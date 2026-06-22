@@ -40,7 +40,10 @@ from harness_cp.cp_shared_types import AgentRole
 from harness_cp.engine_class import EngineClass
 from harness_cp.gate_level_rule import GateLevel
 from harness_cp.hitl_placement import HITLPlacement
-from harness_cp.pause_resume_protocol_types import PauseSnapshot
+from harness_cp.pause_resume_protocol_types import (
+    EffectFenceResolutionDirective,
+    PauseSnapshot,
+)
 
 
 class RunStatus(StrEnum):
@@ -343,6 +346,20 @@ class StepExecutionContext(BaseModel):
     `StepExecutionContext` — per-step-transient, NOT persisted, NOT in any §5.2 /
     per-step-override outcome-hash (the hash-inert carrier); `None` default →
     byte-identical to pre-arc (only the tool dispatcher's fence gate reads it)."""
+
+    effect_fence_resolution: EffectFenceResolutionDirective | None = None
+    """B-EFFECT-FENCE-PAUSE-RESOLUTION (R-FS-1) — the operator's key-bound resume-side
+    resolution of a §26.2 `EFFECT_FENCE_AMBIGUOUS` pause, threaded to the resumed linear
+    TOOL_STEP dispatch. The CP driver sets it (from `ResumeContext.effect_fence_resolution`
+    + `PauseSnapshot.effect_fence_resume.idempotency_key`) ONLY on the resumed step's
+    context; the tool dispatcher applies it at the §14.22 fence gate ONLY when the
+    recomputed dispatch key equals `idempotency_key` (key-bind): RE_FIRE → clear the held
+    claim + fire fresh; SKIP_AS_FIRED → return empty output (never re-fire); ABORT →
+    raise → driver FAILED.
+
+    Same hash-inert / per-step-transient / resume-only posture as `run_engine_class`
+    (NOT persisted, NOT in any §5.2 / outcome-hash); `None` default (every non-resume /
+    non-fence dispatch) → byte-identical to pre-arc."""
 
 
 def compose_branch_child_context(

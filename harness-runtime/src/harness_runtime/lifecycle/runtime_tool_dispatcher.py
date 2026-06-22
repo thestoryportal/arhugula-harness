@@ -49,6 +49,7 @@ from harness_cp.engine_class import EngineClass
 from harness_cp.mcp_client_namespace_emitter import (
     MCPClientNamespaceEmitter,
 )
+from harness_cp.pause_resume_protocol_types import EffectFenceResolution
 from harness_cp.per_server_trust_evaluator import PerServerTrustEvaluator
 from harness_cp.per_server_trust_types import (
     MCPPrimitive,
@@ -67,6 +68,7 @@ from harness_runtime.config.provider_secrets import (
 )
 from harness_runtime.lifecycle.cost_record_sink import SupportsCostRecordAppend
 from harness_runtime.lifecycle.effect_fence import (
+    EffectFenceAbortedError,
     EffectFenceAmbiguousUncommittedError,
     EffectFenceProtocol,
 )
@@ -924,15 +926,72 @@ class RuntimeToolDispatcher:
                 self._effect_fencing_explicit
                 or (step_context.run_engine_class in _DURABLE_AUTO_FENCE_ENGINE_CLASSES)
             ) and not contract.idempotent
+            # B-EFFECT-FENCE-PAUSE-RESOLUTION (§14.22.9) — a KEY-BOUND operator resolution
+            # the driver threaded onto the RESUMED step's context. Bind it to THIS
+            # dispatch's effect: apply ONLY when the directive's `idempotency_key` equals
+            # the recomputed key (so a stale resolution can never mis-apply to a different
+            # fenced step — correctness-by-construction). `None` / non-match → the fence
+            # behaves exactly as pre-v1.73 (the INERT re-pause is preserved).
+            _fence_resolution = (
+                step_context.effect_fence_resolution.resolution
+                if (
+                    step_context.effect_fence_resolution is not None
+                    and step_context.effect_fence_resolution.idempotency_key == idempotency_key
+                )
+                else None
+            )
+            if (
+                self._effect_fence is not None
+                and _fence_gate_open
+                and _fence_resolution is EffectFenceResolution.RE_FIRE
+            ):
+                # RE_FIRE — the operator asserts the prior attempt did NOT fire (it
+                # claimed the reserve, then crashed before firing). Clear the held claim
+                # so the `try_reserve` below WINS and fires the effect FRESH: a FIRST-and-
+                # only execution, still at-most-once from the true state of the world.
+                # Done before the reserve so the normal step-7 `call_tool` + post-fire
+                # `capture_output` + success-path emission all run unchanged.
+                self._effect_fence.clear_claim(idempotency_key)
             if (
                 self._effect_fence is not None
                 and _fence_gate_open
                 and not self._effect_fence.try_reserve(idempotency_key)
             ):
-                # B-EFFECT-FENCE-HITL-ROUTE (§14.22 two-case split) — the reserve was
-                # lost to a prior uncommitted attempt of THIS effect (a crash-then-
-                # resume re-run of an effected-but-uncommitted step, or an in-process
-                # retry). Split on whether that attempt captured a validated output:
+                # The reserve was lost to a prior uncommitted attempt of THIS effect (a
+                # crash-then-resume re-run of an effected-but-uncommitted step, or an
+                # in-process retry). (RE_FIRE was handled above — it cleared the claim, so
+                # `try_reserve` WON and we are not here.)
+                #
+                # B-EFFECT-FENCE-PAUSE-RESOLUTION (§14.22.9) — a key-bound SKIP_AS_FIRED /
+                # ABORT resolution acts BEFORE the auto captured-output split:
+                if _fence_resolution is EffectFenceResolution.SKIP_AS_FIRED:
+                    # Operator asserts the effect FIRED; the prior attempt's output was
+                    # lost in the fire→capture crash window and is unrecoverable → proceed
+                    # with EMPTY output, NEVER re-fire. Balance the pre-fence
+                    # `sandbox.enter` with `sandbox.exit` (the suppress-and-continue
+                    # precedent); no `mcp.tool.call` span (no effect fired this dispatch).
+                    sandbox_exit_cm = (
+                        tracer.start_as_current_span("sandbox.exit")
+                        if tracer is not None
+                        else _null_span_cm()
+                    )
+                    with sandbox_exit_cm as sandbox_exit_span:
+                        _set(sandbox_exit_span, ATTR_SANDBOX_FAIL_CLASS, "")
+                    return {
+                        "tool_id": tool_id,
+                        "response": {},
+                        "idempotency_key": idempotency_key,
+                        "trust_decision_reason": trust_eval.decision_reason.value,
+                        "sandbox_tier": sandbox_decision.tier.value,
+                    }
+                if _fence_resolution is EffectFenceResolution.ABORT:
+                    # Operator cannot determine whether the effect fired (or declines to
+                    # proceed) → fail the run terminally (the driver name-matches
+                    # `EffectFenceAbortedError` → FAILED); never re-fire, never proceed.
+                    raise EffectFenceAbortedError(idempotency_key=idempotency_key)
+                # B-EFFECT-FENCE-HITL-ROUTE (§14.22 two-case split) — no resolution (a
+                # naive resume, or the first ambiguous pause). Split on whether the prior
+                # attempt captured a validated output:
                 captured_output = self._effect_fence.read_output(idempotency_key)
                 if captured_output is not None:
                     # OUTPUT PRESENT + valid → the effect demonstrably completed AND

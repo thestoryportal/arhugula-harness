@@ -312,14 +312,16 @@ def test_resume_context_extra_forbid() -> None:
         _RC(extra_field="x")  # pyright: ignore[reportCallIssue]
 
 
-def test_resume_context_single_field_shape() -> None:
-    """AC #6: ResumeContext has exactly one declared field at v1.16 per §26.8.2.
+def test_resume_context_field_shape() -> None:
+    """ResumeContext fields are the deliberately-amended set per §26.8.
 
-    Future arcs may extend (per §26.8.1 change-note adjacent defect (i)).
-    This gate locks the v1.16 single-field shape so any future extension is
-    a deliberate spec amendment, not a silent absorption.
+    The v1.16 single-field shape (`hitl_response`) was extended at v1.52
+    (B-EFFECT-FENCE-PAUSE-RESOLUTION, §26.8) with `effect_fence_resolution` — a
+    DELIBERATE spec amendment, not a silent absorption (the §26.8.1 change-note
+    anticipated extension). This gate locks the amended set so the NEXT extension
+    is likewise deliberate.
     """
     from harness_cp.pause_resume_protocol import ResumeContext  # noqa: F401
     from harness_cp.pause_resume_protocol_types import ResumeContext as _RC
 
-    assert set(_RC.model_fields.keys()) == {"hitl_response"}
+    assert set(_RC.model_fields.keys()) == {"hitl_response", "effect_fence_resolution"}

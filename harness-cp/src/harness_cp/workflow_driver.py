@@ -77,6 +77,8 @@ from harness_cp.pause_resume_protocol import (
     ResumeOutcomeKind,
 )
 from harness_cp.pause_resume_protocol_types import (
+    EffectFenceResolutionDirective,
+    EffectFenceResumeState,
     EvaluatorOptimizerResumeState,
     EvaluatorOptimizerStepResumeState,
     FanOutBranchResumeState,
@@ -87,6 +89,7 @@ from harness_cp.pause_resume_protocol_types import (
     PausedChildBranchResumeState,
     PauseSnapshot,
     PeerFanOutResumeState,
+    ResumeContext,
     WorkflowPauseReason,
 )
 from harness_cp.per_role_catalog import derive_agent_role
@@ -563,10 +566,33 @@ class DriverContext(Protocol):
     # via `getattr` dynamic dispatch, the `cp_is_wiring` idiom).
     inter_step_output_channel: object | None
 
+    # B-EFFECT-FENCE-PAUSE-RESOLUTION (§14.22.9) — the runtime `ResumeContextHolder`
+    # (the one-shot operator-resume-context sidecar). On an effect-fence-ambiguous-pause
+    # resume the driver PEEKS it (does NOT consume — the runtime HITL composer owns the
+    # one-shot `consume_and_clear`) to extract `effect_fence_resolution`. Typed
+    # `object | None` to avoid pulling
+    # `harness_runtime.lifecycle.resume_context_holder` into the CP Protocol surface
+    # (harness-cp does NOT depend on harness-runtime). When `None` (test ctx / no holder),
+    # the driver threads no resolution → the dispatcher's INERT re-pause is preserved.
+    resume_context_holder: object | None
+
 
 # ---------------------------------------------------------------------------
 # Driver core
 # ---------------------------------------------------------------------------
+
+
+@runtime_checkable
+class _ResumeContextHolderLike(Protocol):
+    """The minimal `ResumeContextHolder` surface the driver peeks (NOT consumes).
+
+    B-EFFECT-FENCE-PAUSE-RESOLUTION — `peek()` returns the current `ResumeContext`
+    without clearing it, so the runtime HITL composer's one-shot `consume_and_clear`
+    stays intact (a step with both a HITL gate and a fenced tool dispatch still
+    delivers its HITL response). Typed against the CP-side `ResumeContext` (harness-cp
+    owns it); the runtime `ResumeContextHolder` structurally satisfies this."""
+
+    def peek(self) -> ResumeContext | None: ...
 
 
 def _compute_run_idempotency_key(
@@ -2038,6 +2064,26 @@ def _execute_workflow_body(
     # this counter reflects only this envelope's executions.
     accumulated: dict[str, Any] = {}
     steps_executed = 0
+    # B-EFFECT-FENCE-PAUSE-RESOLUTION (§14.22.9) — for an effect-fence-ambiguous-pause
+    # resume, PEEK (NOT consume — leave the holder intact for the runtime HITL composer's
+    # one-shot consume) the operator's resolution and key-bind it to the held reserve's
+    # idempotency_key (from the snapshot carrier). Threaded onto the RESUMED step's
+    # context only (`step_index == resume_at`), so the dispatcher applies exactly one
+    # key-matched resolution. Gated on `effect_fence_resume is not None` so a HITL-only
+    # resume never peeks (and never starves the HITL composer). `None` otherwise → the
+    # dispatcher's INERT re-pause is preserved.
+    effect_fence_directive: EffectFenceResolutionDirective | None = None
+    if resume_snapshot is not None and resume_snapshot.effect_fence_resume is not None:
+        _holder = cast(
+            "_ResumeContextHolderLike | None",
+            getattr(ctx, "resume_context_holder", None),
+        )
+        _resume_ctx = _holder.peek() if _holder is not None else None
+        if _resume_ctx is not None and _resume_ctx.effect_fence_resolution is not None:
+            effect_fence_directive = EffectFenceResolutionDirective(
+                resolution=_resume_ctx.effect_fence_resolution,
+                idempotency_key=resume_snapshot.effect_fence_resume.idempotency_key,
+            )
     for step_index, step in enumerate(steps[resume_at:], start=resume_at):
         # § 25.4 row "Per-step pre-entry" — drain check before entering next
         # step (U-CP-57 AC #2; Path B operator-ratified — no `step.boundary`
@@ -2271,6 +2317,11 @@ def _execute_workflow_body(
             # B-EFFECT-FENCE-DURABLE-AUTO — the RUN engine class (NOT a per-step
             # StepOverride.engine_class) so the tool dispatcher auto-fences durable runs.
             run_engine_class=manifest_entry.engine_class,
+            # B-EFFECT-FENCE-PAUSE-RESOLUTION — the key-bound operator resolution, set
+            # ONLY on the RESUMED step (`step_index == resume_at`); the dispatcher applies
+            # it at the §14.22 fence gate when the recomputed key matches. None on every
+            # other step (and every non-resume run) → fence behaves as pre-v1.73.
+            effect_fence_resolution=(effect_fence_directive if step_index == resume_at else None),
             parent_sandbox_tier=SandboxTier.TIER_1_PROCESS,
             parent_actor=ctx.ledger_writer.actor,
             parent_entry_hash="",
@@ -2374,12 +2425,24 @@ def _execute_workflow_body(
                 and ctx.pause_resume_protocol is not None
             ):
                 protocol = cast(PauseResumeProtocol, ctx.pause_resume_protocol)
+                # B-EFFECT-FENCE-PAUSE-RESOLUTION — carry the held reserve's
+                # idempotency_key (off the runtime error, read by name since harness-cp
+                # cannot import harness-runtime) so `api.resume` can key-bind the
+                # operator's resolution to THIS effect. Absent the key (defensive) →
+                # None carrier → resume cannot resolve, re-pauses (the pre-resolution
+                # INERT behavior, never an auto-re-fire).
+                _fence_key = getattr(exc, "idempotency_key", None)
                 pause_snapshot = _run_protocol_method_sync(
                     protocol.capture_pause_snapshot(
                         workflow_id=manifest_entry.workflow_id,
                         run_id=run_id,
                         step_index=step_index,
                         pause_reason=WorkflowPauseReason.EFFECT_FENCE_AMBIGUOUS,
+                        effect_fence_resume=(
+                            EffectFenceResumeState(idempotency_key=_fence_key)
+                            if isinstance(_fence_key, str)
+                            else None
+                        ),
                     )
                 )
                 # PAUSE_CAPTURED effect-fence CP→IS emission. event_kind_index=3

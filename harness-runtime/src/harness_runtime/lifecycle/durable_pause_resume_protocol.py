@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING
 
 from harness_cp.pause_resume_protocol import PauseContextReader, PauseResumeProtocol
 from harness_cp.pause_resume_protocol_types import (
+    EffectFenceResumeState,
     EvaluatorOptimizerResumeState,
     FanOutResumeState,
     HandoffResumeState,
@@ -84,6 +85,7 @@ class DurablePauseResumeProtocol(PauseResumeProtocol):
         peer_fan_out_resume: PeerFanOutResumeState | None = None,
         handoff_resume: HandoffResumeState | None = None,
         evaluator_optimizer_resume: EvaluatorOptimizerResumeState | None = None,
+        effect_fence_resume: EffectFenceResumeState | None = None,
     ) -> PauseSnapshot:
         """Compose the snapshot via the parent, then durably persist it.
 
@@ -109,6 +111,7 @@ class DurablePauseResumeProtocol(PauseResumeProtocol):
             peer_fan_out_resume=peer_fan_out_resume,
             handoff_resume=handoff_resume,
             evaluator_optimizer_resume=evaluator_optimizer_resume,
+            effect_fence_resume=effect_fence_resume,
         )
         self._store.capture(snapshot)
         return snapshot

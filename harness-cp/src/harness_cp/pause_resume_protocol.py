@@ -38,6 +38,7 @@ from harness_cp.cp_shared_types import ActorIdentity
 from harness_cp.handoff_context import ExternalReference, StateSummary
 from harness_cp.material_diff_detection import MaterialDiff
 from harness_cp.pause_resume_protocol_types import (
+    EffectFenceResumeState,
     EvaluatorOptimizerResumeState,
     FanOutResumeState,
     HandoffResumeState,
@@ -417,6 +418,7 @@ class PauseResumeProtocol:
         peer_fan_out_resume: PeerFanOutResumeState | None = None,
         handoff_resume: HandoffResumeState | None = None,
         evaluator_optimizer_resume: EvaluatorOptimizerResumeState | None = None,
+        effect_fence_resume: EffectFenceResumeState | None = None,
     ) -> PauseSnapshot:
         """Capture a workflow-layer pause snapshot per CP spec v1.11 §26.1.
 
@@ -449,6 +451,7 @@ class PauseResumeProtocol:
             peer_fan_out_resume=peer_fan_out_resume,
             handoff_resume=handoff_resume,
             evaluator_optimizer_resume=evaluator_optimizer_resume,
+            effect_fence_resume=effect_fence_resume,
         )
         return PauseSnapshot(
             workflow_id=workflow_id,
@@ -463,6 +466,7 @@ class PauseResumeProtocol:
             peer_fan_out_resume=peer_fan_out_resume,
             handoff_resume=handoff_resume,
             evaluator_optimizer_resume=evaluator_optimizer_resume,
+            effect_fence_resume=effect_fence_resume,
         )
 
     async def attempt_resume(
@@ -519,6 +523,7 @@ class PauseResumeProtocol:
             peer_fan_out_resume=snapshot.peer_fan_out_resume,
             handoff_resume=snapshot.handoff_resume,
             evaluator_optimizer_resume=snapshot.evaluator_optimizer_resume,
+            effect_fence_resume=snapshot.effect_fence_resume,
         )
         if expected_hash != snapshot.snapshot_hash:
             return ResumeResult(
@@ -584,6 +589,7 @@ def _compute_snapshot_hash(
     peer_fan_out_resume: PeerFanOutResumeState | None = None,
     handoff_resume: HandoffResumeState | None = None,
     evaluator_optimizer_resume: EvaluatorOptimizerResumeState | None = None,
+    effect_fence_resume: EffectFenceResumeState | None = None,
 ) -> str:
     """sha256 hex over canonical JSON of (workflow_id, run_id, step_index, state_summary).
 
@@ -633,6 +639,13 @@ def _compute_snapshot_hash(
         # dict ONLY when present (at most one of the four resume carriers ever is), so
         # every pre-existing snapshot hashes byte-identically — mirrors the handoff drop.
         canonical["evaluator_optimizer_resume"] = evaluator_optimizer_resume.model_dump(mode="json")
+    if effect_fence_resume is not None:
+        # B-EFFECT-FENCE-PAUSE-RESOLUTION: the effect-fence ambiguous-pause carrier
+        # (the held reserve's idempotency_key — no recovered output, that absence IS
+        # the ambiguity). Added to the canonical dict ONLY when present (at most one of
+        # the five resume carriers ever is), so every pre-existing snapshot hashes
+        # byte-identically — mirrors the handoff / evaluator drops.
+        canonical["effect_fence_resume"] = effect_fence_resume.model_dump(mode="json")
     payload = json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(payload).hexdigest()
 
