@@ -1679,9 +1679,14 @@ def _execute_workflow_body(
     # strategy coordinates a shared timestamp, and a `SUB_AGENT_DISPATCH` child
     # reuses the same recursion seam transparently.
     if strategy is _DriverStrategyStatus.PARALLELIZATION:
+        # B-POSTJOIN-LLM-SYNTHESIS (CP spec v1.54 §3) — carve an opt-in terminal
+        # POST_JOIN_SYNTHESIS step out of the peer branch set; the strategy
+        # dispatches it post-barrier. `(steps, None)` absent the opt-in →
+        # byte-identical to pre-v1.54.
+        _branch_steps, _synthesis_step = _split_synthesis(steps)
         return _execute_parallelization(
             manifest_entry=manifest_entry,
-            steps=steps,
+            steps=_branch_steps,
             run_id=run_id,
             ctx=ctx,
             default_model_binding=default_model_binding,
@@ -1691,6 +1696,7 @@ def _execute_workflow_body(
             # snapshot's `peer_fan_out_resume` drives the skip-terminal + re-dispatch
             # path; None on a normal first run.
             resume_snapshot=resume_snapshot,
+            synthesis_step=_synthesis_step,
         )
     if strategy is _DriverStrategyStatus.EVALUATOR_OPTIMIZER:
         return _execute_evaluator_optimizer(
@@ -2999,6 +3005,136 @@ def _append_step_ledger_entry(
 
 
 # ---------------------------------------------------------------------------
+# Post-join synthesis (C-CP-25 §25.12 v1.54 / B-POSTJOIN-LLM-SYNTHESIS — arc-a)
+# ---------------------------------------------------------------------------
+#
+# An OPT-IN terminal `POST_JOIN_SYNTHESIS` step (CP spec v1.54 §5.2/§25.2/§3)
+# replaces a concurrent fan-out's deterministic aggregate (`_aggregate_*`) with
+# an LLM-composed synthesis over the branch-index-ordered sibling outputs —
+# sacrificing the §25.12 Point-2 aggregator-purity guarantee for that run ONLY
+# (Point-1 + branch-index ordering preserved; default fold byte-identical absent
+# the opt-in). Effect-free read-only compose. Reproducible cached-replay of the
+# synthesized aggregate is the registered follow-on `B-FANOUT-OUTPUT-REPLAY`
+# (a separate §25.12-Point-1/D1 reckoning — NOT this arc).
+
+
+def _split_synthesis(
+    steps: Sequence[WorkflowStep],
+) -> tuple[Sequence[WorkflowStep], WorkflowStep | None]:
+    """Carve an opt-in terminal `POST_JOIN_SYNTHESIS` step out of a concurrent
+    fan-out's branch set (CP spec v1.54 §3).
+
+    Returns ``(branch_steps, synthesis_step)``: when the LAST step is a
+    ``POST_JOIN_SYNTHESIS`` step it is carved out (NOT executed as a branch) and
+    returned separately for the post-barrier dispatch; otherwise ``(steps, None)``
+    — byte-identical to pre-v1.54 (the deterministic-fold path)."""
+    if steps and steps[-1].step_kind is StepKind.POST_JOIN_SYNTHESIS:
+        return steps[:-1], steps[-1]
+    return steps, None
+
+
+def _append_synthesis_ledger_entry(
+    *,
+    ctx: DriverContext,
+    workflow_id: str,
+    synthesis_index: int,
+    synthesis_idempotency_key: str,
+) -> None:
+    """Append the terminal post-barrier synthesis step's state-ledger entry
+    (CP spec v1.54 §3 disclosure), mirroring ``_append_step_ledger_entry`` but
+    with a synthesis-DISCLOSING ``action_id``.
+
+    The ``action_id`` ``workflow:{wf}:post-join-synthesis:{N}`` self-discloses
+    the step as the non-deterministic LLM-composed aggregate — the §25.12
+    Point-2 sacrifice made LOUD at the ledger. The entry rides the single real
+    writer on the driver thread POST-barrier (after the branch buffers have
+    drained), exactly as the linear terminal entry."""
+    from harness_is.state_ledger_entry_schema import Identifier
+    from harness_is.state_ledger_write import EntryPayload, WriteKey
+
+    action_id = ActionID(f"workflow:{workflow_id}:post-join-synthesis:{synthesis_index}")
+    _resolver = getattr(ctx, "procedural_tier_snapshot_resolver", None)
+    _procedural_tier_snapshot_ref = _resolver() if _resolver is not None else None
+    payload = EntryPayload(
+        action_id=Identifier(str(action_id)),
+        idempotency_key=Identifier(synthesis_idempotency_key),
+        actor=ctx.ledger_writer.actor,
+        timestamp=datetime.now(UTC),
+        procedural_tier_snapshot_ref=_procedural_tier_snapshot_ref,
+    )
+    write_key = WriteKey(
+        thread_id=Identifier(workflow_id),
+        step_id=Identifier(f"post-join-synthesis:{synthesis_index}"),
+        idempotency_key=Identifier(synthesis_idempotency_key),
+    )
+    ctx.ledger_writer.append(payload, write_key)
+
+
+def _maybe_post_join_synthesis(
+    *,
+    synthesis_step: WorkflowStep | None,
+    status: RunStatus,
+    collected: Mapping[int, tuple[str, Mapping[str, Any]]],
+    ctx: DriverContext,
+    manifest_entry: WorkflowManifestEntry,
+    step_dispatchers: StepDispatcherRegistry,
+    default_model_binding: ModelBinding,
+    fanout_parent: StepExecutionContext,
+    run_idempotency_key: str,
+    branch_count: int,
+) -> dict[str, Any] | None:
+    """Dispatch the opt-in terminal `POST_JOIN_SYNTHESIS` step, or return
+    ``None`` to use the default deterministic fold (CP spec v1.54 §3/§4).
+
+    Returns ``None`` (→ caller uses the byte-identical default fold) when NO
+    synthesis step is opted in OR the run is NOT ``SUCCESS`` (a salvaged
+    ``PARTIAL`` uses the fold over its incomplete survivor set — never a
+    synthesis over an incomplete sibling set). When a ``POST_JOIN_SYNTHESIS``
+    step IS opted in AND the run is ``SUCCESS``: dispatch it post-barrier
+    (SYNC, on the driver thread — the fan-out is drained, nothing runs
+    concurrently; mirrors the linear ``step_dispatchers.lookup(...).dispatch``)
+    reading the branch-index-ordered siblings on ``StepExecutionContext.
+    sibling_outputs``, append its disclosing ledger entry, and return its output
+    as the aggregate (the §25.12 Point-2 sacrifice for this run; Point-1 +
+    branch-index ordering preserved). Read-only / effect-free."""
+    if synthesis_step is None or status is not RunStatus.SUCCESS:
+        return None
+    synthesis_index = branch_count  # the terminal step's ordinal in the original `steps`
+    sibling_outputs: tuple[tuple[int, Mapping[str, Any]], ...] = tuple(
+        (bi, dict(out)) for bi, (_sid, out) in sorted(collected.items())
+    )
+    synth_binding = resolve_step_binding(
+        manifest_entry,
+        str(synthesis_step.step_id),
+        default_model_binding=default_model_binding,
+        persona_tier=manifest_entry.persona_tier,
+    )
+    synthesis_idempotency_key = _compute_step_idempotency_key(run_idempotency_key, synthesis_index)
+    synthesis_context = fanout_parent.model_copy(
+        update={
+            "parent_action_id": str(
+                ActionID(f"workflow:{manifest_entry.workflow_id}:step:{synthesis_index}")
+            ),
+            "parent_idempotency_key": synthesis_idempotency_key,
+            "step_index": synthesis_index,
+            "sibling_outputs": sibling_outputs,
+            # the synthesis is a top-level terminal step, NOT a branch child
+            "branch_index": None,
+        }
+    )
+    synth_output = step_dispatchers.lookup(StepKind.POST_JOIN_SYNTHESIS).dispatch(
+        synth_binding, synthesis_step, step_context=synthesis_context
+    )
+    _append_synthesis_ledger_entry(
+        ctx=ctx,
+        workflow_id=manifest_entry.workflow_id,
+        synthesis_index=synthesis_index,
+        synthesis_idempotency_key=synthesis_idempotency_key,
+    )
+    return dict(synth_output)
+
+
+# ---------------------------------------------------------------------------
 # Branch ledger write-cadence (C-CP-25 §25.13 + IS §5.4 + runtime §2.2(c) — U-CP-84)
 # ---------------------------------------------------------------------------
 #
@@ -3564,6 +3700,7 @@ def _execute_parallelization(
     step_dispatchers: StepDispatcherRegistry,
     run_idempotency_key: str,
     resume_snapshot: PauseSnapshot | None = None,
+    synthesis_step: WorkflowStep | None = None,
 ) -> tuple[RunResult, int]:
     """Execute the `PARALLELIZATION` fan-out-barrier-aggregate strategy (U-CP-86).
 
@@ -3873,15 +4010,35 @@ def _execute_parallelization(
         # deterministic aggregate (lowest-branch-index tiebreak, §25.12). A
         # salvaged non-SUCCESS run carries the survivors as `partial_state`.
         steps_executed = _drain_and_emit_step_boundaries(ctx, branch_writers)
+        # B-POSTJOIN-LLM-SYNTHESIS (CP spec v1.54 §3/§4) — an opt-in terminal
+        # POST_JOIN_SYNTHESIS step REPLACES the deterministic fold on SUCCESS,
+        # dispatched POST-drain (so its disclosing ledger entry follows the
+        # branch entries in terminal order); `None` → the byte-identical fold.
+        _synth = _maybe_post_join_synthesis(
+            synthesis_step=synthesis_step,
+            status=status,
+            collected=collected,
+            ctx=ctx,
+            manifest_entry=manifest_entry,
+            step_dispatchers=step_dispatchers,
+            default_model_binding=default_model_binding,
+            fanout_parent=fanout_parent,
+            run_idempotency_key=run_idempotency_key,
+            branch_count=len(steps),
+        )
         # No collected output (e.g. an all-timed-out deadline strike) → the empty
         # aggregate (matching the empty-steps early-return shape); `_aggregate_
         # parallelization([])` would otherwise `max()` an empty vote tally.
         aggregate: dict[str, Any] = (
-            _aggregate_parallelization(
-                [(bi, sid, out) for bi, (sid, out) in sorted(collected.items())]
+            _synth
+            if _synth is not None
+            else (
+                _aggregate_parallelization(
+                    [(bi, sid, out) for bi, (sid, out) in sorted(collected.items())]
+                )
+                if collected
+                else {"branch_outputs": {}, "aggregate": {}}
             )
-            if collected
-            else {"branch_outputs": {}, "aggregate": {}}
         )
         return RunResult(
             workflow_id=workflow_id,

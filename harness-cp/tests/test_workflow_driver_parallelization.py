@@ -702,3 +702,111 @@ def test_parallelization_live_e2e_real_ledger_chain_valid(tmp_path: Path) -> Non
         e.branch_metadata.branch_index for e in entries if e.branch_metadata is not None
     ]
     assert persisted_branch_indices == [0, 0, 1, 1, 2, 2, 3, 3]
+
+
+# ---------------------------------------------------------------------------
+# B-POSTJOIN-LLM-SYNTHESIS (CP spec v1.54 §3/§4) — opt-in terminal synthesis step
+# ---------------------------------------------------------------------------
+
+
+class _SynthesisCapturingDispatcher:
+    """A `POST_JOIN_SYNTHESIS` dispatcher that CAPTURES the branch-index-ordered
+    sibling outputs it receives + returns a synthesized aggregate. Stands in for
+    the runtime `PostJoinSynthesisStepDispatcher` (no real LLM in this CP-side
+    witness — the full-chain real-provider witness is the runtime e2e)."""
+
+    def __init__(self) -> None:
+        self.received_siblings: Any = None
+        self.received_step_kind: Any = None
+
+    def dispatch(
+        self,
+        binding: StepEffectiveBinding,
+        step: WorkflowStep,
+        *,
+        step_context: Any = None,
+    ) -> dict[str, Any]:
+        self.received_siblings = step_context.sibling_outputs
+        self.received_step_kind = step.step_kind
+        return {"synthesis": "composed", "n_siblings": len(step_context.sibling_outputs)}
+
+
+class _BranchOrSynthesisRegistry:
+    """Binds `DECLARATIVE_STEP` (branches) + `POST_JOIN_SYNTHESIS` (synthesis)."""
+
+    def __init__(self, branch: StepDispatcher, synthesis: StepDispatcher) -> None:
+        self._branch = branch
+        self._synthesis = synthesis
+
+    def lookup(self, step_kind: StepKind) -> StepDispatcher:
+        if step_kind is StepKind.DECLARATIVE_STEP:
+            return self._branch
+        if step_kind is StepKind.POST_JOIN_SYNTHESIS:
+            return self._synthesis
+        raise StepKindDispatcherNotBoundError(step_kind)
+
+
+def _synthesis_step() -> WorkflowStep:
+    return WorkflowStep(
+        step_id=StepID("synthesis"),
+        step_kind=StepKind.POST_JOIN_SYNTHESIS,
+        step_payload={"prompt": "compose the siblings"},
+    )
+
+
+def test_parallelization_post_join_synthesis_replaces_fold_and_reads_siblings() -> None:
+    """An opt-in terminal POST_JOIN_SYNTHESIS step REPLACES the deterministic fold
+    on SUCCESS: it is carved out of the branch set, receives the branch-index-
+    ordered sibling outputs, and ITS output becomes final_state; a disclosing
+    synthesis ledger entry is appended POST-drain (CP spec v1.54 §3/§4 — the new
+    capability, the §25.12 Point-2 sacrifice)."""
+    ledger = _RecordingLedger()
+    synth = _SynthesisCapturingDispatcher()
+    ctx = cast(DriverContext, _Ctx(ledger=ledger, emitter=_Emitter()))
+    result = execute_workflow(
+        _manifest(persona_tier=PersonaTier.SOLO_DEVELOPER),
+        [_branch_step(0), _branch_step(1), _branch_step(2), _synthesis_step()],
+        run_id="run-1",
+        ctx=ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=cast(
+            StepDispatcherRegistry,
+            _BranchOrSynthesisRegistry(_VariedDispatcher(), synth),
+        ),
+    )
+    assert result.status is RunStatus.SUCCESS
+    # final_state IS the synthesis output (NOT the {branch_outputs, aggregate} fold).
+    assert result.final_state == {"synthesis": "composed", "n_siblings": 3}
+    # The synthesis dispatcher (NOT a branch) received the 3 branch-index-ORDERED
+    # siblings — the synthesis step itself was carved OUT of the branch set.
+    assert synth.received_step_kind is StepKind.POST_JOIN_SYNTHESIS
+    assert [bi for bi, _out in synth.received_siblings] == [0, 1, 2]
+    assert synth.received_siblings[0][1] == {"branch": 0, "echoed": {"index": 0}}
+    # A disclosing post-join-synthesis ledger entry was appended (§25.12 Point-2
+    # sacrifice disclosure), AFTER the 3 branches' {step, terminal} entries:
+    #   3 branches × {step, terminal} = 6 + 1 synthesis = 7.
+    synth_keys = [
+        wk for _payload, wk in ledger.appends if str(wk.step_id).startswith("post-join-synthesis")
+    ]
+    assert len(synth_keys) == 1
+    assert len(ledger.appends) == 7
+
+
+def test_parallelization_without_synthesis_uses_deterministic_fold() -> None:
+    """Negative control: absent a POST_JOIN_SYNTHESIS terminal step, the
+    deterministic fold is byte-identical to pre-v1.54 (no synthesis dispatch, no
+    synthesis entry)."""
+    ledger = _RecordingLedger()
+    result = _run(
+        steps=[_branch_step(i) for i in range(3)],
+        dispatcher=_VariedDispatcher(),
+        ledger=ledger,
+        persona_tier=PersonaTier.SOLO_DEVELOPER,
+    )
+    assert result.status is RunStatus.SUCCESS
+    assert result.final_state is not None
+    # The deterministic-fold shape, NOT a synthesis output.
+    assert set(result.final_state) == {"branch_outputs", "aggregate"}
+    # No post-join-synthesis entry; 3 branches × {step, terminal} = 6.
+    assert not any(str(wk.step_id).startswith("post-join-synthesis") for _p, wk in ledger.appends)
+    assert len(ledger.appends) == 6
