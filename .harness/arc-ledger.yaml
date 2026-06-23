@@ -46,7 +46,7 @@
 snapshot:
   frozen_total: 11
   frozen_done: 11
-  standalone_closed: 34
+  standalone_closed: 35
   standalone_gated: 1
   standalone_resolved: 4
   standalone_registered: 1
@@ -460,15 +460,33 @@ arcs:
     ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
 
   - id: B-POSTJOIN-LLM-SYNTHESIS
-    title: "Post-join LLM synthesis step for concurrent fan-out (AUTHORIZED 2026-06-22; §25.12 amendment)"
+    title: "Post-join LLM synthesis step for concurrent fan-out (BUILT 2026-06-23; CP v1.54 §25.12 amendment)"
+    kind: standalone
+    status: closed
+    owner_axis: "CP + runtime"
+    parent_arc: B-INTERSTEP-NONLINEAR
+    operator_gated: false  # gate CLEARED 2026-06-22; mechanism RATIFIED A 2026-06-23 (AUQ)
+    pr: "(arc-a bundle — branch arc-a-postjoin-llm-synthesis; PR# filled at open)"
+    spec_delta: "bundled-absorption — CP spec v1.53 → v1.54 (§5.2/§25.2 StepKind 6→7 ADDS post-join-synthesis + §25.12 Point-2 aggregator-purity sacrifice + §3 post-barrier dispatch semantics) + runtime spec v1.74 → v1.75 (NEW §14.24 C-RT-33 PostJoinSynthesisStepDispatcher) + clearance markers for both; operator-ratified A (AUQ 2026-06-23)."
+    gives: "An OPT-IN StepKind.POST_JOIN_SYNTHESIS terminal step that, after a concurrent fan-out (ORCHESTRATOR_WORKERS / PARALLELIZATION / HIERARCHICAL_DELEGATION) barriers, LLM-composes the branch-index-ordered sibling outputs into the run's synthesized aggregate — the canonical orchestrator-synthesizes completion the deterministic §25.12 fold omits. The CP driver carves the terminal synthesis step out of the branch set + dispatches it SYNC post-barrier reading `collected` (branch-index-ordered) via StepExecutionContext.sibling_outputs; the synthesis output REPLACES the fold on SUCCESS; a disclosing post-barrier step ledger entry (workflow:{wf}:post-join-synthesis:{N}) + a trace event make the §25.12 Point-2 sacrifice LOUD. Default fold byte-identical absent the opt-in. The runtime PostJoinSynthesisStepDispatcher (stage-5 bound under requires_inference) wraps the inner LLM dispatcher, composing the siblings into one trailing context message (minimal dispatch); read-only / effect-free. **SCOPED to A (operator AUQ 2026-06-23) after TWO grounding-surfaced hollow-traps:** OPTION-B-capture-only is #705-hollow (synthesis terminal + branch outputs uncaptured + crash-resume re-diverges → reachability≠consistency); the coherent B-full cannot build on the existing substrate (§25.12-D1 binary-ledger has no partial fan-out state). Reproducible cached-replay = the registered follow-on B-FANOUT-OUTPUT-REPLAY (its own §25.12-D1 council + gate). The effect-free property is ENFORCED at the LLM dispatch boundary (RuntimeLLMDispatcher post-coerce, keyed on step_kind) against EVERY payload route incl. a post-HITL-EDIT replacement; a synthesis-bearing fan-out being RESUMED is rejected fail-closed (synthesis-on-resume material-diff coverage folds into B-FANOUT-OUTPUT-REPLAY); the synthesis payload is a normal inference payload (author supplies messages+params, harness forces tools=None). pyright 0/0/0; ruff clean. Decorrelated review: advisor (two-layer hollow-trap + §25.12-D1 blocker + the production-path integration diagnosis + pre-ship) + C1⊥C9 council #711 + out-of-family Codex (9 rounds → severity-terminus: effect-free enforcement, failure-taxonomy, durable-HITL-pause, zero-sibling, params-route bypass, orchestrator-role leak, production-payload-coercion, HITL-EDIT bypass, Anthropic max_tokens, synthesis-on-resume) + the harness-adversarial-reviewer (F1 converged with Codex)."
+    as_built:
+      - "harness-cp/src/harness_cp/workflow_driver_types.py (StepKind.POST_JOIN_SYNTHESIS 6→7; StepExecutionContext.sibling_outputs hash-inert carrier)"
+      - "harness-cp/src/harness_cp/workflow_driver.py (_split_synthesis + _maybe_post_join_synthesis + _append_synthesis_ledger_entry; carve + post-barrier dispatch wired into all 3 concurrent strategies; placement guard rejecting misplaced/zero-sibling/on-resume synthesis; synthesis context action_id consistency + own-derived-role)"
+      - "harness-runtime/src/harness_runtime/lifecycle/post_join_synthesis_dispatch.py (PostJoinSynthesisStepDispatcher + post_join_tool_binding_violations helper) + llm_dispatch.py (effect-free boundary guard, the load-bearing floor) + bootstrap/stage_5_loop_init.py (binding under requires_inference)"
+      - "design-substrate/Spec_Control_Plane_v1_54.md + Spec_Harness_Runtime_v1.md v1.75 §14.24 C-RT-33 + 2 clearance markers"
+      - "tests: harness-cp test_workflow_driver_{parallelization,orchestrator_workers,hierarchical_delegation}.py + parallelization_pause.py (CP synthesis + role-noleak + zero-worker + on-resume-reject witnesses) + harness-runtime test_post_join_synthesis_{dispatch,full_chain}.py + test_lifecycle_llm_dispatch.py (real-dispatcher: payload-coerce, effect-free boundary, HITL-EDIT bypass, single-chain capstone) + integration/test_post_join_synthesis_live_e2e.py (real-Ollama, gated)"
+    ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
+
+  - id: B-FANOUT-OUTPUT-REPLAY
+    title: "Reproducible cached-replay of a fan-out synthesized aggregate (the §25.12-D1 follow-on to B-POSTJOIN-LLM-SYNTHESIS)"
     kind: standalone
     status: registered
     decompose_at_open: true
     owner_axis: "CP + runtime"
-    parent_arc: B-INTERSTEP-NONLINEAR
-    operator_gated: false  # gate CLEARED 2026-06-22 — operator AUTHORIZED build (full-spec closure); design-first per .harness/r-fs-1-final-closure-plan.md
-    anticipated_scope: "The genuine inter-step capability the now-RESOLVED-AS-HOLLOW B-INTERSTEP-NONLINEAR gestured at: a post-join LLM SYNTHESIS step for the concurrent fan-out topologies (ORCHESTRATOR_WORKERS / PARALLELIZATION / HIERARCHICAL_DELEGATION) — an LLM-dispatched step that, after the fan-out barrier, reads the sibling branch outputs (via the §14.21 inter-step channel, whose recording becomes non-vacuous ONLY once this consumer exists) and composes a synthesized result. Today these topologies compose via a DETERMINISTIC fold (_aggregate_orchestrator_workers / _aggregate_parallelization) that the C-CP-25 §25.12 contract GUARANTEES is deterministic ('first to finish wins is forbidden'). An LLM synthesis compose makes the fan-out output NON-deterministic → it SACRIFICES the §25.12 determinism guarantee (a committed decision)."
-    why: "Was OPERATOR-GATED (a committed-decision sacrifice: C-CP-25 §25.12 deterministic-fold composition → non-deterministic LLM compose). AUTHORIZED 2026-06-22 — the operator chose full-spec closure (build both final arcs) over declaring build-complete → BUILD via the design-first pipeline (council [determinism/reproducibility/replay ⊥ canonical-synthesis] → ratify the opt-in mechanism [default deterministic fold byte-identical; synthesis is an opt-in non-deterministic mode, documented in §25.12 + replay/hash semantics] → §25.12 spec amendment + clearance → impl with full-chain witness → adversarial review) per .harness/r-fs-1-final-closure-plan.md. SEQUENCED SECOND (after B-HITL-PLACEMENT-PER-STEP-LOOSEN). This arc is also the non-vacuous CONSUMER that makes B-INTERSTEP-NONLINEAR's concurrent-fan-out recording non-hollow — recording + the synthesis consumer ship together."
+    parent_arc: B-POSTJOIN-LLM-SYNTHESIS
+    operator_gated: true  # SECOND committed-invariant sacrifice (§25.12 D1) — its own C1⊥C9 council + gate when opened
+    anticipated_scope: "Reproducible cached-replay of the non-deterministic post-join synthesized aggregate across a fan-out crash-resume — so a resumed/replayed synthesized run reproduces the SAME aggregate instead of re-dispatching. REQUIRES a NEW durable per-branch-completion substrate that commits in COMPLETION order (the concurrent-fan-out branch terminals currently drain ATOMICALLY at the barrier per §25.12 D1.b → the durable ledger is binary, no partial fan-out state to recover; finding .harness/r-fs-1-b-fanout-output-replay-impl-design.md) + a fan-out crash-resume recovery + the synthesis-output capture/replay. The completion-order durable append directly SACRIFICES §25.12 D1 (branch-index-order append; completion-order is the foreclosed anti-pattern) — a SECOND committed-invariant sacrifice beyond the §25.12 Point-2 already taken at B-POSTJOIN. A nameable C1⊥C9 tension (deterministic-append ⊥ durable-partial-progress)."
+    why: "Surfaced at B-POSTJOIN-LLM-SYNTHESIS build-grounding (advisor materializability vet, 2026-06-23): the cached-replay form the operator's OPTION-B contemplated cannot build on the existing substrate. Operator chose A (synthesis now; reproducibility deferred to this follow-on) — the divergence window is empty in the currently-wired harness (the 5 non-linear strategies are crash-resume-blind), so nothing regresses interim. FULL-SPEC (`[[feedback-full-spec-beyond-mvp-nothing-deferred]]`) — this WILL be built as a coherent producer+consumer arc (not a defer), gated separately for the §25.12-D1 sacrifice."
     ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
 
   - id: B-ENGINE-OUTPUT-REPLAY-WAL-SEGMENT

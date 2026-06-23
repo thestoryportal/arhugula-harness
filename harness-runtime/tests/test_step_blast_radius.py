@@ -71,12 +71,20 @@ _EMPTY_CTX = _ctx_with_registry({})
 
 @pytest.mark.parametrize(
     "kind",
-    [StepKind.INFERENCE_STEP, StepKind.DECLARATIVE_STEP, StepKind.HITL_STEP],
+    [
+        StepKind.INFERENCE_STEP,
+        StepKind.DECLARATIVE_STEP,
+        StepKind.HITL_STEP,
+        # POST_JOIN_SYNTHESIS (CP v1.54 / runtime §14.24) is a read-only / effect-free
+        # LLM compose — a PRE_ACTION-gated synthesis must classify here, else the HITL
+        # composer's resolve raises StepBlastRadiusResolutionError (Codex [P2]).
+        StepKind.POST_JOIN_SYNTHESIS,
+    ],
 )
 def test_read_only_kinds_resolve_read_only(kind: StepKind) -> None:
-    # A provider chat-completion / declarative / HITL step has no external side
-    # effect — side effects come from downstream TOOL/SUB_AGENT steps (each
-    # independently gated). Design §3.2.
+    # A provider chat-completion / declarative / HITL / post-join-synthesis step has
+    # no external side effect — side effects come from downstream TOOL/SUB_AGENT steps
+    # (each independently gated). Design §3.2.
     assert resolve_step_blast_radius(_step(kind), _EMPTY_CTX) is BlastRadiusTier.READ_ONLY
 
 

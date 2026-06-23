@@ -1657,6 +1657,85 @@ def _execute_workflow_body(
     if manifest_entry.engine_class not in _IN_SCOPE_ENGINE_CLASSES:
         raise EngineClassNotYetMaterializedError(manifest_entry.engine_class)
 
+    # B-POSTJOIN placement guard (out-of-family Codex [P2]): a POST_JOIN_SYNTHESIS
+    # step is valid ONLY as the SINGLE terminal step of a CONCURRENT fan-out
+    # (PARALLELIZATION / ORCHESTRATOR_WORKERS / HIERARCHICAL_DELEGATION) — the only
+    # paths that carve it out (`_split_synthesis`) + dispatch it post-barrier with
+    # the siblings. Any other placement (non-terminal, multiple, or a non-concurrent
+    # topology) would otherwise run the synthesis as an ordinary branch/step with NO
+    # siblings → a wasted LLM call on no data folded into the aggregate. Reject
+    # fail-closed (no `workflow.start`-equivalent side effect has fired here yet).
+    _synth_positions = [
+        i for i, _s in enumerate(steps) if _s.step_kind is StepKind.POST_JOIN_SYNTHESIS
+    ]
+    if _synth_positions:
+        # B-POSTJOIN resume guard (out-of-family Codex round 9 [P1]): a synthesis-bearing
+        # fan-out being RESUMED bypasses the material-diff fail-closed guarantee. The
+        # strategy resume guards validate the CARVED branch set against the snapshot
+        # (count + per-branch identity), but the terminal POST_JOIN_SYNTHESIS step is
+        # carved BEFORE those checks (`_split_synthesis`) and the pause snapshot holds no
+        # synthesis identity to diff against — so adding / removing / changing the synthesis
+        # step between pause and resume passes validation, and the resumed run dispatches a
+        # divergent synthesis (or silently falls back to the fold). Reject fail-closed: this
+        # ENFORCES the boundary CP spec v1.54 §3/§4 already declares (a synthesized run is a
+        # "fresh first-and-only dispatch … no completed-synthesis replay"). Reproducible
+        # synthesis-across-resume — incl. the snapshot-coverage extension — is the registered
+        # follow-on `B-FANOUT-OUTPUT-REPLAY`, NOT this arc. (A synthesis only appears in a
+        # concurrent fan-out per the guard below, so `resume_snapshot is not None` here is a
+        # fan-out resume carrying a synthesis.)
+        if resume_snapshot is not None:
+            return (
+                RunResult(
+                    workflow_id=manifest_entry.workflow_id,
+                    run_id=run_id,
+                    status=RunStatus.FAILED,
+                    terminal_step_index=_synth_positions[0],
+                    partial_state=None,
+                    final_state=None,
+                    fail_class=(
+                        "post-join-synthesis-on-resume-unsupported: a POST_JOIN_SYNTHESIS "
+                        "terminal step is a fresh first-and-only dispatch (CP spec v1.54 "
+                        "§3/§4) — it is NOT covered by the fan-out resume material-diff "
+                        "validation (the synthesis is carved before the branch-set diff, "
+                        "with no snapshot identity). Reproducible synthesis-across-resume is "
+                        "the registered B-FANOUT-OUTPUT-REPLAY arc."
+                    ),
+                ),
+                0,
+            )
+        _concurrent_fanout = {
+            _DriverStrategyStatus.PARALLELIZATION,
+            _DriverStrategyStatus.ORCHESTRATOR_WORKERS,
+            _DriverStrategyStatus.HIERARCHICAL_DELEGATION,
+        }
+        if (
+            len(_synth_positions) > 1
+            or _synth_positions[0] != len(steps) - 1
+            or strategy not in _concurrent_fanout
+            # Zero-branch guard (out-of-family Codex [P2]): a lone POST_JOIN_SYNTHESIS
+            # (len < 2, no fan-out step to compose) would carve to empty branch_steps
+            # → the strategy's empty-steps early return SILENTLY DROPS it. A synthesis
+            # needs ≥1 fan-out sibling — reject fail-closed.
+            or len(steps) < 2
+        ):
+            return (
+                RunResult(
+                    workflow_id=manifest_entry.workflow_id,
+                    run_id=run_id,
+                    status=RunStatus.FAILED,
+                    terminal_step_index=_synth_positions[0],
+                    partial_state=None,
+                    final_state=None,
+                    fail_class=(
+                        "post-join-synthesis-misplaced: POST_JOIN_SYNTHESIS is valid only "
+                        "as the single terminal step of a concurrent fan-out with ≥1 "
+                        "fan-out step (PARALLELIZATION / ORCHESTRATOR_WORKERS / "
+                        "HIERARCHICAL_DELEGATION)"
+                    ),
+                ),
+                0,
+            )
+
     # § 25.10/25.11 — non-linear strategy dispatch (U-CP-86+). A materialized
     # non-linear pattern routes to its dedicated `_execute_<strategy>` and
     # returns here; the `SINGLE_THREADED_LINEAR` inline loop below stays
@@ -1679,9 +1758,14 @@ def _execute_workflow_body(
     # strategy coordinates a shared timestamp, and a `SUB_AGENT_DISPATCH` child
     # reuses the same recursion seam transparently.
     if strategy is _DriverStrategyStatus.PARALLELIZATION:
+        # B-POSTJOIN-LLM-SYNTHESIS (CP spec v1.54 §3) — carve an opt-in terminal
+        # POST_JOIN_SYNTHESIS step out of the peer branch set; the strategy
+        # dispatches it post-barrier. `(steps, None)` absent the opt-in →
+        # byte-identical to pre-v1.54.
+        _branch_steps, _synthesis_step = _split_synthesis(steps)
         return _execute_parallelization(
             manifest_entry=manifest_entry,
-            steps=steps,
+            steps=_branch_steps,
             run_id=run_id,
             ctx=ctx,
             default_model_binding=default_model_binding,
@@ -1691,6 +1775,7 @@ def _execute_workflow_body(
             # snapshot's `peer_fan_out_resume` drives the skip-terminal + re-dispatch
             # path; None on a normal first run.
             resume_snapshot=resume_snapshot,
+            synthesis_step=_synthesis_step,
         )
     if strategy is _DriverStrategyStatus.EVALUATOR_OPTIMIZER:
         return _execute_evaluator_optimizer(
@@ -1707,9 +1792,15 @@ def _execute_workflow_body(
             resume_snapshot=resume_snapshot,
         )
     if strategy is _DriverStrategyStatus.ORCHESTRATOR_WORKERS:
+        # B-POSTJOIN-LLM-SYNTHESIS (CP spec v1.54 §3) — carve an opt-in terminal
+        # POST_JOIN_SYNTHESIS step out of the orchestrator+worker step set
+        # (`steps[0]`=orchestrator, `steps[1:]`=workers); the strategy dispatches
+        # it post-barrier composing the worker siblings. `(steps, None)` absent the
+        # opt-in → byte-identical to pre-v1.54.
+        _branch_steps, _synthesis_step = _split_synthesis(steps)
         return _execute_orchestrator_workers(
             manifest_entry=manifest_entry,
-            steps=steps,
+            steps=_branch_steps,
             run_id=run_id,
             ctx=ctx,
             default_model_binding=default_model_binding,
@@ -1723,6 +1814,7 @@ def _execute_workflow_body(
             # (not-yet-wired) resume cannot advertise a false-resumable PAUSED.
             resume_snapshot=resume_snapshot,
             pause_resumable=True,
+            synthesis_step=_synthesis_step,
         )
     if strategy is _DriverStrategyStatus.HIERARCHICAL_DELEGATION:
         # B-HIERARCHICAL-PAUSE (R-FS-1) — HIERARCHICAL now threads the resume
@@ -1730,9 +1822,14 @@ def _execute_workflow_body(
         # at each level, so a level-local worker pause materializes via FanOutResumeState
         # AND a recursive child PAUSE is captured into paused_child_branches + re-entered
         # at the child's cursor on resume — the cross-bootstrap-boundary resume).
+        # B-POSTJOIN-LLM-SYNTHESIS (CP spec v1.54 §3) — carve an opt-in TOP-LEVEL
+        # terminal POST_JOIN_SYNTHESIS step out of this level's step set; recursive
+        # child levels carve their own. `(steps, None)` absent the opt-in →
+        # byte-identical to pre-v1.54.
+        _branch_steps, _synthesis_step = _split_synthesis(steps)
         return _execute_hierarchical_delegation(
             manifest_entry=manifest_entry,
-            steps=steps,
+            steps=_branch_steps,
             run_id=run_id,
             ctx=ctx,
             default_model_binding=default_model_binding,
@@ -1740,6 +1837,7 @@ def _execute_workflow_body(
             run_idempotency_key=run_idempotency_key,
             resume_snapshot=resume_snapshot,
             pause_resumable=True,
+            synthesis_step=_synthesis_step,
         )
     if strategy is _DriverStrategyStatus.DECENTRALIZED_HANDOFF:
         return _execute_decentralized_handoff(
@@ -2999,6 +3097,300 @@ def _append_step_ledger_entry(
 
 
 # ---------------------------------------------------------------------------
+# Post-join synthesis (C-CP-25 §25.12 v1.54 / B-POSTJOIN-LLM-SYNTHESIS — arc-a)
+# ---------------------------------------------------------------------------
+#
+# An OPT-IN terminal `POST_JOIN_SYNTHESIS` step (CP spec v1.54 §5.2/§25.2/§3)
+# replaces a concurrent fan-out's deterministic aggregate (`_aggregate_*`) with
+# an LLM-composed synthesis over the branch-index-ordered sibling outputs —
+# sacrificing the §25.12 Point-2 aggregator-purity guarantee for that run ONLY
+# (Point-1 + branch-index ordering preserved; default fold byte-identical absent
+# the opt-in). Effect-free read-only compose. Reproducible cached-replay of the
+# synthesized aggregate is the registered follow-on `B-FANOUT-OUTPUT-REPLAY`
+# (a separate §25.12-Point-1/D1 reckoning — NOT this arc).
+
+
+def _split_synthesis(
+    steps: Sequence[WorkflowStep],
+) -> tuple[Sequence[WorkflowStep], WorkflowStep | None]:
+    """Carve an opt-in terminal `POST_JOIN_SYNTHESIS` step out of a concurrent
+    fan-out's branch set (CP spec v1.54 §3).
+
+    Returns ``(branch_steps, synthesis_step)``: when the LAST step is a
+    ``POST_JOIN_SYNTHESIS`` step it is carved out (NOT executed as a branch) and
+    returned separately for the post-barrier dispatch; otherwise ``(steps, None)``
+    — byte-identical to pre-v1.54 (the deterministic-fold path)."""
+    if steps and steps[-1].step_kind is StepKind.POST_JOIN_SYNTHESIS:
+        return steps[:-1], steps[-1]
+    return steps, None
+
+
+def _append_synthesis_ledger_entry(
+    *,
+    ctx: DriverContext,
+    workflow_id: str,
+    synthesis_index: int,
+    synthesis_idempotency_key: str,
+) -> None:
+    """Append the terminal post-barrier synthesis step's state-ledger entry
+    (CP spec v1.54 §3 disclosure), mirroring ``_append_step_ledger_entry`` but
+    with a synthesis-DISCLOSING ``action_id``.
+
+    The ``action_id`` ``workflow:{wf}:post-join-synthesis:{N}`` self-discloses
+    the step as the non-deterministic LLM-composed aggregate — the §25.12
+    Point-2 sacrifice made LOUD at the ledger. The entry rides the single real
+    writer on the driver thread POST-barrier (after the branch buffers have
+    drained), exactly as the linear terminal entry."""
+    from harness_is.state_ledger_entry_schema import Identifier
+    from harness_is.state_ledger_write import EntryPayload, WriteKey
+
+    action_id = ActionID(f"workflow:{workflow_id}:post-join-synthesis:{synthesis_index}")
+    _resolver = getattr(ctx, "procedural_tier_snapshot_resolver", None)
+    _procedural_tier_snapshot_ref = _resolver() if _resolver is not None else None
+    payload = EntryPayload(
+        action_id=Identifier(str(action_id)),
+        idempotency_key=Identifier(synthesis_idempotency_key),
+        actor=ctx.ledger_writer.actor,
+        timestamp=datetime.now(UTC),
+        procedural_tier_snapshot_ref=_procedural_tier_snapshot_ref,
+    )
+    write_key = WriteKey(
+        thread_id=Identifier(workflow_id),
+        step_id=Identifier(f"post-join-synthesis:{synthesis_index}"),
+        idempotency_key=Identifier(synthesis_idempotency_key),
+    )
+    ctx.ledger_writer.append(payload, write_key)
+
+
+def _maybe_post_join_synthesis(
+    *,
+    synthesis_step: WorkflowStep | None,
+    status: RunStatus,
+    collected: Mapping[int, tuple[str, Mapping[str, Any]]],
+    ctx: DriverContext,
+    manifest_entry: WorkflowManifestEntry,
+    step_dispatchers: StepDispatcherRegistry,
+    default_model_binding: ModelBinding,
+    fanout_parent: StepExecutionContext,
+    run_idempotency_key: str,
+    run_id: str,
+    branch_count: int,
+) -> RunResult | dict[str, Any] | None:
+    """Dispatch the opt-in terminal `POST_JOIN_SYNTHESIS` step.
+
+    Returns one of three (the caller discriminates):
+    - ``None`` → use the byte-identical default deterministic fold (no synthesis
+      opted in, OR the run is NOT ``SUCCESS`` — a salvaged ``PARTIAL`` uses the
+      fold over its incomplete survivor set, never a synthesis over an incomplete
+      sibling set).
+    - a FAILED ``RunResult`` → the synthesis dispatch/append RAISED; the caller
+      returns this directly (mirroring the inline per-step `try`/`except` → FAILED
+      mapping, so an exception NEVER escapes `execute_workflow` post-drain —
+      out-of-family Codex [P2]).
+    - the synthesis output ``dict`` → SUCCESS; becomes the run's `final_state`.
+
+    On SUCCESS: dispatch post-barrier (SYNC on the driver thread — the fan-out is
+    drained, nothing runs concurrently; mirrors the linear
+    ``step_dispatchers.lookup(...).dispatch``) reading the branch-index-ordered
+    siblings on ``StepExecutionContext.sibling_outputs``, append the disclosing
+    ledger entry, return the output (the §25.12 Point-2 sacrifice for this run;
+    Point-1 + branch-index ordering preserved). Read-only / effect-free."""
+    if synthesis_step is None or status is not RunStatus.SUCCESS:
+        return None
+    # The synthesis disclosure ordinal = the post-carve branch count (out-of-family
+    # adversarial-reviewer F3-3): this IS the synthesis step's index in the original
+    # `steps` for PARALLELIZATION (all prior steps are branches), but for
+    # ORCHESTRATOR_WORKERS / HIERARCHICAL_DELEGATION the orchestrator at steps[0] is not a
+    # branch, so it is a STABLE UNIQUE terminal ordinal (distinct from every 0..N-1 branch
+    # index) for the disclosure action_id + idempotency key — not a literal original-steps
+    # position. Uniqueness within the run is what the action_id/key require.
+    synthesis_index = branch_count
+    sibling_outputs: tuple[tuple[int, Mapping[str, Any]], ...] = tuple(
+        (bi, dict(out)) for bi, (_sid, out) in sorted(collected.items())
+    )
+    # B-POSTJOIN zero-sibling guard (out-of-family Codex round 6 [P2]): the placement
+    # guard's static `len(steps) < 2` catches a PARALLELIZATION lone-synthesis, but an
+    # ORCHESTRATOR_WORKERS / HIERARCHICAL_DELEGATION `[orchestrator, synthesis]` has
+    # len == 2 (the orchestrator is steps[0], NOT a branch) → it passes placement, the
+    # orchestrator runs, and the fan-out drains ZERO workers → an empty `collected`. A
+    # synthesis over zero siblings spends an LLM call on no branch data + violates the
+    # spec §3 "follows a concurrent fan-out with ≥1 sibling" requirement. Reject
+    # fail-closed at dispatch time (the only point the post-carve branch count is known
+    # for a DYNAMIC worker fan-out; a static topology-specific guard would over-reject a
+    # legitimately dynamic `[orchestrator, synthesis]`). Mirrors the placement-guard
+    # FAILED shape; the partially-run orchestrator's side effects are already recorded.
+    if not sibling_outputs:
+        return RunResult(
+            workflow_id=manifest_entry.workflow_id,
+            run_id=run_id,
+            status=RunStatus.FAILED,
+            terminal_step_index=synthesis_index,
+            partial_state=None,
+            final_state=None,
+            fail_class=(
+                "post-join-synthesis-no-siblings: POST_JOIN_SYNTHESIS requires ≥1 fan-out "
+                "sibling to compose; the concurrent fan-out produced zero branches (e.g. an "
+                "ORCHESTRATOR_WORKERS / HIERARCHICAL_DELEGATION [orchestrator, synthesis] with "
+                "no workers). Rejected fail-closed rather than spend an LLM call on no data."
+            ),
+        )
+    synth_binding = resolve_step_binding(
+        manifest_entry,
+        str(synthesis_step.step_id),
+        default_model_binding=default_model_binding,
+        persona_tier=manifest_entry.persona_tier,
+    )
+    synthesis_idempotency_key = _compute_step_idempotency_key(run_idempotency_key, synthesis_index)
+    synthesis_context = fanout_parent.model_copy(
+        update={
+            # The synthesis context's parent_action_id is set CONSISTENT with the synthesis
+            # step's OWN disclosing ledger entry action_id (`_append_synthesis_ledger_entry`:
+            # `workflow:{wf}:post-join-synthesis:{N}`), NOT the generic `...:step:{N}`
+            # (out-of-family Codex round 8 [P2]): a downstream record that references this
+            # context's parent_action_id (cost attribution, an LLM-dispatch span, a HITL
+            # audit entry if a gate fires on the synthesis) should resolve to a REAL ledger
+            # entry; the prior `...:step:{N}` referenced an action_id with NO matching
+            # synthesis entry. This makes the reference RESOLVE — it does not by itself prove
+            # any specific consumer join (no `:step:`-suffix parser runs on this context:
+            # `compose_branch_terminal_*` only APPENDS + is gated on `branch_index`, which is
+            # None here). The idempotency key keys off `synthesis_index` directly, not this
+            # string, so it is unaffected.
+            "parent_action_id": str(
+                ActionID(
+                    f"workflow:{manifest_entry.workflow_id}:post-join-synthesis:{synthesis_index}"
+                )
+            ),
+            "parent_idempotency_key": synthesis_idempotency_key,
+            "step_index": synthesis_index,
+            "sibling_outputs": sibling_outputs,
+            # the synthesis is a top-level terminal step, NOT a branch child
+            "branch_index": None,
+            # B-POSTJOIN per-step overrides on the SYNTHESIS step apply to ITS context,
+            # not the parent's (out-of-family Codex round 2 [P2]): the runtime routing
+            # reads `agent_role` + the wrap-time HITL composer reads `hitl_placements`, so
+            # a per-step role / HITL override on the synthesis step must fold into the
+            # synthesis context — else it routes/gates as the fan-out parent. Mirrors the
+            # per-branch `compose_branch_child_context` + `fold_step_hitl_placements`.
+            #
+            # Role fallback = the synthesis step's OWN derived role, NOT the parent's
+            # (out-of-family Codex round 7 [P2]): for ORCHESTRATOR_WORKERS /
+            # HIERARCHICAL_DELEGATION, `fanout_parent` IS the orchestrator_context, which
+            # carries the ORCHESTRATOR's per-step role override — so falling back to
+            # `fanout_parent.agent_role` would dispatch the synthesis under the
+            # orchestrator's role (wrong per-role model/routing). Workers explicitly avoid
+            # this leak (`binding.agent_role or derive_agent_role(step.step_id)` at the
+            # worker spawn), so the synthesis mirrors them: its own per-step override wins,
+            # else its own step-id-derived role (a distinct, operator-bindable role via
+            # `per_role_bindings`, never the orchestrator's). Truthiness-fold consistent
+            # with the worker site (an empty `AgentRole("")` is not a usable routing key).
+            "agent_role": synth_binding.agent_role or derive_agent_role(synthesis_step.step_id),
+            "hitl_placements": fold_step_hitl_placements(
+                manifest_entry.hitl_placements, synth_binding.hitl_placement
+            ),
+        }
+    )
+    # B-POSTJOIN failed-run mapping (out-of-family Codex [P2]): the synthesis runs
+    # POST-barrier, OUTSIDE the inline per-step try/except, so an unbound dispatcher /
+    # raising LLM call / failing ledger append would ESCAPE execute_workflow after the
+    # branch buffers drained. Map to a FAILED RunResult here (mirrors the inline
+    # step-dispatch mapping at the §25.3 loop), so the caller returns it cleanly.
+    try:
+        # B-POSTJOIN override provenance (out-of-family Codex [P2]): a per-step
+        # override on the SYNTHESIS step must emit the override-application ledger
+        # entry like every other path (linear `emit_override_state_ledger_entry` /
+        # branch `_buffer_branch_override_if_applied`), else the synthesized final
+        # state runs under an override with NO provenance (C-CP-06 §6.6 all-paths
+        # contract). The synthesis runs on the driver thread post-barrier → the
+        # DIRECT emit (mirroring the linear `_execute_workflow_body` guard), gated
+        # on `override_applied`.
+        if synth_binding.override_applied:
+            _cp_is_wiring = getattr(ctx, "cp_is_wiring", None)
+            if _cp_is_wiring is not None:
+                _run_protocol_method_sync(
+                    _cp_is_wiring.emit_override_state_ledger_entry(
+                        workflow_id=manifest_entry.workflow_id,
+                        step_id=str(synthesis_step.step_id),
+                        post_override_step_config=synth_binding.model_dump(mode="json"),
+                        actor=ActorIdentity(ctx.ledger_writer.actor.actor_id),
+                    )
+                )
+        synth_output = step_dispatchers.lookup(StepKind.POST_JOIN_SYNTHESIS).dispatch(
+            synth_binding, synthesis_step, step_context=synthesis_context
+        )
+        _append_synthesis_ledger_entry(
+            ctx=ctx,
+            workflow_id=manifest_entry.workflow_id,
+            synthesis_index=synthesis_index,
+            synthesis_idempotency_key=synthesis_idempotency_key,
+        )
+        # B-POSTJOIN telemetry (out-of-family Codex [P2]): the synthesis IS a step
+        # that executed → emit its lifecycle STEP_BOUNDARY (the caller increments
+        # `steps_executed` by one on a dict return), so `workflow.step_count` counts it.
+        ctx.lifecycle_emitter.emit(WorkflowEventClass.STEP_BOUNDARY)
+    except StepKindDispatcherNotBoundError as exc:
+        return RunResult(
+            workflow_id=manifest_entry.workflow_id,
+            run_id=run_id,
+            status=RunStatus.FAILED,
+            terminal_step_index=synthesis_index,
+            partial_state=None,
+            final_state=None,
+            fail_class=(
+                f"post-join-synthesis-failure: RT-FAIL-STEP-KIND-DISPATCHER-NOT-BOUND: {exc}"
+            ),
+        )
+    except Exception as exc:
+        # B-POSTJOIN timeout taxonomy (out-of-family Codex [P2]): a synthesis LLM call
+        # exceeding `step_dispatch_timeout_seconds` raises `StepDispatchTimeoutError`
+        # (no `rt_fail_class` attr → `_step_fail_class` would mislabel it the class
+        # name). Name-match it to the canonical RT-FAIL-STEP-DISPATCH-TIMEOUT, like the
+        # inline §25.3 loop (harness-cp cannot import the runtime exception type), so
+        # alerts keyed on the failure taxonomy catch timed-out synthesis steps.
+        _fc = (
+            f"post-join-synthesis-failure: RT-FAIL-STEP-DISPATCH-TIMEOUT: {exc}"
+            if type(exc).__name__ == "StepDispatchTimeoutError"
+            else _step_fail_class("post-join-synthesis-failure", exc)
+        )
+        return RunResult(
+            workflow_id=manifest_entry.workflow_id,
+            run_id=run_id,
+            status=RunStatus.FAILED,
+            terminal_step_index=synthesis_index,
+            partial_state=None,
+            final_state=None,
+            fail_class=_fc,
+        )
+    except BaseException as exc:
+        # B-POSTJOIN durable-HITL-pause (out-of-family Codex [P1]): the synthesis flows
+        # through the hitl_inference composer (stage-5 chain), so a PRE_ACTION gate on
+        # the synthesis step can raise the durable-async `HITLPauseRequestedSignal` (a
+        # BaseException — NOT caught by `except Exception` above). The inline §25.3 loop
+        # captures it → PAUSED, but a paused TERMINAL post-barrier synthesis has no
+        # resumable re-entry today (fan-out resume is branch-scoped; reproducible
+        # synthesis resume is the registered B-FANOUT-OUTPUT-REPLAY follow-on). So map
+        # it to FAILED fail-closed (no dead-end PAUSED that cannot resume; no escaping
+        # BaseException), naming the SYNC-HITL alternative. Other BaseExceptions
+        # (KeyboardInterrupt / SystemExit) are NOT swallowed — re-raised.
+        if type(exc).__name__ != "HITLPauseRequestedSignal":
+            raise
+        return RunResult(
+            workflow_id=manifest_entry.workflow_id,
+            run_id=run_id,
+            status=RunStatus.FAILED,
+            terminal_step_index=synthesis_index,
+            partial_state=None,
+            final_state=None,
+            fail_class=(
+                "post-join-synthesis-failure: durable-async HITL pause on "
+                "POST_JOIN_SYNTHESIS is not resumable (use a synchronous HITL gate; "
+                "reproducible synthesis resume is the registered B-FANOUT-OUTPUT-REPLAY "
+                "follow-on)"
+            ),
+        )
+    return dict(synth_output)
+
+
+# ---------------------------------------------------------------------------
 # Branch ledger write-cadence (C-CP-25 §25.13 + IS §5.4 + runtime §2.2(c) — U-CP-84)
 # ---------------------------------------------------------------------------
 #
@@ -3564,6 +3956,7 @@ def _execute_parallelization(
     step_dispatchers: StepDispatcherRegistry,
     run_idempotency_key: str,
     resume_snapshot: PauseSnapshot | None = None,
+    synthesis_step: WorkflowStep | None = None,
 ) -> tuple[RunResult, int]:
     """Execute the `PARALLELIZATION` fan-out-barrier-aggregate strategy (U-CP-86).
 
@@ -3873,15 +4266,44 @@ def _execute_parallelization(
         # deterministic aggregate (lowest-branch-index tiebreak, §25.12). A
         # salvaged non-SUCCESS run carries the survivors as `partial_state`.
         steps_executed = _drain_and_emit_step_boundaries(ctx, branch_writers)
+        # B-POSTJOIN-LLM-SYNTHESIS (CP spec v1.54 §3/§4) — an opt-in terminal
+        # POST_JOIN_SYNTHESIS step REPLACES the deterministic fold on SUCCESS,
+        # dispatched POST-drain (so its disclosing ledger entry follows the
+        # branch entries in terminal order); `None` → the byte-identical fold.
+        _synth = _maybe_post_join_synthesis(
+            synthesis_step=synthesis_step,
+            status=status,
+            collected=collected,
+            ctx=ctx,
+            manifest_entry=manifest_entry,
+            step_dispatchers=step_dispatchers,
+            default_model_binding=default_model_binding,
+            fanout_parent=fanout_parent,
+            run_idempotency_key=run_idempotency_key,
+            run_id=run_id,
+            branch_count=len(steps),
+        )
+        # A FAILED RunResult ⟺ the synthesis dispatch/append raised → return it
+        # directly (no escaping exception post-drain — Codex [P2]).
+        if isinstance(_synth, RunResult):
+            return _synth, steps_executed
+        # A dict ⟺ the synthesis dispatched → count its executed step (Codex [P2];
+        # its STEP_BOUNDARY was emitted inside `_maybe_post_join_synthesis`).
+        if _synth is not None:
+            steps_executed += 1
         # No collected output (e.g. an all-timed-out deadline strike) → the empty
         # aggregate (matching the empty-steps early-return shape); `_aggregate_
         # parallelization([])` would otherwise `max()` an empty vote tally.
         aggregate: dict[str, Any] = (
-            _aggregate_parallelization(
-                [(bi, sid, out) for bi, (sid, out) in sorted(collected.items())]
+            _synth
+            if _synth is not None
+            else (
+                _aggregate_parallelization(
+                    [(bi, sid, out) for bi, (sid, out) in sorted(collected.items())]
+                )
+                if collected
+                else {"branch_outputs": {}, "aggregate": {}}
             )
-            if collected
-            else {"branch_outputs": {}, "aggregate": {}}
         )
         return RunResult(
             workflow_id=workflow_id,
@@ -5046,6 +5468,7 @@ def _execute_orchestrator_workers(
     run_idempotency_key: str,
     resume_snapshot: PauseSnapshot | None = None,
     pause_resumable: bool = False,
+    synthesis_step: WorkflowStep | None = None,
 ) -> tuple[RunResult, int]:
     """Execute the `ORCHESTRATOR_WORKERS` orchestrator-dispatch-collect strategy (U-CP-88).
 
@@ -5489,21 +5912,46 @@ def _execute_orchestrator_workers(
         drain_branch_buffers(ctx.ledger_writer, _orch_writers)
         if orchestrator_writer is not None:
             ctx.lifecycle_emitter.emit(WorkflowEventClass.STEP_BOUNDARY)
-        _aggregate = _aggregate_orchestrator_workers(orchestrator_output, collected)
         # B-FANOUT-PAUSE (advisor [P1]) — a resume where EVERY worker was already
         # terminal: if a recovered branch FAILED (terminal but no collected output)
         # the run is degraded → PARTIAL, not a bare silent SUCCESS dropping the
         # failure. Non-resume orchestrator-only → empty terminal set → SUCCESS.
         _degraded = any(_bi not in collected for _bi in terminal_dispositions)
+        _no_worker_status = RunStatus.PARTIAL if _degraded else RunStatus.SUCCESS
+        # B-POSTJOIN-LLM-SYNTHESIS (CP spec v1.54 §3/§4) — the no-worker-fan-out
+        # terminal aggregate also honors an opt-in synthesis on SUCCESS (composing
+        # the recovered worker set; never silently skipped); `None` → the fold.
+        _synth = _maybe_post_join_synthesis(
+            synthesis_step=synthesis_step,
+            status=_no_worker_status,
+            collected=collected,
+            ctx=ctx,
+            manifest_entry=manifest_entry,
+            step_dispatchers=step_dispatchers,
+            default_model_binding=default_model_binding,
+            fanout_parent=fanout_parent,
+            run_idempotency_key=run_idempotency_key,
+            run_id=run_id,
+            branch_count=len(steps),
+        )
+        if isinstance(_synth, RunResult):
+            return _synth, (1 if orchestrator_writer is not None else 0)
+        # A dict ⟺ the synthesis dispatched → count its executed step (Codex [P2]).
+        _synth_steps = 1 if _synth is not None else 0
+        _aggregate = (
+            _synth
+            if _synth is not None
+            else _aggregate_orchestrator_workers(orchestrator_output, collected)
+        )
         return RunResult(
             workflow_id=workflow_id,
             run_id=run_id,
-            status=RunStatus.PARTIAL if _degraded else RunStatus.SUCCESS,
+            status=_no_worker_status,
             terminal_step_index=None,
             partial_state=_aggregate if _degraded else None,
             final_state=None if _degraded else _aggregate,
             fail_class=None,
-        ), (1 if orchestrator_writer is not None else 0)
+        ), (1 if orchestrator_writer is not None else 0) + _synth_steps
 
     def _finish(
         status: RunStatus,
@@ -5525,7 +5973,33 @@ def _execute_orchestrator_workers(
         steps_executed = (1 if orchestrator_writer is not None else 0) + (
             _drain_and_emit_step_boundaries(ctx, branch_writers)
         )
-        aggregate = _aggregate_orchestrator_workers(orchestrator_output, collected)
+        # B-POSTJOIN-LLM-SYNTHESIS (CP spec v1.54 §3/§4) — an opt-in terminal
+        # POST_JOIN_SYNTHESIS step composes the branch-index-ordered WORKER
+        # siblings post-drain on SUCCESS, REPLACING the deterministic fold;
+        # `None` → the byte-identical fold.
+        _synth = _maybe_post_join_synthesis(
+            synthesis_step=synthesis_step,
+            status=status,
+            collected=collected,
+            ctx=ctx,
+            manifest_entry=manifest_entry,
+            step_dispatchers=step_dispatchers,
+            default_model_binding=default_model_binding,
+            fanout_parent=fanout_parent,
+            run_idempotency_key=run_idempotency_key,
+            run_id=run_id,
+            branch_count=len(steps),
+        )
+        if isinstance(_synth, RunResult):
+            return _synth, steps_executed
+        # A dict ⟺ the synthesis dispatched → count its executed step (Codex [P2]).
+        if _synth is not None:
+            steps_executed += 1
+        aggregate = (
+            _synth
+            if _synth is not None
+            else _aggregate_orchestrator_workers(orchestrator_output, collected)
+        )
         return RunResult(
             workflow_id=workflow_id,
             run_id=run_id,
@@ -5935,6 +6409,7 @@ def _execute_hierarchical_delegation(
     run_idempotency_key: str,
     resume_snapshot: PauseSnapshot | None = None,
     pause_resumable: bool = False,
+    synthesis_step: WorkflowStep | None = None,
 ) -> tuple[RunResult, int]:
     """Execute the `HIERARCHICAL_DELEGATION` recursive bounded-fan-out strategy (U-CP-89).
 
@@ -6028,6 +6503,12 @@ def _execute_hierarchical_delegation(
         run_idempotency_key=run_idempotency_key,
         resume_snapshot=resume_snapshot,
         pause_resumable=pause_resumable,
+        # B-POSTJOIN-LLM-SYNTHESIS (CP spec v1.54 §3) — TOP-LEVEL synthesis only:
+        # the recursion re-enters via a SUB_AGENT_DISPATCH worker's own
+        # execute_workflow on the CHILD manifest, which carves its own synthesis
+        # at its own dispatch site, so this top-level `synthesis_step` never leaks
+        # into a recursive level (synthesis-per-level is the registered follow-on).
+        synthesis_step=synthesis_step,
     )
 
 

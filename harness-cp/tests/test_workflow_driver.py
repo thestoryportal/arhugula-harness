@@ -319,9 +319,11 @@ def test_run_status_five_members() -> None:
     assert members == {"SUCCESS", "DRAINED", "FAILED", "PARTIAL", "PAUSED"}
 
 
-def test_step_kind_six_members() -> None:
-    """6-member StepKind per CP spec §5.2 + v1.39 additive `managed-agents`
-    value (R-FS-1 arc M; operator-ratified 2026-06-17, Option B)."""
+def test_step_kind_seven_members() -> None:
+    """7-member StepKind per CP spec §5.2 + v1.39 additive `managed-agents`
+    (R-FS-1 arc M; operator-ratified 2026-06-17, Option B) + v1.54 additive
+    `post-join-synthesis` (R-FS-1 arc B-POSTJOIN-LLM-SYNTHESIS; operator-ratified
+    2026-06-23, arc-a A)."""
     members = {m.value for m in StepKind}
     assert members == {
         "declarative-step",
@@ -330,6 +332,7 @@ def test_step_kind_six_members() -> None:
         "HITL-step",
         "sub-agent-dispatch",
         "managed-agents",
+        "post-join-synthesis",
     }
 
 

@@ -68,6 +68,9 @@ from harness_runtime.lifecycle.mcp_backed_ask_user_question_surface import (
     materialize_mcp_backed_ask_user_question_surface_stage,
 )
 from harness_runtime.lifecycle.override_evaluator import materialize_override_evaluator_stage
+from harness_runtime.lifecycle.post_join_synthesis_dispatch import (
+    PostJoinSynthesisStepDispatcher,
+)
 from harness_runtime.lifecycle.procedural_tier_snapshot import (
     make_procedural_tier_snapshot_resolver,
 )
@@ -633,6 +636,15 @@ async def execute(
     if ctx.requires_inference:
         dispatchers[StepKind.INFERENCE_STEP] = inference_step_dispatcher
         dispatchers[StepKind.SUB_AGENT_DISPATCH] = sub_agent_step_dispatcher
+        # R-FS-1 B-POSTJOIN-LLM-SYNTHESIS (CP spec v1.54 §3) — the opt-in terminal
+        # synthesis step dispatcher wraps the (already-sync) inference facade,
+        # composing the concurrent fan-out's branch-index-ordered sibling outputs
+        # into the synthesis LLM input. Bound under `requires_inference` (it makes
+        # an LLM call); a POST_JOIN_SYNTHESIS step in a provider-free workflow fails
+        # closed (StepKindDispatcherNotBoundError), same as INFERENCE_STEP.
+        dispatchers[StepKind.POST_JOIN_SYNTHESIS] = PostJoinSynthesisStepDispatcher(
+            inner=inference_step_dispatcher
+        )
 
     # R-FS-1 arc M (C-RT-28 §14.20): surface-gated MANAGED_AGENTS binding. The
     # factory returns a dispatcher only when opted-in

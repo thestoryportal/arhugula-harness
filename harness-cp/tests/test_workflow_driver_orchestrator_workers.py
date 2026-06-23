@@ -863,3 +863,179 @@ def test_orchestrator_workers_live_e2e_real_ledger_chain_valid(tmp_path: Path) -
     assert writer.entry_count == 7
     entries = read_ledger(handle)
     assert verify_chain(entries).status is VerificationStatus.VALID
+
+
+# ---------------------------------------------------------------------------
+# B-POSTJOIN-LLM-SYNTHESIS (CP spec v1.54 §3/§4) — opt-in terminal synthesis step
+# ---------------------------------------------------------------------------
+
+
+class _OWSynthesisCapturingDispatcher:
+    """A `POST_JOIN_SYNTHESIS` dispatcher that CAPTURES the branch-index-ordered
+    WORKER siblings + returns a synthesized aggregate (stands in for the runtime
+    `PostJoinSynthesisStepDispatcher`)."""
+
+    def __init__(self) -> None:
+        self.received_siblings: Any = None
+        self.received_agent_role: Any = None
+
+    def dispatch(
+        self,
+        binding: StepEffectiveBinding,
+        step: WorkflowStep,
+        *,
+        step_context: Any = None,
+    ) -> dict[str, Any]:
+        self.received_siblings = step_context.sibling_outputs
+        self.received_agent_role = step_context.agent_role
+        return {"synthesis": "ow-composed", "n": len(step_context.sibling_outputs)}
+
+
+class _OWBranchOrSynthesisRegistry:
+    """Binds `DECLARATIVE_STEP` (orchestrator + workers) + `POST_JOIN_SYNTHESIS`."""
+
+    def __init__(self, branch: StepDispatcher, synthesis: StepDispatcher) -> None:
+        self._branch = branch
+        self._synthesis = synthesis
+
+    def lookup(self, step_kind: StepKind) -> StepDispatcher:
+        if step_kind is StepKind.DECLARATIVE_STEP:
+            return self._branch
+        if step_kind is StepKind.POST_JOIN_SYNTHESIS:
+            return self._synthesis
+        raise StepKindDispatcherNotBoundError(step_kind)
+
+
+def _ow_synthesis_step() -> WorkflowStep:
+    return WorkflowStep(
+        step_id=StepID("synthesis"),
+        step_kind=StepKind.POST_JOIN_SYNTHESIS,
+        step_payload={"prompt": "compose"},
+    )
+
+
+def test_orchestrator_workers_post_join_synthesis_replaces_compose_reads_workers() -> None:
+    """A terminal POST_JOIN_SYNTHESIS step REPLACES the deterministic orchestrator
+    compose on SUCCESS: carved out of the orchestrator+worker set, it receives the
+    branch-index-ordered WORKER siblings (NOT the orchestrator, NOT itself) and its
+    output is final_state; a disclosing synthesis entry is appended (v1.54 §3/§4)."""
+    ledger = _RecordingLedger()
+    synth = _OWSynthesisCapturingDispatcher()
+    result = _run(
+        steps=[*_steps(2), _ow_synthesis_step()],
+        dispatcher=_OWDispatcher(),  # unused — the registry overrides it
+        ledger=ledger,
+        registry=cast(
+            StepDispatcherRegistry,
+            _OWBranchOrSynthesisRegistry(_OWDispatcher(), synth),
+        ),
+    )
+    assert result.status is RunStatus.SUCCESS
+    assert result.final_state == {"synthesis": "ow-composed", "n": 2}
+    # The synthesis read the 2 branch-index-ordered WORKER siblings (worker-0,
+    # worker-1) — NOT the orchestrator, NOT the carved synthesis step.
+    assert [bi for bi, _o in synth.received_siblings] == [0, 1]
+    assert synth.received_siblings[0][1] == {"role": "worker-0", "echoed": {"index": 0}}
+    assert any(str(wk.step_id).startswith("post-join-synthesis") for _p, wk in ledger.appends)
+
+
+def test_orchestrator_workers_without_synthesis_uses_deterministic_compose() -> None:
+    """Negative control: absent a synthesis step, the deterministic orchestrator
+    compose is byte-identical to pre-v1.54 (no synthesis dispatch, no entry)."""
+    ledger = _RecordingLedger()
+    result = _run(steps=_steps(2), dispatcher=_OWDispatcher(), ledger=ledger)
+    assert result.status is RunStatus.SUCCESS
+    assert result.final_state is not None
+    assert set(result.final_state) == {"orchestrator", "worker_outputs"}
+    assert not any(str(wk.step_id).startswith("post-join-synthesis") for _p, wk in ledger.appends)
+
+
+def test_orchestrator_role_override_does_not_leak_to_synthesis() -> None:
+    """Codex round 7 [P2] — for ORCHESTRATOR_WORKERS, `fanout_parent` IS the
+    orchestrator context, which carries the ORCHESTRATOR's per-step role override.
+    An UNOVERRIDDEN terminal synthesis must NOT inherit that orchestrator role (it
+    would mis-route the synthesis under the orchestrator's per-role model). The
+    synthesis mirrors the worker pattern: its own override wins, else its own
+    step-id-DERIVED role (never the orchestrator's). Both branches witnessed."""
+    orch_role = AgentRole("coordinator-special")
+    synth_role = AgentRole("synthesis-specialist")
+
+    # (a) orchestrator role override + UNOVERRIDDEN synthesis → synthesis gets its
+    #     OWN derived role, NOT the orchestrator's leak.
+    manifest_no_synth_override = _manifest().model_copy(
+        update={
+            "per_step_overrides": {
+                StepID("orchestrator"): StepOverride(
+                    step_id=StepID("orchestrator"), agent_role=orch_role
+                )
+            }
+        }
+    )
+    synth = _OWSynthesisCapturingDispatcher()
+    result = execute_workflow(
+        manifest_no_synth_override,
+        [*_steps(2), _ow_synthesis_step()],
+        run_id="run-synth-role-noleak",
+        ctx=cast(DriverContext, _Ctx(ledger=_RecordingLedger(), emitter=_Emitter())),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=cast(
+            StepDispatcherRegistry, _OWBranchOrSynthesisRegistry(_OWDispatcher(), synth)
+        ),
+    )
+    assert result.status is RunStatus.SUCCESS
+    assert synth.received_agent_role == derive_agent_role(StepID("synthesis"))
+    assert synth.received_agent_role != orch_role  # the leak is closed
+
+    # (b) a per-step role override ON the synthesis step wins (precedence per-step > derived).
+    manifest_synth_override = _manifest().model_copy(
+        update={
+            "per_step_overrides": {
+                StepID("orchestrator"): StepOverride(
+                    step_id=StepID("orchestrator"), agent_role=orch_role
+                ),
+                StepID("synthesis"): StepOverride(
+                    step_id=StepID("synthesis"), agent_role=synth_role
+                ),
+            }
+        }
+    )
+    synth2 = _OWSynthesisCapturingDispatcher()
+    execute_workflow(
+        manifest_synth_override,
+        [*_steps(2), _ow_synthesis_step()],
+        run_id="run-synth-role-override",
+        ctx=cast(DriverContext, _Ctx(ledger=_RecordingLedger(), emitter=_Emitter())),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=cast(
+            StepDispatcherRegistry, _OWBranchOrSynthesisRegistry(_OWDispatcher(), synth2)
+        ),
+    )
+    assert synth2.received_agent_role == synth_role
+
+
+def test_orchestrator_workers_synthesis_with_zero_workers_fails_closed() -> None:
+    """Codex round 6 [P2] — an ORCHESTRATOR_WORKERS `[orchestrator, synthesis]` has
+    len == 2 (the orchestrator is steps[0], NOT a branch), so it PASSES the placement
+    guard's static `len(steps) < 2` check; but carving the synthesis leaves zero
+    workers → the fan-out drains zero siblings. The dispatch-time zero-sibling guard
+    rejects it FAILED rather than spend an LLM call on no branch data. The synthesis
+    dispatcher is never reached + no disclosing entry is appended."""
+    ledger = _RecordingLedger()
+    synth = _OWSynthesisCapturingDispatcher()
+    result = _run(
+        steps=[*_steps(0), _ow_synthesis_step()],  # [orchestrator, synthesis] — zero workers
+        dispatcher=_OWDispatcher(),
+        ledger=ledger,
+        registry=cast(
+            StepDispatcherRegistry,
+            _OWBranchOrSynthesisRegistry(_OWDispatcher(), synth),
+        ),
+    )
+    assert result.status is RunStatus.FAILED
+    assert result.fail_class is not None
+    assert result.fail_class.startswith("post-join-synthesis-no-siblings:")
+    assert result.final_state is None
+    # The synthesis dispatcher never ran (fail-closed before dispatch) — no LLM call,
+    # no disclosing ledger entry.
+    assert synth.received_siblings is None
+    assert not any(str(wk.step_id).startswith("post-join-synthesis") for _p, wk in ledger.appends)
