@@ -198,6 +198,122 @@ def test_always_sampled_span_forwards_immediately_without_buffer() -> None:
     assert "audit.entry.composed" in forwarded_names
 
 
+# --- B-TAIL-CONDITIONAL-SAMPLING: §9.2 attribute-conditional rows at the TAIL ----
+# The tail is the production enforcement point: producers set the discriminating
+# attribute DURING the span, so it is finalized at on_end (here) while ABSENT at the
+# head should_sample → conservative-always-sample (the B7-landed head half). Names/keys
+# are the REAL producer-emitted shapes (files_api.py:240-241 emits span "files.operation"
+# + attr "files.operation.kind"; memory_tool_dispatch.py:289/333 emits "memory.operation"
+# + "memory.operation.kind") — NOT hand-typed to the SSOT constant, so the test proves
+# the producer→SSOT seam, not just the SSOT.
+
+
+def test_files_operation_non_mutation_buffers_at_tail() -> None:
+    """B-TAIL: a `files.operation` at non-mutation `kind=list` is NOT always-sampled at
+    the tail (§9.2 conditional → §10.1 base-rate) → buffered + dropped on a no-trigger
+    root close. Before B-TAIL the name-only tail call force-forwarded every
+    `files.operation` unconditionally (the bug)."""
+    proc, recorder = _new_tail_keep_with_recorder()
+    provider = TracerProvider()
+    provider.add_span_processor(proc)
+    tracer = provider.get_tracer(__name__)
+    with tracer.start_as_current_span("workflow.envelope"):
+        child = tracer.start_span("files.operation")
+        child.set_attribute("files.operation.kind", "list")  # non-mutation
+        child.end()
+    # Buffered (not force-forwarded); whole no-trigger trace drops on root close.
+    assert recorder.on_end_calls == []
+
+
+def test_files_operation_mutation_force_forwards_at_tail() -> None:
+    """B-TAIL: a `files.operation` at mutation `kind=upload` IS always-sampled (§9.2)
+    → force-forwarded immediately at on_end (the always-sampled floor preserved)."""
+    proc, recorder = _new_tail_keep_with_recorder()
+    provider = TracerProvider()
+    provider.add_span_processor(proc)
+    tracer = provider.get_tracer(__name__)
+    with tracer.start_as_current_span("workflow.envelope"):
+        child = tracer.start_span("files.operation")
+        child.set_attribute("files.operation.kind", "upload")  # mutation
+        child.end()
+        # Forwarded immediately — present BEFORE the root closes.
+        assert "files.operation" in {s.name for s in recorder.on_end_calls}
+    # Mutation `files.operation` is always-sampled but NOT a §10.2 keep-trigger, so the
+    # no-trigger root drops (the envelope is not forwarded).
+    assert "workflow.envelope" not in {s.name for s in recorder.on_end_calls}
+
+
+def test_memory_operation_non_mutation_buffers_at_tail() -> None:
+    """B-TAIL: a `memory.operation` at non-mutation `kind=read` → buffered + dropped."""
+    proc, recorder = _new_tail_keep_with_recorder()
+    provider = TracerProvider()
+    provider.add_span_processor(proc)
+    tracer = provider.get_tracer(__name__)
+    with tracer.start_as_current_span("workflow.envelope"):
+        child = tracer.start_span("memory.operation")
+        child.set_attribute("memory.operation.kind", "read")  # non-mutation
+        child.end()
+    assert recorder.on_end_calls == []
+
+
+def test_validator_fail_transient_buffers_at_tail() -> None:
+    """B-TAIL: a `validator.fail.*` at `permanence=transient` is NOT always-sampled at
+    the tail → buffered + dropped (contrast the permanent case at AC #9, which both
+    force-forwards AND keeps the trace as a §10.2 trigger)."""
+    proc, recorder = _new_tail_keep_with_recorder()
+    provider = TracerProvider()
+    provider.add_span_processor(proc)
+    tracer = provider.get_tracer(__name__)
+    with tracer.start_as_current_span("workflow.envelope"):
+        child = tracer.start_span("validator.fail.evaluation")
+        child.set_attribute(VALIDATOR_FAIL_PERMANENCE_ATTR, "transient")
+        child.end()
+    assert recorder.on_end_calls == []
+
+
+def test_files_operation_absent_kind_force_forwards_at_tail() -> None:
+    """B-TAIL conservative-absent floor: a `files.operation` with NO `kind` attribute
+    still force-forwards (always-sample) — the fix only NARROWS behavior for
+    present-and-non-mutation kinds, never under-sampling the §9.3 inviolable floor."""
+    proc, recorder = _new_tail_keep_with_recorder()
+    provider = TracerProvider()
+    provider.add_span_processor(proc)
+    tracer = provider.get_tracer(__name__)
+    with tracer.start_as_current_span("workflow.envelope"):
+        child = tracer.start_span("files.operation")  # no kind attribute
+        child.end()
+        assert "files.operation" in {s.name for s in recorder.on_end_calls}
+
+
+def test_subagent_span_root_force_forwards_at_tail() -> None:
+    """B-TAIL: the §9.2 `subagent.span (root)` row — a ROOT `subagent.span` (no parent)
+    IS always-sampled → force-forwarded at on_end. The real producer emits this span name
+    (`sub_agent_dispatch.py:601` `start_as_current_span("subagent.span")`)."""
+    proc, recorder = _new_tail_keep_with_recorder()
+    provider = TracerProvider()
+    provider.add_span_processor(proc)
+    tracer = provider.get_tracer(__name__)
+    with tracer.start_as_current_span("subagent.span"):  # root (no parent)
+        pass
+    assert "subagent.span" in {s.name for s in recorder.on_end_calls}
+
+
+def test_subagent_span_nonroot_buffers_at_tail() -> None:
+    """B-TAIL: a NON-root (nested) `subagent.span` is NOT always-sampled (§9.2 is
+    root-only) → buffered + dropped on a no-trigger root close, NOT force-forwarded.
+    Before B-TAIL the name-only literal match force-forwarded every `subagent.span`
+    regardless of depth (the head enforces root-only via ParentBased; the tail did not)."""
+    proc, recorder = _new_tail_keep_with_recorder()
+    provider = TracerProvider()
+    provider.add_span_processor(proc)
+    tracer = provider.get_tracer(__name__)
+    with tracer.start_as_current_span("workflow.envelope"):
+        with tracer.start_as_current_span("subagent.span"):  # non-root child
+            pass
+    # The nested subagent.span buffered (not force-forwarded); the no-trigger trace drops.
+    assert recorder.on_end_calls == []
+
+
 def test_force_flush_keeps_all_buffered_traces_to_avoid_silent_loss() -> None:
     """AC #11: force_flush forwards still-buffered traces (keep-all on shutdown)."""
     proc, recorder = _new_tail_keep_with_recorder()

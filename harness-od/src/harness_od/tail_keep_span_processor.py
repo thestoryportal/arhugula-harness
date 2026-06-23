@@ -212,7 +212,30 @@ class TailKeepSpanProcessor(SpanProcessor):
         # always-sampled per spec and their tree-siblings are buffered
         # separately under the trace_id; the always-sampled span itself
         # never depends on tail-keep buffering.
-        if is_always_sampled(span.name):
+        #
+        # B-TAIL-CONDITIONAL-SAMPLING: pass `span.attributes` so the §9.2
+        # ATTRIBUTE-CONDITIONAL rows (`files.operation` at non-mutation `kind`,
+        # `memory.operation` at non-mutation `kind`, `validator.fail.*` at
+        # `permanence=transient`) resolve to NOT-always-sampled at the TAIL and
+        # buffer for the §10.2 tail-keep decision — rather than force-forwarding
+        # unconditionally. This is the production enforcement point: producers set
+        # `files.operation.kind` / `memory.operation.kind` / `validator.fail.permanence`
+        # DURING the span, so at `on_end` (here) the discriminating attribute is
+        # finalized, whereas at the head `should_sample` (span start) it is absent →
+        # conservative-always-sample (the B7-landed head half). Conservative-absent is
+        # preserved by construction: a missing attribute still returns always-sample,
+        # so this only NARROWS behavior for present-and-non-mutation/transient spans
+        # (never under-samples the §9.3 inviolable floor).
+        #
+        # B-TAIL also enforces the §9.2 `subagent.span (root)` ROOT-conditional row at
+        # the tail: only the ROOT `subagent.span` is always-sampled; a non-root (nested)
+        # `subagent.span` → §10.1 base-rate (buffer). The head enforces this structurally
+        # via `ParentBased` (the inner sampler is consulted ONLY for root spans), but the
+        # tail has no `ParentBased` wrapper, so it gates here with a parent-check (advisor:
+        # a processor parent-check, NOT an SSOT `is_root` param — it is the one
+        # root-conditional row, and root-ness is structural, not a name/attribute).
+        _nonroot_subagent = span.name == "subagent.span" and span.parent is not None
+        if not _nonroot_subagent and is_always_sampled(span.name, span.attributes):
             self._downstream.on_end(span)
             # Still mark the trace keep-flag if the always-sampled span is
             # a classification trigger (sandbox.violation + breaker.tripped
