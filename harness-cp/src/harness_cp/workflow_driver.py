@@ -3163,7 +3163,14 @@ def _maybe_post_join_synthesis(
     Point-1 + branch-index ordering preserved). Read-only / effect-free."""
     if synthesis_step is None or status is not RunStatus.SUCCESS:
         return None
-    synthesis_index = branch_count  # the terminal step's ordinal in the original `steps`
+    # The synthesis disclosure ordinal = the post-carve branch count (out-of-family
+    # adversarial-reviewer F3-3): this IS the synthesis step's index in the original
+    # `steps` for PARALLELIZATION (all prior steps are branches), but for
+    # ORCHESTRATOR_WORKERS / HIERARCHICAL_DELEGATION the orchestrator at steps[0] is not a
+    # branch, so it is a STABLE UNIQUE terminal ordinal (distinct from every 0..N-1 branch
+    # index) for the disclosure action_id + idempotency key — not a literal original-steps
+    # position. Uniqueness within the run is what the action_id/key require.
+    synthesis_index = branch_count
     sibling_outputs: tuple[tuple[int, Mapping[str, Any]], ...] = tuple(
         (bi, dict(out)) for bi, (_sid, out) in sorted(collected.items())
     )
