@@ -14,6 +14,8 @@ from dataclasses import dataclass, field
 from harness_od.tail_keep_classification import (
     BREAKER_TRIPPED_SPAN_NAME,
     SANDBOX_VIOLATION_SPAN_NAME,
+    SUBAGENT_RESULT_STATUS_ATTR,
+    SUBAGENT_RESULT_STATUS_FAILED_VALUE,
     VALIDATOR_FAIL_PERMANENCE_ATTR,
     VALIDATOR_FAIL_PERMANENCE_PERMANENT_VALUE,
     is_classification_trigger,
@@ -298,20 +300,63 @@ def test_subagent_span_root_force_forwards_at_tail() -> None:
     assert "subagent.span" in {s.name for s in recorder.on_end_calls}
 
 
-def test_subagent_span_nonroot_buffers_at_tail() -> None:
-    """B-TAIL: a NON-root (nested) `subagent.span` is NOT always-sampled (§9.2 is
-    root-only) → buffered + dropped on a no-trigger root close, NOT force-forwarded.
-    Before B-TAIL the name-only literal match force-forwarded every `subagent.span`
-    regardless of depth (the head enforces root-only via ParentBased; the tail did not)."""
+def test_subagent_span_nonroot_succeeded_buffers_and_drops_at_tail() -> None:
+    """B-TAIL: a NON-root (nested) `subagent.span` that SUCCEEDED is NOT always-sampled
+    (§9.2 root-only) and NOT a §14.3 failure-keep → buffered + dropped on a no-trigger
+    root close, NOT force-forwarded. Before B-TAIL the name-only literal match force-
+    forwarded every `subagent.span` regardless of depth/result (the head enforces
+    root-only via ParentBased; the tail did not)."""
     proc, recorder = _new_tail_keep_with_recorder()
     provider = TracerProvider()
     provider.add_span_processor(proc)
     tracer = provider.get_tracer(__name__)
     with tracer.start_as_current_span("workflow.envelope"):
-        with tracer.start_as_current_span("subagent.span"):  # non-root child
-            pass
-    # The nested subagent.span buffered (not force-forwarded); the no-trigger trace drops.
+        child = tracer.start_span("subagent.span")  # non-root child
+        child.set_attribute(SUBAGENT_RESULT_STATUS_ATTR, "completed")  # succeeded
+        child.end()
+    # Buffered (not force-forwarded); the no-trigger trace drops on root close.
     assert recorder.on_end_calls == []
+
+
+def test_subagent_span_nonroot_failed_is_tail_kept() -> None:
+    """B-TAIL §14.3: a NON-root (nested) `subagent.span` that FAILED
+    (`subagent.result_status=failed`) is tail-kept — its failure is a keep-trigger, so the
+    trace is preserved at root close even with no sandbox/breaker/validator trigger. This is
+    the §14.3 BASE_RATE-head + tail-keep-on-failure contract (out-of-family Codex: the
+    §9.2-root-only refinement must not drop a failed nested subagent span)."""
+    proc, recorder = _new_tail_keep_with_recorder()
+    provider = TracerProvider()
+    provider.add_span_processor(proc)
+    tracer = provider.get_tracer(__name__)
+    with tracer.start_as_current_span("workflow.envelope"):
+        child = tracer.start_span("subagent.span")  # non-root child
+        child.set_attribute(SUBAGENT_RESULT_STATUS_ATTR, SUBAGENT_RESULT_STATUS_FAILED_VALUE)
+        child.end()
+    forwarded_names = {s.name for s in recorder.on_end_calls}
+    # The failed nested subagent.span is tail-kept (flushed with its preserved trace).
+    assert "subagent.span" in forwarded_names
+    assert "workflow.envelope" in forwarded_names
+
+
+def test_non_mutation_files_operation_is_buffered_not_dropped_when_trace_kept() -> None:
+    """B-TAIL buffer-vs-drop: a non-mutation `files.operation` is BUFFERED (not dropped
+    outright, not force-forwarded) — so in a trace that DOES carry a §10.2 trigger
+    (sandbox.violation sibling) it is FLUSHED at root close. Makes the buffer path explicit
+    (the drop-path tests only prove not-force-forwarded)."""
+    proc, recorder = _new_tail_keep_with_recorder()
+    provider = TracerProvider()
+    provider.add_span_processor(proc)
+    tracer = provider.get_tracer(__name__)
+    with tracer.start_as_current_span("workflow.envelope"):
+        child = tracer.start_span("files.operation")
+        child.set_attribute("files.operation.kind", "list")  # non-mutation → buffered
+        child.end()
+        with tracer.start_as_current_span(SANDBOX_VIOLATION_SPAN_NAME):  # §10.2 trigger
+            pass
+    forwarded_names = {s.name for s in recorder.on_end_calls}
+    # The buffered non-mutation files.operation flushed because the trace was kept.
+    assert "files.operation" in forwarded_names
+    assert "workflow.envelope" in forwarded_names
 
 
 def test_force_flush_keeps_all_buffered_traces_to_avoid_silent_loss() -> None:
