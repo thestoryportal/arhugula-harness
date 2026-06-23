@@ -67,19 +67,26 @@ class RunStatus(StrEnum):
 
 
 class StepKind(StrEnum):
-    """The 6 step kinds (CP spec §5.2; materialized at §25.2 per in-session
-    amendment §E 2026-05-20; extended to 6 at CP spec v1.39).
+    """The 7 step kinds (CP spec §5.2; materialized at §25.2 per in-session
+    amendment §E 2026-05-20; extended to 6 at CP spec v1.39, to 7 at v1.54).
 
     Member string values match §5.2's verbatim listing:
     `declarative-step / inference-step / tool-step / HITL-step /
-    sub-agent-dispatch / managed-agents`.
+    sub-agent-dispatch / managed-agents / post-join-synthesis`.
 
-    Closed at cardinality 6 — extension is a Workflow §4.1.2 Class-2 revision
+    Closed at cardinality 7 — extension is a Workflow §4.1.2 Class-2 revision
     of §5.2. The `managed-agents` member is the operator-ratified (2026-06-17,
     Option B) R-FS-1 arc-M extension (CP spec v1.39); it is dispatched by the
     runtime `ManagedAgentsStepDispatcher` (C-RT-28 §14.20) to a vendor-run
     Managed Agents session — distinct from `sub-agent-dispatch`, whose
-    dispatcher orchestrates a harness-run child loop.
+    dispatcher orchestrates a harness-run child loop. The `post-join-synthesis`
+    member is the operator-ratified (2026-06-23, arc-a `A`) R-FS-1 arc
+    `B-POSTJOIN-LLM-SYNTHESIS` extension (CP spec v1.54); it is an OPT-IN
+    terminal post-barrier step dispatched by the runtime
+    `PostJoinSynthesisStepDispatcher` that LLM-composes the branch-index-ordered
+    sibling outputs of a concurrent fan-out (sacrificing the §25.12 Point-2
+    aggregator-purity guarantee for that run; the default deterministic fold is
+    byte-identical absent the opt-in). Read-only / effect-free.
     """
 
     DECLARATIVE_STEP = "declarative-step"
@@ -88,6 +95,7 @@ class StepKind(StrEnum):
     HITL_STEP = "HITL-step"
     SUB_AGENT_DISPATCH = "sub-agent-dispatch"
     MANAGED_AGENTS = "managed-agents"
+    POST_JOIN_SYNTHESIS = "post-join-synthesis"
 
 
 class WorkflowStep(BaseModel):
@@ -360,6 +368,21 @@ class StepExecutionContext(BaseModel):
     Same hash-inert / per-step-transient / resume-only posture as `run_engine_class`
     (NOT persisted, NOT in any §5.2 / outcome-hash); `None` default (every non-resume /
     non-fence dispatch) → byte-identical to pre-arc."""
+
+    sibling_outputs: tuple[tuple[int, Mapping[str, Any]], ...] | None = None
+    """B-POSTJOIN-LLM-SYNTHESIS (R-FS-1, CP spec v1.54 §3) — the branch-index-ordered
+    sibling worker outputs of a concurrent fan-out, supplied by the driver to the
+    terminal `POST_JOIN_SYNTHESIS` step's dispatch ONLY. Each entry is
+    `(branch_index, output)`; the tuple is sorted by `branch_index` (the SAME
+    deterministic order the §25.12 fold reads — Point-1 ordering preserved). The
+    runtime `PostJoinSynthesisStepDispatcher` composes them into the synthesized
+    aggregate via an LLM call; no other dispatcher reads it.
+
+    Same hash-inert / per-step-transient / driver-supplied posture as
+    `run_engine_class` (NOT persisted, NOT in any §5.2 / per-step-override
+    outcome-hash — the synthesis non-determinism is the §25.12 Point-2 sacrifice,
+    disclosed at the synthesis step entry + trace event, NOT a new hash field);
+    `None` default (every non-synthesis dispatch) → byte-identical to pre-arc."""
 
 
 def compose_branch_child_context(
