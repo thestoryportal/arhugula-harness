@@ -481,6 +481,34 @@ def test_negative_control_empty_branches_loses_recovery() -> None:
     }
 
 
+def test_resume_with_terminal_synthesis_rejected_fail_closed() -> None:
+    """Out-of-family Codex round 9 [P1] — a synthesis-bearing fan-out being RESUMED is
+    rejected fail-closed at the placement guard, BEFORE any branch/synthesis dispatch. The
+    strategy resume material-diff guard validates only the CARVED branch set; the terminal
+    POST_JOIN_SYNTHESIS step is carved before that check + has no snapshot identity, so a
+    changed / added / removed synthesis would bypass material-diff validation. This enforces
+    CP spec v1.54 §3/§4's "fresh first-and-only dispatch … no completed-synthesis replay";
+    reproducible synthesis-across-resume is the registered B-FANOUT-OUTPUT-REPLAY arc."""
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    snapshot = _captured_snapshot(
+        peer_fan_out_resume=PeerFanOutResumeState(branches=(), branch_count=2)
+    )
+    synthesis = WorkflowStep(
+        step_id=StepID("synthesis"),
+        step_kind=StepKind.POST_JOIN_SYNTHESIS,
+        step_payload={"messages": [], "params": {"max_tokens": 64}},
+    )
+    result = _run(
+        steps=[*_steps(2), synthesis],
+        dispatcher=_CountingDispatcher(),
+        ctx=ctx,
+        pause_snapshot_input=snapshot,
+    )
+    assert result.status is RunStatus.FAILED
+    assert result.fail_class is not None
+    assert result.fail_class.startswith("post-join-synthesis-on-resume-unsupported:")
+
+
 def test_resume_branch_count_mismatch_fails_closed() -> None:
     """Material-diff guard: a snapshot captured with branch_count=3 but resumed
     against a 2-branch body fails CLOSED (the recovered ordinals no longer map to

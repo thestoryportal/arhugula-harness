@@ -457,14 +457,19 @@ async def test_edit_decoded_payload_reaches_real_llm_dispatcher() -> None:
 
 
 @pytest.mark.asyncio
-async def test_post_join_synthesis_minimal_payload_coerces_through_real_dispatcher() -> None:
-    """[P2] — the minimal documented synthesis payload (`{"messages": [...]}`), composed
-    by `_compose_synthesis_payload`, now coerces through the PRODUCTION `_coerce_payload`
-    → `ProviderAgnosticPayload` (where `tools` + `params` are REQUIRED fields) and the
-    branch-index-ordered siblings reach the real provider call. Before the fix this raised
-    `LLMDispatchPayloadShapeError` before any LLM call (the gap every stub hid)."""
+async def test_post_join_synthesis_realistic_payload_coerces_through_real_dispatcher() -> None:
+    """[P2] — a realistic synthesis payload (`{"messages": [...], "params": {"max_tokens":
+    N}}`, like EVERY inference step), composed by `_compose_synthesis_payload`, coerces
+    through the PRODUCTION `_coerce_payload` → `ProviderAgnosticPayload` (harness forces
+    `tools=None`; the author supplies `params`) and the branch-index-ordered siblings reach
+    the real provider call. The harness does NOT manufacture a `params`/`max_tokens` default
+    (round 9 [P2]: a fabricated `params={}` coerces locally but the real Anthropic call
+    needs `max_tokens`) — the synthesis payload is a normal inference payload."""
     composed = _compose_synthesis_payload(
-        {"messages": [{"role": "system", "content": "synthesize the siblings"}]},
+        {
+            "messages": [{"role": "system", "content": "synthesize the siblings"}],
+            "params": {"max_tokens": 128},
+        },
         ((0, {"finding": "alpha"}), (1, {"finding": "beta"})),
     )
     step = WorkflowStep(
@@ -481,6 +486,9 @@ async def test_post_join_synthesis_minimal_payload_coerces_through_real_dispatch
     # Coerced + dispatched (no LLMDispatchPayloadShapeError) — the [P2] fix end-to-end.
     assert result["id"] == "msg_test_001"
     assert adapter.client.messages.last_kwargs is not None
+    # The author's params reached the REAL Anthropic call (max_tokens present — the round-9
+    # gap: a fabricated params={} would have omitted it).
+    assert adapter.client.messages.last_kwargs["max_tokens"] == 128
     # The branch-index-ordered siblings reached the REAL provider call (the last user
     # message; the `system` instruction is extracted by the anthropic translator).
     sibling_msg = adapter.client.messages.last_kwargs["messages"][-1]
@@ -608,7 +616,10 @@ def test_post_join_synthesis_single_chain_through_real_dispatcher() -> None:
     step = WorkflowStep(
         step_id=StepID("synthesis"),
         step_kind=StepKind.POST_JOIN_SYNTHESIS,
-        step_payload={"messages": [{"role": "system", "content": "synthesize the siblings"}]},
+        step_payload={
+            "messages": [{"role": "system", "content": "synthesize the siblings"}],
+            "params": {"max_tokens": 128},
+        },
     )
     ctx = _step_context().model_copy(
         update={"sibling_outputs": ((0, {"finding": "alpha"}), (1, {"finding": "beta"}))}
@@ -616,7 +627,7 @@ def test_post_join_synthesis_single_chain_through_real_dispatcher() -> None:
 
     out = synth.dispatch(_binding("anthropic"), step, step_context=ctx)
 
-    # The minimal payload coerced + dispatched through the real chain (no stub).
+    # The realistic payload coerced + dispatched through the real chain (no stub).
     assert out["id"] == "msg_test_001"
     assert adapter.client.messages.last_kwargs is not None
     sibling_msg = adapter.client.messages.last_kwargs["messages"][-1]

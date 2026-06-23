@@ -148,15 +148,18 @@ def _compose_synthesis_payload(
     composed["messages"] = [*messages, sibling_message]
     # Out-of-family Codex round 8 [P2]: the production inner `RuntimeLLMDispatcher`
     # coerces `step_payload` via `ProviderAgnosticPayload.model_validate` (frozen,
-    # extra="forbid"), where `tools` and `params` are REQUIRED fields (no defaults — like
-    # EVERY inference step). The minimal synthesis shape the spec/tests document
-    # (`{"messages": [...]}`) would FAIL that validation before the LLM call. Force
-    # `tools=None` (the synthesis is effect-free — tools is ALWAYS None here, NOT
-    # author-controlled, unlike a normal step) + default `params={}`, so the documented
-    # minimal shape coerces. Stubbed tests never built a real `ProviderAgnosticPayload`,
-    # so this gap was invisible until the real-dispatcher witness.
+    # extra="forbid"), where `tools` and `params` are REQUIRED fields. Force `tools=None`
+    # — the synthesis is effect-free, so tools is ALWAYS None here, NOT author-controlled
+    # (out-of-family Codex round 8 [P2]). `params` is author-supplied, exactly like EVERY
+    # inference step: a synthesis payload is a normal inference payload (the harness only
+    # appends the siblings + forces tools-free); the operator supplies `messages` +
+    # `params` (e.g. Anthropic `messages.create` REQUIRES `params['max_tokens']`). The
+    # realistic minimal shape is `{"messages": [...], "params": {"max_tokens": N}}`, NOT
+    # messages-only — "minimal" means no reducer DSL / no configurable templating, not
+    # omitting provider-required params (out-of-family Codex round 9 [P2]: a manufactured
+    # `params={}` coerces locally but the real Anthropic call fails for want of max_tokens;
+    # do NOT fabricate a provider-specific default in this provider-agnostic dispatcher).
     composed["tools"] = None
-    composed.setdefault("params", {})
     return composed
 
 

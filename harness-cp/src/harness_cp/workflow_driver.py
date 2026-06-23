@@ -1669,6 +1669,40 @@ def _execute_workflow_body(
         i for i, _s in enumerate(steps) if _s.step_kind is StepKind.POST_JOIN_SYNTHESIS
     ]
     if _synth_positions:
+        # B-POSTJOIN resume guard (out-of-family Codex round 9 [P1]): a synthesis-bearing
+        # fan-out being RESUMED bypasses the material-diff fail-closed guarantee. The
+        # strategy resume guards validate the CARVED branch set against the snapshot
+        # (count + per-branch identity), but the terminal POST_JOIN_SYNTHESIS step is
+        # carved BEFORE those checks (`_split_synthesis`) and the pause snapshot holds no
+        # synthesis identity to diff against — so adding / removing / changing the synthesis
+        # step between pause and resume passes validation, and the resumed run dispatches a
+        # divergent synthesis (or silently falls back to the fold). Reject fail-closed: this
+        # ENFORCES the boundary CP spec v1.54 §3/§4 already declares (a synthesized run is a
+        # "fresh first-and-only dispatch … no completed-synthesis replay"). Reproducible
+        # synthesis-across-resume — incl. the snapshot-coverage extension — is the registered
+        # follow-on `B-FANOUT-OUTPUT-REPLAY`, NOT this arc. (A synthesis only appears in a
+        # concurrent fan-out per the guard below, so `resume_snapshot is not None` here is a
+        # fan-out resume carrying a synthesis.)
+        if resume_snapshot is not None:
+            return (
+                RunResult(
+                    workflow_id=manifest_entry.workflow_id,
+                    run_id=run_id,
+                    status=RunStatus.FAILED,
+                    terminal_step_index=_synth_positions[0],
+                    partial_state=None,
+                    final_state=None,
+                    fail_class=(
+                        "post-join-synthesis-on-resume-unsupported: a POST_JOIN_SYNTHESIS "
+                        "terminal step is a fresh first-and-only dispatch (CP spec v1.54 "
+                        "§3/§4) — it is NOT covered by the fan-out resume material-diff "
+                        "validation (the synthesis is carved before the branch-set diff, "
+                        "with no snapshot identity). Reproducible synthesis-across-resume is "
+                        "the registered B-FANOUT-OUTPUT-REPLAY arc."
+                    ),
+                ),
+                0,
+            )
         _concurrent_fanout = {
             _DriverStrategyStatus.PARALLELIZATION,
             _DriverStrategyStatus.ORCHESTRATOR_WORKERS,
