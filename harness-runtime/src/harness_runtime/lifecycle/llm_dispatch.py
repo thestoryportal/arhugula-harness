@@ -82,7 +82,7 @@ from harness_cp.routing_core_surface import (
 from harness_cp.routing_layer import RoutingLayer
 from harness_cp.routing_manifest_residence import RoutingManifest
 from harness_cp.validator_fail_transient_staircase import CrossTrustBoundaryState
-from harness_cp.workflow_driver_types import StepExecutionContext, WorkflowStep
+from harness_cp.workflow_driver_types import StepExecutionContext, StepKind, WorkflowStep
 from harness_od.otel_genai_base import HIERARCHY_CORRELATION_KEY, GenAiOperation
 
 from harness_runtime.lifecycle.cost_record_sink import SupportsCostRecordAppend
@@ -842,6 +842,33 @@ class RuntimeLLMDispatcher:
                     )
 
         payload = _coerce_payload(step.step_payload)
+
+        # --- B-POSTJOIN effect-free boundary guard (out-of-family Codex round 8 [P1]) ---
+        # The LOAD-BEARING enforcement of the synthesis effect-free invariant (CP spec
+        # v1.54 §3). This is the single convergence point for ALL payload sources: the
+        # original compose, the `params` route, AND a post-HITL-EDIT replacement — the
+        # `RuntimeHITLGateComposer` wraps this dispatcher, so a PRE_ACTION EDIT that
+        # re-introduces tools lands in `step.step_payload` BEFORE this `_coerce_payload`.
+        # The compose-time guard ran upstream and CANNOT see the edited payload; this
+        # boundary is the real floor (`[[enforce-floor-no-bypass-seam]]`). A
+        # POST_JOIN_SYNTHESIS step is read-only / effect-free — reject any tool binding
+        # before the provider call (the synthesis except in `_maybe_post_join_synthesis`
+        # maps this to a FAILED RunResult). Scoped to the SAFETY half only: an EDIT that
+        # drops the sibling context is operator intent shown at the gate (CP spec v1.54 §3),
+        # not a silent break.
+        if step.step_kind is StepKind.POST_JOIN_SYNTHESIS:
+            from harness_runtime.lifecycle.post_join_synthesis_dispatch import (
+                post_join_tool_binding_violations,
+            )
+
+            _synth_violations = post_join_tool_binding_violations(payload.tools, payload.params)
+            if _synth_violations:
+                raise LLMDispatchPayloadShapeError(
+                    "post-join-synthesis step is read-only / effect-free but the dispatched "
+                    f"payload binds tools ({', '.join(_synth_violations)}); rejected at the LLM "
+                    "dispatch boundary (this catches a post-HITL-EDIT re-introduction the "
+                    "compose-time guard cannot see). CP spec v1.54 §3."
+                )
 
         # --- B-INTERSTEP (runtime spec §14.21 C-RT-29): upstream-output read ---
         # The immediately-prior step's output (the opt-in inter-step channel's

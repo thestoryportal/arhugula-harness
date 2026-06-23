@@ -93,6 +93,10 @@ from harness_runtime.lifecycle.llm_dispatch import (
     RuntimeLLMDispatcher,
     materialize_llm_dispatcher_stage,
 )
+from harness_runtime.lifecycle.post_join_synthesis_dispatch import (
+    POST_JOIN_SYNTHESIS_SIBLINGS_PREFIX,
+    _compose_synthesis_payload,
+)
 from harness_runtime.lifecycle.prompt_selection import (
     PromptSelectionUnauthoredError,
     PromptVersionUnapprovedError,
@@ -438,6 +442,141 @@ async def test_edit_decoded_payload_reaches_real_llm_dispatcher() -> None:
     # str→Mapping→step_payload→_coerce_payload→provider chain end-to-end.
     assert adapter.client.messages.last_kwargs is not None
     assert adapter.client.messages.last_kwargs["messages"] == edited_messages
+
+
+# ---------------------------------------------------------------------------
+# B-POSTJOIN-LLM-SYNTHESIS — real-dispatcher witnesses (out-of-family Codex round 8).
+# The arc was built + tested against STUBS (_RecordingInner / _OWDispatcher / a
+# hand-rolled _OllamaInner), so the PRODUCTION payload path (`_coerce_payload` →
+# `ProviderAgnosticPayload`) + the HITL-EDIT interaction were never exercised — the root
+# cause of the round-5..8 finding streak. These drive a `POST_JOIN_SYNTHESIS` step
+# through the REAL `RuntimeLLMDispatcher` over a recording provider adapter (the missing
+# full-chain witness; `[[full-chain-witness-not-half-proofs]]`).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_post_join_synthesis_minimal_payload_coerces_through_real_dispatcher() -> None:
+    """[P2] — the minimal documented synthesis payload (`{"messages": [...]}`), composed
+    by `_compose_synthesis_payload`, now coerces through the PRODUCTION `_coerce_payload`
+    → `ProviderAgnosticPayload` (where `tools` + `params` are REQUIRED fields) and the
+    branch-index-ordered siblings reach the real provider call. Before the fix this raised
+    `LLMDispatchPayloadShapeError` before any LLM call (the gap every stub hid)."""
+    composed = _compose_synthesis_payload(
+        {"messages": [{"role": "system", "content": "synthesize the siblings"}]},
+        ((0, {"finding": "alpha"}), (1, {"finding": "beta"})),
+    )
+    step = WorkflowStep(
+        step_id=StepID("synthesis"),
+        step_kind=StepKind.POST_JOIN_SYNTHESIS,
+        step_payload=composed,
+    )
+    adapter = _AnthropicFakeAdapter(_AnthropicClient())
+    tp, _ = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(providers={"anthropic": adapter}, tracer_provider=tp)
+
+    result = await dispatcher.dispatch(_binding("anthropic"), step, step_context=_step_context())
+
+    # Coerced + dispatched (no LLMDispatchPayloadShapeError) — the [P2] fix end-to-end.
+    assert result["id"] == "msg_test_001"
+    assert adapter.client.messages.last_kwargs is not None
+    # The branch-index-ordered siblings reached the REAL provider call (the last user
+    # message; the `system` instruction is extracted by the anthropic translator).
+    sibling_msg = adapter.client.messages.last_kwargs["messages"][-1]
+    assert sibling_msg["content"].startswith(POST_JOIN_SYNTHESIS_SIBLINGS_PREFIX)
+    assert "alpha" in sibling_msg["content"]
+    assert "beta" in sibling_msg["content"]
+
+
+@pytest.mark.asyncio
+async def test_post_join_synthesis_tool_bearing_payload_rejected_at_dispatch_boundary() -> None:
+    """[P1] — the LOAD-BEARING effect-free boundary guard. A POST_JOIN_SYNTHESIS step whose
+    payload binds tools (the shape a post-HITL-EDIT replacement can produce) is rejected at
+    the LLM dispatch boundary (post-`_coerce_payload`), BEFORE the provider call. The
+    compose-time guard cannot see such a payload; this is the real floor."""
+    step = WorkflowStep(
+        step_id=StepID("synthesis"),
+        step_kind=StepKind.POST_JOIN_SYNTHESIS,
+        step_payload={
+            "messages": [{"role": "user", "content": "x"}],
+            "tools": [{"name": "write_file"}],
+            "params": {},
+        },
+    )
+    adapter = _AnthropicFakeAdapter(_AnthropicClient())
+    tp, _ = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(providers={"anthropic": adapter}, tracer_provider=tp)
+
+    with pytest.raises(LLMDispatchPayloadShapeError, match="effect-free"):
+        await dispatcher.dispatch(_binding("anthropic"), step, step_context=_step_context())
+    # Rejected BEFORE the provider call — no LLM dispatch fired.
+    assert adapter.client.messages.last_kwargs is None
+
+
+@pytest.mark.asyncio
+async def test_post_join_synthesis_hitl_edit_readding_tools_rejected_at_boundary() -> None:
+    """[P1] — the HITL-EDIT bypass, closed END-TO-END. A PRE_ACTION HITL gate on a
+    POST_JOIN_SYNTHESIS step with operator EDIT replaces the step_payload INSIDE the inner
+    dispatcher (AFTER the compose-time guard ran); the edited payload re-adds tools. The
+    boundary guard (downstream of the edit, at the real dispatcher) rejects it before the
+    provider call — the effect-free invariant holds against EVERY payload source. Mirrors
+    `test_edit_decoded_payload_reaches_real_llm_dispatcher` with a synthesis step."""
+    edited_str = json.dumps(
+        {
+            "messages": [{"role": "user", "content": "edited"}],
+            "tools": [{"name": "rm_rf"}],
+            "params": {},
+        }
+    )
+
+    class _AskEdit:
+        async def ask(
+            self, prompt: str, options: Sequence[HITLResponse], timeout: float | None
+        ) -> AskUserQuestionResult:
+            _ = prompt, options, timeout
+            return AskUserQuestionResult(
+                response=HITLResponse.EDIT, latency_ms=4.0, edited_proposal=edited_str
+            )
+
+    class _Ledger:
+        def append(self, payload: Any, key: Any) -> Any:
+            return ("h", payload, key)
+
+    class _Audit:
+        def append(self, *, tenant_id: Any, audit_entry: Any) -> Any:
+            _ = tenant_id
+            return ("w", audit_entry)
+
+    adapter = _AnthropicFakeAdapter(_AnthropicClient())
+    tp, _ = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(providers={"anthropic": adapter}, tracer_provider=tp)
+    composer = RuntimeHITLGateComposer(
+        inner=dispatcher,
+        applicable_placements=frozenset({HITLPlacementKind.PRE_ACTION}),
+        ask_user_question_surface=cast(AskUserQuestionSurface, _AskEdit()),
+        ledger_writer=cast(Any, _Ledger()),
+        audit_writer=cast(Any, _Audit()),
+        tracer_provider=tp,
+        audit_signing_key_id="harness-runtime-test",
+        audit_signing_algorithm=SignatureAlgorithm.ED25519,
+        procedural_tier_snapshot_resolver=lambda: Identifier("b" * 64),
+    )
+    synthesis_step = WorkflowStep(
+        step_id=StepID("synthesis"),
+        step_kind=StepKind.POST_JOIN_SYNTHESIS,
+        step_payload={
+            "messages": [{"role": "user", "content": "original"}],
+            "tools": None,
+            "params": {},
+        },
+    )
+    placement = HITLPlacement(position=HITLPlacementKind.PRE_ACTION)
+    ctx = _step_context().model_copy(update={"hitl_placements": (placement,)})
+
+    with pytest.raises(LLMDispatchPayloadShapeError, match="effect-free"):
+        await composer.dispatch(_binding("anthropic"), synthesis_step, step_context=ctx)
+    # The operator's tool-re-adding EDIT never reached the provider.
+    assert adapter.client.messages.last_kwargs is None
 
 
 @pytest.mark.asyncio

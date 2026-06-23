@@ -286,6 +286,40 @@ def test_post_join_synthesis_full_chain_per_step_override_reaches_context() -> N
     assert inner.received_context.agent_role == AgentRole("synthesizer")
 
 
+def test_post_join_synthesis_full_chain_context_action_id_matches_ledger_entry() -> None:
+    """Out-of-family Codex round 8 [P2] regression — the synthesis context's
+    `parent_action_id` MUST equal the synthesis step's OWN disclosing ledger entry
+    action_id (`workflow:{wf}:post-join-synthesis:{N}`), NOT the generic `...:step:{N}`.
+    Cost attribution + HITL audit/webhook records join on this context field; a `:step:`
+    value would point at an action_id with no matching synthesis ledger entry."""
+    inner = _RecordingInner()
+    registry = cast(
+        StepDispatcherRegistry,
+        _Registry(
+            worker=_WorkerEcho(),
+            synthesis=PostJoinSynthesisStepDispatcher(inner=cast(StepDispatcher, inner)),
+        ),
+    )
+    ctx = cast(DriverContext, _Ctx(ledger=_RecordingLedger(), emitter=_Emitter()))
+
+    result = execute_workflow(
+        _manifest(),
+        [_worker(0), _worker(1), _synthesis_step()],  # 2 branches → synthesis_index = 2
+        run_id="run-1",
+        ctx=ctx,
+        default_model_binding=ModelBinding(provider="anthropic", model="claude-haiku-4-5"),
+        step_dispatchers=registry,
+    )
+
+    assert result.status is RunStatus.SUCCESS
+    # Matches `_append_synthesis_ledger_entry`'s action_id — the audit join is intact.
+    assert (
+        inner.received_context.parent_action_id
+        == "workflow:wf-postjoin-full-chain:post-join-synthesis:2"
+    )
+    assert ":step:" not in inner.received_context.parent_action_id
+
+
 def test_post_join_synthesis_full_chain_emits_step_boundary() -> None:
     """Codex [P2] regression — a successful synthesis is a real step that executed,
     so it emits one ADDITIONAL lifecycle STEP_BOUNDARY beyond the fan-out branches

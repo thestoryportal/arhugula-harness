@@ -33,8 +33,10 @@ from harness_cp.workflow_driver import StepDispatcher
 from harness_cp.workflow_driver_types import WorkflowStep
 
 __all__ = [
+    "POST_JOIN_EFFECT_BEARING_PARAM_KEYS",
     "POST_JOIN_SYNTHESIS_SIBLINGS_PREFIX",
     "PostJoinSynthesisStepDispatcher",
+    "post_join_tool_binding_violations",
 ]
 
 #: Prefix labelling the injected branch-index-ordered sibling-output context
@@ -53,13 +55,36 @@ POST_JOIN_SYNTHESIS_SIBLINGS_PREFIX = "[post-join siblings]\n"
 #: set is complete for the committed 3-provider stack (anthropic `mcp_servers`/`tools`/
 #: `tool_choice`; openai `tools`/`tool_choice`/legacy `functions`/`function_call`;
 #: ollama `tools`).
-_EFFECT_BEARING_PARAM_KEYS = (
+POST_JOIN_EFFECT_BEARING_PARAM_KEYS = (
     "tools",
     "tool_choice",
     "functions",
     "function_call",
     "mcp_servers",
 )
+
+
+def post_join_tool_binding_violations(tools: Any, params: Any) -> list[str]:
+    """Return the tool-binding keys present on a (would-be) synthesis payload — the
+    top-level ``tools`` (when truthy) + any `POST_JOIN_EFFECT_BEARING_PARAM_KEYS` present
+    in ``params``. Non-empty ⇒ the payload is NOT effect-free.
+
+    The SINGLE source of truth for "what makes a synthesis non-effect-free," shared by
+    two guard sites (out-of-family Codex round 8 [P1]): (1) the compose-time EARLY guard
+    here (clear error on the raw step_payload, the common non-HITL case) and (2) the
+    LOAD-BEARING boundary guard at the production LLM dispatch (`RuntimeLLMDispatcher`,
+    keyed on `step_kind is POST_JOIN_SYNTHESIS`, post-`_coerce_payload`) — the convergence
+    point DOWNSTREAM of a HITL PRE_ACTION EDIT, which replaces `step.step_payload` verbatim
+    AFTER the compose guard ran and so can re-introduce tools. Compose-time enforcement
+    structurally cannot see the edited payload; the boundary is the real floor
+    (`[[enforce-floor-no-bypass-seam]]`)."""
+    violations: list[str] = []
+    if tools:
+        violations.append("tools")
+    if isinstance(params, Mapping):
+        params_map = cast("Mapping[str, Any]", params)
+        violations.extend(k for k in POST_JOIN_EFFECT_BEARING_PARAM_KEYS if params_map.get(k))
+    return violations
 
 
 def _compose_synthesis_payload(
@@ -75,54 +100,41 @@ def _compose_synthesis_payload(
     the dispatcher does NOT introspect the opaque step body otherwise (the
     `workflow_driver` §25.3.3.4 step-body-opaque discipline)."""
     composed = dict(payload)
-    # Out-of-family Codex [P1]: ENFORCE the load-bearing read-only / effect-free
-    # property (the §25.12 safety argument + the at-most-once-safe re-dispatch + the
-    # READ_ONLY blast-radius classification all rest on it). A synthesis payload that
-    # declares provider `tools` would enter the model tool loop and dispatch REAL tools
-    # — making the synthesis effectful. The synthesis is a PURE compose of the siblings;
-    # reject a tool-capable payload fail-closed (`[[enforce-floor-no-bypass-seam]]` —
-    # a claimed property must be enforced, not just asserted).
-    if composed.get("tools"):
+    # Compose-time EARLY effect-free guard (clear error for the common non-HITL case;
+    # rounds 5/6 [P1] + adversarial F1). The synthesis is read-only / effect-free (the
+    # §25.12 safety argument + at-most-once-safe re-dispatch + READ_ONLY blast-radius all
+    # rest on it). A tool-bearing payload — top-level `tools` OR `params['tools']` /
+    # `tool_choice` / `mcp_servers` / legacy `functions` (the LLM translators merge
+    # `kwargs.update(payload.params)` AFTER setting tools) — would enter the model tool
+    # loop + dispatch real effects. The LOAD-BEARING enforcement is the boundary guard at
+    # the production LLM dispatch (round 8 [P1]) — it re-runs `post_join_tool_binding_
+    # violations` POST-HITL-edit, which this compose-time guard cannot see; this is the
+    # early/clear half (`[[enforce-floor-no-bypass-seam]]`).
+    _tool_violations = post_join_tool_binding_violations(
+        composed.get("tools"), composed.get("params")
+    )
+    if _tool_violations:
         raise ValueError(
-            "post-join-synthesis payload may not declare tools: the synthesis step is "
-            "read-only / effect-free (a pure compose of the fan-out siblings); provider "
-            "tools would enter the model tool loop and dispatch real effects, violating "
-            "the §25.12 effect-free property + the READ_ONLY blast-radius classification."
+            "post-join-synthesis payload may not declare provider tool-binding "
+            f"({', '.join(_tool_violations)}): the synthesis step is read-only / effect-free "
+            "(a pure compose of the fan-out siblings); tools would enter the model tool loop "
+            "and dispatch real effects, violating the §25.12 effect-free property + the "
+            "READ_ONLY blast-radius classification. (Re-enforced at the LLM dispatch boundary "
+            "post-HITL-edit.)"
         )
-    # Out-of-family Codex [P2]: the LLM translators do `kwargs.update(payload.params)`,
-    # so a `params["messages"]` escape-hatch would OVERWRITE the appended sibling
-    # context — the model would receive NO branch outputs while the run still reports
-    # a synthesized final state. The synthesis OWNS its messages (it composes the
-    # siblings); reject the conflicting escape-hatch fail-closed (the driver's
-    # failure-mapping converts this to a FAILED RunResult).
+    # `params['messages']` clobber guard (a SEPARATE concern — sibling-loss, not effect):
+    # the LLM translators do `kwargs.update(payload.params)`, so a `params['messages']`
+    # escape-hatch would OVERWRITE the appended sibling context (the model would receive NO
+    # branch outputs while the run still reports a synthesized final state). The synthesis
+    # OWNS its messages; reject fail-closed.
     _params = composed.get("params")
-    if isinstance(_params, Mapping):
-        _params_map = cast("Mapping[str, Any]", _params)
-        if "messages" in _params_map:
-            raise ValueError(
-                "post-join-synthesis payload may not set params['messages']: the provider "
-                "escape-hatch overwrites the appended sibling-context message (the model "
-                "would receive no branch outputs). Put the synthesis instruction in "
-                "payload['messages'] instead."
-            )
-        # Out-of-family Codex round 6 [P1] + adversarial-reviewer F1 (both reviewers
-        # converged): the round-5 fix rejected only TOP-LEVEL `tools`, but the LLM
-        # translators merge `kwargs.update(payload.params)` AFTER setting tools, so
-        # `params['tools']` (or `tool_choice` / `mcp_servers` / legacy `functions`) reaches
-        # the provider unchecked — the same `kwargs.update(payload.params)` route the
-        # `params['messages']` guard above already defends. A half-closed effect-free guard
-        # is the `[[enforce-floor-no-bypass-seam]]` anti-pattern; reject tool-binding by
-        # EVERY route fail-closed.
-        _effect_keys = [k for k in _EFFECT_BEARING_PARAM_KEYS if _params_map.get(k)]
-        if _effect_keys:
-            raise ValueError(
-                "post-join-synthesis payload may not declare provider tool-binding keys in "
-                f"params ({', '.join(_effect_keys)}): the LLM translators merge "
-                "`kwargs.update(payload.params)`, so these reach the provider and make the "
-                "synthesis effectful, violating the §25.12 effect-free property + the "
-                "READ_ONLY blast-radius classification. The synthesis is a pure compose of "
-                "the fan-out siblings (effect-bearing steps belong upstream as branches)."
-            )
+    if isinstance(_params, Mapping) and "messages" in cast("Mapping[str, Any]", _params):
+        raise ValueError(
+            "post-join-synthesis payload may not set params['messages']: the provider "
+            "escape-hatch overwrites the appended sibling-context message (the model "
+            "would receive no branch outputs). Put the synthesis instruction in "
+            "payload['messages'] instead."
+        )
     messages: list[Any] = list(composed.get("messages", ()))
     sibling_message: dict[str, Any] = {
         "role": "user",
@@ -134,6 +146,17 @@ def _compose_synthesis_payload(
         ),
     }
     composed["messages"] = [*messages, sibling_message]
+    # Out-of-family Codex round 8 [P2]: the production inner `RuntimeLLMDispatcher`
+    # coerces `step_payload` via `ProviderAgnosticPayload.model_validate` (frozen,
+    # extra="forbid"), where `tools` and `params` are REQUIRED fields (no defaults — like
+    # EVERY inference step). The minimal synthesis shape the spec/tests document
+    # (`{"messages": [...]}`) would FAIL that validation before the LLM call. Force
+    # `tools=None` (the synthesis is effect-free — tools is ALWAYS None here, NOT
+    # author-controlled, unlike a normal step) + default `params={}`, so the documented
+    # minimal shape coerces. Stubbed tests never built a real `ProviderAgnosticPayload`,
+    # so this gap was invisible until the real-dispatcher witness.
+    composed["tools"] = None
+    composed.setdefault("params", {})
     return composed
 
 

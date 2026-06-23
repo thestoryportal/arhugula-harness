@@ -154,7 +154,7 @@ def test_post_join_synthesis_rejects_tool_capable_payload() -> None:
         step_kind=StepKind.POST_JOIN_SYNTHESIS,
         step_payload={"messages": [], "tools": [{"name": "write_file"}]},
     )
-    with pytest.raises(ValueError, match="may not declare tools"):
+    with pytest.raises(ValueError, match="may not declare provider tool-binding"):
         disp.dispatch(
             cast(StepEffectiveBinding, object()),
             step,
@@ -188,7 +188,7 @@ def test_post_join_synthesis_rejects_params_tool_binding(param_key: str, param_v
         step_kind=StepKind.POST_JOIN_SYNTHESIS,
         step_payload={"messages": [], "params": {param_key: param_value}},
     )
-    with pytest.raises(ValueError, match="tool-binding keys in params"):
+    with pytest.raises(ValueError, match="may not declare provider tool-binding"):
         disp.dispatch(
             cast(StepEffectiveBinding, object()),
             step,
