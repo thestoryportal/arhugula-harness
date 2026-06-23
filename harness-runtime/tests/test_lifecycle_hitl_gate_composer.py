@@ -2945,3 +2945,415 @@ def test_hitl_terminal_exceptions_carry_rt_fail_class_marker() -> None:
     assert (
         getattr(HITLGateRejectedError("x"), "rt_fail_class", None) == "RT-FAIL-HITL-GATE-REJECTED"
     )
+
+
+# ---------------------------------------------------------------------------
+# B-HITL-PLACEMENT-PER-STEP-LOOSEN (R-FS-1 final-closure; CP spec v1.53 §6.2) —
+# opt-in per-step SUB_AGENT_BOUNDARY gate REMOVAL: solo-scoped, floor-clamped,
+# auto-audited. Witnesses by-execution through the SUB_AGENT_BOUNDARY composer.
+# ---------------------------------------------------------------------------
+
+
+def _sab_step() -> WorkflowStep:
+    return _make_step(placements=(HITLPlacement(position=HITLPlacementKind.SUB_AGENT_BOUNDARY),))
+
+
+def _sab_binding(
+    persona_tier: PersonaTier,
+    *,
+    removed: bool,
+    engine_class: Any = None,
+) -> Any:
+    """A `StepEffectiveBinding` for a sub-agent step, with/without the removal opt-in."""
+    from harness_cp.cp_shared_types import ModelBinding
+    from harness_cp.engine_class import EngineClass
+    from harness_cp.hitl_placement import LoosenablePlacementKind
+    from harness_cp.per_step_override_evaluator import StepEffectiveBinding
+
+    return StepEffectiveBinding(
+        step_id="step-sab",
+        model_binding=ModelBinding(provider="anthropic", model="claude-test-1"),
+        engine_class=(
+            engine_class if engine_class is not None else EngineClass.PURE_PATTERN_NO_ENGINE
+        ),
+        override_applied=removed,
+        persona_tier=persona_tier,
+        removed_placements=(
+            frozenset({LoosenablePlacementKind.SUB_AGENT_BOUNDARY}) if removed else frozenset()
+        ),
+    )
+
+
+def _sab_composer(
+    *,
+    tracer_provider: TracerProvider,
+    blast: Any,
+    policy: Any,
+    surface: _MockAskUserQuestionSurface | None = None,
+    inner: _MockInnerDispatcher | None = None,
+    ledger: _MockLedgerWriter | None = None,
+    audit: _MockAuditWriter | None = None,
+    mcp_trust_resolver: Any = None,
+) -> RuntimeHITLGateComposer:
+    """A composer for `applicable_placements={SUB_AGENT_BOUNDARY}` (the host-less c_rt_17)."""
+    return RuntimeHITLGateComposer(
+        inner=cast(Any, inner if inner is not None else _MockInnerDispatcher()),
+        applicable_placements=frozenset({HITLPlacementKind.SUB_AGENT_BOUNDARY}),
+        ask_user_question_surface=cast(
+            AskUserQuestionSurface,
+            surface if surface is not None else _MockAskUserQuestionSurface([]),
+        ),
+        ledger_writer=cast(Any, ledger if ledger is not None else _MockLedgerWriter()),
+        audit_writer=cast(Any, audit if audit is not None else _MockAuditWriter()),
+        tracer_provider=tracer_provider,
+        audit_signing_key_id="harness-runtime-test",
+        audit_signing_algorithm=SignatureAlgorithm.ED25519,
+        procedural_tier_snapshot_resolver=lambda: _Identifier("b" * 64),
+        blast_radius_resolver=lambda _step: blast,
+        hitl_auto_approve_policy=policy,
+        mcp_trust_tier_resolver=mcp_trust_resolver,
+    )
+
+
+@pytest.mark.asyncio
+async def test_sab_removal_non_vacuity_per_step_skips_while_sibling_gates(
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+) -> None:
+    """NON-VACUITY (advisor #1): with the §19.5 persona-floor knob OFF (floor LIVE),
+    the SUB_AGENT_BOUNDARY gate FIRES at solo+read-only; the per-step removal skips
+    THIS step's gate while an unremoved sibling still gates. The genuine per-step
+    delta over §19.5 (a global floor policy) — proven on the SAME composer config."""
+    from harness_as import BlastRadiusTier
+    from harness_runtime.lifecycle.hitl_auto_approve_policy import HITLAutoApprovePolicy
+
+    provider, _ = tracer_provider
+    # Persona floor LIVE (knob OFF) — the §19.5 global skip is disabled.
+    policy = HITLAutoApprovePolicy(solo_persona_floor_auto=False)
+
+    # Sibling (no removal) → gate FIRES (operator prompted).
+    sib_surface = _MockAskUserQuestionSurface(
+        [AskUserQuestionResult(response=HITLResponse.APPROVE, latency_ms=1.0)]
+    )
+    sib_composer = _sab_composer(
+        tracer_provider=provider,
+        blast=BlastRadiusTier.READ_ONLY,
+        policy=policy,
+        surface=sib_surface,
+    )
+    await sib_composer.dispatch(
+        _sab_binding(PersonaTier.SOLO_DEVELOPER, removed=False),
+        _sab_step(),
+        step_context=_make_step_context(),
+    )
+    assert len(sib_surface.calls) == 1, "unremoved sibling MUST gate (persona floor live)"
+
+    # This step (removal opt-in) → gate SKIPS (operator NEVER prompted).
+    rm_surface = _MockAskUserQuestionSurface([])  # empty: a prompt would raise
+    rm_inner = _MockInnerDispatcher()
+    rm_composer = _sab_composer(
+        tracer_provider=provider,
+        blast=BlastRadiusTier.READ_ONLY,
+        policy=policy,
+        surface=rm_surface,
+        inner=rm_inner,
+    )
+    result = await rm_composer.dispatch(
+        _sab_binding(PersonaTier.SOLO_DEVELOPER, removed=True),
+        _sab_step(),
+        step_context=_make_step_context(),
+    )
+    assert result == {"inner_dispatched": True}
+    assert rm_surface.calls == [], "per-step removal MUST skip the gate (no prompt)"
+    assert len(rm_inner.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_sab_removal_effective_at_local_mutation(
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+) -> None:
+    """Ratified {read-only, local-mutation} scope: removal skips the gate at
+    LOCAL_MUTATION (the blast cell is overridden to AUTO for the removal) even with
+    the §19.5 local-mutation knob OFF — the per-step opt-in covers it."""
+    from harness_as import BlastRadiusTier
+    from harness_runtime.lifecycle.hitl_auto_approve_policy import HITLAutoApprovePolicy
+
+    provider, _ = tracer_provider
+    surface = _MockAskUserQuestionSurface([])
+    composer = _sab_composer(
+        tracer_provider=provider,
+        blast=BlastRadiusTier.LOCAL_MUTATION,
+        policy=HITLAutoApprovePolicy(solo_local_mutation_floor_auto=False),
+        surface=surface,
+    )
+    result = await composer.dispatch(
+        _sab_binding(PersonaTier.SOLO_DEVELOPER, removed=True),
+        _sab_step(),
+        step_context=_make_step_context(),
+    )
+    assert result == {"inner_dispatched": True}
+    assert surface.calls == [], "LOCAL_MUTATION removal MUST skip (per-step opt-in covers the cell)"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("blast_name", ["EXTERNAL_REVERSIBLE", "EXTERNAL_IRREVERSIBLE"])
+async def test_sab_removal_refused_at_high_blast(
+    blast_name: str,
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+) -> None:
+    """FLOOR-CLAMP (decline-mirror): a removal on an EXTERNAL_* dispatch is REFUSED —
+    the hard blast floor (NOT override-able) forces the gate. Oversight preserved."""
+    from harness_as import BlastRadiusTier
+    from harness_runtime.lifecycle.hitl_auto_approve_policy import HITLAutoApprovePolicy
+
+    provider, _ = tracer_provider
+    surface = _MockAskUserQuestionSurface(
+        [AskUserQuestionResult(response=HITLResponse.APPROVE, latency_ms=1.0)]
+    )
+    composer = _sab_composer(
+        tracer_provider=provider,
+        blast=getattr(BlastRadiusTier, blast_name),
+        policy=HITLAutoApprovePolicy(solo_persona_floor_auto=False),
+        surface=surface,
+    )
+    await composer.dispatch(
+        _sab_binding(PersonaTier.SOLO_DEVELOPER, removed=True),
+        _sab_step(),
+        step_context=_make_step_context(),
+    )
+    assert len(surface.calls) == 1, "removal at high blast MUST be REFUSED (gate fires)"
+
+
+@pytest.mark.asyncio
+async def test_sab_removal_refused_at_mcp_trust_floor(
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+) -> None:
+    """FLOOR-CLAMP: an untrusted owning-MCP-host (L1 → ASK floor, never
+    override-able) REFUSES the removal even at read-only blast + persona override."""
+    from harness_as import BlastRadiusTier
+    from harness_cp.cp_shared_types import MCPTrustTier
+    from harness_runtime.lifecycle.hitl_auto_approve_policy import HITLAutoApprovePolicy
+
+    provider, _ = tracer_provider
+    surface = _MockAskUserQuestionSurface(
+        [AskUserQuestionResult(response=HITLResponse.APPROVE, latency_ms=1.0)]
+    )
+    composer = _sab_composer(
+        tracer_provider=provider,
+        blast=BlastRadiusTier.READ_ONLY,
+        policy=HITLAutoApprovePolicy(solo_persona_floor_auto=False),
+        surface=surface,
+        mcp_trust_resolver=lambda _step: MCPTrustTier.LEVEL_1_SIGNED_PINNED,
+    )
+    await composer.dispatch(
+        _sab_binding(PersonaTier.SOLO_DEVELOPER, removed=True),
+        _sab_step(),
+        step_context=_make_step_context(),
+    )
+    assert len(surface.calls) == 1, "removal under an untrusted MCP host MUST be REFUSED"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tier", [PersonaTier.TEAM_BINDING, PersonaTier.MULTI_TENANT_COMPLIANCE])
+async def test_sab_removal_non_solo_no_op(
+    tier: PersonaTier,
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+) -> None:
+    """Solo-scoped: at team/multi the removal is a no-op (structural foreclosure,
+    mirroring §19.5) — the gate fires regardless of the opt-in."""
+    from harness_as import BlastRadiusTier
+    from harness_cp.engine_class import EngineClass
+    from harness_runtime.lifecycle.hitl_auto_approve_policy import HITLAutoApprovePolicy
+
+    provider, _ = tracer_provider
+    surface = _MockAskUserQuestionSurface(
+        [AskUserQuestionResult(response=HITLResponse.APPROVE, latency_ms=1.0)]
+    )
+    composer = _sab_composer(
+        tracer_provider=provider,
+        blast=BlastRadiusTier.READ_ONLY,
+        policy=HITLAutoApprovePolicy(),
+        surface=surface,
+    )
+    # save-point-checkpoint is non-excluded at all three tiers (C-CP-07 §7.2).
+    await composer.dispatch(
+        _sab_binding(tier, removed=True, engine_class=EngineClass.SAVE_POINT_CHECKPOINT),
+        _sab_step(),
+        step_context=_make_step_context(),
+    )
+    assert len(surface.calls) == 1, f"{tier} removal MUST be a no-op (gate fires)"
+
+
+@pytest.mark.asyncio
+async def test_sab_removal_emits_placement_removed_audit_by_execution(
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+) -> None:
+    """AUDITED fail-closed (by-execution): an applied removal F2-writes (8b) + OD-
+    appends (8d) a NON-VACUOUS audit — a removed preventive gate never goes live
+    un-audited. The action_id carries the `hitl:` prefix."""
+    from harness_as import BlastRadiusTier
+    from harness_runtime.lifecycle.hitl_auto_approve_policy import HITLAutoApprovePolicy
+
+    provider, _ = tracer_provider
+    ledger = _MockLedgerWriter()
+    audit = _MockAuditWriter()
+    composer = _sab_composer(
+        tracer_provider=provider,
+        blast=BlastRadiusTier.READ_ONLY,
+        policy=HITLAutoApprovePolicy(solo_persona_floor_auto=False),
+        ledger=ledger,
+        audit=audit,
+    )
+    await composer.dispatch(
+        _sab_binding(PersonaTier.SOLO_DEVELOPER, removed=True),
+        _sab_step(),
+        step_context=_make_step_context(),
+    )
+    assert len(ledger.appends) == 1, "applied removal MUST F2-write the audit (8b-HITL)"
+    assert len(audit.appends) == 1, "applied removal MUST emit the §20.1 audit entry (8d-HITL)"
+    payload, _key = ledger.appends[0]
+    assert str(payload.action_id).startswith("hitl:")
+
+
+def test_sab_removal_audit_entry_response_is_placement_removed_not_approve(
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+) -> None:
+    """The removal audit entry is `response="placement-removed"` + gate_level=AUTO —
+    DISTINCT from §19.5 auto-approve's `response="approve"` (forensically separable)
+    and NOT the vacuous timeout `response=""`."""
+    from harness_as import BlastRadiusTier
+    from harness_cp.gate_level_rule import GateLevel as CPGateLevel
+    from harness_runtime.lifecycle.hitl_auto_approve_policy import HITLAutoApprovePolicy
+
+    provider, _ = tracer_provider
+    composer = _sab_composer(
+        tracer_provider=provider, blast=BlastRadiusTier.READ_ONLY, policy=HITLAutoApprovePolicy()
+    )
+    cp_entry, _write = composer._compose_and_persist_audit(
+        parent_action_id=cast(Any, "workflow:test:step:0"),
+        placement=HITLPlacement(position=HITLPlacementKind.SUB_AGENT_BOUNDARY),
+        cell=cast(Any, None),
+        gate_result=None,
+        step_context=_make_step_context(),
+        raise_on_failure=True,
+        placement_removed=True,
+    )
+    assert cp_entry.response == "placement-removed"
+    assert cp_entry.response != HITLResponse.APPROVE.value
+    assert cp_entry.response != ""
+    assert cp_entry.gate_level == CPGateLevel.AUTO
+
+
+def test_sab_removal_per_tool_floor_clamps_to_deny() -> None:
+    """FLOOR-CLAMP unit: a deny-tier tool (`per_tool_gate_level=DENY`, never
+    override-able) keeps the clamped recompute at DENY even with the persona floor
+    overridden to AUTO → the removal is refused. The per_tool hard-floor witness."""
+    from types import SimpleNamespace
+
+    from harness_as import BlastRadiusTier
+    from harness_cp.gate_level_rule import GateLevel
+    from harness_runtime.lifecycle.hitl_gate_composer import _compute_gate_decision
+
+    binding = SimpleNamespace(
+        persona_tier=PersonaTier.SOLO_DEVELOPER,
+        per_tool_gate_level=GateLevel.DENY,
+    )
+    clamped = _compute_gate_decision(
+        binding=binding,
+        resolved_blast_radius=BlastRadiusTier.READ_ONLY,
+        persona_floor_override=GateLevel.AUTO,
+        blast_floor_override=GateLevel.AUTO,
+    )
+    assert clamped is not None
+    assert clamped.computed_gate_level is GateLevel.DENY, "per_tool DENY clamps the removal"
+
+
+@pytest.mark.asyncio
+async def test_sab_removal_fail_closed_on_unresolvable_floor(
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+) -> None:
+    """FAIL-CLOSED: when the blast floor cannot be resolved (no resolver, no binding
+    blast field) the clamped decision is None → the removal is REFUSED (cannot
+    verify the hard floors permit). The gate path is taken, not a silent skip."""
+    from harness_cp.cp_shared_types import ModelBinding
+    from harness_cp.engine_class import EngineClass
+    from harness_cp.hitl_placement import LoosenablePlacementKind
+    from harness_cp.per_step_override_evaluator import StepEffectiveBinding
+    from harness_runtime.lifecycle.hitl_auto_approve_policy import HITLAutoApprovePolicy
+
+    provider, _ = tracer_provider
+    surface = _MockAskUserQuestionSurface(
+        [AskUserQuestionResult(response=HITLResponse.APPROVE, latency_ms=1.0)]
+    )
+    # No blast_radius_resolver → resolved_blast_radius is None; StepEffectiveBinding
+    # carries no blast_radius_tier → _compute_gate_decision returns None.
+    composer = RuntimeHITLGateComposer(
+        inner=cast(Any, _MockInnerDispatcher()),
+        applicable_placements=frozenset({HITLPlacementKind.SUB_AGENT_BOUNDARY}),
+        ask_user_question_surface=cast(AskUserQuestionSurface, surface),
+        ledger_writer=cast(Any, _MockLedgerWriter()),
+        audit_writer=cast(Any, _MockAuditWriter()),
+        tracer_provider=provider,
+        audit_signing_key_id="harness-runtime-test",
+        audit_signing_algorithm=SignatureAlgorithm.ED25519,
+        procedural_tier_snapshot_resolver=lambda: _Identifier("b" * 64),
+        hitl_auto_approve_policy=HITLAutoApprovePolicy(),
+    )
+    binding = StepEffectiveBinding(
+        step_id="step-sab",
+        model_binding=ModelBinding(provider="anthropic", model="claude-test-1"),
+        engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
+        override_applied=True,
+        persona_tier=PersonaTier.SOLO_DEVELOPER,
+        removed_placements=frozenset({LoosenablePlacementKind.SUB_AGENT_BOUNDARY}),
+    )
+    await composer.dispatch(binding, _sab_step(), step_context=_make_step_context())
+    assert len(surface.calls) == 1, "unresolvable floor MUST fail closed (gate fires, no skip)"
+
+
+@pytest.mark.asyncio
+async def test_sab_removal_effective_at_binding_local_mutation_no_resolver(
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+) -> None:
+    """Codex [P2] regression: a resolver-less composer whose binding carries
+    blast_radius_tier=LOCAL_MUTATION must still apply the LOCAL_MUTATION blast
+    override (keying off the EFFECTIVE blast `_compute_gate_decision` uses, not
+    `resolved_blast_radius` alone) → the removal is EFFECTIVE, not wrongly refused."""
+    from types import SimpleNamespace
+
+    from harness_as import BlastRadiusTier
+    from harness_cp.engine_class import EngineClass
+    from harness_cp.gate_level_rule import GateLevel
+    from harness_cp.hitl_placement import LoosenablePlacementKind
+    from harness_runtime.lifecycle.hitl_auto_approve_policy import HITLAutoApprovePolicy
+
+    provider, _ = tracer_provider
+    surface = _MockAskUserQuestionSurface([])  # empty: a prompt would raise
+    inner = _MockInnerDispatcher()
+    # NO blast_radius_resolver → resolved_blast_radius is None; the binding carries
+    # the LOCAL_MUTATION tier (the _compute_gate_decision fallback path).
+    composer = RuntimeHITLGateComposer(
+        inner=cast(Any, inner),
+        applicable_placements=frozenset({HITLPlacementKind.SUB_AGENT_BOUNDARY}),
+        ask_user_question_surface=cast(AskUserQuestionSurface, surface),
+        ledger_writer=cast(Any, _MockLedgerWriter()),
+        audit_writer=cast(Any, _MockAuditWriter()),
+        tracer_provider=provider,
+        audit_signing_key_id="harness-runtime-test",
+        audit_signing_algorithm=SignatureAlgorithm.ED25519,
+        procedural_tier_snapshot_resolver=lambda: _Identifier("b" * 64),
+        hitl_auto_approve_policy=HITLAutoApprovePolicy(solo_persona_floor_auto=False),
+    )
+    binding = SimpleNamespace(
+        persona_tier=PersonaTier.SOLO_DEVELOPER,
+        engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
+        blast_radius_tier=BlastRadiusTier.LOCAL_MUTATION,
+        per_tool_gate_level=GateLevel.AUTO,
+        removed_placements=frozenset({LoosenablePlacementKind.SUB_AGENT_BOUNDARY}),
+    )
+    result = await composer.dispatch(
+        cast(Any, binding), _sab_step(), step_context=_make_step_context()
+    )
+    assert result == {"inner_dispatched": True}
+    assert surface.calls == [], (
+        "binding LOCAL_MUTATION removal MUST skip (effective-blast override)"
+    )

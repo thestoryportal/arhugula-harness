@@ -141,7 +141,12 @@ from harness_cp.handoff_context import (
     RetryHistory,
     StateSummary,
 )
-from harness_cp.hitl_placement import HITLPlacement, HITLPlacementKind, HITLResult
+from harness_cp.hitl_placement import (
+    HITLPlacement,
+    HITLPlacementKind,
+    HITLResult,
+    LoosenablePlacementKind,
+)
 from harness_cp.hitl_response_palette import HITLResponse
 from harness_cp.hitl_timeout_degradation import (
     TimeoutDegradationKind,
@@ -204,6 +209,17 @@ DEFAULT_FULL_PALETTE: frozenset[HITLResponse] = frozenset(HITLResponse)
 
 Cross-trust-boundary palette restriction per NOTE 6-iv deferred to
 validator-composer + MCP-trust-framework arcs."""
+
+
+_PLACEMENT_REMOVED_RESPONSE = "placement-removed"
+"""`CPAuditLedgerEntry.response` value for an APPLIED per-step SUB_AGENT_BOUNDARY
+removal (`B-HITL-PLACEMENT-PER-STEP-LOOSEN`, CP spec v1.53 §6.2).
+
+A DISTINCT non-palette free-string value (`CPAuditLedgerEntry.response` is typed
+`str`, unconstrained): this is NOT an operator approval — no human was consulted;
+the gate was structurally removed for this step. Kept distinct from the §19.5
+auto-approve `response="approve"` so a forensic auditor can tell a per-step
+removal apart from a global auto-approve-policy skip."""
 
 
 _NO_OWNING_MCP_HOST_TRUST_FLOOR: MCPTrustTier = MCPTrustTier.LEVEL_3_ALLOW_WITH_AUDIT
@@ -1018,6 +1034,7 @@ class RuntimeHITLGateComposer:
         step_context: StepExecutionContext,
         raise_on_failure: bool,
         auto_approved: bool = False,
+        placement_removed: bool = False,
         system_reject_reason: str | None = None,
         edited_payload: Mapping[str, Any] | None = None,
         resume_response: HITLResult | None = None,
@@ -1059,6 +1076,18 @@ class RuntimeHITLGateComposer:
             # Explicitly NOT the timeout `response=""` partial shape (which would
             # read as a vacuous/null entry, failing AC-1's spirit).
             response_value = HITLResponse.APPROVE.value
+            edited_hash = None
+            response_text_hash = None
+            rejection_hash = None
+        elif placement_removed:
+            # B-HITL-PLACEMENT-PER-STEP-LOOSEN (CP spec v1.53 §6.2): an APPLIED
+            # per-step SUB_AGENT_BOUNDARY removal — solo-scoped, floor-clamped. The
+            # gate was structurally removed for this step (NO human consulted), so
+            # the entry is NON-VACUOUS with a DISTINCT `response="placement-removed"`
+            # (kept apart from §19.5 auto-approve's `response="approve"` so a removed
+            # preventive gate is forensically distinguishable) + gate_level=AUTO. The
+            # removal NEVER goes live un-audited (caller passes raise_on_failure=True).
+            response_value = _PLACEMENT_REMOVED_RESPONSE
             edited_hash = None
             response_text_hash = None
             rejection_hash = None
@@ -1492,6 +1521,81 @@ class RuntimeHITLGateComposer:
                         )
                     # Step 4j skip-gate: no further spans for this placement.
                     continue
+
+                # --- 4c-removal: per-step SUB_AGENT_BOUNDARY gate removal -------
+                # `B-HITL-PLACEMENT-PER-STEP-LOOSEN` (CP spec v1.53 §6.2). The gate
+                # WOULD fire (hitl_required True). Honour an opt-in per-step removal
+                # of a SUB_AGENT_BOUNDARY gate — the operator-ratified relaxation of
+                # the §17.1 monotone-HITL floor. Mirrors §19.5 auto-approve (a
+                # config-caused skip + non-vacuous audit) but per-STEP and for the
+                # SUB_AGENT_BOUNDARY placement ONLY, FLOOR-CLAMPED: only the §19.1
+                # PERSONA human-oversight-at-handoff floor (+ the LOCAL_MUTATION blast
+                # cell, per the ratified {read-only, local-mutation} scope) is
+                # overridden; the HARD per_tool / mcp_trust floors + blast ABOVE
+                # local-mutation are NOT override-able (gate_level() never lowers
+                # them), so they clamp the removal automatically → a high-blast /
+                # deny-tier-tool / untrusted-MCP dispatch REFUSES the removal (the
+                # decline-mirror). Solo-scoped (PersonaTier.SOLO_DEVELOPER only —
+                # team = registered follow-on, multi-tenant structurally foreclosed,
+                # mirroring §19.5 `_policy_floor_overrides`).
+                removed_placements: frozenset[LoosenablePlacementKind] = getattr(
+                    binding, "removed_placements", frozenset()
+                )
+                if (
+                    placement.position is HITLPlacementKind.SUB_AGENT_BOUNDARY
+                    and LoosenablePlacementKind.SUB_AGENT_BOUNDARY in removed_placements
+                    and persona_tier is PersonaTier.SOLO_DEVELOPER
+                ):
+                    # Recompute with ONLY the persona floor (+ blast at LOCAL_MUTATION)
+                    # overridden to AUTO. fail-CLOSED: a None decision (partial binding
+                    # → cannot verify the hard floors permit) REFUSES the removal.
+                    # The LOCAL_MUTATION override keys off the EFFECTIVE blast tier
+                    # `_compute_gate_decision` actually uses (resolver result, else the
+                    # binding fallback) — NOT `resolved_blast_radius` alone, which is
+                    # None at a resolver-less composer even when the binding carries a
+                    # LOCAL_MUTATION tier (else the recompute would read the binding's
+                    # ASK blast floor un-overridden → wrongly refuse the removal).
+                    effective_blast = (
+                        resolved_blast_radius
+                        if resolved_blast_radius is not None
+                        else getattr(binding, "blast_radius_tier", None)
+                    )
+                    clamped = _compute_gate_decision(
+                        binding=binding,
+                        resolved_blast_radius=resolved_blast_radius,
+                        persona_floor_override=CPGateLevel.AUTO,
+                        blast_floor_override=(
+                            CPGateLevel.AUTO
+                            if effective_blast is BlastRadiusTier.LOCAL_MUTATION
+                            else None
+                        ),
+                        mcp_trust_tier=resolved_mcp_trust_tier,
+                    )
+                    removal_effective = (
+                        clamped is not None and clamped.computed_gate_level is CPGateLevel.AUTO
+                    )
+                    gate_span.set_attribute("hitl.gate.sub_agent_boundary_removal_requested", True)
+                    gate_span.set_attribute(
+                        "hitl.gate.sub_agent_boundary_removal_effective",
+                        bool(removal_effective),
+                    )
+                    if removal_effective:
+                        # Removal applied → skip the gate. Auto-audit (fail-closed):
+                        # a removed preventive gate NEVER goes live un-audited.
+                        self._compose_and_persist_audit(
+                            parent_action_id=parent_action_id,
+                            placement=placement,
+                            cell=cell,
+                            gate_result=None,
+                            step_context=step_context,
+                            raise_on_failure=True,
+                            placement_removed=True,
+                        )
+                        continue
+                    # Removal REFUSED — a hard floor forces the gate. The refusal is
+                    # loud via the span attribute; the gate fires normally below (its
+                    # own gate-fired audit records the preserved oversight). No
+                    # separate ledger entry → no double-count.
 
                 # --- 4-bis: Durable-async cell branch (v1.24 §14.8.8.1) -----
                 # Per runtime spec v1.26 §14.8.8.1 step 0 OR-form precondition

@@ -442,3 +442,80 @@ def test_cp_audit_types_distinct_from_od() -> None:
     # v2.9 §0.5.1 name-collision resolution.
     assert CPAuditLedgerEntry.__name__ == "CPAuditLedgerEntry"
     assert CPSignedAuditLedgerEntry.__name__ == "CPSignedAuditLedgerEntry"
+
+
+# --- B-HITL-PLACEMENT-PER-STEP-LOOSEN (CP spec v1.53 §6.2) — per-step SUB_AGENT_
+# BOUNDARY gate removal carrier propagation + model_dump provenance. ----------
+
+
+def test_resolve_step_binding_applies_removed_placements() -> None:
+    """CP spec v1.53 §6.2: resolve_step_binding carries StepOverride.removed_placements
+    onto the StepEffectiveBinding (the full CP-side half of the CP→runtime seam — the
+    composer reads binding.removed_placements). An override carrying ONLY the removal
+    still applies (the override state-ledger entry fires)."""
+    from harness_cp.hitl_placement import LoosenablePlacementKind
+
+    removed = frozenset({LoosenablePlacementKind.SUB_AGENT_BOUNDARY})
+    manifest = _manifest(
+        per_step_overrides={
+            StepID("s1"): StepOverride(step_id=StepID("s1"), removed_placements=removed)
+        }
+    )
+    binding = resolve_step_binding(
+        manifest,
+        "s1",
+        default_model_binding=_DEFAULT_BINDING,
+        persona_tier=PersonaTier.SOLO_DEVELOPER,
+    )
+    assert binding.removed_placements == removed
+    assert binding.override_applied is True
+    assert binding.model_binding == _DEFAULT_BINDING
+
+
+def test_resolve_step_binding_removed_placements_empty_default() -> None:
+    """Default empty ⇒ byte-identical monotone path: an override without a removal
+    dimension AND a step with no override at all both yield an empty set."""
+    manifest = _manifest(
+        per_step_overrides={
+            StepID("s1"): StepOverride(step_id=StepID("s1"), model_binding=_OVERRIDE_BINDING)
+        }
+    )
+    overridden = resolve_step_binding(
+        manifest,
+        "s1",
+        default_model_binding=_DEFAULT_BINDING,
+        persona_tier=PersonaTier.SOLO_DEVELOPER,
+    )
+    assert overridden.removed_placements == frozenset()
+    no_override = resolve_step_binding(
+        manifest,
+        "s2",
+        default_model_binding=_DEFAULT_BINDING,
+        persona_tier=PersonaTier.SOLO_DEVELOPER,
+    )
+    assert no_override.removed_placements == frozenset()
+
+
+def test_removed_placements_rides_binding_model_dump_for_provenance() -> None:
+    """Provenance (CP spec v1.53 §6.6, advisor #3): binding.model_dump — the WIRED
+    per-step override state-ledger entry payload — carries removed_placements, so a
+    removal opt-in is captured in that entry's outcome-hash (live step-level
+    provenance, NOT a new run-level §5.2 procedural-tier hash field)."""
+    from harness_cp.hitl_placement import LoosenablePlacementKind
+
+    manifest = _manifest(
+        per_step_overrides={
+            StepID("s1"): StepOverride(
+                step_id=StepID("s1"),
+                removed_placements=frozenset({LoosenablePlacementKind.SUB_AGENT_BOUNDARY}),
+            )
+        }
+    )
+    binding = resolve_step_binding(
+        manifest,
+        "s1",
+        default_model_binding=_DEFAULT_BINDING,
+        persona_tier=PersonaTier.SOLO_DEVELOPER,
+    )
+    dumped = binding.model_dump(mode="json")
+    assert dumped["removed_placements"] == ["sub-agent-boundary"]

@@ -49,7 +49,7 @@ from pydantic import BaseModel, ConfigDict
 from harness_cp.cp_shared_types import ActorIdentity, AgentRole, ModelBinding
 from harness_cp.engine_class import EngineClass
 from harness_cp.handoff_context import LedgerEntryRef
-from harness_cp.hitl_placement import HITLPlacement
+from harness_cp.hitl_placement import HITLPlacement, LoosenablePlacementKind
 from harness_cp.state_ledger_canonicalization import _canonicalize_outcome_bytes
 from harness_cp.workflow_manifest_entry import StepOverride, WorkflowManifestEntry
 
@@ -209,6 +209,36 @@ class StepEffectiveBinding(BaseModel):
     `prompt_version_sha`.
     """
 
+    removed_placements: frozenset[LoosenablePlacementKind] = frozenset()
+    """CP spec v1.53 addition (§6.2; `B-HITL-PLACEMENT-PER-STEP-LOOSEN`, R-FS-1
+    final-closure — the operator-ratified committed-invariant relaxation of the
+    §17.1 monotone-HITL "all cells" floor).
+
+    The opt-in set of HITL placements this step REMOVES. `LoosenablePlacementKind`
+    is a closed one-member enum (`SUB_AGENT_BOUNDARY` only) so `PRE_ACTION` /
+    `VALIDATOR_ESCALATION` are STRUCTURALLY unrepresentable here (the §19.1
+    floor-evaluation site + the §14.15-path placement, respectively — see
+    `LoosenablePlacementKind`). **Default empty ⇒ the default (non-opted) path is
+    byte-identical + monotone** (the `fold_step_hitl_placements` ADD-only fold is
+    untouched; this carrier is a SEPARATE directive honoured at the
+    SUB_AGENT_BOUNDARY composer).
+
+    A removal is NOT unconditional: at the composer (`hitl_gate_composer.py` step
+    4c) it is solo-scoped (`PersonaTier.SOLO_DEVELOPER` only — team = registered
+    follow-on, multi-tenant structurally foreclosed) and FLOOR-CLAMPED — it
+    overrides only the §19.1 PERSONA-tier human-oversight-at-handoff floor (and the
+    `blast_radius` floor at the LOCAL_MUTATION cell per the ratified `{read-only,
+    local-mutation}` scope); the HARD `per_tool` / `mcp_trust` floors and any
+    `blast_radius` ABOVE local-mutation are NEVER override-able, so a removal on a
+    high-blast / deny-tier-tool / untrusted-MCP dispatch is REFUSED (the gate
+    fires) per the decline-mirror. Every applied removal is auto-audited
+    (fail-closed) so a removed preventive gate never goes live un-audited.
+
+    Like `prompt_version_sha`/`agent_role`, this rides `binding.model_dump(...)`
+    into the per-step override state-ledger entry's outcome-hash for step-level
+    provenance (CP spec v1.53 §6.6) — NO new §5.2/IS hash field.
+    """
+
 
 def resolve_step_binding(
     manifest_entry: WorkflowManifestEntry,
@@ -278,6 +308,11 @@ def resolve_step_binding(
         # always concrete): the C-RT-16 wrapper reads this to honour per-step at
         # the head of the model-resolution precedence (runtime §14.5.3/§14.6).
         model_binding_override=override.model_binding,
+        # CP spec v1.53 §6.2 — per-step HITL placement REMOVAL set
+        # (B-HITL-PLACEMENT-PER-STEP-LOOSEN). Empty-or-opt-in; the
+        # SUB_AGENT_BOUNDARY composer honours it solo-scoped + floor-clamped +
+        # auto-audited (the ADD-only fold stays untouched).
+        removed_placements=override.removed_placements,
     )
 
 

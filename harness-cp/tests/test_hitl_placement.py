@@ -196,3 +196,21 @@ def test_hitl_gate_is_signature_only_for_runtime_composer() -> None:
                 surface=_Surface(),
             )
         )
+
+
+def test_loosenable_placement_kind_cardinality_one_sub_agent_boundary() -> None:
+    """B-HITL-PLACEMENT-PER-STEP-LOOSEN (CP spec v1.53 §6.2): the loosenable set is a
+    CLOSED one-member enum — SUB_AGENT_BOUNDARY ONLY. PRE_ACTION (the §19.1 floor-
+    evaluation bypass-seam) and VALIDATOR_ESCALATION (the §14.15-path wrong-layer)
+    are STRUCTURALLY unrepresentable (foreclosed at the type, not a runtime guard).
+    The member value equals HITLPlacementKind.SUB_AGENT_BOUNDARY.value verbatim so a
+    removed_placements set keys cleanly against a placement's position."""
+    from harness_cp.hitl_placement import HITLPlacementKind, LoosenablePlacementKind
+
+    assert set(LoosenablePlacementKind) == {LoosenablePlacementKind.SUB_AGENT_BOUNDARY}
+    assert (
+        LoosenablePlacementKind.SUB_AGENT_BOUNDARY.value
+        == HITLPlacementKind.SUB_AGENT_BOUNDARY.value
+    )
+    assert "pre-action" not in {k.value for k in LoosenablePlacementKind}
+    assert "validator-escalation" not in {k.value for k in LoosenablePlacementKind}
