@@ -57,6 +57,20 @@ def _compose_synthesis_payload(
     the dispatcher does NOT introspect the opaque step body otherwise (the
     `workflow_driver` §25.3.3.4 step-body-opaque discipline)."""
     composed = dict(payload)
+    # Out-of-family Codex [P2]: the LLM translators do `kwargs.update(payload.params)`,
+    # so a `params["messages"]` escape-hatch would OVERWRITE the appended sibling
+    # context — the model would receive NO branch outputs while the run still reports
+    # a synthesized final state. The synthesis OWNS its messages (it composes the
+    # siblings); reject the conflicting escape-hatch fail-closed (the driver's
+    # failure-mapping converts this to a FAILED RunResult).
+    _params = composed.get("params")
+    if isinstance(_params, Mapping) and "messages" in _params:
+        raise ValueError(
+            "post-join-synthesis payload may not set params['messages']: the provider "
+            "escape-hatch overwrites the appended sibling-context message (the model "
+            "would receive no branch outputs). Put the synthesis instruction in "
+            "payload['messages'] instead."
+        )
     messages: list[Any] = list(composed.get("messages", ()))
     sibling_message: dict[str, Any] = {
         "role": "user",

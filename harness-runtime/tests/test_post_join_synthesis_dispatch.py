@@ -12,6 +12,7 @@ import json
 from collections.abc import Mapping
 from typing import Any, cast
 
+import pytest
 from harness_core import StepID
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
 from harness_cp.workflow_driver import StepDispatcher
@@ -114,3 +115,28 @@ def test_post_join_synthesis_none_context_is_safe() -> None:
     assert inner.received_step.step_payload["messages"][-1]["content"] == (
         POST_JOIN_SYNTHESIS_SIBLINGS_PREFIX + "[]"
     )
+
+
+def test_post_join_synthesis_rejects_params_messages_escape_hatch() -> None:
+    """Codex [P2] — a synthesis payload using the `params['messages']` escape hatch
+    would have its appended siblings CLOBBERED by the LLM translator's
+    `kwargs.update(payload.params)`; reject it fail-closed (raises → the driver maps
+    it to a FAILED RunResult), never silently dropping the branch data."""
+    inner = _RecordingInner()
+    disp = PostJoinSynthesisStepDispatcher(inner=cast(StepDispatcher, inner))
+    step = WorkflowStep(
+        step_id=StepID("synthesis"),
+        step_kind=StepKind.POST_JOIN_SYNTHESIS,
+        step_payload={
+            "messages": [],
+            "params": {"messages": [{"role": "user", "content": "clobber"}]},
+        },
+    )
+    with pytest.raises(ValueError, match=r"params\['messages'\]"):
+        disp.dispatch(
+            cast(StepEffectiveBinding, object()),
+            step,
+            step_context=_StubContext(((0, {"a": 1}),)),
+        )
+    # The inner was NEVER reached (fail-closed before dispatch).
+    assert inner.received_step is None

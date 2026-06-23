@@ -359,3 +359,33 @@ def test_post_join_synthesis_full_chain_override_emits_provenance() -> None:
     assert result.status is RunStatus.SUCCESS
     # The synthesis step's override emitted exactly one provenance entry, keyed to it.
     assert [e["step_id"] for e in wiring.override_emits] == ["synthesis"]
+
+
+def test_post_join_synthesis_full_chain_non_terminal_placement_fails_closed() -> None:
+    """Codex [P2] regression — a POST_JOIN_SYNTHESIS step NOT in the terminal slot is
+    rejected fail-closed (it would otherwise run as an ordinary branch with no
+    siblings → a wasted LLM call folded into the aggregate)."""
+    registry = cast(
+        StepDispatcherRegistry,
+        _Registry(
+            worker=_WorkerEcho(),
+            synthesis=PostJoinSynthesisStepDispatcher(
+                inner=cast(StepDispatcher, _RecordingInner())
+            ),
+        ),
+    )
+    ctx = cast(DriverContext, _Ctx(ledger=_RecordingLedger(), emitter=_Emitter()))
+
+    result = execute_workflow(
+        _manifest(),
+        # synthesis is NOT terminal (a worker follows it) → misplaced.
+        [_worker(0), _synthesis_step(), _worker(1)],
+        run_id="run-1",
+        ctx=ctx,
+        default_model_binding=ModelBinding(provider="anthropic", model="claude-haiku-4-5"),
+        step_dispatchers=registry,
+    )
+
+    assert result.status is RunStatus.FAILED
+    assert result.final_state is None
+    assert result.fail_class is not None and "post-join-synthesis-misplaced" in result.fail_class

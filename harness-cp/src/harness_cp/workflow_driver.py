@@ -1657,6 +1657,45 @@ def _execute_workflow_body(
     if manifest_entry.engine_class not in _IN_SCOPE_ENGINE_CLASSES:
         raise EngineClassNotYetMaterializedError(manifest_entry.engine_class)
 
+    # B-POSTJOIN placement guard (out-of-family Codex [P2]): a POST_JOIN_SYNTHESIS
+    # step is valid ONLY as the SINGLE terminal step of a CONCURRENT fan-out
+    # (PARALLELIZATION / ORCHESTRATOR_WORKERS / HIERARCHICAL_DELEGATION) — the only
+    # paths that carve it out (`_split_synthesis`) + dispatch it post-barrier with
+    # the siblings. Any other placement (non-terminal, multiple, or a non-concurrent
+    # topology) would otherwise run the synthesis as an ordinary branch/step with NO
+    # siblings → a wasted LLM call on no data folded into the aggregate. Reject
+    # fail-closed (no `workflow.start`-equivalent side effect has fired here yet).
+    _synth_positions = [
+        i for i, _s in enumerate(steps) if _s.step_kind is StepKind.POST_JOIN_SYNTHESIS
+    ]
+    if _synth_positions:
+        _concurrent_fanout = {
+            _DriverStrategyStatus.PARALLELIZATION,
+            _DriverStrategyStatus.ORCHESTRATOR_WORKERS,
+            _DriverStrategyStatus.HIERARCHICAL_DELEGATION,
+        }
+        if (
+            len(_synth_positions) > 1
+            or _synth_positions[0] != len(steps) - 1
+            or strategy not in _concurrent_fanout
+        ):
+            return (
+                RunResult(
+                    workflow_id=manifest_entry.workflow_id,
+                    run_id=run_id,
+                    status=RunStatus.FAILED,
+                    terminal_step_index=_synth_positions[0],
+                    partial_state=None,
+                    final_state=None,
+                    fail_class=(
+                        "post-join-synthesis-misplaced: POST_JOIN_SYNTHESIS is valid only "
+                        "as the single terminal step of a concurrent fan-out "
+                        "(PARALLELIZATION / ORCHESTRATOR_WORKERS / HIERARCHICAL_DELEGATION)"
+                    ),
+                ),
+                0,
+            )
+
     # § 25.10/25.11 — non-linear strategy dispatch (U-CP-86+). A materialized
     # non-linear pattern routes to its dedicated `_execute_<strategy>` and
     # returns here; the `SINGLE_THREADED_LINEAR` inline loop below stays
