@@ -866,3 +866,114 @@ def test_hierarchical_delegation_live_real_ledger_chain_valid_with_linear_child(
     assert result.status is RunStatus.SUCCESS
     entries = read_ledger(handle)
     assert verify_chain(entries).status is VerificationStatus.VALID
+
+
+# ---------------------------------------------------------------------------
+# B-POSTJOIN-LLM-SYNTHESIS (CP spec v1.54 §3/§4) — opt-in TOP-LEVEL synthesis step
+# ---------------------------------------------------------------------------
+
+
+class _HDLeafEchoDispatcher:
+    """Minimal DECLARATIVE_STEP echo for a single-level HIERARCHICAL witness."""
+
+    def dispatch(
+        self,
+        binding: StepEffectiveBinding,
+        step: WorkflowStep,
+        *,
+        step_context: Any = None,
+    ) -> dict[str, Any]:
+        return {"role": str(step.step_id), "echoed": dict(step.step_payload)}
+
+
+class _HDSynthesisCapturingDispatcher:
+    def __init__(self) -> None:
+        self.received_siblings: Any = None
+
+    def dispatch(
+        self,
+        binding: StepEffectiveBinding,
+        step: WorkflowStep,
+        *,
+        step_context: Any = None,
+    ) -> dict[str, Any]:
+        self.received_siblings = step_context.sibling_outputs
+        return {"synthesis": "hd-composed", "n": len(step_context.sibling_outputs)}
+
+
+class _HDBranchOrSynthesisRegistry:
+    def __init__(self, branch: StepDispatcher, synthesis: StepDispatcher) -> None:
+        self._branch = branch
+        self._synthesis = synthesis
+
+    def lookup(self, step_kind: StepKind) -> StepDispatcher:
+        if step_kind is StepKind.DECLARATIVE_STEP:
+            return self._branch
+        if step_kind is StepKind.POST_JOIN_SYNTHESIS:
+            return self._synthesis
+        raise StepKindDispatcherNotBoundError(step_kind)
+
+
+def _hd_synthesis_step() -> WorkflowStep:
+    return WorkflowStep(
+        step_id=StepID("synthesis"),
+        step_kind=StepKind.POST_JOIN_SYNTHESIS,
+        step_payload={"prompt": "compose"},
+    )
+
+
+def test_hierarchical_top_level_post_join_synthesis_replaces_compose_and_not_capped() -> None:
+    """A terminal POST_JOIN_SYNTHESIS step at the TOP HIERARCHICAL level REPLACES
+    the deterministic compose on SUCCESS, composing the branch-index-ordered leaf
+    siblings. With 3 leaf workers AT the cap-3 + a synthesis (5 steps total), the
+    run SUCCEEDS — proving the synthesis is carved OUT of the branch set and NOT
+    counted toward the fan-out cap (CP spec v1.54 §3 — top-level only)."""
+    ledger = _RecordingLedger()
+    synth = _HDSynthesisCapturingDispatcher()
+    ctx = cast(DriverContext, _Ctx(ledger=ledger, emitter=_Emitter()))
+    result = execute_workflow(
+        _manifest(),
+        [
+            _orchestrator_step(),
+            _leaf_worker("leaf-0"),
+            _leaf_worker("leaf-1"),
+            _leaf_worker("leaf-2"),
+            _hd_synthesis_step(),
+        ],
+        run_id="run-1",
+        ctx=ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=cast(
+            StepDispatcherRegistry,
+            _HDBranchOrSynthesisRegistry(_HDLeafEchoDispatcher(), synth),
+        ),
+    )
+    # NOT FAILED-cap-exceeded: the synthesis was carved out → 3 workers (= cap).
+    assert result.status is RunStatus.SUCCESS
+    assert result.final_state == {"synthesis": "hd-composed", "n": 3}
+    assert [bi for bi, _o in synth.received_siblings] == [0, 1, 2]
+    assert any(str(wk.step_id).startswith("post-join-synthesis") for _p, wk in ledger.appends)
+
+
+def test_hierarchical_without_synthesis_uses_deterministic_compose() -> None:
+    """Negative control: absent a synthesis step, the deterministic compose is
+    byte-identical to pre-v1.54 (no synthesis entry)."""
+    ledger = _RecordingLedger()
+    ctx = cast(DriverContext, _Ctx(ledger=ledger, emitter=_Emitter()))
+    result = execute_workflow(
+        _manifest(),
+        [_orchestrator_step(), _leaf_worker("leaf-0"), _leaf_worker("leaf-1")],
+        run_id="run-1",
+        ctx=ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=cast(
+            StepDispatcherRegistry,
+            _HDBranchOrSynthesisRegistry(
+                _HDLeafEchoDispatcher(), _HDSynthesisCapturingDispatcher()
+            ),
+        ),
+    )
+    assert result.status is RunStatus.SUCCESS
+    assert result.final_state is not None
+    assert set(result.final_state) == {"orchestrator", "worker_outputs"}
+    assert not any(str(wk.step_id).startswith("post-join-synthesis") for _p, wk in ledger.appends)

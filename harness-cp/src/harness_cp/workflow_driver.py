@@ -1743,9 +1743,14 @@ def _execute_workflow_body(
         # at each level, so a level-local worker pause materializes via FanOutResumeState
         # AND a recursive child PAUSE is captured into paused_child_branches + re-entered
         # at the child's cursor on resume — the cross-bootstrap-boundary resume).
+        # B-POSTJOIN-LLM-SYNTHESIS (CP spec v1.54 §3) — carve an opt-in TOP-LEVEL
+        # terminal POST_JOIN_SYNTHESIS step out of this level's step set; recursive
+        # child levels carve their own. `(steps, None)` absent the opt-in →
+        # byte-identical to pre-v1.54.
+        _branch_steps, _synthesis_step = _split_synthesis(steps)
         return _execute_hierarchical_delegation(
             manifest_entry=manifest_entry,
-            steps=steps,
+            steps=_branch_steps,
             run_id=run_id,
             ctx=ctx,
             default_model_binding=default_model_binding,
@@ -1753,6 +1758,7 @@ def _execute_workflow_body(
             run_idempotency_key=run_idempotency_key,
             resume_snapshot=resume_snapshot,
             pause_resumable=True,
+            synthesis_step=_synthesis_step,
         )
     if strategy is _DriverStrategyStatus.DECENTRALIZED_HANDOFF:
         return _execute_decentralized_handoff(
@@ -6140,6 +6146,7 @@ def _execute_hierarchical_delegation(
     run_idempotency_key: str,
     resume_snapshot: PauseSnapshot | None = None,
     pause_resumable: bool = False,
+    synthesis_step: WorkflowStep | None = None,
 ) -> tuple[RunResult, int]:
     """Execute the `HIERARCHICAL_DELEGATION` recursive bounded-fan-out strategy (U-CP-89).
 
@@ -6233,6 +6240,12 @@ def _execute_hierarchical_delegation(
         run_idempotency_key=run_idempotency_key,
         resume_snapshot=resume_snapshot,
         pause_resumable=pause_resumable,
+        # B-POSTJOIN-LLM-SYNTHESIS (CP spec v1.54 §3) — TOP-LEVEL synthesis only:
+        # the recursion re-enters via a SUB_AGENT_DISPATCH worker's own
+        # execute_workflow on the CHILD manifest, which carves its own synthesis
+        # at its own dispatch site, so this top-level `synthesis_step` never leaks
+        # into a recursive level (synthesis-per-level is the registered follow-on).
+        synthesis_step=synthesis_step,
     )
 
 
