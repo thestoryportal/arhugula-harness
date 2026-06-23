@@ -3209,15 +3209,18 @@ def _maybe_post_join_synthesis(
     synthesis_idempotency_key = _compute_step_idempotency_key(run_idempotency_key, synthesis_index)
     synthesis_context = fanout_parent.model_copy(
         update={
-            # The synthesis context's parent_action_id MUST match the synthesis step's
-            # OWN disclosing ledger entry action_id (`_append_synthesis_ledger_entry`:
+            # The synthesis context's parent_action_id is set CONSISTENT with the synthesis
+            # step's OWN disclosing ledger entry action_id (`_append_synthesis_ledger_entry`:
             # `workflow:{wf}:post-join-synthesis:{N}`), NOT the generic `...:step:{N}`
-            # (out-of-family Codex round 8 [P2]): cost attribution, HITL audit/webhook
-            # records, and every consumer of `step_context.parent_action_id` join on this
-            # field, so a `...:step:{N}` here points at an action_id with NO matching
-            # synthesis ledger entry — breaking the audit join for synthesis steps. (The
-            # idempotency key keys off `synthesis_index` directly, not this string, so it
-            # is unaffected; this also fixes the HITL-audit join, same context field.)
+            # (out-of-family Codex round 8 [P2]): a downstream record that references this
+            # context's parent_action_id (cost attribution, an LLM-dispatch span, a HITL
+            # audit entry if a gate fires on the synthesis) should resolve to a REAL ledger
+            # entry; the prior `...:step:{N}` referenced an action_id with NO matching
+            # synthesis entry. This makes the reference RESOLVE — it does not by itself prove
+            # any specific consumer join (no `:step:`-suffix parser runs on this context:
+            # `compose_branch_terminal_*` only APPENDS + is gated on `branch_index`, which is
+            # None here). The idempotency key keys off `synthesis_index` directly, not this
+            # string, so it is unaffected.
             "parent_action_id": str(
                 ActionID(
                     f"workflow:{manifest_entry.workflow_id}:post-join-synthesis:{synthesis_index}"

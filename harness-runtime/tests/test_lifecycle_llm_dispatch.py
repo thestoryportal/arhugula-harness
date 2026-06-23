@@ -95,6 +95,7 @@ from harness_runtime.lifecycle.llm_dispatch import (
 )
 from harness_runtime.lifecycle.post_join_synthesis_dispatch import (
     POST_JOIN_SYNTHESIS_SIBLINGS_PREFIX,
+    PostJoinSynthesisStepDispatcher,
     _compose_synthesis_payload,
 )
 from harness_runtime.lifecycle.prompt_selection import (
@@ -577,6 +578,51 @@ async def test_post_join_synthesis_hitl_edit_readding_tools_rejected_at_boundary
         await composer.dispatch(_binding("anthropic"), synthesis_step, step_context=ctx)
     # The operator's tool-re-adding EDIT never reached the provider.
     assert adapter.client.messages.last_kwargs is None
+
+
+def test_post_join_synthesis_single_chain_through_real_dispatcher() -> None:
+    """Capstone single-chain witness (advisor pre-ship): the REAL
+    `PostJoinSynthesisStepDispatcher` → the REAL `RuntimeLLMDispatcher` as ONE chain — the
+    exact seam every other witness still stubs (Test A composes then dispatches separately;
+    the full-chain test stubs the inner with `_RecordingInner`; the Ollama e2e stubs with
+    `_OllamaInner`). Here the synthesis dispatcher reads the siblings off the context,
+    composes the minimal payload, and the real dispatcher coerces + dispatches — no stubbed
+    inner (`[[full-chain-witness-not-half-proofs]]`). Sync (the synthesis dispatcher is
+    sync); the thin wrapper bridges to the async dispatcher via `asyncio.run` — no running
+    loop, so no `@pytest.mark.asyncio`."""
+    adapter = _AnthropicFakeAdapter(_AnthropicClient())
+    tp, _ = _tracer_provider_with_exporter()
+    real = RuntimeLLMDispatcher(providers={"anthropic": adapter}, tracer_provider=tp)
+
+    class _SyncWrap:
+        def dispatch(
+            self,
+            binding: StepEffectiveBinding,
+            step: WorkflowStep,
+            *,
+            step_context: StepExecutionContext,
+        ) -> Mapping[str, Any]:
+            return asyncio.run(real.dispatch(binding, step, step_context=step_context))
+
+    synth = PostJoinSynthesisStepDispatcher(inner=cast(StepDispatcher, _SyncWrap()))
+    step = WorkflowStep(
+        step_id=StepID("synthesis"),
+        step_kind=StepKind.POST_JOIN_SYNTHESIS,
+        step_payload={"messages": [{"role": "system", "content": "synthesize the siblings"}]},
+    )
+    ctx = _step_context().model_copy(
+        update={"sibling_outputs": ((0, {"finding": "alpha"}), (1, {"finding": "beta"}))}
+    )
+
+    out = synth.dispatch(_binding("anthropic"), step, step_context=ctx)
+
+    # The minimal payload coerced + dispatched through the real chain (no stub).
+    assert out["id"] == "msg_test_001"
+    assert adapter.client.messages.last_kwargs is not None
+    sibling_msg = adapter.client.messages.last_kwargs["messages"][-1]
+    assert sibling_msg["content"].startswith(POST_JOIN_SYNTHESIS_SIBLINGS_PREFIX)
+    assert "alpha" in sibling_msg["content"]
+    assert "beta" in sibling_msg["content"]
 
 
 @pytest.mark.asyncio

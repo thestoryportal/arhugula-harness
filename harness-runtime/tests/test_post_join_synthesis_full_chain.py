@@ -288,10 +288,12 @@ def test_post_join_synthesis_full_chain_per_step_override_reaches_context() -> N
 
 def test_post_join_synthesis_full_chain_context_action_id_matches_ledger_entry() -> None:
     """Out-of-family Codex round 8 [P2] regression — the synthesis context's
-    `parent_action_id` MUST equal the synthesis step's OWN disclosing ledger entry
-    action_id (`workflow:{wf}:post-join-synthesis:{N}`), NOT the generic `...:step:{N}`.
-    Cost attribution + HITL audit/webhook records join on this context field; a `:step:`
-    value would point at an action_id with no matching synthesis ledger entry."""
+    `parent_action_id` is CONSISTENT with the synthesis step's OWN disclosing ledger entry
+    action_id (`workflow:{wf}:post-join-synthesis:{N}`), NOT the generic `...:step:{N}`. A
+    downstream record referencing this context's parent_action_id (cost / span / HITL audit)
+    now resolves to a REAL ledger entry; the prior `:step:` value referenced a non-existent
+    synthesis entry. (Proves the value-consistency; consumer-side join behavior is not
+    asserted here.)"""
     inner = _RecordingInner()
     registry = cast(
         StepDispatcherRegistry,
