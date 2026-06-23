@@ -877,6 +877,7 @@ class _OWSynthesisCapturingDispatcher:
 
     def __init__(self) -> None:
         self.received_siblings: Any = None
+        self.received_agent_role: Any = None
 
     def dispatch(
         self,
@@ -886,6 +887,7 @@ class _OWSynthesisCapturingDispatcher:
         step_context: Any = None,
     ) -> dict[str, Any]:
         self.received_siblings = step_context.sibling_outputs
+        self.received_agent_role = step_context.agent_role
         return {"synthesis": "ow-composed", "n": len(step_context.sibling_outputs)}
 
 
@@ -946,6 +948,69 @@ def test_orchestrator_workers_without_synthesis_uses_deterministic_compose() -> 
     assert result.final_state is not None
     assert set(result.final_state) == {"orchestrator", "worker_outputs"}
     assert not any(str(wk.step_id).startswith("post-join-synthesis") for _p, wk in ledger.appends)
+
+
+def test_orchestrator_role_override_does_not_leak_to_synthesis() -> None:
+    """Codex round 7 [P2] — for ORCHESTRATOR_WORKERS, `fanout_parent` IS the
+    orchestrator context, which carries the ORCHESTRATOR's per-step role override.
+    An UNOVERRIDDEN terminal synthesis must NOT inherit that orchestrator role (it
+    would mis-route the synthesis under the orchestrator's per-role model). The
+    synthesis mirrors the worker pattern: its own override wins, else its own
+    step-id-DERIVED role (never the orchestrator's). Both branches witnessed."""
+    orch_role = AgentRole("coordinator-special")
+    synth_role = AgentRole("synthesis-specialist")
+
+    # (a) orchestrator role override + UNOVERRIDDEN synthesis → synthesis gets its
+    #     OWN derived role, NOT the orchestrator's leak.
+    manifest_no_synth_override = _manifest().model_copy(
+        update={
+            "per_step_overrides": {
+                StepID("orchestrator"): StepOverride(
+                    step_id=StepID("orchestrator"), agent_role=orch_role
+                )
+            }
+        }
+    )
+    synth = _OWSynthesisCapturingDispatcher()
+    result = execute_workflow(
+        manifest_no_synth_override,
+        [*_steps(2), _ow_synthesis_step()],
+        run_id="run-synth-role-noleak",
+        ctx=cast(DriverContext, _Ctx(ledger=_RecordingLedger(), emitter=_Emitter())),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=cast(
+            StepDispatcherRegistry, _OWBranchOrSynthesisRegistry(_OWDispatcher(), synth)
+        ),
+    )
+    assert result.status is RunStatus.SUCCESS
+    assert synth.received_agent_role == derive_agent_role(StepID("synthesis"))
+    assert synth.received_agent_role != orch_role  # the leak is closed
+
+    # (b) a per-step role override ON the synthesis step wins (precedence per-step > derived).
+    manifest_synth_override = _manifest().model_copy(
+        update={
+            "per_step_overrides": {
+                StepID("orchestrator"): StepOverride(
+                    step_id=StepID("orchestrator"), agent_role=orch_role
+                ),
+                StepID("synthesis"): StepOverride(
+                    step_id=StepID("synthesis"), agent_role=synth_role
+                ),
+            }
+        }
+    )
+    synth2 = _OWSynthesisCapturingDispatcher()
+    execute_workflow(
+        manifest_synth_override,
+        [*_steps(2), _ow_synthesis_step()],
+        run_id="run-synth-role-override",
+        ctx=cast(DriverContext, _Ctx(ledger=_RecordingLedger(), emitter=_Emitter())),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=cast(
+            StepDispatcherRegistry, _OWBranchOrSynthesisRegistry(_OWDispatcher(), synth2)
+        ),
+    )
+    assert synth2.received_agent_role == synth_role
 
 
 def test_orchestrator_workers_synthesis_with_zero_workers_fails_closed() -> None:

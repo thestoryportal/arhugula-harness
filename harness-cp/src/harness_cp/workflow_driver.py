@@ -3218,12 +3218,24 @@ def _maybe_post_join_synthesis(
             # the synthesis is a top-level terminal step, NOT a branch child
             "branch_index": None,
             # B-POSTJOIN per-step overrides on the SYNTHESIS step apply to ITS context,
-            # not the parent's (out-of-family Codex [P2]): the runtime routing reads
-            # `agent_role` + the wrap-time HITL composer reads `hitl_placements`, so a
-            # per-step role / HITL override on the synthesis step must fold into the
-            # synthesis context — else it routes/gates as the fan-out parent. Mirrors
-            # the per-branch `compose_branch_child_context` + `fold_step_hitl_placements`.
-            "agent_role": synth_binding.agent_role or fanout_parent.agent_role,
+            # not the parent's (out-of-family Codex round 2 [P2]): the runtime routing
+            # reads `agent_role` + the wrap-time HITL composer reads `hitl_placements`, so
+            # a per-step role / HITL override on the synthesis step must fold into the
+            # synthesis context — else it routes/gates as the fan-out parent. Mirrors the
+            # per-branch `compose_branch_child_context` + `fold_step_hitl_placements`.
+            #
+            # Role fallback = the synthesis step's OWN derived role, NOT the parent's
+            # (out-of-family Codex round 7 [P2]): for ORCHESTRATOR_WORKERS /
+            # HIERARCHICAL_DELEGATION, `fanout_parent` IS the orchestrator_context, which
+            # carries the ORCHESTRATOR's per-step role override — so falling back to
+            # `fanout_parent.agent_role` would dispatch the synthesis under the
+            # orchestrator's role (wrong per-role model/routing). Workers explicitly avoid
+            # this leak (`binding.agent_role or derive_agent_role(step.step_id)` at the
+            # worker spawn), so the synthesis mirrors them: its own per-step override wins,
+            # else its own step-id-derived role (a distinct, operator-bindable role via
+            # `per_role_bindings`, never the orchestrator's). Truthiness-fold consistent
+            # with the worker site (an empty `AgentRole("")` is not a usable routing key).
+            "agent_role": synth_binding.agent_role or derive_agent_role(synthesis_step.step_id),
             "hitl_placements": fold_step_hitl_placements(
                 manifest_entry.hitl_placements, synth_binding.hitl_placement
             ),
