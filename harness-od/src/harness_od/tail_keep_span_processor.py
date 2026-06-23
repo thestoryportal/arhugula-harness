@@ -122,7 +122,12 @@ from opentelemetry.context import Context
 from opentelemetry.sdk.trace import ReadableSpan, Span, SpanProcessor
 
 from harness_od.sampling_mode import is_always_sampled
-from harness_od.tail_keep_classification import is_classification_trigger
+from harness_od.tail_keep_classification import (
+    SUBAGENT_RESULT_STATUS_ATTR,
+    SUBAGENT_RESULT_STATUS_FAILED_VALUE,
+    SUBAGENT_SPAN_NAME,
+    is_classification_trigger,
+)
 
 if TYPE_CHECKING:
     pass
@@ -234,8 +239,24 @@ class TailKeepSpanProcessor(SpanProcessor):
         # tail has no `ParentBased` wrapper, so it gates here with a parent-check (advisor:
         # a processor parent-check, NOT an SSOT `is_root` param — it is the one
         # root-conditional row, and root-ness is structural, not a name/attribute).
-        _nonroot_subagent = span.name == "subagent.span" and span.parent is not None
-        if not _nonroot_subagent and is_always_sampled(span.name, span.attributes):
+        #
+        # EXCEPTION — a FAILED `subagent.span` is force-forwarded (eviction-safe) regardless
+        # of depth (out-of-family Codex round 2): §14.3's tail-keep-on-failure decision is
+        # determined by the span's OWN `result_status`, KNOWN at on_end, so it needs no
+        # root-close buffering. Buffering it would expose the failure SIGNAL to §9.3
+        # eviction/overflow — the `_evict_oldest_trace` fidelity tradeoff explicitly assumes
+        # keep-TRIGGER spans are always-sampled/immediate (so eviction only sheds buffered
+        # siblings, never the trigger itself); a buffered failure-trigger would be silently
+        # lost under buffer pressure. So only a SUCCEEDED non-root `subagent.span` buffers.
+        _failed_subagent = (
+            span.name == SUBAGENT_SPAN_NAME
+            and (span.attributes or {}).get(SUBAGENT_RESULT_STATUS_ATTR)
+            == SUBAGENT_RESULT_STATUS_FAILED_VALUE
+        )
+        _buffer_nonroot_subagent = (
+            span.name == SUBAGENT_SPAN_NAME and span.parent is not None and not _failed_subagent
+        )
+        if not _buffer_nonroot_subagent and is_always_sampled(span.name, span.attributes):
             self._downstream.on_end(span)
             # Still mark the trace keep-flag if the always-sampled span is
             # a classification trigger (sandbox.violation + breaker.tripped

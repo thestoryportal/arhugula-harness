@@ -318,12 +318,13 @@ def test_subagent_span_nonroot_succeeded_buffers_and_drops_at_tail() -> None:
     assert recorder.on_end_calls == []
 
 
-def test_subagent_span_nonroot_failed_is_tail_kept() -> None:
+def test_subagent_span_nonroot_failed_force_forwards_immediately() -> None:
     """B-TAIL §14.3: a NON-root (nested) `subagent.span` that FAILED
-    (`subagent.result_status=failed`) is tail-kept — its failure is a keep-trigger, so the
-    trace is preserved at root close even with no sandbox/breaker/validator trigger. This is
-    the §14.3 BASE_RATE-head + tail-keep-on-failure contract (out-of-family Codex: the
-    §9.2-root-only refinement must not drop a failed nested subagent span)."""
+    (`subagent.result_status=failed`) is force-forwarded IMMEDIATELY at on_end (its
+    tail-keep-on-failure decision is determined by its own result_status, known at on_end)
+    — NOT buffered. This is eviction-safe (out-of-family Codex round 2: a buffered
+    failure-trigger would be lost under §9.3 buffer pressure). The keep-flag also preserves
+    the trace context (the envelope flushes at root close)."""
     proc, recorder = _new_tail_keep_with_recorder()
     provider = TracerProvider()
     provider.add_span_processor(proc)
@@ -332,10 +333,33 @@ def test_subagent_span_nonroot_failed_is_tail_kept() -> None:
         child = tracer.start_span("subagent.span")  # non-root child
         child.set_attribute(SUBAGENT_RESULT_STATUS_ATTR, SUBAGENT_RESULT_STATUS_FAILED_VALUE)
         child.end()
-    forwarded_names = {s.name for s in recorder.on_end_calls}
-    # The failed nested subagent.span is tail-kept (flushed with its preserved trace).
-    assert "subagent.span" in forwarded_names
-    assert "workflow.envelope" in forwarded_names
+        # Forwarded IMMEDIATELY — present BEFORE the root closes (force-forward, not buffer).
+        assert "subagent.span" in {s.name for s in recorder.on_end_calls}
+    # The keep-flag preserved the trace context — the envelope flushed at root close.
+    assert "workflow.envelope" in {s.name for s in recorder.on_end_calls}
+
+
+def test_failed_subagent_span_survives_buffer_eviction_pressure() -> None:
+    """B-TAIL §14.3 eviction-safety (out-of-family Codex round 2): a failed nested
+    `subagent.span` is force-forwarded, so the failure SIGNAL survives even when the trace
+    buffer is under `max_buffered_traces` eviction pressure (a buffered failure-trigger
+    would be silently dropped on eviction, since `_evict_oldest_trace` does not spare
+    keep-flagged traces)."""
+    recorder = _RecordingProcessor()
+    proc = TailKeepSpanProcessor(downstream=recorder, max_buffered_traces=1)
+    provider = TracerProvider()
+    provider.add_span_processor(proc)
+    tracer = provider.get_tracer(__name__)
+    # Trace A: a failed nested subagent.span (force-forwarded immediately).
+    with tracer.start_as_current_span("envelope.a"):
+        child = tracer.start_span("subagent.span")
+        child.set_attribute(SUBAGENT_RESULT_STATUS_ATTR, SUBAGENT_RESULT_STATUS_FAILED_VALUE)
+        child.end()
+        # Open a second pending trace to exert max_buffered_traces=1 eviction pressure.
+        with tracer.start_as_current_span("envelope.b.child"):
+            pass
+    # The failed subagent.span was forwarded at on_end → never in the buffer → never evicted.
+    assert "subagent.span" in {s.name for s in recorder.on_end_calls}
 
 
 def test_non_mutation_files_operation_is_buffered_not_dropped_when_trace_kept() -> None:
