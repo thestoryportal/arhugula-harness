@@ -46,10 +46,10 @@
 snapshot:
   frozen_total: 11
   frozen_done: 11
-  standalone_closed: 33
+  standalone_closed: 34
   standalone_gated: 1
   standalone_resolved: 4
-  standalone_registered: 2
+  standalone_registered: 1
   source: ".harness/beyond-mvp-capability-boundary-ledger.md"
   # FRONTIER NOTE (operator decision 2026-06-22): the operator DECLINED "declare
   # build-complete" and AUTHORIZED building BOTH committed-invariant-amendment arcs
@@ -593,13 +593,16 @@ arcs:
   - id: B-HITL-PLACEMENT-PER-STEP-LOOSEN
     title: "Per-step removal of a workflow HITL gate position"
     kind: standalone
-    status: registered
-    decompose_at_open: true
+    status: closed
     owner_axis: "CP"
     parent_arc: B-HITL-PLACEMENT-PER-STEP-OVERRIDE-FOLD
-    anticipated_scope: "Per-step TUNE/REPLACE or REMOVAL of a workflow-level HITL gate position (both reduce coverage — removal drops a position; a tune/replace can loosen attributes like tool_filter / cascade_policy / timeout). Needs BOTH a monotone-HITL-posture relaxation (committed-invariant relax — operator's call) AND a typed-shape change (a tuple-valued, replace/removal-capable per-step placement carrier)."
-    why: "The v1.49 fold is ADD-only / monotone by construction (an override ADDs an absent position; on a same-position collision the workflow placement wins — it can neither remove nor modify an existing one). Loosening (tune/replace/removal) is the rare, deliberately-friction-ful direction. AUTHORIZED 2026-06-22 — the operator chose full-spec closure (build both final arcs) over declaring build-complete → BUILD via the design-first pipeline (council [C10 action-safety ⊥ C11 operator-loop, the §13.4 worked-example dyad] → ratify the safe mechanism [opt-in, removal/replace-capable carrier, gate-removal AUDITED, non-removable mcp_trust/per_tool floors, monotone default preserved] → §17.1/§19.1 monotone-HITL spec amendment + clearance → impl with both-branch witnesses → adversarial review) per .harness/r-fs-1-final-closure-plan.md. SEQUENCED FIRST (smaller CP-contained surface; establishes the amendment rhythm)."
-    operator_gated: false  # gate CLEARED 2026-06-22 — operator AUTHORIZED build (full-spec closure); design-first per .harness/r-fs-1-final-closure-plan.md
+    pr: "#713"
+    spec_delta: "CP spec v1.52 → v1.53 (bundled-absorption; committed-invariant amendment, operator-ratified 2026-06-22). NEW LoosenablePlacementKind one-member enum (§17.1) + additive StepOverride.removed_placements + StepEffectiveBinding.removed_placements + resolve_step_binding propagation (§6.1/§6.2) + the §6.2/§17.1/§19.1 per-step SUB_AGENT_BOUNDARY removal semantics. Runtime hitl_gate_composer step-4c removal branch + placement-removed audit are impl (no runtime-spec contract change). Clearance: .harness/clearance/Spec_Control_Plane-v1_53-cleared-2026-06-22.md."
+    gives: "Opt-in per-step REMOVAL of a SUB_AGENT_BOUNDARY HITL gate — the FIRST per-step override that REDUCES gating (every prior only tightens). The operator-ratified relaxation of the monotone-HITL §17.1 'all cells' + §19.1 persona-tier floor, NARROW: (1) loosenable set = {SUB_AGENT_BOUNDARY} ONLY (PRE_ACTION structurally excluded = the §19.1 floor-evaluation bypass-seam, the §19.5 HITLAutoApprovePolicy is the safe PRE_ACTION loosening; VALIDATOR_ESCALATION = §14.15-path wrong-layer — both unrepresentable in the LoosenablePlacementKind enum, not a runtime guard); (2) remove-not-replace (a tool_filter-narrowing replace silently ungates other tools — the v1.49 footgun); (3) FLOOR-CLAMP load-bearing — overrides ONLY the persona human-oversight-at-handoff floor (+ the LOCAL_MUTATION blast cell per the ratified {read-only, local-mutation} scope); per_tool/mcp_trust NEVER override-able (U-CP-91) + blast above local-mutation clamp it → a high-blast / deny-tier-tool / untrusted-MCP dispatch REFUSES the removal (decline-mirror); (4) solo-only (team = registered follow-on, multi-tenant structurally foreclosed); (5) every applied removal auto-audited fail-closed (response='placement-removed', distinct from §19.5 'approve'). Residual: PREVENTIVE→DETECTIVE oversight for a removed cell — operator consciously accepted at ratification. Mechanism is NOT a fold mutation: the v1.49 fold_step_hitl_placements stays ADD-only (a destructive pre-composer deletion would prevent the floor-clamp); removed_placements is a binding-carried directive honoured at the SUB_AGENT_BOUNDARY composer (c_rt_17), mirroring §19.5's floor-cell lowering at c_rt_16. Provenance rides binding.model_dump (§6.6, the v1.38 agent_role precedent) — NO new §5.2/IS hash. Default empty ⇒ byte-identical + monotone. Witnesses by-execution (harness-cp 1175 passed/1 xfailed; harness-runtime non-e2e 2050 passed; pyright 0/0/0; ruff clean): NON-VACUITY (persona-floor knob OFF → removal skips THIS step's gate while an unremoved sibling gates — the genuine per-step delta over §19.5's global policy); floor-clamp refusal at EXTERNAL_* blast + untrusted MCP + deny-tier per_tool; LOCAL_MUTATION effective; non-solo no-op; fail-closed on unresolvable floor; placement-removed audit shape; carrier propagation (CP) + composer consumption (runtime) witnessed SEPARATELY + model_dump provenance (driver seam shares the agent_role wiring — precedent+inspection, not a single driver run); negative control (empty ⇒ byte-identical); CI pytest all-axes green. C10⊥C11 dyadic council (#709) + advisor (architecture vet + non-vacuity/LOCAL_MUTATION/provenance/fail-closed/audit-honesty sharpenings) + operator AUQ 'Ratify as designed' 2026-06-22 + out-of-family Codex (pre-merge)."
+    units:
+      - { id: null, what: "CP carrier — LoosenablePlacementKind enum + removed_placements on StepOverride/StepEffectiveBinding + resolve_step_binding propagation (harness-cp).", pr: "#713", leg: "spec+impl" }
+      - { id: null, what: "Runtime composer — hitl_gate_composer step-4c removal branch (floor-clamp via persona_floor_override=AUTO, solo-only, fail-closed) + placement-removed audit shape (harness-runtime).", pr: "#713", leg: "impl" }
+    operator_gated: false
     ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
 
   - id: B-EDIT-CARRIER-DURABLE-ASYNC-RESUME

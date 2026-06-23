@@ -42,7 +42,7 @@ from harness_cp.cp_shared_types import AgentRole, ModelBinding
 from harness_cp.cross_family_fallback_chain import FallbackChain
 from harness_cp.engine_class import EngineClass
 from harness_cp.gate_level_rule import GateLevel
-from harness_cp.hitl_placement import HITLPlacement
+from harness_cp.hitl_placement import HITLPlacement, LoosenablePlacementKind
 from harness_cp.layer_budget import LayerBudget
 from harness_cp.sub_agent_brief import SubAgentBrief
 from harness_cp.topology_pattern import TopologyPattern
@@ -125,6 +125,32 @@ class StepOverride(BaseModel):
     hashes the run-level ``PromptSelectionManifest``/``RoutingManifest`` per-role
     catalogs, not per-workflow per-step overrides — the per-step MODEL/PROMPT
     override precedent).
+    """
+
+    removed_placements: frozenset[LoosenablePlacementKind] = frozenset()
+    """v1.53 addition (CP spec v1.53 §6.1 NEW field per the v1.27 §2(d) X-AL-3
+    explicit-extension discipline; R-FS-1 ``B-HITL-PLACEMENT-PER-STEP-LOOSEN`` —
+    the operator-ratified committed-invariant relaxation of the §17.1
+    monotone-HITL "all cells" floor).
+
+    The opt-in set of HITL placements *this step* REMOVES. ``LoosenablePlacementKind``
+    is a closed one-member enum (``SUB_AGENT_BOUNDARY`` only) so ``PRE_ACTION`` /
+    ``VALIDATOR_ESCALATION`` are STRUCTURALLY unrepresentable (the §19.1
+    floor-evaluation bypass-seam + the §14.15-path wrong-layer, respectively —
+    foreclosed at the type, not a runtime guard). Empty (the default) preserves
+    the v1.49 ADD-only fold verbatim — byte-identical + monotone.
+
+    This is the FIRST per-step override that can REDUCE gating (every prior
+    override only TIGHTENS). It is NOT unconditional: ``resolve_step_binding``
+    carries it onto ``StepEffectiveBinding.removed_placements``; the
+    SUB_AGENT_BOUNDARY composer (``hitl_gate_composer.py`` step 4c) applies it
+    solo-scoped + FLOOR-CLAMPED (overrides only the §19.1 PERSONA human-oversight
+    floor + the LOCAL_MUTATION blast cell; the HARD ``per_tool``/``mcp_trust``
+    floors + ``blast_radius`` above local-mutation are NEVER override-able → a
+    removal on a high-blast / deny-tier / untrusted-MCP dispatch is REFUSED) +
+    auto-audited fail-closed. Provenance is the per-step override state-ledger
+    entry (CP spec v1.53 §6.6, like ``agent_role``) — NOT the run-level C-IS-05
+    §5.2 hash.
     """
 
 

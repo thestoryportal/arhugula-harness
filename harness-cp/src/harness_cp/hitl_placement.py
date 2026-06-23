@@ -70,6 +70,37 @@ class HITLPlacementKind(StrEnum):
     """After retry-budget exhaustion (3rd validator fail)."""
 
 
+class LoosenablePlacementKind(StrEnum):
+    """The placement kinds a per-step override MAY opt-in to REMOVE (C-CP-06 §6.2).
+
+    `B-HITL-PLACEMENT-PER-STEP-LOOSEN` (R-FS-1 final-closure; the operator-ratified
+    committed-invariant relaxation of the §17.1 "all cells" monotone-HITL floor).
+    A **closed enum with exactly one member** — `SUB_AGENT_BOUNDARY` — so the two
+    other `HITLPlacementKind` values are **structurally unrepresentable** in a
+    `removed_placements` set, not merely guarded at runtime:
+
+    - `PRE_ACTION` is EXCLUDED because it is the §19.1 `_hitl_required`
+      floor-evaluation call-site (`hitl_gate_composer.py` step 4c) — removing it
+      would leave the `mcp_trust`/`per_tool`/blast-radius floors intact but
+      UNCONSULTED (the bypass-seam C10 foreclosed). The §19.5 `HITLAutoApprovePolicy`
+      already provides the safe, in-`max()` PRE_ACTION loosening (solo persona/blast
+      floor cells → AUTO), so per-step PRE_ACTION removal is both unsafe AND
+      redundant.
+    - `VALIDATOR_ESCALATION` is EXCLUDED because it fires via the §14.15
+      validator-outcome re-entry path, NOT a wrap-time placement — a wrap-time
+      removal would be a no-op/wrong-layer (foreclosed at the composer per Q5).
+
+    The member string value equals `HITLPlacementKind.SUB_AGENT_BOUNDARY.value`
+    verbatim so a `removed_placements` set keys cleanly against the placement's
+    `position` at the composer.
+    """
+
+    SUB_AGENT_BOUNDARY = "sub-agent-boundary"
+    """The only loosenable placement — the parent-child handoff gate. Removal is
+    solo-scoped, floor-clamped (hard blast/`per_tool`/`mcp_trust` floors NOT
+    override-able), and auto-audited per C-CP-06 §6.2."""
+
+
 class HITLPlacementTrigger(BaseModel):
     """A per-placement trigger row of the C-CP-17 §17.1 table."""
 
