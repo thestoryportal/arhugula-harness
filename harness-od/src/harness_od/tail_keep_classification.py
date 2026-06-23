@@ -37,6 +37,9 @@ if TYPE_CHECKING:
 __all__ = [
     "BREAKER_TRIPPED_SPAN_NAME",
     "SANDBOX_VIOLATION_SPAN_NAME",
+    "SUBAGENT_RESULT_STATUS_ATTR",
+    "SUBAGENT_RESULT_STATUS_FAILED_VALUE",
+    "SUBAGENT_SPAN_NAME",
     "VALIDATOR_FAIL_PERMANENCE_ATTR",
     "VALIDATOR_FAIL_PERMANENCE_PERMANENT_VALUE",
     "is_classification_trigger",
@@ -58,9 +61,24 @@ VALIDATOR_FAIL_PERMANENCE_ATTR: str = "validator.fail.permanence"
 #: derivation function at harness-cp/src/harness_cp/validator_fail_taxonomy.py).
 VALIDATOR_FAIL_PERMANENCE_PERMANENT_VALUE: str = "permanent"
 
+#: Span name carrying the §14.3 subagent tail-keep-on-failure row (`subagent.span`,
+#: the real producer-emitted name per harness-runtime sub_agent_dispatch.py).
+SUBAGENT_SPAN_NAME: str = "subagent.span"
+
+#: Span attribute key carrying the subagent result status (CP C-CP-14 §14.2/§14.3;
+#: ingested verbatim per the D6 namespace-ingestion pattern, like the validator attr above).
+SUBAGENT_RESULT_STATUS_ATTR: str = "subagent.result_status"
+
+#: Attribute value flagging the §14.3 subagent-failure tail-keep
+#: (`SubAgentResultStatus.FAILED` value per CP topology_subagent_namespace.py; the runtime
+#: producer emits the lowercase `"failed"` at sub_agent_dispatch.py).
+SUBAGENT_RESULT_STATUS_FAILED_VALUE: str = "failed"
+
 
 def is_classification_trigger(span: ReadableSpan) -> bool:
-    """Return True iff `span` carries any of the 3 §10.2 classification triggers.
+    """Return True iff `span` carries a tail-keep classification trigger: the 3
+    §10.2 triggers (sandbox.violation / breaker.tripped / validator.fail-permanent)
+    OR the §14.3 subagent-failure tail-keep.
 
     Pure predicate over an OTel `ReadableSpan`. Tolerant of missing
     attribute bag (returns False instead of raising). Used at the
@@ -78,4 +96,15 @@ def is_classification_trigger(span: ReadableSpan) -> bool:
     attrs = span.attributes
     if attrs is None:
         return False
-    return attrs.get(VALIDATOR_FAIL_PERMANENCE_ATTR) == (VALIDATOR_FAIL_PERMANENCE_PERMANENT_VALUE)
+    if attrs.get(VALIDATOR_FAIL_PERMANENCE_ATTR) == VALIDATOR_FAIL_PERMANENCE_PERMANENT_VALUE:
+        return True
+    # §14.3 (CP C-CP-14 `MULTI_AGENT_SPAN_SAMPLING`): a `subagent.span` is BASE_RATE
+    # head-sampled with TAIL-KEEP ON FAILURE. Before B-TAIL this was crudely over-satisfied
+    # by name-only always-sampling of every `subagent.span`; with the §9.2-root-only
+    # refinement a non-root `subagent.span` now buffers, so its failure must trigger trace
+    # preservation here (out-of-family Codex — else a failed nested subagent span drops,
+    # regressing the §14.3 observability contract).
+    return (
+        name == SUBAGENT_SPAN_NAME
+        and attrs.get(SUBAGENT_RESULT_STATUS_ATTR) == SUBAGENT_RESULT_STATUS_FAILED_VALUE
+    )

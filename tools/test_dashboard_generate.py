@@ -124,9 +124,12 @@ def test_standalone_projection_matches_ledger_counts():
     # closed standalone arcs carry their PR in the human-facing chip label.
     closed = [s for s in sa if s["status"] == "closed"]
     assert closed and all("#" in s["status_detail"] for s in closed)
-    # both built-half forward families are present.
-    assert any(s["status"] == "gated" for s in sa)
-    assert any(s["status"] == "resolved" for s in sa)
+    # A status family renders iff the ledger has ≥1 arc in it — tie the existence check to
+    # the ledger count rather than assuming a family is always non-empty (B-TAIL-CONDITIONAL-
+    # SAMPLING closed the LAST gated standalone arc → `standalone_gated` is now 0, so the
+    # projection correctly surfaces zero gated arcs; the count assert above already pins it).
+    assert any(s["status"] == "gated" for s in sa) == (d["standalone_gated"] > 0)
+    assert any(s["status"] == "resolved" for s in sa) == (d["standalone_resolved"] > 0)
 
 
 def test_registered_forward_arcs_carry_parent_and_zero_units():
