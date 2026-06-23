@@ -863,3 +863,86 @@ def test_orchestrator_workers_live_e2e_real_ledger_chain_valid(tmp_path: Path) -
     assert writer.entry_count == 7
     entries = read_ledger(handle)
     assert verify_chain(entries).status is VerificationStatus.VALID
+
+
+# ---------------------------------------------------------------------------
+# B-POSTJOIN-LLM-SYNTHESIS (CP spec v1.54 §3/§4) — opt-in terminal synthesis step
+# ---------------------------------------------------------------------------
+
+
+class _OWSynthesisCapturingDispatcher:
+    """A `POST_JOIN_SYNTHESIS` dispatcher that CAPTURES the branch-index-ordered
+    WORKER siblings + returns a synthesized aggregate (stands in for the runtime
+    `PostJoinSynthesisStepDispatcher`)."""
+
+    def __init__(self) -> None:
+        self.received_siblings: Any = None
+
+    def dispatch(
+        self,
+        binding: StepEffectiveBinding,
+        step: WorkflowStep,
+        *,
+        step_context: Any = None,
+    ) -> dict[str, Any]:
+        self.received_siblings = step_context.sibling_outputs
+        return {"synthesis": "ow-composed", "n": len(step_context.sibling_outputs)}
+
+
+class _OWBranchOrSynthesisRegistry:
+    """Binds `DECLARATIVE_STEP` (orchestrator + workers) + `POST_JOIN_SYNTHESIS`."""
+
+    def __init__(self, branch: StepDispatcher, synthesis: StepDispatcher) -> None:
+        self._branch = branch
+        self._synthesis = synthesis
+
+    def lookup(self, step_kind: StepKind) -> StepDispatcher:
+        if step_kind is StepKind.DECLARATIVE_STEP:
+            return self._branch
+        if step_kind is StepKind.POST_JOIN_SYNTHESIS:
+            return self._synthesis
+        raise StepKindDispatcherNotBoundError(step_kind)
+
+
+def _ow_synthesis_step() -> WorkflowStep:
+    return WorkflowStep(
+        step_id=StepID("synthesis"),
+        step_kind=StepKind.POST_JOIN_SYNTHESIS,
+        step_payload={"prompt": "compose"},
+    )
+
+
+def test_orchestrator_workers_post_join_synthesis_replaces_compose_reads_workers() -> None:
+    """A terminal POST_JOIN_SYNTHESIS step REPLACES the deterministic orchestrator
+    compose on SUCCESS: carved out of the orchestrator+worker set, it receives the
+    branch-index-ordered WORKER siblings (NOT the orchestrator, NOT itself) and its
+    output is final_state; a disclosing synthesis entry is appended (v1.54 §3/§4)."""
+    ledger = _RecordingLedger()
+    synth = _OWSynthesisCapturingDispatcher()
+    result = _run(
+        steps=[*_steps(2), _ow_synthesis_step()],
+        dispatcher=_OWDispatcher(),  # unused — the registry overrides it
+        ledger=ledger,
+        registry=cast(
+            StepDispatcherRegistry,
+            _OWBranchOrSynthesisRegistry(_OWDispatcher(), synth),
+        ),
+    )
+    assert result.status is RunStatus.SUCCESS
+    assert result.final_state == {"synthesis": "ow-composed", "n": 2}
+    # The synthesis read the 2 branch-index-ordered WORKER siblings (worker-0,
+    # worker-1) — NOT the orchestrator, NOT the carved synthesis step.
+    assert [bi for bi, _o in synth.received_siblings] == [0, 1]
+    assert synth.received_siblings[0][1] == {"role": "worker-0", "echoed": {"index": 0}}
+    assert any(str(wk.step_id).startswith("post-join-synthesis") for _p, wk in ledger.appends)
+
+
+def test_orchestrator_workers_without_synthesis_uses_deterministic_compose() -> None:
+    """Negative control: absent a synthesis step, the deterministic orchestrator
+    compose is byte-identical to pre-v1.54 (no synthesis dispatch, no entry)."""
+    ledger = _RecordingLedger()
+    result = _run(steps=_steps(2), dispatcher=_OWDispatcher(), ledger=ledger)
+    assert result.status is RunStatus.SUCCESS
+    assert result.final_state is not None
+    assert set(result.final_state) == {"orchestrator", "worker_outputs"}
+    assert not any(str(wk.step_id).startswith("post-join-synthesis") for _p, wk in ledger.appends)

@@ -1713,9 +1713,15 @@ def _execute_workflow_body(
             resume_snapshot=resume_snapshot,
         )
     if strategy is _DriverStrategyStatus.ORCHESTRATOR_WORKERS:
+        # B-POSTJOIN-LLM-SYNTHESIS (CP spec v1.54 §3) — carve an opt-in terminal
+        # POST_JOIN_SYNTHESIS step out of the orchestrator+worker step set
+        # (`steps[0]`=orchestrator, `steps[1:]`=workers); the strategy dispatches
+        # it post-barrier composing the worker siblings. `(steps, None)` absent the
+        # opt-in → byte-identical to pre-v1.54.
+        _branch_steps, _synthesis_step = _split_synthesis(steps)
         return _execute_orchestrator_workers(
             manifest_entry=manifest_entry,
-            steps=steps,
+            steps=_branch_steps,
             run_id=run_id,
             ctx=ctx,
             default_model_binding=default_model_binding,
@@ -1729,6 +1735,7 @@ def _execute_workflow_body(
             # (not-yet-wired) resume cannot advertise a false-resumable PAUSED.
             resume_snapshot=resume_snapshot,
             pause_resumable=True,
+            synthesis_step=_synthesis_step,
         )
     if strategy is _DriverStrategyStatus.HIERARCHICAL_DELEGATION:
         # B-HIERARCHICAL-PAUSE (R-FS-1) — HIERARCHICAL now threads the resume
@@ -5203,6 +5210,7 @@ def _execute_orchestrator_workers(
     run_idempotency_key: str,
     resume_snapshot: PauseSnapshot | None = None,
     pause_resumable: bool = False,
+    synthesis_step: WorkflowStep | None = None,
 ) -> tuple[RunResult, int]:
     """Execute the `ORCHESTRATOR_WORKERS` orchestrator-dispatch-collect strategy (U-CP-88).
 
@@ -5646,16 +5654,36 @@ def _execute_orchestrator_workers(
         drain_branch_buffers(ctx.ledger_writer, _orch_writers)
         if orchestrator_writer is not None:
             ctx.lifecycle_emitter.emit(WorkflowEventClass.STEP_BOUNDARY)
-        _aggregate = _aggregate_orchestrator_workers(orchestrator_output, collected)
         # B-FANOUT-PAUSE (advisor [P1]) — a resume where EVERY worker was already
         # terminal: if a recovered branch FAILED (terminal but no collected output)
         # the run is degraded → PARTIAL, not a bare silent SUCCESS dropping the
         # failure. Non-resume orchestrator-only → empty terminal set → SUCCESS.
         _degraded = any(_bi not in collected for _bi in terminal_dispositions)
+        _no_worker_status = RunStatus.PARTIAL if _degraded else RunStatus.SUCCESS
+        # B-POSTJOIN-LLM-SYNTHESIS (CP spec v1.54 §3/§4) — the no-worker-fan-out
+        # terminal aggregate also honors an opt-in synthesis on SUCCESS (composing
+        # the recovered worker set; never silently skipped); `None` → the fold.
+        _synth = _maybe_post_join_synthesis(
+            synthesis_step=synthesis_step,
+            status=_no_worker_status,
+            collected=collected,
+            ctx=ctx,
+            manifest_entry=manifest_entry,
+            step_dispatchers=step_dispatchers,
+            default_model_binding=default_model_binding,
+            fanout_parent=fanout_parent,
+            run_idempotency_key=run_idempotency_key,
+            branch_count=len(steps),
+        )
+        _aggregate = (
+            _synth
+            if _synth is not None
+            else _aggregate_orchestrator_workers(orchestrator_output, collected)
+        )
         return RunResult(
             workflow_id=workflow_id,
             run_id=run_id,
-            status=RunStatus.PARTIAL if _degraded else RunStatus.SUCCESS,
+            status=_no_worker_status,
             terminal_step_index=None,
             partial_state=_aggregate if _degraded else None,
             final_state=None if _degraded else _aggregate,
@@ -5682,7 +5710,27 @@ def _execute_orchestrator_workers(
         steps_executed = (1 if orchestrator_writer is not None else 0) + (
             _drain_and_emit_step_boundaries(ctx, branch_writers)
         )
-        aggregate = _aggregate_orchestrator_workers(orchestrator_output, collected)
+        # B-POSTJOIN-LLM-SYNTHESIS (CP spec v1.54 §3/§4) — an opt-in terminal
+        # POST_JOIN_SYNTHESIS step composes the branch-index-ordered WORKER
+        # siblings post-drain on SUCCESS, REPLACING the deterministic fold;
+        # `None` → the byte-identical fold.
+        _synth = _maybe_post_join_synthesis(
+            synthesis_step=synthesis_step,
+            status=status,
+            collected=collected,
+            ctx=ctx,
+            manifest_entry=manifest_entry,
+            step_dispatchers=step_dispatchers,
+            default_model_binding=default_model_binding,
+            fanout_parent=fanout_parent,
+            run_idempotency_key=run_idempotency_key,
+            branch_count=len(steps),
+        )
+        aggregate = (
+            _synth
+            if _synth is not None
+            else _aggregate_orchestrator_workers(orchestrator_output, collected)
+        )
         return RunResult(
             workflow_id=workflow_id,
             run_id=run_id,
