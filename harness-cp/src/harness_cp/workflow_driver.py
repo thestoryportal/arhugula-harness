@@ -3157,6 +3157,25 @@ def _maybe_post_join_synthesis(
     # branch buffers drained. Map to a FAILED RunResult here (mirrors the inline
     # step-dispatch mapping at the §25.3 loop), so the caller returns it cleanly.
     try:
+        # B-POSTJOIN override provenance (out-of-family Codex [P2]): a per-step
+        # override on the SYNTHESIS step must emit the override-application ledger
+        # entry like every other path (linear `emit_override_state_ledger_entry` /
+        # branch `_buffer_branch_override_if_applied`), else the synthesized final
+        # state runs under an override with NO provenance (C-CP-06 §6.6 all-paths
+        # contract). The synthesis runs on the driver thread post-barrier → the
+        # DIRECT emit (mirroring the linear `_execute_workflow_body` guard), gated
+        # on `override_applied`.
+        if synth_binding.override_applied:
+            _cp_is_wiring = getattr(ctx, "cp_is_wiring", None)
+            if _cp_is_wiring is not None:
+                _run_protocol_method_sync(
+                    _cp_is_wiring.emit_override_state_ledger_entry(
+                        workflow_id=manifest_entry.workflow_id,
+                        step_id=str(synthesis_step.step_id),
+                        post_override_step_config=synth_binding.model_dump(mode="json"),
+                        actor=ActorIdentity(ctx.ledger_writer.actor.actor_id),
+                    )
+                )
         synth_output = step_dispatchers.lookup(StepKind.POST_JOIN_SYNTHESIS).dispatch(
             synth_binding, synthesis_step, step_context=synthesis_context
         )
@@ -3166,6 +3185,10 @@ def _maybe_post_join_synthesis(
             synthesis_index=synthesis_index,
             synthesis_idempotency_key=synthesis_idempotency_key,
         )
+        # B-POSTJOIN telemetry (out-of-family Codex [P2]): the synthesis IS a step
+        # that executed → emit its lifecycle STEP_BOUNDARY (the caller increments
+        # `steps_executed` by one on a dict return), so `workflow.step_count` counts it.
+        ctx.lifecycle_emitter.emit(WorkflowEventClass.STEP_BOUNDARY)
     except StepKindDispatcherNotBoundError as exc:
         return RunResult(
             workflow_id=manifest_entry.workflow_id,
@@ -4088,6 +4111,10 @@ def _execute_parallelization(
         # directly (no escaping exception post-drain — Codex [P2]).
         if isinstance(_synth, RunResult):
             return _synth, steps_executed
+        # A dict ⟺ the synthesis dispatched → count its executed step (Codex [P2];
+        # its STEP_BOUNDARY was emitted inside `_maybe_post_join_synthesis`).
+        if _synth is not None:
+            steps_executed += 1
         # No collected output (e.g. an all-timed-out deadline strike) → the empty
         # aggregate (matching the empty-steps early-return shape); `_aggregate_
         # parallelization([])` would otherwise `max()` an empty vote tally.
@@ -5733,6 +5760,8 @@ def _execute_orchestrator_workers(
         )
         if isinstance(_synth, RunResult):
             return _synth, (1 if orchestrator_writer is not None else 0)
+        # A dict ⟺ the synthesis dispatched → count its executed step (Codex [P2]).
+        _synth_steps = 1 if _synth is not None else 0
         _aggregate = (
             _synth
             if _synth is not None
@@ -5746,7 +5775,7 @@ def _execute_orchestrator_workers(
             partial_state=_aggregate if _degraded else None,
             final_state=None if _degraded else _aggregate,
             fail_class=None,
-        ), (1 if orchestrator_writer is not None else 0)
+        ), (1 if orchestrator_writer is not None else 0) + _synth_steps
 
     def _finish(
         status: RunStatus,
@@ -5787,6 +5816,9 @@ def _execute_orchestrator_workers(
         )
         if isinstance(_synth, RunResult):
             return _synth, steps_executed
+        # A dict ⟺ the synthesis dispatched → count its executed step (Codex [P2]).
+        if _synth is not None:
+            steps_executed += 1
         aggregate = (
             _synth
             if _synth is not None

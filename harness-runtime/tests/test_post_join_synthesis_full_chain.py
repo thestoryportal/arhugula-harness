@@ -19,6 +19,7 @@ from collections.abc import Mapping
 from typing import Any, cast
 
 from harness_core import PersonaTier, StepID, WorkloadClass
+from harness_core.workflow_event_class import WorkflowEventClass
 from harness_cp.cp_shared_types import AgentRole, ModelBinding
 from harness_cp.cross_family_fallback_chain import (
     FallbackChain,
@@ -82,8 +83,21 @@ class _Emitter:
         self.emits.append(event_class)
 
 
+class _RecordingCpIsWiring:
+    """Records `emit_override_state_ledger_entry` calls (async, run via the driver's
+    `_run_protocol_method_sync`) — to witness synthesis override provenance."""
+
+    def __init__(self) -> None:
+        self.override_emits: list[dict[str, Any]] = []
+
+    async def emit_override_state_ledger_entry(
+        self, *, workflow_id: str, step_id: str, post_override_step_config: Any, actor: Any
+    ) -> None:
+        self.override_emits.append({"workflow_id": workflow_id, "step_id": step_id})
+
+
 class _Ctx:
-    def __init__(self, *, ledger: Any, emitter: _Emitter) -> None:
+    def __init__(self, *, ledger: Any, emitter: _Emitter, cp_is_wiring: Any = None) -> None:
         from opentelemetry.trace import NoOpTracerProvider
 
         self.ledger_writer = ledger
@@ -95,6 +109,7 @@ class _Ctx:
         self.tracer_provider = NoOpTracerProvider()
         self.validator_framework = None
         self.tenant_id = None
+        self.cp_is_wiring = cp_is_wiring
 
 
 class _WorkerEcho:
@@ -269,3 +284,78 @@ def test_post_join_synthesis_full_chain_per_step_override_reaches_context() -> N
     # The synthesis context the dispatcher received carries the OVERRIDE role, not
     # the fan-out parent's None — the per-step override folded into ITS context.
     assert inner.received_context.agent_role == AgentRole("synthesizer")
+
+
+def test_post_join_synthesis_full_chain_emits_step_boundary() -> None:
+    """Codex [P2] regression — a successful synthesis is a real step that executed,
+    so it emits one ADDITIONAL lifecycle STEP_BOUNDARY beyond the fan-out branches
+    (telemetry: `workflow.step_count` counts it). Compared to the byte-identical
+    fold run over the same workers."""
+
+    def _run(steps: list[WorkflowStep]) -> _Emitter:
+        emitter = _Emitter()
+        ctx = cast(DriverContext, _Ctx(ledger=_RecordingLedger(), emitter=emitter))
+        registry = cast(
+            StepDispatcherRegistry,
+            _Registry(
+                worker=_WorkerEcho(),
+                synthesis=PostJoinSynthesisStepDispatcher(
+                    inner=cast(StepDispatcher, _RecordingInner())
+                ),
+            ),
+        )
+        execute_workflow(
+            _manifest(),
+            steps,
+            run_id="run-1",
+            ctx=ctx,
+            default_model_binding=ModelBinding(provider="anthropic", model="claude-haiku-4-5"),
+            step_dispatchers=registry,
+        )
+        return emitter
+
+    def _boundaries(e: _Emitter) -> int:
+        return e.emits.count(WorkflowEventClass.STEP_BOUNDARY)
+
+    with_synthesis = _run([_worker(0), _worker(1), _synthesis_step()])
+    fold_only = _run([_worker(0), _worker(1)])
+    # Exactly ONE more STEP_BOUNDARY when the synthesis step runs.
+    assert _boundaries(with_synthesis) == _boundaries(fold_only) + 1
+
+
+def test_post_join_synthesis_full_chain_override_emits_provenance() -> None:
+    """Codex [P2] regression — a per-step override on the SYNTHESIS step emits the
+    override-application state-ledger entry (provenance), like the linear /
+    branch paths (C-CP-06 §6.6 all-paths contract)."""
+    wiring = _RecordingCpIsWiring()
+    ctx = cast(
+        DriverContext,
+        _Ctx(ledger=_RecordingLedger(), emitter=_Emitter(), cp_is_wiring=wiring),
+    )
+    registry = cast(
+        StepDispatcherRegistry,
+        _Registry(
+            worker=_WorkerEcho(),
+            synthesis=PostJoinSynthesisStepDispatcher(
+                inner=cast(StepDispatcher, _RecordingInner())
+            ),
+        ),
+    )
+    overrides = {
+        StepID("synthesis"): StepOverride(
+            step_id=StepID("synthesis"), agent_role=AgentRole("synthesizer")
+        )
+    }
+
+    result = execute_workflow(
+        _manifest(per_step_overrides=overrides),
+        [_worker(0), _worker(1), _synthesis_step()],
+        run_id="run-1",
+        ctx=ctx,
+        default_model_binding=ModelBinding(provider="anthropic", model="claude-haiku-4-5"),
+        step_dispatchers=registry,
+    )
+
+    assert result.status is RunStatus.SUCCESS
+    # The synthesis step's override emitted exactly one provenance entry, keyed to it.
+    assert [e["step_id"] for e in wiring.override_emits] == ["synthesis"]

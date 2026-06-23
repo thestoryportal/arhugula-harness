@@ -65,7 +65,17 @@ class StepBlastRadiusResolutionError(LookupError):
 
 
 _READ_ONLY_KINDS = frozenset(
-    {StepKind.INFERENCE_STEP, StepKind.DECLARATIVE_STEP, StepKind.HITL_STEP}
+    {
+        StepKind.INFERENCE_STEP,
+        StepKind.DECLARATIVE_STEP,
+        StepKind.HITL_STEP,
+        # POST_JOIN_SYNTHESIS (CP spec v1.54 / runtime §14.24) — a read-only /
+        # effect-free LLM compose of the fan-out siblings (no external effect; the
+        # arc's load-bearing safety property). A PRE_ACTION-gated synthesis must
+        # classify here, else the HITL composer's resolve_step_blast_radius would
+        # raise StepBlastRadiusResolutionError → gated synthesis fails (Codex [P2]).
+        StepKind.POST_JOIN_SYNTHESIS,
+    }
 )
 
 
