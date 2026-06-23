@@ -389,3 +389,73 @@ def test_post_join_synthesis_full_chain_non_terminal_placement_fails_closed() ->
     assert result.status is RunStatus.FAILED
     assert result.final_state is None
     assert result.fail_class is not None and "post-join-synthesis-misplaced" in result.fail_class
+
+
+def test_post_join_synthesis_full_chain_zero_branch_fails_closed() -> None:
+    """Codex [P2] regression — a lone POST_JOIN_SYNTHESIS (no fan-out step to compose)
+    is rejected fail-closed; it would otherwise carve to empty branch_steps → the
+    strategy's empty-steps early return SILENTLY DROPS it."""
+    registry = cast(
+        StepDispatcherRegistry,
+        _Registry(
+            worker=_WorkerEcho(),
+            synthesis=PostJoinSynthesisStepDispatcher(
+                inner=cast(StepDispatcher, _RecordingInner())
+            ),
+        ),
+    )
+    ctx = cast(DriverContext, _Ctx(ledger=_RecordingLedger(), emitter=_Emitter()))
+
+    result = execute_workflow(
+        _manifest(),
+        [_synthesis_step()],  # synthesis with NO fan-out branch
+        run_id="run-1",
+        ctx=ctx,
+        default_model_binding=ModelBinding(provider="anthropic", model="claude-haiku-4-5"),
+        step_dispatchers=registry,
+    )
+
+    assert result.status is RunStatus.FAILED
+    assert result.fail_class is not None and "post-join-synthesis-misplaced" in result.fail_class
+
+
+class HITLPauseRequestedSignal(BaseException):
+    """Name-matches the runtime durable-async HITL pause signal (a BaseException the
+    driver name-matches) — to witness the synthesis durable-pause fail-closed mapping."""
+
+
+class _PauseSignallingInner:
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> Mapping[str, Any]:
+        raise HITLPauseRequestedSignal
+
+
+def test_post_join_synthesis_full_chain_durable_hitl_pause_fails_closed() -> None:
+    """Codex [P1] regression — a durable-async HITL pause signal (BaseException) raised
+    during the synthesis dispatch maps to a FAILED RunResult (not an escaping
+    BaseException, not a dead-end PAUSED that cannot resume): a paused terminal
+    post-barrier synthesis has no resumable re-entry today."""
+    registry = cast(
+        StepDispatcherRegistry,
+        _Registry(
+            worker=_WorkerEcho(),
+            synthesis=PostJoinSynthesisStepDispatcher(
+                inner=cast(StepDispatcher, _PauseSignallingInner())
+            ),
+        ),
+    )
+    ctx = cast(DriverContext, _Ctx(ledger=_RecordingLedger(), emitter=_Emitter()))
+
+    result = execute_workflow(
+        _manifest(),
+        [_worker(0), _worker(1), _synthesis_step()],
+        run_id="run-1",
+        ctx=ctx,
+        default_model_binding=ModelBinding(provider="anthropic", model="claude-haiku-4-5"),
+        step_dispatchers=registry,
+    )
+
+    assert result.status is RunStatus.FAILED
+    assert result.final_state is None
+    assert result.fail_class is not None and "not resumable" in result.fail_class

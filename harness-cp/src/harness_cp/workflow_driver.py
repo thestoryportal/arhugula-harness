@@ -1678,6 +1678,11 @@ def _execute_workflow_body(
             len(_synth_positions) > 1
             or _synth_positions[0] != len(steps) - 1
             or strategy not in _concurrent_fanout
+            # Zero-branch guard (out-of-family Codex [P2]): a lone POST_JOIN_SYNTHESIS
+            # (len < 2, no fan-out step to compose) would carve to empty branch_steps
+            # → the strategy's empty-steps early return SILENTLY DROPS it. A synthesis
+            # needs ≥1 fan-out sibling — reject fail-closed.
+            or len(steps) < 2
         ):
             return (
                 RunResult(
@@ -1689,8 +1694,9 @@ def _execute_workflow_body(
                     final_state=None,
                     fail_class=(
                         "post-join-synthesis-misplaced: POST_JOIN_SYNTHESIS is valid only "
-                        "as the single terminal step of a concurrent fan-out "
-                        "(PARALLELIZATION / ORCHESTRATOR_WORKERS / HIERARCHICAL_DELEGATION)"
+                        "as the single terminal step of a concurrent fan-out with ≥1 "
+                        "fan-out step (PARALLELIZATION / ORCHESTRATOR_WORKERS / "
+                        "HIERARCHICAL_DELEGATION)"
                     ),
                 ),
                 0,
@@ -3249,6 +3255,33 @@ def _maybe_post_join_synthesis(
             partial_state=None,
             final_state=None,
             fail_class=_step_fail_class("post-join-synthesis-failure", exc),
+        )
+    except BaseException as exc:
+        # B-POSTJOIN durable-HITL-pause (out-of-family Codex [P1]): the synthesis flows
+        # through the hitl_inference composer (stage-5 chain), so a PRE_ACTION gate on
+        # the synthesis step can raise the durable-async `HITLPauseRequestedSignal` (a
+        # BaseException — NOT caught by `except Exception` above). The inline §25.3 loop
+        # captures it → PAUSED, but a paused TERMINAL post-barrier synthesis has no
+        # resumable re-entry today (fan-out resume is branch-scoped; reproducible
+        # synthesis resume is the registered B-FANOUT-OUTPUT-REPLAY follow-on). So map
+        # it to FAILED fail-closed (no dead-end PAUSED that cannot resume; no escaping
+        # BaseException), naming the SYNC-HITL alternative. Other BaseExceptions
+        # (KeyboardInterrupt / SystemExit) are NOT swallowed — re-raised.
+        if type(exc).__name__ != "HITLPauseRequestedSignal":
+            raise
+        return RunResult(
+            workflow_id=manifest_entry.workflow_id,
+            run_id=run_id,
+            status=RunStatus.FAILED,
+            terminal_step_index=synthesis_index,
+            partial_state=None,
+            final_state=None,
+            fail_class=(
+                "post-join-synthesis-failure: durable-async HITL pause on "
+                "POST_JOIN_SYNTHESIS is not resumable (use a synchronous HITL gate; "
+                "reproducible synthesis resume is the registered B-FANOUT-OUTPUT-REPLAY "
+                "follow-on)"
+            ),
         )
     return dict(synth_output)
 

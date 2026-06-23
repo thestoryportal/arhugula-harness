@@ -35,6 +35,8 @@ The operator explicitly chose B over A. Grounding now shows B's premise ("captur
 
 ## RESOLUTION (operator AUQ 2026-06-22→23)
 
+> **⛔ SUPERSEDED (2026-06-23, out-of-family Codex [P2] doc-hygiene).** The "Operator chose B-full" resolution below is **OBSOLETE** — it was the FIRST of two AUQs. A SECOND grounding pass (the §25.12-D1 materializability finding, `.harness/r-fs-1-b-fanout-output-replay-impl-design.md` ⛔ banner) showed B-full's coherent form cannot build on the existing substrate (the durable ledger commits fan-out completion atomically at the barrier — no partial state to recover; a completion-order substrate would sacrifice §25.12 D1). The operator then chose **A** (AUQ 2026-06-23): synthesis + loud disclosure now; reproducibility = the registered follow-on `B-FANOUT-OUTPUT-REPLAY`. **The FINAL resolution is A** — recorded in `.harness/r-fs-1-b-fanout-output-replay-impl-design.md` (✅ RESOLVED banner) + `.harness/r-fs-1-final-closure-plan.md` (FINAL RESOLUTION A) + the as-built arc-ledger row. The B-full text below is preserved as the churn record, NOT the built scope.
+
 **Operator chose B-full** — *"also build the replay consumer now."* The FULL-SPEC posture applied (`[[feedback-full-spec-beyond-mvp-nothing-deferred]]`): build the genuine reproducible capability in arc-a, not the hollow capture (B-hollow, foreclosed) and not the sequenced follow-on (A). This HONORS the #705 discipline — the §14.23 capture (producer) ships WITH its non-vacuous replay consumer in the same arc; it does not re-create the hollow carrier.
 
 **Arc-a scope is therefore the larger B-full set:**
