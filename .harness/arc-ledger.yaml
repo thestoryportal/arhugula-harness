@@ -46,8 +46,8 @@
 snapshot:
   frozen_total: 11
   frozen_done: 11
-  standalone_closed: 35
-  standalone_gated: 1
+  standalone_closed: 36
+  standalone_gated: 0
   standalone_resolved: 4
   standalone_registered: 1
   source: ".harness/beyond-mvp-capability-boundary-ledger.md"
@@ -402,10 +402,16 @@ arcs:
   - id: B-TAIL-CONDITIONAL-SAMPLING
     title: "Non-root / end-of-trace conditional sampling"
     kind: standalone
-    status: gated
+    status: closed
+    pr: "#717"
     owner_axis: "OD + runtime"
-    depends_on: "R-420/R-421 (in-process telemetry collector / deployment gates)"
-    gives: "Sample non-root & end-of-trace spans by the §9.2 conditional rules (a tail-keep span processor). B7 delivered the root-span half; this is the non-root/tail enforcement."
+    depends_on: "R-420/R-421 (in-process telemetry collector / deployment gates) — both RESOLVED"
+    gives: "Enforce the §9.2 conditional always-sampled rows at the tail-keep span processor (the production enforcement point). B7 delivered the §9.2 root-span half (head `is_always_sampled` wired into `should_sample`); this is the non-root/production-tail enforcement. The bug: `TailKeepSpanProcessor.on_end` called `is_always_sampled(span.name)` NAME-ONLY → the §9.2 conditional rows force-forwarded unconditionally at the tail. Fix (impl-to-cleared-spec, no new substrate): (1) pass `span.attributes` so the 3 ATTRIBUTE-conditional rows (`files.operation`/`memory.operation` non-mutation `kind`, `validator.fail.*` `permanence=transient`) buffer for the §10.2 tail-keep decision (producers set `.kind`/`.permanence` DURING the span → finalized at on_end, absent at head should_sample → conservative-always-sample there; conservative-absent floor preserved → only NARROWS, never under-samples §9.3); (2) §9.2 `subagent.span (root)` ROOT-conditional via a processor parent-check mirroring the head's `ParentBased`-root (advisor: parent-check not an SSOT is_root param); (3) out-of-family Codex catch — a failed nested `subagent.span` is tail-kept (§14.3 `MULTI_AGENT_SPAN_SAMPLING` BASE_RATE + tail-keep-on-failure: `subagent.result_status=failed` now a §10.2 keep-trigger, else the §9.2-root-only refinement regressed it). Witnesses use the REAL producer-emitted span names + attr keys. Decorrelated review: advisor (disposition + head↔tail mirror confirmed via direct ParentBased read + buffer-vs-drop test) + out-of-family Codex (the §14.3 subagent-failure-keep regression). Closes the lone `gated` standalone arc."
+    as_built:
+      - "harness-od/src/harness_od/tail_keep_span_processor.py (on_end: pass span.attributes + the §9.2 subagent.span root-only parent-check)"
+      - "harness-od/src/harness_od/tail_keep_classification.py (is_classification_trigger: §14.3 subagent.span result_status=failed keep-trigger + SUBAGENT_* constants)"
+      - "harness-od/tests/test_tail_keep_span_processor.py (10 B-TAIL witnesses, real producer-emitted shapes)"
+    surfaced_separately: "topology_subagent_namespace.py:81 schema `emitted_on=subagent.execution` label is inconsistent with the real emitted span name `subagent.span` (sub_agent_dispatch.py:601) — a Class-3 CP-axis schema-doc drift, NOT in B-TAIL scope; the declarative `_subagent_failed` (multi_agent_span_hierarchy.py:130) also checks `==FAILED` uppercase vs the lowercase OTel emission (declarative table, separate from runtime tail enforcement)."
     ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
 
   # ─── STANDALONE — resolved (built inside the frozen order / foreclosed N/A) ───
