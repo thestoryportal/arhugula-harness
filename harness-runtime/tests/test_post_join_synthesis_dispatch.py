@@ -140,3 +140,25 @@ def test_post_join_synthesis_rejects_params_messages_escape_hatch() -> None:
         )
     # The inner was NEVER reached (fail-closed before dispatch).
     assert inner.received_step is None
+
+
+def test_post_join_synthesis_rejects_tool_capable_payload() -> None:
+    """Codex [P1] — a synthesis payload declaring provider `tools` is rejected
+    fail-closed: the synthesis is read-only / effect-free (a pure compose of the
+    siblings); tools would enter the model tool loop + dispatch real effects,
+    violating the load-bearing §25.12 effect-free property + READ_ONLY blast-radius."""
+    inner = _RecordingInner()
+    disp = PostJoinSynthesisStepDispatcher(inner=cast(StepDispatcher, inner))
+    step = WorkflowStep(
+        step_id=StepID("synthesis"),
+        step_kind=StepKind.POST_JOIN_SYNTHESIS,
+        step_payload={"messages": [], "tools": [{"name": "write_file"}]},
+    )
+    with pytest.raises(ValueError, match="may not declare tools"):
+        disp.dispatch(
+            cast(StepEffectiveBinding, object()),
+            step,
+            step_context=_StubContext(((0, {"a": 1}),)),
+        )
+    # Fail-closed BEFORE dispatch — the inner (a real LLM in prod) is never reached.
+    assert inner.received_step is None

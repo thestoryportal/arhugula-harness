@@ -3247,6 +3247,17 @@ def _maybe_post_join_synthesis(
             ),
         )
     except Exception as exc:
+        # B-POSTJOIN timeout taxonomy (out-of-family Codex [P2]): a synthesis LLM call
+        # exceeding `step_dispatch_timeout_seconds` raises `StepDispatchTimeoutError`
+        # (no `rt_fail_class` attr → `_step_fail_class` would mislabel it the class
+        # name). Name-match it to the canonical RT-FAIL-STEP-DISPATCH-TIMEOUT, like the
+        # inline §25.3 loop (harness-cp cannot import the runtime exception type), so
+        # alerts keyed on the failure taxonomy catch timed-out synthesis steps.
+        _fc = (
+            f"post-join-synthesis-failure: RT-FAIL-STEP-DISPATCH-TIMEOUT: {exc}"
+            if type(exc).__name__ == "StepDispatchTimeoutError"
+            else _step_fail_class("post-join-synthesis-failure", exc)
+        )
         return RunResult(
             workflow_id=manifest_entry.workflow_id,
             run_id=run_id,
@@ -3254,7 +3265,7 @@ def _maybe_post_join_synthesis(
             terminal_step_index=synthesis_index,
             partial_state=None,
             final_state=None,
-            fail_class=_step_fail_class("post-join-synthesis-failure", exc),
+            fail_class=_fc,
         )
     except BaseException as exc:
         # B-POSTJOIN durable-HITL-pause (out-of-family Codex [P1]): the synthesis flows

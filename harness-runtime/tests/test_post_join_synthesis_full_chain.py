@@ -459,3 +459,42 @@ def test_post_join_synthesis_full_chain_durable_hitl_pause_fails_closed() -> Non
     assert result.status is RunStatus.FAILED
     assert result.final_state is None
     assert result.fail_class is not None and "not resumable" in result.fail_class
+
+
+class StepDispatchTimeoutError(Exception):
+    """Name-matches the runtime SyncDispatcherFacade timeout (which the CP driver
+    name-matches, harness-cp not importing harness-runtime) — to witness the
+    synthesis timeout fail-class canonicalization."""
+
+
+class _TimeoutInner:
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> Mapping[str, Any]:
+        raise StepDispatchTimeoutError("synthesis dispatch timed out")
+
+
+def test_post_join_synthesis_full_chain_timeout_preserves_fail_class() -> None:
+    """Codex [P2] regression — a synthesis dispatch timeout maps to the canonical
+    RT-FAIL-STEP-DISPATCH-TIMEOUT (not the bare `StepDispatchTimeoutError` class name),
+    so failure-taxonomy-keyed alerts catch timed-out synthesis steps like inline ones."""
+    registry = cast(
+        StepDispatcherRegistry,
+        _Registry(
+            worker=_WorkerEcho(),
+            synthesis=PostJoinSynthesisStepDispatcher(inner=cast(StepDispatcher, _TimeoutInner())),
+        ),
+    )
+    ctx = cast(DriverContext, _Ctx(ledger=_RecordingLedger(), emitter=_Emitter()))
+
+    result = execute_workflow(
+        _manifest(),
+        [_worker(0), _worker(1), _synthesis_step()],
+        run_id="run-1",
+        ctx=ctx,
+        default_model_binding=ModelBinding(provider="anthropic", model="claude-haiku-4-5"),
+        step_dispatchers=registry,
+    )
+
+    assert result.status is RunStatus.FAILED
+    assert result.fail_class is not None and "RT-FAIL-STEP-DISPATCH-TIMEOUT" in result.fail_class

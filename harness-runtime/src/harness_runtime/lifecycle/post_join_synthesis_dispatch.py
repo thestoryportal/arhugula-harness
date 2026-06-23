@@ -57,6 +57,20 @@ def _compose_synthesis_payload(
     the dispatcher does NOT introspect the opaque step body otherwise (the
     `workflow_driver` §25.3.3.4 step-body-opaque discipline)."""
     composed = dict(payload)
+    # Out-of-family Codex [P1]: ENFORCE the load-bearing read-only / effect-free
+    # property (the §25.12 safety argument + the at-most-once-safe re-dispatch + the
+    # READ_ONLY blast-radius classification all rest on it). A synthesis payload that
+    # declares provider `tools` would enter the model tool loop and dispatch REAL tools
+    # — making the synthesis effectful. The synthesis is a PURE compose of the siblings;
+    # reject a tool-capable payload fail-closed (`[[enforce-floor-no-bypass-seam]]` —
+    # a claimed property must be enforced, not just asserted).
+    if composed.get("tools"):
+        raise ValueError(
+            "post-join-synthesis payload may not declare tools: the synthesis step is "
+            "read-only / effect-free (a pure compose of the fan-out siblings); provider "
+            "tools would enter the model tool loop and dispatch real effects, violating "
+            "the §25.12 effect-free property + the READ_ONLY blast-radius classification."
+        )
     # Out-of-family Codex [P2]: the LLM translators do `kwargs.update(payload.params)`,
     # so a `params["messages"]` escape-hatch would OVERWRITE the appended sibling
     # context — the model would receive NO branch outputs while the run still reports
