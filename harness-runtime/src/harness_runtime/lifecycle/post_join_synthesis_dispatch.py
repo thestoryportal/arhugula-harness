@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import Any, cast
 
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
 from harness_cp.workflow_driver import StepDispatcher
@@ -42,6 +42,24 @@ __all__ = [
 #: the step's own declared synthesis-instruction messages (mirrors the B-INTERSTEP
 #: `_UPSTREAM_CONTEXT_PREFIX` convention).
 POST_JOIN_SYNTHESIS_SIBLINGS_PREFIX = "[post-join siblings]\n"
+
+#: Provider tool-binding keys (anthropic / openai / ollama) that — if present in
+#: `step_payload.params` — the LLM translators merge into the provider call via
+#: `kwargs.update(payload.params)` (llm_dispatch.py:1522/1569/1592, AFTER the
+#: `payload.tools` assignment). On a read-only / effect-free synthesis step they are
+#: forbidden by EVERY route (top-level `tools` AND `params`): they would bind tools to
+#: the provider call, letting the model emit/enter tool use — violating the §25.12
+#: effect-free property + the unconditional READ_ONLY blast-radius classification. The
+#: set is complete for the committed 3-provider stack (anthropic `mcp_servers`/`tools`/
+#: `tool_choice`; openai `tools`/`tool_choice`/legacy `functions`/`function_call`;
+#: ollama `tools`).
+_EFFECT_BEARING_PARAM_KEYS = (
+    "tools",
+    "tool_choice",
+    "functions",
+    "function_call",
+    "mcp_servers",
+)
 
 
 def _compose_synthesis_payload(
@@ -78,13 +96,33 @@ def _compose_synthesis_payload(
     # siblings); reject the conflicting escape-hatch fail-closed (the driver's
     # failure-mapping converts this to a FAILED RunResult).
     _params = composed.get("params")
-    if isinstance(_params, Mapping) and "messages" in _params:
-        raise ValueError(
-            "post-join-synthesis payload may not set params['messages']: the provider "
-            "escape-hatch overwrites the appended sibling-context message (the model "
-            "would receive no branch outputs). Put the synthesis instruction in "
-            "payload['messages'] instead."
-        )
+    if isinstance(_params, Mapping):
+        _params_map = cast("Mapping[str, Any]", _params)
+        if "messages" in _params_map:
+            raise ValueError(
+                "post-join-synthesis payload may not set params['messages']: the provider "
+                "escape-hatch overwrites the appended sibling-context message (the model "
+                "would receive no branch outputs). Put the synthesis instruction in "
+                "payload['messages'] instead."
+            )
+        # Out-of-family Codex round 6 [P1] + adversarial-reviewer F1 (both reviewers
+        # converged): the round-5 fix rejected only TOP-LEVEL `tools`, but the LLM
+        # translators merge `kwargs.update(payload.params)` AFTER setting tools, so
+        # `params['tools']` (or `tool_choice` / `mcp_servers` / legacy `functions`) reaches
+        # the provider unchecked — the same `kwargs.update(payload.params)` route the
+        # `params['messages']` guard above already defends. A half-closed effect-free guard
+        # is the `[[enforce-floor-no-bypass-seam]]` anti-pattern; reject tool-binding by
+        # EVERY route fail-closed.
+        _effect_keys = [k for k in _EFFECT_BEARING_PARAM_KEYS if _params_map.get(k)]
+        if _effect_keys:
+            raise ValueError(
+                "post-join-synthesis payload may not declare provider tool-binding keys in "
+                f"params ({', '.join(_effect_keys)}): the LLM translators merge "
+                "`kwargs.update(payload.params)`, so these reach the provider and make the "
+                "synthesis effectful, violating the §25.12 effect-free property + the "
+                "READ_ONLY blast-radius classification. The synthesis is a pure compose of "
+                "the fan-out siblings (effect-bearing steps belong upstream as branches)."
+            )
     messages: list[Any] = list(composed.get("messages", ()))
     sibling_message: dict[str, Any] = {
         "role": "user",

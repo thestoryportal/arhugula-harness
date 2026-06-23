@@ -3167,6 +3167,32 @@ def _maybe_post_join_synthesis(
     sibling_outputs: tuple[tuple[int, Mapping[str, Any]], ...] = tuple(
         (bi, dict(out)) for bi, (_sid, out) in sorted(collected.items())
     )
+    # B-POSTJOIN zero-sibling guard (out-of-family Codex round 6 [P2]): the placement
+    # guard's static `len(steps) < 2` catches a PARALLELIZATION lone-synthesis, but an
+    # ORCHESTRATOR_WORKERS / HIERARCHICAL_DELEGATION `[orchestrator, synthesis]` has
+    # len == 2 (the orchestrator is steps[0], NOT a branch) → it passes placement, the
+    # orchestrator runs, and the fan-out drains ZERO workers → an empty `collected`. A
+    # synthesis over zero siblings spends an LLM call on no branch data + violates the
+    # spec §3 "follows a concurrent fan-out with ≥1 sibling" requirement. Reject
+    # fail-closed at dispatch time (the only point the post-carve branch count is known
+    # for a DYNAMIC worker fan-out; a static topology-specific guard would over-reject a
+    # legitimately dynamic `[orchestrator, synthesis]`). Mirrors the placement-guard
+    # FAILED shape; the partially-run orchestrator's side effects are already recorded.
+    if not sibling_outputs:
+        return RunResult(
+            workflow_id=manifest_entry.workflow_id,
+            run_id=run_id,
+            status=RunStatus.FAILED,
+            terminal_step_index=synthesis_index,
+            partial_state=None,
+            final_state=None,
+            fail_class=(
+                "post-join-synthesis-no-siblings: POST_JOIN_SYNTHESIS requires ≥1 fan-out "
+                "sibling to compose; the concurrent fan-out produced zero branches (e.g. an "
+                "ORCHESTRATOR_WORKERS / HIERARCHICAL_DELEGATION [orchestrator, synthesis] with "
+                "no workers). Rejected fail-closed rather than spend an LLM call on no data."
+            ),
+        )
     synth_binding = resolve_step_binding(
         manifest_entry,
         str(synthesis_step.step_id),

@@ -946,3 +946,31 @@ def test_orchestrator_workers_without_synthesis_uses_deterministic_compose() -> 
     assert result.final_state is not None
     assert set(result.final_state) == {"orchestrator", "worker_outputs"}
     assert not any(str(wk.step_id).startswith("post-join-synthesis") for _p, wk in ledger.appends)
+
+
+def test_orchestrator_workers_synthesis_with_zero_workers_fails_closed() -> None:
+    """Codex round 6 [P2] — an ORCHESTRATOR_WORKERS `[orchestrator, synthesis]` has
+    len == 2 (the orchestrator is steps[0], NOT a branch), so it PASSES the placement
+    guard's static `len(steps) < 2` check; but carving the synthesis leaves zero
+    workers → the fan-out drains zero siblings. The dispatch-time zero-sibling guard
+    rejects it FAILED rather than spend an LLM call on no branch data. The synthesis
+    dispatcher is never reached + no disclosing entry is appended."""
+    ledger = _RecordingLedger()
+    synth = _OWSynthesisCapturingDispatcher()
+    result = _run(
+        steps=[*_steps(0), _ow_synthesis_step()],  # [orchestrator, synthesis] — zero workers
+        dispatcher=_OWDispatcher(),
+        ledger=ledger,
+        registry=cast(
+            StepDispatcherRegistry,
+            _OWBranchOrSynthesisRegistry(_OWDispatcher(), synth),
+        ),
+    )
+    assert result.status is RunStatus.FAILED
+    assert result.fail_class is not None
+    assert result.fail_class.startswith("post-join-synthesis-no-siblings:")
+    assert result.final_state is None
+    # The synthesis dispatcher never ran (fail-closed before dispatch) — no LLM call,
+    # no disclosing ledger entry.
+    assert synth.received_siblings is None
+    assert not any(str(wk.step_id).startswith("post-join-synthesis") for _p, wk in ledger.appends)

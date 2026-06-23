@@ -143,9 +143,9 @@ def test_post_join_synthesis_rejects_params_messages_escape_hatch() -> None:
 
 
 def test_post_join_synthesis_rejects_tool_capable_payload() -> None:
-    """Codex [P1] — a synthesis payload declaring provider `tools` is rejected
-    fail-closed: the synthesis is read-only / effect-free (a pure compose of the
-    siblings); tools would enter the model tool loop + dispatch real effects,
+    """Codex round 5 [P1] — a synthesis payload declaring TOP-LEVEL provider `tools`
+    is rejected fail-closed: the synthesis is read-only / effect-free (a pure compose of
+    the siblings); tools would enter the model tool loop + dispatch real effects,
     violating the load-bearing §25.12 effect-free property + READ_ONLY blast-radius."""
     inner = _RecordingInner()
     disp = PostJoinSynthesisStepDispatcher(inner=cast(StepDispatcher, inner))
@@ -162,3 +162,65 @@ def test_post_join_synthesis_rejects_tool_capable_payload() -> None:
         )
     # Fail-closed BEFORE dispatch — the inner (a real LLM in prod) is never reached.
     assert inner.received_step is None
+
+
+@pytest.mark.parametrize(
+    ("param_key", "param_value"),
+    [
+        ("tools", [{"name": "write_file"}]),
+        ("tool_choice", "required"),
+        ("functions", [{"name": "legacy_fn"}]),
+        ("function_call", "auto"),
+        ("mcp_servers", [{"url": "https://x"}]),
+    ],
+)
+def test_post_join_synthesis_rejects_params_tool_binding(param_key: str, param_value: Any) -> None:
+    """Codex round 6 [P1] + adversarial-reviewer F1 (both reviewers converged) — the
+    round-5 guard rejected only TOP-LEVEL `tools`, but the LLM translators merge
+    `kwargs.update(payload.params)` AFTER setting tools, so a tool-binding key smuggled
+    through `params` (`tools` / `tool_choice` / `functions` / `function_call` /
+    `mcp_servers`) reaches the provider unchecked. Reject every effect-bearing route
+    fail-closed (the `[[enforce-floor-no-bypass-seam]]` discipline)."""
+    inner = _RecordingInner()
+    disp = PostJoinSynthesisStepDispatcher(inner=cast(StepDispatcher, inner))
+    step = WorkflowStep(
+        step_id=StepID("synthesis"),
+        step_kind=StepKind.POST_JOIN_SYNTHESIS,
+        step_payload={"messages": [], "params": {param_key: param_value}},
+    )
+    with pytest.raises(ValueError, match="tool-binding keys in params"):
+        disp.dispatch(
+            cast(StepEffectiveBinding, object()),
+            step,
+            step_context=_StubContext(((0, {"a": 1}),)),
+        )
+    # Fail-closed BEFORE dispatch — the provider call (and its tool binding) never fires.
+    assert inner.received_step is None
+
+
+def test_post_join_synthesis_allows_benign_params() -> None:
+    """A synthesis payload with NON-tool-binding `params` (sampling / thinking / geo —
+    the large open operator-tunable surface) is NOT rejected: only the bounded
+    effect-bearing key set is forbidden (denylist, not a fragile allowlist)."""
+    inner = _RecordingInner()
+    disp = PostJoinSynthesisStepDispatcher(inner=cast(StepDispatcher, inner))
+    step = WorkflowStep(
+        step_id=StepID("synthesis"),
+        step_kind=StepKind.POST_JOIN_SYNTHESIS,
+        step_payload={
+            "messages": [],
+            "params": {"temperature": 0.2, "thinking": {"type": "enabled"}},
+        },
+    )
+    out = disp.dispatch(
+        cast(StepEffectiveBinding, object()),
+        step,
+        step_context=_StubContext(((0, {"a": 1}),)),
+    )
+    assert out == {"synthesized": "ok"}
+    # The benign params survive onto the composed payload (untouched), siblings appended.
+    assert inner.received_step.step_payload["params"] == {
+        "temperature": 0.2,
+        "thinking": {"type": "enabled"},
+    }
+    assert inner.received_step.step_payload["messages"][-1]["role"] == "user"
