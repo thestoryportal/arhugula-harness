@@ -508,22 +508,30 @@ async def _invoke_run_workflow_via_in_process_mcp(
 # `run()` entry point (C-RT-08).
 # ---------------------------------------------------------------------------
 
-# Runtime spec v1.47 §2.1 — the inference-need step kinds (the only two that
-# reach an LLM provider): INFERENCE_STEP → ctx.llm_dispatcher,
-# SUB_AGENT_DISPATCH → ctx.sub_agent_dispatcher.
-_INFERENCE_STEP_KINDS = frozenset({StepKind.INFERENCE_STEP, StepKind.SUB_AGENT_DISPATCH})
+# Runtime spec v1.47 §2.1 — the inference-need step kinds (those that reach an
+# LLM provider): INFERENCE_STEP → ctx.llm_dispatcher, SUB_AGENT_DISPATCH →
+# ctx.sub_agent_dispatcher, and POST_JOIN_SYNTHESIS → PostJoinSynthesisStepDispatcher
+# (runtime §14.24 C-RT-33, bound under requires_inference — it LLM-composes the
+# fan-out siblings). A workflow whose fan-out branches are DECLARATIVE/TOOL but
+# whose terminal POST_JOIN_SYNTHESIS is the only LLM step still requires a
+# provider; omitting it here would skip provider setup + the registry row →
+# StepKindDispatcherNotBoundError at the synthesis dispatch (out-of-family Codex [P1]).
+_INFERENCE_STEP_KINDS = frozenset(
+    {StepKind.INFERENCE_STEP, StepKind.SUB_AGENT_DISPATCH, StepKind.POST_JOIN_SYNTHESIS}
+)
 
 
 def _workflow_requires_inference(workflow: WorkflowObject) -> bool:
     """Runtime spec v1.47 §2.1 inference-need predicate.
 
     A workflow is inference-bearing iff it contains a step whose `StepKind`
-    reaches an LLM provider (`INFERENCE_STEP` / `SUB_AGENT_DISPATCH`).
-    `DECLARATIVE_STEP` / `TOOL_STEP` / `HITL_STEP` never reach a provider. The
-    predicate is **exact** — it reads the same `workflow.steps` the CP driver
-    dispatches through the frozen `{StepKind → StepDispatcher}` registry, so it
-    cannot under-count an inference need (no false negatives). When `False`, the
-    bootstrap requires no provider (tool-only workflows run provider-free).
+    reaches an LLM provider (`INFERENCE_STEP` / `SUB_AGENT_DISPATCH` /
+    `POST_JOIN_SYNTHESIS`). `DECLARATIVE_STEP` / `TOOL_STEP` / `HITL_STEP` never
+    reach a provider. The predicate is **exact** — it reads the same
+    `workflow.steps` the CP driver dispatches through the frozen
+    `{StepKind → StepDispatcher}` registry, so it cannot under-count an inference
+    need (no false negatives). When `False`, the bootstrap requires no provider
+    (tool-only workflows run provider-free).
     """
     return any(step.step_kind in _INFERENCE_STEP_KINDS for step in workflow.steps)
 

@@ -3,8 +3,9 @@
 The bootstrap-provider requirement is conditional on this predicate. It MUST be
 exact (no false negatives) so a tool-only workflow runs provider-free while
 every inference-bearing workflow still requires ≥1 provider at bootstrap (C9
-fail-fast preserved). Only `INFERENCE_STEP` (→ `ctx.llm_dispatcher`) and
-`SUB_AGENT_DISPATCH` (→ `ctx.sub_agent_dispatcher`) reach an LLM provider;
+fail-fast preserved). `INFERENCE_STEP` (→ `ctx.llm_dispatcher`),
+`SUB_AGENT_DISPATCH` (→ `ctx.sub_agent_dispatcher`), and `POST_JOIN_SYNTHESIS`
+(→ `PostJoinSynthesisStepDispatcher`, runtime §14.24) reach an LLM provider;
 `DECLARATIVE_STEP` / `TOOL_STEP` / `HITL_STEP` never do.
 """
 
@@ -27,9 +28,10 @@ def _wf(*kinds: StepKind) -> Any:
 @pytest.mark.parametrize(
     ("kinds", "expected"),
     [
-        # The two inference-bearing kinds.
+        # The three inference-bearing kinds.
         ((StepKind.INFERENCE_STEP,), True),
         ((StepKind.SUB_AGENT_DISPATCH,), True),
+        ((StepKind.POST_JOIN_SYNTHESIS,), True),
         # The three provider-free kinds.
         ((StepKind.TOOL_STEP,), False),
         ((StepKind.DECLARATIVE_STEP,), False),
@@ -37,6 +39,13 @@ def _wf(*kinds: StepKind) -> Any:
         # Mixed — ANY inference-bearing step ⇒ True (exactness, no false negatives).
         ((StepKind.TOOL_STEP, StepKind.INFERENCE_STEP), True),
         ((StepKind.TOOL_STEP, StepKind.SUB_AGENT_DISPATCH), True),
+        # The exact B-POSTJOIN scenario the Codex [P1] flagged: DECLARATIVE/TOOL
+        # fan-out workers + a terminal POST_JOIN_SYNTHESIS as the ONLY LLM step ⇒
+        # still requires a provider (else stage 5 omits the synthesis dispatcher row).
+        (
+            (StepKind.DECLARATIVE_STEP, StepKind.DECLARATIVE_STEP, StepKind.POST_JOIN_SYNTHESIS),
+            True,
+        ),
         ((StepKind.DECLARATIVE_STEP, StepKind.TOOL_STEP, StepKind.HITL_STEP), False),
         # Empty workflow ⇒ no inference need.
         ((), False),

@@ -3094,22 +3094,28 @@ def _maybe_post_join_synthesis(
     default_model_binding: ModelBinding,
     fanout_parent: StepExecutionContext,
     run_idempotency_key: str,
+    run_id: str,
     branch_count: int,
-) -> dict[str, Any] | None:
-    """Dispatch the opt-in terminal `POST_JOIN_SYNTHESIS` step, or return
-    ``None`` to use the default deterministic fold (CP spec v1.54 §3/§4).
+) -> RunResult | dict[str, Any] | None:
+    """Dispatch the opt-in terminal `POST_JOIN_SYNTHESIS` step.
 
-    Returns ``None`` (→ caller uses the byte-identical default fold) when NO
-    synthesis step is opted in OR the run is NOT ``SUCCESS`` (a salvaged
-    ``PARTIAL`` uses the fold over its incomplete survivor set — never a
-    synthesis over an incomplete sibling set). When a ``POST_JOIN_SYNTHESIS``
-    step IS opted in AND the run is ``SUCCESS``: dispatch it post-barrier
-    (SYNC, on the driver thread — the fan-out is drained, nothing runs
-    concurrently; mirrors the linear ``step_dispatchers.lookup(...).dispatch``)
-    reading the branch-index-ordered siblings on ``StepExecutionContext.
-    sibling_outputs``, append its disclosing ledger entry, and return its output
-    as the aggregate (the §25.12 Point-2 sacrifice for this run; Point-1 +
-    branch-index ordering preserved). Read-only / effect-free."""
+    Returns one of three (the caller discriminates):
+    - ``None`` → use the byte-identical default deterministic fold (no synthesis
+      opted in, OR the run is NOT ``SUCCESS`` — a salvaged ``PARTIAL`` uses the
+      fold over its incomplete survivor set, never a synthesis over an incomplete
+      sibling set).
+    - a FAILED ``RunResult`` → the synthesis dispatch/append RAISED; the caller
+      returns this directly (mirroring the inline per-step `try`/`except` → FAILED
+      mapping, so an exception NEVER escapes `execute_workflow` post-drain —
+      out-of-family Codex [P2]).
+    - the synthesis output ``dict`` → SUCCESS; becomes the run's `final_state`.
+
+    On SUCCESS: dispatch post-barrier (SYNC on the driver thread — the fan-out is
+    drained, nothing runs concurrently; mirrors the linear
+    ``step_dispatchers.lookup(...).dispatch``) reading the branch-index-ordered
+    siblings on ``StepExecutionContext.sibling_outputs``, append the disclosing
+    ledger entry, return the output (the §25.12 Point-2 sacrifice for this run;
+    Point-1 + branch-index ordering preserved). Read-only / effect-free."""
     if synthesis_step is None or status is not RunStatus.SUCCESS:
         return None
     synthesis_index = branch_count  # the terminal step's ordinal in the original `steps`
@@ -3133,17 +3139,55 @@ def _maybe_post_join_synthesis(
             "sibling_outputs": sibling_outputs,
             # the synthesis is a top-level terminal step, NOT a branch child
             "branch_index": None,
+            # B-POSTJOIN per-step overrides on the SYNTHESIS step apply to ITS context,
+            # not the parent's (out-of-family Codex [P2]): the runtime routing reads
+            # `agent_role` + the wrap-time HITL composer reads `hitl_placements`, so a
+            # per-step role / HITL override on the synthesis step must fold into the
+            # synthesis context — else it routes/gates as the fan-out parent. Mirrors
+            # the per-branch `compose_branch_child_context` + `fold_step_hitl_placements`.
+            "agent_role": synth_binding.agent_role or fanout_parent.agent_role,
+            "hitl_placements": fold_step_hitl_placements(
+                manifest_entry.hitl_placements, synth_binding.hitl_placement
+            ),
         }
     )
-    synth_output = step_dispatchers.lookup(StepKind.POST_JOIN_SYNTHESIS).dispatch(
-        synth_binding, synthesis_step, step_context=synthesis_context
-    )
-    _append_synthesis_ledger_entry(
-        ctx=ctx,
-        workflow_id=manifest_entry.workflow_id,
-        synthesis_index=synthesis_index,
-        synthesis_idempotency_key=synthesis_idempotency_key,
-    )
+    # B-POSTJOIN failed-run mapping (out-of-family Codex [P2]): the synthesis runs
+    # POST-barrier, OUTSIDE the inline per-step try/except, so an unbound dispatcher /
+    # raising LLM call / failing ledger append would ESCAPE execute_workflow after the
+    # branch buffers drained. Map to a FAILED RunResult here (mirrors the inline
+    # step-dispatch mapping at the §25.3 loop), so the caller returns it cleanly.
+    try:
+        synth_output = step_dispatchers.lookup(StepKind.POST_JOIN_SYNTHESIS).dispatch(
+            synth_binding, synthesis_step, step_context=synthesis_context
+        )
+        _append_synthesis_ledger_entry(
+            ctx=ctx,
+            workflow_id=manifest_entry.workflow_id,
+            synthesis_index=synthesis_index,
+            synthesis_idempotency_key=synthesis_idempotency_key,
+        )
+    except StepKindDispatcherNotBoundError as exc:
+        return RunResult(
+            workflow_id=manifest_entry.workflow_id,
+            run_id=run_id,
+            status=RunStatus.FAILED,
+            terminal_step_index=synthesis_index,
+            partial_state=None,
+            final_state=None,
+            fail_class=(
+                f"post-join-synthesis-failure: RT-FAIL-STEP-KIND-DISPATCHER-NOT-BOUND: {exc}"
+            ),
+        )
+    except Exception as exc:
+        return RunResult(
+            workflow_id=manifest_entry.workflow_id,
+            run_id=run_id,
+            status=RunStatus.FAILED,
+            terminal_step_index=synthesis_index,
+            partial_state=None,
+            final_state=None,
+            fail_class=_step_fail_class("post-join-synthesis-failure", exc),
+        )
     return dict(synth_output)
 
 
@@ -4037,8 +4081,13 @@ def _execute_parallelization(
             default_model_binding=default_model_binding,
             fanout_parent=fanout_parent,
             run_idempotency_key=run_idempotency_key,
+            run_id=run_id,
             branch_count=len(steps),
         )
+        # A FAILED RunResult ⟺ the synthesis dispatch/append raised → return it
+        # directly (no escaping exception post-drain — Codex [P2]).
+        if isinstance(_synth, RunResult):
+            return _synth, steps_executed
         # No collected output (e.g. an all-timed-out deadline strike) → the empty
         # aggregate (matching the empty-steps early-return shape); `_aggregate_
         # parallelization([])` would otherwise `max()` an empty vote tally.
@@ -5679,8 +5728,11 @@ def _execute_orchestrator_workers(
             default_model_binding=default_model_binding,
             fanout_parent=fanout_parent,
             run_idempotency_key=run_idempotency_key,
+            run_id=run_id,
             branch_count=len(steps),
         )
+        if isinstance(_synth, RunResult):
+            return _synth, (1 if orchestrator_writer is not None else 0)
         _aggregate = (
             _synth
             if _synth is not None
@@ -5730,8 +5782,11 @@ def _execute_orchestrator_workers(
             default_model_binding=default_model_binding,
             fanout_parent=fanout_parent,
             run_idempotency_key=run_idempotency_key,
+            run_id=run_id,
             branch_count=len(steps),
         )
+        if isinstance(_synth, RunResult):
+            return _synth, steps_executed
         aggregate = (
             _synth
             if _synth is not None

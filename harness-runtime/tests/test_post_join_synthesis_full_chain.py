@@ -19,14 +19,14 @@ from collections.abc import Mapping
 from typing import Any, cast
 
 from harness_core import PersonaTier, StepID, WorkloadClass
-from harness_cp.cp_shared_types import ModelBinding
+from harness_cp.cp_shared_types import AgentRole, ModelBinding
 from harness_cp.cross_family_fallback_chain import (
     FallbackChain,
     ProviderCandidate,
     ProviderFamily,
 )
 from harness_cp.engine_class import EngineClass
-from harness_cp.per_step_override_evaluator import StepEffectiveBinding
+from harness_cp.per_step_override_evaluator import StepEffectiveBinding, StepOverride
 from harness_cp.topology_pattern import TopologyPattern
 from harness_cp.workflow_driver import (
     DriverContext,
@@ -113,11 +113,13 @@ class _RecordingInner:
 
     def __init__(self) -> None:
         self.composed_messages: Any = None
+        self.received_context: Any = None
 
     def dispatch(
         self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
     ) -> Mapping[str, Any]:
         self.composed_messages = list(step.step_payload["messages"])
+        self.received_context = step_context
         return {"synthesis": "full-chain-composed"}
 
 
@@ -134,7 +136,7 @@ class _Registry:
         raise StepKindDispatcherNotBoundError(step_kind)
 
 
-def _manifest() -> WorkflowManifestEntry:
+def _manifest(per_step_overrides: dict[Any, Any] | None = None) -> WorkflowManifestEntry:
     return WorkflowManifestEntry(
         workflow_id="wf-postjoin-full-chain",
         workload_class=WorkloadClass.PIPELINE_AUTOMATION,
@@ -144,7 +146,7 @@ def _manifest() -> WorkflowManifestEntry:
         layer_budgets=(),
         fallback_chain=_CHAIN,
         hitl_placements=(),
-        per_step_overrides={},
+        per_step_overrides=per_step_overrides or {},
     )
 
 
@@ -197,3 +199,73 @@ def test_post_join_synthesis_full_chain_driver_to_final_state() -> None:
     assert '"branch_index": 0' in sibling_msg
     assert '"branch_index": 1' in sibling_msg
     assert "worker-0" in sibling_msg and "worker-1" in sibling_msg
+
+
+class _RaisingInner:
+    """An inner that RAISES — to witness the post-barrier failed-run mapping."""
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> Mapping[str, Any]:
+        raise RuntimeError("synthesis LLM blew up")
+
+
+def test_post_join_synthesis_full_chain_dispatch_failure_maps_to_failed_run() -> None:
+    """Codex [P2] regression — a synthesis dispatch that RAISES post-barrier maps to
+    a FAILED RunResult (the exception does NOT escape execute_workflow after the
+    branch buffers drained; mirrors the inline per-step failed-run mapping)."""
+    registry = cast(
+        StepDispatcherRegistry,
+        _Registry(
+            worker=_WorkerEcho(),
+            synthesis=PostJoinSynthesisStepDispatcher(inner=cast(StepDispatcher, _RaisingInner())),
+        ),
+    )
+    ctx = cast(DriverContext, _Ctx(ledger=_RecordingLedger(), emitter=_Emitter()))
+
+    result = execute_workflow(
+        _manifest(),
+        [_worker(0), _worker(1), _synthesis_step()],
+        run_id="run-1",
+        ctx=ctx,
+        default_model_binding=ModelBinding(provider="anthropic", model="claude-haiku-4-5"),
+        step_dispatchers=registry,
+    )
+
+    assert result.status is RunStatus.FAILED
+    assert result.final_state is None
+    assert result.fail_class is not None and "post-join-synthesis-failure" in result.fail_class
+
+
+def test_post_join_synthesis_full_chain_per_step_override_reaches_context() -> None:
+    """Codex [P2] regression — a per-step `agent_role` override on the SYNTHESIS step
+    folds into the synthesis step_context (NOT the fan-out parent's, which is None),
+    so runtime routing reads the synthesis step's own role."""
+    inner = _RecordingInner()
+    registry = cast(
+        StepDispatcherRegistry,
+        _Registry(
+            worker=_WorkerEcho(),
+            synthesis=PostJoinSynthesisStepDispatcher(inner=cast(StepDispatcher, inner)),
+        ),
+    )
+    ctx = cast(DriverContext, _Ctx(ledger=_RecordingLedger(), emitter=_Emitter()))
+    overrides = {
+        StepID("synthesis"): StepOverride(
+            step_id=StepID("synthesis"), agent_role=AgentRole("synthesizer")
+        )
+    }
+
+    result = execute_workflow(
+        _manifest(per_step_overrides=overrides),
+        [_worker(0), _worker(1), _synthesis_step()],
+        run_id="run-1",
+        ctx=ctx,
+        default_model_binding=ModelBinding(provider="anthropic", model="claude-haiku-4-5"),
+        step_dispatchers=registry,
+    )
+
+    assert result.status is RunStatus.SUCCESS
+    # The synthesis context the dispatcher received carries the OVERRIDE role, not
+    # the fan-out parent's None — the per-step override folded into ITS context.
+    assert inner.received_context.agent_role == AgentRole("synthesizer")
