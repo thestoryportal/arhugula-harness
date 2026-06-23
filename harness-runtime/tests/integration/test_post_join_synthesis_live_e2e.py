@@ -1,21 +1,23 @@
-"""Full-chain real-provider witness for `PostJoinSynthesisStepDispatcher`
+"""Dispatcher-level REAL-MODEL witness for `PostJoinSynthesisStepDispatcher`
 (R-FS-1 arc B-POSTJOIN-LLM-SYNTHESIS; CP spec v1.54 §3 / runtime §14.24 C-RT-33).
 
-The "no proxy" half (`[[full-chain-witness-not-half-proofs]]`): the REAL
-`PostJoinSynthesisStepDispatcher` composes branch-index-ordered sibling outputs
-into the synthesis LLM input and a **real local Ollama model** composes them —
-closing the gap the CP-side mock-dispatcher witnesses + the runtime unit witnesses
-(recording-inner) leave. Free-local Ollama, no paid call, zero secret
+The "a real LLM actually composes the siblings — no proxy on the model call"
+proof: the REAL `PostJoinSynthesisStepDispatcher` composes branch-index-ordered
+sibling outputs into the synthesis LLM input and a **real local Ollama model**
+composes them. Free-local Ollama, no paid call, zero secret
 (`[[feedback-run-credential-gated-live-e2e-authorized]]`); the paid path is the
 same realization with a different adapter/model, surfaced never auto-fired
 (`[[feedback-background-agent-no-unilateral-paid-calls-or-secret-relocation]]`).
 
-The inner dispatcher here is a thin real-Ollama adapter (mirrors
-`router_resolution.make_ollama_router`'s `adapter.client.chat` surface) rather
-than the full stage-5 inference facade — the stage-5 BINDING of
-`POST_JOIN_SYNTHESIS` is separately proven by the bootstrap suite
-(`test_lifecycle_step_dispatchers` + `test_bootstrap`). This test proves the
-remaining link: the real dispatcher's compose + a real LLM call over it.
+**Scope (precise — this is NOT the full-chain seam).** This calls
+`disp.dispatch(...)` DIRECTLY — it proves the real dispatcher's compose + a real
+LLM over it, NOT the driver→registry→dispatcher→final_state seam. That seam is the
+deterministic `test_post_join_synthesis_full_chain.py` (`execute_workflow` through
+the CP driver + a registry + the real dispatcher with a recording inner). The
+stage-5 BINDING is separately proven by the bootstrap suite
+(`test_lifecycle_step_dispatchers` + `test_bootstrap`). The inner here is a thin
+real-Ollama adapter (mirrors `router_resolution.make_ollama_router`'s
+`adapter.client.chat` surface), not the full stage-5 inference facade.
 """
 
 from __future__ import annotations
