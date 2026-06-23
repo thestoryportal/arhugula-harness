@@ -51,13 +51,19 @@ snapshot:
   standalone_resolved: 4
   standalone_registered: 2
   source: ".harness/beyond-mvp-capability-boundary-ledger.md"
-  # FRONTIER NOTE (PR #705): of the 2 registered + 1 gated forward arcs, ZERO are
-  # Claude-buildable now — both registered (B-HITL-PLACEMENT-PER-STEP-LOOSEN,
-  # B-POSTJOIN-LLM-SYNTHESIS) are operator_gated (committed-decision sacrifices:
-  # monotone-HITL / §25.12 determinism); the 1 gated (B-TAIL-CONDITIONAL-SAMPLING)
-  # is dependency-blocked on R-420/R-421. The buildable standalone B-* frontier is
-  # EXHAUSTED — a principled FULL-SPEC stopping point. Next = operator (a/b/c) fork
-  # per roadmap_status.md (authorize a gate, or declare R-FS-1 build-complete + admit R-CL-Q1).
+  # FRONTIER NOTE (operator decision 2026-06-22): the operator DECLINED "declare
+  # build-complete" and AUTHORIZED building BOTH committed-invariant-amendment arcs
+  # → genuine full-spec closure. The 2 formerly-gated arcs (B-HITL-PLACEMENT-PER-STEP-LOOSEN,
+  # B-POSTJOIN-LLM-SYNTHESIS) are now operator_gated=false (gate CLEARED) and enter the
+  # DESIGN-FIRST closure pipeline (council → ratify mechanism → spec amendment → impl →
+  # adversarial review) per .harness/r-fs-1-final-closure-plan.md. Sequence: LOOSEN first
+  # (CP-contained), POSTJOIN second (CP+runtime). They stay status:registered until each
+  # is decomposed at its arc-open. CLOSURE NEEDS THREE DISPOSITIONS, not two: the
+  # closure_gate.py G1.1 gate is standalone_registered + standalone_gated == 0, so the
+  # 1 gated arc (B-TAIL-CONDITIONAL-SAMPLING, R-420/R-421-blocked — but those are
+  # closed/parked → re-ground at closure) must ALSO be disposed to 0. On ALL THREE
+  # (2 builds + the gated arc) reaching closed/resolved → G1.1 passes → R-FS-1 resolves
+  # → R-CL-Q1 quality track admits. (Run `just closure-gate` to confirm G1.1 empirically.)
 
 arcs:
   # ─── FROZEN build order (B1 → … → M), all closed, real as-built units ───
@@ -454,15 +460,15 @@ arcs:
     ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
 
   - id: B-POSTJOIN-LLM-SYNTHESIS
-    title: "Post-join LLM synthesis step for concurrent fan-out (OPERATOR-GATED on §25.12)"
+    title: "Post-join LLM synthesis step for concurrent fan-out (AUTHORIZED 2026-06-22; §25.12 amendment)"
     kind: standalone
     status: registered
     decompose_at_open: true
     owner_axis: "CP + runtime"
     parent_arc: B-INTERSTEP-NONLINEAR
-    operator_gated: true
+    operator_gated: false  # gate CLEARED 2026-06-22 — operator AUTHORIZED build (full-spec closure); design-first per .harness/r-fs-1-final-closure-plan.md
     anticipated_scope: "The genuine inter-step capability the now-RESOLVED-AS-HOLLOW B-INTERSTEP-NONLINEAR gestured at: a post-join LLM SYNTHESIS step for the concurrent fan-out topologies (ORCHESTRATOR_WORKERS / PARALLELIZATION / HIERARCHICAL_DELEGATION) — an LLM-dispatched step that, after the fan-out barrier, reads the sibling branch outputs (via the §14.21 inter-step channel, whose recording becomes non-vacuous ONLY once this consumer exists) and composes a synthesized result. Today these topologies compose via a DETERMINISTIC fold (_aggregate_orchestrator_workers / _aggregate_parallelization) that the C-CP-25 §25.12 contract GUARANTEES is deterministic ('first to finish wins is forbidden'). An LLM synthesis compose makes the fan-out output NON-deterministic → it SACRIFICES the §25.12 determinism guarantee (a committed decision)."
-    why: "OPERATOR-GATED: a committed-decision sacrifice (C-CP-25 §25.12 deterministic-fold composition → non-deterministic LLM compose) with no concrete workflow demanding it. Per CLAUDE.md §13.4 / [[feedback-gate-only-on-meaningful-architecture-change]] a committed-decision sacrifice is precisely the gate condition. Register, do NOT build; surface the §25.12-relaxation request only if a real workflow needs LLM post-join synthesis. The fork: authorize the §25.12 sacrifice (Class-1 topology-semantics) before any build."
+    why: "Was OPERATOR-GATED (a committed-decision sacrifice: C-CP-25 §25.12 deterministic-fold composition → non-deterministic LLM compose). AUTHORIZED 2026-06-22 — the operator chose full-spec closure (build both final arcs) over declaring build-complete → BUILD via the design-first pipeline (council [determinism/reproducibility/replay ⊥ canonical-synthesis] → ratify the opt-in mechanism [default deterministic fold byte-identical; synthesis is an opt-in non-deterministic mode, documented in §25.12 + replay/hash semantics] → §25.12 spec amendment + clearance → impl with full-chain witness → adversarial review) per .harness/r-fs-1-final-closure-plan.md. SEQUENCED SECOND (after B-HITL-PLACEMENT-PER-STEP-LOOSEN). This arc is also the non-vacuous CONSUMER that makes B-INTERSTEP-NONLINEAR's concurrent-fan-out recording non-hollow — recording + the synthesis consumer ship together."
     ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
 
   - id: B-ENGINE-OUTPUT-REPLAY-WAL-SEGMENT
@@ -592,8 +598,8 @@ arcs:
     owner_axis: "CP"
     parent_arc: B-HITL-PLACEMENT-PER-STEP-OVERRIDE-FOLD
     anticipated_scope: "Per-step TUNE/REPLACE or REMOVAL of a workflow-level HITL gate position (both reduce coverage — removal drops a position; a tune/replace can loosen attributes like tool_filter / cascade_policy / timeout). Needs BOTH a monotone-HITL-posture relaxation (committed-invariant relax — operator's call) AND a typed-shape change (a tuple-valued, replace/removal-capable per-step placement carrier)."
-    why: "The v1.49 fold is ADD-only / monotone by construction (an override ADDs an absent position; on a same-position collision the workflow placement wins — it can neither remove nor modify an existing one). Loosening (tune/replace/removal) is the rare, deliberately-friction-ful direction — register, do NOT build; surface the ADR/spec relax-request only if a real workflow needs per-step gate tune/narrowing."
-    operator_gated: true
+    why: "The v1.49 fold is ADD-only / monotone by construction (an override ADDs an absent position; on a same-position collision the workflow placement wins — it can neither remove nor modify an existing one). Loosening (tune/replace/removal) is the rare, deliberately-friction-ful direction. AUTHORIZED 2026-06-22 — the operator chose full-spec closure (build both final arcs) over declaring build-complete → BUILD via the design-first pipeline (council [C10 action-safety ⊥ C11 operator-loop, the §13.4 worked-example dyad] → ratify the safe mechanism [opt-in, removal/replace-capable carrier, gate-removal AUDITED, non-removable mcp_trust/per_tool floors, monotone default preserved] → §17.1/§19.1 monotone-HITL spec amendment + clearance → impl with both-branch witnesses → adversarial review) per .harness/r-fs-1-final-closure-plan.md. SEQUENCED FIRST (smaller CP-contained surface; establishes the amendment rhythm)."
+    operator_gated: false  # gate CLEARED 2026-06-22 — operator AUTHORIZED build (full-spec closure); design-first per .harness/r-fs-1-final-closure-plan.md
     ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
 
   - id: B-EDIT-CARRIER-DURABLE-ASYNC-RESUME
