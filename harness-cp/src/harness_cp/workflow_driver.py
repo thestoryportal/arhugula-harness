@@ -3946,6 +3946,79 @@ def _run_fanout_to_completion[T](fanout: Coroutine[Any, Any, T], *, max_workers:
         loop.close()
 
 
+class _FanOutStoreCorruptError(Exception):
+    """A fan-out branch journal is PRESENT but UNREADABLE on crash-resume.
+
+    The fail-closed signal (`[[durable-recovery-presence-validity-scope]]`): a branch
+    file that exists but yields no parseable record is corruption / tamper, NOT a
+    genuinely-incomplete branch — re-dispatching it would mask the corruption and
+    re-fire its possibly-landed effect. `_execute_workflow_body` turns this into a
+    FAILED RunResult rather than a fresh re-dispatch.
+    """
+
+
+def _determine_fanout_resume(
+    store: Any,
+    run_key: str,
+    steps: Sequence[WorkflowStep],
+    topology: TopologyPattern,
+) -> FanOutResumeState | PeerFanOutResumeState | None:
+    """Reconstruct a fan-out crash-resume state from the durable branch STORE.
+
+    B-FANOUT-OUTPUT-REPLAY (R-FS-1). On a mid-fan-out crash the durable F2 ledger is
+    BINARY (branch terminals buffer into per-branch `BufferingLedgerWriter`s and drain
+    ATOMICALLY at the barrier per CP §25.12 D1.b), so the STORE is the SOLE
+    which-branches-completed authority: `read_branch_outputs` keys = the completed set;
+    every other declared ordinal is left re-dispatchable. (The ledger is consulted only
+    to know the fan-out is INCOMPLETE — the replay trigger — never for which branches.)
+
+    Returns None (→ fresh run, byte-identical default) when no branch completed. Raises
+    `_FanOutStoreCorruptError` (→ FAILED) when a branch file is PRESENT but UNREADABLE
+    (fail-closed; never silently re-dispatch a corrupt branch). The recovered `step_id`
+    comes from the STORE (CAPTURE-time identity) so the EXISTING strategy resume
+    material-diff guard meaningfully fails closed on a changed body.
+    """
+    readable = store.read_branch_outputs(run_key)
+    corrupt = store.present_branch_indexes(run_key) - readable.keys()
+    if corrupt:
+        raise _FanOutStoreCorruptError(
+            f"fan-out branch journal(s) present but unreadable: {sorted(corrupt)}"
+        )
+    if not readable:
+        return None  # no completed branch → fresh run
+    branches = tuple(
+        FanOutBranchResumeState(
+            branch_index=branch_index,
+            step_id=step_id,
+            terminal_status="completed",
+            output=output,
+        )
+        for branch_index, (step_id, output) in sorted(readable.items())
+    )
+    if topology is TopologyPattern.PARALLELIZATION:
+        # Peer fan-out: every `steps` ordinal is a branch (no orchestrator step[0]).
+        return PeerFanOutResumeState(branches=branches, branch_count=len(steps))
+    # ORCHESTRATOR_WORKERS / HIERARCHICAL_DELEGATION: workers are `steps[1:]`; the
+    # orchestrator (`steps[0]`) output is recovered so it is not re-dispatched.
+    orchestrator = store.read_orchestrator_output(run_key)
+    if orchestrator is None:
+        # Workers completed but the orchestrator output is missing — an inconsistent
+        # store (the orchestrator completes BEFORE any worker dispatches). Fail closed
+        # rather than reconstruct an orchestrator-bearing resume without it.
+        why = "unreadable" if store.orchestrator_present(run_key) else "absent"
+        raise _FanOutStoreCorruptError(
+            f"fan-out orchestrator output {why} but workers completed (inconsistent store)"
+        )
+    orchestrator_step_id, orchestrator_output = orchestrator
+    return FanOutResumeState(
+        orchestrator_output=orchestrator_output,
+        orchestrator_step_id=orchestrator_step_id,
+        branches=branches,
+        worker_count=len(steps) - 1,
+        paused_child_branches=(),
+    )
+
+
 def _execute_parallelization(
     *,
     manifest_entry: WorkflowManifestEntry,
