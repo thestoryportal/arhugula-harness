@@ -61,6 +61,7 @@ from pathlib import Path
 from typing import Any, cast
 
 __all__ = [
+    "ENGINE_OUTPUT_BRANCHES_SUFFIX",
     "ENGINE_OUTPUT_SUBDIR",
     "EngineOutputStore",
     "engine_output_dir_for",
@@ -69,6 +70,14 @@ __all__ = [
 #: Subdirectory under the resolved ``STATE_LEDGER`` directory holding the
 #: per-run engine-output journals (co-location sibling of ``pause-journal``).
 ENGINE_OUTPUT_SUBDIR = "engine-output"
+
+#: Per-run directory suffix holding the CONCURRENT fan-out branch journals
+#: (B-FANOUT-OUTPUT-REPLAY). The linear store keys one ``{digest}.jsonl`` FILE
+#: per run (single-writer); a concurrent fan-out has N branch writers, so each
+#: branch gets its OWN file under ``{digest}.branches/`` — no shared-file
+#: contention (the advisor's per-branch-FILE keying). No collision with the
+#: linear ``{digest}.jsonl`` file (a ``.branches`` DIR vs a ``.jsonl`` file).
+ENGINE_OUTPUT_BRANCHES_SUFFIX = ".branches"
 
 
 def engine_output_dir_for(state_ledger_dir: Path) -> Path:
@@ -155,15 +164,183 @@ class EngineOutputStore:
         Codex caught that a read-failure must NOT be collapsed into it."""
         return self._journal_file(run_key).exists()
 
+    # -- B-FANOUT-OUTPUT-REPLAY: concurrent-fan-out branch capture ------------
+    #
+    # The STORE is the SOLE authority for which-branches-completed on a fan-out
+    # crash-resume: the durable F2 ledger is BINARY for a concurrent fan-out
+    # (branch terminals buffer into per-branch `BufferingLedgerWriter`s and drain
+    # ATOMICALLY at the barrier per CP §25.12 D1.b), so a mid-fan-out crash leaves
+    # an EMPTY ledger but the per-branch journals hold the completed outputs.
+    # `step_id` is recorded at CAPTURE time — the load-bearing identity that lets
+    # the existing resume material-diff guard detect a changed body on replay.
+
+    def record_branch(
+        self,
+        run_key: str,
+        branch_index: int,
+        step_id: str,
+        output: Mapping[str, Any],
+    ) -> None:
+        """Append one branch-output record to the branch's OWN file, durably.
+
+        Per-branch file (``{digest}.branches/branch-{branch_index}.jsonl``) so N
+        concurrent branch writers never contend on a shared handle. RESERVE-before-
+        COMMIT: the caller fsyncs this BEFORE the branch's terminal ledger-append,
+        so the store always holds >= the (binary) ledger's committed branch set.
+        """
+        record = {"step_id": str(step_id), "output": dict(output)}
+        line = json.dumps(record, sort_keys=True)
+        self._append_path(self._branch_file(run_key, branch_index), line)
+
+    def read_branch_outputs(self, run_key: str) -> dict[int, tuple[str, dict[str, Any]]]:
+        """Return ``{branch_index: (step_id, output)}`` for every READABLE branch.
+
+        Empty when no fan-out branch journals exist (config flip / first run). The
+        ``branch_index`` is the filename authority (``branch-{n}.jsonl``); a present
+        but UNREADABLE branch file is omitted here and surfaced by
+        `present_branch_indexes` so the caller fails closed (never silently re-
+        dispatching a corrupt branch — that would mask tampering).
+        """
+        branches_dir = self._branches_dir(run_key)
+        if not branches_dir.exists():
+            return {}
+        outputs: dict[int, tuple[str, dict[str, Any]]] = {}
+        for path in branches_dir.glob("branch-*.jsonl"):
+            branch_index = self._branch_index_from_name(path.name)
+            if branch_index is None:
+                continue
+            parsed = self._read_last_branch_record(path)
+            if parsed is not None:
+                outputs[branch_index] = parsed
+        return outputs
+
+    def present_branch_indexes(self, run_key: str) -> set[int]:
+        """Return the set of branch ordinals whose journal FILE exists (any state).
+
+        The fail-closed discriminator (the branch-level analogue of
+        `journal_exists`): ``present_branch_indexes - read_branch_outputs.keys()``
+        is the set of branch files that EXIST but yield no readable record — a
+        corrupt branch the caller must fail closed on rather than re-dispatch.
+        """
+        branches_dir = self._branches_dir(run_key)
+        if not branches_dir.exists():
+            return set()
+        indexes: set[int] = set()
+        for path in branches_dir.glob("branch-*.jsonl"):
+            branch_index = self._branch_index_from_name(path.name)
+            if branch_index is not None:
+                indexes.add(branch_index)
+        return indexes
+
+    def record_orchestrator(
+        self,
+        run_key: str,
+        step_id: str,
+        output: Mapping[str, Any],
+    ) -> None:
+        """Capture the ORCHESTRATOR_WORKERS ``steps[0]`` output (not a branch).
+
+        The orchestrator output rides the `FanOutResumeState.orchestrator_output`
+        field on resume; captured to a dedicated ``orchestrator.jsonl`` under the
+        branches dir so it does not collide with the ``branch-*`` worker files.
+        """
+        record = {"step_id": str(step_id), "output": dict(output)}
+        line = json.dumps(record, sort_keys=True)
+        self._append_path(self._orchestrator_file(run_key), line)
+
+    def read_orchestrator_output(self, run_key: str) -> tuple[str, dict[str, Any]] | None:
+        """Return the captured ``(step_id, output)`` orchestrator record, or None.
+
+        None means ABSENT (no orchestrator captured). A present-but-unreadable
+        orchestrator file is surfaced by `orchestrator_present` so the caller fails
+        closed (the symmetric of the per-branch corrupt-detection).
+        """
+        path = self._orchestrator_file(run_key)
+        if not path.exists():
+            return None
+        return self._read_last_branch_record(path)
+
+    def orchestrator_present(self, run_key: str) -> bool:
+        """Whether an orchestrator journal FILE exists (regardless of readability)."""
+        return self._orchestrator_file(run_key).exists()
+
     # -- durable journal I/O (mirrors JournalWorkflowPauseStore) --------------
 
+    @staticmethod
+    def _digest(run_key: str) -> str:
+        """The filesystem-safe, collision-free per-run name component."""
+        return hashlib.sha256(run_key.encode("utf-8")).hexdigest()
+
     def _journal_file(self, run_key: str) -> Path:
-        """The per-run journal file (filesystem-safe, collision-free name)."""
-        digest = hashlib.sha256(run_key.encode("utf-8")).hexdigest()
-        return self._journal_dir / f"{digest}.jsonl"
+        """The per-run LINEAR journal file (filesystem-safe, collision-free name)."""
+        return self._journal_dir / f"{self._digest(run_key)}.jsonl"
+
+    def _branches_dir(self, run_key: str) -> Path:
+        """The per-run directory holding the CONCURRENT fan-out branch journals."""
+        return self._journal_dir / f"{self._digest(run_key)}{ENGINE_OUTPUT_BRANCHES_SUFFIX}"
+
+    def _branch_file(self, run_key: str, branch_index: int) -> Path:
+        """The per-branch journal file under the run's branches dir."""
+        return self._branches_dir(run_key) / f"branch-{int(branch_index)}.jsonl"
+
+    def _orchestrator_file(self, run_key: str) -> Path:
+        """The ORCHESTRATOR_WORKERS ``steps[0]`` journal under the branches dir."""
+        return self._branches_dir(run_key) / "orchestrator.jsonl"
+
+    @staticmethod
+    def _branch_index_from_name(name: str) -> int | None:
+        """Parse ``branch-{n}.jsonl`` → ``n``; None for any other filename."""
+        prefix, suffix = "branch-", ".jsonl"
+        if not (name.startswith(prefix) and name.endswith(suffix)):
+            return None
+        try:
+            return int(name[len(prefix) : -len(suffix)])
+        except ValueError:
+            return None
+
+    def _read_last_branch_record(self, path: Path) -> tuple[str, dict[str, Any]] | None:
+        """Return the last readable ``(step_id, output)`` in a branch/orchestrator file.
+
+        ``None`` when the file is unreadable or holds no parseable record (corrupt) —
+        the caller's presence-vs-readability check is the fail-closed gate. A torn
+        trailing line is skipped; a later record for the same file wins (idempotent
+        re-record), mirroring the linear `read_outputs` last-wins discipline.
+        """
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            return None
+        result: tuple[str, dict[str, Any]] | None = None
+        for line in text.splitlines():
+            if not line.strip():
+                continue
+            parsed = self._parse_branch_record(line)
+            if parsed is not None:
+                result = parsed
+        return result
+
+    @staticmethod
+    def _parse_branch_record(line: str) -> tuple[str, dict[str, Any]] | None:
+        """Parse one branch/orchestrator line into ``(step_id, output)`` or ``None``."""
+        try:
+            loaded = json.loads(line)
+            if not isinstance(loaded, dict):
+                return None
+            record = cast("dict[str, object]", loaded)
+            step_id = record["step_id"]
+            output = record["output"]
+            if not isinstance(step_id, str) or not isinstance(output, dict):
+                return None
+            return (step_id, cast("dict[str, Any]", output))
+        except (ValueError, KeyError, TypeError):
+            return None
 
     def _append(self, run_key: str, line: str) -> None:
-        """Append one JSONL record to the run's file, durably.
+        """Append one JSONL record to the run's LINEAR file, durably."""
+        self._append_path(self._journal_file(run_key), line)
+
+    def _append_path(self, path: Path, line: str) -> None:
+        """Append one JSONL record to ``path``, durably (fsync-ed).
 
         The record is ``fsync``-ed before returning so a host crash after a
         ``record`` cannot lose an already-written output. Directory-fsyncs persist
@@ -172,7 +349,6 @@ class EngineOutputStore:
         own (skipped) line rather than corrupting the next record. (Mirrors the
         pause-journal hardenings caught by out-of-family Codex.)
         """
-        path = self._journal_file(run_key)
         journal_dir = path.parent
         dir_is_new = not journal_dir.exists()
         journal_dir.mkdir(parents=True, exist_ok=True)
