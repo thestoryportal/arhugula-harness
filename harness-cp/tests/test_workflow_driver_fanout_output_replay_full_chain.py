@@ -653,3 +653,37 @@ def test_synthesis_bearing_crash_resume_fails_closed() -> None:
     assert "post-join-synthesis-on-resume-unsupported" in r2.fail_class
     assert resume_synth.dispatched == 0  # never re-dispatched the synthesis
     assert resume_branch.dispatched == []  # fail-closed before the strategy ran
+
+
+def test_crash_resume_empty_manifest_fails_closed_material_diff() -> None:
+    """A changed body (out-of-family Codex [P2]): the store holds recovered branches but the
+    RESUMED manifest carries NO branch steps. The strategy's empty-step fast path would
+    return SUCCESS with an empty aggregate BEFORE the resume material-diff guard — silently
+    dropping the recovered outputs. Reject fail-closed instead."""
+    store = _InMemoryBranchStore()
+    steps = [_step(f"branch-{i}", i) for i in range(3)]
+
+    # Run 1: all 3 branches complete + captured.
+    r1 = _run(
+        workflow_id="wf-par-empty",
+        topology=TopologyPattern.PARALLELIZATION,
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3),
+        store=store,
+    )
+    assert r1.status is RunStatus.SUCCESS
+
+    # Run 2 (resume) with an EMPTY manifest sharing the SAME store → FAILED (material-diff),
+    # NOT a silent empty-aggregate SUCCESS.
+    resume = _CountingDispatcher(n=0)
+    r2 = _run(
+        workflow_id="wf-par-empty",
+        topology=TopologyPattern.PARALLELIZATION,
+        steps=[],
+        dispatcher=resume,
+        store=store,
+    )
+    assert r2.status is RunStatus.FAILED
+    assert r2.fail_class is not None
+    assert "fan-out-crash-resume-material-diff" in r2.fail_class
+    assert resume.dispatched == []

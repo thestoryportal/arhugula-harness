@@ -720,6 +720,9 @@ def _rematerialize_recovered_branch_writer(
     run_idempotency_key: str,
     timestamp: datetime,
     procedural_tier_snapshot_ref: Identifier | None,
+    workflow_id: str,
+    step: WorkflowStep,
+    binding: StepEffectiveBinding,
 ) -> BufferingLedgerWriter:
     """B-FANOUT-OUTPUT-REPLAY (R-FS-1) — re-materialize a crash-recovered branch's LOST
     ledger entries (out-of-family Codex [P1]).
@@ -737,6 +740,21 @@ def _rematerialize_recovered_branch_writer(
     binary-ledger premise need not hold mid-drain). Crash-resume ONLY; the per-branch
     idempotency key is deterministic, so the resumed entry matches the lost one."""
     writer = BufferingLedgerWriter(actor=ctx.ledger_writer.actor, branch_index=branch_index)
+    # B-FANOUT-OUTPUT-REPLAY — re-materialize the per-step override-application entry too
+    # (out-of-family Codex [P2]): a recovered branch that used a per-step model / role /
+    # prompt / HITL override had its `cp.per-step-override-application` entry buffered BEFORE
+    # the step entry, and a crash lost it with the in-memory writer — so a crash-resumed
+    # ledger would omit override provenance a no-crash run carries. Buffered FIRST (the
+    # resolution-time order); no-op when no override applied; dedup-safe (the override
+    # entry's `(step, outcome)` idempotency key is deterministic).
+    _buffer_branch_override_if_applied(
+        branch_writer=writer,
+        workflow_id=workflow_id,
+        step=step,
+        binding=binding,
+        timestamp=timestamp,
+        snapshot_ref=procedural_tier_snapshot_ref,
+    )
     append_branch_step_ledger_entry(
         branch_writer=writer,
         branch_context=branch_context,
@@ -1866,6 +1884,28 @@ def _execute_workflow_body(
                         partial_state=None,
                         final_state=None,
                         fail_class=f"fan-out-crash-resume-store-corrupt: {exc}",
+                    ),
+                    0,
+                )
+            # Material-diff fail-closed (out-of-family Codex [P2]): the store holds recovered
+            # branch / orchestrator records but the RESUMED manifest carries NO branch steps
+            # (a changed body). The strategy's empty-step fast path would return SUCCESS with
+            # an empty aggregate BEFORE its resume material-diff guard runs — silently dropping
+            # the recovered outputs. Reject here instead (the guard the fast path bypasses).
+            if _crash_fan_out_resume is not None and not _crash_branch_steps:
+                return (
+                    RunResult(
+                        workflow_id=manifest_entry.workflow_id,
+                        run_id=run_id,
+                        status=RunStatus.FAILED,
+                        terminal_step_index=None,
+                        partial_state=None,
+                        final_state=None,
+                        fail_class=(
+                            "fan-out-crash-resume-material-diff: the store holds recovered "
+                            "fan-out state but the resumed manifest has no branch steps "
+                            "(changed body) — fail closed rather than drop the recovered outputs"
+                        ),
                     ),
                     0,
                 )
@@ -4508,6 +4548,9 @@ def _execute_parallelization(
                     run_idempotency_key=run_idempotency_key,
                     timestamp=fanout_timestamp,
                     procedural_tier_snapshot_ref=snapshot_ref,
+                    workflow_id=workflow_id,
+                    step=_r_step,
+                    binding=_r_binding,
                 )
             )
 
@@ -4766,6 +4809,17 @@ def _execute_parallelization(
             # so the salvaged aggregate keeps it (a ran-and-errored in-flight,
             # `exception() is not None`, has no output).
             if terminal == "completed" and inflight.exception() is None:
+                # B-FANOUT-OUTPUT-REPLAY — a sibling that LANDED under the shield is a
+                # completed branch (its effect fired); capture it to the durable store
+                # too (out-of-family Codex [P1]) — else a crash before the barrier drain
+                # leaves it unrecorded and crash-resume RE-DISPATCHES it (double-fire). The
+                # buffered terminal append above is not durable until the drain, so this
+                # still satisfies RESERVE-before-COMMIT (store fsynced before the drain).
+                _shielded_store = _fanout_replay_store(ctx, manifest_entry)
+                if _shielded_store is not None:
+                    _shielded_store.record_branch(
+                        run_idempotency_key, branch_index, str(step.step_id), inflight.result()
+                    )
                 collected[branch_index] = (str(step.step_id), inflight.result())
             raise  # honor the cancellation (the barrier cancelled this branch)
         except Exception:
@@ -6023,6 +6077,24 @@ def _execute_orchestrator_workers(
             orchestrator_writer = BufferingLedgerWriter(
                 actor=ctx.ledger_writer.actor, branch_index=0
             )
+            # B-FANOUT-OUTPUT-REPLAY — re-materialize the orchestrator's per-step override
+            # provenance too (out-of-family Codex [P2]; the fresh `else` branch buffers it
+            # before the sequential entry — match it so a crash-resumed override-bearing
+            # orchestrator carries the same provenance a no-crash run does). Dedup-safe.
+            _orch_resume_binding = resolve_step_binding(
+                manifest_entry,
+                str(orchestrator_step.step_id),
+                default_model_binding=default_model_binding,
+                persona_tier=manifest_entry.persona_tier,
+            )
+            _buffer_branch_override_if_applied(
+                branch_writer=orchestrator_writer,
+                workflow_id=workflow_id,
+                step=orchestrator_step,
+                binding=_orch_resume_binding,
+                timestamp=fanout_timestamp,
+                snapshot_ref=snapshot_ref,
+            )
             _append_buffered_sequential_entry(
                 writer=orchestrator_writer,
                 workflow_id=workflow_id,
@@ -6248,6 +6320,9 @@ def _execute_orchestrator_workers(
                     run_idempotency_key=run_idempotency_key,
                     timestamp=fanout_timestamp,
                     procedural_tier_snapshot_ref=snapshot_ref,
+                    workflow_id=workflow_id,
+                    step=_r_step,
+                    binding=_r_binding,
                 )
             )
 
@@ -6593,6 +6668,17 @@ def _execute_orchestrator_workers(
             # branch + drops its output, corrupting the resumed aggregate). A
             # ran-and-errored in-flight (`exception() is not None`) has no output.
             if terminal == "completed" and inflight.exception() is None:
+                # B-FANOUT-OUTPUT-REPLAY — a sibling that LANDED under the shield is a
+                # completed branch (its effect fired); capture it to the durable store
+                # too (out-of-family Codex [P1]) — else a crash before the barrier drain
+                # leaves it unrecorded and crash-resume RE-DISPATCHES it (double-fire). The
+                # buffered terminal append above is not durable until the drain, so this
+                # still satisfies RESERVE-before-COMMIT (store fsynced before the drain).
+                _shielded_store = _fanout_replay_store(ctx, manifest_entry)
+                if _shielded_store is not None:
+                    _shielded_store.record_branch(
+                        run_idempotency_key, branch_index, str(step.step_id), inflight.result()
+                    )
                 collected[branch_index] = (str(step.step_id), inflight.result())
             raise  # honor the cancellation (the barrier cancelled this branch)
         except SubAgentChildPausedError as _paused:
