@@ -28,6 +28,7 @@ from harness_cp.topology_pattern import TopologyPattern
 from harness_cp.workflow_driver import (
     _determine_fanout_resume,
     _FanOutStoreCorruptError,
+    _FanOutStoreTimeoutAmbiguousError,
 )
 from harness_cp.workflow_driver_types import StepKind, WorkflowStep
 
@@ -52,18 +53,27 @@ class _FakeStore:
     def __init__(
         self,
         *,
-        branches: dict[int, tuple[str, dict[str, object]]],
+        branches: dict[int, tuple[str, dict[str, object] | None]],
         orchestrator: tuple[str, dict[str, object]] | None = None,
         corrupt_branches: tuple[int, ...] = (),
         orchestrator_corrupt: bool = False,
+        dispositions: dict[int, str] | None = None,
     ) -> None:
         self._branches = dict(branches)
         self._orchestrator = orchestrator
         self._corrupt = set(corrupt_branches)
         self._orchestrator_corrupt = orchestrator_corrupt
+        # Per-branch terminal disposition (default "completed"); set "timed_out" or a
+        # "completed" with a None output to exercise the disposition-class recovery.
+        self._dispositions = dict(dispositions) if dispositions else {}
 
-    def read_branch_outputs(self, run_key: str) -> dict[int, tuple[str, dict[str, object]]]:
-        return dict(self._branches)
+    def read_branch_records(
+        self, run_key: str
+    ) -> dict[int, tuple[str, str, dict[str, object] | None]]:
+        return {
+            bi: (sid, self._dispositions.get(bi, "completed"), out)
+            for bi, (sid, out) in self._branches.items()
+        }
 
     def present_branch_indexes(self, run_key: str) -> set[int]:
         return set(self._branches) | self._corrupt
@@ -180,3 +190,36 @@ def test_orchestrator_absent_with_zero_workers_returns_none_fresh() -> None:
         _determine_fanout_resume(store, _RUN_KEY, _steps(3), TopologyPattern.ORCHESTRATOR_WORKERS)
         is None
     )
+
+
+# --- disposition class (the keystone): completed-with-output / completed-no-output /
+#     timed-out, across topologies ------------------------------------------------------
+def test_timed_out_branch_fails_closed() -> None:
+    """A TIMED_OUT branch is irreducibly ambiguous (a deadline-cut in-flight dispatch may
+    or may not have landed) → crash-resume FAILS CLOSED, never a silent re-dispatch."""
+    store = _FakeStore(branches={0: ("w0", {"o": 0})}, dispositions={0: "timed_out"})
+    with pytest.raises(_FanOutStoreTimeoutAmbiguousError, match="timed out"):
+        _determine_fanout_resume(store, _RUN_KEY, _steps(3), TopologyPattern.PARALLELIZATION)
+
+
+def test_errored_no_output_branch_recovered_as_terminal() -> None:
+    """A COMPLETED branch with NO output (ran-and-errored, effect LANDED) is recovered as
+    TERMINAL (output None → not re-dispatched, not folded), never re-firing the effect."""
+    store = _FakeStore(
+        branches={0: ("w0", {"o": 0}), 1: ("w1", None)},
+        dispositions={1: "completed"},
+    )
+    result = _determine_fanout_resume(store, _RUN_KEY, _steps(3), TopologyPattern.PARALLELIZATION)
+    assert isinstance(result, PeerFanOutResumeState)
+    by_index = {b.branch_index: b for b in result.branches}
+    assert by_index[1].terminal_status == "completed"
+    assert by_index[1].output is None  # errored: terminal, recovered, NOT re-dispatched
+
+
+def test_parallelization_with_orchestrator_record_fails_closed_changed_topology() -> None:
+    """A PARALLELIZATION manifest resuming a run whose store holds an ORCHESTRATOR record
+    is a changed-topology resume (the run key does not bind topology) → fail closed rather
+    than reinterpret worker records as peers or drop the orchestrator effect (Codex [P2])."""
+    store = _FakeStore(branches={0: ("w0", {"o": 0})}, orchestrator=("orch", {"plan": "x"}))
+    with pytest.raises(_FanOutStoreCorruptError, match="topology mismatch"):
+        _determine_fanout_resume(store, _RUN_KEY, _steps(3), TopologyPattern.PARALLELIZATION)

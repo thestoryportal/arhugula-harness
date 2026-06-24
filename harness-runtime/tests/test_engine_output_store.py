@@ -127,38 +127,55 @@ def test_record_branch_then_read_round_trip(tmp_path: Path) -> None:
     """record_branch() persists per-branch outputs keyed by branch_index; a FRESH
     store over the same dir (a crash + fresh-bootstrap resume) reads them back."""
     store = EngineOutputStore(journal_dir=tmp_path / "eo")
-    store.record_branch(_RUN_KEY, 0, "worker-0", {"out": "b0"})
-    store.record_branch(_RUN_KEY, 2, "worker-2", {"out": "b2"})
+    store.record_branch(_RUN_KEY, 0, "worker-0", "completed", {"out": "b0"})
+    store.record_branch(_RUN_KEY, 2, "worker-2", "completed", {"out": "b2"})
 
     fresh = EngineOutputStore(journal_dir=tmp_path / "eo")  # crash + restart
-    assert fresh.read_branch_outputs(_RUN_KEY) == {
-        0: ("worker-0", {"out": "b0"}),
-        2: ("worker-2", {"out": "b2"}),
+    assert fresh.read_branch_records(_RUN_KEY) == {
+        0: ("worker-0", "completed", {"out": "b0"}),
+        2: ("worker-2", "completed", {"out": "b2"}),
     }
     assert fresh.present_branch_indexes(_RUN_KEY) == {0, 2}
+
+
+def test_branch_disposition_round_trip(tmp_path: Path) -> None:
+    """The store records the terminal DISPOSITION for every branch — completed-with-output,
+    completed-no-output (ran-and-errored), and timed_out — read back across a fresh store
+    (crash + restart). The disposition is what closes the at-most-once recovery class."""
+    store = EngineOutputStore(journal_dir=tmp_path / "eo")
+    store.record_branch(_RUN_KEY, 0, "w0", "completed", {"out": 0})
+    store.record_branch(_RUN_KEY, 1, "w1", "completed", None)  # ran-and-errored (no output)
+    store.record_branch(_RUN_KEY, 2, "w2", "timed_out", None)  # deadline-cut (ambiguous)
+
+    fresh = EngineOutputStore(journal_dir=tmp_path / "eo")  # crash + restart
+    assert fresh.read_branch_records(_RUN_KEY) == {
+        0: ("w0", "completed", {"out": 0}),
+        1: ("w1", "completed", None),
+        2: ("w2", "timed_out", None),
+    }
 
 
 def test_branch_files_are_per_branch_isolated(tmp_path: Path) -> None:
     """Each branch writes its OWN file (no shared-handle contention for N
     concurrent writers); the filename is the branch-index authority."""
     store = EngineOutputStore(journal_dir=tmp_path / "eo")
-    store.record_branch(_RUN_KEY, 0, "w0", {"r": 0})
-    store.record_branch(_RUN_KEY, 1, "w1", {"r": 1})
+    store.record_branch(_RUN_KEY, 0, "w0", "completed", {"r": 0})
+    store.record_branch(_RUN_KEY, 1, "w1", "completed", {"r": 1})
     branches_dir = store._branches_dir(_RUN_KEY)
     files = sorted(p.name for p in branches_dir.glob("branch-*.jsonl"))
     assert files == ["branch-0.jsonl", "branch-1.jsonl"]
 
 
 def test_branch_present_but_unreadable_is_fail_closed_signal(tmp_path: Path) -> None:
-    """A present-but-corrupt branch file is OMITTED from read_branch_outputs but
+    """A present-but-corrupt branch file is OMITTED from read_branch_records but
     SURFACED by present_branch_indexes — the set difference is the corrupt set the
     resume site fails closed on (never silently re-dispatching a corrupt branch)."""
     store = EngineOutputStore(journal_dir=tmp_path / "eo")
-    store.record_branch(_RUN_KEY, 0, "w0", {"r": 0})
+    store.record_branch(_RUN_KEY, 0, "w0", "completed", {"r": 0})
     # Branch 1's file exists but holds no parseable record (corruption / tamper).
     store._branch_file(_RUN_KEY, 1).write_text("{ not json", encoding="utf-8")
     present = store.present_branch_indexes(_RUN_KEY)
-    readable = set(store.read_branch_outputs(_RUN_KEY).keys())
+    readable = set(store.read_branch_records(_RUN_KEY).keys())
     assert present == {0, 1}
     assert readable == {0}
     assert present - readable == {1}  # the fail-closed corrupt set
@@ -167,9 +184,9 @@ def test_branch_present_but_unreadable_is_fail_closed_signal(tmp_path: Path) -> 
 def test_branch_last_record_wins(tmp_path: Path) -> None:
     """An idempotent re-record of the same branch yields the latest (last-wins)."""
     store = EngineOutputStore(journal_dir=tmp_path / "eo")
-    store.record_branch(_RUN_KEY, 0, "w0", {"v": "first"})
-    store.record_branch(_RUN_KEY, 0, "w0", {"v": "second"})
-    assert store.read_branch_outputs(_RUN_KEY) == {0: ("w0", {"v": "second"})}
+    store.record_branch(_RUN_KEY, 0, "w0", "completed", {"v": "first"})
+    store.record_branch(_RUN_KEY, 0, "w0", "completed", {"v": "second"})
+    assert store.read_branch_records(_RUN_KEY) == {0: ("w0", "completed", {"v": "second"})}
 
 
 def test_orchestrator_capture_and_read(tmp_path: Path) -> None:
@@ -182,14 +199,14 @@ def test_orchestrator_capture_and_read(tmp_path: Path) -> None:
     assert store.read_orchestrator_output(_RUN_KEY) == ("orch-step", {"plan": "delegate"})
     assert store.orchestrator_present(_RUN_KEY) is True
     # The orchestrator record does NOT pollute the worker branch set.
-    assert store.read_branch_outputs(_RUN_KEY) == {}
+    assert store.read_branch_records(_RUN_KEY) == {}
     assert store.present_branch_indexes(_RUN_KEY) == set()
 
 
 def test_branch_absent_run_returns_empty(tmp_path: Path) -> None:
     """No fan-out journals (config flip / first run) → empty/None, no error."""
     store = EngineOutputStore(journal_dir=tmp_path / "eo")
-    assert store.read_branch_outputs("never") == {}
+    assert store.read_branch_records("never") == {}
     assert store.present_branch_indexes("never") == set()
     assert store.read_orchestrator_output("never") is None
     assert store.orchestrator_present("never") is False
@@ -200,7 +217,7 @@ def test_branch_sidecar_does_not_collide_with_linear_file(tmp_path: Path) -> Non
     same run_key (a SUB_AGENT_DISPATCH parent-linear + fan-out child run)."""
     store = EngineOutputStore(journal_dir=tmp_path / "eo")
     store.record(_RUN_KEY, 0, "lin-0", {"x": 1})
-    store.record_branch(_RUN_KEY, 0, "w0", {"y": 2})
+    store.record_branch(_RUN_KEY, 0, "w0", "completed", {"y": 2})
     assert store.read_outputs(_RUN_KEY) == {0: ("lin-0", {"x": 1})}
-    assert store.read_branch_outputs(_RUN_KEY) == {0: ("w0", {"y": 2})}
+    assert store.read_branch_records(_RUN_KEY) == {0: ("w0", "completed", {"y": 2})}
     assert store.journal_exists(_RUN_KEY) is True

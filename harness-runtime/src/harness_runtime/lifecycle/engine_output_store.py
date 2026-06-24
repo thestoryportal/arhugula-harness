@@ -179,40 +179,58 @@ class EngineOutputStore:
         run_key: str,
         branch_index: int,
         step_id: str,
-        output: Mapping[str, Any],
+        terminal_status: str,
+        output: Mapping[str, Any] | None,
     ) -> None:
-        """Append one branch-output record to the branch's OWN file, durably.
+        """Append one branch terminal-DISPOSITION record to the branch's OWN file, durably.
 
-        Per-branch file (``{digest}.branches/branch-{branch_index}.jsonl``) so N
-        concurrent branch writers never contend on a shared handle. RESERVE-before-
-        COMMIT: the caller fsyncs this BEFORE the branch's terminal ledger-append,
-        so the store always holds >= the (binary) ledger's committed branch set.
+        The store records the branch's terminal **disposition** (``completed`` /
+        ``timed_out``) for EVERY branch that reaches a terminal boundary — NOT only
+        output-bearing clean successes — so a crash-resume can distinguish recover-and-fold
+        (``completed`` with ``output``), recover-as-terminal (``completed`` with ``output is
+        None`` — a ran-and-errored branch whose effect LANDED, never re-dispatched, never
+        folded), and the irreducibly-ambiguous ``timed_out`` (a deadline-cut in-flight
+        dispatch may or may not have landed → the caller FAILS CLOSED). An output-only
+        schema made every non-clean-success disposition invisible (the at-most-once
+        fail-open class); recording disposition closes it.
+
+        Per-branch file (``{digest}.branches/branch-{branch_index}.jsonl``) so N concurrent
+        branch writers never contend on a shared handle. RESERVE-before-COMMIT: the caller
+        fsyncs this BEFORE the branch's terminal ledger-append, so the store always holds
+        >= the (binary) ledger's committed branch set.
         """
-        record = {"step_id": str(step_id), "output": dict(output)}
+        record = {
+            "step_id": str(step_id),
+            "terminal_status": str(terminal_status),
+            "output": dict(output) if output is not None else None,
+        }
         line = json.dumps(record, sort_keys=True)
         self._append_path(self._branch_file(run_key, branch_index), line)
 
-    def read_branch_outputs(self, run_key: str) -> dict[int, tuple[str, dict[str, Any]]]:
-        """Return ``{branch_index: (step_id, output)}`` for every READABLE branch.
+    def read_branch_records(
+        self, run_key: str
+    ) -> dict[int, tuple[str, str, dict[str, Any] | None]]:
+        """Return ``{branch_index: (step_id, terminal_status, output | None)}`` for every
+        READABLE branch.
 
         Empty when no fan-out branch journals exist (config flip / first run). The
-        ``branch_index`` is the filename authority (``branch-{n}.jsonl``); a present
-        but UNREADABLE branch file is omitted here and surfaced by
-        `present_branch_indexes` so the caller fails closed (never silently re-
-        dispatching a corrupt branch — that would mask tampering).
+        ``branch_index`` is the filename authority (``branch-{n}.jsonl``); a present but
+        UNREADABLE branch file is omitted here and surfaced by `present_branch_indexes` so
+        the caller fails closed (never silently re-dispatching a corrupt branch). ``output``
+        is ``None`` for a terminal-no-output branch (ran-and-errored / timed-out).
         """
         branches_dir = self._branches_dir(run_key)
         if not branches_dir.exists():
             return {}
-        outputs: dict[int, tuple[str, dict[str, Any]]] = {}
+        records: dict[int, tuple[str, str, dict[str, Any] | None]] = {}
         for path in branches_dir.glob("branch-*.jsonl"):
             branch_index = self._branch_index_from_name(path.name)
             if branch_index is None:
                 continue
-            parsed = self._read_last_branch_record(path)
+            parsed = self._read_last_branch_disposition(path)
             if parsed is not None:
-                outputs[branch_index] = parsed
-        return outputs
+                records[branch_index] = parsed
+        return records
 
     def present_branch_indexes(self, run_key: str) -> set[int]:
         """Return the set of branch ordinals whose journal FILE exists (any state).
@@ -319,6 +337,42 @@ class EngineOutputStore:
                 result = parsed
         return result
 
+    def _read_last_branch_disposition(
+        self, path: Path
+    ) -> tuple[str, str, dict[str, Any] | None] | None:
+        """Return the last readable ``(step_id, terminal_status, output | None)`` in a
+        branch file (the disposition-bearing branch reader; the orchestrator stays on the
+        2-field `_read_last_branch_record`).
+
+        ``None`` when unreadable / no parseable record (the presence-vs-readability
+        fail-closed gate). Torn trailing line skipped; later record wins. ``output`` may be
+        ``None`` (a terminal-no-output branch). ``terminal_status`` defaults to ``completed``
+        when absent (keeps the parser total)."""
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            return None
+        result: tuple[str, str, dict[str, Any] | None] | None = None
+        for line in text.splitlines():
+            if not line.strip():
+                continue
+            try:
+                loaded = json.loads(line)
+            except (ValueError, TypeError):
+                continue
+            if not isinstance(loaded, dict):
+                continue
+            record = cast("dict[str, object]", loaded)
+            step_id = record.get("step_id")
+            terminal_status = record.get("terminal_status", "completed")
+            output = record.get("output")
+            if not isinstance(step_id, str) or not isinstance(terminal_status, str):
+                continue
+            if output is not None and not isinstance(output, dict):
+                continue
+            result = (step_id, terminal_status, cast("dict[str, Any] | None", output))
+        return result
+
     @staticmethod
     def _parse_branch_record(line: str) -> tuple[str, dict[str, Any]] | None:
         """Parse one branch/orchestrator line into ``(step_id, output)`` or ``None``."""
@@ -350,7 +404,19 @@ class EngineOutputStore:
         pause-journal hardenings caught by out-of-family Codex.)
         """
         journal_dir = path.parent
-        dir_is_new = not journal_dir.exists()
+        # The chain of not-yet-existing ancestor directories `mkdir(parents=True)` will
+        # create (deepest first). A single mkdir for the first fan-out sidecar write can
+        # create BOTH the `{digest}.branches` per-run dir AND the top-level `engine-output`
+        # dir; fsyncing only the leaf loses an intermediate dir's dirent on a host crash
+        # even though `record_branch` returned (out-of-family Codex [P2]). Each new dir's
+        # dirent lives in ITS parent → fsync every new dir's parent below.
+        new_dirs: list[Path] = []
+        probe = journal_dir
+        while not probe.exists():
+            new_dirs.append(probe)
+            if probe.parent == probe:
+                break
+            probe = probe.parent
         journal_dir.mkdir(parents=True, exist_ok=True)
         is_new_file = not path.exists()
         needs_leading_newline = (not is_new_file) and self._last_byte_is_not_newline(path)
@@ -362,8 +428,8 @@ class EngineOutputStore:
             os.fsync(handle.fileno())
         if is_new_file:
             self._fsync_dir(journal_dir)
-        if dir_is_new:
-            self._fsync_dir(journal_dir.parent)
+        for new_dir in new_dirs:
+            self._fsync_dir(new_dir.parent)
 
     @staticmethod
     def _last_byte_is_not_newline(path: Path) -> bool:

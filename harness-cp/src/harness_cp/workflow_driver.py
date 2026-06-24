@@ -712,6 +712,32 @@ def _fanout_replay_store(ctx: DriverContext, manifest_entry: WorkflowManifestEnt
     return getattr(ctx, "engine_output_store", None)
 
 
+def _capture_branch_terminal(
+    ctx: DriverContext,
+    manifest_entry: WorkflowManifestEntry,
+    *,
+    run_idempotency_key: str,
+    branch_index: int,
+    step_id: str,
+    terminal_status: str,
+    output: Mapping[str, Any] | None,
+) -> None:
+    """B-FANOUT-OUTPUT-REPLAY (R-FS-1) — capture a branch's terminal DISPOSITION to the
+    durable store (gated on `_fanout_replay_store`).
+
+    The at-most-once class closer: EVERY branch that reaches a terminal boundary records
+    its disposition — `completed` with output (recover + fold), `completed` with `output is
+    None` (ran-and-errored, effect LANDED → recover as terminal, never re-dispatch, never
+    fold), or `timed_out` (deadline-cut, ambiguous → crash-resume fails closed). An
+    output-only store made every non-clean-success disposition invisible, so a crashed
+    landed effect was silently re-dispatched. No-op unless replay-capable ∧ store-bound."""
+    _store = _fanout_replay_store(ctx, manifest_entry)
+    if _store is not None:
+        _store.record_branch(
+            run_idempotency_key, branch_index, str(step_id), terminal_status, output
+        )
+
+
 def _rematerialize_recovered_branch_writer(
     ctx: DriverContext,
     *,
@@ -1884,6 +1910,19 @@ def _execute_workflow_body(
                         partial_state=None,
                         final_state=None,
                         fail_class=f"fan-out-crash-resume-store-corrupt: {exc}",
+                    ),
+                    0,
+                )
+            except _FanOutStoreTimeoutAmbiguousError as exc:
+                return (
+                    RunResult(
+                        workflow_id=manifest_entry.workflow_id,
+                        run_id=run_id,
+                        status=RunStatus.FAILED,
+                        terminal_step_index=None,
+                        partial_state=None,
+                        final_state=None,
+                        fail_class=f"fan-out-crash-resume-timeout-ambiguous: {exc}",
                     ),
                     0,
                 )
@@ -4154,6 +4193,17 @@ class _FanOutStoreCorruptError(Exception):
     """
 
 
+class _FanOutStoreTimeoutAmbiguousError(Exception):
+    """A recovered fan-out branch reached a TIMED_OUT terminal disposition.
+
+    Irreducibly ambiguous: a deadline-cut in-flight dispatch may or may not have landed
+    its effect (the effect-fence-ambiguous case the linear path needed a dedicated arc to
+    resolve). Crash-resume cannot guess across a fan-out crash, so it FAILS CLOSED; the
+    operator-resolvable timeout-replay is the registered follow-on. `_execute_workflow_body`
+    turns this into a FAILED RunResult with a distinct fail_class.
+    """
+
+
 def _determine_fanout_resume(
     store: Any,
     run_key: str,
@@ -4175,11 +4225,22 @@ def _determine_fanout_resume(
     comes from the STORE (CAPTURE-time identity) so the EXISTING strategy resume
     material-diff guard meaningfully fails closed on a changed body.
     """
-    readable = store.read_branch_outputs(run_key)
-    corrupt = store.present_branch_indexes(run_key) - readable.keys()
+    records = store.read_branch_records(run_key)
+    corrupt = store.present_branch_indexes(run_key) - records.keys()
     if corrupt:
         raise _FanOutStoreCorruptError(
             f"fan-out branch journal(s) present but unreadable: {sorted(corrupt)}"
+        )
+    # Disposition recovery (the at-most-once class closer — an output-only store made every
+    # non-clean-success disposition invisible). A TIMED_OUT branch is irreducibly ambiguous
+    # (deadline-cut in-flight dispatch — may or may not have landed) → FAIL CLOSED. A
+    # COMPLETED branch with NO output (ran-and-errored; its effect LANDED) is recovered as
+    # TERMINAL — not re-dispatched (the seed loop folds only output-bearing branches).
+    timed_out = sorted(bi for bi, (_s, status, _o) in records.items() if status == "timed_out")
+    if timed_out:
+        raise _FanOutStoreTimeoutAmbiguousError(
+            f"fan-out branch(es) {timed_out} timed out (deadline-cut in-flight dispatch — may "
+            f"or may not have landed); crash-resume fails closed (timeout-replay follow-on)"
         )
     branches = tuple(
         FanOutBranchResumeState(
@@ -4188,11 +4249,19 @@ def _determine_fanout_resume(
             terminal_status="completed",
             output=output,
         )
-        for branch_index, (step_id, output) in sorted(readable.items())
+        for branch_index, (step_id, _status, output) in sorted(records.items())
     )
     if topology is TopologyPattern.PARALLELIZATION:
-        # Peer fan-out: every `steps` ordinal is a branch (no orchestrator step[0]); a
-        # crash is recoverable only via completed branches.
+        # Peer fan-out: NO orchestrator `steps[0]`. A captured orchestrator journal here
+        # means the crashed run was an ORCHESTRATOR / HIERARCHICAL run resumed under a
+        # CHANGED topology (the `run_idempotency_key` does NOT bind topology) → fail closed
+        # rather than reinterpret worker records as peer branches or drop a captured
+        # orchestrator effect (out-of-family Codex [P2]).
+        if store.orchestrator_present(run_key):
+            raise _FanOutStoreCorruptError(
+                "fan-out crash-resume topology mismatch: a PARALLELIZATION manifest resumed a "
+                "run whose store holds an orchestrator record — fail closed (changed topology)"
+            )
         if not branches:
             return None  # no completed branch → fresh run, byte-identical default
         return PeerFanOutResumeState(branches=branches, branch_count=len(steps))
@@ -4584,7 +4653,7 @@ def _execute_parallelization(
         _replay_store = _fanout_replay_store(ctx, manifest_entry)
         if _replay_store is not None:
             _replay_store.record_branch(
-                run_idempotency_key, branch_index, str(step.step_id), output
+                run_idempotency_key, branch_index, str(step.step_id), "completed", output
             )
         append_branch_terminal_ledger_entry(
             branch_writer=writer,
@@ -4691,6 +4760,17 @@ def _execute_parallelization(
                     timestamp=fanout_timestamp,
                     procedural_tier_snapshot_ref=snapshot_ref,
                 )
+                # B-FANOUT-OUTPUT-REPLAY — capture the timed-out DISPOSITION (the effect may
+                # have landed; crash-resume FAILS CLOSED on it — never a silent re-dispatch).
+                _capture_branch_terminal(
+                    ctx,
+                    manifest_entry,
+                    run_idempotency_key=run_idempotency_key,
+                    branch_index=branch_index,
+                    step_id=step.step_id,
+                    terminal_status="timed_out",
+                    output=None,
+                )
                 append_branch_terminal_ledger_entry(
                     branch_writer=writer,
                     branch_context=child,
@@ -4714,6 +4794,19 @@ def _execute_parallelization(
                     local_step_index=0,
                     timestamp=fanout_timestamp,
                     procedural_tier_snapshot_ref=snapshot_ref,
+                )
+                # B-FANOUT-OUTPUT-REPLAY — a ran-and-errored branch's effect may have LANDED
+                # (dispatch-boundary `completed`, no output) → capture the disposition so
+                # crash-resume recovers it as TERMINAL (no re-dispatch, no fold), never
+                # re-firing a landed effect (the disposition class closer).
+                _capture_branch_terminal(
+                    ctx,
+                    manifest_entry,
+                    run_idempotency_key=run_idempotency_key,
+                    branch_index=branch_index,
+                    step_id=step.step_id,
+                    terminal_status="completed",
+                    output=None,
                 )
                 append_branch_terminal_ledger_entry(
                     branch_writer=writer,
@@ -4809,18 +4902,34 @@ def _execute_parallelization(
             # so the salvaged aggregate keeps it (a ran-and-errored in-flight,
             # `exception() is not None`, has no output).
             if terminal == "completed" and inflight.exception() is None:
-                # B-FANOUT-OUTPUT-REPLAY — a sibling that LANDED under the shield is a
-                # completed branch (its effect fired); capture it to the durable store
-                # too (out-of-family Codex [P1]) — else a crash before the barrier drain
-                # leaves it unrecorded and crash-resume RE-DISPATCHES it (double-fire). The
-                # buffered terminal append above is not durable until the drain, so this
-                # still satisfies RESERVE-before-COMMIT (store fsynced before the drain).
-                _shielded_store = _fanout_replay_store(ctx, manifest_entry)
-                if _shielded_store is not None:
-                    _shielded_store.record_branch(
-                        run_idempotency_key, branch_index, str(step.step_id), inflight.result()
-                    )
+                # B-FANOUT-OUTPUT-REPLAY — a sibling that LANDED under the shield (its effect
+                # fired) is captured WITH output (out-of-family Codex [P1]) — else crash-resume
+                # RE-DISPATCHES it (double-fire). The buffered terminal append above is not
+                # durable until the drain, so this still satisfies RESERVE-before-COMMIT.
+                _capture_branch_terminal(
+                    ctx,
+                    manifest_entry,
+                    run_idempotency_key=run_idempotency_key,
+                    branch_index=branch_index,
+                    step_id=step.step_id,
+                    terminal_status="completed",
+                    output=inflight.result(),
+                )
                 collected[branch_index] = (str(step.step_id), inflight.result())
+            else:
+                # A timed-out (deadline-cut, ambiguous) OR ran-and-errored (effect LANDED, no
+                # output) in-flight sibling — capture the DISPOSITION with no output so
+                # crash-resume recovers-as-terminal (`completed`) or FAILS CLOSED (`timed_out`),
+                # never silently re-dispatching a landed effect (the disposition class closer).
+                _capture_branch_terminal(
+                    ctx,
+                    manifest_entry,
+                    run_idempotency_key=run_idempotency_key,
+                    branch_index=branch_index,
+                    step_id=step.step_id,
+                    terminal_status=terminal,
+                    output=None,
+                )
             raise  # honor the cancellation (the barrier cancelled this branch)
         except Exception:
             # THIS branch's own dispatch ERRORED — the failure that triggers the
@@ -4828,6 +4937,17 @@ def _execute_parallelization(
             # + a `completed` terminal (dispatch-boundary, not step-outcome — the
             # carrier forecloses `failed`). Re-raise so the TaskGroup cascade-
             # cancels the siblings.
+            # B-FANOUT-OUTPUT-REPLAY — capture the `completed` disposition (effect may have
+            # LANDED, no output) so crash-resume recovers it as terminal, never re-firing it.
+            _capture_branch_terminal(
+                ctx,
+                manifest_entry,
+                run_idempotency_key=run_idempotency_key,
+                branch_index=branch_index,
+                step_id=step.step_id,
+                terminal_status="completed",
+                output=None,
+            )
             append_branch_step_ledger_entry(
                 branch_writer=writer,
                 branch_context=child,
@@ -6351,7 +6471,7 @@ def _execute_orchestrator_workers(
         _replay_store = _fanout_replay_store(ctx, manifest_entry)
         if _replay_store is not None:
             _replay_store.record_branch(
-                run_idempotency_key, branch_index, str(step.step_id), output
+                run_idempotency_key, branch_index, str(step.step_id), "completed", output
             )
         append_branch_terminal_ledger_entry(
             branch_writer=writer,
@@ -6514,6 +6634,17 @@ def _execute_orchestrator_workers(
                     timestamp=fanout_timestamp,
                     procedural_tier_snapshot_ref=snapshot_ref,
                 )
+                # B-FANOUT-OUTPUT-REPLAY — capture the timed-out DISPOSITION (the effect may
+                # have landed; crash-resume FAILS CLOSED on it — never a silent re-dispatch).
+                _capture_branch_terminal(
+                    ctx,
+                    manifest_entry,
+                    run_idempotency_key=run_idempotency_key,
+                    branch_index=branch_index,
+                    step_id=step.step_id,
+                    terminal_status="timed_out",
+                    output=None,
+                )
                 append_branch_terminal_ledger_entry(
                     branch_writer=writer,
                     branch_context=child,
@@ -6546,6 +6677,19 @@ def _execute_orchestrator_workers(
                     local_step_index=0,
                     timestamp=fanout_timestamp,
                     procedural_tier_snapshot_ref=snapshot_ref,
+                )
+                # B-FANOUT-OUTPUT-REPLAY — a ran-and-errored branch's effect may have LANDED
+                # (dispatch-boundary `completed`, no output) → capture the disposition so
+                # crash-resume recovers it as TERMINAL (no re-dispatch, no fold), never
+                # re-firing a landed effect (the disposition class closer).
+                _capture_branch_terminal(
+                    ctx,
+                    manifest_entry,
+                    run_idempotency_key=run_idempotency_key,
+                    branch_index=branch_index,
+                    step_id=step.step_id,
+                    terminal_status="completed",
+                    output=None,
                 )
                 append_branch_terminal_ledger_entry(
                     branch_writer=writer,
@@ -6668,18 +6812,34 @@ def _execute_orchestrator_workers(
             # branch + drops its output, corrupting the resumed aggregate). A
             # ran-and-errored in-flight (`exception() is not None`) has no output.
             if terminal == "completed" and inflight.exception() is None:
-                # B-FANOUT-OUTPUT-REPLAY — a sibling that LANDED under the shield is a
-                # completed branch (its effect fired); capture it to the durable store
-                # too (out-of-family Codex [P1]) — else a crash before the barrier drain
-                # leaves it unrecorded and crash-resume RE-DISPATCHES it (double-fire). The
-                # buffered terminal append above is not durable until the drain, so this
-                # still satisfies RESERVE-before-COMMIT (store fsynced before the drain).
-                _shielded_store = _fanout_replay_store(ctx, manifest_entry)
-                if _shielded_store is not None:
-                    _shielded_store.record_branch(
-                        run_idempotency_key, branch_index, str(step.step_id), inflight.result()
-                    )
+                # B-FANOUT-OUTPUT-REPLAY — a sibling that LANDED under the shield (its effect
+                # fired) is captured WITH output (out-of-family Codex [P1]) — else crash-resume
+                # RE-DISPATCHES it (double-fire). The buffered terminal append above is not
+                # durable until the drain, so this still satisfies RESERVE-before-COMMIT.
+                _capture_branch_terminal(
+                    ctx,
+                    manifest_entry,
+                    run_idempotency_key=run_idempotency_key,
+                    branch_index=branch_index,
+                    step_id=step.step_id,
+                    terminal_status="completed",
+                    output=inflight.result(),
+                )
                 collected[branch_index] = (str(step.step_id), inflight.result())
+            else:
+                # A timed-out (deadline-cut, ambiguous) OR ran-and-errored (effect LANDED, no
+                # output) in-flight sibling — capture the DISPOSITION with no output so
+                # crash-resume recovers-as-terminal (`completed`) or FAILS CLOSED (`timed_out`),
+                # never silently re-dispatching a landed effect (the disposition class closer).
+                _capture_branch_terminal(
+                    ctx,
+                    manifest_entry,
+                    run_idempotency_key=run_idempotency_key,
+                    branch_index=branch_index,
+                    step_id=step.step_id,
+                    terminal_status=terminal,
+                    output=None,
+                )
             raise  # honor the cancellation (the barrier cancelled this branch)
         except SubAgentChildPausedError as _paused:
             # B-HIERARCHICAL-PAUSE — this worker's recursive child sub-workflow PAUSED

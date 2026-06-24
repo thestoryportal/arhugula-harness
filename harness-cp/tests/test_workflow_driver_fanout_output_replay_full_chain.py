@@ -75,22 +75,33 @@ _PROCEED_TIER = PersonaTier.SOLO_DEVELOPER
 # ---------------------------------------------------------------------------
 class _InMemoryBranchStore:
     def __init__(self) -> None:
-        self._branches: dict[str, dict[int, tuple[str, dict[str, Any]]]] = {}
+        self._branches: dict[str, dict[int, tuple[str, str, dict[str, Any] | None]]] = {}
         self._orchestrators: dict[str, tuple[str, dict[str, Any]]] = {}
         # branch indexes marked present-but-unreadable (corruption / tamper) per run_key.
         self._corrupt: dict[str, set[int]] = {}
 
     # -- producer (net-add #1) -------------------------------------------------
     def record_branch(
-        self, run_key: str, branch_index: int, step_id: str, output: dict[str, Any]
+        self,
+        run_key: str,
+        branch_index: int,
+        step_id: str,
+        terminal_status: str,
+        output: dict[str, Any] | None,
     ) -> None:
-        self._branches.setdefault(run_key, {})[branch_index] = (str(step_id), dict(output))
+        self._branches.setdefault(run_key, {})[branch_index] = (
+            str(step_id),
+            str(terminal_status),
+            dict(output) if output is not None else None,
+        )
 
     def record_orchestrator(self, run_key: str, step_id: str, output: dict[str, Any]) -> None:
         self._orchestrators[run_key] = (str(step_id), dict(output))
 
     # -- consumer (net-add #2/#3) ---------------------------------------------
-    def read_branch_outputs(self, run_key: str) -> dict[int, tuple[str, dict[str, Any]]]:
+    def read_branch_records(
+        self, run_key: str
+    ) -> dict[int, tuple[str, str, dict[str, Any] | None]]:
         return dict(self._branches.get(run_key, {}))
 
     def present_branch_indexes(self, run_key: str) -> set[int]:
@@ -102,9 +113,14 @@ class _InMemoryBranchStore:
     def orchestrator_present(self, run_key: str) -> bool:
         return run_key in self._orchestrators
 
-    # -- test helper: mark a branch present-but-unreadable ---------------------
+    # -- test helper: mark a branch present-but-unreadable (drop the readable record) --
     def mark_corrupt(self, run_key: str, branch_index: int) -> None:
+        self._branches.get(run_key, {}).pop(branch_index, None)
         self._corrupt.setdefault(run_key, set()).add(branch_index)
+
+    # -- test helper: simulate a branch IN-FLIGHT at the crash (absent from the store) --
+    def forget_branch(self, run_key: str, branch_index: int) -> None:
+        self._branches.get(run_key, {}).pop(branch_index, None)
 
     # -- test helper: the single run_key recorded this run (the driver computes
     # `sha256(run_id, workflow_id, entry_version)` internally; inspecting by the
@@ -249,29 +265,28 @@ def _run(
 
 
 # ---------------------------------------------------------------------------
-# PARALLELIZATION — partial crash → resume: completed branches replay (fire once),
-# only the incomplete branch re-dispatches; the aggregate matches a no-crash run.
+# PARALLELIZATION — crash → resume: completed branches replay (fire once); a branch
+# IN-FLIGHT at the crash (absent from the store) re-dispatches; aggregate matches no-crash.
 # ---------------------------------------------------------------------------
-def test_parallelization_crash_resume_replays_completed_redispatches_incomplete() -> None:
+def test_parallelization_crash_resume_replays_completed_redispatches_absent() -> None:
     store = _InMemoryBranchStore()
     steps = [_step(f"branch-{i}", i) for i in range(3)]
 
-    # Run 1 (the crash): branch 1 crashes after 0 + 2 complete → 0, 2 captured to the
-    # durable store; PARTIAL (cascade_policy=proceed). The ledger from this phase is
-    # discarded (the crash loses the binary ledger).
-    crash = _CountingDispatcher(n=3, fail_index=1)
-    r1 = _run(
+    # Run 1: all 3 branches complete + captured. Then `forget` branch 1 — modelling a
+    # branch that was still IN-FLIGHT when the host crashed (no terminal record landed),
+    # leaving 0 + 2 durable and 1 absent (the only re-dispatchable disposition).
+    _run(
         workflow_id="wf-par-crash",
         topology=TopologyPattern.PARALLELIZATION,
         steps=steps,
-        dispatcher=crash,
+        dispatcher=_CountingDispatcher(n=3),
         store=store,
     )
-    assert r1.status is RunStatus.PARTIAL
-    assert store.read_branch_outputs(store.sole_run_key()).keys() == {0, 2}
+    store.forget_branch(store.sole_run_key(), 1)
+    assert store.read_branch_records(store.sole_run_key()).keys() == {0, 2}
 
     # Run 2 (resume): a FRESH ctx + FRESH (empty) ledger sharing the SAME durable store.
-    # 0 + 2 are recovered (NOT re-dispatched); only branch 1 re-dispatches.
+    # 0 + 2 are recovered (NOT re-dispatched); only the absent branch 1 re-dispatches.
     resume = _CountingDispatcher(n=3)
     r2 = _run(
         workflow_id="wf-par-crash",
@@ -281,8 +296,8 @@ def test_parallelization_crash_resume_replays_completed_redispatches_incomplete(
         store=store,
     )
     assert r2.status is RunStatus.SUCCESS
-    # Fire-once: across crash+resume the completed branches dispatched exactly once
-    # (in Run 1). On resume ONLY the incomplete branch re-fires.
+    # Fire-once: the completed branches dispatched exactly once (in Run 1). On resume ONLY
+    # the absent (in-flight-at-crash) branch re-fires.
     assert resume.dispatched == ["branch-1"]
     # The aggregate is identical to a clean no-crash run of the same workflow.
     baseline = _run(
@@ -295,6 +310,44 @@ def test_parallelization_crash_resume_replays_completed_redispatches_incomplete(
     assert r2.final_state is not None and baseline.final_state is not None
     assert r2.final_state["branch_outputs"] == baseline.final_state["branch_outputs"]
     assert r2.final_state["aggregate"] == baseline.final_state["aggregate"]
+
+
+# ---------------------------------------------------------------------------
+# PARALLELIZATION — a ran-and-errored branch (effect LANDED, no output) is recovered as
+# TERMINAL on crash-resume: NOT re-dispatched (at-most-once), NOT folded (honest PARTIAL).
+# ---------------------------------------------------------------------------
+def test_parallelization_crash_resume_errored_branch_recovered_as_terminal() -> None:
+    store = _InMemoryBranchStore()
+    steps = [_step(f"branch-{i}", i) for i in range(3)]
+
+    # Run 1: branch 1 ran-and-errored (effect may have landed) → captured `completed`/None;
+    # 0 + 2 clean. The disposition store records ALL three terminal dispositions.
+    _run(
+        workflow_id="wf-par-errored",
+        topology=TopologyPattern.PARALLELIZATION,
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3, fail_index=1),
+        store=store,
+    )
+    records = store.read_branch_records(store.sole_run_key())
+    assert records.keys() == {0, 1, 2}
+    assert records[1] == ("branch-1", "completed", None)  # errored: terminal, no output
+
+    # Run 2 (resume): branch 1 is recovered AS TERMINAL — never re-dispatched (its effect
+    # may have landed) and never folded (no output) → the {0, 2} aggregate. The at-most-once
+    # core: the errored branch's possibly-landed effect is NOT re-fired.
+    resume = _CountingDispatcher(n=3)
+    r2 = _run(
+        workflow_id="wf-par-errored",
+        topology=TopologyPattern.PARALLELIZATION,
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+    )
+    assert resume.dispatched == []  # at-most-once: the errored branch is NOT re-fired
+    _aggregate_state = r2.final_state if r2.final_state is not None else r2.partial_state
+    assert _aggregate_state is not None
+    assert set(_aggregate_state["branch_outputs"]) == {"branch-0", "branch-2"}
 
 
 def _completed_branch_indexes(ledger: _RecordingLedger) -> set[int]:
@@ -427,42 +480,28 @@ def test_orchestrator_crash_resume_rematerializes_worker_ledger_entries() -> Non
     assert _completed_branch_indexes(ledger) == {0, 1}
 
 
-class _WorkersFailDispatcher:
-    """Succeeds for the orchestrator (`orch`), raises for every worker (`w-*`) — the
-    crash window where the orchestrator captured but ZERO workers completed."""
-
-    def __init__(self) -> None:
-        self.dispatched: list[str] = []
-
-    def dispatch(
-        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
-    ) -> dict[str, Any]:
-        self.dispatched.append(str(step.step_id))
-        if str(step.step_id).startswith("w"):
-            raise RuntimeError(f"simulated worker crash at {step.step_id}")
-        return {"plan": "delegate"}
-
-
 def test_orchestrator_zero_workers_crash_resume_recovers_orchestrator_only() -> None:
-    """A crash after the orchestrator captured but BEFORE any worker completed (Codex
-    [P1]): on resume the orchestrator is RECOVERED (NOT re-dispatched — no double-fire),
-    and every worker re-dispatches fresh. Exercises the empty-`branches=()` resume state,
-    a NEW shape pause never produced (advisor)."""
+    """A crash after the orchestrator captured but with EVERY worker still in-flight /
+    absent (Codex [P1]): on resume the orchestrator is RECOVERED (NOT re-dispatched — no
+    double-fire), and every worker re-dispatches fresh. Exercises the empty-`branches=()`
+    resume state, a NEW shape pause never produced (advisor)."""
     store = _InMemoryBranchStore()
     steps = [_step("orch", 0), _step("w-0", 0), _step("w-1", 1)]
 
-    # Run 1: orchestrator succeeds + is captured; both workers crash → PARTIAL, no worker
-    # captured. (The orchestrator effect already fired + was recorded.)
-    r1 = _run(
+    # Run 1: orchestrator + both workers complete + captured. Then `forget` both workers —
+    # modelling a crash where the orchestrator landed + was recorded but the workers were
+    # still in-flight (no terminal record), leaving the store orchestrator-only.
+    _run(
         workflow_id="wf-ow-orch-only",
         topology=TopologyPattern.ORCHESTRATOR_WORKERS,
         steps=steps,
-        dispatcher=_WorkersFailDispatcher(),
+        dispatcher=_CountingDispatcher(n=2),
         store=store,
     )
-    assert r1.status is RunStatus.PARTIAL
+    store.forget_branch(store.sole_run_key(), 0)
+    store.forget_branch(store.sole_run_key(), 1)
     assert store.orchestrator_present(store.sole_run_key()) is True
-    assert store.read_branch_outputs(store.sole_run_key()) == {}  # zero workers captured
+    assert store.read_branch_records(store.sole_run_key()) == {}  # zero workers captured
 
     # Run 2 (resume): the orchestrator is recovered (NOT re-dispatched); both workers
     # re-dispatch fresh (none were captured).
@@ -634,7 +673,7 @@ def test_synthesis_bearing_crash_resume_fails_closed() -> None:
         store=store,
     )
     assert r1.status is RunStatus.SUCCESS
-    assert store.read_branch_outputs(store.sole_run_key()).keys() == {0, 1}
+    assert store.read_branch_records(store.sole_run_key()).keys() == {0, 1}
 
     # Run 2 (crash-resume): the store has the completed branches, so net-add #3 builds a
     # crash resume state — and because a synthesis step is present, the run FAILS CLOSED
