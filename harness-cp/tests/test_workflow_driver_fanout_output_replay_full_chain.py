@@ -1116,10 +1116,15 @@ def test_crash_resume_empty_manifest_fails_closed_material_diff() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Cascade-policy scope (PR1, advisor): crash-resume recovery is correct ONLY for
-# CascadePolicy.PROCEED. PAUSE + CASCADE_CANCEL carry committed on-failure semantics a
-# cascade-policy-BLIND recovery cannot honor → FAIL CLOSED. Cascade-policy-aware crash-resume
-# is the registered back-flow follow-on (.harness/class_1_fork_fanout_crash_resume_cascade_policy.md).
+# Cascade-policy-AWARE crash-resume (B-FANOUT-CRASH-RESUME-CASCADE-POLICY). The cascade_policy
+# governs the run's ON-A-BRANCH-FAILURE semantics; a CRASH is a different event, so the policy
+# only diverges from "continue" when a branch actually FAILED before the crash (captured
+# `completed`-no-output STRICTLY BEFORE the cancel `raise`). Detection = `_crash_degraded` (a
+# recovered branch with output is None). No errored branch → recover + continue (all policies,
+# lifting the PR1 fail-closed for the common host-crash case). An errored branch → the policy's
+# failure semantics: PROCEED → PARTIAL; CASCADE_CANCEL → reproduce FAILED (no re-dispatch of the
+# cancelled siblings); PAUSE → fail closed ambiguous (the lost pause snapshot can't be honored
+# from a crash-interrupted store — the registered B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT sub-arc).
 # ---------------------------------------------------------------------------
 def _run_persona(
     *,
@@ -1128,12 +1133,13 @@ def _run_persona(
     dispatcher: StepDispatcher,
     store: Any,
     persona_tier: PersonaTier,
+    topology: TopologyPattern = TopologyPattern.PARALLELIZATION,
 ) -> Any:
     ctx = cast(DriverContext, _Ctx(ledger=_RecordingLedger(), store=store))
     return execute_workflow(
         _manifest(
             workflow_id=workflow_id,
-            topology=TopologyPattern.PARALLELIZATION,
+            topology=topology,
             persona_tier=persona_tier,
         ),
         steps,
@@ -1144,27 +1150,226 @@ def _run_persona(
     )
 
 
-def test_crash_resume_cascade_cancel_fails_closed() -> None:
+def test_crash_resume_cascade_cancel_clean_crash_recovers() -> None:
+    """Lift the PR1 fail-closed for the COMMON case — a clean host-crash mid-fan-out under
+    CASCADE_CANCEL with NO branch failure. Run 1 all-complete, then one branch is forgotten
+    (in-flight at the crash). On resume the recovered branches replay and only the absent one
+    re-dispatches → SUCCESS (the policy never fired; nothing to fail closed on)."""
     store = _InMemoryBranchStore()
     steps = [_step(f"branch-{i}", i) for i in range(3)]
-    # Run 1 (MULTI_TENANT_COMPLIANCE = cascade-cancel): all complete + captured.
     _run_persona(
-        workflow_id="wf-cc",
+        workflow_id="wf-cc-clean",
         steps=steps,
         dispatcher=_CountingDispatcher(n=3),
         store=store,
         persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
     )
-    # Run 2 (resume): the crash-resume gate sees CASCADE_CANCEL → FAILED (never recovers /
-    # re-dispatches — a cascade-policy-blind recovery would corrupt the cancel semantic).
+    store.forget_branch(store.sole_run_key(), 1)  # branch 1 in-flight at the crash (absent)
+
     resume = _CountingDispatcher(n=3)
     r2 = _run_persona(
-        workflow_id="wf-cc",
+        workflow_id="wf-cc-clean",
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+    )
+    assert r2.status is RunStatus.SUCCESS
+    assert resume.dispatched == ["branch-1"]  # only the absent branch re-dispatched
+
+
+def test_crash_resume_cascade_cancel_errored_branch_reproduces_failed() -> None:
+    """An errored branch under CASCADE_CANCEL (the cascade trigger fired before the crash) →
+    reproduce FAILED on resume, NEVER re-dispatching (the not-yet-dispatched siblings stay
+    cancelled — re-dispatching would run effects the compliance tier deliberately stopped)."""
+    store = _InMemoryBranchStore()
+    steps = [_step(f"branch-{i}", i) for i in range(3)]
+    _run_persona(
+        workflow_id="wf-cc-fail",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3, fail_index=1),  # branch 1 errors → trigger
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+    )
+    # branch 1 is captured `completed`-no-output (the trigger). Forget branch 2 to model a
+    # genuinely-cancelled (not-yet-dispatched, absent) sibling: it must NOT be re-dispatched.
+    store.forget_branch(store.sole_run_key(), 2)
+
+    resume = _CountingDispatcher(n=3)
+    r2 = _run_persona(
+        workflow_id="wf-cc-fail",
         steps=steps,
         dispatcher=resume,
         store=store,
         persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
     )
     assert r2.status is RunStatus.FAILED
-    assert r2.fail_class is not None and "cascade-policy-unsupported" in r2.fail_class
-    assert resume.dispatched == []  # fail-closed before any recovery / re-dispatch
+    assert r2.fail_class is not None and "fan-out-crash-resume-cascade-cancel" in r2.fail_class
+    assert resume.dispatched == []  # FAILED reproduced; NO branch (incl. the absent one) re-run
+
+
+def test_crash_resume_pause_clean_crash_recovers() -> None:
+    """The clean-crash lift also applies under PAUSE (TEAM_BINDING): no branch failed → no
+    pause was triggered → recover + continue → SUCCESS."""
+    store = _InMemoryBranchStore()
+    steps = [_step(f"branch-{i}", i) for i in range(3)]
+    _run_persona(
+        workflow_id="wf-pause-clean",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3),
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+    )
+    store.forget_branch(store.sole_run_key(), 0)
+
+    resume = _CountingDispatcher(n=3)
+    r2 = _run_persona(
+        workflow_id="wf-pause-clean",
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+    )
+    assert r2.status is RunStatus.SUCCESS
+    assert resume.dispatched == ["branch-0"]
+
+
+def test_crash_resume_pause_errored_branch_fails_closed_ambiguous() -> None:
+    """An errored branch under PAUSE (the pause trigger fired, but the durable PauseSnapshot
+    was lost in the crash) → fail closed (`pause-trigger-ambiguous`): a reconstruct can't honor
+    §25.15.1 'finish in-flight, then pause' from a crash-interrupted store. No re-dispatch."""
+    store = _InMemoryBranchStore()
+    steps = [_step(f"branch-{i}", i) for i in range(3)]
+    _run_persona(
+        workflow_id="wf-pause-fail",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3, fail_index=1),
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+    )
+
+    resume = _CountingDispatcher(n=3)
+    r2 = _run_persona(
+        workflow_id="wf-pause-fail",
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+    )
+    assert r2.status is RunStatus.FAILED
+    assert (
+        r2.fail_class is not None
+        and "fan-out-crash-resume-pause-trigger-ambiguous" in r2.fail_class
+    )
+    assert resume.dispatched == []
+
+
+def test_crash_resume_cascade_cancel_ordering_dichotomy() -> None:
+    """Advisor — pin the ORDERING that makes the lift safe. The failing branch is captured
+    STRICTLY BEFORE the `raise` that triggers the cancel, so there is no third case:
+      • crash AFTER the capture → the errored branch is in the store → FAILED.
+      • crash BEFORE the capture → the errored branch is ABSENT (and, since no `raise`
+        happened, no cancel happened → siblings were never cancelled) → recover + continue;
+        re-dispatching the failing branch is a first-dispatch, no compliance violation."""
+    steps = [_step(f"branch-{i}", i) for i in range(3)]
+
+    # Crash AFTER capture: branch 1 errored + captured → FAILED.
+    store_after = _InMemoryBranchStore()
+    _run_persona(
+        workflow_id="wf-order-after",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3, fail_index=1),
+        store=store_after,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+    )
+    r_after = _run_persona(
+        workflow_id="wf-order-after",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3),
+        store=store_after,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+    )
+    assert r_after.status is RunStatus.FAILED
+    assert "fan-out-crash-resume-cascade-cancel" in (r_after.fail_class or "")
+
+    # Crash BEFORE capture: the errored branch's record never landed → forget it → no errored
+    # branch in the store → recover + continue (the safe first-dispatch).
+    store_before = _InMemoryBranchStore()
+    _run_persona(
+        workflow_id="wf-order-before",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3, fail_index=1),
+        store=store_before,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+    )
+    store_before.forget_branch(store_before.sole_run_key(), 1)  # the failing branch uncaptured
+    resume = _CountingDispatcher(n=3)
+    r_before = _run_persona(
+        workflow_id="wf-order-before",
+        steps=steps,
+        dispatcher=resume,
+        store=store_before,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+    )
+    assert r_before.status is RunStatus.SUCCESS
+    assert resume.dispatched == ["branch-1"]  # first-dispatch of the never-cancelled branch
+
+
+def test_crash_resume_cascade_cancel_orchestrator_workers_errored() -> None:
+    """Advisor — VERIFY the orchestrator leg, don't assume symmetry. The cascade trigger under
+    ORCHESTRATOR_WORKERS is always a WORKER failure (an orchestrator failure returns FAILED
+    directly before any worker — `workflow_driver.py:6548` 'cascade_policy governs WORKER
+    failure'). So detection over `.branches` (the workers) covers it: an errored worker under
+    CASCADE_CANCEL → FAILED on resume, no re-dispatch (orchestrator recovered, not the trigger)."""
+    store = _InMemoryBranchStore()
+    steps = [_step("orch", 0), _step("w-0", 0), _step("w-1", 1)]
+    _run_persona(
+        workflow_id="wf-ow-cc-fail",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=2, fail_index=1),  # worker w-1 errors → trigger
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+    )
+    assert store.orchestrator_present(store.sole_run_key())
+
+    resume = _CountingDispatcher(n=2)
+    r2 = _run_persona(
+        workflow_id="wf-ow-cc-fail",
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+    )
+    assert r2.status is RunStatus.FAILED
+    assert "fan-out-crash-resume-cascade-cancel" in (r2.fail_class or "")
+    assert resume.dispatched == []  # FAILED reproduced; orchestrator + workers never re-run
+
+
+def test_crash_resume_cascade_cancel_orchestrator_workers_clean_recovers() -> None:
+    """ORCHESTRATOR_WORKERS clean crash under CASCADE_CANCEL — the orchestrator + completed
+    workers recover, only the in-flight-at-crash worker re-dispatches → SUCCESS (the lift)."""
+    store = _InMemoryBranchStore()
+    steps = [_step("orch", 0), _step("w-0", 0), _step("w-1", 1)]
+    _run_persona(
+        workflow_id="wf-ow-cc-clean",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=2),
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+    )
+    store.forget_branch(store.sole_run_key(), 1)  # worker w-1 in-flight at the crash
+
+    resume = _CountingDispatcher(n=2)
+    r2 = _run_persona(
+        workflow_id="wf-ow-cc-clean",
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+    )
+    assert r2.status is RunStatus.SUCCESS
+    assert resume.dispatched == ["w-1"]  # orchestrator recovered; only the absent worker re-run

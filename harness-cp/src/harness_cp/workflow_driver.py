@@ -1926,21 +1926,49 @@ def _execute_workflow_body(
                     ),
                     0,
                 )
-            # PR1 SCOPE (advisor + out-of-family Codex [P1]): crash-resume recovery is
-            # witnessed + correct ONLY for `CascadePolicy.PROCEED`. PAUSE + CASCADE_CANCEL
-            # carry committed on-failure semantics (pause-the-fan-out / cancel-siblings →
-            # FAILED) that "reuse the pause-resume path verbatim" — the ratified mechanism —
-            # does NOT honor on a crash-resume: a cascade-policy-BLIND recovery would re-run
-            # deliberately-cancelled siblings and report PARTIAL where CASCADE_CANCEL's
-            # contract says FAILED (a wrong, less-safe result on the compliance tier). FAIL
-            # CLOSED for them. Cascade-policy-aware crash-resume is the registered back-flow
-            # follow-on (`.harness/class_1_fork_fanout_crash_resume_cascade_policy.md`).
+            # B-FANOUT-CRASH-RESUME-CASCADE-POLICY (R-FS-1) — cascade-policy-AWARE crash-resume.
+            # The cascade_policy (§25.15.1) governs the run's ON-A-BRANCH-FAILURE semantics:
+            # PROCEED → harvest survivors → PARTIAL; PAUSE → halt → PAUSED; CASCADE_CANCEL →
+            # cancel not-yet-dispatched siblings → FAILED. A CRASH is a DIFFERENT event (the
+            # host died), so the policy only DIVERGES from "continue" when a branch actually
+            # FAILED before the crash.
+            #
+            # DETECTION (advisor-verified): a branch failure is captured `completed`-no-output
+            # (output is None) to the crash-resume store, STRICTLY BEFORE the `raise` that
+            # triggers the TaskGroup sibling-cancel (`_cancel_branch` except-Exception at
+            # ~5233, before the `raise` at ~5263; the worker analogue mirrors it). The
+            # dichotomy is total — there is NO "cancel fired but trigger uncaptured" window:
+            #   • crash BEFORE the capture ⟹ no `raise` yet ⟹ no cancel ⟹ siblings were
+            #     never cancelled ⟹ re-dispatching them on resume is a FIRST dispatch, not a
+            #     re-run (no compliance violation; identical to PROCEED's accepted window); and
+            #     no errored branch is in the store ⟹ `_crash_degraded` False ⟹ continue.
+            #   • crash AFTER the capture ⟹ the errored branch IS in the store ⟹
+            #     `_crash_degraded` True ⟹ the policy's failure semantics apply.
+            # So `_crash_degraded` (any recovered branch `output is None` — `_determine_fanout_
+            # resume` already RAISES on `timed_out`, so in the recovered set `output is None`
+            # ⟺ ran-and-errored) faithfully detects "a branch failure fired the policy". An
+            # errored ORCHESTRATOR is NOT a cascade trigger (it returns FAILED directly before
+            # any worker; `cascade_policy governs WORKER failure` — `workflow_driver.py:6548`),
+            # so detection over `.branches` (the workers/peers) is complete.
             if _crash_fan_out_resume is not None:
                 _crash_cascade_policy = d4_tunable(
                     lookup_cell(manifest_entry.workload_class, manifest_entry.engine_class),
                     manifest_entry.persona_tier,
                 ).cascade_policy
-                if _crash_cascade_policy is not CascadePolicy.PROCEED:
+                _crash_degraded = any(b.output is None for b in _crash_fan_out_resume.branches)
+                if _crash_cascade_policy is CascadePolicy.CASCADE_CANCEL and _crash_degraded:
+                    # A branch FAILED → cascade-cancel fired → reproduce FAILED (§25.15.1 +
+                    # obligation 6). Do NOT re-dispatch the not-yet-dispatched (cancelled)
+                    # siblings — they were never dispatched, so re-dispatching would RUN their
+                    # effects (LLM calls / gated tool steps) the MULTI_TENANT_COMPLIANCE tier
+                    # deliberately stopped (obligation 7: MUST NOT re-dispatch a `cancelled`
+                    # branch; advisor — "not-yet-dispatched" ≠ effect-free). Store-only audit
+                    # for the recovered branches (NOT ledger re-materialization, the deliberate
+                    # choice): the disposition keystone IS the durable crash-recovery audit
+                    # substrate (every recovered branch's terminal disposition + output), and a
+                    # FAILED run produces no aggregate a consumer attests — so the §25.15.2
+                    # obl. 3 "no silent landed effect" guarantee is met by the store, without a
+                    # FAILED-only strategy re-materialization mode.
                     return (
                         RunResult(
                             workflow_id=manifest_entry.workflow_id,
@@ -1950,15 +1978,50 @@ def _execute_workflow_body(
                             partial_state=None,
                             final_state=None,
                             fail_class=(
-                                "fan-out-crash-resume-cascade-policy-unsupported: crash-resume "
-                                "recovery is PR1-scoped to CascadePolicy.PROCEED; "
-                                f"{_crash_cascade_policy.value} (pause / cascade-cancel) has "
-                                "committed on-failure semantics a cascade-policy-blind recovery "
-                                "cannot honor — fail closed (registered follow-on)"
+                                "fan-out-crash-resume-cascade-cancel: a branch failed before "
+                                "the crash under CascadePolicy.CASCADE_CANCEL — reproduce "
+                                "RunStatus.FAILED (§25.15.1); the not-yet-dispatched siblings "
+                                "stay cancelled (never re-dispatched — they would run effects "
+                                "the compliance tier stopped)"
                             ),
                         ),
                         0,
                     )
+                if _crash_cascade_policy is CascadePolicy.PAUSE and _crash_degraded:
+                    # A branch FAILED → `pause` was triggered, but the durable PauseSnapshot
+                    # write was LOST in the crash (else this would be the pause-resume path,
+                    # `resume_snapshot is not None`). A naive reconstruct is SPEC-FORECLOSED:
+                    # §25.15.1 PAUSE is "allowed to finish in-flight, then pause", but a
+                    # crash-INTERRUPTED store does NOT hold the finished-in-flight branches
+                    # (the crash cut them mid-flight), so a reconstructed snapshot would resume
+                    # interrupted-not-finished branches — violating the cleared pause semantics
+                    # (probe-resolved, advisor). Fail CLOSED → the operator resumes via HITL.
+                    # A CORRECT reconstruct (that honors finish-in-flight) is the registered
+                    # B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT sub-arc.
+                    return (
+                        RunResult(
+                            workflow_id=manifest_entry.workflow_id,
+                            run_id=run_id,
+                            status=RunStatus.FAILED,
+                            terminal_step_index=None,
+                            partial_state=None,
+                            final_state=None,
+                            fail_class=(
+                                "fan-out-crash-resume-pause-trigger-ambiguous: a branch failed "
+                                "before the crash under CascadePolicy.PAUSE, but the durable "
+                                "pause snapshot was lost — a reconstruct cannot honor §25.15.1 "
+                                "'finish in-flight, then pause' from a crash-interrupted store; "
+                                "fail closed (registered B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT "
+                                "follow-on)"
+                            ),
+                        ),
+                        0,
+                    )
+                # PROCEED (any), OR PAUSE / CASCADE_CANCEL with NO errored branch (a clean
+                # host-crash mid-fan-out, no policy trigger) → fall through to the recovery
+                # and CONTINUE: recover the completed branches, re-dispatch the incomplete.
+                # If a re-dispatched branch then fails, the strategy resolves the policy THEN
+                # (the cascade-cancel TaskGroup / pause snapshot fires on the actual failure).
             # Material-diff fail-closed (out-of-family Codex [P2]): the store holds recovered
             # branch / orchestrator records but the RESUMED manifest carries NO branch steps
             # (a changed body). The strategy's empty-step fast path would return SUCCESS with
