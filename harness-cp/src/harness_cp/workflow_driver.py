@@ -1798,20 +1798,27 @@ def _execute_workflow_body(
     # guard against the CHILD's own snapshot (the child carves + captures its own
     # synthesis identity via the reused `_execute_orchestrator_workers`).
     if resume_snapshot is not None:
-        # Carrier/topology mismatch FIRST (out-of-family Codex [P1]): a synthesis-bearing
-        # snapshot resumed under a topology whose carrier it did NOT populate must fail
-        # closed — the identity diff alone false-passes when the resumed body ALSO dropped
-        # the synthesis (the strategy's expected carrier is empty → captured None == resumed
-        # None), and the strategy would then run the whole fan-out FRESH, re-dispatching
-        # effect-bearing branches.
-        _carrier_mismatch = _synthesis_resume_carrier_mismatch(resume_snapshot, strategy)
+        # B-FANOUT-RESUME-CARRIER-TOPOLOGY-MISMATCH (R-FS-1) — general carrier/topology
+        # mismatch guard, FIRST (out-of-family Codex flagged this 3× at
+        # B-FANOUT-PAUSE-SYNTHESIS). A pause snapshot populates EXACTLY ONE topology resume
+        # carrier (`fan_out_resume` / `peer_fan_out_resume` / `handoff_resume` /
+        # `evaluator_optimizer_resume` / `effect_fence_resume`), read by exactly its
+        # capturing strategy. A snapshot resumed under a topology whose carrier it did NOT
+        # populate (a topology change between pause and resume) must fail closed — the
+        # resuming strategy would otherwise read its absent carrier (`_is_resume` False) and
+        # run the WHOLE topology FRESH, re-dispatching effect-bearing branches/stages (an
+        # at-most-once violation). This GENERALIZES the B-FANOUT-PAUSE-SYNTHESIS
+        # synthesis-only carrier-mismatch guard to ALL topology resume carriers,
+        # synthesis-bearing or not (the v1.58 §1 "non-synthesis ... unchanged" carve-out is
+        # now closed). It runs FIRST so the synthesis material-diff below always sees a
+        # carrier-consistent snapshot (and its own former carrier-mismatch leg — the
+        # both-dropped synthesis false-pass — is subsumed: a populated synthesis carrier the
+        # strategy does not read fails here on carrier-populated alone, independent of the
+        # synthesis identity).
+        _carrier_diff = _resume_carrier_topology_mismatch(resume_snapshot, strategy)
         _synth_diff = (
-            "post-join-synthesis-resume-carrier-mismatch: a synthesis-bearing pause snapshot "
-            f"was captured under a fan-out carrier the resumed {strategy.value} topology does "
-            "not read (the snapshot's topology changed between pause and resume). Resuming "
-            "would run the fan-out FRESH, re-dispatching effect-bearing branches. Rejected "
-            "fail-closed (B-FANOUT-PAUSE-SYNTHESIS)."
-            if _carrier_mismatch
+            _carrier_diff
+            if _carrier_diff is not None
             else _synthesis_resume_material_diff(resume_snapshot, steps, strategy)
         )
         if _synth_diff is not None:
@@ -3583,31 +3590,79 @@ def _append_step_ledger_entry(
 # (a separate §25.12-Point-1/D1 reckoning — NOT this arc).
 
 
-def _synthesis_resume_carrier_mismatch(
+# B-FANOUT-RESUME-CARRIER-TOPOLOGY-MISMATCH (R-FS-1) — the topology resume carrier ↔
+# strategy map. A PauseSnapshot populates EXACTLY ONE of these carriers (the NEVER-co-set
+# invariant on C-CP-26 §26.2), and each `_execute_<strategy>` reads ONLY its own
+# (`resume_snapshot.<carrier> if resume_snapshot is not None else <crash-reconstructed>`;
+# `_is_resume = <carrier> is not None`). So a snapshot resumed under a strategy NOT in its
+# carrier's set has the strategy read its absent carrier → `_is_resume` False → the whole
+# topology runs FRESH (re-dispatching effect-bearing branches/stages). `effect_fence_resume`
+# is consumed by the LINEAR_INLINE step loop (a fence pause is only ever captured in the
+# linear/TOOL_STEP path — `workflow_driver.py` `_execute_workflow_body`, never a fan-out
+# strategy function). A plain linear `step_index`-only resume populates NONE of these → no
+# entry matched → never a mismatch (correctly admitted).
+_RESUME_CARRIER_STRATEGIES: tuple[tuple[str, frozenset[_DriverStrategyStatus]], ...] = (
+    (
+        "fan_out_resume",
+        frozenset(
+            {
+                _DriverStrategyStatus.ORCHESTRATOR_WORKERS,
+                _DriverStrategyStatus.HIERARCHICAL_DELEGATION,
+            }
+        ),
+    ),
+    ("peer_fan_out_resume", frozenset({_DriverStrategyStatus.PARALLELIZATION})),
+    ("handoff_resume", frozenset({_DriverStrategyStatus.DECENTRALIZED_HANDOFF})),
+    ("evaluator_optimizer_resume", frozenset({_DriverStrategyStatus.EVALUATOR_OPTIMIZER})),
+    ("effect_fence_resume", frozenset({_DriverStrategyStatus.LINEAR_INLINE})),
+)
+
+
+def _resume_carrier_topology_mismatch(
     resume_snapshot: PauseSnapshot,
     strategy: _DriverStrategyStatus,
-) -> bool:
-    """True when the pause snapshot carries a SYNTHESIS identity on a fan-out carrier
-    the resuming strategy does NOT read (B-FANOUT-PAUSE-SYNTHESIS, out-of-family Codex
-    [P1]). `fan_out_resume` is read by ORCHESTRATOR_WORKERS / HIERARCHICAL_DELEGATION;
-    `peer_fan_out_resume` by PARALLELIZATION. A synthesis-bearing snapshot resumed under
-    the OTHER topology would have the strategy read its (absent) carrier → run the WHOLE
-    fan-out FRESH, re-dispatching effect-bearing branches. The identity material-diff
-    catches this when the resumed body still has a synthesis, but NOT when the resumed
-    body ALSO dropped it (both the strategy's-carrier captured id and the resumed id are
-    then None → a false-pass); this guard closes that gap. Fail-closed before any dispatch.
-    A synthesis-bearing snapshot MUST be resumed under the topology whose carrier it
-    populated."""
-    fan = resume_snapshot.fan_out_resume
-    if fan is not None and fan.synthesis_step_id is not None:
-        return strategy not in (
-            _DriverStrategyStatus.ORCHESTRATOR_WORKERS,
-            _DriverStrategyStatus.HIERARCHICAL_DELEGATION,
-        )
-    peer = resume_snapshot.peer_fan_out_resume
-    if peer is not None and peer.synthesis_step_id is not None:
-        return strategy is not _DriverStrategyStatus.PARALLELIZATION
-    return False
+) -> str | None:
+    """Fail closed when a pause snapshot's populated topology resume carrier does NOT match
+    the resuming strategy (B-FANOUT-RESUME-CARRIER-TOPOLOGY-MISMATCH, R-FS-1).
+
+    A `PauseSnapshot` records its fan-out / handoff / evaluator-optimizer / effect-fence
+    recovery state on EXACTLY ONE topology-specific carrier, captured by the strategy that
+    paused (`peer_fan_out_resume` by PARALLELIZATION, `handoff_resume` by
+    DECENTRALIZED_HANDOFF, etc. — see ``_RESUME_CARRIER_STRATEGIES``). On a resume
+    (``resume_snapshot is not None``) each strategy reads ONLY its own carrier; a topology
+    change between pause and resume therefore leaves the resuming strategy reading its
+    ABSENT carrier → it runs the WHOLE topology FRESH, re-dispatching effect-bearing
+    branches/stages (an at-most-once violation). This guard fails that closed BEFORE any
+    dispatch side-effect.
+
+    GENERALIZES the B-FANOUT-PAUSE-SYNTHESIS synthesis-only carrier-mismatch guard to ALL
+    topology resume carriers, synthesis-bearing or not — the v1.58 §1 "non-synthesis
+    carrier/topology mismatch ... is PRE-EXISTING behavior ... unchanged" carve-out is now
+    closed. It runs FIRST at the resume entry so the synthesis material-diff sees a
+    carrier-consistent snapshot; the synthesis-specific carrier-mismatch leg (the
+    both-dropped false-pass) is subsumed — a populated synthesis carrier the strategy does
+    not read fails here on carrier-populated alone, independent of synthesis identity.
+
+    The crash-resume path (``resume_snapshot is None``) never reaches here: each strategy
+    RECONSTRUCTS its own carrier keyed to the executing topology (``_determine_fanout_resume``),
+    so a foreign carrier cannot be surfaced there.
+
+    Returns a ``fail_class`` string on mismatch, or ``None`` when the populated carrier (if
+    any) matches the resuming strategy. The loop fails closed on ANY populated-but-foreign
+    carrier, so a corrupt multi-populated snapshot (the never-co-set invariant violated)
+    also fails closed rather than relying on one carrier happening to match.
+    """
+    for name, allowed in _RESUME_CARRIER_STRATEGIES:
+        if getattr(resume_snapshot, name) is not None and strategy not in allowed:
+            return (
+                f"resume-carrier-topology-mismatch: the pause snapshot populated the "
+                f"{name!r} resume carrier, which the resumed {strategy.value} topology does "
+                "not read (the snapshot's topology changed between pause and resume). "
+                "Resuming would run the whole topology FRESH, re-dispatching effect-bearing "
+                "branches/stages (an at-most-once violation). Rejected fail-closed "
+                "(B-FANOUT-RESUME-CARRIER-TOPOLOGY-MISMATCH)."
+            )
+    return None
 
 
 def _synthesis_resume_material_diff(
@@ -3627,14 +3682,12 @@ def _synthesis_resume_material_diff(
     first-and-only per B-POSTJOIN).
 
     The captured identity is read from the carrier THE RESUMING STRATEGY uses — NOT
-    "whichever carrier the snapshot populated". A carrier/topology MISMATCH (e.g. a
-    `fan_out_resume` snapshot resumed under PARALLELIZATION, which reads
-    `peer_fan_out_resume`) then surfaces here as a material-diff: the strategy's expected
-    carrier is absent → captured None → it differs from a present resumed synthesis →
-    fail closed, rather than the strategy reading its absent carrier and running the
-    WHOLE fan-out FRESH (re-dispatching effect-bearing branches) + fresh-dispatching the
-    synthesis over it (out-of-family Codex [P1]). A non-fan-out strategy has no synthesis
-    carrier → captured None.
+    "whichever carrier the snapshot populated". A carrier/topology mismatch is now FRONT-RUN
+    by ``_resume_carrier_topology_mismatch`` (B-FANOUT-RESUME-CARRIER-TOPOLOGY-MISMATCH), so
+    this function only ever sees a carrier-consistent snapshot; the strategy-keyed read here
+    is retained (a mismatch still incidentally surfaces as a material-diff when a synthesis
+    is present in the resumed body — captured None ≠ present — which is harmless given the
+    front guard). A non-fan-out strategy has no synthesis carrier → captured None.
 
     Returns a ``fail_class`` string on mismatch (synthesis added / removed / changed
     ``step_id``, or a carrier/topology mismatch), or ``None`` when the captured and

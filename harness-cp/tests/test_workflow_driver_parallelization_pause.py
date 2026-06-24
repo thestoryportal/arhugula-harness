@@ -45,8 +45,11 @@ from harness_cp.pause_resume_protocol import (
     _strip_none_synthesis_step_id,
 )
 from harness_cp.pause_resume_protocol_types import (
+    EffectFenceResumeState,
+    EvaluatorOptimizerResumeState,
     FanOutBranchResumeState,
     FanOutResumeState,
+    HandoffResumeState,
     PauseSnapshot,
     PeerFanOutResumeState,
     WorkflowPauseReason,
@@ -59,7 +62,7 @@ from harness_cp.workflow_driver import (
     StepDispatcherRegistry,
     StepKindDispatcherNotBoundError,
     _DriverStrategyStatus,
-    _synthesis_resume_carrier_mismatch,
+    _resume_carrier_topology_mismatch,
     _synthesis_resume_material_diff,
     execute_workflow,
 )
@@ -815,69 +818,180 @@ def test_strip_preserves_user_synthesis_step_id_in_recovered_output() -> None:
     assert "synthesis_step_id" in dumped["orchestrator_output"]  # the USER key is preserved
 
 
-def test_synthesis_resume_carrier_mismatch_fails_closed_even_without_resumed_synthesis() -> None:
-    """B-FANOUT-PAUSE-SYNTHESIS carrier/topology mismatch (out-of-family Codex [P1] round 2)
-    — a synthesis-bearing snapshot resumed under the OTHER topology fails closed EVEN when
-    the resumed body also dropped the terminal synthesis. The identity material-diff alone
-    false-passes there (the strategy's expected carrier is empty → captured None == resumed
-    None), so the dedicated carrier-mismatch guard is what fails it closed — otherwise the
-    strategy reads its absent carrier and runs the fan-out FRESH, re-dispatching
-    effect-bearing branches."""
-    _ORCH = _DriverStrategyStatus.ORCHESTRATOR_WORKERS
-    _PAR = _DriverStrategyStatus.PARALLELIZATION
-    fan_snap = _captured_snapshot_fanout("synthesis")
-    peer_snap = _captured_snapshot(
-        peer_fan_out_resume=PeerFanOutResumeState(
-            branches=(), branch_count=1, synthesis_step_id="synthesis"
-        )
-    )
-    # The predicate: a synthesis-bearing FanOut snapshot is a mismatch under PARALLELIZATION
-    # (and vice versa); it is NOT a mismatch under its own / the sibling fan-out topology.
-    assert _synthesis_resume_carrier_mismatch(fan_snap, _PAR) is True
-    assert _synthesis_resume_carrier_mismatch(fan_snap, _ORCH) is False
-    assert (
-        _synthesis_resume_carrier_mismatch(fan_snap, _DriverStrategyStatus.HIERARCHICAL_DELEGATION)
-        is False
-    )
-    assert _synthesis_resume_carrier_mismatch(peer_snap, _ORCH) is True
-    assert _synthesis_resume_carrier_mismatch(peer_snap, _PAR) is False
-    # A non-synthesis snapshot is NEVER a synthesis carrier-mismatch (pre-existing
-    # non-synthesis carrier/topology behavior is out of this guard's scope).
-    no_synth_fan = _captured_snapshot_fanout(None)
-    assert _synthesis_resume_carrier_mismatch(no_synth_fan, _PAR) is False
-    # End-to-end: a FanOut+synthesis snapshot resumed as PARALLELIZATION with NO terminal
-    # synthesis in the resumed body fails closed (the false-pass the guard closes).
-    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
-    result = _run(
-        steps=_steps(1),  # NO synthesis step
-        dispatcher=_CountingDispatcher(),
-        ctx=ctx,
-        pause_snapshot_input=fan_snap,
-    )
-    assert result.status is RunStatus.FAILED
-    assert result.fail_class is not None
-    assert result.fail_class.startswith("post-join-synthesis-resume-carrier-mismatch:")
-
-
-def _captured_snapshot_fanout(synthesis_step_id: str | None) -> PauseSnapshot:
-    """A hash-valid ORCHESTRATOR_WORKERS (FanOutResumeState) snapshot for carrier-mismatch
-    tests — captured through the real protocol."""
-    fan = FanOutResumeState(
-        orchestrator_output={},
-        orchestrator_step_id="orch",
-        branches=(),
-        worker_count=1,
-        synthesis_step_id=synthesis_step_id,
-    )
+def _captured_with(**carrier: Any) -> PauseSnapshot:
+    """A hash-valid snapshot carrying exactly one topology resume carrier (or none),
+    captured through the real protocol — the exact shape a prior `pause` halt under that
+    topology would produce. `**carrier` is one of `fan_out_resume=` / `peer_fan_out_resume=`
+    / `handoff_resume=` / `evaluator_optimizer_resume=` / `effect_fence_resume=`, or empty
+    (a plain linear `step_index`-only pause)."""
     return asyncio.run(
         _protocol().capture_pause_snapshot(
             workflow_id="wf-pp",
             run_id="run-1",
             step_index=0,
             pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
-            fan_out_resume=fan,
+            **carrier,
         )
     )
+
+
+def _a_fan_out(synthesis_step_id: str | None = None) -> FanOutResumeState:
+    return FanOutResumeState(
+        orchestrator_output={},
+        orchestrator_step_id="orch",
+        branches=(),
+        worker_count=1,
+        synthesis_step_id=synthesis_step_id,
+    )
+
+
+def _manifest_topology(
+    topology: TopologyPattern, workflow_id: str = "wf-pp"
+) -> WorkflowManifestEntry:
+    """`_manifest` with an arbitrary topology — for the carrier/topology-mismatch
+    by-execution tests that resume a foreign carrier under each resuming strategy."""
+    return WorkflowManifestEntry(
+        workflow_id=workflow_id,
+        workload_class=WorkloadClass.PIPELINE_AUTOMATION,
+        persona_tier=_PAUSE_TIER,
+        engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
+        topology_pattern=topology,
+        layer_budgets=(),
+        fallback_chain=_CHAIN,
+        hitl_placements=(),
+        per_step_overrides={},
+    )
+
+
+def _run_topology(
+    *,
+    topology: TopologyPattern,
+    steps: list[WorkflowStep],
+    dispatcher: StepDispatcher,
+    ctx: DriverContext,
+    pause_snapshot_input: PauseSnapshot,
+) -> Any:
+    return execute_workflow(
+        _manifest_topology(topology),
+        steps,
+        run_id="run-1",
+        ctx=ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(dispatcher),
+        pause_snapshot_input=pause_snapshot_input,
+    )
+
+
+def test_resume_carrier_topology_mismatch_predicate_full_matrix() -> None:
+    """B-FANOUT-RESUME-CARRIER-TOPOLOGY-MISMATCH — the general carrier↔strategy predicate
+    fails closed for EVERY populated topology resume carrier resumed under a strategy that
+    does NOT read it, and admits the matching carrier. This generalizes the
+    B-FANOUT-PAUSE-SYNTHESIS synthesis-only guard to all carriers, synthesis-bearing or NOT
+    (the v1.58 §1 "non-synthesis ... unchanged" carve-out is now closed)."""
+    _LIN = _DriverStrategyStatus.LINEAR_INLINE
+    _PAR = _DriverStrategyStatus.PARALLELIZATION
+    _ORCH = _DriverStrategyStatus.ORCHESTRATOR_WORKERS
+    _HIER = _DriverStrategyStatus.HIERARCHICAL_DELEGATION
+    _HAND = _DriverStrategyStatus.DECENTRALIZED_HANDOFF
+    _EO = _DriverStrategyStatus.EVALUATOR_OPTIMIZER
+    all_strategies = frozenset({_LIN, _PAR, _ORCH, _HIER, _HAND, _EO})
+
+    # (carrier-bearing snapshot, the strategies that READ it). Every other strategy = mismatch.
+    cases: list[tuple[PauseSnapshot, frozenset[_DriverStrategyStatus]]] = [
+        (_captured_with(fan_out_resume=_a_fan_out()), frozenset({_ORCH, _HIER})),
+        (
+            _captured_with(peer_fan_out_resume=PeerFanOutResumeState(branches=(), branch_count=1)),
+            frozenset({_PAR}),
+        ),
+        (
+            _captured_with(handoff_resume=HandoffResumeState(completed_stages=(), stage_count=1)),
+            frozenset({_HAND}),
+        ),
+        (
+            _captured_with(
+                evaluator_optimizer_resume=EvaluatorOptimizerResumeState(completed_steps=())
+            ),
+            frozenset({_EO}),
+        ),
+        (
+            _captured_with(effect_fence_resume=EffectFenceResumeState(idempotency_key="k")),
+            frozenset({_LIN}),
+        ),
+    ]
+    for snap, readers in cases:
+        for strat in all_strategies:
+            diff = _resume_carrier_topology_mismatch(snap, strat)
+            if strat in readers:
+                assert diff is None, (snap, strat)
+            else:
+                assert diff is not None and diff.startswith("resume-carrier-topology-mismatch:")
+
+    # A carrier-less snapshot (a plain linear step_index resume) is NEVER a mismatch.
+    bare = _captured_with()
+    for strat in all_strategies:
+        assert _resume_carrier_topology_mismatch(bare, strat) is None
+
+    # The generalization subsumes the synthesis-bearing case (the only one guarded before
+    # this arc): a fan-out+synthesis snapshot resumed as PARALLELIZATION still fails closed
+    # on carrier-populated alone, independent of the synthesis identity.
+    synth_fan = _captured_with(fan_out_resume=_a_fan_out("synthesis"))
+    assert _resume_carrier_topology_mismatch(synth_fan, _PAR) is not None
+    assert _resume_carrier_topology_mismatch(synth_fan, _ORCH) is None
+
+
+def test_resume_foreign_carrier_under_parallelization_fails_closed_zero_dispatch() -> None:
+    """B-FANOUT-RESUME-CARRIER-TOPOLOGY-MISMATCH integration (by-execution) — resuming the
+    PARALLELIZATION strategy against a snapshot that populated a DIFFERENT topology's carrier
+    fails closed BEFORE any dispatch (zero branches re-run), proving the guard prevents the
+    fresh-run re-dispatch of effect-bearing branches. Covers every foreign (non-peer)
+    carrier, incl. the previously-unguarded NON-synthesis fan-out carrier."""
+    foreign: list[PauseSnapshot] = [
+        _captured_with(fan_out_resume=_a_fan_out()),  # ORCHESTRATOR carrier (non-synthesis)
+        _captured_with(handoff_resume=HandoffResumeState(completed_stages=(), stage_count=1)),
+        _captured_with(
+            evaluator_optimizer_resume=EvaluatorOptimizerResumeState(completed_steps=())
+        ),
+        _captured_with(effect_fence_resume=EffectFenceResumeState(idempotency_key="k")),
+    ]
+    for snap in foreign:
+        dispatcher = _CountingDispatcher()
+        ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+        result = _run(steps=_steps(2), dispatcher=dispatcher, ctx=ctx, pause_snapshot_input=snap)
+        assert result.status is RunStatus.FAILED
+        assert result.fail_class is not None
+        assert result.fail_class.startswith("resume-carrier-topology-mismatch:")
+        assert dispatcher.dispatched == []  # at-most-once: nothing re-dispatched fresh
+
+
+def test_resume_peer_carrier_under_foreign_topology_fails_closed_zero_dispatch() -> None:
+    """The reverse angle — a PARALLELIZATION (`peer_fan_out_resume`) snapshot resumed under
+    every OTHER strategy fails closed BEFORE any dispatch. Proves the entry guard fires for
+    EACH resuming strategy (not only PARALLELIZATION reading a foreign carrier), so the
+    generalization is exercised end-to-end for orchestrator / hierarchical / handoff /
+    evaluator-optimizer / linear resumes too."""
+    peer_snap = _captured_with(
+        peer_fan_out_resume=PeerFanOutResumeState(branches=(), branch_count=1)
+    )
+    for topology in (
+        TopologyPattern.ORCHESTRATOR_WORKERS,
+        TopologyPattern.HIERARCHICAL_DELEGATION,
+        TopologyPattern.DECENTRALIZED_HANDOFF,
+        TopologyPattern.EVALUATOR_OPTIMIZER,
+        TopologyPattern.SINGLE_THREADED_LINEAR,
+    ):
+        dispatcher = _CountingDispatcher()
+        ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+        result = _run_topology(
+            topology=topology,
+            steps=_steps(2),
+            dispatcher=dispatcher,
+            ctx=ctx,
+            pause_snapshot_input=peer_snap,
+        )
+        assert result.status is RunStatus.FAILED, topology
+        assert result.fail_class is not None, topology
+        assert result.fail_class.startswith("resume-carrier-topology-mismatch:"), topology
+        assert dispatcher.dispatched == [], topology
 
 
 def test_resume_branch_count_mismatch_fails_closed() -> None:
