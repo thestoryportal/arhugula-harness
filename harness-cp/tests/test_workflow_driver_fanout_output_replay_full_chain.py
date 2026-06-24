@@ -80,6 +80,10 @@ class _InMemoryBranchStore:
         # branch indexes marked present-but-unreadable (corruption / tamper) per run_key.
         self._corrupt: dict[str, set[int]] = {}
         self._cardinality: dict[str, int] = {}
+        # PR2 — captured terminal POST_JOIN_SYNTHESIS records: {run_key: (step_id, output, self_hash)}.
+        self._synthesis: dict[str, tuple[str, dict[str, Any], str]] = {}
+        # run_keys whose synthesis file is present-but-unreadable (a corrupt capture).
+        self._synthesis_corrupt: set[str] = set()
 
     def record_fanout_cardinality(self, run_key: str, branch_count: int) -> None:
         self._cardinality[run_key] = int(branch_count)
@@ -104,6 +108,35 @@ class _InMemoryBranchStore:
 
     def record_orchestrator(self, run_key: str, step_id: str, output: dict[str, Any]) -> None:
         self._orchestrators[run_key] = (str(step_id), dict(output))
+
+    # -- PR2 synthesis capture / replay ---------------------------------------
+    def record_synthesis(
+        self, run_key: str, step_id: str, output: dict[str, Any], self_hash: str
+    ) -> None:
+        self._synthesis[run_key] = (str(step_id), dict(output), str(self_hash))
+
+    def read_synthesis(self, run_key: str) -> tuple[str, dict[str, Any], str] | None:
+        if run_key in self._synthesis_corrupt:
+            return None  # present-but-unreadable
+        return self._synthesis.get(run_key)
+
+    def synthesis_present(self, run_key: str) -> bool:
+        return run_key in self._synthesis or run_key in self._synthesis_corrupt
+
+    # -- test helper: tamper a captured synthesis output (self-hash will mismatch) --
+    def tamper_synthesis(self, run_key: str, output: dict[str, Any]) -> None:
+        step_id, _old, self_hash = self._synthesis[run_key]
+        self._synthesis[run_key] = (step_id, dict(output), self_hash)
+
+    # -- test helper: mark the synthesis file present-but-unreadable (corrupt capture) --
+    def mark_synthesis_corrupt(self, run_key: str) -> None:
+        self._synthesis.pop(run_key, None)
+        self._synthesis_corrupt.add(run_key)
+
+    # -- test helper: simulate a crash BEFORE the synthesis ran (branches captured, synthesis not) --
+    def forget_synthesis(self, run_key: str) -> None:
+        self._synthesis.pop(run_key, None)
+        self._synthesis_corrupt.discard(run_key)
 
     # -- consumer (net-add #2/#3) ---------------------------------------------
     def read_branch_records(
@@ -133,7 +166,7 @@ class _InMemoryBranchStore:
     # `sha256(run_id, workflow_id, entry_version)` internally; inspecting by the
     # sole recorded key avoids re-deriving it and coupling the test to §25.6). --
     def sole_run_key(self) -> str:
-        keys = set(self._branches) | set(self._orchestrators)
+        keys = set(self._branches) | set(self._orchestrators) | set(self._synthesis)
         assert len(keys) == 1, f"expected exactly one recorded run_key, got {keys}"
         return next(iter(keys))
 
@@ -615,22 +648,24 @@ def test_crash_resume_fails_closed_on_corrupt_store() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Synthesis-bearing crash-resume — FAIL-CLOSED (PR1). A POST_JOIN_SYNTHESIS fan-out
-# that crash-resumes sails PAST the §3/§4 pause-resume reject (resume_snapshot is None),
-# recovers its branches, and would otherwise dispatch the synthesis FRESH (a
-# non-reproducible W3-window output). It must stay fail-closed until the synthesis
-# self-hash + captured-output replay lands (the registered follow-on slice). This keeps
-# the half-capability from silently shipping (advisor: don't let "works fresh" win).
+# Synthesis-bearing crash-resume — PR2 REPLAY (CP spec v1.56 §1/§2). The PR1 fail-closed
+# is now RELAXED: a POST_JOIN_SYNTHESIS fan-out that crash-resumes under PROCEED recovers
+# its branches then, at the post-barrier synthesis, REPLAYS a captured output (the W3
+# window — verified by the record-local self-hash + step_id material-diff, reproducible) or
+# re-dispatches FRESH on the reproduced branches (a crash BEFORE the synthesis ran;
+# effect-free, consistent over the same siblings). Three fail-closed gates protect the
+# replay: present-but-unreadable, self-hash mismatch, and a changed synthesis body.
 # ---------------------------------------------------------------------------
 class _SynthesisDispatcher:
-    def __init__(self) -> None:
+    def __init__(self, *, output: dict[str, Any] | None = None) -> None:
         self.dispatched = 0
+        self._output = {"synthesis": "composed"} if output is None else output
 
     def dispatch(
         self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
     ) -> dict[str, Any]:
         self.dispatched += 1
-        return {"synthesis": "composed"}
+        return dict(self._output)
 
 
 class _BranchOrSynthesisRegistry:
@@ -655,12 +690,19 @@ def _synthesis_step() -> WorkflowStep:
 
 
 def _run_synth(
-    *, workflow_id: str, branch: StepDispatcher, synthesis: StepDispatcher, store: Any
+    *,
+    workflow_id: str,
+    branch: StepDispatcher,
+    synthesis: StepDispatcher,
+    store: Any,
+    topology: TopologyPattern = TopologyPattern.PARALLELIZATION,
+    steps: list[WorkflowStep] | None = None,
 ) -> Any:
     ctx = cast(DriverContext, _Ctx(ledger=_RecordingLedger(), store=store))
-    steps = [_step("branch-0", 0), _step("branch-1", 1), _synthesis_step()]
+    if steps is None:
+        steps = [_step("branch-0", 0), _step("branch-1", 1), _synthesis_step()]
     return execute_workflow(
-        _manifest(workflow_id=workflow_id, topology=TopologyPattern.PARALLELIZATION),
+        _manifest(workflow_id=workflow_id, topology=topology),
         steps,
         run_id="run-1",
         ctx=ctx,
@@ -671,37 +713,187 @@ def _run_synth(
     )
 
 
-def test_synthesis_bearing_crash_resume_fails_closed() -> None:
+def test_synthesis_crash_resume_replays_captured_output() -> None:
+    """Window (a) — the W3 crash window (crash AFTER the synthesis was captured). The branches
+    recover from the store AND the captured synthesis output is REPLAYED (not re-dispatched):
+    the resume synthesis dispatcher fires ZERO times and the aggregate is byte-identical to the
+    no-crash trajectory. No provider needed — fully deterministic (advisor)."""
     store = _InMemoryBranchStore()
 
-    # Run 1: a clean synthesis-bearing fan-out — 2 branches + the terminal synthesis all
-    # dispatch (the branches captured to the store; synthesis dispatched fresh, SUCCESS).
+    # Run 1: a clean synthesis-bearing fan-out — branches + synthesis captured; SUCCESS.
     r1 = _run_synth(
-        workflow_id="wf-synth-crash",
+        workflow_id="wf-synth-replay",
+        branch=_CountingDispatcher(n=2),
+        synthesis=_SynthesisDispatcher(output={"synthesis": "composed-original"}),
+        store=store,
+    )
+    assert r1.status is RunStatus.SUCCESS
+    assert r1.final_state == {"synthesis": "composed-original"}
+    assert store.synthesis_present(store.sole_run_key())
+
+    # Run 2 (crash-resume): branches recover; the captured synthesis REPLAYS. The resume
+    # dispatcher would return a DIFFERENT output if (wrongly) called — so the aggregate
+    # matching Run 1 proves replay, not re-dispatch.
+    resume_synth = _SynthesisDispatcher(output={"synthesis": "WRONG-fresh-redispatch"})
+    r2 = _run_synth(
+        workflow_id="wf-synth-replay",
+        branch=_CountingDispatcher(n=2),
+        synthesis=resume_synth,
+        store=store,
+    )
+    assert r2.status is RunStatus.SUCCESS
+    assert resume_synth.dispatched == 0  # REPLAYED from the store, never re-dispatched
+    assert r2.final_state == r1.final_state == {"synthesis": "composed-original"}
+
+
+def test_synthesis_crash_resume_before_synthesis_redispatches_fresh() -> None:
+    """Window (b) — a crash BEFORE the synthesis ran (branches captured, synthesis not). On
+    resume the branches recover and the synthesis dispatches FRESH on the reproduced siblings
+    (effect-free, first-and-only). Not byte-reproducible by construction — but consistent."""
+    store = _InMemoryBranchStore()
+
+    r1 = _run_synth(
+        workflow_id="wf-synth-pre",
         branch=_CountingDispatcher(n=2),
         synthesis=_SynthesisDispatcher(),
         store=store,
     )
     assert r1.status is RunStatus.SUCCESS
-    assert store.read_branch_records(store.sole_run_key()).keys() == {0, 1}
+    # Simulate the crash landing BEFORE the synthesis-capture point: drop the synthesis record.
+    store.forget_synthesis(store.sole_run_key())
+    assert not store.synthesis_present(store.sole_run_key())
 
-    # Run 2 (crash-resume): the store has the completed branches, so net-add #3 builds a
-    # crash resume state — and because a synthesis step is present, the run FAILS CLOSED
-    # (the synthesis would otherwise re-dispatch fresh, non-reproducibly). The synthesis
-    # dispatcher must fire ZERO times on resume.
-    resume_branch = _CountingDispatcher(n=2)
+    resume_synth = _SynthesisDispatcher(output={"synthesis": "fresh-on-reproduced"})
+    r2 = _run_synth(
+        workflow_id="wf-synth-pre",
+        branch=_CountingDispatcher(n=2),
+        synthesis=resume_synth,
+        store=store,
+    )
+    assert r2.status is RunStatus.SUCCESS
+    assert resume_synth.dispatched == 1  # re-dispatched fresh (no capture to replay)
+    assert r2.final_state == {"synthesis": "fresh-on-reproduced"}
+
+
+def test_synthesis_crash_resume_self_hash_mismatch_fails_closed() -> None:
+    """Window (c) — a captured synthesis whose record is TAMPERED (the output no longer matches
+    its record-local self-hash). Replay fails closed rather than serving a tampered aggregate;
+    the synthesis is NEVER re-dispatched (no silent fresh fallback that would mask the tamper)."""
+    store = _InMemoryBranchStore()
+
+    r1 = _run_synth(
+        workflow_id="wf-synth-tamper",
+        branch=_CountingDispatcher(n=2),
+        synthesis=_SynthesisDispatcher(),
+        store=store,
+    )
+    assert r1.status is RunStatus.SUCCESS
+    store.tamper_synthesis(store.sole_run_key(), {"synthesis": "TAMPERED"})
+
     resume_synth = _SynthesisDispatcher()
     r2 = _run_synth(
-        workflow_id="wf-synth-crash",
-        branch=resume_branch,
+        workflow_id="wf-synth-tamper",
+        branch=_CountingDispatcher(n=2),
         synthesis=resume_synth,
         store=store,
     )
     assert r2.status is RunStatus.FAILED
     assert r2.fail_class is not None
-    assert "post-join-synthesis-on-resume-unsupported" in r2.fail_class
-    assert resume_synth.dispatched == 0  # never re-dispatched the synthesis
-    assert resume_branch.dispatched == []  # fail-closed before the strategy ran
+    assert "post-join-synthesis-replay-self-hash-mismatch" in r2.fail_class
+    assert resume_synth.dispatched == 0
+
+
+def test_synthesis_crash_resume_corrupt_capture_fails_closed() -> None:
+    """Window (c) — a captured synthesis file present-but-UNREADABLE (a corrupt capture).
+    `synthesis_present` is True but `read_synthesis` yields None → fail closed, never a silent
+    fresh re-dispatch."""
+    store = _InMemoryBranchStore()
+
+    r1 = _run_synth(
+        workflow_id="wf-synth-corrupt",
+        branch=_CountingDispatcher(n=2),
+        synthesis=_SynthesisDispatcher(),
+        store=store,
+    )
+    assert r1.status is RunStatus.SUCCESS
+    store.mark_synthesis_corrupt(store.sole_run_key())
+
+    resume_synth = _SynthesisDispatcher()
+    r2 = _run_synth(
+        workflow_id="wf-synth-corrupt",
+        branch=_CountingDispatcher(n=2),
+        synthesis=resume_synth,
+        store=store,
+    )
+    assert r2.status is RunStatus.FAILED
+    assert r2.fail_class is not None
+    assert "post-join-synthesis-replay-corrupt" in r2.fail_class
+    assert resume_synth.dispatched == 0
+
+
+def test_synthesis_crash_resume_branch_corrupt_fails_closed_not_masked() -> None:
+    """Advisor window (c) — a captured synthesis (so all branches DID complete) but a branch
+    is now present-but-unreadable on resume. PR1's branch-corruption guard fires BEFORE the
+    synthesis: the run fails closed (`fan-out-crash-resume-store-corrupt`), the synthesis replay
+    does NOT mask the branch corruption, and the synthesis is never reached."""
+    store = _InMemoryBranchStore()
+
+    r1 = _run_synth(
+        workflow_id="wf-synth-branch-corrupt",
+        branch=_CountingDispatcher(n=2),
+        synthesis=_SynthesisDispatcher(),
+        store=store,
+    )
+    assert r1.status is RunStatus.SUCCESS
+    assert store.synthesis_present(store.sole_run_key())
+    store.mark_corrupt(store.sole_run_key(), 1)  # branch 1 now present-but-unreadable
+
+    resume_synth = _SynthesisDispatcher()
+    r2 = _run_synth(
+        workflow_id="wf-synth-branch-corrupt",
+        branch=_CountingDispatcher(n=2),
+        synthesis=resume_synth,
+        store=store,
+    )
+    assert r2.status is RunStatus.FAILED
+    assert r2.fail_class is not None
+    assert "fan-out-crash-resume-store-corrupt" in r2.fail_class
+    assert resume_synth.dispatched == 0  # synthesis never reached — branch guard fired first
+
+
+def test_synthesis_crash_resume_replays_with_orchestrator_recovery() -> None:
+    """Window (a) for ORCHESTRATOR_WORKERS: the orchestrator output AND the workers recover
+    from the store, and the captured synthesis REPLAYS on top — proving the synthesis rides the
+    orchestrator-topology recovery. HIERARCHICAL_DELEGATION reuses `_execute_orchestrator_workers`
+    at each level, so this also covers the per-level synthesis recovery (CP spec v1.56 §2)."""
+    store = _InMemoryBranchStore()
+    steps = [_step("orch", 0), _step("w-0", 0), _step("w-1", 1), _synthesis_step()]
+
+    r1 = _run_synth(
+        workflow_id="wf-ow-synth-replay",
+        branch=_CountingDispatcher(n=2),
+        synthesis=_SynthesisDispatcher(output={"synthesis": "ow-original"}),
+        store=store,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+        steps=steps,
+    )
+    assert r1.status is RunStatus.SUCCESS
+    assert r1.final_state == {"synthesis": "ow-original"}
+    assert store.orchestrator_present(store.sole_run_key())
+    assert store.synthesis_present(store.sole_run_key())
+
+    resume_synth = _SynthesisDispatcher(output={"synthesis": "WRONG-fresh-redispatch"})
+    r2 = _run_synth(
+        workflow_id="wf-ow-synth-replay",
+        branch=_CountingDispatcher(n=2),
+        synthesis=resume_synth,
+        store=store,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+        steps=steps,
+    )
+    assert r2.status is RunStatus.SUCCESS
+    assert resume_synth.dispatched == 0  # orchestrator + workers + synthesis all recovered
+    assert r2.final_state == r1.final_state == {"synthesis": "ow-original"}
 
 
 def test_crash_resume_empty_manifest_fails_closed_material_diff() -> None:
