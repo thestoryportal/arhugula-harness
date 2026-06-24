@@ -315,6 +315,87 @@ class EngineOutputStore:
                 result = count
         return result
 
+    # -- B-FANOUT-CRASH-RESUME-STRICT-TIER-INCOMPLETE: reserve-before-DISPATCH --
+    #
+    # The branch-output capture above is RESERVE-before-COMMIT — it proves a branch
+    # COMPLETED. It does NOT distinguish a branch that NEVER dispatched from one that
+    # RAN its effect but crashed before the capture (both leave NO branch record). For
+    # the strict tiers (PAUSE / CASCADE_CANCEL) that ambiguity forces a fail-closed on
+    # any INCOMPLETE crash-resume — re-dispatching an absent (maybe-ran) effect-BEARING
+    # branch would risk a double-fire. This sidecar adds the missing at-most-once
+    # primitive: a durable per-(run, branch) "dispatched" MARKER written + fsynced
+    # strictly BEFORE the branch body dispatches. The load-bearing invariant: within an
+    # instrumented run, marker-ABSENT ⟺ the branch's effect did NOT fire. So an absent
+    # branch with NO dispatch marker is PROVABLY not-yet-run (safe to re-dispatch fresh,
+    # first-and-only); a dispatch marker with no terminal capture is MAYBE-RAN (the
+    # narrow fire→capture window — still fail-closed; its resolution is a follow-on).
+    # The fan-out analogue of the §14.22 C-RT-31 effect-fence `try_reserve` at branch
+    # granularity. Marker presence is the whole signal — `step_id` is recorded for
+    # parity + future material-diff, never read by the strict-tier classifier.
+    #
+    # The per-run "instrumented" STAMP is the CROSS-VERSION guard
+    # (`[[durable-recovery-presence-validity-scope]]`: presence ≠ validity). A crash
+    # journal written by PRE-arc code has NO markers for ANY branch — INCLUDING a
+    # maybe-ran one — so classifying its absent branches "provably not-run" would
+    # re-dispatch + double-fire, the exact failure this arc prevents. The stamp is
+    # written ONCE at fan-out start (before any branch dispatches) by marker-instrumented
+    # code only; the strict-tier classifier trusts the per-branch markers ONLY when the
+    # stamp is present, and retains the conservative fail-closed for an un-stamped (old)
+    # journal.
+
+    def record_branch_dispatched(
+        self,
+        run_key: str,
+        branch_index: int,
+        step_id: str,
+    ) -> None:
+        """Mark a fan-out branch as DISPATCHED (the reserve-before-dispatch marker), durably.
+
+        The caller writes this — fsynced — strictly BEFORE the branch body dispatches, so on
+        any crash a present marker proves the branch's effect MAY have fired and an absent
+        marker proves it did NOT. Its OWN per-branch file (``{digest}.branches/branch-{i}.
+        dispatched``) so N concurrent branch writers never contend; no collision with the
+        ``branch-*.jsonl`` terminal-capture files (a ``.dispatched`` vs ``.jsonl`` suffix).
+        Idempotent (last-wins; presence is the signal). ``step_id`` is recorded for parity
+        with ``record_branch`` (a future material-diff), never read by the classifier."""
+        record = {"step_id": str(step_id)}
+        line = json.dumps(record, sort_keys=True)
+        self._append_path(self._branch_dispatched_file(run_key, branch_index), line)
+
+    def present_dispatched_indexes(self, run_key: str) -> set[int]:
+        """Return the set of branch ordinals with a DISPATCHED marker file (any state).
+
+        The strict-tier classifier's authority for which branches BEGAN dispatch. A branch
+        in this set but ABSENT from ``read_branch_records`` is MAYBE-RAN (dispatched, no
+        terminal capture — the fire→capture window) → fail closed. A branch absent from BOTH
+        is PROVABLY not-yet-run → safe to re-dispatch. Presence-only (the marker carries no
+        readability gate — an unreadable/torn marker still proves dispatch BEGAN, which is
+        the conservative reading: treat it as maybe-ran)."""
+        branches_dir = self._branches_dir(run_key)
+        if not branches_dir.exists():
+            return set()
+        indexes: set[int] = set()
+        for path in branches_dir.glob("branch-*.dispatched"):
+            branch_index = self._dispatched_index_from_name(path.name)
+            if branch_index is not None:
+                indexes.add(branch_index)
+        return indexes
+
+    def record_dispatch_instrumented(self, run_key: str) -> None:
+        """Stamp this run as DISPATCH-INSTRUMENTED (the cross-version guard), durably.
+
+        Written ONCE at fan-out start (before any branch dispatches) by marker-instrumented
+        code only. The strict-tier classifier trusts the per-branch dispatch markers ONLY when
+        this stamp is present — an un-stamped journal (written by PRE-arc code, which has no
+        markers for ANY branch including a maybe-ran one) retains the conservative
+        incomplete-recovery fail-closed. Idempotent (last-wins; presence is the signal)."""
+        line = json.dumps({"instrumented": True}, sort_keys=True)
+        self._append_path(self._dispatch_instrumented_file(run_key), line)
+
+    def dispatch_instrumented(self, run_key: str) -> bool:
+        """Whether the per-run dispatch-instrumented STAMP file exists (the cross-version guard)."""
+        return self._dispatch_instrumented_file(run_key).exists()
+
     # -- B-FANOUT-OUTPUT-REPLAY PR2: terminal POST_JOIN_SYNTHESIS capture -----
     #
     # The synthesis output is the ONE genuine residual the #719 C9 probe named:
@@ -398,10 +479,29 @@ class EngineOutputStore:
         """The terminal POST_JOIN_SYNTHESIS step journal under the branches dir."""
         return self._branches_dir(run_key) / "synthesis.jsonl"
 
+    def _branch_dispatched_file(self, run_key: str, branch_index: int) -> Path:
+        """The per-branch reserve-before-DISPATCH marker file under the run's branches dir."""
+        return self._branches_dir(run_key) / f"branch-{int(branch_index)}.dispatched"
+
+    def _dispatch_instrumented_file(self, run_key: str) -> Path:
+        """The per-run dispatch-instrumented STAMP file (the cross-version guard)."""
+        return self._branches_dir(run_key) / "dispatch-instrumented.marker"
+
     @staticmethod
     def _branch_index_from_name(name: str) -> int | None:
         """Parse ``branch-{n}.jsonl`` → ``n``; None for any other filename."""
         prefix, suffix = "branch-", ".jsonl"
+        if not (name.startswith(prefix) and name.endswith(suffix)):
+            return None
+        try:
+            return int(name[len(prefix) : -len(suffix)])
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _dispatched_index_from_name(name: str) -> int | None:
+        """Parse ``branch-{n}.dispatched`` → ``n``; None for any other filename."""
+        prefix, suffix = "branch-", ".dispatched"
         if not (name.startswith(prefix) and name.endswith(suffix)):
             return None
         try:

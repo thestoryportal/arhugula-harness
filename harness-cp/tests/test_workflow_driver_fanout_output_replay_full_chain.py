@@ -84,6 +84,10 @@ class _InMemoryBranchStore:
         self._synthesis: dict[str, tuple[str, dict[str, Any], str]] = {}
         # run_keys whose synthesis file is present-but-unreadable (a corrupt capture).
         self._synthesis_corrupt: set[str] = set()
+        # B-FANOUT-CRASH-RESUME-STRICT-TIER-INCOMPLETE — reserve-before-dispatch markers:
+        # {run_key: {branch_index that BEGAN dispatch}} + the per-run dispatch-instrumented stamp.
+        self._dispatched: dict[str, set[int]] = {}
+        self._instrumented: set[str] = set()
 
     def record_fanout_cardinality(self, run_key: str, branch_count: int) -> None:
         self._cardinality[run_key] = int(branch_count)
@@ -108,6 +112,32 @@ class _InMemoryBranchStore:
 
     def record_orchestrator(self, run_key: str, step_id: str, output: dict[str, Any]) -> None:
         self._orchestrators[run_key] = (str(step_id), dict(output))
+
+    # -- B-FANOUT-CRASH-RESUME-STRICT-TIER-INCOMPLETE: reserve-before-dispatch ----
+    def record_branch_dispatched(self, run_key: str, branch_index: int, step_id: str) -> None:
+        self._dispatched.setdefault(run_key, set()).add(int(branch_index))
+
+    def present_dispatched_indexes(self, run_key: str) -> set[int]:
+        return set(self._dispatched.get(run_key, set()))
+
+    def record_dispatch_instrumented(self, run_key: str) -> None:
+        self._instrumented.add(run_key)
+
+    def dispatch_instrumented(self, run_key: str) -> bool:
+        return run_key in self._instrumented
+
+    # -- test helper: a branch that was NOT-YET-DISPATCHED at the crash (no marker, no
+    # output) — provably-not-run, the case the strict tiers can now re-dispatch safely. --
+    def forget_branch_undispatched(self, run_key: str, branch_index: int) -> None:
+        self._branches.get(run_key, {}).pop(branch_index, None)
+        self._dispatched.get(run_key, set()).discard(branch_index)
+
+    # -- test helper: a PRE-arc (un-instrumented) journal — cardinality + branch records but
+    # NO dispatch stamp and NO markers (the cross-version hazard). Forces the conservative
+    # fail-closed: "no marker" cannot be read as "not-run" on an un-stamped journal. --
+    def simulate_pre_arc_journal(self, run_key: str) -> None:
+        self._instrumented.discard(run_key)
+        self._dispatched.pop(run_key, None)
 
     # -- PR2 synthesis capture / replay ---------------------------------------
     def record_synthesis(
@@ -1179,10 +1209,12 @@ def test_crash_resume_cascade_cancel_complete_recovery_completes() -> None:
 
 
 def test_crash_resume_cascade_cancel_incomplete_fails_closed() -> None:
-    """An INCOMPLETE recovery on the strict (compliance) tier fails CLOSED (out-of-family Codex
-    [P1]). A branch absent from the store is indistinguishable from one that RAN its effect but
-    crashed before its capture (the dispatch-before-capture window) — re-dispatching it would
-    risk double-firing an effect-BEARING branch the compliance tier must not. No re-dispatch."""
+    """An INCOMPLETE recovery where the absent branch is MAYBE-RAN (B-FANOUT-CRASH-RESUME-
+    STRICT-TIER-INCOMPLETE). `forget_branch` drops the OUTPUT record but KEEPS the reserve-
+    before-dispatch marker — modelling a branch that BEGAN dispatch (effect may have fired) but
+    crashed before its capture. `present_dispatched_indexes − recovered = {1}` ≠ ∅ → fail closed
+    (re-dispatching it would risk double-firing an effect-BEARING branch the compliance tier
+    must not). The provably-not-run case (no marker) recovers — see the sibling test."""
     store = _InMemoryBranchStore()
     steps = [_step(f"branch-{i}", i) for i in range(3)]
     _run_persona(
@@ -1192,7 +1224,9 @@ def test_crash_resume_cascade_cancel_incomplete_fails_closed() -> None:
         store=store,
         persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
     )
-    store.forget_branch(store.sole_run_key(), 1)  # branch 1 absent → incomplete recovery
+    key = store.sole_run_key()
+    store.forget_branch(key, 1)  # output gone, marker KEPT → branch 1 is MAYBE-RAN
+    assert 1 in store.present_dispatched_indexes(key)  # the maybe-ran discriminator
 
     resume = _CountingDispatcher(n=3)
     r2 = _run_persona(
@@ -1208,12 +1242,12 @@ def test_crash_resume_cascade_cancel_incomplete_fails_closed() -> None:
 
 
 def test_crash_resume_cascade_cancel_cardinality_only_fails_closed() -> None:
-    """Out-of-family Codex [P1] round-2 — a CARDINALITY-ONLY store. The cardinality marker is
-    written before any branch dispatches, so a crash after the marker but before any branch is
-    captured leaves NOTHING recoverable WHILE the marker is present (the fan-out STARTED; a
-    branch may have run-but-uncaptured). `_determine_fanout_resume` returns None, so without a
-    guard the strict tier would restart FRESH and re-dispatch the maybe-run branch → fail closed
-    instead (the incomplete-recovery rule extends to the cardinality-only store)."""
+    """A CARDINALITY-ONLY store where branches are MAYBE-RAN. The cardinality marker is written
+    before any branch dispatches; here every branch BEGAN dispatch (markers KEPT) but none was
+    captured. `_determine_fanout_resume` returns None, and the reserve-before-dispatch markers
+    show dispatched branches with no capture → fail closed (a maybe-run branch must not be
+    re-dispatched). The no-dispatch-marker variant — a crash truly before any branch began —
+    recovers fresh; see the sibling test."""
     store = _InMemoryBranchStore()
     steps = [_step(f"branch-{i}", i) for i in range(3)]
     _run_persona(
@@ -1225,9 +1259,10 @@ def test_crash_resume_cascade_cancel_cardinality_only_fails_closed() -> None:
     )
     key = store.sole_run_key()
     for i in range(3):
-        store.forget_branch(key, i)  # forget ALL branches → only the cardinality marker remains
+        store.forget_branch(key, i)  # output gone, markers KEPT → all branches MAYBE-RAN
     assert store.read_fanout_cardinality(key) == 3
     assert store.read_branch_records(key) == {}
+    assert store.present_dispatched_indexes(key) == {0, 1, 2}  # all maybe-ran
 
     resume = _CountingDispatcher(n=3)
     r2 = _run_persona(
@@ -1299,9 +1334,9 @@ def test_crash_resume_pause_complete_recovery_completes() -> None:
 
 
 def test_crash_resume_pause_incomplete_fails_closed() -> None:
-    """An INCOMPLETE recovery under PAUSE (TEAM_BINDING) also fails closed — the dispatch-before-
-    capture window applies to the team tier too (effect-bearing branches, not re-dispatchable on
-    an ambiguous absence)."""
+    """An INCOMPLETE recovery with a MAYBE-RAN branch under PAUSE (TEAM_BINDING) also fails
+    closed — `forget_branch` keeps the dispatch marker, so branch 0 is maybe-ran (dispatched, no
+    capture) and is not re-dispatchable on the team tier either (effect-bearing branches)."""
     store = _InMemoryBranchStore()
     steps = [_step(f"branch-{i}", i) for i in range(3)]
     _run_persona(
@@ -1311,7 +1346,9 @@ def test_crash_resume_pause_incomplete_fails_closed() -> None:
         store=store,
         persona_tier=PersonaTier.TEAM_BINDING,
     )
-    store.forget_branch(store.sole_run_key(), 0)
+    key = store.sole_run_key()
+    store.forget_branch(key, 0)  # output gone, marker KEPT → maybe-ran
+    assert 0 in store.present_dispatched_indexes(key)
 
     resume = _CountingDispatcher(n=3)
     r2 = _run_persona(
@@ -1413,3 +1450,251 @@ def test_crash_resume_cascade_cancel_orchestrator_workers_complete_completes() -
     )
     assert r2.status is RunStatus.SUCCESS
     assert resume.dispatched == []  # orchestrator + all workers recovered → nothing re-dispatched
+
+
+# ===========================================================================
+# B-FANOUT-CRASH-RESUME-STRICT-TIER-INCOMPLETE (R-FS-1) — the lifted capability:
+# the strict tiers (PAUSE / CASCADE_CANCEL) now RECOVER an incomplete crash by
+# re-dispatching ONLY the PROVABLY-not-run branches (reserve-before-dispatch markers),
+# instead of failing closed. A maybe-ran branch (marker, no capture) or a pre-arc
+# un-stamped journal still fails closed (the cross-version guard).
+# ===========================================================================
+def test_crash_resume_cascade_cancel_provably_not_run_recovers() -> None:
+    """The core lift. A NOT-YET-DISPATCHED branch (no dispatch marker, no capture) is PROVABLY
+    not-run, so a CASCADE_CANCEL crash-resume re-dispatches ONLY it (first-and-only) + recovers
+    the captured siblings → SUCCESS. The no-double-fire witness: `resume.dispatched == ["branch-1"]`
+    proves the recovered branches fire exactly once (in Run 1), not again on resume."""
+    store = _InMemoryBranchStore()
+    steps = [_step(f"branch-{i}", i) for i in range(3)]
+    _run_persona(
+        workflow_id="wf-cc-not-run",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3),
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+    )
+    key = store.sole_run_key()
+    # Branch 1 was NOT-YET-DISPATCHED at the crash: drop BOTH its output and its marker.
+    store.forget_branch_undispatched(key, 1)
+    assert store.read_branch_records(key).keys() == {0, 2}
+    assert 1 not in store.present_dispatched_indexes(key)  # provably not-run
+
+    resume = _CountingDispatcher(n=3)
+    r2 = _run_persona(
+        workflow_id="wf-cc-not-run",
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+    )
+    assert r2.status is RunStatus.SUCCESS
+    assert resume.dispatched == ["branch-1"]  # ONLY the provably-not-run branch re-fires
+    # The recovered aggregate matches a clean no-crash run.
+    baseline = _run_persona(
+        workflow_id="wf-cc-baseline",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3),
+        store=_InMemoryBranchStore(),
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+    )
+    assert r2.final_state is not None and baseline.final_state is not None
+    assert r2.final_state["branch_outputs"] == baseline.final_state["branch_outputs"]
+
+
+def test_crash_resume_pause_provably_not_run_recovers() -> None:
+    """The lift holds under PAUSE (TEAM_BINDING) too: a not-yet-dispatched branch re-dispatches,
+    the captured siblings recover → SUCCESS, re-dispatching only the provably-not-run branch."""
+    store = _InMemoryBranchStore()
+    steps = [_step(f"branch-{i}", i) for i in range(3)]
+    _run_persona(
+        workflow_id="wf-pause-not-run",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3),
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+    )
+    key = store.sole_run_key()
+    store.forget_branch_undispatched(key, 2)
+    assert 2 not in store.present_dispatched_indexes(key)
+
+    resume = _CountingDispatcher(n=3)
+    r2 = _run_persona(
+        workflow_id="wf-pause-not-run",
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+    )
+    assert r2.status is RunStatus.SUCCESS
+    assert resume.dispatched == ["branch-2"]
+
+
+def test_crash_resume_orchestrator_workers_provably_not_run_recovers() -> None:
+    """The lift under ORCHESTRATOR_WORKERS: a not-yet-dispatched WORKER re-dispatches while the
+    orchestrator + the captured worker recover. The orchestrator is NOT re-dispatched (recovered
+    from its own record); only the provably-not-run worker re-fires."""
+    store = _InMemoryBranchStore()
+    steps = [_step("orch", 0), _step("w-0", 0), _step("w-1", 1)]
+    _run_persona(
+        workflow_id="wf-ow-not-run",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=2),
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+    )
+    key = store.sole_run_key()
+    store.forget_branch_undispatched(key, 1)  # worker w-1 not-yet-dispatched
+    assert store.orchestrator_present(key)
+    assert 1 not in store.present_dispatched_indexes(key)
+
+    resume = _CountingDispatcher(n=2)
+    r2 = _run_persona(
+        workflow_id="wf-ow-not-run",
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+    )
+    assert r2.status is RunStatus.SUCCESS
+    assert resume.dispatched == ["w-1"]  # orchestrator + w-0 recovered; only w-1 re-fires
+
+
+def test_crash_resume_hierarchical_top_level_provably_not_run_recovers() -> None:
+    """The lift under HIERARCHICAL_DELEGATION (top level — reuses `_execute_orchestrator_workers`,
+    so it threads the strict-tier reserve-before-dispatch path). Witnesses the clearance-marker
+    claim of hierarchical coverage (`[[full-chain-witness-not-half-proofs]]`). Cross-LEVEL keying
+    is safe by construction: `run_idempotency_key = sha256(run_id, workflow_id)` and each child
+    level re-enters with a DISTINCT child workflow_id → a distinct store dir → no branch_index
+    collision across levels (the markers key identically to `record_branch`)."""
+    store = _InMemoryBranchStore()
+    steps = [_step("parent", 0), _step("child-0", 0), _step("child-1", 1)]  # ≤3 (cap 3)
+    _run_persona(
+        workflow_id="wf-hd-not-run",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=2),
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        topology=TopologyPattern.HIERARCHICAL_DELEGATION,
+    )
+    key = store.sole_run_key()
+    store.forget_branch_undispatched(key, 1)  # child-1 not-yet-dispatched (provably not-run)
+    assert store.orchestrator_present(key)
+    assert 1 not in store.present_dispatched_indexes(key)
+
+    resume = _CountingDispatcher(n=2)
+    r2 = _run_persona(
+        workflow_id="wf-hd-not-run",
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        topology=TopologyPattern.HIERARCHICAL_DELEGATION,
+    )
+    assert r2.status is RunStatus.SUCCESS
+    assert "parent" not in resume.dispatched  # the orchestrator is recovered, not re-fired
+    assert resume.dispatched == ["child-1"]  # only the provably-not-run child re-dispatches
+
+
+def test_crash_resume_cardinality_only_no_dispatch_recovers_fresh() -> None:
+    """The cardinality-only lift: a crash AFTER the cardinality marker but BEFORE any branch
+    BEGAN dispatch (instrumented stamp present, ZERO dispatch markers) is provably a no-branch-
+    started state → the run re-dispatches every branch fresh (first-and-only) → SUCCESS, rather
+    than failing closed. (Contrast the maybe-ran cardinality-only test, which keeps the markers.)"""
+    store = _InMemoryBranchStore()
+    steps = [_step(f"branch-{i}", i) for i in range(3)]
+    _run_persona(
+        workflow_id="wf-cc-card-fresh",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3),
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+    )
+    key = store.sole_run_key()
+    for i in range(3):
+        store.forget_branch_undispatched(key, i)  # no output AND no marker for any branch
+    assert store.read_fanout_cardinality(key) == 3
+    assert store.present_dispatched_indexes(key) == set()
+    assert store.dispatch_instrumented(key)  # the run WAS instrumented
+
+    resume = _CountingDispatcher(n=3)
+    r2 = _run_persona(
+        workflow_id="wf-cc-card-fresh",
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+    )
+    assert r2.status is RunStatus.SUCCESS
+    assert sorted(resume.dispatched) == [
+        "branch-0",
+        "branch-1",
+        "branch-2",
+    ]  # all re-dispatch fresh
+
+
+def test_crash_resume_incomplete_pre_arc_journal_fails_closed() -> None:
+    """THE CROSS-VERSION GUARD (advisor BLOCKING). A crash journal written by PRE-arc code has NO
+    dispatch markers for ANY branch — including a maybe-ran one. Classifying its absent branches
+    'provably not-run' would re-dispatch + double-fire. The instrumented STAMP is the guard: an
+    un-stamped journal retains the conservative fail-closed even though no markers exist."""
+    store = _InMemoryBranchStore()
+    steps = [_step(f"branch-{i}", i) for i in range(3)]
+    _run_persona(
+        workflow_id="wf-cc-pre-arc",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3),
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+    )
+    key = store.sole_run_key()
+    store.forget_branch(key, 1)  # branch 1 absent (output)
+    store.simulate_pre_arc_journal(key)  # clear the stamp AND all markers (a pre-arc journal)
+    assert not store.dispatch_instrumented(key)
+    assert store.present_dispatched_indexes(key) == set()  # no markers at all
+
+    resume = _CountingDispatcher(n=3)
+    r2 = _run_persona(
+        workflow_id="wf-cc-pre-arc",
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+    )
+    assert r2.status is RunStatus.FAILED
+    assert "fan-out-crash-resume-cascade-policy-incomplete-recovery" in (r2.fail_class or "")
+    assert resume.dispatched == []  # un-stamped journal → fail closed, no re-dispatch
+
+
+def test_crash_resume_mixed_not_run_and_maybe_ran_fails_closed() -> None:
+    """ANY maybe-ran absent branch poisons the recovery. Branch 1 is not-yet-dispatched (safe)
+    but branch 2 is maybe-ran (marker kept, output gone). `present_dispatched − recovered = {2}`
+    ≠ ∅ → fail closed — the at-most-once guarantee admits re-dispatch only when EVERY absent
+    branch is provably not-run."""
+    store = _InMemoryBranchStore()
+    steps = [_step(f"branch-{i}", i) for i in range(3)]
+    _run_persona(
+        workflow_id="wf-cc-mixed",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3),
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+    )
+    key = store.sole_run_key()
+    store.forget_branch_undispatched(key, 1)  # provably not-run
+    store.forget_branch(key, 2)  # maybe-ran (marker kept)
+    assert 1 not in store.present_dispatched_indexes(key)
+    assert 2 in store.present_dispatched_indexes(key)
+
+    resume = _CountingDispatcher(n=3)
+    r2 = _run_persona(
+        workflow_id="wf-cc-mixed",
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+    )
+    assert r2.status is RunStatus.FAILED
+    assert "fan-out-crash-resume-cascade-policy-incomplete-recovery" in (r2.fail_class or "")
+    assert resume.dispatched == []  # any maybe-ran branch → fail closed

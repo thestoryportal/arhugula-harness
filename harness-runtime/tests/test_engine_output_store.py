@@ -287,3 +287,59 @@ def test_branch_sidecar_does_not_collide_with_linear_file(tmp_path: Path) -> Non
     assert store.read_outputs(_RUN_KEY) == {0: ("lin-0", {"x": 1})}
     assert store.read_branch_records(_RUN_KEY) == {0: ("w0", "completed", {"y": 2})}
     assert store.journal_exists(_RUN_KEY) is True
+
+
+# ---------------------------------------------------------------------------
+# B-FANOUT-CRASH-RESUME-STRICT-TIER-INCOMPLETE — reserve-before-dispatch markers +
+# the cross-version instrumented stamp (real-store round-trip across a restart).
+# ---------------------------------------------------------------------------
+def test_dispatched_marker_round_trip_across_restart(tmp_path: Path) -> None:
+    """record_branch_dispatched() persists a per-branch marker keyed by branch_index; a FRESH
+    store instance (= a process restart) reads it back. Marker presence is the at-most-once
+    signal — an absent branch with no marker is provably not-yet-run."""
+    store = EngineOutputStore(journal_dir=tmp_path / "eo")
+    store.record_branch_dispatched(_RUN_KEY, 0, "w0")
+    store.record_branch_dispatched(_RUN_KEY, 2, "w2")
+    fresh = EngineOutputStore(journal_dir=tmp_path / "eo")  # crash + restart
+    assert fresh.present_dispatched_indexes(_RUN_KEY) == {0, 2}
+
+
+def test_dispatched_markers_absent_returns_empty(tmp_path: Path) -> None:
+    """No markers recorded → the empty set (a run where no branch began dispatch)."""
+    store = EngineOutputStore(journal_dir=tmp_path / "eo")
+    assert store.present_dispatched_indexes(_RUN_KEY) == set()
+
+
+def test_dispatched_marker_idempotent_last_wins(tmp_path: Path) -> None:
+    """A re-recorded marker (a resume re-dispatch of the same branch) is idempotent — the
+    branch still appears exactly once in the present set."""
+    store = EngineOutputStore(journal_dir=tmp_path / "eo")
+    store.record_branch_dispatched(_RUN_KEY, 1, "w1")
+    store.record_branch_dispatched(_RUN_KEY, 1, "w1")
+    assert store.present_dispatched_indexes(_RUN_KEY) == {1}
+
+
+def test_dispatch_instrumented_stamp_round_trip(tmp_path: Path) -> None:
+    """record_dispatch_instrumented() persists the per-run cross-version stamp; a FRESH store
+    reads it back. Absent → False (a pre-arc journal, or a never-stamped run)."""
+    store = EngineOutputStore(journal_dir=tmp_path / "eo")
+    assert store.dispatch_instrumented(_RUN_KEY) is False
+    store.record_dispatch_instrumented(_RUN_KEY)
+    fresh = EngineOutputStore(journal_dir=tmp_path / "eo")  # crash + restart
+    assert fresh.dispatch_instrumented(_RUN_KEY) is True
+
+
+def test_dispatched_marker_does_not_collide_with_branch_capture(tmp_path: Path) -> None:
+    """The .dispatched marker file and the .jsonl terminal-capture file coexist per branch
+    (the reserve-before-DISPATCH marker is distinct from the reserve-before-COMMIT capture):
+    a branch can be both dispatched AND captured (completed), or dispatched-only (maybe-ran)."""
+    store = EngineOutputStore(journal_dir=tmp_path / "eo")
+    store.record_branch_dispatched(_RUN_KEY, 0, "w0")
+    store.record_branch(_RUN_KEY, 0, "w0", "completed", {"y": 2})
+    store.record_branch_dispatched(_RUN_KEY, 1, "w1")  # dispatched but NOT captured (maybe-ran)
+    assert store.present_dispatched_indexes(_RUN_KEY) == {0, 1}
+    assert store.read_branch_records(_RUN_KEY) == {0: ("w0", "completed", {"y": 2})}
+    # maybe-ran discriminator: dispatched − captured = {1}
+    assert store.present_dispatched_indexes(_RUN_KEY) - store.read_branch_records(
+        _RUN_KEY
+    ).keys() == {1}
