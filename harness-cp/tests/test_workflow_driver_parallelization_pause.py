@@ -39,9 +39,14 @@ from harness_cp.cross_family_fallback_chain import (
 )
 from harness_cp.engine_class import EngineClass
 from harness_cp.handoff_context import StateSummary
-from harness_cp.pause_resume_protocol import PauseResumeProtocol, _compute_snapshot_hash
+from harness_cp.pause_resume_protocol import (
+    PauseResumeProtocol,
+    _compute_snapshot_hash,
+    _strip_none_synthesis_step_id,
+)
 from harness_cp.pause_resume_protocol_types import (
     FanOutBranchResumeState,
+    FanOutResumeState,
     PauseSnapshot,
     PeerFanOutResumeState,
     WorkflowPauseReason,
@@ -53,6 +58,9 @@ from harness_cp.workflow_driver import (
     StepDispatcher,
     StepDispatcherRegistry,
     StepKindDispatcherNotBoundError,
+    _DriverStrategyStatus,
+    _synthesis_resume_carrier_mismatch,
+    _synthesis_resume_material_diff,
     execute_workflow,
 )
 from harness_cp.workflow_driver_types import (
@@ -206,6 +214,51 @@ class _CountingDispatcher:
         if step_id in self._fail:
             raise RuntimeError(f"simulated branch failure at {step_id}")
         return {"role": step_id, "echoed": dict(step.step_payload)}
+
+
+class _SynthDispatcher:
+    """B-FANOUT-PAUSE-SYNTHESIS — handles BOTH peer branches (`DECLARATIVE_STEP`,
+    echoing `{role, echoed}`) AND the terminal `POST_JOIN_SYNTHESIS` step (returning a
+    DISTINCT `{synthesized, from}` marker so a test can prove the run's aggregate is the
+    SYNTHESIZED output, NOT the deterministic `{branch_outputs}` fold). Records every
+    dispatched step_id so the synthesis-dispatched-exactly-once + branches-re-dispatched
+    claims are checkable."""
+
+    def __init__(self) -> None:
+        self.dispatched: list[str] = []
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        step_id = str(step.step_id)
+        self.dispatched.append(step_id)
+        if step.step_kind is StepKind.POST_JOIN_SYNTHESIS:
+            siblings = tuple(
+                sid for sid, _ in (getattr(step_context, "sibling_outputs", None) or ())
+            )
+            return {"synthesized": True, "from": siblings}
+        return {"role": step_id, "echoed": dict(step.step_payload)}
+
+
+class _SynthRegistry:
+    """Routes BOTH `DECLARATIVE_STEP` (branches) and `POST_JOIN_SYNTHESIS` (the
+    post-barrier synthesis) to one `_SynthDispatcher`."""
+
+    def __init__(self, dispatcher: StepDispatcher) -> None:
+        self._dispatcher = dispatcher
+
+    def lookup(self, step_kind: StepKind) -> StepDispatcher:
+        if step_kind not in (StepKind.DECLARATIVE_STEP, StepKind.POST_JOIN_SYNTHESIS):
+            raise StepKindDispatcherNotBoundError(step_kind)
+        return self._dispatcher
+
+
+def _synthesis_step(step_id: str = "synthesis") -> WorkflowStep:
+    return WorkflowStep(
+        step_id=StepID(step_id),
+        step_kind=StepKind.POST_JOIN_SYNTHESIS,
+        step_payload={"messages": [], "params": {"max_tokens": 64}},
+    )
 
 
 class _GatedFailDispatcher:
@@ -481,32 +534,350 @@ def test_negative_control_empty_branches_loses_recovery() -> None:
     }
 
 
-def test_resume_with_terminal_synthesis_rejected_fail_closed() -> None:
-    """Out-of-family Codex round 9 [P1] — a synthesis-bearing fan-out being RESUMED is
-    rejected fail-closed at the placement guard, BEFORE any branch/synthesis dispatch. The
-    strategy resume material-diff guard validates only the CARVED branch set; the terminal
-    POST_JOIN_SYNTHESIS step is carved before that check + has no snapshot identity, so a
-    changed / added / removed synthesis would bypass material-diff validation. This enforces
-    CP spec v1.54 §3/§4's "fresh first-and-only dispatch … no completed-synthesis replay";
-    reproducible synthesis-across-resume is the registered B-FANOUT-OUTPUT-REPLAY arc."""
+def test_resume_with_matching_synthesis_fresh_dispatches_succeeds() -> None:
+    """B-FANOUT-PAUSE-SYNTHESIS full-chain (PARALLELIZATION) — a synthesis-bearing peer
+    fan-out PAUSE is now RESUMABLE. The snapshot carries the synthesis identity
+    (`synthesis_step_id="synthesis"`); resume material-diffs it against the re-supplied
+    terminal synthesis (match), recovers/re-dispatches the branches, then FRESH-dispatches
+    the synthesis post-barrier (it never ran on a pause → effect-free, first-and-only).
+    The load-bearing assertions: the aggregate is the SYNTHESIZED output (NOT the
+    deterministic `{branch_outputs}` fold), and the synthesis dispatched EXACTLY ONCE."""
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    snapshot = _captured_snapshot(
+        peer_fan_out_resume=PeerFanOutResumeState(
+            branches=(), branch_count=2, synthesis_step_id="synthesis"
+        )
+    )
+    dispatcher = _SynthDispatcher()
+    result = execute_workflow(
+        _manifest(),
+        [*_steps(2), _synthesis_step()],
+        run_id="run-1",
+        ctx=ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=cast(StepDispatcherRegistry, _SynthRegistry(dispatcher)),
+        pause_snapshot_input=snapshot,
+    )
+    assert result.status is RunStatus.SUCCESS
+    # The aggregate is the SYNTHESIZED output, NOT the deterministic fold — a fold-fallback
+    # bug (synthesis silently skipped) would yield `{"branch_outputs": ...}` and pass a bare
+    # "resume succeeds" test. `from` carries the branch-index-ordered sibling step_ids.
+    assert result.final_state == {"synthesized": True, "from": (0, 1)}
+    # The synthesis dispatched EXACTLY ONCE (first-and-only — no replay, no double-dispatch).
+    assert dispatcher.dispatched.count("synthesis") == 1
+    # Both branches were re-dispatched (nothing recovered in this snapshot).
+    assert {s for s in dispatcher.dispatched if s.startswith("branch")} == {
+        "branch-0",
+        "branch-1",
+    }
+
+
+def test_resume_synthesis_added_fails_closed() -> None:
+    """B-FANOUT-PAUSE-SYNTHESIS material-diff (ADDED) — a snapshot captured WITHOUT a
+    synthesis (`synthesis_step_id=None`) but resumed against a body that NOW carries a
+    terminal synthesis fails closed: the synthesis was added between pause and resume, so a
+    fresh dispatch would compose an aggregate the original run never produced. Fail-closed
+    BEFORE any branch/synthesis dispatch (the original [P1] reject posture preserved as a
+    typed material-diff)."""
     ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
     snapshot = _captured_snapshot(
         peer_fan_out_resume=PeerFanOutResumeState(branches=(), branch_count=2)
     )
-    synthesis = WorkflowStep(
-        step_id=StepID("synthesis"),
-        step_kind=StepKind.POST_JOIN_SYNTHESIS,
-        step_payload={"messages": [], "params": {"max_tokens": 64}},
-    )
     result = _run(
-        steps=[*_steps(2), synthesis],
+        steps=[*_steps(2), _synthesis_step()],
         dispatcher=_CountingDispatcher(),
         ctx=ctx,
         pause_snapshot_input=snapshot,
     )
     assert result.status is RunStatus.FAILED
     assert result.fail_class is not None
-    assert result.fail_class.startswith("post-join-synthesis-on-resume-unsupported:")
+    assert result.fail_class.startswith("post-join-synthesis-resume-material-diff:")
+
+
+def test_resume_synthesis_removed_fails_closed() -> None:
+    """B-FANOUT-PAUSE-SYNTHESIS material-diff (REMOVED) — a snapshot that CAPTURED a
+    synthesis (`synthesis_step_id="synthesis"`) but resumed against a body with NO terminal
+    synthesis fails closed rather than silently yielding the deterministic fold. This is the
+    silent-DROP case a check nested inside the placement block would structurally miss (the
+    resumed body has no synthesis position to trigger it)."""
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    snapshot = _captured_snapshot(
+        peer_fan_out_resume=PeerFanOutResumeState(
+            branches=(), branch_count=2, synthesis_step_id="synthesis"
+        )
+    )
+    result = _run(
+        steps=_steps(2),  # NO synthesis step on resume
+        dispatcher=_CountingDispatcher(),
+        ctx=ctx,
+        pause_snapshot_input=snapshot,
+    )
+    assert result.status is RunStatus.FAILED
+    assert result.fail_class is not None
+    assert result.fail_class.startswith("post-join-synthesis-resume-material-diff:")
+
+
+def test_resume_synthesis_changed_step_id_fails_closed() -> None:
+    """B-FANOUT-PAUSE-SYNTHESIS material-diff (CHANGED) — a snapshot that captured
+    `synthesis_step_id="synthesis-a"` but resumed against a body whose terminal synthesis is
+    `synthesis-b` fails closed: a same-position rename is a body change, so fresh-dispatching
+    the renamed synthesis would compose a divergent aggregate."""
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    snapshot = _captured_snapshot(
+        peer_fan_out_resume=PeerFanOutResumeState(
+            branches=(), branch_count=2, synthesis_step_id="synthesis-a"
+        )
+    )
+    result = _run(
+        steps=[*_steps(2), _synthesis_step("synthesis-b")],
+        dispatcher=_CountingDispatcher(),
+        ctx=ctx,
+        pause_snapshot_input=snapshot,
+    )
+    assert result.status is RunStatus.FAILED
+    assert result.fail_class is not None
+    assert result.fail_class.startswith("post-join-synthesis-resume-material-diff:")
+
+
+def test_synthesis_absent_peer_snapshot_byte_compat_hash() -> None:
+    """B-FANOUT-PAUSE-SYNTHESIS byte-compat (PeerFanOutResumeState) — a synthesis-ABSENT
+    peer snapshot (`synthesis_step_id=None`) hashes byte-identically to the pre-arc shape:
+    `_compute_snapshot_hash` DROPS the `synthesis_step_id` key from the canonical
+    serialization when None, so every old durable PARALLELIZATION snapshot still validates.
+    `PeerFanOutResumeState` had NO drop before this field, so this guards the freshly-added
+    drop."""
+    import hashlib
+    import json
+
+    state_summary, _ = _pause_context_reader()
+    peer = PeerFanOutResumeState(branches=(), branch_count=2)  # synthesis_step_id defaults None
+    got = _compute_snapshot_hash(
+        workflow_id="wf-pp",
+        run_id="run-1",
+        step_index=0,
+        state_summary=state_summary,
+        peer_fan_out_resume=peer,
+    )
+    # The pre-arc canonical serialization — peer carrier with NO `synthesis_step_id` key.
+    canonical = {
+        "workflow_id": "wf-pp",
+        "run_id": "run-1",
+        "step_index": 0,
+        "state_summary": state_summary.model_dump(mode="json"),
+        "peer_fan_out_resume": {"branches": [], "branch_count": 2},
+    }
+    expected = hashlib.sha256(
+        json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    assert got == expected
+
+
+def test_synthesis_material_diff_helper_covers_both_carriers() -> None:
+    """B-FANOUT-PAUSE-SYNTHESIS — direct unit coverage of `_synthesis_resume_material_diff`
+    over BOTH resume carriers and all identity-diff directions. Includes the HIERARCHICAL
+    case: a HIERARCHICAL child re-enters via `execute_workflow(pause_snapshot_input=...)`
+    against a `FanOutResumeState`-bearing child snapshot, so the FanOut branch of this helper
+    IS the child-level guard."""
+
+    def _peer(synthesis_step_id: str | None) -> PauseSnapshot:
+        return _captured_snapshot(
+            peer_fan_out_resume=PeerFanOutResumeState(
+                branches=(), branch_count=1, synthesis_step_id=synthesis_step_id
+            )
+        )
+
+    def _fanout(synthesis_step_id: str | None) -> PauseSnapshot:
+        fan = FanOutResumeState(
+            orchestrator_output={},
+            orchestrator_step_id="orch",
+            branches=(),
+            worker_count=1,
+            synthesis_step_id=synthesis_step_id,
+        )
+        return asyncio.run(
+            _protocol().capture_pause_snapshot(
+                workflow_id="wf-pp",
+                run_id="run-1",
+                step_index=0,
+                pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
+                fan_out_resume=fan,
+            )
+        )
+
+    no_synth = _steps(1)
+    with_synth = [*_steps(1), _synthesis_step("synthesis")]
+    with_other = [*_steps(1), _synthesis_step("other")]
+    _ORCH = _DriverStrategyStatus.ORCHESTRATOR_WORKERS
+    _PAR = _DriverStrategyStatus.PARALLELIZATION
+    # Each builder is read under the strategy whose carrier it populates: `_peer` (a
+    # PeerFanOutResumeState snapshot) under PARALLELIZATION, `_fanout` (a FanOutResumeState
+    # snapshot) under ORCHESTRATOR_WORKERS. HIERARCHICAL_DELEGATION reuses the FanOut carrier,
+    # so `_fanout` under HIERARCHICAL is the child-level guard.
+    for build, strat in ((_peer, _PAR), (_fanout, _ORCH)):
+        # both-present match → None (OK)
+        assert _synthesis_resume_material_diff(build("synthesis"), with_synth, strat) is None
+        # both-absent → None (a non-synthesis fan-out resume, unchanged)
+        assert _synthesis_resume_material_diff(build(None), no_synth, strat) is None
+        # added (captured None, resumed present) → fail
+        assert _synthesis_resume_material_diff(build(None), with_synth, strat) is not None
+        # removed (captured present, resumed absent) → fail
+        assert _synthesis_resume_material_diff(build("synthesis"), no_synth, strat) is not None
+        # changed step_id → fail
+        assert _synthesis_resume_material_diff(build("synthesis"), with_other, strat) is not None
+    # HIERARCHICAL_DELEGATION reads the FanOut carrier (the child-level guard path).
+    assert (
+        _synthesis_resume_material_diff(
+            _fanout("synthesis"), with_synth, _DriverStrategyStatus.HIERARCHICAL_DELEGATION
+        )
+        is None
+    )
+    # CARRIER/TOPOLOGY MISMATCH (out-of-family Codex [P1]) — a synthesis-bearing snapshot
+    # captured under one carrier but resumed under the OTHER topology fails closed: the
+    # strategy's EXPECTED carrier is absent → captured None → differs from the present
+    # resumed synthesis. A `peer` snapshot resumed as ORCHESTRATOR_WORKERS, and a `fanout`
+    # snapshot resumed as PARALLELIZATION — both reject (would otherwise run the fan-out fresh).
+    assert _synthesis_resume_material_diff(_peer("synthesis"), with_synth, _ORCH) is not None
+    assert _synthesis_resume_material_diff(_fanout("synthesis"), with_synth, _PAR) is not None
+
+
+def test_strip_none_synthesis_step_id_recurses_into_nested_child_snapshots() -> None:
+    """B-FANOUT-PAUSE-SYNTHESIS byte-compat (NESTED, out-of-family Codex [P1]) — the hash
+    drop must RECURSE: a HIERARCHICAL `paused_child_branches` cursor serializes a child
+    `PauseSnapshot` (with its own `fan_out_resume`) inside the parent carrier's `model_dump`,
+    so a nested `synthesis_step_id: null` must be stripped too — a top-level-only drop would
+    change the recomputed hash of valid pre-existing HIERARCHICAL parent snapshots. This
+    asserts the recursion strips None at EVERY depth while KEEPING a synthesis-bearing id."""
+    tree: dict[str, Any] = {
+        "synthesis_step_id": None,  # top-level (parent carrier)
+        "branches": [],
+        "paused_child_branches": [
+            {
+                "branch_index": 0,
+                "step_id": "worker-0",
+                "child_snapshot": {
+                    "run_id": "child",
+                    "fan_out_resume": {
+                        "synthesis_step_id": None,  # nested child carrier — the [P1] leak
+                        "branches": [],
+                    },
+                    "peer_fan_out_resume": {
+                        "synthesis_step_id": "kept-grandchild",  # non-None → KEPT
+                    },
+                },
+            }
+        ],
+    }
+    _strip_none_synthesis_step_id(tree)
+    assert "synthesis_step_id" not in tree
+    child = tree["paused_child_branches"][0]["child_snapshot"]
+    assert "synthesis_step_id" not in child["fan_out_resume"]
+    # a present (synthesis-bearing) id at ANY depth is hash-covered → KEPT.
+    assert child["peer_fan_out_resume"]["synthesis_step_id"] == "kept-grandchild"
+
+
+def test_strip_preserves_user_synthesis_step_id_in_recovered_output() -> None:
+    """B-FANOUT-PAUSE-SYNTHESIS — the strip is PATH-AWARE (out-of-family Codex [P2]): it
+    touches ONLY the carrier's OWN structural `synthesis_step_id`, NOT a user-data key that
+    happens to be named `synthesis_step_id` inside recovered output (`orchestrator_output` /
+    `branches[].output`). Such a user key MUST stay hash-covered — a blanket recursive walk
+    would strip it (breaking byte-compat for old snapshots + leaving it uncovered for new
+    ones). Witness: a recovered `orchestrator_output` with `synthesis_step_id: None` changes
+    the snapshot hash (it is covered), while the carrier's own default-None field does not."""
+    state_summary, _ = _pause_context_reader()
+
+    def _hash(orchestrator_output: dict[str, Any]) -> str:
+        fan = FanOutResumeState(
+            orchestrator_output=orchestrator_output,
+            orchestrator_step_id="orch",
+            branches=(),
+            worker_count=1,
+        )
+        return _compute_snapshot_hash(
+            workflow_id="wf-pp",
+            run_id="run-1",
+            step_index=0,
+            state_summary=state_summary,
+            fan_out_resume=fan,
+        )
+
+    # A user-data `synthesis_step_id` key in recovered output is HASH-COVERED → its presence
+    # changes the hash (the path-aware strip never reaches into orchestrator_output).
+    assert _hash({"synthesis_step_id": None, "data": 1}) != _hash({"data": 1})
+    # And it survives in the strip output (not silently removed).
+    dumped = FanOutResumeState(
+        orchestrator_output={"synthesis_step_id": None, "data": 1},
+        orchestrator_step_id="orch",
+        branches=(),
+        worker_count=1,  # carrier synthesis_step_id defaults None
+    ).model_dump(mode="json")
+    _strip_none_synthesis_step_id(dumped)
+    assert "synthesis_step_id" not in dumped  # the CARRIER's own field is stripped
+    assert "synthesis_step_id" in dumped["orchestrator_output"]  # the USER key is preserved
+
+
+def test_synthesis_resume_carrier_mismatch_fails_closed_even_without_resumed_synthesis() -> None:
+    """B-FANOUT-PAUSE-SYNTHESIS carrier/topology mismatch (out-of-family Codex [P1] round 2)
+    — a synthesis-bearing snapshot resumed under the OTHER topology fails closed EVEN when
+    the resumed body also dropped the terminal synthesis. The identity material-diff alone
+    false-passes there (the strategy's expected carrier is empty → captured None == resumed
+    None), so the dedicated carrier-mismatch guard is what fails it closed — otherwise the
+    strategy reads its absent carrier and runs the fan-out FRESH, re-dispatching
+    effect-bearing branches."""
+    _ORCH = _DriverStrategyStatus.ORCHESTRATOR_WORKERS
+    _PAR = _DriverStrategyStatus.PARALLELIZATION
+    fan_snap = _captured_snapshot_fanout("synthesis")
+    peer_snap = _captured_snapshot(
+        peer_fan_out_resume=PeerFanOutResumeState(
+            branches=(), branch_count=1, synthesis_step_id="synthesis"
+        )
+    )
+    # The predicate: a synthesis-bearing FanOut snapshot is a mismatch under PARALLELIZATION
+    # (and vice versa); it is NOT a mismatch under its own / the sibling fan-out topology.
+    assert _synthesis_resume_carrier_mismatch(fan_snap, _PAR) is True
+    assert _synthesis_resume_carrier_mismatch(fan_snap, _ORCH) is False
+    assert (
+        _synthesis_resume_carrier_mismatch(fan_snap, _DriverStrategyStatus.HIERARCHICAL_DELEGATION)
+        is False
+    )
+    assert _synthesis_resume_carrier_mismatch(peer_snap, _ORCH) is True
+    assert _synthesis_resume_carrier_mismatch(peer_snap, _PAR) is False
+    # A non-synthesis snapshot is NEVER a synthesis carrier-mismatch (pre-existing
+    # non-synthesis carrier/topology behavior is out of this guard's scope).
+    no_synth_fan = _captured_snapshot_fanout(None)
+    assert _synthesis_resume_carrier_mismatch(no_synth_fan, _PAR) is False
+    # End-to-end: a FanOut+synthesis snapshot resumed as PARALLELIZATION with NO terminal
+    # synthesis in the resumed body fails closed (the false-pass the guard closes).
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    result = _run(
+        steps=_steps(1),  # NO synthesis step
+        dispatcher=_CountingDispatcher(),
+        ctx=ctx,
+        pause_snapshot_input=fan_snap,
+    )
+    assert result.status is RunStatus.FAILED
+    assert result.fail_class is not None
+    assert result.fail_class.startswith("post-join-synthesis-resume-carrier-mismatch:")
+
+
+def _captured_snapshot_fanout(synthesis_step_id: str | None) -> PauseSnapshot:
+    """A hash-valid ORCHESTRATOR_WORKERS (FanOutResumeState) snapshot for carrier-mismatch
+    tests — captured through the real protocol."""
+    fan = FanOutResumeState(
+        orchestrator_output={},
+        orchestrator_step_id="orch",
+        branches=(),
+        worker_count=1,
+        synthesis_step_id=synthesis_step_id,
+    )
+    return asyncio.run(
+        _protocol().capture_pause_snapshot(
+            workflow_id="wf-pp",
+            run_id="run-1",
+            step_index=0,
+            pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
+            fan_out_resume=fan,
+        )
+    )
 
 
 def test_resume_branch_count_mismatch_fails_closed() -> None:

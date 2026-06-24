@@ -42,6 +42,7 @@ from harness_cp.pause_resume_protocol import PauseResumeProtocol, _compute_snaps
 from harness_cp.pause_resume_protocol_types import (
     FanOutBranchResumeState,
     FanOutResumeState,
+    PausedChildBranchResumeState,
     PauseSnapshot,
     WorkflowPauseReason,
 )
@@ -240,6 +241,47 @@ class _GatedFailDispatcher:
         # worker-1: wait until worker-0 has completed, then fail (the trigger).
         assert self._gate.wait(timeout=10.0), "worker-0 never completed"
         raise RuntimeError("simulated worker-1 failure (after worker-0 completed)")
+
+
+class _SynthDispatcher:
+    """B-FANOUT-PAUSE-SYNTHESIS — handles the orchestrator + worker branches
+    (`DECLARATIVE_STEP`) AND the terminal `POST_JOIN_SYNTHESIS` step (returning a
+    DISTINCT `{synthesized, from}` marker so a test can prove the run's aggregate is the
+    SYNTHESIZED output, NOT the deterministic orchestrator+workers fold). Records every
+    dispatched step_id."""
+
+    def __init__(self) -> None:
+        self.dispatched: list[str] = []
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        step_id = str(step.step_id)
+        self.dispatched.append(step_id)
+        if step.step_kind is StepKind.POST_JOIN_SYNTHESIS:
+            siblings = tuple(
+                sid for sid, _ in (getattr(step_context, "sibling_outputs", None) or ())
+            )
+            return {"synthesized": True, "from": siblings}
+        return {"role": step_id, "echoed": dict(step.step_payload)}
+
+
+class _SynthRegistry:
+    def __init__(self, dispatcher: StepDispatcher) -> None:
+        self._dispatcher = dispatcher
+
+    def lookup(self, step_kind: StepKind) -> StepDispatcher:
+        if step_kind not in (StepKind.DECLARATIVE_STEP, StepKind.POST_JOIN_SYNTHESIS):
+            raise StepKindDispatcherNotBoundError(step_kind)
+        return self._dispatcher
+
+
+def _synthesis_step(step_id: str = "synthesis") -> WorkflowStep:
+    return WorkflowStep(
+        step_id=StepID(step_id),
+        step_kind=StepKind.POST_JOIN_SYNTHESIS,
+        step_payload={"messages": [], "params": {"max_tokens": 64}},
+    )
 
 
 def _run(
@@ -1069,3 +1111,314 @@ def test_cancellation_race_captures_paused_child_among_failing_siblings() -> Non
         f"terminal={terminal_indices}"
     )
     assert terminal_indices.isdisjoint(pcb_indices)
+
+
+# ---------------------------------------------------------------------------
+# B-FANOUT-PAUSE-SYNTHESIS — synthesis-bearing ORCHESTRATOR_WORKERS pause-resume.
+# (HIERARCHICAL_DELEGATION reuses `_execute_orchestrator_workers` + `FanOutResumeState`
+# + the SAME `execute_workflow(pause_snapshot_input=...)` entry the child re-enters on,
+# so these FanOut witnesses cover the HIERARCHICAL top-level + child-level paths too.)
+# ---------------------------------------------------------------------------
+
+
+def test_resume_with_matching_synthesis_fresh_dispatches_succeeds() -> None:
+    """B-FANOUT-PAUSE-SYNTHESIS full-chain (ORCHESTRATOR_WORKERS) — a synthesis-bearing
+    fan-out PAUSE is now RESUMABLE. The snapshot recovers the orchestrator output + carries
+    the synthesis identity (`synthesis_step_id="synthesis"`); resume material-diffs it
+    (match), re-dispatches the (absent) workers, then FRESH-dispatches the synthesis over
+    the worker siblings post-barrier (it never ran on a pause → effect-free, first-and-only).
+    Load-bearing: the aggregate is the SYNTHESIZED output (NOT the orchestrator+workers
+    fold), the synthesis dispatched EXACTLY ONCE, and the orchestrator was NOT re-dispatched
+    (recovered)."""
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    snapshot = _captured_snapshot(
+        fan_out_resume=FanOutResumeState(
+            orchestrator_output={"role": "orchestrator", "recovered": True},
+            orchestrator_step_id="orchestrator",
+            branches=(),  # both workers re-dispatchable
+            worker_count=2,
+            synthesis_step_id="synthesis",
+        )
+    )
+    dispatcher = _SynthDispatcher()
+    result = execute_workflow(
+        _manifest(),
+        [*_steps(2), _synthesis_step()],
+        run_id="run-1",
+        ctx=ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=cast(StepDispatcherRegistry, _SynthRegistry(dispatcher)),
+        pause_snapshot_input=snapshot,
+    )
+    assert result.status is RunStatus.SUCCESS
+    # SYNTHESIZED output, NOT the fold — `from` carries the branch-index-ordered WORKER
+    # siblings (0, 1); the orchestrator (steps[0]) is NOT a sibling.
+    assert result.final_state == {"synthesized": True, "from": (0, 1)}
+    assert dispatcher.dispatched.count("synthesis") == 1
+    # Workers re-dispatched; the orchestrator was recovered (NOT re-dispatched).
+    assert {s for s in dispatcher.dispatched if s.startswith("worker")} == {
+        "worker-0",
+        "worker-1",
+    }
+    assert "orchestrator" not in dispatcher.dispatched
+
+
+def test_resume_synthesis_added_fails_closed_fanout() -> None:
+    """B-FANOUT-PAUSE-SYNTHESIS material-diff (ADDED, ORCHESTRATOR_WORKERS) — a snapshot
+    captured WITHOUT a synthesis but resumed against a body that NOW carries one fails
+    closed (the synthesis was added between pause and resume)."""
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    snapshot = _captured_snapshot(
+        fan_out_resume=FanOutResumeState(
+            orchestrator_output={"role": "orchestrator"},
+            orchestrator_step_id="orchestrator",
+            branches=(),
+            worker_count=2,
+        )
+    )
+    result = _run(
+        steps=[*_steps(2), _synthesis_step()],
+        dispatcher=_CountingDispatcher(),
+        ctx=ctx,
+        pause_snapshot_input=snapshot,
+    )
+    assert result.status is RunStatus.FAILED
+    assert result.fail_class is not None
+    assert result.fail_class.startswith("post-join-synthesis-resume-material-diff:")
+
+
+def test_synthesis_absent_fanout_snapshot_byte_compat_hash() -> None:
+    """B-FANOUT-PAUSE-SYNTHESIS byte-compat (FanOutResumeState) — a synthesis-ABSENT fan-out
+    snapshot (`synthesis_step_id=None`, no `paused_child_branches`) hashes byte-identically
+    to the pre-arc shape: `_compute_snapshot_hash` DROPS the `synthesis_step_id` key (next to
+    the existing `paused_child_branches` drop) when None, so every old durable
+    ORCHESTRATOR_WORKERS snapshot still validates."""
+    import hashlib
+    import json
+
+    state_summary, _ = _pause_context_reader()
+    fan = FanOutResumeState(
+        orchestrator_output={"role": "orchestrator"},
+        orchestrator_step_id="orchestrator",
+        branches=(),
+        worker_count=2,
+    )  # synthesis_step_id + paused_child_branches both default-empty
+    got = _compute_snapshot_hash(
+        workflow_id="wf-fp",
+        run_id="run-1",
+        step_index=0,
+        state_summary=state_summary,
+        fan_out_resume=fan,
+    )
+    # The pre-arc canonical serialization — FanOut carrier with NEITHER `synthesis_step_id`
+    # NOR `paused_child_branches` keys (both dropped when empty).
+    canonical = {
+        "workflow_id": "wf-fp",
+        "run_id": "run-1",
+        "step_index": 0,
+        "state_summary": state_summary.model_dump(mode="json"),
+        "fan_out_resume": {
+            "orchestrator_output": {"role": "orchestrator"},
+            "orchestrator_step_id": "orchestrator",
+            "branches": [],
+            "worker_count": 2,
+        },
+    }
+    expected = hashlib.sha256(
+        json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    assert got == expected
+
+
+# ---------------------------------------------------------------------------
+# B-FANOUT-PAUSE-SYNTHESIS × HIERARCHICAL — a REAL nested round-trip (advisor Item 1).
+# A synthesis-bearing CHILD fan-out snapshot embedded in a parent's paused_child_branches:
+# proves (1) the nested child synthesis identity survives a REAL protocol capture, (2) the
+# parent hash recomputes consistently over the nested carrier (the recursive `synthesis_step_id`
+# strip — Codex #1 was exactly a nested-HIERARCHICAL hash bug), and (3) on parent resume the
+# child re-enters `execute_workflow(pause_snapshot_input=...)`, MY entry guard material-diffs the
+# child synthesis (matches), and the child reaches SUCCESS + FRESH-dispatches its synthesis once.
+# ---------------------------------------------------------------------------
+
+
+class _ChildSynthDispatcher:
+    """Child fan-out dispatcher with a terminal synthesis: `child-orch` + workers echo;
+    `child-synthesis` returns a DISTINCT marker + counts its dispatches (so the
+    fresh-dispatched-exactly-once claim is checkable)."""
+
+    def __init__(self) -> None:
+        self.synth_dispatches = 0
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        if step.step_kind is StepKind.POST_JOIN_SYNTHESIS:
+            self.synth_dispatches += 1
+            sibs = tuple(i for i, _ in (getattr(step_context, "sibling_outputs", None) or ()))
+            return {"child_synthesized": True, "from": sibs}
+        return {"role": str(step.step_id)}
+
+
+class _ChildSynthRegistry:
+    def __init__(self, dispatcher: StepDispatcher) -> None:
+        self._dispatcher = dispatcher
+
+    def lookup(self, step_kind: StepKind) -> StepDispatcher:
+        if step_kind not in (StepKind.DECLARATIVE_STEP, StepKind.POST_JOIN_SYNTHESIS):
+            raise StepKindDispatcherNotBoundError(step_kind)
+        return self._dispatcher
+
+
+def _child_steps_with_synthesis() -> list[WorkflowStep]:
+    return [
+        WorkflowStep(
+            step_id=StepID("child-orch"),
+            step_kind=StepKind.DECLARATIVE_STEP,
+            step_payload={"role": "child-orch"},
+        ),
+        WorkflowStep(
+            step_id=StepID("child-worker-0"),
+            step_kind=StepKind.DECLARATIVE_STEP,
+            step_payload={"index": 0},
+        ),
+        WorkflowStep(
+            step_id=StepID("child-worker-1"),
+            step_kind=StepKind.DECLARATIVE_STEP,
+            step_payload={"index": 1},
+        ),
+        WorkflowStep(
+            step_id=StepID("child-synthesis"),
+            step_kind=StepKind.POST_JOIN_SYNTHESIS,
+            step_payload={"messages": [], "params": {"max_tokens": 64}},
+        ),
+    ]
+
+
+class _SynthChildSubAgentDispatcher:
+    """Faithful sub-agent double that re-enters a SYNTHESIS-bearing child fan-out, threading
+    `step_context.child_resume_snapshot` as the child's `pause_snapshot_input` (exactly the
+    runtime `sub_agent_dispatch.py` seam) so the child re-enters at its cursor."""
+
+    def __init__(self, *, child_dispatcher: _ChildSynthDispatcher) -> None:
+        self._child_dispatcher = child_dispatcher
+        self.received_resume: list[Any] = []
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        child_resume = getattr(step_context, "child_resume_snapshot", None)
+        self.received_resume.append(child_resume)
+        child_ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+        child_result = execute_workflow(
+            _manifest("wf-child", TopologyPattern.ORCHESTRATOR_WORKERS),
+            _child_steps_with_synthesis(),
+            run_id="child-run",
+            ctx=child_ctx,
+            default_model_binding=_DEFAULT_BINDING,
+            step_dispatchers=cast(
+                StepDispatcherRegistry, _ChildSynthRegistry(self._child_dispatcher)
+            ),
+            pause_snapshot_input=child_resume,
+        )
+        if child_result.status is RunStatus.PAUSED:
+            assert child_result.pause_snapshot is not None
+            raise SubAgentChildPausedError(
+                child_workflow_id="wf-child", child_snapshot=child_result.pause_snapshot
+            )
+        return dict(child_result.final_state or child_result.partial_state or {})
+
+
+class _SynthParentRegistry:
+    def __init__(self, *, sub_agent: _SynthChildSubAgentDispatcher) -> None:
+        self._sub_agent = sub_agent
+        self._echo = _CountingDispatcher()
+
+    def lookup(self, step_kind: StepKind) -> StepDispatcher:
+        if step_kind is StepKind.SUB_AGENT_DISPATCH:
+            return cast(StepDispatcher, self._sub_agent)
+        if step_kind is StepKind.DECLARATIVE_STEP:
+            return cast(StepDispatcher, self._echo)
+        raise StepKindDispatcherNotBoundError(step_kind)
+
+
+def test_hierarchical_child_synthesis_real_nested_round_trip() -> None:
+    """B-FANOUT-PAUSE-SYNTHESIS × HIERARCHICAL real nested round-trip (advisor Item 1)."""
+    # A synthesis-bearing CHILD snapshot — captured through the REAL protocol (hash-valid).
+    # `branches=()` → resume re-dispatches both child workers → SUCCESS → the synthesis fires
+    # (a real failure-pause always leaves a terminal-errored branch → degraded → fold, so the
+    # SUCCESS+synthesis path is the no-errored-branch shape, as for the top-level full-chain).
+    child_snap = asyncio.run(
+        _protocol().capture_pause_snapshot(
+            workflow_id="wf-child",
+            run_id="child-run",
+            step_index=0,
+            pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
+            fan_out_resume=FanOutResumeState(
+                orchestrator_output={"role": "child-orch", "recovered": True},
+                orchestrator_step_id="child-orch",
+                branches=(),
+                worker_count=2,
+                synthesis_step_id="child-synthesis",
+            ),
+        )
+    )
+    # A parent snapshot embedding the child as a paused-child branch (the sub-worker, ordinal 0).
+    parent_fan = FanOutResumeState(
+        orchestrator_output={"role": "parent-orch", "recovered": True},
+        orchestrator_step_id="parent-orch",
+        branches=(),
+        worker_count=1,
+        paused_child_branches=(
+            PausedChildBranchResumeState(
+                branch_index=0, step_id="sub-worker", child_snapshot=child_snap
+            ),
+        ),
+    )
+    parent_snap = asyncio.run(
+        _protocol().capture_pause_snapshot(
+            workflow_id="wf-parent",
+            run_id="parent-run",
+            step_index=0,
+            pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
+            fan_out_resume=parent_fan,
+        )
+    )
+    # (1) REAL nested capture: the child's synthesis identity survives inside the parent snapshot.
+    assert parent_snap.fan_out_resume is not None
+    nested = parent_snap.fan_out_resume.paused_child_branches[0].child_snapshot
+    assert nested.fan_out_resume is not None
+    assert nested.fan_out_resume.synthesis_step_id == "child-synthesis"
+    # (2) Parent hash byte-compat over the NESTED carrier: the recompute COVERS the nested
+    # (non-None) synthesis identity AND strips the parent's own None — `snapshot_hash` (computed
+    # at capture) recomputes identically. With a top-level-only drop this would have diverged
+    # (Codex #1). The recursive strip leaves the nested `synthesis_step_id: null`-free.
+    assert parent_snap.snapshot_hash == _compute_snapshot_hash(
+        workflow_id=parent_snap.workflow_id,
+        run_id=parent_snap.run_id,
+        step_index=parent_snap.step_index,
+        state_summary=parent_snap.state_summary,
+        fan_out_resume=parent_snap.fan_out_resume,
+    )
+    # (3) REAL parent resume → the child re-enters `execute_workflow` at its cursor, MY entry
+    # guard material-diffs the child synthesis (matches "child-synthesis"), the child reaches
+    # SUCCESS and FRESH-dispatches its synthesis EXACTLY ONCE.
+    child_dispatcher = _ChildSynthDispatcher()
+    sub_agent = _SynthChildSubAgentDispatcher(child_dispatcher=child_dispatcher)
+    parent_registry = cast(StepDispatcherRegistry, _SynthParentRegistry(sub_agent=sub_agent))
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    resumed = execute_workflow(
+        _manifest("wf-parent", TopologyPattern.HIERARCHICAL_DELEGATION),
+        _parent_steps(),
+        run_id="parent-run",
+        ctx=ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=parent_registry,
+        pause_snapshot_input=parent_snap,
+    )
+    assert resumed.status is RunStatus.SUCCESS, f"{resumed.status} / {resumed.fail_class}"
+    # The child re-entered WITH its snapshot (genuine re-entry, not a fresh run).
+    assert sub_agent.received_resume[-1] is not None
+    assert sub_agent.received_resume[-1].fan_out_resume is not None
+    assert sub_agent.received_resume[-1].fan_out_resume.synthesis_step_id == "child-synthesis"
+    # The child synthesis FRESH-dispatched exactly once (effect-free, first-and-only).
+    assert child_dispatcher.synth_dispatches == 1

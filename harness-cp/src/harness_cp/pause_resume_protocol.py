@@ -29,7 +29,7 @@ from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 from harness_core import EntryID, WorkflowID
 from pydantic import BaseModel, ConfigDict
@@ -579,6 +579,44 @@ class PauseResumeProtocol:
         return snapshot.state_ledger_anchor != current_anchor
 
 
+def _strip_none_synthesis_step_id(carrier_dump: Any) -> None:
+    """Drop a None `synthesis_step_id` from a `FanOutResumeState`/`PeerFanOutResumeState`
+    carrier `model_dump`, IN PLACE, following the KNOWN carrier paths only
+    (B-FANOUT-PAUSE-SYNTHESIS byte-compat).
+
+    `synthesis_step_id` is a NEW default-None field on the two fan-out resume carriers;
+    `model_dump` always emits it (as `null`), which would change the hash of every
+    pre-existing / non-synthesis snapshot. A HIERARCHICAL `paused_child_branches` cursor
+    nests a full child `PauseSnapshot` (with its own `fan_out_resume`/`peer_fan_out_resume`)
+    INSIDE the parent carrier's `model_dump`, so the drop must reach those nested carriers
+    too — a top-level-only drop would leave the nested `synthesis_step_id: null` and break
+    the byte-compat of valid pre-existing HIERARCHICAL snapshots (out-of-family Codex [P1]).
+
+    The drop is PATH-AWARE — it touches ONLY the carrier object's OWN `synthesis_step_id`
+    field and recurses ONLY through `paused_child_branches[].child_snapshot.{fan_out_resume,
+    peer_fan_out_resume}` (the known nested-carrier path). It deliberately does NOT walk
+    arbitrary recovered-output payloads (`orchestrator_output`, `branches[].output`) where a
+    user-data key happening to be named `synthesis_step_id` must stay hash-covered, not
+    silently stripped (out-of-family Codex [P2]). Only None is dropped; a present
+    (synthesis-bearing) id is hash-COVERED and kept."""
+    if not isinstance(carrier_dump, dict):
+        return
+    carrier = cast("dict[str, Any]", carrier_dump)
+    if carrier.get("synthesis_step_id") is None:
+        carrier.pop("synthesis_step_id", None)
+    paused_children = carrier.get("paused_child_branches")
+    if isinstance(paused_children, list):
+        for pcb in cast("list[Any]", paused_children):
+            if not isinstance(pcb, dict):
+                continue
+            child_snapshot = cast("dict[str, Any]", pcb).get("child_snapshot")
+            if not isinstance(child_snapshot, dict):
+                continue
+            child = cast("dict[str, Any]", child_snapshot)
+            for nested_key in ("fan_out_resume", "peer_fan_out_resume"):
+                _strip_none_synthesis_step_id(child.get(nested_key))
+
+
 def _compute_snapshot_hash(
     *,
     workflow_id: str,
@@ -624,9 +662,25 @@ def _compute_snapshot_hash(
         _for = fan_out_resume.model_dump(mode="json")
         if not _for.get("paused_child_branches"):
             _for.pop("paused_child_branches", None)
+        # B-FANOUT-PAUSE-SYNTHESIS: `synthesis_step_id` is a NEW default-None field on
+        # FanOutResumeState. `model_dump` always emits it (as `null` when None), which
+        # would change the hash of every pre-existing / non-synthesis snapshot — breaking
+        # byte-compat. RECURSIVELY drop it when None: a HIERARCHICAL `paused_child_branches`
+        # cursor serializes each child `PauseSnapshot` INSIDE this `model_dump`, so a nested
+        # child `fan_out_resume`/`peer_fan_out_resume` also emits `synthesis_step_id: null`
+        # — a top-level-only drop would leave those nested nulls and change the recomputed
+        # hash of valid pre-existing HIERARCHICAL parent snapshots (out-of-family Codex [P1]).
+        _strip_none_synthesis_step_id(_for)
         canonical["fan_out_resume"] = _for
     if peer_fan_out_resume is not None:
-        canonical["peer_fan_out_resume"] = peer_fan_out_resume.model_dump(mode="json")
+        # B-FANOUT-PAUSE-SYNTHESIS: same recursive `synthesis_step_id` drop for the
+        # PARALLELIZATION carrier. PeerFanOutResumeState had NO drop before this field, so it
+        # is ADDED here — without it every pre-existing PARALLELIZATION snapshot's hash would
+        # change. (A peer carrier has no nested child snapshots today, but the recursive form
+        # is uniform + future-proof.)
+        _pfor = peer_fan_out_resume.model_dump(mode="json")
+        _strip_none_synthesis_step_id(_pfor)
+        canonical["peer_fan_out_resume"] = _pfor
     if handoff_resume is not None:
         # B-HANDOFF-PAUSE: the DECENTRALIZED_HANDOFF stage cursor (recovered
         # completed-stage outputs). Added to the canonical dict ONLY when present
