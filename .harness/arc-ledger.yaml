@@ -46,24 +46,25 @@
 snapshot:
   frozen_total: 11
   frozen_done: 11
-  standalone_closed: 36
+  standalone_closed: 37
   standalone_gated: 0
   standalone_resolved: 4
-  standalone_registered: 1
+  standalone_registered: 3
   source: ".harness/beyond-mvp-capability-boundary-ledger.md"
-  # FRONTIER NOTE (operator decision 2026-06-22): the operator DECLINED "declare
-  # build-complete" and AUTHORIZED building BOTH committed-invariant-amendment arcs
-  # → genuine full-spec closure. The 2 formerly-gated arcs (B-HITL-PLACEMENT-PER-STEP-LOOSEN,
-  # B-POSTJOIN-LLM-SYNTHESIS) are now operator_gated=false (gate CLEARED) and enter the
-  # DESIGN-FIRST closure pipeline (council → ratify mechanism → spec amendment → impl →
-  # adversarial review) per .harness/r-fs-1-final-closure-plan.md. Sequence: LOOSEN first
-  # (CP-contained), POSTJOIN second (CP+runtime). They stay status:registered until each
-  # is decomposed at its arc-open. CLOSURE NEEDS THREE DISPOSITIONS, not two: the
-  # closure_gate.py G1.1 gate is standalone_registered + standalone_gated == 0, so the
-  # 1 gated arc (B-TAIL-CONDITIONAL-SAMPLING, R-420/R-421-blocked — but those are
-  # closed/parked → re-ground at closure) must ALSO be disposed to 0. On ALL THREE
-  # (2 builds + the gated arc) reaching closed/resolved → G1.1 passes → R-FS-1 resolves
-  # → R-CL-Q1 quality track admits. (Run `just closure-gate` to confirm G1.1 empirically.)
+  # FRONTIER NOTE (2026-06-24, B-FANOUT-OUTPUT-REPLAY PR2). The frozen 11-arc order is
+  # COMPLETE; the standalone B-* register is the live frontier. B-FANOUT-OUTPUT-REPLAY
+  # closed (PR1 #723 deterministic-fold core + PR2 synthesis self-hash + captured-output
+  # replay) — the LAST pre-existing registered arc. But PR2 does NOT resolve R-FS-1: the
+  # PR1 build surfaced a Class-1 cascade-policy finding, and under FULL-SPEC the remaining
+  # fan-out crash-resume capabilities are genuine build arcs, now registered:
+  #   • B-FANOUT-CRASH-RESUME-CASCADE-POLICY  (PAUSE + CASCADE_CANCEL; Class-1 finding)
+  #   • B-FANOUT-CRASH-RESUME-TIMEOUT-REPLAY  (the timed_out ambiguous disposition)
+  #   • B-FANOUT-PAUSE-SYNTHESIS              (synthesis on the explicit-pause path)
+  # closure_gate.py G1.1 = standalone_registered + standalone_gated == 0 is now 3 + 0 = 3
+  # → R-FS-1 stays ACTIVE. The v1.55 §5 footer's "PR2 flips registered → built → R-FS-1
+  # resolves" is SUPERSEDED (it predates the PR1-surfaced cascade-policy finding; CP spec
+  # v1.56 §4). On all three follow-ons reaching closed/resolved → G1.1 passes → R-FS-1
+  # resolves → R-CL-Q1 quality track admits. (Run `just closure-gate` to confirm G1.1.)
 
 arcs:
   # ─── FROZEN build order (B1 → … → M), all closed, real as-built units ───
@@ -486,13 +487,54 @@ arcs:
   - id: B-FANOUT-OUTPUT-REPLAY
     title: "Reproducible cached-replay of a fan-out synthesized aggregate (the §25.12-D1 follow-on to B-POSTJOIN-LLM-SYNTHESIS)"
     kind: standalone
+    status: closed
+    owner_axis: "CP + runtime"
+    parent_arc: B-POSTJOIN-LLM-SYNTHESIS
+    operator_gated: false  # gate CLEARED 2026-06-23 (AUQ) — operator RATIFIED A: NON-attested branch-index-KEYED sidecar (council recommendation, precedent EngineOutputStore #665) → §25.12-D1 preserved literally; synthesis output gets a record-local self-hash either way.
+    pr: "PR1 (#723 — deterministic-fold crash-resume core, PROCEED-gated) + PR2 (this branch feat/r-fs-1-fanout-output-replay-pr2 — synthesis self-hash + captured-output replay; flips registered → closed)"
+    spec_delta: "PR1 bundled-absorption CP v1.54 → v1.55 + runtime v1.75 → v1.76 (the non-attested branch sidecar); PR2 bundled-absorption CP v1.55 → v1.56 (§1 synthesis self-hash + captured-output replay; §2 the §3 crash-resume synthesis fail-closed RELAXED) + runtime v1.76 → v1.77 (the EngineOutputStore synthesis sidecar API); + 2 clearance markers each. NO contract / enum / committed-invariant change; §25.12 Point 1 + D1 + D1.b PRESERVED LITERALLY (non-attested sidecars, not in the §6 chain)."
+    gives: "Reproducible cached-replay of the non-deterministic post-join synthesized aggregate across a fan-out crash-resume under CascadePolicy.PROCEED. PR1 made the DETERMINISTIC fold crash-resume-reproducible (branch + orchestrator capture / _determine_fanout_resume / crash-resume entry + the disposition keystone: completed-with-output → fold, completed-no-output errored → recover-as-terminal, timed_out → fail-closed; ledger re-materialization; changed-topology / cardinality / unknown-disposition fail-closed guards). PR2 made the SYNTHESIZED aggregate crash-resume-reproducible: a record-local capture-time synthesis self-hash (the #719 C9 residual — the synthesis carries no ledger response_hash) + captured-synthesis-output replay (verified by the self-hash + step_id material-diff; the W3 window byte-identical; a crash BEFORE the synthesis ran re-dispatches FRESH on the reproduced branches — effect-free, consistent) RELAXES the PR1 synthesis-bearing crash-resume fail-closed. Per-level HIERARCHICAL covered (each recursion re-enters the driver body keyed by its own run-scoped store). Decorrelated review: advisor (the integration-point trace — the strategy still receives the synthesis step on the crash path; the three witness windows; the dedup-safe ledger re-append; relax-only-the-crash-path) + 6 out-of-family Codex rounds (PR1) + Codex on the PR2 diff. Three FULL-SPEC follow-ons registered (cascade-policy / timeout-replay / pause-synthesis) keep R-FS-1 ACTIVE — PR2 does NOT resolve R-FS-1 (the v1.55 §5 'PR2 resolves' superseded by the PR1-surfaced cascade-policy Class-1 finding)."
+    as_built:
+      - "harness-runtime/src/harness_runtime/lifecycle/engine_output_store.py (PR1 branch + orchestrator + cardinality sidecar API; PR2 record_synthesis / read_synthesis / synthesis_present synthesis.jsonl sidecar with the record-local self-hash + missing-self-hash unreadable fail-closed)"
+      - "harness-cp/src/harness_cp/workflow_driver.py (PR1 _fanout_replay_store shared gate / _capture_branch_terminal / _determine_fanout_resume / crash-resume entry + disposition keystone + re-materialization; PR2 _compute_synthesis_self_hash + _replay_captured_synthesis + the capture in _maybe_post_join_synthesis + the §3 crash-resume synthesis guard removal)"
+      - "design-substrate/Spec_Control_Plane_v1_55.md + v1_56.md + Spec_Harness_Runtime_v1.md v1.76 + v1.77 + 4 clearance markers"
+      - "tests: harness-cp test_workflow_driver_fanout_output_replay{,_full_chain}.py (PR1 branch/orchestrator/hierarchical recovery + PR2 W3 replay / pre-synthesis fresh / self-hash-mismatch / corrupt-capture / branch-corrupt-not-masked / ORCHESTRATOR_WORKERS replay) + harness-runtime test_engine_output_store.py (real-store branch + synthesis round-trip + corruption fail-closed)"
+    ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
+
+  - id: B-FANOUT-CRASH-RESUME-CASCADE-POLICY
+    title: "Cascade-policy-aware fan-out crash-resume (PAUSE + CASCADE_CANCEL)"
+    kind: standalone
     status: registered
     decompose_at_open: true
     owner_axis: "CP + runtime"
-    parent_arc: B-POSTJOIN-LLM-SYNTHESIS
-    operator_gated: false  # gate CLEARED 2026-06-23 (AUQ this loop iteration) — operator RATIFIED A: the second recovery authority is a NON-attested, branch-index-KEYED sidecar (council recommendation, precedent EngineOutputStore #665) → §25.12-D1 preserved literally; synthesis output gets a record-local self-hash either way; per-branch-FILE keying is the post-gate build-time item. Narrowing lineage: council 2026-06-23 corrected the "second §25.12-D1 sacrifice" framing as too strong + narrowed the gate to attested-vs-non-attested; operator answered non-attested. BUILD-READY (arc stays `registered` until built; closure_gate.py G1.1 still 1+0).
-    anticipated_scope: "Reproducible cached-replay of the non-deterministic post-join synthesized aggregate across a fan-out crash-resume — so a resumed/replayed synthesized run reproduces the SAME aggregate instead of re-dispatching. REQUIRES a NEW durable per-branch-completion substrate (the concurrent-fan-out branch terminals drain ATOMICALLY at the barrier per §25.12 D1.b → the durable ledger is binary, no partial fan-out state to recover; finding .harness/r-fs-1-b-fanout-output-replay-impl-design.md) + a fan-out crash-resume recovery + the synthesis-output capture/replay. **COUNCIL-CORRECTED (2026-06-23, C1⊥C9 + advisor): the prior 'SECOND committed-invariant sacrifice (§25.12 D1)' framing is TOO STRONG — D1 scopes the ATTESTED LEDGER's append order, NOT a recovery substrate's physical write order; a NON-attested, branch-index-KEYED sidecar (the shipped EngineOutputStore pattern, landed #665 with NO §25.12 amendment) preserves D1 LITERALLY (write-completion-order, read-by-branch-index; resume drains branch-index-ordered → attested chain order-identical to no-crash). So the D1 sacrifice is AVOIDABLE.** Genuinely-independent C9 probes: the fan-out branch ledger entries carry NO response_hash → the cross-check-vs-ledger-digest tamper mechanism is unavailable for fan-out; the SYNTHESIS output is the sole-authority-no-digest residual → a record-local self-hash (one record, not a chain). Design = non-attested keyed sidecar + reserve-before-commit + fail-closed-on-skew + engine-class-gate + synthesis self-hash; recovery reuses the FanOutResumeState/resume_snapshot path. Build-time (post-gate): per-branch-FILE keying (EngineOutputStore is single-writer; fan-out has N concurrent writers). Nameable C1⊥C9 tension (deterministic-append ⊥ durable-partial-progress) PROBE-narrowed to attested-vs-non-attested."
-    why: "Surfaced at B-POSTJOIN-LLM-SYNTHESIS build-grounding (advisor materializability vet, 2026-06-23): the cached-replay form the operator's OPTION-B contemplated cannot build on the existing substrate. Operator chose A (synthesis now; reproducibility deferred to this follow-on) — the divergence window is empty in the currently-wired harness (the 5 non-linear strategies are crash-resume-blind), so nothing regresses interim. FULL-SPEC (`[[feedback-full-spec-beyond-mvp-nothing-deferred]]`) — this WILL be built as a coherent producer+consumer arc (not a defer), gated separately for the §25.12-D1 sacrifice."
+    parent_arc: B-FANOUT-OUTPUT-REPLAY
+    operator_gated: false  # a Class-1 architectural finding (the ratified "reuse pause-resume verbatim" mechanism is under-scoped), NOT a committed-invariant sacrifice → no operator gate; needs its own cascade-semantics design vet before build.
+    anticipated_scope: "Cascade-policy-aware fan-out crash-resume recovery. PR1 fails CLOSED for PAUSE + CASCADE_CANCEL (fan-out-crash-resume-cascade-policy-unsupported) because 'reuse the pause-resume path verbatim' is cascade-policy-BLIND — correct only for PROCEED. The three policies carry DIFFERENT committed on-failure semantics (§25.15.1, persona-tier-derived): PROCEED (SOLO) harvests survivors → PARTIAL; PAUSE (TEAM_BINDING) → reconstruct a resumable halt or restart-fresh; CASCADE_CANCEL (MULTI_TENANT_COMPLIANCE) → recover the cancel outcome → FAILED, do NOT re-run cancelled siblings. Filed as a Class-1 back-flow finding (.harness/class_1_fork_fanout_crash_resume_cascade_policy.md); carries its own cascade-semantics design vet (the §25.15 cascade contract + the sibling-re-dispatch question) before build."
+    why: "Surfaced at B-FANOUT-OUTPUT-REPLAY PR1 build (out-of-family Codex rounds 5-6 + advisor): the operator-ratified recovery mechanism is under-scoped versus what correct crash-resume requires across the three cascade policies. A genuine design dimension the 'reuse verbatim' authorization did not contemplate — a Class-1 architectural extension, not a Phase-7 silent absorption. FULL-SPEC (`[[feedback-full-spec-beyond-mvp-nothing-deferred]]`) — built as a coherent arc, not a defer."
+    ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
+
+  - id: B-FANOUT-CRASH-RESUME-TIMEOUT-REPLAY
+    title: "Operator-resolvable timed-out-branch fan-out crash-resume"
+    kind: standalone
+    status: registered
+    decompose_at_open: true
+    owner_axis: "CP + runtime"
+    parent_arc: B-FANOUT-OUTPUT-REPLAY
+    operator_gated: false  # additive (resolve an ambiguous disposition), no committed-invariant sacrifice → no operator gate; the disposition resolution mechanism is the design question.
+    anticipated_scope: "Fan-out crash-resume recovery for the `timed_out` branch disposition. PR1 fails CLOSED on a timed-out branch (fan-out-crash-resume-timeout-ambiguous, CP spec v1.55 §1) — a deadline-cut in-flight dispatch may or may not have LANDED its effect (the effect-fence-ambiguous case; the linear path needed a dedicated arc to resolve the analogous ambiguity). Operator-resolvable timeout-replay: a disposition mechanism that lets a timed-out branch be recovered-as-terminal or re-dispatched per an operator-set policy, without the at-most-once fail-open the blind path would risk."
+    why: "Named as a registered follow-on at B-FANOUT-OUTPUT-REPLAY PR1 (CP spec v1.55 §1 disposition keystone: 'operator-resolvable timeout-replay is the registered follow-on'). The `timed_out` disposition is the one irreducibly-ambiguous branch outcome the PR1 fail-closed defers. FULL-SPEC — built as a coherent arc."
+    ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
+
+  - id: B-FANOUT-PAUSE-SYNTHESIS
+    title: "Synthesis-on-PAUSE-resume (material-diff coverage of a fresh pause-resume synthesis)"
+    kind: standalone
+    status: registered
+    decompose_at_open: true
+    owner_axis: "CP + runtime"
+    parent_arc: B-FANOUT-OUTPUT-REPLAY
+    operator_gated: false  # additive carrier extension (a synthesis identity on PauseSnapshot), no committed-invariant sacrifice → no operator gate.
+    anticipated_scope: "Synthesis on the EXPLICIT-PAUSE resume path. PR2 relaxed the CRASH-resume synthesis fail-closed but LEFT the pause-resume reject (post-join-synthesis-on-resume-unsupported, CP spec v1.56 §2) — a pause snapshot carries no synthesis identity to material-diff against, and on a pause the synthesis never ran (nothing to replay). Scope: a synthesis identity on the FanOutResumeState/PeerFanOutResumeState/PauseSnapshot carrier so a pause-resume that re-reaches the terminal synthesis material-diffs the carved synthesis step (presence + step_id) against the captured identity → fresh dispatch on the recovered branches (effect-free, first-and-only) instead of the interim fail-closed."
+    why: "Surfaced at B-FANOUT-OUTPUT-REPLAY PR2 (the §3 crash-resume guard relaxation explicitly left the pause-path reject). A genuine separate slice (a PauseSnapshot carrier extension, not the crash-path replay). FULL-SPEC — built as a coherent arc."
     ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
 
   - id: B-ENGINE-OUTPUT-REPLAY-WAL-SEGMENT

@@ -315,6 +315,58 @@ class EngineOutputStore:
                 result = count
         return result
 
+    # -- B-FANOUT-OUTPUT-REPLAY PR2: terminal POST_JOIN_SYNTHESIS capture -----
+    #
+    # The synthesis output is the ONE genuine residual the #719 C9 probe named:
+    # non-deterministic (an LLM compose), carries NO ledger `response_hash`, and on
+    # a W3 crash (between synthesis-capture and run-finalize) the store is its SOLE
+    # authority with nothing to cross-check. So it carries a record-local capture-time
+    # SELF-HASH (computed by the CP caller over `step_id` + `output`, the
+    # `PauseSnapshot._compute_snapshot_hash` shape) — ONE record, a harness-internal
+    # integrity field, NOT a hash-chained second authority and NOT in the §6 chain.
+    # On replay the caller recomputes the hash over the read record and fails closed on
+    # a mismatch (corruption / tamper). The `step_id` is the material-diff identity (a
+    # changed synthesis body on resume → caller fails closed).
+
+    def record_synthesis(
+        self,
+        run_key: str,
+        step_id: str,
+        output: Mapping[str, Any],
+        self_hash: str,
+    ) -> None:
+        """Capture the terminal POST_JOIN_SYNTHESIS step output to its own durable file.
+
+        Mirrors `record_orchestrator` (a dedicated ``synthesis.jsonl`` under the branches
+        dir, no collision with the ``branch-*`` / ``orchestrator`` files) but ALSO records
+        the record-local capture-time ``self_hash``. RESERVE-before-COMMIT: the caller fsyncs
+        this BEFORE the synthesis terminal ledger-append, so a crash that committed the ledger
+        entry always finds the captured output on resume. Idempotent (last-wins)."""
+        record = {"step_id": str(step_id), "output": dict(output), "self_hash": str(self_hash)}
+        line = json.dumps(record, sort_keys=True)
+        self._append_path(self._synthesis_file(run_key), line)
+
+    def read_synthesis(self, run_key: str) -> tuple[str, dict[str, Any], str] | None:
+        """Return the captured ``(step_id, output, self_hash)`` synthesis record, or None.
+
+        None means ABSENT (no synthesis captured — a fresh first dispatch, OR a crash BEFORE
+        the synthesis ran). A present-but-unreadable synthesis file is surfaced by
+        `synthesis_present` so the caller fails closed (the symmetric of the per-branch /
+        orchestrator corrupt-detection)."""
+        path = self._synthesis_file(run_key)
+        if not path.exists():
+            return None
+        return self._read_last_synthesis_record(path)
+
+    def synthesis_present(self, run_key: str) -> bool:
+        """Whether a synthesis journal FILE exists (regardless of readability).
+
+        The fail-closed discriminator: a synthesis file that EXISTS but yields no readable
+        record (`read_synthesis` returns None) is a corrupt capture the caller fails closed on
+        — never re-dispatching a fresh (non-reproducible) synthesis that would mask the
+        corruption."""
+        return self._synthesis_file(run_key).exists()
+
     # -- durable journal I/O (mirrors JournalWorkflowPauseStore) --------------
 
     @staticmethod
@@ -341,6 +393,10 @@ class EngineOutputStore:
     def _cardinality_file(self, run_key: str) -> Path:
         """The per-run fan-out CARDINALITY marker under the branches dir."""
         return self._branches_dir(run_key) / "cardinality.jsonl"
+
+    def _synthesis_file(self, run_key: str) -> Path:
+        """The terminal POST_JOIN_SYNTHESIS step journal under the branches dir."""
+        return self._branches_dir(run_key) / "synthesis.jsonl"
 
     @staticmethod
     def _branch_index_from_name(name: str) -> int | None:
@@ -414,6 +470,41 @@ class EngineOutputStore:
             if output is not None and not isinstance(output, dict):
                 continue
             result = (step_id, terminal_status, cast("dict[str, Any] | None", output))
+        return result
+
+    def _read_last_synthesis_record(self, path: Path) -> tuple[str, dict[str, Any], str] | None:
+        """Return the last readable ``(step_id, output, self_hash)`` in the synthesis file.
+
+        ``None`` when unreadable / no parseable record (the presence-vs-readability
+        fail-closed gate). Torn trailing line skipped; later record wins (idempotent
+        re-record). All three fields are REQUIRED — a record missing ``self_hash`` (a
+        pre-PR2 / tampered capture) is treated as unreadable so the caller fails closed
+        rather than replaying an un-integrity-checked synthesis."""
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            return None
+        result: tuple[str, dict[str, Any], str] | None = None
+        for line in text.splitlines():
+            if not line.strip():
+                continue
+            try:
+                loaded = json.loads(line)
+            except (ValueError, TypeError):
+                continue
+            if not isinstance(loaded, dict):
+                continue
+            record = cast("dict[str, object]", loaded)
+            step_id = record.get("step_id")
+            output = record.get("output")
+            self_hash = record.get("self_hash")
+            if (
+                not isinstance(step_id, str)
+                or not isinstance(output, dict)
+                or not isinstance(self_hash, str)
+            ):
+                continue
+            result = (step_id, cast("dict[str, Any]", output), self_hash)
         return result
 
     @staticmethod

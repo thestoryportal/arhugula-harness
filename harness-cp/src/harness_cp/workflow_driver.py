@@ -1982,37 +1982,90 @@ def _execute_workflow_body(
                     0,
                 )
 
-    # B-FANOUT-OUTPUT-REPLAY PR1 fail-closed (synthesis-bearing crash-resume): a
-    # POST_JOIN_SYNTHESIS fan-out that crash-resumes (`resume_snapshot is None` →
-    # sails PAST the §3/§4 pause-resume reject at the top of this function) would,
-    # absent this guard, recover its branches then dispatch the synthesis FRESH on
-    # `_finish` — a NON-reproducible W3-window synthesis output (no captured-synthesis
-    # replay yet). KEEP it fail-closed — extending B-POSTJOIN's interim
-    # `post-join-synthesis-on-resume-unsupported` boundary from the pause-resume path
-    # to the crash-resume path. The synthesis self-hash + capture + replay that RELAXES
-    # this is the registered follow-on slice of this arc. Because every recursive
-    # HIERARCHICAL child re-enters `_execute_workflow_body`, this also closes the
-    # child-level synthesis hole (a synthesis at a recursive level under crash-resume).
-    if _crash_fan_out_resume is not None and _synth_positions:
-        return (
-            RunResult(
-                workflow_id=manifest_entry.workflow_id,
-                run_id=run_id,
-                status=RunStatus.FAILED,
-                terminal_step_index=_synth_positions[0],
-                partial_state=None,
-                final_state=None,
-                fail_class=(
-                    "post-join-synthesis-on-resume-unsupported: a POST_JOIN_SYNTHESIS "
-                    "terminal step is a fresh first-and-only dispatch (CP spec v1.54 §3/§4) "
-                    "— a crash-resume that recovers the fan-out branches would dispatch the "
-                    "synthesis FRESH (a non-reproducible W3-window output). Reproducible "
-                    "synthesis-across-crash-resume (the synthesis self-hash + captured-output "
-                    "replay) is the registered follow-on slice of B-FANOUT-OUTPUT-REPLAY."
-                ),
-            ),
-            0,
-        )
+            # B-FANOUT-OUTPUT-REPLAY PR2 — synthesis-completeness fail-closed (out-of-family
+            # Codex [P2] ×2). A captured synthesis PROVES a COMPLETE, SUCCESSFUL fan-out: the
+            # synthesis composes over the full OUTPUT-BEARING sibling set, and runs ONLY on
+            # RunStatus.SUCCESS. So whenever a synthesis is captured, the store MUST hold a
+            # complete, output-bearing, ZERO-RE-DISPATCH fan-out state — every expected branch
+            # present + readable + `completed`-WITH-OUTPUT (+ a recovered orchestrator for the
+            # orchestrator topologies, which `_determine_fanout_resume` guarantees when it
+            # returns non-None). ANY gap → fail CLOSED here, BEFORE any re-dispatch (a re-fired
+            # landed effect + a stale/degraded replayed aggregate). This fires INDEPENDENT of
+            # `_crash_fan_out_resume`: (a) ALL branches absent → `_determine_fanout_resume`
+            # returns None, yet the run must NOT proceed as fresh then replay the stale synthesis;
+            # (b) a `completed`-no-output (degraded, effect-landed-no-output) branch keeps the
+            # count but is non-output-bearing. `_crash_branch_steps` excludes the carved
+            # synthesis; `steps[0]` is the orchestrator for the orchestrator topologies.
+            if _crash_replay_store.synthesis_present(run_idempotency_key):
+                # Material-diff: the resumed manifest DROPPED the terminal synthesis step
+                # (out-of-family Codex [P2] round-3). A captured synthesis but no synthesis
+                # in the resumed body would silently return the deterministic FOLD, DISCARDING
+                # the captured synthesized aggregate. Fail closed (the symmetric of the
+                # `step_id` material-diff that catches a CHANGED synthesis body).
+                if not _synth_positions:
+                    return (
+                        RunResult(
+                            workflow_id=manifest_entry.workflow_id,
+                            run_id=run_id,
+                            status=RunStatus.FAILED,
+                            terminal_step_index=None,
+                            partial_state=None,
+                            final_state=None,
+                            fail_class=(
+                                "post-join-synthesis-replay-material-diff: a synthesis was "
+                                "captured but the resumed manifest has NO terminal "
+                                "POST_JOIN_SYNTHESIS step (a changed body) — proceeding would "
+                                "silently discard the captured synthesized aggregate for the "
+                                "deterministic fold; fail closed"
+                            ),
+                        ),
+                        0,
+                    )
+                _is_orchestrated = manifest_entry.topology_pattern in {
+                    TopologyPattern.ORCHESTRATOR_WORKERS,
+                    TopologyPattern.HIERARCHICAL_DELEGATION,
+                }
+                _expected_branches = len(_crash_branch_steps) - (1 if _is_orchestrated else 0)
+                _complete_output_bearing = (
+                    _crash_fan_out_resume is not None
+                    and len(_crash_fan_out_resume.branches) == _expected_branches
+                    and all(b.output is not None for b in _crash_fan_out_resume.branches)
+                )
+                if not _complete_output_bearing:
+                    return (
+                        RunResult(
+                            workflow_id=manifest_entry.workflow_id,
+                            run_id=run_id,
+                            status=RunStatus.FAILED,
+                            terminal_step_index=_synth_positions[0],
+                            partial_state=None,
+                            final_state=None,
+                            fail_class=(
+                                "post-join-synthesis-replay-incomplete-branches: a synthesis "
+                                "was captured (proving a complete, successful, output-bearing "
+                                "fan-out) but the recovered state is incomplete (an absent / "
+                                "corrupt / non-output-bearing branch, or a missing orchestrator) "
+                                "— fail closed; a captured synthesis admits only a pure "
+                                "zero-re-dispatch replay over the full output-bearing set"
+                            ),
+                        ),
+                        0,
+                    )
+
+    # B-FANOUT-OUTPUT-REPLAY PR2 — the PR1 synthesis-bearing crash-resume fail-closed is now
+    # RELAXED (CP spec v1.56 §1/§2). A POST_JOIN_SYNTHESIS fan-out that crash-resumes under
+    # `CascadePolicy.PROCEED` (the cascade-policy guard above already fails closed for
+    # PAUSE + CASCADE_CANCEL) recovers its branches (PR1 net-add #1-3) then, at the strategy's
+    # post-barrier `_maybe_post_join_synthesis`, either REPLAYS a captured synthesis output
+    # (the W3 crash window — verified by the record-local self-hash + step_id material-diff,
+    # reproducible) or dispatches the synthesis FRESH on the reproduced branches (a crash
+    # BEFORE the synthesis ran — effect-free, first-and-only, consistent over the same
+    # reproduced siblings). Because every recursive HIERARCHICAL child re-enters
+    # `_execute_workflow_body`, the per-level synthesis recovers at each level keyed by its
+    # own run-scoped store. The PAUSE-resume synthesis path (`resume_snapshot is not None`,
+    # the top-of-function reject) stays fail-closed — that is the separately-registered
+    # B-FANOUT-PAUSE-SYNTHESIS follow-on (the pause snapshot carries no synthesis identity to
+    # material-diff against). `_synth_positions` is still consumed by that pause-path reject.
 
     if strategy is _DriverStrategyStatus.PARALLELIZATION:
         # B-POSTJOIN-LLM-SYNTHESIS (CP spec v1.54 §3) — carve an opt-in terminal
@@ -3431,6 +3484,121 @@ def _append_synthesis_ledger_entry(
     ctx.ledger_writer.append(payload, write_key)
 
 
+def _compute_synthesis_self_hash(step_id: str, output: Mapping[str, Any]) -> str:
+    """B-FANOUT-OUTPUT-REPLAY PR2 — the record-local capture-time self-hash for a
+    captured POST_JOIN_SYNTHESIS output.
+
+    sha256 over canonical JSON of `(step_id, output)` — the `_compute_snapshot_hash`
+    shape (sorted-key, compact separators, UTF-8). The synthesis is the ONE genuine
+    integrity residual (#719 C9): non-deterministic, NO ledger `response_hash`, sole
+    authority on a W3 crash. This self-hash is its only cross-check — recomputed over the
+    read-back record on replay, fail-closed on mismatch (corruption / tamper). It is a
+    harness-internal integrity field, NOT a §6 hash-chain link and NOT a second attested
+    authority (§25.12 D1 preserved). The output is JSON-round-trip-stable (it came from an
+    LLM dispatch → JSON), so capture-time and replay-time canonicalization agree byte-for-
+    byte."""
+    canonical = {"step_id": str(step_id), "output": dict(output)}
+    payload = json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _replay_captured_synthesis(
+    *,
+    store: Any,
+    run_idempotency_key: str,
+    synthesis_step: WorkflowStep,
+    synthesis_index: int,
+    synthesis_idempotency_key: str,
+    ctx: DriverContext,
+    manifest_entry: WorkflowManifestEntry,
+    run_id: str,
+) -> RunResult | dict[str, Any]:
+    """B-FANOUT-OUTPUT-REPLAY PR2 — REPLAY a captured synthesis output (the W3 crash
+    window: a crash AFTER the synthesis output was captured but BEFORE the run finalized).
+
+    The branches are already reproduced (PR1 net-add #1-3); the captured synthesis output is
+    replayed — verified by the record-local self-hash + the `step_id` material-diff — rather
+    than re-dispatching a NON-reproducible fresh LLM compose. Three fail-closed gates:
+    present-but-unreadable (a corrupt capture — never silently re-dispatch a fresh synthesis
+    that would mask it), self-hash mismatch (tamper / corruption), and a changed synthesis
+    body (`step_id` material-diff — the resumed manifest redefined the synthesis step). On
+    success it RE-APPENDS the synthesis ledger entry (dedup-safe: a W3 crash can land AFTER
+    the original append, so the deterministic idempotency key → `IDEMPOTENT_NOOP` for the
+    already-persisted entry — PR1 §2 re-materialization discipline) + emits the STEP_BOUNDARY,
+    then returns the captured output as the run's `final_state`."""
+    captured = store.read_synthesis(run_idempotency_key)
+    if captured is None:
+        # `synthesis_present` is True (the file EXISTS) but `read_synthesis` yields no
+        # readable record → a corrupt / torn / un-self-hashed capture. Fail closed.
+        return RunResult(
+            workflow_id=manifest_entry.workflow_id,
+            run_id=run_id,
+            status=RunStatus.FAILED,
+            terminal_step_index=synthesis_index,
+            partial_state=None,
+            final_state=None,
+            fail_class=(
+                "post-join-synthesis-replay-corrupt: a captured synthesis file exists but "
+                "holds no readable self-hashed record — fail closed rather than re-dispatch a "
+                "fresh (non-reproducible) synthesis that would mask the corruption"
+            ),
+        )
+    captured_step_id, captured_output, captured_self_hash = captured
+    if _compute_synthesis_self_hash(captured_step_id, captured_output) != captured_self_hash:
+        return RunResult(
+            workflow_id=manifest_entry.workflow_id,
+            run_id=run_id,
+            status=RunStatus.FAILED,
+            terminal_step_index=synthesis_index,
+            partial_state=None,
+            final_state=None,
+            fail_class=(
+                "post-join-synthesis-replay-self-hash-mismatch: the captured synthesis "
+                "record fails its record-local capture-time self-hash (corruption / tamper) "
+                "— fail closed (the synthesis carries no ledger response_hash to cross-check)"
+            ),
+        )
+    if captured_step_id != str(synthesis_step.step_id):
+        return RunResult(
+            workflow_id=manifest_entry.workflow_id,
+            run_id=run_id,
+            status=RunStatus.FAILED,
+            terminal_step_index=synthesis_index,
+            partial_state=None,
+            final_state=None,
+            fail_class=(
+                "post-join-synthesis-replay-material-diff: the resumed manifest's synthesis "
+                f"step_id ({synthesis_step.step_id!s}) differs from the captured identity "
+                f"({captured_step_id}) — a changed synthesis body; fail closed"
+            ),
+        )
+    # Audit completeness: re-append the synthesis ledger entry (DEDUP-SAFE — the W3 crash
+    # can land after the original append; the deterministic key → IDEMPOTENT_NOOP) + emit the
+    # STEP_BOUNDARY. Map a ledger/emitter failure to a FAILED RunResult here, exactly like the
+    # fresh-dispatch path's `try`/`except` (out-of-family Codex [P2]): the replay runs
+    # POST-barrier, OUTSIDE the inline per-step try/except, so an unwrapped raise would ESCAPE
+    # `execute_workflow` instead of returning the expected failed workflow result.
+    try:
+        _append_synthesis_ledger_entry(
+            ctx=ctx,
+            workflow_id=manifest_entry.workflow_id,
+            synthesis_index=synthesis_index,
+            synthesis_idempotency_key=synthesis_idempotency_key,
+        )
+        ctx.lifecycle_emitter.emit(WorkflowEventClass.STEP_BOUNDARY)
+    except Exception as exc:
+        return RunResult(
+            workflow_id=manifest_entry.workflow_id,
+            run_id=run_id,
+            status=RunStatus.FAILED,
+            terminal_step_index=synthesis_index,
+            partial_state=None,
+            final_state=None,
+            fail_class=_step_fail_class("post-join-synthesis-replay-failure", exc),
+        )
+    return dict(captured_output)
+
+
 def _maybe_post_join_synthesis(
     *,
     synthesis_step: WorkflowStep | None,
@@ -3503,13 +3671,34 @@ def _maybe_post_join_synthesis(
                 "no workers). Rejected fail-closed rather than spend an LLM call on no data."
             ),
         )
+    synthesis_idempotency_key = _compute_step_idempotency_key(run_idempotency_key, synthesis_index)
+    # B-FANOUT-OUTPUT-REPLAY PR2 — REPLAY a captured synthesis (the W3 crash window). The
+    # SHARED `_fanout_replay_store` gate governs BOTH the capture (below) and this consume,
+    # so the two halves can never skew. A captured synthesis is present ONLY on a crash-
+    # resume where the synthesis ran + was captured before the crash (a fresh run captures
+    # AFTER dispatch, never re-entering this terminal step in the same run) → replay it
+    # reproducibly. ABSENT a capture (a crash BEFORE the synthesis ran, or a non-replay-
+    # capable run) → fall through to a fresh dispatch on the reproduced branches (effect-
+    # free, first-and-only; non-byte-reproducible by construction but consistent — it sits on
+    # the SAME reproduced siblings, per CP spec v1.56 §1).
+    _replay_store = _fanout_replay_store(ctx, manifest_entry)
+    if _replay_store is not None and _replay_store.synthesis_present(run_idempotency_key):
+        return _replay_captured_synthesis(
+            store=_replay_store,
+            run_idempotency_key=run_idempotency_key,
+            synthesis_step=synthesis_step,
+            synthesis_index=synthesis_index,
+            synthesis_idempotency_key=synthesis_idempotency_key,
+            ctx=ctx,
+            manifest_entry=manifest_entry,
+            run_id=run_id,
+        )
     synth_binding = resolve_step_binding(
         manifest_entry,
         str(synthesis_step.step_id),
         default_model_binding=default_model_binding,
         persona_tier=manifest_entry.persona_tier,
     )
-    synthesis_idempotency_key = _compute_step_idempotency_key(run_idempotency_key, synthesis_index)
     synthesis_context = fanout_parent.model_copy(
         update={
             # The synthesis context's parent_action_id is set CONSISTENT with the synthesis
@@ -3586,6 +3775,36 @@ def _maybe_post_join_synthesis(
         synth_output = step_dispatchers.lookup(StepKind.POST_JOIN_SYNTHESIS).dispatch(
             synth_binding, synthesis_step, step_context=synthesis_context
         )
+        # B-FANOUT-OUTPUT-REPLAY PR2 — CAPTURE the synthesis output + record-local self-hash,
+        # RESERVE-before-COMMIT (BEFORE the synthesis ledger-append below), gated on the SAME
+        # `_fanout_replay_store` predicate as the replay above. A W3 crash AFTER this capture
+        # replays the output (verified by the self-hash) on resume instead of re-dispatching a
+        # NON-reproducible fresh compose. Default (no store / not replay-capable) → no capture,
+        # byte-identical to pre-PR2. The synthesis carries no ledger response_hash (#719 C9), so
+        # this self-hash is its sole integrity cross-check.
+        #
+        # PRE-CAPTURE crash window (out-of-family Codex round-4 [P2], DELIBERATELY accepted —
+        # advisor-reconciled). The dispatch (above) precedes this capture, so a crash BETWEEN
+        # the dispatch returning and this fsync loses the output → on resume `synthesis_present`
+        # is False (indistinguishable from "synthesis never ran") → fresh re-dispatch. This is
+        # SAFE and consistent: (1) the synthesis is ENFORCED effect-free (the runtime LLM
+        # dispatch boundary, B-POSTJOIN) → a re-dispatch fires NO duplicate effect; (2) the lost
+        # aggregate was never committed (the ledger-append is AFTER this capture) → no consumer
+        # observed it → nothing to be non-reproducible against; (3) PR1 ALREADY accepts the
+        # identical dispatch-before-capture window for effect-BEARING branches (absent → re-
+        # dispatched), so a started-marker + fail-closed here would hold the effect-free
+        # synthesis to a STRICTER standard than the effect-bearing branches — incoherent, and it
+        # would degrade availability for no correctness gain. LOAD-BEARING DEPENDENCY: this is
+        # safe ONLY while the synthesis stays effect-free; if that is ever relaxed, this window
+        # needs a durable "synthesis-started" marker + fail-closed-on-marker-without-capture.
+        if _replay_store is not None:
+            _synth_dict = dict(synth_output)
+            _replay_store.record_synthesis(
+                run_idempotency_key,
+                str(synthesis_step.step_id),
+                _synth_dict,
+                _compute_synthesis_self_hash(str(synthesis_step.step_id), _synth_dict),
+            )
         _append_synthesis_ledger_entry(
             ctx=ctx,
             workflow_id=manifest_entry.workflow_id,

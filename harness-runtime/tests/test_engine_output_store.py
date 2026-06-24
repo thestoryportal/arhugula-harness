@@ -9,6 +9,7 @@ store unit tests.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from harness_runtime.lifecycle.engine_output_store import (
@@ -226,6 +227,55 @@ def test_branch_absent_run_returns_empty(tmp_path: Path) -> None:
     assert store.present_branch_indexes("never") == set()
     assert store.read_orchestrator_output("never") is None
     assert store.orchestrator_present("never") is False
+    assert store.read_synthesis("never") is None
+    assert store.synthesis_present("never") is False
+
+
+def test_synthesis_capture_and_read_round_trip(tmp_path: Path) -> None:
+    """PR2 — the terminal POST_JOIN_SYNTHESIS output rides a dedicated synthesis record
+    carrying the record-local self-hash; absent → None, present → (step_id, output, self_hash);
+    survives a restart (durable)."""
+    store = EngineOutputStore(journal_dir=tmp_path / "eo")
+    assert store.read_synthesis(_RUN_KEY) is None
+    assert store.synthesis_present(_RUN_KEY) is False
+    store.record_synthesis(_RUN_KEY, "synthesis", {"composed": "agg"}, "abc123")
+    fresh = EngineOutputStore(journal_dir=tmp_path / "eo")  # restart
+    assert fresh.read_synthesis(_RUN_KEY) == ("synthesis", {"composed": "agg"}, "abc123")
+    assert fresh.synthesis_present(_RUN_KEY) is True
+    # The synthesis record does NOT pollute the worker branch set or the orchestrator.
+    assert fresh.read_branch_records(_RUN_KEY) == {}
+    assert fresh.read_orchestrator_output(_RUN_KEY) is None
+
+
+def test_synthesis_last_record_wins(tmp_path: Path) -> None:
+    """An idempotent re-record yields the latest (last-wins), like the branch reader."""
+    store = EngineOutputStore(journal_dir=tmp_path / "eo")
+    store.record_synthesis(_RUN_KEY, "synthesis", {"v": "first"}, "h1")
+    store.record_synthesis(_RUN_KEY, "synthesis", {"v": "second"}, "h2")
+    assert store.read_synthesis(_RUN_KEY) == ("synthesis", {"v": "second"}, "h2")
+
+
+def test_synthesis_present_but_unreadable_is_fail_closed_signal(tmp_path: Path) -> None:
+    """A present-but-corrupt synthesis file → synthesis_present True but read_synthesis None —
+    the discriminator the resume site fails closed on (never a silent fresh re-dispatch)."""
+    store = EngineOutputStore(journal_dir=tmp_path / "eo")
+    store._synthesis_file(_RUN_KEY).parent.mkdir(parents=True, exist_ok=True)
+    store._synthesis_file(_RUN_KEY).write_text("{ not json", encoding="utf-8")
+    assert store.synthesis_present(_RUN_KEY) is True
+    assert store.read_synthesis(_RUN_KEY) is None
+
+
+def test_synthesis_record_missing_self_hash_is_unreadable(tmp_path: Path) -> None:
+    """A synthesis record lacking the self_hash field (a pre-PR2 / tampered capture) is
+    treated as UNREADABLE — the caller fails closed rather than replaying an
+    un-integrity-checked synthesis."""
+    store = EngineOutputStore(journal_dir=tmp_path / "eo")
+    store._synthesis_file(_RUN_KEY).parent.mkdir(parents=True, exist_ok=True)
+    store._synthesis_file(_RUN_KEY).write_text(
+        json.dumps({"step_id": "synthesis", "output": {"x": 1}}), encoding="utf-8"
+    )
+    assert store.synthesis_present(_RUN_KEY) is True
+    assert store.read_synthesis(_RUN_KEY) is None
 
 
 def test_branch_sidecar_does_not_collide_with_linear_file(tmp_path: Path) -> None:
