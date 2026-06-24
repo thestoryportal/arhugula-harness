@@ -753,9 +753,13 @@ def test_synthesis_crash_resume_replays_captured_output() -> None:
 
 
 def test_synthesis_crash_resume_before_synthesis_redispatches_fresh() -> None:
-    """Window (b) — a crash BEFORE the synthesis ran (branches captured, synthesis not). On
-    resume the branches recover and the synthesis dispatches FRESH on the reproduced siblings
-    (effect-free, first-and-only). Not byte-reproducible by construction — but consistent."""
+    """Window (b) — the synthesis sidecar absent (branches captured, synthesis not). On resume
+    the branches recover and the synthesis dispatches FRESH on the reproduced siblings. This one
+    state covers BOTH pre-capture sub-windows — "synthesis never ran" AND "synthesis ran but the
+    capture was lost before fsync" (Codex round-4): the store cannot distinguish them, and both
+    safely re-dispatch because the synthesis is ENFORCED effect-free + the lost aggregate was
+    never committed (the ledger-append is after the capture). Not byte-reproducible by
+    construction — but consistent and effect-safe (see the capture-site comment in the driver)."""
     store = _InMemoryBranchStore()
 
     r1 = _run_synth(

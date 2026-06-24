@@ -3782,6 +3782,21 @@ def _maybe_post_join_synthesis(
         # NON-reproducible fresh compose. Default (no store / not replay-capable) → no capture,
         # byte-identical to pre-PR2. The synthesis carries no ledger response_hash (#719 C9), so
         # this self-hash is its sole integrity cross-check.
+        #
+        # PRE-CAPTURE crash window (out-of-family Codex round-4 [P2], DELIBERATELY accepted —
+        # advisor-reconciled). The dispatch (above) precedes this capture, so a crash BETWEEN
+        # the dispatch returning and this fsync loses the output → on resume `synthesis_present`
+        # is False (indistinguishable from "synthesis never ran") → fresh re-dispatch. This is
+        # SAFE and consistent: (1) the synthesis is ENFORCED effect-free (the runtime LLM
+        # dispatch boundary, B-POSTJOIN) → a re-dispatch fires NO duplicate effect; (2) the lost
+        # aggregate was never committed (the ledger-append is AFTER this capture) → no consumer
+        # observed it → nothing to be non-reproducible against; (3) PR1 ALREADY accepts the
+        # identical dispatch-before-capture window for effect-BEARING branches (absent → re-
+        # dispatched), so a started-marker + fail-closed here would hold the effect-free
+        # synthesis to a STRICTER standard than the effect-bearing branches — incoherent, and it
+        # would degrade availability for no correctness gain. LOAD-BEARING DEPENDENCY: this is
+        # safe ONLY while the synthesis stays effect-free; if that is ever relaxed, this window
+        # needs a durable "synthesis-started" marker + fail-closed-on-marker-without-capture.
         if _replay_store is not None:
             _synth_dict = dict(synth_output)
             _replay_store.record_synthesis(
