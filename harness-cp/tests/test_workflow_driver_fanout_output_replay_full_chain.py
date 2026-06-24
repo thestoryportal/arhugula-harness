@@ -1001,6 +1001,35 @@ def test_synthesis_crash_resume_degraded_branch_fails_closed() -> None:
     assert resume_synth.dispatched == 0
 
 
+def test_synthesis_crash_resume_body_drops_synthesis_fails_closed() -> None:
+    """Out-of-family Codex [P2] round-3 — a captured synthesis but the resumed manifest DROPPED
+    the terminal POST_JOIN_SYNTHESIS step. Without a guard the run returns the deterministic
+    FOLD, silently DISCARDING the captured synthesized aggregate. Material-diff → fail closed
+    (the symmetric of the step_id material-diff for a CHANGED synthesis body)."""
+    store = _InMemoryBranchStore()
+
+    r1 = _run_synth(
+        workflow_id="wf-synth-dropped",
+        branch=_CountingDispatcher(n=2),
+        synthesis=_SynthesisDispatcher(),
+        store=store,
+    )
+    assert r1.status is RunStatus.SUCCESS
+    assert store.synthesis_present(store.sole_run_key())
+
+    # Run 2 (resume) with the SAME branches but the synthesis step REMOVED from the manifest.
+    r2 = _run_synth(
+        workflow_id="wf-synth-dropped",
+        branch=_CountingDispatcher(n=2),
+        synthesis=_SynthesisDispatcher(),
+        store=store,
+        steps=[_step("branch-0", 0), _step("branch-1", 1)],  # no _synthesis_step()
+    )
+    assert r2.status is RunStatus.FAILED
+    assert r2.fail_class is not None
+    assert "post-join-synthesis-replay-material-diff" in r2.fail_class
+
+
 class _SynthesisAppendRaiser(_RecordingLedger):
     """A ledger that raises on the SYNTHESIS terminal entry append (the post-join-synthesis
     write_key) — to witness that a replay-path ledger failure maps to a FAILED RunResult

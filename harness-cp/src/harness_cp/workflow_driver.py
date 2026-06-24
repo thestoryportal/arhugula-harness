@@ -1996,7 +1996,31 @@ def _execute_workflow_body(
             # (b) a `completed`-no-output (degraded, effect-landed-no-output) branch keeps the
             # count but is non-output-bearing. `_crash_branch_steps` excludes the carved
             # synthesis; `steps[0]` is the orchestrator for the orchestrator topologies.
-            if _crash_replay_store.synthesis_present(run_idempotency_key) and _synth_positions:
+            if _crash_replay_store.synthesis_present(run_idempotency_key):
+                # Material-diff: the resumed manifest DROPPED the terminal synthesis step
+                # (out-of-family Codex [P2] round-3). A captured synthesis but no synthesis
+                # in the resumed body would silently return the deterministic FOLD, DISCARDING
+                # the captured synthesized aggregate. Fail closed (the symmetric of the
+                # `step_id` material-diff that catches a CHANGED synthesis body).
+                if not _synth_positions:
+                    return (
+                        RunResult(
+                            workflow_id=manifest_entry.workflow_id,
+                            run_id=run_id,
+                            status=RunStatus.FAILED,
+                            terminal_step_index=None,
+                            partial_state=None,
+                            final_state=None,
+                            fail_class=(
+                                "post-join-synthesis-replay-material-diff: a synthesis was "
+                                "captured but the resumed manifest has NO terminal "
+                                "POST_JOIN_SYNTHESIS step (a changed body) — proceeding would "
+                                "silently discard the captured synthesized aggregate for the "
+                                "deterministic fold; fail closed"
+                            ),
+                        ),
+                        0,
+                    )
                 _is_orchestrated = manifest_entry.topology_pattern in {
                     TopologyPattern.ORCHESTRATOR_WORKERS,
                     TopologyPattern.HIERARCHICAL_DELEGATION,
