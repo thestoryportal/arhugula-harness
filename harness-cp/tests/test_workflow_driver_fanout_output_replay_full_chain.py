@@ -1116,10 +1116,16 @@ def test_crash_resume_empty_manifest_fails_closed_material_diff() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Cascade-policy scope (PR1, advisor): crash-resume recovery is correct ONLY for
-# CascadePolicy.PROCEED. PAUSE + CASCADE_CANCEL carry committed on-failure semantics a
-# cascade-policy-BLIND recovery cannot honor → FAIL CLOSED. Cascade-policy-aware crash-resume
-# is the registered back-flow follow-on (.harness/class_1_fork_fanout_crash_resume_cascade_policy.md).
+# Cascade-policy-AWARE crash-resume (B-FANOUT-CRASH-RESUME-CASCADE-POLICY), the STRICT-TIER-
+# conservative version (Codex [P1] + advisor reconcile). For the strict tiers (PAUSE / TEAM,
+# CASCADE_CANCEL / MULTI_TENANT_COMPLIANCE) a crash-resume CONTINUES only when the recovery is
+# COMPLETE (every branch recovered → nothing to re-dispatch) AND no branch errored — every other
+# state fails closed: an errored branch → the policy's failure semantics (CASCADE_CANCEL →
+# reproduce FAILED; PAUSE → fail-closed-ambiguous → the B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT
+# sub-arc); an INCOMPLETE recovery → fail closed (an absent branch is indistinguishable from one
+# that ran its effect but crashed before its capture — re-dispatching an effect-BEARING branch
+# is unsafe for these tiers; broad incomplete recovery is the B-FANOUT-CRASH-RESUME-STRICT-TIER-
+# INCOMPLETE follow-on, needing at-most-once branch dispatch). PROCEED is UNCHANGED (PR1).
 # ---------------------------------------------------------------------------
 def _run_persona(
     *,
@@ -1128,12 +1134,13 @@ def _run_persona(
     dispatcher: StepDispatcher,
     store: Any,
     persona_tier: PersonaTier,
+    topology: TopologyPattern = TopologyPattern.PARALLELIZATION,
 ) -> Any:
     ctx = cast(DriverContext, _Ctx(ledger=_RecordingLedger(), store=store))
     return execute_workflow(
         _manifest(
             workflow_id=workflow_id,
-            topology=TopologyPattern.PARALLELIZATION,
+            topology=topology,
             persona_tier=persona_tier,
         ),
         steps,
@@ -1144,27 +1151,265 @@ def _run_persona(
     )
 
 
-def test_crash_resume_cascade_cancel_fails_closed() -> None:
+def test_crash_resume_cascade_cancel_complete_recovery_completes() -> None:
+    """The ONE strict-tier continue path — a COMPLETE recovery (every branch recovered, none
+    errored). The crash landed after all branches finished but before the run finalized; on
+    resume there is NOTHING to re-dispatch, so the run finalizes from the recovered set →
+    SUCCESS (advisor: run it, don't infer it — re-dispatch count must be zero)."""
     store = _InMemoryBranchStore()
     steps = [_step(f"branch-{i}", i) for i in range(3)]
-    # Run 1 (MULTI_TENANT_COMPLIANCE = cascade-cancel): all complete + captured.
     _run_persona(
-        workflow_id="wf-cc",
+        workflow_id="wf-cc-complete",
         steps=steps,
         dispatcher=_CountingDispatcher(n=3),
         store=store,
         persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
     )
-    # Run 2 (resume): the crash-resume gate sees CASCADE_CANCEL → FAILED (never recovers /
-    # re-dispatches — a cascade-policy-blind recovery would corrupt the cancel semantic).
+    # All 3 captured; no forget → a COMPLETE recovery.
     resume = _CountingDispatcher(n=3)
     r2 = _run_persona(
-        workflow_id="wf-cc",
+        workflow_id="wf-cc-complete",
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+    )
+    assert r2.status is RunStatus.SUCCESS
+    assert resume.dispatched == []  # complete recovery → re-dispatches NOTHING
+
+
+def test_crash_resume_cascade_cancel_incomplete_fails_closed() -> None:
+    """An INCOMPLETE recovery on the strict (compliance) tier fails CLOSED (out-of-family Codex
+    [P1]). A branch absent from the store is indistinguishable from one that RAN its effect but
+    crashed before its capture (the dispatch-before-capture window) — re-dispatching it would
+    risk double-firing an effect-BEARING branch the compliance tier must not. No re-dispatch."""
+    store = _InMemoryBranchStore()
+    steps = [_step(f"branch-{i}", i) for i in range(3)]
+    _run_persona(
+        workflow_id="wf-cc-incomplete",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3),
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+    )
+    store.forget_branch(store.sole_run_key(), 1)  # branch 1 absent → incomplete recovery
+
+    resume = _CountingDispatcher(n=3)
+    r2 = _run_persona(
+        workflow_id="wf-cc-incomplete",
         steps=steps,
         dispatcher=resume,
         store=store,
         persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
     )
     assert r2.status is RunStatus.FAILED
-    assert r2.fail_class is not None and "cascade-policy-unsupported" in r2.fail_class
-    assert resume.dispatched == []  # fail-closed before any recovery / re-dispatch
+    assert "fan-out-crash-resume-cascade-policy-incomplete-recovery" in (r2.fail_class or "")
+    assert resume.dispatched == []  # fail closed — the absent branch is NOT re-dispatched
+
+
+def test_crash_resume_cascade_cancel_cardinality_only_fails_closed() -> None:
+    """Out-of-family Codex [P1] round-2 — a CARDINALITY-ONLY store. The cardinality marker is
+    written before any branch dispatches, so a crash after the marker but before any branch is
+    captured leaves NOTHING recoverable WHILE the marker is present (the fan-out STARTED; a
+    branch may have run-but-uncaptured). `_determine_fanout_resume` returns None, so without a
+    guard the strict tier would restart FRESH and re-dispatch the maybe-run branch → fail closed
+    instead (the incomplete-recovery rule extends to the cardinality-only store)."""
+    store = _InMemoryBranchStore()
+    steps = [_step(f"branch-{i}", i) for i in range(3)]
+    _run_persona(
+        workflow_id="wf-cc-cardinality-only",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3),
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+    )
+    key = store.sole_run_key()
+    for i in range(3):
+        store.forget_branch(key, i)  # forget ALL branches → only the cardinality marker remains
+    assert store.read_fanout_cardinality(key) == 3
+    assert store.read_branch_records(key) == {}
+
+    resume = _CountingDispatcher(n=3)
+    r2 = _run_persona(
+        workflow_id="wf-cc-cardinality-only",
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+    )
+    assert r2.status is RunStatus.FAILED
+    assert "fan-out-crash-resume-cascade-policy-incomplete-recovery" in (r2.fail_class or "")
+    assert (
+        resume.dispatched == []
+    )  # NOT restarted fresh — fail closed on the cardinality-only store
+
+
+def test_crash_resume_cascade_cancel_errored_branch_reproduces_failed() -> None:
+    """An errored branch under CASCADE_CANCEL (the cascade trigger fired before the crash) →
+    reproduce FAILED on resume, NEVER re-dispatching (the not-yet-dispatched siblings stay
+    cancelled — re-dispatching would run effects the compliance tier deliberately stopped)."""
+    store = _InMemoryBranchStore()
+    steps = [_step(f"branch-{i}", i) for i in range(3)]
+    _run_persona(
+        workflow_id="wf-cc-fail",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3, fail_index=1),  # branch 1 errors → trigger
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+    )
+    # branch 1 is captured `completed`-no-output (the trigger). Forget branch 2 to model a
+    # genuinely-cancelled (not-yet-dispatched, absent) sibling: it must NOT be re-dispatched.
+    store.forget_branch(store.sole_run_key(), 2)
+
+    resume = _CountingDispatcher(n=3)
+    r2 = _run_persona(
+        workflow_id="wf-cc-fail",
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+    )
+    assert r2.status is RunStatus.FAILED
+    assert r2.fail_class is not None and "fan-out-crash-resume-cascade-cancel" in r2.fail_class
+    assert resume.dispatched == []  # FAILED reproduced; NO branch (incl. the absent one) re-run
+
+
+def test_crash_resume_pause_complete_recovery_completes() -> None:
+    """The complete-recovery continue path also holds under PAUSE (TEAM_BINDING): all branches
+    recovered, none errored → finalize from the recovered set → SUCCESS, re-dispatch nothing."""
+    store = _InMemoryBranchStore()
+    steps = [_step(f"branch-{i}", i) for i in range(3)]
+    _run_persona(
+        workflow_id="wf-pause-complete",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3),
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+    )
+    resume = _CountingDispatcher(n=3)
+    r2 = _run_persona(
+        workflow_id="wf-pause-complete",
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+    )
+    assert r2.status is RunStatus.SUCCESS
+    assert resume.dispatched == []
+
+
+def test_crash_resume_pause_incomplete_fails_closed() -> None:
+    """An INCOMPLETE recovery under PAUSE (TEAM_BINDING) also fails closed — the dispatch-before-
+    capture window applies to the team tier too (effect-bearing branches, not re-dispatchable on
+    an ambiguous absence)."""
+    store = _InMemoryBranchStore()
+    steps = [_step(f"branch-{i}", i) for i in range(3)]
+    _run_persona(
+        workflow_id="wf-pause-incomplete",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3),
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+    )
+    store.forget_branch(store.sole_run_key(), 0)
+
+    resume = _CountingDispatcher(n=3)
+    r2 = _run_persona(
+        workflow_id="wf-pause-incomplete",
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+    )
+    assert r2.status is RunStatus.FAILED
+    assert "fan-out-crash-resume-cascade-policy-incomplete-recovery" in (r2.fail_class or "")
+    assert resume.dispatched == []
+
+
+def test_crash_resume_pause_errored_branch_fails_closed_ambiguous() -> None:
+    """An errored branch under PAUSE (the pause trigger fired, but the durable PauseSnapshot
+    was lost in the crash) → fail closed (`pause-trigger-ambiguous`): a reconstruct can't honor
+    §25.15.1 'finish in-flight, then pause' from a crash-interrupted store. No re-dispatch."""
+    store = _InMemoryBranchStore()
+    steps = [_step(f"branch-{i}", i) for i in range(3)]
+    _run_persona(
+        workflow_id="wf-pause-fail",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3, fail_index=1),
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+    )
+
+    resume = _CountingDispatcher(n=3)
+    r2 = _run_persona(
+        workflow_id="wf-pause-fail",
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+    )
+    assert r2.status is RunStatus.FAILED
+    assert (
+        r2.fail_class is not None
+        and "fan-out-crash-resume-pause-trigger-ambiguous" in r2.fail_class
+    )
+    assert resume.dispatched == []
+
+
+def test_crash_resume_cascade_cancel_orchestrator_workers_errored() -> None:
+    """Advisor — VERIFY the orchestrator leg, don't assume symmetry. The cascade trigger under
+    ORCHESTRATOR_WORKERS is always a WORKER failure (an orchestrator failure returns FAILED
+    directly before any worker — `workflow_driver.py:6548` 'cascade_policy governs WORKER
+    failure'). So detection over `.branches` (the workers) covers it: an errored worker under
+    CASCADE_CANCEL → FAILED on resume, no re-dispatch (orchestrator recovered, not the trigger)."""
+    store = _InMemoryBranchStore()
+    steps = [_step("orch", 0), _step("w-0", 0), _step("w-1", 1)]
+    _run_persona(
+        workflow_id="wf-ow-cc-fail",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=2, fail_index=1),  # worker w-1 errors → trigger
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+    )
+    assert store.orchestrator_present(store.sole_run_key())
+
+    resume = _CountingDispatcher(n=2)
+    r2 = _run_persona(
+        workflow_id="wf-ow-cc-fail",
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+    )
+    assert r2.status is RunStatus.FAILED
+    assert "fan-out-crash-resume-cascade-cancel" in (r2.fail_class or "")
+    assert resume.dispatched == []  # FAILED reproduced; orchestrator + workers never re-run
+
+
+def test_crash_resume_cascade_cancel_orchestrator_workers_complete_completes() -> None:
+    """ORCHESTRATOR_WORKERS complete recovery under CASCADE_CANCEL — the orchestrator + ALL
+    workers recovered (none absent, none errored) → finalize from the recovered set → SUCCESS,
+    re-dispatch nothing (the strict-tier continue path, orchestrator topology)."""
+    store = _InMemoryBranchStore()
+    steps = [_step("orch", 0), _step("w-0", 0), _step("w-1", 1)]
+    _run_persona(
+        workflow_id="wf-ow-cc-complete",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=2),
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+    )
+    resume = _CountingDispatcher(n=2)
+    r2 = _run_persona(
+        workflow_id="wf-ow-cc-complete",
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+    )
+    assert r2.status is RunStatus.SUCCESS
+    assert resume.dispatched == []  # orchestrator + all workers recovered → nothing re-dispatched

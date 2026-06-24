@@ -46,25 +46,27 @@
 snapshot:
   frozen_total: 11
   frozen_done: 11
-  standalone_closed: 37
+  standalone_closed: 38
   standalone_gated: 0
   standalone_resolved: 4
-  standalone_registered: 3
+  standalone_registered: 4
   source: ".harness/beyond-mvp-capability-boundary-ledger.md"
-  # FRONTIER NOTE (2026-06-24, B-FANOUT-OUTPUT-REPLAY PR2). The frozen 11-arc order is
-  # COMPLETE; the standalone B-* register is the live frontier. B-FANOUT-OUTPUT-REPLAY
-  # closed (PR1 #723 deterministic-fold core + PR2 synthesis self-hash + captured-output
-  # replay) — the LAST pre-existing registered arc. But PR2 does NOT resolve R-FS-1: the
-  # PR1 build surfaced a Class-1 cascade-policy finding, and under FULL-SPEC the remaining
-  # fan-out crash-resume capabilities are genuine build arcs, now registered:
-  #   • B-FANOUT-CRASH-RESUME-CASCADE-POLICY  (PAUSE + CASCADE_CANCEL; Class-1 finding)
-  #   • B-FANOUT-CRASH-RESUME-TIMEOUT-REPLAY  (the timed_out ambiguous disposition)
-  #   • B-FANOUT-PAUSE-SYNTHESIS              (synthesis on the explicit-pause path)
-  # closure_gate.py G1.1 = standalone_registered + standalone_gated == 0 is now 3 + 0 = 3
-  # → R-FS-1 stays ACTIVE. The v1.55 §5 footer's "PR2 flips registered → built → R-FS-1
-  # resolves" is SUPERSEDED (it predates the PR1-surfaced cascade-policy finding; CP spec
-  # v1.56 §4). On all three follow-ons reaching closed/resolved → G1.1 passes → R-FS-1
-  # resolves → R-CL-Q1 quality track admits. (Run `just closure-gate` to confirm G1.1.)
+  # FRONTIER NOTE (2026-06-24, B-FANOUT-CRASH-RESUME-CASCADE-POLICY closed). The frozen
+  # 11-arc order is COMPLETE; the standalone B-* register is the live frontier. The fan-out
+  # crash-resume capability family is being built out under FULL-SPEC. CLOSED so far:
+  # B-FANOUT-OUTPUT-REPLAY (PR1 #723 + PR2 #724) + B-FANOUT-CRASH-RESUME-CASCADE-POLICY
+  # (cascade-aware crash-resume — lifts the PR1 fail-closed; impl-to-cleared-spec on §25.15).
+  # The 4 still-registered follow-ons keeping R-FS-1 ACTIVE:
+  #   • B-FANOUT-CRASH-RESUME-TIMEOUT-REPLAY    (the timed_out ambiguous disposition)
+  #   • B-FANOUT-PAUSE-SYNTHESIS                (synthesis on the explicit-pause path)
+  #   • B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT (reconstruct a lost PAUSE snapshot honoring
+  #       §25.15.1 finish-in-flight; the PAUSE-trigger leg cascade-policy fails closed)
+  #   • B-FANOUT-CRASH-RESUME-STRICT-TIER-INCOMPLETE (NEW — broad incomplete-crash recovery
+  #       for the strict tiers; cascade-policy fails the incomplete case closed because an
+  #       absent branch is ran-but-uncaptured-ambiguous; needs at-most-once branch dispatch)
+  # closure_gate.py G1.1 = standalone_registered + standalone_gated == 0 is now 4 + 0 = 4
+  # → R-FS-1 stays ACTIVE. On all four follow-ons reaching closed/resolved → G1.1 passes →
+  # R-FS-1 resolves → R-CL-Q1 quality track admits. (Run `just closure-gate` to confirm G1.1.)
 
 arcs:
   # ─── FROZEN build order (B1 → … → M), all closed, real as-built units ───
@@ -504,13 +506,41 @@ arcs:
   - id: B-FANOUT-CRASH-RESUME-CASCADE-POLICY
     title: "Cascade-policy-aware fan-out crash-resume (PAUSE + CASCADE_CANCEL)"
     kind: standalone
+    status: closed
+    owner_axis: "CP"
+    parent_arc: B-FANOUT-OUTPUT-REPLAY
+    operator_gated: false  # impl-to-cleared-spec on §25.15.1 + §25.15.2 obl. 7 (the cascade semantics were already cleared) → no operator gate; the §25.15 probe + advisor design-vet resolved it without council.
+    pr: "#726 (feat/r-fs-1-fanout-crash-resume-cascade-policy — flips registered → closed)"
+    spec_delta: "bundled-absorption CP v1.56 → v1.57 (§1 cascade-policy-aware crash-resume; §2 PAUSE-trigger fail-closed + the registered reconstruct sub-arc; supersedes the v1.55 §2 PR1-scoped fail-closed) + 1 clearance marker. CP-only (no runtime/store change — detection reuses `output is None`). NO contract / enum / committed-invariant change; impl-to-cleared-spec on the §25.15 cascade contract."
+    gives: "Cascade-policy-AWARE fan-out crash-resume (the STRICT-TIER-conservative version, Codex [P1] + advisor reconcile), correcting the PR1 blanket fail-closed for PAUSE + CASCADE_CANCEL. For the strict tiers a crash-resume CONTINUES ONLY when the recovery is COMPLETE (every branch recovered → nothing to re-dispatch) AND no branch errored; every other state fails closed. DETECTION: `_crash_degraded` (recovered branch output is None; `_determine_fanout_resume` already raises on timed_out, so output is None ⟺ ran-and-errored) + `_crash_complete` (len(branches) == worker_count/branch_count). An errored ORCHESTRATOR is NOT a cascade trigger (returns FAILED directly before any worker — `cascade_policy governs WORKER failure`, :6548), so detection over `.branches` is complete (VERIFIED by orchestrator-workers witnesses, not assumed — advisor BLOCKING catch). Outcomes (strict tiers): errored branch → CASCADE_CANCEL reproduce FAILED no-re-dispatch (obligation 7; 'not-yet-dispatched' ≠ effect-free, advisor) / PAUSE fail-closed-ambiguous (naive reconstruct spec-foreclosed by §25.15.1 'finish in-flight then pause' → registered B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT); INCOMPLETE recovery → fail closed (`...-incomplete-recovery`) — an absent branch is indistinguishable from ran-but-uncaptured (the dispatch-before-capture window; branches are effect-BEARING, unlike v1.56's effect-free synthesis), so re-dispatch is unsafe; broad incomplete recovery needs at-most-once branch dispatch → registered B-FANOUT-CRASH-RESUME-STRICT-TIER-INCOMPLETE. COMPLETE ∧ no-error → continue (finalize from the recovered set, re-dispatch nothing — VERIFIED by witness). PROCEED unchanged (PR1). Honest scoping: delivers correct CASCADE_CANCEL→FAILED + complete-recovery completion; the common incomplete-crash recovery stays fail-closed. CASCADE_CANCEL FAILED = store-only audit (disposition keystone; a FAILED run attests no aggregate). Decorrelated: advisor (capture-before-cancel verification + not-yet-dispatched≠effect-free + the orchestrator false-negative catch + the PAUSE probe-resolution + the Codex-[P1] reconcile narrowing the lift to complete-recovery) + §25.15 probe (impl-to-cleared-spec, no council) + out-of-family Codex (the [P1] dispatch-before-capture catch)."
+    as_built:
+      - "harness-cp/src/harness_cp/workflow_driver.py (the crash-resume entry: replace the PR1 blanket cascade-policy fail-closed with `_crash_degraded` + `_crash_complete` detection → CASCADE_CANCEL→FAILED / PAUSE→ambiguous / incomplete→fail-closed / complete∧no-error→continue; PROCEED untouched)"
+      - "design-substrate/Spec_Control_Plane_v1_57.md + 1 clearance marker"
+      - "tests: harness-cp test_workflow_driver_fanout_output_replay_full_chain.py (complete-recovery-completes cascade-cancel + pause + orchestrator-workers; incomplete→fail-closed cascade-cancel + pause; errored→FAILED-no-redispatch; pause→ambiguous; ORCHESTRATOR_WORKERS errored)"
+    ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
+
+  - id: B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT
+    title: "Reconstruct a lost PAUSE snapshot on a fan-out crash-resume (honoring finish-in-flight)"
+    kind: standalone
     status: registered
     decompose_at_open: true
     owner_axis: "CP + runtime"
-    parent_arc: B-FANOUT-OUTPUT-REPLAY
-    operator_gated: false  # a Class-1 architectural finding (the ratified "reuse pause-resume verbatim" mechanism is under-scoped), NOT a committed-invariant sacrifice → no operator gate; needs its own cascade-semantics design vet before build.
-    anticipated_scope: "Cascade-policy-aware fan-out crash-resume recovery. PR1 fails CLOSED for PAUSE + CASCADE_CANCEL (fan-out-crash-resume-cascade-policy-unsupported) because 'reuse the pause-resume path verbatim' is cascade-policy-BLIND — correct only for PROCEED. The three policies carry DIFFERENT committed on-failure semantics (§25.15.1, persona-tier-derived): PROCEED (SOLO) harvests survivors → PARTIAL; PAUSE (TEAM_BINDING) → reconstruct a resumable halt or restart-fresh; CASCADE_CANCEL (MULTI_TENANT_COMPLIANCE) → recover the cancel outcome → FAILED, do NOT re-run cancelled siblings. Filed as a Class-1 back-flow finding (.harness/class_1_fork_fanout_crash_resume_cascade_policy.md); carries its own cascade-semantics design vet (the §25.15 cascade contract + the sibling-re-dispatch question) before build."
-    why: "Surfaced at B-FANOUT-OUTPUT-REPLAY PR1 build (out-of-family Codex rounds 5-6 + advisor): the operator-ratified recovery mechanism is under-scoped versus what correct crash-resume requires across the three cascade policies. A genuine design dimension the 'reuse verbatim' authorization did not contemplate — a Class-1 architectural extension, not a Phase-7 silent absorption. FULL-SPEC (`[[feedback-full-spec-beyond-mvp-nothing-deferred]]`) — built as a coherent arc, not a defer."
+    parent_arc: B-FANOUT-CRASH-RESUME-CASCADE-POLICY
+    operator_gated: false  # a genuine design problem (how to honor §25.15.1 'finish in-flight, then pause' from a crash-interrupted store), NOT a committed-invariant sacrifice → no operator gate; carries its own design vet.
+    anticipated_scope: "Reconstruct a resumable PAUSED state on a fan-out crash-resume where a branch failed under CascadePolicy.PAUSE but the durable PauseSnapshot write was LOST in the crash. B-FANOUT-CRASH-RESUME-CASCADE-POLICY fails this case CLOSED (`fan-out-crash-resume-pause-trigger-ambiguous`) because a NAIVE reconstruct violates §25.15.1 PAUSE 'Allowed to finish in-flight, then pause' — a crash-interrupted store does NOT hold the finished-in-flight branches (the crash cut them mid-flight), so a reconstructed snapshot would resume interrupted-not-finished branches. Scope: a correct reconstruct that distinguishes finished-in-flight (recoverable) from interrupted-in-flight (must re-dispatch or fail), so api.resume re-enters a PAUSED state equivalent to a real pause snapshot. Carries its own design vet (the in-flight-disposition question)."
+    why: "Surfaced at B-FANOUT-CRASH-RESUME-CASCADE-POLICY (the PAUSE leg). The naive reconstruct is spec-foreclosed (probe-resolved, advisor); a correct reconstruct is a genuine design problem deferred to this sub-arc, NOT a defer. FULL-SPEC (`[[feedback-full-spec-beyond-mvp-nothing-deferred]]`)."
+    ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
+
+  - id: B-FANOUT-CRASH-RESUME-STRICT-TIER-INCOMPLETE
+    title: "Broad incomplete-crash recovery for the strict tiers (PAUSE + CASCADE_CANCEL)"
+    kind: standalone
+    status: registered
+    decompose_at_open: true
+    owner_axis: "CP + runtime"
+    operator_gated: false  # needs at-most-once branch dispatch (reserve-before-dispatch) — a substrate capability, not a committed-invariant sacrifice → no operator gate.
+    parent_arc: B-FANOUT-CRASH-RESUME-CASCADE-POLICY
+    anticipated_scope: "Broad incomplete-crash recovery for the strict tiers. B-FANOUT-CRASH-RESUME-CASCADE-POLICY continues a strict-tier (PAUSE / CASCADE_CANCEL) crash-resume ONLY when the recovery is COMPLETE (every branch recovered → nothing to re-dispatch); an INCOMPLETE recovery fails closed (fan-out-crash-resume-cascade-policy-incomplete-recovery) because an absent branch is INDISTINGUISHABLE from one that RAN its effect but crashed before its capture (the dispatch-before-capture window) — re-dispatching an effect-BEARING branch is unsafe for these tiers (Codex [P1]). Scope: at-most-once fan-out branch dispatch (reserve-before-dispatch — a durable 'dispatched' marker so an absent branch is PROVABLY not-yet-run, not ran-but-uncaptured), which would let the strict tiers recover an incomplete crash (re-dispatch only the provably-not-run branches) instead of failing closed. The analogue of the linear effect-fence's at-most-once for fan-out branches."
+    why: "Surfaced at B-FANOUT-CRASH-RESUME-CASCADE-POLICY (out-of-family Codex [P1] + advisor reconcile): lifting the strict-tier fail-closed for the COMMON incomplete-crash case requires distinguishing in-flight from ran-but-uncaptured, which needs reserve-before-dispatch. The cascade-policy arc lifts only the unambiguous COMPLETE case; the broad lift is this follow-on. FULL-SPEC (`[[feedback-full-spec-beyond-mvp-nothing-deferred]]`) — not naming a savior arc (advisor: don't forward-cite the effect-fence without verifying it covers fan-out branch dispatch)."
     ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
 
   - id: B-FANOUT-CRASH-RESUME-TIMEOUT-REPLAY
