@@ -688,6 +688,30 @@ def _record_durable_step_output(
         _store.record(run_idempotency_key, step_index, step_id, step_output)
 
 
+_FANOUT_REPLAY_ENGINE_CLASSES: frozenset[EngineClass] = frozenset(
+    {EngineClass.EVENT_SOURCED_REPLAY, EngineClass.WAL_SEGMENT}
+)
+
+
+def _fanout_replay_store(ctx: DriverContext, manifest_entry: WorkflowManifestEntry) -> Any:
+    """B-FANOUT-OUTPUT-REPLAY (R-FS-1) — the bound `EngineOutputStore` IFF this run is
+    fan-out-crash-recoverable, else `None`.
+
+    The SINGLE gate predicate shared by the branch-output CAPTURE sites
+    (`record_branch` / `record_orchestrator` at branch completion) and the crash-resume
+    CONSUME site (`_determine_fanout_resume`), so the two halves of the recovery
+    mechanism can NEVER skew on which runs are recoverable
+    (`[[durable-recovery-presence-validity-scope]]`: two halves of one mechanism share
+    their scope key). Gated to the replay-capable engine classes
+    (`EVENT_SOURCED_REPLAY` / `WAL_SEGMENT`) AND an operator-bound store
+    (`ctx.engine_output_store` is `None` by default → returns `None` → no-op,
+    byte-identical to pre-arc). Read via `getattr` (the `cp_is_wiring` idiom — harness-cp
+    does not import the runtime store type)."""
+    if manifest_entry.engine_class not in _FANOUT_REPLAY_ENGINE_CLASSES:
+        return None
+    return getattr(ctx, "engine_output_store", None)
+
+
 def _step_fail_class(prefix: str, exc: BaseException) -> str:
     """Compose a step-dispatch `fail_class` string, surfacing a canonical
     `RT-FAIL-*` code when the raised exception self-describes one.
@@ -1757,6 +1781,83 @@ def _execute_workflow_body(
     # (`drain_branch_buffers` re-stamps every entry to its append moment); no
     # strategy coordinates a shared timestamp, and a `SUB_AGENT_DISPATCH` child
     # reuses the same recursion seam transparently.
+    # net-add #3 (B-FANOUT-OUTPUT-REPLAY, R-FS-1) — fan-out CRASH-resume entry. The 3
+    # concurrent fan-out strategies early-return BEFORE the linear resume block, so a
+    # crashed fan-out otherwise restarts fresh. When this run is replay-capable ∧
+    # store-bound (the SAME `_fanout_replay_store` gate the capture sites use) ∧ there is
+    # no explicit PAUSE snapshot, reconstruct the synthetic resume state from the durable
+    # branch store and thread it as `crash_fan_out_resume` — the strategy then runs the
+    # EXISTING pause-resume recovery VERBATIM (skip terminal branches, recover outputs,
+    # re-dispatch the rest; only the snapshot SOURCE differs). `_FanOutStoreCorruptError`
+    # (a present-but-unreadable branch / orchestrator) → FAILED (fail-closed, never
+    # silently re-dispatch a corrupt branch). Default (no store / not replay-capable /
+    # zero completed branches) → `None` → fresh run, byte-identical.
+    _crash_fan_out_resume: FanOutResumeState | PeerFanOutResumeState | None = None
+    if (
+        strategy
+        in {
+            _DriverStrategyStatus.PARALLELIZATION,
+            _DriverStrategyStatus.ORCHESTRATOR_WORKERS,
+            _DriverStrategyStatus.HIERARCHICAL_DELEGATION,
+        }
+        and resume_snapshot is None
+    ):
+        _crash_replay_store = _fanout_replay_store(ctx, manifest_entry)
+        if _crash_replay_store is not None:
+            _crash_branch_steps, _ = _split_synthesis(steps)
+            try:
+                _crash_fan_out_resume = _determine_fanout_resume(
+                    _crash_replay_store,
+                    run_idempotency_key,
+                    _crash_branch_steps,
+                    manifest_entry.topology_pattern,
+                )
+            except _FanOutStoreCorruptError as exc:
+                return (
+                    RunResult(
+                        workflow_id=manifest_entry.workflow_id,
+                        run_id=run_id,
+                        status=RunStatus.FAILED,
+                        terminal_step_index=None,
+                        partial_state=None,
+                        final_state=None,
+                        fail_class=f"fan-out-crash-resume-store-corrupt: {exc}",
+                    ),
+                    0,
+                )
+
+    # B-FANOUT-OUTPUT-REPLAY PR1 fail-closed (synthesis-bearing crash-resume): a
+    # POST_JOIN_SYNTHESIS fan-out that crash-resumes (`resume_snapshot is None` →
+    # sails PAST the §3/§4 pause-resume reject at the top of this function) would,
+    # absent this guard, recover its branches then dispatch the synthesis FRESH on
+    # `_finish` — a NON-reproducible W3-window synthesis output (no captured-synthesis
+    # replay yet). KEEP it fail-closed — extending B-POSTJOIN's interim
+    # `post-join-synthesis-on-resume-unsupported` boundary from the pause-resume path
+    # to the crash-resume path. The synthesis self-hash + capture + replay that RELAXES
+    # this is the registered follow-on slice of this arc. Because every recursive
+    # HIERARCHICAL child re-enters `_execute_workflow_body`, this also closes the
+    # child-level synthesis hole (a synthesis at a recursive level under crash-resume).
+    if _crash_fan_out_resume is not None and _synth_positions:
+        return (
+            RunResult(
+                workflow_id=manifest_entry.workflow_id,
+                run_id=run_id,
+                status=RunStatus.FAILED,
+                terminal_step_index=_synth_positions[0],
+                partial_state=None,
+                final_state=None,
+                fail_class=(
+                    "post-join-synthesis-on-resume-unsupported: a POST_JOIN_SYNTHESIS "
+                    "terminal step is a fresh first-and-only dispatch (CP spec v1.54 §3/§4) "
+                    "— a crash-resume that recovers the fan-out branches would dispatch the "
+                    "synthesis FRESH (a non-reproducible W3-window output). Reproducible "
+                    "synthesis-across-crash-resume (the synthesis self-hash + captured-output "
+                    "replay) is the registered follow-on slice of B-FANOUT-OUTPUT-REPLAY."
+                ),
+            ),
+            0,
+        )
+
     if strategy is _DriverStrategyStatus.PARALLELIZATION:
         # B-POSTJOIN-LLM-SYNTHESIS (CP spec v1.54 §3) — carve an opt-in terminal
         # POST_JOIN_SYNTHESIS step out of the peer branch set; the strategy
@@ -1775,6 +1876,10 @@ def _execute_workflow_body(
             # snapshot's `peer_fan_out_resume` drives the skip-terminal + re-dispatch
             # path; None on a normal first run.
             resume_snapshot=resume_snapshot,
+            # B-FANOUT-OUTPUT-REPLAY — synthetic CRASH-resume state (None unless this run
+            # crashed mid-fan-out with ≥1 completed branch in the store); never co-set
+            # with `resume_snapshot`.
+            crash_fan_out_resume=_crash_fan_out_resume,
             synthesis_step=_synthesis_step,
         )
     if strategy is _DriverStrategyStatus.EVALUATOR_OPTIMIZER:
@@ -1813,6 +1918,10 @@ def _execute_workflow_body(
             # which reuses `_execute_orchestrator_workers`, calls it False so its
             # (not-yet-wired) resume cannot advertise a false-resumable PAUSED.
             resume_snapshot=resume_snapshot,
+            # B-FANOUT-OUTPUT-REPLAY — synthetic CRASH-resume state (None unless this run
+            # crashed mid-fan-out with ≥1 completed worker in the store); never co-set
+            # with `resume_snapshot`.
+            crash_fan_out_resume=_crash_fan_out_resume,
             pause_resumable=True,
             synthesis_step=_synthesis_step,
         )
@@ -1836,6 +1945,10 @@ def _execute_workflow_body(
             step_dispatchers=step_dispatchers,
             run_idempotency_key=run_idempotency_key,
             resume_snapshot=resume_snapshot,
+            # B-FANOUT-OUTPUT-REPLAY — synthetic CRASH-resume state, forwarded into the
+            # per-level `_execute_orchestrator_workers` (None unless this run crashed
+            # mid-fan-out with ≥1 completed worker); never co-set with `resume_snapshot`.
+            crash_fan_out_resume=_crash_fan_out_resume,
             pause_resumable=True,
             synthesis_step=_synthesis_step,
         )
@@ -4029,6 +4142,7 @@ def _execute_parallelization(
     step_dispatchers: StepDispatcherRegistry,
     run_idempotency_key: str,
     resume_snapshot: PauseSnapshot | None = None,
+    crash_fan_out_resume: FanOutResumeState | PeerFanOutResumeState | None = None,
     synthesis_step: WorkflowStep | None = None,
 ) -> tuple[RunResult, int]:
     """Execute the `PARALLELIZATION` fan-out-barrier-aggregate strategy (U-CP-86).
@@ -4067,7 +4181,18 @@ def _execute_parallelization(
     # (None on a normal first run). Mirrors `_execute_orchestrator_workers` but
     # PARALLELIZATION-shaped: NO orchestrator `steps[0]`, so the recovered set is
     # keyed over `steps` ordinals directly (every step is a peer branch).
-    _peer_resume = resume_snapshot.peer_fan_out_resume if resume_snapshot is not None else None
+    # B-FANOUT-OUTPUT-REPLAY (R-FS-1) — crash-resume threads the synthetic peer resume
+    # state through the SAME `_peer_resume` local the pause path uses (only the snapshot
+    # SOURCE differs; skip-terminal + seed-collected below are reused VERBATIM). Never
+    # co-set with the pause snapshot — `_execute_workflow_body` computes the crash state
+    # only when `resume_snapshot is None`; the assert pins the invariant.
+    assert resume_snapshot is None or crash_fan_out_resume is None
+    _peer_crash_resume = (
+        crash_fan_out_resume if isinstance(crash_fan_out_resume, PeerFanOutResumeState) else None
+    )
+    _peer_resume = (
+        resume_snapshot.peer_fan_out_resume if resume_snapshot is not None else _peer_crash_resume
+    )
     _is_resume = _peer_resume is not None
     # branch_index -> recovered terminal disposition (carried forward across
     # repeated resumes so a re-pause snapshot unions prior + this-round terminals).
@@ -4316,6 +4441,18 @@ def _execute_parallelization(
             timestamp=fanout_timestamp,
             procedural_tier_snapshot_ref=snapshot_ref,
         )
+        # B-FANOUT-OUTPUT-REPLAY (R-FS-1) — RESERVE-before-COMMIT: durably capture this
+        # branch's output to its own per-branch store file BEFORE the terminal ledger
+        # append (the §25.12 D1.b concurrent-fan-out ledger is BINARY — buffered, drained
+        # atomically at the barrier — so it holds no mid-fan-out branch set; the store is
+        # the SOLE crash-resume which-branches-completed authority). `step_id` captured
+        # here is the load-bearing identity the resume material-diff guard fails closed
+        # on. No-op unless replay-capable ∧ store-bound (`_fanout_replay_store`).
+        _replay_store = _fanout_replay_store(ctx, manifest_entry)
+        if _replay_store is not None:
+            _replay_store.record_branch(
+                run_idempotency_key, branch_index, str(step.step_id), output
+            )
         append_branch_terminal_ledger_entry(
             branch_writer=writer,
             branch_context=child,
@@ -5540,6 +5677,7 @@ def _execute_orchestrator_workers(
     step_dispatchers: StepDispatcherRegistry,
     run_idempotency_key: str,
     resume_snapshot: PauseSnapshot | None = None,
+    crash_fan_out_resume: FanOutResumeState | PeerFanOutResumeState | None = None,
     pause_resumable: bool = False,
     synthesis_step: WorkflowStep | None = None,
 ) -> tuple[RunResult, int]:
@@ -5588,7 +5726,18 @@ def _execute_orchestrator_workers(
     workflow_id = manifest_entry.workflow_id
 
     # B-FANOUT-PAUSE — resume reconstruction state (None on a normal first run).
-    _fan_out_resume = resume_snapshot.fan_out_resume if resume_snapshot is not None else None
+    # B-FANOUT-OUTPUT-REPLAY (R-FS-1) — crash-resume threads the synthetic resume state
+    # through the SAME `_fan_out_resume` local the pause path uses (only the snapshot
+    # SOURCE differs; the `_is_resume` orchestrator-recover + skip-terminal-worker +
+    # re-dispatch-incomplete path below is reused VERBATIM). Never co-set with the pause
+    # snapshot (computed only when `resume_snapshot is None`); the assert pins it.
+    assert resume_snapshot is None or crash_fan_out_resume is None
+    _fan_out_crash_resume = (
+        crash_fan_out_resume if isinstance(crash_fan_out_resume, FanOutResumeState) else None
+    )
+    _fan_out_resume = (
+        resume_snapshot.fan_out_resume if resume_snapshot is not None else _fan_out_crash_resume
+    )
     _is_resume = _fan_out_resume is not None
     # branch_index -> recovered terminal disposition (carried forward across
     # repeated resumes so a re-pause snapshot unions prior + this-round terminals).
@@ -5818,6 +5967,18 @@ def _execute_orchestrator_workers(
                 final_state=None,
                 fail_class=_step_fail_class("orchestrator-workers-orchestrator-failure", exc),
             ), 0
+        # B-FANOUT-OUTPUT-REPLAY (R-FS-1) — RESERVE-before-COMMIT: capture the
+        # orchestrator (steps[0]) output BEFORE its sequential ledger entry, so a crash
+        # after ≥1 worker completes can recover `FanOutResumeState.orchestrator_output`.
+        # Without it `_determine_fanout_resume` fails CLOSED (workers-completed-but-
+        # orchestrator-missing is an inconsistent store), so this capture must be wired
+        # in the SAME pass as the worker capture above. No-op unless replay-capable ∧
+        # store-bound (the identical `_fanout_replay_store` gate).
+        _orch_replay_store = _fanout_replay_store(ctx, manifest_entry)
+        if _orch_replay_store is not None:
+            _orch_replay_store.record_orchestrator(
+                run_idempotency_key, str(orchestrator_step.step_id), orchestrator_output
+            )
         _append_buffered_sequential_entry(
             writer=orchestrator_writer,
             workflow_id=workflow_id,
@@ -5964,6 +6125,15 @@ def _execute_orchestrator_workers(
             timestamp=fanout_timestamp,
             procedural_tier_snapshot_ref=snapshot_ref,
         )
+        # B-FANOUT-OUTPUT-REPLAY (R-FS-1) — RESERVE-before-COMMIT branch-output capture
+        # (the worker analogue of the parallelization site; same store, same gate). The
+        # store is the SOLE crash-resume authority (the §25.12 D1.b binary ledger holds
+        # no mid-fan-out worker set). No-op unless replay-capable ∧ store-bound.
+        _replay_store = _fanout_replay_store(ctx, manifest_entry)
+        if _replay_store is not None:
+            _replay_store.record_branch(
+                run_idempotency_key, branch_index, str(step.step_id), output
+            )
         append_branch_terminal_ledger_entry(
             branch_writer=writer,
             branch_context=child,
@@ -6481,6 +6651,7 @@ def _execute_hierarchical_delegation(
     step_dispatchers: StepDispatcherRegistry,
     run_idempotency_key: str,
     resume_snapshot: PauseSnapshot | None = None,
+    crash_fan_out_resume: FanOutResumeState | PeerFanOutResumeState | None = None,
     pause_resumable: bool = False,
     synthesis_step: WorkflowStep | None = None,
 ) -> tuple[RunResult, int]:
@@ -6575,6 +6746,10 @@ def _execute_hierarchical_delegation(
         step_dispatchers=step_dispatchers,
         run_idempotency_key=run_idempotency_key,
         resume_snapshot=resume_snapshot,
+        # B-FANOUT-OUTPUT-REPLAY (R-FS-1) — forward the synthetic crash-resume state into
+        # the per-level orchestrator-workers execution (each recursion level captures +
+        # recovers against its own run-keyed store; this top level recovers here).
+        crash_fan_out_resume=crash_fan_out_resume,
         pause_resumable=pause_resumable,
         # B-POSTJOIN-LLM-SYNTHESIS (CP spec v1.54 §3) — TOP-LEVEL synthesis only:
         # the recursion re-enters via a SUB_AGENT_DISPATCH worker's own
