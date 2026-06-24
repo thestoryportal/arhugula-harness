@@ -334,8 +334,8 @@ def test_parallelization_crash_resume_errored_branch_recovered_as_terminal() -> 
     assert records[1] == ("branch-1", "completed", None)  # errored: terminal, no output
 
     # Run 2 (resume): branch 1 is recovered AS TERMINAL — never re-dispatched (its effect
-    # may have landed) and never folded (no output) → the {0, 2} aggregate. The at-most-once
-    # core: the errored branch's possibly-landed effect is NOT re-fired.
+    # may have landed) and never folded (no output). The run stays DEGRADED → PARTIAL (the
+    # resume must NOT upgrade the original failure to SUCCESS by omitting it — Codex [P2]).
     resume = _CountingDispatcher(n=3)
     r2 = _run(
         workflow_id="wf-par-errored",
@@ -345,9 +345,9 @@ def test_parallelization_crash_resume_errored_branch_recovered_as_terminal() -> 
         store=store,
     )
     assert resume.dispatched == []  # at-most-once: the errored branch is NOT re-fired
-    _aggregate_state = r2.final_state if r2.final_state is not None else r2.partial_state
-    assert _aggregate_state is not None
-    assert set(_aggregate_state["branch_outputs"]) == {"branch-0", "branch-2"}
+    assert r2.status is RunStatus.PARTIAL  # degraded: the recovered failure is preserved
+    assert r2.partial_state is not None
+    assert set(r2.partial_state["branch_outputs"]) == {"branch-0", "branch-2"}
 
 
 def _completed_branch_indexes(ledger: _RecordingLedger) -> set[int]:
@@ -370,14 +370,16 @@ def test_parallelization_crash_resume_rematerializes_recovered_branch_ledger_ent
     store = _InMemoryBranchStore()
     steps = [_step(f"branch-{i}", i) for i in range(3)]
 
-    # Run 1 (crash): branch 1 crashes after 0 + 2 complete → 0, 2 captured.
+    # Run 1: all 3 complete + captured; `forget` branch 1 (in-flight at the crash, absent →
+    # the only re-dispatchable disposition) so resume re-dispatches 1 + replays 0, 2.
     _run(
         workflow_id="wf-par-ledger",
         topology=TopologyPattern.PARALLELIZATION,
         steps=steps,
-        dispatcher=_CountingDispatcher(n=3, fail_index=1),
+        dispatcher=_CountingDispatcher(n=3),
         store=store,
     )
+    store.forget_branch(store.sole_run_key(), 1)
 
     # Run 2 (resume) with an explicit ledger to inspect.
     ledger = _RecordingLedger()

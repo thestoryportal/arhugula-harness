@@ -4584,6 +4584,10 @@ def _execute_parallelization(
         terminal_dispositions[_bi] = _branch.terminal_status
         if _branch.output is not None:
             collected[_bi] = (str(steps[_bi].step_id), _branch.output)
+    # B-FANOUT-OUTPUT-REPLAY — a crash-recovered branch with NO output (ran-and-errored,
+    # effect landed) means the ORIGINAL run was DEGRADED; the resumed run must stay PARTIAL
+    # rather than upgrade to SUCCESS by omitting the failure (out-of-family Codex [P2]).
+    _recovered_degraded = any(b.output is None for b in _recovered_terminal.values())
 
     # B-FANOUT-OUTPUT-REPLAY — on a CRASH-resume (NOT a pause-resume), re-materialize the
     # recovered branches' LOST ledger entries (out-of-family Codex [P1]): a crash before the
@@ -4673,6 +4677,11 @@ def _execute_parallelization(
         salvage: bool,
         pause_snapshot: PauseSnapshot | None = None,
     ) -> tuple[RunResult, int]:
+        # B-FANOUT-OUTPUT-REPLAY — a crash-resume that recovered a ran-and-errored branch
+        # (terminal, no output) keeps the run DEGRADED: never report SUCCESS while omitting
+        # a recovered failure (out-of-family Codex [P2]).
+        if status is RunStatus.SUCCESS and _recovered_degraded:
+            status, salvage = RunStatus.PARTIAL, True
         # Drain the branch buffers (branch-index order) + emit one STEP_BOUNDARY
         # per persisted-step writer, then fold the collected outputs into one
         # deterministic aggregate (lowest-branch-index tiebreak, §25.12). A
@@ -6404,6 +6413,9 @@ def _execute_orchestrator_workers(
         terminal_dispositions[_bi] = _branch.terminal_status
         if _branch.output is not None:
             collected[_bi] = (str(worker_steps[_bi].step_id), _branch.output)
+    # B-FANOUT-OUTPUT-REPLAY — a crash-recovered worker with NO output (ran-and-errored)
+    # keeps the run DEGRADED (never SUCCESS while omitting the failure — Codex [P2]).
+    _recovered_degraded = any(b.output is None for b in _recovered_terminal.values())
 
     # B-FANOUT-OUTPUT-REPLAY — on a CRASH-resume (NOT pause), re-materialize the recovered
     # WORKER branches' LOST ledger entries (out-of-family Codex [P1]): a crash before the
@@ -6547,6 +6559,10 @@ def _execute_orchestrator_workers(
         salvage: bool,
         pause_snapshot: PauseSnapshot | None = None,
     ) -> tuple[RunResult, int]:
+        # B-FANOUT-OUTPUT-REPLAY — a crash-resume that recovered a ran-and-errored worker
+        # (terminal, no output) keeps the run DEGRADED (Codex [P2]).
+        if status is RunStatus.SUCCESS and _recovered_degraded:
+            status, salvage = RunStatus.PARTIAL, True
         # Drain the orchestrator entry FIRST (the fan-out parent persists before
         # its workers), then the worker buffers (branch-index order), emitting one
         # STEP_BOUNDARY per persisted-step writer. steps_executed = orchestrator +

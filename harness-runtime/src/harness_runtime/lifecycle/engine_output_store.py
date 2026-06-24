@@ -368,6 +368,12 @@ class EngineOutputStore:
             output = record.get("output")
             if not isinstance(step_id, str) or not isinstance(terminal_status, str):
                 continue
+            # An unknown terminal_status is SEMANTICALLY corrupt (tamper / a future schema):
+            # treat the record as unreadable so the presence-vs-readability gate surfaces it
+            # in the corrupt set → the resume site fails closed, never treating it as a clean
+            # `completed` it could replay or skip (out-of-family Codex [P2]).
+            if terminal_status not in ("completed", "timed_out"):
+                continue
             if output is not None and not isinstance(output, dict):
                 continue
             result = (step_id, terminal_status, cast("dict[str, Any] | None", output))

@@ -155,6 +155,22 @@ def test_branch_disposition_round_trip(tmp_path: Path) -> None:
     }
 
 
+def test_unknown_disposition_is_unreadable_fail_closed(tmp_path: Path) -> None:
+    """A parseable record with an UNKNOWN terminal_status (tamper / a future schema) is
+    treated as UNREADABLE — omitted from read_branch_records but surfaced by
+    present_branch_indexes, so the resume site fails closed (out-of-family Codex [P2])."""
+    store = EngineOutputStore(journal_dir=tmp_path / "eo")
+    store.record_branch(_RUN_KEY, 0, "w0", "completed", {"o": 0})
+    store._branch_file(_RUN_KEY, 1).write_text(
+        '{"output": null, "step_id": "w1", "terminal_status": "bogus"}', encoding="utf-8"
+    )
+    readable = set(store.read_branch_records(_RUN_KEY).keys())
+    present = store.present_branch_indexes(_RUN_KEY)
+    assert readable == {0}  # the bogus-disposition record is omitted (unreadable)
+    assert present == {0, 1}
+    assert present - readable == {1}  # the fail-closed corrupt set
+
+
 def test_branch_files_are_per_branch_isolated(tmp_path: Path) -> None:
     """Each branch writes its OWN file (no shared-handle contention for N
     concurrent writers); the filename is the branch-index authority."""
