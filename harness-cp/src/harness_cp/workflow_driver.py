@@ -4097,8 +4097,6 @@ def _determine_fanout_resume(
         raise _FanOutStoreCorruptError(
             f"fan-out branch journal(s) present but unreadable: {sorted(corrupt)}"
         )
-    if not readable:
-        return None  # no completed branch → fresh run
     branches = tuple(
         FanOutBranchResumeState(
             branch_index=branch_index,
@@ -4109,24 +4107,37 @@ def _determine_fanout_resume(
         for branch_index, (step_id, output) in sorted(readable.items())
     )
     if topology is TopologyPattern.PARALLELIZATION:
-        # Peer fan-out: every `steps` ordinal is a branch (no orchestrator step[0]).
+        # Peer fan-out: every `steps` ordinal is a branch (no orchestrator step[0]); a
+        # crash is recoverable only via completed branches.
+        if not branches:
+            return None  # no completed branch → fresh run, byte-identical default
         return PeerFanOutResumeState(branches=branches, branch_count=len(steps))
-    # ORCHESTRATOR_WORKERS / HIERARCHICAL_DELEGATION: workers are `steps[1:]`; the
-    # orchestrator (`steps[0]`) output is recovered so it is not re-dispatched.
+    # ORCHESTRATOR_WORKERS / HIERARCHICAL_DELEGATION: the orchestrator (`steps[0]`) is
+    # dispatched FIRST (sequentially), BEFORE any worker. So a crash after the orchestrator
+    # output is captured but BEFORE any worker completes must STILL recover the
+    # orchestrator — else re-dispatching `steps[0]` double-fires its effect, which the
+    # sidecar already captured (out-of-family Codex [P1]). The orchestrator record is
+    # therefore the recovery authority for these topologies, independent of the branch set.
     orchestrator = store.read_orchestrator_output(run_key)
     if orchestrator is None:
-        # Workers completed but the orchestrator output is missing — an inconsistent
-        # store (the orchestrator completes BEFORE any worker dispatches). Fail closed
-        # rather than reconstruct an orchestrator-bearing resume without it.
-        why = "unreadable" if store.orchestrator_present(run_key) else "absent"
+        if store.orchestrator_present(run_key):
+            # Orchestrator file present-but-unreadable → fail closed (corruption / tamper),
+            # whether or not any worker completed.
+            raise _FanOutStoreCorruptError(
+                "fan-out orchestrator output present but unreadable (corrupt store)"
+            )
+        if not branches:
+            return None  # nothing captured (orchestrator absent + no worker) → fresh run
+        # Workers completed but the orchestrator output is ABSENT — an inconsistent store
+        # (the orchestrator completes BEFORE any worker dispatches). Fail closed.
         raise _FanOutStoreCorruptError(
-            f"fan-out orchestrator output {why} but workers completed (inconsistent store)"
+            "fan-out orchestrator output absent but workers completed (inconsistent store)"
         )
     orchestrator_step_id, orchestrator_output = orchestrator
     return FanOutResumeState(
         orchestrator_output=orchestrator_output,
         orchestrator_step_id=orchestrator_step_id,
-        branches=branches,
+        branches=branches,  # possibly empty — orchestrator captured, zero workers completed
         worker_count=len(steps) - 1,
         paused_child_branches=(),
     )

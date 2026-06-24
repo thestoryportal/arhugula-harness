@@ -146,5 +146,37 @@ def test_orchestrator_unreadable_when_workers_completed_fails_closed() -> None:
     """The orchestrator file present-but-unreadable is distinguished from absent in the
     fail-closed diagnostic (consumes the `orchestrator_present` discriminator)."""
     store = _FakeStore(branches={0: ("w-0", {"o": 0})}, orchestrator_corrupt=True)
-    with pytest.raises(_FanOutStoreCorruptError, match="unreadable but workers completed"):
+    with pytest.raises(_FanOutStoreCorruptError, match="present but unreadable"):
         _determine_fanout_resume(store, _RUN_KEY, _steps(3), TopologyPattern.ORCHESTRATOR_WORKERS)
+
+
+def test_orchestrator_recovered_with_zero_workers_completed() -> None:
+    """A crash after the orchestrator (`steps[0]`) captured but BEFORE any worker
+    completes must STILL recover the orchestrator (it dispatches first) — else
+    re-dispatching `steps[0]` double-fires its effect (out-of-family Codex [P1]). The
+    resume state carries an EMPTY branch set → every worker re-dispatches fresh."""
+    store = _FakeStore(branches={}, orchestrator=("orch", {"plan": "delegate"}))
+    result = _determine_fanout_resume(
+        store, _RUN_KEY, _steps(4), TopologyPattern.ORCHESTRATOR_WORKERS
+    )
+    assert isinstance(result, FanOutResumeState)
+    assert result.branches == ()  # zero workers completed
+    assert result.orchestrator_output == {"plan": "delegate"}
+    assert result.worker_count == 3  # len(steps) - 1
+
+
+def test_orchestrator_unreadable_with_zero_workers_fails_closed() -> None:
+    """A present-but-unreadable orchestrator file fails closed EVEN with zero workers
+    completed (corruption / tamper is never silently treated as a fresh run)."""
+    store = _FakeStore(branches={}, orchestrator_corrupt=True)
+    with pytest.raises(_FanOutStoreCorruptError, match="present but unreadable"):
+        _determine_fanout_resume(store, _RUN_KEY, _steps(3), TopologyPattern.ORCHESTRATOR_WORKERS)
+
+
+def test_orchestrator_absent_with_zero_workers_returns_none_fresh() -> None:
+    """Nothing captured (orchestrator absent + no worker) → None (fresh run)."""
+    store = _FakeStore(branches={}, orchestrator=None)
+    assert (
+        _determine_fanout_resume(store, _RUN_KEY, _steps(3), TopologyPattern.ORCHESTRATOR_WORKERS)
+        is None
+    )

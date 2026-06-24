@@ -333,6 +333,59 @@ def test_orchestrator_crash_resume_recovers_orchestrator_and_workers() -> None:
     assert resume.dispatched == []  # fire-once: everything recovered, no re-dispatch
 
 
+class _WorkersFailDispatcher:
+    """Succeeds for the orchestrator (`orch`), raises for every worker (`w-*`) — the
+    crash window where the orchestrator captured but ZERO workers completed."""
+
+    def __init__(self) -> None:
+        self.dispatched: list[str] = []
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        self.dispatched.append(str(step.step_id))
+        if str(step.step_id).startswith("w"):
+            raise RuntimeError(f"simulated worker crash at {step.step_id}")
+        return {"plan": "delegate"}
+
+
+def test_orchestrator_zero_workers_crash_resume_recovers_orchestrator_only() -> None:
+    """A crash after the orchestrator captured but BEFORE any worker completed (Codex
+    [P1]): on resume the orchestrator is RECOVERED (NOT re-dispatched — no double-fire),
+    and every worker re-dispatches fresh. Exercises the empty-`branches=()` resume state,
+    a NEW shape pause never produced (advisor)."""
+    store = _InMemoryBranchStore()
+    steps = [_step("orch", 0), _step("w-0", 0), _step("w-1", 1)]
+
+    # Run 1: orchestrator succeeds + is captured; both workers crash → PARTIAL, no worker
+    # captured. (The orchestrator effect already fired + was recorded.)
+    r1 = _run(
+        workflow_id="wf-ow-orch-only",
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+        steps=steps,
+        dispatcher=_WorkersFailDispatcher(),
+        store=store,
+    )
+    assert r1.status is RunStatus.PARTIAL
+    assert store.orchestrator_present(store.sole_run_key()) is True
+    assert store.read_branch_outputs(store.sole_run_key()) == {}  # zero workers captured
+
+    # Run 2 (resume): the orchestrator is recovered (NOT re-dispatched); both workers
+    # re-dispatch fresh (none were captured).
+    resume = _CountingDispatcher(n=2)
+    r2 = _run(
+        workflow_id="wf-ow-orch-only",
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+    )
+    assert r2.status is RunStatus.SUCCESS
+    # The orchestrator (`orch`) is NOT in the resume dispatch set — recovered, not re-fired.
+    assert "orch" not in resume.dispatched
+    assert sorted(resume.dispatched) == ["w-0", "w-1"]  # only the workers re-dispatch
+
+
 # ---------------------------------------------------------------------------
 # HIERARCHICAL_DELEGATION — top-level crash → resume threads through the per-level
 # `_execute_orchestrator_workers` (the crash_fan_out_resume forward). Recursive child
