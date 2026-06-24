@@ -1926,6 +1926,46 @@ def _execute_workflow_body(
                     ),
                     0,
                 )
+            # B-FANOUT-CRASH-RESUME-CASCADE-POLICY — strict-tier CARDINALITY-ONLY fail-closed
+            # (out-of-family Codex [P1] round-2). The fan-out cardinality marker is written ONCE
+            # on a fresh run BEFORE any branch dispatches (`record_fanout_cardinality`, the
+            # `not _is_resume` gate). So a crash AFTER the marker but before any branch is
+            # readably captured leaves `_determine_fanout_resume` → None (nothing recoverable)
+            # WHILE a cardinality marker IS present: the fan-out STARTED, and a branch may have
+            # dispatched its effect but crashed before its capture. For the strict tiers (PAUSE /
+            # CASCADE_CANCEL) treating this as a FRESH run would re-dispatch the maybe-run branch
+            # → double-fire an effect-BEARING branch. Fail CLOSED — the incomplete-recovery rule
+            # extends to the cardinality-only store. NO marker → the fan-out never started →
+            # genuinely fresh (continue, all policies). PROCEED with a marker also continues (the
+            # SOLO tier accepts the dispatch-before-capture window — PR1, unchanged).
+            if _crash_fan_out_resume is None:
+                _cardinality_policy = d4_tunable(
+                    lookup_cell(manifest_entry.workload_class, manifest_entry.engine_class),
+                    manifest_entry.persona_tier,
+                ).cascade_policy
+                if (
+                    _cardinality_policy is not CascadePolicy.PROCEED
+                    and _crash_replay_store.read_fanout_cardinality(run_idempotency_key) is not None
+                ):
+                    return (
+                        RunResult(
+                            workflow_id=manifest_entry.workflow_id,
+                            run_id=run_id,
+                            status=RunStatus.FAILED,
+                            terminal_step_index=None,
+                            partial_state=None,
+                            final_state=None,
+                            fail_class=(
+                                "fan-out-crash-resume-cascade-policy-incomplete-recovery: a "
+                                f"{_cardinality_policy.value} fan-out STARTED (cardinality marker "
+                                "present) but NOTHING is readably recoverable — a branch may have "
+                                "dispatched its effect before its capture; re-dispatching it as a "
+                                "fresh run would risk double-firing an effect these tiers must "
+                                "not. Fail closed (the cardinality-only incomplete-recovery case)"
+                            ),
+                        ),
+                        0,
+                    )
             # B-FANOUT-CRASH-RESUME-CASCADE-POLICY (R-FS-1) — cascade-policy-AWARE crash-resume,
             # the STRICT-TIER-conservative version (out-of-family Codex [P1] + advisor reconcile).
             # The cascade_policy (§25.15.1) governs the run's ON-A-BRANCH-FAILURE semantics. For

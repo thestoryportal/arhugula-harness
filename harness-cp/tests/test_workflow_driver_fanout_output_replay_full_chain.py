@@ -1207,6 +1207,43 @@ def test_crash_resume_cascade_cancel_incomplete_fails_closed() -> None:
     assert resume.dispatched == []  # fail closed — the absent branch is NOT re-dispatched
 
 
+def test_crash_resume_cascade_cancel_cardinality_only_fails_closed() -> None:
+    """Out-of-family Codex [P1] round-2 — a CARDINALITY-ONLY store. The cardinality marker is
+    written before any branch dispatches, so a crash after the marker but before any branch is
+    captured leaves NOTHING recoverable WHILE the marker is present (the fan-out STARTED; a
+    branch may have run-but-uncaptured). `_determine_fanout_resume` returns None, so without a
+    guard the strict tier would restart FRESH and re-dispatch the maybe-run branch → fail closed
+    instead (the incomplete-recovery rule extends to the cardinality-only store)."""
+    store = _InMemoryBranchStore()
+    steps = [_step(f"branch-{i}", i) for i in range(3)]
+    _run_persona(
+        workflow_id="wf-cc-cardinality-only",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3),
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+    )
+    key = store.sole_run_key()
+    for i in range(3):
+        store.forget_branch(key, i)  # forget ALL branches → only the cardinality marker remains
+    assert store.read_fanout_cardinality(key) == 3
+    assert store.read_branch_records(key) == {}
+
+    resume = _CountingDispatcher(n=3)
+    r2 = _run_persona(
+        workflow_id="wf-cc-cardinality-only",
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+    )
+    assert r2.status is RunStatus.FAILED
+    assert "fan-out-crash-resume-cascade-policy-incomplete-recovery" in (r2.fail_class or "")
+    assert (
+        resume.dispatched == []
+    )  # NOT restarted fresh — fail closed on the cardinality-only store
+
+
 def test_crash_resume_cascade_cancel_errored_branch_reproduces_failed() -> None:
     """An errored branch under CASCADE_CANCEL (the cascade trigger fired before the crash) →
     reproduce FAILED on resume, NEVER re-dispatching (the not-yet-dispatched siblings stay
