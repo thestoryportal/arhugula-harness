@@ -688,6 +688,118 @@ def _record_durable_step_output(
         _store.record(run_idempotency_key, step_index, step_id, step_output)
 
 
+_FANOUT_REPLAY_ENGINE_CLASSES: frozenset[EngineClass] = frozenset(
+    {EngineClass.EVENT_SOURCED_REPLAY, EngineClass.WAL_SEGMENT}
+)
+
+
+def _fanout_replay_store(ctx: DriverContext, manifest_entry: WorkflowManifestEntry) -> Any:
+    """B-FANOUT-OUTPUT-REPLAY (R-FS-1) — the bound `EngineOutputStore` IFF this run is
+    fan-out-crash-recoverable, else `None`.
+
+    The SINGLE gate predicate shared by the branch-output CAPTURE sites
+    (`record_branch` / `record_orchestrator` at branch completion) and the crash-resume
+    CONSUME site (`_determine_fanout_resume`), so the two halves of the recovery
+    mechanism can NEVER skew on which runs are recoverable
+    (`[[durable-recovery-presence-validity-scope]]`: two halves of one mechanism share
+    their scope key). Gated to the replay-capable engine classes
+    (`EVENT_SOURCED_REPLAY` / `WAL_SEGMENT`) AND an operator-bound store
+    (`ctx.engine_output_store` is `None` by default → returns `None` → no-op,
+    byte-identical to pre-arc). Read via `getattr` (the `cp_is_wiring` idiom — harness-cp
+    does not import the runtime store type)."""
+    if manifest_entry.engine_class not in _FANOUT_REPLAY_ENGINE_CLASSES:
+        return None
+    return getattr(ctx, "engine_output_store", None)
+
+
+def _capture_branch_terminal(
+    ctx: DriverContext,
+    manifest_entry: WorkflowManifestEntry,
+    *,
+    run_idempotency_key: str,
+    branch_index: int,
+    step_id: str,
+    terminal_status: str,
+    output: Mapping[str, Any] | None,
+) -> None:
+    """B-FANOUT-OUTPUT-REPLAY (R-FS-1) — capture a branch's terminal DISPOSITION to the
+    durable store (gated on `_fanout_replay_store`).
+
+    The at-most-once class closer: EVERY branch that reaches a terminal boundary records
+    its disposition — `completed` with output (recover + fold), `completed` with `output is
+    None` (ran-and-errored, effect LANDED → recover as terminal, never re-dispatch, never
+    fold), or `timed_out` (deadline-cut, ambiguous → crash-resume fails closed). An
+    output-only store made every non-clean-success disposition invisible, so a crashed
+    landed effect was silently re-dispatched. No-op unless replay-capable ∧ store-bound."""
+    _store = _fanout_replay_store(ctx, manifest_entry)
+    if _store is not None:
+        _store.record_branch(
+            run_idempotency_key, branch_index, str(step_id), terminal_status, output
+        )
+
+
+def _rematerialize_recovered_branch_writer(
+    ctx: DriverContext,
+    *,
+    branch_index: int,
+    branch_context: StepExecutionContext,
+    run_idempotency_key: str,
+    timestamp: datetime,
+    procedural_tier_snapshot_ref: Identifier | None,
+    workflow_id: str,
+    step: WorkflowStep,
+    binding: StepEffectiveBinding,
+) -> BufferingLedgerWriter:
+    """B-FANOUT-OUTPUT-REPLAY (R-FS-1) — re-materialize a crash-recovered branch's LOST
+    ledger entries (out-of-family Codex [P1]).
+
+    Unlike a PAUSE-resume (where the recovered branches' step/terminal entries were already
+    DRAINED durably before the pause halt), a CRASH before the barrier drain lost the
+    in-memory `BufferingLedgerWriter` contents — the §25.12 D1.b ledger drained NOTHING — so
+    the resumed run's ledger would OMIT every recovered branch and undercount
+    `workflow.step_count`. This appends the recovered branch's step + `completed` terminal
+    entries to a fresh writer (identity + causality only — the fan-out branch entries carry
+    NO `response_hash`, so the lost output is not part of the entry). The returned writer is
+    added to the barrier-drain set; `drain_branch_buffers` → `append_ledger_entry` DEDUPS by
+    idempotency key, so a mid-drain crash that DID persist some branch entries yields
+    `IDEMPOTENT_NOOP` for those — re-materialization is correct in EVERY crash window (the
+    binary-ledger premise need not hold mid-drain). Crash-resume ONLY; the per-branch
+    idempotency key is deterministic, so the resumed entry matches the lost one."""
+    writer = BufferingLedgerWriter(actor=ctx.ledger_writer.actor, branch_index=branch_index)
+    # B-FANOUT-OUTPUT-REPLAY — re-materialize the per-step override-application entry too
+    # (out-of-family Codex [P2]): a recovered branch that used a per-step model / role /
+    # prompt / HITL override had its `cp.per-step-override-application` entry buffered BEFORE
+    # the step entry, and a crash lost it with the in-memory writer — so a crash-resumed
+    # ledger would omit override provenance a no-crash run carries. Buffered FIRST (the
+    # resolution-time order); no-op when no override applied; dedup-safe (the override
+    # entry's `(step, outcome)` idempotency key is deterministic).
+    _buffer_branch_override_if_applied(
+        branch_writer=writer,
+        workflow_id=workflow_id,
+        step=step,
+        binding=binding,
+        timestamp=timestamp,
+        snapshot_ref=procedural_tier_snapshot_ref,
+    )
+    append_branch_step_ledger_entry(
+        branch_writer=writer,
+        branch_context=branch_context,
+        run_idempotency_key=run_idempotency_key,
+        local_step_index=0,
+        timestamp=timestamp,
+        procedural_tier_snapshot_ref=procedural_tier_snapshot_ref,
+    )
+    append_branch_terminal_ledger_entry(
+        branch_writer=writer,
+        branch_context=branch_context,
+        run_idempotency_key=run_idempotency_key,
+        terminal_status="completed",
+        timestamp=timestamp,
+        procedural_tier_snapshot_ref=procedural_tier_snapshot_ref,
+    )
+    return writer
+
+
 def _step_fail_class(prefix: str, exc: BaseException) -> str:
     """Compose a step-dispatch `fail_class` string, surfacing a canonical
     `RT-FAIL-*` code when the raised exception self-describes one.
@@ -1757,6 +1869,151 @@ def _execute_workflow_body(
     # (`drain_branch_buffers` re-stamps every entry to its append moment); no
     # strategy coordinates a shared timestamp, and a `SUB_AGENT_DISPATCH` child
     # reuses the same recursion seam transparently.
+    # net-add #3 (B-FANOUT-OUTPUT-REPLAY, R-FS-1) — fan-out CRASH-resume entry. The 3
+    # concurrent fan-out strategies early-return BEFORE the linear resume block, so a
+    # crashed fan-out otherwise restarts fresh. When this run is replay-capable ∧
+    # store-bound (the SAME `_fanout_replay_store` gate the capture sites use) ∧ there is
+    # no explicit PAUSE snapshot, reconstruct the synthetic resume state from the durable
+    # branch store and thread it as `crash_fan_out_resume` — the strategy then runs the
+    # EXISTING pause-resume recovery VERBATIM (skip terminal branches, recover outputs,
+    # re-dispatch the rest; only the snapshot SOURCE differs). `_FanOutStoreCorruptError`
+    # (a present-but-unreadable branch / orchestrator) → FAILED (fail-closed, never
+    # silently re-dispatch a corrupt branch). Default (no store / not replay-capable /
+    # zero completed branches) → `None` → fresh run, byte-identical.
+    _crash_fan_out_resume: FanOutResumeState | PeerFanOutResumeState | None = None
+    if (
+        strategy
+        in {
+            _DriverStrategyStatus.PARALLELIZATION,
+            _DriverStrategyStatus.ORCHESTRATOR_WORKERS,
+            _DriverStrategyStatus.HIERARCHICAL_DELEGATION,
+        }
+        and resume_snapshot is None
+    ):
+        _crash_replay_store = _fanout_replay_store(ctx, manifest_entry)
+        if _crash_replay_store is not None:
+            _crash_branch_steps, _ = _split_synthesis(steps)
+            try:
+                _crash_fan_out_resume = _determine_fanout_resume(
+                    _crash_replay_store,
+                    run_idempotency_key,
+                    _crash_branch_steps,
+                    manifest_entry.topology_pattern,
+                )
+            except _FanOutStoreCorruptError as exc:
+                return (
+                    RunResult(
+                        workflow_id=manifest_entry.workflow_id,
+                        run_id=run_id,
+                        status=RunStatus.FAILED,
+                        terminal_step_index=None,
+                        partial_state=None,
+                        final_state=None,
+                        fail_class=f"fan-out-crash-resume-store-corrupt: {exc}",
+                    ),
+                    0,
+                )
+            except _FanOutStoreTimeoutAmbiguousError as exc:
+                return (
+                    RunResult(
+                        workflow_id=manifest_entry.workflow_id,
+                        run_id=run_id,
+                        status=RunStatus.FAILED,
+                        terminal_step_index=None,
+                        partial_state=None,
+                        final_state=None,
+                        fail_class=f"fan-out-crash-resume-timeout-ambiguous: {exc}",
+                    ),
+                    0,
+                )
+            # PR1 SCOPE (advisor + out-of-family Codex [P1]): crash-resume recovery is
+            # witnessed + correct ONLY for `CascadePolicy.PROCEED`. PAUSE + CASCADE_CANCEL
+            # carry committed on-failure semantics (pause-the-fan-out / cancel-siblings →
+            # FAILED) that "reuse the pause-resume path verbatim" — the ratified mechanism —
+            # does NOT honor on a crash-resume: a cascade-policy-BLIND recovery would re-run
+            # deliberately-cancelled siblings and report PARTIAL where CASCADE_CANCEL's
+            # contract says FAILED (a wrong, less-safe result on the compliance tier). FAIL
+            # CLOSED for them. Cascade-policy-aware crash-resume is the registered back-flow
+            # follow-on (`.harness/class_1_fork_fanout_crash_resume_cascade_policy.md`).
+            if _crash_fan_out_resume is not None:
+                _crash_cascade_policy = d4_tunable(
+                    lookup_cell(manifest_entry.workload_class, manifest_entry.engine_class),
+                    manifest_entry.persona_tier,
+                ).cascade_policy
+                if _crash_cascade_policy is not CascadePolicy.PROCEED:
+                    return (
+                        RunResult(
+                            workflow_id=manifest_entry.workflow_id,
+                            run_id=run_id,
+                            status=RunStatus.FAILED,
+                            terminal_step_index=None,
+                            partial_state=None,
+                            final_state=None,
+                            fail_class=(
+                                "fan-out-crash-resume-cascade-policy-unsupported: crash-resume "
+                                "recovery is PR1-scoped to CascadePolicy.PROCEED; "
+                                f"{_crash_cascade_policy.value} (pause / cascade-cancel) has "
+                                "committed on-failure semantics a cascade-policy-blind recovery "
+                                "cannot honor — fail closed (registered follow-on)"
+                            ),
+                        ),
+                        0,
+                    )
+            # Material-diff fail-closed (out-of-family Codex [P2]): the store holds recovered
+            # branch / orchestrator records but the RESUMED manifest carries NO branch steps
+            # (a changed body). The strategy's empty-step fast path would return SUCCESS with
+            # an empty aggregate BEFORE its resume material-diff guard runs — silently dropping
+            # the recovered outputs. Reject here instead (the guard the fast path bypasses).
+            if _crash_fan_out_resume is not None and not _crash_branch_steps:
+                return (
+                    RunResult(
+                        workflow_id=manifest_entry.workflow_id,
+                        run_id=run_id,
+                        status=RunStatus.FAILED,
+                        terminal_step_index=None,
+                        partial_state=None,
+                        final_state=None,
+                        fail_class=(
+                            "fan-out-crash-resume-material-diff: the store holds recovered "
+                            "fan-out state but the resumed manifest has no branch steps "
+                            "(changed body) — fail closed rather than drop the recovered outputs"
+                        ),
+                    ),
+                    0,
+                )
+
+    # B-FANOUT-OUTPUT-REPLAY PR1 fail-closed (synthesis-bearing crash-resume): a
+    # POST_JOIN_SYNTHESIS fan-out that crash-resumes (`resume_snapshot is None` →
+    # sails PAST the §3/§4 pause-resume reject at the top of this function) would,
+    # absent this guard, recover its branches then dispatch the synthesis FRESH on
+    # `_finish` — a NON-reproducible W3-window synthesis output (no captured-synthesis
+    # replay yet). KEEP it fail-closed — extending B-POSTJOIN's interim
+    # `post-join-synthesis-on-resume-unsupported` boundary from the pause-resume path
+    # to the crash-resume path. The synthesis self-hash + capture + replay that RELAXES
+    # this is the registered follow-on slice of this arc. Because every recursive
+    # HIERARCHICAL child re-enters `_execute_workflow_body`, this also closes the
+    # child-level synthesis hole (a synthesis at a recursive level under crash-resume).
+    if _crash_fan_out_resume is not None and _synth_positions:
+        return (
+            RunResult(
+                workflow_id=manifest_entry.workflow_id,
+                run_id=run_id,
+                status=RunStatus.FAILED,
+                terminal_step_index=_synth_positions[0],
+                partial_state=None,
+                final_state=None,
+                fail_class=(
+                    "post-join-synthesis-on-resume-unsupported: a POST_JOIN_SYNTHESIS "
+                    "terminal step is a fresh first-and-only dispatch (CP spec v1.54 §3/§4) "
+                    "— a crash-resume that recovers the fan-out branches would dispatch the "
+                    "synthesis FRESH (a non-reproducible W3-window output). Reproducible "
+                    "synthesis-across-crash-resume (the synthesis self-hash + captured-output "
+                    "replay) is the registered follow-on slice of B-FANOUT-OUTPUT-REPLAY."
+                ),
+            ),
+            0,
+        )
+
     if strategy is _DriverStrategyStatus.PARALLELIZATION:
         # B-POSTJOIN-LLM-SYNTHESIS (CP spec v1.54 §3) — carve an opt-in terminal
         # POST_JOIN_SYNTHESIS step out of the peer branch set; the strategy
@@ -1775,6 +2032,10 @@ def _execute_workflow_body(
             # snapshot's `peer_fan_out_resume` drives the skip-terminal + re-dispatch
             # path; None on a normal first run.
             resume_snapshot=resume_snapshot,
+            # B-FANOUT-OUTPUT-REPLAY — synthetic CRASH-resume state (None unless this run
+            # crashed mid-fan-out with ≥1 completed branch in the store); never co-set
+            # with `resume_snapshot`.
+            crash_fan_out_resume=_crash_fan_out_resume,
             synthesis_step=_synthesis_step,
         )
     if strategy is _DriverStrategyStatus.EVALUATOR_OPTIMIZER:
@@ -1813,6 +2074,10 @@ def _execute_workflow_body(
             # which reuses `_execute_orchestrator_workers`, calls it False so its
             # (not-yet-wired) resume cannot advertise a false-resumable PAUSED.
             resume_snapshot=resume_snapshot,
+            # B-FANOUT-OUTPUT-REPLAY — synthetic CRASH-resume state (None unless this run
+            # crashed mid-fan-out with ≥1 completed worker in the store); never co-set
+            # with `resume_snapshot`.
+            crash_fan_out_resume=_crash_fan_out_resume,
             pause_resumable=True,
             synthesis_step=_synthesis_step,
         )
@@ -1836,6 +2101,10 @@ def _execute_workflow_body(
             step_dispatchers=step_dispatchers,
             run_idempotency_key=run_idempotency_key,
             resume_snapshot=resume_snapshot,
+            # B-FANOUT-OUTPUT-REPLAY — synthetic CRASH-resume state, forwarded into the
+            # per-level `_execute_orchestrator_workers` (None unless this run crashed
+            # mid-fan-out with ≥1 completed worker); never co-set with `resume_snapshot`.
+            crash_fan_out_resume=_crash_fan_out_resume,
             pause_resumable=True,
             synthesis_step=_synthesis_step,
         )
@@ -3946,6 +4215,142 @@ def _run_fanout_to_completion[T](fanout: Coroutine[Any, Any, T], *, max_workers:
         loop.close()
 
 
+class _FanOutStoreCorruptError(Exception):
+    """A fan-out branch journal is PRESENT but UNREADABLE on crash-resume.
+
+    The fail-closed signal (`[[durable-recovery-presence-validity-scope]]`): a branch
+    file that exists but yields no parseable record is corruption / tamper, NOT a
+    genuinely-incomplete branch — re-dispatching it would mask the corruption and
+    re-fire its possibly-landed effect. `_execute_workflow_body` turns this into a
+    FAILED RunResult rather than a fresh re-dispatch.
+    """
+
+
+class _FanOutStoreTimeoutAmbiguousError(Exception):
+    """A recovered fan-out branch reached a TIMED_OUT terminal disposition.
+
+    Irreducibly ambiguous: a deadline-cut in-flight dispatch may or may not have landed
+    its effect (the effect-fence-ambiguous case the linear path needed a dedicated arc to
+    resolve). Crash-resume cannot guess across a fan-out crash, so it FAILS CLOSED; the
+    operator-resolvable timeout-replay is the registered follow-on. `_execute_workflow_body`
+    turns this into a FAILED RunResult with a distinct fail_class.
+    """
+
+
+def _determine_fanout_resume(
+    store: Any,
+    run_key: str,
+    steps: Sequence[WorkflowStep],
+    topology: TopologyPattern,
+) -> FanOutResumeState | PeerFanOutResumeState | None:
+    """Reconstruct a fan-out crash-resume state from the durable branch STORE.
+
+    B-FANOUT-OUTPUT-REPLAY (R-FS-1). On a mid-fan-out crash the durable F2 ledger is
+    BINARY (branch terminals buffer into per-branch `BufferingLedgerWriter`s and drain
+    ATOMICALLY at the barrier per CP §25.12 D1.b), so the STORE is the SOLE
+    which-branches-completed authority: `read_branch_outputs` keys = the completed set;
+    every other declared ordinal is left re-dispatchable. (The ledger is consulted only
+    to know the fan-out is INCOMPLETE — the replay trigger — never for which branches.)
+
+    Returns None (→ fresh run, byte-identical default) when no branch completed. Raises
+    `_FanOutStoreCorruptError` (→ FAILED) when a branch file is PRESENT but UNREADABLE
+    (fail-closed; never silently re-dispatch a corrupt branch). The recovered `step_id`
+    comes from the STORE (CAPTURE-time identity) so the EXISTING strategy resume
+    material-diff guard meaningfully fails closed on a changed body.
+    """
+    records = store.read_branch_records(run_key)
+    corrupt = store.present_branch_indexes(run_key) - records.keys()
+    if corrupt:
+        raise _FanOutStoreCorruptError(
+            f"fan-out branch journal(s) present but unreadable: {sorted(corrupt)}"
+        )
+    # Changed-cardinality fail-closed (out-of-family Codex [P2]): the store records the
+    # ORIGINAL fan-out cardinality at capture time, so a manifest redefined with a DIFFERENT
+    # branch count between crash + resume (which the per-branch material-diff cannot catch
+    # when the surviving prefix still matches) fails closed rather than silently dropping the
+    # original in-flight branches. None (unrecorded / unreadable marker) → no check.
+    _recorded_cardinality = store.read_fanout_cardinality(run_key)
+    if _recorded_cardinality is not None and _recorded_cardinality != len(steps):
+        raise _FanOutStoreCorruptError(
+            f"fan-out crash-resume cardinality mismatch: store captured a {_recorded_cardinality}-"
+            f"branch fan-out, resume supplied {len(steps)} (changed body) — fail closed"
+        )
+    # Disposition recovery (the at-most-once class closer — an output-only store made every
+    # non-clean-success disposition invisible). A TIMED_OUT branch is irreducibly ambiguous
+    # (deadline-cut in-flight dispatch — may or may not have landed) → FAIL CLOSED. A
+    # COMPLETED branch with NO output (ran-and-errored; its effect LANDED) is recovered as
+    # TERMINAL — not re-dispatched (the seed loop folds only output-bearing branches).
+    timed_out = sorted(bi for bi, (_s, status, _o) in records.items() if status == "timed_out")
+    if timed_out:
+        raise _FanOutStoreTimeoutAmbiguousError(
+            f"fan-out branch(es) {timed_out} timed out (deadline-cut in-flight dispatch — may "
+            f"or may not have landed); crash-resume fails closed (timeout-replay follow-on)"
+        )
+    branches = tuple(
+        FanOutBranchResumeState(
+            branch_index=branch_index,
+            step_id=step_id,
+            terminal_status="completed",
+            output=output,
+        )
+        for branch_index, (step_id, _status, output) in sorted(records.items())
+    )
+    if topology is TopologyPattern.PARALLELIZATION:
+        # Peer fan-out: NO orchestrator `steps[0]`. A captured orchestrator journal here
+        # means the crashed run was an ORCHESTRATOR / HIERARCHICAL run resumed under a
+        # CHANGED topology (the `run_idempotency_key` does NOT bind topology) → fail closed
+        # rather than reinterpret worker records as peer branches or drop a captured
+        # orchestrator effect (out-of-family Codex [P2]).
+        if store.orchestrator_present(run_key):
+            raise _FanOutStoreCorruptError(
+                "fan-out crash-resume topology mismatch: a PARALLELIZATION manifest resumed a "
+                "run whose store holds an orchestrator record — fail closed (changed topology)"
+            )
+        if not branches:
+            return None  # no completed branch → fresh run, byte-identical default
+        return PeerFanOutResumeState(branches=branches, branch_count=len(steps))
+    # ORCHESTRATOR_WORKERS / HIERARCHICAL_DELEGATION: the orchestrator (`steps[0]`) is
+    # dispatched FIRST (sequentially), BEFORE any worker. So a crash after the orchestrator
+    # output is captured but BEFORE any worker completes must STILL recover the
+    # orchestrator — else re-dispatching `steps[0]` double-fires its effect, which the
+    # sidecar already captured (out-of-family Codex [P1]). The orchestrator record is
+    # therefore the recovery authority for these topologies, independent of the branch set.
+    orchestrator = store.read_orchestrator_output(run_key)
+    if orchestrator is None:
+        if store.orchestrator_present(run_key):
+            # Orchestrator file present-but-unreadable → fail closed (corruption / tamper),
+            # whether or not any worker completed.
+            raise _FanOutStoreCorruptError(
+                "fan-out orchestrator output present but unreadable (corrupt store)"
+            )
+        if not branches:
+            return None  # nothing captured (orchestrator absent + no worker) → fresh run
+        # Workers completed but the orchestrator output is ABSENT — an inconsistent store
+        # (the orchestrator completes BEFORE any worker dispatches). Fail closed.
+        raise _FanOutStoreCorruptError(
+            "fan-out orchestrator output absent but workers completed (inconsistent store)"
+        )
+    # Cardinality-ordering fail-closed (out-of-family Codex [P2]): the orchestrator record is
+    # fsynced BEFORE the fan-out cardinality marker, so a crash between them leaves a valid
+    # orchestrator record with NO recorded cardinality — and a manifest with a CHANGED worker
+    # count would then reuse the old orchestrator output against the new worker set undetected.
+    # An orchestrator record without a cardinality marker therefore fails closed.
+    if _recorded_cardinality is None:
+        raise _FanOutStoreCorruptError(
+            "fan-out orchestrator record present but the fan-out cardinality marker is absent "
+            "(crash between orchestrator capture and cardinality write) — fail closed (the "
+            "worker count cannot be validated against a changed manifest)"
+        )
+    orchestrator_step_id, orchestrator_output = orchestrator
+    return FanOutResumeState(
+        orchestrator_output=orchestrator_output,
+        orchestrator_step_id=orchestrator_step_id,
+        branches=branches,  # possibly empty — orchestrator captured, zero workers completed
+        worker_count=len(steps) - 1,
+        paused_child_branches=(),
+    )
+
+
 def _execute_parallelization(
     *,
     manifest_entry: WorkflowManifestEntry,
@@ -3956,6 +4361,7 @@ def _execute_parallelization(
     step_dispatchers: StepDispatcherRegistry,
     run_idempotency_key: str,
     resume_snapshot: PauseSnapshot | None = None,
+    crash_fan_out_resume: FanOutResumeState | PeerFanOutResumeState | None = None,
     synthesis_step: WorkflowStep | None = None,
 ) -> tuple[RunResult, int]:
     """Execute the `PARALLELIZATION` fan-out-barrier-aggregate strategy (U-CP-86).
@@ -3994,7 +4400,18 @@ def _execute_parallelization(
     # (None on a normal first run). Mirrors `_execute_orchestrator_workers` but
     # PARALLELIZATION-shaped: NO orchestrator `steps[0]`, so the recovered set is
     # keyed over `steps` ordinals directly (every step is a peer branch).
-    _peer_resume = resume_snapshot.peer_fan_out_resume if resume_snapshot is not None else None
+    # B-FANOUT-OUTPUT-REPLAY (R-FS-1) — crash-resume threads the synthetic peer resume
+    # state through the SAME `_peer_resume` local the pause path uses (only the snapshot
+    # SOURCE differs; skip-terminal + seed-collected below are reused VERBATIM). Never
+    # co-set with the pause snapshot — `_execute_workflow_body` computes the crash state
+    # only when `resume_snapshot is None`; the assert pins the invariant.
+    assert resume_snapshot is None or crash_fan_out_resume is None
+    _peer_crash_resume = (
+        crash_fan_out_resume if isinstance(crash_fan_out_resume, PeerFanOutResumeState) else None
+    )
+    _peer_resume = (
+        resume_snapshot.peer_fan_out_resume if resume_snapshot is not None else _peer_crash_resume
+    )
     _is_resume = _peer_resume is not None
     # branch_index -> recovered terminal disposition (carried forward across
     # repeated resumes so a re-pause snapshot unions prior + this-round terminals).
@@ -4222,6 +4639,56 @@ def _execute_parallelization(
         terminal_dispositions[_bi] = _branch.terminal_status
         if _branch.output is not None:
             collected[_bi] = (str(steps[_bi].step_id), _branch.output)
+    # B-FANOUT-OUTPUT-REPLAY — a crash-recovered branch with NO output (ran-and-errored,
+    # effect landed) means the ORIGINAL run was DEGRADED; the resumed run must stay PARTIAL
+    # rather than upgrade to SUCCESS by omitting the failure (out-of-family Codex [P2]).
+    _recovered_degraded = any(b.output is None for b in _recovered_terminal.values())
+    # B-FANOUT-OUTPUT-REPLAY — record the capture-time fan-out CARDINALITY once on a fresh
+    # run (before any branch dispatches), so a changed-cardinality crash-resume (a manifest
+    # redefined with fewer branches) fails closed instead of silently dropping the original
+    # in-flight branches (out-of-family Codex [P2]).
+    if not _is_resume:
+        _cardinality_store = _fanout_replay_store(ctx, manifest_entry)
+        if _cardinality_store is not None:
+            _cardinality_store.record_fanout_cardinality(run_idempotency_key, len(steps))
+
+    # B-FANOUT-OUTPUT-REPLAY — on a CRASH-resume (NOT a pause-resume), re-materialize the
+    # recovered branches' LOST ledger entries (out-of-family Codex [P1]): a crash before the
+    # barrier drained nothing, so the resumed ledger would omit them + undercount
+    # `workflow.step_count`. Dedup-safe; extends the barrier-drain set.
+    if _peer_crash_resume is not None:
+        for _bi in sorted(_recovered_terminal):
+            _r_step = steps[_bi]
+            _r_binding = resolve_step_binding(
+                manifest_entry,
+                str(_r_step.step_id),
+                default_model_binding=default_model_binding,
+                persona_tier=manifest_entry.persona_tier,
+            )
+            _r_child = compose_branch_child_context(
+                fanout_parent,
+                branch_index=_bi,
+                agent_role=_r_binding.agent_role or _DEFAULT_PARALLELIZATION_AGENT_ROLE,
+            ).model_copy(
+                update={
+                    "hitl_placements": fold_step_hitl_placements(
+                        manifest_entry.hitl_placements, _r_binding.hitl_placement
+                    )
+                }
+            )
+            branch_writers.append(
+                _rematerialize_recovered_branch_writer(
+                    ctx,
+                    branch_index=_bi,
+                    branch_context=_r_child,
+                    run_idempotency_key=run_idempotency_key,
+                    timestamp=fanout_timestamp,
+                    procedural_tier_snapshot_ref=snapshot_ref,
+                    workflow_id=workflow_id,
+                    step=_r_step,
+                    binding=_r_binding,
+                )
+            )
 
     def _record_clean(
         branch_index: int,
@@ -4243,6 +4710,18 @@ def _execute_parallelization(
             timestamp=fanout_timestamp,
             procedural_tier_snapshot_ref=snapshot_ref,
         )
+        # B-FANOUT-OUTPUT-REPLAY (R-FS-1) — RESERVE-before-COMMIT: durably capture this
+        # branch's output to its own per-branch store file BEFORE the terminal ledger
+        # append (the §25.12 D1.b concurrent-fan-out ledger is BINARY — buffered, drained
+        # atomically at the barrier — so it holds no mid-fan-out branch set; the store is
+        # the SOLE crash-resume which-branches-completed authority). `step_id` captured
+        # here is the load-bearing identity the resume material-diff guard fails closed
+        # on. No-op unless replay-capable ∧ store-bound (`_fanout_replay_store`).
+        _replay_store = _fanout_replay_store(ctx, manifest_entry)
+        if _replay_store is not None:
+            _replay_store.record_branch(
+                run_idempotency_key, branch_index, str(step.step_id), "completed", output
+            )
         append_branch_terminal_ledger_entry(
             branch_writer=writer,
             branch_context=child,
@@ -4261,6 +4740,11 @@ def _execute_parallelization(
         salvage: bool,
         pause_snapshot: PauseSnapshot | None = None,
     ) -> tuple[RunResult, int]:
+        # B-FANOUT-OUTPUT-REPLAY — a crash-resume that recovered a ran-and-errored branch
+        # (terminal, no output) keeps the run DEGRADED: never report SUCCESS while omitting
+        # a recovered failure (out-of-family Codex [P2]).
+        if status is RunStatus.SUCCESS and _recovered_degraded:
+            status, salvage = RunStatus.PARTIAL, True
         # Drain the branch buffers (branch-index order) + emit one STEP_BOUNDARY
         # per persisted-step writer, then fold the collected outputs into one
         # deterministic aggregate (lowest-branch-index tiebreak, §25.12). A
@@ -4348,6 +4832,17 @@ def _execute_parallelization(
                     timestamp=fanout_timestamp,
                     procedural_tier_snapshot_ref=snapshot_ref,
                 )
+                # B-FANOUT-OUTPUT-REPLAY — capture the timed-out DISPOSITION (the effect may
+                # have landed; crash-resume FAILS CLOSED on it — never a silent re-dispatch).
+                _capture_branch_terminal(
+                    ctx,
+                    manifest_entry,
+                    run_idempotency_key=run_idempotency_key,
+                    branch_index=branch_index,
+                    step_id=step.step_id,
+                    terminal_status="timed_out",
+                    output=None,
+                )
                 append_branch_terminal_ledger_entry(
                     branch_writer=writer,
                     branch_context=child,
@@ -4371,6 +4866,19 @@ def _execute_parallelization(
                     local_step_index=0,
                     timestamp=fanout_timestamp,
                     procedural_tier_snapshot_ref=snapshot_ref,
+                )
+                # B-FANOUT-OUTPUT-REPLAY — a ran-and-errored branch's effect may have LANDED
+                # (dispatch-boundary `completed`, no output) → capture the disposition so
+                # crash-resume recovers it as TERMINAL (no re-dispatch, no fold), never
+                # re-firing a landed effect (the disposition class closer).
+                _capture_branch_terminal(
+                    ctx,
+                    manifest_entry,
+                    run_idempotency_key=run_idempotency_key,
+                    branch_index=branch_index,
+                    step_id=step.step_id,
+                    terminal_status="completed",
+                    output=None,
                 )
                 append_branch_terminal_ledger_entry(
                     branch_writer=writer,
@@ -4466,7 +4974,34 @@ def _execute_parallelization(
             # so the salvaged aggregate keeps it (a ran-and-errored in-flight,
             # `exception() is not None`, has no output).
             if terminal == "completed" and inflight.exception() is None:
+                # B-FANOUT-OUTPUT-REPLAY — a sibling that LANDED under the shield (its effect
+                # fired) is captured WITH output (out-of-family Codex [P1]) — else crash-resume
+                # RE-DISPATCHES it (double-fire). The buffered terminal append above is not
+                # durable until the drain, so this still satisfies RESERVE-before-COMMIT.
+                _capture_branch_terminal(
+                    ctx,
+                    manifest_entry,
+                    run_idempotency_key=run_idempotency_key,
+                    branch_index=branch_index,
+                    step_id=step.step_id,
+                    terminal_status="completed",
+                    output=inflight.result(),
+                )
                 collected[branch_index] = (str(step.step_id), inflight.result())
+            else:
+                # A timed-out (deadline-cut, ambiguous) OR ran-and-errored (effect LANDED, no
+                # output) in-flight sibling — capture the DISPOSITION with no output so
+                # crash-resume recovers-as-terminal (`completed`) or FAILS CLOSED (`timed_out`),
+                # never silently re-dispatching a landed effect (the disposition class closer).
+                _capture_branch_terminal(
+                    ctx,
+                    manifest_entry,
+                    run_idempotency_key=run_idempotency_key,
+                    branch_index=branch_index,
+                    step_id=step.step_id,
+                    terminal_status=terminal,
+                    output=None,
+                )
             raise  # honor the cancellation (the barrier cancelled this branch)
         except Exception:
             # THIS branch's own dispatch ERRORED — the failure that triggers the
@@ -4474,6 +5009,17 @@ def _execute_parallelization(
             # + a `completed` terminal (dispatch-boundary, not step-outcome — the
             # carrier forecloses `failed`). Re-raise so the TaskGroup cascade-
             # cancels the siblings.
+            # B-FANOUT-OUTPUT-REPLAY — capture the `completed` disposition (effect may have
+            # LANDED, no output) so crash-resume recovers it as terminal, never re-firing it.
+            _capture_branch_terminal(
+                ctx,
+                manifest_entry,
+                run_idempotency_key=run_idempotency_key,
+                branch_index=branch_index,
+                step_id=step.step_id,
+                terminal_status="completed",
+                output=None,
+            )
             append_branch_step_ledger_entry(
                 branch_writer=writer,
                 branch_context=child,
@@ -5467,6 +6013,7 @@ def _execute_orchestrator_workers(
     step_dispatchers: StepDispatcherRegistry,
     run_idempotency_key: str,
     resume_snapshot: PauseSnapshot | None = None,
+    crash_fan_out_resume: FanOutResumeState | PeerFanOutResumeState | None = None,
     pause_resumable: bool = False,
     synthesis_step: WorkflowStep | None = None,
 ) -> tuple[RunResult, int]:
@@ -5515,7 +6062,18 @@ def _execute_orchestrator_workers(
     workflow_id = manifest_entry.workflow_id
 
     # B-FANOUT-PAUSE — resume reconstruction state (None on a normal first run).
-    _fan_out_resume = resume_snapshot.fan_out_resume if resume_snapshot is not None else None
+    # B-FANOUT-OUTPUT-REPLAY (R-FS-1) — crash-resume threads the synthetic resume state
+    # through the SAME `_fan_out_resume` local the pause path uses (only the snapshot
+    # SOURCE differs; the `_is_resume` orchestrator-recover + skip-terminal-worker +
+    # re-dispatch-incomplete path below is reused VERBATIM). Never co-set with the pause
+    # snapshot (computed only when `resume_snapshot is None`); the assert pins it.
+    assert resume_snapshot is None or crash_fan_out_resume is None
+    _fan_out_crash_resume = (
+        crash_fan_out_resume if isinstance(crash_fan_out_resume, FanOutResumeState) else None
+    )
+    _fan_out_resume = (
+        resume_snapshot.fan_out_resume if resume_snapshot is not None else _fan_out_crash_resume
+    )
     _is_resume = _fan_out_resume is not None
     # branch_index -> recovered terminal disposition (carried forward across
     # repeated resumes so a re-pause snapshot unions prior + this-round terminals).
@@ -5703,6 +6261,40 @@ def _execute_orchestrator_workers(
         # now extended to carry the fan-out's already-run outputs in the snapshot).
         assert _fan_out_resume is not None  # guarded by `_is_resume`
         orchestrator_output: Mapping[str, Any] = dict(_fan_out_resume.orchestrator_output)
+        # B-FANOUT-OUTPUT-REPLAY — on a CRASH-resume the orchestrator's OWN sequential
+        # ledger entry was LOST (the crash drained nothing), so re-materialize it
+        # (dedup-safe; out-of-family Codex [P1]). A PAUSE-resume's entry was already
+        # durable → skip (the comment above). Sets `orchestrator_writer` so it drains.
+        if _fan_out_crash_resume is not None:
+            orchestrator_writer = BufferingLedgerWriter(
+                actor=ctx.ledger_writer.actor, branch_index=0
+            )
+            # B-FANOUT-OUTPUT-REPLAY — re-materialize the orchestrator's per-step override
+            # provenance too (out-of-family Codex [P2]; the fresh `else` branch buffers it
+            # before the sequential entry — match it so a crash-resumed override-bearing
+            # orchestrator carries the same provenance a no-crash run does). Dedup-safe.
+            _orch_resume_binding = resolve_step_binding(
+                manifest_entry,
+                str(orchestrator_step.step_id),
+                default_model_binding=default_model_binding,
+                persona_tier=manifest_entry.persona_tier,
+            )
+            _buffer_branch_override_if_applied(
+                branch_writer=orchestrator_writer,
+                workflow_id=workflow_id,
+                step=orchestrator_step,
+                binding=_orch_resume_binding,
+                timestamp=fanout_timestamp,
+                snapshot_ref=snapshot_ref,
+            )
+            _append_buffered_sequential_entry(
+                writer=orchestrator_writer,
+                workflow_id=workflow_id,
+                entry_index=0,
+                idempotency_key=orchestrator_idempotency_key,
+                timestamp=fanout_timestamp,
+                procedural_tier_snapshot_ref=snapshot_ref,
+            )
     else:
         orchestrator_writer = BufferingLedgerWriter(actor=ctx.ledger_writer.actor, branch_index=0)
         # Resolve the binding (pure) + buffer the orchestrator step's own per-step
@@ -5745,6 +6337,18 @@ def _execute_orchestrator_workers(
                 final_state=None,
                 fail_class=_step_fail_class("orchestrator-workers-orchestrator-failure", exc),
             ), 0
+        # B-FANOUT-OUTPUT-REPLAY (R-FS-1) — RESERVE-before-COMMIT: capture the
+        # orchestrator (steps[0]) output BEFORE its sequential ledger entry, so a crash
+        # after ≥1 worker completes can recover `FanOutResumeState.orchestrator_output`.
+        # Without it `_determine_fanout_resume` fails CLOSED (workers-completed-but-
+        # orchestrator-missing is an inconsistent store), so this capture must be wired
+        # in the SAME pass as the worker capture above. No-op unless replay-capable ∧
+        # store-bound (the identical `_fanout_replay_store` gate).
+        _orch_replay_store = _fanout_replay_store(ctx, manifest_entry)
+        if _orch_replay_store is not None:
+            _orch_replay_store.record_orchestrator(
+                run_idempotency_key, str(orchestrator_step.step_id), orchestrator_output
+            )
         _append_buffered_sequential_entry(
             writer=orchestrator_writer,
             workflow_id=workflow_id,
@@ -5872,6 +6476,57 @@ def _execute_orchestrator_workers(
         terminal_dispositions[_bi] = _branch.terminal_status
         if _branch.output is not None:
             collected[_bi] = (str(worker_steps[_bi].step_id), _branch.output)
+    # B-FANOUT-OUTPUT-REPLAY — a crash-recovered worker with NO output (ran-and-errored)
+    # keeps the run DEGRADED (never SUCCESS while omitting the failure — Codex [P2]).
+    _recovered_degraded = any(b.output is None for b in _recovered_terminal.values())
+    # B-FANOUT-OUTPUT-REPLAY — record the capture-time fan-out CARDINALITY once on a fresh
+    # run so a changed-cardinality crash-resume fails closed (Codex [P2]). `steps` here is
+    # the [orchestrator, workers] set the resume's `_determine_fanout_resume` also sees.
+    if not _is_resume:
+        _cardinality_store = _fanout_replay_store(ctx, manifest_entry)
+        if _cardinality_store is not None:
+            _cardinality_store.record_fanout_cardinality(run_idempotency_key, len(steps))
+
+    # B-FANOUT-OUTPUT-REPLAY — on a CRASH-resume (NOT pause), re-materialize the recovered
+    # WORKER branches' LOST ledger entries (out-of-family Codex [P1]): a crash before the
+    # barrier drained nothing, so the resumed ledger would omit them + undercount
+    # `workflow.step_count`. Dedup-safe; extends the barrier-drain set. (The worker context
+    # mirrors the dispatch-plan build: `derive_agent_role` + `step_index = branch_index + 1`;
+    # `child_resume_snapshot` is None — a crash has no paused children.)
+    if _fan_out_crash_resume is not None:
+        for _bi in sorted(_recovered_terminal):
+            _r_step = worker_steps[_bi]
+            _r_binding = resolve_step_binding(
+                manifest_entry,
+                str(_r_step.step_id),
+                default_model_binding=default_model_binding,
+                persona_tier=manifest_entry.persona_tier,
+            )
+            _r_child = compose_branch_child_context(
+                fanout_parent,
+                branch_index=_bi,
+                agent_role=_r_binding.agent_role or derive_agent_role(_r_step.step_id),
+            ).model_copy(
+                update={
+                    "step_index": _bi + 1,
+                    "hitl_placements": fold_step_hitl_placements(
+                        manifest_entry.hitl_placements, _r_binding.hitl_placement
+                    ),
+                }
+            )
+            branch_writers.append(
+                _rematerialize_recovered_branch_writer(
+                    ctx,
+                    branch_index=_bi,
+                    branch_context=_r_child,
+                    run_idempotency_key=run_idempotency_key,
+                    timestamp=fanout_timestamp,
+                    procedural_tier_snapshot_ref=snapshot_ref,
+                    workflow_id=workflow_id,
+                    step=_r_step,
+                    binding=_r_binding,
+                )
+            )
 
     def _record_clean(
         branch_index: int,
@@ -5891,6 +6546,15 @@ def _execute_orchestrator_workers(
             timestamp=fanout_timestamp,
             procedural_tier_snapshot_ref=snapshot_ref,
         )
+        # B-FANOUT-OUTPUT-REPLAY (R-FS-1) — RESERVE-before-COMMIT branch-output capture
+        # (the worker analogue of the parallelization site; same store, same gate). The
+        # store is the SOLE crash-resume authority (the §25.12 D1.b binary ledger holds
+        # no mid-fan-out worker set). No-op unless replay-capable ∧ store-bound.
+        _replay_store = _fanout_replay_store(ctx, manifest_entry)
+        if _replay_store is not None:
+            _replay_store.record_branch(
+                run_idempotency_key, branch_index, str(step.step_id), "completed", output
+            )
         append_branch_terminal_ledger_entry(
             branch_writer=writer,
             branch_context=child,
@@ -5912,6 +6576,11 @@ def _execute_orchestrator_workers(
         drain_branch_buffers(ctx.ledger_writer, _orch_writers)
         if orchestrator_writer is not None:
             ctx.lifecycle_emitter.emit(WorkflowEventClass.STEP_BOUNDARY)
+        # B-FANOUT-OUTPUT-REPLAY — drain + count the CRASH-resume re-materialized worker
+        # writers (empty unless a crash-resume recovered EVERY worker → an empty branch_plan;
+        # else the recovered workers' ledger entries would be silently dropped here, the
+        # finding-1 fail-open audit gap in the full-recovery path). Dedup-safe.
+        _rematerialized_steps = _drain_and_emit_step_boundaries(ctx, branch_writers)
         # B-FANOUT-PAUSE (advisor [P1]) — a resume where EVERY worker was already
         # terminal: if a recovered branch FAILED (terminal but no collected output)
         # the run is degraded → PARTIAL, not a bare silent SUCCESS dropping the
@@ -5935,7 +6604,7 @@ def _execute_orchestrator_workers(
             branch_count=len(steps),
         )
         if isinstance(_synth, RunResult):
-            return _synth, (1 if orchestrator_writer is not None else 0)
+            return _synth, (1 if orchestrator_writer is not None else 0) + _rematerialized_steps
         # A dict ⟺ the synthesis dispatched → count its executed step (Codex [P2]).
         _synth_steps = 1 if _synth is not None else 0
         _aggregate = (
@@ -5951,7 +6620,7 @@ def _execute_orchestrator_workers(
             partial_state=_aggregate if _degraded else None,
             final_state=None if _degraded else _aggregate,
             fail_class=None,
-        ), (1 if orchestrator_writer is not None else 0) + _synth_steps
+        ), (1 if orchestrator_writer is not None else 0) + _synth_steps + _rematerialized_steps
 
     def _finish(
         status: RunStatus,
@@ -5960,6 +6629,10 @@ def _execute_orchestrator_workers(
         salvage: bool,
         pause_snapshot: PauseSnapshot | None = None,
     ) -> tuple[RunResult, int]:
+        # B-FANOUT-OUTPUT-REPLAY — a crash-resume that recovered a ran-and-errored worker
+        # (terminal, no output) keeps the run DEGRADED (Codex [P2]).
+        if status is RunStatus.SUCCESS and _recovered_degraded:
+            status, salvage = RunStatus.PARTIAL, True
         # Drain the orchestrator entry FIRST (the fan-out parent persists before
         # its workers), then the worker buffers (branch-index order), emitting one
         # STEP_BOUNDARY per persisted-step writer. steps_executed = orchestrator +
@@ -6047,6 +6720,17 @@ def _execute_orchestrator_workers(
                     timestamp=fanout_timestamp,
                     procedural_tier_snapshot_ref=snapshot_ref,
                 )
+                # B-FANOUT-OUTPUT-REPLAY — capture the timed-out DISPOSITION (the effect may
+                # have landed; crash-resume FAILS CLOSED on it — never a silent re-dispatch).
+                _capture_branch_terminal(
+                    ctx,
+                    manifest_entry,
+                    run_idempotency_key=run_idempotency_key,
+                    branch_index=branch_index,
+                    step_id=step.step_id,
+                    terminal_status="timed_out",
+                    output=None,
+                )
                 append_branch_terminal_ledger_entry(
                     branch_writer=writer,
                     branch_context=child,
@@ -6079,6 +6763,19 @@ def _execute_orchestrator_workers(
                     local_step_index=0,
                     timestamp=fanout_timestamp,
                     procedural_tier_snapshot_ref=snapshot_ref,
+                )
+                # B-FANOUT-OUTPUT-REPLAY — a ran-and-errored branch's effect may have LANDED
+                # (dispatch-boundary `completed`, no output) → capture the disposition so
+                # crash-resume recovers it as TERMINAL (no re-dispatch, no fold), never
+                # re-firing a landed effect (the disposition class closer).
+                _capture_branch_terminal(
+                    ctx,
+                    manifest_entry,
+                    run_idempotency_key=run_idempotency_key,
+                    branch_index=branch_index,
+                    step_id=step.step_id,
+                    terminal_status="completed",
+                    output=None,
                 )
                 append_branch_terminal_ledger_entry(
                     branch_writer=writer,
@@ -6201,7 +6898,34 @@ def _execute_orchestrator_workers(
             # branch + drops its output, corrupting the resumed aggregate). A
             # ran-and-errored in-flight (`exception() is not None`) has no output.
             if terminal == "completed" and inflight.exception() is None:
+                # B-FANOUT-OUTPUT-REPLAY — a sibling that LANDED under the shield (its effect
+                # fired) is captured WITH output (out-of-family Codex [P1]) — else crash-resume
+                # RE-DISPATCHES it (double-fire). The buffered terminal append above is not
+                # durable until the drain, so this still satisfies RESERVE-before-COMMIT.
+                _capture_branch_terminal(
+                    ctx,
+                    manifest_entry,
+                    run_idempotency_key=run_idempotency_key,
+                    branch_index=branch_index,
+                    step_id=step.step_id,
+                    terminal_status="completed",
+                    output=inflight.result(),
+                )
                 collected[branch_index] = (str(step.step_id), inflight.result())
+            else:
+                # A timed-out (deadline-cut, ambiguous) OR ran-and-errored (effect LANDED, no
+                # output) in-flight sibling — capture the DISPOSITION with no output so
+                # crash-resume recovers-as-terminal (`completed`) or FAILS CLOSED (`timed_out`),
+                # never silently re-dispatching a landed effect (the disposition class closer).
+                _capture_branch_terminal(
+                    ctx,
+                    manifest_entry,
+                    run_idempotency_key=run_idempotency_key,
+                    branch_index=branch_index,
+                    step_id=step.step_id,
+                    terminal_status=terminal,
+                    output=None,
+                )
             raise  # honor the cancellation (the barrier cancelled this branch)
         except SubAgentChildPausedError as _paused:
             # B-HIERARCHICAL-PAUSE — this worker's recursive child sub-workflow PAUSED
@@ -6222,6 +6946,18 @@ def _execute_orchestrator_workers(
             # disposition; the step failure lives at this entry) + a `completed`
             # terminal (dispatch-boundary, not step-outcome — the carrier forecloses
             # `failed`). Re-raise so the TaskGroup cascade-cancels the siblings.
+            # B-FANOUT-OUTPUT-REPLAY — capture the `completed` disposition (effect may have
+            # LANDED, no output) so crash-resume recovers it as terminal, never re-firing it
+            # (out-of-family Codex [P1] — the worker analogue of the parallelization site).
+            _capture_branch_terminal(
+                ctx,
+                manifest_entry,
+                run_idempotency_key=run_idempotency_key,
+                branch_index=branch_index,
+                step_id=step.step_id,
+                terminal_status="completed",
+                output=None,
+            )
             append_branch_step_ledger_entry(
                 branch_writer=writer,
                 branch_context=child,
@@ -6408,6 +7144,7 @@ def _execute_hierarchical_delegation(
     step_dispatchers: StepDispatcherRegistry,
     run_idempotency_key: str,
     resume_snapshot: PauseSnapshot | None = None,
+    crash_fan_out_resume: FanOutResumeState | PeerFanOutResumeState | None = None,
     pause_resumable: bool = False,
     synthesis_step: WorkflowStep | None = None,
 ) -> tuple[RunResult, int]:
@@ -6502,6 +7239,10 @@ def _execute_hierarchical_delegation(
         step_dispatchers=step_dispatchers,
         run_idempotency_key=run_idempotency_key,
         resume_snapshot=resume_snapshot,
+        # B-FANOUT-OUTPUT-REPLAY (R-FS-1) — forward the synthetic crash-resume state into
+        # the per-level orchestrator-workers execution (each recursion level captures +
+        # recovers against its own run-keyed store; this top level recovers here).
+        crash_fan_out_resume=crash_fan_out_resume,
         pause_resumable=pause_resumable,
         # B-POSTJOIN-LLM-SYNTHESIS (CP spec v1.54 §3) — TOP-LEVEL synthesis only:
         # the recursion re-enters via a SUB_AGENT_DISPATCH worker's own
