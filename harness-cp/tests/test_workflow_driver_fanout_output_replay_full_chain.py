@@ -297,6 +297,64 @@ def test_parallelization_crash_resume_replays_completed_redispatches_incomplete(
     assert r2.final_state["aggregate"] == baseline.final_state["aggregate"]
 
 
+def _completed_branch_indexes(ledger: _RecordingLedger) -> set[int]:
+    """The branch_index of every `completed` terminal entry in the drained ledger."""
+    out: set[int] = set()
+    for payload, _wk in ledger.appends:
+        bm = getattr(payload, "branch_metadata", None)
+        if bm is not None and getattr(bm, "terminal_status", None) == "completed":
+            out.add(bm.branch_index)
+    return out
+
+
+def test_parallelization_crash_resume_rematerializes_recovered_branch_ledger_entries() -> None:
+    """The finding-1 assertion (out-of-family Codex [P1]) the aggregate/fire-once witnesses
+    MISSED: a crash lost the recovered branches' buffered ledger entries (the binary ledger
+    drained nothing), so the resumed run's ledger must RE-MATERIALIZE them — else the audit
+    trail omits branch outputs that ARE in the aggregate (a fail-open audit gap). The resumed
+    ledger carries a terminal entry for EVERY branch (recovered + re-dispatched), and
+    `workflow.step_count` counts all of them."""
+    store = _InMemoryBranchStore()
+    steps = [_step(f"branch-{i}", i) for i in range(3)]
+
+    # Run 1 (crash): branch 1 crashes after 0 + 2 complete → 0, 2 captured.
+    _run(
+        workflow_id="wf-par-ledger",
+        topology=TopologyPattern.PARALLELIZATION,
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3, fail_index=1),
+        store=store,
+    )
+
+    # Run 2 (resume) with an explicit ledger to inspect.
+    ledger = _RecordingLedger()
+    ctx = cast(DriverContext, _Ctx(ledger=ledger, store=store))
+    r2 = execute_workflow(
+        _manifest(workflow_id="wf-par-ledger", topology=TopologyPattern.PARALLELIZATION),
+        steps,
+        run_id="run-1",
+        ctx=ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=cast(StepDispatcherRegistry, _Registry(_CountingDispatcher(n=3))),
+    )
+    assert r2.status is RunStatus.SUCCESS
+    # The resumed ledger has a `completed` terminal entry for EVERY branch — the recovered
+    # 0, 2 RE-MATERIALIZED + the re-dispatched 1 (NOT just the re-dispatched one).
+    assert _completed_branch_indexes(ledger) == {0, 1, 2}
+    # Compare to a clean no-crash run: the resumed ledger's branch terminal set is identical.
+    baseline_ledger = _RecordingLedger()
+    baseline_ctx = cast(DriverContext, _Ctx(ledger=baseline_ledger, store=_InMemoryBranchStore()))
+    execute_workflow(
+        _manifest(workflow_id="wf-par-ledger-baseline", topology=TopologyPattern.PARALLELIZATION),
+        steps,
+        run_id="run-1",
+        ctx=baseline_ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=cast(StepDispatcherRegistry, _Registry(_CountingDispatcher(n=3))),
+    )
+    assert _completed_branch_indexes(ledger) == _completed_branch_indexes(baseline_ledger)
+
+
 # ---------------------------------------------------------------------------
 # ORCHESTRATOR_WORKERS — full crash → resume: the orchestrator (steps[0]) AND every
 # worker recover from the store; NOTHING re-dispatches on resume. Witnesses the
@@ -331,6 +389,42 @@ def test_orchestrator_crash_resume_recovers_orchestrator_and_workers() -> None:
     )
     assert r2.status is RunStatus.SUCCESS
     assert resume.dispatched == []  # fire-once: everything recovered, no re-dispatch
+
+
+def test_orchestrator_crash_resume_rematerializes_worker_ledger_entries() -> None:
+    """Finding-1 (Codex [P1]) for ORCHESTRATOR_WORKERS: a crash lost the recovered workers'
+    buffered ledger entries; the resumed ledger must RE-MATERIALIZE them (else the audit
+    omits worker outputs that ARE in the aggregate). Full-recovery crash → every worker
+    terminal entry is present in the resumed ledger though NONE re-dispatched."""
+    store = _InMemoryBranchStore()
+    steps = [_step("orch", 0), _step("w-0", 0), _step("w-1", 1)]
+
+    # Run 1: orchestrator + both workers complete + captured.
+    _run(
+        workflow_id="wf-ow-ledger",
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=2),
+        store=store,
+    )
+
+    # Run 2 (resume) with an explicit ledger to inspect.
+    ledger = _RecordingLedger()
+    ctx = cast(DriverContext, _Ctx(ledger=ledger, store=store))
+    resume = _CountingDispatcher(n=2)
+    r2 = execute_workflow(
+        _manifest(workflow_id="wf-ow-ledger", topology=TopologyPattern.ORCHESTRATOR_WORKERS),
+        steps,
+        run_id="run-1",
+        ctx=ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=cast(StepDispatcherRegistry, _Registry(resume)),
+    )
+    assert r2.status is RunStatus.SUCCESS
+    assert resume.dispatched == []  # fire-once: nothing re-dispatched
+    # Both worker branches (0, 1) have a `completed` terminal entry in the resumed ledger —
+    # RE-MATERIALIZED, though neither re-dispatched.
+    assert _completed_branch_indexes(ledger) == {0, 1}
 
 
 class _WorkersFailDispatcher:

@@ -11,7 +11,8 @@ back_reference:
 merge_commit: <filled at merge>
 reviewer_chain:
   - C1⊥C9 dyadic council (genuine dedicated-agent voices) + advisor red-team on the operator-gated §25.12-D1 rationale (PR #719) — corrected the "SECOND committed-invariant sacrifice" framing as a Class-3 over-claim (D1 scopes the attested ledger, not a non-attested recovery sidecar)
-  - advisor — pre-substantive-work design review (Option-B crash-param pivot, shared-gate / wire-both-or-fail-closed traps) AND the synthesis-bearing crash-resume OPEN-PATH catch (resolution (a) fail-closed in PR1; the relax is PR2)
+  - advisor — pre-substantive-work design review (Option-B crash-param pivot, shared-gate / wire-both-or-fail-closed traps) AND the synthesis-bearing crash-resume OPEN-PATH catch (resolution (a) fail-closed in PR1; the relax is PR2); reconciled the per-entry-drain (non-atomic) premise → ledger re-materialization is dedup-safe via IS idempotency
+  - out-of-family Codex pre-merge review — TWO P1 catches advisor + the core agent missed: (#2) orchestrator double-fire when a crash falls after the orchestrator captured but before any worker completed [at-most-once violation, fixed: orchestrator-as-recovery-authority]; (#1) recovered-branch + orchestrator ledger entries not re-materialized [fail-open audit gap, fixed: re-materialize, dedup-safe]
   - Operator AskUserQuestion 2026-06-23 — chose A (the non-attested keyed sidecar) over REQUIRE-attestation (PR #721)
   - spec-writer apply pass (this arc, applied by the core agent holding the grounded materializable design + the as-built code)
 supersedes: <none>

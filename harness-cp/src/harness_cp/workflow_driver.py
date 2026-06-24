@@ -712,6 +712,50 @@ def _fanout_replay_store(ctx: DriverContext, manifest_entry: WorkflowManifestEnt
     return getattr(ctx, "engine_output_store", None)
 
 
+def _rematerialize_recovered_branch_writer(
+    ctx: DriverContext,
+    *,
+    branch_index: int,
+    branch_context: StepExecutionContext,
+    run_idempotency_key: str,
+    timestamp: datetime,
+    procedural_tier_snapshot_ref: Identifier | None,
+) -> BufferingLedgerWriter:
+    """B-FANOUT-OUTPUT-REPLAY (R-FS-1) — re-materialize a crash-recovered branch's LOST
+    ledger entries (out-of-family Codex [P1]).
+
+    Unlike a PAUSE-resume (where the recovered branches' step/terminal entries were already
+    DRAINED durably before the pause halt), a CRASH before the barrier drain lost the
+    in-memory `BufferingLedgerWriter` contents — the §25.12 D1.b ledger drained NOTHING — so
+    the resumed run's ledger would OMIT every recovered branch and undercount
+    `workflow.step_count`. This appends the recovered branch's step + `completed` terminal
+    entries to a fresh writer (identity + causality only — the fan-out branch entries carry
+    NO `response_hash`, so the lost output is not part of the entry). The returned writer is
+    added to the barrier-drain set; `drain_branch_buffers` → `append_ledger_entry` DEDUPS by
+    idempotency key, so a mid-drain crash that DID persist some branch entries yields
+    `IDEMPOTENT_NOOP` for those — re-materialization is correct in EVERY crash window (the
+    binary-ledger premise need not hold mid-drain). Crash-resume ONLY; the per-branch
+    idempotency key is deterministic, so the resumed entry matches the lost one."""
+    writer = BufferingLedgerWriter(actor=ctx.ledger_writer.actor, branch_index=branch_index)
+    append_branch_step_ledger_entry(
+        branch_writer=writer,
+        branch_context=branch_context,
+        run_idempotency_key=run_idempotency_key,
+        local_step_index=0,
+        timestamp=timestamp,
+        procedural_tier_snapshot_ref=procedural_tier_snapshot_ref,
+    )
+    append_branch_terminal_ledger_entry(
+        branch_writer=writer,
+        branch_context=branch_context,
+        run_idempotency_key=run_idempotency_key,
+        terminal_status="completed",
+        timestamp=timestamp,
+        procedural_tier_snapshot_ref=procedural_tier_snapshot_ref,
+    )
+    return writer
+
+
 def _step_fail_class(prefix: str, exc: BaseException) -> str:
     """Compose a step-dispatch `fail_class` string, surfacing a canonical
     `RT-FAIL-*` code when the raised exception self-describes one.
@@ -4432,6 +4476,41 @@ def _execute_parallelization(
         if _branch.output is not None:
             collected[_bi] = (str(steps[_bi].step_id), _branch.output)
 
+    # B-FANOUT-OUTPUT-REPLAY — on a CRASH-resume (NOT a pause-resume), re-materialize the
+    # recovered branches' LOST ledger entries (out-of-family Codex [P1]): a crash before the
+    # barrier drained nothing, so the resumed ledger would omit them + undercount
+    # `workflow.step_count`. Dedup-safe; extends the barrier-drain set.
+    if _peer_crash_resume is not None:
+        for _bi in sorted(_recovered_terminal):
+            _r_step = steps[_bi]
+            _r_binding = resolve_step_binding(
+                manifest_entry,
+                str(_r_step.step_id),
+                default_model_binding=default_model_binding,
+                persona_tier=manifest_entry.persona_tier,
+            )
+            _r_child = compose_branch_child_context(
+                fanout_parent,
+                branch_index=_bi,
+                agent_role=_r_binding.agent_role or _DEFAULT_PARALLELIZATION_AGENT_ROLE,
+            ).model_copy(
+                update={
+                    "hitl_placements": fold_step_hitl_placements(
+                        manifest_entry.hitl_placements, _r_binding.hitl_placement
+                    )
+                }
+            )
+            branch_writers.append(
+                _rematerialize_recovered_branch_writer(
+                    ctx,
+                    branch_index=_bi,
+                    branch_context=_r_child,
+                    run_idempotency_key=run_idempotency_key,
+                    timestamp=fanout_timestamp,
+                    procedural_tier_snapshot_ref=snapshot_ref,
+                )
+            )
+
     def _record_clean(
         branch_index: int,
         step: WorkflowStep,
@@ -5936,6 +6015,22 @@ def _execute_orchestrator_workers(
         # now extended to carry the fan-out's already-run outputs in the snapshot).
         assert _fan_out_resume is not None  # guarded by `_is_resume`
         orchestrator_output: Mapping[str, Any] = dict(_fan_out_resume.orchestrator_output)
+        # B-FANOUT-OUTPUT-REPLAY — on a CRASH-resume the orchestrator's OWN sequential
+        # ledger entry was LOST (the crash drained nothing), so re-materialize it
+        # (dedup-safe; out-of-family Codex [P1]). A PAUSE-resume's entry was already
+        # durable → skip (the comment above). Sets `orchestrator_writer` so it drains.
+        if _fan_out_crash_resume is not None:
+            orchestrator_writer = BufferingLedgerWriter(
+                actor=ctx.ledger_writer.actor, branch_index=0
+            )
+            _append_buffered_sequential_entry(
+                writer=orchestrator_writer,
+                workflow_id=workflow_id,
+                entry_index=0,
+                idempotency_key=orchestrator_idempotency_key,
+                timestamp=fanout_timestamp,
+                procedural_tier_snapshot_ref=snapshot_ref,
+            )
     else:
         orchestrator_writer = BufferingLedgerWriter(actor=ctx.ledger_writer.actor, branch_index=0)
         # Resolve the binding (pure) + buffer the orchestrator step's own per-step
@@ -6118,6 +6213,44 @@ def _execute_orchestrator_workers(
         if _branch.output is not None:
             collected[_bi] = (str(worker_steps[_bi].step_id), _branch.output)
 
+    # B-FANOUT-OUTPUT-REPLAY — on a CRASH-resume (NOT pause), re-materialize the recovered
+    # WORKER branches' LOST ledger entries (out-of-family Codex [P1]): a crash before the
+    # barrier drained nothing, so the resumed ledger would omit them + undercount
+    # `workflow.step_count`. Dedup-safe; extends the barrier-drain set. (The worker context
+    # mirrors the dispatch-plan build: `derive_agent_role` + `step_index = branch_index + 1`;
+    # `child_resume_snapshot` is None — a crash has no paused children.)
+    if _fan_out_crash_resume is not None:
+        for _bi in sorted(_recovered_terminal):
+            _r_step = worker_steps[_bi]
+            _r_binding = resolve_step_binding(
+                manifest_entry,
+                str(_r_step.step_id),
+                default_model_binding=default_model_binding,
+                persona_tier=manifest_entry.persona_tier,
+            )
+            _r_child = compose_branch_child_context(
+                fanout_parent,
+                branch_index=_bi,
+                agent_role=_r_binding.agent_role or derive_agent_role(_r_step.step_id),
+            ).model_copy(
+                update={
+                    "step_index": _bi + 1,
+                    "hitl_placements": fold_step_hitl_placements(
+                        manifest_entry.hitl_placements, _r_binding.hitl_placement
+                    ),
+                }
+            )
+            branch_writers.append(
+                _rematerialize_recovered_branch_writer(
+                    ctx,
+                    branch_index=_bi,
+                    branch_context=_r_child,
+                    run_idempotency_key=run_idempotency_key,
+                    timestamp=fanout_timestamp,
+                    procedural_tier_snapshot_ref=snapshot_ref,
+                )
+            )
+
     def _record_clean(
         branch_index: int,
         step: WorkflowStep,
@@ -6166,6 +6299,11 @@ def _execute_orchestrator_workers(
         drain_branch_buffers(ctx.ledger_writer, _orch_writers)
         if orchestrator_writer is not None:
             ctx.lifecycle_emitter.emit(WorkflowEventClass.STEP_BOUNDARY)
+        # B-FANOUT-OUTPUT-REPLAY — drain + count the CRASH-resume re-materialized worker
+        # writers (empty unless a crash-resume recovered EVERY worker → an empty branch_plan;
+        # else the recovered workers' ledger entries would be silently dropped here, the
+        # finding-1 fail-open audit gap in the full-recovery path). Dedup-safe.
+        _rematerialized_steps = _drain_and_emit_step_boundaries(ctx, branch_writers)
         # B-FANOUT-PAUSE (advisor [P1]) — a resume where EVERY worker was already
         # terminal: if a recovered branch FAILED (terminal but no collected output)
         # the run is degraded → PARTIAL, not a bare silent SUCCESS dropping the
@@ -6189,7 +6327,7 @@ def _execute_orchestrator_workers(
             branch_count=len(steps),
         )
         if isinstance(_synth, RunResult):
-            return _synth, (1 if orchestrator_writer is not None else 0)
+            return _synth, (1 if orchestrator_writer is not None else 0) + _rematerialized_steps
         # A dict ⟺ the synthesis dispatched → count its executed step (Codex [P2]).
         _synth_steps = 1 if _synth is not None else 0
         _aggregate = (
@@ -6205,7 +6343,7 @@ def _execute_orchestrator_workers(
             partial_state=_aggregate if _degraded else None,
             final_state=None if _degraded else _aggregate,
             fail_class=None,
-        ), (1 if orchestrator_writer is not None else 0) + _synth_steps
+        ), (1 if orchestrator_writer is not None else 0) + _synth_steps + _rematerialized_steps
 
     def _finish(
         status: RunStatus,
