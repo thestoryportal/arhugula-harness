@@ -4231,6 +4231,17 @@ def _determine_fanout_resume(
         raise _FanOutStoreCorruptError(
             f"fan-out branch journal(s) present but unreadable: {sorted(corrupt)}"
         )
+    # Changed-cardinality fail-closed (out-of-family Codex [P2]): the store records the
+    # ORIGINAL fan-out cardinality at capture time, so a manifest redefined with a DIFFERENT
+    # branch count between crash + resume (which the per-branch material-diff cannot catch
+    # when the surviving prefix still matches) fails closed rather than silently dropping the
+    # original in-flight branches. None (unrecorded / unreadable marker) → no check.
+    _recorded_cardinality = store.read_fanout_cardinality(run_key)
+    if _recorded_cardinality is not None and _recorded_cardinality != len(steps):
+        raise _FanOutStoreCorruptError(
+            f"fan-out crash-resume cardinality mismatch: store captured a {_recorded_cardinality}-"
+            f"branch fan-out, resume supplied {len(steps)} (changed body) — fail closed"
+        )
     # Disposition recovery (the at-most-once class closer — an output-only store made every
     # non-clean-success disposition invisible). A TIMED_OUT branch is irreducibly ambiguous
     # (deadline-cut in-flight dispatch — may or may not have landed) → FAIL CLOSED. A
@@ -4588,6 +4599,14 @@ def _execute_parallelization(
     # effect landed) means the ORIGINAL run was DEGRADED; the resumed run must stay PARTIAL
     # rather than upgrade to SUCCESS by omitting the failure (out-of-family Codex [P2]).
     _recovered_degraded = any(b.output is None for b in _recovered_terminal.values())
+    # B-FANOUT-OUTPUT-REPLAY — record the capture-time fan-out CARDINALITY once on a fresh
+    # run (before any branch dispatches), so a changed-cardinality crash-resume (a manifest
+    # redefined with fewer branches) fails closed instead of silently dropping the original
+    # in-flight branches (out-of-family Codex [P2]).
+    if not _is_resume:
+        _cardinality_store = _fanout_replay_store(ctx, manifest_entry)
+        if _cardinality_store is not None:
+            _cardinality_store.record_fanout_cardinality(run_idempotency_key, len(steps))
 
     # B-FANOUT-OUTPUT-REPLAY — on a CRASH-resume (NOT a pause-resume), re-materialize the
     # recovered branches' LOST ledger entries (out-of-family Codex [P1]): a crash before the
@@ -6416,6 +6435,13 @@ def _execute_orchestrator_workers(
     # B-FANOUT-OUTPUT-REPLAY — a crash-recovered worker with NO output (ran-and-errored)
     # keeps the run DEGRADED (never SUCCESS while omitting the failure — Codex [P2]).
     _recovered_degraded = any(b.output is None for b in _recovered_terminal.values())
+    # B-FANOUT-OUTPUT-REPLAY — record the capture-time fan-out CARDINALITY once on a fresh
+    # run so a changed-cardinality crash-resume fails closed (Codex [P2]). `steps` here is
+    # the [orchestrator, workers] set the resume's `_determine_fanout_resume` also sees.
+    if not _is_resume:
+        _cardinality_store = _fanout_replay_store(ctx, manifest_entry)
+        if _cardinality_store is not None:
+            _cardinality_store.record_fanout_cardinality(run_idempotency_key, len(steps))
 
     # B-FANOUT-OUTPUT-REPLAY — on a CRASH-resume (NOT pause), re-materialize the recovered
     # WORKER branches' LOST ledger entries (out-of-family Codex [P1]): a crash before the
@@ -6876,6 +6902,18 @@ def _execute_orchestrator_workers(
             # disposition; the step failure lives at this entry) + a `completed`
             # terminal (dispatch-boundary, not step-outcome — the carrier forecloses
             # `failed`). Re-raise so the TaskGroup cascade-cancels the siblings.
+            # B-FANOUT-OUTPUT-REPLAY — capture the `completed` disposition (effect may have
+            # LANDED, no output) so crash-resume recovers it as terminal, never re-firing it
+            # (out-of-family Codex [P1] — the worker analogue of the parallelization site).
+            _capture_branch_terminal(
+                ctx,
+                manifest_entry,
+                run_idempotency_key=run_idempotency_key,
+                branch_index=branch_index,
+                step_id=step.step_id,
+                terminal_status="completed",
+                output=None,
+            )
             append_branch_step_ledger_entry(
                 branch_writer=writer,
                 branch_context=child,

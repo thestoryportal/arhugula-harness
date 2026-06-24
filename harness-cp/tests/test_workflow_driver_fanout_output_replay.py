@@ -58,11 +58,13 @@ class _FakeStore:
         corrupt_branches: tuple[int, ...] = (),
         orchestrator_corrupt: bool = False,
         dispositions: dict[int, str] | None = None,
+        cardinality: int | None = None,
     ) -> None:
         self._branches = dict(branches)
         self._orchestrator = orchestrator
         self._corrupt = set(corrupt_branches)
         self._orchestrator_corrupt = orchestrator_corrupt
+        self._cardinality = cardinality
         # Per-branch terminal disposition (default "completed"); set "timed_out" or a
         # "completed" with a None output to exercise the disposition-class recovery.
         self._dispositions = dict(dispositions) if dispositions else {}
@@ -83,6 +85,9 @@ class _FakeStore:
 
     def orchestrator_present(self, run_key: str) -> bool:
         return self._orchestrator_corrupt or self._orchestrator is not None
+
+    def read_fanout_cardinality(self, run_key: str) -> int | None:
+        return self._cardinality
 
 
 def test_parallelization_reconstructs_peer_resume_from_store() -> None:
@@ -223,3 +228,12 @@ def test_parallelization_with_orchestrator_record_fails_closed_changed_topology(
     store = _FakeStore(branches={0: ("w0", {"o": 0})}, orchestrator=("orch", {"plan": "x"}))
     with pytest.raises(_FanOutStoreCorruptError, match="topology mismatch"):
         _determine_fanout_resume(store, _RUN_KEY, _steps(3), TopologyPattern.PARALLELIZATION)
+
+
+def test_changed_cardinality_fails_closed() -> None:
+    """A store that recorded a 3-branch fan-out, resumed with a 1-branch manifest (a changed
+    body the surviving-prefix material-diff cannot catch), FAILS CLOSED rather than silently
+    dropping the original in-flight branches (out-of-family Codex [P2])."""
+    store = _FakeStore(branches={0: ("w0", {"o": 0})}, cardinality=3)
+    with pytest.raises(_FanOutStoreCorruptError, match="cardinality mismatch"):
+        _determine_fanout_resume(store, _RUN_KEY, _steps(1), TopologyPattern.PARALLELIZATION)

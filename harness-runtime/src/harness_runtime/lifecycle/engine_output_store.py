@@ -282,6 +282,39 @@ class EngineOutputStore:
         """Whether an orchestrator journal FILE exists (regardless of readability)."""
         return self._orchestrator_file(run_key).exists()
 
+    def record_fanout_cardinality(self, run_key: str, branch_count: int) -> None:
+        """Record the capture-time fan-out CARDINALITY (the total branch/step count) once
+        per run, so a crash-resume fails closed on a CHANGED cardinality. A manifest
+        redefined with FEWER branches between crash + resume would otherwise pass the
+        per-branch material-diff (the surviving prefix matches) and silently DROP the
+        original in-flight branches (out-of-family Codex [P2]). Idempotent (last-wins)."""
+        line = json.dumps({"branch_count": int(branch_count)}, sort_keys=True)
+        self._append_path(self._cardinality_file(run_key), line)
+
+    def read_fanout_cardinality(self, run_key: str) -> int | None:
+        """Return the recorded capture-time fan-out cardinality, or None if unrecorded."""
+        path = self._cardinality_file(run_key)
+        if not path.exists():
+            return None
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            return None
+        result: int | None = None
+        for line in text.splitlines():
+            if not line.strip():
+                continue
+            try:
+                loaded = json.loads(line)
+            except (ValueError, TypeError):
+                continue
+            if not isinstance(loaded, dict):
+                continue
+            count = cast("dict[str, object]", loaded).get("branch_count")
+            if isinstance(count, int):
+                result = count
+        return result
+
     # -- durable journal I/O (mirrors JournalWorkflowPauseStore) --------------
 
     @staticmethod
@@ -304,6 +337,10 @@ class EngineOutputStore:
     def _orchestrator_file(self, run_key: str) -> Path:
         """The ORCHESTRATOR_WORKERS ``steps[0]`` journal under the branches dir."""
         return self._branches_dir(run_key) / "orchestrator.jsonl"
+
+    def _cardinality_file(self, run_key: str) -> Path:
+        """The per-run fan-out CARDINALITY marker under the branches dir."""
+        return self._branches_dir(run_key) / "cardinality.jsonl"
 
     @staticmethod
     def _branch_index_from_name(name: str) -> int | None:

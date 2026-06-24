@@ -79,6 +79,13 @@ class _InMemoryBranchStore:
         self._orchestrators: dict[str, tuple[str, dict[str, Any]]] = {}
         # branch indexes marked present-but-unreadable (corruption / tamper) per run_key.
         self._corrupt: dict[str, set[int]] = {}
+        self._cardinality: dict[str, int] = {}
+
+    def record_fanout_cardinality(self, run_key: str, branch_count: int) -> None:
+        self._cardinality[run_key] = int(branch_count)
+
+    def read_fanout_cardinality(self, run_key: str) -> int | None:
+        return self._cardinality.get(run_key)
 
     # -- producer (net-add #1) -------------------------------------------------
     def record_branch(
@@ -726,5 +733,10 @@ def test_crash_resume_empty_manifest_fails_closed_material_diff() -> None:
     )
     assert r2.status is RunStatus.FAILED
     assert r2.fail_class is not None
-    assert "fan-out-crash-resume-material-diff" in r2.fail_class
+    # An empty resumed manifest is BOTH a cardinality change (3 → 0) and an empty-branch
+    # material-diff; either fail-closed reason is correct (the cardinality check fires first).
+    assert (
+        "cardinality mismatch" in r2.fail_class
+        or "fan-out-crash-resume-material-diff" in r2.fail_class
+    )
     assert resume.dispatched == []
