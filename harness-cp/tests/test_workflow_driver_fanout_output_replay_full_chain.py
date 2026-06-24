@@ -143,11 +143,12 @@ def _manifest(
     workflow_id: str,
     topology: TopologyPattern,
     engine_class: EngineClass = EngineClass.EVENT_SOURCED_REPLAY,
+    persona_tier: PersonaTier = _PROCEED_TIER,
 ) -> WorkflowManifestEntry:
     return WorkflowManifestEntry(
         workflow_id=workflow_id,
         workload_class=WorkloadClass.PIPELINE_AUTOMATION,
-        persona_tier=_PROCEED_TIER,
+        persona_tier=persona_tier,
         engine_class=engine_class,
         topology_pattern=topology,
         layer_budgets=(),
@@ -740,3 +741,58 @@ def test_crash_resume_empty_manifest_fails_closed_material_diff() -> None:
         or "fan-out-crash-resume-material-diff" in r2.fail_class
     )
     assert resume.dispatched == []
+
+
+# ---------------------------------------------------------------------------
+# Cascade-policy scope (PR1, advisor): crash-resume recovery is correct ONLY for
+# CascadePolicy.PROCEED. PAUSE + CASCADE_CANCEL carry committed on-failure semantics a
+# cascade-policy-BLIND recovery cannot honor → FAIL CLOSED. Cascade-policy-aware crash-resume
+# is the registered back-flow follow-on (.harness/class_1_fork_fanout_crash_resume_cascade_policy.md).
+# ---------------------------------------------------------------------------
+def _run_persona(
+    *,
+    workflow_id: str,
+    steps: list[WorkflowStep],
+    dispatcher: StepDispatcher,
+    store: Any,
+    persona_tier: PersonaTier,
+) -> Any:
+    ctx = cast(DriverContext, _Ctx(ledger=_RecordingLedger(), store=store))
+    return execute_workflow(
+        _manifest(
+            workflow_id=workflow_id,
+            topology=TopologyPattern.PARALLELIZATION,
+            persona_tier=persona_tier,
+        ),
+        steps,
+        run_id="run-1",
+        ctx=ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=cast(StepDispatcherRegistry, _Registry(dispatcher)),
+    )
+
+
+def test_crash_resume_cascade_cancel_fails_closed() -> None:
+    store = _InMemoryBranchStore()
+    steps = [_step(f"branch-{i}", i) for i in range(3)]
+    # Run 1 (MULTI_TENANT_COMPLIANCE = cascade-cancel): all complete + captured.
+    _run_persona(
+        workflow_id="wf-cc",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3),
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+    )
+    # Run 2 (resume): the crash-resume gate sees CASCADE_CANCEL → FAILED (never recovers /
+    # re-dispatches — a cascade-policy-blind recovery would corrupt the cancel semantic).
+    resume = _CountingDispatcher(n=3)
+    r2 = _run_persona(
+        workflow_id="wf-cc",
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+    )
+    assert r2.status is RunStatus.FAILED
+    assert r2.fail_class is not None and "cascade-policy-unsupported" in r2.fail_class
+    assert resume.dispatched == []  # fail-closed before any recovery / re-dispatch

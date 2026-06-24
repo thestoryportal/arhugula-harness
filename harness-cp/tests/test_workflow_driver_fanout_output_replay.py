@@ -110,6 +110,7 @@ def test_orchestrator_reconstructs_fan_out_resume_with_orchestrator_output() -> 
     store = _FakeStore(
         branches={0: ("w-0", {"o": 0}), 1: ("w-1", {"o": 1})},
         orchestrator=("orch", {"plan": "delegate"}),
+        cardinality=4,
     )
     result = _determine_fanout_resume(
         store, _RUN_KEY, _steps(4), TopologyPattern.ORCHESTRATOR_WORKERS
@@ -170,7 +171,7 @@ def test_orchestrator_recovered_with_zero_workers_completed() -> None:
     completes must STILL recover the orchestrator (it dispatches first) — else
     re-dispatching `steps[0]` double-fires its effect (out-of-family Codex [P1]). The
     resume state carries an EMPTY branch set → every worker re-dispatches fresh."""
-    store = _FakeStore(branches={}, orchestrator=("orch", {"plan": "delegate"}))
+    store = _FakeStore(branches={}, orchestrator=("orch", {"plan": "delegate"}), cardinality=4)
     result = _determine_fanout_resume(
         store, _RUN_KEY, _steps(4), TopologyPattern.ORCHESTRATOR_WORKERS
     )
@@ -237,3 +238,16 @@ def test_changed_cardinality_fails_closed() -> None:
     store = _FakeStore(branches={0: ("w0", {"o": 0})}, cardinality=3)
     with pytest.raises(_FanOutStoreCorruptError, match="cardinality mismatch"):
         _determine_fanout_resume(store, _RUN_KEY, _steps(1), TopologyPattern.PARALLELIZATION)
+
+
+def test_orchestrator_record_without_cardinality_marker_fails_closed() -> None:
+    """The orchestrator record is fsynced BEFORE the cardinality marker — a crash between
+    them leaves an orchestrator record with NO cardinality, so a changed worker set could
+    reuse the old orchestrator output undetected. Fail closed (out-of-family Codex [P2])."""
+    store = _FakeStore(
+        branches={0: ("w-0", {"o": 0})},
+        orchestrator=("orch", {"plan": "x"}),
+        cardinality=None,
+    )
+    with pytest.raises(_FanOutStoreCorruptError, match="cardinality marker is absent"):
+        _determine_fanout_resume(store, _RUN_KEY, _steps(3), TopologyPattern.ORCHESTRATOR_WORKERS)

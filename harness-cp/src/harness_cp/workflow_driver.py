@@ -1926,6 +1926,39 @@ def _execute_workflow_body(
                     ),
                     0,
                 )
+            # PR1 SCOPE (advisor + out-of-family Codex [P1]): crash-resume recovery is
+            # witnessed + correct ONLY for `CascadePolicy.PROCEED`. PAUSE + CASCADE_CANCEL
+            # carry committed on-failure semantics (pause-the-fan-out / cancel-siblings →
+            # FAILED) that "reuse the pause-resume path verbatim" — the ratified mechanism —
+            # does NOT honor on a crash-resume: a cascade-policy-BLIND recovery would re-run
+            # deliberately-cancelled siblings and report PARTIAL where CASCADE_CANCEL's
+            # contract says FAILED (a wrong, less-safe result on the compliance tier). FAIL
+            # CLOSED for them. Cascade-policy-aware crash-resume is the registered back-flow
+            # follow-on (`.harness/class_1_fork_fanout_crash_resume_cascade_policy.md`).
+            if _crash_fan_out_resume is not None:
+                _crash_cascade_policy = d4_tunable(
+                    lookup_cell(manifest_entry.workload_class, manifest_entry.engine_class),
+                    manifest_entry.persona_tier,
+                ).cascade_policy
+                if _crash_cascade_policy is not CascadePolicy.PROCEED:
+                    return (
+                        RunResult(
+                            workflow_id=manifest_entry.workflow_id,
+                            run_id=run_id,
+                            status=RunStatus.FAILED,
+                            terminal_step_index=None,
+                            partial_state=None,
+                            final_state=None,
+                            fail_class=(
+                                "fan-out-crash-resume-cascade-policy-unsupported: crash-resume "
+                                "recovery is PR1-scoped to CascadePolicy.PROCEED; "
+                                f"{_crash_cascade_policy.value} (pause / cascade-cancel) has "
+                                "committed on-failure semantics a cascade-policy-blind recovery "
+                                "cannot honor — fail closed (registered follow-on)"
+                            ),
+                        ),
+                        0,
+                    )
             # Material-diff fail-closed (out-of-family Codex [P2]): the store holds recovered
             # branch / orchestrator records but the RESUMED manifest carries NO branch steps
             # (a changed body). The strategy's empty-step fast path would return SUCCESS with
@@ -4296,6 +4329,17 @@ def _determine_fanout_resume(
         # (the orchestrator completes BEFORE any worker dispatches). Fail closed.
         raise _FanOutStoreCorruptError(
             "fan-out orchestrator output absent but workers completed (inconsistent store)"
+        )
+    # Cardinality-ordering fail-closed (out-of-family Codex [P2]): the orchestrator record is
+    # fsynced BEFORE the fan-out cardinality marker, so a crash between them leaves a valid
+    # orchestrator record with NO recorded cardinality — and a manifest with a CHANGED worker
+    # count would then reuse the old orchestrator output against the new worker set undetected.
+    # An orchestrator record without a cardinality marker therefore fails closed.
+    if _recorded_cardinality is None:
+        raise _FanOutStoreCorruptError(
+            "fan-out orchestrator record present but the fan-out cardinality marker is absent "
+            "(crash between orchestrator capture and cardinality write) — fail closed (the "
+            "worker count cannot be validated against a changed manifest)"
         )
     orchestrator_step_id, orchestrator_output = orchestrator
     return FanOutResumeState(
