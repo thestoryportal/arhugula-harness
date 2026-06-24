@@ -46,30 +46,28 @@
 snapshot:
   frozen_total: 11
   frozen_done: 11
-  standalone_closed: 39
+  standalone_closed: 40
   standalone_gated: 0
   standalone_resolved: 4
-  standalone_registered: 4
+  standalone_registered: 3
   source: ".harness/beyond-mvp-capability-boundary-ledger.md"
-  # FRONTIER NOTE (2026-06-24, B-FANOUT-PAUSE-SYNTHESIS closed; B-FANOUT-RESUME-CARRIER-
-  # TOPOLOGY-MISMATCH registered). The frozen 11-arc order is COMPLETE; the standalone B-*
-  # register is the live frontier. The fan-out crash-resume capability family is being built
-  # out under FULL-SPEC. CLOSED so far:
+  # FRONTIER NOTE (2026-06-24, B-FANOUT-RESUME-CARRIER-TOPOLOGY-MISMATCH closed). The frozen
+  # 11-arc order is COMPLETE; the standalone B-* register is the live frontier. The fan-out
+  # crash-resume capability family is being built out under FULL-SPEC. CLOSED so far:
   # B-FANOUT-OUTPUT-REPLAY (PR1 #723 + PR2 #724) + B-FANOUT-CRASH-RESUME-CASCADE-POLICY (#726)
-  # + B-FANOUT-PAUSE-SYNTHESIS (synthesis on the explicit-pause path — identity-on-carrier +
-  # material-diff + fresh-dispatch; impl-to-cleared-spec on §25.15.1 + §3/§4; CP-only).
-  # The 4 still-registered follow-ons keeping R-FS-1 ACTIVE:
+  # + B-FANOUT-PAUSE-SYNTHESIS (#728) + B-FANOUT-RESUME-CARRIER-TOPOLOGY-MISMATCH (general
+  # fail-closed for ANY topology resume carrier resumed under a strategy that does not read it
+  # — generalizes the synthesis-only #728 guard to all five resume carriers; impl-to-cleared-
+  # spec on the §26.2 never-co-set invariant + §25.15.x read-own-carrier-only recovery; CP-only).
+  # The 3 still-registered follow-ons keeping R-FS-1 ACTIVE:
   #   • B-FANOUT-CRASH-RESUME-TIMEOUT-REPLAY    (the timed_out ambiguous disposition)
   #   • B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT (reconstruct a lost PAUSE snapshot honoring
   #       §25.15.1 finish-in-flight; the PAUSE-trigger leg cascade-policy fails closed)
   #   • B-FANOUT-CRASH-RESUME-STRICT-TIER-INCOMPLETE (broad incomplete-crash recovery
   #       for the strict tiers; cascade-policy fails the incomplete case closed because an
   #       absent branch is ran-but-uncaptured-ambiguous; needs at-most-once branch dispatch)
-  #   • B-FANOUT-RESUME-CARRIER-TOPOLOGY-MISMATCH (general fail-closed for a NON-synthesis
-  #       fan-out resume whose carrier mismatches the resumed topology — surfaced 3× by Codex
-  #       at B-FANOUT-PAUSE-SYNTHESIS; the synthesis case is closed, the general case registered)
-  # closure_gate.py G1.1 = standalone_registered + standalone_gated == 0 is now 4 + 0 = 4
-  # → R-FS-1 stays ACTIVE. On all four follow-ons reaching closed/resolved → G1.1 passes →
+  # closure_gate.py G1.1 = standalone_registered + standalone_gated == 0 is now 3 + 0 = 3
+  # → R-FS-1 stays ACTIVE. On all three follow-ons reaching closed/resolved → G1.1 passes →
   # R-FS-1 resolves → R-CL-Q1 quality track admits. (Run `just closure-gate` to confirm G1.1.)
 
 arcs:
@@ -578,15 +576,20 @@ arcs:
     ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
 
   - id: B-FANOUT-RESUME-CARRIER-TOPOLOGY-MISMATCH
-    title: "Fail-closed on a NON-synthesis fan-out resume carrier/topology mismatch"
+    title: "Fail-closed on ANY topology resume carrier/strategy mismatch (generalizes the synthesis-only #728 guard)"
     kind: standalone
-    status: registered
-    decompose_at_open: true
+    status: closed
     owner_axis: "CP"
     parent_arc: B-FANOUT-PAUSE-SYNTHESIS
+    pr: "#730 (feat/r-fs-1-fanout-resume-carrier-topology-mismatch — flips registered → closed)"
+    spec_delta: "CP v1.58 → v1.59 §1+§2 (general resume-carrier↔strategy consistency guard at the resume entry; closes the v1.58 §1 non-synthesis carve-out; impl-to-cleared-spec on the C-CP-26 §26.2 never-co-set invariant + §25.15.x read-own-carrier-only recovery) + 1 clearance marker; NO contract/enum/committed-invariant change; NO operator gate (a fail-closed safety guard enforcing an existing invariant)."
     operator_gated: false  # a fail-closed safety guard for an always-a-body-change case → no committed-invariant sacrifice, no operator gate.
-    anticipated_scope: "A fan-out resume snapshot resumed under a topology whose carrier it did NOT populate (e.g. a FanOutResumeState snapshot resumed as PARALLELIZATION, which reads peer_fan_out_resume) currently runs the WHOLE fan-out FRESH — the strategy reads its absent carrier (`_execute_parallelization` peer_fan_out_resume None → _is_resume False → fresh), re-dispatching effect-bearing branches (an at-most-once violation). B-FANOUT-PAUSE-SYNTHESIS closed this for the SYNTHESIS-bearing case (the `post-join-synthesis-resume-carrier-mismatch` guard); the NON-synthesis case is pre-existing + UNCHANGED. Scope: a general carrier-vs-strategy consistency guard at the resume entry (the snapshot records no topology to material-diff, so a topology change between pause and resume is undetected) that fails closed for ANY fan-out resume carrier/strategy mismatch, not just synthesis-bearing ones."
-    why: "Surfaced at B-FANOUT-PAUSE-SYNTHESIS (out-of-family Codex flagged carrier/topology mismatch 3× across 2 rounds). The synthesis-scoped fix is surgical to that arc; the general non-synthesis mismatch is a real double-execution gap registered as a forward arc rather than left as a prose note (FULL-SPEC, `[[feedback-full-spec-beyond-mvp-nothing-deferred]]` + `[[spine-ledger-forward-arc-registration]]`)."
+    gives: "A pause snapshot resumed under a topology whose resume carrier it did NOT populate now fails closed (`resume-carrier-topology-mismatch`) BEFORE any dispatch, instead of running the WHOLE topology FRESH and re-dispatching effect-bearing branches/stages (an at-most-once violation). GENERALIZES the synthesis-only B-FANOUT-PAUSE-SYNTHESIS carrier-mismatch guard to ALL FIVE topology resume carriers, synthesis-bearing or not: fan_out_resume→{ORCHESTRATOR_WORKERS,HIERARCHICAL_DELEGATION} / peer_fan_out_resume→{PARALLELIZATION} / handoff_resume→{DECENTRALIZED_HANDOFF} / evaluator_optimizer_resume→{EVALUATOR_OPTIMIZER} / effect_fence_resume→{SINGLE_THREADED_LINEAR}. A single `_resume_carrier_topology_mismatch(resume_snapshot, strategy)` keyed on carrier-populated (not synthesis identity) SUBSUMES + replaces the v1.58 `_synthesis_resume_carrier_mismatch` (removed) and runs FIRST so the retained `_synthesis_resume_material_diff` always sees a carrier-consistent snapshot. Effect-fence is included (advisor-gated: a fence-ambiguous pause is only ever captured in the linear/TOOL_STEP step loop — workflow_driver.py:3006 — never a fan-out strategy function). The crash-resume path (resume_snapshot None) reconstructs each strategy's own carrier keyed to the executing topology (_determine_fanout_resume), so a foreign carrier cannot be surfaced there → the guard is scoped to the explicit pause-resume entry. Decorrelated review: advisor full-transcript (uniform-rule-simpler-and-more-correct than a fan-out-only carve-out; subsumption-safe; effect-fence capture-site verification; record-the-superset don't-fragment) + the §26.2/§25.15.x carrier-invariant probe (impl-to-cleared-spec, no council) + out-of-family Codex (carrier/topology mismatch is exactly what Codex flagged 3× at #728). Built broader than the registered 'fan-out' title (which is preserved as the historical registration) per FULL-SPEC — handoff/EO/fence had the IDENTICAL run-fresh bug, so a fan-out-only fix would be partial."
+    as_built:
+      - "harness-cp/src/harness_cp/workflow_driver.py (_RESUME_CARRIER_STRATEGIES map + _resume_carrier_topology_mismatch guard at the resume entry; removed the subsumed _synthesis_resume_carrier_mismatch; _synthesis_resume_material_diff docstring notes the front-run)"
+      - "design-substrate/Spec_Control_Plane_v1_59.md (delta over v1.58) + .harness/clearance/Spec_Control_Plane-v1_59-cleared-2026-06-24.md"
+      - "tests: harness-cp test_workflow_driver_parallelization_pause.py (full carrier×strategy predicate matrix; every foreign carrier resumed under PARALLELIZATION → FAILED + zero dispatch; a peer carrier resumed under every other strategy → FAILED + zero dispatch; matching-carrier positive controls unaffected in the sibling fanout/handoff/EO/effect-fence pause-test files)"
+    why: "Surfaced at B-FANOUT-PAUSE-SYNTHESIS (out-of-family Codex flagged carrier/topology mismatch 3× across 2 rounds). The synthesis-scoped fix was surgical to that arc; the general mismatch was a real double-execution gap registered as a forward arc rather than left as a prose note (FULL-SPEC, `[[feedback-full-spec-beyond-mvp-nothing-deferred]]` + `[[spine-ledger-forward-arc-registration]]`). Built here, generalized beyond the registered fan-out scope because handoff/EO/fence carry the identical bug."
     ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
 
   - id: B-ENGINE-OUTPUT-REPLAY-WAL-SEGMENT
