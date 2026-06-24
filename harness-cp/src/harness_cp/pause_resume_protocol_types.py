@@ -256,6 +256,21 @@ class FanOutResumeState(BaseModel):
     MUST NOT also appear in `branches` (the resume material-diff guard enforces no
     overlap — terminal vs paused-child are disjoint dispositions)."""
 
+    synthesis_step_id: str | None = None
+    """B-FANOUT-PAUSE-SYNTHESIS (R-FS-1) — the terminal `POST_JOIN_SYNTHESIS` step's
+    `step_id` AT PAUSE-CAPTURE TIME, or `None` when the fan-out carried no opt-in
+    synthesis. The captured synthesis IDENTITY (presence + step_id). On a pause the
+    synthesis NEVER ran (the pause halts at the worker barrier, BEFORE the post-join
+    synthesis), so there is nothing to replay — but resume MUST material-diff the
+    re-supplied terminal synthesis step against this identity (synthesis added /
+    removed / changed `step_id` → fail closed) BEFORE fresh-dispatching it on the
+    recovered + re-dispatched branches (effect-free, first-and-only per B-POSTJOIN).
+    Additive, default-None: `_compute_snapshot_hash` DROPS this field from the
+    canonical serialization when None, so every pre-existing / non-synthesis
+    ORCHESTRATOR_WORKERS snapshot hashes byte-identically (an old durable snapshot's
+    dict, lacking this key, deserializes via the default + re-hashes unchanged —
+    the same `paused_child_branches` drop-when-empty discipline)."""
+
 
 class PeerFanOutResumeState(BaseModel):
     """Peer fan-out (PARALLELIZATION) resume reconstruction state.
@@ -289,6 +304,15 @@ class PeerFanOutResumeState(BaseModel):
     re-dispatchable set (any ordinal in `range(branch_count)` not present in
     `branches` is re-dispatched). A material-diff guard at resume: a different
     `branch_count` means the workflow body changed."""
+
+    synthesis_step_id: str | None = None
+    """B-FANOUT-PAUSE-SYNTHESIS (R-FS-1) — the PARALLELIZATION analogue of
+    `FanOutResumeState.synthesis_step_id`: the terminal `POST_JOIN_SYNTHESIS` step's
+    `step_id` at pause-capture time, `None` when no synthesis was opted in. Same
+    material-diff-on-resume + fresh-dispatch contract; same additive, default-None,
+    drop-from-hash-when-None byte-compat discipline (the `_compute_snapshot_hash` peer
+    drop mirrors the FanOut drop — `PeerFanOutResumeState` had no drop before this
+    field, so the drop is ADDED at the same site)."""
 
 
 class HandoffStageResumeState(BaseModel):

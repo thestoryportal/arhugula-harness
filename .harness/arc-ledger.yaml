@@ -46,24 +46,28 @@
 snapshot:
   frozen_total: 11
   frozen_done: 11
-  standalone_closed: 38
+  standalone_closed: 39
   standalone_gated: 0
   standalone_resolved: 4
   standalone_registered: 4
   source: ".harness/beyond-mvp-capability-boundary-ledger.md"
-  # FRONTIER NOTE (2026-06-24, B-FANOUT-CRASH-RESUME-CASCADE-POLICY closed). The frozen
-  # 11-arc order is COMPLETE; the standalone B-* register is the live frontier. The fan-out
-  # crash-resume capability family is being built out under FULL-SPEC. CLOSED so far:
-  # B-FANOUT-OUTPUT-REPLAY (PR1 #723 + PR2 #724) + B-FANOUT-CRASH-RESUME-CASCADE-POLICY
-  # (cascade-aware crash-resume — lifts the PR1 fail-closed; impl-to-cleared-spec on §25.15).
+  # FRONTIER NOTE (2026-06-24, B-FANOUT-PAUSE-SYNTHESIS closed; B-FANOUT-RESUME-CARRIER-
+  # TOPOLOGY-MISMATCH registered). The frozen 11-arc order is COMPLETE; the standalone B-*
+  # register is the live frontier. The fan-out crash-resume capability family is being built
+  # out under FULL-SPEC. CLOSED so far:
+  # B-FANOUT-OUTPUT-REPLAY (PR1 #723 + PR2 #724) + B-FANOUT-CRASH-RESUME-CASCADE-POLICY (#726)
+  # + B-FANOUT-PAUSE-SYNTHESIS (synthesis on the explicit-pause path — identity-on-carrier +
+  # material-diff + fresh-dispatch; impl-to-cleared-spec on §25.15.1 + §3/§4; CP-only).
   # The 4 still-registered follow-ons keeping R-FS-1 ACTIVE:
   #   • B-FANOUT-CRASH-RESUME-TIMEOUT-REPLAY    (the timed_out ambiguous disposition)
-  #   • B-FANOUT-PAUSE-SYNTHESIS                (synthesis on the explicit-pause path)
   #   • B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT (reconstruct a lost PAUSE snapshot honoring
   #       §25.15.1 finish-in-flight; the PAUSE-trigger leg cascade-policy fails closed)
-  #   • B-FANOUT-CRASH-RESUME-STRICT-TIER-INCOMPLETE (NEW — broad incomplete-crash recovery
+  #   • B-FANOUT-CRASH-RESUME-STRICT-TIER-INCOMPLETE (broad incomplete-crash recovery
   #       for the strict tiers; cascade-policy fails the incomplete case closed because an
   #       absent branch is ran-but-uncaptured-ambiguous; needs at-most-once branch dispatch)
+  #   • B-FANOUT-RESUME-CARRIER-TOPOLOGY-MISMATCH (general fail-closed for a NON-synthesis
+  #       fan-out resume whose carrier mismatches the resumed topology — surfaced 3× by Codex
+  #       at B-FANOUT-PAUSE-SYNTHESIS; the synthesis case is closed, the general case registered)
   # closure_gate.py G1.1 = standalone_registered + standalone_gated == 0 is now 4 + 0 = 4
   # → R-FS-1 stays ACTIVE. On all four follow-ons reaching closed/resolved → G1.1 passes →
   # R-FS-1 resolves → R-CL-Q1 quality track admits. (Run `just closure-gate` to confirm G1.1.)
@@ -558,13 +562,31 @@ arcs:
   - id: B-FANOUT-PAUSE-SYNTHESIS
     title: "Synthesis-on-PAUSE-resume (material-diff coverage of a fresh pause-resume synthesis)"
     kind: standalone
+    status: closed
+    owner_axis: "CP"
+    parent_arc: B-FANOUT-OUTPUT-REPLAY
+    operator_gated: false  # additive carrier extension (a synthesis identity on the fan-out resume carrier), no committed-invariant sacrifice → no operator gate; impl-to-cleared-spec on §25.15.1 + §3/§4, advisor-vetted, no council.
+    pr: "#728 (feat/r-fs-1-fanout-pause-synthesis — flips registered → closed)"
+    spec_delta: "bundled-absorption CP v1.57 → v1.58 (§1 synthesis identity on the pause carrier + material-diff + fresh-dispatch; §2 byte-compat drop-when-None; lifts the v1.56 §2 post-join-synthesis-on-resume-unsupported pause-path reject) + 1 clearance marker. CP-only (no runtime/store change — on a pause the synthesis never ran, so the v1.56 EngineOutputStore synthesis API is not involved). NO contract / enum / committed-invariant change; impl-to-cleared-spec on §25.15.1 pause + the §3/§4 synthesis fresh-first-and-only guarantee."
+    gives: "A synthesis-bearing fan-out EXPLICIT-PAUSE is now RESUMABLE (PARALLELIZATION + ORCHESTRATOR_WORKERS + HIERARCHICAL). MECHANISM: `synthesis_step_id` (the terminal POST_JOIN_SYNTHESIS step's step_id) captured onto FanOutResumeState + PeerFanOutResumeState at the two pause-construction sites; the v1.56 §2 blanket `post-join-synthesis-on-resume-unsupported` reject REPLACED by a single `_synthesis_resume_material_diff(resume_snapshot, steps)` entry guard — captured-vs-resumed identity (presence + step_id): match → PROCEED (strategy recovers/re-dispatches branches + FRESH-dispatches the synthesis post-barrier; the synthesis never ran on a pause → `synthesis_present` False → fresh dispatch, effect-free + first-and-only per B-POSTJOIN), mismatch (added/removed/changed) → fail closed `post-join-synthesis-resume-material-diff`. The ONE helper covers the silent-DROP 'removed' case a placement-nested check would miss (advisor). BYTE-COMPAT: `_compute_snapshot_hash` drops synthesis_step_id when None on BOTH carriers (mirrors the paused_child_branches drop on FanOut; ADDS the analogous drop to PeerFanOut, which had none) → existing snapshots hash byte-identically. HIERARCHICAL child levels re-enter via execute_workflow(pause_snapshot_input=child_snapshot) (confirmed empirically: sub_agent_dispatch.py:637 → child_workflow_runner → execute_workflow) → the SAME entry guard against the child's own snapshot, so option-B entry-side covers the child path — no follow-on needed (advisor-gated). step_id-only material-diff is sufficient (consistent with the branch material-diff; fresh-dispatch not replay → a same-step_id body change yields a valid fresh synthesis). Decorrelated: advisor full-transcript (carrier necessity + one-helper material-diff + the HIERARCHICAL-child GATE traced empirically + the both-carriers byte-compat catch) + the §25.15/§3-§4 probe (impl-to-cleared-spec, no council) + out-of-family Codex (round 1 caught TWO genuine [P1] recovery-path regressions, both fixed + witnessed: (a) the hash drop was top-level-only → a nested HIERARCHICAL paused_child carrier emitted synthesis_step_id:null → broke pre-existing nested-snapshot hashes → RECURSIVE strip; (b) a synthesis-bearing snapshot resumed under a MISMATCHED topology would run the fan-out FRESH → fixed by reading the STRATEGY's expected carrier so a carrier mismatch fails closed as a material-diff)."
+    as_built:
+      - "harness-cp/src/harness_cp/pause_resume_protocol_types.py (synthesis_step_id on FanOutResumeState + PeerFanOutResumeState)"
+      - "harness-cp/src/harness_cp/workflow_driver.py (capture at the 2 pause-construction sites; the `_synthesis_resume_material_diff` helper + entry guard replacing the v1.56 pause-path reject)"
+      - "harness-cp/src/harness_cp/pause_resume_protocol.py (`_compute_snapshot_hash` drop-when-None for both carriers)"
+      - "design-substrate/Spec_Control_Plane_v1_58.md + 1 clearance marker"
+      - "tests: harness-cp test_workflow_driver_parallelization_pause.py (full-chain SUCCESS synthesized-not-fold + dispatched-once; added/removed/changed fail-closed; carrier-mismatch incl. removed-synthesis false-pass; byte-compat peer hash; recursive nested-strip; direct helper unit test over both carriers × all diff directions) + test_workflow_driver_fanout_pause.py (ORCHESTRATOR_WORKERS full-chain + orchestrator-not-redispatched; added fail-closed; byte-compat FanOut hash; HIERARCHICAL real nested round-trip — child synthesis identity captured + parent-hash byte-compat over the nested carrier + child re-enters → SUCCESS → fresh-dispatch-once)"
+    ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
+
+  - id: B-FANOUT-RESUME-CARRIER-TOPOLOGY-MISMATCH
+    title: "Fail-closed on a NON-synthesis fan-out resume carrier/topology mismatch"
+    kind: standalone
     status: registered
     decompose_at_open: true
-    owner_axis: "CP + runtime"
-    parent_arc: B-FANOUT-OUTPUT-REPLAY
-    operator_gated: false  # additive carrier extension (a synthesis identity on PauseSnapshot), no committed-invariant sacrifice → no operator gate.
-    anticipated_scope: "Synthesis on the EXPLICIT-PAUSE resume path. PR2 relaxed the CRASH-resume synthesis fail-closed but LEFT the pause-resume reject (post-join-synthesis-on-resume-unsupported, CP spec v1.56 §2) — a pause snapshot carries no synthesis identity to material-diff against, and on a pause the synthesis never ran (nothing to replay). Scope: a synthesis identity on the FanOutResumeState/PeerFanOutResumeState/PauseSnapshot carrier so a pause-resume that re-reaches the terminal synthesis material-diffs the carved synthesis step (presence + step_id) against the captured identity → fresh dispatch on the recovered branches (effect-free, first-and-only) instead of the interim fail-closed."
-    why: "Surfaced at B-FANOUT-OUTPUT-REPLAY PR2 (the §3 crash-resume guard relaxation explicitly left the pause-path reject). A genuine separate slice (a PauseSnapshot carrier extension, not the crash-path replay). FULL-SPEC — built as a coherent arc."
+    owner_axis: "CP"
+    parent_arc: B-FANOUT-PAUSE-SYNTHESIS
+    operator_gated: false  # a fail-closed safety guard for an always-a-body-change case → no committed-invariant sacrifice, no operator gate.
+    anticipated_scope: "A fan-out resume snapshot resumed under a topology whose carrier it did NOT populate (e.g. a FanOutResumeState snapshot resumed as PARALLELIZATION, which reads peer_fan_out_resume) currently runs the WHOLE fan-out FRESH — the strategy reads its absent carrier (`_execute_parallelization` peer_fan_out_resume None → _is_resume False → fresh), re-dispatching effect-bearing branches (an at-most-once violation). B-FANOUT-PAUSE-SYNTHESIS closed this for the SYNTHESIS-bearing case (the `post-join-synthesis-resume-carrier-mismatch` guard); the NON-synthesis case is pre-existing + UNCHANGED. Scope: a general carrier-vs-strategy consistency guard at the resume entry (the snapshot records no topology to material-diff, so a topology change between pause and resume is undetected) that fails closed for ANY fan-out resume carrier/strategy mismatch, not just synthesis-bearing ones."
+    why: "Surfaced at B-FANOUT-PAUSE-SYNTHESIS (out-of-family Codex flagged carrier/topology mismatch 3× across 2 rounds). The synthesis-scoped fix is surgical to that arc; the general non-synthesis mismatch is a real double-execution gap registered as a forward arc rather than left as a prose note (FULL-SPEC, `[[feedback-full-spec-beyond-mvp-nothing-deferred]]` + `[[spine-ledger-forward-arc-registration]]`)."
     ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
 
   - id: B-ENGINE-OUTPUT-REPLAY-WAL-SEGMENT

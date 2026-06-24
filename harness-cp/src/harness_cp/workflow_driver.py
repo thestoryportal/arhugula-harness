@@ -1780,41 +1780,61 @@ def _execute_workflow_body(
     _synth_positions = [
         i for i, _s in enumerate(steps) if _s.step_kind is StepKind.POST_JOIN_SYNTHESIS
     ]
-    if _synth_positions:
-        # B-POSTJOIN resume guard (out-of-family Codex round 9 [P1]): a synthesis-bearing
-        # fan-out being RESUMED bypasses the material-diff fail-closed guarantee. The
-        # strategy resume guards validate the CARVED branch set against the snapshot
-        # (count + per-branch identity), but the terminal POST_JOIN_SYNTHESIS step is
-        # carved BEFORE those checks (`_split_synthesis`) and the pause snapshot holds no
-        # synthesis identity to diff against — so adding / removing / changing the synthesis
-        # step between pause and resume passes validation, and the resumed run dispatches a
-        # divergent synthesis (or silently falls back to the fold). Reject fail-closed: this
-        # ENFORCES the boundary CP spec v1.54 §3/§4 already declares (a synthesized run is a
-        # "fresh first-and-only dispatch … no completed-synthesis replay"). Reproducible
-        # synthesis-across-resume — incl. the snapshot-coverage extension — is the registered
-        # follow-on `B-FANOUT-OUTPUT-REPLAY`, NOT this arc. (A synthesis only appears in a
-        # concurrent fan-out per the guard below, so `resume_snapshot is not None` here is a
-        # fan-out resume carrying a synthesis.)
-        if resume_snapshot is not None:
+    # B-FANOUT-PAUSE-SYNTHESIS (R-FS-1) — a synthesis-bearing fan-out PAUSE is now
+    # RESUMABLE (this arc relaxes the prior blanket `post-join-synthesis-on-resume-
+    # unsupported` reject, out-of-family Codex round 9 [P1]). The pause snapshot now
+    # carries the terminal synthesis IDENTITY (presence + `step_id`) on its fan-out
+    # resume carrier, so resume material-diffs the re-supplied synthesis step against
+    # it: match → PROCEED (the strategy recovers branches + fresh-dispatches the
+    # synthesis post-barrier — it never ran on a pause, so it is effect-free,
+    # first-and-only per B-POSTJOIN); mismatch (synthesis added / removed / changed
+    # `step_id`) → fail closed BEFORE any dispatch side-effect (the [P1] fail-closed
+    # posture preserved, now as a TYPED material-diff rather than a blanket reject).
+    # The helper also covers the synthesis-REMOVED case (snapshot captured a synthesis,
+    # resumed body dropped it → would silently fold) that a check nested inside the
+    # `if _synth_positions:` placement block would structurally miss. Both-absent →
+    # None (a non-synthesis fan-out resume, unchanged). HIERARCHICAL child levels
+    # re-enter via `execute_workflow(pause_snapshot_input=...)` so they hit this same
+    # guard against the CHILD's own snapshot (the child carves + captures its own
+    # synthesis identity via the reused `_execute_orchestrator_workers`).
+    if resume_snapshot is not None:
+        # Carrier/topology mismatch FIRST (out-of-family Codex [P1]): a synthesis-bearing
+        # snapshot resumed under a topology whose carrier it did NOT populate must fail
+        # closed — the identity diff alone false-passes when the resumed body ALSO dropped
+        # the synthesis (the strategy's expected carrier is empty → captured None == resumed
+        # None), and the strategy would then run the whole fan-out FRESH, re-dispatching
+        # effect-bearing branches.
+        _carrier_mismatch = _synthesis_resume_carrier_mismatch(resume_snapshot, strategy)
+        _synth_diff = (
+            "post-join-synthesis-resume-carrier-mismatch: a synthesis-bearing pause snapshot "
+            f"was captured under a fan-out carrier the resumed {strategy.value} topology does "
+            "not read (the snapshot's topology changed between pause and resume). Resuming "
+            "would run the fan-out FRESH, re-dispatching effect-bearing branches. Rejected "
+            "fail-closed (B-FANOUT-PAUSE-SYNTHESIS)."
+            if _carrier_mismatch
+            else _synthesis_resume_material_diff(resume_snapshot, steps, strategy)
+        )
+        if _synth_diff is not None:
             return (
                 RunResult(
                     workflow_id=manifest_entry.workflow_id,
                     run_id=run_id,
                     status=RunStatus.FAILED,
-                    terminal_step_index=_synth_positions[0],
+                    terminal_step_index=(
+                        _synth_positions[0] if _synth_positions else max(0, len(steps) - 1)
+                    ),
                     partial_state=None,
                     final_state=None,
-                    fail_class=(
-                        "post-join-synthesis-on-resume-unsupported: a POST_JOIN_SYNTHESIS "
-                        "terminal step is a fresh first-and-only dispatch (CP spec v1.54 "
-                        "§3/§4) — it is NOT covered by the fan-out resume material-diff "
-                        "validation (the synthesis is carved before the branch-set diff, "
-                        "with no snapshot identity). Reproducible synthesis-across-resume is "
-                        "the registered B-FANOUT-OUTPUT-REPLAY arc."
-                    ),
+                    fail_class=_synth_diff,
                 ),
                 0,
             )
+    if _synth_positions:
+        # B-POSTJOIN placement guard (out-of-family Codex [P2]): a POST_JOIN_SYNTHESIS
+        # step is valid ONLY as the single terminal step of a concurrent fan-out. This
+        # runs on BOTH fresh runs and resumes (a matching-identity resume falls through
+        # the diff above into here); the placement was already valid at pause, so a
+        # resume re-validates harmlessly.
         _concurrent_fanout = {
             _DriverStrategyStatus.PARALLELIZATION,
             _DriverStrategyStatus.ORCHESTRATOR_WORKERS,
@@ -2189,10 +2209,14 @@ def _execute_workflow_body(
     # BEFORE the synthesis ran — effect-free, first-and-only, consistent over the same
     # reproduced siblings). Because every recursive HIERARCHICAL child re-enters
     # `_execute_workflow_body`, the per-level synthesis recovers at each level keyed by its
-    # own run-scoped store. The PAUSE-resume synthesis path (`resume_snapshot is not None`,
-    # the top-of-function reject) stays fail-closed — that is the separately-registered
-    # B-FANOUT-PAUSE-SYNTHESIS follow-on (the pause snapshot carries no synthesis identity to
-    # material-diff against). `_synth_positions` is still consumed by that pause-path reject.
+    # own run-scoped store. The PAUSE-resume synthesis path (`resume_snapshot is not None`)
+    # is now ALSO supported (B-FANOUT-PAUSE-SYNTHESIS): the top-of-function
+    # `_synthesis_resume_material_diff` guard verifies the re-supplied synthesis identity
+    # (presence + step_id) against the pause snapshot's captured identity, then the strategy
+    # recovers branches + fresh-dispatches the synthesis at the same post-barrier
+    # `_maybe_post_join_synthesis` (the synthesis never ran on a pause, so `synthesis_present`
+    # is False → fresh dispatch, effect-free + first-and-only). `_synth_positions` is still
+    # consumed by the placement guard below.
 
     if strategy is _DriverStrategyStatus.PARALLELIZATION:
         # B-POSTJOIN-LLM-SYNTHESIS (CP spec v1.54 §3) — carve an opt-in terminal
@@ -3557,6 +3581,92 @@ def _append_step_ledger_entry(
 # the opt-in). Effect-free read-only compose. Reproducible cached-replay of the
 # synthesized aggregate is the registered follow-on `B-FANOUT-OUTPUT-REPLAY`
 # (a separate §25.12-Point-1/D1 reckoning — NOT this arc).
+
+
+def _synthesis_resume_carrier_mismatch(
+    resume_snapshot: PauseSnapshot,
+    strategy: _DriverStrategyStatus,
+) -> bool:
+    """True when the pause snapshot carries a SYNTHESIS identity on a fan-out carrier
+    the resuming strategy does NOT read (B-FANOUT-PAUSE-SYNTHESIS, out-of-family Codex
+    [P1]). `fan_out_resume` is read by ORCHESTRATOR_WORKERS / HIERARCHICAL_DELEGATION;
+    `peer_fan_out_resume` by PARALLELIZATION. A synthesis-bearing snapshot resumed under
+    the OTHER topology would have the strategy read its (absent) carrier → run the WHOLE
+    fan-out FRESH, re-dispatching effect-bearing branches. The identity material-diff
+    catches this when the resumed body still has a synthesis, but NOT when the resumed
+    body ALSO dropped it (both the strategy's-carrier captured id and the resumed id are
+    then None → a false-pass); this guard closes that gap. Fail-closed before any dispatch.
+    A synthesis-bearing snapshot MUST be resumed under the topology whose carrier it
+    populated."""
+    fan = resume_snapshot.fan_out_resume
+    if fan is not None and fan.synthesis_step_id is not None:
+        return strategy not in (
+            _DriverStrategyStatus.ORCHESTRATOR_WORKERS,
+            _DriverStrategyStatus.HIERARCHICAL_DELEGATION,
+        )
+    peer = resume_snapshot.peer_fan_out_resume
+    if peer is not None and peer.synthesis_step_id is not None:
+        return strategy is not _DriverStrategyStatus.PARALLELIZATION
+    return False
+
+
+def _synthesis_resume_material_diff(
+    resume_snapshot: PauseSnapshot,
+    steps: Sequence[WorkflowStep],
+    strategy: _DriverStrategyStatus,
+) -> str | None:
+    """Material-diff the re-supplied terminal synthesis step against a pause
+    snapshot's captured synthesis identity (B-FANOUT-PAUSE-SYNTHESIS, R-FS-1).
+
+    On a `cascade_policy=pause` halt the post-join synthesis NEVER ran (the pause
+    halts at the worker barrier, before it), so there is nothing to replay — but the
+    synthesis IDENTITY (presence + ``step_id``) is captured on the fan-out resume
+    carrier (`FanOutResumeState` / `PeerFanOutResumeState`) so a resume that
+    re-reaches the terminal synthesis can verify the body did not change before
+    FRESH-dispatching it on the recovered + re-dispatched branches (effect-free,
+    first-and-only per B-POSTJOIN).
+
+    The captured identity is read from the carrier THE RESUMING STRATEGY uses — NOT
+    "whichever carrier the snapshot populated". A carrier/topology MISMATCH (e.g. a
+    `fan_out_resume` snapshot resumed under PARALLELIZATION, which reads
+    `peer_fan_out_resume`) then surfaces here as a material-diff: the strategy's expected
+    carrier is absent → captured None → it differs from a present resumed synthesis →
+    fail closed, rather than the strategy reading its absent carrier and running the
+    WHOLE fan-out FRESH (re-dispatching effect-bearing branches) + fresh-dispatching the
+    synthesis over it (out-of-family Codex [P1]). A non-fan-out strategy has no synthesis
+    carrier → captured None.
+
+    Returns a ``fail_class`` string on mismatch (synthesis added / removed / changed
+    ``step_id``, or a carrier/topology mismatch), or ``None`` when the captured and
+    re-supplied identities match (incl. both-absent — a non-synthesis resume, unchanged).
+    The REMOVED case (snapshot captured a synthesis, resumed body dropped it) fails closed
+    rather than silently yielding the deterministic fold — exactly the silent-drop class
+    the original entry reject existed to prevent."""
+    captured: str | None = None
+    if strategy in (
+        _DriverStrategyStatus.ORCHESTRATOR_WORKERS,
+        _DriverStrategyStatus.HIERARCHICAL_DELEGATION,
+    ):
+        if resume_snapshot.fan_out_resume is not None:
+            captured = resume_snapshot.fan_out_resume.synthesis_step_id
+    elif strategy is _DriverStrategyStatus.PARALLELIZATION:
+        if resume_snapshot.peer_fan_out_resume is not None:
+            captured = resume_snapshot.peer_fan_out_resume.synthesis_step_id
+    resumed: str | None = None
+    if steps and steps[-1].step_kind is StepKind.POST_JOIN_SYNTHESIS:
+        resumed = str(steps[-1].step_id)
+    if captured == resumed:
+        return None
+    return (
+        "post-join-synthesis-resume-material-diff: the resumed workflow body's terminal "
+        f"synthesis identity ({resumed!r}) differs from the pause snapshot's captured "
+        f"synthesis identity ({captured!r}) for the {strategy.value} carrier — the "
+        "POST_JOIN_SYNTHESIS step was added, removed, or changed between pause and resume "
+        "(or the snapshot's fan-out carrier does not match the resumed topology). A "
+        "synthesis pause-resume fresh-dispatches the synthesis on the recovered branches, "
+        "so a mismatched identity would dispatch a divergent synthesis (or silently drop "
+        "it to the fold). Rejected fail-closed (B-FANOUT-PAUSE-SYNTHESIS)."
+    )
 
 
 def _split_synthesis(
@@ -5480,6 +5590,11 @@ def _execute_parallelization(
                 for _bi, _status in sorted(terminal_dispositions.items())
             ),
             branch_count=len(steps),
+            # B-FANOUT-PAUSE-SYNTHESIS — capture the terminal POST_JOIN_SYNTHESIS
+            # step's identity (presence + step_id) so resume can material-diff it
+            # before fresh-dispatching. None when no synthesis was opted in
+            # (drop-from-hash-when-None keeps those snapshots byte-identical).
+            synthesis_step_id=(str(synthesis_step.step_id) if synthesis_step is not None else None),
         )
         snapshot = _run_protocol_method_sync(
             cast(PauseResumeProtocol, protocol).capture_pause_snapshot(
@@ -7457,6 +7572,14 @@ def _execute_orchestrator_workers(
                     paused_child_dispositions.items(), key=lambda kv: kv[0]
                 )
             ),
+            # B-FANOUT-PAUSE-SYNTHESIS — capture the terminal POST_JOIN_SYNTHESIS
+            # step's identity (presence + step_id) so resume can material-diff it
+            # before fresh-dispatching. None when no synthesis was opted in (the
+            # common case — drop-from-hash-when-None keeps those snapshots
+            # byte-identical). HIERARCHICAL_DELEGATION reuses this function per
+            # level, so a child level's synthesis is captured into the child's own
+            # snapshot here too.
+            synthesis_step_id=(str(synthesis_step.step_id) if synthesis_step is not None else None),
         )
         snapshot = _run_protocol_method_sync(
             cast(PauseResumeProtocol, protocol).capture_pause_snapshot(
