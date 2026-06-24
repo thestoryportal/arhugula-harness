@@ -162,6 +162,11 @@ class _InMemoryBranchStore:
     def forget_branch(self, run_key: str, branch_index: int) -> None:
         self._branches.get(run_key, {}).pop(branch_index, None)
 
+    # -- test helper: degrade a branch to `completed`-NO-OUTPUT (ran-and-errored, effect landed) --
+    def degrade_branch(self, run_key: str, branch_index: int) -> None:
+        step_id, _status, _out = self._branches[run_key][branch_index]
+        self._branches[run_key][branch_index] = (step_id, "completed", None)
+
     # -- test helper: the single run_key recorded this run (the driver computes
     # `sha256(run_id, workflow_id, entry_version)` internally; inspecting by the
     # sole recorded key avoids re-deriving it and coupling the test to §25.6). --
@@ -929,6 +934,71 @@ def test_synthesis_crash_resume_incomplete_branches_fails_closed() -> None:
     assert "post-join-synthesis-replay-incomplete-branches" in r2.fail_class
     assert resume_branch.dispatched == []  # fail-closed BEFORE the absent branch re-dispatched
     assert resume_synth.dispatched == 0  # the stale synthesis was NOT replayed
+
+
+def test_synthesis_crash_resume_all_branches_absent_fails_closed() -> None:
+    """Out-of-family Codex [P2] round-2 (a) — if ALL branch journals are absent but the
+    synthesis sidecar survived, `_determine_fanout_resume` returns None (no crash-resume state),
+    so the run would otherwise proceed as FRESH and then replay the stale synthesis over the
+    freshly re-dispatched branches. The synthesis-completeness guard fires INDEPENDENT of
+    `_crash_fan_out_resume` → fail closed, no re-dispatch."""
+    store = _InMemoryBranchStore()
+
+    r1 = _run_synth(
+        workflow_id="wf-synth-all-absent",
+        branch=_CountingDispatcher(n=2),
+        synthesis=_SynthesisDispatcher(),
+        store=store,
+    )
+    assert r1.status is RunStatus.SUCCESS
+    key = store.sole_run_key()
+    assert store.synthesis_present(key)
+    store.forget_branch(key, 0)
+    store.forget_branch(key, 1)  # ALL branches absent; synthesis still present
+
+    resume_branch = _CountingDispatcher(n=2)
+    resume_synth = _SynthesisDispatcher()
+    r2 = _run_synth(
+        workflow_id="wf-synth-all-absent",
+        branch=resume_branch,
+        synthesis=resume_synth,
+        store=store,
+    )
+    assert r2.status is RunStatus.FAILED
+    assert r2.fail_class is not None
+    assert "post-join-synthesis-replay-incomplete-branches" in r2.fail_class
+    assert resume_branch.dispatched == []  # never proceeded as a fresh run
+    assert resume_synth.dispatched == 0
+
+
+def test_synthesis_crash_resume_degraded_branch_fails_closed() -> None:
+    """Out-of-family Codex [P2] round-2 (b) — a recovered branch `completed` with NO output (a
+    ran-and-errored degraded branch) keeps the branch COUNT but is non-output-bearing. A
+    captured synthesis proves a SUCCESSFUL (all-output-bearing) fan-out, so a degraded branch on
+    resume is inconsistent → fail closed (the count-only check would have let it through)."""
+    store = _InMemoryBranchStore()
+
+    r1 = _run_synth(
+        workflow_id="wf-synth-degraded",
+        branch=_CountingDispatcher(n=2),
+        synthesis=_SynthesisDispatcher(),
+        store=store,
+    )
+    assert r1.status is RunStatus.SUCCESS
+    key = store.sole_run_key()
+    store.degrade_branch(key, 1)  # branch 1: completed, output=None (count still 2)
+
+    resume_synth = _SynthesisDispatcher()
+    r2 = _run_synth(
+        workflow_id="wf-synth-degraded",
+        branch=_CountingDispatcher(n=2),
+        synthesis=resume_synth,
+        store=store,
+    )
+    assert r2.status is RunStatus.FAILED
+    assert r2.fail_class is not None
+    assert "post-join-synthesis-replay-incomplete-branches" in r2.fail_class
+    assert resume_synth.dispatched == 0
 
 
 class _SynthesisAppendRaiser(_RecordingLedger):

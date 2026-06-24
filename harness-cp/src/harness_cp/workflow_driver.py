@@ -1982,44 +1982,51 @@ def _execute_workflow_body(
                     0,
                 )
 
-            # B-FANOUT-OUTPUT-REPLAY PR2 — incomplete-synthesis-sidecar fail-closed (out-of-
-            # family Codex [P2]). A captured synthesis PROVES the fan-out COMPLETED (every
-            # branch + the orchestrator landed — the synthesis composes over the full sibling
-            # set). So if a synthesis is captured BUT the recovered branch set is INCOMPLETE (a
-            # branch journal is absent → `_determine_fanout_resume` left it out of the
-            # snapshot, so the strategy would RE-DISPATCH it), the store is INCONSISTENT:
-            # re-dispatching re-fires a landed effect AND the replay would return the STALE
-            # captured aggregate over changed branches. A captured synthesis admits ONLY a pure
-            # (zero-re-dispatch) replay → fail CLOSED here, BEFORE any re-dispatch. `branches`
-            # is the recovered (present+readable+completed) set; `worker_count` (orchestrator) /
-            # `branch_count` (peer) is the manifest's expected total.
-            if _crash_fan_out_resume is not None and _synth_positions:
-                _synth_store = _fanout_replay_store(ctx, manifest_entry)
-                if _synth_store is not None and _synth_store.synthesis_present(run_idempotency_key):
-                    _expected_branches = getattr(_crash_fan_out_resume, "worker_count", None)
-                    if _expected_branches is None:
-                        _expected_branches = getattr(_crash_fan_out_resume, "branch_count", 0)
-                    if len(_crash_fan_out_resume.branches) < _expected_branches:
-                        return (
-                            RunResult(
-                                workflow_id=manifest_entry.workflow_id,
-                                run_id=run_id,
-                                status=RunStatus.FAILED,
-                                terminal_step_index=_synth_positions[0],
-                                partial_state=None,
-                                final_state=None,
-                                fail_class=(
-                                    "post-join-synthesis-replay-incomplete-branches: a "
-                                    "synthesis was captured (proving the fan-out completed) "
-                                    "but the recovered branch set is incomplete (a branch "
-                                    "journal is absent) — re-dispatching would re-fire a "
-                                    "landed effect and replay a stale aggregate over changed "
-                                    "siblings; fail closed (a captured synthesis admits only "
-                                    "a pure zero-re-dispatch replay)"
-                                ),
+            # B-FANOUT-OUTPUT-REPLAY PR2 — synthesis-completeness fail-closed (out-of-family
+            # Codex [P2] ×2). A captured synthesis PROVES a COMPLETE, SUCCESSFUL fan-out: the
+            # synthesis composes over the full OUTPUT-BEARING sibling set, and runs ONLY on
+            # RunStatus.SUCCESS. So whenever a synthesis is captured, the store MUST hold a
+            # complete, output-bearing, ZERO-RE-DISPATCH fan-out state — every expected branch
+            # present + readable + `completed`-WITH-OUTPUT (+ a recovered orchestrator for the
+            # orchestrator topologies, which `_determine_fanout_resume` guarantees when it
+            # returns non-None). ANY gap → fail CLOSED here, BEFORE any re-dispatch (a re-fired
+            # landed effect + a stale/degraded replayed aggregate). This fires INDEPENDENT of
+            # `_crash_fan_out_resume`: (a) ALL branches absent → `_determine_fanout_resume`
+            # returns None, yet the run must NOT proceed as fresh then replay the stale synthesis;
+            # (b) a `completed`-no-output (degraded, effect-landed-no-output) branch keeps the
+            # count but is non-output-bearing. `_crash_branch_steps` excludes the carved
+            # synthesis; `steps[0]` is the orchestrator for the orchestrator topologies.
+            if _crash_replay_store.synthesis_present(run_idempotency_key) and _synth_positions:
+                _is_orchestrated = manifest_entry.topology_pattern in {
+                    TopologyPattern.ORCHESTRATOR_WORKERS,
+                    TopologyPattern.HIERARCHICAL_DELEGATION,
+                }
+                _expected_branches = len(_crash_branch_steps) - (1 if _is_orchestrated else 0)
+                _complete_output_bearing = (
+                    _crash_fan_out_resume is not None
+                    and len(_crash_fan_out_resume.branches) == _expected_branches
+                    and all(b.output is not None for b in _crash_fan_out_resume.branches)
+                )
+                if not _complete_output_bearing:
+                    return (
+                        RunResult(
+                            workflow_id=manifest_entry.workflow_id,
+                            run_id=run_id,
+                            status=RunStatus.FAILED,
+                            terminal_step_index=_synth_positions[0],
+                            partial_state=None,
+                            final_state=None,
+                            fail_class=(
+                                "post-join-synthesis-replay-incomplete-branches: a synthesis "
+                                "was captured (proving a complete, successful, output-bearing "
+                                "fan-out) but the recovered state is incomplete (an absent / "
+                                "corrupt / non-output-bearing branch, or a missing orchestrator) "
+                                "— fail closed; a captured synthesis admits only a pure "
+                                "zero-re-dispatch replay over the full output-bearing set"
                             ),
-                            0,
-                        )
+                        ),
+                        0,
+                    )
 
     # B-FANOUT-OUTPUT-REPLAY PR2 — the PR1 synthesis-bearing crash-resume fail-closed is now
     # RELAXED (CP spec v1.56 §1/§2). A POST_JOIN_SYNTHESIS fan-out that crash-resumes under
