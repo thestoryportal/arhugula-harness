@@ -697,8 +697,9 @@ def _run_synth(
     store: Any,
     topology: TopologyPattern = TopologyPattern.PARALLELIZATION,
     steps: list[WorkflowStep] | None = None,
+    ledger: Any = None,
 ) -> Any:
-    ctx = cast(DriverContext, _Ctx(ledger=_RecordingLedger(), store=store))
+    ctx = cast(DriverContext, _Ctx(ledger=ledger or _RecordingLedger(), store=store))
     if steps is None:
         steps = [_step("branch-0", 0), _step("branch-1", 1), _synthesis_step()]
     return execute_workflow(
@@ -894,6 +895,82 @@ def test_synthesis_crash_resume_replays_with_orchestrator_recovery() -> None:
     assert r2.status is RunStatus.SUCCESS
     assert resume_synth.dispatched == 0  # orchestrator + workers + synthesis all recovered
     assert r2.final_state == r1.final_state == {"synthesis": "ow-original"}
+
+
+def test_synthesis_crash_resume_incomplete_branches_fails_closed() -> None:
+    """Out-of-family Codex [P2] — a captured synthesis PROVES every branch completed. If on
+    resume a branch journal is ABSENT (a partial-cleanup / sidecar inconsistency),
+    `_determine_fanout_resume` would re-dispatch it (re-firing a landed effect) while the
+    replay returns the STALE captured aggregate over the just-changed sibling. Fail closed
+    BEFORE any re-dispatch: a captured synthesis admits only a pure zero-re-dispatch replay."""
+    store = _InMemoryBranchStore()
+
+    r1 = _run_synth(
+        workflow_id="wf-synth-incomplete",
+        branch=_CountingDispatcher(n=2),
+        synthesis=_SynthesisDispatcher(),
+        store=store,
+    )
+    assert r1.status is RunStatus.SUCCESS
+    assert store.synthesis_present(store.sole_run_key())
+    # Drop branch 1's journal — present synthesis but an absent branch (an inconsistent store).
+    store.forget_branch(store.sole_run_key(), 1)
+
+    resume_branch = _CountingDispatcher(n=2)
+    resume_synth = _SynthesisDispatcher()
+    r2 = _run_synth(
+        workflow_id="wf-synth-incomplete",
+        branch=resume_branch,
+        synthesis=resume_synth,
+        store=store,
+    )
+    assert r2.status is RunStatus.FAILED
+    assert r2.fail_class is not None
+    assert "post-join-synthesis-replay-incomplete-branches" in r2.fail_class
+    assert resume_branch.dispatched == []  # fail-closed BEFORE the absent branch re-dispatched
+    assert resume_synth.dispatched == 0  # the stale synthesis was NOT replayed
+
+
+class _SynthesisAppendRaiser(_RecordingLedger):
+    """A ledger that raises on the SYNTHESIS terminal entry append (the post-join-synthesis
+    write_key) — to witness that a replay-path ledger failure maps to a FAILED RunResult
+    rather than escaping execute_workflow."""
+
+    def append(self, payload: Any, write_key: Any) -> Any:
+        if "post-join-synthesis" in str(getattr(write_key, "step_id", "")):
+            raise RuntimeError("simulated synthesis ledger-append failure")
+        return super().append(payload, write_key)
+
+
+def test_synthesis_replay_ledger_append_failure_maps_to_failed() -> None:
+    """Out-of-family Codex [P2] — on the captured-synthesis replay path, a failing
+    `_append_synthesis_ledger_entry` (or STEP_BOUNDARY emit) must map to a FAILED RunResult
+    (like the fresh-dispatch path), NOT escape execute_workflow as a raw exception."""
+    store = _InMemoryBranchStore()
+
+    r1 = _run_synth(
+        workflow_id="wf-synth-append-fail",
+        branch=_CountingDispatcher(n=2),
+        synthesis=_SynthesisDispatcher(),
+        store=store,
+    )
+    assert r1.status is RunStatus.SUCCESS
+    assert store.synthesis_present(store.sole_run_key())
+
+    # Run 2 (replay): the synthesis is replayed, but the ledger re-append raises → FAILED,
+    # not an escaping exception.
+    resume_synth = _SynthesisDispatcher()
+    r2 = _run_synth(
+        workflow_id="wf-synth-append-fail",
+        branch=_CountingDispatcher(n=2),
+        synthesis=resume_synth,
+        store=store,
+        ledger=_SynthesisAppendRaiser(),
+    )
+    assert r2.status is RunStatus.FAILED
+    assert r2.fail_class is not None
+    assert "post-join-synthesis-replay-failure" in r2.fail_class
+    assert resume_synth.dispatched == 0  # replayed (not re-dispatched), then the append failed
 
 
 def test_crash_resume_empty_manifest_fails_closed_material_diff() -> None:

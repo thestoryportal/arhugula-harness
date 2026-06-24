@@ -1982,6 +1982,45 @@ def _execute_workflow_body(
                     0,
                 )
 
+            # B-FANOUT-OUTPUT-REPLAY PR2 — incomplete-synthesis-sidecar fail-closed (out-of-
+            # family Codex [P2]). A captured synthesis PROVES the fan-out COMPLETED (every
+            # branch + the orchestrator landed — the synthesis composes over the full sibling
+            # set). So if a synthesis is captured BUT the recovered branch set is INCOMPLETE (a
+            # branch journal is absent → `_determine_fanout_resume` left it out of the
+            # snapshot, so the strategy would RE-DISPATCH it), the store is INCONSISTENT:
+            # re-dispatching re-fires a landed effect AND the replay would return the STALE
+            # captured aggregate over changed branches. A captured synthesis admits ONLY a pure
+            # (zero-re-dispatch) replay → fail CLOSED here, BEFORE any re-dispatch. `branches`
+            # is the recovered (present+readable+completed) set; `worker_count` (orchestrator) /
+            # `branch_count` (peer) is the manifest's expected total.
+            if _crash_fan_out_resume is not None and _synth_positions:
+                _synth_store = _fanout_replay_store(ctx, manifest_entry)
+                if _synth_store is not None and _synth_store.synthesis_present(run_idempotency_key):
+                    _expected_branches = getattr(_crash_fan_out_resume, "worker_count", None)
+                    if _expected_branches is None:
+                        _expected_branches = getattr(_crash_fan_out_resume, "branch_count", 0)
+                    if len(_crash_fan_out_resume.branches) < _expected_branches:
+                        return (
+                            RunResult(
+                                workflow_id=manifest_entry.workflow_id,
+                                run_id=run_id,
+                                status=RunStatus.FAILED,
+                                terminal_step_index=_synth_positions[0],
+                                partial_state=None,
+                                final_state=None,
+                                fail_class=(
+                                    "post-join-synthesis-replay-incomplete-branches: a "
+                                    "synthesis was captured (proving the fan-out completed) "
+                                    "but the recovered branch set is incomplete (a branch "
+                                    "journal is absent) — re-dispatching would re-fire a "
+                                    "landed effect and replay a stale aggregate over changed "
+                                    "siblings; fail closed (a captured synthesis admits only "
+                                    "a pure zero-re-dispatch replay)"
+                                ),
+                            ),
+                            0,
+                        )
+
     # B-FANOUT-OUTPUT-REPLAY PR2 — the PR1 synthesis-bearing crash-resume fail-closed is now
     # RELAXED (CP spec v1.56 §1/§2). A POST_JOIN_SYNTHESIS fan-out that crash-resumes under
     # `CascadePolicy.PROCEED` (the cascade-policy guard above already fails closed for
@@ -3503,14 +3542,29 @@ def _replay_captured_synthesis(
             ),
         )
     # Audit completeness: re-append the synthesis ledger entry (DEDUP-SAFE — the W3 crash
-    # can land after the original append; the deterministic key → IDEMPOTENT_NOOP).
-    _append_synthesis_ledger_entry(
-        ctx=ctx,
-        workflow_id=manifest_entry.workflow_id,
-        synthesis_index=synthesis_index,
-        synthesis_idempotency_key=synthesis_idempotency_key,
-    )
-    ctx.lifecycle_emitter.emit(WorkflowEventClass.STEP_BOUNDARY)
+    # can land after the original append; the deterministic key → IDEMPOTENT_NOOP) + emit the
+    # STEP_BOUNDARY. Map a ledger/emitter failure to a FAILED RunResult here, exactly like the
+    # fresh-dispatch path's `try`/`except` (out-of-family Codex [P2]): the replay runs
+    # POST-barrier, OUTSIDE the inline per-step try/except, so an unwrapped raise would ESCAPE
+    # `execute_workflow` instead of returning the expected failed workflow result.
+    try:
+        _append_synthesis_ledger_entry(
+            ctx=ctx,
+            workflow_id=manifest_entry.workflow_id,
+            synthesis_index=synthesis_index,
+            synthesis_idempotency_key=synthesis_idempotency_key,
+        )
+        ctx.lifecycle_emitter.emit(WorkflowEventClass.STEP_BOUNDARY)
+    except Exception as exc:
+        return RunResult(
+            workflow_id=manifest_entry.workflow_id,
+            run_id=run_id,
+            status=RunStatus.FAILED,
+            terminal_step_index=synthesis_index,
+            partial_state=None,
+            final_state=None,
+            fail_class=_step_fail_class("post-join-synthesis-replay-failure", exc),
+        )
     return dict(captured_output)
 
 
