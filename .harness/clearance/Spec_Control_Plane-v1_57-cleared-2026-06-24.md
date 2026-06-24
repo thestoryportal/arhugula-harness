@@ -20,15 +20,16 @@ superseded_by: <none>
 
 v1.57 is an **impl-to-cleared-spec** delta over v1.56 — the build of `B-FANOUT-CRASH-RESUME-CASCADE-POLICY`, making fan-out crash-resume cascade-policy-AWARE and LIFTING the PR1 (v1.55 §2) blanket fail-closed for PAUSE + CASCADE_CANCEL.
 
-- **§1 — cascade-aware recovery.** Detection = a recovered branch with `output is None` (the captured ran-and-errored disposition, captured STRICTLY BEFORE the cancel `raise` — the total dichotomy advisor required). No errored branch (clean host-crash) → recover + continue (all policies — the lift). Errored branch: PROCEED → PARTIAL (PR1); CASCADE_CANCEL → reproduce FAILED, no re-dispatch (obligation 7 + §25.15.1); PAUSE → fail closed ambiguous.
+- **§1 — cascade-aware recovery (strict-tier-conservative, Codex [P1] + advisor reconcile).** For the strict tiers a crash-resume CONTINUES only when COMPLETE (every branch recovered → nothing to re-dispatch) ∧ no-error; every other state fails closed. Errored branch → CASCADE_CANCEL reproduce FAILED no-re-dispatch (obligation 7 + §25.15.1) / PAUSE fail-closed-ambiguous. INCOMPLETE recovery → fail closed (`...-incomplete-recovery`): an absent branch is indistinguishable from ran-but-uncaptured (the dispatch-before-capture window; branches are effect-BEARING) — re-dispatch is unsafe → broad recovery is the registered `B-FANOUT-CRASH-RESUME-STRICT-TIER-INCOMPLETE` follow-on (needs at-most-once branch dispatch). COMPLETE∧no-error → continue (finalize, re-dispatch nothing). PROCEED unchanged (PR1).
 - **§2 — PAUSE-trigger stays fail-closed.** Naive reconstruct is spec-foreclosed (§25.15.1 "finish in-flight, then pause" can't be honored from a crash-interrupted store) → the registered `B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT` sub-arc.
 
 ## Caveats for Phase 7 consumers
 
-- impl-to-cleared-spec: NO new contract / enum / committed-invariant change; the semantics are dictated by the cleared §25.15.1 + obligation 7. CP-only (no runtime / store change — detection reuses `output is None`).
-- New CP-side free-form fail-classes (`fan-out-crash-resume-cascade-cancel`, `fan-out-crash-resume-pause-trigger-ambiguous`) replace the lifted `fan-out-crash-resume-cascade-policy-unsupported`. No closed-enum / cardinality change.
+- impl-to-cleared-spec: NO new contract / enum / committed-invariant change; the semantics are dictated by the cleared §25.15.1 + obligation 7. CP-only (no runtime / store change — detection reuses `output is None` + the carrier counts).
+- Honest scoping: this slice delivers correct CASCADE_CANCEL→FAILED + complete-recovery completion; the common incomplete-crash recovery for the strict tiers stays fail-closed (the broad lift needs at-most-once branch dispatch — a registered follow-on, NOT named-savior-cited).
+- New CP-side free-form fail-classes (`fan-out-crash-resume-cascade-cancel`, `-pause-trigger-ambiguous`, `-cascade-policy-incomplete-recovery`) scope the former `fan-out-crash-resume-cascade-policy-unsupported` blanket to the ambiguous cases. No closed-enum / cardinality change.
 - CASCADE_CANCEL FAILED uses store-only audit (the disposition keystone), NOT ledger re-materialization — a deliberate choice (a FAILED run attests no aggregate; obl. 3 met by the store).
-- Two registered fan-out crash-resume follow-ons remain (TIMEOUT-REPLAY + PAUSE-RECONSTRUCT) plus B-FANOUT-PAUSE-SYNTHESIS → R-FS-1 stays ACTIVE.
+- Three registered fan-out crash-resume follow-ons remain (TIMEOUT-REPLAY + PAUSE-RECONSTRUCT + STRICT-TIER-INCOMPLETE) plus B-FANOUT-PAUSE-SYNTHESIS → R-FS-1 stays ACTIVE.
 
 ## Notes
 
