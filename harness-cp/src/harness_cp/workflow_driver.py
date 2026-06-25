@@ -738,6 +738,29 @@ def _capture_branch_terminal(
         )
 
 
+def _mark_branch_dispatched(
+    ctx: DriverContext,
+    manifest_entry: WorkflowManifestEntry,
+    *,
+    run_idempotency_key: str,
+    branch_index: int,
+    step_id: str,
+) -> None:
+    """B-FANOUT-CRASH-RESUME-STRICT-TIER-INCOMPLETE (R-FS-1) — write the reserve-before-
+    DISPATCH marker for a fan-out branch (gated on `_fanout_replay_store`).
+
+    THE NAMED INVARIANT: the caller invokes this — durably (the store fsyncs) — strictly
+    BEFORE the branch body dispatches, so within an instrumented run marker-ABSENT ⟺ the
+    branch's effect did NOT fire. The fan-out analogue of the §14.22 effect-fence reserve at
+    branch granularity. Consumed ONLY by the strict-tier (PAUSE / CASCADE_CANCEL) crash-resume
+    classifier; written only on those tiers (PROCEED's recovery is unchanged — it accepts the
+    dispatch-before-capture window per the PR1/PR2 precedent). No-op unless replay-capable ∧
+    store-bound."""
+    _store = _fanout_replay_store(ctx, manifest_entry)
+    if _store is not None:
+        _store.record_branch_dispatched(run_idempotency_key, branch_index, str(step_id))
+
+
 def _rematerialize_recovered_branch_writer(
     ctx: DriverContext,
     *,
@@ -1974,25 +1997,42 @@ def _execute_workflow_body(
                     _cardinality_policy is not CascadePolicy.PROCEED
                     and _crash_replay_store.read_fanout_cardinality(run_idempotency_key) is not None
                 ):
-                    return (
-                        RunResult(
-                            workflow_id=manifest_entry.workflow_id,
-                            run_id=run_id,
-                            status=RunStatus.FAILED,
-                            terminal_step_index=None,
-                            partial_state=None,
-                            final_state=None,
-                            fail_class=(
-                                "fan-out-crash-resume-cascade-policy-incomplete-recovery: a "
-                                f"{_cardinality_policy.value} fan-out STARTED (cardinality marker "
-                                "present) but NOTHING is readably recoverable — a branch may have "
-                                "dispatched its effect before its capture; re-dispatching it as a "
-                                "fresh run would risk double-firing an effect these tiers must "
-                                "not. Fail closed (the cardinality-only incomplete-recovery case)"
-                            ),
-                        ),
-                        0,
+                    # B-FANOUT-CRASH-RESUME-STRICT-TIER-INCOMPLETE (R-FS-1) — lift the
+                    # cardinality-only fail-closed when reserve-before-dispatch PROVES no branch
+                    # began. An INSTRUMENTED run (the dispatch stamp) with ZERO dispatch markers
+                    # means the fan-out started (cardinality present) but no branch dispatched its
+                    # effect → a fresh re-dispatch is at-most-once-safe (fall through; the run
+                    # proceeds fresh, re-dispatching every branch first-and-only). ANY dispatch
+                    # marker → at least one branch is MAYBE-RAN (dispatched, no capture) → fail
+                    # closed. An UN-stamped (pre-arc) journal → fail closed: it carries no markers
+                    # for ANY branch, including a maybe-ran one, so "no marker" can't be trusted
+                    # as "not-run" (`[[durable-recovery-presence-validity-scope]]`).
+                    _instrumented = _crash_replay_store.dispatch_instrumented(run_idempotency_key)
+                    _dispatched = _crash_replay_store.present_dispatched_indexes(
+                        run_idempotency_key
                     )
+                    if not (_instrumented and not _dispatched):
+                        return (
+                            RunResult(
+                                workflow_id=manifest_entry.workflow_id,
+                                run_id=run_id,
+                                status=RunStatus.FAILED,
+                                terminal_step_index=None,
+                                partial_state=None,
+                                final_state=None,
+                                fail_class=(
+                                    "fan-out-crash-resume-cascade-policy-incomplete-recovery: a "
+                                    f"{_cardinality_policy.value} fan-out STARTED (cardinality "
+                                    "marker present) but NOTHING is readably recoverable and the "
+                                    "reserve-before-dispatch markers do not prove every branch "
+                                    "not-yet-run (a maybe-ran branch, or a pre-arc un-stamped "
+                                    "journal) — re-dispatching as a fresh run would risk double-"
+                                    "firing an effect these tiers must not. Fail closed (the "
+                                    "cardinality-only incomplete-recovery case)"
+                                ),
+                            ),
+                            0,
+                        )
             # B-FANOUT-CRASH-RESUME-CASCADE-POLICY (R-FS-1) — cascade-policy-AWARE crash-resume,
             # the STRICT-TIER-conservative version (out-of-family Codex [P1] + advisor reconcile).
             # The cascade_policy (§25.15.1) governs the run's ON-A-BRANCH-FAILURE semantics. For
@@ -2084,32 +2124,55 @@ def _execute_workflow_body(
                             0,
                         )
                     if not _crash_complete:
-                        # An INCOMPLETE recovery on a strict tier → an absent branch could be
-                        # ran-but-uncaptured (the dispatch-before-capture window) → re-dispatching
-                        # it would risk double-firing an effect-BEARING branch (out-of-family
-                        # Codex [P1]). Fail CLOSED (PR1's conservative posture for these tiers).
-                        return (
-                            RunResult(
-                                workflow_id=manifest_entry.workflow_id,
-                                run_id=run_id,
-                                status=RunStatus.FAILED,
-                                terminal_step_index=None,
-                                partial_state=None,
-                                final_state=None,
-                                fail_class=(
-                                    "fan-out-crash-resume-cascade-policy-incomplete-recovery: a "
-                                    f"{_crash_cascade_policy.value} crash-resume recovered an "
-                                    "INCOMPLETE branch set — an absent branch is indistinguishable "
-                                    "from one that ran its effect but crashed before its capture, "
-                                    "so re-dispatching it would risk double-firing an effect these "
-                                    "tiers must not. Fail closed (the COMPLETE-recovery case "
-                                    "continues; broad incomplete recovery needs at-most-once "
-                                    "dispatch — registered B-FANOUT-CRASH-RESUME-STRICT-TIER-"
-                                    "INCOMPLETE follow-on)"
-                                ),
-                            ),
-                            0,
+                        # B-FANOUT-CRASH-RESUME-STRICT-TIER-INCOMPLETE (R-FS-1) — lift the
+                        # incomplete-recovery fail-closed when reserve-before-dispatch PROVES every
+                        # absent branch not-yet-run. A branch is MAYBE-RAN iff it has a dispatch
+                        # marker but NO terminal-capture record (the narrow fire→capture window):
+                        # `present_dispatched_indexes − recovered`. This is index-scheme-agnostic
+                        # (no `range(expected)` reconstruction). When the run is INSTRUMENTED (the
+                        # stamp) AND no absent branch is maybe-ran, every absent ordinal is PROVABLY
+                        # not-yet-run → fall through: the strategy recovers the captured branches +
+                        # re-dispatches ONLY the provably-not-run ones (each first-and-only — the
+                        # marker is the at-most-once proof). Otherwise fail closed: a maybe-ran
+                        # branch (its effect MAY have fired — re-dispatch risks a double-fire; its
+                        # resolution is a follow-on), OR a pre-arc un-stamped journal (no markers to
+                        # trust — `[[durable-recovery-presence-validity-scope]]`).
+                        _instrumented = _crash_replay_store.dispatch_instrumented(
+                            run_idempotency_key
                         )
+                        _recovered_indexes = {
+                            b.branch_index for b in _crash_fan_out_resume.branches
+                        }
+                        _maybe_ran = (
+                            _crash_replay_store.present_dispatched_indexes(run_idempotency_key)
+                            - _recovered_indexes
+                        )
+                        if not (_instrumented and not _maybe_ran):
+                            return (
+                                RunResult(
+                                    workflow_id=manifest_entry.workflow_id,
+                                    run_id=run_id,
+                                    status=RunStatus.FAILED,
+                                    terminal_step_index=None,
+                                    partial_state=None,
+                                    final_state=None,
+                                    fail_class=(
+                                        "fan-out-crash-resume-cascade-policy-incomplete-"
+                                        "recovery: a "
+                                        f"{_crash_cascade_policy.value} crash-resume recovered an "
+                                        "INCOMPLETE branch set and the reserve-before-dispatch "
+                                        "markers do not prove every absent branch not-yet-run (a "
+                                        "maybe-ran branch — dispatched but uncaptured — or a "
+                                        "pre-arc un-stamped journal), so re-dispatching would risk "
+                                        "double-firing an effect these tiers must not. Fail closed "
+                                        "(the provably-not-run incomplete case is now recovered; "
+                                        "the maybe-ran resolution is a follow-on)"
+                                    ),
+                                ),
+                                0,
+                            )
+                        # INSTRUMENTED ∧ no maybe-ran → every absent branch is provably-not-run →
+                        # fall through to recovery (re-dispatch ONLY those, first-and-only).
                     # COMPLETE ∧ no-error on a strict tier → fall through; the strategy finalizes
                     # from the recovered set (re-dispatches NOTHING → trivially safe). PROCEED
                     # (the `is not PROCEED` guard skips this whole block) → PR1 recovery unchanged.
@@ -5160,6 +5223,12 @@ def _execute_parallelization(
         _cardinality_store = _fanout_replay_store(ctx, manifest_entry)
         if _cardinality_store is not None:
             _cardinality_store.record_fanout_cardinality(run_idempotency_key, len(steps))
+            # B-FANOUT-CRASH-RESUME-STRICT-TIER-INCOMPLETE (R-FS-1) — stamp the run
+            # dispatch-instrumented (the cross-version guard) on the strict tiers, at fan-out
+            # start before any branch dispatches. PROCEED is UNCHANGED — it never consumes the
+            # stamp / markers (its recovery accepts the dispatch-before-capture window).
+            if cascade_policy is not CascadePolicy.PROCEED:
+                _cardinality_store.record_dispatch_instrumented(run_idempotency_key)
 
     # B-FANOUT-OUTPUT-REPLAY — on a CRASH-resume (NOT a pause-resume), re-materialize the
     # recovered branches' LOST ledger entries (out-of-family Codex [P1]): a crash before the
@@ -5441,6 +5510,23 @@ def _execute_parallelization(
         binding: StepEffectiveBinding,
     ) -> None:
         dispatcher = branch_dispatchers[branch_index]
+        # B-FANOUT-CRASH-RESUME-STRICT-TIER-INCOMPLETE (R-FS-1) — reserve-before-DISPATCH:
+        # durably mark this branch DISPATCHED, fsynced STRICTLY BEFORE the effect can fire
+        # (THE named invariant: marker-absent ⟺ effect-not-fired within an instrumented run),
+        # so a strict-tier crash-resume re-dispatches only PROVABLY-not-run branches. SYNCHRONOUS
+        # (not off-loop) so the marker write + the `ensure_future` dispatch are ATOMIC with no
+        # yield between them: a cascade-cancel can NOT land after the marker but before the
+        # dispatch (which would leave a false-positive marker — and would shift the cancel from
+        # the in-flight `completed` boundary to a not-yet-dispatched `cancelled` one). Matches the
+        # existing synchronous `_capture_branch_terminal` store I/O. `_cancel_branch` is the
+        # strict-tier (PAUSE / CASCADE_CANCEL) path only — PROCEED's `_proceed_branch` writes none.
+        _mark_branch_dispatched(
+            ctx,
+            manifest_entry,
+            run_idempotency_key=run_idempotency_key,
+            branch_index=branch_index,
+            step_id=step.step_id,
+        )
         # Schedule the (sync) dispatch off-loop; `dispatch_branch_step_shielded`
         # keeps it alive against THIS branch's cancellation so an in-flight effect
         # runs to its own completion (obl. 1), and registers it for the barrier's
@@ -7000,6 +7086,11 @@ def _execute_orchestrator_workers(
         _cardinality_store = _fanout_replay_store(ctx, manifest_entry)
         if _cardinality_store is not None:
             _cardinality_store.record_fanout_cardinality(run_idempotency_key, len(steps))
+            # B-FANOUT-CRASH-RESUME-STRICT-TIER-INCOMPLETE (R-FS-1) — stamp the run
+            # dispatch-instrumented (the cross-version guard) on the strict tiers, before any
+            # worker dispatches. PROCEED is UNCHANGED (it never consumes the stamp / markers).
+            if cascade_policy is not CascadePolicy.PROCEED:
+                _cardinality_store.record_dispatch_instrumented(run_idempotency_key)
 
     # B-FANOUT-OUTPUT-REPLAY — on a CRASH-resume (NOT pause), re-materialize the recovered
     # WORKER branches' LOST ledger entries (out-of-family Codex [P1]): a crash before the
@@ -7352,6 +7443,20 @@ def _execute_orchestrator_workers(
         binding: StepEffectiveBinding,
     ) -> None:
         dispatcher = step_dispatchers.lookup(step.step_kind)
+        # B-FANOUT-CRASH-RESUME-STRICT-TIER-INCOMPLETE (R-FS-1) — reserve-before-DISPATCH:
+        # durably mark this WORKER branch DISPATCHED, fsynced STRICTLY BEFORE the effect can
+        # fire (the worker analogue of the parallelization marker; same store, same gate). The
+        # worker `branch_index` is the 0-based `worker_steps` ordinal `record_branch` also uses,
+        # so the marker/capture sets are partition-consistent. SYNCHRONOUS (atomic with the
+        # `ensure_future` dispatch — see `_cancel_branch`). `_cancel_worker` is the strict-tier
+        # path only — PROCEED's `_proceed_worker` writes no marker.
+        _mark_branch_dispatched(
+            ctx,
+            manifest_entry,
+            run_idempotency_key=run_idempotency_key,
+            branch_index=branch_index,
+            step_id=step.step_id,
+        )
         # Schedule the (sync) dispatch off-loop; `dispatch_branch_step_shielded`
         # keeps it alive against THIS branch's cancellation so an in-flight effect
         # runs to its own completion (obl. 1), and registers it for the barrier's

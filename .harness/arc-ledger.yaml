@@ -46,28 +46,32 @@
 snapshot:
   frozen_total: 11
   frozen_done: 11
-  standalone_closed: 40
+  standalone_closed: 41
   standalone_gated: 0
   standalone_resolved: 4
-  standalone_registered: 3
+  standalone_registered: 4
   source: ".harness/beyond-mvp-capability-boundary-ledger.md"
-  # FRONTIER NOTE (2026-06-24, B-FANOUT-RESUME-CARRIER-TOPOLOGY-MISMATCH closed). The frozen
+  # FRONTIER NOTE (2026-06-24, B-FANOUT-CRASH-RESUME-STRICT-TIER-INCOMPLETE closed). The frozen
   # 11-arc order is COMPLETE; the standalone B-* register is the live frontier. The fan-out
   # crash-resume capability family is being built out under FULL-SPEC. CLOSED so far:
   # B-FANOUT-OUTPUT-REPLAY (PR1 #723 + PR2 #724) + B-FANOUT-CRASH-RESUME-CASCADE-POLICY (#726)
-  # + B-FANOUT-PAUSE-SYNTHESIS (#728) + B-FANOUT-RESUME-CARRIER-TOPOLOGY-MISMATCH (general
-  # fail-closed for ANY topology resume carrier resumed under a strategy that does not read it
-  # — generalizes the synthesis-only #728 guard to all five resume carriers; impl-to-cleared-
-  # spec on the §26.2 never-co-set invariant + §25.15.x read-own-carrier-only recovery; CP-only).
-  # The 3 still-registered follow-ons keeping R-FS-1 ACTIVE:
+  # + B-FANOUT-PAUSE-SYNTHESIS (#728) + B-FANOUT-RESUME-CARRIER-TOPOLOGY-MISMATCH (#730)
+  # + B-FANOUT-CRASH-RESUME-STRICT-TIER-INCOMPLETE (reserve-before-DISPATCH at-most-once markers
+  # let a strict-tier crash-resume re-dispatch only the PROVABLY-not-run branches instead of
+  # failing the incomplete case closed; the fan-out analogue of the §14.22 effect-fence reserve;
+  # bundled-absorption CP v1.59→v1.60 + runtime v1.77→v1.78).
+  # The 4 still-registered follow-ons keeping R-FS-1 ACTIVE:
+  #   • B-FANOUT-CRASH-RESUME-MAYBE-RAN-RESOLUTION (the dispatched-but-uncaptured fire→capture
+  #       window — a marker with no terminal capture still fails closed; resolving it [suppress-
+  #       and-continue or a §26.2 pause, the effect-fence HITL-route analogue] is a design problem)
+  #   • B-FANOUT-CRASH-RESUME-ORCHESTRATOR-DISPATCH (the ORCHESTRATOR_WORKERS steps[0]'s own
+  #       pre-existing dispatch-before-capture double-fire window; the sequential-dispatch analogue
+  #       of the per-branch reserve — this slice covers WORKER/PEER branches only, advisor-surfaced)
   #   • B-FANOUT-CRASH-RESUME-TIMEOUT-REPLAY    (the timed_out ambiguous disposition)
   #   • B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT (reconstruct a lost PAUSE snapshot honoring
   #       §25.15.1 finish-in-flight; the PAUSE-trigger leg cascade-policy fails closed)
-  #   • B-FANOUT-CRASH-RESUME-STRICT-TIER-INCOMPLETE (broad incomplete-crash recovery
-  #       for the strict tiers; cascade-policy fails the incomplete case closed because an
-  #       absent branch is ran-but-uncaptured-ambiguous; needs at-most-once branch dispatch)
-  # closure_gate.py G1.1 = standalone_registered + standalone_gated == 0 is now 3 + 0 = 3
-  # → R-FS-1 stays ACTIVE. On all three follow-ons reaching closed/resolved → G1.1 passes →
+  # closure_gate.py G1.1 = standalone_registered + standalone_gated == 0 is now 4 + 0 = 4
+  # → R-FS-1 stays ACTIVE. On all four follow-ons reaching closed/resolved → G1.1 passes →
   # R-FS-1 resolves → R-CL-Q1 quality track admits. (Run `just closure-gate` to confirm G1.1.)
 
 arcs:
@@ -536,13 +540,43 @@ arcs:
   - id: B-FANOUT-CRASH-RESUME-STRICT-TIER-INCOMPLETE
     title: "Broad incomplete-crash recovery for the strict tiers (PAUSE + CASCADE_CANCEL)"
     kind: standalone
-    status: registered
+    status: closed
     decompose_at_open: true
     owner_axis: "CP + runtime"
     operator_gated: false  # needs at-most-once branch dispatch (reserve-before-dispatch) — a substrate capability, not a committed-invariant sacrifice → no operator gate.
     parent_arc: B-FANOUT-CRASH-RESUME-CASCADE-POLICY
-    anticipated_scope: "Broad incomplete-crash recovery for the strict tiers. B-FANOUT-CRASH-RESUME-CASCADE-POLICY continues a strict-tier (PAUSE / CASCADE_CANCEL) crash-resume ONLY when the recovery is COMPLETE (every branch recovered → nothing to re-dispatch); an INCOMPLETE recovery fails closed (fan-out-crash-resume-cascade-policy-incomplete-recovery) because an absent branch is INDISTINGUISHABLE from one that RAN its effect but crashed before its capture (the dispatch-before-capture window) — re-dispatching an effect-BEARING branch is unsafe for these tiers (Codex [P1]). Scope: at-most-once fan-out branch dispatch (reserve-before-dispatch — a durable 'dispatched' marker so an absent branch is PROVABLY not-yet-run, not ran-but-uncaptured), which would let the strict tiers recover an incomplete crash (re-dispatch only the provably-not-run branches) instead of failing closed. The analogue of the linear effect-fence's at-most-once for fan-out branches."
-    why: "Surfaced at B-FANOUT-CRASH-RESUME-CASCADE-POLICY (out-of-family Codex [P1] + advisor reconcile): lifting the strict-tier fail-closed for the COMMON incomplete-crash case requires distinguishing in-flight from ran-but-uncaptured, which needs reserve-before-dispatch. The cascade-policy arc lifts only the unambiguous COMPLETE case; the broad lift is this follow-on. FULL-SPEC (`[[feedback-full-spec-beyond-mvp-nothing-deferred]]`) — not naming a savior arc (advisor: don't forward-cite the effect-fence without verifying it covers fan-out branch dispatch)."
+    pr: "#<pending> (feat/r-fs-1-fanout-strict-tier-incomplete — flips registered → closed)"
+    spec_delta: "bundled-absorption CP v1.59 → v1.60 (§1 reserve-before-dispatch strict-tier incomplete-crash recovery + §2 cross-version instrumented stamp + §3 v1.57 carve-out partial-close + §4 registers B-FANOUT-CRASH-RESUME-MAYBE-RAN-RESOLUTION) + runtime v1.77 → v1.78 (the C-RT-32 EngineOutputStore dispatched-marker + instrumented-stamp sidecar API) + 2 clearance markers. NO contract / enum / committed-invariant change; at-most-once PRESERVED + strengthened (re-dispatch only on proof-of-not-fired)."
+    gives: "A strict-tier (PAUSE / CASCADE_CANCEL) fan-out crash-resume now RECOVERS the COMMON incomplete-crash case — re-dispatching ONLY the PROVABLY-not-run branches — instead of failing the whole incomplete recovery closed (the v1.57 cascade-policy arc lifted only the COMPLETE-recovery case). The mechanism is a durable per-(run, branch) reserve-before-DISPATCH marker (C-RT-32 `record_branch_dispatched`), written synchronously + fsynced STRICTLY BEFORE the branch dispatches (atomic with dispatch scheduling — no false-positive marker), so marker-absent ⟺ effect-not-fired. Classification (index-scheme-agnostic, `present_dispatched_indexes − recovered`): empty + the per-run dispatch-instrumented stamp ⟹ every absent branch provably-not-run ⟹ recover captured + re-dispatch only the not-run ones; non-empty ⟹ a maybe-ran branch (the fire→capture window) ⟹ fail closed. The dispatch-instrumented stamp is the CROSS-VERSION guard (advisor BLOCKING catch): a pre-arc un-stamped journal has no markers for ANY branch including a maybe-ran one, so it retains the conservative fail-closed. PROCEED unchanged (writes/consumes no marker). The fan-out analogue of the §14.22 C-RT-31 effect-fence reserve. Decorrelated: advisor (the cross-version double-fire BLOCKING catch → the instrumented stamp; the synchronous-marker atomicity catch when the test surfaced a cascade-cancel timing regression; the index-scheme-agnostic dispatched−recovered classification) + the §25.15 at-most-once probe (additive substrate, no council) + out-of-family Codex (diff)."
+    as_built:
+      - "harness-runtime/src/harness_runtime/lifecycle/engine_output_store.py (C-RT-32 EngineOutputStore: record_branch_dispatched / present_dispatched_indexes per-branch markers + record_dispatch_instrumented / dispatch_instrumented per-run stamp + the branch-{i}.dispatched / dispatch-instrumented.marker path helpers; same crash-atomic _append_path + present-only reading)"
+      - "harness-cp/src/harness_cp/workflow_driver.py (_mark_branch_dispatched reserve-before-dispatch helper; the SYNCHRONOUS marker write at the strict-tier _cancel_branch + _cancel_worker dispatch sites; the dispatch-instrumented stamp at the parallelization + orchestrator cardinality blocks gated on strict tier; the two consume-site classifications — cardinality-only + incomplete-recovery — lifting the v1.57 fail-closed to the provably-not-run case)"
+      - "design-substrate/Spec_Control_Plane_v1_60.md + design-substrate/Spec_Harness_Runtime_v1.md v1.78 + 2 clearance markers"
+      - "tests: harness-runtime test_engine_output_store.py (marker/stamp real-store round-trip across restart + idempotent + no-collision-with-capture); harness-cp test_workflow_driver_fanout_output_replay_full_chain.py (provably-not-run incomplete recovers + re-dispatches only the not-run branch under CASCADE_CANCEL + PAUSE + ORCHESTRATOR_WORKERS; cardinality-only no-dispatch recovers fresh; the cross-version un-stamped journal fails closed; mixed not-run+maybe-ran fails closed; the 3 refreshed maybe-ran fail-closed tests; the no-double-fire witness resume.dispatched == [not-run branch])"
+    ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
+
+  - id: B-FANOUT-CRASH-RESUME-MAYBE-RAN-RESOLUTION
+    title: "Resolve the dispatched-but-uncaptured (maybe-ran) fan-out branch fire→capture window"
+    kind: standalone
+    status: registered
+    decompose_at_open: true
+    owner_axis: "CP + runtime"
+    operator_gated: false  # additive (resolve the narrow fire→capture ambiguity), no committed-invariant sacrifice → no operator gate; the resolution mechanism is the design question (the effect-fence HITL-route analogue).
+    parent_arc: B-FANOUT-CRASH-RESUME-STRICT-TIER-INCOMPLETE
+    anticipated_scope: "Resolve a MAYBE-RAN fan-out branch on a strict-tier crash-resume. B-FANOUT-CRASH-RESUME-STRICT-TIER-INCOMPLETE re-dispatches PROVABLY-not-run branches but still fails closed when an absent branch has a dispatch marker with NO terminal capture (the fire→capture window — its effect MAY have fired). The narrow irreducible at-most-once ambiguity, the fan-out analogue of the §14.22 effect-fence's lost-reserve case. Scope: a post-dispatch capture that distinguishes completed-and-captured (suppress-and-continue with the captured output, never re-fire) from genuinely-ambiguous (route to a §26.2 WorkflowPauseReason pause for operator resolution, else FAILED) — mirroring the B-EFFECT-FENCE-HITL-ROUTE + B-EFFECT-FENCE-PAUSE-RESOLUTION family for fan-out branches."
+    why: "Surfaced at B-FANOUT-CRASH-RESUME-STRICT-TIER-INCOMPLETE: the reserve-before-dispatch marker separates provably-not-run from maybe-ran but does NOT eliminate the fire→capture ambiguity (advisor: the marker does not eliminate ambiguity, it separates the safe case). The provably-not-run case is built; the maybe-ran resolution is a genuine design problem, not a deferral. FULL-SPEC (`[[feedback-full-spec-beyond-mvp-nothing-deferred]]`)."
+    ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
+
+  - id: B-FANOUT-CRASH-RESUME-ORCHESTRATOR-DISPATCH
+    title: "At-most-once for the ORCHESTRATOR_WORKERS steps[0] orchestrator's own dispatch"
+    kind: standalone
+    status: registered
+    decompose_at_open: true
+    owner_axis: "CP + runtime"
+    operator_gated: false  # additive at-most-once for the sequential orchestrator dispatch — no committed-invariant sacrifice → no operator gate.
+    parent_arc: B-FANOUT-CRASH-RESUME-STRICT-TIER-INCOMPLETE
+    anticipated_scope: "Close the ORCHESTRATOR_WORKERS `steps[0]` orchestrator's own dispatch-before-capture double-fire window. The orchestrator runs FIRST, sequentially, and is recovered via `record_orchestrator` (reserve-before-COMMIT); but a crash AFTER the orchestrator fires its effect and BEFORE `record_orchestrator` + the cardinality marker leaves nothing recoverable + no cardinality → a fresh re-run re-dispatches `steps[0]` → a potential double-fire on the compliance tier. PRE-EXISTING (accepted since v1.55/v1.57 — the orchestrator is a sequential dispatch, not a fan-out branch, so B-FANOUT-CRASH-RESUME-STRICT-TIER-INCOMPLETE's per-(run, branch) markers do not cover it). Scope: extend reserve-before-dispatch (or an equivalent at-most-once marker) to the orchestrator's sequential `steps[0]` dispatch, so a crash in its fire→capture window is provably-not-run-or-maybe-ran rather than silently re-dispatched fresh."
+    why: "Surfaced at B-FANOUT-CRASH-RESUME-STRICT-TIER-INCOMPLETE (advisor non-blocking catch): the arc builds 'at-most-once for fan-out' WORKER/PEER branches, so the orchestrator's sibling at-most-once gap must be NAMED rather than silently left (the FULL-SPEC silent-absorption discipline). Pre-existing, distinct mechanism (sequential, not fan-out). FULL-SPEC (`[[feedback-full-spec-beyond-mvp-nothing-deferred]]`)."
     ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
 
   - id: B-FANOUT-CRASH-RESUME-TIMEOUT-REPLAY
