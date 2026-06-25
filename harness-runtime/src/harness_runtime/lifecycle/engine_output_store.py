@@ -291,6 +291,19 @@ class EngineOutputStore:
         line = json.dumps({"branch_count": int(branch_count)}, sort_keys=True)
         self._append_path(self._cardinality_file(run_key), line)
 
+    def fanout_cardinality_present(self, run_key: str) -> bool:
+        """Whether the fan-out cardinality MARKER file exists (presence-only, like
+        ``orchestrator_present`` / ``present_dispatched_indexes``).
+
+        Distinct from ``read_fanout_cardinality`` (which returns ``None`` for BOTH an absent
+        marker AND a present-but-torn/unreadable one): the crash-resume classifier needs to tell
+        an ABSENT cardinality (the genuine pre-cardinality window) from a PRESENT-but-unreadable
+        one (corruption — the run advanced past the cardinality write, the marker is fsynced after
+        ``record_orchestrator``). A torn marker still proves the run advanced past capture, so its
+        presence — not its readability — is the corruption signal (out-of-family Codex [P2];
+        ``[[durable-recovery-presence-validity-scope]]``: presence ≠ validity)."""
+        return self._cardinality_file(run_key).exists()
+
     def read_fanout_cardinality(self, run_key: str) -> int | None:
         """Return the recorded capture-time fan-out cardinality, or None if unrecorded."""
         path = self._cardinality_file(run_key)
@@ -456,7 +469,7 @@ class EngineOutputStore:
     # dispatch), so the marker→dispatch sequence has no yield point — no false-positive
     # marker is possible without the worker path's atomicity dance.
 
-    def record_orchestrator_dispatched(self, run_key: str, step_id: str) -> None:
+    def record_orchestrator_dispatched(self, run_key: str, step_id: str, step_kind: str) -> None:
         """Mark the ORCHESTRATOR_WORKERS ``steps[0]`` orchestrator as DISPATCHED, durably.
 
         The reserve-before-DISPATCH marker for the orchestrator: written — fsynced — strictly
@@ -465,8 +478,13 @@ class EngineOutputStore:
         file (``{digest}.branches/orchestrator.dispatched``) — no collision with the
         ``orchestrator.jsonl`` terminal-capture file (a ``.dispatched`` vs ``.jsonl`` suffix).
         Idempotent (last-wins; presence is the signal). ``step_id`` is recorded for parity with
-        ``record_orchestrator`` (a future material-diff), never read by the classifier."""
-        record = {"step_id": str(step_id)}
+        ``record_orchestrator`` (a future material-diff), never read by the classifier.
+        ``step_kind`` is the orchestrator's DISPATCH-TIME step kind — read by
+        ``orchestrator_dispatched_kind`` so the maybe-ran re-fire-safety classifier keys on the
+        ORIGINAL kind, never the (possibly changed) resumed manifest's kind (the at-most-once
+        changed-manifest guard, B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-RESOLUTION — the
+        single-orchestrator analogue of the per-branch ``record_branch_dispatched`` kind)."""
+        record = {"step_id": str(step_id), "step_kind": str(step_kind)}
         line = json.dumps(record, sort_keys=True)
         self._append_path(self._orchestrator_dispatched_file(run_key), line)
 
@@ -479,6 +497,33 @@ class EngineOutputStore:
         (a PARALLELIZATION peer fan-out never writes it; an orchestrator marker on a
         PARALLELIZATION resume is a changed-topology mismatch → fail closed)."""
         return self._orchestrator_dispatched_file(run_key).exists()
+
+    def orchestrator_dispatched_kind(self, run_key: str) -> str | None:
+        """Return the orchestrator's recorded DISPATCH-TIME ``step_kind`` (the single-orchestrator
+        analogue of the per-branch ``dispatched_branch_kinds``).
+
+        The maybe-ran re-fire-safety classifier keys on this — the ORIGINAL (dispatch-time) kind
+        recorded in the orchestrator marker, NOT the resumed manifest's current kind. This is the
+        at-most-once changed-manifest guard: an orchestrator that dispatched as an effect-bearing
+        kind and crashed before terminal capture, then is re-supplied at ``steps[0]`` as a
+        re-fire-safe kind, must STILL be classified by its original effect-bearing kind (else the
+        relaxation would re-dispatch + double-fire the original effect). A marker missing / with an
+        unreadable / non-str ``step_kind`` (a pre-v1.81 v1.79-era orchestrator marker, which
+        recorded only ``step_id``, or a torn write) maps to ``None`` → the classifier treats it as
+        NOT re-fire-safe (fail closed — cannot prove the original kind; the v1.79 behavior
+        preserved). Presence remains the v1.79 fail-closed signal (``orchestrator_dispatched``);
+        the kind is best-effort."""
+        path = self._orchestrator_dispatched_file(run_key)
+        if not path.exists():
+            return None
+        try:
+            record = json.loads(path.read_text(encoding="utf-8").splitlines()[-1])
+            raw = record.get("step_kind")
+            return raw if isinstance(raw, str) else None
+        except (OSError, UnicodeDecodeError, ValueError, IndexError, KeyError, AttributeError):
+            # torn / pre-v1.81 / invalid-encoding marker → unknown → fail-closed at the
+            # classifier (mirrors dispatched_branch_kinds' torn-marker safety boundary).
+            return None
 
     # -- B-FANOUT-OUTPUT-REPLAY PR2: terminal POST_JOIN_SYNTHESIS capture -----
     #

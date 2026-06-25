@@ -61,15 +61,25 @@ class _FakeStore:
         orchestrator_corrupt: bool = False,
         dispositions: dict[int, str] | None = None,
         cardinality: int | None = None,
+        cardinality_present: bool | None = None,
         dispatch_instrumented: bool = False,
         orchestrator_dispatched: bool = False,
+        orchestrator_dispatched_kind: str | None = None,
         dispatched_kinds: dict[int, str | None] | None = None,
+        synthesis_present: bool = False,
     ) -> None:
         self._branches = dict(branches)
         self._orchestrator = orchestrator
         self._corrupt = set(corrupt_branches)
         self._orchestrator_corrupt = orchestrator_corrupt
         self._cardinality = cardinality
+        # Cardinality MARKER presence (presence-only, file-exists) is distinct from the readable
+        # value: a present-but-TORN marker exists (present=True) but `read_fanout_cardinality`
+        # returns None. Default: present iff a readable value was supplied. Set explicitly to
+        # model a torn marker (cardinality_present=True, cardinality=None).
+        self._cardinality_present = (
+            cardinality_present if cardinality_present is not None else cardinality is not None
+        )
         # Per-branch terminal disposition (default "completed"); set "timed_out" or a
         # "completed" with a None output to exercise the disposition-class recovery.
         self._dispositions = dict(dispositions) if dispositions else {}
@@ -77,10 +87,18 @@ class _FakeStore:
         # stamp + the orchestrator reserve-before-dispatch marker (presence-only).
         self._dispatch_instrumented = dispatch_instrumented
         self._orchestrator_dispatched = orchestrator_dispatched
+        # B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-RESOLUTION — the orchestrator's
+        # DISPATCH-TIME kind recorded in its marker (the at-most-once changed-manifest guard;
+        # None = un-recorded / pre-v1.64 marker → NOT re-fire-safe → fail-closed).
+        self._orchestrator_dispatched_kind = orchestrator_dispatched_kind
         # B-FANOUT-CRASH-RESUME-MAYBE-RAN-RESOLUTION / TIMEOUT-REPLAY — the dispatch-time
         # kind recorded in each branch's `.dispatched` marker (the at-most-once changed-
         # manifest guard; None = un-recorded / torn marker → fail-closed at the classifier).
         self._dispatched_kinds = dict(dispatched_kinds) if dispatched_kinds else {}
+        # B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-RESOLUTION (Codex R4) — a POST_JOIN_SYNTHESIS
+        # capture (written last by the fan-out writer); its presence proves the run advanced past
+        # the orchestrator phase → a downstream-artifact corruption signal.
+        self._synthesis_present = synthesis_present
 
     def read_branch_records(
         self, run_key: str
@@ -102,11 +120,23 @@ class _FakeStore:
     def read_fanout_cardinality(self, run_key: str) -> int | None:
         return self._cardinality
 
+    def fanout_cardinality_present(self, run_key: str) -> bool:
+        return self._cardinality_present
+
     def dispatch_instrumented(self, run_key: str) -> bool:
         return self._dispatch_instrumented
 
     def orchestrator_dispatched(self, run_key: str) -> bool:
         return self._orchestrator_dispatched
+
+    def orchestrator_dispatched_kind(self, run_key: str) -> str | None:
+        return self._orchestrator_dispatched_kind
+
+    def present_dispatched_indexes(self, run_key: str) -> set[int]:
+        return set(self._dispatched_kinds)
+
+    def synthesis_present(self, run_key: str) -> bool:
+        return self._synthesis_present
 
     def dispatched_branch_kinds(self, run_key: str) -> dict[int, str | None]:
         return dict(self._dispatched_kinds)
@@ -275,6 +305,181 @@ def test_parallelization_orchestrator_marker_topology_mismatch_raises() -> None:
     )
     with pytest.raises(_FanOutStoreCorruptError, match="topology mismatch"):
         _determine_fanout_resume(store, _RUN_KEY, _steps(3), TopologyPattern.PARALLELIZATION)
+
+
+# --- B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-RESOLUTION (R-FS-1, CP spec v1.64 §1) — the
+#     re-fire-safe relaxation: a maybe-ran orchestrator of a re-fire-safe dispatch-time kind
+#     re-runs fresh; an effect-bearing / un-kinded one stays fail-closed ----------------------
+@pytest.mark.parametrize("kind", [StepKind.INFERENCE_STEP, StepKind.DECLARATIVE_STEP])
+def test_orchestrator_maybe_ran_re_fire_safe_kind_returns_none_fresh(kind: StepKind) -> None:
+    """A maybe-ran orchestrator whose recorded DISPATCH-TIME kind is re-fire-safe
+    (INFERENCE_STEP / DECLARATIVE_STEP — no external effect) re-dispatches fresh: None (the
+    unchanged fresh re-run), NOT a fail-closed. The common ORCHESTRATOR_WORKERS shape (steps[0]
+    is an LLM that farms sub-tasks → INFERENCE_STEP) now recovers from its own fire→capture
+    window instead of failing the strict-tier crash-resume closed."""
+    store = _FakeStore(
+        branches={},
+        orchestrator=None,
+        dispatch_instrumented=True,
+        orchestrator_dispatched=True,
+        orchestrator_dispatched_kind=kind.value,
+    )
+    assert (
+        _determine_fanout_resume(store, _RUN_KEY, _steps(3), TopologyPattern.ORCHESTRATOR_WORKERS)
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [StepKind.TOOL_STEP, StepKind.SUB_AGENT_DISPATCH, StepKind.MANAGED_AGENTS],
+)
+def test_orchestrator_maybe_ran_effect_bearing_kind_fails_closed(kind: StepKind) -> None:
+    """A maybe-ran orchestrator whose recorded DISPATCH-TIME kind is effect-bearing
+    (TOOL_STEP / SUB_AGENT_DISPATCH / MANAGED_AGENTS) STAYS fail-closed — its effect may have
+    landed; re-dispatch would double-fire. The effect-bearing-orchestrator resolution is the
+    registered follow-on B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-EFFECT-BEARING."""
+    store = _FakeStore(
+        branches={},
+        orchestrator=None,
+        dispatch_instrumented=True,
+        orchestrator_dispatched=True,
+        orchestrator_dispatched_kind=kind.value,
+    )
+    with pytest.raises(_FanOutStoreOrchestratorMaybeRanError, match="effect-bearing"):
+        _determine_fanout_resume(store, _RUN_KEY, _steps(3), TopologyPattern.ORCHESTRATOR_WORKERS)
+
+
+def test_orchestrator_maybe_ran_changed_manifest_kind_keyed_on_marker() -> None:
+    """The classification keys on the MARKER's recorded dispatch-time kind, NOT the resumed
+    manifest: an orchestrator dispatched as an effect-bearing TOOL_STEP that crashed before
+    capture STAYS fail-closed even though the resumed manifest's steps[0] is DECLARATIVE
+    (`_steps()` builds DECLARATIVE_STEP steps) — the at-most-once changed-manifest guard."""
+    store = _FakeStore(
+        branches={},
+        orchestrator=None,
+        dispatch_instrumented=True,
+        orchestrator_dispatched=True,
+        orchestrator_dispatched_kind=StepKind.TOOL_STEP.value,  # marker says effect-bearing
+    )
+    # `_steps()` yields DECLARATIVE_STEP (re-fire-safe) — but the MARKER governs → fail closed.
+    with pytest.raises(_FanOutStoreOrchestratorMaybeRanError, match="effect-bearing"):
+        _determine_fanout_resume(store, _RUN_KEY, _steps(3), TopologyPattern.ORCHESTRATOR_WORKERS)
+
+
+def test_orchestrator_maybe_ran_re_fire_safe_kind_without_stamp_fails_closed() -> None:
+    """An orphaned/corrupt orchestrator marker — a re-fire-safe recorded kind but NO dispatch-
+    instrumented STAMP — is an INCONSISTENT store whose recorded kind cannot be trusted → fail
+    closed REGARDLESS of kind (the stamp is written STRICTLY BEFORE the marker, so a
+    marker-without-stamp is corruption / tamper / partial loss, never a legitimate re-fire-safe
+    re-run — out-of-family Codex [P2], mirroring the worker `_instrumented` gate +
+    `[[durable-recovery-presence-validity-scope]]`)."""
+    store = _FakeStore(
+        branches={},
+        orchestrator=None,
+        dispatch_instrumented=False,  # NO stamp → orphaned / corrupt store
+        orchestrator_dispatched=True,
+        orchestrator_dispatched_kind=StepKind.INFERENCE_STEP.value,  # re-fire-safe kind, but...
+    )
+    with pytest.raises(_FanOutStoreOrchestratorMaybeRanError, match="orphaned marker"):
+        _determine_fanout_resume(store, _RUN_KEY, _steps(3), TopologyPattern.ORCHESTRATOR_WORKERS)
+
+
+def test_orchestrator_absent_with_cardinality_present_is_corrupt_not_maybe_ran() -> None:
+    """An orchestrator dispatch marker with NO terminal capture but a PRESENT cardinality marker
+    is CORRUPT, not the maybe-ran fire→capture window — the cardinality marker is fsynced AFTER
+    record_orchestrator, so its presence PROVES the orchestrator captured → an absent capture
+    means the capture was LOST. Fail closed as `_FanOutStoreCorruptError`, NOT a re-fire-safe
+    fresh re-run (out-of-family Codex [P2] R2): only an ABSENT cardinality is the true
+    pre-cardinality maybe-ran window. Even a re-fire-safe + instrumented marker is corrupt here."""
+    store = _FakeStore(
+        branches={},
+        orchestrator=None,
+        dispatch_instrumented=True,
+        orchestrator_dispatched=True,
+        orchestrator_dispatched_kind=StepKind.INFERENCE_STEP.value,  # re-fire-safe, BUT...
+        cardinality=4,  # ...cardinality PRESENT → the run advanced past capture → corrupt
+    )
+    with pytest.raises(_FanOutStoreCorruptError, match="capture was LOST"):
+        _determine_fanout_resume(store, _RUN_KEY, _steps(4), TopologyPattern.ORCHESTRATOR_WORKERS)
+
+
+def test_orchestrator_absent_with_torn_cardinality_marker_is_corrupt() -> None:
+    """A present-but-TORN cardinality marker (the file EXISTS but `read_fanout_cardinality`
+    returns None) is STILL corruption, not the pre-cardinality maybe-ran window — the marker's
+    PRESENCE (not its readability) proves the run advanced past orchestrator capture. The guard
+    keys on `fanout_cardinality_present` (presence-only), so a torn marker fails closed even with
+    a re-fire-safe + instrumented orchestrator (out-of-family Codex [P2] R3;
+    `[[durable-recovery-presence-validity-scope]]`: presence ≠ validity)."""
+    store = _FakeStore(
+        branches={},
+        orchestrator=None,
+        dispatch_instrumented=True,
+        orchestrator_dispatched=True,
+        orchestrator_dispatched_kind=StepKind.INFERENCE_STEP.value,  # re-fire-safe + instrumented
+        cardinality=None,  # read returns None (torn) ...
+        cardinality_present=True,  # ... but the marker FILE exists → corrupt, not pre-cardinality
+    )
+    with pytest.raises(_FanOutStoreCorruptError, match="capture was LOST"):
+        _determine_fanout_resume(store, _RUN_KEY, _steps(4), TopologyPattern.ORCHESTRATOR_WORKERS)
+
+
+def test_orchestrator_absent_with_surviving_worker_dispatch_marker_is_corrupt() -> None:
+    """A surviving WORKER dispatch marker with the orchestrator output + cardinality LOST is
+    CORRUPT, not the pre-cardinality maybe-ran window — a worker dispatch marker is written only
+    AFTER the orchestrator+cardinality phase, so its survival proves the run advanced past
+    orchestrator capture (out-of-family Codex [P2] R4). The DEFAULT-DENY guard fails closed on the
+    surviving worker marker even with a re-fire-safe + instrumented orchestrator + absent
+    cardinality (the partial-loss case the cardinality-presence guard alone missed)."""
+    store = _FakeStore(
+        branches={},
+        orchestrator=None,
+        dispatch_instrumented=True,
+        orchestrator_dispatched=True,
+        orchestrator_dispatched_kind=StepKind.INFERENCE_STEP.value,  # re-fire-safe + instrumented
+        cardinality=None,  # cardinality LOST (absent) ...
+        dispatched_kinds={0: StepKind.TOOL_STEP.value},  # ... but a worker dispatch marker survived
+    )
+    with pytest.raises(_FanOutStoreCorruptError, match="capture was LOST"):
+        _determine_fanout_resume(store, _RUN_KEY, _steps(4), TopologyPattern.ORCHESTRATOR_WORKERS)
+
+
+def test_orchestrator_absent_with_surviving_corrupt_worker_capture_is_corrupt() -> None:
+    """A surviving (present-but-unreadable) WORKER branch capture with the orchestrator output
+    LOST fails closed CORRUPT. Here the PRE-EXISTING present-but-unreadable branch guard fires
+    FIRST (`... branch journal(s) present but unreadable`), before the orchestrator-maybe-ran
+    branch — so a corrupt worker capture never reaches the re-fire-safe path. The DEFAULT-DENY
+    `present_branch_indexes` downstream check is therefore defensive backup for that pre-existing
+    guard (self-complete: a worker capture present, readable OR corrupt, proves advanced-past).
+    Either way the result is the same — fail closed, never a fresh re-dispatch."""
+    store = _FakeStore(
+        branches={},  # nothing READABLE ...
+        corrupt_branches=(0,),  # ... but a worker capture file is present-but-unreadable
+        orchestrator=None,
+        dispatch_instrumented=True,
+        orchestrator_dispatched=True,
+        orchestrator_dispatched_kind=StepKind.INFERENCE_STEP.value,
+    )
+    with pytest.raises(_FanOutStoreCorruptError, match="unreadable"):
+        _determine_fanout_resume(store, _RUN_KEY, _steps(4), TopologyPattern.ORCHESTRATOR_WORKERS)
+
+
+def test_orchestrator_absent_with_surviving_synthesis_capture_is_corrupt() -> None:
+    """A surviving POST_JOIN_SYNTHESIS capture with the orchestrator output LOST is CORRUPT — the
+    synthesis is written LAST (after every worker), so its presence proves the run advanced past
+    orchestrator capture. The DEFAULT-DENY guard keys on `synthesis_present` → fail closed even
+    with a re-fire-safe + instrumented orchestrator + absent cardinality (the artifact Codex had
+    not hit, surfaced by the writer-artifact audit rather than reactively)."""
+    store = _FakeStore(
+        branches={},
+        orchestrator=None,
+        dispatch_instrumented=True,
+        orchestrator_dispatched=True,
+        orchestrator_dispatched_kind=StepKind.INFERENCE_STEP.value,
+        synthesis_present=True,  # a post-join synthesis capture survived → advanced-past → corrupt
+    )
+    with pytest.raises(_FanOutStoreCorruptError, match="capture was LOST"):
+        _determine_fanout_resume(store, _RUN_KEY, _steps(4), TopologyPattern.ORCHESTRATOR_WORKERS)
 
 
 # --- disposition class (the keystone): completed-with-output / completed-no-output /

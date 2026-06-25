@@ -94,15 +94,21 @@ class _InMemoryBranchStore:
         # None models a pre-arc v1.60/v1.61 marker (step_id only, no kind) → fail-closed.
         self._dispatched: dict[str, dict[int, str | None]] = {}
         self._instrumented: set[str] = set()
-        # B-FANOUT-CRASH-RESUME-ORCHESTRATOR-DISPATCH — run_keys whose orchestrator BEGAN
+        # B-FANOUT-CRASH-RESUME-ORCHESTRATOR-DISPATCH / MAYBE-RAN-RESOLUTION — {run_key:
+        # orchestrator dispatch-time step_kind value | None} for runs whose orchestrator BEGAN
         # dispatch (the orchestrator reserve-before-dispatch marker; a single marker per run).
-        self._orchestrator_dispatched: set[str] = set()
+        # Presence = key membership; the kind keys the maybe-ran re-fire-safety classifier
+        # (None models a pre-v1.81 v1.79-era marker — step_id only, no kind → fail-closed).
+        self._orchestrator_dispatched: dict[str, str | None] = {}
 
     def record_fanout_cardinality(self, run_key: str, branch_count: int) -> None:
         self._cardinality[run_key] = int(branch_count)
 
     def read_fanout_cardinality(self, run_key: str) -> int | None:
         return self._cardinality.get(run_key)
+
+    def fanout_cardinality_present(self, run_key: str) -> bool:
+        return run_key in self._cardinality
 
     # -- producer (net-add #1) -------------------------------------------------
     def record_branch(
@@ -154,11 +160,21 @@ class _InMemoryBranchStore:
         return run_key in self._instrumented
 
     # -- B-FANOUT-CRASH-RESUME-ORCHESTRATOR-DISPATCH: orchestrator reserve-before-dispatch --
-    def record_orchestrator_dispatched(self, run_key: str, step_id: str) -> None:
-        self._orchestrator_dispatched.add(run_key)
+    def record_orchestrator_dispatched(self, run_key: str, step_id: str, step_kind: str) -> None:
+        self._orchestrator_dispatched[run_key] = str(step_kind)
 
     def orchestrator_dispatched(self, run_key: str) -> bool:
         return run_key in self._orchestrator_dispatched
+
+    def orchestrator_dispatched_kind(self, run_key: str) -> str | None:
+        return self._orchestrator_dispatched.get(run_key)
+
+    # -- test helper: a pre-v1.81 (v1.79-era) orchestrator marker (step_id only, no recorded
+    # kind) → the maybe-ran classifier cannot prove re-fire-safety → fail-closed (the v1.79
+    # behavior). Mirrors `forget_branch_dispatch_kind` for the orchestrator. --
+    def forget_orchestrator_dispatch_kind(self, run_key: str) -> None:
+        if run_key in self._orchestrator_dispatched:
+            self._orchestrator_dispatched[run_key] = None
 
     # -- test helper: a branch that was NOT-YET-DISPATCHED at the crash (no marker, no
     # output) — provably-not-run, the case the strict tiers can now re-dispatch safely. --
@@ -186,7 +202,7 @@ class _InMemoryBranchStore:
         self._cardinality.pop(run_key, None)
         self._branches.pop(run_key, None)
         self._dispatched.pop(run_key, None)
-        self._orchestrator_dispatched.discard(run_key)
+        self._orchestrator_dispatched.pop(run_key, None)
 
     # -- test helper: a PRE-arc (un-instrumented) journal — cardinality + branch records but
     # NO dispatch stamp and NO markers (the cross-version hazard). Forces the conservative
@@ -194,7 +210,7 @@ class _InMemoryBranchStore:
     def simulate_pre_arc_journal(self, run_key: str) -> None:
         self._instrumented.discard(run_key)
         self._dispatched.pop(run_key, None)
-        self._orchestrator_dispatched.discard(run_key)
+        self._orchestrator_dispatched.pop(run_key, None)
 
     # -- PR2 synthesis capture / replay ---------------------------------------
     def record_synthesis(
@@ -2249,13 +2265,19 @@ def test_crash_resume_mixed_not_run_and_maybe_ran_fails_closed() -> None:
 # (the sequential analogue of the per-worker reserve) makes that window provably-not-run
 # (no marker → fresh) or maybe-ran (marker, no capture → fail closed).
 # ===========================================================================
-def test_crash_resume_orchestrator_maybe_ran_cascade_cancel_fails_closed() -> None:
-    """The core new fail-closed. The orchestrator dispatched (marker + instrumented stamp) but
-    its output was never captured (the crash fell in its fire→capture window). Re-dispatching
-    `steps[0]` would risk a double-fire → CASCADE_CANCEL crash-resume FAILS CLOSED, dispatching
-    nothing, with the distinct orchestrator-maybe-ran fail_class."""
+def test_crash_resume_orchestrator_maybe_ran_re_fire_safe_recovers_cascade_cancel() -> None:
+    """B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-RESOLUTION (CP spec v1.64 §1) — the re-fire-safe
+    relaxation. The orchestrator dispatched (marker + instrumented stamp) but its output was never
+    captured (the crash fell in its fire→capture window). Its DISPATCH-TIME kind is DECLARATIVE_STEP
+    (re-fire-safe — no external effect), so re-dispatching `steps[0]` fresh cannot double-fire →
+    the CASCADE_CANCEL (MULTI_TENANT_COMPLIANCE) crash-resume RECOVERS, re-dispatching the
+    orchestrator + both workers first-and-only (was: failed closed unconditionally pre-v1.64)."""
     store = _InMemoryBranchStore()
-    steps = [_step("orch", 0), _step("w-0", 0), _step("w-1", 1)]
+    steps = [
+        _step("orch", 0),
+        _step("w-0", 0),
+        _step("w-1", 1),
+    ]  # _step ⇒ DECLARATIVE (re-fire-safe)
     _run_persona(
         workflow_id="wf-ow-orch-maybe-ran",
         steps=steps,
@@ -2265,10 +2287,11 @@ def test_crash_resume_orchestrator_maybe_ran_cascade_cancel_fails_closed() -> No
         topology=TopologyPattern.ORCHESTRATOR_WORKERS,
     )
     key = store.sole_run_key()
-    store.forget_orchestrator_maybe_ran(key)  # marker kept, output + workers + cardinality gone
+    store.forget_orchestrator_maybe_ran(key)  # marker kept (kind=DECLARATIVE), the rest gone
     assert store.orchestrator_dispatched(key)  # the orchestrator BEGAN dispatch
     assert not store.orchestrator_present(key)  # but its output was never captured
     assert store.dispatch_instrumented(key)  # the run WAS instrumented
+    assert store.orchestrator_dispatched_kind(key) == StepKind.DECLARATIVE_STEP.value
 
     resume = _CountingDispatcher(n=2)
     r2 = _run_persona(
@@ -2279,13 +2302,13 @@ def test_crash_resume_orchestrator_maybe_ran_cascade_cancel_fails_closed() -> No
         persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
         topology=TopologyPattern.ORCHESTRATOR_WORKERS,
     )
-    assert r2.status is RunStatus.FAILED
-    assert "fan-out-crash-resume-orchestrator-maybe-ran" in (r2.fail_class or "")
-    assert resume.dispatched == []  # the orchestrator is NOT re-dispatched (no double-fire)
+    assert r2.status is RunStatus.SUCCESS
+    assert resume.dispatched == ["orch", "w-0", "w-1"]  # re-fire-safe → all re-dispatch fresh
 
 
-def test_crash_resume_orchestrator_maybe_ran_pause_fails_closed() -> None:
-    """The orchestrator maybe-ran fail-closed holds under PAUSE (TEAM_BINDING) too."""
+def test_crash_resume_orchestrator_maybe_ran_re_fire_safe_recovers_pause() -> None:
+    """The re-fire-safe orchestrator-maybe-ran recovery holds under PAUSE (TEAM_BINDING) too — a
+    re-fire-safe (no-external-effect) orchestrator re-runs fresh regardless of the strict tier."""
     store = _InMemoryBranchStore()
     steps = [_step("orch", 0), _step("w-0", 0), _step("w-1", 1)]
     _run_persona(
@@ -2306,6 +2329,80 @@ def test_crash_resume_orchestrator_maybe_ran_pause_fails_closed() -> None:
         dispatcher=resume,
         store=store,
         persona_tier=PersonaTier.TEAM_BINDING,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+    )
+    assert r2.status is RunStatus.SUCCESS
+    assert resume.dispatched == ["orch", "w-0", "w-1"]
+
+
+def test_crash_resume_orchestrator_maybe_ran_effect_bearing_fails_closed() -> None:
+    """An EFFECT-BEARING orchestrator (TOOL_STEP) maybe-ran STAYS fail-closed — its effect may have
+    landed; re-dispatching `steps[0]` would double-fire. The effect-bearing-orchestrator resolution
+    is the registered follow-on B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-EFFECT-BEARING. The
+    DISPATCH-TIME kind in the marker (TOOL_STEP) — not the resumed manifest — governs."""
+    store = _InMemoryBranchStore()
+    steps = [_step("orch", 0, StepKind.TOOL_STEP), _step("w-0", 0), _step("w-1", 1)]
+    registry = _AnyKindRegistry(_CountingDispatcher(n=2))  # serves the TOOL_STEP orchestrator
+    _run_persona(
+        workflow_id="wf-ow-orch-effect-bearing",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=2),
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+        registry=registry,
+    )
+    key = store.sole_run_key()
+    store.forget_orchestrator_maybe_ran(key)
+    assert store.orchestrator_dispatched_kind(key) == StepKind.TOOL_STEP.value
+
+    resume = _CountingDispatcher(n=2)
+    r2 = _run_persona(
+        workflow_id="wf-ow-orch-effect-bearing",
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+        registry=_AnyKindRegistry(resume),
+    )
+    assert r2.status is RunStatus.FAILED
+    assert "fan-out-crash-resume-orchestrator-maybe-ran" in (r2.fail_class or "")
+    assert resume.dispatched == []  # NOT re-dispatched (no double-fire of an effect-bearing orch)
+
+
+def test_crash_resume_orchestrator_maybe_ran_pre_v1_81_marker_fails_closed() -> None:
+    """A pre-v1.81 (v1.79-era) orchestrator marker recorded only `step_id`, no dispatch-time kind.
+    `orchestrator_dispatched_kind` → None → the classifier cannot prove re-fire-safety → fail
+    closed (the v1.79 behavior preserved; presence ≠ validity, never a wrongful re-dispatch — the
+    cross-version at-most-once guard `[[durable-recovery-presence-validity-scope]]`)."""
+    store = _InMemoryBranchStore()
+    steps = [
+        _step("orch", 0),
+        _step("w-0", 0),
+        _step("w-1", 1),
+    ]  # re-fire-safe kind in the manifest
+    _run_persona(
+        workflow_id="wf-ow-orch-pre-v181",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=2),
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+    )
+    key = store.sole_run_key()
+    store.forget_orchestrator_maybe_ran(key)
+    store.forget_orchestrator_dispatch_kind(key)  # model a pre-v1.81 marker (step_id only, no kind)
+    assert store.orchestrator_dispatched(key)  # presence intact
+    assert store.orchestrator_dispatched_kind(key) is None  # but the kind is unknown
+
+    resume = _CountingDispatcher(n=2)
+    r2 = _run_persona(
+        workflow_id="wf-ow-orch-pre-v181",
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
         topology=TopologyPattern.ORCHESTRATOR_WORKERS,
     )
     assert r2.status is RunStatus.FAILED
@@ -2345,11 +2442,12 @@ def test_crash_resume_orchestrator_provably_not_run_recovers_fresh() -> None:
     assert resume.dispatched == ["orch", "w-0", "w-1"]  # all re-dispatch fresh (incl. orchestrator)
 
 
-def test_crash_resume_hierarchical_orchestrator_maybe_ran_fails_closed() -> None:
-    """The orchestrator maybe-ran fail-closed under HIERARCHICAL_DELEGATION (top level reuses
-    `_execute_orchestrator_workers`, so it threads the orchestrator reserve-before-dispatch path).
-    Witnesses the hierarchical coverage claim (`[[full-chain-witness-not-half-proofs]]`) — the
-    marker keys by the run's own key, so the orchestrator maybe-ran window is covered here too."""
+def test_crash_resume_hierarchical_orchestrator_maybe_ran_re_fire_safe_recovers() -> None:
+    """The re-fire-safe orchestrator-maybe-ran recovery threads through HIERARCHICAL_DELEGATION too
+    (the top level reuses `_execute_orchestrator_workers`, so it threads the orchestrator
+    reserve-before-dispatch + maybe-ran-classification path). Witnesses the hierarchical coverage
+    claim (`[[full-chain-witness-not-half-proofs]]`) — the marker keys by the run's own key, so the
+    DECLARATIVE (re-fire-safe) parent maybe-ran recovers fresh here too (was: failed closed)."""
     store = _InMemoryBranchStore()
     steps = [_step("parent", 0), _step("child-0", 0), _step("child-1", 1)]
     _run_persona(
@@ -2363,6 +2461,7 @@ def test_crash_resume_hierarchical_orchestrator_maybe_ran_fails_closed() -> None
     key = store.sole_run_key()
     store.forget_orchestrator_maybe_ran(key)
     assert store.orchestrator_dispatched(key) and not store.orchestrator_present(key)
+    assert store.orchestrator_dispatched_kind(key) == StepKind.DECLARATIVE_STEP.value
 
     resume = _CountingDispatcher(n=2)
     r2 = _run_persona(
@@ -2373,9 +2472,8 @@ def test_crash_resume_hierarchical_orchestrator_maybe_ran_fails_closed() -> None
         persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
         topology=TopologyPattern.HIERARCHICAL_DELEGATION,
     )
-    assert r2.status is RunStatus.FAILED
-    assert "fan-out-crash-resume-orchestrator-maybe-ran" in (r2.fail_class or "")
-    assert resume.dispatched == []
+    assert r2.status is RunStatus.SUCCESS
+    assert resume.dispatched == ["parent", "child-0", "child-1"]  # re-fire-safe → re-dispatch fresh
 
 
 def test_crash_resume_parallelization_orchestrator_marker_topology_mismatch_fails_closed() -> None:
@@ -2459,5 +2557,5 @@ def test_crash_resume_orchestrator_lookup_failure_writes_no_marker() -> None:
     assert r.status is RunStatus.FAILED  # the orchestrator dispatch could not be resolved
     # The store holds NO orchestrator marker — the lookup failed before the marker write, so a
     # later recovery for this run_key is NOT poisoned into a false maybe-ran fail-closed.
-    assert store._orchestrator_dispatched == set()  # no false marker anywhere
+    assert store._orchestrator_dispatched == {}  # no false marker anywhere
     assert store._instrumented == set()  # nor the stamp (it is written with the marker)
