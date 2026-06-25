@@ -28,6 +28,7 @@ from harness_cp.topology_pattern import TopologyPattern
 from harness_cp.workflow_driver import (
     _determine_fanout_resume,
     _FanOutStoreCorruptError,
+    _FanOutStoreOrchestratorMaybeRanError,
     _FanOutStoreTimeoutAmbiguousError,
 )
 from harness_cp.workflow_driver_types import StepKind, WorkflowStep
@@ -59,6 +60,8 @@ class _FakeStore:
         orchestrator_corrupt: bool = False,
         dispositions: dict[int, str] | None = None,
         cardinality: int | None = None,
+        dispatch_instrumented: bool = False,
+        orchestrator_dispatched: bool = False,
     ) -> None:
         self._branches = dict(branches)
         self._orchestrator = orchestrator
@@ -68,6 +71,10 @@ class _FakeStore:
         # Per-branch terminal disposition (default "completed"); set "timed_out" or a
         # "completed" with a None output to exercise the disposition-class recovery.
         self._dispositions = dict(dispositions) if dispositions else {}
+        # B-FANOUT-CRASH-RESUME-ORCHESTRATOR-DISPATCH — the per-run dispatch-instrumented
+        # stamp + the orchestrator reserve-before-dispatch marker (presence-only).
+        self._dispatch_instrumented = dispatch_instrumented
+        self._orchestrator_dispatched = orchestrator_dispatched
 
     def read_branch_records(
         self, run_key: str
@@ -88,6 +95,12 @@ class _FakeStore:
 
     def read_fanout_cardinality(self, run_key: str) -> int | None:
         return self._cardinality
+
+    def dispatch_instrumented(self, run_key: str) -> bool:
+        return self._dispatch_instrumented
+
+    def orchestrator_dispatched(self, run_key: str) -> bool:
+        return self._orchestrator_dispatched
 
 
 def test_parallelization_reconstructs_peer_resume_from_store() -> None:
@@ -196,6 +209,63 @@ def test_orchestrator_absent_with_zero_workers_returns_none_fresh() -> None:
         _determine_fanout_resume(store, _RUN_KEY, _steps(3), TopologyPattern.ORCHESTRATOR_WORKERS)
         is None
     )
+
+
+# --- B-FANOUT-CRASH-RESUME-ORCHESTRATOR-DISPATCH: the orchestrator's own fire→capture window ---
+def test_orchestrator_maybe_ran_raises_when_instrumented() -> None:
+    """Orchestrator dispatched (marker present) + instrumented stamp + output absent + no worker
+    → MAYBE-RAN → fail closed (re-dispatch would risk a double-fire on the strict tiers)."""
+    store = _FakeStore(
+        branches={},
+        orchestrator=None,
+        dispatch_instrumented=True,
+        orchestrator_dispatched=True,
+    )
+    with pytest.raises(_FanOutStoreOrchestratorMaybeRanError, match="never captured"):
+        _determine_fanout_resume(store, _RUN_KEY, _steps(3), TopologyPattern.ORCHESTRATOR_WORKERS)
+
+
+def test_orchestrator_orphaned_marker_without_stamp_fails_closed() -> None:
+    """An orchestrator marker present but the run NOT dispatch-instrumented is an INCONSISTENT
+    store, NOT a pre-arc journal: the marker is a NEW file written only by the instrumented code
+    (strictly AFTER the stamp), so a pre-arc journal carries NO marker and a marker-without-stamp
+    can only be corruption / tamper / partial loss → fail closed (the marker's presence alone is
+    the maybe-ran signal; never a fresh re-dispatch — out-of-family Codex [P2])."""
+    store = _FakeStore(
+        branches={},
+        orchestrator=None,
+        dispatch_instrumented=False,
+        orchestrator_dispatched=True,
+    )
+    with pytest.raises(_FanOutStoreOrchestratorMaybeRanError, match="never captured"):
+        _determine_fanout_resume(store, _RUN_KEY, _steps(3), TopologyPattern.ORCHESTRATOR_WORKERS)
+
+
+def test_orchestrator_provably_not_run_returns_none_fresh() -> None:
+    """Instrumented but NO orchestrator marker → provably-not-run → None (safe fresh re-run)."""
+    store = _FakeStore(
+        branches={},
+        orchestrator=None,
+        dispatch_instrumented=True,
+        orchestrator_dispatched=False,
+    )
+    assert (
+        _determine_fanout_resume(store, _RUN_KEY, _steps(3), TopologyPattern.ORCHESTRATOR_WORKERS)
+        is None
+    )
+
+
+def test_parallelization_orchestrator_marker_topology_mismatch_raises() -> None:
+    """A PARALLELIZATION resume whose store holds an orchestrator DISPATCH marker (output absent)
+    is a changed-topology resume of a maybe-ran orchestrator → fail closed (the widened guard)."""
+    store = _FakeStore(
+        branches={},
+        orchestrator=None,
+        dispatch_instrumented=True,
+        orchestrator_dispatched=True,
+    )
+    with pytest.raises(_FanOutStoreCorruptError, match="topology mismatch"):
+        _determine_fanout_resume(store, _RUN_KEY, _steps(3), TopologyPattern.PARALLELIZATION)
 
 
 # --- disposition class (the keystone): completed-with-output / completed-no-output /

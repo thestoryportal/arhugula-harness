@@ -329,6 +329,38 @@ def test_dispatch_instrumented_stamp_round_trip(tmp_path: Path) -> None:
     assert fresh.dispatch_instrumented(_RUN_KEY) is True
 
 
+def test_orchestrator_dispatched_marker_round_trip_across_restart(tmp_path: Path) -> None:
+    """B-FANOUT-CRASH-RESUME-ORCHESTRATOR-DISPATCH — record_orchestrator_dispatched() persists the
+    orchestrator reserve-before-DISPATCH marker (a single marker per run); a FRESH store instance
+    (= a process restart) reads it back. Absent → False (the orchestrator never began dispatch)."""
+    store = EngineOutputStore(journal_dir=tmp_path / "eo")
+    assert store.orchestrator_dispatched(_RUN_KEY) is False
+    store.record_orchestrator_dispatched(_RUN_KEY, "orch-step")
+    fresh = EngineOutputStore(journal_dir=tmp_path / "eo")  # crash + restart
+    assert fresh.orchestrator_dispatched(_RUN_KEY) is True
+
+
+def test_orchestrator_dispatched_marker_distinct_from_capture(tmp_path: Path) -> None:
+    """The orchestrator .dispatched marker (reserve-before-DISPATCH) is distinct from the
+    orchestrator.jsonl terminal capture (reserve-before-COMMIT): the marker can be present while
+    the capture is absent — the orchestrator MAYBE-RAN (fired its effect, crashed before capture)."""
+    store = EngineOutputStore(journal_dir=tmp_path / "eo")
+    store.record_orchestrator_dispatched(_RUN_KEY, "orch-step")  # dispatched, NOT yet captured
+    assert store.orchestrator_dispatched(_RUN_KEY) is True
+    assert store.orchestrator_present(_RUN_KEY) is False  # no terminal capture → maybe-ran
+    store.record_orchestrator(_RUN_KEY, "orch-step", {"plan": "delegate"})  # now captured
+    assert store.orchestrator_present(_RUN_KEY) is True
+    assert store.orchestrator_dispatched(_RUN_KEY) is True  # both coexist
+
+
+def test_orchestrator_dispatched_marker_idempotent(tmp_path: Path) -> None:
+    """A re-recorded orchestrator marker (a resume re-dispatch) is idempotent — presence-only."""
+    store = EngineOutputStore(journal_dir=tmp_path / "eo")
+    store.record_orchestrator_dispatched(_RUN_KEY, "orch-step")
+    store.record_orchestrator_dispatched(_RUN_KEY, "orch-step")
+    assert store.orchestrator_dispatched(_RUN_KEY) is True
+
+
 def test_dispatched_marker_does_not_collide_with_branch_capture(tmp_path: Path) -> None:
     """The .dispatched marker file and the .jsonl terminal-capture file coexist per branch
     (the reserve-before-DISPATCH marker is distinct from the reserve-before-COMMIT capture):

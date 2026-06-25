@@ -1976,6 +1976,19 @@ def _execute_workflow_body(
                     ),
                     0,
                 )
+            except _FanOutStoreOrchestratorMaybeRanError as exc:
+                return (
+                    RunResult(
+                        workflow_id=manifest_entry.workflow_id,
+                        run_id=run_id,
+                        status=RunStatus.FAILED,
+                        terminal_step_index=None,
+                        partial_state=None,
+                        final_state=None,
+                        fail_class=f"fan-out-crash-resume-orchestrator-maybe-ran: {exc}",
+                    ),
+                    0,
+                )
             # B-FANOUT-CRASH-RESUME-CASCADE-POLICY — strict-tier CARDINALITY-ONLY fail-closed
             # (out-of-family Codex [P1] round-2). The fan-out cardinality marker is written ONCE
             # on a fresh run BEFORE any branch dispatches (`record_fanout_cardinality`, the
@@ -4809,6 +4822,22 @@ class _FanOutStoreTimeoutAmbiguousError(Exception):
     """
 
 
+class _FanOutStoreOrchestratorMaybeRanError(Exception):
+    """The ORCHESTRATOR_WORKERS `steps[0]` orchestrator MAYBE-RAN on a crash-resume.
+
+    B-FANOUT-CRASH-RESUME-ORCHESTRATOR-DISPATCH (R-FS-1). The orchestrator reserve-before-
+    DISPATCH marker is PRESENT (the orchestrator's dispatch BEGAN, its effect may have fired)
+    but its terminal-capture record is ABSENT (the crash fell in the orchestrator's
+    fire→capture window). Re-dispatching `steps[0]` fresh would risk a double-fire on the
+    effect-bearing strict tiers, so the run FAILS CLOSED — the narrow irreducible at-most-once
+    ambiguity for the orchestrator, mirroring the per-branch maybe-ran case. Its RESOLUTION (a
+    post-dispatch capture distinguishing completed-and-captured from genuinely-ambiguous, then
+    suppress-and-continue or a §26.2 pause) is the registered follow-on
+    `B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-RESOLUTION`. `_execute_workflow_body` turns
+    this into a FAILED RunResult with a distinct fail_class.
+    """
+
+
 def _determine_fanout_resume(
     store: Any,
     run_key: str,
@@ -4872,11 +4901,17 @@ def _determine_fanout_resume(
         # means the crashed run was an ORCHESTRATOR / HIERARCHICAL run resumed under a
         # CHANGED topology (the `run_idempotency_key` does NOT bind topology) → fail closed
         # rather than reinterpret worker records as peer branches or drop a captured
-        # orchestrator effect (out-of-family Codex [P2]).
-        if store.orchestrator_present(run_key):
+        # orchestrator effect (out-of-family Codex [P2]). B-FANOUT-CRASH-RESUME-ORCHESTRATOR-
+        # DISPATCH widens this to the orchestrator reserve-before-DISPATCH marker: a crashed
+        # orchestrator that dispatched but never captured its output leaves no orchestrator
+        # RECORD, only the marker — a PARALLELIZATION resume must still fail closed on it
+        # (a peer fan-out never writes the marker, so this only fires on a genuine
+        # changed-topology resume of a maybe-ran orchestrator).
+        if store.orchestrator_present(run_key) or store.orchestrator_dispatched(run_key):
             raise _FanOutStoreCorruptError(
                 "fan-out crash-resume topology mismatch: a PARALLELIZATION manifest resumed a "
-                "run whose store holds an orchestrator record — fail closed (changed topology)"
+                "run whose store holds an orchestrator record/marker — fail closed (changed "
+                "topology)"
             )
         if not branches:
             return None  # no completed branch → fresh run, byte-identical default
@@ -4896,7 +4931,32 @@ def _determine_fanout_resume(
                 "fan-out orchestrator output present but unreadable (corrupt store)"
             )
         if not branches:
-            return None  # nothing captured (orchestrator absent + no worker) → fresh run
+            # B-FANOUT-CRASH-RESUME-ORCHESTRATOR-DISPATCH (R-FS-1) — nothing captured
+            # (orchestrator output absent + no worker). PRE-arc this ALWAYS returned None
+            # (fresh re-run → re-dispatch `steps[0]` → a double-fire on the strict tiers if
+            # the orchestrator had already fired). The orchestrator reserve-before-DISPATCH
+            # marker is the fix, and its PRESENCE ALONE is the fail-closed signal (presence-only,
+            # like `present_dispatched_indexes`): the marker is a NEW file written ONLY by this
+            # arc's instrumented code, strictly BEFORE the orchestrator dispatch, so —
+            #   • marker PRESENT ⟹ the orchestrator BEGAN dispatch (its effect may have fired)
+            #     but its output was never captured → MAYBE-RAN → fail closed. This holds even
+            #     for an orphaned marker WITHOUT the dispatch-instrumented stamp: the stamp is
+            #     written before the marker, so a marker-without-stamp is an INCONSISTENT store
+            #     (corruption / tamper / partial loss), NOT a legitimate pre-arc journal (which
+            #     carries no orchestrator marker at all) — failing it closed is the conservative
+            #     at-most-once reading, never a fresh re-dispatch (out-of-family Codex [P2]).
+            #   • marker ABSENT ⟹ provably-not-run (no dispatch began) OR a pre-arc journal
+            #     (no marker was ever written) → the unchanged fresh re-run. Both safe.
+            # The cross-version guard is therefore INHERENT in the new-file marker — no stamp
+            # gate needed (`[[durable-recovery-presence-validity-scope]]`).
+            if store.orchestrator_dispatched(run_key):
+                raise _FanOutStoreOrchestratorMaybeRanError(
+                    "fan-out orchestrator dispatched but its output was never captured (crash "
+                    "in the orchestrator fire→capture window, or an orphaned dispatch marker) "
+                    "— fail closed (maybe-ran; re-dispatch would risk a double-fire on the "
+                    "strict tiers)"
+                )
+            return None  # no marker → provably-not-run OR pre-arc journal → fresh run
         # Workers completed but the orchestrator output is ABSENT — an inconsistent store
         # (the orchestrator completes BEFORE any worker dispatches). Fail closed.
         raise _FanOutStoreCorruptError(
@@ -6916,8 +6976,36 @@ def _execute_orchestrator_workers(
             timestamp=fanout_timestamp,
             snapshot_ref=snapshot_ref,
         )
+        # B-FANOUT-CRASH-RESUME-ORCHESTRATOR-DISPATCH (R-FS-1) — reserve-before-DISPATCH for
+        # the orchestrator's OWN sequential dispatch. The orchestrator (`steps[0]`) fires FIRST;
+        # a crash in its fire→capture window (after the `dispatch()` below, before the
+        # `record_orchestrator` reserve-before-COMMIT capture) leaves no orchestrator record +
+        # no cardinality marker, so a fresh re-run would re-dispatch `steps[0]` → a double-fire
+        # on the strict tiers. Resolve the dispatcher FIRST — a PURE registry lookup, no effect —
+        # then write the orchestrator dispatched marker (fsynced) STRICTLY BETWEEN the lookup and
+        # the `dispatch()`. Writing the marker AFTER the lookup is load-bearing: a lookup failure
+        # (unknown `step_kind`) raises BEFORE any effect could fire, so it must leave NO marker —
+        # else a false marker would poison a later same-run-key recovery into a spurious fail-
+        # closed (out-of-family Codex [P2]). marker-absent ⟺ the orchestrator's effect did NOT
+        # fire. The marker is a NEW file written ONLY here, so its PRESENCE alone is the resume-
+        # side fail-closed signal (the cross-version guard is INHERENT — a pre-arc journal carries
+        # no orchestrator marker; the resume classifier needs no stamp gate). The dispatch-
+        # instrumented stamp is still written (before the marker) for consistency with the worker
+        # fan-out-start stamp. lookup → marker → dispatch is SYNCHRONOUS (no `ensure_future` /
+        # yield), so the marker still strictly precedes the effect with no interleave — no false-
+        # positive marker without the worker path's atomicity dance. A store-write failure during
+        # the reserve is caught below → FAILED (conservative — at-most-once can't be guaranteed
+        # without the marker). Strict tiers only — PROCEED writes no marker (its recovery accepts
+        # the dispatch-before-capture window, unchanged). `_fanout_replay_store` handle reused.
+        _orch_replay_store = _fanout_replay_store(ctx, manifest_entry)
         try:
-            orchestrator_output = step_dispatchers.lookup(orchestrator_step.step_kind).dispatch(
+            _orch_dispatcher = step_dispatchers.lookup(orchestrator_step.step_kind)
+            if _orch_replay_store is not None and cascade_policy is not CascadePolicy.PROCEED:
+                _orch_replay_store.record_dispatch_instrumented(run_idempotency_key)
+                _orch_replay_store.record_orchestrator_dispatched(
+                    run_idempotency_key, str(orchestrator_step.step_id)
+                )
+            orchestrator_output = _orch_dispatcher.dispatch(
                 orchestrator_binding, orchestrator_step, step_context=orchestrator_context
             )
         except Exception as exc:
@@ -6943,8 +7031,8 @@ def _execute_orchestrator_workers(
         # Without it `_determine_fanout_resume` fails CLOSED (workers-completed-but-
         # orchestrator-missing is an inconsistent store), so this capture must be wired
         # in the SAME pass as the worker capture above. No-op unless replay-capable ∧
-        # store-bound (the identical `_fanout_replay_store` gate).
-        _orch_replay_store = _fanout_replay_store(ctx, manifest_entry)
+        # store-bound (the identical `_fanout_replay_store` gate; `_orch_replay_store` was
+        # computed above for the reserve-before-DISPATCH marker — reuse it).
         if _orch_replay_store is not None:
             _orch_replay_store.record_orchestrator(
                 run_idempotency_key, str(orchestrator_step.step_id), orchestrator_output
