@@ -46,27 +46,30 @@
 snapshot:
   frozen_total: 11
   frozen_done: 11
-  standalone_closed: 42
+  standalone_closed: 43
   standalone_gated: 0
   standalone_resolved: 4
   standalone_registered: 4
   source: ".harness/beyond-mvp-capability-boundary-ledger.md"
-  # FRONTIER NOTE (2026-06-24, B-FANOUT-CRASH-RESUME-ORCHESTRATOR-DISPATCH closed). The frozen
+  # FRONTIER NOTE (2026-06-24, B-FANOUT-CRASH-RESUME-MAYBE-RAN-RESOLUTION closed). The frozen
   # 11-arc order is COMPLETE; the standalone B-* register is the live frontier. The fan-out
   # crash-resume capability family is being built out under FULL-SPEC. CLOSED so far:
   # B-FANOUT-OUTPUT-REPLAY (PR1 #723 + PR2 #724) + B-FANOUT-CRASH-RESUME-CASCADE-POLICY (#726)
   # + B-FANOUT-PAUSE-SYNTHESIS (#728) + B-FANOUT-RESUME-CARRIER-TOPOLOGY-MISMATCH (#730)
   # + B-FANOUT-CRASH-RESUME-STRICT-TIER-INCOMPLETE (#732)
-  # + B-FANOUT-CRASH-RESUME-ORCHESTRATOR-DISPATCH (reserve-before-DISPATCH extended to the
-  # ORCHESTRATOR_WORKERS steps[0] orchestrator's own SEQUENTIAL dispatch — a crash in its
-  # fire→capture window is now provably-not-run [no marker → fresh] or maybe-ran [marker, no
-  # capture → fail closed] rather than a silent steps[0] re-dispatch double-fire; the orchestrator
-  # dispatch is synchronous so no atomicity dance; bundled-absorption CP v1.60→v1.61 + runtime
-  # v1.78→v1.79).
+  # + B-FANOUT-CRASH-RESUME-ORCHESTRATOR-DISPATCH (#734)
+  # + B-FANOUT-CRASH-RESUME-MAYBE-RAN-RESOLUTION (the WORKER maybe-ran resolution for the
+  # RE-FIRE-SAFE kinds — a maybe-ran branch [v1.60 dispatch marker, no terminal capture] of a
+  # DECLARATIVE_STEP / INFERENCE_STEP [no non-idempotent external effect] re-dispatches fresh
+  # instead of failing the whole incomplete recovery closed; effect-bearing kinds stay
+  # fail-closed; classified by the DISPATCH-TIME kind recorded in the marker [the changed-
+  # manifest at-most-once guard, Codex [P1]]; bundled-absorption CP v1.61→v1.62 + runtime
+  # v1.79→v1.80 [the dispatched-marker step_kind field]).
   # The 4 still-registered follow-ons keeping R-FS-1 ACTIVE:
-  #   • B-FANOUT-CRASH-RESUME-MAYBE-RAN-RESOLUTION (the WORKER dispatched-but-uncaptured fire→
-  #       capture window — a marker with no terminal capture still fails closed; resolving it
-  #       [suppress-and-continue or a §26.2 pause, the effect-fence HITL-route analogue])
+  #   • B-FANOUT-CRASH-RESUME-MAYBE-RAN-EFFECT-BEARING (the EFFECT-BEARING maybe-ran residual —
+  #       TOOL_STEP / SUB_AGENT_DISPATCH [compose the inner effect-fence's suppress-and-continue
+  #       / §26.2 ambiguous-pause through the fan-out barrier] + MANAGED_AGENTS [extend the fence
+  #       to the unfenced vendor-session sink]; two decompose_at_open sub-mechanisms)
   #   • B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-RESOLUTION (the ORCHESTRATOR analogue — the
   #       orchestrator maybe-ran fire→capture window; ALSO carries the PROCEED-orchestrator
   #       pre-capture residual, named per FULL-SPEC since #724's effect-free-synthesis
@@ -560,15 +563,33 @@ arcs:
     ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
 
   - id: B-FANOUT-CRASH-RESUME-MAYBE-RAN-RESOLUTION
-    title: "Resolve the dispatched-but-uncaptured (maybe-ran) fan-out branch fire→capture window"
+    title: "Re-fire-safe-kind resolution of the dispatched-but-uncaptured (maybe-ran) fan-out branch fire→capture window"
+    kind: standalone
+    status: closed
+    decompose_at_open: true
+    owner_axis: "CP"
+    operator_gated: false  # additive per-kind refinement (re-fire-safe kinds have no external effect to double-fire) — no committed-invariant sacrifice → no operator gate.
+    parent_arc: B-FANOUT-CRASH-RESUME-STRICT-TIER-INCOMPLETE
+    pr: "#<pending> (feat/r-fs-1-fanout-maybe-ran-refire-safe — flips registered → closed)"
+    spec_delta: "bundled-absorption CP v1.61 → v1.62 (§1 per-kind re-fire-safety of a maybe-ran fan-out WORKER/PEER branch keyed on the dispatch-time kind; §2 the effect-bearing residual; §3 the dispatch-time-kind marker + changed-manifest guard; §4 registers B-FANOUT-CRASH-RESUME-MAYBE-RAN-EFFECT-BEARING) + runtime v1.79 → v1.80 (the C-RT-32 dispatched-marker step_kind field + dispatched_branch_kinds read method) + 2 clearance markers. NO contract / enum / committed-invariant change; at-most-once PRESERVED (a re-fire-safe kind has no external effect to double-fire; the dispatch-time-kind marker forecloses a changed-manifest hole)."
+    gives: "A strict-tier (PAUSE / CASCADE_CANCEL) fan-out crash-resume now RECOVERS a maybe-ran WORKER/PEER branch (a v1.60 dispatch marker present, but NO terminal capture — the fire→capture window) when its DISPATCH-TIME step kind is RE-FIRE-SAFE, instead of failing the whole incomplete recovery closed (the #732 blanket maybe-ran fail-closed was the CONSERVATIVE 'branches are effect-BEARING' impl). RE-FIRE-SAFE = `{DECLARATIVE_STEP, INFERENCE_STEP}` (`_FANOUT_MAYBE_RAN_REFIRE_SAFE_KINDS`), anchored to the cleared step_blast_radius READ_ONLY classification: an LLM inference has no external side-effect (cost + non-determinism only, which the unfenced linear resume already re-dispatches per §14.8.8.7 invariant 3) and a declarative step is a pure transform — re-firing either is a fresh at-most-once-external execution, never a double-fire. The HEAD grounding correction: the anticipated 'post-dispatch capture' ALREADY exists (`_capture_branch_terminal` → recovered), so maybe-ran ⟺ genuinely-ambiguous; the actionable split is the step kind's effect surface, not capture-vs-no-capture. The kind is read from the DISPATCH MARKER (runtime C-RT-32 dispatched_branch_kinds), NOT the resumed manifest — the at-most-once changed-manifest guard (out-of-family Codex [P1]: a TOOL_STEP-dispatched maybe-ran branch re-supplied as DECLARATIVE on a same-cardinality resume would otherwise re-dispatch + double-fire). Applied at BOTH the incomplete-recovery + cardinality-only classification sites via one shared `_refire_unsafe_branch_indices` helper keyed on the marker map (tier-agnostic; no offset). The EFFECT-BEARING residual (TOOL_STEP / SUB_AGENT_DISPATCH inner-fence-ambiguity needing barrier-composition; MANAGED_AGENTS unfenced vendor-session) stays fail-closed → registered B-FANOUT-CRASH-RESUME-MAYBE-RAN-EFFECT-BEARING. Decorrelated: advisor full-transcript ×3 (the thin-composition probe → the partial-fence finding → the residual-sizing reconcile) + the per-dispatcher effect-surface trace (every registry kind) anchored to step_blast_radius READ_ONLY + the §25.15 at-most-once probe (no council) + out-of-family Codex (the [P1] changed-manifest catch → the dispatch-time-kind marker fix)."
+    as_built:
+      - "harness-cp/src/harness_cp/workflow_driver.py (`_FANOUT_MAYBE_RAN_REFIRE_SAFE_KINDS` frozenset {DECLARATIVE_STEP, INFERENCE_STEP} + `_FANOUT_MAYBE_RAN_REFIRE_SAFE_KIND_VALUES` + the `_refire_unsafe_branch_indices` shared helper keyed on the marker-kind map [un-kinded → fail-closed]; `_mark_branch_dispatched` records the dispatch-time kind; the refined gate at the incomplete-recovery + cardinality-only strict-tier classification sites — fall through when every maybe-ran branch is re-fire-safe, else the refined incomplete-recovery fail-class)"
+      - "harness-runtime/src/harness_runtime/lifecycle/engine_output_store.py (C-RT-32 record_branch_dispatched gains the step_kind param [persisted in the per-branch .dispatched marker] + the dispatched_branch_kinds read method)"
+      - "design-substrate/Spec_Control_Plane_v1_62.md + design-substrate/Spec_Harness_Runtime_v1.md v1.80 + 2 clearance markers"
+      - "tests: harness-cp test_workflow_driver_fanout_output_replay_full_chain.py (a maybe-ran DECLARATIVE/re-fire-safe branch recovers re-dispatching only the maybe-ran branch under CASCADE_CANCEL + PAUSE [tier-agnostic]; a maybe-ran TOOL_STEP/effect-bearing branch fails closed; a mixed re-fire-safe + effect-bearing set fails closed; the cardinality-only re-fire-safe set recovers fresh; the cardinality-only effect-bearing set fails closed; a TOOL_STEP-dispatched maybe-ran branch RESUMED as DECLARATIVE [changed manifest] fails closed; a pre-arc un-kinded marker fails closed; the `_AnyKindRegistry` multi-kind harness); harness-runtime test_engine_output_store.py (the dispatched_branch_kinds round-trip across restart)"
+    ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
+
+  - id: B-FANOUT-CRASH-RESUME-MAYBE-RAN-EFFECT-BEARING
+    title: "Resolve a maybe-ran fan-out branch of an EFFECT-BEARING kind (TOOL/SUB_AGENT inner-fence-compose + MANAGED fence-extension)"
     kind: standalone
     status: registered
     decompose_at_open: true
     owner_axis: "CP + runtime"
-    operator_gated: false  # additive (resolve the narrow fire→capture ambiguity), no committed-invariant sacrifice → no operator gate; the resolution mechanism is the design question (the effect-fence HITL-route analogue).
-    parent_arc: B-FANOUT-CRASH-RESUME-STRICT-TIER-INCOMPLETE
-    anticipated_scope: "Resolve a MAYBE-RAN fan-out branch on a strict-tier crash-resume. B-FANOUT-CRASH-RESUME-STRICT-TIER-INCOMPLETE re-dispatches PROVABLY-not-run branches but still fails closed when an absent branch has a dispatch marker with NO terminal capture (the fire→capture window — its effect MAY have fired). The narrow irreducible at-most-once ambiguity, the fan-out analogue of the §14.22 effect-fence's lost-reserve case. Scope: a post-dispatch capture that distinguishes completed-and-captured (suppress-and-continue with the captured output, never re-fire) from genuinely-ambiguous (route to a §26.2 WorkflowPauseReason pause for operator resolution, else FAILED) — mirroring the B-EFFECT-FENCE-HITL-ROUTE + B-EFFECT-FENCE-PAUSE-RESOLUTION family for fan-out branches."
-    why: "Surfaced at B-FANOUT-CRASH-RESUME-STRICT-TIER-INCOMPLETE: the reserve-before-dispatch marker separates provably-not-run from maybe-ran but does NOT eliminate the fire→capture ambiguity (advisor: the marker does not eliminate ambiguity, it separates the safe case). The provably-not-run case is built; the maybe-ran resolution is a genuine design problem, not a deferral. FULL-SPEC (`[[feedback-full-spec-beyond-mvp-nothing-deferred]]`)."
+    operator_gated: false  # additive (resolve the effect-bearing maybe-ran residual via the existing effect-fence primitives) — no committed-invariant sacrifice → no operator gate; the resolution mechanism is the design question (the effect-fence HITL-route / pause-resolution analogue).
+    parent_arc: B-FANOUT-CRASH-RESUME-MAYBE-RAN-RESOLUTION
+    anticipated_scope: "Resolve a MAYBE-RAN fan-out branch of an EFFECT-BEARING kind on a strict-tier crash-resume (B-FANOUT-CRASH-RESUME-MAYBE-RAN-RESOLUTION re-dispatches re-fire-safe kinds but still fails closed for effect-bearing kinds). TWO decompose_at_open sub-mechanisms: (a) TOOL_STEP / SUB_AGENT_DISPATCH — the branch's effect (or a sub-agent's child tool calls) routes through the runtime effect-fence (C-RT-31 §14.22, auto-active for durable replay engines); re-dispatch is at-most-once at the tool sink (suppress-and-continue on a captured output, or `EffectFenceAmbiguousUncommittedError`), but that ambiguous-pause must be COMPOSED THROUGH the fan-out barrier (today a branch raising it is treated as a branch error → cascade) — the fan-out analogue of B-EFFECT-FENCE-HITL-ROUTE / B-EFFECT-FENCE-PAUSE-RESOLUTION; (b) MANAGED_AGENTS — the dispatcher performs an UNFENCED vendor-session external effect (create_session + send_event); resolving it needs the C-RT-31 effect fence EXTENDED to the managed-agents sink."
+    why: "Surfaced at B-FANOUT-CRASH-RESUME-MAYBE-RAN-RESOLUTION (the effect-surface trace): only re-fire-safe kinds (DECLARATIVE/INFERENCE) re-dispatch safely; the effect-bearing kinds (TOOL/SUB_AGENT fenced-but-needing-barrier-composition; MANAGED unfenced) are a genuine design problem, not a deferral — named per FULL-SPEC (`[[feedback-full-spec-beyond-mvp-nothing-deferred]]`) rather than silently left fail-closed."
     ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
 
   - id: B-FANOUT-CRASH-RESUME-ORCHESTRATOR-DISPATCH

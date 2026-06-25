@@ -84,9 +84,12 @@ class _InMemoryBranchStore:
         self._synthesis: dict[str, tuple[str, dict[str, Any], str]] = {}
         # run_keys whose synthesis file is present-but-unreadable (a corrupt capture).
         self._synthesis_corrupt: set[str] = set()
-        # B-FANOUT-CRASH-RESUME-STRICT-TIER-INCOMPLETE — reserve-before-dispatch markers:
-        # {run_key: {branch_index that BEGAN dispatch}} + the per-run dispatch-instrumented stamp.
-        self._dispatched: dict[str, set[int]] = {}
+        # B-FANOUT-CRASH-RESUME-STRICT-TIER-INCOMPLETE / MAYBE-RAN-RESOLUTION — reserve-before-
+        # dispatch markers: {run_key: {branch_index that BEGAN dispatch: dispatch-time step_kind
+        # value | None}} + the per-run dispatch-instrumented stamp. The kind is recorded at
+        # dispatch so the maybe-ran classifier keys on the ORIGINAL kind (changed-manifest guard);
+        # None models a pre-arc v1.60/v1.61 marker (step_id only, no kind) → fail-closed.
+        self._dispatched: dict[str, dict[int, str | None]] = {}
         self._instrumented: set[str] = set()
         # B-FANOUT-CRASH-RESUME-ORCHESTRATOR-DISPATCH — run_keys whose orchestrator BEGAN
         # dispatch (the orchestrator reserve-before-dispatch marker; a single marker per run).
@@ -116,12 +119,30 @@ class _InMemoryBranchStore:
     def record_orchestrator(self, run_key: str, step_id: str, output: dict[str, Any]) -> None:
         self._orchestrators[run_key] = (str(step_id), dict(output))
 
-    # -- B-FANOUT-CRASH-RESUME-STRICT-TIER-INCOMPLETE: reserve-before-dispatch ----
-    def record_branch_dispatched(self, run_key: str, branch_index: int, step_id: str) -> None:
-        self._dispatched.setdefault(run_key, set()).add(int(branch_index))
+    # -- B-FANOUT-CRASH-RESUME-STRICT-TIER-INCOMPLETE / MAYBE-RAN-RESOLUTION: reserve-before-
+    # dispatch ----
+    def record_branch_dispatched(
+        self, run_key: str, branch_index: int, step_id: str, step_kind: str
+    ) -> None:
+        self._dispatched.setdefault(run_key, {})[int(branch_index)] = str(step_kind)
 
     def present_dispatched_indexes(self, run_key: str) -> set[int]:
-        return set(self._dispatched.get(run_key, set()))
+        return set(self._dispatched.get(run_key, {}))
+
+    def dispatched_branch_kinds(self, run_key: str) -> dict[int, str | None]:
+        return dict(self._dispatched.get(run_key, {}))
+
+    # -- test helper: a v1.60/v1.61 pre-arc marker (step_id only, no recorded kind) → the
+    # maybe-ran classifier cannot prove the original kind → fail-closed. --
+    def forget_branch_dispatch_kind(self, run_key: str, branch_index: int) -> None:
+        if branch_index in self._dispatched.get(run_key, {}):
+            self._dispatched[run_key][branch_index] = None
+
+    # -- test helper: a stale / corrupt OUT-OF-RANGE dispatch marker (a leftover
+    # branch-N.dispatched from a larger prior fan-out) with a re-fire-safe recorded kind → the
+    # store no longer matches the declared fan-out → fail-closed (not silently ignored). --
+    def inject_stale_dispatch_marker(self, run_key: str, branch_index: int, kind: str) -> None:
+        self._dispatched.setdefault(run_key, {})[int(branch_index)] = str(kind)
 
     def record_dispatch_instrumented(self, run_key: str) -> None:
         self._instrumented.add(run_key)
@@ -140,7 +161,7 @@ class _InMemoryBranchStore:
     # output) — provably-not-run, the case the strict tiers can now re-dispatch safely. --
     def forget_branch_undispatched(self, run_key: str, branch_index: int) -> None:
         self._branches.get(run_key, {}).pop(branch_index, None)
-        self._dispatched.get(run_key, set()).discard(branch_index)
+        self._dispatched.get(run_key, {}).pop(branch_index, None)
 
     # -- test helper: a crash in the ORCHESTRATOR fire→capture window. The orchestrator
     # dispatched (marker + instrumented stamp present, both written BEFORE the dispatch) but
@@ -259,10 +280,10 @@ def _manifest(
     )
 
 
-def _step(name: str, index: int) -> WorkflowStep:
+def _step(name: str, index: int, kind: StepKind = StepKind.DECLARATIVE_STEP) -> WorkflowStep:
     return WorkflowStep(
         step_id=StepID(name),
-        step_kind=StepKind.DECLARATIVE_STEP,
+        step_kind=kind,
         step_payload={"index": index},
     )
 
@@ -359,6 +380,19 @@ class _LookupRaisesRegistry:
 
     def lookup(self, step_kind: StepKind) -> StepDispatcher:
         raise StepKindDispatcherNotBoundError(step_kind)
+
+
+class _AnyKindRegistry:
+    """A registry serving the SAME dispatcher for ANY step kind — for the
+    B-FANOUT-CRASH-RESUME-MAYBE-RAN-RESOLUTION multi-kind fan-out tests (re-fire-SAFE
+    DECLARATIVE_STEP / INFERENCE_STEP branches recover; effect-bearing TOOL_STEP /
+    MANAGED_AGENTS branches fail closed)."""
+
+    def __init__(self, dispatcher: StepDispatcher) -> None:
+        self._dispatcher = dispatcher
+
+    def lookup(self, step_kind: StepKind) -> StepDispatcher:
+        return self._dispatcher
 
 
 def _run(
@@ -1206,6 +1240,7 @@ def _run_persona(
     store: Any,
     persona_tier: PersonaTier,
     topology: TopologyPattern = TopologyPattern.PARALLELIZATION,
+    registry: Any = None,
 ) -> Any:
     ctx = cast(DriverContext, _Ctx(ledger=_RecordingLedger(), store=store))
     return execute_workflow(
@@ -1218,7 +1253,9 @@ def _run_persona(
         run_id="run-1",
         ctx=ctx,
         default_model_binding=_DEFAULT_BINDING,
-        step_dispatchers=cast(StepDispatcherRegistry, _Registry(dispatcher)),
+        step_dispatchers=cast(
+            StepDispatcherRegistry, registry if registry is not None else _Registry(dispatcher)
+        ),
     )
 
 
@@ -1249,13 +1286,16 @@ def test_crash_resume_cascade_cancel_complete_recovery_completes() -> None:
     assert resume.dispatched == []  # complete recovery → re-dispatches NOTHING
 
 
-def test_crash_resume_cascade_cancel_incomplete_fails_closed() -> None:
-    """An INCOMPLETE recovery where the absent branch is MAYBE-RAN (B-FANOUT-CRASH-RESUME-
-    STRICT-TIER-INCOMPLETE). `forget_branch` drops the OUTPUT record but KEEPS the reserve-
-    before-dispatch marker — modelling a branch that BEGAN dispatch (effect may have fired) but
-    crashed before its capture. `present_dispatched_indexes − recovered = {1}` ≠ ∅ → fail closed
-    (re-dispatching it would risk double-firing an effect-BEARING branch the compliance tier
-    must not). The provably-not-run case (no marker) recovers — see the sibling test."""
+def test_crash_resume_cascade_cancel_incomplete_refire_safe_recovers() -> None:
+    """B-FANOUT-CRASH-RESUME-MAYBE-RAN-RESOLUTION — an INCOMPLETE recovery where the absent
+    branch is MAYBE-RAN of a RE-FIRE-SAFE kind. `forget_branch` drops the OUTPUT record but
+    KEEPS the reserve-before-dispatch marker — a branch that BEGAN dispatch but crashed before
+    its capture. `present_dispatched_indexes − recovered = {1}` ≠ ∅, but the branch is a
+    DECLARATIVE_STEP (no non-idempotent external effect) → SAFE to re-dispatch fresh: the run
+    RECOVERS, re-dispatching ONLY the maybe-ran branch (the captured siblings replay, fire
+    zero times). The #732 arc failed this closed (conservative — "branches are effect-bearing");
+    this arc lifts it for re-fire-safe kinds. The effect-bearing-kind maybe-ran case still fails
+    closed — see `..._unsafe_kind_fails_closed`."""
     store = _InMemoryBranchStore()
     steps = [_step(f"branch-{i}", i) for i in range(3)]
     _run_persona(
@@ -1277,18 +1317,90 @@ def test_crash_resume_cascade_cancel_incomplete_fails_closed() -> None:
         store=store,
         persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
     )
+    assert r2.status is RunStatus.SUCCESS
+    # ONLY the maybe-ran branch re-dispatches (re-fire-safe); the captured siblings replay.
+    assert resume.dispatched == ["branch-1"]
+
+
+def test_crash_resume_cascade_cancel_incomplete_unsafe_kind_fails_closed() -> None:
+    """B-FANOUT-CRASH-RESUME-MAYBE-RAN-RESOLUTION — the maybe-ran branch is an EFFECT-BEARING
+    kind (TOOL_STEP), so the re-fire-safe relaxation does NOT apply: its effect MAY have fired
+    and re-dispatch would risk a double-fire → FAIL CLOSED (the fenced/unfenced resolution is a
+    registered follow-on). The contrasting positive control is the DECLARATIVE re-fire-safe
+    sibling above — same shape, only the kind differs."""
+    store = _InMemoryBranchStore()
+    steps = [_step(f"branch-{i}", i, kind=StepKind.TOOL_STEP) for i in range(3)]
+    _run_persona(
+        workflow_id="wf-cc-unsafe-kind",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3),
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        registry=_AnyKindRegistry(_CountingDispatcher(n=3)),
+    )
+    key = store.sole_run_key()
+    store.forget_branch(key, 1)  # output gone, marker KEPT → branch 1 is MAYBE-RAN (TOOL_STEP)
+    assert 1 in store.present_dispatched_indexes(key)
+
+    resume = _CountingDispatcher(n=3)
+    r2 = _run_persona(
+        workflow_id="wf-cc-unsafe-kind",
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        registry=_AnyKindRegistry(resume),
+    )
     assert r2.status is RunStatus.FAILED
     assert "fan-out-crash-resume-cascade-policy-incomplete-recovery" in (r2.fail_class or "")
-    assert resume.dispatched == []  # fail closed — the absent branch is NOT re-dispatched
+    assert resume.dispatched == []  # fail closed — the effect-bearing branch is NOT re-dispatched
 
 
-def test_crash_resume_cascade_cancel_cardinality_only_fails_closed() -> None:
-    """A CARDINALITY-ONLY store where branches are MAYBE-RAN. The cardinality marker is written
-    before any branch dispatches; here every branch BEGAN dispatch (markers KEPT) but none was
-    captured. `_determine_fanout_resume` returns None, and the reserve-before-dispatch markers
-    show dispatched branches with no capture → fail closed (a maybe-run branch must not be
-    re-dispatched). The no-dispatch-marker variant — a crash truly before any branch began —
-    recovers fresh; see the sibling test."""
+def test_crash_resume_cascade_cancel_incomplete_mixed_safe_unsafe_fails_closed() -> None:
+    """B-FANOUT-CRASH-RESUME-MAYBE-RAN-RESOLUTION — a MIX of maybe-ran branches: one re-fire-safe
+    (DECLARATIVE_STEP) + one effect-bearing (TOOL_STEP). The presence of ANY re-fire-UNSAFE
+    maybe-ran branch fails the WHOLE incomplete recovery closed (the safe subset is not partially
+    recovered — that would still leave the unsafe branch unresolved)."""
+    store = _InMemoryBranchStore()
+    steps = [
+        _step("branch-0", 0, kind=StepKind.DECLARATIVE_STEP),
+        _step("branch-1", 1, kind=StepKind.DECLARATIVE_STEP),
+        _step("branch-2", 2, kind=StepKind.TOOL_STEP),
+    ]
+    _run_persona(
+        workflow_id="wf-cc-mixed",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3),
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        registry=_AnyKindRegistry(_CountingDispatcher(n=3)),
+    )
+    key = store.sole_run_key()
+    store.forget_branch(key, 1)  # maybe-ran DECLARATIVE (re-fire-safe)
+    store.forget_branch(key, 2)  # maybe-ran TOOL_STEP (UNSAFE → poisons the whole recovery)
+    assert store.present_dispatched_indexes(key) - {0} == {1, 2}
+
+    resume = _CountingDispatcher(n=3)
+    r2 = _run_persona(
+        workflow_id="wf-cc-mixed",
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        registry=_AnyKindRegistry(resume),
+    )
+    assert r2.status is RunStatus.FAILED
+    assert "fan-out-crash-resume-cascade-policy-incomplete-recovery" in (r2.fail_class or "")
+    assert resume.dispatched == []  # fail closed — one unsafe maybe-ran poisons the set
+
+
+def test_crash_resume_cascade_cancel_cardinality_only_refire_safe_recovers() -> None:
+    """B-FANOUT-CRASH-RESUME-MAYBE-RAN-RESOLUTION (cardinality-only path) — every branch is
+    MAYBE-RAN of a RE-FIRE-SAFE kind. The cardinality marker is present but NOTHING is readably
+    recovered (`_determine_fanout_resume` → None); every branch BEGAN dispatch (markers KEPT) but
+    none was captured. All maybe-ran branches are DECLARATIVE_STEP → re-fire-safe → the run
+    RECOVERS as a fresh re-dispatch (every branch fires once). The effect-bearing-kind variant
+    still fails closed — see the sibling cardinality-only unsafe test."""
     store = _InMemoryBranchStore()
     steps = [_step(f"branch-{i}", i) for i in range(3)]
     _run_persona(
@@ -1313,11 +1425,192 @@ def test_crash_resume_cascade_cancel_cardinality_only_fails_closed() -> None:
         store=store,
         persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
     )
+    assert r2.status is RunStatus.SUCCESS
+    # Fresh re-dispatch of every branch (re-fire-safe); each fires exactly once.
+    assert sorted(resume.dispatched) == ["branch-0", "branch-1", "branch-2"]
+
+
+def test_crash_resume_cascade_cancel_cardinality_only_unsafe_kind_fails_closed() -> None:
+    """B-FANOUT-CRASH-RESUME-MAYBE-RAN-RESOLUTION (cardinality-only path) — an effect-bearing
+    (TOOL_STEP) maybe-ran branch in a cardinality-only store still FAILS CLOSED (the re-fire-safe
+    relaxation does not apply). The contrasting positive control is the re-fire-safe sibling
+    above."""
+    store = _InMemoryBranchStore()
+    steps = [_step(f"branch-{i}", i, kind=StepKind.TOOL_STEP) for i in range(3)]
+    _run_persona(
+        workflow_id="wf-cc-cardinality-unsafe",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3),
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        registry=_AnyKindRegistry(_CountingDispatcher(n=3)),
+    )
+    key = store.sole_run_key()
+    for i in range(3):
+        store.forget_branch(key, i)  # all maybe-ran, all TOOL_STEP (UNSAFE)
+    assert store.present_dispatched_indexes(key) == {0, 1, 2}
+
+    resume = _CountingDispatcher(n=3)
+    r2 = _run_persona(
+        workflow_id="wf-cc-cardinality-unsafe",
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        registry=_AnyKindRegistry(resume),
+    )
     assert r2.status is RunStatus.FAILED
     assert "fan-out-crash-resume-cascade-policy-incomplete-recovery" in (r2.fail_class or "")
-    assert (
-        resume.dispatched == []
-    )  # NOT restarted fresh — fail closed on the cardinality-only store
+    assert resume.dispatched == []  # fail closed on the cardinality-only effect-bearing store
+
+
+def test_crash_resume_maybe_ran_changed_manifest_kind_fails_closed() -> None:
+    """B-FANOUT-CRASH-RESUME-MAYBE-RAN-RESOLUTION — the changed-manifest at-most-once guard
+    (out-of-family Codex [P1]). A branch dispatched as an EFFECT-BEARING kind (TOOL_STEP) that
+    crashed before terminal capture is RE-SUPPLIED at the SAME ordinal as a RE-FIRE-SAFE kind
+    (DECLARATIVE_STEP) on a same-cardinality resume (same workflow_id → same run_key → the Run-1
+    markers are found). The classifier keys on the marker's RECORDED dispatch-time kind
+    (TOOL_STEP), NOT the resumed manifest's kind → fail closed (the original tool effect may have
+    fired; re-dispatch would double-fire). Were it to key on the resumed DECLARATIVE kind, it
+    would wrongly recover → SUCCESS. Asserting FAILED proves the marker-keying."""
+    store = _InMemoryBranchStore()
+    # Run 1: all TOOL_STEP; branch 1 crashes maybe-ran (marker [TOOL_STEP] kept, output gone).
+    steps_v1 = [_step(f"branch-{i}", i, kind=StepKind.TOOL_STEP) for i in range(3)]
+    _run_persona(
+        workflow_id="wf-changed-manifest",
+        steps=steps_v1,
+        dispatcher=_CountingDispatcher(n=3),
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        registry=_AnyKindRegistry(_CountingDispatcher(n=3)),
+    )
+    key = store.sole_run_key()
+    store.forget_branch(key, 1)  # maybe-ran: marker (TOOL_STEP) kept, output gone
+    assert store.dispatched_branch_kinds(key)[1] == StepKind.TOOL_STEP.value
+
+    # Run 2 (resume): branch 1 re-supplied as a RE-FIRE-SAFE DECLARATIVE_STEP (changed kind, same
+    # ordinal + step_id). The marker still says TOOL_STEP → fail closed.
+    resume = _CountingDispatcher(n=3)
+    steps_v2 = [
+        _step("branch-0", 0, kind=StepKind.TOOL_STEP),
+        _step("branch-1", 1, kind=StepKind.DECLARATIVE_STEP),  # CHANGED from TOOL_STEP
+        _step("branch-2", 2, kind=StepKind.TOOL_STEP),
+    ]
+    r2 = _run_persona(
+        workflow_id="wf-changed-manifest",
+        steps=steps_v2,
+        dispatcher=resume,
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        registry=_AnyKindRegistry(resume),
+    )
+    assert r2.status is RunStatus.FAILED
+    assert "fan-out-crash-resume-cascade-policy-incomplete-recovery" in (r2.fail_class or "")
+    assert resume.dispatched == []  # keyed on the DISPATCH-TIME TOOL_STEP marker → fail closed
+
+
+def test_crash_resume_maybe_ran_pre_arc_marker_no_kind_fails_closed() -> None:
+    """A v1.60/v1.61 dispatch marker (step_id only, NO recorded kind — or a torn write) cannot
+    prove the original kind → the maybe-ran classifier treats it as UNSAFE → fail closed
+    (defensive; the recorded dispatch-time kind is the at-most-once authority, and an un-kinded
+    marker is not trustworthy). Even though the branch is a DECLARATIVE_STEP in the manifest."""
+    store = _InMemoryBranchStore()
+    steps = [_step(f"branch-{i}", i) for i in range(3)]  # DECLARATIVE (re-fire-safe normally)
+    _run_persona(
+        workflow_id="wf-prearc-marker",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3),
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+    )
+    key = store.sole_run_key()
+    store.forget_branch(key, 1)  # maybe-ran
+    store.forget_branch_dispatch_kind(key, 1)  # simulate a pre-arc / torn marker: kind → None
+    assert store.dispatched_branch_kinds(key)[1] is None
+
+    resume = _CountingDispatcher(n=3)
+    r2 = _run_persona(
+        workflow_id="wf-prearc-marker",
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+    )
+    assert r2.status is RunStatus.FAILED  # un-kinded marker → cannot prove re-fire-safe → closed
+    assert "fan-out-crash-resume-cascade-policy-incomplete-recovery" in (r2.fail_class or "")
+    assert resume.dispatched == []
+
+
+def test_crash_resume_maybe_ran_out_of_range_marker_fails_closed() -> None:
+    """B-FANOUT-CRASH-RESUME-MAYBE-RAN-RESOLUTION — an out-of-range / stale dispatch marker (a
+    corrupt `branch-99.dispatched` left from a larger prior fan-out) recording a re-fire-safe
+    kind must NOT be ignored: the store no longer matches the declared fan-out → fail closed
+    (out-of-family Codex [P2]). Branch 1 is a legitimate re-fire-safe maybe-ran; branch 99 is out
+    of range → the whole incomplete recovery fails closed."""
+    store = _InMemoryBranchStore()
+    steps = [_step(f"branch-{i}", i) for i in range(3)]  # DECLARATIVE (re-fire-safe)
+    _run_persona(
+        workflow_id="wf-stale-marker",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3),
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+    )
+    key = store.sole_run_key()
+    store.forget_branch(key, 1)  # legitimate re-fire-safe maybe-ran
+    store.inject_stale_dispatch_marker(key, 99, "declarative-step")  # out-of-range, safe kind
+    assert 99 in store.present_dispatched_indexes(key)
+
+    resume = _CountingDispatcher(n=3)
+    r2 = _run_persona(
+        workflow_id="wf-stale-marker",
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+    )
+    assert r2.status is RunStatus.FAILED  # out-of-range marker → store mismatch → fail closed
+    assert "fan-out-crash-resume-cascade-policy-incomplete-recovery" in (r2.fail_class or "")
+    assert resume.dispatched == []
+
+
+def test_crash_resume_cardinality_only_orchestrator_out_of_range_marker_fails_closed() -> None:
+    """B-FANOUT-CRASH-RESUME-MAYBE-RAN-RESOLUTION — the cardinality-only out-of-range bound uses
+    the WORKER count, not the recorded `len(steps)` cardinality (which for ORCHESTRATOR_WORKERS
+    INCLUDES the orchestrator `steps[0]`). A stale `branch-{worker_count}.dispatched` marker (a
+    worker ordinal one past the last real worker) with a re-fire-safe kind must fail closed, not
+    re-run fresh (out-of-family Codex [P2] — `_cardinality` over-counts by one for orchestrated)."""
+    store = _InMemoryBranchStore()
+    steps = [_step("orch", 0), _step("w0", 0), _step("w1", 1)]  # 1 orchestrator + 2 workers
+    _run_persona(
+        workflow_id="wf-orch-stale-card",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=2),
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+    )
+    key = store.sole_run_key()
+    store.forget_orchestrator_undispatched(key)  # nothing readably recovered (orchestrator-None)
+    store.record_fanout_cardinality(key, len(steps))  # recorded = 3 (INCLUDES the orchestrator)
+    store.record_dispatch_instrumented(key)
+    # worker ordinal 2 is OUT OF RANGE (only 2 workers: ordinals 0, 1) — `_cardinality`=3 would
+    # wrongly accept it (2 < 3); the worker-count bound (3 − 1 = 2) rejects it (2 ≥ 2).
+    store.inject_stale_dispatch_marker(key, 2, "declarative-step")
+    assert store.present_dispatched_indexes(key) == {2}
+
+    resume = _CountingDispatcher(n=2)
+    r2 = _run_persona(
+        workflow_id="wf-orch-stale-card",
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+    )
+    assert r2.status is RunStatus.FAILED  # worker-count bound → branch-2 out of range → closed
+    assert "fan-out-crash-resume-cascade-policy-incomplete-recovery" in (r2.fail_class or "")
+    assert resume.dispatched == []
 
 
 def test_crash_resume_cascade_cancel_errored_branch_reproduces_failed() -> None:
@@ -1375,20 +1668,22 @@ def test_crash_resume_pause_complete_recovery_completes() -> None:
 
 
 def test_crash_resume_pause_incomplete_fails_closed() -> None:
-    """An INCOMPLETE recovery with a MAYBE-RAN branch under PAUSE (TEAM_BINDING) also fails
-    closed — `forget_branch` keeps the dispatch marker, so branch 0 is maybe-ran (dispatched, no
-    capture) and is not re-dispatchable on the team tier either (effect-bearing branches)."""
+    """An INCOMPLETE recovery with a MAYBE-RAN EFFECT-BEARING branch (TOOL_STEP) under PAUSE
+    (TEAM_BINDING) also fails closed — `forget_branch` keeps the dispatch marker, so branch 0 is
+    maybe-ran (dispatched, no capture) and its effect MAY have fired → not re-dispatchable on the
+    team tier either. The re-fire-safe relaxation is tier-agnostic (see the recovery sibling)."""
     store = _InMemoryBranchStore()
-    steps = [_step(f"branch-{i}", i) for i in range(3)]
+    steps = [_step(f"branch-{i}", i, kind=StepKind.TOOL_STEP) for i in range(3)]
     _run_persona(
         workflow_id="wf-pause-incomplete",
         steps=steps,
         dispatcher=_CountingDispatcher(n=3),
         store=store,
         persona_tier=PersonaTier.TEAM_BINDING,
+        registry=_AnyKindRegistry(_CountingDispatcher(n=3)),
     )
     key = store.sole_run_key()
-    store.forget_branch(key, 0)  # output gone, marker KEPT → maybe-ran
+    store.forget_branch(key, 0)  # output gone, marker KEPT → maybe-ran (TOOL_STEP)
     assert 0 in store.present_dispatched_indexes(key)
 
     resume = _CountingDispatcher(n=3)
@@ -1398,10 +1693,40 @@ def test_crash_resume_pause_incomplete_fails_closed() -> None:
         dispatcher=resume,
         store=store,
         persona_tier=PersonaTier.TEAM_BINDING,
+        registry=_AnyKindRegistry(resume),
     )
     assert r2.status is RunStatus.FAILED
     assert "fan-out-crash-resume-cascade-policy-incomplete-recovery" in (r2.fail_class or "")
     assert resume.dispatched == []
+
+
+def test_crash_resume_pause_incomplete_refire_safe_recovers() -> None:
+    """The re-fire-safe maybe-ran relaxation is TIER-AGNOSTIC — a maybe-ran DECLARATIVE_STEP
+    branch under PAUSE (TEAM_BINDING) recovers exactly as under CASCADE_CANCEL (the classifier
+    keys on `cascade_policy is not PROCEED`, not on the specific strict tier)."""
+    store = _InMemoryBranchStore()
+    steps = [_step(f"branch-{i}", i) for i in range(3)]
+    _run_persona(
+        workflow_id="wf-pause-refire-safe",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3),
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+    )
+    key = store.sole_run_key()
+    store.forget_branch(key, 0)  # maybe-ran DECLARATIVE (re-fire-safe)
+    assert 0 in store.present_dispatched_indexes(key)
+
+    resume = _CountingDispatcher(n=3)
+    r2 = _run_persona(
+        workflow_id="wf-pause-refire-safe",
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+    )
+    assert r2.status is RunStatus.SUCCESS
+    assert resume.dispatched == ["branch-0"]  # only the maybe-ran branch re-dispatches
 
 
 def test_crash_resume_pause_errored_branch_fails_closed_ambiguous() -> None:
@@ -1709,36 +2034,39 @@ def test_crash_resume_incomplete_pre_arc_journal_fails_closed() -> None:
 
 
 def test_crash_resume_mixed_not_run_and_maybe_ran_fails_closed() -> None:
-    """ANY maybe-ran absent branch poisons the recovery. Branch 1 is not-yet-dispatched (safe)
-    but branch 2 is maybe-ran (marker kept, output gone). `present_dispatched − recovered = {2}`
-    ≠ ∅ → fail closed — the at-most-once guarantee admits re-dispatch only when EVERY absent
-    branch is provably not-run."""
+    """A maybe-ran EFFECT-BEARING branch poisons the recovery even when another absent branch is
+    provably not-run. Branch 1 is not-yet-dispatched (safe) but branch 2 is maybe-ran TOOL_STEP
+    (marker kept, output gone, effect MAY have fired). `present_dispatched − recovered = {2}` ≠ ∅
+    AND branch 2 is re-fire-UNSAFE → fail closed — the at-most-once guarantee admits re-dispatch
+    of a maybe-ran branch only when it is provably not-run OR a re-fire-safe kind."""
     store = _InMemoryBranchStore()
-    steps = [_step(f"branch-{i}", i) for i in range(3)]
+    steps = [_step(f"branch-{i}", i, kind=StepKind.TOOL_STEP) for i in range(3)]
     _run_persona(
-        workflow_id="wf-cc-mixed",
+        workflow_id="wf-cc-mixed-notrun",
         steps=steps,
         dispatcher=_CountingDispatcher(n=3),
         store=store,
         persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        registry=_AnyKindRegistry(_CountingDispatcher(n=3)),
     )
     key = store.sole_run_key()
     store.forget_branch_undispatched(key, 1)  # provably not-run
-    store.forget_branch(key, 2)  # maybe-ran (marker kept)
+    store.forget_branch(key, 2)  # maybe-ran TOOL_STEP (marker kept) — re-fire-UNSAFE
     assert 1 not in store.present_dispatched_indexes(key)
     assert 2 in store.present_dispatched_indexes(key)
 
     resume = _CountingDispatcher(n=3)
     r2 = _run_persona(
-        workflow_id="wf-cc-mixed",
+        workflow_id="wf-cc-mixed-notrun",
         steps=steps,
         dispatcher=resume,
         store=store,
         persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        registry=_AnyKindRegistry(resume),
     )
     assert r2.status is RunStatus.FAILED
     assert "fan-out-crash-resume-cascade-policy-incomplete-recovery" in (r2.fail_class or "")
-    assert resume.dispatched == []  # any maybe-ran branch → fail closed
+    assert resume.dispatched == []  # any re-fire-unsafe maybe-ran branch → fail closed
 
 
 # ===========================================================================

@@ -298,10 +298,35 @@ def test_dispatched_marker_round_trip_across_restart(tmp_path: Path) -> None:
     store instance (= a process restart) reads it back. Marker presence is the at-most-once
     signal — an absent branch with no marker is provably not-yet-run."""
     store = EngineOutputStore(journal_dir=tmp_path / "eo")
-    store.record_branch_dispatched(_RUN_KEY, 0, "w0")
-    store.record_branch_dispatched(_RUN_KEY, 2, "w2")
+    store.record_branch_dispatched(_RUN_KEY, 0, "w0", "inference-step")
+    store.record_branch_dispatched(_RUN_KEY, 2, "w2", "inference-step")
     fresh = EngineOutputStore(journal_dir=tmp_path / "eo")  # crash + restart
     assert fresh.present_dispatched_indexes(_RUN_KEY) == {0, 2}
+
+
+def test_dispatched_branch_kinds_round_trip_across_restart(tmp_path: Path) -> None:
+    """B-FANOUT-CRASH-RESUME-MAYBE-RAN-RESOLUTION — the marker records the DISPATCH-TIME step
+    kind so the maybe-ran re-fire-safety classifier keys on the ORIGINAL kind (the at-most-once
+    changed-manifest guard), not the resumed manifest's kind. A FRESH store reads it back."""
+    store = EngineOutputStore(journal_dir=tmp_path / "eo")
+    store.record_branch_dispatched(_RUN_KEY, 0, "w0", "tool-step")
+    store.record_branch_dispatched(_RUN_KEY, 1, "w1", "inference-step")
+    fresh = EngineOutputStore(journal_dir=tmp_path / "eo")  # crash + restart
+    assert fresh.dispatched_branch_kinds(_RUN_KEY) == {0: "tool-step", 1: "inference-step"}
+    # Absent → empty (a run where no branch began dispatch).
+    assert fresh.dispatched_branch_kinds("other-run") == {}
+
+
+def test_dispatched_branch_kinds_torn_marker_maps_to_none(tmp_path: Path) -> None:
+    """A torn / invalid-UTF-8 `.dispatched` marker maps to kind=None (→ the CP classifier fails
+    closed), never raising out of dispatched_branch_kinds (out-of-family Codex [P2]; the index
+    is still PRESENT — dispatch began — so the marker is treated as unknown-kind, not absent)."""
+    store = EngineOutputStore(journal_dir=tmp_path / "eo")
+    store.record_branch_dispatched(_RUN_KEY, 0, "w0", "inference-step")
+    marker = store._branch_dispatched_file(_RUN_KEY, 0)  # reach the path helper directly
+    marker.write_bytes(b"\xff\xfe not valid utf-8")  # torn write: invalid UTF-8 bytes
+    assert store.dispatched_branch_kinds(_RUN_KEY) == {0: None}  # unknown kind → fail-closed
+    assert store.present_dispatched_indexes(_RUN_KEY) == {0}  # but dispatch still PROVABLY began
 
 
 def test_dispatched_markers_absent_returns_empty(tmp_path: Path) -> None:
@@ -314,8 +339,8 @@ def test_dispatched_marker_idempotent_last_wins(tmp_path: Path) -> None:
     """A re-recorded marker (a resume re-dispatch of the same branch) is idempotent — the
     branch still appears exactly once in the present set."""
     store = EngineOutputStore(journal_dir=tmp_path / "eo")
-    store.record_branch_dispatched(_RUN_KEY, 1, "w1")
-    store.record_branch_dispatched(_RUN_KEY, 1, "w1")
+    store.record_branch_dispatched(_RUN_KEY, 1, "w1", "inference-step")
+    store.record_branch_dispatched(_RUN_KEY, 1, "w1", "inference-step")
     assert store.present_dispatched_indexes(_RUN_KEY) == {1}
 
 
@@ -366,9 +391,11 @@ def test_dispatched_marker_does_not_collide_with_branch_capture(tmp_path: Path) 
     (the reserve-before-DISPATCH marker is distinct from the reserve-before-COMMIT capture):
     a branch can be both dispatched AND captured (completed), or dispatched-only (maybe-ran)."""
     store = EngineOutputStore(journal_dir=tmp_path / "eo")
-    store.record_branch_dispatched(_RUN_KEY, 0, "w0")
+    store.record_branch_dispatched(_RUN_KEY, 0, "w0", "inference-step")
     store.record_branch(_RUN_KEY, 0, "w0", "completed", {"y": 2})
-    store.record_branch_dispatched(_RUN_KEY, 1, "w1")  # dispatched but NOT captured (maybe-ran)
+    store.record_branch_dispatched(
+        _RUN_KEY, 1, "w1", "inference-step"
+    )  # dispatched but NOT captured (maybe-ran)
     assert store.present_dispatched_indexes(_RUN_KEY) == {0, 1}
     assert store.read_branch_records(_RUN_KEY) == {0: ("w0", "completed", {"y": 2})}
     # maybe-ran discriminator: dispatched − captured = {1}
