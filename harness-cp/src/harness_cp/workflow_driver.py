@@ -5698,6 +5698,13 @@ def _execute_parallelization(
     # AFTER the barrier to build `PeerFanOutResumeState.effect_fence_paused_branches`. "" → the
     # captured error carried no key → resume re-pauses INERT.
     effect_fence_paused_dispositions: dict[int, str] = {}
+    # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE — peer ordinals whose re-dispatch on resume raised the
+    # runtime fence's `EffectFenceAbortedError` (the operator resolved the pause with ABORT). An
+    # ABORT is a TERMINAL decision (NOT a re-pause): the post-barrier forces RunStatus.FAILED,
+    # tier-agnostic, BEFORE the pause path — so a fan-out ABORT maps to FAILED exactly as the
+    # LINEAR effect-fence ABORT does (out-of-family Codex [P1]: without this an ABORT re-supplied
+    # under CascadePolicy.PAUSE fell through the generic branch-failure path → re-pause).
+    effect_fence_aborted_dispositions: set[int] = set()
 
     # B-FANOUT-PAUSE-PARALLELIZATION — seed the recovered terminal branches (from the
     # resume snapshot) into `collected` + `terminal_dispositions` so (a) their outputs
@@ -6047,6 +6054,11 @@ def _execute_parallelization(
             _inflight_exc = (
                 inflight.exception() if (inflight.done() and not inflight.cancelled()) else None
             )
+            if type(_inflight_exc).__name__ == "EffectFenceAbortedError":
+                # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE — an in-flight branch whose re-dispatch raised
+                # the operator's ABORT (symmetric with the own-dispatch catch) → terminal FAILED.
+                effect_fence_aborted_dispositions.add(branch_index)
+                raise
             if type(_inflight_exc).__name__ == "EffectFenceAmbiguousUncommittedError":
                 _inflight_fence_key = getattr(_inflight_exc, "idempotency_key", None)
                 effect_fence_paused_dispositions[branch_index] = (
@@ -6124,6 +6136,13 @@ def _execute_parallelization(
             # never an auto-re-fire) so the post-barrier compose lands it in
             # `effect_fence_paused_branches`, then re-raise so the TaskGroup halts the fan-out at
             # the pause boundary (the post-barrier guard fails honestly if no protocol is bound).
+            if type(_exc).__name__ == "EffectFenceAbortedError":
+                # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE — the operator resolved THIS branch's fence
+                # pause with ABORT on resume → a TERMINAL decision: record the abort ordinal +
+                # re-raise so the post-barrier forces RunStatus.FAILED (tier-agnostic), never a
+                # re-pause (the LINEAR effect-fence ABORT → FAILED analogue; Codex [P1]).
+                effect_fence_aborted_dispositions.add(branch_index)
+                raise
             if type(_exc).__name__ == "EffectFenceAmbiguousUncommittedError":
                 _fence_key = getattr(_exc, "idempotency_key", None)
                 effect_fence_paused_dispositions[branch_index] = (
@@ -6190,6 +6209,16 @@ def _execute_parallelization(
         # is the drained ledger). cascade_policy maps the run-level status.
         branch_failed = True
 
+    # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE — an operator ABORT on resume is a TERMINAL decision:
+    # force RunStatus.FAILED tier-agnostically, BEFORE the cascade-policy branching, so a
+    # CascadePolicy.PAUSE run does NOT re-pause an aborted fence branch (the LINEAR ABORT → FAILED
+    # analogue; Codex [P1]). The aborted branch already re-dispatched (its effect-fence claim is
+    # the durable record); the run fails honestly.
+    if effect_fence_aborted_dispositions:
+        return _finish(
+            RunStatus.FAILED, fail_class="parallelization-effect-fence-aborted", salvage=False
+        )
+
     if cascade_policy is CascadePolicy.CASCADE_CANCEL:
         # obl. 4: a not-yet-dispatched branch (no step/terminal disposition — its
         # task was cancelled before scheduling its dispatch) records a `cancelled`
@@ -6203,9 +6232,23 @@ def _execute_parallelization(
                 # cascade-cancel it MUST NOT be mislabeled `cancelled` (= not-yet-dispatched).
                 # Record `completed` (dispatch-boundary) so the ledger reflects the dispatch;
                 # the run FAILs + the resolution is discarded (not resumed under cascade-cancel).
-                _disposition = (
-                    "completed" if _bi in effect_fence_paused_dispositions else "cancelled"
-                )
+                _fence_paused = _bi in effect_fence_paused_dispositions
+                _disposition = "completed" if _fence_paused else "cancelled"
+                if _fence_paused:
+                    # ALSO capture the `completed`/no-output terminal to the durable STORE (not
+                    # just the buffered ledger) — every other ran-and-errored branch does, via the
+                    # branch coroutine. Without this, a crash mid-cascade-cancel leaves only the
+                    # dispatch marker → crash-resume mis-classifies the branch as MAYBE-RAN +
+                    # re-dispatches instead of reproducing the cascade-cancel FAILED (Codex [P2]).
+                    _capture_branch_terminal(
+                        ctx,
+                        manifest_entry,
+                        run_idempotency_key=run_idempotency_key,
+                        branch_index=_bi,
+                        step_id=str(steps[_bi].step_id),
+                        terminal_status="completed",
+                        output=None,
+                    )
                 append_branch_terminal_ledger_entry(
                     branch_writer=writer,
                     branch_context=child,
@@ -6287,12 +6330,22 @@ def _execute_parallelization(
             # (drop-from-hash-when-None keeps those snapshots byte-identical).
             synthesis_step_id=(str(synthesis_step.step_id) if synthesis_step is not None else None),
         )
+        # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE — label the pause EFFECT_FENCE_AMBIGUOUS whenever a
+        # branch fence-paused this round, so an operator surface keying off the reason knows to
+        # request an `EffectFenceResolution` (mirrors the LINEAR effect-fence pause reason); else
+        # the ordinary `cascade_policy=pause` branch-failure pause stays EXPLICIT_OPERATOR (Codex
+        # [P2]).
+        _pause_reason = (
+            WorkflowPauseReason.EFFECT_FENCE_AMBIGUOUS
+            if effect_fence_paused_dispositions
+            else WorkflowPauseReason.EXPLICIT_OPERATOR
+        )
         snapshot = _run_protocol_method_sync(
             cast(PauseResumeProtocol, protocol).capture_pause_snapshot(
                 workflow_id=workflow_id,
                 run_id=run_id,
                 step_index=0,
-                pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
+                pause_reason=_pause_reason,
                 peer_fan_out_resume=peer_fan_out_resume,
             )
         )
@@ -7730,6 +7783,11 @@ def _execute_orchestrator_workers(
     # name off the runtime error); "" when the error carried no key → resume re-pauses INERT
     # (never an auto-re-fire — the linear B-EFFECT-FENCE-HITL-ROUTE defensive shape).
     effect_fence_paused_dispositions: dict[int, str] = {}
+    # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE — worker ordinals whose re-dispatch on resume raised the
+    # runtime fence's `EffectFenceAbortedError` (operator ABORT). A TERMINAL decision → the
+    # post-barrier forces RunStatus.FAILED tier-agnostic, BEFORE the pause path (the LINEAR ABORT
+    # → FAILED analogue; Codex [P1]).
+    effect_fence_aborted_dispositions: set[int] = set()
 
     # B-FANOUT-PAUSE — seed the recovered terminal branches (from the resume
     # snapshot) into `collected` + `terminal_dispositions` so (a) their outputs
@@ -8157,6 +8215,10 @@ def _execute_orchestrator_workers(
             # skipped). Capture it as effect-fence-paused (NOT a terminal `completed` branch —
             # else resume skips it + drops the pause), matching the SubAgentChildPausedError
             # in-flight shape: stash the reserve key + re-raise, no step/terminal entry.
+            if type(_inflight_exc).__name__ == "EffectFenceAbortedError":
+                # an in-flight worker whose re-dispatch raised the operator's ABORT → FAILED.
+                effect_fence_aborted_dispositions.add(branch_index)
+                raise
             if type(_inflight_exc).__name__ == "EffectFenceAmbiguousUncommittedError":
                 _inflight_fence_key = getattr(_inflight_exc, "idempotency_key", None)
                 effect_fence_paused_dispositions[branch_index] = (
@@ -8253,6 +8315,10 @@ def _execute_orchestrator_workers(
             # `effect_fence_paused_branches`, then re-raise so the TaskGroup halts the fan-out
             # at the pause boundary (the SubAgentChildPausedError disposition shape; the
             # post-barrier guard FAILS HONESTLY if no PauseResumeProtocol is bound).
+            if type(_exc).__name__ == "EffectFenceAbortedError":
+                # operator ABORT on resume → terminal FAILED (NOT a re-pause); Codex [P1].
+                effect_fence_aborted_dispositions.add(branch_index)
+                raise
             if type(_exc).__name__ == "EffectFenceAmbiguousUncommittedError":
                 _fence_key = getattr(_exc, "idempotency_key", None)
                 effect_fence_paused_dispositions[branch_index] = (
@@ -8318,6 +8384,16 @@ def _execute_orchestrator_workers(
         # is the drained ledger). cascade_policy maps the run-level status.
         worker_failed = True
 
+    # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE — an operator ABORT on resume is TERMINAL: force FAILED
+    # tier-agnostically, BEFORE the cascade-policy branching, so a CascadePolicy.PAUSE run does
+    # NOT re-pause an aborted fence worker (the LINEAR ABORT → FAILED analogue; Codex [P1]).
+    if effect_fence_aborted_dispositions:
+        return _finish(
+            RunStatus.FAILED,
+            fail_class="orchestrator-workers-effect-fence-aborted",
+            salvage=False,
+        )
+
     if cascade_policy is CascadePolicy.CASCADE_CANCEL:
         # obl. 4: a not-yet-dispatched worker (no step/terminal disposition — its
         # task was cancelled before scheduling its dispatch) records a `cancelled`
@@ -8346,6 +8422,20 @@ def _execute_orchestrator_workers(
                 if (_bi in paused_child_dispositions or _bi in effect_fence_paused_dispositions)
                 else "cancelled"
             )
+            if _bi in effect_fence_paused_dispositions:
+                # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE — ALSO capture the `completed`/no-output
+                # terminal to the durable STORE (not just the buffered ledger), so a crash mid-
+                # cascade-cancel reproduces the FAILED on resume instead of mis-classifying the
+                # worker as MAYBE-RAN + re-dispatching (Codex [P2]; the parallelization analogue).
+                _capture_branch_terminal(
+                    ctx,
+                    manifest_entry,
+                    run_idempotency_key=run_idempotency_key,
+                    branch_index=_bi,
+                    step_id=str(_step.step_id),
+                    terminal_status="completed",
+                    output=None,
+                )
             append_branch_terminal_ledger_entry(
                 branch_writer=writer,
                 branch_context=child,
@@ -8465,12 +8555,20 @@ def _execute_orchestrator_workers(
             # snapshot here too.
             synthesis_step_id=(str(synthesis_step.step_id) if synthesis_step is not None else None),
         )
+        # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE — label EFFECT_FENCE_AMBIGUOUS when a worker
+        # fence-paused this round so the operator surface knows to supply an EffectFenceResolution
+        # (Codex [P2]; the parallelization analogue).
+        _pause_reason = (
+            WorkflowPauseReason.EFFECT_FENCE_AMBIGUOUS
+            if effect_fence_paused_dispositions
+            else WorkflowPauseReason.EXPLICIT_OPERATOR
+        )
         snapshot = _run_protocol_method_sync(
             cast(PauseResumeProtocol, protocol).capture_pause_snapshot(
                 workflow_id=workflow_id,
                 run_id=run_id,
                 step_index=0,
-                pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
+                pause_reason=_pause_reason,
                 fan_out_resume=fan_out_resume,
             )
         )

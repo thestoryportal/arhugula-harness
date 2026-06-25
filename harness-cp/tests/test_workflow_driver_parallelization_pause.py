@@ -1259,6 +1259,8 @@ def test_peer_branch_effect_fence_ambiguous_composes_through_barrier_to_pause() 
     assert result.fail_class is None
     snap = result.pause_snapshot
     assert snap is not None
+    # Labeled EFFECT_FENCE_AMBIGUOUS so the operator surface knows to supply a resolution.
+    assert snap.pause_reason is WorkflowPauseReason.EFFECT_FENCE_AMBIGUOUS
     pr = snap.peer_fan_out_resume
     assert pr is not None
     assert pr.branch_count == 2
@@ -1313,3 +1315,56 @@ def test_peer_branch_effect_fence_resume_threads_key_bound_resolution() -> None:
     assert threaded.resolution is EffectFenceResolution.SKIP_AS_FIRED
     assert threaded.idempotency_key == key
     assert holder.peeked >= 1  # the holder was PEEKED (non-consuming), not consumed
+
+
+class EffectFenceAbortedError(Exception):
+    """Test-local stand-in for the runtime `effect_fence.EffectFenceAbortedError` — raised when
+    the operator resolved an effect-fence pause with ABORT and the tool dispatcher applies it."""
+
+
+class _AbortOnResolutionDispatcher:
+    """Resume-side dispatcher that RAISES the test-local `EffectFenceAbortedError` when it sees an
+    ABORT directive threaded on the re-entered branch (simulating the runtime fence applying the
+    operator's ABORT) — so the driver's ABORT → terminal FAILED routing is witnessed."""
+
+    def __init__(self) -> None:
+        self.dispatched: list[str] = []
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        step_id = str(step.step_id)
+        self.dispatched.append(step_id)
+        directive = getattr(step_context, "effect_fence_resolution", None)
+        if directive is not None and directive.resolution is EffectFenceResolution.ABORT:
+            raise EffectFenceAbortedError(f"operator aborted {step_id}")
+        return {"role": step_id, "echoed": dict(step.step_payload)}
+
+
+def test_peer_branch_effect_fence_resume_abort_is_terminal_failed_not_repause() -> None:
+    """Codex [P1] regression: resuming an effect-fence-paused peer fan-out with an ABORT
+    resolution yields a TERMINAL `RunStatus.FAILED` (the operator gave up), NOT a re-pause —
+    even on the TEAM (cascade_policy=pause) tier where an ordinary branch failure WOULD pause."""
+    paused = _run(
+        steps=_steps(2),
+        dispatcher=_FenceAmbiguousBranchDispatcher(),
+        ctx=cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())),
+    )
+    snap = paused.pause_snapshot
+    assert snap is not None and snap.peer_fan_out_resume is not None
+
+    holder = _HolderWithResolution(EffectFenceResolution.ABORT)
+    rec = _AbortOnResolutionDispatcher()
+    ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    ctx_obj.resume_context_holder = holder  # type: ignore[attr-defined]
+    result = _run(
+        steps=_steps(2),
+        dispatcher=rec,
+        ctx=cast(DriverContext, ctx_obj),
+        pause_snapshot_input=snap,
+    )
+
+    assert result.status is RunStatus.FAILED
+    assert "parallelization-effect-fence-aborted" in (result.fail_class or "")
+    assert result.pause_snapshot is None  # terminal — NOT a re-pause
+    assert "branch-1" in rec.dispatched  # the aborted branch DID re-dispatch

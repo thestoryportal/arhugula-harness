@@ -1517,6 +1517,8 @@ def test_orchestrator_worker_effect_fence_ambiguous_composes_through_barrier_to_
     assert result.fail_class is None
     snap = result.pause_snapshot
     assert snap is not None
+    # Labeled EFFECT_FENCE_AMBIGUOUS so the operator surface knows to supply a resolution.
+    assert snap.pause_reason is WorkflowPauseReason.EFFECT_FENCE_AMBIGUOUS
     fr = snap.fan_out_resume
     assert fr is not None
     assert fr.orchestrator_output == {"role": "orchestrator"}
@@ -1567,3 +1569,56 @@ def test_orchestrator_worker_effect_fence_resume_threads_key_bound_resolution() 
     assert threaded.resolution is EffectFenceResolution.RE_FIRE
     assert threaded.idempotency_key == key
     assert holder.peeked >= 1  # PEEKED (non-consuming), not consumed
+
+
+class EffectFenceAbortedError(Exception):
+    """Test-local stand-in for the runtime `effect_fence.EffectFenceAbortedError` (operator ABORT
+    applied at the fence gate)."""
+
+
+class _OrchestratorAbortOnResolutionDispatcher:
+    """Resume-side: orchestrator + worker-0 recovered-skipped; the re-entered fence-paused worker
+    RAISES `EffectFenceAbortedError` when its threaded directive is ABORT (the runtime applying the
+    operator's choice) — witnessing ABORT → terminal FAILED, not a re-pause."""
+
+    def __init__(self) -> None:
+        self.dispatched: list[str] = []
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        step_id = str(step.step_id)
+        self.dispatched.append(step_id)
+        directive = getattr(step_context, "effect_fence_resolution", None)
+        if directive is not None and directive.resolution is EffectFenceResolution.ABORT:
+            raise EffectFenceAbortedError(f"operator aborted {step_id}")
+        return {"role": step_id, "echoed": dict(step.step_payload)}
+
+
+def test_orchestrator_worker_effect_fence_resume_abort_is_terminal_failed() -> None:
+    """Codex [P1] regression (ORCHESTRATOR_WORKERS): resuming an effect-fence-paused worker with
+    ABORT yields a TERMINAL `RunStatus.FAILED`, NOT a re-pause — even on the cascade_policy=pause
+    tier."""
+    paused = _run(
+        steps=_steps(2),
+        dispatcher=_OrchestratorFenceAmbiguousDispatcher(),
+        ctx=cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())),
+    )
+    snap = paused.pause_snapshot
+    assert snap is not None and snap.fan_out_resume is not None
+
+    holder = _HolderWithResolution(EffectFenceResolution.ABORT)
+    rec = _OrchestratorAbortOnResolutionDispatcher()
+    ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    ctx_obj.resume_context_holder = holder  # type: ignore[attr-defined]
+    result = _run(
+        steps=_steps(2),
+        dispatcher=rec,
+        ctx=cast(DriverContext, ctx_obj),
+        pause_snapshot_input=snap,
+    )
+
+    assert result.status is RunStatus.FAILED
+    assert "orchestrator-workers-effect-fence-aborted" in (result.fail_class or "")
+    assert result.pause_snapshot is None  # terminal — NOT a re-pause
+    assert "worker-1" in rec.dispatched  # the aborted worker DID re-dispatch
