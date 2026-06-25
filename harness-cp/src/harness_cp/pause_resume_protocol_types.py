@@ -795,7 +795,59 @@ class ResumeContext(BaseModel):
     key-binds it (via `PauseSnapshot.effect_fence_resume.idempotency_key`) and threads
     it to the resumed linear step's dispatch: SKIP_AS_FIRED → proceed with empty output
     (never re-fire); RE_FIRE → clear the held claim + re-dispatch fresh; ABORT → FAILED.
-    Mutually exclusive in practice with `hitl_response` (a pause has one reason)."""
+    Mutually exclusive in practice with `hitl_response` (a pause has one reason).
+
+    For a fan-out pause where MULTIPLE branches fence-paused at once (the
+    PARALLELIZATION / ORCHESTRATOR_WORKERS / HIERARCHICAL_DELEGATION barrier can hold
+    several `effect_fence_paused_branches`), this single field is the UNIFORM default:
+    the driver applies it to EVERY fence-paused branch (key-bound per branch to that
+    branch's reserve). To resolve two fence-paused branches DIFFERENTLY in one resume,
+    supply `effect_fence_resolutions` (below); a per-key entry there OVERRIDES this
+    default for its branch (B-FANOUT-EFFECT-FENCE-PER-BRANCH-RESOLUTION)."""
+
+    effect_fence_resolutions: dict[str, EffectFenceResolution] | None = None
+    """Per-branch-DISTINCT effect-fence resolutions, keyed by held-reserve
+    `idempotency_key` (B-FANOUT-EFFECT-FENCE-PER-BRANCH-RESOLUTION, R-FS-1). `None`
+    (the default) → every fence-paused branch resolves to the uniform
+    `effect_fence_resolution` above (the v1.65 byte-identical behavior). When supplied,
+    a fan-out branch whose held reserve `idempotency_key` (from
+    `FanOutResumeState.effect_fence_paused_branches[*].idempotency_key`, surfaced in the
+    pause `PauseSnapshot`) appears as a key here is resolved with THIS map's value;
+    branches whose key is absent fall back to the uniform `effect_fence_resolution`
+    (and re-pause INERT if that too is `None` — the decline-mirror, never an
+    auto-re-fire). This is a `default + per-key override` composition (NOT a replacement
+    of the single field): the single field is the uniform answer, the map overrides
+    specific branches. Read via `effect_fence_resolution_for(key)`.
+
+    Consumed ONLY at the two fan-out consume sites (`_execute_parallelization` /
+    `_execute_orchestrator_workers`). The LINEAR effect-fence pause has exactly one held
+    reserve key, so per-branch-DISTINCT resolution is structurally inapplicable there —
+    the linear resume consumes the single `effect_fence_resolution` field verbatim (a
+    map supplied for a linear pause is inert). Map entries whose key matches no
+    fence-paused branch this round are harmlessly ignored. Keyed by `idempotency_key`
+    (not `branch_index`) so the map is uniform with the dispatcher's per-`(run, step,
+    tool)` key-bind. ABORT in a map entry retains its shipped run-level-terminal
+    semantic (v1.65 §1(b)) — per-branch-SCOPED abort (fail one branch, let siblings
+    resolve) is the separately-registered `B-FANOUT-EFFECT-FENCE-PER-BRANCH-SCOPED-ABORT`
+    follow-on; the genuinely-independent per-branch dispositions are SKIP_AS_FIRED vs
+    RE_FIRE."""
+
+    def effect_fence_resolution_for(self, idempotency_key: str) -> EffectFenceResolution | None:
+        """The operator's effect-fence resolution for one held-reserve `idempotency_key`.
+
+        B-FANOUT-EFFECT-FENCE-PER-BRANCH-RESOLUTION (R-FS-1) — the single source of
+        truth for "what did the operator answer for THIS branch's fence?": the
+        `effect_fence_resolutions` map entry for `idempotency_key` if present, else the
+        uniform `effect_fence_resolution` default. `None` when neither is supplied → the
+        branch re-pauses INERT (the #701 decline-mirror; never an auto-re-fire). Pure
+        lookup-with-fallback (no control-flow branch on "which mode"): a `None` map and a
+        map-without-this-key both fall through to the single default, so the v1.65
+        single-field behavior is preserved byte-for-byte when no map is supplied."""
+        if self.effect_fence_resolutions is not None:
+            mapped = self.effect_fence_resolutions.get(idempotency_key)
+            if mapped is not None:
+                return mapped
+        return self.effect_fence_resolution
 
 
 # B-HIERARCHICAL-PAUSE (R-FS-1) — `FanOutResumeState.paused_child_branches` forward-refs
