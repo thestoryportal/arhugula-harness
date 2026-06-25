@@ -42,7 +42,7 @@ from harness_cp.handoff_context import StateSummary
 from harness_cp.pause_resume_protocol import (
     PauseResumeProtocol,
     _compute_snapshot_hash,
-    _strip_none_synthesis_step_id,
+    _strip_default_fanout_resume_fields,
 )
 from harness_cp.pause_resume_protocol_types import (
     EffectFenceResumeState,
@@ -770,7 +770,7 @@ def test_strip_none_synthesis_step_id_recurses_into_nested_child_snapshots() -> 
             }
         ],
     }
-    _strip_none_synthesis_step_id(tree)
+    _strip_default_fanout_resume_fields(tree)
     assert "synthesis_step_id" not in tree
     child = tree["paused_child_branches"][0]["child_snapshot"]
     assert "synthesis_step_id" not in child["fan_out_resume"]
@@ -813,7 +813,7 @@ def test_strip_preserves_user_synthesis_step_id_in_recovered_output() -> None:
         branches=(),
         worker_count=1,  # carrier synthesis_step_id defaults None
     ).model_dump(mode="json")
-    _strip_none_synthesis_step_id(dumped)
+    _strip_default_fanout_resume_fields(dumped)
     assert "synthesis_step_id" not in dumped  # the CARRIER's own field is stripped
     assert "synthesis_step_id" in dumped["orchestrator_output"]  # the USER key is preserved
 

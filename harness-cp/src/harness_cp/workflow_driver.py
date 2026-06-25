@@ -77,6 +77,8 @@ from harness_cp.pause_resume_protocol import (
     ResumeOutcomeKind,
 )
 from harness_cp.pause_resume_protocol_types import (
+    EffectFencePausedBranchResumeState,
+    EffectFenceResolution,
     EffectFenceResolutionDirective,
     EffectFenceResumeState,
     EvaluatorOptimizerResumeState,
@@ -5272,6 +5274,30 @@ def _execute_parallelization(
     _recovered_terminal: dict[int, FanOutBranchResumeState] = (
         {b.branch_index: b for b in _peer_resume.branches} if _peer_resume is not None else {}
     )
+    # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE — branch_index -> the held reserve's idempotency_key
+    # for each peer branch whose OWN dispatch raised the effect fence (the PARALLELIZATION
+    # analogue of the ORCHESTRATOR_WORKERS recovery dict). NOT skipped on resume: re-dispatched
+    # WITH the operator's resolution key-bound to this branch's reserve. "" → no key → re-pause
+    # INERT. Rebuilt fresh per round (re-dispatch IS the carry).
+    _recovered_effect_fence_paused: dict[int, str] = (
+        {b.branch_index: b.idempotency_key for b in _peer_resume.effect_fence_paused_branches}
+        if _peer_resume is not None
+        else {}
+    )
+    # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE — PEEK (NOT consume — the HITL composer one-shot intact)
+    # the operator's single `EffectFenceResolution` off the resume context holder; one resolution
+    # TYPE applies across ALL fence-paused peers (key-bound per branch below). A per-branch-DISTINCT
+    # resolution needs a key->resolution MAP on `ResumeContext` (a registered follow-on). None when
+    # no holder / no resolution → every paused peer re-pauses INERT (the #701 decline-mirror).
+    _effect_fence_resolution: EffectFenceResolution | None = None
+    if _recovered_effect_fence_paused:
+        _ef_holder = cast(
+            "_ResumeContextHolderLike | None",
+            getattr(ctx, "resume_context_holder", None),
+        )
+        _ef_resume_ctx = _ef_holder.peek() if _ef_holder is not None else None
+        if _ef_resume_ctx is not None:
+            _effect_fence_resolution = _ef_resume_ctx.effect_fence_resolution
 
     # Empty step sequence → trivially SUCCESS with an empty aggregate (no
     # fan-out; mirrors the linear path's empty-loop SUCCESS).
@@ -5312,6 +5338,25 @@ def _execute_parallelization(
                         f"branch-identity-mismatch at {b.branch_index}: snapshot "
                         f"step_id={b.step_id!r}, resume step_id="
                         f"{str(steps[b.branch_index].step_id)!r}"
+                    )
+            # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE — effect-fence-paused peers: same BOUNDS +
+            # IDENTITY guard, PLUS no-overlap with the terminal `branches` (`seen`) — a
+            # fence-paused ordinal is the disjoint SECOND disposition (PARALLELIZATION has no
+            # paused-child), so any ordinal listed as both terminal AND fence-paused is corrupt.
+            for ef in _peer_resume.effect_fence_paused_branches:
+                if not (0 <= ef.branch_index < len(steps)):
+                    return (
+                        f"effect-fence-paused-index-out-of-range: {ef.branch_index} "
+                        f"∉ [0, {len(steps)})"
+                    )
+                if ef.branch_index in seen:
+                    return f"effect-fence-paused-overlaps-terminal-or-duplicate: {ef.branch_index}"
+                seen.add(ef.branch_index)
+                if str(steps[ef.branch_index].step_id) != ef.step_id:
+                    return (
+                        f"effect-fence-paused-identity-mismatch at {ef.branch_index}: snapshot "
+                        f"step_id={ef.step_id!r}, resume step_id="
+                        f"{str(steps[ef.branch_index].step_id)!r}"
                     )
             return None
 
@@ -5385,6 +5430,21 @@ def _execute_parallelization(
             default_model_binding=default_model_binding,
             persona_tier=manifest_entry.persona_tier,
         )
+        # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE — on resume, a peer whose OWN dispatch raised the
+        # effect fence is re-dispatched WITH the operator's resolution key-bound to THIS branch's
+        # reserve, threaded on the (hash-inert) `effect_fence_resolution` (the PARALLELIZATION
+        # analogue of the ORCHESTRATOR_WORKERS threading). Built ONLY when this ordinal was
+        # fence-paused AND the captured key is non-empty AND a resolution was supplied; else None
+        # → the fence re-pauses INERT. None for every non-fence peer → byte-identical context.
+        _branch_fence_key = _recovered_effect_fence_paused.get(branch_index)
+        _branch_effect_fence_directive = (
+            EffectFenceResolutionDirective(
+                resolution=_effect_fence_resolution,
+                idempotency_key=_branch_fence_key,
+            )
+            if (_branch_fence_key and _effect_fence_resolution is not None)
+            else None
+        )
         child = compose_branch_child_context(
             fanout_parent,
             branch_index=branch_index,
@@ -5395,9 +5455,10 @@ def _execute_parallelization(
             # tuple (keyed from manifest_entry, so no sibling/parent leak; the child
             # inherits manifest_entry.hitl_placements from fanout_parent otherwise).
             update={
+                "effect_fence_resolution": _branch_effect_fence_directive,
                 "hitl_placements": fold_step_hitl_placements(
                     manifest_entry.hitl_placements, binding.hitl_placement
-                )
+                ),
             }
         )
         writer = BufferingLedgerWriter(actor=ctx.ledger_writer.actor, branch_index=branch_index)
@@ -5483,6 +5544,12 @@ def _execute_parallelization(
     # branches` + the resumed-terminal degraded check. Only consumed on the `pause`
     # path (harmlessly populated for proceed / cascade-cancel).
     terminal_dispositions: dict[int, str] = {}
+    # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE — branch_index -> the held reserve's idempotency_key
+    # for each peer branch whose OWN dispatch raised the effect fence (the PARALLELIZATION
+    # analogue). DISJOINT from `terminal_dispositions` (caught at a different except site); read
+    # AFTER the barrier to build `PeerFanOutResumeState.effect_fence_paused_branches`. "" → the
+    # captured error carried no key → resume re-pauses INERT.
+    effect_fence_paused_dispositions: dict[int, str] = {}
 
     # B-FANOUT-PAUSE-PARALLELIZATION — seed the recovered terminal branches (from the
     # resume snapshot) into `collected` + `terminal_dispositions` so (a) their outputs
@@ -5820,6 +5887,24 @@ def _execute_parallelization(
         try:
             output = await dispatch_branch_step_shielded(inflight)
         except asyncio.CancelledError:
+            # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE (R-FS-1) — this branch was cancelled because a
+            # SIBLING raised first, but its OWN in-flight dispatch may have raised the runtime
+            # effect fence (the shield suppresses the in-flight exception + re-raises
+            # CancelledError, so the fence error lands in `inflight.exception()`). Name-matched
+            # (NOT isinstance — a harness-runtime type harness-cp cannot import; `type(None)`
+            # is "NoneType" so a deadline-cut / clean cancel is safely skipped). Capture as
+            # effect-fence-paused (NOT a terminal branch — else resume skips it + drops the
+            # pause): stash the reserve key + re-raise, no step/terminal entry (the disjoint
+            # pause disposition, the peer analogue of the ORCHESTRATOR_WORKERS in-flight catch).
+            _inflight_exc = (
+                inflight.exception() if (inflight.done() and not inflight.cancelled()) else None
+            )
+            if type(_inflight_exc).__name__ == "EffectFenceAmbiguousUncommittedError":
+                _inflight_fence_key = getattr(_inflight_exc, "idempotency_key", None)
+                effect_fence_paused_dispositions[branch_index] = (
+                    _inflight_fence_key if isinstance(_inflight_fence_key, str) else ""
+                )
+                raise
             # In-flight at cancel-time: the effect ran (shielded to completion) or
             # the deadline cut it. Record the step entry (obl. 3) + the
             # discriminating terminal (obl. 4): `completed` = ran (ran-and-errored
@@ -5881,7 +5966,22 @@ def _execute_parallelization(
                     output=None,
                 )
             raise  # honor the cancellation (the barrier cancelled this branch)
-        except Exception:
+        except Exception as _exc:
+            # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE (R-FS-1) — this branch's OWN dispatch raised the
+            # runtime effect fence's `EffectFenceAmbiguousUncommittedError` (C-RT-31 §14.22; the
+            # peer analogue of the ORCHESTRATOR_WORKERS catch). Name-matched (harness-cp cannot
+            # import harness-runtime). NOT a terminal branch — record NO step/terminal entry (a
+            # `completed` terminal would make resume SKIP it + drop the pause): stash the held
+            # reserve's idempotency_key keyed by ordinal ("" when absent → resume re-pauses INERT,
+            # never an auto-re-fire) so the post-barrier compose lands it in
+            # `effect_fence_paused_branches`, then re-raise so the TaskGroup halts the fan-out at
+            # the pause boundary (the post-barrier guard fails honestly if no protocol is bound).
+            if type(_exc).__name__ == "EffectFenceAmbiguousUncommittedError":
+                _fence_key = getattr(_exc, "idempotency_key", None)
+                effect_fence_paused_dispositions[branch_index] = (
+                    _fence_key if isinstance(_fence_key, str) else ""
+                )
+                raise
             # THIS branch's own dispatch ERRORED — the failure that triggers the
             # cascade. The effect ran-and-errored → record the step entry (obl. 3)
             # + a `completed` terminal (dispatch-boundary, not step-outcome — the
@@ -5950,11 +6050,19 @@ def _execute_parallelization(
         # carries its pre-fan-out override entry, `branch_metadata=None`).
         for _bi, _step, child, writer, _binding in branch_plan:
             if not _writer_has_branch_disposition(writer):
+                # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE — an effect-fence-paused peer DID dispatch
+                # (its own dispatch fired the fence; the effect may have landed), so under
+                # cascade-cancel it MUST NOT be mislabeled `cancelled` (= not-yet-dispatched).
+                # Record `completed` (dispatch-boundary) so the ledger reflects the dispatch;
+                # the run FAILs + the resolution is discarded (not resumed under cascade-cancel).
+                _disposition = (
+                    "completed" if _bi in effect_fence_paused_dispositions else "cancelled"
+                )
                 append_branch_terminal_ledger_entry(
                     branch_writer=writer,
                     branch_context=child,
                     run_idempotency_key=run_idempotency_key,
-                    terminal_status="cancelled",
+                    terminal_status=_disposition,
                     timestamp=fanout_timestamp,
                     procedural_tier_snapshot_ref=snapshot_ref,
                 )
@@ -6012,6 +6120,19 @@ def _execute_parallelization(
                 for _bi, _status in sorted(terminal_dispositions.items())
             ),
             branch_count=len(steps),
+            # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE — peers whose OWN dispatch raised the effect
+            # fence this round. DISJOINT from `branches` (a fence-paused ordinal never entered
+            # `terminal_dispositions`). Each carries the held reserve's idempotency_key so
+            # `api.resume` key-binds the operator's resolution to THIS peer's effect. COVERED by
+            # the snapshot hash (dropped-when-empty → a no-fence pause hashes byte-identically).
+            effect_fence_paused_branches=tuple(
+                EffectFencePausedBranchResumeState(
+                    branch_index=_bi,
+                    step_id=str(steps[_bi].step_id),
+                    idempotency_key=_fence_key,
+                )
+                for _bi, _fence_key in sorted(effect_fence_paused_dispositions.items())
+            ),
             # B-FANOUT-PAUSE-SYNTHESIS — capture the terminal POST_JOIN_SYNTHESIS
             # step's identity (presence + step_id) so resume can material-diff it
             # before fresh-dispatching. None when no synthesis was opted in
@@ -6975,6 +7096,34 @@ def _execute_orchestrator_workers(
         if _fan_out_resume is not None
         else {}
     )
+    # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE — branch_index -> the held reserve's idempotency_key
+    # for each TOOL_STEP worker whose OWN dispatch raised the effect fence. Like a paused child,
+    # these are NOT skipped on resume: the worker is RE-DISPATCHED with the operator's
+    # `EffectFenceResolution` threaded (key-bound to this branch's reserve) so the runtime
+    # fence applies exactly one key-matched resolution (SKIP_AS_FIRED / RE_FIRE / ABORT) — NOT
+    # a fresh dispatch. Rebuilt fresh per round (re-dispatch IS the carry). An empty key ("")
+    # means the captured error had none → no directive → the fence re-pauses INERT.
+    _recovered_effect_fence_paused: dict[int, str] = (
+        {b.branch_index: b.idempotency_key for b in _fan_out_resume.effect_fence_paused_branches}
+        if _fan_out_resume is not None
+        else {}
+    )
+    # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE — PEEK (NOT consume — the HITL composer's one-shot
+    # consume stays intact, mirroring the linear path) the operator's single `EffectFenceResolution`
+    # off the resume context holder. One resolution TYPE applies across ALL effect-fence-paused
+    # branches this round (key-bound per branch below); a per-branch-DISTINCT resolution would
+    # need a key->resolution MAP on `ResumeContext` (a new contract surface) — the registered
+    # follow-on. None when no holder / no resolution supplied → every paused branch re-pauses
+    # INERT (never an auto-re-fire — the #701 decline-mirror: proceed only on an operator answer).
+    _effect_fence_resolution: EffectFenceResolution | None = None
+    if _recovered_effect_fence_paused:
+        _ef_holder = cast(
+            "_ResumeContextHolderLike | None",
+            getattr(ctx, "resume_context_holder", None),
+        )
+        _ef_resume_ctx = _ef_holder.peek() if _ef_holder is not None else None
+        if _ef_resume_ctx is not None:
+            _effect_fence_resolution = _ef_resume_ctx.effect_fence_resolution
 
     # Empty step sequence → trivially SUCCESS (mirrors the linear empty-loop +
     # the PARALLELIZATION / EVALUATOR_OPTIMIZER empty-steps SUCCESS).
@@ -7050,6 +7199,29 @@ def _execute_orchestrator_workers(
                         f"paused-child-identity-mismatch at {pc.branch_index}: snapshot "
                         f"step_id={pc.step_id!r}, resume step_id="
                         f"{str(worker_steps[pc.branch_index].step_id)!r}"
+                    )
+            # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE — effect-fence-paused branches: same
+            # BOUNDS + IDENTITY guard, PLUS no-overlap with BOTH the terminal `branches`
+            # AND the paused-child set (`seen` accumulates both) — a fence-paused ordinal
+            # is the disjoint FOURTH disposition, so any ordinal listed as more than one of
+            # {terminal, paused-child, fence-paused} is a corrupt snapshot (fail closed).
+            for ef in _fan_out_resume.effect_fence_paused_branches:
+                if not (0 <= ef.branch_index < len(worker_steps)):
+                    return (
+                        f"effect-fence-paused-index-out-of-range: {ef.branch_index} "
+                        f"∉ [0, {len(worker_steps)})"
+                    )
+                if ef.branch_index in seen:
+                    return (
+                        f"effect-fence-paused-overlaps-other-disposition-or-duplicate: "
+                        f"{ef.branch_index}"
+                    )
+                seen.add(ef.branch_index)
+                if str(worker_steps[ef.branch_index].step_id) != ef.step_id:
+                    return (
+                        f"effect-fence-paused-identity-mismatch at {ef.branch_index}: snapshot "
+                        f"step_id={ef.step_id!r}, resume step_id="
+                        f"{str(worker_steps[ef.branch_index].step_id)!r}"
                     )
             return None
 
@@ -7334,6 +7506,23 @@ def _execute_orchestrator_workers(
         # grandchild's completed steps are recovered, NOT re-executed). `None` for every
         # non-paused-child worker → byte-identical to the pre-arc context.
         _child_resume = _recovered_paused_child.get(branch_index)
+        # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE — on resume, a worker whose OWN dispatch raised
+        # the effect fence is re-dispatched WITH the operator's resolution key-bound to THIS
+        # branch's reserve, threaded on the (hash-inert) `effect_fence_resolution` — the runtime
+        # fence applies exactly one key-matched resolution (the worker analogue of the linear
+        # B-EFFECT-FENCE-PAUSE-RESOLUTION threading at the per-step loop). Built ONLY when this
+        # ordinal was fence-paused AND the captured key is non-empty AND a resolution was
+        # supplied; else None → the fence re-pauses INERT (never an auto-re-fire). None for every
+        # non-fence worker → byte-identical to the pre-arc context.
+        _branch_fence_key = _recovered_effect_fence_paused.get(branch_index)
+        _branch_effect_fence_directive = (
+            EffectFenceResolutionDirective(
+                resolution=_effect_fence_resolution,
+                idempotency_key=_branch_fence_key,
+            )
+            if (_branch_fence_key and _effect_fence_resolution is not None)
+            else None
+        )
         child = compose_branch_child_context(
             fanout_parent, branch_index=branch_index, agent_role=role
         ).model_copy(
@@ -7344,6 +7533,7 @@ def _execute_orchestrator_workers(
             update={
                 "step_index": branch_index + 1,
                 "child_resume_snapshot": _child_resume,
+                "effect_fence_resolution": _branch_effect_fence_directive,
                 "hitl_placements": fold_step_hitl_placements(
                     manifest_entry.hitl_placements, binding.hitl_placement
                 ),
@@ -7383,6 +7573,15 @@ def _execute_orchestrator_workers(
     # child is NOT a terminal disposition (it is re-dispatched-via-child-resume on resume),
     # so its ordinal NEVER enters `terminal_dispositions` (the two sets are disjoint).
     paused_child_dispositions: dict[int, PauseSnapshot] = {}
+    # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE (R-FS-1) — branch_index -> the held effect-fence
+    # reserve's idempotency_key for each TOOL_STEP worker whose OWN dispatch raised the
+    # runtime fence's `EffectFenceAmbiguousUncommittedError` (C-RT-31 §14.22). Like a paused
+    # child (NOT a terminal disposition — re-dispatched-under-resolution on resume), so its
+    # ordinal NEVER enters `terminal_dispositions` (disjoint). Read AFTER the barrier to build
+    # `FanOutResumeState.effect_fence_paused_branches`. The value is the reserve key (read by
+    # name off the runtime error); "" when the error carried no key → resume re-pauses INERT
+    # (never an auto-re-fire — the linear B-EFFECT-FENCE-HITL-ROUTE defensive shape).
+    effect_fence_paused_dispositions: dict[int, str] = {}
 
     # B-FANOUT-PAUSE — seed the recovered terminal branches (from the resume
     # snapshot) into `collected` + `terminal_dispositions` so (a) their outputs
@@ -7801,6 +8000,21 @@ def _execute_orchestrator_workers(
             if isinstance(_inflight_exc, SubAgentChildPausedError):
                 paused_child_dispositions[branch_index] = _inflight_exc.child_snapshot
                 raise
+            # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE (R-FS-1) — this branch was cancelled because
+            # a SIBLING raised first, but its OWN in-flight dispatch raised the runtime effect
+            # fence (the shield suppresses the in-flight exception + re-raises CancelledError,
+            # so the fence error lands in `inflight.exception()`, not the typed handler below).
+            # Name-matched (NOT isinstance — it is a harness-runtime type harness-cp cannot
+            # import; `type(None).__name__` is "NoneType" so a no-inflight cancel is safely
+            # skipped). Capture it as effect-fence-paused (NOT a terminal `completed` branch —
+            # else resume skips it + drops the pause), matching the SubAgentChildPausedError
+            # in-flight shape: stash the reserve key + re-raise, no step/terminal entry.
+            if type(_inflight_exc).__name__ == "EffectFenceAmbiguousUncommittedError":
+                _inflight_fence_key = getattr(_inflight_exc, "idempotency_key", None)
+                effect_fence_paused_dispositions[branch_index] = (
+                    _inflight_fence_key if isinstance(_inflight_fence_key, str) else ""
+                )
+                raise
             # In-flight at cancel-time: the effect ran (shielded to completion) or
             # the deadline cut it. Record the step entry (obl. 3) + the
             # discriminating terminal (obl. 4): `completed` = ran (ran-and-errored
@@ -7877,7 +8091,26 @@ def _execute_orchestrator_workers(
             # re-dispatchable — the §25.15.1 pause semantic), driving the pause branch.
             paused_child_dispositions[branch_index] = _paused.child_snapshot
             raise
-        except Exception:
+        except Exception as _exc:
+            # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE (R-FS-1) — this TOOL_STEP worker's OWN
+            # dispatch raised the runtime effect fence's `EffectFenceAmbiguousUncommittedError`
+            # (C-RT-31 §14.22): the fence lost a reserve to a prior uncommitted attempt AND
+            # found no captured output, so whether THIS branch's effect fired is GENUINELY
+            # ambiguous (the worker analogue of the linear B-EFFECT-FENCE-HITL-ROUTE at the
+            # per-step loop). Name-matched (harness-cp cannot import harness-runtime). It is
+            # NOT a terminal branch — record NO step/terminal entry (a `completed` terminal
+            # would make resume SKIP it + drop the pause): stash the held reserve's
+            # idempotency_key keyed by ordinal ("" when absent → resume re-pauses INERT,
+            # never an auto-re-fire) so the post-barrier compose lands it in
+            # `effect_fence_paused_branches`, then re-raise so the TaskGroup halts the fan-out
+            # at the pause boundary (the SubAgentChildPausedError disposition shape; the
+            # post-barrier guard FAILS HONESTLY if no PauseResumeProtocol is bound).
+            if type(_exc).__name__ == "EffectFenceAmbiguousUncommittedError":
+                _fence_key = getattr(_exc, "idempotency_key", None)
+                effect_fence_paused_dispositions[branch_index] = (
+                    _fence_key if isinstance(_fence_key, str) else ""
+                )
+                raise
             # THIS worker's own dispatch ERRORED — the failure that triggers the
             # cascade. The effect ran-and-errored → record the step entry (obl. 3 —
             # every dispatched effectful step gets its own entry REGARDLESS of
@@ -7955,7 +8188,16 @@ def _execute_orchestrator_workers(
             # discarded), but it MUST NOT be mislabeled `cancelled` (= not-yet-dispatched)
             # — it dispatched + its child paused. Record `completed` (dispatch-boundary,
             # like a ran-and-errored worker) so the branch ledger reflects the dispatch.
-            _disposition = "completed" if _bi in paused_child_dispositions else "cancelled"
+            # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE — same for an effect-fence-paused ordinal:
+            # its OWN dispatch fired the fence (the effect may have landed), so it dispatched
+            # and MUST NOT be mislabeled `cancelled`. Under cascade-cancel it is not resumed
+            # (the run FAILs + the resolution is discarded); record `completed` so the ledger
+            # reflects the dispatch (the ambiguous effect lives at the durable fence claim).
+            _disposition = (
+                "completed"
+                if (_bi in paused_child_dispositions or _bi in effect_fence_paused_dispositions)
+                else "cancelled"
+            )
             append_branch_terminal_ledger_entry(
                 branch_writer=writer,
                 branch_context=child,
@@ -8048,6 +8290,23 @@ def _execute_orchestrator_workers(
                 for _bi, _child_snap in sorted(
                     paused_child_dispositions.items(), key=lambda kv: kv[0]
                 )
+            ),
+            # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE — TOOL_STEP workers whose OWN dispatch
+            # raised the runtime effect fence this round. DISJOINT from both `branches`
+            # (a fence-paused ordinal never entered `terminal_dispositions`) and
+            # `paused_child_branches` (a fence-paused ordinal never entered
+            # `paused_child_dispositions` — they are caught at different except sites).
+            # Each carries the held reserve's idempotency_key so `api.resume` key-binds
+            # the operator's resolution to THIS branch's effect. COVERED by the snapshot
+            # hash (transitively via `fan_out_resume.model_dump`; dropped-when-empty so a
+            # no-fence pause hashes byte-identically to pre-arc).
+            effect_fence_paused_branches=tuple(
+                EffectFencePausedBranchResumeState(
+                    branch_index=_bi,
+                    step_id=str(worker_steps[_bi].step_id),
+                    idempotency_key=_fence_key,
+                )
+                for _bi, _fence_key in sorted(effect_fence_paused_dispositions.items())
             ),
             # B-FANOUT-PAUSE-SYNTHESIS — capture the terminal POST_JOIN_SYNTHESIS
             # step's identity (presence + step_id) so resume can material-diff it
