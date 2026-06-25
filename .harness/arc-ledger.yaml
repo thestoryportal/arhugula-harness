@@ -46,13 +46,13 @@
 snapshot:
   frozen_total: 11
   frozen_done: 11
-  standalone_closed: 45
+  standalone_closed: 46
   standalone_gated: 0
   standalone_resolved: 4
-  standalone_registered: 4
+  standalone_registered: 6
   source: ".harness/beyond-mvp-capability-boundary-ledger.md"
-  # FRONTIER NOTE (2026-06-25, B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-RESOLUTION closed as
-  # the re-fire-safe slice). The frozen 11-arc order is COMPLETE; the standalone B-* register is
+  # FRONTIER NOTE (2026-06-25, B-FANOUT-CRASH-RESUME-MAYBE-RAN-EFFECT-BEARING closed as the
+  # TOOL_STEP slice). The frozen 11-arc order is COMPLETE; the standalone B-* register is
   # the live frontier. The fan-out crash-resume capability family is being built out under
   # FULL-SPEC. CLOSED so far:
   # B-FANOUT-OUTPUT-REPLAY (PR1 #723 + PR2 #724) + B-FANOUT-CRASH-RESUME-CASCADE-POLICY (#726)
@@ -61,30 +61,37 @@ snapshot:
   # + B-FANOUT-CRASH-RESUME-ORCHESTRATOR-DISPATCH (#734)
   # + B-FANOUT-CRASH-RESUME-MAYBE-RAN-RESOLUTION (#736)
   # + B-FANOUT-CRASH-RESUME-TIMEOUT-REPLAY (#738)
-  # + B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-RESOLUTION (the re-fire-safe relaxation of the
-  #   v1.61 orchestrator-maybe-ran fail-closed — a maybe-ran orchestrator of a re-fire-safe
-  #   dispatch-time kind {DECLARATIVE_STEP, INFERENCE_STEP — the common LLM-orchestrator shape}
-  #   re-dispatches fresh; effect-bearing / un-kinded stays fail-closed; the orchestrator analogue
-  #   of the #736 worker re-fire-safety split; CP v1.63→v1.64 + runtime v1.80→v1.81 orchestrator
-  #   dispatch-time-kind marker; NO operator gate). Grounding the arc at open revealed it is THREE
-  #   sub-problems → closes as the re-fire-safe slice + registers TWO narrower follow-ons (a SPLIT,
-  #   not a defer; `[[spec-leg-split-on-ratification-boundary]]`) → standalone_registered 3 → 4
-  #   (a net INCREASE — honest FULL-SPEC accounting).
-  # The 4 still-registered follow-ons keeping R-FS-1 ACTIVE:
-  #   • B-FANOUT-CRASH-RESUME-MAYBE-RAN-EFFECT-BEARING (the WORKER EFFECT-BEARING maybe-ran residual)
-  #   • B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-EFFECT-BEARING (NEW — the ORCHESTRATOR analogue
-  #       of the worker effect-bearing arc: an effect-bearing orchestrator maybe-ran [TOOL_STEP /
-  #       SUB_AGENT_DISPATCH / MANAGED_AGENTS — the orchestrator steps[0] kind is unconstrained]
-  #       routed to a §26.2 pause for operator resolution; needs a NEW resume→orchestrator
-  #       application site the linear effect-fence resume cannot reach)
-  #   • B-FANOUT-CRASH-RESUME-ORCHESTRATOR-PROCEED-RESIDUAL (NEW, operator-gated — under PROCEED the
+  # + B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-RESOLUTION (#740)
+  # + B-FANOUT-CRASH-RESUME-MAYBE-RAN-EFFECT-BEARING (the WORKER effect-bearing maybe-ran residual,
+  #   closed as the TOOL_STEP slice: (1) a fan-out branch whose OWN dispatch raises the effect fence
+  #   COMPOSES the ambiguous-pause THROUGH the barrier to a §26.2 PAUSE [the new
+  #   effect_fence_paused_branches carrier] + key-bound resume; (2) a maybe-ran TOOL_STEP crash-
+  #   resume now RECOVERS into the auto-active fence [vs the v1.62 effect-bearing fail-closed]
+  #   PROVIDED the resumed step_kind is ALSO TOOL_STEP [the changed-kind guard — keying recovery on
+  #   the marker kind alone re-opened the v1.62 changed-manifest hole]; CP v1.64→v1.65, CP-ONLY no
+  #   runtime delta; NO operator gate). Grounding split the effect-bearing kinds by FENCE surface →
+  #   closes as the TOOL_STEP slice + registers THREE narrower follow-ons (a SPLIT, not a defer;
+  #   `[[spec-leg-split-on-ratification-boundary]]`) → standalone_registered 4 → 6 (a net INCREASE —
+  #   honest FULL-SPEC accounting). Tool-swap is ACCEPTED PARITY-with-linear, documented not registered.
+  # The 6 still-registered follow-ons keeping R-FS-1 ACTIVE:
+  #   • B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT (NEW — the maybe-ran SUB_AGENT_DISPATCH worker;
+  #       fenced only at the CHILD's tool sinks → recursive child crash-resume, a larger mechanism)
+  #   • B-FANOUT-CRASH-RESUME-MAYBE-RAN-UNFENCED-EXTERNAL (NEW — the maybe-ran MANAGED_AGENTS worker;
+  #       UNFENCED vendor-session sink → needs the C-RT-31 fence EXTENDED to the managed-agents sink)
+  #   • B-FANOUT-EFFECT-FENCE-PER-BRANCH-RESOLUTION (NEW — one EffectFenceResolution type applies
+  #       across ALL fence-paused branches today; per-branch-distinct needs a key→resolution map on
+  #       ResumeContext, a new C-CP-26 §26.8 contract surface)
+  #   • B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-EFFECT-BEARING (the ORCHESTRATOR analogue of the
+  #       worker effect-bearing arc: an effect-bearing orchestrator maybe-ran routed to a §26.2 pause;
+  #       needs a NEW resume→orchestrator application site the linear effect-fence resume cannot reach)
+  #   • B-FANOUT-CRASH-RESUME-ORCHESTRATOR-PROCEED-RESIDUAL (operator-gated — under PROCEED the
   #       orchestrator writes no marker; closing the pre-capture double-fire window changes PROCEED's
   #       COMMITTED tier semantic [the v1.56 PR2-round-4 "accepts the window" precedent] → a C10⊥C11
   #       tension → dyadic council + operator AUQ at open)
   #   • B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT (reconstruct a lost PAUSE snapshot honoring
   #       §25.15.1 finish-in-flight; the PAUSE-trigger leg cascade-policy fails closed)
-  # closure_gate.py G1.1 = standalone_registered + standalone_gated == 0 is now 4 + 0 = 4
-  # → R-FS-1 stays ACTIVE. On all four follow-ons reaching closed/resolved → G1.1 passes →
+  # closure_gate.py G1.1 = standalone_registered + standalone_gated == 0 is now 6 + 0 = 6
+  # → R-FS-1 stays ACTIVE. On all six follow-ons reaching closed/resolved → G1.1 passes →
   # R-FS-1 resolves → R-CL-Q1 quality track admits. (Run `just closure-gate` to confirm G1.1.)
 
 arcs:
@@ -587,15 +594,58 @@ arcs:
     ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
 
   - id: B-FANOUT-CRASH-RESUME-MAYBE-RAN-EFFECT-BEARING
-    title: "Resolve a maybe-ran fan-out branch of an EFFECT-BEARING kind (TOOL/SUB_AGENT inner-fence-compose + MANAGED fence-extension)"
+    title: "Resolve a maybe-ran fan-out WORKER branch of an EFFECT-BEARING kind — the TOOL_STEP slice"
+    kind: standalone
+    status: closed
+    decompose_at_open: true
+    owner_axis: "CP"  # the TOOL_STEP slice is CP-only (reuses the linear effect-fence resume machinery + the v1.80 dispatched-kind marker); the SUB_AGENT/MANAGED runtime work moved to the split legs below.
+    operator_gated: false  # additive (resolve the TOOL_STEP effect-bearing maybe-ran via the existing effect-fence primitives composed through the barrier) — no committed-invariant sacrifice → no operator gate.
+    parent_arc: B-FANOUT-CRASH-RESUME-MAYBE-RAN-RESOLUTION
+    pr: "#<pending> (feat/r-fs-1-fanout-effect-fence-branch-pause — flips registered → closed as the TOOL_STEP slice; registers THREE narrower follow-ons → standalone_registered 4 → 6, a net increase)"
+    spec_delta: "bundled-absorption CP v1.64 → v1.65 (§1 the live effect-fence ambiguous-pause composed through the fan-out barrier — PAUSE + key-bound resume; §2 the fence-recoverable TOOL_STEP maybe-ran crash-resume relaxation + the resumed-kind changed-kind guard; §3 the effect_fence_paused_branches carrier + the tool-swap accepted-parity note + the 3-way split accounting) + 1 clearance marker. CP-ONLY — NO runtime delta (the #738 shape): reuses the v1.51/v1.52 + runtime v1.72/v1.73 linear effect-fence resume contract + the v1.62/v1.80 dispatched_branch_kinds marker + the v1.67 auto-active fence. NO contract / closed-enum / committed-invariant change; at-most-once PRESERVED."
+    gives: "(1) A fan-out branch (PARALLELIZATION peer OR ORCHESTRATOR_WORKERS / HIERARCHICAL worker) whose OWN dispatch raises the runtime effect fence's EffectFenceAmbiguousUncommittedError (C-RT-31 §14.22) now COMPOSES that ambiguous-pause THROUGH the fan-out barrier — captured as a NON-terminal effect-fence-paused disposition (a new EffectFencePausedBranchResumeState carrier on FanOutResumeState/PeerFanOutResumeState, disjoint from terminal branches + paused-child) → a genuine §26.2 EFFECT_FENCE_AMBIGUOUS PAUSE, instead of being swallowed by the generic except → recorded completed → cascade; resume re-enters the branch with the operator's key-bound EffectFenceResolution (SKIP_AS_FIRED / RE_FIRE / ABORT), reusing the LINEAR machinery verbatim. (2) A maybe-ran TOOL_STEP on a strict-tier crash-resume now RECOVERS (re-dispatch re-reaches the auto-active fence → at-most-once at the tool sink) instead of the v1.62 unconditional effect-bearing fail-closed — PROVIDED the RESUMED branch's step_kind is ALSO TOOL_STEP (the changed-kind guard: keying recovery on the marker kind ALONE re-opened the v1.62 changed-manifest hole — a TOOL→DECLARATIVE resume reaches no fence → the original tool effect abandoned; the resumed-kind conjunct closes it, CP-side via the typed WorkflowStep.step_kind, never the opaque step_payload). GROUNDING (the effect-surface trace) split the effect-bearing kinds by their FENCE surface: TOOL_STEP hits the fence directly (this slice), SUB_AGENT_DISPATCH is fenced only at its child's tool sinks (recursive child crash-resume → registered), MANAGED_AGENTS is unfenced (→ registered). The opaque-payload boundary PIVOTED the changed-kind fix from Option A (record tool_id CP-side, breaks axis isolation) to the CP-only resumed-step_kind conjunct; tool-swap-under-same-step_id is ACCEPTED PARITY with the cleared linear effect-fence path (per-key at-most-once preserved), documented not registered. Decorrelated: advisor full-transcript (the in-flight WIP review — confirmed the changed-manifest failure is a CODE bug not a stale test; sharpened the tool-swap key-composition question; directed front-loading the real-fence witness) + the fence-reachability grep (_FANOUT_REPLAY_ENGINE_CLASSES ⊂ _DURABLE_AUTO_FENCE_ENGINE_CLASSES) + the §14.22 idempotency-key read + out-of-family Codex on the diff."
+    as_built:
+      - "harness-cp/src/harness_cp/pause_resume_protocol_types.py (EffectFencePausedBranchResumeState{branch_index, step_id, idempotency_key} + the effect_fence_paused_branches field on FanOutResumeState + PeerFanOutResumeState — additive, default-empty, extra=forbid/frozen)"
+      - "harness-cp/src/harness_cp/pause_resume_protocol.py (_strip_default_fanout_resume_fields drops effect_fence_paused_branches when empty — the recursive drop-when-default hash discipline → pre-existing snapshots hash byte-identically)"
+      - "harness-cp/src/harness_cp/workflow_driver.py (the _execute_parallelization + _execute_orchestrator_workers effect-fence catch [own-dispatch except + sibling-cancel inflight.exception, name-matched] + the post-barrier carrier population + the per-branch resume directive threading [peek-not-consume, key-bound]; the cascade-cancel completed-not-cancelled disposition; _fence_unrecoverable_maybe_ran_indices gains the resumed-kind conjunct + _resumed_branch_kinds_by_ordinal threaded at the incomplete-recovery + cardinality-only sites)"
+      - "design-substrate/Spec_Control_Plane_v1_65.md + 1 clearance marker (CP-only, no runtime delta)"
+      - "tests: harness-cp test_workflow_driver_parallelization_pause.py (real-fence PARALLELIZATION PAUSE + key-bound resume witnesses) + test_workflow_driver_fanout_pause.py (real-fence ORCHESTRATOR_WORKERS PAUSE + resume witnesses) + test_workflow_driver_fanout_output_replay_full_chain.py (maybe-ran TOOL_STEP recovers at both classification sites; cardinality-only changed-kind TOOL→DECLARATIVE fails closed; the 5 stale fails-closed tests reworked to MANAGED_AGENTS; the existing changed-manifest incomplete-recovery test now passes after the code fix)"
+    ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
+
+  - id: B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT
+    title: "Resolve a maybe-ran fan-out worker of SUB_AGENT_DISPATCH (recursive child crash-resume)"
     kind: standalone
     status: registered
     decompose_at_open: true
     owner_axis: "CP + runtime"
-    operator_gated: false  # additive (resolve the effect-bearing maybe-ran residual via the existing effect-fence primitives) — no committed-invariant sacrifice → no operator gate; the resolution mechanism is the design question (the effect-fence HITL-route / pause-resolution analogue).
-    parent_arc: B-FANOUT-CRASH-RESUME-MAYBE-RAN-RESOLUTION
-    anticipated_scope: "Resolve a MAYBE-RAN fan-out branch of an EFFECT-BEARING kind on a strict-tier crash-resume (B-FANOUT-CRASH-RESUME-MAYBE-RAN-RESOLUTION re-dispatches re-fire-safe kinds but still fails closed for effect-bearing kinds). TWO decompose_at_open sub-mechanisms: (a) TOOL_STEP / SUB_AGENT_DISPATCH — the branch's effect (or a sub-agent's child tool calls) routes through the runtime effect-fence (C-RT-31 §14.22, auto-active for durable replay engines); re-dispatch is at-most-once at the tool sink (suppress-and-continue on a captured output, or `EffectFenceAmbiguousUncommittedError`), but that ambiguous-pause must be COMPOSED THROUGH the fan-out barrier (today a branch raising it is treated as a branch error → cascade) — the fan-out analogue of B-EFFECT-FENCE-HITL-ROUTE / B-EFFECT-FENCE-PAUSE-RESOLUTION; (b) MANAGED_AGENTS — the dispatcher performs an UNFENCED vendor-session external effect (create_session + send_event); resolving it needs the C-RT-31 effect fence EXTENDED to the managed-agents sink."
-    why: "Surfaced at B-FANOUT-CRASH-RESUME-MAYBE-RAN-RESOLUTION (the effect-surface trace): only re-fire-safe kinds (DECLARATIVE/INFERENCE) re-dispatch safely; the effect-bearing kinds (TOOL/SUB_AGENT fenced-but-needing-barrier-composition; MANAGED unfenced) are a genuine design problem, not a deferral — named per FULL-SPEC (`[[feedback-full-spec-beyond-mvp-nothing-deferred]]`) rather than silently left fail-closed."
+    operator_gated: false  # additive (compose the child's own fence/pause state through the parent barrier) — no committed-invariant sacrifice → no operator gate.
+    parent_arc: B-FANOUT-CRASH-RESUME-MAYBE-RAN-EFFECT-BEARING
+    anticipated_scope: "Resolve a MAYBE-RAN fan-out worker of kind SUB_AGENT_DISPATCH on a strict-tier crash-resume (the TOOL_STEP slice B-FANOUT-CRASH-RESUME-MAYBE-RAN-EFFECT-BEARING recovers a maybe-ran TOOL_STEP into the fence but stays fail-closed for SUB_AGENT). Unlike TOOL_STEP, a sub-agent's OWN dispatch does NOT hit the effect fence directly — its non-idempotent effects are its CHILD sub-workflow's tool calls, fenced at the CHILD's tool sinks. Resolving a maybe-ran sub-agent worker is recursive child crash-resume: compose the child sub-workflow's own fence/pause state (the child may itself be mid-pause or have effected-uncommitted child tool calls) through the parent fan-out barrier — a larger, separately-verified mechanism than the direct-tool-sink TOOL_STEP slice. Composes with B-HIERARCHICAL-PAUSE (the SubAgentChildPausedError child-snapshot capture)."
+    why: "Surfaced at B-FANOUT-CRASH-RESUME-MAYBE-RAN-EFFECT-BEARING (the fence-surface split): TOOL_STEP is fenced directly (the closeable slice); SUB_AGENT_DISPATCH is fenced only at its child's tool sinks → a genuine separate design problem, named per FULL-SPEC (`[[feedback-full-spec-beyond-mvp-nothing-deferred]]`) rather than silently left fail-closed."
+    ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
+
+  - id: B-FANOUT-CRASH-RESUME-MAYBE-RAN-UNFENCED-EXTERNAL
+    title: "Resolve a maybe-ran fan-out worker of MANAGED_AGENTS (extend the fence to the vendor-session sink)"
+    kind: standalone
+    status: registered
+    decompose_at_open: true
+    owner_axis: "CP + runtime"
+    operator_gated: false  # additive (extend the C-RT-31 effect fence to the managed-agents sink, then barrier-compose) — no committed-invariant sacrifice → no operator gate.
+    parent_arc: B-FANOUT-CRASH-RESUME-MAYBE-RAN-EFFECT-BEARING
+    anticipated_scope: "Resolve a MAYBE-RAN fan-out worker of kind MANAGED_AGENTS on a strict-tier crash-resume (the TOOL_STEP slice stays fail-closed for MANAGED). The managed-agents dispatcher performs an UNFENCED vendor-session external effect (create_session + send_event), so there is NO held reserve to make a re-dispatch at-most-once (unlike a TOOL_STEP, whose call_tool sink IS fenced by C-RT-31 §14.22). Resolving it needs the runtime effect fence EXTENDED to the managed-agents sink (a runtime-side change — reserve-before create_session, capture-after), then the same barrier-composition + resume-resolution as the TOOL_STEP slice. The harder half is the fence extension (the vendor session is a different sink shape than a single tool call)."
+    why: "Surfaced at B-FANOUT-CRASH-RESUME-MAYBE-RAN-EFFECT-BEARING (the fence-surface split): MANAGED_AGENTS is the one effect-bearing kind with NO fence at all → a genuine runtime-side design problem (extend the fence), named per FULL-SPEC rather than silently left fail-closed."
+    ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
+
+  - id: B-FANOUT-EFFECT-FENCE-PER-BRANCH-RESOLUTION
+    title: "Per-branch-DISTINCT effect-fence resolution (a key→resolution map on ResumeContext)"
+    kind: standalone
+    status: registered
+    decompose_at_open: true
+    owner_axis: "CP + runtime"
+    operator_gated: false  # additive contract surface (a new ResumeContext field) — no committed-invariant sacrifice → no operator gate.
+    parent_arc: B-FANOUT-CRASH-RESUME-MAYBE-RAN-EFFECT-BEARING
+    anticipated_scope: "The B-FANOUT-CRASH-RESUME-MAYBE-RAN-EFFECT-BEARING TOOL_STEP slice applies ONE EffectFenceResolution TYPE across ALL effect-fence-paused branches in a single pause (key-bound per branch to each branch's reserve, but the SAME RE_FIRE / SKIP_AS_FIRED / ABORT for all). Resolving two fence-paused branches DIFFERENTLY in one resume (e.g. branch-1 RE_FIRE + branch-2 ABORT) needs a `idempotency_key → EffectFenceResolution` MAP on ResumeContext (a new contract surface on C-CP-26 §26.8, replacing the single effect_fence_resolution field) + the driver lookup keyed per branch + the runtime/CLI surface to author a per-branch resolution set. A genuine capability the harness lacks today (multiple branches can fence-pause in one barrier, but the operator can only answer them uniformly)."
+    why: "Surfaced during the B-FANOUT-CRASH-RESUME-MAYBE-RAN-EFFECT-BEARING build (advisor flagged the one-resolution-type limitation): a fan-out barrier can pause MULTIPLE branches on the fence at once, but the resume threads ONE resolution type across all — a genuine capability gap, named per FULL-SPEC rather than left as a silent code-comment limitation (`[[spine-ledger-forward-arc-registration]]`)."
     ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
 
   - id: B-FANOUT-CRASH-RESUME-ORCHESTRATOR-DISPATCH

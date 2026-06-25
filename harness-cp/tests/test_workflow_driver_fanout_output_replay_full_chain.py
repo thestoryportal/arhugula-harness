@@ -1510,14 +1510,136 @@ def test_crash_resume_cascade_cancel_incomplete_refire_safe_recovers() -> None:
     assert resume.dispatched == ["branch-1"]
 
 
-def test_crash_resume_cascade_cancel_incomplete_unsafe_kind_fails_closed() -> None:
-    """B-FANOUT-CRASH-RESUME-MAYBE-RAN-RESOLUTION — the maybe-ran branch is an EFFECT-BEARING
-    kind (TOOL_STEP), so the re-fire-safe relaxation does NOT apply: its effect MAY have fired
-    and re-dispatch would risk a double-fire → FAIL CLOSED (the fenced/unfenced resolution is a
-    registered follow-on). The contrasting positive control is the DECLARATIVE re-fire-safe
-    sibling above — same shape, only the kind differs."""
+def test_crash_resume_incomplete_fence_recoverable_tool_step_recovers() -> None:
+    """B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE (R-FS-1) — an INCOMPLETE recovery where the absent
+    branch is MAYBE-RAN of a FENCE-RECOVERABLE TOOL_STEP (marker kept, output gone) AND the
+    resumed manifest's branch at that ordinal is STILL a TOOL_STEP. The #732/#736 arcs failed a
+    maybe-ran TOOL_STEP closed (conservative "effect-bearing"); this arc RECOVERS it —
+    re-dispatching re-reaches the AUTO-ACTIVE runtime effect fence, which makes the re-fire
+    at-most-once AT THE TOOL SINK (suppress-if-captured / ambiguous-PAUSE / fresh-fire-if-claim-
+    absent — proven through the REAL fence by the runtime test_effect_fence.py + the real-fence
+    PARALLELIZATION witness). The run RECOVERS, re-dispatching ONLY the maybe-ran branch. Contrast
+    the changed-kind (`..._changed_manifest_kind...`) + unfenced-kind (`..._unsafe_kind...`)
+    siblings, which still fail closed."""
     store = _InMemoryBranchStore()
     steps = [_step(f"branch-{i}", i, kind=StepKind.TOOL_STEP) for i in range(3)]
+    _run_persona(
+        workflow_id="wf-cc-fence-recoverable",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3),
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        registry=_AnyKindRegistry(_CountingDispatcher(n=3)),
+    )
+    key = store.sole_run_key()
+    store.forget_branch(
+        key, 1
+    )  # output gone, marker KEPT → maybe-ran TOOL_STEP (fence-recoverable)
+    assert store.dispatched_branch_kinds(key)[1] == StepKind.TOOL_STEP.value
+
+    resume = _CountingDispatcher(n=3)
+    r2 = _run_persona(
+        workflow_id="wf-cc-fence-recoverable",
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        registry=_AnyKindRegistry(resume),
+    )
+    assert r2.status is RunStatus.SUCCESS
+    # ONLY the maybe-ran branch re-dispatches (into the fence); the captured siblings replay.
+    assert resume.dispatched == ["branch-1"]
+
+
+def test_crash_resume_cardinality_only_fence_recoverable_tool_step_recovers() -> None:
+    """B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE (R-FS-1, cardinality-only path) — every branch is a
+    MAYBE-RAN FENCE-RECOVERABLE TOOL_STEP (resumed manifest STILL TOOL_STEP). The cardinality
+    marker is present but nothing is readably recovered; all branches began dispatch (markers
+    kept). Re-dispatching re-reaches the auto-active fence → at-most-once at the tool sink → the
+    run RECOVERS as a fresh re-dispatch. Witnesses the cardinality-only call site of the
+    fence-recovery narrowing (distinct from the incomplete-recovery site above)."""
+    store = _InMemoryBranchStore()
+    steps = [_step(f"branch-{i}", i, kind=StepKind.TOOL_STEP) for i in range(3)]
+    _run_persona(
+        workflow_id="wf-cc-card-fence-recoverable",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3),
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        registry=_AnyKindRegistry(_CountingDispatcher(n=3)),
+    )
+    key = store.sole_run_key()
+    for i in range(3):
+        store.forget_branch(key, i)  # all maybe-ran TOOL_STEP (fence-recoverable)
+    assert store.read_branch_records(key) == {}
+    assert store.present_dispatched_indexes(key) == {0, 1, 2}
+
+    resume = _CountingDispatcher(n=3)
+    r2 = _run_persona(
+        workflow_id="wf-cc-card-fence-recoverable",
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        registry=_AnyKindRegistry(resume),
+    )
+    assert r2.status is RunStatus.SUCCESS
+    assert sorted(resume.dispatched) == ["branch-0", "branch-1", "branch-2"]
+
+
+def test_crash_resume_cardinality_only_changed_kind_tool_to_declarative_fails_closed() -> None:
+    """B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE (R-FS-1) — the changed-kind guard at the CARDINALITY-ONLY
+    site (the incomplete-recovery site is covered by `..._changed_manifest_kind_fails_closed`). All
+    branches dispatched as TOOL_STEP, all maybe-ran (cardinality-only). On resume branch 1 is
+    re-supplied as a DECLARATIVE_STEP (changed kind, same ordinal + step_id). The marker says
+    TOOL_STEP but the RESUMED branch is DECLARATIVE → re-dispatch would reach NO tool fence → the
+    original tool effect's ambiguity would be silently abandoned → fail closed (NOT fence-recoverable
+    despite the marker; the resumed-kind conjunct closes the changed-manifest hole at this site)."""
+    store = _InMemoryBranchStore()
+    steps_v1 = [_step(f"branch-{i}", i, kind=StepKind.TOOL_STEP) for i in range(3)]
+    _run_persona(
+        workflow_id="wf-card-changed-kind",
+        steps=steps_v1,
+        dispatcher=_CountingDispatcher(n=3),
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        registry=_AnyKindRegistry(_CountingDispatcher(n=3)),
+    )
+    key = store.sole_run_key()
+    for i in range(3):
+        store.forget_branch(key, i)  # all maybe-ran TOOL_STEP (cardinality-only)
+    assert store.dispatched_branch_kinds(key)[1] == StepKind.TOOL_STEP.value
+
+    resume = _CountingDispatcher(n=3)
+    steps_v2 = [
+        _step("branch-0", 0, kind=StepKind.TOOL_STEP),
+        _step("branch-1", 1, kind=StepKind.DECLARATIVE_STEP),  # CHANGED from TOOL_STEP
+        _step("branch-2", 2, kind=StepKind.TOOL_STEP),
+    ]
+    r2 = _run_persona(
+        workflow_id="wf-card-changed-kind",
+        steps=steps_v2,
+        dispatcher=resume,
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        registry=_AnyKindRegistry(resume),
+    )
+    assert r2.status is RunStatus.FAILED
+    assert "fan-out-crash-resume-cascade-policy-incomplete-recovery" in (r2.fail_class or "")
+    assert resume.dispatched == []  # changed-kind branch → fail closed, no re-dispatch
+
+
+def test_crash_resume_cascade_cancel_incomplete_unsafe_kind_fails_closed() -> None:
+    """B-FANOUT-CRASH-RESUME-MAYBE-RAN-RESOLUTION — the maybe-ran branch is an UNFENCED
+    effect-bearing kind (MANAGED_AGENTS — NOT the now-fence-recoverable TOOL_STEP), so neither the
+    re-fire-safe relaxation NOR the B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE fence-recovery applies: its
+    vendor-session effect MAY have fired with NO fence to make a re-dispatch at-most-once → FAIL
+    CLOSED (the unfenced-external resolution is the registered B-FANOUT-CRASH-RESUME-MAYBE-RAN-
+    UNFENCED-EXTERNAL follow-on). The contrasting positive controls are the DECLARATIVE re-fire-safe
+    sibling above + the fence-recoverable TOOL_STEP sibling below — same shape, only the kind
+    differs."""
+    store = _InMemoryBranchStore()
+    steps = [_step(f"branch-{i}", i, kind=StepKind.MANAGED_AGENTS) for i in range(3)]
     _run_persona(
         workflow_id="wf-cc-unsafe-kind",
         steps=steps,
@@ -1527,7 +1649,7 @@ def test_crash_resume_cascade_cancel_incomplete_unsafe_kind_fails_closed() -> No
         registry=_AnyKindRegistry(_CountingDispatcher(n=3)),
     )
     key = store.sole_run_key()
-    store.forget_branch(key, 1)  # output gone, marker KEPT → branch 1 is MAYBE-RAN (TOOL_STEP)
+    store.forget_branch(key, 1)  # output gone, marker KEPT → branch 1 is MAYBE-RAN (MANAGED_AGENTS)
     assert 1 in store.present_dispatched_indexes(key)
 
     resume = _CountingDispatcher(n=3)
@@ -1541,19 +1663,20 @@ def test_crash_resume_cascade_cancel_incomplete_unsafe_kind_fails_closed() -> No
     )
     assert r2.status is RunStatus.FAILED
     assert "fan-out-crash-resume-cascade-policy-incomplete-recovery" in (r2.fail_class or "")
-    assert resume.dispatched == []  # fail closed — the effect-bearing branch is NOT re-dispatched
+    assert resume.dispatched == []  # fail closed — the unfenced branch is NOT re-dispatched
 
 
 def test_crash_resume_cascade_cancel_incomplete_mixed_safe_unsafe_fails_closed() -> None:
     """B-FANOUT-CRASH-RESUME-MAYBE-RAN-RESOLUTION — a MIX of maybe-ran branches: one re-fire-safe
-    (DECLARATIVE_STEP) + one effect-bearing (TOOL_STEP). The presence of ANY re-fire-UNSAFE
-    maybe-ran branch fails the WHOLE incomplete recovery closed (the safe subset is not partially
-    recovered — that would still leave the unsafe branch unresolved)."""
+    (DECLARATIVE_STEP) + one UNFENCED effect-bearing (MANAGED_AGENTS — NOT the fence-recoverable
+    TOOL_STEP). The presence of ANY genuinely-unrecoverable maybe-ran branch fails the WHOLE
+    incomplete recovery closed (the safe subset is not partially recovered — that would still leave
+    the unsafe branch unresolved)."""
     store = _InMemoryBranchStore()
     steps = [
         _step("branch-0", 0, kind=StepKind.DECLARATIVE_STEP),
         _step("branch-1", 1, kind=StepKind.DECLARATIVE_STEP),
-        _step("branch-2", 2, kind=StepKind.TOOL_STEP),
+        _step("branch-2", 2, kind=StepKind.MANAGED_AGENTS),
     ]
     _run_persona(
         workflow_id="wf-cc-mixed",
@@ -1565,7 +1688,7 @@ def test_crash_resume_cascade_cancel_incomplete_mixed_safe_unsafe_fails_closed()
     )
     key = store.sole_run_key()
     store.forget_branch(key, 1)  # maybe-ran DECLARATIVE (re-fire-safe)
-    store.forget_branch(key, 2)  # maybe-ran TOOL_STEP (UNSAFE → poisons the whole recovery)
+    store.forget_branch(key, 2)  # maybe-ran MANAGED_AGENTS (UNFENCED → poisons the whole recovery)
     assert store.present_dispatched_indexes(key) - {0} == {1, 2}
 
     resume = _CountingDispatcher(n=3)
@@ -1619,12 +1742,13 @@ def test_crash_resume_cascade_cancel_cardinality_only_refire_safe_recovers() -> 
 
 
 def test_crash_resume_cascade_cancel_cardinality_only_unsafe_kind_fails_closed() -> None:
-    """B-FANOUT-CRASH-RESUME-MAYBE-RAN-RESOLUTION (cardinality-only path) — an effect-bearing
-    (TOOL_STEP) maybe-ran branch in a cardinality-only store still FAILS CLOSED (the re-fire-safe
-    relaxation does not apply). The contrasting positive control is the re-fire-safe sibling
-    above."""
+    """B-FANOUT-CRASH-RESUME-MAYBE-RAN-RESOLUTION (cardinality-only path) — an UNFENCED
+    effect-bearing (MANAGED_AGENTS — NOT the fence-recoverable TOOL_STEP) maybe-ran branch in a
+    cardinality-only store still FAILS CLOSED (neither the re-fire-safe nor the fence-recovery
+    relaxation applies). The contrasting positive controls are the re-fire-safe + fence-recoverable
+    TOOL_STEP siblings above."""
     store = _InMemoryBranchStore()
-    steps = [_step(f"branch-{i}", i, kind=StepKind.TOOL_STEP) for i in range(3)]
+    steps = [_step(f"branch-{i}", i, kind=StepKind.MANAGED_AGENTS) for i in range(3)]
     _run_persona(
         workflow_id="wf-cc-cardinality-unsafe",
         steps=steps,
@@ -1635,7 +1759,7 @@ def test_crash_resume_cascade_cancel_cardinality_only_unsafe_kind_fails_closed()
     )
     key = store.sole_run_key()
     for i in range(3):
-        store.forget_branch(key, i)  # all maybe-ran, all TOOL_STEP (UNSAFE)
+        store.forget_branch(key, i)  # all maybe-ran, all MANAGED_AGENTS (UNFENCED)
     assert store.present_dispatched_indexes(key) == {0, 1, 2}
 
     resume = _CountingDispatcher(n=3)
@@ -1856,12 +1980,14 @@ def test_crash_resume_pause_complete_recovery_completes() -> None:
 
 
 def test_crash_resume_pause_incomplete_fails_closed() -> None:
-    """An INCOMPLETE recovery with a MAYBE-RAN EFFECT-BEARING branch (TOOL_STEP) under PAUSE
-    (TEAM_BINDING) also fails closed — `forget_branch` keeps the dispatch marker, so branch 0 is
-    maybe-ran (dispatched, no capture) and its effect MAY have fired → not re-dispatchable on the
-    team tier either. The re-fire-safe relaxation is tier-agnostic (see the recovery sibling)."""
+    """An INCOMPLETE recovery with a MAYBE-RAN UNFENCED effect-bearing branch (MANAGED_AGENTS —
+    NOT the fence-recoverable TOOL_STEP) under PAUSE (TEAM_BINDING) also fails closed —
+    `forget_branch` keeps the dispatch marker, so branch 0 is maybe-ran (dispatched, no capture)
+    and its vendor-session effect MAY have fired with no fence → not re-dispatchable on the team
+    tier either. Both relaxations (re-fire-safe + fence-recovery) are tier-agnostic (see the
+    recovery siblings)."""
     store = _InMemoryBranchStore()
-    steps = [_step(f"branch-{i}", i, kind=StepKind.TOOL_STEP) for i in range(3)]
+    steps = [_step(f"branch-{i}", i, kind=StepKind.MANAGED_AGENTS) for i in range(3)]
     _run_persona(
         workflow_id="wf-pause-incomplete",
         steps=steps,
@@ -1871,7 +1997,7 @@ def test_crash_resume_pause_incomplete_fails_closed() -> None:
         registry=_AnyKindRegistry(_CountingDispatcher(n=3)),
     )
     key = store.sole_run_key()
-    store.forget_branch(key, 0)  # output gone, marker KEPT → maybe-ran (TOOL_STEP)
+    store.forget_branch(key, 0)  # output gone, marker KEPT → maybe-ran (MANAGED_AGENTS)
     assert 0 in store.present_dispatched_indexes(key)
 
     resume = _CountingDispatcher(n=3)
@@ -2222,13 +2348,15 @@ def test_crash_resume_incomplete_pre_arc_journal_fails_closed() -> None:
 
 
 def test_crash_resume_mixed_not_run_and_maybe_ran_fails_closed() -> None:
-    """A maybe-ran EFFECT-BEARING branch poisons the recovery even when another absent branch is
-    provably not-run. Branch 1 is not-yet-dispatched (safe) but branch 2 is maybe-ran TOOL_STEP
-    (marker kept, output gone, effect MAY have fired). `present_dispatched − recovered = {2}` ≠ ∅
-    AND branch 2 is re-fire-UNSAFE → fail closed — the at-most-once guarantee admits re-dispatch
-    of a maybe-ran branch only when it is provably not-run OR a re-fire-safe kind."""
+    """A maybe-ran UNFENCED effect-bearing branch poisons the recovery even when another absent
+    branch is provably not-run. Branch 1 is not-yet-dispatched (safe) but branch 2 is maybe-ran
+    MANAGED_AGENTS (NOT the fence-recoverable TOOL_STEP — marker kept, output gone, vendor effect
+    MAY have fired with no fence). `present_dispatched − recovered = {2}` ≠ ∅ AND branch 2 is
+    genuinely-unrecoverable → fail closed — the at-most-once guarantee admits re-dispatch of a
+    maybe-ran branch only when it is provably not-run, a re-fire-safe kind, OR a fence-recoverable
+    TOOL_STEP."""
     store = _InMemoryBranchStore()
-    steps = [_step(f"branch-{i}", i, kind=StepKind.TOOL_STEP) for i in range(3)]
+    steps = [_step(f"branch-{i}", i, kind=StepKind.MANAGED_AGENTS) for i in range(3)]
     _run_persona(
         workflow_id="wf-cc-mixed-notrun",
         steps=steps,
@@ -2239,7 +2367,7 @@ def test_crash_resume_mixed_not_run_and_maybe_ran_fails_closed() -> None:
     )
     key = store.sole_run_key()
     store.forget_branch_undispatched(key, 1)  # provably not-run
-    store.forget_branch(key, 2)  # maybe-ran TOOL_STEP (marker kept) — re-fire-UNSAFE
+    store.forget_branch(key, 2)  # maybe-ran MANAGED_AGENTS (marker kept) — genuinely-unrecoverable
     assert 1 not in store.present_dispatched_indexes(key)
     assert 2 in store.present_dispatched_indexes(key)
 
@@ -2559,3 +2687,59 @@ def test_crash_resume_orchestrator_lookup_failure_writes_no_marker() -> None:
     # later recovery for this run_key is NOT poisoned into a false maybe-ran fail-closed.
     assert store._orchestrator_dispatched == {}  # no false marker anywhere
     assert store._instrumented == set()  # nor the stamp (it is written with the marker)
+
+
+class _FullChainEffectFenceError(Exception):
+    """Test-local stand-in for the runtime `effect_fence.EffectFenceAmbiguousUncommittedError`
+    (name-matched by the driver; harness-cp cannot import harness-runtime)."""
+
+    def __init__(self, *, idempotency_key: str) -> None:
+        self.idempotency_key = idempotency_key
+        super().__init__("ambiguous")
+
+
+class _CascadeCancelFenceDispatcher:
+    """branch-0 completes (sets a gate); branch-1 waits then raises the fence-ambiguous error.
+    Under cascade-cancel, branch-1's fence-pause halts the fan-out → FAILED; the driver must record
+    branch-1's `completed`/no-output terminal to the durable STORE (not just the buffered ledger)."""
+
+    def __init__(self) -> None:
+        self._gate = threading.Event()
+        self.dispatched: list[str] = []
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        step_id = str(step.step_id)
+        self.dispatched.append(step_id)
+        if int(step.step_payload["index"]) == 0:
+            self._gate.set()
+            return {"branch": 0}
+        assert self._gate.wait(timeout=10.0), "branch-0 never completed"
+        raise _FullChainEffectFenceError(idempotency_key="fence-key")
+
+
+def test_cascade_cancel_fence_paused_branch_terminal_captured_to_store() -> None:
+    """Codex [P2] R1 regression: under CASCADE_CANCEL a fence-paused branch's `completed`/no-output
+    terminal is captured to the durable STORE (not just the buffered ledger), so a crash mid-
+    cascade-cancel reproduces the FAILED on resume instead of mis-classifying the branch as
+    maybe-ran (dispatch marker present, no terminal) + re-dispatching it. Without the store capture
+    branch-1 would carry ONLY its dispatch marker."""
+    store = _InMemoryBranchStore()
+    steps = [_step(f"branch-{i}", i) for i in range(2)]  # DECLARATIVE; the catch is name-matched
+    r = _run(
+        workflow_id="wf-cc-fence-store",
+        topology=TopologyPattern.PARALLELIZATION,
+        steps=steps,
+        dispatcher=_CascadeCancelFenceDispatcher(),
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,  # → cascade-cancel
+    )
+    assert r.status is RunStatus.FAILED
+    assert "parallelization-cascade-cancel" in (r.fail_class or "")
+    records = store.read_branch_records(store.sole_run_key())
+    # The fence-paused branch-1 is recorded `completed`/no-output in the STORE (the Codex fix) — a
+    # terminal record, so a crash-resume recovers it as terminal, NEVER re-dispatches it maybe-ran.
+    assert 1 in records
+    assert records[1][1] == "completed"  # terminal_status
+    assert records[1][2] is None  # output (no output — the effect's ambiguity lives at the fence)

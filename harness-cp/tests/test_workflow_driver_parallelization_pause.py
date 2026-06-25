@@ -42,9 +42,11 @@ from harness_cp.handoff_context import StateSummary
 from harness_cp.pause_resume_protocol import (
     PauseResumeProtocol,
     _compute_snapshot_hash,
-    _strip_none_synthesis_step_id,
+    _strip_default_fanout_resume_fields,
 )
 from harness_cp.pause_resume_protocol_types import (
+    EffectFencePausedBranchResumeState,
+    EffectFenceResolution,
     EffectFenceResumeState,
     EvaluatorOptimizerResumeState,
     FanOutBranchResumeState,
@@ -52,6 +54,7 @@ from harness_cp.pause_resume_protocol_types import (
     HandoffResumeState,
     PauseSnapshot,
     PeerFanOutResumeState,
+    ResumeContext,
     WorkflowPauseReason,
 )
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
@@ -88,11 +91,13 @@ _PAUSE_TIER = PersonaTier.TEAM_BINDING  # → cascade_policy = pause
 _ANCHOR = "0" * 64  # constant MVP pause-context anchor (no material diff on resume)
 
 
-def _manifest(workflow_id: str = "wf-pp") -> WorkflowManifestEntry:
+def _manifest(
+    workflow_id: str = "wf-pp", persona_tier: PersonaTier = _PAUSE_TIER
+) -> WorkflowManifestEntry:
     return WorkflowManifestEntry(
         workflow_id=workflow_id,
         workload_class=WorkloadClass.PIPELINE_AUTOMATION,
-        persona_tier=_PAUSE_TIER,
+        persona_tier=persona_tier,
         engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
         topology_pattern=TopologyPattern.PARALLELIZATION,
         layer_budgets=(),
@@ -295,9 +300,10 @@ def _run(
     ctx: DriverContext,
     pause_snapshot_input: PauseSnapshot | None = None,
     workflow_id: str = "wf-pp",
+    persona_tier: PersonaTier = _PAUSE_TIER,
 ) -> Any:
     return execute_workflow(
-        _manifest(workflow_id),
+        _manifest(workflow_id, persona_tier),
         steps,
         run_id="run-1",
         ctx=ctx,
@@ -770,7 +776,7 @@ def test_strip_none_synthesis_step_id_recurses_into_nested_child_snapshots() -> 
             }
         ],
     }
-    _strip_none_synthesis_step_id(tree)
+    _strip_default_fanout_resume_fields(tree)
     assert "synthesis_step_id" not in tree
     child = tree["paused_child_branches"][0]["child_snapshot"]
     assert "synthesis_step_id" not in child["fan_out_resume"]
@@ -813,7 +819,7 @@ def test_strip_preserves_user_synthesis_step_id_in_recovered_output() -> None:
         branches=(),
         worker_count=1,  # carrier synthesis_step_id defaults None
     ).model_dump(mode="json")
-    _strip_none_synthesis_step_id(dumped)
+    _strip_default_fanout_resume_fields(dumped)
     assert "synthesis_step_id" not in dumped  # the CARRIER's own field is stripped
     assert "synthesis_step_id" in dumped["orchestrator_output"]  # the USER key is preserved
 
@@ -1160,3 +1166,279 @@ def test_peer_snapshot_survives_json_roundtrip() -> None:
         state_summary=restored.state_summary,
         peer_fan_out_resume=restored.peer_fan_out_resume,
     )
+
+
+# ---------------------------------------------------------------------------
+# B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE — a peer branch whose OWN dispatch raises the
+# runtime effect fence COMPOSES that ambiguous-pause THROUGH the fan-out barrier:
+# the run PAUSES with `effect_fence_paused_branches` populated, and resume re-enters
+# the branch with the operator's key-bound `EffectFenceResolution`. The real-fence
+# witness is the REAL `_execute_parallelization` TaskGroup+shield concurrency
+# machinery; the error is name-matched (harness-cp cannot import harness-runtime, the
+# same test-local pattern as the linear `test_workflow_driver_effect_fence_pause.py`).
+# ---------------------------------------------------------------------------
+
+
+class EffectFenceAmbiguousUncommittedError(Exception):
+    """Test-local stand-in for the runtime `effect_fence.EffectFenceAmbiguousUncommittedError`
+    (C-RT-31 §14.22). The driver name-matches `type(exc).__name__` (harness-cp cannot import
+    harness-runtime), so a same-named local class with the `idempotency_key` attribute is the
+    faithful CP-side witness — exercised through the REAL fan-out concurrency machinery."""
+
+    def __init__(self, *, idempotency_key: str) -> None:
+        self.idempotency_key = idempotency_key
+        super().__init__(f"ambiguous (key={idempotency_key!r})")
+
+
+class _FenceAmbiguousBranchDispatcher:
+    """Deterministic all-terminal-or-fence-paused peer fan-out: branch-0 completes cleanly
+    and sets a gate; branch-1 waits on that gate THEN raises the effect-fence ambiguous error.
+    So branch-0 reaches a terminal `completed`+output BEFORE branch-1's fence-pause halts the
+    barrier (no not-yet-dispatched / cancelled branch, no timing race). On RESUME (branch-0
+    terminal-skipped) it records each dispatched step's threaded `effect_fence_resolution`."""
+
+    def __init__(self, *, fence_key: str = "fence-key-branch-1") -> None:
+        self._gate = threading.Event()
+        self._fence_key = fence_key
+        self.dispatched: list[str] = []
+        self.seen_resolution: dict[str, Any] = {}
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        step_id = str(step.step_id)
+        self.dispatched.append(step_id)
+        self.seen_resolution[step_id] = getattr(step_context, "effect_fence_resolution", None)
+        if step_id == "branch-0":
+            self._gate.set()
+            return {"role": "branch-0", "echoed": dict(step.step_payload)}
+        # branch-1: wait until branch-0 has completed, then raise the fence-ambiguous error.
+        assert self._gate.wait(timeout=10.0), "branch-0 never completed"
+        raise EffectFenceAmbiguousUncommittedError(idempotency_key=self._fence_key)
+
+
+class _HolderWithResolution:
+    """Stand-in `ResumeContextHolder` — `peek()` returns a ResumeContext carrying the
+    operator's effect-fence resolution (NON-consuming, the production peek contract)."""
+
+    def __init__(self, resolution: EffectFenceResolution) -> None:
+        self._rc = ResumeContext(effect_fence_resolution=resolution)
+        self.peeked = 0
+
+    def peek(self) -> ResumeContext:
+        self.peeked += 1
+        return self._rc
+
+
+class _ResumeRecordingDispatcher:
+    """Resume-side recording dispatcher: records each dispatched step's threaded
+    `step_context.effect_fence_resolution` then SUCCEEDS (no gate, no raise) — to witness
+    that the driver THREADS the key-bound directive onto the re-entered fence-paused branch."""
+
+    def __init__(self) -> None:
+        self.dispatched: list[str] = []
+        self.seen_resolution: dict[str, Any] = {}
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        step_id = str(step.step_id)
+        self.dispatched.append(step_id)
+        self.seen_resolution[step_id] = getattr(step_context, "effect_fence_resolution", None)
+        return {"role": step_id, "echoed": dict(step.step_payload)}
+
+
+def test_peer_branch_effect_fence_ambiguous_composes_through_barrier_to_pause() -> None:
+    """REAL-FENCE WITNESS (PAUSE half): a peer branch whose OWN dispatch raises the
+    effect-fence ambiguous error does NOT become a `completed` cascade branch — it
+    composes through the REAL `_execute_parallelization` TaskGroup+shield to a genuine
+    PAUSE carrying `effect_fence_paused_branches` (branch-1 + its held reserve key),
+    DISJOINT from the terminal `branches` (branch-0 recovered). Proves the name-matched
+    catch fires through the concurrency machinery (not ExceptionGroup-swallowed)."""
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    result = _run(steps=_steps(2), dispatcher=_FenceAmbiguousBranchDispatcher(), ctx=ctx)
+
+    assert result.status is RunStatus.PAUSED
+    assert result.fail_class is None
+    snap = result.pause_snapshot
+    assert snap is not None
+    # Labeled EFFECT_FENCE_AMBIGUOUS so the operator surface knows to supply a resolution.
+    assert snap.pause_reason is WorkflowPauseReason.EFFECT_FENCE_AMBIGUOUS
+    pr = snap.peer_fan_out_resume
+    assert pr is not None
+    assert pr.branch_count == 2
+    # branch-1 is the disjoint effect-fence-paused disposition (NOT a terminal branch).
+    assert {b.branch_index for b in pr.branches} == {0}  # only branch-0 terminal
+    efp = pr.effect_fence_paused_branches
+    assert len(efp) == 1
+    assert efp[0] == EffectFencePausedBranchResumeState(
+        branch_index=1,
+        step_id="branch-1",
+        step_kind="declarative-step",
+        idempotency_key="fence-key-branch-1",
+    )
+    # The snapshot is hash-valid (the carrier rides the snapshot hash, dropped-when-empty).
+    restored = PauseSnapshot.model_validate(snap.model_dump(mode="json"))
+    assert restored == snap
+
+
+def test_peer_branch_effect_fence_resume_threads_key_bound_resolution() -> None:
+    """REAL-FENCE WITNESS (resume half): resuming an effect-fence-paused peer fan-out
+    re-enters ONLY the fence-paused branch (branch-0 terminal-skipped), threading the
+    operator's `EffectFenceResolution` key-bound to THAT branch's held reserve. The
+    dispatcher APPLYING the resolution (RE_FIRE/SKIP/ABORT) is proven by the runtime
+    `test_effect_fence.py` witnesses; this is the CP producer half."""
+    # First: pause at branch-1, populating the carrier with the key.
+    paused = _run(
+        steps=_steps(2),
+        dispatcher=_FenceAmbiguousBranchDispatcher(),
+        ctx=cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())),
+    )
+    snap = paused.pause_snapshot
+    assert snap is not None and snap.peer_fan_out_resume is not None
+    efp = snap.peer_fan_out_resume.effect_fence_paused_branches
+    assert len(efp) == 1
+    key = efp[0].idempotency_key
+
+    # Resume: a holder carrying SKIP_AS_FIRED + a recording dispatcher; branch-1 re-dispatched.
+    holder = _HolderWithResolution(EffectFenceResolution.SKIP_AS_FIRED)
+    rec = _ResumeRecordingDispatcher()
+    ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    ctx_obj.resume_context_holder = holder  # type: ignore[attr-defined]
+    result = _run(
+        steps=_steps(2),
+        dispatcher=rec,
+        ctx=cast(DriverContext, ctx_obj),
+        pause_snapshot_input=snap,
+    )
+
+    assert result.status is RunStatus.SUCCESS
+    # branch-0 terminal-skipped on resume; only branch-1 re-dispatched WITH the directive.
+    assert "branch-0" not in rec.dispatched
+    assert "branch-1" in rec.dispatched
+    threaded = rec.seen_resolution["branch-1"]
+    assert threaded is not None
+    assert threaded.resolution is EffectFenceResolution.SKIP_AS_FIRED
+    assert threaded.idempotency_key == key
+    assert holder.peeked >= 1  # the holder was PEEKED (non-consuming), not consumed
+
+
+class EffectFenceAbortedError(Exception):
+    """Test-local stand-in for the runtime `effect_fence.EffectFenceAbortedError` — raised when
+    the operator resolved an effect-fence pause with ABORT and the tool dispatcher applies it."""
+
+
+class _AbortOnResolutionDispatcher:
+    """Resume-side dispatcher that RAISES the test-local `EffectFenceAbortedError` when it sees an
+    ABORT directive threaded on the re-entered branch (simulating the runtime fence applying the
+    operator's ABORT) — so the driver's ABORT → terminal FAILED routing is witnessed."""
+
+    def __init__(self) -> None:
+        self.dispatched: list[str] = []
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        step_id = str(step.step_id)
+        self.dispatched.append(step_id)
+        directive = getattr(step_context, "effect_fence_resolution", None)
+        if directive is not None and directive.resolution is EffectFenceResolution.ABORT:
+            raise EffectFenceAbortedError(f"operator aborted {step_id}")
+        return {"role": step_id, "echoed": dict(step.step_payload)}
+
+
+def test_peer_branch_effect_fence_resume_abort_is_terminal_failed_not_repause() -> None:
+    """Codex [P1] regression: resuming an effect-fence-paused peer fan-out with an ABORT
+    resolution yields a TERMINAL `RunStatus.FAILED` (the operator gave up), NOT a re-pause —
+    even on the TEAM (cascade_policy=pause) tier where an ordinary branch failure WOULD pause."""
+    paused = _run(
+        steps=_steps(2),
+        dispatcher=_FenceAmbiguousBranchDispatcher(),
+        ctx=cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())),
+    )
+    snap = paused.pause_snapshot
+    assert snap is not None and snap.peer_fan_out_resume is not None
+
+    holder = _HolderWithResolution(EffectFenceResolution.ABORT)
+    rec = _AbortOnResolutionDispatcher()
+    ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    ctx_obj.resume_context_holder = holder  # type: ignore[attr-defined]
+    result = _run(
+        steps=_steps(2),
+        dispatcher=rec,
+        ctx=cast(DriverContext, ctx_obj),
+        pause_snapshot_input=snap,
+    )
+
+    assert result.status is RunStatus.FAILED
+    assert "parallelization-effect-fence-aborted" in (result.fail_class or "")
+    assert result.pause_snapshot is None  # terminal — NOT a re-pause
+    assert "branch-1" in rec.dispatched  # the aborted branch DID re-dispatch
+
+
+def test_peer_branch_effect_fence_resume_changed_kind_fails_closed() -> None:
+    """Codex [P1] R2 regression: an effect-fence-paused peer captured at one kind, then re-supplied
+    at the SAME step_id but a CHANGED step_kind on resume, FAILS CLOSED — threading the resolution
+    into a different-kind dispatcher would not reach the tool fence (the original effect would be
+    silently abandoned). The live-pause analogue of the crash-resume changed-kind guard."""
+    paused = _run(
+        steps=_steps(2),
+        dispatcher=_FenceAmbiguousBranchDispatcher(),
+        ctx=cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())),
+    )
+    snap = paused.pause_snapshot
+    assert snap is not None and snap.peer_fan_out_resume is not None
+
+    # Resume with branch-1 CHANGED from declarative-step → inference-step (same step_id).
+    changed = [
+        WorkflowStep(
+            step_id=StepID("branch-0"),
+            step_kind=StepKind.DECLARATIVE_STEP,
+            step_payload={"index": 0},
+        ),
+        WorkflowStep(
+            step_id=StepID("branch-1"), step_kind=StepKind.INFERENCE_STEP, step_payload={"index": 1}
+        ),
+    ]
+    holder = _HolderWithResolution(EffectFenceResolution.SKIP_AS_FIRED)
+    ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    ctx_obj.resume_context_holder = holder  # type: ignore[attr-defined]
+    result = _run(
+        steps=changed,
+        dispatcher=_ResumeRecordingDispatcher(),
+        ctx=cast(DriverContext, ctx_obj),
+        pause_snapshot_input=snap,
+    )
+
+    assert result.status is RunStatus.FAILED
+    assert "effect-fence-paused-kind-changed" in (result.fail_class or "")
+
+
+def test_peer_effect_fence_resume_under_proceed_tier_fails_closed() -> None:
+    """Codex [P2] R3 regression: an effect-fence pause captured under a strict (pause) tier, then
+    RESUMED under a manifest/persona that now resolves to CascadePolicy.PROCEED, FAILS CLOSED — the
+    PROCEED path has no pause/resolution handling, so honoring the resume there would degrade the
+    operator's ABORT / the at-most-once re-pause to a silent PARTIAL. The fence resume requires a
+    strict tier."""
+    paused = _run(
+        steps=_steps(2),
+        dispatcher=_FenceAmbiguousBranchDispatcher(),
+        ctx=cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())),
+    )
+    snap = paused.pause_snapshot
+    assert snap is not None and snap.peer_fan_out_resume is not None
+
+    holder = _HolderWithResolution(EffectFenceResolution.SKIP_AS_FIRED)
+    ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    ctx_obj.resume_context_holder = holder  # type: ignore[attr-defined]
+    result = _run(
+        steps=_steps(2),
+        dispatcher=_ResumeRecordingDispatcher(),
+        ctx=cast(DriverContext, ctx_obj),
+        pause_snapshot_input=snap,
+        persona_tier=PersonaTier.SOLO_DEVELOPER,  # → CascadePolicy.PROCEED
+    )
+
+    assert result.status is RunStatus.FAILED
+    assert "effect-fence-resume-requires-strict-tier" in (result.fail_class or "")
+    assert result.pause_snapshot is None  # NOT a silent PARTIAL
