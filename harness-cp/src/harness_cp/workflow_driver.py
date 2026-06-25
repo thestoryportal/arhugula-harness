@@ -5121,11 +5121,62 @@ def _determine_fanout_resume(
             # The cross-version guard is therefore INHERENT in the new-file marker — no stamp
             # gate needed (`[[durable-recovery-presence-validity-scope]]`).
             if store.orchestrator_dispatched(run_key):
+                # B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-RESOLUTION (R-FS-1, CP spec v1.64 §1)
+                # — DEFAULT-DENY re-fire-safe relaxation (out-of-family Codex R1-R4: four corruption
+                # edges proved an enumerate-then-fail-closed DENYLIST inherently incomplete; this is
+                # inverted to a default-deny ALLOWLIST tied to the `_execute_orchestrator_workers`
+                # writer artifact list). The orchestrator runs FIRST + sequentially: its dispatch
+                # marker + the dispatch-instrumented stamp are the ONLY durable artifacts in the
+                # true pre-everything maybe-ran window. EVERY artifact the writer emits AFTER the
+                # orchestrator marker — the orchestrator capture (already excluded above:
+                # `orchestrator is None ∧ not orchestrator_present`), the cardinality marker
+                # (fsynced after record_orchestrator; R2 readable + R3 torn — presence-only), a
+                # worker dispatch marker (R4 — written only after the orchestrator+cardinality
+                # phase), a worker branch capture (readable OR corrupt), a post-join synthesis
+                # capture (written last) — PROVES the run advanced past the orchestrator phase, so
+                # an absent orchestrator capture here is a LOST capture (corruption), NOT the
+                # fire→capture window. Re-running the WHOLE fan-out fresh is safe ONLY in the
+                # pristine window (`[[durable-recovery-presence-validity-scope]]`: presence-only
+                # checks; the equivalence is "re-fire-safe-maybe-ran ≡ provably-not-run EXCEPT the
+                # orchestrator marker" — assert-absent everything the no-marker fresh path assumes).
+                _downstream_artifact_present = (
+                    store.fanout_cardinality_present(run_key)
+                    or bool(store.present_dispatched_indexes(run_key))
+                    or bool(store.present_branch_indexes(run_key))
+                    or store.synthesis_present(run_key)
+                )
+                _orch_kind = store.orchestrator_dispatched_kind(run_key)
+                if (
+                    not _downstream_artifact_present
+                    and store.dispatch_instrumented(run_key)
+                    and _orch_kind in _FANOUT_MAYBE_RAN_REFIRE_SAFE_KIND_VALUES
+                ):
+                    # PRISTINE window + dispatch-instrumented stamp (not orphaned, R1) + a
+                    # re-fire-safe DISPATCH-TIME kind (DECLARATIVE_STEP / INFERENCE_STEP — no
+                    # external effect; the common LLM-orchestrator shape; keyed on the MARKER, not
+                    # the resumed manifest — the changed-manifest guard) → re-run the whole fan-out
+                    # fresh (first-and-only; nothing downstream to double-fire).
+                    return None
+                if _downstream_artifact_present:
+                    # A downstream artifact survived but the orchestrator capture is absent → the
+                    # run advanced past orchestrator capture → the capture was LOST → corruption.
+                    raise _FanOutStoreCorruptError(
+                        "fan-out orchestrator dispatch marker present + a downstream artifact "
+                        "(cardinality marker / worker dispatch marker / worker branch capture / "
+                        "synthesis capture) present but the orchestrator output is absent — the "
+                        "run advanced past orchestrator capture, so the capture was LOST (corrupt "
+                        "store) — fail closed, never a fresh re-dispatch"
+                    )
+                # Pristine window but NOT re-fire-safe: an effect-bearing / un-kinded orchestrator
+                # (its effect may have landed) OR an orphaned marker without the dispatch-
+                # instrumented stamp (an inconsistent store whose recorded kind cannot be trusted —
+                # the v1.61 rule). Fail closed maybe-ran.
                 raise _FanOutStoreOrchestratorMaybeRanError(
                     "fan-out orchestrator dispatched but its output was never captured (crash "
                     "in the orchestrator fire→capture window, or an orphaned dispatch marker) "
-                    "— fail closed (maybe-ran; re-dispatch would risk a double-fire on the "
-                    "strict tiers)"
+                    "— fail closed (maybe-ran of an effect-bearing / un-kinded orchestrator, or "
+                    "an orphaned marker without the dispatch-instrumented stamp; re-dispatch "
+                    "would risk a double-fire on the strict tiers)"
                 )
             return None  # no marker → provably-not-run OR pre-arc journal → fresh run
         # Workers completed but the orchestrator output is ABSENT — an inconsistent store
@@ -7174,8 +7225,15 @@ def _execute_orchestrator_workers(
             _orch_dispatcher = step_dispatchers.lookup(orchestrator_step.step_kind)
             if _orch_replay_store is not None and cascade_policy is not CascadePolicy.PROCEED:
                 _orch_replay_store.record_dispatch_instrumented(run_idempotency_key)
+                # B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-RESOLUTION (R-FS-1, CP spec v1.64
+                # §1/§2) — record the orchestrator's DISPATCH-TIME step kind in the reserve
+                # marker so the resume-side maybe-ran classifier keys on the ORIGINAL kind (the
+                # at-most-once changed-manifest guard), mirroring the worker
+                # `record_branch_dispatched(... str(step_kind.value))` caller.
                 _orch_replay_store.record_orchestrator_dispatched(
-                    run_idempotency_key, str(orchestrator_step.step_id)
+                    run_idempotency_key,
+                    str(orchestrator_step.step_id),
+                    str(orchestrator_step.step_kind.value),
                 )
             orchestrator_output = _orch_dispatcher.dispatch(
                 orchestrator_binding, orchestrator_step, step_context=orchestrator_context

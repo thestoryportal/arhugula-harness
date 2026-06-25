@@ -46,38 +46,45 @@
 snapshot:
   frozen_total: 11
   frozen_done: 11
-  standalone_closed: 44
+  standalone_closed: 45
   standalone_gated: 0
   standalone_resolved: 4
-  standalone_registered: 3
+  standalone_registered: 4
   source: ".harness/beyond-mvp-capability-boundary-ledger.md"
-  # FRONTIER NOTE (2026-06-24, B-FANOUT-CRASH-RESUME-TIMEOUT-REPLAY closed). The frozen
-  # 11-arc order is COMPLETE; the standalone B-* register is the live frontier. The fan-out
-  # crash-resume capability family is being built out under FULL-SPEC. CLOSED so far:
+  # FRONTIER NOTE (2026-06-25, B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-RESOLUTION closed as
+  # the re-fire-safe slice). The frozen 11-arc order is COMPLETE; the standalone B-* register is
+  # the live frontier. The fan-out crash-resume capability family is being built out under
+  # FULL-SPEC. CLOSED so far:
   # B-FANOUT-OUTPUT-REPLAY (PR1 #723 + PR2 #724) + B-FANOUT-CRASH-RESUME-CASCADE-POLICY (#726)
   # + B-FANOUT-PAUSE-SYNTHESIS (#728) + B-FANOUT-RESUME-CARRIER-TOPOLOGY-MISMATCH (#730)
   # + B-FANOUT-CRASH-RESUME-STRICT-TIER-INCOMPLETE (#732)
   # + B-FANOUT-CRASH-RESUME-ORCHESTRATOR-DISPATCH (#734)
   # + B-FANOUT-CRASH-RESUME-MAYBE-RAN-RESOLUTION (#736)
-  # + B-FANOUT-CRASH-RESUME-TIMEOUT-REPLAY (the operator-set `timed_out` disposition policy —
-  # FAIL_CLOSED [default, v1.55-identical] / RECOVER_AS_TERMINAL [recover the deadline-cut branch
-  # as a degraded non-contributor; cascade_policy governs] / RE_DISPATCH [re-run a re-fire-safe
-  # deadline-cut branch, effect-bearing fail-closed, keyed on the v1.62 dispatch-time-kind marker];
-  # built WHOLE — registers NOTHING new → standalone_registered 4 → 3, the FIRST net decrement;
-  # CP v1.62→v1.63 + harness-runtime manifest-loader IMPL plumbing, NO runtime SPEC delta).
-  # The 3 still-registered follow-ons keeping R-FS-1 ACTIVE:
-  #   • B-FANOUT-CRASH-RESUME-MAYBE-RAN-EFFECT-BEARING (the EFFECT-BEARING maybe-ran residual —
-  #       TOOL_STEP / SUB_AGENT_DISPATCH [compose the inner effect-fence's suppress-and-continue
-  #       / §26.2 ambiguous-pause through the fan-out barrier] + MANAGED_AGENTS [extend the fence
-  #       to the unfenced vendor-session sink]; two decompose_at_open sub-mechanisms)
-  #   • B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-RESOLUTION (the ORCHESTRATOR analogue — the
-  #       orchestrator maybe-ran fire→capture window; ALSO carries the PROCEED-orchestrator
-  #       pre-capture residual, named per FULL-SPEC since #724's effect-free-synthesis
-  #       justification does not transfer to the general effect-bearing orchestrator)
+  # + B-FANOUT-CRASH-RESUME-TIMEOUT-REPLAY (#738)
+  # + B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-RESOLUTION (the re-fire-safe relaxation of the
+  #   v1.61 orchestrator-maybe-ran fail-closed — a maybe-ran orchestrator of a re-fire-safe
+  #   dispatch-time kind {DECLARATIVE_STEP, INFERENCE_STEP — the common LLM-orchestrator shape}
+  #   re-dispatches fresh; effect-bearing / un-kinded stays fail-closed; the orchestrator analogue
+  #   of the #736 worker re-fire-safety split; CP v1.63→v1.64 + runtime v1.80→v1.81 orchestrator
+  #   dispatch-time-kind marker; NO operator gate). Grounding the arc at open revealed it is THREE
+  #   sub-problems → closes as the re-fire-safe slice + registers TWO narrower follow-ons (a SPLIT,
+  #   not a defer; `[[spec-leg-split-on-ratification-boundary]]`) → standalone_registered 3 → 4
+  #   (a net INCREASE — honest FULL-SPEC accounting).
+  # The 4 still-registered follow-ons keeping R-FS-1 ACTIVE:
+  #   • B-FANOUT-CRASH-RESUME-MAYBE-RAN-EFFECT-BEARING (the WORKER EFFECT-BEARING maybe-ran residual)
+  #   • B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-EFFECT-BEARING (NEW — the ORCHESTRATOR analogue
+  #       of the worker effect-bearing arc: an effect-bearing orchestrator maybe-ran [TOOL_STEP /
+  #       SUB_AGENT_DISPATCH / MANAGED_AGENTS — the orchestrator steps[0] kind is unconstrained]
+  #       routed to a §26.2 pause for operator resolution; needs a NEW resume→orchestrator
+  #       application site the linear effect-fence resume cannot reach)
+  #   • B-FANOUT-CRASH-RESUME-ORCHESTRATOR-PROCEED-RESIDUAL (NEW, operator-gated — under PROCEED the
+  #       orchestrator writes no marker; closing the pre-capture double-fire window changes PROCEED's
+  #       COMMITTED tier semantic [the v1.56 PR2-round-4 "accepts the window" precedent] → a C10⊥C11
+  #       tension → dyadic council + operator AUQ at open)
   #   • B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT (reconstruct a lost PAUSE snapshot honoring
   #       §25.15.1 finish-in-flight; the PAUSE-trigger leg cascade-policy fails closed)
-  # closure_gate.py G1.1 = standalone_registered + standalone_gated == 0 is now 3 + 0 = 3
-  # → R-FS-1 stays ACTIVE. On all three follow-ons reaching closed/resolved → G1.1 passes →
+  # closure_gate.py G1.1 = standalone_registered + standalone_gated == 0 is now 4 + 0 = 4
+  # → R-FS-1 stays ACTIVE. On all four follow-ons reaching closed/resolved → G1.1 passes →
   # R-FS-1 resolves → R-CL-Q1 quality track admits. (Run `just closure-gate` to confirm G1.1.)
 
 arcs:
@@ -610,15 +617,45 @@ arcs:
     ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
 
   - id: B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-RESOLUTION
-    title: "Resolve the dispatched-but-uncaptured (maybe-ran) ORCHESTRATOR fire→capture window + the PROCEED-orchestrator residual"
+    title: "Re-fire-safe relaxation of the maybe-ran ORCHESTRATOR fire→capture fail-closed"
+    kind: standalone
+    status: closed
+    decompose_at_open: true
+    owner_axis: "CP + runtime"
+    operator_gated: false  # the re-fire-safe relaxation is additive (no committed-invariant sacrifice — at-most-once preserved, effect-bearing stays fail-closed) → no operator gate. The operator-gated piece (PROCEED) is SPLIT to its own registered leg below.
+    parent_arc: B-FANOUT-CRASH-RESUME-ORCHESTRATOR-DISPATCH
+    pr: "#<pending> (feat/r-fs-1-fanout-orchestrator-maybe-ran — flips registered → closed as the re-fire-safe slice; registers TWO narrower follow-ons → standalone_registered 3 → 4, a net increase)"
+    spec_delta: "CP spec v1.63 → v1.64 (§1 the re-fire-safe relaxation: a maybe-ran orchestrator of a re-fire-safe dispatch-time kind {DECLARATIVE_STEP, INFERENCE_STEP} re-dispatches fresh, effect-bearing / un-kinded stays fail-closed; §2 reuse of the dispatch-time-kind marker substrate for the orchestrator [paired runtime delta]; §3 honest split accounting) + runtime v1.80 → v1.81 (the C-RT-32 EngineOutputStore orchestrator dispatched-marker gains the dispatch-time step_kind + orchestrator_dispatched_kind reader — the single-orchestrator analogue of the v1.80 worker dispatched_branch_kinds) + 2 clearance markers. NO contract / closed-enum / committed-invariant change; at-most-once PRESERVED (re-dispatch only a provably re-fire-safe orchestrator, keyed on the dispatch-time-kind marker; a pre-v1.64 marker with no step_kind → None → fail-closed). NO new fail-class (the effect-bearing case raises the existing fan-out-crash-resume-orchestrator-maybe-ran)."
+    gives: "The common ORCHESTRATOR_WORKERS shape (steps[0] is an LLM that farms sub-tasks → INFERENCE_STEP, re-fire-safe) now RECOVERS from its own fire→capture maybe-ran window instead of failing the strict-tier crash-resume closed: _determine_fanout_resume classifies the maybe-ran orchestrator by its DISPATCH-TIME kind (recorded in the orchestrator marker), returns None (fresh re-run — sound: the maybe-ran case fires only with no worker recovered + no cardinality marker yet) for a re-fire-safe kind, and raises (fail-closed, unchanged) for an effect-bearing / un-kinded one. Grounding the arc at open (HEAD re-ground, `[[grounding-reveals-claude-closeable-slice-close-honestly]]`) refined the registered 'route to a §26.2 pause' anticipation into 'per-kind re-dispatch, not a new pause' — EXACTLY as the v1.62 worker arc refined its identical registration language: a completed-and-captured orchestrator is already recovered via read_orchestrator_output (never maybe-ran), so maybe-ran ⟺ genuinely fire→capture-ambiguous, and the actionable distinction is the kind's external-effect surface. Decorrelated: advisor full-transcript ×2 (the design proposal → the decomposition reconcile, where advisor REVERSED its own 'build the pause-route' steer once grounded against the v1.62 worker precedent + read-#2 confirming _execute_orchestrator_workers cannot reach the linear effect-fence resume site) + the orchestrator-kind-reachability grep (confirms steps[0] kind is UNCONSTRAINED → the effect-bearing follow-on is reachable, not vacuous) + out-of-family Codex on the diff."
+    as_built:
+      - "harness-runtime/src/harness_runtime/lifecycle/engine_output_store.py (C-RT-32 EngineOutputStore: record_orchestrator_dispatched gains step_kind + the new orchestrator_dispatched_kind reader; torn / pre-v1.81 marker → None; mirrors the worker dispatched_branch_kinds)"
+      - "harness-cp/src/harness_cp/workflow_driver.py (the orchestrator-block reserve site passes str(orchestrator_step.step_kind.value); the _determine_fanout_resume orchestrator maybe-ran classification keys on orchestrator_dispatched_kind via _FANOUT_MAYBE_RAN_REFIRE_SAFE_KIND_VALUES — re-fire-safe → return None, effect-bearing / un-kinded → raise)"
+      - "design-substrate/Spec_Control_Plane_v1_64.md + design-substrate/Spec_Harness_Runtime_v1.md v1.81 + 2 clearance markers"
+      - "tests: harness-runtime test_engine_output_store.py (orchestrator_dispatched_kind round-trip across restart + pre-v1.81-marker → None); harness-cp test_workflow_driver_fanout_output_replay.py isolation (re-fire-safe INFERENCE/DECLARATIVE → None fresh [parametrized]; effect-bearing TOOL/SUB_AGENT/MANAGED → raises [parametrized]; changed-manifest TOOL-marker-vs-DECLARATIVE-manifest → raises [marker-keyed]); test_workflow_driver_fanout_output_replay_full_chain.py (re-fire-safe orchestrator maybe-ran RECOVERS fresh under CASCADE_CANCEL + PAUSE + HIERARCHICAL re-firing the orchestrator once; effect-bearing TOOL_STEP orchestrator maybe-ran fails closed; pre-v1.81 un-kinded marker fails closed)"
+    ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
+
+  - id: B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-EFFECT-BEARING
+    title: "Resolve a maybe-ran ORCHESTRATOR of an EFFECT-BEARING kind (§26.2 pause-route)"
     kind: standalone
     status: registered
     decompose_at_open: true
     owner_axis: "CP + runtime"
-    operator_gated: false  # additive (resolve the narrow orchestrator fire→capture ambiguity + the PROCEED residual), no committed-invariant sacrifice → no operator gate; the resolution mechanism is the design question (the effect-fence HITL-route analogue).
-    parent_arc: B-FANOUT-CRASH-RESUME-ORCHESTRATOR-DISPATCH
-    anticipated_scope: "Resolve a MAYBE-RAN orchestrator on an ORCHESTRATOR_WORKERS / HIERARCHICAL crash-resume. B-FANOUT-CRASH-RESUME-ORCHESTRATOR-DISPATCH separates provably-not-run (fresh) from maybe-ran (a dispatch marker with NO terminal capture — its effect MAY have fired) but still fails the maybe-ran case CLOSED. The orchestrator analogue of the worker B-FANOUT-CRASH-RESUME-MAYBE-RAN-RESOLUTION. Scope: a post-dispatch capture that distinguishes completed-and-captured (suppress-and-continue with the captured orchestrator output, never re-fire) from genuinely-ambiguous (route to a §26.2 WorkflowPauseReason pause for operator resolution, else FAILED) — mirroring the B-EFFECT-FENCE-HITL-ROUTE / B-EFFECT-FENCE-PAUSE-RESOLUTION family for the orchestrator. ALSO carries the PROCEED-orchestrator pre-capture residual: under PROCEED the orchestrator's pre-capture window still re-dispatches steps[0] fresh on a crash (a potential double-fire) — NOT covered by the v1.56 PR2 'pre-capture re-dispatch is safe' justification (that was specifically 'synthesis is effect-free'; the orchestrator is a general effect-BEARING LLM dispatch)."
-    why: "Surfaced at B-FANOUT-CRASH-RESUME-ORCHESTRATOR-DISPATCH (advisor): the orchestrator reserve-before-dispatch marker separates provably-not-run from maybe-ran but does NOT eliminate the orchestrator fire→capture ambiguity; and the PROCEED-orchestrator pre-capture window is a known residual the strict-tier-only scoping leaves open — both NAMED per FULL-SPEC rather than silently left. The provably-not-run case is built; the maybe-ran resolution + the PROCEED residual are genuine design problems, not deferrals. FULL-SPEC (`[[feedback-full-spec-beyond-mvp-nothing-deferred]]`)."
+    operator_gated: false  # additive (resolve the effect-bearing orchestrator maybe-ran via a §26.2 operator-resolution pause), no committed-invariant sacrifice → no operator gate; the resolution mechanism (the new resume→orchestrator application site) is the design question.
+    parent_arc: B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-RESOLUTION
+    anticipated_scope: "Resolve a MAYBE-RAN orchestrator of an EFFECT-BEARING dispatch-time kind (TOOL_STEP / SUB_AGENT_DISPATCH / MANAGED_AGENTS — the orchestrator steps[0] kind is UNCONSTRAINED: admissibility does not foreclose a non-re-fire-safe orchestrator, a reachable gap confirmed at the parent arc by grep). B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-RESOLUTION re-dispatches a re-fire-safe orchestrator fresh but still fails the effect-bearing case CLOSED (its effect may have landed). The orchestrator analogue of the worker B-FANOUT-CRASH-RESUME-MAYBE-RAN-EFFECT-BEARING (which is explicitly worker-branch-scoped and does NOT cover the orchestrator). Scope: route the ambiguous effect-bearing orchestrator to a §26.2 EFFECT_FENCE_AMBIGUOUS pause for operator resolution (RE_FIRE / ABORT — SKIP_AS_FIRED degenerates for an orchestrator, whose absent output the workers consume), else FAILED — mirroring the B-EFFECT-FENCE-HITL-ROUTE / B-EFFECT-FENCE-PAUSE-RESOLUTION family. Requires a NEW resume-side application site in the orchestrator dispatch path: the linear effect-fence resume threads its directive at step composition (the linear loop), which _execute_orchestrator_workers does NOT reach (read-#2 at the parent arc) — a genuinely larger mechanism than the parent's per-kind re-dispatch slice."
+    why: "Surfaced at B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-RESOLUTION (the per-kind grounding): only a re-fire-safe orchestrator can re-dispatch safely; the effect-bearing orchestrator maybe-ran is a genuine design problem needing the §26.2 pause-route + a new resume→orchestrator application site — split off rather than fail-closed-forever-silently. Mirrors the worker family's own re-fire-safe / effect-bearing split (v1.62 → the registered B-FANOUT-CRASH-RESUME-MAYBE-RAN-EFFECT-BEARING). FULL-SPEC (`[[feedback-full-spec-beyond-mvp-nothing-deferred]]`)."
+    ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
+
+  - id: B-FANOUT-CRASH-RESUME-ORCHESTRATOR-PROCEED-RESIDUAL
+    title: "Close the PROCEED-orchestrator pre-capture double-fire window (committed-tier-semantic change)"
+    kind: standalone
+    status: registered
+    decompose_at_open: true
+    owner_axis: "CP + runtime"
+    operator_gated: true  # closing the PROCEED window changes PROCEED's COMMITTED tier semantic (the v1.56 PR2-round-4 "PROCEED accepts the dispatch-before-capture window" precedent, repeatedly documented v1.56/v1.57/v1.60/v1.61/v1.62) → a nameable C10⊥C11 tension → a dyadic council + operator AUQ at open (CLAUDE.md §10.9 + §13.4). NOT additive.
+    parent_arc: B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-RESOLUTION
+    anticipated_scope: "Under CascadePolicy.PROCEED (SOLO_DEVELOPER) the orchestrator writes NO reserve-before-dispatch marker (v1.61 §1, strict-tier-only), so its pre-capture window still re-dispatches steps[0] fresh on a crash → a potential double-fire of an effect-bearing orchestrator. Closing it (write the orchestrator marker under PROCEED + apply the maybe-ran resolution) changes PROCEED's deliberate, repeatedly-documented committed tier semantic — 'PROCEED accepts the dispatch-before-capture window per the v1.56 PR2-round-4 precedent and the effect-fence's domain' — into a fail-closed / pause for the effect-bearing orchestrator. The v1.56 'no correctness gain' justification (synthesis is enforced effect-free) does NOT transfer to a general effect-BEARING orchestrator (v1.61 §4 named this). Scope: the C10⊥C11 decision (action-safety/blast-radius wanting at-most-once even at SOLO vs operator-loop/local-deployment wanting SOLO to never-block) + the impl once ratified. The same tension generalizes to worker-branch PROCEED (to be considered when this leg opens)."
+    why: "Surfaced at B-FANOUT-CRASH-RESUME-ORCHESTRATOR-DISPATCH (v1.61 §4) + sharpened at B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-RESOLUTION: the spec text shows PROCEED's window-acceptance is a DELIBERATE committed tier semantic (not an unclosed gap in a universal invariant), so closing it is a committed-tier-semantic change requiring an operator gate + dyadic council — SPLIT from the additive re-fire-safe slice per `[[spec-leg-split-on-ratification-boundary]]` rather than silently absorbing the change. FULL-SPEC (`[[feedback-full-spec-beyond-mvp-nothing-deferred]]`)."
     ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
 
   - id: B-FANOUT-CRASH-RESUME-TIMEOUT-REPLAY

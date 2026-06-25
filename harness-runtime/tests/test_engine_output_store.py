@@ -360,7 +360,7 @@ def test_orchestrator_dispatched_marker_round_trip_across_restart(tmp_path: Path
     (= a process restart) reads it back. Absent → False (the orchestrator never began dispatch)."""
     store = EngineOutputStore(journal_dir=tmp_path / "eo")
     assert store.orchestrator_dispatched(_RUN_KEY) is False
-    store.record_orchestrator_dispatched(_RUN_KEY, "orch-step")
+    store.record_orchestrator_dispatched(_RUN_KEY, "orch-step", "inference-step")
     fresh = EngineOutputStore(journal_dir=tmp_path / "eo")  # crash + restart
     assert fresh.orchestrator_dispatched(_RUN_KEY) is True
 
@@ -370,7 +370,8 @@ def test_orchestrator_dispatched_marker_distinct_from_capture(tmp_path: Path) ->
     orchestrator.jsonl terminal capture (reserve-before-COMMIT): the marker can be present while
     the capture is absent — the orchestrator MAYBE-RAN (fired its effect, crashed before capture)."""
     store = EngineOutputStore(journal_dir=tmp_path / "eo")
-    store.record_orchestrator_dispatched(_RUN_KEY, "orch-step")  # dispatched, NOT yet captured
+    # dispatched, NOT yet captured
+    store.record_orchestrator_dispatched(_RUN_KEY, "orch-step", "inference-step")
     assert store.orchestrator_dispatched(_RUN_KEY) is True
     assert store.orchestrator_present(_RUN_KEY) is False  # no terminal capture → maybe-ran
     store.record_orchestrator(_RUN_KEY, "orch-step", {"plan": "delegate"})  # now captured
@@ -381,9 +382,54 @@ def test_orchestrator_dispatched_marker_distinct_from_capture(tmp_path: Path) ->
 def test_orchestrator_dispatched_marker_idempotent(tmp_path: Path) -> None:
     """A re-recorded orchestrator marker (a resume re-dispatch) is idempotent — presence-only."""
     store = EngineOutputStore(journal_dir=tmp_path / "eo")
-    store.record_orchestrator_dispatched(_RUN_KEY, "orch-step")
-    store.record_orchestrator_dispatched(_RUN_KEY, "orch-step")
+    store.record_orchestrator_dispatched(_RUN_KEY, "orch-step", "inference-step")
+    store.record_orchestrator_dispatched(_RUN_KEY, "orch-step", "inference-step")
     assert store.orchestrator_dispatched(_RUN_KEY) is True
+
+
+def test_orchestrator_dispatched_kind_round_trip_across_restart(tmp_path: Path) -> None:
+    """B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-RESOLUTION — record_orchestrator_dispatched()
+    persists the orchestrator's DISPATCH-TIME kind; a FRESH store (= a restart) reads it via
+    orchestrator_dispatched_kind(). Absent run → None (the orchestrator never began dispatch)."""
+    store = EngineOutputStore(journal_dir=tmp_path / "eo")
+    assert store.orchestrator_dispatched_kind(_RUN_KEY) is None  # no marker
+    store.record_orchestrator_dispatched(_RUN_KEY, "orch-step", "tool-step")
+    fresh = EngineOutputStore(journal_dir=tmp_path / "eo")  # crash + restart
+    assert fresh.orchestrator_dispatched_kind(_RUN_KEY) == "tool-step"
+    assert fresh.orchestrator_dispatched_kind("other-run") is None
+
+
+def test_orchestrator_dispatched_kind_pre_v1_81_marker_maps_to_none(tmp_path: Path) -> None:
+    """A pre-v1.81 (v1.79-era) orchestrator marker recorded only {"step_id": ...} with NO
+    step_kind. orchestrator_dispatched_kind() maps it to None → the CP classifier treats it as
+    NOT re-fire-safe → fail-closed (the v1.79 behavior preserved; never a wrongful re-dispatch)."""
+    store = EngineOutputStore(journal_dir=tmp_path / "eo")
+    marker = store._orchestrator_dispatched_file(_RUN_KEY)
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(json.dumps({"step_id": "orch-step"}), encoding="utf-8")  # no step_kind
+    assert store.orchestrator_dispatched(_RUN_KEY) is True  # presence intact
+    assert store.orchestrator_dispatched_kind(_RUN_KEY) is None  # but kind unknown → fail-closed
+
+
+def test_fanout_cardinality_present_distinguishes_absent_from_torn(tmp_path: Path) -> None:
+    """B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-RESOLUTION (Codex R3) — fanout_cardinality_present
+    is presence-only (file-exists), distinct from read_fanout_cardinality (which returns None for
+    BOTH an absent AND a present-but-torn marker). A torn cardinality marker still proves the run
+    advanced past capture → the orchestrator re-fire-safe relaxation must fail closed on it."""
+    store = EngineOutputStore(journal_dir=tmp_path / "eo")
+    assert store.fanout_cardinality_present(_RUN_KEY) is False  # absent
+    assert store.read_fanout_cardinality(_RUN_KEY) is None
+    store.record_fanout_cardinality(_RUN_KEY, 4)
+    assert store.fanout_cardinality_present(_RUN_KEY) is True  # present + readable
+    assert store.read_fanout_cardinality(_RUN_KEY) == 4
+    # Torn marker: the file EXISTS but holds no parseable branch_count → read returns None,
+    # presence stays True (the corruption signal the classifier keys on).
+    torn = EngineOutputStore(journal_dir=tmp_path / "torn")
+    cfile = torn._cardinality_file(_RUN_KEY)
+    cfile.parent.mkdir(parents=True, exist_ok=True)
+    cfile.write_text("{not-json", encoding="utf-8")
+    assert torn.fanout_cardinality_present(_RUN_KEY) is True  # present...
+    assert torn.read_fanout_cardinality(_RUN_KEY) is None  # ...but torn → unreadable
 
 
 def test_dispatched_marker_does_not_collide_with_branch_capture(tmp_path: Path) -> None:
