@@ -41,7 +41,10 @@ from harness_cp.engine_class import EngineClass
 from harness_cp.gate_level_rule import GateLevel
 from harness_cp.topology_pattern import TopologyPattern
 from harness_cp.workflow_driver_types import StepKind, WorkflowStep
-from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
+from harness_cp.workflow_manifest_entry import (
+    FanoutTimeoutDisposition,
+    WorkflowManifestEntry,
+)
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from harness_runtime.lifecycle.strict_safe_loader import strict_safe_load
@@ -158,6 +161,7 @@ class _WorkflowSection(BaseModel):
     topology_pattern: TopologyPattern
     entry_version: int = 1
     default_gate_level: GateLevel | None = None
+    fanout_timeout_disposition: FanoutTimeoutDisposition = FanoutTimeoutDisposition.FAIL_CLOSED
     layer_budgets: list[Any] = []
     fallback_chain: dict[str, Any] | None = None
     hitl_placements: list[Any] = []
@@ -417,6 +421,7 @@ class WorkflowManifestLoader:
                     "per_step_overrides": manifest.workflow.per_step_overrides,
                     "entry_version": manifest.workflow.entry_version,
                     "default_gate_level": manifest.workflow.default_gate_level,
+                    "fanout_timeout_disposition": (manifest.workflow.fanout_timeout_disposition),
                 }
             )
         except ValidationError as exc:

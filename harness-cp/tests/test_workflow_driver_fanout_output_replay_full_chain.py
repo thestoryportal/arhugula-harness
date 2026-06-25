@@ -50,7 +50,10 @@ from harness_cp.workflow_driver import (
     execute_workflow,
 )
 from harness_cp.workflow_driver_types import RunStatus, StepKind, WorkflowStep
-from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
+from harness_cp.workflow_manifest_entry import (
+    FanoutTimeoutDisposition,
+    WorkflowManifestEntry,
+)
 from harness_is.state_ledger_entry_schema import Actor, ActorClass
 
 _DEFAULT_BINDING = ModelBinding(provider="anthropic", model="claude-haiku-4-5")
@@ -251,6 +254,13 @@ class _InMemoryBranchStore:
         step_id, _status, _out = self._branches[run_key][branch_index]
         self._branches[run_key][branch_index] = (step_id, "completed", None)
 
+    # -- test helper: a deadline-cut (`timed_out`) branch — the §25.15 barrier cut-off
+    # captured the disposition with NO output (effect may or may not have landed). The
+    # B-FANOUT-CRASH-RESUME-TIMEOUT-REPLAY disposition policy resolves it on resume. --
+    def timeout_branch(self, run_key: str, branch_index: int) -> None:
+        step_id, _status, _out = self._branches[run_key][branch_index]
+        self._branches[run_key][branch_index] = (step_id, "timed_out", None)
+
     # -- test helper: the single run_key recorded this run (the driver computes
     # `sha256(run_id, workflow_id, entry_version)` internally; inspecting by the
     # sole recorded key avoids re-deriving it and coupling the test to §25.6). --
@@ -266,6 +276,7 @@ def _manifest(
     topology: TopologyPattern,
     engine_class: EngineClass = EngineClass.EVENT_SOURCED_REPLAY,
     persona_tier: PersonaTier = _PROCEED_TIER,
+    timeout_disposition: FanoutTimeoutDisposition = FanoutTimeoutDisposition.FAIL_CLOSED,
 ) -> WorkflowManifestEntry:
     return WorkflowManifestEntry(
         workflow_id=workflow_id,
@@ -277,6 +288,7 @@ def _manifest(
         fallback_chain=_CHAIN,
         hitl_placements=(),
         per_step_overrides={},
+        fanout_timeout_disposition=timeout_disposition,
     )
 
 
@@ -403,10 +415,18 @@ def _run(
     dispatcher: StepDispatcher,
     store: Any,
     engine_class: EngineClass = EngineClass.EVENT_SOURCED_REPLAY,
+    timeout_disposition: FanoutTimeoutDisposition = FanoutTimeoutDisposition.FAIL_CLOSED,
+    persona_tier: PersonaTier = _PROCEED_TIER,
 ) -> Any:
     ctx = cast(DriverContext, _Ctx(ledger=_RecordingLedger(), store=store))
     return execute_workflow(
-        _manifest(workflow_id=workflow_id, topology=topology, engine_class=engine_class),
+        _manifest(
+            workflow_id=workflow_id,
+            topology=topology,
+            engine_class=engine_class,
+            timeout_disposition=timeout_disposition,
+            persona_tier=persona_tier,
+        ),
         steps,
         run_id="run-1",
         ctx=ctx,
@@ -499,6 +519,158 @@ def test_parallelization_crash_resume_errored_branch_recovered_as_terminal() -> 
     assert r2.status is RunStatus.PARTIAL  # degraded: the recovered failure is preserved
     assert r2.partial_state is not None
     assert set(r2.partial_state["branch_outputs"]) == {"branch-0", "branch-2"}
+
+
+# ---------------------------------------------------------------------------
+# B-FANOUT-CRASH-RESUME-TIMEOUT-REPLAY (R-FS-1, CP spec v1.63 §1) — by-execution witnesses
+# through the REAL execute_workflow crash→resume cycle, for each disposition policy.
+# ---------------------------------------------------------------------------
+def test_timeout_disposition_fail_closed_default_fails_the_resume() -> None:
+    """The DEFAULT `FAIL_CLOSED` (the v1.55 §1 behavior): a deadline-cut (`timed_out`)
+    branch fails the crash-resume CLOSED — even under the PROCEED tier — never recovering
+    or re-dispatching. This is the contrast baseline for RECOVER_AS_TERMINAL / RE_DISPATCH."""
+    store = _InMemoryBranchStore()
+    steps = [_step(f"branch-{i}", i) for i in range(3)]
+    _run(
+        workflow_id="wf-timeout-fc",
+        topology=TopologyPattern.PARALLELIZATION,
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3),
+        store=store,
+    )
+    store.timeout_branch(store.sole_run_key(), 1)  # branch 1 deadline-cut on the crashed run
+
+    resume = _CountingDispatcher(n=3)
+    r2 = _run(
+        workflow_id="wf-timeout-fc",
+        topology=TopologyPattern.PARALLELIZATION,
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        timeout_disposition=FanoutTimeoutDisposition.FAIL_CLOSED,
+    )
+    assert r2.status is RunStatus.FAILED  # v1.55 §1 byte-identical
+    assert resume.dispatched == []  # never re-dispatched
+
+
+def test_timeout_disposition_recover_as_terminal_recovers_partial() -> None:
+    """RECOVER_AS_TERMINAL under PROCEED: the deadline-cut branch is recovered as a degraded
+    non-contributor (never re-dispatched, never folded) → the run RECOVERS as PARTIAL folding
+    the survivors, instead of FAILING closed. Contrast with the FAIL_CLOSED baseline above —
+    same store state, different disposition → FAILED vs PARTIAL."""
+    store = _InMemoryBranchStore()
+    steps = [_step(f"branch-{i}", i) for i in range(3)]
+    _run(
+        workflow_id="wf-timeout-rat",
+        topology=TopologyPattern.PARALLELIZATION,
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3),
+        store=store,
+    )
+    store.timeout_branch(store.sole_run_key(), 1)
+
+    resume = _CountingDispatcher(n=3)
+    r2 = _run(
+        workflow_id="wf-timeout-rat",
+        topology=TopologyPattern.PARALLELIZATION,
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        timeout_disposition=FanoutTimeoutDisposition.RECOVER_AS_TERMINAL,
+    )
+    assert resume.dispatched == []  # at-most-once: the deadline-cut branch is NOT re-fired
+    assert r2.status is RunStatus.PARTIAL  # recovered (degraded) instead of FAILED
+    assert r2.partial_state is not None
+    assert set(r2.partial_state["branch_outputs"]) == {"branch-0", "branch-2"}
+
+
+def test_timeout_disposition_re_dispatch_re_fire_safe_branch_re_runs() -> None:
+    """RE_DISPATCH + a re-fire-safe (DECLARATIVE_STEP, the default `_step` kind) deadline-cut
+    branch → re-run fresh (the dispatch marker recorded the re-fire-safe kind). On resume the
+    timed-out branch re-fires exactly once + the survivors replay → SUCCESS, aggregate matches
+    a clean run. A re-fire-safe re-run has no external effect to double-fire.
+
+    Run under a STRICT tier (MULTI_TENANT_COMPLIANCE → cascade-cancel): the dispatch-time-kind
+    markers RE_DISPATCH's re-fire-safety gate keys on are written only on the strict tiers (the
+    v1.62 marker substrate is strict-tier-only — under PROCEED, with no markers to prove
+    re-fire-safety, RE_DISPATCH conservatively fails closed; PROCEED-tier timeout recovery uses
+    RECOVER_AS_TERMINAL)."""
+    store = _InMemoryBranchStore()
+    steps = [_step(f"branch-{i}", i) for i in range(3)]
+    _run(
+        workflow_id="wf-timeout-rd",
+        topology=TopologyPattern.PARALLELIZATION,
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3),
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+    )
+    store.timeout_branch(store.sole_run_key(), 1)
+
+    resume = _CountingDispatcher(n=3)
+    r2 = _run(
+        workflow_id="wf-timeout-rd",
+        topology=TopologyPattern.PARALLELIZATION,
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        timeout_disposition=FanoutTimeoutDisposition.RE_DISPATCH,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+    )
+    assert r2.status is RunStatus.SUCCESS  # re-fire-safe re-run completes the fan-out
+    assert resume.dispatched == [
+        "branch-1"
+    ]  # ONLY the timed-out branch re-fires (survivors replay)
+    baseline = _run(
+        workflow_id="wf-timeout-rd-baseline",
+        topology=TopologyPattern.PARALLELIZATION,
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3),
+        store=_InMemoryBranchStore(),
+    )
+    assert r2.final_state is not None and baseline.final_state is not None
+    assert r2.final_state["aggregate"] == baseline.final_state["aggregate"]
+
+
+def test_timeout_disposition_re_dispatch_effect_bearing_branch_fails_closed() -> None:
+    """RE_DISPATCH + an EFFECT-BEARING deadline-cut branch → FAIL CLOSED through the real run
+    path: the dispatch marker records an effect-bearing kind, so re-dispatch is refused (its
+    effect may have landed). At-most-once is the GATE, not operator-overridable.
+
+    The classifier keys on the dispatch-time-kind MARKER (the changed-manifest at-most-once
+    guard, §3) — so branch 1's marker is overridden to TOOL_STEP after a clean DECLARATIVE
+    Run 1 (modelling a branch that DISPATCHED as an effect-bearing kind; effect-bearing fan-out
+    branch capture itself is the separately-registered effect-bearing-maybe-ran arc's substrate,
+    out of scope here). Strict tier → markers present → the fail-closed is for the EFFECT-BEARING
+    reason, not absent markers."""
+    store = _InMemoryBranchStore()
+    steps = [_step(f"branch-{i}", i) for i in range(3)]
+    _run(
+        workflow_id="wf-timeout-rd-eb",
+        topology=TopologyPattern.PARALLELIZATION,
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3),
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+    )
+    run_key = store.sole_run_key()
+    # branch 1 dispatched as an effect-bearing TOOL_STEP (override the recorded marker kind)
+    # then deadline-cut → timed_out.
+    store.inject_stale_dispatch_marker(run_key, 1, StepKind.TOOL_STEP.value)
+    store.timeout_branch(run_key, 1)
+
+    resume = _CountingDispatcher(n=3)
+    r2 = _run(
+        workflow_id="wf-timeout-rd-eb",
+        topology=TopologyPattern.PARALLELIZATION,
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        timeout_disposition=FanoutTimeoutDisposition.RE_DISPATCH,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+    )
+    assert r2.status is RunStatus.FAILED  # effect-bearing deadline-cut cannot be re-dispatched
+    assert resume.dispatched == []
 
 
 def _completed_branch_indexes(ledger: _RecordingLedger) -> set[int]:

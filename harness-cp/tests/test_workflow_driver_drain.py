@@ -521,9 +521,16 @@ def test_driver_does_not_own_bounded_wait_timeout() -> None:
 
     sig = inspect.signature(execute_workflow)
     assert "timeout" not in sig.parameters
-    # No public timeout symbol in module.
+    # No public timeout PRIMITIVE in the module. `FanoutTimeoutDisposition` (a re-exported
+    # enum imported from `workflow_manifest_entry` — the B-FANOUT-CRASH-RESUME-TIMEOUT-REPLAY
+    # crash-resume disposition policy domain, CP spec v1.63 §1) is NOT a driver-owned
+    # bounded-wait timeout primitive, so it is exempt from this guard (it carries "timeout"
+    # only as part of the deadline-cut disposition concept).
+    _timeout_symbol_allowlist = {"FanoutTimeoutDisposition"}
     public_names = [n for n in dir(workflow_driver) if not n.startswith("_")]
     for name in public_names:
+        if name in _timeout_symbol_allowlist:
+            continue
         assert "timeout" not in name.lower()
 
 

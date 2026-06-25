@@ -1,8 +1,10 @@
 """`WorkflowManifestEntry` schema — U-CP-13.
 
 Implements C-CP-06 §6.1 (the workflow-manifest-entry shape). Declares the
-`WorkflowManifestEntry` record (11 top-level fields at v2.12; was 10 at
-v2.11) and the constituent `StepOverride` record.
+`WorkflowManifestEntry` record (13 top-level fields at CP spec v1.63;
+`entry_version` at v2.12, `default_gate_level` at v1.20,
+`fanout_timeout_disposition` at v1.63), the `FanoutTimeoutDisposition` enum,
+and the constituent `StepOverride` record.
 
 **v2.12 re-open (2026-05-20).** `entry_version: int = 1` field added per
 `Implementation_Plan_Control_Plane_v2_12.md` §0.1 + §2.2 amendment.
@@ -35,6 +37,8 @@ ADR-F1 v1.2 §Decision workload-class commitment; ADR-F3 v1.1.
 
 from __future__ import annotations
 
+from enum import StrEnum
+
 from harness_core import PersonaTier, StepID, WorkloadClass
 from pydantic import BaseModel, ConfigDict
 
@@ -46,6 +50,42 @@ from harness_cp.hitl_placement import HITLPlacement, LoosenablePlacementKind
 from harness_cp.layer_budget import LayerBudget
 from harness_cp.sub_agent_brief import SubAgentBrief
 from harness_cp.topology_pattern import TopologyPattern
+
+
+class FanoutTimeoutDisposition(StrEnum):
+    """The operator-set resolution of a deadline-cut (`timed_out`) fan-out branch
+    on crash-resume — R-FS-1 `B-FANOUT-CRASH-RESUME-TIMEOUT-REPLAY` (CP spec v1.63 §1).
+
+    A `timed_out` branch is a deadline-cut in-flight dispatch (the §25.15 barrier
+    cut-off) whose effect MAY or MAY NOT have landed. v1.55 §1 recorded it but
+    failed the crash-resume CLOSED unconditionally, naming the operator-resolvable
+    disposition as a registered follow-on. This enum is that follow-on's domain.
+
+    At-most-once is the GATE, not the policy: `RE_DISPATCH` re-runs ONLY a
+    re-fire-safe deadline-cut branch (no external effect to double-fire, keyed on
+    the v1.62 dispatch-time-kind marker) and fails closed on any effect-bearing
+    one — there is no fail-open path the operator can select.
+    """
+
+    FAIL_CLOSED = "fail-closed"
+    """Default — v1.55 §1 byte-identical: any `timed_out` branch fails the
+    crash-resume closed (`_FanOutStoreTimeoutAmbiguousError`). The conservative
+    reading: a deadline-cut branch's effect may have landed, so refuse recovery."""
+
+    RECOVER_AS_TERMINAL = "recover-as-terminal"
+    """Recover the `timed_out` branch as a `completed`-no-output degraded
+    non-contributor — never folded into the aggregate, never re-dispatched. The
+    run's outcome is then governed by `cascade_policy` (the existing degraded
+    reconciliation): `proceed` recovers PARTIAL folding the survivors; the strict
+    tiers fire their degraded semantics. Safe for ALL kinds (no re-dispatch)."""
+
+    RE_DISPATCH = "re-dispatch"
+    """Re-run a re-fire-safe (`{DECLARATIVE_STEP, INFERENCE_STEP}`) `timed_out`
+    branch fresh (excluded from the recovered set → the existing crash-resume
+    re-dispatch path re-runs it). An effect-bearing (or un-kinded-marker)
+    `timed_out` branch fails closed — its effect may have landed; re-dispatch
+    would double-fire. Keyed on the v1.62 dispatch-time-kind marker (the
+    changed-manifest at-most-once guard)."""
 
 
 class StepOverride(BaseModel):
@@ -157,10 +197,12 @@ class StepOverride(BaseModel):
 class WorkflowManifestEntry(BaseModel):
     """The workflow-manifest-entry shape — canonical per-workflow customization.
 
-    Eleven top-level fields at v2.12 (was ten at v2.11; `entry_version`
-    appended per `Implementation_Plan_Control_Plane_v2_12.md` §2.2). CP spec
+    Thirteen top-level fields at v1.63 (`entry_version` appended at v2.12,
+    `default_gate_level` at CP spec v1.20, `fanout_timeout_disposition` at CP
+    spec v1.63 §1 — R-FS-1 `B-FANOUT-CRASH-RESUME-TIMEOUT-REPLAY`). CP spec
     v1.4 §6.1 (verbatim from v1.2) authorizes the carrier growth via the
-    "// ... additional per-workload fields" extension clause.
+    "// ... additional per-workload fields" extension clause; each addition is
+    Pydantic-Optional with a behavior-preserving default.
 
     `workload_class` and `persona_tier` are mandatory (no default) per
     ADR-F1 v1.2; the absence of a default means Pydantic validation rejects
@@ -234,4 +276,19 @@ class WorkflowManifestEntry(BaseModel):
     Q3=defer-layer-3-e2e). RETIRE-READY promotion enabled at layer-2 close
     (this field + workflow_driver.py:738 read site); RETIRE-READY → RETIRED
     waits on multi-deployment e2e fixture per Q3 deferral.
+    """
+
+    fanout_timeout_disposition: FanoutTimeoutDisposition = FanoutTimeoutDisposition.FAIL_CLOSED
+    """v1.63 addition (R-FS-1 `B-FANOUT-CRASH-RESUME-TIMEOUT-REPLAY`, CP spec
+    v1.63 §1). Operator-set resolution of a deadline-cut (`timed_out`) fan-out
+    branch on crash-resume: `FAIL_CLOSED` (default) / `RECOVER_AS_TERMINAL` /
+    `RE_DISPATCH` (see `FanoutTimeoutDisposition`). Default `FAIL_CLOSED`
+    reproduces the v1.55 §1 unconditional fail-closed byte-for-byte, so existing
+    constructor sites + fixtures validate without modification. Consumed at the
+    `_determine_fanout_resume` crash-resume timed_out classification site. The
+    §6.1 'additional per-workload fields' extension-clause growth (mirrors the
+    v1.20 `default_gate_level` + v2.12 `entry_version` additive-optional
+    precedents). At-most-once is PRESERVED — `RE_DISPATCH` re-runs only a
+    re-fire-safe deadline-cut branch (no external effect to double-fire), keyed
+    on the v1.62 dispatch-time-kind marker; effect-bearing fails closed.
     """
