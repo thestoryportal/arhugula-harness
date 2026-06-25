@@ -40,10 +40,13 @@ from harness_cp.engine_class import EngineClass
 from harness_cp.handoff_context import StateSummary
 from harness_cp.pause_resume_protocol import PauseResumeProtocol, _compute_snapshot_hash
 from harness_cp.pause_resume_protocol_types import (
+    EffectFencePausedBranchResumeState,
+    EffectFenceResolution,
     FanOutBranchResumeState,
     FanOutResumeState,
     PausedChildBranchResumeState,
     PauseSnapshot,
+    ResumeContext,
     WorkflowPauseReason,
 )
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
@@ -1422,3 +1425,145 @@ def test_hierarchical_child_synthesis_real_nested_round_trip() -> None:
     assert sub_agent.received_resume[-1].fan_out_resume.synthesis_step_id == "child-synthesis"
     # The child synthesis FRESH-dispatched exactly once (effect-free, first-and-only).
     assert child_dispatcher.synth_dispatches == 1
+
+
+# ---------------------------------------------------------------------------
+# B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE — the ORCHESTRATOR_WORKERS analogue: a WORKER
+# whose OWN dispatch raises the runtime effect fence composes that ambiguous-pause
+# THROUGH the worker barrier to a genuine PAUSE carrying `effect_fence_paused_branches`,
+# and resume re-enters the worker with the operator's key-bound resolution. The
+# real-fence witness is the REAL `_execute_orchestrator_workers` TaskGroup+shield; the
+# error is name-matched (harness-cp cannot import harness-runtime).
+# ---------------------------------------------------------------------------
+
+
+class EffectFenceAmbiguousUncommittedError(Exception):
+    """Test-local stand-in for the runtime `effect_fence.EffectFenceAmbiguousUncommittedError`
+    (C-RT-31 §14.22) — the driver name-matches `type(exc).__name__`, so a same-named local class
+    with the `idempotency_key` attribute is the faithful CP-side witness."""
+
+    def __init__(self, *, idempotency_key: str) -> None:
+        self.idempotency_key = idempotency_key
+        super().__init__(f"ambiguous (key={idempotency_key!r})")
+
+
+class _OrchestratorFenceAmbiguousDispatcher:
+    """Deterministic: orchestrator returns immediately; worker-0 completes (sets a gate);
+    worker-1 waits on the gate THEN raises the effect-fence ambiguous error — so worker-0 is
+    terminal BEFORE worker-1's fence-pause halts the barrier. Records each dispatch's threaded
+    `effect_fence_resolution` (the resume producer-half witness)."""
+
+    def __init__(self, *, fence_key: str = "fence-key-worker-1") -> None:
+        self._gate = threading.Event()
+        self._fence_key = fence_key
+        self.dispatched: list[str] = []
+        self.seen_resolution: dict[str, Any] = {}
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        step_id = str(step.step_id)
+        self.dispatched.append(step_id)
+        self.seen_resolution[step_id] = getattr(step_context, "effect_fence_resolution", None)
+        if step_id == "orchestrator":
+            return {"role": "orchestrator"}
+        if step_id == "worker-0":
+            self._gate.set()
+            return {"role": "worker-0", "echoed": dict(step.step_payload)}
+        assert self._gate.wait(timeout=10.0), "worker-0 never completed"
+        raise EffectFenceAmbiguousUncommittedError(idempotency_key=self._fence_key)
+
+
+class _OrchestratorResumeRecordingDispatcher:
+    """Resume-side recording dispatcher: orchestrator + worker-0 recovered (skipped); records the
+    threaded `effect_fence_resolution` per dispatch then SUCCEEDS (no gate, no raise)."""
+
+    def __init__(self) -> None:
+        self.dispatched: list[str] = []
+        self.seen_resolution: dict[str, Any] = {}
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        step_id = str(step.step_id)
+        self.dispatched.append(step_id)
+        self.seen_resolution[step_id] = getattr(step_context, "effect_fence_resolution", None)
+        return {"role": step_id, "echoed": dict(step.step_payload)}
+
+
+class _HolderWithResolution:
+    """Stand-in `ResumeContextHolder` — `peek()` returns a ResumeContext carrying the operator's
+    effect-fence resolution (NON-consuming, the production peek contract)."""
+
+    def __init__(self, resolution: EffectFenceResolution) -> None:
+        self._rc = ResumeContext(effect_fence_resolution=resolution)
+        self.peeked = 0
+
+    def peek(self) -> ResumeContext:
+        self.peeked += 1
+        return self._rc
+
+
+def test_orchestrator_worker_effect_fence_ambiguous_composes_through_barrier_to_pause() -> None:
+    """REAL-FENCE WITNESS (PAUSE half, ORCHESTRATOR_WORKERS): a worker whose OWN dispatch raises
+    the effect-fence ambiguous error composes through the REAL `_execute_orchestrator_workers`
+    TaskGroup+shield to a genuine PAUSE carrying `effect_fence_paused_branches` (worker-1 + its
+    held reserve key), DISJOINT from the terminal `branches` (worker-0 recovered) and the
+    orchestrator (recovered)."""
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    result = _run(steps=_steps(2), dispatcher=_OrchestratorFenceAmbiguousDispatcher(), ctx=ctx)
+
+    assert result.status is RunStatus.PAUSED
+    assert result.fail_class is None
+    snap = result.pause_snapshot
+    assert snap is not None
+    fr = snap.fan_out_resume
+    assert fr is not None
+    assert fr.orchestrator_output == {"role": "orchestrator"}
+    # worker-1 (branch ordinal 1) is the disjoint effect-fence-paused disposition.
+    assert {b.branch_index for b in fr.branches} == {0}  # only worker-0 terminal
+    efp = fr.effect_fence_paused_branches
+    assert len(efp) == 1
+    assert efp[0] == EffectFencePausedBranchResumeState(
+        branch_index=1, step_id="worker-1", idempotency_key="fence-key-worker-1"
+    )
+    restored = PauseSnapshot.model_validate(snap.model_dump(mode="json"))
+    assert restored == snap
+
+
+def test_orchestrator_worker_effect_fence_resume_threads_key_bound_resolution() -> None:
+    """REAL-FENCE WITNESS (resume half, ORCHESTRATOR_WORKERS): resuming re-enters ONLY the
+    fence-paused worker (orchestrator + worker-0 recovered-skipped), threading the operator's
+    `EffectFenceResolution` key-bound to THAT worker's held reserve."""
+    paused = _run(
+        steps=_steps(2),
+        dispatcher=_OrchestratorFenceAmbiguousDispatcher(),
+        ctx=cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())),
+    )
+    snap = paused.pause_snapshot
+    assert snap is not None and snap.fan_out_resume is not None
+    efp = snap.fan_out_resume.effect_fence_paused_branches
+    assert len(efp) == 1
+    key = efp[0].idempotency_key
+
+    holder = _HolderWithResolution(EffectFenceResolution.RE_FIRE)
+    rec = _OrchestratorResumeRecordingDispatcher()
+    ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    ctx_obj.resume_context_holder = holder  # type: ignore[attr-defined]
+    result = _run(
+        steps=_steps(2),
+        dispatcher=rec,
+        ctx=cast(DriverContext, ctx_obj),
+        pause_snapshot_input=snap,
+    )
+
+    assert result.status is RunStatus.SUCCESS
+    # orchestrator + worker-0 recovered-skipped; only worker-1 re-dispatched WITH the directive.
+    assert "orchestrator" not in rec.dispatched
+    assert "worker-0" not in rec.dispatched
+    assert "worker-1" in rec.dispatched
+    threaded = rec.seen_resolution["worker-1"]
+    assert threaded is not None
+    assert threaded.resolution is EffectFenceResolution.RE_FIRE
+    assert threaded.idempotency_key == key
+    assert holder.peeked >= 1  # PEEKED (non-consuming), not consumed

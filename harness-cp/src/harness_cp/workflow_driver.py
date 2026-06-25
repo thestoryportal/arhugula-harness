@@ -782,9 +782,27 @@ _FANOUT_MAYBE_RAN_FENCE_RECOVERABLE_KIND_VALUES: frozenset[str] = frozenset(
 )
 
 
+def _resumed_branch_kinds_by_ordinal(
+    branch_steps: Sequence[WorkflowStep], *, branch_count: int, orchestrated: bool
+) -> dict[int, str]:
+    """B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE (R-FS-1) — map each WORKER/PEER branch ordinal
+    (`[0, branch_count)`, the marker's keying scheme) to the RESUMED manifest's `step_kind`
+    at that ordinal. ORCHESTRATOR_WORKERS / HIERARCHICAL_DELEGATION carry the orchestrator at
+    `branch_steps[0]`, so worker ordinal `bi` is `branch_steps[bi + 1]` (offset 1); a PEER fan-out
+    has no orchestrator (offset 0). An ordinal whose mapped step is out of range is OMITTED (left
+    to the helper's fail-closed default — never silently treated as TOOL)."""
+    offset = 1 if orchestrated else 0
+    return {
+        bi: branch_steps[bi + offset].step_kind.value
+        for bi in range(branch_count)
+        if 0 <= bi + offset < len(branch_steps)
+    }
+
+
 def _fence_unrecoverable_maybe_ran_indices(
     unsafe_indices: set[int],
     dispatched_kinds: Mapping[int, str | None],
+    resumed_kinds: Mapping[int, str],
     branch_count: int,
 ) -> set[int]:
     """B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE (R-FS-1) — the subset of `unsafe_indices` (the
@@ -794,17 +812,35 @@ def _fence_unrecoverable_maybe_ran_indices(
     Narrows the v1.62 effect-bearing blanket fail-closed: a maybe-ran TOOL_STEP branch is now
     FENCE-RECOVERABLE — re-dispatching it re-reaches the runtime effect fence (auto-active on the
     fan-out crash-resume engine classes), which makes the re-dispatch at-most-once at the tool
-    sink (suppress / ambiguous-PAUSE / fresh-fire-if-claim-absent). The fence `idempotency_key`
-    recomputes identically across resume from `run_idempotency_key` (stable — the maybe-ran marker
-    is keyed on it) + `step_id` (the strategy `_resume_body_mismatch` guard) + `tool_id` (the SAME
-    accepted manifest-stability posture as the cleared LINEAR effect-fence — a tool-swap-under-same-
-    `step_id` is the linear fence's shared limitation, NOT newly introduced here).
+    sink (suppress / ambiguous-PAUSE / fresh-fire-if-claim-absent).
 
-    An ordinal stays UNRECOVERABLE (fail closed) iff it is NOT a fence-recoverable TOOL_STEP in
-    range: an out-of-range / stale-store ordinal, an un-recorded / `None` marker kind (presence ≠
-    validity), SUB_AGENT_DISPATCH (recursive child crash-resume residual), MANAGED_AGENTS (unfenced
-    vendor sink), or any other effect-bearing kind. Keys on the DISPATCH MARKER kind (not the
-    resumed manifest), inheriting the v1.62 changed-manifest at-most-once guard. Shared by the
+    An ordinal is fence-recoverable iff ALL of: (a) within `[0, branch_count)`; (b) the DISPATCH
+    MARKER kind is TOOL_STEP (the ORIGINAL effect was a fenced tool effect — the at-most-once
+    changed-manifest guard inherited from `_refire_unsafe_branch_indices`); AND (c) the RESUMED
+    manifest's kind at that ordinal is ALSO TOOL_STEP. Conjunct (c) is the changed-kind guard:
+    a maybe-ran TOOL_STEP re-supplied at the same ordinal as a NON-TOOL kind (e.g. DECLARATIVE)
+    would re-dispatch a step that reaches NO tool sink → NO fence to make the re-dispatch
+    at-most-once → the original tool effect's ambiguity would be silently abandoned. Keying
+    fence-recovery on the marker kind ALONE (an earlier draft) re-opened the exact v1.62
+    changed-manifest hole; requiring the resumed kind to ALSO be TOOL_STEP closes it (the CP
+    driver knows `step_kind` — a typed `WorkflowStep` field — without reading the opaque
+    `step_payload`).
+
+    ACCEPTED PARITY (NOT a registered arc — CP spec v1.65 §3 documents it): a tool-SWAP under the
+    same `step_id` (marker TOOL_STEP, resumed TOOL_STEP, but a DIFFERENT `tool_id`) composes a
+    DIFFERENT fence key → fires the new tool fresh (per-key at-most-once is PRESERVED — each tool
+    key fires ≤once), the SAME structural consequence as the cleared LINEAR effect-fence path
+    (which likewise re-dispatches the resumed manifest's step into the fence keyed on `tool_id`).
+    The CP driver cannot detect it because `tool_id` lives in the opaque `step_payload`
+    (`WorkflowStep` §25.2) — this is CORRECT parity with linear, not a missing capability. A
+    stricter-than-linear fail-closed-on-tool-swap is *possible* (record `tool_id` runtime-side)
+    but is a policy stricter than the cleared linear path, not a deferred capability — so not
+    registered.
+
+    An ordinal stays UNRECOVERABLE (fail closed) iff it is NOT a same-kind TOOL_STEP in range: an
+    out-of-range / stale-store ordinal, an un-recorded / `None` marker kind (presence ≠ validity),
+    a changed-to-non-TOOL resumed kind, SUB_AGENT_DISPATCH (recursive child crash-resume residual),
+    MANAGED_AGENTS (unfenced vendor sink), or any other effect-bearing kind. Shared by the
     incomplete-recovery + cardinality-only sites so the fence-recoverability classification is one
     source of truth."""
     return {
@@ -813,6 +849,7 @@ def _fence_unrecoverable_maybe_ran_indices(
         if not (
             0 <= bi < branch_count
             and dispatched_kinds.get(bi) in _FANOUT_MAYBE_RAN_FENCE_RECOVERABLE_KIND_VALUES
+            and resumed_kinds.get(bi) in _FANOUT_MAYBE_RAN_FENCE_RECOVERABLE_KIND_VALUES
         )
     }
 
@@ -2182,11 +2219,26 @@ def _execute_workflow_body(
                     # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE (R-FS-1) — narrow the unsafe set: a
                     # maybe-ran TOOL_STEP branch is FENCE-RECOVERABLE (a fresh re-run re-dispatches
                     # it into the auto-active effect fence, whose held prior claim makes the re-fire
-                    # at-most-once at the tool sink — suppress / ambiguous-PAUSE / fresh-fire). Only
-                    # the genuinely-unrecoverable remainder (SUB_AGENT / MANAGED / out-of-range /
-                    # un-kinded) forces the fail-closed.
+                    # at-most-once at the tool sink — suppress / ambiguous-PAUSE / fresh-fire)
+                    # PROVIDED the RESUMED branch at that ordinal is ALSO a TOOL_STEP (else the
+                    # re-dispatch reaches no fence → the changed-kind guard fails it closed). Only
+                    # the genuinely-
+                    # unrecoverable remainder (SUB_AGENT / MANAGED / out-of-range / un-kinded /
+                    # changed-to-non-TOOL) forces the fail-closed.
+                    _dispatched_resumed_kinds = _resumed_branch_kinds_by_ordinal(
+                        _crash_branch_steps,
+                        branch_count=_card_branch_count,
+                        orchestrated=manifest_entry.topology_pattern
+                        in {
+                            TopologyPattern.ORCHESTRATOR_WORKERS,
+                            TopologyPattern.HIERARCHICAL_DELEGATION,
+                        },
+                    )
                     _dispatched_fail_closed = _fence_unrecoverable_maybe_ran_indices(
-                        _dispatched_unsafe, _dispatched_kinds, _card_branch_count
+                        _dispatched_unsafe,
+                        _dispatched_kinds,
+                        _dispatched_resumed_kinds,
+                        _card_branch_count,
                     )
                     if not (_instrumented and not _dispatched_fail_closed):
                         return (
@@ -2353,11 +2405,25 @@ def _execute_workflow_body(
                         # bearing fail-closed: of the re-fire-UNSAFE maybe-ran branches, a TOOL_STEP
                         # is FENCE-RECOVERABLE (re-dispatch re-reaches the auto-active runtime fence
                         # — at-most-once at the tool sink: suppress-if-captured / ambiguous-PAUSE /
-                        # fresh-fire-if-claim-absent). Only the genuinely-unrecoverable
+                        # fresh-fire-if-claim-absent) — PROVIDED the RESUMED branch at that ordinal
+                        # is ALSO a TOOL_STEP (the changed-kind guard; a TOOL→non-TOOL resume
+                        # reaches no fence → fail closed). Only the genuinely-unrecoverable
                         # remainder (SUB_AGENT_DISPATCH recursive child / MANAGED_AGENTS unfenced /
-                        # out-of-range / un-kinded) forces the conservative fail-closed.
+                        # out-of-range / un-kinded / changed-to-non-TOOL) forces the fail-closed.
+                        _maybe_ran_resumed_kinds = _resumed_branch_kinds_by_ordinal(
+                            _crash_branch_steps,
+                            branch_count=_crash_expected,
+                            orchestrated=manifest_entry.topology_pattern
+                            in {
+                                TopologyPattern.ORCHESTRATOR_WORKERS,
+                                TopologyPattern.HIERARCHICAL_DELEGATION,
+                            },
+                        )
                         _maybe_ran_fail_closed = _fence_unrecoverable_maybe_ran_indices(
-                            _maybe_ran_unsafe, _maybe_ran_kinds, _crash_expected
+                            _maybe_ran_unsafe,
+                            _maybe_ran_kinds,
+                            _maybe_ran_resumed_kinds,
+                            _crash_expected,
                         )
                         if not (_instrumented and not _maybe_ran_fail_closed):
                             return (
