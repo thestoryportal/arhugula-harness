@@ -1522,3 +1522,63 @@ def test_peer_per_branch_distinct_resolutions() -> None:
     assert b0.idempotency_key == key_by_index[0]
     assert b1 is not None and b1.resolution is EffectFenceResolution.RE_FIRE
     assert b1.idempotency_key == key_by_index[1]
+
+
+class _PeerAbortGuardDispatcher:
+    """Resume-side abort-guard witness (PARALLELIZATION): an ABORT directive raises
+    EffectFenceAbortedError; a RE_FIRE / SKIP directive FIRES (records in `fired`); a None directive
+    (a suppressed sibling) RE-RAISES the ambiguous fence (re-pause, no fire)."""
+
+    def __init__(self) -> None:
+        self.dispatched: list[str] = []
+        self.fired: list[str] = []
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        step_id = str(step.step_id)
+        self.dispatched.append(step_id)
+        directive = getattr(step_context, "effect_fence_resolution", None)
+        if directive is None:
+            raise EffectFenceAmbiguousUncommittedError(idempotency_key=f"fence-key-{step_id}")
+        if directive.resolution is EffectFenceResolution.ABORT:
+            raise EffectFenceAbortedError(f"operator aborted {step_id}")
+        self.fired.append(step_id)
+        return {"role": step_id, "echoed": dict(step.step_payload)}
+
+
+def test_peer_mixed_abort_map_suppresses_sibling_refire() -> None:
+    """Codex [P1] (PARALLELIZATION): a mixed map {branch-0: ABORT, branch-1: RE_FIRE} must NOT fire
+    the RE_FIRE sibling before the ABORT fails the run — ABORT stays run-level-terminal. The RE_FIRE
+    sibling's directive is SUPPRESSED (re-pauses INERT, no fire); the run FAILs."""
+    paused = _run(
+        steps=_steps(2),
+        dispatcher=_TwoFenceAmbiguousBranchDispatcher(),
+        ctx=cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())),
+    )
+    snap = paused.pause_snapshot
+    assert snap is not None and snap.peer_fan_out_resume is not None
+    key_by_index = {
+        b.branch_index: b.idempotency_key
+        for b in snap.peer_fan_out_resume.effect_fence_paused_branches
+    }
+    holder = _HolderWithResolutions(
+        {
+            key_by_index[0]: EffectFenceResolution.ABORT,
+            key_by_index[1]: EffectFenceResolution.RE_FIRE,
+        }
+    )
+    rec = _PeerAbortGuardDispatcher()
+    ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    ctx_obj.resume_context_holder = holder  # type: ignore[attr-defined]
+    result = _run(
+        steps=_steps(2),
+        dispatcher=rec,
+        ctx=cast(DriverContext, ctx_obj),
+        pause_snapshot_input=snap,
+    )
+
+    assert result.status is RunStatus.FAILED
+    assert "parallelization-effect-fence-aborted" in (result.fail_class or "")
+    assert result.pause_snapshot is None
+    assert "branch-1" not in rec.fired  # the RE_FIRE sibling was SUPPRESSED — did NOT fire

@@ -1869,3 +1869,60 @@ def test_orchestrator_no_map_uniform_default_applies_to_all() -> None:
     assert result.status is RunStatus.SUCCESS
     assert rec.seen_resolution["worker-0"].resolution is EffectFenceResolution.RE_FIRE
     assert rec.seen_resolution["worker-1"].resolution is EffectFenceResolution.RE_FIRE
+
+
+class _OrchestratorAbortGuardDispatcher:
+    """Resume-side abort-guard witness: an ABORT directive raises EffectFenceAbortedError; a
+    RE_FIRE / SKIP directive FIRES (records the branch in `fired`); a None directive (a suppressed
+    sibling) RE-RAISES the ambiguous fence (re-pause, no fire). Witnesses that under a mixed
+    {ABORT, RE_FIRE} map the RE_FIRE sibling does NOT fire before the ABORT fails the run."""
+
+    def __init__(self) -> None:
+        self.dispatched: list[str] = []
+        self.fired: list[str] = []
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        step_id = str(step.step_id)
+        self.dispatched.append(step_id)
+        if step_id == "orchestrator":
+            return {"role": "orchestrator"}
+        directive = getattr(step_context, "effect_fence_resolution", None)
+        if directive is None:
+            raise EffectFenceAmbiguousUncommittedError(idempotency_key=f"fence-key-{step_id}")
+        if directive.resolution is EffectFenceResolution.ABORT:
+            raise EffectFenceAbortedError(f"operator aborted {step_id}")
+        self.fired.append(step_id)  # RE_FIRE / SKIP would fire the effect
+        return {"role": step_id, "echoed": dict(step.step_payload)}
+
+
+def test_orchestrator_mixed_abort_map_suppresses_sibling_refire() -> None:
+    """Codex [P1] (ORCHESTRATOR_WORKERS): a mixed map {worker-0: ABORT, worker-1: RE_FIRE} must NOT
+    fire the RE_FIRE sibling before the ABORT fails the run — ABORT stays run-level-terminal
+    (v1.65 §1(b)). The RE_FIRE sibling's directive is SUPPRESSED (re-pauses INERT, no fire); the
+    run FAILs. Per-branch-SCOPED abort (fire survivors anyway) is the registered follow-on."""
+    snap = _orchestrator_two_fence_pause()
+    key_by_index = {
+        b.branch_index: b.idempotency_key for b in snap.fan_out_resume.effect_fence_paused_branches
+    }
+    holder = _HolderWithResolutions(
+        {
+            key_by_index[0]: EffectFenceResolution.ABORT,
+            key_by_index[1]: EffectFenceResolution.RE_FIRE,
+        }
+    )
+    rec = _OrchestratorAbortGuardDispatcher()
+    ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    ctx_obj.resume_context_holder = holder  # type: ignore[attr-defined]
+    result = _run(
+        steps=_steps(2),
+        dispatcher=rec,
+        ctx=cast(DriverContext, ctx_obj),
+        pause_snapshot_input=snap,
+    )
+
+    assert result.status is RunStatus.FAILED
+    assert "orchestrator-workers-effect-fence-aborted" in (result.fail_class or "")
+    assert result.pause_snapshot is None  # terminal — NOT a re-pause
+    assert "worker-1" not in rec.fired  # the RE_FIRE sibling was SUPPRESSED — did NOT fire

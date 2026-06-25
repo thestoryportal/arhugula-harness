@@ -78,6 +78,7 @@ from harness_cp.pause_resume_protocol import (
 )
 from harness_cp.pause_resume_protocol_types import (
     EffectFencePausedBranchResumeState,
+    EffectFenceResolution,
     EffectFenceResolutionDirective,
     EffectFenceResumeState,
     EvaluatorOptimizerResumeState,
@@ -5446,6 +5447,20 @@ def _execute_parallelization(
         )
         _ef_resume_ctx = _ef_holder.peek() if _ef_holder is not None else None
 
+    # B-FANOUT-EFFECT-FENCE-PER-BRANCH-RESOLUTION — run-level ABORT guard (out-of-family Codex
+    # [P1]). ABORT stays a RUN-LEVEL terminal decision (v1.65 §1(b)) even per-branch: if the
+    # operator ABORTs ANY fence-paused peer, the run WILL fail, so NO sibling continue-resolution
+    # (SKIP/RE_FIRE) may FIRE first — a RE_FIRE sibling would otherwise clear+re-fire its effect
+    # concurrently in the TaskGroup before the ABORT branch fails the run. When any resolution is
+    # ABORT we suppress the non-ABORT siblings' directives below (they re-pause INERT, never fire);
+    # the ABORT branch keeps its directive → re-dispatch → EffectFenceAbortedError → terminal
+    # FAILED. Per-branch-SCOPED abort (fire survivors anyway) is the registered follow-on
+    # B-FANOUT-EFFECT-FENCE-PER-BRANCH-SCOPED-ABORT.
+    _any_fence_abort = _ef_resume_ctx is not None and any(
+        _ef_resume_ctx.effect_fence_resolution_for(_k) is EffectFenceResolution.ABORT
+        for _k in _recovered_effect_fence_paused.values()
+    )
+
     # Empty step sequence → trivially SUCCESS with an empty aggregate (no
     # fan-out; mirrors the linear path's empty-loop SUCCESS).
     if not steps:
@@ -5600,13 +5615,17 @@ def _execute_parallelization(
         # B-FANOUT-EFFECT-FENCE-PER-BRANCH-RESOLUTION — resolve THIS peer's fence key against the
         # operator's resume context: its per-key `effect_fence_resolutions` entry if supplied, else
         # the uniform `effect_fence_resolution` default (so two paused peers can resolve DIFFERENTLY
-        # in one resume). None → re-pause INERT (the decline-mirror).
+        # in one resume). None → re-pause INERT (the decline-mirror). Run-level ABORT guard: if ANY
+        # paused peer resolves to ABORT, suppress this NON-ABORT peer's continue-resolution so it
+        # re-pauses INERT (never fires) before the ABORT fails the run (Codex [P1]).
         _branch_fence_key = _recovered_effect_fence_paused.get(branch_index)
         _branch_resolution = (
             _ef_resume_ctx.effect_fence_resolution_for(_branch_fence_key)
             if (_branch_fence_key and _ef_resume_ctx is not None)
             else None
         )
+        if _any_fence_abort and _branch_resolution is not EffectFenceResolution.ABORT:
+            _branch_resolution = None
         _branch_effect_fence_directive = (
             EffectFenceResolutionDirective(
                 resolution=_branch_resolution,
@@ -7363,6 +7382,17 @@ def _execute_orchestrator_workers(
         )
         _ef_resume_ctx = _ef_holder.peek() if _ef_holder is not None else None
 
+    # B-FANOUT-EFFECT-FENCE-PER-BRANCH-RESOLUTION — run-level ABORT guard (out-of-family Codex
+    # [P1]). If the operator ABORTs ANY fence-paused worker, the run WILL fail, so NO sibling
+    # continue-resolution (SKIP/RE_FIRE) may FIRE first (a RE_FIRE sibling would otherwise
+    # clear+re-fire concurrently before the ABORT branch fails the run). Suppress the non-ABORT
+    # siblings' directives below; the ABORT worker keeps its directive → EffectFenceAbortedError
+    # → terminal FAILED. The PARALLELIZATION analogue.
+    _any_fence_abort = _ef_resume_ctx is not None and any(
+        _ef_resume_ctx.effect_fence_resolution_for(_k) is EffectFenceResolution.ABORT
+        for _k in _recovered_effect_fence_paused.values()
+    )
+
     # Empty step sequence → trivially SUCCESS (mirrors the linear empty-loop +
     # the PARALLELIZATION / EVALUATOR_OPTIMIZER empty-steps SUCCESS).
     if not steps:
@@ -7772,6 +7802,11 @@ def _execute_orchestrator_workers(
             if (_branch_fence_key and _ef_resume_ctx is not None)
             else None
         )
+        # Run-level ABORT guard: if ANY paused worker resolves to ABORT, suppress this NON-ABORT
+        # worker's continue-resolution so it re-pauses INERT (never fires) before the ABORT fails
+        # the run (Codex [P1]).
+        if _any_fence_abort and _branch_resolution is not EffectFenceResolution.ABORT:
+            _branch_resolution = None
         _branch_effect_fence_directive = (
             EffectFenceResolutionDirective(
                 resolution=_branch_resolution,
