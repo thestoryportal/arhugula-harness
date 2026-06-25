@@ -693,6 +693,70 @@ _FANOUT_REPLAY_ENGINE_CLASSES: frozenset[EngineClass] = frozenset(
 )
 
 
+# B-FANOUT-CRASH-RESUME-MAYBE-RAN-RESOLUTION (R-FS-1) — the fan-out branch step kinds whose
+# RE-DISPATCH cannot double-fire a non-idempotent EXTERNAL effect, so a MAYBE-RAN branch
+# (dispatched-but-uncaptured — its effect MAY have fired) of this kind is SAFE to re-dispatch
+# fresh instead of failing the whole strict-tier incomplete recovery closed.
+#
+# Anchored to the runtime step-blast-radius one-source-of-truth (`step_blast_radius.py:13-22`
+# `_READ_ONLY_KINDS`: "INFERENCE_STEP / DECLARATIVE_STEP — no external effect"): an LLM
+# inference has no external side-effect (cost + output non-determinism only, which crash-resume
+# ALREADY tolerates — the linear resume path re-dispatches an INFERENCE_STEP unfenced, the
+# §14.8.8.7 invariant-3 re-ask-per-retry posture), and a DECLARATIVE_STEP is a pure transform.
+#
+# DELIBERATELY a STRICT SUBSET of the blast-radius READ_ONLY set (re-fire-safety ≠ READ_ONLY
+# blast radius): HITL_STEP is READ_ONLY-blast but operator-facing (re-dispatch re-prompts);
+# SUB_AGENT_DISPATCH is READ_ONLY at the PARENT gate but its child TOOL_STEPs are fenced at the
+# tool sink, so re-dispatch can hit the inner-fence-ambiguous window → the registered
+# B-FANOUT-CRASH-RESUME-MAYBE-RAN-FENCED-COMPOSE follow-on. TOOL_STEP is likewise fenced →
+# same follow-on. MANAGED_AGENTS performs an UNFENCED vendor-session external effect (create +
+# send) → the registered B-FANOUT-CRASH-RESUME-MAYBE-RAN-UNFENCED-EXTERNAL follow-on. The
+# allowlist is CONSERVATIVE: any unlisted (or out-of-bounds) kind stays fail-closed.
+_FANOUT_MAYBE_RAN_REFIRE_SAFE_KINDS: frozenset[StepKind] = frozenset(
+    {StepKind.DECLARATIVE_STEP, StepKind.INFERENCE_STEP}
+)
+# The same set as `.value` strings — the dispatch marker records the step kind as a string
+# (`StepKind.value`), so the classifier compares the marker's recorded kind against these.
+_FANOUT_MAYBE_RAN_REFIRE_SAFE_KIND_VALUES: frozenset[str] = frozenset(
+    k.value for k in _FANOUT_MAYBE_RAN_REFIRE_SAFE_KINDS
+)
+
+
+def _refire_unsafe_branch_indices(
+    branch_indices: set[int],
+    dispatched_kinds: Mapping[int, str | None],
+    branch_count: int,
+) -> set[int]:
+    """B-FANOUT-CRASH-RESUME-MAYBE-RAN-RESOLUTION (R-FS-1) — the subset of `branch_indices`
+    (maybe-ran / dispatched fan-out branch ordinals on a strict-tier crash-resume) that are NOT
+    safe to re-dispatch, so falling through would risk double-firing a non-idempotent effect.
+
+    An ordinal is SAFE iff it is BOTH (a) within the valid fan-out range `[0, branch_count)`
+    AND (b) recorded in the DISPATCH MARKER with a re-fire-safe kind
+    (`_FANOUT_MAYBE_RAN_REFIRE_SAFE_KIND_VALUES`). Everything else is unsafe → fail closed:
+    - keys on the kind recorded IN THE DISPATCH MARKER (`dispatched_kinds`, from
+      `EngineOutputStore.dispatched_branch_kinds`), NOT the resumed manifest's current kind —
+      the at-most-once changed-manifest guard (out-of-family Codex [P1]): a branch dispatched as
+      an effect-bearing kind that crashed before terminal capture, then re-supplied at the same
+      ordinal as a re-fire-safe kind on a same-cardinality resume, STAYS classified by its
+      original effect-bearing kind. A missing / unknown / `None` recorded kind (a pre-arc
+      v1.60/v1.61 marker, or a torn write) is unsafe.
+    - an ordinal OUTSIDE `[0, branch_count)` is an out-of-range / stale-store marker (a corrupt
+      extra `branch-N.dispatched` for a smaller fan-out) — the store no longer matches the
+      declared fan-out → unsafe, never silently ignored (out-of-family Codex [P2]).
+
+    Shared by the incomplete-recovery + cardinality-only classification sites so the
+    re-fire-safety classification is one source of truth."""
+    return {
+        bi
+        for bi in branch_indices
+        if not (
+            0 <= bi < branch_count
+            and dispatched_kinds.get(bi) in _FANOUT_MAYBE_RAN_REFIRE_SAFE_KIND_VALUES
+        )
+    }
+
+
 def _fanout_replay_store(ctx: DriverContext, manifest_entry: WorkflowManifestEntry) -> Any:
     """B-FANOUT-OUTPUT-REPLAY (R-FS-1) — the bound `EngineOutputStore` IFF this run is
     fan-out-crash-recoverable, else `None`.
@@ -745,6 +809,7 @@ def _mark_branch_dispatched(
     run_idempotency_key: str,
     branch_index: int,
     step_id: str,
+    step_kind: StepKind,
 ) -> None:
     """B-FANOUT-CRASH-RESUME-STRICT-TIER-INCOMPLETE (R-FS-1) — write the reserve-before-
     DISPATCH marker for a fan-out branch (gated on `_fanout_replay_store`).
@@ -754,11 +819,15 @@ def _mark_branch_dispatched(
     branch's effect did NOT fire. The fan-out analogue of the §14.22 effect-fence reserve at
     branch granularity. Consumed ONLY by the strict-tier (PAUSE / CASCADE_CANCEL) crash-resume
     classifier; written only on those tiers (PROCEED's recovery is unchanged — it accepts the
-    dispatch-before-capture window per the PR1/PR2 precedent). No-op unless replay-capable ∧
-    store-bound."""
+    dispatch-before-capture window per the PR1/PR2 precedent). The marker records the branch's
+    DISPATCH-TIME `step_kind` so the maybe-ran re-fire-safety classifier
+    (B-FANOUT-CRASH-RESUME-MAYBE-RAN-RESOLUTION) keys on the ORIGINAL kind, never the
+    (possibly changed) resumed manifest's kind. No-op unless replay-capable ∧ store-bound."""
     _store = _fanout_replay_store(ctx, manifest_entry)
     if _store is not None:
-        _store.record_branch_dispatched(run_idempotency_key, branch_index, str(step_id))
+        _store.record_branch_dispatched(
+            run_idempotency_key, branch_index, str(step_id), str(step_kind.value)
+        )
 
 
 def _rematerialize_recovered_branch_writer(
@@ -2006,25 +2075,50 @@ def _execute_workflow_body(
                     lookup_cell(manifest_entry.workload_class, manifest_entry.engine_class),
                     manifest_entry.persona_tier,
                 ).cascade_policy
-                if (
-                    _cardinality_policy is not CascadePolicy.PROCEED
-                    and _crash_replay_store.read_fanout_cardinality(run_idempotency_key) is not None
-                ):
+                _cardinality = _crash_replay_store.read_fanout_cardinality(run_idempotency_key)
+                if _cardinality_policy is not CascadePolicy.PROCEED and _cardinality is not None:
                     # B-FANOUT-CRASH-RESUME-STRICT-TIER-INCOMPLETE (R-FS-1) — lift the
                     # cardinality-only fail-closed when reserve-before-dispatch PROVES no branch
                     # began. An INSTRUMENTED run (the dispatch stamp) with ZERO dispatch markers
                     # means the fan-out started (cardinality present) but no branch dispatched its
                     # effect → a fresh re-dispatch is at-most-once-safe (fall through; the run
-                    # proceeds fresh, re-dispatching every branch first-and-only). ANY dispatch
-                    # marker → at least one branch is MAYBE-RAN (dispatched, no capture) → fail
-                    # closed. An UN-stamped (pre-arc) journal → fail closed: it carries no markers
-                    # for ANY branch, including a maybe-ran one, so "no marker" can't be trusted
-                    # as "not-run" (`[[durable-recovery-presence-validity-scope]]`).
+                    # proceeds fresh, re-dispatching every branch first-and-only). An UN-stamped
+                    # (pre-arc) journal → fail closed: it carries no markers for ANY branch,
+                    # including a maybe-ran one, so "no marker" can't be trusted as "not-run"
+                    # (`[[durable-recovery-presence-validity-scope]]`).
+                    #
+                    # B-FANOUT-CRASH-RESUME-MAYBE-RAN-RESOLUTION (R-FS-1) — a dispatch marker means
+                    # at least one branch is MAYBE-RAN (dispatched, no capture). Distinguish by step
+                    # KIND (same per-kind split + helper as the incomplete-recovery path): a
+                    # maybe-ran branch of a RE-FIRE-SAFE kind (DECLARATIVE_STEP / INFERENCE_STEP) is
+                    # safe to re-dispatch fresh → fall through; only a maybe-ran branch of an
+                    # EFFECT-BEARING kind (or an out-of-range / stale-store ordinal) forces the
+                    # fail-closed (`_cardinality` is the declared fan-out branch count bound).
                     _instrumented = _crash_replay_store.dispatch_instrumented(run_idempotency_key)
-                    _dispatched = _crash_replay_store.present_dispatched_indexes(
+                    _dispatched_kinds = _crash_replay_store.dispatched_branch_kinds(
                         run_idempotency_key
                     )
-                    if not (_instrumented and not _dispatched):
+                    # The dispatch markers are keyed by WORKER/PEER ordinal (synthesis-excluded,
+                    # orchestrator-excluded). The out-of-range bound is therefore the worker/branch
+                    # count — NOT `_cardinality` (the recorded `len(steps)`, which for
+                    # ORCHESTRATOR_WORKERS / HIERARCHICAL_DELEGATION INCLUDES the orchestrator
+                    # `steps[0]`, so `_cardinality` would over-count by one and let a stale
+                    # `branch-{worker_count}.dispatched` marker slip through as in-range; out-of-
+                    # family Codex [P2]). Computed from `_crash_branch_steps` (synthesis already
+                    # split off) the same way as the incomplete-recovery `_expected_branches`.
+                    _card_branch_count = len(_crash_branch_steps) - (
+                        1
+                        if manifest_entry.topology_pattern
+                        in {
+                            TopologyPattern.ORCHESTRATOR_WORKERS,
+                            TopologyPattern.HIERARCHICAL_DELEGATION,
+                        }
+                        else 0
+                    )
+                    _dispatched_unsafe = _refire_unsafe_branch_indices(
+                        set(_dispatched_kinds), _dispatched_kinds, _card_branch_count
+                    )
+                    if not (_instrumented and not _dispatched_unsafe):
                         return (
                             RunResult(
                                 workflow_id=manifest_entry.workflow_id,
@@ -2038,10 +2132,11 @@ def _execute_workflow_body(
                                     f"{_cardinality_policy.value} fan-out STARTED (cardinality "
                                     "marker present) but NOTHING is readably recoverable and the "
                                     "reserve-before-dispatch markers do not prove every branch "
-                                    "not-yet-run (a maybe-ran branch, or a pre-arc un-stamped "
-                                    "journal) — re-dispatching as a fresh run would risk double-"
-                                    "firing an effect these tiers must not. Fail closed (the "
-                                    "cardinality-only incomplete-recovery case)"
+                                    "re-dispatch-safe (a RE-FIRE-UNSAFE maybe-ran branch — an "
+                                    "effect-bearing kind — or a pre-arc un-stamped journal) — "
+                                    "re-dispatching as a fresh run would risk double-firing an "
+                                    "effect these tiers must not. Fail closed (re-fire-SAFE "
+                                    "maybe-ran kinds now recover; the cardinality-only case)"
                                 ),
                             ),
                             0,
@@ -2142,14 +2237,15 @@ def _execute_workflow_body(
                         # absent branch not-yet-run. A branch is MAYBE-RAN iff it has a dispatch
                         # marker but NO terminal-capture record (the narrow fire→capture window):
                         # `present_dispatched_indexes − recovered`. This is index-scheme-agnostic
-                        # (no `range(expected)` reconstruction). When the run is INSTRUMENTED (the
-                        # stamp) AND no absent branch is maybe-ran, every absent ordinal is PROVABLY
-                        # not-yet-run → fall through: the strategy recovers the captured branches +
-                        # re-dispatches ONLY the provably-not-run ones (each first-and-only — the
-                        # marker is the at-most-once proof). Otherwise fail closed: a maybe-ran
-                        # branch (its effect MAY have fired — re-dispatch risks a double-fire; its
-                        # resolution is a follow-on), OR a pre-arc un-stamped journal (no markers to
-                        # trust — `[[durable-recovery-presence-validity-scope]]`).
+                        # (no `range(expected)` reconstruction). A provably-not-run branch (no
+                        # marker, INSTRUMENTED) is always re-dispatchable (the marker is the
+                        # at-most-once proof). B-FANOUT-CRASH-RESUME-MAYBE-RAN-RESOLUTION extends
+                        # the fall-through to maybe-ran branches of a RE-FIRE-SAFE kind
+                        # (DECLARATIVE_STEP / INFERENCE_STEP — no non-idempotent external effect);
+                        # only a maybe-ran branch of an EFFECT-BEARING kind (or a pre-arc un-stamped
+                        # journal — no markers to trust, presence ≠ validity
+                        # [[durable-recovery-presence-validity-scope]]) forces the conservative
+                        # fail-closed.
                         _instrumented = _crash_replay_store.dispatch_instrumented(
                             run_idempotency_key
                         )
@@ -2160,7 +2256,23 @@ def _execute_workflow_body(
                             _crash_replay_store.present_dispatched_indexes(run_idempotency_key)
                             - _recovered_indexes
                         )
-                        if not (_instrumented and not _maybe_ran):
+                        # B-FANOUT-CRASH-RESUME-MAYBE-RAN-RESOLUTION (R-FS-1) — the #732 arc
+                        # failed CLOSED on ANY maybe-ran branch (conservative: "branches are
+                        # effect-BEARING"). Distinguish by step KIND: a maybe-ran branch of a
+                        # RE-FIRE-SAFE kind (DECLARATIVE_STEP / INFERENCE_STEP — no non-idempotent
+                        # external effect) is SAFE to re-dispatch fresh (re-dispatch cannot
+                        # double-fire — an LLM inference / declarative transform has no external
+                        # side-effect; the unfenced linear-resume posture already re-dispatches
+                        # inference). Only a maybe-ran branch of an EFFECT-BEARING kind (TOOL_STEP /
+                        # SUB_AGENT_DISPATCH / MANAGED_AGENTS, or an out-of-bounds ordinal) forces
+                        # the conservative fail-closed — its effect MAY have fired, and the
+                        # fenced/unfenced resolution is a registered follow-on.
+                        _maybe_ran_unsafe = _refire_unsafe_branch_indices(
+                            _maybe_ran,
+                            _crash_replay_store.dispatched_branch_kinds(run_idempotency_key),
+                            _crash_expected,
+                        )
+                        if not (_instrumented and not _maybe_ran_unsafe):
                             return (
                                 RunResult(
                                     workflow_id=manifest_entry.workflow_id,
@@ -2173,19 +2285,24 @@ def _execute_workflow_body(
                                         "fan-out-crash-resume-cascade-policy-incomplete-"
                                         "recovery: a "
                                         f"{_crash_cascade_policy.value} crash-resume recovered an "
-                                        "INCOMPLETE branch set and the reserve-before-dispatch "
-                                        "markers do not prove every absent branch not-yet-run (a "
-                                        "maybe-ran branch — dispatched but uncaptured — or a "
-                                        "pre-arc un-stamped journal), so re-dispatching would risk "
+                                        "INCOMPLETE branch set with a RE-FIRE-UNSAFE maybe-ran "
+                                        "branch (an effect-bearing kind — TOOL_STEP / "
+                                        "SUB_AGENT_DISPATCH / MANAGED_AGENTS — dispatched but "
+                                        "uncaptured, its effect MAY have fired) or a pre-arc "
+                                        "un-stamped journal, so re-dispatching would risk "
                                         "double-firing an effect these tiers must not. Fail closed "
-                                        "(the provably-not-run incomplete case is now recovered; "
-                                        "the maybe-ran resolution is a follow-on)"
+                                        "(re-fire-SAFE maybe-ran kinds — DECLARATIVE_STEP / "
+                                        "INFERENCE_STEP — now recover; the fenced/unfenced "
+                                        "effect-bearing residual is a registered follow-on)"
                                     ),
                                 ),
                                 0,
                             )
-                        # INSTRUMENTED ∧ no maybe-ran → every absent branch is provably-not-run →
-                        # fall through to recovery (re-dispatch ONLY those, first-and-only).
+                        # INSTRUMENTED ∧ every maybe-ran branch re-fire-safe → fall through to
+                        # recovery: re-dispatch ALL absent branches — the provably-not-run ones
+                        # (the marker proves not-fired) AND the re-fire-safe maybe-ran ones (safe
+                        # to re-fire), each first-and-only for the provably-not-run, a fresh
+                        # at-most-once-external re-fire for the re-fire-safe maybe-ran.
                     # COMPLETE ∧ no-error on a strict tier → fall through; the strategy finalizes
                     # from the recovered set (re-dispatches NOTHING → trivially safe). PROCEED
                     # (the `is not PROCEED` guard skips this whole block) → PR1 recovery unchanged.
@@ -5586,6 +5703,7 @@ def _execute_parallelization(
             run_idempotency_key=run_idempotency_key,
             branch_index=branch_index,
             step_id=step.step_id,
+            step_kind=step.step_kind,
         )
         # Schedule the (sync) dispatch off-loop; `dispatch_branch_step_shielded`
         # keeps it alive against THIS branch's cancellation so an in-flight effect
@@ -7544,6 +7662,7 @@ def _execute_orchestrator_workers(
             run_idempotency_key=run_idempotency_key,
             branch_index=branch_index,
             step_id=step.step_id,
+            step_kind=step.step_kind,
         )
         # Schedule the (sync) dispatch off-loop; `dispatch_branch_step_shielded`
         # keeps it alive against THIS branch's cancellation so an in-flight effect

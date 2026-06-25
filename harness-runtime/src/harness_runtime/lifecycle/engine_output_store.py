@@ -348,6 +348,7 @@ class EngineOutputStore:
         run_key: str,
         branch_index: int,
         step_id: str,
+        step_kind: str,
     ) -> None:
         """Mark a fan-out branch as DISPATCHED (the reserve-before-dispatch marker), durably.
 
@@ -357,8 +358,12 @@ class EngineOutputStore:
         dispatched``) so N concurrent branch writers never contend; no collision with the
         ``branch-*.jsonl`` terminal-capture files (a ``.dispatched`` vs ``.jsonl`` suffix).
         Idempotent (last-wins; presence is the signal). ``step_id`` is recorded for parity
-        with ``record_branch`` (a future material-diff), never read by the classifier."""
-        record = {"step_id": str(step_id)}
+        with ``record_branch`` (a future material-diff). ``step_kind`` is the branch's
+        DISPATCH-TIME step kind — read by ``dispatched_branch_kinds`` so the maybe-ran
+        re-fire-safety classifier keys on the ORIGINAL kind, never the (possibly changed)
+        resumed manifest's kind (the at-most-once changed-manifest guard, B-FANOUT-CRASH-
+        RESUME-MAYBE-RAN-RESOLUTION)."""
+        record = {"step_id": str(step_id), "step_kind": str(step_kind)}
         line = json.dumps(record, sort_keys=True)
         self._append_path(self._branch_dispatched_file(run_key, branch_index), line)
 
@@ -380,6 +385,42 @@ class EngineOutputStore:
             if branch_index is not None:
                 indexes.add(branch_index)
         return indexes
+
+    def dispatched_branch_kinds(self, run_key: str) -> dict[int, str | None]:
+        """Return ``{branch_index: dispatch-time step_kind}`` for every DISPATCHED marker.
+
+        The maybe-ran re-fire-safety classifier keys on this — the ORIGINAL (dispatch-time)
+        step kind recorded in the marker, NOT the resumed manifest's current kind. This is the
+        at-most-once changed-manifest guard: a branch that dispatched as an effect-bearing kind
+        and crashed before terminal capture, then is re-supplied at the same ordinal as a
+        re-fire-safe kind, must STILL be classified by its original effect-bearing kind (else
+        the relaxation would re-dispatch + double-fire the original effect). A marker missing /
+        with an unreadable / non-str ``step_kind`` (a pre-arc v1.60/v1.61 marker, or a torn
+        write) maps to ``None`` → the classifier treats it as NOT re-fire-safe (fail closed —
+        cannot prove the original kind). Presence-only on the index (mirrors
+        ``present_dispatched_indexes``); the kind is best-effort."""
+        branches_dir = self._branches_dir(run_key)
+        if not branches_dir.exists():
+            return {}
+        kinds: dict[int, str | None] = {}
+        for path in branches_dir.glob("branch-*.dispatched"):
+            branch_index = self._dispatched_index_from_name(path.name)
+            if branch_index is None:
+                continue
+            kind: str | None = None
+            try:
+                record = json.loads(path.read_text(encoding="utf-8").splitlines()[-1])
+                raw = record.get("step_kind")
+                kind = raw if isinstance(raw, str) else None
+            except (OSError, UnicodeDecodeError, ValueError, IndexError, KeyError, AttributeError):
+                # torn / pre-arc / invalid-encoding marker → unknown → fail-closed at the
+                # classifier. UnicodeDecodeError (invalid UTF-8 bytes from read_text) is a
+                # ValueError subclass — listed explicitly so the torn-marker safety boundary is
+                # self-evident; json's ValueError + IndexError (empty file) + AttributeError
+                # (non-dict JSON) cover the other corruption shapes.
+                kind = None
+            kinds[branch_index] = kind
+        return kinds
 
     def record_dispatch_instrumented(self, run_key: str) -> None:
         """Stamp this run as DISPATCH-INSTRUMENTED (the cross-version guard), durably.
