@@ -46,26 +46,26 @@
 snapshot:
   frozen_total: 11
   frozen_done: 11
-  standalone_closed: 43
+  standalone_closed: 44
   standalone_gated: 0
   standalone_resolved: 4
-  standalone_registered: 4
+  standalone_registered: 3
   source: ".harness/beyond-mvp-capability-boundary-ledger.md"
-  # FRONTIER NOTE (2026-06-24, B-FANOUT-CRASH-RESUME-MAYBE-RAN-RESOLUTION closed). The frozen
+  # FRONTIER NOTE (2026-06-24, B-FANOUT-CRASH-RESUME-TIMEOUT-REPLAY closed). The frozen
   # 11-arc order is COMPLETE; the standalone B-* register is the live frontier. The fan-out
   # crash-resume capability family is being built out under FULL-SPEC. CLOSED so far:
   # B-FANOUT-OUTPUT-REPLAY (PR1 #723 + PR2 #724) + B-FANOUT-CRASH-RESUME-CASCADE-POLICY (#726)
   # + B-FANOUT-PAUSE-SYNTHESIS (#728) + B-FANOUT-RESUME-CARRIER-TOPOLOGY-MISMATCH (#730)
   # + B-FANOUT-CRASH-RESUME-STRICT-TIER-INCOMPLETE (#732)
   # + B-FANOUT-CRASH-RESUME-ORCHESTRATOR-DISPATCH (#734)
-  # + B-FANOUT-CRASH-RESUME-MAYBE-RAN-RESOLUTION (the WORKER maybe-ran resolution for the
-  # RE-FIRE-SAFE kinds — a maybe-ran branch [v1.60 dispatch marker, no terminal capture] of a
-  # DECLARATIVE_STEP / INFERENCE_STEP [no non-idempotent external effect] re-dispatches fresh
-  # instead of failing the whole incomplete recovery closed; effect-bearing kinds stay
-  # fail-closed; classified by the DISPATCH-TIME kind recorded in the marker [the changed-
-  # manifest at-most-once guard, Codex [P1]]; bundled-absorption CP v1.61→v1.62 + runtime
-  # v1.79→v1.80 [the dispatched-marker step_kind field]).
-  # The 4 still-registered follow-ons keeping R-FS-1 ACTIVE:
+  # + B-FANOUT-CRASH-RESUME-MAYBE-RAN-RESOLUTION (#736)
+  # + B-FANOUT-CRASH-RESUME-TIMEOUT-REPLAY (the operator-set `timed_out` disposition policy —
+  # FAIL_CLOSED [default, v1.55-identical] / RECOVER_AS_TERMINAL [recover the deadline-cut branch
+  # as a degraded non-contributor; cascade_policy governs] / RE_DISPATCH [re-run a re-fire-safe
+  # deadline-cut branch, effect-bearing fail-closed, keyed on the v1.62 dispatch-time-kind marker];
+  # built WHOLE — registers NOTHING new → standalone_registered 4 → 3, the FIRST net decrement;
+  # CP v1.62→v1.63 + harness-runtime manifest-loader IMPL plumbing, NO runtime SPEC delta).
+  # The 3 still-registered follow-ons keeping R-FS-1 ACTIVE:
   #   • B-FANOUT-CRASH-RESUME-MAYBE-RAN-EFFECT-BEARING (the EFFECT-BEARING maybe-ran residual —
   #       TOOL_STEP / SUB_AGENT_DISPATCH [compose the inner effect-fence's suppress-and-continue
   #       / §26.2 ambiguous-pause through the fan-out barrier] + MANAGED_AGENTS [extend the fence
@@ -74,11 +74,10 @@ snapshot:
   #       orchestrator maybe-ran fire→capture window; ALSO carries the PROCEED-orchestrator
   #       pre-capture residual, named per FULL-SPEC since #724's effect-free-synthesis
   #       justification does not transfer to the general effect-bearing orchestrator)
-  #   • B-FANOUT-CRASH-RESUME-TIMEOUT-REPLAY    (the timed_out ambiguous disposition)
   #   • B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT (reconstruct a lost PAUSE snapshot honoring
   #       §25.15.1 finish-in-flight; the PAUSE-trigger leg cascade-policy fails closed)
-  # closure_gate.py G1.1 = standalone_registered + standalone_gated == 0 is now 4 + 0 = 4
-  # → R-FS-1 stays ACTIVE. On all four follow-ons reaching closed/resolved → G1.1 passes →
+  # closure_gate.py G1.1 = standalone_registered + standalone_gated == 0 is now 3 + 0 = 3
+  # → R-FS-1 stays ACTIVE. On all three follow-ons reaching closed/resolved → G1.1 passes →
   # R-FS-1 resolves → R-CL-Q1 quality track admits. (Run `just closure-gate` to confirm G1.1.)
 
 arcs:
@@ -625,13 +624,20 @@ arcs:
   - id: B-FANOUT-CRASH-RESUME-TIMEOUT-REPLAY
     title: "Operator-resolvable timed-out-branch fan-out crash-resume"
     kind: standalone
-    status: registered
+    status: closed
     decompose_at_open: true
-    owner_axis: "CP + runtime"
+    owner_axis: "CP + runtime"  # CP spec + CP resume logic + harness-runtime manifest-loader IMPL plumbing (impl-to-cleared-spec on §14.19.4); reuses the existing v1.62 dispatched_branch_kinds marker — NO runtime SPEC delta
     parent_arc: B-FANOUT-OUTPUT-REPLAY
     operator_gated: false  # additive (resolve an ambiguous disposition), no committed-invariant sacrifice → no operator gate; the disposition resolution mechanism is the design question.
-    anticipated_scope: "Fan-out crash-resume recovery for the `timed_out` branch disposition. PR1 fails CLOSED on a timed-out branch (fan-out-crash-resume-timeout-ambiguous, CP spec v1.55 §1) — a deadline-cut in-flight dispatch may or may not have LANDED its effect (the effect-fence-ambiguous case; the linear path needed a dedicated arc to resolve the analogous ambiguity). Operator-resolvable timeout-replay: a disposition mechanism that lets a timed-out branch be recovered-as-terminal or re-dispatched per an operator-set policy, without the at-most-once fail-open the blind path would risk."
-    why: "Named as a registered follow-on at B-FANOUT-OUTPUT-REPLAY PR1 (CP spec v1.55 §1 disposition keystone: 'operator-resolvable timeout-replay is the registered follow-on'). The `timed_out` disposition is the one irreducibly-ambiguous branch outcome the PR1 fail-closed defers. FULL-SPEC — built as a coherent arc."
+    pr: "#<pending> (feat/r-fs-1-fanout-timeout-replay — flips registered → closed; WHOLE-close, registers NOTHING new → standalone_registered 4 → 3, the FIRST net decrement of the fan-out crash-resume family)"
+    spec_delta: "CP spec v1.62 → v1.63 (§1 the fan-out timeout-disposition policy: a new additive `WorkflowManifestEntry.fanout_timeout_disposition: FanoutTimeoutDisposition` field [default FAIL_CLOSED, v1.55 §1 byte-identical] + the three dispositions; §2 the cascade_policy separation-of-concerns + v1.55 cascade-resume-comment refinement; §3 reuse of the v1.62 dispatch-time-kind marker [no new store API] + the manifest-loader plumbing [harness-runtime `WorkflowManifestLoader` IMPL — impl-to-cleared-spec on the §14.19.4 byte-exact-projection invariant, the operator-facing config surface; a Codex-R1 catch — the field was schema-only/vacuous without it]; §4 WHOLE-close, no new registration) + 1 clearance marker. NO runtime SPEC delta (the loader fix is impl-to-cleared-spec). NO new contract / closed-enum / committed-invariant change; at-most-once PRESERVED — the default reproduces v1.55, RECOVER_AS_TERMINAL never re-dispatches, RE_DISPATCH re-dispatches only a re-fire-safe deadline-cut branch keyed on the dispatch-time-kind marker (effect-bearing fail-closed, no fail-open). Refined fail-class MESSAGE only (`fan-out-crash-resume-timeout-ambiguous`)."
+    gives: "A fan-out crash-resume now resolves a deadline-cut (`timed_out`) branch per an operator-set per-workflow disposition policy, lifting the v1.55 §1 unconditional fail-closed. `FAIL_CLOSED` (default) reproduces v1.55 byte-for-byte. `RECOVER_AS_TERMINAL` recovers the deadline-cut branch as a `completed`-no-output degraded non-contributor (never folded into the aggregate, never re-dispatched) → the run RECOVERS (PARTIAL under PROCEED folding the survivors) instead of FAILING; `cascade_policy` governs the degraded reaction (the §2 separation-of-concerns — `timeout_disposition` resolves only the early-raise; the recovered timed_out branch joins the EXISTING `output is None` ⟺ degraded handling). `RE_DISPATCH` re-runs a re-fire-safe (`{DECLARATIVE_STEP, INFERENCE_STEP}`) deadline-cut branch fresh (excluded from the recovered tuple → the EXISTING #736 crash-resume re-dispatch path re-runs it; a re-fire-safe re-run has no external effect to double-fire), and FAILS CLOSED on any effect-bearing one (its effect may have landed). RE_DISPATCH is a STRICT-TIER mechanism (its re-fire-safety gate keys on the v1.62 dispatch-time-kind marker, written only on PAUSE/CASCADE_CANCEL — under PROCEED, no markers ⟹ conservative fail-closed; PROCEED recovery uses RECOVER_AS_TERMINAL). WHOLE-close: all three dispositions built, NO residual, NO new registration. The strictly-more-capable effect-fence-PROVES-landed-ness-then-re-dispatches-effect-bearing capability is the SEPARATE already-registered B-FANOUT-CRASH-RESUME-MAYBE-RAN-EFFECT-BEARING (fence-through-barrier — composes with this policy, not a timeout residual). Decorrelated: advisor full-transcript ×3 (the STRATEGIC reconcile — registered-never-dropped → whole-close discriminator → the config-vs-pause fact-check) + the cascade-resume interaction trace (direct read; the disposition reuses the existing degraded + #736 machinery, only the v1.55 comment refined) + out-of-family Codex at pre-PR."
+    as_built:
+      - "harness-cp/src/harness_cp/workflow_manifest_entry.py (the `FanoutTimeoutDisposition` StrEnum {FAIL_CLOSED, RECOVER_AS_TERMINAL, RE_DISPATCH} + the additive optional `WorkflowManifestEntry.fanout_timeout_disposition` field [default FAIL_CLOSED] — the §6.1 extension-clause growth, 13th field; docstring field-count refreshed)"
+      - "harness-cp/src/harness_cp/workflow_driver.py (the `_determine_fanout_resume` `timeout_disposition` param + the `timed_out` policy resolution: FAIL_CLOSED → raise [v1.55]; RECOVER_AS_TERMINAL → fall through [timed_out flows in as completed-no-output degraded non-contributor]; RE_DISPATCH → `_refire_unsafe_branch_indices` on the marker kinds [worker/branch-count bound], re-fire-safe excluded for re-dispatch / effect-bearing|un-kinded raise; the `timeout_disposition` threaded from `manifest_entry` at the crash-resume call site; the v1.55 cascade-resume comment refined)"
+      - "design-substrate/Spec_Control_Plane_v1_63.md + 1 clearance marker (NO runtime SPEC delta)"
+      - "harness-runtime/src/harness_runtime/lifecycle/workflow_manifest_loader.py (the manifest-loader plumbing — the `_WorkflowSection` carrier field + the `_project_to_loaded_workflow` projection; impl-to-cleared-spec on the §14.19.4 byte-exact-projection invariant, the operator-facing config surface — an out-of-family Codex R1 catch: the field was schema-only/vacuous without it)"
+      - "tests: harness-cp test_workflow_driver_fanout_output_replay.py (6 `_determine_fanout_resume` unit tests — FAIL_CLOSED default raises; RECOVER_AS_TERMINAL recovers the timed_out branch as completed-no-output; RE_DISPATCH re-fire-safe excludes it; RE_DISPATCH effect-bearing / un-kinded / mixed raises; orchestrator worker-count bound) + test_workflow_driver_fanout_output_replay_full_chain.py (4 real-`execute_workflow` crash→resume witnesses — FAIL_CLOSED→FAILED, RECOVER_AS_TERMINAL→PARTIAL folding survivors, RE_DISPATCH re-fire-safe→re-runs-once→SUCCESS aggregate-matches-clean, RE_DISPATCH effect-bearing-marker→FAILED) + test_workflow_manifest_entry.py (13-field cardinality) + test_workflow_driver_drain.py (the timeout-PRIMITIVE guard allowlists the re-exported disposition enum) + harness-runtime test_workflow_manifest_loader.py (the §14.19.4 byte-exact-projection round-trip — a manifest file setting `recover-as-terminal` projects to the entry; absent → FAIL_CLOSED default — the Codex-R1 loader-plumbing witness)"
     ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
 
   - id: B-FANOUT-PAUSE-SYNTHESIS

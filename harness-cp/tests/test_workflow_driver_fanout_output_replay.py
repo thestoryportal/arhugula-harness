@@ -32,6 +32,7 @@ from harness_cp.workflow_driver import (
     _FanOutStoreTimeoutAmbiguousError,
 )
 from harness_cp.workflow_driver_types import StepKind, WorkflowStep
+from harness_cp.workflow_manifest_entry import FanoutTimeoutDisposition
 
 _RUN_KEY = "run-idem-key-fanout"
 
@@ -62,6 +63,7 @@ class _FakeStore:
         cardinality: int | None = None,
         dispatch_instrumented: bool = False,
         orchestrator_dispatched: bool = False,
+        dispatched_kinds: dict[int, str | None] | None = None,
     ) -> None:
         self._branches = dict(branches)
         self._orchestrator = orchestrator
@@ -75,6 +77,10 @@ class _FakeStore:
         # stamp + the orchestrator reserve-before-dispatch marker (presence-only).
         self._dispatch_instrumented = dispatch_instrumented
         self._orchestrator_dispatched = orchestrator_dispatched
+        # B-FANOUT-CRASH-RESUME-MAYBE-RAN-RESOLUTION / TIMEOUT-REPLAY — the dispatch-time
+        # kind recorded in each branch's `.dispatched` marker (the at-most-once changed-
+        # manifest guard; None = un-recorded / torn marker → fail-closed at the classifier).
+        self._dispatched_kinds = dict(dispatched_kinds) if dispatched_kinds else {}
 
     def read_branch_records(
         self, run_key: str
@@ -101,6 +107,9 @@ class _FakeStore:
 
     def orchestrator_dispatched(self, run_key: str) -> bool:
         return self._orchestrator_dispatched
+
+    def dispatched_branch_kinds(self, run_key: str) -> dict[int, str | None]:
+        return dict(self._dispatched_kinds)
 
 
 def test_parallelization_reconstructs_peer_resume_from_store() -> None:
@@ -271,11 +280,141 @@ def test_parallelization_orchestrator_marker_topology_mismatch_raises() -> None:
 # --- disposition class (the keystone): completed-with-output / completed-no-output /
 #     timed-out, across topologies ------------------------------------------------------
 def test_timed_out_branch_fails_closed() -> None:
-    """A TIMED_OUT branch is irreducibly ambiguous (a deadline-cut in-flight dispatch may
-    or may not have landed) → crash-resume FAILS CLOSED, never a silent re-dispatch."""
+    """A TIMED_OUT branch under the DEFAULT `fanout_timeout_disposition=FAIL_CLOSED` is
+    irreducibly ambiguous (a deadline-cut in-flight dispatch may or may not have landed) →
+    crash-resume FAILS CLOSED, never a silent re-dispatch. Byte-identical to v1.55 §1
+    (the disposition param defaults to FAIL_CLOSED — every existing caller is unchanged)."""
     store = _FakeStore(branches={0: ("w0", {"o": 0})}, dispositions={0: "timed_out"})
-    with pytest.raises(_FanOutStoreTimeoutAmbiguousError, match="timed out"):
+    with pytest.raises(_FanOutStoreTimeoutAmbiguousError, match="FAIL_CLOSED"):
         _determine_fanout_resume(store, _RUN_KEY, _steps(3), TopologyPattern.PARALLELIZATION)
+
+
+# --- B-FANOUT-CRASH-RESUME-TIMEOUT-REPLAY (R-FS-1, CP spec v1.63 §1) — the operator-set
+#     fan-out timeout disposition policy: FAIL_CLOSED / RECOVER_AS_TERMINAL / RE_DISPATCH --
+def test_timeout_recover_as_terminal_recovers_degraded_non_contributor() -> None:
+    """RECOVER_AS_TERMINAL: a deadline-cut branch is recovered as a `completed`-no-output
+    degraded non-contributor (output None → not folded, not re-dispatched). The surviving
+    branch is recovered. cascade_policy then governs the degraded reaction (separation of
+    concerns, §2). No raise — the run can recover instead of failing closed."""
+    store = _FakeStore(
+        branches={0: ("w0", {"o": 0}), 1: ("w1", None)},
+        dispositions={1: "timed_out"},
+    )
+    result = _determine_fanout_resume(
+        store,
+        _RUN_KEY,
+        _steps(3),
+        TopologyPattern.PARALLELIZATION,
+        FanoutTimeoutDisposition.RECOVER_AS_TERMINAL,
+    )
+    assert isinstance(result, PeerFanOutResumeState)
+    by_index = {b.branch_index: b for b in result.branches}
+    assert by_index[0].output == {"o": 0}  # survivor recovered
+    assert 1 in by_index  # the timed_out branch IS recovered (not excluded)
+    assert by_index[1].output is None  # degraded non-contributor (never folded/re-dispatched)
+
+
+def test_timeout_re_dispatch_re_fire_safe_branch_excluded_for_redispatch() -> None:
+    """RE_DISPATCH + a re-fire-safe (DECLARATIVE_STEP) deadline-cut branch → EXCLUDED from
+    the recovered tuple so the existing crash-resume re-dispatch path re-runs it fresh
+    (a re-fire-safe re-run has no external effect to double-fire). The survivor stays
+    recovered; the timed_out re-fire-safe branch is absent → re-dispatchable."""
+    store = _FakeStore(
+        branches={0: ("w0", {"o": 0}), 1: ("w1", None)},
+        dispositions={1: "timed_out"},
+        dispatched_kinds={1: StepKind.DECLARATIVE_STEP.value},
+    )
+    result = _determine_fanout_resume(
+        store,
+        _RUN_KEY,
+        _steps(3),
+        TopologyPattern.PARALLELIZATION,
+        FanoutTimeoutDisposition.RE_DISPATCH,
+    )
+    assert isinstance(result, PeerFanOutResumeState)
+    assert {b.branch_index for b in result.branches} == {0}  # branch 1 EXCLUDED → re-dispatched
+
+
+def test_timeout_re_dispatch_effect_bearing_branch_fails_closed() -> None:
+    """RE_DISPATCH + an EFFECT-BEARING (TOOL_STEP) deadline-cut branch → FAIL CLOSED: its
+    effect may have landed, so re-dispatch would double-fire. At-most-once is the GATE, not
+    operator-overridable (the operator selected RE_DISPATCH but it cannot fail-open)."""
+    store = _FakeStore(
+        branches={0: ("w0", {"o": 0}), 1: ("w1", None)},
+        dispositions={1: "timed_out"},
+        dispatched_kinds={1: StepKind.TOOL_STEP.value},
+    )
+    with pytest.raises(_FanOutStoreTimeoutAmbiguousError, match="RE-FIRE-UNSAFE"):
+        _determine_fanout_resume(
+            store,
+            _RUN_KEY,
+            _steps(3),
+            TopologyPattern.PARALLELIZATION,
+            FanoutTimeoutDisposition.RE_DISPATCH,
+        )
+
+
+def test_timeout_re_dispatch_un_kinded_marker_fails_closed() -> None:
+    """RE_DISPATCH + a deadline-cut branch with NO recorded dispatch-time kind (a pre-arc /
+    torn marker → None) → FAIL CLOSED. The classifier cannot prove the original kind
+    re-fire-safe, so the conservative reading refuses re-dispatch (the changed-manifest
+    at-most-once guard reuse, §3)."""
+    store = _FakeStore(
+        branches={0: ("w0", {"o": 0}), 1: ("w1", None)},
+        dispositions={1: "timed_out"},
+        dispatched_kinds={},  # no recorded kind for branch 1
+    )
+    with pytest.raises(_FanOutStoreTimeoutAmbiguousError, match="RE-FIRE-UNSAFE"):
+        _determine_fanout_resume(
+            store,
+            _RUN_KEY,
+            _steps(3),
+            TopologyPattern.PARALLELIZATION,
+            FanoutTimeoutDisposition.RE_DISPATCH,
+        )
+
+
+def test_timeout_re_dispatch_mixed_safe_and_unsafe_fails_closed() -> None:
+    """RE_DISPATCH + a MIXED timed_out set (one re-fire-safe DECLARATIVE + one effect-bearing
+    TOOL_STEP) → FAIL CLOSED. ANY effect-bearing deadline-cut branch under RE_DISPATCH forces
+    the conservative fail-closed (the unsafe one cannot be re-dispatched)."""
+    store = _FakeStore(
+        branches={0: ("w0", None), 1: ("w1", None)},
+        dispositions={0: "timed_out", 1: "timed_out"},
+        dispatched_kinds={0: StepKind.DECLARATIVE_STEP.value, 1: StepKind.TOOL_STEP.value},
+    )
+    with pytest.raises(_FanOutStoreTimeoutAmbiguousError, match="RE-FIRE-UNSAFE"):
+        _determine_fanout_resume(
+            store,
+            _RUN_KEY,
+            _steps(3),
+            TopologyPattern.PARALLELIZATION,
+            FanoutTimeoutDisposition.RE_DISPATCH,
+        )
+
+
+def test_timeout_orchestrator_re_dispatch_uses_worker_count_bound() -> None:
+    """RE_DISPATCH on an ORCHESTRATOR_WORKERS resume bounds the re-fire-safety check by the
+    WORKER count (len(steps) - 1, orchestrator-excluded), matching the dispatch-marker
+    ordinal scheme. A re-fire-safe timed_out worker is excluded for re-dispatch; the
+    orchestrator + survivor stay recovered."""
+    store = _FakeStore(
+        branches={0: ("w0", {"o": 0}), 1: ("w1", None)},
+        orchestrator=("orch", {"plan": "x"}),
+        cardinality=3,
+        dispositions={1: "timed_out"},
+        dispatched_kinds={1: StepKind.INFERENCE_STEP.value},
+    )
+    result = _determine_fanout_resume(
+        store,
+        _RUN_KEY,
+        _steps(3),
+        TopologyPattern.ORCHESTRATOR_WORKERS,
+        FanoutTimeoutDisposition.RE_DISPATCH,
+    )
+    assert isinstance(result, FanOutResumeState)
+    assert result.orchestrator_output == {"plan": "x"}
+    assert {b.branch_index for b in result.branches} == {0}  # worker 1 EXCLUDED → re-dispatched
 
 
 def test_errored_no_output_branch_recovered_as_terminal() -> None:

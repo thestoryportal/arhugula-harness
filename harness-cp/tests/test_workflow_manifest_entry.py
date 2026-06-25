@@ -47,10 +47,11 @@ def _entry(**over: object) -> WorkflowManifestEntry:
     return WorkflowManifestEntry(**base)  # type: ignore[arg-type]
 
 
-def test_workflow_manifest_entry_twelve_fields() -> None:
-    """v1.20 — `default_gate_level` field added per CP spec v1.20 §6.1.Y
-    Reading A absorption (was 11 at v2.12)."""
-    assert len(WorkflowManifestEntry.model_fields) == 12
+def test_workflow_manifest_entry_thirteen_fields() -> None:
+    """v1.63 — `fanout_timeout_disposition` field added per CP spec v1.63 §1
+    (R-FS-1 B-FANOUT-CRASH-RESUME-TIMEOUT-REPLAY; was 12 at v1.20 with
+    `default_gate_level`, 11 at v2.12 with `entry_version`)."""
+    assert len(WorkflowManifestEntry.model_fields) == 13
     assert set(WorkflowManifestEntry.model_fields) == {
         "workflow_id",
         "workload_class",
@@ -64,6 +65,7 @@ def test_workflow_manifest_entry_twelve_fields() -> None:
         "per_step_overrides",
         "entry_version",
         "default_gate_level",
+        "fanout_timeout_disposition",
     }
 
 

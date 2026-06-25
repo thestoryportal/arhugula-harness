@@ -119,7 +119,10 @@ from harness_cp.workflow_driver_types import (
     compose_branch_terminal_path,
     fold_step_hitl_placements,
 )
-from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
+from harness_cp.workflow_manifest_entry import (
+    FanoutTimeoutDisposition,
+    WorkflowManifestEntry,
+)
 from harness_cp.workload_engine_class_matrix import d4_tunable, lookup_cell
 
 # ---------------------------------------------------------------------------
@@ -2018,6 +2021,7 @@ def _execute_workflow_body(
                     run_idempotency_key,
                     _crash_branch_steps,
                     manifest_entry.topology_pattern,
+                    manifest_entry.fanout_timeout_disposition,
                 )
             except _FanOutStoreCorruptError as exc:
                 return (
@@ -2149,10 +2153,13 @@ def _execute_workflow_body(
             # recovered branch set is COMPLETE (every declared ordinal recovered → NOTHING to
             # re-dispatch) AND no branch errored. Every other state fails closed:
             #   • an ERRORED branch (a failure fired the policy before the crash — captured
-            #     `completed`-no-output; `_determine_fanout_resume` already RAISES on `timed_out`,
-            #     so in the recovered set `output is None` ⟺ ran-and-errored) → the policy's
-            #     failure semantics: CASCADE_CANCEL → reproduce FAILED (§25.15.1), PAUSE →
-            #     fail-closed-ambiguous.
+            #     `completed`-no-output; in the recovered set `output is None` ⟺ ran-and-errored
+            #     OR a `RECOVER_AS_TERMINAL`-recovered deadline-cut branch [B-FANOUT-CRASH-RESUME-
+            #     TIMEOUT-REPLAY, CP spec v1.63 §2] — both degraded non-contributors, treated
+            #     identically here; under `FAIL_CLOSED`/`RE_DISPATCH` `_determine_fanout_resume`
+            #     raises/excludes the timed_out branch so it never reaches the recovered set) →
+            #     the policy's failure semantics: CASCADE_CANCEL → reproduce FAILED (§25.15.1),
+            #     PAUSE → fail-closed-ambiguous.
             #   • an INCOMPLETE recovery (a branch ordinal absent) → fail CLOSED. An absent
             #     branch is INDISTINGUISHABLE from one that RAN its effect but crashed BEFORE
             #     `_capture_branch_terminal` persisted (the dispatch-before-capture window), so
@@ -4960,6 +4967,7 @@ def _determine_fanout_resume(
     run_key: str,
     steps: Sequence[WorkflowStep],
     topology: TopologyPattern,
+    timeout_disposition: FanoutTimeoutDisposition = FanoutTimeoutDisposition.FAIL_CLOSED,
 ) -> FanOutResumeState | PeerFanOutResumeState | None:
     """Reconstruct a fan-out crash-resume state from the durable branch STORE.
 
@@ -4994,16 +5002,61 @@ def _determine_fanout_resume(
             f"branch fan-out, resume supplied {len(steps)} (changed body) — fail closed"
         )
     # Disposition recovery (the at-most-once class closer — an output-only store made every
-    # non-clean-success disposition invisible). A TIMED_OUT branch is irreducibly ambiguous
-    # (deadline-cut in-flight dispatch — may or may not have landed) → FAIL CLOSED. A
-    # COMPLETED branch with NO output (ran-and-errored; its effect LANDED) is recovered as
-    # TERMINAL — not re-dispatched (the seed loop folds only output-bearing branches).
+    # non-clean-success disposition invisible). A COMPLETED branch with NO output (ran-and-
+    # errored; its effect LANDED) is recovered as TERMINAL — not re-dispatched (the seed loop
+    # folds only output-bearing branches). A TIMED_OUT branch is a deadline-cut in-flight
+    # dispatch (may or may not have landed) — resolved by the operator-set
+    # `fanout_timeout_disposition` per B-FANOUT-CRASH-RESUME-TIMEOUT-REPLAY (CP spec v1.63 §1).
     timed_out = sorted(bi for bi, (_s, status, _o) in records.items() if status == "timed_out")
+    # The timed_out branches to EXCLUDE from the recovered tuple so the existing crash-resume
+    # re-dispatch path re-runs them (RE_DISPATCH); empty for FAIL_CLOSED (raises) +
+    # RECOVER_AS_TERMINAL (they flow in as `completed`-no-output degraded non-contributors).
+    _timeout_recover_excluded: set[int] = set()
     if timed_out:
-        raise _FanOutStoreTimeoutAmbiguousError(
-            f"fan-out branch(es) {timed_out} timed out (deadline-cut in-flight dispatch — may "
-            f"or may not have landed); crash-resume fails closed (timeout-replay follow-on)"
-        )
+        if timeout_disposition is FanoutTimeoutDisposition.FAIL_CLOSED:
+            # Default — v1.55 §1 byte-identical: refuse recovery (the effect may have landed).
+            raise _FanOutStoreTimeoutAmbiguousError(
+                f"fan-out branch(es) {timed_out} timed out (deadline-cut in-flight dispatch — "
+                f"may or may not have landed); crash-resume fails closed "
+                f"(fanout_timeout_disposition=FAIL_CLOSED)"
+            )
+        if timeout_disposition is FanoutTimeoutDisposition.RE_DISPATCH:
+            # Re-run the re-fire-safe deadline-cut branches fresh; an effect-bearing (or
+            # un-recorded-marker-kind) one fails closed — its effect may have landed, so
+            # re-dispatch would double-fire (at-most-once is the GATE, not operator-overridable).
+            # Keyed on the v1.62 dispatch-time-kind marker (`dispatched_branch_kinds`) — NOT the
+            # resumed manifest (the changed-manifest at-most-once guard). Excluded branches drop
+            # from `branches` → the existing re-dispatch path (the provably-not-run / re-fire-safe-
+            # maybe-ran machinery) re-runs them. `_branch_count` is the worker/branch count
+            # (orchestrator `steps[0]` excluded for the orchestrator topologies — the marker is
+            # keyed by branch ordinal, matching the cardinality-only `_card_branch_count`).
+            _branch_count = len(steps) - (
+                1
+                if topology
+                in {
+                    TopologyPattern.ORCHESTRATOR_WORKERS,
+                    TopologyPattern.HIERARCHICAL_DELEGATION,
+                }
+                else 0
+            )
+            _timeout_unsafe = _refire_unsafe_branch_indices(
+                set(timed_out), store.dispatched_branch_kinds(run_key), _branch_count
+            )
+            if _timeout_unsafe:
+                raise _FanOutStoreTimeoutAmbiguousError(
+                    f"fan-out branch(es) {sorted(_timeout_unsafe)} timed out under "
+                    f"fanout_timeout_disposition=RE_DISPATCH but are RE-FIRE-UNSAFE (an effect-"
+                    f"bearing dispatch-time kind — TOOL_STEP / SUB_AGENT_DISPATCH / "
+                    f"MANAGED_AGENTS — an out-of-range ordinal, or an un-recorded marker kind); "
+                    f"their effect may have landed, so re-dispatch would double-fire. Fail closed "
+                    f"(at-most-once is not operator-overridable)"
+                )
+            _timeout_recover_excluded = set(timed_out)
+        # RECOVER_AS_TERMINAL → fall through: the timed_out branches flow into `branches` below
+        # as `completed`-no-output degraded non-contributors (never folded into the aggregate,
+        # never re-dispatched); `cascade_policy` then governs the degraded reaction (the §2
+        # separation-of-concerns — `output is None` ⟺ ran-and-errored OR recovered-deadline-cut,
+        # both degraded, treated identically by the cascade reconciliation).
     branches = tuple(
         FanOutBranchResumeState(
             branch_index=branch_index,
@@ -5012,6 +5065,7 @@ def _determine_fanout_resume(
             output=output,
         )
         for branch_index, (step_id, _status, output) in sorted(records.items())
+        if branch_index not in _timeout_recover_excluded
     )
     if topology is TopologyPattern.PARALLELIZATION:
         # Peer fan-out: NO orchestrator `steps[0]`. A captured orchestrator journal here

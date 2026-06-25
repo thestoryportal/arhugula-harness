@@ -33,7 +33,10 @@ from harness_cp.cross_family_fallback_chain import (
 )
 from harness_cp.engine_class import EngineClass
 from harness_cp.topology_pattern import TopologyPattern
-from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
+from harness_cp.workflow_manifest_entry import (
+    FanoutTimeoutDisposition,
+    WorkflowManifestEntry,
+)
 from harness_runtime.api import WorkflowObject
 from harness_runtime.lifecycle.workflow_manifest_loader import (
     LoadedWorkflow,
@@ -485,7 +488,10 @@ def test_minimum_required_manifest_produces_workflow_object(tmp_path: Path) -> N
 
 # AC #2 — full-optional manifest matches manual WME construction
 def test_full_optional_manifest_matches_manual_construction(tmp_path: Path) -> None:
-    extra = '  entry_version: 2\n  default_gate_level: "deny"\n'
+    extra = (
+        '  entry_version: 2\n  default_gate_level: "deny"\n'
+        '  fanout_timeout_disposition: "recover-as-terminal"\n'
+    )
     path = _write(tmp_path, "full-wme.yaml", _yaml_with_wme(extra))
     workflow = WorkflowManifestLoader.load_workflow(path)
     manual_wme = WorkflowManifestEntry(
@@ -510,8 +516,16 @@ def test_full_optional_manifest_matches_manual_construction(tmp_path: Path) -> N
         default_gate_level=__import__(
             "harness_cp.gate_level_rule", fromlist=["GateLevel"]
         ).GateLevel.DENY,
+        fanout_timeout_disposition=FanoutTimeoutDisposition.RECOVER_AS_TERMINAL,
     )
     assert workflow.manifest_entry == manual_wme
+    # B-FANOUT-CRASH-RESUME-TIMEOUT-REPLAY (CP spec v1.63 §1) — the disposition is plumbed
+    # through the manifest loader (the §14.19.4 byte-exact-projection invariant): an operator
+    # CAN set it in the manifest file (not a built-but-vacuous schema-only field).
+    assert (
+        workflow.manifest_entry.fanout_timeout_disposition
+        is FanoutTimeoutDisposition.RECOVER_AS_TERMINAL
+    )
 
 
 # AC #3 — Pydantic-default discipline (§14.19.4 #6): absent optional field
@@ -525,6 +539,11 @@ def test_optional_field_absent_uses_pydantic_carrier_default(tmp_path: Path) -> 
     assert workflow.manifest_entry.default_gate_level is None
     # `sub_agent_briefs` not present → WME default of None applies.
     assert workflow.manifest_entry.sub_agent_briefs is None
+    # `fanout_timeout_disposition` not present → WME default FAIL_CLOSED applies (v1.55
+    # byte-identical; B-FANOUT-CRASH-RESUME-TIMEOUT-REPLAY, CP spec v1.63 §1).
+    assert (
+        workflow.manifest_entry.fanout_timeout_disposition is FanoutTimeoutDisposition.FAIL_CLOSED
+    )
 
 
 # AC #4 — YAML↔TOML round-trip invariant (§14.19.4 #8)
