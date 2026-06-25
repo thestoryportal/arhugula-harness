@@ -762,6 +762,61 @@ def _refire_unsafe_branch_indices(
     }
 
 
+# B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE (R-FS-1) — the maybe-ran fan-out branch kinds whose
+# RE-DISPATCH is at-most-once-safe NOT because they have no effect (those are the re-fire-safe
+# set above) but because their effect is FENCED at the runtime tool sink (C-RT-31 §14.22): a
+# re-dispatch re-reaches the fence, whose `try_reserve` LOSES on the prior attempt's held claim
+# and SPLITS — suppress-and-continue (output captured ⟹ effect completed), ambiguous-PAUSE (the
+# B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE fan-out analogue of the linear B-EFFECT-FENCE-HITL-ROUTE),
+# or fresh-fire (claim ABSENT ⟹ the prior attempt crashed BEFORE the fence reserve ⟹ the effect
+# did not fire). Only TOOL_STEP: its own dispatch hits the fence sink DIRECTLY. SUB_AGENT_DISPATCH
+# is fenced only at its CHILD's tool sinks (recursive child crash-resume — a larger, separately-
+# verified mechanism → the registered B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT follow-on);
+# MANAGED_AGENTS performs an UNFENCED vendor-session effect → the registered
+# B-FANOUT-CRASH-RESUME-MAYBE-RAN-UNFENCED-EXTERNAL follow-on. The fence is AUTO-ACTIVE here: a
+# fan-out crash-resume is reachable ONLY for `_FANOUT_REPLAY_ENGINE_CLASSES`
+# ({EVENT_SOURCED_REPLAY, WAL_SEGMENT}), a SUBSET of the runtime's durable-auto-fence set, and a
+# worker child context inherits `run_engine_class` (so the fence gate is open for the re-dispatch).
+_FANOUT_MAYBE_RAN_FENCE_RECOVERABLE_KIND_VALUES: frozenset[str] = frozenset(
+    {StepKind.TOOL_STEP.value}
+)
+
+
+def _fence_unrecoverable_maybe_ran_indices(
+    unsafe_indices: set[int],
+    dispatched_kinds: Mapping[int, str | None],
+    branch_count: int,
+) -> set[int]:
+    """B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE (R-FS-1) — the subset of `unsafe_indices` (the
+    re-fire-UNSAFE maybe-ran ordinals from `_refire_unsafe_branch_indices`) that ALSO cannot be
+    recovered by RE-DISPATCH-INTO-THE-EFFECT-FENCE, so they STILL fail closed.
+
+    Narrows the v1.62 effect-bearing blanket fail-closed: a maybe-ran TOOL_STEP branch is now
+    FENCE-RECOVERABLE — re-dispatching it re-reaches the runtime effect fence (auto-active on the
+    fan-out crash-resume engine classes), which makes the re-dispatch at-most-once at the tool
+    sink (suppress / ambiguous-PAUSE / fresh-fire-if-claim-absent). The fence `idempotency_key`
+    recomputes identically across resume from `run_idempotency_key` (stable — the maybe-ran marker
+    is keyed on it) + `step_id` (the strategy `_resume_body_mismatch` guard) + `tool_id` (the SAME
+    accepted manifest-stability posture as the cleared LINEAR effect-fence — a tool-swap-under-same-
+    `step_id` is the linear fence's shared limitation, NOT newly introduced here).
+
+    An ordinal stays UNRECOVERABLE (fail closed) iff it is NOT a fence-recoverable TOOL_STEP in
+    range: an out-of-range / stale-store ordinal, an un-recorded / `None` marker kind (presence ≠
+    validity), SUB_AGENT_DISPATCH (recursive child crash-resume residual), MANAGED_AGENTS (unfenced
+    vendor sink), or any other effect-bearing kind. Keys on the DISPATCH MARKER kind (not the
+    resumed manifest), inheriting the v1.62 changed-manifest at-most-once guard. Shared by the
+    incomplete-recovery + cardinality-only sites so the fence-recoverability classification is one
+    source of truth."""
+    return {
+        bi
+        for bi in unsafe_indices
+        if not (
+            0 <= bi < branch_count
+            and dispatched_kinds.get(bi) in _FANOUT_MAYBE_RAN_FENCE_RECOVERABLE_KIND_VALUES
+        )
+    }
+
+
 def _fanout_replay_store(ctx: DriverContext, manifest_entry: WorkflowManifestEntry) -> Any:
     """B-FANOUT-OUTPUT-REPLAY (R-FS-1) — the bound `EngineOutputStore` IFF this run is
     fan-out-crash-recoverable, else `None`.
@@ -2124,7 +2179,16 @@ def _execute_workflow_body(
                     _dispatched_unsafe = _refire_unsafe_branch_indices(
                         set(_dispatched_kinds), _dispatched_kinds, _card_branch_count
                     )
-                    if not (_instrumented and not _dispatched_unsafe):
+                    # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE (R-FS-1) — narrow the unsafe set: a
+                    # maybe-ran TOOL_STEP branch is FENCE-RECOVERABLE (a fresh re-run re-dispatches
+                    # it into the auto-active effect fence, whose held prior claim makes the re-fire
+                    # at-most-once at the tool sink — suppress / ambiguous-PAUSE / fresh-fire). Only
+                    # the genuinely-unrecoverable remainder (SUB_AGENT / MANAGED / out-of-range /
+                    # un-kinded) forces the fail-closed.
+                    _dispatched_fail_closed = _fence_unrecoverable_maybe_ran_indices(
+                        _dispatched_unsafe, _dispatched_kinds, _card_branch_count
+                    )
+                    if not (_instrumented and not _dispatched_fail_closed):
                         return (
                             RunResult(
                                 workflow_id=manifest_entry.workflow_id,
@@ -2138,10 +2202,12 @@ def _execute_workflow_body(
                                     f"{_cardinality_policy.value} fan-out STARTED (cardinality "
                                     "marker present) but NOTHING is readably recoverable and the "
                                     "reserve-before-dispatch markers do not prove every branch "
-                                    "re-dispatch-safe (a RE-FIRE-UNSAFE maybe-ran branch — an "
-                                    "effect-bearing kind — or a pre-arc un-stamped journal) — "
-                                    "re-dispatching as a fresh run would risk double-firing an "
-                                    "effect these tiers must not. Fail closed (re-fire-SAFE "
+                                    "re-dispatch-safe (a maybe-ran branch that is neither re-fire-"
+                                    "safe NOR a fence-recoverable TOOL_STEP — an unfenced "
+                                    "MANAGED_AGENTS, a SUB_AGENT_DISPATCH, an out-of-range "
+                                    "ordinal, or a pre-arc un-stamped journal) — a fresh re-run "
+                                    "would risk double-firing an effect these tiers must not. "
+                                    "Fail closed (re-fire-safe + fence-recoverable TOOL_STEP "
                                     "maybe-ran kinds now recover; the cardinality-only case)"
                                 ),
                             ),
@@ -2272,16 +2338,28 @@ def _execute_workflow_body(
                         # external effect) is SAFE to re-dispatch fresh (re-dispatch cannot
                         # double-fire — an LLM inference / declarative transform has no external
                         # side-effect; the unfenced linear-resume posture already re-dispatches
-                        # inference). Only a maybe-ran branch of an EFFECT-BEARING kind (TOOL_STEP /
-                        # SUB_AGENT_DISPATCH / MANAGED_AGENTS, or an out-of-bounds ordinal) forces
-                        # the conservative fail-closed — its effect MAY have fired, and the
-                        # fenced/unfenced resolution is a registered follow-on.
-                        _maybe_ran_unsafe = _refire_unsafe_branch_indices(
-                            _maybe_ran,
-                            _crash_replay_store.dispatched_branch_kinds(run_idempotency_key),
-                            _crash_expected,
+                        # inference). A maybe-ran TOOL_STEP is SAFE a DIFFERENT way — its effect is
+                        # FENCED (B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE below). Only a maybe-ran branch
+                        # that is NEITHER (SUB_AGENT_DISPATCH / MANAGED_AGENTS, or an out-of-bounds
+                        # ordinal) forces the conservative fail-closed — its effect MAY have fired
+                        # with no fence to make the re-dispatch at-most-once.
+                        _maybe_ran_kinds = _crash_replay_store.dispatched_branch_kinds(
+                            run_idempotency_key
                         )
-                        if not (_instrumented and not _maybe_ran_unsafe):
+                        _maybe_ran_unsafe = _refire_unsafe_branch_indices(
+                            _maybe_ran, _maybe_ran_kinds, _crash_expected
+                        )
+                        # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE (R-FS-1) — narrow the v1.62 effect-
+                        # bearing fail-closed: of the re-fire-UNSAFE maybe-ran branches, a TOOL_STEP
+                        # is FENCE-RECOVERABLE (re-dispatch re-reaches the auto-active runtime fence
+                        # — at-most-once at the tool sink: suppress-if-captured / ambiguous-PAUSE /
+                        # fresh-fire-if-claim-absent). Only the genuinely-unrecoverable
+                        # remainder (SUB_AGENT_DISPATCH recursive child / MANAGED_AGENTS unfenced /
+                        # out-of-range / un-kinded) forces the conservative fail-closed.
+                        _maybe_ran_fail_closed = _fence_unrecoverable_maybe_ran_indices(
+                            _maybe_ran_unsafe, _maybe_ran_kinds, _crash_expected
+                        )
+                        if not (_instrumented and not _maybe_ran_fail_closed):
                             return (
                                 RunResult(
                                     workflow_id=manifest_entry.workflow_id,
@@ -2294,24 +2372,28 @@ def _execute_workflow_body(
                                         "fan-out-crash-resume-cascade-policy-incomplete-"
                                         "recovery: a "
                                         f"{_crash_cascade_policy.value} crash-resume recovered an "
-                                        "INCOMPLETE branch set with a RE-FIRE-UNSAFE maybe-ran "
-                                        "branch (an effect-bearing kind — TOOL_STEP / "
-                                        "SUB_AGENT_DISPATCH / MANAGED_AGENTS — dispatched but "
-                                        "uncaptured, its effect MAY have fired) or a pre-arc "
-                                        "un-stamped journal, so re-dispatching would risk "
-                                        "double-firing an effect these tiers must not. Fail closed "
-                                        "(re-fire-SAFE maybe-ran kinds — DECLARATIVE_STEP / "
-                                        "INFERENCE_STEP — now recover; the fenced/unfenced "
-                                        "effect-bearing residual is a registered follow-on)"
+                                        "INCOMPLETE branch set with a maybe-ran branch that is "
+                                        "neither re-fire-safe NOR a fence-recoverable TOOL_STEP "
+                                        "(an unfenced MANAGED_AGENTS, a SUB_AGENT_DISPATCH, an "
+                                        "out-of-range ordinal, or a pre-arc un-stamped journal) — "
+                                        "dispatched but uncaptured, its effect MAY have fired with "
+                                        "no fence to make the re-dispatch at-most-once. Fail "
+                                        "closed (re-fire-safe — DECLARATIVE_STEP / INFERENCE_STEP "
+                                        "— and fence-recoverable TOOL_STEP maybe-ran kinds now "
+                                        "recover; the SUB_AGENT / unfenced-external residual is a "
+                                        "registered follow-on)"
                                     ),
                                 ),
                                 0,
                             )
-                        # INSTRUMENTED ∧ every maybe-ran branch re-fire-safe → fall through to
+                        # INSTRUMENTED ∧ every maybe-ran branch recoverable → fall through to
                         # recovery: re-dispatch ALL absent branches — the provably-not-run ones
-                        # (the marker proves not-fired) AND the re-fire-safe maybe-ran ones (safe
-                        # to re-fire), each first-and-only for the provably-not-run, a fresh
-                        # at-most-once-external re-fire for the re-fire-safe maybe-ran.
+                        # (the marker proves not-fired), the re-fire-safe maybe-ran ones (no effect
+                        # to double-fire), AND the fence-recoverable TOOL_STEP maybe-ran ones (the
+                        # auto-active fence resolves the re-dispatch at-most-once at the tool sink:
+                        # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE — its ambiguous-uncommitted error
+                        # composes through the barrier to a §26.2 PAUSE, suppresses-and-continues on
+                        # a captured output, or fires fresh when the prior attempt left no claim).
                     # COMPLETE ∧ no-error on a strict tier → fall through; the strategy finalizes
                     # from the recovered set (re-dispatches NOTHING → trivially safe). PROCEED
                     # (the `is not PROCEED` guard skips this whole block) → PR1 recovery unchanged.
