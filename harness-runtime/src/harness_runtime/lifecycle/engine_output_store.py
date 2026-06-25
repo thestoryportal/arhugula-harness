@@ -396,6 +396,49 @@ class EngineOutputStore:
         """Whether the per-run dispatch-instrumented STAMP file exists (the cross-version guard)."""
         return self._dispatch_instrumented_file(run_key).exists()
 
+    # -- B-FANOUT-CRASH-RESUME-ORCHESTRATOR-DISPATCH: reserve-before-DISPATCH for the
+    #    ORCHESTRATOR_WORKERS `steps[0]` orchestrator --------------------------------
+    #
+    # The orchestrator (`steps[0]`) is the SEQUENTIAL dispatch that runs FIRST, before
+    # any worker fans out. `record_orchestrator` above is RESERVE-before-COMMIT — it
+    # captures the output AFTER the orchestrator completes, proving it ran. It does NOT
+    # cover the orchestrator's OWN fire→capture window: a crash AFTER the orchestrator
+    # fires its effect but BEFORE `record_orchestrator` leaves no orchestrator record
+    # (and no cardinality marker), so a fresh re-run re-dispatches `steps[0]` → a
+    # potential double-fire on the compliance tier. This marker is the orchestrator
+    # analogue of the per-WORKER reserve-before-dispatch marker above (a SINGLE marker,
+    # not per-index — there is exactly one orchestrator): written + fsynced strictly
+    # BEFORE the orchestrator body dispatches, so within an instrumented run
+    # marker-absent ⟺ the orchestrator's effect did NOT fire. Gated by the same per-run
+    # dispatch-instrumented stamp (the cross-version guard). The orchestrator dispatch
+    # is SYNCHRONOUS (no `ensure_future` / await between the marker write and the
+    # dispatch), so the marker→dispatch sequence has no yield point — no false-positive
+    # marker is possible without the worker path's atomicity dance.
+
+    def record_orchestrator_dispatched(self, run_key: str, step_id: str) -> None:
+        """Mark the ORCHESTRATOR_WORKERS ``steps[0]`` orchestrator as DISPATCHED, durably.
+
+        The reserve-before-DISPATCH marker for the orchestrator: written — fsynced — strictly
+        BEFORE the orchestrator body dispatches, so on any crash a present marker proves the
+        orchestrator's effect MAY have fired and an absent marker proves it did NOT. Its OWN
+        file (``{digest}.branches/orchestrator.dispatched``) — no collision with the
+        ``orchestrator.jsonl`` terminal-capture file (a ``.dispatched`` vs ``.jsonl`` suffix).
+        Idempotent (last-wins; presence is the signal). ``step_id`` is recorded for parity with
+        ``record_orchestrator`` (a future material-diff), never read by the classifier."""
+        record = {"step_id": str(step_id)}
+        line = json.dumps(record, sort_keys=True)
+        self._append_path(self._orchestrator_dispatched_file(run_key), line)
+
+    def orchestrator_dispatched(self, run_key: str) -> bool:
+        """Whether the orchestrator reserve-before-DISPATCH MARKER file exists (any state).
+
+        Presence-only (no readability gate — a torn/unreadable marker still proves dispatch
+        BEGAN, the conservative reading: treat as maybe-ran → fail closed). The resume
+        classifier consults this ONLY for the ORCHESTRATOR_WORKERS / HIERARCHICAL carriers
+        (a PARALLELIZATION peer fan-out never writes it; an orchestrator marker on a
+        PARALLELIZATION resume is a changed-topology mismatch → fail closed)."""
+        return self._orchestrator_dispatched_file(run_key).exists()
+
     # -- B-FANOUT-OUTPUT-REPLAY PR2: terminal POST_JOIN_SYNTHESIS capture -----
     #
     # The synthesis output is the ONE genuine residual the #719 C9 probe named:
@@ -486,6 +529,10 @@ class EngineOutputStore:
     def _dispatch_instrumented_file(self, run_key: str) -> Path:
         """The per-run dispatch-instrumented STAMP file (the cross-version guard)."""
         return self._branches_dir(run_key) / "dispatch-instrumented.marker"
+
+    def _orchestrator_dispatched_file(self, run_key: str) -> Path:
+        """The orchestrator reserve-before-DISPATCH marker file under the run's branches dir."""
+        return self._branches_dir(run_key) / "orchestrator.dispatched"
 
     @staticmethod
     def _branch_index_from_name(name: str) -> int | None:
