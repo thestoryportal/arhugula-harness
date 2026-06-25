@@ -2687,3 +2687,59 @@ def test_crash_resume_orchestrator_lookup_failure_writes_no_marker() -> None:
     # later recovery for this run_key is NOT poisoned into a false maybe-ran fail-closed.
     assert store._orchestrator_dispatched == {}  # no false marker anywhere
     assert store._instrumented == set()  # nor the stamp (it is written with the marker)
+
+
+class _FullChainEffectFenceError(Exception):
+    """Test-local stand-in for the runtime `effect_fence.EffectFenceAmbiguousUncommittedError`
+    (name-matched by the driver; harness-cp cannot import harness-runtime)."""
+
+    def __init__(self, *, idempotency_key: str) -> None:
+        self.idempotency_key = idempotency_key
+        super().__init__("ambiguous")
+
+
+class _CascadeCancelFenceDispatcher:
+    """branch-0 completes (sets a gate); branch-1 waits then raises the fence-ambiguous error.
+    Under cascade-cancel, branch-1's fence-pause halts the fan-out → FAILED; the driver must record
+    branch-1's `completed`/no-output terminal to the durable STORE (not just the buffered ledger)."""
+
+    def __init__(self) -> None:
+        self._gate = threading.Event()
+        self.dispatched: list[str] = []
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        step_id = str(step.step_id)
+        self.dispatched.append(step_id)
+        if int(step.step_payload["index"]) == 0:
+            self._gate.set()
+            return {"branch": 0}
+        assert self._gate.wait(timeout=10.0), "branch-0 never completed"
+        raise _FullChainEffectFenceError(idempotency_key="fence-key")
+
+
+def test_cascade_cancel_fence_paused_branch_terminal_captured_to_store() -> None:
+    """Codex [P2] R1 regression: under CASCADE_CANCEL a fence-paused branch's `completed`/no-output
+    terminal is captured to the durable STORE (not just the buffered ledger), so a crash mid-
+    cascade-cancel reproduces the FAILED on resume instead of mis-classifying the branch as
+    maybe-ran (dispatch marker present, no terminal) + re-dispatching it. Without the store capture
+    branch-1 would carry ONLY its dispatch marker."""
+    store = _InMemoryBranchStore()
+    steps = [_step(f"branch-{i}", i) for i in range(2)]  # DECLARATIVE; the catch is name-matched
+    r = _run(
+        workflow_id="wf-cc-fence-store",
+        topology=TopologyPattern.PARALLELIZATION,
+        steps=steps,
+        dispatcher=_CascadeCancelFenceDispatcher(),
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,  # → cascade-cancel
+    )
+    assert r.status is RunStatus.FAILED
+    assert "parallelization-cascade-cancel" in (r.fail_class or "")
+    records = store.read_branch_records(store.sole_run_key())
+    # The fence-paused branch-1 is recorded `completed`/no-output in the STORE (the Codex fix) — a
+    # terminal record, so a crash-resume recovers it as terminal, NEVER re-dispatches it maybe-ran.
+    assert 1 in records
+    assert records[1][1] == "completed"  # terminal_status
+    assert records[1][2] is None  # output (no output — the effect's ambiguity lives at the fence)
