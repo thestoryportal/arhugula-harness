@@ -706,6 +706,15 @@ class EffectFencePausedBranchResumeState(BaseModel):
     rename/reorder — the same cheap guard `FanOutBranchResumeState` / `PausedChildBranchResumeState`
     apply)."""
 
+    step_kind: str
+    """The branch `WorkflowStep.step_kind` value AT CAPTURE TIME (always `tool-step` in production —
+    only a TOOL_STEP's dispatch reaches the runtime tool fence, the source of the ambiguous-pause).
+    Resume validates the re-supplied branch's `step_kind` against this (the changed-kind guard): if
+    the operator kept the `step_id` but changed the kind away from the captured one, threading the
+    `EffectFenceResolution` would reach NO fence → the original ambiguous tool effect would be
+    silently abandoned. Fail closed — the live-pause analogue of the §2 crash-resume changed-kind
+    guard (out-of-family Codex [P1])."""
+
     idempotency_key: str
     """The held effect-fence reserve's `idempotency_key` (read by name off the runtime
     `EffectFenceAmbiguousUncommittedError`, since harness-cp cannot import harness-runtime), so

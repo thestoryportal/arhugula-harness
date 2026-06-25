@@ -5506,6 +5506,20 @@ def _execute_parallelization(
                         f"step_id={ef.step_id!r}, resume step_id="
                         f"{str(steps[ef.branch_index].step_id)!r}"
                     )
+                # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE — the resumed branch's kind MUST match the
+                # CAPTURED kind (always `tool-step` in production — only a TOOL_STEP's dispatch
+                # reaches the runtime tool fence, the source of the ambiguous-pause). If the
+                # operator kept the step_id but changed the kind, threading the
+                # `EffectFenceResolution` would reach NO fence → the original ambiguous tool effect
+                # silently abandoned. Fail closed — the live-pause analogue of the §2 crash-resume
+                # changed-kind guard (out-of-family Codex [P1] R2).
+                if str(steps[ef.branch_index].step_kind.value) != ef.step_kind:
+                    return (
+                        f"effect-fence-paused-kind-changed at {ef.branch_index}: snapshot kind="
+                        f"{ef.step_kind!r}, resume kind="
+                        f"{str(steps[ef.branch_index].step_kind.value)!r} — the resolution would "
+                        "not reach the fence (only the captured-kind dispatch does)"
+                    )
             return None
 
         _mismatch = _resume_body_mismatch()
@@ -6320,6 +6334,7 @@ def _execute_parallelization(
                 EffectFencePausedBranchResumeState(
                     branch_index=_bi,
                     step_id=str(steps[_bi].step_id),
+                    step_kind=str(steps[_bi].step_kind.value),
                     idempotency_key=_fence_key,
                 )
                 for _bi, _fence_key in sorted(effect_fence_paused_dispositions.items())
@@ -7423,6 +7438,18 @@ def _execute_orchestrator_workers(
                         f"effect-fence-paused-identity-mismatch at {ef.branch_index}: snapshot "
                         f"step_id={ef.step_id!r}, resume step_id="
                         f"{str(worker_steps[ef.branch_index].step_id)!r}"
+                    )
+                # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE — the resumed worker's kind MUST match the
+                # CAPTURED kind (always `tool-step` in production — the fence source); a
+                # kept-step_id-but-changed-kind resume would thread the resolution into a dispatcher
+                # that never reaches the fence → fail closed (the live-pause analogue of the §2
+                # changed-kind guard; Codex [P1] R2).
+                if str(worker_steps[ef.branch_index].step_kind.value) != ef.step_kind:
+                    return (
+                        f"effect-fence-paused-kind-changed at {ef.branch_index}: snapshot kind="
+                        f"{ef.step_kind!r}, resume kind="
+                        f"{str(worker_steps[ef.branch_index].step_kind.value)!r} — the resolution "
+                        "would not reach the fence (only the captured-kind dispatch does)"
                     )
             return None
 
@@ -8542,6 +8569,7 @@ def _execute_orchestrator_workers(
                 EffectFencePausedBranchResumeState(
                     branch_index=_bi,
                     step_id=str(worker_steps[_bi].step_id),
+                    step_kind=str(worker_steps[_bi].step_kind.value),
                     idempotency_key=_fence_key,
                 )
                 for _bi, _fence_key in sorted(effect_fence_paused_dispositions.items())

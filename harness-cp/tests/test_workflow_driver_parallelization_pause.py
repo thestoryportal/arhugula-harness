@@ -1269,7 +1269,10 @@ def test_peer_branch_effect_fence_ambiguous_composes_through_barrier_to_pause() 
     efp = pr.effect_fence_paused_branches
     assert len(efp) == 1
     assert efp[0] == EffectFencePausedBranchResumeState(
-        branch_index=1, step_id="branch-1", idempotency_key="fence-key-branch-1"
+        branch_index=1,
+        step_id="branch-1",
+        step_kind="declarative-step",
+        idempotency_key="fence-key-branch-1",
     )
     # The snapshot is hash-valid (the carrier rides the snapshot hash, dropped-when-empty).
     restored = PauseSnapshot.model_validate(snap.model_dump(mode="json"))
@@ -1368,3 +1371,41 @@ def test_peer_branch_effect_fence_resume_abort_is_terminal_failed_not_repause() 
     assert "parallelization-effect-fence-aborted" in (result.fail_class or "")
     assert result.pause_snapshot is None  # terminal — NOT a re-pause
     assert "branch-1" in rec.dispatched  # the aborted branch DID re-dispatch
+
+
+def test_peer_branch_effect_fence_resume_changed_kind_fails_closed() -> None:
+    """Codex [P1] R2 regression: an effect-fence-paused peer captured at one kind, then re-supplied
+    at the SAME step_id but a CHANGED step_kind on resume, FAILS CLOSED — threading the resolution
+    into a different-kind dispatcher would not reach the tool fence (the original effect would be
+    silently abandoned). The live-pause analogue of the crash-resume changed-kind guard."""
+    paused = _run(
+        steps=_steps(2),
+        dispatcher=_FenceAmbiguousBranchDispatcher(),
+        ctx=cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())),
+    )
+    snap = paused.pause_snapshot
+    assert snap is not None and snap.peer_fan_out_resume is not None
+
+    # Resume with branch-1 CHANGED from declarative-step → inference-step (same step_id).
+    changed = [
+        WorkflowStep(
+            step_id=StepID("branch-0"),
+            step_kind=StepKind.DECLARATIVE_STEP,
+            step_payload={"index": 0},
+        ),
+        WorkflowStep(
+            step_id=StepID("branch-1"), step_kind=StepKind.INFERENCE_STEP, step_payload={"index": 1}
+        ),
+    ]
+    holder = _HolderWithResolution(EffectFenceResolution.SKIP_AS_FIRED)
+    ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    ctx_obj.resume_context_holder = holder  # type: ignore[attr-defined]
+    result = _run(
+        steps=changed,
+        dispatcher=_ResumeRecordingDispatcher(),
+        ctx=cast(DriverContext, ctx_obj),
+        pause_snapshot_input=snap,
+    )
+
+    assert result.status is RunStatus.FAILED
+    assert "effect-fence-paused-kind-changed" in (result.fail_class or "")
