@@ -5900,6 +5900,21 @@ def _execute_parallelization(
 
     deadline = _DEFAULT_FANOUT_BARRIER_DEADLINE_SECONDS
 
+    # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE — an effect-fence pause is a STRICT-TIER construct (only
+    # PAUSE / CASCADE_CANCEL compose the ambiguous-pause through the barrier). Resuming one under a
+    # manifest/persona that now resolves to PROCEED is incoherent: the PROCEED `_proceed_branch`
+    # path has no pause/resolution handling, so the re-entered branch's `EffectFenceAbortedError`
+    # (or a missing-resolution ambiguous error) would be caught as an ordinary failure → PARTIAL,
+    # silently dropping the operator's ABORT / the at-most-once re-pause. Fail closed — the resume
+    # requires a strict tier (out-of-family Codex [P2] R3; the tier-change material-diff is allowed
+    # otherwise, so this guard is the load-bearing strict-tier requirement).
+    if _recovered_effect_fence_paused and cascade_policy is CascadePolicy.PROCEED:
+        return _finish(
+            RunStatus.FAILED,
+            fail_class="parallelization-effect-fence-resume-requires-strict-tier",
+            salvage=False,
+        )
+
     # === proceed: branches run to completion → SUCCESS | PARTIAL (degraded) ===
     if cascade_policy is CascadePolicy.PROCEED:
 
@@ -8042,6 +8057,18 @@ def _execute_orchestrator_workers(
         ), steps_executed
 
     deadline = _DEFAULT_FANOUT_BARRIER_DEADLINE_SECONDS
+
+    # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE — resuming an effect-fence pause (a STRICT-TIER construct)
+    # under a manifest/persona that now resolves to PROCEED is incoherent (the PROCEED path has no
+    # pause/resolution handling → a re-entered worker's ABORT / missing-resolution ambiguous error
+    # would degrade to PARTIAL, dropping the operator's decision). Fail closed — the resume requires
+    # a strict tier (out-of-family Codex [P2] R3; the parallelization analogue).
+    if _recovered_effect_fence_paused and cascade_policy is CascadePolicy.PROCEED:
+        return _finish(
+            RunStatus.FAILED,
+            fail_class="orchestrator-workers-effect-fence-resume-requires-strict-tier",
+            salvage=False,
+        )
 
     # === proceed: siblings run to completion → SUCCESS | PARTIAL (degraded) ===
     if cascade_policy is CascadePolicy.PROCEED:

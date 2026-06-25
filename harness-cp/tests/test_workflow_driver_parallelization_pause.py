@@ -91,11 +91,13 @@ _PAUSE_TIER = PersonaTier.TEAM_BINDING  # → cascade_policy = pause
 _ANCHOR = "0" * 64  # constant MVP pause-context anchor (no material diff on resume)
 
 
-def _manifest(workflow_id: str = "wf-pp") -> WorkflowManifestEntry:
+def _manifest(
+    workflow_id: str = "wf-pp", persona_tier: PersonaTier = _PAUSE_TIER
+) -> WorkflowManifestEntry:
     return WorkflowManifestEntry(
         workflow_id=workflow_id,
         workload_class=WorkloadClass.PIPELINE_AUTOMATION,
-        persona_tier=_PAUSE_TIER,
+        persona_tier=persona_tier,
         engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
         topology_pattern=TopologyPattern.PARALLELIZATION,
         layer_budgets=(),
@@ -298,9 +300,10 @@ def _run(
     ctx: DriverContext,
     pause_snapshot_input: PauseSnapshot | None = None,
     workflow_id: str = "wf-pp",
+    persona_tier: PersonaTier = _PAUSE_TIER,
 ) -> Any:
     return execute_workflow(
-        _manifest(workflow_id),
+        _manifest(workflow_id, persona_tier),
         steps,
         run_id="run-1",
         ctx=ctx,
@@ -1409,3 +1412,33 @@ def test_peer_branch_effect_fence_resume_changed_kind_fails_closed() -> None:
 
     assert result.status is RunStatus.FAILED
     assert "effect-fence-paused-kind-changed" in (result.fail_class or "")
+
+
+def test_peer_effect_fence_resume_under_proceed_tier_fails_closed() -> None:
+    """Codex [P2] R3 regression: an effect-fence pause captured under a strict (pause) tier, then
+    RESUMED under a manifest/persona that now resolves to CascadePolicy.PROCEED, FAILS CLOSED — the
+    PROCEED path has no pause/resolution handling, so honoring the resume there would degrade the
+    operator's ABORT / the at-most-once re-pause to a silent PARTIAL. The fence resume requires a
+    strict tier."""
+    paused = _run(
+        steps=_steps(2),
+        dispatcher=_FenceAmbiguousBranchDispatcher(),
+        ctx=cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())),
+    )
+    snap = paused.pause_snapshot
+    assert snap is not None and snap.peer_fan_out_resume is not None
+
+    holder = _HolderWithResolution(EffectFenceResolution.SKIP_AS_FIRED)
+    ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    ctx_obj.resume_context_holder = holder  # type: ignore[attr-defined]
+    result = _run(
+        steps=_steps(2),
+        dispatcher=_ResumeRecordingDispatcher(),
+        ctx=cast(DriverContext, ctx_obj),
+        pause_snapshot_input=snap,
+        persona_tier=PersonaTier.SOLO_DEVELOPER,  # → CascadePolicy.PROCEED
+    )
+
+    assert result.status is RunStatus.FAILED
+    assert "effect-fence-resume-requires-strict-tier" in (result.fail_class or "")
+    assert result.pause_snapshot is None  # NOT a silent PARTIAL
