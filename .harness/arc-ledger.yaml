@@ -46,13 +46,15 @@
 snapshot:
   frozen_total: 11
   frozen_done: 11
-  standalone_closed: 46
+  standalone_closed: 47
   standalone_gated: 0
   standalone_resolved: 4
   standalone_registered: 6
   source: ".harness/beyond-mvp-capability-boundary-ledger.md"
-  # FRONTIER NOTE (2026-06-25, B-FANOUT-CRASH-RESUME-MAYBE-RAN-EFFECT-BEARING closed as the
-  # TOOL_STEP slice). The frozen 11-arc order is COMPLETE; the standalone B-* register is
+  # FRONTIER NOTE (2026-06-25, B-FANOUT-EFFECT-FENCE-PER-BRANCH-RESOLUTION closed as the
+  # per-branch-DISTINCT resolution map; net-zero — closes 1 + registers 1 [the ABORT-scoping
+  # residual B-FANOUT-EFFECT-FENCE-PER-BRANCH-SCOPED-ABORT] → standalone_registered stays 6).
+  # The frozen 11-arc order is COMPLETE; the standalone B-* register is
   # the live frontier. The fan-out crash-resume capability family is being built out under
   # FULL-SPEC. CLOSED so far:
   # B-FANOUT-OUTPUT-REPLAY (PR1 #723 + PR2 #724) + B-FANOUT-CRASH-RESUME-CASCADE-POLICY (#726)
@@ -78,9 +80,10 @@ snapshot:
   #       fenced only at the CHILD's tool sinks → recursive child crash-resume, a larger mechanism)
   #   • B-FANOUT-CRASH-RESUME-MAYBE-RAN-UNFENCED-EXTERNAL (NEW — the maybe-ran MANAGED_AGENTS worker;
   #       UNFENCED vendor-session sink → needs the C-RT-31 fence EXTENDED to the managed-agents sink)
-  #   • B-FANOUT-EFFECT-FENCE-PER-BRANCH-RESOLUTION (NEW — one EffectFenceResolution type applies
-  #       across ALL fence-paused branches today; per-branch-distinct needs a key→resolution map on
-  #       ResumeContext, a new C-CP-26 §26.8 contract surface)
+  #   • B-FANOUT-EFFECT-FENCE-PER-BRANCH-SCOPED-ABORT (NEW, from the per-branch-resolution build —
+  #       per-branch-DISTINCT resolution lands for SKIP/RE_FIRE, but ABORT stays run-level-terminal
+  #       [v1.65 §1(b)]; per-branch-SCOPED abort [fail one branch, let siblings resolve] is a NEW
+  #       disposition semantic → registered, operator-gated-decided-at-open)
   #   • B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-EFFECT-BEARING (the ORCHESTRATOR analogue of the
   #       worker effect-bearing arc: an effect-bearing orchestrator maybe-ran routed to a §26.2 pause;
   #       needs a NEW resume→orchestrator application site the linear effect-fence resume cannot reach)
@@ -639,13 +642,31 @@ arcs:
   - id: B-FANOUT-EFFECT-FENCE-PER-BRANCH-RESOLUTION
     title: "Per-branch-DISTINCT effect-fence resolution (a key→resolution map on ResumeContext)"
     kind: standalone
+    status: closed
+    decompose_at_open: true
+    owner_axis: "CP"  # CP-only — additive ResumeContext field + per-key resolver at the two fan-out consume sites; reuses the existing EffectFenceResolutionDirective + the runtime §14.22 fence-gate consumption verbatim (no runtime delta).
+    operator_gated: false  # additive contract surface (a new optional ResumeContext field) — no committed-invariant sacrifice → no operator gate.
+    parent_arc: B-FANOUT-CRASH-RESUME-MAYBE-RAN-EFFECT-BEARING
+    pr: "#<pending> (feat/r-fs-1-fanout-effect-fence-per-branch-resolution — flips registered → closed as the per-branch-DISTINCT resolution map; registers ONE narrower follow-on B-FANOUT-EFFECT-FENCE-PER-BRANCH-SCOPED-ABORT → standalone_registered 6 → 6, net-zero)"
+    spec_delta: "bundled-absorption CP v1.65 → v1.66 (§1 the additive ResumeContext.effect_fence_resolutions map + the effect_fence_resolution_for resolver + the fan-out-only per-key consume + the LINEAR-exclusion rationale + the ABORT-run-level interaction; §2 the decompose-at-open determination + the registered SCOPED-ABORT follow-on) + 1 clearance marker. CP-ONLY — NO runtime delta (the #738/#742 shape): reuses the v1.51/v1.52 EffectFenceResolutionDirective threading + the runtime §14.22 fence-gate consumption verbatim. NO contract removal / closed-enum / committed-invariant / new fail-class change; at-most-once PRESERVED (per-branch key-bind unchanged, ABORT stays run-level-terminal, absent resolution re-pauses INERT)."
+    gives: "The operator can resolve TWO (or more) effect-fence-paused branches DIFFERENTLY in one resume. v1.65 threaded ONE EffectFenceResolution TYPE across ALL fence-paused branches in a barrier (key-bound per branch, but the same RE_FIRE/SKIP_AS_FIRED/ABORT for all); this adds an additive ResumeContext.effect_fence_resolutions: dict[idempotency_key, EffectFenceResolution] map + a pure effect_fence_resolution_for(key) resolver (map entry if present, else the uniform single effect_fence_resolution default, else None → INERT re-pause). The two fan-out resume sites (_execute_parallelization + _execute_orchestrator_workers) call the resolver per fence-paused branch → branch-0 SKIP_AS_FIRED + branch-1 RE_FIRE in one resume. The single field is PRESERVED as the uniform default (default + per-key override, NOT a replacement — the spec's v1.65 §3 registered language said 'a NEW contract surface', and v1.65 §52 listed the single field among PRESERVED machinery; additive wins on backward-compat + linear ergonomics + fidelity). LINEAR path excluded (one held-reserve key → DISTINCT inapplicable; its single-field consume preserved verbatim). Partial-map iterative: a map answering some branches leaves the rest re-paused INERT carrying their residual → resolve a multi-branch pause across resumes. Decorrelated: advisor full-transcript (confirmed additive-over-replace; surfaced the ABORT-is-terminal × per-branch interaction → the registered scoped-abort split → net-zero; directed the partial-map iterative witness; lean fan-out-only) + the operator-boundary grounding (api.resume constructs ResumeContext directly → no loader/CLI residual, the #738 trap absent) + out-of-family Codex on the diff."
+    as_built:
+      - "harness-cp/src/harness_cp/pause_resume_protocol_types.py (ResumeContext.effect_fence_resolutions additive field + the effect_fence_resolution_for(idempotency_key) resolver method; the single effect_fence_resolution field PRESERVED as the uniform default)"
+      - "harness-cp/src/harness_cp/workflow_driver.py (the per-key resolver call replacing the single peeked resolution at both the _execute_parallelization + _execute_orchestrator_workers fence-paused-branch construction sites; the LINEAR _execute_workflow_body consume UNCHANGED; the now-unused EffectFenceResolution import dropped)"
+      - "design-substrate/Spec_Control_Plane_v1_66.md + 1 clearance marker (CP-only, no runtime delta)"
+      - "tests: harness-cp test_workflow_driver_fanout_pause.py (ORCHESTRATOR_WORKERS per-branch-distinct + map-overrides-uniform + partial-map-iterative + no-map-uniform-default real-fence witnesses) + test_workflow_driver_parallelization_pause.py (PARALLELIZATION per-branch-distinct real-fence witness) + test_pause_resume_protocol_types.py (the effect_fence_resolution_for resolver unit tests + ResumeContext round-trip + the §26.8 field-shape gate updated additively)"
+    ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
+
+  - id: B-FANOUT-EFFECT-FENCE-PER-BRANCH-SCOPED-ABORT
+    title: "Per-branch-SCOPED effect-fence abort (fail one branch, let siblings resolve)"
+    kind: standalone
     status: registered
     decompose_at_open: true
-    owner_axis: "CP + runtime"
-    operator_gated: false  # additive contract surface (a new ResumeContext field) — no committed-invariant sacrifice → no operator gate.
-    parent_arc: B-FANOUT-CRASH-RESUME-MAYBE-RAN-EFFECT-BEARING
-    anticipated_scope: "The B-FANOUT-CRASH-RESUME-MAYBE-RAN-EFFECT-BEARING TOOL_STEP slice applies ONE EffectFenceResolution TYPE across ALL effect-fence-paused branches in a single pause (key-bound per branch to each branch's reserve, but the SAME RE_FIRE / SKIP_AS_FIRED / ABORT for all). Resolving two fence-paused branches DIFFERENTLY in one resume (e.g. branch-1 RE_FIRE + branch-2 ABORT) needs a `idempotency_key → EffectFenceResolution` MAP on ResumeContext (a new contract surface on C-CP-26 §26.8, replacing the single effect_fence_resolution field) + the driver lookup keyed per branch + the runtime/CLI surface to author a per-branch resolution set. A genuine capability the harness lacks today (multiple branches can fence-pause in one barrier, but the operator can only answer them uniformly)."
-    why: "Surfaced during the B-FANOUT-CRASH-RESUME-MAYBE-RAN-EFFECT-BEARING build (advisor flagged the one-resolution-type limitation): a fan-out barrier can pause MULTIPLE branches on the fence at once, but the resume threads ONE resolution type across all — a genuine capability gap, named per FULL-SPEC rather than left as a silent code-comment limitation (`[[spine-ledger-forward-arc-registration]]`)."
+    owner_axis: "CP"
+    operator_gated: false  # provisional — decided at open: it MAY sacrifice the committed ABORT-is-run-terminal semantic (v1.65 §1(b)), in which case it becomes operator-gated. Registered as additive for now.
+    parent_arc: B-FANOUT-EFFECT-FENCE-PER-BRANCH-RESOLUTION
+    anticipated_scope: "Today an EffectFenceResolution of ABORT (in the single effect_fence_resolution field OR a per-branch effect_fence_resolutions map entry) forces the WHOLE run terminal FAILED tier-agnostically (v1.65 §1(b), preserved by the per-branch-resolution build). A genuinely-distinct capability is to abort just ONE fence-paused branch (record it failed/degraded) while the SIBLING branches the operator CAN vouch for resolve (SKIP_AS_FIRED / RE_FIRE) and the run folds survivors per cascade_policy. This is a NEW disposition semantic — a per-branch failure-isolation beyond the shipped run-terminal ABORT — likely a new EffectFenceResolution value (e.g. ABORT_BRANCH) or a per-branch abort-scope flag + the cascade reaction. Whether it sacrifices the committed ABORT-is-run-terminal semantic is decided at open (→ may flip operator_gated)."
+    why: "Surfaced during the B-FANOUT-EFFECT-FENCE-PER-BRANCH-RESOLUTION build (advisor flagged the ABORT-is-terminal × per-branch-distinct interaction): per-branch-DISTINCT resolution lands fully for SKIP/RE_FIRE, but ABORT dominates to run-terminal, so per-branch-SCOPED abort is a genuinely separate capability — named per FULL-SPEC (`[[feedback-full-spec-beyond-mvp-nothing-deferred]]` + `[[spec-leg-split-on-ratification-boundary]]`) rather than silently absorbed."
     ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
 
   - id: B-FANOUT-CRASH-RESUME-ORCHESTRATOR-DISPATCH

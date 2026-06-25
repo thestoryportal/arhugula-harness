@@ -1442,3 +1442,143 @@ def test_peer_effect_fence_resume_under_proceed_tier_fails_closed() -> None:
     assert result.status is RunStatus.FAILED
     assert "effect-fence-resume-requires-strict-tier" in (result.fail_class or "")
     assert result.pause_snapshot is None  # NOT a silent PARTIAL
+
+
+# ---------------------------------------------------------------------------
+# B-FANOUT-EFFECT-FENCE-PER-BRANCH-RESOLUTION (PARALLELIZATION) — two peers fence-pause in
+# one barrier; resume resolves them DIFFERENTLY via the `effect_fence_resolutions` per-key map.
+# The symmetric witness of the ORCHESTRATOR_WORKERS case (same shared resolver, peer site).
+# ---------------------------------------------------------------------------
+
+
+class _TwoFenceAmbiguousBranchDispatcher:
+    """Both peers raise the effect-fence ambiguous error with DISTINCT keys, synchronized on a
+    barrier so BOTH are in-flight before either raises → TWO `effect_fence_paused_branches` in
+    one pause (the per-branch-distinct precondition)."""
+
+    def __init__(self) -> None:
+        self._barrier = threading.Barrier(2, timeout=10.0)
+        self.dispatched: list[str] = []
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        step_id = str(step.step_id)
+        self.dispatched.append(step_id)
+        self._barrier.wait()
+        raise EffectFenceAmbiguousUncommittedError(idempotency_key=f"fence-key-{step_id}")
+
+
+class _HolderWithResolutions:
+    """Stand-in holder whose `peek()` returns a ResumeContext carrying a per-key
+    `effect_fence_resolutions` map (B-FANOUT-EFFECT-FENCE-PER-BRANCH-RESOLUTION)."""
+
+    def __init__(self, resolutions: dict[str, EffectFenceResolution]) -> None:
+        self._rc = ResumeContext(effect_fence_resolutions=resolutions)
+        self.peeked = 0
+
+    def peek(self) -> ResumeContext:
+        self.peeked += 1
+        return self._rc
+
+
+def test_peer_per_branch_distinct_resolutions() -> None:
+    """REAL-FENCE WITNESS (PARALLELIZATION, per-branch-DISTINCT): two peers fence-pause in one
+    barrier; resume resolves branch-0 SKIP_AS_FIRED + branch-1 RE_FIRE via the per-key
+    `effect_fence_resolutions` map — each peer re-dispatched through the REAL
+    `_execute_parallelization` with ITS OWN key-bound resolution."""
+    paused = _run(
+        steps=_steps(2),
+        dispatcher=_TwoFenceAmbiguousBranchDispatcher(),
+        ctx=cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())),
+    )
+    assert paused.status is RunStatus.PAUSED
+    snap = paused.pause_snapshot
+    assert snap is not None and snap.peer_fan_out_resume is not None
+    efp = snap.peer_fan_out_resume.effect_fence_paused_branches
+    assert len(efp) == 2
+    key_by_index = {b.branch_index: b.idempotency_key for b in efp}
+
+    holder = _HolderWithResolutions(
+        {
+            key_by_index[0]: EffectFenceResolution.SKIP_AS_FIRED,
+            key_by_index[1]: EffectFenceResolution.RE_FIRE,
+        }
+    )
+    rec = _ResumeRecordingDispatcher()
+    ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    ctx_obj.resume_context_holder = holder  # type: ignore[attr-defined]
+    result = _run(
+        steps=_steps(2),
+        dispatcher=rec,
+        ctx=cast(DriverContext, ctx_obj),
+        pause_snapshot_input=snap,
+    )
+
+    assert result.status is RunStatus.SUCCESS
+    b0 = rec.seen_resolution["branch-0"]
+    b1 = rec.seen_resolution["branch-1"]
+    assert b0 is not None and b0.resolution is EffectFenceResolution.SKIP_AS_FIRED
+    assert b0.idempotency_key == key_by_index[0]
+    assert b1 is not None and b1.resolution is EffectFenceResolution.RE_FIRE
+    assert b1.idempotency_key == key_by_index[1]
+
+
+class _PeerAbortGuardDispatcher:
+    """Resume-side abort-guard witness (PARALLELIZATION): an ABORT directive raises
+    EffectFenceAbortedError; a RE_FIRE / SKIP directive FIRES (records in `fired`); a None directive
+    (a suppressed sibling) RE-RAISES the ambiguous fence (re-pause, no fire)."""
+
+    def __init__(self) -> None:
+        self.dispatched: list[str] = []
+        self.fired: list[str] = []
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        step_id = str(step.step_id)
+        self.dispatched.append(step_id)
+        directive = getattr(step_context, "effect_fence_resolution", None)
+        if directive is None:
+            raise EffectFenceAmbiguousUncommittedError(idempotency_key=f"fence-key-{step_id}")
+        if directive.resolution is EffectFenceResolution.ABORT:
+            raise EffectFenceAbortedError(f"operator aborted {step_id}")
+        self.fired.append(step_id)
+        return {"role": step_id, "echoed": dict(step.step_payload)}
+
+
+def test_peer_mixed_abort_map_suppresses_sibling_refire() -> None:
+    """Codex [P1] (PARALLELIZATION): a mixed map {branch-0: ABORT, branch-1: RE_FIRE} must NOT fire
+    the RE_FIRE sibling before the ABORT fails the run — ABORT stays run-level-terminal. The RE_FIRE
+    sibling's directive is SUPPRESSED (re-pauses INERT, no fire); the run FAILs."""
+    paused = _run(
+        steps=_steps(2),
+        dispatcher=_TwoFenceAmbiguousBranchDispatcher(),
+        ctx=cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())),
+    )
+    snap = paused.pause_snapshot
+    assert snap is not None and snap.peer_fan_out_resume is not None
+    key_by_index = {
+        b.branch_index: b.idempotency_key
+        for b in snap.peer_fan_out_resume.effect_fence_paused_branches
+    }
+    holder = _HolderWithResolutions(
+        {
+            key_by_index[0]: EffectFenceResolution.ABORT,
+            key_by_index[1]: EffectFenceResolution.RE_FIRE,
+        }
+    )
+    rec = _PeerAbortGuardDispatcher()
+    ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    ctx_obj.resume_context_holder = holder  # type: ignore[attr-defined]
+    result = _run(
+        steps=_steps(2),
+        dispatcher=rec,
+        ctx=cast(DriverContext, ctx_obj),
+        pause_snapshot_input=snap,
+    )
+
+    assert result.status is RunStatus.FAILED
+    assert "parallelization-effect-fence-aborted" in (result.fail_class or "")
+    assert result.pause_snapshot is None
+    assert "branch-1" not in rec.fired  # the RE_FIRE sibling was SUPPRESSED — did NOT fire

@@ -316,12 +316,77 @@ def test_resume_context_field_shape() -> None:
     """ResumeContext fields are the deliberately-amended set per §26.8.
 
     The v1.16 single-field shape (`hitl_response`) was extended at v1.52
-    (B-EFFECT-FENCE-PAUSE-RESOLUTION, §26.8) with `effect_fence_resolution` — a
-    DELIBERATE spec amendment, not a silent absorption (the §26.8.1 change-note
-    anticipated extension). This gate locks the amended set so the NEXT extension
-    is likewise deliberate.
+    (B-EFFECT-FENCE-PAUSE-RESOLUTION, §26.8) with `effect_fence_resolution`, and at
+    v1.66 (B-FANOUT-EFFECT-FENCE-PER-BRANCH-RESOLUTION) with `effect_fence_resolutions`
+    (the per-key map) — each a DELIBERATE spec amendment, not a silent absorption (the
+    §26.8.1 change-note anticipated extension). This gate locks the amended set so the
+    NEXT extension is likewise deliberate.
     """
     from harness_cp.pause_resume_protocol import ResumeContext  # noqa: F401
     from harness_cp.pause_resume_protocol_types import ResumeContext as _RC
 
-    assert set(_RC.model_fields.keys()) == {"hitl_response", "effect_fence_resolution"}
+    assert set(_RC.model_fields.keys()) == {
+        "hitl_response",
+        "effect_fence_resolution",
+        "effect_fence_resolutions",
+    }
+
+
+# --- §26.8 per-branch effect-fence resolution map (B-FANOUT-EFFECT-FENCE-PER-BRANCH-RESOLUTION) ---
+
+
+def test_resume_context_effect_fence_resolutions_defaults_none() -> None:
+    """The per-key map defaults to None → `effect_fence_resolution_for` falls through to the
+    single uniform field (the v1.65 byte-identical behavior)."""
+    from harness_cp.pause_resume_protocol_types import (
+        EffectFenceResolution,
+        ResumeContext,
+    )
+
+    rc = ResumeContext(effect_fence_resolution=EffectFenceResolution.RE_FIRE)
+    assert rc.effect_fence_resolutions is None
+    assert rc.effect_fence_resolution_for("any-key") is EffectFenceResolution.RE_FIRE
+
+
+def test_effect_fence_resolution_for_map_hit_overrides_single() -> None:
+    """A map entry for the key OVERRIDES the uniform single field; an absent key falls back to it."""
+    from harness_cp.pause_resume_protocol_types import (
+        EffectFenceResolution,
+        ResumeContext,
+    )
+
+    rc = ResumeContext(
+        effect_fence_resolution=EffectFenceResolution.RE_FIRE,
+        effect_fence_resolutions={"k0": EffectFenceResolution.SKIP_AS_FIRED},
+    )
+    assert rc.effect_fence_resolution_for("k0") is EffectFenceResolution.SKIP_AS_FIRED  # map wins
+    assert rc.effect_fence_resolution_for("k1") is EffectFenceResolution.RE_FIRE  # fallback
+
+
+def test_effect_fence_resolution_for_both_none_is_none() -> None:
+    """Neither a map entry NOR a single field → None (the branch re-pauses INERT, decline-mirror)."""
+    from harness_cp.pause_resume_protocol_types import (
+        EffectFenceResolution,
+        ResumeContext,
+    )
+
+    rc = ResumeContext(effect_fence_resolutions={"k0": EffectFenceResolution.ABORT})
+    assert rc.effect_fence_resolution_for("k0") is EffectFenceResolution.ABORT
+    assert rc.effect_fence_resolution_for("absent") is None  # no map entry, no single default
+
+
+def test_resume_context_effect_fence_resolutions_round_trips() -> None:
+    """The map field survives model_dump/model_validate (operator-supplied at api.resume)."""
+    from harness_cp.pause_resume_protocol_types import (
+        EffectFenceResolution,
+        ResumeContext,
+    )
+
+    rc = ResumeContext(
+        effect_fence_resolutions={
+            "k0": EffectFenceResolution.SKIP_AS_FIRED,
+            "k1": EffectFenceResolution.RE_FIRE,
+        }
+    )
+    restored = ResumeContext.model_validate(rc.model_dump(mode="json"))
+    assert restored == rc

@@ -5432,20 +5432,34 @@ def _execute_parallelization(
         if _peer_resume is not None
         else {}
     )
-    # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE — PEEK (NOT consume — the HITL composer one-shot intact)
-    # the operator's single `EffectFenceResolution` off the resume context holder; one resolution
-    # TYPE applies across ALL fence-paused peers (key-bound per branch below). A per-branch-DISTINCT
-    # resolution needs a key->resolution MAP on `ResumeContext` (a registered follow-on). None when
-    # no holder / no resolution → every paused peer re-pauses INERT (the #701 decline-mirror).
-    _effect_fence_resolution: EffectFenceResolution | None = None
+    # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE / B-FANOUT-EFFECT-FENCE-PER-BRANCH-RESOLUTION — PEEK
+    # (NOT consume — the HITL composer one-shot intact) the operator's resume context off the
+    # holder. Per paused peer below, `effect_fence_resolution_for(branch_key)` returns that
+    # branch's `effect_fence_resolutions` map entry if supplied, else the uniform
+    # `effect_fence_resolution` default — so two paused peers can resolve DIFFERENTLY in one
+    # resume (SKIP_AS_FIRED vs RE_FIRE; ABORT keeps its run-level-terminal semantic). None holder /
+    # no resolution for a branch's key → that paused peer re-pauses INERT (the #701 decline-mirror).
+    _ef_resume_ctx: ResumeContext | None = None
     if _recovered_effect_fence_paused:
         _ef_holder = cast(
             "_ResumeContextHolderLike | None",
             getattr(ctx, "resume_context_holder", None),
         )
         _ef_resume_ctx = _ef_holder.peek() if _ef_holder is not None else None
-        if _ef_resume_ctx is not None:
-            _effect_fence_resolution = _ef_resume_ctx.effect_fence_resolution
+
+    # B-FANOUT-EFFECT-FENCE-PER-BRANCH-RESOLUTION — run-level ABORT guard (out-of-family Codex
+    # [P1]). ABORT stays a RUN-LEVEL terminal decision (v1.65 §1(b)) even per-branch: if the
+    # operator ABORTs ANY fence-paused peer, the run WILL fail, so NO sibling continue-resolution
+    # (SKIP/RE_FIRE) may FIRE first — a RE_FIRE sibling would otherwise clear+re-fire its effect
+    # concurrently in the TaskGroup before the ABORT branch fails the run. When any resolution is
+    # ABORT we suppress the non-ABORT siblings' directives below (they re-pause INERT, never fire);
+    # the ABORT branch keeps its directive → re-dispatch → EffectFenceAbortedError → terminal
+    # FAILED. Per-branch-SCOPED abort (fire survivors anyway) is the registered follow-on
+    # B-FANOUT-EFFECT-FENCE-PER-BRANCH-SCOPED-ABORT.
+    _any_fence_abort = _ef_resume_ctx is not None and any(
+        _ef_resume_ctx.effect_fence_resolution_for(_k) is EffectFenceResolution.ABORT
+        for _k in _recovered_effect_fence_paused.values()
+    )
 
     # Empty step sequence → trivially SUCCESS with an empty aggregate (no
     # fan-out; mirrors the linear path's empty-loop SUCCESS).
@@ -5598,13 +5612,26 @@ def _execute_parallelization(
         # analogue of the ORCHESTRATOR_WORKERS threading). Built ONLY when this ordinal was
         # fence-paused AND the captured key is non-empty AND a resolution was supplied; else None
         # → the fence re-pauses INERT. None for every non-fence peer → byte-identical context.
+        # B-FANOUT-EFFECT-FENCE-PER-BRANCH-RESOLUTION — resolve THIS peer's fence key against the
+        # operator's resume context: its per-key `effect_fence_resolutions` entry if supplied, else
+        # the uniform `effect_fence_resolution` default (so two paused peers can resolve DIFFERENTLY
+        # in one resume). None → re-pause INERT (the decline-mirror). Run-level ABORT guard: if ANY
+        # paused peer resolves to ABORT, suppress this NON-ABORT peer's continue-resolution so it
+        # re-pauses INERT (never fires) before the ABORT fails the run (Codex [P1]).
         _branch_fence_key = _recovered_effect_fence_paused.get(branch_index)
+        _branch_resolution = (
+            _ef_resume_ctx.effect_fence_resolution_for(_branch_fence_key)
+            if (_branch_fence_key and _ef_resume_ctx is not None)
+            else None
+        )
+        if _any_fence_abort and _branch_resolution is not EffectFenceResolution.ABORT:
+            _branch_resolution = None
         _branch_effect_fence_directive = (
             EffectFenceResolutionDirective(
-                resolution=_effect_fence_resolution,
+                resolution=_branch_resolution,
                 idempotency_key=_branch_fence_key,
             )
-            if (_branch_fence_key and _effect_fence_resolution is not None)
+            if (_branch_fence_key and _branch_resolution is not None)
             else None
         )
         child = compose_branch_child_context(
@@ -7339,22 +7366,32 @@ def _execute_orchestrator_workers(
         if _fan_out_resume is not None
         else {}
     )
-    # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE — PEEK (NOT consume — the HITL composer's one-shot
-    # consume stays intact, mirroring the linear path) the operator's single `EffectFenceResolution`
-    # off the resume context holder. One resolution TYPE applies across ALL effect-fence-paused
-    # branches this round (key-bound per branch below); a per-branch-DISTINCT resolution would
-    # need a key->resolution MAP on `ResumeContext` (a new contract surface) — the registered
-    # follow-on. None when no holder / no resolution supplied → every paused branch re-pauses
-    # INERT (never an auto-re-fire — the #701 decline-mirror: proceed only on an operator answer).
-    _effect_fence_resolution: EffectFenceResolution | None = None
+    # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE / B-FANOUT-EFFECT-FENCE-PER-BRANCH-RESOLUTION — PEEK
+    # (NOT consume — the HITL composer's one-shot consume stays intact, mirroring the linear path)
+    # the operator's resume context off the holder. Per paused worker below,
+    # `effect_fence_resolution_for(branch_key)` returns that branch's `effect_fence_resolutions`
+    # map entry if supplied, else the uniform `effect_fence_resolution` default — so two paused
+    # workers can resolve DIFFERENTLY in one resume (SKIP_AS_FIRED vs RE_FIRE; ABORT keeps its
+    # run-level-terminal semantic). None when no holder / no resolution for a branch's key → that
+    # paused worker re-pauses INERT (never an auto-re-fire — the #701 decline-mirror).
+    _ef_resume_ctx: ResumeContext | None = None
     if _recovered_effect_fence_paused:
         _ef_holder = cast(
             "_ResumeContextHolderLike | None",
             getattr(ctx, "resume_context_holder", None),
         )
         _ef_resume_ctx = _ef_holder.peek() if _ef_holder is not None else None
-        if _ef_resume_ctx is not None:
-            _effect_fence_resolution = _ef_resume_ctx.effect_fence_resolution
+
+    # B-FANOUT-EFFECT-FENCE-PER-BRANCH-RESOLUTION — run-level ABORT guard (out-of-family Codex
+    # [P1]). If the operator ABORTs ANY fence-paused worker, the run WILL fail, so NO sibling
+    # continue-resolution (SKIP/RE_FIRE) may FIRE first (a RE_FIRE sibling would otherwise
+    # clear+re-fire concurrently before the ABORT branch fails the run). Suppress the non-ABORT
+    # siblings' directives below; the ABORT worker keeps its directive → EffectFenceAbortedError
+    # → terminal FAILED. The PARALLELIZATION analogue.
+    _any_fence_abort = _ef_resume_ctx is not None and any(
+        _ef_resume_ctx.effect_fence_resolution_for(_k) is EffectFenceResolution.ABORT
+        for _k in _recovered_effect_fence_paused.values()
+    )
 
     # Empty step sequence → trivially SUCCESS (mirrors the linear empty-loop +
     # the PARALLELIZATION / EVALUATOR_OPTIMIZER empty-steps SUCCESS).
@@ -7749,21 +7786,33 @@ def _execute_orchestrator_workers(
         # grandchild's completed steps are recovered, NOT re-executed). `None` for every
         # non-paused-child worker → byte-identical to the pre-arc context.
         _child_resume = _recovered_paused_child.get(branch_index)
-        # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE — on resume, a worker whose OWN dispatch raised
-        # the effect fence is re-dispatched WITH the operator's resolution key-bound to THIS
-        # branch's reserve, threaded on the (hash-inert) `effect_fence_resolution` — the runtime
-        # fence applies exactly one key-matched resolution (the worker analogue of the linear
-        # B-EFFECT-FENCE-PAUSE-RESOLUTION threading at the per-step loop). Built ONLY when this
-        # ordinal was fence-paused AND the captured key is non-empty AND a resolution was
-        # supplied; else None → the fence re-pauses INERT (never an auto-re-fire). None for every
-        # non-fence worker → byte-identical to the pre-arc context.
+        # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE / B-FANOUT-EFFECT-FENCE-PER-BRANCH-RESOLUTION — on
+        # resume, a worker whose OWN dispatch raised the effect fence is re-dispatched WITH the
+        # operator's resolution key-bound to THIS branch's reserve, threaded on the (hash-inert)
+        # `effect_fence_resolution`. The resolution is `effect_fence_resolution_for(branch_key)` —
+        # this worker's per-key `effect_fence_resolutions` entry if supplied, else the uniform
+        # default — so two paused workers can resolve DIFFERENTLY in one resume (the worker analogue
+        # of the linear B-EFFECT-FENCE-PAUSE-RESOLUTION threading). Built ONLY when this ordinal was
+        # fence-paused AND the captured key is non-empty AND a resolution exists for it; else None →
+        # the fence re-pauses INERT (never an auto-re-fire). None for every non-fence worker →
+        # byte-identical to the pre-arc context.
         _branch_fence_key = _recovered_effect_fence_paused.get(branch_index)
+        _branch_resolution = (
+            _ef_resume_ctx.effect_fence_resolution_for(_branch_fence_key)
+            if (_branch_fence_key and _ef_resume_ctx is not None)
+            else None
+        )
+        # Run-level ABORT guard: if ANY paused worker resolves to ABORT, suppress this NON-ABORT
+        # worker's continue-resolution so it re-pauses INERT (never fires) before the ABORT fails
+        # the run (Codex [P1]).
+        if _any_fence_abort and _branch_resolution is not EffectFenceResolution.ABORT:
+            _branch_resolution = None
         _branch_effect_fence_directive = (
             EffectFenceResolutionDirective(
-                resolution=_effect_fence_resolution,
+                resolution=_branch_resolution,
                 idempotency_key=_branch_fence_key,
             )
-            if (_branch_fence_key and _effect_fence_resolution is not None)
+            if (_branch_fence_key and _branch_resolution is not None)
             else None
         )
         child = compose_branch_child_context(

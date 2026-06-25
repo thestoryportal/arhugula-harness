@@ -1667,3 +1667,262 @@ def test_orchestrator_worker_effect_fence_resume_changed_kind_fails_closed() -> 
 
     assert result.status is RunStatus.FAILED
     assert "effect-fence-paused-kind-changed" in (result.fail_class or "")
+
+
+# ---------------------------------------------------------------------------
+# B-FANOUT-EFFECT-FENCE-PER-BRANCH-RESOLUTION — two workers fence-pause in ONE barrier;
+# resume resolves them DIFFERENTLY via the `effect_fence_resolutions` per-key map
+# (idempotency_key -> EffectFenceResolution), the single field staying the uniform default.
+# Real-fence witness: the REAL `_execute_orchestrator_workers` TaskGroup+shield.
+# ---------------------------------------------------------------------------
+
+
+class _OrchestratorTwoFenceDispatcher:
+    """Orchestrator completes; BOTH workers raise the effect-fence ambiguous error with DISTINCT
+    keys, synchronized on a barrier so both are in-flight BEFORE either raises → TWO
+    `effect_fence_paused_branches` in one pause (the per-branch-distinct precondition)."""
+
+    def __init__(self) -> None:
+        self._barrier = threading.Barrier(2, timeout=10.0)
+        self.dispatched: list[str] = []
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        step_id = str(step.step_id)
+        self.dispatched.append(step_id)
+        if step_id == "orchestrator":
+            return {"role": "orchestrator"}
+        self._barrier.wait()
+        raise EffectFenceAmbiguousUncommittedError(idempotency_key=f"fence-key-{step_id}")
+
+
+class _HolderWithResolutions:
+    """Stand-in `ResumeContextHolder` — `peek()` returns a ResumeContext carrying a per-key
+    `effect_fence_resolutions` map (B-FANOUT-EFFECT-FENCE-PER-BRANCH-RESOLUTION) + an optional
+    uniform `effect_fence_resolution` default."""
+
+    def __init__(
+        self,
+        resolutions: dict[str, EffectFenceResolution],
+        *,
+        uniform: EffectFenceResolution | None = None,
+    ) -> None:
+        self._rc = ResumeContext(
+            effect_fence_resolution=uniform,
+            effect_fence_resolutions=resolutions,
+        )
+        self.peeked = 0
+
+    def peek(self) -> ResumeContext:
+        self.peeked += 1
+        return self._rc
+
+
+class _OrchestratorPartialResumeDispatcher:
+    """Resume-side (partial-map iterative witness): a worker WITH a threaded directive resolves
+    (success); a worker WITHOUT one (unanswered → INERT) RE-RAISES the fence — modelling the
+    runtime's INERT re-pause — so the unanswered worker re-pauses while the answered one resolves
+    terminal."""
+
+    def __init__(self) -> None:
+        self.dispatched: list[str] = []
+        self.seen_resolution: dict[str, Any] = {}
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        step_id = str(step.step_id)
+        self.dispatched.append(step_id)
+        directive = getattr(step_context, "effect_fence_resolution", None)
+        self.seen_resolution[step_id] = directive
+        if step_id == "orchestrator":
+            return {"role": "orchestrator"}
+        if directive is None:
+            raise EffectFenceAmbiguousUncommittedError(idempotency_key=f"fence-key-{step_id}")
+        return {"role": step_id, "echoed": dict(step.step_payload)}
+
+
+def _orchestrator_two_fence_pause() -> PauseSnapshot:
+    """Drive a real ORCHESTRATOR_WORKERS pause with BOTH workers effect-fence-paused; return the
+    snapshot (the per-branch-distinct precondition)."""
+    paused = _run(
+        steps=_steps(2),
+        dispatcher=_OrchestratorTwoFenceDispatcher(),
+        ctx=cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())),
+    )
+    assert paused.status is RunStatus.PAUSED
+    snap = paused.pause_snapshot
+    assert snap is not None and snap.fan_out_resume is not None
+    assert len(snap.fan_out_resume.effect_fence_paused_branches) == 2
+    return snap
+
+
+def test_orchestrator_per_branch_distinct_resolutions() -> None:
+    """REAL-FENCE WITNESS (ORCHESTRATOR_WORKERS, per-branch-DISTINCT): two workers fence-pause in
+    one barrier; resume resolves worker-0 SKIP_AS_FIRED + worker-1 RE_FIRE via the per-key
+    `effect_fence_resolutions` map — each worker re-dispatched with ITS OWN key-bound resolution,
+    the capability the single uniform field could not express."""
+    snap = _orchestrator_two_fence_pause()
+    key_by_index = {
+        b.branch_index: b.idempotency_key for b in snap.fan_out_resume.effect_fence_paused_branches
+    }
+    holder = _HolderWithResolutions(
+        {
+            key_by_index[0]: EffectFenceResolution.SKIP_AS_FIRED,
+            key_by_index[1]: EffectFenceResolution.RE_FIRE,
+        }
+    )
+    rec = _OrchestratorResumeRecordingDispatcher()
+    ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    ctx_obj.resume_context_holder = holder  # type: ignore[attr-defined]
+    result = _run(
+        steps=_steps(2),
+        dispatcher=rec,
+        ctx=cast(DriverContext, ctx_obj),
+        pause_snapshot_input=snap,
+    )
+
+    assert result.status is RunStatus.SUCCESS
+    w0 = rec.seen_resolution["worker-0"]
+    w1 = rec.seen_resolution["worker-1"]
+    assert w0 is not None and w0.resolution is EffectFenceResolution.SKIP_AS_FIRED
+    assert w0.idempotency_key == key_by_index[0]
+    assert w1 is not None and w1.resolution is EffectFenceResolution.RE_FIRE
+    assert w1.idempotency_key == key_by_index[1]
+
+
+def test_orchestrator_per_branch_map_overrides_uniform_default() -> None:
+    """The per-key map OVERRIDES the uniform `effect_fence_resolution` default per branch: worker-0
+    (in the map) gets SKIP_AS_FIRED; worker-1 (absent from the map) falls back to the uniform
+    RE_FIRE default — the `default + per-key override` composition."""
+    snap = _orchestrator_two_fence_pause()
+    key_by_index = {
+        b.branch_index: b.idempotency_key for b in snap.fan_out_resume.effect_fence_paused_branches
+    }
+    holder = _HolderWithResolutions(
+        {key_by_index[0]: EffectFenceResolution.SKIP_AS_FIRED},
+        uniform=EffectFenceResolution.RE_FIRE,
+    )
+    rec = _OrchestratorResumeRecordingDispatcher()
+    ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    ctx_obj.resume_context_holder = holder  # type: ignore[attr-defined]
+    result = _run(
+        steps=_steps(2),
+        dispatcher=rec,
+        ctx=cast(DriverContext, ctx_obj),
+        pause_snapshot_input=snap,
+    )
+
+    assert result.status is RunStatus.SUCCESS
+    assert rec.seen_resolution["worker-0"].resolution is EffectFenceResolution.SKIP_AS_FIRED
+    assert rec.seen_resolution["worker-1"].resolution is EffectFenceResolution.RE_FIRE  # fallback
+
+
+def test_orchestrator_partial_map_unanswered_worker_re_pauses_iteratively() -> None:
+    """Partial-map iterative composability: a map answering ONLY worker-0 (no uniform default) →
+    worker-0 resolves terminal, worker-1 (unanswered → INERT) re-pauses carrying its residual. The
+    NEW snapshot holds ONLY the still-unanswered worker-1, so a subsequent resume can answer it."""
+    snap = _orchestrator_two_fence_pause()
+    key_by_index = {
+        b.branch_index: b.idempotency_key for b in snap.fan_out_resume.effect_fence_paused_branches
+    }
+    # Answer ONLY worker-0; worker-1 left unanswered with NO uniform fallback.
+    holder = _HolderWithResolutions({key_by_index[0]: EffectFenceResolution.SKIP_AS_FIRED})
+    rec = _OrchestratorPartialResumeDispatcher()
+    ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    ctx_obj.resume_context_holder = holder  # type: ignore[attr-defined]
+    result = _run(
+        steps=_steps(2),
+        dispatcher=rec,
+        ctx=cast(DriverContext, ctx_obj),
+        pause_snapshot_input=snap,
+    )
+
+    assert result.status is RunStatus.PAUSED
+    snap2 = result.pause_snapshot
+    assert snap2 is not None and snap2.fan_out_resume is not None
+    efp2 = snap2.fan_out_resume.effect_fence_paused_branches
+    assert len(efp2) == 1
+    assert efp2[0].branch_index == 1  # only worker-1 still paused
+    assert efp2[0].idempotency_key == key_by_index[1]
+    # worker-0 got its SKIP directive (answered); worker-1 got None (unanswered → re-paused).
+    assert rec.seen_resolution["worker-0"].resolution is EffectFenceResolution.SKIP_AS_FIRED
+    assert rec.seen_resolution["worker-1"] is None
+
+
+def test_orchestrator_no_map_uniform_default_applies_to_all() -> None:
+    """Backward-compat: with NO map (the v1.65 shape), the single uniform `effect_fence_resolution`
+    applies to BOTH fence-paused workers — byte-identical to the pre-arc behavior."""
+    snap = _orchestrator_two_fence_pause()
+    holder = _HolderWithResolution(EffectFenceResolution.RE_FIRE)  # single field only, no map
+    rec = _OrchestratorResumeRecordingDispatcher()
+    ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    ctx_obj.resume_context_holder = holder  # type: ignore[attr-defined]
+    result = _run(
+        steps=_steps(2),
+        dispatcher=rec,
+        ctx=cast(DriverContext, ctx_obj),
+        pause_snapshot_input=snap,
+    )
+
+    assert result.status is RunStatus.SUCCESS
+    assert rec.seen_resolution["worker-0"].resolution is EffectFenceResolution.RE_FIRE
+    assert rec.seen_resolution["worker-1"].resolution is EffectFenceResolution.RE_FIRE
+
+
+class _OrchestratorAbortGuardDispatcher:
+    """Resume-side abort-guard witness: an ABORT directive raises EffectFenceAbortedError; a
+    RE_FIRE / SKIP directive FIRES (records the branch in `fired`); a None directive (a suppressed
+    sibling) RE-RAISES the ambiguous fence (re-pause, no fire). Witnesses that under a mixed
+    {ABORT, RE_FIRE} map the RE_FIRE sibling does NOT fire before the ABORT fails the run."""
+
+    def __init__(self) -> None:
+        self.dispatched: list[str] = []
+        self.fired: list[str] = []
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        step_id = str(step.step_id)
+        self.dispatched.append(step_id)
+        if step_id == "orchestrator":
+            return {"role": "orchestrator"}
+        directive = getattr(step_context, "effect_fence_resolution", None)
+        if directive is None:
+            raise EffectFenceAmbiguousUncommittedError(idempotency_key=f"fence-key-{step_id}")
+        if directive.resolution is EffectFenceResolution.ABORT:
+            raise EffectFenceAbortedError(f"operator aborted {step_id}")
+        self.fired.append(step_id)  # RE_FIRE / SKIP would fire the effect
+        return {"role": step_id, "echoed": dict(step.step_payload)}
+
+
+def test_orchestrator_mixed_abort_map_suppresses_sibling_refire() -> None:
+    """Codex [P1] (ORCHESTRATOR_WORKERS): a mixed map {worker-0: ABORT, worker-1: RE_FIRE} must NOT
+    fire the RE_FIRE sibling before the ABORT fails the run — ABORT stays run-level-terminal
+    (v1.65 §1(b)). The RE_FIRE sibling's directive is SUPPRESSED (re-pauses INERT, no fire); the
+    run FAILs. Per-branch-SCOPED abort (fire survivors anyway) is the registered follow-on."""
+    snap = _orchestrator_two_fence_pause()
+    key_by_index = {
+        b.branch_index: b.idempotency_key for b in snap.fan_out_resume.effect_fence_paused_branches
+    }
+    holder = _HolderWithResolutions(
+        {
+            key_by_index[0]: EffectFenceResolution.ABORT,
+            key_by_index[1]: EffectFenceResolution.RE_FIRE,
+        }
+    )
+    rec = _OrchestratorAbortGuardDispatcher()
+    ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    ctx_obj.resume_context_holder = holder  # type: ignore[attr-defined]
+    result = _run(
+        steps=_steps(2),
+        dispatcher=rec,
+        ctx=cast(DriverContext, ctx_obj),
+        pause_snapshot_input=snap,
+    )
+
+    assert result.status is RunStatus.FAILED
+    assert "orchestrator-workers-effect-fence-aborted" in (result.fail_class or "")
+    assert result.pause_snapshot is None  # terminal — NOT a re-pause
+    assert "worker-1" not in rec.fired  # the RE_FIRE sibling was SUPPRESSED — did NOT fire
