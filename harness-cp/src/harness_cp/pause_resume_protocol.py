@@ -579,10 +579,11 @@ class PauseResumeProtocol:
         return snapshot.state_ledger_anchor != current_anchor
 
 
-def _strip_none_synthesis_step_id(carrier_dump: Any) -> None:
-    """Drop a None `synthesis_step_id` from a `FanOutResumeState`/`PeerFanOutResumeState`
-    carrier `model_dump`, IN PLACE, following the KNOWN carrier paths only
-    (B-FANOUT-PAUSE-SYNTHESIS byte-compat).
+def _strip_default_fanout_resume_fields(carrier_dump: Any) -> None:
+    """Drop default-valued additive fields (`synthesis_step_id` when None;
+    `effect_fence_paused_branches` when empty) from a `FanOutResumeState`/
+    `PeerFanOutResumeState` carrier `model_dump`, IN PLACE, following the KNOWN carrier
+    paths only (B-FANOUT-PAUSE-SYNTHESIS + B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE byte-compat).
 
     `synthesis_step_id` is a NEW default-None field on the two fan-out resume carriers;
     `model_dump` always emits it (as `null`), which would change the hash of every
@@ -604,6 +605,12 @@ def _strip_none_synthesis_step_id(carrier_dump: Any) -> None:
     carrier = cast("dict[str, Any]", carrier_dump)
     if carrier.get("synthesis_step_id") is None:
         carrier.pop("synthesis_step_id", None)
+    # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE: `effect_fence_paused_branches` is a NEW
+    # default-empty field on both fan-out carriers; `model_dump` always emits it (as `[]`),
+    # which would change the hash of every pre-existing snapshot — drop it when empty (the
+    # same drop-when-default discipline as `synthesis_step_id`/`paused_child_branches`).
+    if not carrier.get("effect_fence_paused_branches"):
+        carrier.pop("effect_fence_paused_branches", None)
     paused_children = carrier.get("paused_child_branches")
     if isinstance(paused_children, list):
         for pcb in cast("list[Any]", paused_children):
@@ -614,7 +621,7 @@ def _strip_none_synthesis_step_id(carrier_dump: Any) -> None:
                 continue
             child = cast("dict[str, Any]", child_snapshot)
             for nested_key in ("fan_out_resume", "peer_fan_out_resume"):
-                _strip_none_synthesis_step_id(child.get(nested_key))
+                _strip_default_fanout_resume_fields(child.get(nested_key))
 
 
 def _compute_snapshot_hash(
@@ -670,7 +677,7 @@ def _compute_snapshot_hash(
         # child `fan_out_resume`/`peer_fan_out_resume` also emits `synthesis_step_id: null`
         # — a top-level-only drop would leave those nested nulls and change the recomputed
         # hash of valid pre-existing HIERARCHICAL parent snapshots (out-of-family Codex [P1]).
-        _strip_none_synthesis_step_id(_for)
+        _strip_default_fanout_resume_fields(_for)
         canonical["fan_out_resume"] = _for
     if peer_fan_out_resume is not None:
         # B-FANOUT-PAUSE-SYNTHESIS: same recursive `synthesis_step_id` drop for the
@@ -679,7 +686,7 @@ def _compute_snapshot_hash(
         # change. (A peer carrier has no nested child snapshots today, but the recursive form
         # is uniform + future-proof.)
         _pfor = peer_fan_out_resume.model_dump(mode="json")
-        _strip_none_synthesis_step_id(_pfor)
+        _strip_default_fanout_resume_fields(_pfor)
         canonical["peer_fan_out_resume"] = _pfor
     if handoff_resume is not None:
         # B-HANDOFF-PAUSE: the DECENTRALIZED_HANDOFF stage cursor (recovered

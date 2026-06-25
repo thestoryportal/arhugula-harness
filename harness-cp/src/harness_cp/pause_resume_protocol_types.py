@@ -271,6 +271,17 @@ class FanOutResumeState(BaseModel):
     dict, lacking this key, deserializes via the default + re-hashes unchanged —
     the same `paused_child_branches` drop-when-empty discipline)."""
 
+    effect_fence_paused_branches: tuple[EffectFencePausedBranchResumeState, ...] = ()
+    """B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE (R-FS-1) — branches whose own dispatch raised the
+    runtime effect fence's `EffectFenceAmbiguousUncommittedError` (C-RT-31 §14.22). DISTINCT from
+    `branches` (terminal — MUST NOT re-dispatch), from absent ordinals (re-dispatch FRESH), and
+    from `paused_child_branches` (a SUB_AGENT child sub-workflow paused): an effect-fence-paused
+    branch is re-entered on resume via the fence-keyed `EffectFenceResolution` (SKIP_AS_FIRED /
+    RE_FIRE / ABORT), NOT a fresh dispatch — the fan-out analogue of the LINEAR-path
+    B-EFFECT-FENCE-HITL-ROUTE. Additive, default-empty: `_compute_snapshot_hash` DROPS this field
+    from the canonical serialization when empty, so every pre-existing snapshot hashes
+    byte-identically (the `paused_child_branches` drop-when-empty discipline)."""
+
 
 class PeerFanOutResumeState(BaseModel):
     """Peer fan-out (PARALLELIZATION) resume reconstruction state.
@@ -313,6 +324,13 @@ class PeerFanOutResumeState(BaseModel):
     drop-from-hash-when-None byte-compat discipline (the `_compute_snapshot_hash` peer
     drop mirrors the FanOut drop — `PeerFanOutResumeState` had no drop before this
     field, so the drop is ADDED at the same site)."""
+
+    effect_fence_paused_branches: tuple[EffectFencePausedBranchResumeState, ...] = ()
+    """B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE (R-FS-1) — the PARALLELIZATION analogue of
+    `FanOutResumeState.effect_fence_paused_branches`: peer branches whose own dispatch raised the
+    runtime effect fence's `EffectFenceAmbiguousUncommittedError` (C-RT-31 §14.22). Re-entered on
+    resume via the fence-keyed `EffectFenceResolution`, NOT a fresh dispatch. Additive,
+    default-empty, dropped-from-hash-when-empty (same discipline as `synthesis_step_id`)."""
 
 
 class HandoffStageResumeState(BaseModel):
@@ -653,6 +671,51 @@ class PausedChildBranchResumeState(BaseModel):
     `fan_out_resume` with its own `paused_child_branches` (a grandchild that paused on
     a great-grandchild). COVERED by `_compute_snapshot_hash` transitively via the
     enclosing `fan_out_resume.model_dump(mode="json")`."""
+
+
+class EffectFencePausedBranchResumeState(BaseModel):
+    """A fan-out branch whose own dispatch raised the runtime effect fence's
+    `EffectFenceAmbiguousUncommittedError` (C-RT-31 §14.22) — the fence lost a reserve to a
+    prior uncommitted attempt of a non-idempotent effect AND found no captured output proving
+    completion, so whether the branch's effect fired is genuinely ambiguous.
+
+    B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE (R-FS-1) — the fan-out analogue of the LINEAR-path
+    B-EFFECT-FENCE-HITL-ROUTE / B-EFFECT-FENCE-PAUSE-RESOLUTION (`workflow_driver` §26.2 route).
+    A branch raising it was previously caught by the generic branch `except Exception` →
+    recorded `completed` (ran-and-errored) → cascade; this carrier COMPOSES that ambiguous-pause
+    THROUGH the fan-out barrier instead, so the run PAUSES honestly and `api.resume` re-enters
+    the branch with the operator's `EffectFenceResolution` (SKIP_AS_FIRED / RE_FIRE / ABORT).
+
+    Carried by `FanOutResumeState.effect_fence_paused_branches` /
+    `PeerFanOutResumeState.effect_fence_paused_branches` (NOT `branches`: a terminal branch MUST
+    NOT be re-dispatched, but an effect-fence-paused branch MUST be re-entered — via the
+    fence-keyed resolution, NOT a fresh dispatch — the illegal-states-unrepresentable split,
+    mirroring `PausedChildBranchResumeState` for the child-pause disposition).
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    branch_index: int
+    """The fan-out branch/worker ordinal (0-based) whose dispatch raised the fence-ambiguous
+    error. On resume this ordinal is re-dispatched THROUGH the fence-keyed resolution directive
+    (NOT skipped like a terminal branch, NOT fresh like an absent one)."""
+
+    step_id: str
+    """The branch `WorkflowStep.step_id` AT CAPTURE TIME. Resume validates the re-supplied
+    branch step's `step_id` against this (positional-identity guard, fail-closed on a same-count
+    rename/reorder — the same cheap guard `FanOutBranchResumeState` / `PausedChildBranchResumeState`
+    apply)."""
+
+    idempotency_key: str
+    """The held effect-fence reserve's `idempotency_key` (read by name off the runtime
+    `EffectFenceAmbiguousUncommittedError`, since harness-cp cannot import harness-runtime), so
+    `api.resume` key-binds the operator's `EffectFenceResolution` to THIS branch's effect — the
+    same keying discipline the LINEAR path's `EffectFenceResumeState` uses. On resume the branch
+    is re-dispatched with an `EffectFenceResolutionDirective(resolution=..., idempotency_key=...)`
+    threaded on its `StepExecutionContext.effect_fence_resolution`; the runtime tool dispatcher
+    consumes the matching directive (SKIP_AS_FIRED → empty output, RE_FIRE → clear reserve +
+    re-dispatch, ABORT → fail). Absent the key (defensive) → resume re-pauses (INERT, never an
+    auto-re-fire)."""
 
 
 class ResumeResult(BaseModel):
