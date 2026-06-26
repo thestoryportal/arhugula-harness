@@ -210,6 +210,32 @@ def test_present_but_unreadable_branch_fails_closed() -> None:
         _determine_fanout_resume(store, _RUN_KEY, _steps(3), TopologyPattern.PARALLELIZATION)
 
 
+def test_torn_cardinality_marker_changed_cardinality_fails_closed() -> None:
+    """A PRESENT-but-TORN cardinality marker (read→None because unreadable, present→True) on a
+    resume with a CHANGED branch count fails closed, NOT silently dropping the original in-flight
+    branches. The consumer distinguishes torn (present) from genuinely-absent via
+    `fanout_cardinality_present` — mirroring the orchestrator path + the store author's documented
+    `[[durable-recovery-presence-validity-scope]]` intent; a validity-proxy `read→None` would
+    conflate torn + absent and skip the changed-cardinality guard. (Regression: the consumer
+    previously used `read_fanout_cardinality is not None`, so a torn marker bypassed the guard.)"""
+    store = _FakeStore(
+        branches={0: ("step-0", {"o": 0})}, cardinality=None, cardinality_present=True
+    )
+    with pytest.raises(_FanOutStoreCorruptError, match="present but unreadable"):
+        _determine_fanout_resume(store, _RUN_KEY, _steps(2), TopologyPattern.PARALLELIZATION)
+
+
+def test_absent_cardinality_marker_does_not_fail_closed() -> None:
+    """CONTROL (the preserved torn-vs-absent distinction) — a GENUINELY-ABSENT cardinality marker
+    (read→None, present→False: a pre-cardinality / pre-arc journal) does NOT fail closed on a
+    changed branch count; only a TORN (present) marker does. Branch 0 reconstructs normally."""
+    store = _FakeStore(
+        branches={0: ("step-0", {"o": 0})}, cardinality=None, cardinality_present=False
+    )
+    result = _determine_fanout_resume(store, _RUN_KEY, _steps(2), TopologyPattern.PARALLELIZATION)
+    assert isinstance(result, PeerFanOutResumeState)  # absent ≠ torn → no fail-closed
+
+
 def test_orchestrator_missing_when_workers_completed_fails_closed() -> None:
     """Workers completed but the orchestrator output is absent — an inconsistent store
     (the orchestrator completes before any worker dispatches) → fail closed."""
