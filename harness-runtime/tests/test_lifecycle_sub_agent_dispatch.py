@@ -45,7 +45,7 @@ from typing import Any, cast
 import pytest
 from harness_as.sandbox_tier import SandboxTier
 from harness_core import PersonaTier, StepID, WorkloadClass
-from harness_cp.cp_shared_types import ModelBinding
+from harness_cp.cp_shared_types import AgentRole, ModelBinding
 from harness_cp.cross_family_fallback_chain import (
     FallbackChain,
     ProviderCandidate,
@@ -76,6 +76,8 @@ from harness_cp.workflow_driver_types import (
     StepKind,
     SubAgentChildPausedError,
     WorkflowStep,
+    compose_branch_child_context,
+    compose_branch_path,
 )
 from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
 from harness_is.state_ledger_entry_schema import Actor, ActorClass
@@ -1143,10 +1145,12 @@ def test_subagent_child_recoverable_false_for_nested_subagent_or_managed_child_s
     assert subagent_child_recoverable(nested_managed) is False
 
 
-def test_dispatch_seed_gated_on_recoverability_recoverable_child_gets_seed(tmp_path: Path) -> None:
-    """SEED-GATING (the key correction over the reverted branch) — dispatching a RECOVERABLE child
-    threads the DETERMINISTIC `child_run_id_seed` (derived from the worker's stable per-branch key)
-    to the runner, so a parent-crash re-dispatch auto-resumes it."""
+def test_dispatch_seed_none_for_linear_non_fanout_recoverable_child(tmp_path: Path) -> None:
+    """SEED-GATING — a recoverable child on a LINEAR (non-fan-out, `branch_index is None`) context
+    gets `child_run_id_seed=None`. The deterministic seed is FAN-OUT-WORKER-scoped (it matches the
+    fan-out maybe-ran classifier's recovery surface + excludes the sequential-loop topologies whose
+    steps reuse `step_index` across iterations). A non-fan-out dispatch keeps the legacy fresh
+    `uuid` (the fan-out positive case is `test_dispatch_seed_includes_branch_path_for_fanout_worker`)."""
     dispatcher, runner, _ = _dispatcher(tmp_path)
     recoverable = _payload(
         workload_class=WorkloadClass.PIPELINE_AUTOMATION,  # admits SINGLE_THREADED_LINEAR
@@ -1154,10 +1158,8 @@ def test_dispatch_seed_gated_on_recoverability_recoverable_child_gets_seed(tmp_p
         topology=TopologyPattern.SINGLE_THREADED_LINEAR,
         child_step_kinds=(StepKind.TOOL_STEP,),
     )
-    ctx = _step_context()
-    dispatcher.dispatch(_binding(), _step(recoverable), step_context=ctx)
-    expected = compose_child_run_id_seed(ctx.parent_idempotency_key, recoverable.child_workflow_id)
-    assert runner.calls[-1]["child_run_id_seed"] == expected
+    dispatcher.dispatch(_binding(), _step(recoverable), step_context=_step_context())
+    assert runner.calls[-1]["child_run_id_seed"] is None
 
 
 def test_dispatch_seed_gated_on_recoverability_non_recoverable_child_gets_none(
@@ -1171,6 +1173,58 @@ def test_dispatch_seed_gated_on_recoverability_non_recoverable_child_gets_none(
         _binding(), _step(), step_context=_step_context()
     )  # default = non-recoverable
     assert runner.calls[-1]["child_run_id_seed"] is None
+
+
+def test_child_run_id_seed_distinct_across_fanout_siblings() -> None:
+    """OUT-OF-FAMILY CODEX [P1] FIX — two fan-out SIBLING workers inherit the SAME
+    `parent_idempotency_key` from the fan-out parent (the branch-distinct key is the §25.16
+    `branch_path`, composed downstream — NOT folded into `parent_idempotency_key`). The seed MUST
+    fold in `branch_path` so siblings dispatching the SAME `child_workflow_id` derive DISTINCT child
+    run_ids — else they alias one child's durable store / fence state EVEN WITHOUT A CRASH."""
+    shared_parent_key = "0" * 64  # both siblings inherit the SAME parent-step key
+    sib0 = compose_child_run_id_seed(
+        shared_parent_key, "child-wf", branch_path="workflow:wf:step:0:0"
+    )
+    sib1 = compose_child_run_id_seed(
+        shared_parent_key, "child-wf", branch_path="workflow:wf:step:0:1"
+    )
+    assert sib0 != sib1, "fan-out siblings must derive distinct child run_ids"
+    # Resume-stable: the SAME (parent_key, child_wf, branch_path) re-derives the SAME seed (the
+    # recovery prerequisite — a crash-resume re-dispatch of branch 0 reuses branch 0's child run_id).
+    assert (
+        compose_child_run_id_seed(shared_parent_key, "child-wf", branch_path="workflow:wf:step:0:0")
+        == sib0
+    )
+    # A linear (no-branch_path) seed is distinct from any branch seed.
+    assert compose_child_run_id_seed(shared_parent_key, "child-wf") not in {sib0, sib1}
+
+
+def test_dispatch_seed_includes_branch_path_for_fanout_worker(tmp_path: Path) -> None:
+    """OUT-OF-FAMILY CODEX [P1] FIX (full-chain) — the composer, dispatching a fan-out WORKER
+    branch (branch_index set), folds the §25.16 `branch_path` into the seed it threads to the
+    runner, so the seed matches `compose_child_run_id_seed(parent_key, child_wf, branch_path)`
+    (NOT the branch_path-less linear form)."""
+    dispatcher, runner, _ = _dispatcher(tmp_path)
+    recoverable = _payload(
+        workload_class=WorkloadClass.PIPELINE_AUTOMATION,
+        engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+        topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+        child_step_kinds=(StepKind.TOOL_STEP,),
+    )
+    branch_ctx = compose_branch_child_context(
+        _step_context(), branch_index=2, agent_role=AgentRole("worker")
+    )
+    dispatcher.dispatch(_binding(), _step(recoverable), step_context=branch_ctx)
+    expected = compose_child_run_id_seed(
+        branch_ctx.parent_idempotency_key,
+        recoverable.child_workflow_id,
+        branch_path=compose_branch_path(branch_ctx),
+    )
+    assert runner.calls[-1]["child_run_id_seed"] == expected
+    # The branch seed differs from the branch_path-less form (the bug would have used the latter).
+    assert runner.calls[-1]["child_run_id_seed"] != compose_child_run_id_seed(
+        branch_ctx.parent_idempotency_key, recoverable.child_workflow_id
+    )
 
 
 _ = cast

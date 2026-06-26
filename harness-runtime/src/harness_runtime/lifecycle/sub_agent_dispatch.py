@@ -130,6 +130,7 @@ from harness_cp.workflow_driver_types import (
     StepKind,
     SubAgentChildPausedError,
     WorkflowStep,
+    compose_branch_path,
 )
 from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
 from harness_cxa.cp_audit_conversion import cp_audit_to_od_audit
@@ -298,30 +299,39 @@ _SUBAGENT_RECOVERABLE_EXCLUDED_CHILD_KINDS: frozenset[StepKind] = frozenset(
 )
 
 
-def compose_child_run_id_seed(parent_idempotency_key: str, child_workflow_id: str) -> str:
+def compose_child_run_id_seed(
+    parent_idempotency_key: str, child_workflow_id: str, branch_path: str | None = None
+) -> str:
     """B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT (R-FS-1) — the DETERMINISTIC
     first-dispatch child run_id seed (§14.7.4).
 
-    `sha256("child-run:" + parent_idempotency_key + ":" + child_workflow_id)` hex.
-    The spawning SUB_AGENT_DISPATCH worker's `parent_idempotency_key` is its own
-    stable, recoverable per-branch idempotency key
-    (`_compute_step_idempotency_key(run_idempotency_key, step_index[, branch_path])`,
-    C-CP-25 §25.6/§25.16) — it RE-DERIVES IDENTICALLY when the parent fan-out
-    re-dispatches a maybe-ran SUB_AGENT_DISPATCH worker on crash-resume (the run
-    key is recovered from the preserved run_id; step_index + branch_path are
-    deterministic manifest positions). Mixing in `child_workflow_id` keeps the seed
-    distinct if the same worker ever pointed at a different child. Replaces the
-    legacy fresh `uuid.uuid4().hex` first-dispatch run_id, which — being transient —
-    was lost on a parent crash, leaving the child's durable store + fence reserves
-    keyed on an unrecoverable identity (the maybe-ran-subagent recovery blocker).
+    `sha256("child-run:" + parent_idempotency_key + [":" + branch_path] + ":" + child_workflow_id)`.
 
-    Deterministic + collision-free for the DAG (the parent key already encodes run +
-    step + branch). At-most-once PRESERVED: the child still runs once on the happy
-    path; on a re-dispatch the stable key lets the child's OWN crash-resume
-    auto-resume from the shared durable store instead of re-running from scratch."""
-    return hashlib.sha256(
-        f"child-run:{parent_idempotency_key}:{child_workflow_id}".encode()
-    ).hexdigest()
+    **`branch_path` is REQUIRED for a fan-out branch (out-of-family Codex [P1]).** The spawning
+    worker's `parent_idempotency_key` is `_compute_step_idempotency_key(run_idempotency_key,
+    step_index)` — under fan-out, `compose_branch_child_context` inherits it VERBATIM from the
+    fan-out parent (the branch-distinct key is the §25.16 `branch_path`, composed DOWNSTREAM, NOT
+    folded into `parent_idempotency_key`). So WITHOUT `branch_path` two sibling SUB_AGENT_DISPATCH
+    workers that dispatch the SAME `child_workflow_id` would derive the SAME child run_id → ALIASED
+    durable output + fence state → cross-branch corruption EVEN WITHOUT A CRASH. `branch_path`
+    (`{parent_action_id}:{branch_index}`, C-CP-25 §25.16 — globally unique under nested fan-out per
+    IS §5.4) makes the seed per-branch-unique. `None` ⟹ a LINEAR (non-branch) dispatch (no
+    sibling-collision surface).
+
+    Both components RE-DERIVE IDENTICALLY when the parent re-dispatches a maybe-ran worker on
+    crash-resume (the run key is recovered from the preserved run_id; step_index + branch_index are
+    deterministic manifest positions). Mixing in `child_workflow_id` keeps the seed distinct if the
+    same worker ever pointed at a different child (the accepted child-swap parity). Replaces the
+    legacy fresh `uuid.uuid4().hex` first-dispatch run_id, which — being transient — was lost on a
+    parent crash, leaving the child's durable store + fence reserves keyed on an unrecoverable
+    identity (the maybe-ran-subagent recovery blocker).
+
+    At-most-once PRESERVED: the child still runs once on the happy path; on a re-dispatch the stable
+    per-branch key lets the child's OWN crash-resume auto-resume from the shared durable store."""
+    _base = (
+        parent_idempotency_key if branch_path is None else f"{parent_idempotency_key}:{branch_path}"
+    )
+    return hashlib.sha256(f"child-run:{_base}:{child_workflow_id}".encode()).hexdigest()
 
 
 def subagent_child_recoverable(payload: SubAgentDispatchPayload) -> bool:
@@ -713,19 +723,36 @@ class RuntimeSubAgentDispatcher:
             # from scratch (the grandchild's completed steps are recovered, NOT
             # re-executed). `None` on a first dispatch → byte-identical to pre-arc.
             # B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT (R-FS-1) — gate the DETERMINISTIC
-            # child run_id seed on recoverability. A recoverable child ({ESR,WAL} ∧ LINEAR
-            # ∧ leaf) gets the stable seed so a parent-crash re-dispatch auto-resumes it
-            # (with result-faithful reconstruction). A NON-recoverable child gets `None` →
-            # a fresh `uuid` → no auto-resume → its pre-existing behavior (NO suffix-only
-            # `final_state` corruption, which an unconditional deterministic id would cause
-            # for a SAVE_POINT/RECONCILER child on ANY re-dispatch, incl. the linear-parent
-            # resume path the fan-out classifier does not gate). Complements the CP
-            # classifier's fan-out-maybe-ran recoverability gate.
+            # child run_id seed. It is scoped to a FAN-OUT WORKER (`branch_index is not None`) with
+            # a RECOVERABLE child ({ESR,WAL} ∧ LINEAR ∧ leaf) — exactly the surface the fan-out
+            # maybe-ran crash-resume classifier (`_fence_unrecoverable_maybe_ran_indices`) recovers.
+            # A recoverable fan-out worker gets the stable seed so a parent-crash re-dispatch
+            # auto-resumes its child (result-faithful reconstruction). Everything else → `None` →
+            # a fresh `uuid` → no auto-resume → pre-existing behavior. TWO at-most-once guards:
+            #   (1) `branch_path` (§25.16, `{parent_action_id}:{branch_index}`) makes the seed
+            #       per-branch-UNIQUE — sibling workers inherit the SAME `parent_idempotency_key`
+            #       from the fan-out parent (`compose_branch_child_context` copies it verbatim; the
+            #       branch-distinct key is composed downstream), so WITHOUT branch_path two siblings
+            #       dispatching the same child_workflow_id would alias one child run_id EVEN WITHOUT
+            #       A CRASH (out-of-family Codex [P1]).
+            #   (2) `branch_index is not None` EXCLUDES the SEQUENTIAL-LOOP topologies
+            #       (EVALUATOR_OPTIMIZER / RECONCILER_LOOP), whose iterated steps reuse the same
+            #       declared `step_index` (→ same `parent_idempotency_key`) across iterations
+            #       (`workflow_driver.py:2040` — "step_index REPEATS across same-parity re-pauses").
+            #       A deterministic seed there would make loop iteration 2 auto-resume iteration 1's
+            #       durable store (suppressing a NEW logical run). Those steps carry no
+            #       branch_index, so they keep the legacy fresh-`uuid` (no auto-resume) — the
+            #       SAVE_POINT/RECONCILER suffix-only corruption + the loop-suppression foreclosed.
+            _is_recoverable_fanout_worker = (
+                step_context.branch_index is not None and subagent_child_recoverable(payload)
+            )
             _child_run_id_seed = (
                 compose_child_run_id_seed(
-                    step_context.parent_idempotency_key, payload.child_workflow_id
+                    step_context.parent_idempotency_key,
+                    payload.child_workflow_id,
+                    branch_path=compose_branch_path(step_context),
                 )
-                if subagent_child_recoverable(payload)
+                if _is_recoverable_fanout_worker
                 else None
             )
             try:
