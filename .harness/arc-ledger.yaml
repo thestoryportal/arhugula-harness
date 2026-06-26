@@ -46,12 +46,34 @@
 snapshot:
   frozen_total: 11
   frozen_done: 11
-  standalone_closed: 51
+  standalone_closed: 52
   standalone_gated: 0
   standalone_resolved: 4
   standalone_registered: 5
   source: ".harness/beyond-mvp-capability-boundary-ledger.md"
-  # FRONTIER NOTE (2026-06-26, B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT-NOT-YET-DISPATCHED closed
+  # FRONTIER NOTE (2026-06-26, B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT-MAYBE-RAN closed as the
+  # RE-FIRE-SAFE slice [a DECOMPOSE, not a whole close] — the v1.70 §2 PAUSE-reconstruct fail-closed
+  # LIFTED for a RE-FIRE-SAFE [DECLARATIVE/INFERENCE] interrupted-in-flight maybe-ran ordinal: it now
+  # RE-ESTABLISHES the lost PAUSED state OMITTING it [re-dispatch nothing at crash-time]; api.resume
+  # re-dispatches it under obl-5 [re-fire-safe has NO external effect to double-fire under ANY resume
+  # manifest]. Mechanism: the gate WIDENED from `¬_maybe_ran` to `¬_refire_unsafe(_maybe_ran)` via
+  # the §25.15 `_refire_unsafe_branch_indices` classifier [NOT `_fence_unrecoverable_maybe_ran
+  # _indices`], COMPOSED with the v1.70 obl-5 re-pause mode. Gate-only — the three strategies
+  # UNCHANGED. The doubly-ambiguous case resolved for re-fire-safe: (a) effect-maybe-fired → no
+  # external effect; (b) maybe-a-second-pause-trigger → the pause is already established, the omitted
+  # ordinal's disposition resurfaces on api.resume re-dispatch [witnessed: a re-dispatch that fails
+  # again is HANDLED not dropped]. The FENCE-RECOVERABLE [TOOL_STEP/MANAGED_AGENTS] case is SPLIT OFF
+  # [out-of-family Codex [P1]: the deferred-omitted api.resume re-dispatch could double-fire under a
+  # CHANGED step_id — the snapshot carries no step_id to compare; a classification-time guard checks
+  # the wrong manifest; needs a snapshot step_id carrier mirroring the orchestrator's] → registers
+  # B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT-MAYBE-RAN-FENCE-STEP-ID. Fidelity is invariant-3 re-ask,
+  # NOT byte-match. CP v1.70 → v1.71, CP-only. advisor full-transcript BEFORE substantive work
+  # [BLOCKING terminal_status-divergence → snapshot-membership re-dispatch at :5752; BLOCKING
+  # second-pause-trigger → the fail-again full-chain witness] + a RECONCILE call after Codex [the
+  # fence-recoverable lift is UNSOUND for the deferred resume → narrow to re-fire-safe + register
+  # FENCE-STEP-ID] + out-of-family Codex [P1]. DECOMPOSE → standalone_closed 51 → 52,
+  # standalone_registered 5 → 5 [close 1 + register 1 net-zero].
+  # Prior (2026-06-26, B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT-NOT-YET-DISPATCHED closed
   # as a WHOLE close — the v1.68 §2 incomplete-recovery fail-closed LIFTED for the provably-not-run
   # window: a PAUSE-trigger crash-resume whose absent ordinals are all NOT-YET-DISPATCHED
   # [instrumented + NO dispatch marker] RE-ESTABLISHES the lost PAUSED state OMITTING them
@@ -630,13 +652,32 @@ arcs:
   - id: B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT-MAYBE-RAN
     title: "Reconstruct a lost PAUSE snapshot when an absent branch is interrupted-in-flight (maybe-ran)"
     kind: standalone
-    status: registered
+    status: closed
     decompose_at_open: true
-    owner_axis: "CP + runtime"
+    owner_axis: "CP"  # CP-only — the gate reuses the §25.15 per-kind predicate + the v1.70 re-pause mode; no runtime delta (the anticipated "+ runtime" was the un-needed worst case).
     parent_arc: B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT
-    operator_gated: false  # provisional — decided at open: if honoring it for an effect-bearing interrupted branch forces sacrificing at-most-once or the pause semantic, it flips to operator-gated (the SCOPED-ABORT / PROCEED-RESIDUAL precedents).
+    operator_gated: false  # DECIDED AT OPEN (re-fire-safe slice): stays false — a re-fire-safe maybe-ran has NO external effect to double-fire under ANY resume manifest, and PAUSED is re-established → neither at-most-once nor the pause semantic is sacrificed. The fence-recoverable case is SPLIT OFF (Codex [P1]) → registered FENCE-STEP-ID.
+    pr: "#<pending> (feat/r-fs-1-fanout-pause-reconstruct-maybe-ran — flips registered → closed as the RE-FIRE-SAFE slice; registers FENCE-STEP-ID → standalone_registered 5 → 5 net-zero)"
+    spec_delta: "bundled-absorption CP v1.70 → v1.71 (§1 the re-fire-safe-maybe-ran re-pause build — the v1.70 §2 PAUSE-reconstruct fail-closed LIFTED for RE-FIRE-SAFE DECLARATIVE/INFERENCE maybe-ran ordinals via `_refire_unsafe_branch_indices` [gate widened `¬_pr_maybe_ran` → `¬_pr_maybe_ran_unsafe`]; §2 the FENCE-RECOVERABLE TOOL_STEP/MANAGED_AGENTS case SPLIT OFF [out-of-family Codex [P1]: the deferred-omitted api.resume re-dispatch could double-fire under a changed step_id; needs a snapshot step_id carrier] → registers FENCE-STEP-ID; the SUB_AGENT residual subsumed by ...-MAYBE-RAN-SUBAGENT) + 1 clearance marker. CP-ONLY — NO runtime delta (reuses the §26.2 PauseResumeProtocol + v1.44 pause-capture + v1.60 dispatch-instrumentation + the `_refire_unsafe_branch_indices` classifier). NO contract / closed-enum / committed-invariant change; at-most-once PRESERVED."
+    gives: "A strict-tier (PAUSE / TEAM_BINDING) fan-out crash-resume whose absent ordinal is INTERRUPTED-in-flight (a dispatch marker, no terminal capture) AND RE-FIRE-SAFE (DECLARATIVE_STEP/INFERENCE_STEP — no external effect to double-fire) now RE-ESTABLISHES the lost PAUSED state OMITTING that ordinal — re-dispatched on api.resume under obl-5 — instead of the v1.70 §2 blanket fail-closed. The gate is WIDENED from `¬_pr_maybe_ran` to `¬_refire_unsafe(_pr_maybe_ran)` (the §25.15 `_refire_unsafe_branch_indices` classifier — NOT `_fence_unrecoverable_maybe_ran_indices`, which would narrow TOOL/MANAGED back IN, UNSOUND here); a `True` flag drives the v1.70 obl-5 re-pause mode (omit + defer the re-dispatch to api.resume, NEVER crash-time). A re-fire-safe re-dispatch has NO external effect under ANY resume manifest. The doubly-ambiguous case is resolved for re-fire-safe: (a) effect-maybe-fired → no external effect; (b) maybe-a-second-pause-trigger → the pause is already established, the omitted ordinal's true disposition resurfaces on api.resume re-dispatch (witnessed: a re-dispatch that fails again is HANDLED, not dropped). The FENCE-RECOVERABLE TOOL_STEP/MANAGED_AGENTS case is SPLIT OFF (Codex [P1]): unlike the §25.15 crash-time same-manifest re-dispatch, this reconstruct OMITS + DEFERS to api.resume and the snapshot carries NO step_id, so a same-kind CHANGED-step_id resume re-dispatches under a DIFFERENT fence key + double-fires → needs a snapshot step_id carrier (the registered FENCE-STEP-ID). Gate-only change — the three fan-out strategies UNCHANGED. Decorrelated: advisor full-transcript BEFORE substantive work (the BLOCKING terminal_status-divergence → resolved by the snapshot-membership re-dispatch at workflow_driver.py:5752, proven by the fresh-store witness; the BLOCKING second-pause-trigger → the fail-again full-chain witness) + a RECONCILE call after Codex (confirmed the fence-recoverable lift UNSOUND for the deferred resume — a classification-time same-step_id guard checks the wrong manifest; narrow to re-fire-safe + register FENCE-STEP-ID) + out-of-family Codex [P1] (the changed-step_id double-fire catch); no council."
+    as_built:
+      - "harness-cp/src/harness_cp/workflow_driver.py (the `PAUSE ∧ _crash_pause_trigger ∧ ¬_crash_complete` gate WIDENED from `¬_pr_maybe_ran` to `¬_pr_maybe_ran_unsafe` via `_refire_unsafe_branch_indices` — re-fire-safe ONLY; the fence-recoverable/SUB_AGENT/un-kinded/out-of-range kinds fall into the unsafe set → fail-closed; the fail_class reworded. NO strategy / carrier / runtime edit; #742's `_fence_unrecoverable_maybe_ran_indices` UNTOUCHED.)"
+      - "design-substrate/Spec_Control_Plane_v1_71.md + 1 clearance marker (CP-only, no runtime delta)"
+      - "tests: harness-cp test_workflow_driver_fanout_output_replay_full_chain.py (a re-fire-safe DECLARATIVE maybe-ran reconstructs PAUSED omitting the ordinal [re-dispatch nothing at crash-time]; the full-chain api.resume → re-dispatch EXACTLY the omitted ordinal → PARTIAL EQUAL to the no-crash baseline; the BLOCKING second-pause-trigger fail-again is HANDLED not dropped; a FENCE-RECOVERABLE TOOL_STEP maybe-ran STAYS fail-closed [Codex [P1]]; a SUB_AGENT_DISPATCH maybe-ran stays fail-closed; a mixed re-fire-safe+unrecoverable set fails closed; an un-kinded marker fails closed; a re-fire-safe maybe-ran with no protocol bound fails `…-pause-resume-protocol-not-bound`; the ORCHESTRATOR_WORKERS analogue reconstructs PAUSED omitting the re-fire-safe worker; the v1.70 incomplete-errored test reworked to the protocol-not-bound honest fail)"
     anticipated_scope: "Resolve a PAUSE ∧ degraded crash-resume where an ABSENT ordinal is INTERRUPTED-in-flight (a dispatch marker present, NO terminal capture — it ran when the crash hit). It is doubly-ambiguous: its effect MAYBE fired (re-dispatch would double-fire) AND it MAYBE was a second pause trigger (a failure the store cannot show) — so neither the at-most-once nor the disposition is reconstructible from the durable store alone. This is the case the v1.57 §2 foreclosure is actually about (the genuine §25.15.1 'finish in-flight' disposition question). Resolving it needs the per-kind effect-surface refinement (re-fire-safe / fence-recoverable absent branches could re-dispatch) composed with the obl-5-respecting re-pause mode of B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT-NOT-YET-DISPATCHED."
     why: "Surfaced at B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT (the decompose-at-open). The hard residual of the incomplete-recovery PAUSE case — the interrupted-in-flight ambiguity the spec foreclosure names. FULL-SPEC (`[[feedback-full-spec-beyond-mvp-nothing-deferred]]`)."
+    ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
+
+  - id: B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT-MAYBE-RAN-FENCE-STEP-ID
+    title: "Recover a FENCE-RECOVERABLE maybe-ran ordinal in the PAUSE-reconstruct deferred-resume window"
+    kind: standalone
+    status: registered
+    decompose_at_open: true
+    owner_axis: "CP + runtime"  # needs a snapshot step_id carrier (CP) + likely a per-branch dispatch-step_id store reader (runtime), mirroring the orchestrator's OrchestratorEffectFencePausedResumeState.
+    parent_arc: B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT-MAYBE-RAN
+    operator_gated: false  # additive carrier + a same-step_id compare at api.resume; no committed-invariant sacrifice.
+    anticipated_scope: "Recover a FENCE-RECOVERABLE (TOOL_STEP / MANAGED_AGENTS) maybe-ran ordinal in the PAUSE-reconstruct's DEFERRED-resume window (the re-fire-safe slice closed at v1.71; the fence-recoverable case was SPLIT OFF). Out-of-family Codex [P1]: unlike the §25.15 incomplete leg (re-dispatch at CRASH-TIME with the SAME manifest → the fence key (idempotency_key, step_id) matches the held claim), the PAUSE-reconstruct OMITS the ordinal + DEFERS its re-dispatch to the operator-mediated api.resume, and the snapshot carries NO step_id — so a same-kind CHANGED-step_id resume re-dispatches under a DIFFERENT fence key, misses the held claim, and DOUBLE-FIRES the maybe-fired effect. A classification-time same-step_id guard does NOT fix it (it checks the crash-resume manifest, not the api.resume manifest). The sound fix needs the PauseSnapshot to CARRY the maybe-fired effect's fence key (idempotency_key, step_id) per omitted fence-recoverable ordinal (a new resume carrier, mirroring the orchestrator's OrchestratorEffectFencePausedResumeState), so api.resume compares the resume manifest's step_id against the carried marker BEFORE re-dispatch + fail-closed / fence-pause on a mismatch. Scope ALSO covers the SAME lower-exposure hole in #742's crash-time `_fence_unrecoverable_maybe_ran_indices` predicate (an edited crash-resume manifest)."
+    why: "Split off at B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT-MAYBE-RAN (CP v1.71) by an out-of-family Codex [P1] catch — the fence-recoverable lift is UNSOUND for the deferred-omitted resume without a snapshot step_id carrier. FULL-SPEC (`[[feedback-full-spec-beyond-mvp-nothing-deferred]]`)."
     ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
 
   - id: B-FANOUT-CRASH-RESUME-STRICT-TIER-INCOMPLETE
