@@ -109,6 +109,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from harness_core.identity import ActionID
 from harness_cp.cp_shared_types import ActorIdentity
+from harness_cp.engine_class import EngineClass
 from harness_cp.handoff_context import (
     ActionKind,
     HandoffContext,
@@ -118,6 +119,7 @@ from harness_cp.handoff_context import (
     StateSummary,
 )
 from harness_cp.sub_agent_brief import SubAgentBrief
+from harness_cp.topology_pattern import TopologyPattern
 from harness_cp.topology_subagent_namespace import (
     SUBAGENT_NAMESPACE_SCHEMA,
     TOPOLOGY_NAMESPACE_SCHEMA,
@@ -125,6 +127,7 @@ from harness_cp.topology_subagent_namespace import (
 from harness_cp.workflow_driver_types import (
     RunStatus,
     StepExecutionContext,
+    StepKind,
     SubAgentChildPausedError,
     WorkflowStep,
 )
@@ -271,6 +274,89 @@ def compose_child_action_id(parent_action_id: str, child_workflow_id: str) -> Ac
     inspection without invoking a hash (which would lose the parent linkage).
     """
     return ActionID(f"{parent_action_id}::child::{child_workflow_id}")
+
+
+# B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT (R-FS-1) — the child engine classes whose per-step
+# output is DURABLY RECORDED (so a re-dispatched child auto-resumes from the store AND its
+# `final_state` reconstructs via `reconstruct_final_state` — B-CHILD-CRASH-RESUME-FINAL-STATE-
+# RECONSTRUCT, #764/#766/#768). MUST equal the CP driver's `_FANOUT_REPLAY_ENGINE_CLASSES`
+# ({EVENT_SOURCED_REPLAY, WAL_SEGMENT}) — a SUBSET of the runtime's 4 `_DURABLE_AUTO_FENCE_
+# ENGINE_CLASSES`. SAVE_POINT_CHECKPOINT / RECONCILER_LOOP are EXCLUDED: they auto-fence (tools
+# suppress) but have NO durable output store → a resumed child returns a suffix-only `final_state`
+# → the parent fold corrupts (the still-registered B-CHILD-CRASH-RESUME-FINAL-STATE-RECONSTRUCT-
+# SAVE-POINT-RECONCILER arc). The composer (typed) + the CP `_subagent_child_recoverable` defensive
+# read are MIRROR implementations of the same predicate — kept in sync by the by-execution witness.
+_SUBAGENT_RECOVERABLE_CHILD_ENGINE_CLASSES: frozenset[EngineClass] = frozenset(
+    {EngineClass.EVENT_SOURCED_REPLAY, EngineClass.WAL_SEGMENT}
+)
+# Child step kinds that, if present, make the child NOT a witnessed leaf — the deeper recursion
+# (a nested SUB_AGENT_DISPATCH grandchild) or an unfenced vendor sink (MANAGED_AGENTS) is a
+# separate, separately-verified mechanism → fail closed (the LINEAR-leaf slice is what #770
+# witnessed). TOOL_STEP / INFERENCE_STEP / DECLARATIVE_STEP / HITL_STEP children are in-scope.
+_SUBAGENT_RECOVERABLE_EXCLUDED_CHILD_KINDS: frozenset[StepKind] = frozenset(
+    {StepKind.SUB_AGENT_DISPATCH, StepKind.MANAGED_AGENTS}
+)
+
+
+def compose_child_run_id_seed(parent_idempotency_key: str, child_workflow_id: str) -> str:
+    """B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT (R-FS-1) — the DETERMINISTIC
+    first-dispatch child run_id seed (§14.7.4).
+
+    `sha256("child-run:" + parent_idempotency_key + ":" + child_workflow_id)` hex.
+    The spawning SUB_AGENT_DISPATCH worker's `parent_idempotency_key` is its own
+    stable, recoverable per-branch idempotency key
+    (`_compute_step_idempotency_key(run_idempotency_key, step_index[, branch_path])`,
+    C-CP-25 §25.6/§25.16) — it RE-DERIVES IDENTICALLY when the parent fan-out
+    re-dispatches a maybe-ran SUB_AGENT_DISPATCH worker on crash-resume (the run
+    key is recovered from the preserved run_id; step_index + branch_path are
+    deterministic manifest positions). Mixing in `child_workflow_id` keeps the seed
+    distinct if the same worker ever pointed at a different child. Replaces the
+    legacy fresh `uuid.uuid4().hex` first-dispatch run_id, which — being transient —
+    was lost on a parent crash, leaving the child's durable store + fence reserves
+    keyed on an unrecoverable identity (the maybe-ran-subagent recovery blocker).
+
+    Deterministic + collision-free for the DAG (the parent key already encodes run +
+    step + branch). At-most-once PRESERVED: the child still runs once on the happy
+    path; on a re-dispatch the stable key lets the child's OWN crash-resume
+    auto-resume from the shared durable store instead of re-running from scratch."""
+    return hashlib.sha256(
+        f"child-run:{parent_idempotency_key}:{child_workflow_id}".encode()
+    ).hexdigest()
+
+
+def subagent_child_recoverable(payload: SubAgentDispatchPayload) -> bool:
+    """B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT (R-FS-1) — whether a maybe-ran SUB_AGENT_DISPATCH
+    worker's CHILD is RE-DISPATCH-RECOVERABLE: re-dispatching it under the deterministic child
+    run_id auto-resumes the child from its durable store AND reconstructs a result-faithful
+    `final_state` (no parent-fold corruption).
+
+    THREE conjuncts (all required — the corrected predicate over the #746 reverted branch, which
+    keyed on the engine class ALONE and was reverted on the [P1-a] result-fidelity gap):
+
+    1. **engine ∈ {ESR, WAL}** — the child's per-step output is durably recorded, so the resumed
+       child auto-resumes AND `reconstruct_final_state` rebuilds the COMPLETE terminal state.
+       SAVE_POINT_CHECKPOINT / RECONCILER_LOOP have NO output store → suffix-only `final_state` →
+       fold corruption → fail closed (the registered `…-SAVE-POINT-RECONCILER` arc).
+    2. **topology == SINGLE_THREADED_LINEAR** — the WITNESSED scope (#770). A fan-out child engages
+       its OWN fan-out crash-resume reconstruction, a deeper unwitnessed path → the registered
+       fan-out-child follow-on. "No nested sub-agents" ≠ "no recursion" (finding-v1 §4.1).
+    3. **no child step is SUB_AGENT_DISPATCH / MANAGED_AGENTS** — the LEAF condition. A nested
+       sub-agent grandchild is the deeper recursion (a further follow-on); a MANAGED_AGENTS child
+       step is an unfenced vendor sink. TOOL/INFERENCE/DECLARATIVE/HITL child steps are in-scope.
+
+    The composer gates the DETERMINISTIC `child_run_id_seed` on this (a non-recoverable child gets
+    a fresh `uuid` → no auto-resume → pre-existing behavior, no suffix-only corruption), and the CP
+    classifier independently mirrors it (`_subagent_child_recoverable`, defensive opaque-payload
+    read) to decide whether a maybe-ran SUB_AGENT_DISPATCH branch is re-dispatch-recoverable."""
+    cme = payload.child_manifest_entry
+    if cme.engine_class not in _SUBAGENT_RECOVERABLE_CHILD_ENGINE_CLASSES:
+        return False
+    if cme.topology_pattern is not TopologyPattern.SINGLE_THREADED_LINEAR:
+        return False
+    return all(
+        child_step.step_kind not in _SUBAGENT_RECOVERABLE_EXCLUDED_CHILD_KINDS
+        for child_step in payload.child_steps
+    )
 
 
 def _empty_summary_hash() -> str:
@@ -626,6 +712,22 @@ class RuntimeSubAgentDispatcher:
             # Forward it so the child re-enters at its cursor rather than re-running
             # from scratch (the grandchild's completed steps are recovered, NOT
             # re-executed). `None` on a first dispatch → byte-identical to pre-arc.
+            # B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT (R-FS-1) — gate the DETERMINISTIC
+            # child run_id seed on recoverability. A recoverable child ({ESR,WAL} ∧ LINEAR
+            # ∧ leaf) gets the stable seed so a parent-crash re-dispatch auto-resumes it
+            # (with result-faithful reconstruction). A NON-recoverable child gets `None` →
+            # a fresh `uuid` → no auto-resume → its pre-existing behavior (NO suffix-only
+            # `final_state` corruption, which an unconditional deterministic id would cause
+            # for a SAVE_POINT/RECONCILER child on ANY re-dispatch, incl. the linear-parent
+            # resume path the fan-out classifier does not gate). Complements the CP
+            # classifier's fan-out-maybe-ran recoverability gate.
+            _child_run_id_seed = (
+                compose_child_run_id_seed(
+                    step_context.parent_idempotency_key, payload.child_workflow_id
+                )
+                if subagent_child_recoverable(payload)
+                else None
+            )
             try:
                 child_result = self.child_workflow_runner(
                     workflow_id=payload.child_workflow_id,
@@ -635,6 +737,7 @@ class RuntimeSubAgentDispatcher:
                     descent=descent,
                     default_model_binding=binding.model_binding,
                     pause_snapshot_input=step_context.child_resume_snapshot,
+                    child_run_id_seed=_child_run_id_seed,
                 )
             except Exception:
                 # Typed errors from child execution: annotate span +

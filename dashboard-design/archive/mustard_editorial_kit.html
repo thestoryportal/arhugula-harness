@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mustard Editorial — Full Design Kit</title>
+<style>
+  /* ===== EDIT THESE TOKENS TO RETHEME THE WHOLE KIT ===== */
+  :root{
+    --mustard:#E0A82E;
+    --paper:#F4EFE3;
+    --paper-hi:#FBF8F1;
+    --sand:#D8CFBC;
+    --terracotta:#C25B3A;
+    --ink:#2B2620;
+    --ink-soft:#6B6354;
+    --ink-faint:#9A8E76;
+    --serif:Georgia,'Times New Roman',serif;   /* swap for Canela / Tiempos in production */
+    --sans:'Helvetica Neue',Arial,sans-serif;   /* swap for Inter in production */
+    --radius:10px;
+    --shadow:6px 6px 0 var(--mustard);          /* the signature hard offset shadow */
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{background:#E7E0D0;font-family:var(--sans);color:var(--ink);padding:32px;display:flex;justify-content:center;}
+  .kit{width:100%;max-width:860px;background:var(--paper);border-radius:14px;overflow:hidden;border:1px solid var(--sand);}
+  .serif{font-family:var(--serif);}
+  .italic{font-style:italic;}
+
+  .topbar{background:var(--ink);color:var(--mustard);padding:18px 28px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;}
+  .topbar .title{font-family:var(--serif);font-size:18px;letter-spacing:.5px;}
+  .topbar .meta{font-size:11px;letter-spacing:2px;color:#C8941E;}
+
+  .body{padding:28px;}
+  .section-label{font-size:11px;letter-spacing:3px;color:var(--ink-faint);margin-bottom:14px;}
+  .note{font-size:11px;color:var(--ink-faint);line-height:1.6;margin-bottom:34px;}
+
+  /* palette */
+  .swatches{display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap;}
+  .swatch{flex:1;min-width:84px;}
+  .swatch .chip{height:58px;border-radius:6px;}
+  .swatch .name{font-size:10px;color:var(--ink-faint);margin-top:6px;letter-spacing:.5px;}
+
+  /* type scale */
+  .typebox{border-left:4px solid var(--mustard);padding-left:18px;margin-bottom:36px;}
+  .display{font-family:var(--serif);font-size:48px;font-weight:500;line-height:0.98;}
+  .h2{font-family:var(--serif);font-size:30px;font-weight:500;line-height:1.02;margin-top:10px;color:#5a5040;}
+  .subhead{font-size:16px;font-weight:600;margin-top:12px;letter-spacing:.3px;}
+  .bodytext{font-size:13px;color:var(--ink-soft);margin-top:8px;line-height:1.65;}
+  .scaleline{font-size:11px;color:var(--ink-faint);letter-spacing:2px;margin-top:10px;}
+
+  /* motifs */
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:36px;}
+  .motif{background:var(--paper);border:1px solid var(--sand);border-radius:8px;padding:18px;}
+  .motif.shadow{background:var(--paper-hi);box-shadow:var(--shadow);}
+  .motif .mlabel{font-size:11px;font-weight:700;letter-spacing:1px;margin-bottom:8px;}
+  .motif .mdesc{font-size:11px;color:var(--ink-soft);line-height:1.5;}
+  .pullquote{font-family:var(--serif);font-size:20px;font-style:italic;line-height:1.1;margin-bottom:8px;}
+  .numrule{display:flex;align-items:baseline;gap:10px;}
+  .numrule .num{font-family:var(--serif);font-size:34px;font-weight:500;color:var(--mustard);}
+  .numrule .rule{flex:1;border-top:2px solid var(--ink);}
+
+  /* components */
+  .btnrow{display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-bottom:16px;}
+  .btn{font-size:13px;font-weight:600;padding:12px 24px;border-radius:6px;cursor:pointer;border:none;}
+  .btn.dark{background:var(--ink);color:var(--paper);}
+  .btn.mustard{background:var(--mustard);color:var(--ink);}
+  .btn.outline{background:transparent;color:var(--ink);border:1.5px solid var(--ink);padding:11px 22px;}
+  .tag{background:var(--terracotta);color:var(--paper);font-size:11px;font-weight:700;padding:7px 13px;border-radius:4px;letter-spacing:.5px;}
+
+  .cardrow{display:flex;gap:14px;flex-wrap:wrap;margin-bottom:18px;}
+  .card{flex:1;min-width:200px;border-radius:var(--radius);padding:16px;box-shadow:var(--shadow);}
+  .card.light{background:var(--paper-hi);border:1px solid var(--sand);}
+  .card.dark{background:var(--ink);}
+  .card .ch{display:flex;align-items:baseline;gap:8px;margin-bottom:8px;}
+  .card .cnum{font-family:var(--serif);font-size:26px;color:var(--mustard);}
+  .card .crule{flex:1;border-top:1.5px solid var(--sand);}
+  .card.dark .crule{border-top-color:#4a4035;}
+  .card .ctitle{font-family:var(--serif);font-size:17px;font-weight:500;line-height:1.1;}
+  .card.dark .ctitle{color:var(--paper);}
+  .card .cdesc{font-size:11px;color:var(--ink-soft);margin-top:6px;line-height:1.5;}
+  .card.dark .cdesc{color:#B5A68E;}
+
+  /* sample posts */
+  .posts{display:flex;gap:12px;}
+  .post{flex:1;aspect-ratio:4/5;border-radius:var(--radius);padding:16px;display:flex;flex-direction:column;justify-content:space-between;position:relative;overflow:hidden;}
+  .post.mustard{background:var(--mustard);}
+  .post.paper{background:var(--paper);border:1px solid var(--sand);}
+  .post.dark{background:var(--ink);}
+  .post .eyebrow{font-size:9px;font-weight:700;letter-spacing:2px;}
+  .post .ptitle{font-family:var(--serif);font-weight:500;line-height:1.0;}
+  .pill{font-size:9px;font-weight:700;padding:8px 0;border-radius:6px;text-align:center;letter-spacing:1px;}
+  .photo-disc{position:absolute;right:-14px;top:42px;width:74px;height:74px;border-radius:50%;background:var(--sand);filter:sepia(.4);display:flex;align-items:center;justify-content:center;box-shadow:5px 5px 0 var(--mustard);font-size:34px;color:#5a5040;}
+
+  @media(max-width:680px){.grid2,.posts,.cardrow{grid-template-columns:1fr;flex-direction:column;}.posts .post{aspect-ratio:16/9;}.display{font-size:38px;}}
+</style>
+</head>
+<body>
+<div class="kit">
+
+  <div class="topbar">
+    <span class="title">Mustard Editorial</span>
+    <span class="meta">FULL KIT · WARM / MID-CENTURY / PAPER</span>
+  </div>
+
+  <div class="body">
+
+    <!-- 01 PALETTE -->
+    <div class="section-label">01 — PALETTE</div>
+    <div class="swatches">
+      <div class="swatch"><div class="chip" style="background:var(--mustard)"></div><div class="name">#E0A82E · MUSTARD</div></div>
+      <div class="swatch"><div class="chip" style="background:var(--paper);border:1px solid var(--sand)"></div><div class="name">#F4EFE3 · PAPER</div></div>
+      <div class="swatch"><div class="chip" style="background:var(--sand)"></div><div class="name">#D8CFBC · SAND</div></div>
+      <div class="swatch"><div class="chip" style="background:var(--terracotta)"></div><div class="name">#C25B3A · TERRACOTTA</div></div>
+      <div class="swatch"><div class="chip" style="background:var(--ink)"></div><div class="name">#2B2620 · INK</div></div>
+    </div>
+    <div class="note">Mustard + paper carry it; terracotta is the warm secondary accent, used sparingly for a highlighted word or rule. Photos are duotone — paper highlights, ink shadows — never full color. The offset shadow under cards is always mustard, never gray.</div>
+
+    <!-- 02 TYPE -->
+    <div class="section-label">02 — TYPE SCALE · Canela / Tiempos display + Inter</div>
+    <div class="typebox">
+      <div class="display">Brand's voice<br><em class="italic" style="color:var(--terracotta)">is louder</em></div>
+      <div class="h2">Headline 30 — serif</div>
+      <div class="subhead">Subhead 16 · Inter semibold</div>
+      <div class="bodytext">Body 13 — Inter regular. Serif is reserved for display and pull-quotes; sans handles everything functional. The contrast between the two is the editorial signature.</div>
+      <div class="scaleline">48 DISPLAY · 30 HEAD · 16 SUBHEAD · 13 BODY · 11 CAPTION</div>
+    </div>
+
+    <!-- 03 MOTIFS -->
+    <div class="section-label">03 — SIGNATURE MOTIFS</div>
+    <div class="grid2">
+      <div class="motif shadow">
+        <div class="mlabel">A · HARD OFFSET SHADOW</div>
+        <div class="mdesc">Solid mustard shadow offset down-right, no blur. Gives the paper-stack, pasted-clipping feel.</div>
+      </div>
+      <div class="motif" style="padding:0;overflow:hidden;display:flex">
+        <div style="width:64px;background:var(--sand);display:flex;align-items:center;justify-content:center;filter:sepia(.3);font-size:34px;color:#5a5040">◑</div>
+        <div style="padding:14px"><div class="mlabel">B · DUOTONE CUTOUT</div><div class="mdesc">Photos two-tone in paper + ink, hard-edged like scissors.</div></div>
+      </div>
+      <div class="motif">
+        <div class="pullquote">"a single line, set apart."</div>
+        <div class="mlabel">C · SERIF PULL-QUOTE</div>
+      </div>
+      <div class="motif">
+        <div class="mlabel">D · NUMERAL + RULE</div>
+        <div class="numrule"><span class="num">06</span><div class="rule"></div></div>
+        <div class="mdesc" style="margin-top:8px">Big serif numerals + a thin ink rule organize lists and steps.</div>
+      </div>
+    </div>
+
+    <!-- 04 COMPONENTS -->
+    <div class="section-label">04 — COMPONENTS</div>
+    <div class="btnrow">
+      <button class="btn dark">Read more</button>
+      <button class="btn mustard">Get the guide</button>
+      <button class="btn outline">Outline</button>
+      <span class="tag">NEW ISSUE</span>
+    </div>
+    <div class="cardrow">
+      <div class="card light">
+        <div class="ch"><span class="cnum">01</span><div class="crule"></div></div>
+        <div class="ctitle">Brand voice audit</div>
+        <div class="cdesc">Where you sound like everyone else.</div>
+      </div>
+      <div class="card dark">
+        <div class="ch"><span class="cnum">02</span><div class="crule"></div></div>
+        <div class="ctitle">Positioning</div>
+        <div class="cdesc">The one thing you own.</div>
+      </div>
+    </div>
+    <div class="note">Cards are paper-on-paper with a mustard offset shadow; the dark variant inverts for emphasis. Serif numeral + hairline rule is the connective device across a series.</div>
+
+    <!-- 05 SAMPLE POSTS -->
+    <div class="section-label">05 — SAMPLE POSTS · 4:5</div>
+    <div class="posts">
+      <div class="post mustard">
+        <span class="eyebrow" style="color:var(--ink)">VOL. 06 · THE STUDIO</span>
+        <div class="ptitle" style="font-size:27px;color:var(--ink)">Brand's voice<br>is louder</div>
+        <div style="display:flex;align-items:baseline;gap:8px"><span class="serif" style="font-size:22px;color:var(--ink)">→</span><span style="font-size:9px;color:#5a4310;letter-spacing:1px">@studio</span></div>
+      </div>
+      <div class="post paper">
+        <span class="eyebrow" style="color:var(--terracotta)">02 / READ</span>
+        <div class="photo-disc">◷</div>
+        <div class="ptitle" style="font-size:26px;position:relative">Time is<br>attention</div>
+        <div class="serif italic" style="font-size:13px;color:var(--ink-soft)">spend it well. — swipe →</div>
+      </div>
+      <div class="post dark">
+        <span class="eyebrow" style="color:var(--mustard)">FROM THE STUDIO</span>
+        <div class="ptitle" style="font-size:24px;color:var(--paper);line-height:1.04">Let's make<br>something<br><em class="italic" style="color:var(--mustard)">good</em></div>
+        <div class="pill" style="background:var(--mustard);color:var(--ink)">SAY HELLO</div>
+      </div>
+    </div>
+
+  </div>
+</div>
+</body>
+</html>

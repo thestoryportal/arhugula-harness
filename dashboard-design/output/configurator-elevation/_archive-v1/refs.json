@@ -1,0 +1,20 @@
+{
+  "error": "search_returned_no_shots",
+  "status": "Session LIVE (logged in)",
+  "detail": "dribbble_search returned only explore-page nav links and zero shots across the 3 queries (dark dashboard settings panel / developer tool configuration UI / terminal window UI dark) plus a retry. Not the documented human-check item and not logged-out. Likely a check/intercept on the search endpoint. Remedy is dribbble_auth, denied in don't-ask mode.",
+  "searches": [
+    {
+      "query": "dark dashboard settings panel",
+      "shots": []
+    },
+    {
+      "query": "developer tool configuration UI",
+      "shots": []
+    },
+    {
+      "query": "terminal window UI dark",
+      "shots": []
+    }
+  ],
+  "top": []
+}

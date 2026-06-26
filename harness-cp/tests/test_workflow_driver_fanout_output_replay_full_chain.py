@@ -108,6 +108,8 @@ class _InMemoryBranchStore:
         # read by `dispatched_branch_step_ids` so the fence-recoverable classifier + reconstruct
         # carrier key on the ORIGINAL step_id (changed-step_id guard). None models a torn marker.
         self._dispatched_step_id: dict[str, dict[int, str | None]] = {}
+        # B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT — dispatch-time SUB_AGENT child recoverability.
+        self._subagent_recoverable: dict[str, dict[int, bool]] = {}
         self._instrumented: set[str] = set()
         # B-FANOUT-CRASH-RESUME-ORCHESTRATOR-DISPATCH / MAYBE-RAN-RESOLUTION — {run_key:
         # orchestrator dispatch-time step_kind value | None} for runs whose orchestrator BEGAN
@@ -154,10 +156,22 @@ class _InMemoryBranchStore:
     # -- B-FANOUT-CRASH-RESUME-STRICT-TIER-INCOMPLETE / MAYBE-RAN-RESOLUTION: reserve-before-
     # dispatch ----
     def record_branch_dispatched(
-        self, run_key: str, branch_index: int, step_id: str, step_kind: str
+        self,
+        run_key: str,
+        branch_index: int,
+        step_id: str,
+        step_kind: str,
+        child_recoverable: bool | None = None,
     ) -> None:
         self._dispatched.setdefault(run_key, {})[int(branch_index)] = str(step_kind)
         self._dispatched_step_id.setdefault(run_key, {})[int(branch_index)] = str(step_id)
+        if child_recoverable is not None:
+            self._subagent_recoverable.setdefault(run_key, {})[int(branch_index)] = bool(
+                child_recoverable
+            )
+
+    def subagent_child_recoverable_indexes(self, run_key: str) -> set[int]:
+        return {bi for bi, ok in self._subagent_recoverable.get(run_key, {}).items() if ok}
 
     def present_dispatched_indexes(self, run_key: str) -> set[int]:
         return set(self._dispatched.get(run_key, {}))

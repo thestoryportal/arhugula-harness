@@ -237,6 +237,7 @@ class _MockChildWorkflowRunner:
         descent: SubAgentGateLevelDescent,
         default_model_binding: ModelBinding,
         pause_snapshot_input: Any = None,
+        child_run_id_seed: str | None = None,
     ) -> RunResult:
         self.calls.append(
             {
@@ -249,6 +250,9 @@ class _MockChildWorkflowRunner:
                 # B-HIERARCHICAL-PAUSE — the child resume snapshot threaded on resume
                 # (None on a first dispatch).
                 "pause_snapshot_input": pause_snapshot_input,
+                # B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT — the deterministic child run_id
+                # seed (None when the child is non-recoverable / a non-fanout dispatch).
+                "child_run_id_seed": child_run_id_seed,
             }
         )
         return self.next_result

@@ -37,7 +37,7 @@ import asyncio
 import contextlib
 import hashlib
 import json
-from collections.abc import Awaitable, Coroutine, Iterable, Mapping, Sequence
+from collections.abc import Awaitable, Collection, Coroutine, Iterable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import ContextVar
 from datetime import UTC, datetime
@@ -825,6 +825,89 @@ def _resumed_branch_step_ids_by_ordinal(
     }
 
 
+def _subagent_child_recoverable(step: WorkflowStep) -> bool | None:
+    """B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT (R-FS-1) — whether a SUB_AGENT_DISPATCH worker's
+    CHILD is RE-DISPATCH-RECOVERABLE: re-dispatching it under the deterministic child run_id
+    auto-resumes the child from its durable store AND reconstructs a result-faithful `final_state`.
+
+    The CP-side MIRROR of the runtime composer's typed `subagent_child_recoverable(payload)` — the
+    two must agree (the by-execution witness enforces it). The CP driver does NOT own the runtime
+    `SubAgentDispatchPayload` type (layering), so it reads the opaque `step_payload` DEFENSIVELY.
+    The THREE conjuncts (the corrected predicate over the #746 reverted branch, which keyed on the
+    engine class ALONE → reverted on the [P1-a] result-fidelity gap):
+
+    1. child engine ∈ `_FANOUT_REPLAY_ENGINE_CLASSES` ({ESR,WAL}) — durable output store → the
+       resumed child auto-resumes AND its `final_state` reconstructs. SAVE_POINT/RECONCILER have no
+       store → suffix-only `final_state` → fail closed (the `…-SAVE-POINT-RECONCILER` arc).
+    2. child topology == SINGLE_THREADED_LINEAR — the WITNESSED scope (#770); a fan-out child's own
+       reconstruction is the registered follow-on ("no nested sub-agents" ≠ "no recursion").
+    3. no child step kind is SUB_AGENT_DISPATCH / MANAGED_AGENTS — the leaf condition (deeper
+       recursion / unfenced vendor sink → further follow-ons).
+
+    `None` for any non-SUB_AGENT_DISPATCH step (no child → the marker omits the field). Any
+    read/parse failure → `False` (the decline-mirror: cannot prove recoverable → not recoverable →
+    fail closed), NEVER an exception that would break dispatch."""
+    if step.step_kind is not StepKind.SUB_AGENT_DISPATCH:
+        return None
+    try:
+        cme: Any = step.step_payload["child_manifest_entry"]
+        # Read the child engine class from a serialized mapping (`["engine_class"]`) or a typed
+        # carrier (`.engine_class`). `cme` stays `Any` (the opaque payload) so neither branch
+        # narrows to an Unknown element type (pyright-clean on the layering boundary).
+        try:
+            ec_raw: Any = cme["engine_class"]
+        except (TypeError, KeyError):
+            ec_raw = cme.engine_class
+        ec = ec_raw if isinstance(ec_raw, EngineClass) else EngineClass(ec_raw)
+        if ec not in _FANOUT_REPLAY_ENGINE_CLASSES:
+            return False
+        # Conjunct 2 — LINEAR topology narrowing (the [P1-a] fix).
+        try:
+            tp_raw: Any = cme["topology_pattern"]
+        except (TypeError, KeyError):
+            tp_raw = cme.topology_pattern
+        tp = tp_raw if isinstance(tp_raw, TopologyPattern) else TopologyPattern(tp_raw)
+        if tp is not TopologyPattern.SINGLE_THREADED_LINEAR:
+            return False
+        # Conjunct 3 — leaf condition: no nested SUB_AGENT_DISPATCH / MANAGED_AGENTS child step.
+        child_steps: Any = step.step_payload["child_steps"]
+        for child_step in child_steps:
+            try:
+                sk_raw: Any = child_step["step_kind"]
+            except (TypeError, KeyError):
+                sk_raw = child_step.step_kind
+            sk = sk_raw if isinstance(sk_raw, StepKind) else StepKind(sk_raw)
+            if sk in (StepKind.SUB_AGENT_DISPATCH, StepKind.MANAGED_AGENTS):
+                return False
+        return True
+    except (TypeError, KeyError, ValueError, AttributeError):
+        # opaque-payload shape mismatch / unknown enum value → cannot prove recoverable →
+        # fail closed (NEVER break dispatch).
+        return False
+
+
+def _resumed_subagent_recoverable_by_ordinal(
+    branch_steps: Sequence[WorkflowStep], *, branch_count: int, orchestrated: bool
+) -> set[int]:
+    """B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT (R-FS-1) — the WORKER/PEER ordinals whose RESUMED
+    manifest step is a SUB_AGENT_DISPATCH with a RECOVERABLE child (`_subagent_child_recoverable`
+    on the resumed step). The resumed-side half of the maybe-ran-subagent changed-manifest guard
+    ([P1-b], the #746 `6930e7ef` Codex [P1]): recovery requires the child be recoverable BOTH at
+    dispatch (the marker — durable records exist) AND in the RESUMED manifest (the re-dispatch goes
+    through the replay store/fence path); a child edited recoverable→non-recoverable between
+    dispatch + resume is in the dispatch-time set but NOT here → fail closed (else the re-dispatch
+    runs the now-non-recoverable child fresh → double-fire / suffix-only corruption). Same offset
+    scheme as `_resumed_branch_kinds_by_ordinal`; out-of-range ordinals omitted (→ not
+    recoverable)."""
+    offset = 1 if orchestrated else 0
+    return {
+        bi
+        for bi in range(branch_count)
+        if 0 <= bi + offset < len(branch_steps)
+        and _subagent_child_recoverable(branch_steps[bi + offset]) is True
+    }
+
+
 def _fence_unrecoverable_maybe_ran_indices(
     unsafe_indices: set[int],
     dispatched_kinds: Mapping[int, str | None],
@@ -833,6 +916,8 @@ def _fence_unrecoverable_maybe_ran_indices(
     *,
     dispatched_step_ids: Mapping[int, str | None],
     resumed_step_ids: Mapping[int, str],
+    subagent_recoverable_indexes: Collection[int] = frozenset(),
+    resumed_subagent_recoverable_indexes: Collection[int] = frozenset(),
 ) -> set[int]:
     """B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE (R-FS-1) — the subset of `unsafe_indices` (the
     re-fire-UNSAFE maybe-ran ordinals from `_refire_unsafe_branch_indices`) that ALSO cannot be
@@ -872,43 +957,81 @@ def _fence_unrecoverable_maybe_ran_indices(
     An ordinal stays UNRECOVERABLE (fail closed) iff it is NOT a same-kind fence-recoverable branch
     in range: an out-of-range / stale-store ordinal, an un-recorded / `None` marker kind (presence
     ≠ validity), a changed-to-non-recoverable resumed kind, a CROSS-KIND swap between two
-    recoverable kinds (TOOL_STEP ⇄ MANAGED_AGENTS), SUB_AGENT_DISPATCH (recursive child
-    crash-resume residual → a separate registered follow-on), or any other effect-bearing kind.
-    Shared by the incomplete-recovery + cardinality-only sites so the fence-recoverability
-    classification is one source of truth."""
+    recoverable kinds (TOOL_STEP ⇄ MANAGED_AGENTS), a SUB_AGENT_DISPATCH whose child was
+    NON-recoverable at dispatch OR in the resumed manifest (no result-faithful child auto-resume →
+    the `…-NONREPLAY-CHILD` / `…-SAVE-POINT-RECONCILER` / fan-out-child residuals), or any other
+    effect-bearing kind. Shared by the incomplete-recovery + cardinality-only sites so the
+    recoverability classification is one source of truth.
+
+    B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT (R-FS-1) — a SUB_AGENT_DISPATCH worker is READ_ONLY at
+    the parent gate; its only external effects live at the CHILD's tool sinks. A maybe-ran
+    SUB_AGENT_DISPATCH worker is RECOVERABLE iff its child was RECOVERABLE ({ESR,WAL} ∧ LINEAR ∧
+    leaf) BOTH at dispatch (`subagent_recoverable_indexes`, the marker — proves the child wrote
+    durable records to auto-resume from) AND in the RESUMED manifest
+    (`resumed_subagent_recoverable_indexes` — proves the re-dispatch goes through the replay
+    store/fence path, not a fresh non-recoverable run). Requiring BOTH closes the changed-manifest
+    hole ([P1-b], #746 `6930e7ef`): a child edited recoverable→non-recoverable between dispatch +
+    resume has durable records (dispatch True) but the re-dispatch runs the non-recoverable child
+    FRESH (resumed False) → double-fire / suffix-only corruption. Re-dispatching a recoverable
+    child auto-resumes it under the deterministic child run_id (composer-derived from the worker's
+    stable per-branch key) → at-most-once is COMPOSITIONAL (the child recursively re-applies this
+    same classifier). ACCEPTED PARITY (documented, mirrors the TOOL_STEP tool-swap): a
+    child-workflow-id SWAP under the same step_id composes a DIFFERENT deterministic child run_id →
+    the new child runs fresh under its own key (per-child at-most-once PRESERVED)."""
+    _tool = _FANOUT_MAYBE_RAN_FENCE_RECOVERABLE_KIND_VALUES
+    _subagent = StepKind.SUB_AGENT_DISPATCH.value
     return {
         bi
         for bi in unsafe_indices
         if not (
             0 <= bi < branch_count
-            and dispatched_kinds.get(bi) in _FANOUT_MAYBE_RAN_FENCE_RECOVERABLE_KIND_VALUES
-            and resumed_kinds.get(bi) in _FANOUT_MAYBE_RAN_FENCE_RECOVERABLE_KIND_VALUES
-            # Same-kind guard (load-bearing once the recoverable set has >1 kind): a
-            # CROSS-KIND swap (marker TOOL_STEP, resumed MANAGED_AGENTS, or the reverse)
-            # passes both set-membership conjuncts but re-dispatches into a DIFFERENT fence
-            # sink (a different idempotency-key namespace) → the ORIGINAL kind's ambiguous
-            # effect would be silently abandoned + a fresh effect of the new kind fired.
-            # Require the marker kind == the resumed kind so recovery only ever re-reaches
-            # the SAME sink the original effect claimed. (With the prior singleton TOOL_STEP
-            # set this equality was implied; it becomes load-bearing at v1.67 / MANAGED_AGENTS.)
-            and dispatched_kinds.get(bi) == resumed_kinds.get(bi)
             # B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT-MAYBE-RAN-FENCE-STEP-ID (R-FS-1) — the
-            # changed-STEP_ID guard (out-of-family Codex [P1], #756). The runtime effect fence
-            # keys on (parent_idempotency_key, step_id); the same-kind guard above does NOT catch
-            # a kind-preserving step_id change. An operator-edited crash-resume manifest that kept
-            # the kind but RENAMED/REORDERED the step at this ordinal would re-dispatch under a
-            # DIFFERENT fence key → miss the held claim → DOUBLE-FIRE the maybe-fired effect.
+            # changed-STEP_ID guard (out-of-family Codex [P1], #756), COMMON to both recovery
+            # paths. An operator-edited crash-resume manifest that kept the kind but
+            # RENAMED/REORDERED the step at this ordinal would re-dispatch a DIFFERENT branch.
             # Require the DISPATCH-MARKER step_id (best-effort; `None` on a torn / pre-arc marker
-            # → fail closed, cannot prove the original key) to equal the resumed manifest's step_id
-            # at this ordinal. At PAUSE-reconstruct the resumed manifest IS the crash manifest, so
-            # this passes trivially (same step_id) — it only bites the CRASH-TIME edited-manifest
-            # case; the deferred api.resume timing is covered by the resume-side material-diff
-            # guard on the reconstructed `effect_fence_paused_branches` (the two timings are
-            # distinct, same defect class).
+            # → fail closed, cannot prove the original key) to equal the resumed manifest's step_id.
             and dispatched_step_ids.get(bi) is not None
             and dispatched_step_ids.get(bi) == resumed_step_ids.get(bi)
+            and (
+                # 1. TOOL_STEP / MANAGED_AGENTS fence-recovery — re-dispatch re-reaches the
+                #    runtime effect fence at the tool/vendor sink (at-most-once: suppress /
+                #    ambiguous-PAUSE / fresh-fire-if-claim-absent). Same-kind guard (load-bearing
+                #    once the recoverable set has >1 kind): a CROSS-KIND swap (marker TOOL_STEP,
+                #    resumed MANAGED_AGENTS) re-dispatches into a DIFFERENT fence sink → the
+                #    original kind's ambiguous effect abandoned + a fresh effect fired.
+                (
+                    dispatched_kinds.get(bi) in _tool
+                    and resumed_kinds.get(bi) in _tool
+                    and dispatched_kinds.get(bi) == resumed_kinds.get(bi)
+                )
+                # 2. SUB_AGENT_DISPATCH child-recursive-recovery — same-kind (marker AND resumed
+                #    both SUB_AGENT_DISPATCH) AND child recoverable BOTH at dispatch (the marker)
+                #    AND in the resumed manifest (the [P1-b] dual gate, #746 `6930e7ef`).
+                or (
+                    dispatched_kinds.get(bi) == _subagent
+                    and resumed_kinds.get(bi) == _subagent
+                    and bi in subagent_recoverable_indexes
+                    and bi in resumed_subagent_recoverable_indexes
+                )
+            )
         )
     }
+
+
+def _subagent_recoverable_marker_indexes(store: Any, run_key: str) -> set[int]:
+    """B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT (R-FS-1) — defensive read of the DISPATCH-TIME
+    SUB_AGENT child-recoverable marker set from the bound store.
+
+    A store that predates / does not implement the marker reader (a pre-arc store, a partial test
+    fake) → empty set → every maybe-ran SUB_AGENT_DISPATCH branch fails closed (presence ≠
+    validity; the conservative reading — never auto-recover on an un-answerable store). Mirrors the
+    `getattr(ctx, "engine_output_store", None)` wiring idiom — additive, fail-closed, byte-identical
+    for any run without a SUB_AGENT_DISPATCH worker."""
+    reader = getattr(store, "subagent_child_recoverable_indexes", None)
+    if reader is None:
+        return set()
+    return set(reader(run_key))
 
 
 def _fanout_replay_store(ctx: DriverContext, manifest_entry: WorkflowManifestEntry) -> Any:
@@ -964,6 +1087,7 @@ def _mark_branch_dispatched(
     branch_index: int,
     step_id: str,
     step_kind: StepKind,
+    step: WorkflowStep | None = None,
 ) -> None:
     """B-FANOUT-CRASH-RESUME-STRICT-TIER-INCOMPLETE (R-FS-1) — write the reserve-before-
     DISPATCH marker for a fan-out branch (gated on `_fanout_replay_store`).
@@ -976,12 +1100,32 @@ def _mark_branch_dispatched(
     dispatch-before-capture window per the PR1/PR2 precedent). The marker records the branch's
     DISPATCH-TIME `step_kind` so the maybe-ran re-fire-safety classifier
     (B-FANOUT-CRASH-RESUME-MAYBE-RAN-RESOLUTION) keys on the ORIGINAL kind, never the
-    (possibly changed) resumed manifest's kind. No-op unless replay-capable ∧ store-bound."""
+    (possibly changed) resumed manifest's kind.
+
+    B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT (R-FS-1) — for a SUB_AGENT_DISPATCH branch the marker
+    ALSO records the DISPATCH-TIME child recoverability (`_subagent_child_recoverable(step)` — the
+    opaque child manifest's `{ESR,WAL}` ∧ LINEAR ∧ leaf predicate) so the maybe-ran classifier
+    re-dispatches a SUB_AGENT_DISPATCH worker ONLY when its child can auto-resume result-faithfully
+    under the deterministic run_id. `None` (`step` not threaded, or a non-SUB_AGENT branch) → the
+    field is omitted (marker byte-identical). No-op unless replay-capable ∧ store-bound."""
     _store = _fanout_replay_store(ctx, manifest_entry)
     if _store is not None:
-        _store.record_branch_dispatched(
-            run_idempotency_key, branch_index, str(step_id), str(step_kind.value)
-        )
+        _child_recoverable = _subagent_child_recoverable(step) if step is not None else None
+        if _child_recoverable is None:
+            # Non-SUB_AGENT branch (or `step` not threaded) → the recoverability field is
+            # omitted; call the store with the pre-arc signature (byte-identical marker; a store /
+            # fake that predates the additive `child_recoverable` kwarg is unaffected).
+            _store.record_branch_dispatched(
+                run_idempotency_key, branch_index, str(step_id), str(step_kind.value)
+            )
+        else:
+            _store.record_branch_dispatched(
+                run_idempotency_key,
+                branch_index,
+                str(step_id),
+                str(step_kind.value),
+                child_recoverable=_child_recoverable,
+            )
 
 
 def _rematerialize_recovered_branch_writer(
@@ -2405,6 +2549,22 @@ def _execute_workflow_body(
                             run_idempotency_key
                         ),
                         resumed_step_ids=_dispatched_resumed_step_ids,
+                        subagent_recoverable_indexes=(
+                            _subagent_recoverable_marker_indexes(
+                                _crash_replay_store, run_idempotency_key
+                            )
+                        ),
+                        resumed_subagent_recoverable_indexes=(
+                            _resumed_subagent_recoverable_by_ordinal(
+                                _crash_branch_steps,
+                                branch_count=_card_branch_count,
+                                orchestrated=manifest_entry.topology_pattern
+                                in {
+                                    TopologyPattern.ORCHESTRATOR_WORKERS,
+                                    TopologyPattern.HIERARCHICAL_DELEGATION,
+                                },
+                            )
+                        ),
                     )
                     if not (_instrumented and not _dispatched_fail_closed):
                         return (
@@ -2615,6 +2775,18 @@ def _execute_workflow_body(
                             _crash_expected,
                             dispatched_step_ids=_pr_marker_step_ids,
                             resumed_step_ids=_pr_resumed_step_ids,
+                            subagent_recoverable_indexes=(
+                                _subagent_recoverable_marker_indexes(
+                                    _crash_replay_store, run_idempotency_key
+                                )
+                            ),
+                            resumed_subagent_recoverable_indexes=(
+                                _resumed_subagent_recoverable_by_ordinal(
+                                    _crash_branch_steps,
+                                    branch_count=_crash_expected,
+                                    orchestrated=_pr_orchestrated,
+                                )
+                            ),
                         )
                         if _pr_instrumented and not _pr_fence_unrecoverable:
                             _crash_pause_reconstruct_no_dispatch = True
@@ -2746,6 +2918,22 @@ def _execute_workflow_body(
                                 run_idempotency_key
                             ),
                             resumed_step_ids=_maybe_ran_resumed_step_ids,
+                            subagent_recoverable_indexes=(
+                                _subagent_recoverable_marker_indexes(
+                                    _crash_replay_store, run_idempotency_key
+                                )
+                            ),
+                            resumed_subagent_recoverable_indexes=(
+                                _resumed_subagent_recoverable_by_ordinal(
+                                    _crash_branch_steps,
+                                    branch_count=_crash_expected,
+                                    orchestrated=manifest_entry.topology_pattern
+                                    in {
+                                        TopologyPattern.ORCHESTRATOR_WORKERS,
+                                        TopologyPattern.HIERARCHICAL_DELEGATION,
+                                    },
+                                )
+                            ),
                         )
                         if not (_instrumented and not _maybe_ran_fail_closed):
                             return (
@@ -6658,6 +6846,7 @@ def _execute_parallelization(
             branch_index=branch_index,
             step_id=step.step_id,
             step_kind=step.step_kind,
+            step=step,
         )
         # Schedule the (sync) dispatch off-loop; `dispatch_branch_step_shielded`
         # keeps it alive against THIS branch's cancellation so an in-flight effect
@@ -9283,6 +9472,7 @@ def _execute_orchestrator_workers(
             branch_index=branch_index,
             step_id=step.step_id,
             step_kind=step.step_kind,
+            step=step,
         )
         # Schedule the (sync) dispatch off-loop; `dispatch_branch_step_shielded`
         # keeps it alive against THIS branch's cancellation so an in-flight effect
