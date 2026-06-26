@@ -185,13 +185,19 @@ class EngineOutputStore:
         """Append one branch terminal-DISPOSITION record to the branch's OWN file, durably.
 
         The store records the branch's terminal **disposition** (``completed`` /
-        ``timed_out``) for EVERY branch that reaches a terminal boundary — NOT only
-        output-bearing clean successes — so a crash-resume can distinguish recover-and-fold
-        (``completed`` with ``output``), recover-as-terminal (``completed`` with ``output is
-        None`` — a ran-and-errored branch whose effect LANDED, never re-dispatched, never
-        folded), and the irreducibly-ambiguous ``timed_out`` (a deadline-cut in-flight
-        dispatch may or may not have landed → the caller FAILS CLOSED). An output-only
-        schema made every non-clean-success disposition invisible (the at-most-once
+        ``timed_out`` / ``scoped_aborted``) for EVERY branch that reaches a terminal boundary
+        — NOT only output-bearing clean successes — so a crash-resume can distinguish
+        recover-and-fold (``completed`` with ``output``), recover-as-terminal (``completed``
+        with ``output is None`` — a ran-and-errored branch whose effect LANDED, never
+        re-dispatched, never folded), the irreducibly-ambiguous ``timed_out`` (a deadline-cut
+        in-flight dispatch may or may not have landed → the caller FAILS CLOSED), and
+        ``scoped_aborted`` (CP spec v1.74 §1 — a branch the operator scoped-aborted via
+        ``EffectFenceResolution.ABORT_BRANCH``: ``output is None``, never re-dispatched, but
+        distinguished from a ran-and-errored ``completed`` so the CP crash-resume reconstruct
+        reproduces the in-resume all-abort FAILED rather than a vacuous PAUSED/PARTIAL). The
+        IS-hash-bearing F2 ledger terminal entry stays ``completed`` for a scoped-abort branch
+        (no §5.2 IS-hash change); only this runtime store carries the distinguishing value. An
+        output-only schema made every non-clean-success disposition invisible (the at-most-once
         fail-open class); recording disposition closes it.
 
         Per-branch file (``{digest}.branches/branch-{branch_index}.jsonl``) so N concurrent
@@ -217,7 +223,9 @@ class EngineOutputStore:
         ``branch_index`` is the filename authority (``branch-{n}.jsonl``); a present but
         UNREADABLE branch file is omitted here and surfaced by `present_branch_indexes` so
         the caller fails closed (never silently re-dispatching a corrupt branch). ``output``
-        is ``None`` for a terminal-no-output branch (ran-and-errored / timed-out).
+        is ``None`` for a terminal-no-output branch (ran-and-errored / timed-out /
+        scoped-aborted). ``terminal_status`` is one of ``completed`` / ``timed_out`` /
+        ``scoped_aborted`` (any other value is treated as corrupt → fail-closed).
         """
         branches_dir = self._branches_dir(run_key)
         if not branches_dir.exists():
@@ -759,7 +767,24 @@ class EngineOutputStore:
             # treat the record as unreadable so the presence-vs-readability gate surfaces it
             # in the corrupt set → the resume site fails closed, never treating it as a clean
             # `completed` it could replay or skip (out-of-family Codex [P2]).
-            if terminal_status not in ("completed", "timed_out"):
+            # `scoped_aborted` (CP spec v1.74 §1 / runtime spec v1.84 §14.23) is ADDITIVE — a
+            # fan-out branch the operator scoped-aborted (`ABORT_BRANCH`): a `completed`-shaped
+            # terminal (output is None, never re-dispatched) the CP crash-resume reconstruct
+            # must distinguish from a ran-and-errored `completed` to reproduce the in-resume
+            # all-abort FAILED across a crash. Recognized here (NOT corrupt) so it flows through
+            # `read_branch_records`; omitting it would fail-closed a mixed abort+survivor recovery
+            # (`[[closed-schema-extension-enforced-vs-advisory]]` — the guard is ENFORCED).
+            if terminal_status not in ("completed", "timed_out", "scoped_aborted"):
+                continue
+            # A `scoped_aborted` branch is recorded output=None BY CONSTRUCTION (the operator
+            # aborted it — nothing folds). A `scoped_aborted` record carrying a non-None output is
+            # a MALFORMED / tampered sidecar → treat as corrupt (skip → surfaced by
+            # present_branch_indexes → fail closed), NEVER readable: the CP crash-resume seed loop
+            # folds any non-None recovered output into `collected` BEFORE marking the ordinal
+            # scoped-aborted, so an accepted malformed record would mask an all-abort FAILED as a
+            # folded PARTIAL/SUCCESS (`[[durable-recovery-presence-validity-scope]]`: presence ≠
+            # validity; out-of-family Codex [P2]).
+            if terminal_status == "scoped_aborted" and output is not None:
                 continue
             if output is not None and not isinstance(output, dict):
                 continue

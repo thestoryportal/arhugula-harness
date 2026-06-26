@@ -42,7 +42,11 @@ from harness_cp.cross_family_fallback_chain import (
 from harness_cp.engine_class import EngineClass
 from harness_cp.handoff_context import StateSummary
 from harness_cp.pause_resume_protocol import PauseResumeProtocol
-from harness_cp.pause_resume_protocol_types import PauseSnapshot
+from harness_cp.pause_resume_protocol_types import (
+    EffectFenceResolution,
+    PauseSnapshot,
+    ResumeContext,
+)
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
 from harness_cp.topology_pattern import TopologyPattern
 from harness_cp.workflow_driver import (
@@ -403,7 +407,14 @@ class _Ctx:
     protocol); bind one (B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT) so a COMPLETE-recovery
     degraded PAUSE crash-resume can re-establish the lost PAUSED state."""
 
-    def __init__(self, *, ledger: Any, store: Any, pause_resume_protocol: Any = None) -> None:
+    def __init__(
+        self,
+        *,
+        ledger: Any,
+        store: Any,
+        pause_resume_protocol: Any = None,
+        resume_context_holder: Any = None,
+    ) -> None:
         from opentelemetry.trace import NoOpTracerProvider
 
         self.ledger_writer = ledger
@@ -416,6 +427,10 @@ class _Ctx:
         self.validator_framework = None
         self.tenant_id = None
         self.engine_output_store = store
+        # B-FANOUT-EFFECT-FENCE-SCOPED-ABORT-CRASH-DURABLE — the operator's per-key
+        # `EffectFenceResolution` map (ABORT_BRANCH etc.), peeked at the fan-out resume sites.
+        if resume_context_holder is not None:
+            self.resume_context_holder = resume_context_holder
 
 
 class _CountingDispatcher:
@@ -1487,10 +1502,16 @@ def _run_persona(
     pause_resume_protocol: Any = None,
     pause_snapshot_input: PauseSnapshot | None = None,
     timeout_disposition: FanoutTimeoutDisposition = FanoutTimeoutDisposition.FAIL_CLOSED,
+    resume_context_holder: Any = None,
 ) -> Any:
     ctx = cast(
         DriverContext,
-        _Ctx(ledger=_RecordingLedger(), store=store, pause_resume_protocol=pause_resume_protocol),
+        _Ctx(
+            ledger=_RecordingLedger(),
+            store=store,
+            pause_resume_protocol=pause_resume_protocol,
+            resume_context_holder=resume_context_holder,
+        ),
     )
     return execute_workflow(
         _manifest(
@@ -4111,3 +4132,230 @@ def test_cascade_cancel_fence_paused_branch_terminal_captured_to_store() -> None
     assert 1 in records
     assert records[1][1] == "completed"  # terminal_status
     assert records[1][2] is None  # output (no output — the effect's ambiguity lives at the fence)
+
+
+# ---------------------------------------------------------------------------
+# B-FANOUT-EFFECT-FENCE-SCOPED-ABORT-CRASH-DURABLE (R-FS-1, CP spec v1.74 §1 / runtime spec
+# v1.84 §14.23) — the durable store records a scoped-aborted (`ABORT_BRANCH`) branch as the
+# DISTINCT `scoped_aborted` disposition, so a crash mid-resume reconstructs the scoped-abort
+# ordinals from the recovered terminals + reproduces the in-resume all-abort FAILED rather than
+# the vacuous PAUSED/PARTIAL the `completed`-keyed reconstruct yielded pre-arc. GENUINE
+# producer→crash→consumer chains (no proxy: a real effect-fence pause → ABORT_BRANCH resume
+# WRITES the store, then a fresh-ledger run RECONSTRUCTS from it).
+# ---------------------------------------------------------------------------
+class EffectFenceAmbiguousUncommittedError(Exception):
+    """Test-local stand-in for the runtime `effect_fence.EffectFenceAmbiguousUncommittedError`
+    (the driver fan-out fence catch name-matches `type(exc).__name__`; harness-cp cannot import
+    harness-runtime)."""
+
+    def __init__(self, *, idempotency_key: str) -> None:
+        self.idempotency_key = idempotency_key
+        super().__init__("ambiguous")
+
+
+class _FenceDispatcher:
+    """Branches in `complete_indices` return output (the orchestrator / a surviving peer); the
+    rest raise the fence-ambiguous error (→ a §26.2 EFFECT_FENCE_AMBIGUOUS pause). A fence branch
+    waits for every completing sibling (so survivors are captured first) then barrier-syncs among
+    the fence branches (so all are in-flight before any raises) — the deterministic mid-fan-out
+    fence-pause. Records every dispatched step_id (the resume must NOT re-dispatch a scoped-abort
+    branch)."""
+
+    def __init__(self, *, fence_indices: set[int], complete_indices: set[int]) -> None:
+        self.dispatched: list[str] = []
+        self._fence = set(fence_indices)
+        self._complete_events = {i: threading.Event() for i in complete_indices}
+        self._fence_barrier = threading.Barrier(max(1, len(fence_indices)))
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        self.dispatched.append(str(step.step_id))
+        idx = int(step.step_payload["index"])
+        if idx in self._fence:
+            for ev in self._complete_events.values():
+                assert ev.wait(timeout=10.0), "a completing sibling never finished"
+            self._fence_barrier.wait(timeout=10.0)
+            raise EffectFenceAmbiguousUncommittedError(idempotency_key=f"fence-key-{step.step_id}")
+        result = {"branch": idx}
+        if idx in self._complete_events:
+            self._complete_events[idx].set()
+        return result
+
+
+class _HolderWithResolutions:
+    """Stand-in `ResumeContextHolder` — `peek()` returns a ResumeContext carrying the operator's
+    per-key `effect_fence_resolutions` map (B-FANOUT-EFFECT-FENCE-PER-BRANCH-RESOLUTION)."""
+
+    def __init__(self, resolutions: dict[str, EffectFenceResolution]) -> None:
+        self._rc = ResumeContext(effect_fence_resolutions=resolutions)
+
+    def peek(self) -> ResumeContext:
+        return self._rc
+
+
+def test_crash_resume_scoped_abort_all_aborted_reproduces_failed() -> None:
+    """GENUINE producer→crash→consumer chain (PARALLELIZATION). run1: both peers effect-fence-pause
+    → PAUSED. run2: the operator scoped-aborts BOTH (ABORT_BRANCH) → the durable store records each
+    `scoped_aborted` (PRODUCER) + the in-resume fold is the all-abort FAILED. run3 (a crash lost the
+    FAILED result, the store survived): crash-resume reconstructs `_scoped_abort_ordinals` from the
+    recovered `scoped_aborted` terminals → reproduces FAILED (CONSUMER), NOT the vacuous
+    PAUSED/PARTIAL the `completed`-keyed reconstruct yielded pre-arc (the regression goes RED there:
+    without the seed-loop reconstruct, `_scoped_abort_ordinals` is empty on crash-resume → the
+    degraded tail returns PARTIAL)."""
+    store = _InMemoryBranchStore()
+    steps = [_step(f"branch-{i}", i) for i in range(2)]
+    paused = _run_persona(
+        workflow_id="wf-sa-crash",
+        steps=steps,
+        dispatcher=_FenceDispatcher(fence_indices={0, 1}, complete_indices=set()),
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        pause_resume_protocol=_pause_protocol(),
+    )
+    assert paused.status is RunStatus.PAUSED
+    efp = paused.pause_snapshot.peer_fan_out_resume.effect_fence_paused_branches
+    assert len(efp) == 2
+    key_by_index = {b.branch_index: b.idempotency_key for b in efp}
+
+    holder = _HolderWithResolutions(
+        {
+            key_by_index[0]: EffectFenceResolution.ABORT_BRANCH,
+            key_by_index[1]: EffectFenceResolution.ABORT_BRANCH,
+        }
+    )
+    resume_dispatcher = _FenceDispatcher(fence_indices=set(), complete_indices=set())
+    resolved = _run_persona(
+        workflow_id="wf-sa-crash",
+        steps=steps,
+        dispatcher=resume_dispatcher,
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        pause_resume_protocol=_pause_protocol(),
+        pause_snapshot_input=paused.pause_snapshot,
+        resume_context_holder=holder,
+    )
+    assert resolved.status is RunStatus.FAILED  # in-resume all-abort
+    assert "parallelization-effect-fence-branch-aborted" in (resolved.fail_class or "")
+    assert resume_dispatcher.dispatched == []  # neither scoped-abort peer is re-dispatched
+    # PRODUCER witness — both peers recorded the DISTINCT `scoped_aborted` disposition durably.
+    records = store.read_branch_records(store.sole_run_key())
+    assert records[0][1] == "scoped_aborted" and records[0][2] is None
+    assert records[1][1] == "scoped_aborted" and records[1][2] is None
+
+    crash = _run_persona(
+        workflow_id="wf-sa-crash",
+        steps=steps,
+        dispatcher=_FenceDispatcher(fence_indices=set(), complete_indices=set()),
+        store=store,  # the store survived; a FRESH ledger ⟹ crash-resume
+        persona_tier=PersonaTier.TEAM_BINDING,
+        pause_resume_protocol=_pause_protocol(),
+    )
+    assert crash.status is RunStatus.FAILED  # CONSUMER — reproduced, not PAUSED/PARTIAL
+    assert "parallelization-effect-fence-branch-aborted" in (crash.fail_class or "")
+    assert crash.status is resolved.status  # result-fidelity: crash == in-resume all-abort
+
+
+def test_crash_resume_scoped_abort_mixed_survivor_is_partial() -> None:
+    """Mixed (PARALLELIZATION): peer-0 scoped-aborted, peer-1 survived. The crash-resume reproduces
+    PARTIAL — the survivor folds; the all-abort FAILED guard fires ONLY with zero survivors, and a
+    `scoped_aborted` recovered terminal is a degraded non-contributor, never a corrupt fail-closed
+    (the runtime store accepts the disposition; see test_engine_output_store)."""
+    store = _InMemoryBranchStore()
+    steps = [_step(f"branch-{i}", i) for i in range(2)]
+    paused = _run_persona(
+        workflow_id="wf-sa-mixed",
+        steps=steps,
+        dispatcher=_FenceDispatcher(fence_indices={0}, complete_indices={1}),
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        pause_resume_protocol=_pause_protocol(),
+    )
+    assert paused.status is RunStatus.PAUSED
+    efp = paused.pause_snapshot.peer_fan_out_resume.effect_fence_paused_branches
+    assert len(efp) == 1 and efp[0].branch_index == 0
+    holder = _HolderWithResolutions({efp[0].idempotency_key: EffectFenceResolution.ABORT_BRANCH})
+    resolved = _run_persona(
+        workflow_id="wf-sa-mixed",
+        steps=steps,
+        dispatcher=_FenceDispatcher(fence_indices=set(), complete_indices=set()),
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        pause_resume_protocol=_pause_protocol(),
+        pause_snapshot_input=paused.pause_snapshot,
+        resume_context_holder=holder,
+    )
+    assert resolved.status is RunStatus.PARTIAL  # survivor folds in-resume
+    records = store.read_branch_records(store.sole_run_key())
+    assert records[0][1] == "scoped_aborted" and records[0][2] is None
+    assert records[1][1] == "completed" and records[1][2] is not None
+
+    crash = _run_persona(
+        workflow_id="wf-sa-mixed",
+        steps=steps,
+        dispatcher=_FenceDispatcher(fence_indices=set(), complete_indices=set()),
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        pause_resume_protocol=_pause_protocol(),
+    )
+    assert crash.status is RunStatus.PARTIAL  # survivor folds; not FAILED, not corrupt-failed
+    assert crash.status is resolved.status
+
+
+def test_crash_resume_scoped_abort_orchestrator_all_aborted_reproduces_failed() -> None:
+    """The ORCHESTRATOR_WORKERS sibling of the all-abort chain — symmetric reconstruct at the
+    `_execute_orchestrator_workers` seed loop. run1: the orchestrator (steps[0]) completes, both
+    workers effect-fence-pause → PAUSED. run2: scoped-abort BOTH workers (ABORT_BRANCH) → the store
+    records each `scoped_aborted` + in-resume FAILED. run3: crash-resume reconstructs
+    `_scoped_abort_ordinals` from the recovered workers → reproduces FAILED (RED without the
+    orchestrator seed-loop reconstruct → PARTIAL)."""
+    store = _InMemoryBranchStore()
+    steps = [_step("orchestrator", 0)] + [_step(f"worker-{i}", i) for i in range(1, 3)]
+    paused = _run_persona(
+        workflow_id="wf-sa-orch",
+        steps=steps,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+        dispatcher=_FenceDispatcher(fence_indices={1, 2}, complete_indices={0}),
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        pause_resume_protocol=_pause_protocol(),
+    )
+    assert paused.status is RunStatus.PAUSED
+    efp = paused.pause_snapshot.fan_out_resume.effect_fence_paused_branches
+    assert len(efp) == 2  # both workers fence-paused (worker branch_index is 0-based)
+
+    holder = _HolderWithResolutions(
+        {b.idempotency_key: EffectFenceResolution.ABORT_BRANCH for b in efp}
+    )
+    resume_dispatcher = _FenceDispatcher(fence_indices=set(), complete_indices=set())
+    resolved = _run_persona(
+        workflow_id="wf-sa-orch",
+        steps=steps,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+        dispatcher=resume_dispatcher,
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        pause_resume_protocol=_pause_protocol(),
+        pause_snapshot_input=paused.pause_snapshot,
+        resume_context_holder=holder,
+    )
+    assert resolved.status is RunStatus.FAILED
+    assert "orchestrator-workers-effect-fence-branch-aborted" in (resolved.fail_class or "")
+    assert (
+        resume_dispatcher.dispatched == []
+    )  # neither worker (nor the recovered orchestrator) re-fired
+    records = store.read_branch_records(store.sole_run_key())  # workers keyed 0-based
+    assert records[0][1] == "scoped_aborted" and records[1][1] == "scoped_aborted"
+
+    crash = _run_persona(
+        workflow_id="wf-sa-orch",
+        steps=steps,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+        dispatcher=_FenceDispatcher(fence_indices=set(), complete_indices=set()),
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        pause_resume_protocol=_pause_protocol(),
+    )
+    assert crash.status is RunStatus.FAILED
+    assert "orchestrator-workers-effect-fence-branch-aborted" in (crash.fail_class or "")
+    assert crash.status is resolved.status

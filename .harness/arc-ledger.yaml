@@ -46,11 +46,36 @@
 snapshot:
   frozen_total: 11
   frozen_done: 11
-  standalone_closed: 54
+  standalone_closed: 55
   standalone_gated: 0
   standalone_resolved: 4
-  standalone_registered: 4
+  standalone_registered: 3
   source: ".harness/beyond-mvp-capability-boundary-ledger.md"
+  # FRONTIER NOTE (2026-06-26, B-FANOUT-EFFECT-FENCE-SCOPED-ABORT-CRASH-DURABLE closed as a WHOLE
+  # close, CP spec v1.73 → v1.74 + runtime v1.83 → v1.84). Crash-DURABLE persistence of the
+  # scoped-abort disposition (the v1.73 §2 residual). v1.73 reused the `completed`/no-output store
+  # terminal for a scoped-abort branch → indistinguishable from a ran-and-errored branch on
+  # crash-resume → an all-scoped-abort resume that CRASHED after the captures reconstructed
+  # PAUSED→PARTIAL, not the in-resume all-abort FAILED (status-fidelity only; NO double-fire —
+  # a recovered terminal is never re-dispatched). FIX (replay-store side, the disposition-vocabulary
+  # decision answered: NOT a new IS terminal_status → NO §5.2 IS-hash arc): the durable store records
+  # a scoped-abort branch under the DISTINCT disposition `scoped_aborted`; the CP crash-resume
+  # reconstruct reads it back into _scoped_abort_ordinals from the recovered terminals at BOTH fan-out
+  # sites → the existing all-abort guard reproduces FAILED (all-abort) / PARTIAL (mixed survivor)
+  # across a crash. The IS-hash-bearing F2 ledger terminal STAYS `completed` (no §5.2 IS-hash change,
+  # no cross-axis cascade); only the runtime store carries the distinguishing value. The store
+  # read-back closed-set guard is extended ADDITIVELY to accept `scoped_aborted` (else a mixed
+  # abort+survivor recovery fails closed — the ENFORCED-guard catch). Recovered scoped-abort ordinals
+  # excluded from the re-record loop (no duplicate ledger terminal). Witnessed by GENUINE
+  # producer→crash→consumer chains at BOTH topologies (PARALLELIZATION all-abort → FAILED + mixed →
+  # PARTIAL; ORCHESTRATOR_WORKERS all-abort → FAILED) — each RED-without-fix verified — + a runtime
+  # store round-trip witness (RED without the accept-set extension). harness-cp 1388 + harness-runtime
+  # 2132 + harness-cxa 28 green; pyright 0/0/0; ruff; overlay 31/31. Decorrelated: advisor full-
+  # transcript BEFORE substantive work (the A-vs-B replay-store-vs-IS-ledger determination; the
+  # ENFORCED read-back guard catch; both-sites symmetry; result-fidelity bar) + out-of-family Codex.
+  # WHOLE close (registers nothing) → standalone_closed 54 → 55, standalone_registered 4 → 3. The 3
+  # remaining forward: MAYBE-RAN-SUBAGENT + ORCHESTRATOR-MAYBE-RAN-SUBAGENT (recursive-child, heavy) +
+  # ORCHESTRATOR-PROCEED-RESIDUAL (operator-gated). The PRIOR FRONTIER NOTE is preserved below.
   # FRONTIER NOTE (2026-06-26, B-FANOUT-EFFECT-FENCE-PER-BRANCH-SCOPED-ABORT closed + registers 1
   # [net-zero], CP spec v1.72 → v1.73). Per-branch-SCOPED abort: a FOURTH EffectFenceResolution value
   # ABORT_BRANCH fails JUST one fence-paused fan-out branch (record terminal, never re-dispatched →
@@ -847,13 +872,21 @@ arcs:
   - id: B-FANOUT-EFFECT-FENCE-SCOPED-ABORT-CRASH-DURABLE
     title: "Crash-durable persistence of the scoped-abort disposition (reconstruct all-abort FAILED across a crash)"
     kind: standalone
-    status: registered
+    status: closed
     decompose_at_open: true
     owner_axis: "CP + runtime"
-    operator_gated: false
+    operator_gated: false  # additive replay-store disposition value + a CP reconstruct of an EXISTING in-resume fold; no committed-invariant sacrifice (at-most-once PRESERVED — a scoped_aborted branch is a recovered terminal, never re-dispatched), no §5.2 IS-hash change → no operator gate.
     parent_arc: B-FANOUT-EFFECT-FENCE-PER-BRANCH-SCOPED-ABORT
-    anticipated_scope: "The v1.73 scoped-abort records an ABORT_BRANCH branch as a `completed`/no-output terminal in the crash-resume replay store — INDISTINGUISHABLE from a ran-and-errored branch (the reuse-`completed` choice that kept v1.73 CP-only / no §5.2 IS-hash change). Consequence (out-of-family Codex [P1], execution-reproduced): an ALL-scoped-abort resume that CRASHES after the durable captures but before the FAILED return reconstructs via the `_crash_pause_reestablish` path → PAUSED→PARTIAL, NOT the in-resume all-abort FAILED — the operator's explicit all-abort decision is lost across the crash. The residual is STATUS-FIDELITY ONLY: NO double-fire (a recovered-terminal branch is never re-dispatched — execution-repro `re-dispatched=[]`); the divergence is FAILED↔PAUSED/PARTIAL. The fix persists the scoped-abort disposition DISTINGUISHABLY in the durable record (a new replay-store/IS disposition value or a separate durable marker) + reconstructs `_scoped_abort_ordinals` from recovered terminals on crash-resume so the all-abort FAILED is reproduced. Decompose-at-open: the disposition-vocabulary decision (replay-store vs IS-ledger alignment — the v1.73 reuse-`completed` deliberately kept the IS-hash arc out of scope) is the crux; whether it needs a new IS terminal_status (→ §5.2 IS-hash + cross-axis cascade + IS clearance) or a CP/runtime-side marker is decided at open."
-    why: "Surfaced at the B-FANOUT-EFFECT-FENCE-PER-BRANCH-SCOPED-ABORT build (out-of-family Codex round 5 [P1]; advisor reframed rounds 3/4/5 as ONE root cause — reuse-`completed` cannot carry the scoped-abort semantic across the durable crash-resume store). Registered per FULL-SPEC (`[[feedback-full-spec-beyond-mvp-nothing-deferred]]`) — a named BUILD-arc, NOT accept-and-document; the in-resume scoped-abort capability is sound + heavily tested, the crash-durable persistence is the genuinely-separate residual (`[[coarse-degraded-predicate-conflates-dispositions]]` at the durability layer)."
+    pr: "#<pending> (feat/r-fs-1-fanout-scoped-abort-crash-durable — flips registered → closed as a WHOLE close; registers NOTHING → standalone_registered 4 → 3, a net decrement)"
+    spec_delta: "bundled-absorption CP v1.73 → v1.74 (§1 the crash-durable scoped-abort persistence + reconstruct; §2 WHOLE close) + runtime v1.83 → v1.84 (§14.23 the EngineOutputStore disposition vocabulary {completed, timed_out} → {completed, timed_out, scoped_aborted}, additive) + 2 clearance markers. NO contract removal / closed-enum / committed-invariant / new-fail-class change; at-most-once PRESERVED; NO §5.2 IS-hash change (the distinguishing value is a runtime store free-str disposition, NOT the IS terminal_status Literal — the F2 ledger terminal stays `completed`)."
+    anticipated_scope: "The v1.73 scoped-abort records an ABORT_BRANCH branch as a `completed`/no-output terminal in the crash-resume replay store — INDISTINGUISHABLE from a ran-and-errored branch (the reuse-`completed` choice that kept v1.73 CP-only / no §5.2 IS-hash change). Consequence (out-of-family Codex [P1], execution-reproduced): an ALL-scoped-abort resume that CRASHES after the durable captures but before the FAILED return reconstructs via the `_crash_pause_reestablish` path → PAUSED→PARTIAL, NOT the in-resume all-abort FAILED. The residual is STATUS-FIDELITY ONLY: NO double-fire. The fix persists the scoped-abort disposition DISTINGUISHABLY + reconstructs `_scoped_abort_ordinals` from recovered terminals. Decompose-at-open: the disposition-vocabulary decision (replay-store vs IS-ledger alignment) is the crux."
+    closed_scope: "Built as the replay-store-side disposition `scoped_aborted` (the A-vs-B determination answered: NOT a new IS terminal_status → NO §5.2 IS-hash arc). The CP driver records a scoped-abort branch to the durable store as `scoped_aborted` (the `_capture_branch_terminal` calls at both fan-out resume sites; the IS-hash-bearing F2 ledger append STAYS `completed`); the runtime store read-back closed-set guard accepts `scoped_aborted` (additive; an unknown value still fails closed — the ENFORCED-guard catch, else a mixed abort+survivor recovery fails closed). On crash-resume the two recovered-terminal seed loops reconstruct `_scoped_abort_ordinals` from recovered `scoped_aborted` branches → the existing all-abort guard reproduces FAILED (all-abort) / PARTIAL (mixed survivor); the `completed`-keyed `_crash_pause_trigger`/`_crash_pause_reestablish` gates no longer mis-fire on a scoped-abort branch (the `timed_out` precedent); recovered scoped-abort ordinals are EXCLUDED from the re-record loop (`_scoped_abort_ordinals − _recovered_terminal.keys()`) so no duplicate ledger terminal. Witnesses: GENUINE producer→crash→consumer chains at BOTH topologies (PARALLELIZATION all-abort → FAILED + mixed → PARTIAL; ORCHESTRATOR_WORKERS all-abort → FAILED — each RED-without-fix verified: without the seed-loop reconstruct the all-abort crash-resume returns PARTIAL with empty aggregate) + a runtime store round-trip witness (RED without the accept-set extension). harness-cp 1388 / harness-runtime 2132 / harness-cxa 28 green; pyright 0/0/0; ruff; overlay 31/31. Decorrelated: advisor full-transcript BEFORE substantive work + out-of-family Codex. WHOLE close (registers nothing)."
+    why: "Surfaced at the B-FANOUT-EFFECT-FENCE-PER-BRANCH-SCOPED-ABORT build (out-of-family Codex round 5 [P1]; advisor reframed rounds 3/4/5 as ONE root cause — reuse-`completed` cannot carry the scoped-abort semantic across the durable crash-resume store). Built per FULL-SPEC (`[[feedback-full-spec-beyond-mvp-nothing-deferred]]`) — a named BUILD-arc, NOT accept-and-document; the crash-durable persistence was the genuinely-separate residual (`[[coarse-degraded-predicate-conflates-dispositions]]` at the durability layer), now resolved WHOLE."
+    as_built:
+      - "harness-cp/src/harness_cp/workflow_driver.py (the two scoped-abort `_capture_branch_terminal` calls record terminal_status='scoped_aborted' to the store [ledger append + terminal_dispositions stay 'completed']; the two recovered-terminal seed loops reconstruct `_scoped_abort_ordinals` from recovered 'scoped_aborted' branches; the two `_scoped_abort_to_record` loops exclude `_recovered_terminal.keys()`)"
+      - "harness-runtime/src/harness_runtime/lifecycle/engine_output_store.py (the `_read_last_branch_disposition` closed-set guard accepts 'scoped_aborted'; record_branch / read_branch_records docstrings)"
+      - "design-substrate/Spec_Control_Plane_v1_74.md + design-substrate/Spec_Harness_Runtime_v1.md v1.84 + 2 clearance markers"
+      - "tests: harness-cp test_workflow_driver_fanout_output_replay_full_chain.py (genuine producer→crash→consumer chains — scoped_abort all-aborted → FAILED [parallelization + orchestrator] + mixed survivor → PARTIAL); harness-runtime test_engine_output_store.py (scoped_aborted round-trip + not-in-corrupt-set)"
     ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
 
   - id: B-FANOUT-CRASH-RESUME-ORCHESTRATOR-DISPATCH
