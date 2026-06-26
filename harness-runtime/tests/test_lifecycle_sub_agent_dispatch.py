@@ -1145,6 +1145,46 @@ def test_subagent_child_recoverable_false_for_nested_subagent_or_managed_child_s
     assert subagent_child_recoverable(nested_managed) is False
 
 
+def test_cp_and_runtime_recoverability_predicates_agree() -> None:
+    """AGREEMENT WITNESS (advisor secondary) — the CP-side defensive opaque-payload read
+    (`_subagent_child_recoverable`, which records the dispatch marker → admits re-dispatch) and the
+    runtime typed predicate (`subagent_child_recoverable`, which gates the seed) MUST agree. The
+    DANGEROUS drift is CP-True / runtime-False: the classifier admits re-dispatch but the composer
+    passes no seed → the child runs fresh → double-fire. Assert both return the SAME verdict on the
+    recoverable shape + each negative-control shape."""
+    from harness_cp.workflow_driver import _subagent_child_recoverable as _cp_recoverable
+
+    cases = {
+        "linear-esr-leaf": _payload(
+            engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+            topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+            child_step_kinds=(StepKind.TOOL_STEP, StepKind.INFERENCE_STEP),
+        ),
+        "save-point": _payload(
+            engine_class=EngineClass.SAVE_POINT_CHECKPOINT,
+            topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+            child_step_kinds=(StepKind.TOOL_STEP,),
+        ),
+        "fanout-child": _payload(
+            engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+            topology=TopologyPattern.PARALLELIZATION,
+            child_step_kinds=(StepKind.TOOL_STEP,),
+        ),
+        "nested-subagent": _payload(
+            engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+            topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+            child_step_kinds=(StepKind.TOOL_STEP, StepKind.SUB_AGENT_DISPATCH),
+        ),
+    }
+    for name, payload in cases.items():
+        runtime_verdict = subagent_child_recoverable(payload)
+        cp_verdict = _cp_recoverable(_step(payload))  # the CP read over the SUB_AGENT step
+        assert cp_verdict == runtime_verdict, (
+            f"{name}: CP={cp_verdict} runtime={runtime_verdict} — predicates must agree "
+            "(CP-True/runtime-False would admit re-dispatch with no seed → double-fire)"
+        )
+
+
 def test_dispatch_seed_none_for_linear_non_fanout_recoverable_child(tmp_path: Path) -> None:
     """SEED-GATING — a recoverable child on a LINEAR (non-fan-out, `branch_index is None`) context
     gets `child_run_id_seed=None`. The deterministic seed is FAN-OUT-WORKER-scoped (it matches the
