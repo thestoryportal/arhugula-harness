@@ -46,12 +46,22 @@
 snapshot:
   frozen_total: 11
   frozen_done: 11
-  standalone_closed: 48
+  standalone_closed: 49
   standalone_gated: 0
   standalone_resolved: 4
-  standalone_registered: 5
+  standalone_registered: 6
   source: ".harness/beyond-mvp-capability-boundary-ledger.md"
-  # FRONTIER NOTE (2026-06-25, B-FANOUT-CRASH-RESUME-MAYBE-RAN-UNFENCED-EXTERNAL closed as a
+  # FRONTIER NOTE (2026-06-26, B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT closed as the COMPLETE-
+  # recovery slice — the PAUSE-trigger-crash fail-closed [`pause-trigger-ambiguous`] LIFTED when
+  # every declared ordinal is recovered [the snapshot-write-window crash]: the strategy
+  # RE-ESTABLISHES the lost PAUSED state [Reading A] reusing the live capture_pause_snapshot
+  # construction → the reconstructed snapshot's branches byte-match a real pause; CP-only, NO
+  # runtime delta. decompose-at-open: grounding revealed three sub-problems → closes 1 + registers
+  # 2 [the incomplete case splits into NOT-YET-DISPATCHED (provably-not-run absent, needs an obl-5
+  # respecting re-pause-without-dispatch mode) + MAYBE-RAN (interrupted-in-flight, the hard
+  # ambiguity)] → standalone_registered 5 → 6 (a net INCREASE — honest FULL-SPEC accounting;
+  # registering the tractable sub-case as if it were the hard one would be the over-reach trap).
+  # Prior (2026-06-25, B-FANOUT-CRASH-RESUME-MAYBE-RAN-UNFENCED-EXTERNAL closed as a
   # WHOLE close — the §14.22 fence EXTENDED to the §14.20 MANAGED_AGENTS vendor-session sink +
   # MANAGED_AGENTS added to the CP fence-recoverable classifier + a same-kind guard; NO new
   # registration [a LEAF, fully fenced, no residual] → standalone_registered 6 → 5, the second
@@ -80,11 +90,9 @@ snapshot:
   #   `[[spec-leg-split-on-ratification-boundary]]`) → standalone_registered 4 → 6 (a net INCREASE —
   #   honest FULL-SPEC accounting). Tool-swap is ACCEPTED PARITY-with-linear, documented not registered.
   # The 6 still-registered follow-ons keeping R-FS-1 ACTIVE:
-  #   • B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT (NEW — the maybe-ran SUB_AGENT_DISPATCH worker;
+  #   • B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT (the maybe-ran SUB_AGENT_DISPATCH worker;
   #       fenced only at the CHILD's tool sinks → recursive child crash-resume, a larger mechanism)
-  #   • B-FANOUT-CRASH-RESUME-MAYBE-RAN-UNFENCED-EXTERNAL (NEW — the maybe-ran MANAGED_AGENTS worker;
-  #       UNFENCED vendor-session sink → needs the C-RT-31 fence EXTENDED to the managed-agents sink)
-  #   • B-FANOUT-EFFECT-FENCE-PER-BRANCH-SCOPED-ABORT (NEW, from the per-branch-resolution build —
+  #   • B-FANOUT-EFFECT-FENCE-PER-BRANCH-SCOPED-ABORT (from the per-branch-resolution build —
   #       per-branch-DISTINCT resolution lands for SKIP/RE_FIRE, but ABORT stays run-level-terminal
   #       [v1.65 §1(b)]; per-branch-SCOPED abort [fail one branch, let siblings resolve] is a NEW
   #       disposition semantic → registered, operator-gated-decided-at-open)
@@ -95,8 +103,14 @@ snapshot:
   #       orchestrator writes no marker; closing the pre-capture double-fire window changes PROCEED's
   #       COMMITTED tier semantic [the v1.56 PR2-round-4 "accepts the window" precedent] → a C10⊥C11
   #       tension → dyadic council + operator AUQ at open)
-  #   • B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT (reconstruct a lost PAUSE snapshot honoring
-  #       §25.15.1 finish-in-flight; the PAUSE-trigger leg cascade-policy fails closed)
+  #   • B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT-NOT-YET-DISPATCHED (NEW from the PAUSE-RECONSTRUCT
+  #       complete-recovery close — every absent ordinal provably-not-run; a real pause snapshot
+  #       omits not-yet-dispatched branches, so reconstruct + re-pause-WITHOUT-dispatch [obl-5
+  #       blast-radius] → resume re-dispatches them; a distinct strategy mode, not a fall-through)
+  #   • B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT-MAYBE-RAN (NEW — an absent ordinal is interrupted-
+  #       in-flight [marker, no capture]: doubly-ambiguous [maybe-fired + maybe-a-second-trigger];
+  #       the genuine §25.15.1 finish-in-flight question, needs the per-kind refinement + the
+  #       re-pause mode of NOT-YET-DISPATCHED; the hard residual)
   # closure_gate.py G1.1 = standalone_registered + standalone_gated == 0 is now 6 + 0 = 6
   # → R-FS-1 stays ACTIVE. On all six follow-ons reaching closed/resolved → G1.1 passes →
   # R-FS-1 resolves → R-CL-Q1 quality track admits. (Run `just closure-gate` to confirm G1.1.)
@@ -555,13 +569,42 @@ arcs:
   - id: B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT
     title: "Reconstruct a lost PAUSE snapshot on a fan-out crash-resume (honoring finish-in-flight)"
     kind: standalone
+    status: closed
+    decompose_at_open: true
+    owner_axis: "CP"  # the complete-recovery slice is CP-only (reuses the §26.2 PauseResumeProtocol + the v1.44 fan-out pause-capture machinery); the incomplete-recovery follow-ons are CP + runtime.
+    parent_arc: B-FANOUT-CRASH-RESUME-CASCADE-POLICY
+    operator_gated: false  # impl-to-cleared-spec (v1.57 §3: §25.15.1 + obl.7 IMPLEMENTED not changed); at-most-once PRESERVED (complete recovery re-dispatches nothing) → no committed-invariant sacrifice → no operator gate.
+    pr: "#<pending> (feat/r-fs-1-fanout-pause-reconstruct — flips registered → closed as the complete-recovery slice; registers TWO narrower follow-ons → standalone_registered 5 → 6, a net increase)"
+    spec_delta: "bundled-absorption CP v1.67 → v1.68 (§1 the complete-recovery PAUSE reconstruct: the `PAUSE ∧ _crash_degraded` crash-resume leg splits on `_crash_complete` — complete falls through to the strategy, which RE-ESTABLISHES the lost PAUSED state via the `_crash_pause_reestablish` gate reusing the live capture_pause_snapshot construction; incomplete stays fail-closed; §2 the incomplete-recovery residual decomposition into NOT-YET-DISPATCHED + MAYBE-RAN; §3 the decompose-at-open determination) + 1 clearance marker. CP-ONLY — NO runtime delta (reuses the §26.2 PauseResumeProtocol + the v1.44 fan-out pause-capture + the §25.12 store verbatim). NO contract removal / closed-enum / committed-invariant / new-fail-class change; at-most-once PRESERVED."
+    gives: "A strict-tier (PAUSE / TEAM_BINDING) fan-out that crashed AFTER every branch finished in-flight + was captured but BEFORE the PauseSnapshot write (the snapshot-write-window) now RE-ESTABLISHES the lost PAUSED state on crash-resume, instead of FAILING CLOSED (`pause-trigger-ambiguous`) and silently consuming the operator's `pause` HITL election. Reading A: a crash-resume is a FRESH re-execution (`resume_snapshot is None`), NOT the operator's resume — the run was SUPPOSED to be PAUSED, the crash lost the snapshot, so the reconstruct restores it; a SUBSEQUENT api.resume finalizes (PARTIAL) per the existing path. The complete-recovery cut is sound because the store PROVABLY holds every finished-in-flight branch (zero interrupted-in-flight ambiguity), so the §25.15.1 foreclosure does not apply. Fidelity-safe: the reconstruct reuses the strategy's EXISTING capture (PARALLELIZATION at the `if branch_failed or _crash_pause_reestablish:` gate; ORCHESTRATOR_WORKERS at the `not branch_plan` short-circuit — covers HIERARCHICAL via delegation) → synthesis_step_id from the live param + the errored trigger branch represented IDENTICALLY (terminal_status='completed', output=None) → the reconstructed snapshot's branches BYTE-MATCH a real pause snapshot (witnessed). At-most-once PRESERVED (complete recovery re-dispatches NOTHING). Decorrelated: advisor full-transcript ×2 (the A-vs-B pick → Reading A; the slice-boundary decomposition → register NOT-YET-DISPATCHED separately from MAYBE-RAN, because folding provably-not-run via strategy fall-through is UNSOUND — it would re-dispatch not-yet-dispatched branches before the operator's pause-resolution, bypassing the §25.15.2 obl-5 blast-radius gate; the snapshot-carrier fidelity assertion; the spec-forbids read = impl-discretion) + an Explore map of the live pause→resume path re-grounded by direct read + out-of-family Codex on the diff; no council."
+    as_built:
+      - "harness-cp/src/harness_cp/workflow_driver.py (the `PAUSE ∧ _crash_degraded` crash-resume leg gated on `not _crash_complete` [complete falls through]; the `_crash_pause_reestablish` gate at `_execute_parallelization` [extends `if branch_failed:`]; the re-establish in `_execute_orchestrator_workers` `not branch_plan` block [the complete-recovery short-circuit, building the SAME FanOutResumeState a live worker-failure pause builds])"
+      - "design-substrate/Spec_Control_Plane_v1_68.md + 1 clearance marker (CP-only, no runtime delta)"
+      - "tests: harness-cp test_workflow_driver_fanout_output_replay_full_chain.py (complete-recovery reconstructs PAUSED; the RESULT-FIDELITY witness — the reconstruct snapshot's resume-carrier branches BYTE-EQUAL a non-crashed live pause's + resuming either yields the identical PARTIAL; incomplete stays fail-closed `pause-trigger-ambiguous`; protocol-not-bound fails honestly; non-degraded complete → SUCCESS; ORCHESTRATOR_WORKERS complete reconstructs PAUSED; re-crash-before-resume is idempotent)"
+    ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
+
+  - id: B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT-NOT-YET-DISPATCHED
+    title: "Reconstruct a lost PAUSE snapshot when every absent branch is provably-not-run"
+    kind: standalone
     status: registered
     decompose_at_open: true
     owner_axis: "CP + runtime"
-    parent_arc: B-FANOUT-CRASH-RESUME-CASCADE-POLICY
-    operator_gated: false  # a genuine design problem (how to honor §25.15.1 'finish in-flight, then pause' from a crash-interrupted store), NOT a committed-invariant sacrifice → no operator gate; carries its own design vet.
-    anticipated_scope: "Reconstruct a resumable PAUSED state on a fan-out crash-resume where a branch failed under CascadePolicy.PAUSE but the durable PauseSnapshot write was LOST in the crash. B-FANOUT-CRASH-RESUME-CASCADE-POLICY fails this case CLOSED (`fan-out-crash-resume-pause-trigger-ambiguous`) because a NAIVE reconstruct violates §25.15.1 PAUSE 'Allowed to finish in-flight, then pause' — a crash-interrupted store does NOT hold the finished-in-flight branches (the crash cut them mid-flight), so a reconstructed snapshot would resume interrupted-not-finished branches. Scope: a correct reconstruct that distinguishes finished-in-flight (recoverable) from interrupted-in-flight (must re-dispatch or fail), so api.resume re-enters a PAUSED state equivalent to a real pause snapshot. Carries its own design vet (the in-flight-disposition question)."
-    why: "Surfaced at B-FANOUT-CRASH-RESUME-CASCADE-POLICY (the PAUSE leg). The naive reconstruct is spec-foreclosed (probe-resolved, advisor); a correct reconstruct is a genuine design problem deferred to this sub-arc, NOT a defer. FULL-SPEC (`[[feedback-full-spec-beyond-mvp-nothing-deferred]]`)."
+    parent_arc: B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT
+    operator_gated: false  # additive (a new re-pause-without-dispatch strategy mode), no committed-invariant sacrifice → no operator gate.
+    anticipated_scope: "Reconstruct a PAUSED state on a PAUSE ∧ degraded crash-resume where the recovery is INCOMPLETE but every ABSENT ordinal is PROVABLY-NOT-RUN (an instrumented dispatch stamp + NO dispatch marker — the v1.60 reserve-before-dispatch proof). A real pause snapshot LEGITIMATELY omits not-yet-dispatched branches (§25.15.1 'not-yet-dispatched left re-dispatchable'), so a correct reconstruct builds the snapshot from the recovered terminals, OMITS the provably-not-run absent ordinals, returns PAUSED, and lets api.resume re-dispatch them. CANNOT reuse the complete-recovery slice's strategy fall-through: the live strategy re-dispatches the not-yet-dispatched branches IMMEDIATELY (before the operator's pause-resolution), bypassing the §25.15.2 obl-5 pre-dispatch high-blast-radius gate (an operator who would ABORT at the pause cannot prevent a not-yet-dispatched EXTERNAL_IRREVERSIBLE branch from firing). Needs a NEW re-pause-WITHOUT-dispatching-the-absent strategy mode."
+    why: "Surfaced at B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT (the decompose-at-open). The complete-recovery slice closes the snapshot-write-window; this is the tractable incomplete sub-case (provably-not-run absent), registered SEPARATELY from the hard MAYBE-RAN case so the ledger does not imply the whole incomplete case is hard. FULL-SPEC (`[[feedback-full-spec-beyond-mvp-nothing-deferred]]`; `[[grounding-reveals-claude-closeable-slice-close-honestly]]`)."
+    ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
+
+  - id: B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT-MAYBE-RAN
+    title: "Reconstruct a lost PAUSE snapshot when an absent branch is interrupted-in-flight (maybe-ran)"
+    kind: standalone
+    status: registered
+    decompose_at_open: true
+    owner_axis: "CP + runtime"
+    parent_arc: B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT
+    operator_gated: false  # provisional — decided at open: if honoring it for an effect-bearing interrupted branch forces sacrificing at-most-once or the pause semantic, it flips to operator-gated (the SCOPED-ABORT / PROCEED-RESIDUAL precedents).
+    anticipated_scope: "Resolve a PAUSE ∧ degraded crash-resume where an ABSENT ordinal is INTERRUPTED-in-flight (a dispatch marker present, NO terminal capture — it ran when the crash hit). It is doubly-ambiguous: its effect MAYBE fired (re-dispatch would double-fire) AND it MAYBE was a second pause trigger (a failure the store cannot show) — so neither the at-most-once nor the disposition is reconstructible from the durable store alone. This is the case the v1.57 §2 foreclosure is actually about (the genuine §25.15.1 'finish in-flight' disposition question). Resolving it needs the per-kind effect-surface refinement (re-fire-safe / fence-recoverable absent branches could re-dispatch) composed with the obl-5-respecting re-pause mode of B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT-NOT-YET-DISPATCHED."
+    why: "Surfaced at B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT (the decompose-at-open). The hard residual of the incomplete-recovery PAUSE case — the interrupted-in-flight ambiguity the spec foreclosure names. FULL-SPEC (`[[feedback-full-spec-beyond-mvp-nothing-deferred]]`)."
     ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
 
   - id: B-FANOUT-CRASH-RESUME-STRICT-TIER-INCOMPLETE

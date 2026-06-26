@@ -40,6 +40,9 @@ from harness_cp.cross_family_fallback_chain import (
     ProviderFamily,
 )
 from harness_cp.engine_class import EngineClass
+from harness_cp.handoff_context import StateSummary
+from harness_cp.pause_resume_protocol import PauseResumeProtocol
+from harness_cp.pause_resume_protocol_types import PauseSnapshot
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
 from harness_cp.topology_pattern import TopologyPattern
 from harness_cp.workflow_driver import (
@@ -54,7 +57,7 @@ from harness_cp.workflow_manifest_entry import (
     FanoutTimeoutDisposition,
     WorkflowManifestEntry,
 )
-from harness_is.state_ledger_entry_schema import Actor, ActorClass
+from harness_is.state_ledger_entry_schema import Actor, ActorClass, Identifier
 
 _DEFAULT_BINDING = ModelBinding(provider="anthropic", model="claude-haiku-4-5")
 _CHAIN = FallbackChain(
@@ -344,17 +347,49 @@ class _Emitter:
         self.emits.append(event_class)
 
 
+_PAUSE_ANCHOR = "0" * 64  # constant MVP pause-context anchor (no material diff on resume)
+
+
+def _pause_context_reader() -> tuple[StateSummary, str]:
+    """MVP constant-sentinel reader (mirrors the parallelization-pause harness): empty
+    StateSummary + a constant anchor → resume detects no material diff → admits."""
+    return (
+        StateSummary(
+            relevant_entries=(),
+            summary_text="",
+            summary_hash="0" * 64,
+            idempotency_key=Identifier(""),
+            external_references=(),
+        ),
+        _PAUSE_ANCHOR,
+    )
+
+
+def _pause_protocol() -> PauseResumeProtocol:
+    """A real PauseResumeProtocol so the COMPLETE-recovery PAUSE crash-resume can CAPTURE
+    a reconstructed snapshot + return PAUSED (B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT)."""
+    return PauseResumeProtocol(
+        state_ledger_writer=object(),
+        state_ledger_reader=object(),
+        pause_context_reader=_pause_context_reader,
+    )
+
+
 class _Ctx:
     """Minimal duck-typed DriverContext with an `engine_output_store` bound (the
-    fan-out crash-resume substrate). Mirrors the PARALLELIZATION e2e `_Ctx`."""
+    fan-out crash-resume substrate). Mirrors the PARALLELIZATION e2e `_Ctx`.
 
-    def __init__(self, *, ledger: Any, store: Any) -> None:
+    `pause_resume_protocol` defaults None (the fail-closed / continue paths need no
+    protocol); bind one (B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT) so a COMPLETE-recovery
+    degraded PAUSE crash-resume can re-establish the lost PAUSED state."""
+
+    def __init__(self, *, ledger: Any, store: Any, pause_resume_protocol: Any = None) -> None:
         from opentelemetry.trace import NoOpTracerProvider
 
         self.ledger_writer = ledger
         self.lifecycle_emitter = _Emitter()
         self.drained_flag = asyncio.Event()
-        self.pause_resume_protocol = None
+        self.pause_resume_protocol = pause_resume_protocol
         self.pause_requested_flag = asyncio.Event()
         self.ledger_reader = None
         self.tracer_provider = NoOpTracerProvider()
@@ -1429,8 +1464,13 @@ def _run_persona(
     persona_tier: PersonaTier,
     topology: TopologyPattern = TopologyPattern.PARALLELIZATION,
     registry: Any = None,
+    pause_resume_protocol: Any = None,
+    pause_snapshot_input: PauseSnapshot | None = None,
 ) -> Any:
-    ctx = cast(DriverContext, _Ctx(ledger=_RecordingLedger(), store=store))
+    ctx = cast(
+        DriverContext,
+        _Ctx(ledger=_RecordingLedger(), store=store, pause_resume_protocol=pause_resume_protocol),
+    )
     return execute_workflow(
         _manifest(
             workflow_id=workflow_id,
@@ -1444,6 +1484,7 @@ def _run_persona(
         step_dispatchers=cast(
             StepDispatcherRegistry, registry if registry is not None else _Registry(dispatcher)
         ),
+        pause_snapshot_input=pause_snapshot_input,
     )
 
 
@@ -2125,10 +2166,12 @@ def test_crash_resume_pause_incomplete_refire_safe_recovers() -> None:
     assert resume.dispatched == ["branch-0"]  # only the maybe-ran branch re-dispatches
 
 
-def test_crash_resume_pause_errored_branch_fails_closed_ambiguous() -> None:
-    """An errored branch under PAUSE (the pause trigger fired, but the durable PauseSnapshot
-    was lost in the crash) → fail closed (`pause-trigger-ambiguous`): a reconstruct can't honor
-    §25.15.1 'finish in-flight, then pause' from a crash-interrupted store. No re-dispatch."""
+def test_crash_resume_pause_incomplete_errored_fails_closed_ambiguous() -> None:
+    """B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT (CP spec v1.68 §2) — the INCOMPLETE case STAYS
+    fail-closed (`pause-trigger-ambiguous`). An errored branch fired the pause AND a sibling is
+    ABSENT (here forgotten → maybe-ran): the crash-interrupted store does NOT hold every
+    finished-in-flight branch, so a reconstruct cannot honor §25.15.1 'finish in-flight, then
+    pause'. No re-dispatch. (Only the COMPLETE-recovery window reconstructs — see below.)"""
     store = _InMemoryBranchStore()
     steps = [_step(f"branch-{i}", i) for i in range(3)]
     _run_persona(
@@ -2138,6 +2181,8 @@ def test_crash_resume_pause_errored_branch_fails_closed_ambiguous() -> None:
         store=store,
         persona_tier=PersonaTier.TEAM_BINDING,
     )
+    key = store.sole_run_key()
+    store.forget_branch(key, 2)  # a clean sibling's OUTPUT gone → INCOMPLETE recovery (absent #2)
 
     resume = _CountingDispatcher(n=3)
     r2 = _run_persona(
@@ -2153,6 +2198,227 @@ def test_crash_resume_pause_errored_branch_fails_closed_ambiguous() -> None:
         and "fan-out-crash-resume-pause-trigger-ambiguous" in r2.fail_class
     )
     assert resume.dispatched == []
+
+
+def test_crash_resume_pause_complete_reconstructs_paused() -> None:
+    """B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT (CP spec v1.68 §1) — a COMPLETE-recovery degraded
+    PAUSE crash-resume RE-ESTABLISHES the lost PAUSED state (Reading A). All 3 branches captured
+    (branch-1 errored), the snapshot-write-window crash → reconstruct → PAUSED with a re-captured
+    PeerFanOutResumeState snapshot; re-dispatch NOTHING."""
+    store = _InMemoryBranchStore()
+    steps = [_step(f"branch-{i}", i) for i in range(3)]
+    _run_persona(
+        workflow_id="wf-pause-recon",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3, fail_index=1),
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        pause_resume_protocol=_pause_protocol(),
+    )  # COMPLETE recovery (all 3 captured, branch-1 errored) — no forget.
+
+    resume = _CountingDispatcher(n=3)
+    r2 = _run_persona(
+        workflow_id="wf-pause-recon",
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        pause_resume_protocol=_pause_protocol(),
+    )
+    assert r2.status is RunStatus.PAUSED
+    assert resume.dispatched == []  # complete recovery → re-establish only, re-dispatch nothing
+    assert r2.pause_snapshot is not None
+    pr = r2.pause_snapshot.peer_fan_out_resume
+    assert pr is not None
+    # The errored trigger (branch-1) is represented IDENTICALLY to a live pause: terminal_status
+    # "completed", output None; the clean siblings carry their captured output.
+    by_index = {b.branch_index: b for b in pr.branches}
+    assert set(by_index) == {0, 1, 2}
+    assert all(b.terminal_status == "completed" for b in pr.branches)
+    assert by_index[1].output is None
+    assert by_index[0].output == {"branch": 0}
+    assert by_index[2].output == {"branch": 2}
+
+
+def test_crash_resume_pause_reconstruct_byte_matches_live_pause_then_resume_equal() -> None:
+    """The result-fidelity witness (`[[full-chain-witness-not-half-proofs]]`, the #746 lesson):
+    a COMPLETE-recovery crash-resume reconstruct produces a snapshot whose resume-carrier
+    `branches` BYTE-EQUAL a real (non-crashed) pause snapshot's, and resuming the reconstruct
+    yields the SAME PARTIAL state as resuming the real pause. No faked dispatcher, no proxy."""
+    steps = [_step(f"branch-{i}", i) for i in range(3)]
+
+    # run1 IS the live pause (branch-1 fails under PAUSE → PAUSED) AND populates the store; its
+    # snapshot is the non-crashed baseline. run2 IGNORES it (resume_snapshot is None) and
+    # reconstructs from the store → the crash model (the durable snapshot was lost).
+    store = _InMemoryBranchStore()
+    live = _run_persona(
+        workflow_id="wf-pause-fid",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3, fail_index=1),
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        pause_resume_protocol=_pause_protocol(),
+    )
+    assert live.status is RunStatus.PAUSED and live.pause_snapshot is not None
+    recon = _run_persona(
+        workflow_id="wf-pause-fid",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3),
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        pause_resume_protocol=_pause_protocol(),
+    )
+    assert recon.status is RunStatus.PAUSED and recon.pause_snapshot is not None
+
+    # The load-bearing surface a consumer reads — the resume carrier's branches — byte-match.
+    assert (
+        recon.pause_snapshot.peer_fan_out_resume.branches  # type: ignore[union-attr]
+        == live.pause_snapshot.peer_fan_out_resume.branches  # type: ignore[union-attr]
+    )
+
+    # Resuming EITHER snapshot yields the identical PARTIAL result (final-state fidelity).
+    live_resume = _run_persona(
+        workflow_id="wf-pause-fid",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3),
+        store=_InMemoryBranchStore(),
+        persona_tier=PersonaTier.TEAM_BINDING,
+        pause_resume_protocol=_pause_protocol(),
+        pause_snapshot_input=live.pause_snapshot,
+    )
+    recon_resume = _run_persona(
+        workflow_id="wf-pause-fid",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3),
+        store=_InMemoryBranchStore(),
+        persona_tier=PersonaTier.TEAM_BINDING,
+        pause_resume_protocol=_pause_protocol(),
+        pause_snapshot_input=recon.pause_snapshot,
+    )
+    assert live_resume.status is RunStatus.PARTIAL
+    assert recon_resume.status is live_resume.status
+    assert recon_resume.partial_state == live_resume.partial_state
+
+
+def test_crash_resume_pause_reconstruct_protocol_not_bound_fails_honestly() -> None:
+    """Detect-then-refuse: a COMPLETE-recovery degraded PAUSE crash-resume with NO bound
+    pause_resume_protocol cannot capture a snapshot → fail HONESTLY (never a false-resumable
+    PAUSED), not silently reconstruct or finalize."""
+    store = _InMemoryBranchStore()
+    steps = [_step(f"branch-{i}", i) for i in range(3)]
+    _run_persona(
+        workflow_id="wf-pause-nobind",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3, fail_index=1),
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+    )
+    r2 = _run_persona(
+        workflow_id="wf-pause-nobind",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3),
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,  # NO protocol bound
+    )
+    assert r2.status is RunStatus.FAILED
+    assert r2.fail_class is not None
+    assert "pause-resume-protocol-not-bound" in r2.fail_class
+
+
+def test_crash_resume_pause_complete_non_degraded_succeeds() -> None:
+    """No pause was triggered (no branch errored) → a COMPLETE non-degraded PAUSE crash-resume
+    finalizes SUCCESS, NOT a spurious re-established pause. The reconstruct fires ONLY on a
+    degraded recovered set (a genuine pause trigger)."""
+    store = _InMemoryBranchStore()
+    steps = [_step(f"branch-{i}", i) for i in range(3)]
+    _run_persona(
+        workflow_id="wf-pause-clean",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3),
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+    )
+    resume = _CountingDispatcher(n=3)
+    r2 = _run_persona(
+        workflow_id="wf-pause-clean",
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        pause_resume_protocol=_pause_protocol(),
+    )
+    assert r2.status is RunStatus.SUCCESS
+    assert resume.dispatched == []
+
+
+def test_crash_resume_pause_orchestrator_complete_reconstructs_paused() -> None:
+    """The ORCHESTRATOR_WORKERS analogue — a complete recovery short-circuits at the `not
+    branch_plan` block, where the re-establish builds a FanOutResumeState-bearing snapshot →
+    PAUSED (covers HIERARCHICAL_DELEGATION too, which delegates to this strategy)."""
+    store = _InMemoryBranchStore()
+    steps = [_step("orch", 0), _step("w-0", 0), _step("w-1", 1)]
+    _run_persona(
+        workflow_id="wf-ow-pause-recon",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=2, fail_index=1),  # worker w-1 errors → pause trigger
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+        pause_resume_protocol=_pause_protocol(),
+    )
+    resume = _CountingDispatcher(n=2)
+    r2 = _run_persona(
+        workflow_id="wf-ow-pause-recon",
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+        pause_resume_protocol=_pause_protocol(),
+    )
+    assert r2.status is RunStatus.PAUSED
+    assert resume.dispatched == []  # complete recovery → re-dispatch nothing
+    assert r2.pause_snapshot is not None
+    fr = r2.pause_snapshot.fan_out_resume
+    assert fr is not None  # orchestrator-bearing carrier (NOT peer)
+    assert {b.branch_index for b in fr.branches} == {0, 1}
+
+
+def test_crash_resume_pause_reconstruct_idempotent_recrash() -> None:
+    """The reconstruct is idempotent — a re-crash before the operator resumes re-reconstructs
+    the SAME snapshot (the reconstruct does not auto-persist; same store + same inputs → byte-
+    equal carrier), so no double-fire / divergence on repeated recovery."""
+    store = _InMemoryBranchStore()
+    steps = [_step(f"branch-{i}", i) for i in range(3)]
+    _run_persona(
+        workflow_id="wf-pause-idem",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3, fail_index=1),
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        pause_resume_protocol=_pause_protocol(),
+    )
+    r_a = _run_persona(
+        workflow_id="wf-pause-idem",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3),
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        pause_resume_protocol=_pause_protocol(),
+    )
+    r_b = _run_persona(
+        workflow_id="wf-pause-idem",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3),
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        pause_resume_protocol=_pause_protocol(),
+    )
+    assert r_a.status is RunStatus.PAUSED and r_b.status is RunStatus.PAUSED
+    assert (
+        r_a.pause_snapshot.peer_fan_out_resume.branches  # type: ignore[union-attr]
+        == r_b.pause_snapshot.peer_fan_out_resume.branches  # type: ignore[union-attr]
+    )
 
 
 def test_crash_resume_cascade_cancel_orchestrator_workers_errored() -> None:
