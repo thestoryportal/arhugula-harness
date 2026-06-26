@@ -103,6 +103,7 @@ class _InMemoryBranchStore:
         # Presence = key membership; the kind keys the maybe-ran re-fire-safety classifier
         # (None models a pre-v1.81 v1.79-era marker — step_id only, no kind → fail-closed).
         self._orchestrator_dispatched: dict[str, str | None] = {}
+        self._orchestrator_dispatched_step_id: dict[str, str | None] = {}
 
     def record_fanout_cardinality(self, run_key: str, branch_count: int) -> None:
         self._cardinality[run_key] = int(branch_count)
@@ -165,12 +166,16 @@ class _InMemoryBranchStore:
     # -- B-FANOUT-CRASH-RESUME-ORCHESTRATOR-DISPATCH: orchestrator reserve-before-dispatch --
     def record_orchestrator_dispatched(self, run_key: str, step_id: str, step_kind: str) -> None:
         self._orchestrator_dispatched[run_key] = str(step_kind)
+        self._orchestrator_dispatched_step_id[run_key] = str(step_id)
 
     def orchestrator_dispatched(self, run_key: str) -> bool:
         return run_key in self._orchestrator_dispatched
 
     def orchestrator_dispatched_kind(self, run_key: str) -> str | None:
         return self._orchestrator_dispatched.get(run_key)
+
+    def orchestrator_dispatched_step_id(self, run_key: str) -> str | None:
+        return self._orchestrator_dispatched_step_id.get(run_key)
 
     # -- test helper: a pre-v1.81 (v1.79-era) orchestrator marker (step_id only, no recorded
     # kind) → the maybe-ran classifier cannot prove re-fire-safety → fail-closed (the v1.79
@@ -206,6 +211,7 @@ class _InMemoryBranchStore:
         self._branches.pop(run_key, None)
         self._dispatched.pop(run_key, None)
         self._orchestrator_dispatched.pop(run_key, None)
+        self._orchestrator_dispatched_step_id.pop(run_key, None)
 
     # -- test helper: a PRE-arc (un-instrumented) journal — cardinality + branch records but
     # NO dispatch stamp and NO markers (the cross-version hazard). Forces the conservative
@@ -214,6 +220,7 @@ class _InMemoryBranchStore:
         self._instrumented.discard(run_key)
         self._dispatched.pop(run_key, None)
         self._orchestrator_dispatched.pop(run_key, None)
+        self._orchestrator_dispatched_step_id.pop(run_key, None)
 
     # -- PR2 synthesis capture / replay ---------------------------------------
     def record_synthesis(
@@ -2927,14 +2934,20 @@ def test_crash_resume_orchestrator_maybe_ran_re_fire_safe_recovers_pause() -> No
     assert resume.dispatched == ["orch", "w-0", "w-1"]
 
 
-def test_crash_resume_orchestrator_maybe_ran_effect_bearing_fails_closed() -> None:
-    """An EFFECT-BEARING orchestrator (TOOL_STEP) maybe-ran STAYS fail-closed — its effect may have
-    landed; re-dispatching `steps[0]` would double-fire. The effect-bearing-orchestrator resolution
-    is the registered follow-on B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-EFFECT-BEARING. The
-    DISPATCH-TIME kind in the marker (TOOL_STEP) — not the resumed manifest — governs."""
+def test_crash_resume_orchestrator_maybe_ran_fence_recoverable_tool_step_recovers() -> None:
+    """B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-EFFECT-BEARING (R-FS-1) — an EFFECT-BEARING
+    orchestrator (TOOL_STEP) maybe-ran is now FENCE-RECOVERABLE (was: fail-closed pre-this-arc). Its
+    DISPATCH-TIME kind is TOOL_STEP, the resumed manifest's `steps[0]` is STILL TOOL_STEP, so the CP
+    driver RE-DISPATCHES the orchestrator into the AUTO-ACTIVE runtime effect fence — which makes the
+    re-fire at-most-once at the tool sink (suppress / ambiguous-PAUSE / fresh-fire). That fence is the
+    SAME runtime fence the worker path uses; its suppress/pause/fresh-fire BEHAVIOR is proven by the
+    runtime test_effect_fence.py + the worker real-fence witnesses, and the orchestrator reaches it via
+    the SAME tool/managed-agents dispatcher (read-verified parity — same dispatcher, run_engine_class
+    set, deterministic orchestrator key) with no orchestrator-specific fence logic. The mock dispatcher
+    here models the re-dispatch reaching the sink → the run RECOVERS fresh (orchestrator + workers).
+    The same-kind + same-step_id guards are the changed-kind / fence-key protection."""
     store = _InMemoryBranchStore()
     steps = [_step("orch", 0, StepKind.TOOL_STEP), _step("w-0", 0), _step("w-1", 1)]
-    registry = _AnyKindRegistry(_CountingDispatcher(n=2))  # serves the TOOL_STEP orchestrator
     _run_persona(
         workflow_id="wf-ow-orch-effect-bearing",
         steps=steps,
@@ -2942,7 +2955,7 @@ def test_crash_resume_orchestrator_maybe_ran_effect_bearing_fails_closed() -> No
         store=store,
         persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
         topology=TopologyPattern.ORCHESTRATOR_WORKERS,
-        registry=registry,
+        registry=_AnyKindRegistry(_CountingDispatcher(n=2)),
     )
     key = store.sole_run_key()
     store.forget_orchestrator_maybe_ran(key)
@@ -2958,9 +2971,82 @@ def test_crash_resume_orchestrator_maybe_ran_effect_bearing_fails_closed() -> No
         topology=TopologyPattern.ORCHESTRATOR_WORKERS,
         registry=_AnyKindRegistry(resume),
     )
+    assert r2.status is RunStatus.SUCCESS
+    # Re-dispatched into the fence (the mock models the sink) — orchestrator + workers fresh.
+    assert resume.dispatched == ["orch", "w-0", "w-1"]
+
+
+def test_crash_resume_orchestrator_maybe_ran_fence_recoverable_managed_agents_recovers() -> None:
+    """B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-EFFECT-BEARING (R-FS-1) — the MANAGED_AGENTS
+    analogue of the TOOL_STEP orchestrator recovery above. The orchestrator's vendor-session dispatch
+    is fenced at its OWN §14.20/§14.22 sink (the #748 build), so a maybe-ran MANAGED_AGENTS
+    orchestrator re-supplied as MANAGED_AGENTS RE-DISPATCHES into the fence (at-most-once at the
+    vendor-session sink) → the run RECOVERS (the advisor-flagged MANAGED_AGENTS-orchestrator
+    coverage; the #748 runtime fence already lands the resolution-consumption)."""
+    store = _InMemoryBranchStore()
+    steps = [_step("orch", 0, StepKind.MANAGED_AGENTS), _step("w-0", 0), _step("w-1", 1)]
+    _run_persona(
+        workflow_id="wf-ow-orch-managed",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=2),
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+        registry=_AnyKindRegistry(_CountingDispatcher(n=2)),
+    )
+    key = store.sole_run_key()
+    store.forget_orchestrator_maybe_ran(key)
+    assert store.orchestrator_dispatched_kind(key) == StepKind.MANAGED_AGENTS.value
+
+    resume = _CountingDispatcher(n=2)
+    r2 = _run_persona(
+        workflow_id="wf-ow-orch-managed",
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+        registry=_AnyKindRegistry(resume),
+    )
+    assert r2.status is RunStatus.SUCCESS
+    assert resume.dispatched == ["orch", "w-0", "w-1"]
+
+
+def test_crash_resume_orchestrator_maybe_ran_cross_kind_swap_fails_closed() -> None:
+    """The orchestrator same-kind guard — a maybe-ran orchestrator dispatched as TOOL_STEP,
+    re-supplied on resume as MANAGED_AGENTS (a CROSS-KIND swap between two fence-recoverable kinds),
+    FAILS CLOSED: the re-dispatch would reach a DIFFERENT fence sink (a different idempotency-key
+    namespace) and silently abandon the original tool effect's ambiguity. Marker kind (TOOL_STEP) !=
+    resumed kind (MANAGED_AGENTS) → not fence-recoverable → maybe-ran fail-closed."""
+    store = _InMemoryBranchStore()
+    orig = [_step("orch", 0, StepKind.TOOL_STEP), _step("w-0", 0), _step("w-1", 1)]
+    _run_persona(
+        workflow_id="wf-ow-orch-cross-kind",
+        steps=orig,
+        dispatcher=_CountingDispatcher(n=2),
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+        registry=_AnyKindRegistry(_CountingDispatcher(n=2)),
+    )
+    key = store.sole_run_key()
+    store.forget_orchestrator_maybe_ran(key)
+    assert store.orchestrator_dispatched_kind(key) == StepKind.TOOL_STEP.value
+
+    swapped = [_step("orch", 0, StepKind.MANAGED_AGENTS), _step("w-0", 0), _step("w-1", 1)]
+    resume = _CountingDispatcher(n=2)
+    r2 = _run_persona(
+        workflow_id="wf-ow-orch-cross-kind",
+        steps=swapped,
+        dispatcher=resume,
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+        registry=_AnyKindRegistry(resume),
+    )
     assert r2.status is RunStatus.FAILED
     assert "fan-out-crash-resume-orchestrator-maybe-ran" in (r2.fail_class or "")
-    assert resume.dispatched == []  # NOT re-dispatched (no double-fire of an effect-bearing orch)
+    assert resume.dispatched == []  # NOT re-dispatched (cross-kind swap → fail closed)
 
 
 def test_crash_resume_orchestrator_maybe_ran_pre_v1_81_marker_fails_closed() -> None:

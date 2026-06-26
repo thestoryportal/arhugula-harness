@@ -43,6 +43,7 @@ from harness_cp.pause_resume_protocol_types import (
     FanOutResumeState,
     HandoffResumeState,
     MaterialDiffPolicy,
+    OrchestratorEffectFencePausedResumeState,
     PauseSnapshot,
     PeerFanOutResumeState,
     ResumeContext,
@@ -419,6 +420,7 @@ class PauseResumeProtocol:
         handoff_resume: HandoffResumeState | None = None,
         evaluator_optimizer_resume: EvaluatorOptimizerResumeState | None = None,
         effect_fence_resume: EffectFenceResumeState | None = None,
+        orchestrator_effect_fence_resume: OrchestratorEffectFencePausedResumeState | None = None,
     ) -> PauseSnapshot:
         """Capture a workflow-layer pause snapshot per CP spec v1.11 §26.1.
 
@@ -452,6 +454,7 @@ class PauseResumeProtocol:
             handoff_resume=handoff_resume,
             evaluator_optimizer_resume=evaluator_optimizer_resume,
             effect_fence_resume=effect_fence_resume,
+            orchestrator_effect_fence_resume=orchestrator_effect_fence_resume,
         )
         return PauseSnapshot(
             workflow_id=workflow_id,
@@ -467,6 +470,7 @@ class PauseResumeProtocol:
             handoff_resume=handoff_resume,
             evaluator_optimizer_resume=evaluator_optimizer_resume,
             effect_fence_resume=effect_fence_resume,
+            orchestrator_effect_fence_resume=orchestrator_effect_fence_resume,
         )
 
     async def attempt_resume(
@@ -524,6 +528,7 @@ class PauseResumeProtocol:
             handoff_resume=snapshot.handoff_resume,
             evaluator_optimizer_resume=snapshot.evaluator_optimizer_resume,
             effect_fence_resume=snapshot.effect_fence_resume,
+            orchestrator_effect_fence_resume=snapshot.orchestrator_effect_fence_resume,
         )
         if expected_hash != snapshot.snapshot_hash:
             return ResumeResult(
@@ -620,6 +625,16 @@ def _strip_default_fanout_resume_fields(carrier_dump: Any) -> None:
             if not isinstance(child_snapshot, dict):
                 continue
             child = cast("dict[str, Any]", child_snapshot)
+            # B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-EFFECT-BEARING — drop the nested
+            # child snapshot's default-None orchestrator effect-fence carrier (a PauseSnapshot
+            # field, NOT inside fan_out_resume) so a pre-arc HIERARCHICAL snapshot whose nested
+            # child predates this field re-hashes byte-identically. The field is brand-new, so
+            # stripping it when None can only RESTORE byte-compat — it never alters an existing
+            # non-null nested carrier (a real orchestrator fence pause keeps the key + is
+            # hash-COVERED). The OUTERMOST snapshot's carrier is handled by the conditional
+            # include in `_compute_snapshot_hash` (it is passed as a param, not model-dumped).
+            if child.get("orchestrator_effect_fence_resume") is None:
+                child.pop("orchestrator_effect_fence_resume", None)
             for nested_key in ("fan_out_resume", "peer_fan_out_resume"):
                 _strip_default_fanout_resume_fields(child.get(nested_key))
 
@@ -635,6 +650,7 @@ def _compute_snapshot_hash(
     handoff_resume: HandoffResumeState | None = None,
     evaluator_optimizer_resume: EvaluatorOptimizerResumeState | None = None,
     effect_fence_resume: EffectFenceResumeState | None = None,
+    orchestrator_effect_fence_resume: OrchestratorEffectFencePausedResumeState | None = None,
 ) -> str:
     """sha256 hex over canonical JSON of (workflow_id, run_id, step_index, state_summary).
 
@@ -707,6 +723,16 @@ def _compute_snapshot_hash(
         # the five resume carriers ever is), so every pre-existing snapshot hashes
         # byte-identically — mirrors the handoff / evaluator drops.
         canonical["effect_fence_resume"] = effect_fence_resume.model_dump(mode="json")
+    if orchestrator_effect_fence_resume is not None:
+        # B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-EFFECT-BEARING: the orchestrator
+        # effect-fence ambiguous-pause carrier (the held reserve's idempotency_key +
+        # step_id/step_kind guards — no recovered output, that absence IS the ambiguity).
+        # Added to the canonical dict ONLY when present (at most one of the six resume
+        # carriers ever is), so every pre-existing snapshot hashes byte-identically —
+        # mirrors the effect_fence_resume drop.
+        canonical["orchestrator_effect_fence_resume"] = orchestrator_effect_fence_resume.model_dump(
+            mode="json"
+        )
     payload = json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(payload).hexdigest()
 

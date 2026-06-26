@@ -506,6 +506,57 @@ class EffectFenceResumeState(BaseModel):
     `_compute_snapshot_hash` (a resumed resolution trusts it → integrity-checked)."""
 
 
+class OrchestratorEffectFencePausedResumeState(BaseModel):
+    """A fan-out ORCHESTRATOR (`steps[0]`) whose OWN sequential dispatch raised the runtime
+    effect fence's `EffectFenceAmbiguousUncommittedError` (C-RT-31 §14.22) — the fence lost a
+    reserve to a prior uncommitted attempt of a non-idempotent effect AND found no captured
+    output proving completion, so whether the orchestrator's effect fired is genuinely ambiguous.
+
+    B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-EFFECT-BEARING (R-FS-1) — the ORCHESTRATOR
+    analogue of the WORKER `EffectFencePausedBranchResumeState`. The orchestrator runs FIRST +
+    sequentially, BEFORE any worker and BEFORE its own output capture, so when ITS dispatch
+    fence-pauses there is no `FanOutResumeState` to carry (no branch ran, no orchestrator output
+    exists — that absence IS the ambiguity); this is the FIRST-step analogue of the LINEAR-path
+    `EffectFenceResumeState`, not a partial fan-out. Carried on `PauseSnapshot
+    .orchestrator_effect_fence_resume` (a 6th top-level resume carrier, NEVER co-set with the
+    five others), populated by ORCHESTRATOR_WORKERS / HIERARCHICAL_DELEGATION. On resume the
+    orchestrator is RE-DISPATCHED with the operator's `EffectFenceResolution` key-bound to its
+    reserve (NOT skipped like a recovered orchestrator, NOT fresh like a pre-arc run) and the
+    workers then fan out fresh (none ran). The resolution palette is RE_FIRE / ABORT:
+    SKIP_AS_FIRED is REJECTED at the resume site (an orchestrator's empty output would
+    silently structure a degenerate fan-out aggregate — fail loud, never silently
+    under-execute; the no-silent-failure discipline).
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    idempotency_key: str
+    """The held effect-fence reserve's `idempotency_key` (read by name off the runtime
+    `EffectFenceAmbiguousUncommittedError`, since harness-cp cannot import harness-runtime), so
+    `api.resume` key-binds the operator's `EffectFenceResolution` to THIS orchestrator's effect —
+    the same keying discipline the LINEAR path's `EffectFenceResumeState` + the worker
+    `EffectFencePausedBranchResumeState` use. On resume the orchestrator is re-dispatched with an
+    `EffectFenceResolutionDirective(resolution=..., idempotency_key=...)` threaded on its
+    `StepExecutionContext.effect_fence_resolution`; the runtime tool / managed-agents dispatcher
+    consumes the matching directive (RE_FIRE → clear reserve + re-dispatch, ABORT → fail). Absent
+    the key (defensive) → resume re-pauses (INERT, never an auto-re-fire)."""
+
+    step_id: str
+    """The orchestrator `WorkflowStep.step_id` AT CAPTURE TIME. Resume validates the re-supplied
+    `steps[0].step_id` against this (positional-identity guard, fail-closed on a same-count
+    rename/reorder — the same cheap guard `FanOutResumeState.orchestrator_step_id` /
+    `EffectFencePausedBranchResumeState.step_id` apply)."""
+
+    step_kind: str
+    """The orchestrator `WorkflowStep.step_kind` value AT CAPTURE TIME (`tool-step` or
+    `managed-agents` in production — the two fence-recoverable orchestrator kinds). Resume
+    validates the re-supplied `steps[0].step_kind` against this (the changed-kind guard): if the
+    operator kept the `step_id` but changed the kind away from the captured one, threading the
+    `EffectFenceResolution` would reach NO fence (or a DIFFERENT sink) → the original ambiguous
+    effect would be silently abandoned. Fail closed — the orchestrator analogue of the worker
+    `EffectFencePausedBranchResumeState.step_kind` changed-kind guard (out-of-family Codex [P1])."""
+
+
 class EffectFenceResolutionDirective(BaseModel):
     """The key-bound resolution the driver threads to the resumed dispatch.
 
@@ -629,6 +680,22 @@ class PauseSnapshot(BaseModel):
     key-binds the operator's `ResumeContext.effect_fence_resolution` to it (skip-as-fired
     → empty-output proceed / re-fire → clear the claim + fresh dispatch / abort →
     FAILED)."""
+
+    orchestrator_effect_fence_resume: OrchestratorEffectFencePausedResumeState | None = None
+    """B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-EFFECT-BEARING (R-FS-1) — the 6th top-level
+    resume carrier, present ONLY when an ORCHESTRATOR_WORKERS / HIERARCHICAL_DELEGATION fan-out's
+    OWN orchestrator (`steps[0]`) of a fence-recoverable kind (TOOL_STEP / MANAGED_AGENTS)
+    raised the §14.22 effect fence at its sequential dispatch — BEFORE any worker, BEFORE its
+    output capture (`None` otherwise — additive, default-None, so every existing snapshot is
+    byte-unchanged). NEVER co-set with the four fan-out carriers OR `effect_fence_resume`: the
+    orchestrator fence pause is the FIRST-step analogue of the linear `effect_fence_resume`, but
+    captured + resumed by the orchestrator-workers strategy (so it carries `step_id`/`step_kind`
+    for the changed-orchestrator guard, which the key-only linear carrier does not). COVERED by
+    `_compute_snapshot_hash` when present (same integrity contract); when nested inside a
+    HIERARCHICAL `paused_child_branches[].child_snapshot` it is dropped-when-None by
+    `_strip_default_fanout_resume_fields` (byte-compat with pre-arc nested snapshots). `api.resume`
+    key-binds the operator's `ResumeContext.effect_fence_resolution` to it and re-dispatches the
+    orchestrator (RE_FIRE → clear + fresh dispatch / ABORT → FAILED; SKIP_AS_FIRED rejected)."""
 
 
 class PausedChildBranchResumeState(BaseModel):

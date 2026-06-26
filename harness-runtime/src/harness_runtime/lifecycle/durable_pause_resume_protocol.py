@@ -36,6 +36,7 @@ from harness_cp.pause_resume_protocol_types import (
     EvaluatorOptimizerResumeState,
     FanOutResumeState,
     HandoffResumeState,
+    OrchestratorEffectFencePausedResumeState,
     PauseSnapshot,
     PeerFanOutResumeState,
     WorkflowPauseReason,
@@ -86,6 +87,7 @@ class DurablePauseResumeProtocol(PauseResumeProtocol):
         handoff_resume: HandoffResumeState | None = None,
         evaluator_optimizer_resume: EvaluatorOptimizerResumeState | None = None,
         effect_fence_resume: EffectFenceResumeState | None = None,
+        orchestrator_effect_fence_resume: OrchestratorEffectFencePausedResumeState | None = None,
     ) -> PauseSnapshot:
         """Compose the snapshot via the parent, then durably persist it.
 
@@ -112,6 +114,7 @@ class DurablePauseResumeProtocol(PauseResumeProtocol):
             handoff_resume=handoff_resume,
             evaluator_optimizer_resume=evaluator_optimizer_resume,
             effect_fence_resume=effect_fence_resume,
+            orchestrator_effect_fence_resume=orchestrator_effect_fence_resume,
         )
         self._store.capture(snapshot)
         return snapshot

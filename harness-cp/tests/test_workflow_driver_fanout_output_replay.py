@@ -65,6 +65,7 @@ class _FakeStore:
         dispatch_instrumented: bool = False,
         orchestrator_dispatched: bool = False,
         orchestrator_dispatched_kind: str | None = None,
+        orchestrator_dispatched_step_id: str | None = None,
         dispatched_kinds: dict[int, str | None] | None = None,
         synthesis_present: bool = False,
     ) -> None:
@@ -91,6 +92,10 @@ class _FakeStore:
         # DISPATCH-TIME kind recorded in its marker (the at-most-once changed-manifest guard;
         # None = un-recorded / pre-v1.64 marker → NOT re-fire-safe → fail-closed).
         self._orchestrator_dispatched_kind = orchestrator_dispatched_kind
+        # B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-EFFECT-BEARING — the orchestrator's
+        # DISPATCH-TIME step_id (the fence-recoverable same-step_id guard; None = un-recorded /
+        # torn marker → mismatch → fail-closed; Codex [P1]).
+        self._orchestrator_dispatched_step_id = orchestrator_dispatched_step_id
         # B-FANOUT-CRASH-RESUME-MAYBE-RAN-RESOLUTION / TIMEOUT-REPLAY — the dispatch-time
         # kind recorded in each branch's `.dispatched` marker (the at-most-once changed-
         # manifest guard; None = un-recorded / torn marker → fail-closed at the classifier).
@@ -131,6 +136,9 @@ class _FakeStore:
 
     def orchestrator_dispatched_kind(self, run_key: str) -> str | None:
         return self._orchestrator_dispatched_kind
+
+    def orchestrator_dispatched_step_id(self, run_key: str) -> str | None:
+        return self._orchestrator_dispatched_step_id
 
     def present_dispatched_indexes(self, run_key: str) -> set[int]:
         return set(self._dispatched_kinds)
@@ -330,24 +338,85 @@ def test_orchestrator_maybe_ran_re_fire_safe_kind_returns_none_fresh(kind: StepK
     )
 
 
-@pytest.mark.parametrize(
-    "kind",
-    [StepKind.TOOL_STEP, StepKind.SUB_AGENT_DISPATCH, StepKind.MANAGED_AGENTS],
-)
-def test_orchestrator_maybe_ran_effect_bearing_kind_fails_closed(kind: StepKind) -> None:
-    """A maybe-ran orchestrator whose recorded DISPATCH-TIME kind is effect-bearing
-    (TOOL_STEP / SUB_AGENT_DISPATCH / MANAGED_AGENTS) STAYS fail-closed — its effect may have
-    landed; re-dispatch would double-fire. The effect-bearing-orchestrator resolution is the
-    registered follow-on B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-EFFECT-BEARING."""
+def _orch_steps(
+    orch_kind: StepKind, *, orch_step_id: str = "step-0", n: int = 3
+) -> list[WorkflowStep]:
+    """`n` steps where `steps[0]` (the orchestrator) carries `orch_kind` + `orch_step_id`."""
+    steps = _steps(n)
+    steps[0] = WorkflowStep(
+        step_id=StepID(orch_step_id), step_kind=orch_kind, step_payload={"i": 0}
+    )
+    return steps
+
+
+@pytest.mark.parametrize("kind", [StepKind.TOOL_STEP, StepKind.MANAGED_AGENTS])
+def test_orchestrator_maybe_ran_fence_recoverable_same_kind_recovers(kind: StepKind) -> None:
+    """B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-EFFECT-BEARING (R-FS-1) — a maybe-ran
+    orchestrator whose DISPATCH-TIME kind is FENCE-RECOVERABLE (TOOL_STEP / MANAGED_AGENTS), with
+    the resumed `steps[0]` the SAME kind AND the SAME step_id, RECOVERS: None (re-run fresh → the
+    orchestrator re-dispatches into the auto-active fence, at-most-once at the sink). Was: fail
+    closed pre-this-arc."""
     store = _FakeStore(
         branches={},
         orchestrator=None,
         dispatch_instrumented=True,
         orchestrator_dispatched=True,
         orchestrator_dispatched_kind=kind.value,
+        orchestrator_dispatched_step_id="step-0",
+    )
+    assert (
+        _determine_fanout_resume(
+            store, _RUN_KEY, _orch_steps(kind), TopologyPattern.ORCHESTRATOR_WORKERS
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize("kind", [StepKind.TOOL_STEP, StepKind.MANAGED_AGENTS])
+def test_orchestrator_maybe_ran_fence_recoverable_changed_step_id_fails_closed(
+    kind: StepKind,
+) -> None:
+    """The same-step_id guard (out-of-family Codex [P1]) — a fence-recoverable orchestrator
+    re-supplied at the SAME kind but a CHANGED step_id (rename / reorder) FAILS CLOSED: the runtime
+    fence key includes step_id, so a renamed re-dispatch composes a DIFFERENT fence key, misses the
+    held claim, and would double-fire the original effect."""
+    store = _FakeStore(
+        branches={},
+        orchestrator=None,
+        dispatch_instrumented=True,
+        orchestrator_dispatched=True,
+        orchestrator_dispatched_kind=kind.value,
+        orchestrator_dispatched_step_id="step-0",  # marker recorded "step-0"
+    )
+    # Resumed orchestrator renamed to "step-0-renamed" (same kind) → fence-key mismatch.
+    with pytest.raises(_FanOutStoreOrchestratorMaybeRanError, match="effect-bearing"):
+        _determine_fanout_resume(
+            store,
+            _RUN_KEY,
+            _orch_steps(kind, orch_step_id="step-0-renamed"),
+            TopologyPattern.ORCHESTRATOR_WORKERS,
+        )
+
+
+def test_orchestrator_maybe_ran_sub_agent_dispatch_fails_closed() -> None:
+    """A maybe-ran SUB_AGENT_DISPATCH orchestrator STAYS fail-closed — it is recursively fenced at
+    its CHILD's tool sinks (not directly at its own dispatch), so it is NOT in the fence-recoverable
+    set. The registered follow-on B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-SUBAGENT covers it."""
+    store = _FakeStore(
+        branches={},
+        orchestrator=None,
+        dispatch_instrumented=True,
+        orchestrator_dispatched=True,
+        orchestrator_dispatched_kind=StepKind.SUB_AGENT_DISPATCH.value,
+        orchestrator_dispatched_step_id="step-0",
     )
     with pytest.raises(_FanOutStoreOrchestratorMaybeRanError, match="effect-bearing"):
-        _determine_fanout_resume(store, _RUN_KEY, _steps(3), TopologyPattern.ORCHESTRATOR_WORKERS)
+        _determine_fanout_resume(
+            store,
+            _RUN_KEY,
+            _orch_steps(StepKind.SUB_AGENT_DISPATCH),
+            TopologyPattern.ORCHESTRATOR_WORKERS,
+        )
 
 
 def test_orchestrator_maybe_ran_changed_manifest_kind_keyed_on_marker() -> None:

@@ -88,6 +88,7 @@ from harness_cp.pause_resume_protocol_types import (
     HandoffResumeState,
     HandoffStageResumeState,
     MaterialDiffPolicy,
+    OrchestratorEffectFencePausedResumeState,
     PausedChildBranchResumeState,
     PauseSnapshot,
     PeerFanOutResumeState,
@@ -4007,6 +4008,19 @@ _RESUME_CARRIER_STRATEGIES: tuple[tuple[str, frozenset[_DriverStrategyStatus]], 
     ("handoff_resume", frozenset({_DriverStrategyStatus.DECENTRALIZED_HANDOFF})),
     ("evaluator_optimizer_resume", frozenset({_DriverStrategyStatus.EVALUATOR_OPTIMIZER})),
     ("effect_fence_resume", frozenset({_DriverStrategyStatus.LINEAR_INLINE})),
+    # B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-EFFECT-BEARING — the orchestrator's OWN
+    # effect-fence pause is captured + resumed by the orchestrator-workers strategy (the
+    # orchestrator runs at `steps[0]` of ORCHESTRATOR_WORKERS / HIERARCHICAL_DELEGATION), so a
+    # snapshot carrying it resumed under any other strategy fails closed (topology change).
+    (
+        "orchestrator_effect_fence_resume",
+        frozenset(
+            {
+                _DriverStrategyStatus.ORCHESTRATOR_WORKERS,
+                _DriverStrategyStatus.HIERARCHICAL_DELEGATION,
+            }
+        ),
+    ),
 )
 
 
@@ -4086,7 +4100,17 @@ def _synthesis_resume_material_diff(
     re-supplied identities match (incl. both-absent — a non-synthesis resume, unchanged).
     The REMOVED case (snapshot captured a synthesis, resumed body dropped it) fails closed
     rather than silently yielding the deterministic fold — exactly the silent-drop class
-    the original entry reject existed to prevent."""
+    the original entry reject existed to prevent.
+
+    B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-EFFECT-BEARING (out-of-family Codex [P2]) — an
+    ORCHESTRATOR effect-fence resume (`orchestrator_effect_fence_resume` populated) ran NOTHING
+    (the orchestrator paused at its OWN dispatch, BEFORE any worker and BEFORE the synthesis), so
+    there is no captured synthesis identity to diff: the orchestrator + workers + synthesis ALL
+    re-dispatch fresh on resume (a fresh-everything resume gated only by the changed-orchestrator
+    guard at the dispatch site). Skip the material-diff — else the absent captured identity
+    (`None`) would falsely reject an unchanged synthesis-bearing body as a "removed" diff."""
+    if resume_snapshot.orchestrator_effect_fence_resume is not None:
+        return None
     captured: str | None = None
     if strategy in (
         _DriverStrategyStatus.ORCHESTRATOR_WORKERS,
@@ -5352,6 +5376,44 @@ def _determine_fanout_resume(
                     # external effect; the common LLM-orchestrator shape; keyed on the MARKER, not
                     # the resumed manifest — the changed-manifest guard) → re-run the whole fan-out
                     # fresh (first-and-only; nothing downstream to double-fire).
+                    return None
+                _resumed_orch_kind = steps[0].step_kind.value if steps else None
+                _resumed_orch_step_id = str(steps[0].step_id) if steps else None
+                _orch_marker_step_id = store.orchestrator_dispatched_step_id(run_key)
+                if (
+                    not _downstream_artifact_present
+                    and store.dispatch_instrumented(run_key)
+                    and _orch_kind in _FANOUT_MAYBE_RAN_FENCE_RECOVERABLE_KIND_VALUES
+                    and _resumed_orch_kind in _FANOUT_MAYBE_RAN_FENCE_RECOVERABLE_KIND_VALUES
+                    and _orch_kind == _resumed_orch_kind
+                    # Same-step_id guard (out-of-family Codex [P1]): the runtime effect-fence key
+                    # INCLUDES step_id, so a maybe-ran orchestrator re-supplied at steps[0] with the
+                    # same kind but a CHANGED step_id (rename / reorder) would re-dispatch into a
+                    # DIFFERENT fence key, miss the held claim, and double-fire the original effect.
+                    # The re-fire-safe leg above does NOT need this (no external effect to
+                    # double-fire); the fence-recoverable leg DOES. Marker step_id missing →
+                    # None → mismatch → fail closed.
+                    and _orch_marker_step_id is not None
+                    and _orch_marker_step_id == _resumed_orch_step_id
+                ):
+                    # B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-EFFECT-BEARING (R-FS-1) —
+                    # PRISTINE window + dispatch-instrumented stamp + a FENCE-RECOVERABLE
+                    # DISPATCH-TIME kind (TOOL_STEP / MANAGED_AGENTS — effect-bearing, but its
+                    # effect is FENCED at the runtime sink, C-RT-31 §14.22). UNLIKE the
+                    # re-fire-safe set above (which has no effect), this orchestrator's effect may
+                    # have landed — so re-running fresh is at-most-once ONLY because the re-dispatch
+                    # re-reaches the auto-active fence, which SPLITS: suppress-and-continue (the
+                    # fence captured the output ⟹ effect completed), ambiguous-PAUSE (the
+                    # orchestrator analogue of the linear B-EFFECT-FENCE-HITL-ROUTE — composed to a
+                    # §26.2 pause at the dispatch site), or fresh-fire (claim ABSENT ⟹ the prior
+                    # attempt crashed before the reserve ⟹ did not fire). The same-kind guard
+                    # (marker kind == resumed kind, both recoverable) is the changed-kind guard
+                    # inherited from the worker `_fence_unrecoverable_maybe_ran_indices`: a
+                    # cross-kind swap or a change to a non-recoverable kind would re-dispatch into a
+                    # DIFFERENT sink (or none) and silently abandon the original effect's ambiguity
+                    # → fail closed below. The fence is AUTO-ACTIVE here (the fan-out crash-resume
+                    # engine classes are a subset of the durable-auto-fence set; the orchestrator
+                    # context inherits `run_engine_class`).
                     return None
                 if _downstream_artifact_present:
                     # A downstream artifact survived but the orchestrator capture is absent → the
@@ -7444,7 +7506,14 @@ def _execute_orchestrator_workers(
     # run-level-terminal semantic). None when no holder / no resolution for a branch's key → that
     # paused worker re-pauses INERT (never an auto-re-fire — the #701 decline-mirror).
     _ef_resume_ctx: ResumeContext | None = None
-    if _recovered_effect_fence_paused:
+    # B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-EFFECT-BEARING — ALSO peek the holder when the
+    # ORCHESTRATOR itself fence-paused (its pause carries no worker fence branches, so
+    # `_recovered_effect_fence_paused` is empty; without this the orchestrator resolution would
+    # never be read → the orchestrator would re-pause INERT forever).
+    _orch_fence_resume_present = (
+        resume_snapshot is not None and resume_snapshot.orchestrator_effect_fence_resume is not None
+    )
+    if _recovered_effect_fence_paused or _orch_fence_resume_present:
         _ef_holder = cast(
             "_ResumeContextHolderLike | None",
             getattr(ctx, "resume_context_holder", None),
@@ -7462,6 +7531,23 @@ def _execute_orchestrator_workers(
         for _k in _recovered_effect_fence_paused.values()
     )
 
+    # B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-EFFECT-BEARING (out-of-family Codex [P2]) — an
+    # orchestrator effect-fence resume whose body was CHANGED to empty (`steps == []`) must FAIL
+    # CLOSED, not hit the empty-steps SUCCESS fast path below: the snapshot carries an unresolved
+    # ambiguous orchestrator effect (`orchestrator_effect_fence_resume`), and a removed `steps[0]`
+    # would silently abandon BOTH that effect and the operator's resolution. The
+    # changed-orchestrator guard at the dispatch site (which reads `steps[0]`) cannot fire when
+    # there is no `steps[0]`, so this is its empty-body analogue.
+    if not steps and _orch_fence_resume_present:
+        return RunResult(
+            workflow_id=workflow_id,
+            run_id=run_id,
+            status=RunStatus.FAILED,
+            terminal_step_index=None,
+            partial_state=None,
+            final_state=None,
+            fail_class="fan-out-orchestrator-effect-fence-resume-changed-orchestrator",
+        ), 0
     # Empty step sequence → trivially SUCCESS (mirrors the linear empty-loop +
     # the PARALLELIZATION / EVALUATOR_OPTIMIZER empty-steps SUCCESS).
     if not steps:
@@ -7626,6 +7712,68 @@ def _execute_orchestrator_workers(
     # B-FANOUT-PAUSE — None on resume (the orchestrator already ran; no writer /
     # no re-appended entry). The real writer is created in the first-run branch.
     orchestrator_writer: BufferingLedgerWriter | None = None
+    # B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-EFFECT-BEARING (R-FS-1) — the NEW
+    # resume→orchestrator application site. A snapshot carrying
+    # `orchestrator_effect_fence_resume` resumes an ORCHESTRATOR whose OWN dispatch
+    # fence-paused (effect-bearing maybe-ran). UNLIKE a normal fan-out resume
+    # (`fan_out_resume` present → `_is_resume` True → the orchestrator is SKIPPED, its
+    # output recovered), here NOTHING ran: `_fan_out_resume` is None → `_is_resume` False
+    # → the orchestrator is RE-DISPATCHED through the `else` branch below, WITH the
+    # operator's resolution key-bound to its reserve so the runtime fence applies exactly
+    # one key-matched resolution (the linear/worker `effect_fence_resolution` threading,
+    # but on the orchestrator context). Guards run FIRST (fail-closed BEFORE any dispatch).
+    _orch_fence_resume = (
+        resume_snapshot.orchestrator_effect_fence_resume if resume_snapshot is not None else None
+    )
+    _orch_effect_fence_directive: EffectFenceResolutionDirective | None = None
+    if _orch_fence_resume is not None:
+        if (
+            str(orchestrator_step.step_id) != _orch_fence_resume.step_id
+            or orchestrator_step.step_kind.value != _orch_fence_resume.step_kind
+        ):
+            # Changed-orchestrator guard (positional-identity + changed-kind): the operator
+            # renamed/reordered or changed the kind of `steps[0]` between pause and resume →
+            # threading the resolution would reach the WRONG (or no) fence and silently
+            # abandon the original ambiguous effect. Fail closed (the worker
+            # `EffectFencePausedBranchResumeState` step_id/step_kind guard analogue).
+            return RunResult(
+                workflow_id=workflow_id,
+                run_id=run_id,
+                status=RunStatus.FAILED,
+                terminal_step_index=None,
+                partial_state=None,
+                final_state=None,
+                fail_class="fan-out-orchestrator-effect-fence-resume-changed-orchestrator",
+            ), 0
+        _orch_resolution = (
+            _ef_resume_ctx.effect_fence_resolution_for(_orch_fence_resume.idempotency_key)
+            if (_orch_fence_resume.idempotency_key and _ef_resume_ctx is not None)
+            else None
+        )
+        if _orch_resolution is EffectFenceResolution.SKIP_AS_FIRED:
+            # SKIP_AS_FIRED REJECTED for an orchestrator: it would yield EMPTY orchestrator
+            # output, which `_aggregate_orchestrator_workers` would silently fold into a
+            # DEGENERATE aggregate (a no-silent-failure violation — the workers run, but the
+            # orchestrator's structuring contribution is silently gone). The palette for an
+            # orchestrator fence pause is RE_FIRE / ABORT; fail loud, never under-execute.
+            return RunResult(
+                workflow_id=workflow_id,
+                run_id=run_id,
+                status=RunStatus.FAILED,
+                terminal_step_index=None,
+                partial_state=None,
+                final_state=None,
+                fail_class="fan-out-orchestrator-effect-fence-resume-skip-as-fired-unsupported",
+            ), 0
+        # RE_FIRE / ABORT → thread the key-bound directive onto the orchestrator dispatch
+        # (the runtime fence consumes it: RE_FIRE clears the claim + re-fires fresh; ABORT
+        # raises EffectFenceAbortedError → FAILED via the generic dispatch except). None →
+        # the fence re-pauses INERT (never an auto-re-fire), the decline-mirror.
+        if _orch_resolution is not None:
+            _orch_effect_fence_directive = EffectFenceResolutionDirective(
+                resolution=_orch_resolution,
+                idempotency_key=_orch_fence_resume.idempotency_key,
+            )
     orchestrator_context = StepExecutionContext(
         workflow_id=workflow_id,
         parent_action_id=orchestrator_action_id,
@@ -7656,6 +7804,10 @@ def _execute_orchestrator_workers(
         # their own role via compose_branch_child_context, so this does not leak
         # to the fan-out children (CP spec v1.38 §6.1).
         agent_role=_per_step_role_override(manifest_entry, orchestrator_step.step_id),
+        # B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-EFFECT-BEARING — the key-bound
+        # operator resolution for an orchestrator effect-fence resume (None on every
+        # non-fence-resume run → hash-inert, byte-identical to the pre-arc context).
+        effect_fence_resolution=_orch_effect_fence_directive,
     )
     if _is_resume:
         # B-FANOUT-PAUSE — the orchestrator already ran in the ORIGINAL envelope
@@ -7760,6 +7912,55 @@ def _execute_orchestrator_workers(
                 orchestrator_binding, orchestrator_step, step_context=orchestrator_context
             )
         except Exception as exc:
+            # B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-EFFECT-BEARING (R-FS-1) — the
+            # orchestrator's OWN dispatch raised the runtime effect fence's
+            # `EffectFenceAmbiguousUncommittedError` (its effect-bearing maybe-ran re-dispatch
+            # re-reached the auto-active fence, which lost the reserve + found no captured
+            # output, so whether the orchestrator's effect fired is genuinely ambiguous).
+            # Name-matched (harness-cp cannot import harness-runtime, mirroring the linear
+            # B-EFFECT-FENCE-HITL-ROUTE). Compose a §26.2 EFFECT_FENCE_AMBIGUOUS pause — the
+            # orchestrator analogue of the linear route — when a PauseResumeProtocol is bound +
+            # the run is pause-resumable + a STRICT tier (PROCEED has no resolution handling →
+            # its resume would degrade the operator's decision). Else fall through to the FAILED
+            # return below (behaviorally the pre-arc fail-closed; only the disposition differs).
+            # An `EffectFenceAbortedError` (an operator ABORT applied on resume) is NOT
+            # name-matched here → it falls through to FAILED (terminal, never a re-pause).
+            _orch_pause_protocol = getattr(ctx, "pause_resume_protocol", None)
+            _orch_fence_key = getattr(exc, "idempotency_key", None)
+            if (
+                type(exc).__name__ == "EffectFenceAmbiguousUncommittedError"
+                and _orch_pause_protocol is not None
+                and pause_resumable
+                and cascade_policy is not CascadePolicy.PROCEED
+                and isinstance(_orch_fence_key, str)
+                and _orch_fence_key
+            ):
+                # Do NOT drain `orchestrator_writer` here (unlike the terminal FAILED path): on
+                # resume the orchestrator re-dispatches + re-buffers its per-step override entry,
+                # so persisting it now would DOUBLE it. The reserve marker is already fsynced.
+                _orch_pause_snapshot = _run_protocol_method_sync(
+                    cast(PauseResumeProtocol, _orch_pause_protocol).capture_pause_snapshot(
+                        workflow_id=workflow_id,
+                        run_id=run_id,
+                        step_index=0,
+                        pause_reason=WorkflowPauseReason.EFFECT_FENCE_AMBIGUOUS,
+                        orchestrator_effect_fence_resume=OrchestratorEffectFencePausedResumeState(
+                            idempotency_key=_orch_fence_key,
+                            step_id=str(orchestrator_step.step_id),
+                            step_kind=str(orchestrator_step.step_kind.value),
+                        ),
+                    )
+                )
+                return RunResult(
+                    workflow_id=workflow_id,
+                    run_id=run_id,
+                    status=RunStatus.PAUSED,
+                    terminal_step_index=None,
+                    partial_state=None,
+                    final_state=None,
+                    fail_class=None,
+                    pause_snapshot=_orch_pause_snapshot,
+                ), 0
             # The orchestrator failed before any worker fan-out → FAILED. Drain the
             # orchestrator_writer so a buffered per-step override entry persists (the
             # override WAS applied; recorded on a failed dispatch, as the linear path
