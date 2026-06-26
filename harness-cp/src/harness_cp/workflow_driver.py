@@ -2374,30 +2374,51 @@ def _execute_workflow_body(
                         and not _crash_complete
                     ):
                         # B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT (R-FS-1, CP spec v1.68 §1/§2 +
-                        # v1.70 §1) — a branch FAILED → `pause` was triggered, but the durable
-                        # PauseSnapshot write was LOST in the crash. The COMPLETE-recovery case
-                        # (every declared ordinal recovered) is LIFTED below (falls through to the
-                        # strategy, which re-establishes the PAUSED state — the store provably holds
-                        # every finished-in-flight branch, so the §25.15.1 foreclosure does not
-                        # apply). The INCOMPLETE case (an absent branch ordinal) splits on whether
-                        # the absent ordinals are PROVABLY-NOT-RUN:
-                        #   • every absent ordinal NOT-YET-DISPATCHED (instrumented + NO dispatch
-                        #     marker, the v1.60 reserve-before-dispatch proof — `_maybe_ran` empty)
-                        #     → the §25.15.1 "not-yet-dispatched left re-dispatchable" disposition
-                        #     applies: re-pause WITHOUT dispatching them (the strategy omits them →
-                        #     the snapshot byte-omits them like a real pause → `api.resume`
-                        #     re-dispatches them under the operator's obl-5 blast-radius gate). NOT
-                        #     fail-closed — fall through with `_crash_pause_reconstruct_no_dispatch`
+                        # v1.70 §1 + v1.71 §1) — a branch FAILED → `pause` was triggered, but the
+                        # durable PauseSnapshot write was LOST in the crash. The COMPLETE-recovery
+                        # case (every declared ordinal recovered) is LIFTED below (falls through to
+                        # the strategy, which re-establishes the PAUSED state — the store provably
+                        # holds every finished-in-flight branch, so §25.15.1 does not apply). The
+                        # INCOMPLETE case (an absent ordinal) re-establishes PAUSED OMITTING every
+                        # absent ordinal whose RESUME re-dispatch is at-most-once-safe, else fails:
+                        #   • NOT-YET-DISPATCHED (instrumented + NO dispatch marker, the v1.60
+                        #     reserve-before-dispatch proof) → re-dispatchable fresh, first-and-only
                         #     (B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT-NOT-YET-DISPATCHED, v1.70).
-                        #   • ANY absent ordinal INTERRUPTED-in-flight (a dispatch marker, no
-                        #     terminal capture — `_maybe_ran` non-empty) OR a pre-arc
-                        #     un-instrumented journal → doubly-ambiguous (maybe-fired +
-                        #     maybe-a-second-trigger) → STAYS fail-closed → HITL (the registered
-                        #     B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT-MAYBE-RAN follow-on). The gate
-                        #     is STRICTER than the §25.15 incomplete leg's `_maybe_ran_fail_closed`
-                        #     (re-fire-safe / fence-recoverable maybe-ran ordinals recover THERE):
-                        #     for a lost-pause reconstruct ANY maybe-ran ordinal is the MAYBE-RAN
-                        #     residual's territory, so the full `_maybe_ran` set must be empty.
+                        #   • RE-FIRE-SAFE MAYBE-RAN (a dispatch marker, NO terminal capture) of a
+                        #     DECLARATIVE_STEP / INFERENCE_STEP kind — NO external effect to
+                        #     double-fire → re-dispatchable ON RESUME regardless of the resume
+                        #     manifest (B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT-MAYBE-RAN, v1.71).
+                        #     The strategy omits every not-yet-recovered ordinal → an empty/partial
+                        #     branch_plan → the v1.68 `_crash_pause_reestablish` / `not branch_plan`
+                        #     re-establish block builds the snapshot from recovered terminals
+                        #     OMITTING the absent; `api.resume` re-dispatches the omitted
+                        #     (snapshot-absent ⟹ re-dispatched, keyed on `branch_index in
+                        #     _recovered_terminal` below, NOT a divergent terminal_status read).
+                        #   • FENCE-RECOVERABLE MAYBE-RAN (TOOL_STEP / MANAGED_AGENTS) is NOT
+                        #     recovered here — it STAYS fail-closed. Unlike the §25.15 incomplete
+                        #     leg (re-dispatch at CRASH-TIME with the SAME manifest → the fence key
+                        #     (idempotency_key, step_id) matches the held claim), this reconstruct
+                        #     OMITS the ordinal and DEFERS the re-dispatch to `api.resume`
+                        #     (operator-mediated; the manifest may be edited). The snapshot carries
+                        #     NO step_id for the omitted ordinal, so a same-kind CHANGED-step_id
+                        #     resume would re-dispatch under a DIFFERENT fence key, miss the held
+                        #     claim, and DOUBLE-FIRE the maybe-fired effect (out-of-family Codex
+                        #     [P1]; the orchestrator's same-step_id guard at its OWN re-dispatch
+                        #     site does not generalize to a deferred-omitted worker). A fix needs
+                        #     the snapshot to CARRY the marker (idempotency_key, step_id) per
+                        #     omitted ordinal + compare at `api.resume` → the registered
+                        #     B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT-MAYBE-RAN-FENCE-STEP-ID
+                        #     follow-on (the same hole at LOWER exposure is in #742's crash-time
+                        #     predicate; folded into that follow-on's scope).
+                        #   • GENUINELY-UNRECOVERABLE MAYBE-RAN (SUB_AGENT_DISPATCH recursive child,
+                        #     un-kinded / out-of-range) OR a pre-arc un-instrumented journal → still
+                        #     doubly-ambiguous, no at-most-once proof → STAYS fail-closed → HITL.
+                        # Fidelity (NOT a byte-match of a live pause): the omitted ordinal fires on
+                        # RESUME, so a re-fire-safe branch's disposition CAN differ from the
+                        # live-pause baseline (it re-runs) — the §14.8.8.7 invariant-3 re-ask
+                        # semantic (already-committed). At-most-once + the operator's pause election
+                        # PRESERVED (re-fire-safe has NO external effect to double-fire under ANY
+                        # resume manifest — the step_id hazard above is fence-effect-only).
                         _pr_instrumented = _crash_replay_store.dispatch_instrumented(
                             run_idempotency_key
                         )
@@ -2408,8 +2429,26 @@ def _execute_workflow_body(
                             _crash_replay_store.present_dispatched_indexes(run_idempotency_key)
                             - _pr_recovered_indexes
                         )
-                        if _pr_instrumented and not _pr_maybe_ran:
-                            # NOT-YET-DISPATCHED: re-pause WITHOUT dispatching the absent ordinals.
+                        # The maybe-ran ordinals that are NOT re-fire-safe (`_refire_unsafe_branch_
+                        # indices`: TOOL_STEP / MANAGED_AGENTS fence-recoverable, SUB_AGENT,
+                        # un-kinded, out-of-range). ONLY re-fire-safe (no external effect to
+                        # double-fire on the DEFERRED api.resume re-dispatch) is recoverable in this
+                        # obl-5 re-pause mode — the fence-recoverable kinds need the step_id carrier
+                        # (the FENCE-STEP-ID follow-on), so they fall into the unsafe set → fail
+                        # closed. NOT the §25.15 `_fence_unrecoverable_maybe_ran_indices` (that
+                        # narrows TOOL/MANAGED back IN — correct for its crash-time same-manifest
+                        # re-dispatch, UNSOUND for this deferred-omitted resume).
+                        _pr_maybe_ran_kinds = _crash_replay_store.dispatched_branch_kinds(
+                            run_idempotency_key
+                        )
+                        _pr_maybe_ran_unsafe = _refire_unsafe_branch_indices(
+                            _pr_maybe_ran, _pr_maybe_ran_kinds, _crash_expected
+                        )
+                        if _pr_instrumented and not _pr_maybe_ran_unsafe:
+                            # NOT-YET-DISPATCHED + RE-FIRE-SAFE MAYBE-RAN: re-pause OMITTING every
+                            # absent ordinal; `api.resume` re-dispatches them under obl-5 (re-fire-
+                            # safe has no external effect — at-most-once-external under ANY resume
+                            # manifest, so the deferred step_id hazard does not apply).
                             _crash_pause_reconstruct_no_dispatch = True
                         else:
                             return (
@@ -2423,16 +2462,17 @@ def _execute_workflow_body(
                                     fail_class=(
                                         "fan-out-crash-resume-pause-trigger-ambiguous: a branch "
                                         "failed before the crash under CascadePolicy.PAUSE with an "
-                                        "INCOMPLETE recovery whose absent ordinal is interrupted-"
-                                        "in-flight (maybe-ran) or pre-arc un-instrumented — a "
-                                        "reconstruct cannot honor §25.15.1 'finish in-flight, then "
-                                        "pause' (the store may miss a finished-in-flight branch + "
-                                        "its effect maybe fired); fail closed (the "
-                                        "complete-recovery window + the "
-                                        "provably-not-yet-dispatched window reconstruct; the "
-                                        "maybe-ran case is the registered "
-                                        "B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT-MAYBE-RAN "
-                                        "follow-on)"
+                                        "INCOMPLETE recovery whose absent ordinal is a maybe-ran "
+                                        "branch that is NOT re-fire-safe (a fence-recoverable "
+                                        "TOOL_STEP / MANAGED_AGENTS — the deferred api.resume "
+                                        "re-dispatch could double-fire under a changed step_id "
+                                        "[the FENCE-STEP-ID follow-on]; a SUB_AGENT_DISPATCH "
+                                        "recursive child; an un-kinded / out-of-range ordinal) "
+                                        "or a pre-arc un-instrumented journal — a reconstruct "
+                                        "cannot honor §25.15.1 'finish in-flight, then pause' "
+                                        "at-most-once; "
+                                        "fail closed (the complete-recovery + provably-not-yet-"
+                                        "dispatched + re-fire-safe-maybe-ran windows reconstruct)"
                                     ),
                                 ),
                                 0,

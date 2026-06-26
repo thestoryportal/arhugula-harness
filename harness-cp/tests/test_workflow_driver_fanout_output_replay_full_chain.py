@@ -2175,12 +2175,15 @@ def test_crash_resume_pause_incomplete_refire_safe_recovers() -> None:
     assert resume.dispatched == ["branch-0"]  # only the maybe-ran branch re-dispatches
 
 
-def test_crash_resume_pause_incomplete_errored_fails_closed_ambiguous() -> None:
-    """B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT (CP spec v1.68 §2) — the INCOMPLETE case STAYS
-    fail-closed (`pause-trigger-ambiguous`). An errored branch fired the pause AND a sibling is
-    ABSENT (here forgotten → maybe-ran): the crash-interrupted store does NOT hold every
-    finished-in-flight branch, so a reconstruct cannot honor §25.15.1 'finish in-flight, then
-    pause'. No re-dispatch. (Only the COMPLETE-recovery window reconstructs — see below.)"""
+def test_crash_resume_pause_incomplete_refire_safe_maybe_ran_protocol_not_bound_fails() -> None:
+    """B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT-MAYBE-RAN (CP v1.71) — the protocol-not-bound honest
+    fail (spec §1, 'Protocol-not-bound fails honestly'). A re-fire-safe DECLARATIVE maybe-ran
+    sibling (forgotten → marker kept) is now RECOVERABLE, so the dispatcher reaches the re-pause
+    reconstruct path (NOT the v1.70 `pause-trigger-ambiguous` fail-closed — that lift is witnessed
+    at `test_crash_resume_pause_maybe_ran_refire_safe_reconstructs_paused`). With NO bound
+    `pause_resume_protocol`, the strategy's existing detect-then-refuse fires
+    (`…-pause-resume-protocol-not-bound`) — never a false-resumable PAUSED. The genuinely-
+    unrecoverable maybe-ran still fails closed `pause-trigger-ambiguous` (see `…_sub_agent_…`)."""
     store = _InMemoryBranchStore()
     steps = [_step(f"branch-{i}", i) for i in range(3)]
     _run_persona(
@@ -2191,7 +2194,7 @@ def test_crash_resume_pause_incomplete_errored_fails_closed_ambiguous() -> None:
         persona_tier=PersonaTier.TEAM_BINDING,
     )
     key = store.sole_run_key()
-    store.forget_branch(key, 2)  # a clean sibling's OUTPUT gone → INCOMPLETE recovery (absent #2)
+    store.forget_branch(key, 2)  # re-fire-safe maybe-ran (marker KEPT) → reconstruct path (v1.71)
 
     resume = _CountingDispatcher(n=3)
     r2 = _run_persona(
@@ -2199,14 +2202,11 @@ def test_crash_resume_pause_incomplete_errored_fails_closed_ambiguous() -> None:
         steps=steps,
         dispatcher=resume,
         store=store,
-        persona_tier=PersonaTier.TEAM_BINDING,
+        persona_tier=PersonaTier.TEAM_BINDING,  # NO pause_resume_protocol bound
     )
     assert r2.status is RunStatus.FAILED
-    assert (
-        r2.fail_class is not None
-        and "fan-out-crash-resume-pause-trigger-ambiguous" in r2.fail_class
-    )
-    assert resume.dispatched == []
+    assert r2.fail_class is not None and "pause-resume-protocol-not-bound" in r2.fail_class
+    assert resume.dispatched == []  # detect-then-refuse, never a false-resumable PAUSED
 
 
 def test_crash_resume_pause_complete_reconstructs_paused() -> None:
@@ -2666,17 +2666,19 @@ def test_crash_resume_pause_not_yet_dispatched_resume_redispatches_omitted() -> 
     assert crash_resumed.partial_state == live_resumed.partial_state
 
 
-def test_crash_resume_pause_maybe_ran_stays_fail_closed_even_refire_safe() -> None:
-    """Gate-strictness witness (advisor) — the PAUSE-reconstruct gate is `instrumented ∧ NOT
-    maybe_ran`, STRICTER than the §25.15 incomplete leg's `_maybe_ran_fail_closed`. A maybe-ran
-    absent ordinal (a dispatch marker, no capture) of a RE-FIRE-SAFE DECLARATIVE_STEP kind — which
-    the NON-pause incomplete leg WOULD recover — STAYS fail-closed `pause-trigger-ambiguous` here:
-    a lost-pause reconstruct cannot honor 'finish in-flight' when an absent ordinal maybe-ran (it
-    is the registered MAYBE-RAN follow-on's territory)."""
+def test_crash_resume_pause_maybe_ran_refire_safe_reconstructs_paused() -> None:
+    """B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT-MAYBE-RAN (R-FS-1, CP v1.71) — the v1.70 gate
+    STRICTLY failed a maybe-ran absent ordinal closed; this arc LIFTS it for a RECOVERABLE kind by
+    composing the §25.15 per-kind effect-surface refinement with the obl-5 re-pause mode. A
+    maybe-ran branch-2 (dispatch MARKER KEPT, capture gone) of a RE-FIRE-SAFE DECLARATIVE_STEP is
+    now OMITTED from the reconstructed snapshot + re-established PAUSED — re-dispatched on
+    `api.resume` (re-firing a re-fire-safe step has no external effect to double-fire), NOT
+    fail-closed. Crash-resume re-dispatches NOTHING (the omit + defer-to-resume re-pause mode; the
+    omitted ordinal fires only under the operator's obl-5 blast-radius gate)."""
     store = _InMemoryBranchStore()
     steps = [_step(f"branch-{i}", i) for i in range(3)]  # DECLARATIVE_STEP = re-fire-safe
     _run_persona(
-        workflow_id="wf-pause-mr",
+        workflow_id="wf-pause-mr-rfs",
         steps=steps,
         dispatcher=_CountingDispatcher(n=3, fail_index=1),  # branch-1 errors → pause trigger
         store=store,
@@ -2686,10 +2688,285 @@ def test_crash_resume_pause_maybe_ran_stays_fail_closed_even_refire_safe() -> No
     key = store.sole_run_key()
     store.forget_branch(key, 2)  # branch-2 MAYBE-RAN (capture gone, dispatch MARKER KEPT)
     assert 2 in store.present_dispatched_indexes(key)  # the marker proves it maybe-ran
+    assert store.dispatched_branch_kinds(key)[2] == StepKind.DECLARATIVE_STEP.value
 
     resume = _CountingDispatcher(n=3)
     r2 = _run_persona(
-        workflow_id="wf-pause-mr",
+        workflow_id="wf-pause-mr-rfs",
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        pause_resume_protocol=_pause_protocol(),
+    )
+    assert r2.status is RunStatus.PAUSED  # re-establish, NOT fail-closed (the v1.71 lift)
+    assert resume.dispatched == []  # re-pause mode: crash-resume re-dispatches NOTHING (obl-5)
+    assert r2.pause_snapshot is not None
+    pr = r2.pause_snapshot.peer_fan_out_resume
+    assert pr is not None
+    assert {b.branch_index for b in pr.branches} == {0, 1}  # branch-2 (maybe-ran) OMITTED
+    assert pr.branch_count == 3  # the declared total bounds the resume re-dispatch
+
+
+def test_crash_resume_pause_maybe_ran_refire_safe_resume_redispatches_omitted() -> None:
+    """The BLOCKING full-chain witness (`[[full-chain-witness-not-half-proofs]]`) — the maybe-ran
+    analogue of the not-yet-dispatched resume witness. `api.resume` of the reconstructed snapshot
+    re-dispatches EXACTLY the omitted RECOVERABLE maybe-ran ordinal, keeps the seeded failure
+    PARTIAL (no dropped failure, no spurious re-pause), and the deterministic fold yields a final
+    state EQUAL to the no-crash baseline (a live pause → resume). For a DETERMINISTIC re-fire-safe
+    branch this is byte-equal; a non-deterministic branch can diverge — that is the §14.8.8.7
+    invariant-3 re-ask semantic (already-committed behavior), NOT a regression."""
+    steps = [_step(f"branch-{i}", i) for i in range(3)]
+
+    # Crash: branch-1 fails (pause trigger) + branch-2 MAYBE-RAN (marker kept) → reconstruct PAUSED.
+    store = _InMemoryBranchStore()
+    _run_persona(
+        workflow_id="wf-pause-mr-fc",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3, fail_index=1),
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        pause_resume_protocol=_pause_protocol(),
+    )
+    store.forget_branch(store.sole_run_key(), 2)  # branch-2 maybe-ran (marker KEPT)
+    recon = _run_persona(
+        workflow_id="wf-pause-mr-fc",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3),
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        pause_resume_protocol=_pause_protocol(),
+    )
+    assert recon.status is RunStatus.PAUSED and recon.pause_snapshot is not None
+
+    # Resume the reconstructed snapshot (fresh store + dispatcher) → re-dispatch the omitted #2.
+    crash_resume = _CountingDispatcher(n=3)
+    crash_resumed = _run_persona(
+        workflow_id="wf-pause-mr-fc",
+        steps=steps,
+        dispatcher=crash_resume,
+        store=_InMemoryBranchStore(),
+        persona_tier=PersonaTier.TEAM_BINDING,
+        pause_resume_protocol=_pause_protocol(),
+        pause_snapshot_input=recon.pause_snapshot,
+    )
+    assert crash_resumed.status is RunStatus.PARTIAL  # the seeded branch-1 failure → degraded
+    assert crash_resume.dispatched == ["branch-2"]  # EXACTLY the omitted maybe-ran ordinal
+
+    # The no-crash baseline: a live pause (all 3 dispatched, branch-1 fails) → resume → PARTIAL.
+    live = _run_persona(
+        workflow_id="wf-pause-mr-fc",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3, fail_index=1),
+        store=_InMemoryBranchStore(),
+        persona_tier=PersonaTier.TEAM_BINDING,
+        pause_resume_protocol=_pause_protocol(),
+    )
+    assert live.status is RunStatus.PAUSED and live.pause_snapshot is not None
+    live_resume = _CountingDispatcher(n=3)
+    live_resumed = _run_persona(
+        workflow_id="wf-pause-mr-fc",
+        steps=steps,
+        dispatcher=live_resume,
+        store=_InMemoryBranchStore(),
+        persona_tier=PersonaTier.TEAM_BINDING,
+        pause_resume_protocol=_pause_protocol(),
+        pause_snapshot_input=live.pause_snapshot,
+    )
+    assert live_resumed.status is RunStatus.PARTIAL
+    assert live_resume.dispatched == []  # a live pause captured all 3 → resume re-dispatches none
+    # Final-state fidelity (deterministic re-fire-safe): the crash-resume re-dispatched the
+    # maybe-ran #2 ON resume; the baseline folded it from the snapshot — identical PARTIAL.
+    assert crash_resumed.partial_state == live_resumed.partial_state
+
+
+def test_crash_resume_pause_maybe_ran_fence_recoverable_tool_step_stays_fail_closed() -> None:
+    """The FENCE-RECOVERABLE limb STAYS fail-closed (out-of-family Codex [P1]) — a maybe-ran
+    branch-2 of a TOOL_STEP (marker KEPT, capture gone) is NOT recovered by this PAUSE-reconstruct.
+    Unlike the §25.15 incomplete leg (re-dispatch at CRASH-TIME with the SAME manifest → the fence
+    key (idempotency_key, step_id) matches the held claim), this reconstruct OMITS the ordinal and
+    DEFERS the re-dispatch to `api.resume` (operator-mediated); the omitted snapshot carries NO
+    step_id, so a same-kind CHANGED-step_id resume would re-dispatch under a DIFFERENT fence key,
+    miss the held claim, and DOUBLE-FIRE the maybe-fired effect. Resolving it needs a snapshot
+    step_id carrier → the registered B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT-MAYBE-RAN-FENCE-STEP-ID
+    follow-on. Only RE-FIRE-SAFE maybe-ran (no external effect) recovers here."""
+    store = _InMemoryBranchStore()
+    steps = [_step(f"branch-{i}", i, kind=StepKind.TOOL_STEP) for i in range(3)]
+    _run_persona(
+        workflow_id="wf-pause-mr-tool",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3),  # ignored — the registry's dispatcher fires
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        pause_resume_protocol=_pause_protocol(),
+        registry=_AnyKindRegistry(_CountingDispatcher(n=3, fail_index=1)),  # branch-1 → trigger
+    )
+    key = store.sole_run_key()
+    store.forget_branch(key, 2)  # maybe-ran TOOL_STEP (fence-recoverable; marker KEPT)
+    assert store.dispatched_branch_kinds(key)[2] == StepKind.TOOL_STEP.value
+
+    resume = _CountingDispatcher(n=3)
+    r2 = _run_persona(
+        workflow_id="wf-pause-mr-tool",
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        pause_resume_protocol=_pause_protocol(),
+        registry=_AnyKindRegistry(resume),
+    )
+    assert r2.status is RunStatus.FAILED  # fence-recoverable maybe-ran → fail-closed (Codex [P1])
+    assert "fan-out-crash-resume-pause-trigger-ambiguous" in (r2.fail_class or "")
+    assert resume.dispatched == []  # no re-dispatch — the deferred step_id hazard
+
+
+def test_crash_resume_pause_maybe_ran_resume_redispatch_fails_again_handled() -> None:
+    """The BLOCKING second-pause-trigger witness (advisor) — the load-bearing soundness of the
+    lift. A recoverable maybe-ran ordinal MIGHT have FAILED-live (a second pause trigger the store
+    cannot show). The reconstruct omits it + re-dispatches on resume; this test makes the re-dispatch
+    FAIL AGAIN. The run must HANDLE the re-surfaced failure (degraded PARTIAL / re-pause), NEVER
+    silently drop it nor return SUCCESS missing the branch — the failure is NOT lost, it resurfaces
+    at resume (the pause was already established by trigger #1)."""
+    steps = [_step(f"branch-{i}", i) for i in range(3)]
+    store = _InMemoryBranchStore()
+    _run_persona(
+        workflow_id="wf-pause-mr-failagain",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3, fail_index=1),  # branch-1 → pause trigger #1
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        pause_resume_protocol=_pause_protocol(),
+    )
+    store.forget_branch(store.sole_run_key(), 2)  # branch-2 maybe-ran (recoverable, marker KEPT)
+    recon = _run_persona(
+        workflow_id="wf-pause-mr-failagain",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3),
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        pause_resume_protocol=_pause_protocol(),
+    )
+    assert recon.status is RunStatus.PAUSED and recon.pause_snapshot is not None
+
+    # Resume → branch-2 re-dispatch FAILS AGAIN (it was a failed-live second trigger).
+    resume = _CountingDispatcher(n=3, fail_index=2)
+    resumed = _run_persona(
+        workflow_id="wf-pause-mr-failagain",
+        steps=steps,
+        dispatcher=resume,
+        store=_InMemoryBranchStore(),
+        persona_tier=PersonaTier.TEAM_BINDING,
+        pause_resume_protocol=_pause_protocol(),
+        pause_snapshot_input=recon.pause_snapshot,
+    )
+    assert resume.dispatched == ["branch-2"]  # re-dispatched (NOT silently dropped)
+    # The re-surfaced failure is HANDLED — never SUCCESS-missing-the-branch, never a crash.
+    assert resumed.status in {RunStatus.PARTIAL, RunStatus.PAUSED, RunStatus.FAILED}
+    assert resumed.status is not RunStatus.SUCCESS
+
+
+def test_crash_resume_pause_maybe_ran_sub_agent_stays_fail_closed() -> None:
+    """The genuinely-UNRECOVERABLE residual stays HONEST — a maybe-ran branch-2 of a
+    SUB_AGENT_DISPATCH (fenced only at its CHILD's tool sinks → the recursive-child crash-resume
+    residual, NOT a fence-recoverable kind) keeps the doubly-ambiguous fail-closed
+    `pause-trigger-ambiguous` → HITL. Subsumed by the registered
+    B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT (when its recursive-child crash-resume lands, the
+    shared predicate stops classifying it unsafe → it auto-flows here too) — no new registration."""
+    store = _InMemoryBranchStore()
+    steps = [_step(f"branch-{i}", i, kind=StepKind.SUB_AGENT_DISPATCH) for i in range(3)]
+    _run_persona(
+        workflow_id="wf-pause-mr-subagent",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3),  # ignored — the registry's dispatcher fires
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        pause_resume_protocol=_pause_protocol(),
+        registry=_AnyKindRegistry(_CountingDispatcher(n=3, fail_index=1)),  # branch-1 → trigger
+    )
+    key = store.sole_run_key()
+    store.forget_branch(key, 2)  # maybe-ran SUB_AGENT_DISPATCH (unfenced → unrecoverable)
+    assert store.dispatched_branch_kinds(key)[2] == StepKind.SUB_AGENT_DISPATCH.value
+
+    resume = _CountingDispatcher(n=3)
+    r2 = _run_persona(
+        workflow_id="wf-pause-mr-subagent",
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        pause_resume_protocol=_pause_protocol(),
+        registry=_AnyKindRegistry(resume),
+    )
+    assert r2.status is RunStatus.FAILED
+    assert "fan-out-crash-resume-pause-trigger-ambiguous" in (r2.fail_class or "")
+    assert resume.dispatched == []  # no re-dispatch — genuinely-unrecoverable maybe-ran
+
+
+def test_crash_resume_pause_maybe_ran_mixed_recoverable_unrecoverable_fails_closed() -> None:
+    """ANY genuinely-unrecoverable maybe-ran poisons the WHOLE reconstruct (the
+    `_pr_maybe_ran_fail_closed` set must be EMPTY). A re-fire-safe DECLARATIVE maybe-ran (branch-2)
+    + an unfenced SUB_AGENT_DISPATCH maybe-ran (branch-3) → fail closed, because the
+    SUB_AGENT branch has no at-most-once proof for its resume re-dispatch."""
+    store = _InMemoryBranchStore()
+    steps = [
+        _step("branch-0", 0),
+        _step("branch-1", 1),  # the pause trigger (errors)
+        _step("branch-2", 2),  # re-fire-safe DECLARATIVE maybe-ran
+        _step("branch-3", 3, kind=StepKind.SUB_AGENT_DISPATCH),  # unrecoverable maybe-ran
+    ]
+    _run_persona(
+        workflow_id="wf-pause-mr-mixed",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=4),  # ignored — the registry's dispatcher fires
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        pause_resume_protocol=_pause_protocol(),
+        registry=_AnyKindRegistry(_CountingDispatcher(n=4, fail_index=1)),  # branch-1 → trigger
+    )
+    key = store.sole_run_key()
+    store.forget_branch(key, 2)  # re-fire-safe maybe-ran
+    store.forget_branch(key, 3)  # unrecoverable maybe-ran (poisons the whole recovery)
+
+    resume = _CountingDispatcher(n=4)
+    r2 = _run_persona(
+        workflow_id="wf-pause-mr-mixed",
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        pause_resume_protocol=_pause_protocol(),
+        registry=_AnyKindRegistry(resume),
+    )
+    assert r2.status is RunStatus.FAILED
+    assert "fan-out-crash-resume-pause-trigger-ambiguous" in (r2.fail_class or "")
+    assert resume.dispatched == []
+
+
+def test_crash_resume_pause_maybe_ran_un_kinded_marker_fails_closed() -> None:
+    """A maybe-ran branch with a PRE-arc un-kinded marker (a v1.60/v1.61 dispatch marker — step_id
+    only, NO recorded kind) cannot prove re-fire-safety / fence-recoverability (presence ≠
+    validity, `[[durable-recovery-presence-validity-scope]]`) → STAYS fail-closed. The
+    `_instrumented` stamp is present, but the un-kinded marker forces the conservative fail-closed
+    in the same way the §25.15 incomplete leg does."""
+    store = _InMemoryBranchStore()
+    steps = [_step(f"branch-{i}", i) for i in range(3)]
+    _run_persona(
+        workflow_id="wf-pause-mr-unkinded",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3, fail_index=1),
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        pause_resume_protocol=_pause_protocol(),
+    )
+    key = store.sole_run_key()
+    store.forget_branch(key, 2)  # branch-2 maybe-ran
+    store.forget_branch_dispatch_kind(key, 2)  # strip the recorded kind → un-kinded marker
+    assert store.dispatched_branch_kinds(key)[2] is None
+    assert store.dispatch_instrumented(key)  # instrumented, but the marker kind is unknown
+
+    resume = _CountingDispatcher(n=3)
+    r2 = _run_persona(
+        workflow_id="wf-pause-mr-unkinded",
         steps=steps,
         dispatcher=resume,
         store=store,
@@ -2698,7 +2975,47 @@ def test_crash_resume_pause_maybe_ran_stays_fail_closed_even_refire_safe() -> No
     )
     assert r2.status is RunStatus.FAILED
     assert "fan-out-crash-resume-pause-trigger-ambiguous" in (r2.fail_class or "")
-    assert resume.dispatched == []  # no re-dispatch — the maybe-ran branch is doubly-ambiguous
+    assert resume.dispatched == []
+
+
+def test_crash_resume_pause_orchestrator_maybe_ran_refire_safe_reconstructs_paused() -> None:
+    """The ORCHESTRATOR_WORKERS analogue (scope = all three topologies; HIERARCHICAL delegates
+    here) — the orchestrator ran, worker-1 errored (pause trigger), worker-2 is a RECOVERABLE
+    re-fire-safe maybe-ran (marker KEPT). The skip makes branch_plan empty → the `not branch_plan`
+    block re-establishes a FanOutResumeState-bearing PAUSED snapshot OMITTING worker-2;
+    re-dispatch NOTHING."""
+    store = _InMemoryBranchStore()
+    steps = [_step("orch", 0), _step("w-0", 0), _step("w-1", 1), _step("w-2", 2)]
+    _run_persona(
+        workflow_id="wf-ow-pause-mr",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3, fail_index=1),  # worker-1 errors → pause trigger
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+        pause_resume_protocol=_pause_protocol(),
+    )
+    key = store.sole_run_key()
+    store.forget_branch(key, 2)  # worker-2 MAYBE-RAN re-fire-safe (marker KEPT)
+    assert 2 in store.present_dispatched_indexes(key)
+
+    resume = _CountingDispatcher(n=3)
+    r2 = _run_persona(
+        workflow_id="wf-ow-pause-mr",
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+        pause_resume_protocol=_pause_protocol(),
+    )
+    assert r2.status is RunStatus.PAUSED
+    assert resume.dispatched == []  # crash-resume re-dispatches nothing
+    assert r2.pause_snapshot is not None
+    fr = r2.pause_snapshot.fan_out_resume
+    assert fr is not None  # orchestrator-bearing carrier
+    assert {b.branch_index for b in fr.branches} == {0, 1}  # worker-2 OMITTED
+    assert fr.worker_count == 3
 
 
 def test_crash_resume_pause_not_yet_dispatched_pre_arc_journal_fails_closed() -> None:
