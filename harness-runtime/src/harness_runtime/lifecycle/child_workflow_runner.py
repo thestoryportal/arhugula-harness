@@ -160,6 +160,22 @@ def compose_child_workflow_runner(ctx: HarnessContext) -> ChildWorkflowRunner:
         #
         # B-HIERARCHICAL-PAUSE — forward the child's resume snapshot (None on a
         # first dispatch) so a resumed child re-enters at its own cursor.
+        #
+        # B-CHILD-CRASH-RESUME-FINAL-STATE-RECONSTRUCT (R-FS-1) — opt the child run into
+        # final_state reconstruction: on a durable-engine-class (EVENT_SOURCED_REPLAY /
+        # WAL_SEGMENT) child resume over a committed prefix, the CP driver returns a
+        # suffix-only `final_state` (the loop starts at `resume_at` with `accumulated`
+        # empty); the parent fold (`sub_agent_dispatch` SUCCESS → `step_output =
+        # child_result.final_state`; the B-HIERARCHICAL-PAUSE re-enter fold) would
+        # otherwise consume that truncated state and silently corrupt the parent
+        # aggregate. The opt-in seeds the committed prefix from the durable output store
+        # so the child's `final_state` reconstructs the COMPLETE terminal state. A child
+        # of a non-store engine class (SAVE_POINT_CHECKPOINT / RECONCILER_LOOP) degrades
+        # to the prior suffix-only behavior (no output store → the registered
+        # SAVE_POINT/RECONCILER follow-on); a first (non-resume) dispatch is unaffected.
+        # Top-level runs (`harness_runtime.api.run`) do NOT pass this → their accepted
+        # suffix-only resume semantic is untouched (the fork-bearing top-level
+        # reconstruction is a separate registered arc).
         return execute_workflow(
             manifest_entry,
             steps,
@@ -168,6 +184,7 @@ def compose_child_workflow_runner(ctx: HarnessContext) -> ChildWorkflowRunner:
             default_model_binding=default_model_binding,
             step_dispatchers=cast(Any, ctx.step_dispatchers),
             pause_snapshot_input=pause_snapshot_input,
+            reconstruct_final_state=True,
         )
 
     return _runner

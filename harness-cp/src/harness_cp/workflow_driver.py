@@ -1066,6 +1066,104 @@ def _step_fail_class(prefix: str, exc: BaseException) -> str:
     return f"{prefix}: {code}: {exc}"
 
 
+def _read_durable_replay_prefix(
+    ctx: DriverContext,
+    *,
+    run_idempotency_key: str,
+    resume_at: int,
+    steps: Sequence[WorkflowStep],
+    workflow_id: str,
+    run_id: str,
+) -> tuple[list[tuple[str, dict[str, Any]]], RunResult | None]:
+    """Read + validate the durably-stored committed prefix outputs (`0..resume_at-1`).
+
+    The shared read+validate half of the B-ENGINE-OUTPUT-REPLAY family, consumed by
+    BOTH the inter-step CHANNEL rehydrate (`_rehydrate_inter_step_channel_on_replay`,
+    the INPUT side — a downstream step reads its recovered predecessor) AND the
+    child-scoped final_state RECONSTRUCT (`B-CHILD-CRASH-RESUME-FINAL-STATE-RECONSTRUCT`,
+    the OUTPUT side — the resumed run's `final_state` reconstructs the full terminal
+    state). Returns `(prefix, None)` — `prefix` an ordered `[(step_id, output)]` for
+    `i in [0, resume_at)` — on success; `([], None)` for the no-store / config-flip
+    degrade (nothing to replay → the pre-arc empty-prefix behavior preserved); and
+    `([], FAILED)` on store↔ledger skew / identity-mismatch / unreadable-store
+    corruption (the fail-closed gate, the symmetric of B-FANOUT-PAUSE's identity
+    fail-close).
+
+    Read is driven by `resume_at` (the ledger authority), NOT "load whatever's in the
+    store" — the store may hold one extra uncommitted step (a crash AFTER the
+    store-write but BEFORE the ledger-append), which is ignored."""
+    _store = getattr(ctx, "engine_output_store", None)
+    if _store is None or resume_at <= 0:
+        return [], None
+    stored = _store.read_outputs(run_idempotency_key)
+    if not stored:
+        # `read_outputs` returns empty for BOTH "no journal file" AND "file present
+        # but unreadable / undecodable" — these are NOT the same (decorrelated review:
+        # advisor caught the config-flip false-failure; Codex caught that a read
+        # failure must not be silently degraded). Discriminate on FILE EXISTENCE:
+        if getattr(_store, "journal_exists", None) is not None and _store.journal_exists(
+            run_idempotency_key
+        ):
+            # A journal EXISTS but yields no readable records → unreadable / corrupt
+            # store → FAIL CLOSED (never silently drop cached outputs → wrong upstream).
+            return [], RunResult(
+                workflow_id=workflow_id,
+                run_id=run_id,
+                status=RunStatus.FAILED,
+                terminal_step_index=0,
+                partial_state=None,
+                final_state=None,
+                fail_class=(
+                    f"engine-output-replay-unreadable-store: a journal exists for the "
+                    f"run but yields no readable records (resume_at={resume_at}) — "
+                    f"unreadable / corrupt output store"
+                ),
+            )
+        # No journal file at all → a config flip (the original run had
+        # `engine_output_replay=False`, so nothing was recorded) or a fresh store →
+        # NOT corruption: degrade to the documented empty-prefix path (the resumed
+        # step reads None upstream / the reconstruct leaves the suffix-only state)
+        # rather than fail-closing a previously-working resume (advisor pre-merge
+        # catch). RESERVE-before-COMMIT makes the partial case below EXACT: a
+        # committed step's store-write is fsync'd BEFORE its ledger-append, so "store
+        # has SOME records but is missing a committed prefix step" IS genuine
+        # store↔ledger skew → fail-closed.
+        return [], None
+    prefix: list[tuple[str, dict[str, Any]]] = []
+    for i in range(resume_at):
+        if i not in stored:
+            return [], RunResult(
+                workflow_id=workflow_id,
+                run_id=run_id,
+                status=RunStatus.FAILED,
+                terminal_step_index=i,
+                partial_state=None,
+                final_state=None,
+                fail_class=(
+                    f"engine-output-replay-missing-output: step_index={i} is "
+                    f"materialized in the ledger (resume_at={resume_at}) but absent "
+                    f"from the output store — store↔ledger skew corruption"
+                ),
+            )
+        stored_step_id, stored_output = stored[i]
+        if stored_step_id != str(steps[i].step_id):
+            return [], RunResult(
+                workflow_id=workflow_id,
+                run_id=run_id,
+                status=RunStatus.FAILED,
+                terminal_step_index=i,
+                partial_state=None,
+                final_state=None,
+                fail_class=(
+                    f"engine-output-replay-identity-mismatch: step_index={i} stored "
+                    f"step_id={stored_step_id!r} != resumed body step_id="
+                    f"{str(steps[i].step_id)!r} — the workflow body changed"
+                ),
+            )
+        prefix.append((stored_step_id, stored_output))
+    return prefix, None
+
+
 def _rehydrate_inter_step_channel_on_replay(
     ctx: DriverContext,
     *,
@@ -1085,82 +1183,24 @@ def _rehydrate_inter_step_channel_on_replay(
 
     No-op unless BOTH the output store + the inter-step channel are bound (the
     genuine replay path needs the consumer; the store alone records but is not
-    observed). Rehydration is driven by `resume_at` (the ledger authority), NOT
-    "load whatever's in the store" — the store may hold one extra uncommitted step
-    (a crash AFTER the store-write but BEFORE the ledger-append), which is ignored.
-
-    FAILS CLOSED (returns a FAILED `RunResult`) if a step the ledger says is
-    materialized is missing from the store OR its stored `step_id` does not match
-    the re-supplied body — the store↔ledger skew / body-change corruption gate
-    (the symmetric of B-FANOUT-PAUSE's identity fail-close). Returns `None` on
-    success (rehydrated, or not applicable)."""
-    _store = getattr(ctx, "engine_output_store", None)
+    observed). Delegates the store read + skew/identity validation to the shared
+    `_read_durable_replay_prefix` (which fails closed on store↔ledger skew /
+    body-change / unreadable-store corruption) and records the validated prefix into
+    the channel. Returns the fail-closed `RunResult` on corruption, else `None`."""
     _channel = getattr(ctx, "inter_step_output_channel", None)
-    if _store is None or _channel is None or resume_at <= 0:
+    if _channel is None:
         return None
-    stored = _store.read_outputs(run_idempotency_key)
-    if not stored:
-        # `read_outputs` returns empty for BOTH "no journal file" AND "file present
-        # but unreadable / undecodable" — these are NOT the same (decorrelated review:
-        # advisor caught the config-flip false-failure; Codex caught that a read
-        # failure must not be silently degraded). Discriminate on FILE EXISTENCE:
-        if getattr(_store, "journal_exists", None) is not None and _store.journal_exists(
-            run_idempotency_key
-        ):
-            # A journal EXISTS but yields no readable records → unreadable / corrupt
-            # store → FAIL CLOSED (never silently drop cached outputs → wrong upstream).
-            return RunResult(
-                workflow_id=workflow_id,
-                run_id=run_id,
-                status=RunStatus.FAILED,
-                terminal_step_index=0,
-                partial_state=None,
-                final_state=None,
-                fail_class=(
-                    f"engine-output-replay-unreadable-store: a journal exists for the "
-                    f"run but yields no readable records (resume_at={resume_at}) — "
-                    f"unreadable / corrupt output store"
-                ),
-            )
-        # No journal file at all → a config flip (the original run had
-        # `engine_output_replay=False`, so nothing was recorded) or a fresh store →
-        # NOT corruption: degrade to the documented empty-channel path (the resumed
-        # step reads None upstream) rather than fail-closing a previously-working
-        # resume (advisor pre-merge catch). RESERVE-before-COMMIT makes the partial
-        # case below EXACT: a committed step's store-write is fsync'd BEFORE its
-        # ledger-append, so "store has SOME records but is missing a committed prefix
-        # step" IS genuine store↔ledger skew → fail-closed.
-        return None
-    for i in range(resume_at):
-        if i not in stored:
-            return RunResult(
-                workflow_id=workflow_id,
-                run_id=run_id,
-                status=RunStatus.FAILED,
-                terminal_step_index=i,
-                partial_state=None,
-                final_state=None,
-                fail_class=(
-                    f"engine-output-replay-missing-output: step_index={i} is "
-                    f"materialized in the ledger (resume_at={resume_at}) but absent "
-                    f"from the output store — store↔ledger skew corruption"
-                ),
-            )
-        stored_step_id, stored_output = stored[i]
-        if stored_step_id != str(steps[i].step_id):
-            return RunResult(
-                workflow_id=workflow_id,
-                run_id=run_id,
-                status=RunStatus.FAILED,
-                terminal_step_index=i,
-                partial_state=None,
-                final_state=None,
-                fail_class=(
-                    f"engine-output-replay-identity-mismatch: step_index={i} stored "
-                    f"step_id={stored_step_id!r} != resumed body step_id="
-                    f"{str(steps[i].step_id)!r} — the workflow body changed"
-                ),
-            )
+    prefix, fail_result = _read_durable_replay_prefix(
+        ctx,
+        run_idempotency_key=run_idempotency_key,
+        resume_at=resume_at,
+        steps=steps,
+        workflow_id=workflow_id,
+        run_id=run_id,
+    )
+    if fail_result is not None:
+        return fail_result
+    for stored_step_id, stored_output in prefix:
         _channel.record(stored_step_id, stored_output)
     return None
 
@@ -1727,6 +1767,7 @@ def execute_workflow(
     default_model_binding: ModelBinding,
     step_dispatchers: StepDispatcherRegistry,
     pause_snapshot_input: PauseSnapshot | None = None,
+    reconstruct_final_state: bool = False,
 ) -> RunResult:
     """Execute the workflow per C-CP-25 §25.3 happy-path discipline.
 
@@ -1954,6 +1995,12 @@ def execute_workflow(
             # passes None. Gated on `resume_at_step_index is not None` so only a
             # `attempt_resume`-validated snapshot reaches the strategy.
             resume_snapshot=(pause_snapshot_input if resume_at_step_index is not None else None),
+            # B-CHILD-CRASH-RESUME-FINAL-STATE-RECONSTRUCT (R-FS-1) — opt-in (a child
+            # sub-workflow run; default-off for top-level runs): on a durable-engine-class
+            # resume, seed the suffix-only `accumulated` with the durably-stored committed
+            # prefix so the child's `final_state` reconstructs the COMPLETE terminal state
+            # the parent fan-out / hierarchical-pause fold consumes.
+            reconstruct_final_state=reconstruct_final_state,
         )
 
         # C-OD-25 §25.1 close-time attributes (4 of 12). Outcome enum serializes
@@ -1988,6 +2035,7 @@ def _execute_workflow_body(
     run_idempotency_key: str,
     resume_at_step_index_override: int | None = None,
     resume_snapshot: PauseSnapshot | None = None,
+    reconstruct_final_state: bool = False,
 ) -> tuple[RunResult, int]:
     """Execute the workflow body within the workflow.envelope OTel span.
 
@@ -3245,6 +3293,41 @@ def _execute_workflow_body(
     # this counter reflects only this envelope's executions.
     accumulated: dict[str, Any] = {}
     steps_executed = 0
+    # B-CHILD-CRASH-RESUME-FINAL-STATE-RECONSTRUCT (R-FS-1) — child-scoped final_state
+    # reconstruction. When the caller opts in (a child sub-workflow run, so the parent
+    # fan-out / hierarchical-pause fold sees the COMPLETE child terminal state, not the
+    # suffix-only resume final_state), seed `accumulated` with the durably-stored
+    # committed prefix `[0, resume_at)` so the SUCCESS `final_state` (and a DRAINED/FAILED
+    # `partial_state`) reconstructs the full run — the OUTPUT-side analogue of the
+    # inter-step CHANNEL rehydrate (the INPUT side); both consume the shared
+    # `_read_durable_replay_prefix`. Scoped to the cached-output-replay engine classes
+    # (EVENT_SOURCED_REPLAY / WAL_SEGMENT — the only classes whose per-step output is
+    # durably recorded, gated identically at the `_record_durable_step_output` producer
+    # below); a SAVE_POINT_CHECKPOINT / RECONCILER_LOOP child has no output store → the
+    # read degrades to the empty prefix (suffix-only, unchanged) → the registered
+    # SAVE_POINT/RECONCILER follow-on. Top-level runs pass `reconstruct_final_state=False`
+    # (default) → the accepted suffix-only top-level resume semantic is byte-unchanged
+    # (the fork-bearing top-level reconstruction is the registered follow-on). Fail-closed
+    # on a store↔ledger skew / identity-mismatch (the shared read+validate), surfaced as
+    # the child's FAILED result so the parent never folds a corrupt/partial child state.
+    if (
+        reconstruct_final_state
+        and resume_at > 0
+        and manifest_entry.engine_class
+        in (EngineClass.EVENT_SOURCED_REPLAY, EngineClass.WAL_SEGMENT)
+    ):
+        _prefix, _reconstruct_fail = _read_durable_replay_prefix(
+            ctx,
+            run_idempotency_key=run_idempotency_key,
+            resume_at=resume_at,
+            steps=steps,
+            workflow_id=manifest_entry.workflow_id,
+            run_id=run_id,
+        )
+        if _reconstruct_fail is not None:
+            return _reconstruct_fail, 0
+        for _stored_step_id, _stored_output in _prefix:
+            accumulated[_stored_step_id] = dict(_stored_output)
     # B-EFFECT-FENCE-PAUSE-RESOLUTION (§14.22.9) — for an effect-fence-ambiguous-pause
     # resume, PEEK (NOT consume — leave the holder intact for the runtime HITL composer's
     # one-shot consume) the operator's resolution and key-bind it to the held reserve's
