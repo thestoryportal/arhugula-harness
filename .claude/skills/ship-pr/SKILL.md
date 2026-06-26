@@ -12,8 +12,12 @@ canonical §12 protocol** rather than re-stating it — the recipe lives in CLAU
 ## Pre-flight (before opening the PR)
 
 - **Green.** `just check` + the relevant test suites pass; `bash -n` on any new shell.
-- **Out-of-family review.** `just codex-review` (or `-uncommitted`) to convergence — fix
-  real findings, hermetically regression-test each (§13.1).
+- **Out-of-family review.** `just codex-review` (branch-vs-`main`) to convergence — fix
+  real findings, hermetically regression-test each (§13.1). Use `--base` here, NOT
+  `-uncommitted`: `-uncommitted` reviews untracked files too, so any untracked WIP in the
+  working tree pollutes + dilutes the review of the actual diff (the 2026-06-26 finding at
+  `.harness/uncommitted-review-flaw-verification-arc.md`). `-uncommitted` is for genuine
+  pre-commit review in a CLEAN tree only.
 - **Posture check (§11).** Confirm the edit scope matches one posture (design-phase /
   Phase 7 / mode-agnostic). A `design-substrate/**` + `harness-*/src/**` mix MUST carry
   back-flow documentation (§11.4) or it is silent absorption — halt + ask.
