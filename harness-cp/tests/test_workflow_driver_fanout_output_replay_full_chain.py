@@ -2495,6 +2495,46 @@ def test_crash_resume_pause_timeout_plus_safe_absent_recovers_not_ambiguous() ->
     assert resume.dispatched == ["branch-2"]  # only the safe absent ordinal re-dispatches
 
 
+def test_crash_resume_pause_genuine_failure_plus_timeout_reestablishes_paused() -> None:
+    """The mixed case (advisor) — a COMPLETE recovery with BOTH a genuine `completed`+no-output
+    FAILURE (the pause trigger) AND a recovered `timed_out` branch. The genuine failure triggers
+    the re-establish → PAUSED; the recovered timeout flows into the snapshot as a degraded terminal
+    (`terminal_status == "timed_out"`). NOTE this is the RECOVER_AS_TERMINAL-faithful PAUSED
+    disposition, NOT a byte-match of a live pause — a live run with a deadline-cut branch hits
+    `deadline_struck`→FAILED before the pause path, so no live pause snapshot ever holds a
+    `timed_out` branch. At-most-once holds (nothing re-dispatched; resume skips both terminals)."""
+    store = _InMemoryBranchStore()
+    steps = [_step(f"branch-{i}", i) for i in range(3)]
+    _run_persona(
+        workflow_id="wf-pause-mixed",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3, fail_index=1),  # branch 1 GENUINELY errors
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        pause_resume_protocol=_pause_protocol(),
+        timeout_disposition=FanoutTimeoutDisposition.RECOVER_AS_TERMINAL,
+    )
+    key = store.sole_run_key()
+    store.timeout_branch(key, 2)  # branch 2 → recovered timeout (a degraded sibling of the failure)
+
+    resume = _CountingDispatcher(n=3)
+    r2 = _run_persona(
+        workflow_id="wf-pause-mixed",
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        pause_resume_protocol=_pause_protocol(),
+        timeout_disposition=FanoutTimeoutDisposition.RECOVER_AS_TERMINAL,
+    )
+    assert r2.status is RunStatus.PAUSED  # the genuine failure triggers the re-establish
+    assert resume.dispatched == []  # complete recovery → re-dispatch nothing
+    pr = r2.pause_snapshot.peer_fan_out_resume  # type: ignore[union-attr]
+    by_index = {b.branch_index: b for b in pr.branches}  # type: ignore[union-attr]
+    assert by_index[1].terminal_status == "completed" and by_index[1].output is None  # the failure
+    assert by_index[2].terminal_status == "timed_out"  # the recovered timeout, faithfully carried
+
+
 def test_crash_resume_cascade_cancel_orchestrator_workers_errored() -> None:
     """Advisor — VERIFY the orchestrator leg, don't assume symmetry. The cascade trigger under
     ORCHESTRATOR_WORKERS is always a WORKER failure (an orchestrator failure returns FAILED
