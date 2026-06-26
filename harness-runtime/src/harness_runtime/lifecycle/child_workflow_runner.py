@@ -83,6 +83,7 @@ class ChildWorkflowRunner(Protocol):
         descent: SubAgentGateLevelDescent,
         default_model_binding: ModelBinding,
         pause_snapshot_input: PauseSnapshot | None = None,
+        child_run_id_seed: str | None = None,
     ) -> RunResult:
         """Run the child sub-workflow and return its terminal `RunResult`.
 
@@ -92,6 +93,23 @@ class ChildWorkflowRunner(Protocol):
         cursor (`execute_workflow(pause_snapshot_input=...)`) rather than re-running
         from scratch. `None` on a first (non-resume) child dispatch → byte-identical
         to the pre-arc behavior.
+
+        B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT (R-FS-1): `child_run_id_seed`
+        (additive, default `None`) — a DETERMINISTIC first-dispatch child run_id
+        (vs the legacy fresh `uuid`). The composer derives it from the spawning
+        SUB_AGENT_DISPATCH worker's stable, recoverable per-branch idempotency key
+        (`step_context.parent_idempotency_key`) + `child_workflow_id`, so it
+        RE-DERIVES IDENTICALLY when the parent fan-out re-dispatches a maybe-ran
+        SUB_AGENT_DISPATCH worker on crash-resume. That makes the child's durable
+        store + effect-fence reserves RECOVERABLE under a stable key — a plain
+        re-dispatch (no `pause_snapshot_input`) re-enters the child, whose OWN
+        crash-resume auto-resumes from the shared durable store (at-most-once is
+        compositional: it bottoms out at the child's recursively-classified steps).
+        The composer passes it ONLY when the child is recoverable
+        (`subagent_child_recoverable` — `{ESR,WAL}` ∧ LINEAR ∧ leaf); a
+        non-recoverable child gets `None` → legacy fresh-`uuid` (no auto-resume,
+        pre-existing behavior — no suffix-only-reconstruction corruption). Ignored
+        on a resume (`pause_snapshot_input` non-None reuses the snapshot's run_id).
         """
         ...
 
@@ -131,6 +149,7 @@ def compose_child_workflow_runner(ctx: HarnessContext) -> ChildWorkflowRunner:
         descent: SubAgentGateLevelDescent,
         default_model_binding: ModelBinding,
         pause_snapshot_input: PauseSnapshot | None = None,
+        child_run_id_seed: str | None = None,
     ) -> RunResult:
         # B-HIERARCHICAL-PAUSE — on a RESUME (pause_snapshot_input non-None), FAIL CLOSED
         # if the snapshot's workflow_id does not match the child being invoked (Codex
@@ -150,8 +169,24 @@ def compose_child_workflow_runner(ctx: HarnessContext) -> ChildWorkflowRunner:
         # the original run — the same discipline the root resume path follows
         # (it threads `snapshot.run_id`). A fresh id on resume would re-key the child's
         # per-step idempotency + sever its run lineage (Codex [P2]).
+        #
+        # B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT (R-FS-1) — on a FIRST dispatch
+        # (no `pause_snapshot_input`), prefer the composer-supplied DETERMINISTIC
+        # `child_run_id_seed` over a fresh `uuid`. The seed is derived from the
+        # spawning worker's stable, recoverable per-branch idempotency key, so a
+        # parent-crash re-dispatch of a maybe-ran SUB_AGENT_DISPATCH worker
+        # RE-DERIVES the SAME child run_id → the child's durable store + effect-fence
+        # reserves are recoverable → the child's own crash-resume auto-resumes
+        # (at-most-once compositional). The composer passes a seed ONLY for a
+        # recoverable child (`{ESR,WAL}` ∧ LINEAR ∧ leaf); a non-recoverable child
+        # gets `None` → legacy fresh-`uuid` (byte-identical to pre-arc; no auto-resume
+        # so no suffix-only-reconstruction corruption).
         child_run_id = (
-            pause_snapshot_input.run_id if pause_snapshot_input is not None else uuid.uuid4().hex
+            pause_snapshot_input.run_id
+            if pause_snapshot_input is not None
+            else child_run_id_seed
+            if child_run_id_seed is not None
+            else uuid.uuid4().hex
         )
         # The CP driver consumes `ctx` via its structural `DriverContext`
         # Protocol (subset of HarnessContext). Cast for the type layer; the

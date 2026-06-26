@@ -1,0 +1,322 @@
+{
+  "survivors": [
+    {
+      "id": 1,
+      "title": "SYNTAX - Clean, Code-Inspired SaaS Logo",
+      "url": "https://dribbble.com/shots/27277370",
+      "element": "brand",
+      "informs": [
+        "impeccable: Masthead brand lockup: a narrow-grand display mark paired with a small tracked mono/sans descriptor, single ink on warm near-black.",
+        "design-taste-frontend: Single bone mark + condensed all-caps wordmark + tracked-out monospace-like subline as a tight, instrument-grade brand lockup on dark ground.",
+        "ui-ux-pro-max: Masthead brand lockup: a single monochrome condensed-display wordmark + wide-tracked caps subtitle on warm-dark (the typographic lockup, not the fluid swirl mark).",
+        "frontend-design: Masthead brand-identity: a single confident geometric mark plus a wide-tracked uppercase display wordmark sitting on dark ground."
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Brackets concept",
+      "url": "https://dribbble.com/shots/3691838",
+      "element": "terminal-preview",
+      "informs": [
+        "impeccable: Terminal/code-frame live-preview chrome: chrome titlebar with a mono filename tab, line-number gutter, dense monospace body on a dark ground.",
+        "design-taste-frontend: Terminal/editor frame anatomy: dark titlebar with brand+filename, line-numbered monospace body, hairline-separated rail - the live-preview frame structure.",
+        "ui-ux-pro-max: Terminal-window live-preview frame: window-chrome masthead + filename tab + line-numbered monospace body as one dark coherent frame.",
+        "frontend-design: Terminal-preview frame: a dark window chrome with titlebar/brand, a filename tab, and line-numbered monospace body content."
+      ]
+    }
+  ],
+  "matrix": [
+    {
+      "id": 1,
+      "title": "SYNTAX - Clean, Code-Inspired SaaS Logo",
+      "url": "https://dribbble.com/shots/27277370",
+      "element": "brand",
+      "agree": 4,
+      "votes": [
+        {
+          "skill": "impeccable",
+          "suitable": true,
+          "reason": "Monochrome bone-on-near-black display wordmark with a small tracked sans descriptor \u2014 exactly the dark-ground, single-ink, confident-letterform masthead altitude."
+        },
+        {
+          "skill": "design-taste-frontend",
+          "suitable": true,
+          "reason": "Bone monogram on warm near-black, narrow all-caps wordmark with wide-tracked subline label - exactly the masthead posture and restrained dark brand-identity the PWRL brand needs."
+        },
+        {
+          "skill": "ui-ux-pro-max",
+          "suitable": true,
+          "reason": "Monochrome bone-white mark on warm charcoal ground with a condensed display wordmark over a wide-tracked caps subtitle - restraint that is instrument-precise and directly on-brand for the masthead."
+        },
+        {
+          "skill": "frontend-design",
+          "suitable": true,
+          "reason": "Refined geometric monogram on warm near-black textured ground with wide-tracked display sublabel - matte, restrained, single-mark-on-dark; reads as an instrument brand, not consumer."
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Ovonex Team Logo - Lettermark O for SaaS/AI/Cloud",
+      "url": "https://dribbble.com/shots/26233856",
+      "element": "brand",
+      "agree": 0,
+      "votes": [
+        {
+          "skill": "impeccable",
+          "suitable": false,
+          "reason": "Blue/green gradient lettermark on navy, glossy SaaS-AI orb \u2014 cool palette, gradient-drenched consumer-AI clich\u00e9, off-brand for a warm instrument panel."
+        },
+        {
+          "skill": "design-taste-frontend",
+          "suitable": false,
+          "reason": "Bright blue/green gradient SaaS lettermark on glossy navy with a rounded consumer wordmark - off-palette, glossy, and generic; nothing instrument-precise to teach."
+        },
+        {
+          "skill": "ui-ux-pro-max",
+          "suitable": false,
+          "reason": "Bright cool blue/green gradient lettermark, glossy consumer SaaS gloss and gradient orbs - off-brand even with color set aside; a logo-construction sheet, not an instrument identity."
+        },
+        {
+          "skill": "frontend-design",
+          "suitable": false,
+          "reason": "Glossy gradient orb lettermark - the exact consumer-SaaS/AI gradient-mark cliche the skill warns against; the construction-grid panel cannot rescue the off-brand mark treatment."
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "EXPERI/MENTAL - Finance brand",
+      "url": "https://dribbble.com/shots/27418916",
+      "element": "brand",
+      "agree": 1,
+      "votes": [
+        {
+          "skill": "impeccable",
+          "suitable": false,
+          "reason": "Bright orange chrome/liquid finance brand with a rotated label card and numbered 01 eyebrow \u2014 loud, playful, decorative, wrong cadence."
+        },
+        {
+          "skill": "design-taste-frontend",
+          "suitable": false,
+          "reason": "Playful brutalist finance mobile card with rotated vertical type and chunky rounded panels - bright orange maximalism, large radii, and consumer toy energy violate the hairline/2px/restraint discipline."
+        },
+        {
+          "skill": "ui-ux-pro-max",
+          "suitable": false,
+          "reason": "Playful mobile screen with a large rounded orange card on liquid-chrome - large radius, playful, consumer posture; the brutalist '01' does not rescue the overall feel."
+        },
+        {
+          "skill": "frontend-design",
+          "suitable": true,
+          "reason": "Editorial wordmark with a slash-split condensed display logotype and monospace section-numbering ('01') - a distinctive typographic system directly usable for the masthead and numbered heads (keep rests on the type, NOT the liquid-chrome texture)."
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Coding Interface",
+      "url": "https://dribbble.com/shots/2652428",
+      "element": "terminal-preview",
+      "agree": 0,
+      "votes": [
+        {
+          "skill": "impeccable",
+          "suitable": false,
+          "reason": "Light card on a lime-green ground with pastel PRO pills \u2014 light, playful, consumer; fails the dark instrument-panel bar despite an embedded code-editor fragment."
+        },
+        {
+          "skill": "design-taste-frontend",
+          "suitable": false,
+          "reason": "Bright white coding-challenge SaaS layout on a green wave background - light, consumer, soft-shadowed cards; only a small embedded editor is dark and it is generic."
+        },
+        {
+          "skill": "ui-ux-pro-max",
+          "suitable": false,
+          "reason": "A light/consumer white-and-green page rescued only by one dark editor sub-panel; light mode is a separate reject trigger, and its console/Run-Submit toolbar is out of scope for a passive preview frame (id5 covers the dark frame cleanly)."
+        },
+        {
+          "skill": "frontend-design",
+          "suitable": false,
+          "reason": "Light-mode airy floating-card composition on a soft gradient backdrop - consumer challenge UI; the embedded code pane is small and generic, the overall structure is light-mode-not-dark-instrument."
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Brackets concept",
+      "url": "https://dribbble.com/shots/3691838",
+      "element": "terminal-preview",
+      "agree": 4,
+      "votes": [
+        {
+          "skill": "impeccable",
+          "suitable": true,
+          "reason": "Dark code-editor chrome: file-tree rail, dark titlebar with a mono filename tab, line-numbered monospace body on a deep ground \u2014 the exact terminal-window affordance."
+        },
+        {
+          "skill": "design-taste-frontend",
+          "suitable": true,
+          "reason": "Dark code-editor chrome with a clean titled header bar, monospace line-numbered body, and crisp file-list rail - directly informs the terminal-window live-preview frame hierarchy."
+        },
+        {
+          "skill": "ui-ux-pro-max",
+          "suitable": true,
+          "reason": "A coherent fully-dark code-editor window - app-chrome title bar, file-tree gutter, line-numbered monospace body, filename tab - a near-literal terminal-window frame that is restrained and instrument-precise."
+        },
+        {
+          "skill": "frontend-design",
+          "suitable": true,
+          "reason": "Dark IDE window chrome: titlebar with app brand, line-numbered monospace content and a filename tab - exactly the terminal-window live-preview frame pattern, matte and instrument-grade."
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Dark Mode Bento Grid UI with Analytics",
+      "url": "https://dribbble.com/shots/27456998",
+      "element": "overall",
+      "agree": 0,
+      "votes": [
+        {
+          "skill": "impeccable",
+          "suitable": false,
+          "reason": "Dark bento grid but built on glassmorphism, glow, and gradient gauges \u2014 glass-as-default and the hero-metric gauge template are impeccable absolute-bans."
+        },
+        {
+          "skill": "design-taste-frontend",
+          "suitable": false,
+          "reason": "Dark but glassmorphic glow-heavy analytics bento with blue spotlight lighting, soft drop shadows, and rounded cards - the lighting/blur/blue-glow language is anti-instrument and off-discipline."
+        },
+        {
+          "skill": "ui-ux-pro-max",
+          "suitable": false,
+          "reason": "Dark bento grid but built on glassmorphic glow, ambient colored lighting and drop shadows - Almanac forbids drop shadows and large radius; decorative-premium, not hairline-instrument-precise."
+        },
+        {
+          "skill": "frontend-design",
+          "suitable": false,
+          "reason": "Bento cards drowned in lens-flare bloom, soft drop-shadows and rounded-soft corners - decorative glow treatment that violates the 2px-radius/hairline-before-shadow instrument discipline."
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Alps - Premium Dark Admin Template",
+      "url": "https://dribbble.com/shots/24071167",
+      "element": "overall",
+      "agree": 0,
+      "votes": [
+        {
+          "skill": "impeccable",
+          "suitable": false,
+          "reason": "Dark admin shell with rainbow metric cards (red/blue/yellow/green/purple) \u2014 identical-card-grid plus full-rainbow palette is exactly the SaaS-admin slop the brief rejects."
+        },
+        {
+          "skill": "design-taste-frontend",
+          "suitable": false,
+          "reason": "Dark admin template but a rainbow of saturated stat cards, pink charts, and dense candy-colored chips - multi-color status-by-hue and decorative saturation break the single-amber discipline."
+        },
+        {
+          "skill": "ui-ux-pro-max",
+          "suitable": false,
+          "reason": "Dark admin template whose hierarchy is carried by saturated rainbow KPI cards - color-as-only-hierarchy survives grayscale as a structural defect (violates visual-hierarchy via size/spacing/contrast, not color)."
+        },
+        {
+          "skill": "frontend-design",
+          "suitable": false,
+          "reason": "Generic dark admin template with multicolored chiclet stat cards and a rainbow icon rail - textbook templated admin, no intentional aesthetic point of view."
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "Alps - Support Template",
+      "url": "https://dribbble.com/shots/24071214",
+      "element": "overall",
+      "agree": 2,
+      "votes": [
+        {
+          "skill": "impeccable",
+          "suitable": false,
+          "reason": "Same generic Alps dark-admin template as id7 (saturated charts, colored tag chips, generic data table); judged as element=overall it is the shell I reject, and the lone count-strip I'd rescue is itself the banned hero-metric pattern."
+        },
+        {
+          "skill": "design-taste-frontend",
+          "suitable": true,
+          "reason": "Dark admin support board with a clean numeric summary stat-strip, hairline-separated tabular density, and a compact icon rail - genuinely teaches dense status-readout layout and tabular hierarchy on dark ground."
+        },
+        {
+          "skill": "ui-ux-pro-max",
+          "suitable": true,
+          "reason": "Dark dashboard with a clean hairline-celled summary stat band (label + tabular figure) over a structured data table; its color is decorative chips on an already-structured layout, so the density/figure treatment is the genuine instrument teach."
+        },
+        {
+          "skill": "frontend-design",
+          "suitable": false,
+          "reason": "Dark admin template with multicolor status tags and a dense data table; the numbered summary-stat strip has mild density value but is wrapped in generic-admin treatment that disqualifies it."
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "title": "Football App - Settings & Alert Preferences UI",
+      "url": "https://dribbble.com/shots/27249321",
+      "element": "step-heads",
+      "agree": 2,
+      "votes": [
+        {
+          "skill": "impeccable",
+          "suitable": true,
+          "reason": "On-domain settings screen: grouped section labels over consistent rows of title/subtitle with right-aligned toggle controls \u2014 real configurator IA, judged on layout/density with color ignored."
+        },
+        {
+          "skill": "design-taste-frontend",
+          "suitable": true,
+          "reason": "Dark settings screen with grouped, numbered-feeling toggle rows, clear section labels, leading icons, and right-aligned controls - directly models the numbered section-header + configurator-row hierarchy."
+        },
+        {
+          "skill": "ui-ux-pro-max",
+          "suitable": false,
+          "reason": "Consumer mobile (football) settings list using emoji as structural icons - an explicit ui-ux-pro-max anti-pattern; the weight-based group-header/sub-label hierarchy is generic and the reference itself is off-posture."
+        },
+        {
+          "skill": "frontend-design",
+          "suitable": false,
+          "reason": "Consumer iOS settings list shown as a phone product-mockup (toggle rows, generic settings hierarchy) - consumer mobile genre and mockup framing, not a dense dark instrument panel."
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "title": "AI-Powered Productivity Dashboard - Aizen",
+      "url": "https://dribbble.com/shots/26599212",
+      "element": "step-heads",
+      "agree": 0,
+      "votes": [
+        {
+          "skill": "impeccable",
+          "suitable": false,
+          "reason": "Light lavender/periwinkle productivity dashboard with soft rounded cards \u2014 light, pastel, consumer; wrong register entirely for a dark warm instrument panel."
+        },
+        {
+          "skill": "design-taste-frontend",
+          "suitable": false,
+          "reason": "Light lavender/pastel productivity dashboard with soft rounded cards and pale panels - light, soft, consumer; off-tone for a dark warm instrument panel."
+        },
+        {
+          "skill": "ui-ux-pro-max",
+          "suitable": false,
+          "reason": "Light lavender/periwinkle pastel dashboard with soft rounded cards - light, pastel, consumer-bright; off-brand for a warm near-black instrument panel."
+        },
+        {
+          "skill": "frontend-design",
+          "suitable": false,
+          "reason": "Light pastel-lavender dashboard panels with rounded-soft cards - light-mode consumer SaaS composition, the opposite of a dense dark instrument surface."
+        }
+      ]
+    }
+  ],
+  "unanimousCount": 2,
+  "poolSize": 10
+}

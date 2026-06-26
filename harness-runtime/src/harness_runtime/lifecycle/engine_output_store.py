@@ -370,6 +370,7 @@ class EngineOutputStore:
         branch_index: int,
         step_id: str,
         step_kind: str,
+        child_recoverable: bool | None = None,
     ) -> None:
         """Mark a fan-out branch as DISPATCHED (the reserve-before-dispatch marker), durably.
 
@@ -383,10 +384,56 @@ class EngineOutputStore:
         DISPATCH-TIME step kind — read by ``dispatched_branch_kinds`` so the maybe-ran
         re-fire-safety classifier keys on the ORIGINAL kind, never the (possibly changed)
         resumed manifest's kind (the at-most-once changed-manifest guard, B-FANOUT-CRASH-
-        RESUME-MAYBE-RAN-RESOLUTION)."""
-        record = {"step_id": str(step_id), "step_kind": str(step_kind)}
+        RESUME-MAYBE-RAN-RESOLUTION).
+
+        ``child_recoverable`` (B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT) — for a
+        SUB_AGENT_DISPATCH worker only, whether its CHILD was RE-DISPATCH-RECOVERABLE at
+        DISPATCH (``{ESR,WAL}`` engine ∧ SINGLE_THREADED_LINEAR topology ∧ leaf — so the
+        child's tool sinks auto-fence, the child's own crash-resume is durable, AND its
+        ``final_state`` reconstructs). Read by ``subagent_child_recoverable_indexes`` so a
+        maybe-ran SUB_AGENT_DISPATCH worker is re-dispatch-recoverable (its child auto-resumes
+        under the deterministic run_id) ONLY when its child can auto-resume RESULT-FAITHFULLY —
+        else the classifier fails closed (a non-recoverable child re-runs from scratch →
+        double-fire, or a SAVE_POINT/RECONCILER/fan-out child → suffix-only ``final_state`` →
+        fold corruption). The DISPATCH-TIME value (the at-most-once changed-manifest guard).
+        ``None`` (every non-SUB_AGENT_DISPATCH branch + pre-arc markers) → the field is OMITTED
+        so those markers hash/parse byte-identically to before."""
+        record: dict[str, object] = {"step_id": str(step_id), "step_kind": str(step_kind)}
+        if child_recoverable is not None:
+            record["child_recoverable"] = bool(child_recoverable)
         line = json.dumps(record, sort_keys=True)
         self._append_path(self._branch_dispatched_file(run_key, branch_index), line)
+
+    def subagent_child_recoverable_indexes(self, run_key: str) -> set[int]:
+        """Branch ordinals whose DISPATCH-TIME marker recorded ``child_recoverable=True``.
+
+        B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT — a maybe-ran SUB_AGENT_DISPATCH worker is
+        recoverable-by-re-dispatch (its child auto-resumes under the deterministic run_id, with
+        result-faithful ``final_state`` reconstruction) ONLY if its child was RECOVERABLE at
+        dispatch (``{ESR,WAL}`` ∧ LINEAR ∧ leaf, recorded here from the opaque child manifest).
+        The marker is the DISPATCH-TIME value (the at-most-once changed-manifest guard — a child
+        edited recoverable→non-recoverable between dispatch + resume must STILL be classified by
+        the dispatch-time value). Absent / ``False`` / torn / pre-arc → NOT in the set → the
+        classifier fails closed (the #701 decline-mirror; never an auto-recover). Presence of the
+        per-branch marker file is via ``glob`` (mirrors ``dispatched_branch_kinds``); the bool is
+        best-effort (any read/parse failure → not-recoverable)."""
+        branches_dir = self._branches_dir(run_key)
+        if not branches_dir.exists():
+            return set()
+        indexes: set[int] = set()
+        for path in branches_dir.glob("branch-*.dispatched"):
+            branch_index = self._dispatched_index_from_name(path.name)
+            if branch_index is None:
+                continue
+            try:
+                record = json.loads(path.read_text(encoding="utf-8").splitlines()[-1])
+                if record.get("child_recoverable") is True:
+                    indexes.add(branch_index)
+            except (OSError, UnicodeDecodeError, ValueError, IndexError, KeyError, AttributeError):
+                # torn / pre-arc / invalid-encoding marker → not provably recoverable →
+                # fail-closed at the classifier (presence ≠ validity).
+                continue
+        return indexes
 
     def present_dispatched_indexes(self, run_key: str) -> set[int]:
         """Return the set of branch ordinals with a DISPATCHED marker file (any state).

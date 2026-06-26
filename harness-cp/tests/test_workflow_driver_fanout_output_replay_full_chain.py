@@ -56,7 +56,7 @@ from harness_cp.workflow_driver import (
     StepKindDispatcherNotBoundError,
     execute_workflow,
 )
-from harness_cp.workflow_driver_types import RunStatus, StepKind, WorkflowStep
+from harness_cp.workflow_driver_types import RunStatus, StepKind, WorkflowStep, compose_branch_path
 from harness_cp.workflow_manifest_entry import (
     FanoutTimeoutDisposition,
     WorkflowManifestEntry,
@@ -108,6 +108,8 @@ class _InMemoryBranchStore:
         # read by `dispatched_branch_step_ids` so the fence-recoverable classifier + reconstruct
         # carrier key on the ORIGINAL step_id (changed-step_id guard). None models a torn marker.
         self._dispatched_step_id: dict[str, dict[int, str | None]] = {}
+        # B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT — dispatch-time SUB_AGENT child recoverability.
+        self._subagent_recoverable: dict[str, dict[int, bool]] = {}
         self._instrumented: set[str] = set()
         # B-FANOUT-CRASH-RESUME-ORCHESTRATOR-DISPATCH / MAYBE-RAN-RESOLUTION — {run_key:
         # orchestrator dispatch-time step_kind value | None} for runs whose orchestrator BEGAN
@@ -154,10 +156,22 @@ class _InMemoryBranchStore:
     # -- B-FANOUT-CRASH-RESUME-STRICT-TIER-INCOMPLETE / MAYBE-RAN-RESOLUTION: reserve-before-
     # dispatch ----
     def record_branch_dispatched(
-        self, run_key: str, branch_index: int, step_id: str, step_kind: str
+        self,
+        run_key: str,
+        branch_index: int,
+        step_id: str,
+        step_kind: str,
+        child_recoverable: bool | None = None,
     ) -> None:
         self._dispatched.setdefault(run_key, {})[int(branch_index)] = str(step_kind)
         self._dispatched_step_id.setdefault(run_key, {})[int(branch_index)] = str(step_id)
+        if child_recoverable is not None:
+            self._subagent_recoverable.setdefault(run_key, {})[int(branch_index)] = bool(
+                child_recoverable
+            )
+
+    def subagent_child_recoverable_indexes(self, run_key: str) -> set[int]:
+        return {bi for bi, ok in self._subagent_recoverable.get(run_key, {}).items() if ok}
 
     def present_dispatched_indexes(self, run_key: str) -> set[int]:
         return set(self._dispatched.get(run_key, {}))
@@ -4456,3 +4470,67 @@ def test_crash_resume_scoped_abort_orchestrator_all_aborted_reproduces_failed() 
     assert crash.status is RunStatus.FAILED
     assert "orchestrator-workers-effect-fence-branch-aborted" in (crash.fail_class or "")
     assert crash.status is resolved.status
+
+
+class _SeedInputCapturingDispatcher:
+    """Captures, per fan-out branch, the (parent_idempotency_key, branch_path) pair the REAL
+    driver-built branch StepExecutionContext carries — the two inputs (besides child_workflow_id)
+    that the deterministic child run_id seed (`compose_child_run_id_seed`, runtime) derives from.
+    Re-fire-safe DECLARATIVE branches so the maybe-ran / not-run resume re-dispatches cleanly."""
+
+    def __init__(self) -> None:
+        self.dispatched: list[str] = []
+        self.seed_inputs: dict[int, tuple[str, str]] = {}
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        self.dispatched.append(str(step.step_id))
+        if step_context is not None and step_context.branch_index is not None:
+            self.seed_inputs[step_context.branch_index] = (
+                step_context.parent_idempotency_key,
+                compose_branch_path(step_context),
+            )
+        return {"branch": int(step.step_payload["index"])}
+
+
+def test_child_run_id_seed_inputs_resume_stable_through_real_driver_branch_reconstruction() -> None:
+    """FULL-CHAIN seed-resume-stability (advisor: the load-bearing link the component witnesses do
+    NOT compose). The deterministic child run_id seed is `sha256(parent_idempotency_key : branch_path
+    : child_workflow_id)`; the recovery is SOUND only if a parent-crash re-dispatch RE-DERIVES the
+    SAME seed (else the resumed child keys a DISJOINT durable store → runs fresh → double-fire).
+
+    This drives a REAL PARALLELIZATION fan-out parent through `execute_workflow`: first-dispatch
+    captures `(parent_idempotency_key, branch_path)` per branch from the driver-built branch
+    StepExecutionContext; a branch is then marked PROVABLY-NOT-RUN and the run is crash-resumed →
+    that branch RE-DISPATCHES through the driver's RESUME-path branch-context reconstruction → its
+    captured seed-inputs MUST equal the first-dispatch values. Proves the resume path rebuilds the
+    fan-out parent + branch context identically (same `parent_action_id` + `parent_idempotency_key`
+    + `branch_index`), so the child run_id seed is resume-stable BY the real driver, not by
+    construction-assertion."""
+    store = _InMemoryBranchStore()
+    steps = [_step(f"branch-{i}", i) for i in range(3)]
+    first = _SeedInputCapturingDispatcher()
+    _run_persona(
+        workflow_id="wf-seed-stable",
+        steps=steps,
+        dispatcher=first,
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+    )
+    assert set(first.seed_inputs) == {0, 1, 2}
+
+    key = store.sole_run_key()
+    store.forget_branch_undispatched(key, 1)  # branch 1 provably-not-run → re-dispatches on resume
+    resume = _SeedInputCapturingDispatcher()
+    _run_persona(
+        workflow_id="wf-seed-stable",
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+    )
+    assert 1 in resume.seed_inputs, "branch 1 must re-dispatch on the crash-resume"
+    # The load-bearing assertion: the re-dispatched branch's seed inputs (hence its child run_id
+    # seed) are reconstructed IDENTICALLY by the driver's resume path.
+    assert resume.seed_inputs[1] == first.seed_inputs[1]

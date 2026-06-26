@@ -1,0 +1,209 @@
+# Council Workflow — HARNESS-LAYER-AWARE variant
+# ============================================================================
+# A reusable, council-skill-AGNOSTIC-pre-invocation workflow for running a
+# genuine multi-agent council -> adversarial -> Codex/advisor reconcile-to-zero
+# loop over a design/planning question in THIS harness.
+#
+# "Council-skill-agnostic pre-invocation" = the workflow does NOT hardcode which
+# cN voices convene. At invocation it reads `layer_voice_map` for the harness
+# layer/axis the question touches and convenes the relevant voices. For a fully
+# generic (non-harness) variant, see council-workflow.generic.yaml.
+#
+# Provenance: distilled verbatim from the lived context-memory grounding council
+# arc (roadmap R-IF-council-context-memory; PR #292; ledger at
+# .harness/council/context-memory-grounding/). The HIL gates below are the gates
+# that actually kept that arc on track — do not abstract them away.
+# Companion prose: .harness/council/COUNCIL-WORKFLOW.md
+# /command: /council-workflow  (.claude/skills/council-workflow/)
+version: 1
+kind: harness-layer-aware
+
+# --- 0. Pre-convening (council-skill-agnostic) ------------------------------
+pre_convening:
+  nameable_tension_gate:                       # CLAUDE.md §10.9 amendment 1
+    rule: >
+      Convene a council ONLY if a tension between two or more voices can be
+      NAMED in advance. If no nameable cross-domain tension exists, route to a
+      single voice + advisor() instead — a council with no tension collapses to
+      a primary + cosmetic consultants (primary-collapse failure).
+    on_fail: route_single_voice_plus_advisor
+  identify_layer:
+    question: Which harness layer/axis does the deliberation touch?
+    drives: which voices convene (see layer_voice_map)
+  set_spine_tension:
+    rule: >
+      Name the convening spine-tension (the round's center) up front so the
+      council adjudicates a real question, not a citation dump. (This arc's
+      spine was "proportionality-vs-canon".)
+  charter:
+    rule: >
+      Open/append a charter + ledger tree (00-CHARTER.md, 01-council/,
+      02-adversarial/, 03-codex-advisor/, 04-reconciliation/, DELIVERABLE) so
+      the work survives context truncation and hands off cleanly. Additive-only.
+
+# --- layer -> voices router (the harness-aware part) ------------------------
+# Per CLAUDE.md §1.1 axis ownership + §10.7 council slate (C1..C11).
+# primaries = the domain-center voices for the layer; consultants = cross-cutting.
+layer_voice_map:
+  IS:   { name: Information Substrate (context/memory/state/ledger), primaries: [c2, c3], consultants: [c1, c5, c7, c9, c8] }
+  AS:   { name: Action Surface (tools/MCP/sandbox/skills),           primaries: [c4, c10], consultants: [c5, c7, c9, c1] }
+  CP:   { name: Control Plane (routing/retry/workflow/topology/HITL),primaries: [c1, c5, c6, c9], consultants: [c7, c8, c10, c2] }
+  OD:   { name: Operational Discipline (HITL/audit/cost/observability), primaries: [c7, c8, c11], consultants: [c5, c9, c1, c10] }
+  CXA:  { name: Cross-Axis Composition,                              primaries: [c1, c2], consultants: [c5, c7, c9, c10, c8] }
+  cross_cutting:
+    note: >
+      For a multi-axis question, take the union of the touched layers' primaries
+      (cap the PRIMARY set at 2-3 by the genuine domain center) and the union of
+      consultants (dedup). Promote a normally-consultant voice to first-class
+      when the evidence is squarely its domain (this arc promoted C8/eval because
+      the fresh research was eval-gates). Justify any override of the nominal
+      5-voice cap (this arc ran 7, operator-justified).
+  cross_cutting_concerns:     # named concerns -> the voice that owns each (CCR)
+    security_blast_radius: c10
+    observability: c7
+    cost: c6
+    reliability_recovery: c9
+    eval_ability: c8
+    hitl_local_first: c11
+    validation_contract: c5
+    orchestration_lifecycle: c1
+
+# --- the loop (stages, in order) --------------------------------------------
+# Mechanism for EVERY voice/reviewer pass: GENUINE invocation — a dedicated agent
+# (Workflow agent() or Agent tool) that FIRST reads + adopts its cN/skill file,
+# then acts. NOT the core agent reading the skill as reference (ventriloquism).
+stages:
+
+  - id: E1
+    name: Council deliberation
+    full_council_convening: true               # => HIL gate fires (see hil_gates)
+    sub_phases:
+      - id: A1
+        name: primaries (independent)
+        who: layer primaries
+        mode: isolated / blind-to-each-other (decorrelated; anti-primary-collapse)
+        out: per-primary contribution (verbatim, to 01-council/contributions/)
+      - id: A2
+        name: consultants react to primaries
+        who: layer consultants
+        mode: each reads the primaries' REAL output + reacts (surface-tension OR
+              propose-refinement); formulaic concurrence REJECTED; blind to other
+              consultants (decorrelated)
+        out: per-consultant reaction (verbatim)
+      - id: B
+        name: cross-cutting cross-read DEBATE
+        who: the voices that share a seam
+        mode: seam-routed — each voice RECEIVES named peer positions and engages
+              them BY NAME (COHERE / flag-CONFLICT / refine); then primary
+              confirm-back. THIS is where the council genuinely debates.
+        out: per-seam reconciled disposition; the integration/deliverable shape
+    orchestrator_role: compose the envelope + write the ledger; do NOT ventriloquize
+    gate: E1 reconciled-to-internal-zero (primaries<->consultants closed)
+
+  - id: E2
+    name: Adversarial review #1
+    who: harness-adversarial-reviewer (genuine invocation, schema-free)
+    does: red-team the reconciled E1 + integration plan; finding-classified
+          Class 1 (halt) / Class 2 (in-arc revision) / Class 3 (informational)
+          per Project_Workflow §4.1; cite-verification; pattern-checklist;
+          hunt missed cross-cutting tensions
+    out: 02-adversarial/REVIEW-*.md
+
+  - id: E2b
+    name: Adversarial <-> council reconcile-to-zero
+    full_council_convening: true               # => HIL gate
+    who: the council voices respond (ACCEPT / reconcile / rebut) to each finding
+    rule: loop until zero unreconciled; cross-cutting synthesis (seam cross-read)
+          on every reconcile pass
+    gate: reconciled-to-zero BEFORE Codex/advisor handoff (charter default order)
+
+  - id: E3
+    name: Codex (out-of-family) + advisor (in-family) — decorrelated evaluators
+    who:
+      codex:   { tool: "just codex-review (gpt-5.5, $0 ChatGPT subscription)", family: out-of-family }
+      advisor: { tool: "advisor()", family: in-family, sees: full transcript }
+    decorrelation_discipline:                  # CLAUDE.md §13.1
+      - Codex gets a DESCRIPTIVE primer ONLY (what the research/artifact IS) —
+        NEVER the council's conclusions, NEVER the adversarial findings, NEVER
+        advisor's eval. Hand Codex Claude-family conclusions and you re-correlate
+        it and lose the decorrelation you are paying for.
+      - advisor() is transcript-aware (it saw the whole arc) — it is the other half.
+      - The SIGNAL is where Codex DISAGREES with advisor or the adversarial.
+        3-way convergence -> ship with confidence; divergence -> dig there.
+    out: 03-codex-advisor/{codex-eval,advisor-eval}.md
+
+  - id: E3b
+    name: Codex/advisor <-> council reconcile-to-zero
+    full_council_convening: true               # => HIL gate
+    who: council voices respond to the Codex+advisor findings
+    gate: reconciled-to-zero
+
+  - id: E4
+    name: Adversarial review #2 (the gate)
+    who: single bounded harness-adversarial-reviewer (NOT a fan-out — anti-bloat)
+    does: residual sweep on the candidate deliverable + re-verify empirical claims
+          AT HEAD (grep/read — do not trust the plan's word)
+    verdict: CLEAR-TO-COMMIT | CLEAR-WITH-FOLD (fold Class-3, then commit) | LOOP-BACK
+    on_loop_back: return to the relevant reconcile stage
+
+  - id: close
+    name: Close + hand off
+    steps:
+      - fold any CLEAR-WITH-FOLD residuals; re-verify at HEAD
+      - deliverable = a CONSCIOUS versioned move (vN + change-note), not a silent overwrite
+      - register the arc in the roadmap (Project_Roadmap_v1.md R-NNN; NOT the
+        dashboard — the dashboard hash-refresh self-heals at SessionStart/§12.2.1)
+      - commit (additive-only); PR per operator direction; merge = operator's call
+
+# --- reorder note (operator may collapse) -----------------------------------
+reorder_options:
+  consolidated_reconcile:
+    rule: >
+      The operator may collapse E2b + E3b into ONE consolidated reconcile AFTER
+      all reviewer input (adversarial + Codex + advisor) is gathered — the
+      council responds to the merged finding-set in one pass. Preserves
+      reconcile-to-zero; reduces full-council convenings. (This arc did so.)
+
+# --- HIL guidance — the gates that keep it on track -------------------------
+# These are the genuine gates from the lived arc; honor them unless the operator
+# explicitly authorizes autonomy ("without HIL").
+hil_gates:
+  - id: halt-before-full-council-convening
+    rule: >
+      HALT at a gate before EACH full_council_convening stage (E1, E2b, E3b /
+      the consolidated reconcile). Surface the prior phase's result; await the
+      operator go-ahead. Single-reviewer stages (E2, E3-codex, E4) do NOT trip
+      this gate.
+  - id: phase-separation
+    rule: >
+      Run phases as SEPARATE workflow invocations with an orchestrator checkpoint
+      between them — do NOT bundle the isolated deliberation and the cross-read
+      debate in one run. The operator inspects between phases.
+  - id: convening-sequence
+    rule: >
+      primaries (independent) -> consultants (react to primaries) -> cross-read
+      debate. Do NOT run all voices blind-parallel; consultants must be
+      INTRODUCED to react to the primaries' real output.
+  - id: decorrelated-reviewer-wiring
+    rule: Codex cold (descriptive primer only) + advisor transcript-aware; weight divergence.
+  - id: reconcile-to-zero-per-gate
+    rule: Close each pairwise reviewer<->council gate to zero before advancing.
+  - id: genuine-invocation
+    rule: Every voice/reviewer = a dedicated agent adopting its skill; never core-agent reference-reads.
+  - id: proportionality-when-applicable
+    rule: >
+      If the spine is proportionality-vs-canon (or similar), every enrichment must
+      EARN its place against the success metric + the persona filter; triage each
+      input decision-moving / citation-enriching / confirmatory; do not fold all citations.
+
+# --- operational discipline (avoid the failure modes this arc hit) ----------
+operational_discipline:
+  rate_limit: >
+    Fan out GENTLY — batch parallel agent invocations into small sequential waves
+    (peak <= 2-3 concurrent) with a retry wrapper. A burst of many concurrent
+    agents trips the server burst-ceiling (all fail at once).
+  do_not_race_contended_files: >
+    Do NOT run a competing roadmap/dashboard refresh while a concurrent session is
+    churning those files; the SessionStart audit + §12.2.1 fixed point self-heal.
+  ledger_writes: orchestrator writes the ledger from returned agent markdown (no parallel-write races).
+  posture: design-phase council work is additive-only; obey CLAUDE.md §11 posture + X-AL-3.

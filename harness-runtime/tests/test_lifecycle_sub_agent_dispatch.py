@@ -45,7 +45,7 @@ from typing import Any, cast
 import pytest
 from harness_as.sandbox_tier import SandboxTier
 from harness_core import PersonaTier, StepID, WorkloadClass
-from harness_cp.cp_shared_types import ModelBinding
+from harness_cp.cp_shared_types import AgentRole, ModelBinding
 from harness_cp.cross_family_fallback_chain import (
     FallbackChain,
     ProviderCandidate,
@@ -76,6 +76,8 @@ from harness_cp.workflow_driver_types import (
     StepKind,
     SubAgentChildPausedError,
     WorkflowStep,
+    compose_branch_child_context,
+    compose_branch_path,
 )
 from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
 from harness_is.state_ledger_entry_schema import Actor, ActorClass
@@ -91,6 +93,8 @@ from harness_runtime.lifecycle.sub_agent_dispatch import (
     SubAgentDispatchPayload,
     SubAgentDispatchPayloadShapeError,
     SubAgentDispatchTopologyInadmissibleError,
+    compose_child_run_id_seed,
+    subagent_child_recoverable,
 )
 from harness_runtime.lifecycle.topology_dispatcher import RuntimeTopologyDispatcher
 from opentelemetry.sdk.trace import TracerProvider
@@ -136,12 +140,13 @@ def _child_manifest(
     *,
     workload_class: WorkloadClass = WorkloadClass.SOFTWARE_ENGINEERING,
     topology: TopologyPattern = TopologyPattern.HIERARCHICAL_DELEGATION,
+    engine_class: EngineClass = EngineClass.PURE_PATTERN_NO_ENGINE,
 ) -> WorkflowManifestEntry:
     return WorkflowManifestEntry(
         workflow_id="child-wf",
         workload_class=workload_class,
         persona_tier=PersonaTier.TEAM_BINDING,
-        engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
+        engine_class=engine_class,
         topology_pattern=topology,
         layer_budgets=(),
         fallback_chain=_CHAIN,
@@ -150,13 +155,16 @@ def _child_manifest(
     )
 
 
-def _child_steps() -> tuple[WorkflowStep, ...]:
-    return (
+def _child_steps(
+    kinds: tuple[StepKind, ...] = (StepKind.INFERENCE_STEP,),
+) -> tuple[WorkflowStep, ...]:
+    return tuple(
         WorkflowStep(
-            step_id=StepID("child-step-0"),
-            step_kind=StepKind.INFERENCE_STEP,
-            step_payload={"index": 0},
-        ),
+            step_id=StepID(f"child-step-{i}"),
+            step_kind=kind,
+            step_payload={"index": i},
+        )
+        for i, kind in enumerate(kinds)
     )
 
 
@@ -164,11 +172,15 @@ def _payload(
     *,
     workload_class: WorkloadClass = WorkloadClass.SOFTWARE_ENGINEERING,
     topology: TopologyPattern = TopologyPattern.HIERARCHICAL_DELEGATION,
+    engine_class: EngineClass = EngineClass.PURE_PATTERN_NO_ENGINE,
+    child_step_kinds: tuple[StepKind, ...] = (StepKind.INFERENCE_STEP,),
 ) -> SubAgentDispatchPayload:
     return SubAgentDispatchPayload(
         child_workflow_id="child-wf",
-        child_manifest_entry=_child_manifest(workload_class=workload_class, topology=topology),
-        child_steps=_child_steps(),
+        child_manifest_entry=_child_manifest(
+            workload_class=workload_class, topology=topology, engine_class=engine_class
+        ),
+        child_steps=_child_steps(child_step_kinds),
         brief=_brief(),
     )
 
@@ -237,6 +249,7 @@ class _MockChildWorkflowRunner:
         descent: SubAgentGateLevelDescent,
         default_model_binding: ModelBinding,
         pause_snapshot_input: Any = None,
+        child_run_id_seed: str | None = None,
     ) -> RunResult:
         self.calls.append(
             {
@@ -249,6 +262,9 @@ class _MockChildWorkflowRunner:
                 # B-HIERARCHICAL-PAUSE — the child resume snapshot threaded on resume
                 # (None on a first dispatch).
                 "pause_snapshot_input": pause_snapshot_input,
+                # B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT — the deterministic child run_id
+                # seed (None when the child is non-recoverable / a non-fanout dispatch).
+                "child_run_id_seed": child_run_id_seed,
             }
         )
         return self.next_result
@@ -1055,7 +1071,200 @@ def test_three_sequential_dispatches_chain_through_audit_writer(tmp_path: Path) 
 
 
 # ---------------------------------------------------------------------------
-# Module-level: cast unused symbol to silence linters
+# B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT (R-FS-1) — recoverability predicate +
+# seed-gating witnesses (the corrected predicate over the #746 reverted branch).
 # ---------------------------------------------------------------------------
+
+
+def test_subagent_child_recoverable_true_for_linear_esr_leaf() -> None:
+    """The WITNESSED slice: a {ESR} ∧ SINGLE_THREADED_LINEAR child whose steps are all
+    TOOL/INFERENCE/DECLARATIVE/HITL (no nested SUB_AGENT/MANAGED) → RECOVERABLE."""
+    payload = _payload(
+        engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+        topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+        child_step_kinds=(StepKind.INFERENCE_STEP, StepKind.TOOL_STEP, StepKind.DECLARATIVE_STEP),
+    )
+    assert subagent_child_recoverable(payload) is True
+
+
+def test_subagent_child_recoverable_true_for_linear_wal_leaf() -> None:
+    """WAL_SEGMENT is the other reconstruction-capable engine class → also RECOVERABLE."""
+    payload = _payload(
+        engine_class=EngineClass.WAL_SEGMENT,
+        topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+        child_step_kinds=(StepKind.TOOL_STEP,),
+    )
+    assert subagent_child_recoverable(payload) is True
+
+
+def test_subagent_child_recoverable_false_for_save_point_child() -> None:
+    """NEGATIVE CONTROL (the [P1-a] fix half): a SAVE_POINT_CHECKPOINT child auto-fences but has
+    NO durable output store → suffix-only `final_state` → NOT recoverable (the registered
+    `…-SAVE-POINT-RECONCILER` arc). This is the case an unconditional deterministic seed would
+    silently corrupt — seed-gating + the classifier both exclude it."""
+    payload = _payload(
+        engine_class=EngineClass.SAVE_POINT_CHECKPOINT,
+        topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+        child_step_kinds=(StepKind.TOOL_STEP,),
+    )
+    assert subagent_child_recoverable(payload) is False
+
+
+def test_subagent_child_recoverable_false_for_fanout_child() -> None:
+    """NEGATIVE CONTROL (the [P1-a] LINEAR-narrowing fix): a {ESR} child with a FAN-OUT topology
+    engages its OWN fan-out reconstruction (unwitnessed) → NOT recoverable (the registered
+    fan-out-child follow-on). "No nested sub-agents" ≠ "no recursion"."""
+    for fanout_topology in (
+        TopologyPattern.PARALLELIZATION,
+        TopologyPattern.ORCHESTRATOR_WORKERS,
+        TopologyPattern.HIERARCHICAL_DELEGATION,
+    ):
+        payload = _payload(
+            engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+            topology=fanout_topology,
+            child_step_kinds=(StepKind.TOOL_STEP,),
+        )
+        assert subagent_child_recoverable(payload) is False, fanout_topology
+
+
+def test_subagent_child_recoverable_false_for_nested_subagent_or_managed_child_step() -> None:
+    """NEGATIVE CONTROL (the leaf condition): a {ESR} ∧ LINEAR child is NOT recoverable if any of
+    its steps is a nested SUB_AGENT_DISPATCH (deeper recursion) or MANAGED_AGENTS (unfenced vendor
+    sink) — both are further follow-ons, outside the #770-witnessed leaf scope."""
+    nested_subagent = _payload(
+        engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+        topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+        child_step_kinds=(StepKind.INFERENCE_STEP, StepKind.SUB_AGENT_DISPATCH),
+    )
+    assert subagent_child_recoverable(nested_subagent) is False
+    nested_managed = _payload(
+        engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+        topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+        child_step_kinds=(StepKind.TOOL_STEP, StepKind.MANAGED_AGENTS),
+    )
+    assert subagent_child_recoverable(nested_managed) is False
+
+
+def test_cp_and_runtime_recoverability_predicates_agree() -> None:
+    """AGREEMENT WITNESS (advisor secondary) — the CP-side defensive opaque-payload read
+    (`_subagent_child_recoverable`, which records the dispatch marker → admits re-dispatch) and the
+    runtime typed predicate (`subagent_child_recoverable`, which gates the seed) MUST agree. The
+    DANGEROUS drift is CP-True / runtime-False: the classifier admits re-dispatch but the composer
+    passes no seed → the child runs fresh → double-fire. Assert both return the SAME verdict on the
+    recoverable shape + each negative-control shape."""
+    from harness_cp.workflow_driver import _subagent_child_recoverable as _cp_recoverable
+
+    cases = {
+        "linear-esr-leaf": _payload(
+            engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+            topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+            child_step_kinds=(StepKind.TOOL_STEP, StepKind.INFERENCE_STEP),
+        ),
+        "save-point": _payload(
+            engine_class=EngineClass.SAVE_POINT_CHECKPOINT,
+            topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+            child_step_kinds=(StepKind.TOOL_STEP,),
+        ),
+        "fanout-child": _payload(
+            engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+            topology=TopologyPattern.PARALLELIZATION,
+            child_step_kinds=(StepKind.TOOL_STEP,),
+        ),
+        "nested-subagent": _payload(
+            engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+            topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+            child_step_kinds=(StepKind.TOOL_STEP, StepKind.SUB_AGENT_DISPATCH),
+        ),
+    }
+    for name, payload in cases.items():
+        runtime_verdict = subagent_child_recoverable(payload)
+        cp_verdict = _cp_recoverable(_step(payload))  # the CP read over the SUB_AGENT step
+        assert cp_verdict == runtime_verdict, (
+            f"{name}: CP={cp_verdict} runtime={runtime_verdict} — predicates must agree "
+            "(CP-True/runtime-False would admit re-dispatch with no seed → double-fire)"
+        )
+
+
+def test_dispatch_seed_none_for_linear_non_fanout_recoverable_child(tmp_path: Path) -> None:
+    """SEED-GATING — a recoverable child on a LINEAR (non-fan-out, `branch_index is None`) context
+    gets `child_run_id_seed=None`. The deterministic seed is FAN-OUT-WORKER-scoped (it matches the
+    fan-out maybe-ran classifier's recovery surface + excludes the sequential-loop topologies whose
+    steps reuse `step_index` across iterations). A non-fan-out dispatch keeps the legacy fresh
+    `uuid` (the fan-out positive case is `test_dispatch_seed_includes_branch_path_for_fanout_worker`)."""
+    dispatcher, runner, _ = _dispatcher(tmp_path)
+    recoverable = _payload(
+        workload_class=WorkloadClass.PIPELINE_AUTOMATION,  # admits SINGLE_THREADED_LINEAR
+        engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+        topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+        child_step_kinds=(StepKind.TOOL_STEP,),
+    )
+    dispatcher.dispatch(_binding(), _step(recoverable), step_context=_step_context())
+    assert runner.calls[-1]["child_run_id_seed"] is None
+
+
+def test_dispatch_seed_gated_on_recoverability_non_recoverable_child_gets_none(
+    tmp_path: Path,
+) -> None:
+    """SEED-GATING — a NON-recoverable child (the default PURE_PATTERN / HIERARCHICAL payload) gets
+    `child_run_id_seed=None` → the runner falls back to a fresh `uuid` → no auto-resume (pre-arc
+    behavior, NO suffix-only corruption on any re-dispatch path)."""
+    dispatcher, runner, _ = _dispatcher(tmp_path)
+    dispatcher.dispatch(
+        _binding(), _step(), step_context=_step_context()
+    )  # default = non-recoverable
+    assert runner.calls[-1]["child_run_id_seed"] is None
+
+
+def test_child_run_id_seed_distinct_across_fanout_siblings() -> None:
+    """OUT-OF-FAMILY CODEX [P1] FIX — two fan-out SIBLING workers inherit the SAME
+    `parent_idempotency_key` from the fan-out parent (the branch-distinct key is the §25.16
+    `branch_path`, composed downstream — NOT folded into `parent_idempotency_key`). The seed MUST
+    fold in `branch_path` so siblings dispatching the SAME `child_workflow_id` derive DISTINCT child
+    run_ids — else they alias one child's durable store / fence state EVEN WITHOUT A CRASH."""
+    shared_parent_key = "0" * 64  # both siblings inherit the SAME parent-step key
+    sib0 = compose_child_run_id_seed(
+        shared_parent_key, "child-wf", branch_path="workflow:wf:step:0:0"
+    )
+    sib1 = compose_child_run_id_seed(
+        shared_parent_key, "child-wf", branch_path="workflow:wf:step:0:1"
+    )
+    assert sib0 != sib1, "fan-out siblings must derive distinct child run_ids"
+    # Resume-stable: the SAME (parent_key, child_wf, branch_path) re-derives the SAME seed (the
+    # recovery prerequisite — a crash-resume re-dispatch of branch 0 reuses branch 0's child run_id).
+    assert (
+        compose_child_run_id_seed(shared_parent_key, "child-wf", branch_path="workflow:wf:step:0:0")
+        == sib0
+    )
+    # A linear (no-branch_path) seed is distinct from any branch seed.
+    assert compose_child_run_id_seed(shared_parent_key, "child-wf") not in {sib0, sib1}
+
+
+def test_dispatch_seed_includes_branch_path_for_fanout_worker(tmp_path: Path) -> None:
+    """OUT-OF-FAMILY CODEX [P1] FIX (full-chain) — the composer, dispatching a fan-out WORKER
+    branch (branch_index set), folds the §25.16 `branch_path` into the seed it threads to the
+    runner, so the seed matches `compose_child_run_id_seed(parent_key, child_wf, branch_path)`
+    (NOT the branch_path-less linear form)."""
+    dispatcher, runner, _ = _dispatcher(tmp_path)
+    recoverable = _payload(
+        workload_class=WorkloadClass.PIPELINE_AUTOMATION,
+        engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+        topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+        child_step_kinds=(StepKind.TOOL_STEP,),
+    )
+    branch_ctx = compose_branch_child_context(
+        _step_context(), branch_index=2, agent_role=AgentRole("worker")
+    )
+    dispatcher.dispatch(_binding(), _step(recoverable), step_context=branch_ctx)
+    expected = compose_child_run_id_seed(
+        branch_ctx.parent_idempotency_key,
+        recoverable.child_workflow_id,
+        branch_path=compose_branch_path(branch_ctx),
+    )
+    assert runner.calls[-1]["child_run_id_seed"] == expected
+    # The branch seed differs from the branch_path-less form (the bug would have used the latter).
+    assert runner.calls[-1]["child_run_id_seed"] != compose_child_run_id_seed(
+        branch_ctx.parent_idempotency_key, recoverable.child_workflow_id
+    )
+
 
 _ = cast

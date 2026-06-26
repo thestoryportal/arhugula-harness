@@ -58,6 +58,7 @@ from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
 from harness_is.state_ledger_entry_schema import Actor, ActorClass
 from harness_runtime.lifecycle.child_workflow_runner import compose_child_workflow_runner
 from harness_runtime.lifecycle.engine_output_store import EngineOutputStore, engine_output_dir_for
+from harness_runtime.lifecycle.sub_agent_dispatch import compose_child_run_id_seed
 
 _ACTOR = Actor(actor_class=ActorClass.AGENT, actor_id="test-recursive-child")
 _DEFAULT_BINDING = ModelBinding(provider="anthropic", model="claude-haiku-4-5")
@@ -94,6 +95,16 @@ def _step_key(step_index: int) -> str:
     (``branch_path=None``) path — the per-step key the ledger_reader is queried with."""
     h = hashlib.sha256()
     h.update(_run_key().encode("utf-8"))
+    h.update(b"\x00")
+    h.update(str(step_index).encode("utf-8"))
+    return h.hexdigest()
+
+
+def _seeded_step_key(run_id: str, step_index: int) -> str:
+    """``_step_key`` for a SEED-derived child run_id (the E1-live path) — same derivation as
+    ``_step_key`` but the run_key is computed from the seed (not the pinned ``_CHILD_RUN``)."""
+    h = hashlib.sha256()
+    h.update(_run_key(run_id=run_id).encode("utf-8"))
     h.update(b"\x00")
     h.update(str(step_index).encode("utf-8"))
     return h.hexdigest()
@@ -275,6 +286,61 @@ def test_recursive_child_crash_resume_reconstructs_full_final_state(
     assert result.final_state["step-0"] == {"out": "v0"}
     assert result.final_state["step-1"] == {"out": "v1"}
     # The committed prefix was reconstructed from the store, NOT re-dispatched.
+    dispatcher = ctx.step_dispatchers.lookup(StepKind.INFERENCE_STEP)
+    assert len(dispatcher.dispatched) == 1
+    assert str(dispatcher.dispatched[0][1].step_id) == "step-2"
+
+
+_PARENT_KEY = "parent-idem-key-worker-branch-0"
+
+
+def test_recursive_child_crash_resume_e1_live_seed_reconstructs_full_final_state(
+    tmp_path: Path,
+) -> None:
+    """E1-LIVE full-chain witness (B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT) — the discriminator
+    advisor #3 flagged: the #770 sibling PINS the child run_id (monkeypatching ``uuid.uuid4``) to
+    SIMULATE E1. This one uses the REAL ``compose_child_run_id_seed`` (the deterministic E1 seed the
+    arc builds) as ``child_run_id_seed`` — NO uuid pin — and proves the seed-derived run_id drives
+    the ``run_idempotency_key`` -> committed-prefix -> reconstruction chain through the REAL runner.
+
+    The seed is a PURE function of (parent_idempotency_key, child_workflow_id), so a parent-crash
+    re-dispatch RE-DERIVES the SAME id (asserted directly) -> the child auto-resumes from the durable
+    store under the stable key -> the resumed ``final_state`` reconstructs the COMPLETE terminal
+    state {step-0, step-1, step-2}, only step-2 re-dispatched. This closes the half-mechanism gap:
+    #770 proved reconstruction GIVEN a stable id; this proves the E1 seed PRODUCES that stable id
+    through the real runner."""
+    seed = compose_child_run_id_seed(_PARENT_KEY, _CHILD_WF)
+    # The seed is deterministic — a re-dispatch re-derives it (the recovery prerequisite).
+    assert compose_child_run_id_seed(_PARENT_KEY, _CHILD_WF) == seed
+    # A different worker / child workflow_id -> a distinct seed (per-branch / per-child isolation).
+    assert compose_child_run_id_seed("parent-idem-key-worker-branch-1", _CHILD_WF) != seed
+    assert compose_child_run_id_seed(_PARENT_KEY, "other-child-wf") != seed
+
+    store = EngineOutputStore(journal_dir=engine_output_dir_for(tmp_path))
+    run_key = _run_key(run_id=seed)
+    store.record(run_key, 0, "step-0", {"out": "v0"})
+    store.record(run_key, 1, "step-1", {"out": "v1"})
+
+    # resume ctx keyed on the SEED-derived run_key (no uuid pin — the seed IS the id).
+    reader = _LedgerReader({_seeded_step_key(seed, 0): 1, _seeded_step_key(seed, 1): 1})
+    ctx = _Ctx(ledger=_Ledger(), reader=reader, store=store, dispatchers=_Registry(_Echo()))
+    runner = compose_child_workflow_runner(cast(Any, ctx))
+    result = runner(
+        workflow_id=_CHILD_WF,
+        manifest_entry=_manifest(),
+        steps=[_step(0), _step(1), _step(2)],
+        handoff_context=cast(Any, None),
+        descent=cast(Any, None),
+        default_model_binding=_DEFAULT_BINDING,
+        pause_snapshot_input=None,  # CRASH-resume (not a pause-resume)
+        child_run_id_seed=seed,  # E1-LIVE: the deterministic seed, NOT a pinned uuid
+    )
+
+    assert result.status is RunStatus.SUCCESS
+    assert result.final_state is not None
+    assert set(result.final_state.keys()) == {"step-0", "step-1", "step-2"}
+    assert result.final_state["step-0"] == {"out": "v0"}
+    assert result.final_state["step-1"] == {"out": "v1"}
     dispatcher = ctx.step_dispatchers.lookup(StepKind.INFERENCE_STEP)
     assert len(dispatcher.dispatched) == 1
     assert str(dispatcher.dispatched[0][1].step_id) == "step-2"
