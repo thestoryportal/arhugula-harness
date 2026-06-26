@@ -1302,6 +1302,262 @@ def test_event_sourced_replay_unreadable_store_fails_closed() -> None:
 
 
 # ---------------------------------------------------------------------------
+# B-CHILD-CRASH-RESUME-FINAL-STATE-RECONSTRUCT — the OUTPUT-side analogue of the
+# channel rehydrate above. On a durable-engine-class resume, `_execute_workflow_body`
+# returns a SUFFIX-ONLY `final_state` (the loop starts at `resume_at` with `accumulated`
+# empty; the committed prefix is skipped + never seeded). The child-scoped opt-in
+# (`reconstruct_final_state=True`, default-off for top-level runs) seeds the committed
+# prefix `[0, resume_at)` from the durable store so the resumed `final_state` reconstructs
+# the COMPLETE terminal state the parent fan-out / hierarchical-pause fold consumes
+# (`sub_agent_dispatch.py` folds `child_result.final_state` verbatim). Scoped to ESR /
+# WAL (the only classes whose per-step output is durably recorded); SAVE_POINT /
+# RECONCILER degrade unchanged → the registered follow-on.
+# ---------------------------------------------------------------------------
+
+
+def test_reconstruct_final_state_seeds_committed_prefix_on_resume() -> None:
+    """RECONSTRUCT witness — an EVENT_SOURCED_REPLAY resume (steps 0,1 committed) with the
+    child-scoped opt-in seeds `accumulated` with the durably-stored prefix so the SUCCESS
+    `final_state` reconstructs the COMPLETE terminal state {step-0, step-1, step-2}, not
+    the suffix-only {step-2}. This is the result-fidelity the parent fold needs (a
+    suffix-only child final_state silently corrupts the parent aggregate)."""
+    ctx = _esr_resume_ctx(2)
+    ctx.engine_output_store = _FakeOutputStore(
+        {0: ("step-0", {"draft": "v0"}), 1: ("step-1", {"feedback": "v1"})}
+    )
+    dispatcher = _EchoDispatcher()
+    result = execute_workflow(
+        manifest_entry=_manifest(engine_class=EngineClass.EVENT_SOURCED_REPLAY),
+        steps=[_step(0), _step(1), _step(2)],
+        run_id="run-1",
+        ctx=cast(DriverContext, ctx),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(cast(StepDispatcher, dispatcher)),
+        reconstruct_final_state=True,
+    )
+    assert result.status is RunStatus.SUCCESS
+    assert result.final_state is not None
+    # FULL terminal state — the committed prefix is seeded from the store + the suffix
+    # step-2 dispatched this envelope (the prefix is NOT re-dispatched).
+    assert set(result.final_state.keys()) == {"step-0", "step-1", "step-2"}
+    assert result.final_state["step-0"] == {"draft": "v0"}
+    assert result.final_state["step-1"] == {"feedback": "v1"}
+    assert len(dispatcher.dispatched) == 1
+    assert str(dispatcher.dispatched[0][1].step_id) == "step-2"
+
+
+def test_no_reconstruct_leaves_suffix_only_final_state() -> None:
+    """NEGATIVE CONTROL (RED-without-the-flag + top-level untouched) — the SAME resume
+    WITHOUT the opt-in (`reconstruct_final_state` defaults False, as top-level
+    `harness_runtime.api.run` passes it) returns the SUFFIX-ONLY final_state {step-2}.
+    Proves (a) the flag is load-bearing — the reconstruction does not happen by accident;
+    (b) the accepted top-level suffix-only resume semantic is byte-unchanged (the
+    fork-bearing top-level reconstruction is a separate registered arc)."""
+    ctx = _esr_resume_ctx(2)
+    ctx.engine_output_store = _FakeOutputStore(
+        {0: ("step-0", {"draft": "v0"}), 1: ("step-1", {"feedback": "v1"})}
+    )
+    result = execute_workflow(
+        manifest_entry=_manifest(engine_class=EngineClass.EVENT_SOURCED_REPLAY),
+        steps=[_step(0), _step(1), _step(2)],
+        run_id="run-1",
+        ctx=cast(DriverContext, ctx),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(cast(StepDispatcher, _EchoDispatcher())),
+        # reconstruct_final_state omitted → default False (top-level semantic).
+    )
+    assert result.status is RunStatus.SUCCESS
+    assert result.final_state is not None
+    assert set(result.final_state.keys()) == {"step-2"}
+
+
+def test_reconstruct_final_state_fails_closed_on_store_skew() -> None:
+    """FAIL-CLOSED — with the opt-in on, a store missing a committed prefix step (the
+    ledger says 2 materialized but the store holds only step 0) fails the CHILD run
+    closed (FAILED + missing-output) rather than folding a partial state into the parent.
+    Reuses the shared `_read_durable_replay_prefix` skew gate."""
+    ctx = _esr_resume_ctx(2)
+    ctx.engine_output_store = _FakeOutputStore({0: ("step-0", {"draft": "v0"})})  # step 1 absent
+    result = execute_workflow(
+        manifest_entry=_manifest(engine_class=EngineClass.EVENT_SOURCED_REPLAY),
+        steps=[_step(0), _step(1), _step(2)],
+        run_id="run-1",
+        ctx=cast(DriverContext, ctx),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(cast(StepDispatcher, _EchoDispatcher())),
+        reconstruct_final_state=True,
+    )
+    assert result.status is RunStatus.FAILED
+    assert result.fail_class is not None
+    assert "engine-output-replay-missing-output" in result.fail_class
+
+
+def test_reconstruct_final_state_save_point_out_of_scope_degrades() -> None:
+    """SCOPE BOUNDARY (the registered SAVE_POINT/RECONCILER follow-on) — the opt-in is on
+    but the engine class is SAVE_POINT_CHECKPOINT, which has NO durable per-step output
+    store (the producer gate fires only for ESR/WAL). The reconstruction is SKIPPED (the
+    engine-class gate), so the resume returns the suffix-only final_state {step-2} and
+    does NOT fail closed. This is the honest scope: SAVE_POINT/RECONCILER child
+    reconstruction needs an output substrate first (registered follow-on)."""
+    ctx = _esr_resume_ctx(2)
+    # A store IS bound + holds the prefix, but SAVE_POINT never recorded it in practice;
+    # the engine-class gate must skip the reconstruct regardless of a (stray) bound store.
+    ctx.engine_output_store = _FakeOutputStore(
+        {0: ("step-0", {"draft": "v0"}), 1: ("step-1", {"feedback": "v1"})}
+    )
+    result = execute_workflow(
+        manifest_entry=_manifest(engine_class=EngineClass.SAVE_POINT_CHECKPOINT),
+        steps=[_step(0), _step(1), _step(2)],
+        run_id="run-1",
+        ctx=cast(DriverContext, ctx),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(cast(StepDispatcher, _EchoDispatcher())),
+        reconstruct_final_state=True,
+    )
+    assert result.status is RunStatus.SUCCESS
+    assert result.final_state is not None
+    assert set(result.final_state.keys()) == {"step-2"}
+
+
+def test_reconstruct_final_state_no_journal_degrades_not_fails() -> None:
+    """DEGRADE-ON-ABSENT — the opt-in is on for an ESR resume but the store has NO journal
+    file (a config flip: the original run had `engine_output_replay=False`). The
+    reconstruct degrades to the suffix-only final_state {step-2} (the pre-arc behavior),
+    NOT a fail-close — never failing a previously-working resume. Distinct from the
+    partial-prefix skew (fail-closed) above."""
+    ctx = _esr_resume_ctx(2)
+    ctx.engine_output_store = _FakeOutputStore({}, journal_present=False)
+    result = execute_workflow(
+        manifest_entry=_manifest(engine_class=EngineClass.EVENT_SOURCED_REPLAY),
+        steps=[_step(0), _step(1), _step(2)],
+        run_id="run-1",
+        ctx=cast(DriverContext, ctx),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(cast(StepDispatcher, _EchoDispatcher())),
+        reconstruct_final_state=True,
+    )
+    assert result.status is RunStatus.SUCCESS
+    assert result.final_state is not None
+    assert set(result.final_state.keys()) == {"step-2"}
+
+
+def test_reconstruct_final_state_round_trips_through_store_wal_segment() -> None:
+    """FULL-CHAIN round-trip (producer→crash→consumer) — a fresh WAL_SEGMENT run RECORDS
+    its prefix to the store (phase 1, via the real `_record_durable_step_output` producer
+    gate), then a resume READS IT BACK + RECONSTRUCTS the full final_state (phase 2) —
+    proving the producer gate + the reconstruct compose through the real `execute_workflow`
+    for WAL_SEGMENT (parity with EVENT_SOURCED_REPLAY), not a pre-seeded prefix. The store
+    is the CP-level `_FakeOutputStore` duck (harness-cp does not import the runtime
+    `EngineOutputStore`); its `record`/`read_outputs` round-trip is genuine. RED without
+    the fix: phase 2's final_state would be {step-2} only."""
+    store = _FakeOutputStore({}, journal_present=False)
+
+    # Phase 1 — fresh run (resume_at == 0): all 3 steps dispatch + RECORD to the store.
+    ctx1 = _esr_resume_ctx(0)
+    ctx1.engine_output_store = store
+    execute_workflow(
+        manifest_entry=_manifest(engine_class=EngineClass.WAL_SEGMENT),
+        steps=[_step(0), _step(1), _step(2)],
+        run_id="run-1",
+        ctx=cast(DriverContext, ctx1),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(cast(StepDispatcher, _EchoDispatcher())),
+        reconstruct_final_state=True,
+    )
+    # Phase 2 — resume (steps 0,1 committed) over the SAME store: reconstruct the full state.
+    ctx2 = _esr_resume_ctx(2)
+    ctx2.engine_output_store = store
+    result = execute_workflow(
+        manifest_entry=_manifest(engine_class=EngineClass.WAL_SEGMENT),
+        steps=[_step(0), _step(1), _step(2)],
+        run_id="run-1",
+        ctx=cast(DriverContext, ctx2),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(cast(StepDispatcher, _EchoDispatcher())),
+        reconstruct_final_state=True,
+    )
+    assert result.status is RunStatus.SUCCESS
+    assert result.final_state is not None
+    assert set(result.final_state.keys()) == {"step-0", "step-1", "step-2"}
+
+
+def test_reconstruct_also_seeds_partial_state_on_drained_child() -> None:
+    """PARTIAL_STATE reconstruction — the prefix is seeded into `accumulated` BEFORE the
+    loop, so a DRAINED child's `partial_state=dict(accumulated)` ALSO reconstructs the
+    committed prefix (the parent fold consumes `child_result.partial_state` on a DRAINED
+    child at `sub_agent_dispatch.py:668` — the SAME suffix-only corruption class as
+    final_state). Here step-2 dispatches (joining the seeded prefix), then the dispatcher
+    sets the drain flag → the post-step drain returns DRAINED with the FULL partial_state
+    {step-0, step-1, step-2}, not the suffix-only {step-2}."""
+    ctx = _esr_resume_ctx(2)
+    ctx.engine_output_store = _FakeOutputStore(
+        {0: ("step-0", {"draft": "v0"}), 1: ("step-1", {"feedback": "v1"})}
+    )
+
+    class _DrainAfterDispatch:
+        def __init__(self, flag: asyncio.Event) -> None:
+            self._flag = flag
+            self.dispatched: list[tuple[Any, WorkflowStep]] = []
+
+        def dispatch(
+            self, binding: Any, step: WorkflowStep, *, step_context: Any = None
+        ) -> dict[str, Any]:
+            _ = step_context
+            self.dispatched.append((binding, step))
+            self._flag.set()  # drain after this step completes → post-step DRAINED return
+            return {"step_id": str(step.step_id), "echoed": True}
+
+    result = execute_workflow(
+        manifest_entry=_manifest(engine_class=EngineClass.EVENT_SOURCED_REPLAY),
+        steps=[_step(0), _step(1), _step(2)],
+        run_id="run-1",
+        ctx=cast(DriverContext, ctx),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(cast(StepDispatcher, _DrainAfterDispatch(ctx.drained_flag))),
+        reconstruct_final_state=True,
+    )
+    assert result.status is RunStatus.DRAINED
+    assert result.partial_state is not None
+    assert set(result.partial_state.keys()) == {"step-0", "step-1", "step-2"}
+
+
+def test_reconstruct_final_state_on_explicit_pause_override_path() -> None:
+    """#680 WITNESS (explicit-pause re-enter path) — the seeding site is reached on BOTH
+    resume paths: the crash-recovery engine-class block (the tests above) AND the
+    `resume_at_step_index_override` path that the B-HIERARCHICAL-PAUSE child re-enter
+    (#680) + every `attempt_resume`-validated resume drive. Driving `_execute_workflow_body`
+    with the override directly (resume_at = 2 from the override, NOT the engine-class
+    block) still reconstructs the full final_state {step-0, step-1, step-2} — so the #680
+    captured-child-resume fold reconstructs for an ESR/WAL child via the SAME shared
+    seeding site (the SAVE_POINT/RECONCILER hierarchical child stays suffix-only → the
+    registered output-substrate follow-on)."""
+    from harness_cp.workflow_driver import _execute_workflow_body
+    from opentelemetry import trace as _otel_trace
+
+    ctx = _esr_resume_ctx(2)
+    ctx.engine_output_store = _FakeOutputStore(
+        {0: ("step-0", {"draft": "v0"}), 1: ("step-1", {"feedback": "v1"})}
+    )
+    span = _otel_trace.get_tracer("test").start_span("test-envelope")
+    result, _steps_executed = _execute_workflow_body(
+        manifest_entry=_manifest(engine_class=EngineClass.EVENT_SOURCED_REPLAY),
+        steps=[_step(0), _step(1), _step(2)],
+        run_id="run-1",
+        ctx=cast(DriverContext, ctx),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(cast(StepDispatcher, _EchoDispatcher())),
+        span=span,
+        run_idempotency_key="rik-1",  # the fake store ignores the key
+        resume_at_step_index_override=2,  # the explicit-pause / #680 resume path
+        reconstruct_final_state=True,
+    )
+    span.end()
+    assert result.status is RunStatus.SUCCESS
+    assert result.final_state is not None
+    assert set(result.final_state.keys()) == {"step-0", "step-1", "step-2"}
+
+
+# ---------------------------------------------------------------------------
 # B-ENGINE-OUTPUT-REPLAY-WAL-SEGMENT — WAL_SEGMENT shares the EngineOutputStore +
 # the C-CP-08 §8.1 cached-output-replay refinement (the EVENT_SOURCED_REPLAY shape
 # applied to the segment-replay class). The producer gate AND the resume-side

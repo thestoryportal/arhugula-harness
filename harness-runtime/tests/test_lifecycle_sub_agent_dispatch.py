@@ -749,6 +749,44 @@ def test_child_runner_resume_workflow_id_mismatch_fails_closed() -> None:
         )
 
 
+def test_child_workflow_runner_opts_into_final_state_reconstruct(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """B-CHILD-CRASH-RESUME-FINAL-STATE-RECONSTRUCT (R-FS-1) — WIRING WITNESS. The real
+    `compose_child_workflow_runner` forwards `reconstruct_final_state=True` to
+    `execute_workflow` (the child opt-in), so a durable-engine-class child resume over a
+    committed prefix reconstructs its COMPLETE `final_state` for the parent fold (a
+    suffix-only child final_state silently corrupts the parent aggregate per finding-v2).
+    Composes with the CP-side full-chain reconstruct witnesses (which prove that
+    `execute_workflow(reconstruct_final_state=True)` actually seeds the prefix from the
+    durable store). The real-runner-THROUGH-execute_workflow integration remains the
+    pre-existing AC #7 coverage residual (needs a fully-bootstrapped HarnessContext)."""
+    from types import SimpleNamespace
+
+    import harness_runtime.lifecycle.child_workflow_runner as cwr
+
+    captured: dict[str, Any] = {}
+
+    def _spy_execute_workflow(*_args: Any, **kwargs: Any) -> RunResult:
+        captured.update(kwargs)
+        return _success_result()
+
+    monkeypatch.setattr(cwr, "execute_workflow", _spy_execute_workflow)
+    runner = cwr.compose_child_workflow_runner(cast(Any, SimpleNamespace(step_dispatchers={})))
+    result = runner(
+        workflow_id="child-wf",
+        manifest_entry=cast(Any, None),
+        steps=(),
+        handoff_context=cast(Any, None),
+        descent=cast(Any, None),
+        default_model_binding=cast(Any, None),
+        pause_snapshot_input=None,  # first dispatch → skips the workflow-id guard
+    )
+    # The opt-in is forwarded → execute_workflow reconstructs the child's final_state.
+    assert captured.get("reconstruct_final_state") is True
+    assert result.status is RunStatus.SUCCESS
+
+
 # ---------------------------------------------------------------------------
 # AC #9 — audit-entry 4-substep composition (UN-STRUCK at v1.7 §14.7.2 step 8)
 # ---------------------------------------------------------------------------
