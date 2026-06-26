@@ -1302,16 +1302,20 @@ def test_event_sourced_replay_unreadable_store_fails_closed() -> None:
 
 
 # ---------------------------------------------------------------------------
-# B-CHILD-CRASH-RESUME-FINAL-STATE-RECONSTRUCT — the OUTPUT-side analogue of the
-# channel rehydrate above. On a durable-engine-class resume, `_execute_workflow_body`
-# returns a SUFFIX-ONLY `final_state` (the loop starts at `resume_at` with `accumulated`
-# empty; the committed prefix is skipped + never seeded). The child-scoped opt-in
-# (`reconstruct_final_state=True`, default-off for top-level runs) seeds the committed
-# prefix `[0, resume_at)` from the durable store so the resumed `final_state` reconstructs
-# the COMPLETE terminal state the parent fan-out / hierarchical-pause fold consumes
-# (`sub_agent_dispatch.py` folds `child_result.final_state` verbatim). Scoped to ESR /
-# WAL (the only classes whose per-step output is durably recorded); SAVE_POINT /
-# RECONCILER degrade unchanged → the registered follow-on.
+# B-CHILD-CRASH-RESUME-FINAL-STATE-RECONSTRUCT (#766) + B-TOP-LEVEL-CRASH-RESUME-
+# FINAL-STATE-RECONSTRUCT (this arc) — the OUTPUT-side analogue of the channel rehydrate
+# above. On a durable-engine-class resume, `_execute_workflow_body` would return a
+# SUFFIX-ONLY `final_state` (the loop starts at `resume_at` with `accumulated` empty; the
+# committed prefix is skipped + never seeded). `reconstruct_final_state` (now DEFAULT
+# True — reconstruction is the correct behavior; suffix-only was the silent-truncation
+# bug) seeds the committed prefix `[0, resume_at)` from the durable store so the resumed
+# `final_state` reconstructs the COMPLETE terminal state — for BOTH the top-level run
+# (the `run_workflow` handler / `api.run`+`api.resume` use the default) and the child
+# fold the parent fan-out / hierarchical-pause consumes (`sub_agent_dispatch.py` folds
+# `child_result.final_state` verbatim). Scoped to ESR / WAL (the only classes whose
+# per-step output is durably recorded); SAVE_POINT / RECONCILER degrade unchanged → the
+# registered output-substrate follow-on. Explicit `reconstruct_final_state=False` is the
+# opt-out escape hatch (no production caller takes it).
 # ---------------------------------------------------------------------------
 
 
@@ -1346,13 +1350,17 @@ def test_reconstruct_final_state_seeds_committed_prefix_on_resume() -> None:
     assert str(dispatcher.dispatched[0][1].step_id) == "step-2"
 
 
-def test_no_reconstruct_leaves_suffix_only_final_state() -> None:
-    """NEGATIVE CONTROL (RED-without-the-flag + top-level untouched) — the SAME resume
-    WITHOUT the opt-in (`reconstruct_final_state` defaults False, as top-level
-    `harness_runtime.api.run` passes it) returns the SUFFIX-ONLY final_state {step-2}.
-    Proves (a) the flag is load-bearing — the reconstruction does not happen by accident;
-    (b) the accepted top-level suffix-only resume semantic is byte-unchanged (the
-    fork-bearing top-level reconstruction is a separate registered arc)."""
+def test_top_level_default_reconstructs_final_state() -> None:
+    """TOP-LEVEL default-on witness (B-TOP-LEVEL-CRASH-RESUME-FINAL-STATE-RECONSTRUCT) —
+    the SAME resume WITHOUT passing the flag (the path the top-level `run_workflow`
+    handler at `mcp_server.py:427` / `harness_runtime.api.run`+`api.resume` take) now
+    reconstructs the COMPLETE final_state {step-0, step-1, step-2}, because the
+    `reconstruct_final_state` default is True (reconstruction is the correct behavior;
+    suffix-only was the silent-truncation bug — a SUCCESS run that lied about its output).
+    RED before the default flip: this returned the suffix-only {step-2}. Closes the
+    v1.75 §2 registered top-level follow-on (impl-not-fork: the spec was silent on the
+    resume final_state shape — CP v1.76 §25.2/§25.6 now DEFINES the resume-transparency
+    invariant — and no real consumer relied on suffix-only)."""
     ctx = _esr_resume_ctx(2)
     ctx.engine_output_store = _FakeOutputStore(
         {0: ("step-0", {"draft": "v0"}), 1: ("step-1", {"feedback": "v1"})}
@@ -1364,7 +1372,31 @@ def test_no_reconstruct_leaves_suffix_only_final_state() -> None:
         ctx=cast(DriverContext, ctx),
         default_model_binding=_DEFAULT_BINDING,
         step_dispatchers=_registry(cast(StepDispatcher, _EchoDispatcher())),
-        # reconstruct_final_state omitted → default False (top-level semantic).
+        # reconstruct_final_state omitted → default True (the top-level path).
+    )
+    assert result.status is RunStatus.SUCCESS
+    assert result.final_state is not None
+    assert set(result.final_state.keys()) == {"step-0", "step-1", "step-2"}
+
+
+def test_explicit_opt_out_leaves_suffix_only_final_state() -> None:
+    """GATED-NOT-AUTOMATIC control (RED-without-the-seed) — the SAME resume with the seed
+    EXPLICITLY opted out (`reconstruct_final_state=False`) returns the suffix-only
+    final_state {step-2}. Proves the seeding is GATED on the flag — it does not happen by
+    accident — and documents the opt-out escape hatch that preserves the pre-arc degenerate
+    behavior (no production caller takes it; the default is now reconstruct)."""
+    ctx = _esr_resume_ctx(2)
+    ctx.engine_output_store = _FakeOutputStore(
+        {0: ("step-0", {"draft": "v0"}), 1: ("step-1", {"feedback": "v1"})}
+    )
+    result = execute_workflow(
+        manifest_entry=_manifest(engine_class=EngineClass.EVENT_SOURCED_REPLAY),
+        steps=[_step(0), _step(1), _step(2)],
+        run_id="run-1",
+        ctx=cast(DriverContext, ctx),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(cast(StepDispatcher, _EchoDispatcher())),
+        reconstruct_final_state=False,  # explicit opt-out → the degenerate suffix-only path.
     )
     assert result.status is RunStatus.SUCCESS
     assert result.final_state is not None
