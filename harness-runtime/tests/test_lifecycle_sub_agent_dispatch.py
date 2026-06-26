@@ -91,6 +91,8 @@ from harness_runtime.lifecycle.sub_agent_dispatch import (
     SubAgentDispatchPayload,
     SubAgentDispatchPayloadShapeError,
     SubAgentDispatchTopologyInadmissibleError,
+    compose_child_run_id_seed,
+    subagent_child_recoverable,
 )
 from harness_runtime.lifecycle.topology_dispatcher import RuntimeTopologyDispatcher
 from opentelemetry.sdk.trace import TracerProvider
@@ -136,12 +138,13 @@ def _child_manifest(
     *,
     workload_class: WorkloadClass = WorkloadClass.SOFTWARE_ENGINEERING,
     topology: TopologyPattern = TopologyPattern.HIERARCHICAL_DELEGATION,
+    engine_class: EngineClass = EngineClass.PURE_PATTERN_NO_ENGINE,
 ) -> WorkflowManifestEntry:
     return WorkflowManifestEntry(
         workflow_id="child-wf",
         workload_class=workload_class,
         persona_tier=PersonaTier.TEAM_BINDING,
-        engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
+        engine_class=engine_class,
         topology_pattern=topology,
         layer_budgets=(),
         fallback_chain=_CHAIN,
@@ -150,13 +153,16 @@ def _child_manifest(
     )
 
 
-def _child_steps() -> tuple[WorkflowStep, ...]:
-    return (
+def _child_steps(
+    kinds: tuple[StepKind, ...] = (StepKind.INFERENCE_STEP,),
+) -> tuple[WorkflowStep, ...]:
+    return tuple(
         WorkflowStep(
-            step_id=StepID("child-step-0"),
-            step_kind=StepKind.INFERENCE_STEP,
-            step_payload={"index": 0},
-        ),
+            step_id=StepID(f"child-step-{i}"),
+            step_kind=kind,
+            step_payload={"index": i},
+        )
+        for i, kind in enumerate(kinds)
     )
 
 
@@ -164,11 +170,15 @@ def _payload(
     *,
     workload_class: WorkloadClass = WorkloadClass.SOFTWARE_ENGINEERING,
     topology: TopologyPattern = TopologyPattern.HIERARCHICAL_DELEGATION,
+    engine_class: EngineClass = EngineClass.PURE_PATTERN_NO_ENGINE,
+    child_step_kinds: tuple[StepKind, ...] = (StepKind.INFERENCE_STEP,),
 ) -> SubAgentDispatchPayload:
     return SubAgentDispatchPayload(
         child_workflow_id="child-wf",
-        child_manifest_entry=_child_manifest(workload_class=workload_class, topology=topology),
-        child_steps=_child_steps(),
+        child_manifest_entry=_child_manifest(
+            workload_class=workload_class, topology=topology, engine_class=engine_class
+        ),
+        child_steps=_child_steps(child_step_kinds),
         brief=_brief(),
     )
 
@@ -1059,7 +1069,108 @@ def test_three_sequential_dispatches_chain_through_audit_writer(tmp_path: Path) 
 
 
 # ---------------------------------------------------------------------------
-# Module-level: cast unused symbol to silence linters
+# B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT (R-FS-1) — recoverability predicate +
+# seed-gating witnesses (the corrected predicate over the #746 reverted branch).
 # ---------------------------------------------------------------------------
+
+
+def test_subagent_child_recoverable_true_for_linear_esr_leaf() -> None:
+    """The WITNESSED slice: a {ESR} ∧ SINGLE_THREADED_LINEAR child whose steps are all
+    TOOL/INFERENCE/DECLARATIVE/HITL (no nested SUB_AGENT/MANAGED) → RECOVERABLE."""
+    payload = _payload(
+        engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+        topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+        child_step_kinds=(StepKind.INFERENCE_STEP, StepKind.TOOL_STEP, StepKind.DECLARATIVE_STEP),
+    )
+    assert subagent_child_recoverable(payload) is True
+
+
+def test_subagent_child_recoverable_true_for_linear_wal_leaf() -> None:
+    """WAL_SEGMENT is the other reconstruction-capable engine class → also RECOVERABLE."""
+    payload = _payload(
+        engine_class=EngineClass.WAL_SEGMENT,
+        topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+        child_step_kinds=(StepKind.TOOL_STEP,),
+    )
+    assert subagent_child_recoverable(payload) is True
+
+
+def test_subagent_child_recoverable_false_for_save_point_child() -> None:
+    """NEGATIVE CONTROL (the [P1-a] fix half): a SAVE_POINT_CHECKPOINT child auto-fences but has
+    NO durable output store → suffix-only `final_state` → NOT recoverable (the registered
+    `…-SAVE-POINT-RECONCILER` arc). This is the case an unconditional deterministic seed would
+    silently corrupt — seed-gating + the classifier both exclude it."""
+    payload = _payload(
+        engine_class=EngineClass.SAVE_POINT_CHECKPOINT,
+        topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+        child_step_kinds=(StepKind.TOOL_STEP,),
+    )
+    assert subagent_child_recoverable(payload) is False
+
+
+def test_subagent_child_recoverable_false_for_fanout_child() -> None:
+    """NEGATIVE CONTROL (the [P1-a] LINEAR-narrowing fix): a {ESR} child with a FAN-OUT topology
+    engages its OWN fan-out reconstruction (unwitnessed) → NOT recoverable (the registered
+    fan-out-child follow-on). "No nested sub-agents" ≠ "no recursion"."""
+    for fanout_topology in (
+        TopologyPattern.PARALLELIZATION,
+        TopologyPattern.ORCHESTRATOR_WORKERS,
+        TopologyPattern.HIERARCHICAL_DELEGATION,
+    ):
+        payload = _payload(
+            engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+            topology=fanout_topology,
+            child_step_kinds=(StepKind.TOOL_STEP,),
+        )
+        assert subagent_child_recoverable(payload) is False, fanout_topology
+
+
+def test_subagent_child_recoverable_false_for_nested_subagent_or_managed_child_step() -> None:
+    """NEGATIVE CONTROL (the leaf condition): a {ESR} ∧ LINEAR child is NOT recoverable if any of
+    its steps is a nested SUB_AGENT_DISPATCH (deeper recursion) or MANAGED_AGENTS (unfenced vendor
+    sink) — both are further follow-ons, outside the #770-witnessed leaf scope."""
+    nested_subagent = _payload(
+        engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+        topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+        child_step_kinds=(StepKind.INFERENCE_STEP, StepKind.SUB_AGENT_DISPATCH),
+    )
+    assert subagent_child_recoverable(nested_subagent) is False
+    nested_managed = _payload(
+        engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+        topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+        child_step_kinds=(StepKind.TOOL_STEP, StepKind.MANAGED_AGENTS),
+    )
+    assert subagent_child_recoverable(nested_managed) is False
+
+
+def test_dispatch_seed_gated_on_recoverability_recoverable_child_gets_seed(tmp_path: Path) -> None:
+    """SEED-GATING (the key correction over the reverted branch) — dispatching a RECOVERABLE child
+    threads the DETERMINISTIC `child_run_id_seed` (derived from the worker's stable per-branch key)
+    to the runner, so a parent-crash re-dispatch auto-resumes it."""
+    dispatcher, runner, _ = _dispatcher(tmp_path)
+    recoverable = _payload(
+        workload_class=WorkloadClass.PIPELINE_AUTOMATION,  # admits SINGLE_THREADED_LINEAR
+        engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+        topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+        child_step_kinds=(StepKind.TOOL_STEP,),
+    )
+    ctx = _step_context()
+    dispatcher.dispatch(_binding(), _step(recoverable), step_context=ctx)
+    expected = compose_child_run_id_seed(ctx.parent_idempotency_key, recoverable.child_workflow_id)
+    assert runner.calls[-1]["child_run_id_seed"] == expected
+
+
+def test_dispatch_seed_gated_on_recoverability_non_recoverable_child_gets_none(
+    tmp_path: Path,
+) -> None:
+    """SEED-GATING — a NON-recoverable child (the default PURE_PATTERN / HIERARCHICAL payload) gets
+    `child_run_id_seed=None` → the runner falls back to a fresh `uuid` → no auto-resume (pre-arc
+    behavior, NO suffix-only corruption on any re-dispatch path)."""
+    dispatcher, runner, _ = _dispatcher(tmp_path)
+    dispatcher.dispatch(
+        _binding(), _step(), step_context=_step_context()
+    )  # default = non-recoverable
+    assert runner.calls[-1]["child_run_id_seed"] is None
+
 
 _ = cast

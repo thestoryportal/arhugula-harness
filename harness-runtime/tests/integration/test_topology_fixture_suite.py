@@ -119,10 +119,13 @@ class _MockChildWorkflowRunner:
         descent: SubAgentGateLevelDescent,
         default_model_binding: ModelBinding,
         pause_snapshot_input: Any = None,
+        child_run_id_seed: str | None = None,
     ) -> RunResult:
         # B-HIERARCHICAL-PAUSE — accept the additive resume-snapshot kwarg (None on a
         # first dispatch); the widened ChildWorkflowRunner Protocol forwards it.
-        _ = pause_snapshot_input
+        # B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT — accept the additive deterministic
+        # child run_id seed (None for a non-recoverable / non-fanout child).
+        _ = (pause_snapshot_input, child_run_id_seed)
         self.calls.append({"workflow_id": workflow_id, "manifest_entry": manifest_entry})
         return RunResult(
             workflow_id=workflow_id,
