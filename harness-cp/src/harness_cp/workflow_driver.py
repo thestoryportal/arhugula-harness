@@ -2116,6 +2116,14 @@ def _execute_workflow_body(
     # silently re-dispatch a corrupt branch). Default (no store / not replay-capable /
     # zero completed branches) → `None` → fresh run, byte-identical.
     _crash_fan_out_resume: FanOutResumeState | PeerFanOutResumeState | None = None
+    # B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT-NOT-YET-DISPATCHED (R-FS-1, CP spec v1.70 §1) —
+    # set True when a PAUSE-trigger crash-resume is INCOMPLETE but every absent ordinal is
+    # PROVABLY-NOT-RUN (instrumented + no dispatch marker). Threaded to the fan-out strategy so
+    # it re-pauses WITHOUT dispatching the absent ordinals (the obl-5-respecting re-pause mode):
+    # the strategy skips them → an empty branch_plan → the existing `_crash_pause_reestablish`
+    # gate re-establishes the lost PAUSED state OMITTING them; `api.resume` re-dispatches them
+    # (the operator's resume decision is the blast-radius gate, NOT crash-resume).
+    _crash_pause_reconstruct_no_dispatch = False
     if (
         strategy
         in {
@@ -2365,43 +2373,71 @@ def _execute_workflow_body(
                         and _crash_pause_trigger
                         and not _crash_complete
                     ):
-                        # B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT (R-FS-1, CP spec v1.68 §1/§2) —
-                        # a branch FAILED → `pause` was triggered, but the durable PauseSnapshot
-                        # write was LOST in the crash. The COMPLETE-recovery case (every declared
-                        # ordinal recovered) is LIFTED below (falls through to the strategy, which
-                        # re-establishes the PAUSED state — the store provably holds every
-                        # finished-in-flight branch, so the §25.15.1 foreclosure does not apply).
-                        # The INCOMPLETE case stays fail-closed: §25.15.1 PAUSE is "allowed to
-                        # finish in-flight, then pause", but a crash-INTERRUPTED store with an
-                        # ABSENT ordinal does NOT hold every finished-in-flight branch — the absent
-                        # branch is either NOT-YET-DISPATCHED (provably-not-run, omittable on a
-                        # re-pause-without-dispatch — registered B-FANOUT-CRASH-RESUME-PAUSE-
-                        # RECONSTRUCT-NOT-YET-DISPATCHED) or INTERRUPTED-in-flight (maybe-ran +
-                        # maybe-a-second-trigger, doubly-ambiguous — registered B-FANOUT-CRASH-
-                        # RESUME-PAUSE-RECONSTRUCT-MAYBE-RAN). Both stay fail-closed → HITL.
-                        return (
-                            RunResult(
-                                workflow_id=manifest_entry.workflow_id,
-                                run_id=run_id,
-                                status=RunStatus.FAILED,
-                                terminal_step_index=None,
-                                partial_state=None,
-                                final_state=None,
-                                fail_class=(
-                                    "fan-out-crash-resume-pause-trigger-ambiguous: a branch "
-                                    "failed before the crash under CascadePolicy.PAUSE with an "
-                                    "INCOMPLETE recovery (an absent branch ordinal) — a "
-                                    "reconstruct cannot honor §25.15.1 'finish in-flight, then "
-                                    "pause' from a "
-                                    "crash-interrupted store missing a finished-in-flight branch; "
-                                    "fail closed (the complete-recovery window reconstructs; the "
-                                    "incomplete case is the registered B-FANOUT-CRASH-RESUME-PAUSE-"
-                                    "RECONSTRUCT-NOT-YET-DISPATCHED / -MAYBE-RAN follow-ons)"
-                                ),
-                            ),
-                            0,
+                        # B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT (R-FS-1, CP spec v1.68 §1/§2 +
+                        # v1.70 §1) — a branch FAILED → `pause` was triggered, but the durable
+                        # PauseSnapshot write was LOST in the crash. The COMPLETE-recovery case
+                        # (every declared ordinal recovered) is LIFTED below (falls through to the
+                        # strategy, which re-establishes the PAUSED state — the store provably holds
+                        # every finished-in-flight branch, so the §25.15.1 foreclosure does not
+                        # apply). The INCOMPLETE case (an absent branch ordinal) splits on whether
+                        # the absent ordinals are PROVABLY-NOT-RUN:
+                        #   • every absent ordinal NOT-YET-DISPATCHED (instrumented + NO dispatch
+                        #     marker, the v1.60 reserve-before-dispatch proof — `_maybe_ran` empty)
+                        #     → the §25.15.1 "not-yet-dispatched left re-dispatchable" disposition
+                        #     applies: re-pause WITHOUT dispatching them (the strategy omits them →
+                        #     the snapshot byte-omits them like a real pause → `api.resume`
+                        #     re-dispatches them under the operator's obl-5 blast-radius gate). NOT
+                        #     fail-closed — fall through with `_crash_pause_reconstruct_no_dispatch`
+                        #     (B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT-NOT-YET-DISPATCHED, v1.70).
+                        #   • ANY absent ordinal INTERRUPTED-in-flight (a dispatch marker, no
+                        #     terminal capture — `_maybe_ran` non-empty) OR a pre-arc
+                        #     un-instrumented journal → doubly-ambiguous (maybe-fired +
+                        #     maybe-a-second-trigger) → STAYS fail-closed → HITL (the registered
+                        #     B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT-MAYBE-RAN follow-on). The gate
+                        #     is STRICTER than the §25.15 incomplete leg's `_maybe_ran_fail_closed`
+                        #     (re-fire-safe / fence-recoverable maybe-ran ordinals recover THERE):
+                        #     for a lost-pause reconstruct ANY maybe-ran ordinal is the MAYBE-RAN
+                        #     residual's territory, so the full `_maybe_ran` set must be empty.
+                        _pr_instrumented = _crash_replay_store.dispatch_instrumented(
+                            run_idempotency_key
                         )
-                    if not _crash_complete:
+                        _pr_recovered_indexes = {
+                            b.branch_index for b in _crash_fan_out_resume.branches
+                        }
+                        _pr_maybe_ran = (
+                            _crash_replay_store.present_dispatched_indexes(run_idempotency_key)
+                            - _pr_recovered_indexes
+                        )
+                        if _pr_instrumented and not _pr_maybe_ran:
+                            # NOT-YET-DISPATCHED: re-pause WITHOUT dispatching the absent ordinals.
+                            _crash_pause_reconstruct_no_dispatch = True
+                        else:
+                            return (
+                                RunResult(
+                                    workflow_id=manifest_entry.workflow_id,
+                                    run_id=run_id,
+                                    status=RunStatus.FAILED,
+                                    terminal_step_index=None,
+                                    partial_state=None,
+                                    final_state=None,
+                                    fail_class=(
+                                        "fan-out-crash-resume-pause-trigger-ambiguous: a branch "
+                                        "failed before the crash under CascadePolicy.PAUSE with an "
+                                        "INCOMPLETE recovery whose absent ordinal is interrupted-"
+                                        "in-flight (maybe-ran) or pre-arc un-instrumented — a "
+                                        "reconstruct cannot honor §25.15.1 'finish in-flight, then "
+                                        "pause' (the store may miss a finished-in-flight branch + "
+                                        "its effect maybe fired); fail closed (the "
+                                        "complete-recovery window + the "
+                                        "provably-not-yet-dispatched window reconstruct; the "
+                                        "maybe-ran case is the registered "
+                                        "B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT-MAYBE-RAN "
+                                        "follow-on)"
+                                    ),
+                                ),
+                                0,
+                            )
+                    if not _crash_complete and not _crash_pause_reconstruct_no_dispatch:
                         # B-FANOUT-CRASH-RESUME-STRICT-TIER-INCOMPLETE (R-FS-1) — lift the
                         # incomplete-recovery fail-closed when reserve-before-dispatch PROVES every
                         # absent branch not-yet-run. A branch is MAYBE-RAN iff it has a dispatch
@@ -2640,6 +2676,9 @@ def _execute_workflow_body(
             # crashed mid-fan-out with ≥1 completed branch in the store); never co-set
             # with `resume_snapshot`.
             crash_fan_out_resume=_crash_fan_out_resume,
+            # B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT-NOT-YET-DISPATCHED — re-pause-without-
+            # dispatch mode (the dispatcher proved every absent ordinal not-yet-run).
+            crash_pause_reconstruct_no_dispatch=_crash_pause_reconstruct_no_dispatch,
             synthesis_step=_synthesis_step,
         )
     if strategy is _DriverStrategyStatus.EVALUATOR_OPTIMIZER:
@@ -2682,6 +2721,9 @@ def _execute_workflow_body(
             # crashed mid-fan-out with ≥1 completed worker in the store); never co-set
             # with `resume_snapshot`.
             crash_fan_out_resume=_crash_fan_out_resume,
+            # B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT-NOT-YET-DISPATCHED — re-pause-without-
+            # dispatch mode (the dispatcher proved every absent worker ordinal not-yet-run).
+            crash_pause_reconstruct_no_dispatch=_crash_pause_reconstruct_no_dispatch,
             pause_resumable=True,
             synthesis_step=_synthesis_step,
         )
@@ -2709,6 +2751,9 @@ def _execute_workflow_body(
             # per-level `_execute_orchestrator_workers` (None unless this run crashed
             # mid-fan-out with ≥1 completed worker); never co-set with `resume_snapshot`.
             crash_fan_out_resume=_crash_fan_out_resume,
+            # B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT-NOT-YET-DISPATCHED — re-pause-without-
+            # dispatch mode forwarded into the per-level orchestrator-workers execution.
+            crash_pause_reconstruct_no_dispatch=_crash_pause_reconstruct_no_dispatch,
             pause_resumable=True,
             synthesis_step=_synthesis_step,
         )
@@ -5474,6 +5519,7 @@ def _execute_parallelization(
     run_idempotency_key: str,
     resume_snapshot: PauseSnapshot | None = None,
     crash_fan_out_resume: FanOutResumeState | PeerFanOutResumeState | None = None,
+    crash_pause_reconstruct_no_dispatch: bool = False,
     synthesis_step: WorkflowStep | None = None,
 ) -> tuple[RunResult, int]:
     """Execute the `PARALLELIZATION` fan-out-barrier-aggregate strategy (U-CP-86).
@@ -5704,6 +5750,14 @@ def _execute_parallelization(
         # Its recovered output is folded into the aggregate (the seed loop below).
         # Only the not-yet-dispatched (left-re-dispatchable) branches fan out again.
         if branch_index in _recovered_terminal:
+            continue
+        # B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT-NOT-YET-DISPATCHED (CP spec v1.70 §1) — in the
+        # re-pause-without-dispatch mode the dispatcher proved every absent ordinal not-yet-run
+        # (instrumented + no dispatch marker). SKIP them all this round → an empty `branch_plan`
+        # → the `_crash_pause_reestablish` gate below re-establishes the lost PAUSED state OMITTING
+        # them (re-dispatchable on `api.resume`, which is the operator's obl-5 blast-radius gate —
+        # NOT crash-resume, which must never auto-fire a not-yet-dispatched effect-bearing branch).
+        if crash_pause_reconstruct_no_dispatch:
             continue
         # Resolve the per-step binding FIRST so a per-step ROLE override (CP spec
         # v1.38 §6.1, B4 Slice 4) can take precedence over the parallelization
@@ -7407,6 +7461,7 @@ def _execute_orchestrator_workers(
     run_idempotency_key: str,
     resume_snapshot: PauseSnapshot | None = None,
     crash_fan_out_resume: FanOutResumeState | PeerFanOutResumeState | None = None,
+    crash_pause_reconstruct_no_dispatch: bool = False,
     pause_resumable: bool = False,
     synthesis_step: WorkflowStep | None = None,
 ) -> tuple[RunResult, int]:
@@ -8013,6 +8068,14 @@ def _execute_orchestrator_workers(
         # aggregate below. Only the not-yet-dispatched (left-re-dispatchable)
         # workers fan out again.
         if branch_index in _recovered_terminal:
+            continue
+        # B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT-NOT-YET-DISPATCHED (CP spec v1.70 §1) — in the
+        # re-pause-without-dispatch mode the dispatcher proved every absent worker ordinal
+        # not-yet-run (instrumented + no dispatch marker). SKIP them all → an empty `branch_plan`
+        # → the `not branch_plan` block below re-establishes the lost PAUSED state OMITTING them
+        # (re-dispatchable on `api.resume`, the operator's obl-5 blast-radius gate — NOT crash-
+        # resume, which must never auto-fire a not-yet-dispatched effect-bearing worker).
+        if crash_pause_reconstruct_no_dispatch:
             continue
         # Resolve the per-step binding FIRST so a per-step ROLE override (CP spec
         # v1.38 §6.1, B4 Slice 4) can take precedence over the fan-out-derived
@@ -9044,6 +9107,7 @@ def _execute_hierarchical_delegation(
     run_idempotency_key: str,
     resume_snapshot: PauseSnapshot | None = None,
     crash_fan_out_resume: FanOutResumeState | PeerFanOutResumeState | None = None,
+    crash_pause_reconstruct_no_dispatch: bool = False,
     pause_resumable: bool = False,
     synthesis_step: WorkflowStep | None = None,
 ) -> tuple[RunResult, int]:
@@ -9142,6 +9206,9 @@ def _execute_hierarchical_delegation(
         # the per-level orchestrator-workers execution (each recursion level captures +
         # recovers against its own run-keyed store; this top level recovers here).
         crash_fan_out_resume=crash_fan_out_resume,
+        # B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT-NOT-YET-DISPATCHED — forward the re-pause-
+        # without-dispatch mode into the per-level orchestrator-workers execution.
+        crash_pause_reconstruct_no_dispatch=crash_pause_reconstruct_no_dispatch,
         pause_resumable=pause_resumable,
         # B-POSTJOIN-LLM-SYNTHESIS (CP spec v1.54 §3) — TOP-LEVEL synthesis only:
         # the recursion re-enters via a SUB_AGENT_DISPATCH worker's own
