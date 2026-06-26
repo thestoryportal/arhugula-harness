@@ -85,11 +85,12 @@ _ANCHOR = "0" * 64  # constant MVP pause-context anchor (no material diff on res
 def _manifest(
     workflow_id: str = "wf-fp",
     _topology: TopologyPattern = TopologyPattern.ORCHESTRATOR_WORKERS,
+    persona_tier: PersonaTier = _PAUSE_TIER,
 ) -> WorkflowManifestEntry:
     return WorkflowManifestEntry(
         workflow_id=workflow_id,
         workload_class=WorkloadClass.PIPELINE_AUTOMATION,
-        persona_tier=_PAUSE_TIER,
+        persona_tier=persona_tier,
         engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
         topology_pattern=_topology,
         layer_budgets=(),
@@ -296,9 +297,10 @@ def _run(
     pause_snapshot_input: PauseSnapshot | None = None,
     workflow_id: str = "wf-fp",
     topology: TopologyPattern = TopologyPattern.ORCHESTRATOR_WORKERS,
+    persona_tier: PersonaTier = _PAUSE_TIER,
 ) -> Any:
     return execute_workflow(
-        _manifest(workflow_id, topology),
+        _manifest(workflow_id, topology, persona_tier),
         steps,
         run_id="run-1",
         ctx=ctx,
@@ -2229,3 +2231,231 @@ def test_orchestrator_mixed_abort_map_suppresses_sibling_refire() -> None:
     assert "orchestrator-workers-effect-fence-aborted" in (result.fail_class or "")
     assert result.pause_snapshot is None  # terminal — NOT a re-pause
     assert "worker-1" not in rec.fired  # the RE_FIRE sibling was SUPPRESSED — did NOT fire
+
+
+# ---------------------------------------------------------------------------
+# B-FANOUT-EFFECT-FENCE-PER-BRANCH-SCOPED-ABORT (ORCHESTRATOR_WORKERS) — the per-branch-SCOPED
+# abort (`ABORT_BRANCH`): fail JUST one worker, let the vouched-for siblings FIRE, fold survivors
+# per cascade_policy. The symmetric witness of the parallelization peer case (same shared sites).
+# ---------------------------------------------------------------------------
+
+
+def test_orchestrator_scoped_abort_fires_vouched_sibling() -> None:
+    """CRUX contrasting baseline (ORCHESTRATOR_WORKERS; inverse of
+    test_orchestrator_mixed_abort_map_suppresses_sibling_refire): a mixed map
+    {worker-0: ABORT_BRANCH, worker-1: RE_FIRE} fails JUST worker-0 (never re-dispatched →
+    at-most-once) and FIRES the vouched-for RE_FIRE sibling → the run folds the survivor → PARTIAL
+    (NOT the run-level-ABORT FAILED)."""
+    snap = _orchestrator_two_fence_pause()
+    key_by_index = {
+        b.branch_index: b.idempotency_key for b in snap.fan_out_resume.effect_fence_paused_branches
+    }
+    holder = _HolderWithResolutions(
+        {
+            key_by_index[0]: EffectFenceResolution.ABORT_BRANCH,
+            key_by_index[1]: EffectFenceResolution.RE_FIRE,
+        }
+    )
+    rec = _OrchestratorAbortGuardDispatcher()
+    ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    ctx_obj.resume_context_holder = holder  # type: ignore[attr-defined]
+    result = _run(
+        steps=_steps(2),
+        dispatcher=rec,
+        ctx=cast(DriverContext, ctx_obj),
+        pause_snapshot_input=snap,
+    )
+
+    assert result.status is RunStatus.PARTIAL  # survivor folded, NOT the run-level-ABORT FAILED
+    # PARTIAL carries fail_class=None like every degraded PARTIAL (the aborted worker is a degraded
+    # terminal non-contributor; run-result provenance is FAILED-only — see the all-abort test).
+    assert result.fail_class is None
+    assert "worker-1" in rec.fired  # the vouched-for RE_FIRE sibling FIRED (NOT suppressed)
+    assert "worker-0" not in rec.dispatched  # the scoped-abort worker was NEVER re-dispatched
+
+
+def test_orchestrator_all_scoped_abort_fails_not_vacuous_partial() -> None:
+    """All-abort guard (advisor watchpoint #1; ORCHESTRATOR_WORKERS): when EVERY fence-paused worker
+    is scoped-aborted, branch_plan is empty and NO worker survived → the run is FAILED, NOT the
+    vacuous PARTIAL the empty-`branch_plan` short-circuit's `_degraded` would otherwise return."""
+    snap = _orchestrator_two_fence_pause()
+    key_by_index = {
+        b.branch_index: b.idempotency_key for b in snap.fan_out_resume.effect_fence_paused_branches
+    }
+    holder = _HolderWithResolutions(
+        {
+            key_by_index[0]: EffectFenceResolution.ABORT_BRANCH,
+            key_by_index[1]: EffectFenceResolution.ABORT_BRANCH,
+        }
+    )
+    rec = _OrchestratorAbortGuardDispatcher()
+    ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    ctx_obj.resume_context_holder = holder  # type: ignore[attr-defined]
+    result = _run(
+        steps=_steps(2),
+        dispatcher=rec,
+        ctx=cast(DriverContext, ctx_obj),
+        pause_snapshot_input=snap,
+    )
+
+    assert result.status is RunStatus.FAILED  # NO survivor → FAILED, not a vacuous PARTIAL
+    assert "orchestrator-workers-effect-fence-branch-aborted" in (result.fail_class or "")
+    assert "worker-0" not in rec.dispatched  # neither scoped-abort worker was re-dispatched
+    assert "worker-1" not in rec.dispatched
+
+
+def test_orchestrator_scoped_abort_iterative_repause() -> None:
+    """Iterative re-pause (advisor watchpoint #4; ORCHESTRATOR_WORKERS): a map answering ONLY
+    worker-0 (ABORT_BRANCH) while worker-1 is left unresolved → worker-0 finalizes as a TERMINAL
+    branch (next resume SKIPS it) and worker-1 re-pauses INERT (carried forward as still
+    fence-paused)."""
+    snap = _orchestrator_two_fence_pause()
+    key_by_index = {
+        b.branch_index: b.idempotency_key for b in snap.fan_out_resume.effect_fence_paused_branches
+    }
+    holder = _HolderWithResolutions({key_by_index[0]: EffectFenceResolution.ABORT_BRANCH})
+    rec = _OrchestratorAbortGuardDispatcher()
+    ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    ctx_obj.resume_context_holder = holder  # type: ignore[attr-defined]
+    result = _run(
+        steps=_steps(2),
+        dispatcher=rec,
+        ctx=cast(DriverContext, ctx_obj),
+        pause_snapshot_input=snap,
+    )
+
+    assert result.status is RunStatus.PAUSED
+    snap2 = result.pause_snapshot
+    assert snap2 is not None and snap2.fan_out_resume is not None
+    # worker-0 (scoped-aborted) is now a TERMINAL branch — a later resume SKIPS it (never re-fires).
+    assert 0 in {b.branch_index for b in snap2.fan_out_resume.branches}
+    # worker-1 (unresolved) re-paused INERT — still fence-paused, carried forward.
+    assert {b.branch_index for b in snap2.fan_out_resume.effect_fence_paused_branches} == {1}
+    assert "worker-0" not in rec.dispatched  # the scoped-abort worker was NEVER re-dispatched
+
+
+def test_orchestrator_mixed_run_abort_and_scoped_abort_deterministic() -> None:
+    """advisor [P1] (precedence; ORCHESTRATOR_WORKERS): a mixed map {worker-0: ABORT, worker-1:
+    ABORT_BRANCH} — run-level ABORT dominates (the run FAILs), but the scoped-abort worker-1 MUST be
+    recorded DETERMINISTICALLY (excluded from re-dispatch), NOT nulled by the run-level-ABORT
+    suppression and re-dispatched into the ABORT race. Witnesses the interception-BEFORE-suppression
+    ordering: worker-1 is NEVER dispatched."""
+    snap = _orchestrator_two_fence_pause()
+    key_by_index = {
+        b.branch_index: b.idempotency_key for b in snap.fan_out_resume.effect_fence_paused_branches
+    }
+    holder = _HolderWithResolutions(
+        {
+            key_by_index[0]: EffectFenceResolution.ABORT,
+            key_by_index[1]: EffectFenceResolution.ABORT_BRANCH,
+        }
+    )
+    rec = _OrchestratorAbortGuardDispatcher()
+    ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    ctx_obj.resume_context_holder = holder  # type: ignore[attr-defined]
+    result = _run(
+        steps=_steps(2),
+        dispatcher=rec,
+        ctx=cast(DriverContext, ctx_obj),
+        pause_snapshot_input=snap,
+    )
+
+    assert result.status is RunStatus.FAILED  # run-level ABORT dominates
+    assert "orchestrator-workers-effect-fence-aborted" in (result.fail_class or "")
+    assert "worker-0" in rec.dispatched  # the ABORT worker re-dispatched → raised → FAILED
+    assert "worker-1" not in rec.dispatched  # the scoped-abort worker deterministically EXCLUDED
+
+
+def test_orchestrator_scoped_abort_under_cascade_cancel_fails() -> None:
+    """Codex [P1] (CASCADE_CANCEL tier; ORCHESTRATOR_WORKERS): a MIXED scoped-abort + surviving
+    worker resumed under MULTI_TENANT_COMPLIANCE (CascadePolicy.CASCADE_CANCEL) must FAIL — NOT a
+    SUCCESS with the surviving worker as final_state. The cascade-cancel block returns before the
+    §25.15.1 degraded fold, so the scoped-abort guard must fire on this tier too."""
+    snap = _orchestrator_two_fence_pause()
+    key_by_index = {
+        b.branch_index: b.idempotency_key for b in snap.fan_out_resume.effect_fence_paused_branches
+    }
+    holder = _HolderWithResolutions(
+        {
+            key_by_index[0]: EffectFenceResolution.ABORT_BRANCH,
+            key_by_index[1]: EffectFenceResolution.RE_FIRE,
+        }
+    )
+    rec = _OrchestratorAbortGuardDispatcher()
+    ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    ctx_obj.resume_context_holder = holder  # type: ignore[attr-defined]
+    result = _run(
+        steps=_steps(2),
+        dispatcher=rec,
+        ctx=cast(DriverContext, ctx_obj),
+        pause_snapshot_input=snap,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,  # → CascadePolicy.CASCADE_CANCEL
+    )
+
+    assert result.status is RunStatus.FAILED  # NOT a SUCCESS hiding the scoped-abort
+    assert "orchestrator-workers-effect-fence-branch-aborted" in (result.fail_class or "")
+
+
+def test_orchestrator_scoped_abort_under_proceed_rejected_requires_strict_tier() -> None:
+    """Codex [P2] (PROCEED tier; ORCHESTRATOR_WORKERS, MIXED): an effect-fence pause resumed under
+    SOLO_DEVELOPER (CascadePolicy.PROCEED) with a surviving worker is rejected FAIL-CLOSED with
+    `...-requires-strict-tier` (the existing guard, branch_plan non-empty) — scoped-abort recording
+    SKIPPED (fail-closed precedes durable writes)."""
+    snap = _orchestrator_two_fence_pause()
+    key_by_index = {
+        b.branch_index: b.idempotency_key for b in snap.fan_out_resume.effect_fence_paused_branches
+    }
+    holder = _HolderWithResolutions(
+        {
+            key_by_index[0]: EffectFenceResolution.ABORT_BRANCH,
+            key_by_index[1]: EffectFenceResolution.RE_FIRE,
+        }
+    )
+    rec = _OrchestratorAbortGuardDispatcher()
+    ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    ctx_obj.resume_context_holder = holder  # type: ignore[attr-defined]
+    result = _run(
+        steps=_steps(2),
+        dispatcher=rec,
+        ctx=cast(DriverContext, ctx_obj),
+        pause_snapshot_input=snap,
+        persona_tier=PersonaTier.SOLO_DEVELOPER,  # → CascadePolicy.PROCEED
+    )
+
+    assert result.status is RunStatus.FAILED
+    assert "orchestrator-workers-effect-fence-resume-requires-strict-tier" in (
+        result.fail_class or ""
+    )
+    assert "worker-0" not in rec.dispatched  # no dispatch (rejected before the barrier)
+
+
+def test_orchestrator_all_scoped_abort_under_proceed_requires_strict_tier() -> None:
+    """Codex [P2] (PROCEED tier; ORCHESTRATOR_WORKERS, ALL-abort): an all-scoped-abort PROCEED resume
+    empties branch_plan → the `not branch_plan` short-circuit (which returns BEFORE the existing
+    strict-tier guard). The early gate there must report `...-requires-strict-tier` (NOT the
+    scoped-abort fail_class nor a SUCCESS), and NO scoped-abort durable write happened."""
+    snap = _orchestrator_two_fence_pause()
+    key_by_index = {
+        b.branch_index: b.idempotency_key for b in snap.fan_out_resume.effect_fence_paused_branches
+    }
+    holder = _HolderWithResolutions(
+        {
+            key_by_index[0]: EffectFenceResolution.ABORT_BRANCH,
+            key_by_index[1]: EffectFenceResolution.ABORT_BRANCH,
+        }
+    )
+    rec = _OrchestratorAbortGuardDispatcher()
+    ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    ctx_obj.resume_context_holder = holder  # type: ignore[attr-defined]
+    result = _run(
+        steps=_steps(2),
+        dispatcher=rec,
+        ctx=cast(DriverContext, ctx_obj),
+        pause_snapshot_input=snap,
+        persona_tier=PersonaTier.SOLO_DEVELOPER,  # → CascadePolicy.PROCEED
+    )
+
+    assert result.status is RunStatus.FAILED
+    assert "orchestrator-workers-effect-fence-resume-requires-strict-tier" in (
+        result.fail_class or ""
+    )

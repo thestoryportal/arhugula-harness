@@ -1634,3 +1634,232 @@ def test_peer_mixed_abort_map_suppresses_sibling_refire() -> None:
     assert "parallelization-effect-fence-aborted" in (result.fail_class or "")
     assert result.pause_snapshot is None
     assert "branch-1" not in rec.fired  # the RE_FIRE sibling was SUPPRESSED — did NOT fire
+
+
+# ---------------------------------------------------------------------------
+# B-FANOUT-EFFECT-FENCE-PER-BRANCH-SCOPED-ABORT (PARALLELIZATION) — the per-branch-SCOPED abort
+# (`ABORT_BRANCH`): fail JUST one peer, let the vouched-for siblings FIRE, fold survivors per
+# cascade_policy. The exact inverse of the run-level `ABORT` (which suppresses ALL siblings).
+# ---------------------------------------------------------------------------
+
+
+def test_peer_scoped_abort_fires_vouched_sibling() -> None:
+    """CRUX contrasting baseline (the inverse of test_peer_mixed_abort_map_suppresses_sibling_refire):
+    a mixed map {branch-0: ABORT_BRANCH, branch-1: RE_FIRE} fails JUST branch-0 (never re-dispatched
+    → at-most-once: its ambiguous effect is never re-fired) and FIRES the vouched-for RE_FIRE sibling
+    → the run folds the survivor → PARTIAL (NOT the run-FAILED that run-level ABORT forces)."""
+    paused = _run(
+        steps=_steps(2),
+        dispatcher=_TwoFenceAmbiguousBranchDispatcher(),
+        ctx=cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())),
+    )
+    snap = paused.pause_snapshot
+    assert snap is not None and snap.peer_fan_out_resume is not None
+    key_by_index = {
+        b.branch_index: b.idempotency_key
+        for b in snap.peer_fan_out_resume.effect_fence_paused_branches
+    }
+    holder = _HolderWithResolutions(
+        {
+            key_by_index[0]: EffectFenceResolution.ABORT_BRANCH,
+            key_by_index[1]: EffectFenceResolution.RE_FIRE,
+        }
+    )
+    rec = _PeerAbortGuardDispatcher()
+    ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    ctx_obj.resume_context_holder = holder  # type: ignore[attr-defined]
+    result = _run(
+        steps=_steps(2),
+        dispatcher=rec,
+        ctx=cast(DriverContext, ctx_obj),
+        pause_snapshot_input=snap,
+    )
+
+    assert result.status is RunStatus.PARTIAL  # survivor folded, NOT the run-level-ABORT FAILED
+    # PARTIAL carries fail_class=None like every degraded PARTIAL (the aborted peer is a degraded
+    # terminal non-contributor; run-result provenance is FAILED-only — see the all-abort test).
+    assert result.fail_class is None
+    assert "branch-1" in rec.fired  # the vouched-for RE_FIRE sibling FIRED (NOT suppressed)
+    assert "branch-0" not in rec.dispatched  # the scoped-abort peer was NEVER re-dispatched
+
+
+def test_peer_all_scoped_abort_fails_not_vacuous_partial() -> None:
+    """All-abort guard (advisor watchpoint #1): when EVERY fence-paused peer is scoped-aborted there
+    is NO surviving contributor → the run is FAILED, NOT the vacuous PARTIAL the degraded check would
+    otherwise return with zero survivors. Neither peer is re-dispatched."""
+    paused = _run(
+        steps=_steps(2),
+        dispatcher=_TwoFenceAmbiguousBranchDispatcher(),
+        ctx=cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())),
+    )
+    snap = paused.pause_snapshot
+    assert snap is not None and snap.peer_fan_out_resume is not None
+    key_by_index = {
+        b.branch_index: b.idempotency_key
+        for b in snap.peer_fan_out_resume.effect_fence_paused_branches
+    }
+    holder = _HolderWithResolutions(
+        {
+            key_by_index[0]: EffectFenceResolution.ABORT_BRANCH,
+            key_by_index[1]: EffectFenceResolution.ABORT_BRANCH,
+        }
+    )
+    rec = _PeerAbortGuardDispatcher()
+    ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    ctx_obj.resume_context_holder = holder  # type: ignore[attr-defined]
+    result = _run(
+        steps=_steps(2),
+        dispatcher=rec,
+        ctx=cast(DriverContext, ctx_obj),
+        pause_snapshot_input=snap,
+    )
+
+    assert result.status is RunStatus.FAILED  # NO survivor → FAILED, not a vacuous PARTIAL
+    assert "parallelization-effect-fence-branch-aborted" in (result.fail_class or "")
+    assert rec.dispatched == []  # neither scoped-abort peer was re-dispatched
+
+
+def test_peer_scoped_abort_iterative_repause() -> None:
+    """Iterative re-pause (advisor watchpoint #4): a map answering ONLY branch-0 (ABORT_BRANCH) while
+    branch-1 is left unresolved → branch-0 finalizes as a TERMINAL branch (next resume SKIPS it) and
+    branch-1 re-pauses INERT (carried forward as still-fence-paused) — the operator can resolve the
+    rest in a later resume."""
+    paused = _run(
+        steps=_steps(2),
+        dispatcher=_TwoFenceAmbiguousBranchDispatcher(),
+        ctx=cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())),
+    )
+    snap = paused.pause_snapshot
+    assert snap is not None and snap.peer_fan_out_resume is not None
+    key_by_index = {
+        b.branch_index: b.idempotency_key
+        for b in snap.peer_fan_out_resume.effect_fence_paused_branches
+    }
+    holder = _HolderWithResolutions({key_by_index[0]: EffectFenceResolution.ABORT_BRANCH})
+    rec = _PeerAbortGuardDispatcher()
+    ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    ctx_obj.resume_context_holder = holder  # type: ignore[attr-defined]
+    result = _run(
+        steps=_steps(2),
+        dispatcher=rec,
+        ctx=cast(DriverContext, ctx_obj),
+        pause_snapshot_input=snap,
+    )
+
+    assert result.status is RunStatus.PAUSED
+    snap2 = result.pause_snapshot
+    assert snap2 is not None and snap2.peer_fan_out_resume is not None
+    # branch-0 (scoped-aborted) is now a TERMINAL branch — a later resume SKIPS it (never re-fires).
+    assert 0 in {b.branch_index for b in snap2.peer_fan_out_resume.branches}
+    # branch-1 (unresolved) re-paused INERT — still fence-paused, carried forward.
+    assert {b.branch_index for b in snap2.peer_fan_out_resume.effect_fence_paused_branches} == {1}
+    assert "branch-0" not in rec.dispatched  # the scoped-abort peer was NEVER re-dispatched
+
+
+def test_peer_mixed_run_abort_and_scoped_abort_deterministic() -> None:
+    """advisor [P1] (precedence): a mixed map {branch-0: ABORT, branch-1: ABORT_BRANCH} — run-level
+    ABORT dominates (the run FAILs), but the scoped-abort branch-1 MUST be recorded DETERMINISTICALLY
+    (excluded from re-dispatch), NOT nulled by the run-level-ABORT suppression and re-dispatched into
+    the ABORT race. Witnesses the interception-BEFORE-suppression ordering: branch-1 is NEVER
+    dispatched (before the fix it re-dispatched with a None directive)."""
+    paused = _run(
+        steps=_steps(2),
+        dispatcher=_TwoFenceAmbiguousBranchDispatcher(),
+        ctx=cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())),
+    )
+    snap = paused.pause_snapshot
+    assert snap is not None and snap.peer_fan_out_resume is not None
+    key_by_index = {
+        b.branch_index: b.idempotency_key
+        for b in snap.peer_fan_out_resume.effect_fence_paused_branches
+    }
+    holder = _HolderWithResolutions(
+        {
+            key_by_index[0]: EffectFenceResolution.ABORT,
+            key_by_index[1]: EffectFenceResolution.ABORT_BRANCH,
+        }
+    )
+    rec = _PeerAbortGuardDispatcher()
+    ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    ctx_obj.resume_context_holder = holder  # type: ignore[attr-defined]
+    result = _run(
+        steps=_steps(2),
+        dispatcher=rec,
+        ctx=cast(DriverContext, ctx_obj),
+        pause_snapshot_input=snap,
+    )
+
+    assert result.status is RunStatus.FAILED  # run-level ABORT dominates
+    assert "parallelization-effect-fence-aborted" in (result.fail_class or "")
+    assert "branch-0" in rec.dispatched  # the ABORT branch re-dispatched → raised → FAILED
+    assert "branch-1" not in rec.dispatched  # the scoped-abort branch deterministically EXCLUDED
+
+
+def test_peer_scoped_abort_under_cascade_cancel_fails() -> None:
+    """Codex [P1] (CASCADE_CANCEL tier): a scoped-abort resumed under MULTI_TENANT_COMPLIANCE
+    (CascadePolicy.CASCADE_CANCEL) must FAIL — NOT a SUCCESS hiding the aborted branch. Per-branch
+    isolation is incompatible with cascade-cancel-everything; the cascade-cancel block returns before
+    the §25.15.1 degraded fold, so the scoped-abort guard must fire on this tier too."""
+    paused = _run(
+        steps=_steps(2),
+        dispatcher=_TwoFenceAmbiguousBranchDispatcher(),
+        ctx=cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())),
+    )
+    snap = paused.pause_snapshot
+    assert snap is not None and snap.peer_fan_out_resume is not None
+    key_by_index = {
+        b.branch_index: b.idempotency_key
+        for b in snap.peer_fan_out_resume.effect_fence_paused_branches
+    }
+    holder = _HolderWithResolutions(
+        {
+            key_by_index[0]: EffectFenceResolution.ABORT_BRANCH,
+            key_by_index[1]: EffectFenceResolution.RE_FIRE,
+        }
+    )
+    rec = _PeerAbortGuardDispatcher()
+    ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    ctx_obj.resume_context_holder = holder  # type: ignore[attr-defined]
+    result = _run(
+        steps=_steps(2),
+        dispatcher=rec,
+        ctx=cast(DriverContext, ctx_obj),
+        pause_snapshot_input=snap,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,  # → CascadePolicy.CASCADE_CANCEL
+    )
+
+    assert result.status is RunStatus.FAILED  # NOT a SUCCESS hiding the scoped-abort
+    assert "parallelization-effect-fence-branch-aborted" in (result.fail_class or "")
+
+
+def test_peer_scoped_abort_under_proceed_rejected_requires_strict_tier() -> None:
+    """Codex [P2] (PROCEED tier): an effect-fence pause resumed under SOLO_DEVELOPER
+    (CascadePolicy.PROCEED) is rejected FAIL-CLOSED with `...-requires-strict-tier` — and the
+    scoped-abort durable recording is SKIPPED (it would otherwise persist a `completed` terminal for
+    a resume that is then rejected → corrupt state). Fail-closed precedes durable writes."""
+    paused = _run(
+        steps=_steps(2),
+        dispatcher=_TwoFenceAmbiguousBranchDispatcher(),
+        ctx=cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())),
+    )
+    snap = paused.pause_snapshot
+    assert snap is not None and snap.peer_fan_out_resume is not None
+    key_by_index = {
+        b.branch_index: b.idempotency_key
+        for b in snap.peer_fan_out_resume.effect_fence_paused_branches
+    }
+    holder = _HolderWithResolutions({key_by_index[0]: EffectFenceResolution.ABORT_BRANCH})
+    rec = _PeerAbortGuardDispatcher()
+    ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    ctx_obj.resume_context_holder = holder  # type: ignore[attr-defined]
+    result = _run(
+        steps=_steps(2),
+        dispatcher=rec,
+        ctx=cast(DriverContext, ctx_obj),
+        pause_snapshot_input=snap,
+        persona_tier=PersonaTier.SOLO_DEVELOPER,  # → CascadePolicy.PROCEED
+    )
+
+    assert result.status is RunStatus.FAILED
+    assert "effect-fence-resume-requires-strict-tier" in (result.fail_class or "")
+    assert "branch-0" not in rec.dispatched  # no dispatch (rejected before the barrier)

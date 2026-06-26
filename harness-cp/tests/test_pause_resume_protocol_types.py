@@ -348,6 +348,23 @@ def test_resume_context_effect_fence_resolutions_defaults_none() -> None:
     assert rc.effect_fence_resolution_for("any-key") is EffectFenceResolution.RE_FIRE
 
 
+def test_effect_fence_resolution_cardinality_four() -> None:
+    """B-FANOUT-EFFECT-FENCE-PER-BRANCH-SCOPED-ABORT (CP spec v1.73 §1) — the EffectFenceResolution
+    palette is now 4-valued: the v1.52 SKIP_AS_FIRED / RE_FIRE / ABORT plus the additive
+    ABORT_BRANCH (per-branch-SCOPED abort). Pins the closed-contract extension (own the now-false
+    'no enum change' claim; the additive SubAgentResultStatus 3→4 precedent). ABORT stays
+    byte-identically run-level-terminal; ABORT_BRANCH is the new distinct member."""
+    from harness_cp.pause_resume_protocol_types import EffectFenceResolution
+
+    assert len(EffectFenceResolution) == 4
+    assert {m.value for m in EffectFenceResolution} == {
+        "skip_as_fired",
+        "re_fire",
+        "abort",
+        "abort_branch",
+    }
+
+
 def test_effect_fence_resolution_for_map_hit_overrides_single() -> None:
     """A map entry for the key OVERRIDES the uniform single field; an absent key falls back to it."""
     from harness_cp.pause_resume_protocol_types import (

@@ -46,11 +46,36 @@
 snapshot:
   frozen_total: 11
   frozen_done: 11
-  standalone_closed: 53
+  standalone_closed: 54
   standalone_gated: 0
   standalone_resolved: 4
   standalone_registered: 4
   source: ".harness/beyond-mvp-capability-boundary-ledger.md"
+  # FRONTIER NOTE (2026-06-26, B-FANOUT-EFFECT-FENCE-PER-BRANCH-SCOPED-ABORT closed + registers 1
+  # [net-zero], CP spec v1.72 → v1.73). Per-branch-SCOPED abort: a FOURTH EffectFenceResolution value
+  # ABORT_BRANCH fails JUST one fence-paused fan-out branch (record terminal, never re-dispatched →
+  # at-most-once: ambiguous effect never re-fired) while the vouched-for siblings (SKIP_AS_FIRED/RE_FIRE)
+  # FIRE and the run folds survivors per cascade_policy (PARTIAL with survivors; FAILED if none survive;
+  # CASCADE_CANCEL → FAILED; PROCEED resume rejected requires-strict-tier). DECIDED-AT-OPEN: NOT
+  # operator-gated — ABORT stays byte-identically RUN-terminal (v1.65 §1(b); the _any_fence_abort guard
+  # keys on `is ABORT`, so a distinct value never matches it), no committed-invariant sacrifice (the
+  # v1.66 §2 open question answered from the cleared spec, NOT the code comments). The pre-prior frontier
+  # note (below) mislabeled this arc [operator-gated] — grounding overturned it. CP-only (ABORT_BRANCH
+  # consumed CP-side at both fan-out resume sites, never reaches the runtime §14.22 fence gate → no
+  # runtime delta) + no §5.2 IS-hash change (reuses the `completed` terminal_status, not a new IS-schema
+  # value). Enum 3 → 4 ADDITIVE (the SubAgentResultStatus precedent; cardinality test). Hardened over 4
+  # out-of-family Codex rounds (decorrelated, asymptotic — `[[hooks-codex-pilots-decorrelation-validated]]`):
+  # 2×[P1] (mixed-map interception-before-suppression + CASCADE_CANCEL-hiding) + [P2] (iterative-provenance
+  # → FAILED-only-provenance) + [P2] (PROCEED durable-corruption → recording PROCEED-guarded). The 5th
+  # Codex round ([P1]) + advisor reframed rounds 3/4/5 as ONE root cause (reuse-`completed` can't carry
+  # the scoped-abort semantic across the DURABLE crash-resume store) → REGISTER (not fix: a distinguishable
+  # durable record splits the disposition vocabulary [replay-store 4 / IS-ledger 3] → round-6 risk). The
+  # residual (an all-scoped-abort resume that CRASHES after the captures reconstructs PAUSED→PARTIAL not
+  # FAILED) is status-fidelity-only, NO double-fire (execution-repro: re-dispatched=[]). REGISTERED as
+  # B-FANOUT-EFFECT-FENCE-SCOPED-ABORT-CRASH-DURABLE. close 1 + register 1 → standalone_closed 53 → 54,
+  # standalone_registered 4 → 4 [net-zero, the v1.66 shape]. The 4 forward: MAYBE-RAN-SUBAGENT +
+  # ORCHESTRATOR-MAYBE-RAN-SUBAGENT (recursive-child, heavy) + ORCHESTRATOR-PROCEED-RESIDUAL (operator-
+  # gated) + SCOPED-ABORT-CRASH-DURABLE (NEW). The PRIOR FRONTIER NOTE is preserved below for lineage.
   # FRONTIER NOTE (2026-06-26, B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT-MAYBE-RAN-FENCE-STEP-ID closed
   # as a WHOLE close — the v1.71 §1 fence-recoverable case was SPLIT OFF; this arc LIFTS it: the
   # FENCE-RECOVERABLE [TOOL_STEP/MANAGED_AGENTS] maybe-ran ordinals are now CARRIED into the
@@ -808,13 +833,27 @@ arcs:
   - id: B-FANOUT-EFFECT-FENCE-PER-BRANCH-SCOPED-ABORT
     title: "Per-branch-SCOPED effect-fence abort (fail one branch, let siblings resolve)"
     kind: standalone
-    status: registered
+    status: closed
     decompose_at_open: true
     owner_axis: "CP"
-    operator_gated: false  # provisional — decided at open: it MAY sacrifice the committed ABORT-is-run-terminal semantic (v1.65 §1(b)), in which case it becomes operator-gated. Registered as additive for now.
+    operator_gated: false  # DECIDED AT OPEN (CP spec v1.73 §2, grounded from the cleared spec NOT the code comments): NOT gated. The additive ABORT_BRANCH value leaves ABORT byte-identically RUN-terminal (v1.65 §1(b); the _any_fence_abort guard keys on `is ABORT`, so a distinct value never matches it) → no committed-invariant sacrifice. Disanalogy to the v1.38 per-step-ROLE override (gated by an explicit §14.5.3 invariant 2); v1.66 §2 explicitly anticipated "a new EffectFenceResolution value".
     parent_arc: B-FANOUT-EFFECT-FENCE-PER-BRANCH-RESOLUTION
+    pr: "#<pending> (feat/r-fs-1-fanout-effect-fence-per-branch-scoped-abort — flips registered → closed; close 1 + register 1 [SCOPED-ABORT-CRASH-DURABLE], net-zero; CP spec v1.72 → v1.73; standalone_closed 53 → 54, standalone_registered 4 → 4)"
     anticipated_scope: "Today an EffectFenceResolution of ABORT (in the single effect_fence_resolution field OR a per-branch effect_fence_resolutions map entry) forces the WHOLE run terminal FAILED tier-agnostically (v1.65 §1(b), preserved by the per-branch-resolution build). A genuinely-distinct capability is to abort just ONE fence-paused branch (record it failed/degraded) while the SIBLING branches the operator CAN vouch for resolve (SKIP_AS_FIRED / RE_FIRE) and the run folds survivors per cascade_policy. This is a NEW disposition semantic — a per-branch failure-isolation beyond the shipped run-terminal ABORT — likely a new EffectFenceResolution value (e.g. ABORT_BRANCH) or a per-branch abort-scope flag + the cascade reaction. Whether it sacrifices the committed ABORT-is-run-terminal semantic is decided at open (→ may flip operator_gated)."
+    closed_scope: "Built as the additive 4th EffectFenceResolution value ABORT_BRANCH (CP spec v1.73 §1): consumed CP-side at BOTH fan-out resume sites (_execute_parallelization peers + _execute_orchestrator_workers / HIERARCHICAL workers), the scoped-abort branch is EXCLUDED from re-dispatch (never re-fired → at-most-once) + recorded a `completed`/no-output terminal + captured durably; survivors fold per cascade_policy (PARTIAL; FAILED if none survive — the all-abort guard, incl. the orchestrator empty-branch_plan short-circuit; CASCADE_CANCEL → FAILED; PROCEED resume rejected requires-strict-tier with the recording PROCEED-guarded so no durable write precedes the fail-closed). ABORT stays run-terminal (precedence: a map with any ABORT collapses to run-level ABORT; interception-before-suppression so the scoped-abort branch is deterministically recorded). CP-only (no runtime delta — ABORT_BRANCH never reaches the §14.22 fence gate) + no §5.2 IS-hash change (reuses `completed` terminal_status). Witnesses: the CRUX contrasting baseline {ABORT_BRANCH, RE_FIRE} → sibling FIRES + PARTIAL (inverse of {ABORT, RE_FIRE} → suppressed + FAILED) at both sites; all-abort → FAILED; iterative re-pause; {ABORT, ABORT_BRANCH} deterministic-exclusion; CASCADE_CANCEL → FAILED; PROCEED → requires-strict-tier (mixed + all-abort); cardinality test 3→4. Hardened over 4 out-of-family Codex rounds + advisor full-transcript. NOT in this close: the crash-durable persistence of the scoped-abort disposition → REGISTERED follow-on B-FANOUT-EFFECT-FENCE-SCOPED-ABORT-CRASH-DURABLE (a crash after the captures reconstructs PAUSED→PARTIAL not FAILED — status-fidelity-only, NO double-fire [execution-repro: re-dispatched=[]]; the distinguishable-durable-record fix splits the disposition vocabulary, deliberately deferred)."
     why: "Surfaced during the B-FANOUT-EFFECT-FENCE-PER-BRANCH-RESOLUTION build (advisor flagged the ABORT-is-terminal × per-branch-distinct interaction): per-branch-DISTINCT resolution lands fully for SKIP/RE_FIRE, but ABORT dominates to run-terminal, so per-branch-SCOPED abort is a genuinely separate capability — named per FULL-SPEC (`[[feedback-full-spec-beyond-mvp-nothing-deferred]]` + `[[spec-leg-split-on-ratification-boundary]]`) rather than silently absorbed."
+    ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
+
+  - id: B-FANOUT-EFFECT-FENCE-SCOPED-ABORT-CRASH-DURABLE
+    title: "Crash-durable persistence of the scoped-abort disposition (reconstruct all-abort FAILED across a crash)"
+    kind: standalone
+    status: registered
+    decompose_at_open: true
+    owner_axis: "CP + runtime"
+    operator_gated: false
+    parent_arc: B-FANOUT-EFFECT-FENCE-PER-BRANCH-SCOPED-ABORT
+    anticipated_scope: "The v1.73 scoped-abort records an ABORT_BRANCH branch as a `completed`/no-output terminal in the crash-resume replay store — INDISTINGUISHABLE from a ran-and-errored branch (the reuse-`completed` choice that kept v1.73 CP-only / no §5.2 IS-hash change). Consequence (out-of-family Codex [P1], execution-reproduced): an ALL-scoped-abort resume that CRASHES after the durable captures but before the FAILED return reconstructs via the `_crash_pause_reestablish` path → PAUSED→PARTIAL, NOT the in-resume all-abort FAILED — the operator's explicit all-abort decision is lost across the crash. The residual is STATUS-FIDELITY ONLY: NO double-fire (a recovered-terminal branch is never re-dispatched — execution-repro `re-dispatched=[]`); the divergence is FAILED↔PAUSED/PARTIAL. The fix persists the scoped-abort disposition DISTINGUISHABLY in the durable record (a new replay-store/IS disposition value or a separate durable marker) + reconstructs `_scoped_abort_ordinals` from recovered terminals on crash-resume so the all-abort FAILED is reproduced. Decompose-at-open: the disposition-vocabulary decision (replay-store vs IS-ledger alignment — the v1.73 reuse-`completed` deliberately kept the IS-hash arc out of scope) is the crux; whether it needs a new IS terminal_status (→ §5.2 IS-hash + cross-axis cascade + IS clearance) or a CP/runtime-side marker is decided at open."
+    why: "Surfaced at the B-FANOUT-EFFECT-FENCE-PER-BRANCH-SCOPED-ABORT build (out-of-family Codex round 5 [P1]; advisor reframed rounds 3/4/5 as ONE root cause — reuse-`completed` cannot carry the scoped-abort semantic across the durable crash-resume store). Registered per FULL-SPEC (`[[feedback-full-spec-beyond-mvp-nothing-deferred]]`) — a named BUILD-arc, NOT accept-and-document; the in-resume scoped-abort capability is sound + heavily tested, the crash-durable persistence is the genuinely-separate residual (`[[coarse-degraded-predicate-conflates-dispositions]]` at the durability layer)."
     ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
 
   - id: B-FANOUT-CRASH-RESUME-ORCHESTRATOR-DISPATCH
