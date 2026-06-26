@@ -2458,6 +2458,43 @@ def test_crash_resume_pause_recovered_timeout_is_partial_not_paused() -> None:
     assert resume.dispatched == []
 
 
+def test_crash_resume_pause_timeout_plus_safe_absent_recovers_not_ambiguous() -> None:
+    """Out-of-family Codex [P2] (round 2) — an INCOMPLETE PAUSE crash-resume whose degraded set is
+    a recovered timeout PLUS a re-fire-safe absent ordinal (NO genuine `completed`+no-output
+    FAILURE) must NOT fail closed `pause-trigger-ambiguous` (no branch failure lost a pause). The
+    block-level PAUSE leg keys on the genuine-failure trigger, NOT `output is None` — so it falls
+    through to the incomplete-recovery classifier, which re-dispatches the safe branch + finalizes
+    PARTIAL (the timeout is the degraded non-contributor)."""
+    store = _InMemoryBranchStore()
+    steps = [_step(f"branch-{i}", i) for i in range(3)]  # DECLARATIVE_STEP = re-fire-safe
+    _run_persona(
+        workflow_id="wf-pause-timeout-safe",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3),  # all clean — no genuine failure
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        timeout_disposition=FanoutTimeoutDisposition.RECOVER_AS_TERMINAL,
+    )
+    key = store.sole_run_key()
+    store.timeout_branch(key, 1)  # branch 1 → recovered timeout (degraded non-contributor)
+    store.forget_branch(key, 2)  # branch 2 → maybe-ran, re-fire-safe DECLARATIVE (marker kept)
+    assert 2 in store.present_dispatched_indexes(key)
+
+    resume = _CountingDispatcher(n=3)
+    r2 = _run_persona(
+        workflow_id="wf-pause-timeout-safe",
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        pause_resume_protocol=_pause_protocol(),
+        timeout_disposition=FanoutTimeoutDisposition.RECOVER_AS_TERMINAL,
+    )
+    assert r2.status is RunStatus.PARTIAL  # recovers (NOT pause-trigger-ambiguous)
+    assert r2.fail_class is None
+    assert resume.dispatched == ["branch-2"]  # only the safe absent ordinal re-dispatches
+
+
 def test_crash_resume_cascade_cancel_orchestrator_workers_errored() -> None:
     """Advisor — VERIFY the orchestrator leg, don't assume symmetry. The cascade trigger under
     ORCHESTRATOR_WORKERS is always a WORKER failure (an orchestrator failure returns FAILED

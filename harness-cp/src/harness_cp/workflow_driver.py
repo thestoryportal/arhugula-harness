@@ -2322,6 +2322,16 @@ def _execute_workflow_body(
                 ).cascade_policy
                 if _crash_cascade_policy is not CascadePolicy.PROCEED:
                     _crash_degraded = any(b.output is None for b in _crash_fan_out_resume.branches)
+                    # The PAUSE TRIGGER is a genuine branch FAILURE (`terminal_status ==
+                    # "completed"` + no output = ran-and-errored), NOT a RECOVER_AS_TERMINAL
+                    # `timed_out` branch (a degraded non-contributor — a live timeout is
+                    # `deadline_struck`→FAILED, never a pause). Distinct from `_crash_degraded`
+                    # (output-None, which a recovered timeout also satisfies) so a timeout-only
+                    # degraded recovery is NOT a lost-pause trigger (out-of-family Codex [P2]).
+                    _crash_pause_trigger = any(
+                        b.terminal_status == "completed" and b.output is None
+                        for b in _crash_fan_out_resume.branches
+                    )
                     _crash_expected = getattr(_crash_fan_out_resume, "worker_count", None)
                     if _crash_expected is None:
                         _crash_expected = getattr(_crash_fan_out_resume, "branch_count", 0)
@@ -2351,7 +2361,7 @@ def _execute_workflow_body(
                         )
                     if (
                         _crash_cascade_policy is CascadePolicy.PAUSE
-                        and _crash_degraded
+                        and _crash_pause_trigger
                         and not _crash_complete
                     ):
                         # B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT (R-FS-1, CP spec v1.68 §1/§2) —
