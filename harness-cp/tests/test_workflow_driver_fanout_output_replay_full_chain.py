@@ -2542,6 +2542,238 @@ def test_crash_resume_pause_genuine_failure_plus_timeout_reestablishes_paused() 
     assert by_index[2].terminal_status == "timed_out"  # the recovered timeout, faithfully carried
 
 
+# ---------------------------------------------------------------------------
+# B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT-NOT-YET-DISPATCHED (R-FS-1, CP spec v1.70)
+# ---------------------------------------------------------------------------
+# Lifts the v1.68 §2 incomplete-recovery fail-closed for the PROVABLY-NOT-RUN sub-case:
+# a strict-tier PAUSE fan-out that crashed after a branch FAILED (the pause trigger) but
+# before the PauseSnapshot write, where every ABSENT ordinal is not-yet-dispatched
+# (instrumented + no dispatch marker). The reconstruct OMITS those ordinals (like a real
+# pause's "not-yet-dispatched left re-dispatchable") and re-pauses WITHOUT dispatching them;
+# `api.resume` re-dispatches them under the operator's obl-5 blast-radius gate. A maybe-ran
+# absent ordinal (a dispatch marker, no capture) STAYS fail-closed (the MAYBE-RAN follow-on).
+
+
+def test_crash_resume_pause_not_yet_dispatched_reconstructs_paused() -> None:
+    """The core slice witness — an INCOMPLETE PAUSE crash-resume whose absent ordinal is
+    PROVABLY-NOT-RUN (no marker, no capture) RE-ESTABLISHES the lost PAUSED state, OMITTING the
+    not-yet-dispatched ordinal from the snapshot, re-dispatching NOTHING (the obl-5 gate: the
+    not-yet-dispatched effect-bearing branch must not auto-fire on crash-resume)."""
+    store = _InMemoryBranchStore()
+    steps = [_step(f"branch-{i}", i) for i in range(3)]
+    _run_persona(
+        workflow_id="wf-pause-nyd",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3, fail_index=1),  # branch-1 errors → pause trigger
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        pause_resume_protocol=_pause_protocol(),
+    )
+    key = store.sole_run_key()
+    store.forget_branch_undispatched(key, 2)  # branch-2 NOT-YET-DISPATCHED (no marker, no output)
+    assert 2 not in store.present_dispatched_indexes(key)  # provably-not-run
+    assert store.dispatch_instrumented(key)  # the reserve-before-dispatch stamp IS present
+
+    resume = _CountingDispatcher(n=3)
+    r2 = _run_persona(
+        workflow_id="wf-pause-nyd",
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        pause_resume_protocol=_pause_protocol(),
+    )
+    assert r2.status is RunStatus.PAUSED  # re-establish, NOT fail-closed
+    assert resume.dispatched == []  # crash-resume re-dispatches NOTHING (obl-5 gate)
+    assert r2.pause_snapshot is not None
+    pr = r2.pause_snapshot.peer_fan_out_resume
+    assert pr is not None
+    by_index = {b.branch_index: b for b in pr.branches}
+    assert set(by_index) == {0, 1}  # branch-2 OMITTED (not-yet-dispatched, re-dispatchable)
+    assert pr.branch_count == 3  # the declared total bounds the resume re-dispatch
+    assert by_index[1].output is None  # the errored trigger, identical to a live pause
+    assert by_index[0].output == {"branch": 0}
+
+
+def test_crash_resume_pause_not_yet_dispatched_resume_redispatches_omitted() -> None:
+    """The BLOCKING full-chain witness (`[[full-chain-witness-not-half-proofs]]`) — the RESUME
+    half this slice introduces (#750 reconstructed COMPLETE snapshots whose resume re-dispatches
+    NOTHING; this one omits ordinals whose resume MUST re-dispatch them). `api.resume` of the
+    reconstructed snapshot re-dispatches EXACTLY the omitted ordinal, keeps the seeded failure
+    PARTIAL (no spurious re-pause, no dropped failure), and the final state EQUALS the no-crash
+    baseline (a live pause → resume)."""
+    steps = [_step(f"branch-{i}", i) for i in range(3)]
+
+    # The crash path: branch-1 fails + branch-2 not-yet-dispatched → reconstruct PAUSED (omits 2).
+    store = _InMemoryBranchStore()
+    _run_persona(
+        workflow_id="wf-pause-nyd-fc",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3, fail_index=1),
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        pause_resume_protocol=_pause_protocol(),
+    )
+    store.forget_branch_undispatched(store.sole_run_key(), 2)
+    recon = _run_persona(
+        workflow_id="wf-pause-nyd-fc",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3),
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        pause_resume_protocol=_pause_protocol(),
+    )
+    assert recon.status is RunStatus.PAUSED and recon.pause_snapshot is not None
+
+    # Resume the reconstructed snapshot (fresh store + dispatcher) → re-dispatch the omitted #2.
+    crash_resume = _CountingDispatcher(n=3)
+    crash_resumed = _run_persona(
+        workflow_id="wf-pause-nyd-fc",
+        steps=steps,
+        dispatcher=crash_resume,
+        store=_InMemoryBranchStore(),
+        persona_tier=PersonaTier.TEAM_BINDING,
+        pause_resume_protocol=_pause_protocol(),
+        pause_snapshot_input=recon.pause_snapshot,
+    )
+    assert crash_resumed.status is RunStatus.PARTIAL  # the seeded branch-1 failure → degraded
+    assert crash_resume.dispatched == ["branch-2"]  # EXACTLY the omitted ordinal, nothing else
+
+    # The no-crash baseline: a live pause (all 3 dispatched, branch-1 fails) → resume → PARTIAL.
+    live = _run_persona(
+        workflow_id="wf-pause-nyd-fc",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3, fail_index=1),
+        store=_InMemoryBranchStore(),
+        persona_tier=PersonaTier.TEAM_BINDING,
+        pause_resume_protocol=_pause_protocol(),
+    )
+    assert live.status is RunStatus.PAUSED and live.pause_snapshot is not None
+    live_resume = _CountingDispatcher(n=3)
+    live_resumed = _run_persona(
+        workflow_id="wf-pause-nyd-fc",
+        steps=steps,
+        dispatcher=live_resume,
+        store=_InMemoryBranchStore(),
+        persona_tier=PersonaTier.TEAM_BINDING,
+        pause_resume_protocol=_pause_protocol(),
+        pause_snapshot_input=live.pause_snapshot,
+    )
+    assert live_resumed.status is RunStatus.PARTIAL
+    assert live_resume.dispatched == []  # a live pause captured all 3 → resume re-dispatches none
+    # Final-state fidelity: the crash-resume re-dispatched #2 ON resume; the baseline recovered it
+    # from the snapshot — the deterministic branch-index fold yields the IDENTICAL PARTIAL state.
+    assert crash_resumed.partial_state == live_resumed.partial_state
+
+
+def test_crash_resume_pause_maybe_ran_stays_fail_closed_even_refire_safe() -> None:
+    """Gate-strictness witness (advisor) — the PAUSE-reconstruct gate is `instrumented ∧ NOT
+    maybe_ran`, STRICTER than the §25.15 incomplete leg's `_maybe_ran_fail_closed`. A maybe-ran
+    absent ordinal (a dispatch marker, no capture) of a RE-FIRE-SAFE DECLARATIVE_STEP kind — which
+    the NON-pause incomplete leg WOULD recover — STAYS fail-closed `pause-trigger-ambiguous` here:
+    a lost-pause reconstruct cannot honor 'finish in-flight' when an absent ordinal maybe-ran (it
+    is the registered MAYBE-RAN follow-on's territory)."""
+    store = _InMemoryBranchStore()
+    steps = [_step(f"branch-{i}", i) for i in range(3)]  # DECLARATIVE_STEP = re-fire-safe
+    _run_persona(
+        workflow_id="wf-pause-mr",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3, fail_index=1),  # branch-1 errors → pause trigger
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        pause_resume_protocol=_pause_protocol(),
+    )
+    key = store.sole_run_key()
+    store.forget_branch(key, 2)  # branch-2 MAYBE-RAN (capture gone, dispatch MARKER KEPT)
+    assert 2 in store.present_dispatched_indexes(key)  # the marker proves it maybe-ran
+
+    resume = _CountingDispatcher(n=3)
+    r2 = _run_persona(
+        workflow_id="wf-pause-mr",
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        pause_resume_protocol=_pause_protocol(),
+    )
+    assert r2.status is RunStatus.FAILED
+    assert "fan-out-crash-resume-pause-trigger-ambiguous" in (r2.fail_class or "")
+    assert resume.dispatched == []  # no re-dispatch — the maybe-ran branch is doubly-ambiguous
+
+
+def test_crash_resume_pause_not_yet_dispatched_pre_arc_journal_fails_closed() -> None:
+    """The `_instrumented` conjunct guard — a PRE-arc un-instrumented journal has NO dispatch
+    stamp, so "no marker" CANNOT be read as "not-run" (the cross-version hazard, presence ≠
+    validity). Even with the absent ordinal carrying no marker, the un-instrumented store fails
+    CLOSED `pause-trigger-ambiguous` rather than re-pausing-omitting it."""
+    store = _InMemoryBranchStore()
+    steps = [_step(f"branch-{i}", i) for i in range(3)]
+    _run_persona(
+        workflow_id="wf-pause-prearc",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3, fail_index=1),
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        pause_resume_protocol=_pause_protocol(),
+    )
+    key = store.sole_run_key()
+    store.forget_branch(key, 2)  # branch-2 absent
+    store.simulate_pre_arc_journal(key)  # strip the dispatch stamp + ALL markers (un-instrumented)
+    assert not store.dispatch_instrumented(key)
+
+    resume = _CountingDispatcher(n=3)
+    r2 = _run_persona(
+        workflow_id="wf-pause-prearc",
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        pause_resume_protocol=_pause_protocol(),
+    )
+    assert r2.status is RunStatus.FAILED
+    assert "fan-out-crash-resume-pause-trigger-ambiguous" in (r2.fail_class or "")
+    assert resume.dispatched == []
+
+
+def test_crash_resume_pause_orchestrator_not_yet_dispatched_reconstructs_paused() -> None:
+    """The ORCHESTRATOR_WORKERS analogue (scope = all three topologies; HIERARCHICAL delegates
+    here) — the orchestrator ran, worker-1 errored (pause trigger), worker-2 not-yet-dispatched.
+    The skip makes branch_plan empty → the `not branch_plan` block re-establishes a FanOutResume
+    State-bearing PAUSED snapshot OMITTING worker-2; re-dispatch NOTHING."""
+    store = _InMemoryBranchStore()
+    steps = [_step("orch", 0), _step("w-0", 0), _step("w-1", 1), _step("w-2", 2)]
+    _run_persona(
+        workflow_id="wf-ow-pause-nyd",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3, fail_index=1),  # worker-1 errors → pause trigger
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+        pause_resume_protocol=_pause_protocol(),
+    )
+    key = store.sole_run_key()
+    store.forget_branch_undispatched(key, 2)  # worker-2 NOT-YET-DISPATCHED
+    assert 2 not in store.present_dispatched_indexes(key)
+
+    resume = _CountingDispatcher(n=3)
+    r2 = _run_persona(
+        workflow_id="wf-ow-pause-nyd",
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+        pause_resume_protocol=_pause_protocol(),
+    )
+    assert r2.status is RunStatus.PAUSED
+    assert resume.dispatched == []  # crash-resume re-dispatches nothing (orchestrator + workers)
+    assert r2.pause_snapshot is not None
+    fr = r2.pause_snapshot.fan_out_resume
+    assert fr is not None  # orchestrator-bearing carrier
+    assert {b.branch_index for b in fr.branches} == {0, 1}  # worker-2 OMITTED
+    assert fr.worker_count == 3  # the declared total bounds the resume re-dispatch
+
+
 def test_crash_resume_cascade_cancel_orchestrator_workers_errored() -> None:
     """Advisor — VERIFY the orchestrator leg, don't assume symmetry. The cascade trigger under
     ORCHESTRATOR_WORKERS is always a WORKER failure (an orchestrator failure returns FAILED

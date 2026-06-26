@@ -46,12 +46,29 @@
 snapshot:
   frozen_total: 11
   frozen_done: 11
-  standalone_closed: 50
+  standalone_closed: 51
   standalone_gated: 0
   standalone_resolved: 4
-  standalone_registered: 6
+  standalone_registered: 5
   source: ".harness/beyond-mvp-capability-boundary-ledger.md"
-  # FRONTIER NOTE (2026-06-26, B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-EFFECT-BEARING closed
+  # FRONTIER NOTE (2026-06-26, B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT-NOT-YET-DISPATCHED closed
+  # as a WHOLE close — the v1.68 §2 incomplete-recovery fail-closed LIFTED for the provably-not-run
+  # window: a PAUSE-trigger crash-resume whose absent ordinals are all NOT-YET-DISPATCHED
+  # [instrumented + NO dispatch marker] RE-ESTABLISHES the lost PAUSED state OMITTING them
+  # [re-dispatch nothing — the obl-5 blast-radius gate]; api.resume re-dispatches the omitted
+  # ordinals. Mechanism: the dispatcher splits the incomplete PAUSE leg on `_instrumented ∧
+  # ¬_maybe_ran` [STRICTER than the §25.15 incomplete leg's _maybe_ran_fail_closed — ANY maybe-ran
+  # ordinal is the MAYBE-RAN follow-on's territory]; the strategy skips the not-yet-dispatched
+  # ordinals → an empty branch_plan → the v1.68 reconstruct re-establishes PAUSED. All three
+  # fan-out topologies. Fidelity is NOT a byte-match of a live pause [a live parallelization pause
+  # holds every ordinal] — api.resume re-dispatches EXACTLY the omitted ordinals + the post-resume
+  # PARTIAL EQUALS the no-crash baseline [witnessed, the BLOCKING resume-half full-chain]. CP v1.69
+  # → v1.70, CP-only. advisor full-transcript BEFORE substantive work [confirmed the approach +
+  # directed the blocking resume-half trace + the orchestrator-workers collision check + protected
+  # the gate-strictness + corrected fidelity-is-not-byte-match] + Explore map re-grounded by direct
+  # read + out-of-family Codex. WHOLE close → standalone_closed 50 → 51, standalone_registered
+  # 6 → 5 (net decrement; the hard MAYBE-RAN residual stays registered).
+  # Prior (2026-06-26, B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-EFFECT-BEARING closed
   # as the DIRECT-fence slice — the v1.64 effect-bearing orchestrator-maybe-ran fail-closed LIFTED
   # for TOOL_STEP + MANAGED_AGENTS [the two kinds whose dispatch reaches a fence at its OWN sink]:
   # the orchestrator re-dispatches into the auto-active fence [at-most-once] + an ambiguous case
@@ -104,30 +121,25 @@ snapshot:
   #   closes as the TOOL_STEP slice + registers THREE narrower follow-ons (a SPLIT, not a defer;
   #   `[[spec-leg-split-on-ratification-boundary]]`) → standalone_registered 4 → 6 (a net INCREASE —
   #   honest FULL-SPEC accounting). Tool-swap is ACCEPTED PARITY-with-linear, documented not registered.
-  # The 6 still-registered follow-ons keeping R-FS-1 ACTIVE:
+  # The 5 still-registered follow-ons keeping R-FS-1 ACTIVE:
   #   • B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT (the maybe-ran SUB_AGENT_DISPATCH worker;
   #       fenced only at the CHILD's tool sinks → recursive child crash-resume, a larger mechanism)
   #   • B-FANOUT-EFFECT-FENCE-PER-BRANCH-SCOPED-ABORT (from the per-branch-resolution build —
   #       per-branch-DISTINCT resolution lands for SKIP/RE_FIRE, but ABORT stays run-level-terminal
   #       [v1.65 §1(b)]; per-branch-SCOPED abort [fail one branch, let siblings resolve] is a NEW
   #       disposition semantic → registered, operator-gated-decided-at-open)
-  #   • B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-EFFECT-BEARING (the ORCHESTRATOR analogue of the
-  #       worker effect-bearing arc: an effect-bearing orchestrator maybe-ran routed to a §26.2 pause;
-  #       needs a NEW resume→orchestrator application site the linear effect-fence resume cannot reach)
   #   • B-FANOUT-CRASH-RESUME-ORCHESTRATOR-PROCEED-RESIDUAL (operator-gated — under PROCEED the
   #       orchestrator writes no marker; closing the pre-capture double-fire window changes PROCEED's
   #       COMMITTED tier semantic [the v1.56 PR2-round-4 "accepts the window" precedent] → a C10⊥C11
   #       tension → dyadic council + operator AUQ at open)
-  #   • B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT-NOT-YET-DISPATCHED (NEW from the PAUSE-RECONSTRUCT
-  #       complete-recovery close — every absent ordinal provably-not-run; a real pause snapshot
-  #       omits not-yet-dispatched branches, so reconstruct + re-pause-WITHOUT-dispatch [obl-5
-  #       blast-radius] → resume re-dispatches them; a distinct strategy mode, not a fall-through)
-  #   • B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT-MAYBE-RAN (NEW — an absent ordinal is interrupted-
+  #   • B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-SUBAGENT (the recursively-fenced
+  #       SUB_AGENT_DISPATCH orchestrator, registered at the v1.69 direct-fence close)
+  #   • B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT-MAYBE-RAN (an absent ordinal is interrupted-
   #       in-flight [marker, no capture]: doubly-ambiguous [maybe-fired + maybe-a-second-trigger];
   #       the genuine §25.15.1 finish-in-flight question, needs the per-kind refinement + the
-  #       re-pause mode of NOT-YET-DISPATCHED; the hard residual)
-  # closure_gate.py G1.1 = standalone_registered + standalone_gated == 0 is now 6 + 0 = 6
-  # → R-FS-1 stays ACTIVE. On all six follow-ons reaching closed/resolved → G1.1 passes →
+  #       re-pause mode of NOT-YET-DISPATCHED [closed at v1.70]; the hard residual)
+  # closure_gate.py G1.1 = standalone_registered + standalone_gated == 0 is now 5 + 0 = 5
+  # → R-FS-1 stays ACTIVE. On all five follow-ons reaching closed/resolved → G1.1 passes →
   # R-FS-1 resolves → R-CL-Q1 quality track admits. (Run `just closure-gate` to confirm G1.1.)
 
 arcs:
@@ -601,13 +613,18 @@ arcs:
   - id: B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT-NOT-YET-DISPATCHED
     title: "Reconstruct a lost PAUSE snapshot when every absent branch is provably-not-run"
     kind: standalone
-    status: registered
+    status: closed
     decompose_at_open: true
-    owner_axis: "CP + runtime"
+    owner_axis: "CP"  # CP-only impl (reuses the §26.2 PauseResumeProtocol + the v1.44 fan-out pause-capture + the v1.60 dispatch-instrumentation store); no runtime delta.
     parent_arc: B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT
     operator_gated: false  # additive (a new re-pause-without-dispatch strategy mode), no committed-invariant sacrifice → no operator gate.
-    anticipated_scope: "Reconstruct a PAUSED state on a PAUSE ∧ degraded crash-resume where the recovery is INCOMPLETE but every ABSENT ordinal is PROVABLY-NOT-RUN (an instrumented dispatch stamp + NO dispatch marker — the v1.60 reserve-before-dispatch proof). A real pause snapshot LEGITIMATELY omits not-yet-dispatched branches (§25.15.1 'not-yet-dispatched left re-dispatchable'), so a correct reconstruct builds the snapshot from the recovered terminals, OMITS the provably-not-run absent ordinals, returns PAUSED, and lets api.resume re-dispatch them. CANNOT reuse the complete-recovery slice's strategy fall-through: the live strategy re-dispatches the not-yet-dispatched branches IMMEDIATELY (before the operator's pause-resolution), bypassing the §25.15.2 obl-5 pre-dispatch high-blast-radius gate (an operator who would ABORT at the pause cannot prevent a not-yet-dispatched EXTERNAL_IRREVERSIBLE branch from firing). Needs a NEW re-pause-WITHOUT-dispatching-the-absent strategy mode."
-    why: "Surfaced at B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT (the decompose-at-open). The complete-recovery slice closes the snapshot-write-window; this is the tractable incomplete sub-case (provably-not-run absent), registered SEPARATELY from the hard MAYBE-RAN case so the ledger does not imply the whole incomplete case is hard. FULL-SPEC (`[[feedback-full-spec-beyond-mvp-nothing-deferred]]`; `[[grounding-reveals-claude-closeable-slice-close-honestly]]`)."
+    pr: "#<pending> (feat/r-fs-1-fanout-pause-reconstruct-not-yet-dispatched — flips registered → closed as a WHOLE close; registers NOTHING → standalone_registered 6 → 5, a net decrement)"
+    spec_delta: "bundled-absorption CP v1.69 → v1.70 (§1 the not-yet-dispatched re-pause-without-dispatch build: the `PAUSE ∧ _crash_pause_trigger ∧ ¬_crash_complete` leg classifies the absent set — every absent ordinal PROVABLY-NOT-RUN [`dispatch_instrumented ∧ present_dispatched_indexes − recovered == ∅`] → set `_crash_pause_reconstruct_no_dispatch` + fall through; the strategy skips the not-yet-dispatched ordinals → an empty branch_plan → the v1.68 reconstruct re-establishes PAUSED OMITTING them; ANY maybe-ran / un-instrumented stays fail-closed; §2 WHOLE close, the MAYBE-RAN residual stays registered; §3 G1.1 5+0) + 1 clearance marker. CP-ONLY — NO runtime delta. NO contract removal / closed-enum / committed-invariant / new-fail-class change; at-most-once PRESERVED."
+    gives: "A strict-tier (PAUSE / TEAM_BINDING) fan-out that crashed AFTER a branch FAILED (the pause trigger) but BEFORE the PauseSnapshot write, where every ABSENT ordinal is NOT-YET-DISPATCHED (instrumented + NO dispatch marker), now RE-ESTABLISHES the lost PAUSED state on crash-resume OMITTING the not-yet-dispatched ordinals, instead of FAILING CLOSED (`pause-trigger-ambiguous`). The reconstruct re-dispatches NOTHING (the obl-5 blast-radius gate: a not-yet-dispatched effect-bearing branch must not auto-fire on crash-resume); api.resume re-dispatches the omitted ordinals under the operator's resume decision. The gate is STRICTER than the §25.15 incomplete leg — it keys on the FULL `_maybe_ran` set being EMPTY (`_instrumented ∧ ¬_maybe_ran`), NOT `_maybe_ran_fail_closed`: ANY interrupted-in-flight ordinal is the MAYBE-RAN follow-on's territory (even a re-fire-safe DECLARATIVE_STEP). Fidelity is NOT a byte-match of a live pause (a live parallelization pause holds every ordinal; this reconstruct deliberately omits the not-yet-dispatched) — the claim is: api.resume re-dispatches EXACTLY the omitted ordinals (the declared branch_count/worker_count bounds it) + the post-resume PARTIAL state EQUALS the no-crash baseline (witnessed). All three fan-out topologies (PARALLELIZATION + ORCHESTRATOR_WORKERS + HIERARCHICAL-via-delegation). Decorrelated: advisor full-transcript BEFORE substantive work (confirmed the approach + the two-change coordination; directed the BLOCKING resume-half full-chain trace — the re-dispatch-not-yet-dispatched path was dead-until-now for PARALLELIZATION; directed the orchestrator-workers `not branch_plan` collision check before impl; protected the gate-strictness `¬maybe_ran` vs `¬maybe_ran_fail_closed`; corrected fidelity-is-not-byte-match) + an Explore map of the live crash-resume + pause path re-grounded by direct read + out-of-family Codex on the diff; no council (single-axis, no nameable cross-domain tension)."
+    as_built:
+      - "harness-cp/src/harness_cp/workflow_driver.py (the dispatcher `PAUSE ∧ _crash_pause_trigger ∧ ¬_crash_complete` leg split on `_pr_instrumented ∧ ¬_pr_maybe_ran` → set `_crash_pause_reconstruct_no_dispatch` + fall through, else fail-closed; the §25.15 incomplete leg guarded `and not _crash_pause_reconstruct_no_dispatch`; the flag threaded to the three fan-out strategy calls; the branch-plan skip in `_execute_parallelization` + `_execute_orchestrator_workers` [HIERARCHICAL via its delegation to orchestrator-workers])"
+      - "design-substrate/Spec_Control_Plane_v1_70.md + 1 clearance marker (CP-only, no runtime delta)"
+      - "tests: harness-cp test_workflow_driver_fanout_output_replay_full_chain.py (not-yet-dispatched reconstructs PAUSED omitting the absent ordinal, re-dispatch nothing; the full-chain api.resume → re-dispatch EXACTLY the omitted ordinal → PARTIAL EQUAL to the no-crash baseline — the blocking RESUME-half trace; a maybe-ran re-fire-safe DECLARATIVE_STEP STAYS fail-closed [gate-strictness]; a pre-arc un-instrumented journal fails closed [the `_instrumented` guard]; the ORCHESTRATOR_WORKERS analogue reconstructs PAUSED omitting the not-yet-dispatched worker). Full suite: harness-cp 1355 passed / 1 xfailed; pyright 0/0/0; ruff clean."
     ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
 
   - id: B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT-MAYBE-RAN
