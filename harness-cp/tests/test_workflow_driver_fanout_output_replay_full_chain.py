@@ -90,6 +90,9 @@ class _InMemoryBranchStore:
         # branch indexes marked present-but-unreadable (corruption / tamper) per run_key.
         self._corrupt: dict[str, set[int]] = {}
         self._cardinality: dict[str, int] = {}
+        # run_keys whose cardinality marker is PRESENT-but-TORN (unreadable): read→None but
+        # present→True (the run advanced past the cardinality write, then the file was torn).
+        self._cardinality_torn: set[str] = set()
         # PR2 — captured terminal POST_JOIN_SYNTHESIS records: {run_key: (step_id, output, self_hash)}.
         self._synthesis: dict[str, tuple[str, dict[str, Any], str]] = {}
         # run_keys whose synthesis file is present-but-unreadable (a corrupt capture).
@@ -118,10 +121,17 @@ class _InMemoryBranchStore:
         self._cardinality[run_key] = int(branch_count)
 
     def read_fanout_cardinality(self, run_key: str) -> int | None:
+        if run_key in self._cardinality_torn:
+            return None  # present-but-torn → unreadable
         return self._cardinality.get(run_key)
 
     def fanout_cardinality_present(self, run_key: str) -> bool:
-        return run_key in self._cardinality
+        return run_key in self._cardinality or run_key in self._cardinality_torn
+
+    def tear_cardinality(self, run_key: str) -> None:
+        """Test helper — model a torn cardinality marker: read→None, present→True (the
+        run advanced past the cardinality write, then the marker file was torn by a crash)."""
+        self._cardinality_torn.add(run_key)
 
     # -- producer (net-add #1) -------------------------------------------------
     def record_branch(
@@ -1788,6 +1798,93 @@ def test_crash_resume_cardinality_only_changed_kind_tool_to_declarative_fails_cl
     assert r2.status is RunStatus.FAILED
     assert "fan-out-crash-resume-cascade-policy-incomplete-recovery" in (r2.fail_class or "")
     assert resume.dispatched == []  # changed-kind branch → fail closed, no re-dispatch
+
+
+def test_crash_resume_cardinality_only_torn_marker_changed_kind_fails_closed() -> None:
+    """[P1 PROBE — 2296 site] — the EXACT changed-kind cardinality-only fail-closed setup
+    above, but the cardinality marker is TORN before resume (present, unreadable). It MUST still
+    fail closed: a torn marker proves the run advanced past the cardinality write (the maybe-ran
+    branches' effects may have fired), so a fresh re-dispatch would double-fire an effect-bearing
+    maybe-ran branch. The consumer at `workflow_driver.py:2296` reads `read_fanout_cardinality`
+    (→ None on torn) and the `_cardinality is not None` gate skips the whole strict-tier maybe-ran
+    analysis, treating torn-as-absent → fresh re-run. RED here ⟹ confirmed reachable second site."""
+    store = _InMemoryBranchStore()
+    steps_v1 = [_step(f"branch-{i}", i, kind=StepKind.TOOL_STEP) for i in range(3)]
+    _run_persona(
+        workflow_id="wf-card-torn-changed-kind",
+        steps=steps_v1,
+        dispatcher=_CountingDispatcher(n=3),
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        registry=_AnyKindRegistry(_CountingDispatcher(n=3)),
+    )
+    key = store.sole_run_key()
+    for i in range(3):
+        store.forget_branch(key, i)  # all maybe-ran TOOL_STEP (cardinality-only)
+    store.tear_cardinality(key)  # the marker is torn — present but unreadable
+    assert store.read_fanout_cardinality(key) is None
+    assert store.fanout_cardinality_present(key) is True
+
+    resume = _CountingDispatcher(n=3)
+    steps_v2 = [
+        _step("branch-0", 0, kind=StepKind.TOOL_STEP),
+        _step("branch-1", 1, kind=StepKind.DECLARATIVE_STEP),  # CHANGED kind (would fail closed)
+        _step("branch-2", 2, kind=StepKind.TOOL_STEP),
+    ]
+    r2 = _run_persona(
+        workflow_id="wf-card-torn-changed-kind",
+        steps=steps_v2,
+        dispatcher=resume,
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        registry=_AnyKindRegistry(resume),
+    )
+    assert r2.status is RunStatus.FAILED, f"torn marker must fail closed, got {r2.status}"
+    assert resume.dispatched == [], (
+        f"must not re-dispatch on a torn marker, got {resume.dispatched}"
+    )
+
+
+def test_orchestrator_torn_cardinality_marker_fails_closed_before_strict_tier() -> None:
+    """INSURANCE (advisor) — the 2296 strict-tier torn-marker fix is left non-orchestrator-scoped
+    on the basis that an ORCHESTRATOR_WORKERS resume with a torn cardinality marker fails closed in
+    `_determine_fanout_resume` (the orchestrator block's `_downstream_artifact_present` presence-
+    check) BEFORE the `_crash_fan_out_resume is None` strict-tier path (2296) is reached. This
+    WITNESSES that (not a hand-trace): an orchestrator maybe-ran + torn marker fails closed and
+    re-dispatches NOTHING → the orchestrator path never reaches the 2296 fresh-re-dispatch."""
+    store = _InMemoryBranchStore()
+    steps = [_step("orch", 0), _step("w-0", 0), _step("w-1", 1)]  # steps[0]=orchestrator
+    _run_persona(
+        workflow_id="wf-ow-torn",
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=2),
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        registry=_AnyKindRegistry(_CountingDispatcher(n=2)),
+    )
+    key = store.sole_run_key()
+    store.forget_orchestrator_maybe_ran(key)  # orchestrator dispatched, output lost (maybe-ran)
+    for i in range(2):
+        store.forget_branch(key, i)  # workers maybe-ran
+    store.tear_cardinality(key)  # + torn cardinality marker
+    assert store.read_fanout_cardinality(key) is None
+    assert store.fanout_cardinality_present(key) is True
+
+    resume = _CountingDispatcher(n=2)
+    r2 = _run_persona(
+        workflow_id="wf-ow-torn",
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        registry=_AnyKindRegistry(resume),
+    )
+    assert r2.status is RunStatus.FAILED, f"orchestrator torn must fail closed, got {r2.status}"
+    assert resume.dispatched == [], (
+        f"orchestrator torn must not re-dispatch, got {resume.dispatched}"
+    )
 
 
 def test_crash_resume_incomplete_fence_recoverable_changed_step_id_fails_closed() -> None:

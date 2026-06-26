@@ -2294,6 +2294,39 @@ def _execute_workflow_body(
                     manifest_entry.persona_tier,
                 ).cascade_policy
                 _cardinality = _crash_replay_store.read_fanout_cardinality(run_idempotency_key)
+                if (
+                    _cardinality_policy is not CascadePolicy.PROCEED
+                    and _cardinality is None
+                    and _crash_replay_store.fanout_cardinality_present(run_idempotency_key)
+                ):
+                    # PRESENT-but-TORN cardinality marker (`read_fanout_cardinality` → None
+                    # because unreadable, but `fanout_cardinality_present` → True): the run
+                    # ADVANCED past the cardinality write, so its maybe-ran branches' effects MAY
+                    # have fired. Treating torn-as-absent here would skip the strict-tier maybe-ran
+                    # analysis below and FRESH-re-dispatch every branch → double-fire an
+                    # effect-bearing maybe-ran branch. Fail closed (mirror the
+                    # `_determine_fanout_resume` changed-cardinality guard + the orchestrator
+                    # `_downstream_artifact_present` check; `[[durable-recovery-presence-validity-
+                    # scope]]`: presence ≠ validity). A genuinely-absent marker (None + not present)
+                    # falls through to the unchanged fresh-run (never started).
+                    return (
+                        RunResult(
+                            workflow_id=manifest_entry.workflow_id,
+                            run_id=run_id,
+                            status=RunStatus.FAILED,
+                            terminal_step_index=None,
+                            partial_state=None,
+                            final_state=None,
+                            fail_class=(
+                                "fan-out-crash-resume-cardinality-marker-torn: a "
+                                f"{_cardinality_policy.value} fan-out's cardinality marker is "
+                                "present but unreadable (the run advanced past the cardinality "
+                                "write) — fail closed rather than fresh-re-dispatching maybe-ran "
+                                "branches whose effects may have fired"
+                            ),
+                        ),
+                        0,
+                    )
                 if _cardinality_policy is not CascadePolicy.PROCEED and _cardinality is not None:
                     # B-FANOUT-CRASH-RESUME-STRICT-TIER-INCOMPLETE (R-FS-1) — lift the
                     # cardinality-only fail-closed when reserve-before-dispatch PROVES no branch
@@ -5509,9 +5542,26 @@ def _determine_fanout_resume(
     # ORIGINAL fan-out cardinality at capture time, so a manifest redefined with a DIFFERENT
     # branch count between crash + resume (which the per-branch material-diff cannot catch
     # when the surviving prefix still matches) fails closed rather than silently dropping the
-    # original in-flight branches. None (unrecorded / unreadable marker) → no check.
+    # original in-flight branches. A PRESENT-but-TORN marker (`read_fanout_cardinality` → None
+    # because the file is unreadable, but `fanout_cardinality_present` → True) PROVES the run
+    # advanced past the cardinality write (fsynced after `record_orchestrator`), so it is
+    # CORRUPTION → fail closed, NOT treated as a genuinely-absent (pre-cardinality / pre-arc)
+    # marker (`[[durable-recovery-presence-validity-scope]]`: presence ≠ validity — a validity-
+    # proxy `read → None` conflates absent + torn, so a torn marker would otherwise silently DROP
+    # the original in-flight branches on a changed-cardinality resume). GATED to the NON-
+    # orchestrator path: the orchestrator block below ALREADY fails closed on a torn marker via
+    # the `_downstream_artifact_present` presence-check (richer "capture was LOST" diagnosis), so
+    # this guard targets exactly the PARALLELIZATION/peer gap it lacked — leaving the orchestrator
+    # path untouched. A genuinely-absent marker (None + not present) → no check (unchanged).
     _recorded_cardinality = store.read_fanout_cardinality(run_key)
-    if _recorded_cardinality is not None and _recorded_cardinality != len(steps):
+    if _recorded_cardinality is None:
+        if store.fanout_cardinality_present(run_key) and not store.orchestrator_dispatched(run_key):
+            raise _FanOutStoreCorruptError(
+                "fan-out crash-resume cardinality marker present but unreadable (torn) — the "
+                "run advanced past the cardinality write; fail closed rather than dropping the "
+                "original in-flight branches"
+            )
+    elif _recorded_cardinality != len(steps):
         raise _FanOutStoreCorruptError(
             f"fan-out crash-resume cardinality mismatch: store captured a {_recorded_cardinality}-"
             f"branch fan-out, resume supplied {len(steps)} (changed body) — fail closed"
