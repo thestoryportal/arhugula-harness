@@ -23,13 +23,21 @@ Per `Spec_Harness_Runtime_v1.md` §14.20 (C-RT-28) + the paired CP spec v1.39
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, cast
 
+from harness_cp.engine_class import EngineClass
+from harness_cp.pause_resume_protocol_types import EffectFenceResolution
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
 from harness_cp.workflow_driver_types import StepExecutionContext, WorkflowStep
 
+from harness_runtime.lifecycle.effect_fence import (
+    EffectFenceAbortedError,
+    EffectFenceAmbiguousUncommittedError,
+    EffectFenceProtocol,
+)
 from harness_runtime.lifecycle.managed_agents import (
     ManagedAgentEvent,
     ManagedAgentsClientProtocol,
@@ -43,6 +51,23 @@ __all__ = [
     "ManagedAgentsStageMaterializeError",
     "ManagedAgentsStepDispatcher",
 ]
+
+
+# The durable-execution engine classes that AUTO-activate the §14.22 effect fence (a
+# crash-resume re-dispatches uncommitted steps under these). MIRRORS
+# `runtime_tool_dispatcher._DURABLE_AUTO_FENCE_ENGINE_CLASSES` — defined locally (not
+# imported) because importing the heavy tool-dispatcher module from here forms an import
+# cycle through `harness_runtime.config.provider_secrets → harness_runtime.types`. A
+# drift-guard test (`test_managed_agents_fence_gate_set_matches_tool_dispatcher`) asserts
+# the two sets stay equal, so the duplication can never silently skew.
+_DURABLE_AUTO_FENCE_ENGINE_CLASSES: frozenset[EngineClass] = frozenset(
+    {
+        EngineClass.SAVE_POINT_CHECKPOINT,
+        EngineClass.EVENT_SOURCED_REPLAY,
+        EngineClass.WAL_SEGMENT,
+        EngineClass.RECONCILER_LOOP,
+    }
+)
 
 
 # Terminal statuses (the poll loop stops on these); success subset returns a
@@ -59,6 +84,52 @@ _TERMINAL_STATUSES: frozenset[ManagedAgentSessionStatus] = frozenset(
 _SUCCESS_STATUSES: frozenset[ManagedAgentSessionStatus] = frozenset(
     {ManagedAgentSessionStatus.IDLE, ManagedAgentSessionStatus.COMPLETED}
 )
+
+
+def _compose_managed_agents_idempotency_key(parent_idempotency_key: str, step_id: str) -> str:
+    """Payload-independent effect-fence key for a MANAGED_AGENTS dispatch
+    (B-FANOUT-CRASH-RESUME-MAYBE-RAN-UNFENCED-EXTERNAL, R-FS-1).
+
+    The tool key is `H(parent : step_id : tool_id)` (§14.9.7 recipe). This LEADS the digest
+    with a constant ``managed_agents`` domain tag — `H(managed_agents : parent : step_id)`.
+    The tag is DELIBERATELY in the LEADING slot, not the trailing tool-id slot: a trailing
+    tag would be byte-identical to a TOOL_STEP whose `tool_id == "managed_agents"` at the
+    same `(parent, step_id)` → a cross-sink fence collision (both dispatchers share
+    `.harness/effect-fence`) — out-of-family Codex [P2]. Leading the tag makes the key
+    disjoint from EVERY tool key by construction: a collision would require a tool's
+    harness-composed `parent_idempotency_key` to begin with the literal ``managed_agents:``,
+    which a run idempotency key never is. DELIBERATELY carries NO ``agent_id`` / payload
+    component: a resumed agent-swap under the same ``step_id`` composes the SAME key → it is
+    SUPPRESSED (the captured prior outcome is returned) rather than firing a SECOND billable
+    vendor session — accepted-parity-or-stricter vs the cleared TOOL_STEP tool-swap path (CP
+    spec v1.65 §3): per-key at-most-once is preserved."""
+    digest = hashlib.sha256()
+    digest.update(b"managed_agents")
+    digest.update(b":")
+    digest.update(parent_idempotency_key.encode("utf-8"))
+    digest.update(b":")
+    digest.update(step_id.encode("utf-8"))
+    return digest.hexdigest()
+
+
+def _skipped_as_fired_outcome(*, agent_id: str, environment_id: str) -> dict[str, Any]:
+    """The EMPTY-shape outcome for a maybe-ran MANAGED_AGENTS branch the operator
+    resolves SKIP_AS_FIRED (B-FANOUT-CRASH-RESUME-MAYBE-RAN-UNFENCED-EXTERNAL): the vendor
+    session FIRED but its outcome was lost in the create→capture crash window and is
+    unrecoverable, so proceed WITHOUT re-dispatching a second billable session.
+
+    Keeps the 6 success-outcome KEYS present (so an opaque fold / downstream consumer
+    reading e.g. ``.get("status")`` never KeyErrors) with empty / zero values;
+    ``status="skipped_as_fired"`` labels the cell. Parity with the TOOL_STEP SKIP_AS_FIRED
+    empty-output return (runtime spec §14.22.9)."""
+    return {
+        "session_id": "",
+        "agent_id": agent_id,
+        "environment_id": environment_id,
+        "status": "skipped_as_fired",
+        "runtime_ms": 0,
+        "billable_seconds": 0.0,
+    }
 
 
 @dataclass(frozen=True)
@@ -135,6 +206,18 @@ class ManagedAgentsStepDispatcher:
 
     client: ManagedAgentsClientProtocol
     tracer_provider: Any
+    effect_fence: EffectFenceProtocol | None = None
+    """B-FANOUT-CRASH-RESUME-MAYBE-RAN-UNFENCED-EXTERNAL (R-FS-1, §14.22 C-RT-31) — the
+    crash-atomic effect fence that makes the vendor-session effect (create + send)
+    at-most-once across a crash-resume. ``None`` (non-fence bootstrap / unit construction)
+    → no reserve, no claim → byte-identical to pre-arc. Stage-5 factory passes the shared
+    ``RuntimeEffectFence`` (the SAME claim dir as the tool dispatcher)."""
+    effect_fencing_explicit: bool = False
+    """The operator's ``RuntimeConfig.effect_fencing`` opt-in. ``True`` → fence every
+    managed-agents dispatch; ``False`` (default) → AUTO-fence only when the RUN's engine
+    class is durable-execution (``step_context.run_engine_class`` ∈
+    ``_DURABLE_AUTO_FENCE_ENGINE_CLASSES``) — the §14.22.7 per-run gate, mirroring the tool
+    dispatcher so non-durable runs stay fence-free."""
 
     async def dispatch(
         self,
@@ -149,8 +232,17 @@ class ManagedAgentsStepDispatcher:
         event → poll to terminal → emit the ``managed_agents.runtime`` span →
         return the outcome mapping. Raises ``ManagedAgentsSessionError`` on a
         non-success terminal status / poll-budget exhaustion / missing input.
+
+        B-FANOUT-CRASH-RESUME-MAYBE-RAN-UNFENCED-EXTERNAL (R-FS-1): when an effect
+        fence is bound + the per-run gate is open, the vendor-session effect
+        (create + send) is wrapped in ONE crash-atomic claim keyed on
+        ``(parent_idempotency_key, step_id)`` (a LEAF effect — no harness-side
+        reconstruction), so a maybe-ran fan-out worker re-dispatched on a strict-tier
+        crash-resume SUPPRESSES (returns the captured outcome) / PAUSES (ambiguous) /
+        re-fires (claim absent) instead of creating a second billable session. Mirrors
+        the §14.22 tool-dispatcher fence gate verbatim.
         """
-        _ = (binding, step_context)  # not consumed by managed-agents dispatch at v1.55
+        _ = binding  # binding not consumed by managed-agents dispatch (vendor-run loop)
         payload = step.step_payload
 
         agent_id = payload.get("agent_id")
@@ -171,6 +263,80 @@ class ManagedAgentsStepDispatcher:
             cast("Mapping[str, str]", metadata_raw) if isinstance(metadata_raw, Mapping) else None
         )
         title_raw = payload.get("title")
+
+        # --- Effect fence (B-FANOUT-CRASH-RESUME-MAYBE-RAN-UNFENCED-EXTERNAL, R-FS-1) ----
+        # At-most-once for the UNFENCED vendor-session effect (create_session +
+        # send_event): a maybe-ran fan-out MANAGED_AGENTS worker re-dispatched on a
+        # strict-tier crash-resume would otherwise create a SECOND billable session +
+        # re-send the event. The managed-agents dispatch is a LEAF — one opaque vendor
+        # effect returning an outcome mapping, NO harness-side reconstruction (unlike
+        # SUB_AGENT_DISPATCH's recursive child) — so result-fidelity holds by
+        # construction: a suppress folds the CAPTURED outcome verbatim. The §14.22 fence
+        # gate is applied VERBATIM (one coarse claim around the whole dispatch); managed
+        # agents is never `idempotent`, so there is no per-tool exemption.
+        #
+        # The whole gate is guarded on `self.effect_fence is not None`: a fence-bound
+        # dispatcher ALWAYS receives a real `step_context` (the CP driver composes one at
+        # every dispatch site), so reading `parent_idempotency_key` / `run_engine_class`
+        # here is safe; an UNbound dispatcher (no fence) skips the block entirely (the
+        # pre-arc byte-identical path, which a unit test may exercise with no context).
+        idempotency_key: str | None = None
+        fence_gate_open = False
+        if self.effect_fence is not None:
+            idempotency_key = _compose_managed_agents_idempotency_key(
+                step_context.parent_idempotency_key, step.step_id
+            )
+            fence_gate_open = self.effect_fencing_explicit or (
+                step_context.run_engine_class in _DURABLE_AUTO_FENCE_ENGINE_CLASSES
+            )
+            # A KEY-BOUND operator resolution the driver threaded onto the RESUMED step's
+            # context — applied ONLY when it targets THIS dispatch's key (a stale
+            # resolution can never mis-apply to a different fenced effect). `None` /
+            # non-match → the fence behaves exactly as a naive resume (INERT re-pause).
+            fence_resolution = (
+                step_context.effect_fence_resolution.resolution
+                if (
+                    step_context.effect_fence_resolution is not None
+                    and step_context.effect_fence_resolution.idempotency_key == idempotency_key
+                )
+                else None
+            )
+            if (
+                fence_gate_open
+                and fence_resolution is EffectFenceResolution.RE_FIRE
+                and self.effect_fence.try_consume_refire(idempotency_key)
+            ):
+                # RE_FIRE — operator asserts the prior attempt did NOT fire; clear the held
+                # claim so the `try_reserve` below WINS + fires fresh. The consume-once
+                # `.refire` latch makes a retry/crash-resume of the re-fire LOSE → it falls
+                # through to the suppress/ambiguous split, so the re-fire can never
+                # double-create a vendor session.
+                self.effect_fence.clear_claim(idempotency_key)
+            if fence_gate_open and not self.effect_fence.try_reserve(idempotency_key):
+                # The reserve was lost to a prior uncommitted attempt of THIS dispatch (a
+                # crash-then-resume re-run of a maybe-ran branch). A key-bound
+                # SKIP_AS_FIRED / ABORT resolution acts BEFORE the auto captured-output
+                # split.
+                if fence_resolution is EffectFenceResolution.SKIP_AS_FIRED:
+                    return _skipped_as_fired_outcome(
+                        agent_id=str(agent_id), environment_id=str(environment_id)
+                    )
+                if fence_resolution is EffectFenceResolution.ABORT:
+                    # Operator cannot determine whether the session fired (or declines to
+                    # proceed) → fail the run terminally (the driver name-matches
+                    # `EffectFenceAbortedError` → FAILED); never re-fire, never proceed.
+                    raise EffectFenceAbortedError(idempotency_key=idempotency_key)
+                captured_output = self.effect_fence.read_output(idempotency_key)
+                if captured_output is not None:
+                    # Output present + valid → the vendor session demonstrably completed
+                    # AND its outcome is in hand → suppress-and-continue: return the
+                    # CAPTURED outcome verbatim (full result-fidelity), NEVER re-dispatch.
+                    return dict(captured_output)
+                # Output absent / corrupt → the crash fell in the create→capture window →
+                # whether the vendor session fired is genuinely ambiguous → fail to the
+                # operator (the driver routes to a §26.2 EFFECT_FENCE_AMBIGUOUS PAUSE when
+                # a PauseResumeProtocol is bound, else FAILED). NEVER auto-re-fire.
+                raise EffectFenceAmbiguousUncommittedError(idempotency_key=idempotency_key)
 
         session = await self.client.create_session(
             agent_id=str(agent_id),
@@ -227,7 +393,7 @@ class ManagedAgentsStepDispatcher:
                 f"non-successfully (status={session.status.value})"
             )
 
-        return {
+        outcome = {
             "session_id": session.session_id,
             "agent_id": session.agent_id,
             "environment_id": session.environment_id,
@@ -235,3 +401,12 @@ class ManagedAgentsStepDispatcher:
             "runtime_ms": session.runtime_ms,
             "billable_seconds": session.billable_seconds,
         }
+        # Capture AFTER a validated success (the non-success / poll-exhausted paths raised
+        # above WITHOUT capturing → claim held + no output → a resume is genuinely
+        # ambiguous → PAUSE). A present capture therefore always denotes a complete, valid
+        # success the suppress path can fold verbatim (§14.22 capture-on-success-only).
+        # `idempotency_key is not None` whenever `fence_gate_open` (both set together in
+        # the bound-fence block above) — the explicit check satisfies the type narrowing.
+        if self.effect_fence is not None and fence_gate_open and idempotency_key is not None:
+            self.effect_fence.capture_output(idempotency_key, outcome)
+        return outcome
