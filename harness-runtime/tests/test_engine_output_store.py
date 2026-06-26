@@ -156,6 +156,46 @@ def test_branch_disposition_round_trip(tmp_path: Path) -> None:
     }
 
 
+def test_scoped_aborted_disposition_round_trip_not_corrupt(tmp_path: Path) -> None:
+    """B-FANOUT-EFFECT-FENCE-SCOPED-ABORT-CRASH-DURABLE (CP spec v1.74 §1 / runtime spec v1.84
+    §14.23) — `scoped_aborted` is an ADDITIVE recognized disposition (a branch the operator
+    scoped-aborted via ABORT_BRANCH: output None, never re-dispatched, distinct from a
+    ran-and-errored `completed`). It round-trips AND is NOT treated as corrupt — without the
+    additive accept it would be dropped → surfaced in the fail-closed corrupt set → a mixed
+    abort+survivor crash-resume would wrongly fail closed instead of finalizing PARTIAL."""
+    store = EngineOutputStore(journal_dir=tmp_path / "eo")
+    store.record_branch(_RUN_KEY, 0, "w0", "scoped_aborted", None)
+    store.record_branch(_RUN_KEY, 1, "w1", "completed", {"out": 1})  # a survivor
+
+    fresh = EngineOutputStore(journal_dir=tmp_path / "eo")  # crash + restart
+    records = fresh.read_branch_records(_RUN_KEY)
+    assert records == {
+        0: ("w0", "scoped_aborted", None),
+        1: ("w1", "completed", {"out": 1}),
+    }
+    # NOT corrupt — the scoped-abort branch is a readable terminal, not in the fail-closed set.
+    assert fresh.present_branch_indexes(_RUN_KEY) - set(records.keys()) == set()
+
+
+def test_scoped_aborted_with_output_is_corrupt_fail_closed(tmp_path: Path) -> None:
+    """out-of-family Codex [P2]: a `scoped_aborted` record carrying a non-None output is a
+    MALFORMED / tampered sidecar (a scoped-abort branch is output=None by construction). It must
+    be treated as corrupt (omitted from read_branch_records, surfaced by present_branch_indexes →
+    fail closed), NOT readable — else the CP seed loop folds the spurious output into `collected`,
+    masking an all-abort FAILED as a folded PARTIAL (`[[durable-recovery-presence-validity-scope]]`:
+    presence ≠ validity)."""
+    store = EngineOutputStore(journal_dir=tmp_path / "eo")
+    store.record_branch(_RUN_KEY, 0, "w0", "completed", {"o": 0})
+    store._branch_file(_RUN_KEY, 1).write_text(
+        '{"output": {"spurious": true}, "step_id": "w1", "terminal_status": "scoped_aborted"}',
+        encoding="utf-8",
+    )
+    readable = set(store.read_branch_records(_RUN_KEY).keys())
+    present = store.present_branch_indexes(_RUN_KEY)
+    assert readable == {0}  # the malformed scoped_aborted-with-output record is omitted
+    assert present - readable == {1}  # the fail-closed corrupt set
+
+
 def test_unknown_disposition_is_unreadable_fail_closed(tmp_path: Path) -> None:
     """A parseable record with an UNKNOWN terminal_status (tamper / a future schema) is
     treated as UNREADABLE — omitted from read_branch_records but surfaced by

@@ -6109,6 +6109,16 @@ def _execute_parallelization(
         terminal_dispositions[_bi] = _branch.terminal_status
         if _branch.output is not None:
             collected[_bi] = (str(steps[_bi].step_id), _branch.output)
+        # B-FANOUT-EFFECT-FENCE-SCOPED-ABORT-CRASH-DURABLE (R-FS-1, CP spec v1.74 §1) — a
+        # crash-recovered branch the operator scoped-aborted (the durable `scoped_aborted`
+        # disposition) reconstructs `_scoped_abort_ordinals` so the post-barrier all-abort
+        # guard (`_scoped_abort_ordinals and not collected` → FAILED) reproduces the in-resume
+        # scoped-abort fold across a crash, rather than the vacuous PAUSED/PARTIAL the
+        # `completed`-keyed reconstruct would yield. On the operator-RESUME (snapshot) path the
+        # snapshot carries `completed` and this is inert — that path is already correct (the
+        # last resume's resolution ctx repopulates the set + the degraded-terminal fold).
+        if _branch.terminal_status == "scoped_aborted":
+            _scoped_abort_ordinals.add(_bi)
     # B-FANOUT-OUTPUT-REPLAY — a crash-recovered branch with NO output (ran-and-errored,
     # effect landed) means the ORIGINAL run was DEGRADED; the resumed run must stay PARTIAL
     # rather than upgrade to SUCCESS by omitting the failure (out-of-family Codex [P2]).
@@ -6180,7 +6190,16 @@ def _execute_parallelization(
     # (fail-closed MUST precede durable writes — `[[durable-recovery-presence-validity-scope]]`;
     # out-of-family Codex [P2]).
     _scoped_abort_to_record = (
-        () if cascade_policy is CascadePolicy.PROCEED else sorted(_scoped_abort_ordinals)
+        ()
+        if cascade_policy is CascadePolicy.PROCEED
+        # EXCLUDE already-recovered ordinals (B-FANOUT-EFFECT-FENCE-SCOPED-ABORT-CRASH-DURABLE):
+        # on a crash-resume the seed loop reconstructs the recovered scoped-aborts INTO
+        # `_scoped_abort_ordinals` (so the fold guards fire), but those branches are ALREADY
+        # durable (ledger terminal + store record) — re-recording would append a DUPLICATE
+        # ledger terminal. Record only the NEWLY-aborted (this-resume) ordinals; the recovered
+        # ones flow into the fold via the combined set. Disjoint on the operator-resume path
+        # (snapshot scoped-aborts carry `completed` → never reconstructed here).
+        else sorted(_scoped_abort_ordinals - _recovered_terminal.keys())
     )
     for _sa_bi in _scoped_abort_to_record:
         _sa_step = steps[_sa_bi]
@@ -6204,13 +6223,23 @@ def _execute_parallelization(
             timestamp=fanout_timestamp,
             procedural_tier_snapshot_ref=snapshot_ref,
         )
+        # B-FANOUT-EFFECT-FENCE-SCOPED-ABORT-CRASH-DURABLE (R-FS-1, CP spec v1.74 §1) — the
+        # DURABLE store records this scoped-abort as `scoped_aborted` (distinct from a
+        # ran-and-errored `completed`-no-output), so a crash mid-resume reconstructs
+        # `_scoped_abort_ordinals` from the recovered terminals (the seed loop above) and
+        # reproduces the in-resume all-abort FAILED rather than the vacuous PAUSED/PARTIAL the
+        # `completed`-keyed `_crash_pause_reestablish` gate would re-establish. The IS-hash-
+        # bearing F2 LEDGER append (above) stays `completed` → no §5.2 IS-hash change; only the
+        # runtime store carries the distinguishing value. `terminal_dispositions` (in-resume
+        # only; inert for the crash path — `_crash_pause_reestablish` requires a crash-resume
+        # state) stays `completed`; on crash-resume it is REBUILT from the store's value.
         _capture_branch_terminal(
             ctx,
             manifest_entry,
             run_idempotency_key=run_idempotency_key,
             branch_index=_sa_bi,
             step_id=str(_sa_step.step_id),
-            terminal_status="completed",
+            terminal_status="scoped_aborted",
             output=None,
         )
         terminal_dispositions[_sa_bi] = "completed"
@@ -8521,6 +8550,13 @@ def _execute_orchestrator_workers(
         terminal_dispositions[_bi] = _branch.terminal_status
         if _branch.output is not None:
             collected[_bi] = (str(worker_steps[_bi].step_id), _branch.output)
+        # B-FANOUT-EFFECT-FENCE-SCOPED-ABORT-CRASH-DURABLE (R-FS-1, CP spec v1.74 §1) — a
+        # crash-recovered worker the operator scoped-aborted (the durable `scoped_aborted`
+        # disposition) reconstructs `_scoped_abort_ordinals` so the post-barrier all-abort guard
+        # reproduces the in-resume scoped-abort fold across a crash. Mirrors the PARALLELIZATION
+        # peer seed; inert on the operator-RESUME (snapshot `completed`) path (already correct).
+        if _branch.terminal_status == "scoped_aborted":
+            _scoped_abort_ordinals.add(_bi)
     # B-FANOUT-OUTPUT-REPLAY — a crash-recovered worker with NO output (ran-and-errored)
     # keeps the run DEGRADED (never SUCCESS while omitting the failure — Codex [P2]).
     _recovered_degraded = any(b.output is None for b in _recovered_terminal.values())
@@ -8592,7 +8628,16 @@ def _execute_orchestrator_workers(
     # here would corrupt state for a rejected resume (fail-closed precedes durable writes —
     # `[[durable-recovery-presence-validity-scope]]`; out-of-family Codex [P2]).
     _scoped_abort_to_record = (
-        () if cascade_policy is CascadePolicy.PROCEED else sorted(_scoped_abort_ordinals)
+        ()
+        if cascade_policy is CascadePolicy.PROCEED
+        # EXCLUDE already-recovered ordinals (B-FANOUT-EFFECT-FENCE-SCOPED-ABORT-CRASH-DURABLE):
+        # on a crash-resume the seed loop reconstructs the recovered scoped-aborts INTO
+        # `_scoped_abort_ordinals` (so the fold guards fire), but those branches are ALREADY
+        # durable (ledger terminal + store record) — re-recording would append a DUPLICATE
+        # ledger terminal. Record only the NEWLY-aborted (this-resume) ordinals; the recovered
+        # ones flow into the fold via the combined set. Disjoint on the operator-resume path
+        # (snapshot scoped-aborts carry `completed` → never reconstructed here).
+        else sorted(_scoped_abort_ordinals - _recovered_terminal.keys())
     )
     for _sa_bi in _scoped_abort_to_record:
         _sa_step = worker_steps[_sa_bi]
@@ -8623,13 +8668,21 @@ def _execute_orchestrator_workers(
             timestamp=fanout_timestamp,
             procedural_tier_snapshot_ref=snapshot_ref,
         )
+        # B-FANOUT-EFFECT-FENCE-SCOPED-ABORT-CRASH-DURABLE (R-FS-1, CP spec v1.74 §1) — the
+        # DURABLE store records this scoped-abort worker as `scoped_aborted` (distinct from a
+        # ran-and-errored `completed`-no-output) so a crash mid-resume reconstructs
+        # `_scoped_abort_ordinals` from the recovered terminals (the seed loop above) and
+        # reproduces the in-resume all-abort FAILED rather than the vacuous PAUSED/PARTIAL.
+        # IS-hash-bearing LEDGER append (above) stays `completed` (no §5.2 IS-hash change);
+        # `terminal_dispositions` (in-resume only) stays `completed` (rebuilt from the store on
+        # crash-resume). Mirrors the PARALLELIZATION peer site.
         _capture_branch_terminal(
             ctx,
             manifest_entry,
             run_idempotency_key=run_idempotency_key,
             branch_index=_sa_bi,
             step_id=str(_sa_step.step_id),
-            terminal_status="completed",
+            terminal_status="scoped_aborted",
             output=None,
         )
         terminal_dispositions[_sa_bi] = "completed"
