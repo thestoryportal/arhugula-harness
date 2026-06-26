@@ -46,7 +46,7 @@
 snapshot:
   frozen_total: 11
   frozen_done: 11
-  standalone_closed: 57
+  standalone_closed: 58
   standalone_gated: 0
   standalone_resolved: 4
   standalone_registered: 4
@@ -825,7 +825,7 @@ arcs:
   - id: B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT
     title: "Resolve a maybe-ran fan-out worker of SUB_AGENT_DISPATCH (recursive child crash-resume)"
     kind: standalone
-    status: registered
+    status: closed
     decompose_at_open: true
     owner_axis: "CP + runtime"
     operator_gated: false  # additive (compose the child's own fence/pause state through the parent barrier) — no committed-invariant sacrifice → no operator gate.
@@ -834,6 +834,30 @@ arcs:
     why: "Surfaced at B-FANOUT-CRASH-RESUME-MAYBE-RAN-EFFECT-BEARING (the fence-surface split): TOOL_STEP is fenced directly (the closeable slice); SUB_AGENT_DISPATCH is fenced only at its child's tool sinks → a genuine separate design problem, named per FULL-SPEC (`[[feedback-full-spec-beyond-mvp-nothing-deferred]]`) rather than silently left fail-closed."
     # 2026-06-25 (finding v1): a full 'leaf-fenced single-level slice' build was authored + REVERTED before merge after out-of-family Codex found two [P1] crash-resume correctness gaps. Prescribed next attempt = option (a) narrow to topology==SINGLE_THREADED_LINEAR child + dual fence-active gate + a real recursive-child witness. See .harness/b-fanout-crash-resume-maybe-ran-subagent-design-finding-v1.md.
     # 2026-06-26 (finding v2 — SUPERSEDES the option-(a) prescription): a by-execution witness over the REAL execute_workflow proved option (a) is ALSO unsound — a durable-engine-class resume over a committed prefix returns a SILENTLY SUFFIX-ONLY final_state (status SUCCESS, accumulated starts empty at resume_at, prefix-output replay is degenerate-at-HEAD), and the child folds that truncated state into the parent aggregate (sub_agent_dispatch.py:660-663). This is NOT fan-out-specific → the LINEAR narrowing does not escape it. DISPOSITION: option (b) confirmed correct (stay fail-closed); the genuine prerequisite is the newly-registered B-CHILD-CRASH-RESUME-FINAL-STATE-RECONSTRUCT. See .harness/b-fanout-crash-resume-maybe-ran-subagent-design-finding-v2.md.
+    # 2026-06-26 (CLOSED, finding-v2 prerequisite now built): B-CHILD-CRASH-RESUME-FINAL-STATE-RECONSTRUCT landed (#764/#766/#768) + witnessed for the LINEAR child (#770), removing the [P1-a] suffix-only blocker for {ESR,WAL} LINEAR children. Built the recursive-child mechanism (E1 deterministic child run_id + recoverability predicate + classifier dual-gate) as the WITNESSED LINEAR-{ESR,WAL}-leaf slice. See .harness/arc-open-b-fanout-maybe-ran-subagent-v2.md.
+    pr: "#<pending> (feat/r-fs-1-maybe-ran-subagent-v2 — flips registered → closed as the LINEAR-{ESR,WAL}-leaf-child slice; registers 1 follow-on [NONLEAF-CHILD] → standalone_closed 57 → 58, standalone_registered 4 → 4 net-zero)"
+    spec_delta: "bundled-absorption CP v1.76 → v1.77 (§1 the SUB_AGENT_DISPATCH child-recursive-recovery disjunct in `_fence_unrecoverable_maybe_ran_indices` + the `child_recoverable` dispatch-marker + the [P1-b] dispatch∧resumed dual gate) + runtime v1.84 → v1.85 (§14.7.4 the `child_run_id_seed` E1 mechanism + the `subagent_child_recoverable` predicate + seed-gating) + 2 clearance markers. NO contract removal / closed-enum / committed-invariant / new-fail-class change; at-most-once PRESERVED (the deterministic child run_id is branch-unique [branch_path] + fan-out-worker-scoped [loop-safe]; the child auto-resumes via a pure store read, never re-dispatched into a double-fire)."
+    gives: "A maybe-ran fan-out SUB_AGENT_DISPATCH worker whose child is a SINGLE_THREADED_LINEAR {ESR,WAL} LEAF (no nested SUB_AGENT/MANAGED step) on a strict-tier crash-resume now RECOVERS by re-dispatch (the deterministic child run_id makes the child's own crash-resume auto-resume from the shared durable store, result-faithfully) instead of failing the run closed. Recovery requires the child be recoverable BOTH at dispatch (the marker) AND in the resumed manifest (the [P1-b] dual gate). Decorrelated: advisor full-transcript BEFORE substantive work (the GO + five pre-build checks + the corrected predicate over the #746 reverted branch [LINEAR-narrowing + seed-gating]) + out-of-family Codex on the diff (caught a real [P1]: the child run_id seed collided across fan-out siblings because compose_branch_child_context inherits parent_idempotency_key verbatim — fixed by folding §25.16 branch_path + scoping to fan-out workers, which also forecloses the sequential-loop step_index-reuse hazard, empirically confirmed at workflow_driver.py:2040)."
+    closed_scope: "Built as the WITNESSED LINEAR-{ESR,WAL}-leaf-child fan-out-worker slice. Witnesses: E1-live full-chain reconstruction through the REAL compose_child_workflow_runner→execute_workflow over a real run_key-respecting EngineOutputStore with the deterministic seed (NOT a pinned uuid); recoverability-predicate negative controls (SAVE_POINT False, fan-out topology False, nested SUB_AGENT/MANAGED child False, LINEAR-{ESR,WAL}-leaf True); seed-gating (recoverable fan-out worker → seed, linear/non-recoverable → None); fan-out sibling distinctness (pure-fn + full-chain composer); CP classifier dual-gate (recovers only when marker AND resumed both recoverable; [P1-b] marker-True/resumed-False fail-closed; cross-kind / changed-step_id / out-of-range fail-closed). Full suites green: harness-cp 1411 passed / 1 xfailed; harness-runtime 2137 passed / 10 skipped; pyright 0/0/0; ruff. NOT in this close: (a) a recoverable worker whose child is itself FAN-OUT (its own unwitnessed fan-out reconstruction) or has a NESTED SUB_AGENT grandchild → B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-NONLEAF-CHILD; (b) a SAVE_POINT/RECONCILER child → the registered B-CHILD-CRASH-RESUME-FINAL-STATE-RECONSTRUCT-SAVE-POINT-RECONCILER."
+    as_built:
+      - "harness-runtime/src/harness_runtime/lifecycle/child_workflow_runner.py (the additive `child_run_id_seed` kwarg on the ChildWorkflowRunner Protocol + runner; deterministic-seed-over-uuid on first dispatch)"
+      - "harness-runtime/src/harness_runtime/lifecycle/sub_agent_dispatch.py (`compose_child_run_id_seed` [branch_path-folded] + the typed `subagent_child_recoverable` predicate + the fan-out-worker seed-gating)"
+      - "harness-runtime/src/harness_runtime/lifecycle/engine_output_store.py (the additive `child_recoverable` field on record_branch_dispatched + the `subagent_child_recoverable_indexes` reader)"
+      - "harness-cp/src/harness_cp/workflow_driver.py (`_subagent_child_recoverable` defensive opaque-payload read + `_resumed_subagent_recoverable_by_ordinal` + the SUB_AGENT recovery disjunct in `_fence_unrecoverable_maybe_ran_indices` + the `_mark_branch_dispatched` recoverability record + the `_subagent_recoverable_marker_indexes` defensive store read)"
+      - "design-substrate/Spec_Control_Plane_v1_77.md + design-substrate/Spec_Harness_Runtime_v1.md (v1.85) + 2 clearance markers"
+      - "tests: harness-cp test_workflow_driver_subagent_recoverable_classifier.py (10 dual-gate witnesses) + test_workflow_driver_fanout_output_replay_full_chain.py (fake-store mirror); harness-runtime test_lifecycle_sub_agent_dispatch.py (predicate + seed-gating + sibling-distinctness) + integration/test_recursive_child_crash_resume_final_state_witness.py (E1-live)"
+    ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
+
+  - id: B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-NONLEAF-CHILD
+    title: "Recover a maybe-ran SUB_AGENT worker whose child is fan-out or has a nested sub-agent (deeper recursion)"
+    kind: standalone
+    status: registered
+    decompose_at_open: true
+    owner_axis: "CP + runtime"
+    operator_gated: false
+    parent_arc: B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT
+    anticipated_scope: "B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT closed the LINEAR-{ESR,WAL}-LEAF child slice — the recoverability predicate requires the child topology be SINGLE_THREADED_LINEAR AND no child step be SUB_AGENT_DISPATCH/MANAGED_AGENTS. Two non-leaf cases stay fail-closed: (a) a child that is itself FAN-OUT (PARALLELIZATION / ORCHESTRATOR_WORKERS / HIERARCHICAL_DELEGATION) — re-dispatching it engages the child's OWN fan-out crash-resume reconstruction (the B-FANOUT-OUTPUT-REPLAY family), an unwitnessed recursive composition; (b) a LINEAR child with a NESTED SUB_AGENT_DISPATCH grandchild — the compositional recursion bottoms out one level deeper (the grandchild gets its own deterministic seed via the same composer code, but the deeper recursive-child crash-resume is unwitnessed). Both need their own non-mocked recursive-child witnesses + (for the fan-out case) composing the child's fan-out reconstruction through the parent barrier."
+    why: "Surfaced at the B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT close (the leaf-condition narrowing): the closeable slice is the witnessed LINEAR-leaf child; the fan-out-child + nested-sub-agent-child recursion is a genuinely deeper, separately-witnessed mechanism → registered per FULL-SPEC (`[[feedback-full-spec-beyond-mvp-nothing-deferred]]`) rather than silently bundled-unwitnessed."
     ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
 
   - id: B-CHILD-CRASH-RESUME-FINAL-STATE-RECONSTRUCT
