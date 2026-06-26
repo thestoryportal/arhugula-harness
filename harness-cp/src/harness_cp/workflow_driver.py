@@ -5909,6 +5909,12 @@ def _execute_parallelization(
     branch_plan: list[
         tuple[int, WorkflowStep, StepExecutionContext, BufferingLedgerWriter, StepEffectiveBinding]
     ] = []
+    # B-FANOUT-EFFECT-FENCE-PER-BRANCH-SCOPED-ABORT (R-FS-1, CP spec v1.73 §1) — peer ordinals
+    # the operator scoped-aborted (`ABORT_BRANCH`) this resume: EXCLUDED from re-dispatch
+    # (collected here, processed terminal after the disposition dicts init below). DISJOINT
+    # from `branch_plan` (never re-dispatched → at-most-once: the ambiguous effect is never
+    # re-fired) and from run-level `ABORT` (which fails the whole run).
+    _scoped_abort_ordinals: set[int] = set()
     for branch_index, step in enumerate(steps):
         # B-FANOUT-PAUSE-PARALLELIZATION — on resume, a branch that reached a terminal
         # disposition before the prior `pause` halt is SKIPPED (§25.15.2 obligation 7:
@@ -5952,6 +5958,25 @@ def _execute_parallelization(
             if (_branch_fence_key and _ef_resume_ctx is not None)
             else None
         )
+        # B-FANOUT-EFFECT-FENCE-PER-BRANCH-SCOPED-ABORT (R-FS-1, CP spec v1.73 §1) — the operator
+        # scoped the ABORT to THIS peer (`ABORT_BRANCH`): fail just this branch, let the
+        # vouched-for siblings (SKIP_AS_FIRED / RE_FIRE) fire. Do NOT re-dispatch (at-most-once:
+        # no directive reaches the runtime fence → the ambiguous effect is never re-fired); the
+        # post-init block below records it `completed`/no-output terminal + captures it durably +
+        # the post-barrier folds survivors per cascade_policy. This interception runs BEFORE the
+        # run-level ABORT suppression below so a {ABORT, ABORT_BRANCH} mixed map records the
+        # scoped-abort peer DETERMINISTICALLY terminal (the suppression would otherwise null its
+        # resolution first → it would re-dispatch into the ABORT race, never recorded scoped-abort,
+        # contradicting the never-half-recorded contract). Run-level ABORT still dominates: the
+        # ABORT branch keeps its directive → the post-barrier ABORT→FAILED return precedes the
+        # scoped-abort fold; an excluded branch never dispatches, so it can never fire ahead of it.
+        if _branch_resolution is EffectFenceResolution.ABORT_BRANCH:
+            _scoped_abort_ordinals.add(branch_index)
+            continue
+        # Run-level ABORT guard (Codex [P1]): if ANY paused peer resolves to ABORT, suppress this
+        # NON-ABORT (continue: SKIP_AS_FIRED / RE_FIRE) peer's directive so it re-pauses INERT
+        # (never fires) before the ABORT fails the run. Keys on `is ABORT` — ABORT_BRANCH (handled
+        # above) never reaches here.
         if _any_fence_abort and _branch_resolution is not EffectFenceResolution.ABORT:
             _branch_resolution = None
         _branch_effect_fence_directive = (
@@ -6140,6 +6165,56 @@ def _execute_parallelization(
                     binding=_r_binding,
                 )
             )
+
+    # B-FANOUT-EFFECT-FENCE-PER-BRANCH-SCOPED-ABORT (R-FS-1, CP spec v1.73 §1) — record each
+    # scoped-aborted peer as a `completed`/no-output terminal (the IS-hash-bearing
+    # `terminal_status` Literal is REUSED, not extended → CP-only, no §5.2 IS-hash change;
+    # `completed` is dispatch-boundary-accurate — the ORIGINAL attempt ran, its effect may have
+    # landed). Captured durably so a crash mid-resume recovers it terminal-failed (NOT maybe-ran
+    # → re-dispatch — `[[durable-recovery-presence-validity-scope]]`). Its writer joins the
+    # barrier drain; its ordinal (`_scoped_abort_ordinals`) feeds the post-barrier fold (PARTIAL
+    # with survivors; FAILED if NONE) + the run fail_class. NEVER re-dispatched.
+    # SKIPPED under PROCEED: an effect-fence resume under PROCEED is rejected fail-closed by the
+    # strict-tier guard below (BEFORE any branch dispatch), so recording a durable terminal here
+    # would mutate state for a resume that is then rejected → corrupt later strict/crash recovery
+    # (fail-closed MUST precede durable writes — `[[durable-recovery-presence-validity-scope]]`;
+    # out-of-family Codex [P2]).
+    _scoped_abort_to_record = (
+        () if cascade_policy is CascadePolicy.PROCEED else sorted(_scoped_abort_ordinals)
+    )
+    for _sa_bi in _scoped_abort_to_record:
+        _sa_step = steps[_sa_bi]
+        _sa_binding = resolve_step_binding(
+            manifest_entry,
+            str(_sa_step.step_id),
+            default_model_binding=default_model_binding,
+            persona_tier=manifest_entry.persona_tier,
+        )
+        _sa_child = compose_branch_child_context(
+            fanout_parent,
+            branch_index=_sa_bi,
+            agent_role=_sa_binding.agent_role or _DEFAULT_PARALLELIZATION_AGENT_ROLE,
+        )
+        _sa_writer = BufferingLedgerWriter(actor=ctx.ledger_writer.actor, branch_index=_sa_bi)
+        append_branch_terminal_ledger_entry(
+            branch_writer=_sa_writer,
+            branch_context=_sa_child,
+            run_idempotency_key=run_idempotency_key,
+            terminal_status="completed",
+            timestamp=fanout_timestamp,
+            procedural_tier_snapshot_ref=snapshot_ref,
+        )
+        _capture_branch_terminal(
+            ctx,
+            manifest_entry,
+            run_idempotency_key=run_idempotency_key,
+            branch_index=_sa_bi,
+            step_id=str(_sa_step.step_id),
+            terminal_status="completed",
+            output=None,
+        )
+        terminal_dispositions[_sa_bi] = "completed"
+        branch_writers.append(_sa_writer)
 
     def _record_clean(
         branch_index: int,
@@ -6641,6 +6716,18 @@ def _execute_parallelization(
                     timestamp=fanout_timestamp,
                     procedural_tier_snapshot_ref=snapshot_ref,
                 )
+        # B-FANOUT-EFFECT-FENCE-PER-BRANCH-SCOPED-ABORT (R-FS-1, CP spec v1.73 §1; Codex [P1]) —
+        # under CASCADE_CANCEL a scoped-abort is a deliberate branch failure → the run cancels
+        # (FAILED), NEVER a SUCCESS hiding the aborted branch. Per-branch isolation is incompatible
+        # with cascade-cancel-everything; this fires BEFORE the SUCCESS return below (the
+        # cascade-cancel block returns before the §25.15.1 degraded fold, so the fold's scoped-abort
+        # guard would otherwise be bypassed on this tier).
+        if _scoped_abort_ordinals:
+            return _finish(
+                RunStatus.FAILED,
+                fail_class="parallelization-effect-fence-branch-aborted",
+                salvage=False,
+            )
         if branch_failed or deadline_struck:
             return _finish(
                 RunStatus.FAILED,
@@ -6772,6 +6859,20 @@ def _execute_parallelization(
     # (the silent-degradation class this arc forecloses) — instead mirror `proceed`:
     # degraded → PARTIAL + salvage. Non-resume clean runs have no failed terminal →
     # not degraded → SUCCESS (no regression).
+    # B-FANOUT-EFFECT-FENCE-PER-BRANCH-SCOPED-ABORT (R-FS-1, CP spec v1.73 §1) — ALL-ABORT GUARD:
+    # if every fence-paused peer was scoped-aborted and NO peer survived (nothing collected), the
+    # run has NO result → FAILED (with the operator-abort provenance fail_class — conventional on a
+    # FAILED status, the codebase reads fail_class gated on FAILED), not the vacuous PARTIAL the
+    # degraded check below would return with zero survivors. A PARTIAL WITH survivors carries
+    # `fail_class=None` like every other degraded PARTIAL (the aborted peer is a degraded terminal
+    # non-contributor recorded per-branch in the ledger; run-result operator-abort-vs-errored
+    # provenance on a PARTIAL is out of scope — the pre-existing limit for any degraded branch).
+    if _scoped_abort_ordinals and not collected:
+        return _finish(
+            RunStatus.FAILED,
+            fail_class="parallelization-effect-fence-branch-aborted",
+            salvage=True,
+        )
     if any(_bi not in collected for _bi in terminal_dispositions):
         return _finish(RunStatus.PARTIAL, fail_class=None, salvage=True)
     return _finish(RunStatus.SUCCESS, fail_class=None, salvage=False)
@@ -8234,6 +8335,13 @@ def _execute_orchestrator_workers(
     branch_plan: list[
         tuple[int, WorkflowStep, StepExecutionContext, BufferingLedgerWriter, StepEffectiveBinding]
     ] = []
+    # B-FANOUT-EFFECT-FENCE-PER-BRANCH-SCOPED-ABORT (R-FS-1, CP spec v1.73 §1) — worker ordinals
+    # the operator scoped-aborted (`ABORT_BRANCH`) this resume: EXCLUDED from re-dispatch
+    # (processed terminal after the disposition dicts init below). DISJOINT from `branch_plan`
+    # (never re-dispatched → at-most-once: the ambiguous effect is never re-fired) and from
+    # run-level `ABORT` (which fails the whole run). The ORCHESTRATOR analogue of the
+    # parallelization peer scoped-abort.
+    _scoped_abort_ordinals: set[int] = set()
     for branch_index, step in enumerate(worker_steps):
         # B-FANOUT-PAUSE — on resume, a branch that reached a terminal disposition
         # before the prior `pause` halt is SKIPPED (§25.15.2 obligation 7: a
@@ -8309,9 +8417,25 @@ def _execute_orchestrator_workers(
             if (_branch_fence_key and _ef_resume_ctx is not None)
             else None
         )
-        # Run-level ABORT guard: if ANY paused worker resolves to ABORT, suppress this NON-ABORT
-        # worker's continue-resolution so it re-pauses INERT (never fires) before the ABORT fails
-        # the run (Codex [P1]).
+        # B-FANOUT-EFFECT-FENCE-PER-BRANCH-SCOPED-ABORT (R-FS-1, CP spec v1.73 §1) — the operator
+        # scoped the ABORT to THIS worker (`ABORT_BRANCH`): fail just this worker, let the
+        # vouched-for siblings (SKIP_AS_FIRED / RE_FIRE) fire. Do NOT re-dispatch (at-most-once:
+        # no directive reaches the runtime fence → the ambiguous effect is never re-fired); the
+        # post-init block below records it `completed`/no-output terminal + captures it durably +
+        # the post-barrier folds survivors per cascade_policy. This interception runs BEFORE the
+        # run-level ABORT suppression below so a {ABORT, ABORT_BRANCH} mixed map records the
+        # scoped-abort worker DETERMINISTICALLY terminal (the suppression would otherwise null its
+        # resolution first → it would re-dispatch into the ABORT race, never recorded scoped-abort,
+        # contradicting the never-half-recorded contract). Run-level ABORT still dominates: the
+        # ABORT worker keeps its directive → the post-barrier ABORT→FAILED return precedes the
+        # scoped-abort fold; an excluded worker never dispatches, so it can never fire ahead of it.
+        if _branch_resolution is EffectFenceResolution.ABORT_BRANCH:
+            _scoped_abort_ordinals.add(branch_index)
+            continue
+        # Run-level ABORT guard (Codex [P1]): if ANY paused worker resolves to ABORT, suppress this
+        # NON-ABORT (continue: SKIP_AS_FIRED / RE_FIRE) worker's directive so it re-pauses INERT
+        # (never fires) before the ABORT fails the run. Keys on `is ABORT` — ABORT_BRANCH (handled
+        # above) never reaches here.
         if _any_fence_abort and _branch_resolution is not EffectFenceResolution.ABORT:
             _branch_resolution = None
         _branch_effect_fence_directive = (
@@ -8454,6 +8578,63 @@ def _execute_orchestrator_workers(
                 )
             )
 
+    # B-FANOUT-EFFECT-FENCE-PER-BRANCH-SCOPED-ABORT (R-FS-1, CP spec v1.73 §1) — record each
+    # scoped-aborted worker as a `completed`/no-output terminal (REUSE the IS-hash-bearing
+    # `terminal_status` Literal, not extend → CP-only, no §5.2 IS-hash change; `completed` is
+    # dispatch-boundary-accurate — the ORIGINAL attempt ran, its effect may have landed).
+    # Captured durably so a crash mid-resume recovers it terminal-failed (NOT maybe-ran →
+    # re-dispatch — `[[durable-recovery-presence-validity-scope]]`). Its writer joins the barrier
+    # drain; its ordinal (`_scoped_abort_ordinals`) feeds the post-barrier fold (PARTIAL with
+    # survivors; FAILED if NONE) + the run fail_class. NEVER re-dispatched. (Worker context
+    # mirrors the dispatch-plan / re-materialize build: derive role + `step_index = _bi + 1`.)
+    # SKIPPED under PROCEED: an effect-fence resume under PROCEED is rejected fail-closed (the
+    # strict-tier guard below, + the `not branch_plan` early gate), so recording a durable terminal
+    # here would corrupt state for a rejected resume (fail-closed precedes durable writes —
+    # `[[durable-recovery-presence-validity-scope]]`; out-of-family Codex [P2]).
+    _scoped_abort_to_record = (
+        () if cascade_policy is CascadePolicy.PROCEED else sorted(_scoped_abort_ordinals)
+    )
+    for _sa_bi in _scoped_abort_to_record:
+        _sa_step = worker_steps[_sa_bi]
+        _sa_binding = resolve_step_binding(
+            manifest_entry,
+            str(_sa_step.step_id),
+            default_model_binding=default_model_binding,
+            persona_tier=manifest_entry.persona_tier,
+        )
+        _sa_child = compose_branch_child_context(
+            fanout_parent,
+            branch_index=_sa_bi,
+            agent_role=_sa_binding.agent_role or derive_agent_role(_sa_step.step_id),
+        ).model_copy(
+            update={
+                "step_index": _sa_bi + 1,
+                "hitl_placements": fold_step_hitl_placements(
+                    manifest_entry.hitl_placements, _sa_binding.hitl_placement
+                ),
+            }
+        )
+        _sa_writer = BufferingLedgerWriter(actor=ctx.ledger_writer.actor, branch_index=_sa_bi)
+        append_branch_terminal_ledger_entry(
+            branch_writer=_sa_writer,
+            branch_context=_sa_child,
+            run_idempotency_key=run_idempotency_key,
+            terminal_status="completed",
+            timestamp=fanout_timestamp,
+            procedural_tier_snapshot_ref=snapshot_ref,
+        )
+        _capture_branch_terminal(
+            ctx,
+            manifest_entry,
+            run_idempotency_key=run_idempotency_key,
+            branch_index=_sa_bi,
+            step_id=str(_sa_step.step_id),
+            terminal_status="completed",
+            output=None,
+        )
+        terminal_dispositions[_sa_bi] = "completed"
+        branch_writers.append(_sa_writer)
+
     def _record_clean(
         branch_index: int,
         step: WorkflowStep,
@@ -8507,6 +8688,24 @@ def _execute_orchestrator_workers(
         # else the recovered workers' ledger entries would be silently dropped here, the
         # finding-1 fail-open audit gap in the full-recovery path). Dedup-safe.
         _rematerialized_steps = _drain_and_emit_step_boundaries(ctx, branch_writers)
+        # B-FANOUT-EFFECT-FENCE-PER-BRANCH-SCOPED-ABORT (R-FS-1, CP spec v1.73 §1; Codex [P2]) — a
+        # PROCEED resume of an effect-fence pause is rejected fail-closed. The strict-tier guard
+        # below the worker fold (~8905) NEVER runs when branch_plan is empty (all workers were
+        # scoped-aborted/terminal → this `not branch_plan` short-circuit), so reject HERE — after
+        # the drain, before the no-worker fold (incl. the scoped-abort all-abort guard) — so an
+        # all-scoped-abort PROCEED resume reports requires-strict-tier (NOT a SUCCESS/PARTIAL nor
+        # the scoped-abort fail_class). No scoped-abort durable write happened (the recording loop
+        # is PROCEED-guarded → fail-closed precedes durable writes).
+        if _recovered_effect_fence_paused and cascade_policy is CascadePolicy.PROCEED:
+            return RunResult(
+                workflow_id=workflow_id,
+                run_id=run_id,
+                status=RunStatus.FAILED,
+                terminal_step_index=None,
+                partial_state=None,
+                final_state=None,
+                fail_class="orchestrator-workers-effect-fence-resume-requires-strict-tier",
+            ), (1 if orchestrator_writer is not None else 0) + _rematerialized_steps
         # B-FANOUT-PAUSE (advisor [P1]) — a resume where EVERY worker was already
         # terminal: if a recovered branch FAILED (terminal but no collected output)
         # the run is degraded → PARTIAL, not a bare silent SUCCESS dropping the
@@ -8595,6 +8794,21 @@ def _execute_orchestrator_workers(
                 fail_class=None,
                 pause_snapshot=_reestablish_snapshot,
             ), _reestablish_steps
+        # B-FANOUT-EFFECT-FENCE-PER-BRANCH-SCOPED-ABORT (R-FS-1, CP spec v1.73 §1) — all-abort
+        # guard at the empty-`branch_plan` short-circuit (every fence-paused worker scoped-aborted →
+        # nothing to re-dispatch → this block, BEFORE the worker-failed fold): if NO worker survived
+        # (nothing collected), the run has NO result → FAILED, not the vacuous PARTIAL `_degraded`
+        # yields. (≥1 survivor → folds to PARTIAL below with the provenance fail_class.)
+        if _scoped_abort_ordinals and not collected:
+            return RunResult(
+                workflow_id=workflow_id,
+                run_id=run_id,
+                status=RunStatus.FAILED,
+                terminal_step_index=None,
+                partial_state=_aggregate_orchestrator_workers(orchestrator_output, collected),
+                final_state=None,
+                fail_class="orchestrator-workers-effect-fence-branch-aborted",
+            ), (1 if orchestrator_writer is not None else 0) + _rematerialized_steps
         _no_worker_status = RunStatus.PARTIAL if _degraded else RunStatus.SUCCESS
         # B-POSTJOIN-LLM-SYNTHESIS (CP spec v1.54 §3/§4) — the no-worker-fan-out
         # terminal aggregate also honors an opt-in synthesis on SUCCESS (composing
@@ -8628,6 +8842,10 @@ def _execute_orchestrator_workers(
             terminal_step_index=None,
             partial_state=_aggregate if _degraded else None,
             final_state=None if _degraded else _aggregate,
+            # B-FANOUT-EFFECT-FENCE-PER-BRANCH-SCOPED-ABORT — a scoped-abort folding into this
+            # no-worker PARTIAL (survivors present) carries `fail_class=None` like every other
+            # degraded PARTIAL (the all-abort/no-survivor case FAILED earlier with the provenance
+            # fail_class; run-result operator-abort provenance on a PARTIAL is out of scope).
             fail_class=None,
         ), (1 if orchestrator_writer is not None else 0) + _synth_steps + _rematerialized_steps
 
@@ -9137,6 +9355,18 @@ def _execute_orchestrator_workers(
                 timestamp=fanout_timestamp,
                 procedural_tier_snapshot_ref=snapshot_ref,
             )
+        # B-FANOUT-EFFECT-FENCE-PER-BRANCH-SCOPED-ABORT (R-FS-1, CP spec v1.73 §1; Codex [P1]) —
+        # under CASCADE_CANCEL a scoped-abort is a deliberate worker failure → the run cancels
+        # (FAILED), NEVER a SUCCESS hiding the aborted worker. Fires BEFORE the SUCCESS return below
+        # (the cascade-cancel block returns before the §25.15.1 degraded fold). The empty-plan
+        # all-abort case is covered earlier at the `not branch_plan` short-circuit; this covers a
+        # MIXED scoped-abort + surviving-worker resume on the cascade-cancel tier.
+        if _scoped_abort_ordinals:
+            return _finish(
+                RunStatus.FAILED,
+                fail_class="orchestrator-workers-effect-fence-branch-aborted",
+                salvage=False,
+            )
         if worker_failed or deadline_struck:
             return _finish(
                 RunStatus.FAILED,
@@ -9280,6 +9510,18 @@ def _execute_orchestrator_workers(
     # drop that failure (the silent-degradation class this arc forecloses) — instead
     # mirror `proceed`: degraded → PARTIAL + salvage (advisor [P1]). Non-resume
     # clean runs have no failed terminal → not degraded → SUCCESS (no regression).
+    # B-FANOUT-EFFECT-FENCE-PER-BRANCH-SCOPED-ABORT (R-FS-1, CP spec v1.73 §1) — ALL-ABORT GUARD:
+    # if every fence-paused worker was scoped-aborted and NO worker survived (nothing collected),
+    # the run has NO result → FAILED (with the operator-abort provenance fail_class — conventional
+    # on a FAILED status), not the vacuous PARTIAL the degraded check below would return with zero
+    # survivors. A PARTIAL WITH survivors carries `fail_class=None` like every degraded PARTIAL
+    # (the aborted worker is a degraded terminal non-contributor recorded per-branch in the ledger).
+    if _scoped_abort_ordinals and not collected:
+        return _finish(
+            RunStatus.FAILED,
+            fail_class="orchestrator-workers-effect-fence-branch-aborted",
+            salvage=True,
+        )
     if any(_bi not in collected for _bi in terminal_dispositions):
         return _finish(RunStatus.PARTIAL, fail_class=None, salvage=True)
     return _finish(RunStatus.SUCCESS, fail_class=None, salvage=False)

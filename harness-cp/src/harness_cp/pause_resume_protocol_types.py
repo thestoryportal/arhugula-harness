@@ -140,6 +140,24 @@ class EffectFenceResolution(StrEnum):
     proceed). Fail the run terminally (the conservative default — never re-fire,
     never proceed-with-empty)."""
 
+    ABORT_BRANCH = "abort_branch"
+    """B-FANOUT-EFFECT-FENCE-PER-BRANCH-SCOPED-ABORT (R-FS-1) — per-branch-SCOPED
+    abort: fail just THIS fan-out branch (record it terminal, never re-fire) while
+    the SIBLING branches the operator CAN vouch for (SKIP_AS_FIRED / RE_FIRE) resolve
+    and FIRE, and the run folds the survivors per `cascade_policy`. Distinct from
+    `ABORT`, which is RUN-level terminal (the whole run FAILS, all continue-resolutions
+    suppressed — v1.65 §1(b), preserved byte-for-byte). `ABORT_BRANCH` is meaningful
+    ONLY for a fan-out fence pause: it is consumed CP-side at the two fan-out resume sites
+    (`_execute_parallelization` / `_execute_orchestrator_workers`) and NEVER threaded to the
+    runtime fence (the at-most-once guarantee — the scoped-abort branch is never re-dispatched,
+    so its ambiguous effect is never re-fired). A LINEAR fence pause has exactly one branch
+    (scoping is vacuous); the runtime fence gate recognizes only SKIP_AS_FIRED / RE_FIRE /
+    ABORT, so an `ABORT_BRANCH` supplied for a LINEAR pause is unrecognized → it falls through
+    to the default no-resolution fence behavior (suppress-if-captured / else INERT re-pause via
+    the decline-mirror, NEVER an auto-action) — use `ABORT` for a linear run-terminal abort. On
+    a fan-out pause the scoped-abort branch's output is discarded (a degraded non-contributor)
+    → the run folds to PARTIAL with the surviving branches (FAILED if NO survivor)."""
+
 
 class FanOutBranchResumeState(BaseModel):
     """Per-branch terminal disposition + recovered output for a paused fan-out.
@@ -893,11 +911,13 @@ class ResumeContext(BaseModel):
     map supplied for a linear pause is inert). Map entries whose key matches no
     fence-paused branch this round are harmlessly ignored. Keyed by `idempotency_key`
     (not `branch_index`) so the map is uniform with the dispatcher's per-`(run, step,
-    tool)` key-bind. ABORT in a map entry retains its shipped run-level-terminal
-    semantic (v1.65 §1(b)) — per-branch-SCOPED abort (fail one branch, let siblings
-    resolve) is the separately-registered `B-FANOUT-EFFECT-FENCE-PER-BRANCH-SCOPED-ABORT`
-    follow-on; the genuinely-independent per-branch dispositions are SKIP_AS_FIRED vs
-    RE_FIRE."""
+    tool)` key-bind. ABORT in a map entry retains its shipped RUN-level-terminal
+    semantic (v1.65 §1(b), preserved byte-for-byte) — the whole run FAILS and all
+    continue-resolutions are suppressed. ABORT_BRANCH in a map entry is per-branch-SCOPED
+    (B-FANOUT-EFFECT-FENCE-PER-BRANCH-SCOPED-ABORT, CP spec v1.73 §1): fail JUST that
+    branch (record it terminal, never re-dispatched) while the SIBLINGS the operator
+    vouched for (SKIP_AS_FIRED / RE_FIRE) fire and the run folds survivors per
+    `cascade_policy`. So all four resolutions compose freely across branches in one map."""
 
     def effect_fence_resolution_for(self, idempotency_key: str) -> EffectFenceResolution | None:
         """The operator's effect-fence resolution for one held-reserve `idempotency_key`.
