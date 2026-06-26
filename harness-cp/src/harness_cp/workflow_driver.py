@@ -5235,15 +5235,19 @@ def _determine_fanout_resume(
                 )
             _timeout_recover_excluded = set(timed_out)
         # RECOVER_AS_TERMINAL → fall through: the timed_out branches flow into `branches` below
-        # as `completed`-no-output degraded non-contributors (never folded into the aggregate,
-        # never re-dispatched); `cascade_policy` then governs the degraded reaction (the §2
-        # separation-of-concerns — `output is None` ⟺ ran-and-errored OR recovered-deadline-cut,
-        # both degraded, treated identically by the cascade reconciliation).
+        # as their TRUE `timed_out`-no-output disposition (never folded into the aggregate,
+        # never re-dispatched); `cascade_policy` then governs the degraded reaction. `output is
+        # None` ⟺ ran-and-errored OR recovered-deadline-cut — both degraded, treated identically
+        # by the cascade reconciliation EXCEPT the PAUSE-reconstruct re-establish gate, which keys
+        # on `terminal_status == "completed"` (a genuine branch FAILURE = a pause trigger) so a
+        # RECOVER_AS_TERMINAL `timed_out` branch finalizes PARTIAL, never a spurious re-established
+        # PAUSE (CP spec v1.68 §1; out-of-family Codex [P2]). Preserving `_status` is otherwise
+        # inert — every other consumer keys on `output is None`, not `terminal_status`.
     branches = tuple(
         FanOutBranchResumeState(
             branch_index=branch_index,
             step_id=step_id,
-            terminal_status="completed",
+            terminal_status=_status,
             output=output,
         )
         for branch_index, (step_id, _status, output) in sorted(records.items())
@@ -6377,12 +6381,20 @@ def _execute_parallelization(
     # state-restoration reusing the SAME capture block a live branch-failure pause runs (→ the
     # reconstructed `branches` byte-match a real pause snapshot). The crash-resume entry already
     # fail-closed the INCOMPLETE case (§1; B-…-NOT-YET-DISPATCHED / -MAYBE-RAN residuals).
+    # The pause TRIGGER is a genuine branch FAILURE (`terminal_status == "completed"` + no
+    # collected output = ran-and-errored), NOT a RECOVER_AS_TERMINAL `timed_out` branch (which is
+    # a degraded non-contributor → PARTIAL via the tail, never a pause — a live timeout is
+    # `deadline_struck`→FAILED, never a pause). Out-of-family Codex [P2]: keying the re-establish
+    # on `output is None` ALONE would re-pause a recovered-timeout that never lost a pause snapshot.
     _crash_pause_reestablish = (
         crash_fan_out_resume is not None
         and resume_snapshot is None
         and cascade_policy is CascadePolicy.PAUSE
         and not branch_plan
-        and any(_bi not in collected for _bi in terminal_dispositions)
+        and any(
+            terminal_dispositions[_bi] == "completed" and _bi not in collected
+            for _bi in terminal_dispositions
+        )
     )
     if branch_failed or _crash_pause_reestablish:
         protocol = getattr(ctx, "pause_resume_protocol", None)
@@ -8061,8 +8073,15 @@ def _execute_orchestrator_workers(
         # empty → re-dispatch nothing), so build the SAME `FanOutResumeState` a live worker-failure
         # pause builds (paused-child + effect-fence EMPTY on a complete recovery, synthesis_step_id
         # from the live param) → the reconstructed snapshot's `branches` byte-match a real pause.
+        # The trigger is a genuine worker FAILURE (`completed` + no output), NOT a
+        # RECOVER_AS_TERMINAL `timed_out` worker (which finalizes PARTIAL via `_degraded` below;
+        # out-of-family Codex [P2]).
+        _crash_pause_trigger = any(
+            terminal_dispositions[_bi] == "completed" and _bi not in collected
+            for _bi in terminal_dispositions
+        )
         if (
-            _degraded
+            _crash_pause_trigger
             and crash_fan_out_resume is not None
             and resume_snapshot is None
             and cascade_policy is CascadePolicy.PAUSE

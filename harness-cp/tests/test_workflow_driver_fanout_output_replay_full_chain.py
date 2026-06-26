@@ -1466,6 +1466,7 @@ def _run_persona(
     registry: Any = None,
     pause_resume_protocol: Any = None,
     pause_snapshot_input: PauseSnapshot | None = None,
+    timeout_disposition: FanoutTimeoutDisposition = FanoutTimeoutDisposition.FAIL_CLOSED,
 ) -> Any:
     ctx = cast(
         DriverContext,
@@ -1476,6 +1477,7 @@ def _run_persona(
             workflow_id=workflow_id,
             topology=topology,
             persona_tier=persona_tier,
+            timeout_disposition=timeout_disposition,
         ),
         steps,
         run_id="run-1",
@@ -2419,6 +2421,41 @@ def test_crash_resume_pause_reconstruct_idempotent_recrash() -> None:
         r_a.pause_snapshot.peer_fan_out_resume.branches  # type: ignore[union-attr]
         == r_b.pause_snapshot.peer_fan_out_resume.branches  # type: ignore[union-attr]
     )
+
+
+def test_crash_resume_pause_recovered_timeout_is_partial_not_paused() -> None:
+    """Out-of-family Codex [P2] regression guard — a RECOVER_AS_TERMINAL `timed_out` branch is a
+    degraded NON-contributor, NOT a pause trigger (a live timeout is `deadline_struck`→FAILED,
+    never a pause). A COMPLETE crash-resume whose ONLY degraded branch is a recovered timeout
+    (no genuine `completed`+no-output FAILURE) finalizes PARTIAL, NOT a spurious re-established
+    PAUSED — even with a bound protocol. The re-establish keys on the failure disposition, not
+    `output is None`."""
+    store = _InMemoryBranchStore()
+    steps = [_step(f"branch-{i}", i) for i in range(3)]
+    _run_persona(
+        workflow_id="wf-pause-timeout",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3),  # all branches CLEAN — no genuine failure
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        timeout_disposition=FanoutTimeoutDisposition.RECOVER_AS_TERMINAL,
+    )
+    key = store.sole_run_key()
+    store.timeout_branch(key, 1)  # branch 1 → (step_id, "timed_out", None): a recovered timeout
+
+    resume = _CountingDispatcher(n=3)
+    r2 = _run_persona(
+        workflow_id="wf-pause-timeout",
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        pause_resume_protocol=_pause_protocol(),
+        timeout_disposition=FanoutTimeoutDisposition.RECOVER_AS_TERMINAL,
+    )
+    assert r2.status is RunStatus.PARTIAL  # recovered-timeout degraded → PARTIAL, NOT PAUSED
+    assert r2.pause_snapshot is None
+    assert resume.dispatched == []
 
 
 def test_crash_resume_cascade_cancel_orchestrator_workers_errored() -> None:
