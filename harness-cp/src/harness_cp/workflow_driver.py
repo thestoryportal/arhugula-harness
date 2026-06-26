@@ -714,9 +714,11 @@ _FANOUT_REPLAY_ENGINE_CLASSES: frozenset[EngineClass] = frozenset(
 # SUB_AGENT_DISPATCH is READ_ONLY at the PARENT gate but its child TOOL_STEPs are fenced at the
 # tool sink, so re-dispatch can hit the inner-fence-ambiguous window → the registered
 # B-FANOUT-CRASH-RESUME-MAYBE-RAN-FENCED-COMPOSE follow-on. TOOL_STEP is likewise fenced →
-# same follow-on. MANAGED_AGENTS performs an UNFENCED vendor-session external effect (create +
-# send) → the registered B-FANOUT-CRASH-RESUME-MAYBE-RAN-UNFENCED-EXTERNAL follow-on. The
-# allowlist is CONSERVATIVE: any unlisted (or out-of-bounds) kind stays fail-closed.
+# same follow-on. MANAGED_AGENTS performs an effect-bearing vendor-session dispatch (create +
+# send) now FENCED at its own §14.22 sink (the B-FANOUT-CRASH-RESUME-MAYBE-RAN-UNFENCED-EXTERNAL
+# build) → it is fence-RECOVERABLE, not re-fire-safe (see
+# `_FANOUT_MAYBE_RAN_FENCE_RECOVERABLE_KIND_VALUES`). The allowlist is CONSERVATIVE: any unlisted
+# (or out-of-bounds) kind stays fail-closed.
 _FANOUT_MAYBE_RAN_REFIRE_SAFE_KINDS: frozenset[StepKind] = frozenset(
     {StepKind.DECLARATIVE_STEP, StepKind.INFERENCE_STEP}
 )
@@ -769,16 +771,19 @@ def _refire_unsafe_branch_indices(
 # and SPLITS — suppress-and-continue (output captured ⟹ effect completed), ambiguous-PAUSE (the
 # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE fan-out analogue of the linear B-EFFECT-FENCE-HITL-ROUTE),
 # or fresh-fire (claim ABSENT ⟹ the prior attempt crashed BEFORE the fence reserve ⟹ the effect
-# did not fire). Only TOOL_STEP: its own dispatch hits the fence sink DIRECTLY. SUB_AGENT_DISPATCH
-# is fenced only at its CHILD's tool sinks (recursive child crash-resume — a larger, separately-
-# verified mechanism → the registered B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT follow-on);
-# MANAGED_AGENTS performs an UNFENCED vendor-session effect → the registered
-# B-FANOUT-CRASH-RESUME-MAYBE-RAN-UNFENCED-EXTERNAL follow-on. The fence is AUTO-ACTIVE here: a
-# fan-out crash-resume is reachable ONLY for `_FANOUT_REPLAY_ENGINE_CLASSES`
-# ({EVENT_SOURCED_REPLAY, WAL_SEGMENT}), a SUBSET of the runtime's durable-auto-fence set, and a
-# worker child context inherits `run_engine_class` (so the fence gate is open for the re-dispatch).
+# did not fire). TWO kinds reach a fence DIRECTLY at their own sink: TOOL_STEP (its dispatch hits
+# the runtime tool-fence) and MANAGED_AGENTS (its vendor-session dispatch — create + send — is now
+# wrapped in the SAME §14.22 fence keyed on (parent_idempotency_key, step_id), the
+# B-FANOUT-CRASH-RESUME-MAYBE-RAN-UNFENCED-EXTERNAL build; a LEAF effect — no harness-side
+# reconstruction — so its suppress folds the captured outcome verbatim, full result-fidelity).
+# SUB_AGENT_DISPATCH is fenced only at its CHILD's tool sinks (recursive child crash-resume — a
+# larger, separately-verified mechanism → the registered B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT
+# follow-on). The fence is AUTO-ACTIVE here: a fan-out crash-resume is reachable ONLY for
+# `_FANOUT_REPLAY_ENGINE_CLASSES` ({EVENT_SOURCED_REPLAY, WAL_SEGMENT}), a SUBSET of the runtime's
+# durable-auto-fence set, and a worker child context inherits `run_engine_class` (so the fence gate
+# is open for the re-dispatch).
 _FANOUT_MAYBE_RAN_FENCE_RECOVERABLE_KIND_VALUES: frozenset[str] = frozenset(
-    {StepKind.TOOL_STEP.value}
+    {StepKind.TOOL_STEP.value, StepKind.MANAGED_AGENTS.value}
 )
 
 
@@ -815,16 +820,19 @@ def _fence_unrecoverable_maybe_ran_indices(
     sink (suppress / ambiguous-PAUSE / fresh-fire-if-claim-absent).
 
     An ordinal is fence-recoverable iff ALL of: (a) within `[0, branch_count)`; (b) the DISPATCH
-    MARKER kind is TOOL_STEP (the ORIGINAL effect was a fenced tool effect — the at-most-once
-    changed-manifest guard inherited from `_refire_unsafe_branch_indices`); AND (c) the RESUMED
-    manifest's kind at that ordinal is ALSO TOOL_STEP. Conjunct (c) is the changed-kind guard:
-    a maybe-ran TOOL_STEP re-supplied at the same ordinal as a NON-TOOL kind (e.g. DECLARATIVE)
-    would re-dispatch a step that reaches NO tool sink → NO fence to make the re-dispatch
-    at-most-once → the original tool effect's ambiguity would be silently abandoned. Keying
-    fence-recovery on the marker kind ALONE (an earlier draft) re-opened the exact v1.62
-    changed-manifest hole; requiring the resumed kind to ALSO be TOOL_STEP closes it (the CP
-    driver knows `step_kind` — a typed `WorkflowStep` field — without reading the opaque
-    `step_payload`).
+    MARKER kind is in `_FANOUT_MAYBE_RAN_FENCE_RECOVERABLE_KIND_VALUES` (TOOL_STEP or
+    MANAGED_AGENTS — the ORIGINAL effect reached a fence at its own sink: the runtime tool-fence,
+    or the §14.22 vendor-session fence the B-FANOUT-CRASH-RESUME-MAYBE-RAN-UNFENCED-EXTERNAL build
+    added; the at-most-once changed-manifest guard inherited from `_refire_unsafe_branch_indices`);
+    (c) the RESUMED manifest's kind at that ordinal is ALSO in the set; AND (d) the marker kind ==
+    the resumed kind (the same-kind guard). Conjuncts (c)+(d) are the changed-kind guard: a
+    maybe-ran fenced branch re-supplied at the same ordinal as a NON-recoverable kind (e.g.
+    DECLARATIVE) — or as a DIFFERENT recoverable kind (TOOL_STEP ⇄ MANAGED_AGENTS) — would
+    re-dispatch a step that reaches a DIFFERENT sink (or no sink) → the original effect's fence
+    ambiguity would be silently abandoned + a fresh effect fired. Keying fence-recovery on the
+    marker kind ALONE (an earlier draft) re-opened the exact v1.62 changed-manifest hole; requiring
+    the resumed kind to ALSO be in the set AND equal to the marker kind closes it (the CP driver
+    knows `step_kind` — a typed `WorkflowStep` field — without reading the opaque `step_payload`).
 
     ACCEPTED PARITY (NOT a registered arc — CP spec v1.65 §3 documents it): a tool-SWAP under the
     same `step_id` (marker TOOL_STEP, resumed TOOL_STEP, but a DIFFERENT `tool_id`) composes a
@@ -837,12 +845,13 @@ def _fence_unrecoverable_maybe_ran_indices(
     but is a policy stricter than the cleared linear path, not a deferred capability — so not
     registered.
 
-    An ordinal stays UNRECOVERABLE (fail closed) iff it is NOT a same-kind TOOL_STEP in range: an
-    out-of-range / stale-store ordinal, an un-recorded / `None` marker kind (presence ≠ validity),
-    a changed-to-non-TOOL resumed kind, SUB_AGENT_DISPATCH (recursive child crash-resume residual),
-    MANAGED_AGENTS (unfenced vendor sink), or any other effect-bearing kind. Shared by the
-    incomplete-recovery + cardinality-only sites so the fence-recoverability classification is one
-    source of truth."""
+    An ordinal stays UNRECOVERABLE (fail closed) iff it is NOT a same-kind fence-recoverable branch
+    in range: an out-of-range / stale-store ordinal, an un-recorded / `None` marker kind (presence
+    ≠ validity), a changed-to-non-recoverable resumed kind, a CROSS-KIND swap between two
+    recoverable kinds (TOOL_STEP ⇄ MANAGED_AGENTS), SUB_AGENT_DISPATCH (recursive child
+    crash-resume residual → a separate registered follow-on), or any other effect-bearing kind.
+    Shared by the incomplete-recovery + cardinality-only sites so the fence-recoverability
+    classification is one source of truth."""
     return {
         bi
         for bi in unsafe_indices
@@ -850,6 +859,15 @@ def _fence_unrecoverable_maybe_ran_indices(
             0 <= bi < branch_count
             and dispatched_kinds.get(bi) in _FANOUT_MAYBE_RAN_FENCE_RECOVERABLE_KIND_VALUES
             and resumed_kinds.get(bi) in _FANOUT_MAYBE_RAN_FENCE_RECOVERABLE_KIND_VALUES
+            # Same-kind guard (load-bearing once the recoverable set has >1 kind): a
+            # CROSS-KIND swap (marker TOOL_STEP, resumed MANAGED_AGENTS, or the reverse)
+            # passes both set-membership conjuncts but re-dispatches into a DIFFERENT fence
+            # sink (a different idempotency-key namespace) → the ORIGINAL kind's ambiguous
+            # effect would be silently abandoned + a fresh effect of the new kind fired.
+            # Require the marker kind == the resumed kind so recovery only ever re-reaches
+            # the SAME sink the original effect claimed. (With the prior singleton TOOL_STEP
+            # set this equality was implied; it becomes load-bearing at v1.67 / MANAGED_AGENTS.)
+            and dispatched_kinds.get(bi) == resumed_kinds.get(bi)
         )
     }
 

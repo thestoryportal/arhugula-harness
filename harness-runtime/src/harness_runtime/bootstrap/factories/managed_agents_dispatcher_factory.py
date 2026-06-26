@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING
 
 from harness_core.deployment_surface import DeploymentSurface
 
+from harness_runtime.lifecycle.effect_fence import RuntimeEffectFence
 from harness_runtime.lifecycle.managed_agents_dispatch import (
     ManagedAgentsStageMaterializeError,
     ManagedAgentsStepDispatcher,
@@ -78,6 +79,16 @@ async def materialize_managed_agents_dispatcher_stage(
         return ManagedAgentsStepDispatcher(
             client=managed_config.client,
             tracer_provider=ctx.tracer_provider,
+            # B-FANOUT-CRASH-RESUME-MAYBE-RAN-UNFENCED-EXTERNAL (R-FS-1) — the SAME claim
+            # dir as the tool dispatcher (`.harness/effect-fence`); the managed-agents key
+            # namespace is disjoint (the `:managed_agents` domain tag), so sharing the dir
+            # is collision-free. The per-run gate (`effect_fencing` opt-in OR a durable run
+            # engine class) decides whether a reserve fires, keeping non-durable runs
+            # fence-free (the §14.22.7 lazy-claim-dir footprint).
+            effect_fence=RuntimeEffectFence(
+                fence_dir=config.repository_root / ".harness" / "effect-fence"
+            ),
+            effect_fencing_explicit=config.effect_fencing,
         )
     except Exception as e:
         raise ManagedAgentsStageMaterializeError(

@@ -46,14 +46,18 @@
 snapshot:
   frozen_total: 11
   frozen_done: 11
-  standalone_closed: 47
+  standalone_closed: 48
   standalone_gated: 0
   standalone_resolved: 4
-  standalone_registered: 6
+  standalone_registered: 5
   source: ".harness/beyond-mvp-capability-boundary-ledger.md"
-  # FRONTIER NOTE (2026-06-25, B-FANOUT-EFFECT-FENCE-PER-BRANCH-RESOLUTION closed as the
-  # per-branch-DISTINCT resolution map; net-zero — closes 1 + registers 1 [the ABORT-scoping
-  # residual B-FANOUT-EFFECT-FENCE-PER-BRANCH-SCOPED-ABORT] → standalone_registered stays 6).
+  # FRONTIER NOTE (2026-06-25, B-FANOUT-CRASH-RESUME-MAYBE-RAN-UNFENCED-EXTERNAL closed as a
+  # WHOLE close — the §14.22 fence EXTENDED to the §14.20 MANAGED_AGENTS vendor-session sink +
+  # MANAGED_AGENTS added to the CP fence-recoverable classifier + a same-kind guard; NO new
+  # registration [a LEAF, fully fenced, no residual] → standalone_registered 6 → 5, the second
+  # net decrement of the family after #738. Prior (B-FANOUT-EFFECT-FENCE-PER-BRANCH-RESOLUTION
+  # closed as the per-branch-DISTINCT resolution map; net-zero — closes 1 + registers 1 [the
+  # ABORT-scoping residual B-FANOUT-EFFECT-FENCE-PER-BRANCH-SCOPED-ABORT] → registered stayed 6).
   # The frozen 11-arc order is COMPLETE; the standalone B-* register is
   # the live frontier. The fan-out crash-resume capability family is being built out under
   # FULL-SPEC. CLOSED so far:
@@ -631,13 +635,20 @@ arcs:
   - id: B-FANOUT-CRASH-RESUME-MAYBE-RAN-UNFENCED-EXTERNAL
     title: "Resolve a maybe-ran fan-out worker of MANAGED_AGENTS (extend the fence to the vendor-session sink)"
     kind: standalone
-    status: registered
+    status: closed
     decompose_at_open: true
     owner_axis: "CP + runtime"
     operator_gated: false  # additive (extend the C-RT-31 effect fence to the managed-agents sink, then barrier-compose) — no committed-invariant sacrifice → no operator gate.
     parent_arc: B-FANOUT-CRASH-RESUME-MAYBE-RAN-EFFECT-BEARING
-    anticipated_scope: "Resolve a MAYBE-RAN fan-out worker of kind MANAGED_AGENTS on a strict-tier crash-resume (the TOOL_STEP slice stays fail-closed for MANAGED). The managed-agents dispatcher performs an UNFENCED vendor-session external effect (create_session + send_event), so there is NO held reserve to make a re-dispatch at-most-once (unlike a TOOL_STEP, whose call_tool sink IS fenced by C-RT-31 §14.22). Resolving it needs the runtime effect fence EXTENDED to the managed-agents sink (a runtime-side change — reserve-before create_session, capture-after), then the same barrier-composition + resume-resolution as the TOOL_STEP slice. The harder half is the fence extension (the vendor session is a different sink shape than a single tool call)."
-    why: "Surfaced at B-FANOUT-CRASH-RESUME-MAYBE-RAN-EFFECT-BEARING (the fence-surface split): MANAGED_AGENTS is the one effect-bearing kind with NO fence at all → a genuine runtime-side design problem (extend the fence), named per FULL-SPEC rather than silently left fail-closed."
+    pr: "#<pending> (r-fs-1/b-fanout-maybe-ran-unfenced-external — flips registered → closed as a WHOLE close; the §14.22 fence EXTENDED to the §14.20 MANAGED_AGENTS sink + MANAGED_AGENTS added to the CP fence-recoverable classifier + a same-kind guard; registers NOTHING new → standalone_registered 6 → 5, the second net decrement of the family after #738)"
+    spec_delta: "bundled-absorption runtime v1.81 → v1.82 (PRIMARY — the §14.22 fence integration into the §14.20 ManagedAgentsStepDispatcher: reserve-before-create_session, capture-after-success, the lost-reserve directive/captured-output split, the payload-independent leading-domain-tag key) + CP v1.66 → v1.67 (CONSUMER — MANAGED_AGENTS added to _FANOUT_MAYBE_RAN_FENCE_RECOVERABLE_KIND_VALUES + the same-kind-equality conjunct in _fence_unrecoverable_maybe_ran_indices) + 2 clearance markers. NO contract removal / closed-enum / committed-invariant / new fail-class change; at-most-once PRESERVED + STRENGTHENED (MANAGED_AGENTS goes from fail-closed to fence-recoverable; the same-kind guard prevents cross-sink mis-recovery)."
+    gives: "A maybe-ran fan-out MANAGED_AGENTS worker on a strict-tier crash-resume now RECOVERS instead of failing closed. MANAGED_AGENTS was the ONE effect-bearing fan-out kind with NO fence (its create_session + send_event vendor effect reaches no tool sink). This extends the §14.22 effect fence to the managed-agents dispatch (one coarse claim keyed on H(managed_agents : parent_idempotency_key : step_id) — a LEAF effect, no harness-side reconstruction, so result-fidelity holds by construction, UNLIKE the reverted #746 SUBAGENT recursive-child slice) and adds MANAGED_AGENTS to the CP fence-recoverable classifier with a same-kind-equality guard (a cross-kind TOOL_STEP ⇄ MANAGED_AGENTS swap would re-dispatch into a different fence sink → fail closed). Disposition matrix sound: non-success / poll-exhausted raise WITHOUT capturing → ambiguous → §26.2 PAUSE → the existing per-branch resolution. Decorrelated: advisor full-transcript (the pick over a fresh SUBAGENT attempt; the LEAF-vs-recursive distinction that makes this sound; the disposition-matrix risk surface; the same-kind + payload-independent-key constraints) + out-of-family Codex 3-round convergence (R1 a test-helper pyright redeclaration, R2 the fence-key collision [a trailing tag would collide with tool_id='managed_agents'], R3 clean) + direct grounding (the fan-out worker dispatch is kind-generic → MANAGED_AGENTS reachable, the arc is not hollow)."
+    as_built:
+      - "harness-runtime/src/harness_runtime/lifecycle/managed_agents_dispatch.py (ManagedAgentsStepDispatcher.effect_fence + .effect_fencing_explicit additive fields + the _compose_managed_agents_idempotency_key leading-domain-tag composer + _skipped_as_fired_outcome + the dispatch fence gate guarded on effect_fence-is-not-None + capture-on-success; local _DURABLE_AUTO_FENCE_ENGINE_CLASSES mirror [drift-guarded] to avoid the import cycle through runtime_tool_dispatcher)"
+      - "harness-runtime/src/harness_runtime/bootstrap/factories/managed_agents_dispatcher_factory.py (threads a RuntimeEffectFence over the shared .harness/effect-fence dir + config.effect_fencing)"
+      - "harness-cp/src/harness_cp/workflow_driver.py (MANAGED_AGENTS added to _FANOUT_MAYBE_RAN_FENCE_RECOVERABLE_KIND_VALUES + the same-kind-equality conjunct in _fence_unrecoverable_maybe_ran_indices + the docstring/comment refresh)"
+      - "design-substrate/Spec_Harness_Runtime_v1.md v1.81 → v1.82 + design-substrate/Spec_Control_Plane_v1_67.md + 2 clearance markers"
+      - "tests: harness-runtime test_managed_agents_dispatch_effect_fence.py (14 real-fence dispatcher witnesses through a counting vendor port + the tool-key-disjointness regression guard + the drift guard) + harness-cp test_workflow_driver_managed_agents_fence_classifier.py (8 classifier units incl. cross-kind fail-closed) + test_workflow_driver_fanout_output_replay_full_chain.py (2 new full-chain witnesses — MANAGED_AGENTS recovers + cross-kind-swap fails closed; 5 prior fail-closed full-chain tests switched MANAGED_AGENTS → SUB_AGENT_DISPATCH, the still-unfenced effect-bearing kind)"
     ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
 
   - id: B-FANOUT-EFFECT-FENCE-PER-BRANCH-RESOLUTION
