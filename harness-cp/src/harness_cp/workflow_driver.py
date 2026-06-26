@@ -2322,6 +2322,16 @@ def _execute_workflow_body(
                 ).cascade_policy
                 if _crash_cascade_policy is not CascadePolicy.PROCEED:
                     _crash_degraded = any(b.output is None for b in _crash_fan_out_resume.branches)
+                    # The PAUSE TRIGGER is a genuine branch FAILURE (`terminal_status ==
+                    # "completed"` + no output = ran-and-errored), NOT a RECOVER_AS_TERMINAL
+                    # `timed_out` branch (a degraded non-contributor — a live timeout is
+                    # `deadline_struck`→FAILED, never a pause). Distinct from `_crash_degraded`
+                    # (output-None, which a recovered timeout also satisfies) so a timeout-only
+                    # degraded recovery is NOT a lost-pause trigger (out-of-family Codex [P2]).
+                    _crash_pause_trigger = any(
+                        b.terminal_status == "completed" and b.output is None
+                        for b in _crash_fan_out_resume.branches
+                    )
                     _crash_expected = getattr(_crash_fan_out_resume, "worker_count", None)
                     if _crash_expected is None:
                         _crash_expected = getattr(_crash_fan_out_resume, "branch_count", 0)
@@ -2349,14 +2359,25 @@ def _execute_workflow_body(
                             ),
                             0,
                         )
-                    if _crash_cascade_policy is CascadePolicy.PAUSE and _crash_degraded:
-                        # A branch FAILED → `pause` was triggered, but the durable PauseSnapshot
-                        # write was LOST in the crash. A naive reconstruct is SPEC-FORECLOSED:
-                        # §25.15.1 PAUSE is "allowed to finish in-flight, then pause", but a
-                        # crash-INTERRUPTED store does NOT hold the finished-in-flight branches,
-                        # so a reconstruct would resume interrupted-not-finished branches (probe-
-                        # resolved, advisor). Fail CLOSED → HITL. A correct reconstruct is the
-                        # registered B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT sub-arc.
+                    if (
+                        _crash_cascade_policy is CascadePolicy.PAUSE
+                        and _crash_pause_trigger
+                        and not _crash_complete
+                    ):
+                        # B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT (R-FS-1, CP spec v1.68 §1/§2) —
+                        # a branch FAILED → `pause` was triggered, but the durable PauseSnapshot
+                        # write was LOST in the crash. The COMPLETE-recovery case (every declared
+                        # ordinal recovered) is LIFTED below (falls through to the strategy, which
+                        # re-establishes the PAUSED state — the store provably holds every
+                        # finished-in-flight branch, so the §25.15.1 foreclosure does not apply).
+                        # The INCOMPLETE case stays fail-closed: §25.15.1 PAUSE is "allowed to
+                        # finish in-flight, then pause", but a crash-INTERRUPTED store with an
+                        # ABSENT ordinal does NOT hold every finished-in-flight branch — the absent
+                        # branch is either NOT-YET-DISPATCHED (provably-not-run, omittable on a
+                        # re-pause-without-dispatch — registered B-FANOUT-CRASH-RESUME-PAUSE-
+                        # RECONSTRUCT-NOT-YET-DISPATCHED) or INTERRUPTED-in-flight (maybe-ran +
+                        # maybe-a-second-trigger, doubly-ambiguous — registered B-FANOUT-CRASH-
+                        # RESUME-PAUSE-RECONSTRUCT-MAYBE-RAN). Both stay fail-closed → HITL.
                         return (
                             RunResult(
                                 workflow_id=manifest_entry.workflow_id,
@@ -2367,11 +2388,14 @@ def _execute_workflow_body(
                                 final_state=None,
                                 fail_class=(
                                     "fan-out-crash-resume-pause-trigger-ambiguous: a branch "
-                                    "failed before the crash under CascadePolicy.PAUSE, but the "
-                                    "durable pause snapshot was lost — a reconstruct cannot honor "
-                                    "§25.15.1 'finish in-flight, then pause' from a crash-"
-                                    "interrupted store; fail closed (registered B-FANOUT-CRASH-"
-                                    "RESUME-PAUSE-RECONSTRUCT follow-on)"
+                                    "failed before the crash under CascadePolicy.PAUSE with an "
+                                    "INCOMPLETE recovery (an absent branch ordinal) — a "
+                                    "reconstruct cannot honor §25.15.1 'finish in-flight, then "
+                                    "pause' from a "
+                                    "crash-interrupted store missing a finished-in-flight branch; "
+                                    "fail closed (the complete-recovery window reconstructs; the "
+                                    "incomplete case is the registered B-FANOUT-CRASH-RESUME-PAUSE-"
+                                    "RECONSTRUCT-NOT-YET-DISPATCHED / -MAYBE-RAN follow-ons)"
                                 ),
                             ),
                             0,
@@ -5221,15 +5245,19 @@ def _determine_fanout_resume(
                 )
             _timeout_recover_excluded = set(timed_out)
         # RECOVER_AS_TERMINAL → fall through: the timed_out branches flow into `branches` below
-        # as `completed`-no-output degraded non-contributors (never folded into the aggregate,
-        # never re-dispatched); `cascade_policy` then governs the degraded reaction (the §2
-        # separation-of-concerns — `output is None` ⟺ ran-and-errored OR recovered-deadline-cut,
-        # both degraded, treated identically by the cascade reconciliation).
+        # as their TRUE `timed_out`-no-output disposition (never folded into the aggregate,
+        # never re-dispatched); `cascade_policy` then governs the degraded reaction. `output is
+        # None` ⟺ ran-and-errored OR recovered-deadline-cut — both degraded, treated identically
+        # by the cascade reconciliation EXCEPT the PAUSE-reconstruct re-establish gate, which keys
+        # on `terminal_status == "completed"` (a genuine branch FAILURE = a pause trigger) so a
+        # RECOVER_AS_TERMINAL `timed_out` branch finalizes PARTIAL, never a spurious re-established
+        # PAUSE (CP spec v1.68 §1; out-of-family Codex [P2]). Preserving `_status` is otherwise
+        # inert — every other consumer keys on `output is None`, not `terminal_status`.
     branches = tuple(
         FanOutBranchResumeState(
             branch_index=branch_index,
             step_id=step_id,
-            terminal_status="completed",
+            terminal_status=_status,
             output=output,
         )
         for branch_index, (step_id, _status, output) in sorted(records.items())
@@ -6355,7 +6383,30 @@ def _execute_parallelization(
         return _finish(
             RunStatus.FAILED, fail_class="parallelization-barrier-deadline", salvage=False
         )
-    if branch_failed:
+    # B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT (R-FS-1, CP spec v1.68 §1) — a COMPLETE-recovery
+    # crash-resume of a degraded PAUSE fan-out RE-ESTABLISHES the lost PAUSED state (Reading A:
+    # the crash interrupted the run BEFORE it produced PAUSED, so the fresh re-execution restores
+    # it; NOT the operator's resume, which would finalize PARTIAL). `not branch_plan` ⟺ every
+    # branch is recovered-terminal (complete; nothing re-dispatched), so the snapshot is a pure
+    # state-restoration reusing the SAME capture block a live branch-failure pause runs (→ the
+    # reconstructed `branches` byte-match a real pause snapshot). The crash-resume entry already
+    # fail-closed the INCOMPLETE case (§1; B-…-NOT-YET-DISPATCHED / -MAYBE-RAN residuals).
+    # The pause TRIGGER is a genuine branch FAILURE (`terminal_status == "completed"` + no
+    # collected output = ran-and-errored), NOT a RECOVER_AS_TERMINAL `timed_out` branch (which is
+    # a degraded non-contributor → PARTIAL via the tail, never a pause — a live timeout is
+    # `deadline_struck`→FAILED, never a pause). Out-of-family Codex [P2]: keying the re-establish
+    # on `output is None` ALONE would re-pause a recovered-timeout that never lost a pause snapshot.
+    _crash_pause_reestablish = (
+        crash_fan_out_resume is not None
+        and resume_snapshot is None
+        and cascade_policy is CascadePolicy.PAUSE
+        and not branch_plan
+        and any(
+            terminal_dispositions[_bi] == "completed" and _bi not in collected
+            for _bi in terminal_dispositions
+        )
+    )
+    if branch_failed or _crash_pause_reestablish:
         protocol = getattr(ctx, "pause_resume_protocol", None)
         if protocol is None:
             # No pause/resume opt-in bound → the snapshot cannot be captured, so a
@@ -8023,6 +8074,80 @@ def _execute_orchestrator_workers(
         # the run is degraded → PARTIAL, not a bare silent SUCCESS dropping the
         # failure. Non-resume orchestrator-only → empty terminal set → SUCCESS.
         _degraded = any(_bi not in collected for _bi in terminal_dispositions)
+        # B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT (R-FS-1, CP spec v1.68 §1) — a COMPLETE-recovery
+        # crash-resume of a degraded PAUSE fan-out RE-ESTABLISHES the lost PAUSED state HERE (the
+        # ORCHESTRATOR_WORKERS analogue of the parallelization gate; a complete recovery short-
+        # circuits at this `not branch_plan` block, never reaching the worker-failed pause site).
+        # Reading A: restore the PAUSED the crash interrupted, NOT a silent PARTIAL — the operator's
+        # `pause` HITL election is preserved. The recovered set is degraded + complete (branch_plan
+        # empty → re-dispatch nothing), so build the SAME `FanOutResumeState` a live worker-failure
+        # pause builds (paused-child + effect-fence EMPTY on a complete recovery, synthesis_step_id
+        # from the live param) → the reconstructed snapshot's `branches` byte-match a real pause.
+        # The trigger is a genuine worker FAILURE (`completed` + no output), NOT a
+        # RECOVER_AS_TERMINAL `timed_out` worker (which finalizes PARTIAL via `_degraded` below;
+        # out-of-family Codex [P2]).
+        _crash_pause_trigger = any(
+            terminal_dispositions[_bi] == "completed" and _bi not in collected
+            for _bi in terminal_dispositions
+        )
+        if (
+            _crash_pause_trigger
+            and crash_fan_out_resume is not None
+            and resume_snapshot is None
+            and cascade_policy is CascadePolicy.PAUSE
+        ):
+            _reestablish_protocol = getattr(ctx, "pause_resume_protocol", None)
+            _reestablish_steps = (
+                1 if orchestrator_writer is not None else 0
+            ) + _rematerialized_steps
+            if _reestablish_protocol is None:
+                # No protocol bound → cannot capture a snapshot → fail HONESTLY (never a
+                # false-resumable PAUSED), mirroring the worker-failed pause site.
+                return RunResult(
+                    workflow_id=workflow_id,
+                    run_id=run_id,
+                    status=RunStatus.FAILED,
+                    terminal_step_index=None,
+                    partial_state=_aggregate_orchestrator_workers(orchestrator_output, collected),
+                    final_state=None,
+                    fail_class="orchestrator-workers-pause-resume-protocol-not-bound",
+                ), _reestablish_steps
+            _reestablish_fan_out_resume = FanOutResumeState(
+                orchestrator_output=dict(orchestrator_output),
+                orchestrator_step_id=str(orchestrator_step.step_id),
+                branches=tuple(
+                    FanOutBranchResumeState(
+                        branch_index=_bi,
+                        step_id=str(worker_steps[_bi].step_id),
+                        terminal_status=_status,
+                        output=(collected[_bi][1] if _bi in collected else None),
+                    )
+                    for _bi, _status in sorted(terminal_dispositions.items())
+                ),
+                worker_count=len(worker_steps),
+                synthesis_step_id=(
+                    str(synthesis_step.step_id) if synthesis_step is not None else None
+                ),
+            )
+            _reestablish_snapshot = _run_protocol_method_sync(
+                cast(PauseResumeProtocol, _reestablish_protocol).capture_pause_snapshot(
+                    workflow_id=workflow_id,
+                    run_id=run_id,
+                    step_index=0,
+                    pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
+                    fan_out_resume=_reestablish_fan_out_resume,
+                )
+            )
+            return RunResult(
+                workflow_id=workflow_id,
+                run_id=run_id,
+                status=RunStatus.PAUSED,
+                terminal_step_index=None,
+                partial_state=_aggregate_orchestrator_workers(orchestrator_output, collected),
+                final_state=None,
+                fail_class=None,
+                pause_snapshot=_reestablish_snapshot,
+            ), _reestablish_steps
         _no_worker_status = RunStatus.PARTIAL if _degraded else RunStatus.SUCCESS
         # B-POSTJOIN-LLM-SYNTHESIS (CP spec v1.54 §3/§4) — the no-worker-fan-out
         # terminal aggregate also honors an opt-in synthesis on SUCCESS (composing
