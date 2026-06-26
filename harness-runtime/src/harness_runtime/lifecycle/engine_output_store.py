@@ -435,6 +435,44 @@ class EngineOutputStore:
             kinds[branch_index] = kind
         return kinds
 
+    def dispatched_branch_step_ids(self, run_key: str) -> dict[int, str | None]:
+        """Return ``{branch_index: dispatch-time step_id}`` for every DISPATCHED marker.
+
+        The fence-recoverable maybe-ran classifier (B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT-
+        MAYBE-RAN-FENCE-STEP-ID) keys on this — the ORIGINAL (dispatch-time) ``step_id``
+        recorded in the marker, so a fence-recoverable (TOOL_STEP / MANAGED_AGENTS) ordinal's
+        held effect-fence reserve key ``(parent_idempotency_key, step_id)`` is reproducible at
+        crash-resume / pause-reconstruct time WITHOUT reading the opaque ``step_payload``. Two
+        uses: (1) carried into the reconstructed ``effect_fence_paused_branches`` entry's
+        ``step_id`` so the api.resume material-diff guard fail-closes on a changed step_id (the
+        deferred-resume double-fire fix); (2) the crash-time changed-step_id conjunct in
+        ``_fence_unrecoverable_maybe_ran_indices`` (an operator-edited crash-resume manifest that
+        kept the kind but changed the step_id would otherwise re-dispatch under a DIFFERENT fence
+        key → double-fire). A marker missing / with an unreadable / non-str ``step_id`` (a torn
+        write) maps to ``None`` → the classifier treats it as NOT fence-recoverable (fail closed —
+        cannot prove the original key). Presence-only on the index (mirrors
+        ``present_dispatched_indexes`` / ``dispatched_branch_kinds``); the step_id is
+        best-effort."""
+        branches_dir = self._branches_dir(run_key)
+        if not branches_dir.exists():
+            return {}
+        step_ids: dict[int, str | None] = {}
+        for path in branches_dir.glob("branch-*.dispatched"):
+            branch_index = self._dispatched_index_from_name(path.name)
+            if branch_index is None:
+                continue
+            step_id: str | None = None
+            try:
+                record = json.loads(path.read_text(encoding="utf-8").splitlines()[-1])
+                raw = record.get("step_id")
+                step_id = raw if isinstance(raw, str) else None
+            except (OSError, UnicodeDecodeError, ValueError, IndexError, KeyError, AttributeError):
+                # torn / pre-arc / invalid-encoding marker → unknown → fail-closed at the
+                # classifier (same corruption boundary as ``dispatched_branch_kinds``).
+                step_id = None
+            step_ids[branch_index] = step_id
+        return step_ids
+
     def record_dispatch_instrumented(self, run_key: str) -> None:
         """Stamp this run as DISPATCH-INSTRUMENTED (the cross-version guard), durably.
 

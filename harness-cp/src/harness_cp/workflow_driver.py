@@ -805,11 +805,34 @@ def _resumed_branch_kinds_by_ordinal(
     }
 
 
+def _resumed_branch_step_ids_by_ordinal(
+    branch_steps: Sequence[WorkflowStep], *, branch_count: int, orchestrated: bool
+) -> dict[int, str]:
+    """B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT-MAYBE-RAN-FENCE-STEP-ID (R-FS-1) — the step_id
+    sibling of `_resumed_branch_kinds_by_ordinal`: map each WORKER/PEER branch ordinal to the
+    RESUMED manifest's `step_id` at that ordinal, so `_fence_unrecoverable_maybe_ran_indices` can
+    require the dispatch-marker step_id to equal the resumed step_id (the changed-step_id guard).
+    Same orchestrator-offset convention (ORCHESTRATOR_WORKERS / HIERARCHICAL carry the orchestrator
+    at `branch_steps[0]`, so worker ordinal `bi` is `branch_steps[bi + 1]`; a PEER fan-out has no
+    orchestrator → offset 0). An ordinal whose mapped step is out of range is OMITTED (the helper's
+    fail-closed default — a missing resumed step_id never equals the marker's, so the ordinal stays
+    unrecoverable)."""
+    offset = 1 if orchestrated else 0
+    return {
+        bi: str(branch_steps[bi + offset].step_id)
+        for bi in range(branch_count)
+        if 0 <= bi + offset < len(branch_steps)
+    }
+
+
 def _fence_unrecoverable_maybe_ran_indices(
     unsafe_indices: set[int],
     dispatched_kinds: Mapping[int, str | None],
     resumed_kinds: Mapping[int, str],
     branch_count: int,
+    *,
+    dispatched_step_ids: Mapping[int, str | None],
+    resumed_step_ids: Mapping[int, str],
 ) -> set[int]:
     """B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE (R-FS-1) — the subset of `unsafe_indices` (the
     re-fire-UNSAFE maybe-ran ordinals from `_refire_unsafe_branch_indices`) that ALSO cannot be
@@ -869,6 +892,21 @@ def _fence_unrecoverable_maybe_ran_indices(
             # the SAME sink the original effect claimed. (With the prior singleton TOOL_STEP
             # set this equality was implied; it becomes load-bearing at v1.67 / MANAGED_AGENTS.)
             and dispatched_kinds.get(bi) == resumed_kinds.get(bi)
+            # B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT-MAYBE-RAN-FENCE-STEP-ID (R-FS-1) — the
+            # changed-STEP_ID guard (out-of-family Codex [P1], #756). The runtime effect fence
+            # keys on (parent_idempotency_key, step_id); the same-kind guard above does NOT catch
+            # a kind-preserving step_id change. An operator-edited crash-resume manifest that kept
+            # the kind but RENAMED/REORDERED the step at this ordinal would re-dispatch under a
+            # DIFFERENT fence key → miss the held claim → DOUBLE-FIRE the maybe-fired effect.
+            # Require the DISPATCH-MARKER step_id (best-effort; `None` on a torn / pre-arc marker
+            # → fail closed, cannot prove the original key) to equal the resumed manifest's step_id
+            # at this ordinal. At PAUSE-reconstruct the resumed manifest IS the crash manifest, so
+            # this passes trivially (same step_id) — it only bites the CRASH-TIME edited-manifest
+            # case; the deferred api.resume timing is covered by the resume-side material-diff
+            # guard on the reconstructed `effect_fence_paused_branches` (the two timings are
+            # distinct, same defect class).
+            and dispatched_step_ids.get(bi) is not None
+            and dispatched_step_ids.get(bi) == resumed_step_ids.get(bi)
         )
     }
 
@@ -2124,6 +2162,13 @@ def _execute_workflow_body(
     # gate re-establishes the lost PAUSED state OMITTING them; `api.resume` re-dispatches them
     # (the operator's resume decision is the blast-radius gate, NOT crash-resume).
     _crash_pause_reconstruct_no_dispatch = False
+    # B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT-MAYBE-RAN-FENCE-STEP-ID (R-FS-1) — the
+    # FENCE-RECOVERABLE (TOOL_STEP / MANAGED_AGENTS) maybe-ran ordinals carried INTO the
+    # reconstructed snapshot's `effect_fence_paused_branches` (NOT omitted like the re-fire-safe
+    # set): api.resume re-dispatches each THROUGH the resume material-diff guard (changed-step_id /
+    # changed-kind → fail closed) + the auto-active fence (at-most-once at the tool sink). Empty
+    # unless the PAUSE-reconstruct gate below classifies a fence-recoverable maybe-ran ordinal.
+    _crash_pause_reconstruct_fence_paused: tuple[EffectFencePausedBranchResumeState, ...] = ()
     if (
         strategy
         in {
@@ -2261,11 +2306,24 @@ def _execute_workflow_body(
                             TopologyPattern.HIERARCHICAL_DELEGATION,
                         },
                     )
+                    _dispatched_resumed_step_ids = _resumed_branch_step_ids_by_ordinal(
+                        _crash_branch_steps,
+                        branch_count=_card_branch_count,
+                        orchestrated=manifest_entry.topology_pattern
+                        in {
+                            TopologyPattern.ORCHESTRATOR_WORKERS,
+                            TopologyPattern.HIERARCHICAL_DELEGATION,
+                        },
+                    )
                     _dispatched_fail_closed = _fence_unrecoverable_maybe_ran_indices(
                         _dispatched_unsafe,
                         _dispatched_kinds,
                         _dispatched_resumed_kinds,
                         _card_branch_count,
+                        dispatched_step_ids=_crash_replay_store.dispatched_branch_step_ids(
+                            run_idempotency_key
+                        ),
+                        resumed_step_ids=_dispatched_resumed_step_ids,
                     )
                     if not (_instrumented and not _dispatched_fail_closed):
                         return (
@@ -2429,27 +2487,80 @@ def _execute_workflow_body(
                             _crash_replay_store.present_dispatched_indexes(run_idempotency_key)
                             - _pr_recovered_indexes
                         )
-                        # The maybe-ran ordinals that are NOT re-fire-safe (`_refire_unsafe_branch_
-                        # indices`: TOOL_STEP / MANAGED_AGENTS fence-recoverable, SUB_AGENT,
-                        # un-kinded, out-of-range). ONLY re-fire-safe (no external effect to
-                        # double-fire on the DEFERRED api.resume re-dispatch) is recoverable in this
-                        # obl-5 re-pause mode — the fence-recoverable kinds need the step_id carrier
-                        # (the FENCE-STEP-ID follow-on), so they fall into the unsafe set → fail
-                        # closed. NOT the §25.15 `_fence_unrecoverable_maybe_ran_indices` (that
-                        # narrows TOOL/MANAGED back IN — correct for its crash-time same-manifest
-                        # re-dispatch, UNSOUND for this deferred-omitted resume).
+                        # The maybe-ran ordinals split THREE ways. (1) RE-FIRE-SAFE
+                        # (DECLARATIVE_STEP / INFERENCE_STEP — `_refire_unsafe_branch_indices`
+                        # excludes them) → re-pause OMITTING (api.resume re-dispatches fresh; no
+                        # external effect to double-fire). (2) FENCE-RECOVERABLE (TOOL_STEP /
+                        # MANAGED_AGENTS — re-fire-unsafe but the original effect reached a fence
+                        # at its own sink) → carried into the reconstructed
+                        # `effect_fence_paused_branches` (B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT-
+                        # MAYBE-RAN-FENCE-STEP-ID, this arc): api.resume re-dispatches each THROUGH
+                        # the resume material-diff guard (changed-step_id / changed-kind → fail
+                        # closed, closing the #756 Codex [P1] deferred-resume hole) + the
+                        # auto-active fence (at-most-once at the tool sink). (3) GENUINELY-
+                        # UNRECOVERABLE (SUB_AGENT recursive child / un-kinded / out-of-range / a
+                        # crash-time CHANGED-step_id) → STILL fail closed. The split reuses
+                        # `_fence_unrecoverable_maybe_ran_indices` (the §25.15 SoT classifier): at
+                        # reconstruct the resumed manifest IS the crash manifest, so its same-kind
+                        # / same-step_id conjuncts pass trivially — the real changed-manifest
+                        # protection rides on the resume-side guard on the carried entries.
                         _pr_maybe_ran_kinds = _crash_replay_store.dispatched_branch_kinds(
                             run_idempotency_key
                         )
                         _pr_maybe_ran_unsafe = _refire_unsafe_branch_indices(
                             _pr_maybe_ran, _pr_maybe_ran_kinds, _crash_expected
                         )
-                        if _pr_instrumented and not _pr_maybe_ran_unsafe:
-                            # NOT-YET-DISPATCHED + RE-FIRE-SAFE MAYBE-RAN: re-pause OMITTING every
-                            # absent ordinal; `api.resume` re-dispatches them under obl-5 (re-fire-
-                            # safe has no external effect — at-most-once-external under ANY resume
-                            # manifest, so the deferred step_id hazard does not apply).
+                        _pr_orchestrated = manifest_entry.topology_pattern in {
+                            TopologyPattern.ORCHESTRATOR_WORKERS,
+                            TopologyPattern.HIERARCHICAL_DELEGATION,
+                        }
+                        _pr_marker_step_ids = _crash_replay_store.dispatched_branch_step_ids(
+                            run_idempotency_key
+                        )
+                        _pr_resumed_kinds = _resumed_branch_kinds_by_ordinal(
+                            _crash_branch_steps,
+                            branch_count=_crash_expected,
+                            orchestrated=_pr_orchestrated,
+                        )
+                        _pr_resumed_step_ids = _resumed_branch_step_ids_by_ordinal(
+                            _crash_branch_steps,
+                            branch_count=_crash_expected,
+                            orchestrated=_pr_orchestrated,
+                        )
+                        _pr_fence_unrecoverable = _fence_unrecoverable_maybe_ran_indices(
+                            _pr_maybe_ran_unsafe,
+                            _pr_maybe_ran_kinds,
+                            _pr_resumed_kinds,
+                            _crash_expected,
+                            dispatched_step_ids=_pr_marker_step_ids,
+                            resumed_step_ids=_pr_resumed_step_ids,
+                        )
+                        if _pr_instrumented and not _pr_fence_unrecoverable:
                             _crash_pause_reconstruct_no_dispatch = True
+                            # FENCE-RECOVERABLE = the re-fire-unsafe ordinals MINUS the
+                            # genuinely-unrecoverable. Carry each as an
+                            # EffectFencePausedBranchResumeState; the marker step_id + kind are
+                            # guaranteed present (the recoverable filter excludes None /
+                            # out-of-range). idempotency_key="" is the defensive default: CP cannot
+                            # derive the runtime fence key (it composes the opaque `tool_id`, X-AL
+                            # axis isolation) — but the operator is NEVER asked at reconstruct time
+                            # (this was not a pause they saw), so there is no resolution to key-bind
+                            # on the first resume. api.resume re-dispatches FRESH into the
+                            # auto-active fence (keyed on the RUNTIME-computed key, not this ""),
+                            # which re-pauses with the REAL key (captured off the runtime error) if
+                            # still ambiguous → a subsequent resume key-binds the operator
+                            # resolution. At-most-once rides entirely on the durable fsynced reserve
+                            # + the resume-side step_id/kind guard, never this carried key.
+                            _pr_fence_recoverable = _pr_maybe_ran_unsafe - _pr_fence_unrecoverable
+                            _crash_pause_reconstruct_fence_paused = tuple(
+                                EffectFencePausedBranchResumeState(
+                                    branch_index=_bi,
+                                    step_id=str(_pr_marker_step_ids[_bi]),
+                                    step_kind=str(_pr_maybe_ran_kinds[_bi]),
+                                    idempotency_key="",
+                                )
+                                for _bi in sorted(_pr_fence_recoverable)
+                            )
                         else:
                             return (
                                 RunResult(
@@ -2463,16 +2574,14 @@ def _execute_workflow_body(
                                         "fan-out-crash-resume-pause-trigger-ambiguous: a branch "
                                         "failed before the crash under CascadePolicy.PAUSE with an "
                                         "INCOMPLETE recovery whose absent ordinal is a maybe-ran "
-                                        "branch that is NOT re-fire-safe (a fence-recoverable "
-                                        "TOOL_STEP / MANAGED_AGENTS — the deferred api.resume "
-                                        "re-dispatch could double-fire under a changed step_id "
-                                        "[the FENCE-STEP-ID follow-on]; a SUB_AGENT_DISPATCH "
-                                        "recursive child; an un-kinded / out-of-range ordinal) "
-                                        "or a pre-arc un-instrumented journal — a reconstruct "
-                                        "cannot honor §25.15.1 'finish in-flight, then pause' "
-                                        "at-most-once; "
-                                        "fail closed (the complete-recovery + provably-not-yet-"
-                                        "dispatched + re-fire-safe-maybe-ran windows reconstruct)"
+                                        "branch that is neither re-fire-safe nor fence-recoverable "
+                                        "(a SUB_AGENT_DISPATCH recursive child; an un-kinded / "
+                                        "out-of-range ordinal; or a crash-time CHANGED-step_id "
+                                        "edited manifest) or a pre-arc un-instrumented journal — a "
+                                        "reconstruct cannot honor §25.15.1 'finish in-flight, then "
+                                        "pause' at-most-once; fail closed (the complete-recovery + "
+                                        "provably-not-yet-dispatched + re-fire-safe-maybe-ran + "
+                                        "fence-recoverable-maybe-ran windows reconstruct)"
                                     ),
                                 ),
                                 0,
@@ -2538,11 +2647,24 @@ def _execute_workflow_body(
                                 TopologyPattern.HIERARCHICAL_DELEGATION,
                             },
                         )
+                        _maybe_ran_resumed_step_ids = _resumed_branch_step_ids_by_ordinal(
+                            _crash_branch_steps,
+                            branch_count=_crash_expected,
+                            orchestrated=manifest_entry.topology_pattern
+                            in {
+                                TopologyPattern.ORCHESTRATOR_WORKERS,
+                                TopologyPattern.HIERARCHICAL_DELEGATION,
+                            },
+                        )
                         _maybe_ran_fail_closed = _fence_unrecoverable_maybe_ran_indices(
                             _maybe_ran_unsafe,
                             _maybe_ran_kinds,
                             _maybe_ran_resumed_kinds,
                             _crash_expected,
+                            dispatched_step_ids=_crash_replay_store.dispatched_branch_step_ids(
+                                run_idempotency_key
+                            ),
+                            resumed_step_ids=_maybe_ran_resumed_step_ids,
                         )
                         if not (_instrumented and not _maybe_ran_fail_closed):
                             return (
@@ -2719,6 +2841,7 @@ def _execute_workflow_body(
             # B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT-NOT-YET-DISPATCHED — re-pause-without-
             # dispatch mode (the dispatcher proved every absent ordinal not-yet-run).
             crash_pause_reconstruct_no_dispatch=_crash_pause_reconstruct_no_dispatch,
+            crash_pause_reconstruct_fence_paused=_crash_pause_reconstruct_fence_paused,
             synthesis_step=_synthesis_step,
         )
     if strategy is _DriverStrategyStatus.EVALUATOR_OPTIMIZER:
@@ -2764,6 +2887,7 @@ def _execute_workflow_body(
             # B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT-NOT-YET-DISPATCHED — re-pause-without-
             # dispatch mode (the dispatcher proved every absent worker ordinal not-yet-run).
             crash_pause_reconstruct_no_dispatch=_crash_pause_reconstruct_no_dispatch,
+            crash_pause_reconstruct_fence_paused=_crash_pause_reconstruct_fence_paused,
             pause_resumable=True,
             synthesis_step=_synthesis_step,
         )
@@ -2794,6 +2918,7 @@ def _execute_workflow_body(
             # B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT-NOT-YET-DISPATCHED — re-pause-without-
             # dispatch mode forwarded into the per-level orchestrator-workers execution.
             crash_pause_reconstruct_no_dispatch=_crash_pause_reconstruct_no_dispatch,
+            crash_pause_reconstruct_fence_paused=_crash_pause_reconstruct_fence_paused,
             pause_resumable=True,
             synthesis_step=_synthesis_step,
         )
@@ -5560,6 +5685,7 @@ def _execute_parallelization(
     resume_snapshot: PauseSnapshot | None = None,
     crash_fan_out_resume: FanOutResumeState | PeerFanOutResumeState | None = None,
     crash_pause_reconstruct_no_dispatch: bool = False,
+    crash_pause_reconstruct_fence_paused: tuple[EffectFencePausedBranchResumeState, ...] = (),
     synthesis_step: WorkflowStep | None = None,
 ) -> tuple[RunResult, int]:
     """Execute the `PARALLELIZATION` fan-out-barrier-aggregate strategy (U-CP-86).
@@ -6597,6 +6723,12 @@ def _execute_parallelization(
             # `terminal_dispositions`). Each carries the held reserve's idempotency_key so
             # `api.resume` key-binds the operator's resolution to THIS peer's effect. COVERED by
             # the snapshot hash (dropped-when-empty → a no-fence pause hashes byte-identically).
+            # B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT-MAYBE-RAN-FENCE-STEP-ID — APPEND the
+            # fence-recoverable maybe-ran ordinals the crash-resume gate classified (empty `()` in
+            # reconstruct mode the live disposition map is empty; empty `()` in a normal pause the
+            # reconstruct tuple is). Disjoint from terminals (maybe-ran ≠ recovered) + the live set
+            # (no branch dispatched in reconstruct mode); the resume material-diff guard re-checks
+            # disjointness + the changed-step_id / changed-kind identity.
             effect_fence_paused_branches=tuple(
                 EffectFencePausedBranchResumeState(
                     branch_index=_bi,
@@ -6605,7 +6737,8 @@ def _execute_parallelization(
                     idempotency_key=_fence_key,
                 )
                 for _bi, _fence_key in sorted(effect_fence_paused_dispositions.items())
-            ),
+            )
+            + crash_pause_reconstruct_fence_paused,
             # B-FANOUT-PAUSE-SYNTHESIS — capture the terminal POST_JOIN_SYNTHESIS
             # step's identity (presence + step_id) so resume can material-diff it
             # before fresh-dispatching. None when no synthesis was opted in
@@ -7502,6 +7635,7 @@ def _execute_orchestrator_workers(
     resume_snapshot: PauseSnapshot | None = None,
     crash_fan_out_resume: FanOutResumeState | PeerFanOutResumeState | None = None,
     crash_pause_reconstruct_no_dispatch: bool = False,
+    crash_pause_reconstruct_fence_paused: tuple[EffectFencePausedBranchResumeState, ...] = (),
     pause_resumable: bool = False,
     synthesis_step: WorkflowStep | None = None,
 ) -> tuple[RunResult, int]:
@@ -8429,6 +8563,15 @@ def _execute_orchestrator_workers(
                     for _bi, _status in sorted(terminal_dispositions.items())
                 ),
                 worker_count=len(worker_steps),
+                # B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT-MAYBE-RAN-FENCE-STEP-ID — the
+                # ORCHESTRATOR_WORKERS / HIERARCHICAL reconstruct-no-dispatch path ALWAYS
+                # short-circuits HERE (every worker is skipped → empty branch_plan → this
+                # `not branch_plan` block), BEFORE the worker-failed pause site that also appends
+                # these carriers. So the fence-recoverable maybe-ran ordinals MUST be carried HERE
+                # too, else api.resume would treat them as ordinary absent branches and a
+                # changed-step_id edit would bypass the material-diff guard → double-fire
+                # (out-of-family Codex [P1]). Empty `()` on a complete recovery + a normal pause.
+                effect_fence_paused_branches=crash_pause_reconstruct_fence_paused,
                 synthesis_step_id=(
                     str(synthesis_step.step_id) if synthesis_step is not None else None
                 ),
@@ -9088,6 +9231,11 @@ def _execute_orchestrator_workers(
             # the operator's resolution to THIS branch's effect. COVERED by the snapshot
             # hash (transitively via `fan_out_resume.model_dump`; dropped-when-empty so a
             # no-fence pause hashes byte-identically to pre-arc).
+            # B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT-MAYBE-RAN-FENCE-STEP-ID — APPEND the
+            # fence-recoverable maybe-ran ordinals the crash-resume gate classified (`()` unless a
+            # reconstruct; the live disposition map is empty in reconstruct mode). Disjoint from
+            # terminals + paused-child + the live set; the resume material-diff guard re-checks
+            # disjointness + the changed-step_id / changed-kind identity.
             effect_fence_paused_branches=tuple(
                 EffectFencePausedBranchResumeState(
                     branch_index=_bi,
@@ -9096,7 +9244,8 @@ def _execute_orchestrator_workers(
                     idempotency_key=_fence_key,
                 )
                 for _bi, _fence_key in sorted(effect_fence_paused_dispositions.items())
-            ),
+            )
+            + crash_pause_reconstruct_fence_paused,
             # B-FANOUT-PAUSE-SYNTHESIS — capture the terminal POST_JOIN_SYNTHESIS
             # step's identity (presence + step_id) so resume can material-diff it
             # before fresh-dispatching. None when no synthesis was opted in (the
@@ -9148,6 +9297,7 @@ def _execute_hierarchical_delegation(
     resume_snapshot: PauseSnapshot | None = None,
     crash_fan_out_resume: FanOutResumeState | PeerFanOutResumeState | None = None,
     crash_pause_reconstruct_no_dispatch: bool = False,
+    crash_pause_reconstruct_fence_paused: tuple[EffectFencePausedBranchResumeState, ...] = (),
     pause_resumable: bool = False,
     synthesis_step: WorkflowStep | None = None,
 ) -> tuple[RunResult, int]:
@@ -9249,6 +9399,9 @@ def _execute_hierarchical_delegation(
         # B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT-NOT-YET-DISPATCHED — forward the re-pause-
         # without-dispatch mode into the per-level orchestrator-workers execution.
         crash_pause_reconstruct_no_dispatch=crash_pause_reconstruct_no_dispatch,
+        # B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT-MAYBE-RAN-FENCE-STEP-ID — forward the
+        # fence-recoverable maybe-ran carriers into the per-level orchestrator-workers execution.
+        crash_pause_reconstruct_fence_paused=crash_pause_reconstruct_fence_paused,
         pause_resumable=pause_resumable,
         # B-POSTJOIN-LLM-SYNTHESIS (CP spec v1.54 §3) — TOP-LEVEL synthesis only:
         # the recursion re-enters via a SUB_AGENT_DISPATCH worker's own

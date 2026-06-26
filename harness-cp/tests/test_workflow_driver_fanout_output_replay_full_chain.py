@@ -96,6 +96,11 @@ class _InMemoryBranchStore:
         # dispatch so the maybe-ran classifier keys on the ORIGINAL kind (changed-manifest guard);
         # None models a pre-arc v1.60/v1.61 marker (step_id only, no kind) → fail-closed.
         self._dispatched: dict[str, dict[int, str | None]] = {}
+        # B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT-MAYBE-RAN-FENCE-STEP-ID — the dispatch-time
+        # step_id recorded in the SAME marker (the real store persists it alongside the kind),
+        # read by `dispatched_branch_step_ids` so the fence-recoverable classifier + reconstruct
+        # carrier key on the ORIGINAL step_id (changed-step_id guard). None models a torn marker.
+        self._dispatched_step_id: dict[str, dict[int, str | None]] = {}
         self._instrumented: set[str] = set()
         # B-FANOUT-CRASH-RESUME-ORCHESTRATOR-DISPATCH / MAYBE-RAN-RESOLUTION — {run_key:
         # orchestrator dispatch-time step_kind value | None} for runs whose orchestrator BEGAN
@@ -138,12 +143,16 @@ class _InMemoryBranchStore:
         self, run_key: str, branch_index: int, step_id: str, step_kind: str
     ) -> None:
         self._dispatched.setdefault(run_key, {})[int(branch_index)] = str(step_kind)
+        self._dispatched_step_id.setdefault(run_key, {})[int(branch_index)] = str(step_id)
 
     def present_dispatched_indexes(self, run_key: str) -> set[int]:
         return set(self._dispatched.get(run_key, {}))
 
     def dispatched_branch_kinds(self, run_key: str) -> dict[int, str | None]:
         return dict(self._dispatched.get(run_key, {}))
+
+    def dispatched_branch_step_ids(self, run_key: str) -> dict[int, str | None]:
+        return dict(self._dispatched_step_id.get(run_key, {}))
 
     # -- test helper: a v1.60/v1.61 pre-arc marker (step_id only, no recorded kind) → the
     # maybe-ran classifier cannot prove the original kind → fail-closed. --
@@ -156,6 +165,9 @@ class _InMemoryBranchStore:
     # store no longer matches the declared fan-out → fail-closed (not silently ignored). --
     def inject_stale_dispatch_marker(self, run_key: str, branch_index: int, kind: str) -> None:
         self._dispatched.setdefault(run_key, {})[int(branch_index)] = str(kind)
+        self._dispatched_step_id.setdefault(run_key, {})[int(branch_index)] = (
+            f"stale-step-{branch_index}"
+        )
 
     def record_dispatch_instrumented(self, run_key: str) -> None:
         self._instrumented.add(run_key)
@@ -189,6 +201,7 @@ class _InMemoryBranchStore:
     def forget_branch_undispatched(self, run_key: str, branch_index: int) -> None:
         self._branches.get(run_key, {}).pop(branch_index, None)
         self._dispatched.get(run_key, {}).pop(branch_index, None)
+        self._dispatched_step_id.get(run_key, {}).pop(branch_index, None)
 
     # -- test helper: a crash in the ORCHESTRATOR fire→capture window. The orchestrator
     # dispatched (marker + instrumented stamp present, both written BEFORE the dispatch) but
@@ -1756,6 +1769,48 @@ def test_crash_resume_cardinality_only_changed_kind_tool_to_declarative_fails_cl
     assert resume.dispatched == []  # changed-kind branch → fail closed, no re-dispatch
 
 
+def test_crash_resume_incomplete_fence_recoverable_changed_step_id_fails_closed() -> None:
+    """B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT-MAYBE-RAN-FENCE-STEP-ID (#742 crash-time fold-in) —
+    the changed-STEP_ID guard at the crash-time incomplete-recovery site. The same-kind guard
+    (`..._changed_kind...`) does NOT catch a kind-preserving step_id change: the fence keys on
+    (parent_idempotency_key, step_id), so an operator-edited crash-resume manifest that kept the
+    TOOL_STEP kind but RENAMED branch-1 would re-dispatch under a DIFFERENT fence key → miss the
+    held claim → DOUBLE-FIRE. `_fence_unrecoverable_maybe_ran_indices`'s step_id conjunct (fed by
+    the dispatch-marker step_id reader) fails it closed. Mirrors the recovery test
+    (`..._fence_recoverable_tool_step_recovers`) but with an edited step_id at the resumed branch."""
+    store = _InMemoryBranchStore()
+    steps = [_step(f"branch-{i}", i, kind=StepKind.TOOL_STEP) for i in range(3)]
+    _run_persona(
+        workflow_id="wf-cc-changed-step-id",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3),
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        registry=_AnyKindRegistry(_CountingDispatcher(n=3)),
+    )
+    key = store.sole_run_key()
+    store.forget_branch(key, 1)  # maybe-ran TOOL_STEP (marker + step_id "branch-1" KEPT)
+    assert store.dispatched_branch_step_ids(key)[1] == "branch-1"
+
+    resume = _CountingDispatcher(n=3)
+    edited = [
+        _step("branch-0", 0, kind=StepKind.TOOL_STEP),
+        _step("branch-1-renamed", 1, kind=StepKind.TOOL_STEP),  # same kind, CHANGED step_id
+        _step("branch-2", 2, kind=StepKind.TOOL_STEP),
+    ]
+    r2 = _run_persona(
+        workflow_id="wf-cc-changed-step-id",
+        steps=edited,
+        dispatcher=resume,
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        registry=_AnyKindRegistry(resume),
+    )
+    assert r2.status is RunStatus.FAILED
+    assert "fan-out-crash-resume-cascade-policy-incomplete-recovery" in (r2.fail_class or "")
+    assert resume.dispatched == []  # changed-step_id branch → fail closed, no double-fire
+
+
 def test_crash_resume_cascade_cancel_incomplete_unsafe_kind_fails_closed() -> None:
     """B-FANOUT-CRASH-RESUME-MAYBE-RAN-RESOLUTION — the maybe-ran branch is an UNFENCED
     effect-bearing kind (SUB_AGENT_DISPATCH — fenced only at its CHILD's tool sinks, the recursive-child
@@ -2780,20 +2835,16 @@ def test_crash_resume_pause_maybe_ran_refire_safe_resume_redispatches_omitted() 
     assert crash_resumed.partial_state == live_resumed.partial_state
 
 
-def test_crash_resume_pause_maybe_ran_fence_recoverable_tool_step_stays_fail_closed() -> None:
-    """The FENCE-RECOVERABLE limb STAYS fail-closed (out-of-family Codex [P1]) — a maybe-ran
-    branch-2 of a TOOL_STEP (marker KEPT, capture gone) is NOT recovered by this PAUSE-reconstruct.
-    Unlike the §25.15 incomplete leg (re-dispatch at CRASH-TIME with the SAME manifest → the fence
-    key (idempotency_key, step_id) matches the held claim), this reconstruct OMITS the ordinal and
-    DEFERS the re-dispatch to `api.resume` (operator-mediated); the omitted snapshot carries NO
-    step_id, so a same-kind CHANGED-step_id resume would re-dispatch under a DIFFERENT fence key,
-    miss the held claim, and DOUBLE-FIRE the maybe-fired effect. Resolving it needs a snapshot
-    step_id carrier → the registered B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT-MAYBE-RAN-FENCE-STEP-ID
-    follow-on. Only RE-FIRE-SAFE maybe-ran (no external effect) recovers here."""
+def _reconstruct_fence_recoverable_pause(
+    *, workflow_id: str, kind: StepKind
+) -> tuple[list[Any], Any]:
+    """Helper — crash a 3-branch PAUSE fan-out of `kind`, drop branch-2's capture (maybe-ran,
+    marker kept), reconstruct → PAUSED. Returns (steps, recon_result). branch-2 is the
+    fence-recoverable (TOOL_STEP / MANAGED_AGENTS) maybe-ran ordinal."""
     store = _InMemoryBranchStore()
-    steps = [_step(f"branch-{i}", i, kind=StepKind.TOOL_STEP) for i in range(3)]
+    steps = [_step(f"branch-{i}", i, kind=kind) for i in range(3)]
     _run_persona(
-        workflow_id="wf-pause-mr-tool",
+        workflow_id=workflow_id,
         steps=steps,
         dispatcher=_CountingDispatcher(n=3),  # ignored — the registry's dispatcher fires
         store=store,
@@ -2802,22 +2853,240 @@ def test_crash_resume_pause_maybe_ran_fence_recoverable_tool_step_stays_fail_clo
         registry=_AnyKindRegistry(_CountingDispatcher(n=3, fail_index=1)),  # branch-1 → trigger
     )
     key = store.sole_run_key()
-    store.forget_branch(key, 2)  # maybe-ran TOOL_STEP (fence-recoverable; marker KEPT)
-    assert store.dispatched_branch_kinds(key)[2] == StepKind.TOOL_STEP.value
-
-    resume = _CountingDispatcher(n=3)
-    r2 = _run_persona(
-        workflow_id="wf-pause-mr-tool",
+    store.forget_branch(key, 2)  # maybe-ran (fence-recoverable; dispatch marker + step_id KEPT)
+    assert store.dispatched_branch_kinds(key)[2] == kind.value
+    assert store.dispatched_branch_step_ids(key)[2] == "branch-2"
+    recon = _run_persona(
+        workflow_id=workflow_id,
         steps=steps,
-        dispatcher=resume,
+        dispatcher=_CountingDispatcher(n=3),
         store=store,
         persona_tier=PersonaTier.TEAM_BINDING,
         pause_resume_protocol=_pause_protocol(),
-        registry=_AnyKindRegistry(resume),
+        registry=_AnyKindRegistry(_CountingDispatcher(n=3)),
     )
-    assert r2.status is RunStatus.FAILED  # fence-recoverable maybe-ran → fail-closed (Codex [P1])
-    assert "fan-out-crash-resume-pause-trigger-ambiguous" in (r2.fail_class or "")
-    assert resume.dispatched == []  # no re-dispatch — the deferred step_id hazard
+    return steps, recon
+
+
+def test_crash_resume_pause_maybe_ran_fence_recoverable_tool_step_reconstructs_paused() -> None:
+    """B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT-MAYBE-RAN-FENCE-STEP-ID — the FENCE-RECOVERABLE
+    limb now RECONSTRUCTS (the lift; was fail-closed pre-arc). A maybe-ran branch-2 of a TOOL_STEP
+    (marker + step_id KEPT, capture gone) is carried into the reconstructed snapshot's
+    `effect_fence_paused_branches` (NOT omitted like the re-fire-safe set, NOT recovered as
+    terminal): api.resume re-dispatches it THROUGH the resume material-diff guard + the auto-active
+    fence. The carrier holds the DISPATCH-TIME step_id + kind (the changed-step_id / changed-kind
+    guard) and idempotency_key="" (CP cannot derive the runtime fence key — eventually-correct via
+    re-pause; at-most-once rides on the durable reserve + the guard)."""
+    steps, recon = _reconstruct_fence_recoverable_pause(
+        workflow_id="wf-pause-mr-tool", kind=StepKind.TOOL_STEP
+    )
+    assert recon.status is RunStatus.PAUSED  # the lift — NOT fail-closed
+    pr = recon.pause_snapshot.peer_fan_out_resume
+    assert pr is not None
+    assert {b.branch_index for b in pr.branches} == {0, 1}  # branch-2 NOT a recovered terminal
+    # branch-2 carried as the disjoint fence-paused disposition with the dispatch-time identity.
+    assert len(pr.effect_fence_paused_branches) == 1
+    ef = pr.effect_fence_paused_branches[0]
+    assert ef.branch_index == 2
+    assert ef.step_id == "branch-2"
+    assert ef.step_kind == StepKind.TOOL_STEP.value
+    assert ef.idempotency_key == ""  # CP cannot derive the runtime fence key → defensive default
+
+
+def test_crash_resume_pause_maybe_ran_fence_recoverable_managed_agents_reconstructs_paused() -> (
+    None
+):
+    """MANAGED_AGENTS is the second fence-recoverable kind (its vendor-session dispatch is wrapped
+    in the §14.22 fence) — it reconstructs identically to TOOL_STEP. The advisor's 'run for
+    MANAGED_AGENTS, not just TOOL_STEP' coverage."""
+    steps, recon = _reconstruct_fence_recoverable_pause(
+        workflow_id="wf-pause-mr-managed", kind=StepKind.MANAGED_AGENTS
+    )
+    assert recon.status is RunStatus.PAUSED
+    pr = recon.pause_snapshot.peer_fan_out_resume
+    assert pr is not None
+    assert len(pr.effect_fence_paused_branches) == 1
+    assert pr.effect_fence_paused_branches[0].step_kind == StepKind.MANAGED_AGENTS.value
+
+
+def test_crash_resume_pause_maybe_ran_fence_recoverable_same_step_id_resume_redispatches() -> None:
+    """POSITIVE CONTROL (advisor) — api.resume of the reconstructed snapshot with the SAME
+    step_id + kind RE-DISPATCHES branch-2 (through the resume guard + auto-active fence), NOT
+    skipped, NOT double-fired. The fence-recoverable ordinal is re-entered (the run completes
+    PARTIAL — the seeded branch-1 failure stays degraded)."""
+    steps, recon = _reconstruct_fence_recoverable_pause(
+        workflow_id="wf-pause-mr-tool", kind=StepKind.TOOL_STEP
+    )
+    assert recon.status is RunStatus.PAUSED
+    resume = _CountingDispatcher(n=3)
+    resumed = _run_persona(
+        workflow_id="wf-pause-mr-tool",
+        steps=steps,  # SAME manifest → step_id "branch-2" matches the carrier
+        dispatcher=resume,
+        store=_InMemoryBranchStore(),
+        persona_tier=PersonaTier.TEAM_BINDING,
+        pause_resume_protocol=_pause_protocol(),
+        registry=_AnyKindRegistry(resume),
+        pause_snapshot_input=recon.pause_snapshot,
+    )
+    assert resumed.status is RunStatus.PARTIAL  # branch-1 failure → degraded; branch-2 re-entered
+    assert resume.dispatched == ["branch-2"]  # EXACTLY the fence-paused ordinal re-dispatched
+
+
+def test_crash_resume_pause_maybe_ran_fence_recoverable_changed_step_id_resume_fails_closed() -> (
+    None
+):
+    """THE Codex [P1] WITNESS (the bug that hid in #752 + #756 behind same-step_id witnesses) —
+    api.resume of the reconstructed snapshot with a CHANGED step_id at branch-2 FAILS CLOSED. A
+    same-kind step_id rename would re-dispatch under a DIFFERENT fence key → miss the held claim →
+    DOUBLE-FIRE; the resume-side material-diff guard (`effect-fence-paused-identity-mismatch`)
+    forecloses it. This is the load-bearing protection the FENCE-STEP-ID carrier exists to enable —
+    a same-step_id resume would pass while the bug survives, so the witness MUST change the
+    step_id."""
+    steps, recon = _reconstruct_fence_recoverable_pause(
+        workflow_id="wf-pause-mr-tool", kind=StepKind.TOOL_STEP
+    )
+    assert recon.status is RunStatus.PAUSED
+    # Rename branch-2's step_id in the resumed manifest (same count, same kind) — the edited-body
+    # double-fire vector.
+    renamed = list(steps)
+    renamed[2] = _step("branch-2-renamed", 2, kind=StepKind.TOOL_STEP)
+    resume = _CountingDispatcher(n=3)
+    resumed = _run_persona(
+        workflow_id="wf-pause-mr-tool",
+        steps=renamed,
+        dispatcher=resume,
+        store=_InMemoryBranchStore(),
+        persona_tier=PersonaTier.TEAM_BINDING,
+        pause_resume_protocol=_pause_protocol(),
+        registry=_AnyKindRegistry(resume),
+        pause_snapshot_input=recon.pause_snapshot,
+    )
+    assert resumed.status is RunStatus.FAILED
+    assert "effect-fence-paused-identity-mismatch" in (resumed.fail_class or "")
+    assert resume.dispatched == []  # NO re-dispatch — the double-fire foreclosed
+
+
+def test_crash_resume_pause_maybe_ran_fence_recoverable_changed_kind_resume_fails_closed() -> None:
+    """The changed-KIND sibling guard — api.resume with branch-2's step_id KEPT but its kind
+    changed away from the captured fence-recoverable kind FAILS CLOSED (threading a resolution /
+    re-dispatch would reach NO fence → the original ambiguous effect silently abandoned). Covers
+    both the kind-changed-to-non-fence (TOOL→DECLARATIVE) and the TOOL⇄MANAGED cross-kind swap."""
+    steps, recon = _reconstruct_fence_recoverable_pause(
+        workflow_id="wf-pause-mr-tool", kind=StepKind.TOOL_STEP
+    )
+    assert recon.status is RunStatus.PAUSED
+    for swapped_kind in (StepKind.DECLARATIVE_STEP, StepKind.MANAGED_AGENTS):
+        changed = list(steps)
+        changed[2] = _step("branch-2", 2, kind=swapped_kind)  # step_id KEPT, kind changed
+        resume = _CountingDispatcher(n=3)
+        resumed = _run_persona(
+            workflow_id="wf-pause-mr-tool",
+            steps=changed,
+            dispatcher=resume,
+            store=_InMemoryBranchStore(),
+            persona_tier=PersonaTier.TEAM_BINDING,
+            pause_resume_protocol=_pause_protocol(),
+            registry=_AnyKindRegistry(resume),
+            pause_snapshot_input=recon.pause_snapshot,
+        )
+        assert resumed.status is RunStatus.FAILED
+        assert "effect-fence-paused-kind-changed" in (resumed.fail_class or "")
+        assert resume.dispatched == []
+
+
+def test_crash_resume_pause_orchestrator_maybe_ran_fence_recoverable_reconstructs_paused() -> None:
+    """The ORCHESTRATOR_WORKERS (+ HIERARCHICAL, which delegates here) analogue — the path the
+    PARALLELIZATION witnesses do NOT cover (out-of-family Codex [P1]). In reconstruct-no-dispatch
+    mode every worker is SKIPPED → empty branch_plan → `_execute_orchestrator_workers` returns from
+    the EARLY `not branch_plan` re-establish block, BEFORE the worker-failed pause site. The
+    fence-recoverable carriers MUST be threaded into THAT early FanOutResumeState too — else the
+    fence-recoverable worker is dropped from `effect_fence_paused_branches`, api.resume treats it as
+    an ordinary absent branch, and a changed-step_id edit re-dispatches under a new fence key
+    (double-fire). Witnesses the carrier survives the early path + the changed-step_id fail-closed."""
+    store = _InMemoryBranchStore()
+    steps = [
+        _step("orch", 0),
+        _step("w-0", 0, kind=StepKind.TOOL_STEP),
+        _step("w-1", 1, kind=StepKind.TOOL_STEP),
+        _step("w-2", 2, kind=StepKind.TOOL_STEP),
+    ]
+    _run_persona(
+        workflow_id="wf-ow-pause-mr-fence",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3),  # ignored — the registry's dispatcher fires
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+        pause_resume_protocol=_pause_protocol(),
+        registry=_AnyKindRegistry(_CountingDispatcher(n=3, fail_index=1)),  # worker-1 → trigger
+    )
+    key = store.sole_run_key()
+    store.forget_branch(
+        key, 2
+    )  # worker-2 MAYBE-RAN fence-recoverable TOOL_STEP (marker + step_id KEPT)
+    assert store.dispatched_branch_step_ids(key)[2] == "w-2"
+
+    recon = _run_persona(
+        workflow_id="wf-ow-pause-mr-fence",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3),
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+        pause_resume_protocol=_pause_protocol(),
+        registry=_AnyKindRegistry(_CountingDispatcher(n=3)),
+    )
+    assert recon.status is RunStatus.PAUSED
+    fr = recon.pause_snapshot.fan_out_resume  # orchestrator-bearing carrier (NOT peer)
+    assert fr is not None
+    assert {b.branch_index for b in fr.branches} == {0, 1}  # worker-2 NOT a recovered terminal
+    # worker-2 carried in the EARLY re-establish snapshot (the Codex [P1] fix — empty pre-fix).
+    assert len(fr.effect_fence_paused_branches) == 1
+    ef = fr.effect_fence_paused_branches[0]
+    assert ef.branch_index == 2
+    assert ef.step_id == "w-2"
+    assert ef.step_kind == StepKind.TOOL_STEP.value
+    assert ef.idempotency_key == ""
+
+    # POSITIVE CONTROL (advisor) — the at-most-once re-dispatch path is orch-workers-SPECIFIC
+    # (the [P1] proved orch-workers diverges from peer at the early re-establish), so witness the
+    # CLEAN api.resume of the ""-key fence-paused worker on THIS path too: same step_id + kind →
+    # the orchestrator + recovered workers replay, EXACTLY worker-2 re-dispatches (through the
+    # auto-active fence in production; the mock models the sink) → PARTIAL (worker-1 stays degraded).
+    clean = _CountingDispatcher(n=3)
+    clean_resumed = _run_persona(
+        workflow_id="wf-ow-pause-mr-fence",
+        steps=steps,  # SAME manifest → worker-2 step_id "w-2" matches the carrier
+        dispatcher=clean,
+        store=_InMemoryBranchStore(),
+        persona_tier=PersonaTier.TEAM_BINDING,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+        pause_resume_protocol=_pause_protocol(),
+        registry=_AnyKindRegistry(clean),
+        pause_snapshot_input=recon.pause_snapshot,
+    )
+    assert clean_resumed.status is RunStatus.PARTIAL  # worker-1 failure → degraded
+    assert clean.dispatched == ["w-2"]  # orchestrator + w-0 + w-1 recovered; ONLY w-2 re-dispatches
+
+    # api.resume with worker-2's step_id RENAMED (steps[3] is worker ordinal 2) → FAILED.
+    renamed = list(steps)
+    renamed[3] = _step("w-2-renamed", 2, kind=StepKind.TOOL_STEP)
+    resume = _CountingDispatcher(n=3)
+    resumed = _run_persona(
+        workflow_id="wf-ow-pause-mr-fence",
+        steps=renamed,
+        dispatcher=resume,
+        store=_InMemoryBranchStore(),
+        persona_tier=PersonaTier.TEAM_BINDING,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+        pause_resume_protocol=_pause_protocol(),
+        registry=_AnyKindRegistry(resume),
+        pause_snapshot_input=recon.pause_snapshot,
+    )
+    assert resumed.status is RunStatus.FAILED
+    assert "effect-fence-paused-identity-mismatch" in (resumed.fail_class or "")
+    assert resume.dispatched == []  # the double-fire foreclosed on the orchestrator-workers path
 
 
 def test_crash_resume_pause_maybe_ran_resume_redispatch_fails_again_handled() -> None:
