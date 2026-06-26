@@ -525,6 +525,29 @@ class EngineOutputStore:
             # classifier (mirrors dispatched_branch_kinds' torn-marker safety boundary).
             return None
 
+    def orchestrator_dispatched_step_id(self, run_key: str) -> str | None:
+        """Return the orchestrator's recorded DISPATCH-TIME ``step_id`` (already stored by
+        ``record_orchestrator_dispatched``, the single-orchestrator step-identity).
+
+        Read by the B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-EFFECT-BEARING fence-recoverable
+        relaxation: a fence-recoverable (TOOL_STEP / MANAGED_AGENTS) orchestrator re-dispatches into
+        the runtime effect fence, whose key INCLUDES ``step_id`` — so a maybe-ran orchestrator
+        re-supplied at ``steps[0]`` with the SAME kind but a CHANGED ``step_id`` (rename / reorder)
+        would compose a DIFFERENT fence key, miss the held claim, and double-fire the original
+        effect. The relaxation compares this recorded step_id against the resumed
+        ``steps[0].step_id`` and fails closed on mismatch (out-of-family Codex [P1]). A marker
+        missing / with an unreadable / non-str ``step_id`` (a torn write) maps to ``None`` →
+        mismatch → fail closed."""
+        path = self._orchestrator_dispatched_file(run_key)
+        if not path.exists():
+            return None
+        try:
+            record = json.loads(path.read_text(encoding="utf-8").splitlines()[-1])
+            raw = record.get("step_id")
+            return raw if isinstance(raw, str) else None
+        except (OSError, UnicodeDecodeError, ValueError, IndexError, KeyError, AttributeError):
+            return None
+
     # -- B-FANOUT-OUTPUT-REPLAY PR2: terminal POST_JOIN_SYNTHESIS capture -----
     #
     # The synthesis output is the ONE genuine residual the #719 C9 probe named:

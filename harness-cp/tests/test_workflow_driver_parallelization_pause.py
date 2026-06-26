@@ -824,6 +824,58 @@ def test_strip_preserves_user_synthesis_step_id_in_recovered_output() -> None:
     assert "synthesis_step_id" in dumped["orchestrator_output"]  # the USER key is preserved
 
 
+def test_strip_none_orchestrator_effect_fence_resume_recurses_into_nested_child_snapshots() -> None:
+    """B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-EFFECT-BEARING byte-compat (NESTED) — the new
+    `orchestrator_effect_fence_resume` is a PauseSnapshot-level field, so a HIERARCHICAL
+    `paused_child_branches[].child_snapshot` serializes it (as null) inside the parent carrier's
+    `model_dump`. The recursive strip drops it when None at EVERY depth, so a pre-arc nested
+    HIERARCHICAL snapshot re-hashes byte-identically; a non-null carrier (a real nested orchestrator
+    fence pause) is KEPT (hash-covered). Mirrors the synthesis nested-strip [P1] for the new field."""
+    tree: dict[str, Any] = {
+        "branches": [],
+        "paused_child_branches": [
+            {
+                "branch_index": 0,
+                "step_id": "worker-0",
+                "child_snapshot": {
+                    "run_id": "child",
+                    "orchestrator_effect_fence_resume": None,  # nested PauseSnapshot field — drop
+                    "fan_out_resume": {"branches": []},
+                },
+            },
+            {
+                "branch_index": 1,
+                "step_id": "worker-1",
+                "child_snapshot": {
+                    "run_id": "grandchild",
+                    # a REAL nested orchestrator fence pause → non-None → hash-COVERED → KEPT.
+                    "orchestrator_effect_fence_resume": {
+                        "idempotency_key": "k",
+                        "step_id": "orch",
+                        "step_kind": "tool-step",
+                    },
+                },
+            },
+        ],
+    }
+    _strip_default_fanout_resume_fields(tree)
+    c0 = tree["paused_child_branches"][0]["child_snapshot"]
+    assert "orchestrator_effect_fence_resume" not in c0  # None → stripped (byte-compat)
+    c1 = tree["paused_child_branches"][1]["child_snapshot"]
+    assert c1["orchestrator_effect_fence_resume"]["idempotency_key"] == "k"  # non-None → KEPT
+
+
+def test_orchestrator_effect_fence_resume_absent_does_not_change_hash() -> None:
+    """Top-level byte-compat — passing `orchestrator_effect_fence_resume=None` (or omitting it)
+    yields the SAME hash as a pre-arc snapshot (the conditional include in `_compute_snapshot_hash`),
+    so every pre-existing snapshot validates unchanged."""
+    state_summary, _ = _pause_context_reader()
+    base = dict(workflow_id="wf-pp", run_id="run-1", step_index=0, state_summary=state_summary)
+    assert _compute_snapshot_hash(**base) == _compute_snapshot_hash(
+        **base, orchestrator_effect_fence_resume=None
+    )
+
+
 def _captured_with(**carrier: Any) -> PauseSnapshot:
     """A hash-valid snapshot carrying exactly one topology resume carrier (or none),
     captured through the real protocol — the exact shape a prior `pause` halt under that

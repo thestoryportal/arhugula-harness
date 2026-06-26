@@ -44,6 +44,7 @@ from harness_cp.pause_resume_protocol_types import (
     EffectFenceResolution,
     FanOutBranchResumeState,
     FanOutResumeState,
+    OrchestratorEffectFencePausedResumeState,
     PausedChildBranchResumeState,
     PauseSnapshot,
     ResumeContext,
@@ -1667,6 +1668,308 @@ def test_orchestrator_worker_effect_fence_resume_changed_kind_fails_closed() -> 
 
     assert result.status is RunStatus.FAILED
     assert "effect-fence-paused-kind-changed" in (result.fail_class or "")
+
+
+# ---------------------------------------------------------------------------
+# B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-EFFECT-BEARING — the ORCHESTRATOR's OWN
+# (steps[0]) dispatch raises the effect-fence ambiguous error → composed to a §26.2 pause
+# (Part 2) carrying the new `orchestrator_effect_fence_resume` carrier; resume re-dispatches
+# the orchestrator WITH the operator's key-bound EffectFenceResolution threaded onto its
+# context (Part 3, the NEW resume→orchestrator application site). Real-fence witnesses through
+# the REAL `_execute_orchestrator_workers` sequential orchestrator-dispatch path.
+# ---------------------------------------------------------------------------
+
+
+class _OrchestratorSelfFenceAmbiguousDispatcher:
+    """The ORCHESTRATOR's OWN dispatch raises the effect-fence ambiguous error on its FIRST dispatch
+    (no resolution threaded — the effect-bearing orchestrator maybe-ran). On RESUME a directive IS
+    threaded, and this dispatcher APPLIES it (the runtime fence's role): ABORT → raise
+    `EffectFenceAbortedError`; RE_FIRE (or any non-abort) → a fresh success. Records each dispatch's
+    threaded `effect_fence_resolution` (the resume producer-half witness)."""
+
+    def __init__(self, *, fence_key: str = "fence-key-orchestrator") -> None:
+        self._fence_key = fence_key
+        self.dispatched: list[str] = []
+        self.seen_resolution: dict[str, Any] = {}
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        step_id = str(step.step_id)
+        self.dispatched.append(step_id)
+        directive = getattr(step_context, "effect_fence_resolution", None)
+        self.seen_resolution[step_id] = directive
+        if step_id == "orchestrator":
+            if directive is None:
+                raise EffectFenceAmbiguousUncommittedError(idempotency_key=self._fence_key)
+            if directive.resolution is EffectFenceResolution.ABORT:
+                raise EffectFenceAbortedError(f"operator aborted {step_id}")
+            return {"role": "orchestrator", "refired": True}
+        return {"role": step_id, "echoed": dict(step.step_payload)}
+
+
+def test_orchestrator_self_effect_fence_ambiguous_composes_to_pause() -> None:
+    """REAL-FENCE WITNESS (PAUSE half): the ORCHESTRATOR's OWN dispatch raises the effect-fence
+    ambiguous error → `_execute_orchestrator_workers` composes a §26.2 EFFECT_FENCE_AMBIGUOUS pause
+    carrying the new `orchestrator_effect_fence_resume` (held key + orchestrator step_id/step_kind).
+    NOTHING ran (no `fan_out_resume`); the snapshot is hash-valid + round-trips."""
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    result = _run(steps=_steps(2), dispatcher=_OrchestratorSelfFenceAmbiguousDispatcher(), ctx=ctx)
+
+    assert result.status is RunStatus.PAUSED
+    assert result.fail_class is None
+    snap = result.pause_snapshot
+    assert snap is not None
+    assert snap.pause_reason is WorkflowPauseReason.EFFECT_FENCE_AMBIGUOUS
+    # The orchestrator paused BEFORE any worker / its own capture → no fan_out_resume.
+    assert snap.fan_out_resume is None
+    oefr = snap.orchestrator_effect_fence_resume
+    assert oefr == OrchestratorEffectFencePausedResumeState(
+        idempotency_key="fence-key-orchestrator",
+        step_id="orchestrator",
+        step_kind="declarative-step",
+    )
+    # Hash-valid (covers the new carrier) + byte round-trips.
+    assert snap.snapshot_hash == _compute_snapshot_hash(
+        workflow_id=snap.workflow_id,
+        run_id=snap.run_id,
+        step_index=snap.step_index,
+        state_summary=snap.state_summary,
+        orchestrator_effect_fence_resume=oefr,
+    )
+    restored = PauseSnapshot.model_validate(snap.model_dump(mode="json"))
+    assert restored == snap
+
+
+def test_orchestrator_self_effect_fence_resume_re_fire_recovers() -> None:
+    """REAL-FENCE WITNESS (resume RE_FIRE): resuming an orchestrator effect-fence pause re-dispatches
+    the orchestrator WITH the operator's RE_FIRE directive key-bound to its reserve, then the workers
+    fan out fresh → SUCCESS. The directive is threaded onto the orchestrator's context (the NEW
+    resume→orchestrator application site)."""
+    paused = _run(
+        steps=_steps(2),
+        dispatcher=_OrchestratorSelfFenceAmbiguousDispatcher(),
+        ctx=cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())),
+    )
+    snap = paused.pause_snapshot
+    assert snap is not None and snap.orchestrator_effect_fence_resume is not None
+    key = snap.orchestrator_effect_fence_resume.idempotency_key
+
+    holder = _HolderWithResolution(EffectFenceResolution.RE_FIRE)
+    rec = _OrchestratorSelfFenceAmbiguousDispatcher()
+    ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    ctx_obj.resume_context_holder = holder  # type: ignore[attr-defined]
+    result = _run(
+        steps=_steps(2), dispatcher=rec, ctx=cast(DriverContext, ctx_obj), pause_snapshot_input=snap
+    )
+
+    assert result.status is RunStatus.SUCCESS
+    # The orchestrator re-dispatched WITH the RE_FIRE directive key-bound to its reserve.
+    assert "orchestrator" in rec.dispatched
+    threaded = rec.seen_resolution["orchestrator"]
+    assert threaded is not None
+    assert threaded.resolution is EffectFenceResolution.RE_FIRE
+    assert threaded.idempotency_key == key
+    assert holder.peeked >= 1  # PEEKED (non-consuming)
+
+
+def test_orchestrator_self_effect_fence_resume_abort_is_terminal_failed() -> None:
+    """REAL-FENCE WITNESS (resume ABORT): an ABORT directive threaded to the orchestrator re-dispatch
+    raises `EffectFenceAbortedError` (the runtime applying the operator's choice) → the generic
+    orchestrator-dispatch except returns terminal FAILED, NOT a re-pause."""
+    paused = _run(
+        steps=_steps(2),
+        dispatcher=_OrchestratorSelfFenceAmbiguousDispatcher(),
+        ctx=cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())),
+    )
+    snap = paused.pause_snapshot
+    assert snap is not None and snap.orchestrator_effect_fence_resume is not None
+
+    holder = _HolderWithResolution(EffectFenceResolution.ABORT)
+    rec = _OrchestratorSelfFenceAmbiguousDispatcher()
+    ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    ctx_obj.resume_context_holder = holder  # type: ignore[attr-defined]
+    result = _run(
+        steps=_steps(2), dispatcher=rec, ctx=cast(DriverContext, ctx_obj), pause_snapshot_input=snap
+    )
+
+    assert result.status is RunStatus.FAILED
+    assert result.pause_snapshot is None  # terminal — NOT a re-pause
+    assert "orchestrator" in rec.dispatched  # the orchestrator DID re-dispatch (then aborted)
+
+
+def test_orchestrator_self_effect_fence_resume_skip_as_fired_rejected() -> None:
+    """REAL-FENCE WITNESS (resume SKIP_AS_FIRED REJECTED): SKIP_AS_FIRED is rejected at the CP resume
+    site for an orchestrator (its empty output would silently structure a degenerate fan-out
+    aggregate — no-silent-failure). The orchestrator is NOT re-dispatched; the run FAILS loud."""
+    paused = _run(
+        steps=_steps(2),
+        dispatcher=_OrchestratorSelfFenceAmbiguousDispatcher(),
+        ctx=cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())),
+    )
+    snap = paused.pause_snapshot
+    assert snap is not None and snap.orchestrator_effect_fence_resume is not None
+
+    holder = _HolderWithResolution(EffectFenceResolution.SKIP_AS_FIRED)
+    rec = _OrchestratorSelfFenceAmbiguousDispatcher()
+    ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    ctx_obj.resume_context_holder = holder  # type: ignore[attr-defined]
+    result = _run(
+        steps=_steps(2), dispatcher=rec, ctx=cast(DriverContext, ctx_obj), pause_snapshot_input=snap
+    )
+
+    assert result.status is RunStatus.FAILED
+    assert "skip-as-fired-unsupported" in (result.fail_class or "")
+    assert rec.dispatched == []  # rejected BEFORE any dispatch — never re-dispatched
+
+
+def test_orchestrator_self_effect_fence_resume_changed_orchestrator_fails_closed() -> None:
+    """REAL-FENCE WITNESS (changed-orchestrator guard): an orchestrator re-supplied on resume with a
+    CHANGED step_kind (same step_id) FAILS CLOSED — threading the resolution would reach the WRONG
+    (or no) fence and silently abandon the original ambiguous effect."""
+    paused = _run(
+        steps=_steps(2),
+        dispatcher=_OrchestratorSelfFenceAmbiguousDispatcher(),
+        ctx=cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())),
+    )
+    snap = paused.pause_snapshot
+    assert snap is not None and snap.orchestrator_effect_fence_resume is not None
+
+    # Resume with the orchestrator CHANGED declarative-step → inference-step (same step_id).
+    changed = [
+        WorkflowStep(
+            step_id=StepID("orchestrator"),
+            step_kind=StepKind.INFERENCE_STEP,
+            step_payload={"role": "orchestrator"},
+        ),
+        WorkflowStep(
+            step_id=StepID("worker-0"),
+            step_kind=StepKind.DECLARATIVE_STEP,
+            step_payload={"index": 0},
+        ),
+        WorkflowStep(
+            step_id=StepID("worker-1"),
+            step_kind=StepKind.DECLARATIVE_STEP,
+            step_payload={"index": 1},
+        ),
+    ]
+    holder = _HolderWithResolution(EffectFenceResolution.RE_FIRE)
+    rec = _OrchestratorSelfFenceAmbiguousDispatcher()
+    ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    ctx_obj.resume_context_holder = holder  # type: ignore[attr-defined]
+    result = _run(
+        steps=changed, dispatcher=rec, ctx=cast(DriverContext, ctx_obj), pause_snapshot_input=snap
+    )
+
+    assert result.status is RunStatus.FAILED
+    assert "changed-orchestrator" in (result.fail_class or "")
+    assert rec.dispatched == []  # fail-closed BEFORE any re-dispatch
+
+
+def test_orchestrator_self_effect_fence_no_protocol_fails_closed() -> None:
+    """Part-2 gating: the orchestrator raises the fence error but NO PauseResumeProtocol is bound →
+    the pause cannot be composed → fall through to terminal FAILED (the pre-arc fail-closed; resume
+    would advertise a resumability `api.resume` cannot honor)."""
+    ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    ctx_obj.pause_resume_protocol = None  # type: ignore[assignment]
+    result = _run(
+        steps=_steps(2),
+        dispatcher=_OrchestratorSelfFenceAmbiguousDispatcher(),
+        ctx=cast(DriverContext, ctx_obj),
+    )
+    assert result.status is RunStatus.FAILED
+    assert result.pause_snapshot is None
+
+
+def test_orchestrator_self_effect_fence_resume_empty_body_fails_closed() -> None:
+    """Empty-body guard (out-of-family Codex [P2], codex-vs-main): an orchestrator fence pause
+    resumed with the body CHANGED to EMPTY (`steps=[]`) FAILS CLOSED — the empty-steps SUCCESS fast
+    path must NOT silently abandon the unresolved ambiguous orchestrator effect + the operator's
+    resolution (the changed-orchestrator guard reads `steps[0]`, which an empty body lacks)."""
+    paused = _run(
+        steps=_steps(2),
+        dispatcher=_OrchestratorSelfFenceAmbiguousDispatcher(),
+        ctx=cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())),
+    )
+    snap = paused.pause_snapshot
+    assert snap is not None and snap.orchestrator_effect_fence_resume is not None
+
+    holder = _HolderWithResolution(EffectFenceResolution.RE_FIRE)
+    ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    ctx_obj.resume_context_holder = holder  # type: ignore[attr-defined]
+    result = _run(
+        steps=[],  # body changed to empty between pause and resume
+        dispatcher=_OrchestratorSelfFenceAmbiguousDispatcher(),
+        ctx=cast(DriverContext, ctx_obj),
+        pause_snapshot_input=snap,
+    )
+    assert result.status is RunStatus.FAILED
+    assert "changed-orchestrator" in (result.fail_class or "")
+    assert result.pause_snapshot is None
+
+
+class _OrchestratorSelfFenceSynthDispatcher:
+    """Orchestrator raises the fence ambiguous error on its FIRST dispatch; on RESUME (a directive
+    threaded) it re-fires; workers echo; the terminal POST_JOIN_SYNTHESIS composes. Witnesses an
+    orchestrator fence pause in a SYNTHESIS-bearing workflow."""
+
+    def __init__(self) -> None:
+        self.dispatched: list[str] = []
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        step_id = str(step.step_id)
+        self.dispatched.append(step_id)
+        if step.step_kind is StepKind.POST_JOIN_SYNTHESIS:
+            return {"synthesized": True}
+        if step_id == "orchestrator":
+            directive = getattr(step_context, "effect_fence_resolution", None)
+            if directive is None:
+                raise EffectFenceAmbiguousUncommittedError(idempotency_key="fence-key-orchestrator")
+            return {"role": "orchestrator", "refired": True}
+        return {"role": step_id, "echoed": dict(step.step_payload)}
+
+
+def test_orchestrator_self_effect_fence_resume_synthesis_bearing_recovers() -> None:
+    """REAL-FENCE WITNESS (synthesis-bearing, out-of-family Codex [P2]): an orchestrator fence pause
+    in an ORCHESTRATOR_WORKERS workflow that ALSO carries a terminal POST_JOIN_SYNTHESIS step
+    RESUMES — the synthesis material-diff is SKIPPED (the orchestrator paused BEFORE everything, so
+    nothing ran + no synthesis identity was captured; the orchestrator + workers + synthesis all
+    re-dispatch fresh on RE_FIRE). Before the [P2] fix the absent captured synthesis identity falsely
+    rejected the unchanged synthesis-bearing body as a 'removed' material diff."""
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    paused = execute_workflow(
+        _manifest(),
+        [*_steps(2), _synthesis_step()],
+        run_id="run-1",
+        ctx=ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=cast(
+            StepDispatcherRegistry, _SynthRegistry(_OrchestratorSelfFenceSynthDispatcher())
+        ),
+    )
+    assert paused.status is RunStatus.PAUSED
+    snap = paused.pause_snapshot
+    assert snap is not None and snap.orchestrator_effect_fence_resume is not None
+
+    holder = _HolderWithResolution(EffectFenceResolution.RE_FIRE)
+    rec = _OrchestratorSelfFenceSynthDispatcher()
+    ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    ctx_obj.resume_context_holder = holder  # type: ignore[attr-defined]
+    result = execute_workflow(
+        _manifest(),
+        [*_steps(2), _synthesis_step()],
+        run_id="run-1",
+        ctx=cast(DriverContext, ctx_obj),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=cast(StepDispatcherRegistry, _SynthRegistry(rec)),
+        pause_snapshot_input=snap,
+    )
+    assert result.status is RunStatus.SUCCESS  # NOT rejected by the synthesis material-diff
+    # Everything re-dispatched fresh (orchestrator re-fired + workers + synthesis once).
+    assert "orchestrator" in rec.dispatched
+    assert rec.dispatched.count("synthesis") == 1
 
 
 # ---------------------------------------------------------------------------
