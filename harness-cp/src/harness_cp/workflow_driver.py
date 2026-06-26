@@ -1767,7 +1767,7 @@ def execute_workflow(
     default_model_binding: ModelBinding,
     step_dispatchers: StepDispatcherRegistry,
     pause_snapshot_input: PauseSnapshot | None = None,
-    reconstruct_final_state: bool = False,
+    reconstruct_final_state: bool = True,
 ) -> RunResult:
     """Execute the workflow per C-CP-25 §25.3 happy-path discipline.
 
@@ -2035,7 +2035,7 @@ def _execute_workflow_body(
     run_idempotency_key: str,
     resume_at_step_index_override: int | None = None,
     resume_snapshot: PauseSnapshot | None = None,
-    reconstruct_final_state: bool = False,
+    reconstruct_final_state: bool = True,
 ) -> tuple[RunResult, int]:
     """Execute the workflow body within the workflow.envelope OTel span.
 
@@ -3293,23 +3293,29 @@ def _execute_workflow_body(
     # this counter reflects only this envelope's executions.
     accumulated: dict[str, Any] = {}
     steps_executed = 0
-    # B-CHILD-CRASH-RESUME-FINAL-STATE-RECONSTRUCT (R-FS-1) — child-scoped final_state
-    # reconstruction. When the caller opts in (a child sub-workflow run, so the parent
-    # fan-out / hierarchical-pause fold sees the COMPLETE child terminal state, not the
-    # suffix-only resume final_state), seed `accumulated` with the durably-stored
-    # committed prefix `[0, resume_at)` so the SUCCESS `final_state` (and a DRAINED/FAILED
-    # `partial_state`) reconstructs the full run — the OUTPUT-side analogue of the
-    # inter-step CHANNEL rehydrate (the INPUT side); both consume the shared
-    # `_read_durable_replay_prefix`. Scoped to the cached-output-replay engine classes
-    # (EVENT_SOURCED_REPLAY / WAL_SEGMENT — the only classes whose per-step output is
-    # durably recorded, gated identically at the `_record_durable_step_output` producer
-    # below); a SAVE_POINT_CHECKPOINT / RECONCILER_LOOP child has no output store → the
-    # read degrades to the empty prefix (suffix-only, unchanged) → the registered
-    # SAVE_POINT/RECONCILER follow-on. Top-level runs pass `reconstruct_final_state=False`
-    # (default) → the accepted suffix-only top-level resume semantic is byte-unchanged
-    # (the fork-bearing top-level reconstruction is the registered follow-on). Fail-closed
-    # on a store↔ledger skew / identity-mismatch (the shared read+validate), surfaced as
-    # the child's FAILED result so the parent never folds a corrupt/partial child state.
+    # B-CHILD-CRASH-RESUME-FINAL-STATE-RECONSTRUCT (#766) + B-TOP-LEVEL-CRASH-RESUME-
+    # FINAL-STATE-RECONSTRUCT (R-FS-1) — final_state reconstruction on resume. On a
+    # durable-engine-class resume the dispatch loop would return a SUFFIX-ONLY final_state
+    # (the committed prefix is skipped + never seeded into `accumulated`) — a silent
+    # truncation: a SUCCESS run that lies about its output. `reconstruct_final_state`
+    # (DEFAULT True — reconstruction is the correct behavior; suffix-only was the bug)
+    # seeds `accumulated` with the durably-stored committed prefix `[0, resume_at)` so the
+    # SUCCESS `final_state` (and a DRAINED/FAILED `partial_state`) reconstructs the full
+    # run — the OUTPUT-side analogue of the inter-step CHANNEL rehydrate (the INPUT side);
+    # both consume the shared `_read_durable_replay_prefix`. This is reached by BOTH the
+    # top-level run (the `run_workflow` handler / `api.run`+`api.resume` take the default,
+    # CP v1.76 §25.2/§25.6 resume-transparency invariant) AND a child sub-workflow run (so
+    # the parent fan-out / hierarchical-pause fold sees the COMPLETE child terminal state).
+    # Scoped to the cached-output-replay engine classes (EVENT_SOURCED_REPLAY / WAL_SEGMENT
+    # — the only classes whose per-step output is durably recorded, gated identically at the
+    # `_record_durable_step_output` producer below); a SAVE_POINT_CHECKPOINT / RECONCILER_
+    # LOOP resume has no output store → the read degrades to the empty prefix (suffix-only,
+    # unchanged) → the registered SAVE_POINT/RECONCILER follow-on. Explicit
+    # `reconstruct_final_state=False` is the opt-out (no production caller takes it).
+    # Fail-closed on a store↔ledger skew / identity-mismatch (the shared read+validate),
+    # surfaced as a FAILED run so neither a parent fold nor a top-level caller ever sees a
+    # corrupt/partial reconstructed state (a corrupt durable prefix → FAILED, not a
+    # silently-truncated SUCCESS).
     if (
         reconstruct_final_state
         and resume_at > 0
