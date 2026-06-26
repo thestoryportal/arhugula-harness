@@ -317,6 +317,33 @@ def test_dispatched_branch_kinds_round_trip_across_restart(tmp_path: Path) -> No
     assert fresh.dispatched_branch_kinds("other-run") == {}
 
 
+def test_dispatched_branch_step_ids_round_trip_across_restart(tmp_path: Path) -> None:
+    """B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT-MAYBE-RAN-FENCE-STEP-ID — the marker records the
+    DISPATCH-TIME step_id (alongside the kind) so the fence-recoverable classifier + the
+    reconstruct carrier key on the ORIGINAL step_id (the changed-step_id guard). A FRESH store
+    (process restart) reads it back."""
+    store = EngineOutputStore(journal_dir=tmp_path / "eo")
+    store.record_branch_dispatched(_RUN_KEY, 0, "w0", "tool-step")
+    store.record_branch_dispatched(_RUN_KEY, 1, "w1", "managed-agents")
+    fresh = EngineOutputStore(journal_dir=tmp_path / "eo")  # crash + restart
+    assert fresh.dispatched_branch_step_ids(_RUN_KEY) == {0: "w0", 1: "w1"}
+    # Absent → empty (a run where no branch began dispatch).
+    assert fresh.dispatched_branch_step_ids("other-run") == {}
+
+
+def test_dispatched_branch_step_ids_torn_marker_maps_to_none(tmp_path: Path) -> None:
+    """A torn / invalid-UTF-8 `.dispatched` marker maps to step_id=None (→ the CP fence-recoverable
+    classifier fails closed; cannot prove the original fence key), never raising — the index is
+    still PRESENT (dispatch began), so the marker is unknown-step_id, not absent (mirrors the
+    `dispatched_branch_kinds` torn-marker boundary)."""
+    store = EngineOutputStore(journal_dir=tmp_path / "eo")
+    store.record_branch_dispatched(_RUN_KEY, 0, "w0", "tool-step")
+    marker = store._branch_dispatched_file(_RUN_KEY, 0)  # reach the path helper directly
+    marker.write_bytes(b"\xff\xfe not valid utf-8")  # torn write: invalid UTF-8 bytes
+    assert store.dispatched_branch_step_ids(_RUN_KEY) == {0: None}  # unknown → fail-closed
+    assert store.present_dispatched_indexes(_RUN_KEY) == {0}  # but dispatch still PROVABLY began
+
+
 def test_dispatched_branch_kinds_torn_marker_maps_to_none(tmp_path: Path) -> None:
     """A torn / invalid-UTF-8 `.dispatched` marker maps to kind=None (→ the CP classifier fails
     closed), never raising out of dispatched_branch_kinds (out-of-family Codex [P2]; the index

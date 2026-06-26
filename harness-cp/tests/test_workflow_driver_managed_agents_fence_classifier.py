@@ -20,12 +20,30 @@ _MANAGED = StepKind.MANAGED_AGENTS.value
 _DECL = StepKind.DECLARATIVE_STEP.value
 
 
-def _classify(marker: str | None, resumed: str | None, *, branch_count: int = 2) -> set[int]:
+def _classify(
+    marker: str | None,
+    resumed: str | None,
+    *,
+    branch_count: int = 2,
+    marker_step_id: str | None = "s0",
+    resumed_step_id: str | None = "s0",
+) -> set[int]:
     """Return the UNRECOVERABLE subset of {0} for a single maybe-ran branch at ordinal 0
-    with the given dispatch-marker + resumed-manifest kinds. Empty ⟹ fence-recoverable."""
+    with the given dispatch-marker + resumed-manifest kinds (and step_ids). Empty ⟹
+    fence-recoverable. step_ids default to a MATCHING pair so the kind-focused tests isolate the
+    kind conjuncts; the FENCE-STEP-ID step_id conjunct is exercised by `*_step_id_*` tests below."""
     dispatched: dict[int, str | None] = {0: marker}
     resumed_map: dict[int, str] = {0: resumed} if resumed is not None else {}
-    return _fence_unrecoverable_maybe_ran_indices({0}, dispatched, resumed_map, branch_count)
+    dispatched_sids: dict[int, str | None] = {0: marker_step_id}
+    resumed_sids: dict[int, str] = {0: resumed_step_id} if resumed_step_id is not None else {}
+    return _fence_unrecoverable_maybe_ran_indices(
+        {0},
+        dispatched,
+        resumed_map,
+        branch_count,
+        dispatched_step_ids=dispatched_sids,
+        resumed_step_ids=resumed_sids,
+    )
 
 
 def test_managed_same_kind_is_fence_recoverable() -> None:
@@ -69,7 +87,14 @@ def test_managed_marker_missing_resumed_fails_closed() -> None:
 def test_managed_marker_out_of_range_ordinal_fails_closed() -> None:
     """A same-kind MANAGED branch whose ordinal is OUTSIDE [0, branch_count) (a stale /
     corrupt extra marker) fails closed regardless of kind."""
-    out = _fence_unrecoverable_maybe_ran_indices({3}, {3: _MANAGED}, {3: _MANAGED}, 2)
+    out = _fence_unrecoverable_maybe_ran_indices(
+        {3},
+        {3: _MANAGED},
+        {3: _MANAGED},
+        2,
+        dispatched_step_ids={3: "s3"},
+        resumed_step_ids={3: "s3"},
+    )
     assert out == {3}
 
 
@@ -77,3 +102,23 @@ def test_none_marker_managed_resumed_fails_closed() -> None:
     """A pre-arc / torn marker (None recorded kind) + resumed MANAGED_AGENTS fails closed —
     the marker kind cannot be trusted as MANAGED."""
     assert _classify(None, _MANAGED) == {0}
+
+
+def test_same_kind_changed_step_id_fails_closed() -> None:
+    """FENCE-STEP-ID (#742) — marker TOOL_STEP + resumed TOOL_STEP (same kind, in range) but a
+    CHANGED step_id → re-dispatch would compose a DIFFERENT fence key (the key includes step_id) →
+    miss the held claim → double-fire. The step_id conjunct fails it closed even though both kind
+    conjuncts pass."""
+    assert _classify(_TOOL, _TOOL, marker_step_id="s0", resumed_step_id="s0-renamed") == {0}
+
+
+def test_same_kind_matching_step_id_is_fence_recoverable() -> None:
+    """FENCE-STEP-ID — marker + resumed kind AND step_id all match → RECOVERABLE (the fence key
+    is reproduced exactly)."""
+    assert _classify(_TOOL, _TOOL, marker_step_id="s0", resumed_step_id="s0") == set()
+
+
+def test_none_marker_step_id_fails_closed() -> None:
+    """FENCE-STEP-ID — a torn marker with no recorded step_id (None) cannot prove the original
+    fence key → fail closed even with a matching kind + a present resumed step_id."""
+    assert _classify(_TOOL, _TOOL, marker_step_id=None, resumed_step_id="s0") == {0}
