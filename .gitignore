@@ -122,3 +122,16 @@ tools/semantic_overlay/overlay.json
 
 # TTS audio cache (ephemeral; not part of the reorg)
 .claude/audio/
+
+# Local, deliberately-untracked operator working trees (untracked since 2026-06-18;
+# accidentally swept into PR #774 by a `git add -A`, untracked again here). These are
+# local design/agent scratch + tooling, NOT harness source; the dashboard-design logs
+# also carry local session metadata (out-of-family Codex [P2]). Un-ignore deliberately
+# if any should become tracked.
+.agents/
+.codex/agents/
+.claude/agents/
+dashboard-design/archive/
+dashboard-design/output/
+dashboard-design/HANDOFF.md
+dashboard-design/.mcp.json
