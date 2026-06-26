@@ -1,1 +1,0 @@
-{"eval_id":2,"eval_name":"env-fit-absent-voice-substrate","prompt":"Take a critical pass over the four-tier sandbox contract C-AS-01 §1 in design-substrate/Spec_Action_Surface_v1.md — we're about to build against it and I want to know if it holds up.","assertions":[]}

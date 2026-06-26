@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "dribbble": {
-      "type": "stdio",
-      "command": "dribbble-mcp"
-    }
-  }
-}
