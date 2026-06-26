@@ -55,3 +55,53 @@ advisor's reconcile lean was (b) "unless the (a) witness is cheap AND clean on t
 - **advisor** (full-transcript, ×4): the fence-persistence gating check → the deterministic-vs-persist fork (resolved deterministic, the ordering trap) → the opaque-boundary reconcile (gate basis must be dispatch-time-recorded, the #742 lesson one level down) → the **Codex reconcile** (conceded the leaf-fenced slice was wrong; lean (b); the loop-trap + sunk-cost + dead-scaffolding warnings).
 - **out-of-family Codex (gpt-5.5)**, uncommitted-diff review: the two [P1]s above — the decorrelated catch the transcript-aware advisor + I missed (`[[hooks-codex-pilots-decorrelation-validated]]`).
 - **direct grounding**: every §2 fact verified by direct read (presence-not-correctness).
+
+---
+
+## 8. HEAD-VERIFIED RE-SCOPE (2026-06-26, fresh-context `/loop continue`) — [P1-a] is NO LONGER a dead-end; the next attempt is BOUNDED + WITNESS-FIRST
+
+*This §8 supersedes the §5 option framing's cost read. §1–§7 above are PRESERVED verbatim (frozen at 2026-06-25 write-time). Re-grounded against HEAD per the §12.5.4 "verify a frozen finding-doc against HEAD before acting on it" discipline + advisor full-transcript ×3. The §746 finding PREDATES the three arcs that landed specifically to unblock it.*
+
+### 8.1 What changed under this doc since it was written
+
+`#764` REGISTERED + `#766` BUILT + `#768` EXTENDED **`B-CHILD-CRASH-RESUME-FINAL-STATE-RECONSTRUCT`** — the arc whose close note states it "UNBLOCKED the 2 SUBAGENT arcs for LINEAR-ESR/WAL (result-fidelity blocker removed)." That removed blocker **IS [P1-a]** (§3) — the re-dispatched child returning a SUFFIX-ONLY / empty `final_state` because `accumulated` is empty. HEAD facts (direct read, 2026-06-26):
+- `execute_workflow` / `_execute_workflow_body` now default `reconstruct_final_state=True` (`workflow_driver.py:1770/2038`; `:3314` "no production caller takes `=False`").
+- `child_workflow_runner._runner` passes `reconstruct_final_state=True` EXPLICITLY into the same `execute_workflow` (`child_workflow_runner.py:187`).
+- The `#766` CP witnesses (`test_workflow_driver.py:1322+`) prove `execute_workflow(reconstruct_final_state=True)` seeds the committed prefix → FULL `final_state` {step-0, step-1, step-2}, NOT suffix-only.
+
+→ For a **LINEAR (`SINGLE_THREADED_LINEAR`) child**, [P1-a]'s result-fidelity is structurally addressed by the SAME mechanism #766/#768 proved. The FAN-OUT child (PARALLELIZATION / ORCHESTRATOR_WORKERS workers) recursive reconstruction is the larger case → KEEP the §4 constraint-1 LINEAR narrowing (excludes fan-out children).
+
+### 8.2 The catch — [P1-a]-closed is a HYPOTHESIS the witness must confirm, NOT "closed by construction" (advisor)
+
+"Same `execute_workflow`, same flag, proven reconstruct" is MECHANISM reasoning that skips the ONE unproven INTEGRATION fact: **does a REAL recursive child actually get an `engine_output_store` bound under its REUSED run_id with the committed prefix, and does that store present the prefix to the seeding on resume?** The `#766` witnesses use a `_FakeOutputStore` that **IGNORES `run_key`** (`test_workflow_driver.py:1100-1102` — returns ALL outputs regardless of run_key) → structurally CANNOT witness "store bound under the reused run_id." Asserting [P1-a]-closed "by construction" is the EXACT presence-not-correctness move that got the §0 full build REVERTED. Treat the re-scope as a hypothesis the witness TESTS.
+
+### 8.3 The witness is the WORKSPACE'S OWN open coverage residual
+
+`test_lifecycle_sub_agent_dispatch.py:752` (`test_child_workflow_runner_opts_into_final_state_reconstruct`) docstring, verbatim: *"The real-runner-THROUGH-execute_workflow integration remains the pre-existing AC #7 coverage residual (needs a fully-bootstrapped HarnessContext)."* That witness MOCKS `execute_workflow` (a spy) → proves the runner FORWARDS the flag (wiring), NOT that a real recursive child reconstructs. So the discriminator genuinely does not exist at HEAD — confirming §4 constraint 3. Feasibility, however, is GREEN (NOT a hard wall): the real `RuntimeSubAgentDispatcher` (`test_topology_fixture_suite.py:486`, sync + driver-callable), the real `compose_child_workflow_runner(ctx)`, and the `_bootstrap_ctx` (fully-bootstrapped HarnessContext, faked provider/OD stages, CI-runnable) ALL exist. The "frozen HarnessContext" the topology suite cites (`:25`) is moot for a crash-resume witness: use TWO fresh contexts sharing ONE on-disk store + fence dir (advisor).
+
+### 8.4 The NON-VACUOUS witness recipe (the next attempt builds THIS first, before any spec/impl/E1)
+
+Build the discriminator as a STANDALONE probe (the §746 revert happened because the 14 witnesses used a FAKED `_SubAgentDispatcher` → "structurally vacuous for exactly this path"). Components (all verified to exist at HEAD):
+1. A **run_key-RESPECTING** store — a real on-disk `EngineOutputStore` (keyed by `run_idempotency_key`, `engine_output_store.py`; producer writes via `workflow_driver.py:694 _store.record(run_idempotency_key, …)`) OR a faithful mirror that keys outputs by `run_key`. A `run_key`-ignoring fake REPRODUCES the vacuity trap → forbidden.
+2. A REAL child (≥2 steps incl. one COMMITTED `TOOL_STEP` writing to the store + fence) routed through the REAL `compose_child_workflow_runner(ctx)` — NOT a mocked runner, NOT a direct `execute_workflow` call.
+3. **Pin the child run_id to simulate E1** — the runner derives `child_run_id = uuid.uuid4()` on a crash-resume (`pause_snapshot_input is None`, `child_workflow_runner.py:153-154`), so a fresh re-dispatch is NOT recognized as a resume (fresh key → ledger_reader returns 0 materialized → `resume_at=0` → full fresh run, no reconstruct). Monkeypatch `uuid.uuid4` (or thread a pinned id) so the re-dispatch REUSES the original run_id → the store + ledger_reader align → the reconstruct path fires. This ISOLATES [P1-a] from building E1.
+4. Crash the parent mid-fan-out (branch maybe-ran) → resume → assert **recovered child `final_state` == no-crash child `final_state`** (FULL, not suffix-only) AND the committed tool fired EXACTLY ONCE (fence suppressed the re-fire).
+
+### 8.5 Outcome-gated next steps
+
+- **Witness GREEN ([P1-a] reconstructs):** the arc's remaining scope is BOUNDED — **E1** (deterministic child run_id from `parent_idempotency_key` + `child_workflow_id`, §2) **+ the [P1-b] resumed-child fence gate** (require BOTH the dispatch-time-recorded original `child_fence_active` AND a RESUMED-child fence-active check) **+ the LINEAR narrowing** (§4 constraints 1–2). E1 + recovery land TOGETHER (§4 constraint 4 — E1-alone is a `[[wired-handler-unreachable]]` half-mechanism). Then out-of-family Codex (the §0 revert was a Codex catch — expect ≥1 round).
+- **Witness suffix-only / RED:** the re-scope hypothesis is wrong; stay fail-closed, register the larger recursive mechanism honestly. A real finding either way.
+
+### 8.6 Loop posture (this session)
+
+This iteration RE-GROUNDED + RE-SCOPED the arc (the durable deliverable above) + ran the feasibility probe (GREEN) + identified the vacuity trap + **BUILT the [P1-a] discriminator witness (§8.7).** Reviewer chain this pass: advisor full-transcript ×3 (the [P1-a]/#766 reconcile → build-the-witness → the build-now-vs-bank-and-reschedule reconcile, which advisor resolved DECISIVELY toward "build the witness now — you're at peak knowledge; the bootstrap exists; the wall is forecast not hit; bank a real win, not prose").
+
+### 8.7 WITNESS BUILT + GREEN — [P1-a] EMPIRICALLY CONFIRMED CLOSED for the linear child (2026-06-26)
+
+`harness-runtime/tests/integration/test_recursive_child_crash_resume_final_state_witness.py` — 2 tests, both GREEN:
+- **`test_recursive_child_crash_resume_reconstructs_full_final_state`** — a REAL recursive child routed through the REAL `compose_child_workflow_runner` → `execute_workflow` (NOT a mocked runner / spied execute_workflow — the §0 vacuity trap AVOIDED), over a REAL on-disk `EngineOutputStore` (run_key-RESPECTING, unlike the #766 fake), child run_id PINNED via `uuid.uuid4` monkeypatch (simulating E1), `resume_at=2` over a committed prefix → reconstructs the COMPLETE `final_state` {step-0, step-1, step-2}, only step-2 re-dispatched.
+- **`test_recursive_child_crash_resume_without_store_degrades_to_suffix_only`** (NEGATIVE CONTROL, RED-without-the-store) — the SAME resume with NO `engine_output_store` bound → suffix-only {step-2}.
+
+The WITH/WITHOUT pair IS the integration discriminator the #766 run_key-ignoring fake could not witness. **Non-vacuity self-audit:** the WITH-store test PASSING also proves my `_run_key`/`_step_key` replication MATCHED the driver's actual derivation (`_compute_run_idempotency_key` extras=`(str(entry_version),)`, line 1970) — a wrong key → the store read finds nothing → suffix-only → the test would FAIL. Scope is honestly LINEAR-only (the in-scope case per §4 constraint 1); the FAN-OUT-child recursive reconstruction stays a registered follow-on. INFERENCE_STEP children suffice for the [P1-a] RESULT-fidelity question (the driver's `_record_engine_output` auto-commits regardless of kind; TOOL+fence is [P1-b]/at-most-once, a separate witness). **Decorrelated check (the §0 lesson — a GREEN witness was vacuous and only Codex caught it):** out-of-family Codex review (`just codex-review-uncommitted`) came back CLEAN on the witness — verbatim *"The added recursive-child witness test passes"*, ZERO findings against the witness or this addendum (all its [P2]/[P3]s were about UNRELATED pre-existing untracked `dashboard-design/` + `.agents/skills/` files, not in this commit). So the false-GREEN safeguard is satisfied: the witness is non-vacuous by both the WITH/WITHOUT discriminator + the decorrelated review.
+
+**→ The arc's remaining scope is now BOUNDED + DE-RISKED (the next fresh-context build):** E1 (deterministic child run_id from `parent_idempotency_key` + `child_workflow_id`) + the [P1-b] resumed-child fence gate + the LINEAR narrowing, landed TOGETHER (§4 constraint 4) with their own at-most-once witnesses + Codex rounds. [P1-a] result-fidelity is no longer a blocker for the linear child.
