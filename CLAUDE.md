@@ -166,7 +166,7 @@ H_E provides bounded substitutions for not-yet-built H_T primitives across 6 sub
 
 Per-axis substitution count: IS=9 / AS=6 / CP=21 / OD=8 / CXA=5.
 
-### 4.2 Substitution retirement discipline (ALL RETIREMENTS COMPLETE - 54/54)
+### 4.2 Substitution retirement discipline
 
 Per X-AL-2 (Meta-Architecture §7.7):
 
@@ -174,7 +174,7 @@ Per X-AL-2 (Meta-Architecture §7.7):
 
 Partial retirement is non-retirement. The `phase-7-substitution-retirement` skill at `.claude/skills/` governs retirement event discipline. Substitution retirement triggers throughout 7b–7d sub-phases, not only at 7d.
 
-**Canonical accounting (R-600).** `.harness/phase-8-graduation.md` records the **frozen Phase-8 close snapshot**: **54/54 RETIRED (100%) + 54/54 pipeline-advanced (100%)**. That snapshot is a historical milestone, not the live tally. The live per-row dispositions and live counts are the **single source of truth at `.harness/substitutions.yaml`**, DERIVED by `tools/substitution_ledger.py` and surfaced by the dashboard/status refresh flow (the CI tally gate `--check` fails on an impossible tally — the count-drift defect class that produced the original `48/54` cannot recur). Cite the derived live number from the tool/dashboard when needed; do not hand-maintain live counts inline in guidance.
+**Canonical accounting (R-600).** `.harness/phase-8-graduation.md` records the **frozen Phase-8 close snapshot**: **46/54 RETIRED (85.2%) + 49/54 pipeline-advanced (90.7%)**. That snapshot is a historical milestone, not the live tally. The live per-row dispositions and live counts are the **single source of truth at `.harness/substitutions.yaml`**, DERIVED by `tools/substitution_ledger.py` and surfaced by the dashboard/status refresh flow (the CI tally gate `--check` fails on an impossible tally — the count-drift defect class that produced the original `48/54` cannot recur). Cite the derived live number from the tool/dashboard when needed; do not hand-maintain live counts inline in guidance.
 
 ### 4.3 Back-flow routing
 
