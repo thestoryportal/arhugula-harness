@@ -4,7 +4,8 @@
 TOOL_STEP / MANAGED_AGENTS fence-recovery: a maybe-ran SUB_AGENT_DISPATCH worker recovers by
 re-dispatching its child under the deterministic child run_id (the child's own crash-resume
 auto-resumes, result-faithfully). It is recoverable ONLY when the child was RECOVERABLE
-({ESR,WAL} ∧ LINEAR ∧ leaf) BOTH at dispatch (`subagent_recoverable_indexes`, the marker) AND
+({ESR,WAL,SAVE_POINT} ∧ LINEAR ∧ leaf) BOTH at dispatch (`subagent_recoverable_indexes`, the
+marker) AND
 in the RESUMED manifest (`resumed_subagent_recoverable_indexes`) — the [P1-b] dual gate (the
 #746 `6930e7ef` Codex [P1]). Requiring BOTH closes the changed-manifest hole (a child edited
 recoverable→non-recoverable between dispatch + resume has durable records but the re-dispatch
@@ -60,7 +61,7 @@ def test_subagent_recoverable_both_dispatch_and_resumed_is_recoverable() -> None
 
 def test_subagent_recoverable_at_dispatch_but_not_resumed_fails_closed() -> None:
     """[P1-b] — child recoverable at DISPATCH (durable records exist) but NON-recoverable in the
-    RESUMED manifest (operator edited it {ESR}→SAVE_POINT / LINEAR→fan-out / added a nested
+    RESUMED manifest (operator edited it {ESR}→RECONCILER / LINEAR→fan-out / added a nested
     sub-agent) → the re-dispatch runs the non-recoverable child FRESH → double-fire / suffix-only
     corruption. The resumed-side conjunct fails it closed."""
     assert _classify(_SUB, _SUB, marker_recoverable=True, resumed_recoverable=False) == {0}
@@ -74,8 +75,8 @@ def test_subagent_recoverable_at_resumed_but_not_dispatch_fails_closed() -> None
 
 
 def test_subagent_non_recoverable_both_fails_closed() -> None:
-    """A non-recoverable child (e.g. a SAVE_POINT / fan-out / non-leaf child) at BOTH dispatch and
-    resume → fail closed (the `…-SAVE-POINT-RECONCILER` / fan-out-child / nested residuals)."""
+    """A non-recoverable child (e.g. a RECONCILER / fan-out / non-leaf child) at BOTH dispatch and
+    resume → fail closed (the `…-RECONCILER-CHILD` / fan-out-child / nested-child residuals)."""
     assert _classify(_SUB, _SUB, marker_recoverable=False, resumed_recoverable=False) == {0}
 
 

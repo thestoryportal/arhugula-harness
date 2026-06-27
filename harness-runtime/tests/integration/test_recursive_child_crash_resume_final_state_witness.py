@@ -110,12 +110,14 @@ def _seeded_step_key(run_id: str, step_index: int) -> str:
     return h.hexdigest()
 
 
-def _manifest() -> WorkflowManifestEntry:
+def _manifest(
+    engine_class: EngineClass = EngineClass.EVENT_SOURCED_REPLAY,
+) -> WorkflowManifestEntry:
     return WorkflowManifestEntry(
         workflow_id=_CHILD_WF,
         workload_class=WorkloadClass.PIPELINE_AUTOMATION,
         persona_tier=PersonaTier.TEAM_BINDING,
-        engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+        engine_class=engine_class,
         topology_pattern=TopologyPattern.SINGLE_THREADED_LINEAR,
         layer_budgets=(),
         fallback_chain=_CHAIN,
@@ -286,6 +288,52 @@ def test_recursive_child_crash_resume_reconstructs_full_final_state(
     assert result.final_state["step-0"] == {"out": "v0"}
     assert result.final_state["step-1"] == {"out": "v1"}
     # The committed prefix was reconstructed from the store, NOT re-dispatched.
+    dispatcher = ctx.step_dispatchers.lookup(StepKind.INFERENCE_STEP)
+    assert len(dispatcher.dispatched) == 1
+    assert str(dispatcher.dispatched[0][1].step_id) == "step-2"
+
+
+def test_recursive_child_crash_resume_save_point_reconstructs_full_final_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-SAVE-POINT-CHILD (R-FS-1) — the EFFECT-LEVEL pivot
+    witness (advisor #1). A REAL recursive child with a SAVE_POINT_CHECKPOINT manifest, routed
+    through `compose_child_workflow_runner` -> `execute_workflow` over a `run_key`-respecting
+    `EngineOutputStore` holding the committed prefix, crash-resumed with the child run_id PINNED
+    (the E1 deterministic re-derive), AUTO-RESUMES: `resume_at` is COMPUTED from the ledger reader
+    via the engine-class-agnostic F2-prefix join (SAVE_POINT is its reference impl, NOT a fresh run),
+    so ONLY step-2 is re-dispatched — the committed prefix [0,2) is NOT re-fired (at-most-once for
+    committed effects, count == 1 per step) — and final_state reconstructs the COMPLETE
+    {step-0, step-1, step-2}. Distinct from ESR: a SAVE_POINT resume fires NO inter-step
+    cached-output rehydrate and NO engine-layer recovery loop / CAS-claim (no F-1 window). RED on
+    HEAD before the predicate flip: the parent classifier excluded SAVE_POINT → the maybe-ran branch
+    failed closed (the run never reached this re-dispatch); the child-resume mechanics this asserts
+    are what make the now-admitted re-dispatch at-most-once-safe."""
+    store = EngineOutputStore(journal_dir=engine_output_dir_for(tmp_path))
+    run_key = _run_key()
+    store.record(run_key, 0, "step-0", {"out": "v0"})
+    store.record(run_key, 1, "step-1", {"out": "v1"})
+
+    _pin_child_run_id(monkeypatch)
+    ctx = _resume_ctx(store)
+    runner = compose_child_workflow_runner(cast(Any, ctx))
+    result = runner(
+        workflow_id=_CHILD_WF,
+        manifest_entry=_manifest(engine_class=EngineClass.SAVE_POINT_CHECKPOINT),
+        steps=[_step(0), _step(1), _step(2)],
+        handoff_context=cast(Any, None),
+        descent=cast(Any, None),
+        default_model_binding=_DEFAULT_BINDING,
+        pause_snapshot_input=None,  # CRASH-resume (not a pause-resume)
+    )
+
+    assert result.status is RunStatus.SUCCESS
+    assert result.final_state is not None
+    assert set(result.final_state.keys()) == {"step-0", "step-1", "step-2"}
+    assert result.final_state["step-0"] == {"out": "v0"}
+    assert result.final_state["step-1"] == {"out": "v1"}
+    # At-most-once: only step-2 re-dispatched; the committed prefix [0,2) was AUTO-RESUMED
+    # (resume_at computed > 0 from the F2-prefix), NOT re-fired (count == 1 per committed step).
     dispatcher = ctx.step_dispatchers.lookup(StepKind.INFERENCE_STEP)
     assert len(dispatcher.dispatched) == 1
     assert str(dispatcher.dispatched[0][1].step_id) == "step-2"

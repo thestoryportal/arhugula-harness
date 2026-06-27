@@ -292,8 +292,27 @@ def compose_child_action_id(parent_action_id: str, child_workflow_id: str) -> Ac
 # needs its own grounding (SAVE_POINT leaf has no CAS lease → likely cleaner; the arc decomposes).
 # The composer (typed) + the CP `_subagent_child_recoverable` defensive read are MIRROR
 # implementations of the same predicate — kept in sync by the by-execution witness.
+#
+# B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-SAVE-POINT-CHILD (R-FS-1): SAVE_POINT_CHECKPOINT
+# joined ESR/WAL once its final_state-reconstruction blocker retired (CP v1.79 — the
+# class-agnostic EngineOutputStore). A re-dispatched maybe-ran SAVE_POINT leaf child computes
+# `resume_at>0` via the SAME engine-class-agnostic F2-prefix join (`_determine_resume_at`, of
+# which SAVE_POINT is the reference impl), so the committed prefix is auto-resumed (NOT
+# re-fired → at-most-once) and final_state reconstructs — AND, unlike RECONCILER, a SAVE_POINT
+# resume fires NO engine-layer recovery loop / CAS-claim, so there is no F-1 ABORT window.
+# RECONCILER_LOOP stays OUT pending the registered
+# `B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-RECONCILER-CHILD` arc: a maybe-ran RECONCILER child
+# re-dispatch fires the U-CP-97 engine-layer reconverge (`attempt_resume`), whose F-1 limit
+# ABORTs a won-CAS-claim retry → §22.1 HITL — a distinct at-most-once question this fail-closed
+# gate must NOT widen over without its own grounding. This is a DEDICATED set, distinct from the
+# CP `_FANOUT_REPLAY_ENGINE_CLASSES` (which the SEPARATE B-FANOUT-OUTPUT-REPLAY branch-capture
+# gate also consumes and must NOT admit SAVE_POINT) — carrier segregation, not a shared widen.
 _SUBAGENT_RECOVERABLE_CHILD_ENGINE_CLASSES: frozenset[EngineClass] = frozenset(
-    {EngineClass.EVENT_SOURCED_REPLAY, EngineClass.WAL_SEGMENT}
+    {
+        EngineClass.EVENT_SOURCED_REPLAY,
+        EngineClass.WAL_SEGMENT,
+        EngineClass.SAVE_POINT_CHECKPOINT,
+    }
 )
 # Child step kinds that, if present, make the child NOT a witnessed leaf — the deeper recursion
 # (a nested SUB_AGENT_DISPATCH grandchild) or an unfenced vendor sink (MANAGED_AGENTS) is a
@@ -348,16 +367,16 @@ def subagent_child_recoverable(payload: SubAgentDispatchPayload) -> bool:
     THREE conjuncts (all required — the corrected predicate over the #746 reverted branch, which
     keyed on the engine class ALONE and was reverted on the [P1-a] result-fidelity gap):
 
-    1. **engine ∈ {ESR, WAL}** — the child's per-step output is durably recorded, so the resumed
-       child auto-resumes AND `reconstruct_final_state` rebuilds the COMPLETE terminal state.
-       SAVE_POINT_CHECKPOINT / RECONCILER_LOOP `final_state` NOW reconstructs too (the
-       class-agnostic EngineOutputStore, v1.79/v1.80) — the original "no store → suffix-only"
-       exclusion reason is RETIRED — but their re-dispatch recoverability stays OUT pending the
-       registered `B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-SAVE-POINT-RECONCILER-CHILD` arc:
-       RECONCILER carries an at-most-once F-1 window (re-dispatching a maybe-ran child whose first
-       attempt WON the CAS revision claim ABORTs → §22.1 HITL) → widening this fail-closed gate
-       over that unresolved at-most-once question needs its own grounding (SAVE_POINT leaf has no
-       CAS lease → likely cleaner; the arc decomposes).
+    1. **engine ∈ {ESR, WAL, SAVE_POINT}** — the child's per-step output is durably recorded, so
+       the resumed child auto-resumes (`resume_at>0` via the engine-class-agnostic F2-prefix join)
+       AND `reconstruct_final_state` rebuilds the COMPLETE terminal state. SAVE_POINT_CHECKPOINT
+       JOINED at the `…-SAVE-POINT-CHILD` close (R-FS-1): its final_state reconstructs (CP v1.79's
+       class-agnostic EngineOutputStore) AND its re-dispatch fires NO engine-layer recovery loop /
+       CAS-claim — the cleanest auto-resume (no F-1 window). RECONCILER_LOOP stays OUT pending the
+       registered `B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-RECONCILER-CHILD` arc: a maybe-ran
+       RECONCILER child re-dispatch fires the U-CP-97 engine-layer reconverge (`attempt_resume`),
+       whose F-1 limit ABORTs a won-CAS-claim retry → §22.1 HITL — a distinct at-most-once question
+       this fail-closed gate must NOT widen over without its own grounding.
     2. **topology == SINGLE_THREADED_LINEAR** — the WITNESSED scope (#770). A fan-out child engages
        its OWN fan-out crash-resume reconstruction, a deeper unwitnessed path → the registered
        fan-out-child follow-on. "No nested sub-agents" ≠ "no recursion" (finding-v1 §4.1).

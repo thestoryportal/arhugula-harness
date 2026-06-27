@@ -4039,10 +4039,13 @@ def test_crash_resume_orchestrator_maybe_ran_sub_agent_recoverable_child_recover
 
 def test_crash_resume_orchestrator_maybe_ran_sub_agent_non_recoverable_child_fails_closed() -> None:
     """B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-SUBAGENT (R-FS-1) full-chain negative control —
-    a maybe-ran SUB_AGENT_DISPATCH orchestrator whose child is NOT recoverable (here a SAVE_POINT
-    child → no durable output store → suffix-only `final_state`) STAYS fail-closed. The production
-    dispatch records `child_recoverable=False`, so the resume classifier's dual gate fails → the run
-    cannot recover (the SAVE_POINT/RECONCILER + non-leaf-child residuals)."""
+    a maybe-ran SUB_AGENT_DISPATCH orchestrator whose child is NOT recoverable (here a RECONCILER
+    child — its maybe-ran re-dispatch fires the U-CP-97 engine-layer reconverge whose F-1 won-CAS-
+    claim-retry ABORTs → §22.1 HITL, the registered `…-RECONCILER-CHILD` follow-on) STAYS fail-closed.
+    The production dispatch records `child_recoverable=False`, so the resume classifier's dual gate
+    fails → the run cannot recover. (Was a SAVE_POINT child before the `…-SAVE-POINT-CHILD` close
+    flipped SAVE_POINT recoverable; RECONCILER is now the contrasting non-recoverable baseline that
+    breaks if the decomposition boundary is ever accidentally widened to RECONCILER.)"""
     store = _InMemoryBranchStore()
     orch = WorkflowStep(
         step_id=StepID("orch"),
@@ -4050,7 +4053,7 @@ def test_crash_resume_orchestrator_maybe_ran_sub_agent_non_recoverable_child_fai
         step_payload={
             "index": 0,
             "child_manifest_entry": {
-                "engine_class": EngineClass.SAVE_POINT_CHECKPOINT.value,  # no output store
+                "engine_class": EngineClass.RECONCILER_LOOP.value,  # F-1 CAS-claim ABORT window
                 "topology_pattern": TopologyPattern.SINGLE_THREADED_LINEAR.value,
             },
             "child_steps": [{"step_kind": StepKind.TOOL_STEP.value}],
@@ -4083,6 +4086,63 @@ def test_crash_resume_orchestrator_maybe_ran_sub_agent_non_recoverable_child_fai
     # Fail-closed maybe-ran → the run does NOT recover (FAILED, never a spurious fresh re-dispatch).
     assert r2.status is RunStatus.FAILED
     assert resume.dispatched == []
+
+
+def test_crash_resume_orchestrator_maybe_ran_sub_agent_save_point_child_recovers() -> None:
+    """B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-SAVE-POINT-CHILD (R-FS-1) full-chain — a maybe-ran
+    SUB_AGENT_DISPATCH orchestrator whose child is a SAVE_POINT_CHECKPOINT LINEAR leaf now RECOVERS
+    (was: fail-closed — SAVE_POINT was the negative control before this close). The PRODUCTION
+    orchestrator dispatch records `child_recoverable=True` (the predicate now admits SAVE_POINT via
+    the dedicated `_SUBAGENT_RECOVERABLE_CHILD_ENGINE_CLASSES`); on crash-resume the [P1-b] dual gate
+    is satisfied (marker True + resumed `steps[0]` recoverable + same step_id) → the whole fan-out
+    re-runs fresh, the orchestrator re-dispatches, and its child auto-resumes from its durable store
+    under the deterministic child run_id (the at-most-once child-resume is witnessed end-to-end at
+    runtime `test_recursive_child_crash_resume_save_point_reconstructs_full_final_state`). RED before
+    the predicate extension: the marker recorded `child_recoverable=False` → the dual gate failed →
+    the run failed closed (no recovery)."""
+    store = _InMemoryBranchStore()
+    orch = WorkflowStep(
+        step_id=StepID("orch"),
+        step_kind=StepKind.SUB_AGENT_DISPATCH,
+        step_payload={
+            "index": 0,
+            "child_manifest_entry": {
+                "engine_class": EngineClass.SAVE_POINT_CHECKPOINT.value,
+                "topology_pattern": TopologyPattern.SINGLE_THREADED_LINEAR.value,
+            },
+            "child_steps": [{"step_kind": StepKind.TOOL_STEP.value}],
+        },
+    )
+    steps = [orch, _step("w-0", 0), _step("w-1", 1)]
+    _run_persona(
+        workflow_id="wf-ow-orch-subagent-savepoint",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=2),
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+        registry=_AnyKindRegistry(_CountingDispatcher(n=2)),
+    )
+    key = store.sole_run_key()
+    # The PRODUCTION orchestrator dispatch recorded the SAVE_POINT child as recoverable.
+    assert store.orchestrator_subagent_child_recoverable(key) is True
+    store.forget_orchestrator_maybe_ran(key)
+    assert store.orchestrator_subagent_child_recoverable(key) is True
+
+    resume = _CountingDispatcher(n=2)
+    r2 = _run_persona(
+        workflow_id="wf-ow-orch-subagent-savepoint",
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+        registry=_AnyKindRegistry(resume),
+    )
+    assert r2.status is RunStatus.SUCCESS
+    # Recovered → the whole fan-out re-ran fresh (orchestrator re-dispatch → SAVE_POINT child
+    # auto-resume); no spurious double-dispatch.
+    assert resume.dispatched == ["orch", "w-0", "w-1"]
 
 
 class _LegacyOrchestratorMarkerStore(_InMemoryBranchStore):

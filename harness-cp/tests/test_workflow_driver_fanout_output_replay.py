@@ -441,7 +441,7 @@ def test_orchestrator_maybe_ran_sub_agent_dispatch_non_recoverable_child_fails_c
     child (`orchestrator_subagent_recoverable=False`), AND the resumed `steps[0]` opaque payload
     has no child manifest (`_subagent_child_recoverable` → False). A SUB_AGENT orchestrator is
     recursively fenced at its CHILD's tool sinks, so it recovers ONLY when its child can auto-resume
-    result-faithfully ({ESR,WAL} ∧ LINEAR ∧ leaf) — else fail closed (the SAVE_POINT/RECONCILER +
+    result-faithfully ({ESR,WAL,SAVE_POINT} ∧ LINEAR ∧ leaf) — else fail closed (the RECONCILER +
     non-leaf-child residuals)."""
     store = _FakeStore(
         branches={},
