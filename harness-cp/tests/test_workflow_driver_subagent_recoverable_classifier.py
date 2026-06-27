@@ -4,12 +4,18 @@
 TOOL_STEP / MANAGED_AGENTS fence-recovery: a maybe-ran SUB_AGENT_DISPATCH worker recovers by
 re-dispatching its child under the deterministic child run_id (the child's own crash-resume
 auto-resumes, result-faithfully). It is recoverable ONLY when the child was RECOVERABLE
-({ESR,WAL,SAVE_POINT} ∧ LINEAR ∧ leaf) BOTH at dispatch (`subagent_recoverable_indexes`, the
-marker) AND
-in the RESUMED manifest (`resumed_subagent_recoverable_indexes`) — the [P1-b] dual gate (the
-#746 `6930e7ef` Codex [P1]). Requiring BOTH closes the changed-manifest hole (a child edited
+({ESR,WAL,SAVE_POINT,RECONCILER} ∧ LINEAR ∧ leaf) BOTH at dispatch
+(`subagent_recoverable_indexes`, the marker) AND in the RESUMED manifest
+(`resumed_subagent_recoverable_indexes`) — the [P1-b] dual gate (the #746 `6930e7ef` Codex [P1])
+— AND with the SAME child engine class at dispatch + resume (`dispatched_child_engines` ==
+`resumed_child_engines`, the cross-engine-class swap guard, out-of-family Codex [P1] on the
+…-RECONCILER-CHILD arc). Requiring all three closes the changed-manifest hole (a child edited
 recoverable→non-recoverable between dispatch + resume has durable records but the re-dispatch
-runs the non-recoverable child fresh → double-fire / suffix-only corruption).
+runs the non-recoverable child fresh → double-fire / suffix-only corruption) AND the
+cross-engine-class swap hole (a same-step_id RECONCILER→SAVE_POINT swap keeps the same
+engine-class-agnostic `compose_child_run_id_seed` seed → re-dispatches against the SAME durable
+store through a DIFFERENT recovery mechanism, bypassing the RECONCILER CAS at-most-once
+protection).
 """
 
 from __future__ import annotations
@@ -22,6 +28,9 @@ from harness_cp.workflow_driver_types import StepKind
 _SUB = StepKind.SUB_AGENT_DISPATCH.value
 _TOOL = StepKind.TOOL_STEP.value
 _DECL = StepKind.DECLARATIVE_STEP.value
+_ESR = "event-sourced-replay"
+_SAVE = "save-point-checkpoint"
+_RECON = "reconciler-loop"
 
 
 def _classify(
@@ -33,14 +42,22 @@ def _classify(
     branch_count: int = 2,
     marker_step_id: str | None = "s0",
     resumed_step_id: str | None = "s0",
+    marker_engine: str | None = _ESR,
+    resumed_engine: str | None = _ESR,
 ) -> set[int]:
     """UNRECOVERABLE subset of {0} for a single maybe-ran branch at ordinal 0 with the given
-    dispatch-marker + resumed kinds and the dispatch-time / resumed-manifest child recoverability.
-    Empty ⟹ recoverable."""
+    dispatch-marker + resumed kinds, the dispatch-time / resumed-manifest child recoverability, and
+    the dispatch-time / resumed child engine class. Empty ⟹ recoverable. `marker_engine` /
+    `resumed_engine` default to the SAME recoverable engine (the same-engine conjunct holds unless a
+    test varies them — the cross-engine-class swap guard)."""
     subagent_dispatch: Collection[int] = {0} if marker_recoverable else set()
     subagent_resumed: Collection[int] = {0} if resumed_recoverable else set()
     resumed_map: dict[int, str] = {0: resumed} if resumed is not None else {}
     resumed_sids: dict[int, str] = {0: resumed_step_id} if resumed_step_id is not None else {}
+    marker_engines: dict[int, str | None] = {0: marker_engine} if marker_engine is not None else {}
+    resumed_engines: dict[int, str | None] = (
+        {0: resumed_engine} if resumed_engine is not None else {}
+    )
     return _fence_unrecoverable_maybe_ran_indices(
         {0},
         {0: marker},
@@ -50,6 +67,8 @@ def _classify(
         resumed_step_ids=resumed_sids,
         subagent_recoverable_indexes=subagent_dispatch,
         resumed_subagent_recoverable_indexes=subagent_resumed,
+        dispatched_child_engines=marker_engines,
+        resumed_child_engines=resumed_engines,
     )
 
 
@@ -61,7 +80,7 @@ def test_subagent_recoverable_both_dispatch_and_resumed_is_recoverable() -> None
 
 def test_subagent_recoverable_at_dispatch_but_not_resumed_fails_closed() -> None:
     """[P1-b] — child recoverable at DISPATCH (durable records exist) but NON-recoverable in the
-    RESUMED manifest (operator edited it {ESR}→RECONCILER / LINEAR→fan-out / added a nested
+    RESUMED manifest (operator edited it {ESR}→PURE_PATTERN / LINEAR→fan-out / added a nested
     sub-agent) → the re-dispatch runs the non-recoverable child FRESH → double-fire / suffix-only
     corruption. The resumed-side conjunct fails it closed."""
     assert _classify(_SUB, _SUB, marker_recoverable=True, resumed_recoverable=False) == {0}
@@ -75,8 +94,8 @@ def test_subagent_recoverable_at_resumed_but_not_dispatch_fails_closed() -> None
 
 
 def test_subagent_non_recoverable_both_fails_closed() -> None:
-    """A non-recoverable child (e.g. a RECONCILER / fan-out / non-leaf child) at BOTH dispatch and
-    resume → fail closed (the `…-RECONCILER-CHILD` / fan-out-child / nested-child residuals)."""
+    """A non-recoverable child (e.g. a PURE_PATTERN / fan-out / non-leaf child) at BOTH dispatch and
+    resume → fail closed (the PURE_PATTERN-child / fan-out-child / nested-child residuals)."""
     assert _classify(_SUB, _SUB, marker_recoverable=False, resumed_recoverable=False) == {0}
 
 
@@ -141,3 +160,65 @@ def test_subagent_default_empty_recoverable_sets_fail_closed() -> None:
         resumed_step_ids={0: "s0"},
     )
     assert out == {0}
+
+
+def test_subagent_same_engine_reconciler_recoverable() -> None:
+    """Positive control for the RECONCILER engine + the same-engine conjunct: marker RECONCILER +
+    resumed RECONCILER, both recoverable, same step_id → RECOVERABLE (the re-dispatched RECONCILER
+    child runs its OWN crash-resume; the same-engine conjunct holds)."""
+    assert (
+        _classify(
+            _SUB,
+            _SUB,
+            marker_recoverable=True,
+            resumed_recoverable=True,
+            marker_engine=_RECON,
+            resumed_engine=_RECON,
+        )
+        == set()
+    )
+
+
+def test_subagent_cross_engine_swap_reconciler_to_savepoint_fails_closed() -> None:
+    """THE WITNESS (out-of-family Codex [P1], …-RECONCILER-CHILD arc) — RED without the same-engine
+    guard. Marker child engine RECONCILER but resumed child engine SAVE_POINT, BOTH recoverable, SAME
+    step_id: both [P1-b] booleans + the changed-step_id guard pass, yet `compose_child_run_id_seed`
+    is engine-class-agnostic → the swap would re-dispatch the child against the SAME durable store
+    through SAVE_POINT recovery instead of the RECONCILER CAS path, bypassing the at-most-once
+    protection. The same-engine conjunct fails it closed."""
+    assert _classify(
+        _SUB,
+        _SUB,
+        marker_recoverable=True,
+        resumed_recoverable=True,
+        marker_engine=_RECON,
+        resumed_engine=_SAVE,
+    ) == {0}
+
+
+def test_subagent_cross_engine_swap_savepoint_to_reconciler_fails_closed() -> None:
+    """The reverse swap (marker SAVE_POINT, resumed RECONCILER) also fails closed — the same-engine
+    conjunct is symmetric."""
+    assert _classify(
+        _SUB,
+        _SUB,
+        marker_recoverable=True,
+        resumed_recoverable=True,
+        marker_engine=_SAVE,
+        resumed_engine=_RECON,
+    ) == {0}
+
+
+def test_subagent_marker_engine_missing_fails_closed() -> None:
+    """A torn / pre-arc marker with NO recorded child engine class (`marker_engine=None` → the engine
+    map omits the ordinal → `.get(0)` is None) fails closed even with both recoverable + same
+    step_id: cannot prove the dispatch-time engine, so the same-engine conjunct (marker engine is not
+    None) fails."""
+    assert _classify(
+        _SUB,
+        _SUB,
+        marker_recoverable=True,
+        resumed_recoverable=True,
+        marker_engine=None,
+        resumed_engine=_RECON,
+    ) == {0}

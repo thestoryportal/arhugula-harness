@@ -204,10 +204,11 @@ def compose_child_workflow_runner(ctx: HarnessContext) -> ChildWorkflowRunner:
         # child_result.final_state`; the B-HIERARCHICAL-PAUSE re-enter fold) would
         # otherwise consume that truncated state and silently corrupt the parent
         # aggregate. The opt-in seeds the committed prefix from the durable output store
-        # so the child's `final_state` reconstructs the COMPLETE terminal state. A child
-        # of a non-store engine class (SAVE_POINT_CHECKPOINT / RECONCILER_LOOP) degrades
-        # to the prior suffix-only behavior (no output store → the registered
-        # SAVE_POINT/RECONCILER follow-on); a first (non-resume) dispatch is unaffected.
+        # so the child's `final_state` reconstructs the COMPLETE terminal state. ALL FOUR
+        # durable resumable engine classes reconstruct (the EngineOutputStore is
+        # class-agnostic: ESR/WAL #766, SAVE_POINT_CHECKPOINT v1.79 #779, RECONCILER_LOOP
+        # v1.80 #781); only PURE_PATTERN_NO_ENGINE (non-durable) degrades to suffix-only.
+        # A first (non-resume) dispatch is unaffected.
         # Top-level runs (`harness_runtime.api.run`) do NOT pass this → their accepted
         # suffix-only resume semantic is untouched (the fork-bearing top-level
         # reconstruction is a separate registered arc).

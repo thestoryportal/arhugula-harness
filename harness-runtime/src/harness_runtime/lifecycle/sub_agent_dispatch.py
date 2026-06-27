@@ -277,41 +277,38 @@ def compose_child_action_id(parent_action_id: str, child_workflow_id: str) -> Ac
     return ActionID(f"{parent_action_id}::child::{child_workflow_id}")
 
 
-# B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT (R-FS-1) — the child engine classes whose maybe-ran
-# re-dispatch is RECOVERABLE (re-dispatch under the deterministic child run_id auto-resumes from
-# the store AND `final_state` reconstructs via `reconstruct_final_state` — B-CHILD-CRASH-RESUME-
-# FINAL-STATE-RECONSTRUCT, #764/#766/#768). MUST equal the CP driver's
-# `_FANOUT_REPLAY_ENGINE_CLASSES` ({EVENT_SOURCED_REPLAY, WAL_SEGMENT}) — a SUBSET of the runtime's
-# 4 `_DURABLE_AUTO_FENCE_ENGINE_CLASSES`. SAVE_POINT_CHECKPOINT / RECONCILER_LOOP `final_state` NOW
-# reconstructs too (the EngineOutputStore is class-agnostic — SAVE_POINT v1.79 #779, RECONCILER
-# v1.80) — so the original "no durable output store → suffix-only final_state → fold corruption"
-# exclusion is RETIRED, but they stay EXCLUDED here pending the registered
-# B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-SAVE-POINT-RECONCILER-CHILD arc: re-dispatching a
-# maybe-ran RECONCILER child whose first attempt WON the CAS
-# revision claim ABORTs (the substrate F-1 at-most-once window) → widening this fail-closed gate
-# needs its own grounding (SAVE_POINT leaf has no CAS lease → likely cleaner; the arc decomposes).
-# The composer (typed) + the CP `_subagent_child_recoverable` defensive read are MIRROR
-# implementations of the same predicate — kept in sync by the by-execution witness.
+# B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-RECONCILER-CHILD (R-FS-1) — the child engine classes
+# whose maybe-ran re-dispatch is RECOVERABLE (re-dispatch under the deterministic child run_id
+# auto-resumes from the store AND `final_state` reconstructs via `reconstruct_final_state`).
+# ALL FOUR durable resumable engine classes are now members; PURE_PATTERN_NO_ENGINE (non-durable,
+# no resume) is the sole non-member. SAVE_POINT_CHECKPOINT joined ESR/WAL at the
+# `…-SAVE-POINT-CHILD` close; RECONCILER_LOOP JOINS here. The composer (typed) + the CP
+# `_subagent_child_recoverable` defensive read are MIRROR implementations of the same predicate —
+# kept in sync by the by-execution agreement witness.
 #
-# B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-SAVE-POINT-CHILD (R-FS-1): SAVE_POINT_CHECKPOINT
-# joined ESR/WAL once its final_state-reconstruction blocker retired (CP v1.79 — the
-# class-agnostic EngineOutputStore). A re-dispatched maybe-ran SAVE_POINT leaf child computes
-# `resume_at>0` via the SAME engine-class-agnostic F2-prefix join (`_determine_resume_at`, of
-# which SAVE_POINT is the reference impl), so the committed prefix is auto-resumed (NOT
-# re-fired → at-most-once) and final_state reconstructs — AND, unlike RECONCILER, a SAVE_POINT
-# resume fires NO engine-layer recovery loop / CAS-claim, so there is no F-1 ABORT window.
-# RECONCILER_LOOP stays OUT pending the registered
-# `B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-RECONCILER-CHILD` arc: a maybe-ran RECONCILER child
-# re-dispatch fires the U-CP-97 engine-layer reconverge (`attempt_resume`), whose F-1 limit
-# ABORTs a won-CAS-claim retry → §22.1 HITL — a distinct at-most-once question this fail-closed
-# gate must NOT widen over without its own grounding. This is a DEDICATED set, distinct from the
-# CP `_FANOUT_REPLAY_ENGINE_CLASSES` (which the SEPARATE B-FANOUT-OUTPUT-REPLAY branch-capture
-# gate also consumes and must NOT admit SAVE_POINT) — carrier segregation, not a shared widen.
+# RECONCILER admission is at-most-once-safe WITHOUT first building the F-1 engine-lock arc. A
+# re-dispatched maybe-ran RECONCILER child runs its OWN crash-resume, which fires the U-CP-97
+# engine-layer reconverge (`attempt_resume`) gated AT THE CAS CLAIM, upstream of the step loop
+# (`reconciler_pause_resume_substrate.py` F-1). Three exhaustive cases, all safe: (1) child never
+# won a claim → cleanly re-claims → auto-resumes the committed prefix (F2-skipped, not re-fired);
+# (2) clean RESUME_CLEAN → same; (3) the F-1 window — the child WON the claim then crashed
+# mid-re-execution → the retry of the already-claimed revision ABORTs (`ABORT_REVALIDATION_FAILED`)
+# → the child returns RunStatus.FAILED *before any step re-executes* (at-most-once preserved, never
+# a double-fire) → the parent fold raises `SubAgentChildFailedError` (fail-closed; never a SUCCESS
+# aggregate). So admitting RECONCILER strictly IMPROVES the not-won-claim cases (recover vs
+# fail-the-parent-closed) and routes the F-1 window through the SAME already-on-main
+# RECONCILER-resume ABORT→§22.1-HITL disposition (#779/#781); the registered F-1 engine-lock
+# auto-recovery arc improves ALL RECONCILER resumes and is NOT a prerequisite for this slice.
+# (SAVE_POINT, unlike RECONCILER, fires NO recovery loop / CAS-claim — no F-1 window at all.)
+# This is a DEDICATED set, distinct from the CP `_FANOUT_REPLAY_ENGINE_CLASSES` (which the SEPARATE
+# B-FANOUT-OUTPUT-REPLAY branch-capture gate also consumes and must NOT admit SAVE_POINT/RECONCILER)
+# — carrier segregation, not a shared widen.
 _SUBAGENT_RECOVERABLE_CHILD_ENGINE_CLASSES: frozenset[EngineClass] = frozenset(
     {
         EngineClass.EVENT_SOURCED_REPLAY,
         EngineClass.WAL_SEGMENT,
         EngineClass.SAVE_POINT_CHECKPOINT,
+        EngineClass.RECONCILER_LOOP,
     }
 )
 # Child step kinds that, if present, make the child NOT a witnessed leaf — the deeper recursion
@@ -367,16 +364,18 @@ def subagent_child_recoverable(payload: SubAgentDispatchPayload) -> bool:
     THREE conjuncts (all required — the corrected predicate over the #746 reverted branch, which
     keyed on the engine class ALONE and was reverted on the [P1-a] result-fidelity gap):
 
-    1. **engine ∈ {ESR, WAL, SAVE_POINT}** — the child's per-step output is durably recorded, so
-       the resumed child auto-resumes (`resume_at>0` via the engine-class-agnostic F2-prefix join)
-       AND `reconstruct_final_state` rebuilds the COMPLETE terminal state. SAVE_POINT_CHECKPOINT
-       JOINED at the `…-SAVE-POINT-CHILD` close (R-FS-1): its final_state reconstructs (CP v1.79's
-       class-agnostic EngineOutputStore) AND its re-dispatch fires NO engine-layer recovery loop /
-       CAS-claim — the cleanest auto-resume (no F-1 window). RECONCILER_LOOP stays OUT pending the
-       registered `B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-RECONCILER-CHILD` arc: a maybe-ran
-       RECONCILER child re-dispatch fires the U-CP-97 engine-layer reconverge (`attempt_resume`),
-       whose F-1 limit ABORTs a won-CAS-claim retry → §22.1 HITL — a distinct at-most-once question
-       this fail-closed gate must NOT widen over without its own grounding.
+    1. **engine ∈ {ESR, WAL, SAVE_POINT, RECONCILER}** — the child's per-step output is durably
+       recorded, so the resumed child auto-resumes (`resume_at>0` via the engine-class-agnostic
+       F2-prefix join) AND `reconstruct_final_state` rebuilds the COMPLETE terminal state. ALL FOUR
+       durable resumable classes are members (PURE_PATTERN_NO_ENGINE is the lone non-member).
+       SAVE_POINT joined at the `…-SAVE-POINT-CHILD` close (no CAS-claim, no F-1 window);
+       RECONCILER_LOOP joins at the `…-RECONCILER-CHILD` close (R-FS-1): a maybe-ran RECONCILER
+       child re-dispatch runs its OWN crash-resume, firing the U-CP-97 reconverge (`attempt_resume`)
+       gated AT THE CLAIM, upstream of the step loop — so the F-1 won-CAS-claim-retry window
+       manifests as `ABORT_REVALIDATION_FAILED` → child RunStatus.FAILED *before any step
+       re-executes* (at-most-once preserved) → the parent fold raises `SubAgentChildFailedError`
+       (fail-closed; never a SUCCESS aggregate). The F-1 engine-lock auto-recovery arc improves ALL
+       RECONCILER resumes and is NOT a prerequisite for this child-recoverability slice.
     2. **topology == SINGLE_THREADED_LINEAR** — the WITNESSED scope (#770). A fan-out child engages
        its OWN fan-out crash-resume reconstruction, a deeper unwitnessed path → the registered
        fan-out-child follow-on. "No nested sub-agents" ≠ "no recursion" (finding-v1 §4.1).

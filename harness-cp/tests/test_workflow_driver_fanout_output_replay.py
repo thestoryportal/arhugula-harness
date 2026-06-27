@@ -69,6 +69,7 @@ class _FakeStore:
         orchestrator_dispatched_kind: str | None = None,
         orchestrator_dispatched_step_id: str | None = None,
         orchestrator_subagent_recoverable: bool = False,
+        orchestrator_subagent_engine: str | None = None,
         dispatched_kinds: dict[int, str | None] | None = None,
         synthesis_present: bool = False,
     ) -> None:
@@ -103,6 +104,10 @@ class _FakeStore:
         # SUB_AGENT_DISPATCH child was recoverable at dispatch (the marker; False = absent /
         # non-recoverable → the resume classifier fails closed).
         self._orchestrator_subagent_recoverable = orchestrator_subagent_recoverable
+        # B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-RECONCILER-CHILD — the orchestrator's
+        # DISPATCH-TIME child EngineClass value (the cross-engine-class swap guard; None = absent /
+        # torn → mismatch → fail-closed).
+        self._orchestrator_subagent_engine = orchestrator_subagent_engine
         # B-FANOUT-CRASH-RESUME-MAYBE-RAN-RESOLUTION / TIMEOUT-REPLAY — the dispatch-time
         # kind recorded in each branch's `.dispatched` marker (the at-most-once changed-
         # manifest guard; None = un-recorded / torn marker → fail-closed at the classifier).
@@ -149,6 +154,9 @@ class _FakeStore:
 
     def orchestrator_subagent_child_recoverable(self, run_key: str) -> bool:
         return self._orchestrator_subagent_recoverable
+
+    def orchestrator_dispatched_child_engine_class(self, run_key: str) -> str | None:
+        return self._orchestrator_subagent_engine
 
     def present_dispatched_indexes(self, run_key: str) -> set[int]:
         return set(self._dispatched_kinds)
@@ -441,8 +449,8 @@ def test_orchestrator_maybe_ran_sub_agent_dispatch_non_recoverable_child_fails_c
     child (`orchestrator_subagent_recoverable=False`), AND the resumed `steps[0]` opaque payload
     has no child manifest (`_subagent_child_recoverable` → False). A SUB_AGENT orchestrator is
     recursively fenced at its CHILD's tool sinks, so it recovers ONLY when its child can auto-resume
-    result-faithfully ({ESR,WAL,SAVE_POINT} ∧ LINEAR ∧ leaf) — else fail closed (the RECONCILER +
-    non-leaf-child residuals)."""
+    result-faithfully (a durable engine class {ESR,WAL,SAVE_POINT,RECONCILER} ∧ LINEAR ∧ leaf) —
+    else fail closed (PURE_PATTERN_NO_ENGINE + the non-leaf / fan-out-child residuals)."""
     store = _FakeStore(
         branches={},
         orchestrator=None,
@@ -462,17 +470,22 @@ def test_orchestrator_maybe_ran_sub_agent_dispatch_non_recoverable_child_fails_c
 
 
 def _recoverable_orch_steps(
-    *, orch_step_id: str = "step-0", child_kind: StepKind = StepKind.TOOL_STEP
+    *,
+    orch_step_id: str = "step-0",
+    child_kind: StepKind = StepKind.TOOL_STEP,
+    engine: EngineClass = EngineClass.EVENT_SOURCED_REPLAY,
 ) -> list[WorkflowStep]:
     """`steps[0]` is a SUB_AGENT_DISPATCH orchestrator whose opaque payload describes a
-    RE-DISPATCH-RECOVERABLE child ({ESR} ∧ LINEAR ∧ leaf) → `_subagent_child_recoverable` → True."""
+    RE-DISPATCH-RECOVERABLE child ({ESR,WAL,SAVE_POINT,RECONCILER} ∧ LINEAR ∧ leaf) →
+    `_subagent_child_recoverable` → True. `engine` is the resumed manifest's child engine class
+    (compared against the dispatch-time marker by the cross-engine-class swap guard)."""
     steps = _steps(3)
     steps[0] = WorkflowStep(
         step_id=StepID(orch_step_id),
         step_kind=StepKind.SUB_AGENT_DISPATCH,
         step_payload={
             "child_manifest_entry": {
-                "engine_class": EngineClass.EVENT_SOURCED_REPLAY.value,
+                "engine_class": engine.value,
                 "topology_pattern": TopologyPattern.SINGLE_THREADED_LINEAR.value,
             },
             "child_steps": [{"step_kind": child_kind.value}],
@@ -496,6 +509,7 @@ def test_orchestrator_maybe_ran_sub_agent_recoverable_child_recovers() -> None:
         orchestrator_dispatched_kind=StepKind.SUB_AGENT_DISPATCH.value,
         orchestrator_dispatched_step_id="step-0",
         orchestrator_subagent_recoverable=True,
+        orchestrator_subagent_engine=EngineClass.EVENT_SOURCED_REPLAY.value,
     )
     assert (
         _determine_fanout_resume(
@@ -503,6 +517,54 @@ def test_orchestrator_maybe_ran_sub_agent_recoverable_child_recovers() -> None:
         )
         is None
     )
+
+
+def test_orchestrator_maybe_ran_sub_agent_cross_engine_swap_fails_closed() -> None:
+    """SAME-ENGINE guard (out-of-family Codex [P1], …-RECONCILER-CHILD arc), orchestrator path — RED
+    without the guard. The DISPATCH-TIME marker recorded a RECONCILER child engine but the RESUMED
+    steps[0] child engine is SAVE_POINT, both recoverable + SAME step_id: `compose_child_run_id_seed`
+    is engine-class-agnostic, so the swap would re-dispatch the orchestrator's child against the SAME
+    durable store through SAVE_POINT recovery instead of the RECONCILER CAS path, bypassing
+    at-most-once. The same-engine conjunct fails it closed."""
+    store = _FakeStore(
+        branches={},
+        orchestrator=None,
+        dispatch_instrumented=True,
+        orchestrator_dispatched=True,
+        orchestrator_dispatched_kind=StepKind.SUB_AGENT_DISPATCH.value,
+        orchestrator_dispatched_step_id="step-0",
+        orchestrator_subagent_recoverable=True,
+        orchestrator_subagent_engine=EngineClass.RECONCILER_LOOP.value,  # marker: RECONCILER
+    )
+    with pytest.raises(_FanOutStoreOrchestratorMaybeRanError, match="effect-bearing"):
+        _determine_fanout_resume(
+            store,
+            _RUN_KEY,
+            # resumed steps[0] child engine: SAVE_POINT (≠ marker RECONCILER)
+            _recoverable_orch_steps(engine=EngineClass.SAVE_POINT_CHECKPOINT),
+            TopologyPattern.ORCHESTRATOR_WORKERS,
+        )
+
+
+def test_orchestrator_maybe_ran_sub_agent_marker_engine_missing_fails_closed() -> None:
+    """A torn / pre-arc orchestrator marker with NO recorded child engine
+    (`orchestrator_subagent_engine=None`) fails closed even with both recoverable + same step_id:
+    `_orchestrator_dispatched_child_engine` → None → the same-engine conjunct (engine is not None)
+    fails."""
+    store = _FakeStore(
+        branches={},
+        orchestrator=None,
+        dispatch_instrumented=True,
+        orchestrator_dispatched=True,
+        orchestrator_dispatched_kind=StepKind.SUB_AGENT_DISPATCH.value,
+        orchestrator_dispatched_step_id="step-0",
+        orchestrator_subagent_recoverable=True,
+        orchestrator_subagent_engine=None,  # marker engine un-recorded
+    )
+    with pytest.raises(_FanOutStoreOrchestratorMaybeRanError, match="effect-bearing"):
+        _determine_fanout_resume(
+            store, _RUN_KEY, _recoverable_orch_steps(), TopologyPattern.ORCHESTRATOR_WORKERS
+        )
 
 
 def test_orchestrator_maybe_ran_sub_agent_recoverable_at_dispatch_not_resumed_fails_closed() -> (
