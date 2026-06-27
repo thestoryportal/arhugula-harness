@@ -732,6 +732,28 @@ _SUBAGENT_RECOVERABLE_CHILD_ENGINE_CLASSES: frozenset[EngineClass] = frozenset(
         EngineClass.RECONCILER_LOOP,
     }
 )
+# B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-FANOUT-CHILD (R-FS-1) — the FAN-OUT child topologies a
+# maybe-ran SUB_AGENT_DISPATCH re-dispatch can recover. A fan-out child does NOT reach the LINEAR
+# `reconstruct_final_state` seed (the concurrent strategies return before it); instead its AGGREGATE
+# `final_state` reconstructs through the SEPARATE B-FANOUT-OUTPUT-REPLAY branch store at the fan-out
+# crash-resume site (`_crash_fan_out_resume`, this module): on the parent's re-dispatch the child
+# re-runs under its deterministic `child_run_id` → its captured branches replay (fire-once), its
+# in-flight branches re-dispatch through the child's OWN maybe-ran machinery (re-fire-safe fresh,
+# effect-bearing fenced) → the aggregate folds result-faithfully into the parent. EXACTLY the three
+# concurrent strategies `_crash_fan_out_resume` reconstructs; EVALUATOR_OPTIMIZER and
+# DECENTRALIZED_HANDOFF have no fan-out replay store → stay fail-closed. This recovery is gated to
+# `_FANOUT_REPLAY_ENGINE_CLASSES` ({ESR,WAL}) — the ONLY classes with a fan-out replay store; a
+# SAVE_POINT/RECONCILER fan-out child has none → fail closed (the registered
+# `…-FANOUT-CHILD-SAVE-POINT-RECONCILER` follow-on), NOT the {ESR,WAL,SAVE_POINT,RECONCILER} set the
+# LINEAR slice uses (carrier segregation: the LINEAR auto-resume + `reconstruct_final_state` seed
+# back all four; the fan-out aggregate reconstruction backs only two).
+_SUBAGENT_RECOVERABLE_FANOUT_CHILD_TOPOLOGIES: frozenset[TopologyPattern] = frozenset(
+    {
+        TopologyPattern.PARALLELIZATION,
+        TopologyPattern.ORCHESTRATOR_WORKERS,
+        TopologyPattern.HIERARCHICAL_DELEGATION,
+    }
+)
 
 # B-CHILD-CRASH-RESUME-FINAL-STATE-RECONSTRUCT-RECONCILER (R-FS-1) — the engine classes
 # whose per-step output is durably recorded to the `EngineOutputStore` AND seeded back into
@@ -937,7 +959,21 @@ def payload_child_recoverable(cme: Any, child_steps: Any) -> bool:
         return False
     tp_raw: Any = _opaque_field(cme, "topology_pattern")
     tp = tp_raw if isinstance(tp_raw, TopologyPattern) else TopologyPattern(tp_raw)
-    if tp is not TopologyPattern.SINGLE_THREADED_LINEAR:
+    # Conjunct 2 — the recoverable topology∩engine intersection (the FANOUT-CHILD relaxation,
+    # R-FS-1):
+    #   • SINGLE_THREADED_LINEAR → all four durable engine classes (conjunct 1) reconstruct via the
+    #     auto-resume + the LINEAR `reconstruct_final_state` seed;
+    #   • a FAN-OUT child reconstructs its AGGREGATE via the SEPARATE B-FANOUT-OUTPUT-REPLAY branch
+    #     store (`_crash_fan_out_resume`), gated to `_FANOUT_REPLAY_ENGINE_CLASSES` ({ESR,WAL}) ONLY
+    #     — a SAVE_POINT/RECONCILER fan-out child has NO fan-out replay store, so marking it
+    #     recoverable would re-dispatch fresh (the reconstruct never fires) → an at-most-once HOLE →
+    #     fail closed (the registered `…-FANOUT-CHILD-SAVE-POINT-RECONCILER` follow-on);
+    #   • any other topology (EVALUATOR_OPTIMIZER / DECENTRALIZED_HANDOFF) has no reconstruction
+    #     substrate → fail closed.
+    _fanout_recoverable = (
+        tp in _SUBAGENT_RECOVERABLE_FANOUT_CHILD_TOPOLOGIES and ec in _FANOUT_REPLAY_ENGINE_CLASSES
+    )
+    if not (tp is TopologyPattern.SINGLE_THREADED_LINEAR or _fanout_recoverable):
         return False
     for child_step in child_steps:
         sk_raw: Any = _opaque_field(child_step, "step_kind")
