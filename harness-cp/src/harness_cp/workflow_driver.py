@@ -695,8 +695,31 @@ def _record_durable_step_output(
         _store.record(run_idempotency_key, step_index, step_id, step_output)
 
 
+# B-FANOUT-OUTPUT-REPLAY (R-FS-1) — the engine classes whose fan-out run captures its per-branch
+# terminals to the durable branch store AND reconstructs its AGGREGATE on crash-resume. The store
+# (`EngineOutputStore`, the SAME class-agnostic `record_branch`/`read_branch_records` substrate the
+# LINEAR `_record_durable_step_output` uses) is mechanically engine-class-AGNOSTIC, and the fan-out
+# aggregate reconstruction (`_determine_fanout_resume`) consumes ONLY that store — NOT the §8.1
+# cached-output-replay inter-step channel (which is ESR/WAL-only). SAVE_POINT_CHECKPOINT JOINS
+# ESR/WAL here (the `…-FANOUT-CHILD-SAVE-POINT` slice, R-FS-1): SAVE_POINT is the §11.2 ABOVE_ENGINE
+# reading (harness composes lease + dedup + resumption → the harness branch store is the SOLE
+# aggregate authority, no competing engine-owned substrate), its §14.22 effect fence is auto-active
+# (SAVE_POINT ∈ the runtime `_DURABLE_AUTO_FENCE_ENGINE_CLASSES` → in-flight branch re-dispatch is
+# at-most-once-safe), and it fires NO recovery loop / CAS-claim (no F-1 window). RECONCILER_LOOP
+# stays OUT (the registered `…-FANOUT-CHILD-RECONCILER` follow-on): it is the §11.2 RECONCILER
+# reading (engine owns reconvergence via CRD-resource-version), so whether the reconciler substrate
+# competes with the branch store for the fan-out AGGREGATE authority — plus its CAS/F-1 window —
+# needs its own grounding. Widening this SHARED constant moves the capture gate
+# (`_fanout_replay_store`) AND the recoverability predicate (`_fanout_recoverable`) in lockstep —
+# the two halves of one mechanism share their scope key
+# (`[[durable-recovery-presence-validity-scope]]`). The CP↔runtime mirror is the runtime
+# `_SUBAGENT_RECOVERABLE_FANOUT_CHILD_ENGINE_CLASSES` (the agreement witness enforces parity).
 _FANOUT_REPLAY_ENGINE_CLASSES: frozenset[EngineClass] = frozenset(
-    {EngineClass.EVENT_SOURCED_REPLAY, EngineClass.WAL_SEGMENT}
+    {
+        EngineClass.EVENT_SOURCED_REPLAY,
+        EngineClass.WAL_SEGMENT,
+        EngineClass.SAVE_POINT_CHECKPOINT,
+    }
 )
 
 # B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-RECONCILER-CHILD (R-FS-1) — the child engine classes
@@ -720,10 +743,13 @@ _FANOUT_REPLAY_ENGINE_CLASSES: frozenset[EngineClass] = frozenset(
 # and routes the F-1 window through the SAME already-on-main RECONCILER-resume ABORT→§22.1-HITL
 # disposition (#779/#781) — the registered F-1 engine-lock auto-recovery arc improves ALL RECONCILER
 # resumes and is NOT a prerequisite for this child-recoverability slice. This is DEDICATED to the
-# recoverability predicate — DISTINCT from `_FANOUT_REPLAY_ENGINE_CLASSES`, which the SEPARATE
-# `_fanout_replay_store` branch-capture gate (B-FANOUT-OUTPUT-REPLAY) also consumes and must NOT
-# admit SAVE_POINT/RECONCILER (carrier segregation, not a shared-constant widen). The CP-side MIRROR
-# of the runtime `_SUBAGENT_RECOVERABLE_CHILD_ENGINE_CLASSES` (agreement witness enforces parity).
+# LINEAR recoverability conjunct — DISTINCT from `_FANOUT_REPLAY_ENGINE_CLASSES`, the fan-out gate:
+# the LINEAR auto-resume + `reconstruct_final_state` seed back all FOUR durable classes, whereas the
+# fan-out aggregate gate backs {ESR,WAL,SAVE_POINT} only (RECONCILER is the registered
+# `…-FANOUT-CHILD-RECONCILER` follow-on) — so the two sets are NOT identical and must not collapse
+# to one constant (a RECONCILER child is LINEAR-recoverable but NOT yet fan-out-recoverable). The
+# CP-side MIRROR of the runtime `_SUBAGENT_RECOVERABLE_CHILD_ENGINE_CLASSES` (agreement witness
+# enforces parity).
 _SUBAGENT_RECOVERABLE_CHILD_ENGINE_CLASSES: frozenset[EngineClass] = frozenset(
     {
         EngineClass.EVENT_SOURCED_REPLAY,
@@ -742,11 +768,12 @@ _SUBAGENT_RECOVERABLE_CHILD_ENGINE_CLASSES: frozenset[EngineClass] = frozenset(
 # effect-bearing fenced) → the aggregate folds result-faithfully into the parent. EXACTLY the three
 # concurrent strategies `_crash_fan_out_resume` reconstructs; EVALUATOR_OPTIMIZER and
 # DECENTRALIZED_HANDOFF have no fan-out replay store → stay fail-closed. This recovery is gated to
-# `_FANOUT_REPLAY_ENGINE_CLASSES` ({ESR,WAL}) — the ONLY classes with a fan-out replay store; a
-# SAVE_POINT/RECONCILER fan-out child has none → fail closed (the registered
-# `…-FANOUT-CHILD-SAVE-POINT-RECONCILER` follow-on), NOT the {ESR,WAL,SAVE_POINT,RECONCILER} set the
-# LINEAR slice uses (carrier segregation: the LINEAR auto-resume + `reconstruct_final_state` seed
-# back all four; the fan-out aggregate reconstruction backs only two).
+# `_FANOUT_REPLAY_ENGINE_CLASSES` ({ESR,WAL,SAVE_POINT}) — the classes with a fan-out replay store
+# (SAVE_POINT joined at the `…-FANOUT-CHILD-SAVE-POINT` slice, the harness-authored ABOVE_ENGINE
+# store); a RECONCILER fan-out child has no grounded fan-out aggregate substrate yet → fail closed
+# (the registered `…-FANOUT-CHILD-RECONCILER` follow-on). NOT the four-class set the LINEAR slice
+# uses (carrier segregation: the LINEAR auto-resume + `reconstruct_final_state` seed back all four;
+# the fan-out aggregate reconstruction backs only three — {ESR,WAL,SAVE_POINT}).
 _SUBAGENT_RECOVERABLE_FANOUT_CHILD_TOPOLOGIES: frozenset[TopologyPattern] = frozenset(
     {
         TopologyPattern.PARALLELIZATION,
@@ -877,9 +904,9 @@ def _refire_unsafe_branch_indices(
 # SUB_AGENT_DISPATCH is fenced only at its CHILD's tool sinks (recursive child crash-resume — a
 # larger, separately-verified mechanism → the registered B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT
 # follow-on). The fence is AUTO-ACTIVE here: a fan-out crash-resume is reachable ONLY for
-# `_FANOUT_REPLAY_ENGINE_CLASSES` ({EVENT_SOURCED_REPLAY, WAL_SEGMENT}), a SUBSET of the runtime's
-# durable-auto-fence set, and a worker child context inherits `run_engine_class` (so the fence gate
-# is open for the re-dispatch).
+# `_FANOUT_REPLAY_ENGINE_CLASSES` ({EVENT_SOURCED_REPLAY, WAL_SEGMENT, SAVE_POINT_CHECKPOINT}), a
+# SUBSET of the runtime's durable-auto-fence set (which includes all four durable classes), and a
+# worker child context inherits `run_engine_class` (so the fence gate is open for the re-dispatch).
 _FANOUT_MAYBE_RAN_FENCE_RECOVERABLE_KIND_VALUES: frozenset[str] = frozenset(
     {StepKind.TOOL_STEP.value, StepKind.MANAGED_AGENTS.value}
 )
@@ -964,10 +991,11 @@ def payload_child_recoverable(cme: Any, child_steps: Any) -> bool:
     #   • SINGLE_THREADED_LINEAR → all four durable engine classes (conjunct 1) reconstruct via the
     #     auto-resume + the LINEAR `reconstruct_final_state` seed;
     #   • a FAN-OUT child reconstructs its AGGREGATE via the SEPARATE B-FANOUT-OUTPUT-REPLAY branch
-    #     store (`_crash_fan_out_resume`), gated to `_FANOUT_REPLAY_ENGINE_CLASSES` ({ESR,WAL}) ONLY
-    #     — a SAVE_POINT/RECONCILER fan-out child has NO fan-out replay store, so marking it
-    #     recoverable would re-dispatch fresh (the reconstruct never fires) → an at-most-once HOLE →
-    #     fail closed (the registered `…-FANOUT-CHILD-SAVE-POINT-RECONCILER` follow-on);
+    #     store (`_crash_fan_out_resume`), gated to `_FANOUT_REPLAY_ENGINE_CLASSES`
+    #     ({ESR,WAL,SAVE_POINT}) — a RECONCILER fan-out child has no grounded fan-out aggregate
+    #     substrate yet, so marking it recoverable would re-dispatch fresh (the reconstruct never
+    #     fires) → an at-most-once HOLE → fail closed (the registered `…-FANOUT-CHILD-RECONCILER`
+    #     follow-on);
     #   • any other topology (EVALUATOR_OPTIMIZER / DECENTRALIZED_HANDOFF) has no reconstruction
     #     substrate → fail closed.
     _fanout_recoverable = (
@@ -1072,15 +1100,15 @@ def _payload_engine_signature(cme: Any, child_steps: Any) -> str:
     `recursive_sig` carries the grandchild's OWN engine + deeper tuples → holds at all depths.
 
     TOPOLOGY is part of the signature for a FAN-OUT child (the FANOUT-CHILD arc, R-FS-1, out-of-
-    family Codex [P1]): conjunct 2 now admits the SAME engine ({ESR,WAL}) under BOTH SINGLE_THREADED
-    AND a fan-out topology, so a maybe-ran child dispatched LINEAR-ESR whose resumed manifest swaps
-    ONLY its topology to fan-out (same engine/step_id) would pass an engine-only signature AND reuse
-    the same `child_run_id` against a DIFFERENT recovery substrate (the LINEAR
-    `reconstruct_final_state` seed vs the fan-out `_crash_fan_out_resume` branch store) → the child
-    finds no matching records → runs FRESH → double-fires committed effects. A fan-out↔fan-out swap
-    (PARALLELIZATION↔ORCHESTRATOR_WORKERS) is the same hole (a different store shape). The fix folds
-    topology into the signature so ANY topology swap CHANGES the marker → the dual-gate
-    marker==resumed comparison fails closed.
+    family Codex [P1]): conjunct 2 now admits the SAME engine ({ESR,WAL,SAVE_POINT} under fan-out)
+    under BOTH SINGLE_THREADED AND a fan-out topology, so a maybe-ran child dispatched LINEAR-ESR
+    (or LINEAR-SAVE_POINT) whose resumed manifest swaps ONLY its topology to fan-out (same
+    engine/step_id) would pass an engine-only signature AND reuse the same `child_run_id` against a
+    DIFFERENT recovery substrate (the LINEAR `reconstruct_final_state` seed vs the fan-out
+    `_crash_fan_out_resume` branch store) → the child finds no matching records → runs FRESH →
+    double-fires committed effects. A fan-out↔fan-out swap (PARALLELIZATION↔ORCHESTRATOR_WORKERS) is
+    the same hole (a different store shape). The fix folds topology into the signature so ANY
+    topology swap CHANGES the marker → the dual-gate marker==resumed comparison fails closed.
 
     A LINEAR child's base value is the bare engine value, BYTE-IDENTICAL to the pre-FANOUT-CHILD
     marker (the #774..#786 LINEAR closed scope is unaffected); a FAN-OUT child's base is
@@ -6406,10 +6434,12 @@ def _determine_fanout_resume(
                     # re-runs SAFELY because nothing downstream was dispatched (pristine window: no
                     # worker dispatch marker / branch capture / cardinality marker / synthesis).
                     # The orchestrator analogue of the worker
-                    # `_fence_unrecoverable_maybe_ran_indices` SUB_AGENT recovery disjunct. A
-                    # SAVE_POINT/RECONCILER or fan-out/nested child is NOT recoverable
-                    # (`_subagent_child_recoverable` returns False) → falls through to fail closed
-                    # below (the `…-SAVE-POINT-RECONCILER` / non-leaf-child residuals).
+                    # `_fence_unrecoverable_maybe_ran_indices` SUB_AGENT recovery disjunct. The real
+                    # gate is `_subagent_child_recoverable(steps[0]) is True` above — it admits
+                    # LINEAR {ESR,WAL,SAVE_POINT,RECONCILER}, fan-out {ESR,WAL,SAVE_POINT}, and
+                    # nested recoverable children; a RECONCILER fan-out child (the registered
+                    # `…-FANOUT-CHILD-RECONCILER` follow-on) or any other non-recoverable shape
+                    # returns False → falls through to fail closed below.
                     return None
                 if _downstream_artifact_present:
                     # A downstream artifact survived but the orchestrator capture is absent → the
