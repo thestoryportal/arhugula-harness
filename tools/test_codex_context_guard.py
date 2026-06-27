@@ -525,8 +525,10 @@ def test_complete_codex_loop_state_satisfies_closeout(tmp_path: Path) -> None:
             "branch": "feature",
             "head8": "abc12345",
             "worktree_fingerprint": fingerprint,
+            "linked_worktree": True,
         }
         for phase in (
+            "worktree_ready",
             "preflight",
             "plan",
             "red",
@@ -567,8 +569,10 @@ def test_out_of_order_codex_loop_state_blocks_closeout(tmp_path: Path) -> None:
             "branch": "feature",
             "head8": "abc12345",
             "worktree_fingerprint": fingerprint,
+            "linked_worktree": True,
         }
         for phase in (
+            "worktree_ready",
             "preflight",
             "plan",
             "implementation",
@@ -612,8 +616,10 @@ def test_stale_codex_loop_state_blocks_closeout(tmp_path: Path) -> None:
             "branch": "feature",
             "head8": "abc12345",
             "worktree_fingerprint": fingerprint,
+            "linked_worktree": True,
         }
         for phase in (
+            "worktree_ready",
             "preflight",
             "plan",
             "red",
@@ -659,8 +665,10 @@ def test_stale_codex_loop_worktree_fingerprint_blocks_closeout(tmp_path: Path) -
             "branch": "feature",
             "head8": "abc12345",
             "worktree_fingerprint": fingerprint,
+            "linked_worktree": True,
         }
         for phase in (
+            "worktree_ready",
             "preflight",
             "plan",
             "red",

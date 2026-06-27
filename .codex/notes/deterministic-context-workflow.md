@@ -96,7 +96,7 @@ Closeout checks:
 - missing tracking-surface review
 - fresh checkpoint match against current HEAD/status/dashboard
 - active autonomous-loop state, when present, has reached every pre-closeout
-  gate through decorrelated review
+  gate from linked worktree readiness through decorrelated review
 
 The closeout recipe first writes a `pre-closeout` checkpoint, then runs the
 closeout guard with `--require-fresh-checkpoint`. A stale or missing checkpoint
@@ -110,7 +110,7 @@ For autonomous coding arcs, initialize a local evidence ledger:
 just codex-autonomous-arc <arc-id>
 ```
 
-Record gates as the controller/coder/validator loop advances:
+Record gates as the controller/coder/validator/GitHub-shipping loop advances:
 
 ```bash
 just codex-loop-record --phase plan --status passed --command "..." --evidence "..."
@@ -121,16 +121,19 @@ just codex-loop-record --phase implementation --status passed --command "..." --
 The required sequence is:
 
 ```text
-preflight -> plan -> red(status=failed) -> implementation -> narrow_verify -> local_gate -> decorrelated_review -> closeout
+worktree_ready -> preflight -> plan -> red(status=failed) -> implementation -> narrow_verify -> local_gate -> decorrelated_review -> closeout -> commit -> push -> pr_opened -> ci_green -> merged -> post_merge_refresh -> main_synced -> worktree_disposition
 ```
 
 The state file is `.harness/codex_loop_state.json`; it is gitignored because it
 is per-run state, not a project artifact. `just codex-closeout` checks active
 loop state through `decorrelated_review`; record the `closeout` phase after the
-closeout command succeeds, then run `just codex-loop-check` before claiming the
-loop complete. Loop records include branch, HEAD, and a worktree fingerprint;
-changes after `implementation` or any later gate require re-recording that gate
-and all downstream gates.
+closeout command succeeds. Then commit, push, open the PR, watch CI, merge,
+perform any owed terminating refresh, sync local main, and record worktree
+disposition. Run `just codex-loop-check` only when the full lifecycle has been
+recorded. Loop records include branch, HEAD, linked-worktree status, and a
+worktree fingerprint; changes after `implementation` or any later pre-commit
+gate require re-recording that gate and all downstream pre-commit gates before
+committing.
 
 ### 6. Credential Gates
 
@@ -210,8 +213,8 @@ just codex-worktree-gc --reap   # remove only clean merged worktree candidates
 just codex-test                 # provider-free non-e2e pytest lane
 just codex-check                # sync + lint + typecheck + provider-free non-e2e pytest
 just codex-autonomous-arc       # initialize autonomous-loop evidence state
-just codex-loop-record ...      # append one controller/coder/validator gate
-just codex-loop-check           # verify all autonomous-loop gates, including closeout
+just codex-loop-record ...      # append one controller/coder/validator/GitHub-shipping gate
+just codex-loop-check           # verify all autonomous-loop gates, including GitHub shipping and worktree disposition
 just coderabbit-review ...      # optional advisory CodeRabbit review
 ```
 

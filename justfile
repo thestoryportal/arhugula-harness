@@ -91,16 +91,18 @@ codex-loop-record *args:
 codex-loop-status:
     /usr/bin/python3 tools/codex_loop.py status
 
-# Fail until preflight/plan/red/implementation/verification/review/closeout gates are recorded.
+# Fail until worktree, development, PR, CI, merge, main-sync, and worktree-disposition gates are recorded.
 codex-loop-check:
     /usr/bin/python3 tools/codex_loop.py check
 
 # Bootstrap a Codex autonomous implementation arc. The agent still performs the
 # coding/review steps; this recipe creates the evidence ledger and prints the gate order.
-codex-autonomous-arc arc="manual": codex-preflight
+codex-autonomous-arc arc="manual":
     /usr/bin/python3 tools/codex_loop.py start --arc {{arc}}
+    /usr/bin/python3 tools/codex_loop.py record --phase worktree_ready --status passed --command "git worktree ready" --evidence "linked worktree confirmed for autonomous arc"
+    just codex-preflight
     /usr/bin/python3 tools/codex_loop.py record --phase preflight --status passed --command "just codex-preflight" --evidence "preflight completed and checkpoint written"
-    @echo "Next gates: plan -> red(status=failed) -> implementation -> narrow_verify -> local_gate -> decorrelated_review -> closeout"
+    @echo "Next gates: worktree_ready -> preflight -> plan -> red(status=failed) -> implementation -> narrow_verify -> local_gate -> decorrelated_review -> closeout -> commit -> push -> pr_opened -> ci_green -> merged -> post_merge_refresh -> main_synced -> worktree_disposition"
 
 # Dry-run safe stale-worktree cleanup. Use --reap to remove only clean merged candidates.
 codex-worktree-gc *args:

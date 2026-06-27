@@ -62,6 +62,7 @@ CHECKPOINT_FILE = "codex-context-latest.json"
 CREDENTIAL_GATE_LEDGER = Path(".harness/codex_credential_gates.jsonl")
 CODEX_LOOP_STATE = Path(".harness/codex_loop_state.json")
 CODEX_LOOP_PRE_CLOSEOUT_GATES = (
+    "worktree_ready",
     "preflight",
     "plan",
     "red",
@@ -646,6 +647,8 @@ def _codex_loop_issues(state: GuardState) -> list[str]:
                 f"{phase} gate recorded for "
                 f"worktree={event_worktree or '<missing>'}; current worktree={current_worktree}"
             )
+        if phase == "worktree_ready" and event_payload.get("linked_worktree") is not True:
+            issues.append("worktree_ready gate must be recorded in a linked worktree")
         if phase == "red":
             continue
         if event_payload.get("status") != "passed":
