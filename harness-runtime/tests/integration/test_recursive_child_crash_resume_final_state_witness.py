@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -66,6 +67,10 @@ from harness_cp.sub_agent_brief import (
     SubAgentBrief,
 )
 from harness_cp.topology_pattern import TopologyPattern
+from harness_cp.workflow_driver import (
+    _compute_run_idempotency_key,
+    _compute_step_idempotency_key,
+)
 from harness_cp.workflow_driver_types import RunStatus, StepExecutionContext, StepKind, WorkflowStep
 from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
 from harness_is.state_ledger_entry_schema import Actor, ActorClass
@@ -724,3 +729,194 @@ def test_maybe_ran_reconciler_child_f1_abort_parent_folds_fail_closed(tmp_path: 
     # (the ABORT short-circuited before the step loop — at-most-once through the full chain).
     assert len(loop.resume_calls) == 1
     assert child_ctx.step_dispatchers.lookup(StepKind.INFERENCE_STEP).dispatched == []
+
+
+# ---------------------------------------------------------------------------
+# B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-NONLEAF-CHILD (R-FS-1) — the load-bearing
+# DEPTH-2 recursive-composition witness (advisor's sharpened target). The recursive
+# `subagent_child_recoverable` now ADMITS a LINEAR child whose own child step is a
+# recoverable SUB_AGENT (the grandchild). This proves the COMPANION seed-gating extension
+# (`is_linear_sequential_dispatch`) is load-bearing: when the maybe-ran parent re-dispatches
+# the LINEAR child, the child auto-resumes and re-dispatches its grandchild — and the
+# grandchild AUTO-RESUMES from its OWN durable store under its RECURSIVELY-DERIVED run_id
+# (the seed composed at the child's LINEAR-loop dispatch of the grandchild) rather than
+# re-firing its committed effects. The AT-MOST-ONCE assertion (only the in-flight grandchild
+# step re-dispatched) is the load-bearing one — WITHOUT the seed the grandchild re-fires ALL
+# its steps (double-fire); WITH it, only the uncommitted tail. Routed end-to-end through the
+# REAL `compose_child_workflow_runner` -> `execute_workflow` at BOTH levels + the REAL
+# `RuntimeSubAgentDispatcher` at the child->grandchild seam (NOT mocked).
+# ---------------------------------------------------------------------------
+
+_GRANDCHILD_WF = "grandchild-wf"
+
+
+class _KindRegistry:
+    """A step-dispatcher registry mapping each `StepKind` to a DISTINCT dispatcher — the
+    depth-2 witness binds SUB_AGENT_DISPATCH to a REAL `RuntimeSubAgentDispatcher` (recursing
+    into the grandchild) and INFERENCE_STEP to a counting `_Echo` whose `dispatched` length is
+    the child's own at-most-once witness."""
+
+    def __init__(self, mapping: dict[StepKind, Any]) -> None:
+        self._m = mapping
+
+    def lookup(self, step_kind: StepKind) -> Any:
+        return self._m[step_kind]
+
+
+def _grandchild_payload() -> SubAgentDispatchPayload:
+    """A SUB_AGENT_DISPATCH payload whose child (the GRANDCHILD) is an {ESR} ∧ LINEAR leaf with
+    3 INFERENCE steps — RECOVERABLE per the recursive predicate, so the child's LINEAR-loop
+    dispatch of it gets the deterministic seed."""
+    return SubAgentDispatchPayload(
+        child_workflow_id=_GRANDCHILD_WF,
+        child_manifest_entry=WorkflowManifestEntry(
+            workflow_id=_GRANDCHILD_WF,
+            workload_class=WorkloadClass.PIPELINE_AUTOMATION,
+            persona_tier=PersonaTier.TEAM_BINDING,
+            engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+            topology_pattern=TopologyPattern.SINGLE_THREADED_LINEAR,
+            layer_budgets=(),
+            fallback_chain=_CHAIN,
+            hitl_placements=(),
+            per_step_overrides={},
+        ),
+        child_steps=(_g_step(0), _g_step(1), _g_step(2)),
+        brief=_f1_brief(),
+    )
+
+
+def _g_step(idx: int) -> WorkflowStep:
+    """A grandchild INFERENCE step (distinct step_ids from the child's `_step`)."""
+    return WorkflowStep(
+        step_id=StepID(f"g-step-{idx}"),
+        step_kind=StepKind.INFERENCE_STEP,
+        step_payload={"g_index": idx},
+    )
+
+
+def _grandchild_run_key() -> str:
+    """The grandchild's run_idempotency_key — keyed by the RECURSIVELY-DERIVED run_id (the seed
+    the child's LINEAR-loop dispatch of the grandchild composes). Mirrors the production chain
+    using the REAL imported key fns (no mirror drift):
+      child_run_key   = run_key(_CHILD_RUN, _CHILD_WF)            [the worker's pinned child run_id]
+      child_step1_key = step_key(child_run_key, 1)               [the grandchild's dispatch step]
+      disambig        = "linear-step:" + json.dumps(["step-1", <grandchild engine value>])
+      gc_seed         = compose_child_run_id_seed(child_step1_key, _GRANDCHILD_WF, disambig)
+      gc_run_key      = run_key(gc_seed, _GRANDCHILD_WF)
+
+    The `branch_path` is the SAME-STEP + SAME-ENGINE IDENTITY binding (Codex [P1]): the grandchild's
+    dispatch step is `step-1` and its engine is EVENT_SOURCED_REPLAY (`_grandchild_payload`), so the
+    seed folds BOTH in (a rename or engine swap → a different seed → no wrong-store auto-resume).
+    """
+    child_run_key = _compute_run_idempotency_key(
+        _CHILD_RUN, _CHILD_WF, extras=(str(_ENTRY_VERSION),)
+    )
+    child_step1_key = _compute_step_idempotency_key(child_run_key, 1)
+    disambig = "linear-step:" + json.dumps(["step-1", EngineClass.EVENT_SOURCED_REPLAY.value])
+    gc_seed = compose_child_run_id_seed(child_step1_key, _GRANDCHILD_WF, branch_path=disambig)
+    return _compute_run_idempotency_key(gc_seed, _GRANDCHILD_WF, extras=(str(_ENTRY_VERSION),))
+
+
+def test_maybe_ran_nonleaf_child_grandchild_auto_resumes_at_most_once(tmp_path: Path) -> None:
+    """B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-NONLEAF-CHILD (R-FS-1) — the load-bearing depth-2
+    witness. A maybe-ran recoverable LINEAR child (re-dispatched by simulating the worker's seed)
+    crash-resumes at step-1 and re-dispatches its nested SUB_AGENT grandchild THROUGH the real
+    `RuntimeSubAgentDispatcher`. The dispatcher composes the deterministic grandchild seed (because
+    the child's LINEAR-loop dispatch sets `is_linear_sequential_dispatch=True` AND the grandchild is
+    recoverable) → the grandchild's run_id re-derives → the grandchild AUTO-RESUMES its committed
+    prefix [0,2) from its OWN store and re-dispatches ONLY g-step-2.
+
+    AT-MOST-ONCE (load-bearing): the grandchild's INFERENCE dispatcher fired EXACTLY ONCE (only the
+    uncommitted tail g-step-2) — the committed g-step-0/1 were reconstructed, NOT re-fired. WITHOUT
+    the `is_linear_sequential_dispatch` seed the grandchild would get a fresh uuid → its store lookup
+    misses → it re-runs ALL THREE steps (double-fire). Result fidelity (secondary): the grandchild's
+    full final_state {g-step-0,1,2} reconstructs and folds into the child's step-1 output."""
+    # --- grandchild durable store + reader (committed prefix [0,2) under the recursively-derived
+    #     run_key) ---
+    gc_run_key = _grandchild_run_key()
+    gc_store = EngineOutputStore(journal_dir=engine_output_dir_for(tmp_path / "gc"))
+    gc_store.record(gc_run_key, 0, "g-step-0", {"gout": "gv0"})
+    gc_store.record(gc_run_key, 1, "g-step-1", {"gout": "gv1"})
+    gc_reader = _LedgerReader(
+        {
+            _compute_step_idempotency_key(gc_run_key, 0): 1,
+            _compute_step_idempotency_key(gc_run_key, 1): 1,
+        }
+    )
+    gc_echo = _Echo()
+    gc_ctx = _Ctx(
+        ledger=_Ledger(), reader=gc_reader, store=gc_store, dispatchers=_Registry(gc_echo)
+    )
+    gc_runner = compose_child_workflow_runner(cast(Any, gc_ctx))
+
+    # --- the real child->grandchild dispatcher seam ---
+    gc_ledger_writer = _parent_ledger_writer(tmp_path)
+    from datetime import UTC, datetime
+
+    grandchild_dispatcher = RuntimeSubAgentDispatcher(
+        handoff_registry=RuntimeHandoffRegistry(),
+        topology_dispatcher=RuntimeTopologyDispatcher(),
+        tracer_provider=cast(Any, gc_ctx.tracer_provider),
+        child_workflow_runner=cast(Any, gc_runner),
+        ledger_writer=gc_ledger_writer,
+        audit_writer=RuntimeAuditLedgerWriter(
+            ledger_writer=gc_ledger_writer, time_source=lambda: datetime.now(UTC)
+        ),
+        audit_signing_key_id="test-signing-key",
+        audit_signing_algorithm=SignatureAlgorithm.ED25519,
+        time_source=lambda: datetime.now(UTC),
+        procedural_tier_snapshot_resolver=lambda: _Identifier("c" * 64),
+    )
+
+    # --- child durable store + reader (committed prefix [0,1) → child resumes at step-1, the
+    #     grandchild dispatch) ---
+    child_store = EngineOutputStore(journal_dir=engine_output_dir_for(tmp_path / "child"))
+    child_store.record(_run_key(), 0, "step-0", {"out": "cv0"})
+    child_reader = _LedgerReader({_step_key(0): 1})  # only step-0 committed → resume_at == 1
+    child_echo = _Echo()
+    child_ctx = _Ctx(
+        ledger=_Ledger(),
+        reader=child_reader,
+        store=child_store,
+        dispatchers=cast(
+            Any,
+            _KindRegistry(
+                {
+                    StepKind.INFERENCE_STEP: child_echo,
+                    StepKind.SUB_AGENT_DISPATCH: grandchild_dispatcher,
+                }
+            ),
+        ),
+    )
+    child_runner = compose_child_workflow_runner(cast(Any, child_ctx))
+
+    grandchild_step = WorkflowStep(
+        step_id=StepID("step-1"),
+        step_kind=StepKind.SUB_AGENT_DISPATCH,
+        step_payload=_grandchild_payload().model_dump(),
+    )
+    # Re-dispatch the maybe-ran child under the worker's deterministic seed (== _CHILD_RUN), the
+    # simulation the depth-1 witnesses pin via uuid — here passed directly so the grandchild's
+    # OWN run_id comes from the real seed composition, not the monkeypatch.
+    result = child_runner(
+        workflow_id=_CHILD_WF,
+        manifest_entry=_manifest(engine_class=EngineClass.EVENT_SOURCED_REPLAY),
+        steps=[_step(0), grandchild_step],
+        handoff_context=cast(Any, None),
+        descent=cast(Any, None),
+        default_model_binding=_DEFAULT_BINDING,
+        pause_snapshot_input=None,  # CRASH-resume
+        child_run_id_seed=_CHILD_RUN,
+    )
+
+    assert result.status is RunStatus.SUCCESS
+    # AT-MOST-ONCE (load-bearing): the grandchild re-dispatched ONLY its uncommitted tail g-step-2.
+    # Its committed prefix g-step-0/1 was AUTO-RESUMED from the store (recursively-derived run_id),
+    # NOT re-fired. Without the `is_linear_sequential_dispatch` seed this list would be all three.
+    assert [str(b[1].step_id) for b in gc_echo.dispatched] == ["g-step-2"]
+    # The child itself re-dispatched only the maybe-ran grandchild step (step-0 reconstructed).
+    assert [str(b[1].step_id) for b in child_echo.dispatched] == []
+    # Result fidelity (secondary): the grandchild's FULL final_state folds into the child's step-1.
+    assert result.final_state is not None
+    grandchild_final = result.final_state["step-1"]
+    assert set(grandchild_final.keys()) == {"g-step-0", "g-step-1", "g-step-2"}

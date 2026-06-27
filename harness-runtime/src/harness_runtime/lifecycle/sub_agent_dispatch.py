@@ -103,6 +103,7 @@ KMS / keystore deferral).
 from __future__ import annotations
 
 import hashlib
+import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, cast
@@ -311,12 +312,14 @@ _SUBAGENT_RECOVERABLE_CHILD_ENGINE_CLASSES: frozenset[EngineClass] = frozenset(
         EngineClass.RECONCILER_LOOP,
     }
 )
-# Child step kinds that, if present, make the child NOT a witnessed leaf — the deeper recursion
-# (a nested SUB_AGENT_DISPATCH grandchild) or an unfenced vendor sink (MANAGED_AGENTS) is a
-# separate, separately-verified mechanism → fail closed (the LINEAR-leaf slice is what #770
-# witnessed). TOOL_STEP / INFERENCE_STEP / DECLARATIVE_STEP / HITL_STEP children are in-scope.
-_SUBAGENT_RECOVERABLE_EXCLUDED_CHILD_KINDS: frozenset[StepKind] = frozenset(
-    {StepKind.SUB_AGENT_DISPATCH, StepKind.MANAGED_AGENTS}
+# Child step kinds that HARD-disqualify a child regardless of recursion: MANAGED_AGENTS is an
+# unfenced vendor sink with no recursively-classifiable child manifest → fail closed. A nested
+# SUB_AGENT_DISPATCH is DELIBERATELY NOT here — the NONLEAF-CHILD arc (R-FS-1) admits it IFF its
+# own child is recursively recoverable (`subagent_child_recoverable` descends into the grandchild
+# payload). The recursion bottoms out at a LINEAR leaf (no SUB_AGENT/MANAGED child steps). TOOL_STEP
+# / INFERENCE_STEP / DECLARATIVE_STEP / HITL_STEP children remain in-scope (non-recursive).
+_SUBAGENT_RECOVERABLE_HARD_EXCLUDED_CHILD_KINDS: frozenset[StepKind] = frozenset(
+    {StepKind.MANAGED_AGENTS}
 )
 
 
@@ -379,9 +382,18 @@ def subagent_child_recoverable(payload: SubAgentDispatchPayload) -> bool:
     2. **topology == SINGLE_THREADED_LINEAR** — the WITNESSED scope (#770). A fan-out child engages
        its OWN fan-out crash-resume reconstruction, a deeper unwitnessed path → the registered
        fan-out-child follow-on. "No nested sub-agents" ≠ "no recursion" (finding-v1 §4.1).
-    3. **no child step is SUB_AGENT_DISPATCH / MANAGED_AGENTS** — the LEAF condition. A nested
-       sub-agent grandchild is the deeper recursion (a further follow-on); a MANAGED_AGENTS child
-       step is an unfenced vendor sink. TOOL/INFERENCE/DECLARATIVE/HITL child steps are in-scope.
+    3. **every child step is non-MANAGED_AGENTS, and every nested SUB_AGENT_DISPATCH child step is
+       ITSELF recoverable** — the RECURSIVE leaf/non-leaf condition (the NONLEAF-CHILD arc, R-FS-1,
+       relaxing the prior LINEAR-leaf-only slice #770 witnessed). A MANAGED_AGENTS child step is an
+       unfenced vendor sink with no recursively-classifiable child manifest → fail closed. A nested
+       SUB_AGENT_DISPATCH grandchild is admitted IFF `subagent_child_recoverable` holds on its OWN
+       payload (the same {ESR,WAL,SAVE_POINT,RECONCILER} ∧ LINEAR ∧ recursive-leaf test) — correct
+       at ALL depths by construction, bottoming out at a LINEAR leaf. The grandchild's own
+       crash-resume auto-resumes under its deterministic `child_run_id_seed` (composed at the
+       child's re-dispatch by the same composer code at each level) → no parent-fold corruption at
+       any depth. A mis-shaped nested payload (cannot validate to `SubAgentDispatchPayload`) → fail
+       closed. TOOL/INFERENCE/DECLARATIVE/HITL child steps are in-scope (non-recursive). A FAN-OUT
+       grandchild fails its OWN conjunct 2 (LINEAR) → still fail closed (the case-(a) surface).
 
     The composer gates the DETERMINISTIC `child_run_id_seed` on this (a non-recoverable child gets
     a fresh `uuid` → no auto-resume → pre-existing behavior, no suffix-only corruption), and the CP
@@ -392,10 +404,32 @@ def subagent_child_recoverable(payload: SubAgentDispatchPayload) -> bool:
         return False
     if cme.topology_pattern is not TopologyPattern.SINGLE_THREADED_LINEAR:
         return False
-    return all(
-        child_step.step_kind not in _SUBAGENT_RECOVERABLE_EXCLUDED_CHILD_KINDS
-        for child_step in payload.child_steps
-    )
+    for child_step in payload.child_steps:
+        if child_step.step_kind in _SUBAGENT_RECOVERABLE_HARD_EXCLUDED_CHILD_KINDS:
+            return False
+        if child_step.step_kind is StepKind.SUB_AGENT_DISPATCH:
+            # Recursive descent (the NONLEAF-CHILD relaxation): a nested SUB_AGENT_DISPATCH child is
+            # admitted IFF it is itself recoverable. DELEGATE the nested decision to the SHARED CP
+            # `payload_child_recoverable` (ONE SOURCE OF TRUTH, out-of-family Codex [P1]): a runtime
+            # `SubAgentDispatchPayload.model_validate` here would REJECT a partially-valid nested
+            # payload (missing child_workflow_id/brief) that the CP mirror — which cannot
+            # model_validate (a forbidden harness_cp→harness_runtime import) — ADMITS →
+            # CP-True/runtime-False → no seed → double-fire. The shared defensive predicate
+            # classifies nested payloads IDENTICALLY on both sides; recoverability depends only on
+            # engine+topology+child_steps (child_workflow_id/brief affect DISPATCHABILITY, fail
+            # closed at the dispatcher's own model_validate). workflow_driver is already loaded when
+            # the runtime dispatches (it calls execute_workflow), so the import is effectively free.
+            from harness_cp.workflow_driver import payload_child_recoverable
+
+            try:
+                if not payload_child_recoverable(
+                    child_step.step_payload["child_manifest_entry"],
+                    child_step.step_payload["child_steps"],
+                ):
+                    return False
+            except (TypeError, KeyError, ValueError, AttributeError):
+                return False
+    return True
 
 
 def _empty_summary_hash() -> str:
@@ -792,6 +826,44 @@ class RuntimeSubAgentDispatcher:
             _is_recoverable_orchestrator = (
                 step_context.is_orchestrator_dispatch and subagent_child_recoverable(payload)
             )
+            # B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-NONLEAF-CHILD (R-FS-1) — the THIRD
+            # seed surface: a recoverable nested (grandchild) SUB_AGENT_DISPATCH dispatched
+            # by the SINGLE_THREADED_LINEAR inline step loop (`is_linear_sequential_dispatch`).
+            # The recursive `subagent_child_recoverable` now ADMITS a LINEAR child whose own
+            # child step is a recoverable SUB_AGENT; without a deterministic seed here, a
+            # maybe-ran parent's re-dispatch of that LINEAR child would re-dispatch the
+            # grandchild with a FRESH uuid → the grandchild re-runs fresh → its committed
+            # effects DOUBLE-FIRE. Like the orchestrator, a linear-loop step is once-per-run
+            # (`branch_index is None`) but dispatches EXACTLY ONCE — its `(run_id, step_index)`
+            # recurs only as a SAME-LOGICAL-STEP forward resume (`resume_at` advances forward
+            # over the committed prefix at the linear loop), NEVER as a distinct iteration —
+            # so `branch_path=None` is safe (no iteration-2 to alias iteration-1's store; the
+            # EVALUATOR_OPTIMIZER step_index-reuse hazard never reaches the linear loop). The
+            # seed re-derives identically on the parent's re-dispatch because the parent's
+            # step idempotency key is the deterministic monotonic manifest position.
+            _is_recoverable_linear_sequential = (
+                step_context.is_linear_sequential_dispatch and subagent_child_recoverable(payload)
+            )
+            # SAME-STEP IDENTITY for the linear-sequential seed (out-of-family Codex [P1]): UNLIKE
+            # the fan-out/orchestrator paths, the linear-sequential step carries NO maybe-ran
+            # dispatch marker, so the dual gate's same-`step_id` + same-engine guards do NOT protect
+            # it. The seed is keyed on the step INDEX (`parent_idempotency_key`), so RENAMING the
+            # SUB_AGENT *or SWAPPING its child engine* (RECONCILER↔SAVE_POINT) at the SAME index
+            # (same `child_workflow_id`) between a crash + resume would re-derive the SAME seed →
+            # auto-resume the OLD child's durable outputs under a DIFFERENT logical step / through a
+            # DIFFERENT recovery mechanism (the at-most-once bypass the marker dual gate prevents at
+            # the worker/orchestrator level). We fold BOTH the `step_id` AND the IMMEDIATE child
+            # `engine_class` into the seed (via the `branch_path` disambiguator slot, JSON-encoded
+            # so a `step_id` containing delimiters cannot collide; `linear-step:` prefix → distinct
+            # from a worker's `{action_id}:{branch_index}` + orchestrator's `None`, no cross-path
+            # aliasing). A rename OR engine swap CHANGES the seed → the edited step gets a FRESH
+            # run_id (re-runs fresh, NOT the old store); a legitimate resume keeps both → the seed
+            # re-derives identically → auto-resume works. The IMMEDIATE engine suffices — a DEEPER
+            # (grandchild-of-grandchild) engine swap is caught by that deeper dispatch's OWN
+            # linear-sequential seed (per-level binding), so the recursive subtree is not folded.
+            _linear_step_disambiguator = "linear-step:" + json.dumps(
+                [str(step.step_id), payload.child_manifest_entry.engine_class.value]
+            )
             _child_run_id_seed = (
                 compose_child_run_id_seed(
                     step_context.parent_idempotency_key,
@@ -799,6 +871,12 @@ class RuntimeSubAgentDispatcher:
                     branch_path=compose_branch_path(step_context),
                 )
                 if _is_recoverable_fanout_worker
+                else compose_child_run_id_seed(
+                    step_context.parent_idempotency_key,
+                    payload.child_workflow_id,
+                    branch_path=_linear_step_disambiguator,
+                )
+                if _is_recoverable_linear_sequential
                 else compose_child_run_id_seed(
                     step_context.parent_idempotency_key,
                     payload.child_workflow_id,
