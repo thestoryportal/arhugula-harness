@@ -18,6 +18,7 @@ import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, cast
 
 DESIGN_RE = re.compile(
     r"^(design-substrate/|\.harness/class_[123]_|\.harness/architect_recommendation_|"
@@ -59,6 +60,22 @@ DASHBOARD_MIX_EXEMPT_IMPL = {
 CHECKPOINT_DIR = Path(".harness/.checkpoints")
 CHECKPOINT_FILE = "codex-context-latest.json"
 CREDENTIAL_GATE_LEDGER = Path(".harness/codex_credential_gates.jsonl")
+CODEX_LOOP_STATE = Path(".harness/codex_loop_state.json")
+CODEX_LOOP_PRE_CLOSEOUT_GATES = (
+    "preflight",
+    "plan",
+    "red",
+    "implementation",
+    "narrow_verify",
+    "local_gate",
+    "decorrelated_review",
+)
+CODEX_LOOP_CURRENT_WORKTREE_GATES = (
+    "implementation",
+    "narrow_verify",
+    "local_gate",
+    "decorrelated_review",
+)
 CREDENTIAL_TRACKING_SURFACES = {
     ".harness/roadmap_status.md",
     "Project_Roadmap_v1.md",
@@ -142,6 +159,61 @@ def _run(args: list[str], *, cwd: Path, timeout: int = 20) -> subprocess.Complet
 def _out(args: list[str], *, cwd: Path, timeout: int = 20) -> str:
     proc = _run(args, cwd=cwd, timeout=timeout)
     return proc.stdout.strip() if proc.returncode == 0 else ""
+
+
+def _run_bytes(
+    args: list[str], *, cwd: Path, timeout: int = 60
+) -> subprocess.CompletedProcess[bytes]:
+    try:
+        return subprocess.run(
+            args,
+            cwd=cwd,
+            capture_output=True,
+            timeout=timeout,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return subprocess.CompletedProcess(
+            args=args,
+            returncode=127,
+            stdout=b"",
+            stderr=str(exc).encode("utf-8", errors="replace"),
+        )
+
+
+def worktree_fingerprint(root: Path) -> str:
+    digest = hashlib.sha256()
+    pathspec = ["--", ".", f":(exclude){CODEX_LOOP_STATE.as_posix()}"]
+
+    def add(label: str, payload: bytes) -> None:
+        digest.update(label.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(payload)
+        digest.update(b"\0")
+
+    for label, args in (
+        ("status", ["git", "status", "--short", "--untracked-files=all", *pathspec]),
+        ("diff", ["git", "diff", "--binary", "--no-ext-diff", *pathspec]),
+        ("cached", ["git", "diff", "--cached", "--binary", "--no-ext-diff", *pathspec]),
+    ):
+        proc = _run_bytes(args, cwd=root)
+        add(f"{label}:returncode", str(proc.returncode).encode("ascii"))
+        add(f"{label}:stdout", proc.stdout)
+        add(f"{label}:stderr", proc.stderr)
+
+    proc = _run_bytes(
+        ["git", "ls-files", "--others", "--exclude-standard", "-z", *pathspec], cwd=root
+    )
+    add("untracked:returncode", str(proc.returncode).encode("ascii"))
+    add("untracked:stderr", proc.stderr)
+    for rel_raw in sorted(part for part in proc.stdout.split(b"\0") if part):
+        rel = rel_raw.decode("utf-8", errors="surrogateescape")
+        add("untracked:path", rel_raw)
+        try:
+            add("untracked:sha256", hashlib.sha256((root / rel).read_bytes()).hexdigest().encode())
+        except OSError as exc:
+            add("untracked:error", str(exc).encode("utf-8", errors="replace"))
+    return digest.hexdigest()[:16]
 
 
 def repo_root(start: Path) -> Path:
@@ -498,6 +570,89 @@ def _has_credential_gate_tracking_change(files: list[str]) -> bool:
     return bool(set(files) & CREDENTIAL_TRACKING_SURFACES)
 
 
+def _codex_loop_issues(state: GuardState) -> list[str]:
+    path = state.root / CODEX_LOOP_STATE
+    if not path.exists():
+        return []
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return [f"loop state cannot be read: {exc}"]
+    if not isinstance(raw, dict):
+        return ["loop state must be a JSON object"]
+    loop_state = cast("dict[str, Any]", raw)
+    events = loop_state.get("events")
+    if not isinstance(events, list):
+        return ["loop state events must be a list"]
+    latest: dict[str, tuple[int, dict[str, Any]]] = {}
+    event_list = cast("list[Any]", events)
+    for index, event_obj in enumerate(event_list):
+        if not isinstance(event_obj, dict):
+            continue
+        event = cast("dict[str, Any]", event_obj)
+        phase = event.get("phase")
+        if isinstance(phase, str):
+            latest[phase] = (index, event)
+    missing = [phase for phase in CODEX_LOOP_PRE_CLOSEOUT_GATES if phase not in latest]
+    issues: list[str] = []
+    if missing:
+        issues.append("missing pre-closeout gates: " + ", ".join(missing))
+    state_branch = loop_state.get("branch")
+    state_head8 = loop_state.get("head8")
+    if state_branch != state.branch or state_head8 != state.head8:
+        issues.append(
+            "loop state recorded for "
+            f"branch={state_branch or '<missing>'} head={state_head8 or '<missing>'}; "
+            f"current branch={state.branch} head={state.head8}"
+        )
+    current_worktree = worktree_fingerprint(state.root)
+    state_worktree = loop_state.get("worktree_fingerprint")
+    if state_worktree != current_worktree:
+        issues.append(
+            "loop state recorded for "
+            f"worktree={state_worktree or '<missing>'}; current worktree={current_worktree}"
+        )
+    positions = [
+        (phase, latest[phase][0]) for phase in CODEX_LOOP_PRE_CLOSEOUT_GATES if phase in latest
+    ]
+    for offset, (phase, index) in enumerate(positions[1:], start=1):
+        previous_phase, previous_index = positions[offset - 1]
+        if previous_index > index:
+            issues.append(
+                f"gate order invalid: {previous_phase} recorded after {phase}; "
+                + "required pre-closeout order is "
+                + " -> ".join(CODEX_LOOP_PRE_CLOSEOUT_GATES)
+            )
+            break
+    red = latest.get("red")
+    if red is not None and red[1].get("status") != "failed":
+        issues.append("red gate must record status=failed")
+    for phase in CODEX_LOOP_PRE_CLOSEOUT_GATES:
+        event = latest.get(phase)
+        if event is None:
+            continue
+        event_payload = event[1]
+        event_branch = event_payload.get("branch")
+        event_head8 = event_payload.get("head8")
+        if event_branch != state.branch or event_head8 != state.head8:
+            issues.append(
+                f"{phase} gate recorded for "
+                f"branch={event_branch or '<missing>'} head={event_head8 or '<missing>'}; "
+                f"current branch={state.branch} head={state.head8}"
+            )
+        event_worktree = event_payload.get("worktree_fingerprint")
+        if phase in CODEX_LOOP_CURRENT_WORKTREE_GATES and event_worktree != current_worktree:
+            issues.append(
+                f"{phase} gate recorded for "
+                f"worktree={event_worktree or '<missing>'}; current worktree={current_worktree}"
+            )
+        if phase == "red":
+            continue
+        if event_payload.get("status") != "passed":
+            issues.append(f"{phase} gate must record status=passed")
+    return issues
+
+
 def validate(
     state: GuardState,
     *,
@@ -615,6 +770,18 @@ def validate(
                 "surface changed. Surface the pending gate before proceeding.",
             )
         )
+
+    if mode in {"closeout", "check"}:
+        loop_issues = _codex_loop_issues(state)
+        if loop_issues:
+            findings.append(
+                Finding(
+                    "hard",
+                    "CODEX_LOOP_INCOMPLETE",
+                    "Active Codex autonomous loop is not ready for closeout: "
+                    + "; ".join(loop_issues),
+                )
+            )
 
     if (
         mode in {"closeout", "check"}

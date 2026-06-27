@@ -27,6 +27,11 @@ This note codifies the operator-approved Codex setup direction for this reposito
      `just codex-credential-gate ...`, update a human-facing tracking surface,
      and continue to the next implementable unit once non-credential work is
      proven closed.
+   - For autonomous implementation arcs, start `just codex-autonomous-arc <arc-id>`;
+     record controller/coder/validator/verification gates with
+     `just codex-loop-record ...`; require `just codex-loop-check` before
+     claiming the loop complete. The active local state lives at
+     `.harness/codex_loop_state.json` and is intentionally untracked.
 7. Run substantive Codex work in isolated worktrees and land changes through reviewable PRs with strict CI.
 8. Validate instruction discovery with `codex --ask-for-approval never "Summarize the current instructions."` and nested `--cd` checks.
 

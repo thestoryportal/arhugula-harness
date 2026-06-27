@@ -7,6 +7,7 @@ checks instead of remembered process.
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -485,6 +486,212 @@ def test_credential_gate_ledger_change_requires_tracking_surface() -> None:
 
     assert any(
         f.code == "CREDENTIAL_GATE_TRACKING_REQUIRED" and f.severity == "hard" for f in findings
+    )
+
+
+def test_incomplete_codex_loop_state_blocks_closeout(tmp_path: Path) -> None:
+    loop_dir = tmp_path / ".harness"
+    loop_dir.mkdir()
+    (loop_dir / "codex_loop_state.json").write_text(
+        """{
+  "arc_id": "B-LOOP",
+  "events": [
+    {
+      "phase": "preflight",
+      "status": "passed",
+      "command": "just codex-preflight",
+      "evidence": "checkpoint written"
+    }
+  ]
+}
+""",
+        encoding="utf-8",
+    )
+    state = _state(root=tmp_path)
+
+    findings = cg.validate(state, mode="closeout")
+
+    assert any(f.code == "CODEX_LOOP_INCOMPLETE" and f.severity == "hard" for f in findings)
+
+
+def test_complete_codex_loop_state_satisfies_closeout(tmp_path: Path) -> None:
+    loop_dir = tmp_path / ".harness"
+    loop_dir.mkdir()
+    fingerprint = cg.worktree_fingerprint(tmp_path)
+    events = [
+        {
+            "phase": phase,
+            "status": "failed" if phase == "red" else "passed",
+            "branch": "feature",
+            "head8": "abc12345",
+            "worktree_fingerprint": fingerprint,
+        }
+        for phase in (
+            "preflight",
+            "plan",
+            "red",
+            "implementation",
+            "narrow_verify",
+            "local_gate",
+            "decorrelated_review",
+            "closeout",
+        )
+    ]
+    (loop_dir / "codex_loop_state.json").write_text(
+        json.dumps(
+            {
+                "arc_id": "B-LOOP",
+                "branch": "feature",
+                "head8": "abc12345",
+                "worktree_fingerprint": fingerprint,
+                "events": events,
+            }
+        ),
+        encoding="utf-8",
+    )
+    state = _state(root=tmp_path)
+
+    findings = cg.validate(state, mode="closeout")
+
+    assert not any(f.code == "CODEX_LOOP_INCOMPLETE" for f in findings)
+
+
+def test_out_of_order_codex_loop_state_blocks_closeout(tmp_path: Path) -> None:
+    loop_dir = tmp_path / ".harness"
+    loop_dir.mkdir()
+    fingerprint = cg.worktree_fingerprint(tmp_path)
+    events = [
+        {
+            "phase": phase,
+            "status": "failed" if phase == "red" else "passed",
+            "branch": "feature",
+            "head8": "abc12345",
+            "worktree_fingerprint": fingerprint,
+        }
+        for phase in (
+            "preflight",
+            "plan",
+            "implementation",
+            "narrow_verify",
+            "local_gate",
+            "decorrelated_review",
+            "red",
+        )
+    ]
+    (loop_dir / "codex_loop_state.json").write_text(
+        json.dumps(
+            {
+                "arc_id": "B-LOOP",
+                "branch": "feature",
+                "head8": "abc12345",
+                "worktree_fingerprint": fingerprint,
+                "events": events,
+            }
+        ),
+        encoding="utf-8",
+    )
+    state = _state(root=tmp_path)
+
+    findings = cg.validate(state, mode="closeout")
+
+    assert any(
+        f.code == "CODEX_LOOP_INCOMPLETE"
+        and "gate order invalid: red recorded after implementation" in f.message
+        for f in findings
+    )
+
+
+def test_stale_codex_loop_state_blocks_closeout(tmp_path: Path) -> None:
+    loop_dir = tmp_path / ".harness"
+    loop_dir.mkdir()
+    fingerprint = cg.worktree_fingerprint(tmp_path)
+    events = [
+        {
+            "phase": phase,
+            "status": "failed" if phase == "red" else "passed",
+            "branch": "feature",
+            "head8": "abc12345",
+            "worktree_fingerprint": fingerprint,
+        }
+        for phase in (
+            "preflight",
+            "plan",
+            "red",
+            "implementation",
+            "narrow_verify",
+            "local_gate",
+            "decorrelated_review",
+        )
+    ]
+    events[-1]["head8"] = "deadbeef"
+    (loop_dir / "codex_loop_state.json").write_text(
+        json.dumps(
+            {
+                "arc_id": "B-LOOP",
+                "branch": "stale-branch",
+                "head8": "abc12345",
+                "worktree_fingerprint": fingerprint,
+                "events": events,
+            }
+        ),
+        encoding="utf-8",
+    )
+    state = _state(root=tmp_path)
+
+    findings = cg.validate(state, mode="closeout")
+
+    assert any(
+        f.code == "CODEX_LOOP_INCOMPLETE"
+        and "loop state recorded for branch=stale-branch" in f.message
+        and "decorrelated_review gate recorded for" in f.message
+        for f in findings
+    )
+
+
+def test_stale_codex_loop_worktree_fingerprint_blocks_closeout(tmp_path: Path) -> None:
+    loop_dir = tmp_path / ".harness"
+    loop_dir.mkdir()
+    fingerprint = cg.worktree_fingerprint(tmp_path)
+    events = [
+        {
+            "phase": phase,
+            "status": "failed" if phase == "red" else "passed",
+            "branch": "feature",
+            "head8": "abc12345",
+            "worktree_fingerprint": fingerprint,
+        }
+        for phase in (
+            "preflight",
+            "plan",
+            "red",
+            "implementation",
+            "narrow_verify",
+            "local_gate",
+            "decorrelated_review",
+        )
+    ]
+    events[-1]["worktree_fingerprint"] = "stale-worktree"
+    (loop_dir / "codex_loop_state.json").write_text(
+        json.dumps(
+            {
+                "arc_id": "B-LOOP",
+                "branch": "feature",
+                "head8": "abc12345",
+                "worktree_fingerprint": "stale-worktree",
+                "events": events,
+            }
+        ),
+        encoding="utf-8",
+    )
+    state = _state(root=tmp_path)
+
+    findings = cg.validate(state, mode="closeout")
+
+    assert any(
+        f.code == "CODEX_LOOP_INCOMPLETE"
+        and "loop state recorded for worktree=stale-worktree" in f.message
+        and "decorrelated_review gate recorded for worktree=stale-worktree" in f.message
+        for f in findings
     )
 
 
