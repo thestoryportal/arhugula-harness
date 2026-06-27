@@ -46,11 +46,36 @@
 snapshot:
   frozen_total: 11
   frozen_done: 11
-  standalone_closed: 59
+  standalone_closed: 60
   standalone_gated: 0
   standalone_resolved: 4
   standalone_registered: 4
   source: ".harness/beyond-mvp-capability-boundary-ledger.md"
+  # FRONTIER NOTE (2026-06-26, B-CHILD-CRASH-RESUME-FINAL-STATE-RECONSTRUCT-SAVE-POINT closed
+  # as the SAVE_POINT slice of the registered SAVE-POINT-RECONCILER arc, CP spec v1.78 → v1.79,
+  # CP-ONLY). A crash-resumed SINGLE_THREADED_LINEAR SAVE_POINT_CHECKPOINT run (child OR
+  # top-level) over a committed prefix returned a SILENTLY suffix-only final_state (the {ESR,WAL}
+  # engine-class gate degraded SAVE_POINT to the empty prefix). GROUNDING overturned the registered
+  # "needs an entirely NEW output substrate" anticipation: the EngineOutputStore is mechanically
+  # engine-class-AGNOSTIC (per-run JSONL keyed by run_idempotency_key; stage-5 binding gated ONLY on
+  # RuntimeConfig.engine_output_replay, never engine class), and a real SAVE_POINT run flows through
+  # the SAME linear dispatch loop as ESR/WAL → the close is a CP-side gate extension reusing the
+  # class-agnostic store, NOT a new substrate. FIX: unify the producer + seed gates onto ONE
+  # `_FINAL_STATE_RECONSTRUCT_ENGINE_CLASSES = {ESR, WAL, SAVE_POINT_CHECKPOINT}` constant (the
+  # "never record-only / never seed-only" discipline made structural). CP-only (no runtime SPEC
+  # delta, no runtime src behavior change; the engine_output_replay docstring clarified impl-side).
+  # BLOCKING witness (advisor): a producer-half full-chain SAVE_POINT round-trip through the REAL
+  # execute_workflow (NOT a hand-seeded store) — confirmed RED on HEAD (phase 1 recorded nothing) →
+  # GREEN with the gate extensions. LINEAR-scoped (both gates in the linear loop; non-linear returns
+  # before the seed), mirroring the v1.75 child-scoped narrowing. DECOMPOSE — close 1 + REGISTER 1
+  # (B-CHILD-CRASH-RESUME-FINAL-STATE-RECONSTRUCT-RECONCILER — RECONCILER is ENGINE-OWNS-SUBSTRATE,
+  # its authoritative state is the U-RT-123 partial_state, so store-reuse would be a 2nd output
+  # authority → the follow-on grounds store-reuse-vs-derive) → standalone_closed 59 → 60,
+  # standalone_registered 4 → 4 (net-zero). NO operator gate (additive; spec NOT-YET-PROVIDED
+  # reconstruction ≠ FORBADE it; no committed-invariant sacrifice). NO §5.2 IS-hash arc. Decorrelated:
+  # advisor full-transcript BEFORE substantive work (Reading A + the blocking producer-half witness +
+  # the RECONCILER split) + out-of-family Codex (pre-merge). harness-cp 1423 / harness-runtime 2142
+  # non-e2e green; pyright 0/0/0; ruff; overlay 330 nodes / 31 seams. PRIOR FRONTIER NOTE follows.
   # FRONTIER NOTE (2026-06-26, B-CHILD-CRASH-RESUME-FINAL-STATE-RECONSTRUCT closed as the
   # CHILD-SCOPED ESR/WAL slice, CP spec v1.74 → v1.75, CP impl + a runtime impl-only
   # child_workflow_runner opt-in, NO runtime SPEC delta). On a durable-engine-class child
@@ -881,16 +906,36 @@ arcs:
     ledger_ref: ".harness/b-fanout-crash-resume-maybe-ran-subagent-design-finding-v2.md"
 
   - id: B-CHILD-CRASH-RESUME-FINAL-STATE-RECONSTRUCT-SAVE-POINT-RECONCILER
-    title: "Reconstruct a SAVE_POINT_CHECKPOINT / RECONCILER_LOOP resumed final_state — CHILD and TOP-LEVEL (needs an output substrate)"
+    title: "Reconstruct a resumed final_state — SAVE_POINT slice CLOSED (CHILD + TOP-LEVEL, LINEAR); RECONCILER split to ...RECONCILER"
+    kind: standalone
+    status: closed
+    decompose_at_open: true
+    owner_axis: "CP"
+    operator_gated: false  # DECIDED AT OPEN (CP spec v1.79, grounded): impl-not-fork, no gate. The spec NOT-YET-PROVIDED reconstruction for SAVE_POINT (a registered boundary) — it did NOT FORBID per-step outputs (no committed-invariant sacrifice; `[[disposition-label-is-a-claim-verify-against-spec]]`). Additive close of a silent-truncation result-fidelity gap; reported in the PR/handoff, not gated (`[[feedback-gate-only-on-meaningful-architecture-change]]`).
+    parent_arc: B-CHILD-CRASH-RESUME-FINAL-STATE-RECONSTRUCT
+    pr: "#<pending> (r-fs-1/b-child-crash-resume-final-state-reconstruct-save-point — flips registered → closed as the SAVE_POINT slice [child + top-level, LINEAR]; registers the RECONCILER follow-on → standalone_closed 59 → 60, standalone_registered 4 → 4 net-zero)"
+    spec_delta: "bundled-absorption CP v1.78 → v1.79 (§1 the §25.2/§25.6 resume-transparency invariant durable-output-class set extended {ESR,WAL} → {ESR,WAL,SAVE_POINT_CHECKPOINT}; the producer + seed gates unified onto ONE `_FINAL_STATE_RECONSTRUCT_ENGINE_CLASSES` constant [move-together structural]; §2 at-most-once + fail-closed preserved; §3 CLOSE+REGISTER net-zero) + 1 clearance marker. CP-ONLY — NO runtime SPEC delta, NO runtime src behavior change (the EngineOutputStore is already engine-class-agnostic; the `engine_output_replay` docstring is clarified impl-side only). NO contract removal / closed-enum / committed-invariant sacrifice / new-fail-class; at-most-once PRESERVED (pure store READ); NO §5.2 IS-hash arc."
+    gives: "A crash-resumed SINGLE_THREADED_LINEAR SAVE_POINT_CHECKPOINT run (child OR top-level) over a committed prefix now reconstructs its COMPLETE final_state (and a DRAINED/FAILED partial_state) from the durable EngineOutputStore, instead of a silently SUFFIX-ONLY one (status SUCCESS that truncated output to the post-resume steps — a result-fidelity bug; a child fold corrupted the parent aggregate). GROUNDING overturned the registered 'needs an entirely NEW output substrate' anticipation: the EngineOutputStore is mechanically engine-class-agnostic (binds on `engine_output_replay`, not engine class) and a real SAVE_POINT run flows through the SAME linear dispatch loop as ESR/WAL → the close is a CP-side gate extension reusing the class-agnostic store. A corrupt durable prefix now FAILS closed (the shared `_read_durable_replay_prefix` skew gate reaches the SAVE_POINT path) — honest failure over silent truncation. Decorrelated: advisor full-transcript (Reading A over the new-substrate anticipation + the BLOCKING producer-half full-chain witness criterion + the RECONCILER two-authorities split) + out-of-family Codex on the diff."
+    closed_scope: "Built as the SAVE_POINT_CHECKPOINT slice (SINGLE_THREADED_LINEAR, child + top-level in one go — both reach the shared linear seed site; reconstruct_final_state defaults True for both paths). Mechanism = a CP-side gate extension: a NEW `_FINAL_STATE_RECONSTRUCT_ENGINE_CLASSES = {ESR, WAL, SAVE_POINT_CHECKPOINT}` constant gates BOTH the `_record_durable_step_output` producer AND the final_state seed (the 'never record-only / never seed-only' discipline made structural — SAVE_POINT's journal is consumed by the seed, its only consumer, since it has no cached-output-replay channel rehydrate). LINEAR-scoped (both gates in the linear loop; non-linear strategies return before the seed), mirroring the v1.75 child-scoped narrowing. Witnesses (CP, by-execution): `test_reconstruct_final_state_round_trips_through_store_save_point` — the BLOCKING producer→crash→consumer full-chain round-trip through the REAL execute_workflow (phase 1 fresh SAVE_POINT run RECORDS via the real producer [asserted store holds {0,1,2}], phase 2 resume RECONSTRUCTS {step-0,step-1,step-2}; RED-without-the-gate-extension — phase 1 recorded NOTHING, the advisor's honest-vs-vacuous gate) + `test_reconstruct_final_state_reconciler_out_of_scope_degrades` (RECONCILER_LOOP stays suffix-only, reframed from the old SAVE_POINT-degrade test) + the preserved v1.75/v1.76 ESR/WAL reconstruct / store-skew fail-closed / no-journal-degrade / DRAINED partial_state / #680 override-path witnesses. Full suites green: harness-cp 1423 passed / 1 xfailed; harness-runtime 2142 passed / 10 skipped (non-e2e); pyright 0/0/0; ruff; overlay 330 nodes / 31 seams. NOT in this close: (a) RECONCILER_LOOP reconstruction (ENGINE-OWNS-SUBSTRATE — store-reuse would be a 2nd output authority vs the U-RT-123 partial_state) → the registered B-CHILD-CRASH-RESUME-FINAL-STATE-RECONSTRUCT-RECONCILER; (b) a FAN-OUT SAVE_POINT aggregate → the B-FANOUT-OUTPUT-REPLAY family."
+    as_built:
+      - "harness-cp/src/harness_cp/workflow_driver.py (NEW `_FINAL_STATE_RECONSTRUCT_ENGINE_CLASSES = {ESR, WAL, SAVE_POINT_CHECKPOINT}` frozenset; the `_record_durable_step_output` producer call-site gate + the final_state seed gate both reference it [were inline `(ESR, WAL)` tuples])"
+      - "harness-runtime/src/harness_runtime/types.py (`RuntimeConfig.engine_output_replay` docstring clarified: the class-agnostic store also backs final_state reconstruction for {ESR,WAL,SAVE_POINT}; NO behavior change)"
+      - "design-substrate/Spec_Control_Plane_v1_79.md + 1 clearance marker (CP-ONLY, NO runtime SPEC delta, NO runtime src behavior change)"
+      - "tests: harness-cp test_workflow_driver.py (the SAVE_POINT producer→crash→consumer round-trip [RED before the gate extension] + the reframed RECONCILER out-of-scope degrade)"
+    why: "Registered at the B-CHILD-CRASH-RESUME-FINAL-STATE-RECONSTRUCT close (CP v1.75 §2 decompose-at-open) anticipating a new output substrate. Grounded at open (2026-06-26): the EngineOutputStore is class-agnostic → the SAVE_POINT slice is a CP-side gate extension, not a new substrate (`[[grounding-reveals-claude-closeable-slice-close-honestly]]`). DECOMPOSE — close the SAVE_POINT slice + register the RECONCILER follow-on per FULL-SPEC (`[[feedback-full-spec-beyond-mvp-nothing-deferred]]`)."
+    ledger_ref: ".harness/arc-open-b-child-crash-resume-final-state-reconstruct-save-point.md"
+
+  - id: B-CHILD-CRASH-RESUME-FINAL-STATE-RECONSTRUCT-RECONCILER
+    title: "Reconstruct a RECONCILER_LOOP resumed final_state — CHILD and TOP-LEVEL (engine-owns-substrate: store-reuse vs derive)"
     kind: standalone
     status: registered
     decompose_at_open: true
     owner_axis: "CP + runtime"
-    operator_gated: false  # provisional — additive (mirrors the ESR/WAL child-scoped + top-level slices). A new output-carrying substrate for SAVE_POINT/RECONCILER is the larger lift, not a committed-invariant sacrifice → no gate anticipated.
-    parent_arc: B-CHILD-CRASH-RESUME-FINAL-STATE-RECONSTRUCT
-    anticipated_scope: "The final_state reconstruction (B-CHILD-CRASH-RESUME-FINAL-STATE-RECONSTRUCT child-scoped, CP v1.75 + B-TOP-LEVEL-CRASH-RESUME-FINAL-STATE-RECONSTRUCT top-level, CP v1.76) covers EVENT_SOURCED_REPLAY / WAL_SEGMENT — the only classes whose per-step output is durably recorded (the EngineOutputStore per-step linear journal, gated to {ESR, WAL} at `_record_durable_step_output`). A SAVE_POINT_CHECKPOINT or RECONCILER_LOOP resume over a committed prefix — CHILD **or** TOP-LEVEL — crash-resumes the SAME way (the suffix-only `accumulated`) but has NO durable per-step output store, so its final_state cannot be reconstructed until an output-carrying substrate exists for those classes (the storage half — a SAVE_POINT-snapshot-carried output map or a RECONCILER per-iteration output journal; a larger lift than seeding from an existing store). The {ESR,WAL} engine-class gate degrades a SAVE_POINT/RECONCILER resume to suffix-only on BOTH paths (the v1.76 default flip is a no-op for these classes — the gate, not the default, is the blocker). Until then a SAVE_POINT/RECONCILER resume (a top-level run, a child fold, or a SAVE_POINT hierarchical-pause #680 child) folds/returns suffix-only — the residual `[[recovery-effect-fidelity-vs-result-fidelity]]` gap for those classes. The storage-half blocker is SHARED across the child and top-level cases, so this ONE arc covers both (no separate top-level SAVE_POINT/RECONCILER registration is owed — the v1.76 WHOLE close registers nothing)."
-    why: "Surfaced at the B-CHILD-CRASH-RESUME-FINAL-STATE-RECONSTRUCT close (CP v1.75 §2 decompose-at-open): the ESR/WAL store exists + is reused; SAVE_POINT/RECONCILER need a NEW substrate → a genuinely separate, larger build, registered per FULL-SPEC (`[[feedback-full-spec-beyond-mvp-nothing-deferred]]` + `[[grounding-reveals-claude-closeable-slice-close-honestly]]`) rather than over-reached or left prose-only. Scope EXTENDED at the B-TOP-LEVEL close (CP v1.76) to explicitly cover the TOP-LEVEL SAVE_POINT/RECONCILER case — the shared storage-half blocker means one arc covers both child and top-level, so B-TOP-LEVEL is a clean WHOLE close (registers nothing)."
-    ledger_ref: ".harness/b-fanout-crash-resume-maybe-ran-subagent-design-finding-v2.md"
+    operator_gated: false  # provisional — additive (mirrors the ESR/WAL/SAVE_POINT slices). Not a committed-invariant sacrifice → no gate anticipated. The open design question is store-reuse-vs-derive, not a gate.
+    parent_arc: B-CHILD-CRASH-RESUME-FINAL-STATE-RECONSTRUCT-SAVE-POINT-RECONCILER
+    anticipated_scope: "The SAVE_POINT slice (CP v1.79) extended the resume-transparency invariant to {ESR, WAL, SAVE_POINT_CHECKPOINT} by reusing the engine-class-agnostic EngineOutputStore. RECONCILER_LOOP is the LAST durable class still degrading to suffix-only on resume — but it is NOT a simple gate extension. RECONCILER_LOOP is an ENGINE-OWNS-SUBSTRATE class (`workflow_driver.py` reconciler branch: 'the AUTHORITATIVE durable reconciler state lives in the engine-owned reconciler substrate'); the `ReconcilerEnginePauseResumeSubstrate` already persists `partial_state` in its `PauseEvent` checkpoint records. So reconstructing RECONCILER's CP-`accumulated` from the EngineOutputStore would create a SECOND output authority alongside the reconciler substrate (violates one-source-of-truth). THE GROUNDING QUESTION (advisor two-authorities flag): does a RECONCILER resume's `accumulated` reconstruct from the reconciler substrate's `partial_state` (derive-from-the-reconciler-substrate), or from the EngineOutputStore (store-reuse, accepting the two-authorities cost)? Probe the reconciler resume path before wiring either — do NOT blindly reuse the store. THE DISCRIMINATOR vs the SAVE_POINT slice (lest the asymmetry read as arbitrary — SAVE_POINT also nominally delegates checkpointing to an app-layer engine per C-CP-07 §7.1 row 2): the harness SAVE_POINT resume path is F2-skip-prefix with NO competing harness-owned per-step output authority (the LangGraph checkpointer is the spec's REFERENCE substrate, not the harness impl path → the EngineOutputStore is the sole harness authority, store-reuse adds no second one), whereas RECONCILER has a LIVE harness-owned substrate already carrying `partial_state` on the harness resume path → store-reuse genuinely competes. Covers both child and top-level (the shared blocker), like the SAVE_POINT slice. A FAN-OUT RECONCILER aggregate is the separate B-FANOUT-OUTPUT-REPLAY family."
+    why: "Split from B-CHILD-CRASH-RESUME-FINAL-STATE-RECONSTRUCT-SAVE-POINT-RECONCILER at the SAVE_POINT close (CP v1.79 §3 decompose-at-open): SAVE_POINT reused the class-agnostic store cleanly, but RECONCILER's engine-owns-substrate posture means store-reuse-vs-derive needs its own grounding (`[[grounding-reveals-claude-closeable-slice-close-honestly]]` + the advisor two-authorities probe). Registered per FULL-SPEC rather than over-reached into the SAVE_POINT close."
+    ledger_ref: ".harness/arc-open-b-child-crash-resume-final-state-reconstruct-save-point.md"
 
   - id: B-TOP-LEVEL-CRASH-RESUME-FINAL-STATE-RECONSTRUCT
     title: "Reconstruct a TOP-LEVEL resumed run's final_state (the general framing — decided impl-not-fork)"

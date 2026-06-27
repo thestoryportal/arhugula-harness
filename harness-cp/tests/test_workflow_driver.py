@@ -1312,10 +1312,13 @@ def test_event_sourced_replay_unreadable_store_fails_closed() -> None:
 # `final_state` reconstructs the COMPLETE terminal state — for BOTH the top-level run
 # (the `run_workflow` handler / `api.run`+`api.resume` use the default) and the child
 # fold the parent fan-out / hierarchical-pause consumes (`sub_agent_dispatch.py` folds
-# `child_result.final_state` verbatim). Scoped to ESR / WAL (the only classes whose
-# per-step output is durably recorded); SAVE_POINT / RECONCILER degrade unchanged → the
-# registered output-substrate follow-on. Explicit `reconstruct_final_state=False` is the
-# opt-out escape hatch (no production caller takes it).
+# `child_result.final_state` verbatim). Scoped to the durable-output-store classes
+# ESR / WAL / SAVE_POINT_CHECKPOINT (`_FINAL_STATE_RECONSTRUCT_ENGINE_CLASSES`; SAVE_POINT
+# joined at v1.79 — the store is mechanically class-agnostic, witnessed by a real forward-run
+# round-trip below); RECONCILER_LOOP degrades unchanged → the registered RECONCILER
+# follow-on (it owns the U-RT-123 substrate; store-reuse would be a second authority).
+# Explicit `reconstruct_final_state=False` is the opt-out escape hatch (no production caller
+# takes it).
 # ---------------------------------------------------------------------------
 
 
@@ -1424,21 +1427,24 @@ def test_reconstruct_final_state_fails_closed_on_store_skew() -> None:
     assert "engine-output-replay-missing-output" in result.fail_class
 
 
-def test_reconstruct_final_state_save_point_out_of_scope_degrades() -> None:
-    """SCOPE BOUNDARY (the registered SAVE_POINT/RECONCILER follow-on) — the opt-in is on
-    but the engine class is SAVE_POINT_CHECKPOINT, which has NO durable per-step output
-    store (the producer gate fires only for ESR/WAL). The reconstruction is SKIPPED (the
-    engine-class gate), so the resume returns the suffix-only final_state {step-2} and
-    does NOT fail closed. This is the honest scope: SAVE_POINT/RECONCILER child
-    reconstruction needs an output substrate first (registered follow-on)."""
+def test_reconstruct_final_state_reconciler_out_of_scope_degrades() -> None:
+    """SCOPE BOUNDARY (the registered RECONCILER follow-on) — the opt-in is on but the engine
+    class is RECONCILER_LOOP, which is NOT in `_FINAL_STATE_RECONSTRUCT_ENGINE_CLASSES`: it
+    is an ENGINE-OWNS-SUBSTRATE class whose authoritative durable state lives in the U-RT-123
+    reconciler substrate, so seeding from THIS store would be a second output authority. The
+    reconstruction is SKIPPED (the engine-class gate), so the resume returns the suffix-only
+    final_state {step-2} and does NOT fail closed. This is the honest scope: RECONCILER
+    reconstruction needs its own grounding (store-reuse vs derive-from-the-reconciler-
+    substrate) → B-CHILD-CRASH-RESUME-FINAL-STATE-RECONSTRUCT-RECONCILER. SAVE_POINT no
+    longer degrades (see `test_reconstruct_final_state_round_trips_through_store_save_point`)."""
     ctx = _esr_resume_ctx(2)
-    # A store IS bound + holds the prefix, but SAVE_POINT never recorded it in practice;
+    # A store IS bound + holds the prefix, but RECONCILER's authoritative state is U-RT-123;
     # the engine-class gate must skip the reconstruct regardless of a (stray) bound store.
     ctx.engine_output_store = _FakeOutputStore(
         {0: ("step-0", {"draft": "v0"}), 1: ("step-1", {"feedback": "v1"})}
     )
     result = execute_workflow(
-        manifest_entry=_manifest(engine_class=EngineClass.SAVE_POINT_CHECKPOINT),
+        manifest_entry=_manifest(engine_class=EngineClass.RECONCILER_LOOP),
         steps=[_step(0), _step(1), _step(2)],
         run_id="run-1",
         ctx=cast(DriverContext, ctx),
@@ -1501,6 +1507,53 @@ def test_reconstruct_final_state_round_trips_through_store_wal_segment() -> None
     ctx2.engine_output_store = store
     result = execute_workflow(
         manifest_entry=_manifest(engine_class=EngineClass.WAL_SEGMENT),
+        steps=[_step(0), _step(1), _step(2)],
+        run_id="run-1",
+        ctx=cast(DriverContext, ctx2),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(cast(StepDispatcher, _EchoDispatcher())),
+        reconstruct_final_state=True,
+    )
+    assert result.status is RunStatus.SUCCESS
+    assert result.final_state is not None
+    assert set(result.final_state.keys()) == {"step-0", "step-1", "step-2"}
+
+
+def test_reconstruct_final_state_round_trips_through_store_save_point() -> None:
+    """FULL-CHAIN round-trip (producer→crash→consumer) for SAVE_POINT_CHECKPOINT — the
+    BLOCKING producer-half witness for B-CHILD-CRASH-RESUME-FINAL-STATE-RECONSTRUCT-SAVE-
+    POINT (the SAVE_POINT slice of the registered SAVE-POINT-RECONCILER follow-on). A fresh
+    SAVE_POINT_CHECKPOINT run RECORDS its prefix to the store (phase 1, via the REAL
+    `_record_durable_step_output` producer gate now extended to SAVE_POINT — NOT a hand-
+    seeded store), then a resume READS IT BACK + RECONSTRUCTS the full final_state (phase 2,
+    via the seed gate extended in the SAME PR). This proves the EngineOutputStore is
+    mechanically class-agnostic and a real SAVE_POINT forward run flows through the same
+    LINEAR dispatch loop as ESR/WAL — the grounding that overturns the registered "needs an
+    entirely new substrate" anticipation. RED before the gate extensions: phase 1 records
+    NOTHING (producer excludes SAVE_POINT) → phase 2's final_state would be {step-2} only."""
+    store = _FakeOutputStore({}, journal_present=False)
+
+    # Phase 1 — fresh SAVE_POINT run (resume_at == 0): all 3 steps dispatch + RECORD.
+    ctx1 = _esr_resume_ctx(0)
+    ctx1.engine_output_store = store
+    execute_workflow(
+        manifest_entry=_manifest(engine_class=EngineClass.SAVE_POINT_CHECKPOINT),
+        steps=[_step(0), _step(1), _step(2)],
+        run_id="run-1",
+        ctx=cast(DriverContext, ctx1),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(cast(StepDispatcher, _EchoDispatcher())),
+        reconstruct_final_state=True,
+    )
+    # The producer recorded the committed prefix on the fresh run (proves the producer half
+    # is non-vacuous for SAVE_POINT — not papered over by a hand-seeded store).
+    assert set(store.read_outputs("run-1").keys()) == {0, 1, 2}
+
+    # Phase 2 — resume (steps 0,1 committed) over the SAME store: reconstruct the full state.
+    ctx2 = _esr_resume_ctx(2)
+    ctx2.engine_output_store = store
+    result = execute_workflow(
+        manifest_entry=_manifest(engine_class=EngineClass.SAVE_POINT_CHECKPOINT),
         steps=[_step(0), _step(1), _step(2)],
         run_id="run-1",
         ctx=cast(DriverContext, ctx2),

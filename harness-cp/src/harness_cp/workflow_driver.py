@@ -698,6 +698,33 @@ _FANOUT_REPLAY_ENGINE_CLASSES: frozenset[EngineClass] = frozenset(
     {EngineClass.EVENT_SOURCED_REPLAY, EngineClass.WAL_SEGMENT}
 )
 
+# B-CHILD-CRASH-RESUME-FINAL-STATE-RECONSTRUCT-SAVE-POINT (R-FS-1) — the engine classes
+# whose per-step output is durably recorded to the `EngineOutputStore` AND seeded back into
+# `accumulated` on resume so the resumed run's `final_state` reconstructs the COMPLETE
+# terminal state (CP v1.76 §25.2/§25.6 resume-transparency invariant, extended to
+# SAVE_POINT_CHECKPOINT at v1.79). This single constant gates BOTH the `_record_durable_
+# step_output` producer AND the final_state seed site so the two can NEVER drift apart —
+# the documented "never record-only / never seed-only" invariant made structural (a
+# never-rehydrated journal is the exact defect the move-together discipline prevents).
+# EVENT_SOURCED_REPLAY / WAL_SEGMENT additionally feed the §8.1 cached-output-replay
+# inter-step channel rehydrate (its own ESR/WAL-gated branch); SAVE_POINT_CHECKPOINT has no
+# cached-output-replay semantic — its journal is consumed ONLY by the final_state seed, the
+# durable-output sink the EngineOutputStore is mechanically class-agnostic about. The
+# EngineOutputStore binds whenever `RuntimeConfig.engine_output_replay` is on, independent of
+# engine class — so SAVE_POINT reconstruction is a CP-side gate extension, no runtime edit.
+# RECONCILER_LOOP is NOT a member: it is an ENGINE-OWNS-SUBSTRATE class whose authoritative
+# durable state lives in the U-RT-123 reconciler substrate (`partial_state` in its PauseEvent),
+# so reconstructing its `accumulated` from THIS store would create a second output authority —
+# the registered B-CHILD-CRASH-RESUME-FINAL-STATE-RECONSTRUCT-RECONCILER follow-on grounds
+# store-reuse-vs-derive-from-the-reconciler-substrate before wiring it.
+_FINAL_STATE_RECONSTRUCT_ENGINE_CLASSES: frozenset[EngineClass] = frozenset(
+    {
+        EngineClass.EVENT_SOURCED_REPLAY,
+        EngineClass.WAL_SEGMENT,
+        EngineClass.SAVE_POINT_CHECKPOINT,
+    }
+)
+
 
 # B-FANOUT-CRASH-RESUME-MAYBE-RAN-RESOLUTION (R-FS-1) — the fan-out branch step kinds whose
 # RE-DISPATCH cannot double-fire a non-idempotent EXTERNAL effect, so a MAYBE-RAN branch
@@ -3542,21 +3569,26 @@ def _execute_workflow_body(
     # top-level run (the `run_workflow` handler / `api.run`+`api.resume` take the default,
     # CP v1.76 §25.2/§25.6 resume-transparency invariant) AND a child sub-workflow run (so
     # the parent fan-out / hierarchical-pause fold sees the COMPLETE child terminal state).
-    # Scoped to the cached-output-replay engine classes (EVENT_SOURCED_REPLAY / WAL_SEGMENT
-    # — the only classes whose per-step output is durably recorded, gated identically at the
-    # `_record_durable_step_output` producer below); a SAVE_POINT_CHECKPOINT / RECONCILER_
-    # LOOP resume has no output store → the read degrades to the empty prefix (suffix-only,
-    # unchanged) → the registered SAVE_POINT/RECONCILER follow-on. Explicit
-    # `reconstruct_final_state=False` is the opt-out (no production caller takes it).
-    # Fail-closed on a store↔ledger skew / identity-mismatch (the shared read+validate),
-    # surfaced as a FAILED run so neither a parent fold nor a top-level caller ever sees a
-    # corrupt/partial reconstructed state (a corrupt durable prefix → FAILED, not a
-    # silently-truncated SUCCESS).
+    # Scoped to the durable-output-store engine classes (EVENT_SOURCED_REPLAY / WAL_SEGMENT /
+    # SAVE_POINT_CHECKPOINT — the classes whose per-step output is durably recorded, gated by
+    # the SAME `_FINAL_STATE_RECONSTRUCT_ENGINE_CLASSES` constant at the `_record_durable_
+    # step_output` producer below so the producer + seed can never drift apart). SAVE_POINT
+    # joined at v1.79 (the EngineOutputStore is mechanically class-agnostic; a real SAVE_POINT
+    # forward run flows through this same LINEAR loop, recording its prefix at the producer →
+    # reconstructing here on resume — witnessed end-to-end, not pre-seeded). A RECONCILER_LOOP
+    # resume still degrades to the empty prefix (suffix-only, unchanged) → the registered
+    # RECONCILER follow-on (it owns the U-RT-123 reconciler substrate; store-reuse would be a
+    # second output authority). This LINEAR seed site is reached only by SINGLE_THREADED_LINEAR
+    # runs (the non-linear strategies return before it) → the slice is LINEAR-scoped, mirroring
+    # the v1.75 child-scoped narrowing. Explicit `reconstruct_final_state=False` is the opt-out
+    # (no production caller takes it). Fail-closed on a store↔ledger skew / identity-mismatch
+    # (the shared read+validate), surfaced as a FAILED run so neither a parent fold nor a
+    # top-level caller ever sees a corrupt/partial reconstructed state (a corrupt durable prefix
+    # → FAILED, not a silently-truncated SUCCESS).
     if (
         reconstruct_final_state
         and resume_at > 0
-        and manifest_entry.engine_class
-        in (EngineClass.EVENT_SOURCED_REPLAY, EngineClass.WAL_SEGMENT)
+        and manifest_entry.engine_class in _FINAL_STATE_RECONSTRUCT_ENGINE_CLASSES
     ):
         _prefix, _reconstruct_fail = _read_durable_replay_prefix(
             ctx,
@@ -4211,21 +4243,21 @@ def _execute_workflow_body(
         # step's output to the output-carrying event-history store BEFORE the
         # ledger-append below (RESERVE-before-COMMIT: the store always holds ≥ the
         # ledger's materialized prefix). Opt-in; no-op when unbound. The store-write
-        # precedes the ledger materialization `resume_at` counts, so an
-        # EVENT_SOURCED_REPLAY / WAL_SEGMENT resume never finds a materialized step
-        # with a missing stored output. GATED on the cached-output-replay engine
-        # classes (EVENT_SOURCED_REPLAY + WAL_SEGMENT — both SHARE the
-        # EngineOutputStore + the C-CP-08 §8.1 cached-output-replay refinement) so a
-        # SAVE_POINT_CHECKPOINT / non-replay run with the flag on does not write a
-        # never-rehydrated journal (advisor pre-merge catch). The record half is SAFE
-        # only because the rehydrate half fires for the SAME classes: B-ENGINE-OUTPUT-
-        # REPLAY-WAL-SEGMENT added WAL_SEGMENT to BOTH this producer gate AND the
-        # resume-side rehydrate in one arc — never record-only (a never-rehydrated
-        # journal is the exact defect this gate prevents).
-        if manifest_entry.engine_class in (
-            EngineClass.EVENT_SOURCED_REPLAY,
-            EngineClass.WAL_SEGMENT,
-        ):
+        # precedes the ledger materialization `resume_at` counts, so a durable-class
+        # resume never finds a materialized step with a missing stored output. GATED on
+        # the durable-output-store engine classes via the SHARED
+        # `_FINAL_STATE_RECONSTRUCT_ENGINE_CLASSES` constant (EVENT_SOURCED_REPLAY +
+        # WAL_SEGMENT — the C-CP-08 §8.1 cached-output-replay refinement — PLUS
+        # SAVE_POINT_CHECKPOINT at v1.79 for the final_state reconstruction) so a
+        # non-durable run with the flag on does not write a never-consumed journal
+        # (advisor pre-merge catch). The record half is SAFE only because a consumer
+        # fires for the SAME classes: B-ENGINE-OUTPUT-REPLAY-WAL-SEGMENT added WAL to
+        # BOTH this producer gate AND the resume-side rehydrate; B-CHILD-...-SAVE-POINT
+        # added SAVE_POINT to BOTH this producer gate AND the final_state seed (its only
+        # consumer — SAVE_POINT has no cached-output-replay channel rehydrate). Using
+        # ONE constant at both sites makes "never record-only" structural — never a
+        # never-consumed journal.
+        if manifest_entry.engine_class in _FINAL_STATE_RECONSTRUCT_ENGINE_CLASSES:
             _record_durable_step_output(
                 ctx, run_idempotency_key, step_index, str(step.step_id), step_output
             )

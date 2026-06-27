@@ -1373,7 +1373,17 @@ class RuntimeConfig(BaseModel):
     distinguishing replay effect is observable ONLY when composed with
     `inter_step_data_flow=True` (the consumer channel) + an EVENT_SOURCED_REPLAY
     workflow; default `False` → `ctx.engine_output_store is None` → no recording, no
-    rehydration (byte-identical)."""
+    rehydration (byte-identical).
+
+    The store binding is engine-class-AGNOSTIC (gated only on this flag): the same
+    durable per-step output store ALSO backs the resume final_state reconstruction
+    (B-CHILD/TOP-LEVEL/SAVE-POINT-CRASH-RESUME-FINAL-STATE-RECONSTRUCT) for the
+    durable-output classes EVENT_SOURCED_REPLAY / WAL_SEGMENT / SAVE_POINT_CHECKPOINT —
+    the CP driver seeds the committed prefix back into `accumulated` on resume so a
+    resumed run reports its COMPLETE final_state, not a suffix-only one. Which classes
+    record + reconstruct is a CP-side gate (`_FINAL_STATE_RECONSTRUCT_ENGINE_CLASSES`),
+    so SAVE_POINT reconstruction needs no runtime change; RECONCILER_LOOP is excluded
+    (it owns the U-RT-123 reconciler substrate)."""
 
     effect_fencing: bool = False
     """B-EFFECT-FENCE (R-FS-1 standalone arc; runtime spec §14.22 C-RT-31, new at
