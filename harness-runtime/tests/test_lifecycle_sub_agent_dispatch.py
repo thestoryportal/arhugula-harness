@@ -1164,22 +1164,312 @@ def test_subagent_child_recoverable_false_for_fanout_child() -> None:
         assert subagent_child_recoverable(payload) is False, fanout_topology
 
 
-def test_subagent_child_recoverable_false_for_nested_subagent_or_managed_child_step() -> None:
-    """NEGATIVE CONTROL (the leaf condition): a {ESR} ∧ LINEAR child is NOT recoverable if any of
-    its steps is a nested SUB_AGENT_DISPATCH (deeper recursion) or MANAGED_AGENTS (unfenced vendor
-    sink) — both are further follow-ons, outside the #770-witnessed leaf scope."""
-    nested_subagent = _payload(
-        engine_class=EngineClass.EVENT_SOURCED_REPLAY,
-        topology=TopologyPattern.SINGLE_THREADED_LINEAR,
-        child_step_kinds=(StepKind.INFERENCE_STEP, StepKind.SUB_AGENT_DISPATCH),
-    )
-    assert subagent_child_recoverable(nested_subagent) is False
+def test_subagent_child_recoverable_false_for_managed_or_malformed_nested_child_step() -> None:
+    """NEGATIVE CONTROL (the recursive conjunct 3, NONLEAF-CHILD arc): a {ESR} ∧ LINEAR child stays
+    NON-recoverable when (a) a child step is MANAGED_AGENTS (an unfenced vendor sink with no
+    recursively-classifiable child manifest → hard-excluded), or (b) a nested SUB_AGENT_DISPATCH
+    child step carries a MIS-SHAPED grandchild payload (the `_child_steps` helper's `{"index": i}`
+    cannot validate to `SubAgentDispatchPayload` → the decline-mirror fails closed). The WELL-FORMED
+    recoverable-grandchild case is now True — witnessed at
+    `test_subagent_child_recoverable_true_for_nested_recoverable_grandchild`."""
     nested_managed = _payload(
         engine_class=EngineClass.EVENT_SOURCED_REPLAY,
         topology=TopologyPattern.SINGLE_THREADED_LINEAR,
         child_step_kinds=(StepKind.TOOL_STEP, StepKind.MANAGED_AGENTS),
     )
     assert subagent_child_recoverable(nested_managed) is False
+    malformed_nested = _payload(
+        engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+        topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+        child_step_kinds=(StepKind.INFERENCE_STEP, StepKind.SUB_AGENT_DISPATCH),
+    )
+    assert subagent_child_recoverable(malformed_nested) is False
+
+
+def _nested_payload(
+    grandchild: SubAgentDispatchPayload,
+    *,
+    engine_class: EngineClass = EngineClass.EVENT_SOURCED_REPLAY,
+    topology: TopologyPattern = TopologyPattern.SINGLE_THREADED_LINEAR,
+    lead_kinds: tuple[StepKind, ...] = (StepKind.INFERENCE_STEP,),
+    nested_step_id: str = "child-step-nested-subagent",
+) -> SubAgentDispatchPayload:
+    """A parent SUB_AGENT_DISPATCH payload (NONLEAF-CHILD recursion fixture): the child is
+    {engine_class} ∧ {topology} with `lead_kinds` non-recursive steps FOLLOWED BY one nested
+    SUB_AGENT_DISPATCH child step (`nested_step_id`) carrying a WELL-FORMED `grandchild` payload."""
+    nested_step = WorkflowStep(
+        step_id=StepID(nested_step_id),
+        step_kind=StepKind.SUB_AGENT_DISPATCH,
+        step_payload=grandchild.model_dump(),
+    )
+    return SubAgentDispatchPayload(
+        child_workflow_id="parent-child-wf",
+        child_manifest_entry=_child_manifest(
+            workload_class=WorkloadClass.SOFTWARE_ENGINEERING,
+            topology=topology,
+            engine_class=engine_class,
+        ),
+        child_steps=(*_child_steps(lead_kinds), nested_step),
+        brief=_brief(),
+    )
+
+
+def test_subagent_child_recoverable_true_for_nested_recoverable_grandchild() -> None:
+    """POSITIVE — the NONLEAF-CHILD arc's load-bearing relaxation (R-FS-1), RED-without-fix: a
+    {ESR} ∧ LINEAR child whose nested SUB_AGENT_DISPATCH child step carries a RECOVERABLE grandchild
+    ({ESR} ∧ LINEAR leaf) is NOW recoverable. Before the recursive conjunct 3 this returned False
+    (the prior #770 leaf-only slice). The recursion descends into the grandchild payload and applies
+    the SAME predicate — correct at all depths by construction."""
+    grandchild = _payload(
+        engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+        topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+        child_step_kinds=(StepKind.TOOL_STEP, StepKind.INFERENCE_STEP),
+    )
+    assert subagent_child_recoverable(_nested_payload(grandchild)) is True
+
+
+def test_subagent_child_recoverable_false_for_nested_nonrecoverable_grandchild() -> None:
+    """NEGATIVE CONTROL — the recursion fails closed when the grandchild is itself non-recoverable:
+    a FAN-OUT grandchild (fails conjunct 2 at depth 2), a PURE_PATTERN grandchild (fails conjunct 1
+    at depth 2), or a grandchild whose own child step is MANAGED_AGENTS (fails the recursive
+    conjunct 3 at depth 2). Each non-recoverability propagates up to the parent."""
+    fanout_gc = _payload(
+        engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+        topology=TopologyPattern.PARALLELIZATION,
+        child_step_kinds=(StepKind.TOOL_STEP,),
+    )
+    assert subagent_child_recoverable(_nested_payload(fanout_gc)) is False
+    pure_gc = _payload(
+        engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
+        topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+        child_step_kinds=(StepKind.TOOL_STEP,),
+    )
+    assert subagent_child_recoverable(_nested_payload(pure_gc)) is False
+    managed_gc = _payload(
+        engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+        topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+        child_step_kinds=(StepKind.MANAGED_AGENTS,),
+    )
+    assert subagent_child_recoverable(_nested_payload(managed_gc)) is False
+
+
+def test_subagent_child_recoverable_recurses_to_depth_three() -> None:
+    """The recursion bottoms out correctly at arbitrary depth: a depth-3 chain of recoverable LINEAR
+    sub-agents → True; flipping the deepest great-grandchild to a FAN-OUT topology → False (the
+    non-recoverability propagates up through BOTH nested levels to the top)."""
+    leaf = _payload(
+        engine_class=EngineClass.WAL_SEGMENT,
+        topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+        child_step_kinds=(StepKind.TOOL_STEP,),
+    )
+    depth3_good = _nested_payload(_nested_payload(leaf))
+    assert subagent_child_recoverable(depth3_good) is True
+    bad_leaf = _payload(
+        engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+        child_step_kinds=(StepKind.TOOL_STEP,),
+    )
+    depth3_bad = _nested_payload(_nested_payload(bad_leaf))
+    assert subagent_child_recoverable(depth3_bad) is False
+
+
+def test_resumed_recursive_verdict_catches_changed_grandchild_at_resume() -> None:
+    """STALE-RECURSIVE-VERDICT guard (advisor merge-blocker #3a) — the [P1-b] dual gate's
+    resumed-side conjunct (`_resumed_subagent_recoverable_by_ordinal`, which the maybe-ran classifier
+    requires alongside the dispatch marker) RE-COMPUTES the RECURSIVE `_subagent_child_recoverable`
+    on the RESUMED manifest step. So if a child's nested grandchild is edited recoverable→NON-
+    recoverable between dispatch and resume (e.g. grandchild engine flipped to PURE_PATTERN), the
+    resumed verdict EXCLUDES the ordinal — the parent never auto-resumes against a stale dispatch-time
+    recursive verdict (which would re-dispatch the now-non-recoverable child fresh → double-fire).
+    The dispatch-time `child_engine_class` swap guard operates at the CHILD's engine; this recursive
+    re-computation is what catches a GRANDCHILD-only change."""
+    from harness_cp.workflow_driver import _resumed_subagent_recoverable_by_ordinal
+
+    recoverable_grandchild = _nested_payload(
+        _payload(
+            engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+            topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+            child_step_kinds=(StepKind.TOOL_STEP,),
+        )
+    )
+    nonrecoverable_grandchild = _nested_payload(
+        _payload(
+            engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,  # grandchild edited at resume
+            topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+            child_step_kinds=(StepKind.TOOL_STEP,),
+        )
+    )
+    # PEER fan-out (offset 0): the single worker branch at ordinal 0 is the SUB_AGENT step.
+    assert _resumed_subagent_recoverable_by_ordinal(
+        [_step(recoverable_grandchild)], branch_count=1, orchestrated=False
+    ) == {0}
+    assert (
+        _resumed_subagent_recoverable_by_ordinal(
+            [_step(nonrecoverable_grandchild)], branch_count=1, orchestrated=False
+        )
+        == set()  # changed grandchild → resumed verdict excludes the ordinal → dual gate fails closed
+    )
+
+
+def test_recursive_engine_signature_catches_grandchild_engine_swap() -> None:
+    """RECURSIVE cross-engine-class swap guard (out-of-family Codex [P1], NONLEAF-CHILD arc) — a
+    grandchild engine swap recoverable→recoverable (RECONCILER↔SAVE_POINT under the SAME nested
+    workflow_id + step_id) keeps the recursive recoverability verdict True AND the OUTER child engine
+    unchanged, so the leaf-only `child_engine_class` guard would pass both legs and the
+    engine-agnostic grandchild seed would replay the old durable store through a DIFFERENT recovery
+    mechanism (the #784 swap hazard ONE LEVEL DOWN). The RECURSIVE `_subagent_child_engine_class`
+    signature folds the grandchild engines in, so the swap CHANGES the marker → the dual-gate
+    marker==resumed comparison fails closed. A LEAF child signature stays byte-identical to the plain
+    engine value (no regression to the #774..#784 closed scope)."""
+    from harness_cp.workflow_driver import _subagent_child_engine_class
+
+    reconciler_gc = _nested_payload(
+        _payload(
+            engine_class=EngineClass.RECONCILER_LOOP,
+            topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+            child_step_kinds=(StepKind.TOOL_STEP,),
+        )
+    )
+    savepoint_gc = _nested_payload(
+        _payload(
+            engine_class=EngineClass.SAVE_POINT_CHECKPOINT,
+            topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+            child_step_kinds=(StepKind.TOOL_STEP,),
+        )
+    )
+    sig_reconciler = _subagent_child_engine_class(_step(reconciler_gc))
+    sig_savepoint = _subagent_child_engine_class(_step(savepoint_gc))
+    # The grandchild engine swap CHANGES the recursive signature → dual-gate mismatch → fail closed.
+    assert sig_reconciler != sig_savepoint
+    assert sig_reconciler is not None and "reconciler-loop" in sig_reconciler
+    assert sig_savepoint is not None and "save-point-checkpoint" in sig_savepoint
+    # LEAF child (no nested SUB_AGENT) → byte-identical to the plain engine value (pre-arc marker).
+    leaf = _payload(
+        engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+        topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+        child_step_kinds=(StepKind.TOOL_STEP,),
+    )
+    assert _subagent_child_engine_class(_step(leaf)) == EngineClass.EVENT_SOURCED_REPLAY.value
+
+
+def test_recursive_signature_catches_grandchild_step_id_rename() -> None:
+    """RECURSIVE same-step_id guard (out-of-family Codex [P1] round 2, NONLEAF-CHILD) — RENAMING a
+    nested SUB_AGENT step at the SAME index (same grandchild engine + workflow_id) keeps the
+    grandchild seed unchanged (it keys on child step INDEX + grandchild workflow_id, NOT the nested
+    step_id), so it would auto-resume the OLD durable grandchild effects for a DIFFERENT logical
+    step. The recursive signature folds the grandchild `step_id` in → the rename CHANGES the marker
+    → the dual-gate marker==resumed comparison fails closed (the recursive analogue of #742)."""
+    from harness_cp.workflow_driver import _subagent_child_engine_class
+
+    recoverable_gc = _payload(
+        engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+        topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+        child_step_kinds=(StepKind.TOOL_STEP,),
+    )
+    sig_a = _subagent_child_engine_class(
+        _step(_nested_payload(recoverable_gc, nested_step_id="grandchild-step-A"))
+    )
+    sig_b = _subagent_child_engine_class(
+        _step(_nested_payload(recoverable_gc, nested_step_id="grandchild-step-B"))
+    )
+    # Same engine, same grandchild — ONLY the nested step_id renamed → signature MUST differ.
+    assert sig_a != sig_b
+    assert sig_a is not None and "grandchild-step-A" in sig_a
+
+
+def test_recursive_signature_catches_grandchild_ordinal_and_workflow_id(tmp_path: Path) -> None:
+    """RECURSIVE full-identity guard (out-of-family Codex [P1] rounds 5-6, NONLEAF-CHILD) — the
+    nested signature records the FULL tuple the grandchild seed keys on. Two further dimensions
+    beyond engine + step_id: (1) ORDINAL — inserting a non-sub-agent step BEFORE the nested
+    SUB_AGENT shifts its index, so the seed (keyed on the child-step-index `parent_idempotency_key`)
+    changes; (2) WORKFLOW_ID — `compose_child_run_id_seed` mixes the grandchild `child_workflow_id`
+    in. Without these in the marker, a reorder / re-point would change the seed (fresh grandchild
+    run_id → re-fire) while the dual gate passed. Folding both makes the marker CHANGE → fail
+    closed."""
+    from harness_cp.workflow_driver import _subagent_child_engine_class
+
+    recoverable_gc = _payload(
+        engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+        topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+        child_step_kinds=(StepKind.TOOL_STEP,),
+    )
+    # ORDINAL: same grandchild + step_id, but a different lead-step count shifts the nested index.
+    sig_ord1 = _subagent_child_engine_class(
+        _step(_nested_payload(recoverable_gc, lead_kinds=(StepKind.INFERENCE_STEP,)))
+    )
+    sig_ord2 = _subagent_child_engine_class(
+        _step(
+            _nested_payload(
+                recoverable_gc, lead_kinds=(StepKind.INFERENCE_STEP, StepKind.TOOL_STEP)
+            )
+        )
+    )
+    assert sig_ord1 != sig_ord2  # ordinal shift → signature differs → fail closed on a reorder
+
+    # WORKFLOW_ID: same engine + step_id + ordinal, but a different grandchild child_workflow_id.
+    def _gc_with_wf(wf: str) -> SubAgentDispatchPayload:
+        return SubAgentDispatchPayload(
+            child_workflow_id=wf,
+            child_manifest_entry=_child_manifest(
+                workload_class=WorkloadClass.SOFTWARE_ENGINEERING,
+                topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+                engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+            ),
+            child_steps=_child_steps((StepKind.TOOL_STEP,)),
+            brief=_brief(),
+        )
+
+    sig_wf_a = _subagent_child_engine_class(_step(_nested_payload(_gc_with_wf("gc-wf-A"))))
+    sig_wf_b = _subagent_child_engine_class(_step(_nested_payload(_gc_with_wf("gc-wf-B"))))
+    assert sig_wf_a != sig_wf_b  # re-point grandchild workflow_id → signature differs → fail closed
+
+
+def test_cp_runtime_parity_on_partially_malformed_nested_payload() -> None:
+    """CP↔runtime PARITY on a partially-valid nested payload (out-of-family Codex [P1], NONLEAF-CHILD)
+    — a nested SUB_AGENT step_payload with VALID `child_manifest_entry` + `child_steps` but MISSING
+    `child_workflow_id`/`brief`. A runtime-only `SubAgentDispatchPayload.model_validate` would REJECT
+    it (→ runtime-False) while the CP defensive mirror ADMITS it (→ CP-True) — the dangerous
+    CP-True/runtime-False drift (the outer child's marker admits re-dispatch but the composer passes
+    NO seed → the outer child re-runs fresh → its committed prefix DOUBLE-FIRES). Both now delegate
+    the nested decision to the SHARED `payload_child_recoverable`, so they AGREE (recoverability does
+    not depend on `child_workflow_id`/`brief` — those affect DISPATCHABILITY, fail closed at the
+    dispatcher's own validate). RED-without-fix: the old runtime model_validate path returned False
+    here while CP returned True."""
+    from harness_cp.workflow_driver import _subagent_child_recoverable as _cp_recoverable
+
+    valid_grandchild = _payload(
+        engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+        topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+        child_step_kinds=(StepKind.TOOL_STEP,),
+    )
+    gc_dump = valid_grandchild.model_dump()
+    # Hand-craft a nested SUB_AGENT step whose payload has the recoverability-relevant fields but is
+    # NOT a full SubAgentDispatchPayload (no child_workflow_id, no brief).
+    partial_nested_step = WorkflowStep(
+        step_id=StepID("child-step-partial-subagent"),
+        step_kind=StepKind.SUB_AGENT_DISPATCH,
+        step_payload={
+            "child_manifest_entry": gc_dump["child_manifest_entry"],
+            "child_steps": gc_dump["child_steps"],
+        },
+    )
+    outer = SubAgentDispatchPayload(
+        child_workflow_id="outer-wf",
+        child_manifest_entry=_child_manifest(
+            workload_class=WorkloadClass.SOFTWARE_ENGINEERING,
+            topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+            engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+        ),
+        child_steps=(partial_nested_step,),
+        brief=_brief(),
+    )
+    runtime_verdict = subagent_child_recoverable(outer)
+    cp_verdict = _cp_recoverable(_step(outer))
+    assert cp_verdict == runtime_verdict, (
+        f"CP={cp_verdict} runtime={runtime_verdict} — must agree on a partially-malformed nested "
+        "payload (CP-True/runtime-False would admit re-dispatch with no seed → double-fire)"
+    )
+    assert runtime_verdict is True  # recoverability ignores child_workflow_id/brief
 
 
 def test_cp_and_runtime_recoverability_predicates_agree() -> None:
@@ -1234,13 +1524,33 @@ def test_cp_and_runtime_recoverability_predicates_agree() -> None:
             ),
             False,
         ),
-        "nested-subagent": (
+        "nested-subagent-malformed": (
             _payload(
                 engine_class=EngineClass.EVENT_SOURCED_REPLAY,
                 topology=TopologyPattern.SINGLE_THREADED_LINEAR,
                 child_step_kinds=(StepKind.TOOL_STEP, StepKind.SUB_AGENT_DISPATCH),
             ),
-            False,
+            False,  # nested SUB_AGENT with a mis-shaped (`{"index": i}`) grandchild → fail closed
+        ),
+        "nested-recoverable-grandchild": (
+            _nested_payload(
+                _payload(
+                    engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+                    topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+                    child_step_kinds=(StepKind.TOOL_STEP, StepKind.INFERENCE_STEP),
+                )
+            ),
+            True,  # the NONLEAF-CHILD relaxation — CP + runtime must BOTH recurse into the grandchild
+        ),
+        "nested-fanout-grandchild": (
+            _nested_payload(
+                _payload(
+                    engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+                    topology=TopologyPattern.PARALLELIZATION,
+                    child_step_kinds=(StepKind.TOOL_STEP,),
+                )
+            ),
+            False,  # the grandchild fails its OWN conjunct 2 → recursion fails closed on both sides
         ),
     }
     for name, (payload, expected) in cases.items():
@@ -1257,11 +1567,13 @@ def test_cp_and_runtime_recoverability_predicates_agree() -> None:
 
 
 def test_dispatch_seed_none_for_linear_non_fanout_recoverable_child(tmp_path: Path) -> None:
-    """SEED-GATING — a recoverable child on a LINEAR (non-fan-out, `branch_index is None`) context
-    gets `child_run_id_seed=None`. The deterministic seed is FAN-OUT-WORKER-scoped (it matches the
-    fan-out maybe-ran classifier's recovery surface + excludes the sequential-loop topologies whose
-    steps reuse `step_index` across iterations). A non-fan-out dispatch keeps the legacy fresh
-    `uuid` (the fan-out positive case is `test_dispatch_seed_includes_branch_path_for_fanout_worker`)."""
+    """SEED-GATING — a recoverable child on a context with NONE of the recovery flags set
+    (`branch_index is None`, `is_orchestrator_dispatch=False`, `is_linear_sequential_dispatch=False`
+    — the default) gets `child_run_id_seed=None` (legacy fresh `uuid`). The deterministic seed is
+    gated to the fan-out-worker / orchestrator / linear-sequential surfaces; an unmarked dispatch is
+    excluded (this preserves the sequential-loop-topology exclusion whose steps reuse `step_index`
+    across iterations). The linear-sequential POSITIVE case is
+    `test_linear_sequential_seed_binds_step_id`."""
     dispatcher, runner, _ = _dispatcher(tmp_path)
     recoverable = _payload(
         workload_class=WorkloadClass.PIPELINE_AUTOMATION,  # admits SINGLE_THREADED_LINEAR
@@ -1271,6 +1583,46 @@ def test_dispatch_seed_none_for_linear_non_fanout_recoverable_child(tmp_path: Pa
     )
     dispatcher.dispatch(_binding(), _step(recoverable), step_context=_step_context())
     assert runner.calls[-1]["child_run_id_seed"] is None
+
+
+def _linear_seq_seed(tmp_path: Path, *, step_id: str, engine: EngineClass) -> str | None:
+    """The `child_run_id_seed` the real dispatcher composes for a recoverable child under
+    `is_linear_sequential_dispatch=True` with the given dispatch-step `step_id` + child `engine`."""
+    child = _payload(
+        workload_class=WorkloadClass.PIPELINE_AUTOMATION,
+        engine_class=engine,
+        topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+        child_step_kinds=(StepKind.TOOL_STEP,),
+    )
+    linear_ctx = _step_context().model_copy(update={"is_linear_sequential_dispatch": True})
+    dispatcher, runner, _ = _dispatcher(tmp_path)
+    step = WorkflowStep(
+        step_id=StepID(step_id),
+        step_kind=StepKind.SUB_AGENT_DISPATCH,
+        step_payload=child.model_dump(),
+    )
+    dispatcher.dispatch(_binding(), step, step_context=linear_ctx)
+    return runner.calls[-1]["child_run_id_seed"]
+
+
+def test_linear_sequential_seed_binds_step_id_and_engine(tmp_path: Path) -> None:
+    """SAME-STEP + SAME-ENGINE IDENTITY for the linear-sequential seed (out-of-family Codex [P1],
+    NONLEAF-CHILD) — a recoverable child under `is_linear_sequential_dispatch=True` gets a REAL
+    (non-None) deterministic seed that FOLDS IN both `step.step_id` AND the child `engine_class`.
+    UNLIKE the fan-out/orchestrator paths the linear-sequential step has NO maybe-ran marker / dual
+    gate, so the seed itself must be self-defending: RENAMING the SUB_AGENT (same index) OR SWAPPING
+    its child engine (RECONCILER↔SAVE_POINT, same step_id/workflow_id) yields a DIFFERENT seed → the
+    edited step gets a fresh run_id → does NOT replay the old child's durable store (under a
+    different logical step / through a different recovery mechanism). Without these bindings the
+    seeds would be identical (the seed keys only on the index-based parent_idempotency_key)."""
+    base = _linear_seq_seed(tmp_path, step_id="sub-agent-A", engine=EngineClass.RECONCILER_LOOP)
+    renamed = _linear_seq_seed(tmp_path, step_id="sub-agent-B", engine=EngineClass.RECONCILER_LOOP)
+    engine_swapped = _linear_seq_seed(
+        tmp_path, step_id="sub-agent-A", engine=EngineClass.SAVE_POINT_CHECKPOINT
+    )
+    assert base is not None  # real seed (linear-sequential recoverable)
+    assert base != renamed  # renamed step → different seed → no wrong-step auto-resume
+    assert base != engine_swapped  # engine swap → different seed → no cross-mechanism replay
 
 
 def test_dispatch_seed_gated_on_recoverability_non_recoverable_child_gets_none(

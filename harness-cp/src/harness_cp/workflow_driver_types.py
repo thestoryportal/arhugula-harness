@@ -405,6 +405,31 @@ class StepExecutionContext(BaseModel):
     default (every non-orchestrator dispatch) → byte-identical to pre-arc (only the
     SUB_AGENT_DISPATCH dispatcher's seed gate reads it)."""
 
+    is_linear_sequential_dispatch: bool = False
+    """B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-NONLEAF-CHILD (R-FS-1) — marks a
+    SUB_AGENT_DISPATCH step dispatched by the SINGLE_THREADED_LINEAR inline step loop
+    (`_execute_workflow_body`'s `for step_index, step in enumerate(steps[resume_at:], ...)`;
+    set `True` ONLY on that loop's per-step `StepExecutionContext`). The runtime
+    `SubAgentDispatchStepDispatcher` reads it to extend the deterministic
+    `child_run_id_seed` to a recoverable nested (grandchild) SUB_AGENT_DISPATCH whose
+    child the predicate now admits (the NONLEAF-CHILD recursive relaxation) — WITHOUT
+    a seed there, a maybe-ran parent's re-dispatch of a LINEAR child would re-dispatch
+    that child's grandchild with a FRESH uuid → the grandchild re-runs fresh → its
+    committed effects DOUBLE-FIRE (at-most-once violation).
+
+    Safe like `is_orchestrator_dispatch`: a step in the LINEAR inline loop is a SINGLE,
+    once-per-run step (`branch_index is None`) whose `(run_id, step_index)` recurs ONLY
+    as a SAME-LOGICAL-STEP crash/pause resume (`resume_at` advances FORWARD over the
+    committed prefix — `_determine_{resume_at,event_replay_resume_at,reconciler_converge_
+    resume_at}` are all forward-only), NEVER as a distinct loop iteration. The
+    EVALUATOR_OPTIMIZER step_index-reuse hazard is confined to `_execute_evaluator_
+    optimizer`, which builds its OWN contexts and never reaches the linear loop. Same
+    hash-inert / per-step-transient posture as `is_orchestrator_dispatch` (NOT persisted,
+    NOT in any §5.2 / outcome-hash); `False` default → byte-identical to pre-arc (only
+    the SUB_AGENT_DISPATCH dispatcher's seed gate reads it). Reset to `False` on every
+    fan-out CHILD (`compose_branch_child_context`) — a fan-out worker seeds via its own
+    `branch_path` path, never this one."""
+
 
 def compose_branch_child_context(
     parent_context: StepExecutionContext,
@@ -475,6 +500,11 @@ def compose_branch_child_context(
             # it via `model_copy` (else the worker would seed with `branch_path=None`
             # and alias the orchestrator's child run_id).
             "is_orchestrator_dispatch": False,
+            # B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-NONLEAF-CHILD — a fan-out CHILD
+            # is NEVER a linear-sequential dispatch; reset so a worker composed from a
+            # linear-loop-derived parent does not inherit the flag via `model_copy`
+            # (the worker seeds via its own `branch_path` path).
+            "is_linear_sequential_dispatch": False,
         }
     )
 
