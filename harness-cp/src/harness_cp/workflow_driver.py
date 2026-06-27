@@ -698,6 +698,28 @@ _FANOUT_REPLAY_ENGINE_CLASSES: frozenset[EngineClass] = frozenset(
     {EngineClass.EVENT_SOURCED_REPLAY, EngineClass.WAL_SEGMENT}
 )
 
+# B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-SAVE-POINT-CHILD (R-FS-1) — the child engine classes
+# whose maybe-ran SUB_AGENT_DISPATCH re-dispatch is RECOVERABLE: re-dispatching the child under
+# the deterministic child run_id auto-resumes it from its durable store (`resume_at>0` via the
+# engine-class-agnostic F2-prefix join, `_determine_resume_at`) AND reconstructs a result-faithful
+# `final_state` (no parent-fold corruption). SAVE_POINT_CHECKPOINT JOINED ESR/WAL here: its
+# final_state reconstructs (CP v1.79 class-agnostic EngineOutputStore) AND a SAVE_POINT resume
+# fires NO engine-layer recovery loop / CAS-claim (the cleanest auto-resume, no F-1 ABORT window).
+# RECONCILER_LOOP stays OUT pending the registered
+# `B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-RECONCILER-CHILD` (its U-CP-97 reconverge
+# `attempt_resume` carries the F-1 won-CAS-claim-retry-ABORTs-to-HITL window). This is DEDICATED
+# to the recoverability predicate — DISTINCT from `_FANOUT_REPLAY_ENGINE_CLASSES`, which the
+# SEPARATE `_fanout_replay_store` branch-capture gate (B-FANOUT-OUTPUT-REPLAY) also consumes and
+# must NOT admit SAVE_POINT (carrier segregation, not a shared-constant widen). The CP-side MIRROR
+# of the runtime `_SUBAGENT_RECOVERABLE_CHILD_ENGINE_CLASSES` (agreement witness enforces parity).
+_SUBAGENT_RECOVERABLE_CHILD_ENGINE_CLASSES: frozenset[EngineClass] = frozenset(
+    {
+        EngineClass.EVENT_SOURCED_REPLAY,
+        EngineClass.WAL_SEGMENT,
+        EngineClass.SAVE_POINT_CHECKPOINT,
+    }
+)
+
 # B-CHILD-CRASH-RESUME-FINAL-STATE-RECONSTRUCT-RECONCILER (R-FS-1) — the engine classes
 # whose per-step output is durably recorded to the `EngineOutputStore` AND seeded back into
 # `accumulated` on resume so the resumed run's `final_state` reconstructs the COMPLETE
@@ -876,16 +898,19 @@ def _subagent_child_recoverable(step: WorkflowStep) -> bool | None:
     The THREE conjuncts (the corrected predicate over the #746 reverted branch, which keyed on the
     engine class ALONE → reverted on the [P1-a] result-fidelity gap):
 
-    1. child engine ∈ `_FANOUT_REPLAY_ENGINE_CLASSES` ({ESR,WAL}) — durable output store → the
-       resumed child auto-resumes AND its `final_state` reconstructs. SAVE_POINT/RECONCILER
-       `final_state` NOW reconstructs too (the class-agnostic EngineOutputStore, v1.79/v1.80) — so
-       the original "no store → suffix-only → fail closed" reason is RETIRED — but their re-dispatch
-       recoverability stays OUT of this predicate pending the registered
-       `B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-SAVE-POINT-RECONCILER-CHILD` arc: RECONCILER
-       carries an at-most-once F-1 window (re-dispatching a maybe-ran child whose first attempt
-       WON the CAS revision claim ABORTs → §22.1 HITL, `reconciler_pause_resume_substrate.py`
-       F-1) → widening a fail-closed gate over that unresolved at-most-once question needs its
-       own grounding (SAVE_POINT leaf has no CAS lease → likely cleaner; the arc decomposes).
+    1. child engine ∈ `_SUBAGENT_RECOVERABLE_CHILD_ENGINE_CLASSES` ({ESR,WAL,SAVE_POINT}) —
+       durable output store → the resumed child auto-resumes (`resume_at>0` via the
+       engine-class-agnostic F2-prefix join `_determine_resume_at`) AND its `final_state`
+       reconstructs. SAVE_POINT_CHECKPOINT JOINED at the `…-SAVE-POINT-CHILD` close (R-FS-1):
+       final_state reconstructs (the class-agnostic EngineOutputStore, v1.79) AND a SAVE_POINT
+       resume fires NO engine-layer recovery loop / CAS-claim — the cleanest auto-resume (no F-1
+       ABORT window). RECONCILER_LOOP stays OUT pending the registered
+       `B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-RECONCILER-CHILD` arc: a maybe-ran RECONCILER
+       child re-dispatch fires the U-CP-97 engine-layer reconverge (`attempt_resume`), whose F-1
+       limit ABORTs a won-CAS-claim retry → §22.1 HITL (`reconciler_pause_resume_substrate.py`
+       F-1) → widening this fail-closed gate over that at-most-once question needs its own
+       grounding. (DEDICATED set, distinct from `_FANOUT_REPLAY_ENGINE_CLASSES` which the separate
+       `_fanout_replay_store` branch-capture gate consumes — carrier segregation.)
     2. child topology == SINGLE_THREADED_LINEAR — the WITNESSED scope (#770); a fan-out child's own
        reconstruction is the registered follow-on ("no nested sub-agents" ≠ "no recursion").
     3. no child step kind is SUB_AGENT_DISPATCH / MANAGED_AGENTS — the leaf condition (deeper
@@ -906,7 +931,7 @@ def _subagent_child_recoverable(step: WorkflowStep) -> bool | None:
         except (TypeError, KeyError):
             ec_raw = cme.engine_class
         ec = ec_raw if isinstance(ec_raw, EngineClass) else EngineClass(ec_raw)
-        if ec not in _FANOUT_REPLAY_ENGINE_CLASSES:
+        if ec not in _SUBAGENT_RECOVERABLE_CHILD_ENGINE_CLASSES:
             return False
         # Conjunct 2 — LINEAR topology narrowing (the [P1-a] fix).
         try:
