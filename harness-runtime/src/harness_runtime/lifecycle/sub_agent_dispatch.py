@@ -277,16 +277,21 @@ def compose_child_action_id(parent_action_id: str, child_workflow_id: str) -> Ac
     return ActionID(f"{parent_action_id}::child::{child_workflow_id}")
 
 
-# B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT (R-FS-1) — the child engine classes whose per-step
-# output is DURABLY RECORDED (so a re-dispatched child auto-resumes from the store AND its
-# `final_state` reconstructs via `reconstruct_final_state` — B-CHILD-CRASH-RESUME-FINAL-STATE-
-# RECONSTRUCT, #764/#766/#768). MUST equal the CP driver's `_FANOUT_REPLAY_ENGINE_CLASSES`
-# ({EVENT_SOURCED_REPLAY, WAL_SEGMENT}) — a SUBSET of the runtime's 4 `_DURABLE_AUTO_FENCE_
-# ENGINE_CLASSES`. SAVE_POINT_CHECKPOINT / RECONCILER_LOOP are EXCLUDED: they auto-fence (tools
-# suppress) but have NO durable output store → a resumed child returns a suffix-only `final_state`
-# → the parent fold corrupts (the still-registered B-CHILD-CRASH-RESUME-FINAL-STATE-RECONSTRUCT-
-# SAVE-POINT-RECONCILER arc). The composer (typed) + the CP `_subagent_child_recoverable` defensive
-# read are MIRROR implementations of the same predicate — kept in sync by the by-execution witness.
+# B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT (R-FS-1) — the child engine classes whose maybe-ran
+# re-dispatch is RECOVERABLE (re-dispatch under the deterministic child run_id auto-resumes from
+# the store AND `final_state` reconstructs via `reconstruct_final_state` — B-CHILD-CRASH-RESUME-
+# FINAL-STATE-RECONSTRUCT, #764/#766/#768). MUST equal the CP driver's
+# `_FANOUT_REPLAY_ENGINE_CLASSES` ({EVENT_SOURCED_REPLAY, WAL_SEGMENT}) — a SUBSET of the runtime's
+# 4 `_DURABLE_AUTO_FENCE_ENGINE_CLASSES`. SAVE_POINT_CHECKPOINT / RECONCILER_LOOP `final_state` NOW
+# reconstructs too (the EngineOutputStore is class-agnostic — SAVE_POINT v1.79 #779, RECONCILER
+# v1.80) — so the original "no durable output store → suffix-only final_state → fold corruption"
+# exclusion is RETIRED, but they stay EXCLUDED here pending the registered
+# B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-SAVE-POINT-RECONCILER-CHILD arc: re-dispatching a
+# maybe-ran RECONCILER child whose first attempt WON the CAS
+# revision claim ABORTs (the substrate F-1 at-most-once window) → widening this fail-closed gate
+# needs its own grounding (SAVE_POINT leaf has no CAS lease → likely cleaner; the arc decomposes).
+# The composer (typed) + the CP `_subagent_child_recoverable` defensive read are MIRROR
+# implementations of the same predicate — kept in sync by the by-execution witness.
 _SUBAGENT_RECOVERABLE_CHILD_ENGINE_CLASSES: frozenset[EngineClass] = frozenset(
     {EngineClass.EVENT_SOURCED_REPLAY, EngineClass.WAL_SEGMENT}
 )
@@ -345,8 +350,14 @@ def subagent_child_recoverable(payload: SubAgentDispatchPayload) -> bool:
 
     1. **engine ∈ {ESR, WAL}** — the child's per-step output is durably recorded, so the resumed
        child auto-resumes AND `reconstruct_final_state` rebuilds the COMPLETE terminal state.
-       SAVE_POINT_CHECKPOINT / RECONCILER_LOOP have NO output store → suffix-only `final_state` →
-       fold corruption → fail closed (the registered `…-SAVE-POINT-RECONCILER` arc).
+       SAVE_POINT_CHECKPOINT / RECONCILER_LOOP `final_state` NOW reconstructs too (the
+       class-agnostic EngineOutputStore, v1.79/v1.80) — the original "no store → suffix-only"
+       exclusion reason is RETIRED — but their re-dispatch recoverability stays OUT pending the
+       registered `B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-SAVE-POINT-RECONCILER-CHILD` arc:
+       RECONCILER carries an at-most-once F-1 window (re-dispatching a maybe-ran child whose first
+       attempt WON the CAS revision claim ABORTs → §22.1 HITL) → widening this fail-closed gate
+       over that unresolved at-most-once question needs its own grounding (SAVE_POINT leaf has no
+       CAS lease → likely cleaner; the arc decomposes).
     2. **topology == SINGLE_THREADED_LINEAR** — the WITNESSED scope (#770). A fan-out child engages
        its OWN fan-out crash-resume reconstruction, a deeper unwitnessed path → the registered
        fan-out-child follow-on. "No nested sub-agents" ≠ "no recursion" (finding-v1 §4.1).

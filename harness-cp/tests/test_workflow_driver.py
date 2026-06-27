@@ -1313,12 +1313,14 @@ def test_event_sourced_replay_unreadable_store_fails_closed() -> None:
 # (the `run_workflow` handler / `api.run`+`api.resume` use the default) and the child
 # fold the parent fan-out / hierarchical-pause consumes (`sub_agent_dispatch.py` folds
 # `child_result.final_state` verbatim). Scoped to the durable-output-store classes
-# ESR / WAL / SAVE_POINT_CHECKPOINT (`_FINAL_STATE_RECONSTRUCT_ENGINE_CLASSES`; SAVE_POINT
-# joined at v1.79 — the store is mechanically class-agnostic, witnessed by a real forward-run
-# round-trip below); RECONCILER_LOOP degrades unchanged → the registered RECONCILER
-# follow-on (it owns the U-RT-123 substrate; store-reuse would be a second authority).
-# Explicit `reconstruct_final_state=False` is the opt-out escape hatch (no production caller
-# takes it).
+# ESR / WAL / SAVE_POINT_CHECKPOINT / RECONCILER_LOOP (`_FINAL_STATE_RECONSTRUCT_ENGINE_CLASSES`;
+# SAVE_POINT joined at v1.79 and RECONCILER at v1.80 — the store is mechanically class-agnostic,
+# witnessed by a real forward-run round-trip below). RECONCILER joining resolved the registered
+# two-authorities probe: its U-RT-123 substrate persists a CONVERGENCE DIGEST (StateSummary) for
+# the CAS-lease, NOT the per-step output map → no competing output authority. An aborting CAS
+# reconverge returns FAILED upstream of the seed (no reconstruction on a lost claim). The lone
+# non-member is PURE_PATTERN_NO_ENGINE (non-durable, not resumable). Explicit
+# `reconstruct_final_state=False` is the opt-out escape hatch (no production caller takes it).
 # ---------------------------------------------------------------------------
 
 
@@ -1427,19 +1429,73 @@ def test_reconstruct_final_state_fails_closed_on_store_skew() -> None:
     assert "engine-output-replay-missing-output" in result.fail_class
 
 
-def test_reconstruct_final_state_reconciler_out_of_scope_degrades() -> None:
-    """SCOPE BOUNDARY (the registered RECONCILER follow-on) — the opt-in is on but the engine
-    class is RECONCILER_LOOP, which is NOT in `_FINAL_STATE_RECONSTRUCT_ENGINE_CLASSES`: it
-    is an ENGINE-OWNS-SUBSTRATE class whose authoritative durable state lives in the U-RT-123
-    reconciler substrate, so seeding from THIS store would be a second output authority. The
-    reconstruction is SKIPPED (the engine-class gate), so the resume returns the suffix-only
-    final_state {step-2} and does NOT fail closed. This is the honest scope: RECONCILER
-    reconstruction needs its own grounding (store-reuse vs derive-from-the-reconciler-
-    substrate) → B-CHILD-CRASH-RESUME-FINAL-STATE-RECONSTRUCT-RECONCILER. SAVE_POINT no
-    longer degrades (see `test_reconstruct_final_state_round_trips_through_store_save_point`)."""
+def test_reconstruct_final_state_round_trips_through_store_reconciler() -> None:
+    """FULL-CHAIN round-trip (producer→crash→consumer) for RECONCILER_LOOP — the BLOCKING
+    producer-half witness for B-CHILD-CRASH-RESUME-FINAL-STATE-RECONSTRUCT-RECONCILER (the
+    RECONCILER slice, completing the final_state-reconstruction family across ALL FOUR durable
+    classes). A fresh RECONCILER_LOOP run RECORDS its prefix to the store (phase 1, via the
+    REAL `_record_durable_step_output` producer gate now extended to RECONCILER — NOT a hand-
+    seeded store), then a resume READS IT BACK + RECONSTRUCTS the full final_state (phase 2,
+    via the seed gate extended in the SAME PR). This proves the EngineOutputStore is mechanically
+    class-agnostic and a real RECONCILER forward run flows through the same LINEAR dispatch loop
+    as ESR/WAL/SAVE_POINT — the grounding that resolved the registered two-authorities probe (the
+    U-RT-123 reconciler substrate carries a CONVERGENCE DIGEST for its CAS-lease, NOT the per-step
+    output map, so store-reuse adds no competing authority). RED before the gate extension: phase
+    1 records NOTHING (producer excludes RECONCILER) → phase 2's final_state would be {step-2}."""
+    store = _FakeOutputStore({}, journal_present=False)
+
+    # Phase 1 — fresh RECONCILER run (resume_at == 0): all 3 steps dispatch + RECORD.
+    ctx1 = _esr_resume_ctx(0)
+    ctx1.engine_output_store = store
+    execute_workflow(
+        manifest_entry=_manifest(engine_class=EngineClass.RECONCILER_LOOP),
+        steps=[_step(0), _step(1), _step(2)],
+        run_id="run-1",
+        ctx=cast(DriverContext, ctx1),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(cast(StepDispatcher, _EchoDispatcher())),
+        reconstruct_final_state=True,
+    )
+    # The producer recorded the committed prefix on the fresh run (proves the producer half
+    # is non-vacuous for RECONCILER — not papered over by a hand-seeded store).
+    assert set(store.read_outputs("run-1").keys()) == {0, 1, 2}
+
+    # Phase 2 — resume (steps 0,1 committed) over the SAME store: reconstruct the full state.
+    ctx2 = _esr_resume_ctx(2)
+    ctx2.engine_output_store = store
+    result = execute_workflow(
+        manifest_entry=_manifest(engine_class=EngineClass.RECONCILER_LOOP),
+        steps=[_step(0), _step(1), _step(2)],
+        run_id="run-1",
+        ctx=cast(DriverContext, ctx2),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(cast(StepDispatcher, _EchoDispatcher())),
+        reconstruct_final_state=True,
+    )
+    assert result.status is RunStatus.SUCCESS
+    assert result.final_state is not None
+    assert set(result.final_state.keys()) == {"step-0", "step-1", "step-2"}
+
+
+def test_reconstruct_final_state_engine_class_gate_is_load_bearing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """STANDING GATE GUARD — proves the engine-class gate is load-bearing without depending on
+    reverting the source. With RECONCILER monkeypatched OUT of
+    `_FINAL_STATE_RECONSTRUCT_ENGINE_CLASSES`, a RECONCILER resume over a bound store holding the
+    prefix degrades to the suffix-only final_state {step-2} (no reconstruction) — so the gate, not
+    a stray bound store, is what selects reconstruction. Mirrors the file's `_IN_SCOPE`-patch idiom
+    (test_workload_engine_class_selection_*). After RECONCILER joined, every durable resumable
+    class reconstructs, so this patch-out is the boundary proof (PURE_PATTERN_NO_ENGINE is
+    non-resumable → resume_at is always 0 → it can't exercise the gate)."""
+    import harness_cp.workflow_driver as _wd
+
+    monkeypatch.setattr(
+        _wd,
+        "_FINAL_STATE_RECONSTRUCT_ENGINE_CLASSES",
+        frozenset(_wd._FINAL_STATE_RECONSTRUCT_ENGINE_CLASSES) - {EngineClass.RECONCILER_LOOP},
+    )
     ctx = _esr_resume_ctx(2)
-    # A store IS bound + holds the prefix, but RECONCILER's authoritative state is U-RT-123;
-    # the engine-class gate must skip the reconstruct regardless of a (stray) bound store.
     ctx.engine_output_store = _FakeOutputStore(
         {0: ("step-0", {"draft": "v0"}), 1: ("step-1", {"feedback": "v1"})}
     )
@@ -1455,6 +1511,81 @@ def test_reconstruct_final_state_reconciler_out_of_scope_degrades() -> None:
     assert result.status is RunStatus.SUCCESS
     assert result.final_state is not None
     assert set(result.final_state.keys()) == {"step-2"}
+
+
+class _FakeReconcilerRecoveryLoop:
+    """Duck-typed `RuntimeEngineRecoveryLoop` for the RECONCILER CAS-firing witnesses. The CP
+    driver's RECONCILER branch calls `has_pause_record(...)` (sync) then, if a record is present,
+    `attempt_resume(...)` (async, run via `asyncio.run`) and reads
+    `result.resume_outcome.outcome_kind`."""
+
+    def __init__(self, outcome_kind: Any, *, has_record: bool = True) -> None:
+        self._kind = outcome_kind
+        self._has_record = has_record
+
+    def has_pause_record(self, *, engine_class: Any, workflow_id: Any, run_id: Any) -> bool:
+        _ = (engine_class, workflow_id, run_id)
+        return self._has_record
+
+    async def attempt_resume(self, **_kwargs: Any) -> Any:
+        from types import SimpleNamespace
+
+        return SimpleNamespace(resume_outcome=SimpleNamespace(outcome_kind=self._kind))
+
+
+def test_reconstruct_final_state_reconciler_cas_abort_short_circuits_before_seed() -> None:
+    """CAS-ORDERING (advisor check) — a RECONCILER resume whose engine recovery loop fires a CAS
+    reconverge that ABORTs (a LOST claim) returns FAILED with `final_state=None` BEFORE the seed
+    site, even though a store holding the full prefix is bound. So reconstruction NEVER papers over
+    a lost claim — the abort short-circuits (workflow_driver.py CAS block) upstream of the seed.
+    Pre-existing fail-closed behavior, but RECONCILER-specific and unexercised by the ESR/WAL/
+    SAVE_POINT slices; this pins the ordering."""
+    from harness_cp.pause_resume_protocol import ResumeOutcomeKind
+
+    ctx = _esr_resume_ctx(2)
+    ctx.engine_output_store = _FakeOutputStore(
+        {0: ("step-0", {"draft": "v0"}), 1: ("step-1", {"feedback": "v1"})}
+    )
+    ctx.engine_recovery_loop = _FakeReconcilerRecoveryLoop(
+        ResumeOutcomeKind.ABORT_REVALIDATION_FAILED
+    )
+    result = execute_workflow(
+        manifest_entry=_manifest(engine_class=EngineClass.RECONCILER_LOOP),
+        steps=[_step(0), _step(1), _step(2)],
+        run_id="run-1",
+        ctx=cast(DriverContext, ctx),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(cast(StepDispatcher, _EchoDispatcher())),
+        reconstruct_final_state=True,
+    )
+    assert result.status is RunStatus.FAILED
+    assert result.final_state is None
+
+
+def test_reconstruct_final_state_reconciler_cas_clean_falls_through_and_reconstructs() -> None:
+    """CAS-ORDERING (advisor check) — a RECONCILER resume whose CAS reconverge fires and SUCCEEDS
+    (RESUME_CLEAN, a WON claim) falls THROUGH the CAS block to the seed site and reconstructs the
+    full final_state {step-0,1,2} from the bound store. Complements the abort witness: a succeeding
+    claim does not bypass reconstruction."""
+    from harness_cp.pause_resume_protocol import ResumeOutcomeKind
+
+    ctx = _esr_resume_ctx(2)
+    ctx.engine_output_store = _FakeOutputStore(
+        {0: ("step-0", {"draft": "v0"}), 1: ("step-1", {"feedback": "v1"})}
+    )
+    ctx.engine_recovery_loop = _FakeReconcilerRecoveryLoop(ResumeOutcomeKind.RESUME_CLEAN)
+    result = execute_workflow(
+        manifest_entry=_manifest(engine_class=EngineClass.RECONCILER_LOOP),
+        steps=[_step(0), _step(1), _step(2)],
+        run_id="run-1",
+        ctx=cast(DriverContext, ctx),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(cast(StepDispatcher, _EchoDispatcher())),
+        reconstruct_final_state=True,
+    )
+    assert result.status is RunStatus.SUCCESS
+    assert result.final_state is not None
+    assert set(result.final_state.keys()) == {"step-0", "step-1", "step-2"}
 
 
 def test_reconstruct_final_state_no_journal_degrades_not_fails() -> None:

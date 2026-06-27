@@ -698,30 +698,43 @@ _FANOUT_REPLAY_ENGINE_CLASSES: frozenset[EngineClass] = frozenset(
     {EngineClass.EVENT_SOURCED_REPLAY, EngineClass.WAL_SEGMENT}
 )
 
-# B-CHILD-CRASH-RESUME-FINAL-STATE-RECONSTRUCT-SAVE-POINT (R-FS-1) — the engine classes
+# B-CHILD-CRASH-RESUME-FINAL-STATE-RECONSTRUCT-RECONCILER (R-FS-1) — the engine classes
 # whose per-step output is durably recorded to the `EngineOutputStore` AND seeded back into
 # `accumulated` on resume so the resumed run's `final_state` reconstructs the COMPLETE
 # terminal state (CP v1.76 §25.2/§25.6 resume-transparency invariant, extended to
-# SAVE_POINT_CHECKPOINT at v1.79). This single constant gates BOTH the `_record_durable_
-# step_output` producer AND the final_state seed site so the two can NEVER drift apart —
-# the documented "never record-only / never seed-only" invariant made structural (a
-# never-rehydrated journal is the exact defect the move-together discipline prevents).
-# EVENT_SOURCED_REPLAY / WAL_SEGMENT additionally feed the §8.1 cached-output-replay
-# inter-step channel rehydrate (its own ESR/WAL-gated branch); SAVE_POINT_CHECKPOINT has no
-# cached-output-replay semantic — its journal is consumed ONLY by the final_state seed, the
-# durable-output sink the EngineOutputStore is mechanically class-agnostic about. The
-# EngineOutputStore binds whenever `RuntimeConfig.engine_output_replay` is on, independent of
-# engine class — so SAVE_POINT reconstruction is a CP-side gate extension, no runtime edit.
-# RECONCILER_LOOP is NOT a member: it is an ENGINE-OWNS-SUBSTRATE class whose authoritative
-# durable state lives in the U-RT-123 reconciler substrate (`partial_state` in its PauseEvent),
-# so reconstructing its `accumulated` from THIS store would create a second output authority —
-# the registered B-CHILD-CRASH-RESUME-FINAL-STATE-RECONSTRUCT-RECONCILER follow-on grounds
-# store-reuse-vs-derive-from-the-reconciler-substrate before wiring it.
+# SAVE_POINT_CHECKPOINT at v1.79 and RECONCILER_LOOP at v1.80 — ALL FOUR durable resumable
+# engine classes now reconstruct; PURE_PATTERN_NO_ENGINE is the lone non-member, a non-durable
+# class with no resume). This single constant gates BOTH the `_record_durable_step_output`
+# producer AND the final_state seed site so the two can NEVER drift apart — the documented
+# "never record-only / never seed-only" invariant made structural (a never-rehydrated journal
+# is the exact defect the move-together discipline prevents). EVENT_SOURCED_REPLAY / WAL_SEGMENT
+# additionally feed the §8.1 cached-output-replay inter-step channel rehydrate (its own
+# ESR/WAL-gated branch); SAVE_POINT_CHECKPOINT and RECONCILER_LOOP have no cached-output-replay
+# semantic — their journal is consumed ONLY by the final_state seed, the durable-output sink the
+# EngineOutputStore is mechanically class-agnostic about. The EngineOutputStore binds whenever
+# `RuntimeConfig.engine_output_replay` is on, independent of engine class — so RECONCILER
+# reconstruction is a CP-side gate extension, no runtime edit (the same class-agnostic store).
+#
+# RECONCILER_LOOP joining resolved the registered "two output authorities" probe (the advisor
+# two-authorities flag): RECONCILER is an ENGINE-OWNS-SUBSTRATE class whose authoritative durable
+# state lives in the U-RT-123 reconciler substrate — but that substrate persists a `StateSummary`
+# DIGEST (`summary_text` + `summary_hash` + ledger-entry refs) in its `PauseEvent`, for the
+# CAS-lease + revalidation, NOT the per-step `accumulated` output map. The reconciler substrate
+# is the authority for engine-layer CONVERGENCE state (revision-stamped, claim-the-revision);
+# the EngineOutputStore is the authority for the CP per-step OUTPUT map that builds final_state.
+# They measure different things → no one-source-of-truth violation, even though both populate
+# during the same run. (`derive-from-the-reconciler-substrate` is non-viable: the per-step
+# outputs are not in the digest to derive.) A RECONCILER run flows through the SAME linear
+# dispatch loop building `accumulated` per-step, so reconstructing it on resume is identical to
+# ESR/WAL/SAVE_POINT and consistent with a non-resumed RECONCILER run's own final_state shape.
+# (Corrects the prior comment's stale "`partial_state` in its PauseEvent" mischaracterization,
+# the exact text that had misframed the registration as a competing authority.)
 _FINAL_STATE_RECONSTRUCT_ENGINE_CLASSES: frozenset[EngineClass] = frozenset(
     {
         EngineClass.EVENT_SOURCED_REPLAY,
         EngineClass.WAL_SEGMENT,
         EngineClass.SAVE_POINT_CHECKPOINT,
+        EngineClass.RECONCILER_LOOP,
     }
 )
 
@@ -864,8 +877,15 @@ def _subagent_child_recoverable(step: WorkflowStep) -> bool | None:
     engine class ALONE → reverted on the [P1-a] result-fidelity gap):
 
     1. child engine ∈ `_FANOUT_REPLAY_ENGINE_CLASSES` ({ESR,WAL}) — durable output store → the
-       resumed child auto-resumes AND its `final_state` reconstructs. SAVE_POINT/RECONCILER have no
-       store → suffix-only `final_state` → fail closed (the `…-SAVE-POINT-RECONCILER` arc).
+       resumed child auto-resumes AND its `final_state` reconstructs. SAVE_POINT/RECONCILER
+       `final_state` NOW reconstructs too (the class-agnostic EngineOutputStore, v1.79/v1.80) — so
+       the original "no store → suffix-only → fail closed" reason is RETIRED — but their re-dispatch
+       recoverability stays OUT of this predicate pending the registered
+       `B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-SAVE-POINT-RECONCILER-CHILD` arc: RECONCILER
+       carries an at-most-once F-1 window (re-dispatching a maybe-ran child whose first attempt
+       WON the CAS revision claim ABORTs → §22.1 HITL, `reconciler_pause_resume_substrate.py`
+       F-1) → widening a fail-closed gate over that unresolved at-most-once question needs its
+       own grounding (SAVE_POINT leaf has no CAS lease → likely cleaner; the arc decomposes).
     2. child topology == SINGLE_THREADED_LINEAR — the WITNESSED scope (#770); a fan-out child's own
        reconstruction is the registered follow-on ("no nested sub-agents" ≠ "no recursion").
     3. no child step kind is SUB_AGENT_DISPATCH / MANAGED_AGENTS — the leaf condition (deeper
@@ -3570,15 +3590,18 @@ def _execute_workflow_body(
     # CP v1.76 §25.2/§25.6 resume-transparency invariant) AND a child sub-workflow run (so
     # the parent fan-out / hierarchical-pause fold sees the COMPLETE child terminal state).
     # Scoped to the durable-output-store engine classes (EVENT_SOURCED_REPLAY / WAL_SEGMENT /
-    # SAVE_POINT_CHECKPOINT — the classes whose per-step output is durably recorded, gated by
-    # the SAME `_FINAL_STATE_RECONSTRUCT_ENGINE_CLASSES` constant at the `_record_durable_
-    # step_output` producer below so the producer + seed can never drift apart). SAVE_POINT
-    # joined at v1.79 (the EngineOutputStore is mechanically class-agnostic; a real SAVE_POINT
-    # forward run flows through this same LINEAR loop, recording its prefix at the producer →
-    # reconstructing here on resume — witnessed end-to-end, not pre-seeded). A RECONCILER_LOOP
-    # resume still degrades to the empty prefix (suffix-only, unchanged) → the registered
-    # RECONCILER follow-on (it owns the U-RT-123 reconciler substrate; store-reuse would be a
-    # second output authority). This LINEAR seed site is reached only by SINGLE_THREADED_LINEAR
+    # SAVE_POINT_CHECKPOINT / RECONCILER_LOOP — the classes whose per-step output is durably
+    # recorded, gated by the SAME `_FINAL_STATE_RECONSTRUCT_ENGINE_CLASSES` constant at the
+    # `_record_durable_step_output` producer below so the producer + seed can never drift apart).
+    # SAVE_POINT joined at v1.79 and RECONCILER at v1.80 (the EngineOutputStore is mechanically
+    # class-agnostic; a real RECONCILER forward run flows through this same LINEAR loop, recording
+    # its prefix at the producer → reconstructing here on resume — witnessed end-to-end, not
+    # pre-seeded). The RECONCILER two-authorities concern resolved at the constant above: the
+    # U-RT-123 reconciler substrate persists a CONVERGENCE DIGEST (StateSummary) for the CAS-lease,
+    # NOT the per-step output map → the EngineOutputStore is the sole authority for `accumulated`.
+    # An aborting CAS reconverge (a lost claim) returns FAILED upstream of this seed (no
+    # reconstruction on a lost claim); a succeeding/no-pause resume falls through here.
+    # This LINEAR seed site is reached only by SINGLE_THREADED_LINEAR
     # runs (the non-linear strategies return before it) → the slice is LINEAR-scoped, mirroring
     # the v1.75 child-scoped narrowing. Explicit `reconstruct_final_state=False` is the opt-out
     # (no production caller takes it). Fail-closed on a store↔ledger skew / identity-mismatch
@@ -4248,15 +4271,15 @@ def _execute_workflow_body(
         # the durable-output-store engine classes via the SHARED
         # `_FINAL_STATE_RECONSTRUCT_ENGINE_CLASSES` constant (EVENT_SOURCED_REPLAY +
         # WAL_SEGMENT — the C-CP-08 §8.1 cached-output-replay refinement — PLUS
-        # SAVE_POINT_CHECKPOINT at v1.79 for the final_state reconstruction) so a
-        # non-durable run with the flag on does not write a never-consumed journal
-        # (advisor pre-merge catch). The record half is SAFE only because a consumer
-        # fires for the SAME classes: B-ENGINE-OUTPUT-REPLAY-WAL-SEGMENT added WAL to
-        # BOTH this producer gate AND the resume-side rehydrate; B-CHILD-...-SAVE-POINT
-        # added SAVE_POINT to BOTH this producer gate AND the final_state seed (its only
-        # consumer — SAVE_POINT has no cached-output-replay channel rehydrate). Using
-        # ONE constant at both sites makes "never record-only" structural — never a
-        # never-consumed journal.
+        # SAVE_POINT_CHECKPOINT at v1.79 and RECONCILER_LOOP at v1.80 for the final_state
+        # reconstruction) so a non-durable run with the flag on does not write a
+        # never-consumed journal (advisor pre-merge catch). The record half is SAFE only
+        # because a consumer fires for the SAME classes: B-ENGINE-OUTPUT-REPLAY-WAL-SEGMENT
+        # added WAL to BOTH this producer gate AND the resume-side rehydrate;
+        # B-CHILD-...-SAVE-POINT added SAVE_POINT and B-CHILD-...-RECONCILER added RECONCILER
+        # to BOTH this producer gate AND the final_state seed (their only consumer — neither
+        # has a cached-output-replay channel rehydrate). Using ONE constant at both sites
+        # makes "never record-only" structural — never a never-consumed journal.
         if manifest_entry.engine_class in _FINAL_STATE_RECONSTRUCT_ENGINE_CLASSES:
             _record_durable_step_output(
                 ctx, run_idempotency_key, step_index, str(step.step_id), step_output
