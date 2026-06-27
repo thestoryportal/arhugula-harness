@@ -46,11 +46,39 @@
 snapshot:
   frozen_total: 11
   frozen_done: 11
-  standalone_closed: 66
+  standalone_closed: 67
   standalone_gated: 0
   standalone_resolved: 4
   standalone_registered: 2
   source: ".harness/beyond-mvp-capability-boundary-ledger.md"
+  # FRONTIER NOTE (2026-06-27, B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-FANOUT-CHILD-SAVE-POINT closed
+  # as the SAVE_POINT slice of the registered …-FANOUT-CHILD-SAVE-POINT-RECONCILER arc, CP spec v1.84 →
+  # v1.85 + runtime change-note v1.90 → v1.91, CP + runtime [both mirror predicates]). A maybe-ran
+  # fan-out / orchestrator SUB_AGENT_DISPATCH whose child is itself FAN-OUT (PARALLELIZATION /
+  # ORCHESTRATOR_WORKERS / HIERARCHICAL_DELEGATION) ∧ engine SAVE_POINT_CHECKPOINT now RECOVERS by
+  # re-dispatch, reconstructing its AGGREGATE via the EXISTING B-FANOUT-OUTPUT-REPLAY branch store.
+  # Mechanism = widen the SHARED `_FANOUT_REPLAY_ENGINE_CLASSES` {ESR,WAL} → {ESR,WAL,SAVE_POINT} (CP) +
+  # the runtime mirror `_SUBAGENT_RECOVERABLE_FANOUT_CHILD_ENGINE_CLASSES` — one constant moves the
+  # branch-capture producer gate `_fanout_replay_store` AND the conjunct-2 fan-out recoverability
+  # predicate `_fanout_recoverable` in lockstep (two halves of one mechanism share their scope key).
+  # GROUNDING OVERTURN (advisor BEFORE substantive work): the v1.84 "SAVE_POINT/RECONCILER lack a
+  # fan-out substrate" registration was over-cautious for SAVE_POINT (the #779 overturn shape) — the
+  # branch-capture store is the engine-class-AGNOSTIC EngineOutputStore, `_determine_fanout_resume`
+  # consumes ONLY it (not the ESR/WAL-only §8.1 channel), and the §14.22 fence is auto-active for
+  # SAVE_POINT (`_DURABLE_AUTO_FENCE_ENGINE_CLASSES` has all four). SAVE_POINT is the §11.2 ABOVE_ENGINE
+  # reading — harness branch store is the SOLE aggregate authority, no engine-owned competing substrate,
+  # no CAS/F-1 window. CAN-vs-DOES (advisor): the by-execution witness was EMPIRICALLY CONFIRMED
+  # RED-without-fix (reverting the constant → Phase-1 `present_branch_indexes == set()` because the
+  # capture producer `_capture_branch_terminal` no-op'd for SAVE_POINT), GREEN with the widen. Swap guard
+  # already covered by the #788 `topology:engine` fold (no new hole). DECOMPOSE — close 1 + register 1
+  # (B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-FANOUT-CHILD-RECONCILER — the §11.2 RECONCILER reading;
+  # engine owns reconvergence → the two-authorities-for-aggregate + CAS/F-1-under-fan-out questions are
+  # ungrounded → its own build arc, NOT a resolve-invalid since fan-out+RECONCILER is representable).
+  # → standalone_closed 66 → 67, standalone_registered 2 → 2 (net-zero). G1.1 = 2 + 0; R-FS-1 ACTIVE.
+  # No operator gate (additive recovery for a previously-fail-closed surface; §25.15 v1.77 §3 precedent).
+  # Decorrelated: advisor full-transcript (decompose discriminator + CAN-vs-DOES witness + #788 swap-fold
+  # check + RECONCILER representability tie-breaker) + out-of-family Codex on the diff.
+  # SUPERSEDES the prior FANOUT-CHILD {ESR,WAL} FRONTIER NOTE below.
   # FRONTIER NOTE (2026-06-26, B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-SAVE-POINT-CHILD closed
   # as the SAVE_POINT slice of the registered SAVE-POINT-RECONCILER-CHILD arc, CP spec v1.80 → v1.81
   # + runtime change-note v1.86 → v1.87, CP + runtime [both mirror predicates]). A maybe-ran fan-out /
@@ -1253,16 +1281,36 @@ arcs:
     why: "Surfaced at the NONLEAF-CHILD case-(b) close + closed here as the {ESR,WAL} slice. The v1.83-registered 'heavy / genuinely unwired' framing was corrected at open: a by-execution probe at the CORRECT site (`_crash_fan_out_resume`, not the LINEAR seed @3818) showed the fan-out child reconstructs via the EXISTING machinery (`[[disposition-label-is-a-claim-verify-against-spec]]`, `[[grounding-reveals-claude-closeable-slice-close-honestly]]`). DECOMPOSE: close 1 ({ESR,WAL}) + register 1 (SAVE_POINT/RECONCILER — no fan-out replay store, a genuinely separate substrate question) → net-zero `standalone_registered`."
     ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
 
-  - id: B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-FANOUT-CHILD-SAVE-POINT-RECONCILER
-    title: "Recover a maybe-ran SUB_AGENT whose child is itself FAN-OUT with a SAVE_POINT / RECONCILER engine (no fan-out replay store today)"
+  - id: B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-FANOUT-CHILD-SAVE-POINT
+    title: "Recover a maybe-ran SUB_AGENT whose child is itself FAN-OUT with a SAVE_POINT engine (the SAVE_POINT slice — the class-agnostic branch store backs it)"
+    kind: standalone
+    status: closed
+    decompose_at_open: true
+    owner_axis: "CP + runtime"
+    operator_gated: false
+    parent_arc: B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-FANOUT-CHILD
+    pr: "#<pending> (r-fs-1/fanout-child-save-point — flips the registered SAVE-POINT-RECONCILER arc → closed as the SAVE_POINT slice; registers …-FANOUT-CHILD-RECONCILER → standalone_closed 66 → 67, standalone_registered 2 → 2 net-zero)"
+    spec_delta: "bundled-absorption CP v1.84 → v1.85 (C-CP-25 §25.15 — `_FANOUT_REPLAY_ENGINE_CLASSES` widened {ESR,WAL} → {ESR,WAL,SAVE_POINT}, a SHARED constant moving the branch-capture producer gate `_fanout_replay_store` AND the conjunct-2 fan-out recoverability predicate `_fanout_recoverable` in lockstep) + runtime change-note v1.90 → v1.91 (the typed mirror `_SUBAGENT_RECOVERABLE_FANOUT_CHILD_ENGINE_CLASSES`) + 2 clearance markers. NO §5.2-hash change; NO new contract / ADR / enum / fail-class / Protocol widening / CXA edge; at-most-once PRESERVED."
+    gives: "A maybe-ran fan-out / orchestrator SUB_AGENT_DISPATCH whose child is itself FAN-OUT (PARALLELIZATION / ORCHESTRATOR_WORKERS / HIERARCHICAL_DELEGATION) ∧ engine SAVE_POINT_CHECKPOINT now RECOVERS by re-dispatch: the child re-runs under its deterministic child run_id and reconstructs its AGGREGATE final_state via the EXISTING B-FANOUT-OUTPUT-REPLAY branch store (`_crash_fan_out_resume`). GROUNDING OVERTURN: the v1.84 registration anticipated SAVE_POINT/RECONCILER 'lack a fan-out substrate' — over-cautious for SAVE_POINT (the #779 overturn shape). The branch-capture store is the engine-class-AGNOSTIC `EngineOutputStore`; `_determine_fanout_resume` consumes ONLY that store (NOT the ESR/WAL-only §8.1 cached-output-replay channel); the §14.22 fence is auto-active for SAVE_POINT (`_DURABLE_AUTO_FENCE_ENGINE_CLASSES` has all four). SAVE_POINT is the §11.2 ABOVE_ENGINE reading — harness branch store is the SOLE aggregate authority, no engine-owned competing substrate, no CAS/F-1 window. Decorrelated: advisor full-transcript (the DECOMPOSE discriminator + the CAN-vs-DOES capture-producer witness + the #788 swap-fold check + the RECONCILER representability tie-breaker) + out-of-family Codex on the diff."
+    closed_scope: "Built as the SAVE_POINT fan-out-child slice (worker + orchestrator — parent-agnostic; reuses the #774/#777 outer seed, no new seed surface). Mechanism = widen the SHARED `_FANOUT_REPLAY_ENGINE_CLASSES` {ESR,WAL} → {ESR,WAL,SAVE_POINT} (CP) + the runtime mirror `_SUBAGENT_RECOVERABLE_FANOUT_CHILD_ENGINE_CLASSES`. CAN-vs-DOES: the by-execution witness `test_fanout_child_save_point_reconstructs_aggregate_under_deterministic_seed` (real compose_child_workflow_runner → execute_workflow for a SAVE_POINT PARALLELIZATION child) was EMPIRICALLY CONFIRMED RED before the widen (Phase-1 `present_branch_indexes == set()` — `_fanout_replay_store` returned None for SAVE_POINT → no capture), GREEN after (committed branches 0+2 recovered fire-once, only in-flight branch 1 re-dispatched, result-faithful). Cross-topology swap: the #788 `_payload_engine_signature` `topology:engine` fold already discriminates SAVE_POINT (`parallelization:save-point-checkpoint` ≠ bare LINEAR-SAVE_POINT) — no new hole; witnessed at `test_recursive_signature_catches_save_point_topology_swap`. Full suites green: harness-cp 1434/1 xfail; harness-runtime 2166/10skip; pyright 0/0/0; ruff. NOT in this close: a RECONCILER fan-out child (the §11.2 RECONCILER reading — engine owns reconvergence; the two-authorities-for-aggregate + CAS/F-1 question is ungrounded) → the registered B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-FANOUT-CHILD-RECONCILER."
+    as_built:
+      - "harness-cp/src/harness_cp/workflow_driver.py (`_FANOUT_REPLAY_ENGINE_CLASSES` += SAVE_POINT_CHECKPOINT — gates both `_fanout_replay_store` capture and `_fanout_recoverable` conjunct 2; comments updated; the `_payload_engine_signature` topology fold unchanged — already covers the new engine)"
+      - "harness-runtime/src/harness_runtime/lifecycle/sub_agent_dispatch.py (the mirror `_SUBAGENT_RECOVERABLE_FANOUT_CHILD_ENGINE_CLASSES` += SAVE_POINT_CHECKPOINT; `subagent_child_recoverable` conjunct-2 docstring updated)"
+      - "design-substrate/Spec_Control_Plane_v1_85.md + Spec_Harness_Runtime_v1.md v1.90→v1.91 + 2 clearance markers"
+      - "tests: harness-runtime test_lifecycle_sub_agent_dispatch.py (fan-out-child {ESR,WAL,SAVE_POINT} True + fan-out RECONCILER False control + the extended CP↔runtime agreement witness + the SAVE_POINT cross-topology signature fold + the depth-3 RECONCILER bad-leaf) + integration/test_fanout_child_crash_resume_witness.py (the SAVE_POINT by-execution reconstruction, RED-without-fix)"
+    why: "Surfaced at the FANOUT-CHILD {ESR,WAL} close + closed here as the SAVE_POINT slice. The v1.84-registered 'needs a new substrate' framing was overturned at open: grounding (advisor BEFORE substantive work) showed the branch-capture store is class-agnostic + the aggregate reconstruction consumes only it + the fence is auto-active for SAVE_POINT (`[[grounding-reveals-claude-closeable-slice-close-honestly]]`, `[[disposition-label-is-a-claim-verify-against-spec]]`). DECOMPOSE (the arc's own decompose_at_open + the #779→#781 LINEAR precedent): close 1 (SAVE_POINT — ABOVE_ENGINE, harness-authored store) + register 1 (RECONCILER — engine-owns-reconvergence, two-authorities + CAS/F-1 ungrounded) → net-zero `standalone_registered`."
+    ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
+
+  - id: B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-FANOUT-CHILD-RECONCILER
+    title: "Recover a maybe-ran SUB_AGENT whose child is itself FAN-OUT with a RECONCILER_LOOP engine (engine-owns-reconvergence — the fan-out aggregate authority is ungrounded)"
     kind: standalone
     status: registered
     decompose_at_open: true
     owner_axis: "CP + runtime"
     operator_gated: false
-    parent_arc: B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-FANOUT-CHILD
-    anticipated_scope: "The FANOUT-CHILD {ESR,WAL} close intersected fan-out with `_FANOUT_REPLAY_ENGINE_CLASSES` = {ESR,WAL} because the B-FANOUT-OUTPUT-REPLAY branch store (`_fanout_replay_store` → `_crash_fan_out_resume`) is gated to those two classes ONLY — carrier-segregated from the four-class LINEAR `reconstruct_final_state` set. A SAVE_POINT_CHECKPOINT or RECONCILER_LOOP fan-out child is REPRESENTABLE (no load-time topology×engine validator forbids it; `engine_class` is operator-specified; the C-CP-11 §11.2 overlay is fault-handling, not admissibility) but has NO fan-out aggregate reconstruction substrate, so marking it recoverable would re-dispatch fresh (the `_crash_fan_out_resume` reconstruct never fires) → an at-most-once HOLE → it stays fail-closed. This arc would extend the fan-out branch-capture store to SAVE_POINT/RECONCILER fan-out runs (a new substrate — SAVE_POINT branches durably checkpoint, RECONCILER branches CAS-reconverge; whether the per-branch terminal capture + crash-replay re-materialization composes for those engine classes is the design question), OR (if grounding at open shows fan-out + {SAVE_POINT,RECONCILER} is genuinely unrepresentable in practice — e.g. the workload→engine binding never produces it) resolve-as-invalid. Probe representability + the substrate viability at open."
-    why: "Surfaced at the FANOUT-CHILD {ESR,WAL} close (the carrier-segregation boundary — the fan-out replay store backs only {ESR,WAL}). advisor-confirmed register-don't-fold: fan-out + {SAVE_POINT,RECONCILER} is admissible (no load-time topology×engine validator), so it needs a substrate those classes lack → a genuine follow-on, NOT complete-by-construction. FULL-SPEC (`[[feedback-full-spec-beyond-mvp-nothing-deferred]]`)."
+    parent_arc: B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-FANOUT-CHILD-SAVE-POINT
+    anticipated_scope: "The SAVE_POINT fan-out-child close widened `_FANOUT_REPLAY_ENGINE_CLASSES` to {ESR,WAL,SAVE_POINT} but left RECONCILER_LOOP OUT. RECONCILER is REPRESENTABLE under fan-out (no load-time topology×engine validator forbids it; the §11.2 overlay is fault-handling not admissibility; the §11.3 matrix admits every (workload, RECONCILER) cell; RESEARCH/SOFTWARE_ENGINEERING/PIPELINE_AUTOMATION permit ORCHESTRATOR_WORKERS) — so this is a genuine build arc, NOT a resolve-invalid. UNLIKE SAVE_POINT (the §11.2 ABOVE_ENGINE reading — harness branch store is the sole aggregate authority), RECONCILER is the §11.2 RECONCILER reading (engine owns reconvergence via CRD-resource-version): the design question is whether the engine-owned reconciler substrate COMPETES with the B-FANOUT-OUTPUT-REPLAY branch store for the fan-out AGGREGATE authority (the two-authorities probe the RECONCILER LINEAR slice grounded — store-reuse won there because the reconciler substrate carries a convergence DIGEST, not the per-step output map; whether that holds for a fan-out AGGREGATE is open), AND how the RECONCILER F-1 won-CAS-claim window interacts with re-dispatching a fan-out of branches (each branch's own crash-resume fires the engine-layer reconverge gated at the CAS claim — the LINEAR RECONCILER child resolved this via ABORT→§22.1-HITL, but a fan-out of CAS-claiming branches is unwitnessed). Ground the two-authorities-for-aggregate + the CAS/F-1-under-fan-out questions at open; the close is a constant widen IFF grounding shows the branch store is the sole aggregate authority for RECONCILER too (likely, since `_determine_fanout_resume` reads only the class-agnostic store) AND the per-branch CAS interaction is fail-closed-safe."
+    why: "Surfaced at the SAVE_POINT fan-out-child close (the carrier-segregation boundary — RECONCILER left out of the widened set). advisor-directed decompose (the arc's own decompose_at_open + the #779→#781 LINEAR precedent split SAVE_POINT from RECONCILER for exactly the engine-owns-substrate two-authorities reason): RECONCILER carries the engine-owns-reconvergence two-authorities-for-aggregate question + the CAS/F-1 window under a fan-out of branches — needs its own grounding, NOT complete-by-construction. FULL-SPEC (`[[feedback-full-spec-beyond-mvp-nothing-deferred]]`)."
     ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
 
   - id: B-FANOUT-CRASH-RESUME-ORCHESTRATOR-PROCEED-RESIDUAL

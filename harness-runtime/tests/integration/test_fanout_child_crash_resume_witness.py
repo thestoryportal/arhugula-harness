@@ -53,12 +53,14 @@ _PARENT_KEY = "parent-idem-key-worker-branch-0"
 _ENTRY_VERSION = 1
 
 
-def _manifest() -> WorkflowManifestEntry:
+def _manifest(
+    engine_class: EngineClass = EngineClass.EVENT_SOURCED_REPLAY,
+) -> WorkflowManifestEntry:
     return WorkflowManifestEntry(
         workflow_id=_CHILD_WF,
         workload_class=WorkloadClass.PIPELINE_AUTOMATION,
         persona_tier=PersonaTier.SOLO_DEVELOPER,  # PROCEED — survivor harvest on a branch crash
-        engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+        engine_class=engine_class,
         topology_pattern=TopologyPattern.PARALLELIZATION,
         layer_budgets=(),
         fallback_chain=_CHAIN,
@@ -153,12 +155,13 @@ def _drive(
     seed: str,
     *,
     kind: StepKind = StepKind.DECLARATIVE_STEP,
+    engine_class: EngineClass = EngineClass.EVENT_SOURCED_REPLAY,
 ) -> Any:
     ctx = _Ctx(ledger=_Ledger(), store=store, dispatchers=_Registry(dispatcher))
     runner = compose_child_workflow_runner(cast(Any, ctx))
     return runner(
         workflow_id=_CHILD_WF,
-        manifest_entry=_manifest(),
+        manifest_entry=_manifest(engine_class),
         steps=[_branch_step(0, kind), _branch_step(1, kind), _branch_step(2, kind)],
         handoff_context=cast(Any, None),
         descent=cast(Any, None),
@@ -234,6 +237,59 @@ def test_fanout_child_committed_effect_bearing_branches_not_re_fired(tmp_path: P
     # RESULT-FIDELITY: the resumed aggregate matches a clean no-crash run.
     baseline_store = EngineOutputStore(journal_dir=engine_output_dir_for(tmp_path / "baseline"))
     baseline = _drive(baseline_store, _CountingDispatcher(), "baseline-seed")
+    assert r2.final_state is not None and baseline.final_state is not None
+    assert r2.final_state.get("branch_outputs") == baseline.final_state.get("branch_outputs")
+    assert r2.final_state.get("aggregate") == baseline.final_state.get("aggregate")
+
+
+def test_fanout_child_save_point_reconstructs_aggregate_under_deterministic_seed(
+    tmp_path: Path,
+) -> None:
+    """B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-FANOUT-CHILD-SAVE-POINT (R-FS-1) — the load-bearing
+    by-execution witness for the SAVE_POINT leg.
+
+    Identical two-phase structure to the {ESR,WAL} witness above, but the child fan-out runs under
+    `engine_class=SAVE_POINT_CHECKPOINT`. This is the CAN-vs-DOES proof advisor demanded: the
+    branch-capture producer (`_capture_branch_terminal`, gated ONLY by `_fanout_replay_store`) must
+    actually FIRE for a SAVE_POINT fan-out run — before the `_FANOUT_REPLAY_ENGINE_CLASSES` widen the
+    gate returned `None` for SAVE_POINT, so Phase 1 captured NOTHING and this test was RED at the
+    `present_branch_indexes == {0, 1, 2}` assertion. With the widen the SAME class-agnostic
+    `EngineOutputStore` captures the SAVE_POINT branches and `_crash_fan_out_resume` reconstructs the
+    aggregate, recovering committed branches 0+2 and re-dispatching only the in-flight branch 1
+    (at-most-once preserved). SAVE_POINT is the §11.2 ABOVE_ENGINE reading — the harness branch store
+    is the sole aggregate authority, no engine-owned competing substrate."""
+    sp = EngineClass.SAVE_POINT_CHECKPOINT
+    seed = compose_child_run_id_seed(_PARENT_KEY, _CHILD_WF)
+    store = EngineOutputStore(journal_dir=engine_output_dir_for(tmp_path))
+
+    # Phase 1: clean SAVE_POINT fan-out run captures all 3 branches (RED before the gate widen —
+    # `_fanout_replay_store` returned None for SAVE_POINT → no capture).
+    phase1 = _CountingDispatcher()
+    r1 = _drive(store, phase1, seed, kind=StepKind.TOOL_STEP, engine_class=sp)
+    assert r1.status is RunStatus.SUCCESS
+    run_key = _compute_run_idempotency_key(seed, _CHILD_WF, extras=(str(_ENTRY_VERSION),))
+    assert store.present_branch_indexes(run_key) == {0, 1, 2}
+
+    # Model branch 1 in-flight at the crash (no terminal record fsynced).
+    store._branch_file(run_key, 1).unlink()
+    assert store.present_branch_indexes(run_key) == {0, 2}
+
+    # Phase 2 (resume): re-drive under the SAME seed + store. Committed effect-bearing branches 0+2
+    # are recovered (NOT re-fired); only in-flight branch 1 re-dispatches.
+    phase2 = _CountingDispatcher()
+    r2 = _drive(store, phase2, seed, kind=StepKind.TOOL_STEP, engine_class=sp)
+    assert r2.status is RunStatus.SUCCESS
+    assert phase2.dispatched == ["branch-1"]
+
+    # RESULT-FIDELITY: the resumed SAVE_POINT aggregate matches a clean no-crash SAVE_POINT run.
+    baseline_store = EngineOutputStore(journal_dir=engine_output_dir_for(tmp_path / "baseline"))
+    baseline = _drive(
+        baseline_store,
+        _CountingDispatcher(),
+        "baseline-seed",
+        kind=StepKind.TOOL_STEP,
+        engine_class=sp,
+    )
     assert r2.final_state is not None and baseline.final_state is not None
     assert r2.final_state.get("branch_outputs") == baseline.final_state.get("branch_outputs")
     assert r2.final_state.get("aggregate") == baseline.final_state.get("aggregate")
