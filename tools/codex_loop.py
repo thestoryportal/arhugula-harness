@@ -18,7 +18,8 @@ from pathlib import Path
 from typing import Any, cast
 
 STATE_PATH = Path(".harness/codex_loop_state.json")
-REQUIRED_GATES = (
+PRE_CLOSEOUT_GATES = (
+    "worktree_ready",
     "preflight",
     "plan",
     "red",
@@ -26,15 +27,39 @@ REQUIRED_GATES = (
     "narrow_verify",
     "local_gate",
     "decorrelated_review",
+)
+DEVELOPMENT_GATES = (
+    *PRE_CLOSEOUT_GATES,
     "closeout",
 )
+SHIP_GATES = (
+    "commit",
+    "push",
+    "pr_opened",
+    "ci_green",
+    "merged",
+    "post_merge_refresh",
+    "main_synced",
+    "worktree_disposition",
+)
+REQUIRED_GATES = (*DEVELOPMENT_GATES, *SHIP_GATES)
 STATUSES = ("passed", "failed", "blocked", "skipped")
-CURRENT_WORKTREE_GATES = (
+PRE_COMMIT_WORKTREE_GATES = (
     "implementation",
     "narrow_verify",
     "local_gate",
     "decorrelated_review",
     "closeout",
+)
+CLEAN_WORKTREE_RECORD_GATES = (
+    "commit",
+    "push",
+    "pr_opened",
+    "ci_green",
+    "merged",
+    "post_merge_refresh",
+    "main_synced",
+    "worktree_disposition",
 )
 
 
@@ -44,6 +69,8 @@ class GitIdentity:
     branch: str
     head8: str
     worktree_fingerprint: str
+    content_fingerprint: str
+    linked_worktree: bool
 
 
 def _run(args: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
@@ -118,6 +145,87 @@ def worktree_fingerprint(root: Path) -> str:
     return digest.hexdigest()[:16]
 
 
+def content_fingerprint(root: Path) -> str:
+    digest = hashlib.sha256()
+    pathspec = ["--", ".", f":(exclude){STATE_PATH.as_posix()}"]
+
+    def add(label: str, payload: bytes) -> None:
+        digest.update(label.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(payload)
+        digest.update(b"\0")
+
+    stage_proc = _run_bytes(["git", "ls-files", "--stage", "-z", *pathspec], cwd=root)
+    stage_metadata: dict[bytes, bytes] = {}
+    for entry in (part for part in stage_proc.stdout.split(b"\0") if part):
+        if b"\t" not in entry:
+            continue
+        metadata, rel_raw = entry.split(b"\t", 1)
+        stage_metadata[rel_raw] = metadata
+    add("stage:returncode", str(stage_proc.returncode).encode("ascii"))
+    add("stage:stderr", stage_proc.stderr)
+
+    proc = _run_bytes(
+        ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z", *pathspec],
+        cwd=root,
+    )
+    add("ls-files:returncode", str(proc.returncode).encode("ascii"))
+    add("ls-files:stderr", proc.stderr)
+    for rel_raw in sorted(set(part for part in proc.stdout.split(b"\0") if part)):
+        rel = rel_raw.decode("utf-8", errors="surrogateescape")
+        path = root / rel
+        if not path.exists() and not path.is_symlink():
+            continue
+        add("path", rel_raw)
+        if path.is_symlink():
+            add("kind", b"symlink")
+            try:
+                add("target", str(path.readlink()).encode("utf-8", errors="surrogateescape"))
+            except OSError as exc:
+                add("target:error", str(exc).encode("utf-8", errors="replace"))
+        elif path.is_file():
+            add("kind", b"file")
+            try:
+                executable = b"1" if path.stat().st_mode & 0o111 else b"0"
+                add("executable", executable)
+            except OSError as exc:
+                add("executable:error", str(exc).encode("utf-8", errors="replace"))
+            try:
+                add("sha256", hashlib.sha256(path.read_bytes()).hexdigest().encode("ascii"))
+            except OSError as exc:
+                add("file:error", str(exc).encode("utf-8", errors="replace"))
+        else:
+            add("kind", b"other")
+            stage = stage_metadata.get(rel_raw)
+            if stage is not None:
+                add("stage", stage)
+    return digest.hexdigest()[:16]
+
+
+def dirty_status(root: Path) -> str:
+    pathspec = ["--", ".", f":(exclude){STATE_PATH.as_posix()}"]
+    proc = _run(["git", "status", "--short", "--untracked-files=all", *pathspec], cwd=root)
+    if proc.returncode != 0:
+        return "<status unavailable>"
+    return proc.stdout.strip()
+
+
+def _resolve_git_path(root: Path, raw: str) -> Path:
+    path = Path(raw)
+    return path.resolve() if path.is_absolute() else (root / path).resolve()
+
+
+def is_linked_worktree(root: Path) -> bool:
+    superproject = _out(["git", "rev-parse", "--show-superproject-working-tree"], cwd=root)
+    if superproject:
+        return False
+    git_dir = _out(["git", "rev-parse", "--git-dir"], cwd=root)
+    git_common_dir = _out(["git", "rev-parse", "--git-common-dir"], cwd=root)
+    if not git_dir or not git_common_dir:
+        return False
+    return _resolve_git_path(root, git_dir) != _resolve_git_path(root, git_common_dir)
+
+
 def git_identity(start: Path) -> GitIdentity:
     root_s = _out(["git", "rev-parse", "--show-toplevel"], cwd=start)
     root = Path(root_s).resolve() if root_s else start.resolve()
@@ -128,6 +236,8 @@ def git_identity(start: Path) -> GitIdentity:
         branch=branch,
         head8=head8,
         worktree_fingerprint=worktree_fingerprint(root),
+        content_fingerprint=content_fingerprint(root),
+        linked_worktree=is_linked_worktree(root),
     )
 
 
@@ -171,6 +281,8 @@ def start(args: argparse.Namespace) -> int:
         "branch": git.branch,
         "head8": git.head8,
         "worktree_fingerprint": git.worktree_fingerprint,
+        "content_fingerprint": git.content_fingerprint,
+        "linked_worktree": git.linked_worktree,
         "events": [],
         "required_gates": list(REQUIRED_GATES),
     }
@@ -184,26 +296,51 @@ def start(args: argparse.Namespace) -> int:
 def record(args: argparse.Namespace) -> int:
     git = git_identity(Path.cwd())
     state = load_state(git.root)
+    latest = _latest_by_phase(state)
+    if args.phase == "worktree_ready" and git.linked_worktree is not True:
+        raise SystemExit("worktree_ready gate must be recorded in a linked worktree")
+    if args.phase in CLEAN_WORKTREE_RECORD_GATES:
+        dirty = dirty_status(git.root)
+        if dirty:
+            raise SystemExit(f"{args.phase} gate requires a clean worktree; status:\n{dirty}")
+    if args.phase == "commit":
+        closeout = latest.get("closeout")
+        if closeout is None:
+            raise SystemExit("commit gate requires a prior closeout gate")
+        if git.head8 == closeout.get("head8"):
+            raise SystemExit("commit gate must be recorded after a commit changes HEAD")
+        if git.content_fingerprint != closeout.get("content_fingerprint"):
+            raise SystemExit("commit gate content differs from closeout content")
     events_obj = state.get("events")
     if not isinstance(events_obj, list):
         raise SystemExit("loop_state_invalid: events must be a list")
     events = cast("list[Any]", events_obj)
-    events.append(
-        {
-            "recorded_at": _now(),
-            "phase": args.phase,
-            "status": args.status,
-            "command": args.command,
-            "evidence": args.evidence,
-            "branch": git.branch,
-            "head8": git.head8,
-            "worktree_fingerprint": git.worktree_fingerprint,
-        }
-    )
+    event = {
+        "recorded_at": _now(),
+        "phase": args.phase,
+        "status": args.status,
+        "command": args.command,
+        "evidence": args.evidence,
+        "branch": git.branch,
+        "head8": git.head8,
+        "worktree_fingerprint": git.worktree_fingerprint,
+        "content_fingerprint": git.content_fingerprint,
+        "linked_worktree": git.linked_worktree,
+    }
+    if args.phase == "commit":
+        closeout = latest.get("closeout")
+        if closeout is not None:
+            event["validated_phase"] = "closeout"
+            event["validated_head8"] = closeout.get("head8")
+            event["validated_worktree_fingerprint"] = closeout.get("worktree_fingerprint")
+            event["validated_content_fingerprint"] = closeout.get("content_fingerprint")
+    events.append(event)
     state["updated_at"] = _now()
     state["branch"] = git.branch
     state["head8"] = git.head8
     state["worktree_fingerprint"] = git.worktree_fingerprint
+    state["content_fingerprint"] = git.content_fingerprint
+    state["linked_worktree"] = git.linked_worktree
     path = write_state(git.root, state)
     print(f"loop_event_recorded: {args.phase}={args.status}")
     print(f"loop_state: {path}")
@@ -270,26 +407,30 @@ def _identity_issues(
             f"worktree={state_fingerprint or '<missing>'}; "
             f"current worktree={current.worktree_fingerprint}"
         )
-    for phase in REQUIRED_GATES:
-        entry = latest.get(phase)
-        if entry is None:
-            continue
-        event = entry[1]
-        event_branch = event.get("branch")
-        event_head8 = event.get("head8")
-        if event_branch != current.branch or event_head8 != current.head8:
-            issues.append(
-                f"{phase} gate recorded for "
-                f"branch={event_branch or '<missing>'} head={event_head8 or '<missing>'}; "
-                f"current branch={current.branch} head={current.head8}"
-            )
-        event_fingerprint = event.get("worktree_fingerprint")
-        if phase in CURRENT_WORKTREE_GATES and event_fingerprint != current.worktree_fingerprint:
-            issues.append(
-                f"{phase} gate recorded for "
-                f"worktree={event_fingerprint or '<missing>'}; "
-                f"current worktree={current.worktree_fingerprint}"
-            )
+    closeout_entry = latest.get("closeout")
+    if closeout_entry is not None:
+        closeout = closeout_entry[1]
+        closeout_branch = closeout.get("branch")
+        closeout_head8 = closeout.get("head8")
+        closeout_worktree = closeout.get("worktree_fingerprint")
+        for phase in PRE_COMMIT_WORKTREE_GATES:
+            entry = latest.get(phase)
+            if entry is None:
+                continue
+            event = entry[1]
+            if event.get("branch") != closeout_branch or event.get("head8") != closeout_head8:
+                issues.append(
+                    f"{phase} gate recorded for branch={event.get('branch') or '<missing>'} "
+                    f"head={event.get('head8') or '<missing>'}; "
+                    f"closeout branch={closeout_branch or '<missing>'} "
+                    f"head={closeout_head8 or '<missing>'}"
+                )
+            if event.get("worktree_fingerprint") != closeout_worktree:
+                issues.append(
+                    f"{phase} gate recorded for "
+                    f"worktree={event.get('worktree_fingerprint') or '<missing>'}; "
+                    f"closeout worktree={closeout_worktree or '<missing>'}"
+                )
     return issues
 
 
@@ -306,6 +447,22 @@ def check_state(state: dict[str, Any], *, current: GitIdentity | None = None) ->
     red = latest.get("red")
     if red is not None and red.get("status") != "failed":
         issues.append("red gate must record status=failed before implementation")
+    worktree_ready = latest.get("worktree_ready")
+    if worktree_ready is not None and worktree_ready.get("linked_worktree") is not True:
+        issues.append("worktree_ready gate must be recorded in a linked worktree")
+    commit = latest.get("commit")
+    closeout = latest.get("closeout")
+    if commit is not None and closeout is not None:
+        if commit.get("validated_phase") != "closeout":
+            issues.append("commit gate must link to the closeout gate it ships")
+        if commit.get("validated_head8") != closeout.get("head8"):
+            issues.append("commit gate validated_head8 must match closeout head")
+        if commit.get("validated_worktree_fingerprint") != closeout.get("worktree_fingerprint"):
+            issues.append("commit gate validated_worktree_fingerprint must match closeout worktree")
+        if commit.get("validated_content_fingerprint") != closeout.get("content_fingerprint"):
+            issues.append("commit gate validated_content_fingerprint must match closeout content")
+        if commit.get("content_fingerprint") != closeout.get("content_fingerprint"):
+            issues.append("commit gate content must match closeout content")
     for phase in REQUIRED_GATES:
         event = latest.get(phase)
         if event is None or phase == "red":
@@ -372,7 +529,7 @@ def main(argv: list[str] | None = None) -> int:
     p_start.set_defaults(func=start)
 
     p_record = sub.add_parser("record")
-    p_record.add_argument("--phase", required=True)
+    p_record.add_argument("--phase", required=True, choices=REQUIRED_GATES)
     p_record.add_argument("--status", required=True, choices=STATUSES)
     p_record.add_argument("--command", required=True)
     p_record.add_argument("--evidence", required=True)

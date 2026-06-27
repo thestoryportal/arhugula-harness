@@ -1,6 +1,6 @@
 # Codex Autonomous Loop
 
-This note is the tracked, repo-local version of the controller/coder/validator/CI/closeout loop.
+This note is the tracked, repo-local version of the controller/coder/validator/CI/GitHub shipping/closeout loop.
 
 Command surface:
 
@@ -17,13 +17,28 @@ Each record captures branch, HEAD, and a worktree fingerprint; if the diff chang
 
 Required gates:
 
-1. `preflight`
-2. `plan`
-3. `red` with `status=failed`
-4. `implementation`
-5. `narrow_verify`
-6. `local_gate`
-7. `decorrelated_review`
-8. `closeout`
+1. `worktree_ready`
+2. `preflight`
+3. `plan`
+4. `red` with `status=failed`
+5. `implementation`
+6. `narrow_verify`
+7. `local_gate`
+8. `decorrelated_review`
+9. `closeout`
+10. `commit`
+11. `push`
+12. `pr_opened`
+13. `ci_green`
+14. `merged`
+15. `post_merge_refresh`
+16. `main_synced`
+17. `worktree_disposition`
+
+`just codex-closeout` verifies the pre-closeout subset through
+`decorrelated_review`. `just codex-loop-check` verifies the full lifecycle,
+including commit, push, PR, CI, merge, post-merge refresh, main sync, and
+worktree disposition evidence. The `worktree_ready` gate must be recorded from
+a linked worktree.
 
 `just codex-review` remains the mandatory out-of-family review gate. CodeRabbit is optional advisory review through `just coderabbit-review ...`.
