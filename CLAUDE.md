@@ -1,6 +1,6 @@
 # CLAUDE.md — Multi-LLM Agent Harness Workspace
 
-*Workspace-level guidance for Claude Code at Phase 7 execution. Loaded at every Claude Code session startup. Canonical pointer to design-phase artifacts.*
+*Workspace-level guidance for Claude Code Loaded at every session startup.*
 
 ---
 
@@ -8,7 +8,7 @@
 
 ### 1.1 What this workspace builds
 
-This workspace implements **H_T** (the target harness) — a multi-LLM agent harness — under the **H_E** execution surface (Claude Code CLI). H_T is specified by the design-phase artifact corpus enumerated at §2. H_T implementation traverses the per-axis atomic-unit plans at §2.4 in topological-sort order per per-axis-plan dependency graphs. H_E provides the development environment, IDE substrate, and bounded substitutions for not-yet-built H_T primitives (see §4).
+This workspace implements **H_T** (the target harness aka Arhugula v2) — a multi-LLM agent harness — under the **H_E** execution surface (Claude Code CLI). H_T is specified by the design-phase artifact corpus enumerated at §2. H_T implementation traverses the per-axis atomic-unit plans at §2.4 in topological-sort order per per-axis-plan dependency graphs. H_E provides the development environment, IDE substrate, and bounded substitutions for not-yet-built H_T primitives (see §4).
 
 The harness has four design axes plus a cross-axis composition surface:
 
@@ -18,7 +18,7 @@ The harness has four design axes plus a cross-axis composition surface:
 | **AS** — Action Surface | Tool contracts (typed I/O schemas), MCP integration (FastMCP host + client), sandbox (4-tier blast radius), skills filesystem |
 | **CP** — Control Plane | Routing (capability-aware multi-LLM), retry / breaker / idempotency, workflow lifecycle, topology (6-class enum), HITL placement |
 | **OD** — Operational Discipline | HITL primitives (4-response palette), audit ledger schema, cost attribution (5-step chain), observability (12-namespace OTel schema) |
-| **CXA** — Cross-Axis Composition | **107 plan-canonical cross-axis relationships** across 7 composition buckets per `Cross_Axis_Composition_Document_v2_20.md` §2.3 — **37 genuine typed seams + 48 convention-level + 22 phase-2-runtime** (this plan-derived 7c baseline is FROZEN), **+2 R-PM-1 prompts-management forward-capability seams at §2.3.8 (CP→IS + OD→CP, runtime-mediated `R-live`) = 109 total**. (v2.20 2026-06-12 registered the prompts composition as a delineated forward-capability family — frozen-baseline, no fold-in; v2.19 2026-06-01 corrected v2.18's erroneous §2.1 matrix + aggregate back to v2.17's canonical 107; full per-version lineage — including the relocated PR #91 axis-posture-refresh + 13-vs-11 plan-vs-CXA residual notes — at `.harness/claude-artifact-pointers.md` §2.4 per the §2-intro relocation discipline.) |
+| **CXA** — Cross-Axis Composition | **107 plan-canonical cross-axis relationships** across 7 composition buckets per `Cross_Axis_Composition_Document_v2_20.md` §2.3 — **37 genuine typed seams + 48 convention-level + 22 phase-2-runtime** (this plan-derived 7c baseline is FROZEN), **+2 R-PM-1 prompts-management forward-capability seams at §2.3.8 (CP→IS + OD→CP, runtime-mediated `R-live`) = 109 total**.|
 
 ### 1.2 What this workspace is NOT
 
@@ -155,18 +155,18 @@ Per `Phase_7_Meta_Architecture_v1.md` §5 (49-row substitution mapping table) + 
 
 H_E provides bounded substitutions for not-yet-built H_T primitives across 6 substitution-mechanism categories:
 
-| Mechanism | Count | Examples |
+| Mechanism      | Count | Examples |
 |---|---|---|
-| H_E-direct | 11 | H_E filesystem ops; `Edit` / `Read` / `Write` tools |
-| MCP-server | 12 | Substitution routed through MCP server boundary |
-| Convention | 9 | Operator-authored `CLAUDE.md` / prompts |
-| Shell-out | 8 | `Bash` invocations of `git`, `sha256sum`, `python -c` |
-| Manual | 5 | Operator-driven gates (review, approval) |
-| Authoring-only | 4 | Substitutions retired at authoring close |
+| H_E-direct     | 11    | H_E filesystem ops; `Edit` / `Read` / `Write` tools |
+| MCP-server     | 12    | Substitution routed through MCP server boundary |
+| Convention     | 9     | Operator-authored `CLAUDE.md` / prompts |
+| Shell-out      | 8     | `Bash` invocations of `git`, `sha256sum`, `python -c` |
+| Manual         | 5     | Operator-driven gates (review, approval) |
+| Authoring-only | 4     | Substitutions retired at authoring close |
 
 Per-axis substitution count: IS=9 / AS=6 / CP=21 / OD=8 / CXA=5.
 
-### 4.2 Substitution retirement discipline
+### 4.2 Substitution retirement discipline (ALL RETIREMENTS COMPLETE - 54/54)
 
 Per X-AL-2 (Meta-Architecture §7.7):
 
@@ -174,7 +174,7 @@ Per X-AL-2 (Meta-Architecture §7.7):
 
 Partial retirement is non-retirement. The `phase-7-substitution-retirement` skill at `.claude/skills/` governs retirement event discipline. Substitution retirement triggers throughout 7b–7d sub-phases, not only at 7d.
 
-**Canonical accounting (R-600).** `.harness/phase-8-graduation.md` records the **frozen Phase-8 close snapshot**: **46/54 RETIRED (85.2%) + 49/54 pipeline-advanced (90.7%)**. That snapshot is a historical milestone, not the live tally. The live per-row dispositions and live counts are the **single source of truth at `.harness/substitutions.yaml`**, DERIVED by `tools/substitution_ledger.py` and surfaced by the dashboard/status refresh flow (the CI tally gate `--check` fails on an impossible tally — the count-drift defect class that produced the original `48/54` cannot recur). Cite the derived live number from the tool/dashboard when needed; do not hand-maintain live counts inline in guidance.
+**Canonical accounting (R-600).** `.harness/phase-8-graduation.md` records the **frozen Phase-8 close snapshot**: **54/54 RETIRED (100%) + 54/54 pipeline-advanced (100%)**. That snapshot is a historical milestone, not the live tally. The live per-row dispositions and live counts are the **single source of truth at `.harness/substitutions.yaml`**, DERIVED by `tools/substitution_ledger.py` and surfaced by the dashboard/status refresh flow (the CI tally gate `--check` fails on an impossible tally — the count-drift defect class that produced the original `48/54` cannot recur). Cite the derived live number from the tool/dashboard when needed; do not hand-maintain live counts inline in guidance.
 
 ### 4.3 Back-flow routing
 
@@ -599,7 +599,7 @@ The roadmap is one of three durable persistence mechanisms; this section names h
 | Mechanism | Surface | Scope | Authority |
 |---|---|---|---|
 | **Roadmap + dashboard** | `Project_Roadmap_v1.md` + `.harness/roadmap_status.md` | Cross-session next-action + workspace state | This §12 |
-| **Auto-memory** | `~/.claude/projects/-Users-robertrhu-Projects-arhugula-v2/memory/` | Patterns, feedback, project context, references | Global `~/.claude/CLAUDE.md` auto-memory section |
+| **Auto-memory** | `~/.claude/projects/-Users-robertrhu-Projects-arhugula-v2/memory/` | Patterns, feedback, project context, references, learnings | Global `~/.claude/CLAUDE.md` auto-memory section |
 | **Checkpoints** | `~/.gstack/projects/thestoryportal-arhugula-harness/checkpoints/` | Mid-arc transient state for cross-session resume | gstack `/context-save` + `/context-restore` skills |
 
 **Distinction by scope.**
@@ -616,7 +616,7 @@ The roadmap is one of three durable persistence mechanisms; this section names h
 | **Save feedback symmetrically** | Corrections AND confirmations both save. Asymmetric saving drifts behavior toward over-cautious. |
 | **Update existing entries, do not duplicate** | Check `MEMORY.md` index before authoring new; refresh existing entry if topic matches. |
 | **Verify cited memory before acting** | Memory can be stale. If memory names a file/function/flag, grep first; halt + refresh if false (per Workflow v1.13 §7.4.7.3). |
-| **Mind the 24,400-byte MEMORY.md cap** | Compact existing entries before adding new ones if near cap. Compaction = shorten descriptions, drop superseded entries (full text preserved at `memory/<slug>.md`). |
+| **Mind the 24,400-byte MEMORY.md cap** | Before saving context to MEMORY, first precisely measure the exact byte size before writing any memory context and proactively trim the file in a single pass based on the measurement rather than iterative edits. When trimming, change existing status lines in place instead of appending redundant fields. . Compaction = shorten descriptions, drop superseded entries (full text preserved at `memory/<slug>.md`). |
 | **Delete superseded entries** | Wrong / outdated → remove from index, not just append. Provenance lives in git history at the global memory store. |
 | **No code-derivable saves** | Don't save what `git log` / source code shows. Memory is for non-obvious surprises, not architecture. |
 | **Periodic audit** | Cadence ~every 20 entries or operator-discretion (current cadence: round-3 audits via R-IF-NNN PRs). |
