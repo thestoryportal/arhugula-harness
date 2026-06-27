@@ -44,6 +44,7 @@ from typing import Any, cast
 
 import harness_runtime.lifecycle.child_workflow_runner as cwr
 import pytest
+from harness_as.sandbox_tier import SandboxTier
 from harness_core import PersonaTier, StepID, WorkloadClass
 from harness_cp.cp_shared_types import ModelBinding
 from harness_cp.cross_family_fallback_chain import (
@@ -52,13 +53,36 @@ from harness_cp.cross_family_fallback_chain import (
     ProviderFamily,
 )
 from harness_cp.engine_class import EngineClass
+from harness_cp.gate_level_rule import GateLevel
+from harness_cp.pause_resume_protocol import (
+    CP_FAIL_RESUME_MATERIAL_DIFF_DETECTED,
+    ResumeOutcomeKind,
+)
+from harness_cp.per_step_override_evaluator import StepEffectiveBinding
+from harness_cp.sub_agent_brief import (
+    ClearTaskBoundaries,
+    OutputSchema,
+    OutputSchemaKind,
+    SubAgentBrief,
+)
 from harness_cp.topology_pattern import TopologyPattern
-from harness_cp.workflow_driver_types import RunStatus, StepKind, WorkflowStep
+from harness_cp.workflow_driver_types import RunStatus, StepExecutionContext, StepKind, WorkflowStep
 from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
 from harness_is.state_ledger_entry_schema import Actor, ActorClass
+from harness_is.state_ledger_entry_schema import Identifier as _Identifier
+from harness_od.audit_ledger_types import SignatureAlgorithm
+from harness_runtime.lifecycle.audit_writer import RuntimeAuditLedgerWriter
 from harness_runtime.lifecycle.child_workflow_runner import compose_child_workflow_runner
 from harness_runtime.lifecycle.engine_output_store import EngineOutputStore, engine_output_dir_for
-from harness_runtime.lifecycle.sub_agent_dispatch import compose_child_run_id_seed
+from harness_runtime.lifecycle.handoff import RuntimeHandoffRegistry
+from harness_runtime.lifecycle.state_ledger import LedgerWriter
+from harness_runtime.lifecycle.sub_agent_dispatch import (
+    RuntimeSubAgentDispatcher,
+    SubAgentChildFailedError,
+    SubAgentDispatchPayload,
+    compose_child_run_id_seed,
+)
+from harness_runtime.lifecycle.topology_dispatcher import RuntimeTopologyDispatcher
 
 _ACTOR = Actor(actor_class=ActorClass.AGENT, actor_id="test-recursive-child")
 _DEFAULT_BINDING = ModelBinding(provider="anthropic", model="claude-haiku-4-5")
@@ -206,11 +230,53 @@ class _Registry:
         return self._d
 
 
+class _ReconcilerRecoveryLoop:
+    """B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-RECONCILER-CHILD (R-FS-1) — a duck-typed
+    ``engine_recovery_loop`` for the RECONCILER child crash-resume witness. The CP RECONCILER
+    resume branch (workflow_driver.py U-CP-97) calls ``has_pause_record`` (presence gate) then the
+    async ``attempt_resume`` (run via ``asyncio.run``) and reads ``.resume_outcome.outcome_kind``.
+
+    ``outcome_kind`` is configurable: ``RESUME_CLEAN`` models the not-won-claim / clean-reconverge
+    cases (child auto-resumes the committed prefix); ``ABORT_REVALIDATION_FAILED`` models the F-1
+    window — the child WON the CAS revision claim on its first attempt, then crashed mid-re-execution,
+    so the re-dispatch's retry of the already-claimed revision LOSES → ABORT (the substrate F-1
+    at-most-once gate, ``reconciler_pause_resume_substrate.py``). The real reconciler substrate's CAS
+    semantics are independently tested; this fake exercises the COMPOSITION (re-dispatch → reconverge
+    fires → outcome → child RunResult)."""
+
+    def __init__(self, *, outcome_kind: Any, has_record: bool = True) -> None:
+        self._outcome_kind = outcome_kind
+        self._has_record = has_record
+        self.resume_calls: list[dict[str, Any]] = []
+
+    def has_pause_record(self, *, engine_class: Any, workflow_id: str, run_id: str) -> bool:
+        _ = (engine_class, workflow_id, run_id)
+        return self._has_record
+
+    async def attempt_resume(
+        self,
+        *,
+        engine_class: Any,
+        workflow_id: str,
+        run_id: str,
+        step_id: str,
+        resume_event_id: str,
+        resume_attempt_count: int,
+        resume_at: str,
+        resume_request_actor: Any = None,
+    ) -> Any:
+        _ = (engine_class, resume_event_id, resume_attempt_count, resume_at, resume_request_actor)
+        self.resume_calls.append({"workflow_id": workflow_id, "run_id": run_id, "step_id": step_id})
+        return SimpleNamespace(resume_outcome=SimpleNamespace(outcome_kind=self._outcome_kind))
+
+
 class _Ctx:
     """Complete duck-typed mutable ``DriverContext`` (mirrors the #766 ``_FakeCtx`` field
     set) with a REAL ``engine_output_store`` + ``step_dispatchers`` bound — the runner reads
     ``ctx.step_dispatchers`` (child_workflow_runner.py:185) + ``execute_workflow`` reads
-    ``ctx.engine_output_store`` for the reconstruct seed."""
+    ``ctx.engine_output_store`` for the reconstruct seed. ``engine_recovery_loop`` is optional
+    (None for the SAVE_POINT/ESR witnesses, which fire no recovery loop; a ``_ReconcilerRecoveryLoop``
+    for the RECONCILER U-CP-97 reconverge witnesses)."""
 
     def __init__(
         self,
@@ -219,6 +285,7 @@ class _Ctx:
         reader: _LedgerReader,
         store: EngineOutputStore | None,
         dispatchers: _Registry,
+        engine_recovery_loop: Any = None,
     ) -> None:
         from opentelemetry.trace import NoOpTracerProvider
 
@@ -234,6 +301,7 @@ class _Ctx:
         self.validator_framework = None
         self.tenant_id = None
         self.inter_step_output_channel = None
+        self.engine_recovery_loop = engine_recovery_loop
 
 
 def _pin_child_run_id(monkeypatch: Any) -> None:
@@ -339,6 +407,111 @@ def test_recursive_child_crash_resume_save_point_reconstructs_full_final_state(
     assert str(dispatcher.dispatched[0][1].step_id) == "step-2"
 
 
+def _reconciler_resume_ctx(
+    store: EngineOutputStore | None, *, outcome_kind: ResumeOutcomeKind
+) -> _Ctx:
+    """A RECONCILER child crash-resume ctx: 2 steps materialized (``resume_at == 2``) + an
+    ``engine_recovery_loop`` whose ``attempt_resume`` returns ``outcome_kind`` — so the U-CP-97
+    reconverge fires (``resume_at < len(steps) ∧ has_pause_record``)."""
+    reader = _LedgerReader({_step_key(0): 1, _step_key(1): 1})
+    loop = _ReconcilerRecoveryLoop(outcome_kind=outcome_kind)
+    return _Ctx(
+        ledger=_Ledger(),
+        reader=reader,
+        store=store,
+        dispatchers=_Registry(_Echo()),
+        engine_recovery_loop=loop,
+    )
+
+
+def test_recursive_child_crash_resume_reconciler_clean_cas_auto_resumes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-RECONCILER-CHILD (R-FS-1) — the NON-VACUOUS recovery
+    witness (advisor #1: confirm the re-dispatched child's ctx actually binds + fires
+    ``engine_recovery_loop``, which the #782 SAVE_POINT witness could NOT catch — SAVE_POINT fires no
+    recovery loop). A REAL recursive RECONCILER child, re-dispatched through
+    ``compose_child_workflow_runner`` -> ``execute_workflow`` over a ``run_key``-respecting
+    ``EngineOutputStore`` holding the committed prefix, with an ``engine_recovery_loop`` whose
+    reconverge returns RESUME_CLEAN (the not-won-claim / clean-reconverge cases), AUTO-RESUMES: the
+    U-CP-97 reconverge FIRES (``resume_calls == 1`` — NOT vacuous), the committed prefix [0,2) is
+    reconstructed (final_state {step-0,step-1,step-2}), and ONLY step-2 is re-dispatched (the prefix
+    is NOT re-fired — at-most-once)."""
+    store = EngineOutputStore(journal_dir=engine_output_dir_for(tmp_path))
+    run_key = _run_key()
+    store.record(run_key, 0, "step-0", {"out": "v0"})
+    store.record(run_key, 1, "step-1", {"out": "v1"})
+
+    _pin_child_run_id(monkeypatch)
+    ctx = _reconciler_resume_ctx(store, outcome_kind=ResumeOutcomeKind.RESUME_CLEAN)
+    runner = compose_child_workflow_runner(cast(Any, ctx))
+    result = runner(
+        workflow_id=_CHILD_WF,
+        manifest_entry=_manifest(engine_class=EngineClass.RECONCILER_LOOP),
+        steps=[_step(0), _step(1), _step(2)],
+        handoff_context=cast(Any, None),
+        descent=cast(Any, None),
+        default_model_binding=_DEFAULT_BINDING,
+        pause_snapshot_input=None,  # CRASH-resume
+    )
+
+    # The U-CP-97 engine-layer reconverge actually FIRED (the binding is real, not vacuous).
+    loop = cast(_ReconcilerRecoveryLoop, ctx.engine_recovery_loop)
+    assert len(loop.resume_calls) == 1
+    assert result.status is RunStatus.SUCCESS
+    assert result.final_state is not None
+    assert set(result.final_state.keys()) == {"step-0", "step-1", "step-2"}
+    assert result.final_state["step-0"] == {"out": "v0"}
+    # At-most-once: the committed prefix [0,2) was AUTO-RESUMED, only step-2 re-dispatched.
+    dispatcher = ctx.step_dispatchers.lookup(StepKind.INFERENCE_STEP)
+    assert len(dispatcher.dispatched) == 1
+    assert str(dispatcher.dispatched[0][1].step_id) == "step-2"
+
+
+def test_recursive_child_crash_resume_reconciler_f1_abort_fails_closed_at_most_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-RECONCILER-CHILD (R-FS-1) — the LOAD-BEARING F-1
+    case-3 witness (advisor #2 assertions (i)+(ii); the SAVE_POINT close did NOT need this). The F-1
+    window: a maybe-ran RECONCILER child WON the CAS revision claim on its first attempt, then
+    crashed mid-re-execution. On the parent-crash re-dispatch, the child runs its OWN crash-resume,
+    which fires the U-CP-97 reconverge (``attempt_resume``) → the retry of the already-claimed
+    revision LOSES → ``ABORT_REVALIDATION_FAILED``. Asserts: (i) the committed prefix is NOT re-fired
+    AND no suffix runs — the ABORT short-circuits BEFORE the step loop, so ZERO steps are dispatched
+    (at-most-once preserved, never a double-fire); (ii) the child returns RunStatus.FAILED with the
+    C-CP-22 §22.1 abort fail_class (final_state None — never a silently-truncated SUCCESS). The PARENT
+    fold disposition over THIS FAILED child is the separate full-chain witness
+    ``test_maybe_ran_reconciler_child_f1_abort_parent_folds_fail_closed``."""
+    store = EngineOutputStore(journal_dir=engine_output_dir_for(tmp_path))
+    run_key = _run_key()
+    store.record(run_key, 0, "step-0", {"out": "v0"})
+    store.record(run_key, 1, "step-1", {"out": "v1"})
+
+    _pin_child_run_id(monkeypatch)
+    ctx = _reconciler_resume_ctx(store, outcome_kind=ResumeOutcomeKind.ABORT_REVALIDATION_FAILED)
+    runner = compose_child_workflow_runner(cast(Any, ctx))
+    result = runner(
+        workflow_id=_CHILD_WF,
+        manifest_entry=_manifest(engine_class=EngineClass.RECONCILER_LOOP),
+        steps=[_step(0), _step(1), _step(2)],
+        handoff_context=cast(Any, None),
+        descent=cast(Any, None),
+        default_model_binding=_DEFAULT_BINDING,
+        pause_snapshot_input=None,  # CRASH-resume
+    )
+
+    # The reconverge fired and ABORTed → the child fails closed BEFORE any step re-executes.
+    loop = cast(_ReconcilerRecoveryLoop, ctx.engine_recovery_loop)
+    assert len(loop.resume_calls) == 1
+    assert result.status is RunStatus.FAILED
+    assert result.final_state is None
+    assert result.fail_class == CP_FAIL_RESUME_MATERIAL_DIFF_DETECTED
+    # (i) at-most-once: the ABORT short-circuits before the step loop → NOTHING re-dispatched
+    # (the committed prefix is not re-fired; no suffix fires either).
+    dispatcher = ctx.step_dispatchers.lookup(StepKind.INFERENCE_STEP)
+    assert dispatcher.dispatched == []
+
+
 _PARENT_KEY = "parent-idem-key-worker-branch-0"
 
 
@@ -419,3 +592,135 @@ def test_recursive_child_crash_resume_without_store_degrades_to_suffix_only(
     assert result.status is RunStatus.SUCCESS
     assert result.final_state is not None
     assert set(result.final_state.keys()) == {"step-2"}
+
+
+# ---------------------------------------------------------------------------
+# B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-RECONCILER-CHILD (R-FS-1) — the FULL-CHAIN F-1
+# disposition witness (advisor #2 assertion (iii)). Drives the REAL parent
+# `RuntimeSubAgentDispatcher.dispatch` over a REAL `compose_child_workflow_runner` whose RECONCILER
+# child crash-resume ABORTs (the F-1 window) — proving the parent lands FAIL-CLOSED
+# (`SubAgentChildFailedError`), NEVER a SUCCESS aggregate assembled from a failed child.
+# ---------------------------------------------------------------------------
+
+
+def _f1_brief() -> SubAgentBrief:
+    return SubAgentBrief(
+        objective="reconciler child re-dispatch (F-1 window)",
+        output_format=OutputSchema(
+            schema_kind=OutputSchemaKind.JSON_SCHEMA, schema_body='{"type":"object"}'
+        ),
+        guidance="re-dispatch fires the U-CP-97 reconverge",
+        task_boundaries=ClearTaskBoundaries(
+            in_scope=("reconcile",), out_of_scope=("summarize",), termination_criteria=("done",)
+        ),
+        summary_hash="0" * 64,
+    )
+
+
+def _reconciler_subagent_step() -> WorkflowStep:
+    """A SUB_AGENT_DISPATCH step whose child is a RECONCILER_LOOP LINEAR leaf (the now-recoverable
+    shape)."""
+    payload = SubAgentDispatchPayload(
+        child_workflow_id=_CHILD_WF,
+        child_manifest_entry=_manifest(engine_class=EngineClass.RECONCILER_LOOP),
+        child_steps=(_step(0), _step(1), _step(2)),
+        brief=_f1_brief(),
+    )
+    return WorkflowStep(
+        step_id=StepID("step-0"),
+        step_kind=StepKind.SUB_AGENT_DISPATCH,
+        step_payload=payload.model_dump(),
+    )
+
+
+def _parent_step_context() -> StepExecutionContext:
+    return StepExecutionContext(
+        workflow_id="parent-wf",
+        parent_action_id="workflow:parent-wf:step:0",
+        parent_gate_level=GateLevel.AUTO,
+        parent_sandbox_tier=SandboxTier.TIER_1_PROCESS,
+        parent_actor=_ACTOR,
+        parent_entry_hash="",
+        parent_idempotency_key="0" * 64,
+        tenant_id=None,
+        step_index=0,
+    )
+
+
+def _parent_binding() -> StepEffectiveBinding:
+    return StepEffectiveBinding(
+        step_id="step-0",
+        model_binding=_DEFAULT_BINDING,
+        engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
+        hitl_placement=None,
+        override_applied=False,
+        override_audit_ref=None,
+        persona_tier=PersonaTier.SOLO_DEVELOPER,
+    )
+
+
+def _parent_ledger_writer(tmp_path: Path) -> LedgerWriter:
+    from harness_is.jsonl_event_ledger_lifecycle import JsonlLedgerHandle
+
+    path = tmp_path / "parent-state.jsonl"
+    path.touch()
+    return LedgerWriter(
+        handle=JsonlLedgerHandle(canonical_path=path, exists=True, entry_count=0), actor=_ACTOR
+    )
+
+
+def test_maybe_ran_reconciler_child_f1_abort_parent_folds_fail_closed(tmp_path: Path) -> None:
+    """B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-RECONCILER-CHILD (R-FS-1) — the FULL-CHAIN F-1
+    disposition witness (advisor #2 assertion (iii), `[[full-chain-witness-not-half-proofs]]` /
+    `[[recovery-effect-fidelity-vs-result-fidelity]]`): a maybe-ran RECONCILER leaf child re-dispatch
+    in the F-1 won-CAS-claim-then-crashed window flows through the REAL parent
+    `RuntimeSubAgentDispatcher.dispatch` -> REAL `compose_child_workflow_runner` -> `execute_workflow`
+    (the child's OWN crash-resume) -> the U-CP-97 reconverge ABORTs (`ABORT_REVALIDATION_FAILED`) ->
+    child RunStatus.FAILED -> the PARENT FOLD raises `SubAgentChildFailedError` (fail-closed). This
+    PROVES — not assumes — that the parent lands at the safe disposition and NEVER assembles a SUCCESS
+    aggregate from the failed child (the fold has no RECONCILER-special branch; FAILED always raises).
+    The at-most-once (i)/(ii) halves are witnessed at `..._reconciler_f1_abort_fails_closed_at_most_once`;
+    this is the load-bearing parent-disposition half SAVE_POINT never needed."""
+    from datetime import UTC, datetime
+
+    from opentelemetry.trace import NoOpTracerProvider
+
+    # The child ctx: an ABORTing reconverge (the F-1 window — the first attempt won the claim).
+    store = EngineOutputStore(journal_dir=engine_output_dir_for(tmp_path))
+    loop = _ReconcilerRecoveryLoop(outcome_kind=ResumeOutcomeKind.ABORT_REVALIDATION_FAILED)
+    child_ctx = _Ctx(
+        ledger=_Ledger(),
+        reader=_LedgerReader({}),  # resume_at 0 (a step-0 engine pause still fires the reconverge)
+        store=store,
+        dispatchers=_Registry(_Echo()),
+        engine_recovery_loop=loop,
+    )
+    runner = compose_child_workflow_runner(cast(Any, child_ctx))
+
+    ledger_writer = _parent_ledger_writer(tmp_path)
+    dispatcher = RuntimeSubAgentDispatcher(
+        handoff_registry=RuntimeHandoffRegistry(),
+        topology_dispatcher=RuntimeTopologyDispatcher(),
+        tracer_provider=NoOpTracerProvider(),
+        child_workflow_runner=cast(Any, runner),
+        ledger_writer=ledger_writer,
+        audit_writer=RuntimeAuditLedgerWriter(
+            ledger_writer=ledger_writer, time_source=lambda: datetime.now(UTC)
+        ),
+        audit_signing_key_id="test-signing-key",
+        audit_signing_algorithm=SignatureAlgorithm.ED25519,
+        time_source=lambda: datetime.now(UTC),
+        procedural_tier_snapshot_resolver=lambda: _Identifier("b" * 64),
+    )
+
+    # The parent FAILS CLOSED on the child's F-1 ABORT — NOT a SUCCESS aggregate.
+    with pytest.raises(SubAgentChildFailedError):
+        dispatcher.dispatch(
+            cast(Any, _parent_binding()),
+            _reconciler_subagent_step(),
+            step_context=_parent_step_context(),
+        )
+    # The child REALLY ran its crash-resume (the reconverge fired) and re-dispatched NOTHING
+    # (the ABORT short-circuited before the step loop — at-most-once through the full chain).
+    assert len(loop.resume_calls) == 1
+    assert child_ctx.step_dispatchers.lookup(StepKind.INFERENCE_STEP).dispatched == []

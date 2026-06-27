@@ -110,6 +110,11 @@ class _InMemoryBranchStore:
         self._dispatched_step_id: dict[str, dict[int, str | None]] = {}
         # B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT — dispatch-time SUB_AGENT child recoverability.
         self._subagent_recoverable: dict[str, dict[int, bool]] = {}
+        # B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-RECONCILER-CHILD — dispatch-time SUB_AGENT child
+        # EngineClass value (the cross-engine-class swap guard's dispatch-side marker). Absent →
+        # `dispatched_branch_child_engine_classes` omits the ordinal → the gate's same-engine
+        # conjunct fails closed.
+        self._subagent_engine: dict[str, dict[int, str | None]] = {}
         self._instrumented: set[str] = set()
         # B-FANOUT-CRASH-RESUME-ORCHESTRATOR-DISPATCH / MAYBE-RAN-RESOLUTION — {run_key:
         # orchestrator dispatch-time step_kind value | None} for runs whose orchestrator BEGAN
@@ -122,6 +127,10 @@ class _InMemoryBranchStore:
         # for a SUB_AGENT_DISPATCH orchestrator (the single-orchestrator analogue of
         # `_subagent_recoverable`). Absent → not recoverable (fail-closed at the classifier).
         self._orchestrator_subagent_recoverable: dict[str, bool] = {}
+        # B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-RECONCILER-CHILD — {run_key: child EngineClass
+        # value} for a SUB_AGENT_DISPATCH orchestrator (the cross-engine-class swap guard's
+        # dispatch-side marker). Absent → None → the gate's same-engine conjunct fails closed.
+        self._orchestrator_subagent_engine: dict[str, str | None] = {}
 
     def record_fanout_cardinality(self, run_key: str, branch_count: int) -> None:
         self._cardinality[run_key] = int(branch_count)
@@ -166,6 +175,7 @@ class _InMemoryBranchStore:
         step_id: str,
         step_kind: str,
         child_recoverable: bool | None = None,
+        child_engine_class: str | None = None,
     ) -> None:
         self._dispatched.setdefault(run_key, {})[int(branch_index)] = str(step_kind)
         self._dispatched_step_id.setdefault(run_key, {})[int(branch_index)] = str(step_id)
@@ -173,9 +183,16 @@ class _InMemoryBranchStore:
             self._subagent_recoverable.setdefault(run_key, {})[int(branch_index)] = bool(
                 child_recoverable
             )
+        if child_engine_class is not None:
+            self._subagent_engine.setdefault(run_key, {})[int(branch_index)] = str(
+                child_engine_class
+            )
 
     def subagent_child_recoverable_indexes(self, run_key: str) -> set[int]:
         return {bi for bi, ok in self._subagent_recoverable.get(run_key, {}).items() if ok}
+
+    def dispatched_branch_child_engine_classes(self, run_key: str) -> dict[int, str | None]:
+        return dict(self._subagent_engine.get(run_key, {}))
 
     def present_dispatched_indexes(self, run_key: str) -> set[int]:
         return set(self._dispatched.get(run_key, {}))
@@ -214,11 +231,14 @@ class _InMemoryBranchStore:
         step_id: str,
         step_kind: str,
         child_recoverable: bool | None = None,
+        child_engine_class: str | None = None,
     ) -> None:
         self._orchestrator_dispatched[run_key] = str(step_kind)
         self._orchestrator_dispatched_step_id[run_key] = str(step_id)
         if child_recoverable is not None:
             self._orchestrator_subagent_recoverable[run_key] = bool(child_recoverable)
+        if child_engine_class is not None:
+            self._orchestrator_subagent_engine[run_key] = str(child_engine_class)
 
     def orchestrator_dispatched(self, run_key: str) -> bool:
         return run_key in self._orchestrator_dispatched
@@ -231,6 +251,9 @@ class _InMemoryBranchStore:
 
     def orchestrator_subagent_child_recoverable(self, run_key: str) -> bool:
         return self._orchestrator_subagent_recoverable.get(run_key, False)
+
+    def orchestrator_dispatched_child_engine_class(self, run_key: str) -> str | None:
+        return self._orchestrator_subagent_engine.get(run_key)
 
     # -- test helper: a pre-v1.81 (v1.79-era) orchestrator marker (step_id only, no recorded
     # kind) → the maybe-ran classifier cannot prove re-fire-safety → fail-closed (the v1.79
@@ -4039,13 +4062,13 @@ def test_crash_resume_orchestrator_maybe_ran_sub_agent_recoverable_child_recover
 
 def test_crash_resume_orchestrator_maybe_ran_sub_agent_non_recoverable_child_fails_closed() -> None:
     """B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-SUBAGENT (R-FS-1) full-chain negative control —
-    a maybe-ran SUB_AGENT_DISPATCH orchestrator whose child is NOT recoverable (here a RECONCILER
-    child — its maybe-ran re-dispatch fires the U-CP-97 engine-layer reconverge whose F-1 won-CAS-
-    claim-retry ABORTs → §22.1 HITL, the registered `…-RECONCILER-CHILD` follow-on) STAYS fail-closed.
-    The production dispatch records `child_recoverable=False`, so the resume classifier's dual gate
-    fails → the run cannot recover. (Was a SAVE_POINT child before the `…-SAVE-POINT-CHILD` close
-    flipped SAVE_POINT recoverable; RECONCILER is now the contrasting non-recoverable baseline that
-    breaks if the decomposition boundary is ever accidentally widened to RECONCILER.)"""
+    a maybe-ran SUB_AGENT_DISPATCH orchestrator whose child is NOT recoverable (here a
+    PURE_PATTERN_NO_ENGINE child — the lone non-durable engine class: no resume / no durable output
+    store → a re-dispatch would re-run fresh, not auto-resume) STAYS fail-closed. The production
+    dispatch records `child_recoverable=False`, so the resume classifier's dual gate fails → the run
+    cannot recover. (Was a RECONCILER child before the `…-RECONCILER-CHILD` close flipped RECONCILER
+    recoverable; PURE_PATTERN_NO_ENGINE is now the contrasting non-recoverable baseline that breaks
+    if the engine-class gate is ever accidentally widened to admit it.)"""
     store = _InMemoryBranchStore()
     orch = WorkflowStep(
         step_id=StepID("orch"),
@@ -4053,7 +4076,7 @@ def test_crash_resume_orchestrator_maybe_ran_sub_agent_non_recoverable_child_fai
         step_payload={
             "index": 0,
             "child_manifest_entry": {
-                "engine_class": EngineClass.RECONCILER_LOOP.value,  # F-1 CAS-claim ABORT window
+                "engine_class": EngineClass.PURE_PATTERN_NO_ENGINE.value,  # non-durable, no resume
                 "topology_pattern": TopologyPattern.SINGLE_THREADED_LINEAR.value,
             },
             "child_steps": [{"step_kind": StepKind.TOOL_STEP.value}],
@@ -4141,6 +4164,64 @@ def test_crash_resume_orchestrator_maybe_ran_sub_agent_save_point_child_recovers
     )
     assert r2.status is RunStatus.SUCCESS
     # Recovered → the whole fan-out re-ran fresh (orchestrator re-dispatch → SAVE_POINT child
+    # auto-resume); no spurious double-dispatch.
+    assert resume.dispatched == ["orch", "w-0", "w-1"]
+
+
+def test_crash_resume_orchestrator_maybe_ran_sub_agent_reconciler_child_recovers() -> None:
+    """B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-RECONCILER-CHILD (R-FS-1) full-chain — a maybe-ran
+    SUB_AGENT_DISPATCH orchestrator whose child is a RECONCILER_LOOP LINEAR leaf now RECOVERS at the
+    PARENT classifier (was: fail-closed — RECONCILER was the negative control before this close). The
+    PRODUCTION orchestrator dispatch records `child_recoverable=True` (the predicate now admits
+    RECONCILER via the dedicated `_SUBAGENT_RECOVERABLE_CHILD_ENGINE_CLASSES`); on crash-resume the
+    [P1-b] dual gate is satisfied (marker True + resumed `steps[0]` recoverable + same step_id) → the
+    whole fan-out re-runs fresh and the orchestrator re-dispatches. The re-dispatched child then runs
+    its OWN crash-resume (the U-CP-97 reconverge): the not-won-claim cases auto-resume; the F-1
+    won-CAS-claim window ABORTs → child FAILED → parent fail-closed — both at-most-once-safe (the
+    full-chain F-1 disposition + the clean auto-resume are witnessed end-to-end at the runtime
+    integration `test_recursive_child_crash_resume_reconciler_*`). RED before the predicate
+    extension: the marker recorded `child_recoverable=False` → the dual gate failed → fail-closed."""
+    store = _InMemoryBranchStore()
+    orch = WorkflowStep(
+        step_id=StepID("orch"),
+        step_kind=StepKind.SUB_AGENT_DISPATCH,
+        step_payload={
+            "index": 0,
+            "child_manifest_entry": {
+                "engine_class": EngineClass.RECONCILER_LOOP.value,
+                "topology_pattern": TopologyPattern.SINGLE_THREADED_LINEAR.value,
+            },
+            "child_steps": [{"step_kind": StepKind.TOOL_STEP.value}],
+        },
+    )
+    steps = [orch, _step("w-0", 0), _step("w-1", 1)]
+    _run_persona(
+        workflow_id="wf-ow-orch-subagent-reconciler",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=2),
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+        registry=_AnyKindRegistry(_CountingDispatcher(n=2)),
+    )
+    key = store.sole_run_key()
+    # The PRODUCTION orchestrator dispatch recorded the RECONCILER child as recoverable.
+    assert store.orchestrator_subagent_child_recoverable(key) is True
+    store.forget_orchestrator_maybe_ran(key)
+    assert store.orchestrator_subagent_child_recoverable(key) is True
+
+    resume = _CountingDispatcher(n=2)
+    r2 = _run_persona(
+        workflow_id="wf-ow-orch-subagent-reconciler",
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+        registry=_AnyKindRegistry(resume),
+    )
+    assert r2.status is RunStatus.SUCCESS
+    # Recovered → the whole fan-out re-ran fresh (orchestrator re-dispatch → RECONCILER child
     # auto-resume); no spurious double-dispatch.
     assert resume.dispatched == ["orch", "w-0", "w-1"]
 

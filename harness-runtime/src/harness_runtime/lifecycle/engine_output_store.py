@@ -371,6 +371,7 @@ class EngineOutputStore:
         step_id: str,
         step_kind: str,
         child_recoverable: bool | None = None,
+        child_engine_class: str | None = None,
     ) -> None:
         """Mark a fan-out branch as DISPATCHED (the reserve-before-dispatch marker), durably.
 
@@ -397,10 +398,31 @@ class EngineOutputStore:
         double-fire, or a SAVE_POINT/RECONCILER/fan-out child → suffix-only ``final_state`` →
         fold corruption). The DISPATCH-TIME value (the at-most-once changed-manifest guard).
         ``None`` (every non-SUB_AGENT_DISPATCH branch + pre-arc markers) → the field is OMITTED
-        so those markers hash/parse byte-identically to before."""
+        so those markers hash/parse byte-identically to before.
+
+        ``child_engine_class`` (B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-RECONCILER-CHILD) — for
+        a SUB_AGENT_DISPATCH worker only, the child's DISPATCH-TIME ``EngineClass`` value string.
+        The cross-engine-class swap guard (out-of-family Codex [P1]): once >1 durable engine class
+        is re-dispatch-recoverable ({ESR,WAL,SAVE_POINT,RECONCILER}), ``child_recoverable=True``
+        no longer pins WHICH recovery mechanism the child will use. A maybe-ran child whose marker
+        recorded one recoverable engine (e.g. RECONCILER) but whose RESUMED manifest supplies a
+        DIFFERENT recoverable engine (e.g. SAVE_POINT) under the SAME ``step_id`` passes both
+        boolean recoverability gates; because ``compose_child_run_id_seed`` is
+        engine-class-AGNOSTIC (hashes only parent_idempotency_key + branch_path +
+        child_workflow_id), the swap re-dispatches the child against the SAME durable store through
+        a DIFFERENT recovery
+        mechanism → the RECONCILER CAS at-most-once protection is bypassed (unlike the documented
+        child-swap / tool-swap parities, which CHANGE the key). Read by
+        ``dispatched_branch_child_engine_classes`` so the maybe-ran gate requires the marker engine
+        == the resumed engine (fail closed on mismatch / ``None``) — the engine-class leg of the
+        same-identity guard (mirrors the same-kind + changed-step_id legs). ``None`` (every
+        non-SUB_AGENT_DISPATCH branch + pre-arc markers) → the field is OMITTED so those markers
+        hash/parse byte-identically to before."""
         record: dict[str, object] = {"step_id": str(step_id), "step_kind": str(step_kind)}
         if child_recoverable is not None:
             record["child_recoverable"] = bool(child_recoverable)
+        if child_engine_class is not None:
+            record["child_engine_class"] = str(child_engine_class)
         line = json.dumps(record, sort_keys=True)
         self._append_path(self._branch_dispatched_file(run_key, branch_index), line)
 
@@ -528,6 +550,43 @@ class EngineOutputStore:
             step_ids[branch_index] = step_id
         return step_ids
 
+    def dispatched_branch_child_engine_classes(self, run_key: str) -> dict[int, str | None]:
+        """Return ``{branch_index: dispatch-time child EngineClass value}`` for every DISPATCHED
+        marker (B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-RECONCILER-CHILD).
+
+        The cross-engine-class swap guard (out-of-family Codex [P1]): the maybe-ran SUB_AGENT
+        recovery gate keys on this — the ORIGINAL (dispatch-time) child engine class recorded in
+        the marker — and requires it to EQUAL the resumed manifest's child engine class. Without
+        it, a maybe-ran child whose marker recorded one recoverable engine (e.g. RECONCILER) but
+        whose resumed manifest supplies a DIFFERENT recoverable engine (e.g. SAVE_POINT) under the
+        same ``step_id`` passes both boolean recoverability gates and re-dispatches against the SAME
+        engine-class-agnostic ``compose_child_run_id_seed`` durable store through a DIFFERENT
+        recovery mechanism → the RECONCILER CAS at-most-once protection is bypassed. A marker
+        missing / with an unreadable / non-str ``child_engine_class`` (a non-SUB_AGENT branch, a
+        pre-arc marker, or a torn write) maps to ``None`` → the gate treats it as a mismatch (fail
+        closed — cannot prove
+        the original engine). Presence-only on the index (mirrors ``dispatched_branch_kinds`` /
+        ``dispatched_branch_step_ids``); the engine class is best-effort."""
+        branches_dir = self._branches_dir(run_key)
+        if not branches_dir.exists():
+            return {}
+        engines: dict[int, str | None] = {}
+        for path in branches_dir.glob("branch-*.dispatched"):
+            branch_index = self._dispatched_index_from_name(path.name)
+            if branch_index is None:
+                continue
+            engine: str | None = None
+            try:
+                record = json.loads(path.read_text(encoding="utf-8").splitlines()[-1])
+                raw = record.get("child_engine_class")
+                engine = raw if isinstance(raw, str) else None
+            except (OSError, UnicodeDecodeError, ValueError, IndexError, KeyError, AttributeError):
+                # torn / pre-arc / invalid-encoding marker → unknown → fail-closed at the
+                # classifier (same corruption boundary as ``dispatched_branch_kinds``).
+                engine = None
+            engines[branch_index] = engine
+        return engines
+
     def record_dispatch_instrumented(self, run_key: str) -> None:
         """Stamp this run as DISPATCH-INSTRUMENTED (the cross-version guard), durably.
 
@@ -568,6 +627,7 @@ class EngineOutputStore:
         step_id: str,
         step_kind: str,
         child_recoverable: bool | None = None,
+        child_engine_class: str | None = None,
     ) -> None:
         """Mark the ORCHESTRATOR_WORKERS ``steps[0]`` orchestrator as DISPATCHED, durably.
 
@@ -595,10 +655,21 @@ class EngineOutputStore:
         ``record_branch_dispatched(child_recoverable=...)``). The DISPATCH-TIME value (the
         at-most-once changed-manifest guard). ``None`` (every non-SUB_AGENT_DISPATCH
         orchestrator + pre-arc markers) → the field is OMITTED so those markers hash/parse
+        byte-identically to before.
+
+        ``child_engine_class`` (B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-RECONCILER-CHILD) — the
+        orchestrator analogue of the worker ``record_branch_dispatched(child_engine_class=...)``:
+        the child's DISPATCH-TIME ``EngineClass`` value string. Read by
+        ``orchestrator_dispatched_child_engine_class`` so the maybe-ran orchestrator gate requires
+        the marker engine == the resumed engine (the cross-engine-class swap guard, out-of-family
+        Codex [P1]; fail closed on mismatch / ``None``). ``None`` (every non-SUB_AGENT_DISPATCH
+        orchestrator + pre-arc markers) → the field is OMITTED so those markers hash/parse
         byte-identically to before."""
         record: dict[str, object] = {"step_id": str(step_id), "step_kind": str(step_kind)}
         if child_recoverable is not None:
             record["child_recoverable"] = bool(child_recoverable)
+        if child_engine_class is not None:
+            record["child_engine_class"] = str(child_engine_class)
         line = json.dumps(record, sort_keys=True)
         self._append_path(self._orchestrator_dispatched_file(run_key), line)
 
@@ -658,6 +729,31 @@ class EngineOutputStore:
         try:
             record = json.loads(path.read_text(encoding="utf-8").splitlines()[-1])
             raw = record.get("step_id")
+            return raw if isinstance(raw, str) else None
+        except (OSError, UnicodeDecodeError, ValueError, IndexError, KeyError, AttributeError):
+            return None
+
+    def orchestrator_dispatched_child_engine_class(self, run_key: str) -> str | None:
+        """Return the orchestrator's recorded DISPATCH-TIME child ``EngineClass`` value
+        (B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-RECONCILER-CHILD).
+
+        The orchestrator analogue of ``dispatched_branch_child_engine_classes``: the maybe-ran
+        SUB_AGENT orchestrator gate keys on this — the ORIGINAL (dispatch-time) child engine class —
+        and requires it to EQUAL the resumed ``steps[0]`` child engine class (the
+        cross-engine-class swap guard, out-of-family Codex [P1]). Without it, a maybe-ran
+        orchestrator whose marker recorded one recoverable engine but whose resumed manifest
+        supplies a DIFFERENT recoverable engine under the same ``step_id`` passes both boolean
+        recoverability gates and re-dispatches against the SAME engine-class-agnostic
+        ``compose_child_run_id_seed`` durable store through a DIFFERENT recovery mechanism → the
+        RECONCILER CAS at-most-once protection is bypassed. A marker missing / with an unreadable /
+        non-str ``child_engine_class`` (a non-SUB_AGENT orchestrator, a pre-arc marker, or a torn
+        write) maps to ``None`` → mismatch → fail closed."""
+        path = self._orchestrator_dispatched_file(run_key)
+        if not path.exists():
+            return None
+        try:
+            record = json.loads(path.read_text(encoding="utf-8").splitlines()[-1])
+            raw = record.get("child_engine_class")
             return raw if isinstance(raw, str) else None
         except (OSError, UnicodeDecodeError, ValueError, IndexError, KeyError, AttributeError):
             return None

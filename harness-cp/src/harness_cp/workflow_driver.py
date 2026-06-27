@@ -42,6 +42,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextvars import ContextVar
 from datetime import UTC, datetime
 from enum import Enum
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Literal, Protocol, cast, runtime_checkable
 
 from harness_as.sandbox_tier import SandboxTier
@@ -698,25 +699,37 @@ _FANOUT_REPLAY_ENGINE_CLASSES: frozenset[EngineClass] = frozenset(
     {EngineClass.EVENT_SOURCED_REPLAY, EngineClass.WAL_SEGMENT}
 )
 
-# B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-SAVE-POINT-CHILD (R-FS-1) — the child engine classes
+# B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-RECONCILER-CHILD (R-FS-1) — the child engine classes
 # whose maybe-ran SUB_AGENT_DISPATCH re-dispatch is RECOVERABLE: re-dispatching the child under
 # the deterministic child run_id auto-resumes it from its durable store (`resume_at>0` via the
 # engine-class-agnostic F2-prefix join, `_determine_resume_at`) AND reconstructs a result-faithful
-# `final_state` (no parent-fold corruption). SAVE_POINT_CHECKPOINT JOINED ESR/WAL here: its
-# final_state reconstructs (CP v1.79 class-agnostic EngineOutputStore) AND a SAVE_POINT resume
-# fires NO engine-layer recovery loop / CAS-claim (the cleanest auto-resume, no F-1 ABORT window).
-# RECONCILER_LOOP stays OUT pending the registered
-# `B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-RECONCILER-CHILD` (its U-CP-97 reconverge
-# `attempt_resume` carries the F-1 won-CAS-claim-retry-ABORTs-to-HITL window). This is DEDICATED
-# to the recoverability predicate — DISTINCT from `_FANOUT_REPLAY_ENGINE_CLASSES`, which the
-# SEPARATE `_fanout_replay_store` branch-capture gate (B-FANOUT-OUTPUT-REPLAY) also consumes and
-# must NOT admit SAVE_POINT (carrier segregation, not a shared-constant widen). The CP-side MIRROR
+# `final_state` (no parent-fold corruption). ALL FOUR durable resumable engine classes are now
+# members (PURE_PATTERN_NO_ENGINE, the lone non-durable class with no resume, is the sole
+# non-member). SAVE_POINT_CHECKPOINT joined ESR/WAL at the `…-SAVE-POINT-CHILD` close;
+# RECONCILER_LOOP JOINS here. The RECONCILER admission is at-most-once-safe WITHOUT first the F-1
+# engine-lock arc: a re-dispatched maybe-ran RECONCILER child runs its OWN crash-resume, which
+# fires the U-CP-97 engine-layer reconverge (`attempt_resume`) gated AT THE CAS CLAIM, upstream of
+# the step loop (`reconciler_pause_resume_substrate.py` F-1). Three exhaustive re-dispatch cases,
+# all safe: (1) child never won a claim → cleanly RE-CLAIMs the revision → auto-resumes the
+# committed prefix (F2-skipped, not re-fired); (2) clean RESUME_CLEAN → same; (3) the F-1 window —
+# the child WON the claim then crashed mid-re-execution → the retry of the already-claimed revision
+# ABORTs (`ABORT_REVALIDATION_FAILED`) → the child returns RunStatus.FAILED *before any step
+# re-executes* (at-most-once preserved, NEVER a double-fire) → the parent fold raises
+# `SubAgentChildFailedError` (fail-closed; never a SUCCESS aggregate from a failed child). So
+# admitting RECONCILER strictly IMPROVES the not-won-claim cases (recover vs fail-the-parent-closed)
+# and routes the F-1 window through the SAME already-on-main RECONCILER-resume ABORT→§22.1-HITL
+# disposition (#779/#781) — the registered F-1 engine-lock auto-recovery arc improves ALL RECONCILER
+# resumes and is NOT a prerequisite for this child-recoverability slice. This is DEDICATED to the
+# recoverability predicate — DISTINCT from `_FANOUT_REPLAY_ENGINE_CLASSES`, which the SEPARATE
+# `_fanout_replay_store` branch-capture gate (B-FANOUT-OUTPUT-REPLAY) also consumes and must NOT
+# admit SAVE_POINT/RECONCILER (carrier segregation, not a shared-constant widen). The CP-side MIRROR
 # of the runtime `_SUBAGENT_RECOVERABLE_CHILD_ENGINE_CLASSES` (agreement witness enforces parity).
 _SUBAGENT_RECOVERABLE_CHILD_ENGINE_CLASSES: frozenset[EngineClass] = frozenset(
     {
         EngineClass.EVENT_SOURCED_REPLAY,
         EngineClass.WAL_SEGMENT,
         EngineClass.SAVE_POINT_CHECKPOINT,
+        EngineClass.RECONCILER_LOOP,
     }
 )
 
@@ -898,19 +911,22 @@ def _subagent_child_recoverable(step: WorkflowStep) -> bool | None:
     The THREE conjuncts (the corrected predicate over the #746 reverted branch, which keyed on the
     engine class ALONE → reverted on the [P1-a] result-fidelity gap):
 
-    1. child engine ∈ `_SUBAGENT_RECOVERABLE_CHILD_ENGINE_CLASSES` ({ESR,WAL,SAVE_POINT}) —
-       durable output store → the resumed child auto-resumes (`resume_at>0` via the
-       engine-class-agnostic F2-prefix join `_determine_resume_at`) AND its `final_state`
-       reconstructs. SAVE_POINT_CHECKPOINT JOINED at the `…-SAVE-POINT-CHILD` close (R-FS-1):
-       final_state reconstructs (the class-agnostic EngineOutputStore, v1.79) AND a SAVE_POINT
-       resume fires NO engine-layer recovery loop / CAS-claim — the cleanest auto-resume (no F-1
-       ABORT window). RECONCILER_LOOP stays OUT pending the registered
-       `B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-RECONCILER-CHILD` arc: a maybe-ran RECONCILER
-       child re-dispatch fires the U-CP-97 engine-layer reconverge (`attempt_resume`), whose F-1
-       limit ABORTs a won-CAS-claim retry → §22.1 HITL (`reconciler_pause_resume_substrate.py`
-       F-1) → widening this fail-closed gate over that at-most-once question needs its own
-       grounding. (DEDICATED set, distinct from `_FANOUT_REPLAY_ENGINE_CLASSES` which the separate
-       `_fanout_replay_store` branch-capture gate consumes — carrier segregation.)
+    1. child engine ∈ `_SUBAGENT_RECOVERABLE_CHILD_ENGINE_CLASSES`
+       ({ESR,WAL,SAVE_POINT,RECONCILER}) — durable output store → the resumed child auto-resumes
+       (`resume_at>0` via the engine-class-agnostic F2-prefix join `_determine_resume_at`) AND its
+       `final_state` reconstructs. ALL FOUR durable resumable classes are members
+       (PURE_PATTERN_NO_ENGINE, the lone non-durable class, is the sole non-member). SAVE_POINT
+       joined at the `…-SAVE-POINT-CHILD` close (no CAS-claim, no F-1 window); RECONCILER_LOOP joins
+       at the `…-RECONCILER-CHILD` close (R-FS-1): a maybe-ran RECONCILER child re-dispatch runs its
+       OWN crash-resume, which fires the U-CP-97 reconverge (`attempt_resume`) gated AT THE CLAIM,
+       upstream of the step loop — so the F-1 won-CAS-claim-retry window manifests as
+       `ABORT_REVALIDATION_FAILED` → child RunStatus.FAILED *before any step re-executes*
+       (at-most-once preserved) → the parent fold raises `SubAgentChildFailedError` (fail-closed;
+       never a SUCCESS aggregate). Admitting RECONCILER strictly improves the not-won-claim cases
+       and routes the F-1 window through the SAME on-main RECONCILER-resume ABORT→§22.1-HITL
+       disposition; the F-1 engine-lock auto-recovery arc improves ALL RECONCILER resumes and is NOT
+       a prerequisite here. (DEDICATED set, distinct from `_FANOUT_REPLAY_ENGINE_CLASSES` which the
+       separate `_fanout_replay_store` branch-capture gate consumes — carrier segregation.)
     2. child topology == SINGLE_THREADED_LINEAR — the WITNESSED scope (#770); a fan-out child's own
        reconstruction is the registered follow-on ("no nested sub-agents" ≠ "no recursion").
     3. no child step kind is SUB_AGENT_DISPATCH / MANAGED_AGENTS — the leaf condition (deeper
@@ -958,6 +974,59 @@ def _subagent_child_recoverable(step: WorkflowStep) -> bool | None:
         return False
 
 
+def _subagent_child_engine_class(step: WorkflowStep) -> str | None:
+    """B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-RECONCILER-CHILD (R-FS-1) — the DISPATCH-TIME child
+    `EngineClass` value string for a SUB_AGENT_DISPATCH worker (else `None`).
+
+    The cross-engine-class swap guard (out-of-family Codex [P1], this arc).
+    `_subagent_child_recoverable` admits ALL FOUR durable engine classes
+    ({ESR,WAL,SAVE_POINT,RECONCILER}), so once >1 is recoverable a maybe-ran child whose marker
+    recorded one recoverable engine (e.g. RECONCILER) but whose RESUMED manifest supplies a
+    DIFFERENT recoverable engine (e.g. SAVE_POINT) under the SAME `step_id` passes both boolean
+    recoverability gates. `compose_child_run_id_seed` is engine-class-AGNOSTIC (hashes only
+    parent_idempotency_key + branch_path + child_workflow_id), so the swap re-dispatches the child
+    against the SAME durable store through a DIFFERENT recovery mechanism → the RECONCILER CAS
+    at-most-once protection is bypassed (UNLIKE the documented child-swap / tool-swap parities,
+    which CHANGE the key). Persisting (marker) + comparing (gate) this value lets the maybe-ran
+    SUB_AGENT gate require the marker engine == the resumed engine (fail closed on mismatch /
+    `None`) — the engine-class leg of the same-identity guard (mirrors the same-kind +
+    changed-step_id legs).
+
+    Reads the opaque `step_payload` DEFENSIVELY (the CP driver does not own the runtime payload
+    type), the SAME engine-class read as `_subagent_child_recoverable` conjunct 1. Any read/parse
+    failure → `None` (fail closed at the gate), NEVER an exception that breaks dispatch."""
+    if step.step_kind is not StepKind.SUB_AGENT_DISPATCH:
+        return None
+    try:
+        cme: Any = step.step_payload["child_manifest_entry"]
+        try:
+            ec_raw: Any = cme["engine_class"]
+        except (TypeError, KeyError):
+            ec_raw = cme.engine_class
+        ec = ec_raw if isinstance(ec_raw, EngineClass) else EngineClass(ec_raw)
+        return ec.value
+    except (TypeError, KeyError, ValueError, AttributeError):
+        return None
+
+
+def _resumed_subagent_child_engine_by_ordinal(
+    branch_steps: Sequence[WorkflowStep], *, branch_count: int, orchestrated: bool
+) -> dict[int, str | None]:
+    """B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-RECONCILER-CHILD (R-FS-1) — `{ordinal: RESUMED
+    manifest child EngineClass value}` for the WORKER/PEER ordinals (the resumed-side half of the
+    cross-engine-class swap guard). Compared against the dispatch-time marker engine (the store's
+    `dispatched_branch_child_engine_classes`) in `_fence_unrecoverable_maybe_ran_indices`; a
+    mismatch / `None` fails closed. Same offset scheme as
+    `_resumed_subagent_recoverable_by_ordinal`; out-of-range ordinals omitted (→ `None` at the gate
+    → fail closed)."""
+    offset = 1 if orchestrated else 0
+    return {
+        bi: _subagent_child_engine_class(branch_steps[bi + offset])
+        for bi in range(branch_count)
+        if 0 <= bi + offset < len(branch_steps)
+    }
+
+
 def _resumed_subagent_recoverable_by_ordinal(
     branch_steps: Sequence[WorkflowStep], *, branch_count: int, orchestrated: bool
 ) -> set[int]:
@@ -990,6 +1059,8 @@ def _fence_unrecoverable_maybe_ran_indices(
     resumed_step_ids: Mapping[int, str],
     subagent_recoverable_indexes: Collection[int] = frozenset(),
     resumed_subagent_recoverable_indexes: Collection[int] = frozenset(),
+    dispatched_child_engines: Mapping[int, str | None] = MappingProxyType({}),
+    resumed_child_engines: Mapping[int, str | None] = MappingProxyType({}),
 ) -> set[int]:
     """B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE (R-FS-1) — the subset of `unsafe_indices` (the
     re-fire-UNSAFE maybe-ran ordinals from `_refire_unsafe_branch_indices`) that ALSO cannot be
@@ -1037,19 +1108,27 @@ def _fence_unrecoverable_maybe_ran_indices(
 
     B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT (R-FS-1) — a SUB_AGENT_DISPATCH worker is READ_ONLY at
     the parent gate; its only external effects live at the CHILD's tool sinks. A maybe-ran
-    SUB_AGENT_DISPATCH worker is RECOVERABLE iff its child was RECOVERABLE ({ESR,WAL} ∧ LINEAR ∧
-    leaf) BOTH at dispatch (`subagent_recoverable_indexes`, the marker — proves the child wrote
-    durable records to auto-resume from) AND in the RESUMED manifest
-    (`resumed_subagent_recoverable_indexes` — proves the re-dispatch goes through the replay
-    store/fence path, not a fresh non-recoverable run). Requiring BOTH closes the changed-manifest
-    hole ([P1-b], #746 `6930e7ef`): a child edited recoverable→non-recoverable between dispatch +
-    resume has durable records (dispatch True) but the re-dispatch runs the non-recoverable child
-    FRESH (resumed False) → double-fire / suffix-only corruption. Re-dispatching a recoverable
+    SUB_AGENT_DISPATCH worker is RECOVERABLE iff its child was RECOVERABLE
+    ({ESR,WAL,SAVE_POINT,RECONCILER} ∧ LINEAR ∧ leaf) BOTH at dispatch
+    (`subagent_recoverable_indexes`, the marker — proves the child wrote durable records to
+    auto-resume from) AND in the RESUMED manifest (`resumed_subagent_recoverable_indexes` — proves
+    the re-dispatch goes through the replay store/fence path, not a fresh non-recoverable run) AND
+    with the SAME child engine class at dispatch + resume (`dispatched_child_engines` ==
+    `resumed_child_engines` — the cross-engine-class swap guard, out-of-family Codex [P1]: once >1
+    durable engine class is recoverable, a same-step_id RECONCILER→SAVE_POINT swap would otherwise
+    re-dispatch the child against the engine-class-agnostic-seeded SAME durable store through a
+    DIFFERENT recovery mechanism, bypassing the RECONCILER CAS at-most-once protection; marker
+    engine missing → None → fail closed). Requiring all three closes the changed-manifest hole
+    ([P1-b], #746 `6930e7ef`, + the engine-class leg this arc): a child edited
+    recoverable→non-recoverable between dispatch + resume has durable records (dispatch True) but
+    the re-dispatch runs the non-recoverable child FRESH (resumed False) → double-fire / suffix-only
+    corruption. Re-dispatching a recoverable
     child auto-resumes it under the deterministic child run_id (composer-derived from the worker's
     stable per-branch key) → at-most-once is COMPOSITIONAL (the child recursively re-applies this
     same classifier). ACCEPTED PARITY (documented, mirrors the TOOL_STEP tool-swap): a
     child-workflow-id SWAP under the same step_id composes a DIFFERENT deterministic child run_id →
-    the new child runs fresh under its own key (per-child at-most-once PRESERVED)."""
+    the new child runs fresh under its own key (per-child at-most-once PRESERVED) — UNLIKE an
+    engine-class swap, which keeps the same seed and is fail-closed above."""
     _tool = _FANOUT_MAYBE_RAN_FENCE_RECOVERABLE_KIND_VALUES
     _subagent = StepKind.SUB_AGENT_DISPATCH.value
     return {
@@ -1079,12 +1158,24 @@ def _fence_unrecoverable_maybe_ran_indices(
                 )
                 # 2. SUB_AGENT_DISPATCH child-recursive-recovery — same-kind (marker AND resumed
                 #    both SUB_AGENT_DISPATCH) AND child recoverable BOTH at dispatch (the marker)
-                #    AND in the resumed manifest (the [P1-b] dual gate, #746 `6930e7ef`).
+                #    AND in the resumed manifest (the [P1-b] dual gate, #746 `6930e7ef`) AND the
+                #    SAME-ENGINE guard (out-of-family Codex [P1], …-RECONCILER-CHILD arc): the
+                #    marker's dispatch-time child engine class == the resumed manifest's child
+                #    engine class. Load-bearing once >1 durable engine class is recoverable
+                #    ({ESR,WAL,SAVE_POINT,RECONCILER}): a CROSS-ENGINE swap (marker RECONCILER,
+                #    resumed SAVE_POINT) under the same step_id passes BOTH booleans above, and
+                #    `compose_child_run_id_seed` is engine-class-agnostic → the swap re-dispatches
+                #    the child against the SAME durable store through a DIFFERENT recovery
+                #    mechanism, bypassing the RECONCILER CAS at-most-once protection (UNLIKE the
+                #    child-swap / tool-swap parities, which CHANGE the key). Marker engine missing
+                #    (torn / pre-arc) → None → mismatch → fail closed.
                 or (
                     dispatched_kinds.get(bi) == _subagent
                     and resumed_kinds.get(bi) == _subagent
                     and bi in subagent_recoverable_indexes
                     and bi in resumed_subagent_recoverable_indexes
+                    and dispatched_child_engines.get(bi) is not None
+                    and dispatched_child_engines.get(bi) == resumed_child_engines.get(bi)
                 )
             )
         )
@@ -1106,6 +1197,21 @@ def _subagent_recoverable_marker_indexes(store: Any, run_key: str) -> set[int]:
     return set(reader(run_key))
 
 
+def _dispatched_child_engines_from_marker(store: Any, run_key: str) -> dict[int, str | None]:
+    """B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-RECONCILER-CHILD (R-FS-1) — defensive read of the
+    DISPATCH-TIME `{ordinal: child EngineClass value}` marker map from the bound store (the
+    cross-engine-class swap guard's dispatch-side half).
+
+    A store that predates / does not implement the reader (a pre-arc store, a partial test fake) →
+    empty map → the gate's `dispatched_child_engines.get(bi)` is `None` → every maybe-ran SUB_AGENT
+    branch fails closed at the same-engine conjunct (presence ≠ validity; never auto-recover on an
+    un-answerable store). Mirrors the `_subagent_recoverable_marker_indexes` getattr idiom."""
+    reader = getattr(store, "dispatched_branch_child_engine_classes", None)
+    if reader is None:
+        return {}
+    return dict(reader(run_key))
+
+
 def _orchestrator_subagent_recoverable(store: Any, run_key: str) -> bool:
     """B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-SUBAGENT (R-FS-1) — defensive read of the
     DISPATCH-TIME orchestrator child-recoverable marker (the single-orchestrator analogue of
@@ -1119,6 +1225,22 @@ def _orchestrator_subagent_recoverable(store: Any, run_key: str) -> bool:
     if reader is None:
         return False
     return bool(reader(run_key))
+
+
+def _orchestrator_dispatched_child_engine(store: Any, run_key: str) -> str | None:
+    """B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-RECONCILER-CHILD (R-FS-1) — defensive read of the
+    DISPATCH-TIME orchestrator child `EngineClass` value marker (the single-orchestrator analogue
+    of `_dispatched_child_engines_from_marker`; the cross-engine-class swap guard's dispatch half).
+
+    A store that predates / does not implement the reader (a pre-arc store, a partial test fake) →
+    `None` → the orchestrator gate's same-engine conjunct fails closed (presence ≠ validity; never
+    auto-recover on an un-answerable store). Mirrors the `_orchestrator_subagent_recoverable`
+    getattr idiom — additive, fail-closed."""
+    reader = getattr(store, "orchestrator_dispatched_child_engine_class", None)
+    if reader is None:
+        return None
+    result = reader(run_key)
+    return result if isinstance(result, str) else None
 
 
 def _fanout_replay_store(ctx: DriverContext, manifest_entry: WorkflowManifestEntry) -> Any:
@@ -1191,17 +1313,22 @@ def _mark_branch_dispatched(
 
     B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT (R-FS-1) — for a SUB_AGENT_DISPATCH branch the marker
     ALSO records the DISPATCH-TIME child recoverability (`_subagent_child_recoverable(step)` — the
-    opaque child manifest's `{ESR,WAL}` ∧ LINEAR ∧ leaf predicate) so the maybe-ran classifier
-    re-dispatches a SUB_AGENT_DISPATCH worker ONLY when its child can auto-resume result-faithfully
-    under the deterministic run_id. `None` (`step` not threaded, or a non-SUB_AGENT branch) → the
-    field is omitted (marker byte-identical). No-op unless replay-capable ∧ store-bound."""
+    opaque child manifest's `{ESR,WAL,SAVE_POINT,RECONCILER}` ∧ LINEAR ∧ leaf predicate) so the
+    maybe-ran classifier re-dispatches a SUB_AGENT_DISPATCH worker ONLY when its child can
+    auto-resume result-faithfully under the deterministic run_id, AND the DISPATCH-TIME child
+    engine class (`_subagent_child_engine_class(step)`) so the maybe-ran gate fails closed on a
+    same-step_id cross-engine-class swap (out-of-family Codex [P1], …-RECONCILER-CHILD arc). `None`
+    (`step` not
+    threaded, or a non-SUB_AGENT branch) → both fields are omitted (marker byte-identical). No-op
+    unless replay-capable ∧ store-bound."""
     _store = _fanout_replay_store(ctx, manifest_entry)
     if _store is not None:
         _child_recoverable = _subagent_child_recoverable(step) if step is not None else None
+        _child_engine_class = _subagent_child_engine_class(step) if step is not None else None
         if _child_recoverable is None:
-            # Non-SUB_AGENT branch (or `step` not threaded) → the recoverability field is
-            # omitted; call the store with the pre-arc signature (byte-identical marker; a store /
-            # fake that predates the additive `child_recoverable` kwarg is unaffected).
+            # Non-SUB_AGENT branch (or `step` not threaded) → the recoverability + engine-class
+            # fields are omitted; call the store with the pre-arc signature (byte-identical marker;
+            # a store / fake that predates the additive kwargs is unaffected).
             _store.record_branch_dispatched(
                 run_idempotency_key, branch_index, str(step_id), str(step_kind.value)
             )
@@ -1212,6 +1339,7 @@ def _mark_branch_dispatched(
                 str(step_id),
                 str(step_kind.value),
                 child_recoverable=_child_recoverable,
+                child_engine_class=_child_engine_class,
             )
 
 
@@ -2652,6 +2780,18 @@ def _execute_workflow_body(
                                 },
                             )
                         ),
+                        dispatched_child_engines=_dispatched_child_engines_from_marker(
+                            _crash_replay_store, run_idempotency_key
+                        ),
+                        resumed_child_engines=_resumed_subagent_child_engine_by_ordinal(
+                            _crash_branch_steps,
+                            branch_count=_card_branch_count,
+                            orchestrated=manifest_entry.topology_pattern
+                            in {
+                                TopologyPattern.ORCHESTRATOR_WORKERS,
+                                TopologyPattern.HIERARCHICAL_DELEGATION,
+                            },
+                        ),
                     )
                     if not (_instrumented and not _dispatched_fail_closed):
                         return (
@@ -2874,6 +3014,14 @@ def _execute_workflow_body(
                                     orchestrated=_pr_orchestrated,
                                 )
                             ),
+                            dispatched_child_engines=_dispatched_child_engines_from_marker(
+                                _crash_replay_store, run_idempotency_key
+                            ),
+                            resumed_child_engines=_resumed_subagent_child_engine_by_ordinal(
+                                _crash_branch_steps,
+                                branch_count=_crash_expected,
+                                orchestrated=_pr_orchestrated,
+                            ),
                         )
                         if _pr_instrumented and not _pr_fence_unrecoverable:
                             _crash_pause_reconstruct_no_dispatch = True
@@ -3020,6 +3168,18 @@ def _execute_workflow_body(
                                         TopologyPattern.HIERARCHICAL_DELEGATION,
                                     },
                                 )
+                            ),
+                            dispatched_child_engines=_dispatched_child_engines_from_marker(
+                                _crash_replay_store, run_idempotency_key
+                            ),
+                            resumed_child_engines=_resumed_subagent_child_engine_by_ordinal(
+                                _crash_branch_steps,
+                                branch_count=_crash_expected,
+                                orchestrated=manifest_entry.topology_pattern
+                                in {
+                                    TopologyPattern.ORCHESTRATOR_WORKERS,
+                                    TopologyPattern.HIERARCHICAL_DELEGATION,
+                                },
                             ),
                         )
                         if not (_instrumented and not _maybe_ran_fail_closed):
@@ -6068,6 +6228,17 @@ def _determine_fanout_resume(
                     and _orchestrator_subagent_recoverable(store, run_key)
                     and bool(steps)
                     and _subagent_child_recoverable(steps[0]) is True
+                    # SAME-ENGINE guard (out-of-family Codex [P1], …-RECONCILER-CHILD arc): the
+                    # marker's dispatch-time child engine class == the resumed steps[0] child
+                    # engine class. Load-bearing once >1 durable engine class is recoverable: a
+                    # same-step_id RECONCILER→SAVE_POINT swap passes BOTH dual-gate booleans above,
+                    # and `compose_child_run_id_seed` is engine-class-agnostic → the swap
+                    # re-dispatches the child against the SAME durable store through a DIFFERENT
+                    # recovery mechanism, bypassing the RECONCILER CAS at-most-once protection.
+                    # Marker engine missing → None → mismatch → fail closed.
+                    and _orchestrator_dispatched_child_engine(store, run_key) is not None
+                    and _orchestrator_dispatched_child_engine(store, run_key)
+                    == _subagent_child_engine_class(steps[0])
                 ):
                     # B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-SUBAGENT (R-FS-1) — pristine
                     # window + dispatch-instrumented stamp + a SUB_AGENT_DISPATCH orchestrator whose
@@ -8735,14 +8906,19 @@ def _execute_orchestrator_workers(
                 # `record_branch_dispatched(... str(step_kind.value))` caller.
                 # B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-SUBAGENT — ALSO record whether a
                 # SUB_AGENT_DISPATCH orchestrator's child was RE-DISPATCH-RECOVERABLE at dispatch
-                # ({ESR,WAL} ∧ LINEAR ∧ leaf, the SAME `_subagent_child_recoverable` predicate the
-                # worker uses). `None` (non-SUB_AGENT orchestrator) → the additive kwarg is OMITTED
-                # entirely (out-of-family Codex [P2]: a store implementing the pre-v1.86 3-arg
-                # signature must not see a `child_recoverable=None` kwarg → TypeError), mirroring
-                # the worker `_mark_branch_dispatched` only-pass-when-not-None compatibility. The
-                # DISPATCH-TIME value (the at-most-once changed-manifest guard; the resumed-side
-                # half is `_subagent_child_recoverable(steps[0])`).
+                # ({ESR,WAL,SAVE_POINT,RECONCILER} ∧ LINEAR ∧ leaf, the SAME
+                # `_subagent_child_recoverable` predicate the worker uses) AND the DISPATCH-TIME
+                # child engine class (the cross-engine-class swap guard, out-of-family Codex [P1],
+                # …-RECONCILER-CHILD arc). `None` (non-SUB_AGENT orchestrator) → both additive
+                # kwargs are OMITTED entirely (out-of-family Codex [P2]: a store implementing the
+                # pre-v1.86 3-arg signature must not see a `child_recoverable=None` kwarg →
+                # TypeError), mirroring the worker `_mark_branch_dispatched`
+                # only-pass-when-not-None compatibility. The DISPATCH-TIME value (the at-most-once
+                # changed-manifest guard; the resumed-side half is
+                # `_subagent_child_recoverable(steps[0])` +
+                # `_subagent_child_engine_class(steps[0])`).
                 _orch_child_recoverable = _subagent_child_recoverable(orchestrator_step)
+                _orch_child_engine_class = _subagent_child_engine_class(orchestrator_step)
                 if _orch_child_recoverable is None:
                     _orch_replay_store.record_orchestrator_dispatched(
                         run_idempotency_key,
@@ -8755,6 +8931,7 @@ def _execute_orchestrator_workers(
                         str(orchestrator_step.step_id),
                         str(orchestrator_step.step_kind.value),
                         child_recoverable=_orch_child_recoverable,
+                        child_engine_class=_orch_child_engine_class,
                     )
             orchestrator_output = _orch_dispatcher.dispatch(
                 orchestrator_binding, orchestrator_step, step_context=orchestrator_context

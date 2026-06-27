@@ -1112,15 +1112,35 @@ def test_subagent_child_recoverable_true_for_save_point_child() -> None:
     assert subagent_child_recoverable(payload) is True
 
 
-def test_subagent_child_recoverable_false_for_reconciler_child() -> None:
-    """NEGATIVE CONTROL (the decomposition boundary, R-FS-1): a RECONCILER_LOOP LINEAR leaf child
-    STAYS non-recoverable even though its final_state reconstructs (CP v1.80). A maybe-ran RECONCILER
-    child re-dispatch fires the U-CP-97 engine-layer reconverge (`attempt_resume`), whose F-1 limit
-    ABORTs a won-CAS-claim retry → §22.1 HITL — a distinct at-most-once window the registered
-    `B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-RECONCILER-CHILD` arc must ground before widening this
-    fail-closed gate. This control breaks if RECONCILER is ever accidentally widened in."""
+def test_subagent_child_recoverable_true_for_reconciler_child() -> None:
+    """POSITIVE (the `…-RECONCILER-CHILD` close, R-FS-1): a RECONCILER_LOOP LINEAR leaf child is NOW
+    recoverable — its final_state reconstructs (CP v1.80) AND its re-dispatch is at-most-once-safe.
+    A maybe-ran RECONCILER child re-dispatch runs its OWN crash-resume, which fires the U-CP-97
+    engine-layer reconverge (`attempt_resume`) gated AT THE CAS CLAIM, upstream of the step loop:
+    the not-won-claim cases cleanly auto-resume; the F-1 won-CAS-claim-retry window ABORTs
+    (`ABORT_REVALIDATION_FAILED`) → child RunStatus.FAILED *before any step re-executes* → the parent
+    fold fails closed (`SubAgentChildFailedError`), NEVER a double-fire or a SUCCESS aggregate. The
+    grounding (advisor) confirmed the ABORT→§22.1-HITL disposition is the accepted on-main posture
+    (#779/#781); the F-1 engine-lock arc is NOT a prerequisite. Flipped from the prior negative
+    control. The full-chain F-1 disposition is witnessed at the integration `test_recursive_child_
+    crash_resume_reconciler_f1_abort_*` + `..._parent_folds_fail_closed`."""
     payload = _payload(
         engine_class=EngineClass.RECONCILER_LOOP,
+        topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+        child_step_kinds=(StepKind.TOOL_STEP,),
+    )
+    assert subagent_child_recoverable(payload) is True
+
+
+def test_subagent_child_recoverable_false_for_pure_pattern_child() -> None:
+    """NEGATIVE CONTROL (the engine-class boundary, R-FS-1): a PURE_PATTERN_NO_ENGINE LINEAR leaf
+    child STAYS non-recoverable — it is the lone non-durable engine class with no resume / no durable
+    output store, so a re-dispatch cannot auto-resume (it would re-run fresh → no at-most-once / no
+    final_state reconstruction). After the `…-RECONCILER-CHILD` close admitted all four durable
+    classes, PURE_PATTERN_NO_ENGINE is the sole non-member — this control breaks if the engine-class
+    gate is ever accidentally widened to admit it."""
+    payload = _payload(
+        engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
         topology=TopologyPattern.SINGLE_THREADED_LINEAR,
         child_step_kinds=(StepKind.TOOL_STEP,),
     )
@@ -1171,8 +1191,8 @@ def test_cp_and_runtime_recoverability_predicates_agree() -> None:
     recoverable shape + each negative-control shape."""
     from harness_cp.workflow_driver import _subagent_child_recoverable as _cp_recoverable
 
-    # (payload, expected_verdict) — the expected verdict ALSO locks the decomposition boundary
-    # (SAVE_POINT True / RECONCILER False), so an accidental future widen breaks here too.
+    # (payload, expected_verdict) — the expected verdict ALSO locks the engine-class boundary (all
+    # four durable classes True / PURE_PATTERN_NO_ENGINE False), so an accidental future widen breaks.
     cases = {
         "linear-esr-leaf": (
             _payload(
@@ -1196,7 +1216,15 @@ def test_cp_and_runtime_recoverability_predicates_agree() -> None:
                 topology=TopologyPattern.SINGLE_THREADED_LINEAR,
                 child_step_kinds=(StepKind.TOOL_STEP,),
             ),
-            False,  # the registered RECONCILER follow-on — stays fail-closed, both agree
+            True,  # the `…-RECONCILER-CHILD` close — now recoverable (F-1 ABORT→fail-closed-safe)
+        ),
+        "pure-pattern": (
+            _payload(
+                engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
+                topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+                child_step_kinds=(StepKind.TOOL_STEP,),
+            ),
+            False,  # the lone non-durable engine class — no resume → stays non-recoverable
         ),
         "fanout-child": (
             _payload(
@@ -1223,8 +1251,8 @@ def test_cp_and_runtime_recoverability_predicates_agree() -> None:
             "(CP-True/runtime-False would admit re-dispatch with no seed → double-fire)"
         )
         assert runtime_verdict is expected, (
-            f"{name}: verdict={runtime_verdict} expected={expected} — decomposition boundary "
-            "(SAVE_POINT recoverable, RECONCILER fail-closed pending the F-1 follow-on)"
+            f"{name}: verdict={runtime_verdict} expected={expected} — engine-class boundary "
+            "(all four durable classes recoverable, PURE_PATTERN_NO_ENGINE non-recoverable)"
         )
 
 
