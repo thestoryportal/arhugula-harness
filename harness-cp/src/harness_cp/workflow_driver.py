@@ -732,6 +732,28 @@ _SUBAGENT_RECOVERABLE_CHILD_ENGINE_CLASSES: frozenset[EngineClass] = frozenset(
         EngineClass.RECONCILER_LOOP,
     }
 )
+# B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-FANOUT-CHILD (R-FS-1) — the FAN-OUT child topologies a
+# maybe-ran SUB_AGENT_DISPATCH re-dispatch can recover. A fan-out child does NOT reach the LINEAR
+# `reconstruct_final_state` seed (the concurrent strategies return before it); instead its AGGREGATE
+# `final_state` reconstructs through the SEPARATE B-FANOUT-OUTPUT-REPLAY branch store at the fan-out
+# crash-resume site (`_crash_fan_out_resume`, this module): on the parent's re-dispatch the child
+# re-runs under its deterministic `child_run_id` → its captured branches replay (fire-once), its
+# in-flight branches re-dispatch through the child's OWN maybe-ran machinery (re-fire-safe fresh,
+# effect-bearing fenced) → the aggregate folds result-faithfully into the parent. EXACTLY the three
+# concurrent strategies `_crash_fan_out_resume` reconstructs; EVALUATOR_OPTIMIZER and
+# DECENTRALIZED_HANDOFF have no fan-out replay store → stay fail-closed. This recovery is gated to
+# `_FANOUT_REPLAY_ENGINE_CLASSES` ({ESR,WAL}) — the ONLY classes with a fan-out replay store; a
+# SAVE_POINT/RECONCILER fan-out child has none → fail closed (the registered
+# `…-FANOUT-CHILD-SAVE-POINT-RECONCILER` follow-on), NOT the {ESR,WAL,SAVE_POINT,RECONCILER} set the
+# LINEAR slice uses (carrier segregation: the LINEAR auto-resume + `reconstruct_final_state` seed
+# back all four; the fan-out aggregate reconstruction backs only two).
+_SUBAGENT_RECOVERABLE_FANOUT_CHILD_TOPOLOGIES: frozenset[TopologyPattern] = frozenset(
+    {
+        TopologyPattern.PARALLELIZATION,
+        TopologyPattern.ORCHESTRATOR_WORKERS,
+        TopologyPattern.HIERARCHICAL_DELEGATION,
+    }
+)
 
 # B-CHILD-CRASH-RESUME-FINAL-STATE-RECONSTRUCT-RECONCILER (R-FS-1) — the engine classes
 # whose per-step output is durably recorded to the `EngineOutputStore` AND seeded back into
@@ -937,7 +959,21 @@ def payload_child_recoverable(cme: Any, child_steps: Any) -> bool:
         return False
     tp_raw: Any = _opaque_field(cme, "topology_pattern")
     tp = tp_raw if isinstance(tp_raw, TopologyPattern) else TopologyPattern(tp_raw)
-    if tp is not TopologyPattern.SINGLE_THREADED_LINEAR:
+    # Conjunct 2 — the recoverable topology∩engine intersection (the FANOUT-CHILD relaxation,
+    # R-FS-1):
+    #   • SINGLE_THREADED_LINEAR → all four durable engine classes (conjunct 1) reconstruct via the
+    #     auto-resume + the LINEAR `reconstruct_final_state` seed;
+    #   • a FAN-OUT child reconstructs its AGGREGATE via the SEPARATE B-FANOUT-OUTPUT-REPLAY branch
+    #     store (`_crash_fan_out_resume`), gated to `_FANOUT_REPLAY_ENGINE_CLASSES` ({ESR,WAL}) ONLY
+    #     — a SAVE_POINT/RECONCILER fan-out child has NO fan-out replay store, so marking it
+    #     recoverable would re-dispatch fresh (the reconstruct never fires) → an at-most-once HOLE →
+    #     fail closed (the registered `…-FANOUT-CHILD-SAVE-POINT-RECONCILER` follow-on);
+    #   • any other topology (EVALUATOR_OPTIMIZER / DECENTRALIZED_HANDOFF) has no reconstruction
+    #     substrate → fail closed.
+    _fanout_recoverable = (
+        tp in _SUBAGENT_RECOVERABLE_FANOUT_CHILD_TOPOLOGIES and ec in _FANOUT_REPLAY_ENGINE_CLASSES
+    )
+    if not (tp is TopologyPattern.SINGLE_THREADED_LINEAR or _fanout_recoverable):
         return False
     for child_step in child_steps:
         sk_raw: Any = _opaque_field(child_step, "step_kind")
@@ -1035,16 +1071,33 @@ def _payload_engine_signature(cme: Any, child_steps: Any) -> str:
     dual gate prevents at the worker/orchestrator level, ONE LEVEL DOWN). The recursive
     `recursive_sig` carries the grandchild's OWN engine + deeper tuples → holds at all depths.
 
-    A LEAF child (no nested SUB_AGENT step) → just the engine value, BYTE-IDENTICAL to the pre-arc
-    marker (the #774..#784 closed scope is unaffected). A NESTED child → an UNAMBIGUOUS
-    `json.dumps([engine, [[ordinal, step_id, workflow_id, grandchild_sig], ...]])` (Codex [P2]):
-    JSON escaping prevents a crafted nested `step_id` with delimiters from colliding two distinct
-    child trees onto one marker string (a naive `f"{id}={sig}"` join would). A nested signature
-    always starts with `[`, a leaf never does → no leaf↔nested collision either. Same defensive
-    opaque read as `payload_child_recoverable` (raises on miss → caught by the entry's fail-closed
-    guard)."""
+    TOPOLOGY is part of the signature for a FAN-OUT child (the FANOUT-CHILD arc, R-FS-1, out-of-
+    family Codex [P1]): conjunct 2 now admits the SAME engine ({ESR,WAL}) under BOTH SINGLE_THREADED
+    AND a fan-out topology, so a maybe-ran child dispatched LINEAR-ESR whose resumed manifest swaps
+    ONLY its topology to fan-out (same engine/step_id) would pass an engine-only signature AND reuse
+    the same `child_run_id` against a DIFFERENT recovery substrate (the LINEAR
+    `reconstruct_final_state` seed vs the fan-out `_crash_fan_out_resume` branch store) → the child
+    finds no matching records → runs FRESH → double-fires committed effects. A fan-out↔fan-out swap
+    (PARALLELIZATION↔ORCHESTRATOR_WORKERS) is the same hole (a different store shape). The fix folds
+    topology into the signature so ANY topology swap CHANGES the marker → the dual-gate
+    marker==resumed comparison fails closed.
+
+    A LINEAR child's base value is the bare engine value, BYTE-IDENTICAL to the pre-FANOUT-CHILD
+    marker (the #774..#786 LINEAR closed scope is unaffected); a FAN-OUT child's base is
+    `f"{topology}:{engine}"` (the topology prefix never collides with a bare engine value). A LEAF
+    child → just the base value. A NESTED child → an UNAMBIGUOUS `json.dumps([base, [[ordinal,
+    step_id, workflow_id, grandchild_sig], ...]])` (Codex [P2]): JSON escaping prevents a crafted
+    nested `step_id` with delimiters from colliding two distinct child trees onto one marker string.
+    A nested signature always starts with `[`, a leaf never does → no leaf↔nested collision. Same
+    defensive opaque read as `payload_child_recoverable` (raises on miss → caught by the entry's
+    fail-closed guard)."""
     ec_raw: Any = _opaque_field(cme, "engine_class")
     ec = ec_raw if isinstance(ec_raw, EngineClass) else EngineClass(ec_raw)
+    tp_raw: Any = _opaque_field(cme, "topology_pattern")
+    tp = tp_raw if isinstance(tp_raw, TopologyPattern) else TopologyPattern(tp_raw)
+    # LINEAR → bare engine value (byte-identical pre-FANOUT-CHILD marker); fan-out → topology:engine
+    # so a LINEAR/fan-out or fan-out/fan-out swap (same engine, a new hole) fails the gate.
+    base = ec.value if tp is TopologyPattern.SINGLE_THREADED_LINEAR else f"{tp.value}:{ec.value}"
     nested: list[list[Any]] = []
     for ordinal, child_step in enumerate(child_steps):
         sk_raw: Any = _opaque_field(child_step, "step_kind")
@@ -1064,7 +1117,7 @@ def _payload_engine_signature(cme: Any, child_steps: Any) -> str:
             # seed AND this marker → the dual gate fails closed before the outer child is recovered,
             # so a re-dispatch can never replay the old grandchild store under a changed identity.
             nested.append([ordinal, g_step_id, g_workflow_id, g_sig])
-    return ec.value if not nested else json.dumps([ec.value, nested], separators=(",", ":"))
+    return base if not nested else json.dumps([base, nested], separators=(",", ":"))
 
 
 def _subagent_child_engine_class(step: WorkflowStep) -> str | None:

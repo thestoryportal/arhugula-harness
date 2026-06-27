@@ -800,19 +800,26 @@ def _grandchild_run_key() -> str:
     using the REAL imported key fns (no mirror drift):
       child_run_key   = run_key(_CHILD_RUN, _CHILD_WF)            [the worker's pinned child run_id]
       child_step1_key = step_key(child_run_key, 1)               [the grandchild's dispatch step]
-      disambig        = "linear-step:" + json.dumps(["step-1", <grandchild engine value>])
+      disambig        = "linear-step:" + json.dumps(["step-1", <gc engine>, <gc topology>])
       gc_seed         = compose_child_run_id_seed(child_step1_key, _GRANDCHILD_WF, disambig)
       gc_run_key      = run_key(gc_seed, _GRANDCHILD_WF)
 
-    The `branch_path` is the SAME-STEP + SAME-ENGINE IDENTITY binding (Codex [P1]): the grandchild's
-    dispatch step is `step-1` and its engine is EVENT_SOURCED_REPLAY (`_grandchild_payload`), so the
-    seed folds BOTH in (a rename or engine swap → a different seed → no wrong-store auto-resume).
+    The `branch_path` is the SAME-STEP + SAME-ENGINE + SAME-TOPOLOGY IDENTITY binding (Codex [P1]):
+    the grandchild's dispatch step is `step-1`, its engine is EVENT_SOURCED_REPLAY and its topology
+    SINGLE_THREADED_LINEAR (`_grandchild_payload`), so the seed folds ALL THREE in (a rename / engine
+    swap / topology swap → a different seed → no wrong-store / wrong-substrate auto-resume).
     """
     child_run_key = _compute_run_idempotency_key(
         _CHILD_RUN, _CHILD_WF, extras=(str(_ENTRY_VERSION),)
     )
     child_step1_key = _compute_step_idempotency_key(child_run_key, 1)
-    disambig = "linear-step:" + json.dumps(["step-1", EngineClass.EVENT_SOURCED_REPLAY.value])
+    disambig = "linear-step:" + json.dumps(
+        [
+            "step-1",
+            EngineClass.EVENT_SOURCED_REPLAY.value,
+            TopologyPattern.SINGLE_THREADED_LINEAR.value,
+        ]
+    )
     gc_seed = compose_child_run_id_seed(child_step1_key, _GRANDCHILD_WF, branch_path=disambig)
     return _compute_run_idempotency_key(gc_seed, _GRANDCHILD_WF, extras=(str(_ENTRY_VERSION),))
 

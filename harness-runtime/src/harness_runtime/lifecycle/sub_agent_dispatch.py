@@ -321,6 +321,24 @@ _SUBAGENT_RECOVERABLE_CHILD_ENGINE_CLASSES: frozenset[EngineClass] = frozenset(
 _SUBAGENT_RECOVERABLE_HARD_EXCLUDED_CHILD_KINDS: frozenset[StepKind] = frozenset(
     {StepKind.MANAGED_AGENTS}
 )
+# B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-FANOUT-CHILD (R-FS-1) — the mirror of the CP
+# `_SUBAGENT_RECOVERABLE_FANOUT_CHILD_TOPOLOGIES` + `_FANOUT_REPLAY_ENGINE_CLASSES`. A maybe-ran
+# SUB_AGENT_DISPATCH whose child is itself FAN-OUT recovers by re-dispatch: the child re-runs under
+# its deterministic `child_run_id` and reconstructs its AGGREGATE through the B-FANOUT-OUTPUT-REPLAY
+# branch store (CP `_crash_fan_out_resume`). That store exists ONLY for {ESR,WAL} (the CP
+# `_fanout_replay_store` gate) so a SAVE_POINT/RECONCILER fan-out child fails closed (the registered
+# `…-FANOUT-CHILD-SAVE-POINT-RECONCILER` follow-on) — distinct from the four-class LINEAR slice. The
+# CP↔runtime agreement witness enforces parity on this mirror.
+_SUBAGENT_RECOVERABLE_FANOUT_CHILD_TOPOLOGIES: frozenset[TopologyPattern] = frozenset(
+    {
+        TopologyPattern.PARALLELIZATION,
+        TopologyPattern.ORCHESTRATOR_WORKERS,
+        TopologyPattern.HIERARCHICAL_DELEGATION,
+    }
+)
+_SUBAGENT_RECOVERABLE_FANOUT_CHILD_ENGINE_CLASSES: frozenset[EngineClass] = frozenset(
+    {EngineClass.EVENT_SOURCED_REPLAY, EngineClass.WAL_SEGMENT}
+)
 
 
 def compose_child_run_id_seed(
@@ -379,9 +397,14 @@ def subagent_child_recoverable(payload: SubAgentDispatchPayload) -> bool:
        re-executes* (at-most-once preserved) → the parent fold raises `SubAgentChildFailedError`
        (fail-closed; never a SUCCESS aggregate). The F-1 engine-lock auto-recovery arc improves ALL
        RECONCILER resumes and is NOT a prerequisite for this child-recoverability slice.
-    2. **topology == SINGLE_THREADED_LINEAR** — the WITNESSED scope (#770). A fan-out child engages
-       its OWN fan-out crash-resume reconstruction, a deeper unwitnessed path → the registered
-       fan-out-child follow-on. "No nested sub-agents" ≠ "no recursion" (finding-v1 §4.1).
+    2. **topology recoverable-by-substrate** (the FANOUT-CHILD relaxation, R-FS-1): either
+       SINGLE_THREADED_LINEAR (any of the four durable engine classes — the auto-resume +
+       `reconstruct_final_state` LINEAR seed) OR a FAN-OUT child (PARALLELIZATION /
+       ORCHESTRATOR_WORKERS / HIERARCHICAL_DELEGATION) whose engine ∈ {ESR,WAL}. A fan-out child
+       reconstructs its AGGREGATE via the SEPARATE B-FANOUT-OUTPUT-REPLAY branch store (CP
+       `_crash_fan_out_resume`); that store exists only for {ESR,WAL}, so a SAVE_POINT/RECONCILER
+       fan-out child fails closed (the registered `…-FANOUT-CHILD-SAVE-POINT-RECONCILER` follow-on),
+       as do EVALUATOR_OPTIMIZER / DECENTRALIZED_HANDOFF (no fan-out replay substrate).
     3. **every child step is non-MANAGED_AGENTS, and every nested SUB_AGENT_DISPATCH child step is
        ITSELF recoverable** — the RECURSIVE leaf/non-leaf condition (the NONLEAF-CHILD arc, R-FS-1,
        relaxing the prior LINEAR-leaf-only slice #770 witnessed). A MANAGED_AGENTS child step is an
@@ -393,7 +416,8 @@ def subagent_child_recoverable(payload: SubAgentDispatchPayload) -> bool:
        child's re-dispatch by the same composer code at each level) → no parent-fold corruption at
        any depth. A mis-shaped nested payload (cannot validate to `SubAgentDispatchPayload`) → fail
        closed. TOOL/INFERENCE/DECLARATIVE/HITL child steps are in-scope (non-recursive). A FAN-OUT
-       grandchild fails its OWN conjunct 2 (LINEAR) → still fail closed (the case-(a) surface).
+       grandchild is admitted IFF its engine ∈ {ESR,WAL} (the FANOUT-CHILD conjunct 2); a
+       SAVE_POINT/RECONCILER fan-out grandchild fails its OWN conjunct 2 → still fail closed.
 
     The composer gates the DETERMINISTIC `child_run_id_seed` on this (a non-recoverable child gets
     a fresh `uuid` → no auto-resume → pre-existing behavior, no suffix-only corruption), and the CP
@@ -402,7 +426,15 @@ def subagent_child_recoverable(payload: SubAgentDispatchPayload) -> bool:
     cme = payload.child_manifest_entry
     if cme.engine_class not in _SUBAGENT_RECOVERABLE_CHILD_ENGINE_CLASSES:
         return False
-    if cme.topology_pattern is not TopologyPattern.SINGLE_THREADED_LINEAR:
+    # Conjunct 2 — the FANOUT-CHILD relaxation (mirror of the shared CP predicate).
+    # A fan-out child reconstructs its aggregate through the {ESR,WAL}-only fan-out replay store;
+    # a SAVE_POINT/RECONCILER fan-out child has no reconstruction substrate → fail closed (the
+    # registered `…-FANOUT-CHILD-SAVE-POINT-RECONCILER` follow-on).
+    _fanout_recoverable = (
+        cme.topology_pattern in _SUBAGENT_RECOVERABLE_FANOUT_CHILD_TOPOLOGIES
+        and cme.engine_class in _SUBAGENT_RECOVERABLE_FANOUT_CHILD_ENGINE_CLASSES
+    )
+    if not (cme.topology_pattern is TopologyPattern.SINGLE_THREADED_LINEAR or _fanout_recoverable):
         return False
     for child_step in payload.child_steps:
         if child_step.step_kind in _SUBAGENT_RECOVERABLE_HARD_EXCLUDED_CHILD_KINDS:
@@ -844,25 +876,32 @@ class RuntimeSubAgentDispatcher:
             _is_recoverable_linear_sequential = (
                 step_context.is_linear_sequential_dispatch and subagent_child_recoverable(payload)
             )
-            # SAME-STEP IDENTITY for the linear-sequential seed (out-of-family Codex [P1]): UNLIKE
+            # SAME-STEP IDENTITY for the linear-sequential seed (out-of-family Codex [P1]). UNLIKE
             # the fan-out/orchestrator paths, the linear-sequential step carries NO maybe-ran
-            # dispatch marker, so the dual gate's same-`step_id` + same-engine guards do NOT protect
+            # dispatch marker, so the dual gate's same-step_id + same-engine guards do NOT protect
             # it. The seed is keyed on the step INDEX (`parent_idempotency_key`), so RENAMING the
-            # SUB_AGENT *or SWAPPING its child engine* (RECONCILER↔SAVE_POINT) at the SAME index
-            # (same `child_workflow_id`) between a crash + resume would re-derive the SAME seed →
-            # auto-resume the OLD child's durable outputs under a DIFFERENT logical step / through a
-            # DIFFERENT recovery mechanism (the at-most-once bypass the marker dual gate prevents at
-            # the worker/orchestrator level). We fold BOTH the `step_id` AND the IMMEDIATE child
-            # `engine_class` into the seed (via the `branch_path` disambiguator slot, JSON-encoded
-            # so a `step_id` containing delimiters cannot collide; `linear-step:` prefix → distinct
-            # from a worker's `{action_id}:{branch_index}` + orchestrator's `None`, no cross-path
-            # aliasing). A rename OR engine swap CHANGES the seed → the edited step gets a FRESH
-            # run_id (re-runs fresh, NOT the old store); a legitimate resume keeps both → the seed
-            # re-derives identically → auto-resume works. The IMMEDIATE engine suffices — a DEEPER
-            # (grandchild-of-grandchild) engine swap is caught by that deeper dispatch's OWN
-            # linear-sequential seed (per-level binding), so the recursive subtree is not folded.
+            # SUB_AGENT, SWAPPING its child engine (RECONCILER/SAVE_POINT), or SWAPPING its child
+            # TOPOLOGY (LINEAR/fan-out: the FANOUT-CHILD arc, R-FS-1, out-of-family Codex [P1]) at
+            # the SAME index (same `child_workflow_id`) between crash + resume would re-derive the
+            # SAME seed and auto-resume the OLD child's durable outputs under a DIFFERENT logical
+            # step, or through a DIFFERENT recovery substrate (LINEAR `reconstruct_final_state` seed
+            # vs the fan-out `_crash_fan_out_resume` branch store: the at-most-once bypass the
+            # marker dual gate prevents at the worker/orchestrator level). We fold the `step_id`,
+            # the IMMEDIATE child `engine_class` AND its `topology_pattern` into the seed (via the
+            # `branch_path` disambiguator slot, JSON-encoded so a `step_id` with delimiters cannot
+            # collide; the `linear-step:` prefix is distinct from a worker's
+            # `{action_id}:{branch_index}` + orchestrator `None`, no cross-path aliasing). A rename
+            # / engine swap / topology swap CHANGES the seed: the edited step gets a FRESH run_id
+            # (re-runs fresh, NOT an auto-resume of the old store through the wrong substrate); a
+            # legitimate resume keeps all three so the seed re-derives identically and auto-resume
+            # works. The IMMEDIATE engine + topology suffice: a DEEPER grandchild-of-grandchild swap
+            # is caught by that deeper dispatch's OWN linear-sequential seed (per-level binding).
             _linear_step_disambiguator = "linear-step:" + json.dumps(
-                [str(step.step_id), payload.child_manifest_entry.engine_class.value]
+                [
+                    str(step.step_id),
+                    payload.child_manifest_entry.engine_class.value,
+                    payload.child_manifest_entry.topology_pattern.value,
+                ]
             )
             _child_run_id_seed = (
                 compose_child_run_id_seed(

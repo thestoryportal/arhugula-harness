@@ -1147,21 +1147,48 @@ def test_subagent_child_recoverable_false_for_pure_pattern_child() -> None:
     assert subagent_child_recoverable(payload) is False
 
 
-def test_subagent_child_recoverable_false_for_fanout_child() -> None:
-    """NEGATIVE CONTROL (the [P1-a] LINEAR-narrowing fix): a {ESR} child with a FAN-OUT topology
-    engages its OWN fan-out reconstruction (unwitnessed) → NOT recoverable (the registered
-    fan-out-child follow-on). "No nested sub-agents" ≠ "no recursion"."""
+def test_subagent_child_recoverable_true_for_fanout_child_esr_wal() -> None:
+    """POSITIVE — the FANOUT-CHILD relaxation (R-FS-1), RED-without-fix: a {ESR}/{WAL} child with a
+    FAN-OUT topology (PARALLELIZATION / ORCHESTRATOR_WORKERS / HIERARCHICAL_DELEGATION) is NOW
+    recoverable. On the parent's re-dispatch the child re-runs under its deterministic child run_id
+    and reconstructs its AGGREGATE via the B-FANOUT-OUTPUT-REPLAY branch store (CP
+    `_crash_fan_out_resume`) — witnessed end-to-end at the integration probe
+    `test_fanout_child_crash_resume_witness.py`. Before this relax (the prior #770/#786 LINEAR-only
+    conjunct 2) every fan-out child returned False."""
     for fanout_topology in (
         TopologyPattern.PARALLELIZATION,
         TopologyPattern.ORCHESTRATOR_WORKERS,
         TopologyPattern.HIERARCHICAL_DELEGATION,
     ):
-        payload = _payload(
-            engine_class=EngineClass.EVENT_SOURCED_REPLAY,
-            topology=fanout_topology,
-            child_step_kinds=(StepKind.TOOL_STEP,),
-        )
-        assert subagent_child_recoverable(payload) is False, fanout_topology
+        for engine in (EngineClass.EVENT_SOURCED_REPLAY, EngineClass.WAL_SEGMENT):
+            payload = _payload(
+                engine_class=engine,
+                topology=fanout_topology,
+                child_step_kinds=(StepKind.TOOL_STEP,),
+            )
+            assert subagent_child_recoverable(payload) is True, (fanout_topology, engine)
+
+
+def test_subagent_child_recoverable_false_for_fanout_child_save_point_reconciler() -> None:
+    """NEGATIVE CONTROL — the carrier-segregation boundary (FANOUT-CHILD, R-FS-1): a fan-out child
+    whose engine is SAVE_POINT_CHECKPOINT or RECONCILER_LOOP is NOT recoverable. Those classes are in
+    the four-class LINEAR recoverability set but NOT in the {ESR,WAL} `_FANOUT_REPLAY_ENGINE_CLASSES`
+    that backs the fan-out branch store — a fan-out SAVE_POINT/RECONCILER child has no aggregate
+    reconstruction substrate, so marking it recoverable would re-dispatch fresh (an at-most-once
+    hole). Fail closed (the registered `…-FANOUT-CHILD-SAVE-POINT-RECONCILER` follow-on). The SAME
+    engines on a LINEAR child ARE recoverable (witnessed elsewhere) — the gate is topology∩engine."""
+    for fanout_topology in (
+        TopologyPattern.PARALLELIZATION,
+        TopologyPattern.ORCHESTRATOR_WORKERS,
+        TopologyPattern.HIERARCHICAL_DELEGATION,
+    ):
+        for engine in (EngineClass.SAVE_POINT_CHECKPOINT, EngineClass.RECONCILER_LOOP):
+            payload = _payload(
+                engine_class=engine,
+                topology=fanout_topology,
+                child_step_kinds=(StepKind.TOOL_STEP,),
+            )
+            assert subagent_child_recoverable(payload) is False, (fanout_topology, engine)
 
 
 def test_subagent_child_recoverable_false_for_managed_or_malformed_nested_child_step() -> None:
@@ -1230,11 +1257,13 @@ def test_subagent_child_recoverable_true_for_nested_recoverable_grandchild() -> 
 
 def test_subagent_child_recoverable_false_for_nested_nonrecoverable_grandchild() -> None:
     """NEGATIVE CONTROL — the recursion fails closed when the grandchild is itself non-recoverable:
-    a FAN-OUT grandchild (fails conjunct 2 at depth 2), a PURE_PATTERN grandchild (fails conjunct 1
-    at depth 2), or a grandchild whose own child step is MANAGED_AGENTS (fails the recursive
-    conjunct 3 at depth 2). Each non-recoverability propagates up to the parent."""
+    a FAN-OUT SAVE_POINT grandchild (fails the topology∩engine conjunct 2 at depth 2 — fan-out needs
+    {ESR,WAL}), a PURE_PATTERN grandchild (fails conjunct 1 at depth 2), or a grandchild whose own
+    child step is MANAGED_AGENTS (fails the recursive conjunct 3 at depth 2). Each non-recoverability
+    propagates up to the parent. (A fan-out {ESR,WAL} grandchild IS now recoverable — the FANOUT-CHILD
+    relaxation — witnessed at `test_subagent_child_recoverable_true_for_nested_fanout_grandchild`.)"""
     fanout_gc = _payload(
-        engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+        engine_class=EngineClass.SAVE_POINT_CHECKPOINT,
         topology=TopologyPattern.PARALLELIZATION,
         child_step_kinds=(StepKind.TOOL_STEP,),
     )
@@ -1253,10 +1282,24 @@ def test_subagent_child_recoverable_false_for_nested_nonrecoverable_grandchild()
     assert subagent_child_recoverable(_nested_payload(managed_gc)) is False
 
 
+def test_subagent_child_recoverable_true_for_nested_fanout_grandchild() -> None:
+    """POSITIVE — the FANOUT-CHILD relaxation composes through the recursion (R-FS-1): a {ESR} ∧
+    LINEAR child whose nested SUB_AGENT_DISPATCH grandchild is a fan-out {WAL} child is NOW
+    recoverable. The recursion descends into the grandchild and applies the SAME topology∩engine
+    conjunct 2 — a fan-out {ESR,WAL} grandchild reconstructs via its own fan-out replay store at
+    re-dispatch, so the chain is recoverable at every level."""
+    fanout_gc = _payload(
+        engine_class=EngineClass.WAL_SEGMENT,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+        child_step_kinds=(StepKind.TOOL_STEP,),
+    )
+    assert subagent_child_recoverable(_nested_payload(fanout_gc)) is True
+
+
 def test_subagent_child_recoverable_recurses_to_depth_three() -> None:
     """The recursion bottoms out correctly at arbitrary depth: a depth-3 chain of recoverable LINEAR
-    sub-agents → True; flipping the deepest great-grandchild to a FAN-OUT topology → False (the
-    non-recoverability propagates up through BOTH nested levels to the top)."""
+    sub-agents → True; flipping the deepest great-grandchild to a FAN-OUT SAVE_POINT child → False
+    (no fan-out replay substrate; the non-recoverability propagates up through BOTH nested levels)."""
     leaf = _payload(
         engine_class=EngineClass.WAL_SEGMENT,
         topology=TopologyPattern.SINGLE_THREADED_LINEAR,
@@ -1265,7 +1308,7 @@ def test_subagent_child_recoverable_recurses_to_depth_three() -> None:
     depth3_good = _nested_payload(_nested_payload(leaf))
     assert subagent_child_recoverable(depth3_good) is True
     bad_leaf = _payload(
-        engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+        engine_class=EngineClass.SAVE_POINT_CHECKPOINT,
         topology=TopologyPattern.ORCHESTRATOR_WORKERS,
         child_step_kinds=(StepKind.TOOL_STEP,),
     )
@@ -1350,6 +1393,44 @@ def test_recursive_engine_signature_catches_grandchild_engine_swap() -> None:
         child_step_kinds=(StepKind.TOOL_STEP,),
     )
     assert _subagent_child_engine_class(_step(leaf)) == EngineClass.EVENT_SOURCED_REPLAY.value
+
+
+def test_recursive_signature_catches_topology_swap() -> None:
+    """CROSS-TOPOLOGY swap guard (out-of-family Codex [P1], FANOUT-CHILD arc) — conjunct 2 now admits
+    the SAME engine ({ESR,WAL}) under BOTH SINGLE_THREADED_LINEAR AND a fan-out topology. A maybe-ran
+    child dispatched LINEAR-ESR whose resumed manifest swaps ONLY its topology to fan-out (same
+    engine/step_id) would pass an engine-only signature AND reuse the same `child_run_id` against a
+    DIFFERENT recovery substrate (the LINEAR `reconstruct_final_state` seed vs the fan-out
+    `_crash_fan_out_resume` branch store) → run fresh → double-fire. A fan-out↔fan-out swap
+    (PARALLELIZATION↔ORCHESTRATOR_WORKERS) is the same hole. The signature folds topology in (LINEAR
+    keeps the bare engine value; fan-out prepends `topology:`), so ANY topology swap CHANGES the
+    marker → the dual-gate marker==resumed comparison fails closed. RED without the topology fold (the
+    bare-engine signature was identical across topologies)."""
+    from harness_cp.workflow_driver import _subagent_child_engine_class
+
+    def _sig(topology: TopologyPattern) -> str | None:
+        return _subagent_child_engine_class(
+            _step(
+                _payload(
+                    engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+                    topology=topology,
+                    child_step_kinds=(StepKind.TOOL_STEP,),
+                )
+            )
+        )
+
+    sig_linear = _sig(TopologyPattern.SINGLE_THREADED_LINEAR)
+    sig_parallel = _sig(TopologyPattern.PARALLELIZATION)
+    sig_orch = _sig(TopologyPattern.ORCHESTRATOR_WORKERS)
+    # LINEAR↔fan-out swap (same engine) → marker differs → fail closed.
+    assert sig_linear != sig_parallel
+    # fan-out↔fan-out swap (same engine, different store shape) → marker differs → fail closed.
+    assert sig_parallel != sig_orch
+    # LINEAR keeps the bare engine value (the #774..#786 closed-scope byte-identity); fan-out prefixes.
+    assert sig_linear == EngineClass.EVENT_SOURCED_REPLAY.value
+    assert sig_parallel is not None and sig_parallel.startswith(
+        TopologyPattern.PARALLELIZATION.value
+    )
 
 
 def test_recursive_signature_catches_grandchild_step_id_rename() -> None:
@@ -1516,13 +1597,21 @@ def test_cp_and_runtime_recoverability_predicates_agree() -> None:
             ),
             False,  # the lone non-durable engine class — no resume → stays non-recoverable
         ),
-        "fanout-child": (
+        "fanout-child-esr": (
             _payload(
                 engine_class=EngineClass.EVENT_SOURCED_REPLAY,
                 topology=TopologyPattern.PARALLELIZATION,
                 child_step_kinds=(StepKind.TOOL_STEP,),
             ),
-            False,
+            True,  # the FANOUT-CHILD relaxation — a fan-out {ESR,WAL} child reconstructs via the store
+        ),
+        "fanout-child-save-point": (
+            _payload(
+                engine_class=EngineClass.SAVE_POINT_CHECKPOINT,
+                topology=TopologyPattern.PARALLELIZATION,
+                child_step_kinds=(StepKind.TOOL_STEP,),
+            ),
+            False,  # carrier segregation — fan-out needs {ESR,WAL}; SAVE_POINT has no fan-out store
         ),
         "nested-subagent-malformed": (
             _payload(
@@ -1542,7 +1631,7 @@ def test_cp_and_runtime_recoverability_predicates_agree() -> None:
             ),
             True,  # the NONLEAF-CHILD relaxation — CP + runtime must BOTH recurse into the grandchild
         ),
-        "nested-fanout-grandchild": (
+        "nested-fanout-esr-grandchild": (
             _nested_payload(
                 _payload(
                     engine_class=EngineClass.EVENT_SOURCED_REPLAY,
@@ -1550,7 +1639,17 @@ def test_cp_and_runtime_recoverability_predicates_agree() -> None:
                     child_step_kinds=(StepKind.TOOL_STEP,),
                 )
             ),
-            False,  # the grandchild fails its OWN conjunct 2 → recursion fails closed on both sides
+            True,  # the FANOUT-CHILD relaxation composes through the recursion (fan-out {ESR,WAL})
+        ),
+        "nested-fanout-save-point-grandchild": (
+            _nested_payload(
+                _payload(
+                    engine_class=EngineClass.SAVE_POINT_CHECKPOINT,
+                    topology=TopologyPattern.PARALLELIZATION,
+                    child_step_kinds=(StepKind.TOOL_STEP,),
+                )
+            ),
+            False,  # the grandchild fails the topology∩engine conjunct 2 → recursion fails closed
         ),
     }
     for name, (payload, expected) in cases.items():
@@ -1561,8 +1660,8 @@ def test_cp_and_runtime_recoverability_predicates_agree() -> None:
             "(CP-True/runtime-False would admit re-dispatch with no seed → double-fire)"
         )
         assert runtime_verdict is expected, (
-            f"{name}: verdict={runtime_verdict} expected={expected} — engine-class boundary "
-            "(all four durable classes recoverable, PURE_PATTERN_NO_ENGINE non-recoverable)"
+            f"{name}: verdict={runtime_verdict} expected={expected} — topology∩engine boundary "
+            "(LINEAR admits all four durable classes; fan-out admits only {ESR,WAL})"
         )
 
 
@@ -1585,13 +1684,20 @@ def test_dispatch_seed_none_for_linear_non_fanout_recoverable_child(tmp_path: Pa
     assert runner.calls[-1]["child_run_id_seed"] is None
 
 
-def _linear_seq_seed(tmp_path: Path, *, step_id: str, engine: EngineClass) -> str | None:
+def _linear_seq_seed(
+    tmp_path: Path,
+    *,
+    step_id: str,
+    engine: EngineClass,
+    topology: TopologyPattern = TopologyPattern.SINGLE_THREADED_LINEAR,
+) -> str | None:
     """The `child_run_id_seed` the real dispatcher composes for a recoverable child under
-    `is_linear_sequential_dispatch=True` with the given dispatch-step `step_id` + child `engine`."""
+    `is_linear_sequential_dispatch=True` with the given dispatch-step `step_id` + child
+    `engine` + `topology`."""
     child = _payload(
         workload_class=WorkloadClass.PIPELINE_AUTOMATION,
         engine_class=engine,
-        topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+        topology=topology,
         child_step_kinds=(StepKind.TOOL_STEP,),
     )
     linear_ctx = _step_context().model_copy(update={"is_linear_sequential_dispatch": True})
@@ -1623,6 +1729,35 @@ def test_linear_sequential_seed_binds_step_id_and_engine(tmp_path: Path) -> None
     assert base is not None  # real seed (linear-sequential recoverable)
     assert base != renamed  # renamed step → different seed → no wrong-step auto-resume
     assert base != engine_swapped  # engine swap → different seed → no cross-mechanism replay
+
+
+def test_linear_sequential_seed_binds_topology(tmp_path: Path) -> None:
+    """SAME-TOPOLOGY identity for the linear-sequential seed (out-of-family Codex [P1], FANOUT-CHILD
+    arc) — the FANOUT-CHILD relax admits a fan-out {ESR,WAL} child as recoverable, so a recoverable
+    child under `is_linear_sequential_dispatch=True` may now be LINEAR or fan-out. The
+    linear-sequential step has NO maybe-ran dual gate, so the seed must self-defend: SWAPPING the
+    child topology (LINEAR↔ORCHESTRATOR_WORKERS — both permitted for PIPELINE_AUTOMATION, same
+    step_id/engine/workflow_id) between crash + resume must yield a DIFFERENT seed → the edited step
+    gets a fresh run_id → does NOT auto-resume the old store through the wrong recovery substrate
+    (the LINEAR `reconstruct_final_state` seed vs the fan-out `_crash_fan_out_resume` branch store).
+    RED-without-fix: before the topology fold the seeds were identical (engine + step_id only). The
+    fan-out↔fan-out marker-side distinction (PARALLELIZATION vs ORCHESTRATOR_WORKERS) is witnessed at
+    `test_recursive_signature_catches_topology_swap`."""
+    linear = _linear_seq_seed(
+        tmp_path,
+        step_id="sub-agent-A",
+        engine=EngineClass.EVENT_SOURCED_REPLAY,
+        topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+    )
+    fanout = _linear_seq_seed(
+        tmp_path,
+        step_id="sub-agent-A",
+        engine=EngineClass.EVENT_SOURCED_REPLAY,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+    )
+    assert linear is not None and fanout is not None
+    # LINEAR↔fan-out swap (same engine/step_id) → different seed → no wrong-substrate auto-resume.
+    assert linear != fanout
 
 
 def test_dispatch_seed_gated_on_recoverability_non_recoverable_child_gets_none(
