@@ -1684,13 +1684,20 @@ def test_dispatch_seed_none_for_linear_non_fanout_recoverable_child(tmp_path: Pa
     assert runner.calls[-1]["child_run_id_seed"] is None
 
 
-def _linear_seq_seed(tmp_path: Path, *, step_id: str, engine: EngineClass) -> str | None:
+def _linear_seq_seed(
+    tmp_path: Path,
+    *,
+    step_id: str,
+    engine: EngineClass,
+    topology: TopologyPattern = TopologyPattern.SINGLE_THREADED_LINEAR,
+) -> str | None:
     """The `child_run_id_seed` the real dispatcher composes for a recoverable child under
-    `is_linear_sequential_dispatch=True` with the given dispatch-step `step_id` + child `engine`."""
+    `is_linear_sequential_dispatch=True` with the given dispatch-step `step_id` + child
+    `engine` + `topology`."""
     child = _payload(
         workload_class=WorkloadClass.PIPELINE_AUTOMATION,
         engine_class=engine,
-        topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+        topology=topology,
         child_step_kinds=(StepKind.TOOL_STEP,),
     )
     linear_ctx = _step_context().model_copy(update={"is_linear_sequential_dispatch": True})
@@ -1722,6 +1729,35 @@ def test_linear_sequential_seed_binds_step_id_and_engine(tmp_path: Path) -> None
     assert base is not None  # real seed (linear-sequential recoverable)
     assert base != renamed  # renamed step → different seed → no wrong-step auto-resume
     assert base != engine_swapped  # engine swap → different seed → no cross-mechanism replay
+
+
+def test_linear_sequential_seed_binds_topology(tmp_path: Path) -> None:
+    """SAME-TOPOLOGY identity for the linear-sequential seed (out-of-family Codex [P1], FANOUT-CHILD
+    arc) — the FANOUT-CHILD relax admits a fan-out {ESR,WAL} child as recoverable, so a recoverable
+    child under `is_linear_sequential_dispatch=True` may now be LINEAR or fan-out. The
+    linear-sequential step has NO maybe-ran dual gate, so the seed must self-defend: SWAPPING the
+    child topology (LINEAR↔ORCHESTRATOR_WORKERS — both permitted for PIPELINE_AUTOMATION, same
+    step_id/engine/workflow_id) between crash + resume must yield a DIFFERENT seed → the edited step
+    gets a fresh run_id → does NOT auto-resume the old store through the wrong recovery substrate
+    (the LINEAR `reconstruct_final_state` seed vs the fan-out `_crash_fan_out_resume` branch store).
+    RED-without-fix: before the topology fold the seeds were identical (engine + step_id only). The
+    fan-out↔fan-out marker-side distinction (PARALLELIZATION vs ORCHESTRATOR_WORKERS) is witnessed at
+    `test_recursive_signature_catches_topology_swap`."""
+    linear = _linear_seq_seed(
+        tmp_path,
+        step_id="sub-agent-A",
+        engine=EngineClass.EVENT_SOURCED_REPLAY,
+        topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+    )
+    fanout = _linear_seq_seed(
+        tmp_path,
+        step_id="sub-agent-A",
+        engine=EngineClass.EVENT_SOURCED_REPLAY,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+    )
+    assert linear is not None and fanout is not None
+    # LINEAR↔fan-out swap (same engine/step_id) → different seed → no wrong-substrate auto-resume.
+    assert linear != fanout
 
 
 def test_dispatch_seed_gated_on_recoverability_non_recoverable_child_gets_none(

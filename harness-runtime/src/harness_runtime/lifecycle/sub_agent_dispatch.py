@@ -876,25 +876,32 @@ class RuntimeSubAgentDispatcher:
             _is_recoverable_linear_sequential = (
                 step_context.is_linear_sequential_dispatch and subagent_child_recoverable(payload)
             )
-            # SAME-STEP IDENTITY for the linear-sequential seed (out-of-family Codex [P1]): UNLIKE
+            # SAME-STEP IDENTITY for the linear-sequential seed (out-of-family Codex [P1]). UNLIKE
             # the fan-out/orchestrator paths, the linear-sequential step carries NO maybe-ran
-            # dispatch marker, so the dual gate's same-`step_id` + same-engine guards do NOT protect
+            # dispatch marker, so the dual gate's same-step_id + same-engine guards do NOT protect
             # it. The seed is keyed on the step INDEX (`parent_idempotency_key`), so RENAMING the
-            # SUB_AGENT *or SWAPPING its child engine* (RECONCILER↔SAVE_POINT) at the SAME index
-            # (same `child_workflow_id`) between a crash + resume would re-derive the SAME seed →
-            # auto-resume the OLD child's durable outputs under a DIFFERENT logical step / through a
-            # DIFFERENT recovery mechanism (the at-most-once bypass the marker dual gate prevents at
-            # the worker/orchestrator level). We fold BOTH the `step_id` AND the IMMEDIATE child
-            # `engine_class` into the seed (via the `branch_path` disambiguator slot, JSON-encoded
-            # so a `step_id` containing delimiters cannot collide; `linear-step:` prefix → distinct
-            # from a worker's `{action_id}:{branch_index}` + orchestrator's `None`, no cross-path
-            # aliasing). A rename OR engine swap CHANGES the seed → the edited step gets a FRESH
-            # run_id (re-runs fresh, NOT the old store); a legitimate resume keeps both → the seed
-            # re-derives identically → auto-resume works. The IMMEDIATE engine suffices — a DEEPER
-            # (grandchild-of-grandchild) engine swap is caught by that deeper dispatch's OWN
-            # linear-sequential seed (per-level binding), so the recursive subtree is not folded.
+            # SUB_AGENT, SWAPPING its child engine (RECONCILER/SAVE_POINT), or SWAPPING its child
+            # TOPOLOGY (LINEAR/fan-out: the FANOUT-CHILD arc, R-FS-1, out-of-family Codex [P1]) at
+            # the SAME index (same `child_workflow_id`) between crash + resume would re-derive the
+            # SAME seed and auto-resume the OLD child's durable outputs under a DIFFERENT logical
+            # step, or through a DIFFERENT recovery substrate (LINEAR `reconstruct_final_state` seed
+            # vs the fan-out `_crash_fan_out_resume` branch store: the at-most-once bypass the
+            # marker dual gate prevents at the worker/orchestrator level). We fold the `step_id`,
+            # the IMMEDIATE child `engine_class` AND its `topology_pattern` into the seed (via the
+            # `branch_path` disambiguator slot, JSON-encoded so a `step_id` with delimiters cannot
+            # collide; the `linear-step:` prefix is distinct from a worker's
+            # `{action_id}:{branch_index}` + orchestrator `None`, no cross-path aliasing). A rename
+            # / engine swap / topology swap CHANGES the seed: the edited step gets a FRESH run_id
+            # (re-runs fresh, NOT an auto-resume of the old store through the wrong substrate); a
+            # legitimate resume keeps all three so the seed re-derives identically and auto-resume
+            # works. The IMMEDIATE engine + topology suffice: a DEEPER grandchild-of-grandchild swap
+            # is caught by that deeper dispatch's OWN linear-sequential seed (per-level binding).
             _linear_step_disambiguator = "linear-step:" + json.dumps(
-                [str(step.step_id), payload.child_manifest_entry.engine_class.value]
+                [
+                    str(step.step_id),
+                    payload.child_manifest_entry.engine_class.value,
+                    payload.child_manifest_entry.topology_pattern.value,
+                ]
             )
             _child_run_id_seed = (
                 compose_child_run_id_seed(
