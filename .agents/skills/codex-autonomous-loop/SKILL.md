@@ -17,6 +17,10 @@ Use this skill when the operator asks Codex to run an implementation arc with au
 - Shipping controller: owns commit, push, PR, CI, merge, post-merge refresh, main sync, and worktree disposition evidence.
 
 Validators review artifacts and evidence, not the coder's summary.
+The review gate covers the concrete PR diff plus integration/blast-radius risk;
+whole-codebase protection comes from local and CI gates (`ruff`, `pyright`,
+provider-free pytest, overlay, ledger, and axis-isolation checks), not from a
+fresh manual whole-repo code review on every closure.
 
 ## Invocation
 
@@ -44,7 +48,7 @@ just codex-loop-record --phase ci_green --status passed --command "gh pr checks 
 just codex-loop-record --phase merged --status passed --command "gh pr merge ..." --evidence "merged PR number and merge sha"
 just codex-loop-record --phase post_merge_refresh --status passed --command "refresh PR or not-applicable note" --evidence "terminating refresh merged or explicitly not applicable"
 just codex-loop-record --phase main_synced --status passed --command "git pull --ff-only" --evidence "local main equals origin/main"
-just codex-loop-record --phase worktree_disposition --status passed --command "git worktree remove ... or retained" --evidence "clean removed worktree or explicit retention reason"
+just codex-loop-record --phase worktree_disposition --status passed --command "git worktree remove ...; git branch -D ..." --evidence "original arc worktree removed and local topic branch pruned"
 ```
 
 Check readiness:
@@ -77,7 +81,7 @@ required downstream evidence before claiming the loop complete.
 14. `merged`: PR merged per GitHub discipline.
 15. `post_merge_refresh`: terminating refresh PR merged, or an explicit not-applicable note.
 16. `main_synced`: local main fast-forwarded to the merged remote state.
-17. `worktree_disposition`: worktree removed if safe, or retained with a clear reason.
+17. `worktree_disposition`: from synced `main`, prove the original arc worktree is no longer registered and the local topic branch is pruned.
 
 ## Prompt Templates
 

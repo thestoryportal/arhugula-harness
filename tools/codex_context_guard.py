@@ -20,6 +20,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, cast
 
+import codex_loop
+
 DESIGN_RE = re.compile(
     r"^(design-substrate/|\.harness/class_[123]_|\.harness/architect_recommendation_|"
     r".*Spec_[A-Za-z_]+_v\d|.*Implementation_Plan_[A-Za-z_]+_v\d|.*ADR-[FD]\d)"
@@ -594,6 +596,8 @@ def _codex_loop_issues(state: GuardState) -> list[str]:
         phase = event.get("phase")
         if isinstance(phase, str):
             latest[phase] = (index, event)
+    if all(phase in latest for phase in codex_loop.SHIP_GATES):
+        return codex_loop.check_state(loop_state, current=codex_loop.git_identity(state.root))
     missing = [phase for phase in CODEX_LOOP_PRE_CLOSEOUT_GATES if phase not in latest]
     issues: list[str] = []
     if missing:

@@ -11,6 +11,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import codex_loop as cl
+
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "tools" / "codex_loop.py"
 FULL_LIFECYCLE_GATES = [
@@ -64,6 +68,7 @@ def _init_repo(tmp_path: Path) -> Path:
     _git(repo, "config", "user.email", "codex@example.test")
     _git(repo, "config", "user.name", "Codex Test")
     (repo / "README.md").write_text("# repo\n", encoding="utf-8")
+    (repo / ".gitignore").write_text(".harness/codex_loop_state.json\n", encoding="utf-8")
     _git(repo, "add", ".")
     _git(repo, "commit", "-m", "baseline")
     return repo
@@ -91,12 +96,14 @@ def _record_gate(repo: Path, phase: str, status: str) -> subprocess.CompletedPro
     )
 
 
-def _record_full_lifecycle(repo: Path, *, red_status: str = "failed") -> None:
+def _record_lifecycle_without_disposition(repo: Path, *, red_status: str = "failed") -> None:
     marker = _git(repo, "rev-parse", "--short", "HEAD")
     (repo / "README.md").write_text(
         f"# repo\nfull lifecycle {marker} {red_status}\n", encoding="utf-8"
     )
     for phase in FULL_LIFECYCLE_GATES:
+        if phase == "worktree_disposition":
+            continue
         if phase == "commit":
             _git(repo, "add", "README.md")
             _git(repo, "commit", "-m", "full lifecycle change")
@@ -247,12 +254,122 @@ def test_check_accepts_lifecycle_completed_after_main_sync_on_main(tmp_path: Pat
     state_dir.mkdir(exist_ok=True)
     (state_dir / "codex_loop_state.json").write_text(state_text, encoding="utf-8")
     for phase in ("post_merge_refresh", "main_synced", "worktree_disposition"):
+        if phase == "worktree_disposition":
+            _git(main_repo, "worktree", "remove", str(repo))
+            _git(main_repo, "branch", "-D", "feature")
         proc = _record_gate(main_repo, phase, "passed")
         assert proc.returncode == 0, proc.stderr
 
     proc = _run(main_repo, "check")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_worktree_disposition_rejects_registered_arc_worktree_and_branch(
+    tmp_path: Path,
+) -> None:
+    main_repo = _init_repo(tmp_path)
+    repo = tmp_path / "feature"
+    _git(main_repo, "worktree", "add", str(repo), "-b", "feature")
+    assert _run(repo, "start", "--arc", "B-LOOP").returncode == 0
+    (repo / "README.md").write_text("# repo\nfeature change\n", encoding="utf-8")
+    for phase in (
+        "worktree_ready",
+        "preflight",
+        "plan",
+        "red",
+        "implementation",
+        "narrow_verify",
+        "local_gate",
+        "decorrelated_review",
+        "closeout",
+    ):
+        proc = _record_gate(repo, phase, "failed" if phase == "red" else "passed")
+        assert proc.returncode == 0, proc.stderr
+    _git(repo, "add", "README.md")
+    _git(repo, "commit", "-m", "feature change")
+    for phase in ("commit", "push", "pr_opened", "ci_green", "merged"):
+        proc = _record_gate(repo, phase, "passed")
+        assert proc.returncode == 0, proc.stderr
+    _git(main_repo, "merge", "--ff-only", "feature")
+    state_text = (repo / ".harness" / "codex_loop_state.json").read_text(encoding="utf-8")
+    state_dir = main_repo / ".harness"
+    state_dir.mkdir(exist_ok=True)
+    (state_dir / "codex_loop_state.json").write_text(state_text, encoding="utf-8")
+    for phase in ("post_merge_refresh", "main_synced"):
+        proc = _record_gate(main_repo, phase, "passed")
+        assert proc.returncode == 0, proc.stderr
+
+    blocked = _record_gate(main_repo, "worktree_disposition", "passed")
+
+    assert blocked.returncode == 1
+    assert "original arc worktree is still registered" in blocked.stderr
+    assert "local topic branch still exists" in blocked.stderr
+
+    _git(main_repo, "worktree", "remove", str(repo))
+    _git(main_repo, "branch", "-D", "feature")
+    passed = _record_gate(main_repo, "worktree_disposition", "passed")
+
+    assert passed.returncode == 0, passed.stderr
+
+
+def test_worktree_disposition_fails_closed_when_worktree_list_is_unavailable(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    state = {"root": str(tmp_path / "feature-worktree")}
+    latest = {
+        "worktree_ready": {
+            "branch": "feature",
+            "linked_worktree": True,
+        }
+    }
+    current = cl.GitIdentity(
+        root=tmp_path,
+        branch="main",
+        head8="feedface",
+        worktree_fingerprint="wf",
+        content_fingerprint="cf",
+        linked_worktree=False,
+    )
+
+    def fake_run(args: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
+        if args == ["git", "worktree", "list", "--porcelain"]:
+            return subprocess.CompletedProcess(args=args, returncode=1, stdout="", stderr="boom")
+        return subprocess.CompletedProcess(args=args, returncode=1, stdout="", stderr="")
+
+    monkeypatch.setattr(cl, "_run", fake_run)
+
+    issues = cl._worktree_disposition_issues(state, latest, current)
+
+    assert issues == ["unable to verify registered worktrees: boom"]
+
+
+def test_worktree_disposition_rejects_topic_branch_when_current_branch_matches(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    state = {"root": str(tmp_path / "removed-feature-worktree")}
+    latest = {
+        "worktree_ready": {
+            "branch": "feature",
+            "linked_worktree": True,
+        }
+    }
+    current = cl.GitIdentity(
+        root=tmp_path,
+        branch="feature",
+        head8="feedface",
+        worktree_fingerprint="wf",
+        content_fingerprint="cf",
+        linked_worktree=True,
+    )
+    monkeypatch.setattr(cl, "_worktree_paths", lambda root: (set(), None))
+    monkeypatch.setattr(cl, "_local_branch_exists", lambda root, branch: branch == "feature")
+
+    issues = cl._worktree_disposition_issues(state, latest, current)
+
+    assert issues == ["local topic branch still exists: feature"]
 
 
 def test_check_requires_required_gates_and_red_failure_evidence(tmp_path: Path) -> None:
@@ -264,20 +381,12 @@ def test_check_requires_required_gates_and_red_failure_evidence(tmp_path: Path) 
     assert incomplete.returncode == 1
     assert "missing required gates" in incomplete.stdout
 
-    _record_full_lifecycle(repo, red_status="passed")
+    _record_lifecycle_without_disposition(repo, red_status="passed")
 
     bad_red = _run(repo, "check")
 
     assert bad_red.returncode == 1
     assert "red gate must record status=failed" in bad_red.stdout
-
-    assert _run(repo, "start", "--arc", "B-LOOP").returncode == 0
-    _record_full_lifecycle(repo)
-
-    complete = _run(repo, "check")
-
-    assert complete.returncode == 0
-    assert "loop state OK" in complete.stdout
 
 
 def test_check_rejects_latest_required_gate_events_recorded_out_of_order(tmp_path: Path) -> None:
@@ -301,7 +410,6 @@ def test_check_rejects_latest_required_gate_events_recorded_out_of_order(tmp_pat
         "merged",
         "post_merge_refresh",
         "main_synced",
-        "worktree_disposition",
     ):
         if phase == "commit":
             _git(repo, "add", "README.md")
@@ -321,7 +429,7 @@ def test_check_rejects_loop_state_from_stale_branch_or_head(tmp_path: Path) -> N
     repo = _init_linked_worktree(tmp_path)
     assert _run(repo, "start", "--arc", "B-LOOP").returncode == 0
 
-    _record_full_lifecycle(repo)
+    _record_lifecycle_without_disposition(repo)
 
     state_path = repo / ".harness" / "codex_loop_state.json"
     payload = json.loads(state_path.read_text(encoding="utf-8"))
@@ -339,7 +447,7 @@ def test_check_rejects_post_gate_worktree_edits(tmp_path: Path) -> None:
     repo = _init_linked_worktree(tmp_path)
     assert _run(repo, "start", "--arc", "B-LOOP").returncode == 0
 
-    _record_full_lifecycle(repo)
+    _record_lifecycle_without_disposition(repo)
     (repo / "README.md").write_text("# repo\npost-gate edit\n", encoding="utf-8")
 
     proc = _run(repo, "check")
