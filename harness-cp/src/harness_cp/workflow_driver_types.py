@@ -384,6 +384,27 @@ class StepExecutionContext(BaseModel):
     disclosed at the synthesis step entry + trace event, NOT a new hash field);
     `None` default (every non-synthesis dispatch) → byte-identical to pre-arc."""
 
+    is_orchestrator_dispatch: bool = False
+    """B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-SUBAGENT (R-FS-1) — marks the
+    fan-out ORCHESTRATOR's OWN `steps[0]` dispatch context (set `True` ONLY on
+    `_execute_orchestrator_workers`' `orchestrator_context`). The runtime
+    `SubAgentDispatchStepDispatcher` reads it to extend the deterministic
+    `child_run_id_seed` to a SUB_AGENT_DISPATCH orchestrator: the orchestrator is a
+    SINGLE, once-per-run step (`branch_index is None`, like a sequential-loop
+    iteration) but UNLIKE a loop iteration it dispatches EXACTLY ONCE, so the
+    deterministic seed is safe (no iteration-2 to alias iteration-1's store — the
+    loop-suppression hazard the `branch_index is not None` seed gate forecloses for
+    EVALUATOR_OPTIMIZER / RECONCILER_LOOP). This flag is the discriminator that lets
+    the seed reach the orchestrator WITHOUT also reaching those iterated steps.
+
+    Reset to `False` on every fan-out CHILD (`compose_branch_child_context`) so a
+    worker NEVER inherits it via `model_copy` — a worker seeds with its `branch_path`
+    (per-branch-unique), so its child run_id stays distinct from the orchestrator's
+    (`branch_path=None`). Same hash-inert / per-step-transient posture as
+    `run_engine_class` (NOT persisted, NOT in any §5.2 / outcome-hash); `False`
+    default (every non-orchestrator dispatch) → byte-identical to pre-arc (only the
+    SUB_AGENT_DISPATCH dispatcher's seed gate reads it)."""
+
 
 def compose_branch_child_context(
     parent_context: StepExecutionContext,
@@ -448,6 +469,12 @@ def compose_branch_child_context(
             # C-CP-12 §12.2 monotonic descent — child <= parent; equality is
             # the valid default (dispatch_sub_agent's no-override default).
             "parent_gate_level": parent_context.parent_gate_level,
+            # B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-SUBAGENT — a fan-out
+            # CHILD is NEVER the orchestrator. Reset the flag so a worker composed
+            # from an orchestrator-derived parent (`fanout_parent`) does not inherit
+            # it via `model_copy` (else the worker would seed with `branch_path=None`
+            # and alias the orchestrator's child run_id).
+            "is_orchestrator_dispatch": False,
         }
     )
 

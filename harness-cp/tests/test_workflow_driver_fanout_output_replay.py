@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import pytest
 from harness_core import StepID
+from harness_cp.engine_class import EngineClass
 from harness_cp.pause_resume_protocol_types import (
     FanOutResumeState,
     PeerFanOutResumeState,
@@ -30,6 +31,7 @@ from harness_cp.workflow_driver import (
     _FanOutStoreCorruptError,
     _FanOutStoreOrchestratorMaybeRanError,
     _FanOutStoreTimeoutAmbiguousError,
+    _orchestrator_subagent_recoverable,
 )
 from harness_cp.workflow_driver_types import StepKind, WorkflowStep
 from harness_cp.workflow_manifest_entry import FanoutTimeoutDisposition
@@ -66,6 +68,7 @@ class _FakeStore:
         orchestrator_dispatched: bool = False,
         orchestrator_dispatched_kind: str | None = None,
         orchestrator_dispatched_step_id: str | None = None,
+        orchestrator_subagent_recoverable: bool = False,
         dispatched_kinds: dict[int, str | None] | None = None,
         synthesis_present: bool = False,
     ) -> None:
@@ -96,6 +99,10 @@ class _FakeStore:
         # DISPATCH-TIME step_id (the fence-recoverable same-step_id guard; None = un-recorded /
         # torn marker → mismatch → fail-closed; Codex [P1]).
         self._orchestrator_dispatched_step_id = orchestrator_dispatched_step_id
+        # B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-SUBAGENT — whether the orchestrator's
+        # SUB_AGENT_DISPATCH child was recoverable at dispatch (the marker; False = absent /
+        # non-recoverable → the resume classifier fails closed).
+        self._orchestrator_subagent_recoverable = orchestrator_subagent_recoverable
         # B-FANOUT-CRASH-RESUME-MAYBE-RAN-RESOLUTION / TIMEOUT-REPLAY — the dispatch-time
         # kind recorded in each branch's `.dispatched` marker (the at-most-once changed-
         # manifest guard; None = un-recorded / torn marker → fail-closed at the classifier).
@@ -139,6 +146,9 @@ class _FakeStore:
 
     def orchestrator_dispatched_step_id(self, run_key: str) -> str | None:
         return self._orchestrator_dispatched_step_id
+
+    def orchestrator_subagent_child_recoverable(self, run_key: str) -> bool:
+        return self._orchestrator_subagent_recoverable
 
     def present_dispatched_indexes(self, run_key: str) -> set[int]:
         return set(self._dispatched_kinds)
@@ -424,10 +434,15 @@ def test_orchestrator_maybe_ran_fence_recoverable_changed_step_id_fails_closed(
         )
 
 
-def test_orchestrator_maybe_ran_sub_agent_dispatch_fails_closed() -> None:
-    """A maybe-ran SUB_AGENT_DISPATCH orchestrator STAYS fail-closed — it is recursively fenced at
-    its CHILD's tool sinks (not directly at its own dispatch), so it is NOT in the fence-recoverable
-    set. The registered follow-on B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-SUBAGENT covers it."""
+def test_orchestrator_maybe_ran_sub_agent_dispatch_non_recoverable_child_fails_closed() -> None:
+    """B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-SUBAGENT negative control — a maybe-ran
+    SUB_AGENT_DISPATCH orchestrator whose child is NOT re-dispatch-recoverable STAYS fail-closed.
+    Here BOTH halves of the dual gate are False: the dispatch-time marker recorded no recoverable
+    child (`orchestrator_subagent_recoverable=False`), AND the resumed `steps[0]` opaque payload
+    has no child manifest (`_subagent_child_recoverable` → False). A SUB_AGENT orchestrator is
+    recursively fenced at its CHILD's tool sinks, so it recovers ONLY when its child can auto-resume
+    result-faithfully ({ESR,WAL} ∧ LINEAR ∧ leaf) — else fail closed (the SAVE_POINT/RECONCILER +
+    non-leaf-child residuals)."""
     store = _FakeStore(
         branches={},
         orchestrator=None,
@@ -435,6 +450,7 @@ def test_orchestrator_maybe_ran_sub_agent_dispatch_fails_closed() -> None:
         orchestrator_dispatched=True,
         orchestrator_dispatched_kind=StepKind.SUB_AGENT_DISPATCH.value,
         orchestrator_dispatched_step_id="step-0",
+        orchestrator_subagent_recoverable=False,
     )
     with pytest.raises(_FanOutStoreOrchestratorMaybeRanError, match="effect-bearing"):
         _determine_fanout_resume(
@@ -443,6 +459,142 @@ def test_orchestrator_maybe_ran_sub_agent_dispatch_fails_closed() -> None:
             _orch_steps(StepKind.SUB_AGENT_DISPATCH),
             TopologyPattern.ORCHESTRATOR_WORKERS,
         )
+
+
+def _recoverable_orch_steps(
+    *, orch_step_id: str = "step-0", child_kind: StepKind = StepKind.TOOL_STEP
+) -> list[WorkflowStep]:
+    """`steps[0]` is a SUB_AGENT_DISPATCH orchestrator whose opaque payload describes a
+    RE-DISPATCH-RECOVERABLE child ({ESR} ∧ LINEAR ∧ leaf) → `_subagent_child_recoverable` → True."""
+    steps = _steps(3)
+    steps[0] = WorkflowStep(
+        step_id=StepID(orch_step_id),
+        step_kind=StepKind.SUB_AGENT_DISPATCH,
+        step_payload={
+            "child_manifest_entry": {
+                "engine_class": EngineClass.EVENT_SOURCED_REPLAY.value,
+                "topology_pattern": TopologyPattern.SINGLE_THREADED_LINEAR.value,
+            },
+            "child_steps": [{"step_kind": child_kind.value}],
+        },
+    )
+    return steps
+
+
+def test_orchestrator_maybe_ran_sub_agent_recoverable_child_recovers() -> None:
+    """B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-SUBAGENT (R-FS-1) positive — a maybe-ran
+    SUB_AGENT_DISPATCH orchestrator whose child is recoverable BOTH at dispatch (the marker,
+    `orchestrator_subagent_recoverable=True`) AND in the resumed manifest
+    (`_subagent_child_recoverable(steps[0])` → True), with the SAME step_id, RECOVERS: None
+    (re-run the whole fan-out fresh → the orchestrator re-dispatches → its child auto-resumes from
+    its durable store under the deterministic run_id, result-faithfully). Was: fail closed."""
+    store = _FakeStore(
+        branches={},
+        orchestrator=None,
+        dispatch_instrumented=True,
+        orchestrator_dispatched=True,
+        orchestrator_dispatched_kind=StepKind.SUB_AGENT_DISPATCH.value,
+        orchestrator_dispatched_step_id="step-0",
+        orchestrator_subagent_recoverable=True,
+    )
+    assert (
+        _determine_fanout_resume(
+            store, _RUN_KEY, _recoverable_orch_steps(), TopologyPattern.ORCHESTRATOR_WORKERS
+        )
+        is None
+    )
+
+
+def test_orchestrator_maybe_ran_sub_agent_recoverable_at_dispatch_not_resumed_fails_closed() -> (
+    None
+):
+    """[P1-b] dual gate — the child was recoverable at DISPATCH (the marker) but the RESUMED
+    manifest's `steps[0]` is NON-recoverable (here the default opaque payload has no child
+    manifest). The re-dispatch would run the now-non-recoverable child fresh → double-fire /
+    suffix-only corruption → fail closed (the resumed-side conjunct)."""
+    store = _FakeStore(
+        branches={},
+        orchestrator=None,
+        dispatch_instrumented=True,
+        orchestrator_dispatched=True,
+        orchestrator_dispatched_kind=StepKind.SUB_AGENT_DISPATCH.value,
+        orchestrator_dispatched_step_id="step-0",
+        orchestrator_subagent_recoverable=True,  # marker recoverable...
+    )
+    # ...but the resumed steps[0] opaque payload is non-recoverable (`_orch_steps` payload {"i":0}).
+    with pytest.raises(_FanOutStoreOrchestratorMaybeRanError, match="effect-bearing"):
+        _determine_fanout_resume(
+            store,
+            _RUN_KEY,
+            _orch_steps(StepKind.SUB_AGENT_DISPATCH),
+            TopologyPattern.ORCHESTRATOR_WORKERS,
+        )
+
+
+def test_orchestrator_maybe_ran_sub_agent_recoverable_at_resumed_not_dispatch_fails_closed() -> (
+    None
+):
+    """[P1-b] dual gate — the resumed manifest's `steps[0]` is recoverable but the DISPATCH-TIME
+    marker recorded NO recoverable child (`orchestrator_subagent_recoverable=False`: no durable
+    child records to auto-resume from). The dispatch-time marker is the authority → fail closed."""
+    store = _FakeStore(
+        branches={},
+        orchestrator=None,
+        dispatch_instrumented=True,
+        orchestrator_dispatched=True,
+        orchestrator_dispatched_kind=StepKind.SUB_AGENT_DISPATCH.value,
+        orchestrator_dispatched_step_id="step-0",
+        orchestrator_subagent_recoverable=False,  # marker NOT recoverable...
+    )
+    # ...even though the resumed steps[0] IS recoverable.
+    with pytest.raises(_FanOutStoreOrchestratorMaybeRanError, match="effect-bearing"):
+        _determine_fanout_resume(
+            store, _RUN_KEY, _recoverable_orch_steps(), TopologyPattern.ORCHESTRATOR_WORKERS
+        )
+
+
+def test_orchestrator_maybe_ran_sub_agent_changed_step_id_fails_closed() -> None:
+    """Same-step_id guard (manifest-stability parity with the worker SUB_AGENT path) — a
+    recoverable SUB_AGENT orchestrator re-supplied at a CHANGED step_id (rename / reorder) is a
+    DIFFERENT logical orchestrator → fail closed even though both gate halves are recoverable."""
+    store = _FakeStore(
+        branches={},
+        orchestrator=None,
+        dispatch_instrumented=True,
+        orchestrator_dispatched=True,
+        orchestrator_dispatched_kind=StepKind.SUB_AGENT_DISPATCH.value,
+        orchestrator_dispatched_step_id="step-0",  # marker recorded "step-0"
+        orchestrator_subagent_recoverable=True,
+    )
+    with pytest.raises(_FanOutStoreOrchestratorMaybeRanError, match="effect-bearing"):
+        _determine_fanout_resume(
+            store,
+            _RUN_KEY,
+            _recoverable_orch_steps(orch_step_id="step-0-renamed"),
+            TopologyPattern.ORCHESTRATOR_WORKERS,
+        )
+
+
+def test_orchestrator_subagent_recoverable_helper_fails_closed_on_store_without_reader() -> None:
+    """Out-of-family Codex [P2] — the additive `orchestrator_subagent_child_recoverable` reader is
+    read DEFENSIVELY (`getattr`): a store predating v1.86 (or a partial custom/test store) that does
+    NOT implement it maps to `False` (fail closed), NEVER an `AttributeError` that would break the
+    resume classifier — mirroring the worker `_subagent_recoverable_marker_indexes` boundary."""
+
+    class _StoreWithoutReader:
+        pass
+
+    assert _orchestrator_subagent_recoverable(_StoreWithoutReader(), _RUN_KEY) is False
+
+
+def test_orchestrator_subagent_recoverable_helper_reads_present_reader() -> None:
+    """The helper reads the marker when the store DOES implement it (the v1.86 store API)."""
+
+    class _StoreWithReader:
+        def orchestrator_subagent_child_recoverable(self, run_key: str) -> bool:
+            return True
+
+    assert _orchestrator_subagent_recoverable(_StoreWithReader(), _RUN_KEY) is True
 
 
 def test_orchestrator_maybe_ran_changed_manifest_kind_keyed_on_marker() -> None:
