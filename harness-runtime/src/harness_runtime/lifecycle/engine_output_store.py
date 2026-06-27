@@ -562,7 +562,13 @@ class EngineOutputStore:
     # dispatch), so the marker→dispatch sequence has no yield point — no false-positive
     # marker is possible without the worker path's atomicity dance.
 
-    def record_orchestrator_dispatched(self, run_key: str, step_id: str, step_kind: str) -> None:
+    def record_orchestrator_dispatched(
+        self,
+        run_key: str,
+        step_id: str,
+        step_kind: str,
+        child_recoverable: bool | None = None,
+    ) -> None:
         """Mark the ORCHESTRATOR_WORKERS ``steps[0]`` orchestrator as DISPATCHED, durably.
 
         The reserve-before-DISPATCH marker for the orchestrator: written — fsynced — strictly
@@ -576,8 +582,23 @@ class EngineOutputStore:
         ``orchestrator_dispatched_kind`` so the maybe-ran re-fire-safety classifier keys on the
         ORIGINAL kind, never the (possibly changed) resumed manifest's kind (the at-most-once
         changed-manifest guard, B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-RESOLUTION — the
-        single-orchestrator analogue of the per-branch ``record_branch_dispatched`` kind)."""
-        record = {"step_id": str(step_id), "step_kind": str(step_kind)}
+        single-orchestrator analogue of the per-branch ``record_branch_dispatched`` kind).
+
+        ``child_recoverable`` (B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-SUBAGENT) — for a
+        SUB_AGENT_DISPATCH orchestrator only, whether its CHILD was RE-DISPATCH-RECOVERABLE at
+        DISPATCH (``{ESR,WAL}`` engine ∧ SINGLE_THREADED_LINEAR topology ∧ leaf — the SAME
+        predicate the worker uses). Read by ``orchestrator_subagent_child_recoverable`` so a
+        maybe-ran SUB_AGENT_DISPATCH orchestrator is re-dispatch-recoverable (re-running the
+        whole fan-out fresh re-dispatches the orchestrator, whose child auto-resumes under the
+        deterministic run_id) ONLY when its child can auto-resume RESULT-FAITHFULLY — else the
+        classifier fails closed (the single-orchestrator analogue of the worker
+        ``record_branch_dispatched(child_recoverable=...)``). The DISPATCH-TIME value (the
+        at-most-once changed-manifest guard). ``None`` (every non-SUB_AGENT_DISPATCH
+        orchestrator + pre-arc markers) → the field is OMITTED so those markers hash/parse
+        byte-identically to before."""
+        record: dict[str, object] = {"step_id": str(step_id), "step_kind": str(step_kind)}
+        if child_recoverable is not None:
+            record["child_recoverable"] = bool(child_recoverable)
         line = json.dumps(record, sort_keys=True)
         self._append_path(self._orchestrator_dispatched_file(run_key), line)
 
@@ -640,6 +661,32 @@ class EngineOutputStore:
             return raw if isinstance(raw, str) else None
         except (OSError, UnicodeDecodeError, ValueError, IndexError, KeyError, AttributeError):
             return None
+
+    def orchestrator_subagent_child_recoverable(self, run_key: str) -> bool:
+        """Whether the orchestrator's DISPATCH-TIME marker recorded ``child_recoverable=True``.
+
+        B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-SUBAGENT — a maybe-ran SUB_AGENT_DISPATCH
+        orchestrator is recoverable-by-re-dispatch (re-running the whole fan-out fresh
+        re-dispatches the orchestrator, whose child auto-resumes under the deterministic run_id,
+        with result-faithful ``final_state`` reconstruction) ONLY if its child was RECOVERABLE at
+        dispatch (``{ESR,WAL}`` ∧ LINEAR ∧ leaf, recorded here from the opaque child manifest).
+        The marker is the DISPATCH-TIME value (the at-most-once changed-manifest guard — a child
+        edited recoverable→non-recoverable between dispatch + resume must STILL be classified by
+        the dispatch-time value; the resumed-side half is the CP driver's
+        ``_subagent_child_recoverable(steps[0])`` re-check). Absent / ``False`` / torn / pre-arc →
+        ``False`` → the classifier fails closed (the #701 decline-mirror; never an auto-recover).
+        The single-orchestrator analogue of the per-branch
+        ``subagent_child_recoverable_indexes``."""
+        path = self._orchestrator_dispatched_file(run_key)
+        if not path.exists():
+            return False
+        try:
+            record = json.loads(path.read_text(encoding="utf-8").splitlines()[-1])
+            return record.get("child_recoverable") is True
+        except (OSError, UnicodeDecodeError, ValueError, IndexError, KeyError, AttributeError):
+            # torn / pre-arc / invalid-encoding marker → not provably recoverable → fail-closed
+            # at the classifier (presence ≠ validity).
+            return False
 
     # -- B-FANOUT-OUTPUT-REPLAY PR2: terminal POST_JOIN_SYNTHESIS capture -----
     #

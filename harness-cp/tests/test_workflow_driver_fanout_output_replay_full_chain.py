@@ -118,6 +118,10 @@ class _InMemoryBranchStore:
         # (None models a pre-v1.81 v1.79-era marker — step_id only, no kind → fail-closed).
         self._orchestrator_dispatched: dict[str, str | None] = {}
         self._orchestrator_dispatched_step_id: dict[str, str | None] = {}
+        # B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-SUBAGENT — {run_key: child_recoverable}
+        # for a SUB_AGENT_DISPATCH orchestrator (the single-orchestrator analogue of
+        # `_subagent_recoverable`). Absent → not recoverable (fail-closed at the classifier).
+        self._orchestrator_subagent_recoverable: dict[str, bool] = {}
 
     def record_fanout_cardinality(self, run_key: str, branch_count: int) -> None:
         self._cardinality[run_key] = int(branch_count)
@@ -204,9 +208,17 @@ class _InMemoryBranchStore:
         return run_key in self._instrumented
 
     # -- B-FANOUT-CRASH-RESUME-ORCHESTRATOR-DISPATCH: orchestrator reserve-before-dispatch --
-    def record_orchestrator_dispatched(self, run_key: str, step_id: str, step_kind: str) -> None:
+    def record_orchestrator_dispatched(
+        self,
+        run_key: str,
+        step_id: str,
+        step_kind: str,
+        child_recoverable: bool | None = None,
+    ) -> None:
         self._orchestrator_dispatched[run_key] = str(step_kind)
         self._orchestrator_dispatched_step_id[run_key] = str(step_id)
+        if child_recoverable is not None:
+            self._orchestrator_subagent_recoverable[run_key] = bool(child_recoverable)
 
     def orchestrator_dispatched(self, run_key: str) -> bool:
         return run_key in self._orchestrator_dispatched
@@ -216,6 +228,9 @@ class _InMemoryBranchStore:
 
     def orchestrator_dispatched_step_id(self, run_key: str) -> str | None:
         return self._orchestrator_dispatched_step_id.get(run_key)
+
+    def orchestrator_subagent_child_recoverable(self, run_key: str) -> bool:
+        return self._orchestrator_subagent_recoverable.get(run_key, False)
 
     # -- test helper: a pre-v1.81 (v1.79-era) orchestrator marker (step_id only, no recorded
     # kind) → the maybe-ran classifier cannot prove re-fire-safety → fail-closed (the v1.79
@@ -253,6 +268,7 @@ class _InMemoryBranchStore:
         self._dispatched.pop(run_key, None)
         self._orchestrator_dispatched.pop(run_key, None)
         self._orchestrator_dispatched_step_id.pop(run_key, None)
+        self._orchestrator_subagent_recoverable.pop(run_key, None)
 
     # -- test helper: a PRE-arc (un-instrumented) journal — cardinality + branch records but
     # NO dispatch stamp and NO markers (the cross-version hazard). Forces the conservative
@@ -262,6 +278,7 @@ class _InMemoryBranchStore:
         self._dispatched.pop(run_key, None)
         self._orchestrator_dispatched.pop(run_key, None)
         self._orchestrator_dispatched_step_id.pop(run_key, None)
+        self._orchestrator_subagent_recoverable.pop(run_key, None)
 
     # -- PR2 synthesis capture / replay ---------------------------------------
     def record_synthesis(
@@ -3962,6 +3979,145 @@ def test_crash_resume_orchestrator_maybe_ran_fence_recoverable_managed_agents_re
     assert resume.dispatched == ["orch", "w-0", "w-1"]
 
 
+def test_crash_resume_orchestrator_maybe_ran_sub_agent_recoverable_child_recovers() -> None:
+    """B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-SUBAGENT (R-FS-1) full-chain — a maybe-ran
+    SUB_AGENT_DISPATCH orchestrator whose child is RE-DISPATCH-RECOVERABLE ({ESR} ∧ LINEAR ∧ leaf)
+    now RECOVERS (was: fail-closed). The PRODUCTION orchestrator dispatch records
+    `child_recoverable=True` in the reserve marker (`_subagent_child_recoverable(orchestrator_step)`
+    over the opaque child manifest); on crash-resume the classifier sees the [P1-b] dual gate
+    satisfied (marker True + resumed `steps[0]` recoverable + same step_id) → re-runs the whole
+    fan-out fresh: the orchestrator re-dispatches and its child auto-resumes from its durable store
+    under the deterministic child run_id. The recursive-child RESULT-fidelity is witnessed
+    end-to-end at the runtime `test_recursive_child_crash_resume_final_state_witness`; the
+    orchestrator seed-wiring at `test_dispatch_seed_for_orchestrator_uses_branch_path_none`. The
+    mock dispatcher here models the re-dispatch reaching the child sink."""
+    store = _InMemoryBranchStore()
+    orch = WorkflowStep(
+        step_id=StepID("orch"),
+        step_kind=StepKind.SUB_AGENT_DISPATCH,
+        step_payload={
+            "index": 0,
+            "child_manifest_entry": {
+                "engine_class": EngineClass.EVENT_SOURCED_REPLAY.value,
+                "topology_pattern": TopologyPattern.SINGLE_THREADED_LINEAR.value,
+            },
+            "child_steps": [{"step_kind": StepKind.TOOL_STEP.value}],
+        },
+    )
+    steps = [orch, _step("w-0", 0), _step("w-1", 1)]
+    _run_persona(
+        workflow_id="wf-ow-orch-subagent",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=2),
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+        registry=_AnyKindRegistry(_CountingDispatcher(n=2)),
+    )
+    key = store.sole_run_key()
+    # The PRODUCTION orchestrator dispatch recorded the child-recoverable marker (my new call).
+    assert store.orchestrator_subagent_child_recoverable(key) is True
+    store.forget_orchestrator_maybe_ran(key)
+    assert store.orchestrator_dispatched_kind(key) == StepKind.SUB_AGENT_DISPATCH.value
+    # The marker survives the maybe-ran crash (fsynced before dispatch).
+    assert store.orchestrator_subagent_child_recoverable(key) is True
+
+    resume = _CountingDispatcher(n=2)
+    r2 = _run_persona(
+        workflow_id="wf-ow-orch-subagent",
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+        registry=_AnyKindRegistry(resume),
+    )
+    assert r2.status is RunStatus.SUCCESS
+    # Recovered → the whole fan-out re-ran fresh (orchestrator re-dispatch → child auto-resume).
+    assert resume.dispatched == ["orch", "w-0", "w-1"]
+
+
+def test_crash_resume_orchestrator_maybe_ran_sub_agent_non_recoverable_child_fails_closed() -> None:
+    """B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-SUBAGENT (R-FS-1) full-chain negative control —
+    a maybe-ran SUB_AGENT_DISPATCH orchestrator whose child is NOT recoverable (here a SAVE_POINT
+    child → no durable output store → suffix-only `final_state`) STAYS fail-closed. The production
+    dispatch records `child_recoverable=False`, so the resume classifier's dual gate fails → the run
+    cannot recover (the SAVE_POINT/RECONCILER + non-leaf-child residuals)."""
+    store = _InMemoryBranchStore()
+    orch = WorkflowStep(
+        step_id=StepID("orch"),
+        step_kind=StepKind.SUB_AGENT_DISPATCH,
+        step_payload={
+            "index": 0,
+            "child_manifest_entry": {
+                "engine_class": EngineClass.SAVE_POINT_CHECKPOINT.value,  # no output store
+                "topology_pattern": TopologyPattern.SINGLE_THREADED_LINEAR.value,
+            },
+            "child_steps": [{"step_kind": StepKind.TOOL_STEP.value}],
+        },
+    )
+    steps = [orch, _step("w-0", 0), _step("w-1", 1)]
+    _run_persona(
+        workflow_id="wf-ow-orch-subagent-nonrec",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=2),
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+        registry=_AnyKindRegistry(_CountingDispatcher(n=2)),
+    )
+    key = store.sole_run_key()
+    assert store.orchestrator_subagent_child_recoverable(key) is False
+    store.forget_orchestrator_maybe_ran(key)
+
+    resume = _CountingDispatcher(n=2)
+    r2 = _run_persona(
+        workflow_id="wf-ow-orch-subagent-nonrec",
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+        registry=_AnyKindRegistry(resume),
+    )
+    # Fail-closed maybe-ran → the run does NOT recover (FAILED, never a spurious fresh re-dispatch).
+    assert r2.status is RunStatus.FAILED
+    assert resume.dispatched == []
+
+
+class _LegacyOrchestratorMarkerStore(_InMemoryBranchStore):
+    """A replay store implementing the PRE-v1.86 3-arg `record_orchestrator_dispatched(run_key,
+    step_id, step_kind)` signature (no `child_recoverable` kwarg) — out-of-family Codex [P2]."""
+
+    def record_orchestrator_dispatched(  # type: ignore[override]
+        self, run_key: str, step_id: str, step_kind: str
+    ) -> None:
+        super().record_orchestrator_dispatched(run_key, step_id, step_kind)
+
+
+def test_orchestrator_dispatch_on_legacy_3arg_store_no_typeerror() -> None:
+    """Out-of-family Codex [P2] — a NON-SUB_AGENT orchestrator dispatched against a store with the
+    PRE-v1.86 3-arg `record_orchestrator_dispatched` signature must NOT raise `TypeError`: the
+    production path OMITS the additive `child_recoverable` kwarg entirely when the orchestrator is
+    not SUB_AGENT_DISPATCH (`_subagent_child_recoverable` → None), mirroring the worker
+    `_mark_branch_dispatched` only-pass-when-not-None compatibility. A regression (always passing
+    the kwarg) would TypeError → the orchestrator dispatch try/except → a spurious FAILED."""
+    store = _LegacyOrchestratorMarkerStore()
+    steps = [_step("orch", 0, StepKind.DECLARATIVE_STEP), _step("w-0", 0), _step("w-1", 1)]
+    r = _run_persona(
+        workflow_id="wf-ow-orch-legacy-store",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=2),
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+    )
+    assert r.status is RunStatus.SUCCESS  # no TypeError → the run completed normally
+    assert (
+        store.orchestrator_dispatched_kind(store.sole_run_key()) == StepKind.DECLARATIVE_STEP.value
+    )
+
+
 def test_crash_resume_orchestrator_maybe_ran_cross_kind_swap_fails_closed() -> None:
     """The orchestrator same-kind guard — a maybe-ran orchestrator dispatched as TOOL_STEP,
     re-supplied on resume as MANAGED_AGENTS (a CROSS-KIND swap between two fence-recoverable kinds),
@@ -4102,6 +4258,55 @@ def test_crash_resume_hierarchical_orchestrator_maybe_ran_re_fire_safe_recovers(
     )
     assert r2.status is RunStatus.SUCCESS
     assert resume.dispatched == ["parent", "child-0", "child-1"]  # re-fire-safe → re-dispatch fresh
+
+
+def test_crash_resume_hierarchical_orchestrator_maybe_ran_sub_agent_recoverable_recovers() -> None:
+    """HIERARCHICAL_DELEGATION parity for B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-SUBAGENT
+    (R-FS-1) — HIERARCHICAL is recursive ORCHESTRATOR_WORKERS (the top level reuses
+    `_execute_orchestrator_workers`), so a maybe-ran SUB_AGENT_DISPATCH parent with a
+    RE-DISPATCH-RECOVERABLE child inherits the SAME recovery (the `child_recoverable` marker
+    recording + the orchestrator SUB_AGENT recovery disjunct are topology-agnostic). Witnesses the
+    hierarchical coverage claim (`[[full-chain-witness-not-half-proofs]]`)."""
+    store = _InMemoryBranchStore()
+    parent = WorkflowStep(
+        step_id=StepID("parent"),
+        step_kind=StepKind.SUB_AGENT_DISPATCH,
+        step_payload={
+            "index": 0,
+            "child_manifest_entry": {
+                "engine_class": EngineClass.WAL_SEGMENT.value,
+                "topology_pattern": TopologyPattern.SINGLE_THREADED_LINEAR.value,
+            },
+            "child_steps": [{"step_kind": StepKind.TOOL_STEP.value}],
+        },
+    )
+    steps = [parent, _step("child-0", 0), _step("child-1", 1)]
+    _run_persona(
+        workflow_id="wf-hd-orch-subagent",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=2),
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        topology=TopologyPattern.HIERARCHICAL_DELEGATION,
+        registry=_AnyKindRegistry(_CountingDispatcher(n=2)),
+    )
+    key = store.sole_run_key()
+    assert store.orchestrator_subagent_child_recoverable(key) is True
+    store.forget_orchestrator_maybe_ran(key)
+    assert store.orchestrator_dispatched_kind(key) == StepKind.SUB_AGENT_DISPATCH.value
+
+    resume = _CountingDispatcher(n=2)
+    r2 = _run_persona(
+        workflow_id="wf-hd-orch-subagent",
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        topology=TopologyPattern.HIERARCHICAL_DELEGATION,
+        registry=_AnyKindRegistry(resume),
+    )
+    assert r2.status is RunStatus.SUCCESS
+    assert resume.dispatched == ["parent", "child-0", "child-1"]
 
 
 def test_crash_resume_parallelization_orchestrator_marker_topology_mismatch_fails_closed() -> None:

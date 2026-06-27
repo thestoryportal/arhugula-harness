@@ -1034,6 +1034,21 @@ def _subagent_recoverable_marker_indexes(store: Any, run_key: str) -> set[int]:
     return set(reader(run_key))
 
 
+def _orchestrator_subagent_recoverable(store: Any, run_key: str) -> bool:
+    """B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-SUBAGENT (R-FS-1) — defensive read of the
+    DISPATCH-TIME orchestrator child-recoverable marker (the single-orchestrator analogue of
+    `_subagent_recoverable_marker_indexes`).
+
+    A store that predates / does not implement the reader (a pre-arc store, a partial test fake) →
+    `False` → a maybe-ran SUB_AGENT_DISPATCH orchestrator fails closed (presence ≠ validity; never
+    auto-recover on an un-answerable store). Mirrors the worker `getattr` idiom — additive,
+    fail-closed, byte-identical for any run without a SUB_AGENT_DISPATCH orchestrator."""
+    reader = getattr(store, "orchestrator_subagent_child_recoverable", None)
+    if reader is None:
+        return False
+    return bool(reader(run_key))
+
+
 def _fanout_replay_store(ctx: DriverContext, manifest_entry: WorkflowManifestEntry) -> Any:
     """B-FANOUT-OUTPUT-REPLAY (R-FS-1) — the bound `EngineOutputStore` IFF this run is
     fan-out-crash-recoverable, else `None`.
@@ -5952,6 +5967,47 @@ def _determine_fanout_resume(
                     # engine classes are a subset of the durable-auto-fence set; the orchestrator
                     # context inherits `run_engine_class`).
                     return None
+                if (
+                    not _downstream_artifact_present
+                    and store.dispatch_instrumented(run_key)
+                    and _orch_kind == StepKind.SUB_AGENT_DISPATCH.value
+                    and _resumed_orch_kind == StepKind.SUB_AGENT_DISPATCH.value
+                    # Same-step_id guard (manifest-stability parity with the worker SUB_AGENT path,
+                    # #756): a maybe-ran orchestrator re-supplied at steps[0] as a RENAMED/REORDERED
+                    # step is a DIFFERENT logical orchestrator → fail closed. Marker step_id missing
+                    # (torn / pre-arc) → None → mismatch → fail closed.
+                    and _orch_marker_step_id is not None
+                    and _orch_marker_step_id == _resumed_orch_step_id
+                    # The [P1-b] dual gate (#746): the orchestrator's child must be recoverable
+                    # BOTH at dispatch (the marker — durable child records exist to auto-resume
+                    # from) AND in the RESUMED manifest (the re-dispatch goes through the child's
+                    # replay store/fence path, not a fresh non-recoverable run). A child edited
+                    # recoverable→non-recoverable between dispatch + resume is in the dispatch set
+                    # but NOT the resumed set → fail closed (else the re-dispatch runs the
+                    # now-non-recoverable child fresh → double-fire / suffix-only corruption).
+                    and _orchestrator_subagent_recoverable(store, run_key)
+                    and bool(steps)
+                    and _subagent_child_recoverable(steps[0]) is True
+                ):
+                    # B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-SUBAGENT (R-FS-1) — pristine
+                    # window + dispatch-instrumented stamp + a SUB_AGENT_DISPATCH orchestrator whose
+                    # LINEAR-{ESR,WAL}-leaf child is re-dispatch-recoverable. UNLIKE the
+                    # fence-recoverable kinds (the orchestrator's OWN dispatch reaches a fence), a
+                    # sub-agent orchestrator's effects live at its CHILD's tool sinks → recovery
+                    # is COMPOSITIONAL recursive child crash-resume: re-running the whole fan-out
+                    # fresh re-dispatches the orchestrator, whose child auto-resumes from its
+                    # durable store under the DETERMINISTIC `child_run_id_seed` (composer-derived
+                    # from the orchestrator's stable `orchestrator_idempotency_key`,
+                    # `branch_path=None`), with result-faithful `final_state` reconstruction
+                    # (B-CHILD-CRASH-RESUME-FINAL-STATE-RECONSTRUCT, v1.75). The whole fan-out
+                    # re-runs SAFELY because nothing downstream was dispatched (pristine window: no
+                    # worker dispatch marker / branch capture / cardinality marker / synthesis).
+                    # The orchestrator analogue of the worker
+                    # `_fence_unrecoverable_maybe_ran_indices` SUB_AGENT recovery disjunct. A
+                    # SAVE_POINT/RECONCILER or fan-out/nested child is NOT recoverable
+                    # (`_subagent_child_recoverable` returns False) → falls through to fail closed
+                    # below (the `…-SAVE-POINT-RECONCILER` / non-leaf-child residuals).
+                    return None
                 if _downstream_artifact_present:
                     # A downstream artifact survived but the orchestrator capture is absent → the
                     # run advanced past orchestrator capture → the capture was LOST → corruption.
@@ -8495,6 +8551,13 @@ def _execute_orchestrator_workers(
         # operator resolution for an orchestrator effect-fence resume (None on every
         # non-fence-resume run → hash-inert, byte-identical to the pre-arc context).
         effect_fence_resolution=_orch_effect_fence_directive,
+        # B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-SUBAGENT — mark THIS context as
+        # the orchestrator's own dispatch so the runtime extends the deterministic
+        # `child_run_id_seed` to a SUB_AGENT_DISPATCH orchestrator (recoverable child
+        # auto-resumes on a crash re-dispatch). Workers RESET it (compose_branch_child_
+        # context) so they keep their per-branch seed; hash-inert (byte-identical when
+        # the orchestrator is not a recoverable SUB_AGENT_DISPATCH).
+        is_orchestrator_dispatch=True,
     )
     if _is_resume:
         # B-FANOUT-PAUSE — the orchestrator already ran in the ORIGINAL envelope
@@ -8590,11 +8653,29 @@ def _execute_orchestrator_workers(
                 # marker so the resume-side maybe-ran classifier keys on the ORIGINAL kind (the
                 # at-most-once changed-manifest guard), mirroring the worker
                 # `record_branch_dispatched(... str(step_kind.value))` caller.
-                _orch_replay_store.record_orchestrator_dispatched(
-                    run_idempotency_key,
-                    str(orchestrator_step.step_id),
-                    str(orchestrator_step.step_kind.value),
-                )
+                # B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-SUBAGENT — ALSO record whether a
+                # SUB_AGENT_DISPATCH orchestrator's child was RE-DISPATCH-RECOVERABLE at dispatch
+                # ({ESR,WAL} ∧ LINEAR ∧ leaf, the SAME `_subagent_child_recoverable` predicate the
+                # worker uses). `None` (non-SUB_AGENT orchestrator) → the additive kwarg is OMITTED
+                # entirely (out-of-family Codex [P2]: a store implementing the pre-v1.86 3-arg
+                # signature must not see a `child_recoverable=None` kwarg → TypeError), mirroring
+                # the worker `_mark_branch_dispatched` only-pass-when-not-None compatibility. The
+                # DISPATCH-TIME value (the at-most-once changed-manifest guard; the resumed-side
+                # half is `_subagent_child_recoverable(steps[0])`).
+                _orch_child_recoverable = _subagent_child_recoverable(orchestrator_step)
+                if _orch_child_recoverable is None:
+                    _orch_replay_store.record_orchestrator_dispatched(
+                        run_idempotency_key,
+                        str(orchestrator_step.step_id),
+                        str(orchestrator_step.step_kind.value),
+                    )
+                else:
+                    _orch_replay_store.record_orchestrator_dispatched(
+                        run_idempotency_key,
+                        str(orchestrator_step.step_id),
+                        str(orchestrator_step.step_kind.value),
+                        child_recoverable=_orch_child_recoverable,
+                    )
             orchestrator_output = _orch_dispatcher.dispatch(
                 orchestrator_binding, orchestrator_step, step_context=orchestrator_context
             )
@@ -8686,8 +8767,14 @@ def _execute_orchestrator_workers(
         )
 
     # --- 2) the worker fan-out plan (per-role child contexts under the orchestrator) ---
+    # B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-SUBAGENT — reset `is_orchestrator_dispatch`
+    # on the worker-template parent so no worker inherits the orchestrator's seed discriminator
+    # (compose_branch_child_context also resets it; defense-in-depth + intent-documenting).
     fanout_parent = orchestrator_context.model_copy(
-        update={"parent_idempotency_key": orchestrator_idempotency_key}
+        update={
+            "parent_idempotency_key": orchestrator_idempotency_key,
+            "is_orchestrator_dispatch": False,
+        }
     )
     branch_plan: list[
         tuple[int, WorkflowStep, StepExecutionContext, BufferingLedgerWriter, StepEffectiveBinding]

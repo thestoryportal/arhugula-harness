@@ -46,7 +46,7 @@
 snapshot:
   frozen_total: 11
   frozen_done: 11
-  standalone_closed: 58
+  standalone_closed: 59
   standalone_gated: 0
   standalone_resolved: 4
   standalone_registered: 4
@@ -1041,13 +1041,27 @@ arcs:
   - id: B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-SUBAGENT
     title: "Resolve a maybe-ran ORCHESTRATOR of kind SUB_AGENT_DISPATCH (recursively fenced)"
     kind: standalone
-    status: registered
+    status: closed
     decompose_at_open: true
     owner_axis: "CP + runtime"
-    operator_gated: false  # provisional — decided at open; recursive child crash-resume at the orchestrator dispatch site. If honoring it forces sacrificing at-most-once / result-fidelity it flips operator-gated (the worker SUBAGENT precedent #746).
+    operator_gated: false  # additive recovery for a previously-fail-closed surface (no committed-invariant sacrifice, at-most-once preserved) → no operator gate. The worker-SUBAGENT precedent (v1.77) confirmed additive.
     parent_arc: B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-EFFECT-BEARING
     anticipated_scope: "Resolve a MAYBE-RAN orchestrator of kind SUB_AGENT_DISPATCH. Unlike TOOL_STEP / MANAGED_AGENTS (the DIRECT-fence kinds the parent closed), a SUB_AGENT_DISPATCH orchestrator's OWN dispatch does not reach a fence directly — its effects are its CHILD sub-workflow's tool calls (fenced at the child's tool sinks) → recursive child crash-resume (compose the child's own fence/pause state through the ORCHESTRATOR dispatch site), the orchestrator analogue of the worker B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT. Currently the parent's fence-recoverable set excludes SUB_AGENT_DISPATCH → a maybe-ran SUB_AGENT orchestrator fails closed. The #746 worker-SUBAGENT lesson (recursive RESULT-fidelity + resumed-child fence) applies — needs a REAL (non-mocked) recursive-child crash-resume witness + a recorded-original-AND-resumed-child fence-active gate. UNBLOCKED-FOR-ESR/WAL by B-CHILD-CRASH-RESUME-FINAL-STATE-RECONSTRUCT (CP v1.75, #<pending>): the result-fidelity blocker is REMOVED for LINEAR EVENT_SOURCED_REPLAY / WAL_SEGMENT children (the worker-SUBAGENT finding-v2 witness applied identically here; a fan-out child's aggregate was already covered by B-FANOUT-OUTPUT-REPLAY); this arc still needs its OWN recursive-child mechanism, and a SAVE_POINT/RECONCILER child remains result-blocked on B-CHILD-CRASH-RESUME-FINAL-STATE-RECONSTRUCT-SAVE-POINT-RECONCILER."
     why: "Surfaced at B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-EFFECT-BEARING (the per-kind decompose-at-open): the parent closed the DIRECT-fence (LEAF) orchestrator kinds; SUB_AGENT_DISPATCH is recursively fenced (a larger, separately-verified mechanism) → split off rather than fail-closed-forever-silently or unsoundly bundled (the #746 trap). Mirrors the worker family's own TOOL_STEP/MANAGED_AGENTS-vs-SUBAGENT split. FULL-SPEC (`[[feedback-full-spec-beyond-mvp-nothing-deferred]]`)."
+    # 2026-06-26 (CLOSED — the orchestrator analogue of the worker arc, CP v1.77→v1.78 + runtime v1.85→v1.86): built the orchestrator SUB_AGENT recovery as the WITNESSED LINEAR-{ESR,WAL}-leaf slice. Mechanism = the `is_orchestrator_dispatch` seed-discriminator (extends the deterministic child_run_id_seed to the orchestrator dispatch, branch_path=None, distinct from worker seeds, no leak to loop iterations) + record_orchestrator_dispatched(child_recoverable=...) marker + orchestrator_subagent_child_recoverable reader + the SUB_AGENT recovery disjunct in _determine_fanout_resume's orchestrator maybe-ran block ([P1-b] dual gate: dispatch marker AND resumed _subagent_child_recoverable(steps[0]) + same-step_id). REUSES the worker predicate/seed/dual-gate verbatim (no new typed surface). Selection per advisor convergence-value criterion (rank by unblock/avoid-spawn over code-freshness); tripwire close-≥-register confirmed (net-zero). Witnessed: orchestrator seed-wiring + orchestrator↔worker seed-distinctness (runtime) + classifier dual-gate/step_id/negative-controls + full-chain production-marker recovery/fail-closed pair (CP).
+    pr: "#<pending> (orchestrator SUB_AGENT recovery — flips registered → closed as the LINEAR-{ESR,WAL}-leaf-child slice; registers 1 follow-on [ORCHESTRATOR-...-NONLEAF-CHILD] → standalone_closed 58 → 59, standalone_registered 4 → 4 net-zero)"
+    ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
+
+  - id: B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-SUBAGENT-NONLEAF-CHILD
+    title: "Recover a maybe-ran SUB_AGENT ORCHESTRATOR whose child is fan-out or has a nested sub-agent (deeper recursion)"
+    kind: standalone
+    status: registered
+    decompose_at_open: true
+    owner_axis: "CP + runtime"
+    operator_gated: false
+    parent_arc: B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-SUBAGENT
+    anticipated_scope: "B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-SUBAGENT closed the LINEAR-{ESR,WAL}-LEAF orchestrator-child slice — the recoverability predicate (`_subagent_child_recoverable`, shared with the worker) requires the orchestrator's child topology be SINGLE_THREADED_LINEAR AND no child step be SUB_AGENT_DISPATCH/MANAGED_AGENTS. Two non-leaf cases stay fail-closed for the orchestrator (mirroring the worker B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-NONLEAF-CHILD): (a) an orchestrator-child that is itself FAN-OUT (PARALLELIZATION / ORCHESTRATOR_WORKERS / HIERARCHICAL_DELEGATION) — re-dispatching it engages the child's OWN fan-out crash-resume reconstruction (the B-FANOUT-OUTPUT-REPLAY family), an unwitnessed recursive composition; (b) a LINEAR orchestrator-child with a NESTED SUB_AGENT_DISPATCH grandchild — the compositional recursion bottoms out one level deeper. Both need their own non-mocked recursive-child witnesses. The SAVE_POINT/RECONCILER orchestrator-child case is covered by B-CHILD-CRASH-RESUME-FINAL-STATE-RECONSTRUCT-SAVE-POINT-RECONCILER (the shared output-substrate blocker), NOT here."
+    why: "Surfaced at the B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-SUBAGENT close (the same leaf-condition narrowing the worker arc registered): the closeable slice is the witnessed LINEAR-leaf orchestrator-child; the fan-out-child + nested-sub-agent-child recursion is a genuinely deeper, separately-witnessed mechanism → registered per FULL-SPEC (`[[feedback-full-spec-beyond-mvp-nothing-deferred]]`) rather than silently bundled-unwitnessed. Mirrors the worker NONLEAF-CHILD split."
     ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
 
   - id: B-FANOUT-CRASH-RESUME-ORCHESTRATOR-PROCEED-RESIDUAL

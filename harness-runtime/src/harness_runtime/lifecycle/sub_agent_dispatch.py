@@ -746,6 +746,23 @@ class RuntimeSubAgentDispatcher:
             _is_recoverable_fanout_worker = (
                 step_context.branch_index is not None and subagent_child_recoverable(payload)
             )
+            # B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-SUBAGENT (R-FS-1) — the orchestrator
+            # (`steps[0]`) is a SINGLE, once-per-run step (`branch_index is None`, like a
+            # sequential-loop iteration) but UNLIKE a loop iteration it dispatches EXACTLY ONCE,
+            # so a deterministic seed is SAFE here — there is no iteration-2 to alias iteration-1's
+            # durable store (the loop-suppression hazard the `branch_index is not None` gate
+            # forecloses for EVALUATOR_OPTIMIZER / RECONCILER_LOOP). The CP driver marks the
+            # orchestrator's context with `is_orchestrator_dispatch` (hash-inert) so we distinguish
+            # it from those iterated steps. `branch_path=None` — the orchestrator is unique within
+            # the run (no fan-out siblings to collide), and its `parent_idempotency_key`
+            # (`orchestrator_idempotency_key`, step_index 0) RE-DERIVES IDENTICALLY on a parent
+            # crash re-dispatch (the whole fan-out re-runs fresh → the orchestrator re-dispatches
+            # → its child auto-resumes from the shared store). A worker's seed INSERTS
+            # `branch_path`, so the orchestrator's child run_id stays DISTINCT from any worker's
+            # even on the same `child_workflow_id` (no orchestrator↔worker child aliasing).
+            _is_recoverable_orchestrator = (
+                step_context.is_orchestrator_dispatch and subagent_child_recoverable(payload)
+            )
             _child_run_id_seed = (
                 compose_child_run_id_seed(
                     step_context.parent_idempotency_key,
@@ -753,6 +770,12 @@ class RuntimeSubAgentDispatcher:
                     branch_path=compose_branch_path(step_context),
                 )
                 if _is_recoverable_fanout_worker
+                else compose_child_run_id_seed(
+                    step_context.parent_idempotency_key,
+                    payload.child_workflow_id,
+                    branch_path=None,
+                )
+                if _is_recoverable_orchestrator
                 else None
             )
             try:

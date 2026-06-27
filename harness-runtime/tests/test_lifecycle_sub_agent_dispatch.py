@@ -1267,4 +1267,60 @@ def test_dispatch_seed_includes_branch_path_for_fanout_worker(tmp_path: Path) ->
     )
 
 
+def _orchestrator_context() -> StepExecutionContext:
+    """The orchestrator's OWN dispatch context — `branch_index is None` (it is not a fan-out
+    branch) but `is_orchestrator_dispatch=True` (the discriminator the CP driver sets on
+    `_execute_orchestrator_workers`' `orchestrator_context`)."""
+    return _step_context().model_copy(update={"is_orchestrator_dispatch": True})
+
+
+def test_dispatch_seed_for_orchestrator_uses_branch_path_none(tmp_path: Path) -> None:
+    """B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-SUBAGENT (R-FS-1) — the composer threads the
+    DETERMINISTIC `child_run_id_seed` to a SUB_AGENT_DISPATCH ORCHESTRATOR (recoverable child)
+    even though `branch_index is None`, keyed via `is_orchestrator_dispatch`. The orchestrator is
+    unique within the run (no fan-out siblings), so the seed is the branch_path-LESS form
+    (`compose_child_run_id_seed(parent_key, child_wf)`), NOT None and NOT a branch seed."""
+    dispatcher, runner, _ = _dispatcher(tmp_path)
+    recoverable = _payload(
+        workload_class=WorkloadClass.PIPELINE_AUTOMATION,
+        engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+        topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+        child_step_kinds=(StepKind.TOOL_STEP,),
+    )
+    orch_ctx = _orchestrator_context()
+    dispatcher.dispatch(_binding(), _step(recoverable), step_context=orch_ctx)
+    expected = compose_child_run_id_seed(
+        orch_ctx.parent_idempotency_key, recoverable.child_workflow_id
+    )
+    assert runner.calls[-1]["child_run_id_seed"] == expected
+    assert runner.calls[-1]["child_run_id_seed"] is not None
+
+
+def test_orchestrator_seed_distinct_from_worker_seed(tmp_path: Path) -> None:
+    """No orchestrator↔worker child aliasing — the orchestrator seeds with `branch_path=None`
+    while a fan-out worker INSERTS its `branch_path`, so the two derive DISTINCT child run_ids even
+    on the SAME `child_workflow_id` + the SAME inherited `parent_idempotency_key` (workers inherit
+    the orchestrator's key verbatim; the branch-distinct key is the downstream `branch_path`)."""
+    dispatcher, runner, _ = _dispatcher(tmp_path)
+    recoverable = _payload(
+        workload_class=WorkloadClass.PIPELINE_AUTOMATION,
+        engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+        topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+        child_step_kinds=(StepKind.TOOL_STEP,),
+    )
+    orch_ctx = _orchestrator_context()
+    dispatcher.dispatch(_binding(), _step(recoverable), step_context=orch_ctx)
+    orch_seed = runner.calls[-1]["child_run_id_seed"]
+    # A worker composed from the same parent (same parent_idempotency_key) seeds with branch_path.
+    worker_ctx = compose_branch_child_context(
+        orch_ctx, branch_index=0, agent_role=AgentRole("worker")
+    )
+    dispatcher.dispatch(_binding(), _step(recoverable), step_context=worker_ctx)
+    worker_seed = runner.calls[-1]["child_run_id_seed"]
+    assert orch_seed != worker_seed, "orchestrator + worker child run_ids must not alias"
+    # The worker reset `is_orchestrator_dispatch` (compose_branch_child_context) → it took the
+    # fan-out-worker seed path (branch_path), not the orchestrator path.
+    assert worker_ctx.is_orchestrator_dispatch is False
+
+
 _ = cast
