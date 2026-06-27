@@ -39,6 +39,8 @@ Required gates:
 `decorrelated_review`. `just codex-loop-check` verifies the full lifecycle,
 including commit, push, PR, CI, merge, post-merge refresh, main sync, and
 worktree disposition evidence. The `worktree_ready` gate must be recorded from
-a linked worktree.
+a linked worktree; the final `worktree_disposition` gate must be recorded from
+synced `main` after the original arc worktree is no longer registered and the
+local topic branch has been pruned.
 
 `just codex-review` remains the mandatory out-of-family review gate. CodeRabbit is optional advisory review through `just coderabbit-review ...`.

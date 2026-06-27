@@ -129,11 +129,13 @@ is per-run state, not a project artifact. `just codex-closeout` checks active
 loop state through `decorrelated_review`; record the `closeout` phase after the
 closeout command succeeds. Then commit, push, open the PR, watch CI, merge,
 perform any owed terminating refresh, sync local main, and record worktree
-disposition. Run `just codex-loop-check` only when the full lifecycle has been
-recorded. Loop records include branch, HEAD, linked-worktree status, and a
-worktree fingerprint; changes after `implementation` or any later pre-commit
-gate require re-recording that gate and all downstream pre-commit gates before
-committing.
+disposition. The final disposition is a hygiene gate: copy the gitignored loop
+state to synced `main`, remove the original arc worktree, prune the local topic
+branch, then record `worktree_disposition`. Run `just codex-loop-check` only
+when the full lifecycle has been recorded. Loop records include branch, HEAD,
+linked-worktree status, and a worktree fingerprint; changes after
+`implementation` or any later pre-commit gate require re-recording that gate
+and all downstream pre-commit gates before committing.
 
 ### 6. Credential Gates
 

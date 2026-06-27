@@ -226,6 +226,25 @@ def is_linked_worktree(root: Path) -> bool:
     return _resolve_git_path(root, git_dir) != _resolve_git_path(root, git_common_dir)
 
 
+def _worktree_paths(root: Path) -> tuple[set[Path], str | None]:
+    proc = _run(["git", "worktree", "list", "--porcelain"], cwd=root)
+    if proc.returncode != 0:
+        detail = proc.stderr.strip() or proc.stdout.strip() or "git worktree list failed"
+        return set(), detail
+    paths: set[Path] = set()
+    for line in proc.stdout.splitlines():
+        if line.startswith("worktree "):
+            paths.add(Path(line.removeprefix("worktree ")).resolve())
+    return paths, None
+
+
+def _local_branch_exists(root: Path, branch: str) -> bool:
+    if not branch or branch == "DETACHED":
+        return False
+    proc = _run(["git", "show-ref", "--verify", "--quiet", f"refs/heads/{branch}"], cwd=root)
+    return proc.returncode == 0
+
+
 def git_identity(start: Path) -> GitIdentity:
     root_s = _out(["git", "rev-parse", "--show-toplevel"], cwd=start)
     root = Path(root_s).resolve() if root_s else start.resolve()
@@ -303,6 +322,12 @@ def record(args: argparse.Namespace) -> int:
         dirty = dirty_status(git.root)
         if dirty:
             raise SystemExit(f"{args.phase} gate requires a clean worktree; status:\n{dirty}")
+    if args.phase == "worktree_disposition":
+        issues = _worktree_disposition_issues(state, latest, git)
+        if issues:
+            raise SystemExit(
+                "worktree_disposition gate requires completed hygiene:\n- " + "\n- ".join(issues)
+            )
     if args.phase == "commit":
         closeout = latest.get("closeout")
         if closeout is None:
@@ -365,6 +390,31 @@ def _latest_by_phase_with_index(state: dict[str, Any]) -> dict[str, tuple[int, d
 
 def _latest_by_phase(state: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return {phase: event for phase, (_, event) in _latest_by_phase_with_index(state).items()}
+
+
+def _worktree_disposition_issues(
+    state: dict[str, Any],
+    latest: dict[str, dict[str, Any]],
+    current: GitIdentity,
+) -> list[str]:
+    worktree_ready = latest.get("worktree_ready")
+    if worktree_ready is None or worktree_ready.get("linked_worktree") is not True:
+        return []
+    root_raw = state.get("root")
+    if not isinstance(root_raw, str) or not root_raw:
+        return ["loop state missing original arc worktree root"]
+    issues: list[str] = []
+    original_root = Path(root_raw).expanduser().resolve()
+    worktree_paths, worktree_list_error = _worktree_paths(current.root)
+    if worktree_list_error is not None:
+        issues.append(f"unable to verify registered worktrees: {worktree_list_error}")
+    elif original_root in worktree_paths:
+        issues.append(f"original arc worktree is still registered: {original_root}")
+    original_branch = worktree_ready.get("branch")
+    if isinstance(original_branch, str):
+        if _local_branch_exists(current.root, original_branch):
+            issues.append(f"local topic branch still exists: {original_branch}")
+    return issues
 
 
 def _order_issues(
@@ -450,6 +500,8 @@ def check_state(state: dict[str, Any], *, current: GitIdentity | None = None) ->
     worktree_ready = latest.get("worktree_ready")
     if worktree_ready is not None and worktree_ready.get("linked_worktree") is not True:
         issues.append("worktree_ready gate must be recorded in a linked worktree")
+    if "worktree_disposition" in latest and current is not None:
+        issues.extend(_worktree_disposition_issues(state, latest, current))
     commit = latest.get("commit")
     closeout = latest.get("closeout")
     if commit is not None and closeout is not None:

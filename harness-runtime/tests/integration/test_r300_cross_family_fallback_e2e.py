@@ -701,6 +701,7 @@ def _build_ollama_chain() -> Any:
     not _ollama_reachable(),
     reason="live ollama provider exercise requires a local ollama daemon on 127.0.0.1:11434",
 )
+@pytest.mark.e2e
 @pytest.mark.asyncio
 async def test_r300_live_ollama_provider_fallback_exercise(
     tmp_path: Path,
@@ -777,6 +778,7 @@ def _build_valid_ollama_chain() -> Any:
     not _ollama_reachable(),
     reason="live ollama prompt-injection exercise requires a local ollama daemon on 127.0.0.1:11434",
 )
+@pytest.mark.e2e
 @pytest.mark.asyncio
 async def test_r_pm_1_active_prompt_injection_honored_by_live_ollama(
     tmp_path: Path,
@@ -844,6 +846,7 @@ async def test_r_pm_1_active_prompt_injection_honored_by_live_ollama(
     not _ollama_reachable(),
     reason="live ollama prompt-selection exercise requires a local ollama daemon on 127.0.0.1:11434",
 )
+@pytest.mark.e2e
 @pytest.mark.asyncio
 async def test_r_pm_1_workload_selection_drives_live_ollama_injection(
     tmp_path: Path,
