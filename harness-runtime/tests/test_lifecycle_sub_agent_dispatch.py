@@ -1395,6 +1395,44 @@ def test_recursive_engine_signature_catches_grandchild_engine_swap() -> None:
     assert _subagent_child_engine_class(_step(leaf)) == EngineClass.EVENT_SOURCED_REPLAY.value
 
 
+def test_recursive_signature_catches_topology_swap() -> None:
+    """CROSS-TOPOLOGY swap guard (out-of-family Codex [P1], FANOUT-CHILD arc) — conjunct 2 now admits
+    the SAME engine ({ESR,WAL}) under BOTH SINGLE_THREADED_LINEAR AND a fan-out topology. A maybe-ran
+    child dispatched LINEAR-ESR whose resumed manifest swaps ONLY its topology to fan-out (same
+    engine/step_id) would pass an engine-only signature AND reuse the same `child_run_id` against a
+    DIFFERENT recovery substrate (the LINEAR `reconstruct_final_state` seed vs the fan-out
+    `_crash_fan_out_resume` branch store) → run fresh → double-fire. A fan-out↔fan-out swap
+    (PARALLELIZATION↔ORCHESTRATOR_WORKERS) is the same hole. The signature folds topology in (LINEAR
+    keeps the bare engine value; fan-out prepends `topology:`), so ANY topology swap CHANGES the
+    marker → the dual-gate marker==resumed comparison fails closed. RED without the topology fold (the
+    bare-engine signature was identical across topologies)."""
+    from harness_cp.workflow_driver import _subagent_child_engine_class
+
+    def _sig(topology: TopologyPattern) -> str | None:
+        return _subagent_child_engine_class(
+            _step(
+                _payload(
+                    engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+                    topology=topology,
+                    child_step_kinds=(StepKind.TOOL_STEP,),
+                )
+            )
+        )
+
+    sig_linear = _sig(TopologyPattern.SINGLE_THREADED_LINEAR)
+    sig_parallel = _sig(TopologyPattern.PARALLELIZATION)
+    sig_orch = _sig(TopologyPattern.ORCHESTRATOR_WORKERS)
+    # LINEAR↔fan-out swap (same engine) → marker differs → fail closed.
+    assert sig_linear != sig_parallel
+    # fan-out↔fan-out swap (same engine, different store shape) → marker differs → fail closed.
+    assert sig_parallel != sig_orch
+    # LINEAR keeps the bare engine value (the #774..#786 closed-scope byte-identity); fan-out prefixes.
+    assert sig_linear == EngineClass.EVENT_SOURCED_REPLAY.value
+    assert sig_parallel is not None and sig_parallel.startswith(
+        TopologyPattern.PARALLELIZATION.value
+    )
+
+
 def test_recursive_signature_catches_grandchild_step_id_rename() -> None:
     """RECURSIVE same-step_id guard (out-of-family Codex [P1] round 2, NONLEAF-CHILD) — RENAMING a
     nested SUB_AGENT step at the SAME index (same grandchild engine + workflow_id) keeps the
