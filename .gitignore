@@ -107,6 +107,7 @@ tools/dashboard/candidates/
 .harness/loop_status.md
 .harness/.loop-iter
 .harness/.loop-halt
+.harness/codex_loop_state.json
 
 # Reference docs (vendored clones + agent-knowledge corpora, third-party licenses) —
 # read-only learning material, not tracked in harness history (also keeps them out of lint).
@@ -129,6 +130,12 @@ tools/semantic_overlay/overlay.json
 # also carry local session metadata (out-of-family Codex [P2]). Un-ignore deliberately
 # if any should become tracked.
 .agents/
+!.agents/
+.agents/*
+!.agents/skills/
+.agents/skills/*
+!.agents/skills/codex-autonomous-loop/
+!.agents/skills/codex-autonomous-loop/**
 .codex/agents/
 .claude/agents/
 dashboard-design/archive/

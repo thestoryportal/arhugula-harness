@@ -17,6 +17,7 @@ This repository is developed primarily with Claude Code CLI. For Codex, this fil
 - For credential-gated units, build to the exact credential boundary, prove all non-credential forward actions are closed, then log the gate with `just codex-credential-gate --unit ... --gate ... --forward-closed ... --resume ...` if no HIL/operator-approval surface is available. Update a human-facing tracking surface so the pending gate is visible on the next human engagement, then proceed to the next implementable unit.
 - Preserve user work. Do not revert unrelated changes.
 - Re-run `just codex-preflight` after long work, merges, rebases, resumes, or compaction; memory/checkpoints are advisory until re-grounded against HEAD. Use `just codex-checkpoint <label>` for explicit mid-arc context checkpoints.
+- For autonomous coding arcs, initialize the controller/coder/validator evidence loop with `just codex-autonomous-arc <arc-id>`, record gates with `just codex-loop-record ...`, and require `just codex-loop-check` before claiming the loop complete. Gate evidence is branch/HEAD/worktree-fingerprint-bound; after a diff change, re-record the affected gate and downstream gates.
 
 ## Claude-Native Context Mapping
 
@@ -32,6 +33,7 @@ This repository is developed primarily with Claude Code CLI. For Codex, this fil
 - For governance/context changes, also verify instruction discovery or pointer integrity when applicable.
 - For dashboard/status changes, update `.harness/roadmap_status.md` first, regenerate `tools/dashboard/roadmap.html` only through `tools/dashboard/generate.py`, and do not hand-maintain volatile masthead facts or counts in the HTML. The generator owns live `HEAD` / `LAST` / `HASH` / `OPEN FORKS` display values plus derived closure counts.
 - Run `just codex-closeout` before final response, commit, or PR; it writes a fresh pre-closeout checkpoint and hard-fails if the guard cannot verify it. Resolve hard findings and report warnings explicitly.
+- If `.harness/codex_loop_state.json` exists, closeout also verifies the active autonomous loop has reached every pre-closeout gate through decorrelated review.
 - Before claiming green, report exactly which checks ran and which did not.
 
 ## PR Discipline

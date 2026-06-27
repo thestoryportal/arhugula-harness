@@ -78,6 +78,30 @@ codex-context-check:
 codex-credential-gate *args:
     /usr/bin/python3 tools/codex_context_guard.py credential-gate {{args}}
 
+# Start the deterministic Codex autonomous loop ledger for this arc.
+codex-loop-start arc="manual":
+    /usr/bin/python3 tools/codex_loop.py start --arc {{arc}}
+
+# Record one autonomous-loop gate. Example:
+# just codex-loop-record --phase red --status failed --command "uv run pytest ..." --evidence "expected assertion"
+codex-loop-record *args:
+    /usr/bin/python3 tools/codex_loop.py record "$@"
+
+# Show current autonomous-loop gate status.
+codex-loop-status:
+    /usr/bin/python3 tools/codex_loop.py status
+
+# Fail until preflight/plan/red/implementation/verification/review/closeout gates are recorded.
+codex-loop-check:
+    /usr/bin/python3 tools/codex_loop.py check
+
+# Bootstrap a Codex autonomous implementation arc. The agent still performs the
+# coding/review steps; this recipe creates the evidence ledger and prints the gate order.
+codex-autonomous-arc arc="manual": codex-preflight
+    /usr/bin/python3 tools/codex_loop.py start --arc {{arc}}
+    /usr/bin/python3 tools/codex_loop.py record --phase preflight --status passed --command "just codex-preflight" --evidence "preflight completed and checkpoint written"
+    @echo "Next gates: plan -> red(status=failed) -> implementation -> narrow_verify -> local_gate -> decorrelated_review -> closeout"
+
 # Dry-run safe stale-worktree cleanup. Use --reap to remove only clean merged candidates.
 codex-worktree-gc *args:
     /usr/bin/python3 tools/codex_worktree_gc.py {{args}}
@@ -415,6 +439,23 @@ codex-review base='main': _require-codex-subscription
 # Out-of-family review of staged + unstaged + untracked changes, subscription auth.
 codex-review-uncommitted: _require-codex-subscription
     env -u OPENAI_API_KEY codex review -c preferred_auth_method="chatgpt" --uncommitted
+
+# Advisory CodeRabbit review. This is optional and complements, not replaces,
+# `just codex-review` and CI. Run after a meaningful diff exists.
+_require-coderabbit:
+    @if ! command -v coderabbit >/dev/null 2>&1; then \
+        echo "ERROR: coderabbit CLI not found."; \
+        echo "  Install/authenticate CodeRabbit before using this optional advisory gate."; \
+        exit 1; \
+    fi
+    @if ! coderabbit auth status --agent >/dev/null 2>&1; then \
+        echo "ERROR: coderabbit agent auth is not ready."; \
+        echo "  Run: coderabbit auth login --agent"; \
+        exit 1; \
+    fi
+
+coderabbit-review *ARGS: _require-coderabbit
+    coderabbit review --agent "$@"
 
 # Headless overnight autonomous runner (U-HK-15). Turns loop mode ON, then re-invokes
 # `claude -p` in a BOUNDED loop until a genuine gate (halt marker) or the iteration cap.

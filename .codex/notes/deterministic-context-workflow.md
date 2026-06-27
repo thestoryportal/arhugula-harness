@@ -95,10 +95,42 @@ Closeout checks:
 - cite-bearing changes that require `just overlay-check`
 - missing tracking-surface review
 - fresh checkpoint match against current HEAD/status/dashboard
+- active autonomous-loop state, when present, has reached every pre-closeout
+  gate through decorrelated review
 
 The closeout recipe first writes a `pre-closeout` checkpoint, then runs the
 closeout guard with `--require-fresh-checkpoint`. A stale or missing checkpoint
 is a hard failure when freshness is required.
+
+### 5a. Autonomous Loop State
+
+For autonomous coding arcs, initialize a local evidence ledger:
+
+```bash
+just codex-autonomous-arc <arc-id>
+```
+
+Record gates as the controller/coder/validator loop advances:
+
+```bash
+just codex-loop-record --phase plan --status passed --command "..." --evidence "..."
+just codex-loop-record --phase red --status failed --command "..." --evidence "..."
+just codex-loop-record --phase implementation --status passed --command "..." --evidence "..."
+```
+
+The required sequence is:
+
+```text
+preflight -> plan -> red(status=failed) -> implementation -> narrow_verify -> local_gate -> decorrelated_review -> closeout
+```
+
+The state file is `.harness/codex_loop_state.json`; it is gitignored because it
+is per-run state, not a project artifact. `just codex-closeout` checks active
+loop state through `decorrelated_review`; record the `closeout` phase after the
+closeout command succeeds, then run `just codex-loop-check` before claiming the
+loop complete. Loop records include branch, HEAD, and a worktree fingerprint;
+changes after `implementation` or any later gate require re-recording that gate
+and all downstream gates.
 
 ### 6. Credential Gates
 
@@ -177,6 +209,10 @@ just codex-worktree-gc          # dry-run safe stale-worktree cleanup
 just codex-worktree-gc --reap   # remove only clean merged worktree candidates
 just codex-test                 # provider-free non-e2e pytest lane
 just codex-check                # sync + lint + typecheck + provider-free non-e2e pytest
+just codex-autonomous-arc       # initialize autonomous-loop evidence state
+just codex-loop-record ...      # append one controller/coder/validator gate
+just codex-loop-check           # verify all autonomous-loop gates, including closeout
+just coderabbit-review ...      # optional advisory CodeRabbit review
 ```
 
 `codex-context-check` is the combined hard gate for local validation. It exits
