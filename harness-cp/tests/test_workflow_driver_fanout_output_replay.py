@@ -101,9 +101,7 @@ class _FakeStore:
         # DISPATCH-TIME step_id (the fence-recoverable same-step_id guard; None = un-recorded /
         # torn marker → mismatch → fail-closed; Codex [P1]).
         self._orchestrator_dispatched_step_id = orchestrator_dispatched_step_id
-        self._orchestrator_dispatched_proceed_unstamped = (
-            orchestrator_dispatched_proceed_unstamped
-        )
+        self._orchestrator_dispatched_proceed_unstamped = orchestrator_dispatched_proceed_unstamped
         # B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-SUBAGENT — whether the orchestrator's
         # SUB_AGENT_DISPATCH child was recoverable at dispatch (the marker; False = absent /
         # non-recoverable → the resume classifier fails closed).

@@ -6801,9 +6801,7 @@ def _execute_parallelization(
         )
         if reconciler_engine_resume_attempted:
             ctx.lifecycle_emitter.emit(WorkflowEventClass.RESUMPTION)
-            _record_reconciler_fanout_resume_finalized(
-                ctx, manifest_entry, run_idempotency_key
-            )
+            _record_reconciler_fanout_resume_finalized(ctx, manifest_entry, run_idempotency_key)
         return result, 0
 
     # B-FANOUT-PAUSE-PARALLELIZATION — material-diff guard on resume: the re-supplied
@@ -7340,9 +7338,7 @@ def _execute_parallelization(
 
     def _finalize_reconciler_cas_if_attempted() -> None:
         if reconciler_engine_resume_attempted:
-            _record_reconciler_fanout_resume_finalized(
-                ctx, manifest_entry, run_idempotency_key
-            )
+            _record_reconciler_fanout_resume_finalized(ctx, manifest_entry, run_idempotency_key)
 
     def _finish(
         status: RunStatus,
@@ -8994,9 +8990,7 @@ def _execute_orchestrator_workers(
         )
         if reconciler_engine_resume_attempted:
             ctx.lifecycle_emitter.emit(WorkflowEventClass.RESUMPTION)
-            _record_reconciler_fanout_resume_finalized(
-                ctx, manifest_entry, run_idempotency_key
-            )
+            _record_reconciler_fanout_resume_finalized(ctx, manifest_entry, run_idempotency_key)
         return result, 0
 
     orchestrator_step = steps[0]
@@ -9152,9 +9146,7 @@ def _execute_orchestrator_workers(
 
     def _finalize_reconciler_cas_if_attempted() -> None:
         if reconciler_engine_resume_attempted:
-            _record_reconciler_fanout_resume_finalized(
-                ctx, manifest_entry, run_idempotency_key
-            )
+            _record_reconciler_fanout_resume_finalized(ctx, manifest_entry, run_idempotency_key)
 
     # The on-worker-failure cascade reaction (§25.15.1) — resolved above from the
     # manifest's (workload_class, engine_class, persona_tier) via the §11.4 D4
