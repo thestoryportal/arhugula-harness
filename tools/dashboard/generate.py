@@ -730,12 +730,14 @@ def parse_dashboard(md: str) -> dict:
 
     # recently completed — table rows
     rc = _section(md, "Recently completed (last 5)")
-    rows = re.findall(r"^\|\s*(PR #\d+[^|]*)\|\s*([^|]*)\|\s*(.+?)\s*\|\s*$", rc, re.MULTILINE)
-    out["recently_completed"] = [
-        {"pr": r[0].strip(), "date": r[1].strip(), "note": r[2].strip()}
-        for r in rows
-        if not r[0].strip().startswith("R-NNN")
-    ]
+    rows = re.findall(r"^\|\s*([^|\n]+?)\s*\|\s*([^|\n]+?)\s*\|\s*(.+?)\s*\|\s*$", rc, re.MULTILINE)
+    completed = []
+    for label, completed_date, note in rows:
+        label = label.strip()
+        if label in {"PR", "Item"} or set(label) <= {"-"} or label.startswith("R-NNN"):
+            continue
+        completed.append({"pr": label, "date": completed_date.strip(), "note": note.strip()})
+    out["recently_completed"] = completed
 
     # retirement progress — parse the "RETIRED | **N/M (P%)**" row + bucket counts
     rp = _section(md, "Phase 7 retirement progress")
@@ -1541,9 +1543,9 @@ document.getElementById("next-action").innerHTML = mdLite(d.next_action);
 
   document.getElementById("closure").innerHTML = `
     <div class="panel lit" style="margin-bottom:20px">
-      <div class="k">R-FS-1 full-spec build — the live frontier</div>
+      <div class="k">R-FS-1 build-complete — R-CL quality frontier</div>
       <div class="big">${{rf1.done_count||0}}<span class="u"> / ${{rf1.total||0}} frozen arcs done · ${{rf1.standalone_closed||0}}/${{rf1.standalone_buildable||0}} standalone built</span></div>
-      <div class="sub">The frozen build order is complete (<strong>${{rf1.done_count||0}}/${{rf1.total||0}}</strong>). Standalone design-fork-first arcs: <strong>${{rf1.standalone_closed||0}} closed</strong> · <strong>${{rf1.standalone_remaining||0}} remaining</strong> · <strong>${{rf1.standalone_gated||0}} gated</strong> · <strong>${{rf1.standalone_registered||0}} registered (forward)</strong>. See the <strong>arc &amp; unit map</strong> below for what every arc and atomic unit does, in plain language. The substitution-retirement closure below is a <em>separate, historical Phase-8 metric</em> — not full-spec completion.</div>
+      <div class="sub">The frozen build order is complete (<strong>${{rf1.done_count||0}}/${{rf1.total||0}}</strong>). Standalone design-fork-first arcs: <strong>${{rf1.standalone_closed||0}} closed</strong> · <strong>${{rf1.standalone_remaining||0}} remaining</strong> · <strong>${{rf1.standalone_gated||0}} gated</strong> · <strong>${{rf1.standalone_registered||0}} registered (forward)</strong>. See the <strong>arc &amp; unit map</strong> below for what every arc and atomic unit does, in plain language. The substitution-retirement closure below is a <em>separate, historical Phase-8 metric</em>; the live frontier is the R-CL quality/close track.</div>
       <div class="arcstrip">
         ${{(rf1.done||[]).map(t=>`<span class="arc done">${{esc(t)}} ✓</span>`).join("")}}
         <span class="arcsep">→</span>

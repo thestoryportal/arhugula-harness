@@ -2,7 +2,7 @@
 
 > **Purpose.** Crystallize the scattered `must_pass` predicates across `R-FS-1` + `R-CL-Q1..Q4` + `R-CL-D1` + `R-CL-C1` (`Project_Roadmap_v1.md` §5) into **one explicit, checkable closure gate**, so "harness coding is fully closed" is an *objective predicate* — not a manual judgment. Authored as the closure instrument feeding the remaining-build audit (`Remaining_Build_Audit_Report.md` §1 + the reliability assessment).
 > **Posture:** mode-agnostic (process-substrate; consolidates + operationalizes the existing roadmap R-CL track — it does **not** duplicate, override, or re-author those entries; the roadmap stays canonical). No `design-substrate/**` edit.
-> **Authored at:** HEAD `46012d5` (2026-06-20). **Status:** v1 scope (predicate definition + checker contract). The checker tool (`tools/closure_gate.py`) is a defined follow-on, not yet built.
+> **Authored at:** HEAD `46012d5` (2026-06-20). **Status:** v1 scope (predicate definition + checker contract). The checker tool (`tools/closure_gate.py`) is built; Tier-1 manual sign-offs are recorded at `.harness/r-fs-1-tier1-manual-signoff.json`.
 
 ---
 
@@ -79,12 +79,12 @@ Mirrors the proven `arc_ledger.py --check` / `substitution_ledger.py --check` pa
 
 ```
 just closure-gate            # human-readable report: every G-predicate, status, evidence
-just closure-gate --check    # exit 1 if any AUTOMATABLE predicate (G1.1-G1.6, G1.5, G2.3-matrix-built/tested, §3) is false
-                             #   prints the MANUAL predicates (G1.7/G1.8, G2.1/2/5/6-critic) as a checklist with sign-off status
+just closure-gate --check    # exit 1 if any AUTOMATABLE predicate (G1.1-G1.3, G1.5-G1.6, G2.3-matrix-built/tested, §3) is false
+                             #   prints the MANUAL predicates (G1.4/G1.7/G1.8, G2.1/2/5/6-critic) as a checklist with sign-off status
 ```
 
-- **Automatable subset** (asserted by `--check`): G1.1, G1.2, G1.3, G1.4, G1.5, G1.6-tally, and the **built + tested** columns of §3. These compose the existing overlay + arc-ledger + substitution-ledger derivations — no new source of truth.
-- **Manual subset** (reported, not asserted): G1.7 fork-triage, G1.8 residual ratification, G2.1/2/5 phase sign-offs, G2.6 completeness critic, and the **activated + reviewed + documented** columns of §3 — each resolved from clearance markers / phase-close PRs.
+- **Automatable subset** (asserted by `--check`): G1.1, G1.2, G1.3, G1.5, G1.6-tally, and the **built + tested** columns of §3. These compose the existing overlay + arc-ledger + substitution-ledger derivations — no new source of truth.
+- **Manual subset** (reported, not asserted): G1.4 unit-orphan advisory review, G1.7 fork-triage, G1.8 residual ratification, G2.1/2/5 phase sign-offs, G2.6 completeness critic, and the **activated + reviewed + documented** columns of §3 — each resolved from clearance markers / phase-close PRs. For Tier-1 close, the checker reads `.harness/r-fs-1-tier1-manual-signoff.json` and reports G1.4/G1.7/G1.8 as signed only when each gate carries `status: "signed"` plus evidence.
 - **Output is derived fresh from HEAD** (git + filesystem + roadmap), never hand-copied — the anti-drift discipline (`[[regenerate-roadmap-html-after-source-edit]]`).
 
 **Closure is declared** when `just closure-gate --check` is green **and** every manual predicate has a recorded sign-off → R-CL-C1's certification PR cites the green gate as its evidence.
@@ -102,9 +102,9 @@ just closure-gate --check    # exit 1 if any AUTOMATABLE predicate (G1.1-G1.6, G
 
 ## 6. Current standing (informational, HEAD `46012d5`)
 
-- **Tier 1:** G1.2 ✅ (arc_ledger --check green), G1.5 ✅ (cxa 31/31 HARD green), G1.6-tally ✅ (54/54), **G1.3 ✅ now head-scoped (6 phantoms → 1 documented C-IS-11)**, **G1.4 ◐ head-scoped advisory live (8 entries, all audit-resolved non-gaps)**. G1.1 ✗ (14 registered + 1 gated arcs remain — R-FS-1 ACTIVE). G1.7 ◐ (1 likely-stale OPEN fork). G1.8 ☐ (bounded-residuals pending FULL-SPEC ratify-or-build).
-- **Tier 2:** all BLOCKED behind R-FS-1 (correctly — quality runs once on the complete harness). R-CL-P3 e2e pending.
-- **Net:** Tier-1 is the live frontier (R-FS-1); Tier-2 is gated and not yet startable. The gate makes this state explicit and machine-checkable rather than narrative.
+- **Tier 1:** G1.1/G1.2/G1.3/G1.5/G1.6 are green; G1.4/G1.7/G1.8 are signed at `.harness/r-fs-1-tier1-manual-signoff.json` (2026-06-28). R-FS-1 is build-complete.
+- **Tier 2:** R-CL-Q1 is the next startable phase after R-FS-1; later Q/D/C phases remain gated by the R-CL dependency chain.
+- **Net:** Tier-1 has closed; Tier-2 is the live frontier.
 
 ---
 

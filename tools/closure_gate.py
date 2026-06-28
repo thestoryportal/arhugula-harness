@@ -32,6 +32,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 ARC_LEDGER = REPO_ROOT / ".harness" / "arc-ledger.yaml"
 ROADMAP = REPO_ROOT / "Project_Roadmap_v1.md"
 CLEARANCE = REPO_ROOT / ".harness" / "clearance"
+TIER1_MANUAL_SIGNOFF = REPO_ROOT / ".harness" / "r-fs-1-tier1-manual-signoff.json"
 PY = sys.executable
 
 # C-IS-11 is a documented corrected-non-cite (runtime spec names it in prose saying
@@ -85,6 +86,32 @@ def _roadmap_status(rid: str) -> str:
                 if m:
                     return m.group(1)
     return "?"
+
+
+def _manual_signoff(pid: str, fallback: str) -> tuple[bool | None, str]:
+    if not TIER1_MANUAL_SIGNOFF.is_file():
+        return None, f"{fallback}; sign-off missing ({TIER1_MANUAL_SIGNOFF.name})"
+
+    try:
+        data = json.loads(TIER1_MANUAL_SIGNOFF.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return None, f"{fallback}; sign-off invalid: {exc}"
+
+    if not isinstance(data, dict):
+        return None, f"{fallback}; sign-off invalid: root object missing"
+
+    gates = data.get("gates")
+    if not isinstance(gates, dict):
+        return None, f"{fallback}; sign-off invalid: gates object missing"
+
+    gate = gates.get(pid)
+    if not isinstance(gate, dict) or gate.get("status") != "signed":
+        return None, f"{fallback}; sign-off missing ({TIER1_MANUAL_SIGNOFF.name})"
+
+    evidence = gate.get("evidence")
+    if not isinstance(evidence, str) or not evidence.strip():
+        return None, f"{fallback}; sign-off missing evidence"
+    return True, evidence.strip()
 
 
 # --------------------------------------------------------------------------- #
@@ -167,31 +194,43 @@ def evaluate() -> list[Pred]:
 
     # ---- Tier 1 — manual / advisory (reported, not asserted) --------------- #
     units = orph.get("unit_without_code", [])
+    state, detail = _manual_signoff(
+        "G1.4",
+        f"{len(units)} advisory (all audit-resolved non-gaps per RB-DOC-05)",
+    )
     p.append(
         Pred(
             "G1.4",
             "Unit orphans (head-scoped, advisory — review)",
-            None,
+            state,
             False,
-            f"{len(units)} advisory (all audit-resolved non-gaps per RB-DOC-05)",
+            detail,
         )
+    )
+    state, detail = _manual_signoff(
+        "G1.7",
+        "see audit RB-RT-07 (1 likely-stale OPEN fork to re-ground)",
     )
     p.append(
         Pred(
             "G1.7",
             "No genuinely-open forks (manual triage)",
-            None,
+            state,
             False,
-            "see audit RB-RT-07 (1 likely-stale OPEN fork to re-ground)",
+            detail,
         )
+    )
+    state, detail = _manual_signoff(
+        "G1.8",
+        "RB-CP-09 / RB-SUB-01/02 — operator ratify-or-build",
     )
     p.append(
         Pred(
             "G1.8",
             "FULL-SPEC: no unbuilt deferred/bounded-residual unratified",
-            None,
+            state,
             False,
-            "RB-CP-09 / RB-SUB-01/02 — operator ratify-or-build",
+            detail,
         )
     )
 
@@ -239,13 +278,15 @@ def report(preds: list[Pred]) -> None:
     auto = [p for p in preds if p.auto]
     auto_fail = [p for p in auto if p.state is not True]
     t1_manual = [p for p in preds if p.pid.startswith("G1") and not p.auto]
+    t1_manual_open = [p for p in t1_manual if p.state is not True]
+    t1_manual_signed = len(t1_manual) - len(t1_manual_open)
     t2 = [p for p in preds if p.pid.startswith("G2")]
     t2_open = [p for p in t2 if p.state is not True]
     print("\n  ── verdict ──")
     print(f"    automatable Tier-1 predicates: {len(auto) - len(auto_fail)}/{len(auto)} PASS")
-    print(f"    manual Tier-1 (sign-off owed):  {len(t1_manual)}")
+    print(f"    manual Tier-1 signed:           {t1_manual_signed}/{len(t1_manual)}")
     print(f"    Tier-2 phases RESOLVED:         {len(t2) - len(t2_open)}/{len(t2)}")
-    if auto_fail or t1_manual or t2_open:
+    if auto_fail or t1_manual_open or t2_open:
         print("    => NOT fully closed (build + quality/close work remains).")
     else:
         print(
@@ -272,10 +313,15 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
             return 1
-        print(
-            "\nclosure-gate --check: all automatable predicates PASS "
-            "(manual sign-offs still required)."
+        t1_manual_open = [
+            p for p in preds if p.pid.startswith("G1") and not p.auto and p.state is not True
+        ]
+        manual_msg = (
+            "manual Tier-1 sign-offs still required"
+            if t1_manual_open
+            else "manual Tier-1 sign-offs recorded"
         )
+        print(f"\nclosure-gate --check: all automatable predicates PASS ({manual_msg}).")
     return 0
 
 

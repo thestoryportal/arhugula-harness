@@ -417,6 +417,25 @@ def test_live_anchor_derives_masthead_values_from_git_and_filesystem(tmp_path):
     )
 
 
+def test_recently_completed_parser_keeps_non_pr_completion_rows():
+    generate = _load_generate_module()
+    md = """
+## Recently completed (last 5)
+
+| PR | Date | Notes |
+|---|---|---|
+| R-FS-1 Tier-1 | 2026-06-28 | Tier-1 signed. |
+| PR #802 | 2026-06-28 | Build arcs merged. |
+""".lstrip()
+
+    dashboard = generate.parse_dashboard(md)
+
+    assert [row["pr"] for row in dashboard["recently_completed"]] == [
+        "R-FS-1 Tier-1",
+        "PR #802",
+    ]
+
+
 def test_dashboard_template_has_no_literal_currentness_counts():
     generate = _load_generate_module()
 
