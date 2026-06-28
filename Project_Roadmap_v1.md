@@ -221,8 +221,8 @@ def next_action(roadmap, workspace_state, session_posture):
 
 **Effect on this catalog + §4 derivation:**
 - **"confirm-defer" / "ratified-bounded" / "DEFERRED-by-design" are no longer valid closes for an unbuilt capability.** Every such entry is RE-OPENED as a build arc under the single umbrella program **`R-FS-1`** below.
-- The previously-DEFERRED capability entries (`R-CL-P1` routing intelligence, `R-CL-P2` engine-recovery, the arc-#6 confirm-defers, EMBEDDING/LLM_AS_ROUTER residuals, `R-CXA-2` durable-recovery, `CP-16`/`OD-6` register residuals) **fold under `R-FS-1` as child arcs** — they KEEP their DEFERRED status-field (so §4 step-2's `all(depends_on RESOLVED)` filter does NOT activate them in parallel — the trap hit one arc ago, ten-fold here), and `R-FS-1` is the single ACTIVE program that sequences them.
-- **`R-CL-Q1..C1` (the entire quality/close track) move BEHIND `R-FS-1`** — quality runs ONCE on the full-spec harness. `R-CL-Q1` → BLOCKED (`depends_on += R-FS-1`).
+- The previously-DEFERRED capability entries (`R-CL-P1` routing intelligence, `R-CL-P2` engine-recovery, the arc-#6 confirm-defers, EMBEDDING/LLM_AS_ROUTER residuals, `R-CXA-2` durable-recovery, `CP-16`/`OD-6` register residuals) **folded under `R-FS-1` as child arcs** — they kept their DEFERRED status-field while R-FS-1 sequenced the build work.
+- **`R-CL-Q1..C1` (the entire quality/close track) moved BEHIND `R-FS-1`** — quality runs ONCE on the full-spec harness. `R-CL-Q1` is now ACTIVE after R-FS-1 Tier-1 closure.
 - Committed invariants stay the HOW (I-6 hand-roll; ADR-F1 per-provider SDKs); the directive is about scope, NOT overriding ADRs.
 
 Spine: `.harness/beyond-mvp-capability-boundary-ledger.md` (the build inventory) + `[[feedback-full-spec-beyond-mvp-nothing-deferred]]`.
@@ -231,7 +231,7 @@ Spine: `.harness/beyond-mvp-capability-boundary-ledger.md` (the build inventory)
 R-FS-1:
   title: Full-spec build program — build every MVP-bounded / deferred capability to full spec (nothing deferred)
   surface: I-fullspec
-  status: ACTIVE   # 2026-06-27 — final two registered arcs closed under Codex loop; arc ledger snapshot pins 69 closed / 0 gated / 4 resolved / 0 forward, but manual Tier-1 closure gates G1.4/G1.7/G1.8 remain pending.
+  status: RESOLVED   # 2026-06-28 — Tier-1 build-complete closed: arc ledger pins 69 closed / 0 gated / 4 resolved / 0 forward; closure_gate.py automatable predicates pass; manual G1.4/G1.7/G1.8 signed at .harness/r-fs-1-tier1-manual-signoff.json.
   depends_on: []
   blocks: [R-CL-Q1, R-CL-Q2, R-CL-Q3, R-CL-Q4, R-CL-D1, R-CL-C1]
   posture: design-phase   # most arcs are design-fork-first (X-AL-3): research→design→spec→plan→implement
@@ -241,7 +241,7 @@ R-FS-1:
   council_required: conditional:nameable-tension
   verification: { shape: e2e, must_pass: ["the build inventory (ledger Bucket A re-opened + Bucket B + the contract-w/o-cite candidates + the fuller spec-body pass) is COMPLETE and every item BUILT (research/design/spec/plan/impl) — no item closed as deferred/bounded-residual", "the overlay `contract w/o code cite` driven to zero (or each remaining one proven implemented-but-uncited)", "ONLY THEN do R-CL-Q1..C1 open on the full-spec harness"] }
   close_shape: { type: program, artifact: "per-arc PRs tracked in the ledger", cascade: [R-IF-roadmap-refresh] }
-  next_pointer: R-FS-1   # Forward build register is empty; complete/record manual Tier-1 closure gates before R-CL-Q1 can open.
+  next_pointer: R-CL-Q1   # R-FS-1 build-complete; quality/close track opens at Q1.
   notes: |
     OPERATOR STANDING DIRECTIVE 2026-06-12 (verbatim above; will-NOT-drift). Retires the MVP+bounded-residual posture.
     SPINE: `.harness/beyond-mvp-capability-boundary-ledger.md` (grounded inventory: Bucket B = topology / engine-classes /
@@ -2594,8 +2594,8 @@ R-CL-P6:
 R-CL-Q1:
   title: Phase Q1 — DevEx + whole-codebase code-review & simplification sweep
   surface: VII
-  status: BLOCKED      # 2026-06-27 — R-FS-1 forward build register is empty, but manual Tier-1 closure gates remain pending; Q1 still waits on R-FS-1.
-  depends_on: [R-CL-P4, R-CL-P5, R-CL-P6, R-CC-1, R-PM-1, R-FS-1]   # +R-FS-1 (full-spec build program) per §5.0. P1/P2/P3 stay dropped as R-CC-1-subsumed (their open items now re-open AS BUILD under R-FS-1, not as Q1 deps). R-FS-1 is the single ACTIVE program; Q1 admits only when the full spec is built.
+  status: ACTIVE      # 2026-06-28 — R-FS-1 resolved after Tier-1 manual sign-off; Q1 is the next full-harness quality/close frontier.
+  depends_on: [R-CL-P4, R-CL-P5, R-CL-P6, R-CC-1, R-PM-1, R-FS-1]   # +R-FS-1 (full-spec build program) per §5.0. P1/P2/P3 stay dropped as R-CC-1-subsumed (their open items reopened AS BUILD under R-FS-1, not as Q1 deps). R-FS-1 is now resolved; Q1 admits because the full spec is built.
   blocks: [R-CL-Q4]
   posture: phase-7
   scope: { files: [harness-*/src, justfile, harness.toml, tools/], contracts: [], cross_axis: yes }
