@@ -57,7 +57,9 @@ def test_contract_registered_arcs_have_parent_and_no_units() -> None:
     d = arc_ledger.derive(_data())
     ids = {a["id"] for a in d["frozen"] + d["standalone"]}
     registered = [a for a in d["standalone"] if a["status"] == "registered"]
-    assert registered, "the forward register must be non-empty (visibility is the point)"
+    if not registered:
+        assert d["rfs1_status"] in arc_ledger.RFS1_ZERO_OPEN_ALLOWED
+        return
     for a in registered:
         assert a.get("decompose_at_open") is True
         assert a.get("parent_arc") in ids
@@ -76,7 +78,22 @@ def _violates(mutate) -> bool:
 
 
 def _first_registered(data: dict) -> dict:
-    return next(a for a in data["arcs"] if a.get("status") == "registered")
+    for a in data["arcs"]:
+        if a.get("status") == "registered":
+            return a
+
+    a = _first_closed_standalone(data)
+    a["status"] = "registered"
+    a["decompose_at_open"] = True
+    a["parent_arc"] = data["arcs"][0]["id"]
+    a["anticipated_scope"] = "synthetic registered scope for negative validation tests"
+    a.pop("pr", None)
+    a.pop("spec_delta", None)
+    a["units"] = []
+    data["snapshot"]["standalone_closed"] -= 1
+    data["snapshot"]["standalone_registered"] += 1
+    data["snapshot"]["rfs1_status"] = "active"
+    return a
 
 
 def _first_closed_standalone(data: dict) -> dict:
@@ -145,6 +162,52 @@ def test_negative_drift_empty_forward_register_fails() -> None:
         # bump snapshot to zero so ONLY the drift guard fires (isolate the failure class)
         data["snapshot"]["standalone_gated"] = 0
         data["snapshot"]["standalone_registered"] = 0
+        data["snapshot"]["rfs1_status"] = "active"
+
+    assert _violates(m)
+
+
+def test_empty_forward_register_allowed_when_tier1_manual_pending() -> None:
+    """The build register may be empty while manual Tier-1 closure gates remain pending."""
+
+    data = arc_ledger.load()
+    data["arcs"] = [
+        {**a, "status": "closed", "pr": a.get("pr") or "#999"}
+        if a.get("status") in arc_ledger.OPEN_STANDALONE
+        else a
+        for a in data["arcs"]
+    ]
+    d = arc_ledger.derive(data)
+    data["snapshot"]["standalone_closed"] = d["standalone_closed"]
+    data["snapshot"]["standalone_gated"] = d["standalone_gated"]
+    data["snapshot"]["standalone_registered"] = d["standalone_registered"]
+    data["snapshot"]["rfs1_status"] = "tier1_manual_pending"
+
+    assert arc_ledger.validate(data) == []
+
+
+def test_empty_forward_register_allowed_when_rfs1_resolved() -> None:
+    """The terminal state is valid with an explicit R-FS-1 resolved snapshot pin."""
+
+    data = arc_ledger.load()
+    data["arcs"] = [
+        {**a, "status": "closed", "pr": a.get("pr") or "#999"}
+        if a.get("status") in arc_ledger.OPEN_STANDALONE
+        else a
+        for a in data["arcs"]
+    ]
+    d = arc_ledger.derive(data)
+    data["snapshot"]["standalone_closed"] = d["standalone_closed"]
+    data["snapshot"]["standalone_gated"] = d["standalone_gated"]
+    data["snapshot"]["standalone_registered"] = d["standalone_registered"]
+    data["snapshot"]["rfs1_status"] = "resolved"
+
+    assert arc_ledger.validate(data) == []
+
+
+def test_negative_unknown_rfs1_status_fails() -> None:
+    def m(data):
+        data["snapshot"]["rfs1_status"] = "done-ish"
 
     assert _violates(m)
 

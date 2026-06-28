@@ -231,7 +231,7 @@ Spine: `.harness/beyond-mvp-capability-boundary-ledger.md` (the build inventory)
 R-FS-1:
   title: Full-spec build program — build every MVP-bounded / deferred capability to full spec (nothing deferred)
   surface: I-fullspec
-  status: ACTIVE     # operator directive 2026-06-12 — THE frontier. Single ACTIVE umbrella; capabilities are ordered child arcs (R-CC-1 shape). Supersedes all confirm-defer/bounded-residual dispositions.
+  status: ACTIVE   # 2026-06-27 — final two registered arcs closed under Codex loop; arc ledger snapshot pins 69 closed / 0 gated / 4 resolved / 0 forward, but manual Tier-1 closure gates G1.4/G1.7/G1.8 remain pending.
   depends_on: []
   blocks: [R-CL-Q1, R-CL-Q2, R-CL-Q3, R-CL-Q4, R-CL-D1, R-CL-C1]
   posture: design-phase   # most arcs are design-fork-first (X-AL-3): research→design→spec→plan→implement
@@ -241,7 +241,7 @@ R-FS-1:
   council_required: conditional:nameable-tension
   verification: { shape: e2e, must_pass: ["the build inventory (ledger Bucket A re-opened + Bucket B + the contract-w/o-cite candidates + the fuller spec-body pass) is COMPLETE and every item BUILT (research/design/spec/plan/impl) — no item closed as deferred/bounded-residual", "the overlay `contract w/o code cite` driven to zero (or each remaining one proven implemented-but-uncited)", "ONLY THEN do R-CL-Q1..C1 open on the full-spec harness"] }
   close_shape: { type: program, artifact: "per-arc PRs tracked in the ledger", cascade: [R-IF-roadmap-refresh] }
-  next_pointer: R-FS-1-arc-B4-per-role-dispatch   # FROZEN order B1→B3→E→B2→R→B4→CA→B5→B6→B7→M. DONE: B1✅ B3✅ E✅ B2✅ R✅ (R incl. L3 #604 + L2 EMBEDDING #606). NEXT = B4 (per-role/per-step dispatch indexing). Full remaining itemization: .harness/roadmap_status.md "## Remaining forward work"; per-arc LEADS: .harness/r-fs-1-remaining-arcs-grounding-sweep-v1.md.
+  next_pointer: R-FS-1   # Forward build register is empty; complete/record manual Tier-1 closure gates before R-CL-Q1 can open.
   notes: |
     OPERATOR STANDING DIRECTIVE 2026-06-12 (verbatim above; will-NOT-drift). Retires the MVP+bounded-residual posture.
     SPINE: `.harness/beyond-mvp-capability-boundary-ledger.md` (grounded inventory: Bucket B = topology / engine-classes /
@@ -2594,7 +2594,7 @@ R-CL-P6:
 R-CL-Q1:
   title: Phase Q1 — DevEx + whole-codebase code-review & simplification sweep
   surface: VII
-  status: BLOCKED     # RE-BLOCKED 2026-06-12 behind R-FS-1 (FULL-SPEC directive §5.0 — quality runs ONCE on the full-spec harness, not the MVP+bounded-residual one). [was: ACTIVE 2026-06-12 post-R-CC-1 (capability-complete-before-quality, when the bar was the ~11-item inventory); the directive raised the bar to the entire spec → Q1 moves behind R-FS-1.]
+  status: BLOCKED      # 2026-06-27 — R-FS-1 forward build register is empty, but manual Tier-1 closure gates remain pending; Q1 still waits on R-FS-1.
   depends_on: [R-CL-P4, R-CL-P5, R-CL-P6, R-CC-1, R-PM-1, R-FS-1]   # +R-FS-1 (full-spec build program) per §5.0. P1/P2/P3 stay dropped as R-CC-1-subsumed (their open items now re-open AS BUILD under R-FS-1, not as Q1 deps). R-FS-1 is the single ACTIVE program; Q1 admits only when the full spec is built.
   blocks: [R-CL-Q4]
   posture: phase-7

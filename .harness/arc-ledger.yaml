@@ -46,11 +46,22 @@
 snapshot:
   frozen_total: 11
   frozen_done: 11
-  standalone_closed: 67
+  standalone_closed: 69
   standalone_gated: 0
   standalone_resolved: 4
-  standalone_registered: 2
+  standalone_registered: 0
+  rfs1_status: tier1_manual_pending
   source: ".harness/beyond-mvp-capability-boundary-ledger.md"
+  # FRONTIER NOTE (2026-06-27, B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-FANOUT-CHILD-RECONCILER
+  # + B-FANOUT-CRASH-RESUME-ORCHESTRATOR-PROCEED-RESIDUAL closed under Codex loop). The final
+  # two R-FS-1 registered arcs are now built: standalone_closed 67→69, standalone_registered
+  # 2→0, G1.1=0+0. The forward build register is empty, but manual Tier-1 closure gates
+  # (G1.4/G1.7/G1.8) still need sign-off; R-FS-1 stays ACTIVE and R-CL-Q1 remains blocked
+  # until the closure gate clears. RECONCILER fan-out child closes by widening the same
+  # branch-store recovery allowlist as ESR/WAL/SAVE_POINT after grounding the branch store as the
+  # aggregate authority and keeping per-branch RECONCILER CAS/fail-closed behavior delegated to the
+  # existing branch machinery. PROCEED orchestrator residual closes by writing the reserve-before-
+  # dispatch marker for PROCEED orchestrators too; worker-branch PROCEED semantics are unchanged.
   # FRONTIER NOTE (2026-06-27, B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-FANOUT-CHILD-SAVE-POINT closed
   # as the SAVE_POINT slice of the registered …-FANOUT-CHILD-SAVE-POINT-RECONCILER arc, CP spec v1.84 →
   # v1.85 + runtime change-note v1.90 → v1.91, CP + runtime [both mirror predicates]). A maybe-ran
@@ -357,7 +368,8 @@ snapshot:
   #       re-pause mode of NOT-YET-DISPATCHED [closed at v1.70]; the hard residual)
   # closure_gate.py G1.1 = standalone_registered + standalone_gated == 0 is now 5 + 0 = 5
   # → R-FS-1 stays ACTIVE. On all five follow-ons reaching closed/resolved → G1.1 passes →
-  # R-FS-1 resolves → R-CL-Q1 quality track admits. (Run `just closure-gate` to confirm G1.1.)
+  # the manual Tier-1 closure gates become the remaining R-FS-1 interlock before Q1 can open.
+  # (Run `just closure-gate` to confirm G1.1.)
 
 arcs:
   # ─── FROZEN build order (B1 → … → M), all closed, real as-built units ───
@@ -1304,11 +1316,19 @@ arcs:
   - id: B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-FANOUT-CHILD-RECONCILER
     title: "Recover a maybe-ran SUB_AGENT whose child is itself FAN-OUT with a RECONCILER_LOOP engine (engine-owns-reconvergence — the fan-out aggregate authority is ungrounded)"
     kind: standalone
-    status: registered
+    status: closed
     decompose_at_open: true
     owner_axis: "CP + runtime"
     operator_gated: false
     parent_arc: B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-FANOUT-CHILD-SAVE-POINT
+    pr: "#<pending> (codex/r-fs-1-final-arcs — flips registered → closed as a WHOLE close; registers NOTHING → standalone_closed 67 → 68, standalone_registered 2 → 1)"
+    spec_delta: "impl-to-cleared-spec; CP/runtime mirror widen `_FANOUT_REPLAY_ENGINE_CLASSES` and `_SUBAGENT_RECOVERABLE_FANOUT_CHILD_ENGINE_CLASSES` to include RECONCILER_LOOP for fan-out child recovery. NO design-substrate edit in this arc; no new contract/enum/fail-class/protocol/CXA edge; at-most-once preserved."
+    gives: "A maybe-ran fan-out / orchestrator SUB_AGENT_DISPATCH whose child is itself FAN-OUT (PARALLELIZATION / ORCHESTRATOR_WORKERS / HIERARCHICAL_DELEGATION) ∧ engine RECONCILER_LOOP now RECOVERS by re-dispatch through the existing branch store. Grounding: the branch store is the per-branch output-map authority consumed by `_determine_fanout_resume`; the reconciler substrate owns convergence/CAS state, not a competing fan-out aggregate. Per-branch RECONCILER CAS/F-1 behavior stays inside the existing child/branch resume path and remains fail-closed-safe."
+    closed_scope: "Constant widen + runtime mirror; by-execution RECONCILER fan-out reconstruction; CP/runtime predicate agreement tests and unsupported-topology negative controls."
+    as_built:
+      - "harness-cp/src/harness_cp/workflow_driver.py (`_FANOUT_REPLAY_ENGINE_CLASSES` += RECONCILER_LOOP; comments clarify branch-store aggregate authority vs reconciler convergence state)"
+      - "harness-runtime/src/harness_runtime/lifecycle/sub_agent_dispatch.py (`_SUBAGENT_RECOVERABLE_FANOUT_CHILD_ENGINE_CLASSES` += RECONCILER_LOOP; conjunct-2 docs updated)"
+      - "tests: harness-runtime test_lifecycle_sub_agent_dispatch.py (fan-out RECONCILER True + CP/runtime agreement + unsupported-topology false controls) + integration/test_fanout_child_crash_resume_witness.py (by-execution RECONCILER aggregate reconstruction)"
     anticipated_scope: "The SAVE_POINT fan-out-child close widened `_FANOUT_REPLAY_ENGINE_CLASSES` to {ESR,WAL,SAVE_POINT} but left RECONCILER_LOOP OUT. RECONCILER is REPRESENTABLE under fan-out (no load-time topology×engine validator forbids it; the §11.2 overlay is fault-handling not admissibility; the §11.3 matrix admits every (workload, RECONCILER) cell; RESEARCH/SOFTWARE_ENGINEERING/PIPELINE_AUTOMATION permit ORCHESTRATOR_WORKERS) — so this is a genuine build arc, NOT a resolve-invalid. UNLIKE SAVE_POINT (the §11.2 ABOVE_ENGINE reading — harness branch store is the sole aggregate authority), RECONCILER is the §11.2 RECONCILER reading (engine owns reconvergence via CRD-resource-version): the design question is whether the engine-owned reconciler substrate COMPETES with the B-FANOUT-OUTPUT-REPLAY branch store for the fan-out AGGREGATE authority (the two-authorities probe the RECONCILER LINEAR slice grounded — store-reuse won there because the reconciler substrate carries a convergence DIGEST, not the per-step output map; whether that holds for a fan-out AGGREGATE is open), AND how the RECONCILER F-1 won-CAS-claim window interacts with re-dispatching a fan-out of branches (each branch's own crash-resume fires the engine-layer reconverge gated at the CAS claim — the LINEAR RECONCILER child resolved this via ABORT→§22.1-HITL, but a fan-out of CAS-claiming branches is unwitnessed). Ground the two-authorities-for-aggregate + the CAS/F-1-under-fan-out questions at open; the close is a constant widen IFF grounding shows the branch store is the sole aggregate authority for RECONCILER too (likely, since `_determine_fanout_resume` reads only the class-agnostic store) AND the per-branch CAS interaction is fail-closed-safe."
     why: "Surfaced at the SAVE_POINT fan-out-child close (the carrier-segregation boundary — RECONCILER left out of the widened set). advisor-directed decompose (the arc's own decompose_at_open + the #779→#781 LINEAR precedent split SAVE_POINT from RECONCILER for exactly the engine-owns-substrate two-authorities reason): RECONCILER carries the engine-owns-reconvergence two-authorities-for-aggregate question + the CAS/F-1 window under a fan-out of branches — needs its own grounding, NOT complete-by-construction. FULL-SPEC (`[[feedback-full-spec-beyond-mvp-nothing-deferred]]`)."
     ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
@@ -1316,11 +1336,19 @@ arcs:
   - id: B-FANOUT-CRASH-RESUME-ORCHESTRATOR-PROCEED-RESIDUAL
     title: "Close the PROCEED-orchestrator pre-capture double-fire window (committed-tier-semantic change)"
     kind: standalone
-    status: registered
+    status: closed
     decompose_at_open: true
     owner_axis: "CP + runtime"
     operator_gated: true  # closing the PROCEED window changes PROCEED's COMMITTED tier semantic (the v1.56 PR2-round-4 "PROCEED accepts the dispatch-before-capture window" precedent, repeatedly documented v1.56/v1.57/v1.60/v1.61/v1.62) → a nameable C10⊥C11 tension → a dyadic council + operator AUQ at open (CLAUDE.md §10.9 + §13.4). NOT additive.
     parent_arc: B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-RESOLUTION
+    pr: "#<pending> (codex/r-fs-1-final-arcs — flips registered → closed as a WHOLE close; registers NOTHING → standalone_closed 68 → 69, standalone_registered 1 → 0; G1.1=0+0; R-FS-1 manual Tier-1 gates pending)"
+    operator_gate: "Ratified by explicit operator instruction in Codex session 2026-06-27: close both remaining arcs now; decision favors action-safety/blast-radius for an effect-bearing orchestrator under PROCEED."
+    spec_delta: "impl-to-cleared-spec; PROCEED now writes the orchestrator reserve-before-dispatch marker/stamp so effect-bearing orchestrator pre-capture crashes enter the existing maybe-ran classifier instead of fresh re-dispatch. Worker-branch PROCEED semantics remain unchanged."
+    gives: "Under CascadePolicy.PROCEED / SOLO_DEVELOPER, an effect-bearing orchestrator dispatch now records the existing orchestrator marker before dispatch. A crash after the external effect but before output capture therefore resumes through the maybe-ran classifier and can fail closed/pause instead of double-firing the orchestrator."
+    closed_scope: "Removed the PROCEED exclusion from orchestrator marker emission; added full-chain PROCEED orchestrator marker witness."
+    as_built:
+      - "harness-cp/src/harness_cp/workflow_driver.py (orchestrator reserve-before-dispatch marker now written whenever `_orch_replay_store` exists, including PROCEED)"
+      - "tests: harness-cp test_workflow_driver_fanout_output_replay_full_chain.py (`test_crash_resume_proceed_orchestrator_writes_marker`)"
     anticipated_scope: "Under CascadePolicy.PROCEED (SOLO_DEVELOPER) the orchestrator writes NO reserve-before-dispatch marker (v1.61 §1, strict-tier-only), so its pre-capture window still re-dispatches steps[0] fresh on a crash → a potential double-fire of an effect-bearing orchestrator. Closing it (write the orchestrator marker under PROCEED + apply the maybe-ran resolution) changes PROCEED's deliberate, repeatedly-documented committed tier semantic — 'PROCEED accepts the dispatch-before-capture window per the v1.56 PR2-round-4 precedent and the effect-fence's domain' — into a fail-closed / pause for the effect-bearing orchestrator. The v1.56 'no correctness gain' justification (synthesis is enforced effect-free) does NOT transfer to a general effect-BEARING orchestrator (v1.61 §4 named this). Scope: the C10⊥C11 decision (action-safety/blast-radius wanting at-most-once even at SOLO vs operator-loop/local-deployment wanting SOLO to never-block) + the impl once ratified. The same tension generalizes to worker-branch PROCEED (to be considered when this leg opens)."
     why: "Surfaced at B-FANOUT-CRASH-RESUME-ORCHESTRATOR-DISPATCH (v1.61 §4) + sharpened at B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-RESOLUTION: the spec text shows PROCEED's window-acceptance is a DELIBERATE committed tier semantic (not an unclosed gap in a universal invariant), so closing it is a committed-tier-semantic change requiring an operator gate + dyadic council — SPLIT from the additive re-fire-safe slice per `[[spec-leg-split-on-ratification-boundary]]` rather than silently absorbing the change. FULL-SPEC (`[[feedback-full-spec-beyond-mvp-nothing-deferred]]`)."
     ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"

@@ -1176,16 +1176,12 @@ def test_subagent_child_recoverable_true_for_fanout_child_esr_wal_save_point() -
             assert subagent_child_recoverable(payload) is True, (fanout_topology, engine)
 
 
-def test_subagent_child_recoverable_false_for_fanout_child_reconciler() -> None:
-    """NEGATIVE CONTROL — the carrier-segregation boundary (FANOUT-CHILD, R-FS-1): a fan-out child
-    whose engine is RECONCILER_LOOP is NOT recoverable. RECONCILER is in the four-class LINEAR
-    recoverability set but NOT in the {ESR,WAL,SAVE_POINT} `_FANOUT_REPLAY_ENGINE_CLASSES` that backs
-    the fan-out branch store — it is the §11.2 RECONCILER reading (engine owns reconvergence via
-    CRD-resource-version), so whether the reconciler substrate competes with the branch store for the
-    fan-out aggregate authority (plus its CAS/F-1 window) is ungrounded. Marking it recoverable would
-    re-dispatch fresh (an at-most-once hole). Fail closed (the registered `…-FANOUT-CHILD-RECONCILER`
-    follow-on). A RECONCILER LINEAR child IS recoverable (witnessed elsewhere) — the gate is
-    topology∩engine."""
+def test_subagent_child_recoverable_true_for_fanout_child_reconciler() -> None:
+    """B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-FANOUT-CHILD-RECONCILER — RECONCILER fan-out
+    children now join the recoverable set. The fan-out aggregate authority is the class-agnostic
+    B-FANOUT-OUTPUT-REPLAY branch store (the reconciler substrate carries convergence state, not the
+    per-branch output map), and the branch-level CAS/F-1 path stays fail-closed through each child's
+    existing RECONCILER resume. RED before this close: RECONCILER fan-out children failed conjunct 2."""
     for fanout_topology in (
         TopologyPattern.PARALLELIZATION,
         TopologyPattern.ORCHESTRATOR_WORKERS,
@@ -1196,7 +1192,7 @@ def test_subagent_child_recoverable_false_for_fanout_child_reconciler() -> None:
             topology=fanout_topology,
             child_step_kinds=(StepKind.TOOL_STEP,),
         )
-        assert subagent_child_recoverable(payload) is False, fanout_topology
+        assert subagent_child_recoverable(payload) is True, fanout_topology
 
 
 def test_subagent_child_recoverable_false_for_managed_or_malformed_nested_child_step() -> None:
@@ -1265,16 +1261,14 @@ def test_subagent_child_recoverable_true_for_nested_recoverable_grandchild() -> 
 
 def test_subagent_child_recoverable_false_for_nested_nonrecoverable_grandchild() -> None:
     """NEGATIVE CONTROL — the recursion fails closed when the grandchild is itself non-recoverable:
-    a FAN-OUT RECONCILER grandchild (fails the topology∩engine conjunct 2 at depth 2 — fan-out backs
-    {ESR,WAL,SAVE_POINT}, RECONCILER is the registered `…-FANOUT-CHILD-RECONCILER` follow-on), a
-    PURE_PATTERN grandchild (fails conjunct 1 at depth 2), or a grandchild whose own child step is
+    an unsupported EVALUATOR_OPTIMIZER grandchild (fails the topology∩engine conjunct 2 at depth 2),
+    a PURE_PATTERN grandchild (fails conjunct 1 at depth 2), or a grandchild whose own child step is
     MANAGED_AGENTS (fails the recursive conjunct 3 at depth 2). Each non-recoverability propagates up
-    to the parent. (A fan-out {ESR,WAL,SAVE_POINT} grandchild IS recoverable — the FANOUT-CHILD /
-    `…-FANOUT-CHILD-SAVE-POINT` relaxations — witnessed at
+    to the parent. (A fan-out {ESR,WAL,SAVE_POINT,RECONCILER} grandchild IS recoverable — witnessed at
     `test_subagent_child_recoverable_true_for_nested_fanout_grandchild`.)"""
     fanout_gc = _payload(
-        engine_class=EngineClass.RECONCILER_LOOP,
-        topology=TopologyPattern.PARALLELIZATION,
+        engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+        topology=TopologyPattern.EVALUATOR_OPTIMIZER,
         child_step_kinds=(StepKind.TOOL_STEP,),
     )
     assert subagent_child_recoverable(_nested_payload(fanout_gc)) is False
@@ -1308,9 +1302,9 @@ def test_subagent_child_recoverable_true_for_nested_fanout_grandchild() -> None:
 
 def test_subagent_child_recoverable_recurses_to_depth_three() -> None:
     """The recursion bottoms out correctly at arbitrary depth: a depth-3 chain of recoverable LINEAR
-    sub-agents → True; flipping the deepest great-grandchild to a FAN-OUT RECONCILER child → False
-    (no grounded fan-out aggregate substrate — the registered `…-FANOUT-CHILD-RECONCILER` follow-on;
-    the non-recoverability propagates up through BOTH nested levels)."""
+    sub-agents → True; flipping the deepest great-grandchild to an unsupported EVALUATOR_OPTIMIZER
+    child → False (no fan-out replay substrate; the non-recoverability propagates up through BOTH
+    nested levels)."""
     leaf = _payload(
         engine_class=EngineClass.WAL_SEGMENT,
         topology=TopologyPattern.SINGLE_THREADED_LINEAR,
@@ -1319,8 +1313,8 @@ def test_subagent_child_recoverable_recurses_to_depth_three() -> None:
     depth3_good = _nested_payload(_nested_payload(leaf))
     assert subagent_child_recoverable(depth3_good) is True
     bad_leaf = _payload(
-        engine_class=EngineClass.RECONCILER_LOOP,
-        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+        engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+        topology=TopologyPattern.EVALUATOR_OPTIMIZER,
         child_step_kinds=(StepKind.TOOL_STEP,),
     )
     depth3_bad = _nested_payload(_nested_payload(bad_leaf))
@@ -1475,6 +1469,36 @@ def test_recursive_signature_catches_save_point_topology_swap() -> None:
     assert sig_parallel != sig_orch
     # LINEAR keeps the bare engine value; fan-out prefixes `topology:`.
     assert sig_linear == EngineClass.SAVE_POINT_CHECKPOINT.value
+    assert sig_parallel is not None and sig_parallel.startswith(
+        TopologyPattern.PARALLELIZATION.value
+    )
+
+
+def test_recursive_signature_catches_reconciler_topology_swap() -> None:
+    """RECONCILER fan-out admission must preserve the topology-swap guard.
+
+    A linear RECONCILER child and a fan-out RECONCILER child use different recovery substrates, so
+    the topology:engine marker must differ even though the engine class is the same.
+    """
+    from harness_cp.workflow_driver import _subagent_child_engine_class
+
+    def _sig(topology: TopologyPattern) -> str | None:
+        return _subagent_child_engine_class(
+            _step(
+                _payload(
+                    engine_class=EngineClass.RECONCILER_LOOP,
+                    topology=topology,
+                    child_step_kinds=(StepKind.TOOL_STEP,),
+                )
+            )
+        )
+
+    sig_linear = _sig(TopologyPattern.SINGLE_THREADED_LINEAR)
+    sig_parallel = _sig(TopologyPattern.PARALLELIZATION)
+    sig_orch = _sig(TopologyPattern.ORCHESTRATOR_WORKERS)
+    assert sig_linear != sig_parallel
+    assert sig_parallel != sig_orch
+    assert sig_linear == EngineClass.RECONCILER_LOOP.value
     assert sig_parallel is not None and sig_parallel.startswith(
         TopologyPattern.PARALLELIZATION.value
     )
@@ -1666,7 +1690,7 @@ def test_cp_and_runtime_recoverability_predicates_agree() -> None:
                 topology=TopologyPattern.PARALLELIZATION,
                 child_step_kinds=(StepKind.TOOL_STEP,),
             ),
-            False,  # carrier segregation — RECONCILER is the registered `…-FANOUT-CHILD-RECONCILER`
+            True,  # RECONCILER joins the fan-out branch-store recovery set
         ),
         "nested-subagent-malformed": (
             _payload(
@@ -1714,7 +1738,7 @@ def test_cp_and_runtime_recoverability_predicates_agree() -> None:
                     child_step_kinds=(StepKind.TOOL_STEP,),
                 )
             ),
-            False,  # RECONCILER fan-out grandchild fails conjunct 2 → recursion fails closed
+            True,  # RECONCILER fan-out grandchild composes through the recursive predicate
         ),
     }
     for name, (payload, expected) in cases.items():
@@ -1726,7 +1750,7 @@ def test_cp_and_runtime_recoverability_predicates_agree() -> None:
         )
         assert runtime_verdict is expected, (
             f"{name}: verdict={runtime_verdict} expected={expected} — topology∩engine boundary "
-            "(LINEAR admits all four durable classes; fan-out admits {ESR,WAL,SAVE_POINT})"
+            "(LINEAR and fan-out admit the four durable classes; unsupported topologies fail closed)"
         )
 
 

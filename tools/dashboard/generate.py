@@ -523,14 +523,18 @@ def _project_arc_ledger(derived: dict) -> dict:
                 "decompose_at_open": bool(r.get("decompose_at_open")),
             }
         )
-    return {"arcs": arcs, "standalone": standalone}
+    return {
+        "arcs": arcs,
+        "standalone": standalone,
+        "rfs1_status": derived.get("rfs1_status", "active"),
+    }
 
 
 # --------------------------------------------------------------------------- #
 # No-PyYAML fallback — hand-parse `.harness/arc-ledger.yaml` so the dashboard regenerates
 # byte-identically under the system Python 3.9 (no PyYAML) the Codex guard uses. The parser
-# only needs the `arcs:` list (derive() ignores `snapshot`; generate never calls validate()),
-# and only the render-relevant fields — it feeds rows through the SAME reused `derive()`.
+# needs the `snapshot:` status pin plus the `arcs:` list, and only the render-relevant
+# fields — it feeds rows through the SAME reused `derive()`.
 # 3.9-clean (no match/| unions at runtime). A projection-equality test pins it to yaml.safe_load.
 # --------------------------------------------------------------------------- #
 def _coerce_scalar(val: str):
@@ -589,12 +593,19 @@ def _parse_arc_block(block: str) -> dict | None:
 
 
 def _arc_ledger_fallback_load(path: Path) -> dict:
-    """Hand-parse the ledger's `arcs:` list without PyYAML → the same {arcs:[row dicts]} shape
-    `arc_ledger.load()` returns (snapshot omitted; derive() doesn't read it)."""
+    """Hand-parse the ledger without PyYAML → the same {snapshot, arcs} shape
+    `arc_ledger.load()` returns."""
     text = path.read_text(encoding="utf-8")
     marker = re.search(r"^arcs:\s*$", text, re.MULTILINE)
     if not marker:
         return {"arcs": []}
+    snapshot: dict = {}
+    snap = re.search(r"^snapshot:\s*$(.*?)(?=^arcs:\s*$)", text, re.MULTILINE | re.DOTALL)
+    if snap:
+        for line in snap.group(1).splitlines():
+            sm = re.match(r"^\s{2}([A-Za-z0-9_]+):\s*(.*)$", line)
+            if sm:
+                snapshot[sm.group(1)] = _coerce_scalar(sm.group(2))
     body = text[marker.end() :]
     arcs: list[dict] = []
     for block in re.split(r"\n(?=  - id:)", body):
@@ -603,7 +614,7 @@ def _arc_ledger_fallback_load(path: Path) -> dict:
         row = _parse_arc_block(block)
         if row is not None:
             arcs.append(row)
-    return {"arcs": arcs}
+    return {"snapshot": snapshot, "arcs": arcs}
 
 
 def _arc_derivation_or_fallback() -> dict | None:
@@ -667,16 +678,22 @@ def assert_remaining_nonempty(actions: list[dict], dashboard: dict) -> None:
     non-empty via the OPEN (remaining/gated/registered) standalone arcs even when `child_arcs`
     is zero. `closed`/`resolved` standalone arcs do NOT count as remaining work — guarding on a
     merely non-empty `standalone` list would mask drift once every standalone arc is built.
-    `registered` (forward, decompose-at-open) arcs ARE open work — omitting them would make
-    this FATAL guard false-fire the moment the originally-enumerated open arcs all close."""
+    `registered` (forward, decompose-at-open) arcs ARE open work. A zero-open state is valid only
+    when the arc ledger explicitly pins `snapshot.rfs1_status: tier1_manual_pending` (build register
+    empty, manual Tier-1 closure gates still pending). A `resolved` ledger status must be paired
+    with a non-ACTIVE roadmap action, otherwise the sources have drifted."""
     rfs1_active = any(a.get("id") == "R-FS-1" and a.get("status") == "ACTIVE" for a in actions)
     remaining = dashboard.get("remaining_forward", {})
     child_arcs = remaining.get("child_arcs", [])
     standalone = remaining.get("standalone", [])
+    arc_map = dashboard.get("arc_map", {})
+    rfs1_zero_open_allowed = (
+        str(arc_map.get("rfs1_status", "active")).lower() == "tier1_manual_pending"
+    )
     open_standalone = [
         s for s in standalone if s.get("status") in ("remaining", "gated", "registered")
     ]
-    if rfs1_active and not child_arcs and not open_standalone:
+    if rfs1_active and not rfs1_zero_open_allowed and not child_arcs and not open_standalone:
         raise RuntimeError(
             "FATAL: R-FS-1 is ACTIVE but the arc ledger derived zero remaining frozen child "
             "arcs AND zero OPEN (remaining/gated/registered) standalone arcs from "
@@ -739,8 +756,8 @@ def parse_dashboard(md: str) -> dict:
     dl = _section(md, "Drift detection log")
     out["drift_log_count"] = len(re.findall(r"^\|\s*\d{4}-\d{2}-\d{2}\s*\|", dl, re.MULTILINE))
 
-    # remaining_forward + arc_map are populated in build() from the arc-and-unit map
-    # (`.harness/r-fs-1-arc-and-unit-map.md`) — the single arc→unit source. roadmap_status.md
+    # remaining_forward + arc_map are populated in build() from the arc ledger
+    # (`.harness/arc-ledger.yaml`) — the single arc→unit source. roadmap_status.md
     # "Remaining forward work" is now a pointer to the map, not a second parseable copy.
     return out
 

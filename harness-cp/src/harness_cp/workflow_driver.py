@@ -36,6 +36,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hashlib
+import inspect
 import json
 from collections.abc import Awaitable, Collection, Coroutine, Iterable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
@@ -253,8 +254,9 @@ _IN_SCOPE_ENGINE_CLASSES: frozenset[EngineClass] = frozenset(
         # and the EngineClassNotYetMaterializedError gate (the `not in
         # _IN_SCOPE_ENGINE_CLASSES` raise above) becomes preserved-but-unreachable
         # (the E sub-program closes at the gate level).**
-        # Resume-blind on the 5 non-linear strategies, exactly as save-point /
-        # EVENT_SOURCED_REPLAY / WAL_SEGMENT (B-FANOUT-PAUSE arc, not this unit).
+        # Non-linear pause/resume remains owned by the fan-out pause arcs. The fan-out
+        # crash-resume branch now gates RECONCILER replay through the same engine-layer
+        # CAS/abort check before replaying branch-store output.
         EngineClass.RECONCILER_LOOP,
     }
 )
@@ -706,10 +708,10 @@ def _record_durable_step_output(
 # aggregate authority, no competing engine-owned substrate), its §14.22 effect fence is auto-active
 # (SAVE_POINT ∈ the runtime `_DURABLE_AUTO_FENCE_ENGINE_CLASSES` → in-flight branch re-dispatch is
 # at-most-once-safe), and it fires NO recovery loop / CAS-claim (no F-1 window). RECONCILER_LOOP
-# stays OUT (the registered `…-FANOUT-CHILD-RECONCILER` follow-on): it is the §11.2 RECONCILER
-# reading (engine owns reconvergence via CRD-resource-version), so whether the reconciler substrate
-# competes with the branch store for the fan-out AGGREGATE authority — plus its CAS/F-1 window —
-# needs its own grounding. Widening this SHARED constant moves the capture gate
+# JOINS here (the `…-FANOUT-CHILD-RECONCILER` close): the reconciler substrate owns convergence/CAS
+# state, not the per-branch output map, so the class-agnostic branch store remains the SOLE fan-out
+# AGGREGATE authority; each branch's own RECONCILER crash-resume keeps CAS/F-1 fail-closed.
+# Widening this SHARED constant moves the capture gate
 # (`_fanout_replay_store`) AND the recoverability predicate (`_fanout_recoverable`) in lockstep —
 # the two halves of one mechanism share their scope key
 # (`[[durable-recovery-presence-validity-scope]]`). The CP↔runtime mirror is the runtime
@@ -719,6 +721,7 @@ _FANOUT_REPLAY_ENGINE_CLASSES: frozenset[EngineClass] = frozenset(
         EngineClass.EVENT_SOURCED_REPLAY,
         EngineClass.WAL_SEGMENT,
         EngineClass.SAVE_POINT_CHECKPOINT,
+        EngineClass.RECONCILER_LOOP,
     }
 )
 
@@ -742,14 +745,12 @@ _FANOUT_REPLAY_ENGINE_CLASSES: frozenset[EngineClass] = frozenset(
 # admitting RECONCILER strictly IMPROVES the not-won-claim cases (recover vs fail-the-parent-closed)
 # and routes the F-1 window through the SAME already-on-main RECONCILER-resume ABORT→§22.1-HITL
 # disposition (#779/#781) — the registered F-1 engine-lock auto-recovery arc improves ALL RECONCILER
-# resumes and is NOT a prerequisite for this child-recoverability slice. This is DEDICATED to the
-# LINEAR recoverability conjunct — DISTINCT from `_FANOUT_REPLAY_ENGINE_CLASSES`, the fan-out gate:
-# the LINEAR auto-resume + `reconstruct_final_state` seed back all FOUR durable classes, whereas the
-# fan-out aggregate gate backs {ESR,WAL,SAVE_POINT} only (RECONCILER is the registered
-# `…-FANOUT-CHILD-RECONCILER` follow-on) — so the two sets are NOT identical and must not collapse
-# to one constant (a RECONCILER child is LINEAR-recoverable but NOT yet fan-out-recoverable). The
-# CP-side MIRROR of the runtime `_SUBAGENT_RECOVERABLE_CHILD_ENGINE_CLASSES` (agreement witness
-# enforces parity).
+# resumes and is NOT a prerequisite for this child-recoverability slice. This set is DEDICATED to
+# the LINEAR recoverability conjunct; `_FANOUT_REPLAY_ENGINE_CLASSES` is the separate fan-out
+# aggregate gate. They currently contain the same four durable classes, but they remain separate
+# authorities because the LINEAR path seeds `reconstruct_final_state` while the fan-out path
+# consumes the branch-output store. The CP-side MIRROR of the runtime
+# `_SUBAGENT_RECOVERABLE_CHILD_ENGINE_CLASSES` (agreement witness enforces parity).
 _SUBAGENT_RECOVERABLE_CHILD_ENGINE_CLASSES: frozenset[EngineClass] = frozenset(
     {
         EngineClass.EVENT_SOURCED_REPLAY,
@@ -768,12 +769,10 @@ _SUBAGENT_RECOVERABLE_CHILD_ENGINE_CLASSES: frozenset[EngineClass] = frozenset(
 # effect-bearing fenced) → the aggregate folds result-faithfully into the parent. EXACTLY the three
 # concurrent strategies `_crash_fan_out_resume` reconstructs; EVALUATOR_OPTIMIZER and
 # DECENTRALIZED_HANDOFF have no fan-out replay store → stay fail-closed. This recovery is gated to
-# `_FANOUT_REPLAY_ENGINE_CLASSES` ({ESR,WAL,SAVE_POINT}) — the classes with a fan-out replay store
-# (SAVE_POINT joined at the `…-FANOUT-CHILD-SAVE-POINT` slice, the harness-authored ABOVE_ENGINE
-# store); a RECONCILER fan-out child has no grounded fan-out aggregate substrate yet → fail closed
-# (the registered `…-FANOUT-CHILD-RECONCILER` follow-on). NOT the four-class set the LINEAR slice
-# uses (carrier segregation: the LINEAR auto-resume + `reconstruct_final_state` seed back all four;
-# the fan-out aggregate reconstruction backs only three — {ESR,WAL,SAVE_POINT}).
+# `_FANOUT_REPLAY_ENGINE_CLASSES` ({ESR,WAL,SAVE_POINT,RECONCILER}) — the classes with a fan-out
+# replay store. SAVE_POINT joined at the `…-FANOUT-CHILD-SAVE-POINT` slice; RECONCILER joins at the
+# `…-FANOUT-CHILD-RECONCILER` close because the branch-output store, not the reconciler substrate,
+# owns the aggregate output map.
 _SUBAGENT_RECOVERABLE_FANOUT_CHILD_TOPOLOGIES: frozenset[TopologyPattern] = frozenset(
     {
         TopologyPattern.PARALLELIZATION,
@@ -904,9 +903,8 @@ def _refire_unsafe_branch_indices(
 # SUB_AGENT_DISPATCH is fenced only at its CHILD's tool sinks (recursive child crash-resume — a
 # larger, separately-verified mechanism → the registered B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT
 # follow-on). The fence is AUTO-ACTIVE here: a fan-out crash-resume is reachable ONLY for
-# `_FANOUT_REPLAY_ENGINE_CLASSES` ({EVENT_SOURCED_REPLAY, WAL_SEGMENT, SAVE_POINT_CHECKPOINT}), a
-# SUBSET of the runtime's durable-auto-fence set (which includes all four durable classes), and a
-# worker child context inherits `run_engine_class` (so the fence gate is open for the re-dispatch).
+# `_FANOUT_REPLAY_ENGINE_CLASSES`, a subset of the runtime's durable-auto-fence set, and a worker
+# child context inherits `run_engine_class` (so the fence gate is open for the re-dispatch).
 _FANOUT_MAYBE_RAN_FENCE_RECOVERABLE_KIND_VALUES: frozenset[str] = frozenset(
     {StepKind.TOOL_STEP.value, StepKind.MANAGED_AGENTS.value}
 )
@@ -992,10 +990,8 @@ def payload_child_recoverable(cme: Any, child_steps: Any) -> bool:
     #     auto-resume + the LINEAR `reconstruct_final_state` seed;
     #   • a FAN-OUT child reconstructs its AGGREGATE via the SEPARATE B-FANOUT-OUTPUT-REPLAY branch
     #     store (`_crash_fan_out_resume`), gated to `_FANOUT_REPLAY_ENGINE_CLASSES`
-    #     ({ESR,WAL,SAVE_POINT}) — a RECONCILER fan-out child has no grounded fan-out aggregate
-    #     substrate yet, so marking it recoverable would re-dispatch fresh (the reconstruct never
-    #     fires) → an at-most-once HOLE → fail closed (the registered `…-FANOUT-CHILD-RECONCILER`
-    #     follow-on);
+    #     ({ESR,WAL,SAVE_POINT,RECONCILER}); RECONCILER's reconciler substrate owns convergence/CAS
+    #     state, not the per-branch output map;
     #   • any other topology (EVALUATOR_OPTIMIZER / DECENTRALIZED_HANDOFF) has no reconstruction
     #     substrate → fail closed.
     _fanout_recoverable = (
@@ -1048,9 +1044,11 @@ def _subagent_child_recoverable(step: WorkflowStep) -> bool | None:
        disposition; the F-1 engine-lock auto-recovery arc improves ALL RECONCILER resumes and is NOT
        a prerequisite here. (DEDICATED set, distinct from `_FANOUT_REPLAY_ENGINE_CLASSES` which the
        separate `_fanout_replay_store` branch-capture gate consumes — carrier segregation.)
-    2. child topology == SINGLE_THREADED_LINEAR — applied at EVERY recursion level; a fan-out child
-       (or fan-out grandchild) fails this conjunct → still fail closed (the case-(a) fan-out-child
-       surface). "No nested sub-agents" was the prior over-narrowing — now relaxed at conjunct 3.
+    2. child topology is SINGLE_THREADED_LINEAR OR a fan-out topology backed by
+       `_FANOUT_REPLAY_ENGINE_CLASSES` ({ESR,WAL,SAVE_POINT,RECONCILER}) — applied at EVERY
+       recursion level. LINEAR children reconstruct through the per-step output store; fan-out
+       children reconstruct their aggregate through the branch replay store. Unsupported
+       topologies or non-durable engines still fail closed.
     3. every child step is non-MANAGED_AGENTS, and every nested SUB_AGENT_DISPATCH child step is
        ITSELF recoverable — the RECURSIVE leaf/non-leaf condition (the NONLEAF-CHILD arc). A
        MANAGED_AGENTS child step is an unfenced vendor sink (no recursive manifest) → fail closed;
@@ -1100,8 +1098,8 @@ def _payload_engine_signature(cme: Any, child_steps: Any) -> str:
     `recursive_sig` carries the grandchild's OWN engine + deeper tuples → holds at all depths.
 
     TOPOLOGY is part of the signature for a FAN-OUT child (the FANOUT-CHILD arc, R-FS-1, out-of-
-    family Codex [P1]): conjunct 2 now admits the SAME engine ({ESR,WAL,SAVE_POINT} under fan-out)
-    under BOTH SINGLE_THREADED AND a fan-out topology, so a maybe-ran child dispatched LINEAR-ESR
+    family Codex [P1]): conjunct 2 now admits the SAME durable replay engine set under BOTH
+    SINGLE_THREADED and a fan-out topology, so a maybe-ran child dispatched LINEAR-ESR
     (or LINEAR-SAVE_POINT) whose resumed manifest swaps ONLY its topology to fan-out (same
     engine/step_id) would pass an engine-only signature AND reuse the same `child_run_id` against a
     DIFFERENT recovery substrate (the LINEAR `reconstruct_final_state` seed vs the fan-out
@@ -1281,7 +1279,7 @@ def _fence_unrecoverable_maybe_ran_indices(
     B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT (R-FS-1) — a SUB_AGENT_DISPATCH worker is READ_ONLY at
     the parent gate; its only external effects live at the CHILD's tool sinks. A maybe-ran
     SUB_AGENT_DISPATCH worker is RECOVERABLE iff its child was RECOVERABLE
-    ({ESR,WAL,SAVE_POINT,RECONCILER} ∧ LINEAR ∧ leaf) BOTH at dispatch
+    (durable LINEAR or supported fan-out topology, recursively recoverable) BOTH at dispatch
     (`subagent_recoverable_indexes`, the marker — proves the child wrote durable records to
     auto-resume from) AND in the RESUMED manifest (`resumed_subagent_recoverable_indexes` — proves
     the re-dispatch goes through the replay store/fence path, not a fresh non-recoverable run) AND
@@ -1415,6 +1413,29 @@ def _orchestrator_dispatched_child_engine(store: Any, run_key: str) -> str | Non
     return result if isinstance(result, str) else None
 
 
+def _orchestrator_dispatched_proceed_unstamped(store: Any, run_key: str) -> bool:
+    """Defensively read the PROCEED-origin unstamped orchestrator marker bit.
+
+    A store without this additive reader cannot prove that an unstamped effect-free marker came
+    from the new PROCEED writer rather than corruption / partial loss, so it fails closed by
+    returning ``False``."""
+    reader = getattr(store, "orchestrator_dispatched_proceed_unstamped", None)
+    if reader is None:
+        return False
+    return bool(reader(run_key))
+
+
+def _callable_accepts_keyword(fn: Any, keyword: str) -> bool:
+    """Return whether a duck-typed writer can accept an additive keyword argument."""
+    try:
+        parameters = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
+    return keyword in parameters or any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in parameters.values()
+    )
+
+
 def _fanout_replay_store(ctx: DriverContext, manifest_entry: WorkflowManifestEntry) -> Any:
     """B-FANOUT-OUTPUT-REPLAY (R-FS-1) — the bound `EngineOutputStore` IFF this run is
     fan-out-crash-recoverable, else `None`.
@@ -1424,8 +1445,7 @@ def _fanout_replay_store(ctx: DriverContext, manifest_entry: WorkflowManifestEnt
     CONSUME site (`_determine_fanout_resume`), so the two halves of the recovery
     mechanism can NEVER skew on which runs are recoverable
     (`[[durable-recovery-presence-validity-scope]]`: two halves of one mechanism share
-    their scope key). Gated to the replay-capable engine classes
-    (`EVENT_SOURCED_REPLAY` / `WAL_SEGMENT`) AND an operator-bound store
+    their scope key). Gated to `_FANOUT_REPLAY_ENGINE_CLASSES` AND an operator-bound store
     (`ctx.engine_output_store` is `None` by default → returns `None` → no-op,
     byte-identical to pre-arc). Read via `getattr` (the `cp_is_wiring` idiom — harness-cp
     does not import the runtime store type)."""
@@ -1485,12 +1505,11 @@ def _mark_branch_dispatched(
 
     B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT (R-FS-1) — for a SUB_AGENT_DISPATCH branch the marker
     ALSO records the DISPATCH-TIME child recoverability (`_subagent_child_recoverable(step)` — the
-    opaque child manifest's `{ESR,WAL,SAVE_POINT,RECONCILER}` ∧ LINEAR ∧ leaf predicate) so the
-    maybe-ran classifier re-dispatches a SUB_AGENT_DISPATCH worker ONLY when its child can
-    auto-resume result-faithfully under the deterministic run_id, AND the DISPATCH-TIME child
-    engine class (`_subagent_child_engine_class(step)`) so the maybe-ran gate fails closed on a
-    same-step_id cross-engine-class swap (out-of-family Codex [P1], …-RECONCILER-CHILD arc). `None`
-    (`step` not
+    durable LINEAR or supported fan-out, recursively recoverable predicate) so the maybe-ran
+    classifier re-dispatches a SUB_AGENT_DISPATCH worker ONLY when its child can auto-resume
+    result-faithfully under the deterministic run_id, AND the DISPATCH-TIME child engine class
+    (`_subagent_child_engine_class(step)`) so the maybe-ran gate fails closed on a same-step_id
+    cross-engine-class swap (out-of-family Codex [P1], …-RECONCILER-CHILD arc). `None` (`step` not
     threaded, or a non-SUB_AGENT branch) → both fields are omitted (marker byte-identical). No-op
     unless replay-capable ∧ store-bound."""
     _store = _fanout_replay_store(ctx, manifest_entry)
@@ -2289,6 +2308,84 @@ def _run_protocol_method_sync[TProtocolResult](
     return asyncio.run(coro)
 
 
+def _attempt_reconciler_engine_resume_gate(
+    *,
+    ctx: DriverContext,
+    manifest_entry: WorkflowManifestEntry,
+    run_id: str,
+    step_id: str,
+) -> tuple[RunResult | None, bool]:
+    """Run the RECONCILER engine-layer resume gate when a pause record is present.
+
+    Used by both RECONCILER paths conceptually: the linear path has an inline call with a
+    resume_at-derived step id; fan-out crash-resume uses this helper before replaying branch-store
+    output. A present pause record must fire `attempt_resume` so CAS/ABORT outcomes fail closed
+    instead of letting branch replay bypass the reconciler substrate.
+    """
+    if manifest_entry.engine_class is not EngineClass.RECONCILER_LOOP:
+        return None, False
+    _engine_recovery_loop = getattr(ctx, "engine_recovery_loop", None)
+    if _engine_recovery_loop is None:
+        return None, False
+    if not _engine_recovery_loop.has_pause_record(
+        engine_class=manifest_entry.engine_class,
+        workflow_id=manifest_entry.workflow_id,
+        run_id=run_id,
+    ):
+        return None, False
+    _engine_resume = _run_protocol_method_sync(
+        _engine_recovery_loop.attempt_resume(
+            engine_class=manifest_entry.engine_class,
+            workflow_id=manifest_entry.workflow_id,
+            run_id=run_id,
+            step_id=step_id,
+            resume_event_id=f"resume:{run_id}:{step_id}",
+            resume_attempt_count=1,
+            resume_at=datetime.now(UTC).isoformat(),
+        )
+    )
+    _abort_fail_class = _ENGINE_RESUME_ABORT_FAIL_CLASS.get(
+        _engine_resume.resume_outcome.outcome_kind
+    )
+    if _abort_fail_class is None:
+        return None, True
+    ctx.lifecycle_emitter.emit(WorkflowEventClass.RESUMPTION)
+    return (
+        RunResult(
+            workflow_id=manifest_entry.workflow_id,
+            run_id=run_id,
+            status=RunStatus.FAILED,
+            terminal_step_index=None,
+            partial_state=None,
+            final_state=None,
+            fail_class=_abort_fail_class,
+        ),
+        True,
+    )
+
+
+def _reconciler_fanout_resume_finalized(store: Any, run_idempotency_key: str) -> bool:
+    """Whether a prior RECONCILER fan-out resume crossed the strategy commit boundary."""
+    finalized = getattr(store, "reconciler_fanout_resume_finalized", None)
+    return bool(finalized(run_idempotency_key)) if callable(finalized) else False
+
+
+def _record_reconciler_fanout_resume_finalized(
+    ctx: DriverContext,
+    manifest_entry: WorkflowManifestEntry,
+    run_idempotency_key: str,
+) -> None:
+    """Durably mark a clean RECONCILER fan-out resume after the fan-out result commits."""
+    if manifest_entry.engine_class is not EngineClass.RECONCILER_LOOP:
+        return
+    store = _fanout_replay_store(ctx, manifest_entry)
+    if store is None:
+        return
+    record = getattr(store, "record_reconciler_fanout_resume_finalized", None)
+    if callable(record):
+        record(run_idempotency_key)
+
+
 def execute_workflow(
     manifest_entry: WorkflowManifestEntry,
     steps: Sequence[WorkflowStep],
@@ -2748,6 +2845,7 @@ def _execute_workflow_body(
     # changed-kind → fail closed) + the auto-active fence (at-most-once at the tool sink). Empty
     # unless the PAUSE-reconstruct gate below classifies a fence-recoverable maybe-ran ordinal.
     _crash_pause_reconstruct_fence_paused: tuple[EffectFencePausedBranchResumeState, ...] = ()
+    _reconciler_fanout_engine_resume_required = False
     if (
         strategy
         in {
@@ -2807,6 +2905,18 @@ def _execute_workflow_body(
                     ),
                     0,
                 )
+            # RECONCILER fan-out replay returns before the linear engine branch below, so a present
+            # engine pause record must fire the engine-layer pause/CAS gate before branch-store
+            # replay/finalization. Branch records (and synthesis records) are reserve-before-commit:
+            # a crash can leave them complete before the fan-out barrier/result committed. Only the
+            # post-finalization marker below proves a prior clean resume already crossed the
+            # strategy commit boundary and may skip a duplicate CAS on an idempotent re-drive.
+            # The one-shot CAS itself is attempted inside the fan-out strategy AFTER its pure
+            # replay/body material-diff checks, so an invalid retry cannot consume the claim.
+            if manifest_entry.engine_class is EngineClass.RECONCILER_LOOP and not (
+                _reconciler_fanout_resume_finalized(_crash_replay_store, run_idempotency_key)
+            ):
+                _reconciler_fanout_engine_resume_required = True
             # B-FANOUT-CRASH-RESUME-CASCADE-POLICY — strict-tier CARDINALITY-ONLY fail-closed
             # (out-of-family Codex [P1] round-2). The fan-out cardinality marker is written ONCE
             # on a fresh run BEFORE any branch dispatches (`record_fanout_cardinality`, the
@@ -3014,8 +3124,9 @@ def _execute_workflow_body(
             #     dispatch — so an absent branch is provably not-yet-run) is the registered
             #     B-FANOUT-CRASH-RESUME-STRICT-TIER-INCOMPLETE follow-on.
             # The COMPLETE ∧ no-error continue path re-dispatches NOTHING → it finalizes from the
-            # recovered set (trivially safe). PROCEED is UNCHANGED (PR1 re-dispatches absent
-            # branches — the SOLO tier accepts the dispatch-before-capture window). An errored
+            # recovered set (trivially safe). Worker-branch PROCEED is unchanged (PR1 re-dispatches
+            # absent branches — the SOLO tier accepts the dispatch-before-capture window). An
+            # errored
             # ORCHESTRATOR is NOT a cascade trigger (it returns FAILED directly before any
             # worker; `cascade_policy governs WORKER failure` — `workflow_driver.py:6548`), so
             # detection over `.branches` (workers/peers) is complete (orchestrator-workers
@@ -3530,6 +3641,7 @@ def _execute_workflow_body(
             # dispatch mode (the dispatcher proved every absent ordinal not-yet-run).
             crash_pause_reconstruct_no_dispatch=_crash_pause_reconstruct_no_dispatch,
             crash_pause_reconstruct_fence_paused=_crash_pause_reconstruct_fence_paused,
+            reconciler_engine_resume_required=_reconciler_fanout_engine_resume_required,
             synthesis_step=_synthesis_step,
         )
     if strategy is _DriverStrategyStatus.EVALUATOR_OPTIMIZER:
@@ -3576,6 +3688,7 @@ def _execute_workflow_body(
             # dispatch mode (the dispatcher proved every absent worker ordinal not-yet-run).
             crash_pause_reconstruct_no_dispatch=_crash_pause_reconstruct_no_dispatch,
             crash_pause_reconstruct_fence_paused=_crash_pause_reconstruct_fence_paused,
+            reconciler_engine_resume_required=_reconciler_fanout_engine_resume_required,
             pause_resumable=True,
             synthesis_step=_synthesis_step,
         )
@@ -3607,6 +3720,7 @@ def _execute_workflow_body(
             # dispatch mode forwarded into the per-level orchestrator-workers execution.
             crash_pause_reconstruct_no_dispatch=_crash_pause_reconstruct_no_dispatch,
             crash_pause_reconstruct_fence_paused=_crash_pause_reconstruct_fence_paused,
+            reconciler_engine_resume_required=_reconciler_fanout_engine_resume_required,
             pause_resumable=True,
             synthesis_step=_synthesis_step,
         )
@@ -5187,52 +5301,17 @@ def _replay_captured_synthesis(
     the original append, so the deterministic idempotency key → `IDEMPOTENT_NOOP` for the
     already-persisted entry — PR1 §2 re-materialization discipline) + emits the STEP_BOUNDARY,
     then returns the captured output as the run's `final_state`."""
-    captured = store.read_synthesis(run_idempotency_key)
-    if captured is None:
-        # `synthesis_present` is True (the file EXISTS) but `read_synthesis` yields no
-        # readable record → a corrupt / torn / un-self-hashed capture. Fail closed.
-        return RunResult(
-            workflow_id=manifest_entry.workflow_id,
-            run_id=run_id,
-            status=RunStatus.FAILED,
-            terminal_step_index=synthesis_index,
-            partial_state=None,
-            final_state=None,
-            fail_class=(
-                "post-join-synthesis-replay-corrupt: a captured synthesis file exists but "
-                "holds no readable self-hashed record — fail closed rather than re-dispatch a "
-                "fresh (non-reproducible) synthesis that would mask the corruption"
-            ),
-        )
-    captured_step_id, captured_output, captured_self_hash = captured
-    if _compute_synthesis_self_hash(captured_step_id, captured_output) != captured_self_hash:
-        return RunResult(
-            workflow_id=manifest_entry.workflow_id,
-            run_id=run_id,
-            status=RunStatus.FAILED,
-            terminal_step_index=synthesis_index,
-            partial_state=None,
-            final_state=None,
-            fail_class=(
-                "post-join-synthesis-replay-self-hash-mismatch: the captured synthesis "
-                "record fails its record-local capture-time self-hash (corruption / tamper) "
-                "— fail closed (the synthesis carries no ledger response_hash to cross-check)"
-            ),
-        )
-    if captured_step_id != str(synthesis_step.step_id):
-        return RunResult(
-            workflow_id=manifest_entry.workflow_id,
-            run_id=run_id,
-            status=RunStatus.FAILED,
-            terminal_step_index=synthesis_index,
-            partial_state=None,
-            final_state=None,
-            fail_class=(
-                "post-join-synthesis-replay-material-diff: the resumed manifest's synthesis "
-                f"step_id ({synthesis_step.step_id!s}) differs from the captured identity "
-                f"({captured_step_id}) — a changed synthesis body; fail closed"
-            ),
-        )
+    captured_output, failure = _read_valid_captured_synthesis(
+        store=store,
+        run_idempotency_key=run_idempotency_key,
+        synthesis_step=synthesis_step,
+        synthesis_index=synthesis_index,
+        manifest_entry=manifest_entry,
+        run_id=run_id,
+    )
+    if failure is not None:
+        return failure
+    assert captured_output is not None
     # Audit completeness: re-append the synthesis ledger entry (DEDUP-SAFE — the W3 crash
     # can land after the original append; the deterministic key → IDEMPOTENT_NOOP) + emit the
     # STEP_BOUNDARY. Map a ledger/emitter failure to a FAILED RunResult here, exactly like the
@@ -5257,7 +5336,101 @@ def _replay_captured_synthesis(
             final_state=None,
             fail_class=_step_fail_class("post-join-synthesis-replay-failure", exc),
         )
-    return dict(captured_output)
+    return captured_output
+
+
+def _read_valid_captured_synthesis(
+    *,
+    store: Any,
+    run_idempotency_key: str,
+    synthesis_step: WorkflowStep,
+    synthesis_index: int,
+    manifest_entry: WorkflowManifestEntry,
+    run_id: str,
+) -> tuple[dict[str, Any] | None, RunResult | None]:
+    """Read and validate a captured synthesis record without committing replay side effects."""
+    captured = store.read_synthesis(run_idempotency_key)
+    if captured is None:
+        # `synthesis_present` is True (the file EXISTS) but `read_synthesis` yields no
+        # readable record → a corrupt / torn / un-self-hashed capture. Fail closed.
+        return (
+            None,
+            RunResult(
+                workflow_id=manifest_entry.workflow_id,
+                run_id=run_id,
+                status=RunStatus.FAILED,
+                terminal_step_index=synthesis_index,
+                partial_state=None,
+                final_state=None,
+                fail_class=(
+                    "post-join-synthesis-replay-corrupt: a captured synthesis file exists but "
+                    "holds no readable self-hashed record — fail closed rather than re-dispatch a "
+                    "fresh (non-reproducible) synthesis that would mask the corruption"
+                ),
+            ),
+        )
+    captured_step_id, captured_output, captured_self_hash = captured
+    if _compute_synthesis_self_hash(captured_step_id, captured_output) != captured_self_hash:
+        return (
+            None,
+            RunResult(
+                workflow_id=manifest_entry.workflow_id,
+                run_id=run_id,
+                status=RunStatus.FAILED,
+                terminal_step_index=synthesis_index,
+                partial_state=None,
+                final_state=None,
+                fail_class=(
+                    "post-join-synthesis-replay-self-hash-mismatch: the captured synthesis "
+                    "record fails its record-local capture-time self-hash (corruption / tamper) "
+                    "— fail closed (the synthesis carries no ledger response_hash to cross-check)"
+                ),
+            ),
+        )
+    if captured_step_id != str(synthesis_step.step_id):
+        return (
+            None,
+            RunResult(
+                workflow_id=manifest_entry.workflow_id,
+                run_id=run_id,
+                status=RunStatus.FAILED,
+                terminal_step_index=synthesis_index,
+                partial_state=None,
+                final_state=None,
+                fail_class=(
+                    "post-join-synthesis-replay-material-diff: the resumed manifest's synthesis "
+                    f"step_id ({synthesis_step.step_id!s}) differs from the captured identity "
+                    f"({captured_step_id}) — a changed synthesis body; fail closed"
+                ),
+            ),
+        )
+    return dict(captured_output), None
+
+
+def _captured_synthesis_replay_validation_failure(
+    *,
+    ctx: DriverContext,
+    manifest_entry: WorkflowManifestEntry,
+    run_idempotency_key: str,
+    synthesis_step: WorkflowStep | None,
+    branch_count: int,
+    run_id: str,
+) -> RunResult | None:
+    """Validate pure captured-synthesis replay checks before a RECONCILER CAS claim."""
+    if synthesis_step is None:
+        return None
+    store = _fanout_replay_store(ctx, manifest_entry)
+    if store is None or not store.synthesis_present(run_idempotency_key):
+        return None
+    _captured_output, failure = _read_valid_captured_synthesis(
+        store=store,
+        run_idempotency_key=run_idempotency_key,
+        synthesis_step=synthesis_step,
+        synthesis_index=branch_count,
+        manifest_entry=manifest_entry,
+        run_id=run_id,
+    )
+    return failure
 
 
 def _maybe_post_join_synthesis(
@@ -6340,14 +6513,19 @@ def _determine_fanout_resume(
                 _orch_kind = store.orchestrator_dispatched_kind(run_key)
                 if (
                     not _downstream_artifact_present
-                    and store.dispatch_instrumented(run_key)
+                    and (
+                        store.dispatch_instrumented(run_key)
+                        or _orchestrator_dispatched_proceed_unstamped(store, run_key)
+                    )
                     and _orch_kind in _FANOUT_MAYBE_RAN_REFIRE_SAFE_KIND_VALUES
                 ):
-                    # PRISTINE window + dispatch-instrumented stamp (not orphaned, R1) + a
-                    # re-fire-safe DISPATCH-TIME kind (DECLARATIVE_STEP / INFERENCE_STEP — no
-                    # external effect; the common LLM-orchestrator shape; keyed on the MARKER, not
-                    # the resumed manifest — the changed-manifest guard) → re-run the whole fan-out
-                    # fresh (first-and-only; nothing downstream to double-fire).
+                    # PRISTINE window + a re-fire-safe DISPATCH-TIME kind (DECLARATIVE_STEP /
+                    # INFERENCE_STEP — no external effect; the common LLM-orchestrator shape; keyed
+                    # on the MARKER, not the resumed manifest — the changed-manifest guard) → re-run
+                    # the whole fan-out fresh (first-and-only; nothing downstream to double-fire),
+                    # but ONLY with a provenance guard: the strict-tier dispatch-instrumented stamp
+                    # OR the PROCEED-origin unstamped marker bit. A random orphaned unstamped marker
+                    # remains corruption and fails closed below.
                     return None
                 _resumed_orch_kind = steps[0].step_kind.value if steps else None
                 _resumed_orch_step_id = str(steps[0].step_id) if steps else None
@@ -6422,7 +6600,7 @@ def _determine_fanout_resume(
                 ):
                     # B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-SUBAGENT (R-FS-1) — pristine
                     # window + dispatch-instrumented stamp + a SUB_AGENT_DISPATCH orchestrator whose
-                    # LINEAR-{ESR,WAL}-leaf child is re-dispatch-recoverable. UNLIKE the
+                    # recoverable child is re-dispatch-recoverable. UNLIKE the
                     # fence-recoverable kinds (the orchestrator's OWN dispatch reaches a fence), a
                     # sub-agent orchestrator's effects live at its CHILD's tool sinks → recovery
                     # is COMPOSITIONAL recursive child crash-resume: re-running the whole fan-out
@@ -6436,10 +6614,9 @@ def _determine_fanout_resume(
                     # The orchestrator analogue of the worker
                     # `_fence_unrecoverable_maybe_ran_indices` SUB_AGENT recovery disjunct. The real
                     # gate is `_subagent_child_recoverable(steps[0]) is True` above — it admits
-                    # LINEAR {ESR,WAL,SAVE_POINT,RECONCILER}, fan-out {ESR,WAL,SAVE_POINT}, and
-                    # nested recoverable children; a RECONCILER fan-out child (the registered
-                    # `…-FANOUT-CHILD-RECONCILER` follow-on) or any other non-recoverable shape
-                    # returns False → falls through to fail closed below.
+                    # LINEAR {ESR,WAL,SAVE_POINT,RECONCILER}, fan-out
+                    # {ESR,WAL,SAVE_POINT,RECONCILER}, and nested recoverable children; unsupported
+                    # topologies or non-durable engines return False → fail closed below.
                     return None
                 if _downstream_artifact_present:
                     # A downstream artifact survived but the orchestrator capture is absent → the
@@ -6452,15 +6629,14 @@ def _determine_fanout_resume(
                         "store) — fail closed, never a fresh re-dispatch"
                     )
                 # Pristine window but NOT re-fire-safe: an effect-bearing / un-kinded orchestrator
-                # (its effect may have landed) OR an orphaned marker without the dispatch-
-                # instrumented stamp (an inconsistent store whose recorded kind cannot be trusted —
-                # the v1.61 rule). Fail closed maybe-ran.
+                # (its effect may have landed) OR an un-stamped marker for a stamped-only recovery
+                # class. Fail closed maybe-ran.
                 raise _FanOutStoreOrchestratorMaybeRanError(
                     "fan-out orchestrator dispatched but its output was never captured (crash "
                     "in the orchestrator fire→capture window, or an orphaned dispatch marker) "
                     "— fail closed (maybe-ran of an effect-bearing / un-kinded orchestrator, or "
-                    "an orphaned marker without the dispatch-instrumented stamp; re-dispatch "
-                    "would risk a double-fire on the strict tiers)"
+                    "a stamped-only recovery class without the dispatch-instrumented stamp; "
+                    "re-dispatch would risk a double-fire)"
                 )
             return None  # no marker → provably-not-run OR pre-arc journal → fresh run
         # Workers completed but the orchestrator output is ABSENT — an inconsistent store
@@ -6502,6 +6678,7 @@ def _execute_parallelization(
     crash_fan_out_resume: FanOutResumeState | PeerFanOutResumeState | None = None,
     crash_pause_reconstruct_no_dispatch: bool = False,
     crash_pause_reconstruct_fence_paused: tuple[EffectFencePausedBranchResumeState, ...] = (),
+    reconciler_engine_resume_required: bool = False,
     synthesis_step: WorkflowStep | None = None,
 ) -> tuple[RunResult, int]:
     """Execute the `PARALLELIZATION` fan-out-barrier-aggregate strategy (U-CP-86).
@@ -6553,6 +6730,7 @@ def _execute_parallelization(
         resume_snapshot.peer_fan_out_resume if resume_snapshot is not None else _peer_crash_resume
     )
     _is_resume = _peer_resume is not None
+    reconciler_engine_resume_attempted = False
     # branch_index -> recovered terminal disposition (carried forward across
     # repeated resumes so a re-pause snapshot unions prior + this-round terminals).
     _recovered_terminal: dict[int, FanOutBranchResumeState] = (
@@ -6600,7 +6778,19 @@ def _execute_parallelization(
     # Empty step sequence → trivially SUCCESS with an empty aggregate (no
     # fan-out; mirrors the linear path's empty-loop SUCCESS).
     if not steps:
-        return RunResult(
+        if reconciler_engine_resume_required:
+            (
+                _reconciler_resume_fail,
+                reconciler_engine_resume_attempted,
+            ) = _attempt_reconciler_engine_resume_gate(
+                ctx=ctx,
+                manifest_entry=manifest_entry,
+                run_id=run_id,
+                step_id="fanout-crash-resume",
+            )
+            if _reconciler_resume_fail is not None:
+                return _reconciler_resume_fail, 0
+        result = RunResult(
             workflow_id=workflow_id,
             run_id=run_id,
             status=RunStatus.SUCCESS,
@@ -6608,7 +6798,13 @@ def _execute_parallelization(
             partial_state=None,
             final_state={"branch_outputs": {}, "aggregate": {}},
             fail_class=None,
-        ), 0
+        )
+        if reconciler_engine_resume_attempted:
+            ctx.lifecycle_emitter.emit(WorkflowEventClass.RESUMPTION)
+            _record_reconciler_fanout_resume_finalized(
+                ctx, manifest_entry, run_idempotency_key
+            )
+        return result, 0
 
     # B-FANOUT-PAUSE-PARALLELIZATION — material-diff guard on resume: the re-supplied
     # workflow's branch count MUST match the count captured at pause, and each
@@ -6683,6 +6879,23 @@ def _execute_parallelization(
                 final_state=None,
                 fail_class=f"parallelization-resume-body-mismatch: {_mismatch}",
             ), 0
+
+    # Resolve cascade policy before the RECONCILER CAS gate so invalid effect-fence pause resumes
+    # under PROCEED fail without consuming the one-shot engine resume claim.
+    cascade_policy = d4_tunable(
+        lookup_cell(manifest_entry.workload_class, manifest_entry.engine_class),
+        manifest_entry.persona_tier,
+    ).cascade_policy
+    if _recovered_effect_fence_paused and cascade_policy is CascadePolicy.PROCEED:
+        return RunResult(
+            workflow_id=workflow_id,
+            run_id=run_id,
+            status=RunStatus.FAILED,
+            terminal_step_index=None,
+            partial_state=None,
+            final_state=None,
+            fail_class="parallelization-effect-fence-resume-requires-strict-tier",
+        ), 0
 
     # One fan-out parent context (the fan-out point); each branch descends a
     # child via compose_branch_child_context (U-CP-81). The MVP-default seed
@@ -6862,17 +7075,42 @@ def _execute_parallelization(
             fail_class=f"parallelization-step-kind-not-bound: {exc}",
         ), 0
 
+    if reconciler_engine_resume_required:
+        _synth_replay_validation_fail = _captured_synthesis_replay_validation_failure(
+            ctx=ctx,
+            manifest_entry=manifest_entry,
+            run_idempotency_key=run_idempotency_key,
+            synthesis_step=synthesis_step,
+            branch_count=len(steps),
+            run_id=run_id,
+        )
+        if _synth_replay_validation_fail is not None:
+            return _synth_replay_validation_fail, 0
+        (
+            _reconciler_resume_fail,
+            reconciler_engine_resume_attempted,
+        ) = _attempt_reconciler_engine_resume_gate(
+            ctx=ctx,
+            manifest_entry=manifest_entry,
+            run_id=run_id,
+            step_id="fanout-crash-resume",
+        )
+        if _reconciler_resume_fail is not None:
+            return _reconciler_resume_fail, 0
+
     # § 25.3.2 — Emit workflow.start (the fan-out begins). Single-threaded on the
     # driver thread, BEFORE the concurrent branches spawn. B-FANOUT-PAUSE-
     # PARALLELIZATION — on a resume the terminal branches already ran in the original
     # envelope, so this re-entry emits RESUMPTION (mirrors `_execute_orchestrator_
     # workers`), not a second WORKFLOW_START.
     ctx.lifecycle_emitter.emit(
-        WorkflowEventClass.RESUMPTION if _is_resume else WorkflowEventClass.WORKFLOW_START
+        WorkflowEventClass.RESUMPTION
+        if (_is_resume or reconciler_engine_resume_attempted)
+        else WorkflowEventClass.WORKFLOW_START
     )
 
     # B-PARALLELIZATION-CASCADE (R-FS-1) — the on-branch-failure cascade reaction
-    # (§25.15.1), resolved from the manifest's (workload_class, engine_class,
+    # (§25.15.1), resolved above from the manifest's (workload_class, engine_class,
     # persona_tier) via the §11.4 D4 multiplicative tunable (SOLO→proceed /
     # TEAM→pause / MTC→cascade-cancel). U-CP-86 was built happy-path-only
     # ("U-CP-85 non-dep") so a SINGLE branch failure fail-fasted the whole
@@ -6886,11 +7124,6 @@ def _execute_parallelization(
     # api.resume re-entry) is the registered follow-on `B-FANOUT-PAUSE-
     # PARALLELIZATION`; here `pause` fails HONESTLY (`...-not-yet-materialized`),
     # never a false-resumable PAUSED.
-    cascade_policy = d4_tunable(
-        lookup_cell(manifest_entry.workload_class, manifest_entry.engine_class),
-        manifest_entry.persona_tier,
-    ).cascade_policy
-
     # branch_index -> (step_id, output) for a cleanly-completed branch — the
     # aggregate source. The cascade-cancel not-yet-dispatched scan reads the writers
     # directly via `_writer_has_branch_disposition`.
@@ -6949,8 +7182,9 @@ def _execute_parallelization(
             _cardinality_store.record_fanout_cardinality(run_idempotency_key, len(steps))
             # B-FANOUT-CRASH-RESUME-STRICT-TIER-INCOMPLETE (R-FS-1) — stamp the run
             # dispatch-instrumented (the cross-version guard) on the strict tiers, at fan-out
-            # start before any branch dispatches. PROCEED is UNCHANGED — it never consumes the
-            # stamp / markers (its recovery accepts the dispatch-before-capture window).
+            # start before any branch dispatches. Worker-branch PROCEED is unchanged here; the
+            # PROCEED orchestrator marker is emitted at the orchestrator-dispatch site without
+            # stamping the worker-marker trust gate.
             if cascade_policy is not CascadePolicy.PROCEED:
                 _cardinality_store.record_dispatch_instrumented(run_idempotency_key)
 
@@ -7104,6 +7338,12 @@ def _execute_parallelization(
         collected[branch_index] = (str(step.step_id), output)
         terminal_dispositions[branch_index] = "completed"  # B-FANOUT-PAUSE-PARALLELIZATION
 
+    def _finalize_reconciler_cas_if_attempted() -> None:
+        if reconciler_engine_resume_attempted:
+            _record_reconciler_fanout_resume_finalized(
+                ctx, manifest_entry, run_idempotency_key
+            )
+
     def _finish(
         status: RunStatus,
         *,
@@ -7142,6 +7382,7 @@ def _execute_parallelization(
         # directly (no escaping exception post-drain — Codex [P2]).
         if isinstance(_synth, RunResult):
             return _synth, steps_executed
+        _finalize_reconciler_cas_if_attempted()
         # A dict ⟺ the synthesis dispatched → count its executed step (Codex [P2];
         # its STEP_BOUNDARY was emitted inside `_maybe_post_join_synthesis`).
         if _synth is not None:
@@ -7160,7 +7401,7 @@ def _execute_parallelization(
                 else {"branch_outputs": {}, "aggregate": {}}
             )
         )
-        return RunResult(
+        result = RunResult(
             workflow_id=workflow_id,
             run_id=run_id,
             status=status,
@@ -7171,7 +7412,8 @@ def _execute_parallelization(
             # B-FANOUT-PAUSE-PARALLELIZATION — PAUSED carries the salvaged aggregate
             # as partial_state (above) + the resumable snapshot.
             pause_snapshot=pause_snapshot,
-        ), steps_executed
+        )
+        return result, steps_executed
 
     deadline = _DEFAULT_FANOUT_BARRIER_DEADLINE_SECONDS
 
@@ -8584,6 +8826,7 @@ def _execute_orchestrator_workers(
     crash_pause_reconstruct_no_dispatch: bool = False,
     crash_pause_reconstruct_fence_paused: tuple[EffectFencePausedBranchResumeState, ...] = (),
     pause_resumable: bool = False,
+    reconciler_engine_resume_required: bool = False,
     synthesis_step: WorkflowStep | None = None,
 ) -> tuple[RunResult, int]:
     """Execute the `ORCHESTRATOR_WORKERS` orchestrator-dispatch-collect strategy (U-CP-88).
@@ -8644,6 +8887,7 @@ def _execute_orchestrator_workers(
         resume_snapshot.fan_out_resume if resume_snapshot is not None else _fan_out_crash_resume
     )
     _is_resume = _fan_out_resume is not None
+    reconciler_engine_resume_attempted = False
     # branch_index -> recovered terminal disposition (carried forward across
     # repeated resumes so a re-pause snapshot unions prior + this-round terminals).
     _recovered_terminal: dict[int, FanOutBranchResumeState] = (
@@ -8727,7 +8971,19 @@ def _execute_orchestrator_workers(
     # Empty step sequence → trivially SUCCESS (mirrors the linear empty-loop +
     # the PARALLELIZATION / EVALUATOR_OPTIMIZER empty-steps SUCCESS).
     if not steps:
-        return RunResult(
+        if reconciler_engine_resume_required:
+            (
+                _reconciler_resume_fail,
+                reconciler_engine_resume_attempted,
+            ) = _attempt_reconciler_engine_resume_gate(
+                ctx=ctx,
+                manifest_entry=manifest_entry,
+                run_id=run_id,
+                step_id="fanout-crash-resume",
+            )
+            if _reconciler_resume_fail is not None:
+                return _reconciler_resume_fail, 0
+        result = RunResult(
             workflow_id=workflow_id,
             run_id=run_id,
             status=RunStatus.SUCCESS,
@@ -8735,7 +8991,13 @@ def _execute_orchestrator_workers(
             partial_state=None,
             final_state={"orchestrator": {}, "worker_outputs": {}},
             fail_class=None,
-        ), 0
+        )
+        if reconciler_engine_resume_attempted:
+            ctx.lifecycle_emitter.emit(WorkflowEventClass.RESUMPTION)
+            _record_reconciler_fanout_resume_finalized(
+                ctx, manifest_entry, run_idempotency_key
+            )
+        return result, 0
 
     orchestrator_step = steps[0]
     worker_steps = list(steps[1:])
@@ -8848,16 +9110,57 @@ def _execute_orchestrator_workers(
                 fail_class=f"orchestrator-workers-resume-{_mismatch}",
             ), 0
 
-    # The on-worker-failure cascade reaction (§25.15.1) — resolved from the
-    # manifest's (workload_class, engine_class, persona_tier) via the §11.4 D4
-    # multiplicative tunable (`cascade_policy` is NOT a WorkflowManifestEntry
-    # field; it is the D4-layer tunable default — SOLO→proceed / TEAM→pause /
-    # MTC→cascade-cancel).
+    # Resolve cascade policy before the RECONCILER CAS gate so invalid effect-fence pause resumes
+    # under PROCEED fail without consuming the one-shot engine resume claim.
     cascade_policy = d4_tunable(
         lookup_cell(manifest_entry.workload_class, manifest_entry.engine_class),
         manifest_entry.persona_tier,
     ).cascade_policy
+    if _recovered_effect_fence_paused and cascade_policy is CascadePolicy.PROCEED:
+        return RunResult(
+            workflow_id=workflow_id,
+            run_id=run_id,
+            status=RunStatus.FAILED,
+            terminal_step_index=None,
+            partial_state=None,
+            final_state=None,
+            fail_class="orchestrator-workers-effect-fence-resume-requires-strict-tier",
+        ), 0
 
+    if reconciler_engine_resume_required:
+        _synth_replay_validation_fail = _captured_synthesis_replay_validation_failure(
+            ctx=ctx,
+            manifest_entry=manifest_entry,
+            run_idempotency_key=run_idempotency_key,
+            synthesis_step=synthesis_step,
+            branch_count=len(steps),
+            run_id=run_id,
+        )
+        if _synth_replay_validation_fail is not None:
+            return _synth_replay_validation_fail, 0
+        (
+            _reconciler_resume_fail,
+            reconciler_engine_resume_attempted,
+        ) = _attempt_reconciler_engine_resume_gate(
+            ctx=ctx,
+            manifest_entry=manifest_entry,
+            run_id=run_id,
+            step_id="fanout-crash-resume",
+        )
+        if _reconciler_resume_fail is not None:
+            return _reconciler_resume_fail, 0
+
+    def _finalize_reconciler_cas_if_attempted() -> None:
+        if reconciler_engine_resume_attempted:
+            _record_reconciler_fanout_resume_finalized(
+                ctx, manifest_entry, run_idempotency_key
+            )
+
+    # The on-worker-failure cascade reaction (§25.15.1) — resolved above from the
+    # manifest's (workload_class, engine_class, persona_tier) via the §11.4 D4
+    # multiplicative tunable (`cascade_policy` is NOT a WorkflowManifestEntry
+    # field; it is the D4-layer tunable default — SOLO→proceed / TEAM→pause /
+    # MTC→cascade-cancel).
     # R-003 active-workflow-context sidecar (resolved once; the same resolver the
     # linear `_append_step_ledger_entry` reads). None when no resolver is bound.
     _resolver = getattr(ctx, "procedural_tier_snapshot_resolver", None)
@@ -8875,7 +9178,9 @@ def _execute_orchestrator_workers(
     # (mirrors the linear resume-path RESUMPTION emit) — the orchestrator + the
     # terminal workers already ran in the original envelope.
     ctx.lifecycle_emitter.emit(
-        WorkflowEventClass.RESUMPTION if _is_resume else WorkflowEventClass.WORKFLOW_START
+        WorkflowEventClass.RESUMPTION
+        if (_is_resume or reconciler_engine_resume_attempted)
+        else WorkflowEventClass.WORKFLOW_START
     )
 
     # --- 1) the orchestrator step (sequential; its action_id parents the fan-out) ---
@@ -8912,6 +9217,7 @@ def _execute_orchestrator_workers(
             # threading the resolution would reach the WRONG (or no) fence and silently
             # abandon the original ambiguous effect. Fail closed (the worker
             # `EffectFencePausedBranchResumeState` step_id/step_kind guard analogue).
+            _finalize_reconciler_cas_if_attempted()
             return RunResult(
                 workflow_id=workflow_id,
                 run_id=run_id,
@@ -8932,6 +9238,7 @@ def _execute_orchestrator_workers(
             # DEGENERATE aggregate (a no-silent-failure violation — the workers run, but the
             # orchestrator's structuring contribution is silently gone). The palette for an
             # orchestrator fence pause is RE_FIRE / ABORT; fail loud, never under-execute.
+            _finalize_reconciler_cas_if_attempted()
             return RunResult(
                 workflow_id=workflow_id,
                 run_id=run_id,
@@ -9068,19 +9375,27 @@ def _execute_orchestrator_workers(
         # closed (out-of-family Codex [P2]). marker-absent ⟺ the orchestrator's effect did NOT
         # fire. The marker is a NEW file written ONLY here, so its PRESENCE alone is the resume-
         # side fail-closed signal (the cross-version guard is INHERENT — a pre-arc journal carries
-        # no orchestrator marker; the resume classifier needs no stamp gate). The dispatch-
-        # instrumented stamp is still written (before the marker) for consistency with the worker
-        # fan-out-start stamp. lookup → marker → dispatch is SYNCHRONOUS (no `ensure_future` /
-        # yield), so the marker still strictly precedes the effect with no interleave — no false-
-        # positive marker without the worker path's atomicity dance. A store-write failure during
-        # the reserve is caught below → FAILED (conservative — at-most-once can't be guaranteed
-        # without the marker). Strict tiers only — PROCEED writes no marker (its recovery accepts
-        # the dispatch-before-capture window, unchanged). `_fanout_replay_store` handle reused.
+        # no orchestrator marker; the resume classifier needs no stamp gate for presence). Strict
+        # tiers still write the existing dispatch-instrumented stamp here because their pristine-
+        # window allowlist already uses it to validate re-fire-safe / fence-recoverable marker
+        # contents before any worker fan-out starts. PROCEED deliberately does NOT write that
+        # worker-marker trust stamp: PROCEED worker paths still emit no per-branch dispatch markers,
+        # so stamping a PROCEED orchestrator-only run would make a later strict-tier resume trust
+        # absent worker markers that were never instrumented. lookup → marker → dispatch is
+        # SYNCHRONOUS (no `ensure_future` / yield), so the marker still strictly precedes the effect
+        # with no interleave — no false-positive marker without the worker path's atomicity dance. A
+        # store-write failure during the reserve is caught below → FAILED (conservative —
+        # at-most-once can't be guaranteed without the marker). PROCEED writes the same marker now:
+        # worker failures still harvest survivors as PARTIAL, but an effect-bearing orchestrator
+        # pre-capture crash must flow through the maybe-ran classifier instead of accepting a
+        # double-fire window.
+        # `_fanout_replay_store` handle reused.
         _orch_replay_store = _fanout_replay_store(ctx, manifest_entry)
         try:
             _orch_dispatcher = step_dispatchers.lookup(orchestrator_step.step_kind)
-            if _orch_replay_store is not None and cascade_policy is not CascadePolicy.PROCEED:
-                _orch_replay_store.record_dispatch_instrumented(run_idempotency_key)
+            if _orch_replay_store is not None:
+                if cascade_policy is not CascadePolicy.PROCEED:
+                    _orch_replay_store.record_dispatch_instrumented(run_idempotency_key)
                 # B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-RESOLUTION (R-FS-1, CP spec v1.64
                 # §1/§2) — record the orchestrator's DISPATCH-TIME step kind in the reserve
                 # marker so the resume-side maybe-ran classifier keys on the ORIGINAL kind (the
@@ -9088,32 +9403,52 @@ def _execute_orchestrator_workers(
                 # `record_branch_dispatched(... str(step_kind.value))` caller.
                 # B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-SUBAGENT — ALSO record whether a
                 # SUB_AGENT_DISPATCH orchestrator's child was RE-DISPATCH-RECOVERABLE at dispatch
-                # ({ESR,WAL,SAVE_POINT,RECONCILER} ∧ LINEAR ∧ leaf, the SAME
-                # `_subagent_child_recoverable` predicate the worker uses) AND the DISPATCH-TIME
-                # child engine class (the cross-engine-class swap guard, out-of-family Codex [P1],
-                # …-RECONCILER-CHILD arc). `None` (non-SUB_AGENT orchestrator) → both additive
+                # (durable LINEAR or supported fan-out topology, recursively recoverable; the
+                # SAME `_subagent_child_recoverable` predicate the worker uses) AND the
+                # DISPATCH-TIME child engine class (the cross-engine-class swap guard,
+                # out-of-family Codex [P1], …-RECONCILER-CHILD arc). `None` (non-SUB_AGENT
+                # orchestrator) → both additive
                 # kwargs are OMITTED entirely (out-of-family Codex [P2]: a store implementing the
                 # pre-v1.86 3-arg signature must not see a `child_recoverable=None` kwarg →
                 # TypeError), mirroring the worker `_mark_branch_dispatched`
                 # only-pass-when-not-None compatibility. The DISPATCH-TIME value (the at-most-once
                 # changed-manifest guard; the resumed-side half is
                 # `_subagent_child_recoverable(steps[0])` +
-                # `_subagent_child_engine_class(steps[0])`).
+                # `_subagent_child_engine_class(steps[0])`). PROCEED adds `proceed_unstamped=True`
+                # because it intentionally withholds the worker dispatch-instrumented stamp; that
+                # narrow provenance lets an effect-free maybe-ran orchestrator recover without
+                # trusting arbitrary orphaned unstamped markers. Each additive kwarg is filtered
+                # by the bound writer signature: older duck-typed stores still write the historical
+                # marker and then fail closed on any later ambiguous resume instead of TypeErroring
+                # before dispatch.
                 _orch_child_recoverable = _subagent_child_recoverable(orchestrator_step)
                 _orch_child_engine_class = _subagent_child_engine_class(orchestrator_step)
-                if _orch_child_recoverable is None:
-                    _orch_replay_store.record_orchestrator_dispatched(
+                _orch_marker_writer = _orch_replay_store.record_orchestrator_dispatched
+                _orch_marker_kwargs: dict[str, object] = {}
+                if _orch_child_recoverable is not None and _callable_accepts_keyword(
+                    _orch_marker_writer, "child_recoverable"
+                ):
+                    _orch_marker_kwargs["child_recoverable"] = _orch_child_recoverable
+                if _orch_child_engine_class is not None and _callable_accepts_keyword(
+                    _orch_marker_writer, "child_engine_class"
+                ):
+                    _orch_marker_kwargs["child_engine_class"] = _orch_child_engine_class
+                if cascade_policy is CascadePolicy.PROCEED and _callable_accepts_keyword(
+                    _orch_marker_writer, "proceed_unstamped"
+                ):
+                    _orch_marker_kwargs["proceed_unstamped"] = True
+                if _orch_marker_kwargs:
+                    _orch_marker_writer(
                         run_idempotency_key,
                         str(orchestrator_step.step_id),
                         str(orchestrator_step.step_kind.value),
+                        **_orch_marker_kwargs,
                     )
                 else:
-                    _orch_replay_store.record_orchestrator_dispatched(
+                    _orch_marker_writer(
                         run_idempotency_key,
                         str(orchestrator_step.step_id),
                         str(orchestrator_step.step_kind.value),
-                        child_recoverable=_orch_child_recoverable,
-                        child_engine_class=_orch_child_engine_class,
                     )
             orchestrator_output = _orch_dispatcher.dispatch(
                 orchestrator_binding, orchestrator_step, step_context=orchestrator_context
@@ -9158,6 +9493,7 @@ def _execute_orchestrator_workers(
                         ),
                     )
                 )
+                _finalize_reconciler_cas_if_attempted()
                 return RunResult(
                     workflow_id=workflow_id,
                     run_id=run_id,
@@ -9175,6 +9511,7 @@ def _execute_orchestrator_workers(
             # so no spurious STEP_BOUNDARY + step_count stays 0. cascade_policy governs
             # WORKER failure, not the orchestrator's own dispatch.
             drain_branch_buffers(ctx.ledger_writer, [orchestrator_writer])
+            _finalize_reconciler_cas_if_attempted()
             return RunResult(
                 workflow_id=workflow_id,
                 run_id=run_id,
@@ -9423,7 +9760,9 @@ def _execute_orchestrator_workers(
             _cardinality_store.record_fanout_cardinality(run_idempotency_key, len(steps))
             # B-FANOUT-CRASH-RESUME-STRICT-TIER-INCOMPLETE (R-FS-1) — stamp the run
             # dispatch-instrumented (the cross-version guard) on the strict tiers, before any
-            # worker dispatches. PROCEED is UNCHANGED (it never consumes the stamp / markers).
+            # worker dispatches. Worker-branch PROCEED remains unchanged here; the PROCEED
+            # orchestrator marker is emitted at the orchestrator-dispatch site without stamping the
+            # worker-marker trust gate.
             if cascade_policy is not CascadePolicy.PROCEED:
                 _cardinality_store.record_dispatch_instrumented(run_idempotency_key)
 
@@ -9604,6 +9943,7 @@ def _execute_orchestrator_workers(
         # the scoped-abort fail_class). No scoped-abort durable write happened (the recording loop
         # is PROCEED-guarded → fail-closed precedes durable writes).
         if _recovered_effect_fence_paused and cascade_policy is CascadePolicy.PROCEED:
+            _finalize_reconciler_cas_if_attempted()
             return RunResult(
                 workflow_id=workflow_id,
                 run_id=run_id,
@@ -9647,6 +9987,7 @@ def _execute_orchestrator_workers(
             if _reestablish_protocol is None:
                 # No protocol bound → cannot capture a snapshot → fail HONESTLY (never a
                 # false-resumable PAUSED), mirroring the worker-failed pause site.
+                _finalize_reconciler_cas_if_attempted()
                 return RunResult(
                     workflow_id=workflow_id,
                     run_id=run_id,
@@ -9691,7 +10032,7 @@ def _execute_orchestrator_workers(
                     fan_out_resume=_reestablish_fan_out_resume,
                 )
             )
-            return RunResult(
+            result = RunResult(
                 workflow_id=workflow_id,
                 run_id=run_id,
                 status=RunStatus.PAUSED,
@@ -9700,13 +10041,16 @@ def _execute_orchestrator_workers(
                 final_state=None,
                 fail_class=None,
                 pause_snapshot=_reestablish_snapshot,
-            ), _reestablish_steps
+            )
+            _finalize_reconciler_cas_if_attempted()
+            return result, _reestablish_steps
         # B-FANOUT-EFFECT-FENCE-PER-BRANCH-SCOPED-ABORT (R-FS-1, CP spec v1.73 §1) — all-abort
         # guard at the empty-`branch_plan` short-circuit (every fence-paused worker scoped-aborted →
         # nothing to re-dispatch → this block, BEFORE the worker-failed fold): if NO worker survived
         # (nothing collected), the run has NO result → FAILED, not the vacuous PARTIAL `_degraded`
         # yields. (≥1 survivor → folds to PARTIAL below with the provenance fail_class.)
         if _scoped_abort_ordinals and not collected:
+            _finalize_reconciler_cas_if_attempted()
             return RunResult(
                 workflow_id=workflow_id,
                 run_id=run_id,
@@ -9735,6 +10079,7 @@ def _execute_orchestrator_workers(
         )
         if isinstance(_synth, RunResult):
             return _synth, (1 if orchestrator_writer is not None else 0) + _rematerialized_steps
+        _finalize_reconciler_cas_if_attempted()
         # A dict ⟺ the synthesis dispatched → count its executed step (Codex [P2]).
         _synth_steps = 1 if _synth is not None else 0
         _aggregate = (
@@ -9742,7 +10087,7 @@ def _execute_orchestrator_workers(
             if _synth is not None
             else _aggregate_orchestrator_workers(orchestrator_output, collected)
         )
-        return RunResult(
+        result = RunResult(
             workflow_id=workflow_id,
             run_id=run_id,
             status=_no_worker_status,
@@ -9754,7 +10099,11 @@ def _execute_orchestrator_workers(
             # degraded PARTIAL (the all-abort/no-survivor case FAILED earlier with the provenance
             # fail_class; run-result operator-abort provenance on a PARTIAL is out of scope).
             fail_class=None,
-        ), (1 if orchestrator_writer is not None else 0) + _synth_steps + _rematerialized_steps
+        )
+        return (
+            result,
+            (1 if orchestrator_writer is not None else 0) + _synth_steps + _rematerialized_steps,
+        )
 
     def _finish(
         status: RunStatus,
@@ -9799,6 +10148,7 @@ def _execute_orchestrator_workers(
         )
         if isinstance(_synth, RunResult):
             return _synth, steps_executed
+        _finalize_reconciler_cas_if_attempted()
         # A dict ⟺ the synthesis dispatched → count its executed step (Codex [P2]).
         if _synth is not None:
             steps_executed += 1
@@ -9807,7 +10157,7 @@ def _execute_orchestrator_workers(
             if _synth is not None
             else _aggregate_orchestrator_workers(orchestrator_output, collected)
         )
-        return RunResult(
+        result = RunResult(
             workflow_id=workflow_id,
             run_id=run_id,
             status=status,
@@ -9818,7 +10168,8 @@ def _execute_orchestrator_workers(
             final_state=aggregate if status is RunStatus.SUCCESS else None,
             fail_class=fail_class,
             pause_snapshot=pause_snapshot,
-        ), steps_executed
+        )
+        return result, steps_executed
 
     deadline = _DEFAULT_FANOUT_BARRIER_DEADLINE_SECONDS
 
@@ -10449,6 +10800,7 @@ def _execute_hierarchical_delegation(
     crash_pause_reconstruct_no_dispatch: bool = False,
     crash_pause_reconstruct_fence_paused: tuple[EffectFencePausedBranchResumeState, ...] = (),
     pause_resumable: bool = False,
+    reconciler_engine_resume_required: bool = False,
     synthesis_step: WorkflowStep | None = None,
 ) -> tuple[RunResult, int]:
     """Execute the `HIERARCHICAL_DELEGATION` recursive bounded-fan-out strategy (U-CP-89).
@@ -10553,6 +10905,7 @@ def _execute_hierarchical_delegation(
         # fence-recoverable maybe-ran carriers into the per-level orchestrator-workers execution.
         crash_pause_reconstruct_fence_paused=crash_pause_reconstruct_fence_paused,
         pause_resumable=pause_resumable,
+        reconciler_engine_resume_required=reconciler_engine_resume_required,
         # B-POSTJOIN-LLM-SYNTHESIS (CP spec v1.54 §3) — TOP-LEVEL synthesis only:
         # the recursion re-enters via a SUB_AGENT_DISPATCH worker's own
         # execute_workflow on the CHILD manifest, which carves its own synthesis
