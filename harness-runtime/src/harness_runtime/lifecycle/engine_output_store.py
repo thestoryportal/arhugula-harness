@@ -372,6 +372,7 @@ class EngineOutputStore:
         step_kind: str,
         child_recoverable: bool | None = None,
         child_engine_class: str | None = None,
+        proceed_unstamped: bool | None = None,
     ) -> None:
         """Mark a fan-out branch as DISPATCHED (the reserve-before-dispatch marker), durably.
 
@@ -389,13 +390,14 @@ class EngineOutputStore:
 
         ``child_recoverable`` (B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT) — for a
         SUB_AGENT_DISPATCH worker only, whether its CHILD was RE-DISPATCH-RECOVERABLE at
-        DISPATCH (``{ESR,WAL}`` engine ∧ SINGLE_THREADED_LINEAR topology ∧ leaf — so the
-        child's tool sinks auto-fence, the child's own crash-resume is durable, AND its
-        ``final_state`` reconstructs). Read by ``subagent_child_recoverable_indexes`` so a
+        DISPATCH (a durable replay engine under either LINEAR or supported fan-out topology, with
+        nested children recursively recoverable — so the child's tool sinks auto-fence, the child's
+        own crash-resume is durable, AND its ``final_state`` reconstructs). Read by
+        ``subagent_child_recoverable_indexes`` so a
         maybe-ran SUB_AGENT_DISPATCH worker is re-dispatch-recoverable (its child auto-resumes
         under the deterministic run_id) ONLY when its child can auto-resume RESULT-FAITHFULLY —
         else the classifier fails closed (a non-recoverable child re-runs from scratch →
-        double-fire, or a SAVE_POINT/RECONCILER/fan-out child → suffix-only ``final_state`` →
+        double-fire, or an unsupported topology/engine cannot reconstruct result-faithfully →
         fold corruption). The DISPATCH-TIME value (the at-most-once changed-manifest guard).
         ``None`` (every non-SUB_AGENT_DISPATCH branch + pre-arc markers) → the field is OMITTED
         so those markers hash/parse byte-identically to before.
@@ -432,7 +434,8 @@ class EngineOutputStore:
         B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT — a maybe-ran SUB_AGENT_DISPATCH worker is
         recoverable-by-re-dispatch (its child auto-resumes under the deterministic run_id, with
         result-faithful ``final_state`` reconstruction) ONLY if its child was RECOVERABLE at
-        dispatch (``{ESR,WAL}`` ∧ LINEAR ∧ leaf, recorded here from the opaque child manifest).
+        dispatch (durable LINEAR or supported fan-out, with nested children recursively
+        recoverable, recorded here from the opaque child manifest).
         The marker is the DISPATCH-TIME value (the at-most-once changed-manifest guard — a child
         edited recoverable→non-recoverable between dispatch + resume must STILL be classified by
         the dispatch-time value). Absent / ``False`` / torn / pre-arc → NOT in the set → the
@@ -590,11 +593,15 @@ class EngineOutputStore:
     def record_dispatch_instrumented(self, run_key: str) -> None:
         """Stamp this run as DISPATCH-INSTRUMENTED (the cross-version guard), durably.
 
-        Written ONCE at fan-out start (before any branch dispatches) by marker-instrumented
-        code only. The strict-tier classifier trusts the per-branch dispatch markers ONLY when
-        this stamp is present — an un-stamped journal (written by PRE-arc code, which has no
-        markers for ANY branch including a maybe-ran one) retains the conservative
-        incomplete-recovery fail-closed. Idempotent (last-wins; presence is the signal)."""
+        Written ONCE at fan-out start (before any branch dispatches) by worker/peer marker-
+        instrumented code only. The strict-tier classifier trusts the per-branch dispatch markers
+        ONLY when this stamp is present — an un-stamped journal (written by PRE-arc or PROCEED
+        worker code, which has no markers for ANY branch including a maybe-ran one) retains the
+        conservative incomplete-recovery fail-closed. Strict-tier orchestrator reserve-before-
+        dispatch also writes this stamp before any worker fan-out starts because the orchestrator
+        pristine-window classifier already uses it to validate marker contents. PROCEED
+        orchestrator markers intentionally do not stamp this worker trust gate. Idempotent
+        (last-wins; presence is the signal)."""
         line = json.dumps({"instrumented": True}, sort_keys=True)
         self._append_path(self._dispatch_instrumented_file(run_key), line)
 
@@ -614,10 +621,11 @@ class EngineOutputStore:
     # potential double-fire on the compliance tier. This marker is the orchestrator
     # analogue of the per-WORKER reserve-before-dispatch marker above (a SINGLE marker,
     # not per-index — there is exactly one orchestrator): written + fsynced strictly
-    # BEFORE the orchestrator body dispatches, so within an instrumented run
-    # marker-absent ⟺ the orchestrator's effect did NOT fire. Gated by the same per-run
-    # dispatch-instrumented stamp (the cross-version guard). The orchestrator dispatch
-    # is SYNCHRONOUS (no `ensure_future` / await between the marker write and the
+    # BEFORE the orchestrator body dispatches. It is a distinct signal from the worker
+    # dispatch-instrumented stamp: strict tiers may stamp that trust gate for the existing
+    # orchestrator pristine-window classifier, while PROCEED can write this marker without making
+    # missing worker branch markers trustworthy on a later strict-tier resume. The orchestrator
+    # dispatch is SYNCHRONOUS (no `ensure_future` / await between the marker write and the
     # dispatch), so the marker→dispatch sequence has no yield point — no false-positive
     # marker is possible without the worker path's atomicity dance.
 
@@ -628,6 +636,7 @@ class EngineOutputStore:
         step_kind: str,
         child_recoverable: bool | None = None,
         child_engine_class: str | None = None,
+        proceed_unstamped: bool | None = None,
     ) -> None:
         """Mark the ORCHESTRATOR_WORKERS ``steps[0]`` orchestrator as DISPATCHED, durably.
 
@@ -646,8 +655,8 @@ class EngineOutputStore:
 
         ``child_recoverable`` (B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-SUBAGENT) — for a
         SUB_AGENT_DISPATCH orchestrator only, whether its CHILD was RE-DISPATCH-RECOVERABLE at
-        DISPATCH (``{ESR,WAL}`` engine ∧ SINGLE_THREADED_LINEAR topology ∧ leaf — the SAME
-        predicate the worker uses). Read by ``orchestrator_subagent_child_recoverable`` so a
+        DISPATCH (the same durable LINEAR / supported fan-out / recursive-child predicate the
+        worker uses). Read by ``orchestrator_subagent_child_recoverable`` so a
         maybe-ran SUB_AGENT_DISPATCH orchestrator is re-dispatch-recoverable (re-running the
         whole fan-out fresh re-dispatches the orchestrator, whose child auto-resumes under the
         deterministic run_id) ONLY when its child can auto-resume RESULT-FAITHFULLY — else the
@@ -664,12 +673,19 @@ class EngineOutputStore:
         the marker engine == the resumed engine (the cross-engine-class swap guard, out-of-family
         Codex [P1]; fail closed on mismatch / ``None``). ``None`` (every non-SUB_AGENT_DISPATCH
         orchestrator + pre-arc markers) → the field is OMITTED so those markers hash/parse
-        byte-identically to before."""
+        byte-identically to before.
+
+        ``proceed_unstamped`` marks a PROCEED orchestrator marker that intentionally did NOT write
+        the worker ``dispatch-instrumented`` stamp. It is omitted for strict-tier markers and read
+        only by the effect-free pristine-window classifier so arbitrary orphaned unstamped markers
+        still fail closed."""
         record: dict[str, object] = {"step_id": str(step_id), "step_kind": str(step_kind)}
         if child_recoverable is not None:
             record["child_recoverable"] = bool(child_recoverable)
         if child_engine_class is not None:
             record["child_engine_class"] = str(child_engine_class)
+        if proceed_unstamped is not None:
+            record["proceed_unstamped"] = bool(proceed_unstamped)
         line = json.dumps(record, sort_keys=True)
         self._append_path(self._orchestrator_dispatched_file(run_key), line)
 
@@ -758,6 +774,23 @@ class EngineOutputStore:
         except (OSError, UnicodeDecodeError, ValueError, IndexError, KeyError, AttributeError):
             return None
 
+    def orchestrator_dispatched_proceed_unstamped(self, run_key: str) -> bool:
+        """Whether the orchestrator marker was written by PROCEED without the worker stamp.
+
+        PROCEED writes the orchestrator reserve-before-DISPATCH marker so its own fire→capture
+        crash window is visible, but deliberately does not write ``dispatch-instrumented.marker``
+        because PROCEED worker fan-out still has no per-worker dispatch markers. This field is the
+        narrow provenance bit that lets the resume classifier recover effect-free orchestrators
+        without treating arbitrary orphaned unstamped markers as trustworthy."""
+        path = self._orchestrator_dispatched_file(run_key)
+        if not path.exists():
+            return False
+        try:
+            record = json.loads(path.read_text(encoding="utf-8").splitlines()[-1])
+            return record.get("proceed_unstamped") is True
+        except (OSError, UnicodeDecodeError, ValueError, IndexError, KeyError, AttributeError):
+            return False
+
     def orchestrator_subagent_child_recoverable(self, run_key: str) -> bool:
         """Whether the orchestrator's DISPATCH-TIME marker recorded ``child_recoverable=True``.
 
@@ -765,7 +798,8 @@ class EngineOutputStore:
         orchestrator is recoverable-by-re-dispatch (re-running the whole fan-out fresh
         re-dispatches the orchestrator, whose child auto-resumes under the deterministic run_id,
         with result-faithful ``final_state`` reconstruction) ONLY if its child was RECOVERABLE at
-        dispatch (``{ESR,WAL}`` ∧ LINEAR ∧ leaf, recorded here from the opaque child manifest).
+        dispatch (durable LINEAR or supported fan-out, with nested children recursively
+        recoverable, recorded here from the opaque child manifest).
         The marker is the DISPATCH-TIME value (the at-most-once changed-manifest guard — a child
         edited recoverable→non-recoverable between dispatch + resume must STILL be classified by
         the dispatch-time value; the resumed-side half is the CP driver's
@@ -836,6 +870,20 @@ class EngineOutputStore:
         corruption."""
         return self._synthesis_file(run_key).exists()
 
+    def record_reconciler_fanout_resume_finalized(self, run_key: str) -> None:
+        """Mark that a RECONCILER fan-out resume committed past the strategy finish boundary.
+
+        Branch and synthesis records are reserve-before-commit sidecars; their completeness does
+        not prove the resumed run finalized. This post-finish marker is the only fan-out sidecar
+        the driver uses to skip a duplicate RECONCILER CAS on an idempotent re-drive.
+        """
+        line = json.dumps({"reconciler_fanout_resume_finalized": True}, sort_keys=True)
+        self._append_path(self._reconciler_fanout_resume_finalized_file(run_key), line)
+
+    def reconciler_fanout_resume_finalized(self, run_key: str) -> bool:
+        """Whether the RECONCILER fan-out resume finalized marker exists."""
+        return self._reconciler_fanout_resume_finalized_file(run_key).exists()
+
     # -- durable journal I/O (mirrors JournalWorkflowPauseStore) --------------
 
     @staticmethod
@@ -866,6 +914,10 @@ class EngineOutputStore:
     def _synthesis_file(self, run_key: str) -> Path:
         """The terminal POST_JOIN_SYNTHESIS step journal under the branches dir."""
         return self._branches_dir(run_key) / "synthesis.jsonl"
+
+    def _reconciler_fanout_resume_finalized_file(self, run_key: str) -> Path:
+        """The post-finish marker for RECONCILER fan-out resume CAS idempotence."""
+        return self._branches_dir(run_key) / "reconciler-fanout-resume-finalized.marker"
 
     def _branch_dispatched_file(self, run_key: str, branch_index: int) -> Path:
         """The per-branch reserve-before-DISPATCH marker file under the run's branches dir."""

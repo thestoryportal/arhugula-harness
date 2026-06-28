@@ -52,6 +52,8 @@ STANDALONE_STATUSES = frozenset({"closed", "remaining", "gated", "resolved", "re
 #: the OPEN set — committed work not yet built+merged (drives the R-FS-1-active guard
 #: + the generate.py FATAL invariant twin).
 OPEN_STANDALONE = frozenset({"remaining", "gated", "registered"})
+RFS1_STATUSES = frozenset({"active", "tier1_manual_pending", "resolved"})
+RFS1_ZERO_OPEN_ALLOWED = frozenset({"tier1_manual_pending", "resolved"})
 
 VALID_KINDS = frozenset({"frozen", "standalone"})
 
@@ -77,6 +79,11 @@ def load(path: Path = DEFAULT_LEDGER) -> dict[str, Any]:
 def derive(data: dict[str, Any]) -> dict[str, Any]:
     """Pure derivation — counts + the {frozen, standalone} projection. No assertions."""
     rows = data["arcs"]
+    snap = data.get("snapshot")
+    if isinstance(snap, dict):
+        rfs1_status = str(snap.get("rfs1_status", "active")).lower()
+    else:
+        rfs1_status = "active"
     frozen = sorted(
         (r for r in rows if r.get("kind") == "frozen"),
         key=lambda r: r.get("position", 0),
@@ -104,6 +111,7 @@ def derive(data: dict[str, Any]) -> dict[str, Any]:
         "standalone_buildable": standalone_status.get("closed", 0)
         + standalone_status.get("remaining", 0),
         "by_status": dict(standalone_status),
+        "rfs1_status": rfs1_status,
     }
 
 
@@ -180,19 +188,27 @@ def validate(data: dict[str, Any]) -> list[str]:
 
     d = derive(data)
 
-    # R-FS-1-ACTIVE invariant (the generate.py FATAL twin): if the full-spec build is
+    # R-FS-1 state invariant (the generate.py FATAL twin): while the full-spec build is
     # ACTIVE there must be OPEN work — at least one open standalone (remaining/gated/
-    # registered). All-closed/resolved with no open arc = drift (the whole point of the
-    # forward register is to never be silently empty while R-FS-1 is ACTIVE).
-    if not d["open_standalone"]:
+    # registered). A zero-open register is valid only after the snapshot explicitly
+    # records either the manual-Tier-1-pending interlock or the terminal resolved state.
+    snap = data.get("snapshot")
+    rfs1_status = d["rfs1_status"]
+    if rfs1_status not in RFS1_STATUSES:
+        violations.append(
+            f"snapshot.rfs1_status={rfs1_status!r} is invalid; expected one of "
+            f"{sorted(RFS1_STATUSES)}"
+        )
+    if not d["open_standalone"] and rfs1_status not in RFS1_ZERO_OPEN_ALLOWED:
         violations.append(
             "R-FS-1 is ACTIVE but zero OPEN standalone arcs (remaining/gated/registered) — "
             "the forward register has drifted empty"
         )
+    if d["open_standalone"] and rfs1_status in RFS1_ZERO_OPEN_ALLOWED:
+        violations.append(f"snapshot.rfs1_status={rfs1_status} but OPEN standalone arcs remain")
 
     # Snapshot pin — the guard against a silent status flip (every structural invariant
     # still passes; forward-only: a real transit bumps this block + the row).
-    snap = data.get("snapshot")
     if not isinstance(snap, dict):
         violations.append("missing 'snapshot' pin block")
     else:

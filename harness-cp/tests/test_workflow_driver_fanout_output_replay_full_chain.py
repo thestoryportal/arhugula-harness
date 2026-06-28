@@ -41,10 +41,17 @@ from harness_cp.cross_family_fallback_chain import (
 )
 from harness_cp.engine_class import EngineClass
 from harness_cp.handoff_context import StateSummary
-from harness_cp.pause_resume_protocol import PauseResumeProtocol
+from harness_cp.pause_resume_protocol import (
+    CP_FAIL_RESUME_MATERIAL_DIFF_DETECTED,
+    PauseResumeProtocol,
+    ResumeOutcomeKind,
+)
 from harness_cp.pause_resume_protocol_types import (
+    EffectFencePausedBranchResumeState,
     EffectFenceResolution,
+    FanOutResumeState,
     PauseSnapshot,
+    PeerFanOutResumeState,
     ResumeContext,
 )
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
@@ -54,6 +61,8 @@ from harness_cp.workflow_driver import (
     StepDispatcher,
     StepDispatcherRegistry,
     StepKindDispatcherNotBoundError,
+    _execute_orchestrator_workers,
+    _execute_parallelization,
     execute_workflow,
 )
 from harness_cp.workflow_driver_types import RunStatus, StepKind, WorkflowStep, compose_branch_path
@@ -131,6 +140,12 @@ class _InMemoryBranchStore:
         # value} for a SUB_AGENT_DISPATCH orchestrator (the cross-engine-class swap guard's
         # dispatch-side marker). Absent → None → the gate's same-engine conjunct fails closed.
         self._orchestrator_subagent_engine: dict[str, str | None] = {}
+        # PROCEED writes the orchestrator marker without the worker dispatch-instrumented stamp.
+        # This provenance bit lets only those unstamped re-fire-safe markers recover.
+        self._orchestrator_proceed_unstamped: set[str] = set()
+        # RECONCILER fan-out resume finalized marker: written only after the strategy crosses its
+        # finish boundary. Complete branch-store records alone are reserve-before-commit.
+        self._reconciler_finalized: set[str] = set()
 
     def record_fanout_cardinality(self, run_key: str, branch_count: int) -> None:
         self._cardinality[run_key] = int(branch_count)
@@ -232,6 +247,7 @@ class _InMemoryBranchStore:
         step_kind: str,
         child_recoverable: bool | None = None,
         child_engine_class: str | None = None,
+        proceed_unstamped: bool | None = None,
     ) -> None:
         self._orchestrator_dispatched[run_key] = str(step_kind)
         self._orchestrator_dispatched_step_id[run_key] = str(step_id)
@@ -239,6 +255,11 @@ class _InMemoryBranchStore:
             self._orchestrator_subagent_recoverable[run_key] = bool(child_recoverable)
         if child_engine_class is not None:
             self._orchestrator_subagent_engine[run_key] = str(child_engine_class)
+        if proceed_unstamped is not None:
+            if proceed_unstamped:
+                self._orchestrator_proceed_unstamped.add(run_key)
+            else:
+                self._orchestrator_proceed_unstamped.discard(run_key)
 
     def orchestrator_dispatched(self, run_key: str) -> bool:
         return run_key in self._orchestrator_dispatched
@@ -255,6 +276,9 @@ class _InMemoryBranchStore:
     def orchestrator_dispatched_child_engine_class(self, run_key: str) -> str | None:
         return self._orchestrator_subagent_engine.get(run_key)
 
+    def orchestrator_dispatched_proceed_unstamped(self, run_key: str) -> bool:
+        return run_key in self._orchestrator_proceed_unstamped
+
     # -- test helper: a pre-v1.81 (v1.79-era) orchestrator marker (step_id only, no recorded
     # kind) → the maybe-ran classifier cannot prove re-fire-safety → fail-closed (the v1.79
     # behavior). Mirrors `forget_branch_dispatch_kind` for the orchestrator. --
@@ -270,17 +294,17 @@ class _InMemoryBranchStore:
         self._dispatched_step_id.get(run_key, {}).pop(branch_index, None)
 
     # -- test helper: a crash in the ORCHESTRATOR fire→capture window. The orchestrator
-    # dispatched (marker + instrumented stamp present, both written BEFORE the dispatch) but
-    # its output was never captured. The orchestrator runs FIRST, so no worker dispatched yet
-    # → the only durable trace is the orchestrator marker + stamp; drop everything else (the
-    # orchestrator output, cardinality, all worker records + markers). Maybe-ran → fail closed. --
+    # dispatched (marker present, written BEFORE the dispatch) but its output was never captured.
+    # The orchestrator runs FIRST, so no worker dispatched yet → the only durable trace needed is
+    # the orchestrator marker; drop everything else (the orchestrator output, cardinality, all
+    # worker records + markers). Maybe-ran → fail closed unless the strict-tier run also carries a
+    # worker-marker trust stamp and a re-fire-safe / recoverable dispatch-time kind. --
     def forget_orchestrator_maybe_ran(self, run_key: str) -> None:
         self._orchestrators.pop(run_key, None)
         self._cardinality.pop(run_key, None)
         self._branches.pop(run_key, None)
         self._dispatched.pop(run_key, None)
-        # KEEP self._orchestrator_dispatched + self._instrumented (the reserve-before-dispatch
-        # marker + the cross-version stamp — both fsynced strictly before the dispatch).
+        # KEEP self._orchestrator_dispatched + any pre-existing self._instrumented worker stamp.
 
     # -- test helper: a crash BEFORE the orchestrator dispatched — no marker, no output, no
     # cardinality, no worker (provably-not-run → a fresh re-run is at-most-once-safe). --
@@ -292,6 +316,8 @@ class _InMemoryBranchStore:
         self._orchestrator_dispatched.pop(run_key, None)
         self._orchestrator_dispatched_step_id.pop(run_key, None)
         self._orchestrator_subagent_recoverable.pop(run_key, None)
+        self._orchestrator_subagent_engine.pop(run_key, None)
+        self._orchestrator_proceed_unstamped.discard(run_key)
 
     # -- test helper: a PRE-arc (un-instrumented) journal — cardinality + branch records but
     # NO dispatch stamp and NO markers (the cross-version hazard). Forces the conservative
@@ -302,6 +328,8 @@ class _InMemoryBranchStore:
         self._orchestrator_dispatched.pop(run_key, None)
         self._orchestrator_dispatched_step_id.pop(run_key, None)
         self._orchestrator_subagent_recoverable.pop(run_key, None)
+        self._orchestrator_subagent_engine.pop(run_key, None)
+        self._orchestrator_proceed_unstamped.discard(run_key)
 
     # -- PR2 synthesis capture / replay ---------------------------------------
     def record_synthesis(
@@ -316,6 +344,12 @@ class _InMemoryBranchStore:
 
     def synthesis_present(self, run_key: str) -> bool:
         return run_key in self._synthesis or run_key in self._synthesis_corrupt
+
+    def record_reconciler_fanout_resume_finalized(self, run_key: str) -> None:
+        self._reconciler_finalized.add(run_key)
+
+    def reconciler_fanout_resume_finalized(self, run_key: str) -> bool:
+        return run_key in self._reconciler_finalized
 
     # -- test helper: tamper a captured synthesis output (self-hash will mismatch) --
     def tamper_synthesis(self, run_key: str, output: dict[str, Any]) -> None:
@@ -372,7 +406,16 @@ class _InMemoryBranchStore:
     # `sha256(run_id, workflow_id, entry_version)` internally; inspecting by the
     # sole recorded key avoids re-deriving it and coupling the test to §25.6). --
     def sole_run_key(self) -> str:
-        keys = set(self._branches) | set(self._orchestrators) | set(self._synthesis)
+        keys = (
+            set(self._branches)
+            | set(self._orchestrators)
+            | set(self._synthesis)
+            | set(self._cardinality)
+            | set(self._dispatched)
+            | set(self._instrumented)
+            | set(self._orchestrator_dispatched)
+            | set(self._reconciler_finalized)
+        )
         assert len(keys) == 1, f"expected exactly one recorded run_key, got {keys}"
         return next(iter(keys))
 
@@ -463,6 +506,31 @@ def _pause_protocol() -> PauseResumeProtocol:
     )
 
 
+class _FakeReconcilerRecoveryLoop:
+    """Duck-typed RECONCILER recovery loop for fan-out replay CAS-gate witnesses."""
+
+    def __init__(
+        self,
+        outcome_kind: ResumeOutcomeKind | tuple[ResumeOutcomeKind, ...],
+        *,
+        has_record: bool = True,
+    ) -> None:
+        self._kinds = outcome_kind if isinstance(outcome_kind, tuple) else (outcome_kind,)
+        self._has_record = has_record
+        self.attempts: list[dict[str, Any]] = []
+
+    def has_pause_record(self, *, engine_class: Any, workflow_id: Any, run_id: Any) -> bool:
+        _ = (engine_class, workflow_id, run_id)
+        return self._has_record
+
+    async def attempt_resume(self, **kwargs: Any) -> Any:
+        from types import SimpleNamespace
+
+        kind = self._kinds[min(len(self.attempts), len(self._kinds) - 1)]
+        self.attempts.append(dict(kwargs))
+        return SimpleNamespace(resume_outcome=SimpleNamespace(outcome_kind=kind))
+
+
 class _Ctx:
     """Minimal duck-typed DriverContext with an `engine_output_store` bound (the
     fan-out crash-resume substrate). Mirrors the PARALLELIZATION e2e `_Ctx`.
@@ -478,6 +546,7 @@ class _Ctx:
         store: Any,
         pause_resume_protocol: Any = None,
         resume_context_holder: Any = None,
+        engine_recovery_loop: Any = None,
     ) -> None:
         from opentelemetry.trace import NoOpTracerProvider
 
@@ -491,6 +560,8 @@ class _Ctx:
         self.validator_framework = None
         self.tenant_id = None
         self.engine_output_store = store
+        if engine_recovery_loop is not None:
+            self.engine_recovery_loop = engine_recovery_loop
         # B-FANOUT-EFFECT-FENCE-SCOPED-ABORT-CRASH-DURABLE — the operator's per-key
         # `EffectFenceResolution` map (ABORT_BRANCH etc.), peeked at the fan-out resume sites.
         if resume_context_holder is not None:
@@ -544,6 +615,19 @@ class _LookupRaisesRegistry:
         raise StepKindDispatcherNotBoundError(step_kind)
 
 
+class _RaisesDispatcher:
+    """A dispatcher that raises AFTER lookup and the pre-dispatch marker have been written."""
+
+    def __init__(self) -> None:
+        self.dispatched: list[str] = []
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        self.dispatched.append(str(step.step_id))
+        raise RuntimeError("simulated orchestrator dispatch crash")
+
+
 class _AnyKindRegistry:
     """A registry serving the SAME dispatcher for ANY step kind — for the
     B-FANOUT-CRASH-RESUME-MAYBE-RAN-RESOLUTION multi-kind fan-out tests (re-fire-SAFE
@@ -567,9 +651,36 @@ def _run(
     engine_class: EngineClass = EngineClass.EVENT_SOURCED_REPLAY,
     timeout_disposition: FanoutTimeoutDisposition = FanoutTimeoutDisposition.FAIL_CLOSED,
     persona_tier: PersonaTier = _PROCEED_TIER,
+    engine_recovery_loop: Any = None,
 ) -> Any:
-    ctx = cast(DriverContext, _Ctx(ledger=_RecordingLedger(), store=store))
-    return execute_workflow(
+    result, _ctx = _run_with_context(
+        workflow_id=workflow_id,
+        topology=topology,
+        steps=steps,
+        dispatcher=dispatcher,
+        store=store,
+        engine_class=engine_class,
+        timeout_disposition=timeout_disposition,
+        persona_tier=persona_tier,
+        engine_recovery_loop=engine_recovery_loop,
+    )
+    return result
+
+
+def _run_with_context(
+    *,
+    workflow_id: str,
+    topology: TopologyPattern,
+    steps: list[WorkflowStep],
+    dispatcher: StepDispatcher,
+    store: Any,
+    engine_class: EngineClass = EngineClass.EVENT_SOURCED_REPLAY,
+    timeout_disposition: FanoutTimeoutDisposition = FanoutTimeoutDisposition.FAIL_CLOSED,
+    persona_tier: PersonaTier = _PROCEED_TIER,
+    engine_recovery_loop: Any = None,
+) -> tuple[Any, _Ctx]:
+    ctx = _Ctx(ledger=_RecordingLedger(), store=store, engine_recovery_loop=engine_recovery_loop)
+    result = execute_workflow(
         _manifest(
             workflow_id=workflow_id,
             topology=topology,
@@ -579,10 +690,11 @@ def _run(
         ),
         steps,
         run_id="run-1",
-        ctx=ctx,
+        ctx=cast(DriverContext, ctx),
         default_model_binding=_DEFAULT_BINDING,
         step_dispatchers=cast(StepDispatcherRegistry, _Registry(dispatcher)),
     )
+    return result, ctx
 
 
 # ---------------------------------------------------------------------------
@@ -631,6 +743,601 @@ def test_parallelization_crash_resume_replays_completed_redispatches_absent() ->
     assert r2.final_state is not None and baseline.final_state is not None
     assert r2.final_state["branch_outputs"] == baseline.final_state["branch_outputs"]
     assert r2.final_state["aggregate"] == baseline.final_state["aggregate"]
+
+
+def test_reconciler_fanout_crash_resume_abort_fails_before_branch_replay() -> None:
+    """A pending RECONCILER fan-out replay must honor the engine-layer pause/CAS gate before
+    returning from the branch-store path. Incomplete branch records cannot bypass ABORT."""
+    store = _InMemoryBranchStore()
+    steps = [_step(f"branch-{i}", i) for i in range(3)]
+    _run(
+        workflow_id="wf-rec-fanout-abort",
+        topology=TopologyPattern.PARALLELIZATION,
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3),
+        store=store,
+        engine_class=EngineClass.RECONCILER_LOOP,
+    )
+    store.forget_branch(store.sole_run_key(), 1)
+
+    loop = _FakeReconcilerRecoveryLoop(ResumeOutcomeKind.ABORT_REVALIDATION_FAILED)
+    resume = _CountingDispatcher(n=3)
+    r2 = _run(
+        workflow_id="wf-rec-fanout-abort",
+        topology=TopologyPattern.PARALLELIZATION,
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        engine_class=EngineClass.RECONCILER_LOOP,
+        engine_recovery_loop=loop,
+    )
+
+    assert r2.status is RunStatus.FAILED
+    assert r2.fail_class == CP_FAIL_RESUME_MATERIAL_DIFF_DETECTED
+    assert resume.dispatched == []
+    assert len(loop.attempts) == 1
+    assert loop.attempts[0]["engine_class"] is EngineClass.RECONCILER_LOOP
+    assert loop.attempts[0]["step_id"] == "fanout-crash-resume"
+
+
+def test_reconciler_fanout_complete_branch_store_without_finalize_marker_still_gates() -> None:
+    """Complete branch sidecars are reserve-before-commit, not proof that resume finalized."""
+    store = _InMemoryBranchStore()
+    steps = [_step(f"branch-{i}", i) for i in range(3)]
+    _run(
+        workflow_id="wf-rec-fanout-complete-abort",
+        topology=TopologyPattern.PARALLELIZATION,
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3),
+        store=store,
+        engine_class=EngineClass.RECONCILER_LOOP,
+    )
+    run_key = store.sole_run_key()
+    assert set(store.read_branch_records(run_key)) == {0, 1, 2}
+    assert not store.reconciler_fanout_resume_finalized(run_key)
+
+    loop = _FakeReconcilerRecoveryLoop(ResumeOutcomeKind.ABORT_REVALIDATION_FAILED)
+    resume = _CountingDispatcher(n=3)
+    r2 = _run(
+        workflow_id="wf-rec-fanout-complete-abort",
+        topology=TopologyPattern.PARALLELIZATION,
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        engine_class=EngineClass.RECONCILER_LOOP,
+        engine_recovery_loop=loop,
+    )
+
+    assert r2.status is RunStatus.FAILED
+    assert r2.fail_class == CP_FAIL_RESUME_MATERIAL_DIFF_DETECTED
+    assert resume.dispatched == []
+    assert len(loop.attempts) == 1
+    assert not store.reconciler_fanout_resume_finalized(run_key)
+
+
+def test_reconciler_fanout_body_mismatch_does_not_consume_cas_claim() -> None:
+    """Pure replay-input validation must fail before the one-shot RECONCILER CAS gate."""
+    store = _InMemoryBranchStore()
+    steps = [_step(f"branch-{i}", i) for i in range(3)]
+    _run(
+        workflow_id="wf-rec-fanout-body-mismatch",
+        topology=TopologyPattern.PARALLELIZATION,
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3),
+        store=store,
+        engine_class=EngineClass.RECONCILER_LOOP,
+    )
+    run_key = store.sole_run_key()
+
+    loop = _FakeReconcilerRecoveryLoop(
+        (
+            ResumeOutcomeKind.RESUME_CLEAN,
+            ResumeOutcomeKind.ABORT_REVALIDATION_FAILED,
+        )
+    )
+    bad_steps = [_step("branch-0", 0), _step("branch-X", 1), _step("branch-2", 2)]
+    r2 = _run(
+        workflow_id="wf-rec-fanout-body-mismatch",
+        topology=TopologyPattern.PARALLELIZATION,
+        steps=bad_steps,
+        dispatcher=_CountingDispatcher(n=3),
+        store=store,
+        engine_class=EngineClass.RECONCILER_LOOP,
+        engine_recovery_loop=loop,
+    )
+
+    assert r2.status is RunStatus.FAILED
+    assert "parallelization-resume-body-mismatch" in (r2.fail_class or "")
+    assert len(loop.attempts) == 0
+    assert not store.reconciler_fanout_resume_finalized(run_key)
+
+    r3 = _run(
+        workflow_id="wf-rec-fanout-body-mismatch",
+        topology=TopologyPattern.PARALLELIZATION,
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3),
+        store=store,
+        engine_class=EngineClass.RECONCILER_LOOP,
+        engine_recovery_loop=loop,
+    )
+
+    assert r3.status is RunStatus.SUCCESS
+    assert len(loop.attempts) == 1
+    assert store.reconciler_fanout_resume_finalized(run_key)
+
+
+def test_reconciler_parallelization_effect_fence_proceed_rejects_before_cas() -> None:
+    """An invalid PROCEED retry of an effect-fence fan-out resume must not consume CAS."""
+    store = _InMemoryBranchStore()
+    loop = _FakeReconcilerRecoveryLoop(ResumeOutcomeKind.RESUME_CLEAN)
+    ctx = _Ctx(ledger=_RecordingLedger(), store=store, engine_recovery_loop=loop)
+    steps = [_step("branch-0", 0, kind=StepKind.TOOL_STEP)]
+
+    result, steps_executed = _execute_parallelization(
+        manifest_entry=_manifest(
+            workflow_id="wf-rec-proceed-fence-peer",
+            topology=TopologyPattern.PARALLELIZATION,
+            engine_class=EngineClass.RECONCILER_LOOP,
+            persona_tier=_PROCEED_TIER,
+        ),
+        steps=steps,
+        run_id="run-1",
+        ctx=cast(DriverContext, ctx),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=cast(StepDispatcherRegistry, _Registry(_CountingDispatcher(n=1))),
+        run_idempotency_key="rk-rec-proceed-fence-peer",
+        crash_fan_out_resume=PeerFanOutResumeState(
+            branches=(),
+            branch_count=1,
+            effect_fence_paused_branches=(
+                EffectFencePausedBranchResumeState(
+                    branch_index=0,
+                    step_id="branch-0",
+                    step_kind=StepKind.TOOL_STEP.value,
+                    idempotency_key="fence-key-branch-0",
+                ),
+            ),
+        ),
+        reconciler_engine_resume_required=True,
+    )
+
+    assert result.status is RunStatus.FAILED
+    assert result.fail_class == "parallelization-effect-fence-resume-requires-strict-tier"
+    assert steps_executed == 0
+    assert len(loop.attempts) == 0
+    assert not store.reconciler_fanout_resume_finalized("rk-rec-proceed-fence-peer")
+
+
+def test_reconciler_orchestrator_effect_fence_proceed_rejects_before_cas() -> None:
+    """ORCHESTRATOR_WORKERS mirrors the pre-CAS invalid-tier guard."""
+    store = _InMemoryBranchStore()
+    loop = _FakeReconcilerRecoveryLoop(ResumeOutcomeKind.RESUME_CLEAN)
+    ctx = _Ctx(ledger=_RecordingLedger(), store=store, engine_recovery_loop=loop)
+    steps = [_step("orch", 0), _step("w-0", 0, kind=StepKind.TOOL_STEP)]
+
+    result, steps_executed = _execute_orchestrator_workers(
+        manifest_entry=_manifest(
+            workflow_id="wf-rec-proceed-fence-orch",
+            topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+            engine_class=EngineClass.RECONCILER_LOOP,
+            persona_tier=_PROCEED_TIER,
+        ),
+        steps=steps,
+        run_id="run-1",
+        ctx=cast(DriverContext, ctx),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=cast(StepDispatcherRegistry, _Registry(_CountingDispatcher(n=1))),
+        run_idempotency_key="rk-rec-proceed-fence-orch",
+        crash_fan_out_resume=FanOutResumeState(
+            orchestrator_output={"branch": 0},
+            orchestrator_step_id="orch",
+            branches=(),
+            worker_count=1,
+            effect_fence_paused_branches=(
+                EffectFencePausedBranchResumeState(
+                    branch_index=0,
+                    step_id="w-0",
+                    step_kind=StepKind.TOOL_STEP.value,
+                    idempotency_key="fence-key-w-0",
+                ),
+            ),
+        ),
+        pause_resumable=True,
+        reconciler_engine_resume_required=True,
+    )
+
+    assert result.status is RunStatus.FAILED
+    assert result.fail_class == "orchestrator-workers-effect-fence-resume-requires-strict-tier"
+    assert steps_executed == 0
+    assert len(loop.attempts) == 0
+    assert not store.reconciler_fanout_resume_finalized("rk-rec-proceed-fence-orch")
+
+
+def test_reconciler_fanout_complete_recovery_skips_second_cas_redrive() -> None:
+    """Once fan-out replay has completed the durable branch set, idempotent re-drives do not
+    re-attempt the RECONCILER CAS claim."""
+    store = _InMemoryBranchStore()
+    steps = [_step(f"branch-{i}", i) for i in range(3)]
+    _run(
+        workflow_id="wf-rec-fanout-idempotent",
+        topology=TopologyPattern.PARALLELIZATION,
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3),
+        store=store,
+        engine_class=EngineClass.RECONCILER_LOOP,
+    )
+    store.forget_branch(store.sole_run_key(), 1)
+
+    loop = _FakeReconcilerRecoveryLoop(
+        (
+            ResumeOutcomeKind.RESUME_CLEAN,
+            ResumeOutcomeKind.ABORT_REVALIDATION_FAILED,
+        )
+    )
+    resume = _CountingDispatcher(n=3)
+    r2 = _run(
+        workflow_id="wf-rec-fanout-idempotent",
+        topology=TopologyPattern.PARALLELIZATION,
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        engine_class=EngineClass.RECONCILER_LOOP,
+        engine_recovery_loop=loop,
+    )
+
+    assert r2.status is RunStatus.SUCCESS
+    assert resume.dispatched == ["branch-1"]
+    assert len(loop.attempts) == 1
+    assert store.reconciler_fanout_resume_finalized(store.sole_run_key())
+
+    redrive = _CountingDispatcher(n=3)
+    r3 = _run(
+        workflow_id="wf-rec-fanout-idempotent",
+        topology=TopologyPattern.PARALLELIZATION,
+        steps=steps,
+        dispatcher=redrive,
+        store=store,
+        engine_class=EngineClass.RECONCILER_LOOP,
+        engine_recovery_loop=loop,
+    )
+
+    assert r3.status is RunStatus.SUCCESS
+    assert redrive.dispatched == []
+    assert len(loop.attempts) == 1
+
+
+def test_reconciler_empty_parallelization_clean_resume_finalizes_for_redrive() -> None:
+    """A clean RECONCILER gate over an empty peer fan-out still crosses the finish boundary."""
+    store = _InMemoryBranchStore()
+    loop = _FakeReconcilerRecoveryLoop(
+        (
+            ResumeOutcomeKind.RESUME_CLEAN,
+            ResumeOutcomeKind.ABORT_REVALIDATION_FAILED,
+        )
+    )
+
+    r1, ctx1 = _run_with_context(
+        workflow_id="wf-rec-empty-parallelization",
+        topology=TopologyPattern.PARALLELIZATION,
+        steps=[],
+        dispatcher=_CountingDispatcher(n=0),
+        store=store,
+        engine_class=EngineClass.RECONCILER_LOOP,
+        engine_recovery_loop=loop,
+    )
+
+    assert r1.status is RunStatus.SUCCESS
+    assert store.reconciler_fanout_resume_finalized(store.sole_run_key())
+    assert len(loop.attempts) == 1
+    assert ctx1.lifecycle_emitter.emits.count(WorkflowEventClass.RESUMPTION) == 1
+    assert WorkflowEventClass.WORKFLOW_START not in ctx1.lifecycle_emitter.emits
+
+    r2, ctx2 = _run_with_context(
+        workflow_id="wf-rec-empty-parallelization",
+        topology=TopologyPattern.PARALLELIZATION,
+        steps=[],
+        dispatcher=_CountingDispatcher(n=0),
+        store=store,
+        engine_class=EngineClass.RECONCILER_LOOP,
+        engine_recovery_loop=loop,
+    )
+
+    assert r2.status is RunStatus.SUCCESS
+    assert len(loop.attempts) == 1
+    assert WorkflowEventClass.RESUMPTION not in ctx2.lifecycle_emitter.emits
+
+
+def test_reconciler_empty_orchestrator_workers_clean_resume_finalizes_for_redrive() -> None:
+    """A clean RECONCILER gate over an empty orchestrator fan-out is idempotent."""
+    store = _InMemoryBranchStore()
+    loop = _FakeReconcilerRecoveryLoop(
+        (
+            ResumeOutcomeKind.RESUME_CLEAN,
+            ResumeOutcomeKind.ABORT_REVALIDATION_FAILED,
+        )
+    )
+
+    r1, ctx1 = _run_with_context(
+        workflow_id="wf-rec-empty-orchestrator",
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+        steps=[],
+        dispatcher=_CountingDispatcher(n=0),
+        store=store,
+        engine_class=EngineClass.RECONCILER_LOOP,
+        engine_recovery_loop=loop,
+    )
+
+    assert r1.status is RunStatus.SUCCESS
+    assert store.reconciler_fanout_resume_finalized(store.sole_run_key())
+    assert len(loop.attempts) == 1
+    assert ctx1.lifecycle_emitter.emits.count(WorkflowEventClass.RESUMPTION) == 1
+    assert WorkflowEventClass.WORKFLOW_START not in ctx1.lifecycle_emitter.emits
+
+    r2, ctx2 = _run_with_context(
+        workflow_id="wf-rec-empty-orchestrator",
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+        steps=[],
+        dispatcher=_CountingDispatcher(n=0),
+        store=store,
+        engine_class=EngineClass.RECONCILER_LOOP,
+        engine_recovery_loop=loop,
+    )
+
+    assert r2.status is RunStatus.SUCCESS
+    assert len(loop.attempts) == 1
+    assert WorkflowEventClass.RESUMPTION not in ctx2.lifecycle_emitter.emits
+
+
+def test_reconciler_orchestrator_pause_reconstruction_finalizes_for_redrive() -> None:
+    """A RECONCILER CAS over an ORCHESTRATOR_WORKERS pause reconstruction is one-shot."""
+    store = _InMemoryBranchStore()
+    steps = [_step("orch", 0), _step("w-0", 0), _step("w-1", 1)]
+    _run_persona(
+        workflow_id="wf-rec-ow-pause-recon",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=2, fail_index=1),
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+        pause_resume_protocol=_pause_protocol(),
+        engine_class=EngineClass.RECONCILER_LOOP,
+    )
+    run_key = store.sole_run_key()
+    assert not store.reconciler_fanout_resume_finalized(run_key)
+
+    loop = _FakeReconcilerRecoveryLoop(
+        (
+            ResumeOutcomeKind.RESUME_CLEAN,
+            ResumeOutcomeKind.ABORT_REVALIDATION_FAILED,
+        )
+    )
+    resume = _CountingDispatcher(n=2)
+    r2 = _run_persona(
+        workflow_id="wf-rec-ow-pause-recon",
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+        pause_resume_protocol=_pause_protocol(),
+        engine_class=EngineClass.RECONCILER_LOOP,
+        engine_recovery_loop=loop,
+    )
+
+    assert r2.status is RunStatus.PAUSED
+    assert r2.pause_snapshot is not None
+    assert resume.dispatched == []
+    assert len(loop.attempts) == 1
+    assert store.reconciler_fanout_resume_finalized(run_key)
+
+    redrive = _CountingDispatcher(n=2)
+    r3 = _run_persona(
+        workflow_id="wf-rec-ow-pause-recon",
+        steps=steps,
+        dispatcher=redrive,
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+        pause_resume_protocol=_pause_protocol(),
+        engine_class=EngineClass.RECONCILER_LOOP,
+        engine_recovery_loop=loop,
+    )
+
+    assert r3.status is RunStatus.PAUSED
+    assert r3.pause_snapshot is not None
+    assert redrive.dispatched == []
+    assert len(loop.attempts) == 1
+
+
+def test_reconciler_orchestrator_dispatch_failure_finalizes_cas_for_redrive() -> None:
+    """A clean CAS followed by orchestrator dispatch failure must not CAS again on retry."""
+    store = _InMemoryBranchStore()
+    steps = [_step("orch", 0), _step("w-0", 0), _step("w-1", 1)]
+    loop = _FakeReconcilerRecoveryLoop(
+        (ResumeOutcomeKind.RESUME_CLEAN, ResumeOutcomeKind.ABORT_REVALIDATION_FAILED)
+    )
+    crash = _RaisesDispatcher()
+    r1 = _run_persona(
+        workflow_id="wf-rec-ow-dispatch-fail-redrive",
+        steps=steps,
+        dispatcher=crash,
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+        engine_class=EngineClass.RECONCILER_LOOP,
+        engine_recovery_loop=loop,
+    )
+    key = store.sole_run_key()
+    assert r1.status is RunStatus.FAILED
+    assert "orchestrator-workers-orchestrator-failure" in (r1.fail_class or "")
+    assert crash.dispatched == ["orch"]
+    assert len(loop.attempts) == 1
+    assert store.reconciler_fanout_resume_finalized(key)
+
+    retry = _CountingDispatcher(n=2)
+    r2 = _run_persona(
+        workflow_id="wf-rec-ow-dispatch-fail-redrive",
+        steps=steps,
+        dispatcher=retry,
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+        engine_class=EngineClass.RECONCILER_LOOP,
+        engine_recovery_loop=loop,
+    )
+    assert r2.status is RunStatus.SUCCESS
+    assert retry.dispatched == ["orch", "w-0", "w-1"]
+    assert len(loop.attempts) == 1
+
+
+def test_reconciler_orchestrator_effect_fence_pause_finalizes_cas_for_redrive() -> None:
+    """A clean CAS followed by orchestrator effect-fence PAUSED must be idempotent."""
+    store = _InMemoryBranchStore()
+    steps = [_step("orch", 0), _step("w-0", 0), _step("w-1", 1)]
+    loop = _FakeReconcilerRecoveryLoop(
+        (ResumeOutcomeKind.RESUME_CLEAN, ResumeOutcomeKind.ABORT_REVALIDATION_FAILED)
+    )
+    fence = _FenceDispatcher(fence_indices={0}, complete_indices=set())
+    r1 = _run_persona(
+        workflow_id="wf-rec-ow-orch-fence-pause-redrive",
+        steps=steps,
+        dispatcher=fence,
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+        pause_resume_protocol=_pause_protocol(),
+        engine_class=EngineClass.RECONCILER_LOOP,
+        engine_recovery_loop=loop,
+    )
+    key = store.sole_run_key()
+    assert r1.status is RunStatus.PAUSED
+    assert r1.pause_snapshot is not None
+    assert fence.dispatched == ["orch"]
+    assert len(loop.attempts) == 1
+    assert store.reconciler_fanout_resume_finalized(key)
+
+    redrive = _CountingDispatcher(n=2)
+    r2 = _run_persona(
+        workflow_id="wf-rec-ow-orch-fence-pause-redrive",
+        steps=steps,
+        dispatcher=redrive,
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+        engine_class=EngineClass.RECONCILER_LOOP,
+        engine_recovery_loop=loop,
+    )
+    assert r2.status is RunStatus.SUCCESS
+    assert redrive.dispatched == ["orch", "w-0", "w-1"]
+    assert len(loop.attempts) == 1
+
+
+def test_reconciler_fanout_empty_store_abort_fails_before_fresh_redispatch() -> None:
+    """An empty fan-out store does not make a RECONCILER pause record safe to ignore."""
+    store = _InMemoryBranchStore()
+    steps = [_step(f"branch-{i}", i) for i in range(3)]
+    loop = _FakeReconcilerRecoveryLoop(ResumeOutcomeKind.ABORT_REVALIDATION_FAILED)
+    resume = _CountingDispatcher(n=3)
+
+    r = _run(
+        workflow_id="wf-rec-fanout-empty-abort",
+        topology=TopologyPattern.PARALLELIZATION,
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        engine_class=EngineClass.RECONCILER_LOOP,
+        engine_recovery_loop=loop,
+    )
+
+    assert r.status is RunStatus.FAILED
+    assert r.fail_class == CP_FAIL_RESUME_MATERIAL_DIFF_DETECTED
+    assert resume.dispatched == []
+    assert len(loop.attempts) == 1
+
+
+def test_reconciler_fanout_crash_resume_clean_replays_after_gate() -> None:
+    """A clean RECONCILER CAS gate falls through to the normal fan-out branch replay path."""
+    store = _InMemoryBranchStore()
+    steps = [_step(f"branch-{i}", i) for i in range(3)]
+    _run(
+        workflow_id="wf-rec-fanout-clean",
+        topology=TopologyPattern.PARALLELIZATION,
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3),
+        store=store,
+        engine_class=EngineClass.RECONCILER_LOOP,
+    )
+    store.forget_branch(store.sole_run_key(), 1)
+
+    loop = _FakeReconcilerRecoveryLoop(ResumeOutcomeKind.RESUME_CLEAN)
+    resume = _CountingDispatcher(n=3)
+    r2, ctx = _run_with_context(
+        workflow_id="wf-rec-fanout-clean",
+        topology=TopologyPattern.PARALLELIZATION,
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        engine_class=EngineClass.RECONCILER_LOOP,
+        engine_recovery_loop=loop,
+    )
+
+    assert r2.status is RunStatus.SUCCESS
+    assert resume.dispatched == ["branch-1"]
+    assert len(loop.attempts) == 1
+    assert ctx.lifecycle_emitter.emits.count(WorkflowEventClass.RESUMPTION) == 1
+    assert WorkflowEventClass.WORKFLOW_START not in ctx.lifecycle_emitter.emits
+
+
+def test_reconciler_parallelization_lookup_failure_does_not_consume_cas() -> None:
+    """Pure branch dispatcher validation must run before the one-shot RECONCILER CAS."""
+    store = _InMemoryBranchStore()
+    steps = [_step(f"branch-{i}", i) for i in range(3)]
+    _run(
+        workflow_id="wf-rec-par-lookup-before-cas",
+        topology=TopologyPattern.PARALLELIZATION,
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3),
+        store=store,
+        engine_class=EngineClass.RECONCILER_LOOP,
+    )
+    key = store.sole_run_key()
+    store.forget_branch(key, 1)
+    changed_steps = [
+        _step("branch-0", 0),
+        _step("branch-1", 1, StepKind.TOOL_STEP),
+        _step("branch-2", 2),
+    ]
+
+    loop = _FakeReconcilerRecoveryLoop(
+        (ResumeOutcomeKind.RESUME_CLEAN, ResumeOutcomeKind.ABORT_REVALIDATION_FAILED)
+    )
+    r2 = _run(
+        workflow_id="wf-rec-par-lookup-before-cas",
+        topology=TopologyPattern.PARALLELIZATION,
+        steps=changed_steps,
+        dispatcher=_CountingDispatcher(n=3),
+        store=store,
+        engine_class=EngineClass.RECONCILER_LOOP,
+        engine_recovery_loop=loop,
+    )
+    assert r2.status is RunStatus.FAILED
+    assert "parallelization-step-kind-not-bound" in (r2.fail_class or "")
+    assert len(loop.attempts) == 0
+    assert not store.reconciler_fanout_resume_finalized(key)
+
+    retry = _CountingDispatcher(n=3)
+    r3 = _run(
+        workflow_id="wf-rec-par-lookup-before-cas",
+        topology=TopologyPattern.PARALLELIZATION,
+        steps=steps,
+        dispatcher=retry,
+        store=store,
+        engine_class=EngineClass.RECONCILER_LOOP,
+        engine_recovery_loop=loop,
+    )
+    assert r3.status is RunStatus.SUCCESS
+    assert retry.dispatched == ["branch-1"]
+    assert len(loop.attempts) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -1100,6 +1807,17 @@ class _SynthesisDispatcher:
         return dict(self._output)
 
 
+class _RaisesSynthesisDispatcher:
+    def __init__(self) -> None:
+        self.dispatched = 0
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        self.dispatched += 1
+        raise RuntimeError("simulated synthesis failure")
+
+
 class _BranchOrSynthesisRegistry:
     def __init__(self, branch: StepDispatcher, synthesis: StepDispatcher) -> None:
         self._branch = branch
@@ -1128,14 +1846,23 @@ def _run_synth(
     synthesis: StepDispatcher,
     store: Any,
     topology: TopologyPattern = TopologyPattern.PARALLELIZATION,
+    engine_class: EngineClass = EngineClass.EVENT_SOURCED_REPLAY,
+    engine_recovery_loop: Any = None,
     steps: list[WorkflowStep] | None = None,
     ledger: Any = None,
 ) -> Any:
-    ctx = cast(DriverContext, _Ctx(ledger=ledger or _RecordingLedger(), store=store))
+    ctx = cast(
+        DriverContext,
+        _Ctx(
+            ledger=ledger or _RecordingLedger(),
+            store=store,
+            engine_recovery_loop=engine_recovery_loop,
+        ),
+    )
     if steps is None:
         steps = [_step("branch-0", 0), _step("branch-1", 1), _synthesis_step()]
     return execute_workflow(
-        _manifest(workflow_id=workflow_id, topology=topology),
+        _manifest(workflow_id=workflow_id, topology=topology, engine_class=engine_class),
         steps,
         run_id="run-1",
         ctx=ctx,
@@ -1212,6 +1939,140 @@ def test_synthesis_crash_resume_before_synthesis_redispatches_fresh() -> None:
     assert r2.final_state == {"synthesis": "fresh-on-reproduced"}
 
 
+def test_reconciler_synthesis_pending_abort_fails_before_fresh_synthesis_dispatch() -> None:
+    """A RECONCILER fan-out whose branches are complete but synthesis is pending still gates CAS."""
+    store = _InMemoryBranchStore()
+    r1 = _run_synth(
+        workflow_id="wf-rec-synth-pending-abort",
+        branch=_CountingDispatcher(n=2),
+        synthesis=_SynthesisDispatcher(),
+        store=store,
+        engine_class=EngineClass.RECONCILER_LOOP,
+    )
+    assert r1.status is RunStatus.SUCCESS
+    store.forget_synthesis(store.sole_run_key())
+    assert not store.synthesis_present(store.sole_run_key())
+
+    loop = _FakeReconcilerRecoveryLoop(ResumeOutcomeKind.ABORT_REVALIDATION_FAILED)
+    resume_synth = _SynthesisDispatcher(output={"synthesis": "must-not-run"})
+    r2 = _run_synth(
+        workflow_id="wf-rec-synth-pending-abort",
+        branch=_CountingDispatcher(n=2),
+        synthesis=resume_synth,
+        store=store,
+        engine_class=EngineClass.RECONCILER_LOOP,
+        engine_recovery_loop=loop,
+    )
+
+    assert r2.status is RunStatus.FAILED
+    assert r2.fail_class == CP_FAIL_RESUME_MATERIAL_DIFF_DETECTED
+    assert resume_synth.dispatched == 0
+    assert len(loop.attempts) == 1
+
+
+def test_reconciler_synthesis_failure_does_not_finalize_cas_for_redrive() -> None:
+    """A synthesis failure is not a fan-out commit and must not finalize the CAS bypass marker."""
+    store = _InMemoryBranchStore()
+    r1 = _run_synth(
+        workflow_id="wf-rec-synth-fail-redrive",
+        branch=_CountingDispatcher(n=2),
+        synthesis=_SynthesisDispatcher(),
+        store=store,
+        engine_class=EngineClass.RECONCILER_LOOP,
+    )
+    assert r1.status is RunStatus.SUCCESS
+    key = store.sole_run_key()
+    store.forget_synthesis(key)
+
+    loop = _FakeReconcilerRecoveryLoop(
+        (ResumeOutcomeKind.RESUME_CLEAN, ResumeOutcomeKind.ABORT_REVALIDATION_FAILED)
+    )
+    failing_synth = _RaisesSynthesisDispatcher()
+    r2 = _run_synth(
+        workflow_id="wf-rec-synth-fail-redrive",
+        branch=_CountingDispatcher(n=2),
+        synthesis=failing_synth,
+        store=store,
+        engine_class=EngineClass.RECONCILER_LOOP,
+        engine_recovery_loop=loop,
+    )
+    assert r2.status is RunStatus.FAILED
+    assert "post-join-synthesis-failure" in (r2.fail_class or "")
+    assert failing_synth.dispatched == 1
+    assert len(loop.attempts) == 1
+    assert not store.reconciler_fanout_resume_finalized(key)
+
+    retry_synth = _RaisesSynthesisDispatcher()
+    r3 = _run_synth(
+        workflow_id="wf-rec-synth-fail-redrive",
+        branch=_CountingDispatcher(n=2),
+        synthesis=retry_synth,
+        store=store,
+        engine_class=EngineClass.RECONCILER_LOOP,
+        engine_recovery_loop=loop,
+    )
+    assert r3.status is RunStatus.FAILED
+    assert r3.fail_class == CP_FAIL_RESUME_MATERIAL_DIFF_DETECTED
+    assert retry_synth.dispatched == 0
+    assert len(loop.attempts) == 2
+    assert not store.reconciler_fanout_resume_finalized(key)
+
+
+def test_reconciler_orchestrator_synthesis_failure_does_not_finalize_cas_for_redrive() -> None:
+    """The same no-finalize synthesis-failure behavior holds for orchestrator fan-out."""
+    store = _InMemoryBranchStore()
+    steps = [_step("orch", 0), _step("w-0", 0), _step("w-1", 1), _synthesis_step()]
+    r1 = _run_synth(
+        workflow_id="wf-rec-ow-synth-fail-redrive",
+        branch=_CountingDispatcher(n=2),
+        synthesis=_SynthesisDispatcher(),
+        store=store,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+        engine_class=EngineClass.RECONCILER_LOOP,
+        steps=steps,
+    )
+    assert r1.status is RunStatus.SUCCESS
+    key = store.sole_run_key()
+    store.forget_synthesis(key)
+
+    loop = _FakeReconcilerRecoveryLoop(
+        (ResumeOutcomeKind.RESUME_CLEAN, ResumeOutcomeKind.ABORT_REVALIDATION_FAILED)
+    )
+    failing_synth = _RaisesSynthesisDispatcher()
+    r2 = _run_synth(
+        workflow_id="wf-rec-ow-synth-fail-redrive",
+        branch=_CountingDispatcher(n=2),
+        synthesis=failing_synth,
+        store=store,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+        engine_class=EngineClass.RECONCILER_LOOP,
+        engine_recovery_loop=loop,
+        steps=steps,
+    )
+    assert r2.status is RunStatus.FAILED
+    assert "post-join-synthesis-failure" in (r2.fail_class or "")
+    assert failing_synth.dispatched == 1
+    assert len(loop.attempts) == 1
+    assert not store.reconciler_fanout_resume_finalized(key)
+
+    retry_synth = _RaisesSynthesisDispatcher()
+    r3 = _run_synth(
+        workflow_id="wf-rec-ow-synth-fail-redrive",
+        branch=_CountingDispatcher(n=2),
+        synthesis=retry_synth,
+        store=store,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+        engine_class=EngineClass.RECONCILER_LOOP,
+        engine_recovery_loop=loop,
+        steps=steps,
+    )
+    assert r3.status is RunStatus.FAILED
+    assert r3.fail_class == CP_FAIL_RESUME_MATERIAL_DIFF_DETECTED
+    assert retry_synth.dispatched == 0
+    assert len(loop.attempts) == 2
+    assert not store.reconciler_fanout_resume_finalized(key)
+
+
 def test_synthesis_crash_resume_self_hash_mismatch_fails_closed() -> None:
     """Window (c) — a captured synthesis whose record is TAMPERED (the output no longer matches
     its record-local self-hash). Replay fails closed rather than serving a tampered aggregate;
@@ -1238,6 +2099,94 @@ def test_synthesis_crash_resume_self_hash_mismatch_fails_closed() -> None:
     assert r2.fail_class is not None
     assert "post-join-synthesis-replay-self-hash-mismatch" in r2.fail_class
     assert resume_synth.dispatched == 0
+
+
+def test_reconciler_synthesis_material_diff_does_not_consume_cas() -> None:
+    """Pure captured-synthesis material-diff validation must run before RECONCILER CAS."""
+    store = _InMemoryBranchStore()
+    r1 = _run_synth(
+        workflow_id="wf-rec-synth-material-diff-before-cas",
+        branch=_CountingDispatcher(n=2),
+        synthesis=_SynthesisDispatcher(),
+        store=store,
+        engine_class=EngineClass.RECONCILER_LOOP,
+    )
+    key = store.sole_run_key()
+    assert r1.status is RunStatus.SUCCESS
+
+    loop = _FakeReconcilerRecoveryLoop(
+        (ResumeOutcomeKind.RESUME_CLEAN, ResumeOutcomeKind.ABORT_REVALIDATION_FAILED)
+    )
+    changed_steps = [
+        _step("branch-0", 0),
+        _step("branch-1", 1),
+        WorkflowStep(
+            step_id=StepID("synthesis-renamed"),
+            step_kind=StepKind.POST_JOIN_SYNTHESIS,
+            step_payload={"prompt": "compose the siblings"},
+        ),
+    ]
+    r2 = _run_synth(
+        workflow_id="wf-rec-synth-material-diff-before-cas",
+        branch=_CountingDispatcher(n=2),
+        synthesis=_SynthesisDispatcher(),
+        store=store,
+        engine_class=EngineClass.RECONCILER_LOOP,
+        engine_recovery_loop=loop,
+        steps=changed_steps,
+    )
+    assert r2.status is RunStatus.FAILED
+    assert "post-join-synthesis-replay-material-diff" in (r2.fail_class or "")
+    assert len(loop.attempts) == 0
+    assert not store.reconciler_fanout_resume_finalized(key)
+
+    r3 = _run_synth(
+        workflow_id="wf-rec-synth-material-diff-before-cas",
+        branch=_CountingDispatcher(n=2),
+        synthesis=_SynthesisDispatcher(),
+        store=store,
+        engine_class=EngineClass.RECONCILER_LOOP,
+        engine_recovery_loop=loop,
+    )
+    assert r3.status is RunStatus.SUCCESS
+    assert len(loop.attempts) == 1
+    assert store.reconciler_fanout_resume_finalized(key)
+
+
+def test_reconciler_orchestrator_synthesis_self_hash_does_not_consume_cas() -> None:
+    """The orchestrator-workers twin also validates captured synthesis before CAS."""
+    store = _InMemoryBranchStore()
+    steps = [_step("orch", 0), _step("w-0", 0), _step("w-1", 1), _synthesis_step()]
+    r1 = _run_synth(
+        workflow_id="wf-rec-ow-synth-tamper-before-cas",
+        branch=_CountingDispatcher(n=3),
+        synthesis=_SynthesisDispatcher(),
+        store=store,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+        engine_class=EngineClass.RECONCILER_LOOP,
+        steps=steps,
+    )
+    key = store.sole_run_key()
+    assert r1.status is RunStatus.SUCCESS
+    store.tamper_synthesis(key, {"synthesis": "TAMPERED"})
+
+    loop = _FakeReconcilerRecoveryLoop(
+        (ResumeOutcomeKind.RESUME_CLEAN, ResumeOutcomeKind.ABORT_REVALIDATION_FAILED)
+    )
+    r2 = _run_synth(
+        workflow_id="wf-rec-ow-synth-tamper-before-cas",
+        branch=_CountingDispatcher(n=3),
+        synthesis=_SynthesisDispatcher(),
+        store=store,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+        engine_class=EngineClass.RECONCILER_LOOP,
+        engine_recovery_loop=loop,
+        steps=steps,
+    )
+    assert r2.status is RunStatus.FAILED
+    assert "post-join-synthesis-replay-self-hash-mismatch" in (r2.fail_class or "")
+    assert len(loop.attempts) == 0
+    assert not store.reconciler_fanout_resume_finalized(key)
 
 
 def test_synthesis_crash_resume_corrupt_capture_fails_closed() -> None:
@@ -1461,6 +2410,57 @@ def test_synthesis_crash_resume_body_drops_synthesis_fails_closed() -> None:
     assert "post-join-synthesis-replay-material-diff" in r2.fail_class
 
 
+def test_non_reconciler_synthesis_material_diff_rematerializes_branches_before_failure() -> None:
+    """Non-RECONCILER synthesis replay validation stays post-drain.
+
+    The RECONCILER fan-out CAS preflight intentionally validates captured synthesis before taking
+    the one-shot CAS claim. ESR/WAL/SAVE_POINT have no such claim, so they must preserve the older
+    ordering: recover/rematerialize branch ledger entries first, then fail closed on a changed
+    captured synthesis step.
+    """
+    store = _InMemoryBranchStore()
+
+    r1 = _run_synth(
+        workflow_id="wf-synth-nonrec-material-diff-post-drain",
+        branch=_CountingDispatcher(n=2),
+        synthesis=_SynthesisDispatcher(),
+        store=store,
+    )
+    assert r1.status is RunStatus.SUCCESS
+    key = store.sole_run_key()
+
+    ledger = _RecordingLedger()
+    changed_steps = [
+        _step("branch-0", 0),
+        _step("branch-1", 1),
+        WorkflowStep(
+            step_id=StepID("synthesis-renamed"),
+            step_kind=StepKind.POST_JOIN_SYNTHESIS,
+            step_payload={"prompt": "compose the siblings"},
+        ),
+    ]
+    resume_branch = _CountingDispatcher(n=2)
+    r2 = _run_synth(
+        workflow_id="wf-synth-nonrec-material-diff-post-drain",
+        branch=resume_branch,
+        synthesis=_SynthesisDispatcher(),
+        store=store,
+        steps=changed_steps,
+        ledger=ledger,
+    )
+
+    assert r2.status is RunStatus.FAILED
+    assert r2.fail_class is not None
+    assert "post-join-synthesis-replay-material-diff" in r2.fail_class
+    assert resume_branch.dispatched == []
+    assert not store.reconciler_fanout_resume_finalized(key)
+    rematerialized_step_ids = {
+        str(getattr(write_key, "step_id", "")) for _payload, write_key in ledger.appends
+    }
+    assert any(step_id.startswith("0:") for step_id in rematerialized_step_ids)
+    assert any(step_id.startswith("1:") for step_id in rematerialized_step_ids)
+
+
 class _SynthesisAppendRaiser(_RecordingLedger):
     """A ledger that raises on the SYNTHESIS terminal entry append (the post-join-synthesis
     write_key) — to witness that a replay-path ledger failure maps to a FAILED RunResult
@@ -1567,6 +2567,8 @@ def _run_persona(
     pause_snapshot_input: PauseSnapshot | None = None,
     timeout_disposition: FanoutTimeoutDisposition = FanoutTimeoutDisposition.FAIL_CLOSED,
     resume_context_holder: Any = None,
+    engine_class: EngineClass = EngineClass.EVENT_SOURCED_REPLAY,
+    engine_recovery_loop: Any = None,
 ) -> Any:
     ctx = cast(
         DriverContext,
@@ -1575,6 +2577,7 @@ def _run_persona(
             store=store,
             pause_resume_protocol=pause_resume_protocol,
             resume_context_holder=resume_context_holder,
+            engine_recovery_loop=engine_recovery_loop,
         ),
     )
     return execute_workflow(
@@ -1582,6 +2585,7 @@ def _run_persona(
             workflow_id=workflow_id,
             topology=topology,
             persona_tier=persona_tier,
+            engine_class=engine_class,
             timeout_disposition=timeout_disposition,
         ),
         steps,
@@ -2559,6 +3563,54 @@ def test_crash_resume_pause_reconstruct_protocol_not_bound_fails_honestly() -> N
     assert r2.status is RunStatus.FAILED
     assert r2.fail_class is not None
     assert "pause-resume-protocol-not-bound" in r2.fail_class
+
+
+def test_reconciler_orchestrator_pause_protocol_missing_finalizes_cas_for_redrive() -> None:
+    """A clean RECONCILER CAS followed by missing pause protocol must be idempotent on redrive."""
+    store = _InMemoryBranchStore()
+    steps = [_step("orch", 0), _step("w-0", 0), _step("w-1", 1)]
+    _run_persona(
+        workflow_id="wf-rec-ow-pause-nobind-redrive",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=2, fail_index=1),
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+        engine_class=EngineClass.RECONCILER_LOOP,
+    )
+    key = store.sole_run_key()
+
+    loop = _FakeReconcilerRecoveryLoop(
+        (ResumeOutcomeKind.RESUME_CLEAN, ResumeOutcomeKind.ABORT_REVALIDATION_FAILED)
+    )
+    r2 = _run_persona(
+        workflow_id="wf-rec-ow-pause-nobind-redrive",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=2),
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+        engine_class=EngineClass.RECONCILER_LOOP,
+        engine_recovery_loop=loop,
+    )
+    assert r2.status is RunStatus.FAILED
+    assert r2.fail_class == "orchestrator-workers-pause-resume-protocol-not-bound"
+    assert len(loop.attempts) == 1
+    assert store.reconciler_fanout_resume_finalized(key)
+
+    r3 = _run_persona(
+        workflow_id="wf-rec-ow-pause-nobind-redrive",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=2),
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+        engine_class=EngineClass.RECONCILER_LOOP,
+        engine_recovery_loop=loop,
+    )
+    assert r3.status is RunStatus.FAILED
+    assert r3.fail_class == "orchestrator-workers-pause-resume-protocol-not-bound"
+    assert len(loop.attempts) == 1
 
 
 def test_crash_resume_pause_complete_non_degraded_succeeds() -> None:
@@ -3895,6 +4947,41 @@ def test_crash_resume_orchestrator_maybe_ran_re_fire_safe_recovers_cascade_cance
     assert resume.dispatched == ["orch", "w-0", "w-1"]  # re-fire-safe → all re-dispatch fresh
 
 
+def test_strict_orchestrator_marker_stamps_before_worker_fanout() -> None:
+    """A strict-tier crash after orchestrator marker write but before orchestrator capture must keep
+    the dispatch-instrumented stamp the pristine-window classifier uses to allow safe recovery."""
+    store = _InMemoryBranchStore()
+    crash = _RaisesDispatcher()
+    steps = [_step("orch", 0), _step("w-0", 0), _step("w-1", 1)]
+    r1 = _run_persona(
+        workflow_id="wf-ow-strict-pre-capture-stamp",
+        steps=steps,
+        dispatcher=crash,
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+    )
+    assert r1.status is RunStatus.FAILED
+    assert crash.dispatched == ["orch"]
+    key = store.sole_run_key()
+    assert store.orchestrator_dispatched(key)
+    assert store.dispatch_instrumented(key)
+    assert not store.orchestrator_present(key)
+    assert store.present_branch_indexes(key) == set()
+
+    resume = _CountingDispatcher(n=2)
+    r2 = _run_persona(
+        workflow_id="wf-ow-strict-pre-capture-stamp",
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+    )
+    assert r2.status is RunStatus.SUCCESS
+    assert resume.dispatched == ["orch", "w-0", "w-1"]
+
+
 def test_crash_resume_orchestrator_maybe_ran_re_fire_safe_recovers_pause() -> None:
     """The re-fire-safe orchestrator-maybe-ran recovery holds under PAUSE (TEAM_BINDING) too — a
     re-fire-safe (no-external-effect) orchestrator re-runs fresh regardless of the strict tier."""
@@ -4111,6 +5198,52 @@ def test_crash_resume_orchestrator_maybe_ran_sub_agent_non_recoverable_child_fai
     assert resume.dispatched == []
 
 
+def test_crash_resume_orchestrator_maybe_ran_sub_agent_non_recoverable_child_fails_closed_under_proceed() -> (
+    None
+):
+    """PROCEED orchestrator markers still fail closed for non-recoverable SUB_AGENT children."""
+    store = _InMemoryBranchStore()
+    orch = WorkflowStep(
+        step_id=StepID("orch"),
+        step_kind=StepKind.SUB_AGENT_DISPATCH,
+        step_payload={
+            "index": 0,
+            "child_manifest_entry": {
+                "engine_class": EngineClass.PURE_PATTERN_NO_ENGINE.value,
+                "topology_pattern": TopologyPattern.SINGLE_THREADED_LINEAR.value,
+            },
+            "child_steps": [{"step_kind": StepKind.TOOL_STEP.value}],
+        },
+    )
+    steps = [orch, _step("w-0", 0), _step("w-1", 1)]
+    _run_persona(
+        workflow_id="wf-ow-orch-subagent-nonrec-proceed",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=2),
+        store=store,
+        persona_tier=_PROCEED_TIER,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+        registry=_AnyKindRegistry(_CountingDispatcher(n=2)),
+    )
+    key = store.sole_run_key()
+    assert store.orchestrator_subagent_child_recoverable(key) is False
+    assert store.orchestrator_dispatched_proceed_unstamped(key)
+    store.forget_orchestrator_maybe_ran(key)
+
+    resume = _CountingDispatcher(n=2)
+    r2 = _run_persona(
+        workflow_id="wf-ow-orch-subagent-nonrec-proceed",
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        persona_tier=_PROCEED_TIER,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+        registry=_AnyKindRegistry(resume),
+    )
+    assert r2.status is RunStatus.FAILED
+    assert resume.dispatched == []
+
+
 def test_crash_resume_orchestrator_maybe_ran_sub_agent_save_point_child_recovers() -> None:
     """B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-SAVE-POINT-CHILD (R-FS-1) full-chain — a maybe-ran
     SUB_AGENT_DISPATCH orchestrator whose child is a SAVE_POINT_CHECKPOINT LINEAR leaf now RECOVERS
@@ -4257,6 +5390,28 @@ def test_orchestrator_dispatch_on_legacy_3arg_store_no_typeerror() -> None:
     assert (
         store.orchestrator_dispatched_kind(store.sole_run_key()) == StepKind.DECLARATIVE_STEP.value
     )
+
+
+def test_proceed_orchestrator_dispatch_on_legacy_3arg_store_no_typeerror() -> None:
+    """PROCEED adds provenance for unstamped orchestrator markers, but a legacy duck-typed store
+    must still accept the run by receiving only the historical marker fields. The provenance is not
+    silently inferred on that store, so later ambiguous resume remains fail-closed."""
+    store = _LegacyOrchestratorMarkerStore()
+    steps = [_step("orch", 0, StepKind.DECLARATIVE_STEP), _step("w-0", 0), _step("w-1", 1)]
+    r = _run_persona(
+        workflow_id="wf-ow-orch-legacy-proceed-store",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=2),
+        store=store,
+        persona_tier=_PROCEED_TIER,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+    )
+    assert r.status is RunStatus.SUCCESS
+    key = store.sole_run_key()
+    assert store.orchestrator_dispatched(key)
+    assert store.orchestrator_dispatched_kind(key) == StepKind.DECLARATIVE_STEP.value
+    assert not store.dispatch_instrumented(key)
+    assert not store.orchestrator_dispatched_proceed_unstamped(key)
 
 
 def test_crash_resume_orchestrator_maybe_ran_cross_kind_swap_fails_closed() -> None:
@@ -4484,12 +5639,12 @@ def test_crash_resume_parallelization_orchestrator_marker_topology_mismatch_fail
     assert resume.dispatched == []
 
 
-def test_crash_resume_proceed_orchestrator_writes_no_marker() -> None:
-    """PROCEED is byte-unchanged: an ORCHESTRATOR_WORKERS run under SOLO_DEVELOPER (PROCEED) writes
-    NO orchestrator reserve-before-dispatch marker (and no instrumented stamp). The PROCEED-tier
-    orchestrator pre-capture double-fire window is the registered follow-on residual, not closed
-    here — #724's effect-free-synthesis justification does not transfer to the orchestrator, so it
-    is named in `B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-RESOLUTION`, not silently absorbed."""
+def test_crash_resume_proceed_orchestrator_writes_marker() -> None:
+    """B-FANOUT-CRASH-RESUME-ORCHESTRATOR-PROCEED-RESIDUAL — PROCEED now writes the orchestrator
+    reserve-before-dispatch marker without stamping the worker dispatch-instrumented trust gate. The
+    SOLO_DEVELOPER committed tier still harvests worker failures as PARTIAL, but an effect-bearing
+    orchestrator pre-capture crash uses the same maybe-ran classifier instead of silently accepting
+    a double-fire window."""
     store = _InMemoryBranchStore()
     steps = [_step("orch", 0), _step("w-0", 0), _step("w-1", 1)]
     r = _run_persona(
@@ -4502,9 +5657,82 @@ def test_crash_resume_proceed_orchestrator_writes_no_marker() -> None:
     )
     assert r.status is RunStatus.SUCCESS
     key = store.sole_run_key()
-    assert not store.orchestrator_dispatched(key)  # PROCEED writes no orchestrator marker
-    assert not store.dispatch_instrumented(key)  # nor the instrumented stamp
+    assert store.orchestrator_dispatched(key)
+    assert not store.dispatch_instrumented(key)
+    assert store.orchestrator_dispatched_proceed_unstamped(key)
     assert store.orchestrator_present(key)  # the reserve-before-COMMIT capture is unchanged
+
+
+def test_crash_resume_proceed_refire_safe_orchestrator_still_recovers() -> None:
+    """PROCEED's new orchestrator marker must not regress effect-free replay."""
+    store = _InMemoryBranchStore()
+    crash = _RaisesDispatcher()
+    steps = [_step("orch", 0), _step("w-0", 0), _step("w-1", 1)]
+    r1 = _run_persona(
+        workflow_id="wf-proceed-refire-safe-orch",
+        steps=steps,
+        dispatcher=crash,
+        store=store,
+        persona_tier=_PROCEED_TIER,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+    )
+    assert r1.status is RunStatus.FAILED
+    assert crash.dispatched == ["orch"]
+    key = store.sole_run_key()
+    assert store.orchestrator_dispatched(key)
+    assert store.orchestrator_dispatched_kind(key) == StepKind.DECLARATIVE_STEP.value
+    assert not store.dispatch_instrumented(key)
+    assert store.orchestrator_dispatched_proceed_unstamped(key)
+    assert not store.orchestrator_present(key)
+
+    resume = _CountingDispatcher(n=2)
+    r2 = _run_persona(
+        workflow_id="wf-proceed-refire-safe-orch",
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        persona_tier=_PROCEED_TIER,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+    )
+
+    assert r2.status is RunStatus.SUCCESS
+    assert resume.dispatched == ["orch", "w-0", "w-1"]
+
+
+def test_proceed_orchestrator_marker_does_not_stamp_worker_gate() -> None:
+    """A PROCEED orchestrator marker must not make absent worker markers trustworthy on a later
+    strict-tier crash resume. PROCEED still writes no worker dispatch markers, so a missing worker
+    record after a persona change is ambiguous and must fail closed instead of re-dispatching."""
+    store = _InMemoryBranchStore()
+    steps = [_step("orch", 0), _step("w-0", 0), _step("w-1", 1)]
+    r1 = _run_persona(
+        workflow_id="wf-proceed-worker-stamp",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=2),
+        store=store,
+        persona_tier=_PROCEED_TIER,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+    )
+    assert r1.status is RunStatus.SUCCESS
+    key = store.sole_run_key()
+    assert store.orchestrator_dispatched(key)
+    assert not store.dispatch_instrumented(key)
+    assert store.orchestrator_dispatched_proceed_unstamped(key)
+
+    store.forget_branch_undispatched(key, 1)
+    resume = _CountingDispatcher(n=2)
+    r2 = _run_persona(
+        workflow_id="wf-proceed-worker-stamp",
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+    )
+
+    assert r2.status is RunStatus.FAILED
+    assert "fan-out-crash-resume-cascade-policy-incomplete-recovery" in (r2.fail_class or "")
+    assert resume.dispatched == []
 
 
 def test_crash_resume_orchestrator_lookup_failure_writes_no_marker() -> None:

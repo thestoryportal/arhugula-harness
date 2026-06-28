@@ -139,7 +139,9 @@ def test_registered_forward_arcs_carry_parent_and_zero_units():
     generate = _load_generate_module()
     am = generate.parse_arc_unit_map()
     reg = [s for s in am["standalone"] if s["status"] == "registered"]
-    assert reg, "the ledger registers forward arcs"
+    if not reg:
+        assert _derived(generate)["standalone_registered"] == 0
+        return
     for s in reg:
         assert s["parent_arc"], f"{s['id']} must name a parent_arc"
         assert s["anticipated_scope"], f"{s['id']} must carry an anticipated_scope"
@@ -250,6 +252,36 @@ def test_assert_remaining_nonempty_raises_on_silent_empty():
                     {"id": "B-W", "status": "registered"},
                 ],
             }
+        },
+    )
+
+    # zero forward build arcs may still keep R-FS-1 ACTIVE while manual Tier-1 closure
+    # predicates are pending; this must not falsely admit Q1 by marking R-FS-1 resolved.
+    generate.assert_remaining_nonempty(
+        actions,
+        {
+            "arc_map": {"rfs1_status": "tier1_manual_pending"},
+            "remaining_forward": {"child_arcs": [], "standalone": []},
+        },
+    )
+
+    # `resolved` is not a valid escape hatch while the roadmap still says ACTIVE; otherwise
+    # cross-source drift can hide behind an empty remaining-work panel.
+    with pytest.raises(RuntimeError, match="remaining-work source has drifted"):
+        generate.assert_remaining_nonempty(
+            actions,
+            {
+                "arc_map": {"rfs1_status": "resolved"},
+                "remaining_forward": {"child_arcs": [], "standalone": []},
+            },
+        )
+
+    # Once the roadmap action is no longer ACTIVE, a resolved ledger snapshot is allowed.
+    generate.assert_remaining_nonempty(
+        [{"id": "R-FS-1", "status": "RESOLVED"}],
+        {
+            "arc_map": {"rfs1_status": "resolved"},
+            "remaining_forward": {"child_arcs": [], "standalone": []},
         },
     )
 

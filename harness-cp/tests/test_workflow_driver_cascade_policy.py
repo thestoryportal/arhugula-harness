@@ -142,6 +142,7 @@ async def _cascade_branch(
     dispositions: dict[int, str],
     trace: list[tuple[str, int, int]],
     steps: Sequence[_Step],
+    dispatch_started: asyncio.Event | None = None,
 ) -> tuple[int, int] | None:
     """Synthetic stand-in for a U-CP-88 cascade branch — the canonical
     gate → shielded-dispatch → classify → record shape (see
@@ -193,6 +194,8 @@ async def _cascade_branch(
                 raises=step.dispatch_raises,
             )
         )
+        if dispatch_started is not None:
+            dispatch_started.set()
         try:
             last = await dispatch_branch_step_shielded(inflight)
         except asyncio.CancelledError:
@@ -207,6 +210,11 @@ async def _cascade_branch(
         _record_step(local)
     _record_terminal("completed")
     return last
+
+
+async def _fail_after_dispatch_started(dispatch_started: asyncio.Event) -> None:
+    await asyncio.wait_for(dispatch_started.wait(), timeout=1.0)
+    raise ValueError("branch 0 step 0 boom")
 
 
 # ---------------------------------------------------------------------------
@@ -462,19 +470,12 @@ async def test_branch_completed_when_in_flight_runs_to_completion() -> None:
     trace: list[tuple[str, int, int]] = []
     dispositions: dict[int, str] = {}
     buf = BufferingLedgerWriter(actor=_ACTOR, branch_index=1)
+    dispatch_started = asyncio.Event()
 
     with pytest.raises(BaseExceptionGroup):
         await cascade_cancel_barrier(
             [
-                _cascade_branch(
-                    parent=parent,
-                    branch_index=0,
-                    run_idempotency_key="rik",
-                    buffer=BufferingLedgerWriter(actor=_ACTOR, branch_index=0),
-                    dispositions=dispositions,
-                    trace=trace,
-                    steps=[_Step(gate=_FAST, dispatch=0.0, fail=True)],
-                ),
+                _fail_after_dispatch_started(dispatch_started),
                 # branch 1 enters its dispatch (fast gate) then is cancelled mid
                 # in-flight when branch 0 fails → drives to completion.
                 _cascade_branch(
@@ -485,6 +486,7 @@ async def test_branch_completed_when_in_flight_runs_to_completion() -> None:
                     dispositions=dispositions,
                     trace=trace,
                     steps=[_Step(gate=_FAST, dispatch=_SLOW)],
+                    dispatch_started=dispatch_started,
                 ),
             ],
             deadline_seconds=_STUCK,
@@ -615,19 +617,12 @@ async def test_branch_completed_when_in_flight_dispatch_errors_under_cascade() -
     trace: list[tuple[str, int, int]] = []
     dispositions: dict[int, str] = {}
     buf = BufferingLedgerWriter(actor=_ACTOR, branch_index=1)
+    dispatch_started = asyncio.Event()
 
     with pytest.raises(BaseExceptionGroup) as excinfo:
         await cascade_cancel_barrier(
             [
-                _cascade_branch(
-                    parent=parent,
-                    branch_index=0,
-                    run_idempotency_key="rik",
-                    buffer=BufferingLedgerWriter(actor=_ACTOR, branch_index=0),
-                    dispositions=dispositions,
-                    trace=trace,
-                    steps=[_Step(gate=_FAST, dispatch=0.0, fail=True)],
-                ),
+                _fail_after_dispatch_started(dispatch_started),
                 # branch 1 is in-flight (fast gate) when branch 0 fails; its
                 # in-flight dispatch then ERRORS during the shielded drive.
                 _cascade_branch(
@@ -638,6 +633,7 @@ async def test_branch_completed_when_in_flight_dispatch_errors_under_cascade() -
                     dispositions=dispositions,
                     trace=trace,
                     steps=[_Step(gate=_FAST, dispatch=_SLOW, dispatch_raises=True)],
+                    dispatch_started=dispatch_started,
                 ),
             ],
             deadline_seconds=_STUCK,

@@ -68,6 +68,7 @@ class _FakeStore:
         orchestrator_dispatched: bool = False,
         orchestrator_dispatched_kind: str | None = None,
         orchestrator_dispatched_step_id: str | None = None,
+        orchestrator_dispatched_proceed_unstamped: bool = False,
         orchestrator_subagent_recoverable: bool = False,
         orchestrator_subagent_engine: str | None = None,
         dispatched_kinds: dict[int, str | None] | None = None,
@@ -100,6 +101,7 @@ class _FakeStore:
         # DISPATCH-TIME step_id (the fence-recoverable same-step_id guard; None = un-recorded /
         # torn marker → mismatch → fail-closed; Codex [P1]).
         self._orchestrator_dispatched_step_id = orchestrator_dispatched_step_id
+        self._orchestrator_dispatched_proceed_unstamped = orchestrator_dispatched_proceed_unstamped
         # B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-SUBAGENT — whether the orchestrator's
         # SUB_AGENT_DISPATCH child was recoverable at dispatch (the marker; False = absent /
         # non-recoverable → the resume classifier fails closed).
@@ -151,6 +153,9 @@ class _FakeStore:
 
     def orchestrator_dispatched_step_id(self, run_key: str) -> str | None:
         return self._orchestrator_dispatched_step_id
+
+    def orchestrator_dispatched_proceed_unstamped(self, run_key: str) -> bool:
+        return self._orchestrator_dispatched_proceed_unstamped
 
     def orchestrator_subagent_child_recoverable(self, run_key: str) -> bool:
         return self._orchestrator_subagent_recoverable
@@ -690,8 +695,29 @@ def test_orchestrator_maybe_ran_re_fire_safe_kind_without_stamp_fails_closed() -
         orchestrator_dispatched=True,
         orchestrator_dispatched_kind=StepKind.INFERENCE_STEP.value,  # re-fire-safe kind, but...
     )
-    with pytest.raises(_FanOutStoreOrchestratorMaybeRanError, match="orphaned marker"):
+    with pytest.raises(_FanOutStoreOrchestratorMaybeRanError, match="orphaned dispatch marker"):
         _determine_fanout_resume(store, _RUN_KEY, _steps(3), TopologyPattern.ORCHESTRATOR_WORKERS)
+
+
+def test_orchestrator_maybe_ran_re_fire_safe_proceed_unstamped_recovers() -> None:
+    """A PROCEED-origin unstamped marker is the one safe no-stamp exception for effect-free kinds.
+
+    The worker dispatch-instrumented stamp remains absent, so strict-tier worker marker trust is
+    not widened; the separate PROCEED provenance bit is required to distinguish this marker from
+    an arbitrary orphaned/corrupt unstamped marker."""
+    store = _FakeStore(
+        branches={},
+        orchestrator=None,
+        dispatch_instrumented=False,
+        orchestrator_dispatched=True,
+        orchestrator_dispatched_kind=StepKind.INFERENCE_STEP.value,
+        orchestrator_dispatched_proceed_unstamped=True,
+    )
+
+    assert (
+        _determine_fanout_resume(store, _RUN_KEY, _steps(3), TopologyPattern.ORCHESTRATOR_WORKERS)
+        is None
+    )
 
 
 def test_orchestrator_absent_with_cardinality_present_is_corrupt_not_maybe_ran() -> None:

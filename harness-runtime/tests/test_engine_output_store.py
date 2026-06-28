@@ -466,6 +466,22 @@ def test_orchestrator_dispatched_kind_round_trip_across_restart(tmp_path: Path) 
     assert fresh.orchestrator_dispatched_kind("other-run") is None
 
 
+def test_orchestrator_dispatched_proceed_unstamped_round_trip(tmp_path: Path) -> None:
+    """PROCEED-origin unstamped marker provenance is durable and absent by default."""
+    store = EngineOutputStore(journal_dir=tmp_path / "eo")
+    assert store.orchestrator_dispatched_proceed_unstamped(_RUN_KEY) is False
+    store.record_orchestrator_dispatched(_RUN_KEY, "orch-step", "inference-step")
+    assert store.orchestrator_dispatched_proceed_unstamped(_RUN_KEY) is False
+    store.record_orchestrator_dispatched(
+        _RUN_KEY,
+        "orch-step",
+        "inference-step",
+        proceed_unstamped=True,
+    )
+    fresh = EngineOutputStore(journal_dir=tmp_path / "eo")
+    assert fresh.orchestrator_dispatched_proceed_unstamped(_RUN_KEY) is True
+
+
 def test_orchestrator_dispatched_kind_pre_v1_81_marker_maps_to_none(tmp_path: Path) -> None:
     """A pre-v1.81 (v1.79-era) orchestrator marker recorded only {"step_id": ...} with NO
     step_kind. orchestrator_dispatched_kind() maps it to None → the CP classifier treats it as

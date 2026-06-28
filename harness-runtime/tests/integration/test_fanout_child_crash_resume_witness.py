@@ -1,13 +1,15 @@
 """B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-FANOUT-CHILD (R-FS-1) — by-execution witness.
 
-Does a re-dispatched FAN-OUT child (PARALLELIZATION / {ESR,WAL}) reconstruct its AGGREGATE
-`final_state` at the fan-out crash-resume site (`_crash_fan_out_resume`, CP workflow_driver — NOT
-the LINEAR `reconstruct_final_state` seed, which the concurrent strategies return before) under the
-deterministic child run_id, result-faithfully + at-most-once?
+Does a re-dispatched FAN-OUT child (PARALLELIZATION / {ESR,WAL,SAVE_POINT,RECONCILER})
+reconstruct its AGGREGATE `final_state` at the fan-out crash-resume site
+(`_crash_fan_out_resume`, CP workflow_driver — NOT the LINEAR `reconstruct_final_state` seed,
+which the concurrent strategies return before) under the deterministic child run_id,
+result-faithfully + at-most-once?
 
-This is the load-bearing CHILD-half of the FANOUT-CHILD arc. The arc's predicate relax admits a
-fan-out {ESR,WAL} child as re-dispatch-recoverable; the recovery MECHANISM is this: on the parent's
-re-dispatch the child re-runs under its deterministic `child_run_id` (a pure function of
+This is the load-bearing CHILD-half of the FANOUT-CHILD arc family. The predicate admits fan-out
+children backed by the durable replay set {ESR,WAL,SAVE_POINT,RECONCILER} as
+re-dispatch-recoverable; the recovery MECHANISM is this: on the parent's re-dispatch the child
+re-runs under its deterministic `child_run_id` (a pure function of
 `compose_child_run_id_seed`), its captured branches replay from the B-FANOUT-OUTPUT-REPLAY branch
 store and its in-flight branches re-dispatch through the child's OWN fan-out maybe-ran machinery.
 The CP↔runtime classifier verdict + parity are witnessed at `test_lifecycle_sub_agent_dispatch.py`;
@@ -248,7 +250,7 @@ def test_fanout_child_save_point_reconstructs_aggregate_under_deterministic_seed
     """B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-FANOUT-CHILD-SAVE-POINT (R-FS-1) — the load-bearing
     by-execution witness for the SAVE_POINT leg.
 
-    Identical two-phase structure to the {ESR,WAL} witness above, but the child fan-out runs under
+    Identical two-phase structure to the ESR/WAL witness above, but the child fan-out runs under
     `engine_class=SAVE_POINT_CHECKPOINT`. This is the CAN-vs-DOES proof advisor demanded: the
     branch-capture producer (`_capture_branch_terminal`, gated ONLY by `_fanout_replay_store`) must
     actually FIRE for a SAVE_POINT fan-out run — before the `_FANOUT_REPLAY_ENGINE_CLASSES` widen the
@@ -289,6 +291,46 @@ def test_fanout_child_save_point_reconstructs_aggregate_under_deterministic_seed
         "baseline-seed",
         kind=StepKind.TOOL_STEP,
         engine_class=sp,
+    )
+    assert r2.final_state is not None and baseline.final_state is not None
+    assert r2.final_state.get("branch_outputs") == baseline.final_state.get("branch_outputs")
+    assert r2.final_state.get("aggregate") == baseline.final_state.get("aggregate")
+
+
+def test_fanout_child_reconciler_reconstructs_aggregate_under_deterministic_seed(
+    tmp_path: Path,
+) -> None:
+    """B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT-FANOUT-CHILD-RECONCILER — by-execution witness.
+
+    RECONCILER fan-out children use the same class-agnostic branch-output store for AGGREGATE
+    reconstruction as ESR/WAL/SAVE_POINT. The reconciler substrate remains the convergence/CAS
+    authority; it does not own the per-branch output map. RED before this close: the fan-out replay
+    gate returned None for RECONCILER, so no branch records were captured."""
+    rc = EngineClass.RECONCILER_LOOP
+    seed = compose_child_run_id_seed(_PARENT_KEY, _CHILD_WF)
+    store = EngineOutputStore(journal_dir=engine_output_dir_for(tmp_path))
+
+    phase1 = _CountingDispatcher()
+    r1 = _drive(store, phase1, seed, kind=StepKind.TOOL_STEP, engine_class=rc)
+    assert r1.status is RunStatus.SUCCESS
+    run_key = _compute_run_idempotency_key(seed, _CHILD_WF, extras=(str(_ENTRY_VERSION),))
+    assert store.present_branch_indexes(run_key) == {0, 1, 2}
+
+    store._branch_file(run_key, 1).unlink()
+    assert store.present_branch_indexes(run_key) == {0, 2}
+
+    phase2 = _CountingDispatcher()
+    r2 = _drive(store, phase2, seed, kind=StepKind.TOOL_STEP, engine_class=rc)
+    assert r2.status is RunStatus.SUCCESS
+    assert phase2.dispatched == ["branch-1"]
+
+    baseline_store = EngineOutputStore(journal_dir=engine_output_dir_for(tmp_path / "baseline"))
+    baseline = _drive(
+        baseline_store,
+        _CountingDispatcher(),
+        "baseline-seed",
+        kind=StepKind.TOOL_STEP,
+        engine_class=rc,
     )
     assert r2.final_state is not None and baseline.final_state is not None
     assert r2.final_state.get("branch_outputs") == baseline.final_state.get("branch_outputs")
