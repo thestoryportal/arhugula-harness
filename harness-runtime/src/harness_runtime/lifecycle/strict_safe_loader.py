@@ -1,5 +1,7 @@
 """Strict YAML SafeLoader for harness manifest parsing.
 
+Authority: C-RT-30 WorkflowManifestLoader.
+
 Per runtime spec v1.39 §14.19 Reading (A) re-litigation of Q-H=b (Phase 2a
 G2): replaces `strictyaml.dirty_load` at the WorkflowManifestLoader. The
 strictness features the original Q-H=b decision selected for (closed schema,

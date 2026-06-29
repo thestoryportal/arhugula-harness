@@ -3,6 +3,8 @@
 Per `Spec_Harness_Runtime_v1.md` v1.1 §2 stage 3b post-conditions:
 `ctx.routing_manifest`, `ctx.engine_selector`, `ctx.fallback_chain`,
 `ctx.retry_breaker`, `ctx.hitl_registry`, `ctx.handoff_registry` all non-None.
+Authority: C-RT-02 stage-3b invariants, U-RT-21, U-RT-22, U-RT-23,
+U-RT-24, U-RT-25, and U-RT-26.
 
 Composer order within the stage is free (no intra-stage dependencies among
 the 6 composers); the orchestrator calls them in alphabetical-by-field order

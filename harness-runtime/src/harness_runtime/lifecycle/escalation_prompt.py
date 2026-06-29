@@ -4,6 +4,7 @@ Implements runtime spec v1.22 §14.15.8 deferred-discretion — implementation
 selects shape of the operator-facing escalation prompt. v1.22 baseline shape
 combines ``brief.escalation_reason`` + ``brief.fail_class`` + palette
 enumeration for operator context.
+Authority: C-RT-25 and U-RT-91, consuming C-CP-28 ``HITLEscalationBrief``.
 """
 
 from __future__ import annotations

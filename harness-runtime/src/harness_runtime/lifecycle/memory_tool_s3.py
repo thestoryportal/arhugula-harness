@@ -1,5 +1,7 @@
 """R-830 — S3-backed Memory tool backend.
 
+Authority: C-RT-22, U-RT-80, and H_T-CP-16.
+
 Implements ``MemoryToolStorageBackend.S3`` through a narrow S3 client protocol.
 The backend itself is provider-SDK-neutral and provider-free tests inject a
 fake client; the factory may lazily construct a real boto3 S3 client when the

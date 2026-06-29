@@ -1,5 +1,7 @@
 """`HITLAutoApprovePolicy` — the CP §19.5 operator-policy floor-override schema.
 
+Authority: C-RT-03, C-CP-19, and U-RT-116.
+
 Per `Spec_Harness_Runtime_v1.md` §3.8 (NEW at v1.49) + `.harness/
 class_1_fork_b3_1_hitl_auto_approve_policy_field.md` (F-B3-1; R-FS-1 B3-spec-1)
 + design `.harness/r-fs-1-b3-smart-hitl-design-v1.md` §3.3 D-cond.2 (Reading C

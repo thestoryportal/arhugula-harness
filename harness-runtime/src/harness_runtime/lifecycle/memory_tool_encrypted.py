@@ -1,5 +1,7 @@
 """`B-MEMORY-SURFACE-BACKEND-IMPLS` — Fernet content codec for ENCRYPTED_FILESYSTEM.
 
+Authority: C-RT-22, U-RT-80, and H_T-CP-16.
+
 Realizes runtime spec §14.12.3 step 2 `MemoryToolStorageBackend.ENCRYPTED_FILESYSTEM`
 ("wrap filesystem implementation with per-path encryption per operator-supplied
 key reference at `backend_params`") as a `MemoryContentCodec` injected into

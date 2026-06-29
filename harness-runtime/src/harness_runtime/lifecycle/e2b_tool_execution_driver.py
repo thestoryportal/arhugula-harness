@@ -5,6 +5,9 @@ R-412: a short-lived E2B hosted sandbox executes a JSON tool-runner command and
 returns the runner's JSON response to ``RuntimeToolDispatcher``. The dispatcher
 continues to own trust checks, tier-floor enforcement, telemetry spans, and
 output-schema validation.
+
+Authority: C-RT-19 ToolExecutionDriver tier binding and C-RT-21 TOOL_STEP
+retry wrapper.
 """
 
 from __future__ import annotations

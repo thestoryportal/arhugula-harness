@@ -7,6 +7,9 @@ local Docker-compatible runtime and exchange a single JSON request/response
 over stdin/stdout. The drivers are local-only: they resolve the configured
 image with ``docker inspect`` and run the immutable image ID so Docker never
 pulls by tag.
+
+Authority: C-RT-19 ToolExecutionDriver tier binding and C-RT-21 TOOL_STEP
+retry wrapper.
 """
 
 from __future__ import annotations
