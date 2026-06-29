@@ -2610,7 +2610,7 @@ R-CL-Q1:
 R-CL-Q2:
   title: Phase Q2 — security testing + review
   surface: VII
-  status: ACTIVE      # 2026-06-29 — Q1 resolved; security testing/review is the next selected quality-close frontier.
+  status: RESOLVED    # 2026-06-29 — PR #835 landed the Q2 security review/threat model and fixed the mutable GitHub Actions supply-chain finding.
   depends_on: [R-CL-P1, R-CL-P2, R-CL-P3, R-CL-P4, R-CL-P5, R-CL-P6]
   blocks: [R-CL-Q4]
   posture: phase-7
@@ -2626,7 +2626,7 @@ R-CL-Q2:
 R-CL-Q3:
   title: Phase Q3 — QA + 100%-evidence closure
   surface: III
-  status: BLOCKED
+  status: ACTIVE      # 2026-06-29 — Q2 resolved; QA + executed-path evidence closure is the next selected quality-close frontier.
   depends_on: [R-CL-P1, R-CL-P2, R-CL-P3, R-CL-P4, R-CL-P5, R-CL-P6]
   blocks: [R-CL-Q4]
   posture: phase-7
