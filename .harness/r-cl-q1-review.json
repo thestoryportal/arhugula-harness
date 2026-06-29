@@ -1,0 +1,275 @@
+{
+  "phase": "R-CL-Q1",
+  "generated_at": "2026-06-29T21:45:31Z",
+  "packages": [
+    {
+      "package": "harness-core",
+      "lanes": [
+        {
+          "lane": "codex",
+          "status": "passed",
+          "findings": [],
+          "notes": "Rolled up from .harness/r-cl-q1-harness-core-review.md: direct review covered harness-core carriers, public exports, metadata, and the check-path hardening surfaced during the slice."
+        },
+        {
+          "lane": "code_review",
+          "status": "passed",
+          "findings": [],
+          "notes": "Bug/regression review found no open harness-core defects after enum closure, NewType identity, frozen policy behavior, public API, workspace sync, and daemon startup handling were verified."
+        },
+        {
+          "lane": "simplify",
+          "status": "passed",
+          "findings": [],
+          "notes": "Simplification scan found no package-local cleanup needed; the only changes from the slice were the DevEx fixes required to make the gate executable."
+        }
+      ]
+    },
+    {
+      "package": "harness-is",
+      "lanes": [
+        {
+          "lane": "codex",
+          "status": "passed",
+          "findings": [],
+          "notes": "Rolled up from .harness/r-cl-q1-harness-is-review.md: direct review covered IS carriers, state-ledger paths, prompt manifest, git/worktree primitives, seam exports, tests, and metadata."
+        },
+        {
+          "lane": "code_review",
+          "status": "passed",
+          "findings": [],
+          "notes": "Bug/regression review found no open harness-is defects across path classification, content-addressed prompt versions, JSONL append/read, hash-chain construction, git shell-out edges, and worktree isolation."
+        },
+        {
+          "lane": "simplify",
+          "status": "passed",
+          "findings": [],
+          "notes": "Simplification scan found no TODO/FIXME markers, silent fallback, subprocess shell usage, or package-local simplification target needing a Q1 change."
+        }
+      ]
+    },
+    {
+      "package": "harness-as",
+      "lanes": [
+        {
+          "lane": "codex",
+          "status": "passed",
+          "findings": [],
+          "notes": "Rolled up from .harness/r-cl-q1-harness-as-review.md: direct review covered AS discriminators, sandbox tiers, MCP trust floors, tool contracts, secret surfaces, Anthropic matrices, seam exports, and metadata."
+        },
+        {
+          "lane": "code_review",
+          "status": "passed",
+          "findings": [],
+          "notes": "Bug/regression review found no open harness-as defects across sandbox-tier composition, secret fetch/audit structure, sensitive-data exclusions, MCP fail classes, and public seam coverage."
+        },
+        {
+          "lane": "simplify",
+          "status": "passed",
+          "findings": [],
+          "notes": "Simplification scan found no package-local TODO/FIXME markers, dead branches, hidden network/process side effects, or avoidable abstractions needing Q1 changes."
+        }
+      ]
+    },
+    {
+      "package": "harness-cp",
+      "lanes": [
+        {
+          "lane": "codex",
+          "status": "passed",
+          "findings": [],
+          "notes": "Rolled up from .harness/r-cl-q1-harness-cp-review.md: direct review covered CP package inventory, workflow driver, pause/resume, HITL, routing, validator, MCP trust, audit/state-ledger composers, and metadata."
+        },
+        {
+          "lane": "code_review",
+          "status": "passed",
+          "findings": [],
+          "notes": "Bug/regression review found no open harness-cp defects across topology dispatch, failure handling, snapshots, fan-out and handoff recovery, per-step overrides, gate-level composition, and trust evaluation."
+        },
+        {
+          "lane": "simplify",
+          "status": "passed",
+          "findings": [],
+          "notes": "Simplification scan accepted the large workflow-driver surface as boundary-owned and found no surgical Q1 simplification with lower risk than preserving the current decomposition."
+        }
+      ]
+    },
+    {
+      "package": "harness-od",
+      "lanes": [
+        {
+          "lane": "codex",
+          "status": "passed",
+          "findings": [],
+          "notes": "Rolled up from .harness/r-cl-q1-harness-od-review.md: direct review covered OD namespace ownership, audit ledger, cost/rate tables, redaction/tokenization, sampling, collector topology, SQLite persistence, and metadata."
+        },
+        {
+          "lane": "code_review",
+          "status": "passed",
+          "findings": [],
+          "notes": "Bug/regression review found no open harness-od defects across namespace separation, fail-loud cost lookup, redaction fail-closed behavior, sampling policy, and local span persistence/readback."
+        },
+        {
+          "lane": "simplify",
+          "status": "passed",
+          "findings": [],
+          "notes": "Simplification scan found no OD source TODO/FIXME markers, live network/process side effects, hidden env reads, or meaningful duplicate authority needing Q1 changes."
+        }
+      ]
+    },
+    {
+      "package": "harness-cxa",
+      "lanes": [
+        {
+          "lane": "codex",
+          "status": "passed",
+          "findings": [],
+          "notes": "Rolled up from .harness/r-cl-q1-harness-cxa-review.md: direct review covered the CP-to-OD audit conversion seam, carrier union, namespace projection, entry-core behavior, signing/hash delegation, and metadata."
+        },
+        {
+          "lane": "code_review",
+          "status": "passed",
+          "findings": [],
+          "notes": "Bug/regression review found no open harness-cxa defects across union coverage, conditional field elision, prior-hash propagation, fallback entry-core visibility, and unsupported-carrier failure."
+        },
+        {
+          "lane": "simplify",
+          "status": "passed",
+          "findings": [],
+          "notes": "Simplification scan found the package already at a small useful shape: one seam module, an empty package export file, direct tests, and no extra wrapper needed."
+        }
+      ]
+    },
+    {
+      "package": "harness-runtime",
+      "lanes": [
+        {
+          "lane": "codex",
+          "status": "passed",
+          "findings": [],
+          "notes": "Rolled up from .harness/r-cl-q1-harness-runtime-review.md: direct review covered runtime package inventory, CLI/API/config, bootstrap, provider/MCP/LLM/tool/HITL lifecycle boundaries, and overlay grounding."
+        },
+        {
+          "lane": "code_review",
+          "status": "passed",
+          "findings": [],
+          "notes": "Bug/regression review found no open harness-runtime defects across typed failure surfaces, manifest strictness, provider degradation, per-run context isolation, effect fencing, sandbox/trust gates, and local-loopback coverage."
+        },
+        {
+          "lane": "simplify",
+          "status": "passed",
+          "findings": [],
+          "notes": "Simplification scan found no hidden runtime TODO markers or broad over-abstraction needing Q1 change; side effects are explicit at the runtime composition boundary."
+        }
+      ]
+    }
+  ],
+  "non_package_surfaces": [
+    {
+      "surface": "tools/",
+      "lanes": [
+        {
+          "lane": "codex",
+          "status": "passed",
+          "findings": [],
+          "notes": "Direct review inventoried the tools surface: context and loop guards, arc/substitution ledgers, Q1 gate, dashboard generator, semantic overlay, readiness/live-e2e wrappers, and hook/statusline scripts."
+        },
+        {
+          "lane": "code_review",
+          "status": "passed",
+          "findings": [],
+          "notes": "Focused review found no open tools defect in the Q1-critical paths: q1_review_gate, codex_loop, codex_context_guard, codex_worktree_gc, arc/substitution ledgers, and dashboard/overlay test surfaces."
+        },
+        {
+          "lane": "simplify",
+          "status": "passed",
+          "findings": [],
+          "notes": "Risk scan hit expected generated dashboard data, shell-fixture stderr suppression, live-e2e wrapper boundaries, and typed Any/cast at parser or SDK edges; no low-risk Q1 simplification was identified."
+        }
+      ]
+    },
+    {
+      "surface": "justfile",
+      "lanes": [
+        {
+          "lane": "codex",
+          "status": "passed",
+          "findings": [],
+          "notes": "Direct review covered the operator command surface, default gates, provider-free Codex recipes, live e2e recipes, dotenv behavior, review recipes, and Q1 review-gate recipes."
+        },
+        {
+          "lane": "code_review",
+          "status": "passed",
+          "findings": [
+            {
+              "id": "Q1-JUST-001",
+              "severity": "important",
+              "status": "fixed",
+              "path": "justfile",
+              "line": 22,
+              "summary": "`just check` could run live provider and local-provider tests because it called plain pytest while `just` dotenv loading could import ancestor credentials.",
+              "recommendation": "Make the default `test` and `check` lanes provider-free by unsetting provider credential env vars, forcing a null keyring backend, and excluding `e2e`; keep live exercises behind explicit recipes.",
+              "evidence": "Initial `just check` attempts ran credential/live paths; after the justfile change, escalated `just check` passed with 5132 passed, 10 skipped, 24 deselected, and 1 xfailed."
+            }
+          ],
+          "notes": "Bug/regression review found and fixed the default-gate/live-test leak; the explicit live recipes remain available and still carry their credential or local-service gates."
+        },
+        {
+          "lane": "simplify",
+          "status": "passed",
+          "findings": [],
+          "notes": "Simplification review kept the existing recipe structure and made the smallest command-level change needed to align local `check` with CI's provider-free blocking posture."
+        }
+      ]
+    },
+    {
+      "surface": "harness.toml.example",
+      "lanes": [
+        {
+          "lane": "codex",
+          "status": "passed",
+          "findings": [],
+          "notes": "Direct review covered the operator-facing runtime config template, required runtime fields, provider-secret selector metadata, OTel endpoint config, path bindings, routing manifest, and documented default-discovery gap."
+        },
+        {
+          "lane": "code_review",
+          "status": "passed",
+          "findings": [],
+          "notes": "Bug/regression review found no open template defect: plaintext secrets are explicitly forbidden, required fields are present, path-binding workload guidance is visible, and the unimplemented default-discovery behavior is tracked."
+        },
+        {
+          "lane": "simplify",
+          "status": "passed",
+          "findings": [],
+          "notes": "Simplification review found no safe Q1 trim: the long warning/filter section is operator-facing DevEx guidance for a known provider-degraded warning behavior."
+        }
+      ]
+    }
+  ],
+  "clean_checkout_walkthrough": {
+    "status": "passed",
+    "commands": [
+      "git worktree add -b codex/r-cl-q1-final-closure .codex-worktrees/r-cl-q1-final-closure main",
+      "git rev-parse --show-toplevel",
+      "git branch --show-current",
+      "git status --short --untracked-files=all",
+      "test ! -f .env",
+      "just codex-preflight",
+      "just codex-sync",
+      "just check"
+    ],
+    "notes": "Fresh isolated worktree started clean at ee2b27fe. `just codex-sync` required network escalation only to fetch the build backend for the new worktree. `just check` exposed that parent dotenv credentials could trigger live tests; Q1 fixed the justfile default test lane, then reran `just check` with local-loopback escalation for the provider-free echo MCP test."
+  },
+  "verification_commands": [
+    {
+      "command": "just check",
+      "status": "passed",
+      "notes": "Passed after Q1 justfile hardening: sync OK, ruff OK, pyright 0 errors, provider-free pytest selected 5143 tests and passed with 5132 passed, 10 skipped, 24 deselected, 1 xfailed; rerun used escalation only for localhost test socket binding."
+    },
+    {
+      "command": "PYTHONPATH=tools UV_CACHE_DIR=/tmp/arhugula-uv-cache ANTHROPIC_API_KEY= OPENAI_API_KEY= E2B_API_KEY= GOOGLE_APPLICATION_CREDENTIALS= GOOGLE_CLOUD_PROJECT= PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring uv run pytest tools/test_q1_review_gate.py tools/test_codex_loop.py tools/test_codex_context_guard.py tools/test_codex_worktree_gc.py tools/test_arc_ledger.py tools/test_substitution_ledger.py -q",
+      "status": "passed",
+      "notes": "Provider-free focused tools subset passed with 98 passed."
+    }
+  ]
+}
