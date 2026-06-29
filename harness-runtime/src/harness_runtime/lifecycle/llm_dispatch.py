@@ -545,7 +545,8 @@ class RuntimeLLMDispatcher:
     # `RuntimeConfig.approved_prompt_version_shas` at stage 5; the gate is inert
     # at the solo-developer tier (no approval required) per `resolve_prompt_governance`.
     approved_prompt_version_shas: frozenset[str] = frozenset()
-    # C-CP-02 §2.5 (R-impl-1) — the injected Layer-3 router-resolution callable.
+    # C-CP-02 §2.5 (R-impl-1) / U-RT-133 — the injected Layer-3
+    # router-resolution callable.
     # Production binds None: the Layer-3 surface stays inert (DECLARATIVE
     # resolves all production traffic; no router is injected until R-impl-2
     # binds a real router model). A test fixture injects a mock RouterResolutionFn

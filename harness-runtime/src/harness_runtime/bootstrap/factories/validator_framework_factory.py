@@ -20,6 +20,9 @@ Reading A scope (per fork doc
   `ValidatorFrameworkStageMaterializeError` (fail class
   `RT-FAIL-VALIDATOR-STAGE-MATERIALIZE`, permanent severity → bootstrap
   rollback per C-RT-02).
+- U-RT-85 real-bootstrap ValidatorFramework e2e binds through this factory:
+  opt-in config materializes the operator-supplied framework slot on the
+  runtime context before the workflow-driver validator hook can fire.
 """
 
 from __future__ import annotations
