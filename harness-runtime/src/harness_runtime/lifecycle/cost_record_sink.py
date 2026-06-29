@@ -1,7 +1,7 @@
 """`SupportsCostRecordAppend` — structural sink for per-dispatch cost records.
 
 B-INTERSTEP-PERRUN-ISOLATION (B-INTERSTEP fork §3/§5; runtime spec §14.21
-C-RT-29 invariant 7). A tiny leaf module (imports only `SpanCostRecord` from the
+C-RT-34 invariant 7). A tiny leaf module (imports only `SpanCostRecord` from the
 OD axis + `typing.Protocol`) so every per-dispatch cost wrapper can be typed
 against it without importing `harness_runtime.types` — `types.py` imports several
 of those wrapper modules (e.g. `webhook_delivery_composer`), so a wrapper →

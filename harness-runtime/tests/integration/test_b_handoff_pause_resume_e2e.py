@@ -283,7 +283,7 @@ async def test_api_resume_handoff_pause_restart_proof_round_trip(
       - the completed prefix (stage-0, stage-1) is NOT re-dispatched (recovered),
       - ONLY stage-2 (the failed-then-recovered tail) is re-dispatched,
       - the resumed aggregate fuses the recovered prefix with the fresh tail.
-    Full-runtime witness through the public `api.resume` surface (C-RT-30)."""
+    Full-runtime witness through the public `api.resume` surface (C-RT-35)."""
     _RESUME_DISPATCHED.clear()
     config = _config_opt_in(tmp_path)
 

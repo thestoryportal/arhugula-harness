@@ -210,7 +210,7 @@ class FanOutResumeState(BaseModel):
 
     B-FANOUT-PAUSE (R-FS-1) — the self-contained, hash-integrity-checked resume
     source for a `cascade_policy=pause` fan-out halt. Materializes the §25.15.1
-    `pause → PAUSED` row's "composes with C-CP-26 PauseResumeProtocol + C-RT-30
+    `pause → PAUSED` row's "composes with C-CP-26 PauseResumeProtocol + C-RT-35
     `api.resume`" promise for the fan-out case, which position-only resume cannot
     represent (a fan-out paused at the worker barrier has no single `step_index`
     capturing which branches completed vs. need re-dispatch — `adversarial-review-

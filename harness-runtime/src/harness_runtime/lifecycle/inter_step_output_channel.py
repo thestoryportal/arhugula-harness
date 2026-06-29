@@ -3,7 +3,7 @@
 R-FS-1 standalone `B-*` arc **B-INTERSTEP** (design-fork-first per X-AL-3;
 `.harness/class_1_fork_b_interstep_data_flow.md`; spine ledger
 `.harness/beyond-mvp-capability-boundary-ledger.md`). Canonical contract:
-runtime spec **§14.21 C-RT-29** (new at v1.59).
+runtime spec **§14.21 C-RT-34** (new at v1.59).
 
 Why this exists
 ---------------
@@ -135,7 +135,7 @@ class InterStepOutputChannel:
         return len(self._records)
 
 
-# B-INTERSTEP-PERRUN-ISOLATION (runtime spec §14.21 C-RT-29 invariant 7;
+# B-INTERSTEP-PERRUN-ISOLATION (runtime spec §14.21 C-RT-34 invariant 7;
 # B-INTERSTEP fork §3/§5) — the per-run channel ContextVar. The frozen
 # `HarnessContext` binds a stable `RunScopedInterStepOutputChannel` proxy (opt-in
 # only); the proxy resolves the *current run's* channel from this var. The

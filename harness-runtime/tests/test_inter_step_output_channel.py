@@ -1,4 +1,4 @@
-"""B-INTERSTEP — `InterStepOutputChannel` unit tests (runtime spec §14.21 C-RT-29).
+"""B-INTERSTEP — `InterStepOutputChannel` unit tests (runtime spec §14.21 C-RT-34).
 
 Covers the channel's own semantics: append-ordered recording, the
 `most_recent_output()` upstream-read (incl. the EVALUATOR_OPTIMIZER re-dispatch

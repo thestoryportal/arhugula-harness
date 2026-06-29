@@ -277,7 +277,7 @@ async def test_api_resume_parallelization_pause_restart_proof_round_trip(
       - branch-0 is NOT re-dispatched (recovered from the snapshot, obligation 7),
       - ONLY branch-1 is re-dispatched,
       - the resumed aggregate fuses the recovered branch-0 with the fresh branch-1.
-    Full-runtime witness through the public `api.resume` surface (C-RT-30)."""
+    Full-runtime witness through the public `api.resume` surface (C-RT-35)."""
     _RESUME_DISPATCHED.clear()
     config = _config_opt_in(tmp_path)
 

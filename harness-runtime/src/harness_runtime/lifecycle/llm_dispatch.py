@@ -258,7 +258,7 @@ def _coerce_payload(payload: Mapping[str, Any]) -> ProviderAgnosticPayload:
 
 _UPSTREAM_CONTEXT_PREFIX = "Upstream step output:\n"
 """Label prefixing the B-INTERSTEP upstream-output context message (runtime spec
-§14.21 C-RT-29). Lets a model (and a test) distinguish the injected prior-step
+§14.21 C-RT-34). Lets a model (and a test) distinguish the injected prior-step
 output from the step's own messages."""
 
 
@@ -269,7 +269,7 @@ def _inject_upstream_context_message(
     message into the FINAL provider ``kwargs["messages"]``, AFTER any leading
     ``role:"system"`` message.
 
-    B-INTERSTEP (runtime spec §14.21 C-RT-29). Operating on the final kwargs (NOT
+    B-INTERSTEP (runtime spec §14.21 C-RT-34). Operating on the final kwargs (NOT
     ``payload.messages``) is load-bearing, and mirrors the R-PM-1 system-prompt
     post-`params` injection: it runs AFTER ``kwargs.update(payload.params)`` so a
     ``params["messages"]`` escape-hatch override cannot silently drop it, and AFTER
@@ -444,7 +444,7 @@ class RuntimeLLMDispatcher:
     # `RunResult.cost_attribution` (runtime spec v1.53 §9 C-RT-09). None at unit-test
     # construction → the wrapper skips the append (no-op).
     cost_record_sink: SupportsCostRecordAppend | None = None
-    # B-INTERSTEP (runtime spec §14.21 C-RT-29) — run-scoped inter-step output
+    # B-INTERSTEP (runtime spec §14.21 C-RT-34) — run-scoped inter-step output
     # channel (the SAME `InterStepOutputChannel` instance the CP driver records
     # into, threaded by `materialize_llm_dispatcher_stage` from the mutable
     # bootstrap ctx). When bound + non-empty, `dispatch` injects the
@@ -871,7 +871,7 @@ class RuntimeLLMDispatcher:
                     "compose-time guard cannot see). CP spec v1.54 §3."
                 )
 
-        # --- B-INTERSTEP (runtime spec §14.21 C-RT-29): upstream-output read ---
+        # --- B-INTERSTEP (runtime spec §14.21 C-RT-34): upstream-output read ---
         # The immediately-prior step's output (the opt-in inter-step channel's
         # most-recent record). It is injected into the FINAL provider kwargs at the
         # translator layer (`_inject_upstream_context_message`), NOT into

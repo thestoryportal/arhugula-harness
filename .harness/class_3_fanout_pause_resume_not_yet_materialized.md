@@ -11,7 +11,7 @@
 
 Cleared CP spec §25.15.1 maps, byte-exact and unconditional:
 
-> `| pause | Halt the fan-out at a HITL/pause boundary (composes with C-CP-26 PauseResumeProtocol + C-RT-30 api.resume). … | **PAUSED** |`
+> `| pause | Halt the fan-out at a HITL/pause boundary (composes with C-CP-26 PauseResumeProtocol + C-RT-35 api.resume). … | **PAUSED** |`
 
 and §25.15.2 obligation 6: "`pause` → `RunStatus.PAUSED`".
 
@@ -19,7 +19,7 @@ The U-CP-88 impl, on a worker failure under `cascade_policy == pause` (reachable
 
 ## Why FAILED-now instead of the spec's PAUSED
 
-§25.15.1 promises `pause → PAUSED` "composing with C-CP-26 PauseResumeProtocol + C-RT-30 `api.resume`". For the LINEAR path that composition works: the driver captures a position-only C-CP-26 `PauseSnapshot` (single `step_index`) and `api.resume` re-enters from it. For a **fan-out**, that composition is not yet materializable:
+§25.15.1 promises `pause → PAUSED` "composing with C-CP-26 PauseResumeProtocol + C-RT-35 `api.resume`". For the LINEAR path that composition works: the driver captures a position-only C-CP-26 `PauseSnapshot` (single `step_index`) and `api.resume` re-enters from it. For a **fan-out**, that composition is not yet materializable:
 
 1. **Resume reconstruction is ledger-based (§25.15.2 obl. 7), not snapshot-based.** Fan-out resume must read each branch's persisted `terminal_status` (via the branch-scoped idempotency key) and skip the terminal branches / re-dispatch the rest. That **resume-re-entry path does not exist** — the non-linear strategies deliberately bypass the §25.3 prefix-replay / resume-detection (it is linear-only at HEAD; the strategy is resume-blind by design).
 2. **Completed-branch OUTPUTS are not persisted for a resume merge.** The ledger entries carry `action_id` / `idempotency_key` / `branch_metadata` (causality + terminal_status) — NOT the dispatch OUTPUT mapping. So even with the resume-re-entry, the aggregate of a resumed fan-out could not recover the already-completed branches' outputs without a new persistence mechanism (candidate: the `PauseSnapshot.state_summary`, shape TBD).

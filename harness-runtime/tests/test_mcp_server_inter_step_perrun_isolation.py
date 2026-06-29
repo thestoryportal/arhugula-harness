@@ -1,5 +1,5 @@
 """B-INTERSTEP-PERRUN-ISOLATION — per-run ContextVar isolation of the run-scoped
-inter-step output channel + cost accumulator (runtime spec §14.21 C-RT-29
+inter-step output channel + cost accumulator (runtime spec §14.21 C-RT-34
 invariant 7; B-INTERSTEP fork §3/§5).
 
 SUPERSEDES the B-INTERSTEP per-loop single-flight lock. Daemon-client mode

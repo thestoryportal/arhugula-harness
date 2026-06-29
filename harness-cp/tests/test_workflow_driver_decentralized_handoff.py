@@ -481,7 +481,7 @@ def test_decentralized_handoff_live_real_ledger_chain_valid(tmp_path: Path) -> N
 
 # ---------------------------------------------------------------------------
 # B-INTERSTEP-NONLINEAR — handoff-slice inter-step data flow (runtime spec
-# §14.21 C-RT-29). Single-owner sequential ⟹ recorded INLINE on the driver
+# §14.21 C-RT-34). Single-owner sequential ⟹ recorded INLINE on the driver
 # thread (like the SINGLE_THREADED_LINEAR / EVALUATOR_OPTIMIZER sites), NOT via
 # the #648 buffered-branch drain (the 3 genuinely-concurrent topologies need
 # that — registered follow-ons). The CP-level witness proves the PRODUCER wiring

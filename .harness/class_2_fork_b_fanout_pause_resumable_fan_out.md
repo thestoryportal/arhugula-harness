@@ -8,7 +8,7 @@
 
 ## What was built
 
-The cleared §25.15.1 row maps `pause → PAUSED` "composing with C-CP-26 PauseResumeProtocol + C-RT-30 `api.resume`", and §25.15.2 obligation 7 commits ledger-based resume reconstruction (skip terminal branches, re-dispatch the rest). For a fan-out this was **not materializable** (the interim Class-3 deviation): (1) a fan-out paused at the worker barrier has no single `step_index` capturing which branches completed vs. need re-dispatch (the non-linear strategies are resume-blind — they return before the linear `resume_at_step_index` prefix-replay); (2) completed-branch **outputs** do not survive in the ledger (causality + `terminal_status` only).
+The cleared §25.15.1 row maps `pause → PAUSED` "composing with C-CP-26 PauseResumeProtocol + C-RT-35 `api.resume`", and §25.15.2 obligation 7 commits ledger-based resume reconstruction (skip terminal branches, re-dispatch the rest). For a fan-out this was **not materializable** (the interim Class-3 deviation): (1) a fan-out paused at the worker barrier has no single `step_index` capturing which branches completed vs. need re-dispatch (the non-linear strategies are resume-blind — they return before the linear `resume_at_step_index` prefix-replay); (2) completed-branch **outputs** do not survive in the ledger (causality + `terminal_status` only).
 
 The build supplies both:
 
