@@ -44,6 +44,7 @@ dev = [
     #   name; OTel GenAI contrib instrumentation is split (opentelemetry-instrumentation-openai-v2,
     #   opentelemetry-instrumentation-google-genai, ...). Substitute the actual split package(s) at
     #   the AS/OD-axis units that require GenAI instrumentation. Logged as Class 3 informational.
+    "instructor>=1.15.4",
 ]
 
 [tool.uv]
