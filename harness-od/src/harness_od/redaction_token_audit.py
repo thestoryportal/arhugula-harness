@@ -4,6 +4,8 @@ This module turns an opaque redaction-token mapping into a signed OD
 `AuditLedgerEntry`. It is the durable audit-ledger arm for the provider-free
 token substrate in `redaction_tokenizer.py`; it does not classify semantic
 content and does not change the default strip-not-tokenize processor path.
+
+Authority: H_T-OD-4.
 """
 
 from __future__ import annotations

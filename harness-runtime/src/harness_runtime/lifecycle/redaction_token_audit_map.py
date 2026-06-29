@@ -1,4 +1,7 @@
-"""Runtime-backed R-008 redaction-token map persistence."""
+"""Runtime-backed R-008 redaction-token map persistence.
+
+Authority: H_T-OD-4.
+"""
 
 from __future__ import annotations
 

@@ -7,6 +7,8 @@ supplies:
 - a protocol plus Anthropic Files API adapter,
 - Messages and Batch API file reference helpers, and
 - a `files.operation` span helper carrying the AS `files.*` namespace.
+
+Authority: C-AS-14 §14.6 plus H_T-AS-8e and H_T-CP-17.
 """
 
 from __future__ import annotations

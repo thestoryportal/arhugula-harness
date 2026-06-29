@@ -5,6 +5,7 @@ CP-axis modules consume AS-owned policy and tool-contract carriers such as
 ``BlastRadiusTier``, ``ToolContract``, and ``fetch_secret``. This composer
 materializes the runtime registry for the AS substrate exports that declare
 the Control Plane as a consuming axis.
+Authority: H_T-CXA-3 plus the U-CP-68 -> U-AS-03 CP-to-AS ToolContract seam.
 
 The composer deliberately does not invent a callback path. Its job is to bind
 the AS terminal export manifest into stage 6, fail fast if the CP-consumed

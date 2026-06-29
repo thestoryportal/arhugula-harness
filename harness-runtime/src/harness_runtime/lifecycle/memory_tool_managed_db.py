@@ -1,5 +1,7 @@
 """R-830 — managed SQL Memory tool backend.
 
+Authority: C-RT-22, U-RT-80, and H_T-CP-16.
+
 Implements the MANAGED_CLOUD ``MemoryToolStorageBackend.DATABASE`` remainder
 for PostgreSQL-compatible managed databases. The backend keeps the same
 filesystem-style ``/memories/...`` CRUD semantics as the filesystem, SQLite,
