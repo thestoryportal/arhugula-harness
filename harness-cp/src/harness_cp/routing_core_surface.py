@@ -11,6 +11,9 @@ boundary. It orchestrates layered routing -> provider dispatch -> response
 materialization. Routing-strategy resolution delegates to U-CP-05; provider
 dispatch delegates to provider SDK adapters (out of scope at the CP plan; the
 AS plan declares the MCP server SDK boundaries).
+Layer-3 LLM_AS_ROUTER fall-through materialization lands here as U-CP-100:
+`infer` accepts an injected `router` callable and routes the L3 sentinel through
+that callable before response materialization.
 
 Note on `InferenceRequest`: this is the C-CP-01 §1.1 *API envelope* — a
 6-field record carrying the routing-discriminator fields plus the

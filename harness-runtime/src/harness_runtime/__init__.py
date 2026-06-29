@@ -10,6 +10,8 @@ this package owns runtime composition of the axis libraries:
 - Cross-axis seam wiring (C-RT-12; 24 phase-2-runtime edges).
 - `run()` Python API (F-P2-2; C-RT-08).
 
+Foundational package scaffold traceability lands here as U-RT-01: the runtime
+workspace package is importable and exposes the composition-root public API.
 Public API surface lands at L8 close (U-RT-42 — `run()` signature + `RunResult`
 shape) and L9 (U-RT-43 — bootstrap orchestrator body).
 """

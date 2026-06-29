@@ -248,7 +248,7 @@ async def hitl_gate(
     palette: frozenset[HITLResponse] | None = None,
     timeout: int | None = None,
 ) -> HITLGateResult:
-    """Canonical §17.4 HITL gate signature (C-CP-17 §17.4 NEW at spec v1.10).
+    """Canonical §17.4 HITL gate signature (U-CP-71; C-CP-17 §17.4 NEW at spec v1.10).
 
     Pure signature materialization closing the historical
     `NotImplementedError` left at v1.2 + carried through v1.9. The gate
