@@ -2594,7 +2594,7 @@ R-CL-P6:
 R-CL-Q1:
   title: Phase Q1 — DevEx + whole-codebase code-review & simplification sweep
   surface: VII
-  status: ACTIVE      # 2026-06-28 — R-FS-1 resolved after Tier-1 manual sign-off; Q1 is the next full-harness quality/close frontier.
+  status: RESOLVED    # closed 2026-06-29 by PR #833 (`f2831cbe`): final structured Q1 review artifact covers all seven packages plus tools/, justfile, and harness.toml.example; clean-checkout-to-green DevEx path and provider-free `just check` verified.
   depends_on: [R-CL-P4, R-CL-P5, R-CL-P6, R-CC-1, R-PM-1, R-FS-1]   # +R-FS-1 (full-spec build program) per §5.0. P1/P2/P3 stay dropped as R-CC-1-subsumed (their open items reopened AS BUILD under R-FS-1, not as Q1 deps). R-FS-1 is now resolved; Q1 admits because the full spec is built.
   blocks: [R-CL-Q4]
   posture: phase-7
@@ -2610,7 +2610,7 @@ R-CL-Q1:
 R-CL-Q2:
   title: Phase Q2 — security testing + review
   surface: VII
-  status: BLOCKED
+  status: ACTIVE      # 2026-06-29 — Q1 resolved; security testing/review is the next selected quality-close frontier.
   depends_on: [R-CL-P1, R-CL-P2, R-CL-P3, R-CL-P4, R-CL-P5, R-CL-P6]
   blocks: [R-CL-Q4]
   posture: phase-7
