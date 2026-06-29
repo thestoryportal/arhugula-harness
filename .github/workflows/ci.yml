@@ -323,6 +323,30 @@ jobs:
         working-directory: tools
         run: uv run python -m pytest semantic_overlay/test_overlay.py -q
 
+  q1-review-gate:
+    # R-CL-Q1 — provider-free structured review artifact gate. This tool lives
+    # outside pytest's 7 package testpaths, so CI pins its tests explicitly.
+    runs-on: ubuntu-latest
+    name: Q1 review gate (structured artifact) — blocking
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv + Python 3.12
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Sync workspace
+        run: uv sync --all-packages
+
+      - name: Q1 review-gate tests
+        run: uv run python -m pytest tools/test_q1_review_gate.py -q
+
+      - name: Q1 review-gate schema is JSON
+        run: uv run python tools/q1_review_gate.py --schema | uv run python -m json.tool >/dev/null
+
   codex-context-guard:
     # R-600-codex-context-guard — Codex-side context-rot gate. The guard is stdlib-only
     # so the runtime check uses /usr/bin/python3; pytest still runs under uv for the

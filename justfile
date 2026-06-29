@@ -140,6 +140,14 @@ closure-gate:
 closure-gate-check:
     uv run python tools/closure_gate.py --check
 
+# ─── R-CL-Q1 structured review artifact gate ────────────────────────────────
+# Provider-free checker for the Q1 review/simplification evidence artifact.
+q1-review-check report:
+    @uv run python tools/q1_review_gate.py --check {{report}}
+
+q1-review-schema:
+    @uv run python tools/q1_review_gate.py --schema
+
 # ─── operator-facing CLI smoke ─────────────────────────────────────────────
 
 # One-shot run of a workflow manifest. Example: just run examples/minimal.toml
