@@ -96,6 +96,27 @@ def test_batch_52_backflow_rows_are_retired(data):
     assert "SB_INDEFINITE" not in sl.derive(data)["by_disposition"]
 
 
+def test_as_axis_claude_uses_live_batch_52_posture(data):
+    rows = {r["id"]: r for r in data["substitutions"]}
+    derived = sl.derive(data)
+    text = (sl.DEFAULT_LEDGER.parents[1] / "harness-as" / "CLAUDE.md").read_text(encoding="utf-8")
+
+    assert derived["axis_rowcount"]["AS"] == 11
+    assert derived["axis_retired"]["AS"] == 11
+    assert ".harness/substitutions.yaml" in text
+    assert "tools/substitution_ledger.py" in text
+    assert "2 / 11 STILL-BOUNDED-INDEFINITELY" not in text
+
+    lines = text.splitlines()
+    for row_id in ("H_T-AS-8e", "H_T-AS-8f"):
+        assert rows[row_id]["disposition"] == "SUBSTANTIVE_RETIRED"
+        assert rows[row_id]["batch"] == "batch-52"
+        row_line = next(line for line in lines if line.startswith(f"| {row_id} "))
+        assert "SUBSTANTIVE_RETIRED" in row_line
+        assert "batch-52" in row_line
+        assert "STILL-BOUNDED" not in row_line
+
+
 def test_batch_53_backflow_rows_are_retired(data):
     rows = {r["id"]: r for r in data["substitutions"]}
     for row_id in ("H_T-OD-4", "H_T-CXA-4"):
