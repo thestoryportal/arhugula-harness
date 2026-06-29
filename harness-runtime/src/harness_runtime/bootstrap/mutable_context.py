@@ -431,7 +431,7 @@ class _MutableHarnessContext:
     ``ManagedAgentsClientProtocol | None`` surface."""
 
     inter_step_output_channel: Any = None
-    """B-INTERSTEP (R-FS-1 standalone arc; runtime spec §14.21 C-RT-29, new at
+    """B-INTERSTEP (R-FS-1 standalone arc; runtime spec §14.21 C-RT-34, new at
     v1.59) — run-scoped inter-step output channel (the shared run-context the
     dispatcher reads). Constructed + bound at stage 5 LOOP_INIT ONLY when
     ``RuntimeConfig.inter_step_data_flow`` is True; ``None`` (default) = opt-out,

@@ -1,7 +1,7 @@
 """B-FANOUT-PAUSE (R-FS-1) — resumable `cascade_policy=pause` fan-out.
 
 Materializes the cleared CP spec §25.15.1 `pause → PAUSED` row ("composes with
-C-CP-26 PauseResumeProtocol + C-RT-30 `api.resume`") for the `ORCHESTRATOR_WORKERS`
+C-CP-26 PauseResumeProtocol + C-RT-35 `api.resume`") for the `ORCHESTRATOR_WORKERS`
 fan-out, flipping the interim `class_3_fanout_pause_resume_not_yet_materialized`
 deviation (FAILED + `not-yet-materialized`) to a genuine resumable PAUSED.
 

@@ -33,7 +33,7 @@ The resolution **composes entirely with committed primitives** — DRAIN protoco
 5. **High-blast-radius pre-dispatch gating.** Effectful steps gate before dispatch via the committed chain (C-AS-02 four-tier `sandbox_tier_floor` → C-CP-19 §19.1 `gate_level` max() → C-CP-16 HITL); `external-irreversible → tier-4 → mandatory HITL`. cascade-cancel composes this gate, does not re-invent it.
 6. **Run-level status.** `cascade-cancel` on a branch failure → run-level `RunStatus = FAILED`. (Distinct from `proceed` → `PARTIAL` + `degraded=true`, and `pause` → `PAUSED`. `PARTIAL` belongs to `proceed`, NOT cascade-cancel — advisor-caught, confirmed by C1.)
 7. **Resume-idempotency.** Branch-scoped idempotency keys (`+ branch_path` in the key composition) so `api.resume` reads each branch's persisted `terminal_status` and MUST NOT re-dispatch a branch that is `cancelled` / `completed` / `timed_out`.
-8. **`pause` / `proceed` composition.** `pause` halts the fan-out at a HITL/pause boundary (composes with C-RT-30 `api.resume`); `proceed` records the branch failure and lets siblings finish, aggregator sees a partial set with `degraded=true` (Google SRE graceful-degradation).
+8. **`pause` / `proceed` composition.** `pause` halts the fan-out at a HITL/pause boundary (composes with C-RT-35 `api.resume`); `proceed` records the branch failure and lets siblings finish, aggregator sees a partial set with `degraded=true` (Google SRE graceful-degradation).
 
 ## Decorrelated review — 3-way convergence
 

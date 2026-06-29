@@ -286,7 +286,7 @@ async def test_api_resume_evaluator_optimizer_pause_restart_proof_round_trip(
       - the completed prefix (gen0, eval0) is NOT re-dispatched (recovered),
       - ONLY the failed-then-recovered iteration (generate + evaluate) is re-dispatched,
       - the resumed loop terminates SUCCESS at the accepting evaluation.
-    Full-runtime witness through the public `api.resume` surface (C-RT-30)."""
+    Full-runtime witness through the public `api.resume` surface (C-RT-35)."""
     _RESUME_DISPATCHED.clear()
     config = _config_opt_in(tmp_path)
 

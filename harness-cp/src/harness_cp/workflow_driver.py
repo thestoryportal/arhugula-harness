@@ -560,7 +560,7 @@ class DriverContext(Protocol):
     # workflow / test ctx), the sidecar stays `None`.
     procedural_tier_snapshot_resolver: object | None
 
-    # B-INTERSTEP (runtime spec §14.21 C-RT-29) — run-scoped inter-step output
+    # B-INTERSTEP (runtime spec §14.21 C-RT-34) — run-scoped inter-step output
     # channel (the shared run-context a dispatcher reads). The driver records each
     # completed step's output here; the runtime LLM dispatcher reads
     # `most_recent_output()` and injects the prior step's output into the
@@ -658,7 +658,7 @@ def _compute_step_idempotency_key(
 def _record_inter_step_output(
     ctx: DriverContext, step_id: str, step_output: Mapping[str, Any]
 ) -> None:
-    """B-INTERSTEP (runtime spec §14.21 C-RT-29) — record a completed step's output
+    """B-INTERSTEP (runtime spec §14.21 C-RT-34) — record a completed step's output
     to the run-scoped inter-step channel so a subsequent dispatch can read it.
 
     Operator-opt-in: `ctx.inter_step_output_channel` is `None` by default
@@ -2010,7 +2010,7 @@ def cascade_policy_run_status(policy: CascadePolicy) -> RunStatus:
       contracted ``RunResult`` field).
     - ``PAUSE`` → ``RunStatus.PAUSED``: the fan-out halts at the HITL/pause
       boundary; composes with the existing PauseResumeProtocol + ``api.resume``
-      (C-RT-30) — this mapping does NOT re-build pause-snapshot capture.
+      (C-RT-35) — this mapping does NOT re-build pause-snapshot capture.
 
     A clean fan-out (no branch failure) is the strategy's normal ``SUCCESS`` path
     and does not consult this function.
@@ -2032,7 +2032,7 @@ def resume_should_redispatch(
     entry (``None`` — it never reached a dispatch boundary, e.g. a fan-out
     interrupted before this branch ran) is re-dispatch-eligible.
 
-    ``api.resume`` (C-RT-30) reads each branch's persisted ``terminal_status``
+    ``api.resume`` (C-RT-35) reads each branch's persisted ``terminal_status``
     via the branch-scoped idempotency key (U-CP-83) and consults this predicate
     before re-dispatching: ``True`` ⟹ eligible; ``False`` ⟹ already-terminal,
     skip.
@@ -4789,7 +4789,7 @@ def _execute_workflow_body(
 
         # Accumulate step output under its step id for terminal state.
         accumulated[str(step.step_id)] = dict(step_output)
-        # B-INTERSTEP (runtime spec §14.21 C-RT-29) — also record to the run-scoped
+        # B-INTERSTEP (runtime spec §14.21 C-RT-34) — also record to the run-scoped
         # inter-step channel (opt-in; no-op when unbound) so a subsequent step's
         # dispatch can read this step's output as upstream context.
         _record_inter_step_output(ctx, str(step.step_id), step_output)
@@ -8018,7 +8018,7 @@ def _execute_parallelization(
 # loop re-dispatching the generate step IS the regenerate. Inter-step DATA flow
 # (the generate draft → the evaluator's input; the evaluator's feedback → the
 # next generate's input) is realized by **B-INTERSTEP** (runtime spec §14.21
-# C-RT-29, new at v1.59) — the runtime/dispatcher concern this comment originally
+# C-RT-34, new at v1.59) — the runtime/dispatcher concern this comment originally
 # named ("a shared run context the dispatcher reads"). The driver records each
 # step's opaque output to `ctx.inter_step_output_channel` (the
 # `_record_inter_step_output` call in `_dispatch_and_buffer` above; opt-in via
@@ -8457,7 +8457,7 @@ def _execute_evaluator_optimizer(
             raise
         except Exception as dispatch_exc:
             raise _EvaluatorOptimizerStepDispatchError(dispatch_exc) from dispatch_exc
-        # B-INTERSTEP (runtime spec §14.21 C-RT-29) — record this step's output to
+        # B-INTERSTEP (runtime spec §14.21 C-RT-34) — record this step's output to
         # the run-scoped inter-step channel BEFORE the next dispatch so the EO data
         # flow is real: the evaluate dispatch reads the generate draft, and the
         # next iteration's regenerate reads the evaluator feedback (append-ordered
@@ -11010,7 +11010,7 @@ def _execute_decentralized_handoff(
     Terminal when no further handoff — structural: the declared step list IS the
     handoff sequence, terminal = after the last stage (no continue-signal read from
     step output — terminal CONTROL flow stays structural). Inter-step DATA flow,
-    however, IS wired (B-INTERSTEP-NONLINEAR handoff slice, §14.21 C-RT-29): each
+    however, IS wired (B-INTERSTEP-NONLINEAR handoff slice, §14.21 C-RT-34): each
     completed stage's output is recorded so the next stage-expert's dispatch reads
     it as upstream context (single-owner sequential → recorded inline like the
     linear/EO sites, no buffered-branch drain). On a stage failure the chain stops (`cascade_policy`
@@ -11444,7 +11444,7 @@ def _execute_decentralized_handoff(
             procedural_tier_snapshot_ref=snapshot_ref,
         )
         stage_outputs[str(step.step_id)] = output
-        # B-INTERSTEP-NONLINEAR (handoff slice; runtime spec §14.21 C-RT-29) —
+        # B-INTERSTEP-NONLINEAR (handoff slice; runtime spec §14.21 C-RT-34) —
         # record this completed stage's output so the NEXT stage's dispatch reads
         # it as upstream context (the runtime LLM dispatcher injects
         # `most_recent_output()`; §14.21.2). Single-owner sequential on the driver

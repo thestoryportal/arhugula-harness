@@ -212,7 +212,7 @@ class _Ctx:
         self.tracer_provider = NoOpTracerProvider()
         self.validator_framework = None
         self.tenant_id = None
-        # B-INTERSTEP (runtime spec §14.21 C-RT-29) — None (default) → the driver's
+        # B-INTERSTEP (runtime spec §14.21 C-RT-34) — None (default) → the driver's
         # `getattr(..., None)` read records nothing; a bound channel exercises the
         # producer half (the driver records each step's output during the EO run).
         self.inter_step_output_channel = inter_step_output_channel
@@ -617,7 +617,7 @@ def test_evaluator_optimizer_live_e2e_real_ledger_chain_valid(
 
 
 # ---------------------------------------------------------------------------
-# B-INTERSTEP (runtime spec §14.21 C-RT-29) — inter-step DATA flow (producer).
+# B-INTERSTEP (runtime spec §14.21 C-RT-34) — inter-step DATA flow (producer).
 #
 # The CP driver records each completed step's output to a run-scoped channel so a
 # subsequent dispatch can read it. harness-cp must NOT depend on harness-runtime,

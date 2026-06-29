@@ -136,7 +136,7 @@ Each pattern is materialized as a **driver strategy** selected by `manifest_entr
 | `cascade_policy` | On a branch failure | Sibling branches | Ledger record |
 |---|---|---|---|
 | `proceed` | Record failure; aggregator sees a partial result set | Run to completion | All branches append; aggregator entry notes the partial set |
-| `pause` | Halt the fan-out at a HITL/pause boundary (composes with the existing pause/resume, C-RT-30 `api.resume`) | Allowed to finish in-flight, then pause | Pause entry + in-flight branch entries |
+| `pause` | Halt the fan-out at a HITL/pause boundary (composes with the existing pause/resume, C-RT-35 `api.resume`) | Allowed to finish in-flight, then pause | Pause entry + in-flight branch entries |
 | `cascade-cancel` | **Cancel in-flight siblings** (`asyncio.TaskGroup` cancellation), fail the fan-out | Cancelled | Each cancelled branch appends a terminal entry carrying a **persisted** cancellation marker (audit completeness — a cancelled branch is *not* a silent gap) |
 
 **Five design commitments for `cascade-cancel`** (commitments 2–4 are Codex-caught implementation-contract requirements, §9; commitment 5 is the advisor-caught effectful-cancellation blast radius — naming them is what makes D3 *implementable* and *honest*, not merely asserted):

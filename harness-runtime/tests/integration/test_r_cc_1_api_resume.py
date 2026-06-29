@@ -1,6 +1,6 @@
 """R-CC-1 arc #3 cascade step 1 — `api.resume(...)` workflow-layer durable-resume.
 
-C-RT-30 (NEW): `harness_runtime.resume(workflow, *, pause_snapshot, ...)` — the
+C-RT-35 (NEW): `harness_runtime.resume(workflow, *, pause_snapshot, ...)` — the
 Track-A sibling of `run()` that continues a paused workflow from a caller-supplied
 `PauseSnapshot` after a fresh bootstrap (a process restart). Design:
 `.harness/r-cc-1-arc-3-workflow-durable-resume-design-v1.md` §7a.
@@ -289,7 +289,7 @@ def test_build_run_result_surfaces_paused() -> None:
     `RunResult(status='paused')` and carries the `pause_snapshot` through.
 
     Guards the `_CP_TO_RT_STATUS` PAUSED mapping (which previously had no entry
-    → KeyError on any paused workflow) + the snapshot carry-through. C-RT-30 /
+    → KeyError on any paused workflow) + the snapshot carry-through. C-RT-35 /
     C-RT-09."""
     snapshot = PauseSnapshot(
         workflow_id=_WORKFLOW_ID,
@@ -393,7 +393,7 @@ async def test_api_resume_corrupt_snapshot_surfaces_failed(
 ) -> None:
     """A snapshot with a mutated `snapshot_hash` (transit/storage corruption)
     → `attempt_resume` returns FAILED before any step runs → `api.resume`
-    surfaces `RunResult(status='failed')` carrying the CP fail-class. C-RT-30
+    surfaces `RunResult(status='failed')` carrying the CP fail-class. C-RT-35
     `RT-FAIL-RESUME-SNAPSHOT-CORRUPTION` family."""
     _ = _patched_runtime
     config = _config_opt_in(tmp_path)

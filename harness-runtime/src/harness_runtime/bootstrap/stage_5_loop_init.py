@@ -239,7 +239,7 @@ async def execute(
     )
     materialize_r_cxa_2_producer_loop_stage(ctx, config)
 
-    # B-INTERSTEP (runtime spec §14.21 C-RT-29) + B-INTERSTEP-PERRUN-ISOLATION —
+    # B-INTERSTEP (runtime spec §14.21 C-RT-34) + B-INTERSTEP-PERRUN-ISOLATION —
     # bind the stable run-scoped channel PROXY when opted-in. The SAME proxy is
     # threaded into the LLM dispatcher (the consumer) below + read by the CP driver
     # (the producer) via `DriverContext.inter_step_output_channel`; both
@@ -295,7 +295,7 @@ async def execute(
             # from COST_ACCUM_VAR), which `_build_run_result` reads post-join →
             # `RunResult.cost_attribution` (runtime v1.53 §9).
             cost_record_sink=ctx.cost_record_accumulator,
-            # B-INTERSTEP (runtime spec §14.21 C-RT-29) — thread the SAME channel
+            # B-INTERSTEP (runtime spec §14.21 C-RT-34) — thread the SAME channel
             # instance the CP driver records into; the dispatcher reads
             # `most_recent_output()` and injects it into the dispatched payload.
             # None (opt-out) → no injection (byte-identical to pre-v1.59).

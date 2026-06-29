@@ -2,7 +2,7 @@
 PARALLELIZATION (peer fan-out) topology.
 
 Materializes the cleared CP spec §25.15.1 `pause → PAUSED` row ("composes with
-C-CP-26 PauseResumeProtocol + C-RT-30 `api.resume`") for PARALLELIZATION, flipping
+C-CP-26 PauseResumeProtocol + C-RT-35 `api.resume`") for PARALLELIZATION, flipping
 the interim `parallelization-pause-resume-not-yet-materialized` FAILED to a genuine
 resumable PAUSED — the `_execute_orchestrator_workers` (U-CP-88 / B-FANOUT-PAUSE)
 shape applied PARALLELIZATION-shaped: NO orchestrator `steps[0]`, every step is a

@@ -116,7 +116,7 @@ _CURRENT_TOOL_CTX: contextvars.ContextVar[Context[Any, Any] | None] = contextvar
     "harness.current_tool_ctx", default=None
 )
 
-# B-INTERSTEP-PERRUN-ISOLATION (runtime spec §14.21 C-RT-29 invariant 7;
+# B-INTERSTEP-PERRUN-ISOLATION (runtime spec §14.21 C-RT-34 invariant 7;
 # B-INTERSTEP fork §3/§5) — SUPERSEDES B-INTERSTEP's per-loop single-flight
 # lock. The run-scoped inter-step channel + cost accumulator are now ISOLATED
 # per run via ContextVars (`INTER_STEP_CHANNEL_VAR` / `COST_ACCUM_VAR`, set in
@@ -345,7 +345,7 @@ def materialize_mcp_server_stage(
                     f"invoking the `run_workflow` tool per AC #5."
                 )
 
-        # C-RT-30 (R-CC-1 arc #3) resume path. `api.resume()` binds an
+        # C-RT-35 (R-CC-1 arc #3) resume path. `api.resume()` binds an
         # in-process `_resume_pause_snapshot` on `_state` (NOT over the MCP
         # wire — mirrors `_harness_ctx`). When present, this invocation is a
         # resume: reuse the snapshot's `run_id` for audit/ledger coherence
@@ -362,7 +362,7 @@ def materialize_mcp_server_stage(
             _holder = getattr(harness_ctx, "resume_context_holder", None)
             if _holder is not None:
                 _holder.set(_resume_context)
-        # B-INTERSTEP-PERRUN-ISOLATION (runtime spec §14.21 C-RT-29 invariant 7;
+        # B-INTERSTEP-PERRUN-ISOLATION (runtime spec §14.21 C-RT-34 invariant 7;
         # B-INTERSTEP fork §3/§5) — establish THIS run's isolated holders in their
         # ContextVars before dispatch. The set propagates into the
         # `asyncio.to_thread(execute_workflow)` worker via `contextvars.copy_

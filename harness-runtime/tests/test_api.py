@@ -201,14 +201,14 @@ def test_run_result_all_required_fields_per_c_rt_09() -> None:
         # cross-family family-tag rollup (LLM-subtotal partition).
         "cost_attribution_by_provider_discriminator",
         "failure_cause",
-        # NEW v1.45 (C-RT-30, R-CC-1 arc #3) — optional pause-snapshot surface.
+        # NEW v1.45 (C-RT-35, R-CC-1 arc #3) — optional pause-snapshot surface.
         "pause_snapshot",
     }
 
 
 def test_run_result_status_literal_values() -> None:
     """`status: Literal['completed', 'drained', 'failed', 'paused', 'partial']`
-    per C-RT-09 (v1.45 added 'paused' for C-RT-30 resume; U-RT-113 added
+    per C-RT-09 (v1.45 added 'paused' for C-RT-35 resume; U-RT-113 added
     'partial' for R-FS-1 B1 proceed-cascade graceful degradation). The
     `pause_snapshot is not None iff status=='paused'` invariant is documented,
     not model-enforced — same posture as the `status=='failed' -> failure_cause`

@@ -36,7 +36,7 @@ C1 (orchestration / canonical-synthesis capability-completeness) and C9 (reliabi
 |---|---|
 | Deterministic fold (the invariant) | `harness-cp/src/harness_cp/workflow_driver.py` — `_aggregate_orchestrator_workers` (~:815-890), `_aggregate_parallelization`, fan-out+aggregation (~:1668), the B-INTERSTEP registered-build-arc comment (~:1799) |
 | C-CP-25 §25.11/§25.12 contract | `design-substrate/Spec_Control_Plane_v1_52.md` (head; C-CP-25 §25.x — regenerate-with-feedback + deterministic composition) |
-| §14.21 `InterStepOutputChannel` (C-RT-29) — BUILT, per-run isolated (v1.64) | `harness-runtime/src/harness_runtime/lifecycle/inter_step_output_channel.py`; `design-substrate/Spec_Harness_Runtime_v1.md` §14.21.1-.7 |
+| §14.21 `InterStepOutputChannel` (C-RT-34) — BUILT, per-run isolated (v1.64) | `harness-runtime/src/harness_runtime/lifecycle/inter_step_output_channel.py`; `design-substrate/Spec_Harness_Runtime_v1.md` §14.21.1-.7 |
 | §14.23 `EngineOutputStore` (C-RT-32) — durable replay store, RESERVE-before-COMMIT, fail-closed | `design-substrate/Spec_Harness_Runtime_v1.md` §14.23 (lineage v1.63/v1.65/v1.74) |
 | #705 HOLLOW resolution + B-POSTJOIN registration | `design-substrate/Spec_Harness_Runtime_v1.md` §14.21.5 inv-4 / §14.21.7 (v1.74 status posture, lines ~5-9) |
 | §5.2 hash-chain (6-field state-ledger entries) | IS spec `design-substrate/Spec_Information_Substrate_v1.md` §5.2 |

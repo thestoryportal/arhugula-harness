@@ -3113,7 +3113,7 @@ async def test_b4_slice4_per_step_role_override_full_stack_e2e() -> None:
 
 
 # ---------------------------------------------------------------------------
-# B-INTERSTEP (runtime spec §14.21 C-RT-29) — inter-step output injection.
+# B-INTERSTEP (runtime spec §14.21 C-RT-34) — inter-step output injection.
 #
 # Genuine non-vacuity: the REAL `RuntimeLLMDispatcher.dispatch` path injects the
 # immediately-prior step's output into the ACTUAL provider call's `messages` when

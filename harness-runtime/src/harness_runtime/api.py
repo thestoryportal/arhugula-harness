@@ -135,7 +135,7 @@ class HarnessDraining(Exception):  # noqa: N818 — domain-anchored name
 
 class ResumeProtocolNotBoundError(Exception):
     """`RT-FAIL-RESUME-PROTOCOL-NOT-BOUND` — `resume()` called without the
-    pause/resume protocol opted in (C-RT-30).
+    pause/resume protocol opted in (C-RT-35).
 
     Resume requires `config.pause_resume_protocol_config` (the same opt-in
     that produced the pause). Without it the driver's entry-point resume
@@ -147,7 +147,7 @@ class ResumeProtocolNotBoundError(Exception):
 
 class ResumeWorkflowMismatchError(Exception):
     """`RT-FAIL-RESUME-WORKFLOW-MISMATCH` — `pause_snapshot.workflow_id` does
-    not match the resumed `workflow.workflow_id` (C-RT-30).
+    not match the resumed `workflow.workflow_id` (C-RT-35).
 
     A snapshot's `snapshot_hash` validates against its OWN embedded fields, so
     a snapshot from workflow A would otherwise be applied (A's `run_id` +
@@ -158,7 +158,7 @@ class ResumeWorkflowMismatchError(Exception):
 
 class ResumeStepIndexOutOfRangeError(Exception):
     """`RT-FAIL-RESUME-STEP-INDEX-OUT-OF-RANGE` — `pause_snapshot.step_index`
-    is not a valid step of the resumed `workflow` (C-RT-30).
+    is not a valid step of the resumed `workflow` (C-RT-35).
 
     If the supplied workflow changed since the pause so `step_index` is `< 0`
     or `>= len(workflow.steps)`, the driver's `resume_at_step_index` would slice
@@ -170,7 +170,7 @@ class ResumeStepIndexOutOfRangeError(Exception):
 
 class ResumeArgsError(Exception):
     """`RT-FAIL-RESUME-ARGS` — `resume()` was not given exactly one snapshot
-    source (C-RT-30, R-CC-1 arc #3 cascade step 2).
+    source (C-RT-35, R-CC-1 arc #3 cascade step 2).
 
     `resume()` accepts EITHER a caller-supplied `pause_snapshot` (cascade step 1)
     OR a `resume_handle` that the harness reads back from its own durable store
@@ -183,7 +183,7 @@ class ResumeArgsError(Exception):
 
 class ResumeHandleUnknownError(Exception):
     """`RT-FAIL-RESUME-HANDLE-UNKNOWN` — no durable `PauseSnapshot` is journaled
-    for the supplied `resume_handle` (C-RT-30, R-CC-1 arc #3 cascade step 2).
+    for the supplied `resume_handle` (C-RT-35, R-CC-1 arc #3 cascade step 2).
 
     The harness-owned `JournalWorkflowPauseStore` (co-located under the resolved
     `STATE_LEDGER` dir) has no record for the workflow_id, or its latest record
@@ -310,7 +310,7 @@ class RunResult(BaseModel):
     status: Literal["completed", "drained", "failed", "paused", "partial"]
     """Terminal status of the workflow execution.
 
-    `'paused'` (C-RT-30, R-CC-1 arc #3) is a non-terminal outcome: a
+    `'paused'` (C-RT-35, R-CC-1 arc #3) is a non-terminal outcome: a
     workflow-layer pause (DURABLE_ASYNC HITL gate / EXPLICIT_OPERATOR) was
     captured; `pause_snapshot` is populated for `harness_runtime.resume(...)`.
     Type-widen of the existing Literal — minor bump per C-RT-09 §9.
@@ -388,7 +388,7 @@ class RunResult(BaseModel):
 
     pause_snapshot: PauseSnapshot | None = None
     """The captured workflow-layer `PauseSnapshot` when `status == 'paused'`
-    (C-RT-30, R-CC-1 arc #3); `None` otherwise. The caller persists it and
+    (C-RT-35, R-CC-1 arc #3); `None` otherwise. The caller persists it and
     passes it to `harness_runtime.resume(workflow, pause_snapshot=...)` to
     continue the workflow after a process restart (workflow-layer
     durable-resume). Optional field with default — minor bump per C-RT-09 §9."""
@@ -596,7 +596,7 @@ async def run(
 
     async with _run_lock:
         resolved_config = config if config is not None else _default_config()
-        # B-INTERSTEP-PERRUN-ISOLATION (runtime spec §14.21 C-RT-29 invariant 7) —
+        # B-INTERSTEP-PERRUN-ISOLATION (runtime spec §14.21 C-RT-34 invariant 7) —
         # establish THIS run's isolated cost accumulator in `COST_ACCUM_VAR` for
         # the whole run. The set propagates into the `run_workflow` tool handler +
         # its `asyncio.to_thread` worker (so the per-dispatch cost wrappers, which
@@ -684,7 +684,7 @@ def _read_durable_pause_snapshot(
     workflow: WorkflowObject,
     resume_handle: str,
 ) -> PauseSnapshot | None:
-    """Read the latest durably-journaled `PauseSnapshot` for the handle (C-RT-30).
+    """Read the latest durably-journaled `PauseSnapshot` for the handle (C-RT-35).
 
     Resolves the pause-journal directory the SAME way the stage-5 factory does at
     capture — `<STATE_LEDGER resolved dir>/pause-journal` for this workflow's
@@ -720,7 +720,7 @@ async def resume(
     resume_context: ResumeContext | None = None,
     config: RuntimeConfig | None = None,
 ) -> RunResult:
-    """Resume a paused workflow — caller-supplied snapshot OR durable-store handle (C-RT-30).
+    """Resume a paused workflow — caller-supplied snapshot OR durable-store handle (C-RT-35).
 
     The workflow-layer durable-resume Track-A sibling of `run()` (R-CC-1
     arc #3). `run()` surfaces `RunResult(status='paused', pause_snapshot=...)`
@@ -797,7 +797,7 @@ async def resume(
     surfaces as `RunResult(status='failed')` with the CP fail-class
     (`CP-FAIL-PAUSE-SNAPSHOT-CORRUPTION` / `CP-FAIL-RESUME-MATERIAL-DIFF-
     DETECTED`) on `failure_cause.validator_fail_class` — the driver returns
-    FAILED before any step runs (`RT-FAIL-RESUME-*` family, C-RT-30).
+    FAILED before any step runs (`RT-FAIL-RESUME-*` family, C-RT-35).
     """
     from harness_runtime.drain import is_process_drained
 
@@ -813,27 +813,27 @@ async def resume(
         )
 
     # Detect-then-refuse: EXACTLY ONE snapshot source. Both → ambiguous; neither
-    # → nothing to resume. C-RT-30 cascade step 2.
+    # → nothing to resume. C-RT-35 cascade step 2.
     if (pause_snapshot is None) == (resume_handle is None):
         _supplied = "both" if pause_snapshot is not None else "neither"
         raise ResumeArgsError(
             "resume() requires exactly one of `pause_snapshot` (caller-supplied) "
             f"or `resume_handle` (harness durable-store read); got {_supplied} "
-            "(C-RT-30)."
+            "(C-RT-35)."
         )
 
     # Detect-then-refuse: resume REQUIRES the pause/resume opt-in (the same
     # config that produced the pause). Without it the driver's entry-point
     # resume detection is inert and the workflow would SILENTLY re-run from
     # step 0 — re-executing completed prefix steps + side effects. Fail fast
-    # (pre-bootstrap) rather than silently re-run. C-RT-30.
+    # (pre-bootstrap) rather than silently re-run. C-RT-35.
     resolved_config = config if config is not None else _default_config()
     if resolved_config.pause_resume_protocol_config is None:
         raise ResumeProtocolNotBoundError(
             "resume() requires config.pause_resume_protocol_config (the "
             "pause/resume opt-in that produced the pause); without it the "
             "driver's resume detection is inert and the workflow would "
-            "silently re-run from step 0 (C-RT-30 detect-then-refuse)."
+            "silently re-run from step 0 (C-RT-35 detect-then-refuse)."
         )
 
     # Concurrency guard BEFORE the durable-store read (Codex-caught, this arc):
@@ -847,7 +847,7 @@ async def resume(
     # and (b) the guard → store read → `async with _run_lock` segment below is
     # `await`-free, so under asyncio's cooperative scheduling no other coroutine
     # can acquire the lock (and thus write the store) between this check and our
-    # own acquisition. C-RT-30.
+    # own acquisition. C-RT-35.
     if _run_lock.locked():
         raise ConcurrentRunNotSupported(
             "a `run()`/`resume()` invocation is already in flight in this "
@@ -855,20 +855,20 @@ async def resume(
         )
 
     # Resolve the snapshot to resume from: the caller-supplied one, or the
-    # latest record the harness durably journaled for the handle. C-RT-30.
+    # latest record the harness durably journaled for the handle. C-RT-35.
     if resume_handle is not None:
         if not resolved_config.pause_resume_protocol_config.durable:
             raise ResumeArgsError(
                 "resume_handle requires the durable opt-in "
                 "(pause_resume_protocol_config.durable=True); without it the "
-                "harness owns no snapshot store to read (C-RT-30)."
+                "harness owns no snapshot store to read (C-RT-35)."
             )
         snapshot = _read_durable_pause_snapshot(resolved_config, workflow, resume_handle)
         if snapshot is None:
             raise ResumeHandleUnknownError(
                 f"no durable PauseSnapshot journaled for resume_handle="
                 f"{resume_handle!r} under the resolved STATE_LEDGER pause-journal "
-                f"(C-RT-30)."
+                f"(C-RT-35)."
             )
     else:
         assert pause_snapshot is not None  # exactly-one-of guard guarantees this
@@ -876,22 +876,22 @@ async def resume(
 
     # Detect-then-refuse: a snapshot's hash validates against its own embedded
     # fields, so a snapshot from another workflow would otherwise be applied
-    # (its run_id + step_index) against THIS workflow's steps. C-RT-30.
+    # (its run_id + step_index) against THIS workflow's steps. C-RT-35.
     if snapshot.workflow_id != workflow.workflow_id:
         raise ResumeWorkflowMismatchError(
             f"snapshot.workflow_id={snapshot.workflow_id!r} != "
             f"workflow.workflow_id={workflow.workflow_id!r}; a snapshot may only "
-            f"resume its own workflow (C-RT-30)."
+            f"resume its own workflow (C-RT-35)."
         )
     # Detect-then-refuse: a step_index outside the supplied workflow's steps
     # (the workflow changed since the pause) would slice `steps[resume_at:]`
-    # to empty → a silent SUCCESS that executed nothing. C-RT-30.
+    # to empty → a silent SUCCESS that executed nothing. C-RT-35.
     _step_count = len(workflow.steps)
     if not (0 <= snapshot.step_index < _step_count):
         raise ResumeStepIndexOutOfRangeError(
             f"snapshot.step_index={snapshot.step_index} is not a "
             f"valid step of the resumed workflow (0 <= i < {_step_count}); the "
-            f"workflow may have changed since the pause (C-RT-30)."
+            f"workflow may have changed since the pause (C-RT-35)."
         )
 
     from harness_runtime.bootstrap import run_bootstrap
@@ -920,7 +920,7 @@ async def resume(
                 # `run_workflow` tool reads these from `_state`, mirroring how
                 # `_harness_ctx` is passed. Presence of `_resume_pause_snapshot`
                 # switches the tool to the resume path (snapshot.run_id continuity
-                # + `pause_snapshot_input=` to the driver). C-RT-30.
+                # + `pause_snapshot_input=` to the driver). C-RT-35.
                 mcp_server._state["_resume_pause_snapshot"] = snapshot  # pyright: ignore[reportPrivateUsage]
                 mcp_server._state["_resume_context"] = resume_context  # pyright: ignore[reportPrivateUsage]
                 mcp_server.workflow_registry[workflow.workflow_id] = workflow
@@ -960,7 +960,7 @@ _CP_TO_RT_STATUS: dict[
     _CpRunStatus.SUCCESS: "completed",
     _CpRunStatus.DRAINED: "drained",
     _CpRunStatus.FAILED: "failed",
-    # PAUSED (C-RT-30, R-CC-1 arc #3) — a workflow-layer pause was captured;
+    # PAUSED (C-RT-35, R-CC-1 arc #3) — a workflow-layer pause was captured;
     # `pause_snapshot` is carried through `_build_run_result` for `resume()`.
     _CpRunStatus.PAUSED: "paused",
     # PARTIAL (U-RT-113, R-FS-1 B1 §9) — a `proceed`-cascade fan-out run
@@ -1132,7 +1132,7 @@ def _build_run_result(
             _rollup_cost_attribution_by_provider_discriminator(cost_records)
         ),
         failure_cause=failure_cause,
-        # C-RT-30 (R-CC-1 arc #3) — surface the captured PauseSnapshot on a
+        # C-RT-35 (R-CC-1 arc #3) — surface the captured PauseSnapshot on a
         # 'paused' outcome so the caller can persist it + resume(). None on
         # every terminal outcome (the CP driver only populates it on PAUSED).
         pause_snapshot=cp_result.pause_snapshot if status == "paused" else None,

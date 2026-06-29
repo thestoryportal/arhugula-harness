@@ -278,7 +278,7 @@ async def test_api_resume_fan_out_pause_restart_proof_round_trip(
       - ONLY worker-1 is re-dispatched,
       - the resumed aggregate fuses the recovered (orchestrator + worker-0) with
         the fresh worker-1 output.
-    Full-runtime witness through the public `api.resume` surface (C-RT-30)."""
+    Full-runtime witness through the public `api.resume` surface (C-RT-35)."""
     _RESUME_DISPATCHED.clear()
     config = _config_opt_in(tmp_path)
 

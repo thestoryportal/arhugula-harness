@@ -120,7 +120,7 @@ from harness_runtime.lifecycle.engine_output_store import EngineOutputStore
 from harness_runtime.lifecycle.hitl_auto_approve_policy import HITLAutoApprovePolicy
 
 # B-INTERSTEP — InterStepOutputChannel by-reference holder (runtime spec §14.21
-# C-RT-29, new at v1.59). No harness imports in that module → no import cycle.
+# C-RT-34, new at v1.59). No harness imports in that module → no import cycle.
 from harness_runtime.lifecycle.inter_step_output_channel import InterStepOutputChannel
 
 # C-RT-28 §14.20 (R-FS-1 arc M) — ManagedAgents executable-consumer carriers.
@@ -1347,7 +1347,7 @@ class RuntimeConfig(BaseModel):
     `ollama_optional` precedent."""
 
     inter_step_data_flow: bool = False
-    """B-INTERSTEP (R-FS-1 standalone arc; runtime spec §14.21 C-RT-29, new at
+    """B-INTERSTEP (R-FS-1 standalone arc; runtime spec §14.21 C-RT-34, new at
     v1.59) — opt-in to the inter-step output channel (the shared run-context a
     dispatcher reads). When `True`, stage 5 LOOP_INIT constructs + binds a fresh
     `InterStepOutputChannel` on `ctx.inter_step_output_channel`, the workflow
@@ -2035,7 +2035,7 @@ class HarnessContext(BaseModel):
     # consumers call dynamically); `None` = operator opt-out → sidecar `None`.
     procedural_tier_snapshot_resolver: object | None = None
 
-    # B-INTERSTEP (R-FS-1 standalone arc; spec §14.21 C-RT-29, new at v1.59) —
+    # B-INTERSTEP (R-FS-1 standalone arc; spec §14.21 C-RT-34, new at v1.59) —
     # run-scoped inter-step output channel (the shared run-context the dispatcher
     # reads). Bound at stage 5 LOOP_INIT to a fresh `InterStepOutputChannel` ONLY
     # when `RuntimeConfig.inter_step_data_flow` is True; `None` (default) = opt-out

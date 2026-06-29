@@ -214,7 +214,7 @@ def test_harness_context_declares_all_c_rt_04_fields() -> None:
         # write to populate procedural_tier_snapshot_ref (IS spec v1.3 §5.1).
         # Typed `object | None` mirroring cp_is_wiring (no CP-axis import coupling).
         "procedural_tier_snapshot_resolver",
-        # B-INTERSTEP (runtime spec §14.21 C-RT-29) — run-scoped inter-step output
+        # B-INTERSTEP (runtime spec §14.21 C-RT-34) — run-scoped inter-step output
         # channel (the shared run-context the dispatcher reads). Bound at stage 5
         # only when RuntimeConfig.inter_step_data_flow is True; None (default) →
         # byte-identical. A plain by-reference holder (the CostRecordAccumulator
