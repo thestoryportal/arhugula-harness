@@ -19,9 +19,9 @@ default:
 
 # ─── core dev loop ─────────────────────────────────────────────────────────
 
-# Run the full pytest suite (mechanism α only; β/γ skip without credentials).
+# Run the default provider-free pytest suite, matching CI's blocking test lane.
 test:
-    uv run pytest
+    env -u ANTHROPIC_API_KEY -u OPENAI_API_KEY -u E2B_API_KEY -u GOOGLE_APPLICATION_CREDENTIALS -u GOOGLE_CLOUD_PROJECT PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring uv run pytest -m "not e2e"
 
 # Run a single test file or node id. Example: just test-one harness-cp/tests/test_foo.py
 test-one *args:
@@ -39,12 +39,12 @@ lint:
 fmt:
     uv run ruff format .
 
-# Full pre-merge gate: workspace sync + lint + typecheck + tests.
+# Full pre-merge gate: workspace sync + lint + typecheck + provider-free tests.
 check: codex-sync lint typecheck test
 
 # Codex provider-free pytest lane. Strips live provider env and mirrors CI's non-e2e gate.
 codex-test *args:
-    env -u ANTHROPIC_API_KEY -u OPENAI_API_KEY -u E2B_API_KEY -u GOOGLE_APPLICATION_CREDENTIALS -u GOOGLE_CLOUD_PROJECT uv run pytest -m "not e2e" {{args}}
+    env -u ANTHROPIC_API_KEY -u OPENAI_API_KEY -u E2B_API_KEY -u GOOGLE_APPLICATION_CREDENTIALS -u GOOGLE_CLOUD_PROJECT PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring uv run pytest -m "not e2e" {{args}}
 
 # Synchronize all workspace packages before the Codex PR-ready gate.
 codex-sync:
@@ -52,7 +52,7 @@ codex-sync:
 
 # Codex PR-ready local gate without live provider credentials.
 codex-check: codex-sync lint typecheck
-    env -u ANTHROPIC_API_KEY -u OPENAI_API_KEY -u E2B_API_KEY -u GOOGLE_APPLICATION_CREDENTIALS -u GOOGLE_CLOUD_PROJECT uv run pytest -m "not e2e"
+    env -u ANTHROPIC_API_KEY -u OPENAI_API_KEY -u E2B_API_KEY -u GOOGLE_APPLICATION_CREDENTIALS -u GOOGLE_CLOUD_PROJECT PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring uv run pytest -m "not e2e"
 
 # ─── Codex deterministic context guard ─────────────────────────────────────
 
