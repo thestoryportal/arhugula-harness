@@ -69,6 +69,10 @@ from harness_runtime.types import (
 runner = CliRunner()
 
 
+def _daemon_subprocess_smoke_socket_path() -> Path:
+    return Path("/tmp") / f"h-daemon-{os.getpid()}-{time.monotonic_ns()}.sock"
+
+
 def _runtime_config(tmp_path: Path) -> RuntimeConfig:
     return RuntimeConfig(
         deployment_surface=DeploymentSurface.LOCAL_DEVELOPMENT,
@@ -137,6 +141,13 @@ def test_ac1_default_socket_path_matches_across_simulated_processes() -> None:
     a = _default_daemon_socket_path()
     b = _default_daemon_socket_path()
     assert a == b
+
+
+def test_ac1_daemon_subprocess_smoke_socket_path_stays_short() -> None:
+    path = _daemon_subprocess_smoke_socket_path()
+
+    assert path.parent == Path("/tmp")
+    assert len(str(path)) < 100
 
 
 def test_ac2_socket_path_flag_appears_in_help() -> None:
@@ -259,6 +270,75 @@ def test_ac7_bootstrap_failure_raises_daemon_startup_error(
     assert excinfo.value.FAIL_CLASS == "RT-FAIL-CLI-DAEMON-CONNECTION"
 
 
+@pytest.mark.asyncio
+async def test_ac7_uvicorn_serve_failure_raises_daemon_startup_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A uvicorn startup/bind failure is retrieved and surfaced as CLI failure."""
+    fake_ctx_state: dict[str, Any] = {}
+    drained = asyncio.Event()
+
+    class _FakeCtx:
+        def __init__(self) -> None:
+            self.drained_flag = drained
+            self.mcp_server = _FakeMCPServer()
+
+    class _FakeMCPServer:
+        def __init__(self) -> None:
+            self._state = fake_ctx_state
+            self.server = _FakeFastMCP()
+
+    class _FakeFastMCP:
+        def streamable_http_app(self) -> Any:
+            return object()
+
+    fake_ctx = _FakeCtx()
+
+    async def _fake_bootstrap(*args: Any, **kwargs: Any) -> Any:
+        return fake_ctx
+
+    shutdown_called: list[Any] = []
+
+    async def _fake_shutdown(ctx: Any, *, timeout: float = 30.0) -> Any:
+        shutdown_called.append(ctx)
+        return object()
+
+    class _FailingUvicornServer:
+        def __init__(self, config: Any) -> None:
+            self.config = config
+            self.should_exit = False
+            self.force_exit = False
+
+        async def serve(self) -> None:
+            raise OSError("AF_UNIX path too long")
+
+    class _FakeUvicornConfig:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            self.uds = kwargs.get("uds")
+
+    fake_uvicorn = type("uvicorn", (), {})()
+    fake_uvicorn.Server = _FailingUvicornServer  # type: ignore[attr-defined]
+    fake_uvicorn.Config = _FakeUvicornConfig  # type: ignore[attr-defined]
+
+    monkeypatch.setitem(sys.modules, "uvicorn", fake_uvicorn)
+    import harness_runtime.bootstrap as _bootstrap_mod
+
+    monkeypatch.setattr(_bootstrap_mod, "run_bootstrap", _fake_bootstrap)
+    _shutdown_mod = sys.modules["harness_runtime.shutdown"]
+    monkeypatch.setattr(_shutdown_mod, "shutdown", _fake_shutdown)
+
+    with pytest.raises(DaemonStartupError) as excinfo:
+        await _cli_app_mod._daemon_main(
+            runtime_config=_runtime_config(tmp_path),
+            socket_path=tmp_path / "too-long.sock",
+        )
+
+    assert "failed to bind Unix-socket" in str(excinfo.value)
+    assert "AF_UNIX path too long" in str(excinfo.value)
+    assert shutdown_called == [fake_ctx]
+
+
 # ---------------------------------------------------------------------------
 # Adjacent — config load failure surfaces at CLI layer as exit 3
 # ---------------------------------------------------------------------------
@@ -313,7 +393,7 @@ def test_ac1_e2e_daemon_subprocess_binds_socket_and_shuts_down(
     resolver lets the test source the key from ``ANTHROPIC_API_KEY`` per
     ADR-F5 §(b)(i) headless-mode framing.
     """
-    socket_path = tmp_path / "smoke.sock"
+    socket_path = _daemon_subprocess_smoke_socket_path()
     repo_root = tmp_path
     skills_dir = tmp_path / "skills"
     skills_dir.mkdir()
@@ -409,3 +489,4 @@ def test_ac1_e2e_daemon_subprocess_binds_socket_and_shuts_down(
         if proc.poll() is None:
             proc.send_signal(signal.SIGKILL)
             proc.wait(timeout=5.0)
+        socket_path.unlink(missing_ok=True)

@@ -39,8 +39,8 @@ lint:
 fmt:
     uv run ruff format .
 
-# Full pre-merge gate: lint + typecheck + tests.
-check: lint typecheck test
+# Full pre-merge gate: workspace sync + lint + typecheck + tests.
+check: codex-sync lint typecheck test
 
 # Codex provider-free pytest lane. Strips live provider env and mirrors CI's non-e2e gate.
 codex-test *args:

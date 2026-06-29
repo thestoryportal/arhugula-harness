@@ -459,6 +459,18 @@ async def _daemon_main(
             else:
                 # uvicorn exited first (e.g., bind failure or external stop).
                 drain_task.cancel()
+                try:
+                    await drain_task
+                except asyncio.CancelledError:
+                    pass
+                try:
+                    await serve_task
+                except OSError as exc:
+                    raise DaemonStartupError(
+                        f"failed to bind Unix-socket {socket_path}: {exc}"
+                    ) from exc
+                except Exception as exc:
+                    raise DaemonStartupError(f"daemon server exited with error: {exc}") from exc
             for task in pending:
                 if not task.done():
                     task.cancel()
