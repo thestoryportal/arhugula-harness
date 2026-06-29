@@ -328,11 +328,73 @@ def parse_recent_git_prs(root: Path, limit: int = 5) -> list[dict]:
     return out
 
 
-def build_live_anchor(root: Path, open_prs: list[dict]) -> dict:
+def _recent_pr_hash(row: dict) -> str:
+    match = re.search(r"\(`([a-f0-9]+)`\)", str(row.get("pr", "")))
+    return match.group(1) if match else ""
+
+
+def _dashboard_head_short(dashboard: dict) -> str:
+    match = re.search(r"`([a-f0-9]{7,40})`", str(dashboard.get("git_head", "")))
+    return match.group(1) if match else ""
+
+
+def _dashboard_head_subject(dashboard: dict) -> str:
+    fields = re.findall(r"`([^`]+)`", str(dashboard.get("git_head", "")))
+    if len(fields) < 2:
+        return ""
+    return re.sub(r"\s*\(#\d+\)\s*$", "", fields[1]).strip()
+
+
+def _status_recent_pr_for_head(git_head: str, dashboard: dict | None) -> dict | None:
+    if not dashboard:
+        return None
+    head8 = git_head[:8]
+    dashboard_head = _dashboard_head_short(dashboard)
+    if not head8 or dashboard_head[:8] != head8:
+        return None
+    completed = dashboard.get("recently_completed") or []
+    if not completed:
+        return None
+    first = completed[0]
+    match = re.search(r"PR #(\d+)", str(first.get("pr", "")))
+    if not match:
+        return None
+    return {
+        "pr": f"PR #{match.group(1)} (`{head8}`)",
+        "date": str(first.get("date", "")),
+        "note": _dashboard_head_subject(dashboard) or str(first.get("note", "")),
+    }
+
+
+def _align_recent_prs_with_status_head(
+    git_head: str,
+    recent_prs: list[dict],
+    dashboard: dict | None,
+    *,
+    limit: int = 5,
+) -> list[dict]:
+    head8 = git_head[:8]
+    if recent_prs and _recent_pr_hash(recent_prs[0])[:8] == head8:
+        return recent_prs[:limit]
+    status_pr = _status_recent_pr_for_head(git_head, dashboard)
+    if status_pr is None:
+        return recent_prs[:limit]
+    status_number = re.search(r"PR #(\d+)", status_pr["pr"])
+    status_prefix = f"PR #{status_number.group(1)}" if status_number else ""
+    remaining = [row for row in recent_prs if not str(row.get("pr", "")).startswith(status_prefix)]
+    return [status_pr, *remaining[: limit - 1]]
+
+
+def build_live_anchor(root: Path, open_prs: list[dict], dashboard: dict | None = None) -> dict:
     """Live masthead values that should never be hand-maintained in prose."""
     git_head = _run(["git", "rev-parse", "--short=12", "HEAD"], cwd=root).strip()
     fork_count = count_open_fork_docs(root)
     batch = latest_retirement_batch(root)
+    recent_prs = _align_recent_prs_with_status_head(
+        git_head,
+        parse_recent_git_prs(root),
+        dashboard,
+    )
     return {
         "git_head": git_head,
         "hash": compute_workspace_state_hash(
@@ -343,7 +405,7 @@ def build_live_anchor(root: Path, open_prs: list[dict]) -> dict:
         ),
         "fork_count": str(fork_count),
         "latest_retirement_batch": batch,
-        "recent_prs": parse_recent_git_prs(root),
+        "recent_prs": recent_prs,
     }
 
 
@@ -1953,7 +2015,7 @@ def build(root: Path) -> dict:
     dashboard["remaining_forward"] = derive_remaining_forward(arc_map)
     assert_remaining_nonempty(actions, dashboard)
     open_prs = parse_open_prs(root)
-    live_anchor = build_live_anchor(root, open_prs)
+    live_anchor = build_live_anchor(root, open_prs, dashboard)
     return {
         "live_head": live_anchor["git_head"],
         "live_anchor": live_anchor,
