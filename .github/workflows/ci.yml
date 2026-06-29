@@ -50,10 +50,10 @@ jobs:
     name: pytest (all axis packages) — blocking
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Install uv + Python 3.12
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
         with:
           python-version: "3.12"
           enable-cache: true
@@ -76,12 +76,12 @@ jobs:
     # (check + format) tree-wide. New findings fail the PR. See header note.
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
 
       - name: Install uv + Python 3.12
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
         with:
           python-version: "3.12"
           enable-cache: true
@@ -104,10 +104,10 @@ jobs:
     # fixes). Run locally exactly as here: `uv sync --all-packages && uv run pyright`.
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Install uv + Python 3.12
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
         with:
           python-version: "3.12"
           enable-cache: true
@@ -153,10 +153,10 @@ jobs:
         axis: [core, is, as, cp, od, cxa]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Install uv + Python 3.12
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
         with:
           python-version: "3.12"
           enable-cache: true
@@ -186,10 +186,10 @@ jobs:
     continue-on-error: true
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Install uv + Python 3.12
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
         with:
           python-version: "3.12"
           enable-cache: true
@@ -219,7 +219,7 @@ jobs:
 
       - name: Upload coverage.xml artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: coverage-xml
           path: coverage.xml
@@ -240,10 +240,10 @@ jobs:
     name: substitution ledger (tally gate) — blocking
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Install uv + Python 3.12
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
         with:
           python-version: "3.12"
           enable-cache: true
@@ -274,10 +274,10 @@ jobs:
     name: arc ledger (tally gate) — blocking
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Install uv + Python 3.12
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
         with:
           python-version: "3.12"
           enable-cache: true
@@ -306,10 +306,10 @@ jobs:
     name: semantic overlay (drift gate) — blocking
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Install uv + Python 3.12
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
         with:
           python-version: "3.12"
           enable-cache: true
@@ -331,10 +331,10 @@ jobs:
     name: Q1 review gate (structured artifact) — blocking
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Install uv + Python 3.12
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
         with:
           python-version: "3.12"
           enable-cache: true
@@ -358,7 +358,7 @@ jobs:
     name: Codex context guard (anti-rot gate) — blocking
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           # FULL history (not the default shallow depth-1). The guard's `--base-ref`
           # diff AND `_lag_expected()` (which runs `git show --name-only HEAD` to confirm
@@ -371,7 +371,7 @@ jobs:
           fetch-depth: 0
 
       - name: Install uv + Python 3.12
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
         with:
           python-version: "3.12"
           enable-cache: true
