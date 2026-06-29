@@ -417,6 +417,56 @@ def test_live_anchor_derives_masthead_values_from_git_and_filesystem(tmp_path):
     )
 
 
+def test_live_anchor_uses_status_recent_completion_when_head_subject_lacks_pr(tmp_path):
+    generate = _load_generate_module()
+
+    harness = tmp_path / ".harness"
+    harness.mkdir()
+    (harness / "phase-7d-retirement-events-batch-57.md").write_text("new\n", encoding="utf-8")
+
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True, text=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True)
+    (tmp_path / "tracked.txt").write_text("x\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "docs: resolve runtime contract id collisions"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    head8 = subprocess.check_output(
+        ["git", "rev-parse", "--short=8", "HEAD"],
+        cwd=tmp_path,
+        text=True,
+    ).strip()
+
+    anchor = generate.build_live_anchor(
+        tmp_path,
+        [],
+        {
+            "git_head": (
+                f"`{head8}` — `docs: resolve runtime contract id collisions (#816)`. "
+                "**R-CL-Q1 runtime contract-ID hygiene MERGED.**"
+            ),
+            "recently_completed": [
+                {
+                    "pr": "PR #816",
+                    "date": "2026-06-29",
+                    "note": "**R-CL-Q1 runtime contract-ID hygiene MERGED.**",
+                }
+            ],
+        },
+    )
+
+    assert anchor["recent_prs"][0] == {
+        "pr": f"PR #816 (`{head8}`)",
+        "date": "2026-06-29",
+        "note": "docs: resolve runtime contract id collisions",
+    }
+
+
 def test_recently_completed_parser_keeps_non_pr_completion_rows():
     generate = _load_generate_module()
     md = """
