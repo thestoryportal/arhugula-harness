@@ -1,5 +1,7 @@
 """U-RT-109 — Phase 2a Gate G6 cluster-closure e2e for Track B operator CLI.
 
+Authority: C-RT-30.
+
 Maps to acceptance criteria 1–10 at runtime plan v2.31 §1.9.
 
 Mechanism enumeration (per L9-undecies U-RT-85 / U-RT-89 / U-RT-95 precedent —

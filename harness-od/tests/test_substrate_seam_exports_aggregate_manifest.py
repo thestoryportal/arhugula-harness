@@ -1,5 +1,7 @@
 """Tests for U-OD-34 — OD substrate seam exports aggregate manifest.
 
+Authority: C-OD-23.
+
 THE TERMINAL AGGREGATE EXPORTER of the OD axis-stream. Every U-OD-34 acceptance
 criterion (#1-#12) maps to >=1 test below. acc #3/#4 are tested at the v2.6
 M-3-conformed values (26 / {IS:4, AS:10, CP:12}).

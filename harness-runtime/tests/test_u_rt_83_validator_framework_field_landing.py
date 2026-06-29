@@ -1,5 +1,7 @@
 """U-RT-83 — RuntimeConfig.validator_framework_config + ValidatorFrameworkConfig empty-marker tests.
 
+Authority: C-RT-23.
+
 ACs per runtime plan v2.17 §1 U-RT-83:
 
 1. RuntimeConfig.validator_framework_config field appended at the

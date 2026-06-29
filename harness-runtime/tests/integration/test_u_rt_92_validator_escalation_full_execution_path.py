@@ -1,5 +1,7 @@
 """Full workflow_driver execution-path e2e for validator-escalation composer.
 
+Authority: C-RT-25, C-CP-28.
+
 Companion to ``test_u_rt_92_validator_escalation_e2e.py`` — the existing
 U-RT-92 e2e exercises the composer via DIRECT invocation
 (``compose_validator_escalation_gate(...)`` called from test body). This file
