@@ -1,5 +1,7 @@
 """Full workflow_driver execution-path e2e for pause/resume cycle.
 
+Authority: C-RT-24.
+
 Closes the U-RT-89 docstring deferral at
 `test_u_rt_89_pause_resume_e2e.py` lines 42-49:
 
