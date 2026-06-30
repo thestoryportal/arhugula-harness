@@ -337,6 +337,21 @@ def test_status_refresh_with_dashboard_snapshot_counts_as_expected_lag(tmp_path:
     assert cg._lag_expected(repo)
 
 
+def test_status_refresh_with_roadmap_and_dashboard_counts_as_expected_lag(
+    tmp_path: Path,
+) -> None:
+    repo = _init_repo(tmp_path)
+    (repo / "tools").mkdir()
+    (repo / "tools" / "dashboard").mkdir()
+    (repo / "tools" / "dashboard" / "roadmap.html").write_text("snapshot\n", encoding="utf-8")
+    (repo / ".harness" / "roadmap_status.md").write_text("refreshed\n", encoding="utf-8")
+    (repo / "Project_Roadmap_v1.md").write_text("roadmap\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "ops: roadmap status refresh post-test")
+
+    assert cg._lag_expected(repo)
+
+
 def test_dashboard_snapshot_normalization_ignores_volatile_dashboard_fields() -> None:
     base = (
         b'<meta name="dashboard-live-head" content="abc123"/>'

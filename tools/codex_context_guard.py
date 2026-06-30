@@ -442,6 +442,7 @@ def _lag_expected(root: Path) -> bool:
     return files in (
         [".harness/roadmap_status.md"],
         [".harness/roadmap_status.md", DASHBOARD_SNAPSHOT],
+        [".harness/roadmap_status.md", "Project_Roadmap_v1.md", DASHBOARD_SNAPSHOT],
     )
 
 
@@ -713,7 +714,7 @@ def validate(
                 Finding(
                     "warn",
                     "ROADMAP_DASHBOARD_LAG_EXPECTED",
-                    "Dashboard hash differs because HEAD is a roadmap-status-only refresh; "
+                    "Dashboard hash differs because HEAD is a terminating roadmap refresh; "
                     "the next terminating refresh should reconcile the lag.",
                 )
             )
