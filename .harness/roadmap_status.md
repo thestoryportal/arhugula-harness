@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `001c985310ba` |
-| `last_refreshed` | 2026-06-30T02:07:03+00:00 |
-| `git_head` | `4a88a498` — `Merge pull request #847 from thestoryportal/codex/r-if-stale-active-closures`. **Post-#847 terminating refresh.** PR #847 closes stale ACTIVE governance entries `R-IF-114` and `R-IF-115` as RESOLVED after re-grounding against current dashboard/closure evidence, regenerates the dashboard, and records that no implementable non-recurring roadmap arc remains. Verification: PR #847 CI green across blocking and advisory checks; this refresh pins the merge commit/dashboard hash and leaves the selector on cadence/operator-selected recurring lanes only. **PRIOR LINEAGE (#847, preserved):** `19adbe32` — stale R-IF governance closure branch. |
+| `workspace_state_hash` | `ce0b579e22c8` |
+| `last_refreshed` | 2026-06-30T02:23:54+00:00 |
+| `git_head` | `3177fab8` — `Merge pull request #848 from thestoryportal/codex/r-if-stale-active-closures-refresh`. **R-600 cadence-4 pattern bake-in branch.** The cadence-4 memory sweep found `full-chain-witness-not-half-proofs` promotion-ready (20 refs / 15 files, reinforced by non-vacuity/runtime-path memories) and promotes it as workflow **PD-6 composed-chain non-vacuity witness** at `Project_Workflow_v1_16.md` with clearance marker `.harness/clearance/Project_Workflow-v1_16-cleared-2026-06-30.md`. ZERO new §7.4.7 stale-carry species owed; no C-*-NN contract, production-code, retirement-event, or cross-axis cascade. **PRIOR LINEAGE (#848, preserved):** `3177fab8` — post-#847 terminating refresh fixed point. |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 86 |
 
@@ -24,9 +24,9 @@
 
 **Frontier.** R-FS-1 Tier-1 is closed. The frozen order is complete (11/11), the standalone `B-*` register derives **69 closed / 0 forward / 0 gated / 4 resolved**, `closure_gate.py` G1.1 is **0+0**, automatable Tier-1 predicates pass, and manual G1.4/G1.7/G1.8 sign-off is recorded at `.harness/r-fs-1-tier1-manual-signoff.json`.
 
-**Current next action.** No implementable non-recurring roadmap arc remains after `R-CL-C1` shipped and stale `R-IF-114` / `R-IF-115` ACTIVE statuses were closed. Continue recurring lanes only when cadence or a future operator-selected surface requires them: `R-600-*` pattern bake-in/out-of-family review and `R-IF-roadmap-refresh` fixed-point refreshes.
+**Current next action.** No implementable non-recurring roadmap arc remains after `R-CL-C1` shipped, stale `R-IF-114` / `R-IF-115` ACTIVE statuses were closed, and `R-600-pattern-bake-in-sweep` cadence-4 promoted PD-6. Continue recurring lanes only when cadence or a future operator-selected surface requires them: `R-600-*` pattern bake-in/out-of-family review and `R-IF-roadmap-refresh` fixed-point refreshes.
 
-**Recurring lanes** continue on cadence: `R-600-*` (pattern bake-in / out-of-family review) and `R-IF-roadmap-refresh`.
+**Recurring lanes** continue on cadence: `R-600-*` (pattern bake-in / out-of-family review; pattern-bake-in next due after another ~10 PRs or a concrete candidate) and `R-IF-roadmap-refresh`.
 
 **Do not re-open as next action.** The R-FS-1 `B-*` build register is closed; historical Next-action prose below this refresh is lineage only. Closed/parked surfaces remain: `R-411/412/420/421/430`, `R-500`, `R-810/820/830`, `R-008`/OD-4, `R-CXA-1/2/4`, `R-100-*`, `R-300-*`, and `R-901`.
 
@@ -34,7 +34,7 @@
 
 ## Remaining forward work
 
-**The full-spec build (R-FS-1).** The single full-spec umbrella **R-FS-1** has no `B-*` forward build arcs remaining and is RESOLVED after manual Tier-1 gates G1.4/G1.7/G1.8 were signed. `R-CL-Q1`, `R-CL-Q2`, `R-CL-Q3`, `R-CL-Q4`, `R-CL-D1`, and `R-CL-C1` are RESOLVED; stale governance entries `R-IF-114` and `R-IF-115` are RESOLVED; no implementable non-recurring roadmap arc remains.
+**The full-spec build (R-FS-1).** The single full-spec umbrella **R-FS-1** has no `B-*` forward build arcs remaining and is RESOLVED after manual Tier-1 gates G1.4/G1.7/G1.8 were signed. `R-CL-Q1`, `R-CL-Q2`, `R-CL-Q3`, `R-CL-Q4`, `R-CL-D1`, and `R-CL-C1` are RESOLVED; stale governance entries `R-IF-114` and `R-IF-115` are RESOLVED; `R-600-pattern-bake-in-sweep` cadence-4 is ACTIVE-SURVEYED with PD-6 promoted; no implementable non-recurring roadmap arc remains.
 
 **Single arc→unit source.** The full itemization — every arc + unit in plain language, with status, build position, dependencies, and as-built units — lives in the single structured source **`.harness/arc-ledger.yaml`** (derived by `tools/arc_ledger.py`, rendered in the dashboard's Arc & unit map; the forward `B-*` register is shown with decompose-at-open markers). The spine ledger `.harness/beyond-mvp-capability-boundary-ledger.md` carries every surfaced boundary's rationale; per-arc grounding leads at `.harness/r-fs-1-remaining-arcs-grounding-sweep-v1.md` (re-ground at arc-open, presence-not-correctness).
 
@@ -106,10 +106,11 @@ The bucket rows below sum to **54** under the batch-56 live ledger (RETIRED 54).
 ## Drift detection log
 
 
-_Showing the 10 most recent drift/reconciliation events. The full audit history (166 events) is archived at `.harness/roadmap_drift_log_archive.md`._
+_Showing the 10 most recent drift/reconciliation events. The full audit history (167 events) is archived at `.harness/roadmap_drift_log_archive.md`._
 
 | Date | Source | Resolution |
 |---|---|---|
+| 2026-06-30 | **R-600 cadence-4 pattern bake-in branch opened at `3177fab8`.** | Hash `001c985310ba` → `ce0b579e22c8` (state at `3177fab8`, open PRs empty, fork count 86, batch-57). Cadence-4 enumerated the current memory store (114 files, 558 refs, 101 distinct tokens, 72 at cardinality >=2), found `full-chain-witness-not-half-proofs` promotion-ready, and promotes it as workflow v1.16 **PD-6 composed-chain non-vacuity witness** with clearance marker. ZERO new §7.4.7 stale-carry species owed; no cross-axis cascade or production-code change. |
 | 2026-06-30 | **Post-#847 terminating refresh — PR #847 stale R-IF governance closure merged at `4a88a498`; §12.2 owed follow-on.** | Hash `55f9c2203617` → `001c985310ba` (state at `4a88a498`, open PRs empty, fork count 86, batch-57). PR #847 closes stale ACTIVE `R-IF-114` and `R-IF-115` as RESOLVED, preserving the no-implementable-non-recurring selector and leaving only cadence/operator-selected recurring lanes. Verification: PR #847 all checks green; this terminating refresh updates `.harness/roadmap_status.md` and regenerates `tools/dashboard/roadmap.html` to pin the merge commit fixed point. |
 | 2026-06-30 | **Stale ACTIVE governance closure branch — `R-IF-114` and `R-IF-115` re-grounded at `5078af55`.** | Hash `26b5e189c85d` → `55f9c2203617` (state at `5078af55`, open PRs empty, fork count 86, batch-57). `R-IF-114` was already fixed by schema/ledger-derived dashboard tests and the CI tooling lane; `R-IF-115` was already fixed by PR #676's audit artifacts, `tools/closure_gate.py`, and current `just closure-gate` evidence. Both entries are flipped to RESOLVED on this branch. Verification includes stale-active RED witness, dashboard/context focused tests, closure/documentation/certification gates, overlay-check, and diff-check. No implementable non-recurring roadmap arc remains; recurring lanes continue only on cadence or future operator selection. |
 | 2026-06-30 | **Post-#845 terminating refresh — PR #845 Codex merged-refresh guard fix merged at `d5bc87a7`; §12.2 owed follow-on.** | Hash `4a55e7577ac9` → `26b5e189c85d` (state at `d5bc87a7`, open PRs empty, fork count 86, batch-57). Fixes the Codex context guard so GitHub merge commits carrying terminating roadmap refresh PRs are recognized as expected dashboard lag when both the merge first-parent diff and the second-parent commit are exactly a terminating-refresh file set; unrelated payloads remain non-exempt. Verification: RED merged-refresh regression, focused merged-refresh tests, context-guard tests, `codex-preflight`, full provider-free `codex-check`, and all PR #845 checks green. No roadmap state transition; no non-recurring close-track arc remains. Lags HEAD by one commit after this terminating-refresh PR merges (fixed point, §12.2.1). |
