@@ -3,6 +3,13 @@
 The target harness (**H_T**) — a multi-LLM agent harness — built across four
 design axes (IS / AS / CP / OD) plus a cross-axis composition surface (CXA).
 
+## Runtime documentation
+
+The operator-facing documentation suite starts at
+[`docs/README.md`](docs/README.md). Use it for current runtime setup,
+workflow execution, daemon operation, deployment readiness, API/config
+reference, and architecture orientation.
+
 ## Execution surface
 
 **H_E** = Claude Code CLI. During Phase 7 sub-phase 7a, H_E provides bounded
@@ -11,6 +18,7 @@ boundary lives at the MCP server process (X-AL-1).
 
 ## Workspace pointers
 
+- `./docs/README.md` — current runtime documentation index.
 - `./CLAUDE.md` — workspace-level Claude Code guidance + canonical artifact pointers.
 - `./Phase_7_Session_1_Entry_Directive_v1.md` — Phase 7 Session 1 entry context.
 - `./Sub_Agent_Boundary_Specification_v1.md` — sub-agent topology + scope boundaries.
@@ -32,8 +40,9 @@ repository root.
 
 ## Repo layout
 
-A `uv` workspace with 6 members: `harness-core/` (shared types) plus the four
-axes `harness-{is,as,cp,od}/` and `harness-cxa/` (cross-axis composition).
+A `uv` workspace with 7 members: `harness-core/` (shared types), the four axes
+`harness-{is,as,cp,od}/`, `harness-cxa/` (cross-axis composition), and
+`harness-runtime/` (operator CLI, bootstrap, daemon, and runtime wiring).
 
 ## Opening a Phase 7 session
 
