@@ -39,8 +39,8 @@ lint:
 fmt:
     uv run ruff format .
 
-# Full pre-merge gate: workspace sync + lint + typecheck + provider-free tests.
-check: codex-sync lint typecheck test
+# Full pre-merge gate: workspace sync + lint + typecheck + docs + provider-free tests.
+check: codex-sync lint typecheck docs-completeness-check test
 
 # Codex provider-free pytest lane. Strips live provider env and mirrors CI's non-e2e gate.
 codex-test *args:
@@ -51,7 +51,7 @@ codex-sync:
     uv sync --all-packages
 
 # Codex PR-ready local gate without live provider credentials.
-codex-check: codex-sync lint typecheck
+codex-check: codex-sync lint typecheck docs-completeness-check
     env -u ANTHROPIC_API_KEY -u OPENAI_API_KEY -u E2B_API_KEY -u GOOGLE_APPLICATION_CREDENTIALS -u GOOGLE_CLOUD_PROJECT PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring uv run pytest -m "not e2e"
 
 # ─── Codex deterministic context guard ─────────────────────────────────────
@@ -147,6 +147,11 @@ q1-review-check report:
 
 q1-review-schema:
     @uv run python tools/q1_review_gate.py --schema
+
+# ─── R-CL-D1 documentation suite gate ──────────────────────────────────────
+# Provider-free checker for the operator-facing docs suite and grounding matrix.
+docs-completeness-check:
+    uv run python tools/docs_completeness.py --check
 
 # ─── operator-facing CLI smoke ─────────────────────────────────────────────
 

@@ -6,10 +6,9 @@
 # Per runtime spec v1.39 §3.7, config precedence is env (HARNESS_*) →
 # harness.toml → CLI flags (lowest → highest priority).
 #
-# NOTE: §3.7 also specifies automatic discovery of `harness.toml` at the
-# workspace root when `--config` is omitted, but that lookup is not yet
-# wired (the `just`/CLI flows above pass `--config` explicitly). Tracked at
-# `.harness/class_1_fork_harness_toml_default_discovery_unimplemented.md`.
+# If `--config` is omitted, the CLI discovers `harness.toml` in the process
+# current working directory. The `just run` / `just daemon` recipes still pass
+# `--config harness.toml` explicitly for operator clarity.
 #
 # This template covers the 4 required fields plus the most common
 # optional knobs. Defaults documented inline; see
