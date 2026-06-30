@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `26b5e189c85d` |
-| `last_refreshed` | 2026-06-30T01:38:17+00:00 |
-| `git_head` | `d5bc87a7` — `fix: recognize merged roadmap refresh lag (#845)`. **Codex SessionStart/default-branch drift guard fixed for GitHub merge commits.** Teaches `_lag_expected` to accept a GitHub merge commit only when the merge first-parent diff and the second-parent commit are both exactly a known terminating-refresh file set; unrelated payloads remain non-exempt. Verification: RED merged-refresh regression failed before implementation; focused merged-refresh tests 2 passed; context-guard tests 37 passed; `just codex-preflight` classified the post-#844 shape as `ROADMAP_DASHBOARD_LAG_EXPECTED`; `just codex-check` green with 5132 passed / 10 skipped / 24 deselected / 1 xfailed; CI green: all PR #845 checks passed. External private-diff review remains blocked by tenant policy despite operator approval; the loop recorded a local substitute review. **PRIOR LINEAGE (#843, preserved):** `62d19553` — R-CL-C1 closure certification (#843). |
+| `workspace_state_hash` | `55f9c2203617` |
+| `last_refreshed` | 2026-06-30T01:52:18+00:00 |
+| `git_head` | `5078af55` — `ops: roadmap status refresh post-845 (#846)`. **Stale ACTIVE R-IF governance entries closed on this branch.** Re-grounding found `R-IF-114` already fixed by ledger-derived dashboard tests plus the CI tooling lane, and `R-IF-115` already fixed by PR #676's audit/closure-gate artifacts plus current `just closure-gate` evidence. This branch flips both entries to RESOLVED and records that no implementable non-recurring roadmap arc remains. Verification: RED stale-active witness failed before implementation; `tools/test_dashboard_generate.py` and context guard tests are included in the focused dashboard lane; `just closure-gate`, `just closure-certification-check`, `just docs-completeness-check`, `just overlay-check`, and `git diff --check` green. **PRIOR LINEAGE (#845, preserved):** `d5bc87a7` — Codex merged-refresh guard fix (#845). |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 86 |
 
@@ -24,7 +24,7 @@
 
 **Frontier.** R-FS-1 Tier-1 is closed. The frozen order is complete (11/11), the standalone `B-*` register derives **69 closed / 0 forward / 0 gated / 4 resolved**, `closure_gate.py` G1.1 is **0+0**, automatable Tier-1 predicates pass, and manual G1.4/G1.7/G1.8 sign-off is recorded at `.harness/r-fs-1-tier1-manual-signoff.json`.
 
-**Current next action.** No non-recurring close-track arc remains after `R-CL-C1` shipped. Continue recurring lanes only when cadence or a future operator-selected surface requires them: `R-600-*` pattern bake-in/out-of-family review and `R-IF-roadmap-refresh` fixed-point refreshes.
+**Current next action.** No implementable non-recurring roadmap arc remains after `R-CL-C1` shipped and stale `R-IF-114` / `R-IF-115` ACTIVE statuses were closed. Continue recurring lanes only when cadence or a future operator-selected surface requires them: `R-600-*` pattern bake-in/out-of-family review and `R-IF-roadmap-refresh` fixed-point refreshes.
 
 **Recurring lanes** continue on cadence: `R-600-*` (pattern bake-in / out-of-family review) and `R-IF-roadmap-refresh`.
 
@@ -34,7 +34,7 @@
 
 ## Remaining forward work
 
-**The full-spec build (R-FS-1).** The single full-spec umbrella **R-FS-1** has no `B-*` forward build arcs remaining and is RESOLVED after manual Tier-1 gates G1.4/G1.7/G1.8 were signed. `R-CL-Q1`, `R-CL-Q2`, `R-CL-Q3`, `R-CL-Q4`, `R-CL-D1`, and `R-CL-C1` are RESOLVED; no non-recurring close-track arc remains.
+**The full-spec build (R-FS-1).** The single full-spec umbrella **R-FS-1** has no `B-*` forward build arcs remaining and is RESOLVED after manual Tier-1 gates G1.4/G1.7/G1.8 were signed. `R-CL-Q1`, `R-CL-Q2`, `R-CL-Q3`, `R-CL-Q4`, `R-CL-D1`, and `R-CL-C1` are RESOLVED; stale governance entries `R-IF-114` and `R-IF-115` are RESOLVED; no implementable non-recurring roadmap arc remains.
 
 **Single arc→unit source.** The full itemization — every arc + unit in plain language, with status, build position, dependencies, and as-built units — lives in the single structured source **`.harness/arc-ledger.yaml`** (derived by `tools/arc_ledger.py`, rendered in the dashboard's Arc & unit map; the forward `B-*` register is shown with decompose-at-open markers). The spine ledger `.harness/beyond-mvp-capability-boundary-ledger.md` carries every surfaced boundary's rationale; per-arc grounding leads at `.harness/r-fs-1-remaining-arcs-grounding-sweep-v1.md` (re-ground at arc-open, presence-not-correctness).
 
@@ -106,10 +106,11 @@ The bucket rows below sum to **54** under the batch-56 live ledger (RETIRED 54).
 ## Drift detection log
 
 
-_Showing the 10 most recent drift/reconciliation events. The full audit history (164 events) is archived at `.harness/roadmap_drift_log_archive.md`._
+_Showing the 10 most recent drift/reconciliation events. The full audit history (165 events) is archived at `.harness/roadmap_drift_log_archive.md`._
 
 | Date | Source | Resolution |
 |---|---|---|
+| 2026-06-30 | **Stale ACTIVE governance closure branch — `R-IF-114` and `R-IF-115` re-grounded at `5078af55`.** | Hash `26b5e189c85d` → `55f9c2203617` (state at `5078af55`, open PRs empty, fork count 86, batch-57). `R-IF-114` was already fixed by schema/ledger-derived dashboard tests and the CI tooling lane; `R-IF-115` was already fixed by PR #676's audit artifacts, `tools/closure_gate.py`, and current `just closure-gate` evidence. Both entries are flipped to RESOLVED on this branch. Verification includes stale-active RED witness, dashboard/context focused tests, closure/documentation/certification gates, overlay-check, and diff-check. No implementable non-recurring roadmap arc remains; recurring lanes continue only on cadence or future operator selection. |
 | 2026-06-30 | **Post-#845 terminating refresh — PR #845 Codex merged-refresh guard fix merged at `d5bc87a7`; §12.2 owed follow-on.** | Hash `4a55e7577ac9` → `26b5e189c85d` (state at `d5bc87a7`, open PRs empty, fork count 86, batch-57). Fixes the Codex context guard so GitHub merge commits carrying terminating roadmap refresh PRs are recognized as expected dashboard lag when both the merge first-parent diff and the second-parent commit are exactly a terminating-refresh file set; unrelated payloads remain non-exempt. Verification: RED merged-refresh regression, focused merged-refresh tests, context-guard tests, `codex-preflight`, full provider-free `codex-check`, and all PR #845 checks green. No roadmap state transition; no non-recurring close-track arc remains. Lags HEAD by one commit after this terminating-refresh PR merges (fixed point, §12.2.1). |
 | 2026-06-30 | **Post-#843 terminating refresh — PR #843 R-CL-C1 closure certification merged at `62d19553`; §12.2 owed follow-on.** | Hash `3e9de3ba0932` → `4a55e7577ac9` (state at `62d19553`, open PRs empty, fork count 86, batch-57). Adds the final C1 closure certificate, provider-free certification checker/tests, and local-gate wiring. The certificate records the 5-dimension matrix for all contracts/CXA seams/ADRs, Phase-9 bounded-residual review, completeness critic, tenant-policy external-review limitation, and ship evidence. Also fixes the Codex SessionStart/default-branch drift regression by recognizing the actual three-file terminating-refresh shape. Verification: focused C1/guard lane, `closure-certification-check`, `docs-completeness-check`, `closure-gate`, `overlay-check`, `q4-packaging-check`, full provider-free `just check`, and all PR #843 checks green. `R-CL-C1` is now RESOLVED; no non-recurring close-track arc remains. Lags HEAD by one commit after this terminating-refresh PR merges (fixed point, §12.2.1). |
 | 2026-06-30 | **Post-#841 terminating refresh — PR #841 R-CL-D1 documentation suite merged at `e3dba297`; §12.2 owed follow-on.** | Hash `6249f70a9652` → `3e9de3ba0932` (state at `e3dba297`, open PRs empty, fork count 86, batch-57). Adds the top-level runtime docs suite, D1 docs-completeness evidence matrix, provider-free docs checker/tests, and normal local gate wiring so docs drift fails `just check` / `just codex-check`. Corrects the operator config template to match CWD `harness.toml` discovery. Verification: focused docs lane, `docs-completeness-check`, `overlay-check`, `closure-gate`, full provider-free `just check`, and all PR #841 checks green. `R-CL-D1` is now RESOLVED. Next selector moves to **R-CL-C1** closure certification + ship. Lags HEAD by one commit after this terminating-refresh PR merges (fixed point, §12.2.1). |

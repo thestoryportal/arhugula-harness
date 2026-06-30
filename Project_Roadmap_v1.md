@@ -357,7 +357,7 @@ R-IF-112:
 R-IF-114:
   title: dashboard-generate test rot — `tools/test_dashboard_generate.py` ungated brittle arc-map snapshot
   surface: VII
-  status: ACTIVE
+  status: RESOLVED    # 2026-06-30 — stale ACTIVE closed; dashboard tests now derive from arc-ledger and are CI-gated.
   depends_on: []
   blocks: []
   posture: mode-agnostic
@@ -369,23 +369,21 @@ R-IF-114:
   close_shape: { type: PR-merge, artifact: "tools/test_dashboard_generate.py disposition", cascade: [R-IF-roadmap-refresh] }
   next_pointer: null
   notes: >
-    Surfaced 2026-06-19 at the post-#661 (B-FANOUT-PAUSE) refresh. `tools/test_dashboard_generate.py`
-    asserts HARDCODED per-arc statuses + bucket counts against the LIVE arc-map (`_real_arc_map_md()`),
-    so it goes red every time §5 changes. It rotted UNDETECTED across #655→#661 (asserts
-    `B-HITL-PLACEMENT-PER-STEP-PRODUCER == "remaining"` + "8 closed" — pre-#657 state) because the
-    `tools/` test module is DELIBERATELY OUTSIDE CI (ci.yml:236 — only the 7 testpaths packages run; the
-    substitution-ledger test got its OWN dedicated CI job at ci.yml:255/259 — the precedent IF this test is
-    gate-worthy). Operator-surfaceable disposition (NOT to be wired unilaterally): (a) make the test ROBUST
-    (assert structural invariants — status ∈ {closed,remaining,gated,resolved}, every closed arc has a PR# in
-    `status_detail`, bucket counts sum) + gate it like the substitution-ledger job, OR (b) drop the live-data
-    assertions / accept it as a manual snapshot. Re-snapshotting to current numbers only resets the timer
-    (brittle). Known-red LOCALLY until resolved (not blocking; not in CI). Decorrelated review (advisor) at
-    the post-#661 refresh confirmed register-don't-bury + don't-silently-wire-CI.
+    RESOLVED 2026-06-30 — the stale ACTIVE entry is closed after re-grounding against HEAD.
+    The old brittle hard-coded live-data assertions were replaced with schema/ledger-derived
+    invariants in `tools/test_dashboard_generate.py`: frozen arc order derives from
+    `.harness/arc-ledger.yaml`, standalone status counts derive from the ledger, and registered
+    forward arcs carry parent/anticipated-scope/decompose markers without fabricated U-* units.
+    CI now gates the dashboard/arc-ledger/tooling lane at `.github/workflows/ci.yml` via
+    `uv run python -m pytest test_arc_ledger.py test_dashboard_generate.py test_runtime_contract_ids.py -q`.
+    Verification on the close branch: `tools/test_dashboard_generate.py` included in the focused
+    dashboard/context suite and prior PR #845/#846 CI green. No further operator disposition is
+    owed for the original stale-count rot class.
 
 R-IF-115:
   title: Remaining-build audit surface + closure gate — fold into the loop
   surface: VII
-  status: ACTIVE   # authored 2026-06-20 (this arc); landed in working tree, pending commit/merge. NOT the frontier (R-FS-1 is); an infra-integration lane.
+  status: RESOLVED    # 2026-06-30 — stale ACTIVE closed; PR #676 landed the audit and closure gate, now green at HEAD.
   depends_on: []
   blocks: []
   posture: mode-agnostic
@@ -397,23 +395,15 @@ R-IF-115:
   close_shape: { type: PR-merge, artifact: ".harness/audit/* + overlay head-scoping + this entry", cascade: [R-IF-roadmap-refresh] }
   next_pointer: null
   notes: >
-    The 2-pass remaining-build audit (.harness/audit/Remaining_Build_Audit_Report.md +
-    Remaining_Build_Register.csv, 48 rows) + the binding .harness/audit/Closure_Gate_v1.md.
-    POINT-IN-TIME snapshot at HEAD 46012d5 — NOT a maintained parallel source (the live
-    authorities are .harness/arc-ledger.yaml + `just overlay`, both CI-gated; re-ground at
-    arc-open — the R-IF-114 drift lesson). Closure gate = Tier-1 build-complete (gates
-    R-FS-1) + Tier-2 quality/close (gates R-CL-C1); the checker `tools/closure_gate.py` is a
-    DEFINED follow-on, NOT yet built (operator to authorize the build).
-    FINDING HOMES (so the loop acts on them, not just the report):
-    RB-DOC-03 overlay head-scoping = DONE this arc (overlay.py canonical_head_md_files;
-    contract_without_code 6->1, the lone C-IS-11 a documented corrected-non-cite).
-    RB-EXP-01 (cp/od/cxa empty __init__ public exports) -> R-CL-Q1/Q4 (public-API policy — operator call).
-    RB-DOC-01 per-package READMEs + RB-CXA-02 (§3.3 layout drift: harness-cxa near-stub) + RB-DOC-05 (unit cites) -> R-CL-D1.
-    RB-DOC-02 (14 code-without-cite) + RB-CXA-03 (31-vs-37 seam-count reconcile) -> R-CL-Q1 hygiene (RB-CXA-03 doc-side touches CXA design-substrate -> X-AL-3 back-flow if pursued).
-    RB-SUB-03 (scaffold-MCP cleanup) -> R-CL-Q4. RB-GOV-07 (R-IF-114 stale-ACTIVE) + RB-GOV-08 (opt-in pre-commit hook) = governance hygiene.
-    RB-RT-07 (stale-OPEN engine-durable-resume fork) -> re-ground + close-or-rescope.
-    The forward FEATURE arcs (RB-RT-*/RB-CP-*/RB-AS-01/RB-OD-01) are ALREADY in arc-ledger.yaml — no re-entry.
-    OPERATOR DECISIONS OWED: build `tools/closure_gate.py` (C); cp/od/cxa export policy (RB-EXP-01); CXA-doc count reconcile (RB-CXA-03).
+    RESOLVED 2026-06-30 — PR #676 landed the 2-pass remaining-build audit
+    (`.harness/audit/Remaining_Build_Audit_Report.md` + `Remaining_Build_Register.csv`),
+    `.harness/audit/Closure_Gate_v1.md`, `tools/closure_gate.py`, and `tools/test_closure_gate.py`.
+    The checker is no longer a defined-but-unbuilt follow-on: `just closure-gate` delegates to the
+    live authorities and reports Tier-1 build-complete plus Tier-2 quality/close signed at HEAD
+    (5/5 automatable Tier-1, 3/3 manual Tier-1, 6/6 Tier-2 phases RESOLVED).
+    Findings routed by the original point-in-time audit have either landed in the Q1-Q4/D1/C1
+    close track or remain deliberately represented in the live arc ledger / closure-gate residual
+    review instead of this stale ACTIVE entry. No new build arc is opened here.
 
 R-IF-roadmap-refresh:
   title: Refresh roadmap status dashboard after PR merge
