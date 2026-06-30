@@ -2658,7 +2658,7 @@ R-CL-Q4:
 R-CL-D1:
   title: Phase D1 — documentation suite
   surface: XI
-  status: ACTIVE      # 2026-06-29 — Q4 resolved; documentation suite is the next selected close-track frontier.
+  status: RESOLVED    # 2026-06-30 — PR #841 added the D1 runtime docs suite, docs-completeness gate, and evidence matrix; merged at e3dba297.
   depends_on: [R-CL-Q4]
   blocks: [R-CL-C1]
   posture: mode-agnostic
@@ -2674,7 +2674,7 @@ R-CL-D1:
 R-CL-C1:
   title: Phase C1 — full-spec closure certification + ship
   surface: VIII
-  status: BLOCKED
+  status: ACTIVE      # 2026-06-30 — D1 resolved; closure certification + ship is the next close-track frontier.
   depends_on: [R-CL-D1]
   blocks: []
   posture: mode-agnostic
