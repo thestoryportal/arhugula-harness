@@ -2642,7 +2642,7 @@ R-CL-Q3:
 R-CL-Q4:
   title: Phase Q4 — portable packaging + deployment
   surface: V
-  status: ACTIVE      # 2026-06-29 — Q3 resolved; packaging/deployment is the next selected quality-close frontier.
+  status: RESOLVED    # 2026-06-29 — PR #839 added the packaging gate + deploy image artifacts and merged at ce344811.
   depends_on: [R-CL-Q1, R-CL-Q2, R-CL-Q3]
   blocks: [R-CL-D1]
   posture: phase-7
@@ -2658,7 +2658,7 @@ R-CL-Q4:
 R-CL-D1:
   title: Phase D1 — documentation suite
   surface: XI
-  status: BLOCKED
+  status: ACTIVE      # 2026-06-29 — Q4 resolved; documentation suite is the next selected close-track frontier.
   depends_on: [R-CL-Q4]
   blocks: [R-CL-C1]
   posture: mode-agnostic
