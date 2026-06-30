@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `7f425ded55ab` |
-| `last_refreshed` | 2026-06-30T02:35:22+00:00 |
-| `git_head` | `c0a82220` — `Merge pull request #849 from thestoryportal/codex/r600-pattern-bake-in-cadence4`. **Post-R-600 cadence-4 terminating refresh.** PR #849 promoted `full-chain-witness-not-half-proofs` as workflow **PD-6 composed-chain non-vacuity witness** at `Project_Workflow_v1_16.md` with clearance marker `.harness/clearance/Project_Workflow-v1_16-cleared-2026-06-30.md`, refreshed the R-600 artifact and roadmap/status pointers, and left no new §7.4.7 stale-carry species, C-*-NN contract, production-code, retirement-event, or cross-axis cascade owed. |
+| `workspace_state_hash` | `c5505229727f` |
+| `last_refreshed` | 2026-06-30T02:47:14+00:00 |
+| `git_head` | `743837b3` — `Merge pull request #850 from thestoryportal/codex/r600-pattern-bake-in-cadence4-refresh`. **R-600 Codex review pilot closure branch.** The out-of-family review pilot has enough A/B evidence and is closing as RESOLVED: `just codex-review` remains a standing concrete-diff artifact gate, while tenant-policy blocks on uncommitted private diffs are recorded as local substitute reviews rather than kept as open roadmap work. |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 86 |
 
@@ -24,9 +24,9 @@
 
 **Frontier.** R-FS-1 Tier-1 is closed. The frozen order is complete (11/11), the standalone `B-*` register derives **69 closed / 0 forward / 0 gated / 4 resolved**, `closure_gate.py` G1.1 is **0+0**, automatable Tier-1 predicates pass, and manual G1.4/G1.7/G1.8 sign-off is recorded at `.harness/r-fs-1-tier1-manual-signoff.json`.
 
-**Current next action.** No implementable non-recurring roadmap arc remains after `R-CL-C1` shipped, stale `R-IF-114` / `R-IF-115` ACTIVE statuses were closed, and `R-600-pattern-bake-in-sweep` cadence-4 promoted PD-6. Continue recurring lanes only when cadence or a future operator-selected surface requires them: `R-600-*` pattern bake-in/out-of-family review and `R-IF-roadmap-refresh` fixed-point refreshes.
+**Current next action.** No implementable non-recurring roadmap arc remains after `R-CL-C1` shipped, stale `R-IF-114` / `R-IF-115` ACTIVE statuses were closed, `R-600-pattern-bake-in-sweep` cadence-4 promoted PD-6, and `R-600-codex-out-of-family-review` is closing as a validated pilot. Continue recurring lanes only when cadence or a future operator-selected surface requires them: `R-600-pattern-bake-in-sweep` and `R-IF-roadmap-refresh` fixed-point refreshes.
 
-**Recurring lanes** continue on cadence: `R-600-*` (pattern bake-in / out-of-family review; pattern-bake-in next due after another ~10 PRs or a concrete candidate) and `R-IF-roadmap-refresh`.
+**Recurring lanes** continue on cadence: `R-600-pattern-bake-in-sweep` (next due after another ~10 PRs or a concrete candidate) and `R-IF-roadmap-refresh`. Out-of-family review continues as a codified default gate, not as an open roadmap arc.
 
 **Do not re-open as next action.** The R-FS-1 `B-*` build register is closed; historical Next-action prose below this refresh is lineage only. Closed/parked surfaces remain: `R-411/412/420/421/430`, `R-500`, `R-810/820/830`, `R-008`/OD-4, `R-CXA-1/2/4`, `R-100-*`, `R-300-*`, and `R-901`.
 
@@ -34,7 +34,7 @@
 
 ## Remaining forward work
 
-**The full-spec build (R-FS-1).** The single full-spec umbrella **R-FS-1** has no `B-*` forward build arcs remaining and is RESOLVED after manual Tier-1 gates G1.4/G1.7/G1.8 were signed. `R-CL-Q1`, `R-CL-Q2`, `R-CL-Q3`, `R-CL-Q4`, `R-CL-D1`, and `R-CL-C1` are RESOLVED; stale governance entries `R-IF-114` and `R-IF-115` are RESOLVED; `R-600-pattern-bake-in-sweep` cadence-4 is ACTIVE-SURVEYED with PD-6 promoted; no implementable non-recurring roadmap arc remains.
+**The full-spec build (R-FS-1).** The single full-spec umbrella **R-FS-1** has no `B-*` forward build arcs remaining and is RESOLVED after manual Tier-1 gates G1.4/G1.7/G1.8 were signed. `R-CL-Q1`, `R-CL-Q2`, `R-CL-Q3`, `R-CL-Q4`, `R-CL-D1`, and `R-CL-C1` are RESOLVED; stale governance entries `R-IF-114` and `R-IF-115` are RESOLVED; `R-600-pattern-bake-in-sweep` cadence-4 is ACTIVE-SURVEYED with PD-6 promoted; `R-600-codex-out-of-family-review` is closing as RESOLVED; no implementable non-recurring roadmap arc remains.
 
 **Single arc→unit source.** The full itemization — every arc + unit in plain language, with status, build position, dependencies, and as-built units — lives in the single structured source **`.harness/arc-ledger.yaml`** (derived by `tools/arc_ledger.py`, rendered in the dashboard's Arc & unit map; the forward `B-*` register is shown with decompose-at-open markers). The spine ledger `.harness/beyond-mvp-capability-boundary-ledger.md` carries every surfaced boundary's rationale; per-arc grounding leads at `.harness/r-fs-1-remaining-arcs-grounding-sweep-v1.md` (re-ground at arc-open, presence-not-correctness).
 
@@ -106,10 +106,11 @@ The bucket rows below sum to **54** under the batch-56 live ledger (RETIRED 54).
 ## Drift detection log
 
 
-_Showing the 10 most recent drift/reconciliation events. The full audit history (168 events) is archived at `.harness/roadmap_drift_log_archive.md`._
+_Showing the 10 most recent drift/reconciliation events. The full audit history (169 events) is archived at `.harness/roadmap_drift_log_archive.md`._
 
 | Date | Source | Resolution |
 |---|---|---|
+| 2026-06-30 | **R-600 Codex out-of-family review pilot closure branch opened at `743837b3`.** | Hash `7f425ded55ab` → `c5505229727f` (state at `743837b3`, open PRs empty, fork count 86, batch-57). The pilot has enough A/B evidence to close: `just codex-review` is institutionalized as the concrete-diff artifact reviewer, the autonomous loop keeps it as a standing gate, and tenant-policy blocks on uncommitted private diffs are handled by local substitute reviews. This branch marks `R-600-codex-out-of-family-review` RESOLVED and adds `.harness/R-600-codex-out-of-family-review-pilot-closure.md`. |
 | 2026-06-30 | **Post-#849 terminating refresh — PR #849 R-600 cadence-4 pattern bake-in merged at `c0a82220`; §12.2 owed follow-on.** | Hash `ce0b579e22c8` → `7f425ded55ab` (state at `c0a82220`, open PRs empty, fork count 86, batch-57). PR #849 promotes `full-chain-witness-not-half-proofs` as workflow v1.16 **PD-6 composed-chain non-vacuity witness**, adds the clearance marker, updates R-600/roadmap/pointer/status/dashboard surfaces, and records ZERO new §7.4.7 stale-carry species or production-code/cross-axis cascade owed. Verification: PR #849 all checks green; this terminating refresh updates `.harness/roadmap_status.md` and regenerates `tools/dashboard/roadmap.html` to pin the merge commit fixed point. |
 | 2026-06-30 | **R-600 cadence-4 pattern bake-in branch opened at `3177fab8`.** | Hash `001c985310ba` → `ce0b579e22c8` (state at `3177fab8`, open PRs empty, fork count 86, batch-57). Cadence-4 enumerated the current memory store (114 files, 558 refs, 101 distinct tokens, 72 at cardinality >=2), found `full-chain-witness-not-half-proofs` promotion-ready, and promotes it as workflow v1.16 **PD-6 composed-chain non-vacuity witness** with clearance marker. ZERO new §7.4.7 stale-carry species owed; no cross-axis cascade or production-code change. |
 | 2026-06-30 | **Post-#847 terminating refresh — PR #847 stale R-IF governance closure merged at `4a88a498`; §12.2 owed follow-on.** | Hash `55f9c2203617` → `001c985310ba` (state at `4a88a498`, open PRs empty, fork count 86, batch-57). PR #847 closes stale ACTIVE `R-IF-114` and `R-IF-115` as RESOLVED, preserving the no-implementable-non-recurring selector and leaving only cadence/operator-selected recurring lanes. Verification: PR #847 all checks green; this terminating refresh updates `.harness/roadmap_status.md` and regenerates `tools/dashboard/roadmap.html` to pin the merge commit fixed point. |

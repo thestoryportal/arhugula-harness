@@ -1804,7 +1804,7 @@ R-600-codex-context-guard:
 R-600-codex-out-of-family-review:
   title: Codex CLI as a decorrelated out-of-family reviewer (subscription auth) — pilot
   surface: VII
-  status: ACTIVE   # wiring built + smoke-tested this PR; the decorrelation A/B runs over the next 3-4 high-stakes forks
+  status: RESOLVED   # pilot validated; review discipline now lives as a standing gate, not an open roadmap item
   depends_on: []
   blocks: []
   posture: mode-agnostic
@@ -1812,8 +1812,8 @@ R-600-codex-out-of-family-review:
   skills: { primary: null, secondary: [harness-adversarial-reviewer] }
   advisor_required: satisfied:2026-06-03   # advisor: VERIFY subscription auth empirically (don't reason about precedence); smoke-test ≠ epistemic A/B
   council_required: no
-  verification: { shape: integration, must_pass: ["just codex-review runs `codex review --base` on subscription auth (codex login status = ChatGPT; $0 metered)", "guard _require-codex-subscription FAILS LOUD if not logged in via ChatGPT (no silent metered fallback)", "first run validates the pipe (wiring); the decorrelation A/B is the ongoing observation, NOT this PR"] }
-  close_shape: { type: tooling, artifact: "justfile codex-review + codex-review-uncommitted + _require-codex-subscription guard", cascade: [] }
+  verification: { shape: integration, must_pass: ["just codex-review runs `codex review --base` on subscription auth (codex login status = ChatGPT; $0 metered)", "guard _require-codex-subscription FAILS LOUD if not logged in via ChatGPT (no silent metered fallback)", "first run validates the pipe (wiring); later A/B evidence validates the standing discipline"] }
+  close_shape: { type: tooling, artifact: "justfile codex-review + codex-review-uncommitted + _require-codex-subscription guard + .harness/R-600-codex-out-of-family-review-pilot-closure.md", cascade: [] }
   next_pointer: null
   notes: >
     Codex (B) from the 2026-06-02 exploration. Out-of-family (OpenAI) reviewer complementing Claude
@@ -1829,8 +1829,11 @@ R-600-codex-out-of-family-review:
     the self-referential first run (Codex reviews this PR's diff) is a WIRING SMOKE TEST, not the
     decorrelation A/B. The real A/B = run Codex alongside advisor on the next 3-4 high-stakes forks, log
     what each uniquely catches, let DATA decide keep/expand/drop. Disclosed self-bias: Claude assessing a
-    Claude alternative → keep the A/B mechanical (log verbatim, don't self-grade). ACTIVE until the A/B
-    produces enough data to decide scope.
+    Claude alternative → keep the A/B mechanical (log verbatim, don't self-grade). RESOLVED 2026-06-30:
+    later high-stakes forks produced enough data, CLAUDE.md institutionalized `just codex-review` as the
+    default concrete-diff artifact reviewer, and `.codex/notes/codex-autonomous-loop.md` keeps it as a
+    standing autonomous-loop gate. Tenant policy can still block uncommitted private-diff upload; in that
+    case record a local substitute/decorrelated review rather than keeping this pilot open.
 ```
 
 ### 5.7 Halt-doc routings (2026-05-31 carries)
