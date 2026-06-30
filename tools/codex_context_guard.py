@@ -53,6 +53,11 @@ TRACKING_SURFACES = {
     ".harness/substitutions.yaml",
 }
 DASHBOARD_SNAPSHOT = "tools/dashboard/roadmap.html"
+TERMINATING_REFRESH_FILE_SETS = (
+    frozenset({".harness/roadmap_status.md"}),
+    frozenset({".harness/roadmap_status.md", DASHBOARD_SNAPSHOT}),
+    frozenset({".harness/roadmap_status.md", "Project_Roadmap_v1.md", DASHBOARD_SNAPSHOT}),
+)
 DASHBOARD_MIX_EXEMPT_IMPL = {
     "tools/dashboard/generate.py",
     "tools/dashboard/README.md",
@@ -434,16 +439,32 @@ def append_credential_gate(
 
 
 def _lag_expected(root: Path) -> bool:
-    title = _out(["git", "log", "-1", "--format=%s"], cwd=root)
+    if _is_terminating_refresh_commit(root, "HEAD"):
+        return True
+    parents = _out(["git", "rev-list", "--parents", "-n", "1", "HEAD"], cwd=root).split()
+    if len(parents) < 3:
+        return False
+    first_parent = parents[1]
+    second_parent = parents[2]
+    return _is_terminating_refresh_file_set(
+        _changed_files(root, base_ref=first_parent, head_ref="HEAD")
+    ) and _is_terminating_refresh_commit(root, second_parent)
+
+
+def _is_terminating_refresh_commit(root: Path, ref: str) -> bool:
+    title = _out(["git", "log", "-1", "--format=%s", ref], cwd=root)
     if not title.startswith("ops: roadmap status refresh "):
         return False
-    changed = _out(["git", "show", "--name-only", "--pretty=format:", "HEAD"], cwd=root)
-    files = sorted(line.strip() for line in changed.splitlines() if line.strip())
-    return files in (
-        [".harness/roadmap_status.md"],
-        [".harness/roadmap_status.md", DASHBOARD_SNAPSHOT],
-        [".harness/roadmap_status.md", "Project_Roadmap_v1.md", DASHBOARD_SNAPSHOT],
-    )
+    return _is_terminating_refresh_file_set(_commit_files(root, ref))
+
+
+def _commit_files(root: Path, ref: str) -> list[str]:
+    changed = _out(["git", "show", "--name-only", "--pretty=format:", ref], cwd=root)
+    return sorted(line.strip() for line in changed.splitlines() if line.strip())
+
+
+def _is_terminating_refresh_file_set(files: list[str]) -> bool:
+    return frozenset(files) in TERMINATING_REFRESH_FILE_SETS
 
 
 def _dashboard_snapshot_current(

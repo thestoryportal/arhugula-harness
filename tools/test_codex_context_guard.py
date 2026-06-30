@@ -352,6 +352,47 @@ def test_status_refresh_with_roadmap_and_dashboard_counts_as_expected_lag(
     assert cg._lag_expected(repo)
 
 
+def test_merged_status_refresh_with_roadmap_and_dashboard_counts_as_expected_lag(
+    tmp_path: Path,
+) -> None:
+    repo = _init_repo(tmp_path)
+    _git(repo, "branch", "-m", "main")
+    _git(repo, "checkout", "-b", "refresh")
+    (repo / "tools").mkdir()
+    (repo / "tools" / "dashboard").mkdir()
+    (repo / "tools" / "dashboard" / "roadmap.html").write_text("snapshot\n", encoding="utf-8")
+    (repo / ".harness" / "roadmap_status.md").write_text("refreshed\n", encoding="utf-8")
+    (repo / "Project_Roadmap_v1.md").write_text("roadmap\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "ops: roadmap status refresh post-test")
+    _git(repo, "checkout", "main")
+    _git(repo, "merge", "--no-ff", "refresh", "-m", "Merge pull request #123 from test/refresh")
+
+    assert cg._lag_expected(repo)
+
+
+def test_merged_status_refresh_with_unrelated_payload_is_not_expected_lag(
+    tmp_path: Path,
+) -> None:
+    repo = _init_repo(tmp_path)
+    _git(repo, "branch", "-m", "main")
+    _git(repo, "checkout", "-b", "refresh")
+    (repo / "unrelated.txt").write_text("payload\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "add unrelated payload")
+    (repo / "tools").mkdir()
+    (repo / "tools" / "dashboard").mkdir()
+    (repo / "tools" / "dashboard" / "roadmap.html").write_text("snapshot\n", encoding="utf-8")
+    (repo / ".harness" / "roadmap_status.md").write_text("refreshed\n", encoding="utf-8")
+    (repo / "Project_Roadmap_v1.md").write_text("roadmap\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "ops: roadmap status refresh post-test")
+    _git(repo, "checkout", "main")
+    _git(repo, "merge", "--no-ff", "refresh", "-m", "Merge pull request #123 from test/refresh")
+
+    assert not cg._lag_expected(repo)
+
+
 def test_dashboard_snapshot_normalization_ignores_volatile_dashboard_fields() -> None:
     base = (
         b'<meta name="dashboard-live-head" content="abc123"/>'
