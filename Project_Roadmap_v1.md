@@ -2674,7 +2674,7 @@ R-CL-D1:
 R-CL-C1:
   title: Phase C1 — full-spec closure certification + ship
   surface: VIII
-  status: ACTIVE      # 2026-06-30 — D1 resolved; closure certification + ship is the next close-track frontier.
+  status: RESOLVED    # 2026-06-30 — PR #843 added the closure certification, provider-free C1 gate, and shipped the close-track release at 62d19553.
   depends_on: [R-CL-D1]
   blocks: []
   posture: mode-agnostic
@@ -2685,7 +2685,12 @@ R-CL-C1:
   verification: { shape: e2e, must_pass: ["coverage matrix 100% (every C-* + CXA seam + ADR: built∧activated∧tested∧reviewed∧documented); final adversarial+council completeness critic; phase-9 promotion model applied to remaining bounded-residuals; shipped release"] }
   close_shape: { type: PR-merge, artifact: "closure-certification PR + shipped release", cascade: [R-IF-roadmap-refresh] }
   next_pointer: null
-  notes: The completeness critic — "what's missing: a surface not built, a claim unverified, a doc not written?" Apply phase-9-retirement-criteria.md for bounded-residual promotion. /ship.
+  notes: >
+    RESOLVED 2026-06-30 at PR #843 — `.harness/closure-certification.md` records the
+    5-dimension coverage matrix, final completeness critic, Phase-9 bounded-residual review,
+    tenant-policy external-review limitation, and ship evidence. Provider-free C1 gate
+    `just closure-certification-check` is wired into `just check` / `just codex-check`.
+    No non-recurring close-track arc remains.
 ```
 
 ---
