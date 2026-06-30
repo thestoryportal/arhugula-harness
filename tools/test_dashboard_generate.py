@@ -341,9 +341,9 @@ def test_activation_open_count_matches_current_forward_catalog():
     closure = generate.compute_closure(actions, {"retirement": {}})
 
     # Point-in-time forward-catalog check (update when the catalog changes): the
-    # activation axis = open forward-surface + R-CXA items. 2 open / 25 total at HEAD
+    # activation axis = open forward-surface + R-CXA items. 1 open / 25 total at HEAD
     # (R-CL-P1/P2 reconciled DEFERRED→RESOLVED — superseded by R-FS-1 arc R/E).
-    assert closure["activation"]["open"] == 2
+    assert closure["activation"]["open"] == 1
     assert closure["activation"]["total"] == 25
 
 
