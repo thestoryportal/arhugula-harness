@@ -1486,7 +1486,7 @@ R-600-pattern-bake-in-sweep:
   verification: { shape: grep, must_pass: ["all `[[pattern-name]]` cardinality ≥2 entries identified", "each promotion candidate evaluated against the §7.4.7 + §7.5 catalogues"] }   # must_pass[1] refreshed at cadence-2: pre-v1.14 text said "§7.4.7" only; §7.5 now exists and is where process-disciplines land
   close_shape: { type: substrate-amendment, artifact: "Workflow doc revision absorbing N patterns", cascade: [] }
   next_pointer: null
-  resume: .harness/R-600-pattern-bake-in-sweep.md   # ACTIVE-SURVEYED (cadence-3) 2026-06-10 HEAD a7f7d1f4: both must_pass met. Cadence-2's PD-5 candidate matured via independent grounding-first arcs and was promoted at workflow v1.15 as PD-5 grounding-first producer/slice discovery. ZERO new §7.4.7 owed. Next run only after the cadence trips again (~10 PRs) or a concrete new candidate reaches independent instance-cardinality >=2.
+  resume: .harness/R-600-pattern-bake-in-sweep.md   # ACTIVE-SURVEYED (cadence-4) 2026-06-30 HEAD 3177fab8: both must_pass met. Cadence-4's full-chain witness candidate matured via independent composed-runtime arcs and was promoted at workflow v1.16 as PD-6 composed-chain non-vacuity witness. ZERO new §7.4.7 owed. Next run only after the cadence trips again (~10 PRs) or a concrete new candidate reaches independent instance-cardinality >=2.
   notes: >
     Cadence: every ~10 PRs or operator-discretion. NOT every session. FIRST run 2026-06-01
     (HEAD d7574b3). Survey at .harness/R-600-pattern-bake-in-sweep.md. Result: ZERO new §7.4.7.2

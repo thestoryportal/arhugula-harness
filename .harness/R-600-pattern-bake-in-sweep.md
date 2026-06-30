@@ -2,7 +2,7 @@
 
 **Entry:** `R-600-pattern-bake-in-sweep` (roadmap §5.6) — *Sweep workspace memory for pattern candidates ready for workflow-doc promotion.*
 **Posture:** mode-agnostic recurring sweep; design-substrate amendment only when a candidate clears the §7.5 gate. **Cadence:** ~every 10 PRs or operator-discretion.
-**Latest status:** **ACTIVE-SURVEYED (cadence-3, 2026-06-10)** — cadence-3 survey complete (both `must_pass` met); cadence-2's PD-5 candidate was promoted in `design-substrate/Project_Workflow_v1_15.md` as **PD-5 grounding-first producer/slice discovery** with clearance marker `.harness/clearance/Project_Workflow-v1_15-cleared-2026-06-10.md`. R-600 remains a recurring lane; next run only after the cadence trips again or a concrete new candidate reaches independent instance-cardinality >=2.
+**Latest status:** **ACTIVE-SURVEYED (cadence-4, 2026-06-30)** — cadence-4 survey complete (both `must_pass` met); the `full-chain-witness-not-half-proofs` candidate matured via repeated independent runtime/CP arcs and was promoted in `design-substrate/Project_Workflow_v1_16.md` as **PD-6 composed-chain non-vacuity witness** with clearance marker `.harness/clearance/Project_Workflow-v1_16-cleared-2026-06-30.md`. R-600 remains a recurring lane; next run only after the cadence trips again (~10 PRs) or a concrete new candidate reaches independent instance-cardinality >=2.
 
 **Method.** Read-only enumeration of the auto-memory store at `/Users/robertrhu/.claude/projects/-Users-robertrhu-Projects-arhugula-v2/memory/` (152 files): grep raw `[[wiki-link]]` tokens across all file bodies; count per-token cardinality (total refs + distinct referencing files). 569 total refs / 155 distinct tokens → **104 at cardinality ≥2**, 51 at cardinality 1.
 
@@ -230,3 +230,47 @@ Other high-salience cadence-3 candidates were evaluated but not promoted:
 - **`must_pass` #1** (cardinality>=2 frontier identified): ✅ C3-§1.
 - **`must_pass` #2** (candidates evaluated against §7.4.7 + §7.5): ✅ C3-§2 — result: ZERO new §7.4.7 owed; one §7.5 PD-5 promoted at workflow v1.15.
 - **Entry status:** **ACTIVE-SURVEYED (cadence-3)**. Cadence-2's PD-5 promotion debt is discharged. R-600 remains an ACTIVE recurring lane; next run only after the cadence trips again (~10 PRs) or a concrete new candidate reaches independent instance-cardinality >=2.
+
+---
+---
+
+# Cadence-4 run — 2026-06-30 (HEAD `3177fab8`, post-PR-848)
+
+**Cadence trigger.** More than 10 PRs merged since cadence-3 (`a7f7d1f4` / post-PR-466 → `3177fab8` / post-PR-848), including the full R-FS-1 close track, multiple R-FS-1 implementation arcs, Q1-Q4/D1/C1 closure arcs, Codex context-guard hardening, stale R-IF closure, and terminating refreshes. Cadence is therefore due.
+
+**Method.** Read-only `[[wiki-link]]` enumeration of the auto-memory store at `/Users/robertrhu/.claude/projects/-Users-robertrhu-Projects-arhugula-v2/memory/` (**114 files**): **558 total refs / 101 distinct tokens → 72 at cardinality >=2**. The file count is lower than cadence-3's 199-file snapshot, so raw total/cardinality deltas are not interpreted as a trend; this run uses current token salience plus per-candidate independence/home checks.
+
+## C4-§1 — `must_pass` #1: cardinality>=2 frontier identified
+
+Top unchanged/already-homed signals remain dominant: `hooks-codex-pilots-decorrelation-validated` (45), `verification-shape-sharpened-grep-vs-e2e` (36), `grounding-reveals-claude-closeable-slice-close-honestly` (31), `advisor-before-substantive-work-for-cross-axis-blockers` (30), and `r-cxa-seam-wiring-is-producer-discovery` (20). The frontier change relevant to workflow promotion is the composed-chain / non-vacuity family:
+
+| pattern | refs / files | cadence-3 disposition | cadence-4 disposition |
+|---|---:|---|---|
+| `full-chain-witness-not-half-proofs` | 20 / 15 | not a cadence-3 promoted entry | Promoted as PD-6 composed-chain non-vacuity witness |
+| `built-but-vacuous-reground-ledger-asis` | 18 / 17 | reinforcing PD-5 grounding / non-vacuity signal | Cite-under-PD-5/PD-6; not a standalone PD this cadence |
+| `test-bypass-as-runtime-truth-pattern` | 13 / 9 | parked/candidate at earlier cadence | Cite-under-PD-6 + PD-3; not standalone |
+| `feedback-gate-only-on-meaningful-architecture-change` | 16 / 15 | operator behavioral guidance | Already active in session/AGENTS discipline; no workflow-doc entry |
+| `subagent-landscape-reports-need-regrounding` | 15 / 12 | direct-source grounding signal | Reinforces PD-5 and CLAUDE/AGENTS subagent discipline; no standalone |
+| `cleared-spec-resolves-it-before-first-principles-fix` | 14 / 11 | direct-source/spec-authority signal | Reinforces PD-5 and direct-source grounding; no standalone |
+
+## C4-§2 — `must_pass` #2: candidates evaluated against §7.4.7 and §7.5
+
+**§7.4.7:** ZERO new stale-carry-text disposition species surfaced. The cadence-1 through cadence-3 finding remains corroborated.
+
+**§7.5:** One candidate clears the v1.14 §7.5.1 gate:
+
+**`full-chain-witness-not-half-proofs` → PD-6 PROMOTED.** Statement: when the claim crosses a real producer → shared surface → consumer chain, two half-proofs do not prove the composed claim. A producer test that stops at the seam plus a consumer test fed a hand-built/stubbed input can both pass while the production path is dead or vacuous. The proof must include one non-proxy witness through the real composed path, or the close must be narrowed honestly.
+
+Run against the §7.5.1 inclusion gate:
+
+1. **Instance-cardinality >=2 — PASS.** The memory records repeated independent applications: B-TOOL-GATE, B-HITL-PLACEMENT, B-EDIT-CARRIER, B-FANOUT-PAUSE-SYNTHESIS, B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT, B-INTERSTEP-HANDOFF, and B-HITL-PLACEMENT-PER-STEP-LOOSEN.
+2. **Genuinely §7.5-shaped — PASS.** It is an execution/verification sequencing discipline: choose the composed witness shape before claiming production-live or non-vacuous behavior.
+3. **No canonical home elsewhere — PASS with cite-don't-relocate.** PD-3 covers matching verification shape and PD-5 covers grounding/classification before authoring or closing, but neither states the stricter composed-chain witness requirement.
+
+**Promotion applied this arc:** `design-substrate/Project_Workflow_v1_16.md` adds **PD-6 composed-chain non-vacuity witness**. Clearance marker filed at `.harness/clearance/Project_Workflow-v1_16-cleared-2026-06-30.md`. Root `CLAUDE.md` and `.harness/claude-artifact-pointers.md` now point to workflow head v1.16.
+
+## C4-§3 — Closure disposition (cadence-4)
+
+- **`must_pass` #1** (cardinality>=2 frontier identified): ✅ C4-§1.
+- **`must_pass` #2** (candidates evaluated against §7.4.7 + §7.5): ✅ C4-§2 — result: ZERO new §7.4.7 owed; one §7.5 PD-6 promoted at workflow v1.16.
+- **Entry status:** **ACTIVE-SURVEYED (cadence-4)**. Cadence-4's PD-6 promotion debt is discharged. R-600 remains an ACTIVE recurring lane; next run only after the cadence trips again (~10 PRs) or a concrete new candidate reaches independent instance-cardinality >=2.
