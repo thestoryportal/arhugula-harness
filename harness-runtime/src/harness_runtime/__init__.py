@@ -48,6 +48,15 @@ from harness_runtime.memory_capture import (
     SummaryProvenance,
     SummarySource,
 )
+from harness_runtime.memory_promotion import (
+    PreferenceCandidateSource,
+    PromotionCandidate,
+    PromotionCandidateConfidence,
+    PromotionCandidateExtractor,
+    PromotionCandidateHint,
+    PromotionCandidateKind,
+    PromotionRiskFlag,
+)
 from harness_runtime.shutdown import (
     AlreadyShutDown,
     FlushReport,
@@ -74,6 +83,13 @@ __all__ = [
     "MemoryCaptureMode",
     "MemoryCaptureResult",
     "MemoryCaptureStatus",
+    "PreferenceCandidateSource",
+    "PromotionCandidate",
+    "PromotionCandidateConfidence",
+    "PromotionCandidateExtractor",
+    "PromotionCandidateHint",
+    "PromotionCandidateKind",
+    "PromotionRiskFlag",
     "ResumeArgsError",
     "ResumeHandleUnknownError",
     "ResumeProtocolNotBoundError",
