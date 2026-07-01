@@ -371,9 +371,7 @@ def _entry_from_payload(
         policy_ref=payload.policy_ref,
         procedural_snapshot_ref=payload.procedural_snapshot_ref,
     )
-    return draft.model_copy(
-        update={"response_hash": compute_memory_operation_response_hash(draft)}
-    )
+    return draft.model_copy(update={"response_hash": compute_memory_operation_response_hash(draft)})
 
 
 def _equivalence_payload_from_entry(entry: MemoryOperationEntry) -> dict[str, object]:
@@ -530,9 +528,7 @@ def _write_projection_file(path: Path, records: list[dict[str, str]]) -> None:
     if not records:
         path.write_text("")
         return
-    path.write_text(
-        "".join(json.dumps(record, separators=(",", ":")) + "\n" for record in records)
-    )
+    path.write_text("".join(json.dumps(record, separators=(",", ":")) + "\n" for record in records))
 
 
 def rebuild_memory_operation_projections(
