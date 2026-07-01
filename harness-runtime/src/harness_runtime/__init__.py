@@ -40,6 +40,14 @@ from harness_runtime.bootstrap import (
     run_bootstrap,
 )
 from harness_runtime.drain import DrainPlatformError
+from harness_runtime.memory_capture import (
+    EpisodicMemoryCapture,
+    MemoryCaptureMode,
+    MemoryCaptureResult,
+    MemoryCaptureStatus,
+    SummaryProvenance,
+    SummarySource,
+)
 from harness_runtime.shutdown import (
     AlreadyShutDown,
     FlushReport,
@@ -56,12 +64,16 @@ __all__ = [
     "BootstrapStageCompleteEvent",
     "ConcurrentRunNotSupported",
     "DrainPlatformError",
+    "EpisodicMemoryCapture",
     "FailureCause",
     "FlushReport",
     "FlushTimeoutError",
     "HarnessDraining",
     "IncompleteBootstrapError",
     "InvalidWorkflowError",
+    "MemoryCaptureMode",
+    "MemoryCaptureResult",
+    "MemoryCaptureStatus",
     "ResumeArgsError",
     "ResumeHandleUnknownError",
     "ResumeProtocolNotBoundError",
@@ -70,6 +82,8 @@ __all__ = [
     "RunResult",
     "ShutdownReport",
     "ShutdownTimeout",
+    "SummaryProvenance",
+    "SummarySource",
     "WorkflowObject",
     "flush_observability",
     "resume",
