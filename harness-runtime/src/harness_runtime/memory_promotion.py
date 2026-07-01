@@ -1,10 +1,11 @@
-"""Promotion candidate extraction - U-MEM-08.
+"""Promotion candidate extraction and review decisions.
 
-This module implements the C-MEM-10 extraction boundary only. It validates
-structured candidate hints from episodic/operator source records, links each
-candidate back to source evidence, annotates risk, and resolves whether the
-current memory policy permits automatic promotion. Canonical promotion writes,
-review queues, and durable promotion-decision ledgers land in later units.
+This module implements the C-MEM-10 extraction boundary and the U-MEM-09
+promotion-decision boundary. It validates structured candidate hints from
+episodic/operator source records, links each candidate back to source evidence,
+annotates risk, resolves whether the current memory policy permits automatic
+promotion, and persists review decisions through the canonical memory store and
+durable memory-operation ledger.
 """
 
 from __future__ import annotations
@@ -13,9 +14,16 @@ import hashlib
 import json
 import unicodedata
 from collections.abc import Mapping, Sequence
+from datetime import datetime
 from enum import StrEnum
-from typing import Self, cast
+from typing import Protocol, Self, cast
 
+from harness_is.memory_operation_ledger import (
+    MemoryOperationKind,
+    MemoryOperationPayload,
+    MemoryOperationProjection,
+    MemoryOperationWriteResult,
+)
 from harness_is.memory_policy import (
     MemoryPolicyResolver,
     MemoryPromotionResolution,
@@ -24,12 +32,18 @@ from harness_is.memory_policy import (
 )
 from harness_is.memory_record_envelope import (
     MemoryID,
+    MemoryRecordEnvelope,
+    MemoryRecordKind,
     MemoryScope,
+    MemoryTier,
     MemoryVisibility,
     SourceRef,
     SourceRefType,
+    compute_memory_content_hash,
+    derive_memory_id,
 )
 from harness_is.memory_store import MemoryStoreRecord
+from harness_is.state_ledger_entry_schema import Actor, Identifier
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
@@ -67,6 +81,65 @@ class PreferenceCandidateSource(StrEnum):
 
     OPERATOR_DIRECT = "operator_direct"
     INFERRED = "inferred"
+
+
+class SemanticRecordStatus(StrEnum):
+    """Semantic/procedural promotion statuses declared by C-MEM-05."""
+
+    PROPOSED = "proposed"
+    ACTIVE = "active"
+    DENIED = "denied"
+    SUPERSEDED = "superseded"
+    EXPIRED = "expired"
+
+
+class SemanticInjectionPolicy(StrEnum):
+    """Injection policy values declared by C-MEM-05."""
+
+    NEVER = "never"
+    RETRIEVAL_ONLY = "retrieval_only"
+    PROMPT_PACKET_ALLOWED = "prompt_packet_allowed"
+    TOOL_ALLOWED = "tool_allowed"
+    NATIVE_ALLOWED = "native_allowed"
+
+
+class PreferenceSubject(StrEnum):
+    """Preference subjects declared by C-MEM-06."""
+
+    OPERATOR = "operator"
+    PROJECT = "project"
+    WORKFLOW = "workflow"
+    CODE_STYLE = "code_style"
+    TOOL_USE = "tool_use"
+    PROVIDER = "provider"
+    REVIEW = "review"
+    OTHER = "other"
+
+
+class PreferenceStrength(StrEnum):
+    """Preference strengths declared by C-MEM-06."""
+
+    WEAK = "weak"
+    NORMAL = "normal"
+    STRONG = "strong"
+    MANDATORY = "mandatory"
+
+
+class PreferenceSourceAuthority(StrEnum):
+    """Preference source-authority values declared by C-MEM-06."""
+
+    OPERATOR_DIRECT = "operator_direct"
+    INFERRED_FROM_REPETITION = "inferred_from_repetition"
+    IMPORTED = "imported"
+    POLICY = "policy"
+
+
+class PromotionReviewRequiredError(ValueError):
+    """Raised when a caller tries to activate a candidate that still needs review."""
+
+
+class PreferencePromotionValidationError(ValueError):
+    """Raised when a preference candidate lacks C-MEM-06 required metadata."""
 
 
 def _empty_source_refs() -> tuple[SourceRef, ...]:
@@ -144,6 +217,40 @@ class PromotionCandidate(BaseModel):
         return self
 
 
+class PreferencePromotionDetails(BaseModel):
+    """C-MEM-06 preference-only fields supplied during promotion."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    preference_subject: PreferenceSubject
+    preference_strength: PreferenceStrength
+    source_authority: PreferenceSourceAuthority
+    confirmation_required: bool
+
+
+class PromotionDecisionResult(BaseModel):
+    """Result of applying or queueing one promotion decision."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    status: SemanticRecordStatus
+    record: MemoryStoreRecord
+    memory_id: MemoryID
+    operation_kind: MemoryOperationKind
+    operation_result: MemoryOperationWriteResult
+
+
+class PromotionDecisionStore(Protocol):
+    """Store surface consumed by ``PromotionDecisionService``."""
+
+    def write_record(self, record: MemoryStoreRecord) -> object: ...
+
+    def append_memory_operation(
+        self,
+        payload: MemoryOperationPayload,
+    ) -> MemoryOperationWriteResult: ...
+
+
 class PromotionCandidateExtractor:
     """Extract C-MEM-10 candidates from episodic/operator memory records."""
 
@@ -162,6 +269,236 @@ class PromotionCandidateExtractor:
             for hint in _hints_from_record(record):
                 candidates.append(_candidate_from_hint(record, hint, resolution))
         return candidates
+
+
+class PromotionDecisionService:
+    """Apply C-MEM-10 promotion decisions through the canonical store and ledger."""
+
+    def __init__(
+        self,
+        *,
+        store: PromotionDecisionStore,
+        actor: Actor,
+        policy_ref: str | None = None,
+        procedural_snapshot_ref: str | None = None,
+        run_id: str | None = None,
+        step_id: str | None = None,
+        provider: str | None = None,
+        model: str | None = None,
+        cli_profile: str | None = None,
+    ) -> None:
+        self._store = store
+        self._actor = actor
+        self._policy_ref = policy_ref
+        self._procedural_snapshot_ref = procedural_snapshot_ref
+        self._run_id = run_id
+        self._step_id = step_id
+        self._provider = provider
+        self._model = model
+        self._cli_profile = cli_profile
+
+    def propose_for_review(
+        self,
+        candidate: PromotionCandidate,
+        *,
+        timestamp: datetime,
+        injection_policy: SemanticInjectionPolicy,
+        preference_details: PreferencePromotionDetails | None = None,
+        rationale: str | None = None,
+        tags: Sequence[str] = (),
+    ) -> PromotionDecisionResult:
+        """Persist a proposed semantic/procedural record for operator review."""
+
+        return self._persist_decision(
+            candidate,
+            status=SemanticRecordStatus.PROPOSED,
+            operation_kind=MemoryOperationKind.PROPOSE_PROMOTION,
+            timestamp=timestamp,
+            injection_policy=injection_policy,
+            preference_details=preference_details,
+            rationale=rationale,
+            tags=tags,
+            review_reason=None,
+            supersedes=(),
+            statement_override=None,
+        )
+
+    def approve(
+        self,
+        candidate: PromotionCandidate,
+        *,
+        timestamp: datetime,
+        injection_policy: SemanticInjectionPolicy | None = None,
+        preference_details: PreferencePromotionDetails | None = None,
+        operator_approved: bool = False,
+        rationale: str | None = None,
+        tags: Sequence[str] = (),
+        supersedes: Sequence[MemoryID] = (),
+    ) -> PromotionDecisionResult:
+        """Persist an active record when policy or operator review allows it."""
+
+        if not candidate.auto_promote_allowed and not operator_approved:
+            raise PromotionReviewRequiredError(
+                "candidate cannot become active until operator review approves it"
+            )
+        if injection_policy is None:
+            if candidate.proposed_kind is PromotionCandidateKind.PREFERENCE:
+                raise PreferencePromotionValidationError(
+                    "preference promotion requires injection_policy"
+                )
+            raise ValueError("active promotion requires an injection_policy")
+        return self._persist_decision(
+            candidate,
+            status=SemanticRecordStatus.ACTIVE,
+            operation_kind=MemoryOperationKind.PROMOTE,
+            timestamp=timestamp,
+            injection_policy=injection_policy,
+            preference_details=preference_details,
+            rationale=rationale,
+            tags=tags,
+            review_reason=None,
+            supersedes=supersedes,
+            statement_override=None,
+        )
+
+    def deny(
+        self,
+        candidate: PromotionCandidate,
+        *,
+        timestamp: datetime,
+        reason: str,
+        tags: Sequence[str] = (),
+    ) -> PromotionDecisionResult:
+        """Persist a denied record and append a denial ledger entry."""
+
+        return self._persist_decision(
+            candidate,
+            status=SemanticRecordStatus.DENIED,
+            operation_kind=MemoryOperationKind.DENY_PROMOTION,
+            timestamp=timestamp,
+            injection_policy=SemanticInjectionPolicy.NEVER,
+            preference_details=None,
+            rationale=None,
+            tags=tags,
+            review_reason=reason,
+            supersedes=(),
+            statement_override=None,
+        )
+
+    def edit_and_approve(
+        self,
+        candidate: PromotionCandidate,
+        *,
+        statement: str,
+        timestamp: datetime,
+        injection_policy: SemanticInjectionPolicy,
+        preference_details: PreferencePromotionDetails | None = None,
+        operator_approved: bool = False,
+        rationale: str | None = None,
+        tags: Sequence[str] = (),
+        supersedes: Sequence[MemoryID] = (),
+    ) -> PromotionDecisionResult:
+        """Apply an operator-edited statement and persist it as active."""
+
+        if not candidate.auto_promote_allowed and not operator_approved:
+            raise PromotionReviewRequiredError(
+                "candidate cannot become active until operator review approves it"
+            )
+        if not statement.strip():
+            raise ValueError("edited promotion statement cannot be empty")
+        return self._persist_decision(
+            candidate,
+            status=SemanticRecordStatus.ACTIVE,
+            operation_kind=MemoryOperationKind.PROMOTE,
+            timestamp=timestamp,
+            injection_policy=injection_policy,
+            preference_details=preference_details,
+            rationale=rationale,
+            tags=tags,
+            review_reason=None,
+            supersedes=supersedes,
+            statement_override=statement,
+        )
+
+    def _persist_decision(
+        self,
+        candidate: PromotionCandidate,
+        *,
+        status: SemanticRecordStatus,
+        operation_kind: MemoryOperationKind,
+        timestamp: datetime,
+        injection_policy: SemanticInjectionPolicy,
+        preference_details: PreferencePromotionDetails | None,
+        rationale: str | None,
+        tags: Sequence[str],
+        review_reason: str | None,
+        supersedes: Sequence[MemoryID],
+        statement_override: str | None,
+    ) -> PromotionDecisionResult:
+        _validate_preference_promotion(
+            candidate,
+            status=status,
+            injection_policy=injection_policy,
+            preference_details=preference_details,
+        )
+        record = _promotion_record(
+            candidate,
+            status=status,
+            timestamp=timestamp,
+            injection_policy=injection_policy,
+            preference_details=preference_details,
+            rationale=rationale,
+            tags=tags,
+            review_reason=review_reason,
+            supersedes=supersedes,
+            statement_override=statement_override,
+            policy_ref=self._policy_ref,
+        )
+        self._store.write_record(record)
+        operation_result = self._store.append_memory_operation(
+            self._operation_payload(
+                candidate,
+                record=record,
+                operation_kind=operation_kind,
+                timestamp=timestamp,
+            )
+        )
+        return PromotionDecisionResult(
+            status=status,
+            record=record,
+            memory_id=record.envelope.memory_id,
+            operation_kind=operation_kind,
+            operation_result=operation_result,
+        )
+
+    def _operation_payload(
+        self,
+        candidate: PromotionCandidate,
+        *,
+        record: MemoryStoreRecord,
+        operation_kind: MemoryOperationKind,
+        timestamp: datetime,
+    ) -> MemoryOperationPayload:
+        action_id = Identifier(
+            f"promotion:{operation_kind.value}:{candidate.candidate_id}:{record.envelope.memory_id}"
+        )
+        return MemoryOperationPayload(
+            action_id=action_id,
+            idempotency_key=Identifier(f"idempotent:{action_id}"),
+            actor=self._actor,
+            timestamp=timestamp,
+            operation_kind=operation_kind,
+            operation_projection=MemoryOperationProjection.for_operation_kind(operation_kind),
+            run_id=self._run_id,
+            step_id=self._step_id,
+            provider=self._provider,
+            model=self._model,
+            cli_profile=self._cli_profile,
+            engine_class=None,
+            memory_refs=(record.envelope.memory_id,),
+            policy_ref=self._policy_ref,
+            procedural_snapshot_ref=self._procedural_snapshot_ref,
+        )
 
 
 def _hints_from_record(record: MemoryStoreRecord) -> list[PromotionCandidateHint]:
@@ -355,12 +692,250 @@ def _candidate_id(
     return f"promocand:{hashlib.sha256(serialized.encode('utf-8')).hexdigest()}"
 
 
+def _promotion_record(
+    candidate: PromotionCandidate,
+    *,
+    status: SemanticRecordStatus,
+    timestamp: datetime,
+    injection_policy: SemanticInjectionPolicy,
+    preference_details: PreferencePromotionDetails | None,
+    rationale: str | None,
+    tags: Sequence[str],
+    review_reason: str | None,
+    supersedes: Sequence[MemoryID],
+    statement_override: str | None,
+    policy_ref: str | None,
+) -> MemoryStoreRecord:
+    kind = _record_kind_for_candidate(candidate)
+    tier = _tier_for_record_kind(kind)
+    content = _record_content(
+        candidate,
+        status=status,
+        injection_policy=injection_policy,
+        preference_details=preference_details,
+        rationale=rationale,
+        tags=tags,
+        review_reason=review_reason,
+        statement_override=statement_override,
+        policy_ref=policy_ref,
+    )
+    content_hash = compute_memory_content_hash(content)
+    return MemoryStoreRecord(
+        envelope=MemoryRecordEnvelope(
+            memory_id=derive_memory_id(tier, kind, content_hash),
+            schema_version="promotion-record/v1",
+            tier=tier,
+            kind=kind,
+            created_at=timestamp,
+            updated_at=None,
+            source_refs=candidate.source_refs,
+            scope=candidate.suggested_scope,
+            content_hash=content_hash,
+            supersedes=tuple(supersedes),
+        ),
+        content=content,
+    )
+
+
+def _record_kind_for_candidate(candidate: PromotionCandidate) -> MemoryRecordKind:
+    if candidate.proposed_kind is PromotionCandidateKind.FACT:
+        return MemoryRecordKind.SEMANTIC_FACT
+    if candidate.proposed_kind is PromotionCandidateKind.DECISION:
+        return MemoryRecordKind.DECISION
+    if candidate.proposed_kind is PromotionCandidateKind.CONVENTION:
+        return MemoryRecordKind.CONVENTION
+    if candidate.proposed_kind is PromotionCandidateKind.FAILURE_LEARNING:
+        return MemoryRecordKind.FAILURE_LEARNING
+    if candidate.proposed_kind is PromotionCandidateKind.RESEARCH:
+        return MemoryRecordKind.RESEARCH
+    if candidate.proposed_kind is PromotionCandidateKind.PREFERENCE:
+        return MemoryRecordKind.PREFERENCE
+    if candidate.proposed_kind is PromotionCandidateKind.PROCEDURAL_UPDATE:
+        return MemoryRecordKind.PROCEDURAL_SNAPSHOT
+    raise AssertionError(f"unhandled promotion kind {candidate.proposed_kind.value}")
+
+
+def _tier_for_record_kind(kind: MemoryRecordKind) -> MemoryTier:
+    if kind is MemoryRecordKind.PROCEDURAL_SNAPSHOT:
+        return MemoryTier.PROCEDURAL
+    return MemoryTier.SEMANTIC
+
+
+def _record_content(
+    candidate: PromotionCandidate,
+    *,
+    status: SemanticRecordStatus,
+    injection_policy: SemanticInjectionPolicy,
+    preference_details: PreferencePromotionDetails | None,
+    rationale: str | None,
+    tags: Sequence[str],
+    review_reason: str | None,
+    statement_override: str | None,
+    policy_ref: str | None,
+) -> dict[str, object]:
+    if candidate.proposed_kind is PromotionCandidateKind.PROCEDURAL_UPDATE:
+        return _procedural_record_content(
+            candidate,
+            status=status,
+            injection_policy=injection_policy,
+            rationale=rationale,
+            tags=tags,
+            review_reason=review_reason,
+            statement_override=statement_override,
+            policy_ref=policy_ref,
+        )
+    return _semantic_record_content(
+        candidate,
+        status=status,
+        injection_policy=injection_policy,
+        preference_details=preference_details,
+        rationale=rationale,
+        tags=tags,
+        review_reason=review_reason,
+        statement_override=statement_override,
+    )
+
+
+def _semantic_record_content(
+    candidate: PromotionCandidate,
+    *,
+    status: SemanticRecordStatus,
+    injection_policy: SemanticInjectionPolicy,
+    preference_details: PreferencePromotionDetails | None,
+    rationale: str | None,
+    tags: Sequence[str],
+    review_reason: str | None,
+    statement_override: str | None,
+) -> dict[str, object]:
+    content: dict[str, object] = {
+        "candidate_id": candidate.candidate_id,
+        "source_memory_refs": [str(memory_id) for memory_id in candidate.source_memory_refs],
+        "semantic_kind": candidate.proposed_kind.value,
+        "statement": statement_override or candidate.statement,
+        "rationale": rationale,
+        "evidence": [ref.model_dump(mode="json") for ref in candidate.source_refs],
+        "confidence": candidate.confidence.value,
+        "status": status.value,
+        "ttl": None,
+        "expires_at": None,
+        "injection_policy": injection_policy.value,
+        "tags": [str(tag) for tag in tags],
+    }
+    if review_reason is not None:
+        content["review_reason"] = review_reason
+    if candidate.proposed_kind is PromotionCandidateKind.PREFERENCE:
+        assert preference_details is not None
+        content.update(
+            {
+                "preference_subject": preference_details.preference_subject.value,
+                "preference_strength": preference_details.preference_strength.value,
+                "source_authority": preference_details.source_authority.value,
+                "confirmation_required": preference_details.confirmation_required,
+            }
+        )
+    return content
+
+
+def _procedural_record_content(
+    candidate: PromotionCandidate,
+    *,
+    status: SemanticRecordStatus,
+    injection_policy: SemanticInjectionPolicy,
+    rationale: str | None,
+    tags: Sequence[str],
+    review_reason: str | None,
+    statement_override: str | None,
+    policy_ref: str | None,
+) -> dict[str, object]:
+    content: dict[str, object] = {
+        "snapshot_id": candidate.candidate_id,
+        "workflow_id": candidate.suggested_scope.workflow,
+        "cli_profile": candidate.suggested_scope.cli_profile,
+        "prompt_refs": [],
+        "skill_refs": [],
+        "routing_manifest_ref": None,
+        "instruction_file_refs": [],
+        "memory_policy_ref": policy_ref,
+        "procedural_update": statement_override or candidate.statement,
+        "rationale": rationale,
+        "evidence": [ref.model_dump(mode="json") for ref in candidate.source_refs],
+        "confidence": candidate.confidence.value,
+        "status": status.value,
+        "injection_policy": injection_policy.value,
+        "tags": [str(tag) for tag in tags],
+    }
+    if review_reason is not None:
+        content["review_reason"] = review_reason
+    return content
+
+
+def _validate_preference_promotion(
+    candidate: PromotionCandidate,
+    *,
+    status: SemanticRecordStatus,
+    injection_policy: SemanticInjectionPolicy,
+    preference_details: PreferencePromotionDetails | None,
+) -> None:
+    if candidate.proposed_kind is not PromotionCandidateKind.PREFERENCE:
+        if preference_details is not None:
+            raise PreferencePromotionValidationError(
+                "preference_details are only valid for preference candidates"
+            )
+        return
+    if preference_details is None:
+        raise PreferencePromotionValidationError("preference promotion requires preference_details")
+    if not candidate.source_refs:
+        raise PreferencePromotionValidationError("preference promotion requires source evidence")
+    if (
+        status is SemanticRecordStatus.ACTIVE
+        and preference_details.source_authority
+        is PreferenceSourceAuthority.INFERRED_FROM_REPETITION
+        and len(candidate.source_refs) < 2
+    ):
+        raise PreferencePromotionValidationError(
+            "inferred preference promotion requires at least two source refs "
+            "or must remain proposed"
+        )
+    if (
+        preference_details.preference_strength is PreferenceStrength.MANDATORY
+        and not _scope_has_binding(candidate.suggested_scope)
+    ):
+        raise PreferencePromotionValidationError(
+            "mandatory preference promotion requires a scoped binding"
+        )
+
+
+def _scope_has_binding(scope: MemoryScope) -> bool:
+    return any(
+        getattr(scope, field_name) is not None
+        for field_name in (
+            "project",
+            "workflow",
+            "workload_class",
+            "provider_family",
+            "cli_profile",
+            "tenant",
+        )
+    )
+
+
 __all__ = [
     "PreferenceCandidateSource",
+    "PreferencePromotionDetails",
+    "PreferencePromotionValidationError",
+    "PreferenceSourceAuthority",
+    "PreferenceStrength",
+    "PreferenceSubject",
     "PromotionCandidate",
     "PromotionCandidateConfidence",
     "PromotionCandidateExtractor",
     "PromotionCandidateHint",
     "PromotionCandidateKind",
+    "PromotionDecisionResult",
+    "PromotionDecisionService",
+    "PromotionDecisionStore",
+    "PromotionReviewRequiredError",
     "PromotionRiskFlag",
+    "SemanticInjectionPolicy",
+    "SemanticRecordStatus",
 ]
