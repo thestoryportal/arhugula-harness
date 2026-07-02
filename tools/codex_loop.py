@@ -417,6 +417,14 @@ def _worktree_disposition_issues(
     return issues
 
 
+def worktree_disposition_issues(
+    state: dict[str, Any],
+    latest: dict[str, dict[str, Any]],
+    current: GitIdentity,
+) -> list[str]:
+    return _worktree_disposition_issues(state, latest, current)
+
+
 def _order_issues(
     latest: dict[str, tuple[int, dict[str, Any]]], required_gates: tuple[str, ...]
 ) -> list[str]:

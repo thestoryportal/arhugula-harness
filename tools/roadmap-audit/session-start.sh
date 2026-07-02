@@ -91,11 +91,30 @@ fi
 # keying on the title alone would let a substantive commit mis-titled with the reserved
 # prefix suppress a genuine drift halt (the false negative post-merge-refresh.sh +
 # prompt-context.sh also guard).
-LAST_TITLE=$(git log -1 --format=%s 2>/dev/null)
-if echo "$LAST_TITLE" | grep -qE '^ops: roadmap status refresh '; then
-  CHANGED_FILES=$(git show --name-only --pretty=format: HEAD 2>/dev/null | grep -v '^$' | sort -u)
+is_terminating_refresh_ref() {
+  local _ref _title _files
+  _ref="$1"
+  _title=$(git log -1 --format=%s "$_ref" 2>/dev/null || echo "")
+  echo "$_title" | grep -qE '^ops: roadmap status refresh ' || return 1
+  _files=$(git show --name-only --pretty=format: "$_ref" 2>/dev/null | grep -v '^$' | sort -u)
+  hook_is_dashboard_only_set "$_files"
+}
+
+if is_terminating_refresh_ref HEAD; then
+  emit "[ROADMAP] hash=lag-expected next=${NEXT:-?} (post-refresh fixed-point §12.2.1)"
+fi
+
+PARENTS=$(git rev-list --parents -n 1 HEAD 2>/dev/null || echo "")
+# shellcheck disable=SC2086 # intentional word splitting of rev-list parent SHAs.
+set -- $PARENTS
+if [ "$#" -ge 3 ]; then
+  FIRST_PARENT="$2"
+  SECOND_PARENT="$3"
+  CHANGED_FILES=$(git diff --name-only "$FIRST_PARENT" HEAD 2>/dev/null | sort -u)
   if hook_is_dashboard_only_set "$CHANGED_FILES"; then
-    emit "[ROADMAP] hash=lag-expected next=${NEXT:-?} (post-refresh fixed-point §12.2.1)"
+    if is_terminating_refresh_ref "$SECOND_PARENT"; then
+      emit "[ROADMAP] hash=lag-expected next=${NEXT:-?} (post-refresh fixed-point §12.2.1)"
+    fi
   fi
 fi
 

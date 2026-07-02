@@ -77,6 +77,19 @@ git -C "$REPO" commit -qm "ops: roadmap status refresh post-#5 (#6)"
 OUT=$(run)
 printf '%s' "$OUT" | grep -q "lag-expected" && ok "lag-expected on status+HTML refresh ($OUT)" || bad "expected lag-expected on HTML-regenerating refresh, got: $OUT"
 
+# 3c) lag-expected — the same terminating refresh after GitHub's merge commit.
+#     The main tip title is "Merge pull request ...", so SessionStart has to inspect
+#     the second parent instead of requiring the merge commit title itself to carry
+#     the reserved refresh prefix.
+git -C "$REPO" checkout -qb merge-refresh
+write_dashboard "222222222222"
+git -C "$REPO" add .harness/roadmap_status.md
+git -C "$REPO" commit -qm "ops: roadmap status refresh post-#7 (#8)"
+git -C "$REPO" checkout -q main
+git -C "$REPO" merge --no-ff -q merge-refresh -m "Merge pull request #8 from test/merge-refresh"
+OUT=$(run)
+printf '%s' "$OUT" | grep -q "lag-expected" && ok "lag-expected on merged refresh PR ($OUT)" || bad "expected lag-expected on merged refresh PR, got: $OUT"
+
 # 4) DRIFT despite refresh title — last commit carries the reserved prefix but ALSO
 #    changes a non-dashboard file, so it is NOT a terminating refresh under §12.2.1.
 #    Title-only matching would mis-pass this as lag-expected (the false negative).
