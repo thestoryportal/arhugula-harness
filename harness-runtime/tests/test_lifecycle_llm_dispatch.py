@@ -76,7 +76,12 @@ from harness_cp.workflow_driver_types import (
 )
 from harness_cp.workflow_manifest_entry import StepOverride, WorkflowManifestEntry
 from harness_is.memory_operation_ledger import MemoryOperationWriteResult
-from harness_is.memory_record_envelope import MemoryID, MemoryRecordKind
+from harness_is.memory_record_envelope import (
+    MemoryID,
+    MemoryRecordKind,
+    MemoryScope,
+    MemoryVisibility,
+)
 from harness_is.memory_retrieval import (
     MemoryPacket,
     MemoryPacketAccessMode,
@@ -246,6 +251,8 @@ class _FakeHITLToolLoop:
 class _OpenAICompletions:
     def __init__(self) -> None:
         self.last_kwargs: dict[str, Any] | None = None
+        self.calls: list[dict[str, Any]] = []
+        self.responses: list[_ProviderResponse] = []
         self.canned_response = _ProviderResponse(
             id="cmpl_test_001",
             usage=_Usage(prompt_tokens=15, completion_tokens=7),
@@ -254,6 +261,9 @@ class _OpenAICompletions:
 
     async def create(self, **kwargs: Any) -> _ProviderResponse:
         self.last_kwargs = kwargs
+        self.calls.append(kwargs)
+        if self.responses:
+            return self.responses.pop(0)
         return self.canned_response
 
 
@@ -823,6 +833,54 @@ def _prompt_extension_memory_context(
     )
 
 
+def _standard_tools_memory_context(
+    *,
+    provider: str = "openai",
+    model: str = "test-model-1",
+    family: ProviderFamily = ProviderFamily.OPENAI,
+) -> RuntimeMemoryContext:
+    packet = MemoryPacket(
+        packet_id="memory-packet:" + ("c" * 32),
+        packet_hash="c" * 64,
+        token_budget=80,
+        access_mode=MemoryPacketAccessMode.STANDARD_MEMORY_TOOLS,
+        sections=(),
+        selected_refs=(),
+        policy_ref="policy:u-mem-16",
+    )
+    return RuntimeMemoryContext(
+        run_id="run-u-mem-16",
+        access_mode=MemoryAccessMode.STANDARD_MEMORY_TOOLS,
+        selection=MemoryAccessModeSelection(
+            access_mode=MemoryAccessMode.STANDARD_MEMORY_TOOLS,
+            selected_provider=provider,
+            selected_model=model,
+            selected_family=family,
+            fallback_primary=f"{provider}:{model}",
+            cli_profile_ref="codex",
+            decision_trace=("standard_tools_policy_allowed",),
+        ),
+        policy_ref="policy:u-mem-16",
+        selected_refs=(),
+        packet=packet,
+        packet_hash=packet.packet_hash,
+        retrieval_request_hash="d" * 64,
+        record_scope=MemoryScope(
+            project="arhugula-v2",
+            workflow="memory-substrate",
+            workload_class="coding-arc",
+            provider_family=ProviderFamily.OPENAI.value,
+            cli_profile="codex",
+            visibility=MemoryVisibility.WORKFLOW,
+        ),
+        external_cli_route_ref=None,
+        denial_reason=None,
+        ledgerable_denial=False,
+        injection_action_id=Identifier("memory-injection:cccccccccccccccccccccccccccccccc"),
+        injection_operation_result=MemoryOperationWriteResult.APPENDED,
+    )
+
+
 @pytest.mark.asyncio
 async def test_active_system_prompt_injects_anthropic_system_kwarg() -> None:
     """Anthropic dispatch injects the active prompt as the top-level ``system=``
@@ -1019,6 +1077,117 @@ async def test_memory_prompt_packet_injects_openai_leading_system_message() -> N
     assert "read-only memory packet" in msgs[0]["content"]
     assert str(_MEMORY_REF) in msgs[0]["content"]
     assert msgs[1] == {"role": "user", "content": "hi"}
+
+
+@pytest.mark.asyncio
+async def test_openai_standard_memory_tool_loop_executes_provider_neutral_tool() -> None:
+    """A non-native provider using standard memory tools gets a tool-result turn."""
+
+    class _FakeStandardMemoryToolExecutor:
+        def __init__(self) -> None:
+            self.requests: list[Any] = []
+
+        def execute(self, request: Any) -> dict[str, object]:
+            self.requests.append(request)
+            return {
+                "results": [
+                    {
+                        "memory_ref": "mem:semantic:preference:" + ("a" * 64),
+                        "record_kind": "preference",
+                        "packet_section_ref": "active_operator_project_preferences",
+                        "packet_hash": "b" * 64,
+                        "score": 100,
+                    }
+                ],
+                "policy_ref": "policy:u-mem-16",
+            }
+
+    client = _OpenAIClient()
+    tool_call = {
+        "id": "call_memory_search",
+        "type": "function",
+        "function": {
+            "name": "memory.search",
+            "arguments": json.dumps(
+                {
+                    "query": "codex memory",
+                    "scope_ref": "scope:u-mem-16",
+                    "policy_ref": "policy:u-mem-16",
+                },
+                sort_keys=True,
+            ),
+        },
+    }
+    client.chat.completions.responses = [
+        _ProviderResponse(
+            id="cmpl_tool_001",
+            usage=_Usage(prompt_tokens=10, completion_tokens=4),
+            _dump={
+                "id": "cmpl_tool_001",
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [tool_call],
+                        }
+                    }
+                ],
+            },
+        ),
+        _ProviderResponse(
+            id="cmpl_final_001",
+            usage=_Usage(prompt_tokens=12, completion_tokens=5),
+            _dump={
+                "id": "cmpl_final_001",
+                "choices": [{"message": {"role": "assistant", "content": "done"}}],
+            },
+        ),
+    ]
+    executor = _FakeStandardMemoryToolExecutor()
+    adapter = _OpenAIFakeAdapter(client)
+    tp, _ = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"openai": adapter},
+        tracer_provider=tp,
+        memory_context=_standard_tools_memory_context(),
+        standard_memory_tool_executor=executor,
+    )
+
+    await dispatcher.dispatch(
+        _binding("openai"),
+        _step(
+            {
+                "messages": [{"role": "user", "content": "search memory"}],
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "memory.search",
+                            "parameters": {"type": "object"},
+                        },
+                    }
+                ],
+                "params": {"max_tokens": 100},
+            }
+        ),
+        step_context=_step_context(),
+    )
+
+    assert len(executor.requests) == 1
+    assert executor.requests[0].tool_name == "memory.search"
+    assert executor.requests[0].context.policy_ref == "policy:u-mem-16"
+    assert len(client.chat.completions.calls) == 2
+    continuation = client.chat.completions.calls[1]["messages"]
+    assert continuation[-2] == {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [tool_call],
+    }
+    assert continuation[-1]["role"] == "tool"
+    assert continuation[-1]["tool_call_id"] == "call_memory_search"
+    assert continuation[-1]["name"] == "memory.search"
+    assert json.loads(continuation[-1]["content"])["results"][0]["record_kind"] == "preference"
 
 
 @pytest.mark.asyncio

@@ -77,6 +77,14 @@ from harness_runtime.memory_promotion import (
     SemanticInjectionPolicy,
     SemanticRecordStatus,
 )
+from harness_runtime.memory_tool_executor import (
+    MemoryToolExecutionContext,
+    MemoryToolExecutionDeniedError,
+    MemoryToolExecutionError,
+    MemoryToolExecutionInputError,
+    MemoryToolExecutionRequest,
+    StandardMemoryToolExecutor,
+)
 from harness_runtime.shutdown import (
     AlreadyShutDown,
     FlushReport,
@@ -105,6 +113,11 @@ __all__ = [
     "MemoryCaptureStatus",
     "MemoryContextCompositionRequest",
     "MemoryInjectionOperationStore",
+    "MemoryToolExecutionContext",
+    "MemoryToolExecutionDeniedError",
+    "MemoryToolExecutionError",
+    "MemoryToolExecutionInputError",
+    "MemoryToolExecutionRequest",
     "PreferenceCandidateSource",
     "PreferencePromotionDetails",
     "PreferencePromotionValidationError",
@@ -134,6 +147,7 @@ __all__ = [
     "SemanticRecordStatus",
     "ShutdownReport",
     "ShutdownTimeout",
+    "StandardMemoryToolExecutor",
     "SummaryProvenance",
     "SummarySource",
     "WorkflowObject",
