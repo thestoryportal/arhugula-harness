@@ -89,6 +89,15 @@ cat > "$DASHF" <<'EOF'
 **`R-OLD-stale-narrative`** was closed earlier (must NOT be picked).
 EOF
 eq "hook_roadmap_next skips range token and picks concrete pointer" "$(hook_roadmap_next "$DASHF")" "R-300-x"
+cat > "$DASHF" <<'EOF'
+# dash
+## Next action
+**Current next action.** Continue the memory substrate build. U-MEM-09 is merged; the next implementable unit is U-MEM-10, the Information-substrate derived retrieval indexes unit.
+
+**Recurring lanes** continue on cadence: `R-600-pattern-bake-in-sweep` and `R-IF-roadmap-refresh`.
+---
+EOF
+eq "hook_roadmap_next picks U-MEM frontier before recurring R lane" "$(hook_roadmap_next "$DASHF")" "U-MEM-10"
 # Absent section / file → empty (callers default to '?').
 eq "hook_roadmap_next empty on missing file" "$(hook_roadmap_next "$REPO/nope.md")" ""
 printf '# d\nno next-action heading here\n' > "$DASHF"
