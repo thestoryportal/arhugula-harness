@@ -48,6 +48,12 @@ from harness_runtime.memory_capture import (
     SummaryProvenance,
     SummarySource,
 )
+from harness_runtime.memory_context import (
+    MemoryContextCompositionRequest,
+    MemoryInjectionOperationStore,
+    RuntimeMemoryContext,
+    RuntimeMemoryContextComposer,
+)
 from harness_runtime.memory_promotion import (
     PreferenceCandidateSource,
     PreferencePromotionDetails,
@@ -94,6 +100,8 @@ __all__ = [
     "MemoryCaptureMode",
     "MemoryCaptureResult",
     "MemoryCaptureStatus",
+    "MemoryContextCompositionRequest",
+    "MemoryInjectionOperationStore",
     "PreferenceCandidateSource",
     "PreferencePromotionDetails",
     "PreferencePromotionValidationError",
@@ -116,6 +124,8 @@ __all__ = [
     "ResumeStepIndexOutOfRangeError",
     "ResumeWorkflowMismatchError",
     "RunResult",
+    "RuntimeMemoryContext",
+    "RuntimeMemoryContextComposer",
     "SemanticInjectionPolicy",
     "SemanticRecordStatus",
     "ShutdownReport",
