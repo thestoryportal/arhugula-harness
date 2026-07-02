@@ -29,6 +29,7 @@ from harness_is.memory_record_envelope import (
     MemoryScope,
     MemoryTier,
     MemoryVisibility,
+    RedactionState,
     SourceRef,
     SourceRefType,
     compute_memory_content_hash,
@@ -41,6 +42,7 @@ from harness_is.state_ledger_entry_schema import Actor, ActorClass
 from harness_runtime.memory_context import (
     MemoryContextCompositionRequest,
     RuntimeMemoryContextComposer,
+    render_prompt_extension_packet,
 )
 
 _NOW = datetime(2026, 7, 2, 16, 0, 0, tzinfo=UTC)
@@ -84,11 +86,12 @@ def _scope(
 def _record(
     *,
     statement: str,
+    kind: MemoryRecordKind = MemoryRecordKind.PREFERENCE,
     cli_profile: str = "codex",
     provider_family: str = ProviderFamily.OPENAI.value,
 ) -> MemoryStoreRecord:
     content: dict[str, object] = {
-        "semantic_kind": MemoryRecordKind.PREFERENCE.value,
+        "semantic_kind": kind.value,
         "statement": statement,
         "confidence": "high",
         "source_authority": "operator_direct",
@@ -103,12 +106,10 @@ def _record(
     content_hash = compute_memory_content_hash(content)
     return MemoryStoreRecord(
         envelope=MemoryRecordEnvelope(
-            memory_id=derive_memory_id(
-                MemoryTier.SEMANTIC, MemoryRecordKind.PREFERENCE, content_hash
-            ),
+            memory_id=derive_memory_id(MemoryTier.SEMANTIC, kind, content_hash),
             schema_version="memory-store-record/v1",
             tier=MemoryTier.SEMANTIC,
-            kind=MemoryRecordKind.PREFERENCE,
+            kind=kind,
             created_at=_NOW,
             source_refs=(SourceRef(ref_type=SourceRefType.OPERATOR, ref="operator:u-mem-14"),),
             scope=_scope(cli_profile=cli_profile, provider_family=provider_family),
@@ -380,3 +381,64 @@ def test_external_cli_route_metadata_composes_with_standard_tool_context(
     ]
     assert operations[-1].provider == "codex"
     assert operations[-1].cli_profile == "codex-cli"
+
+
+def test_prompt_extension_packet_rendering_is_bounded_cited_and_stable(
+    tmp_path: Path,
+) -> None:
+    policy = _enabled_policy(eligible_record_kinds=(MemoryRecordKind.PREFERENCE,))
+    allowed = _record(statement="Codex memory prompt packets must cite selected refs.")
+    denied = _record(
+        statement="Codex denied memory must not appear in rendered packets.",
+        kind=MemoryRecordKind.CONVENTION,
+    )
+    redacted = _record(
+        statement="Codex redacted memory must not appear in rendered packets.",
+    )
+    redacted = redacted.model_copy(
+        update={
+            "envelope": redacted.envelope.model_copy(
+                update={"redaction_state": RedactionState.REDACTED}
+            )
+        }
+    )
+
+    binding = _binding(tmp_path)
+    store = _store(binding)
+    store.write_record(allowed)
+    store.write_record(denied)
+    store.write_record(redacted)
+    index_store = _index_store(binding)
+    index_store.rebuild(indexed_at=_NOW)
+    composer = RuntimeMemoryContextComposer(
+        retriever=MemoryRetriever(
+            store=store,
+            index_store=index_store,
+            policy_resolver=MemoryPolicyResolver(policy),
+            policy_ref=_POLICY_REF,
+        ),
+        operation_store=store,
+    )
+
+    context = composer.compose_run_start(
+        _request(
+            workflow_policy=policy,
+            provider_capabilities=_capabilities(prompt=True),
+        )
+    )
+
+    rendered = render_prompt_extension_packet(context)
+    repeated = render_prompt_extension_packet(context)
+
+    assert rendered is not None
+    assert rendered == repeated
+    assert rendered.packet_hash == context.packet_hash
+    assert rendered.policy_ref == _POLICY_REF
+    assert rendered.selected_refs == context.selected_refs
+    assert context.packet is not None
+    assert rendered.section_token_estimate <= context.packet.token_budget
+    assert str(allowed.envelope.memory_id) in rendered.content
+    assert "Codex memory prompt packets must cite selected refs." in rendered.content
+    assert "Codex denied memory must not appear in rendered packets." not in rendered.content
+    assert "Codex redacted memory must not appear in rendered packets." not in rendered.content
+    assert "read-only memory packet" in rendered.content
