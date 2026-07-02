@@ -56,6 +56,15 @@ from harness_runtime.memory_capture import (
     SummaryProvenance,
     SummarySource,
 )
+from harness_runtime.memory_compaction_safety import (
+    CompactionCandidateDisposition,
+    CompactionCandidateDispositionRecord,
+    CompactionDecisionResult,
+    CompactionDecisionStore,
+    CompactionDispositionRequiredError,
+    CompactionDispositionWriteError,
+    CompactionSafetyHook,
+)
 from harness_runtime.memory_context import (
     MemoryContextCompositionRequest,
     MemoryInjectionOperationStore,
@@ -122,6 +131,13 @@ __all__ = [
     "CliProfileResolution",
     "CliProfileResolutionError",
     "CliProfileResolutionRequest",
+    "CompactionCandidateDisposition",
+    "CompactionCandidateDispositionRecord",
+    "CompactionDecisionResult",
+    "CompactionDecisionStore",
+    "CompactionDispositionRequiredError",
+    "CompactionDispositionWriteError",
+    "CompactionSafetyHook",
     "ConcurrentRunNotSupported",
     "DrainPlatformError",
     "EpisodicMemoryCapture",
