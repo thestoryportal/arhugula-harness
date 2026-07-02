@@ -96,6 +96,10 @@ from harness_runtime.lifecycle.memory_tool_dispatch import (
     execute_with_memory_callbacks,
     step_has_memory_tool,
 )
+from harness_runtime.memory_context import (
+    RuntimeMemoryContext,
+    compose_system_prompt_with_memory_packet,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -511,6 +515,11 @@ class RuntimeLLMDispatcher:
     # translate fns (`system=` kwarg for anthropic; leading `role:"system"`
     # message for openai/ollama); `ProviderAgnosticPayload` stays frozen.
     active_system_prompt: str | None = None
+    # U-MEM-15 — prompt-extension memory fallback context. When C-MEM-13 selects
+    # `PROMPT_EXTENSION_PACKET`, the dispatcher renders the C-MEM-12 packet as
+    # read-only system content and composes it into the existing provider prompt
+    # seam. Other access modes leave the prompt byte-identical.
+    memory_context: RuntimeMemoryContext | None = None
     # R-FS-1 arc B4 (§14.5.3) — per-role PROMPT map: branch `AgentRole` → its
     # resolved system-prompt content, pre-resolved at bootstrap stage 0 (where the
     # fail-loud store-membership + binding-tier governance checks fire — before
@@ -934,6 +943,10 @@ class RuntimeLLMDispatcher:
             _effective_system_prompt = self.per_role_system_prompts[_role]
         else:
             _effective_system_prompt = self.active_system_prompt
+        _effective_system_prompt = compose_system_prompt_with_memory_packet(
+            _effective_system_prompt,
+            self.memory_context,
+        )
 
         # --- R-300 / B-L2-FALLBACK-COMPOSITION: faithful dispatch-read ----------
         # The DECLARATIVE layer decision ECHOES the effective binding
@@ -2099,6 +2112,7 @@ def materialize_llm_dispatcher_stage(
     workload_class: WorkloadClass | None = None,
     persona_tier: PersonaTier | None = None,
     active_system_prompt: str | None = None,
+    memory_context: RuntimeMemoryContext | None = None,
     per_role_system_prompts: Mapping[AgentRole, str] | None = None,
     prompt_versions_by_sha: Mapping[str, str] | None = None,
     approved_prompt_version_shas: frozenset[str] = frozenset(),
@@ -2176,6 +2190,7 @@ def materialize_llm_dispatcher_stage(
         workload_class=workload_class,
         persona_tier=persona_tier,
         active_system_prompt=active_system_prompt,
+        memory_context=memory_context,
         per_role_system_prompts=per_role_system_prompts or {},
         prompt_versions_by_sha=prompt_versions_by_sha or {},
         approved_prompt_version_shas=approved_prompt_version_shas,

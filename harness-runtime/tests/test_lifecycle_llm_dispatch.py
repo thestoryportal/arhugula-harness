@@ -47,6 +47,7 @@ from harness_cp.hitl_placement import HITLPlacement, HITLPlacementKind
 from harness_cp.hitl_response_palette import HITLResponse
 from harness_cp.layer_budget import DEFAULT_LAYER_BUDGETS, LayerBudget
 from harness_cp.layered_routing_strategy import LayerDecisionFn
+from harness_cp.memory_access_mode import MemoryAccessMode, MemoryAccessModeSelection
 from harness_cp.per_role_catalog import (
     derive_agent_role,
     derive_fanout_roles,
@@ -74,6 +75,13 @@ from harness_cp.workflow_driver_types import (
     WorkflowStep,
 )
 from harness_cp.workflow_manifest_entry import StepOverride, WorkflowManifestEntry
+from harness_is.memory_operation_ledger import MemoryOperationWriteResult
+from harness_is.memory_record_envelope import MemoryID, MemoryRecordKind
+from harness_is.memory_retrieval import (
+    MemoryPacket,
+    MemoryPacketAccessMode,
+    MemoryPacketSection,
+)
 from harness_is.state_ledger_entry_schema import Actor, ActorClass, Identifier
 from harness_od.audit_ledger_types import SignatureAlgorithm
 from harness_runtime.lifecycle import llm_dispatch as llm_dispatch_module
@@ -111,6 +119,7 @@ from harness_runtime.lifecycle.retry_breaker_fallback import (
     RetryBreakerFallbackDispatcher,
 )
 from harness_runtime.lifecycle.sync_dispatcher_facade import SyncDispatcherFacade
+from harness_runtime.memory_context import RuntimeMemoryContext
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -759,6 +768,59 @@ async def test_dispatch_ollama_round_trip() -> None:
 
 
 _SYS = "You are the active harness prompt."
+_MEMORY_REF = MemoryID("mem:u-mem-15:allowed")
+_MEMORY_PACKET_HASH = "a" * 64
+
+
+def _prompt_extension_memory_context(
+    *,
+    provider: str,
+    model: str = "test-model-1",
+    family: ProviderFamily = ProviderFamily.OPENAI,
+) -> RuntimeMemoryContext:
+    packet = MemoryPacket(
+        packet_id=f"memory-packet:{_MEMORY_PACKET_HASH[:32]}",
+        packet_hash=_MEMORY_PACKET_HASH,
+        token_budget=80,
+        access_mode=MemoryPacketAccessMode.PROMPT_EXTENSION_PACKET,
+        sections=(
+            MemoryPacketSection(
+                section_id="active_operator_project_preferences",
+                memory_ref=_MEMORY_REF,
+                record_kind=MemoryRecordKind.PREFERENCE,
+                text=(
+                    f"[{_MEMORY_REF}] Codex prompt packet context should be "
+                    "injected as read-only memory."
+                ),
+                token_estimate=18,
+            ),
+        ),
+        selected_refs=(_MEMORY_REF,),
+        policy_ref="policy:u-mem-15",
+    )
+    return RuntimeMemoryContext(
+        run_id="run-u-mem-15",
+        access_mode=MemoryAccessMode.PROMPT_EXTENSION_PACKET,
+        selection=MemoryAccessModeSelection(
+            access_mode=MemoryAccessMode.PROMPT_EXTENSION_PACKET,
+            selected_provider=provider,
+            selected_model=model,
+            selected_family=family,
+            fallback_primary=f"{provider}:{model}",
+            cli_profile_ref="codex",
+            decision_trace=("prompt_packet_policy_allowed",),
+        ),
+        policy_ref="policy:u-mem-15",
+        selected_refs=(_MEMORY_REF,),
+        packet=packet,
+        packet_hash=_MEMORY_PACKET_HASH,
+        retrieval_request_hash="b" * 64,
+        external_cli_route_ref=None,
+        denial_reason=None,
+        ledgerable_denial=False,
+        injection_action_id=Identifier("memory-injection:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+        injection_operation_result=MemoryOperationWriteResult.APPENDED,
+    )
 
 
 @pytest.mark.asyncio
@@ -913,6 +975,78 @@ async def test_active_system_prompt_injects_openai_leading_system_message() -> N
     msgs = adapter.client.chat.completions.last_kwargs["messages"]  # type: ignore[index]
     assert msgs[0] == {"role": "system", "content": _SYS}
     assert msgs[1] == {"role": "user", "content": "hi"}
+
+
+@pytest.mark.asyncio
+async def test_memory_prompt_packet_injects_anthropic_system_kwarg() -> None:
+    """Prompt-extension memory rides Anthropic's top-level ``system=`` seam."""
+    adapter = _AnthropicFakeAdapter(_AnthropicClient())
+    tp, _ = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": adapter},
+        tracer_provider=tp,
+        memory_context=_prompt_extension_memory_context(
+            provider="anthropic",
+            family=ProviderFamily.ANTHROPIC,
+        ),
+    )
+
+    await dispatcher.dispatch(_binding("anthropic"), _step(), step_context=_step_context())
+
+    assert adapter.client.messages.last_kwargs is not None
+    system = adapter.client.messages.last_kwargs["system"]
+    assert "read-only memory packet" in system
+    assert str(_MEMORY_REF) in system
+    assert "Codex prompt packet context should be injected as read-only memory." in system
+    assert adapter.client.messages.last_kwargs["messages"] == [{"role": "user", "content": "hi"}]
+
+
+@pytest.mark.asyncio
+async def test_memory_prompt_packet_injects_openai_leading_system_message() -> None:
+    """Prompt-extension memory rides OpenAI's leading ``role:\"system\"`` seam."""
+    adapter = _OpenAIFakeAdapter(_OpenAIClient())
+    tp, _ = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"openai": adapter},
+        tracer_provider=tp,
+        memory_context=_prompt_extension_memory_context(provider="openai"),
+    )
+
+    await dispatcher.dispatch(_binding("openai"), _step(), step_context=_step_context())
+
+    msgs = adapter.client.chat.completions.last_kwargs["messages"]  # type: ignore[index]
+    assert msgs[0]["role"] == "system"
+    assert "read-only memory packet" in msgs[0]["content"]
+    assert str(_MEMORY_REF) in msgs[0]["content"]
+    assert msgs[1] == {"role": "user", "content": "hi"}
+
+
+@pytest.mark.asyncio
+async def test_memory_prompt_packet_conflict_openai_leading_system_message_fails_loud() -> None:
+    """Memory prompt packets do not silently merge with payload-owned systems."""
+    adapter = _OpenAIFakeAdapter(_OpenAIClient())
+    tp, _ = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"openai": adapter},
+        tracer_provider=tp,
+        memory_context=_prompt_extension_memory_context(provider="openai"),
+    )
+
+    with pytest.raises(PromptInjectionConflictError):
+        await dispatcher.dispatch(
+            _binding("openai"),
+            _step(
+                {
+                    "messages": [
+                        {"role": "system", "content": "step-owned system"},
+                        {"role": "user", "content": "hi"},
+                    ],
+                    "tools": None,
+                    "params": {"max_tokens": 100},
+                }
+            ),
+            step_context=_step_context(),
+        )
 
 
 @pytest.mark.asyncio

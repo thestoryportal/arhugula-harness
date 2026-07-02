@@ -51,8 +51,11 @@ from harness_runtime.memory_capture import (
 from harness_runtime.memory_context import (
     MemoryContextCompositionRequest,
     MemoryInjectionOperationStore,
+    RenderedMemoryPromptPacket,
     RuntimeMemoryContext,
     RuntimeMemoryContextComposer,
+    compose_system_prompt_with_memory_packet,
+    render_prompt_extension_packet,
 )
 from harness_runtime.memory_promotion import (
     PreferenceCandidateSource,
@@ -118,6 +121,7 @@ __all__ = [
     "PromotionDecisionStore",
     "PromotionReviewRequiredError",
     "PromotionRiskFlag",
+    "RenderedMemoryPromptPacket",
     "ResumeArgsError",
     "ResumeHandleUnknownError",
     "ResumeProtocolNotBoundError",
@@ -133,7 +137,9 @@ __all__ = [
     "SummaryProvenance",
     "SummarySource",
     "WorkflowObject",
+    "compose_system_prompt_with_memory_packet",
     "flush_observability",
+    "render_prompt_extension_packet",
     "resume",
     "run",
     "run_bootstrap",
