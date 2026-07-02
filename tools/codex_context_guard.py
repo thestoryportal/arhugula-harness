@@ -619,7 +619,18 @@ def _codex_loop_issues(state: GuardState) -> list[str]:
         if isinstance(phase, str):
             latest[phase] = (index, event)
     if all(phase in latest for phase in codex_loop.SHIP_GATES):
-        return codex_loop.check_state(loop_state, current=codex_loop.git_identity(state.root))
+        current = codex_loop.git_identity(state.root)
+        active_issues = codex_loop.check_state(loop_state, current=current)
+        if not active_issues:
+            return []
+        archived_issues = codex_loop.check_state(loop_state, current=None)
+        latest_events = {phase: event for phase, (_, event) in latest.items()}
+        archived_issues.extend(
+            codex_loop.worktree_disposition_issues(loop_state, latest_events, current)
+        )
+        if not archived_issues:
+            return []
+        return active_issues
     missing = [phase for phase in CODEX_LOOP_PRE_CLOSEOUT_GATES if phase not in latest]
     issues: list[str] = []
     if missing:

@@ -707,6 +707,101 @@ def test_complete_shipped_codex_loop_state_satisfies_main_closeout(tmp_path: Pat
     assert not any(f.code == "CODEX_LOOP_INCOMPLETE" for f in findings)
 
 
+def test_stale_complete_shipped_codex_loop_state_is_archived_evidence(tmp_path: Path) -> None:
+    repo = _init_repo(tmp_path)
+    shipped_identity = cl.git_identity(repo)
+    loop_dir = repo / ".harness"
+    feature_branch = "codex/loop-closeout-guard-fix"
+    feature_head = "feedface"
+    feature_worktree = "feature-worktree"
+    reviewed_content = "reviewed-content"
+    events: list[dict[str, object]] = []
+    for phase in (
+        "worktree_ready",
+        "preflight",
+        "plan",
+        "red",
+        "implementation",
+        "narrow_verify",
+        "local_gate",
+        "decorrelated_review",
+        "closeout",
+    ):
+        events.append(
+            {
+                "phase": phase,
+                "status": "failed" if phase == "red" else "passed",
+                "branch": feature_branch,
+                "head8": feature_head,
+                "worktree_fingerprint": feature_worktree,
+                "content_fingerprint": reviewed_content,
+                "linked_worktree": True,
+            }
+        )
+    events.append(
+        {
+            "phase": "commit",
+            "status": "passed",
+            "branch": feature_branch,
+            "head8": "c0ffee00",
+            "worktree_fingerprint": feature_worktree,
+            "content_fingerprint": reviewed_content,
+            "linked_worktree": True,
+            "validated_phase": "closeout",
+            "validated_head8": feature_head,
+            "validated_worktree_fingerprint": feature_worktree,
+            "validated_content_fingerprint": reviewed_content,
+        }
+    )
+    for phase in ("push", "pr_opened", "ci_green", "merged"):
+        events.append(
+            {
+                "phase": phase,
+                "status": "passed",
+                "branch": feature_branch,
+                "head8": "c0ffee00",
+                "worktree_fingerprint": feature_worktree,
+                "content_fingerprint": reviewed_content,
+                "linked_worktree": True,
+            }
+        )
+    for phase in ("post_merge_refresh", "main_synced", "worktree_disposition"):
+        events.append(
+            {
+                "phase": phase,
+                "status": "passed",
+                "branch": shipped_identity.branch,
+                "head8": shipped_identity.head8,
+                "worktree_fingerprint": shipped_identity.worktree_fingerprint,
+                "content_fingerprint": shipped_identity.content_fingerprint,
+                "linked_worktree": shipped_identity.linked_worktree,
+            }
+        )
+    (loop_dir / "codex_loop_state.json").write_text(
+        json.dumps(
+            {
+                "arc_id": "B-LOOP",
+                "root": str(tmp_path / "removed-feature-worktree"),
+                "branch": shipped_identity.branch,
+                "head8": shipped_identity.head8,
+                "worktree_fingerprint": shipped_identity.worktree_fingerprint,
+                "content_fingerprint": shipped_identity.content_fingerprint,
+                "required_gates": list(cl.REQUIRED_GATES),
+                "events": events,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (repo / "later.txt").write_text("main advanced after shipped loop\n", encoding="utf-8")
+    _git(repo, "add", "later.txt")
+    _git(repo, "commit", "-m", "advance main")
+    state = cg.derive(repo)
+
+    findings = cg.validate(state, mode="closeout")
+
+    assert not any(f.code == "CODEX_LOOP_INCOMPLETE" for f in findings)
+
+
 def test_out_of_order_codex_loop_state_blocks_closeout(tmp_path: Path) -> None:
     loop_dir = tmp_path / ".harness"
     loop_dir.mkdir()
