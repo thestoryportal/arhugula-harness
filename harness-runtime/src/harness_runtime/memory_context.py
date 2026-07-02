@@ -93,6 +93,7 @@ class RuntimeMemoryContext(BaseModel):
     packet: MemoryPacket | None
     packet_hash: str | None
     retrieval_request_hash: str | None
+    record_scope: MemoryScope | None = None
     external_cli_route_ref: str | None
     denial_reason: MemoryAccessModeDenialReason | None
     ledgerable_denial: bool
@@ -168,6 +169,7 @@ class RuntimeMemoryContextComposer:
                 packet=None,
                 packet_hash=None,
                 retrieval_request_hash=None,
+                record_scope=request.record_scope,
                 external_cli_route_ref=selection.external_cli_route_ref,
                 denial_reason=selection.denial_reason,
                 ledgerable_denial=selection.ledgerable_denial,
@@ -196,6 +198,7 @@ class RuntimeMemoryContextComposer:
             packet=retrieval_result.packet,
             packet_hash=retrieval_result.packet_hash,
             retrieval_request_hash=retrieval_result.request_hash,
+            record_scope=request.record_scope,
             external_cli_route_ref=selection.external_cli_route_ref,
             denial_reason=None,
             ledgerable_denial=False,

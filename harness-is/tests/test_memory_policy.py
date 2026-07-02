@@ -303,6 +303,18 @@ def test_native_and_standard_tool_access_cannot_bypass_policy() -> None:
     assert permissive.resolve_standard_tools().access_decision is m.AccessDecision.STANDARD_TOOLS
 
 
+def test_record_kind_filter_does_not_hide_tool_surface_access() -> None:
+    m = _policy_module()
+    resolver = m.MemoryPolicyResolver(
+        _enabled_policy(
+            standard_tool_access=m.AccessDecision.STANDARD_TOOLS,
+            eligible_record_kinds=(MemoryRecordKind.PREFERENCE,),
+        )
+    )
+
+    assert resolver.resolve_standard_tools().access_decision is m.AccessDecision.STANDARD_TOOLS
+
+
 def test_memory_policy_package_re_exports() -> None:
     h_is = importlib.import_module("harness_is")
     m = _policy_module()

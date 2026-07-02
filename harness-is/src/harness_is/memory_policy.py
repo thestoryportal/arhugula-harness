@@ -328,6 +328,8 @@ def _record_kind_allowed(
     policy: MemoryPolicyDocument,
     record_kind: MemoryRecordKind | None,
 ) -> bool:
+    if record_kind is None:
+        return True
     return not policy.eligible_record_kinds or record_kind in policy.eligible_record_kinds
 
 
