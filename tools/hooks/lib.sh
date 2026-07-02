@@ -124,8 +124,19 @@ hook_is_dashboard_only_set() {
 hook_roadmap_next() {
   local dash="$1"
   [ -f "$dash" ] || return 0
-  awk '/^## Next action/{f=1; next} f && /^---$/{exit} f' "$dash" 2>/dev/null \
-    | grep -oE '`R-[A-Za-z0-9._-]+`' 2>/dev/null \
+  local section current token
+  section=$(awk '/^## Next action/{f=1; next} f && /^---$/{exit} f' "$dash" 2>/dev/null)
+  current=$(printf '%s\n' "$section" | grep -m1 'Current next action' 2>/dev/null || true)
+  token=$(printf '%s\n' "$current" \
+    | sed -nE 's/.*next implementable unit is `?((U|R)-[A-Za-z0-9._-]+)`?.*/\1/p' \
+    | grep -v '\.\.' \
+    | head -1)
+  if [ -n "$token" ]; then
+    printf '%s' "$token"
+    return 0
+  fi
+  printf '%s\n' "$section" \
+    | grep -oE '`(U|R)-[A-Za-z0-9._-]+`' 2>/dev/null \
     | tr -d '`' \
     | grep -v '\.\.' \
     | head -1
