@@ -39,6 +39,14 @@ from harness_runtime.bootstrap import (
     IncompleteBootstrapError,
     run_bootstrap,
 )
+from harness_runtime.cli_profile_loading import (
+    CliExternalMemorySourceAccess,
+    CliProfileResolution,
+    CliProfileResolutionError,
+    CliProfileResolutionRequest,
+    LoadedCliInstructionSource,
+    resolve_cli_profile,
+)
 from harness_runtime.drain import DrainPlatformError
 from harness_runtime.memory_capture import (
     EpisodicMemoryCapture,
@@ -99,6 +107,10 @@ __all__ = [
     "AlreadyShutDown",
     "BootstrapFailure",
     "BootstrapStageCompleteEvent",
+    "CliExternalMemorySourceAccess",
+    "CliProfileResolution",
+    "CliProfileResolutionError",
+    "CliProfileResolutionRequest",
     "ConcurrentRunNotSupported",
     "DrainPlatformError",
     "EpisodicMemoryCapture",
@@ -108,6 +120,7 @@ __all__ = [
     "HarnessDraining",
     "IncompleteBootstrapError",
     "InvalidWorkflowError",
+    "LoadedCliInstructionSource",
     "MemoryCaptureMode",
     "MemoryCaptureResult",
     "MemoryCaptureStatus",
@@ -154,6 +167,7 @@ __all__ = [
     "compose_system_prompt_with_memory_packet",
     "flush_observability",
     "render_prompt_extension_packet",
+    "resolve_cli_profile",
     "resume",
     "run",
     "run_bootstrap",
