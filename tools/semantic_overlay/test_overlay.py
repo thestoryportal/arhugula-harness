@@ -42,9 +42,9 @@ def test_extract_cites_pulls_each_class() -> None:
 
 
 def test_extract_cites_dedupes_and_sorts() -> None:
-    c = overlay.extract_cites("U-RT-05 U-RT-112 U-RT-05 C-CP-16 C-CP-16")
-    assert c["unit_ids"] == ["U-RT-05", "U-RT-112"]
-    assert c["spec_contracts"] == ["C-CP-16"]
+    c = overlay.extract_cites("U-RT-05 U-RT-112 U-RT-05 U-MEM-20 C-CP-16 C-MEM-10 C-CP-16")
+    assert c["unit_ids"] == ["U-MEM-20", "U-RT-05", "U-RT-112"]
+    assert c["spec_contracts"] == ["C-CP-16", "C-MEM-10"]
 
 
 def test_has_any_cite_ignores_sections() -> None:
