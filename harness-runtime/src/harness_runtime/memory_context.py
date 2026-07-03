@@ -20,6 +20,12 @@ from harness_cp.memory_access_mode import (
     select_memory_access_mode,
 )
 from harness_is.cli_profile import CliProfile
+from harness_is.memory_observability import (
+    MemoryTelemetryFailureClass,
+    MemoryTelemetryOperationName,
+    memory_telemetry_span,
+    set_memory_telemetry_attributes,
+)
 from harness_is.memory_operation_ledger import (
     MemoryOperationEngineClass,
     MemoryOperationKind,
@@ -142,9 +148,11 @@ class RuntimeMemoryContextComposer:
         *,
         retriever: MemoryRetriever,
         operation_store: MemoryInjectionOperationStore,
+        tracer_provider: object | None = None,
     ) -> None:
         self._retriever = retriever
         self._operation_store = operation_store
+        self._tracer_provider = tracer_provider
 
     def compose_run_start(
         self,
@@ -154,12 +162,29 @@ class RuntimeMemoryContextComposer:
 
         selection = select_memory_access_mode(_access_mode_request(request))
         if selection.access_mode is MemoryAccessMode.NO_MEMORY_ACCESS:
-            action_id, operation_result = self._write_injection_decision(
-                request,
-                selection=selection,
-                selected_refs=(),
-                packet_hash=None,
-            )
+            with memory_telemetry_span(
+                self._tracer_provider,
+                tracer_name="harness.runtime.memory_context",
+                operation_name=MemoryTelemetryOperationName.DENIAL,
+                operation_kind=MemoryOperationKind.INJECT.value,
+                access_mode=selection.access_mode.value,
+                provider=selection.selected_provider,
+                model=selection.selected_model,
+                cli_profile=selection.cli_profile_ref,
+                policy_decision=(
+                    selection.denial_reason.value
+                    if selection.denial_reason is not None
+                    else "denied"
+                ),
+                record_count=0,
+                failure_class=MemoryTelemetryFailureClass.POLICY_DENIAL,
+            ):
+                action_id, operation_result = self._write_injection_decision(
+                    request,
+                    selection=selection,
+                    selected_refs=(),
+                    packet_hash=None,
+                )
             return RuntimeMemoryContext(
                 run_id=request.run_id,
                 access_mode=selection.access_mode,
@@ -177,18 +202,66 @@ class RuntimeMemoryContextComposer:
                 injection_operation_result=operation_result,
             )
 
-        retrieval_result = self._retriever.retrieve(
-            _retrieval_request(request, selection=selection),
-            timestamp=request.timestamp,
-            actor=request.actor,
-            access_mode=MemoryPacketAccessMode(selection.access_mode.value),
-        )
-        action_id, operation_result = self._write_injection_decision(
-            request,
+        with memory_telemetry_span(
+            self._tracer_provider,
+            tracer_name="harness.runtime.memory_context",
+            operation_name=MemoryTelemetryOperationName.RETRIEVAL,
+            operation_kind=MemoryOperationKind.RETRIEVE.value,
+            access_mode=selection.access_mode.value,
+            provider=selection.selected_provider,
+            model=selection.selected_model,
+            cli_profile=selection.cli_profile_ref,
+            policy_decision="allowed",
+        ) as retrieval_span:
+            retrieval_result = self._retriever.retrieve(
+                _retrieval_request(request, selection=selection),
+                timestamp=request.timestamp,
+                actor=request.actor,
+                access_mode=MemoryPacketAccessMode(selection.access_mode.value),
+            )
+            set_memory_telemetry_attributes(
+                retrieval_span,
+                packet_hash=retrieval_result.packet_hash,
+                record_count=len(retrieval_result.selected_refs),
+                failure_class=(
+                    MemoryTelemetryFailureClass.RETRIEVAL_EMPTY_RESULT
+                    if not retrieval_result.selected_refs
+                    else None
+                ),
+            )
+        _emit_memory_context_span(
+            self._tracer_provider,
+            operation_name=MemoryTelemetryOperationName.RANKING,
             selection=selection,
-            selected_refs=retrieval_result.selected_refs,
             packet_hash=retrieval_result.packet_hash,
+            record_count=len(retrieval_result.ranking_trace),
         )
+        _emit_memory_context_span(
+            self._tracer_provider,
+            operation_name=MemoryTelemetryOperationName.PACKET_ASSEMBLY,
+            selection=selection,
+            packet_hash=retrieval_result.packet_hash,
+            record_count=len(retrieval_result.packet.sections),
+        )
+        with memory_telemetry_span(
+            self._tracer_provider,
+            tracer_name="harness.runtime.memory_context",
+            operation_name=MemoryTelemetryOperationName.INJECTION,
+            operation_kind=MemoryOperationKind.INJECT.value,
+            access_mode=selection.access_mode.value,
+            provider=selection.selected_provider,
+            model=selection.selected_model,
+            cli_profile=selection.cli_profile_ref,
+            policy_decision="allowed",
+            packet_hash=retrieval_result.packet_hash,
+            record_count=len(retrieval_result.selected_refs),
+        ):
+            action_id, operation_result = self._write_injection_decision(
+                request,
+                selection=selection,
+                selected_refs=retrieval_result.selected_refs,
+                packet_hash=retrieval_result.packet_hash,
+            )
         return RuntimeMemoryContext(
             run_id=request.run_id,
             access_mode=selection.access_mode,
@@ -239,6 +312,29 @@ class RuntimeMemoryContextComposer:
             )
         )
         return action_id, result
+
+
+def _emit_memory_context_span(
+    tracer_provider: object | None,
+    *,
+    operation_name: MemoryTelemetryOperationName,
+    selection: MemoryAccessModeSelection,
+    packet_hash: str,
+    record_count: int,
+) -> None:
+    with memory_telemetry_span(
+        tracer_provider,
+        tracer_name="harness.runtime.memory_context",
+        operation_name=operation_name,
+        access_mode=selection.access_mode.value,
+        provider=selection.selected_provider,
+        model=selection.selected_model,
+        cli_profile=selection.cli_profile_ref,
+        policy_decision="allowed",
+        packet_hash=packet_hash,
+        record_count=record_count,
+    ):
+        pass
 
 
 def render_prompt_extension_packet(

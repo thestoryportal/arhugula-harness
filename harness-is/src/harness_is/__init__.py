@@ -33,6 +33,13 @@ from harness_is.git_tier_sub_role_taxonomy import (
     GitTierSubRoleMetadata,
     SubRolePosture,
 )
+from harness_is.memory_observability import (
+    MemoryTelemetryFailureClass,
+    MemoryTelemetryOperationName,
+    classify_memory_failure,
+    memory_telemetry_span,
+    set_memory_telemetry_attributes,
+)
 from harness_is.memory_operation_ledger import (
     MemoryLedgerVerificationFailureType,
     MemoryLedgerVerificationResult,
@@ -244,6 +251,8 @@ __all__ = [
     "MemoryStoreRecordUnavailableError",
     "MemoryStoreUnsupportedKindError",
     "MemoryStoreWriteResult",
+    "MemoryTelemetryFailureClass",
+    "MemoryTelemetryOperationName",
     "MemoryTier",
     "MemoryVisibility",
     "PathBinding",
@@ -276,13 +285,16 @@ __all__ = [
     "canonicalize_memory_content",
     "canonicalize_memory_operation",
     "canonicalize_memory_store_record",
+    "classify_memory_failure",
     "compute_memory_content_hash",
     "compute_memory_operation_response_hash",
     "derive_memory_id",
     "external_memory_source_mutation_allowed",
     "load_path_binding",
+    "memory_telemetry_span",
     "read_memory_operation_ledger",
     "rebuild_memory_operation_projections",
+    "set_memory_telemetry_attributes",
     "verify_memory_operation_entries",
     "verify_memory_operation_ledger",
 ]

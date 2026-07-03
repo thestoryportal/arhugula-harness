@@ -11,6 +11,11 @@ from datetime import datetime
 from typing import Any, cast
 
 from harness_as.memory_tool_contracts import MemoryToolName, memory_tool_contract
+from harness_is.memory_observability import (
+    MemoryTelemetryOperationName,
+    classify_memory_failure,
+    set_memory_telemetry_attributes,
+)
 from harness_is.memory_operation_ledger import (
     MemoryOperationEngineClass,
     MemoryOperationKind,
@@ -146,11 +151,26 @@ class StandardMemoryToolExecutor:
         span_cm = self._span_context(request)
         with span_cm as span:
             _set_span_attributes(span, request)
-            self._require_standard_tool_access()
-            result = self._execute_authorized(request)
-            memory_refs = _memory_refs_from_result(request.tool_name, result)
-            self._append_standard_tool_call(request, memory_refs=memory_refs)
-            return result
+            try:
+                self._require_standard_tool_access()
+                result = self._execute_authorized(request)
+                memory_refs = _memory_refs_from_result(request.tool_name, result)
+                set_memory_telemetry_attributes(
+                    span,
+                    policy_decision="allowed",
+                    record_count=len(memory_refs),
+                )
+                self._append_standard_tool_call(request, memory_refs=memory_refs)
+                return result
+            except Exception as exc:
+                set_memory_telemetry_attributes(
+                    span,
+                    policy_decision="denied"
+                    if isinstance(exc, MemoryToolExecutionDeniedError)
+                    else "failed",
+                    failure_class=classify_memory_failure(exc),
+                )
+                raise
 
     def _execute_authorized(self, request: MemoryToolExecutionRequest) -> dict[str, object]:
         tool_name = request.tool_name
@@ -507,12 +527,18 @@ class StandardMemoryToolExecutor:
 def _set_span_attributes(span: Any, request: MemoryToolExecutionRequest) -> None:
     if span is None:
         return
-    span.set_attribute("memory.operation.kind", MemoryOperationKind.STANDARD_TOOL_CALL.value)
+    set_memory_telemetry_attributes(
+        span,
+        operation_name=MemoryTelemetryOperationName.STANDARD_TOOL_CALL,
+        operation_kind=MemoryOperationKind.STANDARD_TOOL_CALL.value,
+        access_mode=MemoryPacketAccessMode.STANDARD_MEMORY_TOOLS.value,
+        provider=request.context.provider,
+        model=request.context.model,
+        cli_profile=request.context.cli_profile,
+    )
     span.set_attribute("memory.tool.name", request.tool_name.value)
     span.set_attribute("memory.policy_ref", request.context.policy_ref)
     span.set_attribute("memory.scope_ref", request.context.scope_ref)
-    span.set_attribute("memory.provider", request.context.provider)
-    span.set_attribute("memory.model", request.context.model)
 
 
 def _string_arg(args: Mapping[str, object], name: str) -> str:

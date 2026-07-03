@@ -24,6 +24,9 @@ from harness_runtime.memory_capture import (
     SummaryProvenance,
     SummarySource,
 )
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 _BASE_TIME = datetime(2026, 7, 1, 14, 0, 0, tzinfo=UTC)
 _RUN_ID = "run-u-mem-07"
@@ -46,6 +49,13 @@ def _recorder(tmp_path: Path) -> tuple[CanonicalMemoryStore, EpisodicMemoryCaptu
         actor=Actor(actor_class=ActorClass.AGENT, actor_id="codex"),
         project="arhugula-v2",
     )
+
+
+def _tracer_provider() -> tuple[TracerProvider, InMemorySpanExporter]:
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    return provider, exporter
 
 
 def _model_summary() -> SummaryProvenance:
@@ -177,6 +187,37 @@ def test_supported_events_write_episodic_records_and_capture_operations(
     assert {entry.policy_ref for entry in operations} == {_POLICY_REF}
     assert {entry.procedural_snapshot_ref for entry in operations} == {_SNAPSHOT_REF}
     assert _semantic_files(tmp_path) == ["index.jsonl"]
+
+
+def test_capture_emits_c_mem_19_observability_span(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    tracer_provider, exporter = _tracer_provider()
+    recorder = EpisodicMemoryCapture(
+        store=store,
+        actor=Actor(actor_class=ActorClass.AGENT, actor_id="codex"),
+        project="arhugula-v2",
+        tracer_provider=tracer_provider,
+    )
+
+    result = recorder.capture_run_start(
+        run_id=_RUN_ID,
+        workflow_id="workflow-memory",
+        thread_id="thread-1",
+        provider_route=("openai:gpt-5",),
+        **_common_kwargs(0),
+    )
+
+    assert result.status is MemoryCaptureStatus.CAPTURED
+    [span] = [span for span in exporter.get_finished_spans() if span.name == "memory.operation"]
+    attrs = dict(span.attributes or {})
+    assert attrs["memory.operation.name"] == "capture"
+    assert attrs["memory.operation.kind"] == MemoryOperationKind.CAPTURE.value
+    assert attrs["memory.tier"] == MemoryTier.EPISODIC.value
+    assert attrs["memory.provider"] == "openai"
+    assert attrs["memory.model"] == "gpt-5"
+    assert attrs["memory.cli_profile"] == "codex"
+    assert attrs["memory.policy.decision"] == "captured"
+    assert attrs["memory.record_count"] == 1
 
 
 def test_stored_summaries_carry_provenance_and_hash(tmp_path: Path) -> None:

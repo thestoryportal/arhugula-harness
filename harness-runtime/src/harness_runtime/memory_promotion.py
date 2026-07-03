@@ -18,6 +18,10 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Protocol, Self, cast
 
+from harness_is.memory_observability import (
+    MemoryTelemetryOperationName,
+    memory_telemetry_span,
+)
 from harness_is.memory_operation_ledger import (
     MemoryOperationKind,
     MemoryOperationPayload,
@@ -286,6 +290,7 @@ class PromotionDecisionService:
         provider: str | None = None,
         model: str | None = None,
         cli_profile: str | None = None,
+        tracer_provider: object | None = None,
     ) -> None:
         self._store = store
         self._actor = actor
@@ -296,6 +301,7 @@ class PromotionDecisionService:
         self._provider = provider
         self._model = model
         self._cli_profile = cli_profile
+        self._tracer_provider = tracer_provider
 
     def propose_for_review(
         self,
@@ -454,15 +460,27 @@ class PromotionDecisionService:
             statement_override=statement_override,
             policy_ref=self._policy_ref,
         )
-        self._store.write_record(record)
-        operation_result = self._store.append_memory_operation(
-            self._operation_payload(
-                candidate,
-                record=record,
-                operation_kind=operation_kind,
-                timestamp=timestamp,
+        with memory_telemetry_span(
+            self._tracer_provider,
+            tracer_name="harness.runtime.memory_promotion",
+            operation_name=MemoryTelemetryOperationName.PROMOTION,
+            operation_kind=operation_kind.value,
+            tier=record.envelope.tier.value,
+            provider=self._provider,
+            model=self._model,
+            cli_profile=self._cli_profile,
+            policy_decision=status.value,
+            record_count=1,
+        ):
+            self._store.write_record(record)
+            operation_result = self._store.append_memory_operation(
+                self._operation_payload(
+                    candidate,
+                    record=record,
+                    operation_kind=operation_kind,
+                    timestamp=timestamp,
+                )
             )
-        )
         return PromotionDecisionResult(
             status=status,
             record=record,

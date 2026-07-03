@@ -15,6 +15,12 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Protocol, Self
 
+from harness_is.memory_observability import (
+    MemoryTelemetryFailureClass,
+    MemoryTelemetryOperationName,
+    memory_telemetry_span,
+    set_memory_telemetry_attributes,
+)
 from harness_is.memory_operation_ledger import (
     MemoryOperationEngineClass,
     MemoryOperationKind,
@@ -117,12 +123,14 @@ class EpisodicMemoryCapture:
         project: str | None = None,
         visibility: MemoryVisibility = MemoryVisibility.PROJECT,
         capture_mode: MemoryCaptureMode = MemoryCaptureMode.SUMMARIZED,
+        tracer_provider: object | None = None,
     ) -> None:
         self._store = store
         self._actor = actor
         self._project = project
         self._visibility = visibility
         self._capture_mode = capture_mode
+        self._tracer_provider = tracer_provider
 
     def capture_run_start(
         self,
@@ -506,24 +514,41 @@ class EpisodicMemoryCapture:
             policy_ref=policy_ref,
             procedural_snapshot_ref=procedural_snapshot_ref,
         )
-        try:
-            self._store.write_record(record)
-            operation_result = self._store.append_memory_operation(payload)
-        except Exception as exc:
+        with memory_telemetry_span(
+            self._tracer_provider,
+            tracer_name="harness.runtime.memory_capture",
+            operation_name=MemoryTelemetryOperationName.CAPTURE,
+            operation_kind=MemoryOperationKind.CAPTURE.value,
+            tier=record.envelope.tier.value,
+            provider=provider,
+            model=model,
+            cli_profile=cli_profile,
+            policy_decision=MemoryCaptureStatus.CAPTURED.value,
+            record_count=1,
+        ) as span:
+            try:
+                self._store.write_record(record)
+                operation_result = self._store.append_memory_operation(payload)
+            except Exception as exc:
+                set_memory_telemetry_attributes(
+                    span,
+                    policy_decision=MemoryCaptureStatus.FAILED.value,
+                    failure_class=MemoryTelemetryFailureClass.IO_FAILURE,
+                )
+                return MemoryCaptureResult(
+                    status=MemoryCaptureStatus.FAILED,
+                    event_kind=event_kind,
+                    record_kind=record_kind,
+                    failure_reason=f"{type(exc).__name__}: {exc}",
+                )
             return MemoryCaptureResult(
-                status=MemoryCaptureStatus.FAILED,
+                status=MemoryCaptureStatus.CAPTURED,
                 event_kind=event_kind,
                 record_kind=record_kind,
-                failure_reason=f"{type(exc).__name__}: {exc}",
+                memory_id=record.envelope.memory_id,
+                operation_action_id=action_id,
+                operation_result=operation_result,
             )
-        return MemoryCaptureResult(
-            status=MemoryCaptureStatus.CAPTURED,
-            event_kind=event_kind,
-            record_kind=record_kind,
-            memory_id=record.envelope.memory_id,
-            operation_action_id=action_id,
-            operation_result=operation_result,
-        )
 
     def _record(
         self,

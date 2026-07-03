@@ -26,6 +26,9 @@ from harness_runtime.lifecycle.memory_tool_types import (
     MemoryToolStorageBackendProtocol,
 )
 from harness_runtime.lifecycle.native_memory_adapter import CanonicalNativeMemoryToolBackend
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 _NOW = datetime(2026, 7, 2, 20, 30, 0, tzinfo=UTC)
 _POLICY_REF = "policy:u-mem-17"
@@ -63,11 +66,19 @@ def _store(tmp_path: Path) -> CanonicalMemoryStore:
     )
 
 
+def _tracer_provider() -> tuple[TracerProvider, InMemorySpanExporter]:
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    return provider, exporter
+
+
 def _backend(
     tmp_path: Path,
     *,
     store: CanonicalMemoryStore | None = None,
     policy: MemoryPolicyDocument | None = None,
+    tracer_provider: TracerProvider | None = None,
 ) -> tuple[CanonicalMemoryStore, CanonicalNativeMemoryToolBackend]:
     canonical_store = store or _store(tmp_path)
     return canonical_store, CanonicalNativeMemoryToolBackend(
@@ -82,6 +93,7 @@ def _backend(
         cli_profile="claude",
         policy_ref=_POLICY_REF,
         clock=lambda: _NOW,
+        tracer_provider=tracer_provider,
     )
 
 
@@ -141,6 +153,40 @@ async def test_native_writes_stay_episodic_and_do_not_silently_promote(
 
 
 @pytest.mark.asyncio
+async def test_native_adapter_emits_c_mem_19_success_span(tmp_path: Path) -> None:
+    tracer_provider, exporter = _tracer_provider()
+    _, backend = _backend(tmp_path, tracer_provider=tracer_provider)
+
+    await backend.create("/memories/observability.txt", b"native adapter telemetry")
+
+    [span] = [span for span in exporter.get_finished_spans() if span.name == "memory.operation"]
+    attrs = dict(span.attributes or {})
+    assert attrs["memory.operation.name"] == "native_adapter_call"
+    assert attrs["memory.operation.kind"] == MemoryOperationKind.NATIVE_ADAPTER_CALL.value
+    assert attrs["memory.path"] == "/memories/observability.txt"
+    assert attrs["memory.provider"] == "anthropic"
+    assert attrs["memory.model"] == "claude-test"
+    assert attrs["memory.cli_profile"] == "claude"
+    assert attrs["memory.policy.decision"] == "allowed"
+    assert attrs["memory.record_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_native_adapter_path_violation_emits_failure_class(tmp_path: Path) -> None:
+    tracer_provider, exporter = _tracer_provider()
+    _, backend = _backend(tmp_path, tracer_provider=tracer_provider)
+
+    with pytest.raises(MemoryPathViolationError):
+        await backend.create("/memories/../outside.txt", b"secret")
+
+    [span] = [span for span in exporter.get_finished_spans() if span.name == "memory.operation"]
+    attrs = dict(span.attributes or {})
+    assert attrs["memory.operation.name"] == "native_adapter_call"
+    assert attrs["memory.failure_class"] == "path_violation"
+    assert attrs["memory.path"] == "/memories/../outside.txt"
+
+
+@pytest.mark.asyncio
 async def test_native_adapter_ledgers_repeated_identical_reads(
     tmp_path: Path,
 ) -> None:
@@ -177,15 +223,22 @@ async def test_native_adapter_policy_denies_capture_without_writing(
 async def test_native_adapter_policy_denies_native_access(
     tmp_path: Path,
 ) -> None:
+    tracer_provider, exporter = _tracer_provider()
     store, backend = _backend(
         tmp_path,
         policy=_policy(native_memory_access=AccessDecision.DENY),
+        tracer_provider=tracer_provider,
     )
 
     with pytest.raises(MemoryCallbackIOError, match="native memory policy denies"):
         await backend.create("/memories/denied.txt", b"secret")
 
     assert store.read_memory_operations() == []
+    [span] = [span for span in exporter.get_finished_spans() if span.name == "memory.operation"]
+    attrs = dict(span.attributes or {})
+    assert attrs["memory.operation.name"] == "native_adapter_call"
+    assert attrs["memory.failure_class"] == "policy_denial"
+    assert attrs["memory.path"] == "/memories/denied.txt"
 
 
 @pytest.mark.asyncio
