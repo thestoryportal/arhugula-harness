@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `c3ae3c660bc2` |
-| `last_refreshed` | 2026-07-03T09:07:48+00:00 |
-| `git_head` | `6a9cb627` — `test(memory): add U-MEM live confirmations`. **Post-#909 U-MEM live confirmations MERGED.** PR #909 adds live Anthropic native-memory and external CLI auth e2e resume tests, records U-MEM-25 live-confirmation evidence, and updates the roadmap/dashboard surfaces so Anthropic native-memory plus Claude Code and Codex CLI auth are confirmed while Antigravity, legacy Gemini, and generic-command remain explicit local gates. |
+| `workspace_state_hash` | `ef13fe8aabe6` |
+| `last_refreshed` | 2026-07-03T09:20:33+00:00 |
+| `git_head` | `6115e0ca` — `docs(roadmap): refresh after U-MEM live confirmations`. **Post-#910 U-MEM live-confirmation terminating refresh MERGED.** PR #910 pinned the PR #909 fixed point in the roadmap/dashboard surfaces after the live Anthropic native-memory, Claude Code CLI auth, and Codex CLI auth confirmations merged. |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 87 |
 
@@ -108,10 +108,11 @@ The bucket rows below sum to **54** under the batch-56 live ledger (RETIRED 54).
 ## Drift detection log
 
 
-_Showing the 10 most recent drift/reconciliation events. The full audit history (180 events) is archived at `.harness/roadmap_drift_log_archive.md`._
+_Showing the 10 most recent drift/reconciliation events. The full audit history (182 events) is archived at `.harness/roadmap_drift_log_archive.md`._
 
 | Date | Source | Resolution |
 |---|---|---|
+| 2026-07-03 | **Post-#910 terminating refresh — PR #910 post-#909 roadmap fixed point merged at `6115e0ca`; §12.2 owed follow-on.** | Hash `c3ae3c660bc2` → `ef13fe8aabe6` (state at `6115e0ca`, open PRs empty, fork count 87, batch-57). PR #910 performed the post-#909 terminating refresh after U-MEM live confirmations merged. This follow-on refresh restores the canonical `ops: roadmap status refresh ...` subject prefix for the next refresh commit so the context guard classifies the one-commit dashboard lag as expected. Verification: PR #910 all checks green; this terminating refresh updates `.harness/roadmap_status.md` and regenerates `tools/dashboard/roadmap.html` to pin the merge commit fixed point. |
 | 2026-07-03 | **Post-#909 terminating refresh — PR #909 U-MEM live confirmations merged at `6a9cb627`; §12.2 owed follow-on.** | Hash `f3f025ab55ab` → `c3ae3c660bc2` (state at `6a9cb627`, open PRs empty, fork count 87, batch-57). PR #909 records the live Anthropic native-memory confirmation and the Claude Code / Codex external CLI auth confirmations, adds the corresponding e2e resume tests, and leaves Antigravity, legacy Gemini, and generic-command as explicit local live gates until their CLIs/probe are available. Verification: PR #909 all checks green; this terminating refresh updates `.harness/roadmap_status.md` and regenerates `tools/dashboard/roadmap.html` to pin the merge commit fixed point. |
 | 2026-07-03 | **Post-#907 terminating refresh — PR #907 U-MEM-25 memory closeout, documentation, and review evidence merged at `2864e81e`; §12.2 owed follow-on.** | Hash `6a64f3f962bb` → `f3f025ab55ab` (state at `2864e81e`, open PRs empty, fork count 87, batch-57). PR #907 implements the final planned provider-free unit of the full memory substrate: operator-facing memory policy documentation, maintainer architecture and migration notes, an R-MEM/C-MEM closeout evidence packet, provider-free `memory-closeout-check` gate wiring, docs index discoverability, and U-MEM-25 source cite grounding through the C-MEM-20 verification matrix. The full U-MEM forward sequence is complete at the provider-free boundary; optional live Anthropic native-memory and external-CLI auth checks remain explicit credential gates. Verification: PR #907 all checks green; this terminating refresh updates `.harness/roadmap_status.md` and regenerates `tools/dashboard/roadmap.html` to pin the merge commit fixed point. |
 | 2026-07-03 | **Post-#905 terminating refresh — PR #905 U-MEM-24 cross-provider and CLI verification suite implementation merged at `4841c921`; §12.2 owed follow-on.** | Hash `1f88899a644a` → `6a64f3f962bb` (state at `4841c921`, open PRs empty, fork count 87, batch-57). PR #905 implements the twenty-fourth atomic unit of the full memory substrate: a runtime C-MEM-20 evidence matrix, typed verification requirement/test-selector/live-gate/scenario carriers, provider-free deterministic selector coverage for every required verification item, access-mode and CLI profile scenario coverage, external-CLI route scenarios with fake-subprocess evidence separated from live auth gates, and explicit live gates for Anthropic native memory plus CLI-auth checks. The next unit is U-MEM-25 closeout, documentation, and review evidence. Verification: PR #905 all checks green; this terminating refresh updates `.harness/roadmap_status.md` and regenerates `tools/dashboard/roadmap.html` to pin the merge commit fixed point. |
