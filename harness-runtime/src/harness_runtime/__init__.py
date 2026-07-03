@@ -48,6 +48,12 @@ from harness_runtime.cli_profile_loading import (
     resolve_cli_profile,
 )
 from harness_runtime.drain import DrainPlatformError
+from harness_runtime.lifecycle.memory_migration import (
+    CallbackMemoryMigrationService,
+    MemoryMigrationItem,
+    MemoryMigrationItemStatus,
+    MemoryMigrationReport,
+)
 from harness_runtime.memory_capture import (
     EpisodicMemoryCapture,
     MemoryCaptureMode,
@@ -127,6 +133,7 @@ __all__ = [
     "AlreadyShutDown",
     "BootstrapFailure",
     "BootstrapStageCompleteEvent",
+    "CallbackMemoryMigrationService",
     "CliExternalMemorySourceAccess",
     "CliProfileResolution",
     "CliProfileResolutionError",
@@ -158,6 +165,9 @@ __all__ = [
     "MemoryDurabilityStrategy",
     "MemoryDurabilityViolationError",
     "MemoryInjectionOperationStore",
+    "MemoryMigrationItem",
+    "MemoryMigrationItemStatus",
+    "MemoryMigrationReport",
     "MemoryToolExecutionContext",
     "MemoryToolExecutionDeniedError",
     "MemoryToolExecutionError",
