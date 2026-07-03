@@ -3,6 +3,7 @@
 This module is intentionally declarative: it names the provider-free checks
 that close each C-MEM-20 requirement and keeps live provider or external CLI
 auth checks behind explicit gates. It does not execute paid provider calls.
+U-MEM-25 uses the same matrix as its closeout evidence index.
 """
 
 from __future__ import annotations

@@ -12,6 +12,7 @@ reference, and architecture.
 | Daily operator or workflow author | [How to operate the runtime](how-to-operate-runtime.md) | Use one-shot CLI, daemon mode, admin inspection, and shutdown paths. |
 | Deployment owner | [How to deploy](how-to-deploy.md) | Validate self-hosted, managed-cloud, and image packaging surfaces before live runs. |
 | Maintainer or reviewer | [Reference](reference.md) and [Architecture](architecture.md) | Check public commands, config fields, workflow shape, package layout, and runtime flow. |
+| Memory operator or reviewer | [Memory substrate](memory-substrate.md) | Review memory policy, architecture, migration, live gates, and closeout evidence. |
 | Closure reviewer | [D1 evidence matrix](../.harness/r-cl-d1-docs-completeness.md) | See audience/surface coverage and the source files grounding each doc claim. |
 
 ## Public Surfaces Covered
@@ -28,6 +29,7 @@ The docs cover these shipped public surfaces:
 | Managed-cloud readiness | [How to deploy](how-to-deploy.md) |
 | Runtime image packaging | [How to deploy](how-to-deploy.md), [Reference](reference.md) |
 | Architecture/API | [Architecture](architecture.md), [Reference](reference.md) |
+| Memory substrate policy and closeout | [Memory substrate](memory-substrate.md) |
 
 ## Source Grounding
 
@@ -38,4 +40,6 @@ guide, deployment runbooks, and close-track dashboard:
 `harness-runtime/src/harness_runtime/types.py`, `examples/README.md`,
 `harness.toml.example`, `deploy/self-hosted-local/README.md`,
 `deploy/managed-cloud/README.md`, `deploy/images/README.md`, and
-`.harness/roadmap_status.md`.
+`.harness/roadmap_status.md`. Memory substrate guidance is grounded in
+`docs/memory-substrate.md`, `.harness/u-mem-25-memory-closeout-evidence.md`,
+and `harness-runtime/src/harness_runtime/memory_verification_suite.py`.
