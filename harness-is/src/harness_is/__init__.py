@@ -45,6 +45,7 @@ from harness_is.memory_operation_ledger import (
     MemoryOperationProjection,
     MemoryOperationProjectionHandles,
     MemoryOperationProjectionMismatchError,
+    MemoryOperationRedactionEventMismatchError,
     MemoryOperationWriteResult,
     append_memory_operation,
     canonicalize_memory_operation,
@@ -94,6 +95,14 @@ from harness_is.memory_record_envelope import (
     canonicalize_memory_content,
     compute_memory_content_hash,
     derive_memory_id,
+)
+from harness_is.memory_redaction import (
+    MemoryRedactionActor,
+    MemoryRedactionEvent,
+    MemoryRedactionKind,
+    MemoryRedactionResult,
+    MemoryRedactionService,
+    MemoryRedactionWriteError,
 )
 from harness_is.memory_retrieval import (
     ExcludedMemoryRef,
@@ -202,6 +211,7 @@ __all__ = [
     "MemoryOperationProjection",
     "MemoryOperationProjectionHandles",
     "MemoryOperationProjectionMismatchError",
+    "MemoryOperationRedactionEventMismatchError",
     "MemoryOperationWriteResult",
     "MemoryPacket",
     "MemoryPacketAccessMode",
@@ -217,6 +227,12 @@ __all__ = [
     "MemoryPromotionResolution",
     "MemoryRecordEnvelope",
     "MemoryRecordKind",
+    "MemoryRedactionActor",
+    "MemoryRedactionEvent",
+    "MemoryRedactionKind",
+    "MemoryRedactionResult",
+    "MemoryRedactionService",
+    "MemoryRedactionWriteError",
     "MemoryRetrievalRequest",
     "MemoryRetrievalResult",
     "MemoryRetriever",

@@ -403,6 +403,7 @@ def _read_json_record(path: Path) -> MemoryStoreRecord:
 def _read_jsonl_record(path: Path, memory_id: MemoryID) -> MemoryStoreRecord:
     if not path.exists():
         raise MemoryStoreRecordNotFoundError(f"memory record ledger not found at {path!s}")
+    matched_record: MemoryStoreRecord | None = None
     for line in path.read_text().splitlines():
         if not line.strip():
             continue
@@ -414,7 +415,9 @@ def _read_jsonl_record(path: Path, memory_id: MemoryID) -> MemoryStoreRecord:
         if isinstance(envelope, dict):
             envelope_payload = cast("Mapping[str, object]", envelope)
             if envelope_payload.get("memory_id") == memory_id:
-                return _deserialize_store_record(raw)
+                matched_record = _deserialize_store_record(raw)
+    if matched_record is not None:
+        return matched_record
     raise MemoryStoreRecordNotFoundError(f"memory record {memory_id!s} not found at {path!s}")
 
 
