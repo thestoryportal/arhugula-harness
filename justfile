@@ -40,7 +40,7 @@ fmt:
     uv run ruff format .
 
 # Full pre-merge gate: workspace sync + lint + typecheck + docs/closure + provider-free tests.
-check: codex-sync lint typecheck docs-completeness-check closure-certification-check test
+check: codex-sync lint typecheck docs-completeness-check memory-closeout-check closure-certification-check test
 
 # Codex provider-free pytest lane. Strips live provider env and mirrors CI's non-e2e gate.
 codex-test *args:
@@ -51,7 +51,7 @@ codex-sync:
     uv sync --all-packages
 
 # Codex PR-ready local gate without live provider credentials.
-codex-check: codex-sync lint typecheck docs-completeness-check closure-certification-check
+codex-check: codex-sync lint typecheck docs-completeness-check memory-closeout-check closure-certification-check
     env -u ANTHROPIC_API_KEY -u OPENAI_API_KEY -u E2B_API_KEY -u GOOGLE_APPLICATION_CREDENTIALS -u GOOGLE_CLOUD_PROJECT PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring uv run pytest -m "not e2e"
 
 # ─── Codex deterministic context guard ─────────────────────────────────────
@@ -152,6 +152,11 @@ q1-review-schema:
 # Provider-free checker for the operator-facing docs suite and grounding matrix.
 docs-completeness-check:
     uv run python tools/docs_completeness.py --check
+
+# ─── U-MEM-25 memory substrate closeout gate ───────────────────────────────
+# Provider-free checker for memory policy docs and closeout evidence.
+memory-closeout-check:
+    uv run python tools/memory_closeout_check.py --check
 
 # ─── R-CL-C1 closure certification gate ────────────────────────────────────
 # Provider-free checker for the final closure certificate and evidence links.
