@@ -17,6 +17,12 @@ from typing import cast
 
 from pydantic import BaseModel, ConfigDict
 
+from harness_is.memory_observability import (
+    MemoryTelemetryOperationName,
+    classify_memory_failure,
+    memory_telemetry_span,
+    set_memory_telemetry_attributes,
+)
 from harness_is.memory_operation_ledger import (
     MemoryOperationKind,
     MemoryOperationPayload,
@@ -70,6 +76,7 @@ class MemoryRedactionService:
         model: str | None = None,
         cli_profile: str | None = None,
         procedural_snapshot_ref: str | None = None,
+        tracer_provider: object | None = None,
     ) -> None:
         self._store = store
         self._operation_actor = operation_actor
@@ -81,6 +88,7 @@ class MemoryRedactionService:
         self._model = model
         self._cli_profile = cli_profile
         self._procedural_snapshot_ref = procedural_snapshot_ref
+        self._tracer_provider = tracer_provider
 
     def redact_content(
         self,
@@ -211,31 +219,48 @@ class MemoryRedactionService:
             new_content_hash=new_content_hash.hex(),
         )
         action_id = Identifier(f"{operation_kind.value}:{event.event_id.rsplit(':', 1)[-1]}")
-        try:
-            self._store.append_memory_operation(
-                MemoryOperationPayload(
-                    action_id=action_id,
-                    idempotency_key=Identifier(f"{operation_kind.value}:{event.event_id}"),
-                    actor=self._operation_actor,
-                    timestamp=timestamp,
-                    operation_kind=operation_kind,
-                    operation_projection=MemoryOperationProjection.NONE,
-                    run_id=run_id or self._run_id,
-                    step_id=self._step_id,
-                    provider=self._provider,
-                    model=self._model,
-                    cli_profile=self._cli_profile,
-                    memory_refs=(memory_id,),
-                    policy_ref=self._policy_ref,
-                    procedural_snapshot_ref=self._procedural_snapshot_ref,
-                    redaction_event=event,
+        with memory_telemetry_span(
+            self._tracer_provider,
+            tracer_name="harness.is.memory_redaction",
+            operation_name=(
+                MemoryTelemetryOperationName.TOMBSTONE
+                if operation_kind is MemoryOperationKind.TOMBSTONE
+                else MemoryTelemetryOperationName.REDACTION
+            ),
+            operation_kind=operation_kind.value,
+            tier=record.envelope.tier.value,
+            provider=self._provider,
+            model=self._model,
+            cli_profile=self._cli_profile,
+            policy_decision=redaction_kind.value,
+            record_count=1,
+        ) as span:
+            try:
+                self._store.append_memory_operation(
+                    MemoryOperationPayload(
+                        action_id=action_id,
+                        idempotency_key=Identifier(f"{operation_kind.value}:{event.event_id}"),
+                        actor=self._operation_actor,
+                        timestamp=timestamp,
+                        operation_kind=operation_kind,
+                        operation_projection=MemoryOperationProjection.NONE,
+                        run_id=run_id or self._run_id,
+                        step_id=self._step_id,
+                        provider=self._provider,
+                        model=self._model,
+                        cli_profile=self._cli_profile,
+                        memory_refs=(memory_id,),
+                        policy_ref=self._policy_ref,
+                        procedural_snapshot_ref=self._procedural_snapshot_ref,
+                        redaction_event=event,
+                    )
                 )
-            )
-            self._store.write_record(updated_record)
-        except Exception as exc:
-            raise MemoryRedactionWriteError(
-                f"failed to write {redaction_kind.value} transition for {memory_id!s}"
-            ) from exc
+                self._store.write_record(updated_record)
+            except Exception as exc:
+                set_memory_telemetry_attributes(span, failure_class=classify_memory_failure(exc))
+                raise MemoryRedactionWriteError(
+                    f"failed to write {redaction_kind.value} transition for {memory_id!s}"
+                ) from exc
         return MemoryRedactionResult(
             event=event,
             operation_action_id=action_id,

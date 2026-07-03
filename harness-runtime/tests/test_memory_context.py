@@ -44,6 +44,9 @@ from harness_runtime.memory_context import (
     RuntimeMemoryContextComposer,
     render_prompt_extension_packet,
 )
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 _NOW = datetime(2026, 7, 2, 16, 0, 0, tzinfo=UTC)
 _POLICY_REF = "policy:u-mem-14"
@@ -66,6 +69,13 @@ def _index_store(binding: MemoryRootBinding) -> DerivedRetrievalIndexStore:
         root_binding=binding,
         deployment_surface=DeploymentSurface.LOCAL_DEVELOPMENT,
     )
+
+
+def _tracer_provider() -> tuple[TracerProvider, InMemorySpanExporter]:
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    return provider, exporter
 
 
 def _scope(
@@ -178,6 +188,7 @@ def _composer(
     *,
     policy: MemoryPolicyDocument,
     record: MemoryStoreRecord | None = None,
+    tracer_provider: TracerProvider | None = None,
 ) -> tuple[CanonicalMemoryStore, RuntimeMemoryContextComposer]:
     binding = _binding(tmp_path)
     store = _store(binding)
@@ -191,7 +202,11 @@ def _composer(
         policy_resolver=MemoryPolicyResolver(policy),
         policy_ref=_POLICY_REF,
     )
-    return store, RuntimeMemoryContextComposer(retriever=retriever, operation_store=store)
+    return store, RuntimeMemoryContextComposer(
+        retriever=retriever,
+        operation_store=store,
+        tracer_provider=tracer_provider,
+    )
 
 
 def _request(
@@ -257,6 +272,49 @@ def test_prompt_packet_context_retrieves_packet_and_ledgers_injection(tmp_path: 
     assert injection_entry.cli_profile == "codex"
     assert injection_entry.memory_refs == context.selected_refs
     assert injection_entry.policy_ref == _POLICY_REF
+
+
+def test_context_composer_emits_c_mem_19_spans_for_retrieval_packet_and_injection(
+    tmp_path: Path,
+) -> None:
+    tracer_provider, exporter = _tracer_provider()
+    policy = _enabled_policy()
+    record = _record(statement="Memory observability should cover packet assembly.")
+    _, composer = _composer(
+        tmp_path,
+        policy=policy,
+        record=record,
+        tracer_provider=tracer_provider,
+    )
+
+    context = composer.compose_run_start(
+        _request(
+            workflow_policy=policy,
+            provider_capabilities=_capabilities(prompt=True),
+        )
+    )
+
+    attrs_by_name = {
+        span.attributes["memory.operation.name"]: dict(span.attributes or {})
+        for span in exporter.get_finished_spans()
+        if span.name == "memory.operation"
+    }
+    assert {
+        "retrieval",
+        "ranking",
+        "packet_assembly",
+        "injection",
+    } <= set(attrs_by_name)
+    retrieval = attrs_by_name["retrieval"]
+    assert retrieval["memory.packet_hash"] == context.packet_hash
+    assert retrieval["memory.record_count"] == 1
+    assert retrieval["memory.access_mode"] == MemoryAccessMode.PROMPT_EXTENSION_PACKET.value
+    assert retrieval["memory.provider"] == "openai"
+    assert retrieval["memory.model"] == "gpt-5"
+    assert retrieval["memory.cli_profile"] == "codex"
+    assert attrs_by_name["ranking"]["memory.record_count"] == 1
+    assert attrs_by_name["packet_assembly"]["memory.packet_hash"] == context.packet_hash
+    assert attrs_by_name["injection"]["memory.operation.kind"] == MemoryOperationKind.INJECT.value
 
 
 def test_native_provider_memory_context_uses_native_packet_mode(tmp_path: Path) -> None:
@@ -328,6 +386,33 @@ def test_no_memory_access_denial_is_explicit_and_ledgered_without_retrieval(
     assert denial_entry.operation_projection is MemoryOperationProjection.INJECTION_DECISIONS
     assert denial_entry.memory_refs == ()
     assert denial_entry.policy_ref == _POLICY_REF
+
+
+def test_context_composer_denial_emits_policy_failure_class(tmp_path: Path) -> None:
+    tracer_provider, exporter = _tracer_provider()
+    disabled_policy = MemoryPolicyDocument(policy_id=_POLICY_REF)
+    _, composer = _composer(
+        tmp_path,
+        policy=disabled_policy,
+        tracer_provider=tracer_provider,
+    )
+
+    composer.compose_run_start(
+        _request(
+            workflow_policy=disabled_policy,
+            provider_capabilities=_capabilities(prompt=True),
+        )
+    )
+
+    [denial_span] = [
+        span
+        for span in exporter.get_finished_spans()
+        if (span.attributes or {}).get("memory.operation.name") == "denial"
+    ]
+    attrs = dict(denial_span.attributes or {})
+    assert attrs["memory.failure_class"] == "policy_denial"
+    assert attrs["memory.policy.decision"] == MemoryAccessModeDenialReason.POLICY_DENIED.value
+    assert attrs["memory.record_count"] == 0
 
 
 def test_external_cli_route_metadata_composes_with_standard_tool_context(

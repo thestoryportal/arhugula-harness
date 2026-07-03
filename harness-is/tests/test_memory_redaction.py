@@ -138,12 +138,74 @@ def _tool_event_record(*, summary: str) -> MemoryStoreRecord:
     )
 
 
-def _service(store: CanonicalMemoryStore) -> MemoryRedactionService:
+class _FakeSpan:
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.attributes: dict[str, object] = {}
+
+    def set_attribute(self, key: str, value: object) -> None:
+        self.attributes[key] = value
+
+
+class _FakeSpanExporter:
+    def __init__(self) -> None:
+        self._spans: list[_FakeSpan] = []
+
+    def append(self, span: _FakeSpan) -> None:
+        self._spans.append(span)
+
+    def get_finished_spans(self) -> tuple[_FakeSpan, ...]:
+        return tuple(self._spans)
+
+
+class _FakeSpanContext:
+    def __init__(self, exporter: _FakeSpanExporter, name: str) -> None:
+        self._exporter = exporter
+        self._span = _FakeSpan(name)
+
+    def __enter__(self) -> _FakeSpan:
+        return self._span
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+        self._exporter.append(self._span)
+
+
+class _FakeTracer:
+    def __init__(self, exporter: _FakeSpanExporter) -> None:
+        self._exporter = exporter
+
+    def start_as_current_span(self, name: str) -> _FakeSpanContext:
+        return _FakeSpanContext(self._exporter, name)
+
+
+class _FakeTracerProvider:
+    def __init__(self, exporter: _FakeSpanExporter) -> None:
+        self._exporter = exporter
+
+    def get_tracer(self, name: str) -> _FakeTracer:
+        _ = name
+        return _FakeTracer(self._exporter)
+
+
+def _tracer_provider() -> tuple[_FakeTracerProvider, _FakeSpanExporter]:
+    exporter = _FakeSpanExporter()
+    return _FakeTracerProvider(exporter), exporter
+
+
+def _service(
+    store: CanonicalMemoryStore,
+    *,
+    tracer_provider: object | None = None,
+) -> MemoryRedactionService:
     return MemoryRedactionService(
         store=store,
         operation_actor=Actor(actor_class=ActorClass.AGENT, actor_id="codex"),
         event_actor=MemoryRedactionActor.OPERATOR,
         policy_ref=_POLICY_REF,
+        provider="openai",
+        model="gpt-5",
+        cli_profile="codex",
+        tracer_provider=tracer_provider,
     )
 
 
@@ -189,6 +251,33 @@ def test_content_redaction_writes_event_before_physical_replacement(
     assert operation.operation_kind is MemoryOperationKind.REDACT
     assert operation.memory_refs == (record.envelope.memory_id,)
     assert operation.redaction_event == result.event
+
+
+def test_redaction_emits_c_mem_19_span(tmp_path: Path) -> None:
+    tracer_provider, exporter = _tracer_provider()
+    binding = _binding(tmp_path)
+    store = _store(binding)
+    record = _record(statement="Sensitive telemetry target should be redacted.")
+    store.write_record(record)
+
+    result = _service(store, tracer_provider=tracer_provider).redact_content(
+        record.envelope.memory_id,
+        record.envelope.kind,
+        timestamp=_NOW,
+        reason="operator requested telemetry redaction",
+        replacement_summary="Sensitive telemetry target removed.",
+    )
+
+    [span] = [span for span in exporter.get_finished_spans() if span.name == "memory.operation"]
+    attrs = dict(span.attributes or {})
+    assert attrs["memory.operation.name"] == "redaction"
+    assert attrs["memory.operation.kind"] == MemoryOperationKind.REDACT.value
+    assert attrs["memory.tier"] == record.envelope.tier.value
+    assert attrs["memory.provider"] == "openai"
+    assert attrs["memory.model"] == "gpt-5"
+    assert attrs["memory.cli_profile"] == "codex"
+    assert attrs["memory.policy.decision"] == result.event.redaction_kind.value
+    assert attrs["memory.record_count"] == 1
 
 
 def test_tombstone_transition_remains_audit_visible_and_retrieval_excluded(

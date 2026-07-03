@@ -513,3 +513,39 @@ def test_standard_memory_tool_call_emits_span(tmp_path: Path) -> None:
         spans[0].attributes["memory.operation.kind"] == MemoryOperationKind.STANDARD_TOOL_CALL.value
     )
     assert spans[0].attributes["memory.policy_ref"] == _POLICY_REF
+    assert spans[0].attributes["memory.operation.name"] == "standard_tool_call"
+    assert spans[0].attributes["memory.access_mode"] == "standard_memory_tools"
+    assert spans[0].attributes["memory.provider"] == "openai"
+    assert spans[0].attributes["memory.model"] == "gpt-5"
+    assert spans[0].attributes["memory.cli_profile"] == "codex"
+    assert spans[0].attributes["memory.policy.decision"] == "allowed"
+    assert spans[0].attributes["memory.record_count"] == 1
+
+
+def test_standard_memory_tool_denial_emits_policy_failure_class(tmp_path: Path) -> None:
+    exporter = InMemorySpanExporter()
+    tracer_provider = TracerProvider()
+    tracer_provider.add_span_processor(SimpleSpanProcessor(exporter))
+    _, executor = _executor(
+        tmp_path,
+        policy=_policy(standard_tool_access=AccessDecision.DENY),
+        tracer_provider=tracer_provider,
+    )
+
+    with pytest.raises(MemoryToolExecutionDeniedError, match="denied"):
+        executor.execute(
+            _request(
+                MemoryToolName.SEARCH,
+                {
+                    "query": "denied telemetry",
+                    "scope_ref": _SCOPE_REF,
+                    "policy_ref": _POLICY_REF,
+                },
+            )
+        )
+
+    [span] = [span for span in exporter.get_finished_spans() if span.name == "memory.tool_call"]
+    attrs = dict(span.attributes or {})
+    assert attrs["memory.operation.name"] == "standard_tool_call"
+    assert attrs["memory.failure_class"] == "policy_denial"
+    assert attrs["memory.policy.decision"] == "denied"

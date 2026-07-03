@@ -14,6 +14,11 @@ from datetime import UTC, datetime
 from pathlib import PurePosixPath
 from typing import Final, cast
 
+from harness_is.memory_observability import (
+    MemoryTelemetryOperationName,
+    classify_memory_failure,
+    memory_telemetry_span,
+)
 from harness_is.memory_operation_ledger import (
     MemoryOperationEngineClass,
     MemoryOperationKind,
@@ -82,6 +87,7 @@ class CanonicalNativeMemoryToolBackend:
         engine_class: MemoryOperationEngineClass | None = None,
         procedural_snapshot_ref: str | None = None,
         clock: Callable[[], datetime] | None = None,
+        tracer_provider: object | None = None,
     ) -> None:
         self._store = store
         self._policy_resolver = policy_resolver
@@ -96,120 +102,146 @@ class CanonicalNativeMemoryToolBackend:
         self._engine_class = engine_class
         self._procedural_snapshot_ref = procedural_snapshot_ref
         self._clock = clock or (lambda: datetime.now(UTC))
+        self._tracer_provider = tracer_provider
         self._locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
     async def view(self, path: str) -> bytes:
-        validated = _validate_memory_path(path)
-        self._require_native_access()
-        async with self._locks[validated.external_path]:
-            state = self._require_existing_state(validated, command="view")
-            self._require_retrieval_allowed(state.record, validated)
-            content = state.content
-            if content is None:
-                raise MemoryCallbackIOError(f"view({path!r}) failed: not found")
-            self._append_native_adapter_call(
-                command="view",
-                validated=validated,
-                record=state.record,
-                timestamp=self._clock(),
-            )
-            return content
+        try:
+            validated = self._validate_observed_path(path)
+            self._require_native_access()
+            async with self._locks[validated.external_path]:
+                state = self._require_existing_state(validated, command="view")
+                self._require_retrieval_allowed(state.record, validated)
+                content = state.content
+                if content is None:
+                    raise MemoryCallbackIOError(f"view({path!r}) failed: not found")
+                self._append_native_adapter_call(
+                    command="view",
+                    validated=validated,
+                    record=state.record,
+                    timestamp=self._clock(),
+                )
+                return content
+        except Exception as exc:
+            self._emit_native_failure_span(path=path, exc=exc)
+            raise
 
     async def create(self, path: str, content: bytes) -> None:
-        validated = _validate_memory_path(path)
-        self._require_native_access()
-        self._require_capture_allowed()
-        async with self._locks[validated.external_path]:
-            record = self._write_tool_event(
-                command="create",
-                validated=validated,
-                content=content,
-                deleted=False,
-                prior_state=self._latest_state(validated),
-            )
-            self._append_native_adapter_call(
-                command="create",
-                validated=validated,
-                record=record,
-                timestamp=record.envelope.created_at,
-            )
+        try:
+            validated = self._validate_observed_path(path)
+            self._require_native_access()
+            self._require_capture_allowed()
+            async with self._locks[validated.external_path]:
+                record = self._write_tool_event(
+                    command="create",
+                    validated=validated,
+                    content=content,
+                    deleted=False,
+                    prior_state=self._latest_state(validated),
+                )
+                self._append_native_adapter_call(
+                    command="create",
+                    validated=validated,
+                    record=record,
+                    timestamp=record.envelope.created_at,
+                )
+        except Exception as exc:
+            self._emit_native_failure_span(path=path, exc=exc)
+            raise
 
     async def delete(self, path: str) -> None:
-        validated = _validate_memory_path(path)
-        self._require_native_access()
-        self._require_capture_allowed()
-        async with self._locks[validated.external_path]:
-            state = self._latest_state(validated)
-            if state is None or state.deleted:
-                return
-            self._require_retrieval_allowed(state.record, validated)
-            record = self._write_tool_event(
-                command="delete",
-                validated=validated,
-                content=None,
-                deleted=True,
-                prior_state=state,
-            )
-            self._append_native_adapter_call(
-                command="delete",
-                validated=validated,
-                record=record,
-                timestamp=record.envelope.created_at,
-            )
+        try:
+            validated = self._validate_observed_path(path)
+            self._require_native_access()
+            self._require_capture_allowed()
+            async with self._locks[validated.external_path]:
+                state = self._latest_state(validated)
+                if state is None or state.deleted:
+                    return
+                self._require_retrieval_allowed(state.record, validated)
+                record = self._write_tool_event(
+                    command="delete",
+                    validated=validated,
+                    content=None,
+                    deleted=True,
+                    prior_state=state,
+                )
+                self._append_native_adapter_call(
+                    command="delete",
+                    validated=validated,
+                    record=record,
+                    timestamp=record.envelope.created_at,
+                )
+        except Exception as exc:
+            self._emit_native_failure_span(path=path, exc=exc)
+            raise
 
     async def str_replace(self, path: str, old: str, new: str) -> None:
-        validated = _validate_memory_path(path)
-        self._require_native_access()
-        self._require_capture_allowed()
-        async with self._locks[validated.external_path]:
-            state = self._require_existing_state(validated, command="str_replace")
-            self._require_retrieval_allowed(state.record, validated)
-            content = _state_text(state, command="str_replace", path=path)
-            if old not in content:
-                raise MemoryCallbackIOError(f"str_replace({path!r}): substring {old!r} not found")
-            replaced = content.replace(old, new).encode(_TEXT_ENCODING)
-            record = self._write_tool_event(
-                command="str_replace",
-                validated=validated,
-                content=replaced,
-                deleted=False,
-                prior_state=state,
-            )
-            self._append_native_adapter_call(
-                command="str_replace",
-                validated=validated,
-                record=record,
-                timestamp=record.envelope.created_at,
-            )
+        try:
+            validated = self._validate_observed_path(path)
+            self._require_native_access()
+            self._require_capture_allowed()
+            async with self._locks[validated.external_path]:
+                state = self._require_existing_state(validated, command="str_replace")
+                self._require_retrieval_allowed(state.record, validated)
+                content = _state_text(state, command="str_replace", path=path)
+                if old not in content:
+                    raise MemoryCallbackIOError(
+                        f"str_replace({path!r}): substring {old!r} not found"
+                    )
+                replaced = content.replace(old, new).encode(_TEXT_ENCODING)
+                record = self._write_tool_event(
+                    command="str_replace",
+                    validated=validated,
+                    content=replaced,
+                    deleted=False,
+                    prior_state=state,
+                )
+                self._append_native_adapter_call(
+                    command="str_replace",
+                    validated=validated,
+                    record=record,
+                    timestamp=record.envelope.created_at,
+                )
+        except Exception as exc:
+            self._emit_native_failure_span(path=path, exc=exc)
+            raise
 
     async def insert(self, path: str, line: int, content: str) -> None:
-        validated = _validate_memory_path(path)
-        self._require_native_access()
-        self._require_capture_allowed()
-        async with self._locks[validated.external_path]:
-            state = self._require_existing_state(validated, command="insert")
-            self._require_retrieval_allowed(state.record, validated)
-            existing = _state_text(state, command="insert", path=path)
-            lines = existing.splitlines(keepends=True)
-            if line < 1 or line > len(lines) + 1:
-                raise MemoryCallbackIOError(
-                    f"insert({path!r}, line={line}): out of range (1..{len(lines) + 1})"
+        try:
+            validated = self._validate_observed_path(path)
+            self._require_native_access()
+            self._require_capture_allowed()
+            async with self._locks[validated.external_path]:
+                state = self._require_existing_state(validated, command="insert")
+                self._require_retrieval_allowed(state.record, validated)
+                existing = _state_text(state, command="insert", path=path)
+                lines = existing.splitlines(keepends=True)
+                if line < 1 or line > len(lines) + 1:
+                    raise MemoryCallbackIOError(
+                        f"insert({path!r}, line={line}): out of range (1..{len(lines) + 1})"
+                    )
+                lines.insert(line - 1, content)
+                replaced = "".join(lines).encode(_TEXT_ENCODING)
+                record = self._write_tool_event(
+                    command="insert",
+                    validated=validated,
+                    content=replaced,
+                    deleted=False,
+                    prior_state=state,
                 )
-            lines.insert(line - 1, content)
-            replaced = "".join(lines).encode(_TEXT_ENCODING)
-            record = self._write_tool_event(
-                command="insert",
-                validated=validated,
-                content=replaced,
-                deleted=False,
-                prior_state=state,
-            )
-            self._append_native_adapter_call(
-                command="insert",
-                validated=validated,
-                record=record,
-                timestamp=record.envelope.created_at,
-            )
+                self._append_native_adapter_call(
+                    command="insert",
+                    validated=validated,
+                    record=record,
+                    timestamp=record.envelope.created_at,
+                )
+        except Exception as exc:
+            self._emit_native_failure_span(path=path, exc=exc)
+            raise
+
+    def _validate_observed_path(self, path: str) -> _ValidatedMemoryPath:
+        return _validate_memory_path(path)
 
     def _require_native_access(self) -> None:
         access = self._policy_resolver.resolve_native_memory()
@@ -387,6 +419,38 @@ class CanonicalNativeMemoryToolBackend:
                 procedural_snapshot_ref=self._procedural_snapshot_ref,
             )
         )
+        self._emit_native_success_span(validated=validated)
+
+    def _emit_native_success_span(self, *, validated: _ValidatedMemoryPath) -> None:
+        with memory_telemetry_span(
+            self._tracer_provider,
+            tracer_name="harness.runtime.native_memory_adapter",
+            operation_name=MemoryTelemetryOperationName.NATIVE_ADAPTER_CALL,
+            operation_kind=MemoryOperationKind.NATIVE_ADAPTER_CALL.value,
+            path=validated.external_path,
+            provider=self._provider,
+            model=self._model,
+            cli_profile=self._cli_profile,
+            policy_decision="allowed",
+            record_count=1,
+        ):
+            pass
+
+    def _emit_native_failure_span(self, *, path: str, exc: BaseException) -> None:
+        with memory_telemetry_span(
+            self._tracer_provider,
+            tracer_name="harness.runtime.native_memory_adapter",
+            operation_name=MemoryTelemetryOperationName.NATIVE_ADAPTER_CALL,
+            operation_kind=MemoryOperationKind.NATIVE_ADAPTER_CALL.value,
+            path=path,
+            provider=self._provider,
+            model=self._model,
+            cli_profile=self._cli_profile,
+            policy_decision="failed",
+            record_count=0,
+            failure_class=classify_memory_failure(exc),
+        ):
+            pass
 
 
 def _validate_memory_path(path: str) -> _ValidatedMemoryPath:

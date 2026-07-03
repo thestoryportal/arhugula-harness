@@ -38,6 +38,9 @@ from harness_runtime.memory_promotion import (
     SemanticInjectionPolicy,
     SemanticRecordStatus,
 )
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 _NOW = datetime(2026, 7, 1, 18, 0, 0, tzinfo=UTC)
 _ACTOR = Actor(actor_class=ActorClass.AGENT, actor_id="codex")
@@ -48,6 +51,13 @@ def _store(tmp_path: Path) -> CanonicalMemoryStore:
         root_binding=MemoryRootBinding(default_root=tmp_path / "memory"),
         deployment_surface=DeploymentSurface.LOCAL_DEVELOPMENT,
     )
+
+
+def _tracer_provider() -> tuple[TracerProvider, InMemorySpanExporter]:
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    return provider, exporter
 
 
 def _scope() -> MemoryScope:
@@ -88,13 +98,20 @@ def _candidate(
     )
 
 
-def _service(store: CanonicalMemoryStore) -> PromotionDecisionService:
+def _service(
+    store: CanonicalMemoryStore,
+    *,
+    tracer_provider: TracerProvider | None = None,
+) -> PromotionDecisionService:
     return PromotionDecisionService(
         store=store,
         actor=_ACTOR,
         policy_ref="policy:memory-test",
         run_id="run-u-mem-09",
         cli_profile="codex",
+        provider="openai",
+        model="gpt-5",
+        tracer_provider=tracer_provider,
     )
 
 
@@ -135,6 +152,29 @@ def test_approve_writes_active_semantic_record_and_promote_operation(tmp_path: P
     assert operation.operation_projection is MemoryOperationProjection.PROMOTION_DECISIONS
     assert operation.memory_refs == (result.memory_id,)
     assert operation.policy_ref == "policy:memory-test"
+
+
+def test_promotion_decision_emits_c_mem_19_span(tmp_path: Path) -> None:
+    tracer_provider, exporter = _tracer_provider()
+    store = _store(tmp_path)
+    service = _service(store, tracer_provider=tracer_provider)
+
+    result = service.approve(
+        _candidate(),
+        timestamp=_NOW,
+        injection_policy=SemanticInjectionPolicy.RETRIEVAL_ONLY,
+    )
+
+    [span] = [span for span in exporter.get_finished_spans() if span.name == "memory.operation"]
+    attrs = dict(span.attributes or {})
+    assert attrs["memory.operation.name"] == "promotion"
+    assert attrs["memory.operation.kind"] == MemoryOperationKind.PROMOTE.value
+    assert attrs["memory.provider"] == "openai"
+    assert attrs["memory.model"] == "gpt-5"
+    assert attrs["memory.cli_profile"] == "codex"
+    assert attrs["memory.policy.decision"] == SemanticRecordStatus.ACTIVE.value
+    assert attrs["memory.record_count"] == 1
+    assert attrs["memory.tier"] == result.record.envelope.tier.value
 
 
 def test_review_required_candidate_cannot_be_active_until_operator_approves(
