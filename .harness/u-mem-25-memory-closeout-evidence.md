@@ -74,3 +74,36 @@ Live checks are explicitly gated, not silently skipped:
 | `live-antigravity-cli-auth` | Authenticated local Antigravity CLI session | Fake-subprocess route resolves `antigravity:antigravity`. | `codex-credential-gate:U-MEM-24:antigravity-cli-auth` |
 | `live-gemini-legacy-cli-auth` | Authenticated local legacy Gemini CLI session | Fake-subprocess route resolves `gemini:gemini`. | `codex-credential-gate:U-MEM-24:gemini-legacy-cli-auth` |
 | `live-generic-command-cli-auth` | Operator-declared generic external CLI auth | Fake-subprocess route resolves `generic-command:custom`. | `codex-credential-gate:U-MEM-24:generic-command-cli-auth` |
+
+### Live Confirmation Resume Tests
+
+U-MEM-live-confirmations adds the declared U-MEM-24 e2e resume surfaces:
+
+- `harness-runtime/tests/integration/test_u_mem_24_live_memory.py`
+  runs `-m e2e -k anthropic_native_memory` against the hosted Anthropic
+  Memory tool and asserts the canonical `CanonicalNativeMemoryToolBackend`
+  writes `TOOL_EVENT` records plus `NATIVE_ADAPTER_CALL` operation-ledger rows.
+- `harness-runtime/tests/integration/test_u_mem_24_live_cli_routes.py`
+  runs `-m e2e -k {claude_code,codex,antigravity,gemini_legacy,generic_command}`
+  and binds real local CLI status probes to `ExternalCliRoute` carriers without
+  printing or moving credential values.
+
+Pass/skip semantics are explicit. Anthropic skips only when `ANTHROPIC_API_KEY`
+is absent from the live execution environment. Claude Code and Codex pass only
+when the local CLI is installed and reports authenticated status; the Codex
+probe strips `OPENAI_API_KEY` and requires ChatGPT subscription auth. Antigravity
+and legacy Gemini skip when their local CLIs are absent, and otherwise remain
+skipped until a non-secret auth-status probe is declared. The generic-command
+gate skips until `U_MEM_24_GENERIC_COMMAND_AUTH_PROBE` names an operator-owned
+zero-secret status command.
+
+Observed local live-confirmation status on 2026-07-03:
+
+| Gate | Local status | Evidence |
+| --- | --- | --- |
+| `live-anthropic-native-memory` | PASS | `test_u_mem_24_live_memory.py -m e2e -k anthropic_native_memory` passed against the hosted provider and asserted canonical native-adapter ledger rows. |
+| `live-claude-code-cli-auth` | PASS | `test_u_mem_24_live_cli_routes.py -m e2e -k claude_code` passed in the broader local Claude Code auth boundary. |
+| `live-codex-cli-auth` | PASS | `test_u_mem_24_live_cli_routes.py -m e2e -k codex` passed with `OPENAI_API_KEY` stripped and ChatGPT subscription auth required. |
+| `live-antigravity-cli-auth` | NOT CONFIRMED | Skipped because `antigravity` is not installed on PATH. |
+| `live-gemini-legacy-cli-auth` | NOT CONFIRMED | Skipped because `gemini` is not installed on PATH. |
+| `live-generic-command-cli-auth` | NOT CONFIRMED | Skipped because `U_MEM_24_GENERIC_COMMAND_AUTH_PROBE` is not set. |
