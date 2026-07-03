@@ -46,7 +46,7 @@ from harness_runtime.lifecycle.memory_tool_types import (
     MemoryPathViolationError,
 )
 
-__all__ = ["CanonicalNativeMemoryToolBackend"]
+__all__ = ["CanonicalNativeMemoryToolBackend", "normalize_native_memory_path"]
 
 
 _MEMORIES_SCOPE: Final[str] = "/memories/"
@@ -145,6 +145,46 @@ class CanonicalNativeMemoryToolBackend:
                     record=record,
                     timestamp=record.envelope.created_at,
                 )
+        except Exception as exc:
+            self._emit_native_failure_span(path=path, exc=exc)
+            raise
+
+    async def migrate_from_callback(
+        self,
+        path: str,
+        content: bytes,
+        *,
+        migration_id: str,
+        source_backend_name: str,
+    ) -> MemoryID:
+        """Write a callback-backed memory item into the canonical memory root.
+
+        U-MEM-23 keeps migration explicit by recording command ``migrate`` in
+        the canonical tool event while reusing the C-MEM-15 native adapter
+        durable operation ledger.
+        """
+
+        try:
+            validated = self._validate_observed_path(path)
+            self._require_native_access()
+            self._require_capture_allowed()
+            async with self._locks[validated.external_path]:
+                record = self._write_tool_event(
+                    command="migrate",
+                    validated=validated,
+                    content=content,
+                    deleted=False,
+                    prior_state=self._latest_state(validated),
+                    migration_id=migration_id,
+                    migration_source_backend=source_backend_name,
+                )
+                self._append_native_adapter_call(
+                    command="migrate",
+                    validated=validated,
+                    record=record,
+                    timestamp=record.envelope.created_at,
+                )
+                return record.envelope.memory_id
         except Exception as exc:
             self._emit_native_failure_span(path=path, exc=exc)
             raise
@@ -328,6 +368,8 @@ class CanonicalNativeMemoryToolBackend:
         content: bytes | None,
         deleted: bool,
         prior_state: _NativeMemoryState | None,
+        migration_id: str | None = None,
+        migration_source_backend: str | None = None,
     ) -> MemoryStoreRecord:
         timestamp = self._clock()
         content_sha256 = hashlib.sha256(content).hexdigest() if content is not None else None
@@ -350,6 +392,10 @@ class CanonicalNativeMemoryToolBackend:
             "cli_profile": self._cli_profile,
             "policy_ref": self._policy_ref,
         }
+        if migration_id is not None:
+            record_content["migration_id"] = migration_id
+        if migration_source_backend is not None:
+            record_content["migration_source_backend"] = migration_source_backend
         content_hash = compute_memory_content_hash(record_content)
         memory_id = derive_memory_id(MemoryTier.EPISODIC, MemoryRecordKind.TOOL_EVENT, content_hash)
         record = MemoryStoreRecord(
@@ -474,6 +520,12 @@ def _validate_memory_path(path: str) -> _ValidatedMemoryPath:
         external_path=f"{_MEMORIES_SCOPE}{normalized_relative}",
         relative_path=normalized_relative,
     )
+
+
+def normalize_native_memory_path(path: str) -> str:
+    """Return the canonical `/memories/...` path used by native adapters."""
+
+    return _validate_memory_path(path).external_path
 
 
 def _state_text(state: _NativeMemoryState, *, command: str, path: str) -> str:
