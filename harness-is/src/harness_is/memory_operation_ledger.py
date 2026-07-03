@@ -21,6 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from harness_is.jsonl_event_ledger_lifecycle import JsonlLedgerHandle
 from harness_is.memory_record_envelope import MemoryID
+from harness_is.memory_redaction_event import MemoryRedactionEvent, MemoryRedactionKind
 from harness_is.state_ledger_entry_schema import (
     ALL_ZEROS_SENTINEL,
     Actor,
@@ -115,6 +116,10 @@ class MemoryOperationProjectionMismatchError(ValueError):
     """Raised when an operation kind is paired with the wrong projection."""
 
 
+class MemoryOperationRedactionEventMismatchError(ValueError):
+    """Raised when a redaction/tombstone operation lacks its C-MEM-18 event."""
+
+
 class MemoryOperationEntry(StateLedgerEntry):
     """C-MEM-08 memory operation entry.
 
@@ -133,6 +138,7 @@ class MemoryOperationEntry(StateLedgerEntry):
     memory_refs: tuple[MemoryID, ...] = Field(default_factory=tuple)
     policy_ref: str | None = None
     procedural_snapshot_ref: str | None = None
+    redaction_event: MemoryRedactionEvent | None = None
 
     @model_validator(mode="after")
     def _projection_matches_kind(self) -> Self:
@@ -141,6 +147,7 @@ class MemoryOperationEntry(StateLedgerEntry):
             raise MemoryOperationProjectionMismatchError(
                 f"{self.operation_kind.value} operations project to {expected.value}"
             )
+        _validate_redaction_event(self.operation_kind, self.redaction_event)
         return self
 
 
@@ -164,6 +171,7 @@ class MemoryOperationPayload(BaseModel):
     memory_refs: tuple[MemoryID, ...] = Field(default_factory=tuple)
     policy_ref: str | None = None
     procedural_snapshot_ref: str | None = None
+    redaction_event: MemoryRedactionEvent | None = None
     procedural_tier_snapshot_ref: Identifier | None = None
     branch_metadata: BranchMetadata | None = None
 
@@ -174,7 +182,34 @@ class MemoryOperationPayload(BaseModel):
             raise MemoryOperationProjectionMismatchError(
                 f"{self.operation_kind.value} operations project to {expected.value}"
             )
+        _validate_redaction_event(self.operation_kind, self.redaction_event)
         return self
+
+
+def _validate_redaction_event(
+    operation_kind: MemoryOperationKind,
+    redaction_event: MemoryRedactionEvent | None,
+) -> None:
+    if operation_kind in {MemoryOperationKind.REDACT, MemoryOperationKind.TOMBSTONE}:
+        if redaction_event is None:
+            raise MemoryOperationRedactionEventMismatchError(
+                f"{operation_kind.value} operations require a C-MEM-18 redaction_event"
+            )
+    elif redaction_event is not None:
+        raise MemoryOperationRedactionEventMismatchError(
+            f"{operation_kind.value} operations cannot carry redaction_event"
+        )
+    if redaction_event is None:
+        return
+    if operation_kind is MemoryOperationKind.TOMBSTONE:
+        if redaction_event.redaction_kind is not MemoryRedactionKind.TOMBSTONE:
+            raise MemoryOperationRedactionEventMismatchError(
+                "tombstone operations require redaction_kind=tombstone"
+            )
+    elif redaction_event.redaction_kind is MemoryRedactionKind.TOMBSTONE:
+        raise MemoryOperationRedactionEventMismatchError(
+            "tombstone redaction events require operation_kind=tombstone"
+        )
 
 
 class MemoryLedgerVerificationResult(BaseModel):
@@ -242,11 +277,27 @@ def _canonical_payload(entry: MemoryOperationEntry) -> dict[str, object]:
         "policy_ref": _optional_nfc(entry.policy_ref),
         "procedural_snapshot_ref": _optional_nfc(entry.procedural_snapshot_ref),
     }
+    if entry.redaction_event is not None:
+        payload["redaction_event"] = _redaction_event_payload(entry.redaction_event)
     if entry.procedural_tier_snapshot_ref is not None:
         payload["procedural_tier_snapshot_ref"] = _nfc(entry.procedural_tier_snapshot_ref)
     if entry.branch_metadata is not None:
         payload["branch_metadata"] = _branch_metadata_payload(entry.branch_metadata)
     return payload
+
+
+def _redaction_event_payload(event: MemoryRedactionEvent) -> dict[str, object]:
+    return {
+        "event_id": _nfc(event.event_id),
+        "target_memory_id": _nfc(event.target_memory_id),
+        "redaction_kind": _nfc(event.redaction_kind.value),
+        "reason": _nfc(event.reason),
+        "actor": _nfc(event.actor.value),
+        "timestamp": event.timestamp.isoformat(),
+        "replacement_summary": _optional_nfc(event.replacement_summary),
+        "old_content_hash": _nfc(event.old_content_hash),
+        "new_content_hash": _nfc(event.new_content_hash),
+    }
 
 
 def canonicalize_memory_operation(entry: MemoryOperationEntry) -> bytes:
@@ -322,6 +373,11 @@ def _deserialize_entry(line: str) -> MemoryOperationEntry:
         memory_refs=tuple(MemoryID(ref) for ref in raw.get("memory_refs", [])),
         policy_ref=raw.get("policy_ref"),
         procedural_snapshot_ref=raw.get("procedural_snapshot_ref"),
+        redaction_event=(
+            MemoryRedactionEvent.model_validate(raw["redaction_event"])
+            if raw.get("redaction_event") is not None
+            else None
+        ),
     )
 
 
@@ -370,6 +426,7 @@ def _entry_from_payload(
         memory_refs=payload.memory_refs,
         policy_ref=payload.policy_ref,
         procedural_snapshot_ref=payload.procedural_snapshot_ref,
+        redaction_event=payload.redaction_event,
     )
     return draft.model_copy(update={"response_hash": compute_memory_operation_response_hash(draft)})
 
@@ -392,6 +449,7 @@ def _equivalence_payload_from_entry(entry: MemoryOperationEntry) -> dict[str, ob
         "memory_refs": entry.memory_refs,
         "policy_ref": entry.policy_ref,
         "procedural_snapshot_ref": entry.procedural_snapshot_ref,
+        "redaction_event": entry.redaction_event,
     }
 
 
@@ -413,6 +471,7 @@ def _equivalence_payload_from_payload(payload: MemoryOperationPayload) -> dict[s
         "memory_refs": payload.memory_refs,
         "policy_ref": payload.policy_ref,
         "procedural_snapshot_ref": payload.procedural_snapshot_ref,
+        "redaction_event": payload.redaction_event,
     }
 
 
@@ -564,6 +623,7 @@ __all__ = [
     "MemoryOperationProjection",
     "MemoryOperationProjectionHandles",
     "MemoryOperationProjectionMismatchError",
+    "MemoryOperationRedactionEventMismatchError",
     "MemoryOperationWriteResult",
     "append_memory_operation",
     "canonicalize_memory_operation",

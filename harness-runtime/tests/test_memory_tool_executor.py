@@ -32,6 +32,7 @@ from harness_is.memory_record_envelope import (
     compute_memory_content_hash,
     derive_memory_id,
 )
+from harness_is.memory_redaction import MemoryRedactionActor, MemoryRedactionService
 from harness_is.memory_retrieval import MemoryRetriever
 from harness_is.memory_retrieval_index import DerivedRetrievalIndexStore
 from harness_is.memory_store import CanonicalMemoryStore, MemoryStoreRecord
@@ -268,6 +269,84 @@ def test_search_and_read_return_only_policy_allowed_refs(tmp_path: Path) -> None
 
     ledger_kinds = [entry.operation_kind for entry in store.read_memory_operations()]
     assert MemoryOperationKind.RETRIEVE in ledger_kinds
+    assert ledger_kinds.count(MemoryOperationKind.STANDARD_TOOL_CALL) == 2
+
+
+def test_redaction_transition_excludes_standard_tool_search_and_read(
+    tmp_path: Path,
+) -> None:
+    binding = _binding(tmp_path)
+    store = _store(binding)
+    record = _semantic_record(
+        kind=MemoryRecordKind.PREFERENCE,
+        statement="Codex standard tools must drop records after redaction transitions.",
+    )
+    store.write_record(record)
+    index_store = _index_store(binding)
+    index_store.rebuild(indexed_at=_NOW)
+    resolver = MemoryPolicyResolver(_policy(eligible_record_kinds=(MemoryRecordKind.PREFERENCE,)))
+    retriever = MemoryRetriever(
+        store=store,
+        index_store=index_store,
+        policy_resolver=resolver,
+        policy_ref=_POLICY_REF,
+    )
+    executor = StandardMemoryToolExecutor(
+        store=store,
+        index_store=index_store,
+        retriever=retriever,
+        policy_resolver=resolver,
+    )
+    search_args = {
+        "query": "codex standard tools redaction transitions",
+        "scope_ref": _SCOPE_REF,
+        "policy_ref": _POLICY_REF,
+        "limit": 10,
+        "allowed_kinds": ["preference"],
+    }
+    before = executor.execute(_request(MemoryToolName.SEARCH, search_args))
+    before_results = cast(list[dict[str, object]], before["results"])
+    assert [item["memory_ref"] for item in before_results] == [str(record.envelope.memory_id)]
+
+    MemoryRedactionService(
+        store=store,
+        operation_actor=_context().actor,
+        event_actor=MemoryRedactionActor.OPERATOR,
+        policy_ref=_POLICY_REF,
+    ).redact_content(
+        record.envelope.memory_id,
+        record.envelope.kind,
+        timestamp=_NOW,
+        reason="operator requested standard-tool redaction",
+        replacement_summary="Removed from standard memory tools.",
+    )
+    with pytest.raises(MemoryToolExecutionDeniedError, match="unavailable"):
+        executor.execute(
+            _request(
+                MemoryToolName.READ,
+                {
+                    "memory_ref": str(record.envelope.memory_id),
+                    "policy_ref": _POLICY_REF,
+                },
+            )
+        )
+    index_store.rebuild(indexed_at=_NOW)
+
+    after = executor.execute(_request(MemoryToolName.SEARCH, search_args))
+    assert after["results"] == []
+    with pytest.raises(MemoryToolExecutionDeniedError, match="unavailable"):
+        executor.execute(
+            _request(
+                MemoryToolName.READ,
+                {
+                    "memory_ref": str(record.envelope.memory_id),
+                    "policy_ref": _POLICY_REF,
+                },
+            )
+        )
+    ledger_kinds = [entry.operation_kind for entry in store.read_memory_operations()]
+    assert MemoryOperationKind.RETRIEVE in ledger_kinds
+    assert MemoryOperationKind.REDACT in ledger_kinds
     assert ledger_kinds.count(MemoryOperationKind.STANDARD_TOOL_CALL) == 2
 
 

@@ -37,7 +37,11 @@ from harness_is.memory_retrieval import (
     MemoryRetriever,
 )
 from harness_is.memory_retrieval_index import DerivedRetrievalIndexEntry, DerivedRetrievalIndexStore
-from harness_is.memory_store import CanonicalMemoryStore, MemoryStoreRecord
+from harness_is.memory_store import (
+    CanonicalMemoryStore,
+    MemoryStoreRecord,
+    MemoryStoreRecordUnavailableError,
+)
 from harness_is.state_ledger_entry_schema import Actor, Identifier
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -210,7 +214,12 @@ class StandardMemoryToolExecutor:
         self._require_policy_ref(args, context)
         memory_ref = MemoryID(_string_arg(args, "memory_ref"))
         entry = self._allowed_index_entry(memory_ref, context)
-        record = self._store.read_record(entry.memory_id, entry.record_kind)
+        try:
+            record = self._store.read_record(entry.memory_id, entry.record_kind)
+        except MemoryStoreRecordUnavailableError as exc:
+            raise MemoryToolExecutionDeniedError(
+                f"memory ref {memory_ref!s} is unavailable"
+            ) from exc
         packet_section_ref = _optional_string_arg(args, "packet_section_ref") or (
             f"record:{_stable_digest(str(memory_ref))[:32]}"
         )
