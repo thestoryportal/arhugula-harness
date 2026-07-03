@@ -61,6 +61,24 @@ ollama_optional = true
 # `http://localhost:11434`.
 # ollama_host = "http://localhost:11434"
 
+# Automatic local memory substrate. Defaults are local-first and safe for a
+# fresh checkout: first inference bootstrap creates `<repository_root>/.harness/memory`,
+# builds the derived retrieval index, injects bounded prompt packets, and exposes
+# provider-neutral standard memory tools when the provider supports tools.
+# Anthropic/provider-native remote memory storage is disabled by default and, even
+# when enabled, is selected only after local standard tools and prompt packets are
+# unavailable.
+[runtime.memory]
+enabled = true
+# root_path = "/absolute/path/to/your/workspace/.harness/memory"
+token_budget = 1200
+capture_run_events = true
+capture_turns = true
+prompt_packet_enabled = true
+standard_tools_enabled = true
+native_provider_enabled = false
+policy_id = "policy:automatic-local-memory"
+
 
 # Provider secret backend selection. This table carries selector metadata
 # only. Do not put API keys, tokens, passwords, or other secret values here.
