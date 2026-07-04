@@ -45,9 +45,10 @@ must provide:
 | `default_topology` | Fallback topology when the workflow does not specify one. |
 
 The template also declares path bindings, provider-secret selector metadata,
-provider optionality flags, and a routing manifest fallback chain. Optional
-runtime features are exposed as explicit `RuntimeConfig` fields and default off
-unless their type declares a default sub-config.
+provider optionality flags, automatic local memory settings, and a routing
+manifest fallback chain. Optional runtime features are exposed as explicit
+`RuntimeConfig` fields. The memory sub-config defaults on locally with
+provider-native remote memory disabled.
 
 ## Config Load Order
 
