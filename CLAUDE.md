@@ -51,15 +51,15 @@ Current governance anchors: `Project_Workflow_v1_16.md`, `Phase_7_Meta_Architect
 
 ### 2.2 ADR + ADD + PRD
 
-Foundational authority remains ADR-F1..F5 plus ADR-D1..D6, then `Architectural_Design_Document_v1_3.md`, then `PRD_v1_1.md`. Full version notes are indexed at `claude-artifact-pointers.md` §2.2 in `.harness`.
+Foundational authority remains ADR-F1..F5 plus ADR-D1..D6, then `Architectural_Design_Document_v1_3.md`, then `PRD_v1_1.md`. **New (2026-07-01, cleared 2026-07-09):** `ADR-D7_memory_substrate.md` adopts the provider-neutral memory substrate + CLI-profile/provider-adapter surface (its §15/§86 "external CLI routing … not in this repo" claim is corrected in-place — the routing was ported to `main` at PR #914, `R-300-external-cli-oauth-routing`); `PRD_v1_2.md` adds the R-MEM memory-substrate requirement family (additive to PRD v1.1). Full version notes are indexed at `claude-artifact-pointers.md` §2.2 in `.harness`.
 
 ### 2.3 Per-Axis Specs (Phase 5 Contract Authority)
 
-Canonical spec heads are IS `Spec_Information_Substrate_v1.md`, AS `Spec_Action_Surface_v1.md` (v1.10), CP `Spec_Control_Plane_v1_38.md`, OD `Spec_Operational_Discipline_v1_28.md`, and Runtime `Spec_Harness_Runtime_v1.md` (v1.52). Full per-spec lineage is indexed at `claude-artifact-pointers.md` §2.3 in `.harness`.
+Canonical spec heads are IS `Spec_Information_Substrate_v1.md`, AS `Spec_Action_Surface_v1.md` (v1.10), CP `Spec_Control_Plane_v1_85.md`, OD `Spec_Operational_Discipline_v1_30.md`, Runtime `Spec_Harness_Runtime_v1.md` (v1.92), and **Memory `Spec_Memory_Substrate_v1.md` (the `C-MEM-*` contract family; Proposed 2026-07-01, cleared 2026-07-09)**. *(Version refresh 2026-07-09: CP v1.38→v1.85, OD v1.28→v1.30, Runtime v1.52→v1.92 caught up after the R-FS-1 + memory-substrate arcs; the delta-only chains mean a `§`-cite may name an older last-substantive-definition version — verify byte-exact per §10.4.)* Full per-spec lineage is indexed at `claude-artifact-pointers.md` §2.3 in `.harness`.
 
 ### 2.4 Per-Axis Plans + CXA (Phase 6 Execution Authority)
 
-Canonical plan heads are core `Implementation_Plan_Harness_Core_v1_2.md`, IS `Implementation_Plan_Information_Substrate_v2_6.md`, AS `Implementation_Plan_Action_Surface_v1_4.md`, CP `Implementation_Plan_Control_Plane_v2_37.md`, OD `Implementation_Plan_Operational_Discipline_v2_27.md`, Runtime `Implementation_Plan_Harness_Runtime_v2_48.md`, and CXA `Cross_Axis_Composition_Document_v2_20.md`. Full per-plan and CXA lineage is indexed at `claude-artifact-pointers.md` §2.4 in `.harness`.
+Canonical plan heads are core `Implementation_Plan_Harness_Core_v1_2.md`, IS `Implementation_Plan_Information_Substrate_v2_6.md`, AS `Implementation_Plan_Action_Surface_v1_4.md`, CP `Implementation_Plan_Control_Plane_v2_37.md`, OD `Implementation_Plan_Operational_Discipline_v2_28.md`, Runtime `Implementation_Plan_Harness_Runtime_v2_48.md`, CXA `Cross_Axis_Composition_Document_v2_20.md`, and **Memory `Implementation_Plan_Memory_Substrate_v1.md` (U-MEM-01..25; cleared 2026-07-09)**. Full per-plan and CXA lineage is indexed at `claude-artifact-pointers.md` §2.4 in `.harness`.
 
 ### 2.5 Per-Axis Subdirectory `CLAUDE.md` Pointers
 
