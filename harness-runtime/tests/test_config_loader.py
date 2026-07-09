@@ -19,7 +19,9 @@ from harness_runtime.config.loader import (
     materialize_runtime_config,
 )
 from harness_runtime.types import (
+    SDK_ONLY_ENABLED_PROVIDER_NAMES,
     CollectorConfig,
+    ExternalCLIProviderConfig,
     OTelConfig,
     PathBindingConfig,
     ProviderSecretsConfig,
@@ -49,6 +51,122 @@ def test_kwargs_only_materializes() -> None:
     cfg = materialize_runtime_config(env={}, **_required_kwargs())
     direct = RuntimeConfig(**_required_kwargs())
     assert cfg == direct
+
+
+def test_enabled_provider_names_defaults_to_prefer_oauth() -> None:
+    """Operator-ratified prefer-OAuth default (2026-07-09): CLI providers first.
+
+    A fresh checkout routes through the local subscription CLIs first (each
+    degrades via `optional=True` until authenticated), then the hosted SDK
+    providers. Soft-degrade (`*_optional=True`) is the coherent companion: a
+    missing hosted credential must not block when CLIs are the preferred path.
+    Keeping hosted-SDK-only routing is the explicit opt-out below.
+    """
+    cfg = materialize_runtime_config(env={}, **_required_kwargs())
+    assert cfg.enabled_provider_names == (
+        "claude_code",
+        "codex",
+        "antigravity",
+        "anthropic",
+        "openai",
+        "ollama",
+    )
+    assert tuple(provider.provider for provider in cfg.external_cli_providers) == (
+        "claude_code",
+        "codex",
+        "antigravity",
+    )
+    assert all(provider.optional for provider in cfg.external_cli_providers)
+    assert cfg.anthropic_optional is True
+    assert cfg.openai_optional is True
+    assert cfg.ollama_optional is True
+
+
+def test_sdk_only_opt_out_constant() -> None:
+    """The explicit opt-out `SDK_ONLY_ENABLED_PROVIDER_NAMES` lists hosted SDKs only."""
+    assert SDK_ONLY_ENABLED_PROVIDER_NAMES == (
+        "anthropic",
+        "openai",
+        "ollama",
+    )
+
+
+def test_external_cli_provider_config_materializes_from_kwargs() -> None:
+    """Operators can opt into a local authenticated CLI provider without secrets."""
+    cfg = materialize_runtime_config(
+        env={},
+        **_required_kwargs(),
+        enabled_provider_names=("claude_code",),
+        external_cli_providers=(
+            ExternalCLIProviderConfig(
+                provider="claude_code",
+                kind="claude-code",
+                command="claude",
+                timeout_seconds=90.0,
+            ),
+        ),
+    )
+    assert cfg.enabled_provider_names == ("claude_code",)
+    assert cfg.external_cli_providers[0].provider == "claude_code"
+    assert cfg.external_cli_providers[0].command == "claude"
+
+
+def test_external_cli_provider_config_rejects_builtin_name_shadow() -> None:
+    """A CLI provider key that shadows a built-in SDK provider fails loud at config time.
+
+    Guards the double-hazard: SDK construction would take the built-in branch and drop
+    the CLI config, while the memory layer keys external-CLI detection on the same name
+    and would suppress the built-in's native/tool memory.
+    """
+    with pytest.raises(ValidationError, match="shadows a built-in SDK provider"):
+        materialize_runtime_config(
+            env={},
+            **_required_kwargs(),
+            external_cli_providers=(
+                ExternalCLIProviderConfig(
+                    provider="anthropic",
+                    kind="generic-command",
+                    command="my-anthropic-cli",
+                ),
+            ),
+        )
+
+
+def test_external_cli_provider_config_rejects_duplicate_keys() -> None:
+    """Duplicate external-CLI provider keys fail loud (last-win shadowing avoided)."""
+    with pytest.raises(ValidationError, match="duplicate external_cli_providers"):
+        materialize_runtime_config(
+            env={},
+            **_required_kwargs(),
+            external_cli_providers=(
+                ExternalCLIProviderConfig(provider="my_cli", kind="generic-command", command="a"),
+                ExternalCLIProviderConfig(provider="my_cli", kind="generic-command", command="b"),
+            ),
+        )
+
+
+def test_external_cli_provider_config_accepts_generic_argv_templates() -> None:
+    """Custom CLI providers can be configured without adding repo code."""
+    cfg = materialize_runtime_config(
+        env={},
+        **_required_kwargs(),
+        enabled_provider_names=("local_llm",),
+        external_cli_providers=(
+            ExternalCLIProviderConfig(
+                provider="local_llm",
+                kind="generic-command",
+                command="my-llm",
+                args=("--model", "{model}", "--json"),
+                auth_args=("auth", "status"),
+                response_format="json",
+            ),
+        ),
+    )
+
+    provider = cfg.external_cli_providers[0]
+    assert provider.args == ("--model", "{model}", "--json")
+    assert provider.auth_args == ("auth", "status")
+    assert provider.response_format == "json"
 
 
 def test_env_supplies_scalar_fields_when_kwargs_omit_them() -> None:

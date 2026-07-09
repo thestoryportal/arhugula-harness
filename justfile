@@ -170,6 +170,15 @@ closure-certification-check:
 run file:
     uv run harness run {{file}} --config harness.toml
 
+# Materialize a temp harness config for a local external CLI provider.
+# Examples:
+#   just external-cli-config codex
+#   just external-cli-config antigravity
+#   just external-cli-config gemini       # legacy/deprecated Gemini CLI
+#   just external-cli-config generic-command --provider-name local_llm --command my-llm --model demo --family openai --arg=--model --arg={model}
+external-cli-config provider *args:
+    @uv run python tools/external_cli_provider_config.py {{provider}} {{args}}
+
 # Start the daemon (background MCP server over Unix socket).
 daemon:
     uv run harness daemon --config harness.toml

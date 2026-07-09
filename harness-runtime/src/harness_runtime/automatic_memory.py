@@ -119,6 +119,12 @@ class LocalAutomaticMemoryRuntime:
         self._capture_turns = config.memory.capture_turns
         self._tracer_provider = tracer_provider
         self._started_runs: set[str] = set()
+        # Provider keys routed through external OAuth/subscription CLIs. Their dispatch
+        # is subprocess text-only (no tool loop), so memory must reach them via the
+        # prompt-extension packet, not standard memory tools (see compose_for_dispatch).
+        self._external_cli_provider_names: frozenset[str] = frozenset(
+            provider.provider for provider in config.external_cli_providers
+        )
 
         binding = MemoryRootBinding(default_root=memory_root)
         MemoryPathRegistry(binding).ensure_canonical_roots(self._surface)
@@ -193,7 +199,10 @@ class LocalAutomaticMemoryRuntime:
                 timestamp=datetime.now(UTC),
                 actor=step_context.parent_actor,
                 policy_ref=self._policy.policy_id,
-                provider_capabilities=reflect_memory_provider_capabilities(model_binding),
+                provider_capabilities=reflect_memory_provider_capabilities(
+                    model_binding,
+                    is_external_cli=model_binding.provider in self._external_cli_provider_names,
+                ),
             )
         )
         self._capture_run_start_once(

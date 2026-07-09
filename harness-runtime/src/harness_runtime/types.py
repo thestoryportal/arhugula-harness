@@ -185,6 +185,9 @@ if TYPE_CHECKING:
     from harness_od.audit_ledger_types import AuditLedgerEntry
 
 __all__ = [
+    "DEFAULT_ENABLED_PROVIDER_NAMES",
+    "DEFAULT_EXTERNAL_CLI_PROVIDERS",
+    "SDK_ONLY_ENABLED_PROVIDER_NAMES",
     "AuditLedgerWriter",
     "BootstrapStage",
     "ClientName",
@@ -193,6 +196,10 @@ __all__ = [
     "ContentAddressedIndex",
     "CostAttributionChain",
     "EngineSelector",
+    "ExternalCLIPromptTransport",
+    "ExternalCLIProviderConfig",
+    "ExternalCLIProviderKind",
+    "ExternalCLIResponseFormat",
     "HITLPlacementRegistry",
     "HandoffRegistry",
     "HarnessContext",
@@ -1245,6 +1252,159 @@ class ProviderClient(Protocol):
         ...
 
 
+class ExternalCLIProviderKind(StrEnum):
+    """Supported subscription-backed local CLI provider adapters."""
+
+    CLAUDE_CODE = "claude-code"
+    CODEX = "codex"
+    ANTIGRAVITY = "antigravity"
+    GEMINI = "gemini"
+    GENERIC_COMMAND = "generic-command"
+
+
+class ExternalCLIResponseFormat(StrEnum):
+    """How a local CLI writes its final text response to stdout."""
+
+    TEXT = "text"
+    JSON = "json"
+    JSONL = "jsonl"
+
+
+class ExternalCLIPromptTransport(StrEnum):
+    """How the adapter passes the prompt to the local CLI process."""
+
+    STDIN = "stdin"
+    ARG = "arg"
+
+
+class ExternalCLIProviderConfig(BaseModel):
+    """Config for an already-authenticated local CLI-backed provider.
+
+    Carries executable metadata only. OAuth/session material stays exclusively
+    inside the official local CLI's own auth/session store.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    provider: str
+    """Provider key used by routing, for example ``"claude_code"``."""
+
+    kind: ExternalCLIProviderKind
+    """Adapter implementation kind."""
+
+    command: str = "claude"
+    """Executable name/path passed as argv[0] to create_subprocess_exec."""
+
+    args: tuple[str, ...] = ()
+    """Generic-command inference argv suffix. Supports ``{model}`` and ``{prompt}``."""
+
+    auth_args: tuple[str, ...] = ()
+    """Optional generic-command auth/status argv suffix."""
+
+    response_format: ExternalCLIResponseFormat = ExternalCLIResponseFormat.TEXT
+    """Stdout response format for generic-command providers."""
+
+    prompt_transport: ExternalCLIPromptTransport = ExternalCLIPromptTransport.STDIN
+    """Prompt passing mode for generic-command providers."""
+
+    timeout_seconds: float = 120.0
+    """Per-process timeout for auth checks and inference calls."""
+
+    auth_check: bool = True
+    """If true, construction probes official CLI auth status before routing."""
+
+    optional: bool = False
+    """If true, construction failure degrades like the built-in optional providers."""
+
+    @field_validator("provider", "command")
+    @classmethod
+    def _non_empty_string(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("must be a non-empty string")
+        if "\x00" in stripped:
+            raise ValueError("must not contain NUL bytes")
+        return stripped
+
+    @field_validator("args", "auth_args")
+    @classmethod
+    def _clean_argv_items(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        cleaned: list[str] = []
+        for item in value:
+            stripped = item.strip()
+            if not stripped:
+                raise ValueError("argv items must be non-empty strings")
+            if "\x00" in stripped:
+                raise ValueError("argv items must not contain NUL bytes")
+            cleaned.append(stripped)
+        return tuple(cleaned)
+
+    @field_validator("timeout_seconds")
+    @classmethod
+    def _positive_timeout(cls, value: float) -> float:
+        if value <= 0:
+            raise ValueError("timeout_seconds must be > 0")
+        return value
+
+
+DEFAULT_EXTERNAL_CLI_PROVIDERS: tuple[ExternalCLIProviderConfig, ...] = (
+    ExternalCLIProviderConfig(
+        provider="claude_code",
+        kind=ExternalCLIProviderKind.CLAUDE_CODE,
+        command="claude",
+        optional=True,
+    ),
+    ExternalCLIProviderConfig(
+        provider="codex",
+        kind=ExternalCLIProviderKind.CODEX,
+        command="codex",
+        optional=True,
+    ),
+    ExternalCLIProviderConfig(
+        provider="antigravity",
+        kind=ExternalCLIProviderKind.ANTIGRAVITY,
+        command="agy",
+        optional=True,
+    ),
+)
+"""Default OAuth/session-backed local CLI providers.
+
+These carry executable metadata only. Each CLI owns its own local auth/session
+store, and ``optional=True`` lets clean installs degrade until the operator has
+authenticated one of the CLIs.
+"""
+
+DEFAULT_ENABLED_PROVIDER_NAMES: tuple[str, ...] = (
+    *(provider.provider for provider in DEFAULT_EXTERNAL_CLI_PROVIDERS),
+    "anthropic",
+    "openai",
+    "ollama",
+)
+"""Provider construction default: prefer OAuth/subscription CLI providers, keep the
+hosted SDK/API-key providers as secondary fallbacks.
+
+Operator-ratified default posture (2026-07-09 AskUserQuestion; recorded in
+`.harness/class_1_fork_provider_construction_allowlist_semantic.md`): a fresh
+checkout CONSTRUCTS the local subscription CLIs first (each degrades via
+`optional=True` until authenticated), then the SDK providers. This governs stage-3a
+construction ORDER + availability, not routing itself — actual CLI-first dispatch also
+needs a `routing_manifest` naming those provider keys (see `harness.toml.example`). To
+opt OUT and keep hosted-SDK-only construction, set
+`enabled_provider_names = SDK_ONLY_ENABLED_PROVIDER_NAMES` (and
+`external_cli_providers = ()`) in `harness.toml`.
+"""
+
+SDK_ONLY_ENABLED_PROVIDER_NAMES: tuple[str, ...] = (
+    "anthropic",
+    "openai",
+    "ollama",
+)
+"""Opt-out allowlist that keeps hosted SDK/API-key routing only (no external CLIs).
+
+The conservative posture: an operator selects it explicitly in `harness.toml` to
+suppress OAuth CLI routing entirely."""
+
+
 # ----------------------------------------------------------------------------
 # `RuntimeMemoryConfig` — local-first automatic memory substrate config.
 # ----------------------------------------------------------------------------
@@ -1354,39 +1514,83 @@ class RuntimeConfig(BaseModel):
     not a key-allowlist concern. U-RT-17 amendment per advisor.
     """
 
-    ollama_optional: bool = False
+    ollama_optional: bool = True
     """If True, Ollama unreachability at stage 3a → `RT-FAIL-PROVIDER-DEGRADED`
-    (typed warning; stage continues with 2-provider context). Default False:
-    Ollama unreachability is a hard stage 3a failure per the multi-LLM
-    commitment (ADR-F1 v1.2). U-RT-19 wires the degraded branch; field is
-    declared here at U-RT-17 to keep schema additions in one commit."""
+    (typed warning; stage continues without the Ollama provider). Default True
+    under the operator-ratified prefer-OAuth posture (2026-07-09; recorded in
+    `.harness/class_1_fork_provider_construction_allowlist_semantic.md`): a
+    missing/unreachable hosted provider must not block routing when local
+    subscription CLIs are the preferred path. U-RT-19 wires the degraded branch;
+    field is declared here at U-RT-17 to keep schema additions in one commit."""
 
-    anthropic_optional: bool = False
+    anthropic_optional: bool = True
     """If True, Anthropic construction failure at stage 3a (keyring miss OR
     network unreachable) → `RT-FAIL-PROVIDER-DEGRADED` (typed warning; stage
-    continues without `"anthropic"` in providers). Default False: Anthropic
-    failure is a hard stage 3a failure per the multi-LLM commitment
-    (ADR-F1 v1.2). Auth errors (`ProviderAuthError` — 401/403) ALWAYS surface
-    regardless of `anthropic_optional` because they indicate operator intent
-    + misconfig (keyring entry present but invalid).
+    continues without `"anthropic"` in providers). Default True under the
+    operator-ratified prefer-OAuth posture (2026-07-09): missing API credentials
+    must not block routing when local subscription CLIs are the preferred path.
+    Auth errors (`ProviderAuthError` — 401/403) ALWAYS surface regardless of
+    `anthropic_optional` because they indicate operator intent + misconfig
+    (keyring entry present but invalid).
 
-    Added per `.harness/class_1_fork_provider_construction_allowlist_semantic.md`
-    operator-ratified 2026-05-28 (E-prod-3). Symmetric extension of the
-    `ollama_optional` precedent at line 1938 deferred-to-discretion clause.
-    Unblocks daemon-mode subprocess e2e for operators without all keyring
-    entries configured."""
+    Field added per `.harness/class_1_fork_provider_construction_allowlist_semantic.md`
+    (E-prod-3, 2026-05-28, which ratified `False`); the 2026-07-09 prefer-OAuth
+    ratification (same fork doc, appended) flips the DEFAULT to `True`. An operator
+    who wants fail-fast sets `anthropic_optional = false` explicitly."""
 
-    openai_optional: bool = False
+    openai_optional: bool = True
     """If True, OpenAI construction failure at stage 3a (keyring miss OR
     network unreachable) → `RT-FAIL-PROVIDER-DEGRADED` (typed warning; stage
-    continues without `"openai"` in providers). Default False: OpenAI
-    failure is a hard stage 3a failure per the multi-LLM commitment
-    (ADR-F1 v1.2). Auth errors (`ProviderAuthError` — 401/403) ALWAYS surface
-    regardless of `openai_optional`.
+    continues without `"openai"` in providers). Default True under the
+    operator-ratified prefer-OAuth posture (2026-07-09): missing API credentials
+    must not block routing when local subscription CLIs are the preferred path.
+    Auth errors (`ProviderAuthError` — 401/403) ALWAYS surface regardless of
+    `openai_optional`.
 
-    Added per `.harness/class_1_fork_provider_construction_allowlist_semantic.md`
-    operator-ratified 2026-05-28 (E-prod-3). Symmetric extension of the
-    `ollama_optional` precedent."""
+    Field added per `.harness/class_1_fork_provider_construction_allowlist_semantic.md`
+    (E-prod-3, 2026-05-28, which ratified `False`); the 2026-07-09 prefer-OAuth
+    ratification flips the DEFAULT to `True`."""
+
+    enabled_provider_names: tuple[str, ...] = DEFAULT_ENABLED_PROVIDER_NAMES
+    """Provider keys stage 3a should construct, in construction order.
+
+    Defaults to the prefer-OAuth posture (`DEFAULT_ENABLED_PROVIDER_NAMES`): local
+    subscription CLIs first, hosted SDK/API-key providers as secondary fallbacks. To
+    keep hosted-SDK-only routing, set `SDK_ONLY_ENABLED_PROVIDER_NAMES` here (and
+    `external_cli_providers = ()`). See `harness.toml.example`.
+    """
+
+    external_cli_providers: tuple[ExternalCLIProviderConfig, ...] = DEFAULT_EXTERNAL_CLI_PROVIDERS
+    """Local CLI-backed provider configs. Defaults to the built-in claude_code /
+    codex / antigravity set (each `optional=True`, so an unauthenticated CLI simply
+    degrades). Contains no secret/token fields."""
+
+    @field_validator("external_cli_providers")
+    @classmethod
+    def _external_cli_providers_do_not_shadow_builtins(
+        cls,
+        value: tuple[ExternalCLIProviderConfig, ...],
+    ) -> tuple[ExternalCLIProviderConfig, ...]:
+        """Reject a CLI provider key that shadows a built-in SDK provider, or duplicates.
+
+        A shadow is a silent double-hazard: stage-3a construction takes the built-in SDK
+        branch and drops the CLI config, while the memory layer keys external-CLI
+        detection on the same provider name and would suppress the built-in's native/tool
+        memory. Fail loud at config time instead.
+        """
+        seen: set[str] = set()
+        for provider in value:
+            name = provider.provider
+            if name in SDK_ONLY_ENABLED_PROVIDER_NAMES:
+                raise ValueError(
+                    f"external_cli_providers entry {name!r} shadows a built-in SDK "
+                    "provider; use a distinct provider key (reserved built-in names: "
+                    f"{', '.join(SDK_ONLY_ENABLED_PROVIDER_NAMES)})"
+                )
+            if name in seen:
+                raise ValueError(f"duplicate external_cli_providers entry {name!r}")
+            seen.add(name)
+        return value
 
     inter_step_data_flow: bool = False
     """B-INTERSTEP (R-FS-1 standalone arc; runtime spec §14.21 C-RT-34, new at
