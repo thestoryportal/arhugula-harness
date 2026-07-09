@@ -39,6 +39,19 @@ docs/packaging/portable leakage); pyright-strict + ruff clean.
 | **F8** | Class 3 | Auth-probe / CLI stderr (which can carry account identity, e.g. "Logged in as …") flows into `ProviderDegradedWarning` + span telemetry (`fallback.last_failure_detail`, bounded 500 chars). Tokens unlikely. | Note only; consider redacting identity from degraded telemetry. |
 | **F1-03** | Class 3 | Codex auth-status uses a fragile stdout substring heuristic vs Claude's structured `loggedIn` check. Fails-closed; faithful to deployed. | Note only. |
 
+## Second review — Fable 5 on the deployed-parity + F2 delta (`cf0fbe43..HEAD`)
+
+Verdict **MERGE, no blocker.** Verified by tracing the dispatch chain: F2 discriminator is correct (the retry/breaker wrapper rebinds `model_binding` to the current candidate per attempt, so `model_binding.provider` equals the dispatched provider on every hop), packet transit holds, SDK providers unchanged, all-degrade is fail-clear (`ProviderNoneConfiguredError`), and `harness.toml.example` parses. Dispositions:
+
+| Finding | Sev | Disposition |
+|---|---|---|
+| Runtime-side F2 wiring untested (witness proved *selection* only) | Class 2 | **FIXED** — added `test_automatic_memory_runtime.py::test_external_cli_binding_composes_prompt_packet_not_standard_tools` (real `LocalAutomaticMemoryRuntime` selects prompt-packet for a claude_code binding) + `test_lifecycle_llm_dispatch.py::test_memory_prompt_packet_injects_external_cli_system_block` (full chain: packet text lands in the CLI subprocess prompt). |
+| Builtin-name collision (an `external_cli_providers` entry named `anthropic`/`openai`/`ollama` silently shadows the SDK + misselects memory) — same as F7 | Class 2 | **FIXED** — `RuntimeConfig._external_cli_providers_do_not_shadow_builtins` field-validator rejects builtin-name shadowing AND duplicate CLI keys, fail-loud at config time. |
+| Docstrings overstate: "routes first" (it's construction order, routing needs the manifest) + "ProviderAuthError ALWAYS surfaces" (only for hosted SDK rows; a CLI's not-auth degrades under `optional=true`) | Class 3 | **FIXED** — `DEFAULT_ENABLED_PROVIDER_NAMES` docstring + fork §10 corrected. |
+| CLI step carrying a leading `role:"system"` message now fails loud (`PromptInjectionConflictError`) with memory enabled, where pre-fix it dropped memory | Class 3 | Note — consistent with SDK-branch semantics; behavior change on the default path, recorded here. |
+| Mechanism duplication: `MemoryAccessModeRequest.external_cli_route` seam stays production-unreachable; `select_memory_access_mode`'s internal fallback reflects WITHOUT `is_external_cli` (`memory_access_mode.py:163`), so a future caller omitting `provider_capabilities` for a CLI binding re-manifests the pre-F2 bug | Class 3 | Note / one-source-of-truth follow-up — the only production caller (`automatic_memory.compose_for_dispatch`) always passes the flagged capabilities, so inert today. Consider consolidating on the `external_cli_route` seam. |
+| Missing CLI binary → `ProviderTransientError` → 3 bounded retries per CLI (no backoff) — modest bootstrap latency | Class 3 | Benign; note. |
+
 ## Governance follow-up (WS2)
 
 - **ADR-D7 stale claim:** `ADR-D7_memory_substrate.md` §15 ("a separate existing substrate … not the gap") and §86 ("Existing external CLI routing remains the provider-construction authority") are now stale present-tense — the routing is owned in this repo as of this port. Correct them. (§17 is commit-pinned to `cc612ec8` and is NOT stale — do not touch.)

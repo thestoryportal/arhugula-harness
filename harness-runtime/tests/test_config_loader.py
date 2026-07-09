@@ -111,6 +111,40 @@ def test_external_cli_provider_config_materializes_from_kwargs() -> None:
     assert cfg.external_cli_providers[0].command == "claude"
 
 
+def test_external_cli_provider_config_rejects_builtin_name_shadow() -> None:
+    """A CLI provider key that shadows a built-in SDK provider fails loud at config time.
+
+    Guards the double-hazard: SDK construction would take the built-in branch and drop
+    the CLI config, while the memory layer keys external-CLI detection on the same name
+    and would suppress the built-in's native/tool memory.
+    """
+    with pytest.raises(ValidationError, match="shadows a built-in SDK provider"):
+        materialize_runtime_config(
+            env={},
+            **_required_kwargs(),
+            external_cli_providers=(
+                ExternalCLIProviderConfig(
+                    provider="anthropic",
+                    kind="generic-command",
+                    command="my-anthropic-cli",
+                ),
+            ),
+        )
+
+
+def test_external_cli_provider_config_rejects_duplicate_keys() -> None:
+    """Duplicate external-CLI provider keys fail loud (last-win shadowing avoided)."""
+    with pytest.raises(ValidationError, match="duplicate external_cli_providers"):
+        materialize_runtime_config(
+            env={},
+            **_required_kwargs(),
+            external_cli_providers=(
+                ExternalCLIProviderConfig(provider="my_cli", kind="generic-command", command="a"),
+                ExternalCLIProviderConfig(provider="my_cli", kind="generic-command", command="b"),
+            ),
+        )
+
+
 def test_external_cli_provider_config_accepts_generic_argv_templates() -> None:
     """Custom CLI providers can be configured without adding repo code."""
     cfg = materialize_runtime_config(

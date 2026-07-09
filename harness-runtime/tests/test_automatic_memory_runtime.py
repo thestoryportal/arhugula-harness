@@ -307,6 +307,59 @@ def test_first_use_initializes_local_memory_root_and_prompt_packet(tmp_path: Pat
     assert context.packet.sections == ()
 
 
+def test_external_cli_binding_composes_prompt_packet_not_standard_tools(
+    tmp_path: Path,
+) -> None:
+    """F2 wiring: a CLI-routed binding selects the prompt packet, not standard tools.
+
+    `_config` enables standard memory tools and defaults `external_cli_providers` to the
+    claude_code/codex/antigravity set. A `claude_code` binding is NOT anthropic, so
+    without the `is_external_cli` wiring it would (wrongly) select STANDARD_MEMORY_TOOLS
+    — a mode the CLI subprocess dispatch cannot serve. This exercises the real
+    `LocalAutomaticMemoryRuntime` path (`self._external_cli_provider_names`), not just
+    the capability helper.
+    """
+    runtime = materialize_automatic_memory_runtime(_config(tmp_path))
+
+    context = runtime.compose_for_dispatch(
+        binding=StepEffectiveBinding(
+            step_id="cli-memory-step",
+            model_binding=ModelBinding(provider="claude_code", model="sonnet"),
+            engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
+            override_applied=False,
+            persona_tier=PersonaTier.SOLO_DEVELOPER,
+        ),
+        fallback_chain=FallbackChain(
+            primary=ProviderCandidate(
+                provider="claude_code",
+                model="sonnet",
+                family=ProviderFamily.ANTHROPIC,
+            ),
+            same_family=(),
+            cross_family=(),
+        ),
+        step=WorkflowStep(
+            step_id="cli-memory-step",
+            step_kind=StepKind.INFERENCE_STEP,
+            step_payload={"messages": [{"role": "user", "content": "remember repo rules"}]},
+        ),
+        step_context=StepExecutionContext(
+            workflow_id="workflow-memory",
+            parent_action_id="workflow:workflow-memory:step:0",
+            parent_gate_level=GateLevel.AUTO,
+            parent_sandbox_tier=SandboxTier.TIER_1_PROCESS,
+            parent_actor=Actor(actor_class=ActorClass.AGENT, actor_id="codex"),
+            parent_entry_hash="",
+            parent_idempotency_key="run-cli-memory-step-0",
+            tenant_id=None,
+            step_index=0,
+            run_engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
+        ),
+    )
+
+    assert context.access_mode.value == "prompt_extension_packet"
+
+
 @pytest.mark.asyncio
 async def test_default_local_init_normal_inference_exposes_and_persists_memory(
     tmp_path: Path,

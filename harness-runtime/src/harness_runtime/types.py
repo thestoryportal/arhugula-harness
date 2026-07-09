@@ -1385,10 +1385,13 @@ hosted SDK/API-key providers as secondary fallbacks.
 
 Operator-ratified default posture (2026-07-09 AskUserQuestion; recorded in
 `.harness/class_1_fork_provider_construction_allowlist_semantic.md`): a fresh
-checkout routes through the local subscription CLIs first (each degrades via
-`optional=True` until authenticated), then the SDK providers. To opt OUT and keep
-hosted-SDK-only routing, set `enabled_provider_names = SDK_ONLY_ENABLED_PROVIDER_NAMES`
-(and `external_cli_providers = ()`) in `harness.toml`.
+checkout CONSTRUCTS the local subscription CLIs first (each degrades via
+`optional=True` until authenticated), then the SDK providers. This governs stage-3a
+construction ORDER + availability, not routing itself — actual CLI-first dispatch also
+needs a `routing_manifest` naming those provider keys (see `harness.toml.example`). To
+opt OUT and keep hosted-SDK-only construction, set
+`enabled_provider_names = SDK_ONLY_ENABLED_PROVIDER_NAMES` (and
+`external_cli_providers = ()`) in `harness.toml`.
 """
 
 SDK_ONLY_ENABLED_PROVIDER_NAMES: tuple[str, ...] = (
@@ -1561,6 +1564,33 @@ class RuntimeConfig(BaseModel):
     """Local CLI-backed provider configs. Defaults to the built-in claude_code /
     codex / antigravity set (each `optional=True`, so an unauthenticated CLI simply
     degrades). Contains no secret/token fields."""
+
+    @field_validator("external_cli_providers")
+    @classmethod
+    def _external_cli_providers_do_not_shadow_builtins(
+        cls,
+        value: tuple[ExternalCLIProviderConfig, ...],
+    ) -> tuple[ExternalCLIProviderConfig, ...]:
+        """Reject a CLI provider key that shadows a built-in SDK provider, or duplicates.
+
+        A shadow is a silent double-hazard: stage-3a construction takes the built-in SDK
+        branch and drops the CLI config, while the memory layer keys external-CLI
+        detection on the same provider name and would suppress the built-in's native/tool
+        memory. Fail loud at config time instead.
+        """
+        seen: set[str] = set()
+        for provider in value:
+            name = provider.provider
+            if name in SDK_ONLY_ENABLED_PROVIDER_NAMES:
+                raise ValueError(
+                    f"external_cli_providers entry {name!r} shadows a built-in SDK "
+                    "provider; use a distinct provider key (reserved built-in names: "
+                    f"{', '.join(SDK_ONLY_ENABLED_PROVIDER_NAMES)})"
+                )
+            if name in seen:
+                raise ValueError(f"duplicate external_cli_providers entry {name!r}")
+            seen.add(name)
+        return value
 
     inter_step_data_flow: bool = False
     """B-INTERSTEP (R-FS-1 standalone arc; runtime spec §14.21 C-RT-34, new at

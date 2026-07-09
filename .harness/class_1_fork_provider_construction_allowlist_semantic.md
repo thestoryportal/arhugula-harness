@@ -161,10 +161,13 @@ to the prefer-OAuth posture: when CLIs are the preferred path, a missing/unreach
 hosted-provider credential must degrade (drop that provider) rather than hard-fail
 stage 3a — otherwise a fresh checkout without API keys could not route at all despite
 authenticated CLIs being available. This does **not** change the auth-error carve-out
-(`ProviderAuthError` 401/403 ALWAYS surfaces) and does **not** weaken ADR-F1: multi-LLM
-routing is preserved; degradation is the ratified default, and an operator who wants
-fail-fast sets `*_optional = false` explicitly (or picks the
-`SDK_ONLY_ENABLED_PROVIDER_NAMES` opt-out).
+for the **hosted SDK providers** (`ProviderAuthError` 401/403 always surfaces there
+regardless of `*_optional`, indicating a present-but-invalid credential); an external
+CLI's own not-authenticated condition, by contrast, degrades under its `optional=true`
+like any other CLI-unavailable case (a subscription CLI has no 401 to distinguish). It
+does **not** weaken ADR-F1: multi-LLM routing is preserved; degradation is the ratified
+default, and an operator who wants fail-fast sets `*_optional = false` explicitly (or
+picks the `SDK_ONLY_ENABLED_PROVIDER_NAMES` opt-out).
 
 **Class.** Class 2 (operator decision reversing a prior ratified default). Not a Class 1
 architectural fork — the field semantics, the auth-error carve-out, and the multi-LLM

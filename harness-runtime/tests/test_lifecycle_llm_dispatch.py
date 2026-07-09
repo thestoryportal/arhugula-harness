@@ -1146,6 +1146,34 @@ async def test_memory_prompt_packet_injects_openai_leading_system_message() -> N
 
 
 @pytest.mark.asyncio
+async def test_memory_prompt_packet_injects_external_cli_system_block() -> None:
+    """F2 full chain: prompt-extension memory rides the external-CLI `system:` block.
+
+    When an external-CLI-routed dispatch carries a PROMPT_EXTENSION_PACKET memory
+    context, the packet must reach the subprocess prompt via the effective system
+    prompt (not be silently dropped, as it was before the capability-reflection fix).
+    """
+    adapter = _ExternalCLIFakeAdapter(calls=[])
+    tp, _ = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"claude_code": adapter},
+        tracer_provider=tp,
+        memory_context=_prompt_extension_memory_context(
+            provider="claude_code", family=ProviderFamily.ANTHROPIC
+        ),
+    )
+
+    await dispatcher.dispatch(
+        _binding("claude_code", model="sonnet"), _step(), step_context=_step_context()
+    )
+
+    _, prompt = adapter.calls[0]
+    assert "system:\n" in prompt
+    assert "read-only memory packet" in prompt
+    assert str(_MEMORY_REF) in prompt
+
+
+@pytest.mark.asyncio
 async def test_automatic_memory_runtime_composes_prompt_packet_per_dispatch() -> None:
     """Automatic memory is selected at dispatch time from the current run context."""
 
