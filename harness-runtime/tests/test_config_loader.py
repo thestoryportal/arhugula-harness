@@ -19,7 +19,9 @@ from harness_runtime.config.loader import (
     materialize_runtime_config,
 )
 from harness_runtime.types import (
+    CLI_PREFERRED_ENABLED_PROVIDER_NAMES,
     CollectorConfig,
+    ExternalCLIProviderConfig,
     OTelConfig,
     PathBindingConfig,
     ProviderSecretsConfig,
@@ -49,6 +51,82 @@ def test_kwargs_only_materializes() -> None:
     cfg = materialize_runtime_config(env={}, **_required_kwargs())
     direct = RuntimeConfig(**_required_kwargs())
     assert cfg == direct
+
+
+def test_enabled_provider_names_defaults_to_hosted_sdk_only() -> None:
+    """Conservative default: hosted SDK/API-key providers only, external-CLI off.
+
+    External-CLI (OAuth/subscription) routing is opt-in — a fresh checkout must
+    not silently route inference through local subscription CLIs. Preferring the
+    CLIs is an explicit operator posture (see the opt-in test below and
+    `CLI_PREFERRED_ENABLED_PROVIDER_NAMES`).
+    """
+    cfg = materialize_runtime_config(env={}, **_required_kwargs())
+    assert cfg.enabled_provider_names == (
+        "anthropic",
+        "openai",
+        "ollama",
+    )
+    assert cfg.external_cli_providers == ()
+    assert cfg.anthropic_optional is True
+    assert cfg.openai_optional is True
+    assert cfg.ollama_optional is True
+
+
+def test_cli_preferred_allowlist_constant_prefers_clis() -> None:
+    """The opt-in `CLI_PREFERRED_ENABLED_PROVIDER_NAMES` posture lists CLIs first."""
+    assert CLI_PREFERRED_ENABLED_PROVIDER_NAMES == (
+        "claude_code",
+        "codex",
+        "antigravity",
+        "anthropic",
+        "openai",
+        "ollama",
+    )
+
+
+def test_external_cli_provider_config_materializes_from_kwargs() -> None:
+    """Operators can opt into a local authenticated CLI provider without secrets."""
+    cfg = materialize_runtime_config(
+        env={},
+        **_required_kwargs(),
+        enabled_provider_names=("claude_code",),
+        external_cli_providers=(
+            ExternalCLIProviderConfig(
+                provider="claude_code",
+                kind="claude-code",
+                command="claude",
+                timeout_seconds=90.0,
+            ),
+        ),
+    )
+    assert cfg.enabled_provider_names == ("claude_code",)
+    assert cfg.external_cli_providers[0].provider == "claude_code"
+    assert cfg.external_cli_providers[0].command == "claude"
+
+
+def test_external_cli_provider_config_accepts_generic_argv_templates() -> None:
+    """Custom CLI providers can be configured without adding repo code."""
+    cfg = materialize_runtime_config(
+        env={},
+        **_required_kwargs(),
+        enabled_provider_names=("local_llm",),
+        external_cli_providers=(
+            ExternalCLIProviderConfig(
+                provider="local_llm",
+                kind="generic-command",
+                command="my-llm",
+                args=("--model", "{model}", "--json"),
+                auth_args=("auth", "status"),
+                response_format="json",
+            ),
+        ),
+    )
+
+    provider = cfg.external_cli_providers[0]
+    assert provider.args == ("--model", "{model}", "--json")
+    assert provider.auth_args == ("auth", "status")
+    assert provider.response_format == "json"
 
 
 def test_env_supplies_scalar_fields_when_kwargs_omit_them() -> None:
