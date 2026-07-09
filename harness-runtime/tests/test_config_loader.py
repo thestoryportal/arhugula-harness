@@ -19,7 +19,7 @@ from harness_runtime.config.loader import (
     materialize_runtime_config,
 )
 from harness_runtime.types import (
-    CLI_PREFERRED_ENABLED_PROVIDER_NAMES,
+    SDK_ONLY_ENABLED_PROVIDER_NAMES,
     CollectorConfig,
     ExternalCLIProviderConfig,
     OTelConfig,
@@ -53,36 +53,38 @@ def test_kwargs_only_materializes() -> None:
     assert cfg == direct
 
 
-def test_enabled_provider_names_defaults_to_hosted_sdk_only() -> None:
-    """Conservative default: hosted SDK/API-key providers only, external-CLI off.
+def test_enabled_provider_names_defaults_to_prefer_oauth() -> None:
+    """Operator-ratified prefer-OAuth default (2026-07-09): CLI providers first.
 
-    External-CLI (OAuth/subscription) routing is opt-in — a fresh checkout must
-    not silently route inference through local subscription CLIs. Preferring the
-    CLIs is an explicit operator posture (see the opt-in test below and
-    `CLI_PREFERRED_ENABLED_PROVIDER_NAMES`).
+    A fresh checkout routes through the local subscription CLIs first (each
+    degrades via `optional=True` until authenticated), then the hosted SDK
+    providers. Soft-degrade (`*_optional=True`) is the coherent companion: a
+    missing hosted credential must not block when CLIs are the preferred path.
+    Keeping hosted-SDK-only routing is the explicit opt-out below.
     """
     cfg = materialize_runtime_config(env={}, **_required_kwargs())
     assert cfg.enabled_provider_names == (
+        "claude_code",
+        "codex",
+        "antigravity",
         "anthropic",
         "openai",
         "ollama",
     )
-    assert cfg.external_cli_providers == ()
-    # Fail-fast provider construction is the ratified default (ADR-F1 v1.2 +
-    # class_1_fork_provider_construction_allowlist_semantic, E-prod-3): a missing
-    # provider credential hard-fails stage 3a rather than silently degrading. The
-    # routing port must not flip this to soft-degradation by default.
-    assert cfg.anthropic_optional is False
-    assert cfg.openai_optional is False
-    assert cfg.ollama_optional is False
-
-
-def test_cli_preferred_allowlist_constant_prefers_clis() -> None:
-    """The opt-in `CLI_PREFERRED_ENABLED_PROVIDER_NAMES` posture lists CLIs first."""
-    assert CLI_PREFERRED_ENABLED_PROVIDER_NAMES == (
+    assert tuple(provider.provider for provider in cfg.external_cli_providers) == (
         "claude_code",
         "codex",
         "antigravity",
+    )
+    assert all(provider.optional for provider in cfg.external_cli_providers)
+    assert cfg.anthropic_optional is True
+    assert cfg.openai_optional is True
+    assert cfg.ollama_optional is True
+
+
+def test_sdk_only_opt_out_constant() -> None:
+    """The explicit opt-out `SDK_ONLY_ENABLED_PROVIDER_NAMES` lists hosted SDKs only."""
+    assert SDK_ONLY_ENABLED_PROVIDER_NAMES == (
         "anthropic",
         "openai",
         "ollama",

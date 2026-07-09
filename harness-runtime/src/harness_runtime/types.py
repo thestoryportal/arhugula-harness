@@ -185,9 +185,9 @@ if TYPE_CHECKING:
     from harness_od.audit_ledger_types import AuditLedgerEntry
 
 __all__ = [
-    "CLI_PREFERRED_ENABLED_PROVIDER_NAMES",
     "DEFAULT_ENABLED_PROVIDER_NAMES",
     "DEFAULT_EXTERNAL_CLI_PROVIDERS",
+    "SDK_ONLY_ENABLED_PROVIDER_NAMES",
     "AuditLedgerWriter",
     "BootstrapStage",
     "ClientName",
@@ -1374,31 +1374,32 @@ store, and ``optional=True`` lets clean installs degrade until the operator has
 authenticated one of the CLIs.
 """
 
-CLI_PREFERRED_ENABLED_PROVIDER_NAMES: tuple[str, ...] = (
+DEFAULT_ENABLED_PROVIDER_NAMES: tuple[str, ...] = (
     *(provider.provider for provider in DEFAULT_EXTERNAL_CLI_PROVIDERS),
     "anthropic",
     "openai",
     "ollama",
 )
-"""Opt-in allowlist that PREFERS OAuth CLI providers over hosted SDKs.
+"""Provider construction default: prefer OAuth/subscription CLI providers, keep the
+hosted SDK/API-key providers as secondary fallbacks.
 
-Not the default (see `DEFAULT_ENABLED_PROVIDER_NAMES`). An operator selects this
-posture explicitly in `harness.toml` by listing the CLI provider keys first in
-`enabled_provider_names`; a fresh checkout keeps hosted-SDK routing.
+Operator-ratified default posture (2026-07-09 AskUserQuestion; recorded in
+`.harness/class_1_fork_provider_construction_allowlist_semantic.md`): a fresh
+checkout routes through the local subscription CLIs first (each degrades via
+`optional=True` until authenticated), then the SDK providers. To opt OUT and keep
+hosted-SDK-only routing, set `enabled_provider_names = SDK_ONLY_ENABLED_PROVIDER_NAMES`
+(and `external_cli_providers = ()`) in `harness.toml`.
 """
 
-DEFAULT_ENABLED_PROVIDER_NAMES: tuple[str, ...] = (
+SDK_ONLY_ENABLED_PROVIDER_NAMES: tuple[str, ...] = (
     "anthropic",
     "openai",
     "ollama",
 )
-"""Conservative provider construction default: hosted SDK/API-key providers only.
+"""Opt-out allowlist that keeps hosted SDK/API-key routing only (no external CLIs).
 
-External-CLI (OAuth/subscription) routing is opt-in — a fresh checkout does NOT
-route through local subscription CLIs. To enable it, set `external_cli_providers`
-and list those provider keys in `enabled_provider_names` in `harness.toml` (see
-`harness.toml.example` and `CLI_PREFERRED_ENABLED_PROVIDER_NAMES`).
-"""
+The conservative posture: an operator selects it explicitly in `harness.toml` to
+suppress OAuth CLI routing entirely."""
 
 
 # ----------------------------------------------------------------------------
@@ -1510,52 +1511,56 @@ class RuntimeConfig(BaseModel):
     not a key-allowlist concern. U-RT-17 amendment per advisor.
     """
 
-    ollama_optional: bool = False
+    ollama_optional: bool = True
     """If True, Ollama unreachability at stage 3a → `RT-FAIL-PROVIDER-DEGRADED`
-    (typed warning; stage continues with 2-provider context). Default False:
-    Ollama unreachability is a hard stage 3a failure per the multi-LLM
-    commitment (ADR-F1 v1.2). U-RT-19 wires the degraded branch; field is
-    declared here at U-RT-17 to keep schema additions in one commit."""
+    (typed warning; stage continues without the Ollama provider). Default True
+    under the operator-ratified prefer-OAuth posture (2026-07-09; recorded in
+    `.harness/class_1_fork_provider_construction_allowlist_semantic.md`): a
+    missing/unreachable hosted provider must not block routing when local
+    subscription CLIs are the preferred path. U-RT-19 wires the degraded branch;
+    field is declared here at U-RT-17 to keep schema additions in one commit."""
 
-    anthropic_optional: bool = False
+    anthropic_optional: bool = True
     """If True, Anthropic construction failure at stage 3a (keyring miss OR
     network unreachable) → `RT-FAIL-PROVIDER-DEGRADED` (typed warning; stage
-    continues without `"anthropic"` in providers). Default False: Anthropic
-    failure is a hard stage 3a failure per the multi-LLM commitment
-    (ADR-F1 v1.2). Auth errors (`ProviderAuthError` — 401/403) ALWAYS surface
-    regardless of `anthropic_optional` because they indicate operator intent
-    + misconfig (keyring entry present but invalid).
+    continues without `"anthropic"` in providers). Default True under the
+    operator-ratified prefer-OAuth posture (2026-07-09): missing API credentials
+    must not block routing when local subscription CLIs are the preferred path.
+    Auth errors (`ProviderAuthError` — 401/403) ALWAYS surface regardless of
+    `anthropic_optional` because they indicate operator intent + misconfig
+    (keyring entry present but invalid).
 
-    Added per `.harness/class_1_fork_provider_construction_allowlist_semantic.md`
-    operator-ratified 2026-05-28 (E-prod-3). Symmetric extension of the
-    `ollama_optional` precedent at line 1938 deferred-to-discretion clause.
-    Unblocks daemon-mode subprocess e2e for operators without all keyring
-    entries configured."""
+    Field added per `.harness/class_1_fork_provider_construction_allowlist_semantic.md`
+    (E-prod-3, 2026-05-28, which ratified `False`); the 2026-07-09 prefer-OAuth
+    ratification (same fork doc, appended) flips the DEFAULT to `True`. An operator
+    who wants fail-fast sets `anthropic_optional = false` explicitly."""
 
-    openai_optional: bool = False
+    openai_optional: bool = True
     """If True, OpenAI construction failure at stage 3a (keyring miss OR
     network unreachable) → `RT-FAIL-PROVIDER-DEGRADED` (typed warning; stage
-    continues without `"openai"` in providers). Default False: OpenAI
-    failure is a hard stage 3a failure per the multi-LLM commitment
-    (ADR-F1 v1.2). Auth errors (`ProviderAuthError` — 401/403) ALWAYS surface
-    regardless of `openai_optional`.
+    continues without `"openai"` in providers). Default True under the
+    operator-ratified prefer-OAuth posture (2026-07-09): missing API credentials
+    must not block routing when local subscription CLIs are the preferred path.
+    Auth errors (`ProviderAuthError` — 401/403) ALWAYS surface regardless of
+    `openai_optional`.
 
-    Added per `.harness/class_1_fork_provider_construction_allowlist_semantic.md`
-    operator-ratified 2026-05-28 (E-prod-3). Symmetric extension of the
-    `ollama_optional` precedent."""
+    Field added per `.harness/class_1_fork_provider_construction_allowlist_semantic.md`
+    (E-prod-3, 2026-05-28, which ratified `False`); the 2026-07-09 prefer-OAuth
+    ratification flips the DEFAULT to `True`."""
 
     enabled_provider_names: tuple[str, ...] = DEFAULT_ENABLED_PROVIDER_NAMES
     """Provider keys stage 3a should construct, in construction order.
 
-    Defaults to hosted SDK/API-key providers only (`anthropic`, `openai`,
-    `ollama`). To route through OAuth/subscription local CLIs, list their
-    provider keys here (first, to prefer them) and populate
-    `external_cli_providers` — see `harness.toml.example`.
+    Defaults to the prefer-OAuth posture (`DEFAULT_ENABLED_PROVIDER_NAMES`): local
+    subscription CLIs first, hosted SDK/API-key providers as secondary fallbacks. To
+    keep hosted-SDK-only routing, set `SDK_ONLY_ENABLED_PROVIDER_NAMES` here (and
+    `external_cli_providers = ()`). See `harness.toml.example`.
     """
 
-    external_cli_providers: tuple[ExternalCLIProviderConfig, ...] = ()
-    """Local CLI-backed provider configs. Empty by default (opt-in); external-CLI
-    routing is off on a fresh checkout. Contains no secret/token fields."""
+    external_cli_providers: tuple[ExternalCLIProviderConfig, ...] = DEFAULT_EXTERNAL_CLI_PROVIDERS
+    """Local CLI-backed provider configs. Defaults to the built-in claude_code /
+    codex / antigravity set (each `optional=True`, so an unauthenticated CLI simply
+    degrades). Contains no secret/token fields."""
 
     inter_step_data_flow: bool = False
     """B-INTERSTEP (R-FS-1 standalone arc; runtime spec §14.21 C-RT-34, new at

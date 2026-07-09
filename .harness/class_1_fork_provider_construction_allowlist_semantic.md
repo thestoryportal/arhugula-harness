@@ -144,3 +144,34 @@ ZERO cross-axis cascade verified via grep at `design-substrate/` 2026-05-28.
 - `[[finding-runtime-config-loader-unreachable-sub-configs]]` — layer 1 (CLOSED by PR #4)
 - `[[verification-shape-sharpened-grep-vs-e2e]]` — depth-budget discipline
 - `[[advisor-before-substantive-work-for-cross-axis-blockers]]` — 28th application
+
+## §10 Amendment — prefer-OAuth default flips `*_optional` to `True` (2026-07-09)
+
+**Trigger.** The external-CLI (OAuth/subscription) multi-LLM routing capability was
+ported into `main` (branch `feat/external-cli-oauth-routing-port`; see
+`.harness/external-cli-routing-port-review-findings.md`). The operator ratified the
+**prefer-OAuth default routing posture** via AskUserQuestion (2026-07-09): a fresh
+checkout routes through local subscription CLIs first (`enabled_provider_names`
+defaults to `DEFAULT_ENABLED_PROVIDER_NAMES` = CLI providers + SDK fallbacks;
+`external_cli_providers` defaults to the claude_code/codex/antigravity set).
+
+**Decision.** The §5.1 default for `anthropic_optional` / `openai_optional` /
+`ollama_optional` flips **`False` → `True`** (soft-degrade) as the coherent companion
+to the prefer-OAuth posture: when CLIs are the preferred path, a missing/unreachable
+hosted-provider credential must degrade (drop that provider) rather than hard-fail
+stage 3a — otherwise a fresh checkout without API keys could not route at all despite
+authenticated CLIs being available. This does **not** change the auth-error carve-out
+(`ProviderAuthError` 401/403 ALWAYS surfaces) and does **not** weaken ADR-F1: multi-LLM
+routing is preserved; degradation is the ratified default, and an operator who wants
+fail-fast sets `*_optional = false` explicitly (or picks the
+`SDK_ONLY_ENABLED_PROVIDER_NAMES` opt-out).
+
+**Class.** Class 2 (operator decision reversing a prior ratified default). Not a Class 1
+architectural fork — the field semantics, the auth-error carve-out, and the multi-LLM
+commitment are all unchanged; only the DEFAULT value of an already-existing operator
+knob is flipped, under explicit operator ratification. E-prod-3 (2026-05-28, which
+ratified `False`) stands as the field's origin; this amendment supersedes only its
+default value, forward.
+
+**Carrier.** `harness-runtime/src/harness_runtime/types.py` field defaults + docstrings;
+`harness.toml.example`; `test_config_loader.py::test_enabled_provider_names_defaults_to_prefer_oauth`.

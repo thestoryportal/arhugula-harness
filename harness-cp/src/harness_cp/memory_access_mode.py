@@ -125,19 +125,32 @@ class MemoryAccessModeSelection(BaseModel):
 
 def reflect_memory_provider_capabilities(
     model_binding: ModelBinding,
+    *,
+    is_external_cli: bool = False,
 ) -> MemoryProviderCapabilities:
-    """Reflect native/tool/prompt memory capability for a model binding."""
+    """Reflect native/tool/prompt memory capability for a model binding.
+
+    ``is_external_cli`` marks a binding routed through an external OAuth/subscription
+    CLI (subprocess text dispatch). Those adapters have no tool-calling loop, so they
+    support neither native memory nor standard memory tools — memory reaches them via
+    the prompt-extension packet. Without this flag a CLI binding (provider e.g.
+    ``"claude_code"``) would report ``supports_standard_memory_tools=True`` and
+    ``select_memory_access_mode`` would pick a mode the CLI dispatch path cannot serve,
+    silently dropping memory on the (now default) routing path.
+    """
 
     provider_capabilities = reflect_provider_capabilities(
         model_binding.provider,
         model_binding.model,
     )
-    is_anthropic = model_binding.provider == "anthropic"
+    is_anthropic = model_binding.provider == "anthropic" and not is_external_cli
     return MemoryProviderCapabilities(
         provider=model_binding.provider,
         model=model_binding.model,
         supports_native_memory=is_anthropic,
-        supports_standard_memory_tools=provider_capabilities.supports_tools and not is_anthropic,
+        supports_standard_memory_tools=(
+            provider_capabilities.supports_tools and not is_anthropic and not is_external_cli
+        ),
         supports_prompt_extension_packet=True,
     )
 

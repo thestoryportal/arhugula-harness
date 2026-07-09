@@ -52,7 +52,7 @@ default_topology = "single-threaded-linear"
 # Auth errors (401/403) ALWAYS surface regardless of these flags.
 # Defaults: anthropic = openai = ollama = true.
 # These flags matter only when the matching SDK/API-key provider is enabled.
-anthropic_optional = false
+anthropic_optional = true
 openai_optional = true
 ollama_optional = true
 
@@ -78,43 +78,46 @@ standard_tools_enabled = true
 native_provider_enabled = false
 policy_id = "policy:automatic-local-memory"
 
-# External-CLI (OAuth/subscription) provider routing. DISABLED BY DEFAULT — the
-# runtime default `external_cli_providers` is empty and `enabled_provider_names`
-# lists only the hosted SDK providers, so a fresh checkout keeps API-key routing.
-# Uncomment the block below to route inference through subscription-backed local
-# CLIs (Claude Code / Codex / Antigravity / a generic command). The tables carry
-# executable metadata only — do NOT put OAuth/session tokens or hosted API keys
+# External-CLI (OAuth/subscription) provider routing. ENABLED BY DEFAULT under the
+# operator-ratified prefer-OAuth posture (2026-07-09): the runtime defaults
+# `enabled_provider_names` to the CLI providers FIRST and `external_cli_providers`
+# to the claude_code / codex / antigravity set below, so a fresh checkout routes
+# through your local subscription CLIs (each degrades via `optional = true` until
+# authenticated), falling back to the hosted SDK providers. The tables carry
+# executable metadata ONLY — do NOT put OAuth/session tokens or hosted API keys
 # here; authenticate each official CLI itself and let it own its local session.
-# To PREFER the CLIs over the SDKs, list them first in `enabled_provider_names`.
 #
-# enabled_provider_names = ["claude_code", "codex", "antigravity", "anthropic", "openai", "ollama"]
+# To keep hosted-SDK-only routing instead, set (in the top-level [runtime] section,
+# above [runtime.memory]): enabled_provider_names = ["anthropic", "openai", "ollama"]
+# and delete the [[runtime.external_cli_providers]] tables below.
+
+[[runtime.external_cli_providers]]
+provider = "claude_code"
+kind = "claude-code"
+command = "claude"
+timeout_seconds = 120
+auth_check = true
+optional = true
+
+[[runtime.external_cli_providers]]
+provider = "codex"
+kind = "codex"
+command = "codex"
+timeout_seconds = 120
+auth_check = true
+optional = true
+
+[[runtime.external_cli_providers]]
+provider = "antigravity"
+kind = "antigravity"
+command = "agy"
+timeout_seconds = 120
+auth_check = true
+optional = true
+
+# Generic-command example for other local CLIs (uncomment + adjust):
 #
 # [[runtime.external_cli_providers]]
-# provider = "claude_code"
-# kind = "claude-code"
-# command = "claude"
-# timeout_seconds = 120
-# auth_check = true
-# optional = true
-#
-# [[runtime.external_cli_providers]]
-# provider = "codex"
-# kind = "codex"
-# command = "codex"
-# timeout_seconds = 120
-# auth_check = true
-# optional = true
-#
-# [[runtime.external_cli_providers]]
-# provider = "antigravity"
-# kind = "antigravity"
-# command = "agy"
-# timeout_seconds = 120
-# auth_check = true
-# optional = true
-#
-# Generic-command example for other local CLIs:
-#
 # provider = "local_llm"
 # kind = "generic-command"
 # command = "my-llm"
@@ -193,14 +196,18 @@ manifest_version = 1
 per_role_bindings = {}
 per_workload_overrides = {}
 retry_policies = {}
+# Prefer-OAuth default: a subscription CLI is primary, with cross-family hops
+# through the other CLIs and hosted-SDK fallbacks last. To keep hosted-SDK-only
+# routing, set `primary = { provider = "anthropic", ... }` and drop the CLI hops.
 fallback_chains = [
-    { primary = { provider = "anthropic", model = "claude-haiku-4-5", family = "anthropic" }, same_family = [], cross_family = [] },
+    { primary = { provider = "claude_code", model = "sonnet", family = "anthropic" }, same_family = [], cross_family = [
+        { provider = "codex", model = "gpt-5", family = "openai" },
+        { provider = "antigravity", model = "Gemini 3.5 Flash (Low)", family = "google" },
+        { provider = "anthropic", model = "claude-haiku-4-5", family = "anthropic" },
+        { provider = "openai", model = "gpt-5", family = "openai" },
+        { provider = "ollama", model = "llama3.2:3b", family = "local_open_weight" },
+    ] },
 ]
-# To route through the OAuth/subscription CLIs, enable them above (uncomment the
-# `[[runtime.external_cli_providers]]` blocks + add their keys to
-# `enabled_provider_names`) and then reference those provider keys here, e.g.
-# `primary = { provider = "claude_code", model = "sonnet", family = "anthropic" }`
-# with cross_family hops through `codex` / `antigravity` and SDK fallbacks.
 
 
 # ---------------------------------------------------------------------------

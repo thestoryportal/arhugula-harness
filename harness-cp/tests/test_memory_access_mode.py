@@ -322,3 +322,37 @@ def test_reflect_memory_provider_capabilities_is_deterministic() -> None:
     assert first == second
     assert first.supports_standard_memory_tools is True
     assert first.supports_native_memory is False
+
+
+def test_external_cli_binding_selects_prompt_packet_not_standard_tools() -> None:
+    """F2: a CLI-routed binding falls through to the prompt packet, not tool mode.
+
+    External CLI dispatch is subprocess text-only (no tool loop), so
+    `reflect_memory_provider_capabilities(is_external_cli=True)` reports no standard
+    memory tools and `select_memory_access_mode` picks PROMPT_EXTENSION_PACKET — the
+    mode the CLI path can actually serve. The contrasting baseline (no flag) shows the
+    STANDARD_MEMORY_TOOLS misselection this guards against, which silently dropped
+    memory on the prefer-OAuth default routing path.
+    """
+    cli_caps = reflect_memory_provider_capabilities(
+        ModelBinding(provider="claude_code", model="sonnet"),
+        is_external_cli=True,
+    )
+    assert cli_caps.supports_standard_memory_tools is False
+    assert cli_caps.supports_native_memory is False
+    assert cli_caps.supports_prompt_extension_packet is True
+
+    naive_caps = reflect_memory_provider_capabilities(
+        ModelBinding(provider="claude_code", model="sonnet"),
+    )
+    assert naive_caps.supports_standard_memory_tools is True  # the bug, without the flag
+
+    result = select_memory_access_mode(
+        _request(
+            provider="claude_code",
+            model="sonnet",
+            family=ProviderFamily.ANTHROPIC,
+            capabilities=cli_caps,
+        )
+    )
+    assert result.access_mode is MemoryAccessMode.PROMPT_EXTENSION_PACKET
