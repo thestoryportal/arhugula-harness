@@ -2092,46 +2092,6 @@ R-300-multi-llm-second-provider:
     untouched: cross-family OpenAI and local Ollama provider traversal are both covered, with deterministic
     CI coverage retained for non-credentialed runs. No further R-300 second-provider gate remains. Register
     §B-2.
-
-R-300-external-cli-oauth-routing:
-  title: External-CLI (OAuth/subscription) multi-LLM routing — port from deployed repo into main (prefer-OAuth default)
-  surface: IV
-  status: RESOLVED   # 2026-07-09 (PR #914) — ported external_cli_provider adapters + config types + dispatch branch + providers/retry wiring from deployed thestoryportal/arhugula (ad690ed + c2ca63c); operator-ratified prefer-OAuth default posture (fork §10); memory retrieval wired on the CLI dispatch path (F2). Two decorrelated reviewers (Fable 5 out-of-family + adversarial) cleared MERGE; codex-check 5355 passed; overlay green.
-  depends_on: [R-300-multi-llm-second-provider]
-  blocks: []
-  posture: phase-7
-  scope: { files: [harness-runtime/src/harness_runtime/lifecycle/external_cli_provider.py, harness-runtime/src/harness_runtime/types.py, harness-runtime/src/harness_runtime/lifecycle/providers.py, harness-runtime/src/harness_runtime/lifecycle/llm_dispatch.py, harness-cp/src/harness_cp/memory_access_mode.py, tools/external_cli_provider_config.py], contracts: [ADR-F1, C-MEM-16], cross_axis: no }
-  skills: { primary: phase-7-implementation, secondary: [] }
-  advisor_required: yes
-  council_required: no
-  verification: { shape: e2e, must_pass: ["argv-only subprocess adapters for claude_code/codex/antigravity/gemini/generic", "prefer-OAuth default ratified (fork §10), not silently flipped", "memory packet reaches the CLI dispatch prompt (full-chain witness)", "scrubbed child env prevents OAuth→metered billing"] }
-  close_shape: { type: PR-merge, artifact: "PR #914 feat(runtime): port external-CLI OAuth routing", cascade: [R-IF-roadmap-refresh] }
-  next_pointer: R-300-external-cli-routing-governance
-  notes: >
-    Ported from the deployed sibling repo thestoryportal/arhugula so the routing lives in both repos; feature
-    work continues here (the deployed repos were point-in-time tests). Operator ratified deployed-parity
-    (prefer OAuth by default, 2026-07-09 AskUserQuestion; fork §10 amendment of
-    class_1_fork_provider_construction_allowlist_semantic.md). Full review findings + dispositions at
-    .harness/external-cli-routing-port-review-findings.md.
-
-R-300-external-cli-routing-governance:
-  title: Governance reconciliation for the external-CLI routing port + memory substrate (WS2)
-  surface: IV
-  status: ACTIVE   # opened 2026-07-09 alongside R-300-external-cli-oauth-routing
-  depends_on: [R-300-external-cli-oauth-routing]
-  blocks: []
-  posture: design-phase
-  scope: { files: [design-substrate/ADR-D7_memory_substrate.md, CLAUDE.md, .harness/clearance/**], contracts: [ADR-D7], cross_axis: no }
-  skills: { primary: null, secondary: [] }
-  advisor_required: no
-  council_required: no
-  verification: { shape: none, must_pass: ["ADR-D7 §15/§86 stale 'not in this repo' claim corrected", "external_cli_provider.py carries a C-* cite (advisory overlay orphan cleared)", "clearance markers filed for the 5 Proposed memory design artifacts (ADR-D7 + Spec_Memory_Substrate_v1 + PRD_v1_2 + Memory_Substrate_Design_v1 + Implementation_Plan_Memory_Substrate_v1)", "CLAUDE.md §2 pointers refreshed (memory substrate + OAuth routing; CP v1.85 / OD v1.30 / Runtime v1.92)"] }
-  close_shape: { type: PR-merge, artifact: "governance reconciliation PR", cascade: [R-IF-roadmap-refresh] }
-  next_pointer: null
-  notes: >
-    Separate PR (design-phase posture) from the impl port (R-300-external-cli-oauth-routing, phase-7 posture)
-    to keep postures clean per CLAUDE.md §11. Clearance markers (§4.5) serve as X-AL-3 back-flow so the
-    design-substrate edits pass the guard.
 ```
 
 ### 5.11 Multi-tenant (R-500..R-599) — Surface VI
