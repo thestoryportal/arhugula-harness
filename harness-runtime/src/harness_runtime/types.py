@@ -1510,21 +1510,21 @@ class RuntimeConfig(BaseModel):
     not a key-allowlist concern. U-RT-17 amendment per advisor.
     """
 
-    ollama_optional: bool = True
+    ollama_optional: bool = False
     """If True, Ollama unreachability at stage 3a → `RT-FAIL-PROVIDER-DEGRADED`
-    (typed warning; stage continues without the Ollama provider). Default True:
-    Ollama unreachability does not block OAuth CLI providers. U-RT-19 wires
-    the degraded branch; field is declared here at U-RT-17 to keep schema
-    additions in one commit."""
+    (typed warning; stage continues with 2-provider context). Default False:
+    Ollama unreachability is a hard stage 3a failure per the multi-LLM
+    commitment (ADR-F1 v1.2). U-RT-19 wires the degraded branch; field is
+    declared here at U-RT-17 to keep schema additions in one commit."""
 
-    anthropic_optional: bool = True
+    anthropic_optional: bool = False
     """If True, Anthropic construction failure at stage 3a (keyring miss OR
     network unreachable) → `RT-FAIL-PROVIDER-DEGRADED` (typed warning; stage
-    continues without `"anthropic"` in providers). Default True: missing API
-    credentials do not block OAuth CLI providers. Auth errors
-    (`ProviderAuthError` — 401/403) ALWAYS surface regardless of
-    `anthropic_optional` because they indicate operator intent + misconfig
-    (keyring entry present but invalid).
+    continues without `"anthropic"` in providers). Default False: Anthropic
+    failure is a hard stage 3a failure per the multi-LLM commitment
+    (ADR-F1 v1.2). Auth errors (`ProviderAuthError` — 401/403) ALWAYS surface
+    regardless of `anthropic_optional` because they indicate operator intent
+    + misconfig (keyring entry present but invalid).
 
     Added per `.harness/class_1_fork_provider_construction_allowlist_semantic.md`
     operator-ratified 2026-05-28 (E-prod-3). Symmetric extension of the
@@ -1532,13 +1532,13 @@ class RuntimeConfig(BaseModel):
     Unblocks daemon-mode subprocess e2e for operators without all keyring
     entries configured."""
 
-    openai_optional: bool = True
+    openai_optional: bool = False
     """If True, OpenAI construction failure at stage 3a (keyring miss OR
     network unreachable) → `RT-FAIL-PROVIDER-DEGRADED` (typed warning; stage
-    continues without `"openai"` in providers). Default True: missing API
-    credentials do not block OAuth CLI providers. Auth errors
-    (`ProviderAuthError` — 401/403) ALWAYS surface regardless of
-    `openai_optional`.
+    continues without `"openai"` in providers). Default False: OpenAI
+    failure is a hard stage 3a failure per the multi-LLM commitment
+    (ADR-F1 v1.2). Auth errors (`ProviderAuthError` — 401/403) ALWAYS surface
+    regardless of `openai_optional`.
 
     Added per `.harness/class_1_fork_provider_construction_allowlist_semantic.md`
     operator-ratified 2026-05-28 (E-prod-3). Symmetric extension of the

@@ -52,7 +52,7 @@ default_topology = "single-threaded-linear"
 # Auth errors (401/403) ALWAYS surface regardless of these flags.
 # Defaults: anthropic = openai = ollama = true.
 # These flags matter only when the matching SDK/API-key provider is enabled.
-anthropic_optional = true
+anthropic_optional = false
 openai_optional = true
 ollama_optional = true
 
@@ -194,14 +194,13 @@ per_role_bindings = {}
 per_workload_overrides = {}
 retry_policies = {}
 fallback_chains = [
-    { primary = { provider = "claude_code", model = "sonnet", family = "anthropic" }, same_family = [], cross_family = [
-        { provider = "codex", model = "gpt-5", family = "openai" },
-        { provider = "antigravity", model = "Gemini 3.5 Flash (Low)", family = "google" },
-        { provider = "anthropic", model = "claude-haiku-4-5", family = "anthropic" },
-        { provider = "openai", model = "gpt-5", family = "openai" },
-        { provider = "ollama", model = "llama3.2:3b", family = "local_open_weight" },
-    ] },
+    { primary = { provider = "anthropic", model = "claude-haiku-4-5", family = "anthropic" }, same_family = [], cross_family = [] },
 ]
+# To route through the OAuth/subscription CLIs, enable them above (uncomment the
+# `[[runtime.external_cli_providers]]` blocks + add their keys to
+# `enabled_provider_names`) and then reference those provider keys here, e.g.
+# `primary = { provider = "claude_code", model = "sonnet", family = "anthropic" }`
+# with cross_family hops through `codex` / `antigravity` and SDK fallbacks.
 
 
 # ---------------------------------------------------------------------------

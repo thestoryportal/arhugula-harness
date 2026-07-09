@@ -68,9 +68,13 @@ def test_enabled_provider_names_defaults_to_hosted_sdk_only() -> None:
         "ollama",
     )
     assert cfg.external_cli_providers == ()
-    assert cfg.anthropic_optional is True
-    assert cfg.openai_optional is True
-    assert cfg.ollama_optional is True
+    # Fail-fast provider construction is the ratified default (ADR-F1 v1.2 +
+    # class_1_fork_provider_construction_allowlist_semantic, E-prod-3): a missing
+    # provider credential hard-fails stage 3a rather than silently degrading. The
+    # routing port must not flip this to soft-degradation by default.
+    assert cfg.anthropic_optional is False
+    assert cfg.openai_optional is False
+    assert cfg.ollama_optional is False
 
 
 def test_cli_preferred_allowlist_constant_prefers_clis() -> None:

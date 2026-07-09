@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol, cast
@@ -120,6 +121,31 @@ class ExternalCLISubprocessRunner(Protocol):
     ) -> CLIProcessResult: ...
 
 
+# Provider inference credentials stripped from the environment handed to a spawned
+# external CLI. OAuth/subscription CLI routing exists to use each CLI's own local
+# auth/session store; the `claude`/`codex`/`gemini` CLIs prefer an inherited API key
+# over their OAuth session when one is present, which would silently convert the
+# subscription route into metered API-key billing AND export the harness's secrets
+# into an agentic child process. This workspace loads such keys into the process
+# environment (via `just` dotenv), so the risk is concrete rather than theoretical.
+_SCRUBBED_PROVIDER_ENV_VARS: frozenset[str] = frozenset(
+    {
+        "ANTHROPIC_API_KEY",
+        "OPENAI_API_KEY",
+        "GEMINI_API_KEY",
+        "GOOGLE_API_KEY",
+        "GOOGLE_APPLICATION_CREDENTIALS",
+    }
+)
+
+
+def _scrubbed_child_env() -> dict[str, str]:
+    """The current environment minus hosted-provider inference credentials."""
+    return {
+        key: value for key, value in os.environ.items() if key not in _SCRUBBED_PROVIDER_ENV_VARS
+    }
+
+
 class AsyncioSubprocessRunner:
     """Production subprocess runner using argv-only execution."""
 
@@ -138,6 +164,7 @@ class AsyncioSubprocessRunner:
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                env=_scrubbed_child_env(),
             )
         except FileNotFoundError as exc:
             raise ExternalCLICommandError(argv[0], 127, str(exc)) from exc
@@ -418,7 +445,10 @@ def _gemini_inference_argv(command: str, model: str, prompt: str) -> tuple[str, 
 
 
 def _go_seconds_duration(seconds: float) -> str:
-    return f"{seconds:.3g}s"
+    # Go's ParseDuration rejects scientific notation (`:.3g` yields e.g.
+    # "1.2e+03s" for timeouts >= 1000s), so emit a plain decimal with any
+    # trailing zeros trimmed ("120s", "0.5s", "1200s").
+    return f"{seconds:.3f}".rstrip("0").rstrip(".") + "s"
 
 
 def _raise_for_nonzero(command: str, result: CLIProcessResult) -> None:
