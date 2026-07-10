@@ -30,7 +30,8 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
-from harness_as.sandbox_tier import SandboxTier
+from harness_as.sandbox_tier import BlastRadiusTier, SandboxTier
+from harness_as.tool_contract import ToolContract
 from harness_core import PersonaTier
 from harness_core.identity import StepID
 from harness_core.workload_class import WorkloadClass
@@ -1080,6 +1081,92 @@ async def test_active_system_prompt_injects_through_anthropic_memory_variant(
     )
 
     assert recorded.get("system") == _SYS
+
+
+# U-1 (B-18) — full-chain witness for the frozen-tool-superset cache breakpoint.
+# The leaf translate seam is unit-tested at
+# `test_frozen_tool_superset_cache_breakpoint.py`; THESE tests prove the binding
+# reaches the wire through the REAL dispatch chain (`self.frozen_tool_superset`
+# → `_invoke_provider` → `_dispatch_anthropic` → translate), so a threading typo
+# is caught (`[[full-chain-witness-not-half-proofs]]`).
+def _u1_big_superset() -> tuple[Mapping[str, Any], ...]:
+    """A frozen superset whose serialized size clears the ≥4096-tok floor."""
+    from harness_runtime.lifecycle.frozen_tool_superset import (
+        compute_frozen_tool_superset,
+    )
+    from harness_runtime.lifecycle.tool_registry import ToolRegistry
+
+    class _FakeHost:
+        def __init__(self, registry: ToolRegistry) -> None:
+            self.tool_registry = registry
+
+    registry = ToolRegistry()
+    registry.register(
+        ToolContract(
+            name="alpha",
+            description="d",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    f"f{i}": {"type": "string", "description": "x" * 200} for i in range(120)
+                },
+            },
+            output_schema={"type": "object"},
+            minimum_tier=SandboxTier.TIER_1_PROCESS,
+            blast_radius_tier=BlastRadiusTier.READ_ONLY,
+        )
+    )
+    superset = compute_frozen_tool_superset({"srv": _FakeHost(registry)}, include_memory_tool=False)
+    assert superset is not None
+    return superset
+
+
+@pytest.mark.asyncio
+async def test_u1_frozen_superset_marks_wire_tools_through_full_dispatch_chain() -> None:
+    """Bound `frozen_tool_superset` reaches the Anthropic wire with the
+    `cache_control` marker on the last block — through the real dispatch chain."""
+    superset = _u1_big_superset()
+    adapter = _AnthropicFakeAdapter(_AnthropicClient())
+    tp, _ = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": adapter},
+        tracer_provider=tp,
+        frozen_tool_superset=superset,
+    )
+
+    await dispatcher.dispatch(_binding("anthropic"), _step(), step_context=_step_context())
+
+    wire_tools = adapter.client.messages.last_kwargs["tools"]  # type: ignore[index]
+    assert wire_tools[-1]["cache_control"] == {"type": "ephemeral", "ttl": "5m"}
+    assert [t["name"] for t in wire_tools] == [t["name"] for t in superset]
+
+
+@pytest.mark.asyncio
+async def test_u1_none_superset_wire_is_byte_identical_to_legacy_through_chain() -> None:
+    """`frozen_tool_superset=None` sends `payload.tools` verbatim (no marker) —
+    the no-regression proof through the real dispatch chain."""
+    payload_tools = [{"name": "legacy", "description": "d", "input_schema": {"type": "object"}}]
+    adapter = _AnthropicFakeAdapter(_AnthropicClient())
+    tp, _ = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": adapter},
+        tracer_provider=tp,
+        frozen_tool_superset=None,
+    )
+
+    await dispatcher.dispatch(
+        _binding("anthropic"),
+        _step(
+            {
+                "messages": [{"role": "user", "content": "hi"}],
+                "tools": payload_tools,
+                "params": {"max_tokens": 100},
+            }
+        ),
+        step_context=_step_context(),
+    )
+
+    assert adapter.client.messages.last_kwargs["tools"] == payload_tools  # type: ignore[index]
 
 
 @pytest.mark.asyncio

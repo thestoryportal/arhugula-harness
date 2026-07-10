@@ -59,7 +59,7 @@ from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any, Protocol, cast, runtime_checkable
+from typing import Any, Final, Protocol, cast, runtime_checkable
 
 from harness_as.memory_tool_contracts import MEMORY_TOOL_CONTRACTS, MemoryToolName
 from harness_core import PersonaTier, WorkloadClass
@@ -531,6 +531,18 @@ class RuntimeLLMDispatcher:
     # translate fns (`system=` kwarg for anthropic; leading `role:"system"`
     # message for openai/ollama); `ProviderAgnosticPayload` stays frozen.
     active_system_prompt: str | None = None
+    # U-1 (B-18) — the deterministic frozen tool superset for the Anthropic
+    # prompt-cache `cache_control` breakpoint (ADR-D3 §1.5 slice 1). Bound at
+    # stage-5 (top-level dispatch only, single-privilege-tier per the C10
+    # blast-radius verdict) to the union of every `ctx.mcp_client_hosts[*].
+    # tool_registry` contract projected to Anthropic `{name, description,
+    # input_schema}`, deterministically ordered (+ memory tool when applicable).
+    # None → byte-identical legacy path (`payload.tools` on the wire; no
+    # breakpoint). The Anthropic translate seam replaces `payload.tools` with
+    # this superset and marks its last block when the ≥4096-tok non-vacuity
+    # gate clears + extended-thinking is off. Sub-agent / downgraded dispatchers
+    # inherit None (fail-safe) → they fall back to `payload.tools`.
+    frozen_tool_superset: tuple[Mapping[str, Any], ...] | None = None
     # U-MEM-15 — prompt-extension memory fallback context. When C-MEM-13 selects
     # `PROMPT_EXTENSION_PACKET`, the dispatcher renders the C-MEM-12 packet as
     # read-only system content and composes it into the existing provider prompt
@@ -1274,6 +1286,7 @@ class RuntimeLLMDispatcher:
                         tracer=tracer,
                         system=effective_system_prompt,
                         upstream=upstream_output,
+                        frozen_tool_superset=self.frozen_tool_superset,
                     )
                 elif (
                     self.hitl_tool_loop is not None
@@ -1295,6 +1308,7 @@ class RuntimeLLMDispatcher:
                         persona_tier=self.persona_tier or PersonaTier.SOLO_DEVELOPER,
                         system=effective_system_prompt,
                         upstream=upstream_output,
+                        frozen_tool_superset=self.frozen_tool_superset,
                     )
                 else:
                     (
@@ -1308,6 +1322,7 @@ class RuntimeLLMDispatcher:
                         payload,
                         system=effective_system_prompt,
                         upstream=upstream_output,
+                        frozen_tool_superset=self.frozen_tool_superset,
                     )
             elif provider_name == "openai":
                 if (
@@ -1645,10 +1660,73 @@ def _extract_anthropic_request_attrs(
     )
 
 
+# U-1 (B-18) — Anthropic prompt-cache breakpoint marker (ADR-D3 §1.5 slice 1).
+# `ttl: "5m"` per the design (§14.5 5-minute ephemeral tier).
+_ANTHROPIC_TOOLS_CACHE_CONTROL: Final[Mapping[str, str]] = {"type": "ephemeral", "ttl": "5m"}
+# Anthropic's minimum cacheable-prefix floor is 1024 tokens for smaller models
+# and 2048/4096 for larger; slice 1 uses the max-model 4096-tok floor (the
+# non-vacuity gate — below it a marker caches nothing = built-but-vacuous).
+_ANTHROPIC_MIN_CACHEABLE_TOKENS: Final[int] = 4096
+# Documented ~4-chars-per-token heuristic for the non-vacuity size estimate
+# (approximation only; the authoritative check is the live cache-hit e2e).
+_TOKENS_PER_CHAR_DIVISOR: Final[int] = 4
+
+
+def _superset_clears_non_vacuity_floor(superset: tuple[Mapping[str, Any], ...]) -> bool:
+    """Return True iff the serialized superset clears the ≥4096-tok floor.
+
+    Approximates tokens as ``len(json.dumps(superset)) / 4`` (the documented
+    per-char heuristic). Below the floor the ``cache_control`` marker would
+    cache nothing (built-but-vacuous) → skip the marker, just send the tools.
+    """
+    serialized = json.dumps(list(superset), sort_keys=True, separators=(",", ":"))
+    return len(serialized) / _TOKENS_PER_CHAR_DIVISOR >= _ANTHROPIC_MIN_CACHEABLE_TOKENS
+
+
+def _anthropic_tools_with_cache_breakpoint(
+    superset: tuple[Mapping[str, Any], ...],
+    *,
+    extended_thinking: bool,
+) -> list[Mapping[str, Any]]:
+    """Return the wire ``tools`` list for the frozen superset, with the
+    ``cache_control`` breakpoint on a COPY of the last block when the gates pass.
+
+    Gates (both must pass to emit the marker):
+      - extended-thinking mode OFF (§1.5 extended-thinking-invalidates clause —
+        handled at the epoch layer; below the epoch primitive slice 1 just skips
+        the marker and sends the stable superset unmarked);
+      - the superset clears the ≥4096-tok non-vacuity floor.
+
+    Below either gate the superset is sent WITHOUT the marker (still a stable
+    prefix; just no caching this dispatch). The frozen tuple's dicts are NEVER
+    mutated in place — the marker is attached to a shallow copy of the last dict.
+    """
+    tools = list(superset)
+    if extended_thinking or not _superset_clears_non_vacuity_floor(superset):
+        return tools
+    # Place the breakpoint on the LAST block that carries an ``input_schema`` — a
+    # regular client-side tool. Anthropic *server-side* tool blocks (e.g. the
+    # `memory_20250818` tool: ``type`` + ``name`` only, no ``input_schema``) are
+    # appended after the client tools; whether a server-tool block accepts
+    # ``cache_control`` is unverified, so the marker NEVER lands on one (else a
+    # silent cache miss — the failure no-silent-failure forbids). A memory-only
+    # superset (no client tool) is sub-floor and already returns unmarked above,
+    # so the no-client-tool branch here is a defensive belt-and-suspenders.
+    marker_idx = next(
+        (i for i in range(len(tools) - 1, -1, -1) if "input_schema" in tools[i]),
+        None,
+    )
+    if marker_idx is None:
+        return tools
+    tools[marker_idx] = {**tools[marker_idx], "cache_control": dict(_ANTHROPIC_TOOLS_CACHE_CONTROL)}
+    return tools
+
+
 def _payload_to_anthropic_kwargs(
     payload: ProviderAgnosticPayload,
     system: str | None = None,
     upstream: Mapping[str, Any] | None = None,
+    frozen_tool_superset: tuple[Mapping[str, Any], ...] | None = None,
 ) -> dict[str, Any]:
     """Translate `ProviderAgnosticPayload` → ``messages.create`` kwargs.
 
@@ -1665,9 +1743,31 @@ def _payload_to_anthropic_kwargs(
     (ADR-F1-faithful: per-provider feature use at the call site, no provider-
     specific field lifted into the neutral record). Fail-loud if ``params``
     already carries a competing ``system`` (the opaque escape hatch).
+
+    U-1 (B-18) — when ``frozen_tool_superset`` is bound, it REPLACES
+    ``payload.tools`` on the wire (the deterministic, cache-stable prefix) and
+    a ``cache_control`` breakpoint is placed on its last block (subject to the
+    extended-thinking + ≥4096-tok non-vacuity gates in
+    ``_anthropic_tools_with_cache_breakpoint``). ``ProviderAgnosticPayload``
+    stays frozen — the superset rides the dispatcher, never the payload
+    (ADR-F1-faithful: the Anthropic-specific structure lives ONLY here at
+    translate-time). ``None`` → byte-identical legacy path (``payload.tools``).
     """
     kwargs: dict[str, Any] = {"messages": list(payload.messages)}
-    if payload.tools is not None:
+    if frozen_tool_superset is not None:
+        # U-1 — the frozen superset REPLACES `payload.tools` (visibility-only per
+        # the C10 verdict; execution stays registry-gated). `thinking_mode` is not
+        # in scope here (extracted at `_extract_anthropic_request_attrs`), so
+        # re-derive extended-thinking from `params["thinking"]["type"]`.
+        thinking_cfg = payload.params.get("thinking")
+        extended_thinking = (
+            isinstance(thinking_cfg, Mapping)
+            and cast(Mapping[str, Any], thinking_cfg).get("type") == "enabled"
+        )
+        kwargs["tools"] = _anthropic_tools_with_cache_breakpoint(
+            frozen_tool_superset, extended_thinking=extended_thinking
+        )
+    elif payload.tools is not None:
         kwargs["tools"] = list(payload.tools)
     kwargs.update(payload.params)
     if system:
@@ -1952,6 +2052,7 @@ async def _dispatch_anthropic_with_hitl_tool_loop(
     persona_tier: PersonaTier,
     system: str | None = None,
     upstream: Mapping[str, Any] | None = None,
+    frozen_tool_superset: tuple[Mapping[str, Any], ...] | None = None,
 ) -> tuple[Mapping[str, Any], _UsageAttrs, _AnthropicCacheAttrs, _AnthropicRequestAttrs]:
     """Anthropic provider branch with generic R-CXA-2 HITL tool continuation.
 
@@ -1964,7 +2065,7 @@ async def _dispatch_anthropic_with_hitl_tool_loop(
     mutable ``messages`` list is rebuilt per turn, but ``system`` is a separate
     kwarg).
     """
-    kwargs = _payload_to_anthropic_kwargs(payload, system, upstream)
+    kwargs = _payload_to_anthropic_kwargs(payload, system, upstream, frozen_tool_superset)
     # Seed the per-turn mutable loop list from the TRANSLATED `kwargs["messages"]`
     # (NOT `payload.messages`) so it carries the `params["messages"]` merge result
     # AND the B-INTERSTEP upstream-context injection — otherwise the tool-loop's
@@ -2034,6 +2135,7 @@ async def _dispatch_anthropic_with_memory(
     tracer: Any,
     system: str | None = None,
     upstream: Mapping[str, Any] | None = None,
+    frozen_tool_superset: tuple[Mapping[str, Any], ...] | None = None,
 ) -> tuple[Mapping[str, Any], _UsageAttrs, _AnthropicCacheAttrs, _AnthropicRequestAttrs]:
     """Anthropic provider branch with Memory tool inner loop (U-RT-81).
 
@@ -2050,7 +2152,7 @@ async def _dispatch_anthropic_with_memory(
     backend = registry.resolve_backend(deployment_surface)
     configured_backend = registry.configured_backend
     context_editing_active = derive_context_editing_active(payload.params)
-    kwargs = _payload_to_anthropic_kwargs(payload, system, upstream)
+    kwargs = _payload_to_anthropic_kwargs(payload, system, upstream, frozen_tool_superset)
 
     response = await execute_with_memory_callbacks(
         adapter=adapter,
@@ -2072,9 +2174,10 @@ async def _dispatch_anthropic(
     *,
     system: str | None = None,
     upstream: Mapping[str, Any] | None = None,
+    frozen_tool_superset: tuple[Mapping[str, Any], ...] | None = None,
 ) -> tuple[Mapping[str, Any], _UsageAttrs, _AnthropicCacheAttrs, _AnthropicRequestAttrs]:
     """Anthropic provider branch — ``client.messages.create(...)``."""
-    kwargs = _payload_to_anthropic_kwargs(payload, system, upstream)
+    kwargs = _payload_to_anthropic_kwargs(payload, system, upstream, frozen_tool_superset)
     response = await adapter.client.messages.create(model=model, **kwargs)
 
     return _anthropic_response_bundle(response, payload, model)
@@ -2549,6 +2652,7 @@ def materialize_llm_dispatcher_stage(
     workload_class: WorkloadClass | None = None,
     persona_tier: PersonaTier | None = None,
     active_system_prompt: str | None = None,
+    frozen_tool_superset: tuple[Mapping[str, Any], ...] | None = None,
     memory_context: RuntimeMemoryContext | None = None,
     standard_memory_tool_executor: Any = None,
     memory_runtime: Any = None,
@@ -2630,6 +2734,7 @@ def materialize_llm_dispatcher_stage(
         workload_class=workload_class,
         persona_tier=persona_tier,
         active_system_prompt=active_system_prompt,
+        frozen_tool_superset=frozen_tool_superset,
         memory_context=memory_context,
         standard_memory_tool_executor=standard_memory_tool_executor,
         memory_runtime=memory_runtime,
