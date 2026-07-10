@@ -1722,6 +1722,54 @@ def _anthropic_tools_with_cache_breakpoint(
     return tools
 
 
+# U-1 (B-18) slice 2 (ADR-D3 §1.5 full parent breakpoint) — move the SINGLE
+# `cache_control` breakpoint from the tools block (slice 1) to the LAST system
+# block when a system prompt is present. Anthropic caches in
+# `tools → system → messages` order and one breakpoint caches everything from
+# the start UP TO AND INCLUDING its block, so a marker on the system block
+# caches the full `[tools + system]` parent position (§1.5) with exactly ONE
+# breakpoint (never exceeds Anthropic's ≤4-breakpoint limit). Requires the
+# structured/multi-block `system` content-block array (runtime-spec OQ-1 form),
+# emitted at translate-time only — `ProviderAgnosticPayload` stays frozen.
+def _combined_prefix_clears_non_vacuity_floor(
+    superset: tuple[Mapping[str, Any], ...], system: str
+) -> bool:
+    """Return True iff the COMBINED tools-superset + system prefix clears the floor.
+
+    The system-block breakpoint caches `[tools + system]`, so the non-vacuity
+    estimate is the serialized superset length PLUS the system-prompt length
+    (same ~4-chars-per-token heuristic + ≥4096-tok floor as
+    ``_superset_clears_non_vacuity_floor`` — no second heuristic forked). Since
+    the combined length is ≥ the superset-only length, this is monotone: a
+    combined-below-floor prefix implies a superset-only-below-floor prefix, so
+    the tools-marking path also stays unmarked (no double-marking, no orphan
+    marker).
+    """
+    serialized = json.dumps(list(superset), sort_keys=True, separators=(",", ":"))
+    combined_chars = len(serialized) + len(system)
+    return combined_chars / _TOKENS_PER_CHAR_DIVISOR >= _ANTHROPIC_MIN_CACHEABLE_TOKENS
+
+
+def _anthropic_system_cache_block(system: str) -> list[Mapping[str, Any]]:
+    """Return the single-element Anthropic ``system`` content-block array with the
+    ``cache_control`` breakpoint on its (only, last) text block.
+
+    This is the OQ-1 structured/multi-block ``system`` form: instead of the plain
+    ``system=<string>``, emit ``system=[{"type": "text", "text": <system>,
+    "cache_control": {"type": "ephemeral", "ttl": "5m"}}]`` so the breakpoint
+    caches ``[tools + system]``. Only ever produced on the marker path; the plain
+    string is preserved on every below-floor / no-superset / extended-thinking path
+    (byte-identical to slice 1 / pre-slice-2).
+    """
+    return [
+        {
+            "type": "text",
+            "text": system,
+            "cache_control": dict(_ANTHROPIC_TOOLS_CACHE_CONTROL),
+        }
+    ]
+
+
 def _payload_to_anthropic_kwargs(
     payload: ProviderAgnosticPayload,
     system: str | None = None,
@@ -1745,35 +1793,70 @@ def _payload_to_anthropic_kwargs(
     already carries a competing ``system`` (the opaque escape hatch).
 
     U-1 (B-18) — when ``frozen_tool_superset`` is bound, it REPLACES
-    ``payload.tools`` on the wire (the deterministic, cache-stable prefix) and
-    a ``cache_control`` breakpoint is placed on its last block (subject to the
-    extended-thinking + ≥4096-tok non-vacuity gates in
-    ``_anthropic_tools_with_cache_breakpoint``). ``ProviderAgnosticPayload``
-    stays frozen — the superset rides the dispatcher, never the payload
-    (ADR-F1-faithful: the Anthropic-specific structure lives ONLY here at
-    translate-time). ``None`` → byte-identical legacy path (``payload.tools``).
+    ``payload.tools`` on the wire (the deterministic, cache-stable prefix) and a
+    SINGLE ``cache_control`` breakpoint is placed at the end of the composed
+    cacheable prefix, subject to the extended-thinking + non-vacuity gates.
+    ``ProviderAgnosticPayload`` stays frozen — the superset rides the dispatcher,
+    never the payload (ADR-F1-faithful: the Anthropic-specific structure lives
+    ONLY here at translate-time). ``None`` → byte-identical legacy path
+    (``payload.tools``).
+
+    U-1 slice 2 (ADR-D3 §1.5 full parent breakpoint) — WHEN a system prompt is
+    present (and the superset is bound + gates pass), the single breakpoint moves
+    from the tools block to the LAST **system** block: ``tools[]`` = the frozen
+    superset WITHOUT a marker (still the stable prefix) and ``system`` is emitted
+    as the OQ-1 content-block array ``[{"type": "text", "text": <system>,
+    "cache_control": {...}}]``, which caches ``[tools + system]`` with exactly ONE
+    breakpoint. When NO system prompt is present (or the combined prefix is below
+    floor, or extended-thinking is on) the slice-1 behavior is preserved verbatim
+    (marker on the last client tool block when it clears floor; plain string
+    ``system`` otherwise). The system marker is gated on ``frozen_tool_superset
+    is not None`` — the frozen superset is the only STABLE tools prefix, so a
+    system breakpoint over an unstable per-step ``payload.tools`` would write a
+    cache every step that is never read (a silent cost regression). OpenAI/Ollama
+    translators are untouched (they keep the ``role:"system"`` message form).
     """
     kwargs: dict[str, Any] = {"messages": list(payload.messages)}
+    # U-1 — `thinking_mode` is not in scope here (extracted at
+    # `_extract_anthropic_request_attrs`), so re-derive extended-thinking from
+    # `params["thinking"]["type"]` for the breakpoint gates.
+    thinking_cfg = payload.params.get("thinking")
+    extended_thinking = (
+        isinstance(thinking_cfg, Mapping)
+        and cast(Mapping[str, Any], thinking_cfg).get("type") == "enabled"
+    )
+    # U-1 slice 2 — decide ONCE where the single breakpoint lands, so the tools
+    # branch and the system branch never each mark independently (double-marking).
+    # The system position is used iff a system prompt is present AND the stable
+    # frozen superset is bound AND extended-thinking is off AND the COMBINED
+    # `[tools + system]` prefix clears the non-vacuity floor.
+    place_on_system = (
+        bool(system)
+        and frozen_tool_superset is not None
+        and not extended_thinking
+        and _combined_prefix_clears_non_vacuity_floor(frozen_tool_superset, system)
+    )
     if frozen_tool_superset is not None:
-        # U-1 — the frozen superset REPLACES `payload.tools` (visibility-only per
-        # the C10 verdict; execution stays registry-gated). `thinking_mode` is not
-        # in scope here (extracted at `_extract_anthropic_request_attrs`), so
-        # re-derive extended-thinking from `params["thinking"]["type"]`.
-        thinking_cfg = payload.params.get("thinking")
-        extended_thinking = (
-            isinstance(thinking_cfg, Mapping)
-            and cast(Mapping[str, Any], thinking_cfg).get("type") == "enabled"
-        )
-        kwargs["tools"] = _anthropic_tools_with_cache_breakpoint(
-            frozen_tool_superset, extended_thinking=extended_thinking
-        )
+        # The frozen superset REPLACES `payload.tools` (visibility-only per the
+        # C10 verdict; execution stays registry-gated). When the breakpoint is on
+        # the system block the superset is sent UNMARKED (still the stable prefix);
+        # otherwise the slice-1 tools-marking path applies (the extended-thinking +
+        # superset-only floor gates live inside the helper).
+        if place_on_system:
+            kwargs["tools"] = list(frozen_tool_superset)
+        else:
+            kwargs["tools"] = _anthropic_tools_with_cache_breakpoint(
+                frozen_tool_superset, extended_thinking=extended_thinking
+            )
     elif payload.tools is not None:
         kwargs["tools"] = list(payload.tools)
     kwargs.update(payload.params)
     if system:
         if "system" in kwargs:
             raise PromptInjectionConflictError("anthropic", 'params["system"]')
-        kwargs["system"] = system
+        # slice 2 — the OQ-1 content-block array WITH the breakpoint when this is
+        # the marker position; else the plain string (byte-identical to slice 1).
+        kwargs["system"] = _anthropic_system_cache_block(system) if place_on_system else system
     # B-INTERSTEP — Anthropic carries `system` as a top-level kwarg (not a message),
     # so the upstream context goes at messages index 0 (post-`params`-merge).
     _inject_upstream_context_message(kwargs, upstream)

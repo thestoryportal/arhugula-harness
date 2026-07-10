@@ -1169,6 +1169,58 @@ async def test_u1_none_superset_wire_is_byte_identical_to_legacy_through_chain()
     assert adapter.client.messages.last_kwargs["tools"] == payload_tools  # type: ignore[index]
 
 
+# U-1 (B-18) slice 2 — full-chain witness: with a system prompt + a bound
+# superset, the SINGLE breakpoint reaches the wire on the LAST system block (the
+# `[tools + system]` §1.5 parent position) and the tools go UNMARKED, all through
+# the real dispatch chain (`self.active_system_prompt` + `self.frozen_tool_superset`
+# → `_invoke_provider` → `_dispatch_anthropic` → translate).
+@pytest.mark.asyncio
+async def test_u1_slice2_system_block_marker_reaches_wire_through_full_chain() -> None:
+    superset = _u1_big_superset()
+    adapter = _AnthropicFakeAdapter(_AnthropicClient())
+    tp, _ = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": adapter},
+        tracer_provider=tp,
+        active_system_prompt=_SYS,
+        frozen_tool_superset=superset,
+    )
+
+    await dispatcher.dispatch(_binding("anthropic"), _step(), step_context=_step_context())
+
+    wire = adapter.client.messages.last_kwargs  # type: ignore[assignment]
+    assert wire is not None
+    # System is the OQ-1 content-block array with the breakpoint on its last block.
+    assert wire["system"] == [
+        {"type": "text", "text": _SYS, "cache_control": {"type": "ephemeral", "ttl": "5m"}}
+    ]
+    # The tools are the frozen superset WITHOUT a marker (the single breakpoint
+    # moved to system — never double-marked).
+    assert [t["name"] for t in wire["tools"]] == [t["name"] for t in superset]
+    assert all("cache_control" not in t for t in wire["tools"])
+
+
+@pytest.mark.asyncio
+async def test_u1_slice2_no_system_keeps_tools_marker_through_full_chain() -> None:
+    """No system prompt + bound superset → slice-1 behavior through the real chain:
+    the marker stays on the last client tool block; no `system` kwarg is emitted."""
+    superset = _u1_big_superset()
+    adapter = _AnthropicFakeAdapter(_AnthropicClient())
+    tp, _ = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": adapter},
+        tracer_provider=tp,
+        frozen_tool_superset=superset,
+    )
+
+    await dispatcher.dispatch(_binding("anthropic"), _step(), step_context=_step_context())
+
+    wire = adapter.client.messages.last_kwargs  # type: ignore[assignment]
+    assert wire is not None
+    assert "system" not in wire
+    assert wire["tools"][-1]["cache_control"] == {"type": "ephemeral", "ttl": "5m"}
+
+
 @pytest.mark.asyncio
 async def test_active_system_prompt_injects_openai_leading_system_message() -> None:
     """OpenAI dispatch injects the active prompt as a leading ``role:"system"``

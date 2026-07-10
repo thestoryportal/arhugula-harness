@@ -275,8 +275,13 @@ def test_memory_only_run_still_produces_a_superset() -> None:
 # ==========================================================================
 @pytest.mark.e2e
 @pytest.mark.skipif(
-    not os.environ.get("ANTHROPIC_API_KEY"),
-    reason="live Anthropic cache-hit proof — requires ANTHROPIC_API_KEY (PAID call)",
+    not os.environ.get("ANTHROPIC_API_KEY")
+    or not os.environ.get("HARNESS_LIVE_ANTHROPIC_CACHE_E2E"),
+    reason=(
+        "live Anthropic cache-hit proof — requires ANTHROPIC_API_KEY AND the explicit "
+        "HARNESS_LIVE_ANTHROPIC_CACHE_E2E=1 opt-in (PAID call; never auto-fired even with a "
+        "key present — the `@pytest.mark.e2e` marker only deselects under the -m 'not e2e' lanes)"
+    ),
 )
 async def test_live_frozen_superset_cache_hit() -> None:  # pragma: no cover
     """Two identical-prefix real Anthropic dispatches: call 1 creates the cache,
