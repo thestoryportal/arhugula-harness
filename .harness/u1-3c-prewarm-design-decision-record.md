@@ -179,4 +179,61 @@ Scaffolding from `harness-cp/tests/test_workflow_driver_parallelization.py` (`_m
 
 ---
 
-*End DDR. Next session: advisor-review §9 open questions → build §5 (PROCEED, opt-in-off) with §6 tests → CP-spec + clearance → codex-review → PR → refresh.*
+## 11. Decorrelated review outcome (Fable 5 via Agent, 2026-07-10) — **SOUND-WITH-AMENDMENTS**
+
+The advisor tool was down this session; **Fable 5** (`Agent(model: "fable")`) ran the pre-commit adversarial review (operator-directed; `[[fable5-fallback-reviewer]]`). Verdict: **the architecture survives (reuse `_proceed_branch`, PROCEED-only, opt-in default-off), but the §5.2 sketch as literally written is a correctness hazard, the §2 predicate is unsound as stated, and there is an IndexError degenerate. Build ONLY with the amendments below.** These are the *authoritative* corrections to §2/§5.2/§6/§9. Fable's cites checked line-accurate; the review found what lies *between* my cited lines (memory composition at `llm_dispatch.py:1040-1060`) and *around* the bare first-await.
+
+### 11.1 H1 (MUST FIX — build-breaking). Branch[0] failure must be captured, not awaited bare.
+Today PROCEED uses `gather(..., return_exceptions=True)` (`:7539-7541`): a ran-and-errored branch records its entries then `raise`s (`:7532`), and the exception becomes a *results element* → `any_failed` → `_finish(PARTIAL, salvage=True)`. My §5.2 `first = await _proceed_branch(branch_plan[0])` is a **bare await**: an ordinary `Exception` from branch[0] escapes `_proceed_fanout`, is NOT caught by the enclosing `try` (which catches only `BranchBarrierDeadlineExceededError`/`TimeoutError` at `:7548/:7553`), `_finish` never runs so **branch[0]'s buffered ledger entries never drain (ledger loss)**, siblings never dispatch (PROCEED "a failing branch does NOT cancel siblings" violated), and `_run_fanout_to_completion` abandons the executor (`:6254-6275`). **Corrected sketch:**
+```python
+async def _proceed_fanout() -> list[Any]:
+    if not _warmup_gate:
+        return await asyncio.gather(*(_proceed_branch(*p) for p in branch_plan), return_exceptions=True)
+    try:
+        first = await _proceed_branch(*branch_plan[0])          # serialize: cache-write
+    except Exception as e:                                       # NOT BaseException — let CancelledError/timeout propagate to :7553
+        first = e                                                # capture exactly as gather would
+    rest = await asyncio.gather(                                 # STILL release survivors (PROCEED semantic)
+        *(_proceed_branch(*p) for p in branch_plan[1:]), return_exceptions=True)
+    return [first, *rest]
+```
+The whole warm-up must remain inside the existing `asyncio.timeout(deadline)` (`:7538`) so the deadline bounds *both* phases (see 11.5-M2).
+
+### 11.2 H2 (MUST FIX). The same-prefix predicate is under-specified — strengthen it; the memory packet is the load-bearing miss.
+`(agent_role, prompt_version_sha)` uniformity is NOT sufficient — the effective prefix has per-branch variabilities the DDR's §2 table missed (all produce **safe-vacuous** false positives = serialized latency with zero cache benefit, never wrong output, but exactly the vacuous-warm defect class the workspace guards against). **Corrected predicate (all must hold across `branch_plan`, + tunable ON):**
+- `len(branch_plan) >= 2` (H3);
+- uniform `step.step_kind == INFERENCE_STEP` (Q3 — dispatchers are per-kind);
+- uniform `binding.model_binding.provider` **and** `.model` (Anthropic cache is per-model; a non-anthropic branch shares nothing — `StepOverride.model_binding` is real, `per_step_override_evaluator.py:137`);
+- uniform `binding.agent_role` **and** `binding.prompt_version_sha`;
+- uniform extended-thinking (derivable at CP from `step.step_payload.params["thinking"]`; thinking forecloses the system marker at `llm_dispatch.py:1927-1931` and is per-epoch per ADR-D3 §1.5:205).
+
+**The memory-packet exclusion (the big one).** When `memory_runtime is not None`, `compose_for_dispatch` retrieves a **per-branch** memory packet keyed on `_query_summary(step.step_payload)` and appends it INTO the cached system block (`llm_dispatch.py:1040-1060` → `memory_context.py:384-397`) — and branch[0]'s `capture_turn_completion` can mutate the store *between phase 1 and phase 2*. So even uniform-`(role,sha)` siblings get different prefixes → warm-up is pure loss. **CP cannot see `memory_runtime`, `frozen_tool_superset`-None-ness, or the non-vacuity floor** — so document these as the **operator-asserted residual scope** (a *stated deviation* from findings-§Correction guardrail (1)'s `frozen_tool_superset is not None` code-conjunct, which I silently demoted): warm-up is only non-vacuous when the deployment is anthropic-routed, `frozen_tool_superset` is bound, **no `memory_runtime`**, and the prefix clears the ≥4096-tok floor. This is the argument for the Q1 C-shape below.
+
+### 11.3 H3 (MUST FIX). Empty/singleton `branch_plan` degenerate.
+On resume, recovered/scoped-abort ordinals are skipped (`:6968/:6976/:7017-7019`), so `branch_plan` can be `[]` or length 1 while the cell cap > 1. `branch_plan[0]` then raises `IndexError` (today's empty-gather returns `[]` → SUCCESS). The `len(branch_plan) >= 2` conjunct (11.2) closes this — gate on the **live branch_plan length, not the cell cap**.
+
+### 11.4 Revised §9 answers (Fable-confirmed)
+- **Q1 (gate carrier):** Option A (D4 tunable) now — cheap, additive, `d4_tunable` already delivers `cascade_policy` to this function (`:6897-6900`). **Register the C follow-on with a sharper shape:** `StepDispatcher.cohort_key() -> str | None` where **`None` = "prefix unstable / not cacheable — do not warm"** (dispatcher returns None when `memory_runtime` is bound, `frozen_tool_superset is None`, or the floor can't clear). That `None` is the *real* fix for the CP-blindness in 11.2 — not a mere field-move. `B-18-3C-PREWARM-COHORTKEY`.
+- **Q2 (PROCEED-only):** accepted (confirmed — strict tiers add TaskGroup + snapshot + fence surface for the same benefit).
+- **Q3 (shared-dispatcher):** holds **only per step_kind** — `branch_dispatchers = {bi: step_dispatchers.lookup(step.step_kind)}` (`:7078-7081`); `StepKindDispatcherRegistry` is frozen `Mapping[StepKind, StepDispatcher]`. Same kind ⟹ same instance. Hence the uniform-`INFERENCE_STEP` conjunct (11.2). Confirmed uniform-by-construction: `sub_agent_descent` (set once on `fanout_parent :6933`, inherited) + the role default (`_DEFAULT_PARALLELIZATION_AGENT_ROLE` constant `:6019`).
+- **Q4 (opt-in default-off):** correct — *strengthened*. Honoring ADR §1.8(f) "required at cap>1" immediately would impose serialized latency on provably-non-cacheable configs (no MCP tools → no breakpoint; memory runtime → unstable prefix; sub-floor). Add "dispatcher can attest cacheability (Q1 C-shape) OR a live witness" to the `B-18-3C-PREWARM-DEFAULT-ON` gate.
+
+### 11.5 Test-plan additions (§6 gaps Fable found)
+- **M1 (most important — §6 had NO failure-path test):** branch[0]-fails-under-warm-up → assert siblings STILL dispatch, PARTIAL-with-survivors, **branch[0]'s ledger entries drained** (the H1 regression witness).
+- **M2:** deadline-strike during phase 1 → the never-released `[1..N-1]` have NO ledger entries (PROCEED has no not-yet-dispatched scan) — decide + test the disposition of never-released siblings.
+- **M3:** deadline-budget-consumption — serialization spends wall-clock serially; a fan-out that fits the deadline concurrently but not as T(phase1)+T(phase2) regresses SUCCESS→PARTIAL under the gate. Document; ideally test.
+- **M4:** resume-with-warm-up-ON → the re-dispatched subset serializes its new `branch_plan[0]` (safe re-warm) — assert ordered + safe.
+- **M5:** empty/singleton `branch_plan` (H3) + N=1-declared degenerates → no serialization, no IndexError.
+- **M6:** mixed step_kind / per-step model-override / extended-thinking sibling → predicate false → all-concurrent (extends §6-test-3, which only varied role/sha).
+- **M7:** memory-runtime-enabled fan-out → warm-up vacuous → documented exclusion + a fake-runtime test showing the miss (guards a future default-flip on a memory deployment).
+- **M8:** negative ordering assertion — gate ON but predicate false → branch[0] does NOT serialize (guards a gate/predicate wiring bug that silently serializes everything).
+
+### 11.6 What the review CONFIRMED (build on these)
+- Reuse-`_proceed_branch` is self-contained per-branch (`_record_clean :7313-7354`; drain orders by branch-index regardless of completion order; `fanout_timestamp` is a fixed placeholder re-stamped at drain) — no barrier-wide counter, no concurrent-start assumption. ✅ (with the H1 exception-capture amendment).
+- Crash-resume-mid-warm is correct: `record_branch` (`:7340-7344`) lands synchronously before `first = await` returns, strictly before `[1..N-1]` are created; the dispatched-but-not-recorded window exists identically today for every PROCEED branch (serialization doesn't widen it). ✅
+- PROCEED-only is genuinely isolated (effect-fence PROCEED-resumes rejected fail-closed before dispatch `:6901-6910`; no `_mark_branch_dispatched`; no TaskGroup). ✅
+- §10 grounded-refs table checked line-accurate throughout. ✅
+
+---
+
+*End DDR. **Next session (design now review-cleared): build §5 as amended by §11 — H1 exception-capture + H2 strengthened predicate + memory-runtime exclusion + H3 length-gate, PROCEED opt-in-off — with the §6+§11.5 test plan (incl. the M1 failure-path witness) → CP-spec D4-tunable field + clearance → codex/Fable-5 review → PR → refresh.** Register `B-18-3C-PREWARM-COHORTKEY` (the Q1 C-shape `cohort_key() -> str | None`).*
