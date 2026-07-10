@@ -208,6 +208,27 @@ The register has **two tiers**, kept distinct:
 
 ---
 
+## Surface XIII — Upstream decomposition-audit build arcs (2026-07-09)
+
+*Source: `.harness/audit/Upstream_Decomposition_Audit_2026-07-09.md` — council-engaged intent→spec audit (0 silent gaps; 12 documented deferrals). Under the operator FULL-SPEC directive ("no MVP scoping; all beyond-MVP spec'd + built") the deferrals are build targets. The 9 already-tracked ones live in their existing homes (Arc R / B4 / B-TAIL / B-FALLBACK / C-AS-10 §10.3 / B3 / F-B3-2 / FM-2 / per-persona crypto — several BUILT-but-gated on a 2nd provider). The 2 net-new UNREGISTERED findings are registered here.*
+
+### B-18 · U-1 — `cache_control` breakpoint emission *(NET-NEW, registered 2026-07-09)*
+- **What it is.** The executable half of the **ADR-D3 §1.5 "prompt-cache breakpoint placement contract"** (per-cell breakpoint placement at parent-agent + per-sub-agent levels, composing D4 §1.8 concurrent-cache warm-up). The static-prefix/dynamic-suffix discipline + the observation attrs are built; the harness never AUTHORS a breakpoint — the runtime dispatch composer emits a **string-only** system prompt, so it cannot place `cache_control` markers.
+- **Current state.** COMMITTED at ADR-D3 §1.5; deferred only as runtime spec §14.5.2:3620-3621 OQ-1 (string-only) + OQ-2 (perf follow-on); **in no ledger/register** (confirmed by acknowledgment-grep). Load-bearing C2 cost lever (cache-miss = 4–10× input tokens per ADR-F2 §Rationale(b)(ii)).
+- **Close-out steps.** Un-defer runtime spec OQ-1 (structured/multi-block `system`-array content) + emit `cache_control` breakpoints per ADR-D3 §1.5 placement contract at the dispatch composer; tests (cache-prefix stability, breakpoint placement, ≤4-breakpoint Anthropic limit); clearance marker. Bundled design+impl. Free acceptance witness: the observation half already exists (`llm_dispatch.py:331-358` reads `anthropic.cache_breakpoint_id`) → emit→observe round-trip.
+- **Probe findings (2026-07-09, advisor-guided scoping):** the §1.5 parent breakpoint sits at end-of-[system_prompt + frozen_tool_superset + template]. Two constraints gate a *sound, non-vacuous* build: (1) the stable prefix must be ≥4096 tok (Anthropic min cacheable prefix); (2) `tools[]` must be a static **frozen superset per epoch** (§1.5 line 203). **At MVP neither holds:** `active_system_prompt: str \| None = None` by default (`llm_dispatch.py:533` — no prefix to cache), and tools flow **per-step** (`payload.tools` from `step_payload.tools`, applied at `_payload_to_anthropic_kwargs:1670`), NOT frozen-per-epoch. So a naive breakpoint is **built-but-vacuous**. **Operator decision (2026-07-09): FROZEN-TOOLS PREREQUISITE FIRST** (build the §1.5-line-203 static-frozen-superset-per-epoch tool model → then the full §1.5 parent breakpoint is sound in one arc), rejecting the narrower system-prompt-only-conditional slice.
+- **Refined disposition:** the frozen-tools prerequisite is a **substantial architectural change to the tool-dispatch model** (per-step tools → frozen-superset-per-(workload-class × prompt-version)-epoch), NOT a quick prerequisite — council-eligible (C4 tools ⊥ C2 caching ⊥ C6 routing/epoch). **Council: ⚖️ conditional** (frozen-tools-superset architecture + epoch model). **ACTIVE, scoped — the clean next focused build arc** (deferred from the 2026-07-09 audit session to avoid a rushed tail-of-session architectural change; ground the AS/MCP tool-superset + the epoch model, council + advisor, then build frozen-tools → §1.5 breakpoint → emit→observe witness).
+
+### B-19 · U-2 — breaker `breaker.cause` + `breaker.cooldown_ms` attributes *(NET-NEW, registered 2026-07-09; operator-discretionary)*
+- **What it is.** The two CP-side ambient breaker-state attributes (`breaker.cause` trip-cause enum + `breaker.cooldown_ms`) dropped when the CP `breaker.*` set was replaced by the OD 7-attribute *event* schema.
+- **Current state.** CP spec v1→v1.1 change-note line 72 **"Semantic-loss note"** (dropped, no OD equivalent); line 47 flags re-introduction as **"operator-discretionary, forward-flagged, adjudicated NOT-FINDING at iter-2."** Unregistered. **A conscious event-vs-ambient design drop** — re-introduction is a genuine design call (does re-adding ambient-state attrs alongside the event schema cohere, or duplicate?).
+- **Close-out steps.** Assess coherence of re-introducing ambient-state attrs alongside the OD event schema (possible council/architect vet); if built, extend the CP `harness.breaker.*` namespace + producer + observability. **Council: ⚖️ conditional.** DISPOSITION: build-or-skip decided at arc-open (leans build under FULL-SPEC; surface the redundancy concern first).
+
+### R-1 confirmed-DEFERRED · Managed-cloud deployment-surface dispatch
+- **Operator decision (2026-07-09):** the prior fork AS-8f **DEFER-INDEFINITELY (2026-05-28)** **STANDS** — the FULL-SPEC directive does NOT override this held decision. Managed-cloud dispatch (Persona §9/§10.2 + ADR-D2 §1.1 3-tier surface × blast-radius) remains deferred until a managed-cloud deployment. Recorded so the hold is honored, not silently reversed.
+
+---
+
 ## 2. Provenance + method
 
 - **Two tiers per advisor guidance:** Phase-8 *closure residuals* (Tier A — declare Phase 8 done) kept distinct from *post*-Phase-8 forward activation (Tier B); the retirements are **legitimate per X-AL-2** (the H_E scaffold was displaced; production exercise was never an X-AL-2 condition) — this register is the *next axis* of work, not a correction.
