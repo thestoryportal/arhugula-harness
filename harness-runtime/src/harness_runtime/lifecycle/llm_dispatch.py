@@ -543,6 +543,18 @@ class RuntimeLLMDispatcher:
     # gate clears + extended-thinking is off. Sub-agent / downgraded dispatchers
     # inherit None (fail-safe) → they fall back to `payload.tools`.
     frozen_tool_superset: tuple[Mapping[str, Any], ...] | None = None
+    # U-1 slice 3a (B-18) — the DESCENDED sub-agent (child) frozen tool superset:
+    # the ADR-D4 §1.5 default-downgrade REMOVE half applied to the SAME
+    # `ctx.mcp_client_hosts` union (external-irreversible tools omitted; the
+    # `compute_frozen_tool_superset(..., remove_tiers={EXTERNAL_IRREVERSIBLE})`
+    # result, bound alongside `frozen_tool_superset` at stage 5). `dispatch()`
+    # selects THIS superset when `step_context.sub_agent_descent` is True (a
+    # child-workflow inference step), closing the F1 latent C10 condition-2 gap
+    # (a sub-agent inference must NOT emit the parent's external-irreversible
+    # tools into its inference context). `None` when the child union is empty
+    # (no non-removed MCP tools + no memory) → fall back to `payload.tools`.
+    # At MVP both supersets are `None` (no MCP tools) → byte-identical.
+    child_frozen_tool_superset: tuple[Mapping[str, Any], ...] | None = None
     # U-MEM-15 — prompt-extension memory fallback context. When C-MEM-13 selects
     # `PROMPT_EXTENSION_PACKET`, the dispatcher renders the C-MEM-12 packet as
     # read-only system content and composes it into the existing provider prompt
@@ -1257,6 +1269,29 @@ class RuntimeLLMDispatcher:
             cache_attrs: _AnthropicCacheAttrs | None
             request_attrs: _AnthropicRequestAttrs | None
             external_cli_attrs: _ExternalCLIAttrs | None = None
+            # U-1 slice 3a (B-18) — select the DESCENDED superset for a sub-agent
+            # (child-workflow) inference. The CP driver marks every child
+            # `StepExecutionContext` with `sub_agent_descent=True` (ADR-D4 §1.5
+            # descent); a descended dispatch emits the child superset (external-
+            # irreversible tools REMOVE'd) instead of the parent's full superset —
+            # closing the F1 latent C10 condition-2 gap. Top-level dispatch
+            # (`sub_agent_descent=False`) is byte-identical to pre-slice-3a.
+            if step_context.sub_agent_descent and self.frozen_tool_superset is not None:
+                # A descended child in a run that HAS MCP tools: its wire tools ARE
+                # the downgraded superset, and it MUST NOT fall back to
+                # `payload.tools` (which could re-expose a removed external-
+                # irreversible tool the child step declares). When the downgraded
+                # union is empty (the parent registry held ONLY external-irreversible
+                # tools → all REMOVE'd → `child_frozen_tool_superset is None`), emit an
+                # EMPTY superset `()` so the translate sends `tools: []` (no visible
+                # tools) rather than the step's declared tools (out-of-family Codex
+                # [P2] — the two `None` meanings disambiguated by the parent superset).
+                _effective_frozen_tool_superset = self.child_frozen_tool_superset or ()
+            else:
+                # Top-level dispatch, OR a descended child in an MVP run with NO MCP
+                # tools at all (`frozen_tool_superset is None` → child superset also
+                # None → the legacy `payload.tools` path; nothing to downgrade).
+                _effective_frozen_tool_superset = self.frozen_tool_superset
             if provider_name == "anthropic":
                 # U-RT-81 (C-RT-15 §14.5.1) — Memory tool callback-injection
                 # composer-step. If `step.step_payload.tools` contains the
@@ -1286,7 +1321,7 @@ class RuntimeLLMDispatcher:
                         tracer=tracer,
                         system=effective_system_prompt,
                         upstream=upstream_output,
-                        frozen_tool_superset=self.frozen_tool_superset,
+                        frozen_tool_superset=_effective_frozen_tool_superset,
                     )
                 elif (
                     self.hitl_tool_loop is not None
@@ -1308,7 +1343,7 @@ class RuntimeLLMDispatcher:
                         persona_tier=self.persona_tier or PersonaTier.SOLO_DEVELOPER,
                         system=effective_system_prompt,
                         upstream=upstream_output,
-                        frozen_tool_superset=self.frozen_tool_superset,
+                        frozen_tool_superset=_effective_frozen_tool_superset,
                     )
                 else:
                     (
@@ -1322,7 +1357,7 @@ class RuntimeLLMDispatcher:
                         payload,
                         system=effective_system_prompt,
                         upstream=upstream_output,
-                        frozen_tool_superset=self.frozen_tool_superset,
+                        frozen_tool_superset=_effective_frozen_tool_superset,
                     )
             elif provider_name == "openai":
                 if (
@@ -2736,6 +2771,7 @@ def materialize_llm_dispatcher_stage(
     persona_tier: PersonaTier | None = None,
     active_system_prompt: str | None = None,
     frozen_tool_superset: tuple[Mapping[str, Any], ...] | None = None,
+    child_frozen_tool_superset: tuple[Mapping[str, Any], ...] | None = None,
     memory_context: RuntimeMemoryContext | None = None,
     standard_memory_tool_executor: Any = None,
     memory_runtime: Any = None,
@@ -2818,6 +2854,7 @@ def materialize_llm_dispatcher_stage(
         persona_tier=persona_tier,
         active_system_prompt=active_system_prompt,
         frozen_tool_superset=frozen_tool_superset,
+        child_frozen_tool_superset=child_frozen_tool_superset,
         memory_context=memory_context,
         standard_memory_tool_executor=standard_memory_tool_executor,
         memory_runtime=memory_runtime,

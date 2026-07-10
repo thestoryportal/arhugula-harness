@@ -4,6 +4,8 @@
 
 ## F1 — verified latent C10 condition-2 gap shipped in slice 1 (PR #919)
 
+> **✅ CLOSED at slice 3a** (runtime spec v1.96 + CP spec v1.86; branch `u1-slice3a-child-frozen-tool-superset-f1`). Materialized condition 2 via the ADR-D4 §1.5 REMOVE half: a descended sub-agent inference now emits `child_frozen_tool_superset` (external-irreversible tools REMOVE'd) instead of the parent's full superset, gated on the new `StepExecutionContext.sub_agent_descent` carrier. The empty-child case sends `tools: []` (never `payload.tools` — out-of-family Codex [P2] fix). C10 re-confirmed at `.harness/u1-slice3a-c10-reconfirmation.md` (monotone visibility reduction; execution gating untouched; conditions 1+2 satisfied). Slice 3a chose the child-scoped-superset build (not the interim minimal guard) since both routes needed the same descent seam — see the design lineage below (the interim guard is now moot).
+
 **Finding.** The slice-1 C10 blast-radius verdict (`.harness/u1-slice1-c10-blast-radius-verdict.md`) accepted Option A (full frozen tool superset visible per step) at **single-privilege-tier top-level dispatch**, under conditions — notably **condition 2: sub-agent / downgraded dispatchers stay `frozen_tool_superset = None` → fall back to `payload.tools`.** That guard was **assumed but never built.**
 
 **Verified mechanism (re-grounded, not the subagent's summary):**

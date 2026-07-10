@@ -29,12 +29,27 @@ import json
 from collections.abc import Mapping
 from typing import Any
 
+from harness_as.sandbox_tier import BlastRadiusTier
+
 from harness_runtime.lifecycle.memory_tool_dispatch import MEMORY_TOOL_TYPE
 
 #: The Anthropic Memory tool definition (``ADR-D3 v1.2 §1.1 #11``; the
 #: step-declared server-tool shape mirrored at the integration fixtures). A
 #: typed server tool — carries ``type`` + ``name`` only (no ``input_schema``).
 _MEMORY_TOOL_DEFINITION: dict[str, Any] = {"type": MEMORY_TOOL_TYPE, "name": "memory"}
+
+#: U-1 slice 3a (B-18) — the blast-radius tiers a DESCENDED sub-agent (child)
+#: registry REMOVEs from its visibility superset, per the ADR-D4 §1.5
+#: default-downgrade rule: only ``external-irreversible`` is dropped (the
+#: ``REMOVE`` disposition). ``local-mutation``/``external-reversible`` stay
+#: VISIBLE (``external-reversible``'s ``DOWNGRADE_TO_ASK`` is a gate-level
+#: concern, enforced at the HITL gate, not a visibility one). The child ceiling
+#: is uniform (`compute_child_blast_radius_ceiling` → READ_ONLY), so the REMOVE
+#: is tier-uniform and idempotent — a grandchild re-filtering an already-filtered
+#: parent union drops nothing more (monotonic-sticky descent is correct).
+CHILD_DOWNGRADE_REMOVE_TIERS: frozenset[BlastRadiusTier] = frozenset(
+    {BlastRadiusTier.EXTERNAL_IRREVERSIBLE}
+)
 
 
 def _canonicalize_schema(schema: Mapping[str, Any]) -> dict[str, Any]:
@@ -54,6 +69,7 @@ def compute_frozen_tool_superset(
     mcp_client_hosts: Mapping[Any, Any] | None,
     *,
     include_memory_tool: bool,
+    remove_tiers: frozenset[BlastRadiusTier] = frozenset(),
 ) -> tuple[Mapping[str, Any], ...] | None:
     """Compute the deterministic frozen tool superset from the MCP registries.
 
@@ -70,6 +86,21 @@ def compute_frozen_tool_superset(
     definition is appended so a memory step's step-declared memory tool is NOT
     dropped from the wire when the superset REPLACES ``payload.tools``.
 
+    ``remove_tiers`` — U-1 slice 3a (B-18): the ADR-D4 §1.5 sub-agent
+    default-downgrade **REMOVE** half. When a descended sub-agent (child)
+    dispatch computes its own visibility superset, tools whose
+    ``ToolContract.blast_radius_tier`` is in ``remove_tiers`` are OMITTED from
+    the union (the child registry does not surface them; the parent must invoke
+    them directly post-synthesis). The stage-5 caller passes
+    ``frozenset({BlastRadiusTier.EXTERNAL_IRREVERSIBLE})`` for the child
+    superset and ``frozenset()`` for the full top-level superset. Filtered at
+    COMPUTE time (where ``blast_radius_tier`` is in hand — the projected tuple
+    drops it). The Memory tool is NOT blast-radius-classified and is retained.
+    Default ``frozenset()`` → byte-identical to the pre-slice-3a full union.
+    ``local-mutation`` and ``external-reversible`` tools stay VISIBLE (the
+    latter's ``DOWNGRADE_TO_ASK`` is a gate-level concern, not a visibility one,
+    enforced separately at the HITL gate — not here).
+
     Cross-host name collisions already fail loud at ``build_tool_routing_index``
     (``runtime_tool_dispatcher_factory.py``), so a same-name dedup here is safe
     (a collision would have aborted bootstrap). Sort by tool ``name`` for a
@@ -84,6 +115,11 @@ def compute_frozen_tool_superset(
             registry = host.tool_registry
             for name in registry.names():
                 contract = registry.get(name)
+                # ADR-D4 §1.5 REMOVE: a descended child registry OMITS tools at a
+                # removed blast-radius tier (external-irreversible). `remove_tiers`
+                # is empty for the top-level superset → no filtering.
+                if contract.blast_radius_tier in remove_tiers:
+                    continue
                 # DEDUP by name (collision is impossible post-bootstrap; last
                 # write is identical to first). Deterministic projection.
                 projected[str(contract.name)] = {

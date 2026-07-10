@@ -2396,6 +2396,7 @@ def execute_workflow(
     step_dispatchers: StepDispatcherRegistry,
     pause_snapshot_input: PauseSnapshot | None = None,
     reconstruct_final_state: bool = True,
+    sub_agent_descent: bool = False,
 ) -> RunResult:
     """Execute the workflow per C-CP-25 §25.3 happy-path discipline.
 
@@ -2629,6 +2630,10 @@ def execute_workflow(
             # prefix so the child's `final_state` reconstructs the COMPLETE terminal state
             # the parent fan-out / hierarchical-pause fold consumes.
             reconstruct_final_state=reconstruct_final_state,
+            # U-1 slice 3a (B-18) — run-level descent marker; threaded onto every
+            # StepExecutionContext so a descended sub-agent inference emits the child
+            # (downgraded) frozen_tool_superset. False for a top-level run.
+            sub_agent_descent=sub_agent_descent,
         )
 
         # C-OD-25 §25.1 close-time attributes (4 of 12). Outcome enum serializes
@@ -2664,6 +2669,7 @@ def _execute_workflow_body(
     resume_at_step_index_override: int | None = None,
     resume_snapshot: PauseSnapshot | None = None,
     reconstruct_final_state: bool = True,
+    sub_agent_descent: bool = False,
 ) -> tuple[RunResult, int]:
     """Execute the workflow body within the workflow.envelope OTel span.
 
@@ -3643,6 +3649,7 @@ def _execute_workflow_body(
             crash_pause_reconstruct_fence_paused=_crash_pause_reconstruct_fence_paused,
             reconciler_engine_resume_required=_reconciler_fanout_engine_resume_required,
             synthesis_step=_synthesis_step,
+            sub_agent_descent=sub_agent_descent,
         )
     if strategy is _DriverStrategyStatus.EVALUATOR_OPTIMIZER:
         return _execute_evaluator_optimizer(
@@ -3657,6 +3664,7 @@ def _execute_workflow_body(
             # snapshot's `evaluator_optimizer_resume` drives the recover-prefix +
             # re-dispatch-from-failed-step path; None on a normal first run.
             resume_snapshot=resume_snapshot,
+            sub_agent_descent=sub_agent_descent,
         )
     if strategy is _DriverStrategyStatus.ORCHESTRATOR_WORKERS:
         # B-POSTJOIN-LLM-SYNTHESIS (CP spec v1.54 §3) — carve an opt-in terminal
@@ -3691,6 +3699,7 @@ def _execute_workflow_body(
             reconciler_engine_resume_required=_reconciler_fanout_engine_resume_required,
             pause_resumable=True,
             synthesis_step=_synthesis_step,
+            sub_agent_descent=sub_agent_descent,
         )
     if strategy is _DriverStrategyStatus.HIERARCHICAL_DELEGATION:
         # B-HIERARCHICAL-PAUSE (R-FS-1) — HIERARCHICAL now threads the resume
@@ -3723,6 +3732,7 @@ def _execute_workflow_body(
             reconciler_engine_resume_required=_reconciler_fanout_engine_resume_required,
             pause_resumable=True,
             synthesis_step=_synthesis_step,
+            sub_agent_descent=sub_agent_descent,
         )
     if strategy is _DriverStrategyStatus.DECENTRALIZED_HANDOFF:
         return _execute_decentralized_handoff(
@@ -3738,6 +3748,7 @@ def _execute_workflow_body(
             # recover-completed-prefix + re-dispatch-from-the-cursor path; None on a
             # normal first run.
             resume_snapshot=resume_snapshot,
+            sub_agent_descent=sub_agent_descent,
         )
 
     # Selective per-run replay-resumption via N-lookup over the existing
@@ -4369,6 +4380,8 @@ def _execute_workflow_body(
             # SUB_AGENT (the NONLEAF-CHILD relaxation) so a maybe-ran parent's re-dispatch
             # auto-resumes the grandchild instead of re-firing its committed effects.
             is_linear_sequential_dispatch=True,
+            # U-1 slice 3a (B-18) — run-level descent marker (ADR-D4 §1.5).
+            sub_agent_descent=sub_agent_descent,
         )
         # v1.6 routing-layer refactor per C-RT-17 §14.7.7: dispatch via
         # registry.lookup(step.kind).dispatch(...) instead of single
@@ -6680,6 +6693,7 @@ def _execute_parallelization(
     crash_pause_reconstruct_fence_paused: tuple[EffectFencePausedBranchResumeState, ...] = (),
     reconciler_engine_resume_required: bool = False,
     synthesis_step: WorkflowStep | None = None,
+    sub_agent_descent: bool = False,
 ) -> tuple[RunResult, int]:
     """Execute the `PARALLELIZATION` fan-out-barrier-aggregate strategy (U-CP-86).
 
@@ -6914,6 +6928,9 @@ def _execute_parallelization(
         parent_idempotency_key=_compute_step_idempotency_key(run_idempotency_key, 0),
         tenant_id=ctx.tenant_id,
         step_index=0,
+        # U-1 slice 3a (B-18) — run-level descent marker; branch children inherit
+        # it via compose_branch_child_context's model_copy (ADR-D4 §1.5).
+        sub_agent_descent=sub_agent_descent,
     )
 
     # R-003 active-workflow-context sidecar (resolved once per fan-out; the same
@@ -8140,6 +8157,7 @@ def _execute_evaluator_optimizer(
     step_dispatchers: StepDispatcherRegistry,
     run_idempotency_key: str,
     resume_snapshot: PauseSnapshot | None = None,
+    sub_agent_descent: bool = False,
 ) -> tuple[RunResult, int]:
     """Execute the `EVALUATOR_OPTIMIZER` generate→evaluate→regenerate loop (U-CP-87).
 
@@ -8417,6 +8435,8 @@ def _execute_evaluator_optimizer(
             # carry no derived role, so the override is the sole source — linear
             # precedent). None → byte-identical to v1.37 (§14.5.3 invariant-1).
             agent_role=binding.agent_role,
+            # U-1 slice 3a (B-18) — run-level descent marker (ADR-D4 §1.5).
+            sub_agent_descent=sub_agent_descent,
         )
         # B-NONLINEAR-OVERRIDE-PROVENANCE — buffer the per-step override entry
         # BEFORE dispatch (mirrors the linear path's pre-dispatch emission). A
@@ -8824,6 +8844,7 @@ def _execute_orchestrator_workers(
     pause_resumable: bool = False,
     reconciler_engine_resume_required: bool = False,
     synthesis_step: WorkflowStep | None = None,
+    sub_agent_descent: bool = False,
 ) -> tuple[RunResult, int]:
     """Execute the `ORCHESTRATOR_WORKERS` orchestrator-dispatch-collect strategy (U-CP-88).
 
@@ -9290,6 +9311,9 @@ def _execute_orchestrator_workers(
         # context) so they keep their per-branch seed; hash-inert (byte-identical when
         # the orchestrator is not a recoverable SUB_AGENT_DISPATCH).
         is_orchestrator_dispatch=True,
+        # U-1 slice 3a (B-18) — run-level descent marker; workers inherit it via
+        # compose_branch_child_context's model_copy (ADR-D4 §1.5).
+        sub_agent_descent=sub_agent_descent,
     )
     if _is_resume:
         # B-FANOUT-PAUSE — the orchestrator already ran in the ORIGINAL envelope
@@ -10794,6 +10818,7 @@ def _execute_hierarchical_delegation(
     pause_resumable: bool = False,
     reconciler_engine_resume_required: bool = False,
     synthesis_step: WorkflowStep | None = None,
+    sub_agent_descent: bool = False,
 ) -> tuple[RunResult, int]:
     """Execute the `HIERARCHICAL_DELEGATION` recursive bounded-fan-out strategy (U-CP-89).
 
@@ -10904,6 +10929,7 @@ def _execute_hierarchical_delegation(
         # at its own dispatch site, so this top-level `synthesis_step` never leaks
         # into a recursive level (synthesis-per-level is the registered follow-on).
         synthesis_step=synthesis_step,
+        sub_agent_descent=sub_agent_descent,
     )
 
 
@@ -10981,6 +11007,7 @@ def _execute_decentralized_handoff(
     step_dispatchers: StepDispatcherRegistry,
     run_idempotency_key: str,
     resume_snapshot: PauseSnapshot | None = None,
+    sub_agent_descent: bool = False,
 ) -> tuple[RunResult, int]:
     """Execute the `DECENTRALIZED_HANDOFF` single-owner sequential handoff strategy (U-CP-90).
 
@@ -11273,6 +11300,9 @@ def _execute_decentralized_handoff(
             parent_idempotency_key=_compute_step_idempotency_key(run_idempotency_key, stage_index),
             tenant_id=ctx.tenant_id,
             step_index=stage_index,
+            # U-1 slice 3a (B-18) — run-level descent marker; stage_ctx inherits it
+            # via compose_branch_child_context's model_copy (ADR-D4 §1.5).
+            sub_agent_descent=sub_agent_descent,
         )
         # Single owner → branch_index 0 (no siblings; causality rides the chained
         # parent_action_id, NOT the fan-out ordinal). step_index = the declared stage

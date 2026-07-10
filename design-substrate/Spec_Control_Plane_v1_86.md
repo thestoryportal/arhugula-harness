@@ -1,0 +1,30 @@
+# Spec: Control Plane — v1.86 (delta over v1.85)
+
+*Delta-only file. The v1.85 body + the entire C-CP-01 … C-CP-29 contract body are PRESERVED VERBATIM (delta-only-spec-file convention). This delta records the CP carrier half of **U-1 slice 3a** (runtime forward register B-18): an additive `StepExecutionContext.sub_agent_descent: bool = False` field under **C-CP-25 §25.2** (the per-step execution-context surface the driver composes and passes to the `StepDispatcher` Protocol), threaded by `execute_workflow(sub_agent_descent=...)`. It is the descent signal the runtime `RuntimeLLMDispatcher.dispatch` reads to emit the **child-scoped (downgraded) frozen tool superset** per **ADR-D4 §1.5** (paired with **runtime spec change-note v1.95 → v1.96**). **Net: additive field only — no contract/enum/fail-class/§5.2-hash change.***
+
+## Change-note (v1.85 → v1.86)
+
+**What this materializes.** U-1 slice 1 (runtime v1.94) landed the Anthropic prompt-cache `frozen_tool_superset` for **top-level** single-privilege-tier dispatch; its C10 blast-radius verdict accepted full-superset visibility per step UNDER conditions — notably **condition 2**: sub-agent / downgraded dispatchers stay `frozen_tool_superset = None` → fall back to `payload.tools`. That guard was **assumed but never built** — a child workflow reuses the parent `ctx.step_dispatchers` (v1.6 MVP child-context sharing), so a sub-agent inference emitted the PARENT's superset (the F1 latent C10 condition-2 gap, `.harness/u1-slice3-findings-and-f1-c10-gap.md`). Materializing condition 2 requires the runtime dispatch to know it is executing inside a descended sub-agent. That descent fact is a **control-plane property** of the execution context — its home is `StepExecutionContext`, NOT a cloned dispatcher stack or a run-scoped ContextVar (the `[[carrier-home-defect-pattern]]` + `[[run-scoped-ctx-holder-daemon-isolation]]` disciplines).
+
+**Scope of revision — one additive field on `StepExecutionContext` (C-CP-25 §25.2).**
+
+- `sub_agent_descent: bool = False` — whether the step executes inside a DESCENDED sub-agent (child) workflow, per **ADR-D4 §1.5** sub-agent privilege inheritance. A RUN-LEVEL constant for a given `execute_workflow` invocation: the new `execute_workflow(..., sub_agent_descent: bool = False)` keyword threads it onto EVERY `StepExecutionContext` the driver composes — the SINGLE_THREADED_LINEAR per-step loop AND the five non-linear strategy composers (PARALLELIZATION / EVALUATOR_OPTIMIZER / ORCHESTRATOR_WORKERS / HIERARCHICAL_DELEGATION / DECENTRALIZED_HANDOFF); fan-out **branch children inherit it via `compose_branch_child_context`'s `model_copy`** (it is not re-listed in the `update` dict, so it flows through — the exact `hitl_placements` / `run_engine_class` producer precedent). The runtime `child_workflow_runner` re-enters `execute_workflow(sub_agent_descent=True)`; the top-level `harness_runtime.api.run` uses the `False` default. **Monotonic-sticky** (once True, all descendant runs are True — the recursive child_workflow_runner re-passes True), correct because the ADR-D4 §1.5 REMOVE downgrade is idempotent.
+
+**Carrier discipline (the `hitl_placements` / `agent_role` precedent).** `sub_agent_descent` rides `StepExecutionContext` (the per-step execution metadata surface), NOT `StepEffectiveBinding` (whose `model_dump` feeds the §16.5.4 per-step-override outcome-hash) and NOT the §5.2 IS state-ledger hash. It is a **hash-inert, per-step-transient, NOT-persisted** carrier — the same posture as `hitl_placements` (v1.49 §6.2), `run_engine_class`, and `effect_fence_resolution`. So there is **NO §5.2 IS-hash change** and **NO per-step-override outcome-hash change**; a `False` default → byte-identical to pre-slice-3a (a top-level dispatch).
+
+**Spec-vs-fork.** Bundled-absorption amendment materializing a COMMITTED contract (ADR-D4 §1.5's `sub_agent_tool_registry` REMOVE disposition), NOT X-AL-3 design extension. The REMOVE half was a committed-but-unbuilt unit; this delta adds only the CP carrier the runtime reads. No committed decision is sacrificed → **no operator gate**. The consuming runtime behavior + the C10 re-confirmation (`.harness/u1-slice3a-c10-reconfirmation.md`: the child superset is a monotone subset of the parent's — downgrade can only REDUCE visibility — execution gating untouched → no blast-radius regression) live in the paired runtime spec v1.96.
+
+**Invariants preserved.** NO §5.2 IS-hash change. NO new contract / ADR / enum / fail-class / CXA edge / `StepDispatcher` Protocol widening. NO contract removal. The `StepExecutionContext` addition is additive-optional (default `False`); the driver-composition precedent (`hitl_placements` at every site + `model_copy` inheritance) is followed exactly. No cardinality/field-count test asserts a `StepExecutionContext.model_fields` count (verified).
+
+**Decorrelated review.** advisor full-transcript (BEFORE substantive work — broke the Option-A-vs-B tie toward the per-call `StepExecutionContext` carrier over a dual-registry clone; flagged the wrapper-stack `step_context` propagation witness [grep-confirmed: `SyncDispatcherFacade` / `RetryBreakerFallbackDispatcher` / `RuntimeHITLGateComposer` all forward the identical `step_context` object unchanged to inner]) + out-of-family Codex (gpt-5.5, subscription) on the diff (caught the empty-child `payload.tools` fallback [P2], fixed at the runtime seam).
+
+## Filing footer
+
+| Field | Value |
+|---|---|
+| Artifact | `Spec_Control_Plane_v1_86.md` (delta over v1.85) |
+| Arc | U-1 slice 3a — `StepExecutionContext.sub_agent_descent` CP carrier (F1 close) |
+| Paired runtime | `Spec_Harness_Runtime_v1.md` change-note v1.95 → v1.96 |
+| Disposition | additive `StepExecutionContext` field; no contract/enum/fail-class/§5.2-hash change |
+| Decorrelated | advisor full-transcript (Option-B tie-break + propagation witness) + out-of-family Codex on the diff |
+| IS / OD / AS / ADR | UNCHANGED. ADR-D4 §1.5 is the committed source (impl-of-committed, not extension). CXA v2.20 UNCHANGED |
