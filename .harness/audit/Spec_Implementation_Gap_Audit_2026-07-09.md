@@ -68,13 +68,30 @@ This is the **inverse** of the memory gap on the only axis this audit measures. 
 
 ---
 
+## 3b. Full independent re-audit — all axes (operator-requested extension)
+
+Layers 1–2 leaned on the prior 2026-06-20 audit + arc-ledger for the pre-2026-06-20 surface. At operator request, that reliance was replaced with a **from-scratch independent verification of every head contract and unit** — a 26-agent structured workflow: per-axis-chunk **verify** (classify each ID BUILT / STUB / MISSING / DEFINITIONAL_NA / UNSURE with file:line evidence) → **adversarial refute** of every flag (a second independent agent tries to *find* the code, catching false-negatives) → synthesize. Denominator = the head-scoped keyspace (canonical-head-scoped via the overlay module): **143 contracts + 289 units = 432 items** (a deliberate superset of the prior audit's 108/195 — includes Memory and every axis).
+
+**Result: 426 BUILT (or refuted = code found on second pass), 6 DEFINITIONAL_NA, 0 surviving flags.** Zero designed-but-unbuilt gaps across the entire harness. The 6 non-built items are all correctly not-code (each re-grounded by hand):
+
+| ID | Disposition (re-grounded) |
+|---|---|
+| **C-IS-11** | Phantom IS contract — IS spec defines only C-IS-01..10; stale cross-axis ref (→ F-B). |
+| **C-IS-13** | Phantom IS contract — 0 IS-spec definition; remapped to **C-IS-10 §10.3** (OD plan v2.4 §0.4.2) (→ F-B). |
+| **C-IS-14** | Phantom IS contract — 0 IS-spec definition; **CXA v2.18: `was C-IS-14 §14.2 → now C-IS-10 §10.5`** (→ F-B). |
+| **C-MEM-01** | Definitional plane-boundary contract; invariants enforced by C-MEM-02+ (§2). |
+| **U-IS-18** | Retired at IS plan v2.5, **relocated to U-RT-112** — built at `harness-runtime/.../procedural_tier_snapshot.py`. Not a gap. |
+| **U-RT-00** | Meta-unit ("this spec IS the authoring unit"); no own code. |
+
+This independent whole-harness pass **confirms** Layers 1–2 (no gaps) and closes the "rests on the prior audit" scope caveat for the original axes. It also broadened F-B from one phantom cite to a **C-IS-11/13/14 family** whose remap targets are already decided in-corpus.
+
 ## 4. Findings
 
 No designed-but-unbuilt gaps. Two cite-hygiene items (both Class 3 informational; neither changes behavior, neither re-opens a cleared decision):
 
 | # | Finding | Class | Signature | Remediation |
 |---|---|---|---|---|
-| **F-B** | **`C-IS-11` live phantom cite in a cleared head.** `Spec_Harness_Runtime_v1.md` body (`:3846`, `:3850`) cites "IS C-IS-11 §11.1" for `WriteResult`/append semantics, while its own change-note (`:2431`) says C-IS-11 doesn't exist; also cited in CP specs. C-IS-11 is confirmed **not defined** in the IS spec (0 definitions). The co-cited **C-IS-10 §10.5** *is* real (a substrate seam export); the real write/`WriteResult` contract is **C-IS-07 §7.1** (idempotent-write contract). | 3 (informational / cite-hygiene) | forward/phantom cite in a cleared head | In the next Runtime-spec delta: **strike the phantom "+ C-IS-11 §11.1"** at `:3846`/`:3850` (C-IS-10 §10.5 already carries the seam cite; add C-IS-07 §7.1 if a write-semantics cite is wanted). Also sweep the CP specs for the same phantom. Clearance marker. Distinct from prior RB-DOC-03 (superseded-version phantoms; this is a live head). |
+| **F-B** | **Phantom IS-contract cite family `C-IS-11 / C-IS-13 / C-IS-14` — none defined in the IS spec (which defines only C-IS-01..10), yet cited across cleared Runtime / CP / OD / CXA specs, and one in landed code.** The remap targets are already decided in-corpus: `C-IS-11 §11.1` (Runtime spec body `:3846`/`:3850`, whose own change-note `:2431` says it doesn't exist → write contract is **C-IS-07 §7.1**, seam **C-IS-10 §10.5** already co-cited); `C-IS-13 §13.5 → C-IS-10 §10.3` (OD plan v2.4 §0.4.2); `C-IS-14 §14.2 → C-IS-10 §10.5` (CXA v2.18 `:50`). **Code-side residue:** the landed `U-OD-30` docstring still cites pre-remap `C-IS-14 §14.2 / C-IS-13 §13.5` (CXA v2.3 `:167` marks it "update when next touched, non-blocking"). | 3 (informational / cite-hygiene) | phantom/pre-remap cites in cleared heads + one code docstring | Propagate the **already-decided remaps** (strike C-IS-11; C-IS-13→C-IS-10 §10.3; C-IS-14→C-IS-10 §10.5) into the remaining stale sites across Runtime/CP/OD specs + the `U-OD-30` code docstring. No design decision — just finishing an in-flight remap. Clearance marker. Distinct from prior RB-DOC-03 (superseded-version phantoms; these are live heads + code). |
 | **F-C** | **Two `code_without_cite` orphans** (soft; overlay drift gate GREEN — not HARD seam violations). (a) `automatic_memory.py` — real "Automatic local memory substrate wiring", wired into bootstrap (§2), 0 C-*/U-* cites. (b) `external_cli_provider.py` — 766-line routing surface, authority is ADR-D7 §Decision + C-RT-05 (the cleared placement of §3), but the file cites neither. | 3 (cite-hygiene) | code without cite | (a) add a `C-MEM-*` docstring cite (candidate C-MEM-11 retrieval / C-MEM-12 packet assembly — pick the contract the wiring realizes). (b) add a one-line docstring cite to **ADR-D7 §Decision / C-RT-05** (makes the authority chain navigable; clears the orphan without inventing a contract family). |
 
 **Downgraded (recorded so the reasoning is auditable):** an earlier draft flagged "external-CLI routing has no dedicated contract family" as a substantive FULL-SPEC finding. That was **over-excavation** and is withdrawn: ADR-D7 §Decision (line 88) is an affirmative, cleared placement of routing under the generic provider-construction contracts, not a deferred capability (§3). The only residue is the uncited file, captured as F-C(b). Surfacing it as an operator fork would spend a scarce decision signal on a non-fork and re-open a cleared ADR — the failure mode, not diligence.
@@ -94,7 +111,7 @@ These are already documented in the forward register / prior audit — enumerate
 
 ## 6. Conclusion
 
-**No designed-but-unbuilt gaps found. The design corpus and implementation are coherent.** The overlay-visible spec→code layer is clean (0 HARD seam orphans; all 4 contract/unit orphans are phantom/definitional/uncited-but-built). The live arc-ledger confirms R-FS-1 is genuinely resolved (`0 forward`, not merely label-RESOLVED). The memory substrate — the exemplar gap this audit was commissioned to guard against — is fully built **and reachable** (automatic-memory wired at bootstrap stage 5). The newest un-audited subsystem, external-CLI routing, is built, tested, running, and its authority is a cleared ADR-D7 placement — coherent, not a gap.
+**No designed-but-unbuilt gaps found, across the entire harness. The design corpus and implementation are coherent.** Confirmed at three independent depths: (1) the overlay-visible spec→code layer is clean (0 HARD seam orphans); (2) the live arc-ledger confirms R-FS-1 genuinely resolved (`0 forward`); (3) an **independent from-scratch re-verification of all 432 head contracts + units** (26-agent verify + adversarial-refute, §3b) returned **0 surviving flags** — 426 built, 6 correctly-not-code (3 phantom cites, 1 plane-boundary contract, 1 relocated-and-built unit, 1 meta-unit). The memory substrate — the exemplar gap this audit was commissioned to guard against — is fully built **and reachable** (automatic-memory wired at bootstrap stage 5). The newest un-audited subsystem, external-CLI routing, is built, tested, running, and its authority is a cleared ADR-D7 placement — coherent, not a gap.
 
 What the audit surfaces is **two cite-hygiene items**, both Class 3, neither behavior-changing:
 
@@ -103,7 +120,7 @@ What the audit surfaces is **two cite-hygiene items**, both Class 3, neither beh
 
 An audit that resists inventing work is the stronger result. **No operator decision is owed** — F-B and F-C are mechanical doc-hygiene, fixable in a single design-phase pass (spec-writer posture) with a clearance marker: F-B in the next Runtime/CP spec delta; F-C as one-line docstring cites in the two runtime files. No new contracts, no re-litigation of cleared decisions.
 
-**Scope honesty:** this audit's "no gaps" for the pre-2026-06-20 surface rests on the prior audit + the live arc-ledger (it did not re-derive all 108 contracts from scratch); it independently pressure-tested the two post-2026-06-20 additions (memory, external-CLI) and the overlay orphan set at HEAD. The gap definition is presence (designed-but-unbuilt), not correctness of built features — a correctness audit is a separate exercise.
+**Scope honesty:** the whole-harness "no gaps" is now backed by an independent from-scratch re-verification of all 432 head contracts + units (§3b), not only the prior audit + arc-ledger. The two newest additions (memory, external-CLI) were additionally deep-verified by hand. The gap definition is **presence** (designed-but-unbuilt), not **correctness** of built features — the re-audit confirms every contract/unit has substantive landed code, but a correctness/behavioral audit (does the built code do the right thing under all inputs) is a separate exercise not performed here.
 
 ---
 
