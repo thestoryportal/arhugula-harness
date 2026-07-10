@@ -1856,6 +1856,24 @@ class RuntimeConfig(BaseModel):
     by `enforce_prompt_version_approval` (lifecycle/prompt_selection.py).
     """
 
+    prompt_cache_long_ttl_workloads: frozenset[WorkloadClass] = frozenset()
+    """Workload classes that use the 1hr Anthropic prompt-cache ttl tier (U-1
+    slice 3b; ADR-D3 §1.5 line 188 `ttl: 5min default; 1hr at Persona §6
+    cost-ceiling cells where epoch > 5min`).
+
+    Persona §6 records the cost ceiling as per-workload-class + operator-asserted
+    (no fixed cell matrix), so the "cost-ceiling cells" that warrant the >5min
+    (1hr) epoch are an operator opt-in: name the workload classes for which the
+    2× cache-write cost amortizes against a tight per-class ceiling. The run's
+    `workload_class` (bound at bootstrap stage 5) selects `"1h"` iff it is a
+    member, else `"5m"` (`cacheable_epoch.select_cache_ttl`), threaded onto
+    `RuntimeLLMDispatcher.cache_ttl` and consumed at the Anthropic translate seam.
+    The default `frozenset()` → every class uses `"5m"` → byte-identical to
+    pre-slice-3b (zero config burden). Gates a cost optimization, not correctness
+    (the 5m default is always correct), so — like the other RuntimeConfig
+    collections — this is a file/CLI-only field, NOT env-keyed.
+    """
+
     trust_policy: TrustPolicy | None = None
     """Operator-supplied per-server trust policy (CP spec v1.11 §27.2 carrier).
 
