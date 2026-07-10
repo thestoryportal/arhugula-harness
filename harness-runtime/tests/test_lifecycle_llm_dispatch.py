@@ -1911,6 +1911,108 @@ async def test_anthropic_cache_breakpoint_id_and_ttl_extracted_from_request() ->
 
 
 # ---------------------------------------------------------------------------
+# B-18-CACHE-TTL-OBSERVABILITY — the U-1 cache breakpoint lands on the TOOLS or
+# SYSTEM block at translate-time (not on a message), so the pre-B-18
+# messages-only scan never recorded `anthropic.cache_ttl_seconds` /
+# `cache_breakpoint_id` for the common slice-1/2/3a/3b case. These prove the
+# generalized wire-kwargs scan records the tools/system breakpoint through the
+# REAL dispatch chain (`[[full-chain-witness-not-half-proofs]]`).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_b18_tools_block_breakpoint_records_cache_ttl_on_span() -> None:
+    """Tools-block breakpoint (slice 1 / 3a path, no system prompt) → the span
+    records `anthropic.cache_breakpoint_id == "tools"` + `cache_ttl_seconds == 300`."""
+    superset = _u1_big_superset()
+    adapter = _AnthropicFakeAdapter(_AnthropicClient())
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": adapter},
+        tracer_provider=tp,
+        frozen_tool_superset=superset,
+    )
+
+    await dispatcher.dispatch(_binding("anthropic"), _step(), step_context=_step_context())
+
+    attrs = exporter.get_finished_spans()[0].attributes or {}
+    assert attrs["anthropic.cache_breakpoint_id"] == "tools"
+    assert attrs["anthropic.cache_ttl_seconds"] == 300
+
+
+@pytest.mark.asyncio
+async def test_b18_system_block_breakpoint_records_cache_ttl_on_span() -> None:
+    """System-block breakpoint (slice 2 path — system prompt + bound superset) →
+    the span records `cache_breakpoint_id == "system"` + `cache_ttl_seconds == 300`."""
+    superset = _u1_big_superset()
+    adapter = _AnthropicFakeAdapter(_AnthropicClient())
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": adapter},
+        tracer_provider=tp,
+        active_system_prompt=_SYS,
+        frozen_tool_superset=superset,
+    )
+
+    await dispatcher.dispatch(_binding("anthropic"), _step(), step_context=_step_context())
+
+    attrs = exporter.get_finished_spans()[0].attributes or {}
+    assert attrs["anthropic.cache_breakpoint_id"] == "system"
+    assert attrs["anthropic.cache_ttl_seconds"] == 300
+
+
+@pytest.mark.asyncio
+async def test_b18_selected_1h_ttl_reaches_the_span_attribute() -> None:
+    """The slice-3b higher-value case: a `cache_ttl="1h"` selection is recorded as
+    `anthropic.cache_ttl_seconds == 3600` on the span (not just on the wire marker)."""
+    superset = _u1_big_superset()
+    adapter = _AnthropicFakeAdapter(_AnthropicClient())
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": adapter},
+        tracer_provider=tp,
+        frozen_tool_superset=superset,
+        cache_ttl="1h",
+    )
+
+    await dispatcher.dispatch(_binding("anthropic"), _step(), step_context=_step_context())
+
+    attrs = exporter.get_finished_spans()[0].attributes or {}
+    assert attrs["anthropic.cache_breakpoint_id"] == "tools"
+    assert attrs["anthropic.cache_ttl_seconds"] == 3600
+
+
+@pytest.mark.asyncio
+async def test_b18_no_breakpoint_leaves_cache_ttl_attrs_absent() -> None:
+    """Negative control: no bound superset + plain `payload.tools` → no marker on the
+    wire → the request-side cache attrs stay ABSENT from the span (no false positive)."""
+    payload_tools = [{"name": "legacy", "description": "d", "input_schema": {"type": "object"}}]
+    adapter = _AnthropicFakeAdapter(_AnthropicClient())
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": adapter},
+        tracer_provider=tp,
+        frozen_tool_superset=None,
+    )
+
+    await dispatcher.dispatch(
+        _binding("anthropic"),
+        _step(
+            {
+                "messages": [{"role": "user", "content": "hi"}],
+                "tools": payload_tools,
+                "params": {"max_tokens": 100},
+            }
+        ),
+        step_context=_step_context(),
+    )
+
+    attrs = exporter.get_finished_spans()[0].attributes or {}
+    assert "anthropic.cache_breakpoint_id" not in attrs
+    assert "anthropic.cache_ttl_seconds" not in attrs
+
+
+# ---------------------------------------------------------------------------
 # AC #5 — RT-FAIL-PROVIDER-UNREACHABLE.
 # ---------------------------------------------------------------------------
 

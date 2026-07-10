@@ -325,49 +325,82 @@ def _set_if_present(span: Any, key: str, value: Any) -> None:
         span.set_attribute(key, value)
 
 
+def _cache_control_ttl_seconds(cache_control: Mapping[str, Any]) -> int | None:
+    """Translate an Anthropic ``cache_control.ttl`` label to seconds.
+
+    ``"5m"`` → 300; ``"1h"`` → 3600; absent ttl → 300 (Anthropic's
+    default when a ``cache_control`` directive is present without an
+    explicit ttl); unrecognized label → ``None``.
+    """
+    ttl_label = cast(Any, cache_control.get("ttl"))
+    if ttl_label == "1h":
+        return 3600
+    if ttl_label == "5m":
+        return 300
+    if ttl_label is None:
+        return 300  # Anthropic default
+    return None
+
+
+def _first_cache_control_in_blocks(blocks: object) -> Mapping[str, Any] | None:
+    """Return the first block-level ``cache_control`` mapping in a content-block
+    list (a ``tools`` list, the structured ``system`` content-block array, or a
+    message's ``content`` list), else ``None``.
+
+    Non-list shapes (e.g. a plain-string ``system``) return ``None`` — they
+    carry no block-level ``cache_control`` directive.
+    """
+    if not isinstance(blocks, list):
+        return None
+    for block in cast(list[Any], blocks):
+        if not isinstance(block, Mapping):
+            continue
+        cache_control = cast(Any, cast(Mapping[str, Any], block).get("cache_control"))
+        if isinstance(cache_control, Mapping):
+            return cast(Mapping[str, Any], cache_control)
+    return None
+
+
 def _extract_anthropic_cache_request_attrs(
-    payload: ProviderAgnosticPayload,
+    request_kwargs: Mapping[str, Any],
 ) -> tuple[str | None, int | None]:
     """Extract ``anthropic.cache_breakpoint_id`` + ``anthropic.cache_ttl_seconds``
-    from the request payload's ``cache_control`` directives, if present.
+    from the TRANSLATED wire kwargs' ``cache_control`` directives, if present.
 
-    Per Anthropic prompt-caching docs, ``cache_control`` lives on
-    individual content blocks within ``messages`` (and optionally on
-    ``system`` / ``tools``). The breakpoint_id is the ordinal of the
-    first cache_control-bearing block (≤4 per Anthropic limit); the
-    ttl is the ``cache_control.ttl`` field translated to seconds
-    (``"5m"`` → 300; ``"1h"`` → 3600). Returns ``(None, None)`` when
-    no cache_control directive is present.
+    Anthropic honors ``cache_control`` on ``tools`` blocks, the structured
+    ``system`` content-block array, and ``messages`` content blocks, cached in
+    that prefix order (``tools → system → messages``). The U-1 (B-18) cache
+    breakpoint lands on the tools block (slice 1 / 3a) or the system block
+    (slice 2), and is placed at TRANSLATE time on the wire kwargs — never on the
+    frozen ``ProviderAgnosticPayload``. Scanning the wire kwargs (rather than
+    ``payload.messages``, the pre-B-18 source) is therefore the single source of
+    truth for what was actually sent, and records the tools/system breakpoint the
+    messages-only scan missed (closes B-18-CACHE-TTL-OBSERVABILITY uniformly for
+    slices 1/2/3a/3b).
 
-    The extraction is best-effort: payloads that don't follow the
-    cache-control convention return ``(None, None)`` rather than
-    raising. Per C-AS-14 §14.2 these attributes have low cardinality
-    (≤4 breakpoints; binary ttl).
+    Returns the breakpoint position id (``"tools"`` / ``"system"`` /
+    ``"msg-{index}"``) + the ttl in seconds for the FIRST cache_control-bearing
+    position in prefix order, or ``(None, None)`` when no directive is present.
+    Per C-AS-14 §14.2 these attributes are low-cardinality (≤4 breakpoints;
+    binary ttl). Best-effort: shapes that don't follow the convention return
+    ``(None, None)`` rather than raising.
     """
-    for index, message in enumerate(payload.messages):
-        content = cast(Any, message.get("content"))
-        if not isinstance(content, list):
-            continue
-        blocks = cast(list[Any], content)
-        for block in blocks:
-            if not isinstance(block, Mapping):
+    tools_cc = _first_cache_control_in_blocks(request_kwargs.get("tools"))
+    if tools_cc is not None:
+        return ("tools", _cache_control_ttl_seconds(tools_cc))
+    system_cc = _first_cache_control_in_blocks(request_kwargs.get("system"))
+    if system_cc is not None:
+        return ("system", _cache_control_ttl_seconds(system_cc))
+    messages = request_kwargs.get("messages")
+    if isinstance(messages, list):
+        for index, message in enumerate(cast(list[Any], messages)):
+            if not isinstance(message, Mapping):
                 continue
-            block_mapping = cast(Mapping[str, Any], block)
-            cache_control = cast(Any, block_mapping.get("cache_control"))
-            if not isinstance(cache_control, Mapping):
-                continue
-            cc_mapping = cast(Mapping[str, Any], cache_control)
-            ttl_label = cast(Any, cc_mapping.get("ttl"))
-            ttl_seconds: int | None
-            if ttl_label == "1h":
-                ttl_seconds = 3600
-            elif ttl_label == "5m":
-                ttl_seconds = 300
-            elif ttl_label is None:
-                ttl_seconds = 300  # Anthropic default
-            else:
-                ttl_seconds = None
-            return (f"msg-{index}", ttl_seconds)
+            message_cc = _first_cache_control_in_blocks(
+                cast(Mapping[str, Any], message).get("content")
+            )
+            if message_cc is not None:
+                return (f"msg-{index}", _cache_control_ttl_seconds(message_cc))
     return (None, None)
 
 
@@ -2169,6 +2202,7 @@ def _anthropic_response_bundle(
     response: Any,
     payload: ProviderAgnosticPayload,
     model: str,
+    request_kwargs: Mapping[str, Any],
 ) -> tuple[Mapping[str, Any], _UsageAttrs, _AnthropicCacheAttrs, _AnthropicRequestAttrs]:
     usage = getattr(response, "usage", None)
     usage_attrs = _UsageAttrs(
@@ -2176,7 +2210,11 @@ def _anthropic_response_bundle(
         output_tokens=getattr(usage, "output_tokens", None),
         response_id=getattr(response, "id", None),
     )
-    cache_breakpoint_id, cache_ttl_seconds = _extract_anthropic_cache_request_attrs(payload)
+    # B-18-CACHE-TTL-OBSERVABILITY — scan the TRANSLATED wire kwargs (tools /
+    # system / messages), NOT `payload.messages`: the U-1 cache breakpoint is
+    # placed on the tools/system block at translate-time, so the pre-B-18
+    # messages-only scan never observed it.
+    cache_breakpoint_id, cache_ttl_seconds = _extract_anthropic_cache_request_attrs(request_kwargs)
     cache_attrs = _AnthropicCacheAttrs(
         cache_creation_input_tokens=getattr(usage, "cache_creation_input_tokens", None),
         cache_read_input_tokens=getattr(usage, "cache_read_input_tokens", None),
@@ -2232,7 +2270,7 @@ async def _dispatch_anthropic_with_hitl_tool_loop(
         response = await adapter.client.messages.create(model=model, **kwargs)
         tool_use_blocks = _anthropic_tool_use_blocks(response)
         if not tool_use_blocks:
-            return _anthropic_response_bundle(response, payload, model)
+            return _anthropic_response_bundle(response, payload, model, kwargs)
 
         calls = tuple(
             _model_tool_call_from_anthropic_block(
@@ -2316,7 +2354,7 @@ async def _dispatch_anthropic_with_memory(
         context_editing_active=context_editing_active,
     )
 
-    return _anthropic_response_bundle(response, payload, model)
+    return _anthropic_response_bundle(response, payload, model, kwargs)
 
 
 async def _dispatch_anthropic(
@@ -2335,7 +2373,7 @@ async def _dispatch_anthropic(
     )
     response = await adapter.client.messages.create(model=model, **kwargs)
 
-    return _anthropic_response_bundle(response, payload, model)
+    return _anthropic_response_bundle(response, payload, model, kwargs)
 
 
 async def _dispatch_openai(
