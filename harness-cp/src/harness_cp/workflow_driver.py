@@ -7588,7 +7588,7 @@ def _execute_parallelization(
                 # siblings and STILL drain branch[0]'s buffered ledger entries (PARTIAL).
                 try:
                     first: Any = await _proceed_branch(*branch_plan[0])
-                except Exception as exc:  # NOT BaseException: CancelledError/TimeoutError propagate
+                except Exception as exc:  # NOT BaseException: deadline CancelledError propagates
                     first = exc
                 rest = await asyncio.gather(
                     *(_proceed_branch(*plan) for plan in branch_plan[1:]),
