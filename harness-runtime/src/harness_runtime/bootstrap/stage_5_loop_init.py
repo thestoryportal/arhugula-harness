@@ -58,6 +58,7 @@ from harness_runtime.lifecycle.engine_output_store import (
     EngineOutputStore,
     engine_output_dir_for,
 )
+from harness_runtime.lifecycle.frozen_tool_superset import compute_frozen_tool_superset
 from harness_runtime.lifecycle.hitl_gate_composer import RuntimeHITLGateComposer
 from harness_runtime.lifecycle.inter_step_output_channel import RunScopedInterStepOutputChannel
 from harness_runtime.lifecycle.lifecycle_emitter import materialize_lifecycle_emitter_stage
@@ -289,6 +290,24 @@ async def execute(
             workload_class=workload_class,
             tracer_provider=tracer_provider,
         )
+        # U-1 (B-18) — compute the deterministic frozen tool superset for the
+        # Anthropic prompt-cache `cache_control` breakpoint (ADR-D3 §1.5 slice 1).
+        # C10 condition 1/2: derive from THIS dispatch's OWN resolved registry
+        # (`ctx.mcp_client_hosts` — the top-level, single-privilege-tier set;
+        # slice 1 is single-threaded-linear, no sub-agents), never a captured
+        # parent set. Include the Memory tool def when the run is memory-capable
+        # (mirrors the `_dispatch_anthropic_with_memory` gate MINUS the per-step
+        # `step_has_memory_tool`) so a memory step's step-declared memory tool is
+        # NOT dropped when the superset REPLACES `payload.tools`. Empty union
+        # (no MCP tools + no memory) → None → byte-identical legacy path.
+        # (The dispatch gate is `memory_tool_registry is not None AND
+        # deployment_surface is not None`; `config.deployment_surface` is a
+        # required literal here [never None], so gating on the registry alone is
+        # the faithful mirror.)
+        frozen_tool_superset = compute_frozen_tool_superset(
+            ctx.mcp_client_hosts,
+            include_memory_tool=ctx.memory_tool_registry is not None,
+        )
         bare_dispatcher = materialize_llm_dispatcher_stage(
             providers,
             cast(Any, tracer_provider),
@@ -326,6 +345,11 @@ async def execute(
             # bootstrap seam: the dispatcher injects the active prompt as a system
             # prompt at translate-time per runtime spec v1.44 §14.5.
             active_system_prompt=ctx.prompt_manifest.active_prompt_version.content or None,
+            # U-1 (B-18) — the deterministic frozen tool superset (or None when
+            # no MCP tools + no memory). Top-level, single-privilege-tier only
+            # (C10 condition 1); sub-agent / downgraded dispatchers are not
+            # constructed here and inherit the field's None default (fail-safe).
+            frozen_tool_superset=frozen_tool_superset,
             memory_runtime=automatic_memory_runtime,
             fallback_chain=fallback_chain,
             # R-FS-1 arc B4 (§14.5.3) — the per-role PROMPT injection map resolved
