@@ -89,6 +89,7 @@ from harness_cp.validator_fail_transient_staircase import CrossTrustBoundaryStat
 from harness_cp.workflow_driver_types import StepExecutionContext, StepKind, WorkflowStep
 from harness_od.otel_genai_base import HIERARCHY_CORRELATION_KEY, GenAiOperation
 
+from harness_runtime.lifecycle.cacheable_epoch import DEFAULT_CACHE_TTL, CacheTTL
 from harness_runtime.lifecycle.cost_record_sink import SupportsCostRecordAppend
 from harness_runtime.lifecycle.hitl_tool_loop import (
     HITLToolLoopContext,
@@ -555,6 +556,15 @@ class RuntimeLLMDispatcher:
     # (no non-removed MCP tools + no memory) → fall back to `payload.tools`.
     # At MVP both supersets are `None` (no MCP tools) → byte-identical.
     child_frozen_tool_superset: tuple[Mapping[str, Any], ...] | None = None
+    # U-1 slice 3b (B-18) — the Anthropic prompt-cache ttl for this run (ADR-D3
+    # §1.5 line 188 `ttl: 5min default; 1hr at Persona §6 cost-ceiling cells`).
+    # A run-scoped constant selected at stage 5 from the run's `workload_class` +
+    # `RuntimeConfig.prompt_cache_long_ttl_workloads` (see `cacheable_epoch.
+    # select_cache_ttl`); consumed at the translate seam where the `cache_control`
+    # breakpoint is placed (tools OR system block). `"5m"` (the default) is
+    # byte-identical to pre-slice-3b. Orthogonal to WHICH block is marked (slice
+    # 1/2) and to the superset CONTENT (slice 3a) — it only sets the ttl value.
+    cache_ttl: CacheTTL = DEFAULT_CACHE_TTL
     # U-MEM-15 — prompt-extension memory fallback context. When C-MEM-13 selects
     # `PROMPT_EXTENSION_PACKET`, the dispatcher renders the C-MEM-12 packet as
     # read-only system content and composes it into the existing provider prompt
@@ -1322,6 +1332,7 @@ class RuntimeLLMDispatcher:
                         system=effective_system_prompt,
                         upstream=upstream_output,
                         frozen_tool_superset=_effective_frozen_tool_superset,
+                        cache_ttl=self.cache_ttl,
                     )
                 elif (
                     self.hitl_tool_loop is not None
@@ -1344,6 +1355,7 @@ class RuntimeLLMDispatcher:
                         system=effective_system_prompt,
                         upstream=upstream_output,
                         frozen_tool_superset=_effective_frozen_tool_superset,
+                        cache_ttl=self.cache_ttl,
                     )
                 else:
                     (
@@ -1358,6 +1370,7 @@ class RuntimeLLMDispatcher:
                         system=effective_system_prompt,
                         upstream=upstream_output,
                         frozen_tool_superset=_effective_frozen_tool_superset,
+                        cache_ttl=self.cache_ttl,
                     )
             elif provider_name == "openai":
                 if (
@@ -1696,8 +1709,16 @@ def _extract_anthropic_request_attrs(
 
 
 # U-1 (B-18) — Anthropic prompt-cache breakpoint marker (ADR-D3 §1.5 slice 1).
-# `ttl: "5m"` per the design (§14.5 5-minute ephemeral tier).
-_ANTHROPIC_TOOLS_CACHE_CONTROL: Final[Mapping[str, str]] = {"type": "ephemeral", "ttl": "5m"}
+# Slice 1/2 used a fixed `ttl: "5m"`; slice 3b makes the ttl a run-scoped value
+# selected from the workload class (`cacheable_epoch.select_cache_ttl`, ADR-D3
+# §1.5 line 188 `5min default; 1hr at Persona §6 cost-ceiling cells`). The marker
+# is otherwise unchanged (`type: ephemeral`). `"5m"` reproduces the pre-slice-3b
+# directive byte-for-byte.
+def _anthropic_cache_control(ttl: CacheTTL) -> dict[str, str]:
+    """Return the Anthropic ephemeral `cache_control` directive for a ttl tier."""
+    return {"type": "ephemeral", "ttl": ttl}
+
+
 # Anthropic's minimum cacheable-prefix floor is 1024 tokens for smaller models
 # and 2048/4096 for larger; slice 1 uses the max-model 4096-tok floor (the
 # non-vacuity gate — below it a marker caches nothing = built-but-vacuous).
@@ -1722,6 +1743,7 @@ def _anthropic_tools_with_cache_breakpoint(
     superset: tuple[Mapping[str, Any], ...],
     *,
     extended_thinking: bool,
+    cache_ttl: CacheTTL = DEFAULT_CACHE_TTL,
 ) -> list[Mapping[str, Any]]:
     """Return the wire ``tools`` list for the frozen superset, with the
     ``cache_control`` breakpoint on a COPY of the last block when the gates pass.
@@ -1753,7 +1775,7 @@ def _anthropic_tools_with_cache_breakpoint(
     )
     if marker_idx is None:
         return tools
-    tools[marker_idx] = {**tools[marker_idx], "cache_control": dict(_ANTHROPIC_TOOLS_CACHE_CONTROL)}
+    tools[marker_idx] = {**tools[marker_idx], "cache_control": _anthropic_cache_control(cache_ttl)}
     return tools
 
 
@@ -1785,22 +1807,25 @@ def _combined_prefix_clears_non_vacuity_floor(
     return combined_chars / _TOKENS_PER_CHAR_DIVISOR >= _ANTHROPIC_MIN_CACHEABLE_TOKENS
 
 
-def _anthropic_system_cache_block(system: str) -> list[Mapping[str, Any]]:
+def _anthropic_system_cache_block(
+    system: str, cache_ttl: CacheTTL = DEFAULT_CACHE_TTL
+) -> list[Mapping[str, Any]]:
     """Return the single-element Anthropic ``system`` content-block array with the
     ``cache_control`` breakpoint on its (only, last) text block.
 
     This is the OQ-1 structured/multi-block ``system`` form: instead of the plain
     ``system=<string>``, emit ``system=[{"type": "text", "text": <system>,
-    "cache_control": {"type": "ephemeral", "ttl": "5m"}}]`` so the breakpoint
-    caches ``[tools + system]``. Only ever produced on the marker path; the plain
-    string is preserved on every below-floor / no-superset / extended-thinking path
-    (byte-identical to slice 1 / pre-slice-2).
+    "cache_control": {"type": "ephemeral", "ttl": <cache_ttl>}}]`` so the
+    breakpoint caches ``[tools + system]``. Only ever produced on the marker path;
+    the plain string is preserved on every below-floor / no-superset /
+    extended-thinking path (byte-identical to slice 1 / pre-slice-2). ``cache_ttl``
+    defaults to ``"5m"`` (byte-identical to pre-slice-3b).
     """
     return [
         {
             "type": "text",
             "text": system,
-            "cache_control": dict(_ANTHROPIC_TOOLS_CACHE_CONTROL),
+            "cache_control": _anthropic_cache_control(cache_ttl),
         }
     ]
 
@@ -1810,6 +1835,7 @@ def _payload_to_anthropic_kwargs(
     system: str | None = None,
     upstream: Mapping[str, Any] | None = None,
     frozen_tool_superset: tuple[Mapping[str, Any], ...] | None = None,
+    cache_ttl: CacheTTL = DEFAULT_CACHE_TTL,
 ) -> dict[str, Any]:
     """Translate `ProviderAgnosticPayload` → ``messages.create`` kwargs.
 
@@ -1881,7 +1907,7 @@ def _payload_to_anthropic_kwargs(
             kwargs["tools"] = list(frozen_tool_superset)
         else:
             kwargs["tools"] = _anthropic_tools_with_cache_breakpoint(
-                frozen_tool_superset, extended_thinking=extended_thinking
+                frozen_tool_superset, extended_thinking=extended_thinking, cache_ttl=cache_ttl
             )
     elif payload.tools is not None:
         kwargs["tools"] = list(payload.tools)
@@ -1891,7 +1917,9 @@ def _payload_to_anthropic_kwargs(
             raise PromptInjectionConflictError("anthropic", 'params["system"]')
         # slice 2 — the OQ-1 content-block array WITH the breakpoint when this is
         # the marker position; else the plain string (byte-identical to slice 1).
-        kwargs["system"] = _anthropic_system_cache_block(system) if place_on_system else system
+        kwargs["system"] = (
+            _anthropic_system_cache_block(system, cache_ttl) if place_on_system else system
+        )
     # B-INTERSTEP — Anthropic carries `system` as a top-level kwarg (not a message),
     # so the upstream context goes at messages index 0 (post-`params`-merge).
     _inject_upstream_context_message(kwargs, upstream)
@@ -2171,6 +2199,7 @@ async def _dispatch_anthropic_with_hitl_tool_loop(
     system: str | None = None,
     upstream: Mapping[str, Any] | None = None,
     frozen_tool_superset: tuple[Mapping[str, Any], ...] | None = None,
+    cache_ttl: CacheTTL = DEFAULT_CACHE_TTL,
 ) -> tuple[Mapping[str, Any], _UsageAttrs, _AnthropicCacheAttrs, _AnthropicRequestAttrs]:
     """Anthropic provider branch with generic R-CXA-2 HITL tool continuation.
 
@@ -2183,7 +2212,9 @@ async def _dispatch_anthropic_with_hitl_tool_loop(
     mutable ``messages`` list is rebuilt per turn, but ``system`` is a separate
     kwarg).
     """
-    kwargs = _payload_to_anthropic_kwargs(payload, system, upstream, frozen_tool_superset)
+    kwargs = _payload_to_anthropic_kwargs(
+        payload, system, upstream, frozen_tool_superset, cache_ttl
+    )
     # Seed the per-turn mutable loop list from the TRANSLATED `kwargs["messages"]`
     # (NOT `payload.messages`) so it carries the `params["messages"]` merge result
     # AND the B-INTERSTEP upstream-context injection — otherwise the tool-loop's
@@ -2254,6 +2285,7 @@ async def _dispatch_anthropic_with_memory(
     system: str | None = None,
     upstream: Mapping[str, Any] | None = None,
     frozen_tool_superset: tuple[Mapping[str, Any], ...] | None = None,
+    cache_ttl: CacheTTL = DEFAULT_CACHE_TTL,
 ) -> tuple[Mapping[str, Any], _UsageAttrs, _AnthropicCacheAttrs, _AnthropicRequestAttrs]:
     """Anthropic provider branch with Memory tool inner loop (U-RT-81).
 
@@ -2270,7 +2302,9 @@ async def _dispatch_anthropic_with_memory(
     backend = registry.resolve_backend(deployment_surface)
     configured_backend = registry.configured_backend
     context_editing_active = derive_context_editing_active(payload.params)
-    kwargs = _payload_to_anthropic_kwargs(payload, system, upstream, frozen_tool_superset)
+    kwargs = _payload_to_anthropic_kwargs(
+        payload, system, upstream, frozen_tool_superset, cache_ttl
+    )
 
     response = await execute_with_memory_callbacks(
         adapter=adapter,
@@ -2293,9 +2327,12 @@ async def _dispatch_anthropic(
     system: str | None = None,
     upstream: Mapping[str, Any] | None = None,
     frozen_tool_superset: tuple[Mapping[str, Any], ...] | None = None,
+    cache_ttl: CacheTTL = DEFAULT_CACHE_TTL,
 ) -> tuple[Mapping[str, Any], _UsageAttrs, _AnthropicCacheAttrs, _AnthropicRequestAttrs]:
     """Anthropic provider branch — ``client.messages.create(...)``."""
-    kwargs = _payload_to_anthropic_kwargs(payload, system, upstream, frozen_tool_superset)
+    kwargs = _payload_to_anthropic_kwargs(
+        payload, system, upstream, frozen_tool_superset, cache_ttl
+    )
     response = await adapter.client.messages.create(model=model, **kwargs)
 
     return _anthropic_response_bundle(response, payload, model)
@@ -2772,6 +2809,7 @@ def materialize_llm_dispatcher_stage(
     active_system_prompt: str | None = None,
     frozen_tool_superset: tuple[Mapping[str, Any], ...] | None = None,
     child_frozen_tool_superset: tuple[Mapping[str, Any], ...] | None = None,
+    cache_ttl: CacheTTL = DEFAULT_CACHE_TTL,
     memory_context: RuntimeMemoryContext | None = None,
     standard_memory_tool_executor: Any = None,
     memory_runtime: Any = None,
@@ -2855,6 +2893,7 @@ def materialize_llm_dispatcher_stage(
         active_system_prompt=active_system_prompt,
         frozen_tool_superset=frozen_tool_superset,
         child_frozen_tool_superset=child_frozen_tool_superset,
+        cache_ttl=cache_ttl,
         memory_context=memory_context,
         standard_memory_tool_executor=standard_memory_tool_executor,
         memory_runtime=memory_runtime,

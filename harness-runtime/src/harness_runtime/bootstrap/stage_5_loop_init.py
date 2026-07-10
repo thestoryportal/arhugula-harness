@@ -53,6 +53,7 @@ from harness_runtime.bootstrap.factories.webhook_delivery_composer_factory impor
     materialize_webhook_delivery_composer_stage,
 )
 from harness_runtime.bootstrap.mutable_context import _MutableHarnessContext
+from harness_runtime.lifecycle.cacheable_epoch import select_cache_ttl
 from harness_runtime.lifecycle.child_workflow_runner import compose_child_workflow_runner
 from harness_runtime.lifecycle.engine_output_store import (
     EngineOutputStore,
@@ -324,6 +325,12 @@ async def execute(
             include_memory_tool=ctx.memory_tool_registry is not None,
             remove_tiers=CHILD_DOWNGRADE_REMOVE_TIERS,
         )
+        # U-1 slice 3b (B-18) — the run-scoped Anthropic prompt-cache ttl (ADR-D3
+        # §1.5 line 188). `"1h"` iff the run's workload class is an operator-opted
+        # cost-ceiling cell, else `"5m"` (byte-identical to pre-slice-3b when the
+        # opt-in set is empty). Bound onto the dispatcher and consumed where the
+        # `cache_control` breakpoint is placed (tools/system block).
+        cache_ttl = select_cache_ttl(workload_class, config.prompt_cache_long_ttl_workloads)
         bare_dispatcher = materialize_llm_dispatcher_stage(
             providers,
             cast(Any, tracer_provider),
@@ -353,6 +360,7 @@ async def execute(
             # from RuntimeConfig. The DECLARATIVE-echo path is behavior-preserving.
             routing_manifest=ctx.routing_manifest,
             workload_class=workload_class,
+            cache_ttl=cache_ttl,
             persona_tier=config.persona_tier,
             # R-PM-1 cascade PR #1 — resolve the active prompt's inline content from
             # the stage-0-copied `ctx.prompt_manifest` (operator-supplied via
