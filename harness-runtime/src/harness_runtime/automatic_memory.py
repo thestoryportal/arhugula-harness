@@ -4,6 +4,10 @@ This module binds the existing memory store, derived retrieval index,
 retriever, prompt-packet composer, and standard tool executor from
 ``RuntimeConfig.memory``. The substrate is local-first: provider-native remote
 memory is opt-in and remains the lowest-priority access mode.
+
+Realizes the runtime composition of C-MEM-11 (retrieval and ranking),
+C-MEM-12 (memory packet assembly), and C-MEM-14 (provider-neutral memory
+tools) over the C-MEM-09 policy and C-MEM-08 operation ledger.
 """
 
 from __future__ import annotations

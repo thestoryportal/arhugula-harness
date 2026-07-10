@@ -255,7 +255,7 @@ def test_assert_tenant_id_not_required_at_non_multi_tenant_cell() -> None:
 
 
 def test_audit_signature_required_at_tier_5_ledger() -> None:
-    """§21.2 + C-IS-14 §14.2 — audit-signature attestation required at Tier-5."""
+    """§21.2 + C-IS-10 §10.5 — audit-signature attestation required at Tier-5."""
     assert AUDIT_SIGNATURE_REQUIRED_AT_TIER_5_LEDGER is True
 
 

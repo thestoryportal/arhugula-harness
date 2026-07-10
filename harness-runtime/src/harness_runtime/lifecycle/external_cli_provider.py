@@ -3,6 +3,11 @@
 R-CLI-1 deliberately uses the official local CLI as the auth boundary. The
 runtime passes text over stdin and reads JSON over stdout; it never reads or
 stores OAuth/session tokens and never invokes a shell.
+
+Authority: ADR-D7 §Decision places external CLI routing under the C-RT-05
+provider-construction authority; the operator-supply surface is the C-RT-02
+``RuntimeConfig`` external-CLI fields (per
+``class_1_fork_provider_construction_allowlist_semantic.md``).
 """
 
 from __future__ import annotations
