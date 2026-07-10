@@ -25,14 +25,14 @@ U-OD-04 OTel-handle alias family (`otel_genai_base`) via the `[U-OD-04]` edge.
 
 Cross-axis composition (resolves at sub-phase 7c — NOT imported here). The
 audit-ledger composition has three cross-axis IS/CP edges per OD plan v2.1
-§3.7.4 "Cross-axis dependency resolution": IS C-IS-14 §14.2 (Tier-5 audit
-ledger durability), IS C-IS-13 §13.5 (hash-chain integrity primitive), CP
+§3.7.4 "Cross-axis dependency resolution": IS C-IS-10 §10.5 (Tier-5 audit
+ledger durability), IS C-IS-10 §10.3 (hash-chain integrity primitive), CP
 C-CP-20 §20.4 (audit namespace 7-attribute schema). These resolve to the
 IS-exported `StateLedgerEntry` shape + hash-chain discipline (NOT to an
 `AuditLedger` type — `AuditLedger` is OD-axis-local) and the CP-emitted audit
 namespace; per U-OD-34 / CXA v2.1 the edge wiring lands at 7c. `verify_hash_
 chain_integrity` here is the OD-side hash-chain walk over OD-local `AuditLedger`
-entries; it composes with the IS C-IS-13 §13.5 primitive at 7c.
+entries; it composes with the IS C-IS-10 §10.3 primitive at 7c.
 
 Authority: Implementation_Plan_Operational_Discipline_v2_7.md §3.7.4 U-OD-30
 (v2.7 SignatureAlgorithm-note delta — `SignatureAlgorithm` declared at U-OD-00,
@@ -44,7 +44,7 @@ Spec_Operational_Discipline_v1_2.md §21 C-OD-21 §21.1 / §21.2 / §21.3
 (preserved verbatim into v1.4 per v1.4 §0); ADR-D5 v1.3 §1.4 / §1.4.1.
 
 Depends on: [U-OD-01, U-OD-02, U-OD-28, U-OD-04, U-OD-00] (within-axis) +
-[U-IS-NN (C-IS-14 §14.2), U-IS-NN (C-IS-13 §13.5), U-CP-NN (C-CP-20 §20.4)]
+[U-IS-NN (C-IS-10 §10.5), U-IS-NN (C-IS-10 §10.3), U-CP-NN (C-CP-20 §20.4)]
 (cross-axis — resolve at 7c).
 """
 
@@ -169,7 +169,7 @@ _MULTI_TENANT_CELLS: frozenset[CellID] = frozenset({_CELL_7, _CELL_8})
 
 # --- §21.2 cryptographic audit ledger composition --------------------------
 
-#: §21.2 + C-IS-14 §14.2 — audit-signature attestation is required at the
+#: §21.2 + C-IS-10 §10.5 — audit-signature attestation is required at the
 #: Tier-5 per-tenant audit ledger.
 AUDIT_SIGNATURE_REQUIRED_AT_TIER_5_LEDGER: bool = True
 
@@ -214,7 +214,7 @@ def verify_hash_chain_integrity(ledger: AuditLedger) -> None:
     Returns `None` (the `Ok(())` arm) when the ledger is well-formed — each
     entry's `payload.prior_entry_hash` links to the predecessor's `entry_hash`
     for all `i > 0`. Raises `HashChainBreach` (the `Err` arm) at the first
-    broken link. Composes with the IS C-IS-13 §13.5 hash-chain integrity
+    broken link. Composes with the IS C-IS-10 §10.3 hash-chain integrity
     primitive (cross-axis IS edge — resolves at 7c).
     """
     entries = ledger.entries
@@ -225,7 +225,7 @@ def verify_hash_chain_integrity(ledger: AuditLedger) -> None:
             raise HashChainBreach(
                 f"audit-ledger hash chain broken at entry {i}: "
                 f"prior_entry_hash={prior_hash!r} != predecessor entry_hash="
-                f"{predecessor_hash!r} (C-OD-21 §21.2 / C-IS-13 §13.5)"
+                f"{predecessor_hash!r} (C-OD-21 §21.2 / C-IS-10 §10.3)"
             )
     return None
 
