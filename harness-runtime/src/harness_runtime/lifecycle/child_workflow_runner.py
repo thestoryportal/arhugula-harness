@@ -221,6 +221,13 @@ def compose_child_workflow_runner(ctx: HarnessContext) -> ChildWorkflowRunner:
             step_dispatchers=cast(Any, ctx.step_dispatchers),
             pause_snapshot_input=pause_snapshot_input,
             reconstruct_final_state=True,
+            # U-1 slice 3a (B-18) — mark the child run as a DESCENDED sub-agent so
+            # every child `StepExecutionContext` carries `sub_agent_descent=True`;
+            # a child INFERENCE step then emits the downgraded (external-irreversible-
+            # REMOVE'd) frozen_tool_superset per ADR-D4 §1.5, closing the F1 latent
+            # C10 condition-2 gap. Monotonic-sticky: a grandchild re-enters here with
+            # True again (the REMOVE downgrade is idempotent).
+            sub_agent_descent=True,
         )
 
     return _runner

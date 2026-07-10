@@ -316,6 +316,31 @@ class StepExecutionContext(BaseModel):
     outcome-hash). The per-step `StepOverride.hitl_placement` override fold is
     the separate follow-on arc `B-HITL-PLACEMENT-PER-STEP-OVERRIDE-FOLD`."""
 
+    sub_agent_descent: bool = False
+    """U-1 slice 3a (B-18) — whether this step executes inside a DESCENDED
+    sub-agent (child) workflow (ADR-D4 §1.5 sub-agent privilege inheritance).
+
+    A RUN-LEVEL constant for a given `execute_workflow` invocation: `execute_workflow`
+    threads its `sub_agent_descent` param onto EVERY `StepExecutionContext` it composes
+    (linear + the 5 non-linear strategies; branch children inherit via
+    `compose_branch_child_context`'s `model_copy`). The runtime
+    `child_workflow_runner` re-enters `execute_workflow(sub_agent_descent=True)`; the
+    top-level `harness_runtime.api.run` uses the `False` default. Monotonic-sticky
+    (once True, all descendant runs are True — the recursive child_workflow_runner
+    re-passes True), which is correct because the ADR-D4 §1.5 REMOVE downgrade is
+    idempotent.
+
+    Read at the runtime LLM dispatch (`RuntimeLLMDispatcher.dispatch`): a descended
+    INFERENCE step emits the child (downgraded) `frozen_tool_superset` — the ADR-D4
+    §1.5 REMOVE half drops external-irreversible tools from the child's visibility —
+    instead of the parent's full superset (closing the F1 latent C10 condition-2 gap).
+    Rides `StepExecutionContext` (per-step execution metadata, NOT persisted, NOT in
+    any §5.2 / per-step-override outcome-hash — the hash-inert carrier per the
+    new-surface-audit hash-config-not-carrier discipline), NOT `StepEffectiveBinding`
+    (which IS hashed) and NOT a run-scoped ContextVar (it travels with the dispatch
+    call itself — no daemon-isolation concern). Default `False` → byte-identical to
+    pre-slice-3a (a top-level dispatch)."""
+
     child_resume_snapshot: PauseSnapshot | None = None
     """B-HIERARCHICAL-PAUSE (R-FS-1) — on RESUME, the `PauseSnapshot` a recursive
     child sub-workflow paused at, threaded to its `SUB_AGENT_DISPATCH` worker so the

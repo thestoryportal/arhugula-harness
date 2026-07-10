@@ -58,7 +58,10 @@ from harness_runtime.lifecycle.engine_output_store import (
     EngineOutputStore,
     engine_output_dir_for,
 )
-from harness_runtime.lifecycle.frozen_tool_superset import compute_frozen_tool_superset
+from harness_runtime.lifecycle.frozen_tool_superset import (
+    CHILD_DOWNGRADE_REMOVE_TIERS,
+    compute_frozen_tool_superset,
+)
 from harness_runtime.lifecycle.hitl_gate_composer import RuntimeHITLGateComposer
 from harness_runtime.lifecycle.inter_step_output_channel import RunScopedInterStepOutputChannel
 from harness_runtime.lifecycle.lifecycle_emitter import materialize_lifecycle_emitter_stage
@@ -308,6 +311,19 @@ async def execute(
             ctx.mcp_client_hosts,
             include_memory_tool=ctx.memory_tool_registry is not None,
         )
+        # U-1 slice 3a (B-18) — the DESCENDED sub-agent (child) superset: the
+        # ADR-D4 §1.5 REMOVE half applied to the SAME `ctx.mcp_client_hosts`
+        # union (external-irreversible tools omitted). Bound alongside the full
+        # superset; `RuntimeLLMDispatcher.dispatch` selects it when the step's
+        # `StepExecutionContext.sub_agent_descent` is True (a child-workflow
+        # inference). This closes the F1 latent C10 condition-2 gap (a sub-agent
+        # inference must not emit the parent's external-irreversible tools). At
+        # MVP (no MCP tools) both are None → byte-identical legacy path.
+        child_frozen_tool_superset = compute_frozen_tool_superset(
+            ctx.mcp_client_hosts,
+            include_memory_tool=ctx.memory_tool_registry is not None,
+            remove_tiers=CHILD_DOWNGRADE_REMOVE_TIERS,
+        )
         bare_dispatcher = materialize_llm_dispatcher_stage(
             providers,
             cast(Any, tracer_provider),
@@ -350,6 +366,7 @@ async def execute(
             # (C10 condition 1); sub-agent / downgraded dispatchers are not
             # constructed here and inherit the field's None default (fail-safe).
             frozen_tool_superset=frozen_tool_superset,
+            child_frozen_tool_superset=child_frozen_tool_superset,
             memory_runtime=automatic_memory_runtime,
             fallback_chain=fallback_chain,
             # R-FS-1 arc B4 (§14.5.3) — the per-role PROMPT injection map resolved
