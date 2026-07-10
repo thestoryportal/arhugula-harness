@@ -65,6 +65,12 @@ class D4MultiplicativeTunable(BaseModel):
     workload_class: WorkloadClass
     topology_pattern: TopologyPattern
     cascade_policy: CascadePolicy
+    concurrent_cache_warmup: bool = False
+    """B-18-3C-PREWARM (ADR-D4 §1.8). When True and topology is PARALLELIZATION
+    under PROCEED policy, the driver serializes branch[0] before releasing
+    branches[1..N-1] to warm the shared Anthropic prefix cache. Opt-in
+    default-False — byte-identical at default; see B-18-3C-PREWARM-DEFAULT-ON
+    for the ADR §1.8(f) required-at-cap>1 flip once the mechanism is proven."""
 
 
 # --- §11.3 structural-exclusion set -----------------------------------------
@@ -105,12 +111,17 @@ def lookup_cell(workload: WorkloadClass, engine: EngineClass) -> WorkloadEngineM
 
 
 def d4_tunable(
-    cell: WorkloadEngineMatrixCell, persona_tier: PersonaTier
+    cell: WorkloadEngineMatrixCell,
+    persona_tier: PersonaTier,
+    *,
+    concurrent_cache_warmup: bool = False,
 ) -> D4MultiplicativeTunable:
     """Return the §11.4 D4 multiplicative tunable for a cell + persona tier.
 
     Persona tier influences the `cascade_policy` default: more conservative
-    tiers default to `PAUSE`, solo-developer defaults to `PROCEED`."""
+    tiers default to `PAUSE`, solo-developer defaults to `PROCEED`.
+    `concurrent_cache_warmup` threads the ADR-D4 §1.8 warm-up opt-in (default
+    False — byte-identical; see B-18-3C-PREWARM-DEFAULT-ON for the flip)."""
     if persona_tier is PersonaTier.SOLO_DEVELOPER:
         cascade_policy = CascadePolicy.PROCEED
     elif persona_tier is PersonaTier.TEAM_BINDING:
@@ -122,4 +133,5 @@ def d4_tunable(
         workload_class=cell.workload_class,
         topology_pattern=cell.topology_pattern,
         cascade_policy=cascade_policy,
+        concurrent_cache_warmup=concurrent_cache_warmup,
     )

@@ -292,3 +292,24 @@ class WorkflowManifestEntry(BaseModel):
     re-fire-safe deadline-cut branch (no external effect to double-fire), keyed
     on the v1.62 dispatch-time-kind marker; effect-bearing fails closed.
     """
+
+    concurrent_cache_warmup: bool = False
+    """B-18-3C-PREWARM addition (ADR-D4 §1.8 concurrent-prompt-cache warm-up
+    protocol). Opt-in gate for the PARALLELIZATION PROCEED warm-up: when True,
+    the driver serializes branch[0] before releasing branches[1..N-1] so that
+    branch[0]'s response warms the shared Anthropic prefix cache (the tools +
+    system block breakpoint), and subsequent siblings land as cache-hits.
+
+    Default False — byte-identical to the all-concurrent baseline at default.
+    Consumed at the §25.15 `_execute_parallelization` PROCEED path via the D4
+    multiplicative tunable (CP spec §25.15.1). The operator asserts that the
+    deployment is Anthropic-routed, the frozen-tool-superset breakpoint is bound,
+    no memory_runtime is active, and the prefix clears the ≥4096-tok floor (the
+    CP-invisible same-prefix residual — see B-18-3C-PREWARM DDR §11.2).
+
+    Staged rollout: this slice (PROCEED only, binary same-prefix predicate). The
+    ADR §1.8(f) required-at-cap>1 default is the registered follow-on
+    B-18-3C-PREWARM-DEFAULT-ON, gated on the witness suite + live cache-hit e2e.
+    §6.1 'additional per-workload fields' extension-clause growth (mirrors the
+    v1.20/v1.63 additive-optional precedents).
+    """

@@ -162,6 +162,7 @@ class _WorkflowSection(BaseModel):
     entry_version: int = 1
     default_gate_level: GateLevel | None = None
     fanout_timeout_disposition: FanoutTimeoutDisposition = FanoutTimeoutDisposition.FAIL_CLOSED
+    concurrent_cache_warmup: bool = False
     layer_budgets: list[Any] = []
     fallback_chain: dict[str, Any] | None = None
     hitl_placements: list[Any] = []
@@ -422,6 +423,7 @@ class WorkflowManifestLoader:
                     "entry_version": manifest.workflow.entry_version,
                     "default_gate_level": manifest.workflow.default_gate_level,
                     "fanout_timeout_disposition": (manifest.workflow.fanout_timeout_disposition),
+                    "concurrent_cache_warmup": manifest.workflow.concurrent_cache_warmup,
                 }
             )
         except ValidationError as exc:

@@ -6894,10 +6894,12 @@ def _execute_parallelization(
 
     # Resolve cascade policy before the RECONCILER CAS gate so invalid effect-fence pause resumes
     # under PROCEED fail without consuming the one-shot engine resume claim.
-    cascade_policy = d4_tunable(
+    _d4 = d4_tunable(
         lookup_cell(manifest_entry.workload_class, manifest_entry.engine_class),
         manifest_entry.persona_tier,
-    ).cascade_policy
+        concurrent_cache_warmup=manifest_entry.concurrent_cache_warmup,
+    )
+    cascade_policy = _d4.cascade_policy
     if _recovered_effect_fence_paused and cascade_policy is CascadePolicy.PROCEED:
         return RunResult(
             workflow_id=workflow_id,
@@ -7447,6 +7449,45 @@ def _execute_parallelization(
 
     # === proceed: branches run to completion → SUCCESS | PARTIAL (degraded) ===
     if cascade_policy is CascadePolicy.PROCEED:
+        # B-18-3C-PREWARM — same-prefix cohort predicate (H2). Conservative binary
+        # check: all branches uniform in (INFERENCE_STEP, provider, model, agent_role,
+        # prompt_version_sha, extended-thinking). Requires len>=2 (H3). Does NOT check
+        # memory_runtime, frozen_tool_superset None-ness, or cache-floor clearance —
+        # those are the operator-asserted opt-in residual (CP-invisible; DDR §11.2).
+        def _same_prefix_cohort() -> bool:
+            if len(branch_plan) < 2:  # H3: live len, not cell cap
+                return False
+            ref_step = branch_plan[0][1]
+            ref_b = branch_plan[0][4]
+            # Uniform INFERENCE_STEP — dispatchers are per-kind (DDR §11.4 Q3)
+            if not all(s.step_kind is StepKind.INFERENCE_STEP for _, s, _, _, _ in branch_plan):
+                return False
+            # Uniform provider + model — Anthropic cache is per-model
+            if not all(
+                b.model_binding.provider == ref_b.model_binding.provider
+                and b.model_binding.model == ref_b.model_binding.model
+                for _, _, _, _, b in branch_plan
+            ):
+                return False
+            # Uniform agent_role + prompt_version_sha
+            if not all(
+                b.agent_role == ref_b.agent_role
+                and b.prompt_version_sha == ref_b.prompt_version_sha
+                for _, _, _, _, b in branch_plan
+            ):
+                return False
+
+            # Uniform extended-thinking (per-epoch per ADR-D3 §1.5:205)
+            def _thinking(s: WorkflowStep) -> Any:
+                raw = s.step_payload.get("params")
+                if not isinstance(raw, dict):
+                    return None
+                return cast("dict[str, Any]", raw).get("thinking")
+
+            ref_thinking = _thinking(ref_step)
+            return all(_thinking(s) == ref_thinking for _, s, _, _, _ in branch_plan)
+
+        _warmup_gate: bool = _d4.concurrent_cache_warmup and _same_prefix_cohort()
 
         async def _proceed_branch(
             branch_index: int,
@@ -7533,13 +7574,27 @@ def _execute_parallelization(
             _record_clean(branch_index, step, child, writer, output)
 
         async def _proceed_fanout() -> list[Any]:
-            # `return_exceptions=True`: a failing branch does NOT cancel siblings
-            # (the proceed semantic). Bounded by the §25.11 wall-clock deadline.
             async with asyncio.timeout(deadline):
-                return await asyncio.gather(
-                    *(_proceed_branch(*plan) for plan in branch_plan),
+                if not _warmup_gate:
+                    # Default: all branches concurrent (return_exceptions=True: a failing
+                    # branch does NOT cancel siblings — the proceed semantic).
+                    return await asyncio.gather(
+                        *(_proceed_branch(*plan) for plan in branch_plan),
+                        return_exceptions=True,
+                    )
+                # B-18-3C-PREWARM — serialize branch[0] (cache-write), then release
+                # branches[1..N-1] (cache-hits). Both phases bounded by the deadline.
+                # H1: capture, don't bare-await — a branch[0] failure must STILL dispatch
+                # siblings and STILL drain branch[0]'s buffered ledger entries (PARTIAL).
+                try:
+                    first: Any = await _proceed_branch(*branch_plan[0])
+                except Exception as exc:  # NOT BaseException: CancelledError/TimeoutError propagate
+                    first = exc
+                rest = await asyncio.gather(
+                    *(_proceed_branch(*plan) for plan in branch_plan[1:]),
                     return_exceptions=True,
                 )
+                return [first, *rest]
 
         try:
             results = _run_fanout_to_completion(
