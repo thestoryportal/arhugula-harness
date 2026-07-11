@@ -49,9 +49,16 @@ snapshot:
   standalone_closed: 79
   standalone_gated: 0
   standalone_resolved: 4
-  standalone_registered: 0
-  rfs1_status: resolved
+  standalone_registered: 15
+  rfs1_status: active
   source: ".harness/beyond-mvp-capability-boundary-ledger.md"
+  # FRONTIER NOTE (2026-07-11, R-FS-2 REGISTRATION — the anticipated flip fires): the
+  # R-FS-2 final-closure umbrella (status remaining) + 15 registered child arcs enter the
+  # register per .harness/r-fs-2-final-closure-implementation-plan-v1.md (Unit-0);
+  # standalone_registered 0→15, rfs1_status resolved→active. Sources: the NotebookLM
+  # completeness audit (.harness/audit/NotebookLM_Spec_Layer_Overview_Audit_2026-07-11.md)
+  # + the pre-existing open register + the PARTIAL verdicts. Waves 1-4 are ledger arcs;
+  # the Wave-5 hygiene sweep + Appendix-B held/credential gates are plan-tracked, not rows.
   # FRONTIER NOTE (2026-07-11, B-18-PREWARM-OW closed at PR #933 — the registered B-* queue
   # EMPTIES). standalone_closed 78→79, standalone_registered 1→0; rfs1_status active→resolved
   # (the --check zero-open invariant: with no remaining/gated/registered arc the register
@@ -1867,3 +1874,179 @@ arcs:
     spec_delta: "CP spec v1.91 → v1.92 (fence-family arms + fifth scan site; clearance marker 2026-07-11)"
     pr: "#929"
     close_note: "PR #929. Scan at FIVE terminal exits (fence-ABORT added); aborted arm = ledger `completed` terminal-ONLY capture-less (obligation-4 forecloses `cancelled`; abort semantics at fail_class + durable fence claim); fence arm = this-round ∪ recovered union — recovered-withheld peer `completed` CAPTURE-LESS (the v1.91 open question answered by the snapshot-carried asymmetry: capture would flip _crash_pause_trigger and orphan the reserve); ONE named crash-visible addition (this-round INERT re-pause at the new exit inherits the v1.65 §1(c) capture trade, FL4-pinned); PAUSED boundary stays scan-free (ML5+FL8). O-W counterpart registered as B-18-FENCE-LEDGER-FIDELITY-OW, not silently widened. Pre-build Fable-5 design review AMEND 0-blocking (all folded pre-build); post-build Fable-5 diff review 0-blocking/2-concern/1-cosmetic (five-exits stale-carry + -OW registration-truth + comment variant, all fixed in-arc). 7 witnesses (FL1(+FL2/FL7)/FL3/FL3b/FL4/FL5/FL6/FL8, fails-on-main verified). harness-cp 1509 / runtime 2360 / axes 1590 green; pyright 0/0/0. 2026-07-11."
+
+  # ── R-FS-2 final-closure register (plan: .harness/r-fs-2-final-closure-implementation-plan-v1.md) ──
+
+  - id: R-FS-2
+    title: "Final-closure umbrella — all remaining spec-committed work to full closure"
+    kind: standalone
+    status: remaining
+    owner_axis: "cross-axis"
+    anticipated_scope: "Umbrella for the R-FS-2 register (plan doc at .harness/r-fs-2-final-closure-implementation-plan-v1.md): the Wave 1-4 child arcs below + the Wave-5 hygiene sweep PR (not a ledger arc) + the G2 closure report. Transitions to resolved when every child is closed/resolved, the Appendix-B gates were surfaced once (batched AUQ; held decisions honored), and the closure report is filed at .harness/audit/."
+    units: []
+    ledger_ref: ".harness/r-fs-2-final-closure-implementation-plan-v1.md"
+
+  - id: B-18-KEEPALIVE
+    title: "Boot-time prompt-cache pre-warm + 4-min keep-alive loop (ADR-D3 §1.5 lines 189-190; opt-in default-off)"
+    kind: standalone
+    status: registered
+    decompose_at_open: true
+    owner_axis: "runtime"
+    parent_arc: R-FS-2
+    anticipated_scope: "ADR-D3 §1.5 lines 189-190 (cleared, byte-verified) commit boot-time pre-warm (max_tokens=0 at process boot) + keep-alive every 4min for 5min-TTL caches. Named at the 3c DDR §8 as B-18-KEEPALIVE (R2); deferred at the slice-3b design doc §3.3/§4.3 with the C11-safe default named: OPT-IN, DEFAULT OFF. Zero code at HEAD (verified twice: completeness audit + its adversarial reviewer). Shape: runtime spec delta + clearance (bundled absorption) recording (a) the max_tokens=1 minimal-ping adaptation (messages.create requires max_tokens — llm_dispatch.py:1917; mirrors the ratified 3c await-completion precedent) and (b) the R2 skip-under-cost-ceiling disposition (build the carve-out or explicitly re-defer with rationale); RuntimeConfig opt-in fields threaded through BOTH env loaders; boot ping at the stage-5/daemon seam against the parent-agent cacheable epoch; 4-min keep-alive task for 5m-TTL epochs ONLY (1h epochs excluded by design), daemon-scoped, cancelled at drain/shutdown, per-run isolation respected; pings flow through normal dispatch so cost attribution + anthropic.* cache attrs record them (no shadow spend). Witnesses: default-off byte-identical dispatch control; opt-in boot ping observed with cache attrs; fake-clock TTL firing; 1h-epoch exclusion; drain cancellation."
+    units: []
+    ledger_ref: ".harness/r-fs-2-final-closure-implementation-plan-v1.md"
+
+  - id: B-WAL-F1-01-EXACTLY-ONCE
+    title: "WAL completed-run-retry duplicate resume-attempted emission (floor-(ii) exactly-once residual)"
+    kind: standalone
+    status: registered
+    decompose_at_open: true
+    owner_axis: "CP"
+    parent_arc: R-FS-2
+    anticipated_scope: "C-CP-07 §7.4 floor-(ii) exactly-once residual: WAL_SEGMENT completed-run retry duplicates the engine-layer resume-attempted emission by one (an OD audit-trace over-count; no fail-closed, no run failure, no corruption). Residual doc .harness/r-fs-1-e-impl-3c-f1-01-wal-exactly-once.md (OPEN, non-gating) carries the fix shape: apply the same completed-run guard symmetrically. Witness pins a single resume-prefixed emission on completed-run retry; control: no other status/fail_class byte changes."
+    units: []
+    ledger_ref: ".harness/r-fs-2-final-closure-implementation-plan-v1.md"
+
+  - id: B-SKILL-FRONTMATTER-VALIDATOR
+    title: "SKILL.md frontmatter constraint enforcement at the skills filesystem-load seam"
+    kind: standalone
+    status: registered
+    decompose_at_open: true
+    owner_axis: "AS"
+    parent_arc: R-FS-2
+    anticipated_scope: "Enforce the substrate-committed SKILL.md frontmatter constraints: name ≤64 chars + description non-empty ≤1024 (ADR-D3 Rationale, HIGH-cited Anthropic schema) + frontmatter.version and version_sha both required (ADR-D3 §1.8.1 line 331). External agentskills.io extras (lowercase-alphanumeric, vendor reserved words) are NOT committed in-substrate (greps empty; the AS spec defers authoring schemata beyond frontmatter to discretion) — enforcing them requires a spec-delta leg first; record the choice either way. Pure fail-closed validation function with a typed rejection enum, mirroring the tool-contract registration validator shape (tool_contract.py:167-194). Grounding-first: locate the exact spec table; confirm no validator hides in the procedural-tier snapshot/loaders. Witnesses: rejection test per constraint + accepted-fixture control; wired at the real load path (not tests-only)."
+    units: []
+    ledger_ref: ".harness/r-fs-2-final-closure-implementation-plan-v1.md"
+
+  - id: B-AUDIT-KEY-ROTATION-RUNTIME
+    title: "Two-row audit-key rotation dual-signature runtime path (ADR-D5 v1.3 §1.4 Option (a))"
+    kind: standalone
+    status: registered
+    decompose_at_open: true
+    owner_axis: "OD"
+    parent_arc: R-FS-2
+    anticipated_scope: "ADR-D5 v1.3 §1.4 Option (a) two-row rotation pattern: a rotation event is written as two ledger entries sharing rotation_correlation_id — one signed under the outgoing key at period N, one under the incoming key at period N+1; external-auditor walk semantics specified in the ADR prose (sibling lookup, both signatures, chain continuity across the boundary). Signer + chain verifier exist (multi_tenant_trace_separation_and_audit_ledger.py lines 177/211); NO rotation-pair writer/verifier located (re-ground at open). Build the rotation-event writer + extend the verify walk; solo-tier no-op preserved (correlation column NULL). Witnesses: rotate-then-verify passes; tamper-either-sibling fails; non-rotation entries unaffected (control)."
+    units: []
+    ledger_ref: ".harness/r-fs-2-final-closure-implementation-plan-v1.md"
+
+  - id: B-18-LANEB-PROMPT-SEMVER
+    title: "Operator-declared semantic-version field on PromptVersion (skill frontmatter.version analogue; cache-inert)"
+    kind: standalone
+    status: registered
+    decompose_at_open: true
+    owner_axis: "IS"
+    parent_arc: R-FS-2
+    anticipated_scope: "The skill frontmatter.version analogue for prompts (ADR-D3 §1.8.1: an operator may bump the declared version without changing every byte; both-required with the content hash). Named at the 3c DDR §8; optional by design (version_sha remains the cache key). BUILD by default under FULL-SPEC; the operator may strike this row at the Unit-0 PR review — the one-time skip window, recorded either way. Shape: IS-spec delta + clearance adding the optional field to the PromptVersion shape; prompt_manifest.py optional field default None (byte-compatible with every existing manifest); explicitly CACHE-INERT (spec text states it does not participate in cohort/cache identity — that is version_sha's job). Witnesses: manifest round-trip with/without the field; cohort-key/cacheable-epoch byte-unchanged controls."
+    units: []
+    ledger_ref: ".harness/r-fs-2-final-closure-implementation-plan-v1.md"
+
+  - id: B-TOOL-SEARCH-RUNTIME
+    title: "tool_search capability-discovery runtime path (ADR-D3 §1.5 cache-prefix discipline)"
+    kind: standalone
+    status: registered
+    decompose_at_open: true
+    owner_axis: "AS + runtime"
+    parent_arc: R-FS-2
+    anticipated_scope: "ADR-D3 §1.5 cache-prefix integrity discipline commits per-MCP capability discovery via tool_search rather than tools[] mutation. Modeled only at HEAD (skill.activation_mode enum value; the adoption-depth matrix); no runtime search-dispatch mechanism; the frozen tool superset is the current realization. Grounding-first: read the adoption-depth cell for tool_search at the current workload classes — if the committed depth for every live cell is deferred/not-adopted, close as adoption-depth-honored with cites; otherwise build: a search tool inside the frozen superset returning deferred schemas on demand + skill.activation span emission in tool_search mode + a cache-prefix invariance witness (tools[] bytes unchanged across searches — the point of the mechanism)."
+    units: []
+    ledger_ref: ".harness/r-fs-2-final-closure-implementation-plan-v1.md"
+
+  - id: B-OD19-LOCAL-INSPECTION
+    title: "C-OD-19 named-primitive completion: TUI trace browser + ring-buffer rotation + otelcol config manifest"
+    kind: standalone
+    status: registered
+    decompose_at_open: true
+    owner_axis: "OD"
+    parent_arc: R-FS-2
+    anticipated_scope: "C-OD-19 §19 contract surface (OD spec v1.2 lines 1049-1091: in-process collector signature + sqlite ring-buffer trace storage + TUI trace browser surfacing; §19.3 primitive table) — formally deferred in-code at deferral_envelope.py:270-276 with closure target phase-6, now due under FULL-SPEC. Decompose-at-open into three slices: (a) TUI trace browser — terminal-native scoped-query browser over the sqlite ring buffer (ledger/trace walk; the five operator-burden primitives as scoped queries per spec lines 922/976; threshold annotation); framework-pull check at design (prefer stdlib curses; operator machine is Intel x86 macOS — bias light); extend sqlite_span_store_reader + the harness-inspect internals, do not fork. (b) Ring-buffer rotation — §19.2 commits the 24h default, operator-tunable; only the mechanism (size/time/hybrid) is discretion; crash-safe; Phase-2 markers at local_first_otlp_collector.py lines 36/234/264. (c) otelcol-contrib config manifest — grounding-first: §19.1 commits an in-process otelcol-contrib instance but the as-built collector is the hand-rolled local_first_otlp_collector.py (BUILT-MODIFIED); ground what the manifest configures when no otelcol-contrib binary runs; possible small spec-reconciliation delta. Witnesses: seeded-ring-buffer browse + five-primitive render (scripted TUI or headless harness); fill-rotate-chain-readable + 24h-default pin; manifest validation or a cited reconciliation close."
+    units: []
+    ledger_ref: ".harness/r-fs-2-final-closure-implementation-plan-v1.md"
+
+  - id: B-OD17-EVAL-LOOP-TOOLING
+    title: "Operator-manual eval review-loop tooling + holdout-set construction (C-OD-17 §17.3; NO model-judge)"
+    kind: standalone
+    status: registered
+    decompose_at_open: true
+    owner_axis: "OD"
+    parent_arc: R-FS-2
+    anticipated_scope: "C-OD-17 §17.3 (OD spec v1.2 line 976): the Husain manual-review, categorize, automate, align loop runs against the ring buffer with operator self-curation; the deferral envelope defers the holdout-set construction protocol + loop tooling + per-cell dashboard query authoring to phase-6. HARD BOUNDARY: the standing eval-harness-as-governance-gate REFUSAL — the committed surface is operator-MANUAL review tooling; the kappa/TPR/TNR/gold-set numbers are research-only (excluded); any model-judge component proposal = halt + Class-1 fork, not this arc. Build: a deterministic holdout sampler (N traces from the ring buffer into a versioned holdout file); a review-loop CLI or TUI-browser view (composes with the OD19 arc, non-blocking); categorization appended to a durable review ledger; the automate step scaffolds operator-authored assertion stubs checked into the repo (tooling scaffolds the file; the human writes the assertion). Witnesses: holdout determinism; review round-trip persists; zero model calls in the loop (control assert)."
+    units: []
+    ledger_ref: ".harness/r-fs-2-final-closure-implementation-plan-v1.md"
+
+  - id: B-OD18-DRIFT-ALGORITHM
+    title: "Per-primitive drift computation + re-baselining workflow + eval-kind SDK-boundary guard (C-OD-18)"
+    kind: standalone
+    status: registered
+    decompose_at_open: true
+    owner_axis: "OD"
+    parent_arc: R-FS-2
+    anticipated_scope: "C-OD-18 §18.1-18.2: the drift event emission is BUILT (alignment_floor_drift_detection.py — 4-attribute always-sampled event); the deferral envelope defers the drift-detection ALGORITHM per primitive + the re-baselining cycle workflow + dashboard alerting integration + eval-kind enforcement at the SDK boundary. Grounding-first: how much the built emitter already computes vs receives. Build: per-primitive current-value computation over the ring-buffer observation window (the five C-OD-17 operator-burden primitives); threshold comparison feeding the existing emitter; re-baselining workflow = an operator-facing recompute + threshold-update path (threshold VALUES stay deployment-binding config); an eval-kind SDK-boundary guard rejecting offline_judge spans emitted through the inline path (a validation guard, not a judge — the model-judge refusal binds here too). Witnesses: synthetic-window drift (breach emits the event with correct attrs; no breach stays silent); re-baseline round-trip; eval-kind guard fail-closed."
+    units: []
+    ledger_ref: ".harness/r-fs-2-final-closure-implementation-plan-v1.md"
+
+  - id: B-MCP-OAUTH-RS-ENFORCE
+    title: "Remote-MCP L2/L3 OAuth resource-server validation (grounding-first; C-AS-10 §10.3 trust taxonomy)"
+    kind: standalone
+    status: registered
+    decompose_at_open: true
+    owner_axis: "AS + runtime"
+    parent_arc: R-FS-2
+    anticipated_scope: "AS spec C-AS-10 §10.3 four-level streamable_http trust taxonomy (enum built at discriminators.py:31-43; the STDIO tier-3 floor is enforced at sandbox_tier_floor.py:140-142) + the ADR-D2/ADR-D3 OAuth-2.1-mandatory-for-remote commitments (PKCE, RFC 8707 resource indicators; token-passthrough prohibited). Grounding decides the arc: (1) read the §10.3 Deferred-to-implementation-discretion block verbatim — does connection-time OAuth-RS validation sit inside it, and does any committed sentence make L2/L3 connection CONDITIONAL on OAuth-RS status? (2) does ANY streamable-HTTP client path exist at mcp_client_host_factory.py (the external-MCP live e2e proved stdio only)? Branch A: no remote-HTTP client + no committed conditional = close as deployment-binding-honored with cites (fail-closed today: the L0-refuse level + no HTTP path means an un-validated remote connection is structurally impossible). Branch B: a committed conditional exists = build the fail-closed gate at the client-host connect seam (PKCE + resource-indicator checks before L2/L3 session establishment), stdio path byte-unchanged; a LIVE remote-HTTP e2e is credential-gated (Appendix-B pattern, surfaced not auto-fired)."
+    units: []
+    ledger_ref: ".harness/r-fs-2-final-closure-implementation-plan-v1.md"
+
+  - id: B-MCP-PRIMITIVE-SIG-GATE
+    title: "mcp.primitive.signature.sha256 registration-time verification gate (grounding-first; rug-pull protection)"
+    kind: standalone
+    status: registered
+    decompose_at_open: true
+    owner_axis: "AS"
+    parent_arc: R-FS-2
+    anticipated_scope: "The 7-attribute mcp.* namespace including mcp.primitive.signature.sha256 is canonical + emitted (AS spec §14.3 line 207; the CP-side client namespace emitter owns producer discipline). The REGISTRATION-TIME verification gate (rug-pull protection: verify a tool description/schema hash has not mutated since first registration) has no located code, and its spec commitment is unpinned — the concept may be research-only beyond the attribute. Grounding decides: locate a committed verify-on-mutation behavior in the AS §14.3 body + the tool-registration contract + ADR-D2. Branch A (committed): persist the first-seen hash per primitive in the tool registry; on re-registration/dispatch mismatch emit a violation (compose with existing violation event shapes) + fail closed per gate level; witnesses: tamper-description triggers violation + refusal; stable-hash control. Branch B (attr-only): close as research-only-gate / attribute-complete with cites."
+    units: []
+    ledger_ref: ".harness/r-fs-2-final-closure-implementation-plan-v1.md"
+
+  - id: B-OD-ENVELOPE-P6-SWEEP
+    title: "OD deferral-envelope phase-6 disposition sweep (11 v1.2 entries + 4 post-v1.2 discretion blocks)"
+    kind: standalone
+    status: registered
+    decompose_at_open: true
+    owner_axis: "OD"
+    parent_arc: R-FS-2
+    anticipated_scope: "Disposition sweep over the remaining phase-6-targeted deferral-envelope entries (deferral_envelope.py enumerates OD spec v1.2 §1-§23; 14 entries carry the phase-6 closure target; C-OD-17/18/19 have their own arcs — this sweep covers the other 11): C-OD-01 cell-identification API + transition state-machine + binding persistence; C-OD-04 SDK binding + exporter; C-OD-05 cross-SDK namespace conformance harness; C-OD-06 span-event emission API + sibling correlation; C-OD-07 breaker OTLP emission (expected already-realized at the runtime breaker-span landing); C-OD-08 runtime cross-namespace validation; C-OD-09 tail-sampling decision algorithm (expected realized: composite sampler + tail-keep processor); C-OD-12 default-off filter (expected realized: content-structure discipline); C-OD-13 eval-grade redaction pipeline (expected realized: redaction span processor); C-OD-22 transition-planning UX + cross-cell config; C-OD-23 cross-spec citation strings + seam versioning. PLUS the four post-v1.2 discretion blocks the envelope does not enumerate (OD v1.8 delta §25.5/§26.5/§27.5/§28.5 — pre-reviewed 2026-07-11: each names a default already realized in the built contracts). Per entry: body-read the contract + locate realizing code + classify already-realized (cite the consumer-visible surface — presence is not correctness) / scoped-build (register a follow-on row) / genuinely-discretionary-no-op (cite the discretion sentence). Deliverable: an evidence-cited disposition table at .harness/ covering all 15."
+    units: []
+    ledger_ref: ".harness/r-fs-2-final-closure-implementation-plan-v1.md"
+
+  - id: B-COST-REPLAY-DEDUP-WITNESS
+    title: "Replay-dedup cost-join verification witness (ADR-D6 §1.5 / C-OD-14)"
+    kind: standalone
+    status: registered
+    decompose_at_open: true
+    owner_axis: "OD"
+    parent_arc: R-FS-2
+    anticipated_scope: "ADR-D6 §1.5 / C-OD-14: cost attribution joins on the idempotency key; durable replay must not double-count. Flagged MODERATE (spec-committed, carried via the idempotency join, not independently re-executed) at the NotebookLM completeness audit. Verify-first: a witness replaying a completed step (journal-resume path) asserting the cost rollup is emitted exactly once; if the join is missing, the smallest fix lands at the cost-record accumulator."
+    units: []
+    ledger_ref: ".harness/r-fs-2-final-closure-implementation-plan-v1.md"
+
+  - id: B-19-BREAKER-AMBIENT-ATTRS
+    title: "breaker.cause + breaker.cooldown_ms ambient attrs — redundancy analysis + operator build/skip AUQ"
+    kind: standalone
+    status: registered
+    decompose_at_open: true
+    owner_axis: "CP + OD"
+    parent_arc: R-FS-2
+    anticipated_scope: "The CP spec v1 4-attribute ambient breaker set was consciously dropped at the v1-to-v1.1 revision (Semantic-loss note at Spec_Control_Plane_v1_2.md:72: breaker.cause trip-cause enum + breaker.cooldown_ms have no direct OD event-schema equivalent); re-introduction is OPERATOR-DISCRETIONARY (line 47; adjudicated NOT-FINDING at iter-2). Drive-to-gate per the no-parking directive: author the redundancy analysis (what the 7-attribute event schema already answers vs what ambient state adds — current-cause-while-open, remaining-cooldown for schedulers/dashboards; cite harness_breaker_schema.py + consumers), then ONE batched AUQ (shared with the Gap-D arc): build or skip-and-close. If build: attrs at the breaker registry + an OD ingestion row — the namespace map is a CLOSED schema, so the addition is itself a spec-delta leg + clearance marker."
+    units: []
+    ledger_ref: ".harness/r-fs-2-final-closure-implementation-plan-v1.md"
+
+  - id: B-GAPD-TOOLONLY-BOOTSTRAP
+    title: "Conditional provider ping for tool-only workflows (Gap D / R-100 AC#2; Class-1 fork + dyadic council)"
+    kind: standalone
+    status: registered
+    decompose_at_open: true
+    owner_axis: "runtime"
+    parent_arc: R-FS-2
+    anticipated_scope: "Registered Class-1 fork candidate (forward register, the external-MCP arc residual): the api.run bootstrap pings at least one provider regardless of step kind, so a tool-only workflow still requires a live provider (the tool-only e2e stays skipif-gated on a live provider). Nameable C9-vs-C11 tension (fail-fast reliability vs tool-only-workflow ergonomics), dyadic-council-eligible per root CLAUDE.md §10.9. Drive-to-gate: file the Class-1 fork doc; probe-first discipline (what exactly breaks downstream if no provider is pinged and a later step needs one — is a deferred-fail path already typed?); convene the dyadic council (C9 + C11 voices); operator ratification via the batched Wave-4 AUQ (a genuine Class-1 gate — the operator decides). On ratify: make the stage-3a ping conditional on the workflow containing an inference step; un-gate the tool-only e2e for the no-provider case."
+    units: []
+    ledger_ref: ".harness/r-fs-2-final-closure-implementation-plan-v1.md"
