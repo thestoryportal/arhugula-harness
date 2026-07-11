@@ -46,9 +46,34 @@ CP spec v1.90 §25.17 addendum) — the warm-up extended to the strict tiers
     → test_pause_warmup_branch0_bare_timeout_error_is_branch_failure_not_deadline
     → test_cascade_cancel_warmup_branch0_bare_timeout_error_fails_as_cascade
 
+B-18-3C-PREWARM-TIMEOUT-LEDGER section (M2, DDR §11.5; CP spec v1.91 §25.17
+addendum) — obligation-4 `cancelled` terminals synthesized at every TERMINAL
+fan-out exit for branches withheld past the boundary (never-dispatched → zero
+footprint would be indistinguishable from lost entries):
+
+  ML1 PROCEED Phase-1 deadline strike → PARTIAL; withheld siblings `cancelled`
+  (terminal-only, ledger-only):
+    → test_proceed_warmup_phase1_deadline_strike_records_cancelled_for_withheld
+  ML2 PAUSE Phase-1 deadline strike → FAILED barrier-deadline; siblings
+  `cancelled` in ledger + dispatch-marker ABSENCE in store:
+    → test_pause_warmup_phase1_deadline_strike_failed_with_cancelled_terminals
+  ML3 CASCADE_CANCEL Phase-1 deadline strike → FAILED cascade-cancel; the
+  pre-existing obl-4 scan (now the shared helper) covers the deadline path:
+    → test_cascade_cancel_warmup_phase1_deadline_strike_cancelled_via_scan
+  ML4 PAUSE branch[0]-failure + protocol NOT bound → terminal FAILED
+  protocol-not-bound runs the scan (C2 — no snapshot, omission ≠ re-dispatchable):
+    → test_pause_warmup_branch0_failure_protocol_not_bound_records_cancelled
+  ML5 negative control — branch-failure → PAUSED does NOT run the scan
+  (snapshot omission IS the re-dispatchable contract):
+    → test_pause_warmup_branch0_failure_paused_siblings_zero_ledger_footprint
+  ML6 baseline no-op — gate=False all-concurrent deadline strike: every branch
+  in-flight-cut records `timed_out`; the absence-keyed scan synthesizes nothing:
+    → test_baseline_all_concurrent_deadline_strike_no_cancelled_synthesis
+
 Authority: `.harness/u1-3c-prewarm-design-decision-record.md` +
 `.harness/b18-3c-prewarm-cascade-ddr.md` (Fable-5 review-cleared);
-ADR-D4 v1.1 §1.8; `Spec_Control_Plane_v1_86.md` §25.15; CP spec v1.90 §25.17.
+ADR-D4 v1.1 §1.8; `Spec_Control_Plane_v1_86.md` §25.15; CP spec v1.90 §25.17;
+CP spec v1.91 (M2 terminal-exit synthesis).
 """
 
 from __future__ import annotations
@@ -1080,3 +1105,399 @@ def test_warmup_default_on_live_cache_hit() -> None:  # pragma: no cover
         concurrent_cache_warmup=entry.concurrent_cache_warmup,
     )
     assert result.status is RunStatus.SUCCESS
+
+
+# ---------------------------------------------------------------------------
+# B-18-3C-PREWARM-TIMEOUT-LEDGER (M2) — terminal-exit audit completeness
+# ---------------------------------------------------------------------------
+
+
+class _WedgeBranch0CohortDispatcher:
+    """CohortKeyCapable dispatcher whose `wedge_index` branch (default the
+    original branch[0]) blocks past the (monkeypatched) barrier deadline — the
+    Phase-1 deadline-strike trigger (a resume's NEW "branch[0]" is the first
+    remaining ordinal, so the C3 witness wedges index 1). Records dispatched
+    indices so the withheld-siblings claim is asserted at the dispatch level too.
+    Self-releases at `self_release_seconds` as a CI backstop; the test also sets
+    `release` in a `finally` so the abandoned worker thread exits promptly
+    (mirrors `_BlockingDispatcher` in test_workflow_driver_parallelization.py)."""
+
+    def __init__(
+        self,
+        *,
+        release: threading.Event,
+        self_release_seconds: float,
+        wedge_index: int = 0,
+    ) -> None:
+        self._release = release
+        self._self_release_seconds = self_release_seconds
+        self._wedge_index = wedge_index
+        self._lock = threading.Lock()
+        self.dispatched: list[int] = []
+
+    def dispatch(
+        self,
+        binding: StepEffectiveBinding,
+        step: WorkflowStep,
+        *,
+        step_context: Any = None,
+    ) -> dict[str, Any]:
+        idx = int(step.step_payload["index"])
+        with self._lock:
+            self.dispatched.append(idx)
+        if idx == self._wedge_index:
+            self._release.wait(timeout=self._self_release_seconds)
+        return {"branch": idx}
+
+    def cohort_key(self, binding: StepEffectiveBinding, step: WorkflowStep) -> str | None:
+        return "test-cohort-uniform"
+
+
+class _BlockingAllDispatcher:
+    """NON-CohortKeyCapable (no `cohort_key`) dispatcher that wedges EVERY branch —
+    the gate=False all-concurrent deadline-strike baseline (every branch in-flight
+    when the cut lands)."""
+
+    def __init__(self, *, release: threading.Event, self_release_seconds: float) -> None:
+        self._release = release
+        self._self_release_seconds = self_release_seconds
+        self._lock = threading.Lock()
+        self.dispatched: list[int] = []
+
+    def dispatch(
+        self,
+        binding: StepEffectiveBinding,
+        step: WorkflowStep,
+        *,
+        step_context: Any = None,
+    ) -> dict[str, Any]:
+        idx = int(step.step_payload["index"])
+        with self._lock:
+            self.dispatched.append(idx)
+        self._release.wait(timeout=self._self_release_seconds)
+        return {"branch": idx}
+
+
+def _branch_terminals(ledger: _RecordingLedger) -> dict[int, str]:
+    """branch_index -> drained terminal_status."""
+    return {
+        payload.branch_metadata.branch_index: payload.branch_metadata.terminal_status
+        for payload, _wk in ledger.appends
+        if getattr(payload, "branch_metadata", None) is not None
+        and payload.branch_metadata.terminal_status is not None
+    }
+
+
+def _branch_step_indexes(ledger: _RecordingLedger) -> set[int]:
+    """Branch indices that drained a STEP entry (`terminal_status is None`) — a
+    step entry claims the dispatch was scheduled, so a synthesized (never-
+    dispatched) branch must NOT appear here."""
+    return {
+        payload.branch_metadata.branch_index
+        for payload, _wk in ledger.appends
+        if getattr(payload, "branch_metadata", None) is not None
+        and payload.branch_metadata.terminal_status is None
+    }
+
+
+def test_proceed_warmup_phase1_deadline_strike_records_cancelled_for_withheld(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ML1 (M2, PROCEED): warm-up ON, branch[0] wedged past the barrier deadline
+    in Phase 1 → PARTIAL; the never-released siblings drain obligation-4
+    `cancelled` terminals (terminal-ONLY — a step entry would claim a dispatch
+    that never fired; `timed_out` would claim an ambiguous in-flight effect);
+    branch[0] records its own step + `timed_out`. The synthesis is LEDGER-only:
+    the withheld siblings never reach the durable store (PROCEED writes no
+    dispatch markers on any path — the load-bearing marker-absence assert is the
+    strict-tier witness ML2)."""
+    from harness_cp import workflow_driver as wd
+
+    monkeypatch.setattr(wd, "_DEFAULT_FANOUT_BARRIER_DEADLINE_SECONDS", 0.2)
+    n = 3
+    release = threading.Event()
+    dispatcher = _WedgeBranch0CohortDispatcher(release=release, self_release_seconds=2.0)
+    ledger = _RecordingLedger()
+    store = _MiniFanoutStore()
+    started = time.monotonic()
+    try:
+        result = _run(
+            steps=[_inference_step(i) for i in range(n)],
+            dispatcher=cast(StepDispatcher, dispatcher),
+            ledger=ledger,
+            concurrent_cache_warmup=True,
+            persona_tier=PersonaTier.SOLO_DEVELOPER,
+            engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+            store=store,
+        )
+    finally:
+        release.set()
+    elapsed = time.monotonic() - started
+    assert result.status is RunStatus.PARTIAL
+    # Phase 1 consumed the whole budget: the siblings were never released.
+    assert dispatcher.dispatched == [0]
+    assert _branch_terminals(ledger) == {0: "timed_out", 1: "cancelled", 2: "cancelled"}
+    assert _branch_step_indexes(ledger) == {0}
+    # LEDGER-only synthesis: branch[0]'s own in-flight `timed_out` capture is the
+    # store's only record; the withheld siblings have none.
+    assert store.present_branch_indexes(store.sole_run_key()) == {0}
+    # Returned at ~the 0.2s deadline, not the 2.0s wedge (bounded-barrier guard).
+    assert elapsed < 1.5
+
+
+def test_pause_warmup_phase1_deadline_strike_failed_with_cancelled_terminals(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ML2 (M2, PAUSE): the deadline-strike exit is terminal FAILED
+    (`parallelization-barrier-deadline` — no clean pause boundary, nothing
+    resumes it), so the scan RUNS: withheld siblings drain `cancelled` ledger
+    terminals while their reserve-before-dispatch markers stay ABSENT in the
+    store (marker-absence = provably-never-dispatched, CP spec v1.90 §25.17
+    item 4 — the effect-set invariant is untouched by the synthesis)."""
+    from harness_cp import workflow_driver as wd
+
+    monkeypatch.setattr(wd, "_DEFAULT_FANOUT_BARRIER_DEADLINE_SECONDS", 0.2)
+    n = 3
+    release = threading.Event()
+    dispatcher = _WedgeBranch0CohortDispatcher(release=release, self_release_seconds=2.0)
+    ledger = _RecordingLedger()
+    store = _MiniFanoutStore()
+    started = time.monotonic()
+    try:
+        result = _run(
+            steps=[_inference_step(i) for i in range(n)],
+            dispatcher=cast(StepDispatcher, dispatcher),
+            ledger=ledger,
+            concurrent_cache_warmup=True,
+            persona_tier=PersonaTier.TEAM_BINDING,
+            engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+            store=store,
+        )
+    finally:
+        release.set()
+    elapsed = time.monotonic() - started
+    assert result.status is RunStatus.FAILED
+    assert result.fail_class == "parallelization-barrier-deadline"
+    assert dispatcher.dispatched == [0]
+    assert _branch_terminals(ledger) == {0: "timed_out", 1: "cancelled", 2: "cancelled"}
+    assert _branch_step_indexes(ledger) == {0}
+    # Strict tier: branch[0] wrote its dispatch marker + in-flight `timed_out`
+    # capture; the withheld siblings wrote NEITHER (ledger-only synthesis).
+    assert store.present_dispatched_indexes(store.sole_run_key()) == {0}
+    assert store.present_branch_indexes(store.sole_run_key()) == {0}
+    assert elapsed < 1.5
+
+
+def test_cascade_cancel_warmup_phase1_deadline_strike_cancelled_via_scan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ML3 (M2, CASCADE_CANCEL): the pre-existing obligation-4 scan (now the
+    shared `_synthesize_undispatched_terminals`) already ran unconditionally on
+    this tier BEFORE the deadline_struck check — regression pin that the helper
+    refactor preserves it on the deadline path (FAILED
+    `parallelization-cascade-cancel`)."""
+    from harness_cp import workflow_driver as wd
+
+    monkeypatch.setattr(wd, "_DEFAULT_FANOUT_BARRIER_DEADLINE_SECONDS", 0.2)
+    n = 3
+    release = threading.Event()
+    dispatcher = _WedgeBranch0CohortDispatcher(release=release, self_release_seconds=2.0)
+    ledger = _RecordingLedger()
+    store = _MiniFanoutStore()
+    started = time.monotonic()
+    try:
+        result = _run(
+            steps=[_inference_step(i) for i in range(n)],
+            dispatcher=cast(StepDispatcher, dispatcher),
+            ledger=ledger,
+            concurrent_cache_warmup=True,
+            persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+            engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+            store=store,
+        )
+    finally:
+        release.set()
+    elapsed = time.monotonic() - started
+    assert result.status is RunStatus.FAILED
+    assert result.fail_class == "parallelization-cascade-cancel"
+    assert dispatcher.dispatched == [0]
+    assert _branch_terminals(ledger) == {0: "timed_out", 1: "cancelled", 2: "cancelled"}
+    assert _branch_step_indexes(ledger) == {0}
+    assert store.present_dispatched_indexes(store.sole_run_key()) == {0}
+    assert elapsed < 1.5
+
+
+def test_pause_warmup_branch0_failure_protocol_not_bound_records_cancelled() -> None:
+    """ML4 (M2/C2, PAUSE): branch[0] FAILS in Phase 1 with NO pause/resume
+    protocol bound → the detect-then-refuse terminal FAILED
+    (`parallelization-pause-resume-protocol-not-bound`). No snapshot exists, so
+    re-dispatchable-by-omission does not apply — the scan runs and the withheld
+    siblings drain `cancelled` terminals (branch[0] itself is ran-and-errored →
+    step + `completed` dispatch-boundary terminal)."""
+    n = 3
+    dispatcher = _RecordingCohortDispatcher(fail={0})
+    ledger = _RecordingLedger()
+    result = _run(
+        steps=[_inference_step(i) for i in range(n)],
+        dispatcher=cast(StepDispatcher, dispatcher),
+        ledger=ledger,
+        concurrent_cache_warmup=True,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        with_pause_protocol=False,
+    )
+    assert result.status is RunStatus.FAILED
+    assert result.fail_class == "parallelization-pause-resume-protocol-not-bound"
+    assert dispatcher.dispatched == [0]
+    assert _branch_terminals(ledger) == {0: "completed", 1: "cancelled", 2: "cancelled"}
+    assert _branch_step_indexes(ledger) == {0}
+
+
+def test_pause_warmup_branch0_failure_paused_siblings_zero_ledger_footprint() -> None:
+    """ML5 (M2 negative control): the branch-failure → PAUSED boundary is
+    RESUMABLE — snapshot OMISSION is the re-dispatchable contract (§25.15.1,
+    CP spec v1.44 §1 as re-scoped at v1.91) — so the scan does NOT run there:
+    the withheld siblings leave ZERO ledger footprint on the paused attempt
+    (their record is written by the resumed attempt that actually runs them)."""
+    n = 3
+    dispatcher = _RecordingCohortDispatcher(fail={0})
+    ledger = _RecordingLedger()
+    result = _run(
+        steps=[_inference_step(i) for i in range(n)],
+        dispatcher=cast(StepDispatcher, dispatcher),
+        ledger=ledger,
+        concurrent_cache_warmup=True,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        with_pause_protocol=True,
+    )
+    assert result.status is RunStatus.PAUSED
+    assert dispatcher.dispatched == [0]
+    assert _branch_terminals(ledger) == {0: "completed"}
+    assert _branch_step_indexes(ledger) == {0}
+
+
+def test_baseline_all_concurrent_deadline_strike_no_cancelled_synthesis(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ML6 (M2 baseline no-op): gate=False (non-CohortKeyCapable dispatcher) →
+    all-concurrent; every branch is IN-FLIGHT when the deadline cuts, so every
+    branch records its own step + `timed_out` at its CancelledError handler and
+    the absence-keyed scan synthesizes NOTHING (no `cancelled` anywhere) — the
+    pre-M2 baseline ledger shape is byte-preserved."""
+    from harness_cp import workflow_driver as wd
+
+    monkeypatch.setattr(wd, "_DEFAULT_FANOUT_BARRIER_DEADLINE_SECONDS", 0.2)
+    n = 3
+    release = threading.Event()
+    dispatcher = _BlockingAllDispatcher(release=release, self_release_seconds=2.0)
+    ledger = _RecordingLedger()
+    started = time.monotonic()
+    try:
+        result = _run(
+            steps=[_inference_step(i) for i in range(n)],
+            dispatcher=cast(StepDispatcher, dispatcher),
+            ledger=ledger,
+            concurrent_cache_warmup=True,
+            persona_tier=PersonaTier.SOLO_DEVELOPER,
+        )
+    finally:
+        release.set()
+    elapsed = time.monotonic() - started
+    assert result.status is RunStatus.PARTIAL
+    assert sorted(dispatcher.dispatched) == [0, 1, 2]
+    assert _branch_terminals(ledger) == {0: "timed_out", 1: "timed_out", 2: "timed_out"}
+    assert _branch_step_indexes(ledger) == {0, 1, 2}
+    assert elapsed < 1.5
+
+
+def test_stale_snapshot_double_resume_synthesized_cancelled_key_collides(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ML7 (M2/C3 residual pin): synthesized ledger terminals are PER-ATTEMPT
+    audit records, not resume authority. A resume attempt that deadline-strikes
+    in Phase 1 drains a synthesized `cancelled` terminal for the withheld
+    sibling; a second resume from the SAME (stale) snapshot still re-dispatches
+    that sibling — re-dispatch keys on snapshot OMISSION, never on a ledger
+    terminal read — and the sibling's REAL terminal composes the IDENTICAL
+    idempotency key (deterministic over run-key × step_index × terminal-path),
+    so at a real shared IS ledger the second append IDEMPOTENT-NOOPs and the
+    first attempt's `cancelled` stands in the audit trail. Result fidelity is
+    unaffected: the second resume itself is PARTIAL with the sibling's output
+    folded (the C3 residual recorded at CP spec v1.91)."""
+    from harness_cp import workflow_driver as wd
+
+    n = 3
+    # Run A: branch[0] fails under warm-up → PAUSED; snapshot omits siblings 1, 2.
+    result_a = _run(
+        steps=[_inference_step(i) for i in range(n)],
+        dispatcher=cast(StepDispatcher, _RecordingCohortDispatcher(fail={0})),
+        concurrent_cache_warmup=True,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        with_pause_protocol=True,
+    )
+    assert result_a.status is RunStatus.PAUSED
+    snapshot = result_a.pause_snapshot
+    assert snapshot is not None
+
+    # Resume attempt 1: the remaining cohort's NEW branch[0] (ordinal 1) wedges
+    # past the deadline in Phase 1 → FAILED barrier-deadline; ordinal 2 is
+    # withheld and drains a synthesized `cancelled` terminal.
+    original_deadline = wd._DEFAULT_FANOUT_BARRIER_DEADLINE_SECONDS
+    monkeypatch.setattr(wd, "_DEFAULT_FANOUT_BARRIER_DEADLINE_SECONDS", 0.2)
+    release = threading.Event()
+    ledger_1 = _RecordingLedger()
+    try:
+        attempt_1 = _run(
+            steps=[_inference_step(i) for i in range(n)],
+            dispatcher=cast(
+                StepDispatcher,
+                _WedgeBranch0CohortDispatcher(
+                    release=release, self_release_seconds=2.0, wedge_index=1
+                ),
+            ),
+            ledger=ledger_1,
+            concurrent_cache_warmup=True,
+            persona_tier=PersonaTier.TEAM_BINDING,
+            with_pause_protocol=True,
+            pause_snapshot_input=snapshot,
+        )
+    finally:
+        release.set()
+    assert attempt_1.status is RunStatus.FAILED
+    assert attempt_1.fail_class == "parallelization-barrier-deadline"
+    assert _branch_terminals(ledger_1)[2] == "cancelled"
+    # Restore the production deadline for attempt 2 (no wedge remains).
+    monkeypatch.setattr(wd, "_DEFAULT_FANOUT_BARRIER_DEADLINE_SECONDS", original_deadline)
+
+    # Resume attempt 2 from the SAME stale snapshot: both siblings re-dispatch
+    # (omission-keyed) and complete → PARTIAL (branch[0] is the degraded
+    # non-contributor from run A).
+    resume_dispatcher = _RecordingCohortDispatcher()
+    ledger_2 = _RecordingLedger()
+    attempt_2 = _run(
+        steps=[_inference_step(i) for i in range(n)],
+        dispatcher=cast(StepDispatcher, resume_dispatcher),
+        ledger=ledger_2,
+        concurrent_cache_warmup=True,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        with_pause_protocol=True,
+        pause_snapshot_input=snapshot,
+    )
+    assert attempt_2.status is RunStatus.PARTIAL
+    assert sorted(resume_dispatcher.dispatched) == [1, 2]
+    assert _branch_terminals(ledger_2)[2] == "completed"
+
+    def _terminal_key(ledger: _RecordingLedger, branch_index: int) -> str:
+        keys = {
+            str(payload.idempotency_key)
+            for payload, _wk in ledger.appends
+            if getattr(payload, "branch_metadata", None) is not None
+            and payload.branch_metadata.branch_index == branch_index
+            and payload.branch_metadata.terminal_status is not None
+        }
+        assert len(keys) == 1, f"expected one terminal for branch {branch_index}, got {keys}"
+        return next(iter(keys))
+
+    # The collision: the synthesized `cancelled` (attempt 1) and the real
+    # `completed` (attempt 2) compose the SAME idempotency key — at one shared
+    # real ledger the second is an IDEMPOTENT_NOOP and `cancelled` stands.
+    assert _terminal_key(ledger_1, 2) == _terminal_key(ledger_2, 2)
