@@ -11,7 +11,7 @@ reviewer_chain:
   - Fable-5 adversarial pre-build DESIGN review (this session; advisor tool unavailable + Codex TLS-blocked in bg jobs — standing fallback ladder per [[fable5-fallback-reviewer]]) — VERDICT AMEND, 0 blocking / 5 concern / 3 cosmetic; every cited anchor independently re-grounded at HEAD; C1 (v1.44 §1 re-scope) / C2 (protocol-not-bound exit included) / C3 (dedup residual named + ML7 key-collision witness) / C4 (single shared helper + PROCEED handler merge) / C5 (fence-arm live-on-strict-tiers/unreachable-on-PROCEED documented) all incorporated before build
   - Reviewer confirmations (refutation attempts that failed) — `cancelled` is the only obligation-4-legal disposition; a store write would poison crash-resume (store terminal outside {completed,timed_out,scoped_aborted} = corrupt; synthesized `timed_out` would trip the fail-closed ambiguity gate); no consumer keys `cancelled` to the CASCADE_CANCEL tier; crash-resume entry gates read store/markers only
   - impl witnesses (7 new ML1–ML7 tests; harness-cp full suite 1502 green; workspace pyright 0/0/0; ruff clean; runtime non-e2e + IS/AS/OD green recorded at the PR)
-  - post-build decorrelated diff review recorded at the PR
+  - Fable-5 post-build decorrelated DIFF review (fresh agent, main...HEAD) — VERDICT 0 BLOCKING / 2 CONCERN / 1 COSMETIC; all 8 attack points CLEAN with independent suite re-run (1502 green reproduced, pyright 0/0/0, ruff clean, every §-cite byte-resolved); CONCERN 1+2 = the fence-family audit-fidelity pair → prose re-scoped to the four enumerated exits + `B-18-FENCE-LEDGER-FIDELITY` registered (v1.91 item 6); COSMETIC (ML7 hard-coded deadline restore) fixed in-arc
 ---
 
 # Clearance — `Spec_Control_Plane_v1_91.md`

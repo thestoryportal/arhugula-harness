@@ -7536,7 +7536,13 @@ def _execute_parallelization(
     # — a crash would otherwise mis-classify it MAYBE-RAN + re-dispatch); the fence
     # arm is live on the strict tiers only (`_proceed_branch` has no fence path, and
     # PROCEED fence-resumes are rejected fail-closed pre-dispatch — under PROCEED it
-    # is structurally unreachable).
+    # is structurally unreachable). Fence-family scope limits (v1.91 item 6,
+    # follow-on `B-18-FENCE-LEDGER-FIDELITY`): the fence arm consults THIS-ROUND
+    # `effect_fence_paused_dispositions` only — a snapshot-carried fence peer
+    # (`_recovered_effect_fence_paused`) withheld on a resume round synthesizes
+    # `cancelled` (false cross-attempt; audit-surface only) — and the tier-agnostic
+    # fence-ABORT FAILED return fires before every scan site (an aborted branch has
+    # its own disposition-mapping questions; not naively scannable).
     def _synthesize_undispatched_terminals() -> None:
         for _bi, _step, child, writer, _binding in branch_plan:
             if _writer_has_branch_disposition(writer):

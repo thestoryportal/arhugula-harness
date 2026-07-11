@@ -1441,6 +1441,7 @@ def test_stale_snapshot_double_resume_synthesized_cancelled_key_collides(
     # Resume attempt 1: the remaining cohort's NEW branch[0] (ordinal 1) wedges
     # past the deadline in Phase 1 → FAILED barrier-deadline; ordinal 2 is
     # withheld and drains a synthesized `cancelled` terminal.
+    original_deadline = wd._DEFAULT_FANOUT_BARRIER_DEADLINE_SECONDS
     monkeypatch.setattr(wd, "_DEFAULT_FANOUT_BARRIER_DEADLINE_SECONDS", 0.2)
     release = threading.Event()
     ledger_1 = _RecordingLedger()
@@ -1465,7 +1466,7 @@ def test_stale_snapshot_double_resume_synthesized_cancelled_key_collides(
     assert attempt_1.fail_class == "parallelization-barrier-deadline"
     assert _branch_terminals(ledger_1)[2] == "cancelled"
     # Restore the production deadline for attempt 2 (no wedge remains).
-    monkeypatch.setattr(wd, "_DEFAULT_FANOUT_BARRIER_DEADLINE_SECONDS", 300.0)
+    monkeypatch.setattr(wd, "_DEFAULT_FANOUT_BARRIER_DEADLINE_SECONDS", original_deadline)
 
     # Resume attempt 2 from the SAME stale snapshot: both siblings re-dispatch
     # (omission-keyed) and complete → PARTIAL (branch[0] is the degraded
