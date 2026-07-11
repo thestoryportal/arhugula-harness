@@ -46,19 +46,21 @@
 snapshot:
   frozen_total: 11
   frozen_done: 11
-  standalone_closed: 74
+  standalone_closed: 75
   standalone_gated: 0
   standalone_resolved: 4
-  standalone_registered: 3
+  standalone_registered: 2
   rfs1_status: active
   source: ".harness/beyond-mvp-capability-boundary-ledger.md"
-  # FRONTIER NOTE (2026-07-11, B-18-FENCE-LEDGER-FIDELITY build arc: B-18-FENCE-LEDGER-
-  # FIDELITY-OW registered). standalone_registered 2→3 (the O-W counterpart registered at CP
-  # spec v1.92 item 7 per the pre-build review's check-7 grounding — shared ABORT-exit shape,
-  # different mechanics: inline CASCADE_CANCEL-only scan, never-landed M2 exits, third
-  # disposition class, own recovered dict — its own design pass rather than a silent widen).
-  # The B-18-FENCE-LEDGER-FIDELITY close (registered 3→2, closed 74→75) lands with the PR
-  # number in the same-branch close commit.
+  # FRONTIER NOTE (2026-07-11, B-18-FENCE-LEDGER-FIDELITY closed at PR #929; B-18-FENCE-
+  # LEDGER-FIDELITY-OW registered). standalone_closed 74→75, standalone_registered 2→2 net
+  # (FENCE-LEDGER-FIDELITY out; the -OW counterpart in, registered at CP spec v1.92 item 7
+  # per the pre-build review's check-7 grounding — shared ABORT-exit shape, different
+  # mechanics: inline CASCADE_CANCEL-only scan, never-landed M2 exits, third disposition
+  # class, own recovered dict — its own design pass rather than a silent widen). Scan now at
+  # FIVE terminal exits; aborted arm + recovered-union arm both capture-less; ONE named
+  # crash-visible addition (FL4). Remaining registered: B-18-EPOCH-PARTITION (dedicated
+  # session) + B-18-FENCE-LEDGER-FIDELITY-OW.
   # FRONTIER NOTE (2026-07-11, B-18-3C-PREWARM-TIMEOUT-LEDGER closed; B-18-FENCE-LEDGER-
   # FIDELITY registered). standalone_closed 73→74, standalone_registered 2→2 (TIMEOUT-LEDGER
   # out, FENCE-LEDGER-FIDELITY in from the #928 post-build diff review). Obligation-4
@@ -1777,10 +1779,13 @@ arcs:
   - id: B-18-FENCE-LEDGER-FIDELITY
     title: "Fence-state × terminal-exit audit records (ABORT-exit bypass + snapshot-carried fence-peer arm)"
     kind: standalone
-    status: registered
+    status: closed
     decompose_at_open: true
     owner_axis: CP
     parent_arc: B-18-3C-PREWARM
     anticipated_scope: "Two fence-family audit-fidelity findings from the #928 post-build diff review (CP spec v1.91 item 6): (a) the tier-agnostic parallelization-effect-fence-aborted FAILED return fires BEFORE every obligation-4 scan site — under warm-up a Phase-1 EffectFenceAbortedError withholds all siblings with zero ledger footprint; naively scanning there would mislabel the ABORTED branch `cancelled` (it DID dispatch — the fence arm keys on the paused dict, not the aborted set), so inclusion needs its own disposition mapping. (b) The scan's fence arm consults this-round effect_fence_paused_dispositions only, not the snapshot-carried _recovered_effect_fence_paused — a previously-fence-paused peer re-dispatched on a resume round and withheld by a Phase-1 strike synthesizes `cancelled` (false cross-attempt). Both audit-surface only (store markers / snapshots / resume / crash-resume stay honest, review-confirmed); open semantic question: store-capture-or-not for a cross-attempt fence peer."
     units: []
     ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
+    spec_delta: "CP spec v1.91 → v1.92 (fence-family arms + fifth scan site; clearance marker 2026-07-11)"
+    pr: "#929"
+    close_note: "PR #929. Scan at FIVE terminal exits (fence-ABORT added); aborted arm = ledger `completed` terminal-ONLY capture-less (obligation-4 forecloses `cancelled`; abort semantics at fail_class + durable fence claim); fence arm = this-round ∪ recovered union — recovered-withheld peer `completed` CAPTURE-LESS (the v1.91 open question answered by the snapshot-carried asymmetry: capture would flip _crash_pause_trigger and orphan the reserve); ONE named crash-visible addition (this-round INERT re-pause at the new exit inherits the v1.65 §1(c) capture trade, FL4-pinned); PAUSED boundary stays scan-free (ML5+FL8). O-W counterpart registered as B-18-FENCE-LEDGER-FIDELITY-OW, not silently widened. Pre-build Fable-5 design review AMEND 0-blocking (all folded pre-build); post-build Fable-5 diff review 0-blocking/2-concern/1-cosmetic (five-exits stale-carry + -OW registration-truth + comment variant, all fixed in-arc). 7 witnesses (FL1(+FL2/FL7)/FL3/FL3b/FL4/FL5/FL6/FL8, fails-on-main verified). harness-cp 1509 / runtime 2360 / axes 1590 green; pyright 0/0/0. 2026-07-11."
