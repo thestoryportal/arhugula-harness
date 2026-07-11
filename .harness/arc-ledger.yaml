@@ -46,12 +46,22 @@
 snapshot:
   frozen_total: 11
   frozen_done: 11
-  standalone_closed: 75
+  standalone_closed: 76
   standalone_gated: 0
   standalone_resolved: 4
   standalone_registered: 2
   rfs1_status: active
   source: ".harness/beyond-mvp-capability-boundary-ledger.md"
+  # FRONTIER NOTE (2026-07-11, B-18-FENCE-LEDGER-FIDELITY-OW closed at PR #930;
+  # B-18-FENCE-LEDGER-RECONSTRUCT-RESIDUAL registered). standalone_closed 75→76,
+  # standalone_registered 2→2 net (the -OW counterpart out; the reconstruct residual in,
+  # registered at CP spec v1.93 item 9 per the -OW pre-build review finding 3 — the shared
+  # two-engine reconstruct-no-dispatch × protocol-unbound zero-footprint exit, OUTSIDE the
+  # seven-exit scan, deliberately not absorbed). O-W scan now at SEVEN terminal exits with
+  # six arms (aborted-first; fence + paused-child this-round/recovered union; else
+  # cancelled); named crash-visible additions = fence capture at ABORT exit + fresh-run
+  # protocol-not-bound. Remaining registered: B-18-EPOCH-PARTITION (dedicated session) +
+  # B-18-FENCE-LEDGER-RECONSTRUCT-RESIDUAL.
   # FRONTIER NOTE (2026-07-11, B-18-FENCE-LEDGER-FIDELITY closed at PR #929; B-18-FENCE-
   # LEDGER-FIDELITY-OW registered). standalone_closed 74→75, standalone_registered 2→2 net
   # (FENCE-LEDGER-FIDELITY out; the -OW counterpart in, registered at CP spec v1.92 item 7
@@ -1768,11 +1778,25 @@ arcs:
   - id: B-18-FENCE-LEDGER-FIDELITY-OW
     title: "ORCHESTRATOR_WORKERS fence/terminal-exit audit records (aborted-return bypass + never-landed M2 exits + union arm)"
     kind: standalone
-    status: registered
+    status: closed
     decompose_at_open: true
     owner_axis: CP
     parent_arc: B-18-3C-PREWARM
     anticipated_scope: "The O-W counterpart of B-18-FENCE-LEDGER-FIDELITY, registered at CP spec v1.92 item 7 (pre-build review check 7) rather than silently widened: O-W SHARES the zero-footprint ABORT-exit shape (orchestrator-workers-effect-fence-aborted fires before its scan) but the mechanics differ — O-W's obligation-4 scan is an inline CASCADE_CANCEL-only loop (its deadline and pause-tier terminal exits never received the v1.91 M2 scan at all), O-W carries a third disposition class (paused_child_dispositions union), and O-W has its own recovered dict. Honest scope = the aborted-return bypass + the never-landed M2 terminal exits + the this-round/recovered union arm, mapped against O-W's three-class arms; same disposition vocabulary as v1.92 (aborted arm completed terminal-only capture-less; recovered-withheld completed capture-less)."
+    units: []
+    ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
+    spec_delta: "CP spec v1.92 → v1.93 (O-W scan at SEVEN terminal exits, six arms; clearance marker 2026-07-11)"
+    pr: "#930"
+    close_note: "PR #930. Inline CASCADE_CANCEL-only loop factored into an O-W-local _synthesize_undispatched_terminals() at SEVEN terminal exits (fence-ABORT bypass fixed; PROCEED deadline [handlers merged] + PROCEED paused-child + PAUSE deadline + not-yet-materialized + protocol-not-bound never had the M2 scan). Six arms aborted-first (aborted ∈ recovered BY CONSTRUCTION — the directive is built from the dict): aborted completed terminal-ONLY capture-less; fence this-round completed + capture; fence recovered completed capture-less; paused-child this-round AND recovered completed capture-less (the third-class union half — a capture would flip the crash gate's child-recoverable classification); else cancelled. Named crash-visible additions: fence capture at the ABORT exit (OW1) + fresh-run protocol-not-bound (OW6b); race-reachable at PAUSE deadline per the v1.91 item-3 characterization. PAUSED boundary + rejection guards + empty-plan block scan-free; HD inherits per level. Pre-build Fable-5 design review AMEND 0-blocking/4-concern/3-cosmetic ALL folded; build-time empirical corrections folded (poisoned-ordinal-itself mechanics; execute_workflow ignores snapshot input without protocol → recovered arms at pause-guard exits direct-call-only). 9 witnesses OW1-OW10 (determinism 3/3); harness-cp 1518 + runtime 2360 + axes 1590 green; pyright 0/0/0. The shared two-engine reconstruct residual REGISTERED (B-18-FENCE-LEDGER-RECONSTRUCT-RESIDUAL), not absorbed. 2026-07-11."
+
+  - id: B-18-FENCE-LEDGER-RECONSTRUCT-RESIDUAL
+    title: "Two-engine reconstruct-no-dispatch × protocol-unbound zero-footprint residual (skipped-ordinal cancelled synthesis)"
+    kind: standalone
+    status: registered
+    decompose_at_open: true
+    owner_axis: CP
+    parent_arc: B-18-3C-PREWARM
+    anticipated_scope: "Registered at CP spec v1.93 item 9 (the -OW pre-build review finding 3): the crash-pause reconstruct-no-dispatch path's protocol-not-bound FAILED exit returns BEFORE any snapshot is built, so the reconstruct-skipped ordinals (proven not-yet-run: instrumented + no dispatch marker) and the carried fence-recoverable ordinals end at a terminal FAILED with zero ledger footprint and NO snapshot — the v1.91 item-2(d) rationale, at an exit OUTSIDE the seven-exit scan (branch_plan is empty there; the ordinals are not plan-carried). SHARED with the committed PARALLELIZATION sibling (its protocol-not-bound scan call is vacuous over the empty plan on that path; v1.92 did not fix it either). Honest fix shape = an explicit synthesis over the skipped ordinals at that exit in BOTH engines (cancelled is provably honest for them: marker-absence = provably-never-ran); needs its own disposition pass for the carried fence-recoverable ordinals (completed capture-less per the union-arm vocabulary)."
     units: []
     ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
 
