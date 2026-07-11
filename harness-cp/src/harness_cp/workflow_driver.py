@@ -10430,6 +10430,99 @@ def _execute_orchestrator_workers(
 
     deadline = _DEFAULT_FANOUT_BARRIER_DEADLINE_SECONDS
 
+    # B-18-FENCE-LEDGER-FIDELITY-OW (CP spec v1.93; DDR at
+    # `.harness/b18-fence-ledger-fidelity-ow-design-decision-record.md`) — the §25.15.2
+    # obligation-4 scan, extended from PARALLELIZATION (v1.91 M2 + v1.92 fence arms) to
+    # this engine's SEVEN terminal exits: fence-ABORT (pre-cascade-branch), CASCADE_CANCEL
+    # post-barrier (the pre-arc inline loop, factored here), PROCEED deadline → PARTIAL,
+    # PROCEED paused-child → FAILED, PAUSE deadline → FAILED, PAUSE not-yet-materialized →
+    # FAILED (defence-in-depth; no live caller passes pause_resumable=False), PAUSE
+    # protocol-not-bound → FAILED. A worker withheld past a terminal run boundary has NO
+    # ledger footprint, unlike every in-flight worker (which records step + terminal at its
+    # own handler). Keyed on the ABSENCE of a step/terminal disposition, NOT an empty
+    # buffer (an overridden worker carries its pre-fan-out override entry,
+    # `branch_metadata=None`). LEDGER-only for a never-dispatched worker — NEVER
+    # `_mark_branch_dispatched` / `_capture_branch_terminal`: dispatch-marker ABSENCE is
+    # the durable provably-never-ran witness, and synthesized entries are PER-ATTEMPT
+    # AUDIT records, not resume authority (resume keys on snapshot omission — v1.91
+    # item 5 / v1.92 item 5). NOT called on the worker-failure → PAUSED boundary, where
+    # snapshot omission IS the re-dispatchable contract (§25.15.1), nor at the resume-
+    # rejection guards (pre-flight refusals — the round never released a worker), nor at
+    # the `not branch_plan` short-circuit (no plan-carried branches; the reconstruct ×
+    # protocol-unbound residual there is REGISTERED at v1.93, not absorbed here). Arms in
+    # ORDER — an aborted ordinal is BY CONSTRUCTION also in the recovered-fence dict (the
+    # ABORT directive is built from it), so the aborted arm is checked first:
+    #   (1) fence-ABORTED (`EffectFenceAbortedError` at its re-dispatch): dispatched and
+    #       REFUSED — `cancelled` is foreclosed (obligation-4: not-yet-dispatched only)
+    #       and a step entry would claim an effectful step ran. Ledger `completed`
+    #       terminal-ONLY, NO store capture (a capture would flip the crash gate's
+    #       fence-recoverable classification and erase the operator's pending ABORT).
+    #   (2) fence-paused, THIS round (`effect_fence_paused_dispositions`): DID dispatch →
+    #       `completed` + the durable store capture (the pre-arc CASCADE_CANCEL arm,
+    #       Codex [P2] lineage; where this arm newly fires — the fence-ABORT exit and the
+    #       PAUSE-guard FAILED exits — the capture is the committed v1.65 §1(c)
+    #       reproduce-the-terminal trade, v1.93-named).
+    #   (3) fence-paused, RECOVERED (`_recovered_effect_fence_paused`; withheld this
+    #       round before its re-dispatch): attempt-1 dispatched and holds an ambiguous-
+    #       uncommitted reserve — obligation-4 `completed`; NO capture (the still-
+    #       journaled prior snapshot carries the peer, so capture-less keeps its crash
+    #       classification fence-recoverable MAYBE-RAN + the reserve un-orphaned).
+    #   (4) paused-child, THIS round (`paused_child_dispositions`): DID dispatch (its
+    #       recursive child paused mid-flight) → `completed` (the pre-arc CASCADE_CANCEL
+    #       arm), NO capture (a capture would flip the crash gate's child-recoverable
+    #       classification to recovered-terminal, dropping the child snapshot's
+    #       resumability).
+    #   (5) paused-child, RECOVERED (`_recovered_paused_child`; withheld this round
+    #       before its child-resume re-dispatch): attempt-1 dispatched — `completed`,
+    #       NO capture (the prior snapshot carries it in `paused_child_branches`; the
+    #       third-disposition-class half of the v1.93 union arm).
+    #   (6) else never-dispatched → `cancelled`, LEDGER-only (the M2 baseline).
+    # HIERARCHICAL_DELEGATION inherits every site per level (its recursion re-enters this
+    # engine). Scoped-abort ordinals are structurally invisible (excluded from
+    # `branch_plan`; their durable terminal is recorded at the post-init block above).
+    def _synthesize_undispatched_terminals() -> None:
+        for _bi, _step, child, writer, _binding in branch_plan:
+            if _writer_has_branch_disposition(writer):
+                continue
+            if _bi in effect_fence_aborted_dispositions:
+                # Arm (1): aborted — ledger `completed` terminal-ONLY, no capture.
+                append_branch_terminal_ledger_entry(
+                    branch_writer=writer,
+                    branch_context=child,
+                    run_idempotency_key=run_idempotency_key,
+                    terminal_status="completed",
+                    timestamp=fanout_timestamp,
+                    procedural_tier_snapshot_ref=snapshot_ref,
+                )
+                continue
+            _fence_paused = _bi in effect_fence_paused_dispositions
+            _dispatched_boundary = (
+                _fence_paused
+                or _bi in _recovered_effect_fence_paused
+                or _bi in paused_child_dispositions
+                or _bi in _recovered_paused_child
+            )
+            _disposition = "completed" if _dispatched_boundary else "cancelled"
+            if _fence_paused:
+                # Arm (2) only — arms (3)/(4)/(5) are deliberately capture-less.
+                _capture_branch_terminal(
+                    ctx,
+                    manifest_entry,
+                    run_idempotency_key=run_idempotency_key,
+                    branch_index=_bi,
+                    step_id=str(_step.step_id),
+                    terminal_status="completed",
+                    output=None,
+                )
+            append_branch_terminal_ledger_entry(
+                branch_writer=writer,
+                branch_context=child,
+                run_idempotency_key=run_idempotency_key,
+                terminal_status=_disposition,
+                timestamp=fanout_timestamp,
+                procedural_tier_snapshot_ref=snapshot_ref,
+            )
+
     # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE — resuming an effect-fence pause (a STRICT-TIER construct)
     # under a manifest/persona that now resolves to PROCEED is incoherent (the PROCEED path has no
     # pause/resolution handling → a re-entered worker's ABORT / missing-resolution ambiguous error
@@ -10555,18 +10648,28 @@ def _execute_orchestrator_workers(
             results = _run_fanout_to_completion(
                 _proceed_fanout(), max_workers=max(1, len(branch_plan))
             )
-        except BranchBarrierDeadlineExceededError:
+        except (BranchBarrierDeadlineExceededError, TimeoutError):
             # A stuck worker hit the deadline; the completed workers buffered their
             # entries → PARTIAL (degraded). (proceed does not cancel; the stuck
-            # worker is abandoned per `_run_fanout_to_completion`.)
-            return _finish(RunStatus.PARTIAL, fail_class=None, salvage=True)
-        except TimeoutError:
+            # worker is abandoned per `_run_fanout_to_completion`; handlers merged —
+            # the M2 parity shape.) A TERMINAL exit nothing resumes → run the
+            # obligation-4 scan (B-18-FENCE-LEDGER-FIDELITY-OW): a never-scheduled
+            # worker records `cancelled`; a stashed paused-child (its stash-then-
+            # deadline interleaving exits HERE, before the paused-child check below)
+            # records `completed` terminal-only — in-flight-cut workers already
+            # recorded `timed_out` at their own CancelledError handler.
+            _synthesize_undispatched_terminals()
             return _finish(RunStatus.PARTIAL, fail_class=None, salvage=True)
         if paused_child_dispositions:
             # B-HIERARCHICAL-PAUSE — a recursive child PAUSED under `proceed`. There is
             # no resumable-pause boundary here (proceed degrades, it does not pause), so
             # the suspended child cannot be carried for resume — FAIL HONESTLY rather than
             # a SUCCESS/PARTIAL that silently dropped a suspended sub-workflow.
+            # B-18-FENCE-LEDGER-FIDELITY-OW — a TERMINAL exit nothing resumes: the
+            # paused child itself has zero footprint (stash only) → the scan records
+            # its `completed` terminal-only (arm 4; dispatch-boundary — its child
+            # paused mid-flight), never `cancelled`.
+            _synthesize_undispatched_terminals()
             return _finish(
                 RunStatus.FAILED,
                 fail_class="orchestrator-workers-child-paused-not-resumable-under-proceed",
@@ -10814,7 +10917,17 @@ def _execute_orchestrator_workers(
     # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE — an operator ABORT on resume is TERMINAL: force FAILED
     # tier-agnostically, BEFORE the cascade-policy branching, so a CascadePolicy.PAUSE run does
     # NOT re-pause an aborted fence worker (the LINEAR ABORT → FAILED analogue; Codex [P1]).
+    # (Positioned tier-agnostically; strict-tier-only in practice — PROCEED returns earlier and
+    # `_proceed_worker` has no abort catch.)
+    # B-18-FENCE-LEDGER-FIDELITY-OW (CP spec v1.93) — a TERMINAL exit nothing resumes: run the
+    # obligation-4 scan BEFORE the return (the fence-ABORT bypass fix, the v1.92-item-7(a)
+    # shape). The aborted arm records the ABORTED worker `completed` terminal-ONLY no-capture
+    # (arm order wins over its by-construction recovered-dict membership); a this-round INERT
+    # re-paused peer records `completed` + the durable capture (the v1.65 §1(c) trade, named);
+    # withheld recovered peers record `completed` capture-less; plain withheld `cancelled`.
+    # fail_class + run status unchanged.
     if effect_fence_aborted_dispositions:
+        _synthesize_undispatched_terminals()
         return _finish(
             RunStatus.FAILED,
             fail_class="orchestrator-workers-effect-fence-aborted",
@@ -10825,52 +10938,14 @@ def _execute_orchestrator_workers(
         # obl. 4: a not-yet-dispatched worker (no step/terminal disposition — its
         # task was cancelled before scheduling its dispatch) records a `cancelled`
         # terminal so `resume_should_redispatch` is False (no double-dispatch on
-        # resume). Keyed on the ABSENCE of a step/terminal disposition, NOT an empty
-        # buffer: an overridden worker carries its pre-fan-out override entry
-        # (`branch_metadata=None`, B-NONLINEAR-OVERRIDE-PROVENANCE), so an
-        # `entry_count == 0` test would skip its required `cancelled` terminal.
-        for _bi, _step, child, writer, _binding in branch_plan:
-            if _writer_has_branch_disposition(writer):
-                continue
-            # B-HIERARCHICAL-PAUSE (Codex [P2]) — a paused-child branch (its recursive
-            # child returned PAUSED) DID dispatch but recorded no terminal (it is the
-            # third disposition, captured into `paused_child_dispositions`). Under
-            # cascade-cancel it is NOT resumed (the run FAILs + the child snapshot is
-            # discarded), but it MUST NOT be mislabeled `cancelled` (= not-yet-dispatched)
-            # — it dispatched + its child paused. Record `completed` (dispatch-boundary,
-            # like a ran-and-errored worker) so the branch ledger reflects the dispatch.
-            # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE — same for an effect-fence-paused ordinal:
-            # its OWN dispatch fired the fence (the effect may have landed), so it dispatched
-            # and MUST NOT be mislabeled `cancelled`. Under cascade-cancel it is not resumed
-            # (the run FAILs + the resolution is discarded); record `completed` so the ledger
-            # reflects the dispatch (the ambiguous effect lives at the durable fence claim).
-            _disposition = (
-                "completed"
-                if (_bi in paused_child_dispositions or _bi in effect_fence_paused_dispositions)
-                else "cancelled"
-            )
-            if _bi in effect_fence_paused_dispositions:
-                # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE — ALSO capture the `completed`/no-output
-                # terminal to the durable STORE (not just the buffered ledger), so a crash mid-
-                # cascade-cancel reproduces the FAILED on resume instead of mis-classifying the
-                # worker as MAYBE-RAN + re-dispatching (Codex [P2]; the parallelization analogue).
-                _capture_branch_terminal(
-                    ctx,
-                    manifest_entry,
-                    run_idempotency_key=run_idempotency_key,
-                    branch_index=_bi,
-                    step_id=str(_step.step_id),
-                    terminal_status="completed",
-                    output=None,
-                )
-            append_branch_terminal_ledger_entry(
-                branch_writer=writer,
-                branch_context=child,
-                run_idempotency_key=run_idempotency_key,
-                terminal_status=_disposition,
-                timestamp=fanout_timestamp,
-                procedural_tier_snapshot_ref=snapshot_ref,
-            )
+        # resume); a paused-child / effect-fence-paused ordinal records `completed`
+        # instead (it dispatched — B-HIERARCHICAL-PAUSE Codex [P2] +
+        # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE, fence + durable capture for the
+        # this-round fence arm; a recovered-withheld peer records `completed`
+        # capture-less, CP spec v1.93 union arm). The shared scan
+        # (`_synthesize_undispatched_terminals` above — the pre-arc inline loop,
+        # factored at B-18-FENCE-LEDGER-FIDELITY-OW) carries the full discipline.
+        _synthesize_undispatched_terminals()
         # B-FANOUT-EFFECT-FENCE-PER-BRANCH-SCOPED-ABORT (R-FS-1, CP spec v1.73 §1; Codex [P1]) —
         # under CASCADE_CANCEL a scoped-abort is a deliberate worker failure → the run cancels
         # (FAILED), NEVER a SUCCESS hiding the aborted worker. Fires BEFORE the SUCCESS return below
@@ -10894,10 +10969,12 @@ def _execute_orchestrator_workers(
     # pause (§25.15.1 `pause → PAUSED`) — resumable FAN-OUT pause (B-FANOUT-PAUSE,
     # R-FS-1). On a worker failure: in-flight siblings finished (shielded, recorded
     # their terminal); not-yet-dispatched siblings were TaskGroup-cancelled and are
-    # LEFT RE-DISPATCHABLE — the cascade-cancel obl.4 `cancelled`-terminal scan above
-    # is DELIBERATELY NOT run here (the §25.15.1 pause semantic is "in-flight finish;
-    # not-yet-dispatched left re-dispatchable", adversarial-review-r-fs-1-arc-14
-    # line 55). We capture the per-branch terminal dispositions + the completed
+    # LEFT RE-DISPATCHABLE — the shared obl.4 scan (`_synthesize_undispatched_terminals`)
+    # is DELIBERATELY NOT run on this PAUSED boundary (the §25.15.1 pause semantic is
+    # "in-flight finish; not-yet-dispatched left re-dispatchable" — snapshot OMISSION is
+    # the re-dispatchable contract; adversarial-review-r-fs-1-arc-14 line 55, re-scoped
+    # to exactly this boundary at CP spec v1.91/v1.93). We capture the per-branch
+    # terminal dispositions + the completed
     # branches' OUTPUTS (which the ledger does NOT carry — the R-CC-1 design §1.1
     # data-stateless re-open trigger, materialized for the fan-out case) into a
     # `FanOutResumeState`-bearing, hash-integrity-checked `PauseSnapshot`, return
@@ -10905,6 +10982,14 @@ def _execute_orchestrator_workers(
     # re-dispatch the rest (obl. 7). The deadline-strike case (a STUCK fan-out, no
     # worker raised) stays FAILED — there is no clean pause boundary to resume from.
     if deadline_struck:
+        # A TERMINAL exit nothing resumes (a STUCK fan-out has no clean pause boundary)
+        # → run the obligation-4 scan (B-18-FENCE-LEDGER-FIDELITY-OW): never-scheduled
+        # workers + withheld recovered peers would otherwise leave zero footprint with
+        # NO snapshot to carry the re-dispatchable-by-omission defense. (The this-round
+        # stash arms are race-reachable here — a stash-family raise in the watchdog
+        # window ends its task CANCELLED, not failed — the documented v1.91-item-3
+        # composition.)
+        _synthesize_undispatched_terminals()
         return _finish(
             RunStatus.FAILED, fail_class="orchestrator-workers-barrier-deadline", salvage=False
         )
@@ -10918,6 +11003,10 @@ def _execute_orchestrator_workers(
             # BOTH top-level ORCHESTRATOR_WORKERS and HIERARCHICAL_DELEGATION pass
             # `pause_resumable=True`, so this guard now only protects a future unwired
             # reuse site (defence-in-depth, no live caller hits it).
+            # B-18-FENCE-LEDGER-FIDELITY-OW — a TERMINAL exit sharing the protocol-
+            # not-bound shape below: scan for the same reason (uniform obligation-4
+            # completeness; the exit is direct-call-reachable only, honestly labeled).
+            _synthesize_undispatched_terminals()
             return _finish(
                 RunStatus.FAILED,
                 fail_class="orchestrator-workers-pause-resume-not-yet-materialized",
@@ -10929,6 +11018,11 @@ def _execute_orchestrator_workers(
             # FALSE-`PAUSED` silent-degradation mode). Fail HONESTLY — detect-then-
             # refuse, mirroring `api.resume`'s ResumeProtocolNotBoundError. Completed
             # / in-flight ledger entries + the salvaged partial set still persist.
+            # A TERMINAL exit nothing resumes → run the obligation-4 scan (without a
+            # snapshot the re-dispatchable-by-omission defense does not apply, so zero
+            # footprint here would be indistinguishable from lost entries; a this-round
+            # fence peer's capture at this exit is the named v1.65 §1(c) trade).
+            _synthesize_undispatched_terminals()
             return _finish(
                 RunStatus.FAILED,
                 fail_class="orchestrator-workers-pause-resume-protocol-not-bound",
