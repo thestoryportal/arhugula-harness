@@ -1,4 +1,4 @@
-"""B-18-3C-PREWARM-COHORTKEY — CP driver integration: `_same_prefix_cohort()` predicate.
+"""B-18-3C-PREWARM-COHORTKEY — CP driver integration: the warm-up cohort gate.
 
 Tests that the dispatcher-oracle predicate correctly gates the concurrent-cache-warmup
 serialization path for `_execute_parallelization`.  These tests use the full
@@ -7,7 +7,8 @@ but focus on the COHORTKEY-specific branches:
 
   CK-1  Uniform non-None cohort keys → warmup fires (serialized branch[0] first).
   CK-2  CohortKeyCapable dispatcher returns None → warmup blocked (all-concurrent).
-  CK-3  Non-uniform cohort keys → warmup blocked (all-concurrent).
+  CK-3′ ALL-DISTINCT cohort keys (every cohort singleton) → warmup blocked
+        (all-concurrent).  Reshaped at B-18-EPOCH-PARTITION (CP spec v1.95 §25.19).
 
 Authority: `.harness/class_2_fork_b18_cohortkey_fork_a_vs_b.md`;
 `Spec_Control_Plane_v1_88.md` §25.15–§25.16; DDR §11.5.
@@ -214,10 +215,17 @@ class _NullCohortDispatcher:
 
 
 class _NonUniformCohortDispatcher:
-    """CohortKeyCapable — returns different keys per branch → warmup blocked.  CK-3.
+    """CohortKeyCapable — ALL-DISTINCT keys per branch → warmup blocked.  CK-3′.
 
     Same reverse-completion ordering as above to detect serialization via deadlock.
-    Branch 0 gets "key-A"; all others get "key-B".
+    Every branch gets its own key → every cohort is a singleton → no multi-member
+    cohort → the B-18-EPOCH-PARTITION gate stays False (CP spec v1.95 §25.19).
+
+    (CK-3's pre-partition premise — branch 0 "key-A", others "key-B", asserting
+    non-uniform → all-concurrent — was SUPERSEDED by B-18-EPOCH-PARTITION: a
+    multi-member cohort now warms even beside a differing branch. That behavior
+    is pinned by the EP witnesses in test_workflow_driver_parallelization_warmup.py;
+    this reshaped fixture pins the SURVIVING half of the old contract.)
     """
 
     def __init__(self, *, n: int) -> None:
@@ -240,7 +248,7 @@ class _NonUniformCohortDispatcher:
 
     def cohort_key(self, binding: StepEffectiveBinding, step: WorkflowStep) -> str | None:
         idx = step.step_payload.get("index", 0)
-        return "key-A" if idx == 0 else "key-B"
+        return f"key-{idx}"
 
 
 # ---------------------------------------------------------------------------
@@ -250,7 +258,7 @@ class _NonUniformCohortDispatcher:
 
 def test_uniform_cohort_key_triggers_warmup() -> None:
     """CK-1: CohortKeyCapable dispatcher returning the same non-None key for all
-    branches → `_same_prefix_cohort()` returns True → warmup serialization fires."""
+    branches → one N-member cohort → gate True → warmup serialization fires."""
     n = 4
     witness = _UniformCohortDispatcher()
     result = _run(
@@ -266,8 +274,8 @@ def test_uniform_cohort_key_triggers_warmup() -> None:
 
 
 def test_none_cohort_key_no_warmup() -> None:
-    """CK-2: CohortKeyCapable dispatcher that returns None → `_same_prefix_cohort()`
-    returns False → no serialization → all-concurrent (reverse-completion proves this)."""
+    """CK-2: CohortKeyCapable dispatcher that returns None → no cohort forms →
+    gate False → no serialization → all-concurrent (reverse-completion proves this)."""
     n = 3
     dispatcher = _NullCohortDispatcher(n=n)
     result = _run(
@@ -278,8 +286,10 @@ def test_none_cohort_key_no_warmup() -> None:
 
 
 def test_nonuniform_cohort_keys_no_warmup() -> None:
-    """CK-3: CohortKeyCapable dispatcher returning different keys for branch 0 vs
-    siblings → `_same_prefix_cohort()` returns False → no serialization → all-concurrent."""
+    """CK-3′ (reshaped at B-18-EPOCH-PARTITION, CP spec v1.95 §25.19): ALL-DISTINCT
+    cohort keys → every cohort a singleton → no multi-member cohort → gate False →
+    no serialization → all-concurrent. (The pre-partition CK-3 premise — any
+    non-uniformity blocks warmup — is superseded; see the EP witnesses.)"""
     n = 3
     dispatcher = _NonUniformCohortDispatcher(n=n)
     result = _run(
