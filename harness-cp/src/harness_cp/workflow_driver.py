@@ -7511,9 +7511,10 @@ def _execute_parallelization(
     _warmup_gate: bool = _d4.concurrent_cache_warmup and _same_prefix_cohort()
 
     # B-18-3C-PREWARM-TIMEOUT-LEDGER (M2) — audit completeness at every TERMINAL fan-out
-    # exit. §25.15.2 obligation-4 scan, shared by all four terminal exits (CASCADE_CANCEL
+    # exit. §25.15.2 obligation-4 scan, shared by all five terminal exits (CASCADE_CANCEL
     # post-barrier; PROCEED deadline → PARTIAL; PAUSE deadline-strike → FAILED; PAUSE
-    # protocol-not-bound → FAILED): a branch withheld past a terminal run boundary — the
+    # protocol-not-bound → FAILED; fence-ABORT → FAILED, CP spec v1.92): a branch
+    # withheld past a terminal run boundary — the
     # warm-up Phase 1 struck the deadline / failed before releasing it, or (baseline) it
     # was never started when the cut landed — has NO ledger footprint, unlike every
     # in-flight branch (which records its step + `timed_out` terminal at its own
@@ -8041,8 +8042,10 @@ def _execute_parallelization(
         # obl. 4: a not-yet-dispatched branch (no step/terminal disposition — its
         # task was cancelled before scheduling its dispatch) records a `cancelled`
         # terminal so resume does not double-dispatch; an effect-fence-paused peer
-        # records `completed` + the durable capture instead. The shared scan
-        # (`_synthesize_undispatched_terminals` above) carries the full discipline.
+        # records `completed` + the durable capture instead (this-round; a
+        # recovered-withheld peer records `completed` capture-less, CP spec v1.92).
+        # The shared scan (`_synthesize_undispatched_terminals` above) carries the
+        # full discipline.
         _synthesize_undispatched_terminals()
         # B-FANOUT-EFFECT-FENCE-PER-BRANCH-SCOPED-ABORT (R-FS-1, CP spec v1.73 §1; Codex [P1]) —
         # under CASCADE_CANCEL a scoped-abort is a deliberate branch failure → the run cancels
