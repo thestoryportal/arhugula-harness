@@ -1652,6 +1652,7 @@ arcs:
     title: "CohortKeyCapable Protocol — dispatcher-attested cacheability for concurrent-cache warmup"
     kind: standalone
     status: closed
+    pr: "#925"
     owner_axis: "CP + runtime"
     parent_arc: B-18-3C-PREWARM
     spec_delta: "CP spec v1.87 → v1.88 (additive CohortKeyCapable @runtime_checkable Protocol §25.16; _same_prefix_cohort() dispatcher-oracle refactor §25.15; clearance marker 2026-07-10). Fork B ratified per .harness/class_2_fork_b18_cohortkey_fork_a_vs_b.md. NO StepDispatcher Protocol widening, NO IS/CXA/contract/enum/fail-class/§5.2-hash change."
@@ -1702,12 +1703,14 @@ arcs:
     units: []
     ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
     spec_delta: "CP spec v1.89 → v1.90 (§25.17 CASCADE_CANCEL+PAUSE addendum; clearance marker 2026-07-11)"
-    close_note: "Gate lift + two-phase _cancel_fanout (shared deadline/watchdog, R3 guard). DDR §3b Option A operator-ratified then PROBE-RESOLVED vacuous (entry-gate v1.68/v1.70 reconstruct already covers the crash window; W6 pins PAUSED-not-PARTIAL). 8 new witnesses. 2026-07-11."
+    pr: "#927"
+    close_note: "PR #927. Gate lift + two-phase _cancel_fanout (shared deadline/watchdog, R3 guard). DDR §3b Option A operator-ratified then PROBE-RESOLVED vacuous (entry-gate v1.68/v1.70 reconstruct already covers the crash window; W6 pins PAUSED-not-PARTIAL). 10 new witnesses. 2026-07-11."
 
   - id: B-18-3C-PREWARM-DEFAULT-ON
     title: "Flip concurrent_cache_warmup default to ADR §1.8(f) required-at-cap>1"
     kind: standalone
     status: closed
+    pr: "#926"
     decompose_at_open: true
     owner_axis: "CP + runtime"
     parent_arc: B-18-3C-PREWARM
