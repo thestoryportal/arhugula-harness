@@ -491,8 +491,8 @@ def test_warmup_branch0_failure_siblings_dispatched_and_partial() -> None:
 
 
 def test_warmup_singleton_branch_plan_no_serialization() -> None:
-    """H3 regression: len(branch_plan) < 2 → _same_prefix_cohort() returns False
-    → _warmup_gate=False even with concurrent_cache_warmup=True.  Singleton branch
+    """H3 regression: len(branch_plan) < 2 → the cohort partition short-circuits (no
+    multi-member cohort) → _warmup_gate=False even with concurrent_cache_warmup=True.  Singleton branch
     must succeed on the all-concurrent path."""
     result = _run(
         steps=[_inference_step(0)],
@@ -505,7 +505,7 @@ def test_warmup_singleton_branch_plan_no_serialization() -> None:
 def test_warmup_predicate_declarative_step_all_concurrent() -> None:
     """M6: DECLARATIVE_STEP uses a non-CohortKeyCapable dispatcher (mirrors
     production: sub-agent / tool / HITL dispatchers are not CohortKeyCapable) →
-    _same_prefix_cohort() returns False → _warmup_gate=False → all-concurrent.
+    no cohort forms → _warmup_gate=False → all-concurrent.
     Verified via ReverseCompletionDispatcher (would deadlock on the serialized path)."""
     n = 3
     reverse = _ReverseCompletionDispatcher(n=n)
@@ -520,7 +520,7 @@ def test_warmup_predicate_declarative_step_all_concurrent() -> None:
 
 def test_warmup_predicate_nonuniform_thinking_all_concurrent() -> None:
     """M8 (non-CohortKeyCapable path): a non-CohortKeyCapable INFERENCE_STEP
-    dispatcher → _same_prefix_cohort() returns False → _warmup_gate=False →
+    dispatcher → no cohort forms → _warmup_gate=False →
     all-concurrent.  Verified via ReverseCompletionDispatcher.
 
     The cohort-key encoding of thinking-uniformity (CohortKeyCapable path where
@@ -1109,7 +1109,7 @@ def test_warmup_default_on_live_cache_hit() -> None:  # pragma: no cover
 
     Verifies that a WorkflowManifestEntry constructed WITHOUT explicit
     `concurrent_cache_warmup` gets the new default of True. The structural run
-    below uses _ReverseCompletionDispatcher (non-CohortKeyCapable) → _same_prefix_cohort()
+    below uses _ReverseCompletionDispatcher (non-CohortKeyCapable) → the cohort partition
     returns False → _warmup_gate=False → all-concurrent baseline (the safety
     property: default-True + non-cohort dispatcher = byte-identical to old default-False).
 
@@ -2124,3 +2124,545 @@ def test_fence_ledger_paused_boundary_scan_free_peer_reappears_this_round() -> N
         (e.branch_index, e.step_id, e.step_kind, e.idempotency_key)
         for e in peer2.effect_fence_paused_branches
     ] == [(1, "inf-1", "inference-step", "fence-key-round2-1")]
+
+
+# ---------------------------------------------------------------------------
+# B-18-EPOCH-PARTITION — heterogeneous cohort partition (CP spec v1.95 §25.19;
+# `.harness/b18-epoch-partition-design-decision-record.md` §5 witnesses EP1-EP9).
+# The binary all-same-key predicate is superseded: branches group by
+# (step_kind, cohort_key); Phase 1 = one LEADER per multi-member cohort + every
+# non-beneficiary (None-key / non-capable / singleton) branch; Phase 2 = the
+# followers. EP4 (all-distinct keys → all singleton → gate False → baseline) is
+# the reshaped CK-3′ in test_cohort_key_capable.py.
+# ---------------------------------------------------------------------------
+
+
+def _cohort_step(index: int, cohort: str | None) -> WorkflowStep:
+    """INFERENCE_STEP whose cohort membership rides the payload; `cohort=None`
+    yields a None cohort_key (a non-beneficiary branch) under the fixtures below."""
+    return WorkflowStep(
+        step_id=StepID(f"inf-{index}"),
+        step_kind=StepKind.INFERENCE_STEP,
+        step_payload={"index": index, "cohort": cohort},
+    )
+
+
+class _PartitionOrderingWitness:
+    """CohortKeyCapable dispatcher for the partition ordering witnesses.
+
+    Leaders (the caller names them — the first ordinal of each multi-member
+    cohort) sleep briefly then set THEIR cohort's event; every other branch
+    records at entry whether its own cohort's leader event was already set
+    (followers must see True under the partition; on the pre-partition
+    all-concurrent path they enter while the leader still sleeps → False).
+    `slow_leaders` extends a leader's sleep so cross-cohort Phase-1 barrier
+    ordering is observable (EP6)."""
+
+    def __init__(self, *, leaders: set[int], slow_leaders: set[int] | None = None) -> None:
+        self._leaders = leaders
+        self._slow_leaders = slow_leaders or set()
+        self._events: dict[str, threading.Event] = {}
+        self._lock = threading.Lock()
+        self.dispatched: list[int] = []
+        self.follower_leader_done_on_entry: dict[int, bool] = {}
+        self.all_leaders_done_on_entry: dict[int, bool] = {}
+
+    def _event(self, cohort: str) -> threading.Event:
+        with self._lock:
+            return self._events.setdefault(cohort, threading.Event())
+
+    def _all_leader_events_set(self) -> bool:
+        with self._lock:
+            events = list(self._events.values())
+        return bool(events) and all(event.is_set() for event in events)
+
+    def dispatch(
+        self,
+        binding: StepEffectiveBinding,
+        step: WorkflowStep,
+        *,
+        step_context: Any = None,
+    ) -> dict[str, Any]:
+        idx = int(step.step_payload["index"])
+        cohort = step.step_payload["cohort"]
+        with self._lock:
+            self.dispatched.append(idx)
+        if idx in self._leaders:
+            time.sleep(0.1 if idx in self._slow_leaders else 0.02)
+            self._event(str(cohort)).set()
+        else:
+            self.all_leaders_done_on_entry[idx] = self._all_leader_events_set()
+            if cohort is not None:
+                self.follower_leader_done_on_entry[idx] = self._event(str(cohort)).is_set()
+        return {"branch": idx}
+
+    def cohort_key(self, binding: StepEffectiveBinding, step: WorkflowStep) -> str | None:
+        cohort = step.step_payload.get("cohort")
+        return f"cohort-{cohort}" if cohort is not None else None
+
+
+def test_partition_proceed_two_cohorts_leaders_serialize_before_followers() -> None:
+    """EP1 (PROCEED): cohorts A={0,1} / B={2,3} → Phase 1 = leaders {0,2}
+    concurrent, Phase 2 = followers {1,3}. Each follower must see ITS cohort
+    leader completed at entry (per-cohort cache-write-before-cache-hit). Fails
+    on the pre-partition binary gate (non-uniform keys → all-concurrent →
+    followers enter while the leaders still sleep)."""
+    witness = _PartitionOrderingWitness(leaders={0, 2})
+    result = _run(
+        steps=[_cohort_step(0, "A"), _cohort_step(1, "A"), _cohort_step(2, "B"), _cohort_step(3, "B")],
+        dispatcher=cast(StepDispatcher, witness),
+        concurrent_cache_warmup=True,
+    )
+    assert result.status is RunStatus.SUCCESS
+    assert sorted(witness.dispatched) == [0, 1, 2, 3]
+    assert witness.follower_leader_done_on_entry.get(1) is True, (
+        f"follower 1 started before cohort-A leader completed ({witness.follower_leader_done_on_entry})"
+    )
+    assert witness.follower_leader_done_on_entry.get(3) is True, (
+        f"follower 3 started before cohort-B leader completed ({witness.follower_leader_done_on_entry})"
+    )
+
+
+@pytest.mark.parametrize(
+    "persona_tier",
+    [PersonaTier.TEAM_BINDING, PersonaTier.MULTI_TENANT_COMPLIANCE],
+    ids=["pause-tier", "cascade-cancel-tier"],
+)
+def test_partition_strict_tiers_two_cohorts_leaders_serialize_before_followers(
+    persona_tier: PersonaTier,
+) -> None:
+    """EP2 (strict tiers): the same two-cohort partition ordering through
+    `_cancel_fanout`'s Phase-1 TaskGroup on BOTH strict tiers."""
+    witness = _PartitionOrderingWitness(leaders={0, 2})
+    result = _run(
+        steps=[_cohort_step(0, "A"), _cohort_step(1, "A"), _cohort_step(2, "B"), _cohort_step(3, "B")],
+        dispatcher=cast(StepDispatcher, witness),
+        concurrent_cache_warmup=True,
+        persona_tier=persona_tier,
+    )
+    assert result.status is RunStatus.SUCCESS
+    assert sorted(witness.dispatched) == [0, 1, 2, 3]
+    assert witness.follower_leader_done_on_entry.get(1) is True
+    assert witness.follower_leader_done_on_entry.get(3) is True
+
+
+class _LeaderWaitsForNoneBranchDispatcher:
+    """EP3 fixture: the cohort-A leader (index 0) BLOCKS until the None-key
+    branch (index 2) completes. Passing therefore PROVES the None-key branch
+    dispatched in Phase 1 alongside the leader (D2 non-beneficiary placement) —
+    if it were withheld to Phase 2 the leader would wait out the 10 s guard and
+    fail. Green on the pre-partition baseline too (all-concurrent): a
+    deadlock-detector control, not a fails-on-main witness."""
+
+    def __init__(self) -> None:
+        self.none_branch_done = threading.Event()
+        self._lock = threading.Lock()
+        self.dispatched: list[int] = []
+
+    def dispatch(
+        self,
+        binding: StepEffectiveBinding,
+        step: WorkflowStep,
+        *,
+        step_context: Any = None,
+    ) -> dict[str, Any]:
+        idx = int(step.step_payload["index"])
+        with self._lock:
+            self.dispatched.append(idx)
+        if idx == 0:
+            assert self.none_branch_done.wait(timeout=10.0), (
+                "None-key branch never dispatched while the leader ran Phase 1 — "
+                "non-beneficiary was withheld (D2 violation)"
+            )
+        if idx == 2:
+            self.none_branch_done.set()
+        return {"branch": idx}
+
+    def cohort_key(self, binding: StepEffectiveBinding, step: WorkflowStep) -> str | None:
+        cohort = step.step_payload.get("cohort")
+        return f"cohort-{cohort}" if cohort is not None else None
+
+
+def test_partition_none_key_branch_dispatches_in_phase1() -> None:
+    """EP3 (control): a None-key (non-beneficiary) branch keeps its baseline
+    immediate dispatch — Phase 1 alongside the leaders, never delayed behind
+    another cohort's cache-write (D2)."""
+    dispatcher = _LeaderWaitsForNoneBranchDispatcher()
+    result = _run(
+        steps=[_cohort_step(0, "A"), _cohort_step(1, "A"), _cohort_step(2, None)],
+        dispatcher=cast(StepDispatcher, dispatcher),
+        concurrent_cache_warmup=True,
+    )
+    assert result.status is RunStatus.SUCCESS
+    assert sorted(dispatcher.dispatched) == [0, 1, 2]
+
+
+class _PartitionFailLeaderDispatcher:
+    """CohortKeyCapable dispatcher over payload cohorts; indices in `fail` raise
+    immediately; indices in `slow` sleep first (in-flight at a sibling failure →
+    shielded completion)."""
+
+    def __init__(self, *, fail: set[int], slow: set[int] | None = None) -> None:
+        self._fail = fail
+        self._slow = slow or set()
+        self._lock = threading.Lock()
+        self.dispatched: list[int] = []
+
+    def dispatch(
+        self,
+        binding: StepEffectiveBinding,
+        step: WorkflowStep,
+        *,
+        step_context: Any = None,
+    ) -> dict[str, Any]:
+        idx = int(step.step_payload["index"])
+        with self._lock:
+            self.dispatched.append(idx)
+        if idx in self._slow:
+            time.sleep(0.05)
+        if idx in self._fail:
+            raise RuntimeError(f"simulated leader-{idx} failure")
+        return {"branch": idx}
+
+    def cohort_key(self, binding: StepEffectiveBinding, step: WorkflowStep) -> str | None:
+        cohort = step.step_payload.get("cohort")
+        return f"cohort-{cohort}" if cohort is not None else None
+
+
+def test_partition_cascade_cancel_leader_failure_withholds_all_followers() -> None:
+    """EP5 (strict tier): cohorts A={0,1} / B={2,3}; leader 0 fails fast in the
+    Phase-1 TaskGroup while leader 2 is in-flight (slow → shielded completion).
+    Followers {1,3} of BOTH cohorts are withheld: dispatch-marker ABSENCE (the
+    v1.90 item-4 effect-set subset invariant under the partition) + obligation-4
+    `cancelled` synthesis; the run FAILs cascade-cancel. Fails on the
+    pre-partition gate (all four would dispatch concurrently)."""
+    ledger = _RecordingLedger()
+    store = _MiniFanoutStore()
+    dispatcher = _PartitionFailLeaderDispatcher(fail={0}, slow={2})
+    result = _run(
+        steps=[_cohort_step(0, "A"), _cohort_step(1, "A"), _cohort_step(2, "B"), _cohort_step(3, "B")],
+        dispatcher=cast(StepDispatcher, dispatcher),
+        ledger=ledger,
+        concurrent_cache_warmup=True,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+        store=store,
+    )
+    assert result.status is RunStatus.FAILED
+    assert result.fail_class == "parallelization-cascade-cancel"
+    # Phase 1 only: the failing leader + the in-flight leader; followers withheld.
+    assert sorted(dispatcher.dispatched) == [0, 2]
+    assert store.present_dispatched_indexes(store.sole_run_key()) == {0, 2}
+    # Leader 0 ran-and-errored → `completed`; leader 2 shielded to completion →
+    # `completed`; withheld followers → scan `cancelled` (ledger-only).
+    assert _branch_terminals(ledger) == {
+        0: "completed",
+        1: "cancelled",
+        2: "completed",
+        3: "cancelled",
+    }
+    assert _branch_step_indexes(ledger) == {0, 2}
+
+
+def test_partition_proceed_leader_failure_still_releases_all_followers() -> None:
+    """EP6 (PROCEED, H1 generalized): leader 0 (cohort A) fails fast; leader 2
+    (cohort B) is SLOW (0.1 s). Phase 2 releases only after the WHOLE Phase-1
+    gather returns, so every follower — including the failed cohort's — sees ALL
+    leader events set at entry, and the failed leader still yields PARTIAL with
+    everyone dispatched. Fails on the pre-partition gate (followers enter
+    immediately → slow leader B not done)."""
+    witness = _EP6FailLeaderOrderingWitness(fail={0}, leaders={0, 2}, slow_leaders={2})
+    result = _run(
+        steps=[_cohort_step(0, "A"), _cohort_step(1, "A"), _cohort_step(2, "B"), _cohort_step(3, "B")],
+        dispatcher=cast(StepDispatcher, witness),
+        concurrent_cache_warmup=True,
+    )
+    assert result.status is RunStatus.PARTIAL
+    assert sorted(witness.dispatched) == [0, 1, 2, 3]
+    # The Phase-1 barrier: both followers entered only after slow leader B set
+    # its event (leader A failed — its event never sets; the assertion is on B).
+    assert witness.leader_b_done_on_entry.get(1) is True
+    assert witness.leader_b_done_on_entry.get(3) is True
+
+
+class _EP6FailLeaderOrderingWitness:
+    """EP6 fixture: leader 0 raises immediately (its cohort event never sets);
+    leader 2 sleeps 0.1 s then sets cohort-B's event; followers record whether
+    cohort-B's leader event was set at entry (the Phase-1 barrier witness that
+    survives a failed leader)."""
+
+    def __init__(self, *, fail: set[int], leaders: set[int], slow_leaders: set[int]) -> None:
+        self._fail = fail
+        self._leaders = leaders
+        self._slow_leaders = slow_leaders
+        self.leader_b_event = threading.Event()
+        self._lock = threading.Lock()
+        self.dispatched: list[int] = []
+        self.leader_b_done_on_entry: dict[int, bool] = {}
+
+    def dispatch(
+        self,
+        binding: StepEffectiveBinding,
+        step: WorkflowStep,
+        *,
+        step_context: Any = None,
+    ) -> dict[str, Any]:
+        idx = int(step.step_payload["index"])
+        with self._lock:
+            self.dispatched.append(idx)
+        if idx in self._fail:
+            raise RuntimeError(f"simulated leader-{idx} failure")
+        if idx in self._leaders:
+            time.sleep(0.1 if idx in self._slow_leaders else 0.02)
+            self.leader_b_event.set()
+        else:
+            self.leader_b_done_on_entry[idx] = self.leader_b_event.is_set()
+        return {"branch": idx}
+
+    def cohort_key(self, binding: StepEffectiveBinding, step: WorkflowStep) -> str | None:
+        cohort = step.step_payload.get("cohort")
+        return f"cohort-{cohort}" if cohort is not None else None
+
+
+class _WedgeLeaderPartitionDispatcher:
+    """EP7 fixture: cohort-keyed variant of `_WedgeBranch0CohortDispatcher` —
+    the wedged leader blocks past the (monkeypatched) deadline while the other
+    cohort's leader completes clean."""
+
+    def __init__(self, *, release: threading.Event, self_release_seconds: float) -> None:
+        self._release = release
+        self._self_release_seconds = self_release_seconds
+        self._lock = threading.Lock()
+        self.dispatched: list[int] = []
+
+    def dispatch(
+        self,
+        binding: StepEffectiveBinding,
+        step: WorkflowStep,
+        *,
+        step_context: Any = None,
+    ) -> dict[str, Any]:
+        idx = int(step.step_payload["index"])
+        with self._lock:
+            self.dispatched.append(idx)
+        if idx == 0:
+            self._release.wait(timeout=self._self_release_seconds)
+        return {"branch": idx}
+
+    def cohort_key(self, binding: StepEffectiveBinding, step: WorkflowStep) -> str | None:
+        cohort = step.step_payload.get("cohort")
+        return f"cohort-{cohort}" if cohort is not None else None
+
+
+def test_partition_pause_deadline_strike_in_phase1_scan_covers_all_followers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """EP7 (ML-family generalized): heterogeneous Phase 1 — leader 0 (cohort A)
+    wedges past the deadline, leader 2 (cohort B) completes clean. The strike
+    lands the PAUSE-tier terminal FAILED barrier-deadline exit; the obligation-4
+    scan records `cancelled` for the withheld followers of BOTH cohorts,
+    marker-absent; the cut leader records `timed_out`, the clean leader
+    `completed`."""
+    from harness_cp import workflow_driver as wd
+
+    monkeypatch.setattr(wd, "_DEFAULT_FANOUT_BARRIER_DEADLINE_SECONDS", 0.2)
+    release = threading.Event()
+    dispatcher = _WedgeLeaderPartitionDispatcher(release=release, self_release_seconds=2.0)
+    ledger = _RecordingLedger()
+    store = _MiniFanoutStore()
+    started = time.monotonic()
+    try:
+        result = _run(
+            steps=[
+                _cohort_step(0, "A"),
+                _cohort_step(1, "A"),
+                _cohort_step(2, "B"),
+                _cohort_step(3, "B"),
+            ],
+            dispatcher=cast(StepDispatcher, dispatcher),
+            ledger=ledger,
+            concurrent_cache_warmup=True,
+            persona_tier=PersonaTier.TEAM_BINDING,
+            engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+            store=store,
+        )
+    finally:
+        release.set()
+    elapsed = time.monotonic() - started
+    assert result.status is RunStatus.FAILED
+    assert result.fail_class == "parallelization-barrier-deadline"
+    assert sorted(dispatcher.dispatched) == [0, 2]
+    assert _branch_terminals(ledger) == {
+        0: "timed_out",
+        1: "cancelled",
+        2: "completed",
+        3: "cancelled",
+    }
+    assert _branch_step_indexes(ledger) == {0, 2}
+    # Markers: both Phase-1 leaders wrote theirs; the withheld followers wrote
+    # NEITHER marker nor store record (ledger-only synthesis).
+    assert store.present_dispatched_indexes(store.sole_run_key()) == {0, 2}
+    assert elapsed < 1.5
+
+
+def test_partition_partial_recovery_resume_repartitions_remainder() -> None:
+    """EP8: a partial-recovery resume re-partitions the LIVE remainder. Snapshot
+    carries terminals for ordinals 0 (cohort A) and 3 (cohort B); the live plan
+    {1,2,4} re-groups as A={1,2} (NEW leader 1) + singleton B={4} → Phase 1 =
+    {1,4}, Phase 2 = {2}: follower 2 must see the new cohort-A leader completed
+    at entry. Fails on the pre-partition gate (non-uniform remainder →
+    all-concurrent)."""
+    snapshot = _captured_peer_snapshot(
+        peer=PeerFanOutResumeState(
+            branches=(
+                FanOutBranchResumeState(
+                    branch_index=0,
+                    step_id="inf-0",
+                    terminal_status="completed",
+                    output={"branch": 0},
+                ),
+                FanOutBranchResumeState(
+                    branch_index=3,
+                    step_id="inf-3",
+                    terminal_status="completed",
+                    output={"branch": 3},
+                ),
+            ),
+            branch_count=5,
+        )
+    )
+    witness = _PartitionOrderingWitness(leaders={1})
+    result = _run(
+        steps=[
+            _cohort_step(0, "A"),
+            _cohort_step(1, "A"),
+            _cohort_step(2, "A"),
+            _cohort_step(3, "B"),
+            _cohort_step(4, "B"),
+        ],
+        dispatcher=cast(StepDispatcher, witness),
+        concurrent_cache_warmup=True,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        with_pause_protocol=True,
+        pause_snapshot_input=snapshot,
+    )
+    assert result.status is RunStatus.SUCCESS
+    assert sorted(witness.dispatched) == [1, 2, 4]
+    assert witness.follower_leader_done_on_entry.get(2) is True, (
+        "follower 2 started before the resumed cohort's NEW leader (=1) completed"
+    )
+
+
+class _SpontaneousCancelLeaderDispatcher:
+    """EP9 fixture: the cohort-A leader raises SPONTANEOUS CancelledError from
+    its own dispatch (the sub-agent naked-escape / watchdog-cut vehicle); the
+    cohort-B leader is slow (in-flight while the group settles)."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self.dispatched: list[int] = []
+
+    def dispatch(
+        self,
+        binding: StepEffectiveBinding,
+        step: WorkflowStep,
+        *,
+        step_context: Any = None,
+    ) -> dict[str, Any]:
+        idx = int(step.step_payload["index"])
+        with self._lock:
+            self.dispatched.append(idx)
+        if idx == 0:
+            raise asyncio.CancelledError()
+        if idx == 2:
+            time.sleep(0.05)
+        return {"branch": idx}
+
+    def cohort_key(self, binding: StepEffectiveBinding, step: WorkflowStep) -> str | None:
+        cohort = step.step_payload.get("cohort")
+        return f"cohort-{cohort}" if cohort is not None else None
+
+
+def test_partition_phase1_spontaneous_cancel_resurfaces_and_withholds_followers() -> None:
+    """EP9 (the review-B2 pin): a Phase-1 leader raising SPONTANEOUS
+    CancelledError is SWALLOWED by the TaskGroup (CPython: the group exits clean
+    with task.cancelled()=True) — the mandatory post-group `task.result()`
+    collection (§25.19 normative) resurfaces it, so the cancellation propagates
+    (honored, exactly the pre-arc solo re-raise) and the followers are NEVER
+    dispatched: marker ABSENCE for {1,3}, no Phase-2 release after the cut (the
+    v1.90 item-4 effect-set subset invariant). A naive TaskGroup Phase 1 without
+    the collection dispatches the followers AFTER the cut — this witness fails
+    against that regression, and against the pre-partition gate (heterogeneous →
+    all four dispatch)."""
+    store = _MiniFanoutStore()
+    dispatcher = _SpontaneousCancelLeaderDispatcher()
+    with pytest.raises(asyncio.CancelledError):
+        _run(
+            steps=[
+                _cohort_step(0, "A"),
+                _cohort_step(1, "A"),
+                _cohort_step(2, "B"),
+                _cohort_step(3, "B"),
+            ],
+            dispatcher=cast(StepDispatcher, dispatcher),
+            concurrent_cache_warmup=True,
+            persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+            engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+            store=store,
+        )
+    # Phase 1 only ever dispatched; the swallowed cancel resurfaced BEFORE any
+    # Phase-2 release (the in-flight cohort-B leader ran shielded to completion).
+    assert sorted(dispatcher.dispatched) == [0, 2]
+    assert store.present_dispatched_indexes(store.sole_run_key()) == {0, 2}
+
+
+class _MutualLeaderEntryWitness:
+    """EP10 fixture: each leader waits for the OTHER leader's ENTRY before
+    returning (mutual entry-wait). Passing therefore PROVES the two cohort
+    leaders ran CONCURRENTLY in Phase 1 — a (hypothetical) leader-serializing
+    Phase 1 would wedge each wait out to its 10 s guard and fail the run."""
+
+    def __init__(self) -> None:
+        self.entered: dict[int, threading.Event] = {0: threading.Event(), 2: threading.Event()}
+        self._lock = threading.Lock()
+        self.dispatched: list[int] = []
+
+    def dispatch(
+        self,
+        binding: StepEffectiveBinding,
+        step: WorkflowStep,
+        *,
+        step_context: Any = None,
+    ) -> dict[str, Any]:
+        idx = int(step.step_payload["index"])
+        with self._lock:
+            self.dispatched.append(idx)
+        if idx in self.entered:
+            self.entered[idx].set()
+            other = 2 if idx == 0 else 0
+            assert self.entered[other].wait(timeout=10.0), (
+                f"leader {other} never entered while leader {idx} ran — "
+                "Phase-1 leaders were serialized (cross-cohort concurrency violated)"
+            )
+        return {"branch": idx}
+
+    def cohort_key(self, binding: StepEffectiveBinding, step: WorkflowStep) -> str | None:
+        cohort = step.step_payload.get("cohort")
+        return f"cohort-{cohort}" if cohort is not None else None
+
+
+def test_partition_proceed_leaders_run_concurrently_in_phase1() -> None:
+    """EP10 (post-build review cosmetic 2): different cohorts' LEADERS dispatch
+    CONCURRENTLY with each other in Phase 1 on PROCEED — the partition
+    serializes leader→followers WITHIN a cohort, never leader→leader ACROSS
+    cohorts (different prefixes share no cache line). Deadlock-detector control
+    (green on the all-concurrent baseline too; fails against a hypothetical
+    leader-serializing Phase 1)."""
+    witness = _MutualLeaderEntryWitness()
+    result = _run(
+        steps=[_cohort_step(0, "A"), _cohort_step(1, "A"), _cohort_step(2, "B"), _cohort_step(3, "B")],
+        dispatcher=cast(StepDispatcher, witness),
+        concurrent_cache_warmup=True,
+    )
+    assert result.status is RunStatus.SUCCESS
+    assert sorted(witness.dispatched) == [0, 1, 2, 3]

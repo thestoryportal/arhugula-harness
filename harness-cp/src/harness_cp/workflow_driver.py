@@ -7498,36 +7498,69 @@ def _execute_parallelization(
             salvage=False,
         )
 
-    # B-18-3C-PREWARM-COHORTKEY — dispatcher-attested cohort predicate (H2).
-    # Each branch asks its dispatcher for a stable cohort key; None means
-    # "not cache-stable" (CP-invisible check: memory_runtime, frozen_tool_superset,
-    # or per-binding attributes differ). All branches must return the same non-None
-    # key to form a warm cohort. len>=2 guard (H3) preserved.
-    # Replaces the binary CP-visible-only predicate (DDR §11.4 C follow-on).
-    # B-18-3C-PREWARM-CASCADE — LIFTED above the cascade_policy branch (was PROCEED-local):
-    # the warm-up gate now serializes branch[0] on all three §25.15.1 paths (`_proceed_fanout`
-    # for PROCEED + `_cancel_fanout` below for CASCADE_CANCEL / PAUSE). Placed AFTER the
-    # effect-fence PROCEED fail-closed guard above so pre-arc PROCEED evaluation order is
-    # exactly preserved (the gate — and its dispatcher `cohort_key()` calls — never runs
-    # ahead of that guard's honest FAILED). H3 keys on the LIVE branch_plan
-    # (post-recovery-seed): a partial-recovery resume warms the REMAINING cohort with a new
-    # "branch[0]" (the first remaining ordinal); a <2-branch remainder — including the
-    # crash-reconstruct empty plan — stays all-concurrent (gate False).
-    def _same_prefix_cohort() -> bool:
-        if len(branch_plan) < 2:  # H3: live len, not cell cap
-            return False
-        keys: list[str] = []
+    # B-18-EPOCH-PARTITION (CP spec v1.95 §25.19) — heterogeneous cohort partition.
+    # Supersedes the v1.88 binary all-same-key predicate (`_same_prefix_cohort`):
+    # branches are grouped by their dispatcher-attested `(step_kind, cohort_key)` —
+    # step_kind participates because equal 16-hex keys are attested-comparable only
+    # within one capable dispatcher instance, which the registry resolves per
+    # step_kind (behavior-inert at HEAD where only INFERENCE_STEP is capable;
+    # forecloses a silent cross-kind collision if a second capable kind lands).
+    # Phase 1 = one LEADER (first ordinal) per multi-member cohort PLUS every
+    # non-beneficiary branch (None-key / non-capable / singleton cohort — they are
+    # cache-neutral, so Phase-2 placement would delay them for zero benefit; keeping
+    # them in Phase 1 preserves their baseline immediate dispatch). Phase 2 = the
+    # followers (cache-hits). Degenerate reductions: all-same key → phase1 = {first
+    # ordinal}, phase2 = rest (the v1.87/v1.90 serialize-branch[0] schedule EXACTLY);
+    # no multi-member cohort (all-distinct / all-None / non-capable / <2 plan) →
+    # phase2 empty → gate False → all-concurrent baseline byte-identical.
+    # B-18-3C-PREWARM-CASCADE lineage preserved: evaluated AFTER the effect-fence
+    # PROCEED fail-closed guard above (the split — and its dispatcher `cohort_key()`
+    # calls — never runs ahead of that guard's honest FAILED) and shared by all three
+    # §25.15.1 paths. Keyed on the LIVE branch_plan (post-recovery-seed): a
+    # partial-recovery resume re-partitions the REMAINDER (new leader per remaining
+    # cohort); the H3 <2 short-circuit is kept explicit so a singleton plan makes
+    # ZERO cohort_key() oracle calls (the v1.90 call-count-exact property), as does
+    # a gate-off tunable (the split is never computed).
+    def _warmup_phase_split() -> tuple[
+        list[
+            tuple[
+                int, WorkflowStep, StepExecutionContext, BufferingLedgerWriter, StepEffectiveBinding
+            ]
+        ],
+        list[
+            tuple[
+                int, WorkflowStep, StepExecutionContext, BufferingLedgerWriter, StepEffectiveBinding
+            ]
+        ],
+    ]:
+        if len(branch_plan) < 2:  # H3: live len, not cell cap; zero oracle calls
+            return list(branch_plan), []
+        cohort_members: dict[tuple[StepKind, str], list[int]] = {}
         for branch_index, step, _child, _writer, binding in branch_plan:
             dispatcher = branch_dispatchers[branch_index]
             if not isinstance(dispatcher, CohortKeyCapable):
-                return False
+                continue
             key = dispatcher.cohort_key(binding, step)
             if key is None:
-                return False
-            keys.append(key)
-        return len(set(keys)) == 1
+                continue
+            cohort_members.setdefault((step.step_kind, key), []).append(branch_index)
+        follower_ordinals = {
+            ordinal
+            for members in cohort_members.values()
+            if len(members) >= 2
+            for ordinal in members[1:]
+        }
+        if not follower_ordinals:
+            return list(branch_plan), []
+        return (
+            [plan for plan in branch_plan if plan[0] not in follower_ordinals],
+            [plan for plan in branch_plan if plan[0] in follower_ordinals],
+        )
 
-    _warmup_gate: bool = _d4.concurrent_cache_warmup and _same_prefix_cohort()
+    _warmup_phase1, _warmup_phase2 = (
+        _warmup_phase_split() if _d4.concurrent_cache_warmup else (list(branch_plan), [])
+    )
+    _warmup_gate: bool = bool(_warmup_phase2)
 
     # B-18-3C-PREWARM-TIMEOUT-LEDGER (M2) — audit completeness at every TERMINAL fan-out
     # exit. §25.15.2 obligation-4 scan, shared by all five terminal exits (CASCADE_CANCEL
@@ -7686,9 +7719,10 @@ def _execute_parallelization(
 
     # === proceed: branches run to completion → SUCCESS | PARTIAL (degraded) ===
     if cascade_policy is CascadePolicy.PROCEED:
-        # (B-18-3C-PREWARM-CASCADE: `_same_prefix_cohort` + `_warmup_gate` were
-        # PROCEED-local here; lifted above the cascade_policy branch so the strict
-        # tiers share the same gate.)
+        # (B-18-3C-PREWARM-CASCADE: the warm-up gate was PROCEED-local here; lifted
+        # above the cascade_policy branch so the strict tiers share it.
+        # B-18-EPOCH-PARTITION: the binary predicate became the `_warmup_phase_split`
+        # cohort partition at the same lifted position.)
 
         async def _proceed_branch(
             branch_index: int,
@@ -7783,19 +7817,32 @@ def _execute_parallelization(
                         *(_proceed_branch(*plan) for plan in branch_plan),
                         return_exceptions=True,
                     )
-                # B-18-3C-PREWARM — serialize branch[0] (cache-write), then release
-                # branches[1..N-1] (cache-hits). Both phases bounded by the deadline.
-                # H1: capture, don't bare-await — a branch[0] failure must STILL dispatch
-                # siblings and STILL drain branch[0]'s buffered ledger entries (PARTIAL).
-                try:
-                    first: Any = await _proceed_branch(*branch_plan[0])
-                except Exception as exc:  # NOT BaseException: deadline CancelledError propagates
-                    first = exc
-                rest = await asyncio.gather(
-                    *(_proceed_branch(*plan) for plan in branch_plan[1:]),
+                # B-18-EPOCH-PARTITION (§25.19) — Phase 1: cohort leaders + non-beneficiary
+                # branches concurrent (per-cohort cache-writes; None/singleton branches keep
+                # their baseline immediacy), then Phase 2: the followers (cache-hits). Both
+                # phases bounded by the deadline. gather(return_exceptions=True) on BOTH
+                # phases generalizes H1: a Phase-1 failure must STILL dispatch Phase 2 and
+                # STILL drain the failed branch's buffered ledger entries (PARTIAL). Named
+                # §25.19 carve-out: a SPONTANEOUS branch CancelledError is captured as a
+                # result here, aligning the warm-up path with the gate-False baseline gather
+                # (the v1.87 solo `except Exception` let it escape naked — the outlier
+                # shape); the DEADLINE CancelledError still propagates (the gather itself is
+                # cancelled → TimeoutError at the timeout __aexit__), preserving M2/ML
+                # semantics. Results reassembled in branch_plan ordinal order.
+                phase1_results = await asyncio.gather(
+                    *(_proceed_branch(*plan) for plan in _warmup_phase1),
                     return_exceptions=True,
                 )
-                return [first, *rest]
+                phase2_results = await asyncio.gather(
+                    *(_proceed_branch(*plan) for plan in _warmup_phase2),
+                    return_exceptions=True,
+                )
+                results_by_ordinal: dict[int, Any] = {}
+                for plan, result in zip(_warmup_phase1, phase1_results, strict=True):
+                    results_by_ordinal[plan[0]] = result
+                for plan, result in zip(_warmup_phase2, phase2_results, strict=True):
+                    results_by_ordinal[plan[0]] = result
+                return [results_by_ordinal[plan[0]] for plan in branch_plan]
 
         try:
             results = _run_fanout_to_completion(
@@ -8014,18 +8061,20 @@ def _execute_parallelization(
             return await cascade_cancel_barrier(
                 (_cancel_branch(*plan) for plan in branch_plan), deadline_seconds=deadline
             )
-        # B-18-3C-PREWARM-CASCADE — serialize branch[0] (cache-write) then release
-        # branches[1..N-1] (cache-hits) on the strict tiers, SHARING one deadline
+        # B-18-3C-PREWARM-CASCADE (partitioned at B-18-EPOCH-PARTITION, §25.19) —
+        # Phase 1 (cohort leaders + non-beneficiaries; cache-writes) then Phase 2
+        # (the followers; cache-hits) on the strict tiers, SHARING one deadline
         # budget + one `_BRANCH_INFLIGHT_DISPATCHES` watchdog registry across both
         # phases. Inlines the `cascade_cancel_barrier` setup rather than composing
         # two barrier calls — each call would grant a FULL `deadline` budget,
         # doubling the §25.11 wall-clock cap (DDR §4). Inline (not a
         # `serialize_first` barrier param) also keeps coroutine creation lazy:
-        # a Phase-1 failure never instantiates a sibling coroutine, so there is
+        # a Phase-1 failure never instantiates a FOLLOWER coroutine, so there is
         # no un-awaited-coroutine leak to reap (DDR §4 / Fable-5 C2 disposition).
-        # Effect-set: a Phase-1 failure WITHHOLDS branches[1..N-1] entirely — their
-        # effect-set is empty, a strict subset of the non-warmup barrier's (where a
-        # sibling may land an effect before the cascade arrives) — so warmup is
+        # Effect-set: a Phase-1 failure WITHHOLDS the followers (`_warmup_phase2`)
+        # entirely — their effect-set is empty, so the dispatched set is strictly
+        # SMALLER than the non-warmup barrier's (where every branch may land an
+        # effect before the cascade arrives; v1.95 §25.19 item 5) — warmup stays
         # strictly safer on the tiers that exist to bound effects (DDR §2).
         inflight_dispatches: set[asyncio.Future[Any]] = set()
         parent_chain = _BRANCH_INFLIGHT_DISPATCHES.get() or ()
@@ -8044,35 +8093,47 @@ def _execute_parallelization(
         cutoff_task = asyncio.ensure_future(_deadline_cutoff())
         try:
             async with asyncio.timeout(deadline):
-                # Phase 1: branch[0] solo (cache-write; its dispatch marker + terminal
-                # records are written inside `_cancel_branch`, byte-identical to the
-                # TaskGroup path). Guard: `except asyncio.CancelledError: raise` ONLY —
-                # `asyncio.timeout` delivers CancelledError INSIDE the block (converted
-                # to TimeoutError at __aexit__), so catching TimeoutError here would
-                # misclassify a branch-raised bare TimeoutError (a branch FAILURE) as
-                # the barrier deadline (Fable-5 R3 correction, DDR §4).
-                try:
-                    await _cancel_branch(*branch_plan[0])
-                except asyncio.CancelledError:
-                    raise
-                except BaseException as exc:
-                    # Wrap so the caller's `except BaseExceptionGroup` classifies a
-                    # Phase-1 failure exactly like a TaskGroup branch failure
-                    # (`branch_failed = True`); a bare exception would escape the
-                    # post-barrier cascade-policy classification entirely.
-                    raise BaseExceptionGroup("cascade-warmup-branch0", [exc]) from exc
-                # Phase 2: branches[1..N-1] under TaskGroup (cache-hits). A branch
-                # failure raises ExceptionGroup (a BaseExceptionGroup subclass) →
-                # propagates unchanged → caller: `branch_failed = True` — identical
-                # to the non-warmup barrier's failure surface.
-                if len(branch_plan) > 1:
-                    async with asyncio.TaskGroup() as task_group:
-                        tasks = [
-                            task_group.create_task(_cancel_branch(*plan))
-                            for plan in branch_plan[1:]
-                        ]
-                    return [None, *(task.result() for task in tasks)]
-                return [None]
+                # B-18-EPOCH-PARTITION (§25.19) — Phase 1: cohort leaders + non-beneficiary
+                # branches under a TaskGroup (per-cohort cache-writes; each branch's dispatch
+                # marker + terminal records are written inside `_cancel_branch`,
+                # ordinal-keyed, byte-identical to the Phase-2 path). The v1.90 item-3 solo
+                # R3 guard is SUPERSEDED: TaskGroup natively (a) leaves the outer deadline
+                # CancelledError unwrapped (→ TimeoutError at the timeout __aexit__ →
+                # BranchBarrierDeadlineExceededError below), and (b) wraps a child's bare
+                # TimeoutError into an ExceptionGroup that `except TimeoutError` below does
+                # NOT catch (no implicit group unwrap) — a branch FAILURE, never the barrier
+                # deadline (W7 pins by execution).
+                async with asyncio.TaskGroup() as warmup_task_group:
+                    phase1_tasks = [
+                        warmup_task_group.create_task(_cancel_branch(*plan))
+                        for plan in _warmup_phase1
+                    ]
+                # NORMATIVE (§25.19; pre-build review B2, empirically convergent): collect
+                # `task.result()` BEFORE releasing Phase 2 — CPython's TaskGroup SWALLOWS a
+                # child that raises SPONTANEOUS CancelledError (a watchdog-cut future — e.g.
+                # an OUTER nested-fan-out barrier's earlier-armed watchdog cutting this
+                # inner Phase 1 inside the window where this inner timeout has not fired —
+                # or a sub-agent child's naked escape through `dispatch()`): the group exits
+                # CLEAN with task.cancelled()=True. Without this resurface the followers
+                # would dispatch AFTER the cut, inverting the v1.90 item-4 effect-set subset
+                # invariant on the tiers that exist to bound effects. `task.result()`
+                # re-raises the CancelledError — byte-matching the Phase-2 collection idiom
+                # below (EP9 pins; the K=1 degenerate case reduces to the pre-arc solo
+                # re-raise exactly).
+                for phase1_task in phase1_tasks:
+                    phase1_task.result()
+                # Phase 2: the followers under TaskGroup (cache-hits; non-empty by the
+                # gate). A branch failure raises ExceptionGroup (a BaseExceptionGroup
+                # subclass) → propagates unchanged → caller: `branch_failed = True` —
+                # identical to the non-warmup barrier's failure surface. The
+                # `task.result()` collection is LOAD-BEARING here too (the same
+                # swallowed-cancellation resurface as Phase 1); the return value
+                # itself is discarded by the caller.
+                async with asyncio.TaskGroup() as task_group:
+                    tasks = [
+                        task_group.create_task(_cancel_branch(*plan)) for plan in _warmup_phase2
+                    ]
+                return [task.result() for task in tasks]
         except TimeoutError as exc:
             # Barrier-deadline parity with `cascade_cancel_barrier` (§25.11): the
             # timeout cancelled the fan-out body with no branch failure.
@@ -8107,11 +8168,11 @@ def _execute_parallelization(
     # analogue; Codex [P1]). The aborted branch already re-dispatched (its effect-fence claim is
     # the durable record); the run fails honestly.
     # B-18-FENCE-LEDGER-FIDELITY (CP spec v1.92) — a TERMINAL exit nothing resumes: run the
-    # obligation-4 scan (the fifth call site). Under warm-up a Phase-1 abort withheld ALL
-    # siblings; without the scan this exit records zero footprint for the aborted branch AND
-    # the withheld siblings (v1.91 item 6a). The aborted arm records the ABORTED branch
-    # `completed` terminal-ONLY; withheld recovered fence peers `completed` (capture-less);
-    # plain withheld siblings `cancelled`. fail_class + run status unchanged.
+    # obligation-4 scan (the fifth call site). Under warm-up a Phase-1 abort withheld the
+    # FOLLOWERS (§25.19); without the scan this exit records zero footprint for the aborted
+    # branch AND the withheld followers (v1.91 item 6a). The aborted arm records the ABORTED
+    # branch `completed` terminal-ONLY; withheld recovered fence peers `completed`
+    # (capture-less); plain withheld branches `cancelled`. fail_class + run status unchanged.
     if effect_fence_aborted_dispositions:
         _synthesize_undispatched_terminals()
         return _finish(
@@ -8162,8 +8223,8 @@ def _execute_parallelization(
     # (obligation 7). The deadline-strike case (a STUCK fan-out, no branch raised)
     # stays FAILED — there is no clean pause boundary to resume from — and, being a
     # TERMINAL exit nothing resumes, it DOES run the scan (B-18-3C-PREWARM-
-    # TIMEOUT-LEDGER M2: under warm-up a Phase-1 strike withheld ALL siblings, which
-    # would otherwise leave zero audit footprint).
+    # TIMEOUT-LEDGER M2: under warm-up a Phase-1 strike withheld the followers
+    # (§25.19), which would otherwise leave zero audit footprint).
     if deadline_struck:
         _synthesize_undispatched_terminals()
         return _finish(
@@ -8201,7 +8262,7 @@ def _execute_parallelization(
             # refuse, mirroring `api.resume`'s ResumeProtocolNotBoundError. Completed
             # / in-flight ledger entries + the salvaged partial set still persist.
             # A TERMINAL exit nothing resumes → run the obligation-4 scan (M2: under
-            # warm-up a Phase-1 branch[0] failure withheld ALL siblings; without a
+            # warm-up a Phase-1 failure withheld all FOLLOWERS (§25.19); without a
             # snapshot the re-dispatchable-by-omission defense does not apply, so
             # zero footprint here would be indistinguishable from lost entries).
             _synthesize_undispatched_terminals()

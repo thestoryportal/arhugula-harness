@@ -295,17 +295,21 @@ class WorkflowManifestEntry(BaseModel):
 
     concurrent_cache_warmup: bool = True
     """ADR-D4 §1.8 concurrent-prompt-cache warm-up protocol (B-18-3C-PREWARM).
-    When True, the PARALLELIZATION PROCEED driver serializes branch[0] before
-    releasing branches[1..N-1]: branch[0]'s response warms the shared Anthropic
-    prefix cache (tools + system block breakpoint) so siblings land as cache-hits.
+    When True, the PARALLELIZATION driver partitions the branches into cache
+    cohorts and serializes one LEADER per multi-member cohort (Phase 1) before
+    releasing that cohort's followers (Phase 2): each leader's response warms its
+    cohort's shared Anthropic prefix cache (tools + system block breakpoint) so
+    the followers land as cache-hits (B-18-EPOCH-PARTITION, CP spec v1.95 §25.19;
+    the homogeneous all-same-cohort case is the original serialize-branch[0]
+    shape).
 
     Default True per ADR-D4 §1.8(f) required-at-cap>1 (B-18-3C-PREWARM-DEFAULT-ON,
-    CP spec v1.89 §25.17). Safe to default on because `_same_prefix_cohort()` is
-    now machine-checked via the `CohortKeyCapable` dispatcher oracle (B-18-3C-PREWARM-
-    COHORTKEY, CP spec v1.88): if the dispatcher does not implement `CohortKeyCapable`,
-    or if any branch key is None (memory_runtime bound, fts absent, binding difference),
-    the predicate returns False and warmup does not fire — byte-identical to default-off.
-    Set to False explicitly to opt out.
+    CP spec v1.89 §25.17). Safe to default on because the warm-up gate is
+    machine-checked via the `CohortKeyCapable` dispatcher oracle (B-18-3C-PREWARM-
+    COHORTKEY, CP spec v1.88): a non-`CohortKeyCapable` dispatcher or a None key
+    (memory_runtime bound, fts absent, binding difference) simply forms no cohort,
+    and with no multi-member cohort the gate is False and warmup does not fire —
+    byte-identical to default-off. Set to False explicitly to opt out.
 
     Consumed at the §25.15 `_execute_parallelization` PROCEED path via the D4
     multiplicative tunable (CP spec §25.15.1). §6.1 'additional per-workload fields'
