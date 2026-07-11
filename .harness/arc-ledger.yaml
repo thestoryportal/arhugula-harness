@@ -46,12 +46,21 @@
 snapshot:
   frozen_total: 11
   frozen_done: 11
-  standalone_closed: 76
+  standalone_closed: 77
   standalone_gated: 0
   standalone_resolved: 4
-  standalone_registered: 2
+  standalone_registered: 1
   rfs1_status: active
   source: ".harness/beyond-mvp-capability-boundary-ledger.md"
+  # FRONTIER NOTE (2026-07-11, B-18-FENCE-LEDGER-RECONSTRUCT-RESIDUAL closed at PR #931).
+  # standalone_closed 76→77, standalone_registered 2→1. The shared two-engine reconstruct ×
+  # protocol-unbound zero-footprint exit discharged (CP spec v1.93 item 9 → v1.94): reconstruct
+  # arms in both shared scan closures, GATED on reconstruct mode; three classes (carried fence-
+  # recoverable + refire-safe maybe-ran [NEW threaded frozenset carrier] → completed capture-
+  # less; not-yet-dispatched → cancelled); O-W gains its EIGHTH call site (closure def moved
+  # above the not-branch_plan block, six pre-existing arms byte-preserved); ZERO store writes
+  # (no named crash-visible additions). Remaining registered: B-18-EPOCH-PARTITION ONLY
+  # (dedicated session; version_sha cohort hash + heterogeneous partition).
   # FRONTIER NOTE (2026-07-11, B-18-FENCE-LEDGER-FIDELITY-OW closed at PR #930;
   # B-18-FENCE-LEDGER-RECONSTRUCT-RESIDUAL registered). standalone_closed 75→76,
   # standalone_registered 2→2 net (the -OW counterpart out; the reconstruct residual in,
@@ -1792,13 +1801,16 @@ arcs:
   - id: B-18-FENCE-LEDGER-RECONSTRUCT-RESIDUAL
     title: "Two-engine reconstruct-no-dispatch × protocol-unbound zero-footprint residual (skipped-ordinal cancelled synthesis)"
     kind: standalone
-    status: registered
+    status: closed
     decompose_at_open: true
     owner_axis: CP
     parent_arc: B-18-3C-PREWARM
     anticipated_scope: "Registered at CP spec v1.93 item 9 (the -OW pre-build review finding 3): the crash-pause reconstruct-no-dispatch path's protocol-not-bound FAILED exit returns BEFORE any snapshot is built, so the reconstruct-skipped ordinals (proven not-yet-run: instrumented + no dispatch marker) and the carried fence-recoverable ordinals end at a terminal FAILED with zero ledger footprint and NO snapshot — the v1.91 item-2(d) rationale, at an exit OUTSIDE the seven-exit scan (branch_plan is empty there; the ordinals are not plan-carried). SHARED with the committed PARALLELIZATION sibling (its protocol-not-bound scan call is vacuous over the empty plan on that path; v1.92 did not fix it either). Honest fix shape = an explicit synthesis over the skipped ordinals at that exit in BOTH engines (cancelled is provably honest for them: marker-absence = provably-never-ran); needs its own disposition pass for the carried fence-recoverable ordinals (completed capture-less per the union-arm vocabulary)."
     units: []
     ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
+    spec_delta: "CP spec v1.93 → v1.94 (reconstruct arms in both shared scan closures; clearance marker 2026-07-11)"
+    pr: "#931"
+    close_note: "PR #931. Reconstruct arms in BOTH engines' shared obligation-4 scan closures, structurally GATED on crash_pause_reconstruct_no_dispatch (pre-build review top finding RR-1 — ungated, the domain-minus-recovered derivation would synthesize phantom terminals at all 12 pre-existing call sites). THREE classes, decomposed at open (the registered two honestly extended): carried fence-recoverable → completed capture-less (v1.92 union-arm vocabulary); re-fire-safe maybe-ran (NEW threaded crash_pause_reconstruct_refire_safe frozenset — v1.71 admits the class with no carrier; obligation-4 marker-presence forecloses cancelled) → completed capture-less; not-yet-dispatched → cancelled ledger-only. O-W gains its EIGHTH call site (closure def moved above the not-branch_plan block; six pre-existing arms byte-preserved vs git show main:). ZERO store writes — the whole synthesis store-inert (no named crash-visible additions, stronger than v1.92/v1.93); run statuses / fail_classes / step counts byte-unchanged; bound-leg + complete-recovery boundaries stay scan-free (RR2/RR4/RR5). 6 witnesses RR1-RR7 (RR6+7 merged; 2/6 fail-on-main BY EXECUTION at a throwaway main worktree — RR1/RR3 KeyError exactly at the defect; 4 designed controls). harness-cp 1524 (+6) / runtime 2360 / axes 1590 green; pyright 0/0/0; overlay 31/31. Pre-build Fable-5 design review AMEND 0-blocking/5-concern/2-cosmetic ALL folded pre-build; post-build Fable-5 diff review 0-blocking/1-concern/1-cosmetic recommendation MERGE (RR-D1 companions discharged in-PR; RR-D2 RR5 wording folded). B-18-EPOCH-PARTITION now the SOLE registered arc. 2026-07-11."
 
   - id: B-18-FENCE-LEDGER-FIDELITY
     title: "Fence-state × terminal-exit audit records (ABORT-exit bypass + snapshot-carried fence-peer arm)"

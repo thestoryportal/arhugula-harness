@@ -2569,11 +2569,12 @@ def _run_persona(
     resume_context_holder: Any = None,
     engine_class: EngineClass = EngineClass.EVENT_SOURCED_REPLAY,
     engine_recovery_loop: Any = None,
+    ledger: Any = None,
 ) -> Any:
     ctx = cast(
         DriverContext,
         _Ctx(
-            ledger=_RecordingLedger(),
+            ledger=ledger if ledger is not None else _RecordingLedger(),
             store=store,
             pause_resume_protocol=pause_resume_protocol,
             resume_context_holder=resume_context_holder,
@@ -6108,3 +6109,324 @@ def test_child_run_id_seed_inputs_resume_stable_through_real_driver_branch_recon
     # The load-bearing assertion: the re-dispatched branch's seed inputs (hence its child run_id
     # seed) are reconstructed IDENTICALLY by the driver's resume path.
     assert resume.seed_inputs[1] == first.seed_inputs[1]
+
+
+# =============================================================================
+# B-18-FENCE-LEDGER-RECONSTRUCT-RESIDUAL (CP spec v1.94) — the reconstruct ×
+# protocol-unbound obligation-4 synthesis (discharging the v1.93 item-9
+# registration). RR1/RR3 fail on main (zero ledger footprint for the skipped +
+# carried ordinals at the unbound exit); RR2/RR4/RR5 are byte-preservation
+# controls pinning the scan-free legs and the reconstruct-mode GATE.
+# DDR: .harness/b18-fence-ledger-reconstruct-residual-design-decision-record.md
+# =============================================================================
+
+
+def _branch_terminal_statuses(ledger: _RecordingLedger) -> dict[int, list[str]]:
+    """branch_index → the ordered terminal statuses drained to the ledger."""
+    out: dict[int, list[str]] = {}
+    for payload, _wk in ledger.appends:
+        bm = getattr(payload, "branch_metadata", None)
+        if bm is not None and getattr(bm, "terminal_status", None) is not None:
+            out.setdefault(bm.branch_index, []).append(bm.terminal_status)
+    return out
+
+
+def _branch_step_entry_indexes(ledger: _RecordingLedger) -> set[int]:
+    """branch_index of every STEP entry (terminal_status None) — synthesized
+    reconstruct terminals are terminal-ONLY, so their ordinals must not appear."""
+    out: set[int] = set()
+    for payload, _wk in ledger.appends:
+        bm = getattr(payload, "branch_metadata", None)
+        if bm is not None and getattr(bm, "terminal_status", None) is None:
+            out.add(bm.branch_index)
+    return out
+
+
+def _rr_parallelization_crashed_store() -> tuple[_InMemoryBranchStore, list[WorkflowStep]]:
+    """Run-1 (the crashed attempt) under PAUSE tier: branch-1 genuinely fails (the
+    pause trigger, captured `completed`/no-output); then the store levers carve the
+    three residual classes — branch-2 re-fire-safe maybe-ran (marker kept, capture
+    dropped, DECLARATIVE), branch-3 fence-recoverable maybe-ran (marker kept, TOOL),
+    branch-4 provably-not-run (marker + capture dropped, instrumented)."""
+    store = _InMemoryBranchStore()
+    steps = [
+        _step("branch-0", 0),
+        _step("branch-1", 1),
+        _step("branch-2", 2),
+        _step("branch-3", 3, StepKind.TOOL_STEP),
+        _step("branch-4", 4),
+    ]
+    d1 = _CountingDispatcher(n=5, fail_index=1)
+    _run_persona(
+        workflow_id="wf-rr-residual",
+        steps=steps,
+        dispatcher=d1,
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        registry=_AnyKindRegistry(d1),
+    )
+    key = store.sole_run_key()
+    store.forget_branch(key, 2)  # marker KEPT → re-fire-safe maybe-ran (class b)
+    store.forget_branch(key, 3)  # marker KEPT, TOOL_STEP → fence-recoverable (class a)
+    store.forget_branch_undispatched(key, 4)  # NO marker → provably-not-run (class c)
+    assert 4 not in store.present_dispatched_indexes(key)
+    assert store.dispatch_instrumented(key)
+    return store, steps
+
+
+def test_reconstruct_residual_parallelization_unbound_synthesizes_ledger() -> None:
+    """RR1 — the reconstruct × protocol-unbound exit records the three residual
+    classes: carried fence-recoverable → `completed`, re-fire-safe maybe-ran →
+    `completed`, not-yet-dispatched → `cancelled` — all terminal-ONLY, store
+    byte-unchanged; run status + fail_class + no-re-dispatch byte-preserved.
+    FAILS ON MAIN: the scan call is vacuous over the empty reconstruct plan, so
+    branches 2/3/4 have zero ledger footprint at a terminal exit nothing resumes."""
+    import copy
+
+    store, steps = _rr_parallelization_crashed_store()
+    pre = copy.deepcopy(store.__dict__)
+    resume = _CountingDispatcher(n=5)
+    ledger = _RecordingLedger()
+    r2 = _run_persona(
+        workflow_id="wf-rr-residual",
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        registry=_AnyKindRegistry(resume),
+        ledger=ledger,
+    )  # NO pause_resume_protocol → the unbound reconstruct exit
+    assert r2.status is RunStatus.FAILED
+    assert r2.fail_class == "parallelization-pause-resume-protocol-not-bound"
+    assert resume.dispatched == []  # reconstruct dispatches NOTHING (unchanged)
+    terminals = _branch_terminal_statuses(ledger)
+    assert terminals[0] == ["completed"]  # recovered, re-materialized
+    assert terminals[1] == ["completed"]  # the recovered trigger, re-materialized
+    assert terminals[2] == ["completed"]  # class (b): marker forecloses `cancelled`
+    assert terminals[3] == ["completed"]  # class (a): carried fence-recoverable
+    assert terminals[4] == ["cancelled"]  # class (c): provably-never-ran
+    # Synthesized entries are terminal-ONLY: no step entry claims a dispatch this attempt.
+    assert _branch_step_entry_indexes(ledger) == {0, 1}
+    # Every arm is LEDGER-only: the durable store is byte-unchanged (RR6's premise).
+    assert copy.deepcopy(store.__dict__) == pre
+
+
+def test_reconstruct_residual_parallelization_bound_leg_stays_scan_free() -> None:
+    """RR2 (control) — the protocol-BOUND reconstruct leg re-establishes PAUSED with
+    the snapshot omitting the skipped ordinals (re-dispatchable-by-omission) and
+    carrying the fence-recoverable ordinal; NO synthesized terminals (the scan-free
+    §25.15.1 boundary is byte-preserved)."""
+    store, steps = _rr_parallelization_crashed_store()
+    resume = _CountingDispatcher(n=5)
+    ledger = _RecordingLedger()
+    r2 = _run_persona(
+        workflow_id="wf-rr-residual",
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        registry=_AnyKindRegistry(resume),
+        pause_resume_protocol=_pause_protocol(),
+        ledger=ledger,
+    )
+    assert r2.status is RunStatus.PAUSED
+    assert resume.dispatched == []
+    assert r2.pause_snapshot is not None
+    pr = r2.pause_snapshot.peer_fan_out_resume
+    assert pr is not None
+    assert {b.branch_index for b in pr.branches} == {0, 1}  # skipped ordinals OMITTED
+    assert {f.branch_index for f in pr.effect_fence_paused_branches} == {3}
+    terminals = _branch_terminal_statuses(ledger)
+    assert set(terminals) == {0, 1}  # re-materialized only — NO synthesis on the bound leg
+
+
+def _rr_orchestrator_workers_crashed_store() -> tuple[_InMemoryBranchStore, list[WorkflowStep]]:
+    """The O-W mirror of `_rr_parallelization_crashed_store`: worker w-0 fails (the
+    trigger); worker ordinals 1/2/3 carved into classes (b)/(a)/(c)."""
+    store = _InMemoryBranchStore()
+    steps = [
+        _step("orch", 0),
+        _step("w-0", 1),
+        _step("w-1", 2),
+        _step("w-2", 3, StepKind.TOOL_STEP),
+        _step("w-3", 4),
+    ]
+    d1 = _CountingDispatcher(n=5, fail_index=1)
+    _run_persona(
+        workflow_id="wf-rr-residual-ow",
+        steps=steps,
+        dispatcher=d1,
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+        registry=_AnyKindRegistry(d1),
+    )
+    key = store.sole_run_key()
+    store.forget_branch(key, 1)  # worker w-1: re-fire-safe maybe-ran (class b)
+    store.forget_branch(key, 2)  # worker w-2: TOOL_STEP fence-recoverable (class a)
+    store.forget_branch_undispatched(key, 3)  # worker w-3: provably-not-run (class c)
+    assert 3 not in store.present_dispatched_indexes(key)
+    assert store.dispatch_instrumented(key)
+    return store, steps
+
+
+def test_reconstruct_residual_orchestrator_workers_unbound_synthesizes_ledger() -> None:
+    """RR3 — the O-W mirror of RR1 at the `not branch_plan` reconstruct ×
+    protocol-unbound exit (the EIGHTH scan site, CP spec v1.94). FAILS ON MAIN:
+    that exit had NO scan at all."""
+    import copy
+
+    store, steps = _rr_orchestrator_workers_crashed_store()
+    pre = copy.deepcopy(store.__dict__)
+    resume = _CountingDispatcher(n=5)
+    ledger = _RecordingLedger()
+    r2 = _run_persona(
+        workflow_id="wf-rr-residual-ow",
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+        registry=_AnyKindRegistry(resume),
+        ledger=ledger,
+    )
+    assert r2.status is RunStatus.FAILED
+    assert r2.fail_class == "orchestrator-workers-pause-resume-protocol-not-bound"
+    assert resume.dispatched == []
+    terminals = _branch_terminal_statuses(ledger)
+    assert terminals[0] == ["completed"]  # the recovered trigger worker, re-materialized
+    assert terminals[1] == ["completed"]  # class (b)
+    assert terminals[2] == ["completed"]  # class (a)
+    assert terminals[3] == ["cancelled"]  # class (c)
+    assert _branch_step_entry_indexes(ledger) == {0}
+    assert copy.deepcopy(store.__dict__) == pre
+
+
+def test_reconstruct_residual_orchestrator_workers_bound_leg_stays_scan_free() -> None:
+    """RR4 (control) — the O-W protocol-BOUND reconstruct leg re-establishes PAUSED,
+    omitting the skipped worker ordinals + carrying the fence-recoverable one; NO
+    synthesized terminals."""
+    store, steps = _rr_orchestrator_workers_crashed_store()
+    resume = _CountingDispatcher(n=5)
+    ledger = _RecordingLedger()
+    r2 = _run_persona(
+        workflow_id="wf-rr-residual-ow",
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+        registry=_AnyKindRegistry(resume),
+        pause_resume_protocol=_pause_protocol(),
+        ledger=ledger,
+    )
+    assert r2.status is RunStatus.PAUSED
+    assert resume.dispatched == []
+    assert r2.pause_snapshot is not None
+    fr = r2.pause_snapshot.fan_out_resume
+    assert fr is not None
+    assert {b.branch_index for b in fr.branches} == {0}
+    assert {f.branch_index for f in fr.effect_fence_paused_branches} == {2}
+    terminals = _branch_terminal_statuses(ledger)
+    assert set(terminals) == {0}
+
+
+def test_reconstruct_residual_complete_recovery_unbound_byte_preserved() -> None:
+    """RR5 (containment control on the gate-off path) — a COMPLETE-recovery unbound
+    re-establish (the reconstruct GATE is OFF: `crash_pause_reconstruct_no_dispatch`
+    never set on the complete path) synthesizes NOTHING beyond the re-materialized
+    recovered set — the pre-arc outputs byte-preserved. (The gate itself is pinned
+    by the 12 pre-existing scan-site suites, whose exact-list asserts would break
+    under an ungated domain-minus-recovered arm; post-build review RR-D2.)"""
+    store = _InMemoryBranchStore()
+    steps = [_step(f"branch-{i}", i) for i in range(3)]
+    _run_persona(
+        workflow_id="wf-rr-complete",
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3, fail_index=1),
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+    )  # COMPLETE recovery: no forgets
+    resume = _CountingDispatcher(n=3)
+    ledger = _RecordingLedger()
+    r2 = _run_persona(
+        workflow_id="wf-rr-complete",
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        ledger=ledger,
+    )
+    assert r2.status is RunStatus.FAILED
+    assert r2.fail_class == "parallelization-pause-resume-protocol-not-bound"
+    terminals = _branch_terminal_statuses(ledger)
+    assert terminals == {0: ["completed"], 1: ["completed"], 2: ["completed"]}
+    assert _branch_step_entry_indexes(ledger) == {0, 1, 2}
+
+
+def test_reconstruct_residual_store_inert_per_attempt_then_recovers() -> None:
+    """RR6 + RR7 — store-inertness via observables + the obligation-7 leg for the
+    new shape. Attempt-1 and attempt-2 (both unbound) reproduce the SAME fail_class
+    and the SAME synthesized multiset off a byte-identical store; attempt-3 (bound)
+    re-establishes PAUSED (the honest recovery path unbroken); resuming attempt-3's
+    snapshot genuinely RE-DISPATCHES the class-(b)/(c)/(a) ordinals despite
+    attempt-2's synthesized `completed`/`cancelled` ledger terminals (re-dispatch
+    keys on snapshot omission, never a ledger terminal read — v1.91/v1.92 item 5
+    extended to marker-bearing synthesized-`completed`)."""
+    import copy
+
+    store, steps = _rr_parallelization_crashed_store()
+    pre = copy.deepcopy(store.__dict__)
+
+    def _unbound_attempt() -> tuple[Any, dict[int, list[str]]]:
+        d = _CountingDispatcher(n=5)
+        led = _RecordingLedger()
+        r = _run_persona(
+            workflow_id="wf-rr-residual",
+            steps=steps,
+            dispatcher=d,
+            store=store,
+            persona_tier=PersonaTier.TEAM_BINDING,
+            registry=_AnyKindRegistry(d),
+            ledger=led,
+        )
+        assert d.dispatched == []
+        return r, _branch_terminal_statuses(led)
+
+    r_a1, t_a1 = _unbound_attempt()
+    assert copy.deepcopy(store.__dict__) == pre  # attempt-1 wrote NOTHING durable
+    r_a2, t_a2 = _unbound_attempt()
+    assert copy.deepcopy(store.__dict__) == pre  # attempt-2 identical premise
+    assert r_a1.fail_class == r_a2.fail_class
+    assert t_a1 == t_a2  # per-attempt synthesized multiset identical
+
+    # Attempt-3: bind the protocol → the reconstruct re-establishes PAUSED.
+    d3 = _CountingDispatcher(n=5)
+    r_a3 = _run_persona(
+        workflow_id="wf-rr-residual",
+        steps=steps,
+        dispatcher=d3,
+        store=store,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        registry=_AnyKindRegistry(d3),
+        pause_resume_protocol=_pause_protocol(),
+    )
+    assert r_a3.status is RunStatus.PAUSED and r_a3.pause_snapshot is not None
+    assert d3.dispatched == []
+
+    # RR7 — resume the snapshot (fresh store: the resume is its own attempt): the
+    # omitted (b)/(c) ordinals AND the carried fence ordinal re-dispatch despite the
+    # synthesized terminals attempt-2 recorded.
+    d4 = _CountingDispatcher(n=5)
+    r_a4 = _run_persona(
+        workflow_id="wf-rr-residual",
+        steps=steps,
+        dispatcher=d4,
+        store=_InMemoryBranchStore(),
+        persona_tier=PersonaTier.TEAM_BINDING,
+        registry=_AnyKindRegistry(d4),
+        pause_resume_protocol=_pause_protocol(),
+        pause_snapshot_input=r_a3.pause_snapshot,
+    )
+    assert set(d4.dispatched) == {"branch-2", "branch-3", "branch-4"}
+    assert r_a4.status is RunStatus.PARTIAL  # the recovered branch-1 failure stays degraded
