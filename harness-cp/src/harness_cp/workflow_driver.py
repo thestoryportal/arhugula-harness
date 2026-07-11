@@ -2881,6 +2881,14 @@ def _execute_workflow_body(
     # changed-kind → fail closed) + the auto-active fence (at-most-once at the tool sink). Empty
     # unless the PAUSE-reconstruct gate below classifies a fence-recoverable maybe-ran ordinal.
     _crash_pause_reconstruct_fence_paused: tuple[EffectFencePausedBranchResumeState, ...] = ()
+    # B-18-FENCE-LEDGER-RECONSTRUCT-RESIDUAL (CP spec v1.94) — the RE-FIRE-SAFE maybe-ran
+    # ordinals (DECLARATIVE_STEP / INFERENCE_STEP; dispatch marker, no capture) the reconstruct
+    # OMITS from the plan with NO carrier. Threaded so the strategy's reconstruct ×
+    # protocol-unbound terminal exit can synthesize their obligation-4 `completed` (marker
+    # presence forecloses `cancelled`) instead of leaving zero ledger footprint. Empty unless
+    # the PAUSE-reconstruct gate below runs; the driver's ONE store read stays the sole
+    # classification authority (no engine-side re-read).
+    _crash_pause_reconstruct_refire_safe: frozenset[int] = frozenset()
     _reconciler_fanout_engine_resume_required = False
     if (
         strategy
@@ -3344,6 +3352,13 @@ def _execute_workflow_body(
                         )
                         if _pr_instrumented and not _pr_fence_unrecoverable:
                             _crash_pause_reconstruct_no_dispatch = True
+                            # B-18-FENCE-LEDGER-RECONSTRUCT-RESIDUAL (CP spec v1.94) — the
+                            # re-fire-safe maybe-ran remainder (omitted from the plan, carried
+                            # into NO snapshot field): threaded for the reconstruct ×
+                            # protocol-unbound exit's obligation-4 synthesis.
+                            _crash_pause_reconstruct_refire_safe = frozenset(
+                                _pr_maybe_ran - _pr_maybe_ran_unsafe
+                            )
                             # FENCE-RECOVERABLE = the re-fire-unsafe ordinals MINUS the
                             # genuinely-unrecoverable. Carry each as an
                             # EffectFencePausedBranchResumeState; the marker step_id + kind are
@@ -3677,6 +3692,7 @@ def _execute_workflow_body(
             # dispatch mode (the dispatcher proved every absent ordinal not-yet-run).
             crash_pause_reconstruct_no_dispatch=_crash_pause_reconstruct_no_dispatch,
             crash_pause_reconstruct_fence_paused=_crash_pause_reconstruct_fence_paused,
+            crash_pause_reconstruct_refire_safe=_crash_pause_reconstruct_refire_safe,
             reconciler_engine_resume_required=_reconciler_fanout_engine_resume_required,
             synthesis_step=_synthesis_step,
             sub_agent_descent=sub_agent_descent,
@@ -3726,6 +3742,7 @@ def _execute_workflow_body(
             # dispatch mode (the dispatcher proved every absent worker ordinal not-yet-run).
             crash_pause_reconstruct_no_dispatch=_crash_pause_reconstruct_no_dispatch,
             crash_pause_reconstruct_fence_paused=_crash_pause_reconstruct_fence_paused,
+            crash_pause_reconstruct_refire_safe=_crash_pause_reconstruct_refire_safe,
             reconciler_engine_resume_required=_reconciler_fanout_engine_resume_required,
             pause_resumable=True,
             synthesis_step=_synthesis_step,
@@ -3759,6 +3776,7 @@ def _execute_workflow_body(
             # dispatch mode forwarded into the per-level orchestrator-workers execution.
             crash_pause_reconstruct_no_dispatch=_crash_pause_reconstruct_no_dispatch,
             crash_pause_reconstruct_fence_paused=_crash_pause_reconstruct_fence_paused,
+            crash_pause_reconstruct_refire_safe=_crash_pause_reconstruct_refire_safe,
             reconciler_engine_resume_required=_reconciler_fanout_engine_resume_required,
             pause_resumable=True,
             synthesis_step=_synthesis_step,
@@ -6723,6 +6741,7 @@ def _execute_parallelization(
     crash_fan_out_resume: FanOutResumeState | PeerFanOutResumeState | None = None,
     crash_pause_reconstruct_no_dispatch: bool = False,
     crash_pause_reconstruct_fence_paused: tuple[EffectFencePausedBranchResumeState, ...] = (),
+    crash_pause_reconstruct_refire_safe: frozenset[int] = frozenset(),
     reconciler_engine_resume_required: bool = False,
     synthesis_step: WorkflowStep | None = None,
     sub_agent_descent: bool = False,
@@ -7603,6 +7622,67 @@ def _execute_parallelization(
                 timestamp=fanout_timestamp,
                 procedural_tier_snapshot_ref=snapshot_ref,
             )
+        # B-18-FENCE-LEDGER-RECONSTRUCT-RESIDUAL (CP spec v1.94) — the reconstruct ×
+        # protocol-unbound arms, structurally GATED on the reconstruct mode (NOT
+        # incidentally empty: on a fresh run an ungated domain-minus-recovered scan
+        # would synthesize a phantom `cancelled` per live branch at every terminal
+        # exit). In-mode `branch_plan` is empty (the reconstruct `continue` above),
+        # so the plan loop is vacuous and ONLY these arms fire — at the single
+        # reconstruct-reachable exit (`pause-resume-protocol-not-bound`; the fence-
+        # ABORT / deadline / CASCADE_CANCEL exits are unreachable with nothing
+        # dispatched and cascade_policy pinned PAUSE by the driver gate). Ordinals:
+        # recovered-terminal branches were re-materialized by the seed loop (have
+        # footprint; `terminal_dispositions` carries them); the rest were skipped
+        # at plan build with zero footprint at a terminal exit nothing resumes.
+        # Arms, all LEDGER-only terminal-ONLY (zero store writes — a capture would
+        # flip a future reconstruct's classification; marker ABSENCE stays the
+        # provably-never-ran witness):
+        #   (a) carried fence-recoverable (marker + held reserve) → `completed`
+        #       (obligation-4: attempt-1 dispatched; `cancelled` would contradict
+        #       the branch's own store);
+        #   (b) re-fire-safe maybe-ran (marker, DECLARATIVE/INFERENCE) →
+        #       `completed` (same marker-presence foreclosure);
+        #   (c) not-yet-dispatched (instrumented, NO marker) → `cancelled` (the M2
+        #       baseline).
+        # Writers are freshly composed (no plan writers exist) and appended to
+        # `branch_writers` so the `_finish` drain persists them; terminal-only
+        # writers add 0 to `steps_executed` / STEP_BOUNDARY (the step-entry drain
+        # predicate).
+        if not crash_pause_reconstruct_no_dispatch:
+            return
+        _recon_carried = {int(_s.branch_index) for _s in crash_pause_reconstruct_fence_paused}
+        for _bi in range(len(steps)):
+            if _bi in terminal_dispositions:
+                continue
+            _r_step = steps[_bi]
+            _r_binding = resolve_step_binding(
+                manifest_entry,
+                str(_r_step.step_id),
+                default_model_binding=default_model_binding,
+                persona_tier=manifest_entry.persona_tier,
+            )
+            _r_child = compose_branch_child_context(
+                fanout_parent,
+                branch_index=_bi,
+                agent_role=_r_binding.agent_role or _DEFAULT_PARALLELIZATION_AGENT_ROLE,
+            ).model_copy(
+                update={
+                    "hitl_placements": fold_step_hitl_placements(
+                        manifest_entry.hitl_placements, _r_binding.hitl_placement
+                    )
+                }
+            )
+            _r_writer = BufferingLedgerWriter(actor=ctx.ledger_writer.actor, branch_index=_bi)
+            _r_dispatched = _bi in _recon_carried or _bi in crash_pause_reconstruct_refire_safe
+            append_branch_terminal_ledger_entry(
+                branch_writer=_r_writer,
+                branch_context=_r_child,
+                run_idempotency_key=run_idempotency_key,
+                terminal_status="completed" if _r_dispatched else "cancelled",
+                timestamp=fanout_timestamp,
+                procedural_tier_snapshot_ref=snapshot_ref,
+            )
+            branch_writers.append(_r_writer)
 
     # === proceed: branches run to completion → SUCCESS | PARTIAL (degraded) ===
     if cascade_policy is CascadePolicy.PROCEED:
@@ -9082,6 +9162,7 @@ def _execute_orchestrator_workers(
     crash_fan_out_resume: FanOutResumeState | PeerFanOutResumeState | None = None,
     crash_pause_reconstruct_no_dispatch: bool = False,
     crash_pause_reconstruct_fence_paused: tuple[EffectFencePausedBranchResumeState, ...] = (),
+    crash_pause_reconstruct_refire_safe: frozenset[int] = frozenset(),
     pause_resumable: bool = False,
     reconciler_engine_resume_required: bool = False,
     synthesis_step: WorkflowStep | None = None,
@@ -10176,6 +10257,167 @@ def _execute_orchestrator_workers(
         collected[branch_index] = (str(step.step_id), output)
         terminal_dispositions[branch_index] = "completed"  # B-FANOUT-PAUSE
 
+    # B-18-FENCE-LEDGER-FIDELITY-OW (CP spec v1.93; DDR at
+    # `.harness/b18-fence-ledger-fidelity-ow-design-decision-record.md`) — the §25.15.2
+    # obligation-4 scan, extended from PARALLELIZATION (v1.91 M2 + v1.92 fence arms) to
+    # this engine's SEVEN terminal exits: fence-ABORT (pre-cascade-branch), CASCADE_CANCEL
+    # post-barrier (the pre-arc inline loop, factored here), PROCEED deadline → PARTIAL,
+    # PROCEED paused-child → FAILED, PAUSE deadline → FAILED, PAUSE not-yet-materialized →
+    # FAILED (defence-in-depth; no live caller passes pause_resumable=False), PAUSE
+    # protocol-not-bound → FAILED — plus, at CP spec v1.94, the EIGHTH call site: the
+    # crash-reconstruct × protocol-unbound exit inside the `not branch_plan` block
+    # (B-18-FENCE-LEDGER-RECONSTRUCT-RESIDUAL; the def moved above that block so the
+    # call resolves — late binding preserves the seven pre-existing sites). A worker
+    # withheld past a terminal run boundary has NO
+    # ledger footprint, unlike every in-flight worker (which records step + terminal at its
+    # own handler). Keyed on the ABSENCE of a step/terminal disposition, NOT an empty
+    # buffer (an overridden worker carries its pre-fan-out override entry,
+    # `branch_metadata=None`). LEDGER-only for a never-dispatched worker — NEVER
+    # `_mark_branch_dispatched` / `_capture_branch_terminal`: dispatch-marker ABSENCE is
+    # the durable provably-never-ran witness, and synthesized entries are PER-ATTEMPT
+    # AUDIT records, not resume authority (resume keys on snapshot omission — v1.91
+    # item 5 / v1.92 item 5). NOT called on the worker-failure → PAUSED boundary, where
+    # snapshot omission IS the re-dispatchable contract (§25.15.1), nor at the resume-
+    # rejection guards (pre-flight refusals — the round never released a worker), nor at
+    # the `not branch_plan` short-circuit's OTHER legs (complete-recovery SUCCESS/PARTIAL
+    # folds; PROCEED strict-tier gate; re-establish-PAUSED — the v1.94 call is exactly
+    # the reconstruct × protocol-unbound FAILED return, discharging the v1.93 item-9
+    # registration). Arms in
+    # ORDER — an aborted ordinal is BY CONSTRUCTION also in the recovered-fence dict (the
+    # ABORT directive is built from it), so the aborted arm is checked first:
+    #   (1) fence-ABORTED (`EffectFenceAbortedError` at its re-dispatch): dispatched and
+    #       REFUSED — `cancelled` is foreclosed (obligation-4: not-yet-dispatched only)
+    #       and a step entry would claim an effectful step ran. Ledger `completed`
+    #       terminal-ONLY, NO store capture (a capture would flip the crash gate's
+    #       fence-recoverable classification and erase the operator's pending ABORT).
+    #   (2) fence-paused, THIS round (`effect_fence_paused_dispositions`): DID dispatch →
+    #       `completed` + the durable store capture (the pre-arc CASCADE_CANCEL arm,
+    #       Codex [P2] lineage; where this arm newly fires — the fence-ABORT exit and the
+    #       PAUSE-guard FAILED exits — the capture is the committed v1.65 §1(c)
+    #       reproduce-the-terminal trade, v1.93-named).
+    #   (3) fence-paused, RECOVERED (`_recovered_effect_fence_paused`; withheld this
+    #       round before its re-dispatch): attempt-1 dispatched and holds an ambiguous-
+    #       uncommitted reserve — obligation-4 `completed`; NO capture (the still-
+    #       journaled prior snapshot carries the peer, so capture-less keeps its crash
+    #       classification fence-recoverable MAYBE-RAN + the reserve un-orphaned).
+    #   (4) paused-child, THIS round (`paused_child_dispositions`): DID dispatch (its
+    #       recursive child paused mid-flight) → `completed` (the pre-arc CASCADE_CANCEL
+    #       arm), NO capture (a capture would flip the crash gate's child-recoverable
+    #       classification to recovered-terminal, dropping the child snapshot's
+    #       resumability).
+    #   (5) paused-child, RECOVERED (`_recovered_paused_child`; withheld this round
+    #       before its child-resume re-dispatch): attempt-1 dispatched — `completed`,
+    #       NO capture (the prior snapshot carries it in `paused_child_branches`; the
+    #       third-disposition-class half of the v1.93 union arm).
+    #   (6) else never-dispatched → `cancelled`, LEDGER-only (the M2 baseline).
+    # HIERARCHICAL_DELEGATION inherits every site per level (its recursion re-enters this
+    # engine). Scoped-abort ordinals are structurally invisible (excluded from
+    # `branch_plan`; their durable terminal is recorded at the post-init block above).
+    # B-18-FENCE-LEDGER-RECONSTRUCT-RESIDUAL (CP spec v1.94) — the reconstruct-arm
+    # writers, drained ONLY at the reconstruct × protocol-unbound exit (terminal-only
+    # → zero `steps_executed` / STEP_BOUNDARY contribution).
+    _reconstruct_synth_writers: list[BufferingLedgerWriter] = []
+
+    def _synthesize_undispatched_terminals() -> None:
+        for _bi, _step, child, writer, _binding in branch_plan:
+            if _writer_has_branch_disposition(writer):
+                continue
+            if _bi in effect_fence_aborted_dispositions:
+                # Arm (1): aborted — ledger `completed` terminal-ONLY, no capture.
+                append_branch_terminal_ledger_entry(
+                    branch_writer=writer,
+                    branch_context=child,
+                    run_idempotency_key=run_idempotency_key,
+                    terminal_status="completed",
+                    timestamp=fanout_timestamp,
+                    procedural_tier_snapshot_ref=snapshot_ref,
+                )
+                continue
+            _fence_paused = _bi in effect_fence_paused_dispositions
+            _dispatched_boundary = (
+                _fence_paused
+                or _bi in _recovered_effect_fence_paused
+                or _bi in paused_child_dispositions
+                or _bi in _recovered_paused_child
+            )
+            _disposition = "completed" if _dispatched_boundary else "cancelled"
+            if _fence_paused:
+                # Arm (2) only — arms (3)/(4)/(5) are deliberately capture-less.
+                _capture_branch_terminal(
+                    ctx,
+                    manifest_entry,
+                    run_idempotency_key=run_idempotency_key,
+                    branch_index=_bi,
+                    step_id=str(_step.step_id),
+                    terminal_status="completed",
+                    output=None,
+                )
+            append_branch_terminal_ledger_entry(
+                branch_writer=writer,
+                branch_context=child,
+                run_idempotency_key=run_idempotency_key,
+                terminal_status=_disposition,
+                timestamp=fanout_timestamp,
+                procedural_tier_snapshot_ref=snapshot_ref,
+            )
+        # B-18-FENCE-LEDGER-RECONSTRUCT-RESIDUAL (CP spec v1.94) — the reconstruct ×
+        # protocol-unbound arms, structurally GATED on the reconstruct mode (NOT
+        # incidentally empty: on a fresh run an ungated domain-minus-recovered scan
+        # would synthesize a phantom `cancelled` per live worker at every terminal
+        # exit). In-mode `branch_plan` is empty (the reconstruct `continue` at plan
+        # build), so the plan loop above is vacuous and ONLY these arms fire — at
+        # the single reconstruct-reachable exit (the protocol-unbound FAILED return;
+        # cascade_policy is pinned PAUSE by the driver gate and nothing dispatched).
+        # Ordinals: recovered-terminal workers were re-materialized by the seed loop
+        # (have footprint; `terminal_dispositions` carries them); the rest were
+        # skipped at plan build with zero footprint at a terminal exit nothing
+        # resumes. Arms, all LEDGER-only terminal-ONLY (zero store writes — a
+        # capture would flip a future reconstruct's classification; marker ABSENCE
+        # stays the provably-never-ran witness):
+        #   (a) carried fence-recoverable (marker + held reserve) → `completed`
+        #       (obligation-4: attempt-1 dispatched; `cancelled` would contradict
+        #       the worker's own store);
+        #   (b) re-fire-safe maybe-ran (marker, DECLARATIVE/INFERENCE) →
+        #       `completed` (same marker-presence foreclosure);
+        #   (c) not-yet-dispatched (instrumented, NO marker) → `cancelled` (the M2
+        #       baseline).
+        if not crash_pause_reconstruct_no_dispatch:
+            return
+        _recon_carried = {int(_s.branch_index) for _s in crash_pause_reconstruct_fence_paused}
+        for _bi in range(len(worker_steps)):
+            if _bi in terminal_dispositions:
+                continue
+            _r_step = worker_steps[_bi]
+            _r_binding = resolve_step_binding(
+                manifest_entry,
+                str(_r_step.step_id),
+                default_model_binding=default_model_binding,
+                persona_tier=manifest_entry.persona_tier,
+            )
+            _r_child = compose_branch_child_context(
+                fanout_parent,
+                branch_index=_bi,
+                agent_role=_r_binding.agent_role or derive_agent_role(_r_step.step_id),
+            ).model_copy(
+                update={
+                    "step_index": _bi + 1,
+                    "hitl_placements": fold_step_hitl_placements(
+                        manifest_entry.hitl_placements, _r_binding.hitl_placement
+                    ),
+                }
+            )
+            _r_writer = BufferingLedgerWriter(actor=ctx.ledger_writer.actor, branch_index=_bi)
+            _r_dispatched = _bi in _recon_carried or _bi in crash_pause_reconstruct_refire_safe
+            append_branch_terminal_ledger_entry(
+                branch_writer=_r_writer,
+                branch_context=_r_child,
+                run_idempotency_key=run_idempotency_key,
+                terminal_status="completed" if _r_dispatched else "cancelled",
+                timestamp=fanout_timestamp,
+                procedural_tier_snapshot_ref=snapshot_ref,
+            )
+            _reconstruct_synth_writers.append(_r_writer)
+
     # No worker fan-out to run → SUCCESS with the recovered/empty worker set.
     # Non-resume: orchestrator-only (no workers) — `not branch_plan` ⟺ `not
     # worker_steps` (one plan entry per worker, no skips). Resume: every worker
@@ -10244,6 +10486,16 @@ def _execute_orchestrator_workers(
             if _reestablish_protocol is None:
                 # No protocol bound → cannot capture a snapshot → fail HONESTLY (never a
                 # false-resumable PAUSED), mirroring the worker-failed pause site.
+                # B-18-FENCE-LEDGER-RECONSTRUCT-RESIDUAL (CP spec v1.94, the EIGHTH scan
+                # site) — a TERMINAL exit nothing resumes, reached BEFORE any snapshot is
+                # built: without the scan the reconstruct-skipped ordinals + the carried
+                # fence-recoverable ordinals end with zero ledger footprint (the v1.93
+                # item-9 registration, discharged here). Reconstruct arms only (the plan
+                # is empty); synthesized writers drain here, terminal-only → zero
+                # `steps_executed` / STEP_BOUNDARY contribution (`_reestablish_steps`
+                # byte-unchanged).
+                _synthesize_undispatched_terminals()
+                drain_branch_buffers(ctx.ledger_writer, _reconstruct_synth_writers)
                 _finalize_reconciler_cas_if_attempted()
                 return RunResult(
                     workflow_id=workflow_id,
@@ -10430,99 +10682,10 @@ def _execute_orchestrator_workers(
 
     deadline = _DEFAULT_FANOUT_BARRIER_DEADLINE_SECONDS
 
-    # B-18-FENCE-LEDGER-FIDELITY-OW (CP spec v1.93; DDR at
-    # `.harness/b18-fence-ledger-fidelity-ow-design-decision-record.md`) — the §25.15.2
-    # obligation-4 scan, extended from PARALLELIZATION (v1.91 M2 + v1.92 fence arms) to
-    # this engine's SEVEN terminal exits: fence-ABORT (pre-cascade-branch), CASCADE_CANCEL
-    # post-barrier (the pre-arc inline loop, factored here), PROCEED deadline → PARTIAL,
-    # PROCEED paused-child → FAILED, PAUSE deadline → FAILED, PAUSE not-yet-materialized →
-    # FAILED (defence-in-depth; no live caller passes pause_resumable=False), PAUSE
-    # protocol-not-bound → FAILED. A worker withheld past a terminal run boundary has NO
-    # ledger footprint, unlike every in-flight worker (which records step + terminal at its
-    # own handler). Keyed on the ABSENCE of a step/terminal disposition, NOT an empty
-    # buffer (an overridden worker carries its pre-fan-out override entry,
-    # `branch_metadata=None`). LEDGER-only for a never-dispatched worker — NEVER
-    # `_mark_branch_dispatched` / `_capture_branch_terminal`: dispatch-marker ABSENCE is
-    # the durable provably-never-ran witness, and synthesized entries are PER-ATTEMPT
-    # AUDIT records, not resume authority (resume keys on snapshot omission — v1.91
-    # item 5 / v1.92 item 5). NOT called on the worker-failure → PAUSED boundary, where
-    # snapshot omission IS the re-dispatchable contract (§25.15.1), nor at the resume-
-    # rejection guards (pre-flight refusals — the round never released a worker), nor at
-    # the `not branch_plan` short-circuit (no plan-carried branches; the reconstruct ×
-    # protocol-unbound residual there is REGISTERED at v1.93, not absorbed here). Arms in
-    # ORDER — an aborted ordinal is BY CONSTRUCTION also in the recovered-fence dict (the
-    # ABORT directive is built from it), so the aborted arm is checked first:
-    #   (1) fence-ABORTED (`EffectFenceAbortedError` at its re-dispatch): dispatched and
-    #       REFUSED — `cancelled` is foreclosed (obligation-4: not-yet-dispatched only)
-    #       and a step entry would claim an effectful step ran. Ledger `completed`
-    #       terminal-ONLY, NO store capture (a capture would flip the crash gate's
-    #       fence-recoverable classification and erase the operator's pending ABORT).
-    #   (2) fence-paused, THIS round (`effect_fence_paused_dispositions`): DID dispatch →
-    #       `completed` + the durable store capture (the pre-arc CASCADE_CANCEL arm,
-    #       Codex [P2] lineage; where this arm newly fires — the fence-ABORT exit and the
-    #       PAUSE-guard FAILED exits — the capture is the committed v1.65 §1(c)
-    #       reproduce-the-terminal trade, v1.93-named).
-    #   (3) fence-paused, RECOVERED (`_recovered_effect_fence_paused`; withheld this
-    #       round before its re-dispatch): attempt-1 dispatched and holds an ambiguous-
-    #       uncommitted reserve — obligation-4 `completed`; NO capture (the still-
-    #       journaled prior snapshot carries the peer, so capture-less keeps its crash
-    #       classification fence-recoverable MAYBE-RAN + the reserve un-orphaned).
-    #   (4) paused-child, THIS round (`paused_child_dispositions`): DID dispatch (its
-    #       recursive child paused mid-flight) → `completed` (the pre-arc CASCADE_CANCEL
-    #       arm), NO capture (a capture would flip the crash gate's child-recoverable
-    #       classification to recovered-terminal, dropping the child snapshot's
-    #       resumability).
-    #   (5) paused-child, RECOVERED (`_recovered_paused_child`; withheld this round
-    #       before its child-resume re-dispatch): attempt-1 dispatched — `completed`,
-    #       NO capture (the prior snapshot carries it in `paused_child_branches`; the
-    #       third-disposition-class half of the v1.93 union arm).
-    #   (6) else never-dispatched → `cancelled`, LEDGER-only (the M2 baseline).
-    # HIERARCHICAL_DELEGATION inherits every site per level (its recursion re-enters this
-    # engine). Scoped-abort ordinals are structurally invisible (excluded from
-    # `branch_plan`; their durable terminal is recorded at the post-init block above).
-    def _synthesize_undispatched_terminals() -> None:
-        for _bi, _step, child, writer, _binding in branch_plan:
-            if _writer_has_branch_disposition(writer):
-                continue
-            if _bi in effect_fence_aborted_dispositions:
-                # Arm (1): aborted — ledger `completed` terminal-ONLY, no capture.
-                append_branch_terminal_ledger_entry(
-                    branch_writer=writer,
-                    branch_context=child,
-                    run_idempotency_key=run_idempotency_key,
-                    terminal_status="completed",
-                    timestamp=fanout_timestamp,
-                    procedural_tier_snapshot_ref=snapshot_ref,
-                )
-                continue
-            _fence_paused = _bi in effect_fence_paused_dispositions
-            _dispatched_boundary = (
-                _fence_paused
-                or _bi in _recovered_effect_fence_paused
-                or _bi in paused_child_dispositions
-                or _bi in _recovered_paused_child
-            )
-            _disposition = "completed" if _dispatched_boundary else "cancelled"
-            if _fence_paused:
-                # Arm (2) only — arms (3)/(4)/(5) are deliberately capture-less.
-                _capture_branch_terminal(
-                    ctx,
-                    manifest_entry,
-                    run_idempotency_key=run_idempotency_key,
-                    branch_index=_bi,
-                    step_id=str(_step.step_id),
-                    terminal_status="completed",
-                    output=None,
-                )
-            append_branch_terminal_ledger_entry(
-                branch_writer=writer,
-                branch_context=child,
-                run_idempotency_key=run_idempotency_key,
-                terminal_status=_disposition,
-                timestamp=fanout_timestamp,
-                procedural_tier_snapshot_ref=snapshot_ref,
-            )
-
+    # (The obligation-4 scan closure — formerly defined here — moved ABOVE the
+    # `not branch_plan` block for the B-18-FENCE-LEDGER-RECONSTRUCT-RESIDUAL call
+    # site inside it, CP spec v1.94. Late binding keeps the seven pre-existing
+    # call sites' semantics; every closed-over name binds before any call.)
     # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE — resuming an effect-fence pause (a STRICT-TIER construct)
     # under a manifest/persona that now resolves to PROCEED is incoherent (the PROCEED path has no
     # pause/resolution handling → a re-entered worker's ABORT / missing-resolution ambiguous error
@@ -11150,6 +11313,7 @@ def _execute_hierarchical_delegation(
     crash_fan_out_resume: FanOutResumeState | PeerFanOutResumeState | None = None,
     crash_pause_reconstruct_no_dispatch: bool = False,
     crash_pause_reconstruct_fence_paused: tuple[EffectFencePausedBranchResumeState, ...] = (),
+    crash_pause_reconstruct_refire_safe: frozenset[int] = frozenset(),
     pause_resumable: bool = False,
     reconciler_engine_resume_required: bool = False,
     synthesis_step: WorkflowStep | None = None,
@@ -11256,6 +11420,9 @@ def _execute_hierarchical_delegation(
         # B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT-MAYBE-RAN-FENCE-STEP-ID — forward the
         # fence-recoverable maybe-ran carriers into the per-level orchestrator-workers execution.
         crash_pause_reconstruct_fence_paused=crash_pause_reconstruct_fence_paused,
+        # B-18-FENCE-LEDGER-RECONSTRUCT-RESIDUAL (CP spec v1.94) — forward the re-fire-safe
+        # maybe-ran ordinals for the reconstruct × protocol-unbound obligation-4 synthesis.
+        crash_pause_reconstruct_refire_safe=crash_pause_reconstruct_refire_safe,
         pause_resumable=pause_resumable,
         reconciler_engine_resume_required=reconciler_engine_resume_required,
         # B-POSTJOIN-LLM-SYNTHESIS (CP spec v1.54 §3) — TOP-LEVEL synthesis only:
