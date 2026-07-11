@@ -399,7 +399,28 @@ async def execute(
             # classifier (fail-loud if the `[embedding]` extra is absent). Default
             # False → the #213 always-echo, byte-identical / zero blast radius.
             routing_activation=config.routing_activation,
+            # B-18-KEEPALIVE — Anthropic model string for prewarm/keep-alive pings
+            # (ADR-D3 §1.5:189). File/CLI-only on RuntimeConfig (not env-keyed);
+            # resolved inside `prewarm()` from routing_manifest first, then this
+            # fallback. None → prewarm returns SKIPPED_NOT_ELIGIBLE.
+            prewarm_model=config.prompt_cache_prewarm_model,
         )
+        # B-18-KEEPALIVE — stash the bare dispatcher on ctx so the daemon
+        # keep-alive loop (Step 5) can call `bare.prewarm()` directly without
+        # routing through the HITL/retry wrapper (which gates at PRE_ACTION).
+        ctx.bare_llm_dispatcher = bare_dispatcher
+        # Best-effort boot pre-warm: fires for BOTH `harness run` (one-shot)
+        # AND daemon; MUST NOT propagate as BootstrapFailure (ADR-D3 §1.5:189).
+        if config.prompt_cache_boot_prewarm:
+            try:
+                await bare_dispatcher.prewarm()
+            except Exception:
+                import logging
+
+                logging.getLogger("harness.runtime.prewarm").warning(
+                    "stage-5 prewarm failed (best-effort; bootstrap continues)",
+                    exc_info=True,
+                )
 
     # U-RT-58 (C-RT-16 §14.6 D6): rebind ``ctx.llm_dispatcher`` from the
     # bare ``RuntimeLLMDispatcher`` to the ``RetryBreakerFallbackDispatcher``

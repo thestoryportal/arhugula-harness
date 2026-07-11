@@ -175,6 +175,7 @@ async def test_ac4_drained_flag_triggers_uvicorn_shutdown(
         def __init__(self) -> None:
             self.drained_flag = drained
             self.mcp_server = _FakeMCPServer()
+            self.bare_llm_dispatcher = None  # B-18-KEEPALIVE stub (keepalive not tested here)
 
     class _FakeMCPServer:
         def __init__(self) -> None:
@@ -283,6 +284,7 @@ async def test_ac7_uvicorn_serve_failure_raises_daemon_startup_error(
         def __init__(self) -> None:
             self.drained_flag = drained
             self.mcp_server = _FakeMCPServer()
+            self.bare_llm_dispatcher = None  # B-18-KEEPALIVE stub (keepalive not tested here)
 
     class _FakeMCPServer:
         def __init__(self) -> None:

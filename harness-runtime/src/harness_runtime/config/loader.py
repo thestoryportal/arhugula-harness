@@ -84,6 +84,14 @@ _ENV_SCALAR_FIELDS: dict[str, tuple[str, Any]] = {
     # operator who sets HARNESS_ROUTING_ACTIVATION must NOT be silently dropped
     # ([[runtimeconfig-scalar-needs-both-env-loaders]]; mirrored in config_source).
     "routing_activation": (f"{ENV_PREFIX}ROUTING_ACTIVATION", _parse_bool),
+    # B-18-KEEPALIVE: env-keyed because both flags gate cost-affecting behavior
+    # (paid Anthropic calls at boot / every 4min idle). An operator who sets
+    # HARNESS_PROMPT_CACHE_BOOT_PREWARM or HARNESS_PROMPT_CACHE_KEEPALIVE must NOT
+    # be silently dropped ([[runtimeconfig-scalar-needs-both-env-loaders]]).
+    # `prompt_cache_prewarm_model` (str) is file/CLI-only — it does not gate
+    # correctness, only which model is warmed; no env entry needed.
+    "prompt_cache_boot_prewarm": (f"{ENV_PREFIX}PROMPT_CACHE_BOOT_PREWARM", _parse_bool),
+    "prompt_cache_keepalive": (f"{ENV_PREFIX}PROMPT_CACHE_KEEPALIVE", _parse_bool),
 }
 
 

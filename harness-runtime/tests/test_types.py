@@ -231,6 +231,9 @@ def test_harness_context_declares_all_c_rt_04_fields() -> None:
         # fork class_1_fork_prompts_management_surface_active_prompt_version.md).
         # Empty-defaultable PromptManifest mirroring routing_manifest.
         "prompt_manifest",
+        # B-18-KEEPALIVE (runtime spec v1.99 §B-18) — bare dispatcher handle for
+        # prewarm() / keep-alive; typed Any to avoid lifecycle→types import cycle.
+        "bare_llm_dispatcher",
     }
     actual = set(HarnessContext.model_fields.keys())
     assert actual == expected, f"missing: {expected - actual}; extra: {actual - expected}"

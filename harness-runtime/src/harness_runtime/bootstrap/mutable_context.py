@@ -287,6 +287,11 @@ class _MutableHarnessContext:
     satisfy the ``LLMDispatcher`` Protocol; the field is typed against the
     Protocol so the C-RT-16 wrap is type-transparent."""
 
+    bare_llm_dispatcher: Any = None
+    """B-18-KEEPALIVE bare dispatcher handle for `prewarm()` / keep-alive.
+    See `HarnessContext.bare_llm_dispatcher` for rationale. `None` for
+    non-inference workflows; stashed at stage 5 LOOP_INIT."""
+
     sub_agent_dispatcher: Any = None
     """U-RT-59 (C-RT-17 §14.7) sub-agent dispatch composer + U-RT-60
     (C-RT-18 §14.8) HITL gate composer wrap layer; bound at stage 5
@@ -533,6 +538,7 @@ class _MutableHarnessContext:
             topology_dispatcher=_bound(self.topology_dispatcher),
             lifecycle_emitter=_bound(self.lifecycle_emitter),
             llm_dispatcher=_bound(self.llm_dispatcher),
+            bare_llm_dispatcher=self.bare_llm_dispatcher,
             sub_agent_dispatcher=self.sub_agent_dispatcher,
             ask_user_question_surface=self.ask_user_question_surface,
             step_dispatchers=self.step_dispatchers,
