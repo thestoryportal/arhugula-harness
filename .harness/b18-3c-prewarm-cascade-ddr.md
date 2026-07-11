@@ -246,4 +246,22 @@ Single Phase 7 session:
 
 ---
 
+## 10. §3b resolution addendum (build session, 2026-07-11)
+
+**Operator ratified Option A (2026-07-11). A pre-build empirical probe then REFUTED the §3b gap premise — Option A was NOT built (probe-resolved; the ratified intent holds on pre-existing machinery).**
+
+The §3b analysis above (and Fable-5 R2) modeled only the strategy-local flow: it assumed the crash-resume re-entry reaches the fan-out barrier with `branch_plan = [(1,…),(2,…)]` non-empty. That premise is stale against the ENTRY-time crash-resume gate in `_execute_workflow_body` (B-FANOUT-CRASH-RESUME-CASCADE-POLICY + B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT, CP spec v1.68 §1 + v1.70 §1 + v1.71 §1), which intercepts BEFORE the strategy:
+
+- **PAUSE**: pause-trigger (`completed`+no-output) + INCOMPLETE recovery + absent ordinals provably-not-run (instrumented + no dispatch marker — exactly the warmup-withheld siblings) → `_crash_pause_reconstruct_no_dispatch = True` → the strategy skips every non-recovered ordinal → `branch_plan` EMPTY → `_crash_pause_reestablish` re-establishes PAUSED without dispatching. Probe result: `paused`, zero re-dispatches, snapshot = `[(0, "completed", None)]`.
+- **CASCADE_CANCEL**: degraded recovery → FAILED `fan-out-crash-resume-cascade-cancel` at entry. Probe result: `failed`, zero re-dispatches.
+
+Probe: seeded the exact §3b store state (cardinality=3, instrumented, branch[0] marker + `completed`/no-output record, siblings absent, no snapshot input) on HEAD `f1ed1916` and re-entered `execute_workflow` for both strict tiers. Option A's synthesis predicate can therefore never fire on a reachable path (operator snapshot-resume is excluded by `resume_snapshot`; recovered scoped-aborts carry `scoped_aborted` ≠ `completed`; recovered `timed_out` is not a pause trigger; every pause-trigger crash state is intercepted at entry).
+
+**W6 as built** produces the crash state organically through the NEW warm-up path (live Phase-1 branch[0] failure under PAUSE → PAUSED → snapshot discarded → re-entry on the shared store) and pins: re-entry → PAUSED, zero dispatches, snapshot carries only branch[0] — never a silent PARTIAL. The W6 row's "correct outcome (PAUSED or FAILED depending on Option A/B decision at §3b)" resolves to **PAUSED via the pre-existing reconstruct machinery**, satisfying the operator-ratified Option A intent with zero new code. Recorded at CP spec v1.90 §3b-disposition + clearance marker `Spec_Control_Plane-v1_90-cleared-2026-07-11.md`.
+
+**Decorrelated diff-review sharpenings (Fable-5, build session):** (a) Option A **as sketched at §7 (unguarded)** would be actively HARMFUL, not merely dead — its predicate is TRUE on every operator resume of a degraded pause, forcing a re-pause where the ratified Reading A produces PARTIAL (would regress the W3 resume leg); not building it is doubly correct. The §8 spec-delta sketch's "Option A ensures…" sentence is therefore superseded — CP spec v1.90 authors the crash-resume paragraph around the B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT entry gate. (b) §4's "W4 covers the deadline-budget witness" is superseded: the shared-single-budget property is structural (one `asyncio.timeout` + one watchdog wrap both phases, by construction); no unit witness is practical against the non-injectable 300 s deadline constant — the built W4 is the §6-table gate=False baseline. (c) A new W7 (both tiers) pins the R3 Phase-1 guard: a bare branch[0] `TimeoutError` classifies as branch failure (PAUSED / `parallelization-cascade-cancel`), never `parallelization-barrier-deadline`.
+
+---
+
 *Filed by: Claude Code (Sonnet 4.6) — advisor + Fable-5 decorrelated reviews applied*
+*§10 addendum filed by: Claude Code (Fable 5) build session 2026-07-11 — §3b probe-resolved*

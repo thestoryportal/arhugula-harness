@@ -7477,29 +7477,42 @@ def _execute_parallelization(
             salvage=False,
         )
 
+    # B-18-3C-PREWARM-COHORTKEY — dispatcher-attested cohort predicate (H2).
+    # Each branch asks its dispatcher for a stable cohort key; None means
+    # "not cache-stable" (CP-invisible check: memory_runtime, frozen_tool_superset,
+    # or per-binding attributes differ). All branches must return the same non-None
+    # key to form a warm cohort. len>=2 guard (H3) preserved.
+    # Replaces the binary CP-visible-only predicate (DDR §11.4 C follow-on).
+    # B-18-3C-PREWARM-CASCADE — LIFTED above the cascade_policy branch (was PROCEED-local):
+    # the warm-up gate now serializes branch[0] on all three §25.15.1 paths (`_proceed_fanout`
+    # for PROCEED + `_cancel_fanout` below for CASCADE_CANCEL / PAUSE). Placed AFTER the
+    # effect-fence PROCEED fail-closed guard above so pre-arc PROCEED evaluation order is
+    # exactly preserved (the gate — and its dispatcher `cohort_key()` calls — never runs
+    # ahead of that guard's honest FAILED). H3 keys on the LIVE branch_plan
+    # (post-recovery-seed): a partial-recovery resume warms the REMAINING cohort with a new
+    # "branch[0]" (the first remaining ordinal); a <2-branch remainder — including the
+    # crash-reconstruct empty plan — stays all-concurrent (gate False).
+    def _same_prefix_cohort() -> bool:
+        if len(branch_plan) < 2:  # H3: live len, not cell cap
+            return False
+        keys: list[str] = []
+        for branch_index, step, _child, _writer, binding in branch_plan:
+            dispatcher = branch_dispatchers[branch_index]
+            if not isinstance(dispatcher, CohortKeyCapable):
+                return False
+            key = dispatcher.cohort_key(binding, step)
+            if key is None:
+                return False
+            keys.append(key)
+        return len(set(keys)) == 1
+
+    _warmup_gate: bool = _d4.concurrent_cache_warmup and _same_prefix_cohort()
+
     # === proceed: branches run to completion → SUCCESS | PARTIAL (degraded) ===
     if cascade_policy is CascadePolicy.PROCEED:
-        # B-18-3C-PREWARM-COHORTKEY — dispatcher-attested cohort predicate (H2).
-        # Each branch asks its dispatcher for a stable cohort key; None means
-        # "not cache-stable" (CP-invisible check: memory_runtime, frozen_tool_superset,
-        # or per-binding attributes differ). All branches must return the same non-None
-        # key to form a warm cohort. len>=2 guard (H3) preserved.
-        # Replaces the binary CP-visible-only predicate (DDR §11.4 C follow-on).
-        def _same_prefix_cohort() -> bool:
-            if len(branch_plan) < 2:  # H3: live len, not cell cap
-                return False
-            keys: list[str] = []
-            for branch_index, step, _child, _writer, binding in branch_plan:
-                dispatcher = branch_dispatchers[branch_index]
-                if not isinstance(dispatcher, CohortKeyCapable):
-                    return False
-                key = dispatcher.cohort_key(binding, step)
-                if key is None:
-                    return False
-                keys.append(key)
-            return len(set(keys)) == 1
-
-        _warmup_gate: bool = _d4.concurrent_cache_warmup and _same_prefix_cohort()
+        # (B-18-3C-PREWARM-CASCADE: `_same_prefix_cohort` + `_warmup_gate` were
+        # PROCEED-local here; lifted above the cascade_policy branch so the strict
+        # tiers share the same gate.)
 
         async def _proceed_branch(
             branch_index: int,
@@ -7817,9 +7830,81 @@ def _execute_parallelization(
         _record_clean(branch_index, step, child, writer, output)
 
     async def _cancel_fanout() -> list[None]:
-        return await cascade_cancel_barrier(
-            (_cancel_branch(*plan) for plan in branch_plan), deadline_seconds=deadline
-        )
+        if not _warmup_gate:
+            return await cascade_cancel_barrier(
+                (_cancel_branch(*plan) for plan in branch_plan), deadline_seconds=deadline
+            )
+        # B-18-3C-PREWARM-CASCADE — serialize branch[0] (cache-write) then release
+        # branches[1..N-1] (cache-hits) on the strict tiers, SHARING one deadline
+        # budget + one `_BRANCH_INFLIGHT_DISPATCHES` watchdog registry across both
+        # phases. Inlines the `cascade_cancel_barrier` setup rather than composing
+        # two barrier calls — each call would grant a FULL `deadline` budget,
+        # doubling the §25.11 wall-clock cap (DDR §4). Inline (not a
+        # `serialize_first` barrier param) also keeps coroutine creation lazy:
+        # a Phase-1 failure never instantiates a sibling coroutine, so there is
+        # no un-awaited-coroutine leak to reap (DDR §4 / Fable-5 C2 disposition).
+        # Effect-set: a Phase-1 failure WITHHOLDS branches[1..N-1] entirely — their
+        # effect-set is empty, a strict subset of the non-warmup barrier's (where a
+        # sibling may land an effect before the cascade arrives) — so warmup is
+        # strictly safer on the tiers that exist to bound effects (DDR §2).
+        inflight_dispatches: set[asyncio.Future[Any]] = set()
+        parent_chain = _BRANCH_INFLIGHT_DISPATCHES.get() or ()
+        registry_token = _BRANCH_INFLIGHT_DISPATCHES.set((*parent_chain, inflight_dispatches))
+
+        async def _deadline_cutoff() -> None:
+            # Mirrors `cascade_cancel_barrier._deadline_cutoff`: the direct in-flight
+            # cut `asyncio.shield` cannot absorb (see the original's do-NOT-optimize-
+            # away note); the `asyncio.timeout` below bounds only gate-stuck branches
+            # with no in-flight dispatch for this watchdog to cut.
+            await asyncio.sleep(deadline)
+            for inflight in list(inflight_dispatches):
+                if not inflight.done():
+                    inflight.cancel()
+
+        cutoff_task = asyncio.ensure_future(_deadline_cutoff())
+        try:
+            async with asyncio.timeout(deadline):
+                # Phase 1: branch[0] solo (cache-write; its dispatch marker + terminal
+                # records are written inside `_cancel_branch`, byte-identical to the
+                # TaskGroup path). Guard: `except asyncio.CancelledError: raise` ONLY —
+                # `asyncio.timeout` delivers CancelledError INSIDE the block (converted
+                # to TimeoutError at __aexit__), so catching TimeoutError here would
+                # misclassify a branch-raised bare TimeoutError (a branch FAILURE) as
+                # the barrier deadline (Fable-5 R3 correction, DDR §4).
+                try:
+                    await _cancel_branch(*branch_plan[0])
+                except asyncio.CancelledError:
+                    raise
+                except BaseException as exc:
+                    # Wrap so the caller's `except BaseExceptionGroup` classifies a
+                    # Phase-1 failure exactly like a TaskGroup branch failure
+                    # (`branch_failed = True`); a bare exception would escape the
+                    # post-barrier cascade-policy classification entirely.
+                    raise BaseExceptionGroup("cascade-warmup-branch0", [exc]) from exc
+                # Phase 2: branches[1..N-1] under TaskGroup (cache-hits). A branch
+                # failure raises ExceptionGroup (a BaseExceptionGroup subclass) →
+                # propagates unchanged → caller: `branch_failed = True` — identical
+                # to the non-warmup barrier's failure surface.
+                if len(branch_plan) > 1:
+                    async with asyncio.TaskGroup() as task_group:
+                        tasks = [
+                            task_group.create_task(_cancel_branch(*plan))
+                            for plan in branch_plan[1:]
+                        ]
+                    return [None, *(task.result() for task in tasks)]
+                return [None]
+        except TimeoutError as exc:
+            # Barrier-deadline parity with `cascade_cancel_barrier` (§25.11): the
+            # timeout cancelled the fan-out body with no branch failure.
+            raise BranchBarrierDeadlineExceededError(deadline) from exc
+        finally:
+            # Reap the watchdog + restore the registry — byte-matching the original
+            # barrier's finally (await-with-suppress so the watchdog never outlives
+            # the barrier).
+            cutoff_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await cutoff_task
+            _BRANCH_INFLIGHT_DISPATCHES.reset(registry_token)
 
     branch_failed = False
     deadline_struck = False
