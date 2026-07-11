@@ -46,12 +46,18 @@
 snapshot:
   frozen_total: 11
   frozen_done: 11
-  standalone_closed: 71
+  standalone_closed: 72
   standalone_gated: 0
   standalone_resolved: 4
-  standalone_registered: 4
+  standalone_registered: 3
   rfs1_status: active
   source: ".harness/beyond-mvp-capability-boundary-ledger.md"
+  # FRONTIER NOTE (2026-07-10, B-18-3C-PREWARM-DEFAULT-ON closed). standalone_closed 71→72,
+  # standalone_registered 4→3. WorkflowManifestEntry.concurrent_cache_warmup + _WorkflowSectionFields
+  # default flipped False→True per ADR-D4 §1.8(f). Safe via CohortKeyCapable oracle (v1.88 prereq):
+  # non-CohortKeyCapable dispatchers → predicate False → byte-identical baseline. CP spec v1.88→v1.89
+  # + clearance. 4 witnesses (2 new + 1 updated + 1 e2e skeleton). Remaining registered:
+  # CASCADE / EPOCH-PARTITION / TIMEOUT-LEDGER.
   # FRONTIER NOTE (2026-07-10, B-18-3C-PREWARM-COHORTKEY closed). standalone_closed 70→71,
   # standalone_registered 5→4. CohortKeyCapable @runtime_checkable Protocol (§25.16) + _same_prefix_cohort()
   # dispatcher-oracle refactor (§25.15) + 3 delegation stubs (RuntimeHITLGateComposer /
@@ -1692,13 +1698,15 @@ arcs:
   - id: B-18-3C-PREWARM-DEFAULT-ON
     title: "Flip concurrent_cache_warmup default to ADR §1.8(f) required-at-cap>1"
     kind: standalone
-    status: registered
+    status: closed
     decompose_at_open: true
     owner_axis: "CP + runtime"
     parent_arc: B-18-3C-PREWARM
-    anticipated_scope: "Flip `D4MultiplicativeTunable.concurrent_cache_warmup` default from False to True for cells where fan-out cap > 1, honoring ADR-D4 §1.8(f). Requires: (a) B-18-3C-PREWARM-COHORTKEY landed (dispatcher attests cacheability so the default is non-vacuous) AND (b) live cache-hit e2e witness (real Anthropic fan-out shows cache_read_input_tokens > 0 on siblings[1..N-1]). Operator gate: paid-call authorization for the e2e witness."
+    anticipated_scope: "Flip `WorkflowManifestEntry.concurrent_cache_warmup` and `_WorkflowSectionFields.concurrent_cache_warmup` defaults from False to True per ADR-D4 §1.8(f). Safe because B-18-3C-PREWARM-COHORTKEY (v1.88) landed the CohortKeyCapable oracle: non-CohortKeyCapable dispatchers → predicate False → all-concurrent baseline, byte-identical. D4MultiplicativeTunable model field and d4_tunable() param default remain False (non-PARALLELIZATION callers). Live cache-hit e2e gated on ANTHROPIC_API_KEY (skipif skeleton shipped)."
     units: []
     ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
+    spec_delta: "CP spec v1.88 → v1.89 (§25.17 default-on discipline; clearance marker 2026-07-10)"
+    close_note: "CP spec v1.89 + clearance marker. 4 new/updated witnesses. 2026-07-10."
 
   - id: B-18-EPOCH-PARTITION
     title: "version_sha cohort HASH + heterogeneous partition (warm one per cohort)"

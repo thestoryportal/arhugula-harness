@@ -293,23 +293,21 @@ class WorkflowManifestEntry(BaseModel):
     on the v1.62 dispatch-time-kind marker; effect-bearing fails closed.
     """
 
-    concurrent_cache_warmup: bool = False
-    """B-18-3C-PREWARM addition (ADR-D4 §1.8 concurrent-prompt-cache warm-up
-    protocol). Opt-in gate for the PARALLELIZATION PROCEED warm-up: when True,
-    the driver serializes branch[0] before releasing branches[1..N-1] so that
-    branch[0]'s response warms the shared Anthropic prefix cache (the tools +
-    system block breakpoint), and subsequent siblings land as cache-hits.
+    concurrent_cache_warmup: bool = True
+    """ADR-D4 §1.8 concurrent-prompt-cache warm-up protocol (B-18-3C-PREWARM).
+    When True, the PARALLELIZATION PROCEED driver serializes branch[0] before
+    releasing branches[1..N-1]: branch[0]'s response warms the shared Anthropic
+    prefix cache (tools + system block breakpoint) so siblings land as cache-hits.
 
-    Default False — byte-identical to the all-concurrent baseline at default.
+    Default True per ADR-D4 §1.8(f) required-at-cap>1 (B-18-3C-PREWARM-DEFAULT-ON,
+    CP spec v1.89 §25.17). Safe to default on because `_same_prefix_cohort()` is
+    now machine-checked via the `CohortKeyCapable` dispatcher oracle (B-18-3C-PREWARM-
+    COHORTKEY, CP spec v1.88): if the dispatcher does not implement `CohortKeyCapable`,
+    or if any branch key is None (memory_runtime bound, fts absent, binding difference),
+    the predicate returns False and warmup does not fire — byte-identical to default-off.
+    Set to False explicitly to opt out.
+
     Consumed at the §25.15 `_execute_parallelization` PROCEED path via the D4
-    multiplicative tunable (CP spec §25.15.1). The operator asserts that the
-    deployment is Anthropic-routed, the frozen-tool-superset breakpoint is bound,
-    no memory_runtime is active, and the prefix clears the ≥4096-tok floor (the
-    CP-invisible same-prefix residual — see B-18-3C-PREWARM DDR §11.2).
-
-    Staged rollout: this slice (PROCEED only, binary same-prefix predicate). The
-    ADR §1.8(f) required-at-cap>1 default is the registered follow-on
-    B-18-3C-PREWARM-DEFAULT-ON, gated on the witness suite + live cache-hit e2e.
-    §6.1 'additional per-workload fields' extension-clause growth (mirrors the
-    v1.20/v1.63 additive-optional precedents).
+    multiplicative tunable (CP spec §25.15.1). §6.1 'additional per-workload fields'
+    extension-clause growth (mirrors v1.20/v1.63/v1.87 additive-optional precedents).
     """
