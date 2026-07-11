@@ -46,12 +46,19 @@
 snapshot:
   frozen_total: 11
   frozen_done: 11
-  standalone_closed: 72
+  standalone_closed: 73
   standalone_gated: 0
   standalone_resolved: 4
-  standalone_registered: 3
+  standalone_registered: 2
   rfs1_status: active
   source: ".harness/beyond-mvp-capability-boundary-ledger.md"
+  # FRONTIER NOTE (2026-07-11, B-18-3C-PREWARM-CASCADE closed). standalone_closed 72→73,
+  # standalone_registered 3→2. Warm-up extended to the strict tiers via _cancel_fanout two-phase
+  # (shared deadline + watchdog; Fable-5 R3 CancelledError-only Phase-1 guard); _warmup_gate lifted
+  # above the cascade_policy branch. DDR §3b Option A (operator-ratified 2026-07-11) probe-resolved
+  # VACUOUS: the v1.68/v1.70 entry-gate reconstruct already re-pauses/FAILs the crash window — W6
+  # pins PAUSED-never-silent-PARTIAL. CP spec v1.89→v1.90 + clearance. Remaining registered:
+  # B-18-EPOCH-PARTITION + B-18-3C-PREWARM-TIMEOUT-LEDGER (now also covers strict-tier Phase 1).
   # FRONTIER NOTE (2026-07-10, B-18-3C-PREWARM-DEFAULT-ON closed). standalone_closed 71→72,
   # standalone_registered 4→3. WorkflowManifestEntry.concurrent_cache_warmup + _WorkflowSectionFields
   # default flipped False→True per ADR-D4 §1.8(f). Safe via CohortKeyCapable oracle (v1.88 prereq):
@@ -1645,6 +1652,7 @@ arcs:
     title: "CohortKeyCapable Protocol — dispatcher-attested cacheability for concurrent-cache warmup"
     kind: standalone
     status: closed
+    pr: "#925"
     owner_axis: "CP + runtime"
     parent_arc: B-18-3C-PREWARM
     spec_delta: "CP spec v1.87 → v1.88 (additive CohortKeyCapable @runtime_checkable Protocol §25.16; _same_prefix_cohort() dispatcher-oracle refactor §25.15; clearance marker 2026-07-10). Fork B ratified per .harness/class_2_fork_b18_cohortkey_fork_a_vs_b.md. NO StepDispatcher Protocol widening, NO IS/CXA/contract/enum/fail-class/§5.2-hash change."
@@ -1687,18 +1695,22 @@ arcs:
   - id: B-18-3C-PREWARM-CASCADE
     title: "Concurrent-prompt-cache warm-up on CASCADE_CANCEL + PAUSE fan-out paths"
     kind: standalone
-    status: registered
+    status: closed
     decompose_at_open: true
     owner_axis: CP
     parent_arc: B-18-3C-PREWARM
     anticipated_scope: "Extend the B-18-3C-PREWARM serialized branch[0] warm-up to the CASCADE_CANCEL and PAUSE cascade-policy paths. Larger review surface: TaskGroup + snapshot-build (_crash_pause_reestablish) + the `not branch_plan` re-establish paths are touched. Same cache benefit as PROCEED but more complex invariant surface."
     units: []
     ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
+    spec_delta: "CP spec v1.89 → v1.90 (§25.17 CASCADE_CANCEL+PAUSE addendum; clearance marker 2026-07-11)"
+    pr: "#927"
+    close_note: "PR #927. Gate lift + two-phase _cancel_fanout (shared deadline/watchdog, R3 guard). DDR §3b Option A operator-ratified then PROBE-RESOLVED vacuous (entry-gate v1.68/v1.70 reconstruct already covers the crash window; W6 pins PAUSED-not-PARTIAL). 10 new witnesses. 2026-07-11."
 
   - id: B-18-3C-PREWARM-DEFAULT-ON
     title: "Flip concurrent_cache_warmup default to ADR §1.8(f) required-at-cap>1"
     kind: standalone
     status: closed
+    pr: "#926"
     decompose_at_open: true
     owner_axis: "CP + runtime"
     parent_arc: B-18-3C-PREWARM
