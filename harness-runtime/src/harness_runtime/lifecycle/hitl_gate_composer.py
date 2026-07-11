@@ -1874,6 +1874,22 @@ class RuntimeHITLGateComposer:
         # --- Step 5: Delegate to inner dispatcher --------------------------
         return await self._dispatch_inner(binding, step, step_context=step_context)
 
+    def cohort_key(
+        self,
+        binding: Any,
+        step: WorkflowStep,
+    ) -> str | None:
+        """Delegate to inner if it is CohortKeyCapable; else return None.
+
+        B-18-3C-PREWARM-COHORTKEY delegation stub. `inner` is typed `Any`
+        (C-RT-04 pattern) so the isinstance guard is the correct discriminator.
+        """
+        from harness_cp.workflow_driver import CohortKeyCapable
+
+        if isinstance(self.inner, CohortKeyCapable):
+            return self.inner.cohort_key(binding, step)
+        return None
+
 
 class _SentinelMatrixCell:
     """v1.11 MVP placeholder for test-fixture partial-binding tolerance.
