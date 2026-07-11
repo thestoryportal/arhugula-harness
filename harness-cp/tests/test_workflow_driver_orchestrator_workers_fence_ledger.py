@@ -915,6 +915,8 @@ def test_ow_protocol_not_bound_union_arm_completed_no_snapshot() -> None:
     assert result.fail_class == "orchestrator-workers-pause-resume-protocol-not-bound"
     assert result.pause_snapshot is None
     assert _branch_terminals(ledger) == {0: "completed", 1: "completed", 2: "completed"}
+    for index in (0, 1, 2):
+        assert _branch_terminal_statuses(ledger, index) == ["completed"]
     assert _branch_step_indexes(ledger) == set()
     assert store.present_branch_indexes(run_key) == {3}
 
@@ -986,6 +988,8 @@ def test_ow_baseline_cascade_cancel_cancelled_only_byte_preserved() -> None:
     assert result.status is RunStatus.FAILED
     assert result.fail_class == "orchestrator-workers-cascade-cancel"
     assert _branch_terminals(ledger) == {0: "cancelled", 1: "cancelled"}
+    for index in (0, 1):
+        assert _branch_terminal_statuses(ledger, index) == ["cancelled"]
     assert _branch_step_indexes(ledger) == set()
     assert emitter.emits.count(WorkflowEventClass.STEP_BOUNDARY) == 1
     for status in _branch_terminals(ledger).values():
@@ -1078,6 +1082,8 @@ def test_ow_not_yet_materialized_direct_call_scan_runs() -> None:
     # worker-0's in-flight fence raise landed via the shield → this-round fence
     # stash → `completed` + capture; poisoned worker-1 → `cancelled` ledger-only.
     assert _branch_terminals(ledger) == {0: "completed", 1: "cancelled"}
+    assert _branch_terminal_statuses(ledger, 0) == ["completed"]
+    assert _branch_terminal_statuses(ledger, 1) == ["cancelled"]
     assert _branch_step_indexes(ledger) == set()
     assert store.present_branch_indexes("ow9-direct") == {0}
     assert store.read_branch_records("ow9-direct")[0][1:] == ("completed", None)
