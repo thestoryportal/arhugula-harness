@@ -70,10 +70,40 @@ footprint would be indistinguishable from lost entries):
   in-flight-cut records `timed_out`; the absence-keyed scan synthesizes nothing:
     → test_baseline_all_concurrent_deadline_strike_no_cancelled_synthesis
 
+B-18-FENCE-LEDGER-FIDELITY section (CP spec v1.92;
+`.harness/b18-fence-ledger-fidelity-design-decision-record.md` §6+§7) — the
+obligation-4 scan's fence-family arms (aborted / fence-paused-union / cancelled)
+plus the fifth scan call site at the fence-ABORT terminal exit:
+
+  FL1 (+ FL2 recovered-withheld peer + FL7 arm ordering) — ABORT exit under
+  warm-up on a resume round: aborted branch `completed` terminal-ONLY / no
+  capture; withheld recovered peer `completed` / no capture; steps_executed = 0:
+    → test_fence_ledger_abort_exit_aborted_and_recovered_completed_no_capture
+  FL3 PAUSE deadline-strike on a resume round: withheld recovered fence peer
+  `completed` (NOT `cancelled`), no capture; plain withheld sibling `cancelled`:
+    → test_fence_ledger_pause_deadline_recovered_peer_completed_not_cancelled
+  FL3b same union arm at the CASCADE_CANCEL post-barrier exit
+  (persona-tier-change resume reach):
+    → test_fence_ledger_cascade_cancel_exit_recovered_peer_completed_no_capture
+  FL4 this-round INERT re-paused peer at the ABORT exit — inherited v1.91 arm
+  (`completed` + store capture, the deliberate crash-visible addition):
+    → test_fence_ledger_abort_exit_this_round_inert_repause_capture_present
+  FL5 negative control — first-round deadline strike, no fence history → no
+  `completed` synthesis anywhere:
+    → test_fence_ledger_first_round_deadline_no_completed_synthesis
+  FL6 negative control — ABORT_BRANCH ordinal at a scanned terminal exit records
+  exactly ONE ledger terminal (the scoped-abort block's; no scan double-record):
+    → test_fence_ledger_scoped_abort_single_terminal_no_scan_double_record
+  FL8 containment — PAUSED boundary stays scan-free; a no-resolution recovered
+  peer reappears in the new snapshot via the THIS-round dict, never a stale carry:
+    → test_fence_ledger_paused_boundary_scan_free_peer_reappears_this_round
+
 Authority: `.harness/u1-3c-prewarm-design-decision-record.md` +
 `.harness/b18-3c-prewarm-cascade-ddr.md` (Fable-5 review-cleared);
 ADR-D4 v1.1 §1.8; `Spec_Control_Plane_v1_86.md` §25.15; CP spec v1.90 §25.17;
-CP spec v1.91 (M2 terminal-exit synthesis).
+CP spec v1.91 (M2 terminal-exit synthesis); CP spec v1.92 +
+`.harness/b18-fence-ledger-fidelity-design-decision-record.md`
+(B-18-FENCE-LEDGER-FIDELITY fence-family arms).
 """
 
 from __future__ import annotations
@@ -86,6 +116,7 @@ from typing import Any, cast
 
 import pytest
 from harness_core import PersonaTier, StepID, WorkloadClass
+from harness_core.workflow_event_class import WorkflowEventClass
 from harness_cp.cp_shared_types import ModelBinding
 from harness_cp.cross_family_fallback_chain import (
     FallbackChain,
@@ -96,9 +127,12 @@ from harness_cp.engine_class import EngineClass
 from harness_cp.handoff_context import StateSummary
 from harness_cp.pause_resume_protocol import PauseResumeProtocol
 from harness_cp.pause_resume_protocol_types import (
+    EffectFencePausedBranchResumeState,
+    EffectFenceResolution,
     FanOutBranchResumeState,
     PauseSnapshot,
     PeerFanOutResumeState,
+    ResumeContext,
     WorkflowPauseReason,
 )
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
@@ -204,8 +238,6 @@ class _RecordingLedger:
 
 class _Emitter:
     def __init__(self) -> None:
-        from harness_core.workflow_event_class import WorkflowEventClass
-
         self.emits: list[WorkflowEventClass] = []
 
     def emit(self, event_class: Any) -> None:
@@ -226,6 +258,7 @@ class _Ctx:
         emitter: _Emitter,
         pause_resume_protocol: Any = None,
         engine_output_store: Any = None,
+        resume_context_holder: Any = None,
     ) -> None:
         from opentelemetry.trace import NoOpTracerProvider
 
@@ -239,6 +272,9 @@ class _Ctx:
         self.validator_framework = None
         self.tenant_id = None
         self.engine_output_store = engine_output_store
+        # B-18-FENCE-LEDGER-FIDELITY — the driver reads this via
+        # `getattr(ctx, "resume_context_holder", None)`; None ≡ absent.
+        self.resume_context_holder = resume_context_holder
 
 
 class _InferenceRegistry:
@@ -278,10 +314,13 @@ def _run(
     with_pause_protocol: bool = False,
     pause_snapshot_input: PauseSnapshot | None = None,
     workflow_id: str = "wf-warmup",
+    resume_context_holder: Any = None,
+    emitter: _Emitter | None = None,
 ) -> Any:
     if ledger is None:
         ledger = _RecordingLedger()
-    emitter = _Emitter()
+    if emitter is None:
+        emitter = _Emitter()
     ctx = cast(
         DriverContext,
         _Ctx(
@@ -289,6 +328,7 @@ def _run(
             emitter=emitter,
             pause_resume_protocol=_protocol() if with_pause_protocol else None,
             engine_output_store=store,
+            resume_context_holder=resume_context_holder,
         ),
     )
     return execute_workflow(
@@ -1501,3 +1541,586 @@ def test_stale_snapshot_double_resume_synthesized_cancelled_key_collides(
     # `completed` (attempt 2) compose the SAME idempotency key — at one shared
     # real ledger the second is an IDEMPOTENT_NOOP and `cancelled` stands.
     assert _terminal_key(ledger_1, 2) == _terminal_key(ledger_2, 2)
+
+
+# ---------------------------------------------------------------------------
+# B-18-FENCE-LEDGER-FIDELITY — fence-family arms of the obligation-4 scan +
+# the fifth scan call site at the fence-ABORT terminal exit. Witnesses FL1-FL8
+# per `.harness/b18-fence-ledger-fidelity-design-decision-record.md` §7
+# (FL2 + FL7 folded into FL1 per the DDR's own folding notes); CP spec v1.92.
+#
+# The fence errors are NAME-MATCHED test-local stand-ins (harness-cp cannot
+# import harness-runtime — the same pattern as
+# test_workflow_driver_parallelization_pause.py); the hybrid dispatchers below
+# are additionally CohortKeyCapable so the warm-up gate holds over INFERENCE
+# branch plans (including the RESUME round's plan).
+# ---------------------------------------------------------------------------
+
+
+class EffectFenceAmbiguousUncommittedError(Exception):
+    """Test-local stand-in for the runtime `effect_fence.EffectFenceAmbiguousUncommittedError`
+    (C-RT-31 §14.22). The driver name-matches `type(exc).__name__`, so a same-named local
+    class with the `idempotency_key` attribute is the faithful CP-side witness."""
+
+    def __init__(self, *, idempotency_key: str) -> None:
+        self.idempotency_key = idempotency_key
+        super().__init__(f"ambiguous (key={idempotency_key!r})")
+
+
+class EffectFenceAbortedError(Exception):
+    """Test-local stand-in for the runtime `effect_fence.EffectFenceAbortedError` — raised
+    when the operator resolved an effect-fence pause with ABORT and the fence applies it."""
+
+
+class _HolderWithResolutions:
+    """Stand-in `ResumeContextHolder` — `peek()` returns a ResumeContext carrying a per-key
+    `effect_fence_resolutions` map (NON-consuming, the production peek contract; the local
+    twin of the pause-file fixture)."""
+
+    def __init__(self, resolutions: dict[str, EffectFenceResolution]) -> None:
+        self._rc = ResumeContext(effect_fence_resolutions=resolutions)
+        self.peeked = 0
+
+    def peek(self) -> ResumeContext:
+        self.peeked += 1
+        return self._rc
+
+
+class _Branch0CleanSiblingsFenceCohortDispatcher:
+    """Round-1 hybrid (CohortKeyCapable + fence-raising): branch[0] completes cleanly
+    (the warm-up's serialized Phase 1); every sibling synchronizes on a barrier THEN
+    raises the fence-ambiguous error with a per-branch key — so ALL siblings land in
+    `effect_fence_paused_dispositions` deterministically (each is dispatched before any
+    raise; whichever raise propagates first, the other lands via its own catch or the
+    shielded in-flight `inflight.exception()` catch — both record the paused disposition)."""
+
+    def __init__(self, *, sibling_parties: int) -> None:
+        self._barrier = threading.Barrier(sibling_parties, timeout=10.0)
+        self._lock = threading.Lock()
+        self.dispatched: list[int] = []
+
+    def dispatch(
+        self,
+        binding: StepEffectiveBinding,
+        step: WorkflowStep,
+        *,
+        step_context: Any = None,
+    ) -> dict[str, Any]:
+        idx = int(step.step_payload["index"])
+        with self._lock:
+            self.dispatched.append(idx)
+        if idx == 0:
+            return {"branch": 0}
+        self._barrier.wait()
+        raise EffectFenceAmbiguousUncommittedError(idempotency_key=f"fence-key-attempt1-{idx}")
+
+    def cohort_key(self, binding: StepEffectiveBinding, step: WorkflowStep) -> str | None:
+        return "test-cohort-uniform"
+
+
+class _FenceDirectiveReactorCohortDispatcher:
+    """Resume-side hybrid (CohortKeyCapable): reacts to the threaded per-branch
+    `EffectFenceResolutionDirective` the way the runtime fence would — indices in `fail`
+    raise a PLAIN RuntimeError (an ordinary branch failure, checked FIRST); an ABORT
+    directive raises the test-local `EffectFenceAbortedError`; a None directive (no/
+    suppressed resolution) INERT re-pauses by re-raising the fence-ambiguous error with a
+    THIS-ROUND key `{inert_key_prefix}{idx}` (so a re-pause snapshot's this-round-vs-stale
+    provenance is checkable); SKIP_AS_FIRED / RE_FIRE fires (returns success). An optional
+    `sync_barrier` makes N branches dispatch before any raises (deterministic composition)."""
+
+    def __init__(
+        self,
+        *,
+        fail: set[int] | None = None,
+        sync_barrier: threading.Barrier | None = None,
+        inert_key_prefix: str = "fence-key-inert-",
+    ) -> None:
+        self._fail = fail or set()
+        self._barrier = sync_barrier
+        self._inert_key_prefix = inert_key_prefix
+        self._lock = threading.Lock()
+        self.dispatched: list[int] = []
+
+    def dispatch(
+        self,
+        binding: StepEffectiveBinding,
+        step: WorkflowStep,
+        *,
+        step_context: Any = None,
+    ) -> dict[str, Any]:
+        idx = int(step.step_payload["index"])
+        with self._lock:
+            self.dispatched.append(idx)
+        if self._barrier is not None:
+            self._barrier.wait()
+        if idx in self._fail:
+            raise RuntimeError(f"simulated plain branch-{idx} failure")
+        directive = getattr(step_context, "effect_fence_resolution", None)
+        if directive is None:
+            raise EffectFenceAmbiguousUncommittedError(
+                idempotency_key=f"{self._inert_key_prefix}{idx}"
+            )
+        if directive.resolution is EffectFenceResolution.ABORT:
+            raise EffectFenceAbortedError(f"operator aborted branch-{idx}")
+        return {"branch": idx}
+
+    def cohort_key(self, binding: StepEffectiveBinding, step: WorkflowStep) -> str | None:
+        return "test-cohort-uniform"
+
+
+def _branch_terminal_statuses(ledger: _RecordingLedger, branch_index: int) -> list[str]:
+    """EVERY drained terminal entry for one ordinal (order-preserving) — pins
+    exactly-one-terminal claims (`== ["completed"]`), which `_branch_terminals`'
+    dict shape (last-wins) cannot."""
+    return [
+        payload.branch_metadata.terminal_status
+        for payload, _wk in ledger.appends
+        if getattr(payload, "branch_metadata", None) is not None
+        and payload.branch_metadata.branch_index == branch_index
+        and payload.branch_metadata.terminal_status is not None
+    ]
+
+
+def _fence_pause_round1(store: _MiniFanoutStore) -> tuple[PauseSnapshot, dict[int, str]]:
+    """Shared round 1 for FL1/FL4/FL6: TEAM_BINDING (PAUSE) + warm-up ON + protocol
+    bound + durable store: branch[0] completes in Phase 1; branches 1..2 fence-pause
+    in Phase 2 (barrier-synced). Returns the fence-pause snapshot + the per-branch
+    reserve keys, after pinning the attempt-1 store state (markers for every
+    dispatched branch; terminal capture ONLY for branch[0])."""
+    n = 3
+    dispatcher = _Branch0CleanSiblingsFenceCohortDispatcher(sibling_parties=2)
+    paused = _run(
+        steps=[_inference_step(i) for i in range(n)],
+        dispatcher=cast(StepDispatcher, dispatcher),
+        concurrent_cache_warmup=True,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+        store=store,
+        with_pause_protocol=True,
+    )
+    assert paused.status is RunStatus.PAUSED
+    snapshot = paused.pause_snapshot
+    assert snapshot is not None
+    peer = snapshot.peer_fan_out_resume
+    assert peer is not None
+    assert [(b.branch_index, b.terminal_status, b.output) for b in peer.branches] == [
+        (0, "completed", {"branch": 0})
+    ]
+    key_by_index = {b.branch_index: b.idempotency_key for b in peer.effect_fence_paused_branches}
+    assert key_by_index == {1: "fence-key-attempt1-1", 2: "fence-key-attempt1-2"}
+    run_key = store.sole_run_key()
+    assert store.present_dispatched_indexes(run_key) == {0, 1, 2}
+    assert store.present_branch_indexes(run_key) == {0}
+    return snapshot, key_by_index
+
+
+def test_fence_ledger_abort_exit_aborted_and_recovered_completed_no_capture() -> None:
+    """FL1 (+ FL2 + FL7): the fence-ABORT terminal exit now runs the obligation-4
+    scan (the fifth call site) BEFORE the unchanged `parallelization-effect-fence-
+    aborted` FAILED return. Resume a 2-peer fence pause with {branch-1: ABORT} under
+    warm-up: Phase 1 serializes ordinal 1 (the ABORT peer) whose re-dispatch raises
+    the abort, collapsing Phase 1 — ordinal 2 (its directive suppressed by the
+    run-level ABORT guard) is WITHHELD this round.
+
+      Aborted branch-1 → ledger `completed` terminal-ONLY (no step entry) + NO store
+      capture — and branch-1 is in BOTH `effect_fence_aborted_dispositions` AND
+      `_recovered_effect_fence_paused`, so this also pins FL7 arm ORDERING (the
+      aborted arm fires first; never the fence-arm capture).
+      Withheld recovered peer branch-2 → ledger `completed` (the union arm; FL2) with
+      NO store capture (attempt-1 store state byte-unchanged: marker-only).
+      steps_executed = 0 — the terminal-only synthesis never inflates the
+      step-count drain predicate (one STEP_BOUNDARY per branch that ran a step)."""
+    n = 3
+    store = _MiniFanoutStore()
+    snapshot, key_by_index = _fence_pause_round1(store)
+    run_key = store.sole_run_key()
+
+    holder = _HolderWithResolutions({key_by_index[1]: EffectFenceResolution.ABORT})
+    resume_dispatcher = _FenceDirectiveReactorCohortDispatcher()
+    ledger = _RecordingLedger()
+    emitter = _Emitter()
+    result = _run(
+        steps=[_inference_step(i) for i in range(n)],
+        dispatcher=cast(StepDispatcher, resume_dispatcher),
+        ledger=ledger,
+        concurrent_cache_warmup=True,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+        store=store,
+        with_pause_protocol=True,
+        pause_snapshot_input=snapshot,
+        resume_context_holder=holder,
+        emitter=emitter,
+    )
+
+    assert result.status is RunStatus.FAILED
+    assert result.fail_class == "parallelization-effect-fence-aborted"
+    assert result.pause_snapshot is None  # terminal — NOT a re-pause
+    # Phase 1 = ordinal 1 (the ABORT peer); its abort collapsed Phase 1, so ordinal 2
+    # was withheld — never dispatched this round.
+    assert resume_dispatcher.dispatched == [1]
+    # Ledger: aborted arm (branch-1) + recovered union arm (branch-2), both `completed`,
+    # both terminal-ONLY — exactly one terminal each, zero step entries this round.
+    assert _branch_terminals(ledger) == {1: "completed", 2: "completed"}
+    assert _branch_terminal_statuses(ledger, 1) == ["completed"]
+    assert _branch_terminal_statuses(ledger, 2) == ["completed"]
+    assert _branch_step_indexes(ledger) == set()
+    # Store: byte-unchanged from attempt-1 terminals — NO capture for branch-1 (FL7:
+    # the aborted arm, never the fence-arm capture) NOR branch-2 (FL2: capture-less
+    # recovered arm); dispatch markers stay the attempt-1 set (branch-1 re-marked).
+    assert store.present_branch_indexes(run_key) == {0}
+    assert store.present_dispatched_indexes(run_key) == {0, 1, 2}
+    assert store.read_branch_records(run_key)[0][1:] == ("completed", {"branch": 0})
+    # steps_executed == branches that ran a step this round == 0 (DDR review finding 4):
+    # the driver emits one STEP_BOUNDARY per branch that buffered a STEP entry.
+    assert emitter.emits.count(WorkflowEventClass.STEP_BOUNDARY) == 0
+
+
+def test_fence_ledger_pause_deadline_recovered_peer_completed_not_cancelled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FL3: ML2's shape (PAUSE tier, Phase-1 deadline strike) on a RESUME round seeded
+    from a fence-pause snapshot — the withheld RECOVERED fence peer (no resolution
+    supplied; holder absent) synthesizes `completed` via the union arm, NOT the false
+    `cancelled` (whose obligation-4 meaning — "no effectful dispatch" — would
+    contradict the peer's attempt-1 reserve); the plain withheld sibling still
+    synthesizes `cancelled`; NO new store capture for the recovered peer."""
+    from harness_cp import workflow_driver as wd
+
+    monkeypatch.setattr(wd, "_DEFAULT_FANOUT_BARRIER_DEADLINE_SECONDS", 0.2)
+    n = 4
+    # Hash-valid captured snapshot: branch 0 terminal `completed`; branch 2 a RECOVERED
+    # fence peer (attempt-1 reserve key); branches 1 + 3 omitted → re-dispatchable.
+    snapshot = _captured_peer_snapshot(
+        peer=PeerFanOutResumeState(
+            branches=(
+                FanOutBranchResumeState(
+                    branch_index=0,
+                    step_id="inf-0",
+                    terminal_status="completed",
+                    output={"branch": 0},
+                ),
+            ),
+            branch_count=n,
+            effect_fence_paused_branches=(
+                EffectFencePausedBranchResumeState(
+                    branch_index=2,
+                    step_id="inf-2",
+                    step_kind="inference-step",
+                    idempotency_key="fence-key-attempt1-2",
+                ),
+            ),
+        )
+    )
+    release = threading.Event()
+    # The resume plan is [1, 2, 3]; its NEW "branch[0]" is ordinal 1 — wedge it past
+    # the deadline so ordinals 2 (recovered fence peer) + 3 (plain) are withheld.
+    dispatcher = _WedgeBranch0CohortDispatcher(
+        release=release, self_release_seconds=2.0, wedge_index=1
+    )
+    ledger = _RecordingLedger()
+    store = _MiniFanoutStore()
+    started = time.monotonic()
+    try:
+        result = _run(
+            steps=[_inference_step(i) for i in range(n)],
+            dispatcher=cast(StepDispatcher, dispatcher),
+            ledger=ledger,
+            concurrent_cache_warmup=True,
+            persona_tier=PersonaTier.TEAM_BINDING,
+            engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+            store=store,
+            with_pause_protocol=True,
+            pause_snapshot_input=snapshot,
+        )
+    finally:
+        release.set()
+    elapsed = time.monotonic() - started
+    assert result.status is RunStatus.FAILED
+    assert result.fail_class == "parallelization-barrier-deadline"
+    assert dispatcher.dispatched == [1]
+    # Recovered fence peer 2 → `completed` (NOT `cancelled`); plain sibling 3 →
+    # `cancelled`; the wedged ordinal 1 records its own in-flight `timed_out`.
+    assert _branch_terminals(ledger) == {1: "timed_out", 2: "completed", 3: "cancelled"}
+    assert _branch_terminal_statuses(ledger, 2) == ["completed"]
+    assert _branch_step_indexes(ledger) == {1}
+    # Store: the ONLY write this round is the wedged ordinal's own marker + `timed_out`
+    # capture — no new capture for the recovered peer (capture-less union arm).
+    run_key = store.sole_run_key()
+    assert store.present_branch_indexes(run_key) == {1}
+    assert store.present_dispatched_indexes(run_key) == {1}
+    assert elapsed < 1.5
+
+
+def test_fence_ledger_cascade_cancel_exit_recovered_peer_completed_no_capture() -> None:
+    """FL3b: the same union-arm output at the CASCADE_CANCEL post-barrier scan site —
+    reached via the committed persona-tier-change resume path (capture on TEAM_BINDING
+    → PAUSE; resume under MULTI_TENANT_COMPLIANCE → CASCADE_CANCEL, which has no
+    strict-tier fence-resume rejection, only PROCEED does). A Phase-1 PLAIN branch
+    failure withholds the recovered fence peer + the plain sibling; the run fails with
+    the cascade fail_class this path actually produces
+    (`parallelization-cascade-cancel` — the branch-failure route, asserted exactly)."""
+    n = 4
+    snapshot = _captured_peer_snapshot(
+        peer=PeerFanOutResumeState(
+            branches=(
+                FanOutBranchResumeState(
+                    branch_index=0,
+                    step_id="inf-0",
+                    terminal_status="completed",
+                    output={"branch": 0},
+                ),
+            ),
+            branch_count=n,
+            effect_fence_paused_branches=(
+                EffectFencePausedBranchResumeState(
+                    branch_index=2,
+                    step_id="inf-2",
+                    step_kind="inference-step",
+                    idempotency_key="fence-key-attempt1-2",
+                ),
+            ),
+        )
+    )
+    # Resume plan [1, 2, 3]; warm-up Phase 1 = ordinal 1 fails PLAIN → ordinals 2
+    # (recovered fence peer, no resolution) + 3 (plain) withheld.
+    dispatcher = _RecordingCohortDispatcher(fail={1})
+    ledger = _RecordingLedger()
+    store = _MiniFanoutStore()
+    result = _run(
+        steps=[_inference_step(i) for i in range(n)],
+        dispatcher=cast(StepDispatcher, dispatcher),
+        ledger=ledger,
+        concurrent_cache_warmup=True,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+        store=store,
+        with_pause_protocol=True,
+        pause_snapshot_input=snapshot,
+    )
+    assert result.status is RunStatus.FAILED
+    assert result.fail_class == "parallelization-cascade-cancel"
+    assert dispatcher.dispatched == [1]
+    # Union arm at the :8004-family exit: recovered peer 2 → `completed`; plain
+    # withheld 3 → `cancelled`; ordinal 1 ran-and-errored → its own step + `completed`.
+    assert _branch_terminals(ledger) == {1: "completed", 2: "completed", 3: "cancelled"}
+    assert _branch_terminal_statuses(ledger, 2) == ["completed"]
+    assert _branch_step_indexes(ledger) == {1}
+    # No capture for the recovered peer — the only store terminal this round is the
+    # ran-and-errored ordinal 1's own `completed`/no-output capture.
+    run_key = store.sole_run_key()
+    assert store.present_branch_indexes(run_key) == {1}
+    assert store.read_branch_records(run_key)[1][1:] == ("completed", None)
+    assert store.present_dispatched_indexes(run_key) == {1}
+
+
+def test_fence_ledger_abort_exit_this_round_inert_repause_capture_present() -> None:
+    """FL4: a THIS-round INERT re-paused peer at the fence-ABORT exit keeps the
+    inherited v1.91 fence-arm treatment — ledger `completed` AND the store capture
+    (`completed`/no-output) — the deliberate crash-visible addition named at DDR §6 Q2
+    / review finding 1 (v1.65 §1(c) reproduce-the-terminal trade at the new exit).
+    Warm-up OFF so BOTH peers re-dispatch concurrently (barrier-synced): branch-1's
+    ABORT directive aborts; branch-2's SKIP_AS_FIRED is suppressed by the run-level
+    ABORT guard → it re-dispatches and INERT re-pauses into the this-round dict."""
+    n = 3
+    store = _MiniFanoutStore()
+    snapshot, key_by_index = _fence_pause_round1(store)
+    run_key = store.sole_run_key()
+
+    holder = _HolderWithResolutions(
+        {
+            key_by_index[1]: EffectFenceResolution.ABORT,
+            key_by_index[2]: EffectFenceResolution.SKIP_AS_FIRED,
+        }
+    )
+    resume_dispatcher = _FenceDirectiveReactorCohortDispatcher(
+        sync_barrier=threading.Barrier(2, timeout=10.0)
+    )
+    ledger = _RecordingLedger()
+    result = _run(
+        steps=[_inference_step(i) for i in range(n)],
+        dispatcher=cast(StepDispatcher, resume_dispatcher),
+        ledger=ledger,
+        concurrent_cache_warmup=False,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+        store=store,
+        with_pause_protocol=True,
+        pause_snapshot_input=snapshot,
+        resume_context_holder=holder,
+    )
+
+    assert result.status is RunStatus.FAILED
+    assert result.fail_class == "parallelization-effect-fence-aborted"
+    assert result.pause_snapshot is None
+    # BOTH peers re-dispatched this round (all-concurrent, barrier-synced).
+    assert sorted(resume_dispatcher.dispatched) == [1, 2]
+    # Aborted branch-1 → terminal-only `completed`; INERT re-paused branch-2 → the
+    # inherited fence arm: `completed` in the ledger AND the store capture.
+    assert _branch_terminals(ledger) == {1: "completed", 2: "completed"}
+    assert _branch_terminal_statuses(ledger, 1) == ["completed"]
+    assert _branch_terminal_statuses(ledger, 2) == ["completed"]
+    assert _branch_step_indexes(ledger) == set()
+    # Store: branch-2's fence-arm capture IS present (`completed`/no-output — the
+    # crash-visible addition this witness pins); branch-1 has NO capture.
+    assert store.present_branch_indexes(run_key) == {0, 2}
+    assert store.read_branch_records(run_key)[2][1:] == ("completed", None)
+    assert store.present_dispatched_indexes(run_key) == {0, 1, 2}
+
+
+def test_fence_ledger_first_round_deadline_no_completed_synthesis(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FL5 (negative control): a FIRST-round (non-resume) warm-up Phase-1 deadline
+    strike has no fence history — the recovered dict is empty — so the scan
+    synthesizes ONLY `cancelled` for the withheld siblings and NO `completed`
+    appears anywhere (the ML1/ML2 baseline byte-preserved under the union arm)."""
+    from harness_cp import workflow_driver as wd
+
+    monkeypatch.setattr(wd, "_DEFAULT_FANOUT_BARRIER_DEADLINE_SECONDS", 0.2)
+    n = 3
+    release = threading.Event()
+    dispatcher = _WedgeBranch0CohortDispatcher(release=release, self_release_seconds=2.0)
+    ledger = _RecordingLedger()
+    try:
+        result = _run(
+            steps=[_inference_step(i) for i in range(n)],
+            dispatcher=cast(StepDispatcher, dispatcher),
+            ledger=ledger,
+            concurrent_cache_warmup=True,
+            persona_tier=PersonaTier.TEAM_BINDING,
+        )
+    finally:
+        release.set()
+    assert result.status is RunStatus.FAILED
+    assert result.fail_class == "parallelization-barrier-deadline"
+    assert dispatcher.dispatched == [0]
+    assert _branch_terminals(ledger) == {0: "timed_out", 1: "cancelled", 2: "cancelled"}
+    # The explicit FL5 pin: NO `completed` synthesis with an empty recovered dict.
+    assert "completed" not in set(_branch_terminals(ledger).values())
+    assert _branch_step_indexes(ledger) == {0}
+
+
+def test_fence_ledger_scoped_abort_single_terminal_no_scan_double_record() -> None:
+    """FL6 (negative control): an ABORT_BRANCH ordinal at a SCANNED terminal exit
+    records exactly ONE ledger terminal — the scoped-abort block's `completed` — the
+    scan never double-records it (a scoped-abort ordinal is excluded from
+    `branch_plan`, which is all the scan iterates). Resumed under
+    MULTI_TENANT_COMPLIANCE so the CASCADE_CANCEL post-barrier exit (which always
+    scans) is the terminal exit; the vouched-for RE_FIRE sibling fires cleanly and
+    the run fails with the scoped-abort fail_class."""
+    n = 3
+    store = _MiniFanoutStore()
+    snapshot, key_by_index = _fence_pause_round1(store)
+    run_key = store.sole_run_key()
+
+    holder = _HolderWithResolutions(
+        {
+            key_by_index[1]: EffectFenceResolution.ABORT_BRANCH,
+            key_by_index[2]: EffectFenceResolution.RE_FIRE,
+        }
+    )
+    resume_dispatcher = _FenceDirectiveReactorCohortDispatcher()
+    ledger = _RecordingLedger()
+    result = _run(
+        steps=[_inference_step(i) for i in range(n)],
+        dispatcher=cast(StepDispatcher, resume_dispatcher),
+        ledger=ledger,
+        concurrent_cache_warmup=True,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+        store=store,
+        with_pause_protocol=True,
+        pause_snapshot_input=snapshot,
+        resume_context_holder=holder,
+    )
+
+    assert result.status is RunStatus.FAILED
+    assert result.fail_class == "parallelization-effect-fence-branch-aborted"
+    # The scoped-abort ordinal was NEVER re-dispatched; only the RE_FIRE sibling ran.
+    assert resume_dispatcher.dispatched == [2]
+    # Exactly ONE ledger terminal for the scoped-abort ordinal (the recording block's
+    # `completed`) — the scan did not synthesize a second one.
+    assert _branch_terminal_statuses(ledger, 1) == ["completed"]
+    assert _branch_terminals(ledger) == {1: "completed", 2: "completed"}
+    assert _branch_step_indexes(ledger) == {2}
+    # Store: the distinguishing value lives in the runtime store (`scoped_aborted`,
+    # the F1 split), NOT a second ledger terminal; the RE_FIRE sibling captured its
+    # clean `completed` with output.
+    assert store.read_branch_records(run_key)[1][1:] == ("scoped_aborted", None)
+    assert store.read_branch_records(run_key)[2][1:] == ("completed", {"branch": 2})
+    assert store.present_branch_indexes(run_key) == {0, 1, 2}
+
+
+def test_fence_ledger_paused_boundary_scan_free_peer_reappears_this_round() -> None:
+    """FL8 (containment): the branch-failure → PAUSED boundary stays SCAN-FREE. On a
+    resume round where the recovered fence peer gets NO resolution (holder absent)
+    and a PLAIN sibling failure triggers the PAUSE path (protocol bound), the run
+    re-PAUSES with ZERO synthesized terminals for the recovered peer, and the NEW
+    snapshot's `effect_fence_paused_branches` carries the peer via the THIS-round
+    paused dict — proven by the re-raise key (`fence-key-round2-1` ≠ the attempt-1
+    key), distinguishing a genuine re-dispatch-re-pause from a stale carry."""
+    n = 3
+    snapshot = _captured_peer_snapshot(
+        peer=PeerFanOutResumeState(
+            branches=(
+                FanOutBranchResumeState(
+                    branch_index=0,
+                    step_id="inf-0",
+                    terminal_status="completed",
+                    output={"branch": 0},
+                ),
+            ),
+            branch_count=n,
+            effect_fence_paused_branches=(
+                EffectFencePausedBranchResumeState(
+                    branch_index=1,
+                    step_id="inf-1",
+                    step_kind="inference-step",
+                    idempotency_key="fence-key-attempt1-1",
+                ),
+            ),
+        )
+    )
+    # Warm-up OFF + barrier(2): the recovered peer (1, directive None → INERT
+    # re-pause with a round-2 key) and the plain sibling (2, RuntimeError) BOTH
+    # dispatch before either raises.
+    resume_dispatcher = _FenceDirectiveReactorCohortDispatcher(
+        fail={2},
+        sync_barrier=threading.Barrier(2, timeout=10.0),
+        inert_key_prefix="fence-key-round2-",
+    )
+    ledger = _RecordingLedger()
+    result = _run(
+        steps=[_inference_step(i) for i in range(n)],
+        dispatcher=cast(StepDispatcher, resume_dispatcher),
+        ledger=ledger,
+        concurrent_cache_warmup=False,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        with_pause_protocol=True,
+        pause_snapshot_input=snapshot,
+    )
+
+    assert result.status is RunStatus.PAUSED
+    assert result.fail_class is None
+    assert sorted(resume_dispatcher.dispatched) == [1, 2]
+    # ZERO synthesized terminals for the recovered peer this round (scan-free
+    # boundary); the plain failed sibling records its own step + `completed`.
+    assert _branch_terminal_statuses(ledger, 1) == []
+    assert _branch_terminals(ledger) == {2: "completed"}
+    assert _branch_step_indexes(ledger) == {2}
+    # The NEW snapshot: terminal branches union {recovered 0, this-round 2}; the
+    # unresolved peer reappears ONLY via the this-round dict — the round-2 key.
+    snap2 = result.pause_snapshot
+    assert snap2 is not None
+    assert snap2.pause_reason is WorkflowPauseReason.EFFECT_FENCE_AMBIGUOUS
+    peer2 = snap2.peer_fan_out_resume
+    assert peer2 is not None
+    assert [(b.branch_index, b.terminal_status, b.output) for b in peer2.branches] == [
+        (0, "completed", {"branch": 0}),
+        (2, "completed", None),
+    ]
+    assert [
+        (e.branch_index, e.step_id, e.step_kind, e.idempotency_key)
+        for e in peer2.effect_fence_paused_branches
+    ] == [(1, "inf-1", "inference-step", "fence-key-round2-1")]
