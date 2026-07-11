@@ -2209,7 +2209,12 @@ def test_partition_proceed_two_cohorts_leaders_serialize_before_followers() -> N
     followers enter while the leaders still sleep)."""
     witness = _PartitionOrderingWitness(leaders={0, 2})
     result = _run(
-        steps=[_cohort_step(0, "A"), _cohort_step(1, "A"), _cohort_step(2, "B"), _cohort_step(3, "B")],
+        steps=[
+            _cohort_step(0, "A"),
+            _cohort_step(1, "A"),
+            _cohort_step(2, "B"),
+            _cohort_step(3, "B"),
+        ],
         dispatcher=cast(StepDispatcher, witness),
         concurrent_cache_warmup=True,
     )
@@ -2235,7 +2240,12 @@ def test_partition_strict_tiers_two_cohorts_leaders_serialize_before_followers(
     `_cancel_fanout`'s Phase-1 TaskGroup on BOTH strict tiers."""
     witness = _PartitionOrderingWitness(leaders={0, 2})
     result = _run(
-        steps=[_cohort_step(0, "A"), _cohort_step(1, "A"), _cohort_step(2, "B"), _cohort_step(3, "B")],
+        steps=[
+            _cohort_step(0, "A"),
+            _cohort_step(1, "A"),
+            _cohort_step(2, "B"),
+            _cohort_step(3, "B"),
+        ],
         dispatcher=cast(StepDispatcher, witness),
         concurrent_cache_warmup=True,
         persona_tier=persona_tier,
@@ -2340,7 +2350,12 @@ def test_partition_cascade_cancel_leader_failure_withholds_all_followers() -> No
     store = _MiniFanoutStore()
     dispatcher = _PartitionFailLeaderDispatcher(fail={0}, slow={2})
     result = _run(
-        steps=[_cohort_step(0, "A"), _cohort_step(1, "A"), _cohort_step(2, "B"), _cohort_step(3, "B")],
+        steps=[
+            _cohort_step(0, "A"),
+            _cohort_step(1, "A"),
+            _cohort_step(2, "B"),
+            _cohort_step(3, "B"),
+        ],
         dispatcher=cast(StepDispatcher, dispatcher),
         ledger=ledger,
         concurrent_cache_warmup=True,
@@ -2373,7 +2388,12 @@ def test_partition_proceed_leader_failure_still_releases_all_followers() -> None
     immediately → slow leader B not done)."""
     witness = _EP6FailLeaderOrderingWitness(fail={0}, leaders={0, 2}, slow_leaders={2})
     result = _run(
-        steps=[_cohort_step(0, "A"), _cohort_step(1, "A"), _cohort_step(2, "B"), _cohort_step(3, "B")],
+        steps=[
+            _cohort_step(0, "A"),
+            _cohort_step(1, "A"),
+            _cohort_step(2, "B"),
+            _cohort_step(3, "B"),
+        ],
         dispatcher=cast(StepDispatcher, witness),
         concurrent_cache_warmup=True,
     )
@@ -2660,7 +2680,12 @@ def test_partition_proceed_leaders_run_concurrently_in_phase1() -> None:
     leader-serializing Phase 1)."""
     witness = _MutualLeaderEntryWitness()
     result = _run(
-        steps=[_cohort_step(0, "A"), _cohort_step(1, "A"), _cohort_step(2, "B"), _cohort_step(3, "B")],
+        steps=[
+            _cohort_step(0, "A"),
+            _cohort_step(1, "A"),
+            _cohort_step(2, "B"),
+            _cohort_step(3, "B"),
+        ],
         dispatcher=cast(StepDispatcher, witness),
         concurrent_cache_warmup=True,
     )
