@@ -46,10 +46,10 @@
 snapshot:
   frozen_total: 11
   frozen_done: 11
-  standalone_closed: 79
+  standalone_closed: 80
   standalone_gated: 0
   standalone_resolved: 4
-  standalone_registered: 15
+  standalone_registered: 14
   rfs1_status: active
   source: ".harness/beyond-mvp-capability-boundary-ledger.md"
   # FRONTIER NOTE (2026-07-11, R-FS-2 REGISTRATION — the anticipated flip fires): the
@@ -59,6 +59,12 @@ snapshot:
   # completeness audit (.harness/audit/NotebookLM_Spec_Layer_Overview_Audit_2026-07-11.md)
   # + the pre-existing open register + the PARTIAL verdicts. Waves 1-4 are ledger arcs;
   # the Wave-5 hygiene sweep + Appendix-B held/credential gates are plan-tracked, not rows.
+  # FRONTIER NOTE (2026-07-11, B-18-KEEPALIVE closed at PR #935 — R-FS-2 Wave 1 first arc).
+  # standalone_closed 79→80, standalone_registered 15→14. Boot-time Anthropic prompt-cache
+  # pre-warm (max_tokens=1) at stage-5 LOOP_INIT + 240s daemon keep-alive loop for 5m-TTL
+  # epochs; fully opt-in default-off; runtime spec v1.98→v1.99 + clearance marker; 16 hermetic
+  # tests (no paid calls); pyright 0/0/0; ruff clean; all 16 CI checks green. R2 cost-ceiling
+  # carve-out RE-DEFER'd (no committed signal in substrate). Next: B-WAL-F1-01-EXACTLY-ONCE.
   # FRONTIER NOTE (2026-07-11, B-18-PREWARM-OW closed at PR #933 — the registered B-* queue
   # EMPTIES). standalone_closed 78→79, standalone_registered 1→0; rfs1_status active→resolved
   # (the --check zero-open invariant: with no remaining/gated/registered arc the register
@@ -1889,8 +1895,8 @@ arcs:
   - id: B-18-KEEPALIVE
     title: "Boot-time prompt-cache pre-warm + 4-min keep-alive loop (ADR-D3 §1.5 lines 189-190; opt-in default-off)"
     kind: standalone
-    status: registered
-    decompose_at_open: true
+    status: closed
+    pr: 935
     owner_axis: "runtime"
     parent_arc: R-FS-2
     anticipated_scope: "ADR-D3 §1.5 lines 189-190 (cleared, byte-verified) commit boot-time pre-warm (max_tokens=0 at process boot) + keep-alive every 4min for 5min-TTL caches. Named at the 3c DDR §8 as B-18-KEEPALIVE (R2); deferred at the slice-3b design doc §3.3/§4.3 with the C11-safe default named: OPT-IN, DEFAULT OFF. Zero code at HEAD (verified twice: completeness audit + its adversarial reviewer). Shape: runtime spec delta + clearance (bundled absorption) recording (a) the max_tokens=1 minimal-ping adaptation (messages.create requires max_tokens — llm_dispatch.py:1917; mirrors the ratified 3c await-completion precedent) and (b) the R2 skip-under-cost-ceiling disposition (build the carve-out or explicitly re-defer with rationale); RuntimeConfig opt-in fields threaded through BOTH env loaders; boot ping at the stage-5/daemon seam against the parent-agent cacheable epoch; 4-min keep-alive task for 5m-TTL epochs ONLY (1h epochs excluded by design), daemon-scoped, cancelled at drain/shutdown, per-run isolation respected; pings flow through normal dispatch so cost attribution + anthropic.* cache attrs record them (no shadow spend). Witnesses: default-off byte-identical dispatch control; opt-in boot ping observed with cache attrs; fake-clock TTL firing; 1h-epoch exclusion; drain cancellation."
