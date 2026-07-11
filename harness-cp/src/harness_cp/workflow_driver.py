@@ -7511,9 +7511,10 @@ def _execute_parallelization(
     _warmup_gate: bool = _d4.concurrent_cache_warmup and _same_prefix_cohort()
 
     # B-18-3C-PREWARM-TIMEOUT-LEDGER (M2) — audit completeness at every TERMINAL fan-out
-    # exit. §25.15.2 obligation-4 scan, shared by all four terminal exits (CASCADE_CANCEL
+    # exit. §25.15.2 obligation-4 scan, shared by all five terminal exits (CASCADE_CANCEL
     # post-barrier; PROCEED deadline → PARTIAL; PAUSE deadline-strike → FAILED; PAUSE
-    # protocol-not-bound → FAILED): a branch withheld past a terminal run boundary — the
+    # protocol-not-bound → FAILED; fence-ABORT → FAILED, CP spec v1.92): a branch
+    # withheld past a terminal run boundary — the
     # warm-up Phase 1 struck the deadline / failed before releasing it, or (baseline) it
     # was never started when the cut landed — has NO ledger footprint, unlike every
     # in-flight branch (which records its step + `timed_out` terminal at its own
@@ -7530,26 +7531,61 @@ def _execute_parallelization(
     # keys on snapshot omission; a stale-snapshot double-resume leaves the first
     # attempt's `cancelled` standing via branch-terminal idempotency — the recorded
     # C3 residual). NOT called on the branch-failure → PAUSED boundary, where omission
-    # IS the re-dispatchable contract (§25.15.1). An effect-fence-paused peer DID
-    # dispatch (its fence catch records no step/terminal entry), so it records
-    # `completed` (dispatch-boundary) + the durable store capture instead (Codex [P2]
-    # — a crash would otherwise mis-classify it MAYBE-RAN + re-dispatch); the fence
-    # arm is live on the strict tiers only (`_proceed_branch` has no fence path, and
-    # PROCEED fence-resumes are rejected fail-closed pre-dispatch — under PROCEED it
-    # is structurally unreachable). Fence-family scope limits (v1.91 item 6,
-    # follow-on `B-18-FENCE-LEDGER-FIDELITY`): the fence arm consults THIS-ROUND
-    # `effect_fence_paused_dispositions` only — a snapshot-carried fence peer
-    # (`_recovered_effect_fence_paused`) withheld on a resume round synthesizes
-    # `cancelled` (false cross-attempt; audit-surface only) — and the tier-agnostic
-    # fence-ABORT FAILED return fires before every scan site (an aborted branch has
-    # its own disposition-mapping questions; not naively scannable).
+    # IS the re-dispatchable contract (§25.15.1). Fence-family arms
+    # (B-18-FENCE-LEDGER-FIDELITY, CP spec v1.92; DDR at
+    # `.harness/b18-fence-ledger-fidelity-design-decision-record.md`), in arm ORDER —
+    # an aborted ordinal also appears in the recovered dict, so the aborted arm is
+    # checked first:
+    #   (1) fence-ABORTED (this-round re-dispatch met the operator's ABORT directive;
+    #       `EffectFenceAbortedError`): its dispatch FIRED and the fence REFUSED the
+    #       effect — `cancelled` is foreclosed (obligation-4: not-yet-dispatched only)
+    #       and a step entry would claim an effectful step ran. Ledger `completed`
+    #       terminal-ONLY (dispatch-boundary; the abort semantics live at the
+    #       run-level fail_class + the durable fence claim), NO store capture — the
+    #       marker-present/no-terminal store state keeps crash-mid-drain at its
+    #       fail-closed / fence-recoverable classification (a `completed` capture
+    #       would flip `_crash_pause_trigger` and resurrect a crashed ABORT round as
+    #       a resumable pause).
+    #   (2) fence-paused, THIS round (`effect_fence_paused_dispositions`): DID
+    #       dispatch (its fence catch records no step/terminal entry) → `completed`
+    #       (dispatch-boundary) + the durable store capture (Codex [P2] — a terminal
+    #       exit captures no snapshot, so without the store record a crash would
+    #       mis-classify it MAYBE-RAN; at the fence-ABORT exit this same capture is
+    #       the deliberate v1.65 §1(c) reproduce-the-terminal trade, v1.92-named).
+    #   (3) fence-paused, RECOVERED (`_recovered_effect_fence_paused`, snapshot-
+    #       carried; withheld this round before its re-dispatch): attempt-1's
+    #       dispatch fired and holds an ambiguous-uncommitted reserve — exactly
+    #       obligation-4 `completed` ("effect may have landed"); `cancelled` would
+    #       contradict the branch's own store (marker present, reserve held). NO
+    #       store capture: the still-journaled prior snapshot already carries the
+    #       peer, so capture-less keeps its crash classification (fence-recoverable
+    #       MAYBE-RAN, resolvable) and the reserve un-orphaned — byte-identical
+    #       store/crash behavior.
+    #   (4) else never-dispatched → `cancelled`, LEDGER-only (the M2 baseline).
+    # The fence arms are live on the strict tiers only (`_proceed_branch` has no
+    # fence path; PROCEED fence-resumes are rejected fail-closed pre-dispatch;
+    # `effect_fence_aborted_dispositions` is populated only in `_cancel_branch` —
+    # under PROCEED all three are structurally unreachable).
     def _synthesize_undispatched_terminals() -> None:
         for _bi, _step, child, writer, _binding in branch_plan:
             if _writer_has_branch_disposition(writer):
                 continue
+            if _bi in effect_fence_aborted_dispositions:
+                # Arm (1): aborted — ledger `completed` terminal-ONLY, no capture.
+                append_branch_terminal_ledger_entry(
+                    branch_writer=writer,
+                    branch_context=child,
+                    run_idempotency_key=run_idempotency_key,
+                    terminal_status="completed",
+                    timestamp=fanout_timestamp,
+                    procedural_tier_snapshot_ref=snapshot_ref,
+                )
+                continue
             _fence_paused = _bi in effect_fence_paused_dispositions
-            _disposition = "completed" if _fence_paused else "cancelled"
+            _fence_recovered = _bi in _recovered_effect_fence_paused
+            _disposition = "completed" if (_fence_paused or _fence_recovered) else "cancelled"
             if _fence_paused:
+                # Arm (2) only — the recovered arm (3) is deliberately capture-less.
                 _capture_branch_terminal(
                     ctx,
                     manifest_entry,
@@ -7990,7 +8026,14 @@ def _execute_parallelization(
     # CascadePolicy.PAUSE run does NOT re-pause an aborted fence branch (the LINEAR ABORT → FAILED
     # analogue; Codex [P1]). The aborted branch already re-dispatched (its effect-fence claim is
     # the durable record); the run fails honestly.
+    # B-18-FENCE-LEDGER-FIDELITY (CP spec v1.92) — a TERMINAL exit nothing resumes: run the
+    # obligation-4 scan (the fifth call site). Under warm-up a Phase-1 abort withheld ALL
+    # siblings; without the scan this exit records zero footprint for the aborted branch AND
+    # the withheld siblings (v1.91 item 6a). The aborted arm records the ABORTED branch
+    # `completed` terminal-ONLY; withheld recovered fence peers `completed` (capture-less);
+    # plain withheld siblings `cancelled`. fail_class + run status unchanged.
     if effect_fence_aborted_dispositions:
+        _synthesize_undispatched_terminals()
         return _finish(
             RunStatus.FAILED, fail_class="parallelization-effect-fence-aborted", salvage=False
         )
@@ -7999,8 +8042,10 @@ def _execute_parallelization(
         # obl. 4: a not-yet-dispatched branch (no step/terminal disposition — its
         # task was cancelled before scheduling its dispatch) records a `cancelled`
         # terminal so resume does not double-dispatch; an effect-fence-paused peer
-        # records `completed` + the durable capture instead. The shared scan
-        # (`_synthesize_undispatched_terminals` above) carries the full discipline.
+        # records `completed` + the durable capture instead (this-round; a
+        # recovered-withheld peer records `completed` capture-less, CP spec v1.92).
+        # The shared scan (`_synthesize_undispatched_terminals` above) carries the
+        # full discipline.
         _synthesize_undispatched_terminals()
         # B-FANOUT-EFFECT-FENCE-PER-BRANCH-SCOPED-ABORT (R-FS-1, CP spec v1.73 §1; Codex [P1]) —
         # under CASCADE_CANCEL a scoped-abort is a deliberate branch failure → the run cancels
