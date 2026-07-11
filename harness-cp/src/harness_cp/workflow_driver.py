@@ -3905,21 +3905,24 @@ def _execute_workflow_body(
         # ordinary step-prefix recovery with no engine pause does not fire; `run_id`
         # run-scopes the record, identical key composition to the capture branch; the
         # WAL precedent's Codex [P1]/[P2] discipline) AND (b) `resume_at < len(steps)` —
-        # the run is NOT already complete. (b) is the one RECONCILER-SPECIFIC divergence
-        # from the WAL branch and is load-bearing: the reconciler substrate's CAS lease
-        # makes a SECOND `attempt_resume` of an already-claimed revision ABORT (the
-        # genuine new lease-coordination capability; U-RT-123). So once a run has fully
-        # completed (every step committed → `resume_at == len(steps)`), an at-least-once
-        # re-drive of the SAME run_id has NOTHING to reconverge, and firing would
-        # claim-again → ABORT → spuriously FAIL a finished run. Skipping the fire when
-        # complete lets the empty step loop return idempotent SUCCESS — satisfying
-        # C-CP-07 §7.4 floor (ii) "idempotency-keyed exactly-once via the F2 ledger". The
-        # WAL branch (below) carries NO such guard: its re-resumable substrate returns
-        # RESUME_CLEAN (not ABORT) on a completed-run re-drive, so it does NOT fail-close
-        # — the fail-closed regression this guard fixes is reconciler-only (a milder
-        # PRE-EXISTING WAL exactly-once duplicate-emit on the same path is out of scope
-        # here and tracked at `.harness/r-fs-1-e-impl-3c-f1-01-wal-exactly-once.md`). (b)
-        # is an UPPER bound ONLY — a step-0 engine pause (resume_at == 0) still fires
+        # the run is NOT already complete. (b) is load-bearing here because the
+        # reconciler substrate's CAS lease makes a SECOND `attempt_resume` of an
+        # already-claimed revision ABORT (the genuine new lease-coordination
+        # capability; U-RT-123): once a run has fully completed (every step
+        # committed → `resume_at == len(steps)`), an at-least-once re-drive of the
+        # SAME run_id has NOTHING to reconverge, and firing would claim-again →
+        # ABORT → spuriously FAIL a finished run. Skipping the fire when complete
+        # lets the empty step loop return idempotent SUCCESS — satisfying C-CP-07
+        # §7.4 floor (ii) "idempotency-keyed exactly-once via the F2 ledger". The
+        # WAL_SEGMENT branch (below) carries the SAME `resume_at < len(steps)` guard
+        # (F1-01 fix, R-FS-2 B-WAL-F1-01-EXACTLY-ONCE) for the milder sibling defect:
+        # WAL's re-resumable substrate returns RESUME_CLEAN (not ABORT) on a
+        # completed-run re-drive, so it never fail-closed, but pre-fix it re-fired
+        # `attempt_resume` and emitted a duplicate `cp.resume-attempted` entry for an
+        # already-finished run — see
+        # `.harness/r-fs-1-e-impl-3c-f1-01-wal-exactly-once.md` (closed) for the
+        # root-cause + fix-shape this branch's guard originated from. (b) is an
+        # UPPER bound ONLY — a step-0 engine pause (resume_at == 0) still fires
         # (Codex [P2.b]); it is the incomplete-vs-complete discriminator, NOT a
         # `resume_at > 0` gate.
         _engine_recovery_loop = getattr(ctx, "engine_recovery_loop", None)
@@ -4008,15 +4011,27 @@ def _execute_workflow_body(
         #     `has_captured_pause` conflated presence with validity, so a corrupt
         #     snapshot was misread as "absent" and silently skipped, losing the
         #     abort record AND resuming past unrecoverable state (Codex [P1-r3-a]).
-        # So the presence check is the sole gate. NB: the engine `resume_at` arg is
-        # the ResumeAttempt ISO-8601 timestamp — NOT the int step-index (distinct).
+        # So the presence check is the sole gate, PLUS the same `resume_at <
+        # len(steps)` completed-run guard the RECONCILER_LOOP branch above carries
+        # (C-CP-07 §7.4 floor-(ii); F1-01 residual —
+        # `.harness/r-fs-1-e-impl-3c-f1-01-wal-exactly-once.md`): the WAL substrate
+        # is re-resumable (`has_pause_record` stays True after a successful resume,
+        # it never deletes the journal record), so a same-run_id re-drive of a
+        # FULLY-COMPLETED run would otherwise re-fire `attempt_resume` and emit a
+        # SECOND `cp.resume-attempted` for the same resume-event identity — a milder
+        # sibling of the reconciler's fail-closed regression (WAL's RESUME_CLEAN
+        # keeps the run at SUCCESS; only the audit ledger over-counts). NB: the
+        # engine `resume_at` arg passed to `attempt_resume` below is the
+        # ResumeAttempt ISO-8601 timestamp — NOT the int step-index (distinct).
         # `run_id` run-scopes the engine pause record (matching the F2 prefix's
         # run_idempotency_key scope) so a fresh run of the same workflow_id never
         # picks up an earlier run's lingering record (Codex [P2]). The capture
         # branch below passes the SAME run_id — identical key composition.
         _engine_recovery_loop = getattr(ctx, "engine_recovery_loop", None)
-        _resume_engine_pause = _engine_recovery_loop is not None and (
-            _engine_recovery_loop.has_pause_record(
+        _resume_engine_pause = (
+            _engine_recovery_loop is not None
+            and resume_at < len(steps)
+            and _engine_recovery_loop.has_pause_record(
                 engine_class=manifest_entry.engine_class,
                 workflow_id=manifest_entry.workflow_id,
                 run_id=run_id,
