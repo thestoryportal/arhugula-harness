@@ -46,12 +46,21 @@
 snapshot:
   frozen_total: 11
   frozen_done: 11
-  standalone_closed: 73
+  standalone_closed: 74
   standalone_gated: 0
   standalone_resolved: 4
-  standalone_registered: 2
+  standalone_registered: 1
   rfs1_status: active
   source: ".harness/beyond-mvp-capability-boundary-ledger.md"
+  # FRONTIER NOTE (2026-07-11, B-18-3C-PREWARM-TIMEOUT-LEDGER closed). standalone_closed
+  # 73→74, standalone_registered 2→1. Obligation-4 `cancelled` synthesis at every TERMINAL
+  # fan-out exit via the shared _synthesize_undispatched_terminals() (CASCADE_CANCEL
+  # pre-existing scan factored; PROCEED deadline → PARTIAL; PAUSE deadline → FAILED; PAUSE
+  # protocol-not-bound → FAILED per review C2). Disposition `cancelled` NOT the anticipated
+  # `timed_out` (obligation-4 discriminator; DDR M2 left it open). PAUSED boundary stays
+  # scan-free (v1.44 §1 re-scoped at v1.91 item 4). C3 dedup residual named + ML7 pin.
+  # CP spec v1.90→v1.91 + clearance. Sole remaining registered: B-18-EPOCH-PARTITION
+  # (high-blast-radius — dedicated session).
   # FRONTIER NOTE (2026-07-11, B-18-3C-PREWARM-CASCADE closed). standalone_closed 72→73,
   # standalone_registered 3→2. Warm-up extended to the strict tiers via _cancel_fanout two-phase
   # (shared deadline + watchdog; Fable-5 R3 CancelledError-only Phase-1 guard); _warmup_gate lifted
@@ -1734,10 +1743,13 @@ arcs:
   - id: B-18-3C-PREWARM-TIMEOUT-LEDGER
     title: "Audit-visibility gap when asyncio deadline fires during phase-1 warm-up (M2)"
     kind: standalone
-    status: registered
+    status: closed
     decompose_at_open: true
     owner_axis: CP
     parent_arc: B-18-3C-PREWARM
     anticipated_scope: "When the asyncio.timeout deadline fires during phase 1 (branch[0] await), branches[1..N-1] get zero ledger footprint under warmup∧timeout — unlike the all-concurrent baseline which records a timed_out step+terminal for every branch. Crash-safe (marker-absent = safe re-dispatch; PROCEED PARTIAL is terminal), but an audit-visibility regression. Fix: on phase-1 timeout, synthesize timed_out entries for branches[1..N-1] before returning PARTIAL. Paired with a M3 test (deadline fires during phase 1 → PARTIAL + all branch indices in ledger)."
     units: []
     ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
+    spec_delta: "CP spec v1.90 → v1.91 (§25.17 M2 terminal-exit synthesis; clearance marker 2026-07-11)"
+    pr: "#928"
+    close_note: "PR #928. Disposition decided `cancelled` NOT the anticipated `timed_out` (obligation-4 discriminator: never-dispatched ≠ ambiguous-in-flight; DDR left it open). One shared _synthesize_undispatched_terminals() at 4 terminal exits (CASCADE_CANCEL pre-existing / PROCEED deadline / PAUSE deadline / PAUSE protocol-not-bound per review C2); PAUSED boundary stays scan-free; ledger-only (marker-absence invariant untouched); C3 stale-snapshot dedup residual named + ML7-pinned. Pre-build Fable-5 design review AMEND 0-blocking (C1–C5 folded). 7 witnesses. 2026-07-11."
