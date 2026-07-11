@@ -6239,9 +6239,11 @@ def _drain_and_emit_step_boundaries(
     [P2-a/P2-b] distinction: a CASCADE_CANCEL worker cancelled BEFORE dispatch
     buffers ONLY a terminal `cancelled` entry (`entry_count` 1, NO step entry) —
     it did NOT run a step, so it must NOT inflate `workflow.step_count` or emit a
-    `STEP_BOUNDARY`. (`entry_count > 0` would mis-count it; the non-cascade
-    strategies — PARALLELIZATION / EVALUATOR_OPTIMIZER — never buffer a
-    terminal-only branch, so the predicate is a no-op for them.)
+    `STEP_BOUNDARY`. (`entry_count > 0` would mis-count it; PARALLELIZATION
+    buffers terminal-only branches the same way — the CASCADE_CANCEL
+    obligation-4 scan and the M2 terminal-exit synthesis
+    (`_synthesize_undispatched_terminals`) — so the step-entry predicate, not
+    entry-count, is load-bearing there too.)
     """
     ran = sum(1 for writer in branch_writers if _writer_ran_a_step(writer))
     drain_branch_buffers(ctx.ledger_writer, branch_writers)
@@ -7508,6 +7510,58 @@ def _execute_parallelization(
 
     _warmup_gate: bool = _d4.concurrent_cache_warmup and _same_prefix_cohort()
 
+    # B-18-3C-PREWARM-TIMEOUT-LEDGER (M2) — audit completeness at every TERMINAL fan-out
+    # exit. §25.15.2 obligation-4 scan, shared by all four terminal exits (CASCADE_CANCEL
+    # post-barrier; PROCEED deadline → PARTIAL; PAUSE deadline-strike → FAILED; PAUSE
+    # protocol-not-bound → FAILED): a branch withheld past a terminal run boundary — the
+    # warm-up Phase 1 struck the deadline / failed before releasing it, or (baseline) it
+    # was never started when the cut landed — has NO ledger footprint, unlike every
+    # in-flight branch (which records its step + `timed_out` terminal at its own
+    # CancelledError handler). Record the not-yet-dispatched `cancelled` terminal,
+    # terminal-ONLY (a step entry would claim a dispatch that never fired; `timed_out`
+    # would claim an ambiguous in-flight effect — the obligation-4 discriminator both
+    # forecloses). Keyed on the ABSENCE of a step/terminal disposition, NOT an empty
+    # buffer (an overridden branch carries its pre-fan-out override entry,
+    # `branch_metadata=None`). LEDGER-only for a never-dispatched branch — NEVER
+    # `_mark_branch_dispatched` / `_capture_branch_terminal`: dispatch-marker ABSENCE is
+    # the durable provably-never-ran witness (CP spec v1.90 §25.17 item 4), and a store
+    # terminal outside {completed, timed_out, scoped_aborted} is corrupt to crash-resume.
+    # Synthesized entries are PER-ATTEMPT AUDIT records, not resume authority (resume
+    # keys on snapshot omission; a stale-snapshot double-resume leaves the first
+    # attempt's `cancelled` standing via branch-terminal idempotency — the recorded
+    # C3 residual). NOT called on the branch-failure → PAUSED boundary, where omission
+    # IS the re-dispatchable contract (§25.15.1). An effect-fence-paused peer DID
+    # dispatch (its fence catch records no step/terminal entry), so it records
+    # `completed` (dispatch-boundary) + the durable store capture instead (Codex [P2]
+    # — a crash would otherwise mis-classify it MAYBE-RAN + re-dispatch); the fence
+    # arm is live on the strict tiers only (`_proceed_branch` has no fence path, and
+    # PROCEED fence-resumes are rejected fail-closed pre-dispatch — under PROCEED it
+    # is structurally unreachable).
+    def _synthesize_undispatched_terminals() -> None:
+        for _bi, _step, child, writer, _binding in branch_plan:
+            if _writer_has_branch_disposition(writer):
+                continue
+            _fence_paused = _bi in effect_fence_paused_dispositions
+            _disposition = "completed" if _fence_paused else "cancelled"
+            if _fence_paused:
+                _capture_branch_terminal(
+                    ctx,
+                    manifest_entry,
+                    run_idempotency_key=run_idempotency_key,
+                    branch_index=_bi,
+                    step_id=str(steps[_bi].step_id),
+                    terminal_status="completed",
+                    output=None,
+                )
+            append_branch_terminal_ledger_entry(
+                branch_writer=writer,
+                branch_context=child,
+                run_idempotency_key=run_idempotency_key,
+                terminal_status=_disposition,
+                timestamp=fanout_timestamp,
+                procedural_tier_snapshot_ref=snapshot_ref,
+            )
+
     # === proceed: branches run to completion → SUCCESS | PARTIAL (degraded) ===
     if cascade_policy is CascadePolicy.PROCEED:
         # (B-18-3C-PREWARM-CASCADE: `_same_prefix_cohort` + `_warmup_gate` were
@@ -7625,12 +7679,16 @@ def _execute_parallelization(
             results = _run_fanout_to_completion(
                 _proceed_fanout(), max_workers=max(1, len(branch_plan))
             )
-        except BranchBarrierDeadlineExceededError:
-            # A stuck branch hit the deadline; the completed branches buffered
-            # their entries → PARTIAL (degraded). proceed does not cancel; the
-            # stuck branch is abandoned per `_run_fanout_to_completion`.
-            return _finish(RunStatus.PARTIAL, fail_class=None, salvage=True)
-        except TimeoutError:
+        except (BranchBarrierDeadlineExceededError, TimeoutError):
+            # The deadline struck (a stuck branch, or — under warm-up — Phase 1
+            # consumed the budget before releasing the siblings); the completed
+            # branches buffered their entries → PARTIAL (degraded). proceed does
+            # not cancel; a stuck branch is abandoned per
+            # `_run_fanout_to_completion`. Never-released branches record their
+            # obligation-4 `cancelled` terminal (B-18-3C-PREWARM-TIMEOUT-LEDGER
+            # M2 audit completeness — in-flight-cut branches already recorded
+            # `timed_out` at their own CancelledError handler).
+            _synthesize_undispatched_terminals()
             return _finish(RunStatus.PARTIAL, fail_class=None, salvage=True)
         any_failed = any(isinstance(r, BaseException) for r in results)
         if any_failed:
@@ -7934,41 +7992,10 @@ def _execute_parallelization(
     if cascade_policy is CascadePolicy.CASCADE_CANCEL:
         # obl. 4: a not-yet-dispatched branch (no step/terminal disposition — its
         # task was cancelled before scheduling its dispatch) records a `cancelled`
-        # terminal so resume does not double-dispatch. Keyed on the ABSENCE of a
-        # step/terminal disposition, NOT an empty buffer (an overridden branch
-        # carries its pre-fan-out override entry, `branch_metadata=None`).
-        for _bi, _step, child, writer, _binding in branch_plan:
-            if not _writer_has_branch_disposition(writer):
-                # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE — an effect-fence-paused peer DID dispatch
-                # (its own dispatch fired the fence; the effect may have landed), so under
-                # cascade-cancel it MUST NOT be mislabeled `cancelled` (= not-yet-dispatched).
-                # Record `completed` (dispatch-boundary) so the ledger reflects the dispatch;
-                # the run FAILs + the resolution is discarded (not resumed under cascade-cancel).
-                _fence_paused = _bi in effect_fence_paused_dispositions
-                _disposition = "completed" if _fence_paused else "cancelled"
-                if _fence_paused:
-                    # ALSO capture the `completed`/no-output terminal to the durable STORE (not
-                    # just the buffered ledger) — every other ran-and-errored branch does, via the
-                    # branch coroutine. Without this, a crash mid-cascade-cancel leaves only the
-                    # dispatch marker → crash-resume mis-classifies the branch as MAYBE-RAN +
-                    # re-dispatches instead of reproducing the cascade-cancel FAILED (Codex [P2]).
-                    _capture_branch_terminal(
-                        ctx,
-                        manifest_entry,
-                        run_idempotency_key=run_idempotency_key,
-                        branch_index=_bi,
-                        step_id=str(steps[_bi].step_id),
-                        terminal_status="completed",
-                        output=None,
-                    )
-                append_branch_terminal_ledger_entry(
-                    branch_writer=writer,
-                    branch_context=child,
-                    run_idempotency_key=run_idempotency_key,
-                    terminal_status=_disposition,
-                    timestamp=fanout_timestamp,
-                    procedural_tier_snapshot_ref=snapshot_ref,
-                )
+        # terminal so resume does not double-dispatch; an effect-fence-paused peer
+        # records `completed` + the durable capture instead. The shared scan
+        # (`_synthesize_undispatched_terminals` above) carries the full discipline.
+        _synthesize_undispatched_terminals()
         # B-FANOUT-EFFECT-FENCE-PER-BRANCH-SCOPED-ABORT (R-FS-1, CP spec v1.73 §1; Codex [P1]) —
         # under CASCADE_CANCEL a scoped-abort is a deliberate branch failure → the run cancels
         # (FAILED), NEVER a SUCCESS hiding the aborted branch. Per-branch isolation is incompatible
@@ -7993,15 +8020,21 @@ def _execute_parallelization(
     # (B-FANOUT-PAUSE-PARALLELIZATION, R-FS-1; CP spec v1.44 §2). On a branch failure:
     # in-flight siblings finished (shielded, recorded their terminal); not-yet-
     # dispatched siblings were TaskGroup-cancelled and are LEFT RE-DISPATCHABLE — the
-    # cascade-cancel `cancelled`-terminal scan above is DELIBERATELY NOT run here (the
-    # §25.15.1 pause semantic: "in-flight finish; not-yet-dispatched left
-    # re-dispatchable"). We capture the per-branch terminal dispositions + the
-    # completed branches' OUTPUTS (which the ledger does NOT carry) into a
-    # `PeerFanOutResumeState`-bearing, hash-integrity-checked `PauseSnapshot`, return
-    # PAUSED, and `api.resume` re-enters this strategy to skip terminal branches +
-    # re-dispatch the rest (obligation 7). The deadline-strike case (a STUCK fan-out,
-    # no branch raised) stays FAILED — there is no clean pause boundary to resume from.
+    # `cancelled`-terminal scan is DELIBERATELY NOT run on the branch-failure → PAUSED
+    # boundary (the §25.15.1 pause semantic: "in-flight finish; not-yet-dispatched left
+    # re-dispatchable" — snapshot OMISSION is the re-dispatchable contract; CP spec
+    # v1.91 re-scopes the v1.44 §1 sentence to exactly this boundary). We capture the
+    # per-branch terminal dispositions + the completed branches' OUTPUTS (which the
+    # ledger does NOT carry) into a `PeerFanOutResumeState`-bearing,
+    # hash-integrity-checked `PauseSnapshot`, return PAUSED, and `api.resume`
+    # re-enters this strategy to skip terminal branches + re-dispatch the rest
+    # (obligation 7). The deadline-strike case (a STUCK fan-out, no branch raised)
+    # stays FAILED — there is no clean pause boundary to resume from — and, being a
+    # TERMINAL exit nothing resumes, it DOES run the scan (B-18-3C-PREWARM-
+    # TIMEOUT-LEDGER M2: under warm-up a Phase-1 strike withheld ALL siblings, which
+    # would otherwise leave zero audit footprint).
     if deadline_struck:
+        _synthesize_undispatched_terminals()
         return _finish(
             RunStatus.FAILED, fail_class="parallelization-barrier-deadline", salvage=False
         )
@@ -8036,6 +8069,11 @@ def _execute_parallelization(
             # FALSE-`PAUSED` silent-degradation mode). Fail HONESTLY — detect-then-
             # refuse, mirroring `api.resume`'s ResumeProtocolNotBoundError. Completed
             # / in-flight ledger entries + the salvaged partial set still persist.
+            # A TERMINAL exit nothing resumes → run the obligation-4 scan (M2: under
+            # warm-up a Phase-1 branch[0] failure withheld ALL siblings; without a
+            # snapshot the re-dispatchable-by-omission defense does not apply, so
+            # zero footprint here would be indistinguishable from lost entries).
+            _synthesize_undispatched_terminals()
             return _finish(
                 RunStatus.FAILED,
                 fail_class="parallelization-pause-resume-protocol-not-bound",
