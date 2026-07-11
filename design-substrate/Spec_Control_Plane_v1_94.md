@@ -40,7 +40,7 @@
 | RR2 | the bound leg re-establishes PAUSED: skipped ordinals OMITTED from the snapshot, fence ordinal carried, NO synthesized terminals | passes (control) |
 | RR3 | the O-W mirror of RR1 at the EIGHTH scan site | **FAILS** (the exit had no scan) |
 | RR4 | the O-W bound-leg mirror of RR2 (`fan_out_resume` carrier) | passes (control) |
-| RR5 | complete-recovery × unbound: the reconstruct GATE is off → re-materialized entries only, byte-preserved (the review RR-1 gate pin) | passes (control) |
+| RR5 | complete-recovery × unbound: the reconstruct GATE is off on this leg → re-materialized entries only, byte-preserved (containment control; the gate itself is pinned by the 12 pre-existing scan-site suites' exact-list asserts — post-build review RR-D2) | passes (control) |
 | RR6+RR7 | store-inertness via observables (per-attempt fail_class + synthesized-multiset equality off a byte-identical store), attempt-3 bound → PAUSED unbroken, then `api.resume` re-dispatches the omitted + carried ordinals despite attempt-2's synthesized terminals (obligation-7 for the new shape) | passes (invariant control) |
 
 Fails-on-main verified BY EXECUTION at a throwaway main worktree: 2/6 fail exactly at the defect (RR1 KeyError on the class-(b) ordinal; RR3 KeyError on the O-W mirror), 4/6 designed controls pass.

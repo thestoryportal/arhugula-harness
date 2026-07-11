@@ -6332,10 +6332,12 @@ def test_reconstruct_residual_orchestrator_workers_bound_leg_stays_scan_free() -
 
 
 def test_reconstruct_residual_complete_recovery_unbound_byte_preserved() -> None:
-    """RR5 (containment control) — a COMPLETE-recovery unbound re-establish (the
-    reconstruct GATE is OFF: `crash_pause_reconstruct_no_dispatch` never set on the
-    complete path) synthesizes NOTHING beyond the re-materialized recovered set —
-    the pre-arc outputs byte-preserved (the review RR-1 gate pin)."""
+    """RR5 (containment control on the gate-off path) — a COMPLETE-recovery unbound
+    re-establish (the reconstruct GATE is OFF: `crash_pause_reconstruct_no_dispatch`
+    never set on the complete path) synthesizes NOTHING beyond the re-materialized
+    recovered set — the pre-arc outputs byte-preserved. (The gate itself is pinned
+    by the 12 pre-existing scan-site suites, whose exact-list asserts would break
+    under an ungated domain-minus-recovered arm; post-build review RR-D2.)"""
     store = _InMemoryBranchStore()
     steps = [_step(f"branch-{i}", i) for i in range(3)]
     _run_persona(
