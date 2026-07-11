@@ -156,6 +156,12 @@ class _RuntimeEnvSettings(BaseSettings):
     # gates a behavior-changing property (which model serves a workload), so
     # HARNESS_ROUTING_ACTIVATION must not be silently dropped.
     routing_activation: bool | None = None
+    # B-18-KEEPALIVE — env-keyed because both flags gate cost-affecting behavior
+    # (paid Anthropic calls at boot / every 4min idle). Mirrored in loader.py
+    # _ENV_SCALAR_FIELDS ([[runtimeconfig-scalar-needs-both-env-loaders]]).
+    # `prompt_cache_prewarm_model` (str) is file/CLI-only — not here.
+    prompt_cache_boot_prewarm: bool | None = None
+    prompt_cache_keepalive: bool | None = None
 
 
 class RuntimeConfigSource:

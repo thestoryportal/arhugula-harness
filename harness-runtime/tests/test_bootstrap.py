@@ -1595,3 +1595,85 @@ async def test_bootstrap_threads_hitl_auto_approve_policy_onto_both_composers(
     default_policy = ctx_default.llm_dispatcher.inner.hitl_auto_approve_policy  # type: ignore[attr-defined]
     assert default_policy.solo_persona_floor_auto is True
     assert default_policy.solo_local_mutation_floor_auto is False
+
+
+# ---------------------------------------------------------------------------
+# B-18-KEEPALIVE §7.8 — bootstrap stage-5 stash + failure isolation.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_stage_5_prewarm_default_off_zero_calls(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """B-18-KEEPALIVE §7.1 (default-off control) — both flags False (default) →
+    `prewarm()` is never called; bootstrap is byte-identical to pre-B-18.
+
+    Patches `RuntimeLLMDispatcher.prewarm` to fail loudly if called; the
+    default config must not invoke it.
+    """
+    from harness_runtime.lifecycle.llm_dispatch import RuntimeLLMDispatcher
+
+    async def _fail_if_called(self: Any) -> None:
+        raise AssertionError("prewarm() must not be called when prompt_cache_boot_prewarm=False")
+
+    monkeypatch.setattr(RuntimeLLMDispatcher, "prewarm", _fail_if_called)
+
+    _patch_providers(monkeypatch)
+    _patch_collector(monkeypatch)
+    # _config() has prompt_cache_boot_prewarm=False (default) — no prewarm call.
+    ctx = await run_bootstrap(_config(tmp_path), workload_class=_WORKLOAD)
+    assert isinstance(ctx, HarnessContext)
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_stage_5_stashes_bare_dispatcher_on_ctx(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """B-18-KEEPALIVE §7.8 (stash) — `ctx.bare_llm_dispatcher` is a
+    `RuntimeLLMDispatcher` after full bootstrap (ADR-D3 §1.5:189).
+
+    The daemon keep-alive loop calls `bare.prewarm()` directly; routing
+    through the HITL/retry wrapper is inappropriate at keep-alive time.
+    This test verifies the stash lands on the frozen context.
+    """
+    from harness_runtime.lifecycle.llm_dispatch import RuntimeLLMDispatcher
+
+    _patch_providers(monkeypatch)
+    _patch_collector(monkeypatch)
+    ctx = await run_bootstrap(_config(tmp_path), workload_class=_WORKLOAD)
+
+    assert ctx.bare_llm_dispatcher is not None
+    assert isinstance(ctx.bare_llm_dispatcher, RuntimeLLMDispatcher)
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_stage_5_prewarm_failure_does_not_abort_bootstrap(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """B-18-KEEPALIVE §7.8 (isolation) — a `prewarm()` exception at stage 5
+    MUST NOT propagate as `BootstrapFailure` (ADR-D3 §1.5:189 best-effort).
+
+    Patches `RuntimeLLMDispatcher.prewarm` to raise unconditionally;
+    bootstrap MUST succeed and return a frozen `HarnessContext`.
+    """
+    from harness_runtime.lifecycle.llm_dispatch import RuntimeLLMDispatcher
+
+    async def _raise(self: Any) -> None:
+        raise RuntimeError("synthetic prewarm failure for 7.8")
+
+    monkeypatch.setattr(RuntimeLLMDispatcher, "prewarm", _raise)
+
+    _patch_providers(monkeypatch)
+    _patch_collector(monkeypatch)
+
+    # `prompt_cache_boot_prewarm=True` ensures the prewarm path is exercised.
+    cfg = _config(tmp_path).model_copy(
+        update={"prompt_cache_boot_prewarm": True, "prompt_cache_prewarm_model": "claude-haiku-4-5"}
+    )
+    # Must not raise BootstrapFailure — best-effort means failure is swallowed.
+    ctx = await run_bootstrap(cfg, workload_class=_WORKLOAD)
+    assert isinstance(ctx, HarnessContext)

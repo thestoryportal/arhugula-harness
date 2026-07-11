@@ -150,6 +150,36 @@ def test_env_var_supplies_routing_activation(monkeypatch: pytest.MonkeyPatch) ->
     )
 
 
+# B-18-KEEPALIVE — HARNESS_PROMPT_CACHE_BOOT_PREWARM → config.prompt_cache_boot_prewarm.
+# Both prewarm flags gate cost-affecting behavior (paid Anthropic calls), so the env
+# path must reach them ([[runtimeconfig-scalar-needs-both-env-loaders]]).
+def test_env_var_supplies_prompt_cache_boot_prewarm(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HARNESS_PROMPT_CACHE_BOOT_PREWARM", "true")
+    cfg = RuntimeConfigSource.load(cli_overrides=_minimum_required_overrides())
+    assert cfg.prompt_cache_boot_prewarm is True
+    # Absent → the opt-out default.
+    monkeypatch.delenv("HARNESS_PROMPT_CACHE_BOOT_PREWARM", raising=False)
+    assert (
+        RuntimeConfigSource.load(
+            cli_overrides=_minimum_required_overrides()
+        ).prompt_cache_boot_prewarm
+        is False
+    )
+
+
+# B-18-KEEPALIVE — HARNESS_PROMPT_CACHE_KEEPALIVE → config.prompt_cache_keepalive.
+def test_env_var_supplies_prompt_cache_keepalive(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HARNESS_PROMPT_CACHE_KEEPALIVE", "true")
+    cfg = RuntimeConfigSource.load(cli_overrides=_minimum_required_overrides())
+    assert cfg.prompt_cache_keepalive is True
+    # Absent → the opt-out default.
+    monkeypatch.delenv("HARNESS_PROMPT_CACHE_KEEPALIVE", raising=False)
+    assert (
+        RuntimeConfigSource.load(cli_overrides=_minimum_required_overrides()).prompt_cache_keepalive
+        is False
+    )
+
+
 # AC #3 — config-file [runtime] table supplies tenant_id.
 def test_config_file_runtime_table_supplies_tenant_id(tmp_path: Path) -> None:
     config_file = tmp_path / "harness.toml"

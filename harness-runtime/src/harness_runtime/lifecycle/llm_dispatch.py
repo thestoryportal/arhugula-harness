@@ -60,6 +60,7 @@ from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from enum import StrEnum
 from typing import Any, Final, Protocol, cast, runtime_checkable
 
 from harness_as.memory_tool_contracts import MEMORY_TOOL_CONTRACTS, MemoryToolName
@@ -443,6 +444,22 @@ def _declarative_decline(
     return None
 
 
+class PrewarmOutcome(StrEnum):
+    """Result of `RuntimeLLMDispatcher.prewarm()` (B-18-KEEPALIVE; ADR-D3 §1.5:189).
+
+    Used by the keep-alive self-disable counter and test assertions.
+    """
+
+    WARMED = "warmed"
+    """One `max_tokens=1` Anthropic call fired; cache breakpoint established."""
+    SKIPPED_NOT_ELIGIBLE = "skipped_not_eligible"
+    """No cacheable prefix or no resolved Anthropic model — no paid call made."""
+    SKIPPED_NO_ANTHROPIC = "skipped_no_anthropic"
+    """Anthropic adapter absent from `providers` — no paid call made."""
+    FAILED = "failed"
+    """Provider call raised; exception swallowed (best-effort); no retry."""
+
+
 @dataclass(frozen=True, slots=True)
 class RuntimeLLMDispatcher:
     """Per-step LLM-dispatch composer satisfying `harness_cp.workflow_driver.
@@ -688,6 +705,137 @@ class RuntimeLLMDispatcher:
     # DIRECT construction with flag-on but no classifier would let a manifest-miss
     # fall through EMBEDDING (empty) → L3 (`router=None`) → a dispatch raise.
     routing_activation: bool = False
+    # B-18-KEEPALIVE — Anthropic model string for prewarm/keep-alive pings.
+    # Threaded at stage 5 from `RuntimeConfig.prompt_cache_prewarm_model`; also
+    # derived from `routing_manifest.per_workload_overrides` as the first-priority
+    # resolution source in `prewarm()`. File/CLI-only on RuntimeConfig (not env-
+    # keyed — does not gate correctness, only which model is warmed).
+    prewarm_model: str | None = None
+
+    async def prewarm(self) -> PrewarmOutcome:
+        """Boot-time prompt-cache pre-warm (B-18-KEEPALIVE; ADR-D3 §1.5:189).
+
+        Fires one `max_tokens=1` Anthropic call through `_dispatch_anthropic` so
+        the cache breakpoints a real dispatch places are established at process
+        boot. Best-effort: any exception is caught + logged; returns
+        `PrewarmOutcome.FAILED`, never raises.
+
+        Called at bootstrap stage 5 (both one-shot `harness run` + daemon) and
+        repeatedly by the daemon keep-alive loop. MUST NOT be routed through the
+        `RetryBreakerFallbackDispatcher` or `RuntimeHITLGateComposer` wrappers
+        (boot hangs on AskUserQuestion + breaker trips are not appropriate here).
+        """
+        # 1. Anthropic-only gate.
+        if "anthropic" not in self.providers:
+            return PrewarmOutcome.SKIPPED_NO_ANTHROPIC
+
+        # 2. Eligibility gate — skip when no breakpoint would be placed.
+        # Mirrors `_payload_to_anthropic_kwargs` placement logic so
+        # eligible ⟺ breakpoint-will-place ⟺ ping warms something.
+        if self.frozen_tool_superset is None:
+            return PrewarmOutcome.SKIPPED_NOT_ELIGIBLE
+        _system = self.active_system_prompt
+        _eligible = (
+            _combined_prefix_clears_non_vacuity_floor(self.frozen_tool_superset, _system)
+            if _system
+            else _superset_clears_non_vacuity_floor(self.frozen_tool_superset)
+        )
+        if not _eligible:
+            return PrewarmOutcome.SKIPPED_NOT_ELIGIBLE
+
+        # 3. Model resolution:
+        #   (1) routing_manifest per_workload_overrides → Anthropic model_binding_override;
+        #   (2) prewarm_model config field;
+        #   (3) SKIPPED_NOT_ELIGIBLE (cannot warm without a model).
+        _model: str | None = None
+        if self.routing_manifest is not None and self.workload_class is not None:
+            _wc_override = self.routing_manifest.per_workload_overrides.get(self.workload_class)
+            if (
+                _wc_override is not None
+                and _wc_override.model_binding_override is not None
+                and _wc_override.model_binding_override.provider == "anthropic"
+            ):
+                _model = _wc_override.model_binding_override.model
+        if _model is None:
+            _model = self.prewarm_model
+        if _model is None:
+            return PrewarmOutcome.SKIPPED_NOT_ELIGIBLE
+
+        # 4. Minimal ping payload.
+        # ADR-D3 §1.5:189 says max_tokens=0 but Anthropic requires ≥1; use 1.
+        _ping = ProviderAgnosticPayload(
+            messages=({"role": "user", "content": "cache prewarm"},),
+            tools=None,
+            params={"max_tokens": 1},
+        )
+        _adapter = self.providers["anthropic"]
+        _tracer = self.tracer_provider.get_tracer("harness.runtime.llm_dispatch")
+        _span_name = f"{GenAiOperation.CHAT.value} {_model}"
+        try:
+            with _tracer.start_as_current_span(_span_name) as _span:
+                _span.set_attribute("gen_ai.operation.name", GenAiOperation.CHAT.value)
+                _span.set_attribute("gen_ai.provider.name", "anthropic")
+                _span.set_attribute("gen_ai.request.model", _model)
+                _span.set_attribute("anthropic.prewarm", True)
+                _srv_addr = _PROVIDER_SERVER_ADDRESS.get("anthropic")
+                _srv_port = _PROVIDER_SERVER_PORT.get("anthropic")
+                if _srv_addr is not None:
+                    _span.set_attribute("server.address", _srv_addr)
+                    if _srv_port is not None:
+                        _span.set_attribute("server.port", _srv_port)
+
+                _resp, _usage, _cache, _req = await _dispatch_anthropic(
+                    _adapter,
+                    _model,
+                    _ping,
+                    system=_system,
+                    upstream=None,
+                    frozen_tool_superset=self.frozen_tool_superset,
+                    cache_ttl=self.cache_ttl,
+                )
+
+                _set_if_present(_span, "gen_ai.usage.input_tokens", _usage.input_tokens)
+                _set_if_present(_span, "gen_ai.usage.output_tokens", _usage.output_tokens)
+                _set_if_present(
+                    _span,
+                    "anthropic.cache_creation_input_tokens",
+                    _cache.cache_creation_input_tokens,
+                )
+                _set_if_present(
+                    _span, "anthropic.cache_read_input_tokens", _cache.cache_read_input_tokens
+                )
+                _set_if_present(_span, "anthropic.cache_breakpoint_id", _cache.cache_breakpoint_id)
+                _set_if_present(_span, "anthropic.cache_ttl_seconds", _cache.cache_ttl_seconds)
+
+                # Honest cost attribution — synthetic step context so the spend
+                # appears in the audit ledger under workflow_id="__prewarm__"
+                # rather than being silently attributed to the last real workflow.
+                _attribute_cost_best_effort(
+                    span=_span,
+                    cost_chain=self.cost_chain,
+                    audit_writer=self.audit_writer,
+                    rate_table=self.rate_table,
+                    cost_record_sink=self.cost_record_sink,
+                    provider_name="anthropic",
+                    model=_model,
+                    parent_idempotency_key="__prewarm__",
+                    workflow_id="__prewarm__",
+                    parent_action_id="__prewarm__",
+                    input_tokens=_usage.input_tokens,
+                    output_tokens=_usage.output_tokens,
+                    cache_creation=_cache.cache_creation_input_tokens,
+                    cache_read=_cache.cache_read_input_tokens,
+                    tenant_id=None,
+                )
+        except Exception:
+            import logging
+
+            logging.getLogger("harness.runtime.prewarm").warning(
+                "prewarm failed (best-effort; will not propagate)", exc_info=True
+            )
+            return PrewarmOutcome.FAILED
+
+        return PrewarmOutcome.WARMED
 
     def _resolve_per_step_system_prompt(self, prompt_version_sha: str) -> str:
         """Resolve a per-step ``prompt_version_sha`` → injected content (B4 Slice 3).
@@ -2899,6 +3047,7 @@ def materialize_llm_dispatcher_stage(
     approved_prompt_version_shas: frozenset[str] = frozenset(),
     routing_activation: bool = False,
     embedding_classifier: LayerDecisionFn | None = None,
+    prewarm_model: str | None = None,
 ) -> RuntimeLLMDispatcher:
     """Stage 5 LOOP_INIT composer factory for the LLM dispatcher (U-RT-52).
 
@@ -2983,6 +3132,7 @@ def materialize_llm_dispatcher_stage(
         approved_prompt_version_shas=approved_prompt_version_shas,
         routing_activation=routing_activation,
         embedding_classifier=embedding_classifier,
+        prewarm_model=prewarm_model,
     )
 
 
@@ -2990,6 +3140,7 @@ __all__ = [
     "LLMDispatchBindError",
     "LLMDispatchPayloadShapeError",
     "LLMDispatchProviderUnreachableError",
+    "PrewarmOutcome",
     "PromptInjectionConflictError",
     "RuntimeLLMDispatcher",
     "materialize_llm_dispatcher_stage",

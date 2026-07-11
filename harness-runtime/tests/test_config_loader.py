@@ -325,6 +325,59 @@ def test_env_supplies_routing_activation() -> None:
     assert off.routing_activation is False
 
 
+def test_env_supplies_prompt_cache_boot_prewarm() -> None:
+    """`HARNESS_PROMPT_CACHE_BOOT_PREWARM` reaches RuntimeConfig (B-18-KEEPALIVE).
+
+    Both prewarm flags gate cost-affecting behavior (paid Anthropic calls at
+    boot / every 4min idle): an operator who sets the env var must NOT be
+    silently dropped ([[runtimeconfig-scalar-needs-both-env-loaders]]).
+    """
+    base = {
+        f"{ENV_PREFIX}REPOSITORY_ROOT": "/tmp",
+        f"{ENV_PREFIX}DEPLOYMENT_SURFACE": "local-development",
+        f"{ENV_PREFIX}DEFAULT_TOPOLOGY": "single-threaded-linear",
+    }
+    sub = dict(
+        path_bindings=PathBindingConfig(),
+        provider_secrets=ProviderSecretsConfig(),
+        otel=OTelConfig(otlp_endpoint="http://localhost:4318"),
+        collector=CollectorConfig(),
+    )
+    on = materialize_runtime_config(
+        env={**base, f"{ENV_PREFIX}PROMPT_CACHE_BOOT_PREWARM": "true"}, **sub
+    )
+    assert on.prompt_cache_boot_prewarm is True
+    # Absent env var → the opt-out default.
+    off = materialize_runtime_config(env=base, **sub)
+    assert off.prompt_cache_boot_prewarm is False
+
+
+def test_env_supplies_prompt_cache_keepalive() -> None:
+    """`HARNESS_PROMPT_CACHE_KEEPALIVE` reaches RuntimeConfig (B-18-KEEPALIVE).
+
+    Daemon-only keep-alive; env-keyed for the same cost-gating reason as
+    `prompt_cache_boot_prewarm` ([[runtimeconfig-scalar-needs-both-env-loaders]]).
+    """
+    base = {
+        f"{ENV_PREFIX}REPOSITORY_ROOT": "/tmp",
+        f"{ENV_PREFIX}DEPLOYMENT_SURFACE": "local-development",
+        f"{ENV_PREFIX}DEFAULT_TOPOLOGY": "single-threaded-linear",
+    }
+    sub = dict(
+        path_bindings=PathBindingConfig(),
+        provider_secrets=ProviderSecretsConfig(),
+        otel=OTelConfig(otlp_endpoint="http://localhost:4318"),
+        collector=CollectorConfig(),
+    )
+    on = materialize_runtime_config(
+        env={**base, f"{ENV_PREFIX}PROMPT_CACHE_KEEPALIVE": "true"}, **sub
+    )
+    assert on.prompt_cache_keepalive is True
+    # Absent env var → the opt-out default.
+    off = materialize_runtime_config(env=base, **sub)
+    assert off.prompt_cache_keepalive is False
+
+
 def test_ollama_optional_bool_parsing() -> None:
     """`_parse_bool` accepts the common truthy spellings; everything else is False."""
     # The Python `bool("False") == True` trap necessitates explicit parsing.

@@ -13,7 +13,9 @@ Concrete subcommand bodies for daemon mode land downstream:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import sys
+from collections.abc import Awaitable, Callable
 from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Any
@@ -379,6 +381,48 @@ class DaemonStartupError(RuntimeError):
     FAIL_CLASS: str = "RT-FAIL-CLI-DAEMON-CONNECTION"
 
 
+_KEEPALIVE_INTERVAL_SECONDS: float = 240.0
+
+
+async def _keepalive_loop(
+    ctx: Any,
+    bare: Any,
+    *,
+    sleep_fn: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    interval: float = _KEEPALIVE_INTERVAL_SECONDS,
+) -> None:
+    """Daemon keep-alive: re-warm the Anthropic prompt cache every `interval` s.
+
+    Self-disables after 3 consecutive FAILED outcomes (B-18-KEEPALIVE DDR §5).
+    Injectable `sleep_fn` + `interval` for hermetic tests (7.4, 7.5, 7.6).
+    """
+    import logging
+
+    from harness_runtime.lifecycle.llm_dispatch import PrewarmOutcome
+
+    _log = logging.getLogger("harness.runtime.keepalive")
+    consec_fail = 0
+    while not ctx.drained_flag.is_set():
+        try:
+            await sleep_fn(interval)
+        except asyncio.CancelledError:
+            return
+        if ctx.drained_flag.is_set():
+            break
+        try:
+            outcome = await bare.prewarm()
+        except Exception:
+            _log.warning("keep-alive prewarm raised (counting as FAILED)", exc_info=True)
+            outcome = PrewarmOutcome.FAILED
+        if outcome is PrewarmOutcome.FAILED:
+            consec_fail += 1
+            if consec_fail >= 3:
+                _log.warning("keepalive self-disabled after 3 consecutive failures")
+                break
+        else:
+            consec_fail = 0
+
+
 async def _daemon_main(
     *,
     runtime_config: Any,
@@ -414,6 +458,9 @@ async def _daemon_main(
     except BootstrapFailure as exc:
         raise DaemonStartupError(f"bootstrap failure during daemon startup: {exc}") from exc
 
+    # B-18-KEEPALIVE — initialized before the outer try so the finally can
+    # unconditionally cancel+await it without an UnboundLocalError.
+    keepalive_task: asyncio.Task[None] | None = None
     try:
         # Bind the post-bootstrap HarnessContext on the MCP server's state
         # dict; the run_workflow tool handler reads from this key. The
@@ -425,6 +472,19 @@ async def _daemon_main(
 
         concrete_server: Any = _cast(Any, ctx.mcp_server)
         concrete_server._state["_harness_ctx"] = ctx
+
+        # B-18-KEEPALIVE — spawn the 5m-TTL keep-alive loop (DDR §5).
+        # 1h-TTL epochs are long enough that prewarm never matters; excluded.
+        _bare = ctx.bare_llm_dispatcher
+        if (
+            runtime_config.prompt_cache_keepalive
+            and _bare is not None
+            and getattr(_bare, "cache_ttl", None) == "5m"
+        ):
+            keepalive_task = asyncio.create_task(
+                _keepalive_loop(ctx, _bare),
+                name="keepalive-prewarm",
+            )
 
         # Construct uvicorn server bound to the Unix-socket. FastMCP's
         # `streamable_http_app()` returns a Starlette app exposing the MCP
@@ -477,6 +537,14 @@ async def _daemon_main(
         except OSError as exc:
             raise DaemonStartupError(f"failed to bind Unix-socket {socket_path}: {exc}") from exc
     finally:
+        # B-18-KEEPALIVE — cancel+await BEFORE _shutdown so the keep-alive
+        # task cannot call bare.prewarm() against torn-down providers.
+        # The `{serve_task, drain_task}` pending-cancel loop does NOT cover
+        # this task (it's outside that race set) — explicit cancel required.
+        if keepalive_task is not None:
+            keepalive_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await keepalive_task
         await _shutdown(ctx)
         # Best-effort cleanup of the socket file. A single non-retried unlink on
         # the shutdown path; the harness commits to asyncio (not trio/anyio) per

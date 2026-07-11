@@ -1874,6 +1874,44 @@ class RuntimeConfig(BaseModel):
     collections — this is a file/CLI-only field, NOT env-keyed.
     """
 
+    prompt_cache_boot_prewarm: bool = False
+    """B-18-KEEPALIVE (R-FS-2 Wave 1; ADR-D3 §1.5:189) — opt-in to a
+    boot-time Anthropic prompt-cache pre-warm at bootstrap stage 5 (fires for
+    BOTH one-shot `harness run` AND the daemon).
+
+    When enabled, `run_bootstrap` calls `bare_dispatcher.prewarm()` as a
+    strictly best-effort step: any failure is caught + logged; it MUST NOT
+    propagate as a `BootstrapFailure`. Gates a cost side-effect (one
+    `max_tokens=1` Anthropic call per process boot) → env-keyed so operators
+    who set `HARNESS_PROMPT_CACHE_BOOT_PREWARM=true` are never silently
+    overridden by the default-off.
+    """
+
+    prompt_cache_keepalive: bool = False
+    """B-18-KEEPALIVE (R-FS-2 Wave 1; ADR-D3 §1.5:190) — opt-in to a
+    daemon-only keep-alive ping loop that fires every 240s to refresh the
+    Anthropic prompt-cache epoch before the 5-minute TTL expires.
+
+    Daemon-only (attached at `_daemon_main`, not stage 5): only a long-lived
+    daemon idles >4min between `run_workflow` calls; a one-shot exits. Excluded
+    for 1-hour TTL caches (`cache_ttl == "1h"` → loop never spawned). Self-
+    disables after 3 consecutive `FAILED` outcomes. Gates a recurring cost
+    side-effect → env-keyed same as `prompt_cache_boot_prewarm`.
+    """
+
+    prompt_cache_prewarm_model: str | None = None
+    """B-18-KEEPALIVE — Anthropic model string for prewarm/keep-alive pings.
+
+    Anthropic caches are per-model; the prewarm must target the same model real
+    dispatches use. The model is resolved at dispatch-time from the step
+    binding (not available at stage 5), so prewarm uses a fallback chain:
+    (1) `routing_manifest.per_workload_overrides` → Anthropic binding;
+    (2) this field if set; (3) `SKIPPED_NOT_ELIGIBLE`.
+
+    File/CLI-only (not env-keyed): does not gate correctness, only which model
+    is warmed. Matches `prompt_cache_long_ttl_workloads` precedent.
+    """
+
     trust_policy: TrustPolicy | None = None
     """Operator-supplied per-server trust policy (CP spec v1.11 §27.2 carrier).
 
@@ -2354,6 +2392,19 @@ class HarnessContext(BaseModel):
     callers can pass `ctx.llm_dispatcher` to the CP `workflow_driver`
     as the per-step dispatch site. Concretized by
     `harness_runtime.lifecycle.llm_dispatch.RuntimeLLMDispatcher`.
+    """
+
+    bare_llm_dispatcher: Any = None
+    """B-18-KEEPALIVE bare dispatcher handle for `prewarm()` / keep-alive.
+
+    The wrap chain at `ctx.llm_dispatcher` is `RetryBreaker(HITL(bare))`.
+    Routing through the wrapper hits the PRE_ACTION HITL gate at boot and
+    trips the retry/breaker — inappropriate for a best-effort keep-alive.
+    This field holds the bare `RuntimeLLMDispatcher` so `_daemon_main`'s
+    keep-alive loop can call `bare.prewarm()` directly.
+
+    `None` for non-inference workflows (no bare dispatcher is built).
+    Typed `Any` to avoid the `lifecycle.llm_dispatch → types` import cycle.
     """
 
     sub_agent_dispatcher: Any
