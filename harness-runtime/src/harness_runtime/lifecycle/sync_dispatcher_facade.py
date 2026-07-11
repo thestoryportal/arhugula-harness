@@ -210,6 +210,24 @@ class SyncDispatcherFacade:
                 f"step dispatch exceeded {self.result_timeout_seconds}s bound"
             ) from exc
 
+    def cohort_key(
+        self,
+        binding: StepEffectiveBinding,
+        step: WorkflowStep,
+    ) -> str | None:
+        """Delegate to inner if it is CohortKeyCapable; else return None.
+
+        B-18-3C-PREWARM-COHORTKEY delegation stub. The facade sits at the top
+        of the production dispatcher chain (registry boundary). Delegating
+        ensures `isinstance(facade, CohortKeyCapable)` is True and the call
+        reaches the logic-bearing `RuntimeLLMDispatcher.cohort_key()`.
+        """
+        from harness_cp.workflow_driver import CohortKeyCapable
+
+        if isinstance(self.inner, CohortKeyCapable):
+            return self.inner.cohort_key(binding, step)
+        return None
+
 
 def materialize_sync_dispatcher_facade(
     inner: AsyncStepDispatcher,

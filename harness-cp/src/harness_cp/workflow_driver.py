@@ -418,6 +418,36 @@ class StepKindDispatcherNotBoundError(Exception):
 
 
 @runtime_checkable
+class CohortKeyCapable(Protocol):
+    """Optional Protocol for dispatchers that can attest cache-prefix stability.
+
+    Dispatchers implementing this Protocol return a stable cache-cohort key for
+    the given `(binding, step)` pair, or `None` when the dispatch is not
+    cache-stable (e.g. `memory_runtime` bound, no `frozen_tool_superset`, or
+    any other CP-invisible instability). Returning `None` signals "do not warm."
+
+    The CP driver checks `isinstance(dispatcher, CohortKeyCapable)` (attribute-
+    presence only per `@runtime_checkable` — implementations must use explicit
+    `def cohort_key(...)`, NOT `__getattr__` delegation, to satisfy the check)
+    and calls `cohort_key()` per branch.  Branches that all return the same
+    non-`None` key form a cache-warm cohort.
+
+    B-18-3C-PREWARM-COHORTKEY. Ratified at `.harness/class_2_fork_b18_cohortkey_fork_a_vs_b.md`.
+    """
+
+    def cohort_key(
+        self,
+        binding: StepEffectiveBinding,
+        step: WorkflowStep,
+    ) -> str | None:
+        """Return a stable cohort key, or ``None`` if not cache-stable.
+
+        Must not raise — return ``None`` on any instability condition.
+        """
+        ...
+
+
+@runtime_checkable
 class StepDispatcherRegistry(Protocol):
     """Routing-layer surface — frozen `{StepKind → StepDispatcher}` mapping.
 
@@ -7449,43 +7479,25 @@ def _execute_parallelization(
 
     # === proceed: branches run to completion → SUCCESS | PARTIAL (degraded) ===
     if cascade_policy is CascadePolicy.PROCEED:
-        # B-18-3C-PREWARM — same-prefix cohort predicate (H2). Conservative binary
-        # check: all branches uniform in (INFERENCE_STEP, provider, model, agent_role,
-        # prompt_version_sha, extended-thinking). Requires len>=2 (H3). Does NOT check
-        # memory_runtime, frozen_tool_superset None-ness, or cache-floor clearance —
-        # those are the operator-asserted opt-in residual (CP-invisible; DDR §11.2).
+        # B-18-3C-PREWARM-COHORTKEY — dispatcher-attested cohort predicate (H2).
+        # Each branch asks its dispatcher for a stable cohort key; None means
+        # "not cache-stable" (CP-invisible check: memory_runtime, frozen_tool_superset,
+        # or per-binding attributes differ). All branches must return the same non-None
+        # key to form a warm cohort. len>=2 guard (H3) preserved.
+        # Replaces the binary CP-visible-only predicate (DDR §11.4 C follow-on).
         def _same_prefix_cohort() -> bool:
             if len(branch_plan) < 2:  # H3: live len, not cell cap
                 return False
-            ref_step = branch_plan[0][1]
-            ref_b = branch_plan[0][4]
-            # Uniform INFERENCE_STEP — dispatchers are per-kind (DDR §11.4 Q3)
-            if not all(s.step_kind is StepKind.INFERENCE_STEP for _, s, _, _, _ in branch_plan):
-                return False
-            # Uniform provider + model — Anthropic cache is per-model
-            if not all(
-                b.model_binding.provider == ref_b.model_binding.provider
-                and b.model_binding.model == ref_b.model_binding.model
-                for _, _, _, _, b in branch_plan
-            ):
-                return False
-            # Uniform agent_role + prompt_version_sha
-            if not all(
-                b.agent_role == ref_b.agent_role
-                and b.prompt_version_sha == ref_b.prompt_version_sha
-                for _, _, _, _, b in branch_plan
-            ):
-                return False
-
-            # Uniform extended-thinking (per-epoch per ADR-D3 §1.5:205)
-            def _thinking(s: WorkflowStep) -> Any:
-                raw = s.step_payload.get("params")
-                if not isinstance(raw, dict):
-                    return None
-                return cast("dict[str, Any]", raw).get("thinking")
-
-            ref_thinking = _thinking(ref_step)
-            return all(_thinking(s) == ref_thinking for _, s, _, _, _ in branch_plan)
+            keys: list[str] = []
+            for branch_index, step, _child, _writer, binding in branch_plan:
+                dispatcher = branch_dispatchers[branch_index]
+                if not isinstance(dispatcher, CohortKeyCapable):
+                    return False
+                key = dispatcher.cohort_key(binding, step)
+                if key is None:
+                    return False
+                keys.append(key)
+            return len(set(keys)) == 1
 
         _warmup_gate: bool = _d4.concurrent_cache_warmup and _same_prefix_cohort()
 
@@ -11561,6 +11573,7 @@ def _execute_decentralized_handoff(
 
 __all__ = [
     "BufferingLedgerWriter",
+    "CohortKeyCapable",
     "DriverContext",
     "LedgerWriterLike",
     "LifecycleEventEmitterLike",

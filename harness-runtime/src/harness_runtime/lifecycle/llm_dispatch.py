@@ -53,6 +53,7 @@ L5..L8 stage shape established at U-RT-21..U-RT-41.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Mapping, Sequence
 from contextvars import ContextVar
@@ -865,6 +866,47 @@ class RuntimeLLMDispatcher:
             routing_trace=trace,
             binding_rationale=_binding_rationale,
         )
+
+    def cohort_key(
+        self,
+        binding: StepEffectiveBinding,
+        step: WorkflowStep,
+    ) -> str | None:
+        """Return a stable cache-cohort key, or None if this dispatch is not cache-stable.
+
+        B-18-3C-PREWARM-COHORTKEY: satisfies `CohortKeyCapable` Protocol.
+
+        Returns None when:
+        - `memory_runtime` is bound (per-dispatch memory packet injection makes the
+          cache prefix unstable across dispatches), or
+        - `frozen_tool_superset` is None (no deterministic tools block → no stable
+          `cache_control` marker to warm).
+
+        When cache-stable, returns a sha256 hex string encoding the attributes that
+        determine the Anthropic prompt-cache prefix:
+        provider, model, agent_role, prompt_version_sha, extended-thinking flag,
+        cache_ttl, and "fts_bound" sentinel (frozen_tool_superset is not None).
+        """
+        if self.memory_runtime is not None:
+            return None
+        if self.frozen_tool_superset is None:
+            return None
+        raw_params = step.step_payload.get("params")
+        thinking = (
+            cast("dict[str, Any]", raw_params).get("thinking")
+            if isinstance(raw_params, dict)
+            else None
+        )
+        parts = [
+            str(binding.model_binding.provider).encode(),
+            str(binding.model_binding.model).encode(),
+            str(binding.agent_role).encode(),
+            str(binding.prompt_version_sha).encode(),
+            str(thinking).encode(),
+            str(self.cache_ttl).encode(),
+            b"fts_bound",
+        ]
+        return hashlib.sha256(b"\x00".join(parts)).hexdigest()[:16]
 
     async def dispatch(
         self,

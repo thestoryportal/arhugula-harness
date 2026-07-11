@@ -46,12 +46,18 @@
 snapshot:
   frozen_total: 11
   frozen_done: 11
-  standalone_closed: 70
+  standalone_closed: 71
   standalone_gated: 0
   standalone_resolved: 4
-  standalone_registered: 5
+  standalone_registered: 4
   rfs1_status: active
   source: ".harness/beyond-mvp-capability-boundary-ledger.md"
+  # FRONTIER NOTE (2026-07-10, B-18-3C-PREWARM-COHORTKEY closed). standalone_closed 70→71,
+  # standalone_registered 5→4. CohortKeyCapable @runtime_checkable Protocol (§25.16) + _same_prefix_cohort()
+  # dispatcher-oracle refactor (§25.15) + 3 delegation stubs (RuntimeHITLGateComposer /
+  # RetryBreakerFallbackDispatcher / SyncDispatcherFacade) + 16 witnesses (CK-1..3 + RK-1..13
+  # incl. RK-13 full-chain end-to-end). CP spec v1.87→v1.88 + clearance. B-18-3C-PREWARM-DEFAULT-ON
+  # prerequisite now met. Remaining registered: CASCADE / DEFAULT-ON / EPOCH-PARTITION / TIMEOUT-LEDGER.
   # FRONTIER NOTE (2026-07-10, B-18-3C-PREWARM closed; 5 follow-ons registered). standalone_closed
   # 69→70, standalone_registered 0→5. B-18-3C-PREWARM (ADR-D4 §1.8 concurrent-prompt-cache warm-up
   # for PARALLELIZATION PROCEED, opt-in default-OFF) ships as CP spec v1.87 + clearance + 6 witnesses
@@ -1630,14 +1636,46 @@ arcs:
     ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
 
   - id: B-18-3C-PREWARM-COHORTKEY
-    title: "StepDispatcher.cohort_key() Protocol method — dispatcher-attested cacheability"
+    title: "CohortKeyCapable Protocol — dispatcher-attested cacheability for concurrent-cache warmup"
     kind: standalone
-    status: registered
-    decompose_at_open: true
+    status: closed
     owner_axis: "CP + runtime"
     parent_arc: B-18-3C-PREWARM
-    anticipated_scope: "Add `cohort_key() -> str | None` to the StepDispatcher Protocol. `None` = prefix unstable / not cacheable (memory_runtime bound, frozen_tool_superset None, or cache floor can't clear). Replaces the operator-asserted residual scope in B-18-3C-PREWARM §11.2 with a machine-checkable dispatcher-side signal. CP driver reads the cohort key instead of the binary same-prefix predicate; None → skip warmup. Required gate for B-18-3C-PREWARM-DEFAULT-ON (the dispatcher can attest cacheability → safe to flip to ADR §1.8(f) required-at-cap>1)."
-    units: []
+    spec_delta: "CP spec v1.87 → v1.88 (additive CohortKeyCapable @runtime_checkable Protocol §25.16; _same_prefix_cohort() dispatcher-oracle refactor §25.15; clearance marker 2026-07-10). Fork B ratified per .harness/class_2_fork_b18_cohortkey_fork_a_vs_b.md. NO StepDispatcher Protocol widening, NO IS/CXA/contract/enum/fail-class/§5.2-hash change."
+    gives: "Replaces the v1.87 operator-asserted residual scope (memory_runtime / frozen_tool_superset / cache-floor) with machine-checkable dispatcher-oracle. CohortKeyCapable.cohort_key(binding, step) -> str | None: None = not cache-stable (memory_runtime bound, frozen_tool_superset None); non-None = 16-hex sha256 key encoding (provider, model, agent_role, prompt_version_sha, thinking, cache_ttl, fts_bound). _same_prefix_cohort() checks isinstance(dispatcher, CohortKeyCapable) + non-None uniform keys. Three delegation stubs propagate the oracle through the production chain: RuntimeHITLGateComposer / RetryBreakerFallbackDispatcher / SyncDispatcherFacade. 16 witnesses: CK-1..3 (CP driver integration) + RK-1..13 (unit + RK-13 full-chain end-to-end). B-18-3C-PREWARM-DEFAULT-ON prerequisite now met."
+    units:
+      - id: U-COHORTKEY-01
+        title: "CohortKeyCapable Protocol + __all__ export"
+        file: "harness-cp/src/harness_cp/workflow_driver.py"
+        status: closed
+      - id: U-COHORTKEY-02
+        title: "_same_prefix_cohort() dispatcher-oracle refactor + branch_dispatchers pre-flight"
+        file: "harness-cp/src/harness_cp/workflow_driver.py"
+        status: closed
+      - id: U-COHORTKEY-03
+        title: "RuntimeLLMDispatcher.cohort_key() + memory_runtime field"
+        file: "harness-runtime/src/harness_runtime/lifecycle/llm_dispatch.py"
+        status: closed
+      - id: U-COHORTKEY-04
+        title: "SyncDispatcherFacade.cohort_key() delegation stub"
+        file: "harness-runtime/src/harness_runtime/lifecycle/sync_dispatcher_facade.py"
+        status: closed
+      - id: U-COHORTKEY-05
+        title: "RetryBreakerFallbackDispatcher.cohort_key() delegation stub"
+        file: "harness-runtime/src/harness_runtime/lifecycle/retry_breaker_fallback.py"
+        status: closed
+      - id: U-COHORTKEY-06
+        title: "RuntimeHITLGateComposer.cohort_key() delegation stub"
+        file: "harness-runtime/src/harness_runtime/lifecycle/hitl_gate_composer.py"
+        status: closed
+      - id: U-COHORTKEY-07
+        title: "test_cohort_key_capable.py — 3 CP-driver integration witnesses (CK-1..3)"
+        file: "harness-cp/tests/test_cohort_key_capable.py"
+        status: closed
+      - id: U-COHORTKEY-08
+        title: "test_cohort_key_rtllm.py — 13 unit witnesses incl. RK-13 full-chain (RK-1..13)"
+        file: "harness-runtime/tests/test_cohort_key_rtllm.py"
+        status: closed
     ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
 
   - id: B-18-3C-PREWARM-CASCADE

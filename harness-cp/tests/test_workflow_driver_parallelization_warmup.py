@@ -247,6 +247,9 @@ class _WarmupOrderingWitness:
                 self.sibling_b0_done_on_entry[idx] = self.branch0_done.is_set()
         return {"branch": idx}
 
+    def cohort_key(self, binding: StepEffectiveBinding, step: WorkflowStep) -> str | None:
+        return "test-cohort-uniform"
+
     def assert_serialized(self, *, n: int) -> None:
         assert self.branch0_done.is_set(), "branch[0] never dispatched"
         for i in range(1, n):
@@ -283,6 +286,9 @@ class _FailBranch0Dispatcher:
         if idx == 0:
             raise RuntimeError("simulated branch-0 failure (H1 regression)")
         return {"branch": idx}
+
+    def cohort_key(self, binding: StepEffectiveBinding, step: WorkflowStep) -> str | None:
+        return "test-cohort-uniform"
 
 
 class _ReverseCompletionDispatcher:
@@ -363,9 +369,10 @@ def test_warmup_singleton_branch_plan_no_serialization() -> None:
 
 
 def test_warmup_predicate_declarative_step_all_concurrent() -> None:
-    """M6: DECLARATIVE_STEP fails the uniform-INFERENCE_STEP predicate check →
-    _warmup_gate=False → all-concurrent.  Verified via ReverseCompletionDispatcher
-    (would deadlock on the serialized path)."""
+    """M6: DECLARATIVE_STEP uses a non-CohortKeyCapable dispatcher (mirrors
+    production: sub-agent / tool / HITL dispatchers are not CohortKeyCapable) →
+    _same_prefix_cohort() returns False → _warmup_gate=False → all-concurrent.
+    Verified via ReverseCompletionDispatcher (would deadlock on the serialized path)."""
     n = 3
     reverse = _ReverseCompletionDispatcher(n=n)
     result = _run(
@@ -378,8 +385,12 @@ def test_warmup_predicate_declarative_step_all_concurrent() -> None:
 
 
 def test_warmup_predicate_nonuniform_thinking_all_concurrent() -> None:
-    """M8: non-uniform extended-thinking across branches fails the predicate →
-    _warmup_gate=False → all-concurrent.  Verified via ReverseCompletionDispatcher."""
+    """M8 (non-CohortKeyCapable path): a non-CohortKeyCapable INFERENCE_STEP
+    dispatcher → _same_prefix_cohort() returns False → _warmup_gate=False →
+    all-concurrent.  Verified via ReverseCompletionDispatcher.
+
+    The cohort-key encoding of thinking-uniformity (CohortKeyCapable path where
+    non-uniform thinking yields different keys) is tested via RK-5 in test_cohort_key_rtllm.py."""
     n = 3
     # branch[0] has thinking=True; others have thinking=None → non-uniform.
     steps = [_inference_step(0, thinking=True)] + [_inference_step(i) for i in range(1, n)]

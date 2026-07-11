@@ -957,6 +957,23 @@ class RetryBreakerFallbackDispatcher:
             parent_span,
         )
 
+    def cohort_key(
+        self,
+        binding: StepEffectiveBinding,
+        step: WorkflowStep,
+    ) -> str | None:
+        """Delegate to inner if it is CohortKeyCapable; else return None.
+
+        B-18-3C-PREWARM-COHORTKEY delegation stub. Delegates to the PRIMARY
+        inner dispatcher (not the fallback chain) — cohort key reflects the
+        planned execution, not the fallback path.
+        """
+        from harness_cp.workflow_driver import CohortKeyCapable
+
+        if isinstance(self.inner, CohortKeyCapable):
+            return self.inner.cohort_key(binding, step)
+        return None
+
 
 @dataclass(frozen=True, slots=True)
 class _PerCandidateTerminal:
