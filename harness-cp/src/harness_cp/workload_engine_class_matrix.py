@@ -123,9 +123,14 @@ def d4_tunable(
     Persona tier influences the `cascade_policy` default: more conservative
     tiers default to `PAUSE`, solo-developer defaults to `PROCEED`.
     `concurrent_cache_warmup` threads the ADR-D4 §1.8 warm-up flag from the
-    manifest entry (WME default True per §1.8(f)); non-PARALLELIZATION callers
-    omit this param and inherit the function-parameter default of False — the
-    predicate guards warmup to CohortKeyCapable dispatchers regardless."""
+    manifest entry (WME default True per ADR-D4 Consequences (f)). The two
+    fan-out engines the warm-up applies to — PARALLELIZATION and
+    ORCHESTRATOR_WORKERS (+ HIERARCHICAL_DELEGATION per level via its O-W
+    recursion; B-18-PREWARM-OW, CP spec v1.96) — pass it; callers with no
+    warm-up surface (crash gates, EVALUATOR_OPTIMIZER single-evaluator,
+    DECENTRALIZED_HANDOFF) omit it and inherit the function-parameter default
+    of False — the partition guards warmup to CohortKeyCapable dispatchers
+    regardless."""
     if persona_tier is PersonaTier.SOLO_DEVELOPER:
         cascade_policy = CascadePolicy.PROCEED
     elif persona_tier is PersonaTier.TEAM_BINDING:

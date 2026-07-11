@@ -9510,10 +9510,16 @@ def _execute_orchestrator_workers(
 
     # Resolve cascade policy before the RECONCILER CAS gate so invalid effect-fence pause resumes
     # under PROCEED fail without consuming the one-shot engine resume claim.
-    cascade_policy = d4_tunable(
+    # B-18-PREWARM-OW (CP spec v1.96) — capture the FULL tunable (the parallelization
+    # shape): the ADR-D4 §1.8 warm-up now applies to the O-W worker fan-out, so the
+    # manifest's `concurrent_cache_warmup` threads through (supersedes the v1.89
+    # "warmup is irrelevant outside PARALLELIZATION" characterization).
+    _d4 = d4_tunable(
         lookup_cell(manifest_entry.workload_class, manifest_entry.engine_class),
         manifest_entry.persona_tier,
-    ).cascade_policy
+        concurrent_cache_warmup=manifest_entry.concurrent_cache_warmup,
+    )
+    cascade_policy = _d4.cascade_policy
     if _recovered_effect_fence_paused and cascade_policy is CascadePolicy.PROCEED:
         return RunResult(
             workflow_id=workflow_id,
@@ -10759,6 +10765,79 @@ def _execute_orchestrator_workers(
             salvage=False,
         )
 
+    # B-18-PREWARM-OW (CP spec v1.96, extending §25.19) — the ADR-D4 §1.8 heterogeneous
+    # cohort partition for the ORCHESTRATOR_WORKERS worker fan-out ("the protocol
+    # applies to all cells where fan-out cap > 1"; v1.87 scoped the build to
+    # PARALLELIZATION and this arc discharges the registered O-W extension). Workers
+    # are grouped by their dispatcher-attested `(step_kind, cohort_key)` — step_kind
+    # participates because equal 16-hex keys are attested-comparable only within one
+    # capable dispatcher instance, which the registry resolves per step_kind. Phase 1
+    # = one LEADER (first ordinal) per multi-member cohort PLUS every non-beneficiary
+    # worker (None-key / non-capable / singleton cohort — cache-neutral, so Phase-2
+    # placement would delay them for zero benefit). Phase 2 = the followers
+    # (cache-hits). Degenerate reductions: no multi-member cohort (all-distinct /
+    # all-None / non-capable / <2 plan) → phase2 empty → gate False → the pre-arc
+    # all-concurrent baseline byte-identical. Keyed on the LIVE branch_plan
+    # (post-recovery-seed): a partial-recovery resume re-partitions the REMAINDER
+    # (new leader per remaining cohort). Positioned AFTER the `not branch_plan`
+    # short-circuits + the effect-fence PROCEED fail-closed guard above (the split —
+    # and its dispatcher `cohort_key()` calls — never runs ahead of an honest FAILED)
+    # and shared by all three §25.15.1 paths. The `len(branch_plan) < 2`
+    # short-circuit keeps a singleton plan at ZERO cohort_key() oracle calls, as does
+    # a gate-off tunable (the split is never computed). The ORCHESTRATOR is NOT a
+    # cohort member (its sequential dispatch precedes the fan-out; on resume it is
+    # not re-dispatched, so its original cache-write may be stale — crediting its
+    # cohort would need a freshness model with no committed basis; when its key DOES
+    # match a worker cohort's, that cohort's leader simply cache-hits — bounded
+    # latency, never a correctness effect). Dispatchers are resolved INLINE (O-W has
+    # no prebuilt dispatcher map); an unbound StepKind is treated as NON-CAPABLE so
+    # the worker fails at ITS OWN dispatch site exactly as today (PROCEED:
+    # gather-captured → PARTIAL; strict: grouped → cascade) — the split must not
+    # change O-W's committed failure surface.
+    def _warmup_phase_split() -> tuple[
+        list[
+            tuple[
+                int, WorkflowStep, StepExecutionContext, BufferingLedgerWriter, StepEffectiveBinding
+            ]
+        ],
+        list[
+            tuple[
+                int, WorkflowStep, StepExecutionContext, BufferingLedgerWriter, StepEffectiveBinding
+            ]
+        ],
+    ]:
+        if len(branch_plan) < 2:  # live len, not cell cap; zero oracle calls
+            return list(branch_plan), []
+        cohort_members: dict[tuple[StepKind, str], list[int]] = {}
+        for branch_index, step, _child, _writer, binding in branch_plan:
+            try:
+                dispatcher = step_dispatchers.lookup(step.step_kind)
+            except StepKindDispatcherNotBoundError:
+                continue  # non-capable: fails at its own dispatch site, as today
+            if not isinstance(dispatcher, CohortKeyCapable):
+                continue
+            key = dispatcher.cohort_key(binding, step)
+            if key is None:
+                continue
+            cohort_members.setdefault((step.step_kind, key), []).append(branch_index)
+        follower_ordinals = {
+            ordinal
+            for members in cohort_members.values()
+            if len(members) >= 2
+            for ordinal in members[1:]
+        }
+        if not follower_ordinals:
+            return list(branch_plan), []
+        return (
+            [plan for plan in branch_plan if plan[0] not in follower_ordinals],
+            [plan for plan in branch_plan if plan[0] in follower_ordinals],
+        )
+
+    _warmup_phase1, _warmup_phase2 = (
+        _warmup_phase_split() if _d4.concurrent_cache_warmup else (list(branch_plan), [])
+    )
+    _warmup_gate: bool = bool(_warmup_phase2)
+
     # === proceed: siblings run to completion → SUCCESS | PARTIAL (degraded) ===
     if cascade_policy is CascadePolicy.PROCEED:
 
@@ -10863,25 +10942,56 @@ def _execute_orchestrator_workers(
             # `return_exceptions=True`: a failing worker does NOT cancel siblings
             # (the proceed semantic). Bounded by the §25.11 wall-clock deadline.
             async with asyncio.timeout(deadline):
-                return await asyncio.gather(
-                    *(_proceed_worker(*plan) for plan in branch_plan),
+                if not _warmup_gate:
+                    # Default: all workers concurrent (the pre-arc baseline).
+                    return await asyncio.gather(
+                        *(_proceed_worker(*plan) for plan in branch_plan),
+                        return_exceptions=True,
+                    )
+                # B-18-PREWARM-OW (CP spec v1.96, §25.19) — Phase 1: cohort leaders +
+                # non-beneficiary workers concurrent (per-cohort cache-writes), then
+                # Phase 2: the followers (cache-hits). Both phases bounded by the ONE
+                # deadline. gather(return_exceptions=True) on BOTH phases: a Phase-1
+                # failure must STILL dispatch Phase 2 and STILL drain the failed
+                # worker's buffered entries (PARTIAL — the H1 lineage). No new
+                # carve-out arises here: O-W's baseline IS the gather (a spontaneous
+                # worker CancelledError is gather-captured in both phases exactly as
+                # the baseline captures it); the DEADLINE CancelledError still
+                # propagates (the gather itself is cancelled → TimeoutError at the
+                # timeout __aexit__), preserving the deadline-exit scan semantics.
+                # Results reassembled in branch_plan ordinal order.
+                phase1_results = await asyncio.gather(
+                    *(_proceed_worker(*plan) for plan in _warmup_phase1),
                     return_exceptions=True,
                 )
+                phase2_results = await asyncio.gather(
+                    *(_proceed_worker(*plan) for plan in _warmup_phase2),
+                    return_exceptions=True,
+                )
+                results_by_ordinal: dict[int, Any] = {}
+                for plan, result in zip(_warmup_phase1, phase1_results, strict=True):
+                    results_by_ordinal[plan[0]] = result
+                for plan, result in zip(_warmup_phase2, phase2_results, strict=True):
+                    results_by_ordinal[plan[0]] = result
+                return [results_by_ordinal[plan[0]] for plan in branch_plan]
 
         try:
             results = _run_fanout_to_completion(
                 _proceed_fanout(), max_workers=max(1, len(branch_plan))
             )
         except (BranchBarrierDeadlineExceededError, TimeoutError):
-            # A stuck worker hit the deadline; the completed workers buffered their
-            # entries → PARTIAL (degraded). (proceed does not cancel; the stuck
-            # worker is abandoned per `_run_fanout_to_completion`; handlers merged —
-            # the M2 parity shape.) A TERMINAL exit nothing resumes → run the
-            # obligation-4 scan (B-18-FENCE-LEDGER-FIDELITY-OW): a never-scheduled
-            # worker records `cancelled`; a stashed paused-child (its stash-then-
-            # deadline interleaving exits HERE, before the paused-child check below)
-            # records `completed` terminal-only — in-flight-cut workers already
-            # recorded `timed_out` at their own CancelledError handler.
+            # A stuck worker hit the deadline (or — under warm-up — Phase 1 consumed
+            # the budget before releasing the followers, B-18-PREWARM-OW); the
+            # completed workers buffered their entries → PARTIAL (degraded). (proceed
+            # does not cancel; the stuck worker is abandoned per
+            # `_run_fanout_to_completion`; handlers merged — the M2 parity shape.) A
+            # TERMINAL exit nothing resumes → run the obligation-4 scan
+            # (B-18-FENCE-LEDGER-FIDELITY-OW): a never-scheduled worker — incl. a
+            # never-released Phase-2 follower — records `cancelled`; a stashed
+            # paused-child (its stash-then-deadline interleaving exits HERE, before
+            # the paused-child check below) records `completed` terminal-only —
+            # in-flight-cut workers already recorded `timed_out` at their own
+            # CancelledError handler.
             _synthesize_undispatched_terminals()
             return _finish(RunStatus.PARTIAL, fail_class=None, salvage=True)
         if paused_child_dispositions:
@@ -11118,9 +11228,95 @@ def _execute_orchestrator_workers(
         _record_clean(branch_index, step, child, writer, output)
 
     async def _cancel_fanout() -> list[None]:
-        return await cascade_cancel_barrier(
-            (_cancel_worker(*plan) for plan in branch_plan), deadline_seconds=deadline
-        )
+        if not _warmup_gate:
+            return await cascade_cancel_barrier(
+                (_cancel_worker(*plan) for plan in branch_plan), deadline_seconds=deadline
+            )
+        # B-18-PREWARM-OW (CP spec v1.96, §25.19) — Phase 1 (cohort leaders +
+        # non-beneficiaries; cache-writes) then Phase 2 (the followers; cache-hits)
+        # on the strict tiers, SHARING one deadline budget + one
+        # `_BRANCH_INFLIGHT_DISPATCHES` watchdog registry across both phases.
+        # Inlines the `cascade_cancel_barrier` setup rather than composing two
+        # barrier calls — each call would grant a FULL `deadline` budget, doubling
+        # the §25.11 wall-clock cap. Inline also keeps coroutine creation lazy: a
+        # Phase-1 failure never instantiates a FOLLOWER coroutine, so there is no
+        # un-awaited-coroutine leak to reap. Effect-set: a Phase-1 failure WITHHOLDS
+        # the followers entirely — their effect-set is empty, so the dispatched set
+        # is strictly SMALLER than the non-warmup barrier's (§25.19 item 5) — warmup
+        # stays strictly safer on the tiers that exist to bound effects. Per-worker
+        # records are byte-identical: all handlers live in `_cancel_worker`,
+        # ordinal-keyed, phase-agnostic (the engine-local mirror of the
+        # parallelization shape; the two engines' barrier machinery is deliberately
+        # independent, the FIDELITY-OW locality precedent).
+        inflight_dispatches: set[asyncio.Future[Any]] = set()
+        parent_chain = _BRANCH_INFLIGHT_DISPATCHES.get() or ()
+        registry_token = _BRANCH_INFLIGHT_DISPATCHES.set((*parent_chain, inflight_dispatches))
+
+        async def _deadline_cutoff() -> None:
+            # Mirrors `cascade_cancel_barrier._deadline_cutoff`: the direct in-flight
+            # cut `asyncio.shield` cannot absorb; the `asyncio.timeout` below bounds
+            # only gate-stuck workers with no in-flight dispatch for this watchdog
+            # to cut.
+            await asyncio.sleep(deadline)
+            for inflight in list(inflight_dispatches):
+                if not inflight.done():
+                    inflight.cancel()
+
+        cutoff_task = asyncio.ensure_future(_deadline_cutoff())
+        try:
+            async with asyncio.timeout(deadline):
+                # Phase 1: cohort leaders + non-beneficiary workers under a TaskGroup
+                # (per-cohort cache-writes; each worker's dispatch marker + terminal
+                # records are written inside `_cancel_worker`, ordinal-keyed,
+                # byte-identical to the Phase-2 path). TaskGroup natively (a) leaves
+                # the outer deadline CancelledError unwrapped (→ TimeoutError at the
+                # timeout __aexit__ → BranchBarrierDeadlineExceededError below), and
+                # (b) wraps a child's bare TimeoutError into an ExceptionGroup that
+                # `except TimeoutError` below does NOT catch (no implicit group
+                # unwrap) — a worker FAILURE, never the barrier deadline.
+                async with asyncio.TaskGroup() as warmup_task_group:
+                    phase1_tasks = [
+                        warmup_task_group.create_task(_cancel_worker(*plan))
+                        for plan in _warmup_phase1
+                    ]
+                # NORMATIVE (§25.19 item 4): collect `task.result()` BEFORE releasing
+                # Phase 2 — CPython's TaskGroup SWALLOWS a child that raises
+                # SPONTANEOUS CancelledError (a watchdog-cut future — e.g. an OUTER
+                # nested-fan-out barrier's earlier-armed watchdog cutting this inner
+                # Phase 1 inside the window where the inner timeout has not fired; HD
+                # recursion re-enters this executor, so the nested vehicle is REAL
+                # here): the group exits CLEAN with task.cancelled()=True. Without
+                # this resurface the followers would dispatch AFTER the cut,
+                # inverting the effect-set subset invariant on the tiers that exist
+                # to bound effects. `task.result()` re-raises the CancelledError —
+                # byte-matching the Phase-2 collection idiom below (OWP9 pins;
+                # verified by execution to transfer to `_cancel_worker`'s
+                # record-then-reraise handler shape).
+                for phase1_task in phase1_tasks:
+                    phase1_task.result()
+                # Phase 2: the followers under TaskGroup (cache-hits; non-empty by
+                # the gate). A worker failure raises ExceptionGroup (a
+                # BaseExceptionGroup subclass) → propagates unchanged → caller:
+                # `worker_failed = True` — identical to the non-warmup barrier's
+                # failure surface. The `task.result()` collection is LOAD-BEARING
+                # here too (the same swallowed-cancellation resurface as Phase 1).
+                async with asyncio.TaskGroup() as task_group:
+                    tasks = [
+                        task_group.create_task(_cancel_worker(*plan)) for plan in _warmup_phase2
+                    ]
+                return [task.result() for task in tasks]
+        except TimeoutError as exc:
+            # Barrier-deadline parity with `cascade_cancel_barrier` (§25.11): the
+            # timeout cancelled the fan-out body with no worker failure.
+            raise BranchBarrierDeadlineExceededError(deadline) from exc
+        finally:
+            # Reap the watchdog + restore the registry — byte-matching the original
+            # barrier's finally (await-with-suppress so the watchdog never outlives
+            # the barrier).
+            cutoff_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await cutoff_task
+            _BRANCH_INFLIGHT_DISPATCHES.reset(registry_token)
 
     worker_failed = False
     deadline_struck = False

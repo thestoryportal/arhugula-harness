@@ -6,7 +6,11 @@ The engine's inline CASCADE_CANCEL-only loop is factored into an O-W-local
 `_synthesize_undispatched_terminals()` with six arms (aborted-first → fence
 this-round + capture → fence recovered capture-less → paused-child this-round
 capture-less → paused-child recovered capture-less → else `cancelled`), called at
-seven terminal exits. O-W has NO warm-up serialization lever, and a sibling's
+seven terminal exits. At this arc's authoring O-W had NO warm-up serialization
+lever (B-18-PREWARM-OW / CP spec v1.96 later added the §25.19 partition — its
+withheld-follower witnesses live at
+`test_workflow_driver_orchestrator_workers_warmup.py`; these gate-False
+witnesses keep the poisoned-ordinal mechanism), and a sibling's
 raise never deterministically cancels later tasks pre-body (the TaskGroup abort
 runs via a done-callback queued AFTER their first steps — verified empirically),
 so the deterministic zero-footprint ordinal is the POISONED ordinal itself: a

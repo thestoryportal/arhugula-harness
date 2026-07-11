@@ -46,12 +46,26 @@
 snapshot:
   frozen_total: 11
   frozen_done: 11
-  standalone_closed: 78
+  standalone_closed: 79
   standalone_gated: 0
   standalone_resolved: 4
-  standalone_registered: 1
-  rfs1_status: active
+  standalone_registered: 0
+  rfs1_status: resolved
   source: ".harness/beyond-mvp-capability-boundary-ledger.md"
+  # FRONTIER NOTE (2026-07-11, B-18-PREWARM-OW closed at PR #933 — the registered B-* queue
+  # EMPTIES). standalone_closed 78→79, standalone_registered 1→0; rfs1_status active→resolved
+  # (the --check zero-open invariant: with no remaining/gated/registered arc the register
+  # returns to its terminal state — Tier-1 manual sign-off stands at
+  # .harness/r-fs-1-tier1-manual-signoff.json; a future registration flips it back to active). The ADR-D4 §1.8 warm-up +
+  # §25.19 cohort partition extended to the ORCHESTRATOR_WORKERS worker fan-out (CP spec
+  # v1.95→v1.96): full d4_tunable capture (v1.89 characterization superseded), inline-lookup
+  # split adaptation (not-bound → non-capable; failure surface byte-exact), PROCEED two-gather,
+  # strict engine-local two-phase + NORMATIVE task.result() resurface (transfer to
+  # _cancel_worker's record-then-reraise verified by execution), orchestrator NOT a cohort
+  # member (named rejection), scan family untouched at all 8 exits, HD inherits per level,
+  # E-O multi-evaluator contingent (item-9 forward tripwire). 13 witnesses (10 fail-on-main
+  # by execution). With the queue empty, next-action derivation falls to the §4 forward
+  # register + recurring lanes.
   # FRONTIER NOTE (2026-07-11, B-18-EPOCH-PARTITION closed; B-18-PREWARM-OW registered).
   # standalone_closed 77→78, standalone_registered 1→1 net (EPOCH-PARTITION out; PREWARM-OW in,
   # registered at CP spec v1.95 follow-on table per the ADR-D4 §1.8 "all cells where fan-out
@@ -1787,13 +1801,16 @@ arcs:
   - id: B-18-PREWARM-OW
     title: "ADR-D4 §1.8 warm-up + cohort partition for ORCHESTRATOR_WORKERS (+ contingent evaluator-optimizer multi-evaluator)"
     kind: standalone
-    status: registered
+    status: closed
     decompose_at_open: true
     owner_axis: CP
     parent_arc: B-18-3C-PREWARM
     anticipated_scope: "ADR-D4 §1.8 commits the concurrent-prompt-cache warm-up protocol for ALL cells where fan-out cap > 1 — 'orchestrator-workers, parallelization, evaluator-optimizer with multi-evaluator' (ADR-D4.md line 242). v1.87 scoped the build to PARALLELIZATION; no follow-on ever registered the O-W extension, and O-W has NO warm-up gate at HEAD (verified: _warmup_gate exists only in _execute_parallelization). Extending warm-up + the v1.95 §25.19 cohort partition to O-W is its own design pass (different dispatch mechanics, stash/paused-child machinery, EIGHT obligation-4 scan sites) — the B-18-FENCE-LEDGER-FIDELITY-OW register-don't-silently-widen precedent. Scope-note (pre-build review cosmetic): the evaluator-optimizer multi-evaluator cell is CONTINGENT — at HEAD evaluator-optimizer is sequential single-evaluator (§25.11), so this registration covers it only if that cell ever materializes. Registered at CP spec v1.95 follow-on table."
     units: []
     ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
+    spec_delta: "CP spec v1.95 → v1.96 (§25.19 extended to ORCHESTRATOR_WORKERS; clearance marker 2026-07-11)"
+    pr: "#933"
+    close_note: "PR #933. The §25.19 heterogeneous cohort partition extended to the O-W worker fan-out, landed in partition form directly (no intermediate binary-gate stage). The cascade-policy site captures the FULL d4_tunable (v1.89's 'warmup is irrelevant outside PARALLELIZATION' superseded EXPLICITLY; d4_tunable docstring refreshed). _warmup_phase_split() over the LIVE worker branch_plan with ONE engine adaptation: dispatchers resolved INLINE per worker (O-W has no prebuilt map); StepKindDispatcherNotBoundError → non-capable, preserving the committed per-worker failure surface byte-exact (named rejection: porting parallelization's fail-loud pre-flight). PROCEED = two sequential gathers under the one deadline (no new carve-out — O-W's baseline IS the gather). Strict tiers = engine-local inline two-phase (one deadline + one _BRANCH_INFLIGHT_DISPATCHES watchdog; Phase-1 TaskGroup + NORMATIVE post-group task.result() resurface — verified by execution to TRANSFER to _cancel_worker's record-then-reraise handler; Phase-2 TaskGroup). The ORCHESTRATOR is NOT a cohort member (named rejection; review C1 corrected the rationale: cohort_key hashes binding.agent_role, which non-overridden bindings omit → orchestrator/worker key equality is the COMMON case — the decision rests on resume-staleness + bounded cache-hit cost + the ADR-D4 sibling-set reading). Obligation-4 scan family UNTOUCHED at all EIGHT O-W exits; PAUSED boundary scan-free (withheld followers re-dispatchable by snapshot omission; resume re-partitions the remainder). HD inherits per level (zero HD-specific code). E-O multi-evaluator CONTINGENT — discharged forward via the v1.96 item-9 tripwire (any future multi-evaluator cell MUST carry warm-up + partition in its own registration). ZERO store writes; statuses/fail_classes byte-unchanged. 13 witnesses OWP1-OWP12 (OWP2 x2) incl. the review-C4 fence×partition union-arm capture-less pin; 10/13 fail-on-main BY EXECUTION at a throwaway main worktree (OWP3/4/10 designed controls). Pre-build Fable-5 design review AMEND-THEN-BUILD 0-blocking (C1-C4 + 2 cosmetic ALL folded pre-build; advisor + Codex down). CP spec v1.95→v1.96 + clearance. The registered B-* queue EMPTIES at this close."
 
   - id: B-18-3C-PREWARM-TIMEOUT-LEDGER
     title: "Audit-visibility gap when asyncio deadline fires during phase-1 warm-up (M2)"
