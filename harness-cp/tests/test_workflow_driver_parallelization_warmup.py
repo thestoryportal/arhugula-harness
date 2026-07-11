@@ -31,10 +31,12 @@ ADR-D4 v1.1 §1.8; `Spec_Control_Plane_v1_86.md` §25.15.
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 from typing import Any, cast
 
+import pytest
 from harness_core import PersonaTier, StepID, WorkloadClass
 from harness_cp.cp_shared_types import ModelBinding
 from harness_cp.cross_family_fallback_chain import (
@@ -413,5 +415,58 @@ def test_warmup_gate_off_all_concurrent() -> None:
         steps=[_inference_step(i) for i in range(n)],
         dispatcher=reverse,
         concurrent_cache_warmup=False,
+    )
+    assert result.status is RunStatus.SUCCESS
+
+
+# ---------------------------------------------------------------------------
+# E2E skeleton — B-18-3C-PREWARM-DEFAULT-ON
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.e2e
+@pytest.mark.skipif(
+    not os.environ.get("ANTHROPIC_API_KEY"),
+    reason="ANTHROPIC_API_KEY not set — live Anthropic prefix-cache hit test skipped",
+)
+def test_warmup_default_on_live_cache_hit() -> None:  # pragma: no cover
+    """B-18-3C-PREWARM-DEFAULT-ON live acceptance skeleton (CP spec v1.89 §25.17).
+
+    Verifies that a WorkflowManifestEntry constructed WITHOUT explicit
+    `concurrent_cache_warmup` gets the new default of True. The structural run
+    below uses _ReverseCompletionDispatcher (non-CohortKeyCapable) → _same_prefix_cohort()
+    returns False → _warmup_gate=False → all-concurrent baseline (the safety
+    property: default-True + non-cohort dispatcher = byte-identical to old default-False).
+
+    The ordering-witness tests above cover the serialized branch[0] path with
+    a CohortKeyCapable dispatcher. This skeleton documents where the Anthropic
+    live-cache-hit test belongs once a cache-instrumented dispatcher is built.
+
+    TODO (follow-on): add a cache-instrumented live dispatcher that asserts
+    siblings receive anthropic cache_read_input_tokens > 0 (cache hit on siblings).
+    """
+    # Verify the WME default flows correctly without any explicit setting.
+    entry = WorkflowManifestEntry(
+        workflow_id="wf-default-on-live",
+        workload_class=WorkloadClass.PIPELINE_AUTOMATION,
+        persona_tier=PersonaTier.SOLO_DEVELOPER,
+        engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
+        topology_pattern=TopologyPattern.PARALLELIZATION,
+        layer_budgets=(),
+        fallback_chain=_CHAIN,
+        hitl_placements=(),
+        per_step_overrides={},
+        # concurrent_cache_warmup intentionally omitted → must be True by default
+    )
+    assert entry.concurrent_cache_warmup is True, (
+        "B-18-3C-PREWARM-DEFAULT-ON: WME default must be True per ADR-D4 §1.8(f)"
+    )
+
+    # Structural run with non-CohortKeyCapable dispatcher → gate stays False → baseline SUCCESS.
+    n = 3
+    result = _run(
+        steps=[_inference_step(i) for i in range(n)],
+        dispatcher=_ReverseCompletionDispatcher(n=n),
+        concurrent_cache_warmup=entry.concurrent_cache_warmup,
     )
     assert result.status is RunStatus.SUCCESS

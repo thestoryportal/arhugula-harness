@@ -115,6 +115,22 @@ def test_workflow_manifest_entry_accepts_explicit_default_gate_level() -> None:
     assert entry.default_gate_level is GateLevel.ASK
 
 
+def test_workflow_manifest_entry_default_concurrent_cache_warmup_is_true() -> None:
+    """B-18-3C-PREWARM-DEFAULT-ON (CP spec v1.89 §25.17) — default True per ADR-D4 §1.8(f).
+
+    Safe default because _same_prefix_cohort() guards warmup via the CohortKeyCapable
+    oracle (B-18-3C-PREWARM-COHORTKEY, CP spec v1.88): non-CohortKeyCapable dispatchers
+    return False → warmup does not fire → byte-identical to old default-False."""
+    entry = _entry()
+    assert entry.concurrent_cache_warmup is True
+
+
+def test_workflow_manifest_entry_accepts_explicit_opt_out() -> None:
+    """B-18-3C-PREWARM-DEFAULT-ON — operators may set False to disable warmup."""
+    entry = _entry(concurrent_cache_warmup=False)
+    assert entry.concurrent_cache_warmup is False
+
+
 def test_workload_class_mandatory() -> None:
     with pytest.raises(ValidationError):
         WorkflowManifestEntry(  # type: ignore[call-arg]

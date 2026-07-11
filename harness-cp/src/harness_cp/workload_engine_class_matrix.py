@@ -66,11 +66,13 @@ class D4MultiplicativeTunable(BaseModel):
     topology_pattern: TopologyPattern
     cascade_policy: CascadePolicy
     concurrent_cache_warmup: bool = False
-    """B-18-3C-PREWARM (ADR-D4 §1.8). When True and topology is PARALLELIZATION
-    under PROCEED policy, the driver serializes branch[0] before releasing
-    branches[1..N-1] to warm the shared Anthropic prefix cache. Opt-in
-    default-False — byte-identical at default; see B-18-3C-PREWARM-DEFAULT-ON
-    for the ADR §1.8(f) required-at-cap>1 flip once the mechanism is proven."""
+    """ADR-D4 §1.8 concurrent-prompt-cache warm-up resolved value (B-18-3C-PREWARM).
+
+    When True and topology is PARALLELIZATION under PROCEED policy, the driver
+    serializes branch[0] before releasing branches[1..N-1] to warm the shared
+    Anthropic prefix cache. WME default True per §1.8(f) (B-18-3C-PREWARM-DEFAULT-ON,
+    CP spec v1.89 §25.17); this model default False is for non-PARALLELIZATION
+    topologies that call d4_tunable() without the param."""
 
 
 # --- §11.3 structural-exclusion set -----------------------------------------
@@ -120,8 +122,10 @@ def d4_tunable(
 
     Persona tier influences the `cascade_policy` default: more conservative
     tiers default to `PAUSE`, solo-developer defaults to `PROCEED`.
-    `concurrent_cache_warmup` threads the ADR-D4 §1.8 warm-up opt-in (default
-    False — byte-identical; see B-18-3C-PREWARM-DEFAULT-ON for the flip)."""
+    `concurrent_cache_warmup` threads the ADR-D4 §1.8 warm-up flag from the
+    manifest entry (WME default True per §1.8(f)); non-PARALLELIZATION callers
+    omit this param and inherit the function-parameter default of False — the
+    predicate guards warmup to CohortKeyCapable dispatchers regardless."""
     if persona_tier is PersonaTier.SOLO_DEVELOPER:
         cascade_policy = CascadePolicy.PROCEED
     elif persona_tier is PersonaTier.TEAM_BINDING:

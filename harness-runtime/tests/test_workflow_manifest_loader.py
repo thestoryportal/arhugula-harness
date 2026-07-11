@@ -544,6 +544,9 @@ def test_optional_field_absent_uses_pydantic_carrier_default(tmp_path: Path) -> 
     assert (
         workflow.manifest_entry.fanout_timeout_disposition is FanoutTimeoutDisposition.FAIL_CLOSED
     )
+    # `concurrent_cache_warmup` not present → WME default True applies (B-18-3C-PREWARM-DEFAULT-ON,
+    # CP spec v1.89 §25.17); ADR-D4 §1.8(f) required-at-cap>1.
+    assert workflow.manifest_entry.concurrent_cache_warmup is True
 
 
 # AC #4 — YAML↔TOML round-trip invariant (§14.19.4 #8)

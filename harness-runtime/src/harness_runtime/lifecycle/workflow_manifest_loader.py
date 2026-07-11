@@ -162,7 +162,7 @@ class _WorkflowSection(BaseModel):
     entry_version: int = 1
     default_gate_level: GateLevel | None = None
     fanout_timeout_disposition: FanoutTimeoutDisposition = FanoutTimeoutDisposition.FAIL_CLOSED
-    concurrent_cache_warmup: bool = False
+    concurrent_cache_warmup: bool = True
     layer_budgets: list[Any] = []
     fallback_chain: dict[str, Any] | None = None
     hitl_placements: list[Any] = []
