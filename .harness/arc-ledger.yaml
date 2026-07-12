@@ -46,12 +46,39 @@
 snapshot:
   frozen_total: 11
   frozen_done: 11
-  standalone_closed: 86
+  standalone_closed: 87
   standalone_gated: 0
   standalone_resolved: 4
-  standalone_registered: 8
+  standalone_registered: 7
   rfs1_status: active
   source: ".harness/beyond-mvp-capability-boundary-ledger.md"
+  # FRONTIER NOTE (2026-07-12, B-OD17-EVAL-LOOP-TOOLING closed — R-FS-2 Wave 2
+  # fourth arc). standalone_closed 86→87, standalone_registered 8→7. Deterministic
+  # holdout sampler (harness_od.holdout_set, sorted-trace-id + random.Random(seed)
+  # sample over the sqlite ring buffer) + append-only JSONL review ledger
+  # (holdout_review_ledger) + operator-authored assertion-stub scaffolder
+  # (holdout_assertion_scaffold, always-NotImplementedError until hand-edited) +
+  # harness-inspect --holdout-sample/--holdout-review/--holdout-scaffold CLI. Hard
+  # boundary held throughout: zero model calls, proven three ways (AST import/call
+  # scan of the three modules; a socket.connect-blocking full-loop CLI drive; the
+  # design's own docstrings). advisor() review before PR caught three real gaps
+  # fixed pre-merge: (1) `_run_holdout_sample` only caught `sqlite3.DatabaseError`
+  # at connect, not at the actual read — a wrong-schema collector db crashed with a
+  # raw traceback instead of RT-FAIL-INSPECT-PATH (same defect class B-OD19 round 2
+  # caught for --browse); fixed + a wrong-schema regression test added. (2) the
+  # sampler ran the ring-buffer loop for ANY non-excluded cell, but §17.3 binds the
+  # ring-buffer/self-curation loop to solo-developer cells only (team/multi-tenant
+  # bind to a cell-committed backend); fixed by gating `sample_holdout_traces`
+  # through `run_husain_loop_at_cell` (wires the previously-orphaned
+  # `HusainLoopBinding`/`PER_CELL_EVAL_DASHBOARD_BINDINGS`) and raising the new
+  # `WrongLoopBindingError` for any other cell — a team-cell rejection test added.
+  # (3) honesty-scoping: the module docstring now states plainly that sampling is
+  # primitive-agnostic in v1 (both holdout-evaluable primitives draw the identical
+  # sample for a given seed) and that the sqlite ring buffer this module reads has
+  # no production writer as of this arc (per B-OD19's own reconciliation note) — the
+  # tooling is verified against seeded data, not yet exercised by a live production
+  # span-emission path. workspace-wide 5639 passed/41 skip/1 xfail; pyright 0/0/0;
+  # ruff clean. Next: Wave 2 continues with B-OD18-DRIFT-ALGORITHM.
   # FRONTIER NOTE (2026-07-12, B-OD19-LOCAL-INSPECTION closed — R-FS-2 Wave 2 third
   # arc). standalone_closed 85→86, standalone_registered 9→8. All three slices closed:
   # (a) TUI trace browser (harness_runtime.admin.trace_browser + harness-inspect
@@ -2027,11 +2054,12 @@ arcs:
   - id: B-OD17-EVAL-LOOP-TOOLING
     title: "Operator-manual eval review-loop tooling + holdout-set construction (C-OD-17 §17.3; NO model-judge)"
     kind: standalone
-    status: registered
-    decompose_at_open: true
+    status: closed
+    pr: "#944"
     owner_axis: "OD"
     parent_arc: R-FS-2
     anticipated_scope: "C-OD-17 §17.3 (OD spec v1.2 line 976): the Husain manual-review, categorize, automate, align loop runs against the ring buffer with operator self-curation; the deferral envelope defers the holdout-set construction protocol + loop tooling + per-cell dashboard query authoring to phase-6. HARD BOUNDARY: the standing eval-harness-as-governance-gate REFUSAL — the committed surface is operator-MANUAL review tooling; the kappa/TPR/TNR/gold-set numbers are research-only (excluded); any model-judge component proposal = halt + Class-1 fork, not this arc. Build: a deterministic holdout sampler (N traces from the ring buffer into a versioned holdout file); a review-loop CLI or TUI-browser view (composes with the OD19 arc, non-blocking); categorization appended to a durable review ledger; the automate step scaffolds operator-authored assertion stubs checked into the repo (tooling scaffolds the file; the human writes the assertion). Witnesses: holdout determinism; review round-trip persists; zero model calls in the loop (control assert)."
+    close_note: "Built per anticipated scope. New harness_od.holdout_set (sample_holdout_traces: sorted-trace-id base ordering + random.Random(seed).sample — determinism witness; HoldoutSet/HoldoutTraceRef frozen models; JSON read/write round-trip); harness_od.holdout_review_ledger (append-only JSONL ReviewEntry — the durable review round-trip); harness_od.holdout_assertion_scaffold (always-raises-NotImplementedError stub source, category+notes carried in the docstring, never overwrites an operator's in-progress hand-authored assertion). harness-inspect gains --holdout-sample/--holdout-review/--holdout-scaffold reusing the B-OD19 read-only span-store opener. advisor() review before PR caught three real gaps, all fixed pre-merge: (1) the sample path only caught sqlite3.DatabaseError at connect, not at the actual read query, so a wrong-schema collector db crashed with a raw traceback instead of RT-FAIL-INSPECT-PATH — the same defect class B-OD19 round 2 caught for --browse; fixed (catch at both the connect and the read step) with a new wrong-schema regression test mirroring the --browse one. (2) the sampler ran the ring-buffer loop for any non-excluded cell, but §17.3 binds the ring-buffer/self-curation loop to solo-developer cells only (team/multi-tenant bind to a cell-committed backend the sampler never reads); fixed by gating sample_holdout_traces through run_husain_loop_at_cell (wires the previously-orphaned HusainLoopBinding/PER_CELL_EVAL_DASHBOARD_BINDINGS rather than leaving them unconsumed) and raising a new WrongLoopBindingError for any other cell, with a team-cell rejection test. (3) honesty-scoping: the module docstring states plainly that sampling is primitive-agnostic in v1 (both holdout-evaluable primitives draw the identical sample for a given seed — deferred to discretion per §17.3, not silently overclaimed) and that the sqlite ring buffer this module reads has no production writer as of this arc (per B-OD19's own reconciliation note) — the tooling is verified against seeded test data; the composed real-spans-to-assertion chain is not yet live in production. Zero-model-calls hard boundary proven three ways: an AST import/call scan across the three new modules for provider/dispatcher/judge-shaped tokens; a full sample->review->scaffold CLI drive with socket.socket.connect patched to raise on any attempt; the design's own docstrings. workspace-wide 5639 passed/41 skip/1 xfail; pyright 0/0/0; ruff clean."
     units: []
     ledger_ref: ".harness/r-fs-2-final-closure-implementation-plan-v1.md"
 

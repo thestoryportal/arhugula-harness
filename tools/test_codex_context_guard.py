@@ -399,7 +399,7 @@ def test_dashboard_snapshot_normalization_ignores_volatile_dashboard_fields() ->
         b'const DATA = {"live_head": "abc123", '
         b'"live_anchor": {"git_head": "abc123", "hash": "aaa111", "fork_count": "45", '
         b'"recent_prs": [{"pr": "PR #1", "date": "2026-06-07", "note": "old"}]}, '
-        b'"actions": [1], '
+        b'"actions": [1], "open_prs": [], '
         b'"cadence": [{"date": "2026-06-07", "count": 2}], "pr_cadence": []};'
     )
     same_except_volatile = (
@@ -407,7 +407,7 @@ def test_dashboard_snapshot_normalization_ignores_volatile_dashboard_fields() ->
         b'const DATA = {"live_head": "def456", '
         b'"live_anchor": {"git_head": "def456", "hash": "bbb222", "fork_count": "45", '
         b'"recent_prs": [{"pr": "PR #2", "date": "2026-06-08", "note": "new"}]}, '
-        b'"actions": [1], '
+        b'"actions": [1], "open_prs": [{"number": 944, "title": "self", "branch": "b"}], '
         b'"cadence": [{"date": "2026-06-07", "count": 3}], "pr_cadence": []};'
     )
     changed_payload = (
@@ -415,7 +415,7 @@ def test_dashboard_snapshot_normalization_ignores_volatile_dashboard_fields() ->
         b'const DATA = {"live_head": "def456", '
         b'"live_anchor": {"git_head": "def456", "hash": "bbb222", "fork_count": "45", '
         b'"recent_prs": [{"pr": "PR #2", "date": "2026-06-08", "note": "new"}]}, '
-        b'"actions": [2], '
+        b'"actions": [2], "open_prs": [], '
         b'"cadence": [{"date": "2026-06-07", "count": 3}], "pr_cadence": []};'
     )
 
