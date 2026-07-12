@@ -46,12 +46,20 @@
 snapshot:
   frozen_total: 11
   frozen_done: 11
-  standalone_closed: 81
+  standalone_closed: 82
   standalone_gated: 0
   standalone_resolved: 4
-  standalone_registered: 13
+  standalone_registered: 12
   rfs1_status: active
   source: ".harness/beyond-mvp-capability-boundary-ledger.md"
+  # FRONTIER NOTE (2026-07-12, B-SKILL-FRONTMATTER-VALIDATOR closed at PR #937 — R-FS-2
+  # Wave 1 third arc). standalone_closed 81→82, standalone_registered 13→12. New
+  # harness_as.skill_frontmatter_validator.validate_skill_frontmatter — pure fail-closed
+  # validator (name ≤64 chars; description non-empty ≤1024; version + version_sha both
+  # non-empty) mirroring validate_tool_contract_at_registration; wired at the real
+  # load_skills_from_dir load path via new SkillFrontmatterRejectedError, not tests-only.
+  # Codex round 1 caught whitespace-only fields passing as VALID (bare truthiness); fixed
+  # with .strip() + 3 regression tests; round 2 clean. Next: B-AUDIT-KEY-ROTATION-RUNTIME.
   # FRONTIER NOTE (2026-07-12, B-WAL-F1-01-EXACTLY-ONCE closed at PR #936 — R-FS-2 Wave 1
   # second arc). standalone_closed 80→81, standalone_registered 14→13. WAL_SEGMENT
   # completed-run-retry duplicate cp.resume-attempted emission (C-CP-07 §7.4 floor-(ii))
@@ -62,7 +70,7 @@ snapshot:
   # (should have been `pr: "#935"` per the documented convention — CI's arc-ledger tally
   # gate on main had been passing only because main is unprotected and the malformed field
   # was never re-checked post-merge; caught here because this PR's own review triggered a
-  # fresh run of the same gate against the full ledger). Next: B-SKILL-FRONTMATTER-VALIDATOR.
+  # fresh run of the same gate against the full ledger).
   # FRONTIER NOTE (2026-07-11, R-FS-2 REGISTRATION — the anticipated flip fires): the
   # R-FS-2 final-closure umbrella (status remaining) + 15 registered child arcs enter the
   # register per .harness/r-fs-2-final-closure-implementation-plan-v1.md (Unit-0);
@@ -1929,13 +1937,14 @@ arcs:
   - id: B-SKILL-FRONTMATTER-VALIDATOR
     title: "SKILL.md frontmatter constraint enforcement at the skills filesystem-load seam"
     kind: standalone
-    status: registered
-    decompose_at_open: true
+    status: closed
+    pr: "#937"
     owner_axis: "AS"
     parent_arc: R-FS-2
     anticipated_scope: "Enforce the substrate-committed SKILL.md frontmatter constraints: name ≤64 chars + description non-empty ≤1024 (ADR-D3 Rationale, HIGH-cited Anthropic schema) + frontmatter.version and version_sha both required (ADR-D3 §1.8.1 line 331). External agentskills.io extras (lowercase-alphanumeric, vendor reserved words) are NOT committed in-substrate (greps empty; the AS spec defers authoring schemata beyond frontmatter to discretion) — enforcing them requires a spec-delta leg first; record the choice either way. Pure fail-closed validation function with a typed rejection enum, mirroring the tool-contract registration validator shape (tool_contract.py:167-194). Grounding-first: locate the exact spec table; confirm no validator hides in the procedural-tier snapshot/loaders. Witnesses: rejection test per constraint + accepted-fixture control; wired at the real load path (not tests-only)."
     units: []
     ledger_ref: ".harness/r-fs-2-final-closure-implementation-plan-v1.md"
+    close_note: "PR #937. New harness_as.skill_frontmatter_validator.validate_skill_frontmatter — pure fail-closed validation function with a typed SkillFrontmatterRejectionReason enum (name ≤64 chars; description non-empty ≤1024; version + version_sha both non-empty), mirroring validate_tool_contract_at_registration's shape. Wired at the real load path: harness_runtime.lifecycle.skills.load_skills_from_dir now raises SkillFrontmatterRejectedError on any violation — confirmed by 6 new wiring tests at test_lifecycle_skills.py exercising load_skills_from_dir directly (not tests-only on the pure function). Grounding: no prior production validator existed (SkillManifest's Pydantic type only enforced field presence, not the substrate-committed length/non-emptiness constraints); the pre-existing validate_skill_attributes_carry_both_version_fields (anthropic_attribute_namespaces.py) is a separate span-attribute-presence check at skill.activation emission time, not a frontmatter-load-time check — no duplication. Codex out-of-family review round 1 caught a real P2 (whitespace-only description/version/version_sha passed as VALID via bare truthiness); fixed with .strip() before the emptiness check + 3 new regression tests; round 2 clean. Scope: only the two substrate-committed constraints enforced; external agentskills.io extras left alone per X-AL-3. harness-as 337/337; harness-runtime 2389/2429 (40 skip); pyright 0/0/0; ruff clean; CI 15/15."
 
   - id: B-AUDIT-KEY-ROTATION-RUNTIME
     title: "Two-row audit-key rotation dual-signature runtime path (ADR-D5 v1.3 §1.4 Option (a))"
