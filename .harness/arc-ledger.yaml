@@ -46,12 +46,31 @@
 snapshot:
   frozen_total: 11
   frozen_done: 11
-  standalone_closed: 91
+  standalone_closed: 92
   standalone_gated: 0
   standalone_resolved: 4
-  standalone_registered: 3
+  standalone_registered: 2
   rfs1_status: active
   source: ".harness/beyond-mvp-capability-boundary-ledger.md"
+  # FRONTIER NOTE (2026-07-12, B-COST-REPLAY-DEDUP-WITNESS closed — R-FS-2
+  # Wave 3 fourth/final arc, verify-first, GREEN, no fix). standalone_closed
+  # 91->92, standalone_registered 3->2. Initial grounding hypothesized the CP
+  # driver's F2 committed-step-prefix skip made journal_resume's cost-
+  # attribution call site unreachable on replay -- EMPIRICALLY FALSE (the
+  # resume_at if/elif chain has no branch for PURE_PATTERN_NO_ENGINE;
+  # instrumented dispatch counting confirmed the dispatcher fires twice on a
+  # completed-run retry). The REAL mechanism is the IS state-ledger's
+  # content-addressed idempotency-key dedup at append_ledger_entry (C-IS-07
+  # §7.1): the cost-audit payload uses a constant timestamp="" MVP sentinel
+  # (not wall-clock), so a replayed identical dispatch produces a byte-
+  # identical entry_hash -> the second write is IDEMPOTENT_NOOP. Mutation-
+  # probed both ways: breaking _determine_resume_at had no effect (confirms
+  # it's not on this path); breaking the IS dedup check turned the witness
+  # RED (confirms it's a real detector, not a tautology). dedupe_on_replay
+  # (OD) remains confirmed unwired per the original grounding -- unmodified,
+  # and not the operative mechanism here either. No forward item registered
+  # -- the invariant already holds. Full record at
+  # .harness/b-cost-replay-dedup-witness-closure-record.md.
   # FRONTIER NOTE (2026-07-12, B-OD-ENVELOPE-P6-SWEEP closed — R-FS-2 Wave 3
   # third arc, grounding-only, no code change). standalone_closed 90→91,
   # standalone_registered 4→3. Disposition table over 15 entries (11 v1.2 +
@@ -2193,11 +2212,12 @@ arcs:
   - id: B-COST-REPLAY-DEDUP-WITNESS
     title: "Replay-dedup cost-join verification witness (ADR-D6 §1.5 / C-OD-14)"
     kind: standalone
-    status: registered
-    decompose_at_open: true
+    status: closed
+    pr: "#<pending> (b-od18-drift-algorithm branch — flips registered → closed; standalone_closed 91→92, standalone_registered 3→2)"
     owner_axis: "OD"
     parent_arc: R-FS-2
     anticipated_scope: "ADR-D6 §1.5 / C-OD-14: cost attribution joins on the idempotency key; durable replay must not double-count. Flagged MODERATE (spec-committed, carried via the idempotency join, not independently re-executed) at the NotebookLM completeness audit. Verify-first: a witness replaying a completed step (journal-resume path) asserting the cost rollup is emitted exactly once; if the join is missing, the smallest fix lands at the cost-record accumulator."
+    close_note: "Verify-first close, GREEN, no fix. Initial grounding hypothesized the CP driver's F2 committed-step-prefix skip made journal_resume's cost-attribution call site unreachable on replay — empirically FALSE: the resume_at if/elif chain in workflow_driver.py has no branch for EngineClass.PURE_PATTERN_NO_ENGINE, so resume_at stays 0 and the step dispatcher fires again on every re-drive (confirmed by instrumented dispatch-call counting: 2 invocations across 2 execute_workflow calls with the same run_id). The REAL mechanism is the IS state-ledger's content-addressed idempotency-key dedup at append_ledger_entry (harness-is/src/harness_is/state_ledger_write.py, C-IS-07 §7.1): a write whose idempotency_key already exists returns IDEMPOTENT_NOOP and is dropped. The cost-audit payload's entry_hash (harness-od/src/harness_od/audit_ledger_types.py:compute_entry_hash) is a pure SHA-256 over canonical JSON with no wall-clock component — cost_record_audit_writer.py:_project_cost_record_to_audit_payload defaults timestamp=\"\" (documented MVP sentinel) and attribute_llm_dispatch_cost never overrides it — so a replayed identical dispatch (same span_id/workflow_id/parent_action_id/tokens) produces a byte-identical entry_hash, deduped at the IS layer. Mutation-probed both ways (ad hoc, not committed): patching _determine_resume_at to always return 0 had no effect (confirms it's not on this path); patching append_ledger_entry to always APPENDED (removing the dedup check) turned the witness RED (count_after_r2==2), confirming it is a genuine detector. The committed negative control (test_journal_resume_fresh_second_run_id_emits_independently) proves the ==1 assertions are not vacuous: two distinct run_ids independently emit 2 entries. dedupe_on_replay (harness_od.idempotency_join_dedup) remains confirmed unwired at all four production cost-emission call sites per the original grounding — unmodified, and not the operative mechanism here either. No forward item registered — the invariant already holds via the IS-layer dedup. New test only (test_b_cost_replay_dedup_witness.py); no production code change. Full record at .harness/b-cost-replay-dedup-witness-closure-record.md."
     units: []
     ledger_ref: ".harness/r-fs-2-final-closure-implementation-plan-v1.md"
 
