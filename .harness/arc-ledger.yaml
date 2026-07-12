@@ -46,12 +46,29 @@
 snapshot:
   frozen_total: 11
   frozen_done: 11
-  standalone_closed: 89
+  standalone_closed: 90
   standalone_gated: 0
   standalone_resolved: 4
-  standalone_registered: 5
+  standalone_registered: 4
   rfs1_status: active
   source: ".harness/beyond-mvp-capability-boundary-ledger.md"
+  # FRONTIER NOTE (2026-07-12, B-MCP-PRIMITIVE-SIG-GATE closed — R-FS-2 Wave 3
+  # second arc, grounding-only, no code change). standalone_closed 89→90,
+  # standalone_registered 5→4. Branch B (research-only-gate / attribute-
+  # complete): C-AS-14's own contract surface is observability-only (PRD R-AS-07
+  # "observability emission half"); every cite of mcp.primitive.signature.sha256
+  # frames it as tool-poisoning DETECTION via always-sampled telemetry (§14.8),
+  # never as a registration-time verification/prevention gate. Affirmative
+  # absence check: no reject/refuse verb anywhere in the AS spec attaches to a
+  # signature/mutation check. advisor()-checked pre-close: verified attribute-
+  # complete BY EXECUTION — _compute_primitive_signature_hash computes fresh at
+  # every dispatch with no persistence/comparison, and reachability is proven by
+  # test_u_rt_86's unconditional real-subprocess e2e asserting the full 7-attr
+  # set present on a real span. ToolRegistry.register guards only duplicate/
+  # reserved names, no content-hash gate. Forward item registered (not built):
+  # an active first-seen-hash mismatch-refusal gate would be a genuinely new
+  # committed behavior needing a Class 1 fork before implementation. Full record
+  # at .harness/b-mcp-primitive-sig-gate-closure-record.md.
   # FRONTIER NOTE (2026-07-12, B-MCP-OAUTH-RS-ENFORCE closed — R-FS-2 Wave 3 first
   # arc, grounding-only, no code change). standalone_closed 88→89,
   # standalone_registered 6→5. Branch A (deployment-binding-honored): AS spec
@@ -2132,11 +2149,12 @@ arcs:
   - id: B-MCP-PRIMITIVE-SIG-GATE
     title: "mcp.primitive.signature.sha256 registration-time verification gate (grounding-first; rug-pull protection)"
     kind: standalone
-    status: registered
-    decompose_at_open: true
+    status: closed
+    pr: "#948"
     owner_axis: "AS"
     parent_arc: R-FS-2
     anticipated_scope: "The 7-attribute mcp.* namespace including mcp.primitive.signature.sha256 is canonical + emitted (AS spec §14.3 line 207; the CP-side client namespace emitter owns producer discipline). The REGISTRATION-TIME verification gate (rug-pull protection: verify a tool description/schema hash has not mutated since first registration) has no located code, and its spec commitment is unpinned — the concept may be research-only beyond the attribute. Grounding decides: locate a committed verify-on-mutation behavior in the AS §14.3 body + the tool-registration contract + ADR-D2. Branch A (committed): persist the first-seen hash per primitive in the tool registry; on re-registration/dispatch mismatch emit a violation (compose with existing violation event shapes) + fail closed per gate level; witnesses: tamper-description triggers violation + refusal; stable-hash control. Branch B (attr-only): close as research-only-gate / attribute-complete with cites."
+    close_note: "Grounding-first close, Branch B (research-only-gate / attribute-complete), no code change. C-AS-14's own contract surface is observability-only (PRD R-AS-07 'observability emission half'); every cite of mcp.primitive.signature.sha256 across AS spec/ADR-D2/ADR-D3 frames it as tool-poisoning DETECTION, never verification/prevention. The committed detection mechanism is the always-sampled telemetry (§14.8 mcp.tool.call head=1.0 with tail-keep) — downstream trace analysis over time IS the designed detection method; an in-line registration gate would be redundant with that commitment, not required by it (tamper-EVIDENCE is committed; tamper-PREVENTION is not). Affirmative absence check (not just a keyword-miss): grepped the AS spec directly for reject/refuse near registration — every hit is unrelated (C-AS-03 minimum_tier authoring-time; C-AS-10 MCP-server REFUSE at trust-level-0, covered by B-MCP-OAUTH-RS-ENFORCE; search_tools name reservation; schema_violation per-call response mismatch) — none attaches an enforcement verb to a signature/mutation check. The register's own pointer to 'C-AS-03 registration contract' is a mis-cite (C-AS-03 is minimum_tier, unrelated) — corrected for future citers, doesn't change disposition. advisor()-checked before finalizing: verified attribute-complete BY EXECUTION, not by call-site reading — _compute_primitive_signature_hash (runtime_tool_dispatcher.py:1212) computes fresh at every dispatch with no persistence/comparison/first-seen store (confirmed by reading the body), threaded to mcp_client_namespace_emitter.py:204's span.set_attribute (caller-supplied value only, no compute/store/compare there either), and REACHABILITY is proven by test_u_rt_86_mcp_client_external_server_e2e.py:349-353 asserting the full 7-attr set present on a real external-stdio-subprocess span (same test R-800 cites as unconditional/no-LLM/9-9-green; no skipif marker). ToolRegistry.register (tool_registry.py) confirmed to guard only DuplicateToolNameError/ReservedToolNameError — no content-hash mutation-detection gate anywhere in the registration path. Forward item registered (not built): an active first-seen-hash-persistence + mismatch-refusal gate is a genuinely new committed behavior (spec commits an attribute for telemetry-based detection, not an enforcement gate) — building it now would be X-AL-3 silent design extension; would need a Class 1 fork to AS spec §14 first. Full record at .harness/b-mcp-primitive-sig-gate-closure-record.md."
     units: []
     ledger_ref: ".harness/r-fs-2-final-closure-implementation-plan-v1.md"
 
