@@ -247,6 +247,7 @@ def _run_browse(collector_path: Path | None) -> int:
     import curses
 
     from harness_runtime.admin.trace_browser import (
+        compute_operator_burden_rollups,
         open_readonly_span_store,
         run_trace_browser_tui,
     )
@@ -261,10 +262,11 @@ def _run_browse(collector_path: Path | None) -> int:
         )
         return _EXIT_INSPECT_PATH
     try:
-        # Validate the `spans` table exists before entering curses — a schema
-        # error surfacing mid-render inside `curses.wrapper` would print a
-        # raw traceback instead of a clean RT-FAIL-INSPECT-PATH exit.
-        conn.execute("SELECT 1 FROM spans LIMIT 1")
+        # Run the real rollup query before entering curses — a wrong/old
+        # collector-db schema (missing table, missing column) then surfaces
+        # here as a clean RT-FAIL-INSPECT-PATH exit rather than a raw
+        # traceback mid-render inside `curses.wrapper`.
+        rollups = compute_operator_burden_rollups(conn)
     except sqlite3.OperationalError as exc:
         conn.close()
         print(
@@ -274,7 +276,7 @@ def _run_browse(collector_path: Path | None) -> int:
         )
         return _EXIT_INSPECT_PATH
     try:
-        curses.wrapper(run_trace_browser_tui, conn)
+        curses.wrapper(run_trace_browser_tui, rollups)
     finally:
         conn.close()
     return _EXIT_OK

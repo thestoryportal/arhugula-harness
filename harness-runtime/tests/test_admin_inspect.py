@@ -368,12 +368,44 @@ def test_browse_non_span_store_db_exits_nonzero_instead_of_crashing(
     assert called is False  # never reached curses
 
 
+def test_browse_wrong_schema_db_exits_nonzero_instead_of_crashing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A sqlite file with a `spans` table but the WRONG columns (e.g. a stale
+    collector db from an older schema) must also exit cleanly — the fix runs
+    the real rollup query (not just `SELECT 1 FROM spans`) before curses."""
+    import curses
+    import sqlite3
+
+    db_path = tmp_path / "wrong-schema.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute("CREATE TABLE spans (span_id TEXT PRIMARY KEY)")
+    conn.commit()
+    conn.close()
+
+    called = False
+
+    def _fake_wrapper(func: object, *args: object) -> None:
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(curses, "wrapper", _fake_wrapper)
+
+    code = main(["--browse", "--collector-path", str(db_path)])
+    err = capsys.readouterr().err
+
+    assert code == 2
+    assert "RT-FAIL-INSPECT-PATH" in err
+    assert called is False  # never reached curses
+
+
 def test_browse_opens_readonly_and_dispatches_to_curses_wrapper(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`--browse` opens the sqlite store read-only + hands off to
-    `curses.wrapper(run_trace_browser_tui, conn)` — verified by monkeypatching
-    `curses.wrapper` (no real terminal available under pytest)."""
+    """`--browse` opens the sqlite store read-only, computes the rollups, and
+    hands off to `curses.wrapper(run_trace_browser_tui, rollups)` — verified
+    by monkeypatching `curses.wrapper` (no real terminal available under
+    pytest)."""
     import curses
 
     from harness_od.sqlite_span_store import initialize_span_store
@@ -395,6 +427,8 @@ def test_browse_opens_readonly_and_dispatches_to_curses_wrapper(
     func, args = calls[0]
     assert getattr(func, "__name__", None) == "run_trace_browser_tui"
     assert len(args) == 1
+    (rollups,) = args
+    assert len(rollups) == 5  # the 5 operator-burden eval primitives
 
 
 # ---------------------------------------------------------------------------

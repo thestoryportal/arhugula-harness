@@ -193,9 +193,15 @@ def open_readonly_span_store(db_path: Path) -> sqlite3.Connection:
     return sqlite3.connect(uri, uri=True)
 
 
-def run_trace_browser_tui(stdscr: object, conn: sqlite3.Connection) -> None:
+def run_trace_browser_tui(stdscr: object, rollups: tuple[OperatorBurdenRollup, ...]) -> None:
     """Thin curses driver. All rendering logic lives in the pure functions
     above; this loop only handles terminal I/O + keypress dispatch.
+
+    Takes precomputed `rollups` (not a live connection) — the caller runs
+    `compute_operator_burden_rollups(conn)` *before* entering
+    `curses.wrapper`, so a malformed/wrong-schema span-store sqlite file
+    raises `sqlite3.OperationalError` where the caller can map it to a clean
+    `RT-FAIL-INSPECT-PATH` exit rather than crashing mid-render inside curses.
 
     `stdscr` is the `curses` window object passed by `curses.wrapper(...)`
     (typed `object` here to keep this module importable/testable on
@@ -203,10 +209,8 @@ def run_trace_browser_tui(stdscr: object, conn: sqlite3.Connection) -> None:
     only when this function actually runs).
     """
     import curses
-    from typing import cast
 
     win = cast("curses.window", stdscr)
-    rollups = compute_operator_burden_rollups(conn)
     selected = 0
     curses.curs_set(0)
     while True:
