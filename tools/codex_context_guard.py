@@ -102,6 +102,13 @@ DASHBOARD_JSON_LIVE_ANCHOR_RECENT_PRS_RE = re.compile(
 )
 DASHBOARD_META_LIVE_HEAD_RE = re.compile(rb'(<meta name="dashboard-live-head" content=")[^"]*(")')
 DASHBOARD_JSON_COMMIT_CADENCE_RE = re.compile(rb'("cadence":\s*)\[[^\]]*\](,\s*"pr_cadence")')
+# `open_prs` is a live `gh pr list --state open` query — it always includes the PR
+# regenerating it (e.g. this arc's own just-opened PR), so a local regen (gh
+# available) and CI's regen (gh unavailable, degrades to []) never byte-match on
+# this field alone. Strip it like `recent_prs`/`cadence` rather than let every
+# arc-closing PR HARD-fail DASHBOARD_SNAPSHOT_STALE for a reason unrelated to
+# actual dashboard content drift.
+DASHBOARD_JSON_OPEN_PRS_RE = re.compile(rb'("open_prs":\s*)\[[^\]]*\]')
 
 
 @dataclass(frozen=True)
@@ -502,6 +509,7 @@ def _normalize_dashboard_snapshot(raw: bytes) -> bytes:
         rb'\1[{"pr":"<RECENT>","date":"<RECENT>","note":"<RECENT>"}]', raw, count=1
     )
     raw = DASHBOARD_META_LIVE_HEAD_RE.sub(rb"\1<LIVE_HEAD>\2", raw, count=1)
+    raw = DASHBOARD_JSON_OPEN_PRS_RE.sub(rb"\1[]", raw, count=1)
     return DASHBOARD_JSON_COMMIT_CADENCE_RE.sub(rb'\1[{"date":"<CADENCE>","count":0}]\2', raw)
 
 
