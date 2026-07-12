@@ -241,6 +241,13 @@ from harness_as.secret_passthrough import (
     redact_secrets_in_input_span_attributes,
     redact_secrets_in_output,
 )
+from harness_as.skill_frontmatter_validator import (
+    SKILL_DESCRIPTION_MAX_LENGTH,
+    SKILL_NAME_MAX_LENGTH,
+    SkillFrontmatterRejectionReason,
+    SkillFrontmatterValidationResult,
+    validate_skill_frontmatter,
+)
 from harness_as.sub_agent_sandbox_tier import (
     SubAgentBoundaryViolation,
     SubAgentBoundaryViolationKind,
@@ -284,6 +291,8 @@ __all__ = [
     "SANDBOX_VIOLATION_ATTRIBUTES",
     "SECRET_FAIL_CLASS_METADATA",
     "SENSITIVE_DATA_EXCLUSIONS",
+    "SKILL_DESCRIPTION_MAX_LENGTH",
+    "SKILL_NAME_MAX_LENGTH",
     "TIER_RESOLUTION_TABLE",
     "ASConsumingAxis",
     "ASSeamId",
@@ -376,6 +385,8 @@ __all__ = [
     "SecretRef",
     "SecretResolutionMechanism",
     "SecretScope",
+    "SkillFrontmatterRejectionReason",
+    "SkillFrontmatterValidationResult",
     "SkillVersionValidationResult",
     "SpanEventKind",
     "SpanValidationResult",
@@ -453,6 +464,7 @@ __all__ = [
     "validate_no_secret_in_span_attributes",
     "validate_no_secret_in_static_prefix",
     "validate_skill_attributes_carry_both_version_fields",
+    "validate_skill_frontmatter",
     "validate_span_attributes_against_exclusions",
     "validate_tool_contract_at_registration",
     "verify_secret_fetch_entry_in_chain",

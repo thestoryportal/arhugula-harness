@@ -12,10 +12,16 @@ import json
 from pathlib import Path
 
 import pytest
+from harness_as.skill_frontmatter_validator import (
+    SKILL_DESCRIPTION_MAX_LENGTH,
+    SKILL_NAME_MAX_LENGTH,
+    SkillFrontmatterRejectionReason,
+)
 from harness_core import SkillID
 from harness_runtime.lifecycle.skills import (
     DuplicateSkillError,
     Skill,
+    SkillFrontmatterRejectedError,
     SkillManifest,
     load_skills_from_dir,
 )
@@ -157,3 +163,58 @@ def test_skill_is_frozen(tmp_path: Path) -> None:
 def test_skill_manifest_is_frozen() -> None:
     """`SkillManifest` is a frozen Pydantic model."""
     assert SkillManifest.model_config.get("frozen") is True
+
+
+def test_load_rejects_name_too_long(tmp_path: Path) -> None:
+    """B-SKILL-FRONTMATTER-VALIDATOR — wired at the real load path, not tests-only.
+
+    A manifest with `name` over the committed 64-char ceiling (ADR-D3
+    §Rationale) is rejected at `load_skills_from_dir`, not silently loaded.
+    """
+    _write_manifest(tmp_path / "skills", "too-long-name", name="x" * (SKILL_NAME_MAX_LENGTH + 1))
+    with pytest.raises(SkillFrontmatterRejectedError) as exc_info:
+        load_skills_from_dir(tmp_path / "skills")
+    assert exc_info.value.reason is SkillFrontmatterRejectionReason.NAME_TOO_LONG
+
+
+def test_load_rejects_empty_description(tmp_path: Path) -> None:
+    """`description` empty (ADR-D3 §Rationale: non-empty) is rejected at load."""
+    _write_manifest(tmp_path / "skills", "empty-desc", description="")
+    with pytest.raises(SkillFrontmatterRejectedError) as exc_info:
+        load_skills_from_dir(tmp_path / "skills")
+    assert exc_info.value.reason is SkillFrontmatterRejectionReason.DESCRIPTION_EMPTY
+
+
+def test_load_rejects_description_too_long(tmp_path: Path) -> None:
+    """`description` over the committed 1024-char ceiling is rejected at load."""
+    _write_manifest(
+        tmp_path / "skills",
+        "long-desc",
+        description="x" * (SKILL_DESCRIPTION_MAX_LENGTH + 1),
+    )
+    with pytest.raises(SkillFrontmatterRejectedError) as exc_info:
+        load_skills_from_dir(tmp_path / "skills")
+    assert exc_info.value.reason is SkillFrontmatterRejectionReason.DESCRIPTION_TOO_LONG
+
+
+def test_load_rejects_empty_version(tmp_path: Path) -> None:
+    """`version` empty → MISSING_VERSION (ADR-D3 §1.8.1:331 — both required)."""
+    _write_manifest(tmp_path / "skills", "empty-version", version="")
+    with pytest.raises(SkillFrontmatterRejectedError) as exc_info:
+        load_skills_from_dir(tmp_path / "skills")
+    assert exc_info.value.reason is SkillFrontmatterRejectionReason.MISSING_VERSION
+
+
+def test_load_rejects_empty_version_sha(tmp_path: Path) -> None:
+    """`version_sha` empty → MISSING_VERSION_SHA (operator-supplied override to empty)."""
+    _write_manifest(tmp_path / "skills", "empty-sha", version_sha="")
+    with pytest.raises(SkillFrontmatterRejectedError) as exc_info:
+        load_skills_from_dir(tmp_path / "skills")
+    assert exc_info.value.reason is SkillFrontmatterRejectionReason.MISSING_VERSION_SHA
+
+
+def test_load_accepts_valid_frontmatter(tmp_path: Path) -> None:
+    """Accepted-fixture control — a manifest within every constraint still loads."""
+    _write_manifest(tmp_path / "skills", "within-bounds")
+    skills = load_skills_from_dir(tmp_path / "skills")
+    assert SkillID("within-bounds") in skills

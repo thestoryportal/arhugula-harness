@@ -30,12 +30,14 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
+from harness_as import SkillFrontmatterRejectionReason, validate_skill_frontmatter
 from harness_core import SkillID
 from pydantic import BaseModel, ConfigDict
 
 __all__ = [
     "DuplicateSkillError",
     "Skill",
+    "SkillFrontmatterRejectedError",
     "SkillManifest",
     "compute_git_blob_sha",
     "load_skills_from_dir",
@@ -80,6 +82,25 @@ class DuplicateSkillError(ValueError):
         self.paths = paths
 
 
+class SkillFrontmatterRejectedError(ValueError):
+    """Raised when a manifest violates a committed SKILL.md frontmatter
+    constraint (B-SKILL-FRONTMATTER-VALIDATOR; ADR-D3 §Rationale + §1.8.1:331).
+    """
+
+    def __init__(
+        self,
+        skill_id: SkillID,
+        path: Path,
+        reason: SkillFrontmatterRejectionReason,
+    ) -> None:
+        super().__init__(
+            f"skill {skill_id!r} at {path} rejected: {reason.value}",
+        )
+        self.skill_id = skill_id
+        self.path = path
+        self.reason = reason
+
+
 def compute_git_blob_sha(content: bytes) -> str:
     """Compute the git blob SHA-1 hash for ``content``.
 
@@ -112,6 +133,9 @@ def load_skills_from_dir(skills_dir: Path) -> dict[SkillID, Skill]:
     ------
     DuplicateSkillError
         Two manifests declare the same ``skill_id``.
+    SkillFrontmatterRejectedError
+        A manifest violates a committed SKILL.md frontmatter constraint
+        (name/description length, missing version/version_sha).
     pydantic.ValidationError
         A manifest file fails schema validation.
     """
@@ -136,6 +160,18 @@ def load_skills_from_dir(skills_dir: Path) -> dict[SkillID, Skill]:
             description = data.get("description", "")
             data["body_tokens"] = max(0, len(description) // 4)
         manifest = SkillManifest.model_validate(data)
+        validation = validate_skill_frontmatter(
+            name=manifest.name,
+            description=manifest.description,
+            version=manifest.version,
+            version_sha=manifest.version_sha,
+        )
+        if validation.outcome is not SkillFrontmatterRejectionReason.VALID:
+            raise SkillFrontmatterRejectedError(
+                manifest.skill_id,
+                manifest_path,
+                validation.outcome,
+            )
         prior = path_index.get(manifest.skill_id)
         if prior is not None:
             raise DuplicateSkillError(manifest.skill_id, (prior, manifest_path))
