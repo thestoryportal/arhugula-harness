@@ -2121,7 +2121,7 @@ arcs:
     title: "Remote-MCP L2/L3 OAuth resource-server validation (grounding-first; C-AS-10 §10.3 trust taxonomy)"
     kind: standalone
     status: closed
-    pr: null
+    pr: "#946"
     owner_axis: "AS + runtime"
     parent_arc: R-FS-2
     anticipated_scope: "AS spec C-AS-10 §10.3 four-level streamable_http trust taxonomy (enum built at discriminators.py:31-43; the STDIO tier-3 floor is enforced at sandbox_tier_floor.py:140-142) + the ADR-D2/ADR-D3 OAuth-2.1-mandatory-for-remote commitments (PKCE, RFC 8707 resource indicators; token-passthrough prohibited). Grounding decides the arc: (1) read the §10.3 Deferred-to-implementation-discretion block verbatim — does connection-time OAuth-RS validation sit inside it, and does any committed sentence make L2/L3 connection CONDITIONAL on OAuth-RS status? (2) does ANY streamable-HTTP client path exist at mcp_client_host_factory.py (the external-MCP live e2e proved stdio only)? Branch A: no remote-HTTP client + no committed conditional = close as deployment-binding-honored with cites (fail-closed today: the L0-refuse level + no HTTP path means an un-validated remote connection is structurally impossible). Branch B: a committed conditional exists = build the fail-closed gate at the client-host connect seam (PKCE + resource-indicator checks before L2/L3 session establishment), stdio path byte-unchanged; a LIVE remote-HTTP e2e is credential-gated (Appendix-B pattern, surfaced not auto-fired)."
