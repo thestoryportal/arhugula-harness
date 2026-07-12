@@ -358,14 +358,14 @@ def materialize_ring_buffer_stage(
     """Build the stage 4 OD ring-buffer wiring per C-OD-19 §19.2.
 
     Stage 4 composer. Reads `CollectorConfig.sqlite_rotation_max_rows` +
-    `sqlite_rotation_max_bytes` to derive the OD ring-buffer policy's
-    `default_max_age_hours` and `default_max_bytes_mb` thresholds:
+    `sqlite_rotation_max_bytes` + `sqlite_rotation_max_age_hours` to derive the
+    OD ring-buffer policy's `default_max_age_hours` and `default_max_bytes_mb`
+    thresholds:
 
     - `default_max_bytes_mb = sqlite_rotation_max_bytes / 1_000_000`.
-    - `default_max_age_hours = None` (no age threshold default at HEAD;
-      operator override via a future `CollectorConfig` extension when
-      needed — the spec defers age-threshold defaults to
-      deployment-binding-time per OD C-OD-19 §19.2 acc #10).
+    - `default_max_age_hours = sqlite_rotation_max_age_hours` (default 24 per
+      OD C-OD-19 §19.2 row 2 "Default 24h ring-buffer rotation;
+      operator-tunable" — operator-tunable via `CollectorConfig`).
 
     The composer does NOT start rotation; the orchestrator (U-RT-43) is
     responsible for invoking `rotate_until_within_policy(...)` on the
@@ -390,7 +390,7 @@ def materialize_ring_buffer_stage(
             storage_substrate="SQLITE_LOCAL_FS",
             eviction_policy="RING_BUFFER_FIFO_BY_AGE",
             retention_class="MAX_AGE_OR_MAX_BYTES",
-            default_max_age_hours=None,
+            default_max_age_hours=config.collector.sqlite_rotation_max_age_hours,
             default_max_bytes_mb=max_bytes_mb,
             closure_invariant="FRESH_ON_RESTART_OPTIONAL_PERSISTENCE_BETWEEN_RESTARTS",
         )

@@ -93,6 +93,7 @@ def test_parser_defaults() -> None:
     assert ns.last_n == 10
     assert ns.json is False
     assert ns.collector_path is None
+    assert ns.browse is False
 
 
 def test_parser_flags() -> None:
@@ -313,6 +314,60 @@ def test_inspect_does_not_open_anything_for_write(
 
     assert code == 0
     assert write_attempts == [], f"unexpected write attempts: {write_attempts}"
+
+
+# ---------------------------------------------------------------------------
+# --browse (B-OD19-LOCAL-INSPECTION slice a — C-OD-19 §19.3 TUI trace browser).
+# ---------------------------------------------------------------------------
+
+
+def test_browse_without_collector_path_exits_nonzero(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    code = main(["--browse"])
+    err = capsys.readouterr().err
+    assert code == 2
+    assert "RT-FAIL-INSPECT-PATH" in err
+    assert "--collector-path" in err
+
+
+def test_browse_missing_collector_db_exits_nonzero(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    missing = tmp_path / "does-not-exist.db"
+    code = main(["--browse", "--collector-path", str(missing)])
+    err = capsys.readouterr().err
+    assert code == 2
+    assert "RT-FAIL-INSPECT-PATH" in err
+
+
+def test_browse_opens_readonly_and_dispatches_to_curses_wrapper(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--browse` opens the sqlite store read-only + hands off to
+    `curses.wrapper(run_trace_browser_tui, conn)` — verified by monkeypatching
+    `curses.wrapper` (no real terminal available under pytest)."""
+    import curses
+
+    from harness_od.sqlite_span_store import initialize_span_store
+
+    db_path = tmp_path / "spans.db"
+    initialize_span_store(db_path).close()
+
+    calls: list[tuple[object, tuple[object, ...]]] = []
+
+    def _fake_wrapper(func: object, *args: object) -> None:
+        calls.append((func, args))
+
+    monkeypatch.setattr(curses, "wrapper", _fake_wrapper)
+
+    code = main(["--browse", "--collector-path", str(db_path)])
+
+    assert code == 0
+    assert len(calls) == 1
+    func, args = calls[0]
+    assert getattr(func, "__name__", None) == "run_trace_browser_tui"
+    assert len(args) == 1
 
 
 # ---------------------------------------------------------------------------

@@ -515,6 +515,13 @@ class CollectorConfig(BaseModel):
     sqlite_rotation_max_bytes: int = 100_000_000
     """Byte-size rotation threshold for the collector sqlite store (> 0)."""
 
+    sqlite_rotation_max_age_hours: int = 24
+    """Age-based rotation threshold for the in-memory ring buffer, per OD spec
+    §C-OD-19 §19.2 row 2 ("Default 24h ring-buffer rotation; operator-tunable").
+    Distinct from `sqlite_retention_days` (the *persisted* sqlite store's
+    lazy-on-write retention window, §C-OD-27.2) — this threshold governs when
+    `RuntimeRingBuffer.rotate()` evicts the oldest in-memory row by age (> 0)."""
+
     batch_window_seconds: int = BATCH_SPAN_PROCESSOR_WINDOW_SECONDS
     """BSP batching window in seconds (C-OD-19 §19.1 default = 5; > 0)."""
 
@@ -550,6 +557,7 @@ class CollectorConfig(BaseModel):
         "ring_buffer_size",
         "sqlite_rotation_max_rows",
         "sqlite_rotation_max_bytes",
+        "sqlite_rotation_max_age_hours",
         "batch_window_seconds",
         "batch_size",
         "sqlite_retention_days",
