@@ -360,8 +360,17 @@ def verify_rotation_pairs(ledger: AuditLedger) -> None:
     by_correlation: dict[str, list[AuditLedgerEntry]] = {}
     for entry in ledger.entries:
         correlation_id = entry.payload.audit_namespace_attrs.get(ROTATION_CORRELATION_ID_ATTR)
-        if correlation_id:
-            by_correlation.setdefault(correlation_id, []).append(entry)
+        if not correlation_id:
+            continue
+        try:
+            uuid.UUID(correlation_id)
+        except ValueError as exc:
+            raise RotationPairIntegrityBreach(
+                f"audit.rotation_correlation_id={correlation_id!r} is not a "
+                "canonical UUID string (C-OD-24 §24.7 declares this attribute "
+                "as a UUID string or absent)"
+            ) from exc
+        by_correlation.setdefault(correlation_id, []).append(entry)
 
     for correlation_id, tagged in by_correlation.items():
         if len(tagged) != 2:

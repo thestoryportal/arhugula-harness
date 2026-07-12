@@ -450,3 +450,25 @@ def test_verify_rotation_pairs_solo_tier_no_op() -> None:
     over an empty ledger (structural no-op, not merely a NULL column)."""
     ledger = AuditLedger(entries=(), cell_id=_CELL_7)
     assert verify_rotation_pairs(ledger) is None
+
+
+def test_verify_rotation_pairs_rejects_malformed_correlation_id() -> None:
+    """§24.7 acceptance — a present-but-non-UUID `audit.rotation_correlation_id`
+    is rejected outright, not silently grouped as a valid pairing key (Codex
+    out-of-family review finding — a non-empty non-UUID value must not bypass
+    the exactly-two sibling discipline by accident of string equality)."""
+    outgoing, incoming = _rotation_pair()
+    malformed_payload = outgoing.payload.model_copy(
+        update={
+            "audit_namespace_attrs": {
+                **outgoing.payload.audit_namespace_attrs,
+                ROTATION_CORRELATION_ID_ATTR: "not-a-uuid",
+            }
+        }
+    )
+    malformed_outgoing = outgoing.model_copy(
+        update={"payload": malformed_payload, "entry_hash": compute_entry_hash(malformed_payload)}
+    )
+    ledger = AuditLedger(entries=(malformed_outgoing, incoming), cell_id=_CELL_7)
+    with pytest.raises(RotationPairIntegrityBreach, match="not a canonical UUID"):
+        verify_rotation_pairs(ledger)

@@ -42,7 +42,7 @@ Extends the C-OD-24.1 `AuditPayload.audit_namespace_attrs` convention (preserved
 
 **External-auditor verification (materializes ADR-D5 §1.4's "External-auditor verification semantics for the two-row rotation pattern" at the OD-axis code surface).** A ledger-level verification pass, given an `AuditLedger`:
 
-1. Partition `ledger.entries` into rotation-tagged (non-empty `audit.rotation_correlation_id`) and non-rotation.
+1. Partition `ledger.entries` into rotation-tagged (non-empty `audit.rotation_correlation_id`) and non-rotation. A present-but-malformed value (not a canonical UUID string) is a verification failure at this step — the declaration above admits only "UUID string, or key absent," so a non-UUID non-empty value is neither.
 2. For each distinct `audit.rotation_correlation_id` value, require **exactly two** entries carrying it (a lone rotation-tagged entry — a missing sibling — is a verification failure; more than two is a verification failure — the pattern is a two-row pattern, not N-row).
 3. **Recompute, don't trust stored hashes** — per the ADR's "recomputing hashes" instruction: for each of the two tagged entries, require `entry.entry_hash == compute_entry_hash(entry.payload)` (§24.5). A payload mutated in place with a stale `entry_hash` left behind is a verification failure at this step, independent of any cross-entry check below.
 4. Order the pair by `audit_signature_key_period`; require the periods to be consecutive integers (`period(sibling_2) == period(sibling_1) + 1`) and the `audit_signature_key_id` values to differ (outgoing key ≠ incoming key — a rotation changes the key identity, not just the period counter).
