@@ -46,12 +46,22 @@
 snapshot:
   frozen_total: 11
   frozen_done: 11
-  standalone_closed: 85
+  standalone_closed: 86
   standalone_gated: 0
   standalone_resolved: 4
-  standalone_registered: 9
+  standalone_registered: 8
   rfs1_status: active
   source: ".harness/beyond-mvp-capability-boundary-ledger.md"
+  # FRONTIER NOTE (2026-07-12, B-OD19-LOCAL-INSPECTION closed — R-FS-2 Wave 2 third
+  # arc). standalone_closed 85→86, standalone_registered 9→8. All three slices closed:
+  # (a) TUI trace browser (harness_runtime.admin.trace_browser + harness-inspect
+  # --browse); (b) 24h ring-buffer rotation default pinned
+  # (CollectorConfig.sqlite_rotation_max_age_hours); (c) otelcol-contrib manifest
+  # closed as a cited reconciliation (pre-existing hand-rolled-collector /
+  # inert-ingest-path deferral, not a new gap). Five Codex review rounds each caught
+  # a real gap (URI path escaping, curses schema-crash x2, cache-primitive
+  # wrong-span-name query, ring-buffer eviction ordering under the newly-live 24h
+  # default); round 5 clean. Next: Wave 2 continues with B-OD17-EVAL-LOOP-TOOLING.
   # FRONTIER NOTE (2026-07-12, B-TOOL-SEARCH-RUNTIME closed — R-FS-2 Wave 2 second
   # arc). standalone_closed 84→85, standalone_registered 10→9. AS spec v1.12→v1.13
   # (new §13.7) adds a minimal search_tools capability-discovery contract:
@@ -2006,12 +2016,12 @@ arcs:
   - id: B-OD19-LOCAL-INSPECTION
     title: "C-OD-19 named-primitive completion: TUI trace browser + ring-buffer rotation + otelcol config manifest"
     kind: standalone
-    status: registered
-    decompose_at_open: true
+    status: closed
+    pr: "#941"
     owner_axis: "OD"
     parent_arc: R-FS-2
     anticipated_scope: "C-OD-19 §19 contract surface (OD spec v1.2 lines 1049-1091: in-process collector signature + sqlite ring-buffer trace storage + TUI trace browser surfacing; §19.3 primitive table) — formally deferred in-code at deferral_envelope.py:270-276 with closure target phase-6, now due under FULL-SPEC. Decompose-at-open into three slices: (a) TUI trace browser — terminal-native scoped-query browser over the sqlite ring buffer (ledger/trace walk; the five operator-burden primitives as scoped queries per spec lines 922/976; threshold annotation); framework-pull check at design (prefer stdlib curses; operator machine is Intel x86 macOS — bias light); extend sqlite_span_store_reader + the harness-inspect internals, do not fork. (b) Ring-buffer rotation — §19.2 commits the 24h default, operator-tunable; only the mechanism (size/time/hybrid) is discretion; crash-safe; Phase-2 markers at local_first_otlp_collector.py lines 36/234/264. (c) otelcol-contrib config manifest — grounding-first: §19.1 commits an in-process otelcol-contrib instance but the as-built collector is the hand-rolled local_first_otlp_collector.py (BUILT-MODIFIED); ground what the manifest configures when no otelcol-contrib binary runs; possible small spec-reconciliation delta. Witnesses: seeded-ring-buffer browse + five-primitive render (scripted TUI or headless harness); fill-rotate-chain-readable + 24h-default pin; manifest validation or a cited reconciliation close."
-    units: []
+    close_note: "All three slices closed. (a) New harness_runtime.admin.trace_browser module — pure compute_operator_burden_rollups + render_operator_burden_screen (headlessly testable) + a thin stdlib-curses driver, wired into harness-inspect via a new --browse flag; adds read_spans_by_name + read_all_spans to harness_od.sqlite_span_store_reader (the extension point that module's own docstring anticipated). (b) CollectorConfig.sqlite_rotation_max_age_hours=24 wired into materialize_ring_buffer_stage's default_max_age_hours (previously always None — age-based eviction never fired by default); fill->rotate->chain-readable witness added; kept distinct from the unrelated 7-day sqlite retention_days. (c) Grounding found the as-built collector is a hand-rolled Python supervisor+library, not an otelcol-contrib binary, and the real span-export path (BSP->OTLPSpanExporter) requires an operator-supplied network endpoint while the in-process daemon's ingest_span_row has no production caller (a pre-existing, already-documented deferral) — closed as a cited reconciliation at .harness/b-od19-slice-c-otelcol-manifest-reconciliation.md rather than authoring a manifest configuring nothing real. Five rounds of out-of-family Codex review, each catching a real gap: round 1 URI-metacharacter path escaping in open_readonly_span_store (Path.as_uri() percent-encoding); round 2 curses-crash on a spans-table-exists-but-wrong-columns db (fixed by precomputing rollups before entering curses.wrapper instead of a shallow SELECT-1 probe); round 3 the cache-hit-rate primitive queried by the wrong span-name assumption (source_span_class='anthropic.cache' is a namespace label, not a literal spans.name — the real anthropic.cache_* attributes live on LLM-inference spans named 'chat <model>'; fixed via a full-table attribute-presence scan) plus broadening the schema-validation catch from OperationalError to DatabaseError (a non-sqlite file raises DatabaseError directly); round 4 ring-buffer eviction assumed raw buffer index 0 was the oldest row, which the 24h default now makes live by default under out-of-order span arrival (fixed: compute_state sorts by start_time_unix_ns, rotate() evicts by matching span_id); round 5 clean, no actionable issues. workspace-wide 5608 passed/41 skip/1 xfail; pyright 0/0/0; ruff clean; 14/14 blocking CI checks green."
     ledger_ref: ".harness/r-fs-2-final-closure-implementation-plan-v1.md"
 
   - id: B-OD17-EVAL-LOOP-TOOLING
