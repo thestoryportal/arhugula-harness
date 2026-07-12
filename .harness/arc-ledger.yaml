@@ -46,12 +46,30 @@
 snapshot:
   frozen_total: 11
   frozen_done: 11
-  standalone_closed: 88
+  standalone_closed: 89
   standalone_gated: 0
   standalone_resolved: 4
-  standalone_registered: 6
+  standalone_registered: 5
   rfs1_status: active
   source: ".harness/beyond-mvp-capability-boundary-ledger.md"
+  # FRONTIER NOTE (2026-07-12, B-MCP-OAUTH-RS-ENFORCE closed — R-FS-2 Wave 3 first
+  # arc, grounding-only, no code change). standalone_closed 88→89,
+  # standalone_registered 6→5. Branch A (deployment-binding-honored): AS spec
+  # §10.3 line 934 commits trust level as OPERATOR-DECLARED at registration, not
+  # harness-verified via live OAuth; the two build-committed mechanisms (sandbox
+  # floor + HITL gate floor, the latter landed separately at B2-spec-2 after a
+  # real council probe-resolved floor-only/monotone) are both already built. The
+  # §10.3 deferral block names 4 discretionary items and OAuth-RS validation is
+  # not one of them. advisor()-checked pre-close: corrected the argument to lead
+  # with the affirmative operator-declared-trust reading, and verified the exact
+  # import line rather than trusting a docstring — which found the register's own
+  # "stdio only" Branch-A rationale stale (a real remote streamable-HTTP path
+  # exists since B-MCP-HOST-REMOTE-TRANSPORT, exercised through the production
+  # factory at L1-signed-pinned) and surfaced two real, previously-undiscovered
+  # gaps (wrong streamable-HTTP-client import; MCPClientConfig has no
+  # credential-supply field) — registered, not built, at
+  # post-phase-8-forward-register.md Surface IX / B-10 residual. Full record at
+  # .harness/b-mcp-oauth-rs-enforce-closure-record.md.
   # FRONTIER NOTE (2026-07-12, B-OD18-DRIFT-ALGORITHM closed — R-FS-2 Wave 2 fifth/
   # final arc). standalone_closed 87→88, standalone_registered 7→6. Grounding found
   # §18.1's drift table names 4 AlignmentFloorPrimitive values (U-OD-25's existing
@@ -2102,11 +2120,12 @@ arcs:
   - id: B-MCP-OAUTH-RS-ENFORCE
     title: "Remote-MCP L2/L3 OAuth resource-server validation (grounding-first; C-AS-10 §10.3 trust taxonomy)"
     kind: standalone
-    status: registered
-    decompose_at_open: true
+    status: closed
+    pr: "#946"
     owner_axis: "AS + runtime"
     parent_arc: R-FS-2
     anticipated_scope: "AS spec C-AS-10 §10.3 four-level streamable_http trust taxonomy (enum built at discriminators.py:31-43; the STDIO tier-3 floor is enforced at sandbox_tier_floor.py:140-142) + the ADR-D2/ADR-D3 OAuth-2.1-mandatory-for-remote commitments (PKCE, RFC 8707 resource indicators; token-passthrough prohibited). Grounding decides the arc: (1) read the §10.3 Deferred-to-implementation-discretion block verbatim — does connection-time OAuth-RS validation sit inside it, and does any committed sentence make L2/L3 connection CONDITIONAL on OAuth-RS status? (2) does ANY streamable-HTTP client path exist at mcp_client_host_factory.py (the external-MCP live e2e proved stdio only)? Branch A: no remote-HTTP client + no committed conditional = close as deployment-binding-honored with cites (fail-closed today: the L0-refuse level + no HTTP path means an un-validated remote connection is structurally impossible). Branch B: a committed conditional exists = build the fail-closed gate at the client-host connect seam (PKCE + resource-indicator checks before L2/L3 session establishment), stdio path byte-unchanged; a LIVE remote-HTTP e2e is credential-gated (Appendix-B pattern, surfaced not auto-fired)."
+    close_note: "Grounding-first close, Branch A (deployment-binding-honored), no code change. AS spec §10.3 line 934 commits trust level as OPERATOR-DECLARED at registration, not harness-verified via live OAuth — the two mechanisms the harness DOES commit to build on top of that declaration (sandbox-tier floor §10.1; HITL gate-level floor, landed separately at the B2-spec-2 fork's CP spec v1.35 §19.1.2 after a real dyadic C10⊥C11 council probe-resolved floor-only/monotone) are both already built. The §10.3 'Deferred to implementation discretion' block names exactly 4 discretionary items (registration mechanism / L1 signature-verification / L2 egress allow-list schema / L3 audit cadence) and OAuth-RS validation is not among them — it was never a harness build target, not silently owed. advisor()-checked before finalizing: corrected the closure argument to lead with the affirmative operator-declared-trust reading rather than an absence claim, and to verify the exact import line rather than trust a docstring. That verification found the register's own Branch-A rationale ('L0-refuse + no HTTP path = structurally can't connect un-validated') is STALE — a real remote streamable-HTTP client path now exists and is exercised through the production factory (test_r_cl_p3_live_multi_tier_e2e.py, L1-signed-pinned, real subprocess-free local HTTP server, no test-injection seam), added since R-800's 'stdio only' framing (B-MCP-HOST-REMOTE-TRANSPORT). L0-refuse enforcement was independently re-verified at its actual raise site (mcp_host.py:112 materialize_mcp_stage), not the factory docstring. Two real, previously-undiscovered gaps surfaced verifying the HTTP path and are registered (not built, per FULL-SPEC discipline — building a refusal gate with no credential-supply path would just fail every real connection): (1) mcp_client_host.py:495 imports the LEGACY mcp.client.streamable_http.streamable_http_client (no headers/timeout/sse_read_timeout/auth params) instead of the current streamablehttp_client — a latent TypeError once anything populates those kwargs, currently masked because the factory's _build_transport_config never does; (2) MCPClientConfig has no field at all to carry auth credentials despite its own docstring claiming 'auth-secret reference are operator-supplied' — no way, even manually, to authenticate a remote connection today. Both registered at .harness/post-phase-8-forward-register.md Surface IX / B-10 residual bullet (distinct mechanism from B-MCP-PRIMITIVE-SIG-GATE's tool-description-hash rug-pull gate). Full record at .harness/b-mcp-oauth-rs-enforce-closure-record.md."
     units: []
     ledger_ref: ".harness/r-fs-2-final-closure-implementation-plan-v1.md"
 
