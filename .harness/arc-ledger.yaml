@@ -2213,7 +2213,7 @@ arcs:
     title: "Replay-dedup cost-join verification witness (ADR-D6 §1.5 / C-OD-14)"
     kind: standalone
     status: closed
-    pr: "#<pending> (b-od18-drift-algorithm branch — flips registered → closed; standalone_closed 91→92, standalone_registered 3→2)"
+    pr: "#952"
     owner_axis: "OD"
     parent_arc: R-FS-2
     anticipated_scope: "ADR-D6 §1.5 / C-OD-14: cost attribution joins on the idempotency key; durable replay must not double-count. Flagged MODERATE (spec-committed, carried via the idempotency join, not independently re-executed) at the NotebookLM completeness audit. Verify-first: a witness replaying a completed step (journal-resume path) asserting the cost rollup is emitted exactly once; if the join is missing, the smallest fix lands at the cost-record accumulator."
