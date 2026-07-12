@@ -1981,7 +1981,7 @@ arcs:
     title: "Operator-declared semantic-version field on PromptVersion (skill frontmatter.version analogue; cache-inert)"
     kind: standalone
     status: closed
-    pr: "pending"
+    pr: "#939"
     owner_axis: "IS"
     parent_arc: R-FS-2
     anticipated_scope: "The skill frontmatter.version analogue for prompts (ADR-D3 §1.8.1: an operator may bump the declared version without changing every byte; both-required with the content hash). Named at the 3c DDR §8; optional by design (version_sha remains the cache key). BUILD by default under FULL-SPEC; the operator may strike this row at the Unit-0 PR review — the one-time skip window, recorded either way. Shape: IS-spec delta + clearance adding the optional field to the PromptVersion shape; prompt_manifest.py optional field default None (byte-compatible with every existing manifest); explicitly CACHE-INERT (spec text states it does not participate in cohort/cache identity — that is version_sha's job). Witnesses: manifest round-trip with/without the field; cohort-key/cacheable-epoch byte-unchanged controls."
