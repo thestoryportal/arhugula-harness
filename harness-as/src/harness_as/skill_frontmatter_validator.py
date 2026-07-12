@@ -69,7 +69,7 @@ def validate_skill_frontmatter(
         return SkillFrontmatterValidationResult(
             outcome=SkillFrontmatterRejectionReason.NAME_TOO_LONG,
         )
-    if not description:
+    if not description.strip():
         return SkillFrontmatterValidationResult(
             outcome=SkillFrontmatterRejectionReason.DESCRIPTION_EMPTY,
         )
@@ -77,11 +77,11 @@ def validate_skill_frontmatter(
         return SkillFrontmatterValidationResult(
             outcome=SkillFrontmatterRejectionReason.DESCRIPTION_TOO_LONG,
         )
-    if not version:
+    if not version.strip():
         return SkillFrontmatterValidationResult(
             outcome=SkillFrontmatterRejectionReason.MISSING_VERSION,
         )
-    if not version_sha:
+    if not version_sha.strip():
         return SkillFrontmatterValidationResult(
             outcome=SkillFrontmatterRejectionReason.MISSING_VERSION_SHA,
         )

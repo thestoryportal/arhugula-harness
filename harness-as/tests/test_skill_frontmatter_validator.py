@@ -72,6 +72,24 @@ def test_missing_version_sha_rejected() -> None:
     assert result.outcome is SkillFrontmatterRejectionReason.MISSING_VERSION_SHA
 
 
+def test_whitespace_only_description_rejected() -> None:
+    """Whitespace-only description is not "non-empty" — DESCRIPTION_EMPTY."""
+    result = validate_skill_frontmatter(**_valid(description="   \n\t "))
+    assert result.outcome is SkillFrontmatterRejectionReason.DESCRIPTION_EMPTY
+
+
+def test_whitespace_only_version_rejected() -> None:
+    """Whitespace-only version is not "required" content — MISSING_VERSION."""
+    result = validate_skill_frontmatter(**_valid(version="  "))
+    assert result.outcome is SkillFrontmatterRejectionReason.MISSING_VERSION
+
+
+def test_whitespace_only_version_sha_rejected() -> None:
+    """Whitespace-only version_sha — MISSING_VERSION_SHA."""
+    result = validate_skill_frontmatter(**_valid(version_sha="  "))
+    assert result.outcome is SkillFrontmatterRejectionReason.MISSING_VERSION_SHA
+
+
 def test_name_checked_before_description() -> None:
     """Precedence — a name violation is reported even when description also violates."""
     result = validate_skill_frontmatter(
