@@ -32,6 +32,8 @@ from typing import Any
 from harness_as.sandbox_tier import BlastRadiusTier
 
 from harness_runtime.lifecycle.memory_tool_dispatch import MEMORY_TOOL_TYPE
+from harness_runtime.lifecycle.tool_search import SEARCH_TOOLS_CONTRACT
+from harness_runtime.types import ToolName
 
 #: The Anthropic Memory tool definition (``ADR-D3 v1.2 §1.1 #11``; the
 #: step-declared server-tool shape mirrored at the integration fixtures). A
@@ -70,6 +72,7 @@ def compute_frozen_tool_superset(
     *,
     include_memory_tool: bool,
     remove_tiers: frozenset[BlastRadiusTier] = frozenset(),
+    defer_names: frozenset[ToolName] = frozenset(),
 ) -> tuple[Mapping[str, Any], ...] | None:
     """Compute the deterministic frozen tool superset from the MCP registries.
 
@@ -101,6 +104,17 @@ def compute_frozen_tool_superset(
     latter's ``DOWNGRADE_TO_ASK`` is a gate-level concern, not a visibility one,
     enforced separately at the HITL gate — not here).
 
+    ``defer_names`` — B-TOOL-SEARCH-RUNTIME (AS spec v1.13 §13.7): tools whose
+    name is in ``defer_names`` are OMITTED from the eager union entirely (their
+    full schema is not sent up front — discover them via the ``search_tools``
+    tool instead, see ``harness_runtime.lifecycle.tool_search``). When
+    ``defer_names`` causes ≥1 tool to actually be omitted, exactly one static
+    ``search_tools`` stub entry (``SEARCH_TOOLS_CONTRACT`` — fixed shape,
+    never derived from the deferred set) is appended to the ordered union so
+    the model can discover the deferred schemas on demand. Default
+    ``frozenset()`` → byte-identical to the pre-v1.13 union (no search stub,
+    no tools omitted).
+
     Cross-host name collisions already fail loud at ``build_tool_routing_index``
     (``runtime_tool_dispatcher_factory.py``), so a same-name dedup here is safe
     (a collision would have aborted bootstrap). Sort by tool ``name`` for a
@@ -110,6 +124,7 @@ def compute_frozen_tool_superset(
     dispatcher's byte-identical legacy path.
     """
     projected: dict[str, Mapping[str, Any]] = {}
+    deferred_count = 0
     if mcp_client_hosts is not None:
         for host in mcp_client_hosts.values():
             registry = host.tool_registry
@@ -119,6 +134,12 @@ def compute_frozen_tool_superset(
                 # removed blast-radius tier (external-irreversible). `remove_tiers`
                 # is empty for the top-level superset → no filtering.
                 if contract.blast_radius_tier in remove_tiers:
+                    continue
+                # B-TOOL-SEARCH-RUNTIME (AS spec v1.13 §13.7): a deferred tool is
+                # OMITTED from the eager union — discoverable via `search_tools`
+                # instead. `defer_names` is empty by default → no filtering.
+                if name in defer_names:
+                    deferred_count += 1
                     continue
                 # DEDUP by name (collision is impossible post-bootstrap; last
                 # write is identical to first). Deterministic projection.
@@ -132,6 +153,9 @@ def compute_frozen_tool_superset(
 
     if include_memory_tool:
         ordered.append(dict(_MEMORY_TOOL_DEFINITION))
+
+    if deferred_count:
+        ordered.append(dict(SEARCH_TOOLS_CONTRACT))
 
     if not ordered:
         return None

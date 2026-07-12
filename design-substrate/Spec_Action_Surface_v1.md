@@ -1,4 +1,14 @@
-# Spec — Action Surface v1.12
+# Spec — Action Surface v1.13
+
+## Change-note (v1.12 → v1.13)
+
+**Scope of revision.** R-FS-2 Wave 2 **`B-TOOL-SEARCH-RUNTIME`** — ADR-D3 v1.2 §1.1 names `tool_search` lazy-loading as a facet of committed primitive #2 (MCP-as-code), and §1.5's cache-prefix integrity discipline commits "per-MCP capability discovery via `tool_search` rather than `tools[]` mutation." §13.2 shows MCP-as-code adoption depth r/o/R/r across all four workload classes (never excluded), so the primitive is materially adopted, not deferred — the grounding-first branch in `.harness/r-fs-2-final-closure-implementation-plan-v1.md` therefore routes to build, not to an adoption-depth-honored close. §13.6 already defers the *server-registration mechanism* and the *`tools[]` warm-up cycle at restart* to implementation discretion — but neither of those is the `tool_search` capability-discovery mechanism itself, which was previously unrealized: `harness_runtime.lifecycle.frozen_tool_superset` computed the full eager union of every registered MCP tool with no lazy-discovery facet, and no search/query surface existed on `ToolRegistry`. v1.13 adds new **§13.7** committing a minimal `search_tools` capability-discovery contract that realizes the facet.
+
+**Additive + non-breaking.** New §13.7 only; no existing §13.1–§13.6 content edited. The frozen-superset computation gains one new optional parameter (`defer_names`, default `frozenset()` — byte-identical to pre-v1.13 output when omitted, mirroring the additive precedent set by U-1 slice 3a's `remove_tiers`). No `ToolContract` field change; no `sandbox_tier_floor` change; no AS-AL rule added.
+
+**Amendment site.** New §13.7 (after §13.6, before §14). Impl at `harness_runtime.lifecycle.tool_search` (new module) + one new parameter on `harness_runtime.lifecycle.frozen_tool_superset.compute_frozen_tool_superset`.
+
+**Preserved verbatim.** All v1.12 + prior content — §13.1–§13.6, §2.2/§2.3, §3.1, §10.1/§10.3, §14.x footers, and all frozen historical change-note blocks — PRESERVED VERBATIM.
 
 ## Change-note (v1.11 → v1.12)
 
@@ -1201,6 +1211,23 @@ At workload-binding-time:
 ```
 
 **Deferred to implementation discretion.** Specific Memory tool storage backend per deployment surface (filesystem at local-development with F2 worktree-isolation; cloud-vault or managed-database at managed-cloud; composable at hybrid); specific per-MCP-server-registration mechanism; specific Skill authoring schemata beyond SKILL.md frontmatter; specific Managed Agent session lifecycle binding; specific Batch API job-ID storage per engine class; specific `tools[]` array warm-up cycle at restart per Cluster 2 V2 §[HIGH].
+
+---
+
+## §13.7 — `tool_search` capability-discovery contract (v1.13 — R-FS-2 B-TOOL-SEARCH-RUNTIME)
+
+**Contract surface.** A minimal realization of the ADR-D3 §1.1 primitive-#2 `tool_search` facet: a static, cache-stable `search_tools` tool contract + a deferred-tool index + a deterministic search dispatch, composed with the existing frozen tool superset (§13 preamble; `harness_runtime.lifecycle.frozen_tool_superset`) rather than replacing it.
+
+**Mechanism.**
+
+1. **Deferred-tool set.** The frozen-superset computation (`compute_frozen_tool_superset`) gains one new optional parameter, `defer_names: frozenset[ToolName] = frozenset()`. A tool whose name is in `defer_names` is OMITTED from the eager `tools[]` union (its full schema is not sent up front). Default `frozenset()` → byte-identical to the pre-v1.13 union (no behavior change when the caller does not opt in).
+2. **The `search_tools` contract.** When `defer_names` is non-empty, exactly one additional static entry is appended to the ordered union: a `search_tools` tool taking `{"query": string}` and returning matching deferred tools' full `{name, description, input_schema}` projections. This entry's shape is fixed (not derived from the deferred set), so its presence/absence is the only superset-shape effect of opting in — adding or removing deferred tools never changes any *other* entry's bytes.
+3. **Search dispatch (out-of-band; not a `tools[]` mutation).** `search_tools(query)` is dispatched exactly like any other tool call: the runtime looks up the deferred-tool index, matches `query` as a case-insensitive substring against each deferred tool's `name` + `description` (sorted-by-name deterministic order — the committed minimal discretion-scoped match algorithm; a smarter ranking is implementation discretion, same posture as §13.6's other discretion clauses), and returns the matches' full schemas as the tool's **result** (ordinary message content). This is the "rather than `tools[]` mutation" half of ADR-D3 §1.5: no search, however many times invoked, ever appends to or removes from the static `tools[]` array — the frozen superset (including the single `search_tools` stub) is computed once and stays byte-identical for the epoch regardless of search activity.
+4. **Cache-prefix invariance is the acceptance witness.** A conforming implementation MUST prove, by execution, that `compute_frozen_tool_superset(...)` returns byte-identical output before and after any number of `search_tools` dispatches within the same epoch — this is the concrete realization of the ADR-D3 §1.5 MUST clause for the tool_search facet specifically (as opposed to the pre-v1.13 frozen superset, which already satisfied the clause only for the *non-deferred* facet by never having a deferred set to search over).
+
+**Relationship to `skill.activation` / `SkillActivationMode.TOOL_SEARCH` (C-RT-27).** Distinct, pre-existing, already-built mechanism — `SkillActivationMode.TOOL_SEARCH` (runtime spec §14.17 / AS spec §14.4) names the activation-mode attribute recorded when a Skill is selected at the per-LLM-dispatch hook, not MCP tool discovery. §13.7 does not modify or depend on it; the two mechanisms may co-occur in the same dispatch (a search-driven MCP discovery and a per-dispatch Skill activation both firing before the same LLM call) but are independently specified and independently tested.
+
+**Deferred to implementation discretion.** Specific match-ranking algorithm beyond deterministic substring matching; specific policy for which MCP tools are placed in `defer_names` (a static allowlist, a count threshold, or always-empty/opt-out — any choice is spec-conformant); specific `search_tools` result pagination for large deferred sets.
 
 ---
 
