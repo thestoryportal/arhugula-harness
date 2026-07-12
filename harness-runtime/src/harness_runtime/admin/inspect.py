@@ -40,12 +40,16 @@ import argparse
 import json
 import sqlite3
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from harness_core import DeploymentSurface, PersonaTier
 from harness_is.jsonl_event_ledger_lifecycle import JsonlLedgerHandle
 from harness_is.state_ledger_entry_schema import StateLedgerEntry
 from harness_is.state_ledger_write import read_ledger
+from harness_od.observability_matrix import CellID
+from harness_od.operator_burden_eval_primitives import OperatorBurdenEvalPrimitive
 
 __all__ = ["build_parser", "main"]
 
@@ -124,7 +128,118 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Emit JSON output. Default is human-readable.",
     )
+    _add_holdout_arguments(parser)
     return parser
+
+
+# ---------------------------------------------------------------------------
+# Holdout-loop tooling (B-OD17-EVAL-LOOP-TOOLING; C-OD-17 §17.3).
+# ---------------------------------------------------------------------------
+
+
+_DEFAULT_CELL_ID = "solo-developer:local-development"
+_DEFAULT_STUB_DIR = Path("holdout_stubs")
+
+
+def _add_holdout_arguments(parser: argparse.ArgumentParser) -> None:
+    """Register the three holdout-loop actions (mutually exclusive with each
+    other and with `--browse`/the ledger-summary default; `main` dispatches
+    on whichever fires first)."""
+    parser.add_argument(
+        "--holdout-sample",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "Draw a deterministic sample of N traces from --collector-path "
+            "into a new holdout file at --holdout-path (C-OD-17 §17.3 "
+            "holdout-set construction). Requires --primitive; --seed and "
+            f"--cell-id have defaults ({_DEFAULT_CELL_ID})."
+        ),
+    )
+    parser.add_argument(
+        "--holdout-review",
+        action="store_true",
+        help=(
+            "Interactively review the holdout set at --holdout-path against "
+            "--review-ledger-path: for each not-yet-reviewed trace, print its "
+            "id and span count and prompt for an operator-typed category. "
+            "Makes NO model calls and computes no judge ratio."
+        ),
+    )
+    parser.add_argument(
+        "--holdout-scaffold",
+        action="store_true",
+        help=(
+            "Scaffold an operator-authored assertion stub (one .py file per "
+            "reviewed trace lacking one) under --stub-dir from "
+            "--review-ledger-path. Never overwrites an existing stub."
+        ),
+    )
+    parser.add_argument(
+        "--holdout-path",
+        type=Path,
+        default=None,
+        help=(
+            "Path to the holdout-set JSON file "
+            "(write target for --holdout-sample, read source for --holdout-review)."
+        ),
+    )
+    parser.add_argument(
+        "--review-ledger-path",
+        type=Path,
+        default=None,
+        help=(
+            "Path to the append-only review ledger JSONL "
+            "(used by --holdout-review and --holdout-scaffold)."
+        ),
+    )
+    parser.add_argument(
+        "--stub-dir",
+        type=Path,
+        default=_DEFAULT_STUB_DIR,
+        help=f"Directory for scaffolded assertion stubs (default: {_DEFAULT_STUB_DIR}).",
+    )
+    parser.add_argument(
+        "--primitive",
+        choices=[
+            OperatorBurdenEvalPrimitive.SANDBOX_TIER_ROUTING_ACCURACY.value,
+            OperatorBurdenEvalPrimitive.ROUTING_ACCURACY_HOLDOUT.value,
+        ],
+        default=None,
+        help=(
+            "The holdout-evaluable primitive (C-OD-17 §17.1) "
+            "--holdout-sample draws a holdout set for."
+        ),
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=0,
+        help="Deterministic sampling seed for --holdout-sample (default: 0).",
+    )
+    parser.add_argument(
+        "--cell-id",
+        default=_DEFAULT_CELL_ID,
+        help=(
+            f"'persona-tier:deployment-surface' (default: {_DEFAULT_CELL_ID}). "
+            "Values per harness_core.PersonaTier / DeploymentSurface, hyphenated lowercase."
+        ),
+    )
+
+
+def _parse_cell_id(raw: str) -> CellID:
+    """Parse `'solo-developer:local-development'` into a `CellID`.
+
+    Enum values are the StrEnum's own hyphenated-lowercase form (e.g.
+    `PersonaTier.SOLO_DEVELOPER.value == "solo-developer"`) — the CLI
+    surface accepts exactly that form, not the Python member name.
+    """
+    persona_raw, _, surface_raw = raw.partition(":")
+    return CellID(
+        persona_tier=PersonaTier(persona_raw),
+        deployment_surface=DeploymentSurface(surface_raw),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -286,6 +401,156 @@ def _run_browse(collector_path: Path | None) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Holdout-loop actions (B-OD17-EVAL-LOOP-TOOLING; C-OD-17 §17.3).
+#
+# Each function makes NO model calls and computes no judge/alignment ratio —
+# per the standing model-judge-as-governance-gate refusal, this tooling only
+# samples, persists operator input, and scaffolds files for a human to fill
+# in by hand.
+# ---------------------------------------------------------------------------
+
+
+def _run_holdout_sample(args: argparse.Namespace) -> int:
+    from harness_od.holdout_set import sample_holdout_traces as sample
+    from harness_od.holdout_set import write_holdout_set
+
+    if args.collector_path is None or args.holdout_path is None or args.primitive is None:
+        print(
+            "harness-inspect: RT-FAIL-INSPECT-PATH — --holdout-sample requires "
+            "--collector-path, --holdout-path, and --primitive",
+            file=sys.stderr,
+        )
+        return _EXIT_INSPECT_PATH
+    try:
+        conn = open_readonly_span_store_for_holdout(args.collector_path)
+    except sqlite3.DatabaseError as exc:
+        print(
+            f"harness-inspect: RT-FAIL-INSPECT-PATH — collector sqlite not found "
+            f"or unreadable at {args.collector_path}: {exc}",
+            file=sys.stderr,
+        )
+        return _EXIT_INSPECT_PATH
+    try:
+        holdout = sample(
+            conn,
+            cell_id=_parse_cell_id(args.cell_id),
+            primitive=OperatorBurdenEvalPrimitive(args.primitive),
+            n=args.holdout_sample,
+            seed=args.seed,
+            sampled_at=datetime.now(UTC).isoformat(),
+        )
+    except sqlite3.DatabaseError as exc:
+        # sqlite defers "not a database" / wrong-schema errors to first query —
+        # `open_readonly_span_store_for_holdout` only calls `sqlite3.connect`,
+        # so a wrong-schema file surfaces here, not at connect time.
+        conn.close()
+        print(
+            f"harness-inspect: RT-FAIL-INSPECT-PATH — {args.collector_path} is "
+            f"not an initialized span store: {exc}",
+            file=sys.stderr,
+        )
+        return _EXIT_INSPECT_PATH
+    conn.close()
+    write_holdout_set(holdout, args.holdout_path)
+    print(
+        f"harness-inspect: wrote {len(holdout.traces)} trace(s) to {args.holdout_path} "
+        f"(seed={args.seed}, primitive={args.primitive})"
+    )
+    return _EXIT_OK
+
+
+def _run_holdout_review(args: argparse.Namespace, *, input_fn: Any = None) -> int:
+    # `input_fn` defaults to `None` rather than binding the `input` builtin
+    # directly: a default-argument expression is evaluated once at function-
+    # definition time, so `input_fn: Any = input` would freeze the reference
+    # before a test's `monkeypatch.setattr("builtins.input", ...)` ever runs.
+    # A bare `input(...)` call below is a dynamic builtins lookup at CALL
+    # time, which the monkeypatch does reach.
+    if input_fn is None:
+        input_fn = input
+    from harness_od.holdout_review_ledger import (
+        ReviewEntry,
+        append_review_entry,
+        reviewed_trace_ids,
+    )
+    from harness_od.holdout_set import read_holdout_set
+
+    if args.holdout_path is None or args.review_ledger_path is None:
+        print(
+            "harness-inspect: RT-FAIL-INSPECT-PATH — --holdout-review requires "
+            "--holdout-path and --review-ledger-path",
+            file=sys.stderr,
+        )
+        return _EXIT_INSPECT_PATH
+    try:
+        holdout = read_holdout_set(args.holdout_path)
+    except (OSError, ValueError) as exc:
+        print(
+            f"harness-inspect: RT-FAIL-INSPECT-PATH — cannot read holdout set at "
+            f"{args.holdout_path}: {exc}",
+            file=sys.stderr,
+        )
+        return _EXIT_INSPECT_PATH
+
+    already = reviewed_trace_ids(args.review_ledger_path)
+    pending = [t for t in holdout.traces if t.trace_id not in already]
+    if not pending:
+        print("harness-inspect: nothing to review — every trace is already categorized.")
+        return _EXIT_OK
+
+    for trace in pending:
+        print(
+            f"\ntrace_id={trace.trace_id}  spans={trace.span_count}  "
+            f"primitive={holdout.primitive.value}"
+        )
+        category = input_fn("category> ").strip()
+        if not category:
+            print("harness-inspect: empty category — skipping this trace.")
+            continue
+        notes_raw = input_fn("notes (optional)> ").strip()
+        append_review_entry(
+            args.review_ledger_path,
+            ReviewEntry(
+                cell_id=holdout.cell_id,
+                primitive=holdout.primitive,
+                trace_id=trace.trace_id,
+                category=category,
+                notes=notes_raw or None,
+                reviewed_at=datetime.now(UTC).isoformat(),
+            ),
+        )
+    print(f"\nharness-inspect: review ledger at {args.review_ledger_path}")
+    return _EXIT_OK
+
+
+def _run_holdout_scaffold(args: argparse.Namespace) -> int:
+    from harness_od.holdout_assertion_scaffold import scaffold_pending_stubs
+
+    if args.review_ledger_path is None:
+        print(
+            "harness-inspect: RT-FAIL-INSPECT-PATH — --holdout-scaffold requires "
+            "--review-ledger-path",
+            file=sys.stderr,
+        )
+        return _EXIT_INSPECT_PATH
+    written = scaffold_pending_stubs(args.review_ledger_path, args.stub_dir)
+    if written:
+        print(f"harness-inspect: scaffolded {len(written)} stub(s) in {args.stub_dir}:")
+        for path in written:
+            print(f"  - {path}")
+    else:
+        print(f"harness-inspect: no new stubs — {args.stub_dir} is already up to date.")
+    return _EXIT_OK
+
+
+def open_readonly_span_store_for_holdout(collector_path: Path) -> sqlite3.Connection:
+    """Read-only open shared with `--browse` (same read-only invariant, C-RT-13)."""
+    from harness_runtime.admin.trace_browser import open_readonly_span_store
+
+    return open_readonly_span_store(collector_path)
+
+
+# ---------------------------------------------------------------------------
 # Entry point.
 # ---------------------------------------------------------------------------
 
@@ -301,6 +566,12 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.browse:
         return _run_browse(args.collector_path)
+    if args.holdout_sample is not None:
+        return _run_holdout_sample(args)
+    if args.holdout_review:
+        return _run_holdout_review(args)
+    if args.holdout_scaffold:
+        return _run_holdout_scaffold(args)
 
     ledger_path: Path = args.ledger_path
     last_n: int = args.last_n
