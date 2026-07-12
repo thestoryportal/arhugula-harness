@@ -46,12 +46,32 @@
 snapshot:
   frozen_total: 11
   frozen_done: 11
-  standalone_closed: 90
+  standalone_closed: 91
   standalone_gated: 0
   standalone_resolved: 4
-  standalone_registered: 4
+  standalone_registered: 3
   rfs1_status: active
   source: ".harness/beyond-mvp-capability-boundary-ledger.md"
+  # FRONTIER NOTE (2026-07-12, B-OD-ENVELOPE-P6-SWEEP closed — R-FS-2 Wave 3
+  # third arc, grounding-only, no code change). standalone_closed 90→91,
+  # standalone_registered 4→3. Disposition table over 15 entries (11 v1.2 +
+  # 4 post-v1.2 discretion blocks): 8 full + 2 partial already-realized;
+  # cross-SDK-conformance items + seam-versioning genuinely-discretionary
+  # (single-language build / explicitly out-of-scope-at-v1). An Explore agent
+  # did first-pass code search; every negative claim was independently
+  # re-verified — caught ONE false negative (reject_excluded_cell IS wired
+  # at tracer_provider.py:230-236, contra the agent's claim), corrected
+  # before it produced an overclaimed forward-item. advisor()-checked:
+  # scoped the C-OD-01 gap narrowly (2/3 sub-invariants realized) and
+  # reframed C-OD-12 encryption-in-flight as a live conditional gap (the
+  # session_content_capture() toggle is a real production trigger), not
+  # not-applicable. 3 combined forward items registered, NOT built: (1)
+  # cell-transition-observable event + wiring the dormant
+  # bridging_arc_table.verify_transition to it (C-OD-01+C-OD-22); (2)
+  # C10-gate <-> breaker-trip subscription wiring (C-OD-07); (3)
+  # attribute-level encryption-in-flight for session_content_capture()
+  # (C-OD-12, conditional). Full table at
+  # .harness/b-od-envelope-p6-sweep-disposition-table.md.
   # FRONTIER NOTE (2026-07-12, B-MCP-PRIMITIVE-SIG-GATE closed — R-FS-2 Wave 3
   # second arc, grounding-only, no code change). standalone_closed 89→90,
   # standalone_registered 5→4. Branch B (research-only-gate / attribute-
@@ -2161,11 +2181,12 @@ arcs:
   - id: B-OD-ENVELOPE-P6-SWEEP
     title: "OD deferral-envelope phase-6 disposition sweep (11 v1.2 entries + 4 post-v1.2 discretion blocks)"
     kind: standalone
-    status: registered
-    decompose_at_open: true
+    status: closed
+    pr: "#950"
     owner_axis: "OD"
     parent_arc: R-FS-2
     anticipated_scope: "Disposition sweep over the remaining phase-6-targeted deferral-envelope entries (deferral_envelope.py enumerates OD spec v1.2 §1-§23; 14 entries carry the phase-6 closure target; C-OD-17/18/19 have their own arcs — this sweep covers the other 11): C-OD-01 cell-identification API + transition state-machine + binding persistence; C-OD-04 SDK binding + exporter; C-OD-05 cross-SDK namespace conformance harness; C-OD-06 span-event emission API + sibling correlation; C-OD-07 breaker OTLP emission (expected already-realized at the runtime breaker-span landing); C-OD-08 runtime cross-namespace validation; C-OD-09 tail-sampling decision algorithm (expected realized: composite sampler + tail-keep processor); C-OD-12 default-off filter (expected realized: content-structure discipline); C-OD-13 eval-grade redaction pipeline (expected realized: redaction span processor); C-OD-22 transition-planning UX + cross-cell config; C-OD-23 cross-spec citation strings + seam versioning. PLUS the four post-v1.2 discretion blocks the envelope does not enumerate (OD v1.8 delta §25.5/§26.5/§27.5/§28.5 — pre-reviewed 2026-07-11: each names a default already realized in the built contracts). Per entry: body-read the contract + locate realizing code + classify already-realized (cite the consumer-visible surface — presence is not correctness) / scoped-build (register a follow-on row) / genuinely-discretionary-no-op (cite the discretion sentence). Deliverable: an evidence-cited disposition table at .harness/ covering all 15."
+    close_note: "Disposition table filed, no spec/code change. Of 15 entries: 8 full + 2 partial already-realized (C-OD-04/05/06/08/09/12-partial/13/23 + all 4 post-v1.2 §25.5-§28.5 discretion blocks, each already-realized-as-the-chosen-default); cross-SDK-conformance items (04/05/09) and seam-versioning (23) genuinely-discretionary-no-op (single-language build / explicitly out-of-scope-at-v1 per the spec's own text). An Explore agent did the first-pass code search across all 15 items; every NOT-FOUND (negative) claim was independently re-verified rather than trusted, per the standing discipline that sweep negatives are the unreliable half of a delegated search — this caught ONE real false negative (the agent claimed reject_excluded_cell had no production call site; it is in fact wired at tracer_provider.py:230-236, verified directly), corrected before it could produce an overclaimed forward-item registration. advisor()-checked before finalizing: scoped the C-OD-01 gap narrowly (2 of 3 §1.5 sub-invariants — identifiability + excluded-cell-rejection — are already realized; only cell-transition-observable is a genuine gap) rather than overclaiming the whole contract unbuilt, and reframed C-OD-12's encryption-in-flight as a live conditional gap (the session_content_capture() toggle is a real, callable production trigger) rather than not-applicable. 3 combined forward items registered, NOT built (each would need its own Class 1 fork before implementation, per X-AL-3): (1) cell-transition-observable before/after event emission + wiring the already-built-but-dormant bridging_arc_table.verify_transition to fire at that event (combines C-OD-01 + C-OD-22 — verify_transition is fully implemented with real PASS/FAIL logic but has zero production callers, confirmed by direct grep); (2) C10-gate ↔ C7-breaker-trip subscription wiring (C-OD-07 — confirmed no breaker-state input anywhere in gate_level_rule.py/hitl_gate_composer.py); (3) attribute-level encryption-in-flight for the session_content_capture()-enabled content path (C-OD-12, conditional — not gating since no default enables it). Full table at .harness/b-od-envelope-p6-sweep-disposition-table.md."
     units: []
     ledger_ref: ".harness/r-fs-2-final-closure-implementation-plan-v1.md"
 
