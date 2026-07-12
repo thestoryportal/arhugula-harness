@@ -1995,6 +1995,7 @@ arcs:
     title: "tool_search capability-discovery runtime path (ADR-D3 §1.5 cache-prefix discipline)"
     kind: standalone
     status: closed
+    pr: "#940"
     owner_axis: "AS + runtime"
     parent_arc: R-FS-2
     anticipated_scope: "ADR-D3 §1.5 cache-prefix integrity discipline commits per-MCP capability discovery via tool_search rather than tools[] mutation. Modeled only at HEAD (skill.activation_mode enum value; the adoption-depth matrix); no runtime search-dispatch mechanism; the frozen tool superset is the current realization. Grounding-first: read the adoption-depth cell for tool_search at the current workload classes — if the committed depth for every live cell is deferred/not-adopted, close as adoption-depth-honored with cites; otherwise build: a search tool inside the frozen superset returning deferred schemas on demand + skill.activation span emission in tool_search mode + a cache-prefix invariance witness (tools[] bytes unchanged across searches — the point of the mechanism)."
