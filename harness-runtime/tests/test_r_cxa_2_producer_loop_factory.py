@@ -6,6 +6,8 @@ import asyncio
 from pathlib import Path
 from typing import Any
 
+from harness_as.sandbox_tier import BlastRadiusTier, SandboxTier
+from harness_as.tool_contract import ToolContract
 from harness_core import PersonaTier
 from harness_core.deployment_surface import DeploymentSurface
 from harness_core.workload_class import WorkloadClass
@@ -34,12 +36,14 @@ from harness_runtime.lifecycle.hitl_tool_loop import (
     ModelToolCall,
 )
 from harness_runtime.lifecycle.state_ledger import LedgerWriter, materialize_state_ledger
+from harness_runtime.lifecycle.tool_registry import ToolRegistry
 from harness_runtime.types import (
     CollectorConfig,
     OTelConfig,
     PathBindingConfig,
     ProviderSecretsConfig,
     RuntimeConfig,
+    ToolName,
 )
 
 _ACTOR = ActorIdentity("r-cxa-2-stage-5")
@@ -139,6 +143,39 @@ def _call(tool_call_id: str = "provider-call-1") -> ModelToolCall:
     )
 
 
+class _FakeMCPHost:
+    """Minimal MCPClientHost stand-in — `.tool_registry` only."""
+
+    def __init__(self, registry: ToolRegistry) -> None:
+        self.tool_registry = registry
+
+
+def _deferred_hosts() -> dict[str, Any]:
+    registry = ToolRegistry()
+    registry.register(
+        ToolContract(
+            name="alpha_reader",
+            description="reads alpha files",
+            input_schema={"type": "object"},
+            output_schema={"type": "object"},
+            minimum_tier=SandboxTier.TIER_1_PROCESS,
+            blast_radius_tier=BlastRadiusTier.READ_ONLY,
+        )
+    )
+    return {"srv": _FakeMCPHost(registry)}
+
+
+def _search_call(query: str, tool_call_id: str = "search-call-1") -> ModelToolCall:
+    return ModelToolCall(
+        tool_call_id=tool_call_id,
+        tool="search_tools",
+        server="mcp-main",
+        arguments={"query": query},
+        provider="fixture-provider",
+        model="fixture-model",
+    )
+
+
 def _post_tool_dispatcher_context(
     tmp_path: Path,
     order: list[str],
@@ -227,3 +264,74 @@ def test_bound_engine_loop_emits_pause_and_resume_entries(tmp_path: Path) -> Non
         "cp.pause-captured",
         "cp.resume-attempted",
     ]
+
+
+# --------------------------------------------------------------------------
+# B-TOOL-SEARCH-RUNTIME — search_tools intercepted before self.tool_dispatcher
+# --------------------------------------------------------------------------
+def test_search_tools_call_answered_without_reaching_tool_dispatcher(tmp_path: Path) -> None:
+    """The genuine end-to-end wiring gap Codex flagged on PR #940: a model call
+    to `search_tools` must resolve via `deferred_tool_index`, NEVER reaching
+    `self.tool_dispatcher` (which has no routing-index entry for a synthetic
+    tool and would raise `RT-FAIL-TOOL-CONTRACT-UNKNOWN`)."""
+    order: list[str] = []
+    ctx, config, ask_surface, tool_dispatcher = _post_tool_dispatcher_context(tmp_path, order)
+    ctx.mcp_client_hosts = _deferred_hosts()
+    stage = materialize_r_cxa_2_producer_loop_stage(
+        ctx, config, defer_names=frozenset({ToolName("alpha_reader")})
+    )
+
+    results = asyncio.run(stage.hitl_tool_loop.run_tool_calls([_search_call("alpha")], _context()))
+
+    assert results[0].dispatched is True
+    # "dispatch" is appended ONLY by the fake `_ToolDispatcher.dispatch` — its
+    # absence here IS the proof the wrapped C-RT-19 dispatcher (which raises
+    # on any unknown tool_id) was never invoked for this call.
+    assert order == ["gate"]
+    assert tool_dispatcher.calls == []
+    dispatch_result = results[0].dispatch_result
+    assert dispatch_result is not None
+    assert dispatch_result["tool_id"] == "search_tools"
+    assert dispatch_result["response"]["matches"] == [
+        {
+            "name": "alpha_reader",
+            "description": "reads alpha files",
+            "input_schema": {"type": "object"},
+        }
+    ]
+    assert ask_surface.calls[0][0] == "HITL tool call search_tools on mcp-main"
+
+
+def test_search_tools_no_match_returns_empty_matches(tmp_path: Path) -> None:
+    ctx, config, _ask_surface, tool_dispatcher = _post_tool_dispatcher_context(tmp_path, [])
+    ctx.mcp_client_hosts = _deferred_hosts()
+    stage = materialize_r_cxa_2_producer_loop_stage(
+        ctx, config, defer_names=frozenset({ToolName("alpha_reader")})
+    )
+
+    results = asyncio.run(
+        stage.hitl_tool_loop.run_tool_calls([_search_call("no-such-thing")], _context())
+    )
+
+    assert results[0].dispatch_result is not None
+    assert results[0].dispatch_result["response"]["matches"] == []
+    assert tool_dispatcher.calls == []
+
+
+def test_default_defer_names_leaves_search_tools_unreachable_via_adapter(
+    tmp_path: Path,
+) -> None:
+    """Byte-behavior-identical default: with `defer_names` empty (the
+    production default — no operator-facing policy exists yet), the adapter's
+    `deferred_tool_index` is empty, so a hypothetical `search_tools` call
+    still resolves through the interception (never crashes the wrapped
+    dispatcher) but reports zero matches — the honest empty-index behavior."""
+    ctx, config, _ask_surface, tool_dispatcher = _post_tool_dispatcher_context(tmp_path, [])
+    ctx.mcp_client_hosts = _deferred_hosts()
+    stage = materialize_r_cxa_2_producer_loop_stage(ctx, config)
+
+    results = asyncio.run(stage.hitl_tool_loop.run_tool_calls([_search_call("")], _context()))
+
+    assert results[0].dispatch_result is not None
+    assert results[0].dispatch_result["response"]["matches"] == []
+    assert tool_dispatcher.calls == []

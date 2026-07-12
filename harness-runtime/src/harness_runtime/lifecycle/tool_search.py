@@ -26,6 +26,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from harness_as.sandbox_tier import BlastRadiusTier
+
 from harness_runtime.types import ToolName
 
 __all__ = [
@@ -62,6 +64,8 @@ SEARCH_TOOLS_CONTRACT: Mapping[str, Any] = {
 def compute_deferred_tool_index(
     mcp_client_hosts: Mapping[Any, Any] | None,
     defer_names: frozenset[ToolName],
+    *,
+    remove_tiers: frozenset[BlastRadiusTier] = frozenset(),
 ) -> Mapping[str, Mapping[str, Any]]:
     """Project the deferred subset of registered MCP tools to their full schemas.
 
@@ -69,6 +73,16 @@ def compute_deferred_tool_index(
     ``{name, description, input_schema}`` shape) but keeps ONLY tools whose
     name is in ``defer_names`` — the complement of the eager union. Walks the
     same ``ctx.mcp_client_hosts`` dispatch-scoped registry (C10 condition 2).
+
+    ``remove_tiers`` — MUST mirror the same ``remove_tiers`` passed to the
+    paired ``compute_frozen_tool_superset(...)`` call (e.g.
+    ``CHILD_DOWNGRADE_REMOVE_TIERS`` for a descended sub-agent's superset). A
+    tool omitted from the eager union via ``remove_tiers`` (blast-radius
+    visibility control) MUST also be omitted here — otherwise a tool hidden
+    from a descended child's ``tools[]`` would be rediscoverable via
+    ``search_tools``, defeating the ADR-D4 §1.5 REMOVE visibility control.
+    Checked BEFORE ``defer_names`` membership so a removed tool is excluded
+    regardless of whether it is also deferred.
 
     Empty ``defer_names`` (or no host holds a matching name) → empty mapping.
     """
@@ -81,6 +95,8 @@ def compute_deferred_tool_index(
             if name not in defer_names:
                 continue
             contract = registry.get(name)
+            if contract.blast_radius_tier in remove_tiers:
+                continue
             deferred[str(contract.name)] = {
                 "name": contract.name,
                 "description": contract.description,
