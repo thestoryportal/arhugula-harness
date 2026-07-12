@@ -761,6 +761,70 @@ async def test_path_i_present_but_corrupt_pause_fails_closed(
 
 
 @pytest.mark.asyncio
+async def test_path_i_wal_completed_run_retry_is_idempotent(
+    tmp_path: Path,
+    patched_runtime: dict[str, Any],
+) -> None:
+    """F1-01 (C-CP-07 §7.4 floor (ii)) — a fully-completed WAL_SEGMENT run
+    RE-DRIVEN with the SAME run_id (at-least-once redelivery / crash-after-
+    completion) is idempotent: exactly ONE `cp.resume-attempted` entry, not a
+    duplicate.
+
+    Status stays SUCCESS on both buggy and fixed code — WAL's re-resumable
+    substrate returns RESUME_CLEAN on a completed-run re-drive either way (unlike
+    the RECONCILER_LOOP sibling bug, where a completed-run re-drive CAS-aborts to
+    FAILED). So status/fail_class/dispatched are NOT discriminating here; the
+    only witness is the `cp.resume-attempted` ledger-entry COUNT staying at 1
+    across the completed-run retry (`.harness/r-fs-1-e-impl-3c-f1-01-wal-exactly-once.md`).
+    """
+    _ = patched_runtime
+    config = build_config(tmp_path)
+    ctx = await run_bootstrap(config, workload_class=WORKLOAD)
+    _attach_get_tracer_to_ctx(ctx)
+    handle = ctx.engine_recovery_loop.wiring.ledger_writer.handle
+    manifest = _manifest("wf-wal-done", engine_class=EngineClass.WAL_SEGMENT)
+    steps = _two_inference_steps()
+    dispatcher = _PauseAfterFirstStepDispatcher(ctx.pause_requested_flag)
+    registry = _SingleKindRegistry(dispatcher)
+
+    def _run() -> Any:
+        return execute_workflow(
+            manifest_entry=manifest,
+            steps=steps,
+            run_id="run-wal-done",
+            ctx=ctx,  # type: ignore[arg-type]
+            default_model_binding=_DEFAULT_BINDING,
+            step_dispatchers=registry,  # type: ignore[arg-type]
+        )
+
+    # r1: pause at the segment boundary (after step 0 commits).
+    paused = await asyncio.to_thread(_run)
+    assert paused.status is RunStatus.PAUSED
+
+    # r2: resume — the committed segment prefix fires attempt_resume once.
+    ctx.pause_requested_flag.clear()
+    resumed = await asyncio.to_thread(_run)
+    assert resumed.status is RunStatus.SUCCESS, (
+        f"expected SUCCESS, got {resumed.status}; fail_class={resumed.fail_class}"
+    )
+    resume_count_after_r2 = [e.action_id for e in read_ledger(handle)].count("cp.resume-attempted")
+    assert resume_count_after_r2 == 1
+
+    # r3: re-drive the COMPLETED run (same run_id) — must NOT emit a second
+    # cp.resume-attempted (the completed-run guard skips the engine-resume fire
+    # outright once every step is committed, `resume_at == len(steps)`).
+    ctx.pause_requested_flag.clear()
+    retried = await asyncio.to_thread(_run)
+    assert retried.status is RunStatus.SUCCESS
+    assert dispatcher.dispatched == ["step-0", "step-1"]
+    resume_count_after_r3 = [e.action_id for e in read_ledger(handle)].count("cp.resume-attempted")
+    assert resume_count_after_r3 == 1, (
+        "completed-run retry must be idempotent (no duplicate cp.resume-attempted); "
+        f"got count={resume_count_after_r3}"
+    )
+
+
+@pytest.mark.asyncio
 async def test_path_i_pause_record_is_run_scoped_not_workflow_scoped(
     tmp_path: Path,
     patched_runtime: dict[str, Any],
