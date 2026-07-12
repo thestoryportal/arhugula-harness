@@ -46,12 +46,23 @@
 snapshot:
   frozen_total: 11
   frozen_done: 11
-  standalone_closed: 80
+  standalone_closed: 81
   standalone_gated: 0
   standalone_resolved: 4
-  standalone_registered: 14
+  standalone_registered: 13
   rfs1_status: active
   source: ".harness/beyond-mvp-capability-boundary-ledger.md"
+  # FRONTIER NOTE (2026-07-12, B-WAL-F1-01-EXACTLY-ONCE closed at PR #936 — R-FS-2 Wave 1
+  # second arc). standalone_closed 80→81, standalone_registered 14→13. WAL_SEGMENT
+  # completed-run-retry duplicate cp.resume-attempted emission (C-CP-07 §7.4 floor-(ii))
+  # fixed by applying the RECONCILER_LOOP branch's resume_at < len(steps) completed-run
+  # guard symmetrically to the WAL_SEGMENT branch; new witness
+  # test_path_i_wal_completed_run_retry_is_idempotent confirmed fail-on-main by execution.
+  # Also corrects a pre-existing latent bare-int `pr: 935` format defect on B-18-KEEPALIVE
+  # (should have been `pr: "#935"` per the documented convention — CI's arc-ledger tally
+  # gate on main had been passing only because main is unprotected and the malformed field
+  # was never re-checked post-merge; caught here because this PR's own review triggered a
+  # fresh run of the same gate against the full ledger). Next: B-SKILL-FRONTMATTER-VALIDATOR.
   # FRONTIER NOTE (2026-07-11, R-FS-2 REGISTRATION — the anticipated flip fires): the
   # R-FS-2 final-closure umbrella (status remaining) + 15 registered child arcs enter the
   # register per .harness/r-fs-2-final-closure-implementation-plan-v1.md (Unit-0);
@@ -1896,7 +1907,7 @@ arcs:
     title: "Boot-time prompt-cache pre-warm + 4-min keep-alive loop (ADR-D3 §1.5 lines 189-190; opt-in default-off)"
     kind: standalone
     status: closed
-    pr: 935
+    pr: "#935"
     owner_axis: "runtime"
     parent_arc: R-FS-2
     anticipated_scope: "ADR-D3 §1.5 lines 189-190 (cleared, byte-verified) commit boot-time pre-warm (max_tokens=0 at process boot) + keep-alive every 4min for 5min-TTL caches. Named at the 3c DDR §8 as B-18-KEEPALIVE (R2); deferred at the slice-3b design doc §3.3/§4.3 with the C11-safe default named: OPT-IN, DEFAULT OFF. Zero code at HEAD (verified twice: completeness audit + its adversarial reviewer). Shape: runtime spec delta + clearance (bundled absorption) recording (a) the max_tokens=1 minimal-ping adaptation (messages.create requires max_tokens — llm_dispatch.py:1917; mirrors the ratified 3c await-completion precedent) and (b) the R2 skip-under-cost-ceiling disposition (build the carve-out or explicitly re-defer with rationale); RuntimeConfig opt-in fields threaded through BOTH env loaders; boot ping at the stage-5/daemon seam against the parent-agent cacheable epoch; 4-min keep-alive task for 5m-TTL epochs ONLY (1h epochs excluded by design), daemon-scoped, cancelled at drain/shutdown, per-run isolation respected; pings flow through normal dispatch so cost attribution + anthropic.* cache attrs record them (no shadow spend). Witnesses: default-off byte-identical dispatch control; opt-in boot ping observed with cache attrs; fake-clock TTL firing; 1h-epoch exclusion; drain cancellation."
@@ -1906,13 +1917,14 @@ arcs:
   - id: B-WAL-F1-01-EXACTLY-ONCE
     title: "WAL completed-run-retry duplicate resume-attempted emission (floor-(ii) exactly-once residual)"
     kind: standalone
-    status: registered
-    decompose_at_open: true
+    status: closed
+    pr: "#936"
     owner_axis: "CP"
     parent_arc: R-FS-2
     anticipated_scope: "C-CP-07 §7.4 floor-(ii) exactly-once residual: WAL_SEGMENT completed-run retry duplicates the engine-layer resume-attempted emission by one (an OD audit-trace over-count; no fail-closed, no run failure, no corruption). Residual doc .harness/r-fs-1-e-impl-3c-f1-01-wal-exactly-once.md (OPEN, non-gating) carries the fix shape: apply the same completed-run guard symmetrically. Witness pins a single resume-prefixed emission on completed-run retry; control: no other status/fail_class byte changes."
     units: []
     ledger_ref: ".harness/r-fs-2-final-closure-implementation-plan-v1.md"
+    close_note: "PR #936. Applied the RECONCILER_LOOP branch's `resume_at < len(steps)` completed-run guard symmetrically to the WAL_SEGMENT `_resume_engine_pause` predicate (workflow_driver.py); a completed WAL run re-driven with the same run_id no longer re-fires attempt_resume, so cp.resume-attempted stays a single entry. Status/fail_class unaffected (WAL was already SUCCESS-idempotent; only the audit ledger over-counted). New witness test_path_i_wal_completed_run_retry_is_idempotent asserts the resume-attempted count stays at 1 across a completed-run retry — confirmed fail-on-main (count=2) before the fix, by execution. Fable-5 decorrelated review (just codex-review blocked by session permission policy) + a follow-on Grok-backed just codex-review pass both ran; the Grok pass's one finding (sync this ledger entry before treating the residual doc as closed) is what this close_note resolves. harness-cp 1547/1548 (1 skip, 1 xfail); harness-runtime 2383/2423 (40 skip); pyright 0/0/0; ruff clean."
 
   - id: B-SKILL-FRONTMATTER-VALIDATOR
     title: "SKILL.md frontmatter constraint enforcement at the skills filesystem-load seam"
