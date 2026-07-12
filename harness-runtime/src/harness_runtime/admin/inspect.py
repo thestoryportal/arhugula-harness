@@ -254,7 +254,7 @@ def _run_browse(collector_path: Path | None) -> int:
 
     try:
         conn = open_readonly_span_store(collector_path)
-    except sqlite3.OperationalError as exc:
+    except sqlite3.DatabaseError as exc:
         print(
             f"harness-inspect: RT-FAIL-INSPECT-PATH — collector sqlite not found "
             f"or unreadable at {collector_path}: {exc}",
@@ -263,11 +263,14 @@ def _run_browse(collector_path: Path | None) -> int:
         return _EXIT_INSPECT_PATH
     try:
         # Run the real rollup query before entering curses — a wrong/old
-        # collector-db schema (missing table, missing column) then surfaces
-        # here as a clean RT-FAIL-INSPECT-PATH exit rather than a raw
-        # traceback mid-render inside `curses.wrapper`.
+        # collector-db schema (missing table, missing column) or a file that
+        # isn't a sqlite database at all (`sqlite3.DatabaseError`, which
+        # `OperationalError` subclasses — SQLite defers "file is not a
+        # database" until the first read) then surfaces here as a clean
+        # RT-FAIL-INSPECT-PATH exit rather than a raw traceback mid-render
+        # inside `curses.wrapper`.
         rollups = compute_operator_burden_rollups(conn)
-    except sqlite3.OperationalError as exc:
+    except sqlite3.DatabaseError as exc:
         conn.close()
         print(
             f"harness-inspect: RT-FAIL-INSPECT-PATH — {collector_path} is not an "

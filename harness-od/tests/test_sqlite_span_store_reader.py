@@ -11,6 +11,7 @@ from harness_od.sqlite_span_store import (
     insert_spans,
 )
 from harness_od.sqlite_span_store_reader import (
+    read_all_spans,
     read_span_by_id,
     read_spans_by_name,
     read_spans_by_trace,
@@ -118,6 +119,32 @@ def test_read_span_by_id_returns_none_when_absent(db_path: Path) -> None:
     finally:
         conn.close()
     assert result is None
+
+
+def test_read_all_spans_returns_every_row_ordered_by_start_time(db_path: Path) -> None:
+    conn = initialize_span_store(db_path)
+    try:
+        insert_spans(
+            conn,
+            [
+                _row("s2", name="chat model-a", start_time_ns=200),
+                _row("s1", name="sandbox.violation", start_time_ns=100),
+                _row("s3", name="hitl.invocation.responded", start_time_ns=300),
+            ],
+        )
+        result = read_all_spans(conn)
+    finally:
+        conn.close()
+    assert [s.span_id for s in result] == ["s1", "s2", "s3"]
+
+
+def test_read_all_spans_returns_empty_for_empty_store(db_path: Path) -> None:
+    conn = initialize_span_store(db_path)
+    try:
+        result = read_all_spans(conn)
+    finally:
+        conn.close()
+    assert result == []
 
 
 def test_read_spans_by_name_returns_matching_rows_ordered_by_start_time(

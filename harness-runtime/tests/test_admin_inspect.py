@@ -368,6 +368,34 @@ def test_browse_non_span_store_db_exits_nonzero_instead_of_crashing(
     assert called is False  # never reached curses
 
 
+def test_browse_non_sqlite_file_exits_nonzero_instead_of_crashing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A file that exists but isn't a SQLite database at all (operator typo
+    pointing --collector-path at the wrong file) raises `sqlite3.DatabaseError`
+    ("file is not a database") on the first read, not `OperationalError` —
+    must still exit cleanly with RT-FAIL-INSPECT-PATH."""
+    import curses
+
+    db_path = tmp_path / "not-sqlite-at-all.db"
+    db_path.write_text("not a sqlite database")
+
+    called = False
+
+    def _fake_wrapper(func: object, *args: object) -> None:
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(curses, "wrapper", _fake_wrapper)
+
+    code = main(["--browse", "--collector-path", str(db_path)])
+    err = capsys.readouterr().err
+
+    assert code == 2
+    assert "RT-FAIL-INSPECT-PATH" in err
+    assert called is False  # never reached curses
+
+
 def test_browse_wrong_schema_db_exits_nonzero_instead_of_crashing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

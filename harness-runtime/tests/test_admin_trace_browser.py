@@ -127,9 +127,44 @@ def test_rollup_cache_hit_ratio_computed_from_attributes(conn: sqlite3.Connectio
     assert cache_rollup.value == pytest.approx(0.75)
 
 
+def test_rollup_cache_hit_finds_attrs_on_real_llm_inference_span_name(
+    conn: sqlite3.Connection,
+) -> None:
+    """Regression: the cache-hit-rate primitive's data lives on LLM-inference
+    spans named `"chat <model>"` (per `harness_runtime.lifecycle.llm_dispatch`),
+    NOT on a span literally named `"anthropic.cache"` (`source_span_class` is
+    a namespace label, not a literal `spans.name`). A name-based query would
+    report zero data even when cache attributes are present."""
+    insert_spans(
+        conn,
+        [
+            _span(
+                "s1",
+                name="chat claude-sonnet-5",
+                attributes_json=(
+                    '{"gen_ai.operation.name": "chat", '
+                    '"anthropic.cache_read_input_tokens": 300, '
+                    '"anthropic.cache_creation_input_tokens": 100}'
+                ),
+            ),
+            _span(
+                "s2",
+                name="chat claude-sonnet-5",
+                attributes_json='{"gen_ai.usage.input_tokens": 5}',
+            ),
+        ],
+    )
+    rollups = compute_operator_burden_rollups(conn)
+    by_primitive = {r.declaration.primitive: r for r in rollups}
+    cache_rollup = by_primitive[OperatorBurdenEvalPrimitive.CACHE_HIT_RATE_ALIGNMENT_FLOOR]
+    assert cache_rollup.matching_span_count == 1  # only s1 carries a cache attr
+    assert cache_rollup.value == pytest.approx(0.75)
+
+
 def test_rollup_ignores_non_object_attributes_json(conn: sqlite3.Connection) -> None:
-    """`attributes_json` decoding to a list/scalar (not a dict) must not crash
-    the rollup — it contributes zero, same as unparseable JSON."""
+    """A span whose `attributes_json` decodes to a list/scalar (not a dict)
+    must not crash the rollup — it's treated as carrying no cache attributes
+    (matching_span_count 0), same as unparseable JSON."""
     insert_spans(
         conn,
         [
@@ -141,7 +176,7 @@ def test_rollup_ignores_non_object_attributes_json(conn: sqlite3.Connection) -> 
     by_primitive = {r.declaration.primitive: r for r in rollups}
     cache_rollup = by_primitive[OperatorBurdenEvalPrimitive.CACHE_HIT_RATE_ALIGNMENT_FLOOR]
     assert cache_rollup.value is None
-    assert cache_rollup.matching_span_count == 2
+    assert cache_rollup.matching_span_count == 0
 
 
 def test_rollup_ignores_non_numeric_cache_token_values(conn: sqlite3.Connection) -> None:

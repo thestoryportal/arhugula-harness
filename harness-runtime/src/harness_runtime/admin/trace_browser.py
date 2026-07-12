@@ -42,7 +42,7 @@ from harness_od.operator_burden_eval_primitives import (
     EvalPrimitiveDeclaration,
 )
 from harness_od.sqlite_span_store import SpanInsertRow
-from harness_od.sqlite_span_store_reader import read_spans_by_name
+from harness_od.sqlite_span_store_reader import read_all_spans, read_spans_by_name
 
 __all__ = [
     "OperatorBurdenRollup",
@@ -71,6 +71,35 @@ class OperatorBurdenRollup:
     value: float | None
 
 
+_CACHE_READ_ATTR = "anthropic.cache_read_input_tokens"
+_CACHE_CREATION_ATTR = "anthropic.cache_creation_input_tokens"
+
+
+def _parse_attrs(attributes_json: str) -> dict[str, Any] | None:
+    """Best-effort JSON-object decode of a span's `attributes_json`.
+
+    Returns `None` for unparseable JSON or a decoded non-object (list,
+    scalar) — both are treated as "no attributes" rather than raising."""
+    try:
+        parsed = json.loads(attributes_json)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    return cast("dict[str, Any]", parsed)
+
+
+def _has_cache_attrs(row: SpanInsertRow) -> bool:
+    """True iff `row` carries either `anthropic.cache_*` token attribute.
+
+    The cache-hit-rate primitive's data lives on LLM-inference spans (e.g.
+    `"chat <model>"`, per `harness_runtime.lifecycle.llm_dispatch`), not on a
+    span named after the primitive — this predicate scans by attribute
+    presence rather than by `spans.name`."""
+    attrs = _parse_attrs(row.attributes_json)
+    return attrs is not None and (_CACHE_READ_ATTR in attrs or _CACHE_CREATION_ATTR in attrs)
+
+
 def _cache_hit_ratio(rows: list[SpanInsertRow]) -> float | None:
     """§17.1 primitive-4 formula: cache_read / (cache_read + cache_creation).
 
@@ -83,15 +112,11 @@ def _cache_hit_ratio(rows: list[SpanInsertRow]) -> float | None:
     read_total = 0
     creation_total = 0
     for row in rows:
-        try:
-            parsed = json.loads(row.attributes_json)
-        except json.JSONDecodeError:
+        attrs = _parse_attrs(row.attributes_json)
+        if attrs is None:
             continue
-        if not isinstance(parsed, dict):
-            continue
-        attrs = cast("dict[str, Any]", parsed)
-        read_total += _coerce_int(attrs.get("anthropic.cache_read_input_tokens"))
-        creation_total += _coerce_int(attrs.get("anthropic.cache_creation_input_tokens"))
+        read_total += _coerce_int(attrs.get(_CACHE_READ_ATTR))
+        creation_total += _coerce_int(attrs.get(_CACHE_CREATION_ATTR))
     denom = read_total + creation_total
     if denom == 0:
         return None
@@ -116,18 +141,32 @@ def compute_operator_burden_rollups(
     """Scoped-query rollup over the 5 operator-burden eval primitives (§19.3).
 
     One `OperatorBurdenRollup` per `EVAL_PRIMITIVE_DECLARATIONS` entry
-    (canonical order), querying the sqlite span store for spans whose `name`
-    equals the primitive's `source_span_class`. §17.1 declares the same
-    `source_span_class` (`"meta-eval"`) for two primitives
-    (`sandbox_tier_routing_accuracy`, `routing_accuracy_holdout`) — both
-    surface the same matching-span count per the spec's own
-    primitive-to-span-class mapping; this is spec fidelity, not an
-    under-differentiated query.
+    (canonical order). For 4 of the 5 primitives, queries the sqlite span
+    store for spans whose `name` equals the primitive's `source_span_class`
+    — §17.1 declares the same `source_span_class` (`"meta-eval"`) for two of
+    those (`sandbox_tier_routing_accuracy`, `routing_accuracy_holdout`), so
+    both surface the same matching-span count per the spec's own
+    primitive-to-span-class mapping (spec fidelity, not an
+    under-differentiated query).
+
+    The 5th primitive (`cache_hit_rate_alignment_floor`, the only one with a
+    `computation_formula`) is carried as *attributes* on LLM-inference spans
+    rather than on a span named after the primitive — its `source_span_class`
+    is a namespace label, not a literal `spans.name`. That primitive scans
+    every span (`read_all_spans`, cached across the loop) and filters by
+    attribute presence instead.
     """
+    all_rows: list[SpanInsertRow] | None = None
     rollups: list[OperatorBurdenRollup] = []
     for declaration in EVAL_PRIMITIVE_DECLARATIONS:
-        rows = read_spans_by_name(conn, declaration.source_span_class)
-        value = _cache_hit_ratio(rows) if declaration.computation_formula else None
+        if declaration.computation_formula:
+            if all_rows is None:
+                all_rows = read_all_spans(conn)
+            rows = [r for r in all_rows if _has_cache_attrs(r)]
+            value = _cache_hit_ratio(rows)
+        else:
+            rows = read_spans_by_name(conn, declaration.source_span_class)
+            value = None
         rollups.append(
             OperatorBurdenRollup(
                 declaration=declaration,
