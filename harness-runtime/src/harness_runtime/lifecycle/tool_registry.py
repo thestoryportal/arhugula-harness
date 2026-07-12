@@ -29,10 +29,12 @@ from collections.abc import Iterable
 from harness_as.tool_contract import ToolContract
 
 from harness_runtime.lifecycle.skills import Skill
+from harness_runtime.lifecycle.tool_search import SEARCH_TOOLS_TOOL_NAME
 from harness_runtime.types import SkillID, ToolName
 
 __all__ = [
     "DuplicateToolNameError",
+    "ReservedToolNameError",
     "ToolNameNotRegisteredError",
     "ToolRegistry",
     "materialize_tool_registry",
@@ -44,6 +46,29 @@ class DuplicateToolNameError(ValueError):
 
     def __init__(self, name: ToolName) -> None:
         super().__init__(f"tool {name!r} already registered")
+        self.name = name
+
+
+class ReservedToolNameError(ValueError):
+    """Raised when `register` is called with a name reserved for a synthetic tool.
+
+    B-TOOL-SEARCH-RUNTIME (AS spec v1.13 §13.7): `search_tools` is reserved
+    for the synthetic capability-discovery tool the frozen superset appends
+    when `defer_names` is non-empty. Without this reservation, a real MCP
+    tool named `search_tools` would collide with the synthetic contract —
+    `_RuntimeToolDispatcherModelCallAdapter.dispatch` intercepts EVERY call
+    named `search_tools` unconditionally, so a real tool of that name would
+    silently never be dispatched (its calls answered with synthetic search
+    results instead). Fail loud at registration rather than allow the
+    silent shadowing, mirroring `DuplicateToolNameError`'s existing
+    fail-loud-on-collision precedent in this same class.
+    """
+
+    def __init__(self, name: ToolName) -> None:
+        super().__init__(
+            f"tool name {name!r} is reserved for the synthetic "
+            "search_tools capability-discovery contract (AS spec v1.13 §13.7)"
+        )
         self.name = name
 
 
@@ -68,8 +93,14 @@ class ToolRegistry:
         self._by_name: dict[ToolName, ToolContract] = {}
 
     def register(self, contract: ToolContract) -> None:
-        """Register a tool contract; reject if its name already exists."""
+        """Register a tool contract; reject if its name already exists.
+
+        Also rejects `SEARCH_TOOLS_TOOL_NAME` — reserved for the synthetic
+        capability-discovery tool (see `ReservedToolNameError`).
+        """
         name = ToolName(contract.name)
+        if name == SEARCH_TOOLS_TOOL_NAME:
+            raise ReservedToolNameError(name)
         if name in self._by_name:
             raise DuplicateToolNameError(name)
         self._by_name[name] = contract

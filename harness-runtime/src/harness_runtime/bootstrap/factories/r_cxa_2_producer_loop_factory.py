@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, cast
 
 from harness_as.sandbox_tier import BlastRadiusTier, SandboxTier
@@ -36,10 +36,15 @@ from harness_runtime.lifecycle.hitl_tool_loop import (
 from harness_runtime.lifecycle.reconciler_pause_resume_substrate import (
     ReconcilerEnginePauseResumeSubstrate,
 )
+from harness_runtime.lifecycle.tool_search import (
+    SEARCH_TOOLS_TOOL_NAME,
+    compute_deferred_tool_index,
+    dispatch_search_tools,
+)
 from harness_runtime.lifecycle.wal_segment_pause_resume_substrate import (
     WALSegmentEnginePauseResumeSubstrate,
 )
-from harness_runtime.types import RuntimeConfig
+from harness_runtime.types import RuntimeConfig, ToolName
 
 __all__ = [
     "R_CXA_2_MODEL_TOOL_LOOP_PARENT_GATE_LEVEL",
@@ -130,16 +135,37 @@ class _AskUserQuestionGateAdapter:
 
 @dataclass(frozen=True, slots=True)
 class _RuntimeToolDispatcherModelCallAdapter:
-    """Project approved model tool calls onto the existing C-RT-19 dispatcher."""
+    """Project approved model tool calls onto the existing C-RT-19 dispatcher.
+
+    ``deferred_tool_index`` — B-TOOL-SEARCH-RUNTIME (AS spec v1.13 §13.7): the
+    schemas of MCP tools omitted from the eager ``tools[]`` union at this
+    run's ``compute_frozen_tool_superset(..., defer_names=...)`` call (stage
+    5, ``stage_5_loop_init.py``). A model call to ``search_tools`` is
+    intercepted HERE — before it ever reaches ``self.tool_dispatcher`` — and
+    answered directly from this index, since ``search_tools`` is an
+    in-process pure computation with no owning MCP host/server and thus no
+    real trust/sandbox/cost semantics for the wrapped C-RT-19 dispatcher to
+    evaluate. Default ``{}`` (empty) is byte-behavior-identical to pre-v1.13:
+    no operator-facing policy for populating ``defer_names`` exists yet (AS
+    spec §13.7 explicitly leaves that to implementation discretion), so this
+    stays empty in production until such a policy is built — MUST be kept in
+    sync with whatever ``defer_names``/``remove_tiers`` a future policy
+    threads into the paired ``compute_frozen_tool_superset`` call(s).
+    """
 
     tool_dispatcher: Any
     tenant_id: str | None
+    deferred_tool_index: Mapping[str, Mapping[str, Any]] = field(
+        default_factory=lambda: cast("dict[str, Mapping[str, Any]]", {})
+    )
 
     async def dispatch(
         self,
         call: ModelToolCall,
         context: HITLToolLoopContext,
     ) -> Mapping[str, Any]:
+        if call.tool == SEARCH_TOOLS_TOOL_NAME:
+            return self._dispatch_search_tools(call)
         synthetic_step_id = f"{context.step_id}:tool:{call.tool_call_id}"
         step = WorkflowStep(
             step_id=StepID(synthetic_step_id),
@@ -178,12 +204,47 @@ class _RuntimeToolDispatcherModelCallAdapter:
             step_context=step_context,
         )
 
+    def _dispatch_search_tools(self, call: ModelToolCall) -> Mapping[str, Any]:
+        """Answer a ``search_tools`` model call directly from ``deferred_tool_index``.
+
+        Bypasses ``self.tool_dispatcher`` entirely (§13.7 point 3 — an
+        in-process pure computation, never an MCP-hosted effect). Response
+        shape mirrors the wrapped dispatcher's ``Mapping[str, Any]`` contract
+        (``tool_id`` / ``response`` / ``idempotency_key`` /
+        ``trust_decision_reason`` / ``sandbox_tier``) so the unchanged
+        downstream ``tool_result``-block construction (which JSON-serializes
+        the whole mapping) keeps working without special-casing there.
+        """
+        query = call.arguments.get("query", "")
+        matches = dispatch_search_tools(str(query), self.deferred_tool_index)
+        return {
+            "tool_id": call.tool,
+            "response": {"matches": [dict(m) for m in matches]},
+            "idempotency_key": f"search-tools:{call.tool_call_id}",
+            "trust_decision_reason": "synthetic-in-process-no-trust-gate",
+            "sandbox_tier": SandboxTier.TIER_1_PROCESS.value,
+        }
+
 
 def materialize_r_cxa_2_producer_loop_stage(
     ctx: _MutableHarnessContext,
     config: RuntimeConfig,
+    *,
+    defer_names: frozenset[ToolName] = frozenset(),
 ) -> RCXA2ProducerLoopStage:
-    """Bind R-CXA-2 producer loops at stage 5 LOOP_INIT."""
+    """Bind R-CXA-2 producer loops at stage 5 LOOP_INIT.
+
+    ``defer_names`` — B-TOOL-SEARCH-RUNTIME (AS spec v1.13 §13.7): MUST match
+    the ``defer_names`` the caller passes to the paired top-level
+    ``compute_frozen_tool_superset(ctx.mcp_client_hosts, ..., defer_names=...)``
+    call in ``stage_5_loop_init.py`` (this factory runs BEFORE that call at
+    stage 5, so it independently recomputes the deferred index from the SAME
+    ``ctx.mcp_client_hosts`` rather than accepting a pre-built mapping that
+    could silently drift out of sync). Default ``frozenset()`` → empty index
+    → byte-identical to pre-v1.13 (no operator-facing policy for populating
+    ``defer_names`` exists yet; AS spec §13.7 explicitly leaves that to
+    implementation discretion).
+    """
     if "cp_is_wiring" not in ctx.cxa_stages:
         raise RCXA2ProducerLoopMaterializeError(
             "ctx.cxa_stages['cp_is_wiring'] missing at stage 5; stage 3b "
@@ -216,6 +277,7 @@ def materialize_r_cxa_2_producer_loop_stage(
         dispatcher=_RuntimeToolDispatcherModelCallAdapter(
             tool_dispatcher=ctx.tool_dispatcher,
             tenant_id=config.tenant_id,
+            deferred_tool_index=compute_deferred_tool_index(ctx.mcp_client_hosts, defer_names),
         ),
     )
     # U-RT-124 (R-FS-1 E-impl-3c) — R-CXA-2 engine-layer activation, engine-class-aware.
