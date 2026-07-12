@@ -217,8 +217,16 @@ class RuntimeRingBuffer:
         Composes the live buffer + per-row bytes + oldest-row age + total
         bytes into the OD state record. Passes through to
         `evict_oldest_per_ring_buffer_policy` at rotation time.
+
+        Sorts by `start_time_unix_ns` ascending before building `rows` — the
+        daemon's underlying buffer is arrival-ordered (`ingest_span_row`
+        appends), not guaranteed start-time-ordered (concurrent dispatches
+        can ingest a newer span before an older one from the same batch);
+        the OD `RingBufferStorageState.rows` contract requires oldest-first
+        (per its own docstring), which `evict_oldest_per_ring_buffer_policy`
+        relies on to identify "the oldest row."
         """
-        rows = tuple(self._rows())
+        rows = tuple(sorted(self._rows(), key=lambda row: row.start_time_unix_ns))
         row_bytes = tuple(self._row_bytes(row) for row in rows)
         if rows:
             oldest_age_ns = max(0, now_unix_ns - rows[0].start_time_unix_ns)
@@ -255,8 +263,14 @@ class RuntimeRingBuffer:
         state = self.compute_state(clock_ns)
         action = evict_oldest_per_ring_buffer_policy(state)
         if action.evicted_span_count > 0:
-            # FIFO-by-age — pop the oldest row from the supervisor's buffer.
-            self._rows().pop(0)
+            # FIFO-by-age — remove the actual oldest row (state.rows[0], per
+            # compute_state's sort) by span_id, NOT index 0 of the raw
+            # buffer — the raw buffer is arrival-ordered and may not match
+            # start-time order (see compute_state docstring).
+            oldest_span_id = state.rows[0].span_id
+            raw_rows = self._rows()
+            idx = next(i for i, row in enumerate(raw_rows) if row.span_id == oldest_span_id)
+            raw_rows.pop(idx)
             self._evicted_total_count += action.evicted_span_count
             self._evicted_total_bytes += action.evicted_bytes
         return action
