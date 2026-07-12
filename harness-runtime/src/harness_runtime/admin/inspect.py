@@ -261,6 +261,19 @@ def _run_browse(collector_path: Path | None) -> int:
         )
         return _EXIT_INSPECT_PATH
     try:
+        # Validate the `spans` table exists before entering curses — a schema
+        # error surfacing mid-render inside `curses.wrapper` would print a
+        # raw traceback instead of a clean RT-FAIL-INSPECT-PATH exit.
+        conn.execute("SELECT 1 FROM spans LIMIT 1")
+    except sqlite3.OperationalError as exc:
+        conn.close()
+        print(
+            f"harness-inspect: RT-FAIL-INSPECT-PATH — {collector_path} is not an "
+            f"initialized span store: {exc}",
+            file=sys.stderr,
+        )
+        return _EXIT_INSPECT_PATH
+    try:
         curses.wrapper(run_trace_browser_tui, conn)
     finally:
         conn.close()

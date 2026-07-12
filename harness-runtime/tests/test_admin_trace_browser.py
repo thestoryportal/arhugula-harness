@@ -127,6 +127,48 @@ def test_rollup_cache_hit_ratio_computed_from_attributes(conn: sqlite3.Connectio
     assert cache_rollup.value == pytest.approx(0.75)
 
 
+def test_rollup_ignores_non_object_attributes_json(conn: sqlite3.Connection) -> None:
+    """`attributes_json` decoding to a list/scalar (not a dict) must not crash
+    the rollup — it contributes zero, same as unparseable JSON."""
+    insert_spans(
+        conn,
+        [
+            _span("s1", name="anthropic.cache", attributes_json="[1, 2, 3]"),
+            _span("s2", name="anthropic.cache", attributes_json='"just a string"'),
+        ],
+    )
+    rollups = compute_operator_burden_rollups(conn)
+    by_primitive = {r.declaration.primitive: r for r in rollups}
+    cache_rollup = by_primitive[OperatorBurdenEvalPrimitive.CACHE_HIT_RATE_ALIGNMENT_FLOOR]
+    assert cache_rollup.value is None
+    assert cache_rollup.matching_span_count == 2
+
+
+def test_rollup_ignores_non_numeric_cache_token_values(conn: sqlite3.Connection) -> None:
+    """A malformed (non-numeric) token attribute value must not raise —
+    contributes zero to the ratio rather than crashing the whole rollup."""
+    insert_spans(
+        conn,
+        [
+            _span(
+                "s1",
+                name="anthropic.cache",
+                attributes_json='{"anthropic.cache_read_input_tokens": "not-a-number"}',
+            ),
+            _span(
+                "s2",
+                name="anthropic.cache",
+                attributes_json='{"anthropic.cache_creation_input_tokens": 50}',
+            ),
+        ],
+    )
+    rollups = compute_operator_burden_rollups(conn)
+    by_primitive = {r.declaration.primitive: r for r in rollups}
+    cache_rollup = by_primitive[OperatorBurdenEvalPrimitive.CACHE_HIT_RATE_ALIGNMENT_FLOOR]
+    # "not-a-number" contributes 0 to read_total; s2's 50 lands in creation_total.
+    assert cache_rollup.value == pytest.approx(0.0)
+
+
 def test_rollup_holdout_primitives_share_meta_eval_span_class(
     conn: sqlite3.Connection,
 ) -> None:
@@ -251,3 +293,29 @@ def test_open_readonly_span_store_missing_file_raises(tmp_path: Path) -> None:
     missing = tmp_path / "does-not-exist.db"
     with pytest.raises(sqlite3.OperationalError):
         open_readonly_span_store(missing)
+
+
+@pytest.mark.parametrize("name", ["a?b.db", "a#b.db", "a b.db"])
+def test_open_readonly_span_store_handles_uri_metacharacters_in_path(
+    tmp_path: Path, name: str
+) -> None:
+    """A `?` or `#` in the path must not be parsed as SQLite URI syntax — the
+    path is percent-encoded via `Path.as_uri()` before `?mode=ro` is appended,
+    so the connection resolves to (and stays read-only against) the exact
+    file requested, not a truncated/different one."""
+    db_path = tmp_path / name
+    initialize_span_store(db_path).close()
+
+    ro_conn = open_readonly_span_store(db_path)
+    try:
+        rollups = compute_operator_burden_rollups(ro_conn)
+        assert all(r.matching_span_count == 0 for r in rollups)
+        with pytest.raises(sqlite3.OperationalError):
+            ro_conn.execute("INSERT INTO spans (span_id) VALUES ('x')")
+    finally:
+        ro_conn.close()
+    # No stray *differently-named* db was created (e.g. truncated at the '?'
+    # or '#'). WAL mode's own `-wal`/`-shm` sidecars alongside `name` are
+    # expected and not the bug being guarded against.
+    stray = {p.name for p in tmp_path.iterdir()} - {name, f"{name}-wal", f"{name}-shm"}
+    assert stray == set()

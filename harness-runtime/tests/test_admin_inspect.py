@@ -341,6 +341,33 @@ def test_browse_missing_collector_db_exits_nonzero(
     assert "RT-FAIL-INSPECT-PATH" in err
 
 
+def test_browse_non_span_store_db_exits_nonzero_instead_of_crashing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A sqlite file that exists but has no `spans` table (e.g. an empty
+    file, or the wrong db) must exit cleanly with RT-FAIL-INSPECT-PATH —
+    not raise `sqlite3.OperationalError` from inside `curses.wrapper`."""
+    import curses
+
+    db_path = tmp_path / "not-a-span-store.db"
+    db_path.write_bytes(b"")  # a valid-enough sqlite file with no schema
+
+    called = False
+
+    def _fake_wrapper(func: object, *args: object) -> None:
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(curses, "wrapper", _fake_wrapper)
+
+    code = main(["--browse", "--collector-path", str(db_path)])
+    err = capsys.readouterr().err
+
+    assert code == 2
+    assert "RT-FAIL-INSPECT-PATH" in err
+    assert called is False  # never reached curses
+
+
 def test_browse_opens_readonly_and_dispatches_to_curses_wrapper(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

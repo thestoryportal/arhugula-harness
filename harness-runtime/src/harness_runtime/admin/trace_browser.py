@@ -35,6 +35,7 @@ import sqlite3
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, cast
 
 from harness_od.operator_burden_eval_primitives import (
     EVAL_PRIMITIVE_DECLARATIONS,
@@ -83,15 +84,30 @@ def _cache_hit_ratio(rows: list[SpanInsertRow]) -> float | None:
     creation_total = 0
     for row in rows:
         try:
-            attrs = json.loads(row.attributes_json)
+            parsed = json.loads(row.attributes_json)
         except json.JSONDecodeError:
             continue
-        read_total += int(attrs.get("anthropic.cache_read_input_tokens", 0) or 0)
-        creation_total += int(attrs.get("anthropic.cache_creation_input_tokens", 0) or 0)
+        if not isinstance(parsed, dict):
+            continue
+        attrs = cast("dict[str, Any]", parsed)
+        read_total += _coerce_int(attrs.get("anthropic.cache_read_input_tokens"))
+        creation_total += _coerce_int(attrs.get("anthropic.cache_creation_input_tokens"))
     denom = read_total + creation_total
     if denom == 0:
         return None
     return read_total / denom
+
+
+def _coerce_int(value: object) -> int:
+    """Best-effort int coercion for a span attribute value.
+
+    Non-numeric / missing / `None` values contribute zero rather than raising
+    — an eval rollup over operator-facing span data must not crash on a
+    malformed attribute."""
+    try:
+        return int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 0
 
 
 def compute_operator_burden_rollups(
@@ -166,8 +182,14 @@ def open_readonly_span_store(db_path: Path) -> sqlite3.Connection:
     """Open the sqlite span store read-only (C-RT-13 read-only invariant: no
     writes from an inspection tool). Raises `sqlite3.OperationalError` when
     `db_path` does not exist — the caller maps this to `RT-FAIL-INSPECT-PATH`,
-    mirroring `harness-inspect`'s existing ledger-read failure mode."""
-    uri = f"file:{db_path}?mode=ro"
+    mirroring `harness-inspect`'s existing ledger-read failure mode.
+
+    Builds the `file:` URI via `Path.as_uri()` (percent-encodes the path)
+    before appending `?mode=ro` — a raw `f"file:{db_path}?mode=ro"` would let
+    a `?` or `#` in an operator-supplied path be parsed as URI syntax,
+    truncating the path and silently dropping the read-only mode.
+    """
+    uri = f"{db_path.resolve().as_uri()}?mode=ro"
     return sqlite3.connect(uri, uri=True)
 
 
