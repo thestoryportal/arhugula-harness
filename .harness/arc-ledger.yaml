@@ -2091,7 +2091,7 @@ arcs:
     title: "Per-primitive drift computation + re-baselining workflow + eval-kind SDK-boundary guard (C-OD-18)"
     kind: standalone
     status: closed
-    pr: "#<pending> (b-od18-drift-algorithm branch — flips registered → closed; standalone_closed 87→88, standalone_registered 7→6)"
+    pr: "#945"
     owner_axis: "OD"
     parent_arc: R-FS-2
     anticipated_scope: "C-OD-18 §18.1-18.2: the drift event emission is BUILT (alignment_floor_drift_detection.py — 4-attribute always-sampled event); the deferral envelope defers the drift-detection ALGORITHM per primitive + the re-baselining cycle workflow + dashboard alerting integration + eval-kind enforcement at the SDK boundary. Grounding-first: how much the built emitter already computes vs receives. Build: per-primitive current-value computation over the ring-buffer observation window (the five C-OD-17 operator-burden primitives); threshold comparison feeding the existing emitter; re-baselining workflow = an operator-facing recompute + threshold-update path (threshold VALUES stay deployment-binding config); an eval-kind SDK-boundary guard rejecting offline_judge spans emitted through the inline path (a validation guard, not a judge — the model-judge refusal binds here too). Witnesses: synthetic-window drift (breach emits the event with correct attrs; no breach stays silent); re-baseline round-trip; eval-kind guard fail-closed."
