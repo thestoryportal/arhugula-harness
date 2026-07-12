@@ -207,6 +207,41 @@ def test_resolve_same_prompt_version_same_hash() -> None:
     )
 
 
+def test_resolve_prompt_version_operator_label_is_byte_inert() -> None:
+    """IS spec v1.10 §5.5 (B-18-LANEB-PROMPT-SEMVER) — the operator-declared
+    ``PromptVersion.version`` label does NOT participate in the §5.2 recipe:
+    the resolved hash is byte-identical whether ``version`` is unset, set, or
+    changed, for the same ``content``/``version_sha``. This is the load-bearing
+    cache-inertness witness (proof by execution, not merely by spec assertion)."""
+    unlabeled = PromptManifest(
+        manifest_version=1,
+        active_prompt_version=PromptVersion.from_content("stable body"),
+    )
+    labeled_v1 = PromptManifest(
+        manifest_version=1,
+        active_prompt_version=PromptVersion(
+            version_sha=PromptVersion.from_content("stable body").version_sha,
+            content="stable body",
+            version="1.0",
+        ),
+    )
+    labeled_v2 = PromptManifest(
+        manifest_version=1,
+        active_prompt_version=PromptVersion(
+            version_sha=PromptVersion.from_content("stable body").version_sha,
+            content="stable body",
+            version="2.0-rc",
+        ),
+    )
+    ctx_unlabeled = _ctx(prompt_manifest=unlabeled)
+    ctx_v1 = _ctx(prompt_manifest=labeled_v1)
+    ctx_v2 = _ctx(prompt_manifest=labeled_v2)
+    hash_unlabeled = resolve_procedural_tier_snapshot(ctx_unlabeled)  # type: ignore[arg-type]
+    hash_v1 = resolve_procedural_tier_snapshot(ctx_v1)  # type: ignore[arg-type]
+    hash_v2 = resolve_procedural_tier_snapshot(ctx_v2)  # type: ignore[arg-type]
+    assert hash_unlabeled == hash_v1 == hash_v2
+
+
 def test_resolve_same_state_same_hash_across_calls() -> None:
     """AC #6: identical state ⇒ identical hash (cross-instance + cross-call determinism)."""
     skill = _skill("k", version_sha="v-determ")

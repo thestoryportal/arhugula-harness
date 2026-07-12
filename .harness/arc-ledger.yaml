@@ -46,12 +46,19 @@
 snapshot:
   frozen_total: 11
   frozen_done: 11
-  standalone_closed: 83
+  standalone_closed: 84
   standalone_gated: 0
   standalone_resolved: 4
-  standalone_registered: 11
+  standalone_registered: 10
   rfs1_status: active
   source: ".harness/beyond-mvp-capability-boundary-ledger.md"
+  # FRONTIER NOTE (2026-07-12, B-18-LANEB-PROMPT-SEMVER closed — R-FS-2 Wave 2 first
+  # arc). standalone_closed 83→84, standalone_registered 11→10. IS spec v1.9→v1.10
+  # (new §5.5) adds PromptVersion.version: str | None = None (skill frontmatter.version
+  # analogue, cache-inert by construction — every production consumer reads
+  # .version_sha/.content only). Byte-unchanged control witness at
+  # resolve_procedural_tier_snapshot, mutation-probed. Next: Wave 2 continues with
+  # B-TOOL-SEARCH-RUNTIME.
   # FRONTIER NOTE (2026-07-12, B-AUDIT-KEY-ROTATION-RUNTIME closed — R-FS-2 Wave 1
   # fourth/final arc). standalone_closed 82→83, standalone_registered 12→11. Grounding
   # at open caught ADR-D5 version drift (plan cited v1.3; HEAD is v1.4, which demoted
@@ -1973,11 +1980,12 @@ arcs:
   - id: B-18-LANEB-PROMPT-SEMVER
     title: "Operator-declared semantic-version field on PromptVersion (skill frontmatter.version analogue; cache-inert)"
     kind: standalone
-    status: registered
-    decompose_at_open: true
+    status: closed
+    pr: "#939"
     owner_axis: "IS"
     parent_arc: R-FS-2
     anticipated_scope: "The skill frontmatter.version analogue for prompts (ADR-D3 §1.8.1: an operator may bump the declared version without changing every byte; both-required with the content hash). Named at the 3c DDR §8; optional by design (version_sha remains the cache key). BUILD by default under FULL-SPEC; the operator may strike this row at the Unit-0 PR review — the one-time skip window, recorded either way. Shape: IS-spec delta + clearance adding the optional field to the PromptVersion shape; prompt_manifest.py optional field default None (byte-compatible with every existing manifest); explicitly CACHE-INERT (spec text states it does not participate in cohort/cache identity — that is version_sha's job). Witnesses: manifest round-trip with/without the field; cohort-key/cacheable-epoch byte-unchanged controls."
+    close_note: "Unit-0 strike window (PR #934) passed unexercised — built per FULL-SPEC. IS spec v1.9→v1.10 (new §5.5) adds PromptVersion.version: str | None = None. Grounding confirmed cache-inertness empirically (not just asserted): grepped every production consumer of PromptVersion (the §5.2 resolver, CP cohort_key, cacheable-epoch prefix_content_hash) and confirmed each reads .version_sha or .content only, never the full model — so the new field cannot leak into any hash by construction. §5.3 store's uniqueness invariant (b) is version_sha-keyed only; two store entries may share the same operator-declared version label without violating it — a dedicated test proves this. Added a byte-unchanged control witness at resolve_procedural_tier_snapshot (three PromptManifests differing only in .version all hash identically) and mutation-probed it (temporarily leaking .version into the hash computation reproduces the test failure, confirming it's load-bearing) before restoring via file-copy backup. harness-is 25/25 (test_prompt_manifest.py); harness-runtime 21/21 (test_procedural_tier_snapshot.py); workspace-wide 5556 passed/10 skip/33 deselect/1 xfail; pyright 0/0/0; ruff clean."
     units: []
     ledger_ref: ".harness/r-fs-2-final-closure-implementation-plan-v1.md"
 
