@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sqlite3
 import sys
 from pathlib import Path
 from typing import Any
@@ -97,8 +98,19 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=None,
         help=(
-            "Path to the collector sqlite — accepted but unused at HEAD "
-            "(in-memory storage only; fork-trace-storage-pathclass-gap)."
+            "Path to the collector sqlite span store (C-OD-19 §19.2). Required "
+            "with --browse. Unused otherwise — the ledger summary's span rollup "
+            "remains N/A regardless (production span ingestion into this store "
+            "is a separate, pre-existing deferral; see "
+            "b-od19-slice-c-otelcol-manifest-reconciliation.md)."
+        ),
+    )
+    parser.add_argument(
+        "--browse",
+        action="store_true",
+        help=(
+            "Launch the TUI trace browser (C-OD-19 §19.3) over --collector-path "
+            "instead of the ledger summary."
         ),
     )
     parser.add_argument(
@@ -219,6 +231,61 @@ def _format_json(
 
 
 # ---------------------------------------------------------------------------
+# --browse (C-OD-19 §19.3 TUI trace browser).
+# ---------------------------------------------------------------------------
+
+
+def _run_browse(collector_path: Path | None) -> int:
+    """Launch the TUI trace browser over `collector_path`. Returns the exit code."""
+    if collector_path is None:
+        print(
+            "harness-inspect: RT-FAIL-INSPECT-PATH — --browse requires --collector-path",
+            file=sys.stderr,
+        )
+        return _EXIT_INSPECT_PATH
+
+    import curses
+
+    from harness_runtime.admin.trace_browser import (
+        compute_operator_burden_rollups,
+        open_readonly_span_store,
+        run_trace_browser_tui,
+    )
+
+    try:
+        conn = open_readonly_span_store(collector_path)
+    except sqlite3.DatabaseError as exc:
+        print(
+            f"harness-inspect: RT-FAIL-INSPECT-PATH — collector sqlite not found "
+            f"or unreadable at {collector_path}: {exc}",
+            file=sys.stderr,
+        )
+        return _EXIT_INSPECT_PATH
+    try:
+        # Run the real rollup query before entering curses — a wrong/old
+        # collector-db schema (missing table, missing column) or a file that
+        # isn't a sqlite database at all (`sqlite3.DatabaseError`, which
+        # `OperationalError` subclasses — SQLite defers "file is not a
+        # database" until the first read) then surfaces here as a clean
+        # RT-FAIL-INSPECT-PATH exit rather than a raw traceback mid-render
+        # inside `curses.wrapper`.
+        rollups = compute_operator_burden_rollups(conn)
+    except sqlite3.DatabaseError as exc:
+        conn.close()
+        print(
+            f"harness-inspect: RT-FAIL-INSPECT-PATH — {collector_path} is not an "
+            f"initialized span store: {exc}",
+            file=sys.stderr,
+        )
+        return _EXIT_INSPECT_PATH
+    try:
+        curses.wrapper(run_trace_browser_tui, rollups)
+    finally:
+        conn.close()
+    return _EXIT_OK
+
+
+# ---------------------------------------------------------------------------
 # Entry point.
 # ---------------------------------------------------------------------------
 
@@ -231,6 +298,9 @@ def main(argv: list[str] | None = None) -> int:
     """
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    if args.browse:
+        return _run_browse(args.collector_path)
 
     ledger_path: Path = args.ledger_path
     last_n: int = args.last_n

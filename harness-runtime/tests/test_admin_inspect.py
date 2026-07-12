@@ -93,6 +93,7 @@ def test_parser_defaults() -> None:
     assert ns.last_n == 10
     assert ns.json is False
     assert ns.collector_path is None
+    assert ns.browse is False
 
 
 def test_parser_flags() -> None:
@@ -313,6 +314,149 @@ def test_inspect_does_not_open_anything_for_write(
 
     assert code == 0
     assert write_attempts == [], f"unexpected write attempts: {write_attempts}"
+
+
+# ---------------------------------------------------------------------------
+# --browse (B-OD19-LOCAL-INSPECTION slice a — C-OD-19 §19.3 TUI trace browser).
+# ---------------------------------------------------------------------------
+
+
+def test_browse_without_collector_path_exits_nonzero(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    code = main(["--browse"])
+    err = capsys.readouterr().err
+    assert code == 2
+    assert "RT-FAIL-INSPECT-PATH" in err
+    assert "--collector-path" in err
+
+
+def test_browse_missing_collector_db_exits_nonzero(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    missing = tmp_path / "does-not-exist.db"
+    code = main(["--browse", "--collector-path", str(missing)])
+    err = capsys.readouterr().err
+    assert code == 2
+    assert "RT-FAIL-INSPECT-PATH" in err
+
+
+def test_browse_non_span_store_db_exits_nonzero_instead_of_crashing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A sqlite file that exists but has no `spans` table (e.g. an empty
+    file, or the wrong db) must exit cleanly with RT-FAIL-INSPECT-PATH —
+    not raise `sqlite3.OperationalError` from inside `curses.wrapper`."""
+    import curses
+
+    db_path = tmp_path / "not-a-span-store.db"
+    db_path.write_bytes(b"")  # a valid-enough sqlite file with no schema
+
+    called = False
+
+    def _fake_wrapper(func: object, *args: object) -> None:
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(curses, "wrapper", _fake_wrapper)
+
+    code = main(["--browse", "--collector-path", str(db_path)])
+    err = capsys.readouterr().err
+
+    assert code == 2
+    assert "RT-FAIL-INSPECT-PATH" in err
+    assert called is False  # never reached curses
+
+
+def test_browse_non_sqlite_file_exits_nonzero_instead_of_crashing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A file that exists but isn't a SQLite database at all (operator typo
+    pointing --collector-path at the wrong file) raises `sqlite3.DatabaseError`
+    ("file is not a database") on the first read, not `OperationalError` —
+    must still exit cleanly with RT-FAIL-INSPECT-PATH."""
+    import curses
+
+    db_path = tmp_path / "not-sqlite-at-all.db"
+    db_path.write_text("not a sqlite database")
+
+    called = False
+
+    def _fake_wrapper(func: object, *args: object) -> None:
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(curses, "wrapper", _fake_wrapper)
+
+    code = main(["--browse", "--collector-path", str(db_path)])
+    err = capsys.readouterr().err
+
+    assert code == 2
+    assert "RT-FAIL-INSPECT-PATH" in err
+    assert called is False  # never reached curses
+
+
+def test_browse_wrong_schema_db_exits_nonzero_instead_of_crashing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A sqlite file with a `spans` table but the WRONG columns (e.g. a stale
+    collector db from an older schema) must also exit cleanly — the fix runs
+    the real rollup query (not just `SELECT 1 FROM spans`) before curses."""
+    import curses
+    import sqlite3
+
+    db_path = tmp_path / "wrong-schema.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute("CREATE TABLE spans (span_id TEXT PRIMARY KEY)")
+    conn.commit()
+    conn.close()
+
+    called = False
+
+    def _fake_wrapper(func: object, *args: object) -> None:
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(curses, "wrapper", _fake_wrapper)
+
+    code = main(["--browse", "--collector-path", str(db_path)])
+    err = capsys.readouterr().err
+
+    assert code == 2
+    assert "RT-FAIL-INSPECT-PATH" in err
+    assert called is False  # never reached curses
+
+
+def test_browse_opens_readonly_and_dispatches_to_curses_wrapper(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--browse` opens the sqlite store read-only, computes the rollups, and
+    hands off to `curses.wrapper(run_trace_browser_tui, rollups)` — verified
+    by monkeypatching `curses.wrapper` (no real terminal available under
+    pytest)."""
+    import curses
+
+    from harness_od.sqlite_span_store import initialize_span_store
+
+    db_path = tmp_path / "spans.db"
+    initialize_span_store(db_path).close()
+
+    calls: list[tuple[object, tuple[object, ...]]] = []
+
+    def _fake_wrapper(func: object, *args: object) -> None:
+        calls.append((func, args))
+
+    monkeypatch.setattr(curses, "wrapper", _fake_wrapper)
+
+    code = main(["--browse", "--collector-path", str(db_path)])
+
+    assert code == 0
+    assert len(calls) == 1
+    func, args = calls[0]
+    assert getattr(func, "__name__", None) == "run_trace_browser_tui"
+    assert len(args) == 1
+    (rollups,) = args
+    assert len(rollups) == 5  # the 5 operator-burden eval primitives
 
 
 # ---------------------------------------------------------------------------

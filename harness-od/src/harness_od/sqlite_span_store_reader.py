@@ -19,7 +19,9 @@ import sqlite3
 from harness_od.sqlite_span_store import SpanInsertRow
 
 __all__ = [
+    "read_all_spans",
     "read_span_by_id",
+    "read_spans_by_name",
     "read_spans_by_trace",
     "read_spans_by_workflow",
 ]
@@ -77,6 +79,40 @@ def read_spans_by_trace(conn: sqlite3.Connection, trace_id: str) -> list[SpanIns
     rows = conn.execute(
         f"SELECT {_SELECT_COLUMNS} FROM spans WHERE trace_id = ? ORDER BY start_time_ns ASC",
         (trace_id,),
+    ).fetchall()
+    return [_row_to_span(r) for r in rows]
+
+
+def read_all_spans(conn: sqlite3.Connection) -> list[SpanInsertRow]:
+    """Return every span in the store, ordered by `start_time_ns` ascending.
+
+    Scoped-query surface for TUI views (§19.3) whose primitive is carried as
+    an *attribute* on spans of varying names (e.g. the cache-hit-rate
+    primitive's `anthropic.cache_*` token attributes live on LLM-inference
+    spans named `"chat <model>"`, not on a span named after the primitive
+    itself) — those views scan the full table and filter on attribute
+    presence rather than on `name`. No index is needed; ring-buffer scale
+    (bounded by the §19.2 rotation policy) makes a full scan acceptable.
+    """
+    rows = conn.execute(
+        f"SELECT {_SELECT_COLUMNS} FROM spans ORDER BY start_time_ns ASC"
+    ).fetchall()
+    return [_row_to_span(r) for r in rows]
+
+
+def read_spans_by_name(conn: sqlite3.Connection, name: str) -> list[SpanInsertRow]:
+    """Return all spans with the given `name`, ordered by `start_time_ns` ascending.
+
+    Scoped-query surface for the C-OD-19 §19.3 TUI trace browser's
+    operator-burden eval primitive views (per-primitive `source_span_class`
+    lookup, e.g. `"hitl.invocation.responded"` / `"sandbox.violation"`).
+    No dedicated index exists on `name` — the ring-buffer scale (bounded by
+    the §19.2 rotation policy) makes a full scan acceptable for this
+    low-frequency operator-facing query.
+    """
+    rows = conn.execute(
+        f"SELECT {_SELECT_COLUMNS} FROM spans WHERE name = ? ORDER BY start_time_ns ASC",
+        (name,),
     ).fetchall()
     return [_row_to_span(r) for r in rows]
 

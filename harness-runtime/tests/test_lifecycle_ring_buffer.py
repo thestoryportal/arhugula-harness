@@ -61,6 +61,7 @@ def _config(
     tmp_path: Path,
     *,
     sqlite_rotation_max_bytes: int = 100_000_000,
+    sqlite_rotation_max_age_hours: int = 24,
 ) -> RuntimeConfig:
     return RuntimeConfig(
         deployment_surface=DeploymentSurface.LOCAL_DEVELOPMENT,
@@ -70,6 +71,7 @@ def _config(
         otel=OTelConfig(otlp_endpoint="http://localhost:4317"),
         collector=CollectorConfig(
             sqlite_rotation_max_bytes=sqlite_rotation_max_bytes,
+            sqlite_rotation_max_age_hours=sqlite_rotation_max_age_hours,
         ),
         default_topology=TopologyPattern.SINGLE_THREADED_LINEAR,
     )
@@ -127,6 +129,27 @@ def test_rotate_evicts_oldest_row_when_bytes_threshold_exceeded(
     assert remaining_ids == ["middle", "newest"]
 
 
+def test_rotate_evicts_oldest_row_when_age_threshold_exceeded(tmp_path: Path) -> None:
+    """§19.2 row 2's 24h default fires age-based eviction even when the
+    buffer is well under the bytes threshold (small rows, old timestamps)."""
+    daemon = _daemon(tmp_path)
+    ring = materialize_ring_buffer_stage(
+        _config(tmp_path, sqlite_rotation_max_bytes=100_000_000),
+        daemon,
+    ).ring_buffer
+    rows = [
+        _span_row("oldest", start_time_unix_ns=0),
+        _span_row("newest", start_time_unix_ns=23 * _HOUR_NS),
+    ]
+    _seed(daemon, rows)
+    # "oldest" is 25h old at now=25h — past the 24h default; "newest" is 2h old.
+    action = ring.rotate(now_unix_ns=25 * _HOUR_NS)
+    assert action.evicted_span_count == 1
+    assert action.eviction_reason == "MAX_AGE_EXCEEDED"
+    remaining_ids = [r.span_id for r in daemon._ingested_rows]  # pyright: ignore[reportPrivateUsage]
+    assert remaining_ids == ["newest"]
+
+
 def test_rotate_no_op_when_under_threshold(tmp_path: Path) -> None:
     """When the buffer is within policy thresholds, `rotate()` is a no-op."""
     daemon = _daemon(tmp_path)
@@ -181,6 +204,35 @@ def test_rotation_preserves_fifo_by_age_order(tmp_path: Path) -> None:
     ids = [r.span_id for r in daemon._ingested_rows]  # pyright: ignore[reportPrivateUsage]
     # 'oldest' evicted; 'middle' + 'newest' remain in age order.
     assert ids == ["middle", "newest"]
+
+
+def test_rotate_evicts_true_oldest_when_buffer_arrives_out_of_start_time_order(
+    tmp_path: Path,
+) -> None:
+    """`ingest_span_row` appends in arrival order, which need not match
+    `start_time_unix_ns` order (concurrent dispatches can land a newer span
+    before an older one). `rotate()` must still evict the row with the
+    smallest `start_time_unix_ns`, not raw-buffer index 0."""
+    daemon = _daemon(tmp_path)
+    ring = materialize_ring_buffer_stage(
+        _config(tmp_path, sqlite_rotation_max_bytes=1_000_000),
+        daemon,
+    ).ring_buffer
+    big = "x" * 1_000_000
+    # Arrival order: middle, THEN the true oldest, then newest — index 0 of
+    # the raw buffer ("middle") is NOT the oldest by start_time.
+    _seed(
+        daemon,
+        [
+            _span_row("middle", start_time_unix_ns=_HOUR_NS, attrs=big),
+            _span_row("oldest", start_time_unix_ns=0, attrs=big),
+            _span_row("newest", start_time_unix_ns=2 * _HOUR_NS, attrs=big),
+        ],
+    )
+    action = ring.rotate(now_unix_ns=3 * _HOUR_NS)
+    assert action.evicted_span_count == 1
+    remaining_ids = {r.span_id for r in daemon._ingested_rows}  # pyright: ignore[reportPrivateUsage]
+    assert remaining_ids == {"middle", "newest"}  # "oldest" evicted, not "middle"
 
 
 # ---------------------------------------------------------------------------
@@ -272,6 +324,28 @@ def test_policy_max_bytes_derived_from_collector_config(tmp_path: Path) -> None:
     assert ring.policy.default_max_bytes_mb == 50  # 50 MB
 
 
+def test_policy_default_max_age_hours_pinned_to_24_per_spec_19_2(tmp_path: Path) -> None:
+    """OD C-OD-19 §19.2 row 2 commits a 24h default ring-buffer rotation.
+
+    Prior to this fix `materialize_ring_buffer_stage` always passed
+    `default_max_age_hours=None` (no age-based eviction ever fired by
+    default) — this witness pins the spec-committed default."""
+    daemon = _daemon(tmp_path)
+    ring = materialize_ring_buffer_stage(_config(tmp_path), daemon).ring_buffer
+    assert ring.policy.default_max_age_hours == 24
+
+
+def test_policy_max_age_hours_operator_tunable(tmp_path: Path) -> None:
+    """§19.2 row 2 "operator-tunable" — a non-default `CollectorConfig` value
+    flows through to the policy."""
+    daemon = _daemon(tmp_path)
+    ring = materialize_ring_buffer_stage(
+        _config(tmp_path, sqlite_rotation_max_age_hours=48),
+        daemon,
+    ).ring_buffer
+    assert ring.policy.default_max_age_hours == 48
+
+
 def test_ring_buffer_stage_is_frozen(tmp_path: Path) -> None:
     daemon = _daemon(tmp_path)
     stage = materialize_ring_buffer_stage(_config(tmp_path), daemon)
@@ -289,6 +363,25 @@ def test_compute_state_oldest_age_hours_from_unix_ns(tmp_path: Path) -> None:
     _seed(daemon, [_span_row("old", start_time_unix_ns=0)])
     state = ring.compute_state(now_unix_ns=5 * _HOUR_NS)
     assert state.oldest_row_age_hours == 5
+
+
+def test_compute_state_oldest_age_hours_correct_when_out_of_arrival_order(
+    tmp_path: Path,
+) -> None:
+    """`start_time_unix_ns=0` arrives SECOND — `oldest_row_age_hours` must
+    still reflect it (the true oldest), not the first-appended row's age."""
+    daemon = _daemon(tmp_path)
+    ring = materialize_ring_buffer_stage(_config(tmp_path), daemon).ring_buffer
+    _seed(
+        daemon,
+        [
+            _span_row("arrived-first", start_time_unix_ns=3 * _HOUR_NS),
+            _span_row("true-oldest", start_time_unix_ns=0),
+        ],
+    )
+    state = ring.compute_state(now_unix_ns=5 * _HOUR_NS)
+    assert state.oldest_row_age_hours == 5
+    assert state.rows[0].span_id == "true-oldest"
 
 
 # ---------------------------------------------------------------------------
@@ -444,3 +537,37 @@ async def test_flush_to_sqlite_100_span_batch_under_100ms_per_ac_5(
         conn.close()
     assert inserted == 100
     assert elapsed_ns < 100_000_000, f"flush took {elapsed_ns}ns; AC #5 budget 100ms"
+
+
+# ---------------------------------------------------------------------------
+# B-OD19-LOCAL-INSPECTION slice (b) — fill → rotate → chain-readable witness.
+# ---------------------------------------------------------------------------
+
+
+async def test_fill_rotate_chain_readable_witness(tmp_path: Path) -> None:
+    """§19.2 rotation witness: fill the in-memory buffer past the 24h age
+    default, rotate (age-based eviction fires for the old row), then flush the
+    survivors to sqlite and read them back via the typed reader — the
+    persisted store reflects exactly what rotation left behind."""
+    from harness_od.sqlite_span_store_reader import read_spans_by_trace
+
+    daemon = _daemon(tmp_path)
+    ring = materialize_ring_buffer_stage(_config(tmp_path), daemon).ring_buffer
+    _seed(
+        daemon,
+        [
+            _span_row("expired", start_time_unix_ns=0),
+            _span_row("fresh", start_time_unix_ns=23 * _HOUR_NS),
+        ],
+    )
+    now_ns = 25 * _HOUR_NS
+    evicted = ring.rotate_until_within_policy(now_unix_ns=now_ns)
+    assert evicted == 1
+    conn = initialize_span_store(tmp_path / "spans.db")
+    try:
+        inserted = await ring.flush_to_sqlite(conn, now_ns=now_ns)
+        rows = read_spans_by_trace(conn, "trace-0")
+    finally:
+        conn.close()
+    assert inserted == 1
+    assert [r.span_id for r in rows] == ["fresh"]
