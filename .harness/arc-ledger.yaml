@@ -2055,7 +2055,7 @@ arcs:
     title: "Operator-manual eval review-loop tooling + holdout-set construction (C-OD-17 §17.3; NO model-judge)"
     kind: standalone
     status: closed
-    pr: "#<pending> (b-od17-eval-loop-tooling branch — flips registered → closed; standalone_closed 86→87, standalone_registered 8→7)"
+    pr: "#944"
     owner_axis: "OD"
     parent_arc: R-FS-2
     anticipated_scope: "C-OD-17 §17.3 (OD spec v1.2 line 976): the Husain manual-review, categorize, automate, align loop runs against the ring buffer with operator self-curation; the deferral envelope defers the holdout-set construction protocol + loop tooling + per-cell dashboard query authoring to phase-6. HARD BOUNDARY: the standing eval-harness-as-governance-gate REFUSAL — the committed surface is operator-MANUAL review tooling; the kappa/TPR/TNR/gold-set numbers are research-only (excluded); any model-judge component proposal = halt + Class-1 fork, not this arc. Build: a deterministic holdout sampler (N traces from the ring buffer into a versioned holdout file); a review-loop CLI or TUI-browser view (composes with the OD19 arc, non-blocking); categorization appended to a durable review ledger; the automate step scaffolds operator-authored assertion stubs checked into the repo (tooling scaffolds the file; the human writes the assertion). Witnesses: holdout determinism; review round-trip persists; zero model calls in the loop (control assert)."
