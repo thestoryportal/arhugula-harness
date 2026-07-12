@@ -12,10 +12,12 @@ from harness_as.sandbox_tier import BlastRadiusTier, SandboxTier
 from harness_as.tool_contract import ToolContract
 from harness_runtime.lifecycle.tool_registry import (
     DuplicateToolNameError,
+    ReservedToolNameError,
     ToolNameNotRegisteredError,
     ToolRegistry,
     materialize_tool_registry,
 )
+from harness_runtime.lifecycle.tool_search import SEARCH_TOOLS_TOOL_NAME
 from harness_runtime.types import ToolName
 
 
@@ -91,6 +93,18 @@ def test_duplicate_name_rejected() -> None:
     with pytest.raises(DuplicateToolNameError) as exc_info:
         registry.register(_contract("dup"))
     assert exc_info.value.name == ToolName("dup")
+
+
+def test_search_tools_name_reserved() -> None:
+    """B-TOOL-SEARCH-RUNTIME (AS spec v1.13 §13.7): a real MCP tool cannot
+    register as `search_tools` — that name is reserved for the synthetic
+    capability-discovery contract, since the model-tool-loop adapter
+    intercepts every call with that name unconditionally."""
+    registry = ToolRegistry()
+    with pytest.raises(ReservedToolNameError) as exc_info:
+        registry.register(_contract(SEARCH_TOOLS_TOOL_NAME))
+    assert exc_info.value.name == ToolName(SEARCH_TOOLS_TOOL_NAME)
+    assert len(registry) == 0
 
 
 # ---------------------------------------------------------------------------
