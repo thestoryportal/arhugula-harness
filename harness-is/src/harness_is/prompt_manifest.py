@@ -64,6 +64,14 @@ substrate + the content-addressing discipline (sha = digest of content) +
 internal-coherence invariants (store entries authored + content-addressed-unique;
 a non-empty active selection is a member of the store). Empty ``versions`` (the
 default) preserves the #496/PR-#1 behavior verbatim.
+
+R-FS-2 Wave 2 (B-18-LANEB-PROMPT-SEMVER, IS spec v1.10 §5.5): ``PromptVersion``
+gains ``version: str | None = None`` — an operator-declared semantic-version
+*label*, the ``skill.frontmatter.version`` analogue (ADR-D3 §1.8.1), but
+optional. Migration-tracking metadata only: no derivation relationship to
+``content``/``version_sha``, never read by the §5.2 recipe or any cache-epoch
+derivation, and not a dimension of the §5.3 store's uniqueness invariant.
+``version_sha`` remains the sole cache-correctness + content-identity key.
 """
 
 from __future__ import annotations
@@ -130,6 +138,15 @@ class PromptVersion(BaseModel):
     """Inline system-prompt content (R-PM-1 PR #1 minimal carrier). ``""`` = no
     active prompt (the empty-carrier sentinel; forward-compatible with the
     #496 identity-only construction ``PromptVersion(version_sha="")``)."""
+
+    version: str | None = None
+    """Operator-declared semantic-version label (R-FS-2 B-18-LANEB-PROMPT-SEMVER;
+    IS spec v1.10 §5.5) — the ``skill.frontmatter.version`` analogue (ADR-D3
+    §1.8.1), but optional. Migration-tracking / lifecycle metadata only: has no
+    derivation relationship to ``content`` / ``version_sha`` and is never read
+    by the §5.2 procedural-tier recipe, the CP ``cohort_key`` / cacheable-epoch
+    derivations, or the §5.3 store's content-addressed-uniqueness invariant —
+    ``version_sha`` remains the sole cache-correctness + content-identity key."""
 
     @model_validator(mode="before")
     @classmethod

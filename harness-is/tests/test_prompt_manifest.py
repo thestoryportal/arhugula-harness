@@ -14,6 +14,10 @@ unique; a non-empty active selection is a store member) + the `from_contents`
 authoring builder. The store has no runtime consumer in PR #2 (selection is the
 PR #3 CP arc), so these are carrier-coherence unit tests — the appropriate
 verification shape for an additive carrier with no behavioral path yet.
+
+R-FS-2 Wave 2 (B-18-LANEB-PROMPT-SEMVER, IS spec v1.10 §5.5) adds the optional
+operator-declared `version` label — no derivation relationship to `content`/
+`version_sha`, no participation in the §5.3 store's uniqueness invariant.
 """
 
 from __future__ import annotations
@@ -267,3 +271,64 @@ def test_prompt_manifest_from_contents_empty_string_active_refused() -> None:
     never an authored version, so it is refused (adversarial F-03)."""
     with pytest.raises(ValueError, match="active must be one of contents"):
         PromptManifest.from_contents(manifest_version=1, contents=["real"], active="")
+
+
+# --- R-FS-2 B-18-LANEB-PROMPT-SEMVER: `PromptVersion.version` (IS spec v1.10 §5.5) --
+
+
+def test_prompt_version_version_defaults_none() -> None:
+    """§5.5 — `version` defaults to `None`; byte-compatible with every
+    pre-v1.10 construction call site (`from_content`, bare `content=`, the
+    empty-carrier sentinel)."""
+    assert PromptVersion().version is None
+    assert PromptVersion(content="x").version is None
+    assert PromptVersion.from_content("x").version is None
+    assert PromptVersion(version_sha="").version is None
+
+
+def test_prompt_version_version_round_trips() -> None:
+    """§5.5 — an operator-supplied `version` label round-trips unchanged and
+    does not disturb the `version_sha` derive-invariant."""
+    pv = PromptVersion(content="hello", version="1.0")
+    assert pv.version == "1.0"
+    assert pv.version_sha == prompt_version_sha("hello")
+
+
+def test_prompt_version_version_has_no_derivation_relationship_to_content() -> None:
+    """§5.5 — `version` carries no construction-time invariant beyond its type;
+    two different `content` strings may share the same operator label, and the
+    same `content` may be constructed with different labels."""
+    a = PromptVersion(content="body one", version="1.0")
+    b = PromptVersion(content="body two", version="1.0")
+    assert a.version == b.version == "1.0"
+    assert a.version_sha != b.version_sha  # content-derived identity unaffected
+
+    c = PromptVersion(content="same body", version="1.0")
+    d = PromptVersion(content="same body", version="2.0")
+    assert c.version_sha == d.version_sha  # same content -> same identity
+    assert c.version != d.version  # labels are independent of content-identity
+
+
+def test_prompt_version_extra_forbid_still_enforced_with_version_field() -> None:
+    """§5.5 — the new field does not relax `extra="forbid"`; frozen still holds."""
+    pv = PromptVersion(content="x", version="1.0")
+    with pytest.raises(ValidationError):
+        pv.version = "2.0"  # type: ignore[misc]  # frozen
+    with pytest.raises(ValidationError):
+        PromptVersion(content="x", version="1.0", unexpected="y")  # type: ignore[call-arg]
+
+
+def test_prompt_manifest_versions_store_allows_duplicate_version_labels() -> None:
+    """§5.5 — the §5.3 store's content-addressed-uniqueness invariant (b) is
+    keyed on `version_sha` only; two store entries MAY share the same
+    operator-declared `version` label without violating (b)."""
+    entry_a = PromptVersion(content="body A", version="1.0")
+    entry_b = PromptVersion(content="body B", version="1.0")
+    pm = PromptManifest(
+        manifest_version=1,
+        active_prompt_version=PromptVersion(version_sha=""),
+        versions=(entry_a, entry_b),
+    )
+    assert len(pm.versions) == 2
+    assert {v.version for v in pm.versions} == {"1.0"}
+    assert len({v.version_sha for v in pm.versions}) == 2  # (b) still holds
