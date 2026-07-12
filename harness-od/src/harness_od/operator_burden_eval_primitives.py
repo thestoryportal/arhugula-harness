@@ -32,6 +32,12 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict
 
+from harness_od.eval_vs_runtime_gate import (
+    EVAL_KIND_ATTRIBUTE_NAME,
+    EvalKindDiscriminator,
+    EvalSpanRouting,
+    validate_eval_span_routing,
+)
 from harness_od.otel_genai_base import ChildSpanRef, SpanRef
 
 __all__ = [
@@ -217,11 +223,29 @@ def emit_eval_as_child_span(
     contract-conformant by construction; a caller that attempts span-event-only
     emission is rejected by `reject_span_event_only_emission`.
 
+    Before emitting, validates the routing against the C-OD-18 §18.3
+    eval-kind shape via `validate_eval_span_routing` (U-OD-26) — this is the
+    one production-reachable call site of that guard (B-OD18-DRIFT-ALGORITHM
+    "eval-kind SDK-boundary enforcement"; the guard was previously declared
+    but never invoked). The child span carries `gen_ai.eval.kind =
+    "offline_judge"` (§18.3), the discriminator attribute this emission path
+    previously never set.
+
     The child span is created via the OTel-SDK tracer bound to the parent's
     instrumentation scope, with the parent span set as the active context so
     the child inherits the parent's trace context (C-OD-04 §4.4).
     """
     from opentelemetry.trace import get_tracer_provider, set_span_in_context
+
+    validate_eval_span_routing(
+        EvalKindDiscriminator.OFFLINE_JUDGE,
+        parent_span_ref,
+        EvalSpanRouting(
+            emitted_as_child_span=True,
+            has_validator_fail_attributes=False,
+            has_operator_burden_eval_reference=True,
+        ),
+    )
 
     tracer = get_tracer_provider().get_tracer("harness-od.eval")
     parent_context = set_span_in_context(parent_span_ref)
@@ -231,6 +255,7 @@ def emit_eval_as_child_span(
     )
     child.set_attribute("eval.primitive", primitive.value)
     child.set_attribute("eval.value", value)
+    child.set_attribute(EVAL_KIND_ATTRIBUTE_NAME, EvalKindDiscriminator.OFFLINE_JUDGE.value)
     child.end()
     return child
 

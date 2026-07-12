@@ -46,12 +46,36 @@
 snapshot:
   frozen_total: 11
   frozen_done: 11
-  standalone_closed: 87
+  standalone_closed: 88
   standalone_gated: 0
   standalone_resolved: 4
-  standalone_registered: 7
+  standalone_registered: 6
   rfs1_status: active
   source: ".harness/beyond-mvp-capability-boundary-ledger.md"
+  # FRONTIER NOTE (2026-07-12, B-OD18-DRIFT-ALGORITHM closed — R-FS-2 Wave 2 fifth/
+  # final arc). standalone_closed 87→88, standalone_registered 7→6. Grounding found
+  # §18.1's drift table names 4 AlignmentFloorPrimitive values (U-OD-25's existing
+  # commitment), not the register's loose "five C-OD-17 primitives" phrasing — spec
+  # wins, Class-3 note, no fork. Of those 4, only cache-hit-rate has a
+  # judgment-free span formula; the other 3 require a judge/human verdict and the
+  # B-OD17 review ledger's free-text/no-taxonomy categories can't be turned into an
+  # accuracy ratio without building the exact judge the standing
+  # eval-harness-refused-as-governance-gate boundary forecloses — those 3 take an
+  # operator-supplied current_value instead, honoring detect_drift's existing seam.
+  # New harness_od.alignment_floor_drift_algorithm: window-scoped current-value
+  # computation (TIME_WINDOW + SAMPLE_WINDOW) wired to U-OD-25's pre-existing
+  # detect_drift/emit_drift_event pair (previously had no real current-value
+  # source); rebaseline_threshold operator-facing recompute + threshold-update
+  # round-trip (threshold VALUES stay deployment-binding). Also found
+  # gen_ai.eval.kind (U-OD-26) had zero production callers anywhere and
+  # emit_eval_as_child_span (U-OD-23) never set it at all — wired
+  # validate_eval_span_routing into that one production-reachable call site + now
+  # emits the discriminator; the CP-owned inline-path producer doesn't emit
+  # gen_ai.eval.kind yet either, so that cross-axis half is honestly noted as
+  # nothing-to-guard-yet rather than a fabricated function. 17 new tests; Codex
+  # review clean. workspace-wide 5654 passed/10 skip/33 deselect/1 xfail; pyright
+  # 0/0/0; ruff clean. R-FS-2 Wave 2 is now COMPLETE (5/5 arcs); next: Wave 3
+  # grounding-first sweeps per the frozen order.
   # FRONTIER NOTE (2026-07-12, B-OD17-EVAL-LOOP-TOOLING closed — R-FS-2 Wave 2
   # fourth arc). standalone_closed 86→87, standalone_registered 8→7. Deterministic
   # holdout sampler (harness_od.holdout_set, sorted-trace-id + random.Random(seed)
@@ -2066,11 +2090,12 @@ arcs:
   - id: B-OD18-DRIFT-ALGORITHM
     title: "Per-primitive drift computation + re-baselining workflow + eval-kind SDK-boundary guard (C-OD-18)"
     kind: standalone
-    status: registered
-    decompose_at_open: true
+    status: closed
+    pr: "#<pending> (b-od18-drift-algorithm branch — flips registered → closed; standalone_closed 87→88, standalone_registered 7→6)"
     owner_axis: "OD"
     parent_arc: R-FS-2
     anticipated_scope: "C-OD-18 §18.1-18.2: the drift event emission is BUILT (alignment_floor_drift_detection.py — 4-attribute always-sampled event); the deferral envelope defers the drift-detection ALGORITHM per primitive + the re-baselining cycle workflow + dashboard alerting integration + eval-kind enforcement at the SDK boundary. Grounding-first: how much the built emitter already computes vs receives. Build: per-primitive current-value computation over the ring-buffer observation window (the five C-OD-17 operator-burden primitives); threshold comparison feeding the existing emitter; re-baselining workflow = an operator-facing recompute + threshold-update path (threshold VALUES stay deployment-binding config); an eval-kind SDK-boundary guard rejecting offline_judge spans emitted through the inline path (a validation guard, not a judge — the model-judge refusal binds here too). Witnesses: synthetic-window drift (breach emits the event with correct attrs; no breach stays silent); re-baseline round-trip; eval-kind guard fail-closed."
+    close_note: "Grounding first (advisor()-checked before build). §18.1's drift table names exactly 4 AlignmentFloorPrimitive values (U-OD-25 already committed to 4, not the arc register's loose 'five C-OD-17 primitives' phrasing — spec wins per the authority chain; Class-3 note, no fork). Of those 4, only CACHE_HIT_RATE_ALIGNMENT_FLOOR has a deterministic, judgment-free span formula; the other 3 (JUDGE_HUMAN_COHENS_KAPPA, ROUTING_ACCURACY_HOLDOUT, SANDBOX_TIER_ROUTING_ACCURACY) require a judge/human verdict, and the B-OD17 review ledger stores only free-text categories with NO fixed taxonomy under the standing eval-harness-refused-as-governance-gate boundary — synthesizing an accuracy ratio from it would build the exact judge that boundary forecloses. New harness_od.alignment_floor_drift_algorithm module: compute_current_value (window-scoped cache-hit-ratio off anthropic.cache_* attributes for the one span-derivable primitive; NotSpanDerivableError for the other 3, directing callers to supply a judge value instead — TIME_WINDOW and SAMPLE_WINDOW both implemented against the existing ObservationWindow type); run_drift_check (wires the real current-value source to U-OD-25's pre-existing detect_drift/emit_drift_event pair — previously detect_drift only accepted a pre-computed value with no production caller); rebaseline_threshold (operator-facing recompute + threshold-update round-trip — the threshold VALUE stays operator-supplied/deployment-binding, this function only recomputes against it). Eval-kind SDK-boundary guard: found gen_ai.eval.kind was declared (U-OD-26 eval_vs_runtime_gate.py) and validate_eval_span_routing fully implemented but had ZERO production callers anywhere in the codebase (wired-handler-unreachable), and emit_eval_as_child_span (U-OD-23, the one real offline_judge emission path) never set the discriminator attribute at all. Wired validate_eval_span_routing into emit_eval_as_child_span (now the one production-reachable call site) and added gen_ai.eval.kind=offline_judge to the emitted child span. The CP-owned 'inline path' producer (validator_framework.py, C-CP-21) does not currently emit gen_ai.eval.kind at all, so there is no live violating code path on that side to guard yet — noted honestly rather than authoring a dead cross-axis function (advisor()-flagged). 17 new tests in test_alignment_floor_drift_algorithm.py: window-scoping correctness (TIME_WINDOW excludes out-of-window spans, SAMPLE_WINDOW keeps only the most recent N), synthetic-window drift witness (floor breach emits the 4-attr event, no breach and no-data-in-window are both silent), judge-scored-primitive path (raises without a supplied value, emits correctly with one), re-baseline round-trip (resolves drift, can still legitimately drift), and the eval-kind guard fail-closed test (validate_eval_span_routing rejects an offline_judge routing with emitted_as_child_span=False — the exact 'inline path' shape the acceptance criterion names) plus an end-to-end witness that emit_eval_as_child_span's real returned span now carries gen_ai.eval.kind (via monkeypatching the OTel global tracer provider for the one test that needs a real, not no-op, span — auto-reverted, no cross-test state leakage). Same production-liveness disposition as B-OD17/B-OD19: the sqlite ring buffer this module reads has no production writer as of this arc — verified against seeded test data. workspace-wide 5654 passed/10 skip/33 deselect/1 xfail; pyright 0/0/0; ruff clean. Out-of-family Codex review: no actionable issues."
     units: []
     ledger_ref: ".harness/r-fs-2-final-closure-implementation-plan-v1.md"
 
