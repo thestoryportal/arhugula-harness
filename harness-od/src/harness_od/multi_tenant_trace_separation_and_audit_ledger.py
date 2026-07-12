@@ -4,7 +4,8 @@ Implements C-OD-21 §21.1 (per-tenant trace separation — tenant.id attribute +
 per-tenant OTLP routing or per-tenant backend partition), §21.2 (cryptographic
 audit ledger composition — the 4 `audit.signature.*` attributes + 3 admissible
 signature algorithms per ADR-D5 v1.3 §1.4.1), §21.3 (multi-tenant cell
-composition — cells 7, 8 only).
+composition — cells 7, 8 only); OD spec v1.31 C-OD-24 §24.7 (the
+`audit.rotation_correlation_id` two-row dual-signature rotation pattern).
 
 `TenantSeparationStrategy` enumerates the 2 per-tenant separation strategies.
 `PerTenantSeparation` carries, for one multi-tenant cell, the cell's separation
@@ -14,7 +15,12 @@ exactly 2 entries (cell-7, cell-8). `sign_audit_entry` produces the 4-attribute
 `AuditSignatureAttributes` set over an `AuditPayload`;
 `verify_hash_chain_integrity` walks an `AuditLedger`'s hash chain;
 `assert_tenant_id_on_every_span_at_multi_tenant_cells` enforces the §21.1
-per-span tenant.id invariant at cells 7/8.
+per-span tenant.id invariant at cells 7/8. `sign_rotation_pair` produces the
+`audit.rotation_correlation_id`-joined sibling pair for a `secret_rotation_event`
+where the rotating secret IS the audit-signing key (ADR-D5 §1.4 "Key-period
+model for rotation"); `verify_rotation_pairs` walks a ledger's rotation-tagged
+entries per the ADR's external-auditor verification semantics (OD spec v1.31
+§24.7 steps 1-4).
 
 Carrier resolution. `AuditPayload` / `AuditLedger` / `AuditSignatureAttributes` /
 `SignatureAlgorithm` resolve to the U-OD-00 carrier (`audit_ledger_types`) via
@@ -50,6 +56,7 @@ Depends on: [U-OD-01, U-OD-02, U-OD-28, U-OD-04, U-OD-00] (within-axis) +
 
 from __future__ import annotations
 
+import uuid
 from enum import StrEnum
 from typing import Literal
 
@@ -58,9 +65,12 @@ from pydantic import BaseModel, ConfigDict
 
 from harness_od.audit_ledger_types import (
     AuditLedger,
+    AuditLedgerEntry,
     AuditPayload,
     AuditSignatureAttributes,
     SignatureAlgorithm,
+    StateLedgerEntryRef,
+    compute_entry_hash,
 )
 from harness_od.observability_matrix import CellID
 from harness_od.otel_genai_base import SpanRef
@@ -68,12 +78,16 @@ from harness_od.otel_genai_base import SpanRef
 __all__ = [
     "AUDIT_SIGNATURE_REQUIRED_AT_TIER_5_LEDGER",
     "PER_TENANT_SEPARATION_BINDINGS",
+    "ROTATION_CORRELATION_ID_ATTR",
     "HashChainBreach",
     "PerTenantSeparation",
+    "RotationPairIntegrityBreach",
     "TenantIdMissingViolation",
     "TenantSeparationStrategy",
     "sign_audit_entry",
+    "sign_rotation_pair",
     "verify_hash_chain_integrity",
+    "verify_rotation_pairs",
 ]
 
 
@@ -87,6 +101,19 @@ class HashChainBreach(Exception):  # noqa: N818 — name is the U-OD-30 plan sig
     — a ledger is well-formed iff each entry's `prior_entry_hash` links to the
     predecessor's `entry_hash`. Stack is Pydantic v2 + stdlib, no `Result`
     framework pull (CLAUDE.md §3.2 / I-6).
+    """
+
+
+class RotationPairIntegrityBreach(Exception):  # noqa: N818 — mirrors HashChainBreach naming
+    """Raised when an `audit.rotation_correlation_id` sibling pair is malformed.
+
+    The `Result<(), RotationPairIntegrityBreach>` error arm of
+    `verify_rotation_pairs` (OD spec v1.31 C-OD-24 §24.7) — a rotation-tagged
+    entry set is well-formed iff every distinct `audit.rotation_correlation_id`
+    value is carried by exactly two entries, each entry's stored `entry_hash`
+    matches its recomputed hash, the pair's `key_period` values are
+    consecutive integers with the earlier entry signed by the outgoing key,
+    the key ids differ, and chain-hash continuity holds across the pair.
     """
 
 
@@ -226,6 +253,171 @@ def verify_hash_chain_integrity(ledger: AuditLedger) -> None:
                 f"audit-ledger hash chain broken at entry {i}: "
                 f"prior_entry_hash={prior_hash!r} != predecessor entry_hash="
                 f"{predecessor_hash!r} (C-OD-21 §21.2 / C-IS-10 §10.3)"
+            )
+    return None
+
+
+# --- C-OD-24 §24.7 rotation-pair dual-signature pattern (OD spec v1.31) ----
+
+ROTATION_CORRELATION_ID_ATTR = "audit.rotation_correlation_id"
+"""The §24.7 namespace-attribute name carried inside `audit_namespace_attrs`."""
+
+
+def sign_rotation_pair(
+    *,
+    outgoing_entry_core: StateLedgerEntryRef,
+    outgoing_prior_entry_hash: str,
+    incoming_entry_core: StateLedgerEntryRef,
+    outgoing_key_id: str,
+    outgoing_key_period: int,
+    incoming_key_id: str,
+    incoming_key_period: int,
+    algo: SignatureAlgorithm,
+    outgoing_audit_namespace_attrs: dict[str, str] | None = None,
+    incoming_audit_namespace_attrs: dict[str, str] | None = None,
+) -> tuple[AuditLedgerEntry, AuditLedgerEntry]:
+    """Produce the co-signed rotation-pair sibling entries (C-OD-24 §24.7).
+
+    Materializes ADR-D5 §1.4's `secret_rotation_event` two-row pattern for the
+    case where the rotating secret IS the audit-signing key: sibling-1 is
+    signed under the outgoing key at `outgoing_key_period`; sibling-2 is
+    signed under the incoming key at `incoming_key_period` and chains onto
+    sibling-1 (`incoming.payload.prior_entry_hash == outgoing.entry_hash`).
+    Both entries carry a freshly-generated, shared `audit.rotation_correlation_id`
+    inside `audit_namespace_attrs`.
+
+    Raises `ValueError` when `incoming_key_period != outgoing_key_period + 1`
+    (periods must be consecutive) or `outgoing_key_id == incoming_key_id` (a
+    rotation changes the key identity, not just the period counter).
+    """
+    if incoming_key_period != outgoing_key_period + 1:
+        raise ValueError(
+            "sign_rotation_pair precondition violated: incoming_key_period "
+            f"({incoming_key_period}) must equal outgoing_key_period "
+            f"({outgoing_key_period}) + 1 (C-OD-24 §24.7)"
+        )
+    if outgoing_key_id == incoming_key_id:
+        raise ValueError(
+            "sign_rotation_pair precondition violated: outgoing_key_id and "
+            "incoming_key_id must differ (C-OD-24 §24.7)"
+        )
+
+    correlation_id = str(uuid.uuid4())
+
+    outgoing_attrs = dict(outgoing_audit_namespace_attrs or {})
+    outgoing_attrs[ROTATION_CORRELATION_ID_ATTR] = correlation_id
+    outgoing_payload = AuditPayload(
+        entry_core=outgoing_entry_core,
+        audit_namespace_attrs=outgoing_attrs,
+        prior_entry_hash=outgoing_prior_entry_hash,
+    )
+    outgoing_entry_hash = compute_entry_hash(outgoing_payload)
+    outgoing_sig = sign_audit_entry(outgoing_payload, outgoing_key_id, algo).model_copy(
+        update={"audit_signature_key_period": str(outgoing_key_period)}
+    )
+    outgoing_entry = AuditLedgerEntry(
+        payload=outgoing_payload, signature_attrs=outgoing_sig, entry_hash=outgoing_entry_hash
+    )
+
+    incoming_attrs = dict(incoming_audit_namespace_attrs or {})
+    incoming_attrs[ROTATION_CORRELATION_ID_ATTR] = correlation_id
+    incoming_payload = AuditPayload(
+        entry_core=incoming_entry_core,
+        audit_namespace_attrs=incoming_attrs,
+        prior_entry_hash=outgoing_entry_hash,
+    )
+    incoming_entry_hash = compute_entry_hash(incoming_payload)
+    incoming_sig = sign_audit_entry(incoming_payload, incoming_key_id, algo).model_copy(
+        update={"audit_signature_key_period": str(incoming_key_period)}
+    )
+    incoming_entry = AuditLedgerEntry(
+        payload=incoming_payload, signature_attrs=incoming_sig, entry_hash=incoming_entry_hash
+    )
+
+    return outgoing_entry, incoming_entry
+
+
+def verify_rotation_pairs(ledger: AuditLedger) -> None:
+    """Verify every `audit.rotation_correlation_id` sibling pair (C-OD-24 §24.7).
+
+    Returns `None` (the `Ok(())` arm) when every distinct rotation-correlation
+    value tags exactly two entries whose recomputed `entry_hash` matches the
+    stored value, whose key periods are consecutive integers, whose key ids
+    differ, and whose chain-hash continuity holds across the pair (the
+    later-period sibling's `prior_entry_hash` extends the earlier-period
+    sibling's `entry_hash`). Raises `RotationPairIntegrityBreach` (the `Err`
+    arm) on the first violation. Entries with no `audit.rotation_correlation_id`
+    attribute are ignored — non-rotation entries are unaffected, per the ADR's
+    verification semantics.
+
+    Per the ADR's "Standard chain-verification walks entries in `entry_hash`
+    chain order, recomputing hashes..." — each tagged entry's stored
+    `entry_hash` is recomputed from its stored `payload` via `compute_entry_hash`
+    before any cross-entry check runs, so a payload mutated in place (e.g. a
+    tampered `audit.*` attribute) with a stale `entry_hash` left behind is
+    caught here, not just at the cross-entry `prior_entry_hash` linkage.
+    """
+    by_correlation: dict[str, list[AuditLedgerEntry]] = {}
+    for entry in ledger.entries:
+        correlation_id = entry.payload.audit_namespace_attrs.get(ROTATION_CORRELATION_ID_ATTR)
+        if not correlation_id:
+            continue
+        try:
+            uuid.UUID(correlation_id)
+        except ValueError as exc:
+            raise RotationPairIntegrityBreach(
+                f"audit.rotation_correlation_id={correlation_id!r} is not a "
+                "canonical UUID string (C-OD-24 §24.7 declares this attribute "
+                "as a UUID string or absent)"
+            ) from exc
+        by_correlation.setdefault(correlation_id, []).append(entry)
+
+    for correlation_id, tagged in by_correlation.items():
+        if len(tagged) != 2:
+            raise RotationPairIntegrityBreach(
+                f"audit.rotation_correlation_id={correlation_id!r} tagged "
+                f"{len(tagged)} entries; the two-row rotation pattern requires "
+                "exactly 2 (C-OD-24 §24.7)"
+            )
+        for entry in tagged:
+            recomputed = compute_entry_hash(entry.payload)
+            if recomputed != entry.entry_hash:
+                raise RotationPairIntegrityBreach(
+                    f"audit.rotation_correlation_id={correlation_id!r}: stored "
+                    f"entry_hash={entry.entry_hash!r} does not match recomputed "
+                    f"hash={recomputed!r} over the entry's payload — payload "
+                    "tampered without recomputing entry_hash (C-OD-24 §24.7)"
+                )
+        entry_a, entry_b = tagged
+        try:
+            period_a = int(entry_a.signature_attrs.audit_signature_key_period)
+            period_b = int(entry_b.signature_attrs.audit_signature_key_period)
+        except ValueError as exc:
+            raise RotationPairIntegrityBreach(
+                f"audit.rotation_correlation_id={correlation_id!r}: key_period "
+                "must be integer-valued for rotation-tagged entries (C-OD-24 §24.7)"
+            ) from exc
+        sibling_1, sibling_2 = (entry_a, entry_b) if period_a < period_b else (entry_b, entry_a)
+        period_1, period_2 = sorted((period_a, period_b))
+        if period_2 != period_1 + 1:
+            raise RotationPairIntegrityBreach(
+                f"audit.rotation_correlation_id={correlation_id!r}: key periods "
+                f"{period_1} and {period_2} are not consecutive (C-OD-24 §24.7)"
+            )
+        if (
+            sibling_1.signature_attrs.audit_signature_key_id
+            == sibling_2.signature_attrs.audit_signature_key_id
+        ):
+            raise RotationPairIntegrityBreach(
+                f"audit.rotation_correlation_id={correlation_id!r}: outgoing and "
+                "incoming key_id must differ (C-OD-24 §24.7)"
+            )
+        if sibling_2.payload.prior_entry_hash != sibling_1.entry_hash:
+            raise RotationPairIntegrityBreach(
+                f"audit.rotation_correlation_id={correlation_id!r}: chain-hash "
+                "continuity broken across the rotation boundary — "
+                f"sibling_2.payload.prior_entry_hash={sibling_2.payload.prior_entry_hash!r} "
+                f"!= sibling_1.entry_hash={sibling_1.entry_hash!r} (C-OD-24 §24.7)"
             )
     return None
 

@@ -46,12 +46,24 @@
 snapshot:
   frozen_total: 11
   frozen_done: 11
-  standalone_closed: 82
+  standalone_closed: 83
   standalone_gated: 0
   standalone_resolved: 4
-  standalone_registered: 12
+  standalone_registered: 11
   rfs1_status: active
   source: ".harness/beyond-mvp-capability-boundary-ledger.md"
+  # FRONTIER NOTE (2026-07-12, B-AUDIT-KEY-ROTATION-RUNTIME closed — R-FS-2 Wave 1
+  # fourth/final arc). standalone_closed 82→83, standalone_registered 12→11. Grounding
+  # at open caught ADR-D5 version drift (plan cited v1.3; HEAD is v1.4, which demoted
+  # the rotation_correlation_id SQLite table to a non-canonical deferred model without
+  # porting it to the v1.4 JSONL-canonical shape — a gap the ADR's own v1.4 change-note
+  # flagged Class-3/open). Closed via OD spec v1.30→v1.31 (new §24.7 — rotation_correlation_id
+  # ported into the existing audit_namespace_attrs open-dict convention, zero schema change)
+  # + sign_rotation_pair/verify_rotation_pairs in multi_tenant_trace_separation_and_audit_ledger.py.
+  # Codex out-of-family review caught a real gap (verify trusted stored hashes without
+  # recomputing from payload); fixed + mutation-probed. Wave 1 (B-18-KEEPALIVE,
+  # B-WAL-F1-01-EXACTLY-ONCE, B-SKILL-FRONTMATTER-VALIDATOR, B-AUDIT-KEY-ROTATION-RUNTIME)
+  # is now COMPLETE — next is Wave 2 (LANEB first).
   # FRONTIER NOTE (2026-07-12, B-SKILL-FRONTMATTER-VALIDATOR closed at PR #937 — R-FS-2
   # Wave 1 third arc). standalone_closed 81→82, standalone_registered 13→12. New
   # harness_as.skill_frontmatter_validator.validate_skill_frontmatter — pure fail-closed
@@ -1949,13 +1961,14 @@ arcs:
   - id: B-AUDIT-KEY-ROTATION-RUNTIME
     title: "Two-row audit-key rotation dual-signature runtime path (ADR-D5 v1.3 §1.4 Option (a))"
     kind: standalone
-    status: registered
-    decompose_at_open: true
+    status: closed
+    pr: "#938"
     owner_axis: "OD"
     parent_arc: R-FS-2
     anticipated_scope: "ADR-D5 v1.3 §1.4 Option (a) two-row rotation pattern: a rotation event is written as two ledger entries sharing rotation_correlation_id — one signed under the outgoing key at period N, one under the incoming key at period N+1; external-auditor walk semantics specified in the ADR prose (sibling lookup, both signatures, chain continuity across the boundary). Signer + chain verifier exist (multi_tenant_trace_separation_and_audit_ledger.py lines 177/211); NO rotation-pair writer/verifier located (re-ground at open). Build the rotation-event writer + extend the verify walk; solo-tier no-op preserved (correlation column NULL). Witnesses: rotate-then-verify passes; tamper-either-sibling fails; non-rotation entries unaffected (control)."
     units: []
     ledger_ref: ".harness/r-fs-2-final-closure-implementation-plan-v1.md"
+    close_note: "Grounding at open surfaced a real version-drift: the plan cited ADR-D5 v1.3, but HEAD is v1.4 (Phase-7 storage-form reconciliation — JSONL via IS composition is v1.4-canonical; the SQLite table carrying rotation_correlation_id was demoted to a deferred, non-canonical persistence model). ADR-D5 v1.4's own Change-note admitted the reconciliation was left open (Class-3 flag: 'future ... authoring will need to either reconcile the table with v1.4 JSONL-canonical, OR commit the SQLite migration'). Closed via bundled-absorption: OD spec v1.30→v1.31 (new §24.7) ports rotation_correlation_id into the existing audit_namespace_attrs open-dict convention (the §24.6 audit.cp.* precedent) rather than a new AuditLedgerEntry field — zero Pydantic schema change, acceptance-pinned field-count tests untouched, automatically hash-covered. Clearance marker filed. Code: sign_rotation_pair (co-signed sibling pair, consecutive key_period + differing key_id preconditions) + verify_rotation_pairs (5-step external-auditor walk: exactly-2 siblings, hash-recompute per entry, consecutive periods + differing key ids, chain-hash continuity) in multi_tenant_trace_separation_and_audit_ledger.py. Codex out-of-family review (round 1, P1) caught that the initial verify_rotation_pairs trusted stored entry_hash/prior_entry_hash without recomputing from payload — a payload tampered in place with a stale hash would pass; fixed by adding the recompute-and-compare step (mirroring the ADR's own 'recomputing hashes' instruction, which the initial draft cited but didn't implement) + a dedicated regression test; mutation-probed (temporarily removing the recompute check reproduces test failure, confirming the test is load-bearing) before restoring. Round-2 out-of-family review (branch-vs-main) caught a second real gap (P2): the correlation-id grouping used bare truthiness, so a present-but-non-UUID value would still group as a valid pairing key instead of being rejected; fixed by validating `uuid.UUID(correlation_id)` before grouping, with its own regression test + mutation-probe. harness-od 974/974; workspace-wide 5550 passed/10 skip/33 deselect/1 xfail; pyright 0/0/0; ruff clean."
 
   - id: B-18-LANEB-PROMPT-SEMVER
     title: "Operator-declared semantic-version field on PromptVersion (skill frontmatter.version analogue; cache-inert)"
