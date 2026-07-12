@@ -274,3 +274,58 @@ Run against the §7.5.1 inclusion gate:
 - **`must_pass` #1** (cardinality>=2 frontier identified): ✅ C4-§1.
 - **`must_pass` #2** (candidates evaluated against §7.4.7 + §7.5): ✅ C4-§2 — result: ZERO new §7.4.7 owed; one §7.5 PD-6 promoted at workflow v1.16.
 - **Entry status:** **ACTIVE-SURVEYED (cadence-4)**. Cadence-4's PD-6 promotion debt is discharged. R-600 remains an ACTIVE recurring lane; next run only after the cadence trips again (~10 PRs) or a concrete new candidate reaches independent instance-cardinality >=2.
+
+---
+---
+
+# Cadence-5 run — 2026-07-12 (HEAD `a5627fc2`, post-#941)
+
+**Cadence trigger.** ~44 merge commits (50 total commits) since the cadence-4 baseline (`3177fab8` / post-#848 → `a5627fc2` / post-#941) — well past the ~10-PR interval. The interval includes the R-FS-1 close track's tail (Tier-1 manual sign-off), the R-FS-2 Wave-1/Wave-2 opening arcs (B-18 EPOCH-PARTITION, B-18 PREWARM-OW, B-TOOL-SEARCH-RUNTIME, B-OD19-LOCAL-INSPECTION), and the codex-review-pilot closure.
+
+**Method (identical to cadence-1..4).** Read-only `[[wiki-link]]` enumeration of the auto-memory store at `/Users/robertrhu/.claude/projects/-Users-robertrhu-Projects-arhugula-v2/memory/` (**119 files**, was 114 at cadence-4): **566 total refs / 99 distinct tokens → 76 at cardinality >=2** (was 558/101/72). As at every prior cadence, citation-count is a salience proxy, NOT instance-cardinality — promotion decisions below use per-candidate independent-arc counting, not the raw number.
+
+## C5-§1 — `must_pass` #1: cardinality>=2 frontier identified
+
+Top unchanged/already-homed signals remain dominant: `hooks-codex-pilots-decorrelation-validated` (45), `verification-shape-sharpened-grep-vs-e2e` (35), `advisor-before-substantive-work-for-cross-axis-blockers` (32), `grounding-reveals-claude-closeable-slice-close-honestly` (31), `r-cxa-seam-wiring-is-producer-discovery` (20), `full-chain-witness-not-half-proofs` (20, PD-6) — all already dispositioned at cadence-3/4.
+
+The frontier change relevant to workflow promotion:
+
+| pattern | refs/files | cadence-4 disposition | cadence-5 disposition |
+|---|---:|---|---|
+| `disposition-label-is-a-claim-verify-against-spec` | 5 refs, 8 named independent arcs (#695, #697, #702, #703, #760, #768, #928, #788) | did not exist as a consolidated token | **Promoted as PD-7** (see C5-§2). |
+| `new-surface-audit-hash-and-config-not-carrier` | 7 refs, 6 named independent arcs (#616, #625, #635, #651, #657, #728) | did not exist as a consolidated token | **NOT §7.5** — out-of-domain (runtime-implementation mechanics, not SDLC process discipline). Recommended a dedicated home; see C5-§2. |
+| `spec-leg-split-on-ratification-boundary` | 4 | did not exist | Cite-under-PD-1 (single named worked instance, #581 — fails §7.5.1 gate 1). Parked. |
+| `adr-vs-fork-spec-plan-granularity` | 4 | did not exist | Already-homed reinforcement of CLAUDE.md §4.3 back-flow routing; not a new §7.5 shape. Cite-don't-relocate. |
+| `design-substrate-version-identity-hazards` | 4 | did not exist | Reference-type; reinforces `[[wrong-version-read-delta-only-baseline]]` (already cite-under-PD-5). No standalone. |
+| `insights-recs-workspace-blind` | 3 | did not exist | Already-homed at the `/optimize-claude-md` skill (a tool, not a workflow-doc discipline). No standalone. |
+
+**Provenance honesty (the cadence-2 producer-discovery precedent applied here).** 7 of PD-7's 8 named arcs (#695–#788) **predate** the cadence-4 baseline (post-#848); only #928 (2026-07-11) postdates it. This is **not** a newly-occurring pattern missed at cadence-4 — it is a **newly-consolidated** one: the individual per-arc lessons existed as scattered feedback across many sessions, and the memory file itself carries mtime 2026-07-11 (this inter-cadence window), meaning the consolidation into one named, citable discipline happened after cadence-4 closed, drawing together 7 historical instances plus 1 new one. The honest framing is "first cadence at which the consolidated discipline crosses the promotion gate as a named pattern," not "first cadence at which the underlying behavior occurred." Same holds for `new-surface-audit-hash-and-config-not-carrier` (arcs #616–#728, all pre-cadence-4; consolidated file mtime within this window).
+
+## C5-§2 — `must_pass` #2: candidates evaluated against §7.4.7 and §7.5
+
+**§7.4.7:** ZERO new stale-carry-text disposition species surfaced. The cadence-1 through cadence-4 finding remains corroborated (5th independent surfacing).
+
+**§7.5.4 cross-catalogue discriminator re-read at source (v1.14 §7.5.4), not from memory of prior cadence write-ups** — per the advisor's flag that this cadence's actual open question ("distinct new PD vs cite-under an existing PD") is adjudicated by that section's body, and PD-7's own memory frames itself as "the 4-disposition classifier [PD-5] this refines." §7.5.4 discriminates **catalogue membership** (§7.4.7.2 stale-carry-text / §7.5 process-discipline / `.harness/` retirement-event-pattern), not within-§7.5 novelty — and §7.5 is explicitly "a catalogue (heterogeneous disciplines, each with its own statement + empirical anchor + application shape + cross-reference) — NOT a taxonomy" (v1.14 §7.5 preamble). The PD-6 precedent (itself explicitly "complements PD-5," cite-don't-relocate, yet catalogued as its own numbered entry) is the controlling analogy: an adjacent-but-distinct discipline gets its own PD entry cross-referencing the sibling, not a merge into it.
+
+**`disposition-label-is-a-claim-verify-against-spec` → PD-7 PROMOTED.** Statement: a disposition label already attached to a registered arc — in `arc-ledger.yaml`, the dashboard next-action, the spine ledger, a prior memory, or a precedent's own paraphrase/docstring — is someone's earlier conclusion, not ground truth. Before committing to build, fork, or gate on that label, re-ground the one load-bearing premise via a gated **direct** read of the primary spec text (never a precedent's paraphrase, a memory summary, or a sibling arc's framing) — the disposition can flip in either direction.
+
+Run against the §7.5.1 inclusion gate:
+
+1. **Instance-cardinality >=2 of independent arcs — PASS, strongly.** 8 distinct arcs across ~3 weeks (#695 bug-vs-ratified; #697 fork-vs-build; #702 type-signature-tiebreaker-over-a-vetted-design's-own-claimed-verification; #703 answers-a-question-vs-overrides-a-floor; #760 code-comments-are-not-the-spec's-invariant; #768 a-deferred-question-is-not-evidence-for-one-answer; #928 an-anticipated-scope-fix-shape-is-not-a-ratified-disposition; #788 a-probe-cited-disposition-is-doubly-a-claim), each a genuinely distinct failure mode, not a rescope of one unit.
+2. **Genuinely §7.5-shaped — PASS.** A verification/sequencing discipline: before acting on an inherited claim, ground it directly. Distinct in shape from PD-3 (matching verification depth to the claim being verified) and PD-5 (deciding whether a lever is built/buildable/absent before authoring) — PD-7 is specifically about auditing **inherited labels/claims about a registered arc's disposition**, with its own discriminators (forbidding invariant vs. descriptive prose; does an impl-discretion clause name the strategy; does an operator action answer the surfaced question or override an independently-enforced invariant).
+3. **No canonical home elsewhere — PASS with cite-don't-relocate to PD-5.** PD-5 decides whether a lever is already built before authoring; PD-7 decides whether an *already-assigned disposition label* on that lever should be trusted before acting on it — adjacent, not redundant, exactly the PD-6/PD-5 relationship.
+
+**Promotion applied this arc:** `design-substrate/Project_Workflow_v1_17.md` adds **PD-7 disposition-label-is-a-claim**. Clearance marker filed at `.harness/clearance/Project_Workflow-v1_17-cleared-2026-07-12.md`. Root `CLAUDE.md` and `.harness/claude-artifact-pointers.md` now point to workflow head v1.17.
+
+**`new-surface-audit-hash-and-config-not-carrier` → NOT promoted to §7.5; dedicated home recommended.** The pattern (audit-hash coherence for new behavior-driving surfaces; config-vs-carrier field placement; the three `freeze()` hazard sub-modes; the daemon-reuse per-run-isolation hazard; hash-carrier choice; drop-when-None byte-compat for hash-fed carriers) is empirically load-bearing across 6 independent R-FS-1 arcs (#616, #625, #635, #651, #657, #728) — it clears §7.5.1 gate 1 comfortably. It fails the **domain fit** implicit in §7.5.4's catalogue-routing spirit: §7.5 catalogues *SDLC execution-process* disciplines transferable across axes and design-phase work (sequencing, verification depth, AC decomposition, grounding-before-authoring); this pattern is a **runtime-implementation mechanics checklist** specific to `HarnessContext`/procedural-tier-hash/`freeze()` internals in one subsystem — not a cross-project process shape. Recommended home: a dedicated runtime-implementation pattern note, **not** Project_Workflow. Authored this arc at `.harness/harness-context-carrier-and-hash-patterns.md` (mode-agnostic; no `design-substrate/**` touch, no clearance marker owed).
+
+**Parked (fail gate 1 — single named instance, cite-don't-relocate):**
+- `spec-leg-split-on-ratification-boundary` (card 4 cite, 1 worked arc — #581): the design-authoring-time analogue of PD-1's build-time AC-split. Stays a PD-1 specialization until a second independent spec-leg-split arc surfaces.
+- `adr-vs-fork-spec-plan-granularity` (card 4 cite, 1 worked arc): already substantially covered by CLAUDE.md §4.3's fork-class routing table; this memory sharpens it (the "impl-to-cleared-spec is not a fork at all" corollary) without introducing a new §7.5 shape. Cite-don't-relocate.
+- `design-substrate-version-identity-hazards` (card 4 cite, reference-type): reinforces the already-cited `[[wrong-version-read-delta-only-baseline]]`; no standalone promotion.
+
+## C5-§3 — Closure disposition (cadence-5)
+
+- **`must_pass` #1** (cardinality>=2 frontier identified): ✅ C5-§1.
+- **`must_pass` #2** (candidates evaluated against §7.4.7 + §7.5): ✅ C5-§2 — result: ZERO new §7.4.7 owed; one §7.5 PD-7 promoted at workflow v1.17; one strong-but-out-of-domain candidate (`new-surface-audit-hash-and-config-not-carrier`) routed to a dedicated non-§7.5 home instead of forced into the workflow doc.
+- **Entry status:** **ACTIVE-SURVEYED (cadence-5)**. Cadence-5's PD-7 promotion debt is discharged in the same arc. R-600 remains an ACTIVE recurring lane; next run only after the cadence trips again (~10 PRs) or a concrete new candidate reaches independent instance-cardinality >=2.

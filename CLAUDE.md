@@ -43,11 +43,11 @@ All canonical design artifacts live in `design-substrate/`; root `CLAUDE.md` is 
 
 Citation discipline remains unchanged: when this file cites a canonical artifact, consult the design-phase substrate copy and preserve byte-exact citation discipline per `Project_Workflow_v1_8.md` §7.4.2.
 
-**Delta-baseline §-cite convention.** `Project_Workflow` is a delta chain — `Project_Workflow_v1_8.md` is the full baseline; v1.9–v1.16 are deltas that preserve prior bodies verbatim (current head v1.16, recorded at this file's §2.1). A `§`-cite therefore names the version of **last substantive definition** of that section, which is often older than the head: §7.4.2 byte-exact-citation discipline + §2.7.6 back-flow routing live at v1.8; §7.4.7.3 stale-carry audit at v1.13; §7.5.2 PD-5 lives at v1.15 and PD-6 lives at v1.16. These older-version §-cites are **intentional and resolve byte-exact — not stale** (a cite to `v1.16 §7.4.2` would in fact *fail* byte-exact, since §7.4.2 is not re-tabled in the v1.16 delta).
+**Delta-baseline §-cite convention.** `Project_Workflow` is a delta chain — `Project_Workflow_v1_8.md` is the full baseline; v1.9–v1.17 are deltas that preserve prior bodies verbatim (current head v1.17, recorded at this file's §2.1). A `§`-cite therefore names the version of **last substantive definition** of that section, which is often older than the head: §7.4.2 byte-exact-citation discipline + §2.7.6 back-flow routing live at v1.8; §7.4.7.3 stale-carry audit at v1.13; §7.5.2 PD-5 lives at v1.15, PD-6 lives at v1.16, and PD-7 lives at v1.17. These older-version §-cites are **intentional and resolve byte-exact — not stale** (a cite to `v1.17 §7.4.2` would in fact *fail* byte-exact, since §7.4.2 is not re-tabled in the v1.17 delta).
 
 ### 2.1 Governance + Execution Discipline
 
-Current governance anchors: `Project_Workflow_v1_16.md`, `Phase_7_Meta_Architecture_v1.md`, `Phase_7_Kickoff_Prompt.md`, `Target_Stack_Commitment_v1.md`, `Plan_Executability_Audit_v1.md`, and `Canonical_Substrate_Inventory.md`. Full roles and lineage are indexed at `claude-artifact-pointers.md` §2.1 in `.harness`.
+Current governance anchors: `Project_Workflow_v1_17.md`, `Phase_7_Meta_Architecture_v1.md`, `Phase_7_Kickoff_Prompt.md`, `Target_Stack_Commitment_v1.md`, `Plan_Executability_Audit_v1.md`, and `Canonical_Substrate_Inventory.md`. Full roles and lineage are indexed at `claude-artifact-pointers.md` §2.1 in `.harness`.
 
 ### 2.2 ADR + ADD + PRD
 
