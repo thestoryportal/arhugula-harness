@@ -527,8 +527,17 @@ class EpisodicMemoryCapture:
             record_count=1,
         ) as span:
             try:
-                operation_result = self._store.append_memory_operation(payload)
+                # Write the record BEFORE the ledger entry that references it
+                # (`payload.memory_refs = (record.envelope.memory_id,)`).
+                # Appending the ledger entry first would leave a dangling
+                # reference — a memory_id the append-only, hash-chained
+                # ledger vouches for but that was never persisted — if the
+                # record write then failed. Swapped order downgrades a
+                # ledger-append failure to an orphaned-but-safe record (the
+                # record itself is durable; only its audit trail is
+                # incomplete), never a ledger entry pointing at nothing.
                 self._store.write_record(record)
+                operation_result = self._store.append_memory_operation(payload)
             except Exception as exc:
                 set_memory_telemetry_attributes(
                     span,

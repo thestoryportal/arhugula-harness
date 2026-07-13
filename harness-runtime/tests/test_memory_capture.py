@@ -12,7 +12,6 @@ from harness_is.memory_operation_ledger import (
     MemoryOperationEngineClass,
     MemoryOperationKind,
     MemoryOperationProjection,
-    MemoryOperationWriteResult,
 )
 from harness_is.memory_path_registry import MemoryRootBinding
 from harness_is.memory_record_envelope import MemoryRecordKind, MemoryTier
@@ -279,16 +278,63 @@ def test_redacted_capture_mode_persists_minimal_content(tmp_path: Path) -> None:
     assert "account 456" not in serialized
 
 
-def test_capture_does_not_write_record_when_operation_ledger_append_fails() -> None:
-    class _LedgerFailingStore:
-        records_written = 0
+def test_capture_does_not_append_ledger_when_record_write_fails() -> None:
+    """Regression — the record is written BEFORE the ledger entry that
+    references it (`memory_refs=(record.envelope.memory_id,)`). Previously
+    the ledger was appended FIRST: a record-write failure after a successful
+    ledger append left a dangling reference — a memory_id the append-only,
+    hash-chained ledger vouched for but that was never persisted. Order is
+    now flipped so a record-write failure never reaches the ledger append at
+    all."""
+
+    class _RecordFailingStore:
+        appended = False
 
         def append_memory_operation(self, payload: object) -> object:
+            self.appended = True
+            raise AssertionError("ledger append must not run before record write")
+
+        def write_record(self, record: object) -> object:
+            raise OSError("disk full")
+
+    store = _RecordFailingStore()
+    recorder = EpisodicMemoryCapture(
+        store=store,
+        actor=Actor(actor_class=ActorClass.AGENT, actor_id="codex"),
+        project="arhugula-v2",
+    )
+
+    result = recorder.capture_run_start(
+        run_id=_RUN_ID,
+        workflow_id="workflow-memory",
+        thread_id="thread-1",
+        provider_route=("openai:gpt-5",),
+        **_common_kwargs(),
+    )
+
+    assert result.status is MemoryCaptureStatus.FAILED
+    assert result.memory_id is None
+    assert result.operation_action_id is None
+    assert result.failure_reason == "OSError: disk full"
+    assert store.appended is False
+
+
+def test_capture_ledger_append_failure_after_record_write_leaves_no_dangling_reference() -> None:
+    """A ledger-append failure after a successful record write is the
+    accepted residual failure mode — the record itself is durable and safe
+    to read; only its audit trail is incomplete (an orphaned-but-safe
+    record, not a ledger entry pointing at a record that doesn't exist)."""
+
+    class _LedgerFailingStore:
+        record_written = False
+
+        def append_memory_operation(self, payload: object) -> object:
+            assert self.record_written is True
             raise OSError("ledger offline")
 
         def write_record(self, record: object) -> object:
-            self.records_written += 1
-            raise AssertionError("record write must not run before ledger append")
+            self.record_written = True
+            return object()
 
     store = _LedgerFailingStore()
     recorder = EpisodicMemoryCapture(
@@ -309,41 +355,7 @@ def test_capture_does_not_write_record_when_operation_ledger_append_fails() -> N
     assert result.memory_id is None
     assert result.operation_action_id is None
     assert result.failure_reason == "OSError: ledger offline"
-    assert store.records_written == 0
-
-
-def test_capture_record_write_failure_after_ledger_append_is_observable() -> None:
-    class _FailingStore:
-        appended = False
-
-        def append_memory_operation(self, payload: object) -> object:
-            self.appended = True
-            return MemoryOperationWriteResult.APPENDED
-
-        def write_record(self, record: object) -> object:
-            assert self.appended is True
-            raise OSError("disk full")
-
-    store = _FailingStore()
-    recorder = EpisodicMemoryCapture(
-        store=store,
-        actor=Actor(actor_class=ActorClass.AGENT, actor_id="codex"),
-        project="arhugula-v2",
-    )
-
-    result = recorder.capture_run_start(
-        run_id=_RUN_ID,
-        workflow_id="workflow-memory",
-        thread_id="thread-1",
-        provider_route=("openai:gpt-5",),
-        **_common_kwargs(),
-    )
-
-    assert result.status is MemoryCaptureStatus.FAILED
-    assert result.memory_id is None
-    assert result.operation_action_id is None
-    assert result.failure_reason == "OSError: disk full"
-    assert store.appended is True
+    assert store.record_written is True
 
 
 def test_module_public_api_is_importable() -> None:
