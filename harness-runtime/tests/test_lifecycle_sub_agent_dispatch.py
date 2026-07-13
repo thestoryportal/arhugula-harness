@@ -859,6 +859,37 @@ def test_step8b_writes_f2_dispatch_action_entry(tmp_path: Path) -> None:
     assert "workflow:parent-wf:step:0" in str(dispatch_entries[0].action_id)
 
 
+def test_step8b_sibling_branches_get_distinct_action_ids_via_branch_index(
+    tmp_path: Path,
+) -> None:
+    """Regression guard — sibling `SUB_AGENT_DISPATCH` branches sharing a
+    parent_action_id (a fan-out topology's parallel replicas of the same
+    declared step) must NOT collide on `child_index=0`. Two dispatches
+    differing only in `step_context.branch_index` must persist two DISTINCT
+    F2 dispatch action_ids — previously both computed the identical
+    `dispatch:<parent_action_id>:0` id, and the second write was silently
+    absorbed as an `IDEMPOTENT_NOOP` (out-of-family Codex [P1])."""
+    from harness_is.state_ledger_write import read_ledger
+
+    ledger_writer = _build_ledger_writer(tmp_path)
+    dispatcher, _, _ = _dispatcher(tmp_path, ledger_writer_override=ledger_writer)
+
+    branch_0 = _step_context().model_copy(update={"branch_index": 0})
+    branch_1 = _step_context().model_copy(update={"branch_index": 1})
+
+    dispatcher.dispatch(_binding(), _step(), step_context=branch_0)
+    dispatcher.dispatch(_binding(), _step(), step_context=branch_1)
+
+    entries = read_ledger(ledger_writer.handle)
+    dispatch_entries = [e for e in entries if str(e.action_id).startswith("dispatch:")]
+    assert len(dispatch_entries) == 2, (
+        "sibling branches under the same parent_action_id must both persist "
+        f"a distinct F2 dispatch entry; got {len(dispatch_entries)}"
+    )
+    action_ids = {str(e.action_id) for e in dispatch_entries}
+    assert len(action_ids) == 2, f"sibling dispatch action_ids collided: {action_ids}"
+
+
 def test_step8b_f2_entry_populates_procedural_tier_snapshot_ref(
     tmp_path: Path,
 ) -> None:

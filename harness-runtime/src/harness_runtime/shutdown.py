@@ -475,9 +475,13 @@ async def shutdown(
     # Step 3c — provider clients. Per-provider try/except; one failure
     # doesn't block the others. Bounded by the remaining budget (same
     # unbounded-hang gap as step 3b — a stuck provider `aclose()` blocked
-    # every subsequent close step).
-    remaining = max(0.0, deadline - time.monotonic())
+    # every subsequent close step). `remaining` is recomputed INSIDE the loop
+    # (not once before it) — otherwise every provider after the first would
+    # get re-allotted the SAME stale budget rather than what's actually left,
+    # so N slow providers could each burn the full timeout and blow the
+    # aggregate shutdown deadline by a factor of N (out-of-family Codex [P2]).
     for name, provider in ctx.providers.items():
+        remaining = max(0.0, deadline - time.monotonic())
         try:
 
             async def _aclose(provider: Any = provider) -> None:
@@ -501,10 +505,13 @@ async def shutdown(
     # unstarted host has nothing to drain. Per-resource exception isolation.
     # Bounded by the remaining budget (same unbounded-hang gap as steps 3b/3c).
     # (U-RT-125 reshape: `mcp_client_hosts` is a `dict[ServerName, MCPClientHost]`;
-    # a single host today, ≥1 at B2-impl-2b.)
-    remaining = max(0.0, deadline - time.monotonic())
+    # a single host today, ≥1 at B2-impl-2b.) `remaining` is recomputed INSIDE
+    # the loop for the same reason as step 3c above — a stale pre-loop budget
+    # would let each host burn the full timeout instead of what's actually
+    # left, multiplying the aggregate shutdown time under multiple hosts.
     hosts: dict[ServerName, Any] = getattr(ctx, "mcp_client_hosts", None) or {}
     for host in hosts.values():
+        remaining = max(0.0, deadline - time.monotonic())
         if getattr(host, "started", False):
             try:
                 await asyncio.wait_for(host.shutdown(), timeout=remaining)

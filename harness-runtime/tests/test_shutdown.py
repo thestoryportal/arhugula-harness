@@ -868,6 +868,41 @@ async def test_shutdown_bounded_by_timeout_when_provider_aclose_hangs(tmp_path: 
 
 
 @pytest.mark.asyncio
+async def test_shutdown_recomputes_budget_across_multiple_slow_providers(
+    tmp_path: Path,
+) -> None:
+    """Regression guard — the per-provider shutdown budget must shrink across
+    iterations, not stay pinned at the pre-loop value. Previously `remaining`
+    was computed once before the provider loop, so N slow providers each got
+    re-allotted the SAME stale budget instead of what was actually left —
+    each provider here individually finishes within a single provider's
+    worth of budget, so under the bug all 3 complete successfully (no
+    per-provider timeout failure) but the AGGREGATE elapsed time triples;
+    with the fix, only the first provider gets its full slice and the rest
+    are bounded by what's actually left (out-of-family Codex [P2])."""
+    providers = {
+        "anthropic": _FakeProvider(aclose_sleep=0.15),
+        "openai": _FakeProvider(aclose_sleep=0.15),
+        "ollama": _FakeProvider(aclose_sleep=0.15),
+    }
+    ctx = _shutdown_ctx(
+        tmp_path,
+        tracer=_FakeTracerWithShutdown(),
+        daemon=_FakeCollectorDaemon(),
+        providers=providers,
+    )
+    start = asyncio.get_event_loop().time()
+    await asyncio.wait_for(shutdown(ctx, timeout=0.3), timeout=2.0)
+    elapsed = asyncio.get_event_loop().time() - start
+    assert elapsed < 0.38, (
+        f"shutdown() took {elapsed:.3f}s across 3x 0.15s-slow providers with a "
+        "0.3s overall budget — a stale re-allotted budget lets every provider "
+        "use its full 0.15s (~0.45s total) instead of the aggregate shrinking "
+        "toward the 0.3s deadline (~0.3s total)"
+    )
+
+
+@pytest.mark.asyncio
 async def test_shutdown_bounded_by_timeout_when_mcp_host_shutdown_hangs(tmp_path: Path) -> None:
     """Regression — a hanging MCP client host `shutdown()` must not block
     shutdown."""
