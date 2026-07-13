@@ -163,6 +163,38 @@ def test_inspect_respects_last_n_flag(tmp_path: Path, capsys: pytest.CaptureFixt
     assert "action-0" not in out
 
 
+def test_inspect_last_n_zero_prints_no_entries(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Regression guard — `--last-n 0` must print ZERO entries, not every
+    entry. Python's `list[-0:]` is the same as `list[0:]` (the whole list),
+    since `-0 == 0`; the header already correctly computed `min(0, ...) = 0`
+    but the loop below it used to dump the entire ledger anyway."""
+    ledger = tmp_path / "state.jsonl"
+    _write_n_entries(ledger, 5)
+
+    main(["--ledger-path", str(ledger), "--last-n", "0"])
+    out = capsys.readouterr().out
+
+    assert "Last 0 entries:" in out
+    for i in range(5):
+        assert f"action-{i}" not in out
+
+
+def test_inspect_json_last_n_zero_returns_empty_entries(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    ledger = tmp_path / "state.jsonl"
+    _write_n_entries(ledger, 5)
+
+    main(["--ledger-path", str(ledger), "--json", "--last-n", "0"])
+    out = capsys.readouterr().out
+
+    payload = json.loads(out)
+    assert payload["total_entries"] == 5
+    assert payload["entries"] == []
+
+
 # ---------------------------------------------------------------------------
 # JSON output.
 # ---------------------------------------------------------------------------

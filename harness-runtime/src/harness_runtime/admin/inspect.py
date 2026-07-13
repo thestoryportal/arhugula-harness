@@ -309,8 +309,8 @@ def _format_human(
         lines.append(f"  head_hash:     {_entry_head_hash(entries[-1])}")
 
     lines.append("")
-    lines.append(f"Last {min(last_n, len(entries))} entries:")
-    for entry in entries[-last_n:]:
+    lines.append(f"Last {min(last_n, len(entries)) if last_n > 0 else 0} entries:")
+    for entry in entries[-last_n:] if last_n > 0 else []:
         s = _entry_summary(entry)
         lines.append(
             f"  - action_id={s['action_id']!s} "
@@ -336,7 +336,7 @@ def _format_json(
         "ledger_path": str(ledger_path),
         "total_entries": len(entries),
         "head_hash": head,
-        "entries": [_entry_summary(e) for e in entries[-last_n:]],
+        "entries": [_entry_summary(e) for e in (entries[-last_n:] if last_n > 0 else [])],
         "spans": None,
         "spans_unavailable_reason": _SPANS_UNAVAILABLE_REASON,
         "cost_rollup": None,

@@ -18,15 +18,26 @@ from harness_is.memory_policy import (
     PromotionDecision,
     ReviewMode,
 )
-from harness_is.memory_record_envelope import MemoryRecordKind, MemoryScope, MemoryVisibility
-from harness_is.memory_store import CanonicalMemoryStore
+from harness_is.memory_record_envelope import (
+    MemoryRecordEnvelope,
+    MemoryRecordKind,
+    MemoryScope,
+    MemoryTier,
+    MemoryVisibility,
+    compute_memory_content_hash,
+    derive_memory_id,
+)
+from harness_is.memory_store import CanonicalMemoryStore, MemoryStoreRecord
 from harness_is.state_ledger_entry_schema import Actor, ActorClass
 from harness_runtime.lifecycle.memory_tool_types import (
     MemoryCallbackIOError,
     MemoryPathViolationError,
     MemoryToolStorageBackendProtocol,
 )
-from harness_runtime.lifecycle.native_memory_adapter import CanonicalNativeMemoryToolBackend
+from harness_runtime.lifecycle.native_memory_adapter import (
+    CanonicalNativeMemoryToolBackend,
+    _content_from_record,
+)
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -130,6 +141,46 @@ async def test_canonical_native_backend_preserves_callback_semantics_and_ledgers
         )
         assert record.envelope.kind is MemoryRecordKind.TOOL_EVENT
         assert record.content["memory_path"] == "/memories/project/notes.txt"
+
+
+def _tool_event_record(content: dict[str, object]) -> MemoryStoreRecord:
+    content_hash = compute_memory_content_hash(content)
+    memory_id = derive_memory_id(MemoryTier.EPISODIC, MemoryRecordKind.TOOL_EVENT, content_hash)
+    return MemoryStoreRecord(
+        envelope=MemoryRecordEnvelope(
+            memory_id=memory_id,
+            schema_version="native-memory-adapter/v1",
+            tier=MemoryTier.EPISODIC,
+            kind=MemoryRecordKind.TOOL_EVENT,
+            created_at=_NOW,
+            scope=_scope(),
+            content_hash=content_hash,
+        ),
+        content=content,
+    )
+
+
+def test_content_from_record_raises_on_corrupted_base64() -> None:
+    """Regression guard — a stored `content_b64` that fails base64 decoding
+    must raise `MemoryCallbackIOError`, not return `None`. Previously both a
+    genuinely-absent value (`content_b64: null`) and a corrupted/undecodable
+    one collapsed to the same `None` return, which `_state_text` then reports
+    as "not found" — masking data corruption as ordinary absence."""
+    record = _tool_event_record({"content_b64": "not-valid-base64!!!"})
+    with pytest.raises(MemoryCallbackIOError, match="failed to decode"):
+        _content_from_record(record)
+
+
+def test_content_from_record_raises_on_wrong_type() -> None:
+    record = _tool_event_record({"content_b64": 12345})
+    with pytest.raises(MemoryCallbackIOError, match="unexpected type"):
+        _content_from_record(record)
+
+
+def test_content_from_record_returns_none_for_genuinely_absent_content() -> None:
+    """The legitimate no-content case (`content_b64: None`) is unaffected."""
+    record = _tool_event_record({"content_b64": None})
+    assert _content_from_record(record) is None
 
 
 @pytest.mark.asyncio
