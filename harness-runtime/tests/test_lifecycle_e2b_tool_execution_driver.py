@@ -121,6 +121,77 @@ async def test_e2b_driver_runs_json_runner_in_tier4_sandbox() -> None:
     ]
 
 
+class _SlowCommands:
+    """`.run()` blocks synchronously — simulates the real E2B SDK's blocking
+    network call, used to prove `call_tool` doesn't freeze the event loop."""
+
+    def run(self, command: str, *, timeout: int) -> _Result:
+        del command, timeout
+        import time as _time
+
+        _time.sleep(0.2)
+        return _Result(json.dumps({"content": [], "isError": False}))
+
+
+class _SlowSandbox:
+    def __init__(self) -> None:
+        self.commands = _SlowCommands()
+
+    @classmethod
+    def create(cls, **kwargs: object) -> _SlowSandbox:
+        del kwargs
+        return cls()
+
+    def __enter__(self) -> _SlowSandbox:
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        return None
+
+
+@pytest.mark.asyncio
+async def test_e2b_driver_does_not_block_event_loop() -> None:
+    """Regression — `call_tool` must dispatch the blocking E2B SDK calls off
+    the event loop. Previously `sandbox_cls.create(...)` and
+    `sandbox.commands.run(...)` ran directly inline in the coroutine, so a
+    TIER_4_FULL_VM tool dispatch froze the entire process event loop for the
+    duration — starving every other concurrent workflow, HITL retry, MCP
+    health-check, and OTel export.
+
+    Proven by racing a concurrent asyncio task's tick counter against the
+    "blocking" sandbox call: a frozen loop means the counter cannot advance
+    while `call_tool` is in flight.
+    """
+    import asyncio
+
+    driver = E2BManagedFullVMToolRunnerExecutionDriver(
+        command=("python", "-m", "tool_runner"),
+        sandbox_cls=_SlowSandbox,
+    )
+
+    ticks = 0
+    stop = False
+
+    async def _ticker() -> None:
+        nonlocal ticks
+        while not stop:
+            ticks += 1
+            await asyncio.sleep(0.01)
+
+    ticker_task = asyncio.create_task(_ticker())
+    await driver.call_tool(
+        mcp_client_host=cast(MCPClientHost, object()),
+        sandbox_decision=_decision(),
+        tool_id="echo",
+        tool_args={"message": "ok"},
+        idempotency_key="idem",
+    )
+    stop = True
+    await ticker_task
+
+    assert ticks >= 5, "event loop was frozen during the blocking sandbox call"
+
+
 @pytest.mark.asyncio
 async def test_e2b_driver_rejects_non_tier4_decision() -> None:
     driver = E2BManagedFullVMToolRunnerExecutionDriver(
