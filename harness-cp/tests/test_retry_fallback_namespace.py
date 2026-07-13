@@ -6,8 +6,9 @@ Coverage below is for the landed schema declarations (acceptance #1–#6):
 
   #1 fallback.* 9 attrs        -> test_fallback_namespace_cardinality_nine,
                                   test_fallback_attributes_match_spec_verbatim
-  #2 harness.breaker.* 7 attrs -> test_harness_breaker_namespace_cardinality_seven,
-                                  test_harness_breaker_source_authority
+  #2 harness.breaker.* 9 attrs -> test_harness_breaker_namespace_cardinality_nine,
+                                  test_harness_breaker_source_authority (v1.32:
+                                  +cause +cooldown_ms, B-19-BREAKER-AMBIENT-ATTRS)
   #3 retry.* 6 attrs           -> test_retry_namespace_cardinality_six,
                                   test_retry_attributes_match_spec_v1_3_verbatim
   #4 RetryCause 5 values       -> test_retry_cause_cardinality_five
@@ -47,6 +48,8 @@ _SPEC_HARNESS_BREAKER = {
     "harness.breaker.trip_window_seconds",
     "harness.breaker.fail_count_in_window",
     "harness.breaker.fail_threshold",
+    "harness.breaker.cause",
+    "harness.breaker.cooldown_ms",
 }
 
 _SPEC_RETRY = {
@@ -75,9 +78,9 @@ def test_fallback_attributes_match_spec_verbatim() -> None:
     assert {a.attribute_name for a in FALLBACK_NAMESPACE_SCHEMA} == _SPEC_FALLBACK
 
 
-def test_harness_breaker_namespace_cardinality_seven() -> None:
-    """Acceptance #2 — exactly seven `harness.breaker.*` attributes."""
-    assert len(HARNESS_BREAKER_NAMESPACE_SCHEMA) == 7
+def test_harness_breaker_namespace_cardinality_nine() -> None:
+    """Acceptance #2 — exactly nine `harness.breaker.*` attributes (v1.32)."""
+    assert len(HARNESS_BREAKER_NAMESPACE_SCHEMA) == 9
 
 
 def test_harness_breaker_attributes_match_spec_verbatim() -> None:

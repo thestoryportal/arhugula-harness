@@ -1,12 +1,27 @@
-"""`harness.breaker.*` 7-attribute canonical schema — U-OD-09.
+"""`harness.breaker.*` 9-attribute canonical schema — U-OD-09.
 
-Implements C-OD-07 §7.1 (seven-attribute schema), §7.2 (quality-of-emission
-invariants), §7.3 (C9↔C10 subscription contract reference).
+Implements C-OD-07 §7.1 (nine-attribute schema, v1.32 ADDITIVE amendment over
+the v1-canonical seven), §7.2 (quality-of-emission invariants), §7.3 (C9↔C10
+subscription contract reference).
 
-`HARNESS_BREAKER_ATTRIBUTES` declares the seven `harness.breaker.*` attribute
-names per §7.1. `BreakerScope` / `BreakerState` enumerate the §7.1 enum-typed
-attribute value sets. `HarnessBreakerEvent` is the breaker-trip event record.
-`emit_breaker_trip_span_event` emits the event at the parent span.
+`HARNESS_BREAKER_ATTRIBUTES` declares the nine `harness.breaker.*` attribute
+names per §7.1. `BreakerScope` / `BreakerState` / `BreakerCause` enumerate the
+§7.1 enum-typed attribute value sets. `HarnessBreakerEvent` is the breaker-trip
+event record. `emit_breaker_trip_span_event` emits the event at the parent span.
+
+v1.32 (B-19-BREAKER-AMBIENT-ATTRS): re-introduces `harness.breaker.cause` +
+`harness.breaker.cooldown_ms` (CP v1.1's dropped ambient 4-attribute set,
+re-landed as event attributes rather than ambient state — see
+`Spec_Operational_Discipline_v1_32.md` §7.1 change-note). Both are optional,
+populated only on a real trip (`to_state = open`). `cause` is a typed slot
+that is vacuous-today by honest design: no call site in the current runtime
+can non-speculatively populate any of the four `BreakerCause` values (see
+`.harness/b19-breaker-ambient-attrs-redundancy-analysis.md` §3); it is present
+in the schema for forward compatibility and always `None` until a follow-on
+fine-grained provider-exception classifier arc supplies real signal.
+`cooldown_ms` is real and always populated at a trip — `cooldown_seconds *
+1000`, a static duration the breaker already carries, not a live remaining-
+cooldown counter (no clock is introduced).
 
 substrate-anchored-outside-CP: per F-CP-01 Stage 3b alignment, the
 `harness.breaker.*` namespace is substrate-anchored at the OD axis rather than
@@ -58,6 +73,7 @@ from harness_od.otel_genai_base import EventEmission, SpanRef
 
 __all__ = [
     "HARNESS_BREAKER_ATTRIBUTES",
+    "BreakerCause",
     "BreakerEmissionError",
     "BreakerScope",
     "BreakerState",
@@ -66,7 +82,8 @@ __all__ = [
 ]
 
 
-#: The seven `harness.breaker.*` attribute names per §7.1 verbatim (acc #1).
+#: The nine `harness.breaker.*` attribute names per §7.1 verbatim (acc #1;
+#: v1.32 adds `cause` + `cooldown_ms`).
 #: v2.8 (D-3): re-typed `List<GenAiAttribute>` → `tuple[str, ...]` — the §7.1
 #: table declares no tier classification, so the attributes are plain names.
 HARNESS_BREAKER_ATTRIBUTES: tuple[str, ...] = (
@@ -77,6 +94,8 @@ HARNESS_BREAKER_ATTRIBUTES: tuple[str, ...] = (
     "harness.breaker.permanent_fail_repeats",
     "harness.breaker.tool_id",
     "harness.breaker.model_version",
+    "harness.breaker.cause",
+    "harness.breaker.cooldown_ms",
 )
 
 
@@ -102,13 +121,35 @@ class BreakerState(StrEnum):
     OPEN = "open"
 
 
-class HarnessBreakerEvent(BaseModel):
-    """The breaker-trip event record (C-OD-07 §7.1).
+class BreakerCause(StrEnum):
+    """The 4 `harness.breaker.cause` values (C-OD-07 §7.1, v1.32 NEW).
 
-    Frozen → `Eq`. Carries the seven §7.1 attributes: four non-optional
-    (`scope`, `from_state`, `to_state`, `trigger_count`) and three optional
-    (`permanent_fail_repeats`, `tool_id`, `model_version`) per the §7.1
-    Definition-column conditional reading — preserved verbatim from v2.1.
+    `harness.breaker.cause ∈ {rate_limit, auth_failure, 5xx_streak,
+    capability_shortfall}` per `Spec_Control_Plane_v1_2.md` §"Attribute set
+    reconciliation" line 72 verbatim (the original CP-side ambient-attribute
+    domain, re-declared here as the OD-canonical event-attribute domain).
+
+    Vacuous-today by honest design: no call site in the current runtime can
+    non-speculatively populate any of these four values (see
+    `.harness/b19-breaker-ambient-attrs-redundancy-analysis.md` §3). The enum
+    exists as a forward-compatible typed slot; `HarnessBreakerEvent.cause` is
+    always `None` until a follow-on fine-grained provider-exception
+    classifier arc supplies real signal.
+    """
+
+    RATE_LIMIT = "rate_limit"
+    AUTH_FAILURE = "auth_failure"
+    FIVE_XX_STREAK = "5xx_streak"
+    CAPABILITY_SHORTFALL = "capability_shortfall"
+
+
+class HarnessBreakerEvent(BaseModel):
+    """The breaker-trip event record (C-OD-07 §7.1, v1.32 nine-attribute).
+
+    Frozen → `Eq`. Carries the nine §7.1 attributes: four non-optional
+    (`scope`, `from_state`, `to_state`, `trigger_count`) and five optional
+    (`permanent_fail_repeats`, `tool_id`, `model_version`, `cause`,
+    `cooldown_ms`) per the §7.1 Definition-column conditional reading.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -128,6 +169,14 @@ class HarnessBreakerEvent(BaseModel):
     tool_id: str | None = None
     #: `harness.breaker.model_version` — set when available (§7.1).
     model_version: str | None = None
+    #: `harness.breaker.cause` — classified trip cause (v1.32 NEW). Vacuous
+    #: today: no runtime call site can non-speculatively populate this; always
+    #: `None` until a follow-on classifier arc supplies real signal.
+    cause: BreakerCause | None = None
+    #: `harness.breaker.cooldown_ms` — the cooldown *duration* set for this
+    #: trip (v1.32 NEW), in milliseconds. `None` on non-trip transitions
+    #: (`half_open -> closed`, `open -> half_open`).
+    cooldown_ms: int | None = None
 
 
 class BreakerEmissionError(Exception):
@@ -184,6 +233,8 @@ def emit_breaker_trip_span_event(
             "permanent_fail_repeats",
             "tool_id",
             "model_version",
+            "cause",
+            "cooldown_ms",
         )
         if getattr(event, attribute_name) is not None
     )

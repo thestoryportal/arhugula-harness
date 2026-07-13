@@ -57,7 +57,12 @@ def test_contract_registered_arcs_have_parent_and_no_units() -> None:
     d = arc_ledger.derive(_data())
     ids = {a["id"] for a in d["frozen"] + d["standalone"]}
     registered = [a for a in d["standalone"] if a["status"] == "registered"]
-    if not registered:
+    if not d["open_standalone"]:
+        # Zero-open-standalone (remaining/gated/registered all empty) is the
+        # only case that forces a terminal rfs1_status — checking `registered`
+        # alone missed a live umbrella row left at `status: remaining` (e.g.
+        # R-FS-2 mid-arc with its own Wave-4 forward register drained to zero
+        # but Wave 5 + the G2 closure report still open).
         assert d["rfs1_status"] in arc_ledger.RFS1_ZERO_OPEN_ALLOWED
         return
     for a in registered:

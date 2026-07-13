@@ -146,7 +146,7 @@ CP_NAMESPACE_EXPORT_MANIFEST: tuple[NamespaceExport, ...] = (
     ),
     NamespaceExport(
         namespace_name="harness.breaker.*",
-        attribute_count=7,
+        attribute_count=9,  # v1.32: +cause +cooldown_ms (B-19-BREAKER-AMBIENT-ATTRS)
         source_unit=UnitId("U-CP-07"),
         ingestion_target=_D6_1_4,
         sub_section_authority="C-CP-24 §24.1.B",
