@@ -156,6 +156,7 @@
 2. The ~14 `C-IS-13 §13.5` redundant-cite sites → drop the redundant cite per the recorded convention (clearance marker `Spec_Harness_Runtime-v1_93-cleared-2026-07-09.md`; "correct fix is to drop, NOT inject the seam anchor").
 3. Any stale-carry text the Wave 1–4 arcs surface (per-arc notes accumulate here rather than blocking their PRs).
 - **Acceptance.** `just overlay-check` green; cross-spec `rg` for the touched cite-shapes clean; X-AL-3 guard satisfied via clearance markers where `design-substrate/**` is touched. **Gate:** none. **Size:** S-M.
+- **✅ CLOSED 2026-07-13.** Item 1: root `CLAUDE.md` §1.1 OD row corrected to 15-namespace; the §2.3 CP-pointer half was already resolved by the prior 2026-07-12 R-600 catch-up. Item 2: all 9 real `C-IS-13 §13.5` redundant-cite sites across 7 files corrected (1 file the marker also named, `local_first_otlp_collector.py`, was checked and found to cite a genuinely distinct `§13.2` — untouched). Item 3: the one Wave-1-4 stale-carry finding (B-19's CP-side breaker-namespace-name mismatch) was re-grounded and found to be a genuine small design decision, not a mechanical rename — registered as `B-20` at `post-phase-8-forward-register.md` rather than fixed under Wave-5's mechanical-sweep budget. Full record at `.harness/b-hygiene-cite-pointer-sweep-closure-record.md`. Docs/cite-only, no behavioral change.
 
 ---
 

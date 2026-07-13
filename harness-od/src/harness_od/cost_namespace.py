@@ -88,7 +88,7 @@ class CostRecordAuditPayload(BaseModel):
 
     audit_cp_prior_event_hash: str
     """SHA-256 hex (64 chars) prior CP-event hash per the SHA-256 chain per
-    C-IS-06 + C-IS-13 §13.5. `"0"*64` sentinel at MVP when prior is absent
+    C-IS-06. `"0"*64` sentinel at MVP when prior is absent
     (first cost-record in workflow). String-typed (not `str | None`) per the
     empirical sibling-subclass convention — sentinel zero-hash rather than
     None per pause_resume_namespace.py:226-227 precedent."""

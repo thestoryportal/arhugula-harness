@@ -83,7 +83,7 @@ class AuditPayload(BaseModel):
     """`audit.*` namespace attributes per C-OD-14 §14.5."""
 
     prior_entry_hash: str
-    """SHA-256 hash-chain link per the C-IS-13 §13.5 discipline."""
+    """SHA-256 hash-chain link per the C-IS-06 §6.2 discipline."""
 
 
 class AuditSignatureAttributes(BaseModel):

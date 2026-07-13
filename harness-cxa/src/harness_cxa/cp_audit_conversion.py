@@ -35,7 +35,7 @@ implementation arc landing.
 **Ratifications absorbed.**
 
 - **Q1 (chain equivalence)** — CP `prior_event_hash` ≡ OD `prior_entry_hash`
-  per C-IS-06 + C-IS-13 §13.5 (same SHA-256 chain). Direct pass-through.
+  per C-IS-06 (same SHA-256 chain). Direct pass-through.
 - **Q2(a) (entry_core source semantic)** — caller (the dispatch composer)
   writes an F2 state-ledger entry recording the dispatch action FIRST,
   then passes the resulting `StateLedgerEntryRef` to the converter. The
