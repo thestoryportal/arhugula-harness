@@ -133,21 +133,18 @@
 
 ---
 
-## 5. Wave 4 — operator-gate-driven (drive to the gate; ONE batched AUQ)
+## 5. Wave 4 — operator-gate-driven (drive to the gate; ONE AUQ)
 
 ### B-19-BREAKER-AMBIENT-ATTRS · `breaker.cause` + `breaker.cooldown_ms` *(owner: CP/OD)*
 
 - **Authority.** CP spec v1 4-attr ambient set, consciously dropped at v1→v1.1 ("Semantic-loss note"); #918 U-2: re-introduction **operator-discretionary** ("surface the ambient-vs-event redundancy first" — dashboard standing note).
-- **Drive-to-gate.** Claude authors the redundancy analysis (what the 7-attr *event* schema already answers vs what ambient *state* adds: current-cause-while-open, remaining-cooldown for schedulers/dashboards; cite `harness_breaker_schema.py` + consumers) → **AUQ: build / skip-and-close**. If build: attrs at the breaker registry + OD ingestion row (namespace_map is CLOSED-schema — the addition is itself a spec-delta leg, `[[closed-schema-extension-enforced-vs-advisory]]`).
-- **Gate:** operator AUQ (batched with Gap D below). **Size:** S analysis + S-M build.
+- **Drive-to-gate — DONE (2026-07-12).** Redundancy analysis authored: the 7-attr *event* schema (`harness_breaker_schema.py:72-80`) is a point-in-time transition record, not a queryable ambient-state surface. Neither `cause` nor a live "remaining cooldown" exists as internal breaker state today (`retry_breaker.py` — `cause` isn't tracked at all; `cooldown_seconds` is a static config value, the state machine is deliberately clock-free). Searched CP/OD/runtime/AS/IS/CXA source, the CLI (`app.py`/`admin/`), and dashboard tooling for a real consumer that would read either ambiently — found none; the one production breaker-state reader (`retry_breaker_fallback.py:547` `should_attempt()`) needs only a boolean, and its own emitted event stays deliberately generic. **Recommendation: skip-and-close** — building would mean inventing new untracked internal state plus a CLOSED-schema spec-delta (`[[closed-schema-extension-enforced-vs-advisory]]`) for zero identified consumers today; re-open if a real ambient-status surface (dashboard tile, `harness breaker-status` command) is ever built and needs it.
+- **Gate:** operator AUQ (build / skip-and-close, informed by the analysis above). **Size:** S analysis (done) + S-M build (contingent on AUQ answer).
 
-### B-GAPD-TOOLONLY-BOOTSTRAP · Conditional provider ping for tool-only workflows *(owner: Runtime)*
+### ~~B-GAPD-TOOLONLY-BOOTSTRAP~~ · Conditional provider ping for tool-only workflows — **CLOSED, stale-carry-text (no build owed)**
 
-- **Authority.** `post-phase-8-forward-register.md` B-10 residual: bootstrap pings ≥1 provider regardless of step kind (R-100 AC#2 `must_pass[3]` strict reading); **registered Class-1 fork candidate**, nameable **C9⊥C11** tension (fail-fast reliability ⊥ tool-only ergonomics), dyadic-council-eligible per §10.9.
-- **Drive-to-gate.** File the Class-1 fork doc; convene the dyadic council (C9 + C11) with probe-first discipline (the probe: what exactly breaks downstream if no provider is pinged and a later step needs one — is a deferred-fail path already typed?) → operator ratification AUQ → on ratify: make the stage-3a ping conditional on the workflow containing an inference step; `test_r100_ac2_tool_step_e2e` un-gated for the tool-only case.
-- **Gate:** operator ratification (this is the genuine Class-1 fork the register reserves to the operator). **Size:** M end-to-end.
-
-*(AUQ batching rule: both Wave-4 gates + any Appendix-B re-affirmations surface in ONE AskUserQuestion when Wave 4 opens — not drip-fed.)*
+- **Finding (2026-07-12).** The probe-first discipline (`[[probe-resolves-fork-prescribed-council]]`) resolved this before any council convening was needed — and the probe surfaced that the tension isn't merely resolvable, it was **already resolved**: PR #515 (`feat(R-CC-1): inference-conditional provider bootstrap`, merged 2026-06-11) shipped exactly this fix a full arc-cycle before R-FS-2 registered the item here as forward work. Fork doc `.harness/class_1_fork_api_run_unconditional_provider_ping_for_tool_only_workflows.md` reads `Status: RESOLVED -> Reading B` (operator-ratified 2026-06-12). `test_r100_ac2_tool_step_e2e.py` has no `skipif` marker and passes green with zero provider credentials. This register entry (and the `post-phase-8-forward-register.md` B-10 residual bullet it traced to) was stale-carry-text; both corrected in the same PR that closes this row. No operator gate needed. Full record at `.harness/b-gapd-toolonly-bootstrap-closure-record.md`.
+- **Gate:** none (documentation correction, not a build).
 
 ---
 
@@ -171,8 +168,9 @@ U-CL-00 → [B-18-KEEPALIVE → B-WAL-F1-01-EXACTLY-ONCE → B-SKILL-FRONTMATTER
            → B-OD17-EVAL-LOOP-TOOLING → B-OD18-DRIFT-ALGORITHM]                          (Wave 2)
         → [B-MCP-OAUTH-RS-ENFORCE → B-MCP-PRIMITIVE-SIG-GATE → B-OD-ENVELOPE-P6-SWEEP
            → B-COST-REPLAY-DEDUP-WITNESS]                                                (Wave 3)
-        → [B-19-BREAKER-AMBIENT-ATTRS + B-GAPD-TOOLONLY-BOOTSTRAP
-           — one batched AUQ, then their builds]                                         (Wave 4)
+        → [B-19-BREAKER-AMBIENT-ATTRS — one AUQ, then contingent build;
+           B-GAPD-TOOLONLY-BOOTSTRAP closed pre-Wave-4 as stale-carry-text,
+           already shipped at PR #515 — no build owed]                                   (Wave 4)
         → B-HYGIENE-CITE-POINTER-SWEEP (sweep PR, not a ledger arc)                      (Wave 5)
         → G2 closure report
 ```

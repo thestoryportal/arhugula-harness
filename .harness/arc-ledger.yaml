@@ -46,12 +46,34 @@
 snapshot:
   frozen_total: 11
   frozen_done: 11
-  standalone_closed: 92
+  standalone_closed: 93
   standalone_gated: 0
   standalone_resolved: 4
-  standalone_registered: 2
+  standalone_registered: 1
   rfs1_status: active
   source: ".harness/beyond-mvp-capability-boundary-ledger.md"
+  # FRONTIER NOTE (2026-07-12, B-GAPD-TOOLONLY-BOOTSTRAP closed — stale-carry-
+  # text disposition, no code change). standalone_closed 92->93, standalone_
+  # registered 2->1. Grounding this Wave-4 arc's probe (was a fork-prescribed
+  # dyadic council eligible, per the no-parking directive) surfaced that the
+  # exact tension was already probed/council-scoped/operator-ratified and
+  # SHIPPED at PR #515, a full arc before R-FS-2 registered it here as
+  # forward work. Empirically re-verified (fork doc RESOLVED->Reading B; PR
+  # #515 merged 2026-06-11; test_r100_ac2_tool_step_e2e green with zero
+  # provider creds, no skipif marker; stage_3a_cp_clients.py skips provider
+  # construction when ctx.requires_inference is False; the tool-only
+  # classification predicate is static and exact, so no misclassification
+  # path exists; the typed StepKindDispatcherNotBoundError + LLMDispatchBind-
+  # Error deferred-fail backstop is exercised by test_bootstrap.py:1497/1527
+  # regardless). Corrected the stale carry-text at post-phase-8-forward-
+  # register.md's B-10 residual bullet in the same PR. Full record at
+  # .harness/b-gapd-toolonly-bootstrap-closure-record.md. Only B-19-BREAKER-
+  # AMBIENT-ATTRS remains registered for Wave 4 — its own grounding (redundancy
+  # analysis over harness_breaker_schema.py + real consumers) found no
+  # production consumer reads breaker cause/cooldown ambiently and neither
+  # is tracked as live internal state today; recommendation surfaced to the
+  # operator AUQ is skip-and-close, but the build/skip call itself remains
+  # the genuine operator gate.
   # FRONTIER NOTE (2026-07-12, B-COST-REPLAY-DEDUP-WITNESS closed — R-FS-2
   # Wave 3 fourth/final arc, verify-first, GREEN, no fix). standalone_closed
   # 91->92, standalone_registered 3->2. Initial grounding hypothesized the CP
@@ -2233,12 +2255,13 @@ arcs:
     ledger_ref: ".harness/r-fs-2-final-closure-implementation-plan-v1.md"
 
   - id: B-GAPD-TOOLONLY-BOOTSTRAP
-    title: "Conditional provider ping for tool-only workflows (Gap D / R-100 AC#2; Class-1 fork + dyadic council)"
+    title: "Conditional provider ping for tool-only workflows (Gap D / R-100 AC#2) — STALE-CARRY: already resolved pre-R-FS-2"
     kind: standalone
-    status: registered
-    decompose_at_open: true
+    status: closed
+    pr: "#515"
     owner_axis: "runtime"
     parent_arc: R-FS-2
     anticipated_scope: "Registered Class-1 fork candidate (forward register, the external-MCP arc residual): the api.run bootstrap pings at least one provider regardless of step kind, so a tool-only workflow still requires a live provider (the tool-only e2e stays skipif-gated on a live provider). Nameable C9-vs-C11 tension (fail-fast reliability vs tool-only-workflow ergonomics), dyadic-council-eligible per root CLAUDE.md §10.9. Drive-to-gate: file the Class-1 fork doc; probe-first discipline (what exactly breaks downstream if no provider is pinged and a later step needs one — is a deferred-fail path already typed?); convene the dyadic council (C9 + C11 voices); operator ratification via the batched Wave-4 AUQ (a genuine Class-1 gate — the operator decides). On ratify: make the stage-3a ping conditional on the workflow containing an inference step; un-gate the tool-only e2e for the no-provider case."
+    close_note: "Stale-carry-text disposition, no code change owed. This exact tension was already probed, dyadic-council-scoped, operator-ratified (Reading B, AskUserQuestion 2026-06-12), and SHIPPED at PR #515 (`feat(R-CC-1): inference-conditional provider bootstrap`) — a full arc-cycle before R-FS-2 registered it here as forward work. Empirically re-verified at this session (not trusted from the register text): fork doc `.harness/class_1_fork_api_run_unconditional_provider_ping_for_tool_only_workflows.md:3` reads `Status: RESOLVED -> Reading B`; `gh pr view 515` shows `mergedAt: 2026-06-11T23:40:36Z`; `test_r100_ac2_tool_step_e2e.py` carries no `skipif` marker (only historical narration in its docstring) and passes green (`1 passed`) with zero provider credentials configured. Stage 3a (`stage_3a_cp_clients.py:31-59`) skips provider construction entirely when `ctx.requires_inference` is False; the exact predicate (`api.py:524` `_workflow_requires_inference`) reads the same static `workflow.steps` the CP driver's frozen `{StepKind -> StepDispatcher}` registry dispatches through, so a tool-only workflow cannot later be misclassified into needing inference — there is no dynamic step-kind-escalation path in the model. Even in the hypothetical, the dispatch registry omits unbound inference rows entirely, so a lookup on an omitted kind raises a typed `StepKindDispatcherNotBoundError` (never a hang/crash), backstopped by a second defensive `LLMDispatchBindError` sentinel layer — both exercised by `test_bootstrap.py:1497` (tool-only omission) and `:1527` (inference-with-no-providers still fails fast, C9 preserved). `.harness/post-phase-8-forward-register.md`'s B-10 residual bullet carried this as still-open framing; corrected in the same PR to point at the fork doc's RESOLVED disposition. No operator gate needed — this row closes as a documentation correction, not a build. Full record at `.harness/b-gapd-toolonly-bootstrap-closure-record.md`."
     units: []
     ledger_ref: ".harness/r-fs-2-final-closure-implementation-plan-v1.md"
