@@ -80,8 +80,15 @@ def scaffold_pending_stubs(ledger_path: Path, output_dir: Path) -> list[Path]:
     """
     written: list[Path] = []
     output_dir.mkdir(parents=True, exist_ok=True)
+    seen: dict[Path, str] = {}
     for entry in read_review_ledger(ledger_path):
         path = _stub_path(entry, output_dir)
+        if path in seen and seen[path] != entry.trace_id:
+            raise ValueError(
+                f"trace_id sanitization collision: {entry.trace_id!r} and "
+                f"{seen[path]!r} both sanitize to {path.name!r}"
+            )
+        seen[path] = entry.trace_id
         if path.exists():
             continue
         path.write_text(scaffold_assertion_stub_source(entry))

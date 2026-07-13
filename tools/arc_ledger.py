@@ -215,7 +215,9 @@ def validate(data: dict[str, Any]) -> list[str]:
         for key in (
             "frozen_total",
             "frozen_done",
+            "standalone_total",
             "standalone_closed",
+            "standalone_remaining",
             "standalone_gated",
             "standalone_resolved",
             "standalone_registered",

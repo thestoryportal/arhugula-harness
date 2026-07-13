@@ -179,13 +179,15 @@ def session_content_capture_enabled() -> bool:
 
 
 class MultiTenantOverrideRefusedError(Exception):
-    """Raised when an empty `redacted_attributes` is supplied at multi-tenant.
+    """Raised when `redacted_attributes` narrows below the non-toggleable
+    floor at multi-tenant-compliance (empty, or non-empty but missing one or
+    more `DEFAULT_OFF_CONTENT_ATTRIBUTES` members).
 
     Per OD spec §C-OD-13 §13.1 row 3 +
     `PER_PERSONA_TIER_REDACTION[MULTI_TENANT_COMPLIANCE].toggleable=False`:
-    multi-tenant-compliance is non-toggleable; operator cannot disable
-    redaction at this tier. Surfaces at processor construction; never at
-    runtime.
+    multi-tenant-compliance is non-toggleable; operator cannot disable or
+    partially relax redaction at this tier. Surfaces at processor
+    construction; never at runtime.
     """
 
 
@@ -214,13 +216,18 @@ class RedactionSpanProcessor(SpanProcessor):
         # non-toggleable; operator cannot disable redaction at this tier.
         # An empty `redacted_attributes` at multi-tenant is a disable attempt.
         posture = PER_PERSONA_TIER_REDACTION[persona_tier]
-        if persona_tier == PersonaTier.MULTI_TENANT_COMPLIANCE and len(redacted_attributes) == 0:
+        if persona_tier == PersonaTier.MULTI_TENANT_COMPLIANCE and not (
+            DEFAULT_OFF_CONTENT_ATTRIBUTES <= redacted_attributes
+        ):
             raise MultiTenantOverrideRefusedError(
                 f"persona_tier={persona_tier.value} is non-toggleable per "
                 f"PER_PERSONA_TIER_REDACTION[{persona_tier.value}].toggleable={posture.toggleable} "
-                f"(OD spec §C-OD-13 §13.1 row 3); empty redacted_attributes "
-                f"frozenset is rejected at construction. Re-pass the spec-canonical "
-                f"DEFAULT_OFF_CONTENT_ATTRIBUTES (default) or a non-empty operator-tuned set."
+                f"(OD spec §C-OD-13 §13.1 row 3); redacted_attributes must be a "
+                f"superset of DEFAULT_OFF_CONTENT_ATTRIBUTES at this tier — a "
+                f"non-empty-but-insufficient override still narrows the strip "
+                f"surface below the non-toggleable floor. Re-pass the "
+                f"spec-canonical DEFAULT_OFF_CONTENT_ATTRIBUTES (default) or a "
+                f"superset."
             )
         self._persona_tier: PersonaTier = persona_tier
         self._redacted: frozenset[str] = redacted_attributes

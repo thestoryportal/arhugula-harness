@@ -46,7 +46,9 @@
 snapshot:
   frozen_total: 11
   frozen_done: 11
+  standalone_total: 99
   standalone_closed: 94
+  standalone_remaining: 0
   standalone_gated: 0
   standalone_resolved: 5
   standalone_registered: 0
