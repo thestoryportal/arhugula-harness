@@ -2,7 +2,7 @@
 
 **Entry:** `R-600-pattern-bake-in-sweep` (roadmap §5.6) — *Sweep workspace memory for pattern candidates ready for workflow-doc promotion.*
 **Posture:** mode-agnostic recurring sweep; design-substrate amendment only when a candidate clears the §7.5 gate. **Cadence:** ~every 10 PRs or operator-discretion.
-**Latest status:** **ACTIVE-SURVEYED (cadence-4, 2026-06-30)** — cadence-4 survey complete (both `must_pass` met); the `full-chain-witness-not-half-proofs` candidate matured via repeated independent runtime/CP arcs and was promoted in `design-substrate/Project_Workflow_v1_16.md` as **PD-6 composed-chain non-vacuity witness** with clearance marker `.harness/clearance/Project_Workflow-v1_16-cleared-2026-06-30.md`. R-600 remains a recurring lane; next run only after the cadence trips again (~10 PRs) or a concrete new candidate reaches independent instance-cardinality >=2.
+**Latest status:** **ACTIVE-SURVEYED (cadence-6, 2026-07-12)** — cadence-6 survey complete (both `must_pass` met); ZERO new §7.4.7/§7.5 promotions — a legitimate zero-promotion cadence, confirmed via file-delta audit (not just citation count) per `advisor()` flag. Prior: cadence-5 promoted `disposition-label-is-a-claim-verify-against-spec` as **PD-7 disposition-label-is-a-claim** in `design-substrate/Project_Workflow_v1_17.md`, clearance marker `.harness/clearance/Project_Workflow-v1_17-cleared-2026-07-12.md`. R-600 remains a recurring lane; next run only after the cadence trips again (~10 PRs) or a concrete new candidate reaches independent instance-cardinality >=2.
 
 **Method.** Read-only enumeration of the auto-memory store at `/Users/robertrhu/.claude/projects/-Users-robertrhu-Projects-arhugula-v2/memory/` (152 files): grep raw `[[wiki-link]]` tokens across all file bodies; count per-token cardinality (total refs + distinct referencing files). 569 total refs / 155 distinct tokens → **104 at cardinality ≥2**, 51 at cardinality 1.
 
@@ -329,3 +329,47 @@ Run against the §7.5.1 inclusion gate:
 - **`must_pass` #1** (cardinality>=2 frontier identified): ✅ C5-§1.
 - **`must_pass` #2** (candidates evaluated against §7.4.7 + §7.5): ✅ C5-§2 — result: ZERO new §7.4.7 owed; one §7.5 PD-7 promoted at workflow v1.17; one strong-but-out-of-domain candidate (`new-surface-audit-hash-and-config-not-carrier`) routed to a dedicated non-§7.5 home instead of forced into the workflow doc.
 - **Entry status:** **ACTIVE-SURVEYED (cadence-5)**. Cadence-5's PD-7 promotion debt is discharged in the same arc. R-600 remains an ACTIVE recurring lane; next run only after the cadence trips again (~10 PRs) or a concrete new candidate reaches independent instance-cardinality >=2.
+
+---
+---
+
+# Cadence-6 run — 2026-07-12 (HEAD `dfe82ab6`, post-#961)
+
+**Cadence trigger.** ~19 merge commits since the cadence-5 baseline (`a5627fc2` / post-#941 → `27b311d3` / post-#960) — past the ~10-PR interval, per the dashboard's own due-flag ("cadence-5 last closed at PR #942; ~18 PRs since"). The interval covers the R-FS-2 Wave 3/4/5 closeout arcs (B-COST-REPLAY-DEDUP-WITNESS, B-GAPD-TOOLONLY-BOOTSTRAP, B-19-BREAKER-AMBIENT-ATTRS, B-HYGIENE-CITE-POINTER-SWEEP) and the R-FS-2 G2 closure report (PR #960).
+
+**Method (identical to cadence-1..5).** Read-only `[[wiki-link]]` enumeration of the auto-memory store at `/Users/robertrhu/.claude/projects/-Users-robertrhu-Projects-arhugula-v2/memory/` (**121 files**, was 119 at cadence-5): **567 total refs / 100 distinct tokens → 76 at cardinality >=2** (was 566/99/76). The card>=2 count is unchanged from cadence-5 — but per the standing metric caveat (citation-count is a salience proxy, not instance-cardinality; a frozen count can still hide a newly-*consolidated* discipline, exactly how PD-7 surfaced last cadence), the count alone is not treated as evidence of "nothing new." The gating check this cadence is the **file-delta since the cadence-5 baseline**, not the token count (flagged by `advisor()` pre-write-up as the correct discriminator).
+
+## C6-§1 — `must_pass` #1: cardinality>=2 frontier identified + file-delta audit
+
+Top unchanged/already-homed signals remain dominant: `hooks-codex-pilots-decorrelation-validated` (45), `verification-shape-sharpened-grep-vs-e2e` (35), `advisor-before-substantive-work-for-cross-axis-blockers` (32), `grounding-reveals-claude-closeable-slice-close-honestly` (31), `r-cxa-seam-wiring-is-producer-discovery` (20), `full-chain-witness-not-half-proofs` (20, PD-6), `disposition-label-is-a-claim-verify-against-spec` (5, PD-7) — all already dispositioned at cadence-3/4/5.
+
+**File-delta audit (the load-bearing check this cadence).** `find memory/ -maxdepth 1 -name "*.md" -newermt "cadence-5 baseline"` → exactly 3 non-index files touched since cadence-5, plus `MEMORY.md` itself:
+
+| file | card. | disposition |
+|---|---:|---|
+| `regenerate-roadmap-html-after-source-edit.md` | 8 | Class A operational recipe (dashboard regen mechanics); already indexed at MEMORY.md "Operational recipes." Edited (extended), not new. |
+| `dashboard-regen-gh-unavailable-determinism.md` | — | Class A operational recipe (CI-parity `gh`-hidden regen); already indexed. |
+| `squash-merge-dashboard-conflict.md` | — | Class A operational recipe (branch-from-stale-local-tip → spurious dashboard conflict); already indexed. |
+
+All three are dashboard/git-mechanics recipes, not SDLC process disciplines — none clears the §7.5 domain-fit gate even before checking independence.
+
+**Two card-frontier tokens worth resolving explicitly (grown since being flagged, never closed out in a cadence write-up):**
+
+- **`feedback-verify-observation-layer-before-concluding-defect`** (card 1 at cadence-2 "awaits 2nd instance" → **9** now, 10 distinct referencing files). Checked against root `CLAUDE.md` §6 Verification & Failure Hygiene — **already baked in verbatim**: *"Verify the observation layer before concluding a defect... 'No entries / didn't happen / empty' is not a bug until you've confirmed you're looking at the right sink... Premature escalation on a misread is the symmetric failure to silent scope-narrowing."* **Class B — already-canonical, just never logged as dispositioned in this survey.** Logging it here closes the gap so it stops looking unresolved at the next cadence.
+- **`fable5-fallback-reviewer`** (card 6, new since cadence-4/5 — file mtime 2026-07-10). Reviewer-selection/tooling policy (Fable-5-via-`Agent(model:"fable")` as the fallback decorrelated reviewer when advisor + codex are both unavailable) — the same shape as the already-Class-B `codex-out-of-family-reviewer`. **Class B — tooling/reviewer-ladder guidance, not a §7.5 SDLC discipline.** Already surfaced in MEMORY.md ("Reviewer ladder: codex + Fable-5 fallback").
+
+**Spot-checked mid-frontier tokens (4-9 cite range) for Class-C shape — none qualify:** `gate-enforcement-site-and-timing-asymmetry` (harness gate-placement mechanics, domain-specific like `new-surface-audit-hash-and-config-not-carrier` — already has its own dedicated memory home, not cross-project SDLC), `feedback-genuine-skill-invocation-dedicated-agent` (operator behavioral directive, Class B), `shared-is-shape-change-ripples-cross-axis-field-asserts` (Class A operational recipe, already indexed), `skill-creator-eval-harness-caveats` (Class A tooling recipe, already indexed), `deleting-active-worktree-from-within-session` (Class A git-worktree recipe, sibling of `bash-cwd-reverts-to-project-root-not-worktree`).
+
+## C6-§2 — `must_pass` #2: candidates evaluated against §7.4.7 and §7.5
+
+**§7.4.7 (stale-carry-text):** ZERO new sub-species owed. This is the **6th independent surfacing** of the same null result across cadence-1 through cadence-6 — checked fresh at this cadence's card>=2 set (§C6-§1), not inherited from cadence-5.
+
+**§7.5 (process-discipline):** ZERO new candidates clear the gate. The file-delta audit (the correct discriminator per the advisor's flag — citation-count alone would have under-scrutinized a possible silent consolidation, exactly the shape that produced PD-7 last cadence) found only 3 touched files since cadence-5, all Class A operational/dashboard recipes. The two card-frontier tokens worth resolving (`feedback-verify-observation-layer-before-concluding-defect`, `fable5-fallback-reviewer`) both land Class B — already-homed (CLAUDE.md §6; reviewer-ladder tooling guidance respectively) — confirmed by direct content read, not assumed from citation count.
+
+**No promotion this cadence.** `design-substrate/Project_Workflow_v1_17.md` remains the current head; no amendment, no clearance marker.
+
+## C6-§3 — Closure disposition (cadence-6)
+
+- **`must_pass` #1** (cardinality>=2 frontier identified + file-delta audit): ✅ C6-§1.
+- **`must_pass` #2** (candidates evaluated against §7.4.7 + §7.5): ✅ C6-§2 — result: ZERO new §7.4.7 owed (6th surfacing); ZERO new §7.5 promotion (file-delta-audited, not just citation-count-audited, per `advisor()` pre-write-up flag).
+- **Entry status:** **ACTIVE-SURVEYED (cadence-6)**. A legitimate zero-promotion cadence — verified against the stronger file-delta signal, not the frozen citation count alone. R-600 remains an ACTIVE recurring lane; next run only after the cadence trips again (~10 PRs) or a concrete new candidate reaches independent instance-cardinality >=2.
