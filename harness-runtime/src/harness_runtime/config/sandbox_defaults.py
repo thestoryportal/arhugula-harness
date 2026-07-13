@@ -260,13 +260,12 @@ def resolve_per_tool_sandbox_defaults(
         )
     assert floor.tier is not None, "RESOLVED SandboxTierFloorResult always carries a tier"
 
-    # max(surface default, per-tool floor). When the surface default is STRICTLY higher it
-    # stands UNCHANGED (incl. its tech/provider/reason); otherwise the per-tool floor drives
-    # the tier and the span labels/reason reflect the per-tool cause (security telemetry honesty).
-    if (
-        is_tier_at_or_above(surface_default.sandbox_tier, floor.tier)
-        and surface_default.sandbox_tier is not floor.tier
-    ):
+    # max(surface default, per-tool floor). When the surface default is already at or above
+    # the floor it stands UNCHANGED (incl. its tech/provider/reason — including the equal-tier
+    # case, where attributing the tier to "per-tool floor" would be dishonest since no raise
+    # actually happened); otherwise the per-tool floor drives the tier and the span
+    # labels/reason reflect the per-tool cause (security telemetry honesty).
+    if is_tier_at_or_above(surface_default.sandbox_tier, floor.tier):
         return surface_default
 
     default_tech, default_provider = _TIER_TECH_PROVIDER[floor.tier]

@@ -72,7 +72,8 @@ def build_resource_attributes(
         "deployment.surface": deployment_surface.value,
     }
     for row in NAMESPACE_MAP:
-        attrs[f"namespace.{row.namespace_prefix}declared"] = "true"
+        separator = "" if row.namespace_prefix.endswith(".") else "."
+        attrs[f"namespace.{row.namespace_prefix}{separator}declared"] = "true"
     for key, value in otel.additional_resource_attrs:
         attrs[key] = value
     if tenant_id:

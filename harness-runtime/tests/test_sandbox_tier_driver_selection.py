@@ -119,6 +119,31 @@ def test_per_tool_surface_default_floors_low_per_tool_tier_in_production() -> No
     assert eff.sandbox_tier is SandboxTier.TIER_2_CONTAINER
 
 
+def test_per_tool_equal_tier_retains_surface_default_reason() -> None:
+    """Regression guard — when the per-tool floor equals (not exceeds) the
+    surface default tier, no raise actually happened, so the surface
+    default's own reason must be retained, not misattributed to the
+    per-tool floor (security telemetry honesty). Mirrors
+    `test_remote_l1_readonly_floor_does_not_raise_tier`'s equal-tier
+    pattern for the per-tool path."""
+    client = _client(
+        transport=MCPTransport.STREAMABLE_HTTP_L1_PINNED,
+        trust_level=MCPServerTrustLevel.L1_SIGNED_PINNED,
+        blast_radius=BlastRadiusTier.LOCAL_MUTATION,
+    )
+    surface = resolve_effective_sandbox_defaults(client, DeploymentSurface.MANAGED_CLOUD)
+    assert surface.sandbox_tier is SandboxTier.TIER_2_CONTAINER
+    eff = resolve_per_tool_sandbox_defaults(
+        _contract(blast_radius_tier=BlastRadiusTier.LOCAL_MUTATION),
+        client,
+        DeploymentSurface.MANAGED_CLOUD,
+        surface,
+    )
+    assert eff.sandbox_tier is SandboxTier.TIER_2_CONTAINER
+    assert eff.assigned_tier_reason == surface.assigned_tier_reason
+    assert "per-tool-sandbox-floor" not in eff.assigned_tier_reason
+
+
 # ---------------------------------------------------------------------------
 # resolve_effective_sandbox_defaults — surface-aware default policy (Reading A+).
 # ---------------------------------------------------------------------------
