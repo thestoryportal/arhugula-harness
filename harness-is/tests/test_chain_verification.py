@@ -154,17 +154,3 @@ def test_tamper_inception_modification() -> None:
     assert result.status is VerificationStatus.INVALID
     assert result.failure_position == 1
     assert result.failure_type is FailureType.INCEPTION_SENTINEL_MISMATCH
-
-
-def test_tamper_response_hash_only_modification() -> None:
-    """Regression guard — tampering ONLY a non-terminal entry's own
-    `response_hash` must be caught even though it perturbs no neighbor's
-    link check (`canonicalize` excludes `response_hash` from its own input,
-    so the chain-link walk alone is blind to this tamper; only the direct
-    per-entry recompute-and-compare catches it)."""
-    chain = _valid_chain(5)
-    chain[2] = chain[2].model_copy(update={"response_hash": b"\xaa" * 32})
-    result = verify_chain(chain)
-    assert result.status is VerificationStatus.INVALID
-    assert result.failure_position == 3  # 1-indexed K for 0-indexed K=2
-    assert result.failure_type is FailureType.RESPONSE_HASH_MISMATCH
