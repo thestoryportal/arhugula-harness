@@ -356,3 +356,39 @@ def test_external_cli_binding_selects_prompt_packet_not_standard_tools() -> None
         )
     )
     assert result.access_mode is MemoryAccessMode.PROMPT_EXTENSION_PACKET
+
+
+def test_external_cli_route_without_explicit_capabilities_still_avoids_standard_tools() -> None:
+    """Regression — `select_memory_access_mode`'s own fallback capability
+    reflection (when the caller does not pre-supply `provider_capabilities`)
+    must also thread `is_external_cli`. Previously only the *caller-supplied*
+    `capabilities` path was flag-aware; the fallback call at
+    `select_memory_access_mode` itself called
+    `reflect_memory_provider_capabilities(request.model_binding)` with no
+    `is_external_cli` argument, so a CLI-routed binding with no pre-supplied
+    capabilities was granted `STANDARD_MEMORY_TOOLS` — a mode its
+    subprocess-text-dispatch path cannot serve — silently dropping memory.
+    """
+    route = ExternalCliRoute(
+        provider_name="claude_code",
+        external_cli_kind="claude_code",
+        command_name="claude",
+        auth_check_passed=True,
+        optional=False,
+        degradation_allowed=False,
+    )
+
+    result = select_memory_access_mode(
+        _request(
+            provider="claude_code",
+            model="sonnet",
+            family=ProviderFamily.ANTHROPIC,
+            policy=_policy(standard_tool_access=AccessDecision.STANDARD_TOOLS),
+            external_cli_route=route,
+            # No `capabilities=` override — exercises the fallback reflection
+            # path inside `select_memory_access_mode` itself.
+        )
+    )
+
+    assert result.access_mode is not MemoryAccessMode.STANDARD_MEMORY_TOOLS
+    assert result.access_mode is MemoryAccessMode.PROMPT_EXTENSION_PACKET
