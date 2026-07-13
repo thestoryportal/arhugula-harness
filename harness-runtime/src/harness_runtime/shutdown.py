@@ -458,20 +458,38 @@ async def shutdown(
     except Exception:
         failures.append("collector_daemon")
 
-    # Step 3b — tracer provider (sync; to_thread).
+    # Step 3b — tracer provider (sync; to_thread). Bounded by the remaining
+    # budget: an unbounded `provider.shutdown()` (e.g. a stuck TCP teardown
+    # against an OTLP collector) previously hung the whole shutdown sequence
+    # indefinitely despite the docstring's "each step is allotted the
+    # remaining budget" invariant.
+    remaining = max(0.0, deadline - time.monotonic())
     try:
-        await _close_tracer_provider(ctx)
+        await asyncio.wait_for(_close_tracer_provider(ctx), timeout=remaining)
+    except TimeoutError:
+        failures.append("tracer_provider")
+        timed_out = True
     except Exception:
         failures.append("tracer_provider")
 
     # Step 3c — provider clients. Per-provider try/except; one failure
-    # doesn't block the others.
+    # doesn't block the others. Bounded by the remaining budget (same
+    # unbounded-hang gap as step 3b — a stuck provider `aclose()` blocked
+    # every subsequent close step).
+    remaining = max(0.0, deadline - time.monotonic())
     for name, provider in ctx.providers.items():
         try:
-            aclose = cast(Callable[[], object], provider.aclose)  # type: ignore[attr-defined]
-            result = aclose()
-            if asyncio.iscoroutine(result):
-                await result
+
+            async def _aclose(provider: Any = provider) -> None:
+                aclose = cast(Callable[[], object], provider.aclose)  # type: ignore[attr-defined]
+                result = aclose()
+                if asyncio.iscoroutine(result):
+                    await result
+
+            await asyncio.wait_for(_aclose(), timeout=remaining)
+        except TimeoutError:
+            failures.append(f"provider:{name}")
+            timed_out = True
         except Exception:
             failures.append(f"provider:{name}")
 
@@ -481,13 +499,18 @@ async def shutdown(
     # anyio cancel scope closes in its owning task (the success-path teardown
     # crash without this). Guarded on a started host — the empty-sentinel /
     # unstarted host has nothing to drain. Per-resource exception isolation.
+    # Bounded by the remaining budget (same unbounded-hang gap as steps 3b/3c).
     # (U-RT-125 reshape: `mcp_client_hosts` is a `dict[ServerName, MCPClientHost]`;
     # a single host today, ≥1 at B2-impl-2b.)
+    remaining = max(0.0, deadline - time.monotonic())
     hosts: dict[ServerName, Any] = getattr(ctx, "mcp_client_hosts", None) or {}
     for host in hosts.values():
         if getattr(host, "started", False):
             try:
-                await host.shutdown()
+                await asyncio.wait_for(host.shutdown(), timeout=remaining)
+            except TimeoutError:
+                failures.append("mcp_client_host")
+                timed_out = True
             except Exception:
                 failures.append("mcp_client_host")
     # Step 5 — ledger/index/cache/worktree: covered by step 2 / no close surface.
