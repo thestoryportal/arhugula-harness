@@ -206,6 +206,16 @@ class SyncDispatcherFacade:
         try:
             return future.result(timeout=self.result_timeout_seconds)
         except TimeoutError as exc:
+            # `future.result(timeout=...)` only stops *waiting* — the inner
+            # coroutine (and its cost/audit-ledger write) keeps running
+            # detached on `self.loop` unless explicitly cancelled. Without
+            # this, a retry of the same run can execute concurrently with
+            # the orphaned original dispatch: two live LLM calls / two audit
+            # writes for the same logical step. `run_coroutine_threadsafe`'s
+            # future chains cancellation back to the scheduled Task via
+            # `call_soon_threadsafe`, so `.cancel()` is safe to call here
+            # from this (worker) thread.
+            future.cancel()
             raise StepDispatchTimeoutError(
                 f"step dispatch exceeded {self.result_timeout_seconds}s bound"
             ) from exc

@@ -138,6 +138,32 @@ class _SlowAsyncDispatcher:
         return {}
 
 
+@dataclass
+class _CancellationTrackingAsyncDispatcher:
+    """Async dispatcher that records whether it ran to completion or was
+    cancelled mid-sleep — used to prove a timed-out dispatch is actually
+    torn down rather than left running detached."""
+
+    delay_seconds: float
+    was_cancelled: list[bool]
+    completed: list[bool]
+
+    async def dispatch(
+        self,
+        binding: StepEffectiveBinding,
+        step: WorkflowStep,
+        *,
+        step_context: StepExecutionContext,
+    ) -> Mapping[str, Any]:
+        try:
+            await asyncio.sleep(self.delay_seconds)
+            self.completed.append(True)
+            return {}
+        except asyncio.CancelledError:
+            self.was_cancelled.append(True)
+            raise
+
+
 class _DispatchBoomError(Exception):
     """Inner exception raised by ``_RaisingAsyncDispatcher``."""
 
@@ -294,6 +320,33 @@ async def test_d4_result_timeout_fires() -> None:
 
     with pytest.raises(StepDispatchTimeoutError):
         await asyncio.to_thread(_worker)
+
+
+@pytest.mark.asyncio
+async def test_d4b_timeout_cancels_orphaned_inner_coroutine() -> None:
+    """Regression — a timed-out dispatch must cancel the inner coroutine, not
+    just stop waiting on it. Previously `future.result(timeout=...)` left the
+    inner coroutine (and its cost/audit-ledger write) running detached on the
+    outer loop; a retry of the same run could then execute concurrently with
+    the orphaned original."""
+    was_cancelled: list[bool] = []
+    completed: list[bool] = []
+    inner = _CancellationTrackingAsyncDispatcher(
+        delay_seconds=0.2, was_cancelled=was_cancelled, completed=completed
+    )
+    facade = materialize_sync_dispatcher_facade(inner, result_timeout_seconds=0.05)
+
+    def _worker() -> Mapping[str, Any]:
+        return facade.dispatch(_binding(), _step(), step_context=_step_context())
+
+    with pytest.raises(StepDispatchTimeoutError):
+        await asyncio.to_thread(_worker)
+
+    # Outlive the inner sleep's original duration — if it were still running
+    # detached (not cancelled), it would complete during this wait.
+    await asyncio.sleep(0.3)
+    assert was_cancelled == [True]
+    assert completed == []
 
 
 # ---------------------------------------------------------------------------
