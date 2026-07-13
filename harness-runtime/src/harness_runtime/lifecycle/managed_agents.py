@@ -122,9 +122,13 @@ def _to_payload(value: Any) -> Mapping[str, Any]:
 def _status_from_anthropic(status: Any) -> ManagedAgentSessionStatus:
     status_value = str(status or "").lower()
     return {
+        "created": ManagedAgentSessionStatus.CREATED,
         "idle": ManagedAgentSessionStatus.IDLE,
         "running": ManagedAgentSessionStatus.RUNNING,
         "rescheduling": ManagedAgentSessionStatus.RESCHEDULING,
+        "paused": ManagedAgentSessionStatus.PAUSED,
+        "completed": ManagedAgentSessionStatus.COMPLETED,
+        "canceled": ManagedAgentSessionStatus.CANCELED,
         "terminated": ManagedAgentSessionStatus.TERMINATED,
     }.get(status_value, ManagedAgentSessionStatus.FAILED)
 
