@@ -368,7 +368,13 @@ def _wait_for_cloud_trace(
         )
         if payload is not None:
             names = _trace_span_names(payload)
-            if not names or {ROOT_SPAN, TRIGGER_SPAN} <= names:
+            # An empty span set is NOT success — GCP Cloud Trace's documented
+            # eventual-consistency behavior means the trace shell can appear
+            # before span data lands, so an empty result must keep polling,
+            # not short-circuit as "observed" (mirrors the sibling
+            # r820_managed_agents_live_e2e.py's `_wait_for_managed_agents_trace`,
+            # which never treats an empty/partial match as success).
+            if {ROOT_SPAN, TRIGGER_SPAN} <= names:
                 return TraceQueryResult(trace_id=trace_id, observed=True, span_names=names)
             last_names = names
         time.sleep(query_interval_seconds)
