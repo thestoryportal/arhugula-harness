@@ -83,6 +83,7 @@ from harness_cp.validator_fail_transient_staircase import (
     advance_staircase,
 )
 from harness_od.harness_breaker_schema import (
+    BreakerCause,
     BreakerScope,
     BreakerState,
     HarnessBreakerEvent,
@@ -167,13 +168,24 @@ class BreakerTransition:
     + dispatch `emit_breaker_trip_span_event`. The `(scope, identifier)`
     coordinates identify the breaker; `from_state` / `to_state` name the
     transition; `trigger_count` is the consecutive failure count that drove
-    the transition (closed→open case) or zero (open→half_open, half_open→closed)."""
+    the transition (closed→open case) or zero (open→half_open, half_open→closed).
+
+    `cooldown_seconds` is the machine's static cooldown policy value, carried
+    on every transition (v1.32); the caller derives `cooldown_ms` from it only
+    on an actual trip (`to_state = OPEN`) — see `emit_breaker_transition_event`.
+    `cause` is the caller-supplied `BreakerCause | None` (v1.32) — real signal
+    is vacuous at every current call site (`.harness/b19-breaker-ambient-attrs-
+    redundancy-analysis.md` §3), so this is `None` in production today; the
+    field exists so a future finer-grained classifier can populate it without
+    a `BreakerTransition` shape change."""
 
     from_state: BreakerState
     to_state: BreakerState
     scope: BreakerScope
     identifier: str
     trigger_count: int
+    cooldown_seconds: float = DEFAULT_COOLDOWN_SECONDS
+    cause: BreakerCause | None = None
 
 
 @dataclass(slots=True)
@@ -203,7 +215,7 @@ class BreakerStateMachine:
     fail_threshold: int = DEFAULT_FAIL_THRESHOLD
     cooldown_seconds: float = DEFAULT_COOLDOWN_SECONDS
 
-    def record_failure(self) -> BreakerTransition | None:
+    def record_failure(self, *, cause: BreakerCause | None = None) -> BreakerTransition | None:
         """Record one failure; return the transition iff the state changed.
 
         - In `closed`: increments `fail_count`; transitions to `open` if the
@@ -211,6 +223,13 @@ class BreakerStateMachine:
         - In `half_open`: any failure → `open` (the half-open trial failed).
         - In `open`: no-op (the caller should have checked `should_attempt()`
           before invoking the call); returns `None`.
+
+        `cause` (v1.32) is the caller-supplied `BreakerCause | None` for the
+        `harness.breaker.cause` attribute — real signal is vacuous at every
+        current call site (`.harness/b19-breaker-ambient-attrs-redundancy-
+        analysis.md` §3), so callers pass `None` today; the parameter exists
+        so a future finer-grained classifier can supply a value without a
+        signature change.
 
         Returns the `BreakerTransition` on a state change, else `None`.
         """
@@ -226,6 +245,8 @@ class BreakerStateMachine:
                 scope=self.scope,
                 identifier=self.identifier,
                 trigger_count=self.fail_count,
+                cooldown_seconds=self.cooldown_seconds,
+                cause=cause,
             )
         # state is CLOSED
         self.fail_count += 1
@@ -237,6 +258,8 @@ class BreakerStateMachine:
                 scope=self.scope,
                 identifier=self.identifier,
                 trigger_count=self.fail_count,
+                cooldown_seconds=self.cooldown_seconds,
+                cause=cause,
             )
         return None
 
@@ -256,6 +279,7 @@ class BreakerStateMachine:
                 scope=self.scope,
                 identifier=self.identifier,
                 trigger_count=0,
+                cooldown_seconds=self.cooldown_seconds,
             )
         if self.state is BreakerState.CLOSED:
             self.fail_count = 0
@@ -278,6 +302,7 @@ class BreakerStateMachine:
             scope=self.scope,
             identifier=self.identifier,
             trigger_count=0,
+            cooldown_seconds=self.cooldown_seconds,
         )
 
     def should_attempt(self) -> bool:
@@ -418,10 +443,20 @@ class RuntimeRetryBreaker:
         attributes (C-CP-03 §3.5: "harness.breaker.tool_id — per-model scope
         correlation"). When `tool_id` is omitted at PER_MODEL scope, the
         registry defaults to the transition's `identifier` (the breaker key).
+
+        `cause` / `cooldown_ms` (v1.32) are populated only on a real trip
+        (`to_state = OPEN`) — `cooldown_ms` from `transition.cooldown_seconds
+        * 1000` (a static duration, always known at a trip); `cause` from
+        `transition.cause` (vacuous today at every real call site per
+        `.harness/b19-breaker-ambient-attrs-redundancy-analysis.md` §3).
+        Neither attribute is meaningful on a recovery transition
+        (`half_open -> closed`) or the cooldown-elapsed `open -> half_open`
+        transition, so both stay `None` there.
         """
         effective_tool_id = tool_id
         if effective_tool_id is None and transition.scope is BreakerScope.PER_MODEL:
             effective_tool_id = transition.identifier
+        is_trip = transition.to_state is BreakerState.OPEN
         event = HarnessBreakerEvent(
             scope=transition.scope,
             from_state=transition.from_state,
@@ -430,6 +465,8 @@ class RuntimeRetryBreaker:
             permanent_fail_repeats=permanent_fail_repeats,
             tool_id=effective_tool_id,
             model_version=model_version,
+            cause=transition.cause if is_trip else None,
+            cooldown_ms=int(transition.cooldown_seconds * 1000) if is_trip else None,
         )
         return emit_breaker_trip_span_event(parent_span_ref, event)
 

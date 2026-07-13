@@ -121,7 +121,19 @@ FALLBACK_NAMESPACE_SCHEMA: tuple[FallbackAttributeSchema, ...] = tuple(
 """The 9 `fallback.*` attributes per C-CP-03 §3.5 verbatim."""
 
 
-# --- harness.breaker.* namespace (spec C-CP-03 §3.5 + OD C-OD-07 §7.1 — 7) --
+# --- harness.breaker.* namespace (spec C-CP-03 §3.5 + OD C-OD-07 §7.1 — 9) --
+#
+# NOTE (v1.32, B-19-BREAKER-AMBIENT-ATTRS): the 7 pre-existing entries below
+# carry attribute NAMES that do not match OD's canonical §7.1 emission names
+# (`scope` / `from_state` / `to_state` / `trigger_count` / `permanent_fail_
+# repeats` / `tool_id` / `model_version` — `harness_od.harness_breaker_
+# schema.HARNESS_BREAKER_ATTRIBUTES`). This is a pre-existing drift this
+# module's own `verify_harness_breaker_namespace_inversion()` cardinality
+# check cannot catch (it compares COUNT only, not names) — flagged here as a
+# Class-3 finding, NOT fixed by this arc (out of B-19's scope; touching the
+# other 7 entries is a separate concern). The 2 new v1.32 entries below use
+# OD's actual canonical names (`cause` / `cooldown_ms`), matching what
+# `emit_breaker_trip_span_event` actually emits.
 
 _BREAKER_AUTHORITY = "c9-reliability-recovery SKILL.md"
 
@@ -140,10 +152,13 @@ HARNESS_BREAKER_NAMESPACE_SCHEMA: tuple[HarnessBreakerAttributeSchema, ...] = tu
         ("harness.breaker.trip_window_seconds", AttributeValueType.INT, _C.LOW),
         ("harness.breaker.fail_count_in_window", AttributeValueType.INT, _C.MEDIUM),
         ("harness.breaker.fail_threshold", AttributeValueType.INT, _C.LOW),
+        ("harness.breaker.cause", AttributeValueType.ENUM_REF, _C.LOW),
+        ("harness.breaker.cooldown_ms", AttributeValueType.INT, _C.LOW),
     )
 )
-"""The 7 `harness.breaker.*` attributes per C-CP-03 §3.5 + OD C-OD-07 §7.1
-canonical schema verbatim — each carrying `source_authority`."""
+"""The 9 `harness.breaker.*` attributes per C-CP-03 §3.5 + OD C-OD-07 §7.1
+canonical schema (v1.32 ADDITIVE — `cause` + `cooldown_ms`) — each carrying
+`source_authority`."""
 
 
 # --- retry.* namespace (spec C-CP-03 §3.5 + ADR-D6 v1.2 §1.2.2.1 — 6) -------

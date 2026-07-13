@@ -6,7 +6,7 @@ Acceptance-criterion coverage:
   #3 §24.1.B 4 entries           -> test_section_24_1_b_four_entries
   #4 §24.1.C 1 entry             -> test_section_24_1_c_one_entry
   #5 per-namespace attr count    -> test_per_namespace_attribute_count_match_spec
-  #6 total 63 attributes         -> test_total_attribute_count_sixty_three
+  #6 total 65 attributes (v1.32) -> test_total_attribute_count_sixty_five
   #8 harness.breaker posture     -> test_harness_breaker_substrate_anchored_outside_cp
 """
 
@@ -86,16 +86,21 @@ def test_per_namespace_attribute_count_match_spec() -> None:
         "fallback.*": 9,
         "retry.*": 4,
         "lease.*": 5,
-        "harness.breaker.*": 7,
+        "harness.breaker.*": 9,
         "routing.*": 4,
     }
     for name, count in expected.items():
         assert _by_name(name).attribute_count == count
 
 
-def test_total_attribute_count_sixty_three() -> None:
-    """#6 — total exported attribute count is 63 (34 + 25 + 4)."""
-    assert CP_EXPORTED_ATTRIBUTE_COUNT == 63
+def test_total_attribute_count_sixty_five() -> None:
+    """#6 — total exported attribute count is 65 (36 + 25 + 4).
+
+    v1.32 (B-19-BREAKER-AMBIENT-ATTRS): harness.breaker.* grew 7 -> 9
+    (+cause +cooldown_ms), so the §24.1.B ingest-target subtotal grows
+    34 -> 36 and the manifest total grows 63 -> 65.
+    """
+    assert CP_EXPORTED_ATTRIBUTE_COUNT == 65
 
 
 def test_harness_breaker_substrate_anchored_outside_cp() -> None:

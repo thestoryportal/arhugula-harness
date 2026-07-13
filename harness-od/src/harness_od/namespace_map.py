@@ -190,7 +190,7 @@ NAMESPACE_MAP: tuple[NamespaceMapRow, ...] = (
     # --- 1 substrate-anchored-outside-CP row (§5.1 row 14) -----------------
     NamespaceMapRow(
         namespace_prefix="harness.breaker.",
-        attribute_count=7,
+        attribute_count=9,  # v1.32: +cause +cooldown_ms (B-19-BREAKER-AMBIENT-ATTRS)
         source_axis=NamespaceSourceAxis.SUBSTRATE_ANCHORED_OUTSIDE_CP,
         source_contract_ref="C-OD-07 §7.1",
     ),

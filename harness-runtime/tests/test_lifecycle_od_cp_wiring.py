@@ -138,12 +138,15 @@ def test_bind_errors_typed() -> None:
 
 
 def test_harness_breaker_inversion_at_head_matches() -> None:
-    """OD's 7-attribute canonical schema matches CP's namespace export count."""
+    """OD's 9-attribute canonical schema matches CP's namespace export count.
+
+    v1.32 (B-19-BREAKER-AMBIENT-ATTRS): 7 -> 9 (+cause +cooldown_ms).
+    """
     result = verify_harness_breaker_namespace_inversion()
     assert isinstance(result, HarnessBreakerNamespaceInversion)
     assert result.match is True
-    assert result.od_canonical_attribute_count == 7
-    assert result.cp_declared_attribute_count == 7
+    assert result.od_canonical_attribute_count == 9
+    assert result.cp_declared_attribute_count == 9
 
 
 def test_harness_breaker_attribute_count_equals_od_tuple_len() -> None:

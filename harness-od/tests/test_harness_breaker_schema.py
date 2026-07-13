@@ -1,9 +1,10 @@
-"""Tests for U-OD-09 — `harness.breaker.*` 7-attribute canonical schema.
+"""Tests for U-OD-09 — `harness.breaker.*` 9-attribute canonical schema.
 
 Test set per the U-OD-09 §3.3.1 (v2.8) `Tests:` field — covers acceptance
 #1/#3-#10 against C-OD-07 §7.1 / §7.2 / §7.3. acc #2 is STRUCK (v2.8 D-3) —
 no test; the `test_required_tier_*` / `test_conditional_tier_*` tests are
-struck.
+struck. v1.32 (B-19-BREAKER-AMBIENT-ATTRS) added `cause` + `cooldown_ms`
+(7 -> 9 attributes); tests below updated + 2 new tests added for the pair.
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ from __future__ import annotations
 import pytest
 from harness_od.harness_breaker_schema import (
     HARNESS_BREAKER_ATTRIBUTES,
+    BreakerCause,
     BreakerEmissionError,
     BreakerScope,
     BreakerState,
@@ -28,6 +30,8 @@ _EXPECTED_ATTRIBUTES: tuple[str, ...] = (
     "harness.breaker.permanent_fail_repeats",
     "harness.breaker.tool_id",
     "harness.breaker.model_version",
+    "harness.breaker.cause",
+    "harness.breaker.cooldown_ms",
 )
 
 
@@ -37,7 +41,7 @@ def _span() -> SpanRef:
 
 
 def _full_event() -> HarnessBreakerEvent:
-    """A `HarnessBreakerEvent` with all seven attributes populated."""
+    """A `HarnessBreakerEvent` with all nine attributes populated."""
     return HarnessBreakerEvent(
         scope=BreakerScope.PER_MODEL,
         from_state=BreakerState.CLOSED,
@@ -46,17 +50,19 @@ def _full_event() -> HarnessBreakerEvent:
         permanent_fail_repeats=3,
         tool_id="tool::search",
         model_version="claude-opus-4-7",
+        cause=BreakerCause.RATE_LIMIT,
+        cooldown_ms=30000,
     )
 
 
 # --- acc #1 ----------------------------------------------------------------
-def test_harness_breaker_attributes_cardinality_seven() -> None:
-    """`HARNESS_BREAKER_ATTRIBUTES` declares exactly 7 attribute names per §7.1."""
-    assert len(HARNESS_BREAKER_ATTRIBUTES) == 7
+def test_harness_breaker_attributes_cardinality_nine() -> None:
+    """`HARNESS_BREAKER_ATTRIBUTES` declares exactly 9 attribute names per §7.1."""
+    assert len(HARNESS_BREAKER_ATTRIBUTES) == 9
 
 
 def test_harness_breaker_attribute_names_byte_exact() -> None:
-    """Attribute names are byte-exact against the §7.1 table (7 rows)."""
+    """Attribute names are byte-exact against the §7.1 table (9 rows)."""
     assert HARNESS_BREAKER_ATTRIBUTES == _EXPECTED_ATTRIBUTES
 
 
@@ -76,6 +82,53 @@ def test_breaker_scope_names_per_model_per_provider() -> None:
     assert {s.value for s in BreakerScope} == {"per_model", "per_provider"}
 
 
+# --- v1.32 NEW: cause + cooldown_ms ------------------------------------------
+def test_breaker_cause_cardinality_four() -> None:
+    """`BreakerCause` enumerates exactly 4 values per §7.1 (v1.32 NEW)."""
+    assert len(BreakerCause) == 4
+    assert {c.value for c in BreakerCause} == {
+        "rate_limit",
+        "auth_failure",
+        "5xx_streak",
+        "capability_shortfall",
+    }
+
+
+def test_harness_breaker_event_cause_and_cooldown_ms_default_none() -> None:
+    """`cause` / `cooldown_ms` default `None` — both optional (v1.32 NEW)."""
+    event = HarnessBreakerEvent(
+        scope=BreakerScope.PER_MODEL,
+        from_state=BreakerState.CLOSED,
+        to_state=BreakerState.OPEN,
+        trigger_count=1,
+    )
+    assert event.cause is None
+    assert event.cooldown_ms is None
+
+
+def test_emit_breaker_trip_cause_and_cooldown_ms_populate_attribute_count() -> None:
+    """Populated `cause` + `cooldown_ms` each count toward `attribute_count`."""
+    cause_only = HarnessBreakerEvent(
+        scope=BreakerScope.PER_MODEL,
+        from_state=BreakerState.CLOSED,
+        to_state=BreakerState.OPEN,
+        trigger_count=1,
+        cause=BreakerCause.AUTH_FAILURE,
+    )
+    emission = emit_breaker_trip_span_event(_span(), cause_only)
+    assert emission.attribute_count == 5  # 4 non-optional + cause
+
+    cooldown_only = HarnessBreakerEvent(
+        scope=BreakerScope.PER_MODEL,
+        from_state=BreakerState.CLOSED,
+        to_state=BreakerState.OPEN,
+        trigger_count=1,
+        cooldown_ms=15000,
+    )
+    emission = emit_breaker_trip_span_event(_span(), cooldown_only)
+    assert emission.attribute_count == 5  # 4 non-optional + cooldown_ms
+
+
 # --- acc #4 ----------------------------------------------------------------
 def test_breaker_state_cardinality_three() -> None:
     """`BreakerState` enumerates exactly 3 values per §7.1."""
@@ -83,13 +136,13 @@ def test_breaker_state_cardinality_three() -> None:
     assert {s.value for s in BreakerState} == {"closed", "open", "half_open"}
 
 
-# --- acc #9 — emission accepts all-seven; rejects missing required ---------
-def test_emit_breaker_trip_with_all_seven_attrs_accept() -> None:
+# --- acc #9 — emission accepts all-nine; rejects missing required ----------
+def test_emit_breaker_trip_with_all_nine_attrs_accept() -> None:
     """`emit_breaker_trip_span_event` emits when all attributes populate."""
     emission = emit_breaker_trip_span_event(_span(), _full_event())
     assert isinstance(emission, EventEmission)
     assert emission.event_name == "breaker.tripped"
-    assert emission.attribute_count == 7
+    assert emission.attribute_count == 9
 
 
 def test_emit_breaker_trip_missing_required_attr_reject() -> None:

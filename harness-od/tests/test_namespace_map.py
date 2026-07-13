@@ -105,11 +105,14 @@ def test_hitl_namespace_cp_source() -> None:
 
 def test_harness_breaker_substrate_anchored_outside_cp() -> None:
     """Acceptance #3 — harness.breaker.* is the sole SUBSTRATE_ANCHORED_OUTSIDE_CP
-    row per F-CP-01 Stage 3b alignment."""
+    row per F-CP-01 Stage 3b alignment.
+
+    v1.32 (B-19-BREAKER-AMBIENT-ATTRS): 7 -> 9 (+cause +cooldown_ms).
+    """
     row = lookup_namespace("harness.breaker.")
     assert row is not None
     assert row.source_axis is NamespaceSourceAxis.SUBSTRATE_ANCHORED_OUTSIDE_CP
-    assert row.attribute_count == 7
+    assert row.attribute_count == 9
 
 
 def test_source_contract_ref_present_per_row() -> None:

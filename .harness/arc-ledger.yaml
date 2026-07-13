@@ -46,12 +46,27 @@
 snapshot:
   frozen_total: 11
   frozen_done: 11
-  standalone_closed: 93
+  standalone_closed: 94
   standalone_gated: 0
   standalone_resolved: 4
-  standalone_registered: 1
+  standalone_registered: 0
   rfs1_status: active
   source: ".harness/beyond-mvp-capability-boundary-ledger.md"
+  # FRONTIER NOTE (2026-07-13, B-19-BREAKER-AMBIENT-ATTRS closed — BUILT,
+  # operator-ratified against the grounded skip-and-close recommendation).
+  # standalone_closed 93->94, standalone_registered 1->0 — Wave 4 register
+  # now EMPTY. OD spec v1.31->v1.32 (C-OD-07 §7.1, 7->9 attrs: +cause
+  # +cooldown_ms), bundled-absorption with harness-od/harness-cp/harness-
+  # runtime code + tests. Build-time grounding found cooldown_ms real
+  # (cooldown_seconds*1000, no clock needed) but cause structurally vacuous
+  # today (traced all 3 reachable failure-classification layers at a real
+  # trip site — capability-shortfall pre-empts before the breaker, fail-fast
+  # exceptions don't map to auth_failure, the transient bucket is
+  # undifferentiated, the only real auth-vs-transient discriminator is
+  # bootstrap-ping-only) — surfaced as a second narrow operator AUQ, ratified
+  # amend-once-both-attrs (cause always None today, typed slot for a
+  # follow-on classifier arc). Clearance marker filed. Full record at
+  # .harness/b19-breaker-ambient-attrs-redundancy-analysis.md.
   # FRONTIER NOTE (2026-07-12, B-GAPD-TOOLONLY-BOOTSTRAP closed — stale-carry-
   # text disposition, no code change). standalone_closed 92->93, standalone_
   # registered 2->1. Grounding this Wave-4 arc's probe (was a fork-prescribed
@@ -2246,11 +2261,12 @@ arcs:
   - id: B-19-BREAKER-AMBIENT-ATTRS
     title: "breaker.cause + breaker.cooldown_ms ambient attrs — redundancy analysis + operator build/skip AUQ"
     kind: standalone
-    status: registered
-    decompose_at_open: true
+    status: closed
+    pr: "#956"
     owner_axis: "CP + OD"
     parent_arc: R-FS-2
     anticipated_scope: "The CP spec v1 4-attribute ambient breaker set was consciously dropped at the v1-to-v1.1 revision (Semantic-loss note at Spec_Control_Plane_v1_2.md:72: breaker.cause trip-cause enum + breaker.cooldown_ms have no direct OD event-schema equivalent); re-introduction is OPERATOR-DISCRETIONARY (line 47; adjudicated NOT-FINDING at iter-2). Drive-to-gate per the no-parking directive: author the redundancy analysis (what the 7-attribute event schema already answers vs what ambient state adds — current-cause-while-open, remaining-cooldown for schedulers/dashboards; cite harness_breaker_schema.py + consumers), then ONE batched AUQ (shared with the Gap-D arc): build or skip-and-close. If build: attrs at the breaker registry + an OD ingestion row — the namespace map is a CLOSED schema, so the addition is itself a spec-delta leg + clearance marker."
+    close_note: "BUILT (operator-ratified against the grounded skip-and-close recommendation — a deliberate FULL-SPEC-completeness choice, `[[feedback-full-spec-beyond-mvp-nothing-deferred]]`). Redundancy analysis found zero real consumers of ambient breaker state (searched CP/OD/runtime/AS/IS/CXA, CLI, dashboard); neither attribute exists as tracked internal state. Build-time grounding surfaced a second, narrower fact the first AUQ couldn't have known: `cooldown_ms` is real (`cooldown_seconds * 1000`, a static duration, no clock needed) but `cause` is structurally vacuous today — traced all three reachable failure-classification layers at a real breaker-trip call site (capability-shortfall pre-empts before the breaker is consulted; the two fail-fast exception types don't map to auth_failure; the transient bucket is undifferentiated; the runtime's only real auth-vs-transient discriminator is a bootstrap-only provider-ping classifier that never reaches per-step dispatch). Surfaced as a second, narrowly-scoped operator AUQ (not a relitigation) — ratified 'amend once, both attrs now': `cooldown_ms` populated, `cause` present as a typed 4-value enum slot, always `None` today. OD spec v1.31->v1.32 (C-OD-07 §7.1, 7->9 attrs, clearance marker filed); CP-side composition mirror + cardinality checks updated in the same PR (bundled-absorption arc, CLAUDE.md §11.4) — no CP spec file edit owed (current CP spec head doesn't re-table this namespace in prose). A pre-existing, unrelated 7-name mismatch between CP's composition-mirror attribute names and OD's canonical emission names was found and flagged (Class-3, not fixed — out of this arc's scope). Follow-on fine-grained provider-exception classifier arc registered (not built) if `cause` is ever needed non-vacuously. workspace-wide 5661 passed/41 skip/1 xfail; pyright 0/0/0; ruff clean; overlay-check 31/31. Full record at `.harness/b19-breaker-ambient-attrs-redundancy-analysis.md`."
     units: []
     ledger_ref: ".harness/r-fs-2-final-closure-implementation-plan-v1.md"
 

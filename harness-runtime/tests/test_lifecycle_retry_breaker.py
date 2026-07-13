@@ -438,8 +438,12 @@ def test_breaker_emit_threads_optional_per_model_correlation(tmp_path: Path) -> 
         permanent_fail_repeats=2,
         model_version="claude-opus-4-7",
     )
-    # All seven §7.1 attributes are populated → attribute_count == 7.
-    assert emission.attribute_count == 7
+    # 8 of 9 §7.1 attributes populated: the 7 v1-canonical + `cooldown_ms`
+    # (this is a real trip, `to_state = open`, so cooldown_ms auto-populates
+    # from `cooldown_seconds * 1000`); `cause` stays None (not supplied —
+    # vacuous-today per `.harness/b19-breaker-ambient-attrs-redundancy-
+    # analysis.md` §3).
+    assert emission.attribute_count == 8
 
 
 # ---------------------------------------------------------------------------
