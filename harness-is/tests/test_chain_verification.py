@@ -24,14 +24,21 @@ from harness_is.state_ledger_entry_schema import (
 
 
 def _entry(action_id: str, prior_event_hash: bytes) -> StateLedgerEntry:
-    return StateLedgerEntry(
+    """Build an entry with a genuinely self-consistent `response_hash`.
+
+    A hand-picked stand-in value would make every content-integrity check
+    fail regardless of the linkage scenario under test — mirrors the
+    placeholder-then-recompute pattern at `state_ledger_write.py`.
+    """
+    draft = StateLedgerEntry(
         action_id=Identifier(action_id),
         idempotency_key=Identifier(f"idem-{action_id}"),
         actor=Actor(actor_class=ActorClass.AGENT, actor_id="agent-1"),
-        response_hash=b"\x00" * 32,
+        response_hash=ALL_ZEROS_SENTINEL,
         timestamp=datetime(2026, 5, 16, tzinfo=UTC),
         prior_event_hash=prior_event_hash,
     )
+    return draft.model_copy(update={"response_hash": compute_response_hash(draft)})
 
 
 def _valid_chain(n: int) -> list[StateLedgerEntry]:
@@ -147,3 +154,17 @@ def test_tamper_inception_modification() -> None:
     assert result.status is VerificationStatus.INVALID
     assert result.failure_position == 1
     assert result.failure_type is FailureType.INCEPTION_SENTINEL_MISMATCH
+
+
+def test_tamper_response_hash_only_modification() -> None:
+    """Regression guard — tampering ONLY a non-terminal entry's own
+    `response_hash` must be caught even though it perturbs no neighbor's
+    link check (`canonicalize` excludes `response_hash` from its own input,
+    so the chain-link walk alone is blind to this tamper; only the direct
+    per-entry recompute-and-compare catches it)."""
+    chain = _valid_chain(5)
+    chain[2] = chain[2].model_copy(update={"response_hash": b"\xaa" * 32})
+    result = verify_chain(chain)
+    assert result.status is VerificationStatus.INVALID
+    assert result.failure_position == 3  # 1-indexed K for 0-indexed K=2
+    assert result.failure_type is FailureType.RESPONSE_HASH_MISMATCH

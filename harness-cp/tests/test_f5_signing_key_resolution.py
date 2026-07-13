@@ -4,9 +4,13 @@ Acceptance-criterion coverage:
   #1 SCOPE_UNAUTHORIZED below MTC -> test_resolve_signing_key_scope_unauthorized_below_multi_tenant
   #2 delegates to U-AS-20         -> test_resolve_delegates_to_u_as_20
   #3 rotation_state 3 values      -> test_signing_key_rotation_state_three_values
-  #4 sign produces signed entry   -> test_sign_produces_signed_entry
-  #5 verify at read               -> test_verify_at_read
-  #6 signature algorithm deferred -> test_signature_algorithm_recorded
+
+`sign_audit_entry` / `verify_audit_entry_signature` raise
+`AuditSigningBackendUnavailableError` — real cryptographic signing/verification
+against actual key material is not reachable from the CP axis today (opaque
+`SecretRef`, no value-accessor API per AS spec C-AS-05 §5.4). Operator-ratified
+2026-07-13 (fail loud rather than return a false `VERIFIED` for an unkeyed
+hash match — see module docstring); zero production callers exist.
 """
 
 from __future__ import annotations
@@ -15,17 +19,20 @@ import pytest
 from harness_as import GateLevel, SecretRef
 from harness_core import PersonaTier
 from harness_cp.f5_signing_key_resolution import (
+    AuditSigningBackendUnavailableError,
     KeyRotationState,
     SecretScopeKind,
     SigningKeyHandle,
     SigningKeyResolutionError,
     SigningKeyScope,
-    VerificationResult,
     resolve_signing_key,
     sign_audit_entry,
     verify_audit_entry_signature,
 )
-from harness_cp.per_step_override_evaluator import CPAuditLedgerEntry
+from harness_cp.per_step_override_evaluator import (
+    CPAuditLedgerEntry,
+    CPSignedAuditLedgerEntry,
+)
 
 _SCOPE = SigningKeyScope(scope_kind=SecretScopeKind.TENANT_BOUND, scope_identifier="tenant-7")
 _ENTRY = CPAuditLedgerEntry(
@@ -58,16 +65,10 @@ def test_signing_key_rotation_state_three_values() -> None:
     assert {s.value for s in KeyRotationState} == {"active", "rotating", "retired"}
 
 
-def test_sign_produces_signed_entry() -> None:
-    result = resolve_signing_key(_SCOPE, PersonaTier.MULTI_TENANT_COMPLIANCE)
-    assert result.handle is not None
-    signed = sign_audit_entry(_ENTRY, result.handle, key_period=3)
-    assert signed.entry == _ENTRY
-    assert signed.audit_signature_key_period == 3
-    assert signed.audit_signature_key_id == result.handle.key_id
-
-
 def test_sign_rejects_retired_key() -> None:
+    """The RETIRED-key precondition is validated before the backend-unavailable
+    raise — it's a real, independent C-CP-20 §20.3 requirement a future
+    signing-backend seam would still need to honor."""
     retired = SigningKeyHandle(
         key_id="k0",
         key_secret_ref=SecretRef.model_construct(),
@@ -78,21 +79,32 @@ def test_sign_rejects_retired_key() -> None:
         sign_audit_entry(_ENTRY, retired, key_period=1)
 
 
-def test_verify_at_read() -> None:
+def test_sign_raises_backend_unavailable_for_active_key() -> None:
+    """Regression — `sign_audit_entry` must not fabricate a signed entry.
+
+    Previously it returned `audit_signature_value=b""` with
+    `audit_signature_sha256` copied from the unrelated `prior_event_hash`
+    field — a silent no-op indistinguishable from a real signature.
+    """
     result = resolve_signing_key(_SCOPE, PersonaTier.MULTI_TENANT_COMPLIANCE)
     assert result.handle is not None
-    signed = sign_audit_entry(_ENTRY, result.handle, key_period=1)
-    assert verify_audit_entry_signature(signed, result.handle) is VerificationResult.VERIFIED
+    with pytest.raises(AuditSigningBackendUnavailableError):
+        sign_audit_entry(_ENTRY, result.handle, key_period=1)
 
 
-def test_signature_algorithm_recorded() -> None:
+def test_verify_raises_backend_unavailable() -> None:
+    """Regression — `verify_audit_entry_signature` must not return a fake
+    `VERIFIED`. Previously it only compared `audit_signature_key_id`, so any
+    tampered entry with a matching key_id verified successfully."""
     result = resolve_signing_key(_SCOPE, PersonaTier.MULTI_TENANT_COMPLIANCE)
     assert result.handle is not None
-    signed = sign_audit_entry(_ENTRY, result.handle, key_period=1)
-    # The concrete algorithm is deferred to implementation discretion per
-    # §20.3.1; the algorithm token is recorded on the signed entry.
-    assert signed.audit_signature_algorithm in {
-        "ed25519",
-        "ecdsa-p256",
-        "rsa-pss-2048",
-    }
+    forged = CPSignedAuditLedgerEntry(
+        entry=_ENTRY,
+        audit_signature_sha256="0" * 64,
+        audit_signature_value=b"",
+        audit_signature_algorithm="ed25519",
+        audit_signature_key_id=result.handle.key_id,
+        audit_signature_key_period=1,
+    )
+    with pytest.raises(AuditSigningBackendUnavailableError):
+        verify_audit_entry_signature(forged, result.handle)

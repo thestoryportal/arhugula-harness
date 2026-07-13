@@ -4,10 +4,16 @@ Implements C-IS-06 §6.4 (chain verification on demand) + §6.5 (tamper-evidence
 contract). Declares `verify_chain` — the read-only procedure that re-derives
 each entry's hash and checks the `prior_event_hash` links end-to-end.
 
-Per §6.4 the verification checks only the chain links: entry N+1's
+Per §6.4 the verification checks the chain links (entry N+1's
 `prior_event_hash` must equal `compute_response_hash(entry N)`, and entry 1's
-`prior_event_hash` must be `ALL_ZEROS_SENTINEL`. Any tamper (§6.5) surfaces as
-a verification failure at the affected 1-indexed position.
+`prior_event_hash` must be `ALL_ZEROS_SENTINEL`) and, per §6.5, each entry's
+own content integrity — `entry.response_hash` must equal a fresh
+`compute_response_hash(entry)` recompute. `canonicalize` excludes
+`response_hash` from its own input, so a tampered `response_hash` never
+perturbs a neighbor's link check; only the direct per-entry recompute-and-
+compare catches it. Any tamper surfaces as a verification failure at the
+affected 1-indexed position. Mirrors the sibling
+`harness_is.memory_operation_ledger.verify_memory_operation_entries` shape.
 
 Authority: Implementation_Plan_Information_Substrate_v2_3.md §2.1 U-IS-10
 (preserved verbatim from v2.1 §2); Spec_Information_Substrate_v1.md C-IS-06
@@ -36,6 +42,7 @@ class FailureType(StrEnum):
 
     INCEPTION_SENTINEL_MISMATCH = "inception_sentinel_mismatch"
     CHAIN_LINK_MISMATCH = "chain_link_mismatch"
+    RESPONSE_HASH_MISMATCH = "response_hash_mismatch"
 
 
 class ChainVerificationResult(BaseModel):
@@ -80,6 +87,14 @@ def verify_chain(ledger: list[StateLedgerEntry]) -> ChainVerificationResult:
                 status=VerificationStatus.INVALID,
                 failure_position=i + 1,
                 failure_type=FailureType.CHAIN_LINK_MISMATCH,
+                entries_verified=i,
+            )
+    for i, entry in enumerate(ledger):
+        if entry.response_hash != compute_response_hash(entry):
+            return ChainVerificationResult(
+                status=VerificationStatus.INVALID,
+                failure_position=i + 1,
+                failure_type=FailureType.RESPONSE_HASH_MISMATCH,
                 entries_verified=i,
             )
     return ChainVerificationResult(

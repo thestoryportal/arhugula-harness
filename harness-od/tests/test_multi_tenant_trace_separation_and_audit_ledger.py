@@ -70,16 +70,23 @@ def _payload(prior_hash: str) -> AuditPayload:
     )
 
 
-def _entry(prior_hash: str, entry_hash: str) -> AuditLedgerEntry:
+def _entry(prior_hash: str) -> AuditLedgerEntry:
+    """Build an entry with a genuinely self-consistent `entry_hash`.
+
+    `entry_hash` is always `compute_entry_hash(payload)` — a hand-picked
+    stand-in value would make every `verify_hash_chain_integrity` content
+    check fail regardless of the linkage scenario under test.
+    """
+    payload = _payload(prior_hash)
     return AuditLedgerEntry(
-        payload=_payload(prior_hash),
+        payload=payload,
         signature_attrs=AuditSignatureAttributes(
             audit_signature_value="sig",
             audit_signature_algorithm=SignatureAlgorithm.ED25519,
             audit_signature_key_id="key-1",
             audit_signature_key_period="2026-Q2",
         ),
-        entry_hash=entry_hash,
+        entry_hash=compute_entry_hash(payload),
     )
 
 
@@ -191,33 +198,40 @@ def test_sign_audit_entry_missing_key_id_reject() -> None:
 
 def test_verify_hash_chain_intact_accept() -> None:
     """acc #9 — verify_hash_chain_integrity returns None for an intact chain."""
-    ledger = AuditLedger(
-        entries=(
-            _entry("genesis", "h1"),
-            _entry("h1", "h2"),
-            _entry("h2", "h3"),
-        ),
-        cell_id=_CELL_7,
-    )
+    entry_1 = _entry("genesis")
+    entry_2 = _entry(entry_1.entry_hash)
+    entry_3 = _entry(entry_2.entry_hash)
+    ledger = AuditLedger(entries=(entry_1, entry_2, entry_3), cell_id=_CELL_7)
     assert verify_hash_chain_integrity(ledger) is None
 
 
 def test_verify_hash_chain_broken_reject() -> None:
     """acc #9 — Err(HashChainBreach) when a hash-chain link is broken."""
-    ledger = AuditLedger(
-        entries=(
-            _entry("genesis", "h1"),
-            _entry("WRONG", "h2"),
-        ),
-        cell_id=_CELL_7,
+    entry_1 = _entry("genesis")
+    entry_2 = _entry("WRONG")  # does not chain onto entry_1.entry_hash
+    ledger = AuditLedger(entries=(entry_1, entry_2), cell_id=_CELL_7)
+    with pytest.raises(HashChainBreach, match="hash chain broken"):
+        verify_hash_chain_integrity(ledger)
+
+
+def test_verify_hash_chain_content_tamper_reject() -> None:
+    """acc #9 — Err(HashChainBreach) when an entry's payload is mutated in
+    place without recomputing its stored `entry_hash` — content-integrity
+    check must fire even when every `prior_entry_hash` link still lines up."""
+    entry_1 = _entry("genesis")
+    entry_2 = _entry(entry_1.entry_hash)
+    tampered_payload = entry_2.payload.model_copy(
+        update={"audit_namespace_attrs": {"audit.actor": "attacker"}}
     )
-    with pytest.raises(HashChainBreach):
+    tampered_entry_2 = entry_2.model_copy(update={"payload": tampered_payload})
+    ledger = AuditLedger(entries=(entry_1, tampered_entry_2), cell_id=_CELL_7)
+    with pytest.raises(HashChainBreach, match="content integrity violated"):
         verify_hash_chain_integrity(ledger)
 
 
 def test_verify_hash_chain_single_entry_accept() -> None:
     """acc #9 — a single-entry ledger is trivially well-formed."""
-    ledger = AuditLedger(entries=(_entry("genesis", "h1"),), cell_id=_CELL_8)
+    ledger = AuditLedger(entries=(_entry("genesis"),), cell_id=_CELL_8)
     assert verify_hash_chain_integrity(ledger) is None
 
 
@@ -373,10 +387,9 @@ def test_verify_rotation_pairs_round_trip_accept() -> None:
 def test_verify_rotation_pairs_non_rotation_entries_unaffected() -> None:
     """§24.7 acceptance — a ledger with no rotation-tagged entries is a no-op
     control (untagged entries carry no `audit.rotation_correlation_id`)."""
-    ledger = AuditLedger(
-        entries=(_entry("genesis", "h1"), _entry("h1", "h2")),
-        cell_id=_CELL_7,
-    )
+    entry_1 = _entry("genesis")
+    entry_2 = _entry(entry_1.entry_hash)
+    ledger = AuditLedger(entries=(entry_1, entry_2), cell_id=_CELL_7)
     assert ROTATION_CORRELATION_ID_ATTR not in ledger.entries[0].payload.audit_namespace_attrs
     assert verify_rotation_pairs(ledger) is None
 
