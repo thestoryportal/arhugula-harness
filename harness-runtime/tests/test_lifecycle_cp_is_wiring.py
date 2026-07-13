@@ -217,7 +217,8 @@ def test_emit_sibling_populates_procedural_tier_snapshot_ref(tmp_path: Path) -> 
 
 
 def test_action_id_is_structural_concat(tmp_path: Path) -> None:
-    """`action_id = ParentActionID || sibling_thread_id || step_index` (§15.1)."""
+    """`action_id = ParentActionID || sibling_thread_id || step_index` (§15.1),
+    `||`-delimited to avoid cross-triple collisions."""
     wiring = _wiring(tmp_path)
     wiring.emit_sibling_ledger_entry(
         **_sibling_kwargs(
@@ -227,7 +228,7 @@ def test_action_id_is_structural_concat(tmp_path: Path) -> None:
         )
     )
     [persisted] = read_ledger(wiring.ledger_writer.handle)
-    assert persisted.action_id == "parent-Xthread-Y42"
+    assert persisted.action_id == "parent-X||thread-Y||42"
 
 
 # ---------------------------------------------------------------------------

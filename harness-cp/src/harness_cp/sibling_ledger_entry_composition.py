@@ -131,7 +131,13 @@ def construct_sibling_ledger_entry(
     """Compose the §15.1 per-sibling ledger entry caller-content.
 
     `action_id` is the structural concatenation
-    `ParentActionID || sibling_thread_id || step_index` (§15.1).
+    `ParentActionID || sibling_thread_id || step_index` (§15.1) — `||` is a
+    literal delimiter (the codebase-wide action_id composition convention;
+    see `per_step_override_evaluator.py` / `sub_agent_gate_level_descent.py`),
+    not §15.1's pseudocode-only concatenation notation: an unseparated join
+    lets distinct `(parent_action_id, sibling_thread_id, step_index)` triples
+    collide (e.g. `("run1", "0", 23)` and `("run10", "2", 3)` both joined to
+    `"run1023"`), violating the ledger's `action_id` uniqueness invariant.
     `idempotency_key` is the Stripe-style sha256 over the 5-tuple (§15.1).
     `actor` is the F2 `Actor` shape — `actor_class = SUB_AGENT`, `actor_id`
     carries the sibling agent identity.
@@ -146,7 +152,7 @@ def construct_sibling_ledger_entry(
     helper takes it as a param (default `None` for the outside-workflow /
     test paths) — the sidecar is producer-supplied, not IS-computed (only
     `response_hash` / `prior_event_hash` are IS-computed)."""
-    action_id = f"{parent_action_id}{sibling_thread_id}{step_index}"
+    action_id = f"{parent_action_id}||{sibling_thread_id}||{step_index}"
     idempotency_key = _sibling_idempotency_key(
         parent_action_id, sibling_thread_id, step_index, tool, canonical_args
     )

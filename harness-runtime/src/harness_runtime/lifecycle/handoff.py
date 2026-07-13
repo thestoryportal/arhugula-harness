@@ -210,15 +210,22 @@ class RuntimeHandoffRegistry:
         parent_action_id: ActionID,
         descent: SubAgentGateLevelDescent,
         brief_hash: str,
+        *,
+        sub_agent_idx: int = 0,
     ) -> CPAuditLedgerEntry:
         """Compose the §12.5 sub-agent-dispatch audit-ledger entry (CP-distinct).
 
         The returned `CPAuditLedgerEntry` carries placeholder `timestamp` and
         `prior_event_hash` fields; the U-RT-32 audit writer fills them from
         the live clock and the prior-entry hash chain (U-IS-09 / U-IS-11) at
-        write-time. Pure composition of
+        write-time. `sub_agent_idx` threads through to the entry's `action_id`
+        discriminator — callers should pass the same ordinal used for the
+        sibling F2 `dispatch:<parent_action_id>:<child_index>` action_id at
+        step 8b so the two stay consistent. Pure composition of
         `harness_cp.sub_agent_gate_level_descent.emit_sub_agent_dispatch_audit`."""
-        return emit_sub_agent_dispatch_audit(parent_action_id, descent, brief_hash)
+        return emit_sub_agent_dispatch_audit(
+            parent_action_id, descent, brief_hash, sub_agent_idx=sub_agent_idx
+        )
 
 
 @dataclass(frozen=True, slots=True)

@@ -181,10 +181,21 @@ def emit_sub_agent_dispatch_audit(
     parent_action_id: ActionID,
     descent: SubAgentGateLevelDescent,
     brief_hash: str,
+    *,
+    sub_agent_idx: int = 0,
 ) -> CPAuditLedgerEntry:
     """Compose the §12.5 sub-agent-dispatch audit-ledger entry.
 
-    The entry's `action_id` is `parent_action_id || sub_agent_idx`; F2
+    The entry's `action_id` is `parent_action_id || sub_agent_idx` — a real
+    per-dispatch discriminator, not the literal string `"sub-agent"` (a prior
+    defect: every sub-agent dispatched under the same `parent_action_id`
+    produced an identical, colliding `action_id`). `sub_agent_idx` defaults to
+    `0` for the current v1.6 MVP single-sub-agent-per-`SUB_AGENT_DISPATCH`-step
+    scope (each such step has a unique `parent_action_id`, so `0` never
+    collides today); callers with a genuine per-dispatch ordinal (e.g. the
+    runtime composer's existing `child_index`, already used for the sibling
+    F2 `dispatch:<parent_action_id>:<child_index>` action_id at step 8b)
+    should pass it through so 8a and 8b share one discriminator. F2
     canonicalize+hash delegates to U-IS-08, chain construction to U-IS-09, and
     append to U-IS-11 (C-IS-10 §10.1/§10.3/§10.5). A sub-agent dispatch is
     recorded as an `approve` response (no operator edit/reject/respond), so the
@@ -194,7 +205,7 @@ def emit_sub_agent_dispatch_audit(
     """
     _ = brief_hash
     return CPAuditLedgerEntry(
-        action_id=ActionID(f"{parent_action_id}||sub-agent"),
+        action_id=ActionID(f"{parent_action_id}||{sub_agent_idx}"),
         gate_level=ASGateLevel(descent.child_gate_level.value),
         response="approve",
         timestamp=datetime.now(UTC).isoformat(),
