@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `d2ee988b1320` |
-| `last_refreshed` | 2026-07-13T20:20:00-06:00 |
-| `git_head` | `dfe82ab6` — `ops: roadmap status refresh post-#960 (#961)` (terminating refresh; state at merge_commit~1 = `23cb81e8` R-FS-2 G2 closure). This refresh: **`R-600-pattern-bake-in-sweep` cadence-6 CLOSED (PR #962, ACTIVE-SURVEYED).** File-delta audit against the cadence-5 baseline (3 memory files touched since #941, all Class A dashboard/git recipes already indexed) found ZERO new §7.4.7 stale-carry species (6th surfacing) and ZERO new §7.5 process-discipline promotions — a legitimate zero-promotion cadence, verified via file-delta rather than the frozen card>=2 citation count alone. Survey at `.harness/R-600-pattern-bake-in-sweep.md` cadence-6 section. With R-FS-1/R-FS-2 both closed and R-600 cadence-6 discharging with nothing to promote, **no auto-`ACTIVE` candidate remains** — next selector reverts to the recurring `R-600`/`R-IF-roadmap-refresh` lanes (next R-600 run due at ~10 more PRs, ~#972, or on a concrete new candidate reaching independent cardinality ≥2) **unless the operator selects a new non-recurring frontier.** Prior HEAD `23cb81e8` = R-FS-2 G2 closure (PR #960).
+| `workspace_state_hash` | `ceaf638ef80c` |
+| `last_refreshed` | 2026-07-12T21:10:00-06:00 |
+| `git_head` | `5aa138aa` — `ops(R-600): cadence-6 pattern bake-in sweep — zero-promotion cadence (#962)` (substantive merge; terminating refresh follows as this commit). **`R-600-pattern-bake-in-sweep` cadence-6 CLOSED, ACTIVE-SURVEYED.** File-delta audit against the cadence-5 baseline (3 memory files touched since #941, all Class A dashboard/git recipes already indexed) found ZERO new §7.4.7 stale-carry species (6th surfacing) and ZERO new §7.5 process-discipline promotions — a legitimate zero-promotion cadence, verified via file-delta rather than the frozen card>=2 citation count alone. Survey at `.harness/R-600-pattern-bake-in-sweep.md` cadence-6 section. With R-FS-1/R-FS-2 both closed and R-600 cadence-6 discharging with nothing to promote, **no auto-`ACTIVE` candidate remains** — next selector reverts to the recurring `R-600`/`R-IF-roadmap-refresh` lanes (next R-600 run due at ~10 more PRs, ~#972, or on a concrete new candidate reaching independent cardinality ≥2) **unless the operator selects a new non-recurring frontier.** Prior HEAD `dfe82ab6` = post-#960 terminating refresh (#961).
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 88 |
 
