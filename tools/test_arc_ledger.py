@@ -29,7 +29,9 @@ def test_derived_counts_match_snapshot_pin() -> None:
     for key in (
         "frozen_total",
         "frozen_done",
+        "standalone_total",
         "standalone_closed",
+        "standalone_remaining",
         "standalone_gated",
         "standalone_resolved",
         "standalone_registered",
@@ -153,6 +155,34 @@ def test_negative_status_flip_without_snapshot_bump_fails() -> None:
         a["status"] = "closed"
         a["pr"] = "#999"
         # snapshot NOT bumped → counts drift → caught
+
+    assert _violates(m)
+
+
+def test_negative_new_remaining_row_without_snapshot_bump_fails() -> None:
+    """Regression guard — inserting a new standalone arc (status: remaining)
+    without bumping any snapshot count must be caught. Previously the
+    `--check` pin omitted `standalone_total`/`standalone_remaining`, so a row
+    insertion/deletion that only moves those two derived counts (while the
+    4 previously-pinned status counts stay put) silently passed.
+
+    `rfs1_status` is flipped to `active` in the same mutation so the
+    orthogonal zero-open-forward-register invariant (which would otherwise
+    independently catch *any* newly-open row against this ledger's live
+    `resolved` pin) doesn't mask the snapshot-pin gap under test — this
+    isolates the specific failure class."""
+
+    def m(data):
+        data["arcs"].append(
+            {
+                "id": "B-SYNTHETIC-UNPINNED-INSERT",
+                "kind": "standalone",
+                "status": "remaining",
+                "anticipated_scope": "synthetic row for the snapshot-pin regression test",
+            }
+        )
+        data["snapshot"]["rfs1_status"] = "active"
+        # deliberately do NOT bump standalone_total/standalone_remaining
 
     assert _violates(m)
 

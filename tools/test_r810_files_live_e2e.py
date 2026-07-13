@@ -19,6 +19,7 @@ from tools.r810_files_live_e2e import (
     R810LiveE2EError,
     _assert_managed_cloud_config,
     _response_text,
+    _run_files_round_trip,
     _span_has_files_attrs,
     _wait_for_files_trace,
 )
@@ -115,3 +116,52 @@ def test_wait_for_files_trace_requires_span_and_attrs(monkeypatch: pytest.Monkey
     assert result.observed is True
     assert result.files_attrs_observed is True
     assert "files.operation" in result.span_names
+
+
+class _FakeFile:
+    def __init__(self, file_id: str) -> None:
+        self.file_id = file_id
+
+
+class _FakeFilesNamespace:
+    def __init__(self, *, file_id: str, delete_exc: Exception) -> None:
+        self._file_id = file_id
+        self._delete_exc = delete_exc
+
+    def upload(self, *, file: object, betas: object) -> _FakeFile:
+        return _FakeFile(self._file_id)
+
+    def retrieve_metadata(self, file_id: str, *, betas: object) -> _FakeFile:
+        return _FakeFile(file_id)
+
+    def delete(self, file_id: str, *, betas: object) -> None:
+        raise self._delete_exc
+
+
+class _FakeMessagesNamespace:
+    def create(self, **_kwargs: object) -> None:
+        raise R810LiveE2EError("simulated upstream failure before sentinel check")
+
+
+class _FakeBeta:
+    def __init__(self, *, file_id: str, delete_exc: Exception) -> None:
+        self.files = _FakeFilesNamespace(file_id=file_id, delete_exc=delete_exc)
+        self.messages = _FakeMessagesNamespace()
+
+
+class _FakeAnthropicClient:
+    def __init__(self, *, file_id: str, delete_exc: Exception) -> None:
+        self.beta = _FakeBeta(file_id=file_id, delete_exc=delete_exc)
+
+
+async def test_cleanup_delete_failure_propagates_when_not_an_api_error() -> None:
+    """Regression guard — a genuine bug in the cleanup path (e.g. an adapter
+    signature mismatch) must propagate, not be silently absorbed by a bare
+    `except Exception`. Only Anthropic API/connection errors during
+    best-effort cleanup should be swallowed."""
+    client = _FakeAnthropicClient(
+        file_id="file-abc",
+        delete_exc=RuntimeError("delete boom — a real bug, not an API error"),
+    )
+    with pytest.raises(RuntimeError, match="delete boom"):
+        await _run_files_round_trip(client=client, model="fake-model")

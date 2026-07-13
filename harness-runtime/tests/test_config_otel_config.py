@@ -100,8 +100,23 @@ def test_resource_attrs_include_all_namespace_declarations() -> None:
     cfg = OTelConfig(otlp_endpoint="http://localhost:4318")
     attrs = build_resource_attributes(cfg, DeploymentSurface.LOCAL_DEVELOPMENT)
     for row in NAMESPACE_MAP:
-        key = f"namespace.{row.namespace_prefix}declared"
+        separator = "" if row.namespace_prefix.endswith(".") else "."
+        key = f"namespace.{row.namespace_prefix}{separator}declared"
         assert attrs[key] == "true", f"missing namespace attestation: {key}"
+
+
+def test_resource_attrs_namespace_key_well_formed_without_trailing_dot() -> None:
+    """Regression guard — a `namespace_prefix` row without a trailing `.`
+    (e.g. `provider_discriminator`, the sole flat single-attribute
+    OD_CANONICAL row) must not produce a malformed key like
+    `namespace.provider_discriminatordeclared`."""
+    cfg = OTelConfig(otlp_endpoint="http://localhost:4318")
+    attrs = build_resource_attributes(cfg, DeploymentSurface.LOCAL_DEVELOPMENT)
+    flat_rows = [row for row in NAMESPACE_MAP if not row.namespace_prefix.endswith(".")]
+    assert flat_rows, "expected at least one namespace_prefix row without a trailing dot"
+    for row in flat_rows:
+        assert f"namespace.{row.namespace_prefix}.declared" in attrs
+        assert f"namespace.{row.namespace_prefix}declared" not in attrs
 
 
 def test_resource_attrs_include_operator_additions() -> None:

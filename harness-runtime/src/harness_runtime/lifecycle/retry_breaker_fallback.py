@@ -937,8 +937,12 @@ class RetryBreakerFallbackDispatcher:
                         result=result, last_failure_class=None, last_failure_detail=None
                     )
 
-            # Sleep between retries (outside the inner span CM).
-            await self.sleep_fn(self.retry_breaker.compute_delay_seconds(attempt))
+            # Sleep between retries (outside the inner span CM). Reuse
+            # `backoff_seconds` computed above — this line is only reached via
+            # the STAGE_2_RETRY_WITH_BACKOFF branch that set it; recomputing
+            # would draw a second independent random jitter value, making the
+            # actual sleep duration diverge from the `retry.delay_ms` telemetry.
+            await self.sleep_fn(backoff_seconds)
 
         # Unreachable: the last attempt's `is_last_attempt` branch above
         # always returns. Kept as a defensive fallback if the iteration

@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import threading
 import uuid
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -93,6 +94,7 @@ class WorktreeIsolationManager:
         self._worktree_base = worktree_base
         self._opt_ins = opt_ins
         self._active: dict[Identifier, WorktreeHandle] = {}
+        self._lock = threading.Lock()
 
     def _git(self, *args: str) -> str:
         return subprocess.run(
@@ -118,23 +120,24 @@ class WorktreeIsolationManager:
             raise WorktreeIsolationDisabledError(
                 "worktree allocation rejected: worktree_isolation_enabled is false"
             )
-        cap = self._opt_ins.worktree_concurrency_cap
-        if cap is not None and len(self._active) >= cap:
-            raise WorktreeConcurrencyCapExceededError(
-                f"worktree allocation rejected: concurrency cap {cap} reached"
+        with self._lock:
+            cap = self._opt_ins.worktree_concurrency_cap
+            if cap is not None and len(self._active) >= cap:
+                raise WorktreeConcurrencyCapExceededError(
+                    f"worktree allocation rejected: concurrency cap {cap} reached"
+                )
+            worktree_id = Identifier(str(uuid.uuid4()))
+            worktree_path = self._worktree_base / worktree_id
+            self._git("worktree", "add", "--detach", str(worktree_path), "HEAD")
+            handle = WorktreeHandle(
+                worktree_id=worktree_id,
+                worktree_path=worktree_path,
+                parent_run_id=parent_workflow_run_id,
+                sub_agent_id=sub_agent_id,
+                allocated_at=datetime.now(UTC),
             )
-        worktree_id = Identifier(str(uuid.uuid4()))
-        worktree_path = self._worktree_base / worktree_id
-        self._git("worktree", "add", "--detach", str(worktree_path), "HEAD")
-        handle = WorktreeHandle(
-            worktree_id=worktree_id,
-            worktree_path=worktree_path,
-            parent_run_id=parent_workflow_run_id,
-            sub_agent_id=sub_agent_id,
-            allocated_at=datetime.now(UTC),
-        )
-        self._active[worktree_id] = handle
-        return handle
+            self._active[worktree_id] = handle
+            return handle
 
     def reclaim_worktree(
         self,
@@ -155,7 +158,8 @@ class WorktreeIsolationManager:
             return ReclamationResult.RECLAMATION_FAILED
         if worktree_handle.worktree_path.exists():
             shutil.rmtree(worktree_handle.worktree_path, ignore_errors=True)
-        self._active.pop(worktree_handle.worktree_id, None)
+        with self._lock:
+            self._active.pop(worktree_handle.worktree_id, None)
         return ReclamationResult.RECLAIMED
 
     @property

@@ -15,8 +15,11 @@ from harness_runtime.types import (
     RuntimeConfig,
 )
 
+import tools.r421_managed_cloud_live_e2e as r421_mod
 from tools.managed_cloud_readiness import e2b_secret_allowlist_entry
 from tools.r421_managed_cloud_live_e2e import (
+    ROOT_SPAN,
+    TRIGGER_SPAN,
     R421LiveE2EError,
     _assert_deterministic_managed_cell,
     _assert_runtime_bootstrap_can_reach_collector,
@@ -26,6 +29,7 @@ from tools.r421_managed_cloud_live_e2e import (
     _run_hosted_e2b_probe,
     _trace_id_hex,
     _trace_span_names,
+    _wait_for_cloud_trace,
 )
 
 
@@ -120,6 +124,65 @@ def test_trace_span_names_extracts_cloud_trace_v1_shape() -> None:
     }
 
     assert _trace_span_names(payload) == frozenset({"r421.managed_cloud.root", "sandbox.violation"})
+
+
+def test_wait_for_cloud_trace_does_not_treat_empty_span_set_as_observed(
+    monkeypatch,
+) -> None:
+    """Regression — an empty Cloud Trace span set must not be treated as
+    "observed". Previously `not names or {ROOT_SPAN, TRIGGER_SPAN} <= names`
+    short-circuited success on the FIRST empty poll — GCP Cloud Trace's
+    documented eventual-consistency behavior means the trace shell can
+    appear before span data lands, so the live e2e reported success without
+    ever actually verifying spans reached Cloud Trace.
+    """
+    calls = {"count": 0}
+
+    def _fake_payload(*, project_id: str, trace_id: str, timeout_seconds: float) -> dict:
+        del project_id, trace_id, timeout_seconds
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return {"spans": []}  # empty — must NOT be treated as observed
+        return {"spans": [{"name": ROOT_SPAN}, {"name": TRIGGER_SPAN}]}
+
+    monkeypatch.setattr(r421_mod, "_cloud_trace_payload", _fake_payload)
+    monkeypatch.setattr(r421_mod.time, "sleep", lambda _seconds: None)
+
+    result = _wait_for_cloud_trace(
+        project_id="p",
+        trace_id="t",
+        timeout_seconds=5.0,
+        query_interval_seconds=0.01,
+    )
+
+    assert result.observed is True
+    assert calls["count"] >= 2, "the empty first poll must not short-circuit success"
+
+
+def test_wait_for_cloud_trace_times_out_when_spans_never_arrive(monkeypatch) -> None:
+    """The empty-span-set fix must still raise on genuine timeout (not spin
+    forever) when Cloud Trace never exposes the expected spans."""
+
+    def _fake_payload(*, project_id: str, trace_id: str, timeout_seconds: float) -> dict:
+        del project_id, trace_id, timeout_seconds
+        return {"spans": []}
+
+    monkeypatch.setattr(r421_mod, "_cloud_trace_payload", _fake_payload)
+    monkeypatch.setattr(r421_mod.time, "sleep", lambda _seconds: None)
+
+    # timeout_seconds=0 with time.monotonic() unpatched means the while
+    # condition is false immediately — deterministic single-shot timeout.
+    try:
+        _wait_for_cloud_trace(
+            project_id="p",
+            trace_id="t",
+            timeout_seconds=0.0,
+            query_interval_seconds=0.01,
+        )
+    except R421LiveE2EError:
+        pass
+    else:
+        raise AssertionError("expected R421LiveE2EError on timeout")
 
 
 def test_run_hosted_e2b_probe_restores_environment(

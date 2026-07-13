@@ -12,6 +12,7 @@ from harness_runtime.lifecycle.managed_agents import (
     ManagedAgentsClientProtocol,
     ManagedAgentSession,
     ManagedAgentSessionStatus,
+    _status_from_anthropic,
     managed_agents_runtime_span,
 )
 from opentelemetry.sdk.trace import TracerProvider
@@ -258,6 +259,23 @@ async def test_anthropic_managed_agents_client_maps_sdk_session_and_beta_header(
         [ANTHROPIC_MANAGED_AGENTS_BETA],
     )
     assert sdk_client.beta.sessions.archived == [("session_live", [ANTHROPIC_MANAGED_AGENTS_BETA])]
+
+
+@pytest.mark.parametrize(
+    "raw_status",
+    [status.value for status in ManagedAgentSessionStatus],
+)
+def test_status_from_anthropic_covers_every_status_string(raw_status: str) -> None:
+    """Every `ManagedAgentSessionStatus` string round-trips through the SDK translator.
+
+    Regression guard: the table previously mapped only 4 of 9 statuses and
+    silently defaulted everything else (including "completed") to `FAILED`.
+    """
+    assert _status_from_anthropic(raw_status) is ManagedAgentSessionStatus(raw_status)
+
+
+def test_status_from_anthropic_defaults_unknown_string_to_failed() -> None:
+    assert _status_from_anthropic("some_future_status") is ManagedAgentSessionStatus.FAILED
 
 
 @pytest.mark.asyncio

@@ -12,6 +12,7 @@ retry wrapper.
 
 from __future__ import annotations
 
+import asyncio
 import importlib
 import json
 import shlex
@@ -113,13 +114,26 @@ class E2BManagedFullVMToolRunnerExecutionDriver:
             "sandbox_tier": self.required_tier.value,
             **dict(self.metadata),
         }
+        result = await asyncio.to_thread(self._run_in_sandbox, sandbox_cls, command, metadata)
+        return self._parse_result(result)
+
+    def _run_in_sandbox(self, sandbox_cls: Any, command: str, metadata: Mapping[str, str]) -> Any:
+        """Synchronous E2B sandbox creation + command run.
+
+        Both `sandbox_cls.create(...)` and `sandbox.commands.run(...)` are
+        synchronous, blocking network I/O in the E2B SDK — up to
+        `sandbox_timeout_seconds` + `timeout_seconds` combined. `call_tool`
+        dispatches this method via `asyncio.to_thread` so a TIER_4_FULL_VM
+        tool call doesn't stall the entire process event loop (starving every
+        other concurrent workflow, HITL retry, MCP health-check, and OTel
+        export for up to ~90s).
+        """
         with sandbox_cls.create(
             timeout=self.sandbox_timeout_seconds,
             allow_internet_access=self.allow_internet_access,
             metadata=metadata,
         ) as sandbox:
-            result = sandbox.commands.run(command, timeout=self.timeout_seconds)
-        return self._parse_result(result)
+            return sandbox.commands.run(command, timeout=self.timeout_seconds)
 
     def _command_with_stdin(self, payload_json: str) -> str:
         return f"printf %s {shlex.quote(payload_json)} | {shlex.join(tuple(self.command))}"

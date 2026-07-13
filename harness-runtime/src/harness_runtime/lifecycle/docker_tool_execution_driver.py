@@ -198,6 +198,15 @@ class DockerToolRunnerExecutionDriver:
             proc.kill()
             await proc.wait()
             raise ToolInvocationTimeoutError(timeout_message) from exc
+        except asyncio.CancelledError:
+            # Cancelling the awaiting coroutine does not kill the Docker
+            # subprocess — same reasoning as the TimeoutError branch above,
+            # which is precisely why that branch explicitly kills + reaps.
+            # Without this, an external cancellation (an outer step-level
+            # timeout, workflow shutdown) orphans the container.
+            proc.kill()
+            await proc.wait()
+            raise
         return stdout, stderr, proc.returncode or 0
 
     def _docker_command(self) -> tuple[str, ...]:

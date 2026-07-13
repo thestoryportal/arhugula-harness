@@ -9,6 +9,19 @@ Per §6.4 the verification checks only the chain links: entry N+1's
 `prior_event_hash` must be `ALL_ZEROS_SENTINEL`. Any tamper (§6.5) surfaces as
 a verification failure at the affected 1-indexed position.
 
+**Deliberately no per-entry `response_hash` self-check.** §6.4's four-step
+algorithm never reads an entry's own stored `response_hash` field — it
+recomputes hashes fresh for the linkage comparison. This is load-bearing, not
+an oversight: `response_hash` is a producer-populated field whose formula is
+axis-specific (C-IS-06 §6.2's generic recipe for most producers, but C-AS-08
+§8.2 legitimately overrides it to the `outputs_hash` structure-not-content
+fingerprint for secret-fetch entries). A universal
+`entry.response_hash == compute_response_hash(entry)` check would reject
+every spec-compliant secret-fetch entry as tampered. Chain-linkage tamper-
+evidence (this function's actual contract) does not depend on
+`response_hash` at all: `canonicalize` excludes it, so it is never part of
+what a neighbor's link check verifies either.
+
 Authority: Implementation_Plan_Information_Substrate_v2_3.md §2.1 U-IS-10
 (preserved verbatim from v2.1 §2); Spec_Information_Substrate_v1.md C-IS-06
 §6.4 / §6.5; ADR-F2 v1.2 §Rationale (a.1).

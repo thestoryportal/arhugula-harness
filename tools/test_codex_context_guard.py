@@ -515,6 +515,46 @@ def test_credential_gate_log_redacts_secret_like_values(tmp_path: Path) -> None:
     assert '"unit": "R-1840"' in raw
 
 
+def test_credential_gate_log_redacts_bearer_token_without_name_prefix(tmp_path: Path) -> None:
+    """Regression — a Bearer-token-shaped secret (no `NAME=` prefix) must be
+    redacted too. Previously only NAME=VALUE-shaped values matched, so a
+    Bearer token passed via `--command` landed verbatim in the
+    non-gitignored, actively-committed credential-gate ledger."""
+    state = _state(root=tmp_path, head8="deadbeef")
+
+    path = cg.append_credential_gate(
+        state,
+        unit="R-1840",
+        gate="live API call requires a bearer credential",
+        forward_closed="mock tests passed; only live provider call remains",
+        resume="ask operator for a fresh bearer token, then run live e2e",
+        command="curl -H 'Authorization: Bearer sk-live-abcdef1234567890' https://api.example.com",
+    )
+
+    raw = path.read_text(encoding="utf-8")
+    assert "sk-live-abcdef1234567890" not in raw
+    assert "<redacted>" in raw
+
+
+def test_credential_gate_log_redacts_bare_vendor_prefixed_key(tmp_path: Path) -> None:
+    """Regression — a bare vendor-prefixed API key (no `NAME=` prefix, no
+    `Bearer` keyword) must also be redacted."""
+    state = _state(root=tmp_path, head8="deadbeef")
+
+    path = cg.append_credential_gate(
+        state,
+        unit="R-1840",
+        gate="live GitHub API call requires a PAT",
+        forward_closed="mock tests passed; only live GitHub call remains",
+        resume="ask operator for a fresh PAT, then run live e2e",
+        command="gh api /user --header 'ghp_1234567890abcdef1234567890abcdef1234'",
+    )
+
+    raw = path.read_text(encoding="utf-8")
+    assert "ghp_1234567890abcdef1234567890abcdef1234" not in raw
+    assert "<redacted>" in raw
+
+
 def test_credential_gate_log_requires_forward_closed_evidence(tmp_path: Path) -> None:
     state = _state(root=tmp_path)
 

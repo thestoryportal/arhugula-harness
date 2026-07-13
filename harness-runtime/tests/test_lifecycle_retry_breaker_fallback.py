@@ -348,6 +348,61 @@ async def test_retries_twice_then_succeeds_on_attempt_3() -> None:
     assert "retry.fail_class" not in last_attempt.attributes
 
 
+@pytest.mark.asyncio
+async def test_actual_sleep_duration_matches_recorded_delay_ms_telemetry() -> None:
+    """Regression guard — the actual sleep duration must match the recorded
+    `retry.delay_ms` telemetry for each retried attempt. Previously the sleep
+    call recomputed `compute_delay_seconds` independently (a second random
+    full-jitter draw), so the span's telemetry and the real sleep diverged.
+    Uses a non-zero `base_delay_seconds` so the jitter draw is genuinely
+    random (the shared `_retry_breaker_with_llm_policy` default of 0.0 makes
+    `uniform(0, min(cap, 0 * 2**attempt))` always 0 — vacuous for this
+    check)."""
+    primary = _candidate("anthropic", "claude-test-1")
+    chain = _chain(primary)
+    breaker = RuntimeRetryBreaker(
+        retry_policies={
+            RESERVED_LLM_DISPATCH_KEY: RetryPolicy(
+                max_attempts=3, backoff="full_jitter", jitter="full_jitter"
+            )
+        },
+        default_policy=DEFAULT_RETRY_POLICY,
+        base_delay_seconds=1.0,
+        delay_cap_seconds=10.0,
+    )
+    inner = _MockInnerDispatcher(
+        outcomes=[
+            RuntimeError("transient attempt 0"),
+            RuntimeError("transient attempt 1"),
+            {"result": "success-on-attempt-3"},
+        ]
+    )
+    sleep_calls: list[float] = []
+
+    async def _recording_sleep(seconds: float) -> None:
+        sleep_calls.append(seconds)
+
+    tp, exporter = _tracer_provider_with_exporter()
+    wrapper = RetryBreakerFallbackDispatcher(
+        inner=inner,
+        retry_breaker=breaker,
+        fallback_chain=chain,
+        tracer_provider=tp,
+        sleep_fn=_recording_sleep,
+    )
+
+    result = await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
+    assert result == {"result": "success-on-attempt-3"}
+    assert len(sleep_calls) == 2
+
+    spans = exporter.get_finished_spans()
+    attempt_spans = [s for s in spans if s.name == "harness.runtime.retry_attempt"]
+    assert len(attempt_spans) == 3
+    for span, recorded_sleep_seconds in zip(attempt_spans[:2], sleep_calls, strict=True):
+        assert span.attributes is not None
+        assert span.attributes["retry.delay_ms"] == int(recorded_sleep_seconds * 1000)
+
+
 # ---------------------------------------------------------------------------
 # AC #4 — retry.* 6-attribute namespace emission per C-CP-03 §3.5.
 # ---------------------------------------------------------------------------

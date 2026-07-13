@@ -9,6 +9,7 @@ import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
 from harness_is.jsonl_event_ledger_lifecycle import JsonlLedgerHandle
 from harness_is.shadow_git_checkpoint import (
     CheckpointTriggerContext,
@@ -146,3 +147,47 @@ def test_rollback_does_not_modify_inference_state(tmp_path: Path) -> None:
     result = rollback_to_checkpoint(repo, _ledger(repo), checkpoint_id, _RUN)
     assert result.status is RollbackStatus.RESTORED
     assert result.rollback_entry_id is not None
+
+
+def test_rollback_holds_write_lock_across_ledger_preserve_window(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression — the ledger read-then-restore-write window (preserving the
+    ledger's bytes across `git checkout`) must hold the same module-level
+    write lock `append_ledger_entry` uses. Previously it read/wrote the
+    ledger file directly with no lock — a concurrent append landing inside
+    that window is silently overwritten and lost.
+
+    Verified by asserting the lock is held (from another thread's view)
+    exactly during the git-checkout call — the middle of the guarded window.
+    """
+    import threading
+
+    from harness_is import shadow_git_rollback as sgr
+    from harness_is.state_ledger_write import ledger_write_lock
+
+    repo = _repo(tmp_path)
+    checkpoint_id = _checkpoint(repo)
+    handle = _ledger(repo)
+
+    observed_locked_from_other_thread: list[bool] = []
+    real_git = sgr._git
+
+    def _spy_git(repository_root: Path, *args: str) -> subprocess.CompletedProcess[str]:
+        if args and args[0] == "checkout":
+            result_holder: list[bool] = []
+
+            def _check() -> None:
+                result_holder.append(ledger_write_lock().locked())
+
+            probe = threading.Thread(target=_check)
+            probe.start()
+            probe.join()
+            observed_locked_from_other_thread.extend(result_holder)
+        return real_git(repository_root, *args)
+
+    monkeypatch.setattr(sgr, "_git", _spy_git)  # type: ignore[attr-defined]
+
+    result = rollback_to_checkpoint(repo, handle, checkpoint_id, _RUN)
+    assert result.status is RollbackStatus.RESTORED
+    assert observed_locked_from_other_thread == [True]

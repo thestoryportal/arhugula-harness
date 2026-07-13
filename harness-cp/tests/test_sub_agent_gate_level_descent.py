@@ -144,11 +144,30 @@ def test_audit_entry_cp_audit_ledger_entry() -> None:
     )
     entry = emit_sub_agent_dispatch_audit(ActionID("p0"), descent, "0" * 64)
     assert isinstance(entry, CPAuditLedgerEntry)
-    assert entry.action_id == ActionID("p0||sub-agent")
+    assert entry.action_id == ActionID("p0||0")
     # An approve-class dispatch carries no response-specific hash fields.
     assert entry.edited_proposal_hash is None
     assert entry.rejection_reason_hash is None
     assert entry.response_text_hash is None
+
+
+def test_audit_entry_action_id_disambiguates_by_sub_agent_idx() -> None:
+    """Regression — two dispatches sharing a `parent_action_id` must not
+    collide. Previously `action_id` hardcoded the literal `"sub-agent"`, so
+    every sibling dispatched under the same parent produced an identical
+    `action_id`."""
+    descent = dispatch_sub_agent(
+        ActionID("p0"),
+        GateLevel.ASK,
+        SandboxTier.TIER_2_CONTAINER,
+        _brief(),
+        None,
+    )
+    first = emit_sub_agent_dispatch_audit(ActionID("p0"), descent, "0" * 64, sub_agent_idx=0)
+    second = emit_sub_agent_dispatch_audit(ActionID("p0"), descent, "0" * 64, sub_agent_idx=1)
+    assert first.action_id != second.action_id
+    assert first.action_id == ActionID("p0||0")
+    assert second.action_id == ActionID("p0||1")
 
 
 def test_audit_entry_timestamp_is_iso_8601_per_v1_28() -> None:

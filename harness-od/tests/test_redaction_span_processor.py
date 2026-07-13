@@ -16,6 +16,7 @@ import pytest
 from harness_core import PersonaTier
 from harness_od.content_structure_discipline import DEFAULT_OFF_CONTENT_ATTRIBUTES
 from harness_od.redaction_span_processor import (
+    MultiTenantOverrideRefusedError,
     RedactionSpanProcessor,
     session_content_capture,
     session_content_capture_enabled,
@@ -322,6 +323,40 @@ def test_operator_injected_custom_strip_set() -> None:
     custom = frozenset({"custom.secret.attr", "another.private"})
     processor = RedactionSpanProcessor(redacted_attributes=custom)
     assert processor.redacted_attributes == custom
+
+
+def test_multi_tenant_compliance_refuses_empty_override() -> None:
+    """AC #16: an empty strip-set is refused at the non-toggleable tier."""
+    with pytest.raises(MultiTenantOverrideRefusedError):
+        RedactionSpanProcessor(
+            persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+            redacted_attributes=frozenset(),
+        )
+
+
+def test_multi_tenant_compliance_refuses_non_empty_insufficient_override() -> None:
+    """Regression guard — a non-empty override that still narrows below the
+    DEFAULT_OFF_CONTENT_ATTRIBUTES floor must be refused too, not just the
+    fully-empty case. Previously only `len(redacted_attributes) == 0` was
+    checked, so an operator could pass a single unrelated attribute and
+    silently disable redaction of every real content-bearing attribute at
+    the non-toggleable tier."""
+    insufficient = frozenset({"some.unrelated.key"})
+    with pytest.raises(MultiTenantOverrideRefusedError):
+        RedactionSpanProcessor(
+            persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+            redacted_attributes=insufficient,
+        )
+
+
+def test_multi_tenant_compliance_accepts_superset_override() -> None:
+    """A superset of the canonical floor (widening, not narrowing) is fine."""
+    superset = DEFAULT_OFF_CONTENT_ATTRIBUTES | frozenset({"extra.attr"})
+    processor = RedactionSpanProcessor(
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        redacted_attributes=superset,
+    )
+    assert processor.redacted_attributes == superset
 
 
 def test_custom_strip_set_actually_strips() -> None:

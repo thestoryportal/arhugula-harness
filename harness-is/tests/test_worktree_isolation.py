@@ -7,6 +7,7 @@ Integration tests over real `git worktree` operations in `tmp_path` repos.
 from __future__ import annotations
 
 import subprocess
+import threading
 from pathlib import Path
 
 import pytest
@@ -86,6 +87,38 @@ def test_concurrency_cap_enforced(tmp_path: Path) -> None:
     manager.allocate_worktree(_PARENT, Identifier("sub-2"))
     with pytest.raises(WorktreeConcurrencyCapExceededError):
         manager.allocate_worktree(_PARENT, Identifier("sub-3"))
+
+
+def test_concurrency_cap_enforced_under_concurrent_allocation(tmp_path: Path) -> None:
+    """Regression guard — the cap-check + insert must be atomic: N threads
+    racing `allocate_worktree` at cap N must never allocate more than N
+    worktrees, even though the check-then-act window is otherwise racy."""
+    cap = 3
+    manager = _manager(tmp_path, cap=cap)
+    successes: list[Identifier] = []
+    failures: list[BaseException] = []
+    lock = threading.Lock()
+    start = threading.Barrier(cap * 3)
+
+    def _attempt(index: int) -> None:
+        start.wait()
+        try:
+            handle = manager.allocate_worktree(_PARENT, Identifier(f"sub-{index}"))
+            with lock:
+                successes.append(handle.worktree_id)
+        except WorktreeConcurrencyCapExceededError as exc:
+            with lock:
+                failures.append(exc)
+
+    threads = [threading.Thread(target=_attempt, args=(i,)) for i in range(cap * 3)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert len(successes) == cap
+    assert len(failures) == cap * 3 - cap
+    assert manager.active_count == cap
 
 
 def test_reclaim_worktree_invokes_git_remove(tmp_path: Path) -> None:

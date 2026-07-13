@@ -263,9 +263,13 @@ class RetryBreakerToolDispatcher:
                         inner_span.set_attribute("retry.terminal", "success")
                         return result
 
-                # Sleep between retries (outside the inner span CM).
-                # Only reached on the retry-with-backoff branch above.
-                await self.sleep_fn(self.retry_breaker.compute_delay_seconds(attempt))
+                # Sleep between retries (outside the inner span CM). Reuse
+                # `backoff_seconds` computed above — only reached on the
+                # retry-with-backoff branch, which set it; recomputing would
+                # draw a second independent random jitter value, making the
+                # actual sleep duration diverge from the retry.delay_ms
+                # telemetry.
+                await self.sleep_fn(backoff_seconds)
 
             # Exhausted: emit event + raise typed terminal error.
             outer_span.add_event(

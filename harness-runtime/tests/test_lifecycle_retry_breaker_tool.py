@@ -268,6 +268,49 @@ async def test_transient_fail_then_success_emits_two_inner_spans() -> None:
     assert len(recording_sleep.delays) == 1
 
 
+@pytest.mark.asyncio
+async def test_actual_sleep_duration_matches_recorded_delay_ms_telemetry() -> None:
+    """Regression guard — the actual sleep duration must match the recorded
+    `retry.delay_ms` telemetry. Previously the sleep call recomputed
+    `compute_delay_seconds` independently (a second random full-jitter draw),
+    so the span's telemetry and the real sleep diverged. Uses a non-zero
+    `base_delay_seconds` so the jitter draw is genuinely random (the shared
+    `_retry_breaker_with_tool_policy` default of 0.0 makes
+    `uniform(0, min(cap, 0 * 2**attempt))` always 0 — vacuous for this
+    check)."""
+    tp, exporter = _tracer_provider_with_exporter()
+    transient = ToolInvocationTimeoutError("timeout")
+    success_payload: Mapping[str, Any] = {"tool_output": "ok"}
+    inner = _MockInnerToolDispatcher(outcomes=[transient, success_payload])
+    recording_sleep = _RecordingSleep()
+    breaker = RuntimeRetryBreaker(
+        retry_policies={
+            RESERVED_TOOL_DISPATCH_KEY: RetryPolicy(
+                max_attempts=3, backoff="full_jitter", jitter="full_jitter"
+            )
+        },
+        default_policy=DEFAULT_RETRY_POLICY,
+        base_delay_seconds=1.0,
+        delay_cap_seconds=10.0,
+    )
+    wrapper = RetryBreakerToolDispatcher(
+        inner=inner,
+        retry_breaker=breaker,
+        tracer_provider=tp,
+        sleep_fn=recording_sleep,
+    )
+
+    out = await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
+
+    assert out == success_payload
+    assert len(recording_sleep.delays) == 1
+    inner_spans = [
+        s for s in exporter.get_finished_spans() if s.name == "harness.runtime.tool_retry_attempt"
+    ]
+    retried_span = next(s for s in inner_spans if s.attributes["retry.terminal"] == "retry")
+    assert retried_span.attributes["retry.delay_ms"] == int(recording_sleep.delays[0] * 1000)
+
+
 # ---------------------------------------------------------------------------
 # B-EFFECT-FENCE (§14.22 C-RT-31) — the fence fail-close is NOT retried.
 # ---------------------------------------------------------------------------

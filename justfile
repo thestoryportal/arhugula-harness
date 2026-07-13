@@ -465,11 +465,14 @@ _require-codex-subscription:
         exit 1; \
     fi
 
-# Reviewer model = gpt-5.5, set as the default in ~/.codex/config.toml (top-level +
-# active profile) per operator direction 2026-06-03. NOTE: `codex review` ignores a
-# per-invocation `-c model=` when a profile is active (the profile's model wins), so
-# the model is governed by config.toml, not pinned here. The run banner prints the
-# effective `model:` — confirm it reads `gpt-5.5`.
+# Reviewer model = gpt-5.6-sol (GPT-5.6 flagship tier), set as the default in
+# ~/.codex/config.toml (top-level + active profile) per operator direction
+# 2026-07-13 (upgraded from gpt-5.5 once GPT-5.6 shipped; requires codex-cli
+# >=0.144.3 — `codex update` if the model banner errors "requires a newer
+# version of Codex"). NOTE: `codex review` ignores a per-invocation `-c model=`
+# when a profile is active (the profile's model wins), so the model is
+# governed by config.toml, not pinned here. The run banner prints the
+# effective `model:` — confirm it reads `gpt-5.6-sol`.
 
 # Out-of-family review of the current branch vs BASE (default main), subscription auth.
 codex-review base='main': _require-codex-subscription

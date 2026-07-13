@@ -65,7 +65,8 @@ def test_idempotency_key_construction() -> None:
 
 
 def test_action_id_concatenation() -> None:
-    """#3 — action_id is ParentActionID || sibling_thread_id || step_index."""
+    """#3 — action_id is ParentActionID || sibling_thread_id || step_index,
+    `||`-delimited (not unseparated — see collision regression test below)."""
     payload = construct_sibling_ledger_entry(
         parent_action_id="P",
         sibling_thread_id="T",
@@ -75,8 +76,34 @@ def test_action_id_concatenation() -> None:
         sibling_agent_identity=ActorIdentity("sib-1"),
         timestamp=datetime(2026, 5, 16, 1, tzinfo=UTC),
     )
-    assert payload.action_id == "PT2"
+    assert payload.action_id == "P||T||2"
     assert payload.actor.actor_id == "sib-1"
+
+
+def test_action_id_does_not_collide_across_distinct_triples() -> None:
+    """Regression — unseparated concatenation let distinct
+    `(parent_action_id, sibling_thread_id, step_index)` triples collide,
+    e.g. `("run1", "0", 23)` and `("run10", "2", 3)` both joined to
+    `"run1023"`. The `||` delimiter must disambiguate them."""
+    first = construct_sibling_ledger_entry(
+        parent_action_id="run1",
+        sibling_thread_id="0",
+        step_index=23,
+        tool="read",
+        canonical_args="{}",
+        sibling_agent_identity=ActorIdentity("sib-1"),
+        timestamp=datetime(2026, 5, 16, 1, tzinfo=UTC),
+    )
+    second = construct_sibling_ledger_entry(
+        parent_action_id="run10",
+        sibling_thread_id="2",
+        step_index=3,
+        tool="read",
+        canonical_args="{}",
+        sibling_agent_identity=ActorIdentity("sib-1"),
+        timestamp=datetime(2026, 5, 16, 1, tzinfo=UTC),
+    )
+    assert first.action_id != second.action_id
 
 
 def test_procedural_tier_snapshot_ref_defaults_none() -> None:

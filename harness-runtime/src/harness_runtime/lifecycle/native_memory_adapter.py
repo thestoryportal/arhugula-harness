@@ -541,11 +541,13 @@ def _content_from_record(record: MemoryStoreRecord) -> bytes | None:
     if raw is None:
         return None
     if not isinstance(raw, str):
-        return None
+        raise MemoryCallbackIOError(
+            f"memory record content_b64 has unexpected type {type(raw).__name__!r}"
+        )
     try:
         return base64.b64decode(raw.encode("ascii"), validate=True)
-    except Exception:
-        return None
+    except Exception as exc:
+        raise MemoryCallbackIOError(f"memory record content_b64 failed to decode: {exc}") from exc
 
 
 def _source_ref(*, command: str, path: str) -> str:

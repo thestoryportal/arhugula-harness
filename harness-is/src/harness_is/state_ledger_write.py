@@ -62,6 +62,17 @@ _CLOCK_SKEW_TOLERANCE = timedelta(0)
 _WRITE_LOCK = threading.Lock()
 
 
+def ledger_write_lock() -> threading.Lock:
+    """The module-level lock serializing ledger writes (acceptance #7).
+
+    Exposed for other in-package writers (e.g. `shadow_git_rollback`'s
+    ledger-preserve-across-checkout window) that must serialize against
+    `append_ledger_entry` — a direct read/write of the ledger file without
+    holding this lock can race a concurrent append and silently drop it.
+    """
+    return _WRITE_LOCK
+
+
 class EntryPayload(BaseModel):
     """The caller-supplied content of a new ledger entry (C-IS-07 §7.1).
 

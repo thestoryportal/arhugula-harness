@@ -655,12 +655,34 @@ class RuntimeSubAgentDispatcher:
         returned — the dispatch fact at 8a is preserved per spec
         §14.7.2 step 8 failure-semantics paragraph.
         """
+        # Per-dispatch discriminator, resolved once and shared by both the 8a
+        # CP audit entry's action_id and the 8b F2 dispatch-action action_id
+        # below — `descent` carries no `child_index` field today; `getattr`
+        # keeps this forward-compatible with a future per-dispatch ordinal
+        # without requiring a `SubAgentGateLevelDescent` schema change.
+        #
+        # Sibling `SUB_AGENT_DISPATCH` steps under a fan-out topology (e.g.
+        # PARALLELIZATION) share the SAME `step_context.parent_action_id`
+        # (composed from `(workflow_id, step_index)`, identical across
+        # branch replicas of the same declared step) — `step_context.branch_index`
+        # is the established per-branch disambiguator elsewhere in this same
+        # file (the `branch_path` crash-resume seed above). Without it here,
+        # every sibling would compute the identical `dispatch:<parent_action_id>:0`
+        # action_id, and F2's idempotency-key dedup would silently drop every
+        # sibling but the first as an IDEMPOTENT_NOOP (out-of-family Codex [P1]).
+        child_index = (
+            step_context.branch_index
+            if step_context.branch_index is not None
+            else getattr(descent, "child_index", 0)
+        )
+
         # 8a — compose CP audit (dispatch fact; always produced).
         brief_hash = self.handoff_registry.dispatch_response_hash(payload.brief)
         cp_entry = self.handoff_registry.compose_dispatch_audit(
             parent_action_id=parent_action_id,
             descent=descent,
             brief_hash=brief_hash,
+            sub_agent_idx=child_index,
         )
 
         # Compose the F2 dispatch-action action_id once; reused as both the
@@ -670,7 +692,6 @@ class RuntimeSubAgentDispatcher:
         # F2 entry. Spec narrative cites "entry_hash"; Class 3 prose drift
         # carry-forward (LedgerWriter.append does not expose the forward
         # chain hash + the OD type accepts opaque str).
-        child_index = getattr(descent, "child_index", 0)
         dispatch_action_id = Identifier(f"dispatch:{parent_action_id}:{child_index}")
 
         try:

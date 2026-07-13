@@ -94,6 +94,14 @@ SECRET_VALUE_RE = re.compile(
     r"[A-Z0-9_]*(?:SECRET|TOKEN|CREDENTIAL|PASSWORD|AUTH)[A-Z0-9_]*"
     r")=([^\s]+)"
 )
+# NAME=VALUE-shaped secrets are only one carrier shape. A Bearer/Authorization
+# header or a bare vendor-prefixed API key passed via `--command` has no
+# `NAME=` prefix at all and previously slipped past SECRET_VALUE_RE straight
+# into the non-gitignored, actively-committed credential-gate ledger.
+BEARER_TOKEN_RE = re.compile(r"(?i)\b(bearer|authorization:\s*bearer)\s+(\S+)")
+KNOWN_SECRET_PREFIX_RE = re.compile(
+    r"\b(sk-ant-|sk-|ghp_|gho_|ghu_|ghs_|ghr_|glpat-|xox[baprs]-|AKIA)([A-Za-z0-9_-]{8,})"
+)
 DASHBOARD_JSON_LIVE_HEAD_RE = re.compile(rb'("live_head":\s*")[^"]*(")')
 DASHBOARD_JSON_LIVE_ANCHOR_HEAD_RE = re.compile(rb'("live_anchor":\s*\{\s*"git_head":\s*")[^"]*(")')
 DASHBOARD_JSON_LIVE_ANCHOR_HASH_RE = re.compile(rb'("live_anchor":\s*\{[^}]*"hash":\s*")[^"]*(")')
@@ -404,7 +412,19 @@ def write_checkpoint(state: GuardState, *, label: str, findings: list[Finding]) 
 
 
 def redact_secret_values(value: str) -> str:
-    return SECRET_VALUE_RE.sub(lambda m: f"{m.group(1)}=<redacted>", value)
+    """Redact secret-shaped substrings before they're written to the ledger.
+
+    Three carrier shapes, applied in sequence: `NAME=VALUE` (the original
+    shape), `Bearer <token>` / `Authorization: Bearer <token>` headers, and
+    bare vendor-prefixed API keys (`sk-...`, `ghp_...`, `AKIA...`, etc.) with
+    no `NAME=` prefix at all. Redacting only the first shape let a
+    Bearer-token or bare API key passed via `--command` land verbatim in the
+    non-gitignored, actively-committed `.harness/codex_credential_gates.jsonl`.
+    """
+    value = SECRET_VALUE_RE.sub(lambda m: f"{m.group(1)}=<redacted>", value)
+    value = BEARER_TOKEN_RE.sub(lambda m: f"{m.group(1)} <redacted>", value)
+    value = KNOWN_SECRET_PREFIX_RE.sub(lambda m: f"{m.group(1)}<redacted>", value)
+    return value
 
 
 def append_credential_gate(

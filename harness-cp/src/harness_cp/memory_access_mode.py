@@ -161,7 +161,8 @@ def select_memory_access_mode(
     """Select the C-MEM-13 memory access mode without touching credentials."""
 
     capabilities = request.provider_capabilities or reflect_memory_provider_capabilities(
-        request.model_binding
+        request.model_binding,
+        is_external_cli=request.external_cli_route is not None,
     )
     trace = _base_trace(request, capabilities)
     external_route_ref: str | None = None

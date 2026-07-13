@@ -205,6 +205,33 @@ def test_large_store_retrieval_uses_bounded_index_metadata(tmp_path: Path) -> No
     assert "statement" not in result.entries[0].model_dump()
 
 
+def test_globally_scoped_record_matches_a_dimension_scoped_query(tmp_path: Path) -> None:
+    """Regression guard — a record with `workflow=None` (globally scoped on
+    that dimension) must still match a query that requests a concrete
+    `workflow` value; only a genuine mismatch between two concrete values
+    should exclude a candidate."""
+    binding = _binding(tmp_path)
+    store = _store(binding)
+    global_scope = MemoryScope(
+        project="arhugula-v2",
+        workflow=None,
+        cli_profile="codex",
+        visibility=MemoryVisibility.WORKFLOW,
+    )
+    target = _record(statement="Globally-scoped memory record.", scope=global_scope)
+    store.write_record(target)
+    index_store = _index_store(binding)
+    index_store.rebuild(indexed_at=_NOW)
+
+    result = index_store.retrieve(
+        DerivedRetrievalIndexQuery(
+            scope=_scope(workflow="some-other-workflow"),
+        )
+    )
+
+    assert result.selected_refs == (target.envelope.memory_id,)
+
+
 def test_search_accelerator_is_non_authoritative(tmp_path: Path) -> None:
     binding = _binding(tmp_path)
     store = _store(binding)

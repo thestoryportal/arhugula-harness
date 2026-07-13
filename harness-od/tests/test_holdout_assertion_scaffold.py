@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from harness_core import DeploymentSurface, PersonaTier
 from harness_od.holdout_assertion_scaffold import (
     scaffold_assertion_stub_source,
@@ -90,3 +91,19 @@ def test_scaffold_pending_stubs_empty_ledger_writes_nothing(tmp_path: Path) -> N
     output_dir = tmp_path / "stubs"
     written = scaffold_pending_stubs(tmp_path / "missing.jsonl", output_dir)
     assert written == []
+
+
+def test_scaffold_pending_stubs_raises_on_trace_id_sanitization_collision(
+    tmp_path: Path,
+) -> None:
+    """Regression guard — two distinct trace_ids that sanitize to the same
+    stub path must raise, not silently drop the second one. Previously
+    `path.exists()` treated the second entry as "already scaffolded" with
+    zero signal that it was actually a different trace."""
+    ledger_path = tmp_path / "ledger.jsonl"
+    append_review_entry(ledger_path, _entry("abc-123"))
+    append_review_entry(ledger_path, _entry("abc_123"))  # sanitizes identically
+    output_dir = tmp_path / "stubs"
+
+    with pytest.raises(ValueError, match="sanitization collision"):
+        scaffold_pending_stubs(ledger_path, output_dir)

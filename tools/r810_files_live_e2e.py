@@ -329,11 +329,13 @@ async def _run_files_round_trip(*, client: Any, model: str) -> FilesLiveResult:
         return FilesLiveResult(file=metadata, response_text=text, batch_request=batch_request)
     finally:
         if file_id is not None:
+            from anthropic import APIConnectionError, APIStatusError
+
             try:
                 await adapter.delete(file_id=file_id)
                 _print_step("deleted uploaded Anthropic file")
-            except Exception as exc:
-                _print_step(f"file delete skipped: {type(exc).__name__}")
+            except (APIStatusError, APIConnectionError) as exc:
+                _print_step(f"file delete skipped: {type(exc).__name__}: {exc}")
 
 
 async def _emit_files_trace(

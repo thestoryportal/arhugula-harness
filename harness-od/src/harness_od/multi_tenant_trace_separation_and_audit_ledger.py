@@ -238,13 +238,31 @@ def sign_audit_entry(
 def verify_hash_chain_integrity(ledger: AuditLedger) -> None:
     """Verify an audit ledger's hash-chain integrity (C-OD-21 §21.2).
 
-    Returns `None` (the `Ok(())` arm) when the ledger is well-formed — each
-    entry's `payload.prior_entry_hash` links to the predecessor's `entry_hash`
-    for all `i > 0`. Raises `HashChainBreach` (the `Err` arm) at the first
-    broken link. Composes with the IS C-IS-10 §10.3 hash-chain integrity
-    primitive (cross-axis IS edge — resolves at 7c).
+    Returns `None` (the `Ok(())` arm) when the ledger is well-formed — every
+    entry's stored `entry_hash` matches a fresh `compute_entry_hash` recompute
+    over its own `payload` (content integrity), and each entry's
+    `payload.prior_entry_hash` links to the predecessor's `entry_hash` for all
+    `i > 0` (chain linkage). Raises `HashChainBreach` (the `Err` arm) at the
+    first violation, content check before linkage check. Composes with the IS
+    C-IS-10 §10.3 hash-chain integrity primitive (cross-axis IS edge — resolves
+    at 7c).
+
+    Content-integrity check mirrors `verify_rotation_pairs` (§24.7) below: a
+    payload mutated in place (bad migration, bug, compromised writer) with its
+    `entry_hash` left untouched is caught here — linkage alone cannot detect
+    this, since a tampered entry's own stored hash never participates in the
+    predecessor-link comparison.
     """
     entries = ledger.entries
+    for i, entry in enumerate(entries):
+        recomputed = compute_entry_hash(entry.payload)
+        if recomputed != entry.entry_hash:
+            raise HashChainBreach(
+                f"audit-ledger entry {i} content integrity violated: stored "
+                f"entry_hash={entry.entry_hash!r} does not match recomputed "
+                f"hash={recomputed!r} over the entry's payload — payload "
+                "tampered without recomputing entry_hash (C-OD-21 §21.2)"
+            )
     for i in range(1, len(entries)):
         prior_hash = entries[i].payload.prior_entry_hash
         predecessor_hash = entries[i - 1].entry_hash

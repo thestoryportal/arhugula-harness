@@ -336,26 +336,47 @@ class _FakeTracerWithShutdown(_FakeTracerProvider):
         returns: bool = True,
         raises: Exception | None = None,
         shutdown_raises: Exception | None = None,
+        shutdown_sleep: float = 0.0,
     ) -> None:
         super().__init__(returns=returns, raises=raises)
         self.shutdown_called = False
         self._shutdown_raises = shutdown_raises
+        self._shutdown_sleep = shutdown_sleep
 
     def shutdown(self) -> None:
+        if self._shutdown_sleep:
+            import time as _time
+
+            _time.sleep(self._shutdown_sleep)
         self.shutdown_called = True
         if self._shutdown_raises is not None:
             raise self._shutdown_raises
 
 
 class _FakeProvider:
-    def __init__(self, *, raises: Exception | None = None) -> None:
+    def __init__(self, *, raises: Exception | None = None, aclose_sleep: float = 0.0) -> None:
         self.closed = False
         self._raises = raises
+        self._aclose_sleep = aclose_sleep
 
     async def aclose(self) -> None:
+        if self._aclose_sleep:
+            await asyncio.sleep(self._aclose_sleep)
         if self._raises is not None:
             raise self._raises
         self.closed = True
+
+
+class _FakeMcpHost:
+    def __init__(self, *, started: bool = True, shutdown_sleep: float = 0.0) -> None:
+        self.started = started
+        self.shutdown_called = False
+        self._shutdown_sleep = shutdown_sleep
+
+    async def shutdown(self) -> None:
+        if self._shutdown_sleep:
+            await asyncio.sleep(self._shutdown_sleep)
+        self.shutdown_called = True
 
 
 class _FakeAuditWriter:
@@ -803,6 +824,101 @@ async def test_shutdown_timed_out_when_collector_slow(tmp_path: Path) -> None:
     )
     # Tight budget — collector sleeps 50ms, budget is 20ms.
     report = await shutdown(ctx, timeout=0.02)
+    assert report.timed_out is True
+
+
+@pytest.mark.asyncio
+async def test_shutdown_bounded_by_timeout_when_tracer_shutdown_hangs(tmp_path: Path) -> None:
+    """Regression — a hanging `tracer_provider.shutdown()` must not block the
+    rest of the shutdown sequence indefinitely. Previously this call had no
+    `asyncio.wait_for`/deadline wrapper at all, despite the docstring's
+    "bounded by timeout: each step is allotted the remaining budget"
+    invariant."""
+    tracer = _FakeTracerWithShutdown(shutdown_sleep=0.3)
+    ctx = _shutdown_ctx(
+        tmp_path,
+        tracer=tracer,
+        daemon=_FakeCollectorDaemon(),
+        providers={},
+    )
+    start = asyncio.get_event_loop().time()
+    report = await asyncio.wait_for(shutdown(ctx, timeout=0.02), timeout=1.0)
+    elapsed = asyncio.get_event_loop().time() - start
+    assert elapsed < 0.3, "shutdown() waited out the full hang instead of bounding it"
+    assert "tracer_provider" in report.failures
+    assert report.timed_out is True
+
+
+@pytest.mark.asyncio
+async def test_shutdown_bounded_by_timeout_when_provider_aclose_hangs(tmp_path: Path) -> None:
+    """Regression — a hanging provider `aclose()` must not block shutdown."""
+    providers = {"anthropic": _FakeProvider(aclose_sleep=0.3)}
+    ctx = _shutdown_ctx(
+        tmp_path,
+        tracer=_FakeTracerWithShutdown(),
+        daemon=_FakeCollectorDaemon(),
+        providers=providers,
+    )
+    start = asyncio.get_event_loop().time()
+    report = await asyncio.wait_for(shutdown(ctx, timeout=0.02), timeout=1.0)
+    elapsed = asyncio.get_event_loop().time() - start
+    assert elapsed < 0.3, "shutdown() waited out the full hang instead of bounding it"
+    assert "provider:anthropic" in report.failures
+    assert report.timed_out is True
+
+
+@pytest.mark.asyncio
+async def test_shutdown_recomputes_budget_across_multiple_slow_providers(
+    tmp_path: Path,
+) -> None:
+    """Regression guard — the per-provider shutdown budget must shrink across
+    iterations, not stay pinned at the pre-loop value. Previously `remaining`
+    was computed once before the provider loop, so N slow providers each got
+    re-allotted the SAME stale budget instead of what was actually left —
+    each provider here individually finishes within a single provider's
+    worth of budget, so under the bug all 3 complete successfully (no
+    per-provider timeout failure) but the AGGREGATE elapsed time triples;
+    with the fix, only the first provider gets its full slice and the rest
+    are bounded by what's actually left (out-of-family Codex [P2])."""
+    providers = {
+        "anthropic": _FakeProvider(aclose_sleep=0.15),
+        "openai": _FakeProvider(aclose_sleep=0.15),
+        "ollama": _FakeProvider(aclose_sleep=0.15),
+    }
+    ctx = _shutdown_ctx(
+        tmp_path,
+        tracer=_FakeTracerWithShutdown(),
+        daemon=_FakeCollectorDaemon(),
+        providers=providers,
+    )
+    start = asyncio.get_event_loop().time()
+    await asyncio.wait_for(shutdown(ctx, timeout=0.3), timeout=2.0)
+    elapsed = asyncio.get_event_loop().time() - start
+    assert elapsed < 0.38, (
+        f"shutdown() took {elapsed:.3f}s across 3x 0.15s-slow providers with a "
+        "0.3s overall budget — a stale re-allotted budget lets every provider "
+        "use its full 0.15s (~0.45s total) instead of the aggregate shrinking "
+        "toward the 0.3s deadline (~0.3s total)"
+    )
+
+
+@pytest.mark.asyncio
+async def test_shutdown_bounded_by_timeout_when_mcp_host_shutdown_hangs(tmp_path: Path) -> None:
+    """Regression — a hanging MCP client host `shutdown()` must not block
+    shutdown."""
+    host = _FakeMcpHost(shutdown_sleep=0.3)
+    ctx = _shutdown_ctx(
+        tmp_path,
+        tracer=_FakeTracerWithShutdown(),
+        daemon=_FakeCollectorDaemon(),
+        providers={},
+    )
+    ctx.mcp_client_hosts = {"server-a": host}  # type: ignore[attr-defined]
+    start = asyncio.get_event_loop().time()
+    report = await asyncio.wait_for(shutdown(ctx, timeout=0.02), timeout=1.0)
+    elapsed = asyncio.get_event_loop().time() - start
+    assert elapsed < 0.3, "shutdown() waited out the full hang instead of bounding it"
+    assert "mcp_client_host" in report.failures
     assert report.timed_out is True
 
 

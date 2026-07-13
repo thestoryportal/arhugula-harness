@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Sequence
 from typing import Any, cast
@@ -136,6 +137,64 @@ async def test_docker_driver_runs_resolved_local_image_id(monkeypatch: pytest.Mo
             },
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_cancellation_during_communicate_kills_and_reaps_process(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression guard — cancelling the CALLER while `_communicate` awaits
+    the subprocess must kill + reap the process (mirroring the TimeoutError
+    branch) and propagate `CancelledError`, not leave the Docker container
+    running unsupervised. Cancelling the await alone does not kill the OS
+    process — that's why the TimeoutError branch explicitly calls
+    `proc.kill()` + `proc.wait()`; the CancelledError path needs the same."""
+    kill_calls: list[str] = []
+    wait_calls: list[str] = []
+
+    class _HangingProcess(_FakeProcess):
+        async def communicate(self, stdin_payload: bytes) -> tuple[bytes, bytes]:
+            await asyncio.Event().wait()  # never resolves — cancelled from outside
+            raise AssertionError("unreachable")
+
+        def kill(self) -> None:
+            kill_calls.append("killed")
+
+        async def wait(self) -> int:
+            wait_calls.append("waited")
+            return 137
+
+    async def fake_exec(*argv: str, **_kwargs: Any) -> _FakeProcess:
+        if argv[:2] == ("docker", "inspect"):
+            return _FakeProcess(stdout=b"sha256:resolved-local-image\n")
+        assert argv[:2] == ("docker", "run")
+        return _HangingProcess(stdout=b"")
+
+    monkeypatch.setattr(
+        "harness_runtime.lifecycle.docker_tool_execution_driver.asyncio.create_subprocess_exec",
+        fake_exec,
+    )
+    driver = DockerToolRunnerExecutionDriver(
+        image="python:3.11-slim",
+        command=("python", "-c", "runner"),
+    )
+
+    task = asyncio.ensure_future(
+        driver.call_tool(
+            mcp_client_host=cast(MCPClientHost, object()),
+            sandbox_decision=_decision(),
+            tool_id="echo",
+            tool_args={},
+            idempotency_key="idem",
+        )
+    )
+    await asyncio.sleep(0)  # let it reach the hanging communicate() await
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert kill_calls == ["killed"]
+    assert wait_calls == ["waited"]
 
 
 @pytest.mark.asyncio

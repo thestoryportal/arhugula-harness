@@ -114,6 +114,11 @@ class LocalFilesystemMemoryToolBackend:
         `MemoryToolStorageBackend.ENCRYPTED_FILESYSTEM` (ciphertext at rest).
         """
         self._root = root.resolve()
+        # Keyed on the canonicalized (resolved) target path, not the caller's
+        # raw `path` string — two textually-different paths that resolve to
+        # the same file (e.g. a `.` segment, or a symlink inside `self._root`)
+        # must serialize through the SAME lock to hold the atomicity
+        # invariant above.
         self._locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
         self._codec: MemoryContentCodec = codec if codec is not None else _IdentityContentCodec()
 
@@ -169,7 +174,7 @@ class LocalFilesystemMemoryToolBackend:
         I/O failure propagates as `MemoryCallbackIOError`.
         """
         target = self._validate_path(path)
-        async with self._locks[path]:
+        async with self._locks[str(target)]:
             try:
                 raw = await asyncio.to_thread(target.read_bytes)
             except OSError as exc:
@@ -185,7 +190,7 @@ class LocalFilesystemMemoryToolBackend:
         """
         target = self._validate_path(path)
         payload = self._codec.encode(content)
-        async with self._locks[path]:
+        async with self._locks[str(target)]:
             try:
                 await asyncio.to_thread(target.parent.mkdir, parents=True, exist_ok=True)
                 await asyncio.to_thread(target.write_bytes, payload)
@@ -195,7 +200,7 @@ class LocalFilesystemMemoryToolBackend:
     async def delete(self, path: str) -> None:
         """Delete `/memories/{path}`; no-op if absent."""
         target = self._validate_path(path)
-        async with self._locks[path]:
+        async with self._locks[str(target)]:
             try:
                 await asyncio.to_thread(target.unlink, missing_ok=True)
             except OSError as exc:
@@ -208,7 +213,7 @@ class LocalFilesystemMemoryToolBackend:
         OR on read/write I/O failure.
         """
         target = self._validate_path(path)
-        async with self._locks[path]:
+        async with self._locks[str(target)]:
             try:
                 raw = await asyncio.to_thread(target.read_bytes)
             except OSError as exc:
@@ -233,7 +238,7 @@ class LocalFilesystemMemoryToolBackend:
         out-of-range line OR I/O failure.
         """
         target = self._validate_path(path)
-        async with self._locks[path]:
+        async with self._locks[str(target)]:
             try:
                 raw = await asyncio.to_thread(target.read_bytes)
             except OSError as exc:

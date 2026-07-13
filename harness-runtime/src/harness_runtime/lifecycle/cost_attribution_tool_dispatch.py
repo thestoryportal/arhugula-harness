@@ -221,6 +221,11 @@ def attribute_tool_dispatch_cost(
     idempotency_key
         Tool-dispatch idempotency key composed at
         `runtime_tool_dispatcher.py:401` step 6 via `_compose_idempotency_key`.
+        Accepted for call-site symmetry with the sibling LLM-dispatch cost
+        composer; not consumed here — the `SpanCostRecord.idempotency_key`
+        join key is `parent_idempotency_key` per C-OD-14 §14.4 (cross-span
+        rollup at the audit-ledger join site), mirroring
+        `attach_idempotency_key_to_cost_record`'s `span` parameter.
     parent_idempotency_key
         Parent step's idempotency_key from `step_context`.
     workflow_id
@@ -243,6 +248,8 @@ def attribute_tool_dispatch_cost(
         tool_id not in rate_table.tool_rates per §C-OD-28.2 default
         fail-closed.
     """
+    _ = idempotency_key  # accepted for call-site symmetry; join key is parent_idempotency_key
+
     # Substep 1 — resolve tool rate per §C-OD-28.4 invariant 4 (per-tool
     # registration is the canonical lookup; no fallback per F2-04 ratification
     # — tool dispatch with unknown tool_id is a contract violation, not a

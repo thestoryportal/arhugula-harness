@@ -31,6 +31,7 @@ event loop via pytest-asyncio. Crash-window tests inject a monotonic clock
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import FrozenInstanceError
 from pathlib import Path
 
@@ -175,6 +176,23 @@ async def test_stop_is_idempotent(tmp_path: Path) -> None:
     await stage.daemon.stop()
     await stage.daemon.stop()  # no raise
     assert await stage.daemon.health() is CollectorDaemonHealth.STOPPED
+
+
+@pytest.mark.asyncio
+async def test_stop_cancellation_propagates_instead_of_returning_normally(
+    tmp_path: Path,
+) -> None:
+    """Regression guard — cancelling the CALLER's task while it awaits
+    `stop()` must propagate `CancelledError`, not be silently absorbed so
+    `stop()` returns as if it completed normally."""
+    stage = materialize_collector_daemon_stage(_config(tmp_path))
+    await stage.daemon.start()
+
+    task = asyncio.ensure_future(stage.daemon.stop(timeout_seconds=5.0))
+    await asyncio.sleep(0)  # let it enter the bounded wait_for
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
 
 
 # ---------------------------------------------------------------------------
