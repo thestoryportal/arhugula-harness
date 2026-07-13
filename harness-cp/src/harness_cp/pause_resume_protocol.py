@@ -967,7 +967,7 @@ async def emit_pause_resume_state_ledger_entry(
     Per CP spec v1.26 §16.5.3: produces `EntryPayload` per IS HEAD 4-field shape
     `(action_id, idempotency_key, actor, timestamp)`. `response_hash` and
     `prior_event_hash` are IS-internal — composer does NOT control them
-    (C-IS-06 §6.2 + C-IS-13 §13.5). The outcome-bytes semantic at §16.5.5 row
+    (C-IS-06 §6.2). The outcome-bytes semantic at §16.5.5 row
     U-CP-30 (protocol-state-transition outcome canonical JSON bytes — the
     protocol state snapshot after the class-level event) is carried at the
     `idempotency_key` discriminator per §16.5.4 + Q-β.i-1(a).
@@ -1055,7 +1055,7 @@ async def emit_pause_captured_state_ledger_entry(
     Per CP spec v1.26 §16.5.3: produces `EntryPayload` per IS HEAD 4-field shape
     `(action_id, idempotency_key, actor, timestamp)`. `response_hash` and
     `prior_event_hash` are IS-internal — composer does NOT control them
-    (C-IS-06 §6.2 + C-IS-13 §13.5). The outcome-bytes semantic at §16.5.5 row
+    (C-IS-06 §6.2). The outcome-bytes semantic at §16.5.5 row
     U-CP-49 (`PauseEvent` canonical JSON bytes) is carried at the
     `idempotency_key` discriminator per §16.5.4 + Q-β.i-1(a).
 
@@ -1152,7 +1152,7 @@ async def emit_resume_attempted_state_ledger_entry(
     Per CP spec v1.26 §16.5.3: produces `EntryPayload` per IS HEAD 4-field shape
     `(action_id, idempotency_key, actor, timestamp)`. `response_hash` and
     `prior_event_hash` are IS-internal — composer does NOT control them
-    (C-IS-06 §6.2 + C-IS-13 §13.5). The outcome-bytes semantic at §16.5.5 row
+    (C-IS-06 §6.2). The outcome-bytes semantic at §16.5.5 row
     U-CP-50 (`ResumeOutcome` canonical JSON bytes — includes `outcome_kind` +
     material_diff + context_revalidated + resume_audit_entry_id per impl line
     91) is carried at the `idempotency_key` discriminator per §16.5.4 +

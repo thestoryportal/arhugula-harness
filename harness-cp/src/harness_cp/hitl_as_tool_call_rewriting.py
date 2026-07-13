@@ -262,7 +262,7 @@ async def emit_hitl_tool_call_rewriting_state_ledger_entry(
     Per CP spec v1.26 §16.5.3: produces `EntryPayload` per IS HEAD 4-field shape
     `(action_id, idempotency_key, actor, timestamp)`. `response_hash` and
     `prior_event_hash` are IS-internal — composer does NOT control them
-    (C-IS-06 §6.2 + C-IS-13 §13.5). The outcome-bytes semantic at §16.5.5 row
+    (C-IS-06 §6.2). The outcome-bytes semantic at §16.5.5 row
     U-CP-37 (`RewrittenToolCall` canonical JSON bytes) is carried at the
     `idempotency_key` discriminator per §16.5.4 + Q-β.i-1(a).
 

@@ -412,7 +412,7 @@ def compose_override_entry_payload(
     `(workflow_id, step_id, sha256(outcome_canonical_bytes))`, and the IS HEAD
     5-field payload `(action_id, idempotency_key, actor, timestamp,
     procedural_tier_snapshot_ref)`. `response_hash` / `prior_event_hash` are
-    IS-internal (C-IS-06 §6.2 + C-IS-13 §13.5).
+    IS-internal (C-IS-06 §6.2).
 
     Both write paths compose through here so the persisted override entry is
     byte-shape-identical across all topologies:
