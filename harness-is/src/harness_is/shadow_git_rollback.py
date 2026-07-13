@@ -38,7 +38,12 @@ from harness_is.state_ledger_entry_schema import (
     Identifier,
     Timestamp,
 )
-from harness_is.state_ledger_write import EntryPayload, WriteKey, append_ledger_entry
+from harness_is.state_ledger_write import (
+    EntryPayload,
+    WriteKey,
+    append_ledger_entry,
+    ledger_write_lock,
+)
 
 _SHADOW_REF_PREFIX = "refs/shadow"
 _ROLLBACK_ACTOR = Actor(actor_class=ActorClass.OPERATOR, actor_id="harness-rollback")
@@ -93,13 +98,18 @@ def rollback_to_checkpoint(
             rollback_entry_id=None,
         )
 
-    # Preserve the ledger bytes across the restore — the ledger is NOT rolled back.
+    # Preserve the ledger bytes across the restore — the ledger is NOT rolled
+    # back. Guarded by the same module-level write lock `append_ledger_entry`
+    # uses (acceptance #7's concurrent-writer serialization): without it, a
+    # concurrent append landing between the read and the restore-write below
+    # is silently overwritten and lost.
     ledger_path = ledger_handle.canonical_path
-    ledger_bytes = ledger_path.read_bytes() if ledger_path.exists() else None
+    with ledger_write_lock():
+        ledger_bytes = ledger_path.read_bytes() if ledger_path.exists() else None
 
-    checkout = _git(repository_root, "checkout", shadow_ref, "--", ".")
-    if ledger_bytes is not None:
-        ledger_path.write_bytes(ledger_bytes)
+        checkout = _git(repository_root, "checkout", shadow_ref, "--", ".")
+        if ledger_bytes is not None:
+            ledger_path.write_bytes(ledger_bytes)
     if checkout.returncode != 0:
         return RollbackResult(
             status=RollbackStatus.ROLLBACK_FAILED,
