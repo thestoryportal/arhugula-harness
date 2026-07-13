@@ -48,10 +48,20 @@ snapshot:
   frozen_done: 11
   standalone_closed: 94
   standalone_gated: 0
-  standalone_resolved: 4
+  standalone_resolved: 5
   standalone_registered: 0
-  rfs1_status: active
+  rfs1_status: resolved
   source: ".harness/beyond-mvp-capability-boundary-ledger.md"
+  # FRONTIER NOTE (2026-07-13, R-FS-2 umbrella CLOSED — G2 closure criterion
+  # satisfied). standalone_resolved 4->5. All 15 Wave 1-4 arcs closed; Wave 5
+  # hygiene sweep landed (PR #958, docs/cite-only, registered a new B-20
+  # follow-on candidate); all 7 Appendix-B held/gated items re-affirmed via
+  # one batched operator AskUserQuestion (no reversal requested); registered
+  # queue empty. Terminating closure report at
+  # .harness/audit/R_FS_2_Closure_Report.md. R-FS-2 is a bounded follow-on
+  # umbrella opened after R-FS-1's own Tier-1 resolution -- this closure does
+  # NOT reopen or supersede Closure_Gate_v1.md's wider Tier-1/Tier-2 "harness
+  # coding fully closed" predicate, a separate instrument.
   # FRONTIER NOTE (2026-07-13, B-19-BREAKER-AMBIENT-ATTRS closed — BUILT,
   # operator-ratified against the grounded skip-and-close recommendation).
   # standalone_closed 93->94, standalone_registered 1->0 — Wave 4 register
@@ -2098,9 +2108,10 @@ arcs:
   - id: R-FS-2
     title: "Final-closure umbrella — all remaining spec-committed work to full closure"
     kind: standalone
-    status: remaining
+    status: resolved
     owner_axis: "cross-axis"
     anticipated_scope: "Umbrella for the R-FS-2 register (plan doc at .harness/r-fs-2-final-closure-implementation-plan-v1.md): the Wave 1-4 child arcs below + the Wave-5 hygiene sweep PR (not a ledger arc) + the G2 closure report. Transitions to resolved when every child is closed/resolved, the Appendix-B gates were surfaced once (batched AUQ; held decisions honored), and the closure report is filed at .harness/audit/."
+    resolution: "CLOSED 2026-07-13 (G2). All 15 Wave 1-4 standalone arcs closed with evidence; Wave 5 hygiene sweep landed (PR #958); all 7 Appendix-B held/gated items surfaced via one batched operator AskUserQuestion and re-affirmed as-is (no reversal requested); registered queue empty (standalone_registered: 0). Terminating closure report filed at .harness/audit/R_FS_2_Closure_Report.md."
     units: []
     ledger_ref: ".harness/r-fs-2-final-closure-implementation-plan-v1.md"
 
