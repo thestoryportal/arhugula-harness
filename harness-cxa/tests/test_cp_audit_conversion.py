@@ -74,7 +74,14 @@ def test_converter_produces_well_formed_audit_ledger_entry() -> None:
 
 
 def test_cp_fields_project_into_audit_cp_namespace() -> None:
-    """All non-conditional CP fields land under the `audit.cp.*` prefix."""
+    """All non-conditional CP fields land under the `audit.cp.*` prefix.
+
+    Regression — `prior_event_hash` is one of the 4 common CP-sourced fields
+    every other producer-specific `AuditPayload` subclass (PauseResume /
+    MCP-trust / Validator / OperatorBurden / Webhook / Cost) carries as
+    `audit_cp_prior_event_hash`; `dispatch:`/`hitl:` rows previously omitted
+    it, a schema-shape inconsistency for the most common audit-row type.
+    """
     cp_entry = _cp_entry()
     od_entry = cp_audit_to_od_audit(cp_entry, key_id="test-key")
     attrs = od_entry.payload.audit_namespace_attrs
@@ -83,6 +90,7 @@ def test_cp_fields_project_into_audit_cp_namespace() -> None:
     assert attrs[f"{CP_AUDIT_NAMESPACE_PREFIX}.gate_level"] == "ask"
     assert attrs[f"{CP_AUDIT_NAMESPACE_PREFIX}.response"] == "approve"
     assert attrs[f"{CP_AUDIT_NAMESPACE_PREFIX}.timestamp"] == "2026-05-20T18:30:00Z"
+    assert attrs[f"{CP_AUDIT_NAMESPACE_PREFIX}.prior_event_hash"] == _PRIOR_HASH
 
 
 @pytest.mark.parametrize(

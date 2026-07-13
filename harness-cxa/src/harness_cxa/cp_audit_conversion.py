@@ -108,15 +108,22 @@ CpAuditCarrier = (
 def _project_namespace_attrs(cp_entry: CPAuditLedgerEntry) -> dict[str, str]:
     """Project CP fields → `audit_namespace_attrs` dict per the §3 field table.
 
-    Conditional hash fields (`edited_proposal_hash` / `rejection_reason_hash` /
-    `response_text_hash`) are included only when populated per C-CP-16 §16.2's
-    response-conditional discipline.
+    `action_id` / `response` / `timestamp` / `prior_event_hash` are the 4
+    common CP-sourced fields shared with the other 6 producer-specific
+    `AuditPayload` subclasses (PauseResume / MCP-trust / Validator /
+    OperatorBurden / Webhook / Cost — see each's `audit_cp_*` field set per
+    C-OD-24.6). `gate_level` is a `dispatch:`/`hitl:`-specific addition with
+    no analogue on those other 6 carriers. Conditional hash fields
+    (`edited_proposal_hash` / `rejection_reason_hash` / `response_text_hash`)
+    are included only when populated per C-CP-16 §16.2's response-conditional
+    discipline.
     """
     attrs: dict[str, str] = {
         f"{CP_AUDIT_NAMESPACE_PREFIX}.action_id": str(cp_entry.action_id),
         f"{CP_AUDIT_NAMESPACE_PREFIX}.gate_level": cp_entry.gate_level.value,
         f"{CP_AUDIT_NAMESPACE_PREFIX}.response": cp_entry.response,
         f"{CP_AUDIT_NAMESPACE_PREFIX}.timestamp": cp_entry.timestamp,
+        f"{CP_AUDIT_NAMESPACE_PREFIX}.prior_event_hash": cp_entry.prior_event_hash,
     }
     if cp_entry.edited_proposal_hash is not None:
         attrs[f"{CP_AUDIT_NAMESPACE_PREFIX}.edited_proposal_hash"] = cp_entry.edited_proposal_hash
