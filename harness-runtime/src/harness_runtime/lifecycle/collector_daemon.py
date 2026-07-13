@@ -238,10 +238,18 @@ class CollectorDaemonSupervisor:
         if self._task is not None:
             try:
                 await asyncio.wait_for(self._task, timeout=timeout_seconds)
-            except (TimeoutError, asyncio.CancelledError):
+            except TimeoutError:
                 # Bounded timeout: cancel + swallow per C-RT-07 "await
                 # termination with timeout" obligation.
                 self._task.cancel()
+            except asyncio.CancelledError:
+                # The CALLER's own task was cancelled while awaiting stop() —
+                # not the bounded-timeout case above. Must propagate per
+                # asyncio's cancellation contract; swallowing it here would
+                # let stop() return "successfully" out from under a
+                # cancelled caller.
+                self._task.cancel()
+                raise
             self._task = None
         self._stop_event = None
         self._health = CollectorDaemonHealth.STOPPED

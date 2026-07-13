@@ -232,6 +232,51 @@ async def test_concurrent_str_replace_same_path_serializes(tmp_path: Path) -> No
     assert final.startswith(b"r")
 
 
+@pytest.mark.asyncio
+async def test_concurrent_str_replace_via_differently_spelled_paths_serializes(
+    tmp_path: Path,
+) -> None:
+    """Regression guard — two textually-different paths that resolve to the
+    SAME file (a `.` segment vs. none) must serialize through the SAME lock.
+    Previously the lock was keyed on the raw path string, so the two spellings
+    got two independent `asyncio.Lock` instances and could interleave their
+    read-modify-write on the same underlying file — a torn write would
+    corrupt the content instead of landing exactly one clean replacement."""
+    backend = LocalFilesystemMemoryToolBackend(root=tmp_path)
+    await backend.create("/memories/shared.txt", b"original")
+
+    async def _replace(i: int, path: str) -> None:
+        try:
+            await backend.str_replace(path, "original", f"r{i}")
+        except MemoryCallbackIOError:
+            pass  # After the first success, "original" is absent for the rest.
+
+    tasks = []
+    for i in range(50):
+        tasks.append(_replace(i, "/memories/shared.txt"))
+        tasks.append(_replace(50 + i, "/memories/./shared.txt"))
+    await asyncio.gather(*tasks)
+
+    final = await backend.view("/memories/shared.txt")
+    assert final in {f"r{i}".encode() for i in range(100)}
+
+
+@pytest.mark.asyncio
+async def test_lock_keyed_on_canonicalized_path_not_raw_string(tmp_path: Path) -> None:
+    """Deterministic regression guard for the same defect — two textually-
+    different paths resolving to the same file must share exactly ONE
+    `asyncio.Lock` entry. Previously the lock dict was keyed on the raw
+    `path` string, so touching the same file via two spellings created two
+    independent lock entries — the flaky end-to-end race test above
+    demonstrates the real-world effect; this asserts the root cause directly
+    (scheduling-independent, not a probabilistic race)."""
+    backend = LocalFilesystemMemoryToolBackend(root=tmp_path)
+    await backend.create("/memories/shared.txt", b"content")
+    await backend.view("/memories/shared.txt")
+    await backend.view("/memories/./shared.txt")
+    assert len(backend._locks) == 1
+
+
 # AC #8 — importable + pyright (importable verified by test-module loading).
 
 
