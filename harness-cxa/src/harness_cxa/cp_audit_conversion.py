@@ -156,7 +156,7 @@ def _project_producer_namespace_attrs(
     for field_name, value in data.items():
         if value is None:
             continue
-        rendered = str(value)
+        rendered = "true" if value is True else "false" if value is False else str(value)
         if field_name.startswith("audit_cp_"):
             suffix = field_name[len("audit_cp_") :]
             attrs[f"{CP_AUDIT_NAMESPACE_PREFIX}.{suffix}"] = rendered

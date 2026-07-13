@@ -386,7 +386,12 @@ def _scope_matches(record_scope: MemoryScope, requested_scope: MemoryScope) -> b
         "tenant",
     ):
         requested_value = getattr(requested_scope, field_name)
-        if requested_value is not None and getattr(record_scope, field_name) != requested_value:
+        record_value = getattr(record_scope, field_name)
+        if (
+            record_value is not None
+            and requested_value is not None
+            and record_value != requested_value
+        ):
             return False
     return _visibility_rank(record_scope.visibility) <= _visibility_rank(requested_scope.visibility)
 

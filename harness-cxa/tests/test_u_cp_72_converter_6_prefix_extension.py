@@ -148,6 +148,25 @@ def test_operator_burden_carrier_projects_to_audit_operator_burden_subnamespace(
     assert len(operator_burden_keys) >= 1
 
 
+def test_operator_burden_bool_field_renders_lowercase() -> None:
+    """Regression guard — a `bool` field must render as `"true"`/`"false"`,
+    not Python's `str(True)` → `"True"`, per the codebase's lowercase
+    convention (see `harness_cp.memory_access_mode._bool_token`)."""
+    carrier = _operator_burden_carrier().model_copy(update={"degrade": True})
+    entry = cp_audit_to_od_audit(carrier, key_id=_KEY)
+    attrs = entry.payload.audit_namespace_attrs
+    assert attrs[f"{OPERATOR_BURDEN_AUDIT_NAMESPACE_PREFIX}.degrade"] == "true"
+
+    carrier_false = _operator_burden_carrier().model_copy(update={"degrade": False})
+    entry_false = cp_audit_to_od_audit(carrier_false, key_id=_KEY)
+    assert (
+        entry_false.payload.audit_namespace_attrs[
+            f"{OPERATOR_BURDEN_AUDIT_NAMESPACE_PREFIX}.degrade"
+        ]
+        == "false"
+    )
+
+
 def test_validator_carrier_projects_to_audit_validator_subnamespace() -> None:
     entry = cp_audit_to_od_audit(_validator_carrier(), key_id=_KEY)
     attrs = entry.payload.audit_namespace_attrs
