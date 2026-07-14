@@ -107,6 +107,7 @@ class GuardState:
     fork_doc_count: int
     latest_retirement_batch: str
     lag_expected: bool
+    owed_lag: bool
 
 
 @dataclass(frozen=True)
@@ -366,6 +367,7 @@ def write_checkpoint(state: GuardState, *, label: str, findings: list[Finding]) 
         "fork_doc_count": state.fork_doc_count,
         "latest_retirement_batch": state.latest_retirement_batch,
         "lag_expected": state.lag_expected,
+        "owed_lag": state.owed_lag,
         "findings": [f.__dict__ for f in findings],
     }
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -427,23 +429,108 @@ def append_credential_gate(
 
 
 def _lag_expected(root: Path) -> bool:
-    if _is_terminating_refresh_commit(root, "HEAD"):
-        return True
+    """True when HEAD itself is a verified terminating-refresh point (direct
+    commit or merge-wrapped). This is the fixed point's OWN lag — a refresh
+    commit can never record its own not-yet-computed SHA — and is tolerated
+    unconditionally, for every caller (CI, session-start, preflight alike):
+    a session-start hook checking out exactly the refresh commit must still
+    see it as clean, not as unreconciled drift.
+    """
+    return _is_verified_refresh_point(root, "HEAD")
+
+
+def _owed_lag(root: Path) -> bool:
+    """True when HEAD does NOT touch roadmap_status.md and HEAD's parent is a
+    verified terminating-refresh point. This is the "refresh owed" case: the
+    very next content commit after a refresh still (correctly, unavoidably)
+    carries the refresh's recorded value, since that commit's own SHA did not
+    exist yet when the refresh was authored.
+
+    Unlike `_lag_expected`, this tolerance is CALLER-GATED (on
+    `--allow-roadmap-drift` in `validate()`), not universal: a post-merge CI
+    push on `main` sits at exactly this commit and must pass clean, but a
+    local session-start/preflight check on the SAME commit must still force
+    the owed refresh before substantive work proceeds — the underlying git
+    state is identical in both cases, so only the caller's context can tell
+    them apart.
+
+    The file-touch guard below is the same anti-loophole as before: if HEAD
+    itself modifies roadmap_status.md — under the wrong title, or bundled with
+    unrelated content — it must qualify as a refresh entirely on its own merits
+    via `_lag_expected`/`_is_verified_refresh_point`, never by riding its
+    parent's owed-lag allowance.
+    """
     parents = _out(["git", "rev-list", "--parents", "-n", "1", "HEAD"], cwd=root).split()
+    if len(parents) < 2:
+        return False
+    if ".harness/roadmap_status.md" in _changed_files(root, base_ref=parents[1], head_ref="HEAD"):
+        return False
+    return _is_verified_refresh_point(root, parents[1])
+
+
+def _is_verified_refresh_point(root: Path, ref: str) -> bool:
+    """True when `ref` is a verified terminating-refresh point: either a direct
+    refresh commit (title + exact file set), or a merge commit that wraps one
+    (2 parents, diff-vs-first-parent matches the refresh file set, and the
+    second parent is itself a verified refresh point — recursing through
+    however many merge layers actually exist).
+
+    Checking `ref` directly (rather than resolving "the last commit that
+    touched the path") sidesteps git's default history simplification, which
+    hides a merge commit from path-limited `git log` whenever the merge is
+    tree-same to one parent for that path — exactly the shape of a real
+    terminating refresh merged with `git merge --no-ff`. It also means a stray,
+    malformed, or bundled edit to `roadmap_status.md` can never be mistaken for
+    a legitimate refresh: only a ref that independently proves refresh shape
+    (title + exact file set) counts, never mere path-touching position.
+
+    `_lag_expected` calls this on HEAD (covers HEAD itself being a refresh, or
+    a merge-wrapped refresh — tolerated unconditionally for every caller).
+    `_owed_lag` calls this on HEAD's own parent (covers the far more common
+    case: a plain content commit that doesn't touch the file at all, so it
+    still carries whatever value the last verified refresh point recorded —
+    a commit can never record its own not-yet-computed SHA, so this one-step
+    lag is exactly as unavoidable as a refresh commit's own lag, but is
+    tolerated only when the caller passes `--allow-roadmap-drift`, i.e. the
+    post-merge CI push context). Two or more content commits stacked past the
+    last verified refresh point correctly returns False — genuinely
+    unreconciled drift, not tolerated by either caller.
+
+    For the merge-wrapped case, the merged content must describe THIS merge's
+    own first parent — not merely be internally self-consistent with the
+    refresh branch's own (possibly stale) lineage. A refresh branch created at
+    commit A, left open while `main` advances to B, then merged in with
+    `--no-ff`, must NOT pass: its content still records A, and the merge's
+    real predecessor state is B, not A. `second_parent` being itself a
+    verified refresh point only proves it correctly described its own parent
+    (A) — a fact that is stale, not wrong, once main has moved past it.
+    """
+    if _is_terminating_refresh_commit(root, ref):
+        return True
+    parents = _out(["git", "rev-list", "--parents", "-n", "1", ref], cwd=root).split()
     if len(parents) < 3:
         return False
-    first_parent = parents[1]
-    second_parent = parents[2]
-    return _is_terminating_refresh_file_set(
-        _changed_files(root, base_ref=first_parent, head_ref="HEAD")
-    ) and _is_terminating_refresh_commit(root, second_parent)
+    first_parent, second_parent = parents[1], parents[2]
+    if not _is_terminating_refresh_file_set(
+        _changed_files(root, base_ref=first_parent, head_ref=ref)
+    ):
+        return False
+    if _roadmap_git_head_at_ref(root, ref) != _out(
+        ["git", "rev-parse", "--short=8", first_parent], cwd=root
+    ):
+        return False
+    return _is_verified_refresh_point(root, second_parent)
 
 
 def _is_terminating_refresh_commit(root: Path, ref: str) -> bool:
     title = _out(["git", "log", "-1", "--format=%s", ref], cwd=root)
     if not title.startswith("ops: roadmap status refresh "):
         return False
-    return _is_terminating_refresh_file_set(_commit_files(root, ref))
+    if not _is_terminating_refresh_file_set(_commit_files(root, ref)):
+        return False
+    return _roadmap_git_head_at_ref(root, ref) == _out(
+        ["git", "rev-parse", "--short=8", f"{ref}^"], cwd=root
+    )
 
 
 def _commit_files(root: Path, ref: str) -> list[str]:
@@ -453,6 +540,18 @@ def _commit_files(root: Path, ref: str) -> list[str]:
 
 def _is_terminating_refresh_file_set(files: list[str]) -> bool:
     return frozenset(files) in TERMINATING_REFRESH_FILE_SETS
+
+
+def _roadmap_git_head_at_ref(root: Path, ref: str) -> str:
+    """Read `.harness/roadmap_status.md`'s recorded `git_head` field AS OF `ref`
+    (not the current worktree) — a refresh commit is only genuinely a refresh
+    if it correctly records its own parent's SHA as the state it describes;
+    a structurally-shaped commit (right title, right lone file) that writes
+    malformed/stale/missing content must not pass as verified.
+    """
+    md = _out(["git", "show", f"{ref}:.harness/roadmap_status.md"], cwd=root)
+    match = re.search(r"\|\s*`git_head`\s*\|\s*`?([a-f0-9]{8,40})", md)
+    return match.group(1).strip() if match else ""
 
 
 def derive(
@@ -494,6 +593,7 @@ def derive(
         fork_doc_count=forks,
         latest_retirement_batch=batch,
         lag_expected=_lag_expected(root),
+        owed_lag=_owed_lag(root),
     )
 
 
@@ -663,7 +763,15 @@ def validate(
         )
 
     if state.computed_hash != state.roadmap_status.hash:
-        if state.branch == state.default_branch and not state.lag_expected:
+        # `owed_lag` (HEAD's parent, not HEAD itself, is the verified refresh) is
+        # only tolerated when the caller explicitly allows roadmap drift — i.e.
+        # the post-merge CI push context. `lag_expected` (HEAD itself is the
+        # verified refresh) is tolerated unconditionally for every caller. Both
+        # describe the identical git state on the same commit; only the caller's
+        # context can distinguish "CI post-merge smoke, pass clean" from
+        # "session-start/preflight, force the owed refresh first."
+        ci_owed_lag = allow_roadmap_drift and state.owed_lag
+        if state.branch == state.default_branch and not state.lag_expected and not ci_owed_lag:
             findings.append(
                 Finding(
                     "hard",
@@ -672,13 +780,16 @@ def validate(
                     f"does not match computed {state.computed_hash}.",
                 )
             )
-        elif state.lag_expected:
+        elif state.lag_expected or ci_owed_lag:
             findings.append(
                 Finding(
                     "warn",
                     "ROADMAP_STATUS_LAG_EXPECTED",
-                    "roadmap_status.md hash differs because HEAD is a terminating roadmap "
-                    "refresh; the next terminating refresh should reconcile the lag.",
+                    "roadmap_status.md hash differs because HEAD is a verified terminating "
+                    "roadmap refresh (tolerated for every caller), or HEAD is one commit past "
+                    "one and the caller explicitly allowed roadmap drift (CI post-merge push "
+                    "only) — a commit can never record its own not-yet-computed SHA; the next "
+                    "terminating refresh should reconcile the lag.",
                 )
             )
         elif allow_roadmap_drift:
@@ -833,6 +944,7 @@ def _json_report(state: GuardState, findings: list[Finding]) -> str:
             "fork_doc_count": state.fork_doc_count,
             "latest_retirement_batch": state.latest_retirement_batch,
             "lag_expected": state.lag_expected,
+            "owed_lag": state.owed_lag,
             "findings": [f.__dict__ for f in findings],
         },
         indent=2,
@@ -859,7 +971,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--allow-roadmap-drift",
         action="store_true",
-        help="downgrade non-default-branch roadmap_status.md hash drift to a warning",
+        help=(
+            "downgrade non-default-branch roadmap_status.md hash drift to a warning "
+            "unconditionally; on the default branch, downgrade only the one-commit "
+            "'owed lag' case (HEAD's parent is a verified terminating refresh — the "
+            "post-merge CI push scenario). Never masks arbitrary default-branch drift."
+        ),
     )
     parser.add_argument(
         "--base-ref",

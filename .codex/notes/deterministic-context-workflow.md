@@ -221,10 +221,16 @@ CI runs the guard directly without local checkpoint freshness because
 `.harness/.checkpoints/` is intentionally untracked. The CI invocation passes
 explicit `--base-ref` / `--head-ref` values from the GitHub event so the guard
 checks the committed PR range instead of an empty clean-checkout status.
-`--allow-roadmap-drift` only downgrades non-default-branch drift; it cannot
-mask default-branch roadmap_status.md drift. When `gh pr list` is unavailable, the guard
-emits `OPEN_PRS_UNAVAILABLE` instead of silently treating the open-PR set as
-authoritative.
+`--allow-roadmap-drift` downgrades non-default-branch drift unconditionally,
+and on the default branch it downgrades ONLY the one-commit "owed lag" case
+(HEAD's parent, not HEAD itself, is a verified terminating refresh — the
+post-merge CI push scenario). It cannot mask arbitrary default-branch
+roadmap_status.md drift (two-or-more-commit accumulated drift still hard-fails
+even with the flag). HEAD itself being the verified refresh is tolerated
+unconditionally, for every caller, flag or no flag — see `_lag_expected()` vs
+`_owed_lag()` in `tools/codex_context_guard.py`. When `gh pr list` is
+unavailable, the guard emits `OPEN_PRS_UNAVAILABLE` instead of silently
+treating the open-PR set as authoritative.
 
 The Codex `SessionStart` and `Stop` hooks invoke the same guard. Hook failures
 propagate nonzero when the guard reports a hard finding or cannot run.
