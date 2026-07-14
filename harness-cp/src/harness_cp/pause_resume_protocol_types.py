@@ -334,6 +334,28 @@ class PeerFanOutResumeState(BaseModel):
     `branches` is re-dispatched). A material-diff guard at resume: a different
     `branch_count` means the workflow body changed."""
 
+    paused_child_branches: tuple[PausedChildBranchResumeState, ...] = ()
+    """B-21 (R-FS-1) — the PARALLELIZATION analogue of
+    `FanOutResumeState.paused_child_branches`: peer branches whose own dispatch is a
+    `SUB_AGENT_DISPATCH` step whose recursive child sub-workflow itself returned
+    `RunStatus.PAUSED` (a grandchild paused under `cascade_policy=pause`; the runtime
+    `SUB_AGENT_DISPATCH` dispatcher is topology-agnostic, so a PARALLELIZATION peer
+    branch can recurse + pause exactly as an ORCHESTRATOR_WORKERS worker can). DISTINCT
+    from `branches` (terminal — MUST NOT re-dispatch) and from an absent ordinal
+    (re-dispatch FRESH): a paused-child branch is the THIRD disposition — re-entered on
+    resume via the child's OWN `api.resume(child_snapshot)` so the grandchild's
+    already-completed steps are NOT re-executed (re-dispatching it fresh would lose
+    that work — `[[full-chain-witness-not-half-proofs]]`). Each row's `child_snapshot`
+    is COVERED by `_compute_snapshot_hash` transitively (it lives inside
+    `peer_fan_out_resume`, whose `model_dump(mode="json")` the hash already serializes
+    recursively). Additive, default-empty: `_compute_snapshot_hash` DROPS this field
+    from the canonical serialization when empty (the `synthesis_step_id` /
+    `effect_fence_paused_branches` drop-when-empty discipline), so every pre-existing
+    PARALLELIZATION snapshot hashes byte-identically. A peer ordinal here MUST NOT also
+    appear in `branches` (the resume material-diff guard enforces no overlap —
+    terminal vs paused-child are disjoint dispositions, mirroring
+    `FanOutResumeState.paused_child_branches`)."""
+
     synthesis_step_id: str | None = None
     """B-FANOUT-PAUSE-SYNTHESIS (R-FS-1) — the PARALLELIZATION analogue of
     `FanOutResumeState.synthesis_step_id`: the terminal `POST_JOIN_SYNTHESIS` step's
