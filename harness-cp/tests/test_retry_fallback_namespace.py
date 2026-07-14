@@ -41,13 +41,13 @@ _SPEC_FALLBACK = {
 }
 
 _SPEC_HARNESS_BREAKER = {
-    "harness.breaker.id",
-    "harness.breaker.state",
     "harness.breaker.scope",
-    "harness.breaker.trip_count",
-    "harness.breaker.trip_window_seconds",
-    "harness.breaker.fail_count_in_window",
-    "harness.breaker.fail_threshold",
+    "harness.breaker.from_state",
+    "harness.breaker.to_state",
+    "harness.breaker.trigger_count",
+    "harness.breaker.permanent_fail_repeats",
+    "harness.breaker.tool_id",
+    "harness.breaker.model_version",
     "harness.breaker.cause",
     "harness.breaker.cooldown_ms",
 }
