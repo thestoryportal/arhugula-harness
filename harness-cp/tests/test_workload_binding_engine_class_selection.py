@@ -195,6 +195,30 @@ def test_selection_aborts_when_persona_tier_admits_no_candidate(
         )
 
 
+def test_selection_aborts_when_no_candidate_set_for_surface(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Out-of-family Codex follow-up on B-28 finding #7 — `_candidate_set_for`
+    has its OWN, separate `WorkloadBindingError` raise site ("no §7.2
+    candidate set for deployment surface") that the tier-admissibility test
+    above never reaches (it keeps a matching `LOCAL_DEVELOPMENT` row).
+    Synthesize an `ENGINE_CLASS_CANDIDATES` with no row at all for the
+    requested surface to pin this second, independent guard."""
+    monkeypatch.setattr(
+        "harness_cp.workload_binding_engine_class_selection.ENGINE_CLASS_CANDIDATES",
+        (),
+    )
+
+    with pytest.raises(WorkloadBindingError, match="no §7.2 candidate set"):
+        select_engine_class(
+            _input(
+                WorkloadClass.RESEARCH,
+                DeploymentSurface.LOCAL_DEVELOPMENT,
+                PersonaTier.SOLO_DEVELOPER,
+            )
+        )
+
+
 def test_result_frozen() -> None:
     """The result record is frozen (ConfigDict extra=forbid, frozen=True)."""
     result = select_engine_class(

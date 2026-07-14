@@ -12,6 +12,7 @@ from harness_is.jsonl_event_ledger_lifecycle import JsonlLedgerHandle
 from harness_is.memory_operation_ledger import (
     MemoryLedgerVerificationStatus,
     MemoryOperationEngineClass,
+    MemoryOperationEntry,
     MemoryOperationIdempotencyConflictError,
     MemoryOperationKind,
     MemoryOperationPayload,
@@ -147,7 +148,7 @@ def _redaction_event(
     )
 
 
-def test_projection_mismatch_rejected_on_payload_and_entry() -> None:
+def test_projection_mismatch_rejected_on_payload() -> None:
     """B-28 finding #2 (test-quality preflight 2026-07-12) — the
     ``_projection_matches_kind`` model_validator was never exercised: every
     existing test fixture always constructs the correct
@@ -159,6 +160,25 @@ def test_projection_mismatch_rejected_on_payload_and_entry() -> None:
             idempotency_key=Identifier("idem-mismatch"),
             actor=_ACTOR,
             timestamp=_BASE_TIME,
+            operation_kind=MemoryOperationKind.CAPTURE,
+            operation_projection=MemoryOperationProjection.RETRIEVAL_EVENTS,
+        )
+
+
+def test_projection_mismatch_rejected_on_entry() -> None:
+    """Out-of-family Codex follow-up on B-28 finding #2 — `MemoryOperationEntry`
+    carries its OWN copy of `_projection_matches_kind` (`_deserialize_entry`
+    constructs it directly, bypassing `MemoryOperationPayload` entirely), so
+    payload-only coverage would leave a broken/removed
+    `MemoryOperationEntry._projection_matches_kind` undetected."""
+    with pytest.raises(ValidationError, match="capture"):
+        MemoryOperationEntry(
+            action_id=Identifier("mem-op-entry-mismatch"),
+            idempotency_key=Identifier("idem-entry-mismatch"),
+            actor=_ACTOR,
+            response_hash=b"\x00" * 32,
+            timestamp=_BASE_TIME,
+            prior_event_hash=b"\x00" * 32,
             operation_kind=MemoryOperationKind.CAPTURE,
             operation_projection=MemoryOperationProjection.RETRIEVAL_EVENTS,
         )

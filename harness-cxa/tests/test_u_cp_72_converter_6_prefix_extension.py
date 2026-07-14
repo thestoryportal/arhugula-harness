@@ -355,6 +355,7 @@ def test_signed_with_ed25519_default() -> None:
         _mcp_trust_carrier(),
         _pause_carrier(),
         _resume_carrier(),
+        _cost_carrier(),
     ]
     for carrier in carriers:
         entry = cp_audit_to_od_audit(carrier, key_id=_KEY)
