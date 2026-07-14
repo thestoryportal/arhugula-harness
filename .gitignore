@@ -83,6 +83,9 @@ coverage.xml
 # read-only learning material, not tracked in harness history (also keeps them out of lint).
 ai-docs/
 
+# Design-skill reference clones (vendored, not harness source; keeps them out of lint too).
+dashboard-design/
+
 # Generated knowledge-graph artifacts from the understand-anything plugin (regenerable).
 .understand-anything/
 **/.understand-anything/
