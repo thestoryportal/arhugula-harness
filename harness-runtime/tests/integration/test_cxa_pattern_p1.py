@@ -266,6 +266,31 @@ PATTERN_P1_SEAMS: tuple[tuple[str, str, str, str], ...] = (
         "harness_is.state_ledger_write",
         "EntryPayload",
     ),
+    # ---- §2.3.2 CP → IS — 2 NEW B-26 rows ---------------------------------
+    # Two NEW genuine typed seams: U-CP-45's `verify_rotation_6_steps`
+    # (C-CP-20 §20.3.1 six-step rotation verification) wires the real IS
+    # chain-linkage check into the previously-hardcoded-True stub —
+    # `harness_is.chain_verification.verify_chain` against the caller-
+    # supplied audit-ledger entries, typed via `StateLedgerEntry`. This
+    # materializes the already-cross-cited CP spec §20 composition with IS
+    # spec C-IS-06 §6.4 (`Spec_Control_Plane_v1_2.md` §20 cross-axis
+    # citation: "hash-chain integrity construction — team-binding+
+    # audit-ledger uses F2 hash-chain") — impl-to-cleared-spec, not a new
+    # design surface. Registered per this file's `PATTERN_P1_SEAMS` /
+    # `tools/semantic_overlay/overlay.py` code-resident convention (not the
+    # delta-only CXA markdown, per the module docstring at line 27).
+    (
+        "U-CP-45→U-IS-07",
+        "harness_cp.five_axis_composition",
+        "harness_is.state_ledger_entry_schema",
+        "StateLedgerEntry",
+    ),
+    (
+        "U-CP-45→U-IS-10",
+        "harness_cp.five_axis_composition",
+        "harness_is.chain_verification",
+        "verify_chain",
+    ),
 )
 
 
@@ -274,8 +299,8 @@ PATTERN_P1_SEAMS: tuple[tuple[str, str, str, str], ...] = (
 # ---------------------------------------------------------------------------
 
 
-def test_seam_count_is_31() -> None:
-    """CXA v2.17 §2.3 enumerates 31 genuine typed seams.
+def test_seam_count_is_33() -> None:
+    """CXA v2.17 §2.3 enumerates 31 genuine typed seams; B-26 adds 2 more.
 
     v2.3 baseline: 22 seams. v2.4 added §2.3.7 with 1 seam (U-CP-28 → U-OD-00
     sub-agent dispatch audit-write). v2.5 grew §2.3.7 to 2 seams (added
@@ -292,8 +317,18 @@ def test_seam_count_is_31() -> None:
     (2026-05-28..29) closing the v2.16 §0.4 forward-tracking marker
     6-PENDING transit to 6-ABSORBED. CP→IS bucket grows 37 → 43 canonical;
     9 → 15 genuine. Aggregate genuine 25 → 31.
+
+    B-26 (`.harness/post-phase-8-forward-register.md`) adds 2 NEW §2.3.2
+    rows: `harness_cp.five_axis_composition`'s `verify_rotation_6_steps`
+    wires the real IS chain-linkage check into the previously-hardcoded-True
+    `VERIFY_HASH_CHAIN_LINK` step (`StateLedgerEntry` + `verify_chain`) —
+    materializing the CP spec §20 ↔ IS spec C-IS-06 §6.4 composition already
+    cross-cited at `Spec_Control_Plane_v1_2.md` §20's "Cross-axis citation"
+    line. Aggregate genuine 31 → 33 (registered code-resident per this
+    file's own convention, not a delta-only CXA markdown edit — see the
+    module docstring).
     """
-    assert len(PATTERN_P1_SEAMS) == 31
+    assert len(PATTERN_P1_SEAMS) == 33
 
 
 # ---------------------------------------------------------------------------
