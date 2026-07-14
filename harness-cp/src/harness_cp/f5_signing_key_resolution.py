@@ -191,12 +191,25 @@ class SigningBackend(Protocol):
     algorithm: str
     """`∈ {ed25519, ecdsa-p256, rsa-pss-2048}` per C-CP-20 §20.2."""
 
-    def sign(self, *, message: bytes, key_id: str) -> bytes:
-        """Produce a signature over `message` under the key named `key_id`."""
+    def sign(self, *, message: bytes, key_id: str, key_period: int) -> bytes:
+        """Produce a signature over `message` under the key valid at `key_period`
+        for `key_id` (C-CP-20 §20.3.1 — "the key valid at ... key_period").
+
+        `key_period` is passed through, not merely embedded in `message`, so a
+        rotation-aware backend can select the historical key-period-specific
+        key material — a single stable `key_id` per §20.2's residence scheme
+        cannot by itself distinguish keys across a rotation boundary
+        (out-of-family Codex round-4 P1 finding). This module does not
+        implement rotation-aware key selection itself; it only ensures the
+        seam carries the information a future backend needs to (see `B-33`
+        at `.harness/post-phase-8-forward-register.md` for the rotation-
+        boundary-proof residual this composes with).
+        """
         ...
 
-    def verify(self, *, message: bytes, signature: bytes, key_id: str) -> bool:
-        """Verify `signature` over `message` under the key named `key_id`."""
+    def verify(self, *, message: bytes, signature: bytes, key_id: str, key_period: int) -> bool:
+        """Verify `signature` over `message` under the key valid at `key_period`
+        for `key_id` — see `sign` for why `key_period` is a parameter here too."""
         ...
 
 
@@ -312,7 +325,7 @@ def sign_audit_entry(
     message = _canonical_signing_message(
         sha256_hex, key_id=key.key_id, algorithm=backend.algorithm, key_period=key_period
     )
-    signature = backend.sign(message=message, key_id=key.key_id)
+    signature = backend.sign(message=message, key_id=key.key_id, key_period=key_period)
     return CPSignedAuditLedgerEntry(
         entry=entry,
         audit_signature_sha256=sha256_hex,
@@ -387,6 +400,7 @@ def verify_audit_entry_signature(
         message=message,
         signature=signed.audit_signature_value,
         key_id=key.key_id,
+        key_period=signed.audit_signature_key_period,
     )
     if not verified:
         return VerificationResult.SIGNATURE_MISMATCH

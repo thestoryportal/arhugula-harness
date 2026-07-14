@@ -63,12 +63,12 @@ class _InMemoryEd25519Backend:
         self._private_key = Ed25519PrivateKey.generate()
         self._public_key = self._private_key.public_key()
 
-    def sign(self, *, message: bytes, key_id: str) -> bytes:
-        del key_id
+    def sign(self, *, message: bytes, key_id: str, key_period: int) -> bytes:
+        del key_id, key_period
         return self._private_key.sign(message)
 
-    def verify(self, *, message: bytes, signature: bytes, key_id: str) -> bool:
-        del key_id
+    def verify(self, *, message: bytes, signature: bytes, key_id: str, key_period: int) -> bool:
+        del key_id, key_period
         try:
             self._public_key.verify(signature, message)
         except InvalidSignature:
@@ -396,7 +396,9 @@ def test_verify_rejects_out_of_contract_algorithm_even_if_backend_agrees() -> No
     forged = CPSignedAuditLedgerEntry(
         entry=_ENTRY,
         audit_signature_sha256=_canonical_entry_hash(_ENTRY),
-        audit_signature_value=backend.sign(message=message, key_id=result.handle.key_id),
+        audit_signature_value=backend.sign(
+            message=message, key_id=result.handle.key_id, key_period=1
+        ),
         audit_signature_algorithm="edd25519",
         audit_signature_key_id=result.handle.key_id,
         audit_signature_key_period=1,
@@ -404,6 +406,66 @@ def test_verify_rejects_out_of_contract_algorithm_even_if_backend_agrees() -> No
 
     assert (
         verify_audit_entry_signature(forged, result.handle, backend=backend)
+        is VerificationResult.SIGNATURE_MISMATCH
+    )
+
+
+class _RotationAwareBackend:
+    """TEST-ONLY `SigningBackend` double keying off `key_period`, proving the
+    seam carries what a rotation-aware backend needs (out-of-family Codex
+    round-4 P1 finding — a single stable `key_id` per C-CP-20 §20.2's
+    residence scheme cannot by itself distinguish keys across a rotation
+    boundary; the concrete rotation-boundary-proof mechanism itself is `B-33`,
+    not this seam)."""
+
+    algorithm = "ed25519"
+
+    def __init__(self) -> None:
+        self._keys_by_period: dict[int, Ed25519PrivateKey] = {}
+
+    def _key_for(self, period: int) -> Ed25519PrivateKey:
+        if period not in self._keys_by_period:
+            self._keys_by_period[period] = Ed25519PrivateKey.generate()
+        return self._keys_by_period[period]
+
+    def sign(self, *, message: bytes, key_id: str, key_period: int) -> bytes:
+        del key_id
+        return self._key_for(key_period).sign(message)
+
+    def verify(self, *, message: bytes, signature: bytes, key_id: str, key_period: int) -> bool:
+        del key_id
+        try:
+            self._key_for(key_period).public_key().verify(signature, message)
+        except InvalidSignature:
+            return False
+        return True
+
+
+def test_backend_receives_key_period_for_rotation_awareness() -> None:
+    """Out-of-family Codex round-4 P1 — `SigningBackend.sign`/`verify` receive
+    `key_period`, not just `key_id`, so a rotation-aware backend can select
+    the historical key valid at that period."""
+    result = resolve_signing_key(_SCOPE, PersonaTier.MULTI_TENANT_COMPLIANCE)
+    assert result.handle is not None
+    backend = _RotationAwareBackend()
+
+    signed_period_1 = sign_audit_entry(_ENTRY, result.handle, key_period=1, backend=backend)
+    signed_period_2 = sign_audit_entry(_ENTRY, result.handle, key_period=2, backend=backend)
+
+    assert (
+        verify_audit_entry_signature(signed_period_1, result.handle, backend=backend)
+        is VerificationResult.VERIFIED
+    )
+    assert (
+        verify_audit_entry_signature(signed_period_2, result.handle, backend=backend)
+        is VerificationResult.VERIFIED
+    )
+
+    # Relabeling period 1's signature onto period 2 fails — proving the
+    # backend genuinely used period-specific keys, not one shared key.
+    cross_period = signed_period_1.model_copy(update={"audit_signature_key_period": 2})
+    assert (
+        verify_audit_entry_signature(cross_period, result.handle, backend=backend)
         is VerificationResult.SIGNATURE_MISMATCH
     )
 
@@ -425,7 +487,9 @@ def test_verify_rejects_negative_stored_key_period() -> None:
     forged = CPSignedAuditLedgerEntry(
         entry=_ENTRY,
         audit_signature_sha256=_canonical_entry_hash(_ENTRY),
-        audit_signature_value=backend.sign(message=message, key_id=result.handle.key_id),
+        audit_signature_value=backend.sign(
+            message=message, key_id=result.handle.key_id, key_period=-1
+        ),
         audit_signature_algorithm="ed25519",
         audit_signature_key_id=result.handle.key_id,
         audit_signature_key_period=-1,
