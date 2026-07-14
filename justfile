@@ -129,6 +129,17 @@ overlay-check:
 overlay-query *ARGS:
     uv run python tools/semantic_overlay/overlay.py query {{ARGS}}
 
+# ─── forward register — structured post-Phase-8 B-* forward-work schema ─────
+# Sibling to arc-ledger.yaml (see tools/forward_register.py's own header for why
+# arc-ledger.yaml itself cannot carry these rows). Prose home stays at
+# .harness/post-phase-8-forward-register.md; this is the queryable summary layer.
+forward-register *ARGS:
+    uv run python tools/forward_register.py {{ARGS}}
+
+# CI gate: impossible/stale tally or prose-heading drift = exit 1.
+forward-register-check:
+    uv run python tools/forward_register.py --check
+
 # ─── closure gate (R-IF-115) — the "harness coding fully closed" predicate ──
 # Consolidates R-FS-1 + R-CL-Q1..Q4/D1/C1 must_pass into one report.
 # Spec: .harness/audit/Closure_Gate_v1.md. Delegates to arc_ledger / overlay /

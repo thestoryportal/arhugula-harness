@@ -1,0 +1,321 @@
+# Post-Phase-8 forward-work register — structured source of truth.
+#
+# WHY THIS EXISTS: `.harness/post-phase-8-forward-register.md` (the prose home) grew to
+# 36 B-* items / ~14K words of hand-maintained markdown with no queryable structure —
+# the same "hand-maintained markdown drifts / is expensive to re-read from a fresh
+# context" defect class R-IF-114 fixed for the R-FS-1 build arc via
+# `.harness/arc-ledger.yaml` + `tools/arc_ledger.py`. That fix does NOT cover THIS
+# register: `arc-ledger.yaml`'s own `rfs1_status: resolved` pin REQUIRES zero open
+# standalone rows (see `tools/arc_ledger.py`'s `RFS1_ZERO_OPEN_ALLOWED` invariant) —
+# R-FS-1/R-FS-2 are CLOSED build arcs, and adding new post-closure forward items there
+# as `status: registered` rows would hard-fail `arc_ledger.py --check` (verified
+# empirically before this file was authored — do not fold this register into
+# arc-ledger.yaml). This is a SIBLING schema/tool for a DIFFERENT, still-open
+# lifecycle bucket, mirroring arc-ledger.yaml's proven pattern: one structured source,
+# a pure derive(), a validate() with a snapshot pin, and a blocking `--check` CI gate.
+#
+# PROSE HOME: rich per-item prose (What it is / Current state / Close-out steps /
+# Council rationale) stays at `.harness/post-phase-8-forward-register.md` — each row
+# below carries only a one-line `summary` + `close_out` + a `heading` back-pointer
+# (the exact `### B-NN ·...` markdown heading text) so a query tool can pull the full
+# prose on demand. No prose is duplicated into this file.
+#
+# STATUS ENUM (the ONLY place this mapping lives):
+#   open                   — actionable now, no blocker.
+#   design_substrate_gated — needs a Class 1 fork doc (X-AL-3) before any code change.
+#   registered_finding     — a real, non-urgent gap surfaced during another arc's
+#                            review/build; opens only when a live consumer/trigger
+#                            appears (the "register-then-triage, not drop" discipline).
+#   operator_gated         — needs a credential / D-ADR / cloud provisioning decision
+#                            only the operator can make.
+#   held                   — an explicit operator DEFER-INDEFINITELY ratification;
+#                            not silently reopened.
+#   closed                 — built + merged, or foreclosed/superseded; kept for history.
+#
+# FORWARD-ONLY: a real transit (an item opens/closes, a new one surfaces) edits the
+# row AND bumps the `snapshot:` block in the SAME commit — mirrors arc-ledger.yaml's
+# own forward-only discipline. `tools/forward_register.py --check` is the CI gate.
+
+snapshot:
+  total: 37
+  open: 2
+  design_substrate_gated: 3
+  registered_finding: 8
+  operator_gated: 2
+  held: 1
+  closed: 21
+  source: ".harness/post-phase-8-forward-register.md"
+
+items:
+  - id: B-1
+    title: "Layered capability-aware routing activation"
+    status: closed
+    summary: "R-300 multi-LLM routing activation — declarative layer live; the multi-provider exercise is B-2."
+    pr: "#213"
+    heading: "### B-1 · Layered capability-aware routing activation"
+
+  - id: B-2
+    title: "Multi-provider credentials + mixed-provider exercise"
+    status: closed
+    summary: "Deterministic fallback + live Anthropic->OpenAI and live Ollama exercise."
+    pr: "#281 + #283"
+    heading: "### B-2 · Multi-provider credentials + mixed-provider exercise"
+
+  - id: B-3
+    title: "Real TIER_2_CONTAINER sandbox execution (R-410)"
+    status: closed
+    summary: "Local Docker execution driver + live TIER_2 container e2e."
+    pr: "R-410"
+    heading: "### B-3 · Real TIER_2_CONTAINER sandbox execution (R-410)"
+
+  - id: B-4
+    title: "TIER_3 microVM + TIER_4 full-VM execution (R-411/R-412)"
+    status: closed
+    summary: "Docker+gVisor/runsc driver (R-411) + managed E2B full-VM driver (R-412)."
+    pr: "R-411/R-412"
+    heading: "### B-4 · TIER_3 microVM + TIER_4 full-VM execution (R-411 / R-412)"
+
+  - id: B-5
+    title: "SELF_HOSTED_SERVER + MANAGED_CLOUD deployment e2e (R-420/R-421)"
+    status: closed
+    summary: "Local self-hosted daemon+collector+keyring e2e; E2B+GCP Secret Manager+Cloud Run e2e."
+    pr: "R-420/R-421"
+    heading: "### B-5 · SELF_HOSTED_SERVER + MANAGED_CLOUD deployment e2e (R-420 / R-421)"
+
+  - id: B-6
+    title: "OTLP tail-keep collector-side validation (R-430)"
+    status: closed
+    summary: "Resolved by the R-420 local real-collector tail-keep live proof."
+    pr: "#326"
+    heading: "### B-6 · OTLP tail-keep preservation validation (R-430)"
+
+  - id: B-7
+    title: "Tier-level self-hosted secrets backend selector (R-440)"
+    status: closed
+    summary: "SELF_HOSTED keyring-only selector landed; cloud bootstrap-token is R-421."
+    pr: "R-440 (RESOLVED)"
+    heading: "### B-7 · Tier-level self-hosted secrets backend selector (R-440)"
+
+  - id: B-8
+    title: "Non-default tenant_id / non-SOLO persona_tier deployment"
+    status: closed
+    summary: "R-500 self-hosted multi-tenant live proof (redaction + tenant-scoped audit)."
+    pr: "#328"
+    heading: "### B-8 · Non-default `tenant_id` / non-SOLO `persona_tier` deployment"
+
+  - id: B-9
+    title: "OD-4: per-session redaction toggle + opaque-token tokenization"
+    status: closed
+    summary: "R-008 + batch-53 RESOLVED; runtime residual closed, live ledger back-flowed."
+    pr: "R-008"
+    heading: "### B-9 · OD-4: per-session redaction toggle (§13.1) + opaque-token tokenization (§13.2)"
+
+  - id: B-10
+    title: "Real external MCP server connection"
+    status: closed
+    summary: "R-800 RESOLVED; stdio + streamable-HTTP e2e live. api.run Gap D closed at PR #515."
+    pr: "#172, #515"
+    heading: "### B-10 · Real external MCP server connection"
+
+  - id: B-11
+    title: "Files API integration (AS-8e / CP-17)"
+    status: closed
+    summary: "R-810 RESOLVED — live Anthropic Files upload/reference/delete + Cloud Trace proof."
+    pr: "R-810"
+    heading: "### B-11 · Files API integration (AS-8e / CP-17)"
+
+  - id: B-12
+    title: "managed_agents integration (AS-8f)"
+    status: closed
+    summary: "R-820 RESOLVED by real Anthropic Managed Agents SDK/session live e2e."
+    pr: "#380"
+    heading: "### B-12 · managed_agents integration (AS-8f)"
+
+  - id: B-13
+    title: "Memory-tool production backend (CP-16)"
+    status: closed
+    summary: "Filesystem + SQLite + S3 + managed-PostgreSQL (Neon) backends live-proven."
+    pr: "R-830"
+    heading: "### B-13 · Memory-tool production backend (CP-16)"
+
+  - id: B-14
+    title: "CXA cross-axis seam completion (CXA-1..5)"
+    status: closed
+    summary: "All 5 CXA seams RETIRED (batch-53..57); mechanical wiring, no design tension."
+    pr: "batch-53..57"
+    heading: "## CXA — Cross-axis composition seam completion (B-14)"
+
+  - id: B-15
+    title: "Dashboard iteration-2 (R-XI-02/R-XI-03)"
+    status: closed
+    summary: "Both RESOLVED 2026-06-02; stale-open framing corrected 2026-07-14."
+    pr: "#235, #237"
+    heading: "### B-15 · Dashboard iteration-2 (R-XI-02 / R-XI-03) — **✅ CLOSED (stale-open correction, 2026-07-14)**"
+
+  - id: B-16
+    title: "Open architectural / speculative arcs (Surface X research)"
+    status: registered_finding
+    summary: "Deliberately unpadded standing bucket for not-yet-decomposed forward research."
+    close_out: "Operator-seeded when a specific research question crystallizes; no concrete item today."
+    council: "conditional — case-by-case, only if a named cross-domain tension surfaces"
+    heading: "### B-16 · Open architectural / speculative arcs"
+
+  - id: B-17
+    title: "ICM workspace-methodology adoption"
+    status: operator_gated
+    summary: "ICM_Alignment_Audit_v1.md landed; no adoption decided — 3 operator gates outstanding."
+    close_out: "Operator decides scope / file-size caps / L0-refactor appetite (audit §8) before any spec."
+    council: "conditional — nameable context-minimalism (C2-style) vs governance-completeness tension"
+    heading: "### B-17 · ICM workspace-methodology adoption *(appended 2026-06-04 at HEAD `ca2bc34`)*"
+
+  - id: B-18
+    title: "U-1 — cache_control breakpoint emission"
+    status: open
+    summary: "Frozen-tools-superset prerequisite decided (operator, 2026-07-09); ACTIVE, scoped next build arc."
+    close_out: "Ground AS/MCP tool-superset + epoch model (council+advisor), build frozen-tools -> §1.5 breakpoint -> emit/observe witness."
+    council: "conditional — frozen-tools-superset architecture + epoch model (C4 tools ⊥ C2 caching ⊥ C6 routing/epoch)"
+    heading: "### B-18 · U-1 — `cache_control` breakpoint emission *(NET-NEW, registered 2026-07-09)*"
+
+  - id: B-19
+    title: "breaker.cause + breaker.cooldown_ms ambient attrs"
+    status: closed
+    summary: "BUILT 2026-07-13 as breaker.tripped event attrs; cause vacuous-by-honest-design."
+    pr: "R-FS-2 Wave 4"
+    heading: "### B-19 · U-2 — breaker `breaker.cause` + `breaker.cooldown_ms` attributes *(NET-NEW, registered 2026-07-09; operator-discretionary)* — **✅ BUILT 2026-07-13**"
+
+  - id: B-20
+    title: "CP-side harness.breaker.* composition-mirror attribute-name drift"
+    status: open
+    summary: "7 CP-side breaker schema names diverge from OD's canonical §7.1 emission names; CI-invisible (count-only check)."
+    close_out: "Re-derive the 7 CP entries to match OD's canonical names/cardinality; update the test's expected set."
+    council: "no — mechanical once the target shape is decided (already known from OD's own schema)"
+    heading: "### B-20 · CP-side `harness.breaker.*` composition-mirror attribute-name drift *(NET-NEW, registered 2026-07-13 at Wave-5 hygiene grounding)*"
+
+  - id: R-1
+    title: "Managed-cloud deployment-surface dispatch (confirmed-DEFERRED)"
+    status: held
+    summary: "AS-8f DEFER-INDEFINITELY (2026-05-28) reaffirmed 2026-07-09 — FULL-SPEC directive does not override this held decision."
+    heading: "### R-1 confirmed-DEFERRED · Managed-cloud deployment-surface dispatch"
+
+  - id: B-21
+    title: "PARALLELIZATION nested-child-pause capability gap"
+    status: closed
+    summary: "BUILT 2026-07-13 — PeerFanOutResumeState.paused_child_branches added, mirrors v1.45."
+    pr: "CP spec v1.97"
+    heading: "### B-21 · PARALLELIZATION nested-child-pause capability gap *(preflight HIGH #6, `workflow_driver.py:7787`)* — **✅ BUILT 2026-07-13**"
+
+  - id: B-22
+    title: "F5 real audit-signature backend seam"
+    status: closed
+    summary: "Seam scope CLOSED 2026-07-14 (fail-loud + SigningBackend protocol); concrete backend split to B-36."
+    pr: "#976"
+    heading: "### B-22 · F5 real audit-signature backend seam *(preflight CRITICAL #1 follow-on)* — **✅ CLOSED 2026-07-14 (seam scope only — see `B-36` for the split-off concrete-backend follow-on)**"
+
+  - id: B-23
+    title: "Cost-attribution composers fabricate their audit entry's IS-anchor"
+    status: closed
+    summary: "BUILT 2026-07-13 — shared compose_cost_f2_entry_core helper wired at all 4 composers."
+    pr: "cost_attribution_f2_write"
+    heading: "### B-23 · Cost-attribution composers fabricate their audit entry's IS-anchor *(preflight §4 \"most urgent\", `cp_audit_conversion.py:161`)* — **✅ BUILT 2026-07-13**"
+
+  - id: B-24
+    title: "secret_negative_observation.py wrong NegativeObservationSurface label"
+    status: design_substrate_gated
+    summary: "verify_sole_resolution_path hardcodes the wrong label; no enum value maps to workflow-manifest arrival. Zero production callers (latent)."
+    close_out: "File class_1_fork_secret_negative_observation_missing_enum_member.md before adding the enum member (X-AL-3)."
+    council: "no — mechanical enum addition once the fork ratifies the member name"
+    heading: "### B-24 · `secret_negative_observation.py:127` wrong `NegativeObservationSurface` label — needs a new enum member *(design-substrate)*"
+
+  - id: B-25
+    title: "sandbox_tier_floor.py — is_deterministic_inhouse=False branch undefined"
+    status: design_substrate_gated
+    summary: "is_deterministic_inhouse threaded but never read; spec only defines the True-case floor."
+    close_out: "File class_1_fork_sandbox_tier_floor_deterministic_inhouse_false_undefined.md before patching."
+    council: "conditional — C10 blast-radius vs C4 tool-contract semantics, nameable once a floor value is proposed"
+    heading: "### B-25 · `sandbox_tier_floor.py:54` — `is_deterministic_inhouse=False` branch has no defined floor *(design-substrate)*"
+
+  - id: B-26
+    title: "five_axis_composition.py verify_rotation_6_steps hardcoded-True stub"
+    status: closed
+    summary: "BUILT 2026-07-13 — real IS hash-chain verification wired; 2 new genuine CXA P1 seams."
+    pr: "VERIFY_HASH_CHAIN_LINK"
+    heading: "### B-26 · `five_axis_composition.py:320` — `verify_rotation_6_steps` hardcoded-`True` stub — **✅ BUILT 2026-07-13**"
+
+  - id: B-27
+    title: "cli/app.py paused (HITL) workflow status shares failed's exit code"
+    status: design_substrate_gated
+    summary: "Runtime spec §14.18.2 exit-code table never assigned `paused` a disposition."
+    close_out: "File class_1_fork_cli_exit_code_paused_status_undefined.md before patching app.py."
+    council: "no — mechanical once the disposition is decided"
+    heading: "### B-27 · `cli/app.py:347` — `paused` (HITL) workflow status shares `failed`'s exit code *(design-substrate)*"
+
+  - id: B-28
+    title: "Test-quality findings untriaged (preflight report §6)"
+    status: closed
+    summary: "TRIAGED 2026-07-14 — 17 fixed / 1 stale / 1 discovered-and-registered (B-35)."
+    pr: "preflight §6 triage"
+    heading: "### B-28 · Test-quality findings untriaged *(preflight report §6 — 19 findings, 3 high / 10 medium / 6 low)* — **✅ TRIAGED 2026-07-14**"
+
+  - id: B-29
+    title: "Pre-existing F2-write gaps surfaced at B-23 (branch_metadata + shared clock)"
+    status: registered_finding
+    summary: "Dormant sub_agent_dispatch.py-shared gaps: branch_metadata sidecar unpopulated; no shared time_source consumer."
+    close_out: "Decide branch_metadata ownership (council-eligible); thread optional time_source once a real consumer exists."
+    council: "conditional — C2 IS-axis carrier-ownership vs C9 producer-authority, nameable once a reading is proposed"
+    heading: "### B-29 · Pre-existing F2-write gaps surfaced at B-23 (out-of-family Codex, not novel to B-23) *(registered 2026-07-13)*"
+
+  - id: B-30
+    title: "Cost-attribution disambiguator replay-semantics inconsistency"
+    status: registered_finding
+    summary: "Validator composer dedupes cost events on resume; tool/LLM/webhook always create a new F2 entry — no decided policy."
+    close_out: "Decide replay-billing semantics once (dedupe vs distinct), then align disagreeing composers."
+    council: "conditional — C9 producer/replay-authority vs C7/C8 cost/audit-fidelity, nameable once a policy is proposed"
+    heading: "### B-30 · Cost-attribution disambiguator replay-semantics inconsistency *(surfaced at B-23 round 6, advisor())*"
+
+  - id: B-31
+    title: "Paused-child resume guard does not validate child_workflow_id identity"
+    status: registered_finding
+    summary: "Same-step_id/same-kind edit could swap the target child workflow past the resume guard undetected."
+    close_out: "Add child_workflow_id to the shared PausedChildBranchResumeState carrier, validated at the CP resume guard."
+    council: "no — mechanical carrier-completeness extension, no nameable cross-domain tension"
+    heading: "### B-31 · Paused-child resume guard does not validate `child_workflow_id` identity *(surfaced at B-21, out-of-family Codex round 2)*"
+
+  - id: B-32
+    title: "Nested paused-child HITL-response routing + pause-reason propagation"
+    status: registered_finding
+    summary: "Two concurrent paused children share one run-level resume-context holder; parent pause-reason ignores nested HITL_PENDING."
+    close_out: "Design a per-branch/per-child keyed resume-context routing scheme; derive pause_reason from the union incl. nested reasons."
+    council: "conditional — C7/C8 HITL-fidelity vs C1/C5 orchestration-correctness, nameable once a routing scheme is proposed"
+    heading: "### B-32 · Nested paused-child HITL-response routing + pause-reason propagation (coupled) *(surfaced at B-21, out-of-family Codex round 3)*"
+
+  - id: B-33
+    title: "verify_rotation_6_steps cannot prove a rotation boundary occurred"
+    status: registered_finding
+    summary: "Generic hash-chain continuity check passes any intact ledger; cannot confirm a genuine rotation-pair boundary."
+    close_out: "File a Class 1 fork for an IS rotation-correlation carrier (mirrors OD §24.7); extend once B-36's backend lands."
+    council: "no for the carrier addition; B-36's own disposition governs the signing-backend half"
+    heading: "### B-33 · `verify_rotation_6_steps`'s hash-chain check cannot prove a rotation boundary occurred *(surfaced at B-26, out-of-family Codex rounds 1 + 5, `advisor()`-confirmed)*"
+
+  - id: B-34
+    title: "Concrete signature-representation gaps in the C-CP-20 §20.2.1 seam"
+    status: registered_finding
+    summary: "DER-vs-64-byte ECDSA-P256 encoding unenforced; CPSignedAuditLedgerEntry.audit_signature_value not JSON-serializable for real bytes."
+    close_out: "Validate signature byte-length per algorithm + add a reversible byte-encoding serializer, once a real backend exists (B-36)."
+    council: "no — mechanical once a real backend exists to test against"
+    heading: "### B-34 · Concrete signature-representation gaps in the C-CP-20 §20.2.1 seam *(surfaced at B-22 round 4, out-of-family Codex, `advisor()`-confirmed non-blocking)*"
+
+  - id: B-35
+    title: "test_qa_evidence_matrix.py / test_closure_gate.py orphaned from CI + 12 uncited contracts"
+    status: registered_finding
+    summary: "12 contracts (C-IS-14 + 11 C-MEM-*) cite no test file; neither test module is wired into any CI job."
+    close_out: "Decide CI-wiring (testpaths or documented exclusion); read + cite or file a real gap for each of the 12 contracts."
+    council: "no — mechanical once the CI-wiring question is answered"
+    heading: "### B-35 · `tools/test_qa_evidence_matrix.py` / `test_closure_gate.py` are orphaned from CI + 12 contracts lack test-file citation *(surfaced during B-28 triage, 2026-07-14)*"
+
+  - id: B-36
+    title: "Concrete F5 audit-signature backend selection"
+    status: operator_gated
+    summary: "B-22's seam is closed; no real signing backend exists yet. Blocks any MULTI_TENANT_COMPLIANCE deployment."
+    close_out: "Pick + provision a concrete prod-tech backend (needs a D-ADR + real cloud credentials); author the harness_runtime composition-root arc."
+    council: "conditional — C10 blast-radius vs C11 operator-loop/deployment-surface, live once a candidate backend is proposed"
+    heading: "### B-36 · Concrete F5 audit-signature backend selection *(split off `B-22` 2026-07-14, per operator direction — `B-22`'s seam is CLOSED, this is what remains)*"

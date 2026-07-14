@@ -1,0 +1,192 @@
+"""Tests for the forward register (post-Phase-8 forward-work schema).
+
+Mirrors `tools/test_arc_ledger.py`: the live register must pass validation AND the
+prose-drift cross-check, the derived counts must match the snapshot pin (no inline
+magic numbers), and a battery of NEGATIVE tests proves each gate failure-class is
+actually caught.
+"""
+
+from __future__ import annotations
+
+import copy
+
+import forward_register
+
+
+def _data() -> dict:
+    return forward_register.load()
+
+
+def test_live_register_passes_validation() -> None:
+    assert forward_register.validate(_data()) == []
+
+
+def test_live_register_has_no_prose_drift() -> None:
+    assert forward_register.check_prose_drift(_data()) == []
+
+
+def test_derived_counts_match_snapshot_pin() -> None:
+    data = _data()
+    d = forward_register.derive(data)
+    snap = data["snapshot"]
+    for key in (
+        "total",
+        "open",
+        "design_substrate_gated",
+        "registered_finding",
+        "operator_gated",
+        "held",
+        "closed",
+    ):
+        assert d[key] == snap[key], f"{key}: derived {d[key]} != snapshot {snap[key]}"
+
+
+def test_contract_closed_items_carry_a_pr_citation() -> None:
+    d = forward_register.derive(_data())
+    for r in d["items"]:
+        if r["status"] == "closed":
+            assert r.get("pr"), f"{r['id']}: closed item must cite a deliverable"
+
+
+def test_contract_open_items_carry_close_out_and_council() -> None:
+    d = forward_register.derive(_data())
+    for r in d["open_items"]:
+        assert r.get("close_out"), f"{r['id']}: open-class item must carry close_out"
+        assert r.get("council"), f"{r['id']}: open-class item must carry a council disposition"
+
+
+def test_contract_every_row_has_a_heading_backpointer() -> None:
+    d = forward_register.derive(_data())
+    for r in d["items"]:
+        assert r.get("heading"), f"{r['id']}: missing heading back-pointer"
+
+
+def test_detail_lookup_returns_the_prose_block() -> None:
+    data = _data()
+    row = next(r for r in data["items"] if r["id"] == "B-24")
+    assert row["heading"] in forward_register.DEFAULT_PROSE.read_text(encoding="utf-8")
+
+
+# --- negative tests: each gate failure-class is caught ----------------------
+
+
+def _violates(mutate) -> bool:
+    data = copy.deepcopy(_data())
+    mutate(data)
+    return forward_register.validate(data) != []
+
+
+def _first_closed(data: dict) -> dict:
+    return next(r for r in data["items"] if r["status"] == "closed")
+
+
+def _first_open_class(data: dict) -> dict:
+    return next(r for r in data["items"] if r["status"] in forward_register.OPEN_STATUSES)
+
+
+def test_negative_duplicate_id_fails() -> None:
+    def m(data):
+        data["items"].append(copy.deepcopy(data["items"][0]))
+
+    assert _violates(m)
+
+
+def test_negative_invalid_status_fails() -> None:
+    def m(data):
+        _first_closed(data)["status"] = "in-progress-ish"
+
+    assert _violates(m)
+
+
+def test_negative_closed_without_pr_fails() -> None:
+    def m(data):
+        _first_closed(data).pop("pr", None)
+
+    assert _violates(m)
+
+
+def test_negative_open_class_without_close_out_fails() -> None:
+    def m(data):
+        _first_open_class(data).pop("close_out", None)
+
+    assert _violates(m)
+
+
+def test_negative_open_class_without_council_fails() -> None:
+    def m(data):
+        _first_open_class(data).pop("council", None)
+
+    assert _violates(m)
+
+
+def test_negative_missing_heading_fails() -> None:
+    def m(data):
+        data["items"][0].pop("heading", None)
+
+    assert _violates(m)
+
+
+def test_negative_status_flip_without_snapshot_bump_fails() -> None:
+    def m(data):
+        r = _first_open_class(data)
+        r["status"] = "closed"
+        r["pr"] = "#999"
+        # snapshot NOT bumped -> counts drift -> caught
+
+    assert _violates(m)
+
+
+def test_negative_missing_snapshot_fails() -> None:
+    def m(data):
+        del data["snapshot"]
+
+    assert _violates(m)
+
+
+def test_negative_new_row_without_snapshot_bump_fails() -> None:
+    def m(data):
+        data["items"].append(
+            {
+                "id": "B-SYNTHETIC",
+                "status": "open",
+                "title": "synthetic",
+                "summary": "synthetic row for the snapshot-pin regression test",
+                "close_out": "n/a",
+                "council": "no",
+                "heading": "### B-SYNTHETIC · synthetic",
+            }
+        )
+        # deliberately do NOT bump snapshot.total/open
+
+    assert _violates(m)
+
+
+def test_negative_prose_drift_new_heading_without_row_fails() -> None:
+    """A heading appended to the prose file with no matching YAML row is drift."""
+
+    def mutate_prose(text: str) -> str:
+        return text + "\n\n### B-999 · synthetic drift heading\n- placeholder\n"
+
+    prose_text = forward_register.DEFAULT_PROSE.read_text(encoding="utf-8")
+    mutated = mutate_prose(prose_text)
+    tmp_data = _data()
+
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False) as fh:
+        fh.write(mutated)
+        tmp_path = Path(fh.name)
+    try:
+        assert forward_register.check_prose_drift(tmp_data, tmp_path) != []
+    finally:
+        tmp_path.unlink()
+
+
+def test_negative_heading_not_in_prose_fails() -> None:
+    def m(data):
+        _first_closed(data)["heading"] = "### DOES-NOT-EXIST-IN-PROSE ·"
+
+    data = copy.deepcopy(_data())
+    m(data)
+    assert forward_register.check_prose_drift(data) != []

@@ -265,10 +265,14 @@ jobs:
     # without as-built units, a registered (forward) arc that names a concrete U-* unit or
     # omits decompose_at_open/parent_arc, a row changed without a snapshot bump, or zero OPEN
     # standalone arcs while R-FS-1 is ACTIVE (the count-drift class that produced R-IF-114).
-    # The runtime contract-id hygiene tests run here too: like the substitution + overlay
-    # modules, tools/ test modules live outside the 7 testpaths packages, so the blocking
-    # `test` job does not collect them. This job is their home (they had none before,
-    # hence the rot). pyyaml comes from harness-runtime via the all-packages sync.
+    # `.harness/forward-register.yaml` + `tools/forward_register.py` is a SIBLING schema for
+    # the post-Phase-8 forward-work register (arc-ledger's own `rfs1_status: resolved` pin
+    # forbids adding new open rows there — R-FS-1/R-FS-2 are closed build arcs); it gets the
+    # same tally + prose-drift gate here. The runtime contract-id hygiene tests run here too:
+    # like the substitution + overlay modules, tools/ test modules live outside the 7
+    # testpaths packages, so the blocking `test` job does not collect them. This job is their
+    # home (they had none before, hence the rot). pyyaml comes from harness-runtime via the
+    # all-packages sync.
     runs-on: ubuntu-latest
     name: arc ledger (tally gate) — blocking
     steps:
@@ -287,9 +291,14 @@ jobs:
       - name: Validate the arc ledger (impossible/stale tally = CI failure)
         run: uv run python tools/arc_ledger.py --check
 
-      - name: Arc-ledger + runtime contract-id tests
+      - name: Validate the forward register (impossible tally / prose drift = CI failure)
+        run: uv run python tools/forward_register.py --check
+
+      - name: Arc-ledger + forward-register + runtime contract-id tests
         working-directory: tools
-        run: uv run python -m pytest test_arc_ledger.py test_runtime_contract_ids.py -q
+        run: >
+          uv run python -m pytest
+          test_arc_ledger.py test_forward_register.py test_runtime_contract_ids.py -q
 
   semantic-overlay:
     # R-IF-112 — the spec ↔ code ↔ CXA-seam ↔ substitution overlay drift gate.
