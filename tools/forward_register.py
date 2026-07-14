@@ -285,7 +285,17 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         text = args.prose.read_text(encoding="utf-8")
         heading = row["heading"]
-        start = text.index(heading)
+        lines = text.splitlines(keepends=True)
+        offset = 0
+        start: int | None = None
+        for line in lines:
+            if line.rstrip("\n") == heading:
+                start = offset
+                break
+            offset += len(line)
+        if start is None:
+            print(f"heading not found as a complete line in prose: {heading!r}", file=sys.stderr)
+            return 1
         rest = text[start:]
         next_heading = re.search(r"\n(#{2,3})\s", rest[len(heading) :])
         end = len(rest) if next_heading is None else len(heading) + next_heading.start() + 1

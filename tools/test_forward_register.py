@@ -82,6 +82,32 @@ def test_detail_lookup_returns_the_prose_block() -> None:
     assert row["heading"] in forward_register.DEFAULT_PROSE.read_text(encoding="utf-8")
 
 
+def test_detail_cli_anchors_to_the_real_heading_line_not_a_decoy_substring(capsys) -> None:
+    """A heading string quoted earlier in the file (e.g. as an inline cross-reference)
+    must not hijack `--detail` -- it has to find the actual heading LINE, not the
+    first place the text happens to appear."""
+    heading = next(r["heading"] for r in _data()["items"] if r["id"] == "B-24")
+
+    def mutate_prose(text: str) -> str:
+        decoy = f"An earlier section references {heading!r} as an example.\n\n"
+        return decoy + text
+
+    with _temp_prose(mutate_prose) as tmp_path:
+        forward_register.main(
+            [
+                "--detail",
+                "B-24",
+                "--ledger",
+                str(forward_register.DEFAULT_LEDGER),
+                "--prose",
+                str(tmp_path),
+            ]
+        )
+        out = capsys.readouterr().out
+        assert out.startswith(heading)
+        assert "An earlier section references" not in out
+
+
 # --- negative tests: each gate failure-class is caught ----------------------
 
 
