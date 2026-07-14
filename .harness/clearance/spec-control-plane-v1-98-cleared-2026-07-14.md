@@ -13,6 +13,7 @@ reviewer_chain:
   - advisor() pre-build grounding (corrected the initial plan 3 ways: dropped a keyring "reference backend" as wrong-tier for an MTC-exclusive module; identified the seam as a spec delta rather than pure impl per the CP v1.36 RouterResolutionFn precedent; confirmed the concrete prod-backend choice is the genuine operator/D-ADR/credential gate, not something to pick unilaterally)
   - operator AskUserQuestion 2026-07-14 (build-the-seam-now vs hold-B-22-fully; operator chose build-the-seam-now)
   - empirical grounding against ADR-F5 + ADR-D5 v1.3 §1.4 + Spec_Control_Plane_v1_2.md §20 (last-substantive-definition version resolved via delta-chain grep before authoring; confirmed the concrete backend really is D-ADR-deferred, not merely under-specified)
+  - just codex-review pre-merge (§13.1 out-of-family review), 1 round, 3 findings all fixed — [P1] a valid signature could be relabeled onto different `key_id`/`algorithm`/`key_period` metadata and still verify (fixed via a length-prefixed canonical message binding, mirroring the B-23 segment-injectivity fix); [P2] `sign_audit_entry` accepted a backend declaring an algorithm outside the §20.2 closed enum (fixed with an explicit membership check); [P2] `sign_audit_entry` accepted a negative `key_period` (fixed with an explicit non-negative check). All three mutation-probed individually (guard removed → exactly the corresponding new test fails → restored)
 supersedes: null
 superseded_by: null
 ---

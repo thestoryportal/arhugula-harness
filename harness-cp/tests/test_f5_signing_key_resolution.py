@@ -211,3 +211,76 @@ def test_sign_with_backend_still_rejects_retired_key() -> None:
     )
     with pytest.raises(ValueError, match="RETIRED"):
         sign_audit_entry(_ENTRY, retired, key_period=1, backend=_InMemoryEd25519Backend())
+
+
+def test_verify_rejects_relabeled_key_id() -> None:
+    """Out-of-family Codex P1 — a valid signature relabeled onto a different
+    `audit_signature_key_id` must not verify (metadata is bound into the
+    signed message, not merely carried alongside it)."""
+    result = resolve_signing_key(_SCOPE, PersonaTier.MULTI_TENANT_COMPLIANCE)
+    assert result.handle is not None
+    backend = _InMemoryEd25519Backend()
+    signed = sign_audit_entry(_ENTRY, result.handle, key_period=1, backend=backend)
+
+    relabeled = signed.model_copy(update={"audit_signature_key_id": "some-other-key"})
+
+    assert (
+        verify_audit_entry_signature(relabeled, result.handle, backend=backend)
+        is VerificationResult.SIGNATURE_MISMATCH
+    )
+
+
+def test_verify_rejects_relabeled_algorithm() -> None:
+    """Out-of-family Codex P1 — relabeling `audit_signature_algorithm` on an
+    already-signed entry must not verify."""
+    result = resolve_signing_key(_SCOPE, PersonaTier.MULTI_TENANT_COMPLIANCE)
+    assert result.handle is not None
+    backend = _InMemoryEd25519Backend()
+    signed = sign_audit_entry(_ENTRY, result.handle, key_period=1, backend=backend)
+
+    relabeled = signed.model_copy(update={"audit_signature_algorithm": "ecdsa-p256"})
+
+    assert (
+        verify_audit_entry_signature(relabeled, result.handle, backend=backend)
+        is VerificationResult.SIGNATURE_MISMATCH
+    )
+
+
+def test_verify_rejects_relabeled_key_period() -> None:
+    """Out-of-family Codex P1 — relabeling `audit_signature_key_period` on an
+    already-signed entry must not verify (rotation-boundary tamper)."""
+    result = resolve_signing_key(_SCOPE, PersonaTier.MULTI_TENANT_COMPLIANCE)
+    assert result.handle is not None
+    backend = _InMemoryEd25519Backend()
+    signed = sign_audit_entry(_ENTRY, result.handle, key_period=1, backend=backend)
+
+    relabeled = signed.model_copy(update={"audit_signature_key_period": 2})
+
+    assert (
+        verify_audit_entry_signature(relabeled, result.handle, backend=backend)
+        is VerificationResult.SIGNATURE_MISMATCH
+    )
+
+
+def test_sign_rejects_unsupported_backend_algorithm() -> None:
+    """Out-of-family Codex P2 — a backend declaring an algorithm outside the
+    C-CP-20 §20.2 closed enum must be rejected before signing, not silently
+    persisted onto the ledger entry."""
+
+    class _TypoBackend(_InMemoryEd25519Backend):
+        algorithm = "edd25519"
+
+    result = resolve_signing_key(_SCOPE, PersonaTier.MULTI_TENANT_COMPLIANCE)
+    assert result.handle is not None
+    with pytest.raises(ValueError, match="edd25519"):
+        sign_audit_entry(_ENTRY, result.handle, key_period=1, backend=_TypoBackend())
+
+
+def test_sign_rejects_negative_key_period() -> None:
+    """Out-of-family Codex P2 — a negative `key_period` must be rejected
+    before signing (the ledger contract requires a non-negative monotonic
+    period per C-CP-20 §20.3.1)."""
+    result = resolve_signing_key(_SCOPE, PersonaTier.MULTI_TENANT_COMPLIANCE)
+    assert result.handle is not None
+    with pytest.raises(ValueError, match="key_period"):
+        sign_audit_entry(_ENTRY, result.handle, key_period=-1, backend=_InMemoryEd25519Backend())

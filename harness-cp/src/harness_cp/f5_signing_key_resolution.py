@@ -200,6 +200,11 @@ class SigningBackend(Protocol):
         ...
 
 
+_VALID_SIGNATURE_ALGORITHMS = frozenset({"ed25519", "ecdsa-p256", "rsa-pss-2048"})
+"""C-CP-20 §20.2's closed algorithm enum — the only tokens a `SigningBackend`
+may declare via its `algorithm` attribute."""
+
+
 def _canonical_entry_hash(entry: CPAuditLedgerEntry) -> str:
     """The C-CP-20 §20.4 `audit.signature.sha256` hash over `entry`.
 
@@ -208,6 +213,23 @@ def _canonical_entry_hash(entry: CPAuditLedgerEntry) -> str:
     OD-local sibling's `AuditPayload` (`SHA-256(AuditPayload.model_dump_json())`).
     """
     return hashlib.sha256(entry.model_dump_json().encode()).hexdigest()
+
+
+def _canonical_signing_message(
+    sha256_hex: str, *, key_id: str, algorithm: str, key_period: int
+) -> bytes:
+    """The bytes actually signed/verified — binds `sha256_hex` to its
+    signature metadata (out-of-family Codex P1 finding on `Spec_Control_Plane_v1_98.md`).
+
+    Without this binding, the signature covers only the entry's content hash;
+    `audit_signature_key_id` / `audit_signature_algorithm` / `audit_signature_key_period`
+    could be relabeled on an already-signed entry and it would still verify.
+    Length-prefixing each segment (mirrors the B-23 `compose_cost_f2_entry_core`
+    injectivity fix) makes the four-tuple `(sha256_hex, key_id, algorithm,
+    key_period)` collision-free — no ambiguous field-boundary shift.
+    """
+    parts = (sha256_hex, key_id, algorithm, str(key_period))
+    return b"|".join(f"{len(part)}:{part}".encode() for part in parts)
 
 
 def resolve_signing_key(scope: SigningKeyScope, persona_tier: PersonaTier) -> SigningKeyResult:
@@ -251,20 +273,35 @@ def sign_audit_entry(
     against `key`'s actual key material is not reachable from the CP axis
     today (see module docstring); this function does not fabricate a signed
     entry. With `backend` (C-CP-20 §20.2.1, spec v1.98) — a deployment-time
-    composition root has wired a real signing backend — computes the
-    canonical `audit.signature.sha256` hash and returns a genuinely signed
+    composition root has wired a real signing backend — validates `backend.algorithm`
+    against the §20.2 closed enum and `key_period` non-negative (out-of-family
+    Codex P2 findings), computes the canonical `audit.signature.sha256` hash,
+    binds it to its signature metadata (P1 finding — see
+    `_canonical_signing_message`), and returns a genuinely signed
     `CPSignedAuditLedgerEntry`.
     """
     if key.rotation_state is KeyRotationState.RETIRED:
         raise ValueError("cannot sign under a RETIRED signing key (C-CP-20 §20.3)")
+    if key_period < 0:
+        raise ValueError(
+            f"key_period must be non-negative (monotonic per C-CP-20 §20.3.1); got {key_period}"
+        )
     if backend is None:
         raise AuditSigningBackendUnavailableError(
             "real audit-entry signing requires a key-material-resolution seam not "
             "yet wired from a deployment-bound signing backend into harness-cp "
             "(C-CP-20 §20.3.1; SecretRef is opaque per AS spec C-AS-05 §5.4)"
         )
+    if backend.algorithm not in _VALID_SIGNATURE_ALGORITHMS:
+        raise ValueError(
+            f"backend.algorithm={backend.algorithm!r} is not one of "
+            f"{sorted(_VALID_SIGNATURE_ALGORITHMS)} (C-CP-20 §20.2)"
+        )
     sha256_hex = _canonical_entry_hash(entry)
-    signature = backend.sign(message=bytes.fromhex(sha256_hex), key_id=key.key_id)
+    message = _canonical_signing_message(
+        sha256_hex, key_id=key.key_id, algorithm=backend.algorithm, key_period=key_period
+    )
+    signature = backend.sign(message=message, key_id=key.key_id)
     return CPSignedAuditLedgerEntry(
         entry=entry,
         audit_signature_sha256=sha256_hex,
@@ -291,7 +328,12 @@ def verify_audit_entry_signature(
     `audit.signature.sha256` hash over `signed.entry` per §20.3.1's
     `verify_chain` step 2 (content-integrity check first: a hash mismatch is
     `SIGNATURE_MISMATCH` without ever consulting the backend), then verifies
-    `audit_signature_value` against `key.key_id` through `backend`.
+    `audit_signature_value` against a message binding that hash to `signed`'s
+    OWN stored `audit_signature_key_id` / `audit_signature_algorithm` /
+    `audit_signature_key_period` (out-of-family Codex P1 finding — relabeling
+    any of those three fields on an already-signed entry now breaks
+    verification, since the recomputed message no longer matches what was
+    signed; see `_canonical_signing_message`).
     """
     if backend is None:
         raise AuditSigningBackendUnavailableError(
@@ -303,8 +345,14 @@ def verify_audit_entry_signature(
     recomputed_sha256 = _canonical_entry_hash(signed.entry)
     if recomputed_sha256 != signed.audit_signature_sha256:
         return VerificationResult.SIGNATURE_MISMATCH
+    message = _canonical_signing_message(
+        recomputed_sha256,
+        key_id=signed.audit_signature_key_id,
+        algorithm=signed.audit_signature_algorithm,
+        key_period=signed.audit_signature_key_period,
+    )
     verified = backend.verify(
-        message=bytes.fromhex(recomputed_sha256),
+        message=message,
         signature=signed.audit_signature_value,
         key_id=key.key_id,
     )
