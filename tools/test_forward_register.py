@@ -126,6 +126,27 @@ def test_negative_missing_heading_fails() -> None:
     assert _violates(m)
 
 
+def test_negative_copy_pasted_heading_fails() -> None:
+    """A new row must bind to its OWN prose block, not reuse another row's heading."""
+
+    def m(data):
+        a, b = data["items"][0], data["items"][1]
+        b["heading"] = a["heading"]
+
+    assert _violates(m)
+
+
+def test_negative_heading_names_a_different_id_fails() -> None:
+    """The id embedded in a row's own heading string must match the row's id field."""
+
+    def m(data):
+        r = data["items"][0]
+        other_id = next(x["id"] for x in data["items"] if x["id"] != r["id"])
+        r["heading"] = r["heading"].replace(r["id"], other_id, 1)
+
+    assert _violates(m)
+
+
 def test_negative_status_flip_without_snapshot_bump_fails() -> None:
     def m(data):
         r = _first_open_class(data)

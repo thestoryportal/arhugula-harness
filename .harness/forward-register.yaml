@@ -37,13 +37,13 @@
 # own forward-only discipline. `tools/forward_register.py --check` is the CI gate.
 
 snapshot:
-  total: 37
-  open: 2
+  total: 39
+  open: 1
   design_substrate_gated: 3
-  registered_finding: 8
+  registered_finding: 10
   operator_gated: 2
   held: 1
-  closed: 21
+  closed: 22
   source: ".harness/post-phase-8-forward-register.md"
 
 items:
@@ -170,11 +170,10 @@ items:
 
   - id: B-18
     title: "U-1 — cache_control breakpoint emission"
-    status: open
-    summary: "Frozen-tools-superset prerequisite decided (operator, 2026-07-09); ACTIVE, scoped next build arc."
-    close_out: "Ground AS/MCP tool-superset + epoch model (council+advisor), build frozen-tools -> §1.5 breakpoint -> emit/observe witness."
-    council: "conditional — frozen-tools-superset architecture + epoch model (C4 tools ⊥ C2 caching ⊥ C6 routing/epoch)"
-    heading: "### B-18 · U-1 — `cache_control` breakpoint emission *(NET-NEW, registered 2026-07-09)*"
+    status: closed
+    summary: "BUILT 2026-07-10 across 5 slices (PRs #919-923); stale-open framing corrected 2026-07-14."
+    pr: "#919-#923"
+    heading: "### B-18 · U-1 — `cache_control` breakpoint emission *(NET-NEW, registered 2026-07-09)* — **✅ BUILT 2026-07-10 (stale-open correction, found 2026-07-14 at forward-register-schema grounding, out-of-family Codex)**"
 
   - id: B-19
     title: "breaker.cause + breaker.cooldown_ms ambient attrs"
@@ -319,3 +318,19 @@ items:
     close_out: "Pick + provision a concrete prod-tech backend (needs a D-ADR + real cloud credentials); author the harness_runtime composition-root arc."
     council: "conditional — C10 blast-radius vs C11 operator-loop/deployment-surface, live once a candidate backend is proposed"
     heading: "### B-36 · Concrete F5 audit-signature backend selection *(split off `B-22` 2026-07-14, per operator direction — `B-22`'s seam is CLOSED, this is what remains)*"
+
+  - id: B-37
+    title: "Remote MCP streamable-HTTP transport residuals"
+    status: registered_finding
+    summary: "Legacy streamable_http_client import (latent TypeError once kwargs populate) + MCPClientConfig has no auth-credential field."
+    close_out: "Swap to streamablehttp_client + thread kwargs; add an auth-credential field to MCPClientConfig."
+    council: "no — mechanical once a real remote-MCP credential-supply build opens; not urgent"
+    heading: "### B-37 · Remote MCP streamable-HTTP transport residuals *(surfaced at `B-10`'s own `B-MCP-OAUTH-RS-ENFORCE` grounding, split out 2026-07-14 at forward-register-schema grounding, out-of-family Codex)*"
+
+  - id: B-38
+    title: "Fine-grained provider-exception classifier for breaker.cause"
+    status: registered_finding
+    summary: "breaker.cause stays vacuous (always None) until a real per-step rate_limit/auth_failure/5xx_streak classifier exists."
+    close_out: "Extend _classify_provider_exception to distinguish the 3 failure classes at a real per-step dispatch failure site."
+    council: "no — mechanical extension once opened; not urgent, speculative ahead of any consumer"
+    heading: "### B-38 · Fine-grained provider-exception classifier for `breaker.cause` *(surfaced at `B-19`'s own close, split out 2026-07-14 at forward-register-schema grounding, out-of-family Codex)*"

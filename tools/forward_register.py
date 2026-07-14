@@ -83,6 +83,12 @@ class RegisterError(ValueError):
     """A structural violation in the forward register (fails ``--check`` / CI)."""
 
 
+def _id_from_heading(heading: str) -> str | None:
+    """Extract the item id a heading string names, or None if neither shape matches."""
+    m = _HEADING_ID_RE.match(heading) or _SECTION_HEADING_ID_RE.match(heading)
+    return m.group(1) if m else None
+
+
 def load(path: Path = DEFAULT_LEDGER) -> dict[str, Any]:
     import yaml  # lazy — see module-top note
 
@@ -119,6 +125,7 @@ def validate(data: dict[str, Any]) -> list[str]:
     items = data["items"]
 
     seen_ids: set[str] = set()
+    seen_headings: dict[str, str] = {}
     for r in items:
         rid = r.get("id", "<no-id>")
         if rid in seen_ids:
@@ -130,8 +137,19 @@ def validate(data: dict[str, Any]) -> list[str]:
             violations.append(f"{rid}: invalid status {status!r}")
             continue
 
-        if not r.get("heading"):
+        heading = r.get("heading")
+        if not heading:
             violations.append(f"{rid}: missing 'heading' back-pointer into the prose file")
+        else:
+            if heading in seen_headings:
+                violations.append(
+                    f"{rid}: heading also claimed by {seen_headings[heading]!r} "
+                    f"(copy-pasted heading — each row must bind to its own prose block)"
+                )
+            seen_headings[heading] = rid
+            heading_id = _id_from_heading(heading)
+            if heading_id is not None and heading_id != rid:
+                violations.append(f"{rid}: heading names id {heading_id!r}, not the row's own id")
 
         if status == "closed":
             if not r.get("pr"):
