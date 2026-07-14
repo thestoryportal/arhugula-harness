@@ -322,10 +322,10 @@ items:
   - id: B-37
     title: "Remote MCP streamable-HTTP transport residuals"
     status: registered_finding
-    summary: "Legacy streamable_http_client import (latent TypeError once kwargs populate) + MCPClientConfig has no auth-credential field."
-    close_out: "Swap to streamablehttp_client + thread kwargs; add an auth-credential field to MCPClientConfig."
+    summary: "Current (non-deprecated) streamable_http_client called with the old function's kwarg shape (latent TypeError once populated) + MCPClientConfig has no auth-credential field."
+    close_out: "Build a configured httpx.AsyncClient and pass via http_client= (do NOT migrate to the deprecated streamablehttp_client); fix stale docstrings; add an auth-credential field to MCPClientConfig."
     council: "no — mechanical once a real remote-MCP credential-supply build opens; not urgent"
-    heading: "### B-37 · Remote MCP streamable-HTTP transport residuals *(surfaced at `B-10`'s own `B-MCP-OAUTH-RS-ENFORCE` grounding, split out 2026-07-14 at forward-register-schema grounding, out-of-family Codex)*"
+    heading: "### B-37 · Remote MCP streamable-HTTP transport residuals *(surfaced at `B-10`'s own `B-MCP-OAUTH-RS-ENFORCE` grounding, split out 2026-07-14 at forward-register-schema grounding; corrected 2026-07-14 round-3 out-of-family Codex — the original finding had the deprecated/current function names backwards)*"
 
   - id: B-38
     title: "Fine-grained provider-exception classifier for breaker.cause"
