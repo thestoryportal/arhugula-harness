@@ -225,7 +225,7 @@ items:
     title: "secret_negative_observation.py wrong NegativeObservationSurface label"
     status: design_substrate_gated
     summary: "verify_sole_resolution_path hardcodes the wrong label; no enum value maps to workflow-manifest arrival. Zero production callers (latent)."
-    close_out: "File class_1_fork_secret_negative_observation_missing_enum_member.md before adding the enum member (X-AL-3)."
+    close_out: "Fork doc FILED 2026-07-14 (class_1_fork_secret_negative_observation_missing_enum_member.md) — awaiting operator ratification of Q1 (member name) + Q2 (bundle dispatch fix)."
     council: "no — mechanical enum addition once the fork ratifies the member name"
     heading: "### B-24 · `secret_negative_observation.py:127` wrong `NegativeObservationSurface` label — needs a new enum member *(design-substrate)*"
 
@@ -233,7 +233,7 @@ items:
     title: "sandbox_tier_floor.py — is_deterministic_inhouse=False branch undefined"
     status: design_substrate_gated
     summary: "is_deterministic_inhouse threaded but never read; spec only defines the True-case floor."
-    close_out: "File class_1_fork_sandbox_tier_floor_deterministic_inhouse_false_undefined.md before patching."
+    close_out: "Fork doc FILED 2026-07-14 (class_1_fork_sandbox_tier_floor_deterministic_inhouse_false_undefined.md) — recommends a C10 vs C4 council convening before Q1 (candidate floor value) ratification."
     council: "conditional — C10 blast-radius vs C4 tool-contract semantics, nameable once a floor value is proposed"
     heading: "### B-25 · `sandbox_tier_floor.py:54` — `is_deterministic_inhouse=False` branch has no defined floor *(design-substrate)*"
 
@@ -248,7 +248,7 @@ items:
     title: "cli/app.py paused (HITL) workflow status shares failed's exit code"
     status: design_substrate_gated
     summary: "Runtime spec §14.18.2 exit-code table never assigned `paused` a disposition."
-    close_out: "File class_1_fork_cli_exit_code_paused_status_undefined.md before patching app.py."
+    close_out: "Fork doc FILED 2026-07-14 (class_1_fork_cli_exit_code_paused_status_undefined.md) — awaiting operator ratification of Q1 (new exit code vs reuse) + Q2 (scope)."
     council: "no — mechanical once the disposition is decided"
     heading: "### B-27 · `cli/app.py:347` — `paused` (HITL) workflow status shares `failed`'s exit code *(design-substrate)*"
 
