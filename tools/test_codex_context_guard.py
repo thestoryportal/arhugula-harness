@@ -400,7 +400,8 @@ def test_dashboard_snapshot_normalization_ignores_volatile_dashboard_fields() ->
         b'"live_anchor": {"git_head": "abc123", "hash": "aaa111", "fork_count": "45", '
         b'"recent_prs": [{"pr": "PR #1", "date": "2026-06-07", "note": "old"}]}, '
         b'"actions": [1], "open_prs": [], '
-        b'"cadence": [{"date": "2026-06-07", "count": 2}], "pr_cadence": []};'
+        b'"cadence": [{"date": "2026-06-07", "count": 2}], '
+        b'"pr_cadence": [{"date": "2026-06-07", "count": 1}], "retired_trend": []};'
     )
     same_except_volatile = (
         b'<meta name="dashboard-live-head" content="def456"/>'
@@ -408,7 +409,8 @@ def test_dashboard_snapshot_normalization_ignores_volatile_dashboard_fields() ->
         b'"live_anchor": {"git_head": "def456", "hash": "bbb222", "fork_count": "45", '
         b'"recent_prs": [{"pr": "PR #2", "date": "2026-06-08", "note": "new"}]}, '
         b'"actions": [1], "open_prs": [{"number": 944, "title": "self", "branch": "b"}], '
-        b'"cadence": [{"date": "2026-06-07", "count": 3}], "pr_cadence": []};'
+        b'"cadence": [{"date": "2026-06-07", "count": 3}], '
+        b'"pr_cadence": [{"date": "2026-06-07", "count": 2}], "retired_trend": []};'
     )
     changed_payload = (
         b'<meta name="dashboard-live-head" content="def456"/>'
@@ -416,7 +418,8 @@ def test_dashboard_snapshot_normalization_ignores_volatile_dashboard_fields() ->
         b'"live_anchor": {"git_head": "def456", "hash": "bbb222", "fork_count": "45", '
         b'"recent_prs": [{"pr": "PR #2", "date": "2026-06-08", "note": "new"}]}, '
         b'"actions": [2], "open_prs": [], '
-        b'"cadence": [{"date": "2026-06-07", "count": 3}], "pr_cadence": []};'
+        b'"cadence": [{"date": "2026-06-07", "count": 3}], '
+        b'"pr_cadence": [{"date": "2026-06-07", "count": 2}], "retired_trend": []};'
     )
 
     assert cg._normalize_dashboard_snapshot(base) == (
@@ -424,6 +427,29 @@ def test_dashboard_snapshot_normalization_ignores_volatile_dashboard_fields() ->
     )
     assert cg._normalize_dashboard_snapshot(base) != (
         cg._normalize_dashboard_snapshot(changed_payload)
+    )
+
+
+def test_dashboard_snapshot_normalization_ignores_pr_cadence_alone() -> None:
+    """CI hard-failed DASHBOARD_SNAPSHOT_STALE on every push to main (verified
+    against 20/20 recent runs) because `pr_cadence`'s "today" bucket counts
+    any PR-merge-shaped commit (`... (#NN)`) at HEAD, including a refresh PR's
+    own merge commit the moment it lands -- the same one-commit lag already
+    tolerated for `git_head`/`workspace_state_hash`, but `pr_cadence` was
+    missing from `_normalize_dashboard_snapshot`'s field list. Isolate it: two
+    snapshots differing ONLY in `pr_cadence` must normalize equal."""
+    template = (
+        b'<meta name="dashboard-live-head" content="abc123"/>'
+        b'const DATA = {"live_head": "abc123", '
+        b'"live_anchor": {"git_head": "abc123", "hash": "aaa111", "fork_count": "45", '
+        b'"recent_prs": []}, "actions": [1], "open_prs": [], '
+        b'"cadence": [], "pr_cadence": %s, "retired_trend": []};'
+    )
+    today_count_9 = template % b'[{"date": "2026-07-14", "count": 9}]'
+    today_count_10 = template % b'[{"date": "2026-07-14", "count": 10}]'
+
+    assert cg._normalize_dashboard_snapshot(today_count_9) == (
+        cg._normalize_dashboard_snapshot(today_count_10)
     )
 
 

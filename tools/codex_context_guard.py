@@ -110,6 +110,14 @@ DASHBOARD_JSON_LIVE_ANCHOR_RECENT_PRS_RE = re.compile(
 )
 DASHBOARD_META_LIVE_HEAD_RE = re.compile(rb'(<meta name="dashboard-live-head" content=")[^"]*(")')
 DASHBOARD_JSON_COMMIT_CADENCE_RE = re.compile(rb'("cadence":\s*)\[[^\]]*\](,\s*"pr_cadence")')
+# `pr_cadence` (R-XI-02 PR-merge-cadence sparkline) is git-log-derived like
+# `cadence` above, with the same volatility: its "today" bucket counts whatever
+# PR-merge-shaped commits (`... (#NN)`) exist at HEAD, so a refresh PR's own
+# merge commit (itself PR-shaped) increments the count the moment it lands --
+# the same one-commit lag `ROADMAP_DASHBOARD_LAG_EXPECTED` already tolerates
+# for `git_head`/`workspace_state_hash`, but `pr_cadence` was missing from this
+# normalization list and HARD-failed `DASHBOARD_SNAPSHOT_STALE` on every push.
+DASHBOARD_JSON_PR_CADENCE_RE = re.compile(rb'("pr_cadence":\s*)\[[^\]]*\](,\s*"retired_trend")')
 # `open_prs` is a live `gh pr list --state open` query — it always includes the PR
 # regenerating it (e.g. this arc's own just-opened PR), so a local regen (gh
 # available) and CI's regen (gh unavailable, degrades to []) never byte-match on
@@ -530,7 +538,8 @@ def _normalize_dashboard_snapshot(raw: bytes) -> bytes:
     )
     raw = DASHBOARD_META_LIVE_HEAD_RE.sub(rb"\1<LIVE_HEAD>\2", raw, count=1)
     raw = DASHBOARD_JSON_OPEN_PRS_RE.sub(rb"\1[]", raw, count=1)
-    return DASHBOARD_JSON_COMMIT_CADENCE_RE.sub(rb'\1[{"date":"<CADENCE>","count":0}]\2', raw)
+    raw = DASHBOARD_JSON_COMMIT_CADENCE_RE.sub(rb'\1[{"date":"<CADENCE>","count":0}]\2', raw)
+    return DASHBOARD_JSON_PR_CADENCE_RE.sub(rb'\1[{"date":"<CADENCE>","count":0}]\2', raw)
 
 
 def derive(
