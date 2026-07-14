@@ -464,3 +464,53 @@ def test_two_tenants_sharing_identifiers_get_distinct_f2_entries(
     )
     entry_cores = {str(e.payload.entry_core) for _, e in audit_writer.appended}
     assert len(entry_cores) == 2, "each tenant's audit entry must reference its OWN F2 anchor"
+
+
+def test_two_runs_of_same_workflow_definition_get_distinct_f2_entries(
+    cost_chain: RuntimeCostAttributionChain,
+    audit_writer: _RecordingAuditWriter,
+    tmp_path: Path,
+) -> None:
+    """Regression guard (out-of-family Codex [P1], round 3) —
+    `workflow_id` is the operator-authored `WorkflowManifestEntry.workflow_id`,
+    a STABLE per-definition identifier reused across every invocation of
+    "that workflow" (CP's own `run_idempotency_key = sha256(run_id,
+    workflow_id, entry_version)` composition treats `run_id` and
+    `workflow_id` as distinct components — `workflow_id` alone is not
+    run-unique). Re-running the SAME workflow definition a second time with
+    an identical validator outcome sequence (same deterministic
+    `dispatch_disambiguator`) MUST NOT collapse via `IDEMPOTENT_NOOP` onto
+    the first run's F2 anchor — `parent_idempotency_key` (already
+    run-scoped, since CP composes step-level idempotency keys from the
+    run's own idempotency key) disambiguates."""
+    rate_table = _make_rate_table(cpu_rate_per_ms=Decimal("0.01"))
+    ledger_writer = _build_ledger_writer(tmp_path)
+    common = dict(
+        rate_table=rate_table,
+        cost_chain=cost_chain,
+        audit_writer=audit_writer,
+        validator_id="schema-validator",
+        execution_time_ms=10.0,
+        span_id="validator-evaluate-daily-report-step-0",
+        idempotency_key="validator-idem-1",
+        workflow_id="daily-report",  # SAME operator-authored workflow_id both runs
+        parent_action_id="workflow:daily-report:step:0",
+        dispatch_disambiguator="0-pass-0",  # SAME deterministic outcome both runs
+        ledger_writer=ledger_writer,
+    )
+    # Run 1 of "daily-report".
+    attribute_validator_dispatch_cost(parent_idempotency_key="run-2026-07-13", **common)
+    # Run 2 of the SAME workflow definition, a day later — different run_id
+    # flows through to a different parent_idempotency_key.
+    attribute_validator_dispatch_cost(parent_idempotency_key="run-2026-07-14", **common)
+
+    entries = read_ledger(ledger_writer.handle)
+    cost_entries = [e for e in entries if str(e.action_id).startswith("cost:")]
+    assert len(cost_entries) == 2, (
+        f"two separate runs of the same workflow_id, sharing an identical "
+        f"deterministic dispatch_disambiguator, must get 2 distinct F2 "
+        f"entries, not collapse cross-run via IDEMPOTENT_NOOP; "
+        f"got {len(cost_entries)}"
+    )
+    entry_cores = {str(e.payload.entry_core) for _, e in audit_writer.appended}
+    assert len(entry_cores) == 2, "each run's audit entry must reference its OWN F2 anchor"

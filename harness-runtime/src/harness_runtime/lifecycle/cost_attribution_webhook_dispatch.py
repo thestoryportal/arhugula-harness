@@ -219,6 +219,7 @@ def attribute_webhook_dispatch_cost(
         procedural_tier_snapshot_resolver=procedural_tier_snapshot_resolver,
         workflow_id=workflow_id,
         parent_action_id=parent_action_id,
+        parent_idempotency_key=parent_idempotency_key,
         dispatch_disambiguator=span_id,
         tenant_id=tenant_id,
     )

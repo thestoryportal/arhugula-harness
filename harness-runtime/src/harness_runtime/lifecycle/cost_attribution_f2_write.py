@@ -55,17 +55,38 @@ def compose_cost_f2_entry_core(
     procedural_tier_snapshot_resolver: Callable[[], Identifier] | None,
     workflow_id: str,
     parent_action_id: str,
+    parent_idempotency_key: str,
     dispatch_disambiguator: str,
     tenant_id: str | None = None,
     time_source: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> StateLedgerEntryRef | None:
     """F2-write one cost-attribution dispatch fact; return its `entry_core`.
 
-    `dispatch_disambiguator` MUST be unique per billable event sharing the
-    same `(workflow_id, parent_action_id)` — e.g. a real per-attempt OTel
-    span_id for tool/LLM/webhook dispatch (a fresh span opens per retry
-    attempt), or the validator framework's monotonic `burden_count` for
-    validator dispatch (whose `span_id` is a *synthesized*, not real,
+    `parent_idempotency_key` (out-of-family Codex [P1], round 3) makes the
+    F2 identity RUN-scoped: `workflow_id` is the operator-authored
+    `WorkflowManifestEntry.workflow_id` — a stable per-DEFINITION identifier
+    reused across every invocation of "that workflow" (per CP spec's own
+    `run_idempotency_key = sha256(run_id, workflow_id, entry_version)`
+    composition, `workflow_id` and the per-run `run_id` are DISTINCT
+    components) — NOT unique per execution. For validator dispatch
+    specifically, `dispatch_disambiguator` is a small deterministic space
+    (`burden_count`-derived), so re-running the SAME workflow definition a
+    second time with an identical validator outcome sequence would compute
+    an IDENTICAL F2 key without a run-scoped component, silently pointing
+    the second run's audit entry at the first run's F2 anchor.
+    `parent_idempotency_key` is already run-scoped (CP composes step-level
+    idempotency keys from the run's own idempotency key) and already a
+    parameter every one of the 4 composers receives, so it is folded in
+    uniformly here (tool/LLM/webhook's real per-attempt `span_id` already
+    made this specific failure mode astronomically unlikely for them, but
+    the fix costs nothing extra and removes the probabilistic argument).
+
+    `dispatch_disambiguator` MUST additionally be unique per billable event
+    sharing the same `(workflow_id, parent_action_id, parent_idempotency_key)`
+    WITHIN one run — e.g. a real per-attempt OTel span_id for tool/LLM/
+    webhook dispatch (a fresh span opens per retry attempt), or the
+    validator framework's monotonic `burden_count` for validator dispatch
+    (whose `span_id` is a *synthesized*, not real,
     `f"validator-evaluate-{workflow_id}-{step_id}"` string that repeats
     identically across a REVALIDATE retry loop on the same step). Without
     a unique disambiguator, a second billable event on the same step
@@ -76,12 +97,10 @@ def compose_cost_f2_entry_core(
     `tenant_id` is folded into the F2 identity (mirroring
     `RuntimeAuditLedgerWriter._tenant_tag`'s `audit:` action_id convention)
     because the underlying `LedgerWriter` is SHARED across tenants
-    (out-of-family Codex [P1]): two tenants dispatching workflows that
-    happen to share `(workflow_id, parent_action_id, dispatch_disambiguator)`
-    — plausible for validator dispatch, whose disambiguator is deterministic
-    (`burden_count`-derived), not a random per-attempt span_id — would
-    otherwise collide, and the second tenant's audit entry would silently
-    reference the first tenant's F2 anchor.
+    (out-of-family Codex [P1], round 3): two tenants dispatching workflows
+    that happen to share the rest of the key would otherwise collide, and
+    the second tenant's audit entry would silently reference the first
+    tenant's F2 anchor.
 
     Returns `None` when `ledger_writer` is `None` — the converter's
     `_entry_core_or_default` then falls back to its pre-existing
@@ -93,7 +112,8 @@ def compose_cost_f2_entry_core(
 
     tenant_tag = tenant_id if tenant_id else _SINGLE_TENANT_TAG
     action_id = Identifier(
-        f"cost:{tenant_tag}:{workflow_id}:{parent_action_id}:{dispatch_disambiguator}"
+        f"cost:{tenant_tag}:{workflow_id}:{parent_action_id}:"
+        f"{parent_idempotency_key}:{dispatch_disambiguator}"
     )
     procedural_tier_snapshot_ref = (
         procedural_tier_snapshot_resolver()

@@ -276,6 +276,7 @@ def attribute_validator_dispatch_cost(
         procedural_tier_snapshot_resolver=procedural_tier_snapshot_resolver,
         workflow_id=workflow_id,
         parent_action_id=parent_action_id,
+        parent_idempotency_key=parent_idempotency_key,
         dispatch_disambiguator=dispatch_disambiguator,
         tenant_id=tenant_id,
     )
