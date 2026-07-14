@@ -45,6 +45,7 @@ dev = [
     #   opentelemetry-instrumentation-google-genai, ...). Substitute the actual split package(s) at
     #   the AS/OD-axis units that require GenAI instrumentation. Logged as Class 3 informational.
     "instructor>=1.15.4",
+    "cryptography>=44.0",     # Test-only Ed25519 double for C-CP-20 §20.2.1 SigningBackend seam (B-22)
 ]
 
 [tool.uv]

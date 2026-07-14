@@ -1,0 +1,51 @@
+# Spec: Control Plane — v1.98 (delta over v1.97)
+
+*Delta-only file. The v1.97 body + the entire C-CP-01 … C-CP-29 contract body are PRESERVED VERBATIM (delta-only-spec-file convention). This delta records the `B-22` standalone arc: an additive, optional composition-root injection seam for §20.2 signing-key resolution, so `sign_audit_entry` / `verify_audit_entry_signature` can consume a real deployment-bound signing backend once one is wired, instead of having no possible call shape to ever accept one.*
+
+## Change-note (v1.97 → v1.98)
+
+**Scope of revision.** One additive, optional `SigningBackend` composition-root-injection seam at §20.2 — no new carrier, no new persona-tier behavior, no change to the signing-key residence table (§20.2's per-persona-tier residence rows, the F5 prod-tech-vault deferral, and the `ed25519`/`ecdsa-p256`/`rsa-pss-2048` algorithm enum are all PRESERVED VERBATIM):
+
+- **`SigningBackend` Protocol (NEW §20.2.1)** — a minimal two-method composition-root-injected surface: `sign(message: bytes, key_id: str) -> bytes` and `verify(message: bytes, signature: bytes, key_id: str) -> bool`, plus an `algorithm` attribute naming which of the three §20.2 algorithms the backend implements. The protocol carries no key-custody logic itself — it is the seam a deployment-time composition root (per the same "live signing backend ... wired at a deployment-time composition root" shape ADR-D5 v1.3 §1.4 already establishes for the OD-local sibling `sign_audit_entry`) implements once a concrete prod-tech backend (HSM / KMS / vault) exists.
+- **`sign_audit_entry` / `verify_audit_entry_signature` gain an OPTIONAL `backend: SigningBackend | None = None` keyword parameter.** Absent (the default) — **the existing `AuditSigningBackendUnavailableError` fail-loud raise is PRESERVED VERBATIM, byte-for-byte, including for the zero production callers that exist today** (confirmed by repo-wide grep at both this delta's authoring and at the prior `B-22` register entry). Present — `sign_audit_entry` computes `audit_signature_sha256 = SHA-256(entry.model_dump_json())` per the same canonical-payload-hash convention ADR-D5 v1.3 §1.4.1's v1.4 tightening already establishes for the OD-local sibling, calls `backend.sign(message, key.key_id)` for the signature bytes, and returns a real `CPSignedAuditLedgerEntry`; `verify_audit_entry_signature` recomputes the hash, rejects on hash mismatch (`SIGNATURE_MISMATCH` — the tamper-evident content-integrity check), and otherwise calls `backend.verify(...)` for the genuine cryptographic verdict per §20.3.1's `verify_chain` pseudocode step 2 ("verify audit.signature.value against the key valid at entry.audit.signature.key_period").
+
+**This is the `B-22` standalone arc** (registered at `.harness/post-phase-8-forward-register.md`, surfaced at the 2026-07-13 F5-real-audit-signature-backend preflight follow-on). It closes exactly the "no possible way to ever wire a backend" half of the gap: before this delta, `sign_audit_entry` / `verify_audit_entry_signature` had no call shape capable of accepting real key material at all — every future arc wiring a concrete backend would have had to first author this same seam from scratch. It does NOT close the other half — the concrete prod-tech backend (which vault/KMS a `multi-tenant-compliance` deployment actually uses) remains genuinely deferred; see Status below.
+
+**Why this is additive, not a security-posture change.** The 2026-07-13 operator-ratified disposition ("fail loud instead of fabricating `VERIFIED`") is preserved exactly for the only case that exists today — no backend. The seam only ever activates when a caller supplies a real, typed backend; there is no path by which this delta causes an existing or future absent-backend caller to receive anything other than the identical raise it receives today. The seam is what makes it POSSIBLE for a future arc to satisfy §20.3.1's requirement for genuine verification — it does not itself claim that requirement is satisfied for `multi-tenant-compliance` deployments today.
+
+**Deferred — NOT resolved by this delta (Council: ⚖️ conditional per the `B-22` register entry, C10 blast-radius ⊥ C11 operator-loop/local-deployment).** The concrete prod-tech secrets/signing backend a `multi-tenant-compliance` composition root would inject through this seam — HSM / AWS Secrets Manager / HashiCorp Vault / Azure Key Vault / GCP Secret Manager / Doppler / 1Password Connect — is explicitly deferred per ADR-F5 §Deferred D-ADRs ("D-ADR on bootstrap-token issuance protocol per prod-tech") and per ADR-D5 v1.3 §1.4's own signing-key-residence table (row 3: "F5 prod-tech (deferred to D-ADR ...)"). This delta neither picks a backend nor provisions credentials; it is a mechanical, reversible, zero-regression seam only. A concrete backend selection remains a genuine operator + design-phase (D-ADR) + credential-provisioning decision, out of Phase-7-execution scope per X-AL-3.
+
+**Note on the already-landed `harness_runtime` provider-secrets precedent.** `harness_runtime.config.provider_secrets` already implements an analogous two-backend composition (`KeyringSecretResolver` for `LOCAL_KEYRING_ENV_FALLBACK`; `GcpSecretManagerResolver` for `GCP_SECRET_MANAGER`, R-421) for LLM-provider API keys — a real, working precedent for what a future `SigningBackend` composition-root implementation could look like (fetch raw key-material bytes via `GcpSecretManagerResolver`-style access, then sign locally via a library such as `cryptography`'s Ed25519 primitives). This delta does not wire that precedent to audit-signing — CP must not import `harness_runtime` (axis-layering: `harness_runtime` composes CP, not the reverse) — it is cited here only as forward-work orientation for whoever authors the eventual composition-root arc.
+
+**v1.97 + prior body PRESERVED VERBATIM.** All v1.97 content — the entire C-CP-01 … C-CP-29 body incl. §20.x / §25.x / §26.x — is PRESERVED VERBATIM per the delta-only-spec-file convention; the **only** change is the additive `SigningBackend` protocol + the optional `backend` parameter on the two §20.2 functions.
+
+---
+
+## §1 — NEW §20.2.1 composition-root injection seam (additive)
+
+> **`SigningBackend` (NEW §20.2.1).** A minimal Protocol, implemented by a deployment-time composition root once a concrete prod-tech signing backend exists:
+>
+> ```
+> class SigningBackend(Protocol):
+>     algorithm: str  # ∈ {ed25519, ecdsa-p256, rsa-pss-2048} per §20.2
+>     def sign(self, *, message: bytes, key_id: str) -> bytes: ...
+>     def verify(self, *, message: bytes, signature: bytes, key_id: str) -> bool: ...
+> ```
+>
+> `sign_audit_entry(entry, key, *, key_period, backend: SigningBackend | None = None)` and `verify_audit_entry_signature(signed, key, *, backend: SigningBackend | None = None)` consume it. `backend=None` (default) preserves the existing `AuditSigningBackendUnavailableError` raise verbatim. `backend=<real backend>` performs genuine SHA-256-then-sign / recompute-then-verify per the §20.3.1 `verify_chain` contract. No new persona-tier behavior, no new CP-importable exception type beyond the pre-existing `AuditSigningBackendUnavailableError`, no change to the §20.2 residence table or the §20.2 algorithm enum.
+
+The existing §20.2 signing-key residence table, §20.3 / §20.3.1 rotation + verification semantics, and §20.4 seven-attribute declaration are PRESERVED VERBATIM — this seam is purely a call-surface addition at the two functions that already existed to consume the residence + verification contract.
+
+---
+
+## §2 — Status
+
+One additive `SigningBackend` Protocol + one optional `backend` keyword parameter on `sign_audit_entry` / `verify_audit_entry_signature`, absorbing the `B-22` standalone arc's first close-out step (registered at `.harness/post-phase-8-forward-register.md`) — a real key-material-resolution seam into `harness-cp`, so a future composition root has a call shape to wire a real signing backend into. **The concrete prod-tech backend remains genuinely deferred** (ADR-F5 §Deferred D-ADRs; ADR-D5 v1.3 §1.4 row 3) — this delta does not select one, does not provision credentials, and does not claim `multi-tenant-compliance` deployment-readiness for audit-signature tamper-evidence.
+
+**No operator gate on this delta itself** (additive, opt-in, zero regression for the zero existing callers — operator already selected this scope via the `B-22` seam-now-vs-hold-fully AskUserQuestion). The concrete backend selection remains its own, separate, genuinely operator + D-ADR + credential-gated decision, out of scope for this delta.
+
+v1.97 + earlier PRESERVED VERBATIM per delta-only-spec-file convention. The entire C-CP-01 … C-CP-29 body PRESERVED VERBATIM except the additive `SigningBackend` protocol + optional `backend` parameter. IS spec UNCHANGED. Runtime spec UNCHANGED (no runtime-side wiring in this delta — `harness_runtime` is explicitly NOT touched; see the provider-secrets precedent note above, cited for forward orientation only). CXA v2.19 UNCHANGED (no new cross-axis edge — the seam is CP-internal; the eventual composition-root wiring, when it happens, is a `harness_runtime` concern that already legitimately consumes CP, not a new CP-outbound edge). ADR-F1/F2/F3/D1–D6 UNCHANGED. ADD v1.3 + PRD v1.1 UNCHANGED.
+
+Clearance marker filed at `.harness/clearance/spec-control-plane-v1-98-cleared-2026-07-14.md`.
+
+2026-07-14.

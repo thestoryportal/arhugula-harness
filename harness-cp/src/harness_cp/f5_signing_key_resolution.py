@@ -40,29 +40,47 @@ signature at all, only hash-chain content-integrity), this module's
 `VERIFIED`/`SIGNATURE_MISMATCH` security verdict. Returning `VERIFIED` from an
 unkeyed hash match anyone with ledger-write access could forge is a false
 attestation — worse than the pre-fix key-id-only check because it looks like
-real verification landed. So both `sign_audit_entry` and
-`verify_audit_entry_signature` raise `AuditSigningBackendUnavailableError`
+real verification landed. So absent a real backend, both `sign_audit_entry`
+and `verify_audit_entry_signature` raise `AuditSigningBackendUnavailableError`
 instead: MULTI_TENANT_COMPLIANCE audit-signature tamper-evidence is presently
 **unavailable**, not faked, pending a key-material-resolution seam from a
 deployment-bound signing backend (HSM / KMS / vault) into this unit — the same
 "live signing backend ... wired at a deployment-time composition root" shape
-ADR-D5 v1.3 §1.4.1 already ratifies for OD. There are zero production callers
+ADR-D5 v1.3 §1.4 already ratifies for OD. There are zero production callers
 of either function today (confirmed by repo-wide grep — only the
 `SigningKeyHandle` *type* is consumed, at `five_axis_composition.py`), so this
 is a latent gap, not a live regression; operator-ratified 2026-07-13.
 
+**§20.2.1 composition-root injection seam (C-CP-20 spec v1.98 — `B-22`).**
+Both functions accept an OPTIONAL `backend: SigningBackend | None = None`
+keyword parameter. Absent (the default) — the fail-loud raise above is
+PRESERVED VERBATIM, byte-for-byte, for every existing (zero) caller; this is
+purely additive. Present — a deployment-time composition root has wired a
+real signing backend, and both functions perform genuine cryptographic
+signing/verification against it. The concrete prod-tech backend a
+`multi-tenant-compliance` deployment would inject here (HSM / AWS Secrets
+Manager / HashiCorp Vault / Azure Key Vault / GCP Secret Manager / Doppler /
+1Password Connect) is explicitly deferred per ADR-F5 §Deferred D-ADRs +
+ADR-D5 v1.3 §1.4's own signing-key-residence table (row 3) — this seam does
+not select one or provision credentials; see `Spec_Control_Plane_v1_98.md`
+for the full change-note.
+
 Authority: Implementation_Plan_Control_Plane_v2_1.md §2 U-CP-44 (preserved
 verbatim into v2.3/v2.4 — symbolic enum reference only; v2.9 §0.5.1
 audit-entry name reconciliation); Spec_Control_Plane_v1_2.md §20 C-CP-20
-§20.3, §20.3.1, §20.4 (preserved verbatim into v1.3); ADR-D5 v1.3 §1.4 /
-§1.4.1; CLAUDE.md §3.2 (hand-rolled crypto composition — NO framework; the
-composition/wiring here is hand-rolled, not a from-scratch crypto primitive —
-this module never implements its own asymmetric-cipher math).
+§20.3, §20.3.1, §20.4 (preserved verbatim into v1.3); Spec_Control_Plane_v1_98.md
+§1 (NEW §20.2.1 `SigningBackend` composition-root injection seam); ADR-D5
+v1.3 §1.4 / §1.4.1; CLAUDE.md §3.2 (hand-rolled crypto composition — NO
+framework; the composition/wiring here is hand-rolled, not a from-scratch
+crypto primitive — this module never implements its own asymmetric-cipher
+math).
 """
 
 from __future__ import annotations
 
+import hashlib
 from enum import StrEnum
+from typing import Protocol, runtime_checkable
 
 from harness_as import SandboxTier, SecretRef, SecretScope, fetch_secret
 from harness_core import PersonaTier
@@ -160,6 +178,38 @@ class VerificationResult(StrEnum):
     SIGNATURE_MISMATCH = "signature_mismatch"
 
 
+@runtime_checkable
+class SigningBackend(Protocol):
+    """A deployment-bound signing backend (C-CP-20 §20.2.1, spec v1.98).
+
+    Composition-root-injected — a `multi-tenant-compliance` deployment's
+    bootstrap wires a concrete implementation (HSM / KMS / vault-backed) once
+    one exists. `harness-cp` carries no dependency on any concrete crypto or
+    secrets-backend library; this Protocol is the entire seam.
+    """
+
+    algorithm: str
+    """`∈ {ed25519, ecdsa-p256, rsa-pss-2048}` per C-CP-20 §20.2."""
+
+    def sign(self, *, message: bytes, key_id: str) -> bytes:
+        """Produce a signature over `message` under the key named `key_id`."""
+        ...
+
+    def verify(self, *, message: bytes, signature: bytes, key_id: str) -> bool:
+        """Verify `signature` over `message` under the key named `key_id`."""
+        ...
+
+
+def _canonical_entry_hash(entry: CPAuditLedgerEntry) -> str:
+    """The C-CP-20 §20.4 `audit.signature.sha256` hash over `entry`.
+
+    `SHA-256(entry.model_dump_json())` — mirrors the canonical-payload-hash
+    convention ADR-D5 v1.3 §1.4.1's v1.4 tightening establishes for the
+    OD-local sibling's `AuditPayload` (`SHA-256(AuditPayload.model_dump_json())`).
+    """
+    return hashlib.sha256(entry.model_dump_json().encode()).hexdigest()
+
+
 def resolve_signing_key(scope: SigningKeyScope, persona_tier: PersonaTier) -> SigningKeyResult:
     """Resolve the F5 audit-signing key for `scope` — C-CP-20 §20.3.1.
 
@@ -191,39 +241,73 @@ def sign_audit_entry(
     key: SigningKeyHandle,
     *,
     key_period: int,
+    backend: SigningBackend | None = None,
 ) -> CPSignedAuditLedgerEntry:
     """Sign a CP audit-ledger entry under `key` (C-CP-20 §20.3.1 + §20.4).
 
-    Raises `AuditSigningBackendUnavailableError` — real cryptographic signing
+    Validates the `RETIRED`-key precondition first: the signing key must be
+    `ACTIVE` or `ROTATING`. Without `backend` (the default), raises
+    `AuditSigningBackendUnavailableError` — real cryptographic signing
     against `key`'s actual key material is not reachable from the CP axis
     today (see module docstring); this function does not fabricate a signed
-    entry. Still validates the `RETIRED`-key precondition first (a real
-    signing-backend seam would need to honor it too): the signing key must be
-    `ACTIVE` or `ROTATING`.
+    entry. With `backend` (C-CP-20 §20.2.1, spec v1.98) — a deployment-time
+    composition root has wired a real signing backend — computes the
+    canonical `audit.signature.sha256` hash and returns a genuinely signed
+    `CPSignedAuditLedgerEntry`.
     """
     if key.rotation_state is KeyRotationState.RETIRED:
         raise ValueError("cannot sign under a RETIRED signing key (C-CP-20 §20.3)")
-    raise AuditSigningBackendUnavailableError(
-        "real audit-entry signing requires a key-material-resolution seam not "
-        "yet wired from a deployment-bound signing backend into harness-cp "
-        "(C-CP-20 §20.3.1; SecretRef is opaque per AS spec C-AS-05 §5.4)"
+    if backend is None:
+        raise AuditSigningBackendUnavailableError(
+            "real audit-entry signing requires a key-material-resolution seam not "
+            "yet wired from a deployment-bound signing backend into harness-cp "
+            "(C-CP-20 §20.3.1; SecretRef is opaque per AS spec C-AS-05 §5.4)"
+        )
+    sha256_hex = _canonical_entry_hash(entry)
+    signature = backend.sign(message=bytes.fromhex(sha256_hex), key_id=key.key_id)
+    return CPSignedAuditLedgerEntry(
+        entry=entry,
+        audit_signature_sha256=sha256_hex,
+        audit_signature_value=signature,
+        audit_signature_algorithm=backend.algorithm,
+        audit_signature_key_id=key.key_id,
+        audit_signature_key_period=key_period,
     )
 
 
 def verify_audit_entry_signature(
-    signed: CPSignedAuditLedgerEntry, key: SigningKeyHandle
+    signed: CPSignedAuditLedgerEntry,
+    key: SigningKeyHandle,
+    *,
+    backend: SigningBackend | None = None,
 ) -> VerificationResult:
     """Verify a signed audit-entry's signature at read-time (C-CP-20 §20.3.1).
 
-    Raises `AuditSigningBackendUnavailableError` — real cryptographic
-    signature verification against `key`'s actual key material is not
-    reachable from the CP axis today (see module docstring); this function
-    does not fabricate a `VERIFIED` result.
+    Without `backend` (the default), raises `AuditSigningBackendUnavailableError`
+    — real cryptographic signature verification against `key`'s actual key
+    material is not reachable from the CP axis today (see module docstring);
+    this function does not fabricate a `VERIFIED` result. With `backend`
+    (C-CP-20 §20.2.1, spec v1.98) — recomputes the canonical
+    `audit.signature.sha256` hash over `signed.entry` per §20.3.1's
+    `verify_chain` step 2 (content-integrity check first: a hash mismatch is
+    `SIGNATURE_MISMATCH` without ever consulting the backend), then verifies
+    `audit_signature_value` against `key.key_id` through `backend`.
     """
-    del signed, key
-    raise AuditSigningBackendUnavailableError(
-        "real audit-entry signature verification requires a key-material-"
-        "resolution seam not yet wired from a deployment-bound signing "
-        "backend into harness-cp (C-CP-20 §20.3.1; SecretRef is opaque per "
-        "AS spec C-AS-05 §5.4)"
+    if backend is None:
+        raise AuditSigningBackendUnavailableError(
+            "real audit-entry signature verification requires a key-material-"
+            "resolution seam not yet wired from a deployment-bound signing "
+            "backend into harness-cp (C-CP-20 §20.3.1; SecretRef is opaque per "
+            "AS spec C-AS-05 §5.4)"
+        )
+    recomputed_sha256 = _canonical_entry_hash(signed.entry)
+    if recomputed_sha256 != signed.audit_signature_sha256:
+        return VerificationResult.SIGNATURE_MISMATCH
+    verified = backend.verify(
+        message=bytes.fromhex(recomputed_sha256),
+        signature=signed.audit_signature_value,
+        key_id=key.key_id,
     )
+    if not verified:
+        return VerificationResult.SIGNATURE_MISMATCH
+    return VerificationResult.VERIFIED
