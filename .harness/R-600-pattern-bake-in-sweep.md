@@ -373,3 +373,39 @@ All three are dashboard/git-mechanics recipes, not SDLC process disciplines — 
 - **`must_pass` #1** (cardinality>=2 frontier identified + file-delta audit): ✅ C6-§1.
 - **`must_pass` #2** (candidates evaluated against §7.4.7 + §7.5): ✅ C6-§2 — result: ZERO new §7.4.7 owed (6th surfacing); ZERO new §7.5 promotion (file-delta-audited, not just citation-count-audited, per `advisor()` pre-write-up flag).
 - **Entry status:** **ACTIVE-SURVEYED (cadence-6)**. A legitimate zero-promotion cadence — verified against the stronger file-delta signal, not the frozen citation count alone. R-600 remains an ACTIVE recurring lane; next run only after the cadence trips again (~10 PRs) or a concrete new candidate reaches independent instance-cardinality >=2.
+
+---
+---
+
+# Cadence-7 run — 2026-07-14 (HEAD `a4074653`, post-#973)
+
+**Cadence trigger.** 11 commits since the cadence-6 close commit (`5aa138aa` / PR #962, merged 2026-07-13T02:48:57Z → `a4074653` / post-#973) — spanning PRs #963–#973, past the ~10-PR interval. The window covers `B-23` (cost-attribution F2-write, PR #968) and `B-26` (real IS hash-chain verification wired into the rotation-verification stub, PR #972 — 5 rounds of out-of-family Codex review), plus their terminating refreshes.
+
+**Method (identical to cadence-6 — file-delta is the load-bearing check, not raw citation count).** Read-only `[[wiki-link]]` enumeration of the auto-memory store at `/Users/robertrhu/.claude/projects/-Users-robertrhu-Projects-arhugula-v2/memory/` (**121 files**, unchanged from cadence-6): **568 total refs / 100 distinct tokens → 76 at cardinality >=2** (was 567/100/76 at cadence-6 — a +1 total-ref delta, cardinality-frontier set unchanged). Per the standing caveat (a frozen cardinality count can still hide a newly-consolidated discipline), the gating check is the file-delta since the precise cadence-6 close timestamp, not the near-identical aggregate counts.
+
+## C7-§1 — `must_pass` #1: cardinality>=2 frontier identified + file-delta audit
+
+Top signals unchanged from cadence-6: `hooks-codex-pilots-decorrelation-validated` (45), `verification-shape-sharpened-grep-vs-e2e` (35), `advisor-before-substantive-work-for-cross-axis-blockers` (32), `grounding-reveals-claude-closeable-slice-close-honestly` (31), `full-chain-witness-not-half-proofs` (21, PD-6), `r-cxa-seam-wiring-is-producer-discovery` (20), `disposition-label-is-a-claim-verify-against-spec` (PD-7) — all already dispositioned at cadence-3 through cadence-6.
+
+**File-delta audit (precise cutoff = cadence-6's own merge timestamp, `2026-07-13T02:48:57Z`, not a rounded date — the cadence-6 audit's own 3 already-dispositioned files (`regenerate-roadmap-html-after-source-edit.md`, `dashboard-regen-gh-unavailable-determinism.md`, `squash-merge-dashboard-conflict.md`) have mtimes a few hours BEFORE that exact timestamp and were correctly excluded once the cutoff was tightened from a same-day approximation to the merge instant).** Exactly 2 non-index files touched since cadence-6 close:
+
+| file | disposition |
+|---|---|
+| `codex-out-of-family-reviewer.md` | Class A/B tooling — reviewer-ladder guidance, already indexed at MEMORY.md ("Reviewer ladder: codex + Fable-5 fallback"). New content this window: (a) an operational model-upgrade note (`gpt-5.5`→`gpt-5.6-sol`, tooling mechanics, not process); (b) two review-ritual sharpenings from arc #933 — pre-build reviews should verify each rationale leg **empirically**, not just hunt missing legs; post-build reviews should **mutation-probe normative lines** (temporarily delete the load-bearing line, confirm the witness fails, restore). |
+| `fanout-pause-per-strategy-carrier.md` | Class C, project-type (own `type: project` frontmatter) — CP-axis fan-out pause/resume implementation mechanics. New content this window: item (6), the `B-21` cross-carrier port (PR #970) and its byte-compat-scoping lesson (a shared serialization helper reused for a new field on one carrier must diverge per-carrier-kind when a sibling carrier already has durable instances depending on the old behavior). Same shape as cadence-5's `new-surface-audit-hash-and-config-not-carrier` finding — domain-specific runtime-implementation mechanics, not a cross-project SDLC discipline. Already has a dedicated home; no §7.5 candidacy. |
+
+**One candidate evaluated against §7.5.1 gate 1 and NOT yet cleared — flagged as a card-frontier token for the next cadence, not promoted this one.** The "mutation-probe normative lines" technique (deliberately break the code the witness is supposed to pin, confirm the witness fails, then restore — proving the test is load-bearing rather than green-by-construction) is genuinely valuable and recurring: it originates at arc #933 (named explicitly in `codex-out-of-family-reviewer.md`), a softer precedent exists at #927 ("mutation-probed the normative task.result() resurface" per the `fanout-pause-per-strategy-carrier.md` / `b18-epoch-partition` lineage), and this session's own `B-26` arc (PR #972) independently applied it 4 times (mutation-probing the hash-chain-succeeded gate, the downstream-blocking gate, the empty-ledger gate, each confirmed by reverting the fix and observing the expected test failure before restoring). **Gate-1 read:** despite this real cross-arc recurrence, it does not yet exist as its own **consolidated, independently-named** memory token — it currently lives as sub-content inside `codex-out-of-family-reviewer.md` (a reviewer-ladder tooling file whose primary subject is something else) and is absent from `safe-mutation-probe-no-git-checkout-restore.md` (a git-safety operational recipe, not the verification technique). Per the cadence-5 PD-7 provenance-honesty framing, the *behavior* recurring across arcs is not the same as the *discipline* being promotion-ready — that requires a named, citable consolidation first. **Disposition:** park; if a dedicated `mutation-probe-...` memory entry consolidates with independent-arc citations before the next sweep, it is a strong PD-3-adjacent candidate (verification-shape matching already exists at PD-3/root `CLAUDE.md` §6, but "prove the test itself is load-bearing via fault injection" is a distinct, sharper facet worth its own entry, not a restatement).
+
+## C7-§2 — `must_pass` #2: candidates evaluated against §7.4.7 and §7.5
+
+**§7.4.7 (stale-carry-text):** ZERO new sub-species owed. This is the **7th independent surfacing** of the same null result across cadence-1 through cadence-7, checked fresh against this cadence's card>=2 set and file-delta (not inherited from cadence-6).
+
+**§7.5 (process-discipline):** ZERO new candidates clear the gate this cadence. Both touched files are already-homed (Class A/B tooling and Class C project-type respectively); the one genuinely interesting emerging technique (mutation-probing normative witnesses) fails gate 1 on consolidation, not on merit — flagged forward rather than forced or dropped, per the register's own "register-then-triage, not drop" discipline.
+
+**No promotion this cadence.** `design-substrate/Project_Workflow_v1_17.md` remains the current head; no amendment, no clearance marker.
+
+## C7-§3 — Closure disposition (cadence-7)
+
+- **`must_pass` #1** (cardinality>=2 frontier identified + file-delta audit): ✅ C7-§1.
+- **`must_pass` #2** (candidates evaluated against §7.4.7 + §7.5): ✅ C7-§2 — result: ZERO new §7.4.7 owed (7th surfacing); ZERO new §7.5 promotion (one card-frontier token — mutation-probe-as-load-bearing-witness — flagged forward, not yet consolidated as its own citable pattern).
+- **Entry status:** **ACTIVE-SURVEYED (cadence-7)**. A legitimate zero-promotion cadence. R-600 remains an ACTIVE recurring lane; next run only after the cadence trips again (~10 PRs) or a concrete new candidate (the flagged mutation-probe token, or another) reaches independent instance-cardinality >=2 as a named, consolidated entry.
