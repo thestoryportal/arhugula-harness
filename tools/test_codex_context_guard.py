@@ -40,6 +40,7 @@ def _state(**overrides) -> cg.GuardState:
         fork_doc_count=0,
         latest_retirement_batch=".harness/phase-7d-retirement-events-batch-51.md",
         lag_expected=False,
+        owed_lag=False,
     )
     return cg.GuardState(**{**base.__dict__, **overrides})
 
@@ -78,6 +79,22 @@ def _init_repo(tmp_path: Path) -> Path:
     _git(repo, "add", ".")
     _git(repo, "commit", "-m", "baseline")
     return repo
+
+
+def _write_roadmap_status(repo: Path, *, git_head: str) -> None:
+    (repo / ".harness" / "roadmap_status.md").write_text(
+        "\n".join(
+            [
+                "| Field | Value |",
+                "|---|---|",
+                "| `workspace_state_hash` | `abcdefabcdef` |",
+                f"| `git_head` | `{git_head}` |",
+                "| `last_refreshed` | 2026-06-05T00:00:00-06:00 |",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
 
 def test_root_checkout_edits_are_hard_failure() -> None:
@@ -262,9 +279,39 @@ def test_lag_expected_roadmap_drift_has_specific_warning_code() -> None:
     assert not any(f.code == "ROADMAP_STATUS_BRANCH_DIVERGED" for f in findings)
 
 
+def test_owed_lag_without_allow_roadmap_drift_still_hard_fails_on_default_branch() -> None:
+    # The Codex round-4 finding this guards: a HEAD that is one commit past a
+    # verified refresh (owed_lag=True) must NOT be silently downgraded to a
+    # warning for callers that don't pass --allow-roadmap-drift — i.e. the
+    # session-start hook and `just codex-preflight`, which must force the
+    # owed refresh before further work proceeds, even though CI on the exact
+    # same commit (with the flag) passes clean.
+    state = _state(branch="main", computed_hash="newhash", lag_expected=False, owed_lag=True)
+
+    findings = cg.validate(state, mode="preflight")
+
+    assert any(f.code == "ROADMAP_STATUS_DRIFT" and f.severity == "hard" for f in findings)
+    assert not any(f.code == "ROADMAP_STATUS_LAG_EXPECTED" for f in findings)
+
+
+def test_owed_lag_with_allow_roadmap_drift_downgrades_to_warn_on_default_branch() -> None:
+    # The CI-side fix this round-4 finding demands: the post-merge `push`
+    # trigger passes --allow-roadmap-drift unconditionally, and on that exact
+    # invocation an owed_lag=True HEAD must warn, not hard-fail — this is the
+    # scenario the whole arc originally set out to fix (CI red on the first
+    # run after every content merge to main).
+    state = _state(branch="main", computed_hash="newhash", lag_expected=False, owed_lag=True)
+
+    findings = cg.validate(state, mode="check", allow_roadmap_drift=True)
+
+    assert any(f.code == "ROADMAP_STATUS_LAG_EXPECTED" and f.severity == "warn" for f in findings)
+    assert not any(f.code == "ROADMAP_STATUS_DRIFT" for f in findings)
+
+
 def test_status_refresh_alone_counts_as_expected_lag(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
-    (repo / ".harness" / "roadmap_status.md").write_text("refreshed\n", encoding="utf-8")
+    parent_sha = _git(repo, "rev-parse", "--short=8", "HEAD")
+    _write_roadmap_status(repo, git_head=parent_sha)
     _git(repo, "add", ".")
     _git(repo, "commit", "-m", "ops: roadmap status refresh post-test")
 
@@ -274,8 +321,9 @@ def test_status_refresh_alone_counts_as_expected_lag(tmp_path: Path) -> None:
 def test_merged_status_refresh_alone_counts_as_expected_lag(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     _git(repo, "branch", "-m", "main")
+    parent_sha = _git(repo, "rev-parse", "--short=8", "HEAD")
     _git(repo, "checkout", "-b", "refresh")
-    (repo / ".harness" / "roadmap_status.md").write_text("refreshed\n", encoding="utf-8")
+    _write_roadmap_status(repo, git_head=parent_sha)
     _git(repo, "add", ".")
     _git(repo, "commit", "-m", "ops: roadmap status refresh post-test")
     _git(repo, "checkout", "main")
@@ -308,6 +356,243 @@ def test_status_refresh_with_unrelated_file_is_not_expected_lag(tmp_path: Path) 
     (repo / ".harness" / "roadmap_status.md").write_text("refreshed\n", encoding="utf-8")
     _git(repo, "add", ".")
     _git(repo, "commit", "-m", "ops: roadmap status refresh post-test")
+
+    assert not cg._lag_expected(repo)
+
+
+def test_content_merge_right_after_refresh_counts_as_owed_lag(tmp_path: Path) -> None:
+    # The real repeating topology: content commit -> terminating refresh commit
+    # (touches roadmap_status.md, describing the content commit as its own parent)
+    # -> the NEXT content commit, which does NOT touch roadmap_status.md at all and
+    # so still carries the refresh's recorded value. This is the "owed lag" case
+    # (distinct from `_lag_expected`'s HEAD-is-refresh case) — a commit can never
+    # record its own not-yet-computed SHA, and neither can the commit after it if
+    # that commit doesn't touch the file.
+    repo = _init_repo(tmp_path)
+    (repo / "feature.py").write_text("# content change\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "feat: first content merge")
+    content_sha = _git(repo, "rev-parse", "HEAD")
+    (repo / ".harness" / "roadmap_status.md").write_text(
+        "\n".join(
+            [
+                "| Field | Value |",
+                "|---|---|",
+                "| `workspace_state_hash` | `abcdefabcdef` |",
+                f"| `git_head` | `{content_sha[:8]}` |",
+                "| `last_refreshed` | 2026-06-05T00:00:00-06:00 |",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "ops: roadmap status refresh post-test")
+    (repo / "feature2.py").write_text("# second content change\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "feat: next content merge, does not touch roadmap_status.md")
+
+    assert cg._owed_lag(repo)
+
+
+def test_content_merge_two_commits_past_refresh_is_not_owed_lag(tmp_path: Path) -> None:
+    # Two content commits stacked after the refresh without touching
+    # roadmap_status.md again: genuinely unreconciled drift (two commits, not one),
+    # must still hard-fail rather than be silently tolerated.
+    repo = _init_repo(tmp_path)
+    (repo / "feature.py").write_text("# content change\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "feat: first content merge")
+    content_sha = _git(repo, "rev-parse", "HEAD")
+    (repo / ".harness" / "roadmap_status.md").write_text(
+        "\n".join(
+            [
+                "| Field | Value |",
+                "|---|---|",
+                "| `workspace_state_hash` | `abcdefabcdef` |",
+                f"| `git_head` | `{content_sha[:8]}` |",
+                "| `last_refreshed` | 2026-06-05T00:00:00-06:00 |",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "ops: roadmap status refresh post-test")
+    (repo / "feature2.py").write_text("# second content change\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "feat: next content merge")
+    (repo / "feature3.py").write_text("# third content change\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "feat: second unrefreshed content merge")
+
+    assert not cg._owed_lag(repo)
+
+
+def test_stale_status_touch_before_content_commit_is_not_owed_lag(
+    tmp_path: Path,
+) -> None:
+    # An accidental/malformed edit to roadmap_status.md that is NOT a verified
+    # terminating refresh (wrong title, or touches other files too) must never be
+    # mistaken for a real refresh just because it's positionally the last touch —
+    # position alone is not sufficient; the last-touch commit must independently
+    # prove it was a genuine refresh (title + exact file set).
+    repo = _init_repo(tmp_path)
+    (repo / ".harness" / "roadmap_status.md").write_text(
+        "\n".join(
+            [
+                "| Field | Value |",
+                "|---|---|",
+                "| `workspace_state_hash` | `deadbeefdead` |",
+                "| `git_head` | `deadbeef` |",
+                "| `last_refreshed` | 2026-06-05T00:00:00-06:00 |",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "docs: accidental stale status edit")
+    (repo / "feature.py").write_text("# content change\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "feat: content merge")
+
+    assert not cg._owed_lag(repo)
+
+
+def test_malformed_status_edit_right_after_refresh_is_not_owed_lag(
+    tmp_path: Path,
+) -> None:
+    # The parent-based allowance exists for a HEAD that does NOT touch the status
+    # file at all. If HEAD itself edits roadmap_status.md — wrong title, or
+    # bundled with unrelated content — it must qualify as a refresh entirely on
+    # its own merits, never by riding its parent's lag allowance. Otherwise a
+    # malformed/bundled edit landing right after a real refresh would silently
+    # downgrade genuine hard drift to a warning.
+    repo = _init_repo(tmp_path)
+    (repo / "feature.py").write_text("# content change\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "feat: first content merge")
+    content_sha = _git(repo, "rev-parse", "HEAD")
+    (repo / ".harness" / "roadmap_status.md").write_text(
+        "\n".join(
+            [
+                "| Field | Value |",
+                "|---|---|",
+                "| `workspace_state_hash` | `abcdefabcdef` |",
+                f"| `git_head` | `{content_sha[:8]}` |",
+                "| `last_refreshed` | 2026-06-05T00:00:00-06:00 |",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "ops: roadmap status refresh post-test")
+    (repo / ".harness" / "roadmap_status.md").write_text(
+        "\n".join(
+            [
+                "| Field | Value |",
+                "|---|---|",
+                "| `workspace_state_hash` | `deadbeefdead` |",
+                "| `git_head` | `deadbeef` |",
+                "| `last_refreshed` | 2026-06-05T00:00:00-06:00 |",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (repo / "feature2.py").write_text("# bundled content\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "docs: bundled bad status edit")
+
+    assert not cg._owed_lag(repo)
+
+
+def test_content_merge_after_merge_based_refresh_counts_as_owed_lag(
+    tmp_path: Path,
+) -> None:
+    # A terminating refresh landed via `git merge --no-ff` (2-parent merge commit)
+    # rather than a squash — git's default path-limited history simplification
+    # hides that merge commit in favor of the refresh branch's own commit, so a
+    # naive "last commit touching the path" lookup would resolve to the WRONG
+    # commit relative to the next content commit's actual parent (the merge
+    # commit itself). Checking HEAD's parent directly for verified-refresh shape
+    # (recursing through the merge) must still recognize this topology.
+    repo = _init_repo(tmp_path)
+    _git(repo, "branch", "-m", "main")
+    parent_sha = _git(repo, "rev-parse", "--short=8", "HEAD")
+    _git(repo, "checkout", "-b", "refresh")
+    _write_roadmap_status(repo, git_head=parent_sha)
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "ops: roadmap status refresh post-test")
+    _git(repo, "checkout", "main")
+    _git(repo, "merge", "--no-ff", "refresh", "-m", "Merge pull request #123 from test/refresh")
+    (repo / "feature.py").write_text("# content change\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "feat: next content merge")
+
+    assert cg._owed_lag(repo)
+
+
+def test_refresh_with_stale_git_head_is_not_verified(tmp_path: Path) -> None:
+    # A commit with the right title and the right lone-file shape, but whose
+    # roadmap_status.md content records a `git_head` that does NOT match its
+    # own parent's SHA (stale/malformed/wrong content) must not pass as a
+    # verified refresh — shape alone (title + file set) is not sufficient;
+    # the recorded content must actually describe this commit's own parent.
+    repo = _init_repo(tmp_path)
+    (repo / "feature.py").write_text("# content change\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "feat: first content merge")
+    _write_roadmap_status(repo, git_head="deadbeef")  # wrong: not this commit's parent SHA
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "ops: roadmap status refresh post-test")
+
+    assert not cg._lag_expected(repo)
+
+
+def test_content_merge_after_stale_git_head_refresh_is_not_owed_lag(tmp_path: Path) -> None:
+    # The owed-lag path must inherit the same content-validation protection:
+    # a content commit right after a shape-only "refresh" (wrong git_head)
+    # must not be tolerated as owed lag either.
+    repo = _init_repo(tmp_path)
+    (repo / "feature.py").write_text("# content change\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "feat: first content merge")
+    _write_roadmap_status(repo, git_head="deadbeef")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "ops: roadmap status refresh post-test")
+    (repo / "feature2.py").write_text("# second content change\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "feat: next content merge")
+
+    assert not cg._owed_lag(repo)
+
+
+def test_stale_refresh_branch_merged_after_main_advanced_is_not_verified(
+    tmp_path: Path,
+) -> None:
+    # The exact topology the merge-wrapped content check must catch: a refresh
+    # branch is created at commit A, `main` advances on its own to commit B
+    # (an unrelated content commit lands directly on main), and only THEN is
+    # the now-stale refresh branch merged in with `--no-ff`. The merge's file
+    # set still looks like a clean single-file refresh, and the refresh
+    # branch tip is itself perfectly self-consistent (it correctly recorded
+    # A as its own parent) — but the merged content still records A, while
+    # the merge's real predecessor state is B, not A. This must NOT verify.
+    repo = _init_repo(tmp_path)
+    _git(repo, "branch", "-m", "main")
+    a_sha = _git(repo, "rev-parse", "--short=8", "HEAD")
+    _git(repo, "checkout", "-b", "refresh")
+    _write_roadmap_status(repo, git_head=a_sha)
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "ops: roadmap status refresh post-test")
+    _git(repo, "checkout", "main")
+    (repo / "feature.py").write_text("# content change while refresh pending\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "feat: content merge while refresh branch pending")
+    _git(repo, "merge", "--no-ff", "refresh", "-m", "Merge pull request #123 from test/refresh")
 
     assert not cg._lag_expected(repo)
 
