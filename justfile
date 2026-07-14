@@ -408,35 +408,6 @@ r810-files-live-e2e config *args:
 r820-managed-agents-live-e2e config *args:
     uv run python tools/r820_managed_agents_live_e2e.py {{config}} {{args}}
 
-# ─── operator dashboard (R-XI-01) ──────────────────────────────────────────
-#
-# Local view of the operator roadmap dashboard. Output goes to the gitignored
-# tools/dashboard/public/ (same path CI uses), so it never dirties the tree.
-# The hosted copy is live at https://thestoryportal.github.io/arhugula-harness/
-# and auto-redeploys on every merge that touches the dashboard sources.
-
-# Regenerate the dashboard from current roadmap state and open it in the browser.
-dashboard:
-    uv run python tools/dashboard/generate.py --root . --out tools/dashboard/public/index.html
-    open tools/dashboard/public/index.html
-
-# Regenerate + serve the dashboard locally on PORT (default 8787) until Ctrl-C.
-# Visit http://localhost:PORT/ — re-run this recipe to refresh from current state.
-dashboard-serve port='8787':
-    uv run python tools/dashboard/generate.py --root . --out tools/dashboard/public/index.html
-    @echo "Dashboard at http://localhost:{{port}}/  (Ctrl-C to stop)"
-    cd tools/dashboard/public && python3 -m http.server {{port}}
-
-# Run the 4-skill design-elevation loop on a target HTML file (R-XI-02 discipline).
-# PAID: spawns a headless `claude` agent per move (sonnet-4-6, ~$0.04/move) that
-# invokes the 4 design skills (impeccable / design-taste-frontend / ui-ux-pro-max
-# / frontend-design) and authors in-identity variants. dotenv-load supplies the
-# Anthropic creds. See dashboard-design/DISCIPLINE.md + live-auto/RUNBOOK.md.
-dashboard-elevate file plan:
-    node tools/dashboard/live-auto/orchestrator.mjs \
-      --file="{{file}}" --plan="{{plan}}" \
-      --producer=tools/dashboard/live-auto/producer-skillchain.mjs --no-inject
-
 # ─── out-of-family review — Codex CLI (pilot) ──────────────────────────────
 #
 # Decorrelated second opinion alongside Claude's advisor(). advisor = Claude

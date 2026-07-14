@@ -259,17 +259,16 @@ jobs:
         run: uv run python -m pytest test_substitution_ledger.py -q
 
   arc-ledger:
-    # R-FS-1 dashboard overhaul — the arc-ledger tally-validation gate (byte-parallel to the
+    # R-FS-1 roadmap overhaul — the arc-ledger tally-validation gate (byte-parallel to the
     # substitution-ledger job above). Derives every R-FS-1 arc + unit count from the single
     # source `.harness/arc-ledger.yaml` and FAILS on an impossible/stale tally: a frozen arc
     # without as-built units, a registered (forward) arc that names a concrete U-* unit or
     # omits decompose_at_open/parent_arc, a row changed without a snapshot bump, or zero OPEN
     # standalone arcs while R-FS-1 is ACTIVE (the count-drift class that produced R-IF-114).
-    # The dashboard-generator and runtime contract-id hygiene tests run here too:
-    # like the substitution + overlay modules, tools/ test modules live outside
-    # the 7 testpaths packages, so the blocking `test` job does not collect them.
-    # This job is their home (they had none before, hence the rot).
-    # pyyaml comes from harness-runtime via the all-packages sync.
+    # The runtime contract-id hygiene tests run here too: like the substitution + overlay
+    # modules, tools/ test modules live outside the 7 testpaths packages, so the blocking
+    # `test` job does not collect them. This job is their home (they had none before,
+    # hence the rot). pyyaml comes from harness-runtime via the all-packages sync.
     runs-on: ubuntu-latest
     name: arc ledger (tally gate) — blocking
     steps:
@@ -288,9 +287,9 @@ jobs:
       - name: Validate the arc ledger (impossible/stale tally = CI failure)
         run: uv run python tools/arc_ledger.py --check
 
-      - name: Arc-ledger + dashboard-generator + runtime contract-id tests
+      - name: Arc-ledger + runtime contract-id tests
         working-directory: tools
-        run: uv run python -m pytest test_arc_ledger.py test_dashboard_generate.py test_runtime_contract_ids.py -q
+        run: uv run python -m pytest test_arc_ledger.py test_runtime_contract_ids.py -q
 
   semantic-overlay:
     # R-IF-112 — the spec ↔ code ↔ CXA-seam ↔ substitution overlay drift gate.
@@ -352,8 +351,7 @@ jobs:
     # R-600-codex-context-guard — Codex-side context-rot gate. The guard is stdlib-only
     # so the runtime check uses /usr/bin/python3; pytest still runs under uv for the
     # repo's pinned Python/test environment. Hard failures include root-checkout edits,
-    # design+implementation mixing, default-branch dashboard drift, and stale dashboard
-    # snapshots when dashboard sources changed.
+    # design+implementation mixing, and default-branch roadmap_status.md drift.
     runs-on: ubuntu-latest
     name: Codex context guard (anti-rot gate) — blocking
     steps:
@@ -362,11 +360,11 @@ jobs:
         with:
           # FULL history (not the default shallow depth-1). The guard's `--base-ref`
           # diff AND `_lag_expected()` (which runs `git show --name-only HEAD` to confirm
-          # a refresh-tip changed ONLY the dashboard-only pair) both need HEAD's PARENT
+          # a refresh-tip changed ONLY roadmap_status.md) both need HEAD's PARENT
           # present. On a depth-1 clone the shallow boundary makes `git show HEAD` list the
           # ENTIRE tree (parentless root-commit diff), so `_lag_expected` is always False
           # and EVERY `ops: roadmap status refresh ` push to main HARD-failed
-          # ROADMAP_DASHBOARD_DRIFT (the §12.2.1 lag the session-start hook correctly
+          # ROADMAP_STATUS_DRIFT (the §12.2.1 lag the session-start hook correctly
           # tolerates). Mirrors the `lint` job's fetch-depth: 0.
           fetch-depth: 0
 
@@ -384,7 +382,7 @@ jobs:
           /usr/bin/python3 tools/codex_context_guard.py check
           --base-ref "${{ github.event.pull_request.base.sha || github.event.before }}"
           --head-ref "${{ github.event.pull_request.head.sha || github.sha }}"
-          --allow-dashboard-drift
+          --allow-roadmap-drift
 
       - name: Codex context guard tests
         run: uv run python -m pytest tools/test_codex_context_guard.py -q

@@ -12,7 +12,7 @@ PATTERNS = [
     (
         "paid provider",
         re.compile(
-            r"\b(ANTHROPIC_API_KEY|OPENAI_API_KEY|mvp-r100|mech-beta|real_anthropic|dashboard-elevate)\b",
+            r"\b(ANTHROPIC_API_KEY|OPENAI_API_KEY|mvp-r100|mech-beta|real_anthropic)\b",
             re.I,
         ),
     ),

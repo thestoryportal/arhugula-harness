@@ -174,7 +174,7 @@ Per X-AL-2 (Meta-Architecture §7.7):
 
 Partial retirement is non-retirement. The `phase-7-substitution-retirement` skill at `.claude/skills/` governs retirement event discipline. Substitution retirement triggers throughout 7b–7d sub-phases, not only at 7d.
 
-**Canonical accounting (R-600).** `.harness/phase-8-graduation.md` records the **frozen Phase-8 close snapshot**: **46/54 RETIRED (85.2%) + 49/54 pipeline-advanced (90.7%)**. That snapshot is a historical milestone, not the live tally. The live per-row dispositions and live counts are the **single source of truth at `.harness/substitutions.yaml`**, DERIVED by `tools/substitution_ledger.py` and surfaced by the dashboard/status refresh flow (the CI tally gate `--check` fails on an impossible tally — the count-drift defect class that produced the original `48/54` cannot recur). Cite the derived live number from the tool/dashboard when needed; do not hand-maintain live counts inline in guidance.
+**Canonical accounting (R-600).** `.harness/phase-8-graduation.md` records the **frozen Phase-8 close snapshot**: **46/54 RETIRED (85.2%) + 49/54 pipeline-advanced (90.7%)**. That snapshot is a historical milestone, not the live tally. The live per-row dispositions and live counts are the **single source of truth at `.harness/substitutions.yaml`**, DERIVED by `tools/substitution_ledger.py` and surfaced by the status-refresh flow (the CI tally gate `--check` fails on an impossible tally — the count-drift defect class that produced the original `48/54` cannot recur). Cite the derived live number from the tool when needed; do not hand-maintain live counts inline in guidance.
 
 ### 4.3 Back-flow routing
 
@@ -502,7 +502,9 @@ Don't infer silently. Posture confusion at session start contaminates downstream
 
 ## 12. Roadmap + drift-detection protocol
 
-*Operationalizes `Project_Roadmap_v1.md` (workspace root) + `.harness/roadmap_status.md` (dashboard). Closes the gap between "roadmap exists" and "roadmap drives execution." Per operator directive 2026-05-31: future sessions derive their next action from the roadmap without operator AUQ.*
+*Operationalizes `Project_Roadmap_v1.md` (workspace root) + `.harness/roadmap_status.md`. Closes the gap between "roadmap exists" and "roadmap drives execution." Per operator directive 2026-05-31: future sessions derive their next action from the roadmap without operator AUQ.*
+
+*(2026-07-14: the prior operator-facing HTML dashboard — `tools/dashboard/generate.py` + the committed `tools/dashboard/roadmap.html` snapshot, published via GitHub Pages — was eliminated per operator direction. `.harness/roadmap_status.md` is the sole surviving mechanism this section governs; it was never rendered by the HTML dashboard, so nothing here changes in substance — only the vocabulary drops "dashboard" as a synonym for it.)*
 
 ### 12.1 Mandatory session-start audit
 
@@ -517,13 +519,13 @@ Before the first substantive edit in any session, Claude MUST:
    - count of `.harness/class_1_fork_*.md` + `.harness/class_2_fork_*.md` (open fork docs)
    - latest retirement-batch path from `ls .harness/phase-7d-retirement-events-batch-*.md | sort -V | tail -1`
    - `sha256(concat).hexdigest()[:12]`
-3. Compare with `dashboard.workspace_state_hash`.
+3. Compare with `roadmap_status.md`'s recorded `workspace_state_hash`.
 4. **Mismatch → HALT.** Do not proceed to substantive work. Surface to operator with reconciliation options:
-   - (a) refresh dashboard from current state, proceed
-   - (b) revert workspace to dashboard state (only if drift is uncommitted)
+   - (a) refresh `roadmap_status.md` from current state, proceed
+   - (b) revert workspace to the recorded state (only if drift is uncommitted)
    - (c) operator manually resolves
 5. **Match → proceed** to next-action derivation per `Project_Roadmap_v1.md` §4.
-6. **Fixed-point carve-out** (per §12.2.1). If the dashboard's `workspace_state_hash` does NOT match current state, but the most recent merge commit on main is a terminating refresh PR (title **begins with** `ops: roadmap status refresh ` — suffix format-agnostic per §12.2.1), AND the dashboard hash matches `compute(state at merge_commit~1)` (the state immediately before that refresh-merge), the drift is the expected lag-by-one-commit per §12.2.1. Treat as MATCH; silently recompute and update the dashboard's stored hash against current HEAD; proceed. Do NOT spawn a new refresh PR.
+6. **Fixed-point carve-out** (per §12.2.1). If `roadmap_status.md`'s recorded `workspace_state_hash` does NOT match current state, but the most recent merge commit on main is a terminating refresh PR (title **begins with** `ops: roadmap status refresh ` — suffix format-agnostic per §12.2.1), AND the recorded hash matches `compute(state at merge_commit~1)` (the state immediately before that refresh-merge), the drift is the expected lag-by-one-commit per §12.2.1. Treat as MATCH; silently recompute and update the stored hash against current HEAD; proceed. Do NOT spawn a new refresh PR.
 
 This audit is the load-bearing discipline. Skipping it = silent drift = the failure mode the roadmap was authored to prevent.
 
@@ -538,26 +540,24 @@ After any PR merges to main (whether merged by Claude or operator):
    - `recently_completed` → prepend the merged PR (drop oldest if >5 entries)
    - `in_flight` → remove merged PR, add any newly-opened PRs
    - `next_action` → re-derive per `Project_Roadmap_v1.md` §4
-   - **arc-ledger** — if an R-FS-1 arc transited (an arc closed/resolved, or a new arc/unit surfaced), edit the `.harness/arc-ledger.yaml` row **AND** bump its `snapshot:` block in the **same commit** (forward-only; the blocking CI `arc-ledger` job + `tools/arc_ledger.py --check` fail on an impossible/stale tally). The dashboard's **Arc & unit map** derives from this single structured source via `tools/arc_ledger.py` — there is no parseable markdown copy to drift (the old `.harness/r-fs-1-arc-and-unit-map.md` is a retired pointer stub).
-   - dashboard volatile display values are NOT hand-copied into HTML; `tools/dashboard/generate.py` derives visible `HEAD` / `LAST` / `HASH` / `OPEN FORKS` plus closure copy counts from current git/filesystem/roadmap inputs.
+   - **arc-ledger** — if an R-FS-1 arc transited (an arc closed/resolved, or a new arc/unit surfaced), edit the `.harness/arc-ledger.yaml` row **AND** bump its `snapshot:` block in the **same commit** (forward-only; the blocking CI `arc-ledger` job + `tools/arc_ledger.py --check` fail on an impossible/stale tally). There is no parseable markdown copy to drift (the old `.harness/r-fs-1-arc-and-unit-map.md` is a retired pointer stub).
 3. If any R-NNN entry at `Project_Roadmap_v1.md` §5 closed at this PR, mark it `RESOLVED` and refresh `next_pointer` propagation.
-4. Regenerate the committed dashboard snapshot with `python3 tools/dashboard/generate.py --root .` whenever dashboard status, generator logic, or roadmap inputs changed; never hand-edit `tools/dashboard/roadmap.html`.
-5. Commit with a title beginning `ops: roadmap status refresh ` (e.g. `…post-PR-NN` or `…post-#NN`; the §12.2.1 carve-out keys on the prefix, suffix format-free). Push.
+4. Commit with a title beginning `ops: roadmap status refresh ` (e.g. `…post-PR-NN` or `…post-#NN`; the §12.2.1 carve-out keys on the prefix, suffix format-free). Push.
 
 #### 12.2.1 Refresh PR termination clause (recursion-stopping fixed point)
 
 The §12.2 protocol applied naively recurses: a refresh PR (step 4) is itself a PR merge that triggers another §12.2 audit. This clause defines the fixed point.
 
 **Terminating refresh PR.** A PR is a terminating refresh iff:
-- Title **begins with** `ops: roadmap status refresh ` — the `post-<NNN>` suffix format is FREE (`post-PR-NN`, `post-#NN`, `post-#NN/#NN`, optionally a short parenthetical). The §12.1 step-6 carve-out + the session-start hook key on this **prefix**, NOT a specific suffix format (so a one-commit-behind dashboard after any refresh is never mis-flagged as drift), AND
-- The ONLY files changed are `.harness/roadmap_status.md` and, when regenerated by `tools/dashboard/generate.py`, `tools/dashboard/roadmap.html` (this content rule — not title-verb-purity — is what guarantees the PR is dashboard-only/status-only).
+- Title **begins with** `ops: roadmap status refresh ` — the `post-<NNN>` suffix format is FREE (`post-PR-NN`, `post-#NN`, `post-#NN/#NN`, optionally a short parenthetical). The §12.1 step-6 carve-out + the session-start hook key on this **prefix**, NOT a specific suffix format (so a one-commit-behind recorded hash after any refresh is never mis-flagged as drift), AND
+- The ONLY file changed is `.harness/roadmap_status.md` (this content rule — not title-verb-purity — is what guarantees the PR is roadmap-status-only).
 
 **Termination semantics.**
 - Merging a terminating refresh PR does NOT trigger another §12.2 refresh PR.
-- The dashboard's stored `workspace_state_hash` after merge will lag by exactly one commit (the refresh PR's own merge commit). This lag is the recursion-stopping fixed point.
+- The stored `workspace_state_hash` after merge will lag by exactly one commit (the refresh PR's own merge commit). This lag is the recursion-stopping fixed point.
 - The next §12.1 session-start audit MUST recognize the lag per §12.1 step 6 carve-out and silently update without spawning a new PR.
 
-**Bundled changes drop the prefix.** If a PR contains substantive non-refresh changes (CLAUDE.md amendment, new R-NNN entries, etc.) in addition to a dashboard refresh, its title MUST NOT use the `ops: roadmap status refresh` prefix. §12.2 applies normally, and a follow-on terminating refresh PR is owed.
+**Bundled changes drop the prefix.** If a PR contains substantive non-refresh changes (CLAUDE.md amendment, new R-NNN entries, etc.) in addition to a `roadmap_status.md` refresh, its title MUST NOT use the `ops: roadmap status refresh` prefix. §12.2 applies normally, and a follow-on terminating refresh PR is owed.
 
 **Edge case — multiple PRs merge between audits.** If multiple PRs merge before a session-start audit fires (e.g., overnight batch merges), §12.1 step 1 recomputes against current HEAD; only one terminating refresh PR is needed to reach fixed point (it records all intervening merges at `recently_completed`).
 
@@ -566,7 +566,7 @@ The §12.2 protocol applied naively recurses: a refresh PR (step 4) is itself a 
 When drift is detected at session-start audit OR when an R-NNN entry's `depends_on` resolution is empirically false at workspace state OR when an unexpected file appears under `design-substrate/**` / `harness-*/src/**` not accounted in any open PR:
 
 1. State `DRIFT DETECTED` in session output.
-2. Enumerate the divergence: what the dashboard claims vs. what the workspace shows.
+2. Enumerate the divergence: what `roadmap_status.md` claims vs. what the workspace shows.
 3. Present the 3 reconciliation options (§12.1 step 4) via AskUserQuestion.
 4. Do NOT make any substantive edits until operator response.
 5. After response: update `.harness/roadmap_status.md`, then resume execution per the resolved direction.
@@ -592,13 +592,13 @@ A session must **NOT** conclude `NO_ACTIVE_CANDIDATES → idle/done` and stop wh
 
 ### 12.5 Memory hygiene + checkpointing integration
 
-The roadmap is one of three durable persistence mechanisms; this section names how all three compose. Without this integration, memory + checkpoints drift away from roadmap state and the audit protocol catches dashboard drift but misses memory/checkpoint drift.
+The roadmap is one of three durable persistence mechanisms; this section names how all three compose. Without this integration, memory + checkpoints drift away from roadmap state and the audit protocol catches roadmap_status.md drift but misses memory/checkpoint drift.
 
 **Three persistence mechanisms.**
 
 | Mechanism | Surface | Scope | Authority |
 |---|---|---|---|
-| **Roadmap + dashboard** | `Project_Roadmap_v1.md` + `.harness/roadmap_status.md` | Cross-session next-action + workspace state | This §12 |
+| **Roadmap + status** | `Project_Roadmap_v1.md` + `.harness/roadmap_status.md` | Cross-session next-action + workspace state | This §12 |
 | **Auto-memory** | `~/.claude/projects/-Users-robertrhu-Projects-arhugula-v2/memory/` | Patterns, feedback, project context, references, learnings | Global `~/.claude/CLAUDE.md` auto-memory section |
 | **Checkpoints** | `~/.gstack/projects/thestoryportal-arhugula-harness/checkpoints/` | Mid-arc transient state for cross-session resume | gstack `/context-save` + `/context-restore` skills |
 
@@ -631,11 +631,11 @@ The roadmap is one of three durable persistence mechanisms; this section names h
 
 `/context-restore` fires at session start when prior work was in-flight (cross-branch default; Conductor workspace handoff use case).
 
-**Checkpoint × roadmap interaction.** The roadmap dashboard supersedes checkpoints for cross-session next-action derivation. Checkpoints retain value for mid-arc state (Decisions Made, Remaining Work within a single arc not yet PR'd). When resuming from a checkpoint, always:
+**Checkpoint × roadmap interaction.** `roadmap_status.md` supersedes checkpoints for cross-session next-action derivation. Checkpoints retain value for mid-arc state (Decisions Made, Remaining Work within a single arc not yet PR'd). When resuming from a checkpoint, always:
 
 1. Read the checkpoint for context.
 2. Run the §12.1 session-start audit against current workspace state.
-3. If checkpoint's "Remaining Work" diverges from dashboard's next_action → trust the dashboard, treat the checkpoint as advisory orientation.
+3. If checkpoint's "Remaining Work" diverges from `roadmap_status.md`'s next_action → trust `roadmap_status.md`, treat the checkpoint as advisory orientation.
 
 #### 12.5.3 R-NNN closure cascade (post-close audit)
 
@@ -659,7 +659,7 @@ Before authoring against a memory or checkpoint claim:
 ### 12.6 Cross-references
 
 - Master roadmap: `Project_Roadmap_v1.md` (workspace root)
-- Status dashboard: `.harness/roadmap_status.md`
+- Status file: `.harness/roadmap_status.md`
 - Derivation rule: `Project_Roadmap_v1.md` §4
 - Audit recipes: `Project_Roadmap_v1.md` §7
 - Refresh + update protocol: `Project_Roadmap_v1.md` §8

@@ -29,7 +29,7 @@ def _state(**overrides) -> cg.GuardState:
         is_linked_worktree=True,
         status_entries=[],
         changed_files=[],
-        dashboard=cg.DashboardState(
+        roadmap_status=cg.RoadmapStatusState(
             hash="abc",
             git_head="abc12345",
             last_refreshed="2026-06-05T00:00:00-06:00",
@@ -40,7 +40,6 @@ def _state(**overrides) -> cg.GuardState:
         fork_doc_count=0,
         latest_retirement_batch=".harness/phase-7d-retirement-events-batch-51.md",
         lag_expected=False,
-        dashboard_snapshot_current=True,
     )
     return cg.GuardState(**{**base.__dict__, **overrides})
 
@@ -136,70 +135,6 @@ def test_design_and_codex_tooling_mix_is_hard_failure() -> None:
     assert any(f.code == "DESIGN_IMPL_MIX" and f.severity == "hard" for f in findings)
 
 
-def test_dashboard_snapshot_does_not_count_as_design_impl_mix() -> None:
-    state = _state(
-        status_entries=[
-            " M .harness/class_1_fork_harness_toml_default_discovery_unimplemented.md",
-            " M Project_Roadmap_v1.md",
-            " M tools/dashboard/roadmap.html",
-        ],
-        changed_files=[
-            ".harness/class_1_fork_harness_toml_default_discovery_unimplemented.md",
-            "Project_Roadmap_v1.md",
-            "tools/dashboard/roadmap.html",
-        ],
-        dashboard_snapshot_current=True,
-    )
-
-    findings = cg.validate(state, mode="closeout")
-
-    assert not any(f.code == "DESIGN_IMPL_MIX" for f in findings)
-
-
-def test_dashboard_generator_maintenance_does_not_count_as_design_impl_mix() -> None:
-    state = _state(
-        status_entries=[
-            " M .harness/class_1_fork_harness_toml_default_discovery_unimplemented.md",
-            " M Project_Roadmap_v1.md",
-            " M tools/dashboard/generate.py",
-            " M tools/dashboard/roadmap.html",
-            " M tools/test_dashboard_generate.py",
-        ],
-        changed_files=[
-            ".harness/class_1_fork_harness_toml_default_discovery_unimplemented.md",
-            "Project_Roadmap_v1.md",
-            "tools/dashboard/generate.py",
-            "tools/dashboard/roadmap.html",
-            "tools/test_dashboard_generate.py",
-        ],
-        dashboard_snapshot_current=True,
-    )
-
-    findings = cg.validate(state, mode="closeout")
-
-    assert not any(f.code == "DESIGN_IMPL_MIX" for f in findings)
-
-
-def test_dashboard_maintenance_exemption_does_not_cover_other_tools() -> None:
-    state = _state(
-        status_entries=[
-            " M .harness/class_1_fork_harness_toml_default_discovery_unimplemented.md",
-            " M tools/dashboard/generate.py",
-            " M tools/codex_context_guard.py",
-        ],
-        changed_files=[
-            ".harness/class_1_fork_harness_toml_default_discovery_unimplemented.md",
-            "tools/dashboard/generate.py",
-            "tools/codex_context_guard.py",
-        ],
-        dashboard_snapshot_current=True,
-    )
-
-    findings = cg.validate(state, mode="closeout")
-
-    assert any(f.code == "DESIGN_IMPL_MIX" and f.severity == "hard" for f in findings)
-
-
 def test_clearance_marker_exempts_bundled_absorption() -> None:
     # CLAUDE.md §11.4 + §4.5: a spec amendment co-landing with impl behind a
     # clearance marker is a RATIFIED bundled-absorption arc (the R-FS-1 B-* pattern),
@@ -285,51 +220,50 @@ def test_branch_diff_mode_uses_merge_base_when_worktree_is_clean(tmp_path: Path)
     assert any(f.code == "DESIGN_IMPL_MIX" and f.severity == "hard" for f in findings)
 
 
-def test_dashboard_drift_on_default_branch_is_hard_failure() -> None:
+def test_roadmap_status_drift_on_default_branch_is_hard_failure() -> None:
     state = _state(
         branch="main",
         git_dir=".git",
         is_linked_worktree=False,
         computed_hash="newhash",
-        dashboard=cg.DashboardState(hash="oldhash", git_head="abc12345", last_refreshed="old"),
+        roadmap_status=cg.RoadmapStatusState(
+            hash="oldhash", git_head="abc12345", last_refreshed="old"
+        ),
     )
 
     findings = cg.validate(state, mode="preflight")
 
-    assert any(f.code == "ROADMAP_DASHBOARD_DRIFT" and f.severity == "hard" for f in findings)
+    assert any(f.code == "ROADMAP_STATUS_DRIFT" and f.severity == "hard" for f in findings)
 
 
-def test_dashboard_drift_allowance_does_not_downgrade_default_branch() -> None:
+def test_roadmap_drift_allowance_does_not_downgrade_default_branch() -> None:
     state = _state(
         branch="main",
         git_dir=".git",
         is_linked_worktree=False,
         computed_hash="newhash",
-        dashboard=cg.DashboardState(hash="oldhash", git_head="abc12345", last_refreshed="old"),
+        roadmap_status=cg.RoadmapStatusState(
+            hash="oldhash", git_head="abc12345", last_refreshed="old"
+        ),
     )
 
-    findings = cg.validate(state, mode="preflight", allow_dashboard_drift=True)
+    findings = cg.validate(state, mode="preflight", allow_roadmap_drift=True)
 
-    assert any(f.code == "ROADMAP_DASHBOARD_DRIFT" and f.severity == "hard" for f in findings)
-    assert not any(f.code == "ROADMAP_DASHBOARD_DRIFT_ALLOWED" for f in findings)
+    assert any(f.code == "ROADMAP_STATUS_DRIFT" and f.severity == "hard" for f in findings)
+    assert not any(f.code == "ROADMAP_STATUS_DRIFT_ALLOWED" for f in findings)
 
 
-def test_lag_expected_dashboard_drift_has_specific_warning_code() -> None:
+def test_lag_expected_roadmap_drift_has_specific_warning_code() -> None:
     state = _state(branch="main", computed_hash="newhash", lag_expected=True)
 
     findings = cg.validate(state, mode="preflight")
 
-    assert any(
-        f.code == "ROADMAP_DASHBOARD_LAG_EXPECTED" and f.severity == "warn" for f in findings
-    )
-    assert not any(f.code == "ROADMAP_DASHBOARD_BRANCH_DIVERGED" for f in findings)
+    assert any(f.code == "ROADMAP_STATUS_LAG_EXPECTED" and f.severity == "warn" for f in findings)
+    assert not any(f.code == "ROADMAP_STATUS_BRANCH_DIVERGED" for f in findings)
 
 
-def test_status_refresh_with_dashboard_snapshot_counts_as_expected_lag(tmp_path: Path) -> None:
+def test_status_refresh_alone_counts_as_expected_lag(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
-    (repo / "tools").mkdir()
-    (repo / "tools" / "dashboard").mkdir()
-    (repo / "tools" / "dashboard" / "roadmap.html").write_text("snapshot\n", encoding="utf-8")
     (repo / ".harness" / "roadmap_status.md").write_text("refreshed\n", encoding="utf-8")
     _git(repo, "add", ".")
     _git(repo, "commit", "-m", "ops: roadmap status refresh post-test")
@@ -337,32 +271,11 @@ def test_status_refresh_with_dashboard_snapshot_counts_as_expected_lag(tmp_path:
     assert cg._lag_expected(repo)
 
 
-def test_status_refresh_with_roadmap_and_dashboard_counts_as_expected_lag(
-    tmp_path: Path,
-) -> None:
-    repo = _init_repo(tmp_path)
-    (repo / "tools").mkdir()
-    (repo / "tools" / "dashboard").mkdir()
-    (repo / "tools" / "dashboard" / "roadmap.html").write_text("snapshot\n", encoding="utf-8")
-    (repo / ".harness" / "roadmap_status.md").write_text("refreshed\n", encoding="utf-8")
-    (repo / "Project_Roadmap_v1.md").write_text("roadmap\n", encoding="utf-8")
-    _git(repo, "add", ".")
-    _git(repo, "commit", "-m", "ops: roadmap status refresh post-test")
-
-    assert cg._lag_expected(repo)
-
-
-def test_merged_status_refresh_with_roadmap_and_dashboard_counts_as_expected_lag(
-    tmp_path: Path,
-) -> None:
+def test_merged_status_refresh_alone_counts_as_expected_lag(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     _git(repo, "branch", "-m", "main")
     _git(repo, "checkout", "-b", "refresh")
-    (repo / "tools").mkdir()
-    (repo / "tools" / "dashboard").mkdir()
-    (repo / "tools" / "dashboard" / "roadmap.html").write_text("snapshot\n", encoding="utf-8")
     (repo / ".harness" / "roadmap_status.md").write_text("refreshed\n", encoding="utf-8")
-    (repo / "Project_Roadmap_v1.md").write_text("roadmap\n", encoding="utf-8")
     _git(repo, "add", ".")
     _git(repo, "commit", "-m", "ops: roadmap status refresh post-test")
     _git(repo, "checkout", "main")
@@ -380,77 +293,13 @@ def test_merged_status_refresh_with_unrelated_payload_is_not_expected_lag(
     (repo / "unrelated.txt").write_text("payload\n", encoding="utf-8")
     _git(repo, "add", ".")
     _git(repo, "commit", "-m", "add unrelated payload")
-    (repo / "tools").mkdir()
-    (repo / "tools" / "dashboard").mkdir()
-    (repo / "tools" / "dashboard" / "roadmap.html").write_text("snapshot\n", encoding="utf-8")
     (repo / ".harness" / "roadmap_status.md").write_text("refreshed\n", encoding="utf-8")
-    (repo / "Project_Roadmap_v1.md").write_text("roadmap\n", encoding="utf-8")
     _git(repo, "add", ".")
     _git(repo, "commit", "-m", "ops: roadmap status refresh post-test")
     _git(repo, "checkout", "main")
     _git(repo, "merge", "--no-ff", "refresh", "-m", "Merge pull request #123 from test/refresh")
 
     assert not cg._lag_expected(repo)
-
-
-def test_dashboard_snapshot_normalization_ignores_volatile_dashboard_fields() -> None:
-    base = (
-        b'<meta name="dashboard-live-head" content="abc123"/>'
-        b'const DATA = {"live_head": "abc123", '
-        b'"live_anchor": {"git_head": "abc123", "hash": "aaa111", "fork_count": "45", '
-        b'"recent_prs": [{"pr": "PR #1", "date": "2026-06-07", "note": "old"}]}, '
-        b'"actions": [1], "open_prs": [], '
-        b'"cadence": [{"date": "2026-06-07", "count": 2}], '
-        b'"pr_cadence": [{"date": "2026-06-07", "count": 1}], "retired_trend": []};'
-    )
-    same_except_volatile = (
-        b'<meta name="dashboard-live-head" content="def456"/>'
-        b'const DATA = {"live_head": "def456", '
-        b'"live_anchor": {"git_head": "def456", "hash": "bbb222", "fork_count": "45", '
-        b'"recent_prs": [{"pr": "PR #2", "date": "2026-06-08", "note": "new"}]}, '
-        b'"actions": [1], "open_prs": [{"number": 944, "title": "self", "branch": "b"}], '
-        b'"cadence": [{"date": "2026-06-07", "count": 3}], '
-        b'"pr_cadence": [{"date": "2026-06-07", "count": 2}], "retired_trend": []};'
-    )
-    changed_payload = (
-        b'<meta name="dashboard-live-head" content="def456"/>'
-        b'const DATA = {"live_head": "def456", '
-        b'"live_anchor": {"git_head": "def456", "hash": "bbb222", "fork_count": "45", '
-        b'"recent_prs": [{"pr": "PR #2", "date": "2026-06-08", "note": "new"}]}, '
-        b'"actions": [2], "open_prs": [], '
-        b'"cadence": [{"date": "2026-06-07", "count": 3}], '
-        b'"pr_cadence": [{"date": "2026-06-07", "count": 2}], "retired_trend": []};'
-    )
-
-    assert cg._normalize_dashboard_snapshot(base) == (
-        cg._normalize_dashboard_snapshot(same_except_volatile)
-    )
-    assert cg._normalize_dashboard_snapshot(base) != (
-        cg._normalize_dashboard_snapshot(changed_payload)
-    )
-
-
-def test_dashboard_snapshot_normalization_ignores_pr_cadence_alone() -> None:
-    """CI hard-failed DASHBOARD_SNAPSHOT_STALE on every push to main (verified
-    against 20/20 recent runs) because `pr_cadence`'s "today" bucket counts
-    any PR-merge-shaped commit (`... (#NN)`) at HEAD, including a refresh PR's
-    own merge commit the moment it lands -- the same one-commit lag already
-    tolerated for `git_head`/`workspace_state_hash`, but `pr_cadence` was
-    missing from `_normalize_dashboard_snapshot`'s field list. Isolate it: two
-    snapshots differing ONLY in `pr_cadence` must normalize equal."""
-    template = (
-        b'<meta name="dashboard-live-head" content="abc123"/>'
-        b'const DATA = {"live_head": "abc123", '
-        b'"live_anchor": {"git_head": "abc123", "hash": "aaa111", "fork_count": "45", '
-        b'"recent_prs": []}, "actions": [1], "open_prs": [], '
-        b'"cadence": [], "pr_cadence": %s, "retired_trend": []};'
-    )
-    today_count_9 = template % b'[{"date": "2026-07-14", "count": 9}]'
-    today_count_10 = template % b'[{"date": "2026-07-14", "count": 10}]'
-
-    assert cg._normalize_dashboard_snapshot(today_count_9) == (
-        cg._normalize_dashboard_snapshot(today_count_10)
-    )
 
 
 def test_status_refresh_with_unrelated_file_is_not_expected_lag(tmp_path: Path) -> None:
@@ -463,25 +312,13 @@ def test_status_refresh_with_unrelated_file_is_not_expected_lag(tmp_path: Path) 
     assert not cg._lag_expected(repo)
 
 
-def test_dashboard_drift_off_default_branch_is_advisory() -> None:
+def test_roadmap_drift_off_default_branch_is_advisory() -> None:
     state = _state(computed_hash="newhash")
 
     findings = cg.validate(state, mode="preflight")
 
-    assert any(f.code == "ROADMAP_DASHBOARD_BRANCH_DIVERGED" for f in findings)
-    assert not any(f.code == "ROADMAP_DASHBOARD_DRIFT" for f in findings)
-
-
-def test_roadmap_change_requires_human_dashboard_snapshot() -> None:
-    state = _state(
-        status_entries=[" M Project_Roadmap_v1.md"],
-        changed_files=["Project_Roadmap_v1.md"],
-        dashboard_snapshot_current=False,
-    )
-
-    findings = cg.validate(state, mode="closeout")
-
-    assert any(f.code == "DASHBOARD_SNAPSHOT_STALE" and f.severity == "hard" for f in findings)
+    assert any(f.code == "ROADMAP_STATUS_BRANCH_DIVERGED" for f in findings)
+    assert not any(f.code == "ROADMAP_STATUS_DRIFT" for f in findings)
 
 
 def test_cite_bearing_changes_require_overlay_check_evidence() -> None:

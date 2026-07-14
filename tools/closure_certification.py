@@ -41,7 +41,6 @@ REQUIRED_SOURCE_PATHS: tuple[str, ...] = (
     ".harness/01-planning/01-harness-planning/00-harness-research/phase-9-retirement-criteria.md",
     "Project_Roadmap_v1.md",
     ".harness/roadmap_status.md",
-    "tools/dashboard/roadmap.html",
 )
 
 REQUIRED_TOKENS: tuple[tuple[str, str], ...] = (

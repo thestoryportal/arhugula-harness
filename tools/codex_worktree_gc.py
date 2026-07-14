@@ -27,8 +27,8 @@ REGENERABLE_IGNORED = re.compile(
     r"dist/|build/|htmlcov/|coverage\.xml|\.coverage|\.DS_Store|.*\.swp|"
     r"\.vscode/|\.idea/|node_modules/"
     r")|"
-    r"\.claude/(skills/|settings\.local\.json)|tools/dashboard/|"
-    r"dashboard-design/|\.impeccable/"
+    r"\.claude/(skills/|settings\.local\.json)|"
+    r"\.impeccable/"
     r")"
 )
 

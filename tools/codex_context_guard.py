@@ -2,7 +2,7 @@
 """Deterministic Codex context guard for arhugula-v2.
 
 This is the Codex-side anti-rot instrument. It materializes current repository
-state from git, roadmap, and dashboard files so Codex does not rely on memory for
+state from git and roadmap files so Codex does not rely on memory for
 load-bearing workflow claims.
 """
 
@@ -14,7 +14,6 @@ import json
 import re
 import subprocess
 import sys
-import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -37,33 +36,12 @@ CITE_RE = re.compile(r"^(harness-[a-z]+/src/|harness-[a-z]+/tests/|tools/semanti
 # X-AL-3 guard (§4.4) treats as legitimate back-flow; mirror that here so DESIGN_IMPL_MIX
 # stops flagging the bundled-absorption pattern the R-FS-1 build program runs on.
 CLEARANCE_MARKER_RE = re.compile(r"^\.harness/clearance/.+-cleared-.*\.md$")
-DASHBOARD_SOURCES = {
-    ".harness/roadmap_status.md",
-    ".harness/substitutions.yaml",
-    ".harness/arc-ledger.yaml",
-    "Project_Roadmap_v1.md",
-    "tools/dashboard/generate.py",
-    "tools/dashboard/README.md",
-    ".github/workflows/dashboard-deploy.yml",
-}
 TRACKING_SURFACES = {
     ".harness/roadmap_status.md",
     "Project_Roadmap_v1.md",
-    "tools/dashboard/roadmap.html",
     ".harness/substitutions.yaml",
 }
-DASHBOARD_SNAPSHOT = "tools/dashboard/roadmap.html"
-TERMINATING_REFRESH_FILE_SETS = (
-    frozenset({".harness/roadmap_status.md"}),
-    frozenset({".harness/roadmap_status.md", DASHBOARD_SNAPSHOT}),
-    frozenset({".harness/roadmap_status.md", "Project_Roadmap_v1.md", DASHBOARD_SNAPSHOT}),
-)
-DASHBOARD_MIX_EXEMPT_IMPL = {
-    "tools/dashboard/generate.py",
-    "tools/dashboard/README.md",
-    "tools/dashboard/roadmap.html",
-    "tools/test_dashboard_generate.py",
-}
+TERMINATING_REFRESH_FILE_SETS = (frozenset({".harness/roadmap_status.md"}),)
 CHECKPOINT_DIR = Path(".harness/.checkpoints")
 CHECKPOINT_FILE = "codex-context-latest.json"
 CREDENTIAL_GATE_LEDGER = Path(".harness/codex_credential_gates.jsonl")
@@ -102,33 +80,10 @@ BEARER_TOKEN_RE = re.compile(r"(?i)\b(bearer|authorization:\s*bearer)\s+(\S+)")
 KNOWN_SECRET_PREFIX_RE = re.compile(
     r"\b(sk-ant-|sk-|ghp_|gho_|ghu_|ghs_|ghr_|glpat-|xox[baprs]-|AKIA)([A-Za-z0-9_-]{8,})"
 )
-DASHBOARD_JSON_LIVE_HEAD_RE = re.compile(rb'("live_head":\s*")[^"]*(")')
-DASHBOARD_JSON_LIVE_ANCHOR_HEAD_RE = re.compile(rb'("live_anchor":\s*\{\s*"git_head":\s*")[^"]*(")')
-DASHBOARD_JSON_LIVE_ANCHOR_HASH_RE = re.compile(rb'("live_anchor":\s*\{[^}]*"hash":\s*")[^"]*(")')
-DASHBOARD_JSON_LIVE_ANCHOR_RECENT_PRS_RE = re.compile(
-    rb'("live_anchor":\s*\{[^}]*"recent_prs":\s*)\[[^\]]*\]'
-)
-DASHBOARD_META_LIVE_HEAD_RE = re.compile(rb'(<meta name="dashboard-live-head" content=")[^"]*(")')
-DASHBOARD_JSON_COMMIT_CADENCE_RE = re.compile(rb'("cadence":\s*)\[[^\]]*\](,\s*"pr_cadence")')
-# `pr_cadence` (R-XI-02 PR-merge-cadence sparkline) is git-log-derived like
-# `cadence` above, with the same volatility: its "today" bucket counts whatever
-# PR-merge-shaped commits (`... (#NN)`) exist at HEAD, so a refresh PR's own
-# merge commit (itself PR-shaped) increments the count the moment it lands --
-# the same one-commit lag `ROADMAP_DASHBOARD_LAG_EXPECTED` already tolerates
-# for `git_head`/`workspace_state_hash`, but `pr_cadence` was missing from this
-# normalization list and HARD-failed `DASHBOARD_SNAPSHOT_STALE` on every push.
-DASHBOARD_JSON_PR_CADENCE_RE = re.compile(rb'("pr_cadence":\s*)\[[^\]]*\](,\s*"retired_trend")')
-# `open_prs` is a live `gh pr list --state open` query — it always includes the PR
-# regenerating it (e.g. this arc's own just-opened PR), so a local regen (gh
-# available) and CI's regen (gh unavailable, degrades to []) never byte-match on
-# this field alone. Strip it like `recent_prs`/`cadence` rather than let every
-# arc-closing PR HARD-fail DASHBOARD_SNAPSHOT_STALE for a reason unrelated to
-# actual dashboard content drift.
-DASHBOARD_JSON_OPEN_PRS_RE = re.compile(rb'("open_prs":\s*)\[[^\]]*\]')
 
 
 @dataclass(frozen=True)
-class DashboardState:
+class RoadmapStatusState:
     hash: str
     git_head: str
     last_refreshed: str
@@ -145,14 +100,13 @@ class GuardState:
     is_linked_worktree: bool
     status_entries: list[str]
     changed_files: list[str]
-    dashboard: DashboardState
+    roadmap_status: RoadmapStatusState
     computed_hash: str
     open_prs: str
     open_prs_available: bool
     fork_doc_count: int
     latest_retirement_batch: str
     lag_expected: bool
-    dashboard_snapshot_current: bool | None
 
 
 @dataclass(frozen=True)
@@ -257,18 +211,18 @@ def _default_branch(root: Path) -> str:
     return out.removeprefix("origin/") if out else "main"
 
 
-def _dashboard(root: Path) -> DashboardState:
+def _roadmap_status(root: Path) -> RoadmapStatusState:
     path = root / ".harness" / "roadmap_status.md"
     try:
         md = path.read_text(encoding="utf-8")
     except OSError:
-        return DashboardState(hash="", git_head="", last_refreshed="")
+        return RoadmapStatusState(hash="", git_head="", last_refreshed="")
 
     def field(name: str, pattern: str) -> str:
         m = re.search(pattern, md)
         return m.group(1).strip() if m else ""
 
-    return DashboardState(
+    return RoadmapStatusState(
         hash=field(
             "workspace_state_hash",
             r"\|\s*`workspace_state_hash`\s*\|\s*`?([a-f0-9]{12})`?",
@@ -358,7 +312,7 @@ def state_fingerprint(state: GuardState) -> str:
         "branch": state.branch,
         "changed_files": state.changed_files,
         "computed_hash": state.computed_hash,
-        "dashboard_hash": state.dashboard.hash,
+        "roadmap_status_hash": state.roadmap_status.hash,
         "head8": state.head8,
         "status_entries": state.status_entries,
     }
@@ -406,13 +360,12 @@ def write_checkpoint(state: GuardState, *, label: str, findings: list[Finding]) 
         "is_linked_worktree": state.is_linked_worktree,
         "status_entries": state.status_entries,
         "changed_files": state.changed_files,
-        "dashboard": state.dashboard.__dict__,
+        "roadmap_status": state.roadmap_status.__dict__,
         "computed_hash": state.computed_hash,
         "open_prs": state.open_prs,
         "fork_doc_count": state.fork_doc_count,
         "latest_retirement_batch": state.latest_retirement_batch,
         "lag_expected": state.lag_expected,
-        "dashboard_snapshot_current": state.dashboard_snapshot_current,
         "findings": [f.__dict__ for f in findings],
     }
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -502,46 +455,6 @@ def _is_terminating_refresh_file_set(files: list[str]) -> bool:
     return frozenset(files) in TERMINATING_REFRESH_FILE_SETS
 
 
-def _dashboard_snapshot_current(
-    root: Path, *, changed_files: list[str] | None = None
-) -> bool | None:
-    snapshot = root / "tools" / "dashboard" / "roadmap.html"
-    generator = root / "tools" / "dashboard" / "generate.py"
-    if not snapshot.exists() or not generator.exists():
-        return None
-    # Cheap short-circuit: if none of the source files changed in this worktree,
-    # do not make closeout depend on a heavy HTML regeneration.
-    files = changed_files if changed_files is not None else _changed_files(root)
-    if not (set(files) & DASHBOARD_SOURCES):
-        return True
-    with tempfile.TemporaryDirectory(prefix="codex-dashboard-") as td:
-        out = Path(td) / "roadmap.html"
-        proc = _run(
-            [sys.executable, "tools/dashboard/generate.py", "--root", ".", "--out", str(out)],
-            cwd=root,
-            timeout=60,
-        )
-        if proc.returncode != 0 or not out.exists():
-            return None
-        return _normalize_dashboard_snapshot(snapshot.read_bytes()) == (
-            _normalize_dashboard_snapshot(out.read_bytes())
-        )
-
-
-def _normalize_dashboard_snapshot(raw: bytes) -> bytes:
-    """Ignore volatile commit-derived instrumentation in dashboard snapshots."""
-    raw = DASHBOARD_JSON_LIVE_HEAD_RE.sub(rb"\1<LIVE_HEAD>\2", raw, count=1)
-    raw = DASHBOARD_JSON_LIVE_ANCHOR_HEAD_RE.sub(rb"\1<LIVE_HEAD>\2", raw, count=1)
-    raw = DASHBOARD_JSON_LIVE_ANCHOR_HASH_RE.sub(rb"\1<LIVE_HASH>\2", raw, count=1)
-    raw = DASHBOARD_JSON_LIVE_ANCHOR_RECENT_PRS_RE.sub(
-        rb'\1[{"pr":"<RECENT>","date":"<RECENT>","note":"<RECENT>"}]', raw, count=1
-    )
-    raw = DASHBOARD_META_LIVE_HEAD_RE.sub(rb"\1<LIVE_HEAD>\2", raw, count=1)
-    raw = DASHBOARD_JSON_OPEN_PRS_RE.sub(rb"\1[]", raw, count=1)
-    raw = DASHBOARD_JSON_COMMIT_CADENCE_RE.sub(rb'\1[{"date":"<CADENCE>","count":0}]\2', raw)
-    return DASHBOARD_JSON_PR_CADENCE_RE.sub(rb'\1[{"date":"<CADENCE>","count":0}]\2', raw)
-
-
 def derive(
     root: Path | None = None,
     *,
@@ -557,7 +470,7 @@ def derive(
     prs, prs_available = _open_prs(root)
     forks = _fork_doc_count(root)
     batch = _latest_retirement_batch(root)
-    dashboard = _dashboard(root)
+    roadmap_status = _roadmap_status(root)
     changed_files = _changed_files(root, base_ref=base_ref, head_ref=head_ref)
     if include_branch_diff and not (base_ref and head_ref):
         changed_files = sorted(
@@ -574,14 +487,13 @@ def derive(
         is_linked_worktree=".git/worktrees/" in git_dir or git_dir.startswith("../.git/worktrees/"),
         status_entries=_status_entries(root),
         changed_files=changed_files,
-        dashboard=dashboard,
+        roadmap_status=roadmap_status,
         computed_hash=state_hash(head8, prs, forks, batch),
         open_prs=prs,
         open_prs_available=prs_available,
         fork_doc_count=forks,
         latest_retirement_batch=batch,
         lag_expected=_lag_expected(root),
-        dashboard_snapshot_current=_dashboard_snapshot_current(root, changed_files=changed_files),
     )
 
 
@@ -591,31 +503,13 @@ def _has_design_impl_mix(files: list[str]) -> bool:
     # operationally-accepted consumption — the same back-flow signal the X-AL-3 guard
     # (§4.4) recognizes. Present → ratified bundle, not a silent mix. A silent mix
     # (design + impl, NO clearance marker) still hard-fails.
-    #
-    # Presence-based (ANY clearance marker exempts the PR) is INTENTIONAL: it mirrors
-    # X-AL-3's own presence-based recognition so the two guards agree on what
-    # "legitimate bundled-absorption" is. The residual an artifact-tie would close
-    # (an UNRELATED marker riding a design+impl mix) matches X-AL-3's accepted
-    # tolerance; tying the marker to the changed design file would make THIS guard
-    # stricter than X-AL-3 (the same PR would pass one guard and fail the other) and
-    # is brittle (slug / multi-artifact matching false-blocks legitimate arcs).
-    # Tightening, if ever wanted, is a deliberate BOTH-guards policy change.
     if any(CLEARANCE_MARKER_RE.search(f) for f in files):
         return False
-    impl_files = [f for f in files if f not in DASHBOARD_MIX_EXEMPT_IMPL]
-    return any(DESIGN_RE.search(f) for f in files) and any(IMPL_RE.search(f) for f in impl_files)
+    return any(DESIGN_RE.search(f) for f in files) and any(IMPL_RE.search(f) for f in files)
 
 
 def _has_cite_bearing_changes(files: list[str]) -> bool:
     return any(CITE_RE.search(f) for f in files)
-
-
-def _has_dashboard_source_changes(files: list[str]) -> bool:
-    return bool(
-        set(files) & DASHBOARD_SOURCES
-        or any(f.startswith(".harness/phase-7d-retirement-events-batch-") for f in files)
-        or any(re.match(r"harness-[^/]+/CLAUDE\.md$", f) for f in files)
-    )
 
 
 def _has_tracking_changes(files: list[str]) -> bool:
@@ -734,7 +628,7 @@ def validate(
     state: GuardState,
     *,
     mode: str,
-    allow_dashboard_drift: bool = False,
+    allow_roadmap_drift: bool = False,
     require_fresh_checkpoint: bool = False,
 ) -> list[Finding]:
     findings: list[Finding] = []
@@ -768,13 +662,13 @@ def validate(
             )
         )
 
-    if state.computed_hash != state.dashboard.hash:
+    if state.computed_hash != state.roadmap_status.hash:
         if state.branch == state.default_branch and not state.lag_expected:
             findings.append(
                 Finding(
                     "hard",
-                    "ROADMAP_DASHBOARD_DRIFT",
-                    f"Dashboard hash {state.dashboard.hash or '<missing>'} "
+                    "ROADMAP_STATUS_DRIFT",
+                    f"roadmap_status.md hash {state.roadmap_status.hash or '<missing>'} "
                     f"does not match computed {state.computed_hash}.",
                 )
             )
@@ -782,17 +676,17 @@ def validate(
             findings.append(
                 Finding(
                     "warn",
-                    "ROADMAP_DASHBOARD_LAG_EXPECTED",
-                    "Dashboard hash differs because HEAD is a terminating roadmap refresh; "
-                    "the next terminating refresh should reconcile the lag.",
+                    "ROADMAP_STATUS_LAG_EXPECTED",
+                    "roadmap_status.md hash differs because HEAD is a terminating roadmap "
+                    "refresh; the next terminating refresh should reconcile the lag.",
                 )
             )
-        elif allow_dashboard_drift:
+        elif allow_roadmap_drift:
             findings.append(
                 Finding(
                     "warn",
-                    "ROADMAP_DASHBOARD_DRIFT_ALLOWED",
-                    "Dashboard hash differs, but the caller explicitly allowed drift. "
+                    "ROADMAP_STATUS_DRIFT_ALLOWED",
+                    "roadmap_status.md hash differs, but the caller explicitly allowed drift. "
                     "Use only for CI runtime smoke during the post-merge refresh window.",
                 )
             )
@@ -800,8 +694,8 @@ def validate(
             findings.append(
                 Finding(
                     "warn",
-                    "ROADMAP_DASHBOARD_BRANCH_DIVERGED",
-                    "Dashboard hash differs from this branch; this is expected "
+                    "ROADMAP_STATUS_BRANCH_DIVERGED",
+                    "roadmap_status.md hash differs from this branch; this is expected "
                     "in feature worktrees but must be reconciled after merge.",
                 )
             )
@@ -815,24 +709,6 @@ def validate(
                 "`just overlay-check` unless the PR is docs-only.",
             )
         )
-
-    if mode in {"closeout", "check"} and _has_dashboard_source_changes(state.changed_files):
-        if state.dashboard_snapshot_current is False:
-            findings.append(
-                Finding(
-                    "hard",
-                    "DASHBOARD_SNAPSHOT_STALE",
-                    "`tools/dashboard/roadmap.html` does not match regenerated dashboard output.",
-                )
-            )
-        elif state.dashboard_snapshot_current is None:
-            findings.append(
-                Finding(
-                    "warn",
-                    "DASHBOARD_SNAPSHOT_UNCHECKED",
-                    "Dashboard sources changed, but snapshot comparison could not run.",
-                )
-            )
 
     if (
         mode in {"closeout", "check"}
@@ -891,7 +767,7 @@ def validate(
                 Finding(
                     "hard",
                     "CONTEXT_CHECKPOINT_STALE",
-                    "Latest context checkpoint does not match current HEAD/status/dashboard "
+                    "Latest context checkpoint does not match current HEAD/status/roadmap "
                     f"(checkpoint label={checkpoint.label}, written_at={checkpoint.written_at}).",
                 )
             )
@@ -919,20 +795,19 @@ def _text_report(state: GuardState, findings: list[Finding]) -> str:
             f"branch: {state.branch} (default: {state.default_branch})",
             f"head: {state.head8}",
             f"linked_worktree: {state.is_linked_worktree} (git_dir={state.git_dir})",
-            f"dashboard_hash: {state.dashboard.hash or '<missing>'}",
+            f"roadmap_status_hash: {state.roadmap_status.hash or '<missing>'}",
             f"computed_hash: {state.computed_hash}",
-            f"dashboard_git_head: {state.dashboard.git_head or '<missing>'}",
+            f"roadmap_status_git_head: {state.roadmap_status.git_head or '<missing>'}",
             f"context_fingerprint: {state_fingerprint(state)}",
             f"latest_retirement_batch: {state.latest_retirement_batch or '<none>'}",
             f"open_fork_doc_count: {state.fork_doc_count}",
-            f"dashboard_snapshot_current: {state.dashboard_snapshot_current}",
             "git status:",
             status,
             "changed files:",
             changed,
             _fmt_findings(findings),
             "Required closeout reminders:",
-            "- Update roadmap/status/dashboard/ledger surfaces when the arc changes state.",
+            "- Update roadmap/status/ledger surfaces when the arc changes state.",
             "- Run overlay-query/overlay-check for formal cite or CXA seam claims.",
             "- Report exact verification commands and skipped checks before claiming completion.",
         ]
@@ -950,7 +825,7 @@ def _json_report(state: GuardState, findings: list[Finding]) -> str:
             "is_linked_worktree": state.is_linked_worktree,
             "status_entries": state.status_entries,
             "changed_files": state.changed_files,
-            "dashboard": state.dashboard.__dict__,
+            "roadmap_status": state.roadmap_status.__dict__,
             "computed_hash": state.computed_hash,
             "context_fingerprint": state_fingerprint(state),
             "open_prs": state.open_prs,
@@ -958,7 +833,6 @@ def _json_report(state: GuardState, findings: list[Finding]) -> str:
             "fork_doc_count": state.fork_doc_count,
             "latest_retirement_batch": state.latest_retirement_batch,
             "lag_expected": state.lag_expected,
-            "dashboard_snapshot_current": state.dashboard_snapshot_current,
             "findings": [f.__dict__ for f in findings],
         },
         indent=2,
@@ -980,12 +854,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--require-fresh-checkpoint",
         action="store_true",
-        help="fail if the latest checkpoint does not match current HEAD/status/dashboard",
+        help="fail if the latest checkpoint does not match current HEAD/status/roadmap",
     )
     parser.add_argument(
-        "--allow-dashboard-drift",
+        "--allow-roadmap-drift",
         action="store_true",
-        help="downgrade non-default-branch dashboard hash drift to a warning",
+        help="downgrade non-default-branch roadmap_status.md hash drift to a warning",
     )
     parser.add_argument(
         "--base-ref",
@@ -1047,7 +921,7 @@ def main(argv: list[str] | None = None) -> int:
     findings = validate(
         state,
         mode=args.mode,
-        allow_dashboard_drift=args.allow_dashboard_drift,
+        allow_roadmap_drift=args.allow_roadmap_drift,
         require_fresh_checkpoint=args.require_fresh_checkpoint,
     )
     print(_json_report(state, findings) if args.json else _text_report(state, findings))
