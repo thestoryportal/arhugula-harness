@@ -137,6 +137,9 @@ def validate(data: dict[str, Any]) -> list[str]:
             violations.append(f"{rid}: invalid status {status!r}")
             continue
 
+        if not r.get("title"):
+            violations.append(f"{rid}: missing non-empty 'title'")
+
         heading = r.get("heading")
         if not heading:
             violations.append(f"{rid}: missing 'heading' back-pointer into the prose file")
@@ -148,7 +151,12 @@ def validate(data: dict[str, Any]) -> list[str]:
                 )
             seen_headings[heading] = rid
             heading_id = _id_from_heading(heading)
-            if heading_id is not None and heading_id != rid:
+            if heading_id is None:
+                violations.append(
+                    f"{rid}: heading {heading!r} does not match a recognized "
+                    f"'### ID ·' or '## ... (ID)' shape"
+                )
+            elif heading_id != rid:
                 violations.append(f"{rid}: heading names id {heading_id!r}, not the row's own id")
 
         if status == "closed":
@@ -194,10 +202,17 @@ def check_prose_drift(data: dict[str, Any], prose_path: Path = DEFAULT_PROSE) ->
     text = prose_path.read_text(encoding="utf-8")
 
     yaml_ids = {r["id"] for r in data["items"]}
-    prose_ids = set(_HEADING_ID_RE.findall(text)) | set(_SECTION_HEADING_ID_RE.findall(text))
+    prose_id_counts = Counter(_HEADING_ID_RE.findall(text) + _SECTION_HEADING_ID_RE.findall(text))
 
-    for missing in sorted(prose_ids - yaml_ids):
+    for missing in sorted(set(prose_id_counts) - yaml_ids):
         violations.append(f"prose heading '{missing}' has no matching row in forward-register.yaml")
+
+    for dup_id, count in sorted(prose_id_counts.items()):
+        if count > 1:
+            violations.append(
+                f"prose heading '{dup_id}' appears {count} times in {prose_path.name} "
+                f"(duplicated item block — each id must have exactly one heading)"
+            )
 
     for r in data["items"]:
         heading = r.get("heading")

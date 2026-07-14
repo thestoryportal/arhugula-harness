@@ -9,12 +9,27 @@ actually caught.
 from __future__ import annotations
 
 import copy
+import tempfile
+from contextlib import contextmanager
+from pathlib import Path
 
 import forward_register
 
 
 def _data() -> dict:
     return forward_register.load()
+
+
+@contextmanager
+def _temp_prose(mutate_text):
+    prose_text = forward_register.DEFAULT_PROSE.read_text(encoding="utf-8")
+    with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False) as fh:
+        fh.write(mutate_text(prose_text))
+        tmp_path = Path(fh.name)
+    try:
+        yield tmp_path
+    finally:
+        tmp_path.unlink()
 
 
 def test_live_register_passes_validation() -> None:
@@ -182,26 +197,43 @@ def test_negative_new_row_without_snapshot_bump_fails() -> None:
     assert _violates(m)
 
 
+def test_negative_missing_title_fails() -> None:
+    def m(data):
+        _first_closed(data).pop("title", None)
+
+    assert _violates(m)
+
+
+def test_negative_nonconforming_heading_shape_fails() -> None:
+    """A heading string that matches neither the '### ID ·' nor '## ... (ID)' shape
+    must be rejected, not silently accepted just because it's non-empty."""
+
+    def m(data):
+        _first_closed(data)["heading"] = "Current state."
+
+    assert _violates(m)
+
+
 def test_negative_prose_drift_new_heading_without_row_fails() -> None:
     """A heading appended to the prose file with no matching YAML row is drift."""
 
     def mutate_prose(text: str) -> str:
         return text + "\n\n### B-999 · synthetic drift heading\n- placeholder\n"
 
-    prose_text = forward_register.DEFAULT_PROSE.read_text(encoding="utf-8")
-    mutated = mutate_prose(prose_text)
-    tmp_data = _data()
+    with _temp_prose(mutate_prose) as tmp_path:
+        assert forward_register.check_prose_drift(_data(), tmp_path) != []
 
-    import tempfile
-    from pathlib import Path
 
-    with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False) as fh:
-        fh.write(mutated)
-        tmp_path = Path(fh.name)
-    try:
-        assert forward_register.check_prose_drift(tmp_data, tmp_path) != []
-    finally:
-        tmp_path.unlink()
+def test_negative_duplicate_prose_heading_fails() -> None:
+    """The SAME item heading appearing twice in the prose file (a copy-pasted
+    block) must be caught even though a set-based scan would collapse it."""
+
+    def mutate_prose(text: str) -> str:
+        heading = next(r["heading"] for r in _data()["items"] if r["id"] == "B-20")
+        return text + f"\n\n{heading}\n- duplicated body\n"
+
+    with _temp_prose(mutate_prose) as tmp_path:
+        assert forward_register.check_prose_drift(_data(), tmp_path) != []
 
 
 def test_negative_heading_not_in_prose_fails() -> None:
