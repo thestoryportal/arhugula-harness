@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `a74d6d90e74d` |
-| `last_refreshed` | 2026-07-14T22:20:00Z |
-| `git_head` | `33c1d606` — `fix(cp): align harness.breaker.* schema names with OD canonical C-OD-07 §7.1 (#994)` (substantive merge; terminating refresh follows as this commit). **PR #994** closes **`B-20`**: `harness_cp.retry_fallback_namespace.HARNESS_BREAKER_NAMESPACE_SCHEMA`'s 7 pre-v1.32 entries carried names that never matched OD's canonical `harness.breaker.*` schema (only `scope` overlapped by name), a drift invisible to CI because the only cross-axis check (`verify_harness_breaker_namespace_inversion()`) compares attribute count, not names. Renamed/split/dropped/added the 7 entries to byte-match OD's canonical 9-attribute set (`state` split into `from_state`/`to_state`; `trip_count` → `trigger_count`; `id`/`trip_window_seconds`/`fail_count_in_window`/`fail_threshold` dropped; `tool_id`/`permanent_fail_repeats`/`model_version` newly added); updated the CP test's expected set + the module's stale docstring. 18/18 targeted tests + `harness-runtime` wiring tests (14/14, unaffected as expected) pass; `just check` 5788 passed/10 skip/33 deselected/1 xfail; `just overlay-check` 365/33; `just codex-review` converged clean, no findings. |
+| `workspace_state_hash` | `c96f347ae28a` |
+| `last_refreshed` | 2026-07-14T22:24:18Z |
+| `git_head` | `849c15dc` — `ops(B-20): forward-register closure + roadmap refresh post-#994 (#995)` (terminating refresh; the only file changed is this one). |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 88 |
 
