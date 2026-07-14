@@ -37,6 +37,8 @@ from harness_cp.f5_signing_key_resolution import (
     SigningKeyResolutionError,
     SigningKeyScope,
     VerificationResult,
+    _canonical_entry_hash,
+    _canonical_signing_message,
     resolve_signing_key,
     sign_audit_entry,
     verify_audit_entry_signature,
@@ -337,5 +339,99 @@ def test_verify_rejects_backend_algorithm_mismatch() -> None:
 
     assert (
         verify_audit_entry_signature(signed, result.handle, backend=mislabeled_backend)
+        is VerificationResult.SIGNATURE_MISMATCH
+    )
+
+
+def test_sign_rejects_bool_key_period() -> None:
+    """Out-of-family Codex round-3 P2 — `key_period=True` is an `int` by
+    Python subtyping but signs the textual message `"True"`, while the
+    Pydantic `int` field coerces to `1` — a self-inconsistent entry that
+    would fail its own verifier. Rejected before signing."""
+    result = resolve_signing_key(_SCOPE, PersonaTier.MULTI_TENANT_COMPLIANCE)
+    assert result.handle is not None
+    with pytest.raises(TypeError, match="key_period"):
+        sign_audit_entry(
+            _ENTRY,
+            result.handle,
+            key_period=True,  # type: ignore[arg-type]
+            backend=_InMemoryEd25519Backend(),
+        )
+
+
+def test_sign_rejects_float_key_period() -> None:
+    """Out-of-family Codex round-3 P2 — `key_period=1.0` signs the textual
+    message `"1.0"` while the Pydantic `int` field coerces to `1`, breaking
+    the entry's own verifiability. Rejected before signing."""
+    result = resolve_signing_key(_SCOPE, PersonaTier.MULTI_TENANT_COMPLIANCE)
+    assert result.handle is not None
+    with pytest.raises(TypeError, match="key_period"):
+        sign_audit_entry(
+            _ENTRY,
+            result.handle,
+            key_period=1.0,  # type: ignore[arg-type]
+            backend=_InMemoryEd25519Backend(),
+        )
+
+
+def test_verify_rejects_out_of_contract_algorithm_even_if_backend_agrees() -> None:
+    """Out-of-family Codex round-3 P2 — a `signed` entry constructed outside
+    `sign_audit_entry` (e.g. read from persisted storage) with an
+    out-of-contract `audit_signature_algorithm` must not verify, even when a
+    rogue backend happens to declare the SAME invalid value (so the round-2
+    key/algorithm-match checks alone would pass it through)."""
+
+    class _TypoBackend(_InMemoryEd25519Backend):
+        algorithm = "edd25519"
+
+    result = resolve_signing_key(_SCOPE, PersonaTier.MULTI_TENANT_COMPLIANCE)
+    assert result.handle is not None
+    backend = _TypoBackend()
+    message = _canonical_signing_message(
+        _canonical_entry_hash(_ENTRY),
+        key_id=result.handle.key_id,
+        algorithm="edd25519",
+        key_period=1,
+    )
+    forged = CPSignedAuditLedgerEntry(
+        entry=_ENTRY,
+        audit_signature_sha256=_canonical_entry_hash(_ENTRY),
+        audit_signature_value=backend.sign(message=message, key_id=result.handle.key_id),
+        audit_signature_algorithm="edd25519",
+        audit_signature_key_id=result.handle.key_id,
+        audit_signature_key_period=1,
+    )
+
+    assert (
+        verify_audit_entry_signature(forged, result.handle, backend=backend)
+        is VerificationResult.SIGNATURE_MISMATCH
+    )
+
+
+def test_verify_rejects_negative_stored_key_period() -> None:
+    """Out-of-family Codex round-3 P2 — a `signed` entry constructed outside
+    `sign_audit_entry` with a negative stored `audit_signature_key_period`
+    must not verify, even with a real, otherwise-valid signature over that
+    same (invalid) value."""
+    result = resolve_signing_key(_SCOPE, PersonaTier.MULTI_TENANT_COMPLIANCE)
+    assert result.handle is not None
+    backend = _InMemoryEd25519Backend()
+    message = _canonical_signing_message(
+        _canonical_entry_hash(_ENTRY),
+        key_id=result.handle.key_id,
+        algorithm="ed25519",
+        key_period=-1,
+    )
+    forged = CPSignedAuditLedgerEntry(
+        entry=_ENTRY,
+        audit_signature_sha256=_canonical_entry_hash(_ENTRY),
+        audit_signature_value=backend.sign(message=message, key_id=result.handle.key_id),
+        audit_signature_algorithm="ed25519",
+        audit_signature_key_id=result.handle.key_id,
+        audit_signature_key_period=-1,
+    )
+
+    assert (
+        verify_audit_entry_signature(forged, result.handle, backend=backend)
         is VerificationResult.SIGNATURE_MISMATCH
     )

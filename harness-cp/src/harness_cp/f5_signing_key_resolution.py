@@ -291,6 +291,14 @@ def sign_audit_entry(
             "yet wired from a deployment-bound signing backend into harness-cp "
             "(C-CP-20 §20.3.1; SecretRef is opaque per AS spec C-AS-05 §5.4)"
         )
+    if type(key_period) is not int:  # reject bool/float — isinstance() would admit bool
+        raise TypeError(
+            f"key_period must be a plain int (not bool/float — out-of-family Codex "
+            f"round-3 finding: a non-int value signs a different textual message than "
+            f"the int `CPSignedAuditLedgerEntry.audit_signature_key_period` field "
+            f"coerces to, making the returned entry fail its own verifier); got "
+            f"{key_period!r} ({type(key_period).__name__})"
+        )
     if key_period < 0:
         raise ValueError(
             f"key_period must be non-negative (monotonic per C-CP-20 §20.3.1); got {key_period}"
@@ -342,7 +350,14 @@ def verify_audit_entry_signature(
     `algorithm` disagrees with the entry's stored `audit_signature_algorithm`
     (round-2 P1 finding — a backend that ignores its `key_id` selector, or is
     bound to a different algorithm than the one the entry claims, must not
-    be allowed to attest a verdict for the wrong key/algorithm).
+    be allowed to attest a verdict for the wrong key/algorithm). Also rejects
+    a `signed` entry whose OWN stored `audit_signature_algorithm` /
+    `audit_signature_key_period` already violate the §20.2 closed enum /
+    non-negative contract (round-3 P2 finding — the write path
+    (`sign_audit_entry`) enforces both, but a `signed` entry may arrive from
+    persisted storage or an external source without ever passing through it;
+    a `VERIFIED` verdict over out-of-contract metadata is meaningless even if
+    a rogue backend happens to agree with that same invalid value).
     """
     if backend is None:
         raise AuditSigningBackendUnavailableError(
@@ -351,6 +366,10 @@ def verify_audit_entry_signature(
             "backend into harness-cp (C-CP-20 §20.3.1; SecretRef is opaque per "
             "AS spec C-AS-05 §5.4)"
         )
+    if signed.audit_signature_algorithm not in _VALID_SIGNATURE_ALGORITHMS:
+        return VerificationResult.SIGNATURE_MISMATCH
+    if signed.audit_signature_key_period < 0:
+        return VerificationResult.SIGNATURE_MISMATCH
     if key.key_id != signed.audit_signature_key_id:
         return VerificationResult.SIGNATURE_MISMATCH
     if backend.algorithm != signed.audit_signature_algorithm:
