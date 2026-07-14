@@ -41,13 +41,13 @@
 
 snapshot:
   total: 39
-  open: 1
+  open: 0
   design_substrate_gated: 3
   registered_finding: 10
   operator_gated: 2
   held: 1
-  closed: 22
-  identity_digest: "e94f6199f8840c15"
+  closed: 23
+  identity_digest: "725b9dbd2c7f877d"
   source: ".harness/post-phase-8-forward-register.md"
 
 items:
@@ -188,11 +188,11 @@ items:
 
   - id: B-20
     title: "CP-side harness.breaker.* composition-mirror attribute-name drift"
-    status: open
-    summary: "7 CP-side breaker schema names diverge from OD's canonical §7.1 emission names; CI-invisible (count-only check)."
-    close_out: "Re-derive the 7 CP entries to match OD's canonical names/cardinality; update the test's expected set."
+    status: closed
+    summary: "BUILT 2026-07-14 — 7 CP-side breaker schema names renamed/split/dropped to byte-match OD's canonical §7.1 names."
+    pr: "#994"
     council: "no — mechanical once the target shape is decided (already known from OD's own schema)"
-    heading: "### B-20 · CP-side `harness.breaker.*` composition-mirror attribute-name drift *(NET-NEW, registered 2026-07-13 at Wave-5 hygiene grounding)*"
+    heading: "### B-20 · CP-side `harness.breaker.*` composition-mirror attribute-name drift *(NET-NEW, registered 2026-07-13 at Wave-5 hygiene grounding)* — **✅ BUILT 2026-07-14**"
 
   - id: R-1
     title: "Managed-cloud deployment-surface dispatch (confirmed-DEFERRED)"
