@@ -116,7 +116,7 @@ def _identity_digest(items: list[dict[str, Any]]) -> str:
     B-35 evidence-matrix fix (this same register) already solved with an identical
     digest technique. Never spells out a single id/status in the digest itself.
     """
-    pairs = sorted(f"{r['id']}:{r['status']}" for r in items)
+    pairs = sorted(f"{r.get('id', '<no-id>')}:{r.get('status', '<no-status>')}" for r in items)
     return hashlib.sha256(",".join(pairs).encode()).hexdigest()[:16]
 
 
@@ -159,6 +159,8 @@ def validate(data: dict[str, Any]) -> list[str]:
     seen_headings: dict[str, str] = {}
     for r in items:
         rid = r.get("id", "<no-id>")
+        if not r.get("id"):
+            violations.append("row missing non-empty 'id'")
         if rid in seen_ids:
             violations.append(f"duplicate id {rid}")
         seen_ids.add(rid)
@@ -170,6 +172,9 @@ def validate(data: dict[str, Any]) -> list[str]:
 
         if not r.get("title"):
             violations.append(f"{rid}: missing non-empty 'title'")
+
+        if not r.get("summary"):
+            violations.append(f"{rid}: missing non-empty 'summary'")
 
         heading = r.get("heading")
         if not heading:
@@ -241,7 +246,7 @@ def check_prose_drift(data: dict[str, Any], prose_path: Path = DEFAULT_PROSE) ->
     violations: list[str] = []
     text = prose_path.read_text(encoding="utf-8")
 
-    yaml_ids = {r["id"] for r in data["items"]}
+    yaml_ids = {r.get("id", "<no-id>") for r in data["items"]}
     pairs = _prose_heading_lines(text)
     prose_id_counts = Counter(heading_id for heading_id, _line in pairs)
     prose_line_by_id = dict(pairs)  # last occurrence wins; duplicates flagged below
@@ -260,12 +265,13 @@ def check_prose_drift(data: dict[str, Any], prose_path: Path = DEFAULT_PROSE) ->
         heading = r.get("heading")
         if not heading:
             continue
-        current_line = prose_line_by_id.get(r["id"])
+        rid = r.get("id", "<no-id>")
+        current_line = prose_line_by_id.get(rid)
         if current_line is None:
-            violations.append(f"{r['id']}: no heading line for this id found in {prose_path.name}")
+            violations.append(f"{rid}: no heading line for this id found in {prose_path.name}")
         elif heading != current_line:
             violations.append(
-                f"{r['id']}: row heading is stale — prose now reads {current_line!r}, "
+                f"{rid}: row heading is stale — prose now reads {current_line!r}, "
                 f"row still has {heading!r} (a substring match would have hidden this)"
             )
 

@@ -244,6 +244,34 @@ def test_negative_missing_title_fails() -> None:
     assert _violates(m)
 
 
+def test_negative_missing_summary_fails() -> None:
+    def m(data):
+        _first_closed(data).pop("summary", None)
+
+    assert _violates(m)
+
+
+def test_negative_missing_id_fails() -> None:
+    def m(data):
+        _first_closed(data).pop("id", None)
+
+    assert _violates(m)
+
+
+def test_malformed_row_reports_violations_instead_of_crashing() -> None:
+    """A row missing 'id' or 'status' entirely must degrade to a reported
+    violation, not an unhandled KeyError, in BOTH validate() and
+    check_prose_drift() -- the two functions --check calls."""
+    data = copy.deepcopy(_data())
+    data["items"][0].pop("id", None)
+    data["items"][1].pop("status", None)
+
+    violations = forward_register.validate(data)
+    assert violations  # reported, not raised
+    drift = forward_register.check_prose_drift(data)
+    assert drift  # reported, not raised
+
+
 def test_negative_nonconforming_heading_shape_fails() -> None:
     """A heading string that matches neither the '### ID ·' nor '## ... (ID)' shape
     must be rejected, not silently accepted just because it's non-empty."""
