@@ -320,7 +320,14 @@ def test_end_to_end_dispatch_emits_cost_attribution_audit_entry(
 
 def test_dispatcher_without_cost_substrate_silently_skips_cost_attribution() -> None:
     """Backward-compat: dispatcher constructed without cost_chain/audit_writer/
-    rate_table proceeds without cost-attribution (unit-test ergonomics)."""
+    rate_table proceeds without cost-attribution (unit-test ergonomics).
+
+    B-28 finding #13 (test-quality preflight 2026-07-12) — the prior body
+    asserted nothing about the claimed "silently skips" behavior beyond "no
+    exception raised"; assert the actual skip — no `cost.attributed_decimal`
+    attribute lands on the dispatch span (the early-return guard at
+    `llm_dispatch.py` fires when `cost_chain`/`audit_writer`/`rate_table` are
+    absent, before any cost-attribution attempt)."""
     import asyncio
 
     exporter = InMemorySpanExporter()
@@ -359,8 +366,11 @@ def test_dispatcher_without_cost_substrate_silently_skips_cost_attribution() -> 
         tenant_id=None,
         step_index=0,
     )
-    # Should complete without raising
     asyncio.run(dispatcher.dispatch(binding, step, step_context=step_context))
+
+    spans = exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert COST_ATTRIBUTED_DECIMAL_ATTR not in (spans[0].attributes or {})
 
 
 # ---------------------------------------------------------------------------

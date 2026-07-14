@@ -36,11 +36,13 @@ from harness_is.memory_record_envelope import (
 from harness_is.memory_store import (
     CanonicalMemoryStore,
     MemoryStoreRecord,
+    MemoryStoreRecordNotFoundError,
     MemoryStoreRecordUnavailableError,
     MemoryStoreWriteResult,
     canonicalize_memory_store_record,
 )
 from harness_is.state_ledger_entry_schema import Actor, ActorClass, Identifier
+from pydantic import ValidationError
 
 _BASE_TIME = datetime(2026, 7, 1, 12, 0, 0, tzinfo=UTC)
 _RUN_ID = "run-123"
@@ -368,3 +370,50 @@ def test_memory_store_package_re_exports() -> None:
     assert harness_is.CanonicalMemoryStore is m.CanonicalMemoryStore
     assert harness_is.MemoryStoreRecord is m.MemoryStoreRecord
     assert harness_is.canonicalize_memory_store_record is m.canonicalize_memory_store_record
+
+
+def test_content_hash_mismatch_rejected_at_construction() -> None:
+    """B-28 finding #5 (test-quality preflight 2026-07-12) —
+    ``MemoryStoreContentHashMismatchError`` was never triggered anywhere:
+    an ``envelope.content_hash`` that disagrees with the recomputed hash of
+    ``content`` must be rejected at ``MemoryStoreRecord`` construction."""
+    valid = _record(MemoryRecordKind.SEMANTIC_FACT)
+    with pytest.raises(ValidationError, match="does not match canonical content"):
+        MemoryStoreRecord(
+            envelope=valid.envelope,
+            content={**valid.content, "statement": "a different statement entirely"},
+        )
+
+
+def test_unsupported_kind_rejected_at_construction() -> None:
+    """B-28 finding #5 — ``MemoryStoreUnsupportedKindError`` was never
+    triggered: ``MEMORY_OPERATION`` records are written via
+    ``append_memory_operation``/``read_memory_operations``, not the generic
+    envelope-backed store, and must be rejected at construction."""
+    content: Mapping[str, object] = {"marker": "memory_operation records are not envelope-backed"}
+    content_hash = compute_memory_content_hash(content)
+    with pytest.raises(ValidationError, match="memory_operation"):
+        MemoryStoreRecord(
+            envelope=MemoryRecordEnvelope(
+                memory_id=derive_memory_id(
+                    MemoryTier.EPISODIC, MemoryRecordKind.MEMORY_OPERATION, content_hash
+                ),
+                schema_version="memory-store-record/v1",
+                tier=MemoryTier.EPISODIC,
+                kind=MemoryRecordKind.MEMORY_OPERATION,
+                created_at=_BASE_TIME,
+                scope=MemoryScope(project="arhugula-v2", visibility=MemoryVisibility.PROJECT),
+                content_hash=content_hash,
+            ),
+            content=content,
+        )
+
+
+def test_read_record_raises_when_never_written(tmp_path: Path) -> None:
+    """B-28 finding #5 — reading a record that was never written must raise
+    ``MemoryStoreRecordNotFoundError``, not a bare filesystem error."""
+    store = _store(tmp_path)
+    never_written = _record(MemoryRecordKind.SEMANTIC_FACT)
+
+    with pytest.raises(MemoryStoreRecordNotFoundError):
+        store.read_record(never_written.envelope.memory_id, MemoryRecordKind.SEMANTIC_FACT)

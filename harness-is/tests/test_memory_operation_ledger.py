@@ -25,12 +25,18 @@ from harness_is.memory_operation_ledger import (
     verify_memory_operation_ledger,
 )
 from harness_is.memory_record_envelope import MemoryID
+from harness_is.memory_redaction_event import (
+    MemoryRedactionActor,
+    MemoryRedactionEvent,
+    MemoryRedactionKind,
+)
 from harness_is.state_ledger_entry_schema import (
     ALL_ZEROS_SENTINEL,
     Actor,
     ActorClass,
     Identifier,
 )
+from pydantic import ValidationError
 
 _ACTOR = Actor(actor_class=ActorClass.AGENT, actor_id="agent-memory")
 _BASE_TIME = datetime(2026, 7, 1, 12, 0, 0, tzinfo=UTC)
@@ -124,6 +130,100 @@ def test_memory_operation_vocabularies_match_c_mem_08() -> None:
         "reconciler-loop",
         "WAL-segment",
     }
+
+
+def _redaction_event(
+    kind: MemoryRedactionKind = MemoryRedactionKind.CONTENT_REDACTION,
+) -> MemoryRedactionEvent:
+    return MemoryRedactionEvent(
+        event_id="redact-1",
+        target_memory_id=MemoryID(f"mem:semantic:semantic_fact:{'a' * 64}"),
+        redaction_kind=kind,
+        reason="operator request",
+        actor=MemoryRedactionActor.OPERATOR,
+        timestamp=_BASE_TIME,
+        old_content_hash="a" * 64,
+        new_content_hash="b" * 64,
+    )
+
+
+def test_projection_mismatch_rejected_on_payload_and_entry() -> None:
+    """B-28 finding #2 (test-quality preflight 2026-07-12) — the
+    ``_projection_matches_kind`` model_validator was never exercised: every
+    existing test fixture always constructs the correct
+    ``operation_projection`` for its ``operation_kind``. Wiring a mismatched
+    pair must raise ``ValidationError``."""
+    with pytest.raises(ValidationError, match="capture"):
+        MemoryOperationPayload(
+            action_id=Identifier("mem-op-mismatch"),
+            idempotency_key=Identifier("idem-mismatch"),
+            actor=_ACTOR,
+            timestamp=_BASE_TIME,
+            operation_kind=MemoryOperationKind.CAPTURE,
+            operation_projection=MemoryOperationProjection.RETRIEVAL_EVENTS,
+        )
+
+
+def test_redaction_event_required_for_redact_and_tombstone_kinds() -> None:
+    """B-28 finding #2 — REDACT/TOMBSTONE operations without a redaction_event
+    must raise ``ValidationError``."""
+    for kind in (MemoryOperationKind.REDACT, MemoryOperationKind.TOMBSTONE):
+        with pytest.raises(ValidationError, match="redaction_event"):
+            MemoryOperationPayload(
+                action_id=Identifier(f"mem-op-{kind.value}"),
+                idempotency_key=Identifier(f"idem-{kind.value}"),
+                actor=_ACTOR,
+                timestamp=_BASE_TIME,
+                operation_kind=kind,
+                operation_projection=MemoryOperationProjection.NONE,
+                redaction_event=None,
+            )
+
+
+def test_redaction_event_forbidden_for_non_redaction_kinds() -> None:
+    """B-28 finding #2 — a non-REDACT/TOMBSTONE operation carrying a
+    redaction_event must raise ``ValidationError``."""
+    with pytest.raises(ValidationError, match="cannot carry"):
+        MemoryOperationPayload(
+            action_id=Identifier("mem-op-capture-with-redaction"),
+            idempotency_key=Identifier("idem-capture-with-redaction"),
+            actor=_ACTOR,
+            timestamp=_BASE_TIME,
+            operation_kind=MemoryOperationKind.CAPTURE,
+            operation_projection=MemoryOperationProjection.NONE,
+            redaction_event=_redaction_event(),
+        )
+
+
+def test_tombstone_kind_requires_tombstone_redaction_kind() -> None:
+    """B-28 finding #2 — a TOMBSTONE operation's redaction_event must itself
+    declare ``redaction_kind=tombstone``; any other redaction_kind raises."""
+    with pytest.raises(ValidationError, match="redaction_kind=tombstone"):
+        MemoryOperationPayload(
+            action_id=Identifier("mem-op-tombstone-wrong-kind"),
+            idempotency_key=Identifier("idem-tombstone-wrong-kind"),
+            actor=_ACTOR,
+            timestamp=_BASE_TIME,
+            operation_kind=MemoryOperationKind.TOMBSTONE,
+            operation_projection=MemoryOperationProjection.NONE,
+            redaction_event=_redaction_event(MemoryRedactionKind.CONTENT_REDACTION),
+        )
+
+
+def test_tombstone_redaction_kind_requires_tombstone_operation() -> None:
+    """B-28 finding #2 — a redaction_event declaring
+    ``redaction_kind=tombstone`` on a non-TOMBSTONE operation (e.g. REDACT)
+    must raise."""
+    with pytest.raises(ValidationError, match="operation_kind=tombstone"):
+        MemoryOperationPayload(
+            action_id=Identifier("mem-op-redact-with-tombstone-kind"),
+            idempotency_key=Identifier("idem-redact-with-tombstone-kind"),
+            actor=_ACTOR,
+            timestamp=_BASE_TIME,
+            operation_kind=MemoryOperationKind.REDACT,
+            operation_projection=MemoryOperationProjection.NONE,
+            redaction_event=_redaction_event(MemoryRedactionKind.TOMBSTONE),
+        )
 
 
 def test_append_writes_canonical_memory_ops_jsonl_and_chains(tmp_path: Path) -> None:

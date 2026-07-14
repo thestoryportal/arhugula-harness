@@ -101,17 +101,31 @@ def test_committed_surface_contract_anchors_resolve_to_od_spec_sections() -> Non
 
 
 def test_committed_surface_frozen_and_hashable() -> None:
-    """The CommittedSurface record is frozen → Eq + Hash."""
+    """The CommittedSurface record is frozen → Eq + Hash.
+
+    B-28 finding #9 (test-quality preflight 2026-07-12) — `hash(surface) ==
+    hash(surface)` is tautologically true for any object regardless of
+    whether `__hash__` is field-based or falls back to identity; the real
+    invariant (equal objects hash equal — required for correct dict/set
+    membership) needs hash(surface) compared against hash(duplicate)."""
     surface = COMMITTED_AT_D6_SURFACES[0]
-    assert hash(surface) == hash(surface)
     duplicate = CommittedSurface(
         surface_name=surface.surface_name,
         contract_anchor=surface.contract_anchor,
     )
     assert surface == duplicate
+    assert hash(surface) == hash(duplicate)
 
 
 def test_deferred_surface_frozen_and_hashable() -> None:
-    """The DeferredSurface record is frozen → Eq + Hash."""
+    """The DeferredSurface record is frozen → Eq + Hash.
+
+    B-28 finding #9 — same tautology as `test_committed_surface_frozen_and_hashable`."""
     surface = DEFERRED_SURFACES[0]
-    assert hash(surface) == hash(surface)
+    duplicate = DeferredSurface(
+        surface_name=surface.surface_name,
+        contract_anchor=surface.contract_anchor,
+        closure_target=surface.closure_target,
+    )
+    assert surface == duplicate
+    assert hash(surface) == hash(duplicate)

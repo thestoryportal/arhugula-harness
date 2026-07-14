@@ -230,6 +230,12 @@ def test_no_workload_class_materialized_in_unit() -> None:
 
 
 def test_cell_dashboard_binding_frozen_and_hashable() -> None:
-    """The CellDashboardBinding record is frozen → Eq + Hash."""
+    """The CellDashboardBinding record is frozen → Eq + Hash.
+
+    B-28 finding #11 (test-quality preflight 2026-07-12) — self-comparison
+    tautology; compare two separately-constructed but field-equal instances."""
     binding = next(iter(PER_CELL_DASHBOARD_BINDINGS.values()))
-    assert hash(binding) == hash(binding)
+    duplicate = binding.model_copy()
+    assert binding is not duplicate
+    assert binding == duplicate
+    assert hash(binding) == hash(duplicate)

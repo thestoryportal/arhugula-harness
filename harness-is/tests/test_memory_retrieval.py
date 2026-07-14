@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import pytest
 from harness_core import DeploymentSurface
 from harness_is.memory_operation_ledger import MemoryOperationKind, MemoryOperationProjection
 from harness_is.memory_path_registry import MemoryRootBinding
@@ -29,12 +30,18 @@ from harness_is.memory_record_envelope import (
 from harness_is.memory_retrieval import (
     MemoryPacketAccessMode,
     MemoryRetrievalRequest,
+    MemoryRetrievalResult,
     MemoryRetriever,
     RetrievalExclusionReason,
+    _normalize_for_json,
 )
-from harness_is.memory_retrieval_index import DerivedRetrievalIndexStore
+from harness_is.memory_retrieval_index import (
+    DerivedRetrievalIndexMissingError,
+    DerivedRetrievalIndexStore,
+)
 from harness_is.memory_store import CanonicalMemoryStore, MemoryStoreRecord
 from harness_is.state_ledger_entry_schema import Actor, ActorClass
+from pydantic import ValidationError
 
 _NOW = datetime(2026, 7, 2, 14, 30, 0, tzinfo=UTC)
 
@@ -376,3 +383,89 @@ def test_packet_sections_obey_stable_order_and_token_budget(tmp_path: Path) -> N
     assert {excluded.reason for excluded in result.excluded_refs} == {
         RetrievalExclusionReason.TOKEN_BUDGET_EXCEEDED
     }
+
+
+def test_retrieve_before_index_rebuilt_raises(tmp_path: Path) -> None:
+    """B-28 finding #3 (test-quality preflight 2026-07-12) — every existing
+    test rebuilds the derived retrieval index before calling ``retrieve()``;
+    calling it against a never-rebuilt index must raise
+    ``DerivedRetrievalIndexMissingError``, not silently return an empty
+    result."""
+    binding = _binding(tmp_path)
+    store = _store(binding)
+    index_store = _index_store(binding)
+
+    with pytest.raises(DerivedRetrievalIndexMissingError):
+        _retriever(store=store, index_store=index_store).retrieve(
+            _request(),
+            timestamp=_NOW,
+            actor=Actor(actor_class=ActorClass.AGENT, actor_id="codex"),
+            access_mode=MemoryPacketAccessMode.PROMPT_EXTENSION_PACKET,
+        )
+
+
+def _valid_retrieval_result(tmp_path: Path) -> MemoryRetrievalResult:
+    binding = _binding(tmp_path)
+    store = _store(binding)
+    store.write_record(
+        _record(
+            kind=MemoryRecordKind.PREFERENCE,
+            statement="Codex memory recovery should resume from verified loop state.",
+            tags=("codex", "memory", "workflow"),
+        )
+    )
+    index_store = _index_store(binding)
+    index_store.rebuild(indexed_at=_NOW)
+    return _retriever(store=store, index_store=index_store).retrieve(
+        _request(),
+        timestamp=_NOW,
+        actor=Actor(actor_class=ActorClass.AGENT, actor_id="codex"),
+        access_mode=MemoryPacketAccessMode.PROMPT_EXTENSION_PACKET,
+    )
+
+
+def test_hashes_match_packet_rejects_packet_hash_mismatch(tmp_path: Path) -> None:
+    """B-28 finding #3 — the ``_hashes_match_packet`` model_validator was
+    never exercised: a ``MemoryRetrievalResult.packet_hash`` that disagrees
+    with ``packet.packet_hash`` must be rejected."""
+    result = _valid_retrieval_result(tmp_path)
+    wrong_hash = ("0" if result.packet_hash[0] != "0" else "1") + result.packet_hash[1:]
+    with pytest.raises(ValidationError, match="packet_hash must match"):
+        MemoryRetrievalResult(
+            request_hash=result.request_hash,
+            selected_refs=result.selected_refs,
+            excluded_refs=result.excluded_refs,
+            packet_hash=wrong_hash,
+            ranking_trace=result.ranking_trace,
+            packet=result.packet,
+        )
+
+
+def test_hashes_match_packet_rejects_selected_refs_mismatch(tmp_path: Path) -> None:
+    """B-28 finding #3 — a ``MemoryRetrievalResult.selected_refs`` that
+    disagrees with ``packet.selected_refs`` must be rejected."""
+    result = _valid_retrieval_result(tmp_path)
+    assert result.selected_refs, "fixture must select at least one record"
+    with pytest.raises(ValidationError, match="selected_refs must match"):
+        MemoryRetrievalResult(
+            request_hash=result.request_hash,
+            selected_refs=(),
+            excluded_refs=result.excluded_refs,
+            packet_hash=result.packet_hash,
+            ranking_trace=result.ranking_trace,
+            packet=result.packet,
+        )
+
+
+def test_normalize_for_json_rejects_float() -> None:
+    """B-28 finding #3 — retrieval canonicalization must reject float values
+    (no canonical fixed-point encoding is defined for them)."""
+    with pytest.raises(TypeError, match="float"):
+        _normalize_for_json(1.5)
+
+
+def test_normalize_for_json_rejects_non_string_mapping_key() -> None:
+    """B-28 finding #3 — retrieval canonicalization must reject non-string
+    mapping keys."""
+    with pytest.raises(TypeError, match="string mapping keys"):
+        _normalize_for_json({1: "value"})
