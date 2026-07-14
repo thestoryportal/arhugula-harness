@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `eca59f9f2398` |
-| `last_refreshed` | 2026-07-14T22:40:00Z |
-| `git_head` | `21518ada` — `ops: roadmap status refresh post-#995 (#996)` (substantive merge follows as this commit — files 3 Class-1 fork docs for `B-24`/`B-25`/`B-27` (the design-substrate-gated register items) + updates their register entries to note the fork docs are filed and awaiting operator ratification; no code change, no design-substrate edit). |
+| `workspace_state_hash` | `7f39b0cbb12c` |
+| `last_refreshed` | 2026-07-14T22:52:00Z |
+| `git_head` | `a9fa65ee` — `ops(B-24,B-25,B-27): file Class-1 fork docs + roadmap refresh (#997)` (terminating refresh; the only file changed is this one). |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 91 |
 
