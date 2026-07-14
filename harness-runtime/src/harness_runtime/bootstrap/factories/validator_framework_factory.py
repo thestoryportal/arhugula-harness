@@ -27,6 +27,8 @@ Reading A scope (per fork doc
 
 from __future__ import annotations
 
+from typing import Any
+
 from harness_cp.validator_framework import ConcreteValidatorFramework
 from harness_cp.validator_framework_types import (
     ValidatorFramework,
@@ -59,6 +61,8 @@ async def materialize_validator_framework_stage(
     cost_chain: CostAttributionChain | None = None,
     audit_writer: AuditLedgerWriter | None = None,
     cost_record_sink: SupportsCostRecordAppend | None = None,
+    ledger_writer: Any = None,
+    procedural_tier_snapshot_resolver: Any = None,
 ) -> ValidatorFramework | None:
     """Construct the stage-4 `ValidatorFramework` instance from operator-supplied
     config, or return `None` when the operator has not opted in.
@@ -117,6 +121,8 @@ async def materialize_validator_framework_stage(
             cost_chain=cost_chain,
             audit_writer=audit_writer,
             cost_record_sink=cost_record_sink,
+            ledger_writer=ledger_writer,
+            procedural_tier_snapshot_resolver=procedural_tier_snapshot_resolver,
         )
 
     framework: ValidatorFramework = ConcreteValidatorFramework(

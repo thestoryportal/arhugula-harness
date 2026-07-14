@@ -123,4 +123,11 @@ async def materialize_webhook_delivery_composer_stage(
         # `.records` list) so any appended SpanCostRecord routes to the current
         # run's accumulator at append-time.
         cost_record_sink=ctx.cost_record_accumulator,
+        # B-23 — threaded so a future cost-substrate-bound composer (FM-2
+        # webhook config arc) F2-writes its cost fact with a real entry_core
+        # instead of a fabricated `cp-audit:<action_id>` marker. Dormant at
+        # v1.26 (this factory binds no cost substrates yet, so the composer's
+        # cost wrapper early-returns), same as `cost_record_sink` above.
+        ledger_writer=ctx.ledger_writer,
+        procedural_tier_snapshot_resolver=ctx.procedural_tier_snapshot_resolver,
     )

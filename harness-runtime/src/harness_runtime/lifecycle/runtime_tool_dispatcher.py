@@ -346,6 +346,8 @@ class RuntimeToolDispatcher:
         audit_writer: Any = None,
         rate_table: Any = None,
         cost_record_sink: SupportsCostRecordAppend | None = None,
+        ledger_writer: Any = None,
+        procedural_tier_snapshot_resolver: Any = None,
         tool_execution_drivers: dict[ServerName, ToolExecutionDriver] | None = None,
         provider_secret_resolver: Any = None,
         secret_fetch_audit_emitter: Callable[[SecretFetchEvent], Any] | None = None,
@@ -410,6 +412,14 @@ class RuntimeToolDispatcher:
         rate_table:
             U-OD-39 PRICE_TABLE_REF (`RATE_TABLE_V1` at v1) materialized at
             stage 4 OD. Same None-default discipline as `cost_chain`.
+        ledger_writer:
+            B-23 — IS state-ledger writer (`ctx.ledger_writer`). When bound,
+            threaded to `attribute_tool_dispatch_cost` so the cost-attribution
+            audit entry's `entry_core` is a real F2 anchor instead of a
+            fabricated `cp-audit:<action_id>` marker.
+        procedural_tier_snapshot_resolver:
+            B-23 — R-003 resolver (`ctx.procedural_tier_snapshot_resolver`)
+            for the F2 entry's `procedural_tier_snapshot_ref` sidecar.
         """
         self._mcp_client_hosts = mcp_client_hosts
         self._routing_index = routing_index
@@ -432,6 +442,10 @@ class RuntimeToolDispatcher:
         self._cost_chain = cost_chain
         self._audit_writer = audit_writer
         self._rate_table = rate_table
+        # B-23 — threaded to `attribute_tool_dispatch_cost` at
+        # `_attribute_tool_cost_best_effort` for the F2-write entry_core fix.
+        self._ledger_writer = ledger_writer
+        self._procedural_tier_snapshot_resolver = procedural_tier_snapshot_resolver
         # R-FS-1 arc CA — run-scoped cost-record sink (same list as
         # `ctx.cost_record_accumulator`, threaded by the stage-5 factory).
         # `_attribute_tool_cost_best_effort` appends each dispatch's returned
@@ -473,6 +487,8 @@ class RuntimeToolDispatcher:
         audit_writer: Any = None,
         rate_table: Any = None,
         cost_record_sink: SupportsCostRecordAppend | None = None,
+        ledger_writer: Any = None,
+        procedural_tier_snapshot_resolver: Any = None,
         tool_execution_driver: ToolExecutionDriver | None = None,
         provider_secret_resolver: Any = None,
         secret_fetch_audit_emitter: Callable[[SecretFetchEvent], Any] | None = None,
@@ -513,6 +529,8 @@ class RuntimeToolDispatcher:
             audit_writer=audit_writer,
             rate_table=rate_table,
             cost_record_sink=cost_record_sink,
+            ledger_writer=ledger_writer,
+            procedural_tier_snapshot_resolver=procedural_tier_snapshot_resolver,
             tool_execution_drivers=(
                 {server_name: tool_execution_driver} if tool_execution_driver is not None else None
             ),
@@ -584,6 +602,8 @@ class RuntimeToolDispatcher:
                 workflow_id=step_context.workflow_id,
                 parent_action_id=step_context.parent_action_id,
                 tenant_id=None,
+                ledger_writer=self._ledger_writer,
+                procedural_tier_snapshot_resolver=self._procedural_tier_snapshot_resolver,
             )
         except Exception:
             # Cost-attribution is observability, not contract. Swallow.

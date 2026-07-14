@@ -115,6 +115,8 @@ class WebhookDeliveryComposer:
         cost_chain: Any = None,
         audit_writer: Any = None,
         cost_record_sink: SupportsCostRecordAppend | None = None,
+        ledger_writer: Any = None,
+        procedural_tier_snapshot_resolver: Any = None,
         workflow_id: str | None = None,
         parent_action_id: str | None = None,
         parent_idempotency_key: str | None = None,
@@ -167,6 +169,14 @@ class WebhookDeliveryComposer:
         # `_attribute_webhook_cost_best_effort` fires), so this sink is dormant in
         # production until the FM-2 webhook config arc binds the substrates.
         self._cost_record_sink = cost_record_sink
+        # B-23 — IS state-ledger writer (U-RT-12) + R-003 resolver, threaded to
+        # `attribute_webhook_dispatch_cost` so the cost-attribution audit
+        # entry's `entry_core` is a real F2 anchor instead of a fabricated
+        # `cp-audit:<action_id>` marker. None preserves unit-test ergonomics
+        # (and matches the v1.26 empty-marker factory's dormant-substrate
+        # state — see `webhook_delivery_composer_factory.py`).
+        self._ledger_writer = ledger_writer
+        self._procedural_tier_snapshot_resolver = procedural_tier_snapshot_resolver
         self._workflow_id = workflow_id
         self._parent_action_id = parent_action_id
         self._parent_idempotency_key = parent_idempotency_key
@@ -347,6 +357,8 @@ class WebhookDeliveryComposer:
                 workflow_id=self._workflow_id,
                 parent_action_id=self._parent_action_id,
                 tenant_id=self._tenant_id,
+                ledger_writer=self._ledger_writer,
+                procedural_tier_snapshot_resolver=self._procedural_tier_snapshot_resolver,
             )
             # R-FS-1 arc CA — record into the run-scoped accumulator for the
             # `RunResult.cost_attribution` rollup (runtime spec v1.53 §9 C-RT-09).

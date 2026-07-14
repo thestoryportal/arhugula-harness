@@ -57,11 +57,12 @@ Authority:
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from typing import cast
+from collections.abc import Callable, Mapping
+from typing import Any, cast
 
 from harness_cp.engine_namespace import ReplayDisposition
 from harness_cxa.cp_audit_conversion import cp_audit_to_od_audit
+from harness_is.state_ledger_entry_schema import Identifier
 from harness_od.audit_ledger_types import AuditLedgerEntry
 from harness_od.cost_formula import PriceRateKey, SpanCostInputs
 from harness_od.cost_record_audit_writer import (
@@ -72,6 +73,7 @@ from harness_od.rate_table_bridge import provider_rates_to_price_rate_entry
 from harness_od.rate_table_resolver import resolve_for
 from harness_od.rate_table_types import RateTable
 
+from harness_runtime.lifecycle.cost_attribution_f2_write import compose_cost_f2_entry_core
 from harness_runtime.types import AuditLedgerWriter, CostAttributionChain
 
 #: Canonical signing key id used for cost-attribution audit entries at v1.
@@ -111,6 +113,8 @@ def attribute_llm_dispatch_cost(
     tokenizer_version: str | None = None,
     tenant_id: str | None = None,
     provider_discriminator: str | None = None,
+    ledger_writer: Any = None,
+    procedural_tier_snapshot_resolver: Callable[[], Identifier] | None = None,
 ) -> SpanCostRecord:
     """Run the §C-OD-26.1 v1.10 canonical cost-attribution chain for one LLM dispatch.
 
@@ -170,6 +174,17 @@ def attribute_llm_dispatch_cost(
         non-vacuous in production (R-FS-1 `B-FALLBACK-CHAIN-FAMILY-COST-COMPOSITION`).
         Carried `str`-typed (not `CrossFamilyTag`) to preserve the U-OD-20 no-cycle
         property; validated against `CrossFamilyTag` at the rollup.
+    ledger_writer
+        IS state-ledger writer (U-RT-12). When bound, this dispatch's cost
+        fact is F2-written before the audit conversion, and the resulting
+        `StateLedgerEntryRef` becomes the audit entry's `entry_core` (per
+        B-23; mirrors `sub_agent_dispatch.py`'s 8a/8b/8c pattern). `None`
+        preserves pre-existing unit-test ergonomics — the converter falls
+        back to its `cp-audit:<action_id>` fabricated marker.
+    procedural_tier_snapshot_resolver
+        R-003 resolver for the F2 entry's `procedural_tier_snapshot_ref`
+        sidecar (IS spec §C-IS-05 §5.1). Consulted only when `ledger_writer`
+        is bound.
 
     Returns
     -------
@@ -252,9 +267,21 @@ def attribute_llm_dispatch_cost(
         workflow_id=workflow_id,
         parent_action_id=parent_action_id,
     )
+    # B-23 — F2-write the dispatch fact so entry_core is a real IS anchor,
+    # not a fabricated `cp-audit:<action_id>` marker. `span_id` is a fresh
+    # per-attempt OTel span (a retry opens a new span), so it disambiguates
+    # repeat cost events on the same (workflow_id, parent_action_id).
+    entry_core = compose_cost_f2_entry_core(
+        ledger_writer=ledger_writer,
+        procedural_tier_snapshot_resolver=procedural_tier_snapshot_resolver,
+        workflow_id=workflow_id,
+        parent_action_id=parent_action_id,
+        dispatch_disambiguator=span_id,
+    )
     audit_entry: AuditLedgerEntry = cp_audit_to_od_audit(
         cost_payload,
         key_id=_DEFAULT_SIGNING_KEY_ID,
+        entry_core=entry_core,
     )
     audit_writer.append(tenant_id, audit_entry)
 

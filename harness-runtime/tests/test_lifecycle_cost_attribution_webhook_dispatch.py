@@ -14,14 +14,18 @@ in test_lifecycle_webhook_delivery_composer_cost_attribution.py at task 7.
 from __future__ import annotations
 
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
+from harness_is.state_ledger_entry_schema import Actor, ActorClass
+from harness_is.state_ledger_write import read_ledger
 from harness_od.rate_table_types import RateTable, WebhookRate
 from harness_runtime.lifecycle.cost_attribution import RuntimeCostAttributionChain
 from harness_runtime.lifecycle.cost_attribution_webhook_dispatch import (
     _compute_webhook_cost,
     attribute_webhook_dispatch_cost,
 )
+from harness_runtime.lifecycle.state_ledger import LedgerWriter
 
 
 class _RecordingAuditWriter:
@@ -243,3 +247,111 @@ def test_three_webhook_dispatches_produce_three_audit_writes(
         e[1].payload.audit_namespace_attrs["audit.cp.action_id"] for e in audit_writer.appended
     ]
     assert len(set(action_ids)) == 3
+
+
+# ---------------------------------------------------------------------------
+# B-23 — F2-write entry_core (real IS anchor, not fabricated cp-audit: marker)
+# ---------------------------------------------------------------------------
+
+_ACTOR = Actor(actor_class=ActorClass.AGENT, actor_id="test-cost-attribution")
+
+
+def _build_ledger_writer(tmp_path: Path) -> LedgerWriter:
+    """Real `LedgerWriter` rooted in `tmp_path` — mirrors
+    `test_lifecycle_sub_agent_dispatch.py`'s `_build_ledger_writer`."""
+    from harness_is.jsonl_event_ledger_lifecycle import JsonlLedgerHandle
+
+    path = tmp_path / "state.jsonl"
+    path.touch()
+    handle = JsonlLedgerHandle(canonical_path=path, exists=True, entry_count=0)
+    return LedgerWriter(handle=handle, actor=_ACTOR)
+
+
+def test_ledger_writer_bound_produces_real_entry_core_full_chain(
+    cost_chain: RuntimeCostAttributionChain,
+    audit_writer: _RecordingAuditWriter,
+    tmp_path: Path,
+) -> None:
+    """B-23 full-chain witness: when `ledger_writer` is bound, the F2 entry
+    actually lands in the IS ledger AND the audit entry's `entry_core`
+    references that real action_id — not the fabricated
+    `cp-audit:<action_id>` marker."""
+    rate_table = _make_rate_table(flat_per_attempt=Decimal("0.01"), plus_egress=False)
+    ledger_writer = _build_ledger_writer(tmp_path)
+    attribute_webhook_dispatch_cost(
+        rate_table=rate_table,
+        cost_chain=cost_chain,
+        audit_writer=audit_writer,
+        webhook_target="https://ops.example.com/hitl",
+        bytes_sent=512,
+        span_id="f2-span-1",
+        idempotency_key="webhook-idem-1",
+        parent_idempotency_key="parent-idem-1",
+        workflow_id="test-wf",
+        parent_action_id="hitl:test-wf:gate:0",
+        ledger_writer=ledger_writer,
+    )
+    entries = read_ledger(ledger_writer.handle)
+    cost_entries = [e for e in entries if str(e.action_id).startswith("cost:")]
+    assert len(cost_entries) == 1
+    real_action_id = str(cost_entries[0].action_id)
+    assert not real_action_id.startswith("cp-audit:")
+
+    _, audit_entry = audit_writer.appended[0]
+    assert str(audit_entry.payload.entry_core) == real_action_id
+
+
+def test_ledger_writer_unbound_preserves_fabricated_marker_fallback(
+    cost_chain: RuntimeCostAttributionChain,
+    audit_writer: _RecordingAuditWriter,
+) -> None:
+    """Backward compatibility — omitting `ledger_writer` preserves the
+    converter's pre-existing `cp-audit:<action_id>` fallback."""
+    rate_table = _make_rate_table(flat_per_attempt=Decimal("0.01"), plus_egress=False)
+    attribute_webhook_dispatch_cost(
+        rate_table=rate_table,
+        cost_chain=cost_chain,
+        audit_writer=audit_writer,
+        webhook_target="t",
+        bytes_sent=0,
+        span_id="f2-span-2",
+        idempotency_key="k",
+        parent_idempotency_key="p",
+        workflow_id="wf",
+        parent_action_id="action",
+    )
+    _, audit_entry = audit_writer.appended[0]
+    assert str(audit_entry.payload.entry_core).startswith("cp-audit:")
+
+
+def test_repeat_delivery_same_step_gets_distinct_f2_entries_not_noop_dropped(
+    cost_chain: RuntimeCostAttributionChain,
+    audit_writer: _RecordingAuditWriter,
+    tmp_path: Path,
+) -> None:
+    """Regression guard — two webhook-delivery attempts sharing the same
+    (workflow_id, parent_action_id) MUST persist two DISTINCT F2 entries,
+    not silently collapse via `IDEMPOTENT_NOOP`."""
+    rate_table = _make_rate_table(flat_per_attempt=Decimal("0.01"), plus_egress=False)
+    ledger_writer = _build_ledger_writer(tmp_path)
+    common = dict(
+        rate_table=rate_table,
+        cost_chain=cost_chain,
+        audit_writer=audit_writer,
+        webhook_target="target",
+        bytes_sent=100,
+        parent_idempotency_key="parent-retry",
+        workflow_id="wf",
+        parent_action_id="hitl:wf:gate:0",
+        ledger_writer=ledger_writer,
+    )
+    attribute_webhook_dispatch_cost(span_id="attempt-1", idempotency_key="idem-1", **common)
+    attribute_webhook_dispatch_cost(span_id="attempt-2", idempotency_key="idem-2", **common)
+
+    entries = read_ledger(ledger_writer.handle)
+    cost_entries = [e for e in entries if str(e.action_id).startswith("cost:")]
+    assert len(cost_entries) == 2, (
+        f"expected 2 distinct F2 entries for 2 retry attempts; got {len(cost_entries)}"
+    )
+    entry_cores = {str(e.payload.entry_core) for _, e in audit_writer.appended}
+    assert len(entry_cores) == 2

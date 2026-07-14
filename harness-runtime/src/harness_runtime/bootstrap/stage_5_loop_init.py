@@ -344,6 +344,11 @@ async def execute(
             # from COST_ACCUM_VAR), which `_build_run_result` reads post-join →
             # `RunResult.cost_attribution` (runtime v1.53 §9).
             cost_record_sink=ctx.cost_record_accumulator,
+            # B-23 — threaded so the per-dispatch cost-attribution audit
+            # entry's `entry_core` is a real F2 anchor instead of a
+            # fabricated `cp-audit:<action_id>` marker.
+            ledger_writer=cast(Any, ctx.ledger_writer),
+            procedural_tier_snapshot_resolver=ctx.procedural_tier_snapshot_resolver,
             # B-INTERSTEP (runtime spec §14.21 C-RT-34) — thread the SAME channel
             # instance the CP driver records into; the dispatcher reads
             # `most_recent_output()` and injects it into the dispatched payload.

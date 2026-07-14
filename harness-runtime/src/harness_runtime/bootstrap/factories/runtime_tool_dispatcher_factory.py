@@ -441,6 +441,12 @@ async def materialize_runtime_tool_dispatcher_stage(
         cost_chain=ctx.cost_chain,
         audit_writer=ctx.audit_writer,
         rate_table=rate_table,
+        # B-23 — same ledger_writer + resolver already used 2 lines below
+        # for RuntimeAsIsWiring's secret-fetch F2 writes; threaded to
+        # `_attribute_tool_cost_best_effort` so the cost-attribution audit
+        # entry's `entry_core` is a real F2 anchor.
+        ledger_writer=ctx.ledger_writer,
+        procedural_tier_snapshot_resolver=ctx.procedural_tier_snapshot_resolver,
         # R-FS-1 arc CA + B-INTERSTEP-PERRUN-ISOLATION — thread the run-scoped
         # accumulator PROXY (not its `.records` list — that capture defeated per-run
         # isolation) so per-tool-dispatch SpanCostRecords `append` through to the

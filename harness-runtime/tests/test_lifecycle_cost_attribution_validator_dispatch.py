@@ -18,14 +18,18 @@ factory-binding integration test.
 from __future__ import annotations
 
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
+from harness_is.state_ledger_entry_schema import Actor, ActorClass
+from harness_is.state_ledger_write import read_ledger
 from harness_od.rate_table_types import RateTable, WebhookRate
 from harness_runtime.lifecycle.cost_attribution import RuntimeCostAttributionChain
 from harness_runtime.lifecycle.cost_attribution_validator_dispatch import (
     _compute_validator_cost,
     attribute_validator_dispatch_cost,
 )
+from harness_runtime.lifecycle.state_ledger import LedgerWriter
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -218,3 +222,126 @@ def test_three_validator_dispatches_produce_three_audit_writes(
         e[1].payload.audit_namespace_attrs["audit.cp.action_id"] for e in audit_writer.appended
     ]
     assert len(set(action_ids)) == 3
+
+
+# ---------------------------------------------------------------------------
+# B-23 — F2-write entry_core (real IS anchor, not fabricated cp-audit: marker)
+# ---------------------------------------------------------------------------
+
+_ACTOR = Actor(actor_class=ActorClass.AGENT, actor_id="test-cost-attribution")
+
+
+def _build_ledger_writer(tmp_path: Path) -> LedgerWriter:
+    """Real `LedgerWriter` rooted in `tmp_path` — mirrors
+    `test_lifecycle_sub_agent_dispatch.py`'s `_build_ledger_writer`."""
+    from harness_is.jsonl_event_ledger_lifecycle import JsonlLedgerHandle
+
+    path = tmp_path / "state.jsonl"
+    path.touch()
+    handle = JsonlLedgerHandle(canonical_path=path, exists=True, entry_count=0)
+    return LedgerWriter(handle=handle, actor=_ACTOR)
+
+
+def test_ledger_writer_bound_produces_real_entry_core_full_chain(
+    cost_chain: RuntimeCostAttributionChain,
+    audit_writer: _RecordingAuditWriter,
+    tmp_path: Path,
+) -> None:
+    """B-23 full-chain witness: when `ledger_writer` is bound, the F2 entry
+    actually lands in the IS ledger AND the audit entry's `entry_core`
+    references that real action_id — not the fabricated
+    `cp-audit:<action_id>` marker."""
+    rate_table = _make_rate_table(cpu_rate_per_ms=Decimal("0.01"))
+    ledger_writer = _build_ledger_writer(tmp_path)
+    attribute_validator_dispatch_cost(
+        rate_table=rate_table,
+        cost_chain=cost_chain,
+        audit_writer=audit_writer,
+        validator_id="schema-validator",
+        execution_time_ms=10.0,
+        span_id="validator-evaluate-test-wf-step-0",
+        idempotency_key="validator-idem-1",
+        parent_idempotency_key="parent-idem-1",
+        workflow_id="test-wf",
+        parent_action_id="workflow:test-wf:step:0",
+        burden_count=0,
+        ledger_writer=ledger_writer,
+    )
+    entries = read_ledger(ledger_writer.handle)
+    cost_entries = [e for e in entries if str(e.action_id).startswith("cost:")]
+    assert len(cost_entries) == 1
+    real_action_id = str(cost_entries[0].action_id)
+    assert not real_action_id.startswith("cp-audit:")
+
+    _, audit_entry = audit_writer.appended[0]
+    assert str(audit_entry.payload.entry_core) == real_action_id
+
+
+def test_ledger_writer_unbound_preserves_fabricated_marker_fallback(
+    cost_chain: RuntimeCostAttributionChain,
+    audit_writer: _RecordingAuditWriter,
+) -> None:
+    """Backward compatibility — omitting `ledger_writer` preserves the
+    converter's pre-existing `cp-audit:<action_id>` fallback."""
+    rate_table = _make_rate_table(cpu_rate_per_ms=Decimal("0.01"))
+    attribute_validator_dispatch_cost(
+        rate_table=rate_table,
+        cost_chain=cost_chain,
+        audit_writer=audit_writer,
+        validator_id="schema-validator",
+        execution_time_ms=10.0,
+        span_id="validator-evaluate-test-wf-step-0",
+        idempotency_key="validator-idem-1",
+        parent_idempotency_key="parent-idem-1",
+        workflow_id="test-wf",
+        parent_action_id="workflow:test-wf:step:0",
+    )
+    _, audit_entry = audit_writer.appended[0]
+    assert str(audit_entry.payload.entry_core).startswith("cp-audit:")
+
+
+def test_revalidate_retry_same_synthesized_span_id_gets_distinct_f2_entries(
+    cost_chain: RuntimeCostAttributionChain,
+    audit_writer: _RecordingAuditWriter,
+    tmp_path: Path,
+) -> None:
+    """Regression guard — a REVALIDATE retry loop invokes `evaluate()` on the
+    SAME step multiple times, and this composer's `span_id` is a
+    *synthesized* `f"validator-evaluate-{workflow_id}-{step_id}"` string
+    that repeats IDENTICALLY across those calls (unlike the tool/LLM/webhook
+    composers' real per-attempt OTel span). Using that synthesized span_id
+    as the F2 disambiguator would collide and silently `IDEMPOTENT_NOOP`-
+    drop the second cost event. `burden_count` — the framework's monotonic
+    non-PASS counter (CP spec §25.4 invariant 5) — MUST be used instead."""
+    rate_table = _make_rate_table(cpu_rate_per_ms=Decimal("0.01"))
+    ledger_writer = _build_ledger_writer(tmp_path)
+    same_synthesized_span_id = "validator-evaluate-test-wf-step-0"
+    common = dict(
+        rate_table=rate_table,
+        cost_chain=cost_chain,
+        audit_writer=audit_writer,
+        validator_id="schema-validator",
+        execution_time_ms=10.0,
+        span_id=same_synthesized_span_id,
+        idempotency_key="validator-idem-revalidate",
+        parent_idempotency_key="parent-1",
+        workflow_id="test-wf",
+        parent_action_id="workflow:test-wf:step:0",
+        ledger_writer=ledger_writer,
+    )
+    # First evaluate() call: REVALIDATE outcome → burden_count=1 on this call.
+    attribute_validator_dispatch_cost(burden_count=1, **common)
+    # Retry evaluate() call on the SAME step: burden_count=2.
+    attribute_validator_dispatch_cost(burden_count=2, **common)
+
+    entries = read_ledger(ledger_writer.handle)
+    cost_entries = [e for e in entries if str(e.action_id).startswith("cost:")]
+    assert len(cost_entries) == 2, (
+        f"expected 2 distinct F2 entries for a 2-attempt REVALIDATE retry loop "
+        f"sharing the same synthesized span_id; got {len(cost_entries)} "
+        "(a span_id-keyed disambiguator would collide here)"
+    )
+    entry_cores = {str(e.payload.entry_core) for _, e in audit_writer.appended}
+    assert len(entry_cores) == 2, (
+        "each REVALIDATE attempt's audit entry must reference its OWN F2 anchor"
+    )

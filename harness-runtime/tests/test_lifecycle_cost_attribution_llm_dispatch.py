@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -30,6 +31,7 @@ from harness_cp.workflow_driver_types import (
     WorkflowStep,
 )
 from harness_is.state_ledger_entry_schema import Actor, ActorClass
+from harness_is.state_ledger_write import read_ledger
 from harness_od.cost_record_otel_serializer import COST_ATTRIBUTED_DECIMAL_ATTR
 from harness_od.rate_table_resolver import RateTableMissingError
 from harness_od.rate_table_v1 import RATE_TABLE_V1
@@ -40,6 +42,7 @@ from harness_runtime.lifecycle.cost_attribution_llm_dispatch import (
 from harness_runtime.lifecycle.llm_dispatch import (
     RuntimeLLMDispatcher,
 )
+from harness_runtime.lifecycle.state_ledger import LedgerWriter
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
@@ -358,6 +361,168 @@ def test_dispatcher_without_cost_substrate_silently_skips_cost_attribution() -> 
     )
     # Should complete without raising
     asyncio.run(dispatcher.dispatch(binding, step, step_context=step_context))
+
+
+# ---------------------------------------------------------------------------
+# B-23 — F2-write entry_core (real IS anchor, not fabricated cp-audit: marker)
+# ---------------------------------------------------------------------------
+
+
+def _build_ledger_writer(tmp_path: Path) -> LedgerWriter:
+    """Real `LedgerWriter` rooted in `tmp_path` — mirrors
+    `test_lifecycle_sub_agent_dispatch.py`'s `_build_ledger_writer`."""
+    from harness_is.jsonl_event_ledger_lifecycle import JsonlLedgerHandle
+
+    path = tmp_path / "state.jsonl"
+    path.touch()
+    handle = JsonlLedgerHandle(canonical_path=path, exists=True, entry_count=0)
+    return LedgerWriter(handle=handle, actor=_ACTOR)
+
+
+def test_ledger_writer_bound_produces_real_entry_core_full_chain(
+    cost_chain: RuntimeCostAttributionChain,
+    audit_writer: _RecordingAuditWriter,
+    tmp_path: Path,
+) -> None:
+    """B-23 full-chain witness: when `ledger_writer` is bound, the F2 entry
+    actually lands in the IS ledger AND the audit entry's `entry_core`
+    references that real action_id — not the fabricated
+    `cp-audit:<action_id>` marker."""
+    ledger_writer = _build_ledger_writer(tmp_path)
+    attribute_llm_dispatch_cost(
+        rate_table=RATE_TABLE_V1,
+        cost_chain=cost_chain,
+        audit_writer=audit_writer,
+        provider_name="anthropic",
+        model="claude-haiku-4-5",
+        span_id="f2-span-1",
+        parent_idempotency_key="parent-idem-1",
+        workflow_id="test-wf",
+        parent_action_id="workflow:test-wf:step:0",
+        input_tokens=1000,
+        output_tokens=500,
+        ledger_writer=ledger_writer,
+    )
+    entries = read_ledger(ledger_writer.handle)
+    cost_entries = [e for e in entries if str(e.action_id).startswith("cost:")]
+    assert len(cost_entries) == 1
+    real_action_id = str(cost_entries[0].action_id)
+    assert not real_action_id.startswith("cp-audit:")
+
+    _, audit_entry = audit_writer.appended[0]
+    assert str(audit_entry.payload.entry_core) == real_action_id
+
+
+def test_ledger_writer_unbound_preserves_fabricated_marker_fallback(
+    cost_chain: RuntimeCostAttributionChain,
+    audit_writer: _RecordingAuditWriter,
+) -> None:
+    """Backward compatibility — omitting `ledger_writer` preserves the
+    converter's pre-existing `cp-audit:<action_id>` fallback."""
+    attribute_llm_dispatch_cost(
+        rate_table=RATE_TABLE_V1,
+        cost_chain=cost_chain,
+        audit_writer=audit_writer,
+        provider_name="anthropic",
+        model="claude-haiku-4-5",
+        span_id="f2-span-2",
+        parent_idempotency_key="parent-idem-1",
+        workflow_id="test-wf",
+        parent_action_id="workflow:test-wf:step:0",
+        input_tokens=1000,
+        output_tokens=500,
+    )
+    _, audit_entry = audit_writer.appended[0]
+    assert str(audit_entry.payload.entry_core).startswith("cp-audit:")
+
+
+def test_repeat_dispatch_same_step_gets_distinct_f2_entries_not_noop_dropped(
+    cost_chain: RuntimeCostAttributionChain,
+    audit_writer: _RecordingAuditWriter,
+    tmp_path: Path,
+) -> None:
+    """Regression guard — two LLM-dispatch attempts (e.g. a retry) sharing
+    the same (workflow_id, parent_action_id) MUST persist two DISTINCT F2
+    entries, not silently collapse via `IDEMPOTENT_NOOP`."""
+    ledger_writer = _build_ledger_writer(tmp_path)
+    common = dict(
+        rate_table=RATE_TABLE_V1,
+        cost_chain=cost_chain,
+        audit_writer=audit_writer,
+        provider_name="anthropic",
+        model="claude-haiku-4-5",
+        parent_idempotency_key="parent-retry",
+        workflow_id="test-wf",
+        parent_action_id="workflow:test-wf:step:0",
+        input_tokens=100,
+        output_tokens=50,
+        ledger_writer=ledger_writer,
+    )
+    attribute_llm_dispatch_cost(span_id="attempt-1", **common)
+    attribute_llm_dispatch_cost(span_id="attempt-2", **common)
+
+    entries = read_ledger(ledger_writer.handle)
+    cost_entries = [e for e in entries if str(e.action_id).startswith("cost:")]
+    assert len(cost_entries) == 2, (
+        f"expected 2 distinct F2 entries for 2 retry attempts; got {len(cost_entries)}"
+    )
+    entry_cores = {str(e.payload.entry_core) for _, e in audit_writer.appended}
+    assert len(entry_cores) == 2
+
+
+def test_end_to_end_dispatch_with_ledger_writer_produces_real_entry_core(
+    cost_chain: RuntimeCostAttributionChain,
+    audit_writer: _RecordingAuditWriter,
+    tmp_path: Path,
+) -> None:
+    """End-to-end through `RuntimeLLMDispatcher.dispatch` (real active
+    workflow step) — the wired `ledger_writer` produces a real F2 entry_core,
+    not a fabricated marker."""
+    import asyncio
+
+    ledger_writer = _build_ledger_writer(tmp_path)
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": _FakeAnthropicAdapter()},
+        tracer_provider=TracerProvider(),
+        cost_chain=cost_chain,
+        audit_writer=audit_writer,
+        rate_table=RATE_TABLE_V1,
+        ledger_writer=ledger_writer,
+    )
+    binding = StepEffectiveBinding(
+        step_id="step-0",
+        model_binding=_DEFAULT_BINDING,
+        engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
+        override_applied=False,
+        persona_tier=PersonaTier.SOLO_DEVELOPER,
+    )
+    step = WorkflowStep(
+        step_id=StepID("step-0"),
+        step_kind=StepKind.INFERENCE_STEP,
+        step_payload={
+            "messages": [{"role": "user", "content": "hi"}],
+            "tools": None,
+            "params": {"max_tokens": 1},
+        },
+    )
+    step_context = StepExecutionContext(
+        workflow_id="wf",
+        parent_action_id="workflow:wf:step:0",
+        parent_gate_level=GateLevel.AUTO,
+        parent_sandbox_tier=SandboxTier.TIER_1_PROCESS,
+        parent_actor=_ACTOR,
+        parent_entry_hash="",
+        parent_idempotency_key="parent-e2e-key",
+        tenant_id=None,
+        step_index=0,
+    )
+    asyncio.run(dispatcher.dispatch(binding, step, step_context=step_context))
+
+    entries = read_ledger(ledger_writer.handle)
+    cost_entries = [e for e in entries if str(e.action_id).startswith("cost:")]
+    assert len(cost_entries) == 1
+    _, audit_entry = audit_writer.appended[0]
+    assert str(audit_entry.payload.entry_core) == str(cost_entries[0].action_id)
 
 
 _ = Mapping
