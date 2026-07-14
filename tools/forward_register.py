@@ -32,6 +32,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import re
 import sys
 from collections import Counter
@@ -104,6 +105,19 @@ def _prose_heading_lines(text: str) -> list[tuple[str, str]]:
         if heading_id is not None:
             pairs.append((heading_id, line))
     return pairs
+
+
+def _identity_digest(items: list[dict[str, Any]]) -> str:
+    """SHA-256 fingerprint of the sorted ``id:status`` pairs.
+
+    Aggregate per-status COUNTS alone can't catch two items swapping statuses while
+    the totals stay put (e.g. B-16 and B-17 trading `registered_finding` <->
+    `operator_gated`) — the same "same-count identity substitution" class the
+    B-35 evidence-matrix fix (this same register) already solved with an identical
+    digest technique. Never spells out a single id/status in the digest itself.
+    """
+    pairs = sorted(f"{r['id']}:{r['status']}" for r in items)
+    return hashlib.sha256(",".join(pairs).encode()).hexdigest()[:16]
 
 
 def load(path: Path = DEFAULT_LEDGER) -> dict[str, Any]:
@@ -204,6 +218,15 @@ def validate(data: dict[str, Any]) -> list[str]:
                     f"snapshot.{key}={snap.get(key)} but derived {key}={d[key]} "
                     f"— a row changed without a snapshot bump (forward-only transit?)"
                 )
+
+        expected_digest = _identity_digest(items)
+        if snap.get("identity_digest") != expected_digest:
+            violations.append(
+                f"snapshot.identity_digest={snap.get('identity_digest')!r} but derived "
+                f"{expected_digest!r} — two items may have swapped statuses while "
+                f"the aggregate counts stayed put (the count checks above can't catch "
+                f"this; bump identity_digest on every real transit too)"
+            )
 
     return violations
 

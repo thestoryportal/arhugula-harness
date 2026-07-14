@@ -54,6 +54,7 @@ def test_derived_counts_match_snapshot_pin() -> None:
         "closed",
     ):
         assert d[key] == snap[key], f"{key}: derived {d[key]} != snapshot {snap[key]}"
+    assert forward_register._identity_digest(data["items"]) == snap["identity_digest"]
 
 
 def test_contract_closed_items_carry_a_pr_citation() -> None:
@@ -194,6 +195,19 @@ def test_negative_status_flip_without_snapshot_bump_fails() -> None:
         r["status"] = "closed"
         r["pr"] = "#999"
         # snapshot NOT bumped -> counts drift -> caught
+
+    assert _violates(m)
+
+
+def test_negative_status_swap_with_unchanged_counts_fails() -> None:
+    """Two items trading statuses (aggregate counts unaffected) must still be caught
+    -- the exact class a count-only pin structurally cannot detect."""
+
+    def m(data):
+        a = next(r for r in data["items"] if r["status"] == "registered_finding")
+        b = next(r for r in data["items"] if r["status"] == "operator_gated")
+        a["status"], b["status"] = b["status"], a["status"]
+        # every count stays identical -- only identity_digest can catch this
 
     assert _violates(m)
 

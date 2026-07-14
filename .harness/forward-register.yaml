@@ -33,8 +33,11 @@
 #   closed                 — built + merged, or foreclosed/superseded; kept for history.
 #
 # FORWARD-ONLY: a real transit (an item opens/closes, a new one surfaces) edits the
-# row AND bumps the `snapshot:` block in the SAME commit — mirrors arc-ledger.yaml's
-# own forward-only discipline. `tools/forward_register.py --check` is the CI gate.
+# row AND bumps the `snapshot:` block (counts AND `identity_digest`) in the SAME
+# commit — mirrors arc-ledger.yaml's own forward-only discipline.
+# `identity_digest` = sha256 of the sorted "id:status" pairs; catches two items
+# swapping statuses while the aggregate counts stay put (a plain count pin can't).
+# `tools/forward_register.py --check` is the CI gate.
 
 snapshot:
   total: 39
@@ -44,6 +47,7 @@ snapshot:
   operator_gated: 2
   held: 1
   closed: 22
+  identity_digest: "e94f6199f8840c15"
   source: ".harness/post-phase-8-forward-register.md"
 
 items:
