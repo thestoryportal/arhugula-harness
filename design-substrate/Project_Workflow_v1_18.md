@@ -1,0 +1,76 @@
+# Project Workflow — v1.18 (delta over v1.17)
+
+---
+
+## Change-note (v1.17 -> v1.18)
+
+**Scope of revision.** Narrow additive amendment to §7.5.2, cataloguing one new process discipline: **PD-8 mutation-probe-as-load-bearing-witness**. v1.17's PD-7 disposition-label-is-a-claim, v1.16's PD-6 composed-chain non-vacuity witness, v1.15's PD-5 grounding-first producer/slice discovery, and all v1.14 §7.5 scaffold content are preserved as predecessor body; v1.18 adds exactly one discipline plus adjacent observations and footer. ZERO §7.4 / §7.4.7 amendment; ZERO contract change; ZERO retirement-event filing; ZERO production-code change; ZERO cross-axis cascade.
+
+**Trigger (R-600 cadence-8, 2026-07-14).** `R-600-pattern-bake-in-sweep` reached its next cadence after the cadence-7 survey at post-PR-973 (11 commits at cadence-7 itself, plus PRs #976–#998 since — well past the ~10-PR interval). Cadence-7 flagged one card-frontier token as "not yet consolidated" rather than promoting or dropping it: the mutation-probe technique (deliberately break the code a regression test is supposed to pin, confirm the test fails, then restore) was recurring across independent arcs but lived only as sub-content inside a reviewer-ladder tooling file (`codex-out-of-family-reviewer.md`), absent from a dedicated, independently-named entry. That consolidation has since happened: `mutation-probe-load-bearing-witness.md` now exists as its own named, citable memory entry with explicit multi-arc provenance. This cadence's survey (file-delta audit since the exact cadence-7 close timestamp, `2026-07-14T00:49:43-06:00`, per the established cadence-6/7 discriminator) confirms it clears the §7.5.1 gate.
+
+**Provenance note.** The 3 independent arcs behind this discipline (PR #927, 2026-07-11; PR #933, 2026-07-11; PR #972 / `B-26`, 2026-07-14) span 2 distinct calendar days and 3 distinct build arcs across 2 different axes (CP-axis cache-warmup family; IS-axis hash-chain verification) — not a same-session/same-lesson repetition (the cadence-2 producer-discovery discriminator: same-day-same-session-same-lesson collapses to one instance). #927 and #933, though same-day, are two different sibling PRs within the B-18-3C-PREWARM family (CASCADE vs. ORCHESTRATOR_WORKERS extensions) applying the technique to two different normative lines; #972 is a wholly separate arc (IS hash-chain rotation-verification, 3 days later, this session) applying it 4 times independently within one PR. This is a **newly-consolidated** discipline per the PD-7 provenance-honesty framing: the underlying behavior recurred across arcs before this cadence; the named, citable pattern consolidated only within this inter-cadence window (memory file mtime 2026-07-14T00:32:48-06:00, itself dated by its own "Card-frontier note (R-600 cadence-7...)" cross-reference).
+
+**Authority anchor.** v1.14 §7.5.1 inclusion gate + §7.5.4 cross-catalogue discriminator + §7.5.3 OPEN accumulation clause + `R-600-pattern-bake-in-sweep.md` cadence-7 card-frontier flag + cadence-8 survey evidence. This amendment promotes the recurring lesson that a regression test's green result is not, by itself, proof the test discriminates the fix from its absence — that requires an explicit fault-injection check.
+
+**§7.5.1 inclusion-gate application.**
+
+| Gate | Finding |
+|---|---|
+| Instance-cardinality >=2 of independent arcs | PASS. 3 distinct arcs across 2 calendar days and 2 axes, each a genuinely separate build: PR #927 (2026-07-11, CP `B-18-3C-PREWARM-CASCADE` — deleting the normative `task.result()` resurface line did not raise, confirming the pin); PR #933 (2026-07-11, CP `B-18-PREWARM-OW` — out-of-family Codex review explicitly requested the check on a different normative line and caught that its deletion did not raise); PR #972 / `B-26` (2026-07-14, IS hash-chain rotation-verification — 4 independent mutation-probes across the same PR: the hash-chain-succeeded gate, the downstream-step-blocking gate, and the empty-ledger-fails gate, each confirmed by reverting and observing the expected test failure before restoring). |
+| Genuinely §7.5-shaped | PASS. This is a verification-sequencing discipline: after a regression test is written and green, prove it is load-bearing via fault injection before trusting it. It is not stale-carry-text disposition (§7.4.7) and not byte-exact claim grammar (§7.4.1-§7.4.6). |
+| No canonical home elsewhere | PASS with cite-don't-relocate to PD-3 and PD-6. PD-3 requires matching verification *shape* to the claim (grep vs. e2e); PD-6 requires proving a *composed chain* is real, not proxied. Neither states the narrower, sharper rule that a test **as written** must be shown to discriminate the fix from its absence — a test can pass at the right verification depth, through the real composed chain, and still be green for the wrong reason (a fixture that accidentally satisfies both the old and new code paths, or an assertion weaker than the claim). PD-8 is that missing check. |
+
+---
+
+## §1 Amendment to §7.5.2
+
+### §7.5.2 Additive entry catalogued at v1.18
+
+| # | Discipline | Statement | Independent-instance anchor | Application shape | Cross-reference |
+|---|---|---|---|---|---|
+| **PD-8** | **mutation-probe-as-load-bearing-witness** | When a fix's correctness rests on "this regression test proves it," don't stop at green: temporarily revert the fix (comment it out, hardcode the old value, or otherwise reintroduce the exact defect), re-run the specific test, confirm it fails with the EXPECTED assertion error (not an unrelated crash), then restore the fix and re-verify green. A test can be green for the wrong reason — it never exercises the branch that would fail under the bug, its fixture accidentally satisfies both the old and new code paths, or it asserts a weaker property than the one actually claimed — and mutation-probing is the cheapest way to prove the test discriminates the fix from its absence rather than merely happening to pass. | **3 independent arcs across 2 axes**: PR #927 (2026-07-11, CP `B-18-3C-PREWARM-CASCADE`); PR #933 (2026-07-11, CP `B-18-PREWARM-OW`, distinct sibling arc, Codex-requested); PR #972 / `B-26` (2026-07-14, IS hash-chain rotation-verification, 4 independent probes in one PR). See change-note provenance note above and `R-600-pattern-bake-in-sweep.md` cadence-7 card-frontier flag + cadence-8 §1-§2 for the per-arc detail. | After writing a regression test for a real bug/gap: (1) temporarily revert just the fix (comment out, hardcode the old value, or otherwise reintroduce the exact defect); (2) re-run the specific test and confirm it fails with the EXPECTED assertion error, not an unrelated crash; (3) restore the fix (via file-copy backup or direct string-replace-back — never `git checkout --`, which wipes all uncommitted work, not just the mutation) and re-verify green. Especially valuable for branch-blocking/gating logic, empty/absent-evidence guards, and any fix a decorrelated reviewer flagged as suspect. Cheapest as a scripted swap-mutate-run-restore, not a manual multi-minute detour. | memory `[[mutation-probe-load-bearing-witness]]`, `[[safe-mutation-probe-no-git-checkout-restore]]` (the git-safety corollary for the restore step). Adjacent to PD-3 (`[[verification-shape-sharpened-grep-vs-e2e]]` — matching verification *depth* to the claim) and PD-6 (`[[full-chain-witness-not-half-proofs]]` — proving the *chain* is real); PD-8 is the narrower, sharper check that the test **as written** actually discriminates the fix from its absence — cite-don't-relocate rather than merging into either. |
+
+---
+
+## §2 Sections preserved verbatim at v1.18
+
+Per delta-only convention, v1.18 touches ONLY this file's change-note, §1 PD-8 additive entry, §3 adjacent observations, and footer. The following are PRESERVED VERBATIM at predecessor-body layer:
+
+- v1.17 PD-7 disposition-label-is-a-claim and adjacent observations.
+- v1.16 PD-6 composed-chain non-vacuity witness and adjacent observations.
+- v1.15 PD-5 grounding-first producer/slice discovery and adjacent observations.
+- v1.14 §7.5 scaffold, §7.5.1 inclusion gate, PD-1 through PD-4, §7.5.3 parked candidates, and §7.5.4 cross-catalogue discriminator.
+- §7.4.1-§7.4.6 fidelity-grammar and §7.4.7 stale-carry-text disposition discipline.
+- v1.13 + v1.12 + v1.11 + v1.10 + v1.9 + v1.8 historical anchors.
+
+---
+
+## §3 Adjacent observations
+
+(a) **PD-8 is narrower than "write good tests."** It applies specifically to the moment right after a regression test is written for a real bug/gap and goes green — the discipline is proving THAT SPECIFIC test discriminates the fix from its absence, not general test-quality or coverage discussion (which PD-3/PD-6 already partially cover from adjacent angles).
+
+(b) **PD-8 complements PD-3 and PD-6, it does not replace either.** PD-3 answers "does the verification shape (grep vs. e2e) match the depth of the claim being verified?" PD-6 answers "does the witness prove the real producer -> shared-surface -> consumer chain, not a proxy?" PD-8 answers a question that survives both: "even granting the right depth and the right chain, does the test as written actually fail when the fix is absent?" A test can satisfy PD-3 and PD-6 and still be green-by-construction if it never truly exercises the failing branch.
+
+(c) **Cadence-7's other flagged/touched tokens are not promoted here.** `codex-out-of-family-reviewer.md`'s own new content this window (model-upgrade tooling note; the two review-ritual sharpenings that seeded this PD-8 candidacy) remains reviewer-ladder tooling guidance, already homed. `fanout-pause-per-strategy-carrier.md`'s new content (the `B-21` cross-carrier port byte-compat lesson) remains domain-specific CP-axis runtime-implementation mechanics per the cadence-5/cadence-7 "dedicated home, not §7.5" precedent (`new-surface-audit-hash-and-config-not-carrier`).
+
+(d) **No §7.4.7 absorption owed.** Cadence-8 did not surface a new stale-carry-text disposition species (the 8th independent null-result surfacing across cadence-1 through cadence-8). The promoted rule is process-discipline-shaped and lands under §7.5 only.
+
+---
+
+## Filing footer
+
+| Field | Value |
+|---|---|
+| Version | v1.18 (narrow additive amendment to §7.5.2 adding PD-8 mutation-probe-as-load-bearing-witness; v1.17 PD-7, v1.16 PD-6, v1.15 PD-5, and v1.14 §7.5 scaffold preserved as predecessor body) |
+| Trigger | `R-600-pattern-bake-in-sweep` cadence-8, 2026-07-14 |
+| Supersedes | v1.17 as current workflow head only; all v1.17 bodies preserved verbatim as predecessor |
+| Scope of revision | SUBSTANTIVE workflow-grammar amendment: NEW PD-8 entry + adjacent observations + footer. ZERO §7.4/§7.4.7 amendment; ZERO C-*-NN contract change; ZERO production-code change; ZERO cross-axis cascade. Co-publication: workspace `CLAUDE.md` governance pointer bump + clearance marker. |
+| Cross-axis cascade | ZERO. v1.18 is process-discipline canonicalization; no per-axis spec / plan / CXA / production code touch. |
+| Authority anchor | v1.14 §7.5.1 inclusion gate + §7.5.4 cross-catalogue discriminator + §7.5.3 OPEN accumulation clause + `R-600-pattern-bake-in-sweep.md` cadence-7 card-frontier flag + cadence-8 survey |
+| Predecessor | v1.17 (§7.5 PD-7 disposition-label-is-a-claim) |
+| Successor | (none — current canonical) |
+| Date | 2026-07-14 |
+
+---
+
+*End of `Project_Workflow_v1_18.md` (delta over v1.17). v1.8 + v1.9 + v1.10 + v1.11 + v1.12 + v1.13 + v1.14 + v1.15 + v1.16 + v1.17 PRESERVED VERBATIM as historical anchors per delta-only-spec-file convention.*
