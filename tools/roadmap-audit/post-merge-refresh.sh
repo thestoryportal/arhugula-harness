@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Roadmap post-merge refresh reminder — fires after a `gh pr merge` Bash call.
 # Implements the §12.2 post-PR-merge audit toil as an ADVISORY reminder:
-# it does NOT edit the dashboard (that needs judgment about recently_completed /
+# it does NOT edit roadmap_status.md (that needs judgment about recently_completed /
 # next_action). It detects "a substantive PR just merged → a terminating refresh
 # is owed", PRE-COMPUTES the new workspace_state_hash, and injects a checklist so
 # the mechanical hash-by-hand step is gone.
@@ -32,8 +32,8 @@ PROJECT_DIR=$(hook_project_dir)
 [ -z "$PROJECT_DIR" ] && exit 0
 cd "$PROJECT_DIR" || exit 0
 
-DASHBOARD=".harness/roadmap_status.md"
-[ -f "$DASHBOARD" ] || exit 0
+ROADMAP_STATUS=".harness/roadmap_status.md"
+[ -f "$ROADMAP_STATUS" ] || exit 0
 
 # --- Read the tool command from PostToolUse stdin JSON. -----------------------
 # PostToolUse delivers {"tool_name":"Bash","tool_input":{"command":"..."},...}.
@@ -63,27 +63,27 @@ COMPARE_REF="${POST_MERGE_REFRESH_REF:-origin/${DEFAULT_BRANCH}}"
 ORIGIN_HEAD=$(git rev-parse "$COMPARE_REF" 2>/dev/null | head -c 8)
 [ -z "$ORIGIN_HEAD" ] && exit 0
 
-# Dashboard's pinned git_head (first 8 hex after `git_head` cell).
-DASHBOARD_HEAD=$(grep -E '\| *`git_head`' "$DASHBOARD" 2>/dev/null | head -1 | grep -oE '[a-f0-9]{8}' | head -1)
-[ -z "$DASHBOARD_HEAD" ] && DASHBOARD_HEAD=$(grep -iE 'git_head' "$DASHBOARD" 2>/dev/null | head -1 | grep -oE '[a-f0-9]{8}' | head -1)
+# roadmap_status.md's pinned git_head (first 8 hex after `git_head` cell).
+STORED_HEAD=$(grep -E '\| *`git_head`' "$ROADMAP_STATUS" 2>/dev/null | head -1 | grep -oE '[a-f0-9]{8}' | head -1)
+[ -z "$STORED_HEAD" ] && STORED_HEAD=$(grep -iE 'git_head' "$ROADMAP_STATUS" 2>/dev/null | head -1 | grep -oE '[a-f0-9]{8}' | head -1)
 
 # No advance → failed/no-op merge → stay silent.
-[ "$ORIGIN_HEAD" = "$DASHBOARD_HEAD" ] && exit 0
+[ "$ORIGIN_HEAD" = "$STORED_HEAD" ] && exit 0
 
 # The merged tip is itself a terminating refresh → no follow-on owed → stay silent.
 # §12.2.1 defines a terminating refresh as BOTH (a) the title prefix AND (b) a
-# dashboard-only changed-file set (roadmap_status.md + optionally the regenerated
-# tools/dashboard/roadmap.html — see hook_is_dashboard_only_set). Misclassifying an
-# HTML-regenerating refresh as substantive here is the worst case: it would emit
-# "refresh owed" for a refresh → spawn another refresh → the §12.2.1 recursion the
-# fixed point exists to STOP. Checking the title alone would symmetrically wrongly
-# suppress the owed reminder for a substantive PR mis-titled with the reserved prefix
-# (or a merge whose tip is a refresh over substantive commits). Require both.
+# roadmap-status-only changed-file set (EXACTLY roadmap_status.md — see
+# hook_is_roadmap_status_only_set). Misclassifying a genuine refresh as substantive
+# here is the worst case: it would emit "refresh owed" for a refresh → spawn another
+# refresh → the §12.2.1 recursion the fixed point exists to STOP. Checking the title
+# alone would symmetrically wrongly suppress the owed reminder for a substantive PR
+# mis-titled with the reserved prefix (or a merge whose tip is a refresh over
+# substantive commits). Require both.
 ORIGIN_TITLE=$(git log -1 --format=%s "$COMPARE_REF" 2>/dev/null)
 if printf '%s' "$ORIGIN_TITLE" | grep -qE '^ops: roadmap status refresh '; then
   CHANGED=$(git show --name-only --pretty=format: "$COMPARE_REF" 2>/dev/null | grep -v '^$' | sort -u)
-  if hook_is_dashboard_only_set "$CHANGED"; then
-    exit 0   # genuine dashboard-only terminating refresh → no follow-on owed
+  if hook_is_roadmap_status_only_set "$CHANGED"; then
+    exit 0   # genuine roadmap-status-only terminating refresh → no follow-on owed
   fi
 fi
 
@@ -103,4 +103,4 @@ FORKS=$(git ls-tree --name-only "$COMPARE_REF" .harness/ 2>/dev/null | grep -cE 
 BATCH=$(git ls-tree --name-only "$COMPARE_REF" .harness/ 2>/dev/null | grep -E '/phase-7d-retirement-events-batch-.*\.md$' | sort -V | tail -1)
 COMPUTED=$(hook_state_hash "$ORIGIN_HEAD" "$PRS" "$FORKS" "$BATCH")
 
-emit "[ROADMAP] substantive merge detected (origin/${DEFAULT_BRANCH} @ ${ORIGIN_HEAD}: \"${ORIGIN_TITLE}\"). A terminating refresh is owed per §12.2 (Hook A will NOT catch its own merge). Steps: (1) git -C \"$PROJECT_DIR\" fetch && git merge --ff-only origin/${DEFAULT_BRANCH}; (2) update ${DASHBOARD}: workspace_state_hash=${COMPUTED}, git_head=${ORIGIN_HEAD}, last_refreshed=now, prepend recently_completed, re-derive next_action; (3) commit title prefix 'ops: roadmap status refresh ' (dashboard-only → §12.2.1 fixed point, no recursion)."
+emit "[ROADMAP] substantive merge detected (origin/${DEFAULT_BRANCH} @ ${ORIGIN_HEAD}: \"${ORIGIN_TITLE}\"). A terminating refresh is owed per §12.2 (Hook A will NOT catch its own merge). Steps: (1) git -C \"$PROJECT_DIR\" fetch && git merge --ff-only origin/${DEFAULT_BRANCH}; (2) update ${ROADMAP_STATUS}: workspace_state_hash=${COMPUTED}, git_head=${ORIGIN_HEAD}, last_refreshed=now, prepend recently_completed, re-derive next_action; (3) commit title prefix 'ops: roadmap status refresh ' (roadmap-status-only → §12.2.1 fixed point, no recursion)."

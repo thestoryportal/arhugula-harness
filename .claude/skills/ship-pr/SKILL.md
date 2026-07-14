@@ -1,6 +1,6 @@
 ---
 name: ship-pr
-description: Open a PR for the current arc and run the post-merge fixed-point refresh checklist correctly. Use when the operator says "/ship-pr", "ship it", "open the PR", "land this", or when an arc is built+green and ready to merge. Codifies the §12.2 post-merge audit + the §12.2.1 terminating-refresh fixed-point so the dashboard refresh is done right (and does not recurse). Do NOT use to author code (that is the arc itself) — use it for the PR + refresh ritual.
+description: Open a PR for the current arc and run the post-merge fixed-point refresh checklist correctly. Use when the operator says "/ship-pr", "ship it", "open the PR", "land this", or when an arc is built+green and ready to merge. Codifies the §12.2 post-merge audit + the §12.2.1 terminating-refresh fixed-point so the roadmap_status.md refresh is done right (and does not recurse). Do NOT use to author code (that is the arc itself) — use it for the PR + refresh ritual.
 ---
 
 # ship-pr — PR + fixed-point refresh (U-HK-23)
@@ -44,12 +44,12 @@ This is the step most often done wrong. After the PR merges:
    begins **exactly** `ops: roadmap status refresh ` AND the **only** changed file is
    `.harness/roadmap_status.md`. Both conditions are required — a refresh-titled commit that
    touches any other file is NOT terminating (the §12.2.1 false-negative the hooks guard
-   against). The dashboard hash then legitimately lags HEAD by one commit; the next §12.1
-   audit recognizes the lag (step-6 carve-out) and does NOT spawn another. **Do not spawn a
-   refresh PR for a refresh PR.**
+   against). The roadmap_status.md hash then legitimately lags HEAD by one commit; the next
+   §12.1 audit recognizes the lag (step-6 carve-out) and does NOT spawn another. **Do not
+   spawn a refresh PR for a refresh PR.**
 3. **Bundled changes drop the prefix.** If the PR carries substantive non-refresh changes
-   alongside a dashboard touch, its title MUST NOT use the reserved prefix (§12.2.1), and a
-   follow-on terminating refresh is owed.
+   alongside a roadmap_status.md touch, its title MUST NOT use the reserved prefix
+   (§12.2.1), and a follow-on terminating refresh is owed.
 
 ## R-NNN closure cascade — §12.5.3
 

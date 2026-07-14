@@ -31,7 +31,7 @@ This repository is developed primarily with Claude Code CLI. For Codex, this fil
 - Start with the narrowest meaningful test or static check.
 - For PR-ready code or governance changes, run `just check` unless the change is documentation-only and a narrower documented gate is sufficient.
 - For governance/context changes, also verify instruction discovery or pointer integrity when applicable.
-- For dashboard/status changes, update `.harness/roadmap_status.md` first, regenerate `tools/dashboard/roadmap.html` only through `tools/dashboard/generate.py`, and do not hand-maintain volatile masthead facts or counts in the HTML. The generator owns live `HEAD` / `LAST` / `HASH` / `OPEN FORKS` display values plus derived closure counts.
+- For roadmap/status changes, update `.harness/roadmap_status.md` directly (recompute `workspace_state_hash`, `recently_completed`, `next_action` per CLAUDE.md §12.2); do not hand-maintain volatile facts inconsistently with the recipe there.
 - Run `just codex-closeout` before final response, commit, or PR; it writes a fresh pre-closeout checkpoint and hard-fails if the guard cannot verify it. Resolve hard findings and report warnings explicitly.
 - If `.harness/codex_loop_state.json` exists, closeout also verifies the active autonomous loop has reached every pre-closeout gate from linked worktree readiness through decorrelated review.
 - Before claiming green, report exactly which checks ran and which did not.
@@ -41,4 +41,4 @@ This repository is developed primarily with Claude Code CLI. For Codex, this fil
 - Every substantive Codex setup change should land on a branch and open a PR.
 - Strict CI gates are required: lint, typecheck, tests, semantic overlay, substitution ledger, and axis isolation when CI provides them.
 - `just codex-review` is for out-of-family review of concrete diffs; it complements Claude advisor review and does not replace transcript-aware advisor judgment.
-- PR bodies must name tracking surfaces updated or explicitly state why roadmap/status/dashboard/ledger updates were not applicable.
+- PR bodies must name tracking surfaces updated or explicitly state why roadmap/status/ledger updates were not applicable.

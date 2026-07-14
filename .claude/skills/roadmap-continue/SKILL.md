@@ -12,14 +12,14 @@ the source of truth (the §10.5 stale-carry failure mode). Read the cited sectio
 ## The loop (each step is governed by a canonical section — follow it there)
 
 1. **Session-start audit — CLAUDE.md §12.1.** Read `.harness/roadmap_status.md`; recompute
-   `workspace_state_hash` (recipe at `Project_Roadmap_v1.md` §7.1); compare to the
-   dashboard. **Mismatch → HALT + reconcile (§12.3).** Honor the §12.1 step-6 fixed-point
+   `workspace_state_hash` (recipe at `Project_Roadmap_v1.md` §7.1); compare to the recorded
+   value. **Mismatch → HALT + reconcile (§12.3).** Honor the §12.1 step-6 fixed-point
    carve-out: a one-commit lag after a terminating refresh PR is *expected*, not drift —
    silently update, do not spawn a refresh. (The SessionStart hook usually pre-injects the
    `[ROADMAP]` block; if so, trust it.)
-2. **Derive the next action — `Project_Roadmap_v1.md` §4.** Take the dashboard's `## Next
-   action`. If the auto-`ACTIVE` queue is empty, apply the **no-parking directive (§12.4.1)**:
-   pick the highest-value forward item, do NOT stop citing "operator-owned."
+2. **Derive the next action — `Project_Roadmap_v1.md` §4.** Take `roadmap_status.md`'s
+   `## Next action`. If the auto-`ACTIVE` queue is empty, apply the **no-parking directive
+   (§12.4.1)**: pick the highest-value forward item, do NOT stop citing "operator-owned."
 3. **Ground first.** Before authoring, empirically verify the item's premise at HEAD
    (`[[r-cxa-seam-wiring-is-producer-discovery]]`, `[[grounding-reveals-claude-closeable-slice-close-honestly]]`). Grounding usually reveals a real Claude-closeable slice inside a
    nominally "gated" item — or reveals the genuine gate. When the premise involves a

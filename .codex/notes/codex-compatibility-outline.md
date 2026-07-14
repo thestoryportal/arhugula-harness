@@ -13,9 +13,9 @@ This note codifies the operator-approved Codex setup direction for this reposito
    - `PermissionRequest`: paid-provider, credential, destructive, and network review notes.
    - `Stop`: verification and PR-state reminder.
    - `SessionStart` and `Stop` also run `tools/codex_context_guard.py` so context
-     freshness, worktree isolation, dashboard drift, and closeout obligations are
-     materialized from HEAD instead of remembered. Hard guard findings propagate
-     as hook failures.
+     freshness, worktree isolation, roadmap_status.md drift, and closeout
+     obligations are materialized from HEAD instead of remembered. Hard guard
+     findings propagate as hook failures.
 5. Keep reusable workflows as Codex skills under `.agents/skills` or installed user skills. Package as plugins only for distribution.
    - Repo-local shims now live under `.agents/skills/` for overlay queries, roadmap continuation, self-heal, PR shipping, and CLAUDE governance optimization.
 6. Use `.codex/notes/deterministic-context-workflow.md` as the Codex source of

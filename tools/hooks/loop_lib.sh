@@ -207,7 +207,7 @@ _loop_gc_merged_oid() {
 # copy lives in the main checkout and is never touched), and a reaped worktree is merged
 # /done, so its cache has no forward value — unlike .env/harness.toml. Keep roughly in
 # sync with the regenerable section of .gitignore.
-_LOOP_GC_REGEN_IGNORED='^!! (.*/)?(\.harness/|__pycache__/|.*\.py[co]|.*\.egg-info/|\.pytest_cache/|\.ruff_cache/|\.pyright/|\.mypy_cache/|\.venv/|venv/|env/|dist/|build/|htmlcov/|coverage\.xml|\.coverage|\.DS_Store|.*\.swp|\.vscode/|\.idea/|node_modules/)|^!! (\.claude/(skills/|settings\.local\.json|scheduled_tasks\.lock)|tools/dashboard/|dashboard-design/|\.impeccable/)'
+_LOOP_GC_REGEN_IGNORED='^!! (.*/)?(\.harness/|__pycache__/|.*\.py[co]|.*\.egg-info/|\.pytest_cache/|\.ruff_cache/|\.pyright/|\.mypy_cache/|\.venv/|venv/|env/|dist/|build/|htmlcov/|coverage\.xml|\.coverage|\.DS_Store|.*\.swp|\.vscode/|\.idea/|node_modules/)|^!! (\.claude/(skills/|settings\.local\.json|scheduled_tasks\.lock)|\.impeccable/)'
 
 # Echo a worktree's reap-BLOCKING local state (empty = safe to reap). `--ignored`
 # surfaces ignored entries (`!! ` prefix) that `git worktree remove` would delete; we

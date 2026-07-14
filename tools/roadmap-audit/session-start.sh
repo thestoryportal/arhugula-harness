@@ -26,7 +26,7 @@ PROJECT_DIR=$(hook_project_dir)
 [ -z "$PROJECT_DIR" ] && exit 0
 cd "$PROJECT_DIR" || exit 0
 
-DASHBOARD=".harness/roadmap_status.md"
+ROADMAP_STATUS=".harness/roadmap_status.md"
 ROADMAP="Project_Roadmap_v1.md"
 
 # Pending operator-input summary from the last loop run (empty when none / no ledger).
@@ -43,8 +43,8 @@ fi
 # the last unattended loop run deferred for them.
 emit() { hook_emit "SessionStart" "$1${_HIL}"; }
 
-[ -f "$DASHBOARD" ] || emit "[ROADMAP] absent — see Project_Roadmap_v1.md §7"
-[ -f "$ROADMAP" ] || emit "[ROADMAP] dashboard exists but roadmap absent"
+[ -f "$ROADMAP_STATUS" ] || emit "[ROADMAP] absent — see Project_Roadmap_v1.md §7"
+[ -f "$ROADMAP" ] || emit "[ROADMAP] roadmap_status.md exists but roadmap absent"
 
 # Compute current workspace_state_hash per CLAUDE.md §12.1 step 2 recipe.
 HEAD=$(git rev-parse HEAD 2>/dev/null | head -c 8)
@@ -53,51 +53,50 @@ FORKS=$(ls .harness/class_1_fork_*.md .harness/class_2_fork_*.md 2>/dev/null | w
 BATCH=$(ls .harness/phase-7d-retirement-events-batch-*.md 2>/dev/null | sort -V | tail -1)
 COMPUTED=$(hook_state_hash "$HEAD" "$PRS" "$FORKS" "$BATCH")
 
-# Extract stored hash + next_action from dashboard.
-DASHBOARD_HASH=$(grep '`workspace_state_hash`' "$DASHBOARD" 2>/dev/null | head -1 | grep -oE '[a-f0-9]{12}' | head -1)
-NEXT=$(hook_roadmap_next "$DASHBOARD")
+# Extract stored hash + next_action from roadmap_status.md.
+STORED_HASH=$(grep '`workspace_state_hash`' "$ROADMAP_STATUS" 2>/dev/null | head -1 | grep -oE '[a-f0-9]{12}' | head -1)
+NEXT=$(hook_roadmap_next "$ROADMAP_STATUS")
 
 PR_COUNT=$([ -z "$PRS" ] && echo 0 || echo "$PRS" | tr ',' '\n' | grep -c .)
 
-# Recurrence guard (CLAUDE.md §12.3 / dashboard drift-log line-92 precedent): when on the
+# Recurrence guard (CLAUDE.md §12.3 / roadmap drift-log line-92 precedent): when on the
 # default branch, detect a local checkout trailing origin. The base hook reads only the LOCAL
-# dashboard + HEAD, so a checkout behind origin yields a globally-stale next-action that still
-# looks locally-consistent (the Cluster A/B drift, 2026-05-31). Only fires on the default branch
-# so feature-branch worktrees that intentionally trail main get no noise. Best-effort fetch is
-# bounded (and a no-op offline) so the hook can never hang — it falls back to the existing origin
-# ref, which sibling worktrees/jobs keep fresh.
+# roadmap_status.md + HEAD, so a checkout behind origin yields a globally-stale next-action
+# that still looks locally-consistent (the Cluster A/B drift, 2026-05-31). Only fires on the
+# default branch so feature-branch worktrees that intentionally trail main get no noise.
+# Best-effort fetch is bounded (and a no-op offline) so the hook can never hang — it falls
+# back to the existing origin ref, which sibling worktrees/jobs keep fresh.
 DEFAULT_BRANCH=$(hook_default_branch)
 CURRENT_BRANCH=$(git symbolic-ref --quiet --short HEAD 2>/dev/null || echo "")
 if [ "$CURRENT_BRANCH" = "$DEFAULT_BRANCH" ]; then
   hook_bounded 4 git fetch --quiet --no-tags origin "$DEFAULT_BRANCH" >/dev/null 2>&1 || true
   BEHIND=$(git rev-list --count "HEAD..origin/${DEFAULT_BRANCH}" 2>/dev/null || echo 0)
   if [ "${BEHIND:-0}" -gt 0 ] 2>/dev/null; then
-    emit "[ROADMAP] behind-origin=${BEHIND} on ${DEFAULT_BRANCH} — fast-forward (git merge --ff-only origin/${DEFAULT_BRANCH}) before deriving next-action; dashboard next=${NEXT:-?} may be stale (§12.3 / line-92 precedent)."
+    emit "[ROADMAP] behind-origin=${BEHIND} on ${DEFAULT_BRANCH} — fast-forward (git merge --ff-only origin/${DEFAULT_BRANCH}) before deriving next-action; roadmap next=${NEXT:-?} may be stale (§12.3 / line-92 precedent)."
   fi
 fi
 
-if [ "$COMPUTED" = "$DASHBOARD_HASH" ]; then
+if [ "$COMPUTED" = "$STORED_HASH" ]; then
   emit "[ROADMAP] hash=ok next=${NEXT:-?} in_flight=${PR_COUNT} forks=${FORKS}"
 fi
 
 # Hash mismatch — check §12.2.1 fixed-point carve-out. A terminating refresh requires
 # BOTH (a) the reserved commit-title prefix "ops: roadmap status refresh " AND (b) a
-# dashboard-only changed-file set (roadmap_status.md + optionally the regenerated
-# tools/dashboard/roadmap.html — see hook_is_dashboard_only_set for the §12.2.1 set).
-# The title is format-agnostic on the post-NNN suffix — refreshes have been titled
-# `post-PR-NNN` (early) and `post-#NNN` / `post-#NNN/#NNN` / `post-#NNN (...)` (later) —
-# so we match the prefix, not a specific NNN format, keeping the lag-expected fixed
-# point robust to either convention. The dashboard-only conjunct is load-bearing:
-# keying on the title alone would let a substantive commit mis-titled with the reserved
-# prefix suppress a genuine drift halt (the false negative post-merge-refresh.sh +
-# prompt-context.sh also guard).
+# roadmap-status-only changed-file set (EXACTLY roadmap_status.md — see
+# hook_is_roadmap_status_only_set for the §12.2.1 set). The title is format-agnostic on
+# the post-NNN suffix — refreshes have been titled `post-PR-NNN` (early) and `post-#NNN`
+# / `post-#NNN/#NNN` / `post-#NNN (...)` (later) — so we match the prefix, not a specific
+# NNN format, keeping the lag-expected fixed point robust to either convention. The
+# roadmap-status-only conjunct is load-bearing: keying on the title alone would let a
+# substantive commit mis-titled with the reserved prefix suppress a genuine drift halt
+# (the false negative post-merge-refresh.sh + prompt-context.sh also guard).
 is_terminating_refresh_ref() {
   local _ref _title _files
   _ref="$1"
   _title=$(git log -1 --format=%s "$_ref" 2>/dev/null || echo "")
   echo "$_title" | grep -qE '^ops: roadmap status refresh ' || return 1
   _files=$(git show --name-only --pretty=format: "$_ref" 2>/dev/null | grep -v '^$' | sort -u)
-  hook_is_dashboard_only_set "$_files"
+  hook_is_roadmap_status_only_set "$_files"
 }
 
 if is_terminating_refresh_ref HEAD; then
@@ -111,7 +110,7 @@ if [ "$#" -ge 3 ]; then
   FIRST_PARENT="$2"
   SECOND_PARENT="$3"
   CHANGED_FILES=$(git diff --name-only "$FIRST_PARENT" HEAD 2>/dev/null | sort -u)
-  if hook_is_dashboard_only_set "$CHANGED_FILES"; then
+  if hook_is_roadmap_status_only_set "$CHANGED_FILES"; then
     if is_terminating_refresh_ref "$SECOND_PARENT"; then
       emit "[ROADMAP] hash=lag-expected next=${NEXT:-?} (post-refresh fixed-point §12.2.1)"
     fi
@@ -119,6 +118,6 @@ if [ "$#" -ge 3 ]; then
 fi
 
 # Genuine drift — surface for §12.3 halt-and-reconcile. Reached when the hash mismatches
-# AND the tip is not a dashboard-only terminating refresh (incl. a mis-titled substantive
-# commit — which now correctly halts here rather than passing as lag-expected).
-emit "[ROADMAP DRIFT] dashboard=${DASHBOARD_HASH:-none} computed=${COMPUTED} next=${NEXT:-?} action=§12.3"
+# AND the tip is not a roadmap-status-only terminating refresh (incl. a mis-titled
+# substantive commit — which now correctly halts here rather than passing as lag-expected).
+emit "[ROADMAP DRIFT] stored=${STORED_HASH:-none} computed=${COMPUTED} next=${NEXT:-?} action=§12.3"

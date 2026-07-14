@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Hermetic test for post-merge-refresh.sh (Hook A).
-# Builds a throwaway git repo + fixture dashboard so the test never rots against
+# Builds a throwaway git repo + fixture roadmap_status.md so the test never rots against
 # the live roadmap_status.md. Exercises all four guard branches via direct
 # synthetic-stdin invocation (the hook cannot self-activate a session, so direct
 # invocation IS the pilot test per the advisor pass).
@@ -23,7 +23,7 @@ git -C "$REPO" config user.email t@t.t
 git -C "$REPO" config user.name t
 mkdir -p "$REPO/.harness"
 
-# commit 1 — base (the dashboard will pin this as git_head)
+# commit 1 — base (roadmap_status.md will pin this as git_head)
 echo a > "$REPO/.harness/seed"; git -C "$REPO" add -A; git -C "$REPO" commit -qm "base commit"
 C1=$(git -C "$REPO" rev-parse HEAD | head -c 8)
 
@@ -31,26 +31,17 @@ C1=$(git -C "$REPO" rev-parse HEAD | head -c 8)
 echo b >> "$REPO/.harness/seed"; git -C "$REPO" add -A; git -C "$REPO" commit -qm "feat(x): a substantive change (#101)"
 C2=$(git -C "$REPO" rev-parse HEAD | head -c 8)
 
-# commit 3 — a GENUINE terminating refresh: §12.2.1 prefix AND dashboard-only
+# commit 3 — a GENUINE terminating refresh: §12.2.1 prefix AND roadmap-status-only
 printf '# dash\n' > "$REPO/.harness/roadmap_status.md"; git -C "$REPO" add -A; git -C "$REPO" commit -qm "ops: roadmap status refresh post-#101 (#102)"
 C3=$(git -C "$REPO" rev-parse HEAD | head -c 8)
 
-# commit 3b — a GENUINE terminating refresh that ALSO regenerates the derived HTML
-#             (§12.2.1 permits tools/dashboard/roadmap.html in the set) → must STILL be
-#             treated as dashboard-only, else the hook emits "refresh owed" for a refresh
-#             → the §12.2.1 recursion the fixed point exists to stop.
-printf '# dash2\n' > "$REPO/.harness/roadmap_status.md"
-mkdir -p "$REPO/tools/dashboard"; printf '<html>\n' > "$REPO/tools/dashboard/roadmap.html"
-git -C "$REPO" add -A; git -C "$REPO" commit -qm "ops: roadmap status refresh post-#105 (#106)"
-C3_HTML=$(git -C "$REPO" rev-parse HEAD | head -c 8)
-
-# commit 4 — a MIS-TITLED refresh: §12.2.1 prefix BUT touches a non-dashboard file
+# commit 4 — a MIS-TITLED refresh: §12.2.1 prefix BUT touches a non-roadmap-status file
 #            (P2-a: must NOT be suppressed — a substantive PR wearing the prefix)
 echo d >> "$REPO/.harness/seed"; git -C "$REPO" add -A; git -C "$REPO" commit -qm "ops: roadmap status refresh post-#102 (#104) [also code]"
 C_MIS=$(git -C "$REPO" rev-parse HEAD | head -c 8)
 
-# fixture dashboard pinning C1 as git_head (uncommitted working-tree override —
-# the hook reads DASHBOARD_HEAD from the working tree, not from a commit)
+# fixture roadmap_status.md pinning C1 as git_head (uncommitted working-tree
+# override — the hook reads STORED_HEAD from the working tree, not from a commit)
 cat > "$REPO/.harness/roadmap_status.md" <<EOF
 # Roadmap status dashboard
 | Field | Value |
@@ -78,19 +69,13 @@ bad()  { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 OUT=$(run "$NONMERGE_CMD" "$C2")
 [ -z "$OUT" ] && ok "non-merge command stays silent" || bad "non-merge emitted: $OUT"
 
-# 2) merge command but no advance (compare-ref == dashboard head) → silent
+# 2) merge command but no advance (compare-ref == stored head) → silent
 OUT=$(run "$MERGE_CMD" "$C1")
 [ -z "$OUT" ] && ok "no-advance stays silent" || bad "no-advance emitted: $OUT"
 
-# 3) merge command, tip IS a genuine (dashboard-only) refresh → silent
+# 3) merge command, tip IS a genuine (roadmap-status-only) refresh → silent
 OUT=$(run "$MERGE_CMD" "$C3")
-[ -z "$OUT" ] && ok "dashboard-only refresh-tip stays silent" || bad "refresh-tip emitted: $OUT"
-
-# 3b) merge command, tip is a refresh that ALSO regenerated roadmap.html → still silent.
-#     §12.2.1 permits the regenerated HTML; the prior single-file check wrongly emitted
-#     "refresh owed" here, spawning a refresh-of-a-refresh (the recursion guard).
-OUT=$(run "$MERGE_CMD" "$C3_HTML")
-[ -z "$OUT" ] && ok "status+HTML refresh-tip stays silent (recursion guard)" || bad "HTML-regenerating refresh-tip emitted: $OUT"
+[ -z "$OUT" ] && ok "roadmap-status-only refresh-tip stays silent" || bad "refresh-tip emitted: $OUT"
 
 # 4) merge command, advanced to a substantive (non-refresh) commit → EMIT
 OUT=$(run "$MERGE_CMD" "$C2")
@@ -104,7 +89,7 @@ fi
 
 # 5) [P1 regression — Codex finding] hash inputs (FORKS/BATCH) must come from the
 #    MERGED ref, not the pre-merge local tree. Add a fork doc in a NEW commit C4
-#    (absent at the dashboard pin C1) and assert the emitted hash counts it (FORKS=1),
+#    (absent at the roadmap_status.md pin C1) and assert the emitted hash counts it (FORKS=1),
 #    i.e. equals the hash recomputed from C4's tree — and is NOT the FORKS=0 hash.
 echo "x" > "$REPO/.harness/class_1_fork_regression.md"
 git -C "$REPO" add -A; git -C "$REPO" commit -qm "feat(y): add a fork doc (#103)"
@@ -122,10 +107,11 @@ else
 fi
 
 # 6) [P2-a regression — Codex finding] a commit with the refresh title prefix but
-#    that touches a NON-dashboard file is NOT a §12.2.1 terminating refresh → must EMIT.
+#    that touches a NON-roadmap-status file is NOT a §12.2.1 terminating refresh →
+#    must EMIT.
 OUT=$(run "$MERGE_CMD" "$C_MIS")
 if printf '%s' "$OUT" | grep -q "substantive merge detected"; then
-  ok "mis-titled refresh (prefix but not dashboard-only) still emits (P2-a fix)"
+  ok "mis-titled refresh (prefix but not roadmap-status-only) still emits (P2-a fix)"
 else
   bad "P2-a regression: mis-titled refresh was wrongly suppressed: '$OUT'"
 fi

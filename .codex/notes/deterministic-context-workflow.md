@@ -7,7 +7,7 @@ closeout in Codex sessions for this repository.
 ## Operating Principle
 
 Every substantive Codex arc materializes state from repository instruments at
-defined gates. Memory, checkpoints, prior chat, and dashboard prose are
+defined gates. Memory, checkpoints, prior chat, and roadmap prose are
 orientation only until re-grounded against HEAD.
 
 The `just` recipes are the mandatory command surface. Direct
@@ -31,9 +31,8 @@ The preflight materializes:
 
 - repository root, cwd, branch, HEAD, and linked-worktree status
 - dirty status and changed files
-- roadmap dashboard hash versus computed workspace hash
+- `roadmap_status.md`'s recorded hash versus computed workspace hash
 - open fork-doc count and latest retirement batch
-- dashboard snapshot freshness when dashboard sources changed
 - a local checkpoint artifact at `.harness/.checkpoints/codex-context-latest.json`
 
 Hard failures stop work until resolved.
@@ -66,7 +65,7 @@ just codex-preflight
 ```
 
 Treat memory/checkpoint "remaining work" as advisory until rechecked against
-the current dashboard, git state, and source files.
+the current roadmap_status.md, git state, and source files.
 
 For an explicit mid-arc checkpoint:
 
@@ -75,8 +74,9 @@ just codex-checkpoint mid-arc
 ```
 
 The checkpoint records the current context fingerprint, HEAD, branch, changed
-files, status entries, dashboard state, and findings. It is ignored by git and
-exists to make context-refresh moments inspectable rather than remembered.
+files, status entries, roadmap_status.md state, and findings. It is ignored by
+git and exists to make context-refresh moments inspectable rather than
+remembered.
 
 ### 5. Closeout
 
@@ -90,11 +90,10 @@ Closeout checks:
 
 - worktree-only edit discipline
 - design/implementation boundary
-- dashboard hash drift on the default branch
-- stale committed human dashboard snapshot when dashboard sources changed
+- `roadmap_status.md` hash drift on the default branch
 - cite-bearing changes that require `just overlay-check`
 - missing tracking-surface review
-- fresh checkpoint match against current HEAD/status/dashboard
+- fresh checkpoint match against current HEAD/status/roadmap
 - active autonomous-loop state, when present, has reached every pre-closeout
   gate from linked worktree readiness through decorrelated review
 
@@ -176,7 +175,6 @@ explicitly reported as not applicable:
 
 - `Project_Roadmap_v1.md`
 - `.harness/roadmap_status.md`
-- `tools/dashboard/roadmap.html`
 - `.harness/substitutions.yaml`
 - retirement batches under `.harness/phase-7d-retirement-events-batch-*.md`
 - credential gates under `.harness/codex_credential_gates.jsonl`
@@ -184,13 +182,6 @@ explicitly reported as not applicable:
 - axis `CLAUDE.md` / `AGENTS.md` files when posture changes
 - clearance markers for design/spec/plan amendments
 - memory entries when a pattern reaches the memory threshold
-
-Dashboard snapshots have a stricter currentness rule: `.harness/roadmap_status.md`
-is refreshed first, then `tools/dashboard/roadmap.html` is regenerated only with
-`python3 tools/dashboard/generate.py --root .`. Do not hand-edit the snapshot or
-copy volatile masthead values into it. `generate.py` derives visible `HEAD`,
-`LAST`, `HASH`, `OPEN FORKS`, closure counts, and status-filter state from live
-git/filesystem/roadmap inputs so stale count prose does not become durable UI.
 
 The PR body or final response must report implementation status, verification,
 tracking updates, and any owed follow-on refresh.
@@ -230,8 +221,8 @@ CI runs the guard directly without local checkpoint freshness because
 `.harness/.checkpoints/` is intentionally untracked. The CI invocation passes
 explicit `--base-ref` / `--head-ref` values from the GitHub event so the guard
 checks the committed PR range instead of an empty clean-checkout status.
-`--allow-dashboard-drift` only downgrades non-default-branch drift; it cannot
-mask default-branch dashboard drift. When `gh pr list` is unavailable, the guard
+`--allow-roadmap-drift` only downgrades non-default-branch drift; it cannot
+mask default-branch roadmap_status.md drift. When `gh pr list` is unavailable, the guard
 emits `OPEN_PRS_UNAVAILABLE` instead of silently treating the open-PR set as
 authoritative.
 

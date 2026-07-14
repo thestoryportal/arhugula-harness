@@ -28,38 +28,27 @@ EOF
 }
 run() { printf '%s' '{"hook_event_name":"UserPromptSubmit","prompt":"hi"}' | CLAUDE_PROJECT_DIR="$REPO" bash "$HOOK" | jq -r '.hookSpecificOutput.additionalContext // empty'; }
 
-# 1) dashboard pins current HEAD → next-action, no drift.
+# 1) roadmap_status.md pins current HEAD → next-action, no drift.
 dash "$HEAD8"
 OUT=$(run)
 printf '%s' "$OUT" | grep -q "next=R-BAZ" && ok "injects next-action ($OUT)" || bad "no next-action: $OUT"
 printf '%s' "$OUT" | grep -q "drift" && bad "false drift when HEAD matches" || ok "no drift when HEAD matches"
 
-# 2) dashboard pins a DIFFERENT head, last commit not a refresh → drift flag.
+# 2) roadmap_status.md pins a DIFFERENT head, last commit not a refresh → drift flag.
 dash "deadbeef"
 OUT=$(run)
 printf '%s' "$OUT" | grep -q "possible drift" && ok "flags drift on HEAD mismatch" || bad "no drift flag: $OUT"
 
 # 3) HEAD mismatch but last commit is a GENUINE terminating refresh (refresh title
-#    AND dashboard-only changed file) → no drift (§12.2.1 both-conditions).
+#    AND roadmap-status-only changed file) → no drift (§12.2.1 both-conditions).
 dash "deadbeef"
 git -C "$REPO" add .harness/roadmap_status.md
 git -C "$REPO" commit -q -m "ops: roadmap status refresh post-#1 (#2)"
 OUT=$(run)
-printf '%s' "$OUT" | grep -q "drift" && bad "drift flagged despite genuine dashboard-only refresh" || ok "genuine dashboard-only refresh exempt from drift"
+printf '%s' "$OUT" | grep -q "drift" && bad "drift flagged despite genuine roadmap-status-only refresh" || ok "genuine roadmap-status-only refresh exempt from drift"
 
-# 3b) HEAD mismatch but last commit is a refresh that ALSO regenerated roadmap.html →
-#     still exempt (§12.2.1 permits the regenerated HTML; the prior single-file check
-#     false-flagged every HTML-regenerating refresh as drift). Distinct pin so
-#     roadmap_status.md actually changes vs the test-3 commit.
-dash "feedface"
-mkdir -p "$REPO/tools/dashboard"; echo "<html>" > "$REPO/tools/dashboard/roadmap.html"
-git -C "$REPO" add .harness/roadmap_status.md tools/dashboard/roadmap.html
-git -C "$REPO" commit -q -m "ops: roadmap status refresh post-#5 (#6)"
-OUT=$(run)
-printf '%s' "$OUT" | grep -q "drift" && bad "drift flagged despite status+HTML refresh: $OUT" || ok "status+HTML refresh exempt from drift"
-
-# 4) Refresh-TITLED commit that ALSO touches a non-dashboard file → NOT exempt
-#    (§12.2.1 requires dashboard-only; title-only matching would be a false negative).
+# 4) Refresh-TITLED commit that ALSO touches a non-roadmap-status file → NOT exempt
+#    (§12.2.1 requires roadmap-status-only; title-only matching would be a false negative).
 dash "deadbeef"
 echo "x" > "$REPO/other.txt"
 git -C "$REPO" add .harness/roadmap_status.md other.txt
