@@ -445,3 +445,44 @@ def test_repeat_dispatch_same_step_gets_distinct_f2_entries_not_noop_dropped(
     assert len(audit_writer.appended) == 2
     entry_cores = {str(e.payload.entry_core) for _, e in audit_writer.appended}
     assert len(entry_cores) == 2, "each audit entry must reference its OWN F2 anchor"
+
+
+def test_explicit_tenant_literally_named_single_does_not_alias_no_tenant(
+    cost_chain: RuntimeCostAttributionChain,
+    audit_writer: _RecordingAuditWriter,
+    tmp_path: Path,
+) -> None:
+    """Regression guard (out-of-family Codex [P2], round 4) — a bare
+    `tenant_id or "_single"` encoding would alias `tenant_id=None` with a
+    genuine `tenant_id="_single"` (`RuntimeConfig` does not forbid an
+    operator naming a tenant that). The length-prefixed encoding must keep
+    them distinct."""
+    rate_table = _make_rate_table(
+        {"echo": ToolRate(cost_kind="flat_per_invocation", rate=Decimal("0.005"))}
+    )
+    ledger_writer = _build_ledger_writer(tmp_path)
+    common = dict(
+        rate_table=rate_table,
+        cost_chain=cost_chain,
+        audit_writer=audit_writer,
+        tool_id="echo",
+        tool_args={"input": "hi"},
+        response={"output": "hi"},
+        span_id="same-span",
+        idempotency_key="tool-idem-sentinel",
+        parent_idempotency_key="parent-1",
+        workflow_id="test-wf",
+        parent_action_id="workflow:test-wf:step:0",
+        ledger_writer=ledger_writer,
+    )
+    attribute_tool_dispatch_cost(tenant_id=None, **common)
+    attribute_tool_dispatch_cost(tenant_id="_single", **common)
+
+    entries = read_ledger(ledger_writer.handle)
+    cost_entries = [e for e in entries if str(e.action_id).startswith("cost:")]
+    assert len(cost_entries) == 2, (
+        f"tenant_id=None and tenant_id='_single' must not alias to the same "
+        f"F2 identity; got {len(cost_entries)} distinct entries"
+    )
+    entry_cores = {str(e.payload.entry_core) for _, e in audit_writer.appended}
+    assert len(entry_cores) == 2

@@ -601,7 +601,13 @@ class RuntimeToolDispatcher:
                 parent_idempotency_key=step_context.parent_idempotency_key,
                 workflow_id=step_context.workflow_id,
                 parent_action_id=step_context.parent_action_id,
-                tenant_id=None,
+                # B-23 (out-of-family Codex [P1], round 4) — was hardcoded
+                # `None`, silently defeating the new F2 tenant-scoping fix
+                # (every tool-dispatch cost anchor landed under the
+                # `_single` tag regardless of the real tenant) AND the
+                # pre-existing `audit_writer.append(tenant_id, ...)` OD
+                # tenant scoping. `step_context.tenant_id` is in scope.
+                tenant_id=step_context.tenant_id,
                 ledger_writer=self._ledger_writer,
                 procedural_tier_snapshot_resolver=self._procedural_tier_snapshot_resolver,
             )

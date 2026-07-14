@@ -42,11 +42,12 @@ __all__ = ["compose_cost_f2_entry_core"]
 _COST_ATTRIBUTION_ACTOR = Actor(actor_class=ActorClass.AGENT, actor_id="harness-cost-attribution")
 
 
-#: Tenant tag for the F2 identity when `tenant_id` is `None` — mirrors
-#: `RuntimeAuditLedgerWriter._tenant_tag`'s single-tenant convention so a
-#: `None`-tenant cost event and an explicit `"_single"`-tenant one (unlikely
-#: but not forbidden) don't themselves collide.
-_SINGLE_TENANT_TAG = "_single"
+#: Tenant tag for the F2 identity when `tenant_id` is `None`. Never equal to
+#: an explicit tenant's `f"tenant:{len}:{value}"` encoding (see the call
+#: site below) for any string value, so it cannot alias a real tenant_id —
+#: unlike `RuntimeAuditLedgerWriter._tenant_tag`'s bare `"_single"` sentinel,
+#: which a genuine `tenant_id="_single"` would alias.
+_NO_TENANT_TAG = "no-tenant"
 
 
 def compose_cost_f2_entry_core(
@@ -110,7 +111,12 @@ def compose_cost_f2_entry_core(
     if ledger_writer is None:
         return None
 
-    tenant_tag = tenant_id if tenant_id else _SINGLE_TENANT_TAG
+    # Length-prefixed so an explicit tenant_id can never alias the absent-
+    # tenant sentinel below (out-of-family Codex [P2], round 4) — a bare
+    # `tenant_id or _SINGLE_TENANT_TAG` would collapse `tenant_id=None` and
+    # a genuine `tenant_id="_single"` (which RuntimeConfig does not forbid)
+    # onto the identical F2 identity.
+    tenant_tag = f"tenant:{len(tenant_id)}:{tenant_id}" if tenant_id else _NO_TENANT_TAG
     action_id = Identifier(
         f"cost:{tenant_tag}:{workflow_id}:{parent_action_id}:"
         f"{parent_idempotency_key}:{dispatch_disambiguator}"

@@ -272,6 +272,77 @@ async def test_dispatch_happy_path_invokes_cost_attribution(tracer_setup) -> Non
 
 
 # ---------------------------------------------------------------------------
+# B-23 — real tenant_id reaches both the audit write and the F2 anchor
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_dispatch_propagates_real_tenant_id_to_audit_and_f2_write(
+    tracer_setup, tmp_path
+) -> None:
+    """Regression guard (out-of-family Codex [P1], round 4) — the
+    `_attribute_tool_cost_best_effort` call site was hardcoding
+    `tenant_id=None`, silently defeating BOTH the pre-existing
+    `audit_writer.append(tenant_id, ...)` OD tenant scoping AND the new
+    B-23 F2 tenant-scoping fix (every tool-dispatch cost anchor landed
+    under the `_single`/`no-tenant` tag regardless of the real tenant).
+    `step_context.tenant_id` must reach both."""
+    from harness_is.jsonl_event_ledger_lifecycle import JsonlLedgerHandle
+    from harness_is.state_ledger_write import read_ledger
+    from harness_runtime.lifecycle.state_ledger import LedgerWriter
+
+    tracer_provider, _exporter = tracer_setup
+    host = await _build_started_host()
+    rate_table = _make_rate_table(
+        {"echo": ToolRate(cost_kind="flat_per_invocation", rate=Decimal("0.01"))}
+    )
+    cost_chain = RuntimeCostAttributionChain()
+    audit_writer = _RecordingAuditWriter()
+    ledger_path = tmp_path / "state.jsonl"
+    ledger_path.touch()
+    ledger_writer = LedgerWriter(
+        handle=JsonlLedgerHandle(canonical_path=ledger_path, exists=True, entry_count=0),
+        actor=Actor(actor_class=ActorClass.AGENT, actor_id="test-tool-dispatcher"),
+    )
+    dispatcher = RuntimeToolDispatcher.for_single_host(
+        mcp_client_host=host,
+        per_server_trust_evaluator=PerServerTrustEvaluator(),
+        mcp_namespace_emitter=_make_emitter(),
+        trust_policy=_make_trust_policy(),
+        sandbox_decision_resolver=_good_sandbox_resolver,
+        tracer_provider=tracer_provider,
+        cost_chain=cost_chain,
+        audit_writer=audit_writer,
+        rate_table=rate_table,
+        ledger_writer=ledger_writer,
+    )
+    real_tenant_step_context = _make_step_context().model_copy(update={"tenant_id": "tenant-A"})
+    try:
+        await dispatcher.dispatch(
+            _make_binding(),
+            _make_step("echo", {"message": "hello"}),
+            step_context=real_tenant_step_context,
+        )
+        assert len(audit_writer.appended) == 1
+        tenant_id_at_audit, audit_entry = audit_writer.appended[0]
+        assert tenant_id_at_audit == "tenant-A", (
+            f"audit_writer.append must receive the real tenant_id, not None; "
+            f"got {tenant_id_at_audit!r}"
+        )
+        entries = read_ledger(ledger_writer.handle)
+        cost_entries = [e for e in entries if str(e.action_id).startswith("cost:")]
+        assert len(cost_entries) == 1
+        real_action_id = str(cost_entries[0].action_id)
+        assert "tenant-A" in real_action_id, (
+            f"F2 action_id must be scoped to the real tenant, not the "
+            f"no-tenant sentinel; got {real_action_id!r}"
+        )
+        assert str(audit_entry.payload.entry_core) == real_action_id
+    finally:
+        await host.shutdown()
+
+
+# ---------------------------------------------------------------------------
 # AC #1 failure path — schema_violation
 # ---------------------------------------------------------------------------
 
