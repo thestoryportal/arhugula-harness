@@ -284,3 +284,58 @@ def test_sign_rejects_negative_key_period() -> None:
     assert result.handle is not None
     with pytest.raises(ValueError, match="key_period"):
         sign_audit_entry(_ENTRY, result.handle, key_period=-1, backend=_InMemoryEd25519Backend())
+
+
+def test_sign_with_no_backend_preserves_raise_for_negative_key_period() -> None:
+    """Out-of-family Codex round-2 P2 — the absent-backend path must raise
+    the SAME `AuditSigningBackendUnavailableError` for every input, including
+    a negative `key_period`; `key_period` validation is a backend-only
+    concern and must not run before the backend-presence check."""
+    result = resolve_signing_key(_SCOPE, PersonaTier.MULTI_TENANT_COMPLIANCE)
+    assert result.handle is not None
+    with pytest.raises(AuditSigningBackendUnavailableError):
+        sign_audit_entry(_ENTRY, result.handle, key_period=-1)
+
+
+def test_verify_rejects_mismatched_key_handle() -> None:
+    """Out-of-family Codex round-2 P1 — verifying under a `key` handle whose
+    `key_id` disagrees with the entry's stored `audit_signature_key_id` must
+    not verify, even against the SAME backend instance that signed it (a
+    backend that ignores its `key_id` selector must not be allowed to attest
+    a verdict for the wrong key)."""
+    scope_b = SigningKeyScope(scope_kind=SecretScopeKind.TENANT_BOUND, scope_identifier="tenant-9")
+    result_a = resolve_signing_key(_SCOPE, PersonaTier.MULTI_TENANT_COMPLIANCE)
+    result_b = resolve_signing_key(scope_b, PersonaTier.MULTI_TENANT_COMPLIANCE)
+    assert result_a.handle is not None
+    assert result_b.handle is not None
+    assert result_a.handle.key_id != result_b.handle.key_id
+    backend = _InMemoryEd25519Backend()
+    signed = sign_audit_entry(_ENTRY, result_a.handle, key_period=1, backend=backend)
+
+    assert (
+        verify_audit_entry_signature(signed, result_b.handle, backend=backend)
+        is VerificationResult.SIGNATURE_MISMATCH
+    )
+
+
+def test_verify_rejects_backend_algorithm_mismatch() -> None:
+    """Out-of-family Codex round-2 P1 — a backend whose declared `algorithm`
+    disagrees with the entry's stored `audit_signature_algorithm` must not be
+    consulted for verification at all."""
+
+    class _MislabeledBackend(_InMemoryEd25519Backend):
+        algorithm = "ecdsa-p256"
+
+    result = resolve_signing_key(_SCOPE, PersonaTier.MULTI_TENANT_COMPLIANCE)
+    assert result.handle is not None
+    signing_backend = _InMemoryEd25519Backend()
+    signed = sign_audit_entry(_ENTRY, result.handle, key_period=1, backend=signing_backend)
+
+    mislabeled_backend = _MislabeledBackend()
+    mislabeled_backend._private_key = signing_backend._private_key  # type: ignore[attr-defined]
+    mislabeled_backend._public_key = signing_backend._public_key  # type: ignore[attr-defined]
+
+    assert (
+        verify_audit_entry_signature(signed, result.handle, backend=mislabeled_backend)
+        is VerificationResult.SIGNATURE_MISMATCH
+    )

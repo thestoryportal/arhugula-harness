@@ -272,25 +272,28 @@ def sign_audit_entry(
     `AuditSigningBackendUnavailableError` — real cryptographic signing
     against `key`'s actual key material is not reachable from the CP axis
     today (see module docstring); this function does not fabricate a signed
-    entry. With `backend` (C-CP-20 §20.2.1, spec v1.98) — a deployment-time
-    composition root has wired a real signing backend — validates `backend.algorithm`
-    against the §20.2 closed enum and `key_period` non-negative (out-of-family
-    Codex P2 findings), computes the canonical `audit.signature.sha256` hash,
-    binds it to its signature metadata (P1 finding — see
-    `_canonical_signing_message`), and returns a genuinely signed
-    `CPSignedAuditLedgerEntry`.
+    entry. **The absent-backend behavior is checked BEFORE any of the
+    backend-only validations below** (out-of-family Codex round-2 P2 finding
+    — `key_period` validation must not change what a caller with no backend
+    observes for any input, including a negative period). With `backend`
+    (C-CP-20 §20.2.1, spec v1.98) — a deployment-time composition root has
+    wired a real signing backend — validates `key_period` non-negative and
+    `backend.algorithm` against the §20.2 closed enum (round-1 P2 findings),
+    computes the canonical `audit.signature.sha256` hash, binds it to its
+    signature metadata (round-1 P1 finding — see `_canonical_signing_message`),
+    and returns a genuinely signed `CPSignedAuditLedgerEntry`.
     """
     if key.rotation_state is KeyRotationState.RETIRED:
         raise ValueError("cannot sign under a RETIRED signing key (C-CP-20 §20.3)")
-    if key_period < 0:
-        raise ValueError(
-            f"key_period must be non-negative (monotonic per C-CP-20 §20.3.1); got {key_period}"
-        )
     if backend is None:
         raise AuditSigningBackendUnavailableError(
             "real audit-entry signing requires a key-material-resolution seam not "
             "yet wired from a deployment-bound signing backend into harness-cp "
             "(C-CP-20 §20.3.1; SecretRef is opaque per AS spec C-AS-05 §5.4)"
+        )
+    if key_period < 0:
+        raise ValueError(
+            f"key_period must be non-negative (monotonic per C-CP-20 §20.3.1); got {key_period}"
         )
     if backend.algorithm not in _VALID_SIGNATURE_ALGORITHMS:
         raise ValueError(
@@ -330,10 +333,16 @@ def verify_audit_entry_signature(
     `SIGNATURE_MISMATCH` without ever consulting the backend), then verifies
     `audit_signature_value` against a message binding that hash to `signed`'s
     OWN stored `audit_signature_key_id` / `audit_signature_algorithm` /
-    `audit_signature_key_period` (out-of-family Codex P1 finding — relabeling
-    any of those three fields on an already-signed entry now breaks
-    verification, since the recomputed message no longer matches what was
-    signed; see `_canonical_signing_message`).
+    `audit_signature_key_period` (out-of-family Codex round-1 P1 finding —
+    relabeling any of those three fields on an already-signed entry now
+    breaks verification, since the recomputed message no longer matches what
+    was signed; see `_canonical_signing_message`). Also rejects, before ever
+    calling `backend`, a `key` whose `key_id` disagrees with the entry's
+    stored `audit_signature_key_id`, and a `backend` whose declared
+    `algorithm` disagrees with the entry's stored `audit_signature_algorithm`
+    (round-2 P1 finding — a backend that ignores its `key_id` selector, or is
+    bound to a different algorithm than the one the entry claims, must not
+    be allowed to attest a verdict for the wrong key/algorithm).
     """
     if backend is None:
         raise AuditSigningBackendUnavailableError(
@@ -342,6 +351,10 @@ def verify_audit_entry_signature(
             "backend into harness-cp (C-CP-20 §20.3.1; SecretRef is opaque per "
             "AS spec C-AS-05 §5.4)"
         )
+    if key.key_id != signed.audit_signature_key_id:
+        return VerificationResult.SIGNATURE_MISMATCH
+    if backend.algorithm != signed.audit_signature_algorithm:
+        return VerificationResult.SIGNATURE_MISMATCH
     recomputed_sha256 = _canonical_entry_hash(signed.entry)
     if recomputed_sha256 != signed.audit_signature_sha256:
         return VerificationResult.SIGNATURE_MISMATCH
