@@ -292,3 +292,105 @@ async def test_validator_and_webhook_append_to_run_scoped_cost_sink() -> None:
     dispatch_kinds = sorted(r.dispatch_kind.value for r in sink)
     assert dispatch_kinds == ["validator", "webhook"]
     assert all(r.provider_discriminator is None for r in sink)
+
+
+@pytest.mark.asyncio
+async def test_ledger_writer_wired_produces_real_entry_core_for_both_surfaces(
+    tmp_path: Any,
+) -> None:
+    """B-23 (out-of-family Codex [P1]) — the SAME cost-substrate-bound
+    construction pattern `test_one_validator_plus_one_webhook_produces_two_
+    cost_records` above exercises is the currently-supported real
+    cost-enabled path for both surfaces. With `ledger_writer` +
+    `procedural_tier_snapshot_resolver` threaded into both the
+    `CostAttributingValidatorHook` and the `WebhookDeliveryComposer` — the
+    same two kwargs the bootstrap factories now thread — BOTH audit entries'
+    `entry_core` must be a real F2 anchor, not the fabricated
+    `cp-audit:<action_id>` marker."""
+    from harness_is.jsonl_event_ledger_lifecycle import JsonlLedgerHandle
+    from harness_is.state_ledger_write import read_ledger
+    from harness_runtime.lifecycle.state_ledger import LedgerWriter
+
+    rate_table = _make_rate_table()
+    cost_chain = RuntimeCostAttributionChain()
+    audit_writer = _RecordingAuditWriter()
+    ledger_path = tmp_path / "state.jsonl"
+    ledger_path.touch()
+    ledger_writer = LedgerWriter(
+        handle=JsonlLedgerHandle(canonical_path=ledger_path, exists=True, entry_count=0),
+        actor=Actor(actor_class=ActorClass.AGENT, actor_id="integration-test"),
+    )
+
+    # --- Validator surface ---
+    step = _make_step()
+    ctx = _make_step_context()
+    validator = _FixedValidator(
+        ValidatorResult(outcome=ValidatorOutcome.PASS, fail_class=None, fail_detail_hash=None)
+    )
+    hook = CostAttributingValidatorHook(
+        rate_table=rate_table,
+        cost_chain=cost_chain,
+        audit_writer=audit_writer,
+        ledger_writer=ledger_writer,
+    )
+    fw = ConcreteValidatorFramework(
+        validator_registry={step.step_id: validator},
+        post_evaluate_hook=hook,
+    )
+    await fw.evaluate(step, {}, step_context=ctx)
+
+    # --- Webhook surface ---
+    class _MockResponse:
+        def __init__(self, status_code: int) -> None:
+            self.status_code = status_code
+
+    class _MockAsyncClient:
+        async def __aenter__(self) -> _MockAsyncClient:
+            return self
+
+        async def __aexit__(self, *_args: Any) -> None:
+            return None
+
+        async def post(self, url: str, **kwargs: Any) -> _MockResponse:
+            return _MockResponse(200)
+
+    composer = WebhookDeliveryComposer(
+        retry_max_attempts=1,
+        http_client_factory=lambda: _MockAsyncClient(),  # type: ignore[arg-type]
+        sleep_fn=lambda _s: asyncio.sleep(0),
+        rate_table=rate_table,
+        cost_chain=cost_chain,
+        audit_writer=audit_writer,
+        workflow_id="wf-integration",
+        parent_action_id="hitl:wf-integration:gate:0",
+        parent_idempotency_key="parent-idem-1",
+        ledger_writer=ledger_writer,
+    )
+    webhook_config = WebhookConfig(
+        webhook_id="test-webhook",
+        endpoint_url="https://ops.example.com/hitl",
+        timeout=30.0,
+        degradation_mode="proceed",
+    )
+    webhook_payload = WebhookPayload(
+        approval_id="approval-1",
+        idempotency_key="webhook-1",
+        gate_evaluation_ref="gate-eval-1",
+        payload_body={"summary": "approval needed"},
+    )
+    await composer.deliver_webhook(webhook_config, webhook_payload, idempotency_key="webhook-1")
+
+    assert len(audit_writer.appended) == 2
+    for _tenant_id, audit_entry in audit_writer.appended:
+        entry_core = str(audit_entry.payload.entry_core)
+        assert not entry_core.startswith("cp-audit:"), (
+            f"entry_core must be a real F2 anchor, not fabricated; got {entry_core!r}"
+        )
+
+    # Both F2 entries actually landed in the IS ledger.
+    entries = read_ledger(ledger_writer.handle)
+    cost_entries = [e for e in entries if str(e.action_id).startswith("cost:")]
+    assert len(cost_entries) == 2
+    real_action_ids = {str(e.action_id) for e in cost_entries}
+    entry_cores = {str(e[1].payload.entry_core) for e in audit_writer.appended}
+    assert entry_cores == real_action_ids
