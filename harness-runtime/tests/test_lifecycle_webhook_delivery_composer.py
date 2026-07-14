@@ -318,3 +318,79 @@ async def test_deliver_webhook_for_brief_propagates_exhausted_error() -> None:
     brief = _make_brief_for_composer_tests()
     with pytest.raises(WebhookDeliveryExhaustedError):
         await composer.deliver_webhook_for_brief(brief, "idem-exhaust-1")
+
+
+@pytest.mark.asyncio
+async def test_repeat_deliver_webhook_same_idempotency_key_gets_distinct_f2_entries(
+    tmp_path: Any,
+) -> None:
+    """Regression guard (out-of-family Codex [P2], round 5) — this
+    composer's cost-attribution wrapper fires unconditionally on EVERY
+    `deliver_webhook()` call (no idempotent skip at that layer). Codex's
+    own probe showed 2 calls with the SAME `idempotency_key` produced 2
+    audit entries but only 1 F2 entry before the fix (both audit entries
+    referenced the same anchor) — because the composer's own `span_id` is
+    `f"webhook-deliver-{idempotency_key}"`, which repeats identically
+    across such calls. The production wiring now passes a fresh
+    per-invocation `dispatch_disambiguator` (a UUID) specifically to
+    prevent this."""
+    from decimal import Decimal
+
+    from harness_is.jsonl_event_ledger_lifecycle import JsonlLedgerHandle
+    from harness_is.state_ledger_entry_schema import Actor, ActorClass
+    from harness_is.state_ledger_write import read_ledger
+    from harness_od.rate_table_types import RateTable, WebhookRate
+    from harness_runtime.lifecycle.cost_attribution import RuntimeCostAttributionChain
+    from harness_runtime.lifecycle.state_ledger import LedgerWriter
+
+    class _RecordingAuditWriter:
+        def __init__(self) -> None:
+            self.appended: list[tuple[str | None, object]] = []
+
+        def append(self, tenant_id: str | None, audit_entry: object) -> object:
+            self.appended.append((tenant_id, audit_entry))
+            return "appended"
+
+    rate_table = RateTable(
+        version="2026-07-13-test",
+        providers={},
+        tool_rates={},
+        webhook_rate=WebhookRate(flat_per_attempt=Decimal("0.01"), plus_egress=False),
+        cpu_rate_per_ms=Decimal("0"),
+        egress_rate_per_byte=Decimal("0"),
+    )
+    audit_writer = _RecordingAuditWriter()
+    ledger_path = tmp_path / "state.jsonl"
+    ledger_path.touch()
+    ledger_writer = LedgerWriter(
+        handle=JsonlLedgerHandle(canonical_path=ledger_path, exists=True, entry_count=0),
+        actor=Actor(actor_class=ActorClass.AGENT, actor_id="test-webhook-composer"),
+    )
+    client = _RecordingClient([_MockResponse(200), _MockResponse(200)])
+    composer = WebhookDeliveryComposer(
+        retry_max_attempts=1,
+        http_client_factory=lambda: client,
+        rate_table=rate_table,
+        cost_chain=RuntimeCostAttributionChain(),
+        audit_writer=audit_writer,
+        workflow_id="wf-repeat",
+        parent_action_id="hitl:wf-repeat:gate:0",
+        parent_idempotency_key="parent-1",
+        ledger_writer=ledger_writer,
+    )
+    # Two SEPARATE deliver_webhook() calls sharing the SAME idempotency_key —
+    # a legitimate caller-side pattern (outer-level retry of the whole call,
+    # not just the composer's own internal HTTP-attempt loop).
+    await composer.deliver_webhook(_make_webhook_config(), _make_payload(), "idem-shared")
+    await composer.deliver_webhook(_make_webhook_config(), _make_payload(), "idem-shared")
+
+    assert len(audit_writer.appended) == 2
+    entries = read_ledger(ledger_writer.handle)
+    cost_entries = [e for e in entries if str(e.action_id).startswith("cost:")]
+    assert len(cost_entries) == 2, (
+        f"2 deliver_webhook() calls sharing one idempotency_key must get 2 "
+        f"distinct F2 entries, not collapse via IDEMPOTENT_NOOP; "
+        f"got {len(cost_entries)}"
+    )
+    entry_cores = {str(e[1].payload.entry_core) for e in audit_writer.appended}
+    assert len(entry_cores) == 2, "each call's audit entry must reference its OWN F2 anchor"

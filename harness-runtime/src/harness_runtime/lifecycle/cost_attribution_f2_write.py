@@ -115,8 +115,11 @@ def compose_cost_f2_entry_core(
     # tenant sentinel below (out-of-family Codex [P2], round 4) — a bare
     # `tenant_id or _SINGLE_TENANT_TAG` would collapse `tenant_id=None` and
     # a genuine `tenant_id="_single"` (which RuntimeConfig does not forbid)
-    # onto the identical F2 identity.
-    tenant_tag = f"tenant:{len(tenant_id)}:{tenant_id}" if tenant_id else _NO_TENANT_TAG
+    # onto the identical F2 identity. `is not None` (not truthiness) —
+    # `RuntimeConfig.tenant_id` permits the legal-but-falsy `""`, which a
+    # bare `if tenant_id` would ALSO alias to the absent-tenant sentinel
+    # (round 5).
+    tenant_tag = f"tenant:{len(tenant_id)}:{tenant_id}" if tenant_id is not None else _NO_TENANT_TAG
     action_id = Identifier(
         f"cost:{tenant_tag}:{workflow_id}:{parent_action_id}:"
         f"{parent_idempotency_key}:{dispatch_disambiguator}"

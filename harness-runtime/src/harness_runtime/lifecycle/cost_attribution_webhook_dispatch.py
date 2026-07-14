@@ -104,6 +104,7 @@ def attribute_webhook_dispatch_cost(
     tenant_id: str | None = None,
     ledger_writer: Any = None,
     procedural_tier_snapshot_resolver: Callable[[], Identifier] | None = None,
+    dispatch_disambiguator: str | None = None,
 ) -> SpanCostRecord:
     """Run the §C-OD-26.1 canonical cost-attribution chain for one webhook delivery.
 
@@ -164,6 +165,21 @@ def attribute_webhook_dispatch_cost(
         R-003 resolver for the F2 entry's `procedural_tier_snapshot_ref`
         sidecar (IS spec §C-IS-05 §5.1). Consulted only when `ledger_writer`
         is bound.
+    dispatch_disambiguator
+        The F2-write disambiguator (out-of-family Codex [P2], round 5).
+        `None` (the default) falls back to `span_id` — but the production
+        wiring at `WebhookDeliveryComposer._attribute_webhook_cost_best_
+        effort` passes a fresh per-invocation value instead, because its
+        `span_id` is a *synthesized* `f"webhook-deliver-{idempotency_key}"`
+        string, NOT a real per-call OTel span. `deliver_webhook()` never
+        idempotently skips its own audit write (it fires unconditionally
+        on every invocation, success or failure), so a caller invoking it
+        twice with the SAME `idempotency_key` (the composer's own
+        documented "same idempotency_key → same outcome" semantics is
+        about the delivery OUTCOME, not a promise the composer itself
+        won't be called twice) would otherwise compute an identical
+        `span_id`-keyed F2 identity and silently `IDEMPOTENT_NOOP`-drop
+        the second cost fact's own anchor.
 
     Returns
     -------
@@ -211,16 +227,20 @@ def attribute_webhook_dispatch_cost(
         parent_action_id=parent_action_id,
     )
     # B-23 — F2-write the dispatch fact so entry_core is a real IS anchor,
-    # not a fabricated `cp-audit:<action_id>` marker. `span_id` is a fresh
-    # per-attempt OTel span (a retry opens a new span), so it disambiguates
-    # repeat cost events on the same (workflow_id, parent_action_id).
+    # not a fabricated `cp-audit:<action_id>` marker. Unlike tool/LLM
+    # dispatch, `span_id` here is NOT a real per-attempt OTel span (it's
+    # the caller-synthesized `f"webhook-deliver-{idempotency_key}"`), so it
+    # is NOT safe as the sole disambiguator on its own — see
+    # `dispatch_disambiguator`'s parameter docstring.
     entry_core = compose_cost_f2_entry_core(
         ledger_writer=ledger_writer,
         procedural_tier_snapshot_resolver=procedural_tier_snapshot_resolver,
         workflow_id=workflow_id,
         parent_action_id=parent_action_id,
         parent_idempotency_key=parent_idempotency_key,
-        dispatch_disambiguator=span_id,
+        dispatch_disambiguator=(
+            dispatch_disambiguator if dispatch_disambiguator is not None else span_id
+        ),
         tenant_id=tenant_id,
     )
     audit_entry: AuditLedgerEntry = cp_audit_to_od_audit(

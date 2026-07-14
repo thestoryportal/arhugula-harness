@@ -355,3 +355,82 @@ def test_repeat_delivery_same_step_gets_distinct_f2_entries_not_noop_dropped(
     )
     entry_cores = {str(e.payload.entry_core) for _, e in audit_writer.appended}
     assert len(entry_cores) == 2
+
+
+def test_repeat_call_with_explicit_dispatch_disambiguator_gets_distinct_f2_entries(
+    cost_chain: RuntimeCostAttributionChain,
+    audit_writer: _RecordingAuditWriter,
+    tmp_path: Path,
+) -> None:
+    """Regression guard (out-of-family Codex [P2], round 5) — this
+    composer's `span_id` is `f"webhook-deliver-{idempotency_key}"`, a
+    *synthesized* string, NOT a real per-call OTel span. A caller invoking
+    `deliver_webhook()` twice with the SAME `idempotency_key` (the
+    production wiring at `WebhookDeliveryComposer` passes a fresh per-
+    invocation `dispatch_disambiguator` for exactly this reason) MUST NOT
+    collapse via `IDEMPOTENT_NOOP` when the caller supplies a distinct
+    `dispatch_disambiguator` per call, even though `span_id` repeats."""
+    rate_table = _make_rate_table(flat_per_attempt=Decimal("0.01"), plus_egress=False)
+    ledger_writer = _build_ledger_writer(tmp_path)
+    same_synthesized_span_id = "webhook-deliver-idem-shared"
+    common = dict(
+        rate_table=rate_table,
+        cost_chain=cost_chain,
+        audit_writer=audit_writer,
+        webhook_target="target",
+        bytes_sent=100,
+        span_id=same_synthesized_span_id,
+        idempotency_key="idem-shared",
+        parent_idempotency_key="parent-1",
+        workflow_id="wf",
+        parent_action_id="hitl:wf:gate:0",
+        ledger_writer=ledger_writer,
+    )
+    attribute_webhook_dispatch_cost(dispatch_disambiguator="invocation-1", **common)
+    attribute_webhook_dispatch_cost(dispatch_disambiguator="invocation-2", **common)
+
+    entries = read_ledger(ledger_writer.handle)
+    cost_entries = [e for e in entries if str(e.action_id).startswith("cost:")]
+    assert len(cost_entries) == 2, (
+        f"2 invocations sharing an identical synthesized span_id but distinct "
+        f"dispatch_disambiguator values must get 2 F2 entries; got {len(cost_entries)}"
+    )
+    entry_cores = {str(e.payload.entry_core) for _, e in audit_writer.appended}
+    assert len(entry_cores) == 2
+
+
+def test_empty_string_tenant_does_not_alias_no_tenant(
+    cost_chain: RuntimeCostAttributionChain,
+    audit_writer: _RecordingAuditWriter,
+    tmp_path: Path,
+) -> None:
+    """Regression guard (out-of-family Codex [P2], round 5) — the legal,
+    falsy `tenant_id=""` must not alias `tenant_id=None`'s F2 identity (a
+    bare `if tenant_id` truthiness check would collapse both onto the
+    same no-tenant sentinel)."""
+    rate_table = _make_rate_table(flat_per_attempt=Decimal("0.01"), plus_egress=False)
+    ledger_writer = _build_ledger_writer(tmp_path)
+    common = dict(
+        rate_table=rate_table,
+        cost_chain=cost_chain,
+        audit_writer=audit_writer,
+        webhook_target="target",
+        bytes_sent=100,
+        span_id="same-span",
+        idempotency_key="idem-tenant-empty",
+        parent_idempotency_key="parent-1",
+        workflow_id="wf",
+        parent_action_id="hitl:wf:gate:0",
+        ledger_writer=ledger_writer,
+    )
+    attribute_webhook_dispatch_cost(tenant_id=None, **common)
+    attribute_webhook_dispatch_cost(tenant_id="", **common)
+
+    entries = read_ledger(ledger_writer.handle)
+    cost_entries = [e for e in entries if str(e.action_id).startswith("cost:")]
+    assert len(cost_entries) == 2, (
+        f"tenant_id=None and tenant_id='' must not alias to the same F2 "
+        f"identity; got {len(cost_entries)} distinct entries"
+    )
+    entry_cores = {str(e.payload.entry_core) for _, e in audit_writer.appended}
+    assert len(entry_cores) == 2

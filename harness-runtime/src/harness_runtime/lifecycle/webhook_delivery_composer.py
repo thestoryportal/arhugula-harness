@@ -19,6 +19,7 @@ import asyncio
 import hashlib
 import json
 import time
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -359,6 +360,15 @@ class WebhookDeliveryComposer:
                 tenant_id=self._tenant_id,
                 ledger_writer=self._ledger_writer,
                 procedural_tier_snapshot_resolver=self._procedural_tier_snapshot_resolver,
+                # B-23 (out-of-family Codex [P2], round 5) — `span_id` above
+                # is synthesized from `idempotency_key`, so a caller invoking
+                # `deliver_webhook()` twice with the same `idempotency_key`
+                # would otherwise compute an identical F2 identity and
+                # `IDEMPOTENT_NOOP`-drop the second cost fact's own anchor
+                # (this method fires unconditionally on every invocation —
+                # no idempotent skip at this layer). A fresh UUID per call
+                # guarantees each invocation gets its own F2 anchor.
+                dispatch_disambiguator=str(uuid.uuid4()),
             )
             # R-FS-1 arc CA — record into the run-scoped accumulator for the
             # `RunResult.cost_attribution` rollup (runtime spec v1.53 §9 C-RT-09).
