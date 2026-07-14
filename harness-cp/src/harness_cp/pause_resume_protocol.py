@@ -584,7 +584,9 @@ class PauseResumeProtocol:
         return snapshot.state_ledger_anchor != current_anchor
 
 
-def _strip_default_fanout_resume_fields(carrier_dump: Any) -> None:
+def _strip_default_fanout_resume_fields(
+    carrier_dump: Any, *, strip_paused_child_branches: bool = False
+) -> None:
     """Drop default-valued additive fields (`synthesis_step_id` when None;
     `effect_fence_paused_branches` when empty) from a `FanOutResumeState`/
     `PeerFanOutResumeState` carrier `model_dump`, IN PLACE, following the KNOWN carrier
@@ -604,7 +606,22 @@ def _strip_default_fanout_resume_fields(carrier_dump: Any) -> None:
     arbitrary recovered-output payloads (`orchestrator_output`, `branches[].output`) where a
     user-data key happening to be named `synthesis_step_id` must stay hash-covered, not
     silently stripped (out-of-family Codex [P2]). Only None is dropped; a present
-    (synthesis-bearing) id is hash-COVERED and kept."""
+    (synthesis-bearing) id is hash-COVERED and kept.
+
+    `strip_paused_child_branches` (B-21, out-of-family Codex round 2 [P1]) gates whether
+    THIS carrier's OWN `paused_child_branches` is also dropped when empty. It is scoped
+    PER-CARRIER-KIND, not global: the top-level `peer_fan_out_resume` call + every NESTED
+    `peer_fan_out_resume` reached through this recursion pass `True` (the field is
+    brand-new to `PeerFanOutResumeState` at B-21 — no durable snapshot predates it, so
+    stripping it can only ever RESTORE byte-compat, exactly like `synthesis_step_id` did
+    when it was introduced). The top-level `fan_out_resume` call + every NESTED
+    `fan_out_resume` reached through this recursion pass `False` (the default): that
+    field has existed since #680 (B-HIERARCHICAL-PAUSE) and its nested occurrences have
+    ALWAYS serialized with an unstripped `paused_child_branches: []` — stripping it NOW
+    would CHANGE (not restore) the recomputed hash of any pre-B-21 durable
+    ORCHESTRATOR_WORKERS/HIERARCHICAL_DELEGATION pause snapshot with a nested
+    fan_out_resume cursor, rejecting a valid snapshot as corrupt. Do NOT flip this
+    default without a version-gated migration for #680's shipped byte-compat."""
     if not isinstance(carrier_dump, dict):
         return
     carrier = cast("dict[str, Any]", carrier_dump)
@@ -636,7 +653,12 @@ def _strip_default_fanout_resume_fields(carrier_dump: Any) -> None:
             if child.get("orchestrator_effect_fence_resume") is None:
                 child.pop("orchestrator_effect_fence_resume", None)
             for nested_key in ("fan_out_resume", "peer_fan_out_resume"):
-                _strip_default_fanout_resume_fields(child.get(nested_key))
+                _strip_default_fanout_resume_fields(
+                    child.get(nested_key),
+                    strip_paused_child_branches=(nested_key == "peer_fan_out_resume"),
+                )
+    if strip_paused_child_branches and not carrier.get("paused_child_branches"):
+        carrier.pop("paused_child_branches", None)
 
 
 def _compute_snapshot_hash(
@@ -696,13 +718,27 @@ def _compute_snapshot_hash(
         _strip_default_fanout_resume_fields(_for)
         canonical["fan_out_resume"] = _for
     if peer_fan_out_resume is not None:
+        # B-21: `paused_child_branches` is a NEW field on PeerFanOutResumeState (the
+        # PARALLELIZATION analogue of FanOutResumeState.paused_child_branches, dropped
+        # above). `model_dump` ALWAYS emits it (as `[]` when empty), which would change
+        # the hash of every pre-B-21 PARALLELIZATION snapshot — mirrors the fan_out_resume
+        # drop above so those snapshots hash byte-identically; include it (covering the
+        # nested child cursors recursively) only when a paused-child branch is present.
+        _pfor = peer_fan_out_resume.model_dump(mode="json")
+        if not _pfor.get("paused_child_branches"):
+            _pfor.pop("paused_child_branches", None)
         # B-FANOUT-PAUSE-SYNTHESIS: same recursive `synthesis_step_id` drop for the
         # PARALLELIZATION carrier. PeerFanOutResumeState had NO drop before this field, so it
         # is ADDED here — without it every pre-existing PARALLELIZATION snapshot's hash would
-        # change. (A peer carrier has no nested child snapshots today, but the recursive form
-        # is uniform + future-proof.)
-        _pfor = peer_fan_out_resume.model_dump(mode="json")
-        _strip_default_fanout_resume_fields(_pfor)
+        # change. A `paused_child_branches` cursor (B-21) nests a full child `PauseSnapshot`
+        # INSIDE this `model_dump` exactly as the fan_out_resume side does, so the recursive
+        # strip below reaches those nested carriers too. `strip_paused_child_branches=True`
+        # (out-of-family Codex round 2 [P1]) additionally reaches any NESTED
+        # `peer_fan_out_resume` occurrence's own empty `paused_child_branches` (the field is
+        # brand-new here, so no pre-existing snapshot's hash is disturbed by dropping it at
+        # any depth — unlike the `fan_out_resume` side above, which does NOT pass this flag
+        # to preserve #680's already-shipped nested byte-compat).
+        _strip_default_fanout_resume_fields(_pfor, strip_paused_child_branches=True)
         canonical["peer_fan_out_resume"] = _pfor
     if handoff_resume is not None:
         # B-HANDOFF-PAUSE: the DECENTRALIZED_HANDOFF stage cursor (recovered
