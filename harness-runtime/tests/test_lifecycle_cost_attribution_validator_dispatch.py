@@ -421,3 +421,46 @@ def test_sibling_fanout_branches_sharing_parent_action_id_get_distinct_f2_entrie
     entries = read_ledger(ledger_writer.handle)
     cost_entries = [e for e in entries if str(e.action_id).startswith("cost:")]
     assert len(cost_entries) == 2
+
+
+def test_two_tenants_sharing_identifiers_get_distinct_f2_entries(
+    cost_chain: RuntimeCostAttributionChain,
+    audit_writer: _RecordingAuditWriter,
+    tmp_path: Path,
+) -> None:
+    """Regression guard (out-of-family Codex [P1]) — the underlying
+    `LedgerWriter` is SHARED across tenants. Two tenants dispatching a
+    validator step that happens to share `(workflow_id, parent_action_id,
+    dispatch_disambiguator)` — plausible here since the validator's
+    disambiguator is DETERMINISTIC (`burden_count`-derived), not a random
+    per-attempt span_id — must NOT collide via `IDEMPOTENT_NOOP`, or the
+    second tenant's audit entry would silently reference the first
+    tenant's F2 anchor (a cross-tenant leak)."""
+    rate_table = _make_rate_table(cpu_rate_per_ms=Decimal("0.01"))
+    ledger_writer = _build_ledger_writer(tmp_path)
+    common = dict(
+        rate_table=rate_table,
+        cost_chain=cost_chain,
+        audit_writer=audit_writer,
+        validator_id="schema-validator",
+        execution_time_ms=10.0,
+        span_id="validator-evaluate-test-wf-step-0",
+        idempotency_key="validator-idem-tenant",
+        parent_idempotency_key="parent-1",
+        workflow_id="test-wf",
+        parent_action_id="workflow:test-wf:step:0",
+        dispatch_disambiguator="0-pass-0",
+        ledger_writer=ledger_writer,
+    )
+    attribute_validator_dispatch_cost(tenant_id="tenant-A", **common)
+    attribute_validator_dispatch_cost(tenant_id="tenant-B", **common)
+
+    entries = read_ledger(ledger_writer.handle)
+    cost_entries = [e for e in entries if str(e.action_id).startswith("cost:")]
+    assert len(cost_entries) == 2, (
+        f"two tenants sharing identical (workflow_id, parent_action_id, "
+        f"dispatch_disambiguator) must get 2 distinct F2 entries, not "
+        f"collapse cross-tenant via IDEMPOTENT_NOOP; got {len(cost_entries)}"
+    )
+    entry_cores = {str(e.payload.entry_core) for _, e in audit_writer.appended}
+    assert len(entry_cores) == 2, "each tenant's audit entry must reference its OWN F2 anchor"

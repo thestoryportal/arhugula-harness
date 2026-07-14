@@ -277,6 +277,7 @@ def attribute_validator_dispatch_cost(
         workflow_id=workflow_id,
         parent_action_id=parent_action_id,
         dispatch_disambiguator=dispatch_disambiguator,
+        tenant_id=tenant_id,
     )
     audit_entry: AuditLedgerEntry = cp_audit_to_od_audit(
         cost_payload,

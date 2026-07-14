@@ -42,6 +42,13 @@ __all__ = ["compose_cost_f2_entry_core"]
 _COST_ATTRIBUTION_ACTOR = Actor(actor_class=ActorClass.AGENT, actor_id="harness-cost-attribution")
 
 
+#: Tenant tag for the F2 identity when `tenant_id` is `None` — mirrors
+#: `RuntimeAuditLedgerWriter._tenant_tag`'s single-tenant convention so a
+#: `None`-tenant cost event and an explicit `"_single"`-tenant one (unlikely
+#: but not forbidden) don't themselves collide.
+_SINGLE_TENANT_TAG = "_single"
+
+
 def compose_cost_f2_entry_core(
     *,
     ledger_writer: Any | None,
@@ -49,6 +56,7 @@ def compose_cost_f2_entry_core(
     workflow_id: str,
     parent_action_id: str,
     dispatch_disambiguator: str,
+    tenant_id: str | None = None,
     time_source: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> StateLedgerEntryRef | None:
     """F2-write one cost-attribution dispatch fact; return its `entry_core`.
@@ -65,6 +73,16 @@ def compose_cost_f2_entry_core(
     `IDEMPOTENT_NOOP` — the second cost event's audit entry would then
     reference the FIRST event's F2 anchor, not its own.
 
+    `tenant_id` is folded into the F2 identity (mirroring
+    `RuntimeAuditLedgerWriter._tenant_tag`'s `audit:` action_id convention)
+    because the underlying `LedgerWriter` is SHARED across tenants
+    (out-of-family Codex [P1]): two tenants dispatching workflows that
+    happen to share `(workflow_id, parent_action_id, dispatch_disambiguator)`
+    — plausible for validator dispatch, whose disambiguator is deterministic
+    (`burden_count`-derived), not a random per-attempt span_id — would
+    otherwise collide, and the second tenant's audit entry would silently
+    reference the first tenant's F2 anchor.
+
     Returns `None` when `ledger_writer` is `None` — the converter's
     `_entry_core_or_default` then falls back to its pre-existing
     `cp-audit:<action_id>` fabricated marker (unit-test ergonomics;
@@ -73,7 +91,10 @@ def compose_cost_f2_entry_core(
     if ledger_writer is None:
         return None
 
-    action_id = Identifier(f"cost:{workflow_id}:{parent_action_id}:{dispatch_disambiguator}")
+    tenant_tag = tenant_id if tenant_id else _SINGLE_TENANT_TAG
+    action_id = Identifier(
+        f"cost:{tenant_tag}:{workflow_id}:{parent_action_id}:{dispatch_disambiguator}"
+    )
     procedural_tier_snapshot_ref = (
         procedural_tier_snapshot_resolver()
         if procedural_tier_snapshot_resolver is not None

@@ -277,6 +277,7 @@ def attribute_llm_dispatch_cost(
         workflow_id=workflow_id,
         parent_action_id=parent_action_id,
         dispatch_disambiguator=span_id,
+        tenant_id=tenant_id,
     )
     audit_entry: AuditLedgerEntry = cp_audit_to_od_audit(
         cost_payload,
