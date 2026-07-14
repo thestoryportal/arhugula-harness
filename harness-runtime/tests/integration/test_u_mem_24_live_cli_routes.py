@@ -139,16 +139,28 @@ def test_codex_cli_auth_confirms_codex_route() -> None:
     assert route.route_ref == "codex:codex"
 
 
+@pytest.mark.skip(
+    reason=(
+        "No non-secret Antigravity auth-status probe is declared for this host "
+        "yet (B-28 finding #14, test-quality preflight 2026-07-12 — the prior "
+        "body's PATH-presence check before an unconditional pytest.skip() was "
+        "unreachable dead code; there is no live gate here until a probe "
+        "recipe exists, see CLAUDE.md §2.2)"
+    )
+)
 def test_antigravity_cli_auth_confirms_antigravity_route() -> None:
-    if shutil.which("antigravity") is None:
-        pytest.skip("Antigravity CLI is not installed on PATH")
-    pytest.skip("No non-secret Antigravity auth-status probe is declared for this host")
+    pass
 
 
+@pytest.mark.skip(
+    reason=(
+        "No non-secret legacy Gemini auth-status probe is declared for this "
+        "host yet (B-28 finding #14, test-quality preflight 2026-07-12 — same "
+        "dead-code shape as the Antigravity test above)"
+    )
+)
 def test_gemini_legacy_cli_auth_confirms_gemini_legacy_route() -> None:
-    if shutil.which("gemini") is None:
-        pytest.skip("Gemini CLI is not installed on PATH")
-    pytest.skip("No non-secret legacy Gemini auth-status probe is declared for this host")
+    pass
 
 
 def test_generic_command_cli_auth_confirms_operator_declared_route() -> None:

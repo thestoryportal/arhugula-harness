@@ -96,12 +96,18 @@ def test_pre_collector_pipeline_composes_with_u_od_31() -> None:
 
 
 def test_posture_model_frozen_and_hashable() -> None:
-    """The PerPersonaTierRedactionPosture record is frozen → Eq + Hash."""
+    """The PerPersonaTierRedactionPosture record is frozen → Eq + Hash.
+
+    B-28 finding #12 (test-quality preflight 2026-07-12) — `hash(posture) ==
+    hash(posture)` was a self-comparison tautology; the `duplicate` built
+    below was compared for equality but never for hash equality, so the
+    load-bearing dataclass invariant (equal objects hash equal) went
+    unverified."""
     posture = PER_PERSONA_TIER_REDACTION[PersonaTier.SOLO_DEVELOPER]
-    assert hash(posture) == hash(posture)
     duplicate = PerPersonaTierRedactionPosture(
         persona_tier=PersonaTier.SOLO_DEVELOPER,
         posture=ContentCapturePosture.OPERATOR_SELF_REDACT,
         toggleable=True,
     )
     assert posture == duplicate
+    assert hash(posture) == hash(duplicate)

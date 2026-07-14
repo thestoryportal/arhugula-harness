@@ -21,6 +21,7 @@ from harness_is.memory_record_envelope import (
 )
 from harness_is.memory_retrieval_index import (
     CURRENT_DERIVED_RETRIEVAL_INDEX_VERSION,
+    DerivedRetrievalIndexMissingError,
     DerivedRetrievalIndexQuery,
     DerivedRetrievalIndexStaleError,
     DerivedRetrievalIndexStore,
@@ -151,6 +152,21 @@ def test_stale_index_is_detected_after_canonical_write(tmp_path: Path) -> None:
     assert stale.stale is True
     with pytest.raises(DerivedRetrievalIndexStaleError):
         index_store.read_current()
+
+
+def test_read_current_raises_when_never_rebuilt(tmp_path: Path) -> None:
+    """B-28 finding #4 (test-quality preflight 2026-07-12) — only the
+    already-rebuilt-then-stale path was covered; calling ``read_current()``
+    (or ``require_fresh=False``) before any ``rebuild()`` has ever run must
+    raise ``DerivedRetrievalIndexMissingError``, not a missing-file crash or
+    a silent empty index."""
+    binding = _binding(tmp_path)
+    index_store = _index_store(binding)
+
+    with pytest.raises(DerivedRetrievalIndexMissingError):
+        index_store.read_current()
+    with pytest.raises(DerivedRetrievalIndexMissingError):
+        index_store.read_current(require_fresh=False)
 
 
 def test_empty_store_rebuild_returns_valid_empty_retrieval_base(tmp_path: Path) -> None:

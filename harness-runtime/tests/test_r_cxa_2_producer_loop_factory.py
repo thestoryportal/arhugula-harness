@@ -6,6 +6,7 @@ import asyncio
 from pathlib import Path
 from typing import Any
 
+import pytest
 from harness_as.sandbox_tier import BlastRadiusTier, SandboxTier
 from harness_as.tool_contract import ToolContract
 from harness_core import PersonaTier
@@ -24,6 +25,7 @@ from harness_is.path_resolver import PathResolver
 from harness_is.state_ledger_entry_schema import Actor, ActorClass, Identifier
 from harness_is.state_ledger_write import WriteResult, read_ledger
 from harness_runtime.bootstrap.factories.r_cxa_2_producer_loop_factory import (
+    RCXA2ProducerLoopMaterializeError,
     materialize_r_cxa_2_producer_loop_stage,
 )
 from harness_runtime.bootstrap.mutable_context import _MutableHarnessContext
@@ -335,3 +337,41 @@ def test_default_defer_names_leaves_search_tools_unreachable_via_adapter(
     assert results[0].dispatch_result is not None
     assert results[0].dispatch_result["response"]["matches"] == []
     assert tool_dispatcher.calls == []
+
+
+# --------------------------------------------------------------------------
+# B-28 finding #16 — the 4 stage-5 precondition-guard error branches were
+# never exercised by pytest.raises anywhere in this file.
+# --------------------------------------------------------------------------
+
+
+def test_missing_cp_is_wiring_raises(tmp_path: Path) -> None:
+    ctx, config, _ask_surface, _tool_dispatcher = _post_tool_dispatcher_context(tmp_path, [])
+    del ctx.cxa_stages["cp_is_wiring"]
+
+    with pytest.raises(RCXA2ProducerLoopMaterializeError, match="cp_is_wiring"):
+        materialize_r_cxa_2_producer_loop_stage(ctx, config)
+
+
+def test_missing_hitl_registry_raises(tmp_path: Path) -> None:
+    ctx, config, _ask_surface, _tool_dispatcher = _post_tool_dispatcher_context(tmp_path, [])
+    ctx.hitl_registry = None
+
+    with pytest.raises(RCXA2ProducerLoopMaterializeError, match="hitl_registry"):
+        materialize_r_cxa_2_producer_loop_stage(ctx, config)
+
+
+def test_missing_ask_user_question_surface_raises(tmp_path: Path) -> None:
+    ctx, config, _ask_surface, _tool_dispatcher = _post_tool_dispatcher_context(tmp_path, [])
+    ctx.ask_user_question_surface = None
+
+    with pytest.raises(RCXA2ProducerLoopMaterializeError, match="ask_user_question_surface"):
+        materialize_r_cxa_2_producer_loop_stage(ctx, config)
+
+
+def test_missing_tool_dispatcher_raises(tmp_path: Path) -> None:
+    ctx, config, _ask_surface, _tool_dispatcher = _post_tool_dispatcher_context(tmp_path, [])
+    ctx.tool_dispatcher = None
+
+    with pytest.raises(RCXA2ProducerLoopMaterializeError, match="tool_dispatcher"):
+        materialize_r_cxa_2_producer_loop_stage(ctx, config)

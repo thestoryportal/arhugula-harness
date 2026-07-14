@@ -340,13 +340,27 @@ def test_post_sub_arc_a_5_audit_payload_branches_distinct() -> None:
 
 
 def test_signed_with_ed25519_default() -> None:
-    entry = cp_audit_to_od_audit(_webhook_carrier(), key_id=_KEY)
-    # SignatureAlgorithm default is ED25519; landing under default path.
-    assert SignatureAlgorithm.ED25519 in {
-        SignatureAlgorithm.ED25519,
-    }
-    # signature_attrs carries the algorithm via its own attributes.
-    assert entry.signature_attrs is not None
+    """B-28 finding #1 (test-quality preflight 2026-07-12) — the prior
+    assertion (`SignatureAlgorithm.ED25519 in {SignatureAlgorithm.ED25519,}`)
+    was a literal-against-itself tautology that never read the converter's
+    actual output. The sibling `test_cp_audit_conversion.py:72` only checks
+    this for the `CPAuditLedgerEntry` (dispatch/hitl) branch, so a regression
+    isolated to any of the 6 producer-specific branches U-CP-72 added would
+    go undetected by both files — assert the real value on every landed
+    producer-specific branch here."""
+    carriers = [
+        _webhook_carrier(),
+        _operator_burden_carrier(),
+        _validator_carrier(),
+        _mcp_trust_carrier(),
+        _pause_carrier(),
+        _resume_carrier(),
+        _cost_carrier(),
+    ]
+    for carrier in carriers:
+        entry = cp_audit_to_od_audit(carrier, key_id=_KEY)
+        assert entry.signature_attrs is not None
+        assert entry.signature_attrs.audit_signature_algorithm is SignatureAlgorithm.ED25519
 
 
 # ============================================================================

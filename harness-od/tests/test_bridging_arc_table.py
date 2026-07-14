@@ -224,6 +224,16 @@ def test_fail_sampling_target_missing_source_event_class() -> None:
 
 
 def test_transition_record_frozen_and_hashable() -> None:
-    """The BridgingArcTransition record is frozen → Eq + Hash."""
+    """The BridgingArcTransition record is frozen → Eq + Hash.
+
+    B-28 finding #10 (test-quality preflight 2026-07-12) — `hash(transition)
+    == hash(transition)` compared the same object instance to itself, a
+    tautology true regardless of whether `__hash__` is field-based; compare
+    two separately-constructed but field-equal instances instead, matching
+    the pattern already used elsewhere in this suite (e.g.
+    `test_observability_matrix.py` / `test_rate_table_types.py`)."""
     transition = BRIDGING_ARC_TRANSITIONS[0]
-    assert hash(transition) == hash(transition)
+    duplicate = transition.model_copy()
+    assert transition is not duplicate
+    assert transition == duplicate
+    assert hash(transition) == hash(duplicate)

@@ -108,6 +108,29 @@ def test_generic_profile_has_no_cli_specific_assumptions() -> None:
         )
 
 
+def test_partial_provider_identity_binding_rejected() -> None:
+    """B-28 finding #6 (test-quality preflight 2026-07-12) — only the
+    fully-generic (no binding fields) and fully-specified (all three)
+    branches were exercised; a partially-bound identity (some but not all of
+    provider_name/external_cli_kind/command_name) must be rejected."""
+    m = _cli_profile_module()
+
+    with pytest.raises(ValueError, match="requires provider, kind, and command"):
+        m.CliProfile(
+            profile_id="profile:partial-provider-only",
+            kind=m.CliProfileKind.CUSTOM,
+            provider_name="codex",
+        )
+
+    with pytest.raises(ValueError, match="requires provider, kind, and command"):
+        m.CliProfile(
+            profile_id="profile:partial-kind-and-command",
+            kind=m.CliProfileKind.CUSTOM,
+            external_cli_kind="codex",
+            command_name="codex",
+        )
+
+
 def test_claude_code_and_codex_require_explicit_source_declarations() -> None:
     m = _cli_profile_module()
 

@@ -17,7 +17,7 @@ from __future__ import annotations
 import pytest
 from harness_core import DeploymentSurface, PersonaTier, WorkloadClass
 from harness_cp.engine_class import EngineClass
-from harness_cp.engine_class_candidate import ENGINE_CLASS_CANDIDATES
+from harness_cp.engine_class_candidate import ENGINE_CLASS_CANDIDATES, EngineClassCandidate
 from harness_cp.workload_binding_engine_class_selection import (
     HITLInvocation,
     WorkloadBindingError,
@@ -147,8 +147,8 @@ def test_selection_at_binding_time() -> None:
     """Acceptance #3 — a no-admissible-class selection aborts binding.
 
     `WorkloadBindingError` is the binding-time abort signal — every valid
-    (surface, workload, tier) triple resolves to exactly one class, so the
-    error path is exercised via the unreachable-surface guard.
+    (surface, workload, tier) triple resolves to exactly one class today, so
+    this test also proves the happy-path side of that claim.
     """
     # Every valid triple succeeds — binding-time, single result.
     for surface in DeploymentSurface:
@@ -156,8 +156,67 @@ def test_selection_at_binding_time() -> None:
             for workload in WorkloadClass:
                 result = select_engine_class(_input(workload, surface, tier))
                 assert result.selected_class in result.candidate_set
-    # The abort type is a binding-time ValueError subclass.
     assert issubclass(WorkloadBindingError, ValueError)
+
+
+def test_selection_aborts_when_persona_tier_admits_no_candidate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """B-28 finding #7 (test-quality preflight 2026-07-12) — the prior test
+    asserted only ``issubclass(WorkloadBindingError, ValueError)``, a
+    type-hierarchy tautology that never actually raised the error. No
+    production `ENGINE_CLASS_CANDIDATES` entry today is pure-pattern-only, so
+    the tier-admissibility abort at `select_engine_class` (§7.3 step 3) is
+    genuinely unreachable via real data — this pins the guard itself by
+    synthesizing a surface whose ONLY candidate is
+    `PURE_PATTERN_NO_ENGINE` (admitted solely at `SOLO_DEVELOPER`) and
+    selecting at a higher persona tier."""
+    pure_pattern_only = EngineClassCandidate(
+        deployment_surface=DeploymentSurface.LOCAL_DEVELOPMENT,
+        candidate_set=frozenset({EngineClass.PURE_PATTERN_NO_ENGINE}),
+        exclusion_reasons={
+            candidate: "synthesized for B-28 finding #7 — non-pure-pattern classes excluded"
+            for candidate in EngineClass
+            if candidate is not EngineClass.PURE_PATTERN_NO_ENGINE
+        },
+    )
+    monkeypatch.setattr(
+        "harness_cp.workload_binding_engine_class_selection.ENGINE_CLASS_CANDIDATES",
+        (pure_pattern_only,),
+    )
+
+    with pytest.raises(WorkloadBindingError, match="admits no engine class"):
+        select_engine_class(
+            _input(
+                WorkloadClass.RESEARCH,
+                DeploymentSurface.LOCAL_DEVELOPMENT,
+                PersonaTier.TEAM_BINDING,
+            )
+        )
+
+
+def test_selection_aborts_when_no_candidate_set_for_surface(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Out-of-family Codex follow-up on B-28 finding #7 — `_candidate_set_for`
+    has its OWN, separate `WorkloadBindingError` raise site ("no §7.2
+    candidate set for deployment surface") that the tier-admissibility test
+    above never reaches (it keeps a matching `LOCAL_DEVELOPMENT` row).
+    Synthesize an `ENGINE_CLASS_CANDIDATES` with no row at all for the
+    requested surface to pin this second, independent guard."""
+    monkeypatch.setattr(
+        "harness_cp.workload_binding_engine_class_selection.ENGINE_CLASS_CANDIDATES",
+        (),
+    )
+
+    with pytest.raises(WorkloadBindingError, match="no §7.2 candidate set"):
+        select_engine_class(
+            _input(
+                WorkloadClass.RESEARCH,
+                DeploymentSurface.LOCAL_DEVELOPMENT,
+                PersonaTier.SOLO_DEVELOPER,
+            )
+        )
 
 
 def test_result_frozen() -> None:
