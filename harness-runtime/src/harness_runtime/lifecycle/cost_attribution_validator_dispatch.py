@@ -124,7 +124,7 @@ def attribute_validator_dispatch_cost(
     workflow_id: str,
     parent_action_id: str,
     tenant_id: str | None = None,
-    burden_count: int = 0,
+    dispatch_disambiguator: str = "0",
     ledger_writer: Any = None,
     procedural_tier_snapshot_resolver: Callable[[], Identifier] | None = None,
 ) -> SpanCostRecord:
@@ -179,15 +179,20 @@ def attribute_validator_dispatch_cost(
         Parent action_id from `step_context.parent_action_id`.
     tenant_id
         Tenant scope for audit-ledger append (None → single-tenant).
-    burden_count
-        `ValidatorEvaluation.burden_count` — the framework's monotonic
-        non-PASS-outcome counter (CP spec §25.4 invariant 5). Used as the
-        F2-write disambiguator instead of `span_id`: unlike the tool/LLM/
-        webhook composers' `span_id` (a fresh real OTel span per attempt),
-        this composer's `span_id` is a *synthesized*
+    dispatch_disambiguator
+        The F2-write disambiguator, used instead of `span_id`: unlike the
+        tool/LLM/webhook composers' `span_id` (a fresh real OTel span per
+        attempt), this composer's `span_id` is a *synthesized*
         `f"validator-evaluate-{workflow_id}-{step_id}"` string that repeats
-        identically across a REVALIDATE retry loop on the same step —
-        `burden_count` strictly increases across those repeat calls.
+        identically across a REVALIDATE retry loop on the same step. The
+        caller (`CostAttributingValidatorHook.on_post_evaluate`) composes
+        this from `(evaluation.burden_count, evaluation.result.outcome,
+        step_context.branch_index)` — `burden_count` alone collides
+        because a REVALIDATE→PASS pair shares one `burden_count` value
+        (PASS is the sole outcome that does NOT increment it per CP spec
+        §25.4 invariant 5), so the outcome token is required to
+        disambiguate that pair; `branch_index` disambiguates sibling
+        fan-out branches sharing one `parent_action_id`.
     ledger_writer
         IS state-ledger writer (U-RT-12). When bound, this evaluation's
         cost fact is F2-written before the audit conversion, and the
@@ -263,16 +268,15 @@ def attribute_validator_dispatch_cost(
         parent_action_id=parent_action_id,
     )
     # B-23 — F2-write the dispatch fact so entry_core is a real IS anchor,
-    # not a fabricated `cp-audit:<action_id>` marker. `burden_count`
-    # disambiguates a REVALIDATE retry loop on the same step (see the
-    # `burden_count` parameter docstring — this composer's `span_id` is
-    # synthesized and repeats across such a loop).
+    # not a fabricated `cp-audit:<action_id>` marker. See the
+    # `dispatch_disambiguator` parameter docstring for why a composed
+    # (burden_count, outcome, branch_index) key is required.
     entry_core = compose_cost_f2_entry_core(
         ledger_writer=ledger_writer,
         procedural_tier_snapshot_resolver=procedural_tier_snapshot_resolver,
         workflow_id=workflow_id,
         parent_action_id=parent_action_id,
-        dispatch_disambiguator=str(burden_count),
+        dispatch_disambiguator=dispatch_disambiguator,
     )
     audit_entry: AuditLedgerEntry = cp_audit_to_od_audit(
         cost_payload,
@@ -360,6 +364,20 @@ class CostAttributingValidatorHook:
         span_id = f"validator-evaluate-{step_context.workflow_id}-{step.step_id}"
         idempotency_key = f"validator:{step_context.workflow_id}:{step.step_id}"
 
+        # B-23 (out-of-family Codex [P1]) — `evaluation.burden_count` alone
+        # collides: it does NOT increment on the terminal PASS call, so a
+        # REVALIDATE (burden_count=N) immediately followed by PASS
+        # (burden_count STILL N) would compute the same F2 idempotency key
+        # and the PASS event's cost fact would `IDEMPOTENT_NOOP`-drop onto
+        # the REVALIDATE's anchor. The outcome token disambiguates that
+        # pair; `branch_index` disambiguates sibling fan-out branches that
+        # share one `parent_action_id` (the `sub_agent_dispatch.py`
+        # precedent for the same class of collision).
+        branch_index = step_context.branch_index if step_context.branch_index is not None else 0
+        dispatch_disambiguator = (
+            f"{evaluation.burden_count}-{evaluation.result.outcome.value}-{branch_index}"
+        )
+
         attached = attribute_validator_dispatch_cost(
             rate_table=self._rate_table,
             cost_chain=self._cost_chain,
@@ -372,7 +390,7 @@ class CostAttributingValidatorHook:
             workflow_id=step_context.workflow_id,
             parent_action_id=step_context.parent_action_id,
             tenant_id=step_context.tenant_id,
-            burden_count=evaluation.burden_count,
+            dispatch_disambiguator=dispatch_disambiguator,
             ledger_writer=self._ledger_writer,
             procedural_tier_snapshot_resolver=self._procedural_tier_snapshot_resolver,
         )

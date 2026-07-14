@@ -264,7 +264,7 @@ def test_ledger_writer_bound_produces_real_entry_core_full_chain(
         parent_idempotency_key="parent-idem-1",
         workflow_id="test-wf",
         parent_action_id="workflow:test-wf:step:0",
-        burden_count=0,
+        dispatch_disambiguator="0-pass-0",
         ledger_writer=ledger_writer,
     )
     entries = read_ledger(ledger_writer.handle)
@@ -311,8 +311,8 @@ def test_revalidate_retry_same_synthesized_span_id_gets_distinct_f2_entries(
     that repeats IDENTICALLY across those calls (unlike the tool/LLM/webhook
     composers' real per-attempt OTel span). Using that synthesized span_id
     as the F2 disambiguator would collide and silently `IDEMPOTENT_NOOP`-
-    drop the second cost event. `burden_count` — the framework's monotonic
-    non-PASS counter (CP spec §25.4 invariant 5) — MUST be used instead."""
+    drop the second cost event. Two consecutive REVALIDATE outcomes get
+    strictly-increasing `burden_count` values, disambiguating naturally."""
     rate_table = _make_rate_table(cpu_rate_per_ms=Decimal("0.01"))
     ledger_writer = _build_ledger_writer(tmp_path)
     same_synthesized_span_id = "validator-evaluate-test-wf-step-0"
@@ -330,9 +330,9 @@ def test_revalidate_retry_same_synthesized_span_id_gets_distinct_f2_entries(
         ledger_writer=ledger_writer,
     )
     # First evaluate() call: REVALIDATE outcome → burden_count=1 on this call.
-    attribute_validator_dispatch_cost(burden_count=1, **common)
-    # Retry evaluate() call on the SAME step: burden_count=2.
-    attribute_validator_dispatch_cost(burden_count=2, **common)
+    attribute_validator_dispatch_cost(dispatch_disambiguator="1-revalidate-0", **common)
+    # Retry evaluate() call on the SAME step: REVALIDATE again → burden_count=2.
+    attribute_validator_dispatch_cost(dispatch_disambiguator="2-revalidate-0", **common)
 
     entries = read_ledger(ledger_writer.handle)
     cost_entries = [e for e in entries if str(e.action_id).startswith("cost:")]
@@ -345,3 +345,79 @@ def test_revalidate_retry_same_synthesized_span_id_gets_distinct_f2_entries(
     assert len(entry_cores) == 2, (
         "each REVALIDATE attempt's audit entry must reference its OWN F2 anchor"
     )
+
+
+def test_revalidate_then_pass_shares_burden_count_but_gets_distinct_f2_entries(
+    cost_chain: RuntimeCostAttributionChain,
+    audit_writer: _RecordingAuditWriter,
+    tmp_path: Path,
+) -> None:
+    """Regression guard (out-of-family Codex [P1]) — `burden_count` alone is
+    NOT a safe disambiguator: per CP spec §25.4 invariant 5, `burden_count`
+    increments only on NON-PASS outcomes, so a REVALIDATE call
+    (burden_count=1) immediately followed by the terminal PASS call
+    (burden_count STILL 1) would collide on a `burden_count`-only key. The
+    outcome token in `dispatch_disambiguator` must break that tie."""
+    rate_table = _make_rate_table(cpu_rate_per_ms=Decimal("0.01"))
+    ledger_writer = _build_ledger_writer(tmp_path)
+    same_synthesized_span_id = "validator-evaluate-test-wf-step-0"
+    common = dict(
+        rate_table=rate_table,
+        cost_chain=cost_chain,
+        audit_writer=audit_writer,
+        validator_id="schema-validator",
+        execution_time_ms=10.0,
+        span_id=same_synthesized_span_id,
+        idempotency_key="validator-idem-revalidate-then-pass",
+        parent_idempotency_key="parent-1",
+        workflow_id="test-wf",
+        parent_action_id="workflow:test-wf:step:0",
+        ledger_writer=ledger_writer,
+    )
+    # REVALIDATE call: burden_count increments to 1.
+    attribute_validator_dispatch_cost(dispatch_disambiguator="1-revalidate-0", **common)
+    # Terminal PASS call on the retry: burden_count does NOT increment — still 1.
+    attribute_validator_dispatch_cost(dispatch_disambiguator="1-pass-0", **common)
+
+    entries = read_ledger(ledger_writer.handle)
+    cost_entries = [e for e in entries if str(e.action_id).startswith("cost:")]
+    assert len(cost_entries) == 2, (
+        "REVALIDATE (burden_count=1) then PASS (burden_count still 1) must NOT "
+        f"collapse to 1 F2 entry via IDEMPOTENT_NOOP; got {len(cost_entries)}"
+    )
+    entry_cores = {str(e.payload.entry_core) for _, e in audit_writer.appended}
+    assert len(entry_cores) == 2
+
+
+def test_sibling_fanout_branches_sharing_parent_action_id_get_distinct_f2_entries(
+    cost_chain: RuntimeCostAttributionChain,
+    audit_writer: _RecordingAuditWriter,
+    tmp_path: Path,
+) -> None:
+    """Regression guard (out-of-family Codex [P1]) — sibling fan-out
+    branches of the SAME declared validator step share one
+    `parent_action_id` (per `StepExecutionContext.branch_index`'s own
+    docstring: "Branch identity is (parent_action_id, branch_index)"), the
+    same collision class `sub_agent_dispatch.py`'s `child_index` guards
+    against. `branch_index` in `dispatch_disambiguator` must disambiguate."""
+    rate_table = _make_rate_table(cpu_rate_per_ms=Decimal("0.01"))
+    ledger_writer = _build_ledger_writer(tmp_path)
+    common = dict(
+        rate_table=rate_table,
+        cost_chain=cost_chain,
+        audit_writer=audit_writer,
+        validator_id="schema-validator",
+        execution_time_ms=10.0,
+        span_id="validator-evaluate-test-wf-step-0",
+        idempotency_key="validator-idem-fanout",
+        parent_idempotency_key="parent-1",
+        workflow_id="test-wf",
+        parent_action_id="workflow:test-wf:step:0",
+        ledger_writer=ledger_writer,
+    )
+    attribute_validator_dispatch_cost(dispatch_disambiguator="0-pass-0", **common)
+    attribute_validator_dispatch_cost(dispatch_disambiguator="0-pass-1", **common)
+
+    entries = read_ledger(ledger_writer.handle)
+    cost_entries = [e for e in entries if str(e.action_id).startswith("cost:")]
+    assert len(cost_entries) == 2
