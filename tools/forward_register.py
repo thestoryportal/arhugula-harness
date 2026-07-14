@@ -89,6 +89,23 @@ def _id_from_heading(heading: str) -> str | None:
     return m.group(1) if m else None
 
 
+def _prose_heading_lines(text: str) -> list[tuple[str, str]]:
+    """Every (id, complete heading line) pair in the prose file, in file order.
+
+    Scans whole ``#``/``##``/``###`` lines rather than doing a substring search, so a
+    row's ``heading`` must match a CURRENT, COMPLETE heading line — not merely be a
+    substring somewhere in the file. This is what catches a heading that grew a
+    status suffix (e.g. "... — CLOSED") without the YAML row being updated to match:
+    the OLD, shorter heading is a substring of the NEW line, but not equal to it.
+    """
+    pairs: list[tuple[str, str]] = []
+    for line in text.splitlines():
+        heading_id = _id_from_heading(line)
+        if heading_id is not None:
+            pairs.append((heading_id, line))
+    return pairs
+
+
 def load(path: Path = DEFAULT_LEDGER) -> dict[str, Any]:
     import yaml  # lazy — see module-top note
 
@@ -202,7 +219,9 @@ def check_prose_drift(data: dict[str, Any], prose_path: Path = DEFAULT_PROSE) ->
     text = prose_path.read_text(encoding="utf-8")
 
     yaml_ids = {r["id"] for r in data["items"]}
-    prose_id_counts = Counter(_HEADING_ID_RE.findall(text) + _SECTION_HEADING_ID_RE.findall(text))
+    pairs = _prose_heading_lines(text)
+    prose_id_counts = Counter(heading_id for heading_id, _line in pairs)
+    prose_line_by_id = dict(pairs)  # last occurrence wins; duplicates flagged below
 
     for missing in sorted(set(prose_id_counts) - yaml_ids):
         violations.append(f"prose heading '{missing}' has no matching row in forward-register.yaml")
@@ -216,9 +235,15 @@ def check_prose_drift(data: dict[str, Any], prose_path: Path = DEFAULT_PROSE) ->
 
     for r in data["items"]:
         heading = r.get("heading")
-        if heading and heading not in text:
+        if not heading:
+            continue
+        current_line = prose_line_by_id.get(r["id"])
+        if current_line is None:
+            violations.append(f"{r['id']}: no heading line for this id found in {prose_path.name}")
+        elif heading != current_line:
             violations.append(
-                f"{r['id']}: heading {heading!r} not found verbatim in {prose_path.name}"
+                f"{r['id']}: row heading is stale — prose now reads {current_line!r}, "
+                f"row still has {heading!r} (a substring match would have hidden this)"
             )
 
     return violations

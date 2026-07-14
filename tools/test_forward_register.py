@@ -214,6 +214,19 @@ def test_negative_nonconforming_heading_shape_fails() -> None:
     assert _violates(m)
 
 
+def test_negative_prose_drift_heading_grew_a_suffix_without_row_update_fails() -> None:
+    """A heading that grows a status suffix (e.g. "... -- CLOSED") in the prose file,
+    without the YAML row's heading being updated to match, must be caught even though
+    the OLD heading is still a substring of the NEW line."""
+
+    def mutate_prose(text: str) -> str:
+        old = next(r["heading"] for r in _data()["items"] if r["id"] == "B-20")
+        return text.replace(old, old + " -- SYNTHETIC SUFFIX", 1)
+
+    with _temp_prose(mutate_prose) as tmp_path:
+        assert forward_register.check_prose_drift(_data(), tmp_path) != []
+
+
 def test_negative_prose_drift_new_heading_without_row_fails() -> None:
     """A heading appended to the prose file with no matching YAML row is drift."""
 

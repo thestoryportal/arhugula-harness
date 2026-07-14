@@ -52,7 +52,7 @@ items:
     status: closed
     summary: "R-300 multi-LLM routing activation — declarative layer live; the multi-provider exercise is B-2."
     pr: "#213"
-    heading: "### B-1 · Layered capability-aware routing activation"
+    heading: "### B-1 · Layered capability-aware routing activation `⚖️ council-eligible`"
 
   - id: B-2
     title: "Multi-provider credentials + mixed-provider exercise"
@@ -66,14 +66,14 @@ items:
     status: closed
     summary: "Local Docker execution driver + live TIER_2 container e2e."
     pr: "R-410"
-    heading: "### B-3 · Real TIER_2_CONTAINER sandbox execution (R-410)"
+    heading: "### B-3 · Real TIER_2_CONTAINER sandbox execution (R-410) `⚖️ council-eligible`"
 
   - id: B-4
     title: "TIER_3 microVM + TIER_4 full-VM execution (R-411/R-412)"
     status: closed
     summary: "Docker+gVisor/runsc driver (R-411) + managed E2B full-VM driver (R-412)."
     pr: "R-411/R-412"
-    heading: "### B-4 · TIER_3 microVM + TIER_4 full-VM execution (R-411 / R-412)"
+    heading: "### B-4 · TIER_3 microVM + TIER_4 full-VM execution (R-411 / R-412) `⚖️ council-eligible`"
 
   - id: B-5
     title: "SELF_HOSTED_SERVER + MANAGED_CLOUD deployment e2e (R-420/R-421)"
@@ -101,14 +101,14 @@ items:
     status: closed
     summary: "R-500 self-hosted multi-tenant live proof (redaction + tenant-scoped audit)."
     pr: "#328"
-    heading: "### B-8 · Non-default `tenant_id` / non-SOLO `persona_tier` deployment"
+    heading: "### B-8 · Non-default `tenant_id` / non-SOLO `persona_tier` deployment `⚖️ council-eligible`"
 
   - id: B-9
     title: "OD-4: per-session redaction toggle + opaque-token tokenization"
     status: closed
     summary: "R-008 + batch-53 RESOLVED; runtime residual closed, live ledger back-flowed."
     pr: "R-008"
-    heading: "### B-9 · OD-4: per-session redaction toggle (§13.1) + opaque-token tokenization (§13.2)"
+    heading: "### B-9 · OD-4: per-session redaction toggle (§13.1) + opaque-token tokenization (§13.2) `⚖️ council-eligible`"
 
   - id: B-10
     title: "Real external MCP server connection"
