@@ -22,8 +22,11 @@ concern at U-OD-39 production binding arc to follow).
 from __future__ import annotations
 
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
+from harness_is.state_ledger_entry_schema import Actor, ActorClass, Identifier
+from harness_is.state_ledger_write import read_ledger
 from harness_od.rate_table_types import RateTable, ToolRate, WebhookRate
 from harness_runtime.lifecycle.cost_attribution import RuntimeCostAttributionChain
 from harness_runtime.lifecycle.cost_attribution_tool_dispatch import (
@@ -33,6 +36,7 @@ from harness_runtime.lifecycle.cost_attribution_tool_dispatch import (
     _resolve_tool_rate,
     attribute_tool_dispatch_cost,
 )
+from harness_runtime.lifecycle.state_ledger import LedgerWriter
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -307,3 +311,178 @@ def test_attribute_tool_dispatch_cost_propagates_rate_missing_error(
         )
     # No audit-ledger entry on rate-resolution failure (fail-closed semantics)
     assert audit_writer.appended == []
+
+
+# ---------------------------------------------------------------------------
+# B-23 — F2-write entry_core (real IS anchor, not fabricated cp-audit: marker)
+# ---------------------------------------------------------------------------
+
+_ACTOR = Actor(actor_class=ActorClass.AGENT, actor_id="test-cost-attribution")
+
+
+def _build_ledger_writer(tmp_path: Path) -> LedgerWriter:
+    """Real `LedgerWriter` rooted in `tmp_path` — mirrors
+    `test_lifecycle_sub_agent_dispatch.py`'s `_build_ledger_writer`."""
+    from harness_is.jsonl_event_ledger_lifecycle import JsonlLedgerHandle
+
+    path = tmp_path / "state.jsonl"
+    path.touch()
+    handle = JsonlLedgerHandle(canonical_path=path, exists=True, entry_count=0)
+    return LedgerWriter(handle=handle, actor=_ACTOR)
+
+
+def test_ledger_writer_bound_produces_real_entry_core_full_chain(
+    cost_chain: RuntimeCostAttributionChain,
+    audit_writer: _RecordingAuditWriter,
+    tmp_path: Path,
+) -> None:
+    """B-23 full-chain witness: when `ledger_writer` is bound, the F2 entry
+    actually lands in the IS ledger AND the audit entry's `entry_core`
+    references that real action_id — not the fabricated
+    `cp-audit:<action_id>` marker `_entry_core_or_default` synthesizes
+    absent an explicit `entry_core`."""
+    rate_table = _make_rate_table(
+        {"echo": ToolRate(cost_kind="flat_per_invocation", rate=Decimal("0.005"))}
+    )
+    ledger_writer = _build_ledger_writer(tmp_path)
+
+    def _resolver() -> Identifier:
+        return Identifier("snap-ref")
+
+    attribute_tool_dispatch_cost(
+        rate_table=rate_table,
+        cost_chain=cost_chain,
+        audit_writer=audit_writer,
+        tool_id="echo",
+        tool_args={"input": "hi"},
+        response={"output": "hi"},
+        span_id="f2-span-1",
+        idempotency_key="tool-idem-1",
+        parent_idempotency_key="parent-1",
+        workflow_id="test-wf",
+        parent_action_id="workflow:test-wf:step:0",
+        ledger_writer=ledger_writer,
+        procedural_tier_snapshot_resolver=_resolver,
+    )
+
+    # Half 1 — the F2 entry actually landed in the IS ledger.
+    entries = read_ledger(ledger_writer.handle)
+    cost_entries = [e for e in entries if str(e.action_id).startswith("cost:")]
+    assert len(cost_entries) == 1
+    real_action_id = str(cost_entries[0].action_id)
+    assert not real_action_id.startswith("cp-audit:")
+    assert cost_entries[0].procedural_tier_snapshot_ref == "snap-ref"
+
+    # Half 2 — the audit entry's entry_core references that SAME real anchor,
+    # not a fabricated cp-audit:<action_id> marker.
+    _, audit_entry = audit_writer.appended[0]
+    assert str(audit_entry.payload.entry_core) == real_action_id
+    assert not str(audit_entry.payload.entry_core).startswith("cp-audit:")
+
+
+def test_ledger_writer_unbound_preserves_fabricated_marker_fallback(
+    cost_chain: RuntimeCostAttributionChain,
+    audit_writer: _RecordingAuditWriter,
+) -> None:
+    """Backward compatibility — omitting `ledger_writer` (the pre-B-23
+    default, e.g. existing unit-test callers) preserves the converter's
+    pre-existing `cp-audit:<action_id>` fabricated-marker fallback."""
+    rate_table = _make_rate_table(
+        {"echo": ToolRate(cost_kind="flat_per_invocation", rate=Decimal("0.005"))}
+    )
+    attribute_tool_dispatch_cost(
+        rate_table=rate_table,
+        cost_chain=cost_chain,
+        audit_writer=audit_writer,
+        tool_id="echo",
+        tool_args={"input": "hi"},
+        response={"output": "hi"},
+        span_id="f2-span-2",
+        idempotency_key="tool-idem-2",
+        parent_idempotency_key="parent-1",
+        workflow_id="test-wf",
+        parent_action_id="workflow:test-wf:step:0",
+    )
+    _, audit_entry = audit_writer.appended[0]
+    assert str(audit_entry.payload.entry_core).startswith("cp-audit:")
+
+
+def test_repeat_dispatch_same_step_gets_distinct_f2_entries_not_noop_dropped(
+    cost_chain: RuntimeCostAttributionChain,
+    audit_writer: _RecordingAuditWriter,
+    tmp_path: Path,
+) -> None:
+    """Regression guard (advisor-flagged) — two billable tool-dispatch
+    attempts sharing the same (workflow_id, parent_action_id) — e.g. a
+    retry — MUST persist two DISTINCT F2 entries, not silently collapse to
+    one via `IDEMPOTENT_NOOP`. Each real OTel span_id disambiguates."""
+    rate_table = _make_rate_table(
+        {"echo": ToolRate(cost_kind="flat_per_invocation", rate=Decimal("0.005"))}
+    )
+    ledger_writer = _build_ledger_writer(tmp_path)
+    common = dict(
+        rate_table=rate_table,
+        cost_chain=cost_chain,
+        audit_writer=audit_writer,
+        tool_id="echo",
+        tool_args={"input": "hi"},
+        response={"output": "hi"},
+        idempotency_key="tool-idem-retry",
+        parent_idempotency_key="parent-1",
+        workflow_id="test-wf",
+        parent_action_id="workflow:test-wf:step:0",
+        ledger_writer=ledger_writer,
+    )
+    attribute_tool_dispatch_cost(span_id="attempt-1", **common)
+    attribute_tool_dispatch_cost(span_id="attempt-2", **common)
+
+    entries = read_ledger(ledger_writer.handle)
+    cost_entries = [e for e in entries if str(e.action_id).startswith("cost:")]
+    assert len(cost_entries) == 2, (
+        f"expected 2 distinct F2 entries for 2 retry attempts; got {len(cost_entries)} "
+        "(a collision would silently IDEMPOTENT_NOOP-drop the second)"
+    )
+    assert len(audit_writer.appended) == 2
+    entry_cores = {str(e.payload.entry_core) for _, e in audit_writer.appended}
+    assert len(entry_cores) == 2, "each audit entry must reference its OWN F2 anchor"
+
+
+def test_explicit_tenant_literally_named_single_does_not_alias_no_tenant(
+    cost_chain: RuntimeCostAttributionChain,
+    audit_writer: _RecordingAuditWriter,
+    tmp_path: Path,
+) -> None:
+    """Regression guard (out-of-family Codex [P2], round 4) — a bare
+    `tenant_id or "_single"` encoding would alias `tenant_id=None` with a
+    genuine `tenant_id="_single"` (`RuntimeConfig` does not forbid an
+    operator naming a tenant that). The length-prefixed encoding must keep
+    them distinct."""
+    rate_table = _make_rate_table(
+        {"echo": ToolRate(cost_kind="flat_per_invocation", rate=Decimal("0.005"))}
+    )
+    ledger_writer = _build_ledger_writer(tmp_path)
+    common = dict(
+        rate_table=rate_table,
+        cost_chain=cost_chain,
+        audit_writer=audit_writer,
+        tool_id="echo",
+        tool_args={"input": "hi"},
+        response={"output": "hi"},
+        span_id="same-span",
+        idempotency_key="tool-idem-sentinel",
+        parent_idempotency_key="parent-1",
+        workflow_id="test-wf",
+        parent_action_id="workflow:test-wf:step:0",
+        ledger_writer=ledger_writer,
+    )
+    attribute_tool_dispatch_cost(tenant_id=None, **common)
+    attribute_tool_dispatch_cost(tenant_id="_single", **common)
+
+    entries = read_ledger(ledger_writer.handle)
+    cost_entries = [e for e in entries if str(e.action_id).startswith("cost:")]
+    assert len(cost_entries) == 2, (
+        f"tenant_id=None and tenant_id='_single' must not alias to the same "
+        f"F2 identity; got {len(cost_entries)} distinct entries"
+    )
+    entry_cores = {str(e.payload.entry_core) for _, e in audit_writer.appended}
+    assert len(entry_cores) == 2

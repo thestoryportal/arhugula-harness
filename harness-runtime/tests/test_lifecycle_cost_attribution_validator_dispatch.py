@@ -18,14 +18,18 @@ factory-binding integration test.
 from __future__ import annotations
 
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
+from harness_is.state_ledger_entry_schema import Actor, ActorClass
+from harness_is.state_ledger_write import read_ledger
 from harness_od.rate_table_types import RateTable, WebhookRate
 from harness_runtime.lifecycle.cost_attribution import RuntimeCostAttributionChain
 from harness_runtime.lifecycle.cost_attribution_validator_dispatch import (
     _compute_validator_cost,
     attribute_validator_dispatch_cost,
 )
+from harness_runtime.lifecycle.state_ledger import LedgerWriter
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -218,3 +222,295 @@ def test_three_validator_dispatches_produce_three_audit_writes(
         e[1].payload.audit_namespace_attrs["audit.cp.action_id"] for e in audit_writer.appended
     ]
     assert len(set(action_ids)) == 3
+
+
+# ---------------------------------------------------------------------------
+# B-23 — F2-write entry_core (real IS anchor, not fabricated cp-audit: marker)
+# ---------------------------------------------------------------------------
+
+_ACTOR = Actor(actor_class=ActorClass.AGENT, actor_id="test-cost-attribution")
+
+
+def _build_ledger_writer(tmp_path: Path) -> LedgerWriter:
+    """Real `LedgerWriter` rooted in `tmp_path` — mirrors
+    `test_lifecycle_sub_agent_dispatch.py`'s `_build_ledger_writer`."""
+    from harness_is.jsonl_event_ledger_lifecycle import JsonlLedgerHandle
+
+    path = tmp_path / "state.jsonl"
+    path.touch()
+    handle = JsonlLedgerHandle(canonical_path=path, exists=True, entry_count=0)
+    return LedgerWriter(handle=handle, actor=_ACTOR)
+
+
+def test_ledger_writer_bound_produces_real_entry_core_full_chain(
+    cost_chain: RuntimeCostAttributionChain,
+    audit_writer: _RecordingAuditWriter,
+    tmp_path: Path,
+) -> None:
+    """B-23 full-chain witness: when `ledger_writer` is bound, the F2 entry
+    actually lands in the IS ledger AND the audit entry's `entry_core`
+    references that real action_id — not the fabricated
+    `cp-audit:<action_id>` marker."""
+    rate_table = _make_rate_table(cpu_rate_per_ms=Decimal("0.01"))
+    ledger_writer = _build_ledger_writer(tmp_path)
+    attribute_validator_dispatch_cost(
+        rate_table=rate_table,
+        cost_chain=cost_chain,
+        audit_writer=audit_writer,
+        validator_id="schema-validator",
+        execution_time_ms=10.0,
+        span_id="validator-evaluate-test-wf-step-0",
+        idempotency_key="validator-idem-1",
+        parent_idempotency_key="parent-idem-1",
+        workflow_id="test-wf",
+        parent_action_id="workflow:test-wf:step:0",
+        dispatch_disambiguator="0-pass-0",
+        ledger_writer=ledger_writer,
+    )
+    entries = read_ledger(ledger_writer.handle)
+    cost_entries = [e for e in entries if str(e.action_id).startswith("cost:")]
+    assert len(cost_entries) == 1
+    real_action_id = str(cost_entries[0].action_id)
+    assert not real_action_id.startswith("cp-audit:")
+
+    _, audit_entry = audit_writer.appended[0]
+    assert str(audit_entry.payload.entry_core) == real_action_id
+
+
+def test_ledger_writer_unbound_preserves_fabricated_marker_fallback(
+    cost_chain: RuntimeCostAttributionChain,
+    audit_writer: _RecordingAuditWriter,
+) -> None:
+    """Backward compatibility — omitting `ledger_writer` preserves the
+    converter's pre-existing `cp-audit:<action_id>` fallback."""
+    rate_table = _make_rate_table(cpu_rate_per_ms=Decimal("0.01"))
+    attribute_validator_dispatch_cost(
+        rate_table=rate_table,
+        cost_chain=cost_chain,
+        audit_writer=audit_writer,
+        validator_id="schema-validator",
+        execution_time_ms=10.0,
+        span_id="validator-evaluate-test-wf-step-0",
+        idempotency_key="validator-idem-1",
+        parent_idempotency_key="parent-idem-1",
+        workflow_id="test-wf",
+        parent_action_id="workflow:test-wf:step:0",
+    )
+    _, audit_entry = audit_writer.appended[0]
+    assert str(audit_entry.payload.entry_core).startswith("cp-audit:")
+
+
+def test_revalidate_retry_same_synthesized_span_id_gets_distinct_f2_entries(
+    cost_chain: RuntimeCostAttributionChain,
+    audit_writer: _RecordingAuditWriter,
+    tmp_path: Path,
+) -> None:
+    """Regression guard — a REVALIDATE retry loop invokes `evaluate()` on the
+    SAME step multiple times, and this composer's `span_id` is a
+    *synthesized* `f"validator-evaluate-{workflow_id}-{step_id}"` string
+    that repeats IDENTICALLY across those calls (unlike the tool/LLM/webhook
+    composers' real per-attempt OTel span). Using that synthesized span_id
+    as the F2 disambiguator would collide and silently `IDEMPOTENT_NOOP`-
+    drop the second cost event. Two consecutive REVALIDATE outcomes get
+    strictly-increasing `burden_count` values, disambiguating naturally."""
+    rate_table = _make_rate_table(cpu_rate_per_ms=Decimal("0.01"))
+    ledger_writer = _build_ledger_writer(tmp_path)
+    same_synthesized_span_id = "validator-evaluate-test-wf-step-0"
+    common = dict(
+        rate_table=rate_table,
+        cost_chain=cost_chain,
+        audit_writer=audit_writer,
+        validator_id="schema-validator",
+        execution_time_ms=10.0,
+        span_id=same_synthesized_span_id,
+        idempotency_key="validator-idem-revalidate",
+        parent_idempotency_key="parent-1",
+        workflow_id="test-wf",
+        parent_action_id="workflow:test-wf:step:0",
+        ledger_writer=ledger_writer,
+    )
+    # First evaluate() call: REVALIDATE outcome → burden_count=1 on this call.
+    attribute_validator_dispatch_cost(dispatch_disambiguator="1-revalidate-0", **common)
+    # Retry evaluate() call on the SAME step: REVALIDATE again → burden_count=2.
+    attribute_validator_dispatch_cost(dispatch_disambiguator="2-revalidate-0", **common)
+
+    entries = read_ledger(ledger_writer.handle)
+    cost_entries = [e for e in entries if str(e.action_id).startswith("cost:")]
+    assert len(cost_entries) == 2, (
+        f"expected 2 distinct F2 entries for a 2-attempt REVALIDATE retry loop "
+        f"sharing the same synthesized span_id; got {len(cost_entries)} "
+        "(a span_id-keyed disambiguator would collide here)"
+    )
+    entry_cores = {str(e.payload.entry_core) for _, e in audit_writer.appended}
+    assert len(entry_cores) == 2, (
+        "each REVALIDATE attempt's audit entry must reference its OWN F2 anchor"
+    )
+
+
+def test_revalidate_then_pass_shares_burden_count_but_gets_distinct_f2_entries(
+    cost_chain: RuntimeCostAttributionChain,
+    audit_writer: _RecordingAuditWriter,
+    tmp_path: Path,
+) -> None:
+    """Regression guard (out-of-family Codex [P1]) — `burden_count` alone is
+    NOT a safe disambiguator: per CP spec §25.4 invariant 5, `burden_count`
+    increments only on NON-PASS outcomes, so a REVALIDATE call
+    (burden_count=1) immediately followed by the terminal PASS call
+    (burden_count STILL 1) would collide on a `burden_count`-only key. The
+    outcome token in `dispatch_disambiguator` must break that tie."""
+    rate_table = _make_rate_table(cpu_rate_per_ms=Decimal("0.01"))
+    ledger_writer = _build_ledger_writer(tmp_path)
+    same_synthesized_span_id = "validator-evaluate-test-wf-step-0"
+    common = dict(
+        rate_table=rate_table,
+        cost_chain=cost_chain,
+        audit_writer=audit_writer,
+        validator_id="schema-validator",
+        execution_time_ms=10.0,
+        span_id=same_synthesized_span_id,
+        idempotency_key="validator-idem-revalidate-then-pass",
+        parent_idempotency_key="parent-1",
+        workflow_id="test-wf",
+        parent_action_id="workflow:test-wf:step:0",
+        ledger_writer=ledger_writer,
+    )
+    # REVALIDATE call: burden_count increments to 1.
+    attribute_validator_dispatch_cost(dispatch_disambiguator="1-revalidate-0", **common)
+    # Terminal PASS call on the retry: burden_count does NOT increment — still 1.
+    attribute_validator_dispatch_cost(dispatch_disambiguator="1-pass-0", **common)
+
+    entries = read_ledger(ledger_writer.handle)
+    cost_entries = [e for e in entries if str(e.action_id).startswith("cost:")]
+    assert len(cost_entries) == 2, (
+        "REVALIDATE (burden_count=1) then PASS (burden_count still 1) must NOT "
+        f"collapse to 1 F2 entry via IDEMPOTENT_NOOP; got {len(cost_entries)}"
+    )
+    entry_cores = {str(e.payload.entry_core) for _, e in audit_writer.appended}
+    assert len(entry_cores) == 2
+
+
+def test_sibling_fanout_branches_sharing_parent_action_id_get_distinct_f2_entries(
+    cost_chain: RuntimeCostAttributionChain,
+    audit_writer: _RecordingAuditWriter,
+    tmp_path: Path,
+) -> None:
+    """Regression guard (out-of-family Codex [P1]) — sibling fan-out
+    branches of the SAME declared validator step share one
+    `parent_action_id` (per `StepExecutionContext.branch_index`'s own
+    docstring: "Branch identity is (parent_action_id, branch_index)"), the
+    same collision class `sub_agent_dispatch.py`'s `child_index` guards
+    against. `branch_index` in `dispatch_disambiguator` must disambiguate."""
+    rate_table = _make_rate_table(cpu_rate_per_ms=Decimal("0.01"))
+    ledger_writer = _build_ledger_writer(tmp_path)
+    common = dict(
+        rate_table=rate_table,
+        cost_chain=cost_chain,
+        audit_writer=audit_writer,
+        validator_id="schema-validator",
+        execution_time_ms=10.0,
+        span_id="validator-evaluate-test-wf-step-0",
+        idempotency_key="validator-idem-fanout",
+        parent_idempotency_key="parent-1",
+        workflow_id="test-wf",
+        parent_action_id="workflow:test-wf:step:0",
+        ledger_writer=ledger_writer,
+    )
+    attribute_validator_dispatch_cost(dispatch_disambiguator="0-pass-0", **common)
+    attribute_validator_dispatch_cost(dispatch_disambiguator="0-pass-1", **common)
+
+    entries = read_ledger(ledger_writer.handle)
+    cost_entries = [e for e in entries if str(e.action_id).startswith("cost:")]
+    assert len(cost_entries) == 2
+
+
+def test_two_tenants_sharing_identifiers_get_distinct_f2_entries(
+    cost_chain: RuntimeCostAttributionChain,
+    audit_writer: _RecordingAuditWriter,
+    tmp_path: Path,
+) -> None:
+    """Regression guard (out-of-family Codex [P1]) — the underlying
+    `LedgerWriter` is SHARED across tenants. Two tenants dispatching a
+    validator step that happens to share `(workflow_id, parent_action_id,
+    dispatch_disambiguator)` — plausible here since the validator's
+    disambiguator is DETERMINISTIC (`burden_count`-derived), not a random
+    per-attempt span_id — must NOT collide via `IDEMPOTENT_NOOP`, or the
+    second tenant's audit entry would silently reference the first
+    tenant's F2 anchor (a cross-tenant leak)."""
+    rate_table = _make_rate_table(cpu_rate_per_ms=Decimal("0.01"))
+    ledger_writer = _build_ledger_writer(tmp_path)
+    common = dict(
+        rate_table=rate_table,
+        cost_chain=cost_chain,
+        audit_writer=audit_writer,
+        validator_id="schema-validator",
+        execution_time_ms=10.0,
+        span_id="validator-evaluate-test-wf-step-0",
+        idempotency_key="validator-idem-tenant",
+        parent_idempotency_key="parent-1",
+        workflow_id="test-wf",
+        parent_action_id="workflow:test-wf:step:0",
+        dispatch_disambiguator="0-pass-0",
+        ledger_writer=ledger_writer,
+    )
+    attribute_validator_dispatch_cost(tenant_id="tenant-A", **common)
+    attribute_validator_dispatch_cost(tenant_id="tenant-B", **common)
+
+    entries = read_ledger(ledger_writer.handle)
+    cost_entries = [e for e in entries if str(e.action_id).startswith("cost:")]
+    assert len(cost_entries) == 2, (
+        f"two tenants sharing identical (workflow_id, parent_action_id, "
+        f"dispatch_disambiguator) must get 2 distinct F2 entries, not "
+        f"collapse cross-tenant via IDEMPOTENT_NOOP; got {len(cost_entries)}"
+    )
+    entry_cores = {str(e.payload.entry_core) for _, e in audit_writer.appended}
+    assert len(entry_cores) == 2, "each tenant's audit entry must reference its OWN F2 anchor"
+
+
+def test_two_runs_of_same_workflow_definition_get_distinct_f2_entries(
+    cost_chain: RuntimeCostAttributionChain,
+    audit_writer: _RecordingAuditWriter,
+    tmp_path: Path,
+) -> None:
+    """Regression guard (out-of-family Codex [P1], round 3) —
+    `workflow_id` is the operator-authored `WorkflowManifestEntry.workflow_id`,
+    a STABLE per-definition identifier reused across every invocation of
+    "that workflow" (CP's own `run_idempotency_key = sha256(run_id,
+    workflow_id, entry_version)` composition treats `run_id` and
+    `workflow_id` as distinct components — `workflow_id` alone is not
+    run-unique). Re-running the SAME workflow definition a second time with
+    an identical validator outcome sequence (same deterministic
+    `dispatch_disambiguator`) MUST NOT collapse via `IDEMPOTENT_NOOP` onto
+    the first run's F2 anchor — `parent_idempotency_key` (already
+    run-scoped, since CP composes step-level idempotency keys from the
+    run's own idempotency key) disambiguates."""
+    rate_table = _make_rate_table(cpu_rate_per_ms=Decimal("0.01"))
+    ledger_writer = _build_ledger_writer(tmp_path)
+    common = dict(
+        rate_table=rate_table,
+        cost_chain=cost_chain,
+        audit_writer=audit_writer,
+        validator_id="schema-validator",
+        execution_time_ms=10.0,
+        span_id="validator-evaluate-daily-report-step-0",
+        idempotency_key="validator-idem-1",
+        workflow_id="daily-report",  # SAME operator-authored workflow_id both runs
+        parent_action_id="workflow:daily-report:step:0",
+        dispatch_disambiguator="0-pass-0",  # SAME deterministic outcome both runs
+        ledger_writer=ledger_writer,
+    )
+    # Run 1 of "daily-report".
+    attribute_validator_dispatch_cost(parent_idempotency_key="run-2026-07-13", **common)
+    # Run 2 of the SAME workflow definition, a day later — different run_id
+    # flows through to a different parent_idempotency_key.
+    attribute_validator_dispatch_cost(parent_idempotency_key="run-2026-07-14", **common)
+
+    entries = read_ledger(ledger_writer.handle)
+    cost_entries = [e for e in entries if str(e.action_id).startswith("cost:")]
+    assert len(cost_entries) == 2, (
+        f"two separate runs of the same workflow_id, sharing an identical "
+        f"deterministic dispatch_disambiguator, must get 2 distinct F2 "
+        f"entries, not collapse cross-run via IDEMPOTENT_NOOP; "
+        f"got {len(cost_entries)}"
+    )
+    entry_cores = {str(e.payload.entry_core) for _, e in audit_writer.appended}
+    assert len(entry_cores) == 2, "each run's audit entry must reference its OWN F2 anchor"

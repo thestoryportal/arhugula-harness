@@ -111,4 +111,11 @@ async def execute(
         # SpanCostRecords `append` through to the current run's accumulator →
         # `RunResult.cost_attribution` (runtime v1.53 §9).
         cost_record_sink=ctx.cost_record_accumulator,
+        # B-23 — threaded to CostAttributingValidatorHook so the
+        # cost-attribution audit entry's `entry_core` is a real F2 anchor
+        # instead of a fabricated `cp-audit:<action_id>` marker. Both are
+        # already bound on `ctx` by stage 3b (`_materialize_cp_is_wiring_for_
+        # routing`), well before this stage-4 call.
+        ledger_writer=ctx.ledger_writer,
+        procedural_tier_snapshot_resolver=ctx.procedural_tier_snapshot_resolver,
     )

@@ -509,6 +509,12 @@ class RuntimeLLMDispatcher:
     cost_chain: Any = None
     audit_writer: Any = None
     rate_table: Any = None
+    # B-23 — IS state-ledger writer (U-RT-12) + R-003 resolver, threaded to
+    # `_attribute_cost_best_effort` so the per-dispatch cost-attribution audit
+    # entry's `entry_core` is a real F2 anchor instead of a fabricated
+    # `cp-audit:<action_id>` marker. None preserves unit-test ergonomics.
+    ledger_writer: Any = None
+    procedural_tier_snapshot_resolver: Any = None
     # R-FS-1 arc CA — run-scoped cost-record sink (the SAME list as
     # `ctx.cost_record_accumulator`, threaded by `materialize_llm_dispatcher_stage`
     # from the mutable bootstrap ctx). `_attribute_cost_best_effort` appends each
@@ -816,6 +822,13 @@ class RuntimeLLMDispatcher:
                     audit_writer=self.audit_writer,
                     rate_table=self.rate_table,
                     cost_record_sink=self.cost_record_sink,
+                    # B-23 — the prewarm ping fires outside any active workflow
+                    # step (synthetic __prewarm__ ids), so it stays in the
+                    # documented outside-workflow-context class: F2-write the
+                    # dispatch fact (ledger_writer) but omit the sidecar
+                    # (procedural_tier_snapshot_resolver=None) per IS §5.1.
+                    ledger_writer=self.ledger_writer,
+                    procedural_tier_snapshot_resolver=None,
                     provider_name="anthropic",
                     model=_model,
                     parent_idempotency_key="__prewarm__",
@@ -1730,6 +1743,8 @@ class RuntimeLLMDispatcher:
                 audit_writer=self.audit_writer,
                 rate_table=self.rate_table,
                 cost_record_sink=self.cost_record_sink,
+                ledger_writer=self.ledger_writer,
+                procedural_tier_snapshot_resolver=self.procedural_tier_snapshot_resolver,
                 provider_name=provider_name,
                 model=model,
                 parent_idempotency_key=step_context.parent_idempotency_key,
@@ -2926,6 +2941,8 @@ def _attribute_cost_best_effort(
     audit_writer: Any,
     rate_table: Any,
     cost_record_sink: SupportsCostRecordAppend | None = None,
+    ledger_writer: Any = None,
+    procedural_tier_snapshot_resolver: Any = None,
     provider_name: str,
     model: str,
     parent_idempotency_key: str,
@@ -2992,6 +3009,8 @@ def _attribute_cost_best_effort(
             cache_creation=int(cache_creation) if cache_creation is not None else 0,
             cache_read=int(cache_read) if cache_read is not None else 0,
             tenant_id=tenant_id,
+            ledger_writer=ledger_writer,
+            procedural_tier_snapshot_resolver=procedural_tier_snapshot_resolver,
             # R-FS-1 B-FALLBACK-CHAIN-FAMILY-COST-COMPOSITION — populate the
             # §15.3 cross-family family tag from the dispatched provider so the
             # PER_PROVIDER_DISCRIMINATOR rollup is non-vacuous in production.
@@ -3024,6 +3043,8 @@ def materialize_llm_dispatcher_stage(
     audit_writer: Any = None,
     rate_table: Any = None,
     cost_record_sink: SupportsCostRecordAppend | None = None,
+    ledger_writer: Any = None,
+    procedural_tier_snapshot_resolver: Any = None,
     inter_step_channel: Any = None,
     memory_tool_registry: Any = None,
     deployment_surface: Any = None,
@@ -3109,6 +3130,8 @@ def materialize_llm_dispatcher_stage(
         audit_writer=audit_writer,
         rate_table=rate_table,
         cost_record_sink=cost_record_sink,
+        ledger_writer=ledger_writer,
+        procedural_tier_snapshot_resolver=procedural_tier_snapshot_resolver,
         inter_step_channel=inter_step_channel,
         memory_tool_registry=memory_tool_registry,
         deployment_surface=deployment_surface,
