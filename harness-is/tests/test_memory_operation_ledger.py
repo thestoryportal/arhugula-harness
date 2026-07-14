@@ -246,6 +246,75 @@ def test_tombstone_redaction_kind_requires_tombstone_operation() -> None:
         )
 
 
+def _entry_kwargs(
+    suffix: str,
+    kind: MemoryOperationKind,
+    *,
+    redaction_event: MemoryRedactionEvent | None = None,
+) -> dict[str, object]:
+    return {
+        "action_id": Identifier(f"mem-op-entry-{suffix}"),
+        "idempotency_key": Identifier(f"idem-entry-{suffix}"),
+        "actor": _ACTOR,
+        "response_hash": b"\x00" * 32,
+        "timestamp": _BASE_TIME,
+        "prior_event_hash": b"\x00" * 32,
+        "operation_kind": kind,
+        "operation_projection": MemoryOperationProjection.for_operation_kind(kind),
+        "redaction_event": redaction_event,
+    }
+
+
+def test_redaction_event_required_for_redact_and_tombstone_kinds_on_entry() -> None:
+    """Out-of-family Codex round-3 follow-up on B-28 finding #2 —
+    `MemoryOperationEntry` calls its own `_validate_redaction_event` inside
+    `_projection_matches_kind`; `_deserialize_entry` constructs entries
+    directly, bypassing `MemoryOperationPayload`, so a broken/removed
+    entry-side redaction guard would go undetected by payload-only tests."""
+    for kind in (MemoryOperationKind.REDACT, MemoryOperationKind.TOMBSTONE):
+        with pytest.raises(ValidationError, match="redaction_event"):
+            MemoryOperationEntry(**_entry_kwargs(kind.value, kind, redaction_event=None))
+
+
+def test_redaction_event_forbidden_for_non_redaction_kinds_on_entry() -> None:
+    """Out-of-family Codex round-3 follow-up on B-28 finding #2 — entry-side
+    mirror of the forbidden-redaction-event guard."""
+    with pytest.raises(ValidationError, match="cannot carry"):
+        MemoryOperationEntry(
+            **_entry_kwargs(
+                "capture-with-redaction",
+                MemoryOperationKind.CAPTURE,
+                redaction_event=_redaction_event(),
+            )
+        )
+
+
+def test_tombstone_kind_requires_tombstone_redaction_kind_on_entry() -> None:
+    """Out-of-family Codex round-3 follow-up on B-28 finding #2 — entry-side
+    mirror of the tombstone-kind-mismatch guard."""
+    with pytest.raises(ValidationError, match="redaction_kind=tombstone"):
+        MemoryOperationEntry(
+            **_entry_kwargs(
+                "tombstone-wrong-kind",
+                MemoryOperationKind.TOMBSTONE,
+                redaction_event=_redaction_event(MemoryRedactionKind.CONTENT_REDACTION),
+            )
+        )
+
+
+def test_tombstone_redaction_kind_requires_tombstone_operation_on_entry() -> None:
+    """Out-of-family Codex round-3 follow-up on B-28 finding #2 — entry-side
+    mirror of the reverse tombstone-kind-mismatch guard."""
+    with pytest.raises(ValidationError, match="operation_kind=tombstone"):
+        MemoryOperationEntry(
+            **_entry_kwargs(
+                "redact-with-tombstone-kind",
+                MemoryOperationKind.REDACT,
+                redaction_event=_redaction_event(MemoryRedactionKind.TOMBSTONE),
+            )
+        )
+
+
 def test_append_writes_canonical_memory_ops_jsonl_and_chains(tmp_path: Path) -> None:
     handle = _ledger_handle(tmp_path)
 
