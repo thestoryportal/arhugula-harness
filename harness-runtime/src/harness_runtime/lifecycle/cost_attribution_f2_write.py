@@ -42,12 +42,24 @@ __all__ = ["compose_cost_f2_entry_core"]
 _COST_ATTRIBUTION_ACTOR = Actor(actor_class=ActorClass.AGENT, actor_id="harness-cost-attribution")
 
 
-#: Tenant tag for the F2 identity when `tenant_id` is `None`. Never equal to
-#: an explicit tenant's `f"tenant:{len}:{value}"` encoding (see the call
-#: site below) for any string value, so it cannot alias a real tenant_id —
-#: unlike `RuntimeAuditLedgerWriter._tenant_tag`'s bare `"_single"` sentinel,
-#: which a genuine `tenant_id="_single"` would alias.
-_NO_TENANT_TAG = "no-tenant"
+def _length_prefixed(segment: str) -> str:
+    """Encode `segment` so a colon-join of these outputs is injective.
+
+    Round 4/5 (out-of-family Codex) fixed the tenant segment's aliasing one
+    case at a time (truthiness, then `_single`, then `""`). advisor()
+    flagged that the SAME defect class was still open on every other raw
+    colon-joined segment: `parent_action_id` is literally
+    `f"workflow:{workflow_id}:step:{n}"` (contains colons), so a bare
+    `f"...:{workflow_id}:{parent_action_id}:..."` join is not injective —
+    e.g. `workflow_id="a", parent_action_id="b:c"` and
+    `workflow_id="a:b", parent_action_id="c"` concatenate identically.
+    Length-prefixing every segment (not just tenant) closes the whole class
+    in one place: each segment is self-delimiting (read digits up to the
+    first `:`, then exactly that many bytes), so the full join has exactly
+    one parse, which makes two distinct segment tuples always produce
+    distinct joins.
+    """
+    return f"{len(segment)}:{segment}"
 
 
 def compose_cost_f2_entry_core(
@@ -111,19 +123,24 @@ def compose_cost_f2_entry_core(
     if ledger_writer is None:
         return None
 
-    # Length-prefixed so an explicit tenant_id can never alias the absent-
-    # tenant sentinel below (out-of-family Codex [P2], round 4) — a bare
-    # `tenant_id or _SINGLE_TENANT_TAG` would collapse `tenant_id=None` and
-    # a genuine `tenant_id="_single"` (which RuntimeConfig does not forbid)
-    # onto the identical F2 identity. `is not None` (not truthiness) —
-    # `RuntimeConfig.tenant_id` permits the legal-but-falsy `""`, which a
-    # bare `if tenant_id` would ALSO alias to the absent-tenant sentinel
-    # (round 5).
-    tenant_tag = f"tenant:{len(tenant_id)}:{tenant_id}" if tenant_id is not None else _NO_TENANT_TAG
-    action_id = Identifier(
-        f"cost:{tenant_tag}:{workflow_id}:{parent_action_id}:"
-        f"{parent_idempotency_key}:{dispatch_disambiguator}"
+    # Every segment is length-prefixed (see `_length_prefixed`), including a
+    # dedicated tenant PRESENCE flag ("1"/"0") ahead of the tenant value —
+    # `tenant_id=None` and `tenant_id=""` both carry the empty-string value
+    # segment, but only the former gets presence flag "0", so they cannot
+    # alias each other (closes round 4/5's tenant-aliasing findings without
+    # a bespoke sentinel constant).
+    tenant_present = "1" if tenant_id is not None else "0"
+    tenant_value = tenant_id if tenant_id is not None else ""
+    segments = (
+        tenant_present,
+        tenant_value,
+        workflow_id,
+        parent_action_id,
+        parent_idempotency_key,
+        dispatch_disambiguator,
     )
+    encoded = ":".join(_length_prefixed(segment) for segment in segments)
+    action_id = Identifier(f"cost:{encoded}")
     procedural_tier_snapshot_ref = (
         procedural_tier_snapshot_resolver()
         if procedural_tier_snapshot_resolver is not None
