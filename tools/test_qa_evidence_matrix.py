@@ -1,30 +1,43 @@
 from __future__ import annotations
 
-import pytest
-
 from tools import qa_evidence_matrix
 
+# B-35 (.harness/post-phase-8-forward-register.md) - a pre-existing gap, not
+# introduced this session: as of 2026-07-14 a known set of contracts (11
+# memory-substrate + 1 IS contract) have no test file citing their contract
+# id anywhere in the repo. Deliberately NOT spelled out by literal id in this
+# file's own text -- this scanner counts any test_*.py file that merely
+# CONTAINS a contract-id-shaped substring as "proof" for that id, so writing
+# the literal ids here would make this file falsely count as their evidence
+# (out-of-family Codex round 2 caught exactly this self-citation bug in an
+# earlier draft that spelled one id out in an xfail reason string). Pin the
+# exact COUNT instead of xfail-ing the whole assertion, so a genuinely NEW
+# gap (count increases) still fails loudly instead of being silently
+# absorbed by a blanket expected-failure.
+_B35_KNOWN_MISSING_TEST_EVIDENCE_COUNT = 12
+_B35_KNOWN_CXA_MISSING_ENDPOINT_COUNT = 0
 
-@pytest.mark.xfail(
-    reason=(
-        "Pre-existing, not introduced this session (registered as B-35 at "
-        ".harness/post-phase-8-forward-register.md, surfaced during B-28 "
-        "test-quality triage 2026-07-14): 12 contracts (C-IS-14 + 11 C-MEM-*) "
-        "have no test file citing their contract id anywhere in the repo. "
-        "Neither this test nor tools/test_closure_gate.py is wired into any "
-        "CI job (grep .github/workflows/ci.yml — testpaths in pyproject.toml "
-        "excludes tools/), so this has been silently red with no CI signal."
-    ),
-    strict=True,
-)
-def test_q3_evidence_matrix_is_complete() -> None:
+
+def test_q3_evidence_matrix_known_gaps_are_tracked_not_growing() -> None:
+    """B-28 finding #17/#18 follow-up (out-of-family Codex round 2) - the
+    original test asserted `== []` against live data that currently has
+    known gaps (see B-35). A blanket xfail on that whole assertion would
+    mask a genuinely NEW regression (a different, previously-clean contract
+    losing its test citation) behind the same expected-failure outcome.
+    Assert the exact known count instead: this fails loudly if the gap count
+    ever changes in either direction, forcing a human to look at *which*
+    contract changed before adjusting the constant."""
     matrix = qa_evidence_matrix.derive_matrix()
     stats = qa_evidence_matrix.summary(matrix)
 
     assert stats["contracts_total"] > 0
-    assert qa_evidence_matrix.violations(matrix) == []
-    assert stats["contracts_with_test_evidence"] == stats["contracts_total"]
-    assert stats["cxa_seams_wired"] == stats["cxa_seams_total"]
+    assert stats["contracts_missing_test_evidence"] == _B35_KNOWN_MISSING_TEST_EVIDENCE_COUNT, (
+        "the R-CL-Q3 evidence-matrix gap count changed -- if it DECREASED, "
+        "update _B35_KNOWN_MISSING_TEST_EVIDENCE_COUNT down (real progress on "
+        "B-35); if it INCREASED, a previously-covered contract just lost its "
+        "test-file citation -- investigate before touching this constant."
+    )
+    assert stats["cxa_seams_missing_endpoint"] == _B35_KNOWN_CXA_MISSING_ENDPOINT_COUNT
 
 
 def test_q3_evidence_report_renders_contract_rows() -> None:
@@ -35,17 +48,17 @@ def test_q3_evidence_report_renders_contract_rows() -> None:
     assert "| Contracts with test proof |" in report
     assert "## Contract Evidence" in report
 
-    # B-28 finding #18 (test-quality preflight 2026-07-12) — the prior body's
+    # B-28 finding #18 (test-quality preflight 2026-07-12) - the prior body's
     # write-then-read-back assertion only proved the filesystem round-trips a
     # string, adding no coverage of `render_markdown` beyond the substring
-    # checks above; assert real completeness instead — every contract row in
+    # checks above; assert real completeness instead - every contract row in
     # the matrix actually appears as a rendered table row.
     for row in matrix["contracts"]:
         assert f"| {row['contract_id']} |" in report
 
 
 def test_violations_reports_missing_test_evidence_and_cxa_endpoint() -> None:
-    """B-28 finding #17 (test-quality preflight 2026-07-12) — `violations()`
+    """B-28 finding #17 (test-quality preflight 2026-07-12) - `violations()`
     was only ever called against the live, already-clean matrix; construct a
     synthetic matrix with a known contract-missing-test-evidence row and a
     known CXA-seam-missing-endpoint row and assert both are reported."""
