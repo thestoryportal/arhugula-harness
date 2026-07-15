@@ -23,6 +23,7 @@ from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 from typing import Any, Literal
 
+import httpx
 from harness_as.tool_contract import ToolContract
 from harness_cp.cp_shared_types import MCPTrustTier
 
@@ -200,7 +201,7 @@ class MCPClientHost:
         connection_factory:
             Test-injection seam for the per-transport stream-pair context
             manager factory. Default `None` uses the SDK-supplied transport
-            client (`stdio_client` / `streamablehttp_client` / `sse_client`).
+            client (`stdio_client` / `streamable_http_client` / `sse_client`).
             Production callers leave this `None`; integration tests supply
             an in-memory pair via `mcp.shared.memory.create_client_streams`
             or similar.
@@ -480,31 +481,39 @@ create_connected_server_and_client_session`. Production callers leave
         """HTTP transport per U-RT-65 — streamable_http via httpx.
 
         Per spec §14.9.1 HTTP branch + Decision 1.D4 scope expansion +
-        §14.9.6 inv 5. Uses `mcp.client.streamable_http.streamablehttp_client`
-        which opens an httpx client connection pool, performs the
-        streamable-HTTP handshake, and yields `(read, write, get_session_id)`.
-        `_extract_streams` consumes the first two; the session-id callback
-        is reserved for future session-resumption arcs.
+        §14.9.6 inv 5. Uses `mcp.client.streamable_http.streamable_http_client`,
+        which (current SDK) takes a keyword-only pre-built `http_client:
+        httpx.AsyncClient | None` rather than raw `headers`/`timeout` kwargs —
+        this method builds that client itself. Opens an httpx client
+        connection pool, performs the streamable-HTTP handshake, and yields
+        `(read, write, get_session_id)`. `_extract_streams` consumes the
+        first two; the session-id callback is reserved for future
+        session-resumption arcs.
 
         `transport_config` keys consumed:
         - `url`: server URL (REQUIRED str)
-        - `headers`: dict[str, str] of auth + custom headers (OPTIONAL)
-        - `timeout`: connection timeout seconds (default 30)
-        - `sse_read_timeout`: server-sent-event read timeout (default 300)
+        - `headers`: dict[str, str] of auth + custom headers (OPTIONAL) —
+          folded into the constructed `httpx.AsyncClient`
+
+        B-37: prior code called `streamable_http_client(url, headers=...,
+        timeout=..., sse_read_timeout=...)` — the OLD deprecated
+        `streamablehttp_client` kwarg shape. (`mcp.client.sse.sse_client`
+        still uses that old shape — do not port this fix there.) Latent
+        `TypeError`, never exercised because no caller populated `headers`
+        (`MCPClientConfig` had no auth field until B-37). `timeout` /
+        `sse_read_timeout` are NOT threaded here: nothing populates them
+        today, and `sse_read_timeout` has no `httpx.AsyncClient` analogue —
+        adding it would mean reimplementing SSE-read-timeout semantics for a
+        nonexistent consumer.
         """
         from mcp.client.streamable_http import streamable_http_client
 
         url = self._transport_config.get("url")
         if not isinstance(url, str) or not url:
             raise ValueError(f"streamable_http transport_config requires str 'url' (got {url!r})")
-        kwargs: dict[str, Any] = {}
-        if "headers" in self._transport_config:
-            kwargs["headers"] = self._transport_config["headers"]
-        if "timeout" in self._transport_config:
-            kwargs["timeout"] = self._transport_config["timeout"]
-        if "sse_read_timeout" in self._transport_config:
-            kwargs["sse_read_timeout"] = self._transport_config["sse_read_timeout"]
-        async with streamable_http_client(url, **kwargs) as connection:
+        headers = self._transport_config.get("headers")
+        http_client = httpx.AsyncClient(headers=headers) if headers else None
+        async with streamable_http_client(url, http_client=http_client) as connection:
             yield connection
 
     @asynccontextmanager  # pyright: ignore[reportDeprecated]
@@ -541,7 +550,7 @@ create_connected_server_and_client_session`. Production callers leave
     def _extract_streams(connection: Any) -> tuple[Any, Any]:
         """Normalize the connection-context yield into a (read, write) pair.
 
-        `stdio_client` / `streamablehttp_client` / `sse_client` all yield
+        `stdio_client` / `streamable_http_client` / `sse_client` all yield
         tuples whose first two elements are the read + write streams; later
         elements (e.g., HTTP transport carries a per-session-id callback at
         index 2) are not consumed by the runtime.

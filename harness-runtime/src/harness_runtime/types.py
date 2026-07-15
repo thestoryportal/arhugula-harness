@@ -620,9 +620,13 @@ class MCPClientConfig(BaseModel):
 
     Carries the per-client transport + trust-level surface that
     `harness_as.mcp_transport_floor` validates at stage 2 AS bootstrap.
-    Real connection URL + auth-secret reference are operator-supplied;
-    the connection-URL schema (stdio: command line; remote: HTTP URL) is
-    runtime implementation-discretion at L3.
+    Real connection URL is operator-supplied; the connection-URL schema
+    (stdio: command line; remote: HTTP URL) is runtime implementation-
+    discretion at L3. `auth_secret_name` (below) is the auth-secret
+    reference: a keyring/env-var NAME resolved at stage 3a via the same
+    `ProviderSecretResolver.resolve_bootstrap_value` path U-RT-17/18 use
+    for LLM provider API keys (`lifecycle/providers.py`) — not a raw
+    credential value on this frozen, serialized config model.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -641,6 +645,19 @@ class MCPClientConfig(BaseModel):
 
     connection_url: str
     """Stdio command-line OR remote HTTP URL (per `transport`)."""
+
+    auth_secret_name: str | None = None
+    """Keyring/env-var secret NAME for remote streamable-HTTP auth (B-37).
+
+    `None` (the default, and the only valid value for `stdio`) means no auth
+    header is attached. When set, the stage-3a factory resolves the literal
+    value via `ProviderSecretResolver.resolve_bootstrap_value(name)` and
+    attaches it as a Bearer `Authorization` header on the transport's
+    `httpx.AsyncClient` — mirroring the existing LLM-provider bootstrap
+    pattern (`ANTHROPIC_KEYRING_NAME` / `OPENAI_KEYRING_NAME` at
+    `lifecycle/providers.py`) rather than inventing a new credential shape.
+    Also drives `MCPClientHost.auth_present` (the `mcp.auth_present` span
+    attribute)."""
 
     default_minimum_tier: SandboxTier | None = None
     """Operator-declared per-server default sandbox tier (Reading B, spec v1.40

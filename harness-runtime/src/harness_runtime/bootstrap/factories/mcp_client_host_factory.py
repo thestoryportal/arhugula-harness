@@ -41,6 +41,7 @@ from harness_as.tool_contract import ToolContract
 from harness_core.deployment_surface import DeploymentSurface
 from harness_cp.cp_shared_types import MCPTrustTier
 
+from harness_runtime.config.provider_secrets import ProviderSecretResolver
 from harness_runtime.config.sandbox_defaults import resolve_effective_sandbox_defaults
 from harness_runtime.lifecycle.mcp_client_host import (
     MCPClientHost,
@@ -94,7 +95,13 @@ def _coarse_transport(granular: MCPTransport) -> _MCPTransportLiteral:
     return "streamable_http"
 
 
-def _build_transport_config(transport: _MCPTransportLiteral, connection_url: str) -> dict[str, Any]:
+def _build_transport_config(
+    transport: _MCPTransportLiteral,
+    connection_url: str,
+    *,
+    auth_secret_name: str | None = None,
+    resolver: ProviderSecretResolver | None = None,
+) -> dict[str, Any]:
     """Translate MCPClientConfig.connection_url into the transport_config
     shape MCPClientHost consumes per its per-transport context contracts.
 
@@ -103,7 +110,7 @@ def _build_transport_config(transport: _MCPTransportLiteral, connection_url: str
 
       - stdio  → `command` (REQUIRED str), `args` (list[str], default []),
                  `env`/`cwd` (deferred — not supplied from MCPClientConfig at v1.17)
-      - streamable_http / sse → `url` (REQUIRED str)
+      - streamable_http / sse → `url` (REQUIRED str), `headers` (OPTIONAL)
 
     The factory satisfies these contracts. Earlier landed code at this site
     passed `{"connection_url": ...}` unconditionally, which the host rejects
@@ -115,6 +122,14 @@ def _build_transport_config(transport: _MCPTransportLiteral, connection_url: str
     URL-scheme + shell-style-argv convention at the existing factory test
     fixture `_stdio_client(connection_url="stdio:///bin/echo")`. The prefix
     is stripped and the remainder shlex-split into (command, args).
+
+    B-37 — `auth_secret_name` (streamable_http only; stdio auth is via
+    process env, sse is a separate unwired scope): when set, `resolver` must
+    be supplied (fail-loud misconfig, mirroring the L1/L2 `assert
+    ctx.keyring_resolver is not None` discipline at `stage_3a_cp_clients.py`)
+    and its resolved value becomes a Bearer `Authorization` header — the
+    same `resolve_bootstrap_value` idiom U-RT-17/18 use for LLM provider
+    API keys, applied to a new consumer rather than a new credential shape.
     """
     if transport == "stdio":
         if not connection_url.startswith(_STDIO_URL_PREFIX):
@@ -132,7 +147,18 @@ def _build_transport_config(transport: _MCPTransportLiteral, connection_url: str
         return {"command": parts[0], "args": parts[1:]}
     # streamable_http / sse — host's _http_connection_context /
     # _sse_connection_context consume `url` per their docstrings.
-    return {"url": connection_url}
+    config: dict[str, Any] = {"url": connection_url}
+    if auth_secret_name is not None:
+        if resolver is None:
+            raise ValueError(
+                f"MCPClientConfig declares auth_secret_name={auth_secret_name!r} "
+                "but no ProviderSecretResolver was supplied to the stage-3a "
+                "factory (ctx.keyring_resolver must be constructed at stage 0 "
+                "PREAMBLE per U-RT-06/R-421)"
+            )
+        token = resolver.resolve_bootstrap_value(auth_secret_name)
+        config["headers"] = {"Authorization": f"Bearer {token}"}
+    return config
 
 
 def _build_default_policy_converter(
@@ -190,7 +216,11 @@ def _build_default_policy_converter(
     return convert
 
 
-def _build_host(entry: MCPClientConfig, deployment_surface: DeploymentSurface) -> MCPClientHost:
+def _build_host(
+    entry: MCPClientConfig,
+    deployment_surface: DeploymentSurface,
+    resolver: ProviderSecretResolver | None = None,
+) -> MCPClientHost:
     """Construct one `MCPClientHost` from a single `MCPClientConfig` entry.
 
     `entry.transport` is an `harness_as.discriminators.MCPTransport` StrEnum
@@ -204,13 +234,20 @@ def _build_host(entry: MCPClientConfig, deployment_surface: DeploymentSurface) -
         transport=transport_value,
         server_name=entry.client_name,
         trust_tier=_trust_tier_from_level(entry.trust_level),
-        transport_config=_build_transport_config(transport_value, entry.connection_url),
+        transport_config=_build_transport_config(
+            transport_value,
+            entry.connection_url,
+            auth_secret_name=entry.auth_secret_name,
+            resolver=resolver,
+        ),
         tool_contract_converter=_build_default_policy_converter(entry, deployment_surface),
+        auth_present=entry.auth_secret_name is not None,
     )
 
 
 async def materialize_mcp_client_host_stage(
     config: RuntimeConfig,
+    resolver: ProviderSecretResolver | None = None,
 ) -> dict[ServerName, MCPClientHost]:
     """Construct the stage 3a `MCPClientHost` mapping from operator-supplied config.
 
@@ -225,6 +262,11 @@ async def materialize_mcp_client_host_stage(
     dict permitted when 0 servers configured") — no sentinel host; a TOOL_STEP
     then raises `RT-FAIL-TOOL-CONTRACT-UNKNOWN` (empty routing index) at dispatch.
 
+    `resolver` (B-37): the stage-0-constructed `ProviderSecretResolver`
+    (`ctx.keyring_resolver`), threaded through to resolve any entry's
+    `auth_secret_name`. Optional/`None`-default so every existing caller with
+    no `auth_secret_name`-bearing entry is unaffected.
+
     Returns
     -------
     dict[ServerName, MCPClientHost]
@@ -233,7 +275,7 @@ async def materialize_mcp_client_host_stage(
     """
     hosts: dict[ServerName, MCPClientHost] = {}
     for entry in config.mcp_clients:
-        host = _build_host(entry, config.deployment_surface)
+        host = _build_host(entry, config.deployment_surface, resolver)
         server_name = ServerName(host.server_name)
         if server_name in hosts:
             # Fail-loud detect-then-refuse: a duplicate `server_name` (i.e. two

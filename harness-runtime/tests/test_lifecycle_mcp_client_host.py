@@ -6,7 +6,9 @@ Per `Implementation_Plan_Harness_Runtime_v2_11.md` §1 U-RT-63 + U-RT-64 ACs.
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import Any
 
 import pytest
 from harness_as.sandbox_tier import BlastRadiusTier, SandboxTier
@@ -454,6 +456,103 @@ async def test_http_transport_dispatch_via_session_factory_injection() -> None:
         assert result["isError"] is False
     finally:
         await host.shutdown()
+
+
+# ---------- B-37 — HTTP transport http_client= kwarg shape ------------------
+
+
+def test_http_connection_context_builds_httpx_client_with_headers() -> None:
+    """B-37 — `_http_connection_context` must call `streamable_http_client`
+    with the CURRENT SDK's keyword-only `http_client` param, not the OLD
+    deprecated `headers=`/`timeout=`/`sse_read_timeout=` kwarg shape (which
+    raises `TypeError: streamable_http_client() got an unexpected keyword
+    argument 'headers'` against the installed `mcp` SDK). This path was
+    never exercised by any pre-existing test because `MCPClientConfig` had
+    no auth field to populate `headers` in `transport_config`.
+
+    The fake below mirrors the REAL SDK's exact signature (keyword-only
+    `http_client` + `terminate_on_close`, no `headers`/`timeout`) rather than
+    accepting `**kwargs` — a reversion to the old kwarg shape raises
+    `TypeError` against THIS fake exactly as it would against the real SDK,
+    so this is a faithful mutation-probe witness without live network I/O.
+    """
+    import asyncio
+
+    import httpx
+    import mcp.client.streamable_http as streamable_http_module
+
+    captured: dict[str, Any] = {}
+
+    @asynccontextmanager  # pyright: ignore[reportDeprecated]
+    async def _fake_streamable_http_client(
+        url: str,
+        *,
+        http_client: Any = None,
+        terminate_on_close: bool = True,
+    ) -> AsyncIterator[Any]:
+        captured["url"] = url
+        captured["http_client"] = http_client
+        yield ("read-stream", "write-stream", lambda: None)
+
+    original = streamable_http_module.streamable_http_client
+    streamable_http_module.streamable_http_client = _fake_streamable_http_client  # type: ignore[assignment]
+    try:
+        host = MCPClientHost(
+            transport="streamable_http",
+            server_name="srv",
+            trust_tier=MCPTrustTier.LEVEL_2_SANDBOX_ALL,
+            transport_config={
+                "url": "http://example.test/mcp",
+                "headers": {"Authorization": "Bearer secret-token"},
+            },
+            tool_contract_converter=_make_tool_contract_converter(),
+        )
+        cm = host._http_connection_context()
+        asyncio.run(cm.__aenter__())
+    finally:
+        streamable_http_module.streamable_http_client = original  # type: ignore[assignment]
+
+    assert captured["url"] == "http://example.test/mcp"
+    client = captured["http_client"]
+    assert isinstance(client, httpx.AsyncClient)
+    assert client.headers["authorization"] == "Bearer secret-token"
+
+
+def test_http_connection_context_no_headers_passes_none_http_client() -> None:
+    """No `headers` in transport_config -> `http_client=None` (the no-auth
+    case; matches the pre-B-37 zero-kwargs call shape)."""
+    import asyncio
+
+    import mcp.client.streamable_http as streamable_http_module
+
+    captured: dict[str, Any] = {}
+
+    @asynccontextmanager  # pyright: ignore[reportDeprecated]
+    async def _fake_streamable_http_client(
+        url: str,
+        *,
+        http_client: Any = None,
+        terminate_on_close: bool = True,
+    ) -> AsyncIterator[Any]:
+        captured["http_client"] = http_client
+        yield ("read-stream", "write-stream", lambda: None)
+
+    original = streamable_http_module.streamable_http_client
+    streamable_http_module.streamable_http_client = _fake_streamable_http_client  # type: ignore[assignment]
+    try:
+        host = MCPClientHost(
+            transport="streamable_http",
+            server_name="srv",
+            trust_tier=MCPTrustTier.LEVEL_2_SANDBOX_ALL,
+            transport_config={"url": "http://example.test/mcp"},
+            tool_contract_converter=_make_tool_contract_converter(),
+        )
+        cm = host._http_connection_context()
+        asyncio.run(cm.__aenter__())
+    finally:
+        streamable_http_module.streamable_http_client = original  # type: ignore[assignment]
+
+    assert captured["http_client"] is None
 
 
 # ---------- U-RT-66 — SSE transport unit-level ----------------------------

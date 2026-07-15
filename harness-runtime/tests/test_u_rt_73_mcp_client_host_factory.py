@@ -383,3 +383,82 @@ async def test_factory_materializes_remote_streamable_http_host() -> None:
     assert host.transport == "streamable_http"
     # the HTTP transport_config carries the remote URL (not a stdio command).
     assert host._transport_config == {"url": "http://127.0.0.1:9999/mcp"}  # type: ignore[attr-defined]
+    # no auth_secret_name declared -> no header, auth_present stays False.
+    assert host.auth_present is False
+
+
+# ---------------------------------------------------------------------------
+# B-37 — MCPClientConfig.auth_secret_name resolves via the same
+# ProviderSecretResolver.resolve_bootstrap_value path U-RT-17/18 use for LLM
+# provider API keys, applied to a new consumer (remote MCP auth) rather than
+# a new credential shape.
+# ---------------------------------------------------------------------------
+
+
+class _FakeSecretResolver:
+    """Minimal `ProviderSecretResolver`-shaped stand-in (only
+    `resolve_bootstrap_value` is exercised by the factory)."""
+
+    def __init__(self, values: dict[str, str]) -> None:
+        self._values = values
+        self.requested: list[str] = []
+
+    def resolve_bootstrap_value(self, name: str) -> str:
+        self.requested.append(name)
+        return self._values[name]
+
+
+def _remote_client(*, auth_secret_name: str | None, name: str = "remote-auth") -> MCPClientConfig:
+    return MCPClientConfig(
+        client_name=ClientName(name),
+        transport=MCPTransport.STREAMABLE_HTTP_L1_PINNED,
+        trust_level=MCPServerTrustLevel.L1_SIGNED_PINNED,
+        blast_radius=BlastRadiusTier.READ_ONLY,
+        connection_url="http://127.0.0.1:9999/mcp",
+        default_minimum_tier=SandboxTier.TIER_1_PROCESS,
+        default_sandbox_tier=SandboxTier.TIER_1_PROCESS,
+        auth_secret_name=auth_secret_name,
+    )
+
+
+@pytest.mark.asyncio
+async def test_auth_secret_name_resolves_bearer_header_via_resolver() -> None:
+    """B-37 — an entry declaring `auth_secret_name` resolves the literal
+    value via `resolver.resolve_bootstrap_value(name)` and attaches it as a
+    Bearer `Authorization` header on the built transport_config; the host's
+    `auth_present` reflects the declared credential."""
+    resolver = _FakeSecretResolver({"mcp-remote-token": "sekret-value"})
+    cfg = _config([_remote_client(auth_secret_name="mcp-remote-token")])
+    hosts = await materialize_mcp_client_host_stage(cfg, resolver)
+    host = hosts[ServerName("remote-auth")]
+    assert resolver.requested == ["mcp-remote-token"]
+    assert host._transport_config == {  # type: ignore[attr-defined]
+        "url": "http://127.0.0.1:9999/mcp",
+        "headers": {"Authorization": "Bearer sekret-value"},
+    }
+    assert host.auth_present is True
+
+
+@pytest.mark.asyncio
+async def test_auth_secret_name_without_resolver_fails_loud() -> None:
+    """B-37 — declaring `auth_secret_name` but not threading a resolver is a
+    misconfiguration (fail-loud detect-then-refuse, mirroring the
+    `assert ctx.keyring_resolver is not None` discipline at
+    `stage_3a_cp_clients.py`); no silent no-auth fallback."""
+    cfg = _config([_remote_client(auth_secret_name="mcp-remote-token")])
+    with pytest.raises(ValueError, match="no ProviderSecretResolver was supplied"):
+        await materialize_mcp_client_host_stage(cfg)
+
+
+@pytest.mark.asyncio
+async def test_no_auth_secret_name_never_touches_resolver() -> None:
+    """Negative control — an entry with no `auth_secret_name` never calls the
+    resolver even when one is supplied (mutation-probe target: a resolver
+    call recorded here would mean the `is not None` guard was dropped)."""
+    resolver = _FakeSecretResolver({})
+    cfg = _config([_remote_client(auth_secret_name=None)])
+    hosts = await materialize_mcp_client_host_stage(cfg, resolver)
+    host = hosts[ServerName("remote-auth")]
+    assert resolver.requested == []
+    assert host.auth_present is False
+    assert "headers" not in host._transport_config  # type: ignore[attr-defined]

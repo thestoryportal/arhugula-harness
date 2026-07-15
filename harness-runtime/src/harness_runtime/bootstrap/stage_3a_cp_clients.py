@@ -60,7 +60,10 @@ async def execute(
 
     # U-RT-73/126: stage 3a now also materializes the H_T-as-MCP-client hosts
     # (a `dict[ServerName, MCPClientHost]` keyed on each host's `server_name`).
-    ctx.mcp_client_hosts = await materialize_mcp_client_host_stage(config)
+    # B-37: pass the already-asserted-non-None `ctx.keyring_resolver` through so
+    # any entry's `auth_secret_name` resolves via the same bootstrap-value path
+    # the provider clients above use — no separate resolver construction.
+    ctx.mcp_client_hosts = await materialize_mcp_client_host_stage(config, ctx.keyring_resolver)
 
     # spec v1.41 §14.9.8 arc (Gap B): start each host HERE per §14.9.3 stage-3a
     # ("subprocess spawn + protocol handshake + list_tools registry population
