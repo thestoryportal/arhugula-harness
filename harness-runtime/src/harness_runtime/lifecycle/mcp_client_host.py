@@ -29,6 +29,7 @@ from harness_cp.cp_shared_types import MCPTrustTier
 from harness_runtime.lifecycle.tool_registry import ToolRegistry
 
 __all__ = [
+    "MCP_LOOPBACK_HOSTS",
     "MCPClientHost",
     "MCPHostAlreadyStartedError",
     "MCPHostHealth",
@@ -59,6 +60,16 @@ MCPTransport = Literal["stdio", "streamable_http", "sse"]
 
 All 3 transports in scope at v1 per Decision 1.D4 RATIFIED (2026-05-21).
 """
+
+
+MCP_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+"""Hosts exempted from the plaintext-http-with-credentials refusal (B-37).
+
+Single source of truth shared by `harness_runtime.types.MCPClientConfig`'s
+construction-time check and `_http_connection_context`'s send-boundary
+check below (out-of-family review round 3 — a config-level-only check is
+bypassable by constructing `MCPClientHost` directly with a raw
+`transport_config`, as this module's own unit tests do)."""
 
 
 class MCPHostNotStartedError(RuntimeError):
@@ -492,7 +503,12 @@ create_connected_server_and_client_session`. Production callers leave
         `transport_config` keys consumed:
         - `url`: server URL (REQUIRED str)
         - `headers`: dict[str, str] of auth + custom headers (OPTIONAL) —
-          folded into a client built via `create_mcp_http_client`
+          when set, `url` must be `https://` or a `MCP_LOOPBACK_HOSTS` host
+        - `timeout`: connect/write/pool timeout seconds (OPTIONAL, default 30)
+        - `sse_read_timeout`: streaming-read timeout seconds (OPTIONAL,
+          default 300) — the `httpx.Timeout.read` component
+        Any of the three trigger building a client via `create_mcp_http_client`
+        (or, when `headers` is set, a direct `httpx.AsyncClient` — see below).
 
         B-37: prior code called `streamable_http_client(url, headers=...,
         timeout=..., sse_read_timeout=...)` — the OLD deprecated
@@ -501,40 +517,89 @@ create_connected_server_and_client_session`. Production callers leave
         `TypeError`, never exercised because no caller populated `headers`
         (`MCPClientConfig` had no auth field until B-37).
 
-        Out-of-family review (round 1) caught two follow-on defects in the
-        first fix attempt, both addressed here: (1) a bare
+        Out-of-family review caught three follow-on defects in the fix
+        attempts, all addressed here: (round 1) a bare
         `httpx.AsyncClient(headers=headers)` inherits httpx's 5-second
         global default read timeout, far shorter than the 30s-connect /
         300s-read the OLD kwarg shape (and the SDK's own
         `create_mcp_http_client` default) provided — long-lived/idle
         authenticated streams would spuriously `ReadTimeout`. Fixed by
-        building the client via `create_mcp_http_client(headers=headers)`
-        (the SDK's own canonical helper), which sets exactly those
-        defaults. (2) `streamable_http_client` only manages a client's
-        lifecycle when IT constructs the client (`http_client is None`);
-        a caller-supplied client is caller-owned and never closed —
+        building the client via `create_mcp_http_client` (the SDK's own
+        canonical helper). (round 1) `streamable_http_client` only manages a
+        client's lifecycle when IT constructs the client (`http_client is
+        None`); a caller-supplied client is caller-owned and never closed —
         passing a bare, unclosed client here leaked a connection pool on
         every host restart. Fixed by opening the client in our OWN `async
         with` so it closes on this context's exit, same as the
-        no-headers branch closes the SDK-internal default client.
-
-        `timeout` / `sse_read_timeout` config KEYS are still not threaded
-        from `transport_config`: nothing populates them today, and
-        `sse_read_timeout` has no `httpx.AsyncClient` analogue — adding it
-        would mean reimplementing SSE-read-timeout semantics for a
-        nonexistent consumer.
+        no-custom-client branch closes the SDK-internal default client.
+        (round 2) the round-1 fix read `headers` only; a caller supplying
+        `timeout`/`sse_read_timeout` alone (or an already-documented pre-B-37
+        combination of all three) had those silently replaced by the SDK's
+        bare defaults — this method now translates both into the
+        `httpx.Timeout` passed to `create_mcp_http_client`, so a caller-set
+        value always wins over the SDK default rather than being dropped.
+        (round 3, two findings) `MCPClientConfig`'s plaintext-http guard is
+        construction-time-only and bypassable by constructing
+        `MCPClientHost` directly with a raw `transport_config` (as this
+        module's own unit tests do) — the SAME check is repeated here, at
+        the actual send boundary, so it holds regardless of construction
+        path. Separately, httpx's default `trust_env=True` reads
+        `HTTP_PROXY`/`NO_PROXY`/`.netrc` from the process environment; an
+        operator with `HTTP_PROXY` set and no matching `NO_PROXY` loopback
+        exemption would have an authenticated request — even to
+        `127.0.0.1` — silently routed through that proxy, exposing the
+        `Authorization` header in cleartext to it. `create_mcp_http_client`
+        does not expose `trust_env`, so the credential-bearing branch
+        builds the client directly (mirroring the helper's other defaults:
+        `follow_redirects=True`) with `trust_env=False` instead.
         """
         from mcp.client.streamable_http import streamable_http_client
-        from mcp.shared._httpx_utils import create_mcp_http_client
+        from mcp.shared._httpx_utils import (
+            MCP_DEFAULT_SSE_READ_TIMEOUT,
+            MCP_DEFAULT_TIMEOUT,
+            create_mcp_http_client,
+        )
 
         url = self._transport_config.get("url")
         if not isinstance(url, str) or not url:
             raise ValueError(f"streamable_http transport_config requires str 'url' (got {url!r})")
         headers = self._transport_config.get("headers")
+        raw_timeout = self._transport_config.get("timeout")
+        raw_sse_read_timeout = self._transport_config.get("sse_read_timeout")
         if headers:
-            async with create_mcp_http_client(headers=headers) as http_client:
-                async with streamable_http_client(url, http_client=http_client) as connection:
-                    yield connection
+            from urllib.parse import urlsplit
+
+            parsed = urlsplit(url)
+            if parsed.scheme == "http" and parsed.hostname not in MCP_LOOPBACK_HOSTS:
+                raise ValueError(
+                    f"refusing to send headers over plaintext http:// to a "
+                    f"non-loopback host (url={url!r}) — a credential would be "
+                    "sent in cleartext over the network. Use https:// for any "
+                    "non-loopback remote MCP server (127.0.0.1/localhost over "
+                    "http:// is permitted for local development)"
+                )
+        if headers is not None or raw_timeout is not None or raw_sse_read_timeout is not None:
+            import httpx
+
+            timeout = httpx.Timeout(
+                raw_timeout if raw_timeout is not None else MCP_DEFAULT_TIMEOUT,
+                read=raw_sse_read_timeout
+                if raw_sse_read_timeout is not None
+                else MCP_DEFAULT_SSE_READ_TIMEOUT,
+            )
+            if headers is not None:
+                # Credential-bearing — build directly with trust_env=False
+                # (see docstring); create_mcp_http_client has no such param.
+                http_client = httpx.AsyncClient(
+                    headers=headers, timeout=timeout, follow_redirects=True, trust_env=False
+                )
+                async with http_client:
+                    async with streamable_http_client(url, http_client=http_client) as connection:
+                        yield connection
+            else:
+                async with create_mcp_http_client(timeout=timeout) as http_client:
+                    async with streamable_http_client(url, http_client=http_client) as connection:
+                        yield connection
         else:
             async with streamable_http_client(url) as connection:
                 yield connection

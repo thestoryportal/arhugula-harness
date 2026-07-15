@@ -670,6 +670,11 @@ class MCPClientConfig(BaseModel):
     `connection_url` MUST be `https://` (or a loopback host) when this is
     set — see `_validate_auth_secret_name` below."""
 
+    # Duplicated (not imported) from `mcp_client_host.MCP_LOOPBACK_HOSTS`:
+    # `mcp_client_host` transitively imports THIS module (via
+    # `tool_registry` -> `tool_search` -> `types.ToolName`), so a `types.py`
+    # -> `mcp_client_host` import would be circular. Both sites must be kept
+    # in sync if the loopback-host set ever changes.
     _LOOPBACK_HOSTS: ClassVar[frozenset[str]] = frozenset({"localhost", "127.0.0.1", "::1"})
 
     @model_validator(mode="after")
@@ -685,7 +690,12 @@ class MCPClientConfig(BaseModel):
 
         Round 2 — nothing stopped an authenticated remote client from using
         a plaintext `http://` URL to a non-loopback host, sending the
-        resolved bearer token over the network in cleartext.
+        resolved bearer token over the network in cleartext. (Round 3
+        confirmed this construction-time check alone is bypassable via
+        direct `MCPClientHost` construction — the same check is repeated at
+        the actual send boundary in `_http_connection_context`; this
+        validator's value is failing loud as early as possible for the
+        common factory-mediated path, not being the sole enforcement point.)
 
         Both fail loud at construction instead (detect-then-refuse)."""
         if self.auth_secret_name is None:
