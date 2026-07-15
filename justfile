@@ -140,6 +140,23 @@ forward-register *ARGS:
 forward-register-check:
     uv run python tools/forward_register.py --check
 
+# ─── roadmap_status.md — deterministic mechanical-skeleton refresh ──────────
+# Owns the anchor table / in-flight PR table / capped recently-completed +
+# drift-log tables. Does NOT touch the agent-authored Next-action prose.
+# See tools/roadmap_status_refresh.py's own header.
+roadmap-status *ARGS:
+    uv run python tools/roadmap_status_refresh.py {{ARGS}}
+
+# CI/pre-commit gate: cap violations or hash mismatch = exit 1.
+roadmap-status-check:
+    uv run python tools/roadmap_status_refresh.py --check
+
+# ─── MEMORY.md — byte-cap gate + idempotent index upsert ────────────────────
+# NOT a semantic compactor (that stays the agent's call) — a deterministic
+# byte-exact cap gate + idempotent upsert. See tools/memory_compact.py's header.
+memory-compact *ARGS:
+    uv run python tools/memory_compact.py {{ARGS}}
+
 # ─── closure gate (R-IF-115) — the "harness coding fully closed" predicate ──
 # Consolidates R-FS-1 + R-CL-Q1..Q4/D1/C1 must_pass into one report.
 # Spec: .harness/audit/Closure_Gate_v1.md. Delegates to arc_ledger / overlay /
