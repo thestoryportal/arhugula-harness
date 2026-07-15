@@ -574,6 +574,48 @@ def test_send_boundary_rejects_plaintext_http_with_headers() -> None:
         asyncio.run(cm.__aenter__())
 
 
+def test_http_connection_context_accepts_loopback_with_headers() -> None:
+    """Merge-gate test-witness finding (PR #1019 round 1) — the loopback
+    exemption is duplicated at TWO independent sites: the `MCPClientConfig`
+    construction-time validator (`types.py`) and this method's own
+    send-boundary check. Only the config-layer copy had a positive control
+    (`test_auth_secret_name_accepted_for_https_or_loopback`); a mutation
+    narrowing THIS site's exemption (e.g. dropping the `not in
+    MCP_LOOPBACK_HOSTS` clause) would pass CI silently. Directly construct
+    `MCPClientHost` with a loopback + headers `transport_config` and assert
+    it proceeds without raising."""
+    import asyncio
+
+    import mcp.client.streamable_http as streamable_http_module
+
+    @asynccontextmanager  # pyright: ignore[reportDeprecated]
+    async def _fake_streamable_http_client(
+        url: str,
+        *,
+        http_client: Any = None,
+        terminate_on_close: bool = True,
+    ) -> AsyncIterator[Any]:
+        yield ("read-stream", "write-stream", lambda: None)
+
+    original = streamable_http_module.streamable_http_client
+    streamable_http_module.streamable_http_client = _fake_streamable_http_client  # type: ignore[assignment]
+    try:
+        host = MCPClientHost(
+            transport="streamable_http",
+            server_name="srv",
+            trust_tier=MCPTrustTier.LEVEL_2_SANDBOX_ALL,
+            transport_config={
+                "url": "http://127.0.0.1:9999/mcp",
+                "headers": {"Authorization": "Bearer secret-token"},
+            },
+            tool_contract_converter=_make_tool_contract_converter(),
+        )
+        cm = host._http_connection_context()
+        asyncio.run(cm.__aenter__())  # must not raise
+    finally:
+        streamable_http_module.streamable_http_client = original  # type: ignore[assignment]
+
+
 def test_http_connection_context_honors_configured_timeouts() -> None:
     """Out-of-family review round 2 (P2) — a caller supplying `timeout` /
     `sse_read_timeout` in `transport_config` (no `headers`) used to have

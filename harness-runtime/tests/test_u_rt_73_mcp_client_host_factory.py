@@ -519,3 +519,30 @@ async def test_no_auth_secret_name_never_touches_resolver() -> None:
     assert resolver.requested == []
     assert host.auth_present is False
     assert "headers" not in host._transport_config  # type: ignore[attr-defined]
+
+
+def test_auth_present_derives_from_built_transport_config_not_raw_field(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Merge-gate test-witness finding (PR #1019 round 1) — every existing
+    scenario has `"headers" in transport_config` and `entry.auth_secret_name
+    is not None` extensionally identical (since `_build_transport_config`
+    only ever sets `headers` inside the `auth_secret_name is not None`
+    branch), so no test could distinguish `auth_present="headers" in
+    transport_config"` from the old `auth_present=entry.auth_secret_name is
+    not None"` it replaced. Monkeypatch `_build_transport_config` to return
+    a config WITHOUT `headers` despite a set `auth_secret_name`, forcing the
+    two derivations to genuinely diverge, and assert `_build_host` follows
+    the BUILT config (the one source of truth), not the raw field."""
+    import harness_runtime.bootstrap.factories.mcp_client_host_factory as factory_module
+
+    def _fake_build_transport_config(*args: object, **kwargs: object) -> dict[str, object]:
+        return {"url": "https://mcp.example.com/mcp"}  # no "headers" key
+
+    monkeypatch.setattr(factory_module, "_build_transport_config", _fake_build_transport_config)
+
+    entry = _remote_client(auth_secret_name="mcp-remote-token")
+    resolver = _FakeSecretResolver({"mcp-remote-token": "sekret"})
+    host = factory_module._build_host(entry, DeploymentSurface.LOCAL_DEVELOPMENT, resolver)
+
+    assert host.auth_present is False
