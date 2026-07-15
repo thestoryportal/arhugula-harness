@@ -772,9 +772,11 @@ async def test_breaker_transition_carries_classified_cause_on_real_trip(
     failure trips its breaker, and the SAME exception's classified cause
     lands on the emitted `BreakerTransition`. Mirrors
     ``test_breaker_transition_emitted_via_registry``'s spying-registry
-    pattern, swapping the fail-fast harness exception for a realistic
-    SDK-shaped one so the transient-staircase (max-attempts-exhaustion)
-    `record_failure()` call site is exercised instead of the fail-fast one."""
+    pattern. Since B-41, the 401 case exercises the fail-fast `record_failure()`
+    call site (`_classify_provider_exception` now returns `None` for a
+    401/403 status code); 429/500 still exercise the transient-staircase
+    max-attempts-exhaustion site — either way `breaker_cause` lands on the
+    transition identically, which is exactly what this test asserts."""
     breaker = RuntimeRetryBreaker(
         retry_policies={
             RESERVED_LLM_DISPATCH_KEY: RetryPolicy(
@@ -836,6 +838,81 @@ async def test_breaker_transition_carries_classified_cause_on_real_trip(
     assert len(emissions) == 1
     assert emissions[0].to_state.value == "open"
     assert emissions[0].cause is expected_cause
+
+
+@pytest.mark.asyncio
+async def test_classify_provider_exception_fails_fast_on_auth_error() -> None:
+    """B-41: a 401/403 SDK exception must NOT retry — `_classify_provider_exception`
+    returns `None` (fail-fast) for it, abandoning the candidate after exactly
+    ONE attempt rather than running the staircase. `max_attempts=3` with only
+    2 outcomes supplied is NOT by itself discriminating (a buggy
+    `TRANSIENT_RETRY` classification would retry once on candidate 0 and
+    still consume exactly 2 total calls) — the real witness is checking
+    WHICH candidate the 2nd call actually dispatched to: fail-fast means
+    candidate 0 is abandoned after 1 call and candidate 1 gets the 2nd call;
+    a retry-on-candidate-0 bug would dispatch the 2nd call to candidate 0
+    again."""
+    primary = _candidate("anthropic", "claude-test-1")
+    same_family = (_candidate("anthropic", "claude-test-2"),)
+    chain = _chain(primary, same_family=same_family)
+    breaker = _retry_breaker_with_llm_policy(max_attempts=3)
+    inner = _MockInnerDispatcher(
+        outcomes=[
+            _FakeProviderStatusError(401),
+            {"result": "candidate-1-ok"},
+        ]
+    )
+    tp, _ = _tracer_provider_with_exporter()
+    wrapper = RetryBreakerFallbackDispatcher(
+        inner=inner,
+        retry_breaker=breaker,
+        fallback_chain=chain,
+        tracer_provider=tp,
+        sleep_fn=_noop_sleep,
+    )
+
+    result = await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
+    assert result == {"result": "candidate-1-ok"}
+    assert len(inner.calls) == 2
+    # The load-bearing assertion: call 0 must be candidate 0 (the fail-fast
+    # attempt), call 1 must be candidate 1 (the outer loop advanced) — NOT
+    # a 2nd attempt on candidate 0 (which a TRANSIENT_RETRY regression would
+    # produce, since a retry-then-success on candidate 0 also totals 2 calls).
+    assert inner.calls[0][0].model_binding.model == "claude-test-1"
+    assert inner.calls[1][0].model_binding.model == "claude-test-2"
+
+
+@pytest.mark.asyncio
+async def test_classify_provider_exception_still_retries_transient_status_codes() -> None:
+    """Regression guard for B-41: 429/5xx must still run the retry staircase —
+    only 401/403 are fail-fast. Proves the B-41 fix is a surgical
+    `status_code in (401, 403)` guard, not a blanket
+    `status_code is not None` one (which would wrongly fail-fast every
+    classified SDK exception, including rate-limits and 5xx)."""
+    primary = _candidate("anthropic", "claude-test-1")
+    chain = _chain(primary)  # single candidate — no fallback to hide a wrong fail-fast
+    breaker = _retry_breaker_with_llm_policy(max_attempts=3)
+    inner = _MockInnerDispatcher(
+        outcomes=[
+            _FakeProviderStatusError(429),
+            _FakeProviderStatusError(429),
+            {"result": "retried-then-ok"},
+        ]
+    )
+    tp, _ = _tracer_provider_with_exporter()
+    wrapper = RetryBreakerFallbackDispatcher(
+        inner=inner,
+        retry_breaker=breaker,
+        fallback_chain=chain,
+        tracer_provider=tp,
+        sleep_fn=_noop_sleep,
+    )
+
+    result = await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
+    assert result == {"result": "retried-then-ok"}
+    # 3 dispatch calls on the SAME (only) candidate — proves the staircase
+    # actually retried rather than fail-fasting after the first 429.
+    assert len(inner.calls) == 3
 
 
 @pytest.mark.asyncio
