@@ -101,20 +101,20 @@ def cross_process_read_lock(canonical_path: Path) -> Generator[None, None, None]
     Blocks only while a writer holds `cross_process_write_lock` on the same
     path, closing the torn/partial-line read race against a concurrent append.
 
-    Opens the lock sidecar read-only (`O_RDONLY`), and WITHOUT `O_CREAT` when
-    the sidecar already exists: `flock`'s locking semantics are independent
-    of the fd's read/write mode or creation flags (POSIX `flock`, unlike
-    byte-range `fcntl` locks, doesn't check open-mode permissions), and a
-    pure reader never writes to the lock file — a genuinely read-only open
-    preserves callers' own write-nothing guarantees (e.g. `harness-inspect`'s
-    read-only-CLI invariant, which a blanket `O_CREAT` would otherwise trip
-    even when it creates nothing). `O_CREAT` is only used as a fallback for
-    the rare first-ever read of a ledger no writer has touched yet.
+    Opens the lock sidecar read-only (`O_RDONLY`), NEVER `O_CREAT`: a read
+    must stay genuinely side-effect free (Codex-caught, round 3 — an earlier
+    version fell back to `O_CREAT` for a ledger with no sidecar yet, which
+    also `mkdir`'d the parent directory, breaking `harness-inspect`'s no-writes
+    read-only-CLI invariant and raising `PermissionError` against a read-only
+    parent). If the sidecar doesn't exist, no writer has ever appended under
+    this lock — there is nothing to synchronize against yet, so the read
+    proceeds unguarded (identical to pre-B-40 behavior; the very next writer
+    to append creates the sidecar, after which subsequent reads DO lock
+    against it).
     """
     lock_path = _lock_file_path(canonical_path)
-    if lock_path.exists():
-        with _flock(canonical_path, _LockKind.SHARED, os.O_RDONLY):
-            yield
-    else:
-        with _flock(canonical_path, _LockKind.SHARED, os.O_CREAT | os.O_RDONLY):
-            yield
+    if not lock_path.exists():
+        yield
+        return
+    with _flock(canonical_path, _LockKind.SHARED, os.O_RDONLY):
+        yield

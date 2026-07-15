@@ -21,6 +21,7 @@ from urllib.parse import quote
 from harness_core import DeploymentSurface
 from pydantic import BaseModel, ConfigDict, model_validator
 
+from harness_is.cross_process_ledger_lock import cross_process_read_lock
 from harness_is.jsonl_event_ledger_lifecycle import JsonlLedgerHandle
 from harness_is.memory_operation_ledger import (
     MemoryOperationEntry,
@@ -265,7 +266,11 @@ class CanonicalMemoryStore:
         path = self.memory_operation_ledger_path()
         entry_count = 0
         if path.exists():
-            entry_count = sum(1 for line in path.read_text().splitlines() if line.strip())
+            # B-40 (Codex round 3) — this count previously ran outside any
+            # lock, so a concurrent append could be observed mid-write here
+            # even though `read_memory_operation_ledger` itself is guarded.
+            with cross_process_read_lock(path):
+                entry_count = sum(1 for line in path.read_text().splitlines() if line.strip())
         return JsonlLedgerHandle(
             canonical_path=path,
             exists=path.exists(),
