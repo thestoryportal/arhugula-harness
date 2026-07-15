@@ -66,16 +66,26 @@ is provably safe to delete. This is always a single named branch — the one you
 merged — never a scan or backlog sweep:
 
 ```bash
-# 1. Pull the branch name + its exact merged tip SHA from the PR itself (not typed by
-#    hand — guards against a name typo targeting the wrong ref), and confirm the merge
-#    commit's OWN post-merge CI run on main is green (not the PR's pre-merge checks —
-#    this repo has a documented case where those diverged).
-branch=$(gh pr view <PR#> --json headRefName --jq .headRefName)
-head_oid=$(gh pr view <PR#> --json headRefOid --jq .headRefOid)
-merge_sha=$(gh pr view <PR#> --json mergeCommit --jq .mergeCommit.oid)
-gh run list --commit "$merge_sha" --json conclusion --jq '.[0].conclusion'   # expect "success"
+# 1. Pull the PR's own state + the branch name + its exact merged tip SHA — never typed
+#    by hand. Confirm it's actually MERGED into the default branch (guards against a
+#    mistyped PR number silently targeting some OTHER valid merged PR's branch).
+pr_json=$(gh pr view <PR#> --json state,baseRefName,headRefName,headRefOid,mergeCommit)
+[ "$(jq -r .state <<<"$pr_json")" = MERGED ] || { echo "ABORT: PR is not MERGED"; exit 1; }
+[ "$(jq -r .baseRefName <<<"$pr_json")" = "$(gh repo view --json defaultBranchRef --jq .defaultBranchRef.name)" ] \
+  || { echo "ABORT: PR did not merge into the default branch"; exit 1; }
+branch=$(jq -r .headRefName <<<"$pr_json")
+head_oid=$(jq -r .headRefOid <<<"$pr_json")
+merge_sha=$(jq -r .mergeCommit.oid <<<"$pr_json")
+echo "Closing out: $branch (PR <PR#>)"   # eyeball this — it must be THIS arc's branch
 
-# 2. Lease-guarded delete — refuses atomically if the remote tip no longer equals the
+# 2. Fail closed unless the merge commit's OWN post-merge CI run on main is an exact
+#    "success" (not the PR's pre-merge checks, which this repo has a documented case of
+#    diverging from — and not "pending"/"failure"/empty, which must ALSO abort, not just
+#    print and fall through).
+concl=$(gh run list --commit "$merge_sha" --json conclusion --jq '.[0].conclusion // empty')
+[ "$concl" = success ] || { echo "ABORT: post-merge CI on main is not confirmed green (got '${concl:-empty}')"; exit 1; }
+
+# 3. Lease-guarded delete — refuses atomically if the remote tip no longer equals the
 #    verified merged SHA (new work pushed to the same branch name post-merge, or a
 #    stale/reused ref). A bare `gh api -X DELETE`/`git push --delete` has no such guard
 #    and would silently destroy whatever is currently there, with no recovery. Goes

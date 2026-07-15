@@ -318,7 +318,10 @@ loop_gc_worktrees() {
 # the REMOTE (GitHub) branch, is always a single named branch (the one just
 # merged — no scanning/backlog concept applies), and is documented as a
 # direct recipe in the `ship-pr` skill: verify CI green on the merge commit,
-# then `gh api -X DELETE repos/<owner>/<repo>/git/refs/heads/<branch>`.
-# Local branch refs are left alone entirely — they carry no unique value
-# once merged (git reflog covers recovery for ~90 days regardless) and are
-# not what "branch hygiene" refers to in this workspace's discipline.
+# then a LEASE-GUARDED `git push --force-with-lease=refs/heads/<branch>:<merged-oid>
+# origin :refs/heads/<branch>` (never a bare `gh api -X DELETE`/`git push --delete`,
+# which has no CAS guard and would silently destroy any new work pushed to the
+# same branch name post-merge). Local branch refs are left alone entirely —
+# they carry no unique value once merged (git reflog covers recovery for ~90
+# days regardless) and are not what "branch hygiene" refers to in this
+# workspace's discipline.
