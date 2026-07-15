@@ -51,14 +51,14 @@
 # `tools/forward_register.py --check` is the CI gate.
 
 snapshot:
-  total: 42
+  total: 43
   open: 0
   design_substrate_gated: 4
   registered_finding: 8
   operator_gated: 2
   held: 1
-  closed: 27
-  identity_digest: "8a5089694ad0401b"
+  closed: 28
+  identity_digest: "f5e77295917a60ba"
   source: ".harness/post-phase-8-forward-register.md"
 
 items:
@@ -356,10 +356,11 @@ items:
 
   - id: B-38
     title: "Fine-grained provider-exception classifier for breaker.cause"
-    status: registered_finding
+    status: closed
     summary: "breaker.cause stays vacuous (always None) until a real per-step rate_limit/auth_failure/5xx_streak classifier exists."
-    close_out: "Extend _classify_provider_exception to distinguish the 3 failure classes at a real per-step dispatch failure site."
+    close_out: "CLOSED 2026-07-15. Added _classify_breaker_cause(exc) -> BreakerCause | None (retry_breaker_fallback.py) — duck-typed on .status_code (429->RATE_LIMIT, 401/403->AUTH_FAILURE, >=500->FIVE_XX_STREAK, else None), computed once per exception and wired into all 3 breaker.record_failure() call sites. Mutation-probed against a real production-code reversion (record_failure(cause=breaker_cause) -> record_failure()) confirming the e2e tests genuinely fail. Split out B-41 (retry-routing classifier still misroutes AuthenticationError to TRANSIENT_RETRY, a known tracked divergence) and B-42 (FIVE_XX_STREAK tags by the terminal exception only, not a verified N-consecutive streak — an acknowledged MVP simplification per this row's own grounding, mirroring _classify_provider_exception's existing MVP discrimination) rather than folding either into this telemetry-only change."
     council: "no — mechanical extension once opened; not urgent, speculative ahead of any consumer"
+    pr: "#1020"
     heading: "### B-38 · Fine-grained provider-exception classifier for `breaker.cause` *(surfaced at `B-19`'s own close, split out 2026-07-14 at forward-register-schema grounding, out-of-family Codex)*"
 
   - id: B-40
@@ -377,3 +378,11 @@ items:
     close_out: "Decide whether _classify_provider_exception should fail-fast (return None) on a recognized auth exception instead of retrying it — a real retry-routing behavior change with its own blast radius (changes when/whether the breaker trips on auth failures), so scoped as its own arc rather than folded into B-38's telemetry-only change."
     council: "no — mechanical once a fail-fast-vs-retry decision is made; the two classifiers intentionally serve different axes (retry-routing vs breaker telemetry) today, so leaving them briefly divergent is a documented, tracked choice, not an oversight"
     heading: "### B-41 · `_classify_provider_exception` misroutes AuthenticationError to TRANSIENT_RETRY *(surfaced at B-38 grounding, 2026-07-15, advisor()-flagged)*"
+
+  - id: B-42
+    title: "breaker.cause's FIVE_XX_STREAK is tagged by the terminal exception only, not a verified streak"
+    status: registered_finding
+    summary: "_classify_breaker_cause tags FIVE_XX_STREAK from a single last-attempt 5xx status code; BreakerStateMachine tracks only an aggregate fail_count, not a per-cause history, so a trip after a mixed rate-limit/auth/5xx failure sequence still reads FIVE_XX_STREAK from the terminal exception alone, which can misrepresent what actually happened across the attempt sequence."
+    close_out: "Either preserve per-cause failure history on BreakerStateMachine so a genuine N-consecutive-5xx streak can be verified before tagging FIVE_XX_STREAK, or rename/re-scope the enum value's semantics to match what is actually verifiable today (terminal-cause, not streak-verified). Out-of-family Codex review flagged this at B-38's own PR; the B-38 grounding agent had already flagged the same gap as an acceptable MVP simplification mirroring _classify_provider_exception's own terminal-exception-only discrimination, so this is a known, tracked scoping choice, not an oversight — registering rather than blocking B-38 on it."
+    council: "no — mechanical once a per-cause tracking or naming decision is made; not urgent, no current consumer distinguishes single-5xx from a genuine streak"
+    heading: "### B-42 · `breaker.cause`'s `FIVE_XX_STREAK` is tagged by the terminal exception only, not a verified streak *(surfaced at B-38's own PR, out-of-family Codex round 1, 2026-07-15)*"
