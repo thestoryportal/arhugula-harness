@@ -1012,6 +1012,53 @@ def test_hierarchical_child_pause_resume_does_not_reexecute_grandchild() -> None
     assert sub_agent.received_resume[1].fan_out_resume is not None
 
 
+def test_hierarchical_resume_rejects_paused_child_workflow_id_swap() -> None:
+    """B-31 — a same-step_id, same-step_kind edit that swaps the SUB_AGENT_DISPATCH
+    worker's `child_workflow_id` must fail closed, symmetric with the PARALLELIZATION
+    guard (`test_peer_resume_rejects_paused_child_workflow_id_swap`)."""
+    _grandchild0_dispatches[0] = 0
+    child_dispatcher = _GrandchildDispatcher()
+    sub_agent = _FaithfulSubAgentDispatcher(child_dispatcher=child_dispatcher)
+    parent_registry = cast(StepDispatcherRegistry, _ParentRegistry(sub_agent=sub_agent))
+
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    paused = execute_workflow(
+        _manifest("wf-parent", TopologyPattern.HIERARCHICAL_DELEGATION),
+        _parent_steps(),
+        run_id="parent-run",
+        ctx=ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=parent_registry,
+    )
+    assert paused.status is RunStatus.PAUSED
+    snap = paused.pause_snapshot
+    assert snap is not None and snap.fan_out_resume is not None
+    assert snap.fan_out_resume.paused_child_branches[0].child_workflow_id == "wf-child"
+
+    # Resume with sub-worker's step_payload edited to target a DIFFERENT child workflow —
+    # same step_id, same step_kind.
+    changed_steps = [
+        _parent_steps()[0],
+        WorkflowStep(
+            step_id=StepID("sub-worker"),
+            step_kind=StepKind.SUB_AGENT_DISPATCH,
+            step_payload={"child_workflow_id": "wf-child-SWAPPED"},
+        ),
+    ]
+    ctx2 = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    resumed = execute_workflow(
+        _manifest("wf-parent", TopologyPattern.HIERARCHICAL_DELEGATION),
+        changed_steps,
+        run_id="parent-run",
+        ctx=ctx2,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=parent_registry,
+        pause_snapshot_input=snap,
+    )
+    assert resumed.status is RunStatus.FAILED
+    assert "paused-child-workflow-id-changed" in (resumed.fail_class or "")
+
+
 class _PausingChildDispatcher:
     """A child fan-out grandchild dispatcher whose grandchild-1 always fails → the child
     fan-out PAUSES (grandchild-0 completes terminal+output). Distinct gates per child so
@@ -1234,6 +1281,89 @@ def test_synthesis_absent_fanout_snapshot_byte_compat_hash() -> None:
         json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
     assert got == expected
+
+
+def test_paused_child_absent_workflow_id_byte_compat_hash() -> None:
+    """B-31 byte-compat — a `paused_child_branches` entry captured BEFORE
+    `child_workflow_id` existed (`child_workflow_id=None`, the field's default) hashes
+    byte-identically to the pre-B-31 shape: `_strip_default_fanout_resume_fields` drops the
+    `child_workflow_id` key (not just leaves it `null`) from that entry's `model_dump`, so
+    every durable HIERARCHICAL/ORCHESTRATOR_WORKERS pause snapshot with a paused-child
+    branch that predates this field still recomputes the SAME hash and validates on
+    resume. Directly proves the drop-when-`None` claim at the entry level (distinct from
+    the list-level `paused_child_branches` empty-drop `test_synthesis_absent_fanout_
+    snapshot_byte_compat_hash` already covers) — a `paused_child_branches` list that is
+    NON-empty but whose sole entry omits `child_workflow_id`."""
+    import hashlib
+    import json
+
+    state_summary, _ = _pause_context_reader()
+    child_state_summary, child_anchor = _pause_context_reader()
+    child_snap = PauseSnapshot(
+        workflow_id="wf-child",
+        run_id="child-run",
+        step_index=1,
+        pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
+        state_summary=child_state_summary,
+        snapshot_hash="0" * 64,
+        created_at=0,
+        state_ledger_anchor=child_anchor,
+    )
+    pcb = PausedChildBranchResumeState(
+        branch_index=0,
+        step_id="sub-worker",
+        child_snapshot=child_snap,
+    )  # child_workflow_id omitted -> defaults to None (the pre-B-31 shape)
+    assert pcb.child_workflow_id is None
+    fan = FanOutResumeState(
+        orchestrator_output={"role": "orchestrator"},
+        orchestrator_step_id="orchestrator",
+        branches=(),
+        worker_count=1,
+        paused_child_branches=(pcb,),
+    )
+    got = _compute_snapshot_hash(
+        workflow_id="wf-fp",
+        run_id="run-1",
+        step_index=0,
+        state_summary=state_summary,
+        fan_out_resume=fan,
+    )
+    # The pre-B-31 canonical serialization — the paused_child_branches entry has NO
+    # `child_workflow_id` key at all (the field did not exist), not `child_workflow_id: null`.
+    # The nested child_snapshot dict also has its (pre-existing, unrelated to B-31)
+    # default-None `orchestrator_effect_fence_resume` key dropped by the SAME strip
+    # function — mirror that here too, else this test's own hand-built "canonical" dict
+    # would disagree with the real stripped shape for an unrelated reason.
+    child_snap_dump = child_snap.model_dump(mode="json")
+    child_snap_dump.pop("orchestrator_effect_fence_resume", None)
+    canonical = {
+        "workflow_id": "wf-fp",
+        "run_id": "run-1",
+        "step_index": 0,
+        "state_summary": state_summary.model_dump(mode="json"),
+        "fan_out_resume": {
+            "orchestrator_output": {"role": "orchestrator"},
+            "orchestrator_step_id": "orchestrator",
+            "branches": [],
+            "worker_count": 1,
+            "paused_child_branches": [
+                {
+                    "branch_index": 0,
+                    "step_id": "sub-worker",
+                    "child_snapshot": child_snap_dump,
+                }
+            ],
+        },
+    }
+    expected = hashlib.sha256(
+        json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    assert got == expected, (
+        "child_workflow_id=None must be DROPPED from the entry's model_dump, not "
+        "serialized as `child_workflow_id: null` — else every pre-B-31 durable snapshot "
+        "with a paused-child branch re-hashes differently and fails resume validation"
+    )
 
 
 # ---------------------------------------------------------------------------

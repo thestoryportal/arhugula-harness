@@ -779,6 +779,18 @@ class PausedChildBranchResumeState(BaseModel):
     a great-grandchild). COVERED by `_compute_snapshot_hash` transitively via the
     enclosing `fan_out_resume.model_dump(mode="json")`."""
 
+    child_workflow_id: str | None = None
+    """B-31 — the target child workflow's identifier AT CAPTURE TIME, threaded from
+    `SubAgentChildPausedError.child_workflow_id`. Resume validates it against the
+    re-supplied branch's `step_payload["child_workflow_id"]` (read via `_opaque_field`,
+    the SAME opaque-mapping key CP already reads elsewhere in `workflow_driver.py` for
+    grandchild identity) ONLY when both sides are present — closes the previously
+    documented gap where a same-`step_id`/same-`step_kind` edit that also swapped the
+    payload's target child workflow passed the resume guard undetected. Default-None
+    for byte-compat with snapshots captured before this field existed;
+    `_strip_default_fanout_resume_fields` drops it when None so an old snapshot
+    re-hashes byte-identically (the same discipline as `synthesis_step_id`)."""
+
 
 class EffectFencePausedBranchResumeState(BaseModel):
     """A fan-out branch whose own dispatch raised the runtime effect fence's

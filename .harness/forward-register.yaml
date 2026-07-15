@@ -54,11 +54,11 @@ snapshot:
   total: 39
   open: 0
   design_substrate_gated: 3
-  registered_finding: 10
+  registered_finding: 9
   operator_gated: 2
   held: 1
-  closed: 23
-  identity_digest: "725b9dbd2c7f877d"
+  closed: 24
+  identity_digest: "924eec29ca84c2d6"
   source: ".harness/post-phase-8-forward-register.md"
 
 items:
@@ -288,10 +288,11 @@ items:
 
   - id: B-31
     title: "Paused-child resume guard does not validate child_workflow_id identity"
-    status: registered_finding
+    status: closed
     summary: "Same-step_id/same-kind edit could swap the target child workflow past the resume guard undetected."
-    close_out: "Add child_workflow_id to the shared PausedChildBranchResumeState carrier, validated at the CP resume guard."
+    close_out: "Added child_workflow_id to PausedChildBranchResumeState (optional, byte-compat); resume guard now compares it against the re-supplied SUB_AGENT_DISPATCH payload via the existing _opaque_field convention. CP spec v1.98->v1.99 + clearance marker."
     council: "no — mechanical carrier-completeness extension, no nameable cross-domain tension"
+    pr: "#1011"
     heading: "### B-31 · Paused-child resume guard does not validate `child_workflow_id` identity *(surfaced at B-21, out-of-family Codex round 2)*"
 
   - id: B-32

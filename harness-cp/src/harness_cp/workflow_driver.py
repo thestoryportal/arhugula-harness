@@ -6952,17 +6952,32 @@ def _execute_parallelization(
                         "must stay SUB_AGENT_DISPATCH so the resume threads its child "
                         "snapshot to a dispatcher that can honor it"
                     )
-                # NOTE (out-of-family Codex round 2 [P1], registered forward work, NOT
-                # fixed here): this guard does not validate that the re-supplied branch's
-                # `step_payload` still targets the SAME child workflow the snapshot was
-                # captured against (a same-step_id, same-kind, DIFFERENT
-                # `child_workflow_id` edit would pass). CP treats `step_payload` as an
-                # opaque runtime-owned `Mapping[str, Any]` (axis-boundary discipline — CP
-                # does not know the `child_workflow_id` key convention), so closing this
-                # requires either a typed carrier extension or a runtime-side identity
-                # check at the `SUB_AGENT_DISPATCH` dispatcher. This gap is PRE-EXISTING
-                # + SYMMETRIC on the `FanOutResumeState.paused_child_branches` guard below
-                # (shipped at #680, unrelated to this port) — not unique to PARALLELIZATION.
+                # B-31 (out-of-family Codex round 2 [P1]) — the re-supplied branch's
+                # `step_payload` must still target the SAME child workflow the snapshot was
+                # captured against (a same-step_id, same-kind, DIFFERENT `child_workflow_id`
+                # edit previously passed this guard undetected). Read via `_opaque_field`
+                # (the same opaque-mapping key CP already reads for grandchild identity at
+                # `_payload_engine_signature`) — skipped when the snapshot predates this
+                # field (`pc.child_workflow_id is None`, byte-compat). An unreadable key on
+                # a SUB_AGENT_DISPATCH payload (already kind-checked above) is itself
+                # anomalous — fail closed rather than silently skip the check.
+                if pc.child_workflow_id is not None:
+                    try:
+                        _resumed_cwid = str(
+                            _opaque_field(steps[pc.branch_index].step_payload, "child_workflow_id")
+                        )
+                    except (TypeError, KeyError, AttributeError):
+                        return (
+                            f"paused-child-workflow-id-unreadable at {pc.branch_index}: "
+                            f"snapshot child_workflow_id={pc.child_workflow_id!r} but the "
+                            "resumed step_payload has no readable child_workflow_id key"
+                        )
+                    if _resumed_cwid != pc.child_workflow_id:
+                        return (
+                            f"paused-child-workflow-id-changed at {pc.branch_index}: "
+                            f"snapshot child_workflow_id={pc.child_workflow_id!r}, resume "
+                            f"targets {_resumed_cwid!r}"
+                        )
             # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE — effect-fence-paused peers: same BOUNDS +
             # IDENTITY guard, PLUS no-overlap with the terminal `branches` AND the paused-child
             # set (`seen` accumulates both) — a fence-paused ordinal is the disjoint FOURTH
@@ -7280,14 +7295,17 @@ def _execute_parallelization(
     # branches` + the resumed-terminal degraded check. Only consumed on the `pause`
     # path (harmlessly populated for proceed / cascade-cancel).
     terminal_dispositions: dict[int, str] = {}
-    # B-21 — branch_index -> the child sub-workflow's PauseSnapshot for each peer branch
-    # whose recursive child PAUSED THIS round (raised SubAgentChildPausedError; the
-    # ORCHESTRATOR_WORKERS `paused_child_dispositions` analogue). Written from the same
-    # single-threaded post-await sites as `terminal_dispositions`; read AFTER the barrier
-    # to build `PeerFanOutResumeState.paused_child_branches`. A paused child is NOT a
-    # terminal disposition (re-dispatched-via-child-resume on resume), so its ordinal
-    # NEVER enters `terminal_dispositions` (the two sets are disjoint).
-    paused_child_dispositions: dict[int, PauseSnapshot] = {}
+    # B-21 — branch_index -> (child_workflow_id, child sub-workflow's PauseSnapshot) for
+    # each peer branch whose recursive child PAUSED THIS round (raised
+    # SubAgentChildPausedError; the ORCHESTRATOR_WORKERS `paused_child_dispositions`
+    # analogue). Written from the same single-threaded post-await sites as
+    # `terminal_dispositions`; read AFTER the barrier to build
+    # `PeerFanOutResumeState.paused_child_branches`. A paused child is NOT a terminal
+    # disposition (re-dispatched-via-child-resume on resume), so its ordinal NEVER enters
+    # `terminal_dispositions` (the two sets are disjoint). B-31 adds `child_workflow_id`
+    # (previously discarded) so the resume guard can validate the re-supplied branch still
+    # targets the same child workflow.
+    paused_child_dispositions: dict[int, tuple[str, PauseSnapshot]] = {}
     # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE — branch_index -> the held reserve's idempotency_key
     # for each peer branch whose OWN dispatch raised the effect fence (the PARALLELIZATION
     # analogue). DISJOINT from `terminal_dispositions` (caught at a different except site); read
@@ -7872,7 +7890,10 @@ def _execute_parallelization(
                 # terminal branch) + re-raise so the gather marks the branch; the
                 # post-barrier guard FAILS the run HONESTLY (a paused child cannot be
                 # carried under proceed). No silent loss.
-                paused_child_dispositions[branch_index] = _paused.child_snapshot
+                paused_child_dispositions[branch_index] = (
+                    _paused.child_workflow_id,
+                    _paused.child_snapshot,
+                )
                 raise
             except Exception:
                 # Ran-and-errored → record the step entry (obl. 3) + a `completed`
@@ -8061,7 +8082,10 @@ def _execute_parallelization(
                 # it as a paused-child (NOT a terminal `completed` branch — else the snapshot
                 # records it terminal, resume skips it, and the child's PauseSnapshot is
                 # DROPPED): stash + re-raise, no step/terminal entry recorded.
-                paused_child_dispositions[branch_index] = _inflight_exc.child_snapshot
+                paused_child_dispositions[branch_index] = (
+                    _inflight_exc.child_workflow_id,
+                    _inflight_exc.child_snapshot,
+                )
                 raise
             if type(_inflight_exc).__name__ == "EffectFenceAbortedError":
                 # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE — an in-flight branch whose re-dispatch raised
@@ -8147,7 +8171,10 @@ def _execute_parallelization(
             # Re-raise so the TaskGroup halts the fan-out at the pause boundary (siblings:
             # in-flight finish / not-yet-dispatched left re-dispatchable — the §25.15.1
             # pause semantic, driving the pause branch below).
-            paused_child_dispositions[branch_index] = _paused.child_snapshot
+            paused_child_dispositions[branch_index] = (
+                _paused.child_workflow_id,
+                _paused.child_snapshot,
+            )
             raise
         except Exception as _exc:
             # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE (R-FS-1) — this branch's OWN dispatch raised the
@@ -8454,9 +8481,10 @@ def _execute_parallelization(
                 PausedChildBranchResumeState(
                     branch_index=_bi,
                     step_id=str(steps[_bi].step_id),
+                    child_workflow_id=_cwid,
                     child_snapshot=_child_snap,
                 )
-                for _bi, _child_snap in sorted(
+                for _bi, (_cwid, _child_snap) in sorted(
                     paused_child_dispositions.items(), key=lambda kv: kv[0]
                 )
             ),
@@ -9631,6 +9659,38 @@ def _execute_orchestrator_workers(
                         f"step_id={pc.step_id!r}, resume step_id="
                         f"{str(worker_steps[pc.branch_index].step_id)!r}"
                     )
+                # B-31 (symmetric with the PARALLELIZATION guard above) — validate the
+                # re-supplied worker's `step_payload` still targets the SAME child workflow
+                # the snapshot was captured against. Unlike the PARALLELIZATION guard, this
+                # closure has NO pre-existing kind-changed check (a PRE-EXISTING asymmetry,
+                # not introduced here — out of scope for B-31), so gate explicitly on the
+                # resumed step STILL being SUB_AGENT_DISPATCH: a kind-changed ordinal has no
+                # reason to carry this key at all (legitimately absent, not anomalous), and
+                # the child snapshot won't be threaded to it regardless. Skipped when the
+                # snapshot predates this field (byte-compat). An unreadable key on a
+                # still-SUB_AGENT_DISPATCH payload is itself anomalous — fail closed.
+                if (
+                    pc.child_workflow_id is not None
+                    and worker_steps[pc.branch_index].step_kind is StepKind.SUB_AGENT_DISPATCH
+                ):
+                    try:
+                        _resumed_cwid = str(
+                            _opaque_field(
+                                worker_steps[pc.branch_index].step_payload, "child_workflow_id"
+                            )
+                        )
+                    except (TypeError, KeyError, AttributeError):
+                        return (
+                            f"paused-child-workflow-id-unreadable at {pc.branch_index}: "
+                            f"snapshot child_workflow_id={pc.child_workflow_id!r} but the "
+                            "resumed step_payload has no readable child_workflow_id key"
+                        )
+                    if _resumed_cwid != pc.child_workflow_id:
+                        return (
+                            f"paused-child-workflow-id-changed at {pc.branch_index}: "
+                            f"snapshot child_workflow_id={pc.child_workflow_id!r}, resume "
+                            f"targets {_resumed_cwid!r}"
+                        )
             # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE — effect-fence-paused branches: same
             # BOUNDS + IDENTITY guard, PLUS no-overlap with BOTH the terminal `branches`
             # AND the paused-child set (`seen` accumulates both) — a fence-paused ordinal
@@ -10286,13 +10346,16 @@ def _execute_orchestrator_workers(
     # post-await loop-thread sites as `collected` (single-threaded → safe). Read
     # AFTER the barrier to build a `pause` snapshot's `FanOutResumeState.branches`.
     terminal_dispositions: dict[int, str] = {}
-    # B-HIERARCHICAL-PAUSE — branch_index -> the child sub-workflow's PauseSnapshot for
-    # each worker whose recursive child PAUSED THIS round (raised SubAgentChildPausedError).
-    # Written from the same single-threaded post-await loop sites as `terminal_dispositions`;
-    # read AFTER the barrier to build `FanOutResumeState.paused_child_branches`. A paused
-    # child is NOT a terminal disposition (it is re-dispatched-via-child-resume on resume),
-    # so its ordinal NEVER enters `terminal_dispositions` (the two sets are disjoint).
-    paused_child_dispositions: dict[int, PauseSnapshot] = {}
+    # B-HIERARCHICAL-PAUSE — branch_index -> (child_workflow_id, child sub-workflow's
+    # PauseSnapshot) for each worker whose recursive child PAUSED THIS round (raised
+    # SubAgentChildPausedError). Written from the same single-threaded post-await loop
+    # sites as `terminal_dispositions`; read AFTER the barrier to build
+    # `FanOutResumeState.paused_child_branches`. A paused child is NOT a terminal
+    # disposition (it is re-dispatched-via-child-resume on resume), so its ordinal NEVER
+    # enters `terminal_dispositions` (the two sets are disjoint). B-31 adds
+    # `child_workflow_id` (previously discarded) so the resume guard can validate the
+    # re-supplied branch still targets the same child workflow.
+    paused_child_dispositions: dict[int, tuple[str, PauseSnapshot]] = {}
     # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE (R-FS-1) — branch_index -> the held effect-fence
     # reserve's idempotency_key for each TOOL_STEP worker whose OWN dispatch raised the
     # runtime fence's `EffectFenceAmbiguousUncommittedError` (C-RT-31 §14.22). Like a paused
@@ -11070,7 +11133,10 @@ def _execute_orchestrator_workers(
                 # Stash it (no terminal — not a terminal branch) + re-raise so the
                 # gather marks the branch; the post-barrier guard FAILS the run HONESTLY
                 # (a paused child cannot be carried under proceed). No silent loss.
-                paused_child_dispositions[branch_index] = _paused.child_snapshot
+                paused_child_dispositions[branch_index] = (
+                    _paused.child_workflow_id,
+                    _paused.child_snapshot,
+                )
                 raise
             except Exception:
                 # Ran-and-errored → record the step entry (obl. 3) + a `completed`
@@ -11240,7 +11306,10 @@ def _execute_orchestrator_workers(
                 inflight.exception() if (inflight.done() and not inflight.cancelled()) else None
             )
             if isinstance(_inflight_exc, SubAgentChildPausedError):
-                paused_child_dispositions[branch_index] = _inflight_exc.child_snapshot
+                paused_child_dispositions[branch_index] = (
+                    _inflight_exc.child_workflow_id,
+                    _inflight_exc.child_snapshot,
+                )
                 raise
             # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE (R-FS-1) — this branch was cancelled because
             # a SIBLING raised first, but its OWN in-flight dispatch raised the runtime effect
@@ -11335,7 +11404,10 @@ def _execute_orchestrator_workers(
             # already buffered stays). Re-raise so the TaskGroup halts the fan-out at the
             # pause boundary (siblings: in-flight finish / not-yet-dispatched left
             # re-dispatchable — the §25.15.1 pause semantic), driving the pause branch.
-            paused_child_dispositions[branch_index] = _paused.child_snapshot
+            paused_child_dispositions[branch_index] = (
+                _paused.child_workflow_id,
+                _paused.child_snapshot,
+            )
             raise
         except Exception as _exc:
             # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE (R-FS-1) — this TOOL_STEP worker's OWN
@@ -11648,9 +11720,10 @@ def _execute_orchestrator_workers(
                 PausedChildBranchResumeState(
                     branch_index=_bi,
                     step_id=str(worker_steps[_bi].step_id),
+                    child_workflow_id=_cwid,
                     child_snapshot=_child_snap,
                 )
-                for _bi, _child_snap in sorted(
+                for _bi, (_cwid, _child_snap) in sorted(
                     paused_child_dispositions.items(), key=lambda kv: kv[0]
                 )
             ),
