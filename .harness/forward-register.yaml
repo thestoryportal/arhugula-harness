@@ -51,14 +51,14 @@
 # `tools/forward_register.py --check` is the CI gate.
 
 snapshot:
-  total: 41
+  total: 42
   open: 0
   design_substrate_gated: 4
-  registered_finding: 7
+  registered_finding: 8
   operator_gated: 2
   held: 1
   closed: 27
-  identity_digest: "0f56a08063a95595"
+  identity_digest: "8a5089694ad0401b"
   source: ".harness/post-phase-8-forward-register.md"
 
 items:
@@ -369,3 +369,11 @@ items:
     close_out: "File a Class 1 fork for a cross-process file lock (e.g. fcntl.flock) around the read-last-entry -> compute-prior-hash -> append sequence in harness-is/src/harness_is/memory_operation_ledger.py; also add a lock (or lock-free append-only read tolerance) to read_memory_operation_ledger's unlocked path.read_text() against a concurrent mid-write reader."
     council: "no — mechanical once a locking strategy is chosen; not urgent, no known production multi-process concurrent-writer deployment yet"
     heading: "### B-40 · Memory operation ledger has no cross-process write serialization *(surfaced at B-35's merge-gate concurrency lens, 2026-07-15)*"
+
+  - id: B-41
+    title: "_classify_provider_exception misroutes AuthenticationError to TRANSIENT_RETRY"
+    status: registered_finding
+    summary: "The retry classifier treats an SDK AuthenticationError (401/403) as TRANSIENT_RETRY, running the full retry staircase before ever escalating — the new B-38 breaker.cause telemetry classifier correctly tags the SAME exception AUTH_FAILURE, so the two classifiers now visibly disagree on one real exception shape."
+    close_out: "Decide whether _classify_provider_exception should fail-fast (return None) on a recognized auth exception instead of retrying it — a real retry-routing behavior change with its own blast radius (changes when/whether the breaker trips on auth failures), so scoped as its own arc rather than folded into B-38's telemetry-only change."
+    council: "no — mechanical once a fail-fast-vs-retry decision is made; the two classifiers intentionally serve different axes (retry-routing vs breaker telemetry) today, so leaving them briefly divergent is a documented, tracked choice, not an oversight"
+    heading: "### B-41 · `_classify_provider_exception` misroutes AuthenticationError to TRANSIENT_RETRY *(surfaced at B-38 grounding, 2026-07-15, advisor()-flagged)*"
