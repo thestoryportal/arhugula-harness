@@ -103,6 +103,16 @@ MODULE_AXIS = {
     "harness_runtime": "RT",
 }
 
+# Contract IDs confirmed phantom by canonical spec prose, not real unimplemented
+# contracts. `Spec_Harness_Runtime_v1.md`'s v1.93 change-note: "the IS spec
+# defines only C-IS-01..10, and this spec's own v1.8 §'Cross-axis citation
+# substrate' change-note already flagged 'prior v1 cited C-IS-11/14/15 which
+# don't exist.'" Single source of truth for both `overlay.py`'s own
+# `contract_without_code` orphan scan and `qa_evidence_matrix.py`'s test-
+# citation scan — B-35 (.harness/forward-register.yaml) found C-IS-14 missing
+# from the (until-then closure_gate.py-local, now shared) exclusion set.
+DOCUMENTED_NON_CONTRACTS = {"C-IS-11", "C-IS-14", "C-IS-15"}
+
 # --------------------------------------------------------------------------- #
 # Cite extraction (deterministic — no LLM)
 # --------------------------------------------------------------------------- #
@@ -481,7 +491,9 @@ def derive() -> dict[str, Any]:
     contract_without_code = [
         {"id": contract, "spec_files": files}
         for contract, files in sorted(spec_contracts.items())
-        if contract not in contract_to_files and any(sf in head_md for sf in files)
+        if contract not in contract_to_files
+        and contract not in DOCUMENTED_NON_CONTRACTS
+        and any(sf in head_md for sf in files)
     ]
     # (5) unit-keyspace coverage — ADVISORY, canonical-head-scoped. Delta-only plans do
     #     NOT re-table historical units, so this catches only head-defined U-* with no

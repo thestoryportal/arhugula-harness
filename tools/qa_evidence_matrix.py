@@ -48,7 +48,8 @@ def _canonical_contract_files(graph: dict[str, Any]) -> dict[str, list[str]]:
     return {
         contract_id: sorted(files)
         for contract_id, files in sorted(keyspace.items())
-        if any(path in head_files for path in files)
+        if contract_id not in overlay.DOCUMENTED_NON_CONTRACTS
+        and any(path in head_files for path in files)
     }
 
 

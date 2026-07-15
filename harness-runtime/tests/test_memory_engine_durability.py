@@ -40,6 +40,7 @@ def test_bindings_cover_closed_engine_taxonomy_and_ledger_enum() -> None:
 
 
 def test_each_engine_class_has_c_mem_17_durability_strategy() -> None:
+    """C-MEM-17 - engine-class durability bindings across all 5 engine classes."""
     expected = {
         EngineClass.EVENT_SOURCED_REPLAY: MemoryDurabilityStrategy.ACTIVITY_SNAPSHOT,
         EngineClass.SAVE_POINT_CHECKPOINT: MemoryDurabilityStrategy.CHECKPOINT_PACKET,

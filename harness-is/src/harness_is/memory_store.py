@@ -147,7 +147,12 @@ _JSONL_BY_KIND: Mapping[MemoryRecordKind, MemoryPathClass] = {
 
 
 class CanonicalMemoryStore:
-    """Filesystem-backed canonical memory store."""
+    """Filesystem-backed canonical memory store.
+
+    C-MEM-01 - the physical embodiment of the memory plane boundary's core
+    invariant: native provider memory, standard tools, and prompt-packet
+    fallback all read/write through THIS store, never a private copy.
+    """
 
     def __init__(
         self,

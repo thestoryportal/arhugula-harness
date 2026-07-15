@@ -187,6 +187,7 @@ def test_content_from_record_returns_none_for_genuinely_absent_content() -> None
 async def test_native_writes_stay_episodic_and_do_not_silently_promote(
     tmp_path: Path,
 ) -> None:
+    """C-MEM-15 - native provider adapter writes stay canonically episodic."""
     store, backend = _backend(tmp_path)
 
     await backend.create("/memories/preference.md", b"Always promote this? no.\n")

@@ -360,6 +360,37 @@ jobs:
       - name: Q1 review-gate schema is JSON
         run: uv run python tools/q1_review_gate.py --schema | uv run python -m json.tool >/dev/null
 
+  q3-evidence-and-closure-gate:
+    # B-35 (.harness/forward-register.yaml) — these two tools/*.py test modules
+    # lived outside pytest's 7 package testpaths with no CI job of their own,
+    # so a real, currently-red qa_evidence_matrix.py --check gap (12 contracts
+    # with no test-file citation) sat undetected. This job is their home.
+    # pyyaml comes from harness-runtime via the all-packages sync.
+    runs-on: ubuntu-latest
+    name: Q3 evidence + closure gate — blocking
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install uv + Python 3.12
+        uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Sync workspace (all members; provides pyyaml via harness-runtime)
+        run: uv sync --all-packages
+
+      - name: Q3 evidence-matrix + closure-gate tests
+        working-directory: tools
+        run: uv run python -m pytest test_qa_evidence_matrix.py test_closure_gate.py -q
+
+      - name: Validate the Q3 evidence matrix (missing test-citation = CI failure)
+        run: uv run python tools/qa_evidence_matrix.py --check
+
+      - name: Validate the closure gate (failing automatable predicate = CI failure)
+        run: uv run python tools/closure_gate.py --check
+
   codex-context-guard:
     # R-600-codex-context-guard — Codex-side context-rot gate. The guard is stdlib-only
     # so the runtime check uses /usr/bin/python3; pytest still runs under uv for the

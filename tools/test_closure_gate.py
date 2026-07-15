@@ -24,7 +24,11 @@ def _green_delegates(monkeypatch) -> None:
         closure_gate,
         "_overlay_orphans",
         lambda: {
-            "contract_without_code": [{"id": "C-IS-11"}],
+            # `contract_without_code` is EMPTY here — overlay.py's own
+            # DOCUMENTED_NON_CONTRACTS exclusion (B-35) already strips
+            # documented phantoms (C-IS-11/14/15) before this dict is ever
+            # produced; closure_gate.py trusts that and does no re-filtering.
+            "contract_without_code": [],
             "unit_without_code": [{"id": "U-RT-00"}],
             "cxa_seam_missing_endpoint": [],
         },
@@ -111,8 +115,9 @@ def test_automatable_and_tier2_predicates_evaluate_from_mocked_delegates(
 
     # Tier 1 automatable — all green per _green_delegates' mocked values:
     # standalone_registered=0/standalone_gated=0 (G1.1), _run always (0, "ok")
-    # (G1.2/G1.6), contract_without_code=[C-IS-11] which is a DOCUMENTED_NON_CONTRACT
-    # so 0 real orphans remain (G1.3), cxa_seam_missing_endpoint=[] (G1.5).
+    # (G1.2/G1.6), contract_without_code=[] (overlay.py already excludes
+    # documented phantoms upstream) so 0 real orphans remain (G1.3),
+    # cxa_seam_missing_endpoint=[] (G1.5).
     assert preds["G1.1"].state is True
     assert preds["G1.2"].state is True
     assert preds["G1.3"].state is True

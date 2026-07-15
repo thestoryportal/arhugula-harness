@@ -14,6 +14,7 @@ from harness_as.sandbox_tier import BlastRadiusTier, SandboxTier
 
 
 def test_memory_tool_contract_vocabulary_matches_c_mem_14() -> None:
+    """C-MEM-14 - provider-neutral memory tool contract vocabulary."""
     assert {entry.tool.value for entry in MEMORY_TOOL_CONTRACTS} == {
         "memory.search",
         "memory.read",
