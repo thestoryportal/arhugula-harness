@@ -108,6 +108,23 @@ codex-autonomous-arc arc="manual":
 codex-worktree-gc *args:
     /usr/bin/python3 tools/codex_worktree_gc.py {{args}}
 
+# Report merged local branch refs safe to prune (read-only; exact merged-SHA gate + live
+# post-merge CI-green check, see tools/hooks/loop_lib.sh loop_gc_branches). This is the
+# "careful comprehensive review" step per ~/.claude/CLAUDE.md CI Discipline (§10) — run it
+# BEFORE branch-hygiene-sweep to see what would be deleted and why, not blind.
+branch-hygiene-report:
+    bash -c 'source tools/hooks/lib.sh && source tools/hooks/loop_lib.sh && loop_gc_branches report'
+
+# Delete (local -D + remote, where a same-name remote ref still exists) every branch report
+# lists — merged-PR-verified via exact headRefOid match + live post-merge CI-green check,
+# never a name-only guess. This is the ship-pr skill's post-merge branch-hygiene close-out
+# step (run it right after CI on main's merge commit is confirmed green — see
+# .claude/skills/ship-pr/SKILL.md); also directly invocable for a manual pass. Runs through
+# the normal Bash permission prompt each time — no auto-approve allowlist entry — so this is
+# always an explicit, reviewed action, never silent unattended deletion.
+branch-hygiene-sweep:
+    bash -c 'source tools/hooks/lib.sh && source tools/hooks/loop_lib.sh && loop_gc_branches reap'
+
 # ─── semantic overlay (R-IF-112) — spec ↔ code ↔ CXA-seam ↔ substitution ────
 # A deterministic, no-LLM overlay over the code graph. The agent-facing reference
 # tool: "what code implements C-IS-08", "who cites U-RT-112", "show me the orphans".
