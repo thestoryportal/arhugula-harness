@@ -54,11 +54,11 @@ snapshot:
   total: 43
   open: 0
   design_substrate_gated: 4
-  registered_finding: 8
+  registered_finding: 7
   operator_gated: 2
   held: 1
-  closed: 28
-  identity_digest: "f5e77295917a60ba"
+  closed: 29
+  identity_digest: "b751ab2ef44bfb87"
   source: ".harness/post-phase-8-forward-register.md"
 
 items:
@@ -373,10 +373,11 @@ items:
 
   - id: B-41
     title: "_classify_provider_exception misroutes AuthenticationError to TRANSIENT_RETRY"
-    status: registered_finding
+    status: closed
     summary: "The retry classifier treats an SDK AuthenticationError (401/403) as TRANSIENT_RETRY, running the full retry staircase before ever escalating — the new B-38 breaker.cause telemetry classifier correctly tags the SAME exception AUTH_FAILURE, so the two classifiers now visibly disagree on one real exception shape."
-    close_out: "Decide whether _classify_provider_exception should fail-fast (return None) on a recognized auth exception instead of retrying it — a real retry-routing behavior change with its own blast radius (changes when/whether the breaker trips on auth failures), so scoped as its own arc rather than folded into B-38's telemetry-only change. Test-witness note from B-38's own merge-gate: today the fail-fast (:901) and escalation (:964) breaker.record_failure() call sites in retry_breaker_fallback.py are structurally inert for a non-None breaker_cause (_classify_provider_exception never returns None for an SDK exception, and the escalation branch is unreachable given today's 2-value output) — only the max-attempts-exhaustion site (:945) is currently witnessed by a distinguishing test. If this B-41 fix routes a recognized auth exception to the fail-fast branch, add a test asserting the classified cause lands there too — that path becomes live and untested the moment this closes."
-    council: "no — mechanical once a fail-fast-vs-retry decision is made; the two classifiers intentionally serve different axes (retry-routing vs breaker telemetry) today, so leaving them briefly divergent is a documented, tracked choice, not an oversight"
+    close_out: "CLOSED 2026-07-15. Verified against Spec_Harness_Runtime_v1.md v1.99 (canonical HEAD) directly: §14.5's C-RT-15 fail-class table states RT-FAIL-PROVIDER-AUTH (raw SDK auth error, 401/403, not a harness wrapper type) is \"Raise unmodified\"; §14.6 D2 + its own narrative both say AUTH is fail-fast. The code contradicted its own docstring (which already claimed this). A straightforward conformance fix, not a design decision -- no fork needed. Added a status_code in (401, 403) duck-typed guard to _classify_provider_exception, placed after the wrapper-type check and before the TRANSIENT_RETRY catch-all -- deliberately NOT reusing _classify_breaker_cause so the two classifiers' control-flow contracts stay independent. Closes B-38's noted divergence as a side effect (both classifiers now agree on AUTH). Added a fail-fast witness test (asserts the SECOND call lands on candidate 1, not a retried candidate 0 -- a naive len(calls)==2 check does not discriminate fail-fast from retry-then-succeed) and a regression-guard test proving 429/5xx still retry (guards against an overly-broad status_code is not None mutation). Both mutation-probed against real production-code reversions."
+    council: "no — mechanical conformance fix, spec was unambiguous"
+    pr: "#pending"
     heading: "### B-41 · `_classify_provider_exception` misroutes AuthenticationError to TRANSIENT_RETRY *(surfaced at B-38 grounding, 2026-07-15, advisor()-flagged)*"
 
   - id: B-42

@@ -26,9 +26,9 @@ Per-step invocation discipline (the body of
      C-CP-03 §3.5 ``retry.*`` 6-attribute namespace; dispatch via
      ``self.inner.dispatch(rebound_binding, step)``. On success the breaker
      records success and the result returns; on fail-fast (provider-
-     unreachable / payload-shape) the breaker records failure and the
-     candidate is abandoned; on transient SDK failure the staircase advances
-     and either retries (sleeps full-jitter backoff) or escalates.
+     unreachable / payload-shape / auth, B-41) the breaker records failure
+     and the candidate is abandoned; on transient SDK failure the staircase
+     advances and either retries (sleeps full-jitter backoff) or escalates.
   5. On ``FallbackChainExhaustedError`` emit ``fallback.exhausted`` on the
      outer span and raise ``RetryBreakerFallbackExhaustedError`` (maps to the
      ``RT-FAIL-FALLBACK-EXHAUSTED`` fail class added at v1.4).
@@ -267,7 +267,11 @@ def _classify_provider_exception(exc: BaseException) -> ValidatorRetryExitClass 
     staircase, or ``None`` for fail-fast / propagate.
 
     Per spec §14.6 D2: AUTH / payload-shape / shutdown are fail-fast;
-    network / rate-limit / 5xx are transient (run the staircase).
+    network / rate-limit / 5xx are transient (run the staircase). The C-RT-15
+    fail-class table (§14.5) is explicit that ``RT-FAIL-PROVIDER-AUTH`` (a raw
+    SDK auth error, 401/403, *not* a harness wrapper type) is "Raise
+    unmodified" — i.e. fail-fast, same as ``RT-FAIL-PROVIDER-UNREACHABLE`` /
+    ``RT-FAIL-PAYLOAD-SHAPE``.
 
     MVP discrimination (conservative — extends naturally to provider-specific
     exception classes at a follow-on arc):
@@ -276,12 +280,24 @@ def _classify_provider_exception(exc: BaseException) -> ValidatorRetryExitClass 
       this candidate; the outer loop advances).
     - ``LLMDispatchPayloadShapeError`` → ``None`` (fail-fast, abandons this
       candidate; the outer loop advances).
+    - A raw SDK exception with ``.status_code in (401, 403)`` → ``None``
+      (fail-fast, B-41 — matches ``RT-FAIL-PROVIDER-AUTH``'s "raise
+      unmodified" per §14.5; duck-typed the same way as
+      ``_classify_breaker_cause`` below, deliberately NOT reusing that
+      function so this classifier's control-flow contract stays independent
+      of the telemetry classifier's).
     - ``asyncio.CancelledError`` → re-raise (shutdown / cancellation must
       propagate; this is handled by the caller, not classified here).
     - All other ``Exception`` subclasses → ``TRANSIENT_RETRY`` (treat as
-      network / rate-limit / 5xx until proven otherwise).
+      network / rate-limit / 5xx until proven otherwise) — this deliberately
+      still includes 429/5xx: only 401/403 are fail-fast per spec, a broader
+      ``status_code is not None`` guard would wrongly kill retries for
+      genuinely transient provider failures.
     """
     if isinstance(exc, (LLMDispatchProviderUnreachableError, LLMDispatchPayloadShapeError)):
+        return None
+    status_code = getattr(exc, "status_code", None)
+    if isinstance(status_code, int) and status_code in (401, 403):
         return None
     return ValidatorRetryExitClass.TRANSIENT_RETRY
 
@@ -311,9 +327,11 @@ def _classify_breaker_cause(exc: BaseException) -> BreakerCause | None:
     This is a SEPARATE, telemetry-only classification from
     `_classify_provider_exception` above (which drives retry/fail-fast
     control flow) — the two intentionally read the same exception through
-    different lenses and can disagree today (an `AuthenticationError` is
-    `AUTH_FAILURE` here but `TRANSIENT_RETRY` there, a known, tracked
-    divergence — see `B-41`)."""
+    different lenses, on different `.status_code` sets by design (this one
+    also covers `RATE_LIMIT`/`FIVE_XX_STREAK`, which stay `TRANSIENT_RETRY`
+    there). Both now agree on 401/403 (B-41 closed the prior divergence,
+    where an `AuthenticationError` was `AUTH_FAILURE` here but
+    `TRANSIENT_RETRY` there)."""
     status_code = getattr(exc, "status_code", None)
     if not isinstance(status_code, int):
         return None
