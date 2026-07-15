@@ -221,7 +221,13 @@ def emit_breaker_trip_span_event(
     `breaker.tripped` events are always-sampled at all cells per §7.2 — the
     emitted `EventEmission.sampled` is `True` (composes with the U-OD-11
     always-sampled set). `parent_span_ref` and the return resolve to the
-    U-OD-04 OTel-handle alias family; no `Span*` type is materialized here.
+    U-OD-04 OTel-handle alias family; no `Span*` type is materialized here —
+    `parent_span_ref` is the real `opentelemetry.trace.Span` handle and this
+    function calls its `.add_event(...)` directly (matching
+    `alignment_floor_drift_detection.emit_drift_event`'s established
+    pattern), so `EventEmission` is a bookkeeping return-record ON TOP OF a
+    real emission, not a substitute for one (out-of-family Codex review at
+    `B-38`'s PR caught that this call was previously missing).
     """
     for attribute_name in _NON_OPTIONAL_ATTRIBUTES:
         if getattr(event, attribute_name, None) is None:
@@ -244,6 +250,23 @@ def emit_breaker_trip_span_event(
         )
         if getattr(event, attribute_name) is not None
     )
+    attributes: dict[str, str | int] = {
+        "harness.breaker.scope": event.scope.value,
+        "harness.breaker.from_state": event.from_state.value,
+        "harness.breaker.to_state": event.to_state.value,
+        "harness.breaker.trigger_count": event.trigger_count,
+    }
+    if event.permanent_fail_repeats is not None:
+        attributes["harness.breaker.permanent_fail_repeats"] = event.permanent_fail_repeats
+    if event.tool_id is not None:
+        attributes["harness.breaker.tool_id"] = event.tool_id
+    if event.model_version is not None:
+        attributes["harness.breaker.model_version"] = event.model_version
+    if event.cause is not None:
+        attributes["harness.breaker.cause"] = event.cause.value
+    if event.cooldown_ms is not None:
+        attributes["harness.breaker.cooldown_ms"] = event.cooldown_ms
+    parent_span_ref.add_event(name="breaker.tripped", attributes=attributes)
     return EventEmission(
         emitted_at_span=parent_span_ref,
         event_name="breaker.tripped",

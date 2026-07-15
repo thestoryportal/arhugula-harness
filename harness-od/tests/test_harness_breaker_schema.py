@@ -21,6 +21,8 @@ from harness_od.harness_breaker_schema import (
 )
 from harness_od.otel_genai_base import EventEmission, SpanRef
 from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 _EXPECTED_ATTRIBUTES: tuple[str, ...] = (
     "harness.breaker.scope",
@@ -214,3 +216,61 @@ def test_span_ref_event_emission_resolve_to_u_od_04_carrier() -> None:
     emission = emit_breaker_trip_span_event(span, _full_event())
     assert isinstance(emission, EventEmission)
     assert emission.emitted_at_span is span
+
+
+# --- B-38 follow-up: real span-event emission (out-of-family Codex round 2) --
+def test_emit_breaker_trip_actually_calls_add_event_on_real_span() -> None:
+    """`emit_breaker_trip_span_event` must call the real span's `.add_event(...)`
+    — `EventEmission` is a bookkeeping return-record, not a substitute for the
+    actual OTel emission (matching `emit_drift_event`'s established pattern).
+    Load-bearing: verified via `InMemorySpanExporter`, not just the returned
+    `EventEmission` object every other test in this file checks."""
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    span = provider.get_tracer("u-od-09-test").start_span("parent")
+
+    emit_breaker_trip_span_event(span, _full_event())
+    span.end()
+
+    finished = exporter.get_finished_spans()
+    assert len(finished) == 1
+    events = finished[0].events
+    assert len(events) == 1
+    event = events[0]
+    assert event.name == "breaker.tripped"
+    assert event.attributes is not None
+    assert event.attributes["harness.breaker.scope"] == "per_model"
+    assert event.attributes["harness.breaker.from_state"] == "closed"
+    assert event.attributes["harness.breaker.to_state"] == "open"
+    assert event.attributes["harness.breaker.trigger_count"] == 5
+    assert event.attributes["harness.breaker.cause"] == "rate_limit"
+    assert event.attributes["harness.breaker.cooldown_ms"] == 30000
+
+
+def test_emit_breaker_trip_omits_none_optional_attrs_from_real_event() -> None:
+    """A minimal event (only the 4 non-optional attrs) must NOT carry the
+    5 optional `harness.breaker.*` keys on the real span event — matching
+    `attribute_count`'s existing None-is-absent semantics."""
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    span = provider.get_tracer("u-od-09-test").start_span("parent")
+
+    minimal = HarnessBreakerEvent(
+        scope=BreakerScope.PER_PROVIDER,
+        from_state=BreakerState.HALF_OPEN,
+        to_state=BreakerState.OPEN,
+        trigger_count=1,
+    )
+    emit_breaker_trip_span_event(span, minimal)
+    span.end()
+
+    event = exporter.get_finished_spans()[0].events[0]
+    assert event.attributes is not None
+    assert set(event.attributes.keys()) == {
+        "harness.breaker.scope",
+        "harness.breaker.from_state",
+        "harness.breaker.to_state",
+        "harness.breaker.trigger_count",
+    }

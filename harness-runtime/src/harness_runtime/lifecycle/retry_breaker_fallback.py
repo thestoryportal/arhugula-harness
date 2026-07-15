@@ -321,7 +321,7 @@ def _classify_breaker_cause(exc: BaseException) -> BreakerCause | None:
         return BreakerCause.RATE_LIMIT
     if status_code in (401, 403):
         return BreakerCause.AUTH_FAILURE
-    if status_code >= 500:
+    if 500 <= status_code < 600:
         return BreakerCause.FIVE_XX_STREAK
     return None
 

@@ -720,8 +720,11 @@ class _FakeProviderStatusError(Exception):
         (403, BreakerCause.AUTH_FAILURE),
         (500, BreakerCause.FIVE_XX_STREAK),
         (503, BreakerCause.FIVE_XX_STREAK),
+        (599, BreakerCause.FIVE_XX_STREAK),
         (400, None),
         (404, None),
+        (600, None),
+        (999, None),
     ],
 )
 def test_classify_breaker_cause_status_code_table(
