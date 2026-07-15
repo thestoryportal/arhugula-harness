@@ -25,11 +25,16 @@ shape is inviolate (IS-AL-3).
 
 Concurrent-writer serialization (acceptance #7) is by a module-level lock
 around the read-prior-then-append critical section — an implementation-grade
-mechanism per the §6.3 / §7.4 deferral.
+mechanism per the §6.3 / §7.4 deferral. **B-40 (2026-07-15):** the module-level
+`threading.Lock` only serializes same-process writers; a same-host
+`fcntl.flock` (`cross_process_ledger_lock`) now also serializes writers across
+OS processes, closing the C-IS-09 §9.3 / C-MEM-08 cross-process requirement
+the thread lock alone could not meet. `read_ledger` takes a shared same-host
+lock so a concurrent reader cannot observe a torn/partial write.
 
 Authority: Implementation_Plan_Information_Substrate_v2_3.md §2.1 U-IS-11
 (preserved verbatim from v2.1 §2); Spec_Information_Substrate_v1.md C-IS-07
-§7.1 / §7.3; ADR-F2 v1.2 §Consequences (c).
+§7.1 / §7.3; C-IS-09 §9.3 / §9.4; ADR-F2 v1.2 §Consequences (c).
 """
 
 from __future__ import annotations
@@ -42,6 +47,10 @@ from enum import StrEnum
 from pydantic import BaseModel, ConfigDict
 
 from harness_is.chain_link_construction import construct_prior_event_hash
+from harness_is.cross_process_ledger_lock import (
+    cross_process_read_lock,
+    cross_process_write_lock,
+)
 from harness_is.entry_hash import compute_response_hash
 from harness_is.jsonl_event_ledger_lifecycle import JsonlLedgerHandle
 from harness_is.state_ledger_entry_schema import (
@@ -69,6 +78,11 @@ def ledger_write_lock() -> threading.Lock:
     ledger-preserve-across-checkout window) that must serialize against
     `append_ledger_entry` — a direct read/write of the ledger file without
     holding this lock can race a concurrent append and silently drop it.
+
+    Same-process-only (B-40): other writers must ALSO take
+    `cross_process_ledger_lock.cross_process_write_lock(ledger_handle.
+    canonical_path)` directly for the cross-process dimension — this
+    function only ever returns the in-process `threading.Lock`.
     """
     return _WRITE_LOCK
 
@@ -195,8 +209,14 @@ def _deserialize_entry(line: str) -> StateLedgerEntry:
     )
 
 
-def read_ledger(ledger_handle: JsonlLedgerHandle) -> list[StateLedgerEntry]:
-    """Deserialize every entry currently persisted in the JSONL ledger."""
+def _read_ledger_unlocked(ledger_handle: JsonlLedgerHandle) -> list[StateLedgerEntry]:
+    """Deserialize every persisted entry without taking the cross-process lock.
+
+    Internal — used inside `append_ledger_entry`'s critical section, which
+    already holds the exclusive cross-process lock; taking the shared lock
+    again there would self-deadlock (POSIX `flock` is per open-file-
+    description, not reentrant across a process's own fds).
+    """
     if not ledger_handle.canonical_path.exists():
         return []
     return [
@@ -204,6 +224,16 @@ def read_ledger(ledger_handle: JsonlLedgerHandle) -> list[StateLedgerEntry]:
         for line in ledger_handle.canonical_path.read_text().splitlines()
         if line.strip()
     ]
+
+
+def read_ledger(ledger_handle: JsonlLedgerHandle) -> list[StateLedgerEntry]:
+    """Deserialize every entry currently persisted in the JSONL ledger.
+
+    Takes a shared same-host `flock` (B-40) so a concurrent writer's append
+    cannot be observed mid-write.
+    """
+    with cross_process_read_lock(ledger_handle.canonical_path):
+        return _read_ledger_unlocked(ledger_handle)
 
 
 def append_ledger_entry(
@@ -224,8 +254,8 @@ def append_ledger_entry(
         raise WriteKeyMismatchError(
             "write_key.idempotency_key must equal entry_payload.idempotency_key"
         )
-    with _WRITE_LOCK:
-        ledger = read_ledger(ledger_handle)
+    with _WRITE_LOCK, cross_process_write_lock(ledger_handle.canonical_path):
+        ledger = _read_ledger_unlocked(ledger_handle)
         if any(e.idempotency_key == entry_payload.idempotency_key for e in ledger):
             return WriteResult.IDEMPOTENT_NOOP
         prior_entry = ledger[-1] if ledger else None

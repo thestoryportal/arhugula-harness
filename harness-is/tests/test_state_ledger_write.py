@@ -6,6 +6,7 @@ Test set per the U-IS-11 `Tests:` field — 13 tests covering acceptance #1-#10.
 from __future__ import annotations
 
 import json
+import multiprocessing
 import threading
 from datetime import UTC, datetime
 from pathlib import Path
@@ -176,6 +177,34 @@ def test_append_concurrent_writes_serialized(tmp_path: Path) -> None:
         t.start()
     for t in threads:
         t.join()
+    ledger = read_ledger(handle)
+    assert len(ledger) == 6
+    assert verify_chain(ledger).status is VerificationStatus.VALID
+
+
+def _mp_append_worker(canonical_path: Path, i: int) -> None:
+    """Module-level (picklable) worker — genuine OS process, not a thread."""
+    handle = JsonlLedgerHandle(canonical_path=canonical_path, exists=False, entry_count=0)
+    append_ledger_entry(handle, _payload(i, hour=1), _key(i))
+
+
+def test_append_multiprocess_writes_serialized(tmp_path: Path) -> None:
+    """B-40 (C-IS-09 §9.3 / C-MEM-08) — genuine OS processes appending to the
+    SAME canonical ledger must not fork the hash chain or lose an entry. The
+    prior thread-only witness (above) could not detect a cross-process race;
+    `fork` context sidesteps `spawn`'s module-reimport requirement for a
+    pytest-collected test function."""
+    handle = _handle(tmp_path)
+    canonical_path = handle.canonical_path
+    ctx = multiprocessing.get_context("fork")
+
+    processes = [ctx.Process(target=_mp_append_worker, args=(canonical_path, i)) for i in range(6)]
+    for p in processes:
+        p.start()
+    for p in processes:
+        p.join(timeout=30)
+        assert p.exitcode == 0
+
     ledger = read_ledger(handle)
     assert len(ledger) == 6
     assert verify_chain(ledger).status is VerificationStatus.VALID
