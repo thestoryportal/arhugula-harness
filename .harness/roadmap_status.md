@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `99eca2d464c0` |
+| `workspace_state_hash` | `1368f8ddd586` |
 | `last_refreshed` | 2026-07-15T00:00:00Z |
-| `git_head` | `974817e5` — B-29 comment clarification merged; B-44 registered |
+| `git_head` | `adf4b549` — B-30 register correction merged |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 91 |
 
@@ -56,11 +56,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| #1024 | 2026-07-15 | B-30 register correction: sharpened from stale council-conditional framing to a precise, multi-round-verified disposition (missing ingestion consumer + producer-side replay-metadata gap); register-don't-build, no code change |
 | #1023 | 2026-07-15 | B-29 branch_metadata carrier-ownership question found already resolved via a 2026-06-13 Class 1 fork; closed with clarifying comments citing the spec. B-44 registered (registered_finding) for the split-out time_source half |
 | #1022 | 2026-07-15 | B-42 FIVE_XX_STREAK terminal-not-streak docstring clarification; B-43 registered (design_substrate_gated) for the adjacent OD spec v1.32 §7.1 stale-vacuous prose finding |
 | #1021 | 2026-07-15 | B-41 auth-fail-fast conformance fix; resolves B-38's classifier divergence |
 | #1020 | 2026-07-15 | B-38 breaker.cause classifier + real span-emission fix; B-40/B-41/B-42 registered |
-| #002c82f3 | 2026-07-15 | B-39 re-grounded (2026-07-15 no-parking sweep): all 3 design constraints confirmed still accurate against HEAD by direct read; status moved registered_finding -> design_substrate_gated (needs a Class 1 fork proposing the resume_context threading mechanism before code, per X-AL-3). No code change. Continuing sweep to B-38 next. |
 ---
 
 ---
