@@ -66,21 +66,30 @@ is provably safe to delete. This is always a single named branch — the one you
 merged — never a scan or backlog sweep:
 
 ```bash
-# 1. Confirm the merge commit's OWN post-merge CI run on main is green (not the PR's
-#    pre-merge checks — this repo has a documented case where those diverged).
+# 1. Pull the branch name + its exact merged tip SHA from the PR itself (not typed by
+#    hand — guards against a name typo targeting the wrong ref), and confirm the merge
+#    commit's OWN post-merge CI run on main is green (not the PR's pre-merge checks —
+#    this repo has a documented case where those diverged).
+branch=$(gh pr view <PR#> --json headRefName --jq .headRefName)
+head_oid=$(gh pr view <PR#> --json headRefOid --jq .headRefOid)
 merge_sha=$(gh pr view <PR#> --json mergeCommit --jq .mergeCommit.oid)
 gh run list --commit "$merge_sha" --json conclusion --jq '.[0].conclusion'   # expect "success"
 
-# 2. Delete the remote branch. This goes through the normal Bash permission prompt
-#    every time — an explicit, reviewed action, never silent/unattended.
-gh api -X DELETE repos/<owner>/<repo>/git/refs/heads/<branch>
+# 2. Lease-guarded delete — refuses atomically if the remote tip no longer equals the
+#    verified merged SHA (new work pushed to the same branch name post-merge, or a
+#    stale/reused ref). A bare `gh api -X DELETE`/`git push --delete` has no such guard
+#    and would silently destroy whatever is currently there, with no recovery. Goes
+#    through the normal Bash permission prompt every time — an explicit, reviewed
+#    action, never silent/unattended.
+git push --force-with-lease="refs/heads/${branch}:${head_oid}" origin ":refs/heads/${branch}"
 ```
 
 If `gh pr merge --delete-branch` was used and it already removed the remote ref, step 2 is a
-no-op (the API call 404s — nothing to do). Local branch refs are left alone entirely; they
-carry no unique cleanup obligation. Worktree removal is a separate, structurally later step (a
-session can't remove the worktree it's running inside) — that's `loop_gc_worktrees`, which
-still runs at the next session's SessionStart per U-HK-26; unrelated to this step.
+no-op (the push fails "remote ref does not exist" — nothing to do). Local branch refs are left
+alone entirely; they carry no unique cleanup obligation. Worktree removal is a separate,
+structurally later step (a session can't remove the worktree it's running inside) — that's
+`loop_gc_worktrees`, which still runs at the next session's SessionStart per U-HK-26; unrelated
+to this step.
 
 ## R-NNN closure cascade — §12.5.3
 
