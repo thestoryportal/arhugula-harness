@@ -1,6 +1,6 @@
 ---
 name: ship-pr
-description: Open a PR for the current arc and run the post-merge fixed-point refresh checklist correctly. Use when the operator says "/ship-pr", "ship it", "open the PR", "land this", or when an arc is built+green and ready to merge. Codifies the §12.2 post-merge audit + the §12.2.1 terminating-refresh fixed-point so the roadmap_status.md refresh is done right (and does not recurse). Do NOT use to author code (that is the arc itself) — use it for the PR + refresh ritual.
+description: Open a PR for the current arc, gate the merge through CI-green + the decorrelated `merge-gate` 3-lens review (code-touching PRs), and run the post-merge fixed-point refresh checklist correctly. Use when the operator says "/ship-pr", "ship it", "open the PR", "land this", or when an arc is built+green and ready to merge. Codifies the §12.2 post-merge audit + the §12.2.1 terminating-refresh fixed-point so the roadmap_status.md refresh is done right (and does not recurse). Do NOT use to author code (that is the arc itself) — use it for the PR + gate + refresh ritual.
 ---
 
 # ship-pr — PR + fixed-point refresh (U-HK-23)
@@ -30,6 +30,21 @@ canonical §12 protocol** rather than re-stating it — the recipe lives in CLAU
   title; body lists what changed + verification (tests/assertions, codex rounds) + the
   R-NNN it advances. End the body with the standard generated-with trailer.
 - Commit/PR trailers per the workspace convention (Co-Authored-By; 🤖 Generated-with).
+
+## Pre-merge gate — CI green + decorrelated 3-lens review (before `gh pr merge`)
+
+Once the PR's HEAD sha shows CI fully green (`check-runs`, rerunning known flakes first, per
+`[[wait-for-main-ci-green-before-forward-work]]`), and for any PR that touches
+`harness-*/src|tests` (or equivalent code surface — skip doc-only and terminating
+`ops: roadmap status refresh` PRs), invoke the **`merge-gate`** skill before running
+`gh pr merge`: three parallel Agent-tool subagents (concurrency/race-conditions,
+spec-conformance-against-ledgers, test-witness-adequacy), each returning a structured
+`VERDICT: APPROVE`/`VERDICT: BLOCK: <reason>` line. All-approve → merge without HIL, per
+`[[feedback-merge-without-hil-once-ci-green]]` (CI-green remains the base precondition; this
+gate is an additional one for code-touching PRs, not a replacement). Any block or split
+verdict → do not merge; fix-and-re-gate is capped at 2 rounds, then surface the verdicts to
+the operator via one `AskUserQuestion` — see the skill for the full procedure, parse-failure
+handling, and the audit-log append.
 
 ## Post-merge fixed-point refresh — CLAUDE.md §12.2 + §12.2.1
 
