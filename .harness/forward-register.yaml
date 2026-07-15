@@ -51,14 +51,14 @@
 # `tools/forward_register.py --check` is the CI gate.
 
 snapshot:
-  total: 44
+  total: 45
   open: 0
   design_substrate_gated: 5
   registered_finding: 6
   operator_gated: 2
   held: 1
-  closed: 30
-  identity_digest: "b209fa310ca384b3"
+  closed: 31
+  identity_digest: "1039ec02c73366b0"
   source: ".harness/post-phase-8-forward-register.md"
 
 items:
@@ -272,10 +272,11 @@ items:
 
   - id: B-29
     title: "Pre-existing F2-write gaps surfaced at B-23 (branch_metadata + shared clock)"
-    status: registered_finding
+    status: closed
     summary: "Dormant sub_agent_dispatch.py-shared gaps: branch_metadata sidecar unpopulated; no shared time_source consumer."
-    close_out: "Decide branch_metadata ownership (council-eligible); thread optional time_source once a real consumer exists."
-    council: "conditional — C2 IS-axis carrier-ownership vs C9 producer-authority, nameable once a reading is proposed"
+    close_out: "CLOSED 2026-07-15 (branch_metadata half only; time_source half split to B-44). The council-conditional framing was stale -- the carrier-ownership question was already resolved as a Class 1 fork on 2026-06-13 (.harness/class_1_fork_b1_branch_causality_route_x_vs_y.md, Route Y): CP spec v1.32 §25.13 names CP WorkflowDriver as sole producer, IS spec v1.8 §5.4 confirms it, and WorkflowDriver.append_branch_step_ledger_entry/append_branch_terminal_ledger_entry already populate branch_metadata at ~19 real production call sites. sub_agent_dispatch.py's dispatch-fact entry and the 4 cost-attribution composers are NOT branch-spawn/terminal entries per §25.13's scope, so their branch_metadata=None default is spec-conformant, not a gap. Added a one-line clarifying comment at both producer sites citing the spec so a future reader doesn't re-flag this. No behavior change; ruff clean; 155 tests pass."
+    council: "no — spec already resolved the carrier-ownership question at a prior cleared fork; no live tension to convene"
+    pr: "#pending"
     heading: "### B-29 · Pre-existing F2-write gaps surfaced at B-23 (out-of-family Codex, not novel to B-23) *(registered 2026-07-13)*"
 
   - id: B-30
@@ -386,7 +387,7 @@ items:
     summary: "_classify_breaker_cause tags FIVE_XX_STREAK from a single last-attempt 5xx status code; BreakerStateMachine tracks only an aggregate fail_count, not a per-cause history, so a trip after a mixed rate-limit/auth/5xx failure sequence still reads FIVE_XX_STREAK from the terminal exception alone, which can misrepresent what actually happened across the attempt sequence."
     close_out: "CLOSED 2026-07-15. Grounded directly against OD spec Spec_Operational_Discipline_v1_32.md §7.1 (only requires \"the classified trip-cause, when known\" -- no streak-verification mandate) plus BreakerStateMachine's own source (only an aggregate fail_count, no per-cause history) and confirmed no live consumer reads harness.breaker.cause today -- chose disposition (b) from this row's own close-out options: a documentation-only clarification, not new per-cause tracking infrastructure (which would be speculative ahead of any consumer, the same discipline the B-19 redundancy analysis already established). Added a clarifying paragraph to BreakerCause's docstring in harness_breaker_schema.py stating FIVE_XX_STREAK is tagged from a single terminal 5xx exception, not a verified N-consecutive streak, mirroring the equivalent clarification _classify_breaker_cause's own docstring in retry_breaker_fallback.py already carried since B-38's original landing. The spec-committed enum value (5xx_streak) is UNCHANGED -- only the docstring's description of its derivation is now precise. No behavior/test change; ruff clean; OD breaker test suite (30 tests) still green. Adjacent finding (OD spec v1.32 §7.1's own prose still describes breaker.cause as \"vacuous-today ... absent from every emitted event,\" which is now stale since B-38 populated it for 3 of 4 values) is OUT OF SCOPE for this row -- registered separately as B-43 (design_substrate_gated) since fixing spec prose is a design-substrate edit requiring design-phase posture, not a Phase-7 code fix."
     council: "no — mechanical once grounded; spec text was unambiguous on the non-mandate"
-    pr: "#pending"
+    pr: "#1022"
     heading: "### B-42 · `breaker.cause`'s `FIVE_XX_STREAK` is tagged by the terminal exception only, not a verified streak *(surfaced at B-38's own PR, out-of-family Codex round 1, 2026-07-15)*"
 
   - id: B-43
@@ -396,3 +397,11 @@ items:
     close_out: "NOT closed -- editing design-substrate/Spec_Operational_Discipline_v1_32.md requires design-phase posture (workspace CLAUDE.md §11) plus a clearance marker (§4.5), not a Phase-7 docstring fix; bundling it into B-42's code-only PR would trip the X-AL-3 CI guard (design-substrate edit without back-flow doc) and create a mixed-posture PR per §11.2's explicit halt-and-ask case. The same stale-vacuous framing likely also appears at harness-od/CLAUDE.md §1.2 (spec-pointer summary) and §4.1 (graduation-note context) -- both mode-agnostic, not design-substrate, so those ARE Phase-7-editable, but were deliberately left untouched here to keep this a pure registration pass; a future design-phase pass on the spec itself should sweep all copies at once rather than fixing them piecemeal across postures. Council: no -- this is a narrow prose-accuracy delta over an already-cleared spec version (v1.32 stays canonical; likely a v1.33 ADDITIVE prose-only delta), not a contract change."
     council: "no — prose-accuracy delta over a cleared spec, not a contract change; needs design-phase posture, not council"
     heading: "### B-43 · OD spec v1.32 §7.1 prose still describes `harness.breaker.cause` as vacuous-today, stale since B-38 *(surfaced at B-42 grounding, 2026-07-15, advisor()-flagged)*"
+
+  - id: B-44
+    title: "No production bootstrap site injects a non-default time_source clock"
+    status: registered_finding
+    summary: "RuntimeAuditLedgerWriter + RuntimeSubAgentDispatcher + the 4 cost-attribution composers all support time_source injection, but every production bootstrap site (stage_4_od.py:62, stage_5_loop_init.py:596) always defaults to datetime.now(UTC) -- the flagged NonMonotonicTimestampError failure mode has no live trigger today."
+    close_out: "Thread an optional time_source through the 4 cost-attribution composer signatures + bootstrap sites (plumbing already exists at compose_cost_f2_entry_core) once a real deterministic-clock consumer surfaces (e.g. a multi-writer clock-skew test). Mirrors the workspace's established B-19/B-42 discipline against building speculative infrastructure ahead of a real consumer."
+    council: "no — mechanical once a consumer exists; not urgent, genuinely dormant today"
+    heading: "### B-44 · No production bootstrap site injects a non-default `time_source` clock *(split from B-29, 2026-07-15)*"
