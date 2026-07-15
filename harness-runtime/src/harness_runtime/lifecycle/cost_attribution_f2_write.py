@@ -146,6 +146,10 @@ def compose_cost_f2_entry_core(
         if procedural_tier_snapshot_resolver is not None
         else None
     )
+    # branch_metadata intentionally omitted (defaults None): CP spec v1.32
+    # §25.13 / IS spec v1.8 §5.4 scope that sidecar to the CP WorkflowDriver's
+    # branch-spawn/terminal entries — this is a cost-attribution dispatch-fact
+    # entry, not one of those (B-29).
     payload = EntryPayload(
         action_id=action_id,
         idempotency_key=action_id,

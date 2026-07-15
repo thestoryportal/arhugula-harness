@@ -695,7 +695,10 @@ class RuntimeSubAgentDispatcher:
         dispatch_action_id = Identifier(f"dispatch:{parent_action_id}:{child_index}")
 
         try:
-            # 8b — F2-write the dispatch action.
+            # 8b — F2-write the dispatch action. branch_metadata intentionally
+            # omitted (defaults None): CP spec v1.32 §25.13 / IS spec v1.8 §5.4
+            # scope that sidecar to the CP WorkflowDriver's branch-spawn/terminal
+            # entries — this is a dispatch-fact entry, not one of those (B-29).
             f2_payload = EntryPayload(
                 action_id=dispatch_action_id,
                 idempotency_key=dispatch_action_id,
