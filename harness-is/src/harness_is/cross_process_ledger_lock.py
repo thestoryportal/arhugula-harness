@@ -32,10 +32,10 @@ def _lock_file_path(canonical_path: Path) -> Path:
 
 
 @contextmanager
-def _flock(canonical_path: Path, mode: int) -> Generator[None, None, None]:
+def _flock(canonical_path: Path, mode: int, open_flags: int) -> Generator[None, None, None]:
     lock_path = _lock_file_path(canonical_path)
     lock_path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+    fd = os.open(lock_path, open_flags, 0o600)
     try:
         fcntl.flock(fd, mode)
         try:
@@ -54,7 +54,7 @@ def cross_process_write_lock(canonical_path: Path) -> Generator[None, None, None
     section (unchanged) — this lock adds the cross-process dimension the
     thread lock cannot provide.
     """
-    with _flock(canonical_path, fcntl.LOCK_EX):
+    with _flock(canonical_path, fcntl.LOCK_EX, os.O_CREAT | os.O_RDWR):
         yield
 
 
@@ -64,6 +64,21 @@ def cross_process_read_lock(canonical_path: Path) -> Generator[None, None, None]
 
     Blocks only while a writer holds `cross_process_write_lock` on the same
     path, closing the torn/partial-line read race against a concurrent append.
+
+    Opens the lock sidecar read-only (`O_RDONLY`), and WITHOUT `O_CREAT` when
+    the sidecar already exists: `flock`'s locking semantics are independent
+    of the fd's read/write mode or creation flags (POSIX `flock`, unlike
+    byte-range `fcntl` locks, doesn't check open-mode permissions), and a
+    pure reader never writes to the lock file — a genuinely read-only open
+    preserves callers' own write-nothing guarantees (e.g. `harness-inspect`'s
+    read-only-CLI invariant, which a blanket `O_CREAT` would otherwise trip
+    even when it creates nothing). `O_CREAT` is only used as a fallback for
+    the rare first-ever read of a ledger no writer has touched yet.
     """
-    with _flock(canonical_path, fcntl.LOCK_SH):
-        yield
+    lock_path = _lock_file_path(canonical_path)
+    if lock_path.exists():
+        with _flock(canonical_path, fcntl.LOCK_SH, os.O_RDONLY):
+            yield
+    else:
+        with _flock(canonical_path, fcntl.LOCK_SH, os.O_CREAT | os.O_RDONLY):
+            yield
