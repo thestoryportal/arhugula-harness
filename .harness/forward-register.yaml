@@ -292,7 +292,7 @@ items:
     summary: "Same-step_id/same-kind edit could swap the target child workflow past the resume guard undetected."
     close_out: "Added child_workflow_id to PausedChildBranchResumeState (optional, byte-compat); resume guard now compares it against the re-supplied SUB_AGENT_DISPATCH payload via the existing _opaque_field convention. CP spec v1.98->v1.99 + clearance marker."
     council: "no — mechanical carrier-completeness extension, no nameable cross-domain tension"
-    pr: "#PENDING"
+    pr: "#1011"
     heading: "### B-31 · Paused-child resume guard does not validate `child_workflow_id` identity *(surfaced at B-21, out-of-family Codex round 2)*"
 
   - id: B-32
