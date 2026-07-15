@@ -638,7 +638,15 @@ def _strip_default_fanout_resume_fields(
         for pcb in cast("list[Any]", paused_children):
             if not isinstance(pcb, dict):
                 continue
-            child_snapshot = cast("dict[str, Any]", pcb).get("child_snapshot")
+            pcb_dict = cast("dict[str, Any]", pcb)
+            # B-31: `child_workflow_id` is a NEW default-None field on
+            # `PausedChildBranchResumeState`. `model_dump` always emits it (as `null`
+            # for every snapshot captured before this field existed), which would change
+            # the hash of every pre-B-31 paused-child entry — drop it when None (the same
+            # drop-when-default discipline as `synthesis_step_id`).
+            if pcb_dict.get("child_workflow_id") is None:
+                pcb_dict.pop("child_workflow_id", None)
+            child_snapshot = pcb_dict.get("child_snapshot")
             if not isinstance(child_snapshot, dict):
                 continue
             child = cast("dict[str, Any]", child_snapshot)

@@ -2330,3 +2330,49 @@ def test_peer_resume_rejects_paused_child_branch_kind_changed() -> None:
     )
     assert resumed.status is RunStatus.FAILED
     assert "paused-child-kind-changed" in (resumed.fail_class or "")
+
+
+def test_peer_resume_rejects_paused_child_workflow_id_swap() -> None:
+    """B-31 — a same-step_id, same-step_kind edit that swaps the SUB_AGENT_DISPATCH
+    payload's `child_workflow_id` must fail closed, not silently thread the snapshot's
+    child-resume onto a dispatcher now targeting a DIFFERENT child workflow."""
+    child_dispatcher = _PeerGrandchildDispatcher()
+    sub_agent = _PeerFaithfulSubAgentDispatcher(child_dispatcher=child_dispatcher)
+    parent_registry = cast(StepDispatcherRegistry, _PeerParentRegistry(sub_agent=sub_agent))
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    paused = execute_workflow(
+        _manifest("wf-pp"),
+        _peer_parent_steps(),
+        run_id="run-1",
+        ctx=ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=parent_registry,
+    )
+    assert paused.status is RunStatus.PAUSED
+    snap = paused.pause_snapshot
+    assert snap is not None
+    assert snap.peer_fan_out_resume is not None
+    assert snap.peer_fan_out_resume.paused_child_branches[0].child_workflow_id == "wf-child-peer"
+
+    # Resume with branch-1-sub's step_payload edited to target a DIFFERENT child
+    # workflow — same step_id, same step_kind (so the kind/identity guards above pass).
+    changed_steps = [
+        _peer_parent_steps()[0],
+        WorkflowStep(
+            step_id=StepID("branch-1-sub"),
+            step_kind=StepKind.SUB_AGENT_DISPATCH,
+            step_payload={"child_workflow_id": "wf-child-SWAPPED"},
+        ),
+    ]
+    resume_ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    resumed = execute_workflow(
+        _manifest("wf-pp"),
+        changed_steps,
+        run_id="run-1",
+        ctx=resume_ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(_CountingDispatcher()),
+        pause_snapshot_input=snap,
+    )
+    assert resumed.status is RunStatus.FAILED
+    assert "paused-child-workflow-id-changed" in (resumed.fail_class or "")

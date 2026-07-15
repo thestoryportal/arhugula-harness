@@ -1012,6 +1012,53 @@ def test_hierarchical_child_pause_resume_does_not_reexecute_grandchild() -> None
     assert sub_agent.received_resume[1].fan_out_resume is not None
 
 
+def test_hierarchical_resume_rejects_paused_child_workflow_id_swap() -> None:
+    """B-31 — a same-step_id, same-step_kind edit that swaps the SUB_AGENT_DISPATCH
+    worker's `child_workflow_id` must fail closed, symmetric with the PARALLELIZATION
+    guard (`test_peer_resume_rejects_paused_child_workflow_id_swap`)."""
+    _grandchild0_dispatches[0] = 0
+    child_dispatcher = _GrandchildDispatcher()
+    sub_agent = _FaithfulSubAgentDispatcher(child_dispatcher=child_dispatcher)
+    parent_registry = cast(StepDispatcherRegistry, _ParentRegistry(sub_agent=sub_agent))
+
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    paused = execute_workflow(
+        _manifest("wf-parent", TopologyPattern.HIERARCHICAL_DELEGATION),
+        _parent_steps(),
+        run_id="parent-run",
+        ctx=ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=parent_registry,
+    )
+    assert paused.status is RunStatus.PAUSED
+    snap = paused.pause_snapshot
+    assert snap is not None and snap.fan_out_resume is not None
+    assert snap.fan_out_resume.paused_child_branches[0].child_workflow_id == "wf-child"
+
+    # Resume with sub-worker's step_payload edited to target a DIFFERENT child workflow —
+    # same step_id, same step_kind.
+    changed_steps = [
+        _parent_steps()[0],
+        WorkflowStep(
+            step_id=StepID("sub-worker"),
+            step_kind=StepKind.SUB_AGENT_DISPATCH,
+            step_payload={"child_workflow_id": "wf-child-SWAPPED"},
+        ),
+    ]
+    ctx2 = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    resumed = execute_workflow(
+        _manifest("wf-parent", TopologyPattern.HIERARCHICAL_DELEGATION),
+        changed_steps,
+        run_id="parent-run",
+        ctx=ctx2,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=parent_registry,
+        pause_snapshot_input=snap,
+    )
+    assert resumed.status is RunStatus.FAILED
+    assert "paused-child-workflow-id-changed" in (resumed.fail_class or "")
+
+
 class _PausingChildDispatcher:
     """A child fan-out grandchild dispatcher whose grandchild-1 always fails → the child
     fan-out PAUSES (grandchild-0 completes terminal+output). Distinct gates per child so
