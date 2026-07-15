@@ -17,6 +17,8 @@ The register has **two tiers**, kept distinct:
 
 **This register also discharges a roadmap obligation.** Roadmap §1 marks Surfaces IV / VI / VIII–X as `decomposition-owed` (§9). This document **is** that decomposition for IV / VI / IX / X — its items can seed `R-300` / `R-500` / `R-800` / `R-900` entries, which also closes the **no-`R-NNN`-entry gap** R-700 surfaced for `CXA-1/2/3/4` + `CP-17`.
 
+**Standing directive (operator 2026-07-14) — ground every row before build-or-block.** `Project_Roadmap_v1.md` §5.0b + `[[full-register-ground-every-arc-before-blocking]]` extends the R-FS-1 "nothing deferred" discipline to this register: `registered_finding` / `operator_gated` / `design_substrate_gated`, and the empty `B-16` speculative bucket, are not stop conditions. Every row gets an active grounding pass against the design-substrate before it is built or left open with a label — a label describes current state, not permission to skip investigation.
+
 **Council note (answering the standing question).** Compiling *this register* is descriptive synthesis grounded in substrate — **not** a design decision with a nameable cross-domain tension, so per CLAUDE.md §13.2 + §10.9 it routes to solo + `advisor()`, not the council. But several **forward arcs below carry nameable two-voice tensions that ARE council-eligible the moment the operator opens them to execute** — each is flagged `⚖️ council-eligible` with the named voices. (The roadmap already encodes this on R-410/411/412 via `council_required: conditional:nameable-tension`.)
 
 ---

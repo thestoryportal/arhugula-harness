@@ -207,7 +207,7 @@ def next_action(roadmap, workspace_state, session_posture):
 
 **When to depart from the rule.** Operator AUQ overrides at any step. Class 1 fork detection (§4.3 of CLAUDE.md) halts the rule and routes to design-phase back-flow. Drift detection halts immediately. The rule is not a contract — it is a discipline that fails loudly.
 
-**`NO_ACTIVE_CANDIDATES` does NOT terminate the session (anti-parking — CLAUDE.md §12.4.1, operator directive 2026-06-02).** Step-4 `HALT("NO_ACTIVE_CANDIDATES")` means "no item is *auto-`ACTIVE`*", NOT "no Claude work remains." The `not r.operator_halt_marker` filter and the `PROPOSED`/`DEFERRED`/`infra-gated` statuses exclude items from the *auto* queue — they do **not** make those items the operator's to execute. The operator executes nothing manually. When the auto-queue is empty, **do not stop**: pick the highest-value forward item per the priority order above, **ground it**, and **drive its Claude-executable slice to the genuine gate** (build the stdlib/mockable slice + scaffolding + the recipe the operator runs), then surface only the genuine gate — a real decision, a credential, paid-call authorization, or an irreversible action — batched and minimal (the paid-call/secret boundary stays per `[[feedback-background-agent-no-unilateral-paid-calls-or-secret-relocation]]`; a *held* operator decision is honored, not overridden). See CLAUDE.md §12.4.1 + `[[feedback-operator-labels-are-claude-driven-no-parking]]`.
+**`NO_ACTIVE_CANDIDATES` does NOT terminate the session (anti-parking — CLAUDE.md §12.4.1, operator directive 2026-06-02).** Step-4 `HALT("NO_ACTIVE_CANDIDATES")` means "no item is *auto-`ACTIVE`*", NOT "no Claude work remains." The `not r.operator_halt_marker` filter and the `PROPOSED`/`DEFERRED`/`infra-gated` statuses exclude items from the *auto* queue — they do **not** make those items the operator's to execute. The operator executes nothing manually. When the auto-queue is empty, **do not stop**: pick the highest-value forward item per the priority order above, **ground it**, and **drive its Claude-executable slice to the genuine gate** (build the stdlib/mockable slice + scaffolding + the recipe the operator runs), then surface only the genuine gate — a real decision, a credential, paid-call authorization, or an irreversible action — batched and minimal (the paid-call/secret boundary stays per `[[feedback-background-agent-no-unilateral-paid-calls-or-secret-relocation]]`; a *held* operator decision is honored, not overridden). See CLAUDE.md §12.4.1 + `[[feedback-operator-labels-are-claude-driven-no-parking]]`. **The same discipline extends to the post-Phase-8 forward register per §5.0b below (operator 2026-07-14) — "non-urgent"/"speculative"/"registered_finding" labels there are likewise not a license to skip grounding.**
 
 ---
 
@@ -258,6 +258,21 @@ R-FS-1:
     RETAINED EXTERNAL GATES (not deferral): EMBEDDING corpus+model; LLM_AS_ROUTER router-model — design to the decision
     point, surface the one input at the vendor boundary, never auto-fire (`[[feedback-background-agent-no-unilateral-paid-calls-or-secret-relocation]]`).
 ```
+
+### ⚑ 5.0b STANDING DIRECTIVE — GROUND EVERY FORWARD-REGISTER ARC BEFORE BUILDING OR BLOCKING (operator 2026-07-14)
+
+> *"We will be tackling all arcs even those that are speculative, blocked or policy decision. All will at least be reviewed and explored. The objective is to ensure that all arcs from the spec(s) are built in order to ensure the full harness spec is implemented. So, no longer block any units for forward work in the loop. They must be explored and investigated to ground them in reality of the spec before building or blocking them if there is any ambiguity."*
+
+**Effect on the post-Phase-8 forward register (`.harness/forward-register.yaml`, distinct from the R-FS-1 build inventory above, which is closed).** R-FS-1 (§5.0) applied "nothing deferred" to the original beyond-MVP capability ledger; this directive extends the SAME discipline to the newer, still-open forward register — the `B-*` items surfaced during and after R-FS-1/R-FS-2 close-out. Prior practice treated `registered_finding` / `operator_gated` / `design_substrate_gated`, and the empty-bucket `B-16` "speculative" disposition, as legitimate stop conditions for investigation. They are not. Every row gets an active grounding pass — read the cited spec/ADR/plan section(s) directly — BEFORE it is built or left open with a disposition label:
+
+- **Spec clearly specifies the behavior → build now**, regardless of the row's current label.
+- **Genuinely unspecified/ambiguous → file a Class-1 fork doc** naming the exact ambiguity (X-AL-3 route, pre-authorized as the means to resolve — not a reason to defer).
+- **Blocked by a real external substrate** (credential, infra, live vendor) → build the buildable slice, document the concrete block.
+- **Already operator-ratified DEFER (`held` status)** → re-verify the ratification is still current; a genuine `held` row is honored, not silently re-parked.
+
+**"No auto-derivable candidate" is not a stop condition for this register.** In the `/loop` / `roadmap-continue` flow, the forward register is never "done" while any row lacks a fresh grounding pass — pick the next un-grounded (or stalest-grounded) item and investigate it. This composes with, and does not relax, the paid-call/secret/irreversible-action boundary (`[[feedback-background-agent-no-unilateral-paid-calls-or-secret-relocation]]`) or the genuine-gate discriminator (`[[feedback-operator-labels-are-claude-driven-no-parking]]`) — every item still drives to its real gate; only the *pre-emptive skip on label alone* is what's retired.
+
+Spine: `[[full-register-ground-every-arc-before-blocking]]` + `.harness/forward-register.yaml` + `.harness/post-phase-8-forward-register.md`.
 
 ### 5.1 Mode-agnostic infrastructure (R-IF-NNN)
 
