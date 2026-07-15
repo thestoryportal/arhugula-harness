@@ -181,6 +181,35 @@ writing. (Checkpoint hygiene per §12.5.3: a checkpoint is "resolved" when its `
 merged; PreCompact snapshots are keep-10-pruned by `session-end-cleanup.sh`; resolved-checkpoint
 archival is optional and not automated — no standing "archive Remaining-Work-addressed" step.)
 
+## Reflect + `/context-save` — mandatory, every arc close (not just R-NNN closes)
+
+**This step is not optional and does not wait to be asked.** CLAUDE.md §15 (reflect for
+self-improvement) + §12.5.2 (checkpoint disciplines) both fire at every arc's completion —
+that means every time this skill reaches this point, not only when an R-NNN closed. Skipping
+it was a recurring failure before this step existed in the skill file
+(`[[feedback-autonomous-loop-dont-stop-to-ask]]` — 5 recorded instances across #640, #642,
+#723, and 2026-07-15's PRs #1009 + #1011, corrected only when the operator asked directly
+whether the discipline had run). A memory paragraph alone was not a reliable trigger; this
+skill step is.
+
+Before handing off to the next arc (whether via `ScheduleWakeup`, `/loop-stop`, or simply
+ending the turn):
+
+1. **Reflect.** Ask: did this arc surface anything genuinely new or recurrence-likely — a
+   pattern, a corrected assumption, a tooling gotcha, a process gap? Not "what did I do"
+   (that's the PR body) — "what would a future session want to know before repeating this."
+   If nothing qualifies, say so explicitly rather than skipping the step silently.
+2. **Save it.** Per the auto-memory discipline (global `~/.claude/CLAUDE.md`): cardinality ≥2
+   patterns and any explicit user feedback (correction OR confirmation) get saved/updated —
+   fold into an existing entry when one matches, don't duplicate. Land the `MEMORY.md` index
+   line via `just memory-compact --upsert` (above), never a hand `Edit`.
+3. **Run `/context-save`.** Even if the next action is "stop the loop" — a saved checkpoint is
+   what makes the next session's resume cheap and honest, per
+   `[[feedback-checkpoint-remaining-work-is-advisory-not-authoritative]]`.
+
+Skip only when this PR was itself the terminating roadmap-status refresh (§12.2.1) — a
+refresh-only commit has no new learnings to reflect on.
+
 ## Notes
 
 - The Wave-1 `post-merge-refresh.sh` hook pre-computes the new hash + injects the §12.2
