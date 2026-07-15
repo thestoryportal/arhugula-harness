@@ -51,14 +51,14 @@
 # `tools/forward_register.py --check` is the CI gate.
 
 snapshot:
-  total: 43
+  total: 44
   open: 0
-  design_substrate_gated: 4
-  registered_finding: 7
+  design_substrate_gated: 5
+  registered_finding: 6
   operator_gated: 2
   held: 1
-  closed: 29
-  identity_digest: "b751ab2ef44bfb87"
+  closed: 30
+  identity_digest: "b209fa310ca384b3"
   source: ".harness/post-phase-8-forward-register.md"
 
 items:
@@ -377,13 +377,22 @@ items:
     summary: "The retry classifier treats an SDK AuthenticationError (401/403) as TRANSIENT_RETRY, running the full retry staircase before ever escalating — the new B-38 breaker.cause telemetry classifier correctly tags the SAME exception AUTH_FAILURE, so the two classifiers now visibly disagree on one real exception shape."
     close_out: "CLOSED 2026-07-15. Verified against Spec_Harness_Runtime_v1.md v1.99 (canonical HEAD) directly: §14.5's C-RT-15 fail-class table states RT-FAIL-PROVIDER-AUTH (raw SDK auth error, 401/403, not a harness wrapper type) is \"Raise unmodified\"; §14.6 D2 + its own narrative both say AUTH is fail-fast. The code contradicted its own docstring (which already claimed this). A straightforward conformance fix, not a design decision -- no fork needed. Added a status_code in (401, 403) duck-typed guard to _classify_provider_exception, placed after the wrapper-type check and before the TRANSIENT_RETRY catch-all -- deliberately NOT reusing _classify_breaker_cause so the two classifiers' control-flow contracts stay independent. Closes B-38's noted divergence as a side effect (both classifiers now agree on AUTH). Added a fail-fast witness test (asserts the SECOND call lands on candidate 1, not a retried candidate 0 -- a naive len(calls)==2 check does not discriminate fail-fast from retry-then-succeed) and a regression-guard test proving 429/5xx still retry (guards against an overly-broad status_code is not None mutation). Both mutation-probed against real production-code reversions."
     council: "no — mechanical conformance fix, spec was unambiguous"
-    pr: "#pending"
+    pr: "#1021"
     heading: "### B-41 · `_classify_provider_exception` misroutes AuthenticationError to TRANSIENT_RETRY *(surfaced at B-38 grounding, 2026-07-15, advisor()-flagged)*"
 
   - id: B-42
     title: "breaker.cause's FIVE_XX_STREAK is tagged by the terminal exception only, not a verified streak"
-    status: registered_finding
+    status: closed
     summary: "_classify_breaker_cause tags FIVE_XX_STREAK from a single last-attempt 5xx status code; BreakerStateMachine tracks only an aggregate fail_count, not a per-cause history, so a trip after a mixed rate-limit/auth/5xx failure sequence still reads FIVE_XX_STREAK from the terminal exception alone, which can misrepresent what actually happened across the attempt sequence."
-    close_out: "Either preserve per-cause failure history on BreakerStateMachine so a genuine N-consecutive-5xx streak can be verified before tagging FIVE_XX_STREAK, or rename/re-scope the enum value's semantics to match what is actually verifiable today (terminal-cause, not streak-verified). Out-of-family Codex review flagged this at B-38's own PR; the B-38 grounding agent had already flagged the same gap as an acceptable MVP simplification mirroring _classify_provider_exception's own terminal-exception-only discrimination, so this is a known, tracked scoping choice, not an oversight — registering rather than blocking B-38 on it."
-    council: "no — mechanical once a per-cause tracking or naming decision is made; not urgent, no current consumer distinguishes single-5xx from a genuine streak"
+    close_out: "CLOSED 2026-07-15. Grounded directly against OD spec Spec_Operational_Discipline_v1_32.md §7.1 (only requires \"the classified trip-cause, when known\" -- no streak-verification mandate) plus BreakerStateMachine's own source (only an aggregate fail_count, no per-cause history) and confirmed no live consumer reads harness.breaker.cause today -- chose disposition (b) from this row's own close-out options: a documentation-only clarification, not new per-cause tracking infrastructure (which would be speculative ahead of any consumer, the same discipline the B-19 redundancy analysis already established). Added a clarifying paragraph to BreakerCause's docstring in harness_breaker_schema.py stating FIVE_XX_STREAK is tagged from a single terminal 5xx exception, not a verified N-consecutive streak, mirroring the equivalent clarification _classify_breaker_cause's own docstring in retry_breaker_fallback.py already carried since B-38's original landing. The spec-committed enum value (5xx_streak) is UNCHANGED -- only the docstring's description of its derivation is now precise. No behavior/test change; ruff clean; OD breaker test suite (30 tests) still green. Adjacent finding (OD spec v1.32 §7.1's own prose still describes breaker.cause as \"vacuous-today ... absent from every emitted event,\" which is now stale since B-38 populated it for 3 of 4 values) is OUT OF SCOPE for this row -- registered separately as B-43 (design_substrate_gated) since fixing spec prose is a design-substrate edit requiring design-phase posture, not a Phase-7 code fix."
+    council: "no — mechanical once grounded; spec text was unambiguous on the non-mandate"
+    pr: "#pending"
     heading: "### B-42 · `breaker.cause`'s `FIVE_XX_STREAK` is tagged by the terminal exception only, not a verified streak *(surfaced at B-38's own PR, out-of-family Codex round 1, 2026-07-15)*"
+
+  - id: B-43
+    title: "OD spec v1.32 §7.1 prose still describes harness.breaker.cause as vacuous-today, stale since B-38"
+    status: design_substrate_gated
+    summary: "Spec_Operational_Discipline_v1_32.md §7.1's harness.breaker.cause row states: \"Vacuous-today, honestly documented ... the attribute is present in the schema (forward-compatible typed slot) and absent from every emitted event until a follow-on classifier arc supplies real signal.\" B-38 (PR #1020) landed exactly that follow-on classifier -- _classify_breaker_cause now populates RATE_LIMIT/AUTH_FAILURE/FIVE_XX_STREAK at all 3 real record_failure() call sites and the attribute reaches the real span. The spec prose was never updated to reflect this and is now factually wrong about current runtime behavior for 3 of the 4 enum values (CAPABILITY_SHORTFALL remains genuinely vacuous, per B-38's own grounding)."
+    close_out: "NOT closed -- editing design-substrate/Spec_Operational_Discipline_v1_32.md requires design-phase posture (workspace CLAUDE.md §11) plus a clearance marker (§4.5), not a Phase-7 docstring fix; bundling it into B-42's code-only PR would trip the X-AL-3 CI guard (design-substrate edit without back-flow doc) and create a mixed-posture PR per §11.2's explicit halt-and-ask case. The same stale-vacuous framing likely also appears at harness-od/CLAUDE.md §1.2 (spec-pointer summary) and §4.1 (graduation-note context) -- both mode-agnostic, not design-substrate, so those ARE Phase-7-editable, but were deliberately left untouched here to keep this a pure registration pass; a future design-phase pass on the spec itself should sweep all copies at once rather than fixing them piecemeal across postures. Council: no -- this is a narrow prose-accuracy delta over an already-cleared spec version (v1.32 stays canonical; likely a v1.33 ADDITIVE prose-only delta), not a contract change."
+    council: "no — prose-accuracy delta over a cleared spec, not a contract change; needs design-phase posture, not council"
+    heading: "### B-43 · OD spec v1.32 §7.1 prose still describes `harness.breaker.cause` as vacuous-today, stale since B-38 *(surfaced at B-42 grounding, 2026-07-15, advisor()-flagged)*"

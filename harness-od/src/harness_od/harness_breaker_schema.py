@@ -141,6 +141,17 @@ class BreakerCause(StrEnum):
     exception's `.status_code`. `CAPABILITY_SHORTFALL` remains vacuous — it
     names a separate, out-of-scope cross-family fallback-exhaustion path,
     not a per-step dispatch failure.
+
+    `FIVE_XX_STREAK` (B-42 clarification): the name implies a verified
+    N-consecutive-5xx streak, but the classifier tags this value from a
+    single terminal 5xx exception at the trip call site — there is no
+    per-cause failure-history tracking in `BreakerStateMachine` today. A
+    true consecutive-streak count is a follow-on refinement, not required
+    for the attribute to be non-vacuous (C-OD-07 §7.1 only requires "the
+    classified trip-cause, when known" — it does not mandate streak
+    verification). The enum *value* (`"5xx_streak"`) is spec-committed at
+    OD v1.32 §7.1 + CP v1.1 and is unchanged; only this docstring's
+    description of how it's derived is being made precise.
     """
 
     RATE_LIMIT = "rate_limit"
