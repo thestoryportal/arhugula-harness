@@ -51,45 +51,36 @@ This is the step most often done wrong. After the PR merges:
    alongside a roadmap_status.md touch, its title MUST NOT use the reserved prefix
    (§12.2.1), and a follow-on terminating refresh is owed.
 
-## Branch hygiene close-out — arc closed, prune its branch now
+## Branch hygiene close-out — arc closed, delete its REMOTE branch now
 
 Per `~/.claude/CLAUDE.md` §10 CI Discipline: *"Git repo will not have more than the current
 CI branch present before any merge actions. If stale previous branches are present, conduct
-a careful comprehensive review before deleting or merging them..."* — the moment CI on
-`main`'s merge commit is confirmed green (not just the PR's own pre-merge checks — the
-post-merge push-triggered run) is exactly the moment this arc's branch is provably safe to
-delete. Don't defer it to a future session — that's how it gets missed. This is a **reviewed**
-step, not a blind automated sweep — look at the report before deleting anything:
+a careful comprehensive review before deleting or merging them..."* This discipline is about
+the **remote (GitHub) branch list**, not local `.git/refs/heads/*` pointers — local refs are
+single-clone, cosmetic, and reflog-recoverable regardless; they are not what "branch hygiene"
+means here. Don't defer this to a future session — that's how it gets missed.
+
+The moment CI on `main`'s merge commit is confirmed green (not just the PR's own pre-merge
+checks — the post-merge, push-triggered run) is exactly the moment this arc's remote branch
+is provably safe to delete. This is always a single named branch — the one you just
+merged — never a scan or backlog sweep:
 
 ```bash
-just branch-hygiene-report   # review: exact-merged-SHA + live post-merge-CI-green
-                              # verified candidates. Look at this before deleting.
-just branch-hygiene-sweep    # then delete what the report confirmed: local -D
-                              # (CAS-guarded) + remote (lease-guarded). See
-                              # tools/hooks/loop_lib.sh loop_gc_branches for the
-                              # full safe-subset gate. Runs through the normal
-                              # Bash permission prompt — an explicit, reviewed
-                              # action each time, never silent/unattended.
+# 1. Confirm the merge commit's OWN post-merge CI run on main is green (not the PR's
+#    pre-merge checks — this repo has a documented case where those diverged).
+merge_sha=$(gh pr view <PR#> --json mergeCommit --jq .mergeCommit.oid)
+gh run list --commit "$merge_sha" --json conclusion --jq '.[0].conclusion'   # expect "success"
+
+# 2. Delete the remote branch. This goes through the normal Bash permission prompt
+#    every time — an explicit, reviewed action, never silent/unattended.
+gh api -X DELETE repos/<owner>/<repo>/git/refs/heads/<branch>
 ```
 
-**The current worktree's OWN branch is the one exception** — its local ref can't be deleted
-while checked out (git refuses, correctly); that one waits for this worktree to move to a
-different branch or be removed. Its remote ref, if `gh pr merge` didn't already clean it up,
-can still be deleted now, but **lease-guarded** (never a bare `git push origin --delete`,
-which removes whatever the remote tip currently is unconditionally — if someone pushed new
-work to the same name since the merge, that content is gone with no recovery):
-
-```bash
-sha=$(git rev-parse HEAD)   # the commit THIS branch was at when it merged
-git push --force-with-lease="refs/heads/<branch>:${sha}" origin ":refs/heads/<branch>"
-```
-
-Prefer leaving it alone and letting `just branch-hygiene-sweep` pick it up on a future
-invocation (it does the identical lease-guarded delete, verified against the merged PR's
-exact `headRefOid`) — the manual command above is only for when you want it gone
-immediately. Worktree removal itself is a separate, structurally later step (a session can't
-remove the worktree it's running inside) — that's `loop_gc_worktrees`, which still runs at
-the next session's SessionStart per U-HK-26; unrelated to branch cleanup.
+If `gh pr merge --delete-branch` was used and it already removed the remote ref, step 2 is a
+no-op (the API call 404s — nothing to do). Local branch refs are left alone entirely; they
+carry no unique cleanup obligation. Worktree removal is a separate, structurally later step (a
+session can't remove the worktree it's running inside) — that's `loop_gc_worktrees`, which
+still runs at the next session's SessionStart per U-HK-26; unrelated to this step.
 
 ## R-NNN closure cascade — §12.5.3
 
