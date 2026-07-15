@@ -54,11 +54,11 @@ snapshot:
   total: 41
   open: 0
   design_substrate_gated: 3
-  registered_finding: 9
+  registered_finding: 8
   operator_gated: 2
   held: 1
-  closed: 26
-  identity_digest: "c01313bf0aac76dc"
+  closed: 27
+  identity_digest: "05eeec5cd3d3498d"
   source: ".harness/post-phase-8-forward-register.md"
 
 items:
@@ -347,10 +347,11 @@ items:
 
   - id: B-37
     title: "Remote MCP streamable-HTTP transport residuals"
-    status: registered_finding
+    status: closed
     summary: "Current (non-deprecated) streamable_http_client called with the old function's kwarg shape (latent TypeError once populated) + MCPClientConfig has no auth-credential field."
-    close_out: "Build a configured httpx.AsyncClient and pass via http_client= (do NOT migrate to the deprecated streamablehttp_client); fix stale docstrings; add an auth-credential field to MCPClientConfig."
+    close_out: "CLOSED 2026-07-15. mcp_client_host.py's _http_connection_context now builds an httpx.AsyncClient from transport_config['headers'] and passes it via http_client= (streamablehttp_client left un-migrated per the register's own instruction); 3 stale docstrings naming the deprecated function fixed. MCPClientConfig gained auth_secret_name: str | None, resolved at stage-3a via the SAME ProviderSecretResolver.resolve_bootstrap_value(name) idiom U-RT-17/18 already use for LLM provider API keys (mcp_client_host_factory.py + stage_3a_cp_clients.py thread ctx.keyring_resolver through) rather than inventing a new credential shape; auth_present now wired end-to-end instead of hardcoded False. Mutation-probed both the http_client kwarg-shape fix and the fail-loud resolver guard against real production-code reversions."
     council: "no — mechanical once a real remote-MCP credential-supply build opens; not urgent"
+    pr: "#1019"
     heading: "### B-37 · Remote MCP streamable-HTTP transport residuals *(surfaced at `B-10`'s own `B-MCP-OAUTH-RS-ENFORCE` grounding, split out 2026-07-14 at forward-register-schema grounding; corrected 2026-07-14 round-3 out-of-family Codex — the original finding had the deprecated/current function names backwards)*"
 
   - id: B-38

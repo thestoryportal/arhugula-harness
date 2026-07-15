@@ -34,6 +34,12 @@ dependencies = [
     "ollama>=0.4",
     # MCP host + client (FastMCP). Host startup lands at U-RT-15.
     "mcp>=1.2",
+    # httpx — direct import at tests/test_lifecycle_mcp_client_host.py (B-37):
+    # asserts the AsyncClient shape streamable_http_client's http_client=
+    # receives (built via mcp's own create_mcp_http_client). Already a
+    # transitive dep of mcp; declared directly per the "owning package
+    # re-declares" convention (mirrors mcp/keyring above).
+    "httpx>=0.27",
     # OS keyring (ADR-F5 v1.1). Resolver driver lands at U-RT-06.
     "keyring>=25.5",
     # GCP Secret Manager backend for R-421 MANAGED_CLOUD provider secrets.
