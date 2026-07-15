@@ -6,6 +6,7 @@ Test set per the U-IS-15 `Tests:` field — 7 tests covering acceptance #1-#6.
 from __future__ import annotations
 
 import subprocess
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -218,6 +219,7 @@ def _mp_append_worker_gated(canonical_path: Path, ready_event: object) -> None:
     )
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="multiprocessing 'fork' context is POSIX-only")
 def test_rollback_cross_process_lock_prevents_lost_concurrent_append(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

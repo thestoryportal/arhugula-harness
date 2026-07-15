@@ -15,15 +15,41 @@ downstream-D-ADR-gated tier per C-IS-09 §9.4. This lock serves exactly the
 in-scope requirement: multiple same-host processes (e.g. two concurrent
 `harness run` invocations, or sibling worktree fan-out) writing the same
 `.git`-backed canonical ledger.
+
+C-STK-10 commits to macOS / Linux / Windows host-OS support "without per-OS
+port forking"; the stdlib has no `fcntl` on Windows. Per the fan-out import
+chain (`harness_is.__init__` eagerly imports `memory_operation_ledger`, which
+imports this module), an unconditional top-level `import fcntl` would make
+`import harness_is` itself fail on Windows. On `sys.platform == "win32"` the
+context managers below therefore degrade to a no-op (yield without locking):
+Windows sits at exact pre-B-40 parity (the in-process `threading.Lock`
+callers already hold around the same critical sections is unaffected and is
+cross-platform; only the *cross-process* dimension this module adds is
+unavailable). This is a registered gap, not a silent one — see the B-40
+follow-on forward-register row for genuine cross-platform locking (also
+covers the identical POSIX-only-`fcntl` gap already shipped at
+`harness_runtime.lifecycle.reconciler_pause_resume_substrate`).
 """
 
 from __future__ import annotations
 
-import fcntl
 import os
+import sys
 from collections.abc import Generator
 from contextlib import contextmanager
+from enum import Enum, auto
 from pathlib import Path
+
+_IS_WINDOWS = sys.platform == "win32"
+
+
+class _LockKind(Enum):
+    """Platform-neutral stand-in for `fcntl.LOCK_EX` / `fcntl.LOCK_SH` — the
+    real POSIX constants are resolved locally inside `_flock`, which is never
+    reached on Windows (see the module docstring)."""
+
+    EXCLUSIVE = auto()
+    SHARED = auto()
 
 
 def _lock_file_path(canonical_path: Path) -> Path:
@@ -32,7 +58,17 @@ def _lock_file_path(canonical_path: Path) -> Path:
 
 
 @contextmanager
-def _flock(canonical_path: Path, mode: int, open_flags: int) -> Generator[None, None, None]:
+def _flock(canonical_path: Path, kind: _LockKind, open_flags: int) -> Generator[None, None, None]:
+    if _IS_WINDOWS:
+        # No same-host advisory-lock primitive wired for Windows yet (see the
+        # module docstring) — degrade to a no-op rather than fail the import
+        # or the call. Pre-B-40 parity: cross-process serialization is simply
+        # unavailable on this platform, same as before this module existed.
+        yield
+        return
+    import fcntl  # POSIX-only; module load never reaches here on Windows.
+
+    mode = fcntl.LOCK_EX if kind is _LockKind.EXCLUSIVE else fcntl.LOCK_SH
     lock_path = _lock_file_path(canonical_path)
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(lock_path, open_flags, 0o600)
@@ -54,7 +90,7 @@ def cross_process_write_lock(canonical_path: Path) -> Generator[None, None, None
     section (unchanged) — this lock adds the cross-process dimension the
     thread lock cannot provide.
     """
-    with _flock(canonical_path, fcntl.LOCK_EX, os.O_CREAT | os.O_RDWR):
+    with _flock(canonical_path, _LockKind.EXCLUSIVE, os.O_CREAT | os.O_RDWR):
         yield
 
 
@@ -77,8 +113,8 @@ def cross_process_read_lock(canonical_path: Path) -> Generator[None, None, None]
     """
     lock_path = _lock_file_path(canonical_path)
     if lock_path.exists():
-        with _flock(canonical_path, fcntl.LOCK_SH, os.O_RDONLY):
+        with _flock(canonical_path, _LockKind.SHARED, os.O_RDONLY):
             yield
     else:
-        with _flock(canonical_path, fcntl.LOCK_SH, os.O_CREAT | os.O_RDONLY):
+        with _flock(canonical_path, _LockKind.SHARED, os.O_CREAT | os.O_RDONLY):
             yield

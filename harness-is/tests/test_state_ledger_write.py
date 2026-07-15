@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import multiprocessing
+import sys
 import threading
 from datetime import UTC, datetime
 from pathlib import Path
@@ -188,6 +189,7 @@ def _mp_append_worker(canonical_path: Path, i: int) -> None:
     append_ledger_entry(handle, _payload(i, hour=1), _key(i))
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="multiprocessing 'fork' context is POSIX-only")
 def test_append_multiprocess_writes_serialized(tmp_path: Path) -> None:
     """B-40 (C-IS-09 §9.3 / C-MEM-08) — genuine OS processes appending to the
     SAME canonical ledger must not fork the hash chain or lose an entry. The

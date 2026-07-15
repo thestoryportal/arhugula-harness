@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import multiprocessing
+import sys
 import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -402,6 +403,7 @@ def _mp_append_worker(canonical_path: Path, i: int) -> None:
     append_memory_operation(handle, _payload(i))
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="multiprocessing 'fork' context is POSIX-only")
 def test_multiprocess_appends_do_not_corrupt_canonical_memory_operation_ledger(
     tmp_path: Path,
 ) -> None:
