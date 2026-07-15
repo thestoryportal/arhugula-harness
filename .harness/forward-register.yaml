@@ -53,12 +53,12 @@
 snapshot:
   total: 41
   open: 0
-  design_substrate_gated: 3
-  registered_finding: 8
+  design_substrate_gated: 4
+  registered_finding: 7
   operator_gated: 2
   held: 1
   closed: 27
-  identity_digest: "05eeec5cd3d3498d"
+  identity_digest: "0f56a08063a95595"
   source: ".harness/post-phase-8-forward-register.md"
 
 items:
@@ -306,9 +306,9 @@ items:
 
   - id: B-39
     title: "Nested paused-child HITL-response ROUTING (per-child operator response delivery)"
-    status: registered_finding
+    status: design_substrate_gated
     summary: "Two or more concurrently-paused peer/nested children share one run-level ResumeContextHolder; delivering each its OWN operator response safely is unresolved."
-    close_out: "A first attempt (ResumeContext.hitl_responses keyed by workflow_id, consumed via non-destructive peek()) was built, mutation-probed, and reviewed out-of-family -- Codex found 3 real defects, all confirmed correct on inspection: (1) peek-only never one-shot-consumes, so a later HITL-composed step sharing the same key would silently reuse a stale response; (2) workflow_id is NOT branch-unique -- fan-out siblings can dispatch the SAME child_workflow_id (the runtime already uses branch_path for exactly this disambiguation), so two paused siblings would collapse to one map entry; (3) [already split out as B-32, now closed]. The attempt was fully reverted (not shipped). Concrete design constraints for the next attempt: (a) the key must be branch-unique -- branch_path or an equivalent child-run-id derived value, NOT workflow_id alone; (b) delivery must be genuinely one-shot per key without racing concurrent siblings on the shared holder -- peek() alone is insufficient once one-shot semantics are required; (c) the actual delivery mechanism is unresolved -- execute_workflow/child_workflow_runner currently has NO resume_context parameter at all (only pause_snapshot_input), and effect_fence_resolution's own per-branch mechanism resolves PARENT-side then threads a single resolved value onto the child's StepExecutionContext -- that pattern does NOT carry into a recursive child's OWN internal re-entry the way HITL delivery needs, so the threading path itself needs designing, not just the map shape."
+    close_out: "A first attempt (ResumeContext.hitl_responses keyed by workflow_id, consumed via non-destructive peek()) was built, mutation-probed, and reviewed out-of-family -- Codex found 3 real defects, all confirmed correct on inspection: (1) peek-only never one-shot-consumes, so a later HITL-composed step sharing the same key would silently reuse a stale response; (2) workflow_id is NOT branch-unique -- fan-out siblings can dispatch the SAME child_workflow_id (the runtime already uses branch_path for exactly this disambiguation), so two paused siblings would collapse to one map entry; (3) [already split out as B-32, now closed]. The attempt was fully reverted (not shipped). Concrete design constraints for the next attempt: (a) the key must be branch-unique -- branch_path or an equivalent child-run-id derived value, NOT workflow_id alone; (b) delivery must be genuinely one-shot per key without racing concurrent siblings on the shared holder -- peek() alone is insufficient once one-shot semantics are required; (c) the actual delivery mechanism is unresolved -- execute_workflow/child_workflow_runner currently has NO resume_context parameter at all (only pause_snapshot_input), and effect_fence_resolution's own per-branch mechanism resolves PARENT-side then threads a single resolved value onto the child's StepExecutionContext -- that pattern does NOT carry into a recursive child's OWN internal re-entry the way HITL delivery needs, so the threading path itself needs designing, not just the map shape. Re-grounded 2026-07-15 (B-37 session, no-parking sweep): all 3 constraints CONFIRMED still accurate against current HEAD by direct read (ResumeContext still singular hitl_response only; consume_and_clear still whole-holder; execute_workflow/child_workflow_runner still carry zero resume_context threading surface). Spec_Control_Plane_v1_100.md's own change-note explicitly frames (c) as un-designed, not merely unimplemented -- status moved registered_finding -> design_substrate_gated to reflect this precisely (a Class 1 fork proposing the threading mechanism is the correct next step, before any code, per X-AL-3)."
     council: "not yet re-evaluated -- the original C7/C8-vs-C1/C5 framing may no longer be the right lens once a concrete delivery mechanism is proposed; ground first per this register's own no-parking discipline before deciding"
     heading: "### B-39 · Nested paused-child HITL-response ROUTING (per-child operator response delivery) *(split from B-32 after a same-session Codex review found the first routing attempt had 3 real defects; not shipped)*"
 
