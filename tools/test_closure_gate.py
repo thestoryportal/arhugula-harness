@@ -128,3 +128,31 @@ def test_automatable_and_tier2_predicates_evaluate_from_mocked_delegates(
     # G2.N predicate (state = status == "RESOLVED") must be False.
     for pid in ("G2.1", "G2.2", "G2.3", "G2.4", "G2.5", "G2.6"):
         assert preds[pid].state is False
+
+
+def test_g1_3_goes_false_on_a_real_non_phantom_orphan(tmp_path, monkeypatch) -> None:
+    """B-35 merge-gate test-witness finding — `_green_delegates`' mocked
+    `contract_without_code=[]` can't distinguish "G1.3 correctly reads the
+    delegate and finds it empty" from "G1.3 is hardcoded True regardless of
+    the delegate" (both old-fixture and new-fixture states here are `[]`).
+    Mutation-probe: hardcoding `contracts = []` in closure_gate.py would pass
+    every other test in this file undetected. Supply a real, non-phantom
+    orphan id and assert G1.3 actually goes False."""
+    _green_delegates(monkeypatch)
+    monkeypatch.setattr(
+        closure_gate,
+        "_overlay_orphans",
+        lambda: {
+            "contract_without_code": [{"id": "C-XX-99"}],
+            "unit_without_code": [{"id": "U-RT-00"}],
+            "cxa_seam_missing_endpoint": [],
+        },
+    )
+    signoff = tmp_path / "r-fs-1-tier1-manual-signoff.json"
+    signoff.write_text(json.dumps({"gates": {}}), encoding="utf-8")
+    monkeypatch.setattr(closure_gate, "TIER1_MANUAL_SIGNOFF", signoff)
+
+    preds = {pred.pid: pred for pred in closure_gate.evaluate()}
+
+    assert preds["G1.3"].state is False
+    assert "1 real" in preds["G1.3"].detail

@@ -51,14 +51,14 @@
 # `tools/forward_register.py --check` is the CI gate.
 
 snapshot:
-  total: 40
+  total: 41
   open: 0
   design_substrate_gated: 3
-  registered_finding: 8
+  registered_finding: 9
   operator_gated: 2
   held: 1
   closed: 26
-  identity_digest: "4da16bc3ae56028e"
+  identity_digest: "c01313bf0aac76dc"
   source: ".harness/post-phase-8-forward-register.md"
 
 items:
@@ -360,3 +360,11 @@ items:
     close_out: "Extend _classify_provider_exception to distinguish the 3 failure classes at a real per-step dispatch failure site."
     council: "no — mechanical extension once opened; not urgent, speculative ahead of any consumer"
     heading: "### B-38 · Fine-grained provider-exception classifier for `breaker.cause` *(surfaced at `B-19`'s own close, split out 2026-07-14 at forward-register-schema grounding, out-of-family Codex)*"
+
+  - id: B-40
+    title: "Memory operation ledger has no cross-process write serialization"
+    status: registered_finding
+    summary: "append_memory_operation's hash-chain writer uses a process-local threading.Lock only; concurrent multi-process writers to the same canonical store can corrupt the chain."
+    close_out: "File a Class 1 fork for a cross-process file lock (e.g. fcntl.flock) around the read-last-entry -> compute-prior-hash -> append sequence in harness-is/src/harness_is/memory_operation_ledger.py; also add a lock (or lock-free append-only read tolerance) to read_memory_operation_ledger's unlocked path.read_text() against a concurrent mid-write reader."
+    council: "no — mechanical once a locking strategy is chosen; not urgent, no known production multi-process concurrent-writer deployment yet"
+    heading: "### B-40 · Memory operation ledger has no cross-process write serialization *(surfaced at B-35's merge-gate concurrency lens, 2026-07-15)*"

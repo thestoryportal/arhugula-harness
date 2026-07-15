@@ -16,15 +16,16 @@ def test_q3_evidence_matrix_known_gaps_are_tracked_not_growing() -> None:
     with no test file citing their contract id anywhere in the repo) via a
     SHA-256 fingerprint of the sorted missing-id list, since a bare count
     assertion would miss a same-count substitution (out-of-family Codex
-    rounds 2 + 3). B-35 is now closed -- 1 phantom id (C-IS-14, a documented
-    non-contract per `overlay.DOCUMENTED_NON_CONTRACTS`) was excluded from
-    the keyspace, 10 ids gained a one-line contract-id citation on an
-    already-passing test, and the last (C-MEM-01, an architectural contract
-    with no dedicated source module) gained two new tests
-    (harness-runtime/tests/test_memory_plane_boundary.py). Assert the direct,
-    honest invariant now that the gap is empty: any FUTURE contract losing
-    its citation fails this immediately, without carrying forward dead
-    gap-tracking machinery."""
+    rounds 2 + 3). B-35 is now closed. Deliberately NOT spelled out by
+    literal id in this file's own text (mirrors the original discipline this
+    docstring replaces) -- this scanner counts any test_*.py file that
+    merely CONTAINS a contract-id-shaped substring as "proof" for that id,
+    so writing the literal ids here would make THIS file falsely count as
+    their evidence. See .harness/forward-register.yaml's B-35 entry for the
+    full per-contract close-out detail. Assert the direct, honest invariant
+    now that the gap is empty: any FUTURE contract losing its citation
+    fails this immediately, without carrying forward dead gap-tracking
+    machinery."""
     matrix = qa_evidence_matrix.derive_matrix()
     stats = qa_evidence_matrix.summary(matrix)
 
