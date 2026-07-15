@@ -23,7 +23,6 @@ from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 from typing import Any, Literal
 
-import httpx
 from harness_as.tool_contract import ToolContract
 from harness_cp.cp_shared_types import MCPTrustTier
 
@@ -493,28 +492,52 @@ create_connected_server_and_client_session`. Production callers leave
         `transport_config` keys consumed:
         - `url`: server URL (REQUIRED str)
         - `headers`: dict[str, str] of auth + custom headers (OPTIONAL) —
-          folded into the constructed `httpx.AsyncClient`
+          folded into a client built via `create_mcp_http_client`
 
         B-37: prior code called `streamable_http_client(url, headers=...,
         timeout=..., sse_read_timeout=...)` — the OLD deprecated
         `streamablehttp_client` kwarg shape. (`mcp.client.sse.sse_client`
         still uses that old shape — do not port this fix there.) Latent
         `TypeError`, never exercised because no caller populated `headers`
-        (`MCPClientConfig` had no auth field until B-37). `timeout` /
-        `sse_read_timeout` are NOT threaded here: nothing populates them
-        today, and `sse_read_timeout` has no `httpx.AsyncClient` analogue —
-        adding it would mean reimplementing SSE-read-timeout semantics for a
+        (`MCPClientConfig` had no auth field until B-37).
+
+        Out-of-family review (round 1) caught two follow-on defects in the
+        first fix attempt, both addressed here: (1) a bare
+        `httpx.AsyncClient(headers=headers)` inherits httpx's 5-second
+        global default read timeout, far shorter than the 30s-connect /
+        300s-read the OLD kwarg shape (and the SDK's own
+        `create_mcp_http_client` default) provided — long-lived/idle
+        authenticated streams would spuriously `ReadTimeout`. Fixed by
+        building the client via `create_mcp_http_client(headers=headers)`
+        (the SDK's own canonical helper), which sets exactly those
+        defaults. (2) `streamable_http_client` only manages a client's
+        lifecycle when IT constructs the client (`http_client is None`);
+        a caller-supplied client is caller-owned and never closed —
+        passing a bare, unclosed client here leaked a connection pool on
+        every host restart. Fixed by opening the client in our OWN `async
+        with` so it closes on this context's exit, same as the
+        no-headers branch closes the SDK-internal default client.
+
+        `timeout` / `sse_read_timeout` config KEYS are still not threaded
+        from `transport_config`: nothing populates them today, and
+        `sse_read_timeout` has no `httpx.AsyncClient` analogue — adding it
+        would mean reimplementing SSE-read-timeout semantics for a
         nonexistent consumer.
         """
         from mcp.client.streamable_http import streamable_http_client
+        from mcp.shared._httpx_utils import create_mcp_http_client
 
         url = self._transport_config.get("url")
         if not isinstance(url, str) or not url:
             raise ValueError(f"streamable_http transport_config requires str 'url' (got {url!r})")
         headers = self._transport_config.get("headers")
-        http_client = httpx.AsyncClient(headers=headers) if headers else None
-        async with streamable_http_client(url, http_client=http_client) as connection:
-            yield connection
+        if headers:
+            async with create_mcp_http_client(headers=headers) as http_client:
+                async with streamable_http_client(url, http_client=http_client) as connection:
+                    yield connection
+        else:
+            async with streamable_http_client(url) as connection:
+                yield connection
 
     @asynccontextmanager  # pyright: ignore[reportDeprecated]
     async def _sse_connection_context(self) -> AsyncIterator[Any]:

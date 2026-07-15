@@ -40,7 +40,8 @@ import re
 from collections.abc import Mapping
 from enum import Enum, StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, NewType, Protocol, Self, runtime_checkable
+from typing import TYPE_CHECKING, Any, ClassVar, NewType, Protocol, Self, runtime_checkable
+from urllib.parse import urlsplit
 
 # ----------------------------------------------------------------------------
 # Concrete axis-type imports (the 6 names that resolve at HEAD).
@@ -647,17 +648,64 @@ class MCPClientConfig(BaseModel):
     """Stdio command-line OR remote HTTP URL (per `transport`)."""
 
     auth_secret_name: str | None = None
-    """Keyring/env-var secret NAME for remote streamable-HTTP auth (B-37).
+    """Keyring secret NAME for remote streamable-HTTP auth (B-37).
 
     `None` (the default, and the only valid value for `stdio`) means no auth
     header is attached. When set, the stage-3a factory resolves the literal
     value via `ProviderSecretResolver.resolve_bootstrap_value(name)` and
     attaches it as a Bearer `Authorization` header on the transport's
-    `httpx.AsyncClient` — mirroring the existing LLM-provider bootstrap
-    pattern (`ANTHROPIC_KEYRING_NAME` / `OPENAI_KEYRING_NAME` at
-    `lifecycle/providers.py`) rather than inventing a new credential shape.
-    Also drives `MCPClientHost.auth_present` (the `mcp.auth_present` span
-    attribute)."""
+    HTTP client — applying the existing LLM-provider bootstrap pattern
+    (`lifecycle/providers.py`) to a new consumer rather than inventing a new
+    credential shape. Also drives `MCPClientHost.auth_present` (the
+    `mcp.auth_present` span attribute).
+
+    Out-of-family review (B-37 round 2): resolution goes through the OS
+    keyring (`python-keyring`) — the automatic env-var fallback
+    (`KeyringSecretResolver._KEYRING_TO_ENV_VAR`) is a CLOSED 2-entry mapping
+    hardcoded to the `anthropic_key` / `openai_key` vendor names only; an
+    arbitrary MCP secret name has no env-var fallback and MUST be stored in
+    the keyring service under this exact name, or resolution raises
+    `SecretResolutionError(SECRET_UNKNOWN)`.
+
+    `connection_url` MUST be `https://` (or a loopback host) when this is
+    set — see `_validate_auth_secret_name` below."""
+
+    _LOOPBACK_HOSTS: ClassVar[frozenset[str]] = frozenset({"localhost", "127.0.0.1", "::1"})
+
+    @model_validator(mode="after")
+    def _validate_auth_secret_name(self) -> Self:
+        """Out-of-family review (B-37 rounds 1-2).
+
+        Round 1 — without a transport guard, a stdio entry declaring
+        `auth_secret_name` was silently accepted: the factory's stdio branch
+        never resolves or attaches it (stdio auth is via process env, not a
+        header), yet `auth_present` was still stamped `True` from the raw
+        field — a real credential silently ignored while telemetry falsely
+        claimed one was present.
+
+        Round 2 — nothing stopped an authenticated remote client from using
+        a plaintext `http://` URL to a non-loopback host, sending the
+        resolved bearer token over the network in cleartext.
+
+        Both fail loud at construction instead (detect-then-refuse)."""
+        if self.auth_secret_name is None:
+            return self
+        if self.transport is MCPTransport.STDIO:
+            raise ValueError(
+                "auth_secret_name is not valid for transport=STDIO (stdio auth is "
+                "via process env, not a header-based credential); got "
+                f"auth_secret_name={self.auth_secret_name!r}"
+            )
+        parsed = urlsplit(self.connection_url)
+        if parsed.scheme == "http" and parsed.hostname not in self._LOOPBACK_HOSTS:
+            raise ValueError(
+                f"auth_secret_name is set but connection_url={self.connection_url!r} "
+                "is plaintext http:// to a non-loopback host — the resolved bearer "
+                "token would be sent in cleartext over the network. Use https:// for "
+                "any non-loopback remote MCP server (127.0.0.1/localhost over http:// "
+                "is permitted for local development)"
+            )
+        return self
 
     default_minimum_tier: SandboxTier | None = None
     """Operator-declared per-server default sandbox tier (Reading B, spec v1.40

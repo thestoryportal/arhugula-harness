@@ -508,7 +508,21 @@ def test_http_connection_context_builds_httpx_client_with_headers() -> None:
             tool_contract_converter=_make_tool_contract_converter(),
         )
         cm = host._http_connection_context()
-        asyncio.run(cm.__aenter__())
+
+        async def _drive() -> Any:
+            connection = await cm.__aenter__()
+            client_mid_context = captured["http_client"]
+            # Out-of-family review round 1 finding (P2) — `streamable_http_client`
+            # only manages a client's lifecycle when IT constructs the client;
+            # a caller-supplied client (our headers branch) is caller-owned and
+            # is NEVER closed by the fake/real SDK. Drive `__aexit__` and assert
+            # OUR code closed it via its own `async with create_mcp_http_client`
+            # wrapper — the prior fix (a bare, un-wrapped `httpx.AsyncClient`)
+            # would leave this client open, leaking a connection pool.
+            await cm.__aexit__(None, None, None)
+            return connection, client_mid_context
+
+        asyncio.run(_drive())
     finally:
         streamable_http_module.streamable_http_client = original  # type: ignore[assignment]
 
@@ -516,6 +530,13 @@ def test_http_connection_context_builds_httpx_client_with_headers() -> None:
     client = captured["http_client"]
     assert isinstance(client, httpx.AsyncClient)
     assert client.headers["authorization"] == "Bearer secret-token"
+    # Out-of-family review round 1 finding (P1) — a bare `httpx.AsyncClient()`
+    # inherits httpx's 5-second global default read timeout; the SDK's own
+    # `create_mcp_http_client` default (30s connect / 300s read) must be
+    # preserved for authenticated streams instead.
+    assert client.timeout.connect == 30.0
+    assert client.timeout.read == 300.0
+    assert client.is_closed is True
 
 
 def test_http_connection_context_no_headers_passes_none_http_client() -> None:

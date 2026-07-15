@@ -228,20 +228,31 @@ def _build_host(
     it onto the coarse connection-mechanism the host consumes (`stdio` /
     `streamable_http`). The `server_name` is set from `entry.client_name` (the
     `ServerName`/`ClientName` same-value-today property per spec §14.9.10).
+
+    `auth_present` (out-of-family review, B-37 round 1) is derived from the
+    BUILT `transport_config`'s actual `headers` presence, not re-derived from
+    `entry.auth_secret_name` — one source of truth. `MCPClientConfig`'s own
+    `_reject_auth_secret_name_for_stdio` validator already forbids the
+    stdio+auth_secret_name combination the reviewer flagged (a stdio entry
+    can never reach here with a non-None `auth_secret_name`), but keying off
+    the built config rather than the raw field means `auth_present` stays
+    correct even if `_build_transport_config`'s own header-attachment
+    condition ever changes independently of that field.
     """
     transport_value: _MCPTransportLiteral = _coarse_transport(entry.transport)
+    transport_config = _build_transport_config(
+        transport_value,
+        entry.connection_url,
+        auth_secret_name=entry.auth_secret_name,
+        resolver=resolver,
+    )
     return MCPClientHost(
         transport=transport_value,
         server_name=entry.client_name,
         trust_tier=_trust_tier_from_level(entry.trust_level),
-        transport_config=_build_transport_config(
-            transport_value,
-            entry.connection_url,
-            auth_secret_name=entry.auth_secret_name,
-            resolver=resolver,
-        ),
+        transport_config=transport_config,
         tool_contract_converter=_build_default_policy_converter(entry, deployment_surface),
-        auth_present=entry.auth_secret_name is not None,
+        auth_present="headers" in transport_config,
     )
 
 

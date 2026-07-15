@@ -450,6 +450,63 @@ async def test_auth_secret_name_without_resolver_fails_loud() -> None:
         await materialize_mcp_client_host_stage(cfg)
 
 
+def test_auth_secret_name_rejected_for_stdio_transport() -> None:
+    """Out-of-family review (B-37 round 1) — a stdio entry declaring
+    `auth_secret_name` used to be silently accepted (the factory's stdio
+    branch never resolves or attaches it, yet `auth_present` was still
+    stamped True from the raw field — a credential silently ignored while
+    telemetry falsely claimed one was present). `MCPClientConfig`'s
+    `_validate_auth_secret_name` validator now fails loud at construction
+    instead."""
+    with pytest.raises(ValueError, match="auth_secret_name is not valid for transport=STDIO"):
+        MCPClientConfig(
+            client_name=ClientName("stdio-with-auth"),
+            transport=MCPTransport.STDIO,
+            trust_level=MCPServerTrustLevel.L1_SIGNED_PINNED,
+            blast_radius=BlastRadiusTier.READ_ONLY,
+            connection_url="stdio:///bin/echo",
+            auth_secret_name="should-be-rejected",
+        )
+
+
+def test_auth_secret_name_rejected_for_plaintext_http_non_loopback() -> None:
+    """Out-of-family review (B-37 round 2) — an authenticated remote client
+    on a plaintext `http://` URL to a non-loopback host used to be silently
+    accepted, sending the resolved bearer token in cleartext over the
+    network. `_validate_auth_secret_name` now fails loud at construction."""
+    with pytest.raises(ValueError, match="plaintext http:// to a non-loopback host"):
+        MCPClientConfig(
+            client_name=ClientName("remote-plaintext"),
+            transport=MCPTransport.STREAMABLE_HTTP_L1_PINNED,
+            trust_level=MCPServerTrustLevel.L1_SIGNED_PINNED,
+            blast_radius=BlastRadiusTier.READ_ONLY,
+            connection_url="http://mcp.example.com/mcp",
+            auth_secret_name="mcp-remote-token",
+        )
+
+
+@pytest.mark.parametrize(
+    "connection_url",
+    [
+        "https://mcp.example.com/mcp",
+        "http://127.0.0.1:9999/mcp",
+        "http://localhost:9999/mcp",
+        "http://[::1]:9999/mcp",
+    ],
+)
+def test_auth_secret_name_accepted_for_https_or_loopback(connection_url: str) -> None:
+    """Positive control — HTTPS to any host, or plaintext HTTP restricted to
+    a loopback host (local development), both construct without error."""
+    MCPClientConfig(
+        client_name=ClientName("remote-ok"),
+        transport=MCPTransport.STREAMABLE_HTTP_L1_PINNED,
+        trust_level=MCPServerTrustLevel.L1_SIGNED_PINNED,
+        blast_radius=BlastRadiusTier.READ_ONLY,
+        connection_url=connection_url,
+        auth_secret_name="mcp-remote-token",
+    )
+
+
 @pytest.mark.asyncio
 async def test_no_auth_secret_name_never_touches_resolver() -> None:
     """Negative control — an entry with no `auth_secret_name` never calls the
