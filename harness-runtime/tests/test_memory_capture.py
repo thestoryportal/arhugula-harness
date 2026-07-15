@@ -88,7 +88,10 @@ def _semantic_files(tmp_path: Path) -> list[str]:
 def test_supported_events_write_episodic_records_and_capture_operations(
     tmp_path: Path,
 ) -> None:
-    """U-MEM-07 acceptance - each supported event captures a record and op."""
+    """U-MEM-07 acceptance - each supported event captures a record and op.
+
+    C-MEM-04 - episodic record capture (run/turn/tool_event/compaction, tier=EPISODIC).
+    """
     store, recorder = _recorder(tmp_path)
     summary = _model_summary()
 
@@ -190,6 +193,7 @@ def test_supported_events_write_episodic_records_and_capture_operations(
 
 
 def test_capture_emits_c_mem_19_observability_span(tmp_path: Path) -> None:
+    """C-MEM-19 - capture emits the memory observability span attributes."""
     store = _store(tmp_path)
     tracer_provider, exporter = _tracer_provider()
     recorder = EpisodicMemoryCapture(

@@ -128,6 +128,7 @@ def _preference_details(
 
 
 def test_approve_writes_active_semantic_record_and_promote_operation(tmp_path: Path) -> None:
+    """C-MEM-05 - semantic record promotion writes an active record (evidence mandatory)."""
     store = _store(tmp_path)
     service = _service(store)
 
@@ -248,6 +249,7 @@ def test_proposed_procedural_update_is_persisted_for_review(tmp_path: Path) -> N
 
 
 def test_preference_promotion_requires_details_and_injection_policy(tmp_path: Path) -> None:
+    """C-MEM-06 - preference record schema + promotion-detail invariants."""
     store = _store(tmp_path)
     service = _service(store)
     candidate = _candidate(

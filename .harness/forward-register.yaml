@@ -51,14 +51,14 @@
 # `tools/forward_register.py --check` is the CI gate.
 
 snapshot:
-  total: 40
+  total: 41
   open: 0
   design_substrate_gated: 3
   registered_finding: 9
   operator_gated: 2
   held: 1
-  closed: 25
-  identity_digest: "1399e38162ae350d"
+  closed: 26
+  identity_digest: "c01313bf0aac76dc"
   source: ".harness/post-phase-8-forward-register.md"
 
 items:
@@ -330,11 +330,12 @@ items:
 
   - id: B-35
     title: "test_qa_evidence_matrix.py / test_closure_gate.py orphaned from CI + 12 uncited contracts"
-    status: registered_finding
+    status: closed
     summary: "12 contracts (C-IS-14 + 11 C-MEM-*) cite no test file; neither test module is wired into any CI job."
-    close_out: "Decide CI-wiring (testpaths or documented exclusion); read + cite or file a real gap for each of the 12 contracts."
-    council: "no — mechanical once the CI-wiring question is answered"
-    heading: "### B-35 · `tools/test_qa_evidence_matrix.py` / `test_closure_gate.py` are orphaned from CI + 12 contracts lack test-file citation *(surfaced during B-28 triage, 2026-07-14)*"
+    close_out: "Grounded each of the 12: C-IS-14 was a phantom/dead contract ID (runtime spec v1.93 change-note confirms the IS spec defines only C-IS-01..10 and 'prior v1 cited C-IS-11/14/15 which don't exist') -- moved closure_gate.py's local, incomplete DOCUMENTED_NON_CONTRACTS={C-IS-11} constant to a shared tools/semantic_overlay/overlay.py::DOCUMENTED_NON_CONTRACTS={C-IS-11,C-IS-14,C-IS-15} (single source of truth for both overlay.py's own contract_without_code orphan scan and qa_evidence_matrix.py's test-citation scan) and excluded it there. 10 of the 11 C-MEM-* contracts (04,05,06,11,12,13,14,15,17,19) already had a real, already-passing test exercising their behavior -- just needed a one-line contract-id citation added (several already had the id embedded in the test function name in snake_case, e.g. test_..._c_mem_17_..., just never in the hyphenated form the citation-scan regex needs). C-MEM-01 (the memory-plane-boundary architectural contract, no dedicated source module by design) was a genuine gap: added harness-runtime/tests/test_memory_plane_boundary.py with two new tests -- one proving native/standard-tools/prompt-packet all write to the SAME physical canonical-store ledger (mutation-probed: pointing one component at a different root correctly fails it), one proving promotion and injection are independently-settable policy decisions (mutation-probed against a real production-code coupling mutation). Also cited C-MEM-01 in CanonicalMemoryStore's own docstring, closing closure_gate.py's G1.3 orphan too (0 real, down from 2 -- G1.3 now fully PASSES, all 5 automatable Tier-1 predicates green). Wired both test modules + qa_evidence_matrix.py --check + closure_gate.py --check into a new CI job (q3-evidence-and-closure-gate), mirroring the existing arc-ledger/substitution-ledger/semantic-overlay job pattern. tools/test_qa_evidence_matrix.py's import style was also normalized to match its siblings' self-contained sys.path convention (its prior `from tools import X` package-relative import only worked from repo root, inconsistent with the working-directory: tools convention every other tools/test_*.py file already uses)."
+    council: "no — mechanical once each contract was grounded; no cross-domain tension"
+    pr: "#pending"
+    heading: "### B-35 · `tools/test_qa_evidence_matrix.py` / `test_closure_gate.py` are orphaned from CI + 12 contracts lack test-file citation *(surfaced during B-28 triage, 2026-07-14; closed same session as B-32)*"
 
   - id: B-36
     title: "Concrete F5 audit-signature backend selection"
@@ -359,3 +360,11 @@ items:
     close_out: "Extend _classify_provider_exception to distinguish the 3 failure classes at a real per-step dispatch failure site."
     council: "no — mechanical extension once opened; not urgent, speculative ahead of any consumer"
     heading: "### B-38 · Fine-grained provider-exception classifier for `breaker.cause` *(surfaced at `B-19`'s own close, split out 2026-07-14 at forward-register-schema grounding, out-of-family Codex)*"
+
+  - id: B-40
+    title: "Memory operation ledger has no cross-process write serialization"
+    status: registered_finding
+    summary: "append_memory_operation's hash-chain writer uses a process-local threading.Lock only; concurrent multi-process writers to the same canonical store can corrupt the chain."
+    close_out: "File a Class 1 fork for a cross-process file lock (e.g. fcntl.flock) around the read-last-entry -> compute-prior-hash -> append sequence in harness-is/src/harness_is/memory_operation_ledger.py; also add a lock (or lock-free append-only read tolerance) to read_memory_operation_ledger's unlocked path.read_text() against a concurrent mid-write reader."
+    council: "no — mechanical once a locking strategy is chosen; not urgent, no known production multi-process concurrent-writer deployment yet"
+    heading: "### B-40 · Memory operation ledger has no cross-process write serialization *(surfaced at B-35's merge-gate concurrency lens, 2026-07-15)*"

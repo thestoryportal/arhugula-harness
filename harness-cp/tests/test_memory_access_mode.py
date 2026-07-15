@@ -89,6 +89,7 @@ def _request(
 
 
 def test_memory_access_mode_vocabulary_matches_c_mem_13() -> None:
+    """C-MEM-13 - provider memory access-mode vocabulary."""
     assert {mode.value for mode in MemoryAccessMode} == {
         "native_provider_memory",
         "standard_memory_tools",

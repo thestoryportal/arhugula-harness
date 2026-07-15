@@ -211,6 +211,7 @@ def _retriever(
 
 
 def test_retrieval_ranking_packet_and_event_are_stable(tmp_path: Path) -> None:
+    """C-MEM-11 - retrieval ranking + result shape are deterministic."""
     binding = _binding(tmp_path)
     store = _store(binding)
     pinned = _record(
@@ -321,6 +322,7 @@ def test_excluded_considered_refs_carry_deterministic_reasons(tmp_path: Path) ->
 
 
 def test_packet_sections_obey_stable_order_and_token_budget(tmp_path: Path) -> None:
+    """C-MEM-12 - memory packet assembly is bounded with a stable section order."""
     binding = _binding(tmp_path)
     store = _store(binding)
     records = (

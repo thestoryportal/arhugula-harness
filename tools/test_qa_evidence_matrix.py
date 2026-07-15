@@ -1,71 +1,41 @@
 from __future__ import annotations
 
-import hashlib
-from typing import Any
+import sys
+from pathlib import Path
 
-from tools import qa_evidence_matrix
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-# B-35 (.harness/post-phase-8-forward-register.md) - a pre-existing gap, not
-# introduced this session: as of 2026-07-14 a known set of contracts (11
-# memory-substrate + 1 IS contract) have no test file citing their contract
-# id anywhere in the repo. Deliberately NOT spelled out by literal id in this
-# file's own text -- this scanner counts any test_*.py file that merely
-# CONTAINS a contract-id-shaped substring as "proof" for that id, so writing
-# the literal ids here would make this file falsely count as their evidence
-# (out-of-family Codex round 2 caught exactly this self-citation bug in an
-# earlier draft that spelled one id out in an xfail reason string).
-#
-# A bare COUNT assertion (round-2 fix) has its own gap (out-of-family Codex
-# round 3): if one known-missing contract gains a citation in the same
-# change that a different, previously-covered contract loses its citation,
-# the count is unchanged and the regression passes silently. Pin a SHA-256
-# fingerprint of the sorted missing-id list instead of the count -- any
-# substitution changes the digest even when the count doesn't, and the
-# digest itself never spells out a contract id in this file's text.
-_B35_KNOWN_MISSING_TEST_EVIDENCE_COUNT = 12
-_B35_KNOWN_MISSING_TEST_EVIDENCE_FINGERPRINT = (
-    "4f5c5c86af83254e16aa5558d85d31754275f3051cc6b0fe7e65c0957712f0e5"
-)
+import qa_evidence_matrix
+
 _B35_KNOWN_CXA_MISSING_ENDPOINT_COUNT = 0
 
 
-def _missing_test_evidence_fingerprint(matrix: dict[str, Any]) -> str:
-    missing_ids: list[str] = sorted(
-        row["contract_id"] for row in matrix["contracts"] if not row["test_files"]
-    )
-    return hashlib.sha256(",".join(missing_ids).encode("utf-8")).hexdigest()
-
-
 def test_q3_evidence_matrix_known_gaps_are_tracked_not_growing() -> None:
-    """B-28 finding #17/#18 follow-up (out-of-family Codex rounds 2 + 3) -
-    the original test asserted `== []` against live data that currently has
-    known gaps (see B-35). A blanket xfail on that whole assertion would
-    mask a genuinely NEW regression behind the same expected-failure
-    outcome; a bare count assertion would miss a same-count substitution
-    (one gap closes while a different, previously-clean contract loses its
-    citation). Assert a fingerprint of the exact missing-id set instead:
-    this fails loudly on ANY change to *which* contracts are missing, not
-    just how many, without ever spelling out a contract id in this file."""
+    """B-35 (.harness/forward-register.yaml, CLOSED) - a prior draft of this
+    test pinned a known-nonzero gap (12 contracts, mostly memory-substrate,
+    with no test file citing their contract id anywhere in the repo) via a
+    SHA-256 fingerprint of the sorted missing-id list, since a bare count
+    assertion would miss a same-count substitution (out-of-family Codex
+    rounds 2 + 3). B-35 is now closed. Deliberately NOT spelled out by
+    literal id in this file's own text (mirrors the original discipline this
+    docstring replaces) -- this scanner counts any test_*.py file that
+    merely CONTAINS a contract-id-shaped substring as "proof" for that id,
+    so writing the literal ids here would make THIS file falsely count as
+    their evidence. See .harness/forward-register.yaml's B-35 entry for the
+    full per-contract close-out detail. Assert the direct, honest invariant
+    now that the gap is empty: any FUTURE contract losing its citation
+    fails this immediately, without carrying forward dead gap-tracking
+    machinery."""
     matrix = qa_evidence_matrix.derive_matrix()
     stats = qa_evidence_matrix.summary(matrix)
 
     assert stats["contracts_total"] > 0
-    assert stats["contracts_missing_test_evidence"] == _B35_KNOWN_MISSING_TEST_EVIDENCE_COUNT, (
-        "the R-CL-Q3 evidence-matrix gap count changed -- if it DECREASED, "
-        "update _B35_KNOWN_MISSING_TEST_EVIDENCE_COUNT + the fingerprint down "
-        "(real progress on B-35); if it INCREASED, a previously-covered "
-        "contract just lost its test-file citation -- investigate before "
-        "touching this constant."
-    )
-    fingerprint = _missing_test_evidence_fingerprint(matrix)
-    assert fingerprint == _B35_KNOWN_MISSING_TEST_EVIDENCE_FINGERPRINT, (
-        "the R-CL-Q3 missing-test-evidence CONTRACT SET changed even though "
-        "the count may be unchanged -- a substitution (one contract gained "
-        "evidence while a different one lost it) can hide behind a stable "
-        "count; print sorted(row['contract_id'] for row in "
-        "qa_evidence_matrix.derive_matrix()['contracts'] if not "
-        "row['test_files']) to see the current set before updating this "
-        "fingerprint."
+    missing_ids = sorted(row["contract_id"] for row in matrix["contracts"] if not row["test_files"])
+    assert missing_ids == [], (
+        f"contract(s) {missing_ids} lack test-file citation -- either add a "
+        "one-line contract-id citation to an existing test, write a new "
+        "test, or (if genuinely phantom) add to "
+        "overlay.DOCUMENTED_NON_CONTRACTS with a canonical-spec citation"
     )
     assert stats["cxa_seams_missing_endpoint"] == _B35_KNOWN_CXA_MISSING_ENDPOINT_COUNT
 

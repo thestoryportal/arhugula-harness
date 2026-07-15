@@ -35,9 +35,10 @@ CLEARANCE = REPO_ROOT / ".harness" / "clearance"
 TIER1_MANUAL_SIGNOFF = REPO_ROOT / ".harness" / "r-fs-1-tier1-manual-signoff.json"
 PY = sys.executable
 
-# C-IS-11 is a documented corrected-non-cite (runtime spec names it in prose saying
-# "prior v1 cited C-IS-11/14/15 which don't exist") — not a real unimplemented contract.
-DOCUMENTED_NON_CONTRACTS = {"C-IS-11"}
+# Documented-phantom contract IDs are excluded upstream, at the single source of
+# truth `tools/semantic_overlay/overlay.py::DOCUMENTED_NON_CONTRACTS` (B-35 found
+# this file's own local copy only listed C-IS-11, missing C-IS-14 per the SAME
+# canonical citation — moved there so both consumers can't drift independently).
 
 
 # --------------------------------------------------------------------------- #
@@ -157,16 +158,16 @@ def evaluate() -> list[Pred]:
         )
     )
 
-    all_contracts = orph.get("contract_without_code", [])
-    contracts = [c for c in all_contracts if c.get("id") not in DOCUMENTED_NON_CONTRACTS]
-    n_doc = len(all_contracts) - len(contracts)
+    # Documented-phantom IDs are already excluded by overlay.py's own
+    # `contract_without_code` derivation — nothing left to re-filter here.
+    contracts = orph.get("contract_without_code", [])
     p.append(
         Pred(
             "G1.3",
             "No contract orphans (head-scoped, ex-documented)",
             len(contracts) == 0 if orph else None,
             True,
-            f"{len(contracts)} real + {n_doc} documented(C-IS-11)",
+            f"{len(contracts)} real",
         )
     )
 
