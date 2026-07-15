@@ -51,45 +51,79 @@ This is the step most often done wrong. After the PR merges:
    alongside a roadmap_status.md touch, its title MUST NOT use the reserved prefix
    (§12.2.1), and a follow-on terminating refresh is owed.
 
-## Branch hygiene close-out — arc closed, prune its branch now
+## Branch hygiene close-out — arc closed, delete its REMOTE branch now
 
 Per `~/.claude/CLAUDE.md` §10 CI Discipline: *"Git repo will not have more than the current
 CI branch present before any merge actions. If stale previous branches are present, conduct
-a careful comprehensive review before deleting or merging them..."* — the moment CI on
-`main`'s merge commit is confirmed green (not just the PR's own pre-merge checks — the
-post-merge push-triggered run) is exactly the moment this arc's branch is provably safe to
-delete. Don't defer it to a future session — that's how it gets missed. This is a **reviewed**
-step, not a blind automated sweep — look at the report before deleting anything:
+a careful comprehensive review before deleting or merging them..."* This discipline is about
+the **remote (GitHub) branch list**, not local `.git/refs/heads/*` pointers — local refs are
+single-clone, cosmetic, and reflog-recoverable regardless; they are not what "branch hygiene"
+means here. Don't defer this to a future session — that's how it gets missed.
+
+The moment CI on `main`'s merge commit is confirmed green (not just the PR's own pre-merge
+checks — the post-merge, push-triggered run) is exactly the moment this arc's remote branch
+is provably safe to delete. This is always a single named branch — the one you just
+merged — never a scan or backlog sweep:
 
 ```bash
-just branch-hygiene-report   # review: exact-merged-SHA + live post-merge-CI-green
-                              # verified candidates. Look at this before deleting.
-just branch-hygiene-sweep    # then delete what the report confirmed: local -D
-                              # (CAS-guarded) + remote (lease-guarded). See
-                              # tools/hooks/loop_lib.sh loop_gc_branches for the
-                              # full safe-subset gate. Runs through the normal
-                              # Bash permission prompt — an explicit, reviewed
-                              # action each time, never silent/unattended.
+# 0. Set this to the branch you already know you're closing out (the one THIS arc's PR
+#    used — e.g. `git branch --show-current` if the worktree hasn't moved on yet). A hard
+#    check below, not just an eyeballed echo, against a mistyped PR number that happens to
+#    resolve to some OTHER legitimately-merged PR.
+expected_branch="<branch-name>"
+
+# 1. Pull the PR's own state + the branch name + its exact merged tip SHA — never typed
+#    by hand. Confirm it's actually MERGED into the default branch AND that its branch
+#    matches what you expected (both guard against a mistyped PR number silently
+#    targeting some OTHER valid merged PR's branch).
+pr_json=$(gh pr view <PR#> --json state,baseRefName,headRefName,headRefOid,mergeCommit)
+[ "$(jq -r .state <<<"$pr_json")" = MERGED ] || { echo "ABORT: PR is not MERGED"; exit 1; }
+[ "$(jq -r .baseRefName <<<"$pr_json")" = "$(gh repo view --json defaultBranchRef --jq .defaultBranchRef.name)" ] \
+  || { echo "ABORT: PR did not merge into the default branch"; exit 1; }
+branch=$(jq -r .headRefName <<<"$pr_json")
+[ "$branch" = "$expected_branch" ] || { echo "ABORT: PR <PR#>'s branch ($branch) != expected ($expected_branch)"; exit 1; }
+head_oid=$(jq -r .headRefOid <<<"$pr_json")
+merge_sha=$(jq -r .mergeCommit.oid <<<"$pr_json")
+
+# 2. Fail closed unless the merge commit's OWN post-merge CI run on main is an exact
+#    "success" (not the PR's pre-merge checks, which this repo has a documented case of
+#    diverging from — and not "pending"/"failure"/empty, which must ALSO abort, not just
+#    print and fall through).
+concl=$(gh run list --commit "$merge_sha" --json conclusion --jq '.[0].conclusion // empty')
+[ "$concl" = success ] || { echo "ABORT: post-merge CI on main is not confirmed green (got '${concl:-empty}')"; exit 1; }
+
+# 3. If gh pr merge --delete-branch already removed the ref, there's nothing left to
+#    delete — treat that as done, not a failure. Exit 2 from `ls-remote --exit-code` is the
+#    ONLY "genuinely absent" signal; any other nonzero (network unreachable, auth failure,
+#    ...) must abort, not be silently read as "already gone". Otherwise, lease-guarded
+#    delete: refuses atomically if the remote tip no longer equals the verified merged SHA
+#    (new work pushed to the same branch name post-merge, or a stale/reused ref). A bare
+#    `gh api -X DELETE`/`git push --delete` has no such guard and would silently destroy
+#    whatever is currently there, with no recovery. Goes through the normal Bash
+#    permission prompt every time — an explicit, reviewed action, never silent/unattended.
+git ls-remote --exit-code --heads origin "refs/heads/${branch}" >/dev/null 2>&1; rc=$?
+case "$rc" in
+  0) git push --force-with-lease="refs/heads/${branch}:${head_oid}" origin ":refs/heads/${branch}" ;;
+  2) echo "Already gone (gh pr merge --delete-branch or a prior run) — nothing to do." ;;
+  *) echo "ABORT: could not verify remote ref state (ls-remote exit $rc — network/auth issue?)"; exit 1 ;;
+esac
 ```
 
-**The current worktree's OWN branch is the one exception** — its local ref can't be deleted
-while checked out (git refuses, correctly); that one waits for this worktree to move to a
-different branch or be removed. Its remote ref, if `gh pr merge` didn't already clean it up,
-can still be deleted now, but **lease-guarded** (never a bare `git push origin --delete`,
-which removes whatever the remote tip currently is unconditionally — if someone pushed new
-work to the same name since the merge, that content is gone with no recovery):
+Local branch refs are left alone entirely; they carry no unique cleanup obligation. Worktree
+removal is a separate, structurally later step (a session can't remove the worktree it's
+running inside) — that's `loop_gc_worktrees`, which still runs at the next session's
+SessionStart per U-HK-26; unrelated to this step.
 
-```bash
-sha=$(git rev-parse HEAD)   # the commit THIS branch was at when it merged
-git push --force-with-lease="refs/heads/<branch>:${sha}" origin ":refs/heads/<branch>"
-```
-
-Prefer leaving it alone and letting `just branch-hygiene-sweep` pick it up on a future
-invocation (it does the identical lease-guarded delete, verified against the merged PR's
-exact `headRefOid`) — the manual command above is only for when you want it gone
-immediately. Worktree removal itself is a separate, structurally later step (a session can't
-remove the worktree it's running inside) — that's `loop_gc_worktrees`, which still runs at
-the next session's SessionStart per U-HK-26; unrelated to branch cleanup.
+**Loop mode:** `permission-guard.sh`'s deny-list hard-blocks `git push --force-with-lease`
+unconditionally, even in loop mode (branch deletion is a destructive git operation — the
+workspace's standing discipline is that these always require an explicit, per-instance human
+review, never silent auto-approval, loop mode included). Don't route around this by adding an
+allowlist carve-out — that reintroduces exactly the auto-approved-destructive-op pattern the
+operator has twice rejected. Instead, when running inside loop mode, defer this step through
+the permission guard's allowlisted wrapper — a bare `loop_defer` call is undefined in a fresh
+child shell and would silently no-op:
+`bash tools/04-loop/defer.sh <arc-id> "branch hygiene close-out pending: <branch>"` — and let the next
+interactive session run it.
 
 ## R-NNN closure cascade — §12.5.3
 
