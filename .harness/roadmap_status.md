@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `61f59e433e10` |
+| `workspace_state_hash` | `31c2ba550ad7` |
 | `last_refreshed` | 2026-07-15T00:00:00Z |
-| `git_head` | `2af6727e` — B-41 auth exceptions now fail-fast merged |
+| `git_head` | `b96516e5` — B-42 docstring clarification merged; B-43 registered |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 91 |
 
@@ -56,11 +56,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| #1022 | 2026-07-15 | B-42 FIVE_XX_STREAK terminal-not-streak docstring clarification; B-43 registered (design_substrate_gated) for the adjacent OD spec v1.32 §7.1 stale-vacuous prose finding |
 | #1021 | 2026-07-15 | B-41 auth-fail-fast conformance fix; resolves B-38's classifier divergence |
 | #1020 | 2026-07-15 | B-38 breaker.cause classifier + real span-emission fix; B-40/B-41/B-42 registered |
 | #002c82f3 | 2026-07-15 | B-39 re-grounded (2026-07-15 no-parking sweep): all 3 design constraints confirmed still accurate against HEAD by direct read; status moved registered_finding -> design_substrate_gated (needs a Class 1 fork proposing the resume_context threading mechanism before code, per X-AL-3). No code change. Continuing sweep to B-38 next. |
 | #1019 | 2026-07-15 | B-37 closed — remote MCP streamable-HTTP transport residuals (latent TypeError fix, auth_secret_name credential field, TLS/trust_env security hardening across 3 codex-review rounds + 3-lens merge-gate all-approve) |
-| PR #1017 | 2026-07-15 | Closed B-35: qa_evidence_matrix.py --check was live-red (12 contracts with no test-file citation, C-IS-14 phantom + 11 C-MEM-*) with zero CI signal -- neither it nor test_closure_gate.py was wired into any CI job. C-IS-14 was a documented phantom contract id (runtime spec v1.93's own change-note); moved the exclusion set from closure_gate.py's local incomplete copy to a shared overlay.py::DOCUMENTED_NON_CONTRACTS. 10 of 11 C-MEM-* contracts already had a real passing test -- added a one-line contract-id citation to each. C-MEM-01 (memory-plane-boundary architectural contract) was a genuine gap: added test_memory_plane_boundary.py with two new tests, both mutation-probed against real production code. Wired both test modules + both --check scripts into a new blocking CI job. Side effect: closure_gate.py's Tier-1 automatable predicates now all PASS (was blocked by the same 2 orphans) -- reconciles the tool with an already-RESOLVED R-CL-C1 certification. Merge-gate round 1 (all 3 lenses APPROVE) surfaced two worth-fixing items I self-corrected: my own test docstring accidentally self-cited C-MEM-01 (fixed), and test_closure_gate.py's G1.3 mock couldn't distinguish a hardcoded-True mutation from a genuine pass (added + mutation-probed a new test). Registered B-40 for a real, out-of-scope, pre-existing concurrency gap the reviewer surfaced (memory operation ledger has no cross-process write serialization). just check clean throughout (5796 passed). No standing Claude-derivable next action beyond the R-600 recurring lane or continuing the register sweep (B-37 next, adjacent same-family item). |
 ---
 
 ---
