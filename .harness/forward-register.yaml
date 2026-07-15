@@ -20,14 +20,25 @@
 # (the exact `### B-NN ·...` markdown heading text) so a query tool can pull the full
 # prose on demand. No prose is duplicated into this file.
 #
+# STANDING DIRECTIVE (operator 2026-07-14, [[full-register-ground-every-arc-before-blocking]],
+# Project_Roadmap_v1.md §5.0b): every row below — INCLUDING registered_finding /
+# operator_gated / design_substrate_gated / the empty B-16 speculative bucket — gets an
+# active grounding pass against the cited spec/ADR/plan section(s) before it is built or
+# left open. The status enum below describes CURRENT state, not a license to skip
+# investigation. Only `held` (an already-ratified operator DEFER) stops without a fresh
+# grounding pass.
+#
 # STATUS ENUM (the ONLY place this mapping lives):
 #   open                   — actionable now, no blocker.
 #   design_substrate_gated — needs a Class 1 fork doc (X-AL-3) before any code change.
-#   registered_finding     — a real, non-urgent gap surfaced during another arc's
-#                            review/build; opens only when a live consumer/trigger
-#                            appears (the "register-then-triage, not drop" discipline).
+#   registered_finding     — a real gap surfaced during another arc's review/build;
+#                            grounded against the spec (not skipped), and opens for BUILD
+#                            once grounding confirms a genuinely buildable slice or a live
+#                            consumer/trigger appears (the "register-then-triage, not drop"
+#                            discipline — 2026-07-14: triage means investigate, not defer).
 #   operator_gated         — needs a credential / D-ADR / cloud provisioning decision
-#                            only the operator can make.
+#                            only the operator can make; still grounded + Claude-slice-built
+#                            up to that genuine gate first.
 #   held                   — an explicit operator DEFER-INDEFINITELY ratification;
 #                            not silently reopened.
 #   closed                 — built + merged, or foreclosed/superseded; kept for history.
