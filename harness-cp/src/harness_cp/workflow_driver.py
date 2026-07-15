@@ -8519,10 +8519,31 @@ def _execute_parallelization(
         # branch fence-paused this round, so an operator surface keying off the reason knows to
         # request an `EffectFenceResolution` (mirrors the LINEAR effect-fence pause reason); else
         # the ordinary `cascade_policy=pause` branch-failure pause stays EXPLICIT_OPERATOR (Codex
-        # [P2]).
+        # [P2]). B-32 — a peer whose recursive child's OWN pause_reason is HITL_PENDING (and no
+        # fence-paused peer this round) labels the parent pause HITL_PENDING too, so an operator
+        # surface keying off the reason knows to supply a `hitl_response` resume context. A
+        # nested child paused for a DIFFERENT reason (e.g. an ordinary `cascade_policy=pause`
+        # branch failure inside the child, itself EXPLICIT_OPERATOR) does NOT relabel the parent
+        # — presence of a paused child alone is not evidence of a HITL gate (out-of-family Codex
+        # [P1], caught by executing the fixture: a nested EXPLICIT_OPERATOR pause was mislabeled
+        # HITL_PENDING by an earlier draft that only checked non-emptiness). EFFECT_FENCE_AMBIGUOUS
+        # keeps its existing top precedence (byte-compat: a round with BOTH a fence-paused peer
+        # AND a HITL-paused nested child is unchanged from pre-B-32 behavior). This label is
+        # PURELY INFORMATIONAL — the composer's resume path (`consume_and_clear`) never branches
+        # on pause_reason, so this fix cannot itself unlock an unsafe auto-resume (the composer
+        # always consumes the single shared resume context, regardless of label).
+        # Per-child response ROUTING when >1 nested child pauses HITL_PENDING in the same round is
+        # a SEPARATE, unresolved gap (out-of-family Codex [P1], round 2) tracked at B-39 — an
+        # operator surface must still inspect `paused_child_branches` before supplying a response.
+        _any_nested_hitl_pending = any(
+            _child_snap.pause_reason is WorkflowPauseReason.HITL_PENDING
+            for _, _child_snap in paused_child_dispositions.values()
+        )
         _pause_reason = (
             WorkflowPauseReason.EFFECT_FENCE_AMBIGUOUS
             if effect_fence_paused_dispositions
+            else WorkflowPauseReason.HITL_PENDING
+            if _any_nested_hitl_pending
             else WorkflowPauseReason.EXPLICIT_OPERATOR
         )
         snapshot = _run_protocol_method_sync(
@@ -11762,10 +11783,23 @@ def _execute_orchestrator_workers(
         )
         # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE — label EFFECT_FENCE_AMBIGUOUS when a worker
         # fence-paused this round so the operator surface knows to supply an EffectFenceResolution
-        # (Codex [P2]; the parallelization analogue).
+        # (Codex [P2]; the parallelization analogue). B-32 — a worker whose recursive child's OWN
+        # pause_reason is HITL_PENDING (and no fence-paused worker this round) labels the parent
+        # pause HITL_PENDING too (the PARALLELIZATION analogue); a nested child paused for a
+        # DIFFERENT reason does NOT relabel the parent (presence alone is not evidence of a HITL
+        # gate). EFFECT_FENCE_AMBIGUOUS keeps its existing top precedence (byte-compat). This label
+        # is PURELY INFORMATIONAL (the composer's `consume_and_clear` never branches on
+        # pause_reason); per-child response ROUTING when >1 nested child pauses HITL_PENDING is a
+        # SEPARATE unresolved gap tracked at B-39 (see the PARALLELIZATION analogue comment above).
+        _any_nested_hitl_pending = any(
+            _child_snap.pause_reason is WorkflowPauseReason.HITL_PENDING
+            for _, _child_snap in paused_child_dispositions.values()
+        )
         _pause_reason = (
             WorkflowPauseReason.EFFECT_FENCE_AMBIGUOUS
             if effect_fence_paused_dispositions
+            else WorkflowPauseReason.HITL_PENDING
+            if _any_nested_hitl_pending
             else WorkflowPauseReason.EXPLICIT_OPERATOR
         )
         snapshot = _run_protocol_method_sync(

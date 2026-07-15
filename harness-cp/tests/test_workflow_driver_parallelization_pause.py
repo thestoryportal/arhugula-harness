@@ -2248,6 +2248,114 @@ def test_peer_cancellation_race_captures_both_paused_children() -> None:
     assert terminal_indices.isdisjoint(pcb_indices)
 
 
+def test_peer_cancellation_race_nested_explicit_operator_does_not_relabel_hitl_pending() -> None:
+    """B-32 contrasting baseline — a nested child that paused for an ordinary
+    `cascade_policy=pause` branch failure (its OWN `pause_reason` is EXPLICIT_OPERATOR,
+    NOT a HITL gate) must NOT relabel the parent's pause HITL_PENDING. Presence of a
+    paused child alone is not evidence of a HITL gate (out-of-family Codex [P1]: an
+    earlier draft that keyed only on `paused_child_dispositions` non-emptiness mislabeled
+    exactly this fixture's parent pause HITL_PENDING). Same fixture as
+    `test_peer_cancellation_race_captures_both_paused_children` — both children pause via
+    an ordinary grandchild `RuntimeError` (`_PeerGrandchildDispatcher`), never a HITL gate."""
+    sub_agent = _PeerOrderedPausingSubAgentDispatcher()
+    registry = cast(StepDispatcherRegistry, _TwoPeerSubAgentRegistry(sub_agent=sub_agent))
+    peer_steps = [
+        WorkflowStep(
+            step_id=StepID("branch-0"), step_kind=StepKind.SUB_AGENT_DISPATCH, step_payload={}
+        ),
+        WorkflowStep(
+            step_id=StepID("branch-1"), step_kind=StepKind.SUB_AGENT_DISPATCH, step_payload={}
+        ),
+    ]
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    result = execute_workflow(
+        _manifest("wf-pp-race-reason"),
+        peer_steps,
+        run_id="run-race-reason",
+        ctx=ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=registry,
+    )
+    assert result.status is RunStatus.PAUSED
+    snap = result.pause_snapshot
+    assert snap is not None
+    assert snap.pause_reason is WorkflowPauseReason.EXPLICIT_OPERATOR
+
+
+def _build_minimal_state_summary() -> StateSummary:
+    from harness_is.state_ledger_entry_schema import Identifier
+
+    return StateSummary(
+        relevant_entries=(),
+        summary_text="minimal",
+        summary_hash="0" * 64,
+        idempotency_key=Identifier("idem-hitl-child"),
+        external_references=(),
+    )
+
+
+def _hitl_pending_child_pause_snapshot(workflow_id: str) -> PauseSnapshot:
+    """A bare `PauseSnapshot` with `pause_reason=HITL_PENDING` — a real HITL gate fired
+    inside the child (per the `HITLPauseRequestedSignal` name-match path at
+    `workflow_driver.py:4472-4497`, which this hand-built snapshot stands in for
+    directly, sidestepping the nested-`execute_workflow`-inside-a-`asyncio.to_thread`-
+    dispatched-branch construction that this snapshot's caller runs under)."""
+    return PauseSnapshot(
+        workflow_id=workflow_id,
+        run_id=f"{workflow_id}-run",
+        step_index=0,
+        pause_reason=WorkflowPauseReason.HITL_PENDING,
+        state_summary=_build_minimal_state_summary(),
+        snapshot_hash="a" * 64,
+        created_at=1_700_000_000_000,
+        state_ledger_anchor="b" * 64,
+    )
+
+
+class _SinglePeerHITLPausingSubAgentDispatcher:
+    """A single PARALLELIZATION peer (branch_count=1, no siblings — no TaskGroup
+    cancellation-race to synchronize) whose recursive child pauses `HITL_PENDING`."""
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        raise SubAgentChildPausedError(
+            child_workflow_id="wf-child-branch-0",
+            child_snapshot=_hitl_pending_child_pause_snapshot("wf-child-branch-0"),
+        )
+
+
+def test_peer_child_hitl_pending_pause_labels_parent_hitl_pending() -> None:
+    """B-32 positive case — a nested child whose OWN pause_reason genuinely IS
+    HITL_PENDING labels the PARENT's pause HITL_PENDING too. A single-branch round (no
+    siblings) isolates the pause_reason-propagation behavior from any TaskGroup
+    cancellation-race timing."""
+    registry = cast(
+        StepDispatcherRegistry,
+        _TwoPeerSubAgentRegistry(sub_agent=cast(Any, _SinglePeerHITLPausingSubAgentDispatcher())),
+    )
+    peer_steps = [
+        WorkflowStep(
+            step_id=StepID("branch-0"), step_kind=StepKind.SUB_AGENT_DISPATCH, step_payload={}
+        ),
+    ]
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    result = execute_workflow(
+        _manifest("wf-pp-hitl-positive"),
+        peer_steps,
+        run_id="run-hitl-positive",
+        ctx=ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=registry,
+    )
+    assert result.status is RunStatus.PAUSED
+    snap = result.pause_snapshot
+    assert snap is not None
+    pcb_indices = {p.branch_index for p in snap.peer_fan_out_resume.paused_child_branches}
+    assert pcb_indices == {0}, f"expected branch-0 captured as a paused child: {pcb_indices}"
+    assert snap.pause_reason is WorkflowPauseReason.HITL_PENDING
+
+
 def test_nested_peer_paused_child_branches_dropped_from_hash_when_empty() -> None:
     """B-21 (out-of-family Codex round 1 [P1]) — a NESTED `peer_fan_out_resume` carrier's
     own empty `paused_child_branches` must be dropped from the canonical hash
