@@ -1164,6 +1164,92 @@ def test_cancellation_race_captures_paused_child_among_failing_siblings() -> Non
         f"terminal={terminal_indices}"
     )
     assert terminal_indices.isdisjoint(pcb_indices)
+    # B-32 contrasting baseline — both nested children paused for an ORDINARY
+    # `cascade_policy=pause` branch failure (itself EXPLICIT_OPERATOR, not a HITL gate);
+    # presence of paused children alone must NOT relabel the parent HITL_PENDING.
+    assert snap.pause_reason is WorkflowPauseReason.EXPLICIT_OPERATOR
+
+
+def _hitl_pending_child_pause_snapshot(workflow_id: str) -> PauseSnapshot:
+    state_summary, anchor = _pause_context_reader()
+    return PauseSnapshot(
+        workflow_id=workflow_id,
+        run_id=f"{workflow_id}-run",
+        step_index=0,
+        pause_reason=WorkflowPauseReason.HITL_PENDING,
+        state_summary=state_summary,
+        snapshot_hash="a" * 64,
+        created_at=1_700_000_000_000,
+        state_ledger_anchor=anchor,
+    )
+
+
+class _SingleWorkerHITLPausingSubAgentDispatcher:
+    """A single SUB_AGENT worker (no siblings, no TaskGroup race) whose recursive child's
+    OWN pause_reason genuinely IS HITL_PENDING — isolates the ORCHESTRATOR_WORKERS/
+    HIERARCHICAL_DELEGATION pause_reason-propagation behavior (B-32) from any
+    cancellation-race timing, mirroring the PARALLELIZATION positive test in
+    test_workflow_driver_parallelization_pause.py."""
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        raise SubAgentChildPausedError(
+            child_workflow_id="wf-child-worker-0",
+            child_snapshot=_hitl_pending_child_pause_snapshot("wf-child-worker-0"),
+        )
+
+
+class _SingleWorkerHITLRegistry:
+    def __init__(self, *, sub_agent: _SingleWorkerHITLPausingSubAgentDispatcher) -> None:
+        self._sub_agent = sub_agent
+        self._orchestrator = _CountingDispatcher()
+
+    def lookup(self, step_kind: StepKind) -> StepDispatcher:
+        if step_kind is StepKind.SUB_AGENT_DISPATCH:
+            return cast(StepDispatcher, self._sub_agent)
+        if step_kind is StepKind.DECLARATIVE_STEP:
+            return cast(StepDispatcher, self._orchestrator)
+        raise StepKindDispatcherNotBoundError(step_kind)
+
+
+def test_orchestrator_worker_child_hitl_pending_pause_labels_parent_hitl_pending() -> None:
+    """B-32 positive case (ORCHESTRATOR_WORKERS analogue of the PARALLELIZATION positive
+    test) — a nested worker child whose OWN pause_reason genuinely IS HITL_PENDING labels
+    the PARENT's pause HITL_PENDING too. A single-worker round (no siblings) isolates the
+    pause_reason-propagation behavior from any TaskGroup cancellation-race timing.
+    Mutation-probe: deleting or inverting the `_any_nested_hitl_pending` check at the
+    ORCHESTRATOR_WORKERS/HIERARCHICAL_DELEGATION `_pause_reason` derivation site would
+    leave this assertion failing (parent falls back to EXPLICIT_OPERATOR)."""
+    registry = cast(
+        StepDispatcherRegistry,
+        _SingleWorkerHITLRegistry(sub_agent=_SingleWorkerHITLPausingSubAgentDispatcher()),
+    )
+    parent_steps = [
+        WorkflowStep(
+            step_id=StepID("orchestrator"),
+            step_kind=StepKind.DECLARATIVE_STEP,
+            step_payload={"role": "orchestrator"},
+        ),
+        WorkflowStep(
+            step_id=StepID("worker-0"), step_kind=StepKind.SUB_AGENT_DISPATCH, step_payload={}
+        ),
+    ]
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    result = execute_workflow(
+        _manifest("wf-orch-hitl-positive"),
+        parent_steps,
+        run_id="run-orch-hitl-positive",
+        ctx=ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=registry,
+    )
+    assert result.status is RunStatus.PAUSED
+    snap = result.pause_snapshot
+    assert snap is not None and snap.fan_out_resume is not None
+    pcb_indices = {p.branch_index for p in snap.fan_out_resume.paused_child_branches}
+    assert pcb_indices == {0}, f"expected worker-0 captured as a paused child: {pcb_indices}"
+    assert snap.pause_reason is WorkflowPauseReason.HITL_PENDING
 
 
 # ---------------------------------------------------------------------------
