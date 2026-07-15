@@ -26,9 +26,9 @@ Per-step invocation discipline (the body of
      C-CP-03 §3.5 ``retry.*`` 6-attribute namespace; dispatch via
      ``self.inner.dispatch(rebound_binding, step)``. On success the breaker
      records success and the result returns; on fail-fast (provider-
-     unreachable / payload-shape) the breaker records failure and the
-     candidate is abandoned; on transient SDK failure the staircase advances
-     and either retries (sleeps full-jitter backoff) or escalates.
+     unreachable / payload-shape / auth, B-41) the breaker records failure
+     and the candidate is abandoned; on transient SDK failure the staircase
+     advances and either retries (sleeps full-jitter backoff) or escalates.
   5. On ``FallbackChainExhaustedError`` emit ``fallback.exhausted`` on the
      outer span and raise ``RetryBreakerFallbackExhaustedError`` (maps to the
      ``RT-FAIL-FALLBACK-EXHAUSTED`` fail class added at v1.4).
@@ -327,9 +327,11 @@ def _classify_breaker_cause(exc: BaseException) -> BreakerCause | None:
     This is a SEPARATE, telemetry-only classification from
     `_classify_provider_exception` above (which drives retry/fail-fast
     control flow) — the two intentionally read the same exception through
-    different lenses and can disagree today (an `AuthenticationError` is
-    `AUTH_FAILURE` here but `TRANSIENT_RETRY` there, a known, tracked
-    divergence — see `B-41`)."""
+    different lenses, on different `.status_code` sets by design (this one
+    also covers `RATE_LIMIT`/`FIVE_XX_STREAK`, which stay `TRANSIENT_RETRY`
+    there). Both now agree on 401/403 (B-41 closed the prior divergence,
+    where an `AuthenticationError` was `AUTH_FAILURE` here but
+    `TRANSIENT_RETRY` there)."""
     status_code = getattr(exc, "status_code", None)
     if not isinstance(status_code, int):
         return None
