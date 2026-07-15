@@ -85,21 +85,33 @@ echo "Closing out: $branch (PR <PR#>)"   # eyeball this — it must be THIS arc'
 concl=$(gh run list --commit "$merge_sha" --json conclusion --jq '.[0].conclusion // empty')
 [ "$concl" = success ] || { echo "ABORT: post-merge CI on main is not confirmed green (got '${concl:-empty}')"; exit 1; }
 
-# 3. Lease-guarded delete — refuses atomically if the remote tip no longer equals the
-#    verified merged SHA (new work pushed to the same branch name post-merge, or a
-#    stale/reused ref). A bare `gh api -X DELETE`/`git push --delete` has no such guard
-#    and would silently destroy whatever is currently there, with no recovery. Goes
-#    through the normal Bash permission prompt every time — an explicit, reviewed
-#    action, never silent/unattended.
-git push --force-with-lease="refs/heads/${branch}:${head_oid}" origin ":refs/heads/${branch}"
+# 3. If gh pr merge --delete-branch already removed the ref, there's nothing left to
+#    delete — treat that as done, not a failure. Otherwise, lease-guarded delete: refuses
+#    atomically if the remote tip no longer equals the verified merged SHA (new work
+#    pushed to the same branch name post-merge, or a stale/reused ref). A bare
+#    `gh api -X DELETE`/`git push --delete` has no such guard and would silently destroy
+#    whatever is currently there, with no recovery. Goes through the normal Bash
+#    permission prompt every time — an explicit, reviewed action, never silent/unattended.
+if git ls-remote --exit-code --heads origin "refs/heads/${branch}" >/dev/null 2>&1; then
+  git push --force-with-lease="refs/heads/${branch}:${head_oid}" origin ":refs/heads/${branch}"
+else
+  echo "Already gone (gh pr merge --delete-branch or a prior run) — nothing to do."
+fi
 ```
 
-If `gh pr merge --delete-branch` was used and it already removed the remote ref, step 2 is a
-no-op (the push fails "remote ref does not exist" — nothing to do). Local branch refs are left
-alone entirely; they carry no unique cleanup obligation. Worktree removal is a separate,
-structurally later step (a session can't remove the worktree it's running inside) — that's
-`loop_gc_worktrees`, which still runs at the next session's SessionStart per U-HK-26; unrelated
-to this step.
+Local branch refs are left alone entirely; they carry no unique cleanup obligation. Worktree
+removal is a separate, structurally later step (a session can't remove the worktree it's
+running inside) — that's `loop_gc_worktrees`, which still runs at the next session's
+SessionStart per U-HK-26; unrelated to this step.
+
+**Loop mode:** `permission-guard.sh`'s deny-list hard-blocks `git push --force-with-lease`
+unconditionally, even in loop mode (branch deletion is a destructive git operation — the
+workspace's standing discipline is that these always require an explicit, per-instance human
+review, never silent auto-approval, loop mode included). Don't route around this by adding an
+allowlist carve-out — that reintroduces exactly the auto-approved-destructive-op pattern the
+operator has twice rejected. Instead, when running inside loop mode, `loop_defer` this step
+(`loop_defer <arc-id> "branch hygiene close-out pending: <branch>"`) and let the next
+interactive session run it.
 
 ## R-NNN closure cascade — §12.5.3
 
