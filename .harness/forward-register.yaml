@@ -1,12 +1,65 @@
+# Post-Phase-8 forward-work register — structured source of truth.
+#
+# WHY THIS EXISTS: `.harness/post-phase-8-forward-register.md` (the prose home) grew to
+# 36 B-* items / ~14K words of hand-maintained markdown with no queryable structure —
+# the same "hand-maintained markdown drifts / is expensive to re-read from a fresh
+# context" defect class R-IF-114 fixed for the R-FS-1 build arc via
+# `.harness/arc-ledger.yaml` + `tools/arc_ledger.py`. That fix does NOT cover THIS
+# register: `arc-ledger.yaml`'s own `rfs1_status: resolved` pin REQUIRES zero open
+# standalone rows (see `tools/arc_ledger.py`'s `RFS1_ZERO_OPEN_ALLOWED` invariant) —
+# R-FS-1/R-FS-2 are CLOSED build arcs, and adding new post-closure forward items there
+# as `status: registered` rows would hard-fail `arc_ledger.py --check` (verified
+# empirically before this file was authored — do not fold this register into
+# arc-ledger.yaml). This is a SIBLING schema/tool for a DIFFERENT, still-open
+# lifecycle bucket, mirroring arc-ledger.yaml's proven pattern: one structured source,
+# a pure derive(), a validate() with a snapshot pin, and a blocking `--check` CI gate.
+#
+# PROSE HOME: rich per-item prose (What it is / Current state / Close-out steps /
+# Council rationale) stays at `.harness/post-phase-8-forward-register.md` — each row
+# below carries only a one-line `summary` + `close_out` + a `heading` back-pointer
+# (the exact `### B-NN ·...` markdown heading text) so a query tool can pull the full
+# prose on demand. No prose is duplicated into this file.
+#
+# STANDING DIRECTIVE (operator 2026-07-14, [[full-register-ground-every-arc-before-blocking]],
+# Project_Roadmap_v1.md §5.0b): every row below — INCLUDING registered_finding /
+# operator_gated / design_substrate_gated / the empty B-16 speculative bucket — gets an
+# active grounding pass against the cited spec/ADR/plan section(s) before it is built or
+# left open. The status enum below describes CURRENT state, not a license to skip
+# investigation. Only `held` (an already-ratified operator DEFER) stops without a fresh
+# grounding pass.
+#
+# STATUS ENUM (the ONLY place this mapping lives):
+#   open                   — actionable now, no blocker.
+#   design_substrate_gated — needs a Class 1 fork doc (X-AL-3) before any code change.
+#   registered_finding     — a real gap surfaced during another arc's review/build;
+#                            grounded against the spec (not skipped), and opens for BUILD
+#                            once grounding confirms a genuinely buildable slice or a live
+#                            consumer/trigger appears (the "register-then-triage, not drop"
+#                            discipline — 2026-07-14: triage means investigate, not defer).
+#   operator_gated         — needs a credential / D-ADR / cloud provisioning decision
+#                            only the operator can make; still grounded + Claude-slice-built
+#                            up to that genuine gate first.
+#   held                   — an explicit operator DEFER-INDEFINITELY ratification;
+#                            not silently reopened.
+#   closed                 — built + merged, or foreclosed/superseded; kept for history.
+#
+# FORWARD-ONLY: a real transit (an item opens/closes, a new one surfaces) edits the
+# row AND bumps the `snapshot:` block (counts AND `identity_digest`) in the SAME
+# commit — mirrors arc-ledger.yaml's own forward-only discipline.
+# `identity_digest` = sha256 of the sorted "id:status" pairs; catches two items
+# swapping statuses while the aggregate counts stay put (a plain count pin can't).
+# `tools/forward_register.py --check` is the CI gate.
+
+
 snapshot:
-  total: 46
+  total: 47
   open: 0
   design_substrate_gated: 5
-  registered_finding: 6
+  registered_finding: 7
   operator_gated: 2
   held: 1
   closed: 32
-  identity_digest: 5cb46b27f08e1a37
+  identity_digest: d91525c1e0543743
   source: .harness/post-phase-8-forward-register.md
 items:
 - id: B-1
@@ -514,7 +567,20 @@ items:
     half is unaffected and cross-platform; only the new cross-process dimension is unavailable there).
     (2) the new `.lock` sidecar files were not gitignored; added `.harness/**/*.lock`, verified via `git
     check-ignore` against both actual lock paths. The genuine Windows locking *mechanism* remains unbuilt
-    by design (advisor()-reviewed scope call, not an oversight) — registered separately as B-45.'
+    by design (advisor()-reviewed scope call, not an oversight) — registered separately as B-45. A further
+    out-of-family Codex round (round 4, against the full PR diff vs main -- an earlier round had been
+    invoked with an invalid ref and produced no usable verdict) found two more real, non-regression gaps,
+    both registered rather than fixed in this PR: (1) `cross_process_read_lock`''s no-sidecar-yet fallback
+    (added to fix the P1 read-only-CLI violation above) reintroduces a narrow TOCTOU -- a reader can pass
+    the "sidecar doesn''t exist" check before a racing first-writer creates it, then read unguarded while
+    that writer is mid-append; (2) the identical gap in `jsonl_event_ledger_lifecycle.py`''s initialization
+    probe. Both are pre-existing (every read was unguarded, always, before this module existed) and narrow
+    (once any writer has ever created the sidecar, all subsequent reads/writes correctly serialize) --
+    not a regression, and advisor()-confirmed as correctly out of THIS PR''s scope: the durable fix (locking
+    the canonical ledger file directly instead of a lazily-created sidecar) is a larger, harness-inspect-compatibility-affecting
+    redesign, registered separately as B-46. The torn-read-race claim in `cross_process_read_lock`''s
+    docstring was softened to state this precisely (closes the race once a ledger has been written at
+    least once under the lock, not before).'
   council: no -- requirement settled (C-IS-09 §9.3 + C-MEM-08), mechanism was implementation discretion
     (§9.4); impl-to-cleared-spec
   pr: '#1026'
@@ -640,3 +706,33 @@ items:
     shared-read guarantee on Windows) turns out non-obvious once actually scoped
   heading: '### B-45 · Cross-process ledger lock has no genuine Windows serialization backend *(surfaced
     at B-40''s own PR, out-of-family Codex + advisor(), 2026-07-15)*'
+- id: B-46
+  title: Cross-process ledger lock has a first-write TOCTOU on lazy sidecar provisioning
+  status: registered_finding
+  summary: '`harness_is.cross_process_ledger_lock`''s lock sidecar (B-40) is provisioned lazily by whichever
+    writer touches a ledger first. A reader racing that very first writer can pass `cross_process_read_lock`''s
+    "sidecar doesn''t exist yet" existence check before the writer creates it, then read the ledger unguarded
+    while that writer is mid-append -- defeating the torn-read protection for exactly the first write/read
+    race against a brand-new ledger. The identical gap exists in `jsonl_event_ledger_lifecycle.py`''s
+    initialization probe (a fresh ledger can take the missing-file branch and return `entry_count=0` without
+    waiting, even while another process already holds the writer lock but hasn''t yet created/populated
+    the file).'
+  close_out: Registered, not built -- advisor()-confirmed non-regression (every read was unguarded, always,
+    before B-40 existed; this is a residual, not a new hole) and narrow in practice (once any writer has
+    ever created the sidecar for a given ledger, all subsequent reads/writes correctly serialize -- the
+    window is exactly the first concurrent write+read pair against a not-yet-touched ledger, which degrades
+    to a loud parse error in an already-degenerate scenario, not silent corruption). This finding and
+    B-40's round-3 P1 fix (readers must never create the sidecar or `mkdir`, to preserve `harness-inspect`'s
+    read-only-CLI contract) are in direct tension under a lazily-created sidecar -- no fix satisfies both
+    without changing the lock target. **Close-out steps:** lock the CANONICAL ledger file directly (a
+    separate fd opened purely for `flock`, independent of any fd used for actual I/O -- POSIX `flock`
+    is per open-file-description, so this is safe) instead of a lazily-created sidecar; when the canonical
+    file doesn't exist, there is genuinely nothing to read yet (no race is possible on a file that isn't
+    there); when it does exist, lock it read-only (`O_RDONLY`, no `O_CREAT` needed since it already exists)
+    or read-write (`O_CREAT|O_RDWR`, needed once, for the writer that creates it). This removes the provisioning
+    race entirely but touches the write path adjacent to hash-chain integrity and the `harness-inspect`
+    read-only contract -- its own scoped arc, not bolted onto B-40's PR. **Council:** no -- mechanical
+    redesign once scoped, same implementation-discretion category as B-45; not an open spec question.
+  council: no -- narrow implementation-discretion follow-on, same category as B-45; not an open spec question
+  heading: '### B-46 · Cross-process ledger lock has a first-write TOCTOU on lazy sidecar provisioning
+    *(surfaced at B-40''s own PR, out-of-family Codex round 4 + advisor(), 2026-07-15)*'

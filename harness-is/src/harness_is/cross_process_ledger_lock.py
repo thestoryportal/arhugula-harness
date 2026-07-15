@@ -25,10 +25,25 @@ context managers below therefore degrade to a no-op (yield without locking):
 Windows sits at exact pre-B-40 parity (the in-process `threading.Lock`
 callers already hold around the same critical sections is unaffected and is
 cross-platform; only the *cross-process* dimension this module adds is
-unavailable). This is a registered gap, not a silent one — see the B-40
+unavailable). This is a registered gap, not a silent one — see the B-45
 follow-on forward-register row for genuine cross-platform locking (also
 covers the identical POSIX-only-`fcntl` gap already shipped at
 `harness_runtime.lifecycle.reconciler_pause_resume_substrate`).
+
+A second registered gap (B-46, out-of-family Codex round 4): the lock
+sidecar is provisioned lazily by whichever writer touches a ledger first,
+so a reader racing that very first writer can pass `cross_process_read_lock`'s
+"sidecar doesn't exist yet" check before the writer creates it, then read
+unguarded while that writer is mid-append. This is NOT a regression (every
+read was unguarded, always, before this module existed) and is narrower
+than it sounds (once any writer has ever created the sidecar, all
+subsequent reads/writes serialize correctly) — but it means the "closes
+the torn-read race" claim below only holds after a ledger's first write
+under this lock, not before. The durable fix is locking the canonical
+ledger file directly instead of a lazily-created sidecar, which removes
+the provisioning race entirely; that is a larger, `harness-inspect`
+compatibility-affecting redesign properly scoped to B-46, not bolted onto
+this module's first landing.
 """
 
 from __future__ import annotations
@@ -98,19 +113,24 @@ def cross_process_write_lock(canonical_path: Path) -> Generator[None, None, None
 def cross_process_read_lock(canonical_path: Path) -> Generator[None, None, None]:
     """Hold a shared same-host lock across a read, excluding a concurrent writer.
 
-    Blocks only while a writer holds `cross_process_write_lock` on the same
-    path, closing the torn/partial-line read race against a concurrent append.
+    Blocks while a writer holds `cross_process_write_lock` on the same path
+    IF the lock sidecar already exists — closing the torn/partial-line read
+    race against a concurrent append **once the ledger has been written at
+    least once under this lock**. The very first write/read race against a
+    brand-new ledger (no sidecar yet) is NOT closed by this function — see
+    the B-46 forward-register row (TOCTOU on lazy sidecar provisioning;
+    identical to the always-unlocked pre-B-40 behavior in that one narrow
+    window, so not a regression, but not the full guarantee either).
 
     Opens the lock sidecar read-only (`O_RDONLY`), NEVER `O_CREAT`: a read
     must stay genuinely side-effect free (Codex-caught, round 3 — an earlier
     version fell back to `O_CREAT` for a ledger with no sidecar yet, which
     also `mkdir`'d the parent directory, breaking `harness-inspect`'s no-writes
     read-only-CLI invariant and raising `PermissionError` against a read-only
-    parent). If the sidecar doesn't exist, no writer has ever appended under
-    this lock — there is nothing to synchronize against yet, so the read
-    proceeds unguarded (identical to pre-B-40 behavior; the very next writer
-    to append creates the sidecar, after which subsequent reads DO lock
-    against it).
+    parent). If the sidecar doesn't exist, the read proceeds unguarded
+    (identical to pre-B-40 behavior for this one window; the very next
+    writer to append creates the sidecar, after which subsequent reads DO
+    lock against it).
     """
     lock_path = _lock_file_path(canonical_path)
     if not lock_path.exists():
