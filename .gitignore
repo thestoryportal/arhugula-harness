@@ -16,6 +16,10 @@
 .harness/engine-recovery-segments/
 routing_manifest/
 
+# B-40: cross-process ledger advisory-lock sidecars (harness_is.cross_process_ledger_lock),
+# created next to any canonical ledger path (state.jsonl.lock, memory_ops.jsonl.lock, etc).
+.harness/**/*.lock
+
 # Python build artifacts
 __pycache__/
 *.pyc

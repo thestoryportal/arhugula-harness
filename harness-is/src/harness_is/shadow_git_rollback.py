@@ -31,6 +31,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict
 
+from harness_is.cross_process_ledger_lock import cross_process_write_lock
 from harness_is.jsonl_event_ledger_lifecycle import JsonlLedgerHandle
 from harness_is.state_ledger_entry_schema import (
     Actor,
@@ -100,11 +101,12 @@ def rollback_to_checkpoint(
 
     # Preserve the ledger bytes across the restore — the ledger is NOT rolled
     # back. Guarded by the same module-level write lock `append_ledger_entry`
-    # uses (acceptance #7's concurrent-writer serialization): without it, a
-    # concurrent append landing between the read and the restore-write below
-    # is silently overwritten and lost.
+    # uses (acceptance #7's concurrent-writer serialization) PLUS the same
+    # cross-process lock (B-40): without both, a concurrent append — from
+    # another thread OR another process — landing between the read and the
+    # restore-write below is silently overwritten and lost.
     ledger_path = ledger_handle.canonical_path
-    with ledger_write_lock():
+    with ledger_write_lock(), cross_process_write_lock(ledger_path):
         ledger_bytes = ledger_path.read_bytes() if ledger_path.exists() else None
 
         checkout = _git(repository_root, "checkout", shadow_ref, "--", ".")

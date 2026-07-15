@@ -26,6 +26,7 @@ from pathlib import Path
 from harness_core import DeploymentSurface, WorkloadClass
 from pydantic import BaseModel, ConfigDict
 
+from harness_is.cross_process_ledger_lock import cross_process_read_lock
 from harness_is.path_class_registry import PathClass
 from harness_is.path_resolver import PathResolver
 
@@ -74,7 +75,13 @@ def initialize_jsonl_event_ledger(
     if not path.exists():
         path.touch()
         return JsonlLedgerHandle(canonical_path=path, exists=True, entry_count=0)
-    entry_count = sum(1 for line in path.read_text().splitlines() if line.strip())
+    # B-40: same-host cross-process lock — this reads the same canonical file
+    # `append_ledger_entry` writes under `cross_process_write_lock`; without
+    # this, a concurrent resume/bootstrap can observe a torn/partial line and
+    # undercount `entry_count`, silently skipping the tamper-check gate at
+    # `harness_runtime.lifecycle.state_ledger.materialize_state_ledger`.
+    with cross_process_read_lock(path):
+        entry_count = sum(1 for line in path.read_text().splitlines() if line.strip())
     return JsonlLedgerHandle(canonical_path=path, exists=True, entry_count=entry_count)
 
 
@@ -91,7 +98,9 @@ def validate_jsonl_event_ledger_format(
     try:
         if handle.canonical_path.stat().st_size == 0:
             return LedgerFormatValidationResult.EMPTY
-        text = handle.canonical_path.read_text()
+        # B-40: same-host cross-process lock — see initialize_jsonl_event_ledger.
+        with cross_process_read_lock(handle.canonical_path):
+            text = handle.canonical_path.read_text()
     except OSError:
         return LedgerFormatValidationResult.IO_ERROR
     for line in text.splitlines():

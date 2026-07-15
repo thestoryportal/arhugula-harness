@@ -50,358 +50,689 @@
 # swapping statuses while the aggregate counts stay put (a plain count pin can't).
 # `tools/forward_register.py --check` is the CI gate.
 
+
 snapshot:
-  total: 45
+  total: 47
   open: 0
   design_substrate_gated: 5
-  registered_finding: 6
+  registered_finding: 7
   operator_gated: 2
   held: 1
-  closed: 31
-  identity_digest: "1039ec02c73366b0"
-  source: ".harness/post-phase-8-forward-register.md"
-
+  closed: 32
+  identity_digest: d91525c1e0543743
+  source: .harness/post-phase-8-forward-register.md
 items:
-  - id: B-1
-    title: "Layered capability-aware routing activation"
-    status: closed
-    summary: "R-300 multi-LLM routing activation — declarative layer live; the multi-provider exercise is B-2."
-    pr: "#213"
-    heading: "### B-1 · Layered capability-aware routing activation `⚖️ council-eligible`"
-
-  - id: B-2
-    title: "Multi-provider credentials + mixed-provider exercise"
-    status: closed
-    summary: "Deterministic fallback + live Anthropic->OpenAI and live Ollama exercise."
-    pr: "#281 + #283"
-    heading: "### B-2 · Multi-provider credentials + mixed-provider exercise"
-
-  - id: B-3
-    title: "Real TIER_2_CONTAINER sandbox execution (R-410)"
-    status: closed
-    summary: "Local Docker execution driver + live TIER_2 container e2e."
-    pr: "R-410"
-    heading: "### B-3 · Real TIER_2_CONTAINER sandbox execution (R-410) `⚖️ council-eligible`"
-
-  - id: B-4
-    title: "TIER_3 microVM + TIER_4 full-VM execution (R-411/R-412)"
-    status: closed
-    summary: "Docker+gVisor/runsc driver (R-411) + managed E2B full-VM driver (R-412)."
-    pr: "R-411/R-412"
-    heading: "### B-4 · TIER_3 microVM + TIER_4 full-VM execution (R-411 / R-412) `⚖️ council-eligible`"
-
-  - id: B-5
-    title: "SELF_HOSTED_SERVER + MANAGED_CLOUD deployment e2e (R-420/R-421)"
-    status: closed
-    summary: "Local self-hosted daemon+collector+keyring e2e; E2B+GCP Secret Manager+Cloud Run e2e."
-    pr: "R-420/R-421"
-    heading: "### B-5 · SELF_HOSTED_SERVER + MANAGED_CLOUD deployment e2e (R-420 / R-421)"
-
-  - id: B-6
-    title: "OTLP tail-keep collector-side validation (R-430)"
-    status: closed
-    summary: "Resolved by the R-420 local real-collector tail-keep live proof."
-    pr: "#326"
-    heading: "### B-6 · OTLP tail-keep preservation validation (R-430)"
-
-  - id: B-7
-    title: "Tier-level self-hosted secrets backend selector (R-440)"
-    status: closed
-    summary: "SELF_HOSTED keyring-only selector landed; cloud bootstrap-token is R-421."
-    pr: "R-440 (RESOLVED)"
-    heading: "### B-7 · Tier-level self-hosted secrets backend selector (R-440)"
-
-  - id: B-8
-    title: "Non-default tenant_id / non-SOLO persona_tier deployment"
-    status: closed
-    summary: "R-500 self-hosted multi-tenant live proof (redaction + tenant-scoped audit)."
-    pr: "#328"
-    heading: "### B-8 · Non-default `tenant_id` / non-SOLO `persona_tier` deployment `⚖️ council-eligible`"
-
-  - id: B-9
-    title: "OD-4: per-session redaction toggle + opaque-token tokenization"
-    status: closed
-    summary: "R-008 + batch-53 RESOLVED; runtime residual closed, live ledger back-flowed."
-    pr: "R-008"
-    heading: "### B-9 · OD-4: per-session redaction toggle (§13.1) + opaque-token tokenization (§13.2) `⚖️ council-eligible`"
-
-  - id: B-10
-    title: "Real external MCP server connection"
-    status: closed
-    summary: "R-800 RESOLVED; stdio + streamable-HTTP e2e live. api.run Gap D closed at PR #515."
-    pr: "#172, #515"
-    heading: "### B-10 · Real external MCP server connection"
-
-  - id: B-11
-    title: "Files API integration (AS-8e / CP-17)"
-    status: closed
-    summary: "R-810 RESOLVED — live Anthropic Files upload/reference/delete + Cloud Trace proof."
-    pr: "R-810"
-    heading: "### B-11 · Files API integration (AS-8e / CP-17)"
-
-  - id: B-12
-    title: "managed_agents integration (AS-8f)"
-    status: closed
-    summary: "R-820 RESOLVED by real Anthropic Managed Agents SDK/session live e2e."
-    pr: "#380"
-    heading: "### B-12 · managed_agents integration (AS-8f)"
-
-  - id: B-13
-    title: "Memory-tool production backend (CP-16)"
-    status: closed
-    summary: "Filesystem + SQLite + S3 + managed-PostgreSQL (Neon) backends live-proven."
-    pr: "R-830"
-    heading: "### B-13 · Memory-tool production backend (CP-16)"
-
-  - id: B-14
-    title: "CXA cross-axis seam completion (CXA-1..5)"
-    status: closed
-    summary: "All 5 CXA seams RETIRED (batch-53..57); mechanical wiring, no design tension."
-    pr: "batch-53..57"
-    heading: "## CXA — Cross-axis composition seam completion (B-14)"
-
-  - id: B-15
-    title: "Dashboard iteration-2 (R-XI-02/R-XI-03)"
-    status: closed
-    summary: "Both RESOLVED 2026-06-02; stale-open framing corrected 2026-07-14."
-    pr: "#235, #237"
-    heading: "### B-15 · Dashboard iteration-2 (R-XI-02 / R-XI-03) — **✅ CLOSED (stale-open correction, 2026-07-14)**"
-
-  - id: B-16
-    title: "Open architectural / speculative arcs (Surface X research)"
-    status: registered_finding
-    summary: "Deliberately unpadded standing bucket for not-yet-decomposed forward research."
-    close_out: "Operator-seeded when a specific research question crystallizes; no concrete item today."
-    council: "conditional — case-by-case, only if a named cross-domain tension surfaces"
-    heading: "### B-16 · Open architectural / speculative arcs"
-
-  - id: B-17
-    title: "ICM workspace-methodology adoption"
-    status: operator_gated
-    summary: "ICM_Alignment_Audit_v1.md landed; no adoption decided — 3 operator gates outstanding."
-    close_out: "Operator decides scope / file-size caps / L0-refactor appetite (audit §8) before any spec."
-    council: "conditional — nameable context-minimalism (C2-style) vs governance-completeness tension"
-    heading: "### B-17 · ICM workspace-methodology adoption *(appended 2026-06-04 at HEAD `ca2bc34`)*"
-
-  - id: B-18
-    title: "U-1 — cache_control breakpoint emission"
-    status: closed
-    summary: "BUILT 2026-07-10 across 5 slices (PRs #919-923); stale-open framing corrected 2026-07-14."
-    pr: "#919-#923"
-    heading: "### B-18 · U-1 — `cache_control` breakpoint emission *(NET-NEW, registered 2026-07-09)* — **✅ BUILT 2026-07-10 (stale-open correction, found 2026-07-14 at forward-register-schema grounding, out-of-family Codex)**"
-
-  - id: B-19
-    title: "breaker.cause + breaker.cooldown_ms ambient attrs"
-    status: closed
-    summary: "BUILT 2026-07-13 as breaker.tripped event attrs; cause vacuous-by-honest-design."
-    pr: "R-FS-2 Wave 4"
-    heading: "### B-19 · U-2 — breaker `breaker.cause` + `breaker.cooldown_ms` attributes *(NET-NEW, registered 2026-07-09; operator-discretionary)* — **✅ BUILT 2026-07-13**"
-
-  - id: B-20
-    title: "CP-side harness.breaker.* composition-mirror attribute-name drift"
-    status: closed
-    summary: "BUILT 2026-07-14 — 7 CP-side breaker schema names renamed/split/dropped to byte-match OD's canonical §7.1 names."
-    pr: "#994"
-    council: "no — mechanical once the target shape is decided (already known from OD's own schema)"
-    heading: "### B-20 · CP-side `harness.breaker.*` composition-mirror attribute-name drift *(NET-NEW, registered 2026-07-13 at Wave-5 hygiene grounding)* — **✅ BUILT 2026-07-14**"
-
-  - id: R-1
-    title: "Managed-cloud deployment-surface dispatch (confirmed-DEFERRED)"
-    status: held
-    summary: "AS-8f DEFER-INDEFINITELY (2026-05-28) reaffirmed 2026-07-09 — FULL-SPEC directive does not override this held decision."
-    heading: "### R-1 confirmed-DEFERRED · Managed-cloud deployment-surface dispatch"
-
-  - id: B-21
-    title: "PARALLELIZATION nested-child-pause capability gap"
-    status: closed
-    summary: "BUILT 2026-07-13 — PeerFanOutResumeState.paused_child_branches added, mirrors v1.45."
-    pr: "CP spec v1.97"
-    heading: "### B-21 · PARALLELIZATION nested-child-pause capability gap *(preflight HIGH #6, `workflow_driver.py:7787`)* — **✅ BUILT 2026-07-13**"
-
-  - id: B-22
-    title: "F5 real audit-signature backend seam"
-    status: closed
-    summary: "Seam scope CLOSED 2026-07-14 (fail-loud + SigningBackend protocol); concrete backend split to B-36."
-    pr: "#976"
-    heading: "### B-22 · F5 real audit-signature backend seam *(preflight CRITICAL #1 follow-on)* — **✅ CLOSED 2026-07-14 (seam scope only — see `B-36` for the split-off concrete-backend follow-on)**"
-
-  - id: B-23
-    title: "Cost-attribution composers fabricate their audit entry's IS-anchor"
-    status: closed
-    summary: "BUILT 2026-07-13 — shared compose_cost_f2_entry_core helper wired at all 4 composers."
-    pr: "cost_attribution_f2_write"
-    heading: "### B-23 · Cost-attribution composers fabricate their audit entry's IS-anchor *(preflight §4 \"most urgent\", `cp_audit_conversion.py:161`)* — **✅ BUILT 2026-07-13**"
-
-  - id: B-24
-    title: "secret_negative_observation.py wrong NegativeObservationSurface label"
-    status: design_substrate_gated
-    summary: "verify_sole_resolution_path hardcodes the wrong label; no enum value maps to workflow-manifest arrival. Zero production callers (latent)."
-    close_out: "Fork doc FILED 2026-07-14 (class_1_fork_secret_negative_observation_missing_enum_member.md) — awaiting operator ratification of Q1 (member name) + Q2 (bundle dispatch fix)."
-    council: "no — mechanical enum addition once the fork ratifies the member name"
-    heading: "### B-24 · `secret_negative_observation.py:127` wrong `NegativeObservationSurface` label — needs a new enum member *(design-substrate)*"
-
-  - id: B-25
-    title: "sandbox_tier_floor.py — is_deterministic_inhouse=False branch undefined"
-    status: design_substrate_gated
-    summary: "is_deterministic_inhouse threaded but never read; spec only defines the True-case floor."
-    close_out: "Fork doc FILED 2026-07-14 (class_1_fork_sandbox_tier_floor_deterministic_inhouse_false_undefined.md) — recommends a C10 vs C4 council convening before Q1 (candidate floor value) ratification."
-    council: "conditional — C10 blast-radius vs C4 tool-contract semantics, nameable once a floor value is proposed"
-    heading: "### B-25 · `sandbox_tier_floor.py:54` — `is_deterministic_inhouse=False` branch has no defined floor *(design-substrate)*"
-
-  - id: B-26
-    title: "five_axis_composition.py verify_rotation_6_steps hardcoded-True stub"
-    status: closed
-    summary: "BUILT 2026-07-13 — real IS hash-chain verification wired; 2 new genuine CXA P1 seams."
-    pr: "VERIFY_HASH_CHAIN_LINK"
-    heading: "### B-26 · `five_axis_composition.py:320` — `verify_rotation_6_steps` hardcoded-`True` stub — **✅ BUILT 2026-07-13**"
-
-  - id: B-27
-    title: "cli/app.py paused (HITL) workflow status shares failed's exit code"
-    status: design_substrate_gated
-    summary: "Runtime spec §14.18.2 exit-code table never assigned `paused` a disposition."
-    close_out: "Fork doc FILED 2026-07-14 (class_1_fork_cli_exit_code_paused_status_undefined.md) — awaiting operator ratification of Q1 (new exit code vs reuse) + Q2 (scope)."
-    council: "no — mechanical once the disposition is decided"
-    heading: "### B-27 · `cli/app.py:347` — `paused` (HITL) workflow status shares `failed`'s exit code *(design-substrate)*"
-
-  - id: B-28
-    title: "Test-quality findings untriaged (preflight report §6)"
-    status: closed
-    summary: "TRIAGED 2026-07-14 — 17 fixed / 1 stale / 1 discovered-and-registered (B-35)."
-    pr: "preflight §6 triage"
-    heading: "### B-28 · Test-quality findings untriaged *(preflight report §6 — 19 findings, 3 high / 10 medium / 6 low)* — **✅ TRIAGED 2026-07-14**"
-
-  - id: B-29
-    title: "Pre-existing F2-write gaps surfaced at B-23 (branch_metadata + shared clock)"
-    status: closed
-    summary: "Dormant sub_agent_dispatch.py-shared gaps: branch_metadata sidecar unpopulated; no shared time_source consumer."
-    close_out: "CLOSED 2026-07-15 (branch_metadata half only; time_source half split to B-44). The council-conditional framing was stale -- the carrier-ownership question was already resolved as a Class 1 fork on 2026-06-13 (.harness/class_1_fork_b1_branch_causality_route_x_vs_y.md, Route Y): CP spec v1.32 §25.13 names CP WorkflowDriver as sole producer, IS spec v1.8 §5.4 confirms it, and WorkflowDriver.append_branch_step_ledger_entry/append_branch_terminal_ledger_entry already populate branch_metadata at ~19 real production call sites. sub_agent_dispatch.py's dispatch-fact entry and the 4 cost-attribution composers are NOT branch-spawn/terminal entries per §25.13's scope, so their branch_metadata=None default is spec-conformant, not a gap. Added a one-line clarifying comment at both producer sites citing the spec so a future reader doesn't re-flag this. No behavior change; ruff clean; 155 tests pass."
-    council: "no — spec already resolved the carrier-ownership question at a prior cleared fork; no live tension to convene"
-    pr: "#pending"
-    heading: "### B-29 · Pre-existing F2-write gaps surfaced at B-23 (out-of-family Codex, not novel to B-23) *(registered 2026-07-13)*"
-
-  - id: B-30
-    title: "Cost-attribution disambiguator replay-semantics inconsistency"
-    status: registered_finding
-    summary: "Validator's F2 anchor write (only) IDEMPOTENT_NOOPs on a deterministic-disambiguator replay; tool/LLM/webhook always create a new F2 entry. The AUDIT-LEDGER append specifically is PROVEN to dedupe for LLM+JOURNAL_RESUME (existing witness test, on-disk audit: entry count only -- the run-scoped cost accumulator/RunResult.cost_attribution is NOT exercised by that test) and UNVERIFIED for the other 3 composers/engine classes (correction, 2026-07-15). NOT an undecided policy, but also not just a missing consumer: ADR-D6 v1.2 §1.5 + C-OD-14 §14.5.1 already specify a complete replay-dedup algorithm (harness_od.idempotency_join_dedup.dedupe_on_replay) with no production ingestion-layer caller anywhere in the codebase, AND all 4 composers hard-code engine_replay_disposition=NO_REPLAY with no override -- a producer-side gap in addition to the missing consumer."
-    close_out: "NOT closed -- sharpened, not council-eligible, not yet buildable. Personally verified (not just the grounding agent's paraphrase) that ADR-D6 v1.2 §1.5's algorithm is specified as ingest_span(span) -- a TRACE-INGESTION-time function operating on spans read from the observability pipeline -- not something a per-dispatch composer calls inline while producing its own F2 write. Wiring dedupe_on_replay directly into the 4 attribute_*_dispatch_cost composers (as an initial grounding pass recommended) would be a category error: the correct call site is an ingestion-layer consumer that doesn't exist in production yet, not merely an unimplemented wiring step inside the composers. Separately, the prior B-COST-REPLAY-DEDUP-WITNESS closure record (.harness/b-cost-replay-dedup-witness-closure-record.md, CLOSED GREEN no-fix) already verified the IS-layer content-addressed ledger write independently provides the real replay-dedup guarantee for the JOURNAL_RESUME/PURE_PATTERN_NO_ENGINE engine class, and its own scope note explicitly pre-commits any adjacent replay-dedup finding to register-don't-build, not a broadening of that arc. Webhook's fresh-uuid4-per-attempt billing is confirmed deliberate -- the actual rationale lives at webhook_delivery_composer.py:363-371's inline comment ('this method fires unconditionally on every invocation -- no idempotent skip at this layer. A fresh UUID per call guarantees each invocation gets its own F2 anchor'), an intentional out-of-family-Codex-round-5 fix, not an oversight to align away. Out-of-family Codex flagged three further nuances in THIS correction across three rounds, all addressed same-PR: (1) the paragraph above must not be read as settling whether validator's F2-key collision actually dedupes the BILLABLE cost event -- it only describes the F2 anchor identity write, a SEPARATE content-hash-addressed audit_writer.append whose own dedup depends on AuditPayload byte-identity. (2) A third mechanism exists: ALL 4 production cost-wrapper call sites unconditionally append the returned SpanCostRecord to a run-scoped accumulator (cost_record_sink), which api.py's _build_run_result rolls into RunResult.cost_attribution, bypassing both the F2 dedup and audit-ledger dedup. (3) Round-3 correction to both (1) and (2): test_journal_resume_completed_run_retry_does_not_double_emit_cost already drives attribute_llm_dispatch_cost twice under JOURNAL_RESUME and proves the audit-ledger layer DOES dedupe for LLM+JOURNAL_RESUME specifically -- 'unverified for any composer' was too strong; the real gap is the OTHER 3 composers and OTHER engine classes. And the run-scoped accumulator is FRESH per public run()/resume() invocation (api.py:900, COST_ACCUM_VAR.set(CostRecordAccumulator())) -- a crash-then-separate-resume-call does NOT carry the prior invocation's records forward, so the accumulator is NOT a confirmed cross-invocation dedup-failure layer; it only risks double-counting for repeated dispatches WITHIN one invocation or external aggregation across separate RunResults, neither established as a production concern. (4) Round-4 correction: calling the gap solely a missing ingestion consumer is itself incomplete -- verified all 4 attribute_*_dispatch_cost composers hard-code engine_replay_disposition=_DEFAULT_REPLAY_DISPOSITION (= ReplayDisposition.NO_REPLAY) with no parameter to carry the real disposition (cost_attribution_llm_dispatch.py:88,239; cost_attribution_tool_dispatch.py:90,295; cost_attribution_webhook_dispatch.py:65,204; cost_attribution_validator_dispatch.py:86,243). Even a built ingest_span consumer could never see CHECKPOINT_RESUME/RECONCILER_ITERATION/WAL_CONSUME from any composer today -- a producer-side wiring gap alongside the missing consumer. Close-out path once a real trigger exists: (1) resolve where ingest_span's production call site actually lives (or should be built) before touching any composer; (2) verify whether double-billing is an ACTUAL exercised risk for the durable engine classes (SAVE_POINT_CHECKPOINT/EVENT_SOURCED_REPLAY/RECONCILER_LOOP/WAL_SEGMENT) whose resume_at skip logic may already prevent re-dispatch of completed steps, mirroring the JOURNAL_RESUME finding; (3) extend the existing JOURNAL_RESUME+LLM audit-ledger witness pattern to the other 3 composers, and separately verify whether a within-invocation retry (not cross-invocation resume) can double-append to the accumulator in production; (4) thread the real engine_replay_disposition into all 4 composers so a future ingestion consumer can actually discriminate replay dispositions. Only then decide whether composer-level wiring is even the right fix, and at which layer. Mirrors the B-19/B-42 discipline against building speculative infrastructure ahead of a real, demonstrated consumer."
-    council: "no — a specified policy already exists (ADR-D6 v1.2 §1.5); the open question is call-site + live-risk + per-composer/per-engine-class verification, not a design fork"
-    heading: "### B-30 · Cost-attribution disambiguator replay-semantics inconsistency *(surfaced at B-23 round 6, advisor())*"
-
-  - id: B-31
-    title: "Paused-child resume guard does not validate child_workflow_id identity"
-    status: closed
-    summary: "Same-step_id/same-kind edit could swap the target child workflow past the resume guard undetected."
-    close_out: "Added child_workflow_id to PausedChildBranchResumeState (optional, byte-compat); resume guard now compares it against the re-supplied SUB_AGENT_DISPATCH payload via the existing _opaque_field convention. CP spec v1.98->v1.99 + clearance marker."
-    council: "no — mechanical carrier-completeness extension, no nameable cross-domain tension"
-    pr: "#1011"
-    heading: "### B-31 · Paused-child resume guard does not validate `child_workflow_id` identity *(surfaced at B-21, out-of-family Codex round 2)*"
-
-  - id: B-32
-    title: "Nested paused-child pause-reason propagation (pause_reason half only)"
-    status: closed
-    summary: "Parent pause_reason ignored a nested child's OWN HITL_PENDING pause, always defaulting to EXPLICIT_OPERATOR."
-    close_out: "SCOPE NARROWED from the original coupled finding after out-of-family Codex review caught 3 real bugs in a first attempt at the routing half (see B-39): (1) a naive 'any paused child -> HITL_PENDING' label mislabeled a nested EXPLICIT_OPERATOR pause -- fixed by checking child_snapshot.pause_reason directly at both PARALLELIZATION and ORCHESTRATOR_WORKERS/HIERARCHICAL_DELEGATION sites, any nested HITL_PENDING relabels, EFFECT_FENCE_AMBIGUOUS keeps top precedence. impl-to-cleared-spec (WorkflowPauseReason.HITL_PENDING's existing 'HITL gate opened; workflow paused awaiting operator response' semantic already covers a nested gate without extension) -- no CP spec delta needed. Mutation-probed both the true and false branches (contrasting-baseline + positive test); both confirmed load-bearing. A SECOND out-of-family Codex round then flagged the corrected label itself as a potential false-affordance (an operator seeing accurate HITL_PENDING might assume a single hitl_response safely resolves it even with >1 concurrently-paused child). Grounded via direct grep before deciding: pause_reason is read in exactly one non-telemetry place (this label-derivation code) and the composer's actual resume path (consume_and_clear) never branches on pause_reason at all -- no consumer auto-dispatches a response off this label, so the label is informational-only and safe to ship as corrected. Added an explicit code comment at both sites documenting this + cross-referencing B-39 so the limitation cannot be silently assumed away. The response-ROUTING half (multiple concurrently-paused children each getting their own operator response) is NOT closed here -- see B-39. CORRECTION (merge-gate 3-lens review): the original close_out claimed 'mutation-probed both branches at both sites' -- this was only true of the PARALLELIZATION site; the ORCHESTRATOR_WORKERS/HIERARCHICAL_DELEGATION site had ZERO test witness (test_workflow_driver_fanout_pause.py had no HITL_PENDING assertion at all). Fixed by adding a contrasting-baseline assertion to the existing test_cancellation_race_captures_paused_child_among_failing_siblings + a new positive test test_orchestrator_worker_child_hitl_pending_pause_labels_parent_hitl_pending, both mutation-probed (is -> is not flip at the second site's check correctly fails both new tests; restored, both pass). Also, spec conformance review found design-substrate/Spec_Control_Plane_v1_97.md Section21's registered-forward-work note still canonically asserted gaps (b)+(c) are 'coupled... travel together as one forward arc' -- stale-carry-text now contradicted by shipping (c) alone; closed via a CP spec delta (v1.99->v1.100) correcting that framing, mirroring the B-31/v1.99 precedent for closing a Section21-registered gap."
-    council: "no -- mechanical fix once the labeling logic was corrected; the routing half's council question is now moot per B-39's disposition"
-    pr: "#pending"
-    heading: "### B-32 · Nested paused-child pause-reason propagation *(surfaced at B-21, out-of-family Codex round 3; scope narrowed after a same-session Codex review of the first attempt)*"
-
-  - id: B-39
-    title: "Nested paused-child HITL-response ROUTING (per-child operator response delivery)"
-    status: design_substrate_gated
-    summary: "Two or more concurrently-paused peer/nested children share one run-level ResumeContextHolder; delivering each its OWN operator response safely is unresolved."
-    close_out: "A first attempt (ResumeContext.hitl_responses keyed by workflow_id, consumed via non-destructive peek()) was built, mutation-probed, and reviewed out-of-family -- Codex found 3 real defects, all confirmed correct on inspection: (1) peek-only never one-shot-consumes, so a later HITL-composed step sharing the same key would silently reuse a stale response; (2) workflow_id is NOT branch-unique -- fan-out siblings can dispatch the SAME child_workflow_id (the runtime already uses branch_path for exactly this disambiguation), so two paused siblings would collapse to one map entry; (3) [already split out as B-32, now closed]. The attempt was fully reverted (not shipped). Concrete design constraints for the next attempt: (a) the key must be branch-unique -- branch_path or an equivalent child-run-id derived value, NOT workflow_id alone; (b) delivery must be genuinely one-shot per key without racing concurrent siblings on the shared holder -- peek() alone is insufficient once one-shot semantics are required; (c) the actual delivery mechanism is unresolved -- execute_workflow/child_workflow_runner currently has NO resume_context parameter at all (only pause_snapshot_input), and effect_fence_resolution's own per-branch mechanism resolves PARENT-side then threads a single resolved value onto the child's StepExecutionContext -- that pattern does NOT carry into a recursive child's OWN internal re-entry the way HITL delivery needs, so the threading path itself needs designing, not just the map shape. Re-grounded 2026-07-15 (B-37 session, no-parking sweep): all 3 constraints CONFIRMED still accurate against current HEAD by direct read (ResumeContext still singular hitl_response only; consume_and_clear still whole-holder; execute_workflow/child_workflow_runner still carry zero resume_context threading surface). Spec_Control_Plane_v1_100.md's own change-note explicitly frames (c) as un-designed, not merely unimplemented -- status moved registered_finding -> design_substrate_gated to reflect this precisely (a Class 1 fork proposing the threading mechanism is the correct next step, before any code, per X-AL-3)."
-    council: "not yet re-evaluated -- the original C7/C8-vs-C1/C5 framing may no longer be the right lens once a concrete delivery mechanism is proposed; ground first per this register's own no-parking discipline before deciding"
-    heading: "### B-39 · Nested paused-child HITL-response ROUTING (per-child operator response delivery) *(split from B-32 after a same-session Codex review found the first routing attempt had 3 real defects; not shipped)*"
-
-  - id: B-33
-    title: "verify_rotation_6_steps cannot prove a rotation boundary occurred"
-    status: registered_finding
-    summary: "Generic hash-chain continuity check passes any intact ledger; cannot confirm a genuine rotation-pair boundary."
-    close_out: "File a Class 1 fork for an IS rotation-correlation carrier (mirrors OD §24.7); extend once B-36's backend lands."
-    council: "no for the carrier addition; B-36's own disposition governs the signing-backend half"
-    heading: "### B-33 · `verify_rotation_6_steps`'s hash-chain check cannot prove a rotation boundary occurred *(surfaced at B-26, out-of-family Codex rounds 1 + 5, `advisor()`-confirmed)*"
-
-  - id: B-34
-    title: "Concrete signature-representation gaps in the C-CP-20 §20.2.1 seam"
-    status: registered_finding
-    summary: "DER-vs-64-byte ECDSA-P256 encoding unenforced; CPSignedAuditLedgerEntry.audit_signature_value not JSON-serializable for real bytes."
-    close_out: "Validate signature byte-length per algorithm + add a reversible byte-encoding serializer, once a real backend exists (B-36)."
-    council: "no — mechanical once a real backend exists to test against"
-    heading: "### B-34 · Concrete signature-representation gaps in the C-CP-20 §20.2.1 seam *(surfaced at B-22 round 4, out-of-family Codex, `advisor()`-confirmed non-blocking)*"
-
-  - id: B-35
-    title: "test_qa_evidence_matrix.py / test_closure_gate.py orphaned from CI + 12 uncited contracts"
-    status: closed
-    summary: "12 contracts (C-IS-14 + 11 C-MEM-*) cite no test file; neither test module is wired into any CI job."
-    close_out: "Grounded each of the 12: C-IS-14 was a phantom/dead contract ID (runtime spec v1.93 change-note confirms the IS spec defines only C-IS-01..10 and 'prior v1 cited C-IS-11/14/15 which don't exist') -- moved closure_gate.py's local, incomplete DOCUMENTED_NON_CONTRACTS={C-IS-11} constant to a shared tools/semantic_overlay/overlay.py::DOCUMENTED_NON_CONTRACTS={C-IS-11,C-IS-14,C-IS-15} (single source of truth for both overlay.py's own contract_without_code orphan scan and qa_evidence_matrix.py's test-citation scan) and excluded it there. 10 of the 11 C-MEM-* contracts (04,05,06,11,12,13,14,15,17,19) already had a real, already-passing test exercising their behavior -- just needed a one-line contract-id citation added (several already had the id embedded in the test function name in snake_case, e.g. test_..._c_mem_17_..., just never in the hyphenated form the citation-scan regex needs). C-MEM-01 (the memory-plane-boundary architectural contract, no dedicated source module by design) was a genuine gap: added harness-runtime/tests/test_memory_plane_boundary.py with two new tests -- one proving native/standard-tools/prompt-packet all write to the SAME physical canonical-store ledger (mutation-probed: pointing one component at a different root correctly fails it), one proving promotion and injection are independently-settable policy decisions (mutation-probed against a real production-code coupling mutation). Also cited C-MEM-01 in CanonicalMemoryStore's own docstring, closing closure_gate.py's G1.3 orphan too (0 real, down from 2 -- G1.3 now fully PASSES, all 5 automatable Tier-1 predicates green). Wired both test modules + qa_evidence_matrix.py --check + closure_gate.py --check into a new CI job (q3-evidence-and-closure-gate), mirroring the existing arc-ledger/substitution-ledger/semantic-overlay job pattern. tools/test_qa_evidence_matrix.py's import style was also normalized to match its siblings' self-contained sys.path convention (its prior `from tools import X` package-relative import only worked from repo root, inconsistent with the working-directory: tools convention every other tools/test_*.py file already uses)."
-    council: "no — mechanical once each contract was grounded; no cross-domain tension"
-    pr: "#pending"
-    heading: "### B-35 · `tools/test_qa_evidence_matrix.py` / `test_closure_gate.py` are orphaned from CI + 12 contracts lack test-file citation *(surfaced during B-28 triage, 2026-07-14; closed same session as B-32)*"
-
-  - id: B-36
-    title: "Concrete F5 audit-signature backend selection"
-    status: operator_gated
-    summary: "B-22's seam is closed; no real signing backend exists yet. Blocks any MULTI_TENANT_COMPLIANCE deployment."
-    close_out: "Pick + provision a concrete prod-tech backend (needs a D-ADR + real cloud credentials); author the harness_runtime composition-root arc."
-    council: "conditional — C10 blast-radius vs C11 operator-loop/deployment-surface, live once a candidate backend is proposed"
-    heading: "### B-36 · Concrete F5 audit-signature backend selection *(split off `B-22` 2026-07-14, per operator direction — `B-22`'s seam is CLOSED, this is what remains)*"
-
-  - id: B-37
-    title: "Remote MCP streamable-HTTP transport residuals"
-    status: closed
-    summary: "Current (non-deprecated) streamable_http_client called with the old function's kwarg shape (latent TypeError once populated) + MCPClientConfig has no auth-credential field."
-    close_out: "CLOSED 2026-07-15. mcp_client_host.py's _http_connection_context now builds an httpx.AsyncClient from transport_config['headers'] and passes it via http_client= (streamablehttp_client left un-migrated per the register's own instruction); 3 stale docstrings naming the deprecated function fixed. MCPClientConfig gained auth_secret_name: str | None, resolved at stage-3a via the SAME ProviderSecretResolver.resolve_bootstrap_value(name) idiom U-RT-17/18 already use for LLM provider API keys (mcp_client_host_factory.py + stage_3a_cp_clients.py thread ctx.keyring_resolver through) rather than inventing a new credential shape; auth_present now wired end-to-end instead of hardcoded False. Mutation-probed both the http_client kwarg-shape fix and the fail-loud resolver guard against real production-code reversions."
-    council: "no — mechanical once a real remote-MCP credential-supply build opens; not urgent"
-    pr: "#1019"
-    heading: "### B-37 · Remote MCP streamable-HTTP transport residuals *(surfaced at `B-10`'s own `B-MCP-OAUTH-RS-ENFORCE` grounding, split out 2026-07-14 at forward-register-schema grounding; corrected 2026-07-14 round-3 out-of-family Codex — the original finding had the deprecated/current function names backwards)*"
-
-  - id: B-38
-    title: "Fine-grained provider-exception classifier for breaker.cause"
-    status: closed
-    summary: "breaker.cause stays vacuous (always None) until a real per-step rate_limit/auth_failure/5xx_streak classifier exists."
-    close_out: "CLOSED 2026-07-15. Added _classify_breaker_cause(exc) -> BreakerCause | None (retry_breaker_fallback.py) — duck-typed on .status_code (429->RATE_LIMIT, 401/403->AUTH_FAILURE, 500<=code<600->FIVE_XX_STREAK, else None), computed once per exception and wired into all 3 breaker.record_failure() call sites. Out-of-family Codex round 2 found the value never reached a real OTel span: emit_breaker_trip_span_event (harness_breaker_schema.py) built an EventEmission bookkeeping record but never called parent_span_ref.add_event(...) — confirmed a genuine local bug (not a systemic OTel-absence) by comparison against the sibling emit_drift_event, which does call add_event; fixed to match that established pattern, so harness.breaker.cause (and the other 8 §7.1 attributes) now actually lands on the real span. Mutation-probed against real production-code reversions (record_failure(cause=breaker_cause) -> record_failure(); the 500<=code<600 bound reverted to >=500) confirming the e2e/table tests genuinely fail. Split out B-41 (retry-routing classifier still misroutes AuthenticationError to TRANSIENT_RETRY, a known tracked divergence) and B-42 (FIVE_XX_STREAK tags by the terminal exception only, not a verified N-consecutive streak — an acknowledged MVP simplification per this row's own grounding, mirroring _classify_provider_exception's existing MVP discrimination) rather than folding either into this telemetry-only change."
-    council: "no — mechanical extension once opened; not urgent, speculative ahead of any consumer"
-    pr: "#1020"
-    heading: "### B-38 · Fine-grained provider-exception classifier for `breaker.cause` *(surfaced at `B-19`'s own close, split out 2026-07-14 at forward-register-schema grounding, out-of-family Codex)*"
-
-  - id: B-40
-    title: "Memory operation ledger has no cross-process write serialization"
-    status: registered_finding
-    summary: "append_memory_operation's hash-chain writer uses a process-local threading.Lock only; read_memory_operation_ledger's read is fully unlocked. Both gaps are real, spec-required, LIVE (two ordinary concurrent `harness run` invocations against the same repo already share the default memory root -- no exotic multiprocessing needed), and buildable now -- no fork, no council. Rounds 1-3 of this arc's self-correction each wrongly downgraded this (speculative, then an open interpretive fork, then dormant); a fourth correction (2026-07-15, out-of-family Codex + advisor()) restores the face-value reading: a genuine, live, unimplemented requirement with the mechanism already spec-authorized. See close_out."
-    close_out: "THIRD AND FINAL CORRECTION 2026-07-15 (out-of-family Codex round 2 + advisor(), correcting round 2's own overclaim): round 2 wrongly reclassified this design_substrate_gated on the theory that whether C-MEM-08's 'concurrent writers' covers cross-process/cross-worktree writers was an open interpretive question needing a Class 1 fork. It is NOT open -- verified directly against Spec_Information_Substrate_v1.md: C-IS-07 §7.3 states 'the C3-pole append-only write contract serializes writers' (unconditional); C-IS-09 §9.3 'Cross-worktree writer serialization' explicitly REQUIRES 'concurrent writes across sibling worktrees against the same .git storage backend are serialized'; §9.4 defers only the MECHANISM ('specific cross-worktree writer-serialization mechanism (advisory lock / leader-election / single-threaded-write enforcer)') to implementation discretion, same pattern as IS §7.4 for the memory ledger specifically. Round 2 conflated this settled within-worktree-isolation-scope requirement with §9.4's separate, still-open 'Multi-writer scaling BEYOND worktree-isolation requires a downstream D-ADR' clause -- that D-ADR-deferred tier is a different, larger question (true distributed/cross-host scale) and does not gate this row. Corrected disposition: registered_finding, buildable now, no fork and no council -- requirement is settled (C-IS-09 §9.3 + C-MEM-08), mechanism is implementation discretion (§9.4), so this is impl-to-cleared-spec, not X-AL-3. Both real gaps restored to scope (round 1 dropped the read-side race; round 2 kept it in 'What it is' but neither of its close-out options addressed it): (1) append_memory_operation's threading.Lock does not serialize across OS processes/worktrees -- needs a cross-process mechanism per §9.4's own discretion list; (2) read_memory_operation_ledger's unlocked path.read_text() can observe a torn/partial line during a concurrent append -- needs reader coordination or tolerant parsing, not just a writer-side fix. Axis-wide: memory_operation_ledger.py and state_ledger_write.py share the identical writer pattern, so any fix must cover both, not memory-ledger-only. FOURTH CORRECTION (2026-07-15, out-of-family Codex round 3): 'no live trigger, dormant' was ALSO wrong -- verified zero internal multiprocessing/subprocess.Popen/ProcessPoolExecutor/os.fork hits across harness-*/src, but that only rules out the harness spawning its OWN child processes; it does not rule out two independent, externally-launched, fully-supported CLI invocations. RuntimeConfig.memory.enabled defaults True and memory.root_path defaults to <repository_root>/.harness/memory (types.py:1504-1508; bound at automatic_memory.py:114) -- so two ordinary concurrent `harness run` invocations against the SAME repository (e.g. two terminals, two CI runners, no exotic multiprocess code required) already resolve to the identical canonical memory ledger today. This is a LIVE, directly reachable gap under ordinary usage, not a dormant one gated on some future architecture. Per this session's standing discipline, the actual build (mechanism choice, both-ledger fix, read-side fix, genuine multi-process test coverage replacing the thread-only U-MEM-03 witness, merge-gate 3-lens since this is now code) is deliberately sequenced as its OWN follow-on code arc, not bolted onto this register-only PR -- the mechanism has real texture (fcntl.flock is POSIX-only and may not serialize if the .git backend ever lives on network storage; 'single-threaded-write enforcer' per §9.4 is an architectural write-dispatch change, not a local edit) that deserves dedicated engineering, not loop-momentum shortcuts."
-    council: "no -- requirement settled (C-IS-09 §9.3 + C-MEM-08), mechanism is implementation discretion (§9.4); this is impl-to-cleared-spec, buildable directly in a follow-on code arc"
-    heading: "### B-40 · Memory operation ledger has no cross-process write serialization *(surfaced at B-35's merge-gate concurrency lens, 2026-07-15; rounds 1-3 of self-correction each wrongly downgraded this; round 4 (out-of-family Codex + advisor(), 2026-07-15) restores it as a real, LIVE, buildable, spec-settled gap — follow-on code arc owed)*"
-
-  - id: B-41
-    title: "_classify_provider_exception misroutes AuthenticationError to TRANSIENT_RETRY"
-    status: closed
-    summary: "The retry classifier treats an SDK AuthenticationError (401/403) as TRANSIENT_RETRY, running the full retry staircase before ever escalating — the new B-38 breaker.cause telemetry classifier correctly tags the SAME exception AUTH_FAILURE, so the two classifiers now visibly disagree on one real exception shape."
-    close_out: "CLOSED 2026-07-15. Verified against Spec_Harness_Runtime_v1.md v1.99 (canonical HEAD) directly: §14.5's C-RT-15 fail-class table states RT-FAIL-PROVIDER-AUTH (raw SDK auth error, 401/403, not a harness wrapper type) is \"Raise unmodified\"; §14.6 D2 + its own narrative both say AUTH is fail-fast. The code contradicted its own docstring (which already claimed this). A straightforward conformance fix, not a design decision -- no fork needed. Added a status_code in (401, 403) duck-typed guard to _classify_provider_exception, placed after the wrapper-type check and before the TRANSIENT_RETRY catch-all -- deliberately NOT reusing _classify_breaker_cause so the two classifiers' control-flow contracts stay independent. Closes B-38's noted divergence as a side effect (both classifiers now agree on AUTH). Added a fail-fast witness test (asserts the SECOND call lands on candidate 1, not a retried candidate 0 -- a naive len(calls)==2 check does not discriminate fail-fast from retry-then-succeed) and a regression-guard test proving 429/5xx still retry (guards against an overly-broad status_code is not None mutation). Both mutation-probed against real production-code reversions."
-    council: "no — mechanical conformance fix, spec was unambiguous"
-    pr: "#1021"
-    heading: "### B-41 · `_classify_provider_exception` misroutes AuthenticationError to TRANSIENT_RETRY *(surfaced at B-38 grounding, 2026-07-15, advisor()-flagged)*"
-
-  - id: B-42
-    title: "breaker.cause's FIVE_XX_STREAK is tagged by the terminal exception only, not a verified streak"
-    status: closed
-    summary: "_classify_breaker_cause tags FIVE_XX_STREAK from a single last-attempt 5xx status code; BreakerStateMachine tracks only an aggregate fail_count, not a per-cause history, so a trip after a mixed rate-limit/auth/5xx failure sequence still reads FIVE_XX_STREAK from the terminal exception alone, which can misrepresent what actually happened across the attempt sequence."
-    close_out: "CLOSED 2026-07-15. Grounded directly against OD spec Spec_Operational_Discipline_v1_32.md §7.1 (only requires \"the classified trip-cause, when known\" -- no streak-verification mandate) plus BreakerStateMachine's own source (only an aggregate fail_count, no per-cause history) and confirmed no live consumer reads harness.breaker.cause today -- chose disposition (b) from this row's own close-out options: a documentation-only clarification, not new per-cause tracking infrastructure (which would be speculative ahead of any consumer, the same discipline the B-19 redundancy analysis already established). Added a clarifying paragraph to BreakerCause's docstring in harness_breaker_schema.py stating FIVE_XX_STREAK is tagged from a single terminal 5xx exception, not a verified N-consecutive streak, mirroring the equivalent clarification _classify_breaker_cause's own docstring in retry_breaker_fallback.py already carried since B-38's original landing. The spec-committed enum value (5xx_streak) is UNCHANGED -- only the docstring's description of its derivation is now precise. No behavior/test change; ruff clean; OD breaker test suite (30 tests) still green. Adjacent finding (OD spec v1.32 §7.1's own prose still describes breaker.cause as \"vacuous-today ... absent from every emitted event,\" which is now stale since B-38 populated it for 3 of 4 values) is OUT OF SCOPE for this row -- registered separately as B-43 (design_substrate_gated) since fixing spec prose is a design-substrate edit requiring design-phase posture, not a Phase-7 code fix."
-    council: "no — mechanical once grounded; spec text was unambiguous on the non-mandate"
-    pr: "#1022"
-    heading: "### B-42 · `breaker.cause`'s `FIVE_XX_STREAK` is tagged by the terminal exception only, not a verified streak *(surfaced at B-38's own PR, out-of-family Codex round 1, 2026-07-15)*"
-
-  - id: B-43
-    title: "OD spec v1.32 §7.1 prose still describes harness.breaker.cause as vacuous-today, stale since B-38"
-    status: design_substrate_gated
-    summary: "Spec_Operational_Discipline_v1_32.md §7.1's harness.breaker.cause row states: \"Vacuous-today, honestly documented ... the attribute is present in the schema (forward-compatible typed slot) and absent from every emitted event until a follow-on classifier arc supplies real signal.\" B-38 (PR #1020) landed exactly that follow-on classifier -- _classify_breaker_cause now populates RATE_LIMIT/AUTH_FAILURE/FIVE_XX_STREAK at all 3 real record_failure() call sites and the attribute reaches the real span. The spec prose was never updated to reflect this and is now factually wrong about current runtime behavior for 3 of the 4 enum values (CAPABILITY_SHORTFALL remains genuinely vacuous, per B-38's own grounding)."
-    close_out: "NOT closed -- editing design-substrate/Spec_Operational_Discipline_v1_32.md requires design-phase posture (workspace CLAUDE.md §11) plus a clearance marker (§4.5), not a Phase-7 docstring fix; bundling it into B-42's code-only PR would trip the X-AL-3 CI guard (design-substrate edit without back-flow doc) and create a mixed-posture PR per §11.2's explicit halt-and-ask case. The same stale-vacuous framing likely also appears at harness-od/CLAUDE.md §1.2 (spec-pointer summary) and §4.1 (graduation-note context) -- both mode-agnostic, not design-substrate, so those ARE Phase-7-editable, but were deliberately left untouched here to keep this a pure registration pass; a future design-phase pass on the spec itself should sweep all copies at once rather than fixing them piecemeal across postures. Council: no -- this is a narrow prose-accuracy delta over an already-cleared spec version (v1.32 stays canonical; likely a v1.33 ADDITIVE prose-only delta), not a contract change."
-    council: "no — prose-accuracy delta over a cleared spec, not a contract change; needs design-phase posture, not council"
-    heading: "### B-43 · OD spec v1.32 §7.1 prose still describes `harness.breaker.cause` as vacuous-today, stale since B-38 *(surfaced at B-42 grounding, 2026-07-15, advisor()-flagged)*"
-
-  - id: B-44
-    title: "No production bootstrap site injects a non-default time_source clock"
-    status: registered_finding
-    summary: "RuntimeAuditLedgerWriter + RuntimeSubAgentDispatcher support time_source injection, and the shared compose_cost_f2_entry_core helper accepts one too, but none of the 4 attribute_*_dispatch_cost composer functions (tool/llm/webhook/validator) expose a time_source parameter of their own -- they call the helper without one, so it always defaults to datetime.now(UTC). No production bootstrap site (stage_4_od.py:62, stage_5_loop_init.py:596) injects a non-default clock either -- the flagged NonMonotonicTimestampError failure mode has no live trigger today."
-    close_out: "Thread an optional time_source parameter through each of the 4 attribute_*_dispatch_cost composer signatures (currently they don't have one at all) down to the already-time_source-accepting compose_cost_f2_entry_core helper, plus the bootstrap sites, once a real deterministic-clock consumer surfaces (e.g. a multi-writer clock-skew test). Mirrors the workspace's established B-19/B-42 discipline against building speculative infrastructure ahead of a real consumer."
-    council: "no — mechanical once a consumer exists; not urgent, genuinely dormant today"
-    heading: "### B-44 · No production bootstrap site injects a non-default `time_source` clock *(split from B-29, 2026-07-15)*"
+- id: B-1
+  title: Layered capability-aware routing activation
+  status: closed
+  summary: R-300 multi-LLM routing activation — declarative layer live; the multi-provider exercise is
+    B-2.
+  pr: '#213'
+  heading: '### B-1 · Layered capability-aware routing activation `⚖️ council-eligible`'
+- id: B-2
+  title: Multi-provider credentials + mixed-provider exercise
+  status: closed
+  summary: Deterministic fallback + live Anthropic->OpenAI and live Ollama exercise.
+  pr: '#281 + #283'
+  heading: '### B-2 · Multi-provider credentials + mixed-provider exercise'
+- id: B-3
+  title: Real TIER_2_CONTAINER sandbox execution (R-410)
+  status: closed
+  summary: Local Docker execution driver + live TIER_2 container e2e.
+  pr: R-410
+  heading: '### B-3 · Real TIER_2_CONTAINER sandbox execution (R-410) `⚖️ council-eligible`'
+- id: B-4
+  title: TIER_3 microVM + TIER_4 full-VM execution (R-411/R-412)
+  status: closed
+  summary: Docker+gVisor/runsc driver (R-411) + managed E2B full-VM driver (R-412).
+  pr: R-411/R-412
+  heading: '### B-4 · TIER_3 microVM + TIER_4 full-VM execution (R-411 / R-412) `⚖️ council-eligible`'
+- id: B-5
+  title: SELF_HOSTED_SERVER + MANAGED_CLOUD deployment e2e (R-420/R-421)
+  status: closed
+  summary: Local self-hosted daemon+collector+keyring e2e; E2B+GCP Secret Manager+Cloud Run e2e.
+  pr: R-420/R-421
+  heading: '### B-5 · SELF_HOSTED_SERVER + MANAGED_CLOUD deployment e2e (R-420 / R-421)'
+- id: B-6
+  title: OTLP tail-keep collector-side validation (R-430)
+  status: closed
+  summary: Resolved by the R-420 local real-collector tail-keep live proof.
+  pr: '#326'
+  heading: '### B-6 · OTLP tail-keep preservation validation (R-430)'
+- id: B-7
+  title: Tier-level self-hosted secrets backend selector (R-440)
+  status: closed
+  summary: SELF_HOSTED keyring-only selector landed; cloud bootstrap-token is R-421.
+  pr: R-440 (RESOLVED)
+  heading: '### B-7 · Tier-level self-hosted secrets backend selector (R-440)'
+- id: B-8
+  title: Non-default tenant_id / non-SOLO persona_tier deployment
+  status: closed
+  summary: R-500 self-hosted multi-tenant live proof (redaction + tenant-scoped audit).
+  pr: '#328'
+  heading: '### B-8 · Non-default `tenant_id` / non-SOLO `persona_tier` deployment `⚖️ council-eligible`'
+- id: B-9
+  title: 'OD-4: per-session redaction toggle + opaque-token tokenization'
+  status: closed
+  summary: R-008 + batch-53 RESOLVED; runtime residual closed, live ledger back-flowed.
+  pr: R-008
+  heading: '### B-9 · OD-4: per-session redaction toggle (§13.1) + opaque-token tokenization (§13.2) `⚖️
+    council-eligible`'
+- id: B-10
+  title: Real external MCP server connection
+  status: closed
+  summary: 'R-800 RESOLVED; stdio + streamable-HTTP e2e live. api.run Gap D closed at PR #515.'
+  pr: '#172, #515'
+  heading: '### B-10 · Real external MCP server connection'
+- id: B-11
+  title: Files API integration (AS-8e / CP-17)
+  status: closed
+  summary: R-810 RESOLVED — live Anthropic Files upload/reference/delete + Cloud Trace proof.
+  pr: R-810
+  heading: '### B-11 · Files API integration (AS-8e / CP-17)'
+- id: B-12
+  title: managed_agents integration (AS-8f)
+  status: closed
+  summary: R-820 RESOLVED by real Anthropic Managed Agents SDK/session live e2e.
+  pr: '#380'
+  heading: '### B-12 · managed_agents integration (AS-8f)'
+- id: B-13
+  title: Memory-tool production backend (CP-16)
+  status: closed
+  summary: Filesystem + SQLite + S3 + managed-PostgreSQL (Neon) backends live-proven.
+  pr: R-830
+  heading: '### B-13 · Memory-tool production backend (CP-16)'
+- id: B-14
+  title: CXA cross-axis seam completion (CXA-1..5)
+  status: closed
+  summary: All 5 CXA seams RETIRED (batch-53..57); mechanical wiring, no design tension.
+  pr: batch-53..57
+  heading: '## CXA — Cross-axis composition seam completion (B-14)'
+- id: B-15
+  title: Dashboard iteration-2 (R-XI-02/R-XI-03)
+  status: closed
+  summary: Both RESOLVED 2026-06-02; stale-open framing corrected 2026-07-14.
+  pr: '#235, #237'
+  heading: '### B-15 · Dashboard iteration-2 (R-XI-02 / R-XI-03) — **✅ CLOSED (stale-open correction,
+    2026-07-14)**'
+- id: B-16
+  title: Open architectural / speculative arcs (Surface X research)
+  status: registered_finding
+  summary: Deliberately unpadded standing bucket for not-yet-decomposed forward research.
+  close_out: Operator-seeded when a specific research question crystallizes; no concrete item today.
+  council: conditional — case-by-case, only if a named cross-domain tension surfaces
+  heading: '### B-16 · Open architectural / speculative arcs'
+- id: B-17
+  title: ICM workspace-methodology adoption
+  status: operator_gated
+  summary: ICM_Alignment_Audit_v1.md landed; no adoption decided — 3 operator gates outstanding.
+  close_out: Operator decides scope / file-size caps / L0-refactor appetite (audit §8) before any spec.
+  council: conditional — nameable context-minimalism (C2-style) vs governance-completeness tension
+  heading: '### B-17 · ICM workspace-methodology adoption *(appended 2026-06-04 at HEAD `ca2bc34`)*'
+- id: B-18
+  title: U-1 — cache_control breakpoint emission
+  status: closed
+  summary: 'BUILT 2026-07-10 across 5 slices (PRs #919-923); stale-open framing corrected 2026-07-14.'
+  pr: '#919-#923'
+  heading: '### B-18 · U-1 — `cache_control` breakpoint emission *(NET-NEW, registered 2026-07-09)* —
+    **✅ BUILT 2026-07-10 (stale-open correction, found 2026-07-14 at forward-register-schema grounding,
+    out-of-family Codex)**'
+- id: B-19
+  title: breaker.cause + breaker.cooldown_ms ambient attrs
+  status: closed
+  summary: BUILT 2026-07-13 as breaker.tripped event attrs; cause vacuous-by-honest-design.
+  pr: R-FS-2 Wave 4
+  heading: '### B-19 · U-2 — breaker `breaker.cause` + `breaker.cooldown_ms` attributes *(NET-NEW, registered
+    2026-07-09; operator-discretionary)* — **✅ BUILT 2026-07-13**'
+- id: B-20
+  title: CP-side harness.breaker.* composition-mirror attribute-name drift
+  status: closed
+  summary: BUILT 2026-07-14 — 7 CP-side breaker schema names renamed/split/dropped to byte-match OD's
+    canonical §7.1 names.
+  pr: '#994'
+  council: no — mechanical once the target shape is decided (already known from OD's own schema)
+  heading: '### B-20 · CP-side `harness.breaker.*` composition-mirror attribute-name drift *(NET-NEW,
+    registered 2026-07-13 at Wave-5 hygiene grounding)* — **✅ BUILT 2026-07-14**'
+- id: R-1
+  title: Managed-cloud deployment-surface dispatch (confirmed-DEFERRED)
+  status: held
+  summary: AS-8f DEFER-INDEFINITELY (2026-05-28) reaffirmed 2026-07-09 — FULL-SPEC directive does not
+    override this held decision.
+  heading: '### R-1 confirmed-DEFERRED · Managed-cloud deployment-surface dispatch'
+- id: B-21
+  title: PARALLELIZATION nested-child-pause capability gap
+  status: closed
+  summary: BUILT 2026-07-13 — PeerFanOutResumeState.paused_child_branches added, mirrors v1.45.
+  pr: CP spec v1.97
+  heading: '### B-21 · PARALLELIZATION nested-child-pause capability gap *(preflight HIGH #6, `workflow_driver.py:7787`)*
+    — **✅ BUILT 2026-07-13**'
+- id: B-22
+  title: F5 real audit-signature backend seam
+  status: closed
+  summary: Seam scope CLOSED 2026-07-14 (fail-loud + SigningBackend protocol); concrete backend split
+    to B-36.
+  pr: '#976'
+  heading: '### B-22 · F5 real audit-signature backend seam *(preflight CRITICAL #1 follow-on)* — **✅
+    CLOSED 2026-07-14 (seam scope only — see `B-36` for the split-off concrete-backend follow-on)**'
+- id: B-23
+  title: Cost-attribution composers fabricate their audit entry's IS-anchor
+  status: closed
+  summary: BUILT 2026-07-13 — shared compose_cost_f2_entry_core helper wired at all 4 composers.
+  pr: cost_attribution_f2_write
+  heading: '### B-23 · Cost-attribution composers fabricate their audit entry''s IS-anchor *(preflight
+    §4 "most urgent", `cp_audit_conversion.py:161`)* — **✅ BUILT 2026-07-13**'
+- id: B-24
+  title: secret_negative_observation.py wrong NegativeObservationSurface label
+  status: design_substrate_gated
+  summary: verify_sole_resolution_path hardcodes the wrong label; no enum value maps to workflow-manifest
+    arrival. Zero production callers (latent).
+  close_out: Fork doc FILED 2026-07-14 (class_1_fork_secret_negative_observation_missing_enum_member.md)
+    — awaiting operator ratification of Q1 (member name) + Q2 (bundle dispatch fix).
+  council: no — mechanical enum addition once the fork ratifies the member name
+  heading: '### B-24 · `secret_negative_observation.py:127` wrong `NegativeObservationSurface` label —
+    needs a new enum member *(design-substrate)*'
+- id: B-25
+  title: sandbox_tier_floor.py — is_deterministic_inhouse=False branch undefined
+  status: design_substrate_gated
+  summary: is_deterministic_inhouse threaded but never read; spec only defines the True-case floor.
+  close_out: Fork doc FILED 2026-07-14 (class_1_fork_sandbox_tier_floor_deterministic_inhouse_false_undefined.md)
+    — recommends a C10 vs C4 council convening before Q1 (candidate floor value) ratification.
+  council: conditional — C10 blast-radius vs C4 tool-contract semantics, nameable once a floor value is
+    proposed
+  heading: '### B-25 · `sandbox_tier_floor.py:54` — `is_deterministic_inhouse=False` branch has no defined
+    floor *(design-substrate)*'
+- id: B-26
+  title: five_axis_composition.py verify_rotation_6_steps hardcoded-True stub
+  status: closed
+  summary: BUILT 2026-07-13 — real IS hash-chain verification wired; 2 new genuine CXA P1 seams.
+  pr: VERIFY_HASH_CHAIN_LINK
+  heading: '### B-26 · `five_axis_composition.py:320` — `verify_rotation_6_steps` hardcoded-`True` stub
+    — **✅ BUILT 2026-07-13**'
+- id: B-27
+  title: cli/app.py paused (HITL) workflow status shares failed's exit code
+  status: design_substrate_gated
+  summary: Runtime spec §14.18.2 exit-code table never assigned `paused` a disposition.
+  close_out: Fork doc FILED 2026-07-14 (class_1_fork_cli_exit_code_paused_status_undefined.md) — awaiting
+    operator ratification of Q1 (new exit code vs reuse) + Q2 (scope).
+  council: no — mechanical once the disposition is decided
+  heading: '### B-27 · `cli/app.py:347` — `paused` (HITL) workflow status shares `failed`''s exit code
+    *(design-substrate)*'
+- id: B-28
+  title: Test-quality findings untriaged (preflight report §6)
+  status: closed
+  summary: TRIAGED 2026-07-14 — 17 fixed / 1 stale / 1 discovered-and-registered (B-35).
+  pr: preflight §6 triage
+  heading: '### B-28 · Test-quality findings untriaged *(preflight report §6 — 19 findings, 3 high / 10
+    medium / 6 low)* — **✅ TRIAGED 2026-07-14**'
+- id: B-29
+  title: Pre-existing F2-write gaps surfaced at B-23 (branch_metadata + shared clock)
+  status: closed
+  summary: 'Dormant sub_agent_dispatch.py-shared gaps: branch_metadata sidecar unpopulated; no shared
+    time_source consumer.'
+  close_out: 'CLOSED 2026-07-15 (branch_metadata half only; time_source half split to B-44). The council-conditional
+    framing was stale -- the carrier-ownership question was already resolved as a Class 1 fork on 2026-06-13
+    (.harness/class_1_fork_b1_branch_causality_route_x_vs_y.md, Route Y): CP spec v1.32 §25.13 names CP
+    WorkflowDriver as sole producer, IS spec v1.8 §5.4 confirms it, and WorkflowDriver.append_branch_step_ledger_entry/append_branch_terminal_ledger_entry
+    already populate branch_metadata at ~19 real production call sites. sub_agent_dispatch.py''s dispatch-fact
+    entry and the 4 cost-attribution composers are NOT branch-spawn/terminal entries per §25.13''s scope,
+    so their branch_metadata=None default is spec-conformant, not a gap. Added a one-line clarifying comment
+    at both producer sites citing the spec so a future reader doesn''t re-flag this. No behavior change;
+    ruff clean; 155 tests pass.'
+  council: no — spec already resolved the carrier-ownership question at a prior cleared fork; no live
+    tension to convene
+  pr: '#pending'
+  heading: '### B-29 · Pre-existing F2-write gaps surfaced at B-23 (out-of-family Codex, not novel to
+    B-23) *(registered 2026-07-13)*'
+- id: B-30
+  title: Cost-attribution disambiguator replay-semantics inconsistency
+  status: registered_finding
+  summary: 'Validator''s F2 anchor write (only) IDEMPOTENT_NOOPs on a deterministic-disambiguator replay;
+    tool/LLM/webhook always create a new F2 entry. The AUDIT-LEDGER append specifically is PROVEN to dedupe
+    for LLM+JOURNAL_RESUME (existing witness test, on-disk audit: entry count only -- the run-scoped cost
+    accumulator/RunResult.cost_attribution is NOT exercised by that test) and UNVERIFIED for the other
+    3 composers/engine classes (correction, 2026-07-15). NOT an undecided policy, but also not just a
+    missing consumer: ADR-D6 v1.2 §1.5 + C-OD-14 §14.5.1 already specify a complete replay-dedup algorithm
+    (harness_od.idempotency_join_dedup.dedupe_on_replay) with no production ingestion-layer caller anywhere
+    in the codebase, AND all 4 composers hard-code engine_replay_disposition=NO_REPLAY with no override
+    -- a producer-side gap in addition to the missing consumer.'
+  close_out: 'NOT closed -- sharpened, not council-eligible, not yet buildable. Personally verified (not
+    just the grounding agent''s paraphrase) that ADR-D6 v1.2 §1.5''s algorithm is specified as ingest_span(span)
+    -- a TRACE-INGESTION-time function operating on spans read from the observability pipeline -- not
+    something a per-dispatch composer calls inline while producing its own F2 write. Wiring dedupe_on_replay
+    directly into the 4 attribute_*_dispatch_cost composers (as an initial grounding pass recommended)
+    would be a category error: the correct call site is an ingestion-layer consumer that doesn''t exist
+    in production yet, not merely an unimplemented wiring step inside the composers. Separately, the prior
+    B-COST-REPLAY-DEDUP-WITNESS closure record (.harness/b-cost-replay-dedup-witness-closure-record.md,
+    CLOSED GREEN no-fix) already verified the IS-layer content-addressed ledger write independently provides
+    the real replay-dedup guarantee for the JOURNAL_RESUME/PURE_PATTERN_NO_ENGINE engine class, and its
+    own scope note explicitly pre-commits any adjacent replay-dedup finding to register-don''t-build,
+    not a broadening of that arc. Webhook''s fresh-uuid4-per-attempt billing is confirmed deliberate --
+    the actual rationale lives at webhook_delivery_composer.py:363-371''s inline comment (''this method
+    fires unconditionally on every invocation -- no idempotent skip at this layer. A fresh UUID per call
+    guarantees each invocation gets its own F2 anchor''), an intentional out-of-family-Codex-round-5 fix,
+    not an oversight to align away. Out-of-family Codex flagged three further nuances in THIS correction
+    across three rounds, all addressed same-PR: (1) the paragraph above must not be read as settling whether
+    validator''s F2-key collision actually dedupes the BILLABLE cost event -- it only describes the F2
+    anchor identity write, a SEPARATE content-hash-addressed audit_writer.append whose own dedup depends
+    on AuditPayload byte-identity. (2) A third mechanism exists: ALL 4 production cost-wrapper call sites
+    unconditionally append the returned SpanCostRecord to a run-scoped accumulator (cost_record_sink),
+    which api.py''s _build_run_result rolls into RunResult.cost_attribution, bypassing both the F2 dedup
+    and audit-ledger dedup. (3) Round-3 correction to both (1) and (2): test_journal_resume_completed_run_retry_does_not_double_emit_cost
+    already drives attribute_llm_dispatch_cost twice under JOURNAL_RESUME and proves the audit-ledger
+    layer DOES dedupe for LLM+JOURNAL_RESUME specifically -- ''unverified for any composer'' was too strong;
+    the real gap is the OTHER 3 composers and OTHER engine classes. And the run-scoped accumulator is
+    FRESH per public run()/resume() invocation (api.py:900, COST_ACCUM_VAR.set(CostRecordAccumulator()))
+    -- a crash-then-separate-resume-call does NOT carry the prior invocation''s records forward, so the
+    accumulator is NOT a confirmed cross-invocation dedup-failure layer; it only risks double-counting
+    for repeated dispatches WITHIN one invocation or external aggregation across separate RunResults,
+    neither established as a production concern. (4) Round-4 correction: calling the gap solely a missing
+    ingestion consumer is itself incomplete -- verified all 4 attribute_*_dispatch_cost composers hard-code
+    engine_replay_disposition=_DEFAULT_REPLAY_DISPOSITION (= ReplayDisposition.NO_REPLAY) with no parameter
+    to carry the real disposition (cost_attribution_llm_dispatch.py:88,239; cost_attribution_tool_dispatch.py:90,295;
+    cost_attribution_webhook_dispatch.py:65,204; cost_attribution_validator_dispatch.py:86,243). Even
+    a built ingest_span consumer could never see CHECKPOINT_RESUME/RECONCILER_ITERATION/WAL_CONSUME from
+    any composer today -- a producer-side wiring gap alongside the missing consumer. Close-out path once
+    a real trigger exists: (1) resolve where ingest_span''s production call site actually lives (or should
+    be built) before touching any composer; (2) verify whether double-billing is an ACTUAL exercised risk
+    for the durable engine classes (SAVE_POINT_CHECKPOINT/EVENT_SOURCED_REPLAY/RECONCILER_LOOP/WAL_SEGMENT)
+    whose resume_at skip logic may already prevent re-dispatch of completed steps, mirroring the JOURNAL_RESUME
+    finding; (3) extend the existing JOURNAL_RESUME+LLM audit-ledger witness pattern to the other 3 composers,
+    and separately verify whether a within-invocation retry (not cross-invocation resume) can double-append
+    to the accumulator in production; (4) thread the real engine_replay_disposition into all 4 composers
+    so a future ingestion consumer can actually discriminate replay dispositions. Only then decide whether
+    composer-level wiring is even the right fix, and at which layer. Mirrors the B-19/B-42 discipline
+    against building speculative infrastructure ahead of a real, demonstrated consumer.'
+  council: no — a specified policy already exists (ADR-D6 v1.2 §1.5); the open question is call-site +
+    live-risk + per-composer/per-engine-class verification, not a design fork
+  heading: '### B-30 · Cost-attribution disambiguator replay-semantics inconsistency *(surfaced at B-23
+    round 6, advisor())*'
+- id: B-31
+  title: Paused-child resume guard does not validate child_workflow_id identity
+  status: closed
+  summary: Same-step_id/same-kind edit could swap the target child workflow past the resume guard undetected.
+  close_out: Added child_workflow_id to PausedChildBranchResumeState (optional, byte-compat); resume guard
+    now compares it against the re-supplied SUB_AGENT_DISPATCH payload via the existing _opaque_field
+    convention. CP spec v1.98->v1.99 + clearance marker.
+  council: no — mechanical carrier-completeness extension, no nameable cross-domain tension
+  pr: '#1011'
+  heading: '### B-31 · Paused-child resume guard does not validate `child_workflow_id` identity *(surfaced
+    at B-21, out-of-family Codex round 2)*'
+- id: B-32
+  title: Nested paused-child pause-reason propagation (pause_reason half only)
+  status: closed
+  summary: Parent pause_reason ignored a nested child's OWN HITL_PENDING pause, always defaulting to EXPLICIT_OPERATOR.
+  close_out: 'SCOPE NARROWED from the original coupled finding after out-of-family Codex review caught
+    3 real bugs in a first attempt at the routing half (see B-39): (1) a naive ''any paused child -> HITL_PENDING''
+    label mislabeled a nested EXPLICIT_OPERATOR pause -- fixed by checking child_snapshot.pause_reason
+    directly at both PARALLELIZATION and ORCHESTRATOR_WORKERS/HIERARCHICAL_DELEGATION sites, any nested
+    HITL_PENDING relabels, EFFECT_FENCE_AMBIGUOUS keeps top precedence. impl-to-cleared-spec (WorkflowPauseReason.HITL_PENDING''s
+    existing ''HITL gate opened; workflow paused awaiting operator response'' semantic already covers
+    a nested gate without extension) -- no CP spec delta needed. Mutation-probed both the true and false
+    branches (contrasting-baseline + positive test); both confirmed load-bearing. A SECOND out-of-family
+    Codex round then flagged the corrected label itself as a potential false-affordance (an operator seeing
+    accurate HITL_PENDING might assume a single hitl_response safely resolves it even with >1 concurrently-paused
+    child). Grounded via direct grep before deciding: pause_reason is read in exactly one non-telemetry
+    place (this label-derivation code) and the composer''s actual resume path (consume_and_clear) never
+    branches on pause_reason at all -- no consumer auto-dispatches a response off this label, so the label
+    is informational-only and safe to ship as corrected. Added an explicit code comment at both sites
+    documenting this + cross-referencing B-39 so the limitation cannot be silently assumed away. The response-ROUTING
+    half (multiple concurrently-paused children each getting their own operator response) is NOT closed
+    here -- see B-39. CORRECTION (merge-gate 3-lens review): the original close_out claimed ''mutation-probed
+    both branches at both sites'' -- this was only true of the PARALLELIZATION site; the ORCHESTRATOR_WORKERS/HIERARCHICAL_DELEGATION
+    site had ZERO test witness (test_workflow_driver_fanout_pause.py had no HITL_PENDING assertion at
+    all). Fixed by adding a contrasting-baseline assertion to the existing test_cancellation_race_captures_paused_child_among_failing_siblings
+    + a new positive test test_orchestrator_worker_child_hitl_pending_pause_labels_parent_hitl_pending,
+    both mutation-probed (is -> is not flip at the second site''s check correctly fails both new tests;
+    restored, both pass). Also, spec conformance review found design-substrate/Spec_Control_Plane_v1_97.md
+    Section21''s registered-forward-work note still canonically asserted gaps (b)+(c) are ''coupled...
+    travel together as one forward arc'' -- stale-carry-text now contradicted by shipping (c) alone; closed
+    via a CP spec delta (v1.99->v1.100) correcting that framing, mirroring the B-31/v1.99 precedent for
+    closing a Section21-registered gap.'
+  council: no -- mechanical fix once the labeling logic was corrected; the routing half's council question
+    is now moot per B-39's disposition
+  pr: '#pending'
+  heading: '### B-32 · Nested paused-child pause-reason propagation *(surfaced at B-21, out-of-family
+    Codex round 3; scope narrowed after a same-session Codex review of the first attempt)*'
+- id: B-39
+  title: Nested paused-child HITL-response ROUTING (per-child operator response delivery)
+  status: design_substrate_gated
+  summary: Two or more concurrently-paused peer/nested children share one run-level ResumeContextHolder;
+    delivering each its OWN operator response safely is unresolved.
+  close_out: 'A first attempt (ResumeContext.hitl_responses keyed by workflow_id, consumed via non-destructive
+    peek()) was built, mutation-probed, and reviewed out-of-family -- Codex found 3 real defects, all
+    confirmed correct on inspection: (1) peek-only never one-shot-consumes, so a later HITL-composed step
+    sharing the same key would silently reuse a stale response; (2) workflow_id is NOT branch-unique --
+    fan-out siblings can dispatch the SAME child_workflow_id (the runtime already uses branch_path for
+    exactly this disambiguation), so two paused siblings would collapse to one map entry; (3) [already
+    split out as B-32, now closed]. The attempt was fully reverted (not shipped). Concrete design constraints
+    for the next attempt: (a) the key must be branch-unique -- branch_path or an equivalent child-run-id
+    derived value, NOT workflow_id alone; (b) delivery must be genuinely one-shot per key without racing
+    concurrent siblings on the shared holder -- peek() alone is insufficient once one-shot semantics are
+    required; (c) the actual delivery mechanism is unresolved -- execute_workflow/child_workflow_runner
+    currently has NO resume_context parameter at all (only pause_snapshot_input), and effect_fence_resolution''s
+    own per-branch mechanism resolves PARENT-side then threads a single resolved value onto the child''s
+    StepExecutionContext -- that pattern does NOT carry into a recursive child''s OWN internal re-entry
+    the way HITL delivery needs, so the threading path itself needs designing, not just the map shape.
+    Re-grounded 2026-07-15 (B-37 session, no-parking sweep): all 3 constraints CONFIRMED still accurate
+    against current HEAD by direct read (ResumeContext still singular hitl_response only; consume_and_clear
+    still whole-holder; execute_workflow/child_workflow_runner still carry zero resume_context threading
+    surface). Spec_Control_Plane_v1_100.md''s own change-note explicitly frames (c) as un-designed, not
+    merely unimplemented -- status moved registered_finding -> design_substrate_gated to reflect this
+    precisely (a Class 1 fork proposing the threading mechanism is the correct next step, before any code,
+    per X-AL-3).'
+  council: not yet re-evaluated -- the original C7/C8-vs-C1/C5 framing may no longer be the right lens
+    once a concrete delivery mechanism is proposed; ground first per this register's own no-parking discipline
+    before deciding
+  heading: '### B-39 · Nested paused-child HITL-response ROUTING (per-child operator response delivery)
+    *(split from B-32 after a same-session Codex review found the first routing attempt had 3 real defects;
+    not shipped)*'
+- id: B-33
+  title: verify_rotation_6_steps cannot prove a rotation boundary occurred
+  status: registered_finding
+  summary: Generic hash-chain continuity check passes any intact ledger; cannot confirm a genuine rotation-pair
+    boundary.
+  close_out: File a Class 1 fork for an IS rotation-correlation carrier (mirrors OD §24.7); extend once
+    B-36's backend lands.
+  council: no for the carrier addition; B-36's own disposition governs the signing-backend half
+  heading: '### B-33 · `verify_rotation_6_steps`''s hash-chain check cannot prove a rotation boundary
+    occurred *(surfaced at B-26, out-of-family Codex rounds 1 + 5, `advisor()`-confirmed)*'
+- id: B-34
+  title: Concrete signature-representation gaps in the C-CP-20 §20.2.1 seam
+  status: registered_finding
+  summary: DER-vs-64-byte ECDSA-P256 encoding unenforced; CPSignedAuditLedgerEntry.audit_signature_value
+    not JSON-serializable for real bytes.
+  close_out: Validate signature byte-length per algorithm + add a reversible byte-encoding serializer,
+    once a real backend exists (B-36).
+  council: no — mechanical once a real backend exists to test against
+  heading: '### B-34 · Concrete signature-representation gaps in the C-CP-20 §20.2.1 seam *(surfaced at
+    B-22 round 4, out-of-family Codex, `advisor()`-confirmed non-blocking)*'
+- id: B-35
+  title: test_qa_evidence_matrix.py / test_closure_gate.py orphaned from CI + 12 uncited contracts
+  status: closed
+  summary: 12 contracts (C-IS-14 + 11 C-MEM-*) cite no test file; neither test module is wired into any
+    CI job.
+  close_out: 'Grounded each of the 12: C-IS-14 was a phantom/dead contract ID (runtime spec v1.93 change-note
+    confirms the IS spec defines only C-IS-01..10 and ''prior v1 cited C-IS-11/14/15 which don''t exist'')
+    -- moved closure_gate.py''s local, incomplete DOCUMENTED_NON_CONTRACTS={C-IS-11} constant to a shared
+    tools/semantic_overlay/overlay.py::DOCUMENTED_NON_CONTRACTS={C-IS-11,C-IS-14,C-IS-15} (single source
+    of truth for both overlay.py''s own contract_without_code orphan scan and qa_evidence_matrix.py''s
+    test-citation scan) and excluded it there. 10 of the 11 C-MEM-* contracts (04,05,06,11,12,13,14,15,17,19)
+    already had a real, already-passing test exercising their behavior -- just needed a one-line contract-id
+    citation added (several already had the id embedded in the test function name in snake_case, e.g.
+    test_..._c_mem_17_..., just never in the hyphenated form the citation-scan regex needs). C-MEM-01
+    (the memory-plane-boundary architectural contract, no dedicated source module by design) was a genuine
+    gap: added harness-runtime/tests/test_memory_plane_boundary.py with two new tests -- one proving native/standard-tools/prompt-packet
+    all write to the SAME physical canonical-store ledger (mutation-probed: pointing one component at
+    a different root correctly fails it), one proving promotion and injection are independently-settable
+    policy decisions (mutation-probed against a real production-code coupling mutation). Also cited C-MEM-01
+    in CanonicalMemoryStore''s own docstring, closing closure_gate.py''s G1.3 orphan too (0 real, down
+    from 2 -- G1.3 now fully PASSES, all 5 automatable Tier-1 predicates green). Wired both test modules
+    + qa_evidence_matrix.py --check + closure_gate.py --check into a new CI job (q3-evidence-and-closure-gate),
+    mirroring the existing arc-ledger/substitution-ledger/semantic-overlay job pattern. tools/test_qa_evidence_matrix.py''s
+    import style was also normalized to match its siblings'' self-contained sys.path convention (its prior
+    `from tools import X` package-relative import only worked from repo root, inconsistent with the working-directory:
+    tools convention every other tools/test_*.py file already uses).'
+  council: no — mechanical once each contract was grounded; no cross-domain tension
+  pr: '#pending'
+  heading: '### B-35 · `tools/test_qa_evidence_matrix.py` / `test_closure_gate.py` are orphaned from CI
+    + 12 contracts lack test-file citation *(surfaced during B-28 triage, 2026-07-14; closed same session
+    as B-32)*'
+- id: B-36
+  title: Concrete F5 audit-signature backend selection
+  status: operator_gated
+  summary: B-22's seam is closed; no real signing backend exists yet. Blocks any MULTI_TENANT_COMPLIANCE
+    deployment.
+  close_out: Pick + provision a concrete prod-tech backend (needs a D-ADR + real cloud credentials); author
+    the harness_runtime composition-root arc.
+  council: conditional — C10 blast-radius vs C11 operator-loop/deployment-surface, live once a candidate
+    backend is proposed
+  heading: '### B-36 · Concrete F5 audit-signature backend selection *(split off `B-22` 2026-07-14, per
+    operator direction — `B-22`''s seam is CLOSED, this is what remains)*'
+- id: B-37
+  title: Remote MCP streamable-HTTP transport residuals
+  status: closed
+  summary: Current (non-deprecated) streamable_http_client called with the old function's kwarg shape
+    (latent TypeError once populated) + MCPClientConfig has no auth-credential field.
+  close_out: 'CLOSED 2026-07-15. mcp_client_host.py''s _http_connection_context now builds an httpx.AsyncClient
+    from transport_config[''headers''] and passes it via http_client= (streamablehttp_client left un-migrated
+    per the register''s own instruction); 3 stale docstrings naming the deprecated function fixed. MCPClientConfig
+    gained auth_secret_name: str | None, resolved at stage-3a via the SAME ProviderSecretResolver.resolve_bootstrap_value(name)
+    idiom U-RT-17/18 already use for LLM provider API keys (mcp_client_host_factory.py + stage_3a_cp_clients.py
+    thread ctx.keyring_resolver through) rather than inventing a new credential shape; auth_present now
+    wired end-to-end instead of hardcoded False. Mutation-probed both the http_client kwarg-shape fix
+    and the fail-loud resolver guard against real production-code reversions.'
+  council: no — mechanical once a real remote-MCP credential-supply build opens; not urgent
+  pr: '#1019'
+  heading: '### B-37 · Remote MCP streamable-HTTP transport residuals *(surfaced at `B-10`''s own `B-MCP-OAUTH-RS-ENFORCE`
+    grounding, split out 2026-07-14 at forward-register-schema grounding; corrected 2026-07-14 round-3
+    out-of-family Codex — the original finding had the deprecated/current function names backwards)*'
+- id: B-38
+  title: Fine-grained provider-exception classifier for breaker.cause
+  status: closed
+  summary: breaker.cause stays vacuous (always None) until a real per-step rate_limit/auth_failure/5xx_streak
+    classifier exists.
+  close_out: 'CLOSED 2026-07-15. Added _classify_breaker_cause(exc) -> BreakerCause | None (retry_breaker_fallback.py)
+    — duck-typed on .status_code (429->RATE_LIMIT, 401/403->AUTH_FAILURE, 500<=code<600->FIVE_XX_STREAK,
+    else None), computed once per exception and wired into all 3 breaker.record_failure() call sites.
+    Out-of-family Codex round 2 found the value never reached a real OTel span: emit_breaker_trip_span_event
+    (harness_breaker_schema.py) built an EventEmission bookkeeping record but never called parent_span_ref.add_event(...)
+    — confirmed a genuine local bug (not a systemic OTel-absence) by comparison against the sibling emit_drift_event,
+    which does call add_event; fixed to match that established pattern, so harness.breaker.cause (and
+    the other 8 §7.1 attributes) now actually lands on the real span. Mutation-probed against real production-code
+    reversions (record_failure(cause=breaker_cause) -> record_failure(); the 500<=code<600 bound reverted
+    to >=500) confirming the e2e/table tests genuinely fail. Split out B-41 (retry-routing classifier
+    still misroutes AuthenticationError to TRANSIENT_RETRY, a known tracked divergence) and B-42 (FIVE_XX_STREAK
+    tags by the terminal exception only, not a verified N-consecutive streak — an acknowledged MVP simplification
+    per this row''s own grounding, mirroring _classify_provider_exception''s existing MVP discrimination)
+    rather than folding either into this telemetry-only change.'
+  council: no — mechanical extension once opened; not urgent, speculative ahead of any consumer
+  pr: '#1020'
+  heading: '### B-38 · Fine-grained provider-exception classifier for `breaker.cause` *(surfaced at `B-19`''s
+    own close, split out 2026-07-14 at forward-register-schema grounding, out-of-family Codex)*'
+- id: B-40
+  title: Memory operation ledger has no cross-process write serialization
+  status: closed
+  summary: append_memory_operation and append_ledger_entry each used a process-local threading.Lock only
+    -- no protection against a second OS process (e.g. two concurrent `harness run` invocations against
+    the same repo) writing the same canonical ledger. C-IS-09 §9.3 + C-MEM-08 already require serialization;
+    §9.4 defers only the mechanism, not the requirement -- no fork needed.
+  close_out: 'CLOSED 2026-07-15 at PR #1026, after a 4-round register-correction arc (PR #1025) that repeatedly
+    mis-disposed this finding before landing on the correct one: round 1 wrongly called it speculative/already-decided;
+    round 2 wrongly reclassified it design_substrate_gated as an open interpretive fork; round 3 correctly
+    reclassified registered_finding/buildable-now but still called it dormant; round 4 (out-of-family
+    Codex) corrected ''dormant'' to LIVE (RuntimeConfig.memory defaults enabled=True with root_path=<repo>/.harness/memory,
+    so two ordinary concurrent `harness run` invocations already share the canonical ledger today). Build
+    (PR #1026): added harness_is.cross_process_ledger_lock -- a same-host fcntl.flock helper mirroring
+    the proven pattern already shipped at harness_runtime.lifecycle.reconciler_pause_resume_substrate._workflow_lock
+    (POSIX advisory, same-host only; true cross-host distributed writers remain out of design horizon
+    per ADR-F2 §Rationale(c)(ii), unaffected). Wired into all 4 real call sites found during grounding
+    (2 more than the register originally named): append_ledger_entry, append_memory_operation, shadow_git_rollback''s
+    ledger-preserve-across-checkout window, and jsonl_event_ledger_lifecycle.initialize_jsonl_event_ledger/validate_jsonl_event_ledger_format
+    (the last found by the merge-gate concurrency lens -- reachable on every harness run bootstrap/resume
+    via harness_runtime.lifecycle.state_ledger.materialize_state_ledger, so its pre-existing unlocked
+    read could undercount entry_count and silently skip the tamper-check gate). read_ledger/read_memory_operation_ledger
+    take a shared lock; internal call sites use new _unlocked variants to avoid self-deadlock (flock is
+    per-open-file-description, not reentrant). Added genuine multi-process test coverage (multiprocessing,
+    fork context) for all 3 append-side call sites, replacing the prior threading-only witnesses that
+    could not detect a cross-process race; each new test mutation-probed (reverted the fix, confirmed
+    failure across 3 runs, restored) -- the shadow_git_rollback test specifically caught by the merge-gate
+    test-witness lens, which found the first 2 tests covered only 2 of 3 wired sites. Full harness-is
+    suite green (281+ passed); ruff/pyright/overlay-check clean; 3-lens merge-gate (which caught the 4th
+    call site + the missing shadow_git_rollback test above) and out-of-family Codex both run to convergence
+    before merge. Out-of-family Codex round 1 on PR #1026 caught two further issues, both fixed before
+    merge: (1) the unconditional top-level `import fcntl` broke `import harness_is` on Windows (eagerly
+    imported via `memory_operation_ledger`) — C-STK-10 commits to macOS/Linux/Windows host-OS support
+    "without per-OS port forking"; fixed by gating the import behind `sys.platform == "win32"` and degrading
+    the lock context managers to a no-op on Windows (exact pre-B-40 parity — the in-process `threading.Lock`
+    half is unaffected and cross-platform; only the new cross-process dimension is unavailable there).
+    (2) the new `.lock` sidecar files were not gitignored; added `.harness/**/*.lock`, verified via `git
+    check-ignore` against both actual lock paths. The genuine Windows locking *mechanism* remains unbuilt
+    by design (advisor()-reviewed scope call, not an oversight) — registered separately as B-45. A further
+    out-of-family Codex round (round 4, against the full PR diff vs main -- an earlier round had been
+    invoked with an invalid ref and produced no usable verdict) found two more real, non-regression gaps,
+    both registered rather than fixed in this PR: (1) `cross_process_read_lock`''s no-sidecar-yet fallback
+    (added to fix the P1 read-only-CLI violation above) reintroduces a narrow TOCTOU -- a reader can pass
+    the "sidecar doesn''t exist" check before a racing first-writer creates it, then read unguarded while
+    that writer is mid-append; (2) the identical gap in `jsonl_event_ledger_lifecycle.py`''s initialization
+    probe. Both are pre-existing (every read was unguarded, always, before this module existed) and narrow
+    (once any writer has ever created the sidecar, all subsequent reads/writes correctly serialize) --
+    not a regression, and advisor()-confirmed as correctly out of THIS PR''s scope: the durable fix (locking
+    the canonical ledger file directly instead of a lazily-created sidecar) is a larger, harness-inspect-compatibility-affecting
+    redesign, registered separately as B-46. The torn-read-race claim in `cross_process_read_lock`''s
+    docstring was softened to state this precisely (closes the race once a ledger has been written at
+    least once under the lock, not before).'
+  council: no -- requirement settled (C-IS-09 §9.3 + C-MEM-08), mechanism was implementation discretion
+    (§9.4); impl-to-cleared-spec
+  pr: '#1026'
+  heading: '### B-40 · Memory operation ledger has no cross-process write serialization *(surfaced at
+    B-35''s merge-gate concurrency lens, 2026-07-15; CLOSED at PR #1026 after a 4-round register-correction
+    arc at PR #1025)*'
+- id: B-41
+  title: _classify_provider_exception misroutes AuthenticationError to TRANSIENT_RETRY
+  status: closed
+  summary: The retry classifier treats an SDK AuthenticationError (401/403) as TRANSIENT_RETRY, running
+    the full retry staircase before ever escalating — the new B-38 breaker.cause telemetry classifier
+    correctly tags the SAME exception AUTH_FAILURE, so the two classifiers now visibly disagree on one
+    real exception shape.
+  close_out: 'CLOSED 2026-07-15. Verified against Spec_Harness_Runtime_v1.md v1.99 (canonical HEAD) directly:
+    §14.5''s C-RT-15 fail-class table states RT-FAIL-PROVIDER-AUTH (raw SDK auth error, 401/403, not a
+    harness wrapper type) is "Raise unmodified"; §14.6 D2 + its own narrative both say AUTH is fail-fast.
+    The code contradicted its own docstring (which already claimed this). A straightforward conformance
+    fix, not a design decision -- no fork needed. Added a status_code in (401, 403) duck-typed guard to
+    _classify_provider_exception, placed after the wrapper-type check and before the TRANSIENT_RETRY catch-all
+    -- deliberately NOT reusing _classify_breaker_cause so the two classifiers'' control-flow contracts
+    stay independent. Closes B-38''s noted divergence as a side effect (both classifiers now agree on
+    AUTH). Added a fail-fast witness test (asserts the SECOND call lands on candidate 1, not a retried
+    candidate 0 -- a naive len(calls)==2 check does not discriminate fail-fast from retry-then-succeed)
+    and a regression-guard test proving 429/5xx still retry (guards against an overly-broad status_code
+    is not None mutation). Both mutation-probed against real production-code reversions.'
+  council: no — mechanical conformance fix, spec was unambiguous
+  pr: '#1021'
+  heading: '### B-41 · `_classify_provider_exception` misroutes AuthenticationError to TRANSIENT_RETRY
+    *(surfaced at B-38 grounding, 2026-07-15, advisor()-flagged)*'
+- id: B-42
+  title: breaker.cause's FIVE_XX_STREAK is tagged by the terminal exception only, not a verified streak
+  status: closed
+  summary: _classify_breaker_cause tags FIVE_XX_STREAK from a single last-attempt 5xx status code; BreakerStateMachine
+    tracks only an aggregate fail_count, not a per-cause history, so a trip after a mixed rate-limit/auth/5xx
+    failure sequence still reads FIVE_XX_STREAK from the terminal exception alone, which can misrepresent
+    what actually happened across the attempt sequence.
+  close_out: 'CLOSED 2026-07-15. Grounded directly against OD spec Spec_Operational_Discipline_v1_32.md
+    §7.1 (only requires "the classified trip-cause, when known" -- no streak-verification mandate) plus
+    BreakerStateMachine''s own source (only an aggregate fail_count, no per-cause history) and confirmed
+    no live consumer reads harness.breaker.cause today -- chose disposition (b) from this row''s own close-out
+    options: a documentation-only clarification, not new per-cause tracking infrastructure (which would
+    be speculative ahead of any consumer, the same discipline the B-19 redundancy analysis already established).
+    Added a clarifying paragraph to BreakerCause''s docstring in harness_breaker_schema.py stating FIVE_XX_STREAK
+    is tagged from a single terminal 5xx exception, not a verified N-consecutive streak, mirroring the
+    equivalent clarification _classify_breaker_cause''s own docstring in retry_breaker_fallback.py already
+    carried since B-38''s original landing. The spec-committed enum value (5xx_streak) is UNCHANGED --
+    only the docstring''s description of its derivation is now precise. No behavior/test change; ruff
+    clean; OD breaker test suite (30 tests) still green. Adjacent finding (OD spec v1.32 §7.1''s own prose
+    still describes breaker.cause as "vacuous-today ... absent from every emitted event," which is now
+    stale since B-38 populated it for 3 of 4 values) is OUT OF SCOPE for this row -- registered separately
+    as B-43 (design_substrate_gated) since fixing spec prose is a design-substrate edit requiring design-phase
+    posture, not a Phase-7 code fix.'
+  council: no — mechanical once grounded; spec text was unambiguous on the non-mandate
+  pr: '#1022'
+  heading: '### B-42 · `breaker.cause`''s `FIVE_XX_STREAK` is tagged by the terminal exception only, not
+    a verified streak *(surfaced at B-38''s own PR, out-of-family Codex round 1, 2026-07-15)*'
+- id: B-43
+  title: OD spec v1.32 §7.1 prose still describes harness.breaker.cause as vacuous-today, stale since
+    B-38
+  status: design_substrate_gated
+  summary: 'Spec_Operational_Discipline_v1_32.md §7.1''s harness.breaker.cause row states: "Vacuous-today,
+    honestly documented ... the attribute is present in the schema (forward-compatible typed slot) and
+    absent from every emitted event until a follow-on classifier arc supplies real signal." B-38 (PR #1020)
+    landed exactly that follow-on classifier -- _classify_breaker_cause now populates RATE_LIMIT/AUTH_FAILURE/FIVE_XX_STREAK
+    at all 3 real record_failure() call sites and the attribute reaches the real span. The spec prose
+    was never updated to reflect this and is now factually wrong about current runtime behavior for 3
+    of the 4 enum values (CAPABILITY_SHORTFALL remains genuinely vacuous, per B-38''s own grounding).'
+  close_out: 'NOT closed -- editing design-substrate/Spec_Operational_Discipline_v1_32.md requires design-phase
+    posture (workspace CLAUDE.md §11) plus a clearance marker (§4.5), not a Phase-7 docstring fix; bundling
+    it into B-42''s code-only PR would trip the X-AL-3 CI guard (design-substrate edit without back-flow
+    doc) and create a mixed-posture PR per §11.2''s explicit halt-and-ask case. The same stale-vacuous
+    framing likely also appears at harness-od/CLAUDE.md §1.2 (spec-pointer summary) and §4.1 (graduation-note
+    context) -- both mode-agnostic, not design-substrate, so those ARE Phase-7-editable, but were deliberately
+    left untouched here to keep this a pure registration pass; a future design-phase pass on the spec
+    itself should sweep all copies at once rather than fixing them piecemeal across postures. Council:
+    no -- this is a narrow prose-accuracy delta over an already-cleared spec version (v1.32 stays canonical;
+    likely a v1.33 ADDITIVE prose-only delta), not a contract change.'
+  council: no — prose-accuracy delta over a cleared spec, not a contract change; needs design-phase posture,
+    not council
+  heading: '### B-43 · OD spec v1.32 §7.1 prose still describes `harness.breaker.cause` as vacuous-today,
+    stale since B-38 *(surfaced at B-42 grounding, 2026-07-15, advisor()-flagged)*'
+- id: B-44
+  title: No production bootstrap site injects a non-default time_source clock
+  status: registered_finding
+  summary: RuntimeAuditLedgerWriter + RuntimeSubAgentDispatcher support time_source injection, and the
+    shared compose_cost_f2_entry_core helper accepts one too, but none of the 4 attribute_*_dispatch_cost
+    composer functions (tool/llm/webhook/validator) expose a time_source parameter of their own -- they
+    call the helper without one, so it always defaults to datetime.now(UTC). No production bootstrap site
+    (stage_4_od.py:62, stage_5_loop_init.py:596) injects a non-default clock either -- the flagged NonMonotonicTimestampError
+    failure mode has no live trigger today.
+  close_out: Thread an optional time_source parameter through each of the 4 attribute_*_dispatch_cost
+    composer signatures (currently they don't have one at all) down to the already-time_source-accepting
+    compose_cost_f2_entry_core helper, plus the bootstrap sites, once a real deterministic-clock consumer
+    surfaces (e.g. a multi-writer clock-skew test). Mirrors the workspace's established B-19/B-42 discipline
+    against building speculative infrastructure ahead of a real consumer.
+  council: no — mechanical once a consumer exists; not urgent, genuinely dormant today
+  heading: '### B-44 · No production bootstrap site injects a non-default `time_source` clock *(split
+    from B-29, 2026-07-15)*'
+- id: B-45
+  title: Cross-process ledger lock has no genuine Windows serialization backend
+  status: registered_finding
+  summary: '`harness_is.cross_process_ledger_lock` (B-40) degrades to a no-op on Windows (`sys.platform
+    == "win32"`) rather than providing real cross-process serialization there — Windows sits at exact
+    pre-B-40 parity (same as before the module existed), not at feature parity with POSIX. The identical
+    gap already exists, unregistered until now, at `harness_runtime.lifecycle.reconciler_pause_resume_substrate`''s
+    own unconditional `fcntl` import (that module isn''t eagerly imported at package `__init__`, so it
+    doesn''t break basic import on Windows, but its lock is equally POSIX-only).'
+  close_out: Registered, not built — deliberate scope call (advisor()-reviewed during B-40's own PR),
+    not an oversight. `msvcrt.locking` is byte-range and exclusive-only; it does not cleanly provide the
+    shared-reader/exclusive-writer (`LOCK_SH`/`LOCK_EX`) split both `cross_process_ledger_lock` and `reconciler_pause_resume_substrate`
+    rely on. A correct cross-platform abstraction preserving those semantics (e.g. a small shared/exclusive
+    lock facade backed by `fcntl` on POSIX and a genuine Windows-native primitive, or a portable third-party
+    lock library) is its own scoped arc, not a hasty `sys.platform` branch bolted onto a PR already touching
+    hash-chain integrity. **Close-out steps:** (1) pick a Windows backend (`msvcrt`-based exclusive-only
+    lock with a documented downgrade of the shared-read guarantee, or a vetted portable library — a real
+    design choice, council-eligible if the tradeoff is non-obvious); (2) wire it into `cross_process_ledger_lock._flock`
+    behind the existing `_IS_WINDOWS` branch; (3) apply the same fix to `reconciler_pause_resume_substrate`'s
+    `_workflow_lock` so both same-host lock primitives in this codebase reach genuine Windows parity together,
+    not one at a time. No Windows CI exists today, so this is currently untested-by-CI on that platform
+    regardless — low urgency until Windows becomes an active target, not blocking.
+  council: no for now — narrow implementation-discretion follow-on per C-IS-09 §9.4's own deferred-mechanism
+    framing; council-eligible AT BUILD TIME only if the msvcrt-exclusive-only-lock tradeoff (weaker-than-POSIX
+    shared-read guarantee on Windows) turns out non-obvious once actually scoped
+  heading: '### B-45 · Cross-process ledger lock has no genuine Windows serialization backend *(surfaced
+    at B-40''s own PR, out-of-family Codex + advisor(), 2026-07-15)*'
+- id: B-46
+  title: Cross-process ledger lock has a first-write TOCTOU on lazy sidecar provisioning
+  status: registered_finding
+  summary: '`harness_is.cross_process_ledger_lock`''s lock sidecar (B-40) is provisioned lazily by whichever
+    writer touches a ledger first. A reader racing that very first writer can pass `cross_process_read_lock`''s
+    "sidecar doesn''t exist yet" existence check before the writer creates it, then read the ledger unguarded
+    while that writer is mid-append -- defeating the torn-read protection for exactly the first write/read
+    race against a brand-new ledger. The identical gap exists in `jsonl_event_ledger_lifecycle.py`''s
+    initialization probe (a fresh ledger can take the missing-file branch and return `entry_count=0` without
+    waiting, even while another process already holds the writer lock but hasn''t yet created/populated
+    the file).'
+  close_out: Registered, not built -- advisor()-confirmed non-regression (every read was unguarded, always,
+    before B-40 existed; this is a residual, not a new hole) and narrow in practice (once any writer has
+    ever created the sidecar for a given ledger, all subsequent reads/writes correctly serialize -- the
+    window is exactly the first concurrent write+read pair against a not-yet-touched ledger, which degrades
+    to a loud parse error in an already-degenerate scenario, not silent corruption). This finding and
+    B-40's round-3 P1 fix (readers must never create the sidecar or `mkdir`, to preserve `harness-inspect`'s
+    read-only-CLI contract) are in direct tension under a lazily-created sidecar -- no fix satisfies both
+    without changing the lock target. **Close-out steps:** lock the CANONICAL ledger file directly (a
+    separate fd opened purely for `flock`, independent of any fd used for actual I/O -- POSIX `flock`
+    is per open-file-description, so this is safe) instead of a lazily-created sidecar; when the canonical
+    file doesn't exist, there is genuinely nothing to read yet (no race is possible on a file that isn't
+    there); when it does exist, lock it read-only (`O_RDONLY`, no `O_CREAT` needed since it already exists)
+    or read-write (`O_CREAT|O_RDWR`, needed once, for the writer that creates it). This removes the provisioning
+    race entirely but touches the write path adjacent to hash-chain integrity and the `harness-inspect`
+    read-only contract -- its own scoped arc, not bolted onto B-40's PR. **Council:** no -- mechanical
+    redesign once scoped, same implementation-discretion category as B-45; not an open spec question.
+  council: no -- narrow implementation-discretion follow-on, same category as B-45; not an open spec question
+  heading: '### B-46 · Cross-process ledger lock has a first-write TOCTOU on lazy sidecar provisioning
+    *(surfaced at B-40''s own PR, out-of-family Codex round 4 + advisor(), 2026-07-15)*'

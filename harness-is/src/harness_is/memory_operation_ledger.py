@@ -4,6 +4,14 @@ Implements C-MEM-08 as a memory-specific, additive derivative of the C-IS
 state-ledger shape. The canonical ``durable/memory_ops.jsonl`` ledger owns the
 global operation order; projection files are rebuildable filtered views keyed
 by canonical ledger ``action_id`` and carry no independent hash-chain fields.
+
+**B-40 (2026-07-15):** ``_WRITE_LOCK`` only serializes same-process writers; a
+same-host ``fcntl.flock`` (``cross_process_ledger_lock``) now also serializes
+writers across OS processes (e.g. two concurrent ``harness run`` invocations
+against the same repository), closing the C-IS-09 §9.3 / C-MEM-08
+cross-process requirement the thread lock alone could not meet.
+``read_memory_operation_ledger`` takes a shared same-host lock so a concurrent
+reader cannot observe a torn/partial write.
 """
 
 from __future__ import annotations
@@ -19,6 +27,10 @@ from typing import Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from harness_is.cross_process_ledger_lock import (
+    cross_process_read_lock,
+    cross_process_write_lock,
+)
 from harness_is.jsonl_event_ledger_lifecycle import JsonlLedgerHandle
 from harness_is.memory_record_envelope import MemoryID
 from harness_is.memory_redaction_event import MemoryRedactionEvent, MemoryRedactionKind
@@ -381,10 +393,16 @@ def _deserialize_entry(line: str) -> MemoryOperationEntry:
     )
 
 
-def read_memory_operation_ledger(
+def _read_memory_operation_ledger_unlocked(
     ledger_handle: JsonlLedgerHandle,
 ) -> list[MemoryOperationEntry]:
-    """Read the canonical memory operation ledger."""
+    """Read the canonical memory operation ledger without the cross-process lock.
+
+    Internal — used inside `append_memory_operation`'s critical section, which
+    already holds the exclusive cross-process lock; taking the shared lock
+    again there would self-deadlock (POSIX `flock` is per open-file-
+    description, not reentrant across a process's own fds).
+    """
 
     if not ledger_handle.canonical_path.exists():
         return []
@@ -393,6 +411,19 @@ def read_memory_operation_ledger(
         for line in ledger_handle.canonical_path.read_text().splitlines()
         if line.strip()
     ]
+
+
+def read_memory_operation_ledger(
+    ledger_handle: JsonlLedgerHandle,
+) -> list[MemoryOperationEntry]:
+    """Read the canonical memory operation ledger.
+
+    Takes a shared same-host `flock` (B-40) so a concurrent writer's append
+    cannot be observed mid-write.
+    """
+
+    with cross_process_read_lock(ledger_handle.canonical_path):
+        return _read_memory_operation_ledger_unlocked(ledger_handle)
 
 
 def _prior_event_hash(prior_entry: MemoryOperationEntry | None) -> Bytes32:
@@ -481,8 +512,8 @@ def append_memory_operation(
 ) -> MemoryOperationWriteResult:
     """Append one memory operation with strict idempotency semantics."""
 
-    with _WRITE_LOCK:
-        ledger = read_memory_operation_ledger(ledger_handle)
+    with _WRITE_LOCK, cross_process_write_lock(ledger_handle.canonical_path):
+        ledger = _read_memory_operation_ledger_unlocked(ledger_handle)
         for entry in ledger:
             if entry.idempotency_key != payload.idempotency_key:
                 continue

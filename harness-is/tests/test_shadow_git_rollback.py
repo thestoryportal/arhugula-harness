@@ -6,10 +6,12 @@ Test set per the U-IS-15 `Tests:` field — 7 tests covering acceptance #1-#6.
 from __future__ import annotations
 
 import subprocess
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from harness_is.chain_verification import VerificationStatus, verify_chain
 from harness_is.jsonl_event_ledger_lifecycle import JsonlLedgerHandle
 from harness_is.shadow_git_checkpoint import (
     CheckpointTriggerContext,
@@ -191,3 +193,90 @@ def test_rollback_holds_write_lock_across_ledger_preserve_window(
     result = rollback_to_checkpoint(repo, handle, checkpoint_id, _RUN)
     assert result.status is RollbackStatus.RESTORED
     assert observed_locked_from_other_thread == [True]
+
+
+def _mp_append_worker_gated(canonical_path: Path, ready_event: object) -> None:
+    """Module-level (picklable) worker — waits for a signal, then appends from
+    a genuine OS process. Forked BEFORE any lock is acquired (see the caller's
+    docstring for why fork timing matters here)."""
+    from harness_is.state_ledger_write import append_ledger_entry as _append
+
+    ready_event.wait(timeout=10)  # type: ignore[attr-defined]
+    handle = JsonlLedgerHandle(canonical_path=canonical_path, exists=False, entry_count=0)
+    _append(
+        handle,
+        EntryPayload(
+            action_id=Identifier("act-concurrent"),
+            idempotency_key=Identifier("idem-concurrent"),
+            actor=_ACTOR,
+            timestamp=datetime(2026, 5, 16, 2, tzinfo=UTC),
+        ),
+        WriteKey(
+            thread_id=_RUN,
+            step_id=Identifier("step-concurrent"),
+            idempotency_key=Identifier("idem-concurrent"),
+        ),
+    )
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="multiprocessing 'fork' context is POSIX-only")
+def test_rollback_cross_process_lock_prevents_lost_concurrent_append(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """B-40 — a genuine OS process appending during the ledger-preserve-across-
+    checkout window must NOT be silently lost by the restore-write. Without
+    `cross_process_write_lock` (B-40's fix), the concurrent process's append
+    can land between the pre-checkout read and the restore-write below it and
+    get clobbered — the exact same-process-only gap the thread-based spy test
+    above cannot detect (it only proves the in-process `threading.Lock` is
+    held, not that a genuine second OS process is excluded).
+
+    The child process is forked and started BEFORE `rollback_to_checkpoint`
+    ever runs, then waits on an Event; the monkeypatched `_git` sets that
+    event exactly during the checkout call, so the child's append attempt
+    races against the ongoing preserve window. Fork timing matters: forking
+    AFTER the parent has acquired `ledger_write_lock()` (a `threading.Lock`)
+    would duplicate that lock's OS-level locked state into the child, which
+    would then block forever (the only thread that could release it doesn't
+    run in the child's address space) — a real hazard tried and confirmed
+    here during development, not a hypothetical. Forking before any lock is
+    touched sidesteps it; the child's own `_WRITE_LOCK` copy starts unlocked,
+    and the cross-process `flock` genuinely serializes via a freshly-opened
+    fd in the child, correctly modeling an independently-launched second
+    `harness run` process.
+    """
+    import multiprocessing
+
+    from harness_is import shadow_git_rollback as sgr
+
+    repo = _repo(tmp_path)
+    checkpoint_id = _checkpoint(repo)
+    handle = _ledger(repo)
+    ctx = multiprocessing.get_context("fork")
+    ready_event = ctx.Event()
+    proc = ctx.Process(target=_mp_append_worker_gated, args=(handle.canonical_path, ready_event))
+    proc.start()
+
+    real_git = sgr._git
+
+    def _spy_git(repository_root: Path, *args: str) -> subprocess.CompletedProcess[str]:
+        if args and args[0] == "checkout":
+            ready_event.set()  # type: ignore[attr-defined]
+        return real_git(repository_root, *args)
+
+    monkeypatch.setattr(sgr, "_git", _spy_git)  # type: ignore[attr-defined]
+
+    result = rollback_to_checkpoint(repo, handle, checkpoint_id, _RUN)
+    assert result.status is RollbackStatus.RESTORED
+
+    proc.join(timeout=30)
+    assert proc.exitcode == 0
+
+    # Both the pre-existing entry and the concurrent process's entry survive
+    # (not lost by the ledger-restore-write); `rollback_to_checkpoint` also
+    # appends its own rollback-event entry after the preserve window.
+    ledger = read_ledger(handle)
+    action_ids = {entry.action_id for entry in ledger}
+    assert {"act-pre", "act-concurrent"} <= action_ids
+    assert len(ledger) == 3
+    assert verify_chain(ledger).status is VerificationStatus.VALID
