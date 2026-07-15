@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `31c2ba550ad7` |
+| `workspace_state_hash` | `99eca2d464c0` |
 | `last_refreshed` | 2026-07-15T00:00:00Z |
-| `git_head` | `b96516e5` — B-42 docstring clarification merged; B-43 registered |
+| `git_head` | `974817e5` — B-29 comment clarification merged; B-44 registered |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 91 |
 
@@ -56,11 +56,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| #1023 | 2026-07-15 | B-29 branch_metadata carrier-ownership question found already resolved via a 2026-06-13 Class 1 fork; closed with clarifying comments citing the spec. B-44 registered (registered_finding) for the split-out time_source half |
 | #1022 | 2026-07-15 | B-42 FIVE_XX_STREAK terminal-not-streak docstring clarification; B-43 registered (design_substrate_gated) for the adjacent OD spec v1.32 §7.1 stale-vacuous prose finding |
 | #1021 | 2026-07-15 | B-41 auth-fail-fast conformance fix; resolves B-38's classifier divergence |
 | #1020 | 2026-07-15 | B-38 breaker.cause classifier + real span-emission fix; B-40/B-41/B-42 registered |
 | #002c82f3 | 2026-07-15 | B-39 re-grounded (2026-07-15 no-parking sweep): all 3 design constraints confirmed still accurate against HEAD by direct read; status moved registered_finding -> design_substrate_gated (needs a Class 1 fork proposing the resume_context threading mechanism before code, per X-AL-3). No code change. Continuing sweep to B-38 next. |
-| #1019 | 2026-07-15 | B-37 closed — remote MCP streamable-HTTP transport residuals (latent TypeError fix, auth_secret_name credential field, TLS/trust_env security hardening across 3 codex-review rounds + 3-lens merge-gate all-approve) |
 ---
 
 ---
