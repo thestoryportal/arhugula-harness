@@ -32,7 +32,9 @@ the source of truth (the §10.5 stale-carry failure mode). Read the cited sectio
    `AskUserQuestion` (§14.2). Never fire a paid call / relocate a secret unilaterally
    (`[[feedback-background-agent-no-unilateral-paid-calls-or-secret-relocation]]`). Otherwise
    default to doing + reporting.
-6. **Ship.** Hand off to the `ship-pr` skill (the PR + fixed-point-refresh half).
+6. **Ship.** Hand off to the `ship-pr` skill (the PR + fixed-point-refresh half) — including its
+   mandatory reflect + `/context-save` step at arc close. Do not hand off to the next arc
+   (`ScheduleWakeup`, `/loop-stop`, or ending the turn) before that step has run.
 
 ## When the queue is genuinely slice-exhausted
 
