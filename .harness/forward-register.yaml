@@ -51,14 +51,14 @@
 # `tools/forward_register.py --check` is the CI gate.
 
 snapshot:
-  total: 39
+  total: 40
   open: 0
   design_substrate_gated: 3
   registered_finding: 9
   operator_gated: 2
   held: 1
-  closed: 24
-  identity_digest: "924eec29ca84c2d6"
+  closed: 25
+  identity_digest: "1399e38162ae350d"
   source: ".harness/post-phase-8-forward-register.md"
 
 items:
@@ -296,12 +296,21 @@ items:
     heading: "### B-31 · Paused-child resume guard does not validate `child_workflow_id` identity *(surfaced at B-21, out-of-family Codex round 2)*"
 
   - id: B-32
-    title: "Nested paused-child HITL-response routing + pause-reason propagation"
+    title: "Nested paused-child pause-reason propagation (pause_reason half only)"
+    status: closed
+    summary: "Parent pause_reason ignored a nested child's OWN HITL_PENDING pause, always defaulting to EXPLICIT_OPERATOR."
+    close_out: "SCOPE NARROWED from the original coupled finding after out-of-family Codex review caught 3 real bugs in a first attempt at the routing half (see B-39): (1) a naive 'any paused child -> HITL_PENDING' label mislabeled a nested EXPLICIT_OPERATOR pause -- fixed by checking child_snapshot.pause_reason directly at both PARALLELIZATION and ORCHESTRATOR_WORKERS/HIERARCHICAL_DELEGATION sites, any nested HITL_PENDING relabels, EFFECT_FENCE_AMBIGUOUS keeps top precedence. impl-to-cleared-spec (WorkflowPauseReason.HITL_PENDING's existing 'HITL gate opened; workflow paused awaiting operator response' semantic already covers a nested gate without extension) -- no CP spec delta needed. Mutation-probed both the true and false branches (contrasting-baseline + positive test); both confirmed load-bearing. A SECOND out-of-family Codex round then flagged the corrected label itself as a potential false-affordance (an operator seeing accurate HITL_PENDING might assume a single hitl_response safely resolves it even with >1 concurrently-paused child). Grounded via direct grep before deciding: pause_reason is read in exactly one non-telemetry place (this label-derivation code) and the composer's actual resume path (consume_and_clear) never branches on pause_reason at all -- no consumer auto-dispatches a response off this label, so the label is informational-only and safe to ship as corrected. Added an explicit code comment at both sites documenting this + cross-referencing B-39 so the limitation cannot be silently assumed away. The response-ROUTING half (multiple concurrently-paused children each getting their own operator response) is NOT closed here -- see B-39. CORRECTION (merge-gate 3-lens review): the original close_out claimed 'mutation-probed both branches at both sites' -- this was only true of the PARALLELIZATION site; the ORCHESTRATOR_WORKERS/HIERARCHICAL_DELEGATION site had ZERO test witness (test_workflow_driver_fanout_pause.py had no HITL_PENDING assertion at all). Fixed by adding a contrasting-baseline assertion to the existing test_cancellation_race_captures_paused_child_among_failing_siblings + a new positive test test_orchestrator_worker_child_hitl_pending_pause_labels_parent_hitl_pending, both mutation-probed (is -> is not flip at the second site's check correctly fails both new tests; restored, both pass). Also, spec conformance review found design-substrate/Spec_Control_Plane_v1_97.md Section21's registered-forward-work note still canonically asserted gaps (b)+(c) are 'coupled... travel together as one forward arc' -- stale-carry-text now contradicted by shipping (c) alone; closed via a CP spec delta (v1.99->v1.100) correcting that framing, mirroring the B-31/v1.99 precedent for closing a Section21-registered gap."
+    council: "no -- mechanical fix once the labeling logic was corrected; the routing half's council question is now moot per B-39's disposition"
+    pr: "#pending"
+    heading: "### B-32 · Nested paused-child pause-reason propagation *(surfaced at B-21, out-of-family Codex round 3; scope narrowed after a same-session Codex review of the first attempt)*"
+
+  - id: B-39
+    title: "Nested paused-child HITL-response ROUTING (per-child operator response delivery)"
     status: registered_finding
-    summary: "Two concurrent paused children share one run-level resume-context holder; parent pause-reason ignores nested HITL_PENDING."
-    close_out: "Design a per-branch/per-child keyed resume-context routing scheme; derive pause_reason from the union incl. nested reasons."
-    council: "conditional — C7/C8 HITL-fidelity vs C1/C5 orchestration-correctness, nameable once a routing scheme is proposed"
-    heading: "### B-32 · Nested paused-child HITL-response routing + pause-reason propagation (coupled) *(surfaced at B-21, out-of-family Codex round 3)*"
+    summary: "Two or more concurrently-paused peer/nested children share one run-level ResumeContextHolder; delivering each its OWN operator response safely is unresolved."
+    close_out: "A first attempt (ResumeContext.hitl_responses keyed by workflow_id, consumed via non-destructive peek()) was built, mutation-probed, and reviewed out-of-family -- Codex found 3 real defects, all confirmed correct on inspection: (1) peek-only never one-shot-consumes, so a later HITL-composed step sharing the same key would silently reuse a stale response; (2) workflow_id is NOT branch-unique -- fan-out siblings can dispatch the SAME child_workflow_id (the runtime already uses branch_path for exactly this disambiguation), so two paused siblings would collapse to one map entry; (3) [already split out as B-32, now closed]. The attempt was fully reverted (not shipped). Concrete design constraints for the next attempt: (a) the key must be branch-unique -- branch_path or an equivalent child-run-id derived value, NOT workflow_id alone; (b) delivery must be genuinely one-shot per key without racing concurrent siblings on the shared holder -- peek() alone is insufficient once one-shot semantics are required; (c) the actual delivery mechanism is unresolved -- execute_workflow/child_workflow_runner currently has NO resume_context parameter at all (only pause_snapshot_input), and effect_fence_resolution's own per-branch mechanism resolves PARENT-side then threads a single resolved value onto the child's StepExecutionContext -- that pattern does NOT carry into a recursive child's OWN internal re-entry the way HITL delivery needs, so the threading path itself needs designing, not just the map shape."
+    council: "not yet re-evaluated -- the original C7/C8-vs-C1/C5 framing may no longer be the right lens once a concrete delivery mechanism is proposed; ground first per this register's own no-parking discipline before deciding"
+    heading: "### B-39 · Nested paused-child HITL-response ROUTING (per-child operator response delivery) *(split from B-32 after a same-session Codex review found the first routing attempt had 3 real defects; not shipped)*"
 
   - id: B-33
     title: "verify_rotation_6_steps cannot prove a rotation boundary occurred"
