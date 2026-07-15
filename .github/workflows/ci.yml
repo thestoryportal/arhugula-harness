@@ -294,11 +294,15 @@ jobs:
       - name: Validate the forward register (impossible tally / prose drift = CI failure)
         run: uv run python tools/forward_register.py --check
 
+      - name: Validate roadmap_status.md table caps (stray/uncapped rows = CI failure)
+        run: uv run python tools/roadmap_status_refresh.py --check
+
       - name: Arc-ledger + forward-register + runtime contract-id tests
         working-directory: tools
         run: >
           uv run python -m pytest
-          test_arc_ledger.py test_forward_register.py test_runtime_contract_ids.py -q
+          test_arc_ledger.py test_forward_register.py test_runtime_contract_ids.py
+          test_roadmap_status_refresh.py test_memory_compact.py -q
 
   semantic-overlay:
     # R-IF-112 — the spec ↔ code ↔ CXA-seam ↔ substitution overlay drift gate.

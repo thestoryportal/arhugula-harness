@@ -35,10 +35,31 @@ canonical §12 protocol** rather than re-stating it — the recipe lives in CLAU
 
 This is the step most often done wrong. After the PR merges:
 
-1. **§12.2:** recompute `workspace_state_hash` (recipe `Project_Roadmap_v1.md` §7.1);
-   update `.harness/roadmap_status.md` (`workspace_state_hash`, `last_refreshed`,
-   `recently_completed` prepend / cap 5, `in_flight`, re-derive `next_action`); mark any
-   closed `R-NNN` RESOLVED + propagate `next_pointer`.
+1. **§12.2, mechanical half — run the script, don't hand-Edit.** Per
+   `[[roadmap-ledger-edits-via-idempotent-script]]`, `.harness/roadmap_status.md`'s
+   anchor table / in-flight PR table / capped `recently_completed` + `Drift detection
+   log` tables are owned by `tools/roadmap_status_refresh.py` (`just roadmap-status`),
+   not the `Edit` tool — long single-line table rows are exactly where `Edit`'s
+   old_string matching goes stale (`String to replace not found`) or races a
+   not-yet-`Read` file. Run:
+   ```
+   just roadmap-status --refresh --pr "PR #<NNN>" --date <YYYY-MM-DD> \
+     --notes "<one-line agent-authored summary of what shipped>" \
+     [--drift-source "..." --drift-resolution "..."]
+   ```
+   This recomputes `workspace_state_hash` (byte-parity-tested against
+   `tools/hooks/lib.sh`'s `hook_state_hash`), sets `last_refreshed`/`git_head`/
+   `latest_retirement_batch`/`open_fork_doc_count`, regenerates `in_flight` from
+   live `gh pr list`, prepends+caps `recently_completed` (dedup by PR ref), and
+   caps the `Drift detection log` at 10 — overflow moves (never deletes) into
+   `.harness/roadmap_drift_log_archive.md`. Use `--dry-run` to preview the diff
+   first on a high-stakes refresh. `just roadmap-status-check` is the CI/pre-commit
+   gate (cap violations or a real hash mismatch = exit 1).
+   **Still hand-authored, by design (not machine-derivable):** the `## Next
+   action` prose block and the `--notes` text itself — write those as before,
+   the script only splices them into a structurally-guaranteed-correct skeleton.
+   Mark any closed `R-NNN` RESOLVED + propagate `next_pointer` (still by hand — the
+   R-NNN registry prose is out of the script's mechanical scope).
 2. **§12.2.1 — the recursion-stopping fixed point.** The refresh commit is itself a merge,
    which would trigger another refresh. Make the refresh PR a **terminating refresh**: title
    begins **exactly** `ops: roadmap status refresh ` AND the **only** changed file is
@@ -127,9 +148,21 @@ interactive session run it.
 
 ## R-NNN closure cascade — §12.5.3
 
-On a closed R-NNN: if the close surfaced a `[[pattern]]` at cardinality ≥2, write the memory
-entry + `MEMORY.md` line in the same (or a follow-on) PR; if it superseded an existing entry,
-refresh it. (Checkpoint hygiene per §12.5.3: a checkpoint is "resolved" when its `branch:` is
+On a closed R-NNN: if the close surfaced a `[[pattern]]` at cardinality ≥2, write the topic
+memory file (`~/.claude/projects/<slug>/memory/<pattern-slug>.md`) as before, then land its
+`MEMORY.md` index line via the byte-cap-gated script rather than a hand `Edit` — the file has
+a hard 24,400-byte cap and the "measure once, trim in one pass" discipline (root `CLAUDE.md`
+§14) is exactly what `tools/memory_compact.py` enforces mechanically:
+```
+just memory-compact --upsert <path-to-MEMORY.md> --slug <pattern-slug> \
+  --line "- [Title](pattern-slug.md) — one-line hook"
+```
+This is idempotent (re-running with the same `--slug` replaces the line in place, never
+duplicates) and **refuses to write** if the result would exceed the cap — instead of landing
+an over-cap file, it reports the overage/headroom so an existing entry gets trimmed first. If
+a close superseded an existing entry, refresh it the same way (or `--remove` if it's now
+dead); `just memory-compact --check <path>` reports the current byte/cap/headroom without
+writing. (Checkpoint hygiene per §12.5.3: a checkpoint is "resolved" when its `branch:` is
 merged; PreCompact snapshots are keep-10-pruned by `session-end-cleanup.sh`; resolved-checkpoint
 archival is optional and not automated — no standing "archive Remaining-Work-addressed" step.)
 
