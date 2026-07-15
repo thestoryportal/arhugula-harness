@@ -173,11 +173,12 @@ class BreakerTransition:
     `cooldown_seconds` is the machine's static cooldown policy value, carried
     on every transition (v1.32); the caller derives `cooldown_ms` from it only
     on an actual trip (`to_state = OPEN`) — see `emit_breaker_transition_event`.
-    `cause` is the caller-supplied `BreakerCause | None` (v1.32) — real signal
-    is vacuous at every current call site (`.harness/b19-breaker-ambient-attrs-
-    redundancy-analysis.md` §3), so this is `None` in production today; the
-    field exists so a future finer-grained classifier can populate it without
-    a `BreakerTransition` shape change."""
+    `cause` is the caller-supplied `BreakerCause | None` (v1.32) — populated by
+    `retry_breaker_fallback._classify_breaker_cause` (B-38) at all 3 real
+    `record_failure()` call sites; `None` only for an exception the
+    duck-typed `.status_code` classifier doesn't recognize (previously
+    vacuous at every call site per `.harness/b19-breaker-ambient-attrs-
+    redundancy-analysis.md` §3, before B-38)."""
 
     from_state: BreakerState
     to_state: BreakerState
@@ -225,11 +226,11 @@ class BreakerStateMachine:
           before invoking the call); returns `None`.
 
         `cause` (v1.32) is the caller-supplied `BreakerCause | None` for the
-        `harness.breaker.cause` attribute — real signal is vacuous at every
-        current call site (`.harness/b19-breaker-ambient-attrs-redundancy-
-        analysis.md` §3), so callers pass `None` today; the parameter exists
-        so a future finer-grained classifier can supply a value without a
-        signature change.
+        `harness.breaker.cause` attribute — `retry_breaker_fallback
+        ._classify_breaker_cause` (B-38) supplies it at all 3 real call
+        sites (previously vacuous at every call site per
+        `.harness/b19-breaker-ambient-attrs-redundancy-analysis.md` §3,
+        before B-38).
 
         Returns the `BreakerTransition` on a state change, else `None`.
         """
@@ -447,11 +448,13 @@ class RuntimeRetryBreaker:
         `cause` / `cooldown_ms` (v1.32) are populated only on a real trip
         (`to_state = OPEN`) — `cooldown_ms` from `transition.cooldown_seconds
         * 1000` (a static duration, always known at a trip); `cause` from
-        `transition.cause` (vacuous today at every real call site per
-        `.harness/b19-breaker-ambient-attrs-redundancy-analysis.md` §3).
-        Neither attribute is meaningful on a recovery transition
-        (`half_open -> closed`) or the cooldown-elapsed `open -> half_open`
-        transition, so both stay `None` there.
+        `transition.cause`, populated by `retry_breaker_fallback
+        ._classify_breaker_cause` (B-38) at all 3 real `record_failure()`
+        call sites (previously vacuous at every call site per
+        `.harness/b19-breaker-ambient-attrs-redundancy-analysis.md` §3,
+        before B-38). Neither attribute is meaningful on a recovery
+        transition (`half_open -> closed`) or the cooldown-elapsed
+        `open -> half_open` transition, so both stay `None` there.
         """
         effective_tool_id = tool_id
         if effective_tool_id is None and transition.scope is BreakerScope.PER_MODEL:

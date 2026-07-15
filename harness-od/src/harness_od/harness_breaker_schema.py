@@ -13,15 +13,18 @@ v1.32 (B-19-BREAKER-AMBIENT-ATTRS): re-introduces `harness.breaker.cause` +
 `harness.breaker.cooldown_ms` (CP v1.1's dropped ambient 4-attribute set,
 re-landed as event attributes rather than ambient state — see
 `Spec_Operational_Discipline_v1_32.md` §7.1 change-note). Both are optional,
-populated only on a real trip (`to_state = open`). `cause` is a typed slot
-that is vacuous-today by honest design: no call site in the current runtime
-can non-speculatively populate any of the four `BreakerCause` values (see
-`.harness/b19-breaker-ambient-attrs-redundancy-analysis.md` §3); it is present
-in the schema for forward compatibility and always `None` until a follow-on
-fine-grained provider-exception classifier arc supplies real signal.
-`cooldown_ms` is real and always populated at a trip — `cooldown_seconds *
-1000`, a static duration the breaker already carries, not a live remaining-
-cooldown counter (no clock is introduced).
+populated only on a real trip (`to_state = open`). `cause` was originally a
+typed slot that was vacuous-today by honest design (no call site in the
+runtime could non-speculatively populate any of the four `BreakerCause`
+values — see `.harness/b19-breaker-ambient-attrs-redundancy-analysis.md`
+§3); `harness_runtime.lifecycle.retry_breaker_fallback._classify_breaker_cause`
+(B-38) now populates `RATE_LIMIT`/`AUTH_FAILURE`/`FIVE_XX_STREAK` at all 3
+real `record_failure()` call sites, duck-typed on the provider exception's
+`.status_code`. `CAPABILITY_SHORTFALL` remains vacuous — it names a
+separate, out-of-scope cross-family fallback-exhaustion path, not a
+per-step dispatch failure. `cooldown_ms` is real and always populated at a
+trip — `cooldown_seconds * 1000`, a static duration the breaker already
+carries, not a live remaining-cooldown counter (no clock is introduced).
 
 substrate-anchored-outside-CP: per F-CP-01 Stage 3b alignment, the
 `harness.breaker.*` namespace is substrate-anchored at the OD axis rather than
@@ -129,12 +132,15 @@ class BreakerCause(StrEnum):
     reconciliation" line 72 verbatim (the original CP-side ambient-attribute
     domain, re-declared here as the OD-canonical event-attribute domain).
 
-    Vacuous-today by honest design: no call site in the current runtime can
-    non-speculatively populate any of these four values (see
-    `.harness/b19-breaker-ambient-attrs-redundancy-analysis.md` §3). The enum
-    exists as a forward-compatible typed slot; `HarnessBreakerEvent.cause` is
-    always `None` until a follow-on fine-grained provider-exception
-    classifier arc supplies real signal.
+    Previously vacuous-today by honest design (no call site in the
+    runtime could non-speculatively populate any of these four values —
+    see `.harness/b19-breaker-ambient-attrs-redundancy-analysis.md` §3).
+    `harness_runtime.lifecycle.retry_breaker_fallback._classify_breaker_cause`
+    (B-38) now populates `RATE_LIMIT` / `AUTH_FAILURE` / `FIVE_XX_STREAK` at
+    all 3 real `record_failure()` call sites, duck-typed on the provider
+    exception's `.status_code`. `CAPABILITY_SHORTFALL` remains vacuous — it
+    names a separate, out-of-scope cross-family fallback-exhaustion path,
+    not a per-step dispatch failure.
     """
 
     RATE_LIMIT = "rate_limit"
@@ -215,7 +221,13 @@ def emit_breaker_trip_span_event(
     `breaker.tripped` events are always-sampled at all cells per §7.2 — the
     emitted `EventEmission.sampled` is `True` (composes with the U-OD-11
     always-sampled set). `parent_span_ref` and the return resolve to the
-    U-OD-04 OTel-handle alias family; no `Span*` type is materialized here.
+    U-OD-04 OTel-handle alias family; no `Span*` type is materialized here —
+    `parent_span_ref` is the real `opentelemetry.trace.Span` handle and this
+    function calls its `.add_event(...)` directly (matching
+    `alignment_floor_drift_detection.emit_drift_event`'s established
+    pattern), so `EventEmission` is a bookkeeping return-record ON TOP OF a
+    real emission, not a substitute for one (out-of-family Codex review at
+    `B-38`'s PR caught that this call was previously missing).
     """
     for attribute_name in _NON_OPTIONAL_ATTRIBUTES:
         if getattr(event, attribute_name, None) is None:
@@ -238,6 +250,23 @@ def emit_breaker_trip_span_event(
         )
         if getattr(event, attribute_name) is not None
     )
+    attributes: dict[str, str | int] = {
+        "harness.breaker.scope": event.scope.value,
+        "harness.breaker.from_state": event.from_state.value,
+        "harness.breaker.to_state": event.to_state.value,
+        "harness.breaker.trigger_count": event.trigger_count,
+    }
+    if event.permanent_fail_repeats is not None:
+        attributes["harness.breaker.permanent_fail_repeats"] = event.permanent_fail_repeats
+    if event.tool_id is not None:
+        attributes["harness.breaker.tool_id"] = event.tool_id
+    if event.model_version is not None:
+        attributes["harness.breaker.model_version"] = event.model_version
+    if event.cause is not None:
+        attributes["harness.breaker.cause"] = event.cause.value
+    if event.cooldown_ms is not None:
+        attributes["harness.breaker.cooldown_ms"] = event.cooldown_ms
+    parent_span_ref.add_event(name="breaker.tripped", attributes=attributes)
     return EventEmission(
         emitted_at_span=parent_span_ref,
         event_name="breaker.tripped",

@@ -82,7 +82,7 @@ from harness_cp.routing_manifest_residence import RetryPolicy, RoutingManifest
 from harness_cp.validator_fail_taxonomy import ValidatorRetryExitClass
 from harness_cp.validator_fail_transient_staircase import StaircaseStage
 from harness_cp.workflow_driver_types import StepExecutionContext, WorkflowStep
-from harness_od.harness_breaker_schema import BreakerScope
+from harness_od.harness_breaker_schema import BreakerCause, BreakerScope
 
 from harness_runtime.lifecycle.cross_family_cost_tag import provider_family_for_provider
 from harness_runtime.lifecycle.fallback_chain import (
@@ -284,6 +284,46 @@ def _classify_provider_exception(exc: BaseException) -> ValidatorRetryExitClass 
     if isinstance(exc, (LLMDispatchProviderUnreachableError, LLMDispatchPayloadShapeError)):
         return None
     return ValidatorRetryExitClass.TRANSIENT_RETRY
+
+
+def _classify_breaker_cause(exc: BaseException) -> BreakerCause | None:
+    """Map a provider-side exception to a `BreakerCause` for the
+    `harness.breaker.cause` telemetry attribute (C-OD-07 §7.1, B-38).
+
+    Duck-typed on `.status_code` rather than importing each provider SDK's
+    exception hierarchy directly: `anthropic.APIStatusError`,
+    `openai.APIStatusError`, and `ollama.ResponseError` all carry it, and the
+    dispatch call sites (`llm_dispatch._dispatch_anthropic` /
+    `_dispatch_openai` / `_dispatch_ollama`) already let raw SDK exceptions
+    propagate untouched — so one duck-typed classifier covers all three
+    providers without a hard SDK import here. `getattr` (never direct
+    attribute access) because this runs inside an `except Exception` block —
+    an exception without `.status_code` (e.g. a network/timeout error) must
+    not raise `AttributeError` and mask the original failure; it classifies
+    as `None` instead.
+
+    A single last-attempt's status code drives `FIVE_XX_STREAK` (the name
+    implies N consecutive 5xx, but this MVP tags on the terminal exception
+    only — consistent with `_classify_provider_exception`'s own MVP
+    discrimination above; a true consecutive-streak count is a follow-on
+    refinement, not required for `harness.breaker.cause` to be non-vacuous).
+
+    This is a SEPARATE, telemetry-only classification from
+    `_classify_provider_exception` above (which drives retry/fail-fast
+    control flow) — the two intentionally read the same exception through
+    different lenses and can disagree today (an `AuthenticationError` is
+    `AUTH_FAILURE` here but `TRANSIENT_RETRY` there, a known, tracked
+    divergence — see `B-41`)."""
+    status_code = getattr(exc, "status_code", None)
+    if not isinstance(status_code, int):
+        return None
+    if status_code == 429:
+        return BreakerCause.RATE_LIMIT
+    if status_code in (401, 403):
+        return BreakerCause.AUTH_FAILURE
+    if 500 <= status_code < 600:
+        return BreakerCause.FIVE_XX_STREAK
+    return None
 
 
 def _is_hitl_terminal_control_flow(exc: BaseException) -> bool:
@@ -831,6 +871,13 @@ class RetryBreakerFallbackDispatcher:
                     raise
                 except Exception as exc:
                     last_failure_detail = _failure_detail(exc)
+                    # B-38: telemetry-only classification for `breaker.cause`,
+                    # computed once and reused at every `record_failure()` call
+                    # below (all three sites see the same `exc`). Separate from
+                    # `cause` (the `ValidatorRetryExitClass` below it) which
+                    # drives retry/fail-fast control flow — see
+                    # `_classify_breaker_cause`'s own docstring.
+                    breaker_cause = _classify_breaker_cause(exc)
                     if _is_hitl_terminal_control_flow(exc):
                         # Terminal HITL gate decision (REJECT / EDIT-decode /
                         # cell-excluded / timeout / placement-foreclosed / audit-
@@ -851,7 +898,7 @@ class RetryBreakerFallbackDispatcher:
                             "retry.fail_class",
                             ValidatorRetryExitClass.PERMANENT_FAIL_EXIT.value,
                         )
-                        transition = breaker.record_failure()
+                        transition = breaker.record_failure(cause=breaker_cause)
                         if transition is not None:
                             self._emit_breaker_transition(transition, outer_span)
                         last_failure_class = type(exc).__name__
@@ -895,7 +942,7 @@ class RetryBreakerFallbackDispatcher:
                             "retry.fail_class",
                             ValidatorRetryExitClass.TERMINAL_FAIL_EXIT.value,
                         )
-                        transition = breaker.record_failure()
+                        transition = breaker.record_failure(cause=breaker_cause)
                         if transition is not None:
                             self._emit_breaker_transition(transition, outer_span)
                         last_failure_class = "max-attempts"
@@ -914,7 +961,7 @@ class RetryBreakerFallbackDispatcher:
                         inner_span.set_attribute("retry.delay_ms", 0)
                         inner_span.set_attribute("retry.cause_attribution", cause.value)
                         inner_span.set_attribute("retry.fail_class", cause.value)
-                        transition = breaker.record_failure()
+                        transition = breaker.record_failure(cause=breaker_cause)
                         if transition is not None:
                             self._emit_breaker_transition(transition, outer_span)
                         last_failure_class = cause.value

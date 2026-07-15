@@ -58,7 +58,7 @@ from harness_cp.workflow_driver_types import (
     WorkflowStep,
 )
 from harness_is.state_ledger_entry_schema import Actor, ActorClass
-from harness_od.harness_breaker_schema import BreakerScope
+from harness_od.harness_breaker_schema import BreakerCause, BreakerScope
 from harness_runtime.lifecycle.llm_dispatch import (
     LLMDispatchPayloadShapeError,
     LLMDispatchProviderUnreachableError,
@@ -77,6 +77,7 @@ from harness_runtime.lifecycle.retry_breaker_fallback import (
     RESERVED_LLM_DISPATCH_KEY,
     RetryBreakerFallbackDispatcher,
     RetryBreakerFallbackExhaustedError,
+    _classify_breaker_cause,
     _required_capabilities,
     materialize_retry_breaker_fallback_dispatcher_stage,
 )
@@ -693,6 +694,214 @@ async def test_breaker_transition_emitted_via_registry() -> None:
     # because fail_threshold=1).
     assert len(emissions) == 1
     assert emissions[0].to_state.value == "open"
+
+
+# ---------------------------------------------------------------------------
+# B-38 — `breaker.cause` fine-grained classification (`_classify_breaker_cause`).
+# ---------------------------------------------------------------------------
+
+
+class _FakeProviderStatusError(Exception):
+    """Stands in for `anthropic.APIStatusError` / `openai.APIStatusError` /
+    `ollama.ResponseError` — all three expose `.status_code` on the raised
+    instance; this fake carries only that shape, faithfully matching what
+    `_classify_breaker_cause` actually duck-types on."""
+
+    def __init__(self, status_code: int, message: str = "provider error") -> None:
+        self.status_code = status_code
+        super().__init__(message)
+
+
+@pytest.mark.parametrize(
+    ("status_code", "expected"),
+    [
+        (429, BreakerCause.RATE_LIMIT),
+        (401, BreakerCause.AUTH_FAILURE),
+        (403, BreakerCause.AUTH_FAILURE),
+        (500, BreakerCause.FIVE_XX_STREAK),
+        (503, BreakerCause.FIVE_XX_STREAK),
+        (599, BreakerCause.FIVE_XX_STREAK),
+        (400, None),
+        (404, None),
+        (600, None),
+        (999, None),
+    ],
+)
+def test_classify_breaker_cause_status_code_table(
+    status_code: int, expected: BreakerCause | None
+) -> None:
+    """Isolated table check of the duck-typed status-code mapping. This is a
+    half-proof on its own (see the wrapper-level tests below for the
+    load-bearing witness) — kept because it's a cheap, precise spec of the
+    mapping itself."""
+    assert _classify_breaker_cause(_FakeProviderStatusError(status_code)) is expected
+
+
+def test_classify_breaker_cause_none_without_status_code() -> None:
+    """A network/timeout exception without `.status_code` must classify as
+    `None`, not raise `AttributeError` — this runs inside an
+    `except Exception` block, where masking the original failure would be
+    worse than under-classifying."""
+    assert _classify_breaker_cause(RuntimeError("connection reset")) is None
+
+
+def test_classify_breaker_cause_none_for_non_int_status_code() -> None:
+    """Defensive: a non-int `.status_code` (e.g. a stub/mock exception with a
+    string attribute) must not raise nor misclassify."""
+
+    class _WeirdException(Exception):
+        status_code = "not-an-int"
+
+    assert _classify_breaker_cause(_WeirdException()) is None
+
+
+@pytest.mark.parametrize(
+    ("status_code", "expected_cause"),
+    [
+        (429, BreakerCause.RATE_LIMIT),
+        (401, BreakerCause.AUTH_FAILURE),
+        (500, BreakerCause.FIVE_XX_STREAK),
+    ],
+)
+@pytest.mark.asyncio
+async def test_breaker_transition_carries_classified_cause_on_real_trip(
+    status_code: int, expected_cause: BreakerCause
+) -> None:
+    """`breaker.cause` is populated end-to-end through the REAL per-attempt
+    catch site (not the classifier in isolation): a candidate-0 SDK-shaped
+    failure trips its breaker, and the SAME exception's classified cause
+    lands on the emitted `BreakerTransition`. Mirrors
+    ``test_breaker_transition_emitted_via_registry``'s spying-registry
+    pattern, swapping the fail-fast harness exception for a realistic
+    SDK-shaped one so the transient-staircase (max-attempts-exhaustion)
+    `record_failure()` call site is exercised instead of the fail-fast one."""
+    breaker = RuntimeRetryBreaker(
+        retry_policies={
+            RESERVED_LLM_DISPATCH_KEY: RetryPolicy(
+                max_attempts=1, backoff="full_jitter", jitter="full_jitter"
+            )
+        },
+        default_policy=DEFAULT_RETRY_POLICY,
+        fail_threshold=1,
+        base_delay_seconds=0.0,
+        delay_cap_seconds=0.01,
+    )
+
+    emissions: list[BreakerTransition] = []
+
+    @dataclass
+    class _SpyingRegistry:
+        inner: RuntimeRetryBreaker
+
+        def get_policy(self, tool_name: str) -> RetryPolicy:
+            return self.inner.get_policy(tool_name)
+
+        def get_breaker(self, scope: BreakerScope, identifier: str) -> BreakerStateMachine:
+            return self.inner.get_breaker(scope, identifier)
+
+        def compute_delay_seconds(self, attempt: int, rng: Any | None = None) -> float:
+            return self.inner.compute_delay_seconds(attempt, rng)
+
+        def advance_staircase(self, current: Any, cause: Any, attempt: int) -> Any:
+            return self.inner.advance_staircase(current, cause, attempt)
+
+        def emit_breaker_transition_event(
+            self, transition: Any, parent_span_ref: Any, **kwargs: Any
+        ) -> Any:
+            emissions.append(transition)
+            return self.inner.emit_breaker_transition_event(transition, parent_span_ref, **kwargs)
+
+    spying = _SpyingRegistry(inner=breaker)
+
+    primary = _candidate("anthropic", "claude-test-1")
+    same_family = (_candidate("anthropic", "claude-test-2"),)
+    chain = _chain(primary, same_family=same_family)
+    inner = _MockInnerDispatcher(
+        outcomes=[
+            _FakeProviderStatusError(status_code),
+            {"result": "candidate-1-ok"},
+        ]
+    )
+    tp, _ = _tracer_provider_with_exporter()
+    wrapper = RetryBreakerFallbackDispatcher(
+        inner=inner,
+        retry_breaker=spying,
+        fallback_chain=chain,
+        tracer_provider=tp,
+        sleep_fn=_noop_sleep,
+    )
+
+    result = await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
+    assert result == {"result": "candidate-1-ok"}
+    assert len(emissions) == 1
+    assert emissions[0].to_state.value == "open"
+    assert emissions[0].cause is expected_cause
+
+
+@pytest.mark.asyncio
+async def test_breaker_transition_cause_none_for_unclassified_exception() -> None:
+    """Positive control: an exception with no recognized `.status_code`
+    (e.g. a bare `RuntimeError`) still trips the breaker, but `cause` stays
+    `None` — unchanged default behavior for everything `_classify_breaker_cause`
+    doesn't recognize."""
+    breaker = RuntimeRetryBreaker(
+        retry_policies={
+            RESERVED_LLM_DISPATCH_KEY: RetryPolicy(
+                max_attempts=1, backoff="full_jitter", jitter="full_jitter"
+            )
+        },
+        default_policy=DEFAULT_RETRY_POLICY,
+        fail_threshold=1,
+        base_delay_seconds=0.0,
+        delay_cap_seconds=0.01,
+    )
+    emissions: list[BreakerTransition] = []
+
+    @dataclass
+    class _SpyingRegistry:
+        inner: RuntimeRetryBreaker
+
+        def get_policy(self, tool_name: str) -> RetryPolicy:
+            return self.inner.get_policy(tool_name)
+
+        def get_breaker(self, scope: BreakerScope, identifier: str) -> BreakerStateMachine:
+            return self.inner.get_breaker(scope, identifier)
+
+        def compute_delay_seconds(self, attempt: int, rng: Any | None = None) -> float:
+            return self.inner.compute_delay_seconds(attempt, rng)
+
+        def advance_staircase(self, current: Any, cause: Any, attempt: int) -> Any:
+            return self.inner.advance_staircase(current, cause, attempt)
+
+        def emit_breaker_transition_event(
+            self, transition: Any, parent_span_ref: Any, **kwargs: Any
+        ) -> Any:
+            emissions.append(transition)
+            return self.inner.emit_breaker_transition_event(transition, parent_span_ref, **kwargs)
+
+    spying = _SpyingRegistry(inner=breaker)
+    primary = _candidate("anthropic", "claude-test-1")
+    same_family = (_candidate("anthropic", "claude-test-2"),)
+    chain = _chain(primary, same_family=same_family)
+    inner = _MockInnerDispatcher(
+        outcomes=[
+            RuntimeError("transient, unclassified"),
+            {"result": "candidate-1-ok"},
+        ]
+    )
+    tp, _ = _tracer_provider_with_exporter()
+    wrapper = RetryBreakerFallbackDispatcher(
+        inner=inner,
+        retry_breaker=spying,
+        fallback_chain=chain,
+        tracer_provider=tp,
+        sleep_fn=_noop_sleep,
+    )
+
+    await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
+    assert len(emissions) == 1
+    assert emissions[0].to_state.value == "open"
+    assert emissions[0].cause is None
 
 
 # ---------------------------------------------------------------------------
