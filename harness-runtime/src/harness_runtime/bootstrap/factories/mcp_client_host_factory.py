@@ -200,9 +200,13 @@ def _build_default_policy_converter(
             blast_radius_tier=blast_radius_tier,
             # B6 Slice 2 (runtime spec v1.56 §14.9.11): stamp the per-server default
             # ToolMetadata forcing discriminators so the per-tool resolver's C-AS-02 §2.3
-            # forcing rows (1-2) + row 7 are reachable on the production MCP-discovered path
-            # — not just for manually-built contracts. MCP advertisements carry no forcing
-            # semantics, so the per-server default is the Reading-B policy source.
+            # forcing rows (1-2) are reachable on the production MCP-discovered path — not
+            # just for manually-built contracts. MCP advertisements carry no forcing
+            # semantics, so the per-server default is the policy source for rows 1-2.
+            # `is_deterministic_inhouse` is stamped for carrier consistency but is
+            # NON-GATING at row 7 (v1.14, B-25 Reading A) — reserved, not currently a
+            # forcing discriminator; see .harness/class_1_fork_sandbox_tier_floor_
+            # deterministic_inhouse_false_undefined.md.
             forces_computer_use=entry.default_forces_computer_use,
             forces_code_execution=entry.default_forces_code_execution,
             is_deterministic_inhouse=entry.default_is_deterministic_inhouse,

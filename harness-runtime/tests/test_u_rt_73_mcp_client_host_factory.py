@@ -224,10 +224,11 @@ async def test_converter_stamps_per_server_forcing_discriminators() -> None:
     """B6 Slice 2 (runtime spec v1.56 §14.9.11) — the stage-3a converter stamps the
     entry's per-server `ToolMetadata` forcing discriminators onto every MCP-discovered
     tool's `ToolContract`. Without this, MCP-advertised tools would always carry the
-    safe `False` defaults, leaving the C-AS-02 §2.3 forcing rows (1-2) + row 7 reachable
+    safe `False` defaults, leaving the C-AS-02 §2.3 forcing rows (1-2) reachable
     ONLY for manually-built contracts (the production-path gap). With it, an operator
     declaring a computer-use MCP server raises ALL its discovered tools to the per-tool
-    TIER_4 forcing path at the resolver."""
+    TIER_4 forcing path at the resolver. (`is_deterministic_inhouse` is also stamped
+    for carrier consistency but is non-gating at row 7 — v1.14, B-25 Reading A.)"""
     cfg = _config(
         [
             MCPClientConfig(
