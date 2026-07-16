@@ -259,8 +259,10 @@ items:
 - id: B-27
   title: cli/app.py paused (HITL) workflow status shares failed's exit code
   status: closed
-  summary: BUILT 2026-07-15 — runtime spec v1.99→v1.100 NEW §14.18.2 row (exit 5 PAUSED_RESUMABLE);
-    EXIT_PAUSED_RESUMABLE wired at both CLI call sites.
+  summary: BUILT 2026-07-15 — runtime spec v1.99→v1.100 NEW §14.18.2 row (exit 5 PAUSED); EXIT_PAUSED
+    wired at both CLI call sites. Codex round 1 caught the initial PAUSED_RESUMABLE naming overclaiming
+    uniform snapshot-resumability (WAL_SEGMENT/RECONCILER_LOOP pauses carry pause_snapshot=None) — renamed
+    + spec row documents both resumption shapes.
   pr: Spec_Harness_Runtime v1.100
   close_out: Ratified Q1=A/Q2=ii/Q3=b per filer rec. Clearance marker filed. 28/28 tests pass.
   council: no — mechanical once the disposition is decided

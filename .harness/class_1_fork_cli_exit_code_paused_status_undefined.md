@@ -1,6 +1,6 @@
 # Class 1 Fork — CLI exit-code mapping never assigned a disposition to `RunResult.status == "paused"`; the CLI silently collapses it onto `failed`'s exit code
 
-**Status:** RATIFIED 2026-07-15 (Q1=A new exit code `5`, Q2=ii spec+CLI, Q3=b doc-note-only — all per filer recommendation; roadmap-continue autonomous session). **BUILT** — runtime spec v1.99 → v1.100, clearance marker `.harness/clearance/spec-harness-runtime-v1-100-cleared-2026-07-15.md`; see `.harness/post-phase-8-forward-register.md` §"B-27".
+**Status:** RATIFIED 2026-07-15 (Q1=A new exit code `5`, Q2=ii spec+CLI, Q3=b doc-note-only — all per filer recommendation; roadmap-continue autonomous session). **BUILT** — runtime spec v1.99 → v1.100, clearance marker `.harness/clearance/spec-harness-runtime-v1-100-cleared-2026-07-15.md`; see `.harness/post-phase-8-forward-register.md` §"B-27". **Naming correction (out-of-family `just codex-review` round 1, same session):** Q1=A's proposed name `PAUSED_RESUMABLE` was built, then corrected to plain `PAUSED` — Codex caught that `WAL_SEGMENT`/`RECONCILER_LOOP` engine-native pauses return `pause_snapshot=None` (durable state lives in the engine's own segment log, not the workflow-layer snapshot), so "RESUMABLE" overclaimed a uniform `resume()`-with-snapshot contract that doesn't hold for those paths. See the clearance marker for the full correction; the exit code value (`5`) and trigger (`RunResult.status == PAUSED`) are unchanged, only the label.
 
 **Filed at:** 2026-07-14
 

@@ -34,7 +34,7 @@ assert _ensure_import is not None
 
 from harness_runtime.cli.app import (
     EXIT_BOOTSTRAP_ERROR,
-    EXIT_PAUSED_RESUMABLE,
+    EXIT_PAUSED,
     EXIT_SUCCESS,
     EXIT_WORKFLOW_FAIL,
     app,
@@ -275,7 +275,7 @@ def test_ac3_connection_error_during_dispatch_exits_four(
         ("failed", EXIT_WORKFLOW_FAIL),
         ("partial", EXIT_WORKFLOW_FAIL),
         ("pending", EXIT_WORKFLOW_FAIL),
-        ("paused", EXIT_PAUSED_RESUMABLE),
+        ("paused", EXIT_PAUSED),
     ],
 )
 def test_ac4_cp_status_to_exit_code_mapping(

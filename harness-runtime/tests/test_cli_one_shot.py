@@ -28,7 +28,7 @@ from harness_runtime.cli.app import (
     EXIT_BOOTSTRAP_ERROR,
     EXIT_CONFIG_ERROR,
     EXIT_MANIFEST_ERROR,
-    EXIT_PAUSED_RESUMABLE,
+    EXIT_PAUSED,
     EXIT_SUCCESS,
     EXIT_WORKFLOW_FAIL,
     app,
@@ -344,7 +344,7 @@ def test_b27_workflow_paused_status_exits_five(
     mock_api_run(result=_run_result(status="paused"))
     manifest = _write_yaml(tmp_path)
     result = runner.invoke(app, ["run", str(manifest)])
-    assert result.exit_code == EXIT_PAUSED_RESUMABLE, result.stdout + result.stderr
+    assert result.exit_code == EXIT_PAUSED, result.stdout + result.stderr
 
 
 # ---------------------------------------------------------------------------

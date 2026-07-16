@@ -49,7 +49,7 @@ EXIT_WORKFLOW_FAIL = 1
 EXIT_MANIFEST_ERROR = 2
 EXIT_CONFIG_ERROR = 3
 EXIT_BOOTSTRAP_ERROR = 4
-EXIT_PAUSED_RESUMABLE = 5
+EXIT_PAUSED = 5
 
 
 app = typer.Typer(
@@ -227,7 +227,7 @@ _CP_STATUS_TO_EXIT_CODE: dict[str, int] = {
     "failed": EXIT_WORKFLOW_FAIL,
     "partial": EXIT_WORKFLOW_FAIL,
     "pending": EXIT_WORKFLOW_FAIL,
-    "paused": EXIT_PAUSED_RESUMABLE,
+    "paused": EXIT_PAUSED,
 }
 
 
@@ -349,7 +349,7 @@ def run_command(
     if run_result.status == "completed":
         raise typer.Exit(code=EXIT_SUCCESS)
     if run_result.status == "paused":
-        raise typer.Exit(code=EXIT_PAUSED_RESUMABLE)
+        raise typer.Exit(code=EXIT_PAUSED)
     # status ∈ {"drained", "failed", "partial"} → exit 1
     raise typer.Exit(code=EXIT_WORKFLOW_FAIL)
 
