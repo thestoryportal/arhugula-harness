@@ -756,10 +756,11 @@ class MCPClientConfig(BaseModel):
     Conservative default `False`."""
 
     default_is_deterministic_inhouse: bool = False
-    """Operator-declared per-server default for `ToolMetadata.is_deterministic_inhouse`
-    (C-AS-02 §2.3 row 7 — read-only deterministic in-house → TIER_1, bounded below by the
-    surface default + blast floor), stamped by the stage-3a converter (B6 Slice 2).
-    Conservative default `False`."""
+    """Operator-declared per-server default for `ToolMetadata.is_deterministic_inhouse`,
+    stamped by the stage-3a converter (B6 Slice 2). NON-GATING at C-AS-02 §2.3 row 7
+    (v1.14, B-25) — row 7 keys purely on `blast_radius_tier`; this default does not
+    currently change the resolved tier. Reserved for a possible future
+    verification-gated mechanism. Conservative default `False`."""
 
     default_idempotent: bool = False
     """Operator-declared per-server default for `ToolContract.idempotent` (AS spec

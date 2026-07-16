@@ -118,7 +118,7 @@ def test_sandbox_tier_floor_remote_l3_returns_blast_radius_floor() -> None:
 
 
 def test_sandbox_tier_floor_read_only_deterministic_returns_tier_1() -> None:
-    """§2.3 row 7 — read-only deterministic in-house → tier-1-process."""
+    """§2.3 row 7 (v1.14) — read-only → tier-1-process, keyed on blast_radius_tier alone."""
     tool = ToolMetadata(
         is_deterministic_inhouse=True,
         forces_computer_use=False,
@@ -126,6 +126,26 @@ def test_sandbox_tier_floor_read_only_deterministic_returns_tier_1() -> None:
     )
     result = sandbox_tier_floor(tool, _SURFACE, BlastRadiusTier.READ_ONLY, None, None)
     assert result.tier is SandboxTier.TIER_1_PROCESS
+
+
+def test_sandbox_tier_floor_read_only_ignores_is_deterministic_inhouse() -> None:
+    """B-25 witness: row 7 (v1.14) keys purely on `blast_radius_tier`. `is_deterministic_inhouse`
+    is reserved, non-gating — True and False must resolve identically for a read-only tool.
+    This pins the operator-ratified Reading A resolution (ADR-D2 v1.3 / spec v1.14) as an
+    intentional decision, not an untested gap."""
+    deterministic = ToolMetadata(
+        is_deterministic_inhouse=True,
+        forces_computer_use=False,
+        forces_code_execution=False,
+    )
+    unverified = ToolMetadata(
+        is_deterministic_inhouse=False,
+        forces_computer_use=False,
+        forces_code_execution=False,
+    )
+    result_true = sandbox_tier_floor(deterministic, _SURFACE, BlastRadiusTier.READ_ONLY, None, None)
+    result_false = sandbox_tier_floor(unverified, _SURFACE, BlastRadiusTier.READ_ONLY, None, None)
+    assert result_true.tier is result_false.tier is SandboxTier.TIER_1_PROCESS
 
 
 def test_sandbox_tier_floor_local_mutation_returns_tier_2() -> None:
