@@ -99,3 +99,15 @@ Branch: b24-b27-fork-ratification-build · Date: 2026-07-15
 | test-witness adequacy | APPROVE (all 4 load-bearing lines pinned bidirectionally; 1 non-blocking gap — ecdsa-p256/rsa table rows unwitnessed — CLOSED post-gate by `test_signature_length_table_pins_spec_values_and_forecloses_der`, itself mutation-probed 64→72) |
 
 **Outcome:** all-APPROVE → merge without HIL (CI-green precondition met, 16/16). Non-blocking test-witness note fixed before merge in the same PR.
+
+## PR #1033 — 2026-07-16 — `b-47-od-signing-backend-seam`
+
+**Round 1:** concurrency APPROVE (pure functions, write-once backend carrier, boto3 client thread-safe sharing shape; length gate keys on caller-local algo — safer than the CP sibling) · spec-conformance APPROVE (v1.33 mirror faithful to B-22/ADR-D8/§21.2 baseline; bundled-absorption + clearance marker satisfy X-AL-3; CXA allowlist classification carried in the cleared delta itself; advisory: root CLAUDE.md §2.3 OD head pointer lags — established catch-up class) · test-witness **BLOCK** (canonical-message witnesses reconstructed expectations via the helper under test; 3 of 4 bindings + injectivity unpinned — M1/M2/M3 survived the suite).
+
+**Fix:** literal-bytes witness (`64:<hash>|5:key-1|7:ed25519|16:DEPLOYMENT_BOUND` pinned as an explicit f-string, verified via the cryptography-library public key), relabel probes for all four bindings + plain-join injectivity, backend-never-consulted assert on the key_id precondition, immutability witness on the public width table. M1/M2/M3 + mutable-alias revert each fail exactly one witness (probed).
+
+**Round 2:** concurrency APPROVE · spec-conformance APPROVE (passthrough-row "every production writer" claim verified strictly — 4 call sites, 2 threaded + sign_rotation_pair carved out with an empirically faithful rationale; registering items (e)/(f) matches the B-45/B-46 precedent with stronger non-regression justification) · test-witness APPROVE (BLOCK discharged; reviewer re-ran M1/M2/M3 live — each killed only by the new witness; compute_entry_hash tandem-drift covered by its own literal-pinned witness).
+
+**Codex chain:** round 1 (redaction-writer passthrough P1 + mutable-table P2 — both fixed), round 3 ((e) persistence fidelity — verified, registered), round 4 (close_out structure — fixed), round 5 ((f) tenant-scope binding — verified, registered), rounds 2/6 clean.
+
+**Outcome:** all-APPROVE at round 2 → merge without HIL (CI-green precondition).
