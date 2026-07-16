@@ -555,6 +555,15 @@ def test_signature_length_table_pins_spec_values_and_forecloses_der() -> None:
         "rsa-pss-2048": 256,
     }
 
+    # The PUBLIC view must be immutable (out-of-family Codex P2 + merge-gate
+    # note): state that controls signature validation must not be writable
+    # through its public name.
+    from harness_cp.f5_signing_key_resolution import SIGNATURE_LENGTH_BY_ALGORITHM
+
+    assert SIGNATURE_LENGTH_BY_ALGORITHM == _SIGNATURE_LENGTH_BY_ALGORITHM
+    with pytest.raises(TypeError):
+        SIGNATURE_LENGTH_BY_ALGORITHM["ed25519"] = 1  # type: ignore[index]
+
     class _DerEcdsaBackend:
         algorithm = "ecdsa-p256"
 

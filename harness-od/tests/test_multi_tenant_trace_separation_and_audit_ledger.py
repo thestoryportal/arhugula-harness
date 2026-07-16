@@ -632,8 +632,58 @@ def test_sign_with_backend_rejects_wrong_length_signature() -> None:
 
 def test_sign_with_backend_still_requires_key_id() -> None:
     """The §21.2 key_id precondition fires before any backend interaction —
-    identical behavior on both seam paths."""
+    identical behavior on both seam paths; the recording backend proves it
+    was never consulted (merge-gate test-witness lens note)."""
+    backend = _InMemoryEd25519Backend()
     with pytest.raises(ValueError, match="key_id is required"):
-        sign_audit_entry(
-            _payload("h0"), "", SignatureAlgorithm.ED25519, backend=_InMemoryEd25519Backend()
+        sign_audit_entry(_payload("h0"), "", SignatureAlgorithm.ED25519, backend=backend)
+    assert backend.seen_key_periods == []
+
+
+def test_canonical_message_exact_bytes_pin_all_four_bindings_and_injectivity() -> None:
+    """§21.2.1 item 3 — merge-gate test-witness lens BLOCK fix: the earlier
+    round-trip witness reconstructed the expected message with the SAME
+    `_canonical_od_signing_message` helper the implementation calls, so it
+    could not catch a mutated helper (dropped entry-hash/algo/period binding,
+    or a de-injectivized join). This witness constructs the committed message
+    LITERALLY — `{len}:{part}` segments joined by `|` over the exact
+    four-tuple — and verifies the real signature against those bytes, then
+    proves each remaining binding by literal relabeled-message probes."""
+    import base64
+
+    import pytest as _pytest
+    from cryptography.exceptions import InvalidSignature
+
+    payload = _payload("h0")
+    backend = _InMemoryEd25519Backend()
+    sig = sign_audit_entry(payload, "key-1", SignatureAlgorithm.ED25519, backend=backend)
+    raw = base64.b64decode(sig.audit_signature_value, validate=True)
+
+    entry_hash = compute_entry_hash(payload)
+    assert len(entry_hash) == 64  # sha256 hex
+
+    def literal_message(h: str, key_id: str, algo: str, period: str) -> bytes:
+        return "|".join(f"{len(part)}:{part}" for part in (h, key_id, algo, period)).encode()
+
+    expected = literal_message(entry_hash, "key-1", "ed25519", "DEPLOYMENT_BOUND")
+    assert expected == (f"64:{entry_hash}|5:key-1|7:ed25519|16:DEPLOYMENT_BOUND".encode())
+    backend.public_key.verify(raw, expected)  # raises on mismatch
+
+    # Payload/content binding — a different entry hash must not verify.
+    with _pytest.raises(InvalidSignature):
+        backend.public_key.verify(
+            raw, literal_message("f" * 64, "key-1", "ed25519", "DEPLOYMENT_BOUND")
         )
+    # Algorithm binding.
+    with _pytest.raises(InvalidSignature):
+        backend.public_key.verify(
+            raw, literal_message(entry_hash, "key-1", "ecdsa-p256", "DEPLOYMENT_BOUND")
+        )
+    # Key-period binding.
+    with _pytest.raises(InvalidSignature):
+        backend.public_key.verify(raw, literal_message(entry_hash, "key-1", "ed25519", "0"))
+    # Injectivity — the same fields under a plain (non-length-prefixed) join
+    # must not verify: the length prefixes are part of the signed encoding.
+    plain_join = "|".join((entry_hash, "key-1", "ed25519", "DEPLOYMENT_BOUND")).encode()
+    with _pytest.raises(InvalidSignature):
+        backend.public_key.verify(raw, plain_join)
