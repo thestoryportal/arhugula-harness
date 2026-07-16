@@ -37,7 +37,19 @@ tenant A's reader does not return tenant B's entries.
 runs at the OD emission site and produces the `AuditSignatureAttributes`
 that already live on the `AuditLedgerEntry` this module receives. The
 writer does not re-sign and does not consult signing config; the live
-signing backend (HSM / KMS / keystore) is deferred per ADR-D5 v1.3 §1.4.1.
+signing backend is composition-root-injected at the emission sites per OD
+spec v1.33 §21.2.1 (`B-47`), never here.
+
+**Full-entry sidecar (`B-47` item (e)).** The IS wrap above persists only
+the `audit:<tag>:<entry_hash>` REFERENCE (the six-field C-IS-05 shape is
+ADR-F2-committed and carries no content field), so the writer additionally
+lands every APPENDED entry — payload + signature_attrs + entry_hash — as
+one JSON line in an `audit-entries.jsonl` sidecar beside the IS ledger
+file. The chain's embedded `entry_hash` binds each sidecar row to exactly
+one tamper-evident chain entry; the IS append is the single dedup
+authority (a NOOP replay writes no sidecar line). Reads rehydrate via
+`read_full_entries_for_tenant` — the surface a signature verifier needs
+after restart.
 
 **Verification.** `verify_hash_chain_integrity` (C-OD-21 §21.2) verifies
 the OD audit-chain links via `AuditPayload.prior_entry_hash` / `entry_hash`.
@@ -53,11 +65,17 @@ stage shape established at U-RT-27..31.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import ClassVar
 
+from harness_is.cross_process_ledger_lock import (
+    cross_process_read_lock,
+    cross_process_write_lock,
+)
 from harness_is.state_ledger_entry_schema import Identifier, StateLedgerEntry, Timestamp
 from harness_is.state_ledger_write import (
     EntryPayload,
@@ -92,6 +110,26 @@ class RuntimeAuditLedgerWriter:
 
     _SINGLE_TENANT_TAG: ClassVar[str] = "_single"
     _ACTION_ID_PREFIX: ClassVar[str] = "audit"
+
+    _SIDECAR_FILENAME: ClassVar[str] = "audit-entries.jsonl"
+    """`B-47` close-out item (e) — the full-entry durable sidecar.
+
+    The IS wrap persists only the `audit:<tag>:<entry_hash>` reference (the
+    six-field C-IS-05 entry shape is ADR-F2-committed and carries no content
+    field), so before this sidecar existed the OD `AuditLedgerEntry`'s
+    `payload` + `signature_attrs` were produced then dropped — a real KMS
+    signature could never be recovered or verified after restart
+    (out-of-family Codex round-3 P1 on PR #1033, verified directly). Each
+    APPENDED write lands one JSON line `{"tenant_tag", "entry"}` in this
+    sidecar (same directory as the IS ledger file); the IS chain's action_id
+    embeds the OD `entry_hash`, binding every sidecar row to exactly one
+    tamper-evident chain entry. IDEMPOTENT_NOOP replays write nothing — the
+    IS chain is the single dedup authority, the sidecar a synchronized copy.
+    """
+
+    @property
+    def _sidecar_path(self) -> Path:
+        return self.ledger_writer.handle.canonical_path.parent / self._SIDECAR_FILENAME
 
     @classmethod
     def _tenant_tag(cls, tenant_id: str | None) -> str:
@@ -132,7 +170,67 @@ class RuntimeAuditLedgerWriter:
             step_id=action_id,
             idempotency_key=action_id,
         )
-        return self.ledger_writer.append(payload, write_key)
+        result = self.ledger_writer.append(payload, write_key)
+        if result is WriteResult.APPENDED:
+            # Item (e): persist the FULL signed entry. IS-append-first makes
+            # the chain the single dedup authority (a NOOP replay writes no
+            # sidecar line); the crash window between the IS append and this
+            # write leaves a chain ref whose sidecar row is absent — a loud,
+            # detectable gap (`read_full_entries_for_tenant` simply won't
+            # return it), never a silently duplicated or torn row.
+            self._append_sidecar_line(tenant_id, audit_entry)
+        return result
+
+    def _append_sidecar_line(self, tenant_id: str | None, audit_entry: AuditLedgerEntry) -> None:
+        """Append one full-entry JSON line to the sidecar (item (e)).
+
+        Guarded by the same B-40 cross-process write lock the IS ledger uses
+        (keyed on the sidecar's own path), so two concurrent `harness run`
+        invocations against one repo cannot interleave partial lines. The OD
+        carrier is JSON-clean (`audit_signature_value` is base64/placeholder
+        text, never raw bytes — the PR-A representation discipline), so
+        `model_dump(mode="json")` round-trips losslessly.
+        """
+        line = json.dumps(
+            {
+                "tenant_tag": self._tenant_tag(tenant_id),
+                "entry": audit_entry.model_dump(mode="json"),
+            },
+            separators=(",", ":"),
+        )
+        with cross_process_write_lock(self._sidecar_path):
+            with self._sidecar_path.open("a", encoding="utf-8") as fh:
+                fh.write(line + "\n")
+
+    def read_full_entries_for_tenant(self, tenant_id: str | None) -> list[AuditLedgerEntry]:
+        """Tenant-scoped FULL-entry reader over the item-(e) sidecar.
+
+        Rehydrates every persisted `AuditLedgerEntry` (payload +
+        signature_attrs + entry_hash) for `tenant_id` — the surface a
+        verifier needs to check real signatures after restart, which the
+        ref-only `read_for_tenant` cannot provide. Returns `[]` when the
+        sidecar does not exist yet (no audit entry has ever been appended
+        through this writer). A malformed line fails loud — a corrupt
+        audit-entry sidecar must never be silently skipped.
+        """
+        tag = self._tenant_tag(tenant_id)
+        if not self._sidecar_path.exists():
+            return []
+        entries: list[AuditLedgerEntry] = []
+        # B-40 shared read lock (side-effect-free: never O_CREAT, never mkdir)
+        # — excludes a concurrent writer's partial line once the lock file
+        # exists; the brand-new-file window carries the documented B-46
+        # residual, identical to the main-ledger read path.
+        with cross_process_read_lock(self._sidecar_path):
+            with self._sidecar_path.open(encoding="utf-8") as fh:
+                for line in fh:
+                    if not line.strip():
+                        continue
+                    row = json.loads(line)
+                    if row["tenant_tag"] != tag:
+                        continue
+                    entries.append(AuditLedgerEntry.model_validate(row["entry"]))
+        return entries
 
     def read_for_tenant(self, tenant_id: str | None) -> list[StateLedgerEntry]:
         """Tenant-scoped reader (C-OD-21 §21.1 cross-tenant separation surface).

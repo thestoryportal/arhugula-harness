@@ -64,6 +64,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from harness_core import DeploymentSurface, PersonaTier
+from harness_cp.f5_signing_key_resolution import SigningBackend
 from harness_od.per_sandbox_tier_otlp_reachability import (
     ReachabilityViolation,
     assert_otlp_reachable_from_sandbox,
@@ -158,6 +159,7 @@ def materialize_span_processor_stage(
     *,
     exporter: SpanExporter | None = None,
     audit_writer: AuditLedgerWriter | None = None,
+    signing_backend: SigningBackend | None = None,
 ) -> SpanProcessorStage:
     """Attach a `BatchSpanProcessor(OTLPSpanExporter(...))` to `provider`.
 
@@ -227,6 +229,9 @@ def materialize_span_processor_stage(
                     audit_writer=audit_writer,
                     tenant_id=config.tenant_id,
                     signing_key_id="harness-runtime-redaction-token",
+                    # B-47 PR B — the composition-root-constructed backend
+                    # (OD spec v1.33 §21.2.1). None = placeholder signing.
+                    signing_backend=signing_backend,
                 ),
                 classifier=EvalGradeSemanticRedactionClassifier(),
             )

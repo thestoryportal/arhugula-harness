@@ -436,6 +436,57 @@ class ProviderSecretsConfig(BaseModel):
         return self
 
 
+class AuditSigningBackendKind(StrEnum):
+    """Audit-signing backend selector (OD spec v1.33 §21.2.1 / `B-47` PR B).
+
+    `NONE` (the default) preserves the placeholder signing path byte-for-byte
+    — no backend is constructed and every audit write behaves exactly as
+    before the seam existed. `AWS_KMS` selects ADR-D8's
+    `AwsKmsSigningBackend` (Ed25519, KMS-delegated — the private key never
+    enters harness process memory).
+    """
+
+    NONE = "none"
+    AWS_KMS = "aws-kms"
+
+
+class AuditSigningConfig(BaseModel):
+    """Audit-signing composition-root config (`B-47` PR B; ADR-D8 §Decision
+    items 2/5).
+
+    Carries the deployment-time selection + the logical `key_id → physical
+    KMS key ARN` mapping ADR-D8 requires the composition root to own. Key
+    MATERIAL never lives in this config — only key *identifiers*; the AWS
+    credential chain is boto3's own (env / shared config / instance role),
+    never harness-managed. Mirrors `ProviderSecretsConfig`'s config-driven
+    backend-selector shape (the R-421 precedent).
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    backend: AuditSigningBackendKind = AuditSigningBackendKind.NONE
+    """Backend selector for audit-entry signing."""
+
+    key_arns: dict[str, str] = Field(default_factory=dict)
+    """Logical `key_id` (e.g. `"harness-runtime-redaction-token"`) → physical
+    AWS KMS key ARN/ID. Aliases are rejected at backend construction
+    (`MutableKeyAliasRejectedError` — ADR-D8 §Decision item 2)."""
+
+    aws_region: str | None = None
+    """Optional region override for the boto3 KMS client; `None` defers to
+    boto3's own resolution chain."""
+
+    @model_validator(mode="after")
+    def _require_key_arns_for_aws_kms(self) -> Self:
+        if self.backend is AuditSigningBackendKind.AWS_KMS and not self.key_arns:
+            raise ValueError(
+                "key_arns must be non-empty when backend is aws-kms — the "
+                "composition root must supply an explicit key_id -> KMS key "
+                "ARN mapping (ADR-D8 §Decision item 2); no default key is assumed"
+            )
+        return self
+
+
 class OTelConfig(BaseModel):
     """OTel runtime config — U-RT-07 (L1).
 
@@ -1567,6 +1618,12 @@ class RuntimeConfig(BaseModel):
     Default-factory'd per finding-fix (A) above. Carries ALLOWLIST KEYS only
     (per the docstring on `ProviderSecretsConfig`); actual secret values come
     from the OS keyring at request time per ADR-F5."""
+
+    audit_signing: AuditSigningConfig = Field(default_factory=AuditSigningConfig)
+    """Audit-signing composition-root config (`B-47` PR B; OD spec v1.33
+    §21.2.1). Default (`backend = "none"`) constructs no backend and preserves
+    the placeholder signing path byte-for-byte. Key identifiers only — never
+    key material."""
 
     otel: OTelConfig
     """OTLP endpoint, sampler mode, additional resource attrs. Enriched at U-RT-07.

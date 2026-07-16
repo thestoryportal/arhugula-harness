@@ -359,3 +359,133 @@ def test_time_source_injection_drives_entry_timestamps(tmp_path: Path) -> None:
     [is_entry] = read_ledger(writer.ledger_writer.handle)
     # Ticking clock advances by 1 microsecond per call.
     assert is_entry.timestamp == fixed + timedelta(microseconds=1)
+
+
+# --- B-47 item (e) — full-entry durable sidecar -----------------------------
+
+
+def test_append_persists_full_entry_to_sidecar_and_rehydrates() -> None:
+    """Item (e) round-trip — the full signed entry (payload + signature_attrs
+    + entry_hash) survives durable persistence and rehydrates byte-equal via
+    `read_full_entries_for_tenant`; before the sidecar, only the
+    `audit:<tag>:<entry_hash>` reference survived and a real signature was
+    produced then dropped (codex round-3 P1 on PR #1033, verified)."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        writer = _writer(Path(tmp))
+        entry = _make_audit_entry("a" * 64)
+        assert writer.append("tenant-A", entry) is WriteResult.APPENDED
+
+        [rehydrated] = writer.read_full_entries_for_tenant("tenant-A")
+        assert rehydrated == entry
+        assert rehydrated.signature_attrs.audit_signature_value == "sig:aaaaaaaa"
+
+
+def test_idempotent_replay_writes_no_duplicate_sidecar_line() -> None:
+    """Item (e) dedup — the IS chain is the single dedup authority: a replay
+    returning IDEMPOTENT_NOOP writes no second sidecar line."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        writer = _writer(Path(tmp))
+        entry = _make_audit_entry("b" * 64)
+        assert writer.append("tenant-A", entry) is WriteResult.APPENDED
+        assert writer.append("tenant-A", entry) is WriteResult.IDEMPOTENT_NOOP
+
+        assert len(writer.read_full_entries_for_tenant("tenant-A")) == 1
+
+
+def test_sidecar_reader_is_tenant_scoped_and_empty_when_absent() -> None:
+    """Item (e) separation — the full-entry reader honors the same C-OD-21
+    §21.1 cross-tenant separation as the ref reader, and returns `[]` (not an
+    error) before any entry was ever appended."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        writer = _writer(Path(tmp))
+        assert writer.read_full_entries_for_tenant("tenant-A") == []
+
+        writer.append("tenant-A", _make_audit_entry("c" * 64))
+        writer.append("tenant-B", _make_audit_entry("d" * 64))
+
+        [entry_a] = writer.read_full_entries_for_tenant("tenant-A")
+        [entry_b] = writer.read_full_entries_for_tenant("tenant-B")
+        assert entry_a.entry_hash == "c" * 64
+        assert entry_b.entry_hash == "d" * 64
+
+
+# --- B-47 PR B — full composition-root chain witness -------------------------
+
+
+def test_full_chain_stage_to_real_signature_to_sidecar_rehydration(tmp_path: Path) -> None:
+    """THE end-to-end composition-root witness (B-47 PR B; one witness through
+    the real path, not seam halves): `materialize_span_processor_stage` at
+    MULTI_TENANT_COMPLIANCE with a composition-root-constructed `SigningBackend`
+    → a real span's PII attribute tokenizes → the redaction-token audit entry
+    is signed by REAL cryptography (not the placeholder) → the runtime audit
+    writer persists it → the item-(e) sidecar rehydrates the full entry with
+    the signature intact and it verifies against the canonical message."""
+    import base64
+
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    from harness_od.multi_tenant_trace_separation_and_audit_ledger import (
+        _canonical_od_signing_message,
+    )
+    from harness_runtime.lifecycle.span_processor import materialize_span_processor_stage
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    class _Ed25519Backend:
+        algorithm = "ed25519"
+
+        def __init__(self) -> None:
+            self._private_key = Ed25519PrivateKey.generate()
+            self.public_key = self._private_key.public_key()
+
+        def sign(self, *, message: bytes, key_id: str, key_period: int) -> bytes:
+            del key_id, key_period
+            return self._private_key.sign(message)
+
+        def verify(self, *, message: bytes, signature: bytes, key_id: str, key_period: int) -> bool:
+            del message, signature, key_id, key_period
+            return True
+
+    writer = _writer(tmp_path)
+    backend = _Ed25519Backend()
+    base = _config(tmp_path)
+    config = base.model_copy(
+        update={
+            "persona_tier": base.persona_tier.__class__.MULTI_TENANT_COMPLIANCE,
+            "tenant_id": "tenant-b47",
+        }
+    )
+
+    provider = TracerProvider()
+    stage = materialize_span_processor_stage(
+        config,
+        provider,
+        exporter=InMemorySpanExporter(),
+        audit_writer=writer,
+        signing_backend=backend,
+    )
+    assert stage.redaction_processor.tokenizer_enabled is True
+
+    tracer = provider.get_tracer("b47-composition-root-witness")
+    with tracer.start_as_current_span("anthropic.messages.create") as span:
+        span.set_attribute("gen_ai.input.messages", "customer ssn 123-45-6789")
+    stage.flush(timeout_millis=5000)
+
+    [entry] = writer.read_full_entries_for_tenant("tenant-b47")
+    value = entry.signature_attrs.audit_signature_value
+    assert not value.startswith("unsigned:")
+    raw = base64.b64decode(value, validate=True)
+    assert len(raw) == 64
+
+    expected_message = _canonical_od_signing_message(
+        entry.entry_hash,
+        key_id="harness-runtime-redaction-token",
+        algo_value="ed25519",
+        key_period_token="DEPLOYMENT_BOUND",
+    )
+    backend.public_key.verify(raw, expected_message)  # raises on mismatch

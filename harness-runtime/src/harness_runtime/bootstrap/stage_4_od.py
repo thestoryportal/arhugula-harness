@@ -32,6 +32,7 @@ from harness_runtime.bootstrap.factories.validator_framework_factory import (
     materialize_validator_framework_stage,
 )
 from harness_runtime.bootstrap.mutable_context import _MutableHarnessContext
+from harness_runtime.config.audit_signing import make_audit_signing_backend
 from harness_runtime.lifecycle.audit_writer import materialize_audit_writer_stage
 from harness_runtime.lifecycle.collector_daemon import materialize_collector_daemon_stage
 from harness_runtime.lifecycle.cost_attribution import materialize_cost_attribution_stage
@@ -62,8 +63,21 @@ async def execute(
     audit = materialize_audit_writer_stage(config, ctx.ledger_writer)
     ctx.audit_writer = audit.writer
 
+    # 2b. Audit-signing backend (B-47 PR B — OD spec v1.33 §21.2.1 composition
+    # root). `None` for the default `backend = "none"` config: every signing
+    # surface keeps the placeholder path byte-for-byte. Constructed before the
+    # span processor so the redaction-token map can receive it; a configured
+    # backend that cannot be built (missing boto3, alias ARN) fails the stage
+    # loud — a deployment that asked for real signing never silently degrades.
+    ctx.audit_signing_backend = make_audit_signing_backend(config.audit_signing)
+
     # 3. Span processor + exporter (attaches to the registered tracer provider).
-    materialize_span_processor_stage(config, tracer.provider, audit_writer=ctx.audit_writer)
+    materialize_span_processor_stage(
+        config,
+        tracer.provider,
+        audit_writer=ctx.audit_writer,
+        signing_backend=ctx.audit_signing_backend,
+    )
     # The span processor's lifetime is tied to the tracer provider; the stage
     # record is not held on HarnessContext (the BSP is reachable via the
     # tracer provider's processor list). The C-RT-10 shutdown will need to

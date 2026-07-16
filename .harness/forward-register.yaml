@@ -806,7 +806,15 @@ items:
     just key resolution, since KMS availability now sits on the write-time hot path; (e) persists the signed
     entry (or an equivalent durable sidecar) at RuntimeAuditLedgerWriter.append, which today serializes
     neither payload nor signature_attrs -- a real KMS signature must reach durable storage, not be produced
-    then dropped (out-of-family Codex round-3 P1 on PR A, verified directly); (f) binds tenant scope into
+    then dropped (out-of-family Codex round-3 P1 on PR A, verified directly). PR B1 (2026-07-16) landed
+    items (a) AuditSigningConfig on RuntimeConfig, (b) make_audit_signing_backend (boto3-import-guarded,
+    kms_client injection seam, fail-loud on missing SDK/alias ARNs), (e) the full-entry durable sidecar
+    (audit-entries.jsonl beside the IS ledger, APPENDED-only writes, B-40-locked, tenant-scoped
+    read_full_entries_for_tenant rehydration), and the token-map half of (c) (stage-4 constructs the
+    backend onto ctx.audit_signing_backend and threads it through materialize_span_processor_stage into
+    AuditLedgerRedactionTokenMap; full-chain witness proves stage-to-sidecar real-signature round-trip).
+    REMAINING for the close -- rest of (c) (hitl_gate_composer / sub_agent_dispatch / cost_attribution_*
+    builder threading), (d) the C9 breaker, and (f) below; (f) binds tenant scope into
     what gets signed (out-of-family Codex round-5 P1 on PR A) -- the section 21.2.1 canonical message binds
     entry-hash/key_id/algo/period but not tenant identity, which today enters only at the writer wrap, so
     under a DEPLOYMENT-scoped signing key serving multiple tenants a signed entry could be re-presented

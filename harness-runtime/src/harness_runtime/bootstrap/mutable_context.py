@@ -180,6 +180,11 @@ class _MutableHarnessContext:
     per spec v1.21 §4 C-RT-04."""
     actor: Any = None  # harness_is.Actor — runtime identity; threaded into stage 1
     keyring_resolver: Any = None  # ProviderSecretResolver — threaded into stage 3a
+    audit_signing_backend: Any = None
+    """SigningBackend | None — B-47 PR B composition root. Constructed at
+    stage 4 from `config.audit_signing` (`make_audit_signing_backend`);
+    threaded into the span-processor redaction-token map (and, at PR B2, the
+    remaining audit composer builders). `None` = placeholder signing."""
     requires_inference: bool = True
     """Runtime spec v1.47 §2.1 — bootstrap-time inference-need signal (NOT a
     frozen `HarnessContext` field; not in `_REQUIRED_FIELDS`). Set by
