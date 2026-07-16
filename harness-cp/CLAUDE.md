@@ -68,6 +68,7 @@ Per `Phase_7_Meta_Architecture_v1.md` §2.3 CP-axis primitives:
 | ADR-D4 | v1.1 | Workload classes |
 | ADR-D5 | v1.3 | Cross-deployment monotonicity + HITL palette |
 | ADR-D6 | v1.2 | Observability + cost-attribution |
+| ADR-D8 | v1 (Accepted, 2026-07-16) | Concrete F5 audit-signing backend (AWS KMS, Ed25519) — closes `B-36`; new `harness_cp.aws_kms_signing_backend.AwsKmsSigningBackend` implements `C-CP-20 §20.2.1`'s `SigningBackend` Protocol; clearance at `.harness/clearance/ADR-D8_audit_signing_backend-cleared-2026-07-16.md` |
 
 ADD attestation: `Architectural_Design_Document_v1_3.md` v1.3.
 
