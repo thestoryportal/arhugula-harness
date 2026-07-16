@@ -799,10 +799,14 @@ items:
     precedent at R-421) that: (a) resolves a key_id -> KMS key ARN mapping from RuntimeConfig at MULTI_TENANT_COMPLIANCE
     deployment-time; (b) constructs AwsKmsSigningBackend with a boto3 KMS client sourced from the runtime''s
     own credential-resolution chain; (c) threads it through to the real sign_audit_entry / verify_audit_entry_signature
-    call sites once those exist in production code (currently zero callers -- this unit may need to land
-    together with whatever CP-axis arc first introduces a real audit-signing call site); (d) per ADR-D8''s
+    call sites -- as of PR A (OD spec v1.33 section 21.2.1) the production-reachable injection points exist
+    and are backend-ready (the OD sign_audit_entry via cp_audit_to_od_audit, plus the redaction-token
+    composer/map); this unit threads a constructed backend into them; (d) per ADR-D8''s
     own C11 concession, wires the C9 per-{secret_backend, scope} breaker onto the signing call itself, not
-    just key resolution, since KMS availability now sits on the write-time hot path.'
+    just key resolution, since KMS availability now sits on the write-time hot path; (e) persists the signed
+    entry (or an equivalent durable sidecar) at RuntimeAuditLedgerWriter.append, which today serializes
+    neither payload nor signature_attrs -- a real KMS signature must reach durable storage, not be produced
+    then dropped (out-of-family Codex round-3 P1 on PR A, verified directly).'
   council: 'conditional -- mechanical composition-root wiring once a real sign_audit_entry call site exists;
     revisit if the call-site design itself surfaces a cross-axis tension'
   heading: '### B-47 · `AwsKmsSigningBackend` has no production composition-root call site *(surfaced
