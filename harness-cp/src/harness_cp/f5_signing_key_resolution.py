@@ -217,6 +217,24 @@ _VALID_SIGNATURE_ALGORITHMS = frozenset({"ed25519", "ecdsa-p256", "rsa-pss-2048"
 """C-CP-20 §20.2's closed algorithm enum — the only tokens a `SigningBackend`
 may declare via its `algorithm` attribute."""
 
+_SIGNATURE_LENGTH_BY_ALGORITHM: dict[str, int] = {
+    "ed25519": 64,
+    "ecdsa-p256": 64,
+    "rsa-pss-2048": 256,
+}
+"""Exact signature byte-length per §20.2 algorithm (`B-34` — signature-
+representation enforcement at the §20.2.1 seam).
+
+`ed25519` — RFC 8032 signatures are always exactly 64 bytes (the shape
+`AwsKmsSigningBackend`'s `ED25519_SHA_512` KMS keys emit). `ecdsa-p256` —
+fixed-width raw `r||s` (32+32 bytes); this table IS the seam's encoding
+contract for that algorithm: a future ECDSA backend emitting variable-length
+DER-wrapped signatures fails loud at `sign_audit_entry` rather than landing a
+second, ambiguous representation in the ledger (the exact B-34 hazard).
+`rsa-pss-2048` — the signature is one modulus-width block, 256 bytes.
+Cardinality mirrors `_VALID_SIGNATURE_ALGORITHMS` — every closed-enum token
+has exactly one representation."""
+
 
 def _canonical_entry_hash(entry: CPAuditLedgerEntry) -> str:
     """The C-CP-20 §20.4 `audit.signature.sha256` hash over `entry`.
@@ -294,7 +312,10 @@ def sign_audit_entry(
     `backend.algorithm` against the §20.2 closed enum (round-1 P2 findings),
     computes the canonical `audit.signature.sha256` hash, binds it to its
     signature metadata (round-1 P1 finding — see `_canonical_signing_message`),
-    and returns a genuinely signed `CPSignedAuditLedgerEntry`.
+    and returns a genuinely signed `CPSignedAuditLedgerEntry`. The backend's
+    returned signature must be exactly the declared algorithm's fixed
+    byte-length (`B-34` — see `_SIGNATURE_LENGTH_BY_ALGORITHM`); a wrong-length
+    signature raises `ValueError` rather than landing a malformed entry.
     """
     if key.rotation_state is KeyRotationState.RETIRED:
         raise ValueError("cannot sign under a RETIRED signing key (C-CP-20 §20.3)")
@@ -326,6 +347,14 @@ def sign_audit_entry(
         sha256_hex, key_id=key.key_id, algorithm=backend.algorithm, key_period=key_period
     )
     signature = backend.sign(message=message, key_id=key.key_id, key_period=key_period)
+    expected_length = _SIGNATURE_LENGTH_BY_ALGORITHM[backend.algorithm]
+    if len(signature) != expected_length:
+        raise ValueError(
+            f"backend returned a {len(signature)}-byte signature; algorithm "
+            f"{backend.algorithm!r} signatures are exactly {expected_length} bytes "
+            f"(B-34 — for ecdsa-p256 this seam requires fixed-width raw r||s, "
+            f"never DER; see _SIGNATURE_LENGTH_BY_ALGORITHM)"
+        )
     return CPSignedAuditLedgerEntry(
         entry=entry,
         audit_signature_sha256=sha256_hex,
@@ -370,7 +399,12 @@ def verify_audit_entry_signature(
     (`sign_audit_entry`) enforces both, but a `signed` entry may arrive from
     persisted storage or an external source without ever passing through it;
     a `VERIFIED` verdict over out-of-contract metadata is meaningless even if
-    a rogue backend happens to agree with that same invalid value).
+    a rogue backend happens to agree with that same invalid value). The same
+    pre-backend rejection applies to a stored `audit_signature_value` whose
+    byte-length contradicts the entry's own declared algorithm (`B-34` — see
+    `_SIGNATURE_LENGTH_BY_ALGORITHM`; a length-invalid signature cannot have
+    been produced by a contract-conforming backend, so no backend verdict
+    over it is meaningful).
     """
     if backend is None:
         raise AuditSigningBackendUnavailableError(
@@ -380,6 +414,11 @@ def verify_audit_entry_signature(
             "AS spec C-AS-05 §5.4)"
         )
     if signed.audit_signature_algorithm not in _VALID_SIGNATURE_ALGORITHMS:
+        return VerificationResult.SIGNATURE_MISMATCH
+    if (
+        len(signed.audit_signature_value)
+        != _SIGNATURE_LENGTH_BY_ALGORITHM[signed.audit_signature_algorithm]
+    ):
         return VerificationResult.SIGNATURE_MISMATCH
     if signed.audit_signature_key_period < 0:
         return VerificationResult.SIGNATURE_MISMATCH

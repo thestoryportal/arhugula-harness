@@ -13,6 +13,7 @@ Acceptance-criterion coverage:
 
 from __future__ import annotations
 
+import pytest
 from harness_as import GateLevel
 from harness_core import PersonaTier, StepID, WorkloadClass
 from harness_cp.cp_shared_types import AgentRole, ModelBinding
@@ -434,6 +435,60 @@ def test_cp_signed_audit_entry_five_signature_fields() -> None:
         "audit_signature_key_id",
         "audit_signature_key_period",
     }
+
+
+def test_cp_signed_audit_entry_json_round_trips_arbitrary_signature_bytes() -> None:
+    """`B-34` — `audit_signature_value` is arbitrary binary (real signatures
+    are not utf-8); the base64 serializer/validator pair makes
+    `model_dump_json()` / `model_validate_json()` lossless for every byte
+    string, including ones pydantic's default utf-8 bytes encoding rejects."""
+    entry = CPAuditLedgerEntry(
+        action_id="a||s",  # type: ignore[arg-type]
+        gate_level=GateLevel.AUTO,
+        response="approve",
+        timestamp="t",
+        prior_event_hash="0" * 64,
+    )
+    # 0x80-0xFF run: guaranteed-invalid utf-8, the exact pre-fix crash input.
+    signature = bytes(range(192, 256))
+    signed = CPSignedAuditLedgerEntry(
+        entry=entry,
+        audit_signature_sha256="a" * 64,
+        audit_signature_value=signature,
+        audit_signature_algorithm="ed25519",
+        audit_signature_key_id="tenant_bound:t1",
+        audit_signature_key_period=0,
+    )
+
+    dumped = signed.model_dump_json()
+    reloaded = CPSignedAuditLedgerEntry.model_validate_json(dumped)
+
+    assert reloaded.audit_signature_value == signature
+    assert reloaded == signed
+
+
+def test_cp_signed_audit_entry_rejects_non_base64_signature_string() -> None:
+    """`B-34` — a `str` input for `audit_signature_value` can only be the JSON
+    representation; non-base64 text fails loud instead of round-tripping
+    garbage bytes into the ledger."""
+    import pydantic  # local: the only pydantic-direct use in this test module
+
+    entry = CPAuditLedgerEntry(
+        action_id="a||s",  # type: ignore[arg-type]
+        gate_level=GateLevel.AUTO,
+        response="approve",
+        timestamp="t",
+        prior_event_hash="0" * 64,
+    )
+    with pytest.raises(pydantic.ValidationError, match="base64"):
+        CPSignedAuditLedgerEntry(
+            entry=entry,
+            audit_signature_sha256="a" * 64,
+            audit_signature_value="not!valid!base64!",  # type: ignore[arg-type]
+            audit_signature_algorithm="ed25519",
+            audit_signature_key_id="tenant_bound:t1",
+            audit_signature_key_period=0,
+        )
 
 
 def test_cp_audit_types_distinct_from_od() -> None:
