@@ -546,7 +546,6 @@ def test_unreplayed_orphan_row_keeps_chain_continuity(tmp_path: Path) -> None:
     )
     from harness_od.observability_matrix import CellID
     from harness_od.redaction_tokenizer import RedactionTokenRecord
-
     from harness_runtime.lifecycle.redaction_token_audit_map import (
         AuditLedgerRedactionTokenMap,
     )
@@ -689,3 +688,47 @@ def test_torn_sidecar_tail_is_skipped_on_read_and_healed_on_write(tmp_path: Path
     # (c) The healed file is fully well-formed — every line parses.
     for line in writer._sidecar_path.read_text().splitlines():
         json.loads(line)
+
+
+def test_concurrent_in_process_appends_never_duplicate_rows(tmp_path: Path) -> None:
+    """Codex round-4 P2 (PR B1) — the B-40 cross-process lock degrades to a
+    no-op on Windows and its contract expects callers to hold their own
+    threading.Lock. With the cross-process lock forced to a no-op, two
+    threads racing the SAME entries through append must still produce exactly
+    one sidecar row per entry (membership scan + append serialize on the
+    writer's in-process lock)."""
+    import contextlib
+    import threading
+    import unittest.mock as mock
+
+    from harness_runtime.lifecycle import audit_writer as audit_writer_module
+
+    writer = _writer(tmp_path)
+    entries = [_make_audit_entry(f"{i:02d}" * 32) for i in range(20)]
+    barrier = threading.Barrier(2)
+    errors: list[BaseException] = []
+
+    @contextlib.contextmanager
+    def _noop_lock(path: object):  # type: ignore[no-untyped-def]
+        del path
+        yield
+
+    def _race() -> None:
+        try:
+            barrier.wait(timeout=10)
+            for entry in entries:
+                writer.append("tenant-race", entry)
+        except BaseException as exc:  # pragma: no cover - surfaced below
+            errors.append(exc)
+
+    with mock.patch.object(audit_writer_module, "cross_process_write_lock", _noop_lock):
+        threads = [threading.Thread(target=_race) for _ in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=30)
+
+    assert errors == []
+    rows = writer.read_full_entries_for_tenant("tenant-race")
+    assert len(rows) == len(entries)
+    assert len({e.entry_hash for e in rows}) == len(entries)

@@ -68,8 +68,9 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import ClassVar
@@ -110,6 +111,13 @@ class RuntimeAuditLedgerWriter:
     time_source: Callable[[], Timestamp]
     """Timestamp injection point (test determinism). Default: `datetime.now(UTC)`."""
 
+    _sidecar_thread_lock: threading.Lock = field(default_factory=threading.Lock, init=False)
+    """In-process half of the sidecar critical section (out-of-family Codex
+    round-4 P2): `cross_process_write_lock` degrades to a no-op on Windows
+    and its own contract says callers retain their own `threading.Lock` —
+    without one, two in-process producers could both pass the membership
+    scan and append duplicate/interleaved rows there."""
+
     _SINGLE_TENANT_TAG: ClassVar[str] = "_single"
     _ACTION_ID_PREFIX: ClassVar[str] = "audit"
 
@@ -132,8 +140,15 @@ class RuntimeAuditLedgerWriter:
     """
 
     @property
-    def _sidecar_path(self) -> Path:
+    def sidecar_path(self) -> Path:
+        """Public path handle — the shutdown flush (`flush_observability`)
+        fsyncs this file alongside the IS ledger (a durable-signature claim
+        that survives power loss requires BOTH files flushed)."""
         return self.ledger_writer.handle.canonical_path.parent / self._SIDECAR_FILENAME
+
+    @property
+    def _sidecar_path(self) -> Path:
+        return self.sidecar_path
 
     @classmethod
     def _tenant_tag(cls, tenant_id: str | None) -> str:
@@ -260,7 +275,7 @@ class RuntimeAuditLedgerWriter:
         """
         tag = self._tenant_tag(tenant_id)
         line = self._sidecar_line_for(tenant_id, audit_entry)
-        with cross_process_write_lock(self._sidecar_path):
+        with self._sidecar_thread_lock, cross_process_write_lock(self._sidecar_path):
             self._heal_torn_tail_locked()
             if self._sidecar_path.exists():
                 with self._sidecar_path.open(encoding="utf-8") as fh:

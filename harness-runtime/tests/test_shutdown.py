@@ -938,3 +938,49 @@ def test_shutdown_package_root_re_export() -> None:
     assert harness_runtime.ShutdownReport is ShutdownReport
     assert harness_runtime.ShutdownTimeout is ShutdownTimeout
     assert harness_runtime.AlreadyShutDown is AlreadyShutDown
+
+
+@pytest.mark.asyncio
+async def test_flush_observability_fsyncs_audit_sidecar_when_present(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """B-47 PR B1 (codex round-4) — the item-(e) sidecar is a SECOND durable
+    file the ledger fsync does not touch; a clean shutdown must flush it too
+    or a power loss keeps the IS ref and loses the signature."""
+    ledger_path = tmp_path / "state.jsonl"
+    ledger_path.write_text("entry-1\n")
+    sidecar_path = tmp_path / "audit-entries.jsonl"
+    sidecar_path.write_text('{"tenant_tag":"_single","entry":{}}\n')
+
+    fsynced_fds: list[int] = []
+    real_fsync = os.fsync
+
+    def _spy_fsync(fd: int) -> None:
+        fsynced_fds.append(fd)
+        real_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", _spy_fsync)
+    tracer = _FakeTracerProvider(returns=True)
+    ctx = _ctx_with(tmp_path, tracer=tracer, ledger_path=ledger_path)
+    ctx.audit_writer = SimpleNamespace(sidecar_path=sidecar_path)
+
+    report = await flush_observability(ctx)
+
+    assert report.failures == ()
+    assert len(fsynced_fds) == 2  # ledger + sidecar
+
+
+@pytest.mark.asyncio
+async def test_flush_observability_absent_sidecar_is_clean_noop(tmp_path: Path) -> None:
+    """No sidecar (nothing ever appended) and no audit_writer attribute are
+    both clean no-ops — never a flush failure."""
+    tracer = _FakeTracerProvider(returns=True)
+    ctx = _ctx_with(tmp_path, tracer=tracer)
+
+    report = await flush_observability(ctx)
+    assert report.failures == ()
+
+    ctx.audit_writer = SimpleNamespace(sidecar_path=tmp_path / "never-created.jsonl")
+    report = await flush_observability(ctx)
+    assert report.failures == ()
