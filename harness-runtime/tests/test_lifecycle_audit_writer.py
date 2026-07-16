@@ -489,3 +489,55 @@ def test_full_chain_stage_to_real_signature_to_sidecar_rehydration(tmp_path: Pat
         key_period_token="DEPLOYMENT_BOUND",
     )
     backend.public_key.verify(raw, expected_message)  # raises on mismatch
+
+
+def test_sidecar_created_owner_only_0600(tmp_path: Path) -> None:
+    """Codex P1 (PR B1) — the sidecar persists ORIGINAL raw values (the
+    redaction-token map's whole point), so it must never land world-readable
+    under a permissive umask: created 0600, owner-only."""
+    import os as _os
+
+    writer = _writer(tmp_path)
+    writer.append("tenant-A", _make_audit_entry("e" * 64))
+
+    mode = _os.stat(writer._sidecar_path).st_mode & 0o777
+    assert mode == 0o600
+
+
+def test_crash_between_is_append_and_sidecar_write_heals_on_retry(tmp_path: Path) -> None:
+    """Codex P1 (PR B1) — two-run crash-resume witness: the first append
+    commits the IS entry but dies before the sidecar write (simulated by a
+    raising sidecar hook); the caller's retry returns IDEMPOTENT_NOOP and the
+    repair path heals the gap, so the signed entry IS durably recoverable —
+    the exact failure case durable storage must survive."""
+    writer = _writer(tmp_path)
+    entry = _make_audit_entry("f" * 64)
+
+    original = RuntimeAuditLedgerWriter._append_sidecar_line
+    calls = {"n": 0}
+
+    def _dies_once(
+        self: RuntimeAuditLedgerWriter, tenant_id: str | None, audit_entry: AuditLedgerEntry
+    ) -> None:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise OSError("simulated crash after IS append, before sidecar write")
+        original(self, tenant_id, audit_entry)
+
+    import unittest.mock as mock
+
+    with mock.patch.object(RuntimeAuditLedgerWriter, "_append_sidecar_line", _dies_once):
+        with pytest.raises(OSError, match="simulated crash"):
+            writer.append("tenant-A", entry)
+
+    # The IS chain committed; the sidecar row was lost.
+    assert writer.read_full_entries_for_tenant("tenant-A") == []
+
+    # Retry: IS dedup returns NOOP; the repair path heals the sidecar.
+    assert writer.append("tenant-A", entry) is WriteResult.IDEMPOTENT_NOOP
+    [healed] = writer.read_full_entries_for_tenant("tenant-A")
+    assert healed == entry
+
+    # A further replay repairs nothing more — still exactly one row.
+    assert writer.append("tenant-A", entry) is WriteResult.IDEMPOTENT_NOOP
+    assert len(writer.read_full_entries_for_tenant("tenant-A")) == 1

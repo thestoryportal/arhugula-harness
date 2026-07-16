@@ -66,6 +66,7 @@ stage shape established at U-RT-27..31.
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -173,13 +174,41 @@ class RuntimeAuditLedgerWriter:
         result = self.ledger_writer.append(payload, write_key)
         if result is WriteResult.APPENDED:
             # Item (e): persist the FULL signed entry. IS-append-first makes
-            # the chain the single dedup authority (a NOOP replay writes no
-            # sidecar line); the crash window between the IS append and this
-            # write leaves a chain ref whose sidecar row is absent — a loud,
-            # detectable gap (`read_full_entries_for_tenant` simply won't
-            # return it), never a silently duplicated or torn row.
+            # the chain the single dedup authority (a NOOP replay never
+            # duplicates a row).
             self._append_sidecar_line(tenant_id, audit_entry)
+        else:
+            # Repair-on-replay (out-of-family Codex P1 on the PR-B1 landing):
+            # a crash between the IS append and the sidecar write would
+            # otherwise lose the signed entry PERMANENTLY — every retry
+            # returns IDEMPOTENT_NOOP and the APPENDED-only gate would skip
+            # the sidecar forever. On NOOP, heal the gap iff this entry's row
+            # is absent (checked under the exclusive write lock, so a
+            # concurrent repair cannot double-write).
+            self._append_sidecar_line_if_missing(tenant_id, audit_entry)
         return result
+
+    def _sidecar_line_for(self, tenant_id: str | None, audit_entry: AuditLedgerEntry) -> str:
+        return json.dumps(
+            {
+                "tenant_tag": self._tenant_tag(tenant_id),
+                "entry": audit_entry.model_dump(mode="json"),
+            },
+            separators=(",", ":"),
+        )
+
+    def _open_sidecar_for_append(self) -> int:
+        """Open (creating 0600 if absent) the sidecar for appending.
+
+        Owner-only permissions at creation (out-of-family Codex P1 on the
+        PR-B1 landing): the redaction-token path persists ORIGINAL PII /
+        secret text under `audit.redaction_token.raw_value`, so under the
+        common `022` umask a plain `open("a")` would land that content
+        world-readable on shared hosts. `os.open` applies the 0600 mode only
+        at creation — an operator who deliberately re-permissioned an
+        existing sidecar is not fought.
+        """
+        return os.open(self._sidecar_path, os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
 
     def _append_sidecar_line(self, tenant_id: str | None, audit_entry: AuditLedgerEntry) -> None:
         """Append one full-entry JSON line to the sidecar (item (e)).
@@ -191,15 +220,37 @@ class RuntimeAuditLedgerWriter:
         text, never raw bytes — the PR-A representation discipline), so
         `model_dump(mode="json")` round-trips losslessly.
         """
-        line = json.dumps(
-            {
-                "tenant_tag": self._tenant_tag(tenant_id),
-                "entry": audit_entry.model_dump(mode="json"),
-            },
-            separators=(",", ":"),
-        )
+        line = self._sidecar_line_for(tenant_id, audit_entry)
         with cross_process_write_lock(self._sidecar_path):
-            with self._sidecar_path.open("a", encoding="utf-8") as fh:
+            with os.fdopen(self._open_sidecar_for_append(), "a", encoding="utf-8") as fh:
+                fh.write(line + "\n")
+
+    def _append_sidecar_line_if_missing(
+        self, tenant_id: str | None, audit_entry: AuditLedgerEntry
+    ) -> None:
+        """Crash-recovery repair: append iff no row exists for this entry.
+
+        Runs on the IDEMPOTENT_NOOP replay path. The membership check and the
+        conditional append happen under ONE exclusive cross-process lock —
+        two concurrent replays of the same lost entry cannot both append.
+        Membership keys on `(tenant_tag, entry_hash)`, the same identity the
+        IS chain's action_id embeds.
+        """
+        tag = self._tenant_tag(tenant_id)
+        line = self._sidecar_line_for(tenant_id, audit_entry)
+        with cross_process_write_lock(self._sidecar_path):
+            if self._sidecar_path.exists():
+                with self._sidecar_path.open(encoding="utf-8") as fh:
+                    for existing in fh:
+                        if not existing.strip():
+                            continue
+                        row = json.loads(existing)
+                        if (
+                            row["tenant_tag"] == tag
+                            and row["entry"]["entry_hash"] == audit_entry.entry_hash
+                        ):
+                            return
+            with os.fdopen(self._open_sidecar_for_append(), "a", encoding="utf-8") as fh:
                 fh.write(line + "\n")
 
     def read_full_entries_for_tenant(self, tenant_id: str | None) -> list[AuditLedgerEntry]:
