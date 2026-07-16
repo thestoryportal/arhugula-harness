@@ -973,6 +973,7 @@ async def test_flush_observability_fsyncs_audit_sidecar_when_present(
     # signature was still buffered).
     assert fsynced_inodes == [
         os.stat(sidecar_path).st_ino,
+        os.stat(sidecar_path.parent).st_ino,  # directory-entry durability
         os.stat(ledger_path).st_ino,
     ]
 

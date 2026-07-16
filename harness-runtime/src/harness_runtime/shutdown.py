@@ -17,9 +17,9 @@ discipline mirrors U-RT-43's 9-stage modular split.
 2. **Ledger fsync** — actual work. The IS state-ledger writer closes its
    file handle after every append (`with handle.canonical_path.open("a")
    as fh`); at flush time we open the path RO, `os.fsync(fd)`, close.
-   The directory entry's durability is **deferred to implementation
-   discretion** (production-grade `fsync(dir_fd)` + macOS `F_FULLFSYNC`
-   not required at Track A).
+   macOS `F_FULLFSYNC` remains **deferred to implementation discretion**
+   (Track A); the shared parent directory's entry durability is covered by
+   the sidecar surface's dir-fsync (surface 4).
 
 3. **Cost-attribution chain flush** — no-op. U-RT-31 landed
    `RuntimeCostAttributionChain` as stateless-by-design (every step is a
@@ -27,9 +27,12 @@ discipline mirrors U-RT-43's 9-stage modular split.
    `.harness/class_3_drift_u_rt_45_cost_chain_stateless.md`. Reported as
    `FlushReport.cost_chain_noop = True`.
 
-4. **Audit-writer flush** — implicit. `RuntimeAuditLedgerWriter.append`
-   routes immediately through `LedgerWriter.append` (U-RT-32). The ledger
-   fsync at surface (2) discharges audit-writer durability.
+4. **Audit-writer flush** — the IS refs append through `LedgerWriter.append`
+   (U-RT-32, covered by surface 2), and the FULL signed entries live in the
+   B-47 item-(e) sidecar — fsynced FIRST (file, then parent directory for
+   directory-entry durability, then the ledger; mirrors the sidecar-first
+   write ordering so power loss cannot leave a flushed ref whose signature
+   or very filename was still buffered).
 
 **Per-resource exception isolation.** Per C-RT-10 invariant ("Resources
 that fail to close cleanly are surfaced individually; shutdown does not
@@ -59,6 +62,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sys
 import time
 import weakref
 from collections.abc import Callable
@@ -143,7 +147,8 @@ async def flush_observability(
     2. `os.fsync` on `ctx.ledger_writer.handle.canonical_path` — opens RO,
        fsyncs, closes.
     3. Cost-attribution chain — no-op (stateless-by-design; Class 3 drift).
-    4. Audit writer — covered by (2) (append-through to ledger).
+    4. Audit writer — sidecar file + parent dir fsynced BEFORE (2); the
+       IS refs themselves are covered by (2).
 
     Per-resource exceptions are caught and reported in `FlushReport.failures`;
     the function does not raise. Callers wanting hard-fail semantics inspect
@@ -210,6 +215,21 @@ async def flush_observability(
                 os.fsync(fd)
             finally:
                 os.close(fd)
+            # Directory-entry durability (codex round-11, PR B1): file fsync
+            # does not guarantee a NEWLY CREATED file's directory entry
+            # survives POSIX power loss — the flushed ledger ref could
+            # outlive the sidecar's very filename. One parent-dir fsync
+            # covers both files' entries (they share the ledger directory),
+            # lifting the whole surface past the file-only bar consistently.
+            # POSIX-only: directories are not open()-able on Windows, where
+            # cross-process durability already sits at the documented B-45
+            # platform posture.
+            if sys.platform != "win32":
+                dir_fd = os.open(str(sidecar_path.parent), os.O_RDONLY)
+                try:
+                    os.fsync(dir_fd)
+                finally:
+                    os.close(dir_fd)
     except Exception:
         failures.append("audit_sidecar")
 
