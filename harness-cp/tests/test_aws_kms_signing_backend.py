@@ -19,7 +19,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from harness_cp.aws_kms_signing_backend import AwsKmsSigningBackend, UnknownSigningKeyIdError
 
 _KEY_ID = "tenant_bound:acme-corp"
-_KEY_ARN = "arn:aws:kms:us-east-1:886563671957:key/test-fixture-key-id"
+_KEY_ARN = "arn:aws:kms:us-east-1:123456789012:key/test-fixture-key-id"
 
 
 class _KMSInvalidSignatureException(Exception):
