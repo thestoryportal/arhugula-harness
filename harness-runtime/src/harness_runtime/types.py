@@ -38,6 +38,7 @@ import asyncio
 import contextvars
 import re
 from collections.abc import Mapping
+from types import MappingProxyType
 from enum import Enum, StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, NewType, Protocol, Self, runtime_checkable
@@ -110,7 +111,15 @@ from harness_od.local_first_otlp_collector import (
 from harness_od.otel_genai_base import EventEmission, SpanRef
 from harness_od.per_cell_collector_placement_matrix import CollectorPlacement
 from harness_od.sampling_mode import SamplingMode
-from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    computed_field,
+    field_serializer,
+    field_validator,
+    model_validator,
+)
 
 # B-ENGINE-OUTPUT-REPLAY — durable output store (runtime spec C-RT-32). No harness
 # imports in that module → no import cycle.
@@ -467,7 +476,7 @@ class AuditSigningConfig(BaseModel):
     backend: AuditSigningBackendKind = AuditSigningBackendKind.NONE
     """Backend selector for audit-entry signing."""
 
-    key_arns: dict[str, str] = Field(default_factory=dict)
+    key_arns: Mapping[str, str] = Field(default_factory=dict)
     """Logical `key_id` (e.g. `"harness-runtime-redaction-token"`) → physical
     AWS KMS key ARN/ID. Aliases are rejected at backend construction
     (`MutableKeyAliasRejectedError` — ADR-D8 §Decision item 2)."""
@@ -476,9 +485,16 @@ class AuditSigningConfig(BaseModel):
     """Optional region override for the boto3 KMS client; `None` defers to
     boto3's own resolution chain."""
 
+    @field_serializer("key_arns")
+    def _serialize_key_arns(self, value: Mapping[str, str]) -> dict[str, str]:
+        # The stored value is a MappingProxyType (immutability, round-9 codex);
+        # serialize as a plain dict so model_dump/model_dump_json stay
+        # warning-free and TOML/JSON round-trips re-validate cleanly.
+        return dict(value)
+
     @field_validator("key_arns")
     @classmethod
-    def _key_arns_entries_non_blank(cls, value: dict[str, str]) -> dict[str, str]:
+    def _key_arns_entries_non_blank(cls, value: Mapping[str, str]) -> Mapping[str, str]:
         # Out-of-family Codex round-6 finding (B-47 PR B1): a mapping whose
         # required logical key points at "" / whitespace passed the
         # non-empty-dict check and the coverage check, then failed inside
@@ -503,7 +519,11 @@ class AuditSigningConfig(BaseModel):
             # whitespace otherwise survives to the first real KMS Sign call
             # as an invalid KeyId, defeating configuration-time rejection.
             normalized[key_id] = arn
-        return normalized
+        # Round-9 codex: an immutable view — ConfigDict(frozen=True) prevents
+        # REBINDING the field but not mutating the dict itself; a post-
+        # validation mutation to a blank value would defeat everything this
+        # validator just rejected.
+        return MappingProxyType(normalized)
 
     @model_validator(mode="after")
     def _require_key_arns_for_aws_kms(self) -> Self:

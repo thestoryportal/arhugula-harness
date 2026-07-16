@@ -113,3 +113,16 @@ def test_key_arns_whitespace_normalized_and_duplicates_rejected() -> None:
             backend=AuditSigningBackendKind.AWS_KMS,
             key_arns={"k": _ARN, " k": _ARN},
         )
+
+
+def test_key_arns_mapping_is_immutable_after_validation() -> None:
+    """Codex round-9 (PR B1) — frozen=True prevents rebinding the field but
+    not mutating the dict; a post-validation mutation to a blank value would
+    defeat everything the validator just rejected. The stored mapping is an
+    immutable view."""
+    config = AuditSigningConfig(
+        backend=AuditSigningBackendKind.AWS_KMS,
+        key_arns={"harness-runtime-redaction-token": _ARN},
+    )
+    with pytest.raises(TypeError):
+        config.key_arns["harness-runtime-redaction-token"] = ""  # type: ignore[index]
