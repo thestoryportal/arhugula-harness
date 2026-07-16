@@ -54,12 +54,12 @@
 snapshot:
   total: 47
   open: 0
-  design_substrate_gated: 5
+  design_substrate_gated: 2
   registered_finding: 7
-  operator_gated: 2
+  operator_gated: 3
   held: 1
-  closed: 32
-  identity_digest: d91525c1e0543743
+  closed: 34
+  identity_digest: 8f6a6906629f6cba
   source: .harness/post-phase-8-forward-register.md
 items:
 - id: B-1
@@ -223,24 +223,33 @@ items:
     §4 "most urgent", `cp_audit_conversion.py:161`)* — **✅ BUILT 2026-07-13**'
 - id: B-24
   title: secret_negative_observation.py wrong NegativeObservationSurface label
-  status: design_substrate_gated
-  summary: verify_sole_resolution_path hardcodes the wrong label; no enum value maps to workflow-manifest
-    arrival. Zero production callers (latent).
-  close_out: Fork doc FILED 2026-07-14 (class_1_fork_secret_negative_observation_missing_enum_member.md)
-    — awaiting operator ratification of Q1 (member name) + Q2 (bundle dispatch fix).
+  status: closed
+  summary: BUILT 2026-07-15 — WORKFLOW_MANIFEST_ENTRY enum member + real dispatch dict added. Codex
+    round 2 caught the enum's canonical signature lives at the PLAN (Implementation_Plan_Action_Surface_v1.md
+    U-AS-21), not the spec — a plan delta (v1.5) + clearance marker were required and filed same-PR.
+  pr: Implementation_Plan_Action_Surface v1.5
+  close_out: Ratified Q1=A/Q2=a/Q3=a per filer rec (mechanical, zero prod callers). 9/9 tests pass.
   council: no — mechanical enum addition once the fork ratifies the member name
   heading: '### B-24 · `secret_negative_observation.py:127` wrong `NegativeObservationSurface` label —
-    needs a new enum member *(design-substrate)*'
+    needs a new enum member *(design-substrate)* — **✅ BUILT 2026-07-15**'
 - id: B-25
   title: sandbox_tier_floor.py — is_deterministic_inhouse=False branch undefined
-  status: design_substrate_gated
-  summary: is_deterministic_inhouse threaded but never read; spec only defines the True-case floor.
-  close_out: Fork doc FILED 2026-07-14 (class_1_fork_sandbox_tier_floor_deterministic_inhouse_false_undefined.md)
-    — recommends a C10 vs C4 council convening before Q1 (candidate floor value) ratification.
-  council: conditional — C10 blast-radius vs C4 tool-contract semantics, nameable once a floor value is
-    proposed
+  status: operator_gated
+  summary: Grounded 2026-07-15 — is_deterministic_inhouse threaded but never read; the self-contradiction
+    is at ADR-D2 v1.2 §1.5.1 itself (where-block row 7's own condition tuple names the field; the
+    adjacent keying-paragraph prose says row 7 doesn't key on it), not merely a spec-vs-changenote drift.
+    NOT ratifiable by Claude — a live production sandbox-posture change for every non-opted-in MCP
+    server, no reversible path once shipped, non-coding operator cannot independently audit the blast
+    radius. Recommendation on file (filer's Reading B, one-tier bump to TIER_2_CONTAINER) but the floor
+    value is the operator's call.
+  close_out: Fork doc FILED 2026-07-14, addendum §1.5 added 2026-07-15 (class_1_fork_sandbox_tier_floor_deterministic_inhouse_false_undefined.md)
+    — genuine operator gate confirmed after checking ADR-D2 (the fork's own cited composition authority)
+    did NOT resolve the tension in either direction. Awaiting operator AskUserQuestion on Q1 (floor value)
+    the next time a HIL round-trip is available; do not build unilaterally.
+  council: ⚖️ recommended if/when the operator engages this item — C10 blast-radius vs C4 tool-contract
+    semantics, nameable now that 3 concrete floor values are proposed
   heading: '### B-25 · `sandbox_tier_floor.py:54` — `is_deterministic_inhouse=False` branch has no defined
-    floor *(design-substrate)*'
+    floor *(design-substrate)* — ⚠️ **OPERATOR-GATED, not built (confirmed 2026-07-15)**'
 - id: B-26
   title: five_axis_composition.py verify_rotation_6_steps hardcoded-True stub
   status: closed
@@ -250,13 +259,18 @@ items:
     — **✅ BUILT 2026-07-13**'
 - id: B-27
   title: cli/app.py paused (HITL) workflow status shares failed's exit code
-  status: design_substrate_gated
-  summary: Runtime spec §14.18.2 exit-code table never assigned `paused` a disposition.
-  close_out: Fork doc FILED 2026-07-14 (class_1_fork_cli_exit_code_paused_status_undefined.md) — awaiting
-    operator ratification of Q1 (new exit code vs reuse) + Q2 (scope).
+  status: closed
+  summary: BUILT 2026-07-15 — runtime spec v1.99→v1.100 NEW §14.18.2 row (exit 5 PAUSED); EXIT_PAUSED
+    wired at both CLI call sites. Codex round 1 caught the initial PAUSED_RESUMABLE naming overclaiming
+    uniform snapshot-resumability; round 3 caught the follow-on "plain re-invocation resumes engine-native
+    pauses" claim was also false + P1-unsafe (fresh run_id per invocation can't locate the prior
+    (workflow_id,run_id)-keyed pause record) — spec now states plainly no safe resume path exists yet
+    for WAL_SEGMENT/RECONCILER_LOOP pauses.
+  pr: Spec_Harness_Runtime v1.100
+  close_out: Ratified Q1=A/Q2=ii/Q3=b per filer rec. Clearance marker filed. 28/28 tests pass.
   council: no — mechanical once the disposition is decided
   heading: '### B-27 · `cli/app.py:347` — `paused` (HITL) workflow status shares `failed`''s exit code
-    *(design-substrate)*'
+    *(design-substrate)* — **✅ BUILT 2026-07-15**'
 - id: B-28
   title: Test-quality findings untriaged (preflight report §6)
   status: closed

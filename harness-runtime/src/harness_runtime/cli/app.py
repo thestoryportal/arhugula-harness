@@ -43,12 +43,13 @@ class OutputFormat(StrEnum):
     json = "json"
 
 
-# Exit code mapping per runtime spec v1.35 §14.18.2 strict 5-level shape.
+# Exit code mapping per runtime spec v1.35 §14.18.2 (B-27 extended to 6-level at v1.100).
 EXIT_SUCCESS = 0
 EXIT_WORKFLOW_FAIL = 1
 EXIT_MANIFEST_ERROR = 2
 EXIT_CONFIG_ERROR = 3
 EXIT_BOOTSTRAP_ERROR = 4
+EXIT_PAUSED = 5
 
 
 app = typer.Typer(
@@ -219,13 +220,14 @@ async def _daemon_client_dispatch(
 
 
 # CP RunStatus → CLI exit code mapping (mirror of api.py:_CP_TO_RT_STATUS).
-# CP statuses: 'success' / 'drained' / 'failed' / 'partial' / 'pending'.
+# CP statuses: 'success' / 'drained' / 'failed' / 'partial' / 'pending' / 'paused'.
 _CP_STATUS_TO_EXIT_CODE: dict[str, int] = {
     "success": EXIT_SUCCESS,
     "drained": EXIT_WORKFLOW_FAIL,
     "failed": EXIT_WORKFLOW_FAIL,
     "partial": EXIT_WORKFLOW_FAIL,
     "pending": EXIT_WORKFLOW_FAIL,
+    "paused": EXIT_PAUSED,
 }
 
 
@@ -346,7 +348,9 @@ def run_command(
     _emit_run_result(run_result, output=output)
     if run_result.status == "completed":
         raise typer.Exit(code=EXIT_SUCCESS)
-    # status ∈ {"drained", "failed"} → exit 1
+    if run_result.status == "paused":
+        raise typer.Exit(code=EXIT_PAUSED)
+    # status ∈ {"drained", "failed", "partial"} → exit 1
     raise typer.Exit(code=EXIT_WORKFLOW_FAIL)
 
 

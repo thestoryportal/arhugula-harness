@@ -1,6 +1,6 @@
 # Class 1 Fork — `sandbox_tier_floor()` never reads `ToolMetadata.is_deterministic_inhouse`; the field is threaded end-to-end into production but discarded at the one place it's supposed to matter
 
-**Status:** PROPOSING
+**Status:** PROPOSING — genuine operator gate confirmed 2026-07-15 (see §1.5 addendum); NOT ratified. Do not build any of Q1's readings without an explicit operator decision on the floor value.
 
 **Filed at:** 2026-07-14
 
@@ -77,6 +77,27 @@ But the v1.10→v1.11 change-note (the same amendment that added `is_determinist
 ### §1.4 — Why this is a real (not cosmetic) risk
 
 `False` (the production default for every non-opted-in MCP server) is currently treated identically to `True` (an operator's explicit "I've verified this tool is deterministic and locally-authored" assertion) for sandbox-tier purposes. If the intended design is that non-verified tools should receive a stricter floor than verified-deterministic ones (which the row-7 condition text's very existence, and the v1.11 change-note's "forcing discriminator" framing, both suggest), then every unverified read-only MCP tool today is silently receiving the SAME minimal `TIER_1_PROCESS` floor as an explicitly-verified one — a blast-radius under-provisioning gap for the common case, not the rare one.
+
+### §1.5 — Addendum (2026-07-15): the self-contradiction is at the ADR layer too, not just spec-vs-change-note
+
+Grounding pass (roadmap-continue autonomous session, B-24/B-25/B-27 ratification batch) checked whether a higher-authority source — `ADR-D2 v1.2` §1.5.1, the very "composition authority" this fork's own filing footer cites for `sandbox_tier_floor` — settles the tension in favor of one reading, per the canonical authority chain (`CLAUDE.md` §1.3: ADR → ADD → PRD → spec → plan; ADR wins on conflict).
+
+It does not settle the tension. It reveals the **same contradiction exists inside ADR-D2 itself**, one layer earlier than this fork originally traced it:
+
+`ADR-D2.md` §1.5.1's `where:` block (verbatim, line 176):
+
+```
+(read-only, *, deterministic in-house)    → Tier 1 (operator-tunable
+                                                    at solo-developer)
+```
+
+This row's condition tuple has **three** elements — `read-only`, a wildcard, and `deterministic in-house` — unlike the surrounding rows 8-10 (`local-mutation, *`; `external-reversible, *`; `external-irreversible, *`), which have only two. The third element is doing real work in the row's own text: it names `is_deterministic_inhouse` as part of row 7's match condition.
+
+But the very next paragraph — ADR-D2's own "Row→argument keying" prose (line 183) — states: *"rows 7–10 ... are keyed on the **`blast_radius_tier`** argument"*, with no carve-out for row 7's extra `deterministic in-house` qualifier. Read literally, this paragraph says row 7 does NOT key on `tool.is_deterministic_inhouse` at all — directly contradicting the `where:`-block row it is describing one paragraph above.
+
+**This is not new information resolving the fork — it is the fork's own tension, now confirmed to originate at the ADR (not merely propagate from a later spec change-note as originally framed in §1.3).** The AS spec's v1.10→v1.11 change-note (§1.3 above) did not introduce a NEW misreading; it picked the `where:`-block's own literal row-7 text (which the change-note's author was presumably reading directly) over the keying paragraph's blanket claim — a defensible reading of the ADR as internally inconsistent, not an error. No clearance marker exists for ADR-D2 v1.2 disambiguating this (confirmed via `.harness/clearance/` — none filed; ADR-D2 v1.2 predates the 2026-05-29 marker-convention start date, so implicit clearance applies to the *version as authored*, contradiction included, per `CLAUDE.md` §4.5 retroactive scope — the implicit clearance does not itself resolve which of the two internally-conflicting passages is authoritative).
+
+**Net effect on Q1/Q3:** the meta-question "does row 7 key on `tool` at all" now leans evidentially toward YES (readings B/C) — the `where:`-block condition tuple is the more specific, more clearly load-bearing text (an explicit third match element vs. a blanket summary paragraph that arguably just forgot to carve out row 7's own extra qualifier). But this is still an evidential lean on a genuinely ambiguous primary source, not a resolution — and even granting "row 7 keys on `tool`," the SPECIFIC floor value for `is_deterministic_inhouse=False` (Q1: A/no-change vs. B/one-tier-bump vs. C/forcing-Tier-4) remains undecided by either the ADR or the spec. That value is a live production sandbox-posture decision affecting every non-opted-in MCP server today (§1.4) — a blast-radius tradeoff with no reversible "try it and see" path once shipped to a non-coding operator who cannot independently audit which tools that decision silently re-tiers. **This fork is not ratified.** It is registered as an explicit operator-gated tail at `.harness/forward-register.yaml` id `B-25` with this addendum's finding + the filer's original Reading-B lean attached, for the operator to decide directly — not resolved unilaterally in this session per the standing no-unilateral-blast-radius-change discipline.
 
 ---
 
