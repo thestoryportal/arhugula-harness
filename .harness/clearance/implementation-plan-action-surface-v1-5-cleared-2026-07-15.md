@@ -9,8 +9,8 @@ back_reference:
 merge_commit: pending (pre-merge at filing time)
 reviewer_chain:
   - advisor() pre-implementation grounding (this session) — reviewed the B-24/B-25/B-27 ratification batch before build; confirmed B-24 as Claude-ratifiable (clear, reversible, filer-recommended, convention-following)
-  - out-of-family `just codex-review` round 2 — caught that the initial B-24 close-out ("no design-substrate edit owed") checked only `Spec_Action_Surface_v1.md` (which never declares `NegativeObservationSurface`) and missed that `Implementation_Plan_Action_Surface_v1.md` §1073-1078 DOES declare this enum's canonical 4-member signature, preserved verbatim through v1.2/v1.3/v1.4 — extending it to 5 members without a plan delta was a silent design-extension under X-AL-3 even though the spec itself was silent. This v1.5 delta + clearance marker is the correction, landed in the same PR before merge.
-  - full test run: `harness-as/tests/test_secret_negative_observation.py` — 8/8 passed
+  - "out-of-family `just codex-review` round 2 — caught that the initial B-24 close-out ('no design-substrate edit owed') checked only `Spec_Action_Surface_v1.md` (which never declares `NegativeObservationSurface`) and missed that `Implementation_Plan_Action_Surface_v1.md` §1073-1078 DOES declare this enum's canonical 4-member signature, preserved verbatim through v1.2/v1.3/v1.4 — extending it to 5 members without a plan delta was a silent design-extension under X-AL-3 even though the spec itself was silent. This v1.5 delta + clearance marker is the correction, landed in the same PR before merge."
+  - "full test run: `harness-as/tests/test_secret_negative_observation.py` — 9/9 passed (includes a 3rd test added at the merge-gate test-witness lens's request, pinning the default-fallback branch that was previously unwitnessed)"
   - ruff format + ruff check clean; pyright 0 errors/0 warnings/0 informations
 supersedes: null
 superseded_by: null

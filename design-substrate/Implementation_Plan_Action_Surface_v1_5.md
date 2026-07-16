@@ -19,7 +19,7 @@
 
 **Sections preserved verbatim from v1.4 + v1.3 + v1.2 + v1.1 + v1.** ALL pre-v1.5 content preserved byte-exact at predecessor files. v1.5 supplies canonical-reading amendment-overlay per the delta-only-plan-chain convention applied at v1.4 §1's own precedent (in-unit-body carrier-extension, not a new unit).
 
-**Status posture.** Proposed (v1.4) → Proposed (v1.5) → **BUILT 2026-07-15** (implementation landed same-session at `harness-as/src/harness_as/secret_negative_observation.py` + `harness-as/tests/test_secret_negative_observation.py`; 8/8 tests pass, ruff clean, pyright 0/0/0).
+**Status posture.** Proposed (v1.4) → Proposed (v1.5) → **BUILT 2026-07-15** (implementation landed same-session at `harness-as/src/harness_as/secret_negative_observation.py` + `harness-as/tests/test_secret_negative_observation.py`; 9/9 tests pass, ruff clean, pyright 0/0/0).
 
 **Downstream absorption owed (post-v1.5).**
 - `harness-as/CLAUDE.md` §1.2 plan version pointer (v1.4 → v1.5).
@@ -48,6 +48,7 @@
 
 - `test_verify_sole_resolution_path_dispatches_known_sites_to_matching_surfaces`
 - `test_verify_sole_resolution_path_dispatches_spec_short_form_labels`
+- `test_verify_sole_resolution_path_unrecognized_site_defaults_to_manifest` (added at the merge-gate test-witness lens's request — pins the default-fallback branch, which the first two tests left unwitnessed since neither ever calls with a site absent from `_ARRIVAL_SITE_SURFACES`)
 
 **Implementer-discretion at unrecognized-site default.** The plan does not mandate a specific fallback for a `secret_arrival_site` string outside the spec's 4 named short-form labels and the existing validators' own long-form `detected_at` aliases. `WORKFLOW_MANIFEST_ENTRY` is the recommended default (matches the landed implementation) since it is the one arrival path with no dedicated validator function producing its own canonical `detected_at` string elsewhere in this unit's surface — an unlabeled call is most plausibly one of theirs. A future caller needing stricter behavior (reject-unknown rather than default-to-manifest) MAY narrow this at a follow-on amendment once a real production caller exists; zero production callers exist at v1.5 filing time, so this is implementer-discretion, not a contract gap.
 

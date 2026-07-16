@@ -10,7 +10,7 @@ merge_commit: pending (pre-merge at filing time)
 reviewer_chain:
   - advisor() pre-implementation grounding (this session) — reviewed the B-24/B-25/B-27 ratification batch before build; confirmed B-24/B-27 as Claude-ratifiable (clear, reversible, filer-recommended, convention-following) and B-25 as requiring a genuine operator gate (split off, not built this arc)
   - direct read of `harness-runtime/src/harness_runtime/cli/app.py` confirming both exit-code call sites (`_CP_STATUS_TO_EXIT_CODE` dict for daemon-client mode; the one-shot `if/elif` chain) previously collapsed `paused` onto the same exit code as `failed`
-  - full test run: `harness-runtime/tests/test_cli_one_shot.py` + `test_cli_daemon_client.py` — 28/28 passed, including the 2 new tests added by this fix (`test_b27_workflow_paused_status_exits_five`; the daemon-mode parametrize case `("paused", EXIT_PAUSED)`)
+  - "full test run: `harness-runtime/tests/test_cli_one_shot.py` + `test_cli_daemon_client.py` — 28/28 passed, including the 2 new tests added by this fix (`test_b27_workflow_paused_status_exits_five`; the daemon-mode parametrize case `('paused', EXIT_PAUSED)`)"
   - ruff format + ruff check clean on all touched files
 supersedes: null
 superseded_by: null
