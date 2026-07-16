@@ -811,7 +811,6 @@ def test_same_map_instance_reconciles_chain_after_partial_failure(tmp_path: Path
     )
     from harness_od.observability_matrix import CellID
     from harness_od.redaction_tokenizer import RedactionTokenRecord
-
     from harness_runtime.lifecycle.redaction_token_audit_map import (
         AuditLedgerRedactionTokenMap,
     )
