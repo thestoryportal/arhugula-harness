@@ -806,7 +806,14 @@ items:
     just key resolution, since KMS availability now sits on the write-time hot path; (e) persists the signed
     entry (or an equivalent durable sidecar) at RuntimeAuditLedgerWriter.append, which today serializes
     neither payload nor signature_attrs -- a real KMS signature must reach durable storage, not be produced
-    then dropped (out-of-family Codex round-3 P1 on PR A, verified directly).'
+    then dropped (out-of-family Codex round-3 P1 on PR A, verified directly); (f) binds tenant scope into
+    what gets signed (out-of-family Codex round-5 P1 on PR A) -- the section 21.2.1 canonical message binds
+    entry-hash/key_id/algo/period but not tenant identity, which today enters only at the writer wrap, so
+    under a DEPLOYMENT-scoped signing key serving multiple tenants a signed entry could be re-presented
+    under another tenant without invalidating its signature (a TENANT-scoped key_id already binds the
+    tenant; the gap is deployment-scoped keys). Resolve jointly with (e) at PR B -- options include binding
+    tenant into AuditPayload attrs, a fifth canonical-message segment (spec delta), or requiring
+    tenant-scoped key_ids at MULTI_TENANT_COMPLIANCE. No live exposure at PR A (zero backends wired).'
   council: 'conditional -- mechanical composition-root wiring once a real sign_audit_entry call site exists;
     revisit if the call-site design itself surfaces a cross-axis tension'
   heading: '### B-47 · `AwsKmsSigningBackend` has no production composition-root call site *(surfaced
