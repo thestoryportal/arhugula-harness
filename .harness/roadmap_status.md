@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `d9382761453c` |
-| `last_refreshed` | 2026-07-15T00:00:00Z |
-| `git_head` | `86e0b3a7` — ops: roadmap status refresh post-#1030 (fixed-point anchor correction) |
+| `workspace_state_hash` | `3fc2a18c4f8c` |
+| `last_refreshed` | 2026-07-16T00:00:00Z |
+| `git_head` | `542fdc26` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 91 |
 
@@ -56,11 +56,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1031 | 2026-07-16 | AWS KMS SigningBackend for B-36 audit-signing backend (ADR-D8) -- dyadic C10/C11 council selected KMS-delegated Ed25519 signing over Secrets-Manager-plus-local-signing; real AWS KMS key + least-privilege IAM identity provisioned and live-e2e-proven; 3 rounds of out-of-family Codex review to convergence; B-33 extended, B-34 narrowed, B-47 opened for the composition-root wiring follow-on |
 | PR #1030 | 2026-07-15 | B-25 RESOLVED (was left `operator_gated` at #1029) — dyadic C10⊥C4 council convening (run per the fork's own Q3 recommendation) found `is_deterministic_inhouse` carries zero verification today, converging both voices on Reading A over the filer's original Reading-B lean; operator selected Reading A via `AskUserQuestion` from the council's 4-option synthesis. `ADR-D2.md` v1.2→v1.3 + `Spec_Action_Surface_v1.md` v1.13→v1.14 + NEW `Implementation_Plan_Action_Surface_v1_6.md` (plan-layer companion fix, caught by codex round 1 — same category as B-24) reconcile the row-7 self-contradiction; 3 stale docstrings + 1 stale comment/test-docstring corrected; zero code behavior change (production already implemented Reading A); new mutation-probed witness test. 3-round out-of-family codex-review + 3-lens merge-gate, all converged/approved. Also produced `.harness/architect_recommendation_tool_determinism_attestation.md` (advisor()+Codex-reviewed exploratory memo on a future producer-side verification mechanism — not built, explicitly sequenced after B-25). |
 | PR #1029 | 2026-07-15 | B-24/B-27 ratified+built (enum dispatch fix; CLI exit code 5 for paused status), B-25 grounded but confirmed genuine operator gate (ADR-D2 self-contradiction, registered not built at this PR — resolved at #1030). 4-round out-of-family codex-review + 3-lens merge-gate, all converged. |
 | #1026 | 2026-07-15 | fix(is): B-40 cross-process ledger lock (state + memory ledger writes, jsonl lifecycle read guard, memory_store handle); registered B-45 (Windows backend) + B-46 (first-write TOCTOU) as follow-ons |
 | #1025 | 2026-07-15 | B-40 register correction (4 rounds of self-correction, each catching a genuine issue via out-of-family Codex): final disposition is registered_finding, buildable now, no fork, no council -- C-IS-09 §9.3 + C-MEM-08 already require cross-process/cross-worktree append serialization, §9.4 defers only the mechanism, and two ordinary concurrent 'harness run' invocations against the same repo already share the default memory ledger today (live, not dormant). Follow-on code arc owed for the actual fix. |
-| #1024 | 2026-07-15 | B-30 register correction: sharpened from stale council-conditional framing to a precise, multi-round-verified disposition (missing ingestion consumer + producer-side replay-metadata gap); register-don't-build, no code change |
 ---
 
 ---
