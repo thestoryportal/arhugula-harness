@@ -96,3 +96,20 @@ def test_blank_key_arn_values_rejected_at_config() -> None:
             backend=AuditSigningBackendKind.AWS_KMS,
             key_arns={" ": _ARN},
         )
+
+
+def test_key_arns_whitespace_normalized_and_duplicates_rejected() -> None:
+    """Codex round-8 (PR B1) — surrounding whitespace must not survive to the
+    first KMS Sign call as an invalid KeyId: the stored mapping is
+    normalized, and two keys colliding after normalization fail loud."""
+    config = AuditSigningConfig(
+        backend=AuditSigningBackendKind.AWS_KMS,
+        key_arns={" harness-runtime-redaction-token ": f"  {_ARN}  "},
+    )
+    assert config.key_arns == {"harness-runtime-redaction-token": _ARN}
+
+    with pytest.raises(ValidationError, match="duplicate logical key_id"):
+        AuditSigningConfig(
+            backend=AuditSigningBackendKind.AWS_KMS,
+            key_arns={"k": _ARN, " k": _ARN},
+        )

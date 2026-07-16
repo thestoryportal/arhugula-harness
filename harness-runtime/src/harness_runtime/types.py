@@ -484,15 +484,26 @@ class AuditSigningConfig(BaseModel):
         # non-empty-dict check and the coverage check, then failed inside
         # boto3 on the FIRST real signing call — an invalid deployment must
         # be rejected at config validation, not mid-run.
-        for key_id, arn in value.items():
-            if not key_id.strip():
+        normalized: dict[str, str] = {}
+        for raw_key_id, raw_arn in value.items():
+            key_id, arn = raw_key_id.strip(), raw_arn.strip()
+            if not key_id:
                 raise ValueError("key_arns contains a blank logical key_id")
-            if not arn.strip():
+            if not arn:
                 raise ValueError(
-                    f"key_arns[{key_id!r}] is blank — every mapped value must be "
-                    f"a physical KMS key ARN/ID"
+                    f"key_arns[{raw_key_id!r}] is blank — every mapped value must "
+                    f"be a physical KMS key ARN/ID"
                 )
-        return value
+            if key_id in normalized:
+                raise ValueError(
+                    f"key_arns contains duplicate logical key_id {key_id!r} "
+                    f"after whitespace normalization"
+                )
+            # Round-8 codex: return the NORMALIZED mapping — surrounding
+            # whitespace otherwise survives to the first real KMS Sign call
+            # as an invalid KeyId, defeating configuration-time rejection.
+            normalized[key_id] = arn
+        return normalized
 
     @model_validator(mode="after")
     def _require_key_arns_for_aws_kms(self) -> Self:
