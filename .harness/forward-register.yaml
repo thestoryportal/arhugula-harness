@@ -790,7 +790,11 @@ items:
     to the OD sign_audit_entry (the function production audit writes actually route through, via cp_audit_to_od_audit,
     which also gained the passthrough); absent path preserved byte-identically, present path real signature,
     mutation-probed. Remainder (PR B, the actual close) is the harness_runtime composition root per close_out
-    items (a)-(d).'
+    items (a)-(d), plus (e) surfaced by out-of-family Codex round 3 on PR A and verified directly --
+    RuntimeAuditLedgerWriter.append persists only the action_id wrap (entry_hash), serializing neither
+    payload nor signature_attrs, so a real KMS signature would be produced then dropped at durable
+    persistence (pre-existing shape, placeholder signatures were equally discarded); PR B must persist
+    the signed entry or an equivalent durable sidecar before real signatures can be claimed durable.'
   close_out: 'Author a harness_runtime composition-root unit (mirrors the ProviderSecretResolver / GcpSecretManagerResolver
     precedent at R-421) that: (a) resolves a key_id -> KMS key ARN mapping from RuntimeConfig at MULTI_TENANT_COMPLIANCE
     deployment-time; (b) constructs AwsKmsSigningBackend with a boto3 KMS client sourced from the runtime''s
