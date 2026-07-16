@@ -94,9 +94,11 @@ class ToolContract(BaseModel):
     forcing condition (→ TIER_4_FULL_VM). Default `False`."""
 
     is_deterministic_inhouse: bool = False
-    """OPTIONAL §2.2 `ToolMetadata` discriminator — keys the C-AS-02 §2.3 row-7
-    read-only-deterministic-in-house lookup (→ TIER_1_PROCESS, bounded below by the
-    deployment-surface default + blast-radius floor). Default `False`."""
+    """OPTIONAL §2.2 `ToolMetadata` discriminator. Declared but NON-GATING at the
+    C-AS-02 §2.3 row-7 lookup (v1.14, B-25) — row 7 keys purely on `blast_radius_tier`,
+    same as rows 8-10; this field does not change the resolved tier. Reserved for a
+    possible future verification-gated mechanism (see
+    `.harness/architect_recommendation_tool_determinism_attestation.md`). Default `False`."""
 
     idempotent: bool = False
     """OPTIONAL (C-AS-03 §3.1, v1.12 — `B-EFFECT-FENCE-PER-TOOL`). Read ONLY by the

@@ -4,6 +4,22 @@ Append-only. One entry per gated PR — see `.claude/skills/merge-gate/SKILL.md`
 
 ---
 
+## PR #1030 — fix(as): B-25 resolved — sandbox_tier_floor row-7 self-contradiction (Reading A)
+Branch: b-25-sandbox-tier-floor-reading-a · Date: 2026-07-15
+
+**Round 1 (final):**
+- Concurrency: APPROVE — every code change in this PR is a docstring/comment correction plus one additive pure-function unit test; zero shared-state, I/O, async, or fence logic touched. `ToolMetadata`/`ToolContract`/`MCPClientConfig` remain frozen models throughout.
+- Spec-conformance: APPROVE — verified byte-exact: `ADR-D2.md` is v1.3 with a matching change-note, `Spec_Action_Surface_v1.md` is v1.14, `Implementation_Plan_Action_Surface_v1_6.md` exists and correctly amends U-AS-06 (4 sites, 0 AC-count delta). `tools/forward_register.py --check` clean (47 items, B-25 closed, snapshot/digest match). All 3 clearance markers valid YAML with coherent back-references. Flagged 1 non-blocking Class-3 informational finding: `Spec_Harness_Runtime_v1.md` lines 500 + 4724 still loosely group `is_deterministic_inhouse` with the two genuinely-forcing discriminators in prose (without specifically claiming it gates row 7) — registered for a future doc-hygiene pass, not a defect this PR introduced or is required to fix.
+- Test-witness: APPROVE — the new witness test exercises the real production resolver body (no seam/mock), reasoned mutation-probe confirms it would catch a future row-7 gating regression, and the pre-existing `test_converter_stamps_per_server_forcing_discriminators` still asserts `contract.is_deterministic_inhouse is True` at the body level (docstring corrections were not substituted for real coverage).
+
+**Also converged separately:** 3 rounds of out-of-family `just codex-review` — round 1 (real, fixed: the ADR/spec fix landed without a matching Implementation-Plan delta, same category as the B-24 arc — `Implementation_Plan_Action_Surface_v1_6.md` authored), round 2 (2 real findings, fixed: the architect-recommendation memo still framed B-25 as unresolved despite this PR closing it — added a resolution callout; `mcp_client_host_factory.py` + its test still called `is_deterministic_inhouse` a "forcing discriminator"/"Reading-B policy source" — corrected; also fixed a wrong function-name citation in the memo), round 3 (clean — "no introduced, actionable code defect found").
+
+**Resolution provenance:** dyadic C10⊥C4 council convening (run per the fork's own Q3 recommendation) + operator `AskUserQuestion` selecting Reading A from a 4-option synthesis — see `.harness/clearance/adr-d2-v1-3-cleared-2026-07-15.md` for the full record.
+
+**Outcome:** All-approve → merged without HIL per standing CI-green directive.
+
+---
+
 ## PR #1011 — feat(cp): B-31 resume guard validates paused-child workflow identity
 Branch: feat/b31-paused-child-workflow-id-guard · Date: 2026-07-15
 

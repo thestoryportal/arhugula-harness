@@ -46,7 +46,10 @@ def _tier_max(a: SandboxTier, b: SandboxTier) -> SandboxTier:
 class ToolMetadata(BaseModel):
     """Tool-classification discriminators for the §2.3 lookup (Pattern B carrier).
 
-    Carries the §2.3 row-1 / row-2 / row-7 discriminators.
+    Carries the §2.3 row-1 / row-2 forcing discriminators. Also carries
+    `is_deterministic_inhouse`, which the resolver body does NOT read (v1.14, B-25 —
+    row 7 keys purely on `blast_radius_tier`); the field is reserved for a possible
+    future verification-gated mechanism, not currently a row-7 discriminator.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)

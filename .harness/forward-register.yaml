@@ -56,10 +56,10 @@ snapshot:
   open: 0
   design_substrate_gated: 2
   registered_finding: 7
-  operator_gated: 3
+  operator_gated: 2
   held: 1
-  closed: 34
-  identity_digest: 8f6a6906629f6cba
+  closed: 35
+  identity_digest: 76064e954951972b
   source: .harness/post-phase-8-forward-register.md
 items:
 - id: B-1
@@ -234,22 +234,26 @@ items:
     needs a new enum member *(design-substrate)* — **✅ BUILT 2026-07-15**'
 - id: B-25
   title: sandbox_tier_floor.py — is_deterministic_inhouse=False branch undefined
-  status: operator_gated
-  summary: Grounded 2026-07-15 — is_deterministic_inhouse threaded but never read; the self-contradiction
-    is at ADR-D2 v1.2 §1.5.1 itself (where-block row 7's own condition tuple names the field; the
-    adjacent keying-paragraph prose says row 7 doesn't key on it), not merely a spec-vs-changenote drift.
-    NOT ratifiable by Claude — a live production sandbox-posture change for every non-opted-in MCP
-    server, no reversible path once shipped, non-coding operator cannot independently audit the blast
-    radius. Recommendation on file (filer's Reading B, one-tier bump to TIER_2_CONTAINER) but the floor
-    value is the operator's call.
-  close_out: Fork doc FILED 2026-07-14, addendum §1.5 added 2026-07-15 (class_1_fork_sandbox_tier_floor_deterministic_inhouse_false_undefined.md)
-    — genuine operator gate confirmed after checking ADR-D2 (the fork's own cited composition authority)
-    did NOT resolve the tension in either direction. Awaiting operator AskUserQuestion on Q1 (floor value)
-    the next time a HIL round-trip is available; do not build unilaterally.
-  council: ⚖️ recommended if/when the operator engages this item — C10 blast-radius vs C4 tool-contract
-    semantics, nameable now that 3 concrete floor values are proposed
+  status: closed
+  summary: RESOLVED 2026-07-15 — Q1 = Reading A (non-forcing, spec-text-only). A dyadic C10⊥C4 council
+    convening (run per the fork's own Q3 recommendation) found is_deterministic_inhouse carries zero
+    verification today, so a floor bump would be spoofable by the actor it targets while penalizing
+    honest authors who never opted in; both voices converged on Reading A over the filer's original
+    Reading-B lean. Operator selected Reading A via AskUserQuestion from the council's 4-option synthesis.
+    ADR-D2 v1.2→v1.3 + Spec_Action_Surface_v1.md v1.13→v1.14 (where-block row 7 + keying paragraph
+    reconciled; stale ToolContract/MCPClientConfig/ToolMetadata docstrings corrected); no code behavior
+    change (production already implemented Reading A); new mutation-probed witness test added.
+  close_out: Fork doc FILED 2026-07-14, addendum §1.5 added 2026-07-15, RATIFIED+CLOSED 2026-07-15
+    (class_1_fork_sandbox_tier_floor_deterministic_inhouse_false_undefined.md). Clearance markers at
+    .harness/clearance/adr-d2-v1-3-cleared-2026-07-15.md,
+    .harness/clearance/spec-action-surface-v1-14-cleared-2026-07-15.md, and (plan-layer correction
+    caught by out-of-family codex-review round 1, same category as B-24)
+    .harness/clearance/implementation-plan-action-surface-v1-6-cleared-2026-07-15.md.
+  pr: "#PENDING"
+  council: ✅ convened 2026-07-15 (C10 action-safety/blast-radius + C4 tool-contract-semantics) — decisive
+    probe finding (field is unverified/spoofable) converged both voices on Reading A
   heading: '### B-25 · `sandbox_tier_floor.py:54` — `is_deterministic_inhouse=False` branch has no defined
-    floor *(design-substrate)* — ⚠️ **OPERATOR-GATED, not built (confirmed 2026-07-15)**'
+    floor *(design-substrate)* — **✅ RESOLVED 2026-07-15 (Reading A via council + operator decision)**'
 - id: B-26
   title: five_axis_composition.py verify_rotation_6_steps hardcoded-True stub
   status: closed

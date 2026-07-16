@@ -11,6 +11,22 @@ Revision date: 2026-05-10
 Promotion: P3c-CK final clearance — 2026-05-11
 Revision: v1.1 → v1.2 (Phase 7 C-AS-02 `sandbox_tier_floor` signature reconciliation — operator-authorized 2026-05-15 — reconciling the §1.4 3-arg form and the §1.5.1 4-arg form to the canonical 5-arg signature `sandbox_tier_floor(tool, deployment_surface, blast_radius_tier, mcp_transport, mcp_server) -> SandboxTier | REFUSE`)
 Revision date: 2026-05-15
+Revision: v1.2 → v1.3 (B-25 row-7 self-contradiction resolution — operator-authorized 2026-07-15 via `AskUserQuestion` selecting "Reading A + reserved annotation" from a dyadic C10⊥C4 council synthesis — the `where:`-block's row-7 condition tuple reconciled to the "Row→argument keying" paragraph's own claim that rows 7–10 key purely on `blast_radius_tier`)
+Revision date: 2026-07-15
+
+## Change-note (v1.2 → v1.3)
+
+**Trigger.** `.harness/class_1_fork_sandbox_tier_floor_deterministic_inhouse_false_undefined.md` (B-25) traced a genuine self-contradiction to this ADR's own §1.5.1: the `where:`-block's row 7 reads `(read-only, *, deterministic in-house) → Tier 1` — a 3-element condition tuple, structurally unlike rows 8–10's 2-element `(tier-name, *)` shape — naming `is_deterministic_inhouse` as a real match condition. The very next paragraph, "Row→argument keying," states rows 7–10 "are keyed on the `blast_radius_tier` argument," with no carve-out for row 7's extra qualifier — directly contradicting the row it describes. Production code (`harness-as/src/harness_as/sandbox_tier_floor.py`) already implements the keying-paragraph's reading (never reads `tool.is_deterministic_inhouse`); `ToolContract`'s docstring and the runtime per-tool resolver's threading assumed the `where:`-block's reading. A dyadic council convening (C10 action-safety/blast-radius + C4 tool-contract-semantics, per this ADR's own T-perm-1 permanent-tension pairing) was run at the fork's own Q3 recommendation before any operator decision; its decisive empirical finding — `is_deterministic_inhouse` is a plain self-declared boolean with **zero verification mechanism today**, so a stricter floor keyed on `False` would be trivially spoofable by exactly the actor it targets, while only penalizing honest tool authors who simply never opted into the field — converged both voices on Reading A (do not branch on the field; correct the text to say so explicitly rather than silently). The operator selected this reading (of 4 synthesized options) via `AskUserQuestion` on 2026-07-15.
+
+**Scope of revision.** Reconcile the `where:`-block's row 7 to a 2-element condition tuple matching rows 8–10's shape, removing `deterministic in-house` as a match condition (the "Row→argument keying" paragraph's reading is adopted as canonical). A new sentence is added directly beneath the `where:` block stating explicitly that `is_deterministic_inhouse` — though carried on `ToolContract`/`ToolMetadata` — is **not currently a keying input for row 7 or any row**, and is reserved should a future verification mechanism (content-hash pinning, operator-attestation, or similar — see `.harness/architect_recommendation_tool_determinism_attestation.md`) make the self-declared claim meaningful enough to gate on. This is a documentation correction only — `sandbox_tier_floor()`'s 5-argument signature, all other `where:`-block rows, and the `max()` composition formula are UNCHANGED; production code needs no change since it already implements the reading this revision documents.
+
+**Changes inline.** Status block (third Revision / Revision date line pair). This Change-note section. §1.5.1 `where:` block — row 7's condition tuple `(read-only, *, deterministic in-house)` → `(read-only, *)`; a new sentence appended immediately after the block stating `is_deterministic_inhouse` is non-gating today and reserved for a possible future verification-gated mechanism.
+
+**Sections preserved verbatim.** §1.1–§1.4; §1.5 tunable specialization prose; §1.5.1's composition-rule code block and all rows other than row 7's condition tuple; the "Row→argument keying" paragraph (its own claim is what this revision reconciles row 7 *toward*, not away from); §1.5.2; §1.6–§1.10; Rationale; Consequences; Alternatives considered; References.
+
+**Surfaced findings (not patched).** None beyond the row-7 fix itself — the council's probe pass found no other `where:`-block row carries a similar orphaned qualifier.
+
+**Downstream absorption owed.** `design-substrate/Spec_Action_Surface_v1.md` §2.3 carries the same row-7 self-contradiction and the same stale `ToolContract`/`MCPClientConfig` docstring claims — corrected in the same PR (spec v1.13 → v1.14, see that file's own change-note) as a bundled-absorption arc per workspace `CLAUDE.md` §4.4/§11.4, not a separate follow-on. Workspace root `CLAUDE.md` §2.2's ADR-version table lists `ADR-D2 v1.2` — a follow-up token bump to `v1.3` is owed (out of spec-writer remit; flagged, per the established convention that this pointer batch-refreshes rather than bumping per-delta).
 
 ## Change-note (v1.1 → v1.2)
 
@@ -173,12 +189,14 @@ where:
         (remote MCP, level 2 sandbox-all)         → max(Tier 4,
                                                         blast_radius_floor)
         (remote MCP, level 1 / level 3, *)        → blast_radius_floor
-        (read-only, *, deterministic in-house)    → Tier 1 (operator-tunable
+        (read-only, *)                             → Tier 1 (operator-tunable
                                                             at solo-developer)
         (local-mutation, *)                       → Tier 2 (process)
         (external-reversible, *)                  → Tier 3 (container)
         (external-irreversible, *)                → Tier 4 (microVM / full VM)
 ```
+
+**`is_deterministic_inhouse` is not currently a keying input for any row (v1.3).** `ToolMetadata`/`ToolContract` carry `is_deterministic_inhouse` as a declared field, and row 7's condition text historically named "deterministic in-house" alongside "read-only" — but per the "Row→argument keying" paragraph immediately below, row 7 (like rows 8–10) keys purely on `blast_radius_tier`; `is_deterministic_inhouse` does not change row 7's outcome. This is reserved, not deleted: a future verification mechanism that makes the self-declared claim meaningful (see `.harness/architect_recommendation_tool_determinism_attestation.md`) may re-open whether this row (or a new one) should key on it. See `.harness/class_1_fork_sandbox_tier_floor_deterministic_inhouse_false_undefined.md` (B-25) for the full resolution history.
 
 **Row→argument keying.** `sandbox_tier_floor` is a 5-argument function — `sandbox_tier_floor(tool, deployment_surface, blast_radius_tier, mcp_transport, mcp_server) -> SandboxTier | REFUSE`. Each `where:`-block row band is keyed on a specific argument: rows 1–2 (`computer-use model bound` / `LLM-generated code execution`) are keyed on the **`tool`** argument — these are tool / call-site classifications; row 3 (`STDIO MCP transport`) is keyed on the **`mcp_transport`** argument; rows 4–6 (`remote MCP, level 0` / `level 2 sandbox-all` / `level 1` / `level 3`) are keyed on the remote-MCP trust level read from the **`mcp_server`** argument (the trust level is not derivable from `mcp_transport` — a Streamable-HTTP server may be any of Level 1/2/3); rows 7–10 (`read-only` / `local-mutation` / `external-reversible` / `external-irreversible`) are keyed on the **`blast_radius_tier`** argument. The 3-arg rendering carried at §1.4 prior to the v1.1 → v1.2 reconciliation could not evaluate rows 1–2 (no `tool`) or rows 4–6 (no `mcp_server`); the 5-arg form is the canonical signature at every call site.
 
