@@ -785,15 +785,35 @@ items:
     real KMS key, but zero production code path constructs it and passes it as sign_audit_entry(backend=...)
     / verify_audit_entry_signature(backend=...). It is reachable only from tests. A MULTI_TENANT_COMPLIANCE
     deployment cannot get real signed audit entries until a harness_runtime bootstrap composition-root
-    arc wires this backend in (out-of-family Codex review finding on the B-36 landing).'
+    arc wires this backend in (out-of-family Codex review finding on the B-36 landing). PR A (2026-07-16)
+    landed the missing call-site seam — OD spec v1.33 NEW section 21.2.1 (clearance filed) adds backend=...
+    to the OD sign_audit_entry (the function production audit writes actually route through, via cp_audit_to_od_audit,
+    which also gained the passthrough); absent path preserved byte-identically, present path real signature,
+    mutation-probed. Remainder (PR B, the actual close) is the harness_runtime composition root per close_out
+    items (a)-(d), plus (e) surfaced by out-of-family Codex round 3 on PR A and verified directly --
+    RuntimeAuditLedgerWriter.append persists only the action_id wrap (entry_hash), serializing neither
+    payload nor signature_attrs, so a real KMS signature would be produced then dropped at durable
+    persistence (pre-existing shape, placeholder signatures were equally discarded); PR B must persist
+    the signed entry or an equivalent durable sidecar before real signatures can be claimed durable.'
   close_out: 'Author a harness_runtime composition-root unit (mirrors the ProviderSecretResolver / GcpSecretManagerResolver
     precedent at R-421) that: (a) resolves a key_id -> KMS key ARN mapping from RuntimeConfig at MULTI_TENANT_COMPLIANCE
     deployment-time; (b) constructs AwsKmsSigningBackend with a boto3 KMS client sourced from the runtime''s
     own credential-resolution chain; (c) threads it through to the real sign_audit_entry / verify_audit_entry_signature
-    call sites once those exist in production code (currently zero callers -- this unit may need to land
-    together with whatever CP-axis arc first introduces a real audit-signing call site); (d) per ADR-D8''s
+    call sites -- as of PR A (OD spec v1.33 section 21.2.1) the production-reachable injection points exist
+    and are backend-ready (the OD sign_audit_entry via cp_audit_to_od_audit, plus the redaction-token
+    composer/map); this unit threads a constructed backend into them; (d) per ADR-D8''s
     own C11 concession, wires the C9 per-{secret_backend, scope} breaker onto the signing call itself, not
-    just key resolution, since KMS availability now sits on the write-time hot path.'
+    just key resolution, since KMS availability now sits on the write-time hot path; (e) persists the signed
+    entry (or an equivalent durable sidecar) at RuntimeAuditLedgerWriter.append, which today serializes
+    neither payload nor signature_attrs -- a real KMS signature must reach durable storage, not be produced
+    then dropped (out-of-family Codex round-3 P1 on PR A, verified directly); (f) binds tenant scope into
+    what gets signed (out-of-family Codex round-5 P1 on PR A) -- the section 21.2.1 canonical message binds
+    entry-hash/key_id/algo/period but not tenant identity, which today enters only at the writer wrap, so
+    under a DEPLOYMENT-scoped signing key serving multiple tenants a signed entry could be re-presented
+    under another tenant without invalidating its signature (a TENANT-scoped key_id already binds the
+    tenant; the gap is deployment-scoped keys). Resolve jointly with (e) at PR B -- options include binding
+    tenant into AuditPayload attrs, a fifth canonical-message segment (spec delta), or requiring
+    tenant-scoped key_ids at MULTI_TENANT_COMPLIANCE. No live exposure at PR A (zero backends wired).'
   council: 'conditional -- mechanical composition-root wiring once a real sign_audit_entry call site exists;
     revisit if the call-site design itself surfaces a cross-axis tension'
   heading: '### B-47 · `AwsKmsSigningBackend` has no production composition-root call site *(surfaced

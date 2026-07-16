@@ -55,6 +55,7 @@ implementation arc landing.
 
 from __future__ import annotations
 
+from harness_cp.f5_signing_key_resolution import SigningBackend
 from harness_cp.per_step_override_evaluator import CPAuditLedgerEntry
 from harness_od.audit_ledger_types import (
     AuditLedgerEntry,
@@ -182,11 +183,20 @@ def cp_audit_to_od_audit(
     key_id: str,
     algo: SignatureAlgorithm = SignatureAlgorithm.ED25519,
     entry_core: StateLedgerEntryRef | None = None,
+    backend: SigningBackend | None = None,
 ) -> AuditLedgerEntry:
     """Convert any CP-side audit carrier to a signed OD `AuditLedgerEntry`.
 
     Production seam per CP spec v1.7 §13.5.1 + OD spec v1.5 C-OD-24.6 +
     U-CP-72 6-prefix extension (10-CP-D 2026-05-22).
+
+    `backend` (OD spec v1.33 §21.2.1 — the composition-root injection seam) is
+    passed through verbatim to the OD `sign_audit_entry`: absent (the default),
+    the placeholder signing path is preserved byte-for-byte for every existing
+    caller; present, the produced `AuditLedgerEntry.signature_attrs` carries a
+    genuine cryptographic signature. This converter neither selects nor
+    constructs a backend — that is the deployment-time composition root's job
+    (`B-47` remainder).
 
     Dispatches on the carrier type:
 
@@ -306,7 +316,7 @@ def cp_audit_to_od_audit(
             f"CostRecordAuditPayload"
         )
 
-    signature_attrs = sign_audit_entry(payload, key_id=key_id, algo=algo)
+    signature_attrs = sign_audit_entry(payload, key_id=key_id, algo=algo, backend=backend)
     entry_hash = compute_entry_hash(payload)
 
     return AuditLedgerEntry(

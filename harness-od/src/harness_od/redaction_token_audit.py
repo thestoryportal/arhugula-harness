@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import hashlib
 
+from harness_cp.f5_signing_key_resolution import SigningBackend
+
 from harness_od.audit_ledger_types import (
     AuditLedgerEntry,
     AuditPayload,
@@ -74,11 +76,19 @@ def compose_redaction_token_audit_entry(
     entry_core: StateLedgerEntryRef | None = None,
     prior_entry_hash: str = _ZERO_HASH,
     timestamp: str = "",
+    backend: SigningBackend | None = None,
 ) -> AuditLedgerEntry:
     """Compose one signed audit entry for a redaction-token map record.
 
     The span export path only receives `record.token`; this projection is the
     durable audit-ledger-only map from that opaque token back to the raw value.
+
+    `backend` (OD spec v1.33 §21.2.1) is passed through verbatim to
+    `sign_audit_entry` — this composer is one of the production audit writers
+    a composition root must be able to reach (out-of-family Codex P1 finding
+    on the B-47 PR-A landing: without this passthrough, a KMS-injected
+    deployment would still emit placeholder `unsigned:` attributes for the
+    raw-value token map).
     """
     action_id = _redaction_token_action_id(record)
     payload = AuditPayload(
@@ -86,7 +96,7 @@ def compose_redaction_token_audit_entry(
         audit_namespace_attrs=_redaction_token_attrs(record, timestamp=timestamp),
         prior_entry_hash=prior_entry_hash,
     )
-    signature_attrs = sign_audit_entry(payload, key_id=key_id, algo=algo)
+    signature_attrs = sign_audit_entry(payload, key_id=key_id, algo=algo, backend=backend)
     return AuditLedgerEntry(
         payload=payload,
         signature_attrs=signature_attrs,

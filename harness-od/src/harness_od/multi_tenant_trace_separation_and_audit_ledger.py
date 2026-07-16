@@ -56,11 +56,16 @@ Depends on: [U-OD-01, U-OD-02, U-OD-28, U-OD-04, U-OD-00] (within-axis) +
 
 from __future__ import annotations
 
+import base64
 import uuid
 from enum import StrEnum
 from typing import Literal
 
 from harness_core import DeploymentSurface, PersonaTier
+from harness_cp.f5_signing_key_resolution import (
+    SIGNATURE_LENGTH_BY_ALGORITHM,
+    SigningBackend,
+)
 from pydantic import BaseModel, ConfigDict
 
 from harness_od.audit_ledger_types import (
@@ -201,37 +206,114 @@ _MULTI_TENANT_CELLS: frozenset[CellID] = frozenset({_CELL_7, _CELL_8})
 AUDIT_SIGNATURE_REQUIRED_AT_TIER_5_LEDGER: bool = True
 
 
+#: §21.2.1 — the `"DEPLOYMENT_BOUND"` key-period token's fixed integer
+#: projection passed to a `SigningBackend` (rotation-boundary-aware key-period
+#: selection is `B-33`'s scope, not this seam's).
+_DEPLOYMENT_BOUND_KEY_PERIOD: int = 0
+
+_DEPLOYMENT_BOUND_TOKEN: str = "DEPLOYMENT_BOUND"
+
+
+def _canonical_od_signing_message(
+    entry_hash: str, *, key_id: str, algo_value: str, key_period_token: str
+) -> bytes:
+    """The bytes a §21.2.1 backend actually signs — binds `entry_hash` to its
+    signature metadata (mirrors `C-CP-20 §20.3.1`'s canonical-signing-message
+    discipline: without the binding, `audit_signature_key_id` /
+    `audit_signature_algorithm` / `audit_signature_key_period` could be
+    relabeled on an already-signed entry and its signature would still verify).
+
+    Length-prefixing each segment (the B-23 injectivity shape) makes the
+    four-tuple `(entry_hash, key_id, algo_value, key_period_token)`
+    collision-free — no ambiguous field-boundary shift.
+    """
+    parts = (entry_hash, key_id, algo_value, key_period_token)
+    return b"|".join(f"{len(part)}:{part}".encode() for part in parts)
+
+
 def sign_audit_entry(
     payload: AuditPayload,
     key_id: str,
     algo: SignatureAlgorithm,
+    *,
+    backend: SigningBackend | None = None,
 ) -> AuditSignatureAttributes:
-    """Sign an audit-ledger entry payload (C-OD-21 §21.2).
+    """Sign an audit-ledger entry payload (C-OD-21 §21.2 + §21.2.1).
 
     Produces an `AuditSignatureAttributes` (the 4-attribute `audit.signature.*`
     set) over `payload` with the operator-selected `algo`. Raises `ValueError`
     at function precondition when `key_id` is missing (empty) — §21.2 requires
     a key identifier for the signing operation.
 
-    The concrete cryptographic signing operation (key custody — HSM / cloud KMS
-    / OS keychain) is deferred per ADR-D5 v1.3 §1.4.1 + §21.2 "Deferred to
-    implementation discretion"; this library surface produces the typed
-    `audit.signature.*` attribute record. The signature value is computed by the
-    deployment-bound signing backend; here it is the deterministic placeholder
-    a Phase-2 composition root replaces with the live signing call.
+    **Without `backend` (the default) — the placeholder path, PRESERVED
+    VERBATIM (OD spec v1.33 §21.2.1 item 2).** The concrete cryptographic
+    signing operation (key custody — HSM / cloud KMS / OS keychain) is
+    deferred per ADR-D5 v1.3 §1.4.1 + §21.2 "Deferred to implementation
+    discretion"; this library surface produces the typed `audit.signature.*`
+    attribute record with the deterministic placeholder value a composition
+    root replaces with the live signing call.
+
+    **With `backend` (§21.2.1, OD spec v1.33 — the composition-root injection
+    seam, mirror of `C-CP-20 §20.2.1`/`B-22`).** A deployment-time composition
+    root has wired a real `SigningBackend` (e.g. ADR-D8's
+    `AwsKmsSigningBackend`): the returned `audit_signature_value` is a genuine
+    signature over the canonical message binding `compute_entry_hash(payload)`
+    to `(key_id, algo, key_period)` — see `_canonical_od_signing_message` —
+    carried as standard base64 text (the `str` carrier type is unchanged; raw
+    signature bytes are arbitrary binary — the B-34 representation discipline
+    applied at birth). Fail-loud validations: a `backend.algorithm` disagreeing
+    with `algo.value` raises (a mislabeled algorithm must not be persisted);
+    a backend-returned signature whose byte-length contradicts the declared
+    algorithm's fixed width (`SIGNATURE_LENGTH_BY_ALGORITHM`, byte-identical
+    to `C-CP-20 §20.4`'s committed widths) raises rather than landing a
+    malformed attribute set. `key_period=0` is passed to the backend as the
+    `"DEPLOYMENT_BOUND"` token's fixed integer projection — rotation-aware
+    key-period selection is `B-33`'s scope.
     """
     if not key_id:
         raise ValueError(
             "sign_audit_entry precondition violated: key_id is required "
             "(C-OD-21 §21.2 — audit.signature.key_id)"
         )
-    # The live signing backend (HSM / KMS / keystore) is wired at a Phase-2
-    # composition root; the library surface produces the typed attribute set.
+    if backend is None:
+        # The live signing backend (HSM / KMS / keystore) is wired at a
+        # deployment-time composition root (§21.2.1); absent one, the library
+        # surface produces the typed attribute set with the placeholder value.
+        return AuditSignatureAttributes(
+            audit_signature_value=f"unsigned:{key_id}:{payload.prior_entry_hash}",
+            audit_signature_algorithm=algo,
+            audit_signature_key_id=key_id,
+            audit_signature_key_period="DEPLOYMENT_BOUND",
+        )
+    if backend.algorithm != algo.value:
+        raise ValueError(
+            f"backend.algorithm={backend.algorithm!r} disagrees with the "
+            f"caller-selected algo={algo.value!r} — a backend must not attest "
+            f"under an algorithm other than the one recorded on the entry "
+            f"(OD spec v1.33 §21.2.1)"
+        )
+    entry_hash = compute_entry_hash(payload)
+    message = _canonical_od_signing_message(
+        entry_hash,
+        key_id=key_id,
+        algo_value=algo.value,
+        key_period_token=_DEPLOYMENT_BOUND_TOKEN,
+    )
+    signature = backend.sign(
+        message=message, key_id=key_id, key_period=_DEPLOYMENT_BOUND_KEY_PERIOD
+    )
+    expected_length = SIGNATURE_LENGTH_BY_ALGORITHM[algo.value]
+    if len(signature) != expected_length:
+        raise ValueError(
+            f"backend returned a {len(signature)}-byte signature; algorithm "
+            f"{algo.value!r} signatures are exactly {expected_length} bytes "
+            f"(OD spec v1.33 §21.2.1 / C-CP-20 §20.4 committed widths)"
+        )
     return AuditSignatureAttributes(
-        audit_signature_value=f"unsigned:{key_id}:{payload.prior_entry_hash}",
+        audit_signature_value=base64.b64encode(signature).decode("ascii"),
         audit_signature_algorithm=algo,
         audit_signature_key_id=key_id,
-        audit_signature_key_period="DEPLOYMENT_BOUND",
+        audit_signature_key_period=_DEPLOYMENT_BOUND_TOKEN,
     )
 
 
