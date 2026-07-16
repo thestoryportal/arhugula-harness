@@ -476,6 +476,24 @@ class AuditSigningConfig(BaseModel):
     """Optional region override for the boto3 KMS client; `None` defers to
     boto3's own resolution chain."""
 
+    @field_validator("key_arns")
+    @classmethod
+    def _key_arns_entries_non_blank(cls, value: dict[str, str]) -> dict[str, str]:
+        # Out-of-family Codex round-6 finding (B-47 PR B1): a mapping whose
+        # required logical key points at "" / whitespace passed the
+        # non-empty-dict check and the coverage check, then failed inside
+        # boto3 on the FIRST real signing call — an invalid deployment must
+        # be rejected at config validation, not mid-run.
+        for key_id, arn in value.items():
+            if not key_id.strip():
+                raise ValueError("key_arns contains a blank logical key_id")
+            if not arn.strip():
+                raise ValueError(
+                    f"key_arns[{key_id!r}] is blank — every mapped value must be "
+                    f"a physical KMS key ARN/ID"
+                )
+        return value
+
     @model_validator(mode="after")
     def _require_key_arns_for_aws_kms(self) -> Self:
         if self.backend is AuditSigningBackendKind.AWS_KMS and not self.key_arns:

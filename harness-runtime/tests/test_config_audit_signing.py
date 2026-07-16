@@ -80,3 +80,19 @@ def test_missing_boto3_fails_loud_not_silent(monkeypatch: pytest.MonkeyPatch) ->
     )
     with pytest.raises(SigningBackendUnavailableError, match="boto3"):
         make_audit_signing_backend(config)
+
+
+def test_blank_key_arn_values_rejected_at_config() -> None:
+    """Codex round-6 (PR B1) — a mapping whose value is blank passed the
+    non-empty-dict check and the coverage check, then failed inside boto3 on
+    the first signing call; rejected at config validation instead."""
+    with pytest.raises(ValidationError, match="is blank"):
+        AuditSigningConfig(
+            backend=AuditSigningBackendKind.AWS_KMS,
+            key_arns={"harness-runtime-redaction-token": "   "},
+        )
+    with pytest.raises(ValidationError, match="blank logical key_id"):
+        AuditSigningConfig(
+            backend=AuditSigningBackendKind.AWS_KMS,
+            key_arns={" ": _ARN},
+        )

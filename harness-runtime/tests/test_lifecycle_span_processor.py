@@ -561,6 +561,9 @@ def test_aws_kms_mapping_missing_token_map_key_fails_at_bootstrap(tmp_path: Path
             )
         }
     )
+    import threading
+
+    threads_before = {t_.ident for t_ in threading.enumerate()}
     with pytest.raises(SpanProcessorBindError, match=REDACTION_TOKEN_SIGNING_KEY_ID):
         materialize_span_processor_stage(
             config,
@@ -569,3 +572,8 @@ def test_aws_kms_mapping_missing_token_map_key_fails_at_bootstrap(tmp_path: Path
             audit_writer=_RecordingAuditWriter(),
             signing_backend=_StubBackend(),
         )
+    # Codex round-6 P2: the raise must fire BEFORE the BatchSpanProcessor
+    # exists — a post-construction raise leaked the BSP's live worker thread
+    # on every failed/retried bootstrap.
+    leaked = {t_.ident for t_ in threading.enumerate()} - threads_before
+    assert leaked == set()

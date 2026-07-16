@@ -218,6 +218,30 @@ def materialize_span_processor_stage(
             f"per C-OD-20 §20.3: {exc}"
         ) from exc
 
+    tokenizer_will_bind = (
+        config.persona_tier == PersonaTier.MULTI_TENANT_COMPLIANCE and audit_writer is not None
+    )
+    if (
+        tokenizer_will_bind
+        and signing_backend is not None
+        and config.audit_signing.backend is AuditSigningBackendKind.AWS_KMS
+        and REDACTION_TOKEN_SIGNING_KEY_ID not in config.audit_signing.key_arns
+    ):
+        # Out-of-family Codex P2 on the B-47 PR-B1 landing: a mapping that
+        # omits this consumer's key_id would boot fine and then raise
+        # UnknownSigningKeyIdError on the FIRST redacted span — an invalid
+        # deployment must fail at startup, not mid-run. Validated BEFORE any
+        # BatchSpanProcessor exists (round-6 P2): the BSP constructor starts
+        # a live worker thread that a post-construction raise would leak on
+        # every failed/retried bootstrap.
+        raise SpanProcessorBindError(
+            f"audit_signing.key_arns is missing the redaction-token "
+            f"map's signing key {REDACTION_TOKEN_SIGNING_KEY_ID!r} — "
+            f"the aws-kms mapping must cover every composition-root "
+            f"signing consumer (ADR-D8 §Decision item 2: no default "
+            f"key is ever assumed)"
+        )
+
     try:
         resolved_exporter: SpanExporter = (
             exporter
@@ -230,23 +254,8 @@ def materialize_span_processor_stage(
             schedule_delay_millis=config.collector.batch_window_seconds * 1000,
         )
         tokenizer = None
-        if config.persona_tier == PersonaTier.MULTI_TENANT_COMPLIANCE and audit_writer is not None:
-            if (
-                signing_backend is not None
-                and config.audit_signing.backend is AuditSigningBackendKind.AWS_KMS
-                and REDACTION_TOKEN_SIGNING_KEY_ID not in config.audit_signing.key_arns
-            ):
-                # Out-of-family Codex P2 on the B-47 PR-B1 landing: a mapping
-                # that omits this consumer's key_id would boot fine and then
-                # raise UnknownSigningKeyIdError on the FIRST redacted span —
-                # an invalid deployment must fail at startup, not mid-run.
-                raise SpanProcessorBindError(
-                    f"audit_signing.key_arns is missing the redaction-token "
-                    f"map's signing key {REDACTION_TOKEN_SIGNING_KEY_ID!r} — "
-                    f"the aws-kms mapping must cover every composition-root "
-                    f"signing consumer (ADR-D8 §Decision item 2: no default "
-                    f"key is ever assumed)"
-                )
+        if tokenizer_will_bind:
+            assert audit_writer is not None  # narrowed by tokenizer_will_bind
             tokenizer = OpaqueRedactionTokenizer(
                 token_map=AuditLedgerRedactionTokenMap(
                     audit_writer=audit_writer,
