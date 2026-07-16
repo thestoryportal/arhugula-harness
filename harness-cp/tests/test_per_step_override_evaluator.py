@@ -491,6 +491,39 @@ def test_cp_signed_audit_entry_rejects_non_base64_signature_string() -> None:
         )
 
 
+def test_cp_signed_audit_entry_rejects_non_canonical_base64_signature_string() -> None:
+    """`B-34` + out-of-family Codex P2 — `b64decode(validate=True)` alone
+    accepts a non-canonical spelling with nonzero unused pad bits (`AB==`
+    decodes to the same byte as `AA==`), which would leave multiple accepted
+    JSON representations for one signature. Exactly one spelling is accepted:
+    the one `model_dump_json()` itself produces."""
+    import pydantic
+
+    entry = CPAuditLedgerEntry(
+        action_id="a||s",  # type: ignore[arg-type]
+        gate_level=GateLevel.AUTO,
+        response="approve",
+        timestamp="t",
+        prior_event_hash="0" * 64,
+    )
+
+    def build(signature_text: str) -> CPSignedAuditLedgerEntry:
+        return CPSignedAuditLedgerEntry(
+            entry=entry,
+            audit_signature_sha256="a" * 64,
+            audit_signature_value=signature_text,  # type: ignore[arg-type]
+            audit_signature_algorithm="ed25519",
+            audit_signature_key_id="tenant_bound:t1",
+            audit_signature_key_period=0,
+        )
+
+    canonical = build("AA==")
+    assert canonical.audit_signature_value == b"\x00"
+
+    with pytest.raises(pydantic.ValidationError, match="canonical"):
+        build("AB==")
+
+
 def test_cp_audit_types_distinct_from_od() -> None:
     # The CP audit types are CP-spec-owned, nominally distinct from the OD
     # AuditLedgerEntry (U-OD-00). The CP names carry the `CP` prefix per the

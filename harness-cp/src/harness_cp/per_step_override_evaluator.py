@@ -140,16 +140,28 @@ class CPSignedAuditLedgerEntry(BaseModel):
         `bytes` input (the Python-domain construction path at
         `sign_audit_entry`) passes through untouched — only `str` input, which
         can only have come from the JSON representation this model itself
-        serializes, is base64-decoded. `validate=True` rejects non-base64 /
-        non-canonical text loudly instead of round-tripping garbage.
+        serializes, is base64-decoded. `validate=True` rejects non-alphabet
+        text; the re-encode comparison additionally rejects a NON-CANONICAL
+        spelling (nonzero unused pad bits — e.g. `AB==` decodes to the same
+        byte as `AA==` — which `b64decode` alone accepts), so every signature
+        has exactly one accepted JSON representation (out-of-family Codex P2
+        finding on this `B-34` fix).
         """
         if isinstance(value, str):
             try:
-                return base64.b64decode(value, validate=True)
+                decoded = base64.b64decode(value, validate=True)
             except binascii.Error as exc:
                 raise ValueError(
                     f"audit_signature_value string is not valid base64: {exc}"
                 ) from exc
+            if base64.b64encode(decoded).decode("ascii") != value:
+                raise ValueError(
+                    "audit_signature_value string is not canonical base64 — it "
+                    "decodes, but re-encoding produces a different spelling "
+                    "(nonzero unused pad bits); exactly one JSON representation "
+                    "per signature is accepted (B-34)"
+                )
+            return decoded
         return value
 
     @field_serializer("audit_signature_value", when_used="json")
