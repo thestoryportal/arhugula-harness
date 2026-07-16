@@ -245,8 +245,10 @@ items:
     change (production already implemented Reading A); new mutation-probed witness test added.
   close_out: Fork doc FILED 2026-07-14, addendum §1.5 added 2026-07-15, RATIFIED+CLOSED 2026-07-15
     (class_1_fork_sandbox_tier_floor_deterministic_inhouse_false_undefined.md). Clearance markers at
-    .harness/clearance/adr-d2-v1-3-cleared-2026-07-15.md and
-    .harness/clearance/spec-action-surface-v1-14-cleared-2026-07-15.md.
+    .harness/clearance/adr-d2-v1-3-cleared-2026-07-15.md,
+    .harness/clearance/spec-action-surface-v1-14-cleared-2026-07-15.md, and (plan-layer correction
+    caught by out-of-family codex-review round 1, same category as B-24)
+    .harness/clearance/implementation-plan-action-surface-v1-6-cleared-2026-07-15.md.
   pr: "#PENDING"
   council: ✅ convened 2026-07-15 (C10 action-safety/blast-radius + C4 tool-contract-semantics) — decisive
     probe finding (field is unverified/spoofable) converged both voices on Reading A
