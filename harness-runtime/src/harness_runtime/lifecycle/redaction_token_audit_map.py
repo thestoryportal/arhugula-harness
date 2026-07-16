@@ -5,6 +5,8 @@ Authority: H_T-OD-4.
 
 from __future__ import annotations
 
+import threading
+
 from harness_cp.f5_signing_key_resolution import SigningBackend
 from harness_od.audit_ledger_types import SignatureAlgorithm, StateLedgerEntryRef
 from harness_od.redaction_token_audit import compose_redaction_token_audit_entry
@@ -46,15 +48,47 @@ class AuditLedgerRedactionTokenMap(RedactionTokenMap):
         self._prior_entry_hash = prior_entry_hash
         self._timestamp = timestamp
         self._signing_backend = signing_backend
+        self._chain_lock = threading.Lock()
+        self._chain_seeded = False
+
+    def _seed_chain_from_durable_tail(self) -> None:
+        """Seed `_prior_entry_hash` from the last durably persisted entry.
+
+        Out-of-family Codex finding on the PR-B1 landing: the constructor's
+        genesis `prior_entry_hash` was reused VERBATIM for every append, so a
+        rehydrated per-tenant sequence failed `verify_hash_chain_integrity`
+        from the second entry — the full-entry reader could not serve the
+        verifier it exists for. Seeding from the sidecar tail also makes the
+        chain continue across process restarts. Requires the writer to expose
+        `read_full_entries_for_tenant` (the runtime writer does); a writer
+        without it keeps the constructor-supplied genesis hash.
+        """
+        reader = getattr(self._audit_writer, "read_full_entries_for_tenant", None)
+        if reader is None:
+            return
+        entries = reader(self._tenant_id)
+        if entries:
+            self._prior_entry_hash = entries[-1].entry_hash
 
     def append(self, record: RedactionTokenRecord) -> None:
-        audit_entry = compose_redaction_token_audit_entry(
-            record,
-            key_id=self._signing_key_id,
-            algo=self._signing_algorithm,
-            entry_core=self._entry_core,
-            prior_entry_hash=self._prior_entry_hash,
-            timestamp=self._timestamp,
-            backend=self._signing_backend,
-        )
-        self._audit_writer.append(self._tenant_id, audit_entry)
+        with self._chain_lock:
+            if not self._chain_seeded:
+                self._seed_chain_from_durable_tail()
+                self._chain_seeded = True
+            audit_entry = compose_redaction_token_audit_entry(
+                record,
+                key_id=self._signing_key_id,
+                algo=self._signing_algorithm,
+                entry_core=self._entry_core,
+                prior_entry_hash=self._prior_entry_hash,
+                timestamp=self._timestamp,
+                backend=self._signing_backend,
+            )
+            self._audit_writer.append(self._tenant_id, audit_entry)
+            # Advance ONLY after a successful persist — a raising append must
+            # not orphan the chain position (the retry re-signs at the same
+            # prior hash). In-process appends serialize on `_chain_lock`;
+            # cross-process simultaneous writers to one tenant remain a
+            # registered residual (B-47 remainder — same-host lock exists at
+            # the sidecar, but each process holds its own chain position).
+            self._prior_entry_hash = audit_entry.entry_hash

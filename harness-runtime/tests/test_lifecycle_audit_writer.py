@@ -16,6 +16,7 @@ replay, `read_all` cross-tenant aggregation surface, freeze invariants.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -541,3 +542,96 @@ def test_crash_between_is_append_and_sidecar_write_heals_on_retry(tmp_path: Path
     # A further replay repairs nothing more — still exactly one row.
     assert writer.append("tenant-A", entry) is WriteResult.IDEMPOTENT_NOOP
     assert len(writer.read_full_entries_for_tenant("tenant-A")) == 1
+
+
+def test_token_map_chain_advances_and_reseeds_across_restart(tmp_path: Path) -> None:
+    """Codex round-2 finding (PR B1) — the token map reused its genesis
+    `prior_entry_hash` verbatim on every append, so a rehydrated per-tenant
+    sequence failed `verify_hash_chain_integrity` from entry 2 — the sidecar
+    reader could not serve the verifier it exists for. The chain now advances
+    per append and RESEEDS from the durable tail on restart: a second map
+    instance (same writer) continues the chain, and the full rehydrated
+    sequence verifies."""
+    from harness_core import PersonaTier
+    from harness_od.audit_ledger_types import AuditLedger
+    from harness_od.multi_tenant_trace_separation_and_audit_ledger import (
+        verify_hash_chain_integrity,
+    )
+    from harness_od.observability_matrix import CellID
+    from harness_od.redaction_tokenizer import RedactionTokenRecord
+    from harness_runtime.lifecycle.redaction_token_audit_map import (
+        AuditLedgerRedactionTokenMap,
+    )
+
+    writer = _writer(tmp_path)
+
+    def _record(token: str) -> RedactionTokenRecord:
+        return RedactionTokenRecord(
+            token=token,
+            raw_value=f"raw for {token}",
+            semantic_category="PII",
+            attribute_key="gen_ai.input.messages",
+            trace_id="trace-1",
+            span_id=f"span-{token}",
+        )
+
+    map_run_1 = AuditLedgerRedactionTokenMap(
+        audit_writer=writer,
+        tenant_id="tenant-chain",
+        signing_key_id="chain-key",
+    )
+    map_run_1.append(_record("[REDACTED:PII:1]"))
+    map_run_1.append(_record("[REDACTED:PII:2]"))
+
+    # Simulated restart: a FRESH map instance over the same durable writer.
+    map_run_2 = AuditLedgerRedactionTokenMap(
+        audit_writer=writer,
+        tenant_id="tenant-chain",
+        signing_key_id="chain-key",
+    )
+    map_run_2.append(_record("[REDACTED:PII:3]"))
+
+    entries = writer.read_full_entries_for_tenant("tenant-chain")
+    assert len(entries) == 3
+    assert entries[1].payload.prior_entry_hash == entries[0].entry_hash
+    assert entries[2].payload.prior_entry_hash == entries[1].entry_hash
+    cell_7 = CellID(
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        deployment_surface=DeploymentSurface.SELF_HOSTED_SERVER,
+    )
+    verify_hash_chain_integrity(
+        AuditLedger(entries=tuple(entries), cell_id=cell_7)
+    )  # raises on breach
+
+
+def test_torn_sidecar_tail_is_skipped_on_read_and_healed_on_write(tmp_path: Path) -> None:
+    """Codex round-2 P2 (PR B1) — a crash mid-write leaves an unterminated
+    JSON fragment at the sidecar tail. Reads skip it (side-effect-free; the
+    entry's IS ref survives); the next write-path call truncates the fragment
+    under the lock before appending, so nothing merges into it and the NOOP
+    repair re-lands the lost entry whole."""
+    writer = _writer(tmp_path)
+    first = _make_audit_entry("1" * 64)
+    lost = _make_audit_entry("2" * 64)
+    assert writer.append("tenant-A", first) is WriteResult.APPENDED
+    assert writer.append("tenant-A", lost) is WriteResult.APPENDED
+
+    # Simulate the crash: the LAST record was only partially flushed.
+    raw = writer._sidecar_path.read_bytes()
+    lines = raw.splitlines(keepends=True)
+    torn = lines[-1][: len(lines[-1]) // 2].rstrip(b"\n")
+    writer._sidecar_path.write_bytes(b"".join(lines[:-1]) + torn)
+
+    # (a) Read skips the fragment; the intact record survives.
+    [only] = writer.read_full_entries_for_tenant("tenant-A")
+    assert only == first
+
+    # (b) The NOOP replay of the lost entry truncates the fragment and
+    # re-lands the record whole.
+    assert writer.append("tenant-A", lost) is WriteResult.IDEMPOTENT_NOOP
+    entries = writer.read_full_entries_for_tenant("tenant-A")
+    assert [e.entry_hash for e in entries] == [first.entry_hash, lost.entry_hash]
+
+    # (c) The healed file is fully well-formed — every line parses.
+    for line in writer._sidecar_path.read_text().splitlines():
+        json.loads(line)

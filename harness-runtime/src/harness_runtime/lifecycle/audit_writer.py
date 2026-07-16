@@ -210,6 +210,34 @@ class RuntimeAuditLedgerWriter:
         """
         return os.open(self._sidecar_path, os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
 
+    def _heal_torn_tail_locked(self) -> None:
+        """Truncate an unterminated final record (crash mid-write) — MUST be
+        called with the exclusive cross-process lock held.
+
+        Out-of-family Codex P2 on the PR-B1 landing: a process/disk failure
+        interrupting a sidecar write can leave a partial JSON fragment with
+        no trailing newline. Left in place it wedges every subsequent read
+        and repair (`json.loads` raises on the torn tail), and a later
+        append would MERGE its line into the fragment. A file that does not
+        end in `\\n` is by construction a torn tail (every completed write
+        ends with one); truncate back to the last completed record. The
+        truncated entry's IS chain ref survives, so the NOOP repair path
+        re-lands it whole.
+        """
+        if not self._sidecar_path.exists():
+            return
+        size = self._sidecar_path.stat().st_size
+        if size == 0:
+            return
+        with self._sidecar_path.open("rb") as fh:
+            fh.seek(-1, os.SEEK_END)
+            if fh.read(1) == b"\n":
+                return
+            fh.seek(0)
+            data = fh.read()
+        keep = data.rfind(b"\n") + 1  # 0 when no completed record exists
+        os.truncate(self._sidecar_path, keep)
+
     def _append_sidecar_line(self, tenant_id: str | None, audit_entry: AuditLedgerEntry) -> None:
         """Append one full-entry JSON line to the sidecar (item (e)).
 
@@ -222,6 +250,7 @@ class RuntimeAuditLedgerWriter:
         """
         line = self._sidecar_line_for(tenant_id, audit_entry)
         with cross_process_write_lock(self._sidecar_path):
+            self._heal_torn_tail_locked()
             with os.fdopen(self._open_sidecar_for_append(), "a", encoding="utf-8") as fh:
                 fh.write(line + "\n")
 
@@ -239,6 +268,7 @@ class RuntimeAuditLedgerWriter:
         tag = self._tenant_tag(tenant_id)
         line = self._sidecar_line_for(tenant_id, audit_entry)
         with cross_process_write_lock(self._sidecar_path):
+            self._heal_torn_tail_locked()
             if self._sidecar_path.exists():
                 with self._sidecar_path.open(encoding="utf-8") as fh:
                     for existing in fh:
@@ -276,6 +306,16 @@ class RuntimeAuditLedgerWriter:
             with self._sidecar_path.open(encoding="utf-8") as fh:
                 for line in fh:
                     if not line.strip():
+                        continue
+                    if not line.endswith("\n"):
+                        # Torn tail (crash mid-write): every completed record
+                        # ends with a newline, so an unterminated final line
+                        # is a partial fragment, not corruption. Skipped —
+                        # reads are side-effect-free (never truncate; the
+                        # `harness-inspect` read-only contract) and the
+                        # entry's IS ref survives, so the next write-path
+                        # call heals it. A malformed line that DOES end in
+                        # `\n` still fails loud below (real corruption).
                         continue
                     row = json.loads(line)
                     if row["tenant_tag"] != tag:
