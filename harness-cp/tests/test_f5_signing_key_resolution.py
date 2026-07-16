@@ -470,6 +470,108 @@ def test_backend_receives_key_period_for_rotation_awareness() -> None:
     )
 
 
+def test_signed_entry_json_round_trip_still_verifies() -> None:
+    """`B-34` — a genuinely signed entry survives JSON persistence.
+
+    Real signature bytes are arbitrary binary; before the base64
+    serializer/validator pair on `audit_signature_value`, `model_dump_json()`
+    raised `PydanticSerializationError` on most real signatures (invalid
+    utf-8), so a signed entry could not be persisted to the ledger at all.
+    The load-bearing claim is end-to-end: dump → reload → the reloaded entry
+    still cryptographically VERIFIES."""
+    result = resolve_signing_key(_SCOPE, PersonaTier.MULTI_TENANT_COMPLIANCE)
+    assert result.handle is not None
+    backend = _InMemoryEd25519Backend()
+    signed = sign_audit_entry(_ENTRY, result.handle, key_period=1, backend=backend)
+
+    reloaded = CPSignedAuditLedgerEntry.model_validate_json(signed.model_dump_json())
+
+    assert reloaded.audit_signature_value == signed.audit_signature_value
+    assert (
+        verify_audit_entry_signature(reloaded, result.handle, backend=backend)
+        is VerificationResult.VERIFIED
+    )
+
+
+def test_sign_rejects_wrong_length_backend_signature() -> None:
+    """`B-34` — a backend returning a signature whose byte-length contradicts
+    its own declared algorithm (ed25519 = exactly 64 bytes) is a contract
+    violation; `sign_audit_entry` fails loud rather than landing a malformed
+    entry on the ledger."""
+
+    class _PaddingBackend(_InMemoryEd25519Backend):
+        def sign(self, *, message: bytes, key_id: str, key_period: int) -> bytes:
+            return super().sign(message=message, key_id=key_id, key_period=key_period) + b"\x00"
+
+    result = resolve_signing_key(_SCOPE, PersonaTier.MULTI_TENANT_COMPLIANCE)
+    assert result.handle is not None
+    with pytest.raises(ValueError, match="65-byte signature"):
+        sign_audit_entry(_ENTRY, result.handle, key_period=1, backend=_PaddingBackend())
+
+
+def test_verify_rejects_wrong_length_stored_signature_before_backend() -> None:
+    """`B-34` — a stored `audit_signature_value` whose byte-length contradicts
+    the entry's own declared algorithm cannot have come from a
+    contract-conforming backend; rejected WITHOUT consulting the backend (a
+    rogue backend must not get the chance to attest a verdict over it)."""
+
+    class _CountingBackend(_InMemoryEd25519Backend):
+        verify_calls = 0
+
+        def verify(self, *, message: bytes, signature: bytes, key_id: str, key_period: int) -> bool:
+            type(self).verify_calls += 1
+            return super().verify(
+                message=message, signature=signature, key_id=key_id, key_period=key_period
+            )
+
+    result = resolve_signing_key(_SCOPE, PersonaTier.MULTI_TENANT_COMPLIANCE)
+    assert result.handle is not None
+    backend = _CountingBackend()
+    signed = sign_audit_entry(_ENTRY, result.handle, key_period=1, backend=backend)
+
+    truncated = signed.model_copy(
+        update={"audit_signature_value": signed.audit_signature_value[:-1]}
+    )
+
+    assert (
+        verify_audit_entry_signature(truncated, result.handle, backend=backend)
+        is VerificationResult.SIGNATURE_MISMATCH
+    )
+    assert _CountingBackend.verify_calls == 0
+
+
+def test_signature_length_table_pins_spec_values_and_forecloses_der() -> None:
+    """`B-34` (merge-gate test-witness lens) — the two length-table rows no
+    test otherwise exercises are contract DATA, pinned two ways: (1) the
+    table equals C-CP-20 §20.4's committed byte-widths verbatim ("64 bytes
+    for ed25519/ecdsa-p256; 256 bytes for rsa-pss-2048"); (2) behaviorally,
+    an ecdsa-p256 backend returning a 72-byte DER-plausible signature fails
+    loud at sign time — the exact DER-vs-raw foreclosure B-34 registered."""
+    from harness_cp.f5_signing_key_resolution import _SIGNATURE_LENGTH_BY_ALGORITHM
+
+    assert _SIGNATURE_LENGTH_BY_ALGORITHM == {
+        "ed25519": 64,
+        "ecdsa-p256": 64,
+        "rsa-pss-2048": 256,
+    }
+
+    class _DerEcdsaBackend:
+        algorithm = "ecdsa-p256"
+
+        def sign(self, *, message: bytes, key_id: str, key_period: int) -> bytes:
+            del message, key_id, key_period
+            return b"\x30" + b"\x00" * 71  # DER SEQUENCE-shaped, 72 bytes
+
+        def verify(self, *, message: bytes, signature: bytes, key_id: str, key_period: int) -> bool:
+            del message, signature, key_id, key_period
+            return True
+
+    result = resolve_signing_key(_SCOPE, PersonaTier.MULTI_TENANT_COMPLIANCE)
+    assert result.handle is not None
+    with pytest.raises(ValueError, match="72-byte signature"):
+        sign_audit_entry(_ENTRY, result.handle, key_period=1, backend=_DerEcdsaBackend())
+
+
 def test_verify_rejects_negative_stored_key_period() -> None:
     """Out-of-family Codex round-3 P2 — a `signed` entry constructed outside
     `sign_audit_entry` with a negative stored `audit_signature_key_period`

@@ -89,3 +89,13 @@ Branch: b24-b27-fork-ratification-build · Date: 2026-07-15
 **Also converged separately:** 4 rounds of out-of-family `just codex-review` against the code+doc diff — round 1 (real, fixed: dispatch dict missed §5.3's own short-form vocabulary), round 2 (real, fixed: the enum extension needed an AS *plan* delta, not just the spec — X-AL-3 gap), round 3 (real P1, fixed: the spec's own replacement prose falsely claimed engine-native pauses are safely resumable via plain re-invocation), round 4 (P2, declined with grounding — the flagged root-`CLAUDE.md` pointer staleness is a pre-existing, self-documented periodic-batch convention, not introduced by this PR; independently confirmed above by the spec-conformance lens).
 
 **Outcome:** All-approve → merged without HIL per standing CI-green directive.
+
+## PR #1032 — 2026-07-16 — `b-34-signature-representation`
+
+| Lens | Verdict |
+|---|---|
+| concurrency / race-conditions | APPROVE (no shared-mutable state; new checks operate on function-locals + frozen-model fields; length table read-only) |
+| spec-conformance vs ledgers | APPROVE (byte-lengths match C-CP-20 §20.4's committed widths verbatim at `Spec_Control_Plane_v1_2.md:1792`; register mechanics pass `--check`; no X-AL-3 surface; 2 Class-3 cosmetic notes: v1.98 change-note prose is historical-by-convention; B-36 block's "still open" carry superseded by B-34's same-file close — future register-touching PR may append one line) |
+| test-witness adequacy | APPROVE (all 4 load-bearing lines pinned bidirectionally; 1 non-blocking gap — ecdsa-p256/rsa table rows unwitnessed — CLOSED post-gate by `test_signature_length_table_pins_spec_values_and_forecloses_der`, itself mutation-probed 64→72) |
+
+**Outcome:** all-APPROVE → merge without HIL (CI-green precondition met, 16/16). Non-blocking test-witness note fixed before merge in the same PR.

@@ -34,6 +34,8 @@ ADR-F2 v1.2 audit composition.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime
@@ -44,7 +46,7 @@ from harness_core import PersonaTier
 from harness_core.identity import ActionID
 from harness_is.state_ledger_entry_schema import Actor, ActorClass, Identifier
 from harness_is.state_ledger_write import EntryPayload, WriteResult
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_serializer, field_validator
 
 from harness_cp.cp_shared_types import ActorIdentity, AgentRole, ModelBinding
 from harness_cp.engine_class import EngineClass
@@ -111,7 +113,15 @@ class CPSignedAuditLedgerEntry(BaseModel):
     """Hex-64; the signed hash (C-CP-20 §20.4)."""
 
     audit_signature_value: bytes
-    """Per-entry signature bytes (C-CP-20 §20.4)."""
+    """Per-entry signature bytes (C-CP-20 §20.4).
+
+    Python-domain value is raw `bytes` (what a `SigningBackend.sign` returns);
+    the JSON representation is standard base64 (`B-34` — real signatures are
+    arbitrary binary, so pydantic's default utf-8 bytes-to-JSON encoding raises
+    `PydanticSerializationError` on dump and cannot round-trip). The paired
+    validator/serializer below make `model_dump_json()` /
+    `model_validate_json()` lossless for any signature byte string.
+    """
 
     audit_signature_algorithm: str
     """`∈ {ed25519, ecdsa-p256, rsa-pss-2048}` (C-CP-20 §20.4)."""
@@ -121,6 +131,43 @@ class CPSignedAuditLedgerEntry(BaseModel):
 
     audit_signature_key_period: int
     """Monotonic key-period (C-CP-20 §20.4)."""
+
+    @field_validator("audit_signature_value", mode="before")
+    @classmethod
+    def _decode_signature_base64(cls, value: object) -> object:
+        """Decode a base64 `str` (the JSON representation) back to raw bytes.
+
+        `bytes` input (the Python-domain construction path at
+        `sign_audit_entry`) passes through untouched — only `str` input, which
+        can only have come from the JSON representation this model itself
+        serializes, is base64-decoded. `validate=True` rejects non-alphabet
+        text; the re-encode comparison additionally rejects a NON-CANONICAL
+        spelling (nonzero unused pad bits — e.g. `AB==` decodes to the same
+        byte as `AA==` — which `b64decode` alone accepts), so every signature
+        has exactly one accepted JSON representation (out-of-family Codex P2
+        finding on this `B-34` fix).
+        """
+        if isinstance(value, str):
+            try:
+                decoded = base64.b64decode(value, validate=True)
+            except binascii.Error as exc:
+                raise ValueError(
+                    f"audit_signature_value string is not valid base64: {exc}"
+                ) from exc
+            if base64.b64encode(decoded).decode("ascii") != value:
+                raise ValueError(
+                    "audit_signature_value string is not canonical base64 — it "
+                    "decodes, but re-encoding produces a different spelling "
+                    "(nonzero unused pad bits); exactly one JSON representation "
+                    "per signature is accepted (B-34)"
+                )
+            return decoded
+        return value
+
+    @field_serializer("audit_signature_value", when_used="json")
+    def _encode_signature_base64(self, value: bytes) -> str:
+        """Serialize raw signature bytes as base64 text in JSON mode (`B-34`)."""
+        return base64.b64encode(value).decode("ascii")
 
 
 class StepEffectiveBinding(BaseModel):

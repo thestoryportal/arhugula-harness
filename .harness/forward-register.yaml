@@ -55,11 +55,11 @@ snapshot:
   total: 48
   open: 0
   design_substrate_gated: 2
-  registered_finding: 8
+  registered_finding: 7
   operator_gated: 1
   held: 1
-  closed: 36
-  identity_digest: 58f410f43bc2763d
+  closed: 37
+  identity_digest: 958525332d5108f8
   source: .harness/post-phase-8-forward-register.md
 items:
 - id: B-1
@@ -458,12 +458,17 @@ items:
     occurred *(surfaced at B-26, out-of-family Codex rounds 1 + 5, `advisor()`-confirmed)*'
 - id: B-34
   title: Concrete signature-representation gaps in the C-CP-20 §20.2.1 seam
-  status: registered_finding
+  status: closed
+  pr: '#1032'
   summary: DER-vs-64-byte ECDSA-P256 encoding unenforced; CPSignedAuditLedgerEntry.audit_signature_value
     not JSON-serializable for real bytes. NARROWED 2026-07-16 — B-36 (ADR-D8) selected AWS KMS Ed25519
     (ED25519_SHA_512), whose signatures are always a fixed 64 raw bytes with no DER-wrapping ambiguity;
     the DER-encoding concern only remains live if a future ECDSA-P256 fallback backend is added alongside
-    this one. The JSON-serializability gap is unaffected by backend choice and still open.
+    this one. The JSON-serializability gap is unaffected by backend choice and still open. CLOSED 2026-07-16
+    at PR 1032 — both gaps fixed per this row's own close-out steps -- per-algorithm byte-length
+    enforcement on write+read paths (ecdsa-p256 pinned to fixed-width raw r||s, foreclosing the
+    DER ambiguity by contract) + reversible base64 serializer/validator on audit_signature_value
+    (consumer sweep found zero serialization consumers outside harness-cp).
   close_out: Validate signature byte-length per algorithm + add a reversible byte-encoding serializer,
     once a real backend exists (B-36).
   council: no — mechanical once a real backend exists to test against
