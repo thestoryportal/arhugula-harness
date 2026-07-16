@@ -793,3 +793,72 @@ def test_membership_index_folds_foreign_appends_exactly_once(tmp_path: Path) -> 
 
     assert folded_deltas == [foreign_bytes, 0]
     assert len(writer_b.read_full_entries_for_tenant("tenant-x")) == 2
+
+
+def test_same_map_instance_reconciles_chain_after_partial_failure(tmp_path: Path) -> None:
+    """Codex round-13 (PR B1) — same-instance continuation after a PARTIAL
+    failure (sidecar landed, IS append raised): the live map must reconcile
+    against the durable tail before signing the next DISTINCT record, or that
+    record links to the pre-orphan predecessor and the rehydrated sequence
+    breaks chain verification. (The restart case was already witnessed; this
+    is the no-restart case.)"""
+    import unittest.mock as mock
+
+    from harness_core import PersonaTier
+    from harness_od.audit_ledger_types import AuditLedger
+    from harness_od.multi_tenant_trace_separation_and_audit_ledger import (
+        verify_hash_chain_integrity,
+    )
+    from harness_od.observability_matrix import CellID
+    from harness_od.redaction_tokenizer import RedactionTokenRecord
+
+    from harness_runtime.lifecycle.redaction_token_audit_map import (
+        AuditLedgerRedactionTokenMap,
+    )
+
+    writer = _writer(tmp_path)
+
+    def _record(token: str) -> RedactionTokenRecord:
+        return RedactionTokenRecord(
+            token=token,
+            raw_value=f"raw for {token}",
+            semantic_category="PII",
+            attribute_key="gen_ai.input.messages",
+            trace_id="trace-1",
+            span_id=f"span-{token}",
+        )
+
+    token_map = AuditLedgerRedactionTokenMap(
+        audit_writer=writer,
+        tenant_id="tenant-partial",
+        signing_key_id="chain-key",
+    )
+    token_map.append(_record("[REDACTED:PII:1]"))
+
+    # Entry 2: sidecar lands, IS append raises — SAME map instance survives.
+    original_is_append = type(writer.ledger_writer).append
+    calls = {"n": 0}
+
+    def _dies_once(self: object, payload: object, write_key: object) -> object:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise OSError("simulated IS-append failure after sidecar write")
+        return original_is_append(self, payload, write_key)  # type: ignore[arg-type]
+
+    with mock.patch.object(type(writer.ledger_writer), "append", _dies_once):
+        with pytest.raises(OSError):
+            token_map.append(_record("[REDACTED:PII:2]"))
+
+        # Processing continues on the SAME instance with a DIFFERENT record.
+        token_map.append(_record("[REDACTED:PII:3]"))
+
+    entries = writer.read_full_entries_for_tenant("tenant-partial")
+    assert len(entries) == 3  # incl. the durable orphan
+    assert entries[2].payload.prior_entry_hash == entries[1].entry_hash
+    cell_7 = CellID(
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        deployment_surface=DeploymentSurface.SELF_HOSTED_SERVER,
+    )
+    verify_hash_chain_integrity(
+        AuditLedger(entries=tuple(entries), cell_id=cell_7)
+    )  # raises on breach

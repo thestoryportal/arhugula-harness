@@ -84,11 +84,23 @@ class AuditLedgerRedactionTokenMap(RedactionTokenMap):
                 timestamp=self._timestamp,
                 backend=self._signing_backend,
             )
-            self._audit_writer.append(self._tenant_id, audit_entry)
-            # Advance ONLY after a successful persist — a raising append must
-            # not orphan the chain position (the retry re-signs at the same
-            # prior hash). In-process appends serialize on `_chain_lock`;
-            # cross-process simultaneous writers to one tenant remain a
-            # registered residual (B-47 remainder — same-host lock exists at
-            # the sidecar, but each process holds its own chain position).
+            try:
+                self._audit_writer.append(self._tenant_id, audit_entry)
+            except BaseException:
+                # Partial-failure reconciliation (out-of-family Codex round-13
+                # on the PR-B1 landing): under sidecar-first persistence the
+                # failed append may have landed the entry durably (sidecar
+                # written, IS append raised). Holding the in-memory position
+                # would make the NEXT distinct record link to the pre-orphan
+                # predecessor while the full reader includes the orphan —
+                # breaking `verify_hash_chain_integrity`. Invalidate the seed
+                # so the next append re-reads the durable tail (which includes
+                # the orphan iff it landed) before signing.
+                self._chain_seeded = False
+                raise
+            # Advance ONLY after a successful persist. In-process appends
+            # serialize on `_chain_lock`; cross-process simultaneous writers
+            # to one tenant remain a registered residual (B-47 remainder —
+            # same-host lock exists at the sidecar, but each process holds
+            # its own chain position).
             self._prior_entry_hash = audit_entry.entry_hash
