@@ -69,3 +69,21 @@ def test_verify_sole_resolution_path_dispatches_known_sites_to_matching_surfaces
         verify_sole_resolution_path("audit_ledger_entry").surface
         is NegativeObservationSurface.AUDIT_LEDGER_ENTRY
     )
+
+
+def test_verify_sole_resolution_path_dispatches_spec_short_form_labels() -> None:
+    """B-24 (Codex round 1) — §5.3's own vocabulary (manifest, prompt, log, ledger)
+    must dispatch to the matching surface, not fall through to the manifest default."""
+    assert (
+        verify_sole_resolution_path("manifest").surface
+        is NegativeObservationSurface.WORKFLOW_MANIFEST_ENTRY
+    )
+    assert (
+        verify_sole_resolution_path("prompt").surface
+        is NegativeObservationSurface.STATIC_PROMPT_CACHE_PREFIX
+    )
+    assert verify_sole_resolution_path("log").surface is NegativeObservationSurface.LOG_RECORDS
+    assert (
+        verify_sole_resolution_path("ledger").surface
+        is NegativeObservationSurface.AUDIT_LEDGER_ENTRY
+    )

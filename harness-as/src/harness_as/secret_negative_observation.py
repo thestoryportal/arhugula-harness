@@ -118,6 +118,12 @@ def validate_no_secret_in_audit_ledger_entry(
 
 
 _ARRIVAL_SITE_SURFACES: Mapping[str, NegativeObservationSurface] = {
+    # §5.3's own short-form vocabulary ("manifest, prompt, log, ledger").
+    "manifest": NegativeObservationSurface.WORKFLOW_MANIFEST_ENTRY,
+    "prompt": NegativeObservationSurface.STATIC_PROMPT_CACHE_PREFIX,
+    "log": NegativeObservationSurface.LOG_RECORDS,
+    "ledger": NegativeObservationSurface.AUDIT_LEDGER_ENTRY,
+    # Longer-form aliases matching the other validators' own `detected_at` values.
     "workflow_manifest": NegativeObservationSurface.WORKFLOW_MANIFEST_ENTRY,
     "prompt_cache_prefix": NegativeObservationSurface.STATIC_PROMPT_CACHE_PREFIX,
     "span_attributes": NegativeObservationSurface.SPAN_ATTRIBUTES,
