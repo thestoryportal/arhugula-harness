@@ -79,7 +79,9 @@ math).
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Mapping
 from enum import StrEnum
+from types import MappingProxyType
 from typing import Protocol, runtime_checkable
 
 from harness_as import SandboxTier, SecretRef, SecretScope, fetch_secret
@@ -235,13 +237,16 @@ second, ambiguous representation in the ledger (the exact B-34 hazard).
 Cardinality mirrors `_VALID_SIGNATURE_ALGORITHMS` — every closed-enum token
 has exactly one representation."""
 
-SIGNATURE_LENGTH_BY_ALGORITHM: dict[str, int] = _SIGNATURE_LENGTH_BY_ALGORITHM
-"""Public binding of the per-algorithm signature byte-width table (same object).
+SIGNATURE_LENGTH_BY_ALGORITHM: Mapping[str, int] = MappingProxyType(_SIGNATURE_LENGTH_BY_ALGORITHM)
+"""Public IMMUTABLE view of the per-algorithm signature byte-width table.
 
 Consumed OD→CP by `harness_od.multi_tenant_trace_separation_and_audit_ledger.
 sign_audit_entry`'s §21.2.1 backend seam (OD spec v1.33) so both signing
 surfaces enforce the identical `C-CP-20 §20.4` widths from one source of
-truth rather than drifting copies."""
+truth rather than drifting copies. A `MappingProxyType`, not the dict itself
+(out-of-family Codex finding on the B-47 PR-A landing): a mutable public
+alias would let any importer rewrite the widths process-wide — state that
+controls signature validation must not be writable through its public name."""
 
 
 def _canonical_entry_hash(entry: CPAuditLedgerEntry) -> str:
