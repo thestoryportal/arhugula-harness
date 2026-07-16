@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `1231adad8533` |
+| `workspace_state_hash` | `b9d01b4026bd` |
 | `last_refreshed` | 2026-07-15T00:00:00Z |
-| `git_head` | `d8bc2634` — fix(as): B-25 resolved — sandbox_tier_floor row-7 self-contradiction (Reading A) (#1030) |
+| `git_head` | `e69c4155` — ops: roadmap status refresh post-#1030 |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 91 |
 
