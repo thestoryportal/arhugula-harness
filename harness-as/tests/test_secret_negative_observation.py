@@ -87,3 +87,13 @@ def test_verify_sole_resolution_path_dispatches_spec_short_form_labels() -> None
         verify_sole_resolution_path("ledger").surface
         is NegativeObservationSurface.AUDIT_LEDGER_ENTRY
     )
+
+
+def test_verify_sole_resolution_path_unrecognized_site_defaults_to_manifest() -> None:
+    """merge-gate test-witness lens — the documented default-fallback branch
+    (an arrival site absent from _ARRIVAL_SITE_SURFACES) was previously
+    unwitnessed; pins it explicitly against regressing to the pre-fix
+    hardcoded STATIC_PROMPT_CACHE_PREFIX bug."""
+    violation = verify_sole_resolution_path("some_unlabeled_site")
+    assert violation is not None
+    assert violation.surface is NegativeObservationSurface.WORKFLOW_MANIFEST_ENTRY
