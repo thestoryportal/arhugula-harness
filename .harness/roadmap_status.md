@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `b9d01b4026bd` |
+| `workspace_state_hash` | `d9382761453c` |
 | `last_refreshed` | 2026-07-15T00:00:00Z |
-| `git_head` | `e69c4155` — ops: roadmap status refresh post-#1030 |
+| `git_head` | `86e0b3a7` — ops: roadmap status refresh post-#1030 (fixed-point anchor correction) |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 91 |
 
