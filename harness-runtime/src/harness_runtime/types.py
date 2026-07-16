@@ -38,9 +38,9 @@ import asyncio
 import contextvars
 import re
 from collections.abc import Mapping
-from types import MappingProxyType
 from enum import Enum, StrEnum
 from pathlib import Path
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, NewType, Protocol, Self, runtime_checkable
 from urllib.parse import urlsplit
 
