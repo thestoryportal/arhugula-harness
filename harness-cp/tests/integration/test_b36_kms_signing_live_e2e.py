@@ -13,6 +13,13 @@ Required environment (see ``.env`` / ``just b36-kms-signing-live-e2e``):
 - ``B36_KMS_SIGNING_AWS_ACCESS`` / ``B36_KMS_SIGNING_AWS_SECRET``: the
   least-privilege IAM user's credentials (Sign/Verify/GetPublicKey/DescribeKey
   on this one key ARN only).
+
+Optional (strengthens the least-privilege proof from negative-probing to an
+authoritative policy-document read):
+
+- ``S3_AWS_ACCESS`` / ``S3_AWS_SECRET``: account-admin credentials able to
+  read IAM policy documents. Without these, the policy-document test skips
+  and the negative-probe test remains the only least-privilege witness.
 """
 
 from __future__ import annotations
@@ -123,3 +130,70 @@ def test_aws_kms_signing_backend_live_identity_is_least_privilege() -> None:
 
     with pytest.raises(ClientError, match="AccessDenied"):
         session.client("kms").get_key_policy(KeyId=params["key_arn"], PolicyName="default")
+
+
+@pytest.mark.e2e
+def test_aws_kms_signing_backend_live_identity_policy_document_is_exact() -> None:
+    """Authoritative version of the least-privilege check above: rather than
+    negative-probing a handful of not-granted actions (which cannot rule out
+    an accidentally-broader policy the probes happen not to exercise), reads
+    the actual attached IAM policy document via an admin identity and asserts
+    it is EXACTLY the 4 actions on the 1 key ARN ADR-D8 commits to — nothing
+    more (out-of-family Codex review round-2 finding: negative probing alone
+    "does not prove the claimed 'exactly four actions on one key' boundary").
+    Skips (not fails) if no admin credential is configured — this is a
+    stronger complement to, not a replacement for, the black-box test above,
+    which remains the one every CI-adjacent operator credential set can run."""
+    import json
+
+    import boto3
+
+    params = _require_live_kms_params()
+    admin_access = os.environ.get("S3_AWS_ACCESS", "").strip()
+    admin_secret = os.environ.get("S3_AWS_SECRET", "").strip()
+    if not admin_access or not admin_secret:
+        pytest.skip("policy-document proof requires S3_AWS_ACCESS/S3_AWS_SECRET (account-admin)")
+
+    admin_session = boto3.Session(
+        aws_access_key_id=admin_access,
+        aws_secret_access_key=admin_secret,
+        region_name=params["region_name"],
+    )
+    iam = admin_session.client("iam")
+    caller_arn = (
+        boto3.Session(
+            aws_access_key_id=params["aws_access_key_id"],
+            aws_secret_access_key=params["aws_secret_access_key"],
+            region_name=params["region_name"],
+        )
+        .client("sts")
+        .get_caller_identity()["Arn"]
+    )
+    user_name = caller_arn.rsplit("/", 1)[-1]
+
+    inline_policy_names = iam.list_user_policies(UserName=user_name)["PolicyNames"]
+    assert len(inline_policy_names) == 1, (
+        f"expected exactly one inline policy on {user_name}, found {inline_policy_names}"
+    )
+    policy_doc = iam.get_user_policy(UserName=user_name, PolicyName=inline_policy_names[0])[
+        "PolicyDocument"
+    ]
+
+    statements = policy_doc["Statement"]
+    assert len(statements) == 1, f"expected exactly one statement, found {json.dumps(statements)}"
+    statement = statements[0]
+    assert statement["Effect"] == "Allow"
+    actions = statement["Action"]
+    actions = [actions] if isinstance(actions, str) else actions
+    assert set(actions) == {"kms:Sign", "kms:Verify", "kms:GetPublicKey", "kms:DescribeKey"}
+    resources = statement["Resource"]
+    resources = [resources] if isinstance(resources, str) else resources
+    assert set(resources) == {params["key_arn"]}
+
+    attached_managed = iam.list_attached_user_policies(UserName=user_name)["AttachedPolicies"]
+    assert attached_managed == [], (
+        f"expected no managed policies attached, found {attached_managed}"
+    )
+
+    groups = iam.list_groups_for_user(UserName=user_name)["Groups"]
+    assert groups == [], f"expected no group memberships (no inherited permissions), found {groups}"

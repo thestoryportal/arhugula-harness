@@ -4,6 +4,27 @@ Append-only. One entry per gated PR — see `.claude/skills/merge-gate/SKILL.md`
 
 ---
 
+## PR #1031 — feat(cp): AWS KMS SigningBackend for B-36 audit-signing backend (ADR-D8)
+Branch: b36-aws-kms-audit-signing-backend · Date: 2026-07-16
+
+**Round 1 (initial landing, commit `3a6086e2`):**
+- Concurrency: APPROVE — `AwsKmsSigningBackend` is stateless-post-construction (defensive-copied `key_arns` dict, injected `kms_client`, neither reassigned); zero asyncio surface; `key_period` accepted but unused for key selection, no fencing/idempotency-key involvement; the touched `f5_signing_key_resolution.py` consumer is confirmed byte-unchanged.
+- Spec-conformance: BLOCK — `B-36`'s own `summary` field still read "no real signing backend exists yet ... Blocks any MULTI_TENANT_COMPLIANCE deployment" directly beneath `status: closed` (stale-carry-text self-contradiction); `ADR-D5.md` §1.4 row 3 left with no cross-reference to the new `ADR-D8` despite the clearance marker's own claim that row's deferral was closed for the AWS case.
+- Test-witness: APPROVE — real production class under test (not an isolated seam), fail-loud key-mapping check mutation-resistant; flagged (non-blocking) that request-shape + `KMSInvalidSignatureException`-handling assertions are same-author tautologies vs. AWS's actual API contract, with the live e2e as the only independent check and its "passed" claim resting on author-only prose.
+
+**Also converged separately, 3 rounds of out-of-family `just codex-review`** (capped at 2 rounds per the merge-gate skill; round 3's 2 P2s were narrow/mechanical and fixed+locally-verified rather than spinning a 4th full external pass):
+- Round 1 (5 real findings, all fixed): mutable KMS aliases accepted in `key_arns` → `MutableKeyAliasRejectedError` at construction; live-e2e least-privilege test called `iam.create_user` directly (leak risk on misconfiguration) → replaced with read-only not-granted-action checks; `boto3>=1.34` didn't guarantee KMS Ed25519 support → bisected empirically, bumped to `>=1.41`; `B-36` summary self-contradiction → fixed; composition-root wiring closed-over with no tracked follow-on → split out as `B-47`.
+- Round 2 (clean on the 5 round-1 items; 2 new P2s, both fixed): negative-probing alone couldn't rule out an accidentally-broader policy → added an authoritative admin-credential policy-document read asserting EXACTLY the 4 actions on the 1 key ARN, zero managed policies, zero group memberships (passed against the real AWS account); `.env.example`'s pre-existing `S3_AWS_ACCESS`/`S3_AWS_SECRET` didn't match what any code reads → renamed to the standard `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`.
+- Round 3: not run as a full external pass (cap); both round-2 fixes verified locally instead — 3/3 live e2e tests pass against the real provisioned KMS key + a real admin-credential policy-document read; full workspace suite 5624 passed, 0 regressions; `ruff`/`pyright` clean workspace-wide.
+
+**Resolution provenance:** dyadic C10 (blast-radius) ⊥ C11 (operator-loop) council convening (run per the `B-36` register row's own named tension) + two operator `AskUserQuestion` confirmations (backend-architecture choice; explicit go-ahead before live AWS provisioning, after an auto-mode classifier correctly paused on an ambiguous reply) — see `.harness/clearance/ADR-D8_audit_signing_backend-cleared-2026-07-16.md` + `.harness/clearance/ADR-D5-v1-5-cleared-2026-07-16.md` for the full record.
+
+**Note:** the branch's commit history (not the final tree) briefly carried a real AWS account ID in one commit (`3a6086e2`) before a follow-on commit (`6ca6060f`) redacted it from the current tree state; a `git commit --amend`/force-push to scrub it from history was attempted but denied by the auto-mode classifier (git-destructive-on-already-pushed-branch), so the account ID remains fetchable via the raw commit SHA until this branch is deleted post-merge (squash-merge means it will not propagate to `main`'s permanent history).
+
+**Outcome:** pending — CI + final human/operator merge decision.
+
+---
+
 ## PR #1030 — fix(as): B-25 resolved — sandbox_tier_floor row-7 self-contradiction (Reading A)
 Branch: b-25-sandbox-tier-floor-reading-a · Date: 2026-07-15
 
