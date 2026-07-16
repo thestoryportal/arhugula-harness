@@ -7,9 +7,11 @@
 .harness/state.jsonl
 .harness/state.jsonl.lock
 # B-47 item (e) full-entry audit sidecar — carries ORIGINAL redaction-token
-# raw values (PII/secrets); must never be committed (codex round-5, PR B1).
-.harness/audit-entries.jsonl
-.harness/audit-entries.jsonl.lock
+# raw values (PII/secrets); must never be committed. Unanchored: the sidecar
+# lands beside WHATEVER directory PathBindingConfig places the state ledger
+# in, not only .harness/ (codex rounds 5+7, PR B1).
+audit-entries.jsonl
+audit-entries.jsonl.lock
 .harness/index.json
 .harness/observability.db
 .harness/*.db
