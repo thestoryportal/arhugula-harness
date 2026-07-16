@@ -188,6 +188,31 @@ async def flush_observability(
     except Exception:
         failures.append("tracer")
 
+    # Sidecar fsync FIRST (mirrors the sidecar-first write ordering —
+    # codex round-5 P2: power loss between the two fsyncs must not leave
+    # a flushed ref whose signature was still buffered).
+    # Audit-writer surface: The IS refs append through the ledger (covered
+    # by surface 2), but the FULL signed entries live in the item-(e) sidecar
+    # (B-47 PR B1) — a separate file whose write-back buffer surface-2's
+    # fsync does not touch (out-of-family Codex round-4 finding: a clean
+    # shutdown followed by power loss could keep the ref and lose the
+    # signature). Fsync it when it exists; absent sidecar (no audit entry
+    # ever appended, or a non-runtime writer) is a clean no-op.
+    try:
+        audit_writer = getattr(ctx, "audit_writer", None)
+        sidecar_path = getattr(audit_writer, "sidecar_path", None)
+        # Absent writer/attribute or not-yet-created sidecar = clean no-op
+        # (nothing durable to flush); only a FAILING fsync of an existing
+        # sidecar is a flush failure.
+        if sidecar_path is not None and sidecar_path.exists():
+            fd = os.open(str(sidecar_path), os.O_RDONLY)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+    except Exception:
+        failures.append("audit_sidecar")
+
     # Surface 2: ledger fsync. Open RO, fsync the fd, close. Per Track A
     # discretion, dir-fsync + F_FULLFSYNC deferred.
     #
@@ -210,28 +235,7 @@ async def flush_observability(
     except Exception:
         failures.append("ledger")
 
-    # Surface 3: cost-chain. Stateless-by-design (U-RT-31) → no-op.
-    # Surface 4: audit-writer. The IS refs append through the ledger (covered
-    # by surface 2), but the FULL signed entries live in the item-(e) sidecar
-    # (B-47 PR B1) — a separate file whose write-back buffer surface-2's
-    # fsync does not touch (out-of-family Codex round-4 finding: a clean
-    # shutdown followed by power loss could keep the ref and lose the
-    # signature). Fsync it when it exists; absent sidecar (no audit entry
-    # ever appended, or a non-runtime writer) is a clean no-op.
-    try:
-        audit_writer = getattr(ctx, "audit_writer", None)
-        sidecar_path = getattr(audit_writer, "sidecar_path", None)
-        # Absent writer/attribute or not-yet-created sidecar = clean no-op
-        # (nothing durable to flush); only a FAILING fsync of an existing
-        # sidecar is a flush failure.
-        if sidecar_path is not None and sidecar_path.exists():
-            fd = os.open(str(sidecar_path), os.O_RDONLY)
-            try:
-                os.fsync(fd)
-            finally:
-                os.close(fd)
-    except Exception:
-        failures.append("audit_sidecar")
+    # Cost-chain surface: stateless-by-design (U-RT-31) → no-op.
 
     return FlushReport(
         tracer_flushed=tracer_flushed,

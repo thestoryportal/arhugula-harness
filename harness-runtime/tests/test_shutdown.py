@@ -953,11 +953,11 @@ async def test_flush_observability_fsyncs_audit_sidecar_when_present(
     sidecar_path = tmp_path / "audit-entries.jsonl"
     sidecar_path.write_text('{"tenant_tag":"_single","entry":{}}\n')
 
-    fsynced_fds: list[int] = []
+    fsynced_inodes: list[int] = []
     real_fsync = os.fsync
 
     def _spy_fsync(fd: int) -> None:
-        fsynced_fds.append(fd)
+        fsynced_inodes.append(os.fstat(fd).st_ino)
         real_fsync(fd)
 
     monkeypatch.setattr(os, "fsync", _spy_fsync)
@@ -968,7 +968,13 @@ async def test_flush_observability_fsyncs_audit_sidecar_when_present(
     report = await flush_observability(ctx)
 
     assert report.failures == ()
-    assert len(fsynced_fds) == 2  # ledger + sidecar
+    # BOTH files flushed, sidecar FIRST (mirrors sidecar-first writes —
+    # power loss between the fsyncs must not leave a flushed ref whose
+    # signature was still buffered).
+    assert fsynced_inodes == [
+        os.stat(sidecar_path).st_ino,
+        os.stat(ledger_path).st_ino,
+    ]
 
 
 @pytest.mark.asyncio
