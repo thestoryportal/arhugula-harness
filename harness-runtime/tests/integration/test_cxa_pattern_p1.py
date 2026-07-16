@@ -496,6 +496,14 @@ _ALLOWLISTED_CROSS_AXIS_SYMBOLS: frozenset[tuple[str, str]] = frozenset(
         ("harness_cp.pause_resume_protocol", "ResumeAttempt"),
         ("harness_cp.pause_resume_protocol", "ResumeOutcome"),
         ("harness_cp.pause_resume_protocol", "ResumeOutcomeKind"),
+        # OD spec v1.33 §21.2.1 — the OD `sign_audit_entry` backend seam
+        # consumes the C-CP-20 §20.2.1 `SigningBackend` Protocol (a bytes-in/
+        # bytes-out structural Protocol, no key material) + the §20.4
+        # signature byte-width table as convention/runtime carriers on the
+        # canonical OD→CP inbound direction (CXA §2.3.6) — not a new
+        # Pattern-P1 byte-exact seam obligation (B-47 PR A, 2026-07-16).
+        ("harness_cp.f5_signing_key_resolution", "SigningBackend"),
+        ("harness_cp.f5_signing_key_resolution", "SIGNATURE_LENGTH_BY_ALGORITHM"),
     }
 )
 

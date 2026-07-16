@@ -210,3 +210,52 @@ def test_empty_key_id_raises_value_error_from_sign_audit_entry() -> None:
     cp_entry = _cp_entry()
     with pytest.raises(ValueError, match="key_id is required"):
         cp_audit_to_od_audit(cp_entry, key_id="")
+
+
+# --- OD spec v1.33 §21.2.1 — backend passthrough at the converter seam ------
+
+
+class _RecordingEd25519Backend:
+    """TEST-ONLY C-CP-20 §20.2.1 `SigningBackend` double (real Ed25519)."""
+
+    algorithm = "ed25519"
+
+    def __init__(self) -> None:
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+        self._private_key = Ed25519PrivateKey.generate()
+        self.sign_calls = 0
+
+    def sign(self, *, message: bytes, key_id: str, key_period: int) -> bytes:
+        del key_id, key_period
+        self.sign_calls += 1
+        return self._private_key.sign(message)
+
+    def verify(self, *, message: bytes, signature: bytes, key_id: str, key_period: int) -> bool:
+        del message, signature, key_id, key_period
+        return True
+
+
+def test_converter_without_backend_preserves_placeholder_signing() -> None:
+    """§21.2.1 item 2 via the converter — absent `backend` (the default for
+    every existing production caller), the OD placeholder signing path is
+    byte-identical to pre-seam behavior."""
+    entry = cp_audit_to_od_audit(_cp_entry(), key_id="key-1")
+    assert entry.signature_attrs.audit_signature_value == (f"unsigned:key-1:{_PRIOR_HASH}")
+    assert entry.signature_attrs.audit_signature_key_period == "DEPLOYMENT_BOUND"
+
+
+def test_converter_backend_passthrough_produces_real_signature() -> None:
+    """§21.2.1 via the converter — a composition-root-injected backend reaches
+    the OD signing call through `cp_audit_to_od_audit(..., backend=...)`: the
+    produced entry carries a genuine base64 signature, not the placeholder,
+    and the backend was consulted exactly once."""
+    import base64
+
+    backend = _RecordingEd25519Backend()
+    entry = cp_audit_to_od_audit(_cp_entry(), key_id="key-1", backend=backend)
+
+    assert backend.sign_calls == 1
+    value = entry.signature_attrs.audit_signature_value
+    assert not value.startswith("unsigned:")
+    assert len(base64.b64decode(value, validate=True)) == 64

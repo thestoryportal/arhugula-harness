@@ -235,6 +235,14 @@ second, ambiguous representation in the ledger (the exact B-34 hazard).
 Cardinality mirrors `_VALID_SIGNATURE_ALGORITHMS` — every closed-enum token
 has exactly one representation."""
 
+SIGNATURE_LENGTH_BY_ALGORITHM: dict[str, int] = _SIGNATURE_LENGTH_BY_ALGORITHM
+"""Public binding of the per-algorithm signature byte-width table (same object).
+
+Consumed OD→CP by `harness_od.multi_tenant_trace_separation_and_audit_ledger.
+sign_audit_entry`'s §21.2.1 backend seam (OD spec v1.33) so both signing
+surfaces enforce the identical `C-CP-20 §20.4` widths from one source of
+truth rather than drifting copies."""
+
 
 def _canonical_entry_hash(entry: CPAuditLedgerEntry) -> str:
     """The C-CP-20 §20.4 `audit.signature.sha256` hash over `entry`.

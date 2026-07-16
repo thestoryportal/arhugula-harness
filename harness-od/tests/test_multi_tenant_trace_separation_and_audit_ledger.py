@@ -485,3 +485,155 @@ def test_verify_rotation_pairs_rejects_malformed_correlation_id() -> None:
     ledger = AuditLedger(entries=(malformed_outgoing, incoming), cell_id=_CELL_7)
     with pytest.raises(RotationPairIntegrityBreach, match="not a canonical UUID"):
         verify_rotation_pairs(ledger)
+
+
+# --- OD spec v1.33 §21.2.1 — SigningBackend composition-root injection seam --
+
+
+def test_sign_without_backend_placeholder_preserved_byte_identical() -> None:
+    """§21.2.1 item 2 — the absent-backend path is PRESERVED VERBATIM: every
+    attribute (including the exact placeholder value shape and the
+    'DEPLOYMENT_BOUND' token) is byte-identical to the pre-seam behavior, so
+    every existing caller sees zero regression."""
+    payload = _payload("h0")
+    sig = sign_audit_entry(payload, "key-1", SignatureAlgorithm.ED25519)
+    assert sig == AuditSignatureAttributes(
+        audit_signature_value="unsigned:key-1:h0",
+        audit_signature_algorithm=SignatureAlgorithm.ED25519,
+        audit_signature_key_id="key-1",
+        audit_signature_key_period="DEPLOYMENT_BOUND",
+    )
+
+
+class _InMemoryEd25519Backend:
+    """TEST-ONLY C-CP-20 §20.2.1 `SigningBackend` double — one in-memory
+    Ed25519 keypair (real cryptography, no claim about production residence).
+    Records the `key_period` values it was called with so the seam's
+    'DEPLOYMENT_BOUND' → 0 integer projection is directly observable."""
+
+    algorithm = "ed25519"
+
+    def __init__(self) -> None:
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+        self._private_key = Ed25519PrivateKey.generate()
+        self.public_key = self._private_key.public_key()
+        self.seen_key_periods: list[int] = []
+
+    def sign(self, *, message: bytes, key_id: str, key_period: int) -> bytes:
+        del key_id
+        self.seen_key_periods.append(key_period)
+        return self._private_key.sign(message)
+
+    def verify(self, *, message: bytes, signature: bytes, key_id: str, key_period: int) -> bool:
+        from cryptography.exceptions import InvalidSignature
+
+        del key_id, key_period
+        try:
+            self.public_key.verify(signature, message)
+        except InvalidSignature:
+            return False
+        return True
+
+
+def test_sign_with_backend_real_signature_verifies_over_canonical_message() -> None:
+    """§21.2.1 item 3/4 — with a real backend the produced value is standard
+    base64 of a genuine signature over the canonical message binding
+    (entry-content-hash, key_id, algo, key-period token); verified directly
+    against the backend's public key, and the 3 metadata attrs are unchanged
+    in shape ('DEPLOYMENT_BOUND' token preserved)."""
+    import base64
+
+    from harness_od.multi_tenant_trace_separation_and_audit_ledger import (
+        _canonical_od_signing_message,
+    )
+
+    payload = _payload("h0")
+    backend = _InMemoryEd25519Backend()
+    sig = sign_audit_entry(payload, "key-1", SignatureAlgorithm.ED25519, backend=backend)
+
+    assert not sig.audit_signature_value.startswith("unsigned:")
+    raw = base64.b64decode(sig.audit_signature_value, validate=True)
+    assert len(raw) == 64
+    assert sig.audit_signature_algorithm == SignatureAlgorithm.ED25519
+    assert sig.audit_signature_key_id == "key-1"
+    assert sig.audit_signature_key_period == "DEPLOYMENT_BOUND"
+
+    expected_message = _canonical_od_signing_message(
+        compute_entry_hash(payload),
+        key_id="key-1",
+        algo_value="ed25519",
+        key_period_token="DEPLOYMENT_BOUND",
+    )
+    backend.public_key.verify(raw, expected_message)  # raises on mismatch
+
+
+def test_sign_with_backend_message_binds_key_id_metadata() -> None:
+    """§21.2.1 item 3 — the signature does NOT verify over a message
+    reconstructed with a different key_id: metadata is bound into the signed
+    bytes (the C-CP-20 §20.3.1 relabeling defense), not merely carried
+    alongside them."""
+    import base64
+
+    import pytest as _pytest
+    from cryptography.exceptions import InvalidSignature
+    from harness_od.multi_tenant_trace_separation_and_audit_ledger import (
+        _canonical_od_signing_message,
+    )
+
+    payload = _payload("h0")
+    backend = _InMemoryEd25519Backend()
+    sig = sign_audit_entry(payload, "key-1", SignatureAlgorithm.ED25519, backend=backend)
+    raw = base64.b64decode(sig.audit_signature_value, validate=True)
+
+    relabeled_message = _canonical_od_signing_message(
+        compute_entry_hash(payload),
+        key_id="some-other-key",
+        algo_value="ed25519",
+        key_period_token="DEPLOYMENT_BOUND",
+    )
+    with _pytest.raises(InvalidSignature):
+        backend.public_key.verify(raw, relabeled_message)
+
+
+def test_sign_with_backend_passes_deployment_bound_period_zero() -> None:
+    """§21.2.1 item 3 — the backend receives key_period=0, the fixed integer
+    projection of the 'DEPLOYMENT_BOUND' token (rotation-aware selection is
+    B-33's scope, not this seam's)."""
+    backend = _InMemoryEd25519Backend()
+    sign_audit_entry(_payload("h0"), "key-1", SignatureAlgorithm.ED25519, backend=backend)
+    assert backend.seen_key_periods == [0]
+
+
+def test_sign_with_backend_rejects_algorithm_disagreement() -> None:
+    """§21.2.1 item 4 — a backend whose declared algorithm disagrees with the
+    caller-selected algo must not attest: a mislabeled algorithm never lands
+    on the attribute set."""
+    backend = _InMemoryEd25519Backend()
+    with pytest.raises(ValueError, match="disagrees"):
+        sign_audit_entry(_payload("h0"), "key-1", SignatureAlgorithm.ECDSA_P256, backend=backend)
+
+
+def test_sign_with_backend_rejects_wrong_length_signature() -> None:
+    """§21.2.1 item 4 — a backend returning a signature whose byte-length
+    contradicts the declared algorithm's fixed width (C-CP-20 §20.4: ed25519
+    is exactly 64 bytes) fails loud rather than landing a malformed
+    attribute set."""
+
+    class _PaddingBackend(_InMemoryEd25519Backend):
+        def sign(self, *, message: bytes, key_id: str, key_period: int) -> bytes:
+            return super().sign(message=message, key_id=key_id, key_period=key_period) + b"\x00"
+
+    with pytest.raises(ValueError, match="65-byte signature"):
+        sign_audit_entry(
+            _payload("h0"), "key-1", SignatureAlgorithm.ED25519, backend=_PaddingBackend()
+        )
+
+
+def test_sign_with_backend_still_requires_key_id() -> None:
+    """The §21.2 key_id precondition fires before any backend interaction —
+    identical behavior on both seam paths."""
+    with pytest.raises(ValueError, match="key_id is required"):
+        sign_audit_entry(
+            _payload("h0"), "", SignatureAlgorithm.ED25519, backend=_InMemoryEd25519Backend()
+        )

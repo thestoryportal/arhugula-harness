@@ -785,7 +785,12 @@ items:
     real KMS key, but zero production code path constructs it and passes it as sign_audit_entry(backend=...)
     / verify_audit_entry_signature(backend=...). It is reachable only from tests. A MULTI_TENANT_COMPLIANCE
     deployment cannot get real signed audit entries until a harness_runtime bootstrap composition-root
-    arc wires this backend in (out-of-family Codex review finding on the B-36 landing).'
+    arc wires this backend in (out-of-family Codex review finding on the B-36 landing). PR A (2026-07-16)
+    landed the missing call-site seam — OD spec v1.33 NEW section 21.2.1 (clearance filed) adds backend=...
+    to the OD sign_audit_entry (the function production audit writes actually route through, via cp_audit_to_od_audit,
+    which also gained the passthrough); absent path preserved byte-identically, present path real signature,
+    mutation-probed. Remainder (PR B, the actual close) is the harness_runtime composition root per close_out
+    items (a)-(d).'
   close_out: 'Author a harness_runtime composition-root unit (mirrors the ProviderSecretResolver / GcpSecretManagerResolver
     precedent at R-421) that: (a) resolves a key_id -> KMS key ARN mapping from RuntimeConfig at MULTI_TENANT_COMPLIANCE
     deployment-time; (b) constructs AwsKmsSigningBackend with a boto3 KMS client sourced from the runtime''s

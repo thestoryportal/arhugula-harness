@@ -14,7 +14,9 @@ dependencies = [
     # namespaces incl. `engine.*`). src reads `ReplayDisposition`
     # (harness_cp.engine_namespace) READ-ONLY for idempotency join/dedup + cross-family
     # rollup; the pause-resume audit-projection surface consumes
-    # harness_cp.pause_resume_protocol types. cp's deps are {core, as} (no od) → acyclic-safe.
+    # harness_cp.pause_resume_protocol types; the §21.2.1 signing seam (OD spec v1.33)
+    # consumes harness_cp.f5_signing_key_resolution's SigningBackend Protocol +
+    # SIGNATURE_LENGTH_BY_ALGORITHM. cp's deps are {core, as} (no od) → acyclic-safe.
     # (The reverse CP→OD audit seam, CXA §2.3.7, is mediated through harness-cxa — no
     # direct cp→od import — so the two directions do not form a package cycle.)
     "harness-cp",
