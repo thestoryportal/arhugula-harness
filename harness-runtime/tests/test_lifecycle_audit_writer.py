@@ -732,3 +732,64 @@ def test_concurrent_in_process_appends_never_duplicate_rows(tmp_path: Path) -> N
     rows = writer.read_full_entries_for_tenant("tenant-race")
     assert len(rows) == len(entries)
     assert len({e.entry_hash for e in rows}) == len(entries)
+
+
+def test_membership_index_never_refolds_own_appends(tmp_path: Path) -> None:
+    """Codex round-12 P2 (PR B1) — membership checking must not re-parse the
+    whole growing sidecar on every append (O(N²) on the span-finalization hot
+    path). Own-process appends advance the index directly: across N appends
+    through one writer, the index refresh folds ZERO delta bytes (each byte
+    of the sidecar is parsed at most once per process; own bytes never)."""
+    import unittest.mock as mock
+
+    writer = _writer(tmp_path)
+    folded_deltas: list[int] = []
+    original = RuntimeAuditLedgerWriter._refresh_sidecar_index_locked
+
+    def _spy(self: RuntimeAuditLedgerWriter) -> None:
+        before = self._sidecar_index.offset
+        original(self)
+        folded_deltas.append(self._sidecar_index.offset - before)
+
+    with mock.patch.object(RuntimeAuditLedgerWriter, "_refresh_sidecar_index_locked", _spy):
+        for i in range(10):
+            writer.append("tenant-idx", _make_audit_entry(f"{i:02d}" * 32))
+
+    assert folded_deltas == [0] * 10
+    assert len(writer.read_full_entries_for_tenant("tenant-idx")) == 10
+
+
+def test_membership_index_folds_foreign_appends_exactly_once(tmp_path: Path) -> None:
+    """Cross-process reconciliation — bytes another process appended are
+    folded ONCE (the delta scan), then never again; membership over them
+    still deduplicates correctly (no duplicate row on replay)."""
+    import unittest.mock as mock
+
+    writer_a = _writer(tmp_path)
+    foreign_entry = _make_audit_entry("a" * 64)
+    own_entry = _make_audit_entry("b" * 64)
+    writer_a.append("tenant-x", foreign_entry)
+    foreign_bytes = writer_a.sidecar_path.stat().st_size
+
+    # A second writer over the SAME sidecar (fresh index) simulates another
+    # process: its first append folds exactly the foreign bytes, once.
+    writer_b = RuntimeAuditLedgerWriter(
+        ledger_writer=writer_a.ledger_writer,
+        time_source=writer_a.time_source,
+    )
+    folded_deltas: list[int] = []
+    original = RuntimeAuditLedgerWriter._refresh_sidecar_index_locked
+
+    def _spy(self: RuntimeAuditLedgerWriter) -> None:
+        before = self._sidecar_index.offset
+        original(self)
+        folded_deltas.append(self._sidecar_index.offset - before)
+
+    with mock.patch.object(RuntimeAuditLedgerWriter, "_refresh_sidecar_index_locked", _spy):
+        writer_b.append("tenant-x", own_entry)
+        # Replaying the foreign entry dedups via the index — zero refold,
+        # no duplicate row.
+        writer_b.append("tenant-x", foreign_entry)
+
+    assert folded_deltas == [foreign_bytes, 0]
+    assert len(writer_b.read_full_entries_for_tenant("tenant-x")) == 2

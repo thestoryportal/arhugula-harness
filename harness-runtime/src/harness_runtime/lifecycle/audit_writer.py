@@ -96,6 +96,22 @@ class AuditWriterBindError(Exception):
     """Raised when audit-writer stage materialization fails."""
 
 
+class _SidecarMembershipIndex:
+    """Mutable holder for the incremental sidecar membership index.
+
+    `keys` — every `(tenant_tag, entry_hash)` seen up to `offset`. `offset` —
+    the byte position up to which the sidecar has been folded in. A plain
+    class (not a dataclass field pair) so the frozen writer can mutate it
+    in place.
+    """
+
+    __slots__ = ("keys", "offset")
+
+    def __init__(self) -> None:
+        self.keys: set[tuple[str, str]] = set()
+        self.offset: int = 0
+
+
 @dataclass(frozen=True, slots=True)
 class RuntimeAuditLedgerWriter:
     """Runtime multi-tenant audit-ledger writer (C-RT-04 `audit_writer`).
@@ -117,6 +133,13 @@ class RuntimeAuditLedgerWriter:
     and its own contract says callers retain their own `threading.Lock` —
     without one, two in-process producers could both pass the membership
     scan and append duplicate/interleaved rows there."""
+
+    _sidecar_index: _SidecarMembershipIndex = field(
+        default_factory=lambda: _SidecarMembershipIndex(), init=False
+    )
+    """Incremental membership index over the sidecar (codex round-12 P2 —
+    kills the O(N²) full-scan-per-append on the span-finalization hot path).
+    Mutated only under `_sidecar_thread_lock` + the cross-process write lock."""
 
     _SINGLE_TENANT_TAG: ClassVar[str] = "_single"
     _ACTION_ID_PREFIX: ClassVar[str] = "audit"
@@ -277,19 +300,47 @@ class RuntimeAuditLedgerWriter:
         line = self._sidecar_line_for(tenant_id, audit_entry)
         with self._sidecar_thread_lock, cross_process_write_lock(self._sidecar_path):
             self._heal_torn_tail_locked()
-            if self._sidecar_path.exists():
-                with self._sidecar_path.open(encoding="utf-8") as fh:
-                    for existing in fh:
-                        if not existing.strip():
-                            continue
-                        row = json.loads(existing)
-                        if (
-                            row["tenant_tag"] == tag
-                            and row["entry"]["entry_hash"] == audit_entry.entry_hash
-                        ):
-                            return
-            with os.fdopen(self._open_sidecar_for_append(), "a", encoding="utf-8") as fh:
-                fh.write(line + "\n")
+            self._refresh_sidecar_index_locked()
+            if (tag, audit_entry.entry_hash) in self._sidecar_index.keys:
+                return
+            encoded = (line + "\n").encode("utf-8")
+            with os.fdopen(self._open_sidecar_for_append(), "ab") as fh:
+                fh.write(encoded)
+            # Our own write never needs re-parsing: record it in the index
+            # and advance past it.
+            self._sidecar_index.keys.add((tag, audit_entry.entry_hash))
+            self._sidecar_index.offset += len(encoded)
+
+    def _refresh_sidecar_index_locked(self) -> None:
+        """Incrementally fold NEW sidecar bytes into the membership index —
+        MUST be called with both locks held, after the torn-tail heal.
+
+        Out-of-family Codex round-12 P2: a full scan-per-append is O(N²)
+        JSON parsing on the span-finalization hot path of a long-running
+        compliance deployment. Each byte is now parsed at most once per
+        process: only the delta since `offset` (another process's appends)
+        is read; our own appends advance the offset directly. A file smaller
+        than the recorded offset means a truncation happened (torn-tail heal
+        in another process) — full rescan, rare by construction.
+        """
+        index = self._sidecar_index
+        size = self._sidecar_path.stat().st_size if self._sidecar_path.exists() else 0
+        if size < index.offset:
+            index.keys.clear()
+            index.offset = 0
+        if size == index.offset:
+            return
+        with self._sidecar_path.open("rb") as fh:
+            fh.seek(index.offset)
+            delta = fh.read(size - index.offset)
+        # The heal ran under this same lock, so the region ends on a newline;
+        # every split segment is a complete record.
+        for raw in delta.split(b"\n"):
+            if not raw.strip():
+                continue
+            row = json.loads(raw)
+            index.keys.add((row["tenant_tag"], row["entry"]["entry_hash"]))
+        index.offset = size
 
     def read_full_entries_for_tenant(self, tenant_id: str | None) -> list[AuditLedgerEntry]:
         """Tenant-scoped FULL-entry reader over the item-(e) sidecar.
