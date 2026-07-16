@@ -54,12 +54,12 @@
 snapshot:
   total: 47
   open: 0
-  design_substrate_gated: 5
+  design_substrate_gated: 2
   registered_finding: 7
-  operator_gated: 2
+  operator_gated: 3
   held: 1
-  closed: 32
-  identity_digest: d91525c1e0543743
+  closed: 34
+  identity_digest: 8f6a6906629f6cba
   source: .harness/post-phase-8-forward-register.md
 items:
 - id: B-1
@@ -248,7 +248,7 @@ items:
   council: ⚖️ recommended if/when the operator engages this item — C10 blast-radius vs C4 tool-contract
     semantics, nameable now that 3 concrete floor values are proposed
   heading: '### B-25 · `sandbox_tier_floor.py:54` — `is_deterministic_inhouse=False` branch has no defined
-    floor *(design-substrate)* — ⚠️ OPERATOR-GATED, not built'
+    floor *(design-substrate)* — ⚠️ **OPERATOR-GATED, not built (confirmed 2026-07-15)**'
 - id: B-26
   title: five_axis_composition.py verify_rotation_6_steps hardcoded-True stub
   status: closed
