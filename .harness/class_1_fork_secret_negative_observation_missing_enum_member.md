@@ -1,6 +1,6 @@
 # Class 1 Fork — `NegativeObservationSurface` has no member for workflow-manifest secret arrival; `verify_sole_resolution_path` hardcodes the wrong label regardless of input
 
-**Status:** RATIFIED 2026-07-15 (Q1=A `WORKFLOW_MANIFEST_ENTRY`, Q2=a bundled dispatch fix, Q3=a — all per filer recommendation; roadmap-continue autonomous session, no design-substrate edit owed since the enum is code-level only). **BUILT** — see `.harness/post-phase-8-forward-register.md` §"B-24".
+**Status:** RATIFIED 2026-07-15 (Q1=A `WORKFLOW_MANIFEST_ENTRY`, Q2=a bundled dispatch fix, Q3=a — all per filer recommendation; roadmap-continue autonomous session). **BUILT** — see `.harness/post-phase-8-forward-register.md` §"B-24". **Correction (out-of-family `just codex-review` round 2, same PR):** the initial close-out claimed "no design-substrate edit owed" because `Spec_Action_Surface_v1.md` never declares this enum — true but incomplete. `Implementation_Plan_Action_Surface_v1.md` §1073-1078 (the PLAN, not the spec) DOES declare `NegativeObservationSurface`'s canonical 4-member signature at U-AS-21, preserved verbatim through v1.2/v1.3/v1.4. A plan delta (`Implementation_Plan_Action_Surface_v1_5.md`) + clearance marker (`.harness/clearance/implementation-plan-action-surface-v1-5-cleared-2026-07-15.md`) were required and are now filed in the same PR before merge.
 
 **Filed at:** 2026-07-14
 

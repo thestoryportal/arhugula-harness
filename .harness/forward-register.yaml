@@ -224,10 +224,11 @@ items:
 - id: B-24
   title: secret_negative_observation.py wrong NegativeObservationSurface label
   status: closed
-  summary: BUILT 2026-07-15 — WORKFLOW_MANIFEST_ENTRY enum member + real dispatch dict added; no
-    design-substrate edit owed (enum is code-level only).
-  pr: '#pending'
-  close_out: Ratified Q1=A/Q2=a/Q3=a per filer rec (mechanical, zero prod callers). 7/7 tests pass.
+  summary: BUILT 2026-07-15 — WORKFLOW_MANIFEST_ENTRY enum member + real dispatch dict added. Codex
+    round 2 caught the enum's canonical signature lives at the PLAN (Implementation_Plan_Action_Surface_v1.md
+    U-AS-21), not the spec — a plan delta (v1.5) + clearance marker were required and filed same-PR.
+  pr: Implementation_Plan_Action_Surface v1.5
+  close_out: Ratified Q1=A/Q2=a/Q3=a per filer rec (mechanical, zero prod callers). 8/8 tests pass.
   council: no — mechanical enum addition once the fork ratifies the member name
   heading: '### B-24 · `secret_negative_observation.py:127` wrong `NegativeObservationSurface` label —
     needs a new enum member *(design-substrate)* — **✅ BUILT 2026-07-15**'
