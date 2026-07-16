@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `8653b1d0fa36` |
+| `workspace_state_hash` | `2c8db273e404` |
 | `last_refreshed` | 2026-07-15T00:00:00Z |
-| `git_head` | `d56462a8` — d56462a8 |
+| `git_head` | `816c3e72` — fix(is): cross-process serialization for state + memory ledg |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 91 |
 
@@ -56,11 +56,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| #1026 | 2026-07-15 | fix(is): B-40 cross-process ledger lock (state + memory ledger writes, jsonl lifecycle read guard, memory_store handle); registered B-45 (Windows backend) + B-46 (first-write TOCTOU) as follow-ons |
 | #1025 | 2026-07-15 | B-40 register correction (4 rounds of self-correction, each catching a genuine issue via out-of-family Codex): final disposition is registered_finding, buildable now, no fork, no council -- C-IS-09 §9.3 + C-MEM-08 already require cross-process/cross-worktree append serialization, §9.4 defers only the mechanism, and two ordinary concurrent 'harness run' invocations against the same repo already share the default memory ledger today (live, not dormant). Follow-on code arc owed for the actual fix. |
 | #1024 | 2026-07-15 | B-30 register correction: sharpened from stale council-conditional framing to a precise, multi-round-verified disposition (missing ingestion consumer + producer-side replay-metadata gap); register-don't-build, no code change |
 | #1023 | 2026-07-15 | B-29 branch_metadata carrier-ownership question found already resolved via a 2026-06-13 Class 1 fork; closed with clarifying comments citing the spec. B-44 registered (registered_finding) for the split-out time_source half |
 | #1022 | 2026-07-15 | B-42 FIVE_XX_STREAK terminal-not-streak docstring clarification; B-43 registered (design_substrate_gated) for the adjacent OD spec v1.32 §7.1 stale-vacuous prose finding |
-| #1021 | 2026-07-15 | B-41 auth-fail-fast conformance fix; resolves B-38's classifier divergence |
 ---
 
 ---
