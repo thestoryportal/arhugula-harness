@@ -52,14 +52,14 @@
 
 
 snapshot:
-  total: 47
+  total: 48
   open: 0
   design_substrate_gated: 2
-  registered_finding: 7
-  operator_gated: 2
+  registered_finding: 8
+  operator_gated: 1
   held: 1
-  closed: 35
-  identity_digest: 76064e954951972b
+  closed: 36
+  identity_digest: 58f410f43bc2763d
   source: .harness/post-phase-8-forward-register.md
 items:
 - id: B-1
@@ -450,7 +450,9 @@ items:
   summary: Generic hash-chain continuity check passes any intact ledger; cannot confirm a genuine rotation-pair
     boundary.
   close_out: File a Class 1 fork for an IS rotation-correlation carrier (mirrors OD §24.7); extend once
-    B-36's backend lands.
+    B-36's backend lands. B-36 CLOSED 2026-07-16 (ADR-D8, AwsKmsSigningBackend) — this residual now has
+    a real backend to build the rotation-correlation carrier against; still open, unblocked rather than
+    narrowed.
   council: no for the carrier addition; B-36's own disposition governs the signing-backend half
   heading: '### B-33 · `verify_rotation_6_steps`''s hash-chain check cannot prove a rotation boundary
     occurred *(surfaced at B-26, out-of-family Codex rounds 1 + 5, `advisor()`-confirmed)*'
@@ -458,7 +460,10 @@ items:
   title: Concrete signature-representation gaps in the C-CP-20 §20.2.1 seam
   status: registered_finding
   summary: DER-vs-64-byte ECDSA-P256 encoding unenforced; CPSignedAuditLedgerEntry.audit_signature_value
-    not JSON-serializable for real bytes.
+    not JSON-serializable for real bytes. NARROWED 2026-07-16 — B-36 (ADR-D8) selected AWS KMS Ed25519
+    (ED25519_SHA_512), whose signatures are always a fixed 64 raw bytes with no DER-wrapping ambiguity;
+    the DER-encoding concern only remains live if a future ECDSA-P256 fallback backend is added alongside
+    this one. The JSON-serializability gap is unaffected by backend choice and still open.
   close_out: Validate signature byte-length per algorithm + add a reversible byte-encoding serializer,
     once a real backend exists (B-36).
   council: no — mechanical once a real backend exists to test against
@@ -497,15 +502,29 @@ items:
     as B-32)*'
 - id: B-36
   title: Concrete F5 audit-signature backend selection
-  status: operator_gated
-  summary: B-22's seam is closed; no real signing backend exists yet. Blocks any MULTI_TENANT_COMPLIANCE
-    deployment.
-  close_out: Pick + provision a concrete prod-tech backend (needs a D-ADR + real cloud credentials); author
-    the harness_runtime composition-root arc.
-  council: conditional — C10 blast-radius vs C11 operator-loop/deployment-surface, live once a candidate
-    backend is proposed
+  status: closed
+  summary: 'CLOSED 2026-07-16: AwsKmsSigningBackend (ADR-D8) implements the C-CP-20 SigningBackend
+    Protocol, live-e2e-proven against a real provisioned KMS key. Composition-root wiring into a real
+    production sign_audit_entry call site is a separate follow-on -- see B-47.'
+  close_out: 'CLOSED 2026-07-16 via ADR-D8 (AWS KMS delegated signing, ECC_NIST_EDWARDS25519/Ed25519 —
+    matches the ADR-D5 §1.4 default algorithm; AWS KMS''s Nov-2025 Ed25519 GA dissolved the algorithm-vs-exposure
+    tradeoff). Resolved via a dyadic C10 (blast-radius) vs C11 (operator-loop) council: the already-landed
+    `resolve_signing_key` TIER_4_FULL_VM/in-sandbox-HTTP tier choice + MULTI_TENANT_COMPLIANCE-exclusive
+    gate already signaled a no-exposure design intent, so KMS-delegated signing (key never leaves the
+    HSM boundary) was ranked over Secrets-Manager-plus-local-signing. New `harness_cp.aws_kms_signing_backend.AwsKmsSigningBackend`
+    implements the C-CP-20 §20.2.1 SigningBackend Protocol via boto3 KMS Sign/Verify; zero change to
+    `resolve_signing_key`/`sign_audit_entry`/`verify_audit_entry_signature` (the seam already accommodated
+    this shape). Live-e2e-proven against a real provisioned AWS KMS key + a least-privilege IAM identity
+    scoped to Sign/Verify/GetPublicKey/DescribeKey on that one key only (confirmed AccessDenied against
+    S3 and iam:CreateUser under the same identity). Composition-root wiring of this backend into a real
+    production `sign_audit_entry` call site (with the C9 breaker extended onto the signing call itself,
+    per C11''s availability-cost concern) remains a separate, deployment-time arc — zero production callers
+    of `sign_audit_entry` exist today. B-33/B-34 narrowed accordingly (see their own rows).'
+  council: 'DONE — C10 blast-radius vs C11 operator-loop/deployment-surface, dyadic council 2026-07-16;
+    ranked AWS KMS delegated signing over Secrets-Manager-plus-local-signing'
+  pr: '#pending'
   heading: '### B-36 · Concrete F5 audit-signature backend selection *(split off `B-22` 2026-07-14, per
-    operator direction — `B-22`''s seam is CLOSED, this is what remains)*'
+    operator direction — `B-22`''s seam is CLOSED, this is what remains; CLOSED 2026-07-16 via ADR-D8)*'
 - id: B-37
   title: Remote MCP streamable-HTTP transport residuals
   status: closed
@@ -754,3 +773,23 @@ items:
   council: no -- narrow implementation-discretion follow-on, same category as B-45; not an open spec question
   heading: '### B-46 · Cross-process ledger lock has a first-write TOCTOU on lazy sidecar provisioning
     *(surfaced at B-40''s own PR, out-of-family Codex round 4 + advisor(), 2026-07-15)*'
+- id: B-47
+  title: AwsKmsSigningBackend has no production composition-root call site
+  status: registered_finding
+  summary: 'B-36 (ADR-D8) selected + implemented AwsKmsSigningBackend and live-e2e-proved it against a
+    real KMS key, but zero production code path constructs it and passes it as sign_audit_entry(backend=...)
+    / verify_audit_entry_signature(backend=...). It is reachable only from tests. A MULTI_TENANT_COMPLIANCE
+    deployment cannot get real signed audit entries until a harness_runtime bootstrap composition-root
+    arc wires this backend in (out-of-family Codex review finding on the B-36 landing).'
+  close_out: 'Author a harness_runtime composition-root unit (mirrors the ProviderSecretResolver / GcpSecretManagerResolver
+    precedent at R-421) that: (a) resolves a key_id -> KMS key ARN mapping from RuntimeConfig at MULTI_TENANT_COMPLIANCE
+    deployment-time; (b) constructs AwsKmsSigningBackend with a boto3 KMS client sourced from the runtime''s
+    own credential-resolution chain; (c) threads it through to the real sign_audit_entry / verify_audit_entry_signature
+    call sites once those exist in production code (currently zero callers -- this unit may need to land
+    together with whatever CP-axis arc first introduces a real audit-signing call site); (d) per ADR-D8''s
+    own C11 concession, wires the C9 per-{secret_backend, scope} breaker onto the signing call itself, not
+    just key resolution, since KMS availability now sits on the write-time hot path.'
+  council: 'conditional -- mechanical composition-root wiring once a real sign_audit_entry call site exists;
+    revisit if the call-site design itself surfaces a cross-axis tension'
+  heading: '### B-47 · `AwsKmsSigningBackend` has no production composition-root call site *(surfaced
+    at `B-36`''s own PR, out-of-family Codex review, 2026-07-16)*'

@@ -414,6 +414,12 @@ r500-multitenant-live-e2e config:
 r830-s3-live-e2e:
     uv run --with boto3 --with 'botocore[crt]' pytest harness-runtime/tests/integration/test_r830_memory_tool_s3_live_e2e.py -v
 
+# Live B-36 / ADR-D8 proof of the AWS KMS SigningBackend (C-CP-20 §20.2.1).
+# Requires B36_KMS_KEY_ARN, B36_KMS_REGION, B36_KMS_SIGNING_AWS_ACCESS,
+# B36_KMS_SIGNING_AWS_SECRET (least-privilege identity scoped to one KMS key).
+b36-kms-signing-live-e2e:
+    uv run --package harness-cp pytest harness-cp/tests/integration/test_b36_kms_signing_live_e2e.py -v
+
 # Live R-830 managed-DB memory backend proof. Requires
 # R830_MANAGED_DB_CONNECTION_STRING for a PostgreSQL-compatible managed DB.
 # Performs real create/view/update/delete against a unique /memories path and
