@@ -15,7 +15,7 @@ dependencies = [
     "openai>=1.60",                   # Multi-LLM SDK — OpenAI
     "ollama>=0.4",                    # Multi-LLM SDK — local tier
     "opentelemetry-api>=1.30",        # C-OD-25 §25.1 workflow.envelope span (U-OD-35)
-    "boto3>=1.34",                     # AWS KMS — F5 audit-signing backend (ADR-D8 / B-36)
+    "boto3>=1.41",                     # AWS KMS — F5 audit-signing backend (ADR-D8 / B-36; >=1.41 required for KMS Ed25519 support)
 ]
 
 [tool.uv.sources]

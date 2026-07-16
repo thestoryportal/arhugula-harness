@@ -8,7 +8,7 @@ Date: 2026-07-16
 
 ## Context
 
-ADR-D5 v1.3 §1.4 commits the per-persona-tier audit-ledger cryptographic shape: solo-developer has no signature; team-binding has a hash chain; multi-tenant-compliance adds a cryptographic signature over the hash-chained entry, under a signing key resolved through ADR-F5's `fetch_secret(name, scope) -> SecretRef` abstraction. §1.4's signing-key-residence table names candidate prod-tech backends (Vault / AWS Secrets Manager / Azure Key Vault / GCP Secret Manager / Doppler / 1Password Connect) but explicitly defers the concrete selection to a future D-ADR. ADR-F5 §Deferred D-ADRs independently names the same deferral ("D-ADR on specific secrets provider for production deployment ... selection deployment-surface-bound; depends on production-time deployment surface decision").
+ADR-D5 v1.5 §1.4 commits the per-persona-tier audit-ledger cryptographic shape: solo-developer has no signature; team-binding has a hash chain; multi-tenant-compliance adds a cryptographic signature over the hash-chained entry, under a signing key resolved through ADR-F5's `fetch_secret(name, scope) -> SecretRef` abstraction. §1.4's signing-key-residence table names candidate prod-tech backends (Vault / AWS Secrets Manager / Azure Key Vault / GCP Secret Manager / Doppler / 1Password Connect) but explicitly defers the concrete selection to a future D-ADR. ADR-F5 §Deferred D-ADRs independently names the same deferral ("D-ADR on specific secrets provider for production deployment ... selection deployment-surface-bound; depends on production-time deployment surface decision").
 
 The composition-root injection seam this decision plugs into already exists: `C-CP-20 §20.2.1` (CP spec v1.98, landed via `B-22`) declares a `SigningBackend` Protocol —
 
@@ -111,7 +111,7 @@ This ADR is satisfied when:
 
 ## References
 
-- ADR-D5 v1.3 §1.4 / §1.4.1 — per-persona-tier audit-ledger cryptographic shape; signing-key-residence table; `audit_signature_algorithm` default (Ed25519).
+- ADR-D5 v1.5 §1.4 / §1.4.1 — per-persona-tier audit-ledger cryptographic shape; signing-key-residence table; `audit_signature_algorithm` default (Ed25519).
 - ADR-F5 §Deferred D-ADRs — "D-ADR on specific secrets provider for production deployment."
 - `Spec_Control_Plane_v1_100.md` §20.2.1 (`C-CP-20`, landed at spec v1.98 / `B-22`) — `SigningBackend` Protocol + composition-root injection seam.
 - `Spec_Action_Surface_v1.md` §5.1 / §5.4 (`C-AS-05`) — `fetch_secret` pure-constructor semantics; `SecretRef` opaque-handle discipline.

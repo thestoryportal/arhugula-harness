@@ -36,6 +36,27 @@ class UnknownSigningKeyIdError(KeyError):
     """
 
 
+class MutableKeyAliasRejectedError(ValueError):
+    """A `key_arns` value names a KMS *alias* rather than a physical key ARN/ID.
+
+    Aliases are mutable — repointing one to a different physical key would
+    make this backend silently sign/verify under different key material for
+    the *same* logical `key_id`, and (since `key_period` is not yet used for
+    key selection, see module docstring) undetectably invalidate the
+    identity guarantee the signing key exists to provide. Rejected at
+    construction (out-of-family Codex review finding on the initial B-36
+    landing) rather than left as a latent correctness hazard."""
+
+
+def _is_kms_alias(value: str) -> bool:
+    """True if `value` is a KMS alias name/ARN rather than a key ARN/ID.
+
+    KMS key ARNs/IDs never contain the literal `alias/` segment; alias ARNs
+    are shaped `arn:...:alias/<name>` and bare alias names are `alias/<name>`.
+    """
+    return value.startswith("alias/") or ":alias/" in value
+
+
 class AwsKmsSigningBackend:
     """A `C-CP-20 §20.2.1` `SigningBackend` backed by AWS KMS delegated signing.
 
@@ -57,11 +78,21 @@ class AwsKmsSigningBackend:
     def __init__(self, key_arns: Mapping[str, str], kms_client: Any) -> None:
         """`key_arns` maps a CP-axis logical `key_id` (e.g. `"tenant_bound:acme-corp"`,
         the shape `resolve_signing_key` produces) to the physical AWS KMS key
-        ARN or alias the deployment-time composition root provisioned for it.
-        `kms_client` is a `boto3` KMS client (e.g. `boto3.client("kms")`) —
-        accepted as a constructor parameter rather than constructed internally
-        so the composition root owns session/credential/region configuration.
+        ARN or key ID the deployment-time composition root provisioned for it
+        — a KMS *alias* is rejected (`MutableKeyAliasRejectedError`), since
+        aliases are mutable and would silently repoint an already-used
+        logical `key_id` to different key material. `kms_client` is a
+        `boto3` KMS client (e.g. `boto3.client("kms")`) — accepted as a
+        constructor parameter rather than constructed internally so the
+        composition root owns session/credential/region configuration.
         """
+        for key_id, value in key_arns.items():
+            if _is_kms_alias(value):
+                raise MutableKeyAliasRejectedError(
+                    f"key_arns[{key_id!r}]={value!r} is a KMS alias, not a physical "
+                    f"key ARN/ID — aliases are mutable and must not be used as a "
+                    f"signing key's stable identity (see MutableKeyAliasRejectedError)"
+                )
         self._key_arns = dict(key_arns)
         self._kms = kms_client
 
@@ -79,6 +110,13 @@ class AwsKmsSigningBackend:
     def verify(self, *, message: bytes, signature: bytes, key_id: str, key_period: int) -> bool:
         del key_period
         key_arn = self._resolve_key_arn(key_id)
+        # AWS KMS's own service-model documentation for the `Verify` operation's
+        # `SignatureValid` output member: "If the signature is not verified, the
+        # `Verify` operation fails with a `KMSInvalidSignatureException` exception."
+        # (botocore kms service model, confirmed via `get_service_model("kms")
+        # .operation_model("Verify").output_shape.members["SignatureValid"]
+        # .documentation` — not merely an empirical single observation) — a
+        # successful response's `SignatureValid` is therefore always `True`.
         try:
             response = self._kms.verify(
                 KeyId=key_arn,

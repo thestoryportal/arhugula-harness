@@ -16,7 +16,11 @@ from __future__ import annotations
 import pytest
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from harness_cp.aws_kms_signing_backend import AwsKmsSigningBackend, UnknownSigningKeyIdError
+from harness_cp.aws_kms_signing_backend import (
+    AwsKmsSigningBackend,
+    MutableKeyAliasRejectedError,
+    UnknownSigningKeyIdError,
+)
 
 _KEY_ID = "tenant_bound:acme-corp"
 _KEY_ARN = "arn:aws:kms:us-east-1:123456789012:key/test-fixture-key-id"
@@ -150,3 +154,18 @@ def test_key_period_is_accepted_but_does_not_affect_key_selection() -> None:
     signature = backend.sign(message=message, key_id=_KEY_ID, key_period=1)
 
     assert backend.verify(message=message, signature=signature, key_id=_KEY_ID, key_period=999)
+
+
+@pytest.mark.parametrize(
+    "alias_value",
+    [
+        "alias/audit-signing",
+        "arn:aws:kms:us-east-1:123456789012:alias/audit-signing",
+    ],
+)
+def test_construction_rejects_kms_alias(alias_value: str) -> None:
+    """Out-of-family Codex finding: aliases are mutable and would let a
+    repointed alias silently swap key material under an already-used
+    logical `key_id` — rejected at construction, not merely documented."""
+    with pytest.raises(MutableKeyAliasRejectedError, match=_KEY_ID):
+        AwsKmsSigningBackend(key_arns={_KEY_ID: alias_value}, kms_client=_FakeKmsClient())

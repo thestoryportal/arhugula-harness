@@ -84,8 +84,27 @@ def test_aws_kms_signing_backend_live_sign_verify_e2e() -> None:
 
 @pytest.mark.e2e
 def test_aws_kms_signing_backend_live_identity_is_least_privilege() -> None:
-    """Confirms the provisioned IAM identity cannot reach S3 or create IAM users —
-    the ADR-D8 least-privilege scoping this backend's real credentials rely on."""
+    """Confirms the provisioned IAM identity is scoped to exactly
+    Sign/Verify/GetPublicKey/DescribeKey on the one provisioned KMS key —
+    the ADR-D8 least-privilege guarantee this backend's real credentials
+    rely on.
+
+    Every check here is a read-only AWS API call the identity is NOT
+    granted, so a denial is the expected, safe outcome and a surprise
+    "allowed" is the only way this test can leave residual AWS state (none
+    of these calls mutate anything even on unexpected success). An earlier
+    version of this test called `iam.create_user(...)` directly — an
+    out-of-family Codex review finding on the initial B-36 landing noted
+    that if the identity were ever misconfigured with broader-than-intended
+    permissions, that call would succeed and leave a persistent IAM user
+    before the assertion could even run. `iam.simulate_principal_policy` was
+    considered as a safer alternative but is itself not granted to this
+    identity (empirically confirmed — `iam:SimulatePrincipalPolicy` is not
+    in the least-privilege policy, so calling it also raises AccessDenied,
+    which is the correct behavior but not usable to *evaluate* other
+    actions). `kms:GetKeyPolicy` (read-only, NOT in the granted action set)
+    against the SAME real, provisioned key proves the policy is scoped by
+    ACTION beyond the 4 granted — not merely by service."""
     import boto3
     from botocore.exceptions import ClientError
 
@@ -100,4 +119,7 @@ def test_aws_kms_signing_backend_live_identity_is_least_privilege() -> None:
         session.client("s3").list_buckets()
 
     with pytest.raises(ClientError, match="AccessDenied"):
-        session.client("iam").create_user(UserName="should-not-be-creatable-b36-e2e")
+        session.client("iam").list_users()
+
+    with pytest.raises(ClientError, match="AccessDenied"):
+        session.client("kms").get_key_policy(KeyId=params["key_arn"], PolicyName="default")
