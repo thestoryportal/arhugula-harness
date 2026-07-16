@@ -540,6 +540,38 @@ def test_verify_rejects_wrong_length_stored_signature_before_backend() -> None:
     assert _CountingBackend.verify_calls == 0
 
 
+def test_signature_length_table_pins_spec_values_and_forecloses_der() -> None:
+    """`B-34` (merge-gate test-witness lens) — the two length-table rows no
+    test otherwise exercises are contract DATA, pinned two ways: (1) the
+    table equals C-CP-20 §20.4's committed byte-widths verbatim ("64 bytes
+    for ed25519/ecdsa-p256; 256 bytes for rsa-pss-2048"); (2) behaviorally,
+    an ecdsa-p256 backend returning a 72-byte DER-plausible signature fails
+    loud at sign time — the exact DER-vs-raw foreclosure B-34 registered."""
+    from harness_cp.f5_signing_key_resolution import _SIGNATURE_LENGTH_BY_ALGORITHM
+
+    assert _SIGNATURE_LENGTH_BY_ALGORITHM == {
+        "ed25519": 64,
+        "ecdsa-p256": 64,
+        "rsa-pss-2048": 256,
+    }
+
+    class _DerEcdsaBackend:
+        algorithm = "ecdsa-p256"
+
+        def sign(self, *, message: bytes, key_id: str, key_period: int) -> bytes:
+            del message, key_id, key_period
+            return b"\x30" + b"\x00" * 71  # DER SEQUENCE-shaped, 72 bytes
+
+        def verify(self, *, message: bytes, signature: bytes, key_id: str, key_period: int) -> bool:
+            del message, signature, key_id, key_period
+            return True
+
+    result = resolve_signing_key(_SCOPE, PersonaTier.MULTI_TENANT_COMPLIANCE)
+    assert result.handle is not None
+    with pytest.raises(ValueError, match="72-byte signature"):
+        sign_audit_entry(_ENTRY, result.handle, key_period=1, backend=_DerEcdsaBackend())
+
+
 def test_verify_rejects_negative_stored_key_period() -> None:
     """Out-of-family Codex round-3 P2 — a `signed` entry constructed outside
     `sign_audit_entry` with a negative stored `audit_signature_key_period`
