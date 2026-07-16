@@ -80,14 +80,21 @@ from opentelemetry.sdk.trace import SpanProcessor, TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter
 
 from harness_runtime.lifecycle.redaction_token_audit_map import AuditLedgerRedactionTokenMap
-from harness_runtime.types import AuditLedgerWriter, RuntimeConfig
+from harness_runtime.types import AuditLedgerWriter, AuditSigningBackendKind, RuntimeConfig
 
 __all__ = [
+    "REDACTION_TOKEN_SIGNING_KEY_ID",
     "SpanProcessorBindError",
     "SpanProcessorReachabilityError",
     "SpanProcessorStage",
     "materialize_span_processor_stage",
 ]
+
+REDACTION_TOKEN_SIGNING_KEY_ID = "harness-runtime-redaction-token"
+"""The logical signing `key_id` the multi-tenant redaction-token audit map
+signs under. An `aws-kms` deployment's `audit_signing.key_arns` mapping MUST
+cover it — validated at stage construction (fail-at-bootstrap, not on the
+first redacted span)."""
 
 
 class SpanProcessorBindError(Exception):
@@ -224,11 +231,27 @@ def materialize_span_processor_stage(
         )
         tokenizer = None
         if config.persona_tier == PersonaTier.MULTI_TENANT_COMPLIANCE and audit_writer is not None:
+            if (
+                signing_backend is not None
+                and config.audit_signing.backend is AuditSigningBackendKind.AWS_KMS
+                and REDACTION_TOKEN_SIGNING_KEY_ID not in config.audit_signing.key_arns
+            ):
+                # Out-of-family Codex P2 on the B-47 PR-B1 landing: a mapping
+                # that omits this consumer's key_id would boot fine and then
+                # raise UnknownSigningKeyIdError on the FIRST redacted span —
+                # an invalid deployment must fail at startup, not mid-run.
+                raise SpanProcessorBindError(
+                    f"audit_signing.key_arns is missing the redaction-token "
+                    f"map's signing key {REDACTION_TOKEN_SIGNING_KEY_ID!r} — "
+                    f"the aws-kms mapping must cover every composition-root "
+                    f"signing consumer (ADR-D8 §Decision item 2: no default "
+                    f"key is ever assumed)"
+                )
             tokenizer = OpaqueRedactionTokenizer(
                 token_map=AuditLedgerRedactionTokenMap(
                     audit_writer=audit_writer,
                     tenant_id=config.tenant_id,
-                    signing_key_id="harness-runtime-redaction-token",
+                    signing_key_id=REDACTION_TOKEN_SIGNING_KEY_ID,
                     # B-47 PR B — the composition-root-constructed backend
                     # (OD spec v1.33 §21.2.1). None = placeholder signing.
                     signing_backend=signing_backend,

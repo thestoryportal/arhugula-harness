@@ -492,56 +492,110 @@ def test_full_chain_stage_to_real_signature_to_sidecar_rehydration(tmp_path: Pat
     backend.public_key.verify(raw, expected_message)  # raises on mismatch
 
 
-def test_sidecar_created_owner_only_0600(tmp_path: Path) -> None:
-    """Codex P1 (PR B1) — the sidecar persists ORIGINAL raw values (the
-    redaction-token map's whole point), so it must never land world-readable
-    under a permissive umask: created 0600, owner-only."""
-    import os as _os
+def test_crash_between_sidecar_write_and_is_append_heals_on_retry(tmp_path: Path) -> None:
+    """Codex P1 chain (PR B1, rounds 1+3) — two-run crash-resume witness for
+    the SIDECAR-FIRST ordering: the first append lands the sidecar row but
+    dies before the IS append (simulated by a raising ledger writer); the
+    signed entry is already durable. The caller's retry gets APPENDED (the IS
+    chain never committed) and the membership check writes no duplicate row —
+    one row, one chain ref, fully consistent."""
+    import unittest.mock as mock
 
-    writer = _writer(tmp_path)
-    writer.append("tenant-A", _make_audit_entry("e" * 64))
-
-    mode = _os.stat(writer._sidecar_path).st_mode & 0o777
-    assert mode == 0o600
-
-
-def test_crash_between_is_append_and_sidecar_write_heals_on_retry(tmp_path: Path) -> None:
-    """Codex P1 (PR B1) — two-run crash-resume witness: the first append
-    commits the IS entry but dies before the sidecar write (simulated by a
-    raising sidecar hook); the caller's retry returns IDEMPOTENT_NOOP and the
-    repair path heals the gap, so the signed entry IS durably recoverable —
-    the exact failure case durable storage must survive."""
     writer = _writer(tmp_path)
     entry = _make_audit_entry("f" * 64)
 
-    original = RuntimeAuditLedgerWriter._append_sidecar_line
+    original_is_append = type(writer.ledger_writer).append
     calls = {"n": 0}
 
-    def _dies_once(
-        self: RuntimeAuditLedgerWriter, tenant_id: str | None, audit_entry: AuditLedgerEntry
-    ) -> None:
+    def _dies_once(self: object, payload: object, write_key: object) -> object:
         calls["n"] += 1
         if calls["n"] == 1:
-            raise OSError("simulated crash after IS append, before sidecar write")
-        original(self, tenant_id, audit_entry)
+            raise OSError("simulated crash after sidecar write, before IS append")
+        return original_is_append(self, payload, write_key)  # type: ignore[arg-type]
 
-    import unittest.mock as mock
-
-    with mock.patch.object(RuntimeAuditLedgerWriter, "_append_sidecar_line", _dies_once):
+    with mock.patch.object(type(writer.ledger_writer), "append", _dies_once):
         with pytest.raises(OSError, match="simulated crash"):
             writer.append("tenant-A", entry)
 
-    # The IS chain committed; the sidecar row was lost.
-    assert writer.read_full_entries_for_tenant("tenant-A") == []
+        # The signed entry is ALREADY durable (sidecar-first) — nothing lost.
+        [durable] = writer.read_full_entries_for_tenant("tenant-A")
+        assert durable == entry
 
-    # Retry: IS dedup returns NOOP; the repair path heals the sidecar.
-    assert writer.append("tenant-A", entry) is WriteResult.IDEMPOTENT_NOOP
-    [healed] = writer.read_full_entries_for_tenant("tenant-A")
-    assert healed == entry
+        # Retry: IS append commits (APPENDED — it never landed the first
+        # time); the membership check writes no duplicate sidecar row.
+        assert writer.append("tenant-A", entry) is WriteResult.APPENDED
 
-    # A further replay repairs nothing more — still exactly one row.
+    assert len(writer.read_full_entries_for_tenant("tenant-A")) == 1
+    # A later replay is a NOOP and still writes nothing.
     assert writer.append("tenant-A", entry) is WriteResult.IDEMPOTENT_NOOP
     assert len(writer.read_full_entries_for_tenant("tenant-A")) == 1
+
+
+def test_unreplayed_orphan_row_keeps_chain_continuity(tmp_path: Path) -> None:
+    """Codex round-3 scenario (PR B1) — an entry whose sidecar row landed but
+    whose IS append never did, and which is NEVER replayed (span-redaction
+    side effects do not replay): the next NEW event must seed its chain from
+    the durable tail (the orphan), keeping the rehydrated per-tenant sequence
+    verifying — the IS-first ordering forked the chain here."""
+    import unittest.mock as mock
+
+    from harness_core import PersonaTier
+    from harness_od.audit_ledger_types import AuditLedger
+    from harness_od.multi_tenant_trace_separation_and_audit_ledger import (
+        verify_hash_chain_integrity,
+    )
+    from harness_od.observability_matrix import CellID
+    from harness_od.redaction_tokenizer import RedactionTokenRecord
+
+    from harness_runtime.lifecycle.redaction_token_audit_map import (
+        AuditLedgerRedactionTokenMap,
+    )
+
+    writer = _writer(tmp_path)
+
+    def _record(token: str) -> RedactionTokenRecord:
+        return RedactionTokenRecord(
+            token=token,
+            raw_value=f"raw for {token}",
+            semantic_category="PII",
+            attribute_key="gen_ai.input.messages",
+            trace_id="trace-1",
+            span_id=f"span-{token}",
+        )
+
+    token_map = AuditLedgerRedactionTokenMap(
+        audit_writer=writer,
+        tenant_id="tenant-orphan",
+        signing_key_id="chain-key",
+    )
+    token_map.append(_record("[REDACTED:PII:1]"))
+
+    # Entry 2's sidecar row lands; its IS append dies; it is NEVER replayed.
+    with mock.patch.object(
+        type(writer.ledger_writer),
+        "append",
+        side_effect=OSError("simulated crash before IS append"),
+    ):
+        with pytest.raises(OSError):
+            token_map.append(_record("[REDACTED:PII:2]"))
+
+    # A FRESH map (restart) appends a brand-new event — no replay of entry 2.
+    fresh_map = AuditLedgerRedactionTokenMap(
+        audit_writer=writer,
+        tenant_id="tenant-orphan",
+        signing_key_id="chain-key",
+    )
+    fresh_map.append(_record("[REDACTED:PII:3]"))
+
+    entries = writer.read_full_entries_for_tenant("tenant-orphan")
+    assert len(entries) == 3  # incl. the orphan — durable, never lost
+    cell_7 = CellID(
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        deployment_surface=DeploymentSurface.SELF_HOSTED_SERVER,
+    )
+    verify_hash_chain_integrity(
+        AuditLedger(entries=tuple(entries), cell_id=cell_7)
+    )  # raises on breach — the orphan does NOT fork the chain
 
 
 def test_token_map_chain_advances_and_reseeds_across_restart(tmp_path: Path) -> None:

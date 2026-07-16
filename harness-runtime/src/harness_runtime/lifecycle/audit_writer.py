@@ -43,11 +43,12 @@ spec v1.33 §21.2.1 (`B-47`), never here.
 **Full-entry sidecar (`B-47` item (e)).** The IS wrap above persists only
 the `audit:<tag>:<entry_hash>` REFERENCE (the six-field C-IS-05 shape is
 ADR-F2-committed and carries no content field), so the writer additionally
-lands every APPENDED entry — payload + signature_attrs + entry_hash — as
-one JSON line in an `audit-entries.jsonl` sidecar beside the IS ledger
-file. The chain's embedded `entry_hash` binds each sidecar row to exactly
-one tamper-evident chain entry; the IS append is the single dedup
-authority (a NOOP replay writes no sidecar line). Reads rehydrate via
+lands every entry — payload + signature_attrs + entry_hash — as one JSON
+line in an `audit-entries.jsonl` sidecar beside the IS ledger file. The
+chain's embedded `entry_hash` binds each sidecar row to exactly one
+tamper-evident chain entry; writes are sidecar-first + membership-checked
+(a crash between the two writes leaves at worst a detectable surplus row,
+never a lost signature; replays never duplicate). Reads rehydrate via
 `read_full_entries_for_tenant` — the surface a signature verifier needs
 after restart.
 
@@ -124,8 +125,10 @@ class RuntimeAuditLedgerWriter:
     APPENDED write lands one JSON line `{"tenant_tag", "entry"}` in this
     sidecar (same directory as the IS ledger file); the IS chain's action_id
     embeds the OD `entry_hash`, binding every sidecar row to exactly one
-    tamper-evident chain entry. IDEMPOTENT_NOOP replays write nothing — the
-    IS chain is the single dedup authority, the sidecar a synchronized copy.
+    tamper-evident chain entry. Writes are sidecar-first + membership-checked
+    under the exclusive lock — replays and crash-retries never duplicate a
+    row, and a crash between the sidecar write and the IS append leaves a
+    detectable surplus row rather than a lost signature.
     """
 
     @property
@@ -171,22 +174,23 @@ class RuntimeAuditLedgerWriter:
             step_id=action_id,
             idempotency_key=action_id,
         )
-        result = self.ledger_writer.append(payload, write_key)
-        if result is WriteResult.APPENDED:
-            # Item (e): persist the FULL signed entry. IS-append-first makes
-            # the chain the single dedup authority (a NOOP replay never
-            # duplicates a row).
-            self._append_sidecar_line(tenant_id, audit_entry)
-        else:
-            # Repair-on-replay (out-of-family Codex P1 on the PR-B1 landing):
-            # a crash between the IS append and the sidecar write would
-            # otherwise lose the signed entry PERMANENTLY — every retry
-            # returns IDEMPOTENT_NOOP and the APPENDED-only gate would skip
-            # the sidecar forever. On NOOP, heal the gap iff this entry's row
-            # is absent (checked under the exclusive write lock, so a
-            # concurrent repair cannot double-write).
-            self._append_sidecar_line_if_missing(tenant_id, audit_entry)
-        return result
+        # Item (e): persist the FULL signed entry SIDECAR-FIRST (out-of-family
+        # Codex round-3 finding on the PR-B1 landing). IS-first ordering lost
+        # the signed entry PERMANENTLY when the process died between the two
+        # writes and the exact event was never replayed (span-redaction and
+        # cost side effects do not replay) — and a later NEW event then seeded
+        # its chain from the pre-loss tail, forking the OD chain against the
+        # IS refs. Sidecar-first inverts the failure: the valuable data (the
+        # full signed entry) is durable before the chain ref lands; a crash
+        # between the writes leaves at worst a SURPLUS sidecar row with no IS
+        # ref — detectable by a verifier cross-checking refs, prunable, and
+        # chain-consistent (the row was genuinely signed at that position, so
+        # tail seeding keeps verifying). The membership-checked write keeps
+        # every path idempotent (a retry after either crash window never
+        # duplicates a row); the IS append remains the dedup authority for
+        # the RESULT the caller sees.
+        self._append_sidecar_line_if_missing(tenant_id, audit_entry)
+        return self.ledger_writer.append(payload, write_key)
 
     def _sidecar_line_for(self, tenant_id: str | None, audit_entry: AuditLedgerEntry) -> str:
         return json.dumps(
@@ -238,32 +242,21 @@ class RuntimeAuditLedgerWriter:
         keep = data.rfind(b"\n") + 1  # 0 when no completed record exists
         os.truncate(self._sidecar_path, keep)
 
-    def _append_sidecar_line(self, tenant_id: str | None, audit_entry: AuditLedgerEntry) -> None:
-        """Append one full-entry JSON line to the sidecar (item (e)).
-
-        Guarded by the same B-40 cross-process write lock the IS ledger uses
-        (keyed on the sidecar's own path), so two concurrent `harness run`
-        invocations against one repo cannot interleave partial lines. The OD
-        carrier is JSON-clean (`audit_signature_value` is base64/placeholder
-        text, never raw bytes — the PR-A representation discipline), so
-        `model_dump(mode="json")` round-trips losslessly.
-        """
-        line = self._sidecar_line_for(tenant_id, audit_entry)
-        with cross_process_write_lock(self._sidecar_path):
-            self._heal_torn_tail_locked()
-            with os.fdopen(self._open_sidecar_for_append(), "a", encoding="utf-8") as fh:
-                fh.write(line + "\n")
-
     def _append_sidecar_line_if_missing(
         self, tenant_id: str | None, audit_entry: AuditLedgerEntry
     ) -> None:
-        """Crash-recovery repair: append iff no row exists for this entry.
+        """Membership-checked sidecar append — every write path (item (e)).
 
-        Runs on the IDEMPOTENT_NOOP replay path. The membership check and the
-        conditional append happen under ONE exclusive cross-process lock —
-        two concurrent replays of the same lost entry cannot both append.
-        Membership keys on `(tenant_tag, entry_hash)`, the same identity the
-        IS chain's action_id embeds.
+        Guarded by the same B-40 cross-process write lock the IS ledger uses
+        (keyed on the sidecar's own path): the torn-tail heal, the membership
+        check, and the conditional append happen under ONE exclusive lock, so
+        two concurrent writers/replays of the same entry cannot both append
+        and cannot interleave partial lines. Membership keys on
+        `(tenant_tag, entry_hash)`, the same identity the IS chain's
+        action_id embeds. The OD carrier is JSON-clean
+        (`audit_signature_value` is base64/placeholder text, never raw bytes
+        — the PR-A representation discipline), so `model_dump(mode="json")`
+        round-trips losslessly.
         """
         tag = self._tenant_tag(tenant_id)
         line = self._sidecar_line_for(tenant_id, audit_entry)

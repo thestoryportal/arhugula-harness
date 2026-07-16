@@ -526,3 +526,46 @@ def test_production_surface_preserves_trace_when_sandbox_violation_present(
     finished_names = {s.name for s in finished}
     assert "sandbox.violation" in finished_names
     assert "workflow.envelope" in finished_names
+
+
+def test_aws_kms_mapping_missing_token_map_key_fails_at_bootstrap(tmp_path: Path) -> None:
+    """Codex round-3 P2 (B-47 PR B1) — an `aws-kms` mapping that omits the
+    redaction-token map's hard-coded signing key must fail at STAGE
+    construction, not raise `UnknownSigningKeyIdError` on the first redacted
+    span mid-run."""
+    from harness_runtime.lifecycle.span_processor import (
+        REDACTION_TOKEN_SIGNING_KEY_ID,
+        SpanProcessorBindError,
+    )
+    from harness_runtime.types import AuditSigningBackendKind, AuditSigningConfig
+
+    class _StubBackend:
+        algorithm = "ed25519"
+
+        def sign(self, *, message: bytes, key_id: str, key_period: int) -> bytes:
+            raise AssertionError("never reached — bootstrap must fail first")
+
+        def verify(self, *, message: bytes, signature: bytes, key_id: str, key_period: int) -> bool:
+            raise AssertionError("never reached")
+
+    base = _config(
+        tmp_path,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        tenant_id="tenant-x",
+    )
+    config = base.model_copy(
+        update={
+            "audit_signing": AuditSigningConfig(
+                backend=AuditSigningBackendKind.AWS_KMS,
+                key_arns={"some-other-key": "arn:aws:kms:us-east-1:1:key/x"},
+            )
+        }
+    )
+    with pytest.raises(SpanProcessorBindError, match=REDACTION_TOKEN_SIGNING_KEY_ID):
+        materialize_span_processor_stage(
+            config,
+            _provider(),
+            exporter=InMemorySpanExporter(),
+            audit_writer=_RecordingAuditWriter(),
+            signing_backend=_StubBackend(),
+        )
