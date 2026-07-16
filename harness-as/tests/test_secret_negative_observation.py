@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from harness_as.secret_negative_observation import (
+    NegativeObservationSurface,
     validate_no_secret_in_audit_ledger_entry,
     validate_no_secret_in_span_attributes,
     validate_no_secret_in_static_prefix,
@@ -41,9 +42,30 @@ def test_validate_no_secret_in_audit_ledger_entry_detects_value_content() -> Non
 
 def test_verify_sole_resolution_path_rejects_manifest_arrival() -> None:
     """Acceptance #4 — a secret arriving via the manifest is a violation."""
-    assert verify_sole_resolution_path("workflow_manifest") is not None
+    violation = verify_sole_resolution_path("workflow_manifest")
+    assert violation is not None
+    assert violation.surface is NegativeObservationSurface.WORKFLOW_MANIFEST_ENTRY
 
 
 def test_verify_sole_resolution_path_accepts_fetch_secret_arrival() -> None:
     """Acceptance #4 — a secret arriving via fetch_secret is permitted."""
     assert verify_sole_resolution_path("fetch_secret") is None
+
+
+def test_verify_sole_resolution_path_dispatches_known_sites_to_matching_surfaces() -> None:
+    """B-24 — dispatch reflects the real arrival site, not a hardcoded label."""
+    assert (
+        verify_sole_resolution_path("prompt_cache_prefix").surface
+        is NegativeObservationSurface.STATIC_PROMPT_CACHE_PREFIX
+    )
+    assert (
+        verify_sole_resolution_path("span_attributes").surface
+        is NegativeObservationSurface.SPAN_ATTRIBUTES
+    )
+    assert (
+        verify_sole_resolution_path("log_records").surface is NegativeObservationSurface.LOG_RECORDS
+    )
+    assert (
+        verify_sole_resolution_path("audit_ledger_entry").surface
+        is NegativeObservationSurface.AUDIT_LEDGER_ENTRY
+    )

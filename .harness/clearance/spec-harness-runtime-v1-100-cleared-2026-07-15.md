@@ -1,0 +1,32 @@
+---
+artifact: design-substrate/Spec_Harness_Runtime_v1.md
+version: v1.100
+cleared_at: 2026-07-15T00:00:00-06:00
+clearance_type: Phase-7-absorbed-via-roadmap-continue
+back_reference:
+  - .harness/class_1_fork_cli_exit_code_paused_status_undefined.md (Q1=A / Q2=ii / Q3=b readings, all filer-recommended)
+  - .harness/forward-register.yaml (B-27 entry)
+merge_commit: pending (pre-merge at filing time)
+reviewer_chain:
+  - advisor() pre-implementation grounding (this session) — reviewed the B-24/B-25/B-27 ratification batch before build; confirmed B-24/B-27 as Claude-ratifiable (clear, reversible, filer-recommended, convention-following) and B-25 as requiring a genuine operator gate (split off, not built this arc)
+  - direct read of `harness-runtime/src/harness_runtime/cli/app.py` confirming both exit-code call sites (`_CP_STATUS_TO_EXIT_CODE` dict for daemon-client mode; the one-shot `if/elif` chain) previously collapsed `paused` onto the same exit code as `failed`
+  - full test run: `harness-runtime/tests/test_cli_one_shot.py` + `test_cli_daemon_client.py` — 28/28 passed, including the 2 new tests added by this fix (`test_b27_workflow_paused_status_exits_five`; the daemon-mode parametrize case `("paused", EXIT_PAUSED_RESUMABLE)`)
+  - ruff format + ruff check clean on all touched files
+supersedes: null
+superseded_by: null
+---
+
+# Clearance — `Spec Harness Runtime v1.100`
+
+v1.100 closes the `B-27` fork: §14.18.2's exit-code mapping table never assigned `RunResult.status == PAUSED` a disposition. When `'partial'` was added to the status `Literal` at an earlier spec revision, the author explicitly extended §14.18.2's row-1 trigger set to include it; when `'paused'` was added (earlier in the same lineage, per that revision's own "mirroring v1.45's `paused`" framing), no equivalent §14.18.2 amendment happened. Production code (`harness-runtime/src/harness_runtime/cli/app.py`) inherited the gap: both the one-shot `if/else` chain and the daemon-mode `_CP_STATUS_TO_EXIT_CODE` dict fell through to `EXIT_WORKFLOW_FAIL` (exit `1`) for a `paused` run — indistinguishable by exit code from a genuine `failed` run, even though `paused` is a non-terminal "awaiting `resume()`" outcome with a captured `PauseSnapshot`.
+
+This delta adds a NEW §14.18.2 row: exit code `5` / `PAUSED_RESUMABLE` / triggered by `RunResult.status == PAUSED`. `cli/app.py` gains `EXIT_PAUSED_RESUMABLE = 5`; both call sites now dispatch `paused` to it explicitly rather than falling through to the generic-failure branch. `RunResult.status`'s `Literal` enum itself is unchanged — only the exit-code mapping gained a row, matching the fork's Q2=ii (spec + CLI kept in sync) recommendation. Per Q3, a documentation-only note is recorded: a future CLI `resume` subcommand should honor this same exit-code convention once one is authored — no `resume` subcommand exists yet, and none is added by this delta.
+
+**Ratification note.** This fork was ratified without an operator `AskUserQuestion` round-trip, per explicit operator direction this session ("continue autonomously, no HIL ... pick up B-24/B-25/B-27's fork docs for ratification") — the filer's recommended readings (Q1=A, Q2=ii, Q3=b) were adopted as-is after confirming via `advisor()` that this fork (unlike the sibling `B-25`, which was NOT built this arc) is mechanical, reversible, and does not carry an irreversible production-security-posture tradeoff a non-coding operator could not audit after the fact.
+
+## Notes
+
+- Phase 7 consumers may rely on this version (v1.100) as canonical for the §14.18.2 exit-code mapping table.
+- `B-27`'s forward-register row (`.harness/forward-register.yaml` + `.harness/post-phase-8-forward-register.md`) is marked closed in the same PR, citing this clearance marker.
+- Root `CLAUDE.md` §2.3's Runtime spec pointer is intentionally NOT bumped inline here — per observed workspace convention (the CP spec pointer has similarly lagged behind the live `Spec_Control_Plane_v1_100.md` head), that pointer is refreshed in a separate periodic batch pass, not on every individual spec delta.
+- See `.harness/clearance/README.md` for marker discipline.

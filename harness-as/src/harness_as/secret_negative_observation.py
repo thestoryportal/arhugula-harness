@@ -40,6 +40,7 @@ class NegativeObservationSurface(StrEnum):
     SPAN_ATTRIBUTES = "SPAN_ATTRIBUTES"
     LOG_RECORDS = "LOG_RECORDS"
     AUDIT_LEDGER_ENTRY = "AUDIT_LEDGER_ENTRY"
+    WORKFLOW_MANIFEST_ENTRY = "WORKFLOW_MANIFEST_ENTRY"
 
 
 class NegativeObservationViolation(BaseModel):
@@ -116,6 +117,15 @@ def validate_no_secret_in_audit_ledger_entry(
     return None
 
 
+_ARRIVAL_SITE_SURFACES: Mapping[str, NegativeObservationSurface] = {
+    "workflow_manifest": NegativeObservationSurface.WORKFLOW_MANIFEST_ENTRY,
+    "prompt_cache_prefix": NegativeObservationSurface.STATIC_PROMPT_CACHE_PREFIX,
+    "span_attributes": NegativeObservationSurface.SPAN_ATTRIBUTES,
+    "log_records": NegativeObservationSurface.LOG_RECORDS,
+    "audit_ledger_entry": NegativeObservationSurface.AUDIT_LEDGER_ENTRY,
+}
+
+
 def verify_sole_resolution_path(
     secret_arrival_site: str,
 ) -> NegativeObservationViolation | None:
@@ -126,8 +136,14 @@ def verify_sole_resolution_path(
     """
     if secret_arrival_site == "fetch_secret":
         return None
+    # Unrecognized arrival sites default to the manifest surface (B-24) —
+    # inline manifest fields are the arrival path with no dedicated detector
+    # of their own, so an unlabeled site is most likely one of theirs.
+    surface = _ARRIVAL_SITE_SURFACES.get(
+        secret_arrival_site, NegativeObservationSurface.WORKFLOW_MANIFEST_ENTRY
+    )
     return NegativeObservationViolation(
-        surface=NegativeObservationSurface.STATIC_PROMPT_CACHE_PREFIX,
+        surface=surface,
         detected_at=secret_arrival_site,
         invariant="fetch_secret is the sole secret-resolution path",
     )

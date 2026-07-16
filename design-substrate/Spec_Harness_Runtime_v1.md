@@ -1,4 +1,8 @@
-# Specification — Harness Runtime v1.99
+# Specification — Harness Runtime v1.100
+
+## Change-note (v1.99 → v1.100)
+
+**Status posture (BUILT 2026-07-15).** v1.100 closes **B-27** (`.harness/class_1_fork_cli_exit_code_paused_status_undefined.md`, ratified 2026-07-15 per the fork's Q1=A/Q2=ii/Q3=b recommended readings — roadmap-continue autonomous session). §14.18.2's exit-code table never assigned `RunResult.status == PAUSED` a disposition (unlike `PARTIAL`, whose addition explicitly extended the row-1 trigger set) — production code fell through to `EXIT_WORKFLOW_FAIL` (exit `1`), identical to a genuine `FAILED` run, even though `PAUSED` is a non-terminal "awaiting `resume()`" outcome distinct in kind from a hard failure. **Fix:** §14.18.2 gains a NEW row — exit code `5` / `PAUSED_RESUMABLE` / `RunResult.status == PAUSED`. `harness-runtime/src/harness_runtime/cli/app.py` gains `EXIT_PAUSED_RESUMABLE = 5`; both mapping call sites (`_CP_STATUS_TO_EXIT_CODE` dict for daemon-client mode; the one-shot `if/elif` chain) now dispatch `paused` to it explicitly instead of falling through to the `failed`/`drained`/`partial` catch-all. Per Q3 (documentation-note-only, not an implementation obligation): a future CLI `resume` subcommand should honor this same exit-code convention once it exists — no `resume` subcommand is authored at this version. `RunResult.status`'s `Literal` enum is UNCHANGED — only the exit-code *mapping* gained a row. Tests: `test_b27_workflow_paused_status_exits_five` (one-shot) + a new `("paused", EXIT_PAUSED_RESUMABLE)` parametrize case (daemon-client `_CP_STATUS_TO_EXIT_CODE` mapping test). IS / CP / OD / AS / ADR / CXA specs UNCHANGED. Co-published with a `.harness/clearance/` marker.
 
 ## Change-note (v1.98 → v1.99)
 
@@ -1003,7 +1007,7 @@ CLI flag inventory at `harness run` (per Q-I=(c) Typer dispatcher):
 | `--tenant-id <id>` | `str` | CLI flag (sibling to existing `RuntimeConfig.tenant_id`) | Operator override |
 | `--watch` / `--reload` | (deferred per Q-Q=(b)) | — | Iteration-2 — not authored at v1.35 |
 
-### §14.18.2 Exit code mapping (per Q-G=(a) strict)
+### §14.18.2 Exit code mapping (per Q-G=(a) strict; row 5 added at v1.100 per B-27)
 
 | Exit code | Meaning | Trigger |
 |---|---|---|
@@ -1012,6 +1016,7 @@ CLI flag inventory at `harness run` (per Q-I=(c) Typer dispatcher):
 | `2` | MANIFEST_ERROR | Any `WorkflowManifestLoadError` subclass (per §14.19.2 taxonomy) |
 | `3` | CONFIG_ERROR | `RuntimeConfigSource` load failure; `RT-FAIL-CLI-ARG-INVALID`; `RT-FAIL-CLI-CONFIG-LOAD` |
 | `4` | RUNTIME_BOOTSTRAP_ERROR | Bootstrap-stage failure surfaced at C-RT-02 §2; `RT-FAIL-CLI-DAEMON-CONNECTION` |
+| `5` | PAUSED_RESUMABLE | `RunResult.status == PAUSED` — non-terminal; a `PauseSnapshot` was captured and the run is awaiting a future `resume()` call, distinct from a genuine `WORKFLOW_FAILURE` (v1.100, B-27) |
 
 ### §14.18.3 SIGINT / SIGTERM drain discipline
 

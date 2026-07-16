@@ -1,6 +1,6 @@
 # Class 1 Fork — `NegativeObservationSurface` has no member for workflow-manifest secret arrival; `verify_sole_resolution_path` hardcodes the wrong label regardless of input
 
-**Status:** PROPOSING
+**Status:** RATIFIED 2026-07-15 (Q1=A `WORKFLOW_MANIFEST_ENTRY`, Q2=a bundled dispatch fix, Q3=a — all per filer recommendation; roadmap-continue autonomous session, no design-substrate edit owed since the enum is code-level only). **BUILT** — see `.harness/post-phase-8-forward-register.md` §"B-24".
 
 **Filed at:** 2026-07-14
 
