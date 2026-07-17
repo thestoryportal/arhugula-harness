@@ -701,7 +701,31 @@ class RuntimeAuditLedgerWriter:
                     f"but recomputed {recomputed!r} — tampered or corrupt row "
                     f"preserved as evidence, append refused"
                 )
-            index.digests[(row["tenant_tag"], entry.entry_hash)] = _full_entry_digest(entry)
+            identity = (row["tenant_tag"], entry.entry_hash)
+            digest = _full_entry_digest(entry)
+            existing = index.digests.get(identity)
+            if existing is not None:
+                # Duplicate identity (codex round-47 P1): silently letting
+                # the last row win would make a replay of the legitimate
+                # entry NOOP against a tampered digest while the reader
+                # returns both rows — bypassing the fail-loud posture. No
+                # write path ever duplicates an identity (membership-checked
+                # under the exclusive lock; even our own crash-retries fold
+                # the durable row before appending), so ANY duplicate —
+                # conflicting or byte-identical — is external mutation;
+                # preserved as evidence, fold refused.
+                detail = (
+                    "signature_attrs or other non-payload fields differ"
+                    if existing != digest
+                    else "byte-identical copy"
+                )
+                raise ValueError(
+                    f"sidecar holds duplicate rows for "
+                    f"tenant_tag={row['tenant_tag']!r} "
+                    f"entry_hash={entry.entry_hash!r} ({detail}) — tampered "
+                    f"or corrupt rows preserved as evidence"
+                )
+            index.digests[identity] = digest
         index.offset += len(delta)
         post = self._sidecar_path.stat()
         index.inode = post.st_ino
@@ -800,6 +824,19 @@ class RuntimeAuditLedgerWriter:
                             f"content-integrity on read: stored "
                             f"entry_hash={entry.entry_hash!r} but recomputed "
                             f"{recomputed!r} — tampered or corrupt row"
+                        )
+                    if any(entry.entry_hash == seen.entry_hash for seen in entries):
+                        # Reader mirror of the fold's conflicting-duplicate
+                        # rejection (codex round-47 P1): no write path ever
+                        # duplicates an identity, so a second row for the
+                        # same hash is external mutation — returning both
+                        # would feed verifiers a sequence no legitimate
+                        # writer produced.
+                        raise ValueError(
+                            f"sidecar holds duplicate rows for "
+                            f"tenant_tag={tag!r} "
+                            f"entry_hash={entry.entry_hash!r} — tampered or "
+                            f"corrupt rows preserved as evidence"
                         )
                     entries.append(entry)
         # Round-40 P1 (reader half): a sidecar truncated to a newline

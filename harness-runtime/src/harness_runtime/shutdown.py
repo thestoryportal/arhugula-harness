@@ -62,6 +62,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import stat
 import sys
 import time
 import weakref
@@ -84,6 +85,56 @@ __all__ = [
     "flush_observability",
     "shutdown",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Blocking fsync halves — run in worker threads via `asyncio.to_thread`
+# (codex round-47 P2: a stalled filesystem must not hang the event loop past
+# the advertised timeout; `asyncio.wait_for` bounds the wait, the worker may
+# linger on the stalled syscall while shutdown proceeds).
+# ---------------------------------------------------------------------------
+
+
+def _fsync_sidecar_sync(sidecar_path: Path) -> None:
+    """Sidecar file + parent-dir fsync (blocking half).
+
+    Non-blocking + regular-file check (round-35 codex): a pre-created FIFO
+    here made a blocking O_RDONLY open hang the ENTIRE shutdown before any
+    failure could be recorded. Mirrors the writer's validated-open
+    discipline; a non-regular target is recorded as an audit_sidecar flush
+    failure, never a hang. The parent-dir fsync (codex round-11, PR B1)
+    covers directory-entry durability for NEWLY CREATED files — the flushed
+    ledger ref must not outlive the sidecar's very filename. POSIX-only:
+    directories are not open()-able on Windows, where cross-process
+    durability already sits at the documented B-45 platform posture.
+    """
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)
+    if sys.platform != "win32":
+        flags |= os.O_NOFOLLOW
+    fd = os.open(str(sidecar_path), flags)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise ValueError(f"sidecar {sidecar_path} is not a regular file")
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    if sys.platform != "win32":
+        dir_fd = os.open(str(sidecar_path.parent), os.O_RDONLY)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
+
+
+def _fsync_ledger_sync(ledger_path: Path) -> None:
+    """Ledger fsync (blocking half). Read-only fd is sufficient — fsync
+    flushes the file's write-back buffer via the inode regardless of access
+    mode."""
+    fd = os.open(str(ledger_path), os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
 
 
 # ---------------------------------------------------------------------------
@@ -211,49 +262,35 @@ async def flush_observability(
         # (codex round-43) — recorded as an audit_sidecar failure via the
         # writer's own first-use authority, consistent with its
         # missing-sidecar guard.
+        # Capture-then-narrow (codex round-47 P1): calling
+        # `audit_writer.sidecar_expected()` after a mere hasattr-style probe
+        # fails `reportOptionalMemberAccess` — the probe does not prove
+        # `audit_writer` is non-None; invoking the CAPTURED callable does.
+        sidecar_expected = getattr(audit_writer, "sidecar_expected", None)
         if (
             sidecar_path is not None
             and not sidecar_path.exists()
-            and getattr(audit_writer, "sidecar_expected", None) is not None
-            and audit_writer.sidecar_expected()
+            and sidecar_expected is not None
+            and sidecar_expected()
         ):
             raise ValueError(
                 f"audit sidecar {sidecar_path} is missing but IS audit "
                 f"references exist — signed history deleted or lost"
             )
         if sidecar_path is not None and sidecar_path.exists():
-            # Non-blocking + regular-file check (round-35 codex): a
-            # pre-created FIFO here made a blocking O_RDONLY open hang the
-            # ENTIRE shutdown before any failure could be recorded. Mirrors
-            # the writer's validated-open discipline; a non-regular target
-            # is recorded as an audit_sidecar flush failure, never a hang.
-            flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)
-            if sys.platform != "win32":
-                flags |= os.O_NOFOLLOW
-            fd = os.open(str(sidecar_path), flags)
-            try:
-                import stat as _stat
-
-                if not _stat.S_ISREG(os.fstat(fd).st_mode):
-                    raise ValueError(f"sidecar {sidecar_path} is not a regular file")
-                os.fsync(fd)
-            finally:
-                os.close(fd)
-            # Directory-entry durability (codex round-11, PR B1): file fsync
-            # does not guarantee a NEWLY CREATED file's directory entry
-            # survives POSIX power loss — the flushed ledger ref could
-            # outlive the sidecar's very filename. One parent-dir fsync
-            # covers both files' entries (they share the ledger directory),
-            # lifting the whole surface past the file-only bar consistently.
-            # POSIX-only: directories are not open()-able on Windows, where
-            # cross-process durability already sits at the documented B-45
-            # platform posture.
-            if sys.platform != "win32":
-                dir_fd = os.open(str(sidecar_path.parent), os.O_RDONLY)
-                try:
-                    os.fsync(dir_fd)
-                finally:
-                    os.close(dir_fd)
+            # Bounded worker (codex round-47 P2): fsync against a stalled
+            # filesystem (network mount, dying disk) blocks INDEFINITELY —
+            # run synchronously on the loop it would hang the whole shutdown
+            # past every advertised timeout. `wait_for` bounds the wait; the
+            # worker thread may linger on the stalled syscall, but shutdown
+            # proceeds and records the failure.
+            await asyncio.wait_for(
+                asyncio.to_thread(_fsync_sidecar_sync, sidecar_path),
+                timeout=timeout_millis / 1000.0,
+            )
+    except TimeoutError:
+        failures.append("audit_sidecar")
+        timed_out = True
     except Exception:
         failures.append("audit_sidecar")
 
@@ -268,14 +305,16 @@ async def flush_observability(
     try:
         ledger = ctx.ledger_writer
         ledger_path = ledger.handle.canonical_path
-        # Read-only fd is sufficient — fsync flushes the file's write-back
-        # buffer via the inode regardless of access mode.
-        fd = os.open(str(ledger_path), os.O_RDONLY)
-        try:
-            os.fsync(fd)
-            ledger_fsynced = True
-        finally:
-            os.close(fd)
+        # Bounded worker — same stalled-filesystem hang class as the sidecar
+        # surface above (codex round-47 P2).
+        await asyncio.wait_for(
+            asyncio.to_thread(_fsync_ledger_sync, ledger_path),
+            timeout=timeout_millis / 1000.0,
+        )
+        ledger_fsynced = True
+    except TimeoutError:
+        failures.append("ledger")
+        timed_out = True
     except Exception:
         failures.append("ledger")
 

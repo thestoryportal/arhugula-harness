@@ -1662,3 +1662,67 @@ def test_adoption_refused_when_sidecar_exists(tmp_path: Path) -> None:
     writer.append("tenant-A", _make_audit_entry("1" * 64))
     with pytest.raises(ValueError, match="already exists"):
         writer.adopt_legacy_is_refs()
+
+
+def test_conflicting_duplicate_sidecar_rows_fail_loud(tmp_path: Path) -> None:
+    """Codex round-47 P1 (PR B1) — two rows with the same
+    (tenant_tag, entry_hash) but different signature_attrs silently let the
+    LAST row win the membership fold: a replay of the legitimate entry
+    NOOPed against the tampered digest while the reader returned both rows.
+    No write path ever duplicates an identity, so any duplicate is external
+    mutation — fold and reader both fail loud now."""
+    writer = _writer(tmp_path)
+    entry = _make_audit_entry("1" * 64)
+    writer.append("tenant-A", entry)
+
+    row = json.loads(writer.sidecar_path.read_text().splitlines()[0])
+    row["entry"]["signature_attrs"]["audit_signature_value"] = "sig:tampered"
+    with writer.sidecar_path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(row, separators=(",", ":")) + "\n")
+
+    fresh = RuntimeAuditLedgerWriter(
+        ledger_writer=writer.ledger_writer,
+        time_source=writer.time_source,
+    )
+    with pytest.raises(ValueError, match="duplicate rows"):
+        fresh.append("tenant-A", entry)
+    with pytest.raises(ValueError, match="duplicate rows"):
+        fresh.read_full_entries_for_tenant("tenant-A")
+
+
+def test_identical_duplicate_sidecar_rows_fail_loud(tmp_path: Path) -> None:
+    """Codex round-47 P1 (PR B1) — a byte-identical duplicate row is equally
+    impossible from any legitimate write path (membership-checked under the
+    exclusive lock); it is external mutation and must not be silently
+    tolerated by fold or reader."""
+    writer = _writer(tmp_path)
+    entry = _make_audit_entry("1" * 64)
+    writer.append("tenant-A", entry)
+
+    line = writer.sidecar_path.read_text().splitlines()[0]
+    with writer.sidecar_path.open("a", encoding="utf-8") as fh:
+        fh.write(line + "\n")
+
+    fresh = RuntimeAuditLedgerWriter(
+        ledger_writer=writer.ledger_writer,
+        time_source=writer.time_source,
+    )
+    with pytest.raises(ValueError, match="duplicate rows"):
+        fresh.append("tenant-A", _make_audit_entry("2" * 64))
+    with pytest.raises(ValueError, match="duplicate rows"):
+        fresh.read_full_entries_for_tenant("tenant-A")
+
+
+def test_runtime_config_rejects_reserved_tenant_ids(tmp_path: Path) -> None:
+    """Codex round-47 P2 (PR B1) — `tenant_id=""` / `"_single"` previously
+    loaded cleanly and then aborted the first audit touch in the compliance
+    span path (the round-45 writer-side refusal). Config load fails fast
+    now; the writer-side check remains as defense in depth."""
+    from pydantic import ValidationError
+
+    base = _config(tmp_path).model_dump()
+    for reserved in ("", "_single"):
+        with pytest.raises(ValidationError, match="reserved"):
+            RuntimeConfig.model_validate({**base, "tenant_id": reserved})
+    accepted = RuntimeConfig.model_validate({**base, "tenant_id": "tenant-x"})
+    assert accepted.tenant_id == "tenant-x"

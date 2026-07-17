@@ -147,6 +147,46 @@ async def test_flush_observability_uses_default_timeout(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_flush_bounded_when_fsync_stalls(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Codex round-47 P2 — an fsync against a stalled filesystem (network
+    mount, dying disk) must not hang shutdown past the advertised timeout:
+    both fsync surfaces dispatch to a bounded worker; the stall is recorded
+    as a per-surface failure + timed_out and shutdown proceeds."""
+    import time as time_module
+
+    ledger_path = tmp_path / "state.jsonl"
+    ledger_path.write_text("entry-1\n")
+    sidecar_path = tmp_path / "audit-entries.jsonl"
+    sidecar_path.write_text('{"tenant_tag":"_single","entry":{}}\n')
+
+    def _stalled_fsync(fd: int) -> None:
+        time_module.sleep(1.5)
+
+    monkeypatch.setattr(os, "fsync", _stalled_fsync)
+    tracer = _FakeTracerProvider(returns=True)
+    ctx = _ctx_with(tmp_path, tracer=tracer, ledger_path=ledger_path)
+    ctx.audit_writer = SimpleNamespace(
+        sidecar_path=sidecar_path,
+        sidecar_expected=lambda: True,
+    )
+
+    start = time_module.monotonic()
+    report = await flush_observability(ctx, timeout_millis=200)
+    elapsed = time_module.monotonic() - start
+
+    # Two bounded 200ms waits — far under the 1.5s a single synchronous
+    # stalled fsync would take on the loop.
+    assert elapsed < 1.2
+    assert "audit_sidecar" in report.failures
+    assert "ledger" in report.failures
+    assert report.timed_out is True
+    assert report.ledger_fsynced is False
+
+
+@pytest.mark.asyncio
 async def test_flush_observability_runs_tracer_in_thread(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -164,12 +204,17 @@ async def test_flush_observability_runs_tracer_in_thread(
 
     await flush_observability(ctx, timeout_millis=1_000)
 
-    assert len(to_thread_calls) == 1
-    fn, args = to_thread_calls[0]
-    # Bound-method identity isn't stable across attribute accesses; compare
-    # by __func__ (the underlying function) instead.
-    assert getattr(fn, "__func__", None) is _FakeTracerProvider.force_flush
-    assert args == (1_000,)
+    # The ledger fsync ALSO dispatches via to_thread (codex round-47 P2);
+    # assert the tracer call specifically rather than an exact count.
+    tracer_calls = [
+        (fn, args)
+        for fn, args in to_thread_calls
+        # Bound-method identity isn't stable across attribute accesses;
+        # compare by __func__ (the underlying function) instead.
+        if getattr(fn, "__func__", None) is _FakeTracerProvider.force_flush
+    ]
+    assert len(tracer_calls) == 1
+    assert tracer_calls[0][1] == (1_000,)
 
 
 @pytest.mark.asyncio

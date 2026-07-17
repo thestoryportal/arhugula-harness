@@ -1904,6 +1904,26 @@ class RuntimeConfig(BaseModel):
     tenant_id: str | None = None
     """Multi-tenant separation key per OD audit-ledger. `None` = single-tenant."""
 
+    @field_validator("tenant_id")
+    @classmethod
+    def _tenant_id_not_reserved(cls, value: str | None) -> str | None:
+        """Reject the two audit-scope-ambiguous literals at CONFIG LOAD
+        (codex round-47 P2): the audit writer refuses `""` and `"_single"`
+        (its single-tenant sidecar tag — see
+        `RuntimeAuditLedgerWriter._tenant_tag`, codex round-45 P1) on every
+        append/read, so a deployment configured with either would bootstrap
+        cleanly and then abort on the first audit touch in the compliance
+        span path. Fail at load instead; the writer-side check remains as
+        defense in depth.
+        """
+        if value in ("", "_single"):
+            raise ValueError(
+                f"tenant_id {value!r} is reserved: omit tenant_id (None) for "
+                f"single-tenant deployments; '_single' is the audit writer's "
+                f"single-tenant sidecar tag and may not be an operator tenant"
+            )
+        return value
+
     memory: RuntimeMemoryConfig = Field(default_factory=RuntimeMemoryConfig)
     """Automatic local memory substrate settings.
 
