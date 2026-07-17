@@ -356,19 +356,26 @@ class RuntimeAuditLedgerWriter:
         index = self._sidecar_index
         st = self._sidecar_path.stat() if self._sidecar_path.exists() else None
         size = st.st_size if st is not None else 0
-        changed_identity = st is not None and (
-            st.st_ino != index.inode or st.st_mtime_ns != index.mtime_ns
+        truncated = size < index.offset
+        inode_changed = index.offset > 0 and st is not None and st.st_ino != index.inode
+        same_size_mutated = (
+            index.offset > 0
+            and st is not None
+            and size == index.offset
+            and st.st_mtime_ns != index.mtime_ns
         )
-        if size < index.offset or (index.offset > 0 and changed_identity):
-            # Truncation (torn-tail heal elsewhere) OR the file changed under
-            # us without growing past our offset — e.g. an in-place same-size
-            # mutation while this writer stays alive (codex round-21: a
-            # size-equality short-circuit alone trusted a stale in-memory
-            # index over a tampered durable row). Full rescan; the round-17/19
-            # integrity checks then fire against the actual bytes. (A
-            # same-size mutation that also restores mtime_ns is
-            # adversarial-filesystem territory — the read-time verifier arc,
-            # B-47 remainder item (f), owns that tier.)
+        if truncated or inode_changed or same_size_mutated:
+            # Full rescan ONLY for: truncation (torn-tail heal elsewhere),
+            # file replacement (inode change), or a same-size in-place
+            # mutation (codex round-21: size-equality alone trusted a stale
+            # index over a tampered row). Plain GROWTH on the same inode
+            # folds just the suffix below (codex round-22: clearing on every
+            # foreign append restored the O(N²) behavior this index removes —
+            # alternating same-host writers must stay incremental). A
+            # mutate-in-folded-region-then-grow on the same inode, or a
+            # mutation that also restores mtime_ns, is adversarial-filesystem
+            # territory — the read-time verifier arc (B-47 remainder) owns
+            # that tier.
             index.digests.clear()
             index.offset = 0
         if st is not None and size == index.offset:

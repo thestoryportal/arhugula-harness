@@ -980,3 +980,33 @@ def test_same_size_in_place_mutation_detected_by_live_writer(tmp_path: Path) -> 
 
     with pytest.raises(ValueError, match="diverges from"):
         writer.append("tenant-A", entry)
+
+
+def test_alternating_writers_stay_incremental_never_full_rescan(tmp_path: Path) -> None:
+    """Codex round-22 (PR B1) — a foreign append changes size AND mtime;
+    clearing the index on any mtime change made alternating same-host
+    writers reparse the whole growing file per append (the O(N²) this index
+    exists to remove). Growth on the same inode must fold ONLY the suffix:
+    a sentinel planted in the index survives every alternation — the index
+    is never reset — and membership stays correct."""
+    writer_a = _writer(tmp_path)
+    writer_b = RuntimeAuditLedgerWriter(
+        ledger_writer=writer_a.ledger_writer,
+        time_source=writer_a.time_source,
+    )
+
+    sentinel = ("__witness__", "never-a-real-entry")
+    for i in range(3):
+        writer_a.append("tenant-alt", _make_audit_entry(f"a{i}" * 32))
+        if i > 0:
+            # Planted AFTER writer_b's first append built its index; a full
+            # rescan (digests.clear) would evict it.
+            writer_b._sidecar_index.digests[sentinel] = "sentinel"
+        writer_b.append("tenant-alt", _make_audit_entry(f"b{i}" * 32))
+        if i > 0:
+            assert sentinel in writer_b._sidecar_index.digests, (
+                f"index was fully rescanned on alternation {i} — foreign "
+                f"growth on the same inode must fold only the suffix"
+            )
+
+    assert len(writer_b.read_full_entries_for_tenant("tenant-alt")) == 6
