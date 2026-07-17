@@ -84,6 +84,7 @@ from harness_is.cross_process_ledger_lock import (
 )
 from harness_is.state_ledger_entry_schema import Identifier, StateLedgerEntry, Timestamp
 from harness_is.state_ledger_write import (
+    NonMonotonicTimestampError,
     EntryPayload,
     WriteKey,
     WriteResult,
@@ -324,7 +325,32 @@ class RuntimeAuditLedgerWriter:
             # duplicates a row); the IS append remains the dedup authority for
             # the RESULT the caller sees.
             self._append_sidecar_line_if_missing(tenant_id, audit_entry)
-            return self.ledger_writer.append(payload, write_key)
+            # Bounded resample-retry (codex round-8 P1): this lock
+            # serializes AUDIT appends, but ordinary `LedgerWriter.append`
+            # F2/state writes to the SAME ledger do not take it — one can
+            # commit a newer timestamp between our sampling and our IS
+            # append, which then raises NonMonotonicTimestampError AFTER
+            # the sidecar row is durable (an unanchored signature). The IS
+            # append is retry-safe here: the OD entry (and so the sidecar
+            # identity) is timestamp-independent, and the idempotency key
+            # is unchanged — resample a fresh timestamp and retry. Bounded:
+            # a hot ledger could starve an unbounded loop; exhaustion
+            # propagates the error loudly (the sidecar row is preserved and
+            # the NEXT append's crash-repair path re-anchors it).
+            attempts_left = 5
+            while True:
+                try:
+                    return self.ledger_writer.append(payload, write_key)
+                except NonMonotonicTimestampError:
+                    attempts_left -= 1
+                    if attempts_left <= 0:
+                        raise
+                    payload = EntryPayload(
+                        action_id=payload.action_id,
+                        idempotency_key=payload.idempotency_key,
+                        actor=payload.actor,
+                        timestamp=self.time_source(),
+                    )
 
     def _sidecar_line_for(self, tenant_id: str | None, audit_entry: AuditLedgerEntry) -> str:
         return json.dumps(

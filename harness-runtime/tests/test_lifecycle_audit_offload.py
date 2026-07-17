@@ -287,3 +287,35 @@ def test_for_single_host_forwards_signing_backend() -> None:
         signing_backend=sentinel,
     )
     assert dispatcher._signing_backend is sentinel  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_join_survives_repeated_cancellation() -> None:
+    """Codex round-8 P1 — a facade timeout followed by an outer/shutdown
+    cancellation delivered a SECOND CancelledError that the single suppress
+    absorbed once and exited with the worker still running: the write could
+    land after the caller observed cancellation. The join must hold across
+    repeated cancellations until the worker actually finished."""
+    started = threading.Event()
+    release = threading.Event()
+    wrote: list[str] = []
+
+    def _work() -> None:
+        started.set()
+        assert release.wait(timeout=10.0)
+        wrote.append("audit-write")
+
+    task = asyncio.create_task(run_audit_off_loop(_work))
+    assert await asyncio.to_thread(started.wait, 10.0)
+
+    task.cancel()
+    await asyncio.sleep(0.1)
+    task.cancel()  # the second cancellation (outer task / shutdown)
+    await asyncio.sleep(0.1)
+    assert not task.done(), "join abandoned after the second cancellation"
+
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    # The write landed BEFORE the cancellation became observable.
+    assert wrote == ["audit-write"]

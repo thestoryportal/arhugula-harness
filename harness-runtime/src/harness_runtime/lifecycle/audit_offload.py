@@ -110,7 +110,6 @@ _AUDIT_OFFLOAD_EXECUTOR: Final[_DaemonThreadAuditExecutor] = _DaemonThreadAuditE
 
 async def run_audit_off_loop(fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Any:
     """Run sync audit composition on the dedicated executor; join on cancel."""
-    loop = asyncio.get_running_loop()
     context = contextvars.copy_context()
     call = functools.partial(context.run, functools.partial(fn, *args, **kwargs))
     # Submit DIRECTLY (not run_in_executor): task cancellation marks the
@@ -131,17 +130,16 @@ async def run_audit_off_loop(fn: Callable[..., Any], /, *args: Any, **kwargs: An
         # hazard this module exists to avoid. The worker's own outcome is
         # suppressed — the step is being abandoned either way.
         if not concurrent_future.cancel():
-            joined = asyncio.Event()
-
-            def _join_then_signal() -> None:
-                with contextlib.suppress(BaseException):
-                    concurrent_future.result()
-                with contextlib.suppress(RuntimeError):
-                    loop.call_soon_threadsafe(joined.set)
-
-            threading.Thread(
-                target=_join_then_signal, daemon=True, name="harness-audit-join"
-            ).start()
-            with contextlib.suppress(asyncio.CancelledError):
-                await joined.wait()
+            # Join the uninterruptible worker across REPEATED cancellations
+            # (codex round-8 P1): a facade timeout followed by an outer
+            # task/shutdown cancellation delivered a second CancelledError
+            # that a single suppress absorbed once and then exited with the
+            # worker still running — the write could land after the caller
+            # observed cancellation. The no-post-cancel-write guarantee is
+            # only discharged when the worker has ACTUALLY finished, so each
+            # further CancelledError is absorbed and the join resumes
+            # (10ms poll, only during this already-cancelled window).
+            while not concurrent_future.done():
+                with contextlib.suppress(asyncio.CancelledError):
+                    await asyncio.sleep(0.01)
         raise

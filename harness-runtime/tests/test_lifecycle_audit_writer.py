@@ -1805,3 +1805,38 @@ def test_concurrent_appends_never_raise_non_monotonic(tmp_path: Path) -> None:
     assert errors == []
     entries = read_ledger(writer.ledger_writer.handle)
     assert verify_chain(entries).status is VerificationStatus.VALID
+
+
+def test_stale_timestamp_resamples_instead_of_orphaning_sidecar_row(tmp_path: Path) -> None:
+    """Codex round-8 P1 (PR B2a) — the append lock serializes AUDIT appends
+    only; an ordinary F2/state write to the same ledger can commit a newer
+    timestamp between our sampling and our IS append, which then raised
+    NonMonotonicTimestampError AFTER the sidecar row was durable (an
+    unanchored signature, audit record omitted). The IS append is
+    timestamp-independent for the sidecar identity, so a stale sample now
+    resamples and retries."""
+    ledger = _ledger_writer(tmp_path)
+    base = datetime(2026, 5, 19, 12, 0, 0, tzinfo=UTC)
+    # First append at t+5s; the SECOND append's first sample is STALE (t+1s
+    # — as if a competing writer committed t+5s after we sampled), and its
+    # retry sample is fresh (t+6s).
+    ticks = [
+        base + timedelta(seconds=5),
+        base + timedelta(seconds=1),
+        base + timedelta(seconds=6),
+        base + timedelta(seconds=7),
+    ]
+
+    def _scripted_clock() -> Timestamp:
+        return ticks.pop(0)
+
+    writer = RuntimeAuditLedgerWriter(ledger_writer=ledger, time_source=_scripted_clock)
+    first = _make_audit_entry("1" * 64)
+    second = _make_audit_entry("2" * 64)
+    assert writer.append("tenant-A", first) is WriteResult.APPENDED
+    assert writer.append("tenant-A", second) is WriteResult.APPENDED
+
+    entries = read_ledger(writer.ledger_writer.handle)
+    assert verify_chain(entries).status is VerificationStatus.VALID
+    hashes = [e.entry_hash for e in writer.read_full_entries_for_tenant("tenant-A")]
+    assert hashes == [first.entry_hash, second.entry_hash]
