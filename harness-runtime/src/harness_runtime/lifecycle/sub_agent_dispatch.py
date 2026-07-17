@@ -726,6 +726,21 @@ class RuntimeSubAgentDispatcher:
             entry_core = StateLedgerEntryRef(str(dispatch_action_id))
 
             # 8c — convert CP → OD (signing happens inside the converter).
+            #
+            # NOT routed through run_audit_off_loop (out-of-family Codex
+            # rounds 2 + 7 on PR B2a — registered as forward item B-48):
+            # this dispatcher is the U-RT-60 wrap-asymmetry fork's SYNC
+            # C-RT-17 inner, invoked directly on the event loop by
+            # RuntimeHITLGateComposer._dispatch_inner (the fork's Q3-RATIFIED
+            # reading). A sync function cannot await; blocking this loop
+            # thread on an offload future waits exactly as long as signing
+            # inline does — the loop stays blocked either way, as it already
+            # does for the ENTIRE sub-agent dispatch (child workflow
+            # execution, seconds-long, pre-existing). The effective fix is
+            # offloading the whole sync inner dispatch — a Class 2 fork
+            # revision with recursion-aware executor design and pause/resume
+            # + fan-out re-validation, owned by B-48 at
+            # .harness/forward-register.yaml.
             od_entry = cp_audit_to_od_audit(
                 cp_entry,
                 key_id=self.audit_signing_key_id,
