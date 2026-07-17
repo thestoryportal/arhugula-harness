@@ -210,8 +210,20 @@ async def flush_observability(
         # (nothing durable to flush); only a FAILING fsync of an existing
         # sidecar is a flush failure.
         if sidecar_path is not None and sidecar_path.exists():
-            fd = os.open(str(sidecar_path), os.O_RDONLY)
+            # Non-blocking + regular-file check (round-35 codex): a
+            # pre-created FIFO here made a blocking O_RDONLY open hang the
+            # ENTIRE shutdown before any failure could be recorded. Mirrors
+            # the writer's validated-open discipline; a non-regular target
+            # is recorded as an audit_sidecar flush failure, never a hang.
+            flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)
+            if sys.platform != "win32":
+                flags |= os.O_NOFOLLOW
+            fd = os.open(str(sidecar_path), flags)
             try:
+                import stat as _stat
+
+                if not _stat.S_ISREG(os.fstat(fd).st_mode):
+                    raise ValueError(f"sidecar {sidecar_path} is not a regular file")
                 os.fsync(fd)
             finally:
                 os.close(fd)

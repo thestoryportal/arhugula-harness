@@ -476,6 +476,10 @@ class _ImmutableKeyArns(dict[str, str]):
 
     __setitem__ = _refuse
     __delitem__ = _refuse
+    # `cfg.key_arns |= {...}` mutates in place BEFORE the frozen-field
+    # re-assignment raises (round-35 codex) — a caught ValidationError would
+    # leave the "immutable" mapping changed.
+    __ior__ = _refuse  # type: ignore[assignment]
     update = _refuse  # type: ignore[assignment]
     pop = _refuse  # type: ignore[assignment]
     popitem = _refuse  # type: ignore[assignment]

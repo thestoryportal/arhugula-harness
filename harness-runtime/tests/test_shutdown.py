@@ -979,6 +979,25 @@ async def test_flush_observability_fsyncs_audit_sidecar_when_present(
 
 
 @pytest.mark.asyncio
+async def test_flush_records_failure_for_fifo_sidecar_without_hanging(tmp_path: Path) -> None:
+    """Codex round-35 (PR B1) — a pre-created FIFO at the sidecar path made
+    shutdown's blocking O_RDONLY open hang the entire flush. The open is now
+    non-blocking + regular-file-checked: the flush completes and records an
+    audit_sidecar failure instead of hanging."""
+    ledger_path = tmp_path / "state.jsonl"
+    ledger_path.write_text("entry-1\n")
+    fifo_path = tmp_path / "audit-entries.jsonl"
+    os.mkfifo(fifo_path)
+
+    tracer = _FakeTracerProvider(returns=True)
+    ctx = _ctx_with(tmp_path, tracer=tracer, ledger_path=ledger_path)
+    ctx.audit_writer = SimpleNamespace(sidecar_path=fifo_path)
+
+    report = await flush_observability(ctx)
+    assert "audit_sidecar" in report.failures
+
+
+@pytest.mark.asyncio
 async def test_flush_observability_absent_sidecar_is_clean_noop(tmp_path: Path) -> None:
     """No sidecar (nothing ever appended) and no audit_writer attribute are
     both clean no-ops — never a flush failure."""

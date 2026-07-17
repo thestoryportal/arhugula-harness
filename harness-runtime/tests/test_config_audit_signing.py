@@ -149,6 +149,19 @@ def test_config_deepcopy_and_model_copy_survive_immutability() -> None:
         duplicate.key_arns["harness-runtime-redaction-token"] = ""  # type: ignore[index]
 
 
+def test_ior_operator_cannot_mutate_key_arns() -> None:
+    """Codex round-35 (PR B1) — `cfg.key_arns |= {...}` mutated the mapping
+    in place BEFORE the frozen-field re-assignment raised; a caught error
+    left the 'immutable' mapping changed with an unvalidated value."""
+    config = AuditSigningConfig(
+        backend=AuditSigningBackendKind.AWS_KMS,
+        key_arns={"harness-runtime-redaction-token": _ARN},
+    )
+    with pytest.raises((TypeError, ValidationError)):
+        config.key_arns |= {"evil": ""}  # type: ignore[operator, misc]
+    assert dict(config.key_arns) == {"harness-runtime-redaction-token": _ARN}
+
+
 def test_default_key_arns_is_immutable_too() -> None:
     """Codex round-20 (PR B1) — pydantic skips field validators on defaults
     unless validate_default is set, so the DEFAULT config's key_arns stayed a
