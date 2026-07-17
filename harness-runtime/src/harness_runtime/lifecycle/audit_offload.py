@@ -55,6 +55,14 @@ AUDIT_OFFLOAD_MAX_WORKERS: Final[int] = 4
 #: short enough that a stalled backend cannot hold process exit.
 AUDIT_CANCEL_JOIN_GRACE_SECONDS: Final[float] = 10.0
 
+#: Hard bound on concurrently-detached (stalled, still-running) workers
+#: (codex round-15 P1): each detach spawns replacement capacity, so
+#: sustained traffic against a hung KMS would otherwise accumulate
+#: unbounded threads and in-flight requests. At the cap, further detaches
+#: stop releasing capacity — later audit jobs queue and their callers hit
+#: their own bounded timeouts instead of growing the pool.
+AUDIT_DETACHED_WORKER_CAP: Final[int] = 8
+
 
 class _DaemonThreadAuditExecutor:
     """Hand-rolled daemon-thread work queue (framework-pull discipline).
@@ -84,6 +92,9 @@ class _DaemonThreadAuditExecutor:
         # boundary-race no-op (the job finished between the caller's done()
         # check and this lock: nothing to release, no marker to leak).
         self._serving: set[Future[Any]] = set()
+        # Detached workers whose stalled call is still running (codex
+        # round-15 P1) — bounded by AUDIT_DETACHED_WORKER_CAP.
+        self._detached_live = 0
         # Jobs submitted and not yet finished (codex round-6 P1): the
         # earlier idle-count heuristic never RESERVED the idle capacity a
         # burst observed, so four jobs after a warm-up all saw idle > 0 and
@@ -95,15 +106,20 @@ class _DaemonThreadAuditExecutor:
         future: Future[Any] = Future()
         with self._lock:
             self._outstanding += 1
-            if self._spawned < min(self._max_workers, self._outstanding):
-                self._spawned += 1
-                threading.Thread(
-                    target=self._worker,
-                    daemon=True,
-                    name=f"harness-audit-offload-{self._spawned}",
-                ).start()
+            self._spawn_for_demand_locked()
         self._queue.put((future, fn))
         return future
+
+    def _spawn_for_demand_locked(self) -> None:
+        """Spawn a worker when outstanding demand warrants — caller holds
+        the lock."""
+        if self._spawned < min(self._max_workers, self._outstanding):
+            self._spawned += 1
+            threading.Thread(
+                target=self._worker,
+                daemon=True,
+                name=f"harness-audit-offload-{self._spawned}",
+            ).start()
 
     def release_stalled_slot(self, stalled_future: Future[Any]) -> None:
         """Recover pool capacity after a detach (codex round-12 P1).
@@ -123,8 +139,26 @@ class _DaemonThreadAuditExecutor:
                 # Releasing here would leak an unconsumed retire marker and
                 # spawn a replacement alongside a live worker.
                 return
+            if self._detached_live >= AUDIT_DETACHED_WORKER_CAP:
+                # Codex round-15 P1: unlimited detach-driven replacement
+                # would grow threads + in-flight KMS calls without bound
+                # against a hung backend. At the cap, keep the slot
+                # occupied — later jobs queue and their callers time out
+                # boundedly instead.
+                logging.getLogger("harness.runtime.audit_signing").error(
+                    "audit-offload detached-worker cap (%d) reached — not "
+                    "releasing further capacity while stalled calls are "
+                    "outstanding; subsequent audit jobs will queue",
+                    AUDIT_DETACHED_WORKER_CAP,
+                )
+                return
+            self._detached_live += 1
             self._spawned = max(0, self._spawned - 1)
             self._retire_after.add(stalled_future)
+            # Codex round-15 P1 (queued-orphan half): worker creation
+            # otherwise happens only in submit() — jobs ALREADY queued when
+            # every worker detached would hang until some later submission.
+            self._spawn_for_demand_locked()
 
     def _worker(self) -> None:
         while True:
@@ -153,6 +187,8 @@ class _DaemonThreadAuditExecutor:
                 self._outstanding -= 1
                 retire = future in self._retire_after
                 self._retire_after.discard(future)
+                if retire:
+                    self._detached_live -= 1
         return retire
 
 

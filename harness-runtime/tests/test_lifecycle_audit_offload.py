@@ -461,3 +461,93 @@ def test_release_is_noop_when_worker_already_finished() -> None:
     executor.release_stalled_slot(future)
     assert executor._spawned == spawned_before
     assert future not in executor._retire_after
+
+
+@pytest.mark.asyncio
+async def test_already_queued_job_served_after_detaching_all_workers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Codex round-15 P1 — worker creation happened only in submit(): a job
+    ALREADY queued when every worker detached hung until some later
+    submission. The release path now spawns replacement capacity for
+    existing outstanding demand."""
+    from harness_runtime.lifecycle import audit_offload as offload_module
+    from harness_runtime.lifecycle.audit_offload import AUDIT_OFFLOAD_MAX_WORKERS
+
+    monkeypatch.setattr(offload_module, "AUDIT_CANCEL_JOIN_GRACE_SECONDS", 0.2)
+
+    started = threading.Barrier(AUDIT_OFFLOAD_MAX_WORKERS + 1, timeout=10.0)
+    release = threading.Event()
+
+    def _stalled() -> None:
+        started.wait()
+        release.wait(timeout=30.0)
+
+    stall_tasks = [
+        asyncio.create_task(run_audit_off_loop(_stalled)) for _ in range(AUDIT_OFFLOAD_MAX_WORKERS)
+    ]
+    await asyncio.to_thread(started.wait)
+
+    # Queue one MORE job while every worker is stalled — no further submits
+    # will follow it.
+    queued = asyncio.create_task(run_audit_off_loop(lambda: "served"))
+    await asyncio.sleep(0.05)
+
+    for task in stall_tasks:
+        task.cancel()
+    for task in stall_tasks:
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(asyncio.shield(task), timeout=5.0)
+
+    assert await asyncio.wait_for(queued, timeout=5.0) == "served"
+    release.set()
+
+
+def test_detached_worker_cap_stops_capacity_release(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Codex round-15 P1 — unlimited detach-driven replacement grows threads
+    and in-flight KMS calls without bound against a hung backend. At the
+    cap, release keeps the slot occupied (jobs queue; callers time out
+    boundedly)."""
+    import time as time_module
+
+    from harness_runtime.lifecycle import audit_offload as offload_module
+    from harness_runtime.lifecycle.audit_offload import _DaemonThreadAuditExecutor
+
+    monkeypatch.setattr(offload_module, "AUDIT_DETACHED_WORKER_CAP", 1)
+
+    executor = _DaemonThreadAuditExecutor(2)
+    release = threading.Event()
+    started = threading.Barrier(3, timeout=10.0)
+
+    def _stalled() -> None:
+        started.wait()
+        release.wait(timeout=30.0)
+
+    futures = [executor.submit(_stalled) for _ in range(2)]
+    started.wait()
+
+    executor.release_stalled_slot(futures[0])  # honored (cap 1)
+    executor.release_stalled_slot(futures[1])  # refused at the cap
+    with executor._lock:
+        assert executor._detached_live == 1
+        # Honored release: slot freed AND replacement spawned for the
+        # outstanding demand (net 2). The REFUSED release changed nothing —
+        # without the cap it would have pushed detached_live to 2 and
+        # spawned another replacement.
+        assert executor._spawned == 2
+
+    def _detached_live_now() -> int:
+        # Function boundary defeats pyright literal-narrowing (the value is
+        # mutated by worker threads).
+        with executor._lock:
+            return executor._detached_live
+
+    release.set()
+    deadline = time_module.monotonic() + 5.0
+    while time_module.monotonic() < deadline:
+        if _detached_live_now() == 0:
+            break
+        time_module.sleep(0.02)
+    assert _detached_live_now() == 0  # retired worker returned its token
