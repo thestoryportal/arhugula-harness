@@ -374,7 +374,25 @@ class RuntimeAuditLedgerWriter:
             if os.read(fd, 1) == b"\n":
                 return
             os.lseek(fd, 0, os.SEEK_SET)
-            data = os.read(fd, size)
+            # Drain the FULL file before choosing a truncation point (codex
+            # round-38 P1): a short os.read here made rfind search only a
+            # prefix — ftruncate then destroyed every valid signed record
+            # after it.
+            chunks: list[bytes] = []
+            remaining = size
+            while remaining > 0:
+                chunk = os.read(fd, remaining)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            data = b"".join(chunks)
+            if len(data) != size:
+                raise OSError(
+                    f"could not drain sidecar for torn-tail heal: read "
+                    f"{len(data)} of {size} bytes — refusing to truncate on "
+                    f"partial knowledge"
+                )
             keep = data.rfind(b"\n") + 1  # 0 when no completed record exists
             os.ftruncate(fd, keep)
         finally:

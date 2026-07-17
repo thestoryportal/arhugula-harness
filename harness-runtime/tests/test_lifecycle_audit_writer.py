@@ -1261,6 +1261,41 @@ def test_short_reads_never_mark_unread_suffix_as_folded(tmp_path: Path) -> None:
     assert len(writer_b.read_full_entries_for_tenant("tenant-s")) == 1
 
 
+def test_heal_with_short_reads_never_truncates_valid_records(tmp_path: Path) -> None:
+    """Codex round-38 P1 (PR B1) — a short os.read during the torn-tail heal
+    made rfind search only a prefix, and ftruncate destroyed every valid
+    signed record after it. With reads capped to 7 bytes/call, healing a
+    multi-record file with a torn fragment must keep every complete record."""
+    import unittest.mock as mock
+
+    from harness_runtime.lifecycle import audit_writer as audit_writer_module
+
+    writer = _writer(tmp_path)
+    first = _make_audit_entry("1" * 64)
+    second = _make_audit_entry("2" * 64)
+    lost = _make_audit_entry("3" * 64)
+    writer.append("tenant-A", first)
+    writer.append("tenant-A", second)
+    writer.append("tenant-A", lost)
+
+    # Tear the final record.
+    raw = writer.sidecar_path.read_bytes()
+    lines = raw.splitlines(keepends=True)
+    writer.sidecar_path.write_bytes(b"".join(lines[:-1]) + lines[-1][: len(lines[-1]) // 2])
+
+    real_read = audit_writer_module.os.read
+
+    def _short_read(fd: int, n: int) -> bytes:
+        return real_read(fd, min(n, 7))
+
+    with mock.patch.object(audit_writer_module.os, "read", _short_read):
+        # NOOP replay heals the torn tail then re-lands the lost record.
+        assert writer.append("tenant-A", lost) is WriteResult.IDEMPOTENT_NOOP
+
+    hashes = [e.entry_hash for e in writer.read_full_entries_for_tenant("tenant-A")]
+    assert hashes == [first.entry_hash, second.entry_hash, lost.entry_hash]
+
+
 def test_deleted_sidecar_with_surviving_is_refs_fails_loud(tmp_path: Path) -> None:
     """Codex round-36 P1 (PR B1) — after entries exist, a deleted sidecar
     silently presented an empty history, and the next append minted a
