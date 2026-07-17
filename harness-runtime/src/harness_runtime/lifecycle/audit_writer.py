@@ -715,7 +715,22 @@ class RuntimeAuditLedgerWriter:
                     row = json.loads(line)
                     if row["tenant_tag"] != tag:
                         continue
-                    entries.append(AuditLedgerEntry.model_validate(row["entry"]))
+                    entry = AuditLedgerEntry.model_validate(row["entry"])
+                    # Round-42 codex: the reader needs the same round-17
+                    # content recompute as the append-side fold — a payload
+                    # modified with its stale entry_hash retained still
+                    # passes schema validation AND the coverage check (the
+                    # unchanged hash matches the IS ref), silently feeding
+                    # tampered content to verifiers and chain tail seeding.
+                    recomputed = compute_entry_hash(entry.payload)
+                    if recomputed != entry.entry_hash:
+                        raise ValueError(
+                            f"sidecar row for tenant_tag={tag!r} fails "
+                            f"content-integrity on read: stored "
+                            f"entry_hash={entry.entry_hash!r} but recomputed "
+                            f"{recomputed!r} — tampered or corrupt row"
+                        )
+                    entries.append(entry)
         # Round-40 P1 (reader half): a sidecar truncated to a newline
         # boundary rehydrates only the surviving rows — every IS ref for
         # this tenant must still be covered, or the verifier is silently

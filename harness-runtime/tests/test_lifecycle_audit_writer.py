@@ -1233,6 +1233,31 @@ def test_fifo_sidecar_rejected_on_read_without_hanging(tmp_path: Path) -> None:
         writer.read_full_entries_for_tenant("tenant-A")
 
 
+def test_reader_rejects_tampered_payload_with_stale_hash(tmp_path: Path) -> None:
+    """Codex round-42 P1 (PR B1) — a payload modified with its stale
+    entry_hash retained passed schema validation AND the coverage check (the
+    unchanged hash matches the IS ref), silently feeding tampered content to
+    verifiers. The reader now recomputes content integrity like the
+    append-side fold."""
+    import json as json_module
+
+    writer = _writer(tmp_path)
+    writer.append("tenant-A", _make_audit_entry("1" * 64))
+
+    rows = [
+        json_module.loads(line)
+        for line in writer.sidecar_path.read_text().splitlines()
+        if line.strip()
+    ]
+    rows[0]["entry"]["payload"]["prior_entry_hash"] = "f" * 64  # stale hash kept
+    writer.sidecar_path.write_text(
+        "\n".join(json_module.dumps(r, separators=(",", ":")) for r in rows) + "\n"
+    )
+
+    with pytest.raises(ValueError, match="content-integrity on read"):
+        writer.read_full_entries_for_tenant("tenant-A")
+
+
 def test_colon_bearing_tenant_id_round_trips_all_guards(tmp_path: Path) -> None:
     """Codex round-41 (PR B1) — a tenant id containing ':' (action_id
     'audit:tenant:west:<hash>') made the left-split coverage parse report
