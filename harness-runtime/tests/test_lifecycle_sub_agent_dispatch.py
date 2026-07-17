@@ -327,6 +327,7 @@ def _dispatcher(
     child_result: RunResult | None = None,
     audit_writer_override: RuntimeAuditLedgerWriter | None = None,
     ledger_writer_override: LedgerWriter | None = None,
+    signing_backend: Any | None = None,
 ) -> tuple[RuntimeSubAgentDispatcher, _MockChildWorkflowRunner, InMemorySpanExporter]:
     """Compose a RuntimeSubAgentDispatcher with mocked child runner + real
     handoff/topology registries + real `LedgerWriter` + `RuntimeAuditLedgerWriter`
@@ -359,6 +360,7 @@ def _dispatcher(
         audit_signing_algorithm=SignatureAlgorithm.ED25519,
         time_source=lambda: datetime.now(UTC),
         procedural_tier_snapshot_resolver=lambda: _Identifier("b" * 64),
+        signing_backend=signing_backend,
     )
     return dispatcher, runner, exporter
 
@@ -2002,3 +2004,43 @@ def test_orchestrator_seed_distinct_from_worker_seed(tmp_path: Path) -> None:
 
 
 _ = cast
+
+
+# ---------------------------------------------------------------------------
+# B-47 PR B2a merge-gate round-1 — signing-backend USE-half witness
+# ---------------------------------------------------------------------------
+
+
+class _CountingBackend:
+    algorithm = "ed25519"
+
+    def __init__(self) -> None:
+        self.sign_calls = 0
+
+    def sign(self, *, message: bytes, key_id: str, key_period: int) -> bytes:
+        self.sign_calls += 1
+        return b"c" * 64  # genuine ed25519 width — the OD seam validates length
+
+    def verify(self, *, message: bytes, signature: bytes, key_id: str, key_period: int) -> bool:
+        return True
+
+
+def test_signing_backend_is_passed_into_audit_composition(tmp_path: Path) -> None:
+    """Merge-gate round-1 BLOCK (PR B2a) — USE-half witness: the bootstrap
+    witness proves the field is SET; this proves the field is PASSED into
+    composition.
+
+    Drives the real success-path dispatch (which reaches
+    `_compose_and_persist_audit` at step 8) with a counting backend on the
+    dispatcher — substep 8c's `cp_audit_to_od_audit(...,
+    backend=self.signing_backend)` kwarg must deliver the backend to the OD
+    signing seam (sign invoked), not merely hold it as an inert field.
+    """
+    backend = _CountingBackend()
+    dispatcher, _runner, _exporter = _dispatcher(tmp_path, signing_backend=backend)
+    result = dispatcher.dispatch(_binding(), _step(), step_context=_step_context())
+    assert result == {"child_field": "value"}
+    assert backend.sign_calls >= 1, (
+        "USE-half: the dispatcher's signing_backend must be passed into "
+        "cp_audit_to_od_audit at 8c (backend.sign never invoked)"
+    )

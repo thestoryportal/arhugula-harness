@@ -394,3 +394,79 @@ async def test_repeat_deliver_webhook_same_idempotency_key_gets_distinct_f2_entr
     )
     entry_cores = {str(e[1].payload.entry_core) for e in audit_writer.appended}
     assert len(entry_cores) == 2, "each call's audit entry must reference its OWN F2 anchor"
+
+
+# ---------------------------------------------------------------------------
+# B-47 PR B2a merge-gate round-1 — signing-backend USE-half witness
+# ---------------------------------------------------------------------------
+
+
+class _CountingBackend:
+    algorithm = "ed25519"
+
+    def __init__(self) -> None:
+        self.sign_calls = 0
+
+    def sign(self, *, message: bytes, key_id: str, key_period: int) -> bytes:
+        self.sign_calls += 1
+        return b"c" * 64  # genuine ed25519 width — the OD seam validates length
+
+    def verify(self, *, message: bytes, signature: bytes, key_id: str, key_period: int) -> bool:
+        return True
+
+
+class _RecordingAuditWriter:
+    def __init__(self) -> None:
+        self.appended: list[tuple[str | None, object]] = []
+
+    def append(self, tenant_id: str | None, audit_entry: object) -> object:
+        self.appended.append((tenant_id, audit_entry))
+        return "appended"
+
+
+def test_signing_backend_is_passed_into_cost_audit_composition() -> None:
+    """Merge-gate round-1 BLOCK (PR B2a) — USE-half witness: the bootstrap
+    witness proves the field is SET; this proves the field is PASSED into
+    composition.
+
+    Calls the real sync `_attribute_webhook_cost_best_effort` helper (the
+    connecting line under test) with the cost substrates + a counting backend
+    on the composer — the `signing_backend=self._signing_backend` kwarg must
+    deliver the backend to `attribute_webhook_dispatch_cost` and on to the OD
+    signing seam (sign invoked), not merely hold it as an inert field.
+    """
+    from decimal import Decimal
+
+    from harness_od.rate_table_types import RateTable, WebhookRate
+    from harness_runtime.lifecycle.cost_attribution import RuntimeCostAttributionChain
+
+    rate_table = RateTable(
+        version="2026-07-17-use-half-witness",
+        providers={},
+        tool_rates={},
+        webhook_rate=WebhookRate(flat_per_attempt=Decimal("0.01"), plus_egress=False),
+        cpu_rate_per_ms=Decimal("0.001"),
+        egress_rate_per_byte=Decimal("0"),
+    )
+    backend = _CountingBackend()
+    audit_writer = _RecordingAuditWriter()
+    composer = WebhookDeliveryComposer(
+        retry_max_attempts=1,
+        rate_table=rate_table,
+        cost_chain=RuntimeCostAttributionChain(),
+        audit_writer=audit_writer,
+        signing_backend=backend,
+        workflow_id="wf-use-half",
+        parent_action_id="hitl:wf-use-half:gate:0",
+        parent_idempotency_key="parent-idem-1",
+    )
+    composer._attribute_webhook_cost_best_effort(
+        url="https://ops.example.com/hitl",
+        request_body={"summary": "approval needed"},
+        idempotency_key="webhook-1",
+    )
+    assert len(audit_writer.appended) == 1, "cost-attribution must have fired"
+    assert backend.sign_calls >= 1, (
+        "USE-half: the composer's signing_backend must be passed into "
+        "attribute_webhook_dispatch_cost (backend.sign never invoked)"
+    )

@@ -220,6 +220,7 @@ def _make_composer(
     applicable_placements: frozenset[HITLPlacementKind] = frozenset({HITLPlacementKind.PRE_ACTION}),
     ledger_writer: Any | None = None,
     audit_writer: Any | None = None,
+    signing_backend: Any | None = None,
 ) -> RuntimeHITLGateComposer:
     """Build composer fixture per U-RT-60 wrap-asymmetry fork (c) ratification.
 
@@ -240,6 +241,7 @@ def _make_composer(
         audit_signing_key_id="harness-runtime-test",
         audit_signing_algorithm=SignatureAlgorithm.ED25519,
         procedural_tier_snapshot_resolver=lambda: _Identifier("b" * 64),
+        signing_backend=signing_backend,
     )
 
 
@@ -3356,4 +3358,61 @@ async def test_sab_removal_effective_at_binding_local_mutation_no_resolver(
     assert result == {"inner_dispatched": True}
     assert surface.calls == [], (
         "binding LOCAL_MUTATION removal MUST skip (effective-blast override)"
+    )
+
+
+# ---------------------------------------------------------------------------
+# B-47 PR B2a merge-gate round-1 — signing-backend USE-half witness
+# ---------------------------------------------------------------------------
+
+
+class _CountingBackend:
+    algorithm = "ed25519"
+
+    def __init__(self) -> None:
+        self.sign_calls = 0
+
+    def sign(self, *, message: bytes, key_id: str, key_period: int) -> bytes:
+        self.sign_calls += 1
+        return b"c" * 64  # genuine ed25519 width — the OD seam validates length
+
+    def verify(self, *, message: bytes, signature: bytes, key_id: str, key_period: int) -> bool:
+        return True
+
+
+def test_signing_backend_is_passed_into_audit_composition(
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+) -> None:
+    """Merge-gate round-1 BLOCK (PR B2a) — USE-half witness: the bootstrap
+    witness proves the field is SET; this proves the field is PASSED into
+    composition.
+
+    Drives the real `_compose_and_persist_audit` helper (the connecting line
+    under test) with a counting backend on the composer — substep 8c-HITL's
+    `cp_audit_to_od_audit(..., backend=self.signing_backend)` kwarg must
+    deliver the backend to the OD signing seam (sign invoked), not merely
+    hold it as an inert field.
+    """
+    provider, _ = tracer_provider
+    backend = _CountingBackend()
+    composer = _make_composer(
+        inner=_MockInnerDispatcher(),
+        surface=_MockAskUserQuestionSurface([]),
+        tracer_provider=provider,
+        signing_backend=backend,
+    )
+    cp_entry, write_result = composer._compose_and_persist_audit(
+        parent_action_id=cast(Any, "workflow:test:step:0"),
+        placement=HITLPlacement(position=HITLPlacementKind.PRE_ACTION),
+        cell=cast(Any, None),
+        gate_result=None,
+        step_context=_make_step_context(),
+        raise_on_failure=True,
+        auto_approved=True,
+    )
+    assert cp_entry.response == HITLResponse.APPROVE.value
+    assert write_result is not None, "audit composition must complete (8d persisted)"
+    assert backend.sign_calls >= 1, (
+        "USE-half: the composer's signing_backend must be passed into "
+        "cp_audit_to_od_audit at 8c-HITL (backend.sign never invoked)"
     )
