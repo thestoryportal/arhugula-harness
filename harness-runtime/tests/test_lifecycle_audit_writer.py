@@ -861,3 +861,33 @@ def test_same_map_instance_reconciles_chain_after_partial_failure(tmp_path: Path
     verify_hash_chain_integrity(
         AuditLedger(entries=tuple(entries), cell_id=cell_7)
     )  # raises on breach
+
+
+def test_corrupt_keyed_sidecar_row_fails_appends_loud_not_silent(tmp_path: Path) -> None:
+    """Codex round-15 (PR B1) — a newline-terminated row carrying valid
+    identity keys but a corrupt entry body must not silently count as
+    membership (which would suppress the legitimate signed entry while the
+    IS ref still lands). Folding validates the whole entry and fails LOUD —
+    matching the reader's corrupt-row posture and preserving the row as
+    evidence (auto-repair could destroy tampering traces)."""
+    import json as json_module
+
+    import pydantic
+
+    writer = _writer(tmp_path)
+    good = _make_audit_entry("1" * 64)
+    writer.append("tenant-A", good)
+
+    corrupt_row = json_module.dumps(
+        {"tenant_tag": "tenant-A", "entry": {"entry_hash": "2" * 64}},
+        separators=(",", ":"),
+    )
+    with writer.sidecar_path.open("a", encoding="utf-8") as fh:
+        fh.write(corrupt_row + "\n")
+
+    fresh_writer = RuntimeAuditLedgerWriter(
+        ledger_writer=writer.ledger_writer,
+        time_source=writer.time_source,
+    )
+    with pytest.raises(pydantic.ValidationError):
+        fresh_writer.append("tenant-A", _make_audit_entry("3" * 64))

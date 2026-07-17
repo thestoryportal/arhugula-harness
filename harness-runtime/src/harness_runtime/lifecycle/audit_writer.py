@@ -339,7 +339,17 @@ class RuntimeAuditLedgerWriter:
             if not raw.strip():
                 continue
             row = json.loads(raw)
-            index.keys.add((row["tenant_tag"], row["entry"]["entry_hash"]))
+            # Validate the WHOLE entry before accepting the row as membership
+            # (codex round-15, PR B1): a newline-terminated row with valid
+            # identity keys but corrupt remaining fields must not silently
+            # suppress a legitimate re-append of the real signed entry —
+            # that would land an IS ref whose only full copy is the corrupt
+            # row. Fail-loud matches the reader's posture and preserves the
+            # corrupt row as evidence (auto-replacing it would destroy what
+            # may be tampering). Validation happens once per folded byte —
+            # no O(N²) regression.
+            entry = AuditLedgerEntry.model_validate(row["entry"])
+            index.keys.add((row["tenant_tag"], entry.entry_hash))
         index.offset = size
 
     def read_full_entries_for_tenant(self, tenant_id: str | None) -> list[AuditLedgerEntry]:
