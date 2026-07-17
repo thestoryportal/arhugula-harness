@@ -52,15 +52,14 @@
 
 
 snapshot:
-  total: 49
-  open: 0
-  design_substrate_gated: 2
-  registered_finding: 8
+  total: 54
+  open: 2
+  design_substrate_gated: 5
+  registered_finding: 7
   operator_gated: 1
   held: 1
-  closed: 37
-  identity_digest: 6e61a453f1b65f75
-  source: .harness/post-phase-8-forward-register.md
+  closed: 38
+  identity_digest: 7b7e74695d686680
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -780,7 +779,8 @@ items:
     *(surfaced at B-40''s own PR, out-of-family Codex round 4 + advisor(), 2026-07-15)*'
 - id: B-47
   title: AwsKmsSigningBackend has no production composition-root call site
-  status: registered_finding
+  status: closed
+  pr: '#1033 (PR A seam) + #1034 (PR B1 sidecar) + #1036 (PR B2a threading/breaker); remainder split to B-49..B-53 at the 2026-07-17 disposition'
   summary: 'B-36 (ADR-D8) selected + implemented AwsKmsSigningBackend and live-e2e-proved it against a
     real KMS key, but zero production code path constructs it and passes it as sign_audit_entry(backend=...)
     / verify_audit_entry_signature(backend=...). It is reachable only from tests. A MULTI_TENANT_COMPLIANCE
@@ -914,3 +914,63 @@ items:
     genuine recursion-depth bound question'
   heading: '### B-48 · Sync sub-agent dispatch executes on the event loop *(surfaced at B-47 PR B2a,
     out-of-family Codex round-2, 2026-07-17)*'
+- id: B-49
+  title: Per-family audit chain verifier
+  status: open
+  summary: 'B-47 disposition item (h): a tenant''s sidecar entries interleave independent OD chain
+    families (CXA v2.10 section 0.3 action-id prefixes discriminate); running verify_hash_chain_integrity
+    over the raw per-tenant sequence fails by construction. Buildable against cleared contracts: partition
+    by payload.entry_core prefix, verify per family. No spec surface.'
+  close_out: 'Build verify_per_family_chains(entries) in harness-runtime (or harness-od), witness with
+    interleaved multi-family fixtures + mutation probes; wire into harness-inspect if natural.'
+  council: 'no -- mechanical partition + existing verifier'
+  heading: '### B-49 · Per-family audit chain verifier *(split from B-47 disposition, 2026-07-17)*'
+- id: B-50
+  title: Sidecar scale engineering -- disk-backed membership index + POSIX cross-process chain atomicity
+  status: open
+  summary: 'B-47 disposition items (g)+(i): the in-memory membership index refolds full history at
+    restart (O(history) cold start); the redaction-chain tail-read+compose+append is not cross-process
+    atomic. Both impl-discretion within Tier-5''s committed properties (no spec fork -- corrected
+    grounding at the disposition doc). (i) fix is POSIX-only lock-scope widening of the B-40 lock;
+    Windows closure rides B-45.'
+  close_out: 'Disk-backed index (stdlib sqlite3 on the 3.12 baseline, or offset-checkpointed snapshot);
+    widen the B-40 lock across the token map''s tail-read+compose+append with a POSIX-only qualifier.'
+  council: 'no'
+  heading: '### B-50 · Sidecar scale engineering *(split from B-47 disposition, 2026-07-17)*'
+- id: B-51
+  title: Tenant-scope binding under deployment-scoped signing keys
+  status: design_substrate_gated
+  summary: 'B-47 disposition item (f): the section 21.2.1 canonical message does not bind tenant
+    identity; under a deployment-scoped key a signed entry could be re-presented under another tenant.
+    Recommendation recorded: require tenant-scoped key_ids at MTC now (config validation, zero
+    message-format risk) + fifth canonical-message segment at the next OD delta. Class 2 fork doc owed
+    before any code change.'
+  close_out: 'Author the Class 2 fork doc with the recorded recommendation; on ratification implement
+    the MTC key-scope validation, then the spec-delta segment at the next OD amendment arc.'
+  council: 'conditional -- C7 compliance vs C2 schema-minimalism at the fork leg'
+  heading: '### B-51 · Tenant-scope binding under deployment-scoped keys *(split from B-47 disposition,
+    2026-07-17)*'
+- id: B-52
+  title: Audit-signing fail-closed policy at MULTI_TENANT_COMPLIANCE
+  status: design_substrate_gated
+  summary: 'B-47 disposition item (m): signing failures are typed + loudly surfaced but dispatch stays
+    fail-open (CP section 28.10.4 invariant 2 is spec-committed). Recommendation recorded: mirror OD
+    v1.8 section C-OD-28.2''s operator-configurable default-fail-closed pattern via an
+    audit_signing_fail_closed flag, default ON at MTC -- needs an OD delta carving out the validator-hook
+    swallow. Class 2 fork doc owed.'
+  close_out: 'Author the Class 2 fork doc; on ratification add the flag + consult it at the six
+    loud-surface sites + the OD delta text.'
+  council: 'conditional -- C7 compliance vs C1/C9 reliability at the fork leg'
+  heading: '### B-52 · Audit-signing fail-closed policy at MTC *(split from B-47 disposition,
+    2026-07-17)*'
+- id: B-53
+  title: Migration-CLI promotion into the spec-committed scripts inventory
+  status: design_substrate_gated
+  summary: 'B-47 disposition item (j): python -m harness_runtime.admin.migrate_audit_sidecar works
+    today; promoting it to [project.scripts] extends the runtime spec section 13.4 committed CLI
+    inventory. LOW urgency; rides the next runtime-spec delta as a one-row addition.'
+  close_out: 'One-row scripts-inventory addition folded into the next runtime-spec delta + pyproject
+    entry; nothing blocks on it.'
+  council: 'no'
+  heading: '### B-53 · Migration-CLI scripts-inventory promotion *(split from B-47 disposition,
+    2026-07-17)*'
