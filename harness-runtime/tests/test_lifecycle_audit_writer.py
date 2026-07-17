@@ -1017,9 +1017,8 @@ def test_sidecar_fsynced_before_is_reference_lands(tmp_path: Path) -> None:
     sidecar row must be fsync'd BEFORE the IS reference is appended, or power
     loss could keep the ref while the signature row was never durable."""
     import os as os_module
-    import unittest.mock as mock
-
     import stat as stat_module
+    import unittest.mock as mock
 
     writer = _writer(tmp_path)
     events: list[str] = []
@@ -1054,3 +1053,22 @@ def test_sidecar_fsynced_before_is_reference_lands(tmp_path: Path) -> None:
     for pos in is_append_positions:
         assert "fsync_file" in events[prev + 1 : pos], events
         prev = pos
+
+
+def test_writer_instances_over_one_sidecar_share_the_in_process_lock(tmp_path: Path) -> None:
+    """Codex round-25 (PR B1) — a per-INSTANCE fallback lock left two writer
+    instances over one sidecar unserialized where the cross-process lock is
+    a no-op (Windows). The in-process lock is keyed on the resolved sidecar
+    path: same path ⇒ the SAME lock object; different path ⇒ different."""
+    writer_a = _writer(tmp_path)
+    writer_b = RuntimeAuditLedgerWriter(
+        ledger_writer=writer_a.ledger_writer,
+        time_source=writer_a.time_source,
+    )
+    assert writer_a._sidecar_thread_lock is writer_b._sidecar_thread_lock
+
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as other:
+        writer_c = _writer(Path(other))
+        assert writer_c._sidecar_thread_lock is not writer_a._sidecar_thread_lock

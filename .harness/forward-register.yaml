@@ -821,7 +821,13 @@ items:
     under another tenant without invalidating its signature (a TENANT-scoped key_id already binds the
     tenant; the gap is deployment-scoped keys). Resolve jointly with (e) at PR B -- options include binding
     tenant into AuditPayload attrs, a fifth canonical-message segment (spec delta), or requiring
-    tenant-scoped key_ids at MULTI_TENANT_COMPLIANCE. No live exposure at PR A (zero backends wired).'
+    tenant-scoped key_ids at MULTI_TENANT_COMPLIANCE. No live exposure at PR A (zero backends wired);
+    (g) bounds the sidecar membership index (out-of-family Codex round-24 on PR B1) -- the in-memory
+    identity-to-digest map grows linearly with complete audit history in a long-running MTC deployment.
+    A bounded LRU alone cannot work (membership must prove ABSENCE, which needs complete knowledge or
+    a full scan), so the fix is a disk-backed index -- intersecting C-OD-21 section 21.2 and its own
+    hash-chained-SQLite storage commitment for the Tier-5 audit ledger; resolve jointly with the
+    (e)/(f) persistence-substrate design at PR B2 (JSONL sidecar vs SQLite is the real fork).'
   council: 'conditional -- mechanical composition-root wiring once a real sign_audit_entry call site exists;
     revisit if the call-site design itself surfaces a cross-axis tension'
   heading: '### B-47 · `AwsKmsSigningBackend` has no production composition-root call site *(surfaced

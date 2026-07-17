@@ -124,6 +124,21 @@ def _full_entry_digest(entry: AuditLedgerEntry) -> str:
     return hashlib.sha256(entry.model_dump_json().encode("utf-8")).hexdigest()
 
 
+_SIDECAR_LOCKS: dict[str, threading.Lock] = {}
+_SIDECAR_LOCKS_GUARD = threading.Lock()
+
+
+def _sidecar_lock_for(path: Path) -> threading.Lock:
+    """One in-process lock per resolved sidecar path (rounds 4 + 25)."""
+    key = str(path.resolve())
+    with _SIDECAR_LOCKS_GUARD:
+        lock = _SIDECAR_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _SIDECAR_LOCKS[key] = lock
+        return lock
+
+
 @dataclass(frozen=True, slots=True)
 class RuntimeAuditLedgerWriter:
     """Runtime multi-tenant audit-ledger writer (C-RT-04 `audit_writer`).
@@ -139,12 +154,17 @@ class RuntimeAuditLedgerWriter:
     time_source: Callable[[], Timestamp]
     """Timestamp injection point (test determinism). Default: `datetime.now(UTC)`."""
 
-    _sidecar_thread_lock: threading.Lock = field(default_factory=threading.Lock, init=False)
-    """In-process half of the sidecar critical section (out-of-family Codex
-    round-4 P2): `cross_process_write_lock` degrades to a no-op on Windows
-    and its own contract says callers retain their own `threading.Lock` —
-    without one, two in-process producers could both pass the membership
-    scan and append duplicate/interleaved rows there."""
+    @property
+    def _sidecar_thread_lock(self) -> threading.Lock:
+        """In-process half of the sidecar critical section, SHARED across all
+        writer instances targeting the same sidecar path (out-of-family Codex
+        rounds 4 + 25): `cross_process_write_lock` degrades to a no-op on
+        Windows and its contract says callers retain their own
+        `threading.Lock` — a per-INSTANCE lock left two writers over one
+        sidecar unserialized in the same process. Keyed on the resolved path
+        via a module-level registry (the IS writer's module-level-lock
+        pattern)."""
+        return _sidecar_lock_for(self._sidecar_path)
 
     _sidecar_index: _SidecarMembershipIndex = field(
         default_factory=lambda: _SidecarMembershipIndex(), init=False
