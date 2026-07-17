@@ -670,3 +670,35 @@ async def test_stage_4_validates_signing_before_one_shot_tracer_registration(
             await stage_4_od.execute(ctx, config, WorkloadClass.SOFTWARE_ENGINEERING)
 
     assert tracer_calls == []  # the one-shot registrar was never invoked
+
+
+def test_restarted_stage_tokenizers_never_collide_tokens(tmp_path: Path) -> None:
+    """Codex round-29 (B-47 PR B1) — the tokenizer counter restarts at 1 per
+    construction while the durable sidecar retains prior mappings; without a
+    run-unique namespace two runs mint the SAME token for different raw
+    values, making token-to-raw lookup ambiguous. Two stage constructions
+    (simulated restart) must produce disjoint tokens."""
+    tokens: list[str] = []
+    for run in range(2):
+        audit_writer = _RecordingAuditWriter()
+        in_memory = InMemorySpanExporter()
+        provider = _provider()
+        stage = materialize_span_processor_stage(
+            _config(
+                tmp_path,
+                persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+                tenant_id="tenant-ns",
+            ),
+            provider,
+            exporter=in_memory,
+            audit_writer=audit_writer,
+        )
+        assert stage.redaction_processor.tokenizer_enabled is True
+        tracer = provider.get_tracer(f"ns-run-{run}")
+        with tracer.start_as_current_span("anthropic.messages.create") as span:
+            span.set_attribute("gen_ai.input.messages", f"customer ssn run {run}")
+        stage.flush(timeout_millis=5000)
+        [(_tenant, entry)] = audit_writer.appended
+        tokens.append(entry.payload.audit_namespace_attrs["audit.redaction_token.token"])
+
+    assert tokens[0] != tokens[1], tokens

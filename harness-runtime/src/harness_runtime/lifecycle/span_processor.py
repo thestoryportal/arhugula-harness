@@ -61,6 +61,7 @@ unit attaches the BSP + exporter only.
 
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass
 
 from harness_core import DeploymentSurface, PersonaTier
@@ -286,6 +287,12 @@ def materialize_span_processor_stage(
         if tokenizer_will_bind:
             assert audit_writer is not None  # narrowed by tokenizer_will_bind
             tokenizer = OpaqueRedactionTokenizer(
+                # Run-unique token namespace (codex round-29): the tokenizer
+                # counter restarts at 1 per construction while the sidecar
+                # retains prior mappings — without a namespace, two runs mint
+                # identical tokens for DIFFERENT raw values, making the
+                # durable token-to-raw lookup ambiguous.
+                token_namespace=uuid.uuid4().hex[:12],
                 token_map=AuditLedgerRedactionTokenMap(
                     audit_writer=audit_writer,
                     tenant_id=config.tenant_id,
