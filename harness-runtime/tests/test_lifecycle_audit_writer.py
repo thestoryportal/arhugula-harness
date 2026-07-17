@@ -1163,3 +1163,34 @@ def test_membership_hit_retry_refsyncs_before_is_reference(tmp_path: Path) -> No
 
     assert "is_append" in events
     assert "fsync_file" in events[: events.index("is_append")], events
+
+
+def test_symlinked_sidecar_target_refused(tmp_path: Path) -> None:
+    """Codex round-31 P1 (PR B1) — on a shared state directory another
+    account can pre-create a symlink where the sidecar will land; a plain
+    open would follow it and append raw PII to an attacker-chosen target.
+    O_NOFOLLOW makes the append fail loud."""
+    import os as os_module
+
+    writer = _writer(tmp_path)
+    lure = tmp_path / "attacker-target.jsonl"
+    lure.write_text("")
+    os_module.symlink(lure, writer.sidecar_path)
+
+    with pytest.raises(OSError):
+        writer.append("tenant-A", _make_audit_entry("1" * 64))
+
+
+def test_permissive_preexisting_sidecar_refused(tmp_path: Path) -> None:
+    """Codex round-31 P1 (PR B1) — O_CREAT does not change an existing file's
+    mode: a pre-created group/other-readable sidecar would silently receive
+    raw values. Verified via fstat and refused loud with an explicit remedy."""
+    writer = _writer(tmp_path)
+    writer.sidecar_path.touch(mode=0o644)
+
+    with pytest.raises(ValueError, match="group/other-accessible"):
+        writer.append("tenant-A", _make_audit_entry("1" * 64))
+
+    # Operator remedy works: tighten the mode and the append proceeds.
+    writer.sidecar_path.chmod(0o600)
+    assert writer.append("tenant-A", _make_audit_entry("1" * 64)) is WriteResult.APPENDED

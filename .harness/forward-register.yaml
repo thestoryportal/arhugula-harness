@@ -829,7 +829,7 @@ items:
     hash-chained-SQLite storage commitment for the Tier-5 audit ledger; resolve jointly with the
     (e)/(f) persistence-substrate design at PR B2 (JSONL sidecar vs SQLite is the real fork); (h)
     partitions chain verification by producer family (out-of-family Codex round-30 on PR B1) -- a
-    tenant's sidecar entries interleave INDEPENDENT OD chain families (the CXA section 0.3 action-id
+    per-tenant sidecar entry set interleaves INDEPENDENT OD chain families (the CXA section 0.3 action-id
     prefixes are the discriminator; the converter chains on CP-side event hashes, the redaction-token
     map within itself), so the PR-B2 verifier must verify per family, never over the raw per-tenant
     sequence; global re-sequencing at sign time would touch spec-committed converter prior-hash

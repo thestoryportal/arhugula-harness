@@ -69,6 +69,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import stat
 import sys
 import threading
 from collections.abc import Callable
@@ -286,17 +287,57 @@ class RuntimeAuditLedgerWriter:
         )
 
     def _open_sidecar_for_append(self) -> int:
-        """Open (creating 0600 if absent) the sidecar for appending.
+        """Open (creating 0600 if absent) the sidecar for appending — refusing
+        unsafe pre-existing targets.
 
         Owner-only permissions at creation (out-of-family Codex P1 on the
         PR-B1 landing): the redaction-token path persists ORIGINAL PII /
         secret text under `audit.redaction_token.raw_value`, so under the
         common `022` umask a plain `open("a")` would land that content
-        world-readable on shared hosts. `os.open` applies the 0600 mode only
-        at creation — an operator who deliberately re-permissioned an
-        existing sidecar is not fought.
+        world-readable on shared hosts.
+
+        Pre-existing targets are VERIFIED, not trusted (codex round-31 P1):
+        `O_CREAT` does not change an existing file's mode and a plain open
+        follows symlinks, so on a shared state directory another account
+        could pre-create a symlink or a permissively-readable file and
+        harvest appended raw values. POSIX opens use `O_NOFOLLOW` (symlink →
+        `ELOOP`, fails loud) and the opened fd is `fstat`-checked: must be a
+        regular file, owned by the effective uid, with no group/other
+        permission bits. A deliberately re-permissioned file therefore fails
+        loud rather than silently receiving secrets — the operator's remedy
+        is explicit (chmod 600 or relocate), never a silent downgrade.
+        Windows carries the documented B-45 platform posture (no O_NOFOLLOW;
+        ACL semantics differ).
         """
-        return os.open(self._sidecar_path, os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
+        flags = os.O_CREAT | os.O_WRONLY | os.O_APPEND
+        if sys.platform != "win32":
+            flags |= os.O_NOFOLLOW
+        fd = os.open(self._sidecar_path, flags, 0o600)
+        if sys.platform == "win32":
+            return fd
+        try:
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode):
+                raise ValueError(
+                    f"sidecar {self._sidecar_path} is not a regular file "
+                    f"(mode={st.st_mode:o}) — refusing to append raw values"
+                )
+            if st.st_uid != os.geteuid():
+                raise ValueError(
+                    f"sidecar {self._sidecar_path} is owned by uid {st.st_uid}, "
+                    f"not the effective uid {os.geteuid()} — refusing to append "
+                    f"raw values to another account's file"
+                )
+            if st.st_mode & 0o077:
+                raise ValueError(
+                    f"sidecar {self._sidecar_path} is group/other-accessible "
+                    f"(mode={stat.S_IMODE(st.st_mode):o}) — raw redaction values "
+                    f"must stay owner-only; chmod 600 it (or remove it) and retry"
+                )
+        except BaseException:
+            os.close(fd)
+            raise
+        return fd
 
     def _heal_torn_tail_locked(self) -> None:
         """Truncate an unterminated final record (crash mid-write) — MUST be
