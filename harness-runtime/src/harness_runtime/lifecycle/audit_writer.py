@@ -109,11 +109,13 @@ class _SidecarMembershipIndex:
     a dataclass field pair) so the frozen writer can mutate it in place.
     """
 
-    __slots__ = ("digests", "offset")
+    __slots__ = ("digests", "inode", "mtime_ns", "offset")
 
     def __init__(self) -> None:
         self.digests: dict[tuple[str, str], str] = {}
         self.offset: int = 0
+        self.inode: int = -1
+        self.mtime_ns: int = -1
 
 
 def _full_entry_digest(entry: AuditLedgerEntry) -> str:
@@ -335,6 +337,9 @@ class RuntimeAuditLedgerWriter:
             # and advance past it.
             self._sidecar_index.digests[identity] = incoming_digest
             self._sidecar_index.offset += len(encoded)
+            post = self._sidecar_path.stat()
+            self._sidecar_index.inode = post.st_ino
+            self._sidecar_index.mtime_ns = post.st_mtime_ns
 
     def _refresh_sidecar_index_locked(self) -> None:
         """Incrementally fold NEW sidecar bytes into the membership index —
@@ -349,11 +354,28 @@ class RuntimeAuditLedgerWriter:
         in another process) — full rescan, rare by construction.
         """
         index = self._sidecar_index
-        size = self._sidecar_path.stat().st_size if self._sidecar_path.exists() else 0
-        if size < index.offset:
+        st = self._sidecar_path.stat() if self._sidecar_path.exists() else None
+        size = st.st_size if st is not None else 0
+        changed_identity = st is not None and (
+            st.st_ino != index.inode or st.st_mtime_ns != index.mtime_ns
+        )
+        if size < index.offset or (index.offset > 0 and changed_identity):
+            # Truncation (torn-tail heal elsewhere) OR the file changed under
+            # us without growing past our offset — e.g. an in-place same-size
+            # mutation while this writer stays alive (codex round-21: a
+            # size-equality short-circuit alone trusted a stale in-memory
+            # index over a tampered durable row). Full rescan; the round-17/19
+            # integrity checks then fire against the actual bytes. (A
+            # same-size mutation that also restores mtime_ns is
+            # adversarial-filesystem territory — the read-time verifier arc,
+            # B-47 remainder item (f), owns that tier.)
             index.digests.clear()
             index.offset = 0
-        if size == index.offset:
+        if st is not None and size == index.offset:
+            index.inode = st.st_ino
+            index.mtime_ns = st.st_mtime_ns
+            return
+        if st is None:
             return
         with self._sidecar_path.open("rb") as fh:
             fh.seek(index.offset)
@@ -390,6 +412,9 @@ class RuntimeAuditLedgerWriter:
                 )
             index.digests[(row["tenant_tag"], entry.entry_hash)] = _full_entry_digest(entry)
         index.offset = size
+        post = self._sidecar_path.stat()
+        index.inode = post.st_ino
+        index.mtime_ns = post.st_mtime_ns
 
     def read_full_entries_for_tenant(self, tenant_id: str | None) -> list[AuditLedgerEntry]:
         """Tenant-scoped FULL-entry reader over the item-(e) sidecar.

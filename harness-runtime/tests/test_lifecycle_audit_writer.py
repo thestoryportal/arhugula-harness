@@ -960,3 +960,23 @@ def test_signature_mutated_row_fails_replay_loud_not_silent_noop(tmp_path: Path)
     )
     with pytest.raises(ValueError, match="diverges from"):
         fresh_writer.append("tenant-A", entry)
+
+
+def test_same_size_in_place_mutation_detected_by_live_writer(tmp_path: Path) -> None:
+    """Codex round-21 (PR B1) — an in-place SAME-SIZE mutation of a durable
+    row while this writer stays alive left file size == index offset, so the
+    stale in-memory digest silently accepted the replay. File identity
+    (inode + mtime_ns) now forces a rescan, and the round-19 divergence
+    check fires against the actual bytes."""
+    writer = _writer(tmp_path)
+    entry = _make_audit_entry("1" * 64)
+    writer.append("tenant-A", entry)
+
+    raw = writer.sidecar_path.read_text()
+    assert "sig:11111111" in raw
+    mutated = raw.replace("sig:11111111", "sig:TAMPERED")  # same byte length
+    assert len(mutated) == len(raw)
+    writer.sidecar_path.write_text(mutated)
+
+    with pytest.raises(ValueError, match="diverges from"):
+        writer.append("tenant-A", entry)
