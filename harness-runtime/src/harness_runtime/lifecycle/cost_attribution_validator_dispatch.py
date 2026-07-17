@@ -52,6 +52,7 @@ Authority:
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, cast
@@ -386,7 +387,10 @@ class CostAttributingValidatorHook:
             f"{evaluation.burden_count}-{evaluation.result.outcome.value}-{branch_index}"
         )
 
-        attached = attribute_validator_dispatch_cost(
+        attached = await asyncio.to_thread(
+            # Codex round-1 P1 (PR B2a): KMS signing is sync network I/O —
+            # off-loop, same discipline as the composer paths.
+            attribute_validator_dispatch_cost,
             rate_table=self._rate_table,
             cost_chain=self._cost_chain,
             audit_writer=self._audit_writer,

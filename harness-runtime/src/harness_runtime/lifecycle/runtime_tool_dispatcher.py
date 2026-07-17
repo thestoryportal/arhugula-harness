@@ -29,6 +29,7 @@ Composition surface:
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import time
 from collections.abc import Callable, Mapping
@@ -544,6 +545,17 @@ class RuntimeToolDispatcher:
             effect_fence=effect_fence,
             effect_fencing_explicit=effect_fencing_explicit,
         )
+
+    async def _attribute_tool_cost_off_loop(self, *args: Any, **kwargs: Any) -> Any:
+        """Codex round-1 P1 (PR B2a) — run the sync compose helper off-thread.
+
+        With a real KMS backend the helper performs synchronous network
+        signing I/O (plus the pre-existing IS file writes + fsyncs); awaited
+        on the loop it would block every unrelated workflow for KMS latency.
+        `asyncio.to_thread` copies contextvars, so the run-scoped
+        cost-accumulator proxy still resolves.
+        """
+        return await asyncio.to_thread(self._attribute_tool_cost_best_effort, *args, **kwargs)
 
     def _attribute_tool_cost_best_effort(
         self,
@@ -1102,7 +1114,7 @@ class RuntimeToolDispatcher:
                 # U-OD-39 AC #1: cost-attribution invoked on every dispatch
                 # (success + failure paths). Failure-path response=None;
                 # per_output_byte cost_kind degrades to len('"null"')=6 bytes.
-                self._attribute_tool_cost_best_effort(
+                await self._attribute_tool_cost_off_loop(
                     outer_span=outer_span,
                     tool_id=tool_id,
                     tool_args=tool_args,
@@ -1115,7 +1127,7 @@ class RuntimeToolDispatcher:
                 self._emit_sandbox_violation(
                     tracer, MCPInvocationFailClass.PROTOCOL_ERROR, idempotency_key
                 )
-                self._attribute_tool_cost_best_effort(
+                await self._attribute_tool_cost_off_loop(
                     outer_span=outer_span,
                     tool_id=tool_id,
                     tool_args=tool_args,
@@ -1128,7 +1140,7 @@ class RuntimeToolDispatcher:
                 self._emit_sandbox_violation(
                     tracer, MCPInvocationFailClass.TRANSPORT, idempotency_key
                 )
-                self._attribute_tool_cost_best_effort(
+                await self._attribute_tool_cost_off_loop(
                     outer_span=outer_span,
                     tool_id=tool_id,
                     tool_args=tool_args,
@@ -1148,7 +1160,7 @@ class RuntimeToolDispatcher:
                 # U-OD-39 AC #1: cost-attribution on schema-violation failure.
                 # Response IS available here (validation failed AFTER call),
                 # so per_output_byte cost_kind reflects actual response bytes.
-                self._attribute_tool_cost_best_effort(
+                await self._attribute_tool_cost_off_loop(
                     outer_span=outer_span,
                     tool_id=tool_id,
                     tool_args=tool_args,
@@ -1175,7 +1187,7 @@ class RuntimeToolDispatcher:
             # AC #1 success branch + AC #3 mcp.tool.call piggyback (1 helper
             # invocation per dispatch attributes entire tool-dispatch surface
             # including nested mcp.tool.call span per §C-OD-26.2 table).
-            self._attribute_tool_cost_best_effort(
+            await self._attribute_tool_cost_off_loop(
                 outer_span=outer_span,
                 tool_id=tool_id,
                 tool_args=tool_args,

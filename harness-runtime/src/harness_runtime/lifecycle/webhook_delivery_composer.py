@@ -301,7 +301,7 @@ class WebhookDeliveryComposer:
         # billable per flat_per_attempt semantics). Best-effort swallow
         # mirrors `_attribute_tool_cost_best_effort` at
         # runtime_tool_dispatcher.py:285.
-        self._attribute_webhook_cost_best_effort(
+        await self._attribute_webhook_cost_off_loop(
             url=url,
             request_body=request_body,
             idempotency_key=idempotency_key,
@@ -314,6 +314,17 @@ class WebhookDeliveryComposer:
                 f"{delivery_attempts} terminal_status={last_status_code}"
             )
         return result
+
+    async def _attribute_webhook_cost_off_loop(self, *args: Any, **kwargs: Any) -> Any:
+        """Codex round-1 P1 (PR B2a) — run the sync compose helper off-thread.
+
+        With a real KMS backend the helper performs synchronous network
+        signing I/O (plus the pre-existing IS file writes + fsyncs); awaited
+        on the loop it would block every unrelated workflow for KMS latency.
+        `asyncio.to_thread` copies contextvars, so the run-scoped
+        cost-accumulator proxy still resolves.
+        """
+        return await asyncio.to_thread(self._attribute_webhook_cost_best_effort, *args, **kwargs)
 
     def _attribute_webhook_cost_best_effort(
         self,

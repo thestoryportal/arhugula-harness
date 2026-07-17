@@ -31,30 +31,37 @@ from tests.integration.conftest import WORKLOAD, build_config
 
 _ARN = "arn:aws:kms:us-east-1:111122223333:key/deadbeef-dead-beef-dead-beefdeadbeef"
 
-_WRAPPER_ATTRS = ("inner", "_inner", "post_evaluate_hook")
+_WRAPPER_ATTRS = ("inner", "_inner", "post_evaluate_hook", "dispatchers")
 _CARRIER_ATTRS = ("signing_backend", "_signing_backend")
 
 
-def _collect_signing_carriers(root: Any) -> dict[str, Any]:
-    """Walk wrapper chains from `root`, returning {class_name: carried value}
-    for every object that DECLARES a signing-backend attribute (value may be
-    None — that is exactly the mutation this witness exists to catch)."""
-    found: dict[str, Any] = {}
+def _collect_signing_carriers(root: Any) -> dict[int, tuple[str, Any]]:
+    """Walk wrapper chains from `root`, returning
+    {id(obj): (class_name, carried value)} for every object that DECLARES a
+    signing-backend attribute (value may be None — exactly the mutation this
+    witness exists to catch). Keyed by OBJECT IDENTITY (codex round-1 P2):
+    class-name keying collapsed the three RuntimeHITLGateComposer instances,
+    letting one correctly-wired composer mask a missing kwarg on another."""
+    found: dict[int, tuple[str, Any]] = {}
     seen: set[int] = set()
     frontier = [root]
     while frontier:
         obj = frontier.pop()
-        if obj is None or id(obj) in seen or len(seen) > 100:
+        if obj is None or id(obj) in seen or len(seen) > 200:
             continue
         seen.add(id(obj))
         for attr in _CARRIER_ATTRS:
             if hasattr(obj, attr):
-                found[type(obj).__name__] = getattr(obj, attr)
+                found[id(obj)] = (type(obj).__name__, getattr(obj, attr))
                 break
         for attr in _WRAPPER_ATTRS:
             nxt = getattr(obj, attr, None)
             if nxt is not None and not isinstance(nxt, (str, bytes, int, float, bool)):
                 frontier.append(nxt)
+        # Mapping roots (ctx.step_dispatchers carries a `dispatchers` dict;
+        # the walker's "dispatchers" wrapper-attr surfaces it here).
+        if isinstance(obj, dict):
+            frontier.extend(v for v in obj.values() if v is not None)
     return found
 
 
@@ -105,20 +112,28 @@ async def test_kms_backend_threads_into_every_reachable_audit_composer(
         "llm_dispatcher": ctx.llm_dispatcher,
         "sub_agent_dispatcher": ctx.sub_agent_dispatcher,
         "tool_dispatcher": ctx.tool_dispatcher,
+        # hitl_tool is reachable via step_dispatchers, NOT tool_dispatcher
+        # (codex round-1 P2).
+        "step_dispatchers": ctx.step_dispatchers,
         "webhook_delivery_composer": ctx.webhook_delivery_composer,
         "validator_framework": ctx.validator_framework,
     }
-    all_found: dict[str, Any] = {}
+    all_found: dict[int, tuple[str, Any]] = {}
     for root in roots.values():
         all_found.update(_collect_signing_carriers(root))
 
-    # Every carrier that DECLARES the seam must hold the ONE backend
-    # instance — a deleted threading kwarg leaves its None default here.
+    # Every carrier INSTANCE that declares the seam must hold the ONE
+    # backend — a deleted threading kwarg leaves its None default here.
     assert all_found, f"no signing carriers reachable from roots {list(roots)}"
-    wrong = {name: val for name, val in all_found.items() if val is not backend}
+    wrong = [(name, val) for name, val in all_found.values() if val is not backend]
     assert not wrong, f"carriers not threaded with ctx backend: {wrong!r}"
 
-    # The two dataclass composers this PR threads must be among the
-    # reachable carriers (guards against the walker silently losing them).
-    assert "RuntimeHITLGateComposer" in all_found
-    assert "RuntimeSubAgentDispatcher" in all_found
+    # All three RuntimeHITLGateComposer INSTANCES (inference / sub-agent /
+    # tool) plus the sub-agent dispatcher must be distinct reachable
+    # carriers — identity keying is what makes a single missing kwarg on
+    # ANY one of them fail the check above.
+    by_class: dict[str, int] = {}
+    for name, _val in all_found.values():
+        by_class[name] = by_class.get(name, 0) + 1
+    assert by_class.get("RuntimeHITLGateComposer", 0) >= 3, by_class
+    assert by_class.get("RuntimeSubAgentDispatcher", 0) >= 1, by_class

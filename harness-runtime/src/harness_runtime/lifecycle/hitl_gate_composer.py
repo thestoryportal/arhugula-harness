@@ -1033,6 +1033,17 @@ class RuntimeHITLGateComposer:
             delivery_result=delivery_result,
         )
 
+    async def _compose_and_persist_audit_off_loop(self, *args: Any, **kwargs: Any) -> Any:
+        """Codex round-1 P1 (PR B2a) — run the sync compose helper off-thread.
+
+        With a real KMS backend the helper performs synchronous network
+        signing I/O (plus the pre-existing IS file writes + fsyncs); awaited
+        on the loop it would block every unrelated workflow for KMS latency.
+        `asyncio.to_thread` copies contextvars, so the run-scoped
+        cost-accumulator proxy still resolves.
+        """
+        return await asyncio.to_thread(self._compose_and_persist_audit, *args, **kwargs)
+
     def _compose_and_persist_audit(
         self,
         *,
@@ -1331,7 +1342,7 @@ class RuntimeHITLGateComposer:
                 # sync step-4h `raise_on_failure` discipline. An EDIT with a None
                 # proposal is still audited (the attempt is recorded, edited_hash
                 # None) BEFORE the routing raise — the sync record-then-raise shape.
-                self._compose_and_persist_audit(
+                await self._compose_and_persist_audit_off_loop(
                     parent_action_id=resumed_parent_action_id,
                     placement=placement,
                     cell=cast(HITLMatrixCell, _SentinelMatrixCell()),
@@ -1520,7 +1531,7 @@ class RuntimeHITLGateComposer:
                     # mis-attribute an auto-approve audit; benign over-audit
                     # foreclosed per adversarial F2-01 / advisor pre-done #3).
                     if gate_decision is not None and policy_applied:
-                        self._compose_and_persist_audit(
+                        await self._compose_and_persist_audit_off_loop(
                             parent_action_id=parent_action_id,
                             placement=placement,
                             cell=cell,
@@ -1592,7 +1603,7 @@ class RuntimeHITLGateComposer:
                     if removal_effective:
                         # Removal applied → skip the gate. Auto-audit (fail-closed):
                         # a removed preventive gate NEVER goes live un-audited.
-                        self._compose_and_persist_audit(
+                        await self._compose_and_persist_audit_off_loop(
                             parent_action_id=parent_action_id,
                             placement=placement,
                             cell=cell,
@@ -1727,7 +1738,7 @@ class RuntimeHITLGateComposer:
                                 # Residual hard-timeout — the partial entry
                                 # (response="") consistent with the pre-existing
                                 # v1.9 RT-FAIL-HITL-GATE-TIMEOUT disposition.
-                                self._compose_and_persist_audit(
+                                await self._compose_and_persist_audit_off_loop(
                                     parent_action_id=parent_action_id,
                                     placement=placement,
                                     cell=cell,
@@ -1743,7 +1754,7 @@ class RuntimeHITLGateComposer:
                                 # populated rejection_reason_hash over a SYSTEM
                                 # reason) that AGREES with RT-FAIL-HITL-GATE-REJECTED
                                 # (NOT the vacuous response="" partial).
-                                self._compose_and_persist_audit(
+                                await self._compose_and_persist_audit_off_loop(
                                     parent_action_id=parent_action_id,
                                     placement=placement,
                                     cell=cell,
@@ -1828,7 +1839,7 @@ class RuntimeHITLGateComposer:
                     # is primary fault.
                     raise_on_audit_failure = gate_result.response != HITLResponse.REJECT
                     try:
-                        _, write_result = self._compose_and_persist_audit(
+                        _, write_result = await self._compose_and_persist_audit_off_loop(
                             parent_action_id=parent_action_id,
                             placement=placement,
                             cell=cell,

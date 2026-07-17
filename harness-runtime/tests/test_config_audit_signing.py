@@ -275,3 +275,61 @@ def test_breaker_half_open_probe_failure_reopens_cooldown() -> None:
     with pytest.raises(AuditSigningBreakerOpenError):
         guarded.sign(message=b"m", key_id="k", key_period=0)
     assert inner.sign_calls == 4
+
+
+def test_stale_pre_open_success_does_not_close_open_breaker() -> None:
+    """Codex round-1 P1 (PR B2a) — a slow call admitted while CLOSED can
+    succeed AFTER concurrent failures opened the breaker; that stale success
+    must not instantly close the newly-opened breaker (epoch guard)."""
+    import threading as threading_module
+
+    from harness_runtime.config.audit_signing import AuditSigningBreakerOpenError
+
+    entered = threading_module.Event()
+    release = threading_module.Event()
+
+    class _SlowFirstBackend:
+        algorithm = "ed25519"
+
+        def __init__(self) -> None:
+            self.calls = 0
+            self._lock = threading_module.Lock()
+
+        def sign(self, *, message: bytes, key_id: str, key_period: int) -> bytes:
+            with self._lock:
+                self.calls += 1
+                mine = self.calls
+            if mine == 1:
+                entered.set()
+                assert release.wait(timeout=10.0)
+                return b"slow-sig"
+            raise RuntimeError("kms down")
+
+        def verify(self, *, message: bytes, signature: bytes, key_id: str, key_period: int) -> bool:
+            return True
+
+    inner = _SlowFirstBackend()
+    clock = {"now": 0.0}
+    guarded = _guarded(inner, clock)
+
+    slow_result: list[bytes] = []
+    slow = threading_module.Thread(
+        target=lambda: slow_result.append(guarded.sign(message=b"m", key_id="k", key_period=0)),
+        daemon=True,
+    )
+    slow.start()
+    assert entered.wait(timeout=10.0)
+
+    # While the slow (closed-epoch) call is in flight, three failures open
+    # the breaker.
+    for _ in range(3):
+        with pytest.raises(RuntimeError, match="kms down"):
+            guarded.sign(message=b"m", key_id="k", key_period=0)
+
+    release.set()
+    slow.join(timeout=10.0)
+    assert slow_result == [b"slow-sig"]
+
+    # The stale success must NOT have closed the breaker.
+    with pytest.raises(AuditSigningBreakerOpenError):
+        guarded.sign(message=b"m", key_id="k", key_period=0)

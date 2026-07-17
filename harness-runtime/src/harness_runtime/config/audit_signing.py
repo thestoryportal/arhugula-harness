@@ -121,13 +121,21 @@ class BreakerGuardedSigningBackend:
         self._consecutive_failures = 0
         self._opened_at: float | None = None
         self._half_open_probe_inflight = False
+        # Epoch guard (codex round-1 P1 on PR B2a): bumped on every OPEN /
+        # CLOSE transition. A slow call admitted while CLOSED can finish
+        # AFTER other calls opened the breaker — its stale outcome must not
+        # mutate the newer state (an unconditional _record_success would
+        # instantly close a just-opened breaker; a stale failure would
+        # double-count into the new window).
+        self._epoch = 0
 
-    def _admit_or_raise(self) -> bool:
-        """Under the lock: return True when this call is the half-open probe;
-        raise when the breaker refuses admission; False = closed-state call."""
+    def _admit_or_raise(self) -> tuple[bool, int]:
+        """Under the lock: admit this call and return
+        `(is_half_open_probe, admission_epoch)`; raise when the breaker
+        refuses admission."""
         with self._lock:
             if self._opened_at is None:
-                return False
+                return False, self._epoch
             elapsed = self._monotonic() - self._opened_at
             if elapsed < self._cooldown_seconds or self._half_open_probe_inflight:
                 raise AuditSigningBreakerOpenError(
@@ -141,29 +149,41 @@ class BreakerGuardedSigningBackend:
                     f"stalling the audit hot path on a down KMS"
                 )
             self._half_open_probe_inflight = True
-            return True
+            return True, self._epoch
 
-    def _record_success(self) -> None:
+    def _record_success(self, *, admission_epoch: int) -> None:
         with self._lock:
+            if admission_epoch != self._epoch:
+                # Stale outcome from before the last state transition —
+                # a pre-open success must not close an OPEN breaker.
+                return
+            transitioning = self._opened_at is not None
             self._consecutive_failures = 0
             self._opened_at = None
             self._half_open_probe_inflight = False
+            if transitioning:
+                self._epoch += 1
 
-    def _record_failure(self, *, was_probe: bool) -> None:
+    def _record_failure(self, *, was_probe: bool, admission_epoch: int) -> None:
         with self._lock:
+            if admission_epoch != self._epoch:
+                return
             self._consecutive_failures += 1
             if was_probe or self._consecutive_failures >= self._fail_threshold:
+                transitioning = self._opened_at is None or was_probe
                 self._opened_at = self._monotonic()
+                if transitioning:
+                    self._epoch += 1
             self._half_open_probe_inflight = False
 
     def sign(self, *, message: bytes, key_id: str, key_period: int) -> bytes:
-        was_probe = self._admit_or_raise()
+        was_probe, admission_epoch = self._admit_or_raise()
         try:
             signature = self._inner.sign(message=message, key_id=key_id, key_period=key_period)
         except Exception:
-            self._record_failure(was_probe=was_probe)
+            self._record_failure(was_probe=was_probe, admission_epoch=admission_epoch)
             raise
-        self._record_success()
+        self._record_success(admission_epoch=admission_epoch)
         return signature
 
     def verify(self, *, message: bytes, signature: bytes, key_id: str, key_period: int) -> bool:
