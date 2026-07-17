@@ -1539,3 +1539,66 @@ def test_map_reseeds_from_its_own_family_tail_not_foreign(tmp_path: Path) -> Non
     family = [e for e in entries if str(e.payload.entry_core).startswith("redaction-token:")]
     assert len(family) == 2
     assert family[1].payload.prior_entry_hash == family[0].entry_hash
+
+
+def test_warm_writer_detects_truncation_on_next_append(tmp_path: Path) -> None:
+    """Codex round-45 P1 (PR B1) — the round-40 coverage check gated on the
+    PRE-refresh offset, so a WARM writer (rows already indexed) whose sidecar
+    was truncated to a newline boundary reset the index INSIDE the refresh
+    and skipped the check — the next append extended an incomplete signed
+    history. The gate now also fires when the refresh itself rescans from
+    zero."""
+    writer = _writer(tmp_path)
+    writer.append("tenant-A", _make_audit_entry("1" * 64))
+    writer.append("tenant-A", _make_audit_entry("2" * 64))
+
+    # Truncate to the first record's boundary with the SAME warm writer
+    # (round-40's witness used a fresh, cold-index writer).
+    raw = writer.sidecar_path.read_bytes()
+    lines = raw.splitlines(keepends=True)
+    writer.sidecar_path.write_bytes(lines[0])
+
+    with pytest.raises(ValueError, match="truncated or lost"):
+        writer.append("tenant-A", _make_audit_entry("3" * 64))
+
+
+def test_reserved_tenant_ids_refused_everywhere(tmp_path: Path) -> None:
+    """Codex round-45 P1 (PR B1) — `None`, `""`, and the literal `"_single"`
+    all collapsed to one sidecar tag, so an operator tenant named `_single`
+    read the single-tenant scope's FULL entries (redaction-token raw values
+    included). The encoding is now injective: `None` is the one single-tenant
+    signal; the two ambiguous literals are refused at every surface."""
+    writer = _writer(tmp_path)
+    writer.append(None, _make_audit_entry("1" * 64))
+
+    for reserved in ("", "_single"):
+        with pytest.raises(ValueError, match="reserved"):
+            writer.append(reserved, _make_audit_entry("2" * 64))
+        with pytest.raises(ValueError, match="reserved"):
+            writer.read_full_entries_for_tenant(reserved)
+        with pytest.raises(ValueError, match="reserved"):
+            writer.read_for_tenant(reserved)
+
+    # The single-tenant scope stays reachable via its documented signal.
+    assert len(writer.read_full_entries_for_tenant(None)) == 1
+
+
+def test_prefix_related_tenants_scope_exactly(tmp_path: Path) -> None:
+    """Codex round-45 P2 (PR B1) — `read_for_tenant("tenant")` prefix-matched
+    `audit:tenant:` and so also returned `tenant:west` refs; the full-entry
+    reader's sidecar scan filters by EXACT tag, making the coverage check
+    falsely report intact history as truncated. Ref matching now parses the
+    tag exactly from the right (entry_hash is hex-64, never ':')."""
+    writer = _writer(tmp_path)
+    parent = _make_audit_entry("a" * 64)
+    child = _make_audit_entry("b" * 64)
+    writer.append("tenant", parent)
+    writer.append("tenant:west", child)
+
+    parent_read = writer.read_full_entries_for_tenant("tenant")
+    assert [e.entry_hash for e in parent_read] == [parent.entry_hash]
+    child_read = writer.read_full_entries_for_tenant("tenant:west")
+    assert [e.entry_hash for e in child_read] == [child.entry_hash]
+
+    refs = writer.read_for_tenant("tenant")
+    assert [r.action_id for r in refs] == [f"audit:tenant:{parent.entry_hash}"]

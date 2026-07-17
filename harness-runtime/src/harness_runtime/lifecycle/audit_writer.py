@@ -208,8 +208,27 @@ class RuntimeAuditLedgerWriter:
 
     @classmethod
     def _tenant_tag(cls, tenant_id: str | None) -> str:
-        """Resolve the tenant scoping tag for an append/read call."""
-        return tenant_id if tenant_id else cls._SINGLE_TENANT_TAG
+        """Resolve the tenant scoping tag for an append/read call.
+
+        The encoding must be INJECTIVE (codex round-45 P1): the sidecar
+        persists FULL signed entries (including redaction-token raw values)
+        keyed by this tag, so a literal operator tenant ID colliding with
+        the single-tenant sentinel would disclose single-tenant audit
+        payloads to that tenant's reader. `None` is the one documented
+        single-tenant signal (RuntimeConfig.tenant_id); the empty string is
+        a config bug, not single-tenant intent — both ambiguous inputs are
+        refused rather than silently normalized.
+        """
+        if tenant_id is None:
+            return cls._SINGLE_TENANT_TAG
+        if tenant_id in ("", cls._SINGLE_TENANT_TAG):
+            raise ValueError(
+                f"tenant_id {tenant_id!r} is reserved: None is the "
+                f"single-tenant signal and {cls._SINGLE_TENANT_TAG!r} is its "
+                f"sidecar tag — an operator tenant may not alias the "
+                f"single-tenant audit scope"
+            )
+        return tenant_id
 
     @classmethod
     def _action_id_for(cls, tenant_id: str | None, audit_entry: AuditLedgerEntry) -> Identifier:
@@ -484,8 +503,13 @@ class RuntimeAuditLedgerWriter:
                 self._assert_absence_is_first_use()
             self._heal_torn_tail_locked()
             folded_from_zero = self._sidecar_index.offset == 0
-            self._refresh_sidecar_index_locked()
-            if folded_from_zero:
+            rescanned_from_zero = self._refresh_sidecar_index_locked()
+            if folded_from_zero or rescanned_from_zero:
+                # `rescanned_from_zero` (codex round-45 P1): a WARM index
+                # (offset > 0) whose file was truncated/replaced resets to
+                # zero INSIDE the refresh — gating on the pre-refresh offset
+                # alone skipped the coverage check exactly when truncation
+                # was detected, extending an incomplete history.
                 # Round-40 P1: truncation to a NEWLINE BOUNDARY (or to zero
                 # with the file kept) leaves only valid-looking rows — the
                 # torn-tail heal sees nothing to fix and round-36's absence
@@ -557,9 +581,12 @@ class RuntimeAuditLedgerWriter:
             self._sidecar_index.inode = post.st_ino
             self._sidecar_index.mtime_ns = post.st_mtime_ns
 
-    def _refresh_sidecar_index_locked(self) -> None:
+    def _refresh_sidecar_index_locked(self) -> bool:
         """Incrementally fold NEW sidecar bytes into the membership index —
         MUST be called with both locks held, after the torn-tail heal.
+        Returns True when a truncation / replacement / mutation forced the
+        index back to zero for a full rescan (the caller must then re-check
+        IS-ref coverage — codex round-45 P1).
 
         Out-of-family Codex round-12 P2: a full scan-per-append is O(N²)
         JSON parsing on the span-finalization hot path of a long-running
@@ -580,7 +607,8 @@ class RuntimeAuditLedgerWriter:
             and size == index.offset
             and st.st_mtime_ns != index.mtime_ns
         )
-        if truncated or inode_changed or same_size_mutated:
+        reset_to_zero = truncated or inode_changed or same_size_mutated
+        if reset_to_zero:
             # Full rescan ONLY for: truncation (torn-tail heal elsewhere),
             # file replacement (inode change), or a same-size in-place
             # mutation (codex round-21: size-equality alone trusted a stale
@@ -597,9 +625,9 @@ class RuntimeAuditLedgerWriter:
         if st is not None and size == index.offset:
             index.inode = st.st_ino
             index.mtime_ns = st.st_mtime_ns
-            return
+            return reset_to_zero
         if st is None:
-            return
+            return reset_to_zero
         # Validated fd (codex round-33 P1): a plain path open here followed
         # symlinks and would block forever on a pre-created FIFO.
         fd = self._open_sidecar_validated(os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
@@ -625,7 +653,7 @@ class RuntimeAuditLedgerWriter:
         if not delta.endswith(b"\n"):
             delta = delta[: delta.rfind(b"\n") + 1]
         if not delta:
-            return
+            return reset_to_zero
         # The heal ran under this same lock, so the region ends on a newline;
         # every split segment is a complete record.
         for raw in delta.split(b"\n"):
@@ -661,6 +689,7 @@ class RuntimeAuditLedgerWriter:
         post = self._sidecar_path.stat()
         index.inode = post.st_ino
         index.mtime_ns = post.st_mtime_ns
+        return reset_to_zero
 
     def read_full_entries_for_tenant(self, tenant_id: str | None) -> list[AuditLedgerEntry]:
         """Tenant-scoped FULL-entry reader over the item-(e) sidecar.
@@ -764,15 +793,21 @@ class RuntimeAuditLedgerWriter:
     def read_for_tenant(self, tenant_id: str | None) -> list[StateLedgerEntry]:
         """Tenant-scoped reader (C-OD-21 §21.1 cross-tenant separation surface).
 
-        Returns every IS entry whose `action_id` begins with the tenant's
-        `audit:<tag>:` prefix. Entries from other tenants are excluded.
-        Reads the underlying JSONL file fresh (no in-process cache); safe
-        across concurrent writers (the IS read returns a snapshot).
+        Returns every IS entry whose `action_id` scopes EXACTLY to the
+        tenant's tag. Matching parses from the right (codex round-45 P2):
+        `entry_hash` is hex-64 and never contains ':', so
+        `action_id.rsplit(":", 1)[0]` recovers `audit:<tag>` exactly — a
+        plain `audit:<tag>:` prefix test also matched tenants whose IDs are
+        colon-extensions of `tag` (e.g. `tenant:west` under `tenant`),
+        leaking refs across the C-OD-21 §21.1 separation surface and making
+        the sidecar coverage check falsely report intact history as
+        truncated. Reads the underlying JSONL file fresh (no in-process
+        cache); safe across concurrent writers (the IS read returns a
+        snapshot).
         """
-        tag = self._tenant_tag(tenant_id)
-        prefix = f"{self._ACTION_ID_PREFIX}:{tag}:"
+        scope = f"{self._ACTION_ID_PREFIX}:{self._tenant_tag(tenant_id)}"
         entries = read_ledger(self.ledger_writer.handle)
-        return [e for e in entries if e.action_id.startswith(prefix)]
+        return [e for e in entries if e.action_id.rsplit(":", 1)[0] == scope]
 
     def read_all(self) -> list[StateLedgerEntry]:
         """Cross-tenant reader — returns every persisted audit-wrapped entry.
