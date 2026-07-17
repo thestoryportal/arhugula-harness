@@ -111,3 +111,11 @@ Branch: b24-b27-fork-ratification-build · Date: 2026-07-15
 **Codex chain:** round 1 (redaction-writer passthrough P1 + mutable-table P2 — both fixed), round 3 ((e) persistence fidelity — verified, registered), round 4 (close_out structure — fixed), round 5 ((f) tenant-scope binding — verified, registered), rounds 2/6 clean.
 
 **Outcome:** all-APPROVE at round 2 → merge without HIL (CI-green precondition).
+
+## PR #1034 — 2026-07-17 — `b-47-pr-b1-composition-root`
+
+**Round 1:** concurrency APPROVE (lock hierarchy acyclic — chain-lock → sidecar thread-lock → sidecar flock, IS locks never nested inside; two same-process writers serialize via the path-keyed registry; reader IS-refs pre-snapshot proven race-free under sidecar-first ordering; asyncio.timeout/daemon-thread handling correct; 1 P3 follow-up — `exists()` sampled before the refs predicate at the two UNLOCKED sites can false-positive the round-36 loss error against a racing FIRST-EVER append: narrow, self-healing, fail-loud-false-positive, no durability impact) · spec-conformance APPROVE (OD v1.33 §21.2.1 verified as the sanctioned B-47 remainder; `[project.scripts]` inventory untouched — migration module python-m-only claim accurate; register B-47 row matches landed scope exactly; clearance marker present; advisories: version-less "CXA §0.3" cites resolve at v2.10 not head, one docstring mislabels the no-silent-failure venue) · test-witness APPROVE (core witnesses real-path + mutation-sensitive incl. crypto-verified e2e and two-run crash-resume; 4 follow-up gaps — stage-4 `signing_backend=` kwarg unwitnessed-but-fail-loud, shutdown↔writer seam witnessed only via SimpleNamespace fakes, migrate-CLI `__main__` guard unpinned, sidecar `timed_out` line masked by the ledger surface).
+
+**Codex chain:** 49 rounds; rounds 1–48 each fixed-and-mutation-probed or registered ((e)–(j) close-out items); round 49 clean ("no actionable bugs").
+
+**Outcome:** all-APPROVE at round 1 → merge without HIL (CI-green precondition). Follow-up notes registered at forward-register B-47 item (k) for the PR-B2 arc.

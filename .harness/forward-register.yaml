@@ -848,7 +848,14 @@ items:
     harness_runtime.admin.migrate_audit_sidecar. That module is deliberately NOT in the spec-committed
     [project.scripts] inventory (runtime spec section 13.4 / 14.18.1) -- promoting it to a console
     script is a design-substrate decision to take WITH the (e)/(g) SQLite persistence fork at PR B2,
-    since a substrate swap owes its own migration path from the JSONL sidecar anyway.'
+    since a substrate swap owes its own migration path from the JSONL sidecar anyway; (k) merge-gate
+    round-1 follow-ups on PR B1 (all three lenses APPROVE, notes explicitly non-blocking): reorder the
+    exists()-before-refs-predicate samples at the two UNLOCKED sites (shutdown flush guard +
+    read_full_entries_for_tenant absence check) so a racing first-ever append cannot false-positive the
+    round-36 loss error; witness the stage-4 signing_backend= kwarg through the REAL bootstrap stage
+    (currently unwitnessed-but-fail-loud); one integration witness wiring a real RuntimeAuditLedgerWriter
+    into flush_observability (seam currently SimpleNamespace-only); pin the migrate-CLI __main__ guard;
+    pin the sidecar timed_out flag with a sidecar-only stall. Fold into the PR-B2 arc.'
   council: 'conditional -- mechanical composition-root wiring once a real sign_audit_entry call site exists;
     revisit if the call-site design itself surfaces a cross-axis tension'
   heading: '### B-47 · `AwsKmsSigningBackend` has no production composition-root call site *(surfaced
