@@ -380,6 +380,28 @@ class RuntimeAuditLedgerWriter:
         finally:
             os.close(fd)
 
+    def _assert_absence_is_first_use(self) -> None:
+        """A MISSING sidecar is only legitimate before any audit entry ever
+        landed (codex round-36 P1): after entries exist, deletion — cleanup,
+        corruption, tampering — must fail loud, not silently present an empty
+        history and let the next append mint a REPLACEMENT sidecar (IS refs
+        old + new, only new signatures recoverable — exactly the loss the
+        sidecar exists to prevent). The IS chain is the authority for
+        \"has anything ever been appended\": its `audit:` refs are hash-chained
+        and cannot be silently removed the way a plain file can.
+        """
+        if any(
+            entry.action_id.startswith(f"{self._ACTION_ID_PREFIX}:")
+            for entry in read_ledger(self.ledger_writer.handle)
+        ):
+            raise ValueError(
+                f"audit sidecar {self._sidecar_path} is MISSING but the IS "
+                f"ledger holds audit references — the durable signed-entry "
+                f"history has been deleted or lost; refusing to continue "
+                f"(restore the sidecar from backup, or intentionally reset "
+                f"BOTH ledgers together)"
+            )
+
     def _append_sidecar_line_if_missing(
         self, tenant_id: str | None, audit_entry: AuditLedgerEntry
     ) -> None:
@@ -399,6 +421,12 @@ class RuntimeAuditLedgerWriter:
         tag = self._tenant_tag(tenant_id)
         line = self._sidecar_line_for(tenant_id, audit_entry)
         with self._sidecar_thread_lock, cross_process_write_lock(self._sidecar_path):
+            if not self._sidecar_path.exists():
+                # Round-36 P1: creating a REPLACEMENT sidecar after the
+                # original disappeared would silently split history (old IS
+                # refs unrecoverable). Absence is only legitimate at genuine
+                # first use.
+                self._assert_absence_is_first_use()
             self._heal_torn_tail_locked()
             self._refresh_sidecar_index_locked()
             identity = (tag, audit_entry.entry_hash)
@@ -575,6 +603,7 @@ class RuntimeAuditLedgerWriter:
         """
         tag = self._tenant_tag(tenant_id)
         if not self._sidecar_path.exists():
+            self._assert_absence_is_first_use()
             return []
         entries: list[AuditLedgerEntry] = []
         # B-40 shared read lock (side-effect-free: never O_CREAT, never mkdir)

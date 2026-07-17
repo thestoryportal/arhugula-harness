@@ -1230,6 +1230,27 @@ def test_fifo_sidecar_rejected_on_read_without_hanging(tmp_path: Path) -> None:
         writer.read_full_entries_for_tenant("tenant-A")
 
 
+def test_deleted_sidecar_with_surviving_is_refs_fails_loud(tmp_path: Path) -> None:
+    """Codex round-36 P1 (PR B1) — after entries exist, a deleted sidecar
+    silently presented an empty history, and the next append minted a
+    REPLACEMENT (old IS refs unrecoverable — the exact loss the sidecar
+    prevents). Absence is only legitimate at genuine first use, judged
+    against the hash-chained IS refs: both the reader and the append path
+    now fail loud, and a genuine first use stays clean."""
+    writer = _writer(tmp_path)
+
+    # Genuine first use: absent sidecar + no IS refs = clean empty read.
+    assert writer.read_full_entries_for_tenant("tenant-A") == []
+
+    writer.append("tenant-A", _make_audit_entry("1" * 64))
+    writer.sidecar_path.unlink()  # cleanup/corruption/tampering
+
+    with pytest.raises(ValueError, match="MISSING"):
+        writer.read_full_entries_for_tenant("tenant-A")
+    with pytest.raises(ValueError, match="MISSING"):
+        writer.append("tenant-A", _make_audit_entry("2" * 64))
+
+
 def test_symlinked_sidecar_rejected_on_read(tmp_path: Path) -> None:
     """Codex round-33 P1 (PR B1) — a symlinked sidecar must not feed
     attacker-controlled rows through the reader (the seeding path consumes
