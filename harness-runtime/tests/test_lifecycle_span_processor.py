@@ -526,3 +526,179 @@ def test_production_surface_preserves_trace_when_sandbox_violation_present(
     finished_names = {s.name for s in finished}
     assert "sandbox.violation" in finished_names
     assert "workflow.envelope" in finished_names
+
+
+def test_aws_kms_mapping_missing_token_map_key_fails_at_bootstrap(tmp_path: Path) -> None:
+    """Codex round-3 P2 (B-47 PR B1) — an `aws-kms` mapping that omits the
+    redaction-token map's hard-coded signing key must fail at STAGE
+    construction, not raise `UnknownSigningKeyIdError` on the first redacted
+    span mid-run."""
+    from harness_runtime.lifecycle.span_processor import (
+        REDACTION_TOKEN_SIGNING_KEY_ID,
+        SpanProcessorBindError,
+    )
+    from harness_runtime.types import AuditSigningBackendKind, AuditSigningConfig
+
+    class _StubBackend:
+        algorithm = "ed25519"
+
+        def sign(self, *, message: bytes, key_id: str, key_period: int) -> bytes:
+            raise AssertionError("never reached — bootstrap must fail first")
+
+        def verify(self, *, message: bytes, signature: bytes, key_id: str, key_period: int) -> bool:
+            raise AssertionError("never reached")
+
+    base = _config(
+        tmp_path,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        tenant_id="tenant-x",
+    )
+    config = base.model_copy(
+        update={
+            "audit_signing": AuditSigningConfig(
+                backend=AuditSigningBackendKind.AWS_KMS,
+                key_arns={"some-other-key": "arn:aws:kms:us-east-1:1:key/x"},
+            )
+        }
+    )
+    import threading
+
+    threads_before = {t_.ident for t_ in threading.enumerate()}
+    with pytest.raises(SpanProcessorBindError, match=REDACTION_TOKEN_SIGNING_KEY_ID):
+        materialize_span_processor_stage(
+            config,
+            _provider(),
+            exporter=InMemorySpanExporter(),
+            audit_writer=_RecordingAuditWriter(),
+            signing_backend=_StubBackend(),
+        )
+    # Codex round-6 P2: the raise must fire BEFORE the BatchSpanProcessor
+    # exists — a post-construction raise leaked the BSP's live worker thread
+    # on every failed/retried bootstrap.
+    leaked = {t_.ident for t_ in threading.enumerate()} - threads_before
+    assert leaked == set()
+
+
+def test_aws_kms_config_without_injected_backend_fails_at_bootstrap(tmp_path: Path) -> None:
+    """Codex round-16 (B-47 PR B1) — the composer is public: a direct caller
+    passing an explicitly-KMS config while omitting `signing_backend` must
+    fail loud at construction, not silently emit `unsigned:` placeholders
+    despite the configuration."""
+    from harness_runtime.lifecycle.span_processor import SpanProcessorBindError
+    from harness_runtime.types import AuditSigningBackendKind, AuditSigningConfig
+
+    base = _config(
+        tmp_path,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        tenant_id="tenant-x",
+    )
+    config = base.model_copy(
+        update={
+            "audit_signing": AuditSigningConfig(
+                backend=AuditSigningBackendKind.AWS_KMS,
+                key_arns={"harness-runtime-redaction-token": "arn:aws:kms:us-east-1:1:key/x"},
+            )
+        }
+    )
+    with pytest.raises(SpanProcessorBindError, match="never silently degrade"):
+        materialize_span_processor_stage(
+            config,
+            _provider(),
+            exporter=InMemorySpanExporter(),
+            audit_writer=_RecordingAuditWriter(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_stage_4_validates_signing_before_one_shot_tracer_registration(
+    tmp_path: Path,
+) -> None:
+    """Codex round-18 (B-47 PR B1) — OTel tracer registration is one-shot per
+    process; a KMS config failure surfacing AFTER it poisoned same-process
+    bootstrap retry. Stage 4 must construct+validate the signing backend
+    BEFORE the tracer registrar is ever invoked."""
+    import unittest.mock as mock
+    from types import SimpleNamespace
+
+    from harness_runtime.bootstrap import stage_4_od
+    from harness_runtime.bootstrap.mutable_context import _MutableHarnessContext
+    from harness_runtime.lifecycle.span_processor import SpanProcessorBindError
+    from harness_runtime.types import AuditSigningBackendKind, AuditSigningConfig
+
+    base = _config(
+        tmp_path,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        tenant_id="tenant-x",
+    )
+    config = base.model_copy(
+        update={
+            "audit_signing": AuditSigningConfig(
+                backend=AuditSigningBackendKind.AWS_KMS,
+                key_arns={"some-other-key": "arn:aws:kms:us-east-1:1:key/x"},
+            )
+        }
+    )
+
+    ctx = _MutableHarnessContext()
+    ctx.ledger_writer = SimpleNamespace()  # stage-1 precondition only
+    tracer_calls: list[object] = []
+
+    class _FakeBackend:
+        algorithm = "ed25519"
+
+        def sign(self, *, message: bytes, key_id: str, key_period: int) -> bytes:
+            raise AssertionError("never reached")
+
+        def verify(self, *, message: bytes, signature: bytes, key_id: str, key_period: int) -> bool:
+            raise AssertionError("never reached")
+
+    with (
+        mock.patch.object(
+            stage_4_od,
+            "make_audit_signing_backend",
+            lambda _cfg: _FakeBackend(),
+        ),
+        mock.patch.object(
+            stage_4_od,
+            "materialize_tracer_provider_stage",
+            lambda _cfg: tracer_calls.append(_cfg),
+        ),
+    ):
+        from harness_core.workload_class import WorkloadClass
+
+        with pytest.raises(SpanProcessorBindError, match="ever assumed"):
+            await stage_4_od.execute(ctx, config, WorkloadClass.SOFTWARE_ENGINEERING)
+
+    assert tracer_calls == []  # the one-shot registrar was never invoked
+
+
+def test_restarted_stage_tokenizers_never_collide_tokens(tmp_path: Path) -> None:
+    """Codex round-29 (B-47 PR B1) — the tokenizer counter restarts at 1 per
+    construction while the durable sidecar retains prior mappings; without a
+    run-unique namespace two runs mint the SAME token for different raw
+    values, making token-to-raw lookup ambiguous. Two stage constructions
+    (simulated restart) must produce disjoint tokens."""
+    tokens: list[str] = []
+    for run in range(2):
+        audit_writer = _RecordingAuditWriter()
+        in_memory = InMemorySpanExporter()
+        provider = _provider()
+        stage = materialize_span_processor_stage(
+            _config(
+                tmp_path,
+                persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+                tenant_id="tenant-ns",
+            ),
+            provider,
+            exporter=in_memory,
+            audit_writer=audit_writer,
+        )
+        assert stage.redaction_processor.tokenizer_enabled is True
+        tracer = provider.get_tracer(f"ns-run-{run}")
+        with tracer.start_as_current_span("anthropic.messages.create") as span:
+            span.set_attribute("gen_ai.input.messages", f"customer ssn run {run}")
+        stage.flush(timeout_millis=5000)
+        [(_tenant, entry)] = audit_writer.appended
+        tokens.append(entry.payload.audit_namespace_attrs["audit.redaction_token.token"])
+
+    assert tokens[0] != tokens[1], tokens

@@ -17,9 +17,9 @@ discipline mirrors U-RT-43's 9-stage modular split.
 2. **Ledger fsync** — actual work. The IS state-ledger writer closes its
    file handle after every append (`with handle.canonical_path.open("a")
    as fh`); at flush time we open the path RO, `os.fsync(fd)`, close.
-   The directory entry's durability is **deferred to implementation
-   discretion** (production-grade `fsync(dir_fd)` + macOS `F_FULLFSYNC`
-   not required at Track A).
+   macOS `F_FULLFSYNC` remains **deferred to implementation discretion**
+   (Track A); the shared parent directory's entry durability is covered by
+   the sidecar surface's dir-fsync (surface 4).
 
 3. **Cost-attribution chain flush** — no-op. U-RT-31 landed
    `RuntimeCostAttributionChain` as stateless-by-design (every step is a
@@ -27,9 +27,12 @@ discipline mirrors U-RT-43's 9-stage modular split.
    `.harness/class_3_drift_u_rt_45_cost_chain_stateless.md`. Reported as
    `FlushReport.cost_chain_noop = True`.
 
-4. **Audit-writer flush** — implicit. `RuntimeAuditLedgerWriter.append`
-   routes immediately through `LedgerWriter.append` (U-RT-32). The ledger
-   fsync at surface (2) discharges audit-writer durability.
+4. **Audit-writer flush** — the IS refs append through `LedgerWriter.append`
+   (U-RT-32, covered by surface 2), and the FULL signed entries live in the
+   B-47 item-(e) sidecar — fsynced FIRST (file, then parent directory for
+   directory-entry durability, then the ledger; mirrors the sidecar-first
+   write ordering so power loss cannot leave a flushed ref whose signature
+   or very filename was still buffered).
 
 **Per-resource exception isolation.** Per C-RT-10 invariant ("Resources
 that fail to close cleanly are surfaced individually; shutdown does not
@@ -59,6 +62,9 @@ from __future__ import annotations
 
 import asyncio
 import os
+import stat
+import sys
+import threading
 import time
 import weakref
 from collections.abc import Callable
@@ -80,6 +86,95 @@ __all__ = [
     "flush_observability",
     "shutdown",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Blocking fsync halves — run in worker threads via `asyncio.to_thread`
+# (codex round-47 P2: a stalled filesystem must not hang the event loop past
+# the advertised timeout; `asyncio.wait_for` bounds the wait, the worker may
+# linger on the stalled syscall while shutdown proceeds).
+# ---------------------------------------------------------------------------
+
+
+def _fsync_sidecar_sync(sidecar_path: Path) -> None:
+    """Sidecar file + parent-dir fsync (blocking half).
+
+    Non-blocking + regular-file check (round-35 codex): a pre-created FIFO
+    here made a blocking O_RDONLY open hang the ENTIRE shutdown before any
+    failure could be recorded. Mirrors the writer's validated-open
+    discipline; a non-regular target is recorded as an audit_sidecar flush
+    failure, never a hang. The parent-dir fsync (codex round-11, PR B1)
+    covers directory-entry durability for NEWLY CREATED files — the flushed
+    ledger ref must not outlive the sidecar's very filename. POSIX-only:
+    directories are not open()-able on Windows, where cross-process
+    durability already sits at the documented B-45 platform posture.
+    """
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)
+    if sys.platform != "win32":
+        flags |= os.O_NOFOLLOW
+    fd = os.open(str(sidecar_path), flags)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise ValueError(f"sidecar {sidecar_path} is not a regular file")
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    if sys.platform != "win32":
+        dir_fd = os.open(str(sidecar_path.parent), os.O_RDONLY)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
+
+
+def _fsync_ledger_sync(ledger_path: Path) -> None:
+    """Ledger fsync (blocking half). Read-only fd is sufficient — fsync
+    flushes the file's write-back buffer via the inode regardless of access
+    mode."""
+    fd = os.open(str(ledger_path), os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+async def _run_fsync_bounded(
+    fn: Callable[[Path], None], path: Path, timeout_seconds: float
+) -> None:
+    """Run a blocking fsync half on a DAEMON thread with a bounded await.
+
+    NOT `asyncio.to_thread` (codex round-48 P1): to_thread uses the loop's
+    default executor, whose worker threads `asyncio.run`'s teardown JOINS —
+    a genuinely stalled fsync would still hang process exit AFTER the
+    timeout report was returned, defeating the bound at the process level.
+    A daemon thread is never joined; the stalled syscall lingers harmlessly
+    until process end. Raises `TimeoutError` on expiry (via
+    `asyncio.timeout` — expiry converts the internal CancelledError at the
+    block boundary); relays the worker's exception on failure.
+    """
+    loop = asyncio.get_running_loop()
+    done = asyncio.Event()
+    failure: list[BaseException] = []
+
+    def _worker() -> None:
+        try:
+            fn(path)
+        except BaseException as exc:  # relayed to the awaiting side
+            failure.append(exc)
+        finally:
+            try:
+                loop.call_soon_threadsafe(done.set)
+            except RuntimeError:
+                # Loop already closed — the awaiting side reported its
+                # timeout long ago and the process is exiting; nothing is
+                # listening for this completion signal anymore.
+                pass
+
+    threading.Thread(target=_worker, daemon=True, name="harness-flush-fsync").start()
+    async with asyncio.timeout(timeout_seconds):
+        await done.wait()
+    if failure:
+        raise failure[0]
 
 
 # ---------------------------------------------------------------------------
@@ -143,7 +238,8 @@ async def flush_observability(
     2. `os.fsync` on `ctx.ledger_writer.handle.canonical_path` — opens RO,
        fsyncs, closes.
     3. Cost-attribution chain — no-op (stateless-by-design; Class 3 drift).
-    4. Audit writer — covered by (2) (append-through to ledger).
+    4. Audit writer — sidecar file + parent dir fsynced BEFORE (2); the
+       IS refs themselves are covered by (2).
 
     Per-resource exceptions are caught and reported in `FlushReport.failures`;
     the function does not raise. Callers wanting hard-fail semantics inspect
@@ -168,6 +264,14 @@ async def flush_observability(
     tracer_flushed = False
     ledger_fsynced = False
     timed_out = False
+    # ONE shared budget across all flush surfaces (codex round-48 P2):
+    # per-surface full timeouts let this coroutine consume ~3x the caller's
+    # remaining budget sequentially, violating the advertised top-level
+    # shutdown deadline even for finite stalls. The tracer's force_flush
+    # bounds itself internally with the full value (first surface — the
+    # full value IS the remaining budget at that point); each later surface
+    # gets only what is left on this monotonic deadline.
+    deadline = time.monotonic() + timeout_millis / 1000.0
 
     # Surface 1: tracer BSP force_flush. OTel's `force_flush` is sync and
     # returns False on internal timeout; we treat that as `timed_out=True`.
@@ -188,6 +292,57 @@ async def flush_observability(
     except Exception:
         failures.append("tracer")
 
+    # Sidecar fsync FIRST (mirrors the sidecar-first write ordering —
+    # codex round-5 P2: power loss between the two fsyncs must not leave
+    # a flushed ref whose signature was still buffered).
+    # Audit-writer surface: The IS refs append through the ledger (covered
+    # by surface 2), but the FULL signed entries live in the item-(e) sidecar
+    # (B-47 PR B1) — a separate file whose write-back buffer surface-2's
+    # fsync does not touch (out-of-family Codex round-4 finding: a clean
+    # shutdown followed by power loss could keep the ref and lose the
+    # signature). Fsync it when it exists; absent sidecar (no audit entry
+    # ever appended, or a non-runtime writer) is a clean no-op.
+    try:
+        audit_writer = getattr(ctx, "audit_writer", None)
+        sidecar_path = getattr(audit_writer, "sidecar_path", None)
+        # Absent writer/attribute or genuinely-first-use sidecar = clean
+        # no-op. A MISSING sidecar whose IS refs exist is deletion-after-use
+        # (codex round-43) — recorded as an audit_sidecar failure via the
+        # writer's own first-use authority, consistent with its
+        # missing-sidecar guard.
+        # Capture-then-narrow (codex round-47 P1): calling
+        # `audit_writer.sidecar_expected()` after a mere hasattr-style probe
+        # fails `reportOptionalMemberAccess` — the probe does not prove
+        # `audit_writer` is non-None; invoking the CAPTURED callable does.
+        sidecar_expected = getattr(audit_writer, "sidecar_expected", None)
+        if (
+            sidecar_path is not None
+            and not sidecar_path.exists()
+            and sidecar_expected is not None
+            and sidecar_expected()
+        ):
+            raise ValueError(
+                f"audit sidecar {sidecar_path} is missing but IS audit "
+                f"references exist — signed history deleted or lost"
+            )
+        if sidecar_path is not None and sidecar_path.exists():
+            # Bounded daemon worker (codex round-47 P2 + round-48 P1): fsync
+            # against a stalled filesystem (network mount, dying disk)
+            # blocks INDEFINITELY — run synchronously on the loop it would
+            # hang the whole shutdown past every advertised timeout. The
+            # worker lingers on the stalled syscall while shutdown proceeds
+            # and records the failure; remaining-budget per round-48 P2.
+            await _run_fsync_bounded(
+                _fsync_sidecar_sync,
+                sidecar_path,
+                max(0.0, deadline - time.monotonic()),
+            )
+    except TimeoutError:
+        failures.append("audit_sidecar")
+        timed_out = True
+    except Exception:
+        failures.append("audit_sidecar")
+
     # Surface 2: ledger fsync. Open RO, fsync the fd, close. Per Track A
     # discretion, dir-fsync + F_FULLFSYNC deferred.
     #
@@ -199,19 +354,21 @@ async def flush_observability(
     try:
         ledger = ctx.ledger_writer
         ledger_path = ledger.handle.canonical_path
-        # Read-only fd is sufficient — fsync flushes the file's write-back
-        # buffer via the inode regardless of access mode.
-        fd = os.open(str(ledger_path), os.O_RDONLY)
-        try:
-            os.fsync(fd)
-            ledger_fsynced = True
-        finally:
-            os.close(fd)
+        # Bounded daemon worker — same stalled-filesystem hang class as the
+        # sidecar surface above (codex round-47 P2 + round-48 P1/P2).
+        await _run_fsync_bounded(
+            _fsync_ledger_sync,
+            ledger_path,
+            max(0.0, deadline - time.monotonic()),
+        )
+        ledger_fsynced = True
+    except TimeoutError:
+        failures.append("ledger")
+        timed_out = True
     except Exception:
         failures.append("ledger")
 
-    # Surface 3: cost-chain. Stateless-by-design (U-RT-31) → no-op.
-    # Surface 4: audit-writer. Append-through to ledger → covered by (2).
+    # Cost-chain surface: stateless-by-design (U-RT-31) → no-op.
 
     return FlushReport(
         tracer_flushed=tracer_flushed,

@@ -61,9 +61,11 @@ unit attaches the BSP + exporter only.
 
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass
 
 from harness_core import DeploymentSurface, PersonaTier
+from harness_cp.f5_signing_key_resolution import SigningBackend
 from harness_od.per_sandbox_tier_otlp_reachability import (
     ReachabilityViolation,
     assert_otlp_reachable_from_sandbox,
@@ -79,14 +81,21 @@ from opentelemetry.sdk.trace import SpanProcessor, TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter
 
 from harness_runtime.lifecycle.redaction_token_audit_map import AuditLedgerRedactionTokenMap
-from harness_runtime.types import AuditLedgerWriter, RuntimeConfig
+from harness_runtime.types import AuditLedgerWriter, AuditSigningBackendKind, RuntimeConfig
 
 __all__ = [
+    "REDACTION_TOKEN_SIGNING_KEY_ID",
     "SpanProcessorBindError",
     "SpanProcessorReachabilityError",
     "SpanProcessorStage",
     "materialize_span_processor_stage",
 ]
+
+REDACTION_TOKEN_SIGNING_KEY_ID = "harness-runtime-redaction-token"
+"""The logical signing `key_id` the multi-tenant redaction-token audit map
+signs under. An `aws-kms` deployment's `audit_signing.key_arns` mapping MUST
+cover it — validated at stage construction (fail-at-bootstrap, not on the
+first redacted span)."""
 
 
 class SpanProcessorBindError(Exception):
@@ -152,12 +161,59 @@ class SpanProcessorStage:
         return self.processor.force_flush(timeout_millis=timeout_millis)
 
 
+def validate_audit_signing_for_span_stage(
+    config: RuntimeConfig,
+    *,
+    signing_backend: SigningBackend | None,
+    tokenizer_will_bind: bool,
+) -> None:
+    """Fail-at-bootstrap validation of the audit-signing wiring — pure, no
+    construction side effects.
+
+    Called by `materialize_span_processor_stage` itself (defense for direct
+    composer callers) and by stage 4 BEFORE the one-shot global tracer
+    registration (out-of-family Codex round-18, B-47 PR B1: a KMS config
+    failure surfacing after `set_tracer_provider` poisoned same-process
+    bootstrap retry with `TracerProviderConcurrentRegistrationError`).
+
+    Checks, both scoped to a tokenizer that will actually bind:
+    - explicit `aws-kms` config with no constructed backend → raise (a
+      deployment that asked for real signing never silently degrades —
+      round 16);
+    - an `aws-kms` mapping that omits the redaction-token map's signing key
+      → raise (would otherwise surface as `UnknownSigningKeyIdError` on the
+      FIRST redacted span mid-run — round 3; validated before any
+      `BatchSpanProcessor` worker thread exists — round 6).
+    """
+    if not tokenizer_will_bind:
+        return
+    if config.audit_signing.backend is not AuditSigningBackendKind.AWS_KMS:
+        return
+    if signing_backend is None:
+        raise SpanProcessorBindError(
+            "audit_signing.backend is 'aws-kms' but no signing_backend was "
+            "supplied to materialize_span_processor_stage — construct one "
+            "via make_audit_signing_backend(config.audit_signing) and pass "
+            "it through (stage 4 does); explicit KMS configuration must "
+            "never silently degrade to placeholder signing"
+        )
+    if REDACTION_TOKEN_SIGNING_KEY_ID not in config.audit_signing.key_arns:
+        raise SpanProcessorBindError(
+            f"audit_signing.key_arns is missing the redaction-token "
+            f"map's signing key {REDACTION_TOKEN_SIGNING_KEY_ID!r} — "
+            f"the aws-kms mapping must cover every composition-root "
+            f"signing consumer (ADR-D8 §Decision item 2: no default "
+            f"key is ever assumed)"
+        )
+
+
 def materialize_span_processor_stage(
     config: RuntimeConfig,
     provider: TracerProvider,
     *,
     exporter: SpanExporter | None = None,
     audit_writer: AuditLedgerWriter | None = None,
+    signing_backend: SigningBackend | None = None,
 ) -> SpanProcessorStage:
     """Attach a `BatchSpanProcessor(OTLPSpanExporter(...))` to `provider`.
 
@@ -209,6 +265,13 @@ def materialize_span_processor_stage(
             f"per C-OD-20 §20.3: {exc}"
         ) from exc
 
+    tokenizer_will_bind = (
+        config.persona_tier == PersonaTier.MULTI_TENANT_COMPLIANCE and audit_writer is not None
+    )
+    validate_audit_signing_for_span_stage(
+        config, signing_backend=signing_backend, tokenizer_will_bind=tokenizer_will_bind
+    )
+
     try:
         resolved_exporter: SpanExporter = (
             exporter
@@ -221,12 +284,22 @@ def materialize_span_processor_stage(
             schedule_delay_millis=config.collector.batch_window_seconds * 1000,
         )
         tokenizer = None
-        if config.persona_tier == PersonaTier.MULTI_TENANT_COMPLIANCE and audit_writer is not None:
+        if tokenizer_will_bind:
+            assert audit_writer is not None  # narrowed by tokenizer_will_bind
             tokenizer = OpaqueRedactionTokenizer(
+                # Run-unique token namespace (codex round-29): the tokenizer
+                # counter restarts at 1 per construction while the sidecar
+                # retains prior mappings — without a namespace, two runs mint
+                # identical tokens for DIFFERENT raw values, making the
+                # durable token-to-raw lookup ambiguous.
+                token_namespace=uuid.uuid4().hex[:12],
                 token_map=AuditLedgerRedactionTokenMap(
                     audit_writer=audit_writer,
                     tenant_id=config.tenant_id,
-                    signing_key_id="harness-runtime-redaction-token",
+                    signing_key_id=REDACTION_TOKEN_SIGNING_KEY_ID,
+                    # B-47 PR B — the composition-root-constructed backend
+                    # (OD spec v1.33 §21.2.1). None = placeholder signing.
+                    signing_backend=signing_backend,
                 ),
                 classifier=EvalGradeSemanticRedactionClassifier(),
             )

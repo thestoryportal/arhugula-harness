@@ -806,14 +806,56 @@ items:
     just key resolution, since KMS availability now sits on the write-time hot path; (e) persists the signed
     entry (or an equivalent durable sidecar) at RuntimeAuditLedgerWriter.append, which today serializes
     neither payload nor signature_attrs -- a real KMS signature must reach durable storage, not be produced
-    then dropped (out-of-family Codex round-3 P1 on PR A, verified directly); (f) binds tenant scope into
+    then dropped (out-of-family Codex round-3 P1 on PR A, verified directly). PR B1 (2026-07-16) landed
+    items (a) AuditSigningConfig on RuntimeConfig, (b) make_audit_signing_backend (boto3-import-guarded,
+    kms_client injection seam, fail-loud on missing SDK/alias ARNs), (e) the full-entry durable sidecar
+    (audit-entries.jsonl beside the IS ledger, APPENDED-only writes, B-40-locked, tenant-scoped
+    read_full_entries_for_tenant rehydration), and the token-map half of (c) (stage-4 constructs the
+    backend onto ctx.audit_signing_backend and threads it through materialize_span_processor_stage into
+    AuditLedgerRedactionTokenMap; full-chain witness proves stage-to-sidecar real-signature round-trip).
+    REMAINING for the close -- rest of (c) (hitl_gate_composer / sub_agent_dispatch / cost_attribution_*
+    builder threading), (d) the C9 breaker, and (f) below; (f) binds tenant scope into
     what gets signed (out-of-family Codex round-5 P1 on PR A) -- the section 21.2.1 canonical message binds
     entry-hash/key_id/algo/period but not tenant identity, which today enters only at the writer wrap, so
     under a DEPLOYMENT-scoped signing key serving multiple tenants a signed entry could be re-presented
     under another tenant without invalidating its signature (a TENANT-scoped key_id already binds the
     tenant; the gap is deployment-scoped keys). Resolve jointly with (e) at PR B -- options include binding
     tenant into AuditPayload attrs, a fifth canonical-message segment (spec delta), or requiring
-    tenant-scoped key_ids at MULTI_TENANT_COMPLIANCE. No live exposure at PR A (zero backends wired).'
+    tenant-scoped key_ids at MULTI_TENANT_COMPLIANCE. No live exposure at PR A (zero backends wired);
+    (g) bounds the sidecar membership index (out-of-family Codex round-24 on PR B1) -- the in-memory
+    identity-to-digest map grows linearly with complete audit history in a long-running MTC deployment.
+    A bounded LRU alone cannot work (membership must prove ABSENCE, which needs complete knowledge or
+    a full scan), so the fix is a disk-backed index -- intersecting C-OD-21 section 21.2 and its own
+    hash-chained-SQLite storage commitment for the Tier-5 audit ledger; resolve jointly with the
+    (e)/(f) persistence-substrate design at PR B2 (JSONL sidecar vs SQLite is the real fork); (h)
+    partitions chain verification by producer family (out-of-family Codex round-30 on PR B1) -- a
+    per-tenant sidecar entry set interleaves INDEPENDENT OD chain families (the CXA section 0.3 action-id
+    prefixes are the discriminator; the converter chains on CP-side event hashes, the redaction-token
+    map within itself), so the PR-B2 verifier must verify per family, never over the raw per-tenant
+    sequence; global re-sequencing at sign time would touch spec-committed converter prior-hash
+    semantics and is a design-phase question, not an impl patch. Reader docstring now states the
+    non-single-chain contract explicitly; (i) makes redaction-chain tail-read + compose + append
+    cross-process atomic (out-of-family Codex round-32 on PR B1) -- two processes appending for one
+    tenant can both read the same durable family tail and sign different entries with the identical
+    predecessor (the sidecar lock serializes persistence only, not chain-position selection). The
+    in-process half is serialized; the clean cross-process fix is an atomic writer operation, which
+    the (e)/(g)/(h) SQLite persistence redesign gives transactionally -- resolve there. Already
+    documented in-code as a residual since round 13; formally registered now; (j) upgrade/migration
+    surface (out-of-family Codex rounds 44-48 on PR B1, all fixed in-PR): the JSONL sidecar gained
+    IS-refs-pre-snapshot reader ordering, warm-index truncation coverage, injective tenant tags with
+    config-load validation, duplicate-row rejection, bounded daemon-thread shutdown fsyncs under one
+    shared budget, and the explicit adopt_legacy_is_refs() pre-sidecar migration runnable via python -m
+    harness_runtime.admin.migrate_audit_sidecar. That module is deliberately NOT in the spec-committed
+    [project.scripts] inventory (runtime spec section 13.4 / 14.18.1) -- promoting it to a console
+    script is a design-substrate decision to take WITH the (e)/(g) SQLite persistence fork at PR B2,
+    since a substrate swap owes its own migration path from the JSONL sidecar anyway; (k) merge-gate
+    round-1 follow-ups on PR B1 (all three lenses APPROVE, notes explicitly non-blocking): reorder the
+    exists()-before-refs-predicate samples at the two UNLOCKED sites (shutdown flush guard +
+    read_full_entries_for_tenant absence check) so a racing first-ever append cannot false-positive the
+    round-36 loss error; witness the stage-4 signing_backend= kwarg through the REAL bootstrap stage
+    (currently unwitnessed-but-fail-loud); one integration witness wiring a real RuntimeAuditLedgerWriter
+    into flush_observability (seam currently SimpleNamespace-only); pin the migrate-CLI __main__ guard;
+    pin the sidecar timed_out flag with a sidecar-only stall. Fold into the PR-B2 arc.'
   council: 'conditional -- mechanical composition-root wiring once a real sign_audit_entry call site exists;
     revisit if the call-site design itself surfaces a cross-axis tension'
   heading: '### B-47 · `AwsKmsSigningBackend` has no production composition-root call site *(surfaced

@@ -147,6 +147,115 @@ async def test_flush_observability_uses_default_timeout(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_flush_bounded_when_fsync_stalls(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Codex round-47 P2 — an fsync against a stalled filesystem (network
+    mount, dying disk) must not hang shutdown past the advertised timeout:
+    both fsync surfaces dispatch to a bounded worker; the stall is recorded
+    as a per-surface failure + timed_out and shutdown proceeds."""
+    import time as time_module
+
+    ledger_path = tmp_path / "state.jsonl"
+    ledger_path.write_text("entry-1\n")
+    sidecar_path = tmp_path / "audit-entries.jsonl"
+    sidecar_path.write_text('{"tenant_tag":"_single","entry":{}}\n')
+
+    def _stalled_fsync(fd: int) -> None:
+        time_module.sleep(1.5)
+
+    monkeypatch.setattr(os, "fsync", _stalled_fsync)
+    tracer = _FakeTracerProvider(returns=True)
+    ctx = _ctx_with(tmp_path, tracer=tracer, ledger_path=ledger_path)
+    ctx.audit_writer = SimpleNamespace(
+        sidecar_path=sidecar_path,
+        sidecar_expected=lambda: True,
+    )
+
+    start = time_module.monotonic()
+    report = await flush_observability(ctx, timeout_millis=200)
+    elapsed = time_module.monotonic() - start
+
+    # Two bounded 200ms waits — far under the 1.5s a single synchronous
+    # stalled fsync would take on the loop.
+    assert elapsed < 1.2
+    assert "audit_sidecar" in report.failures
+    assert "ledger" in report.failures
+    assert report.timed_out is True
+    assert report.ledger_fsynced is False
+
+
+def test_asyncio_run_teardown_not_blocked_by_stalled_fsync(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Codex round-48 P1 — `asyncio.to_thread` workers live in the loop's
+    default executor, which `asyncio.run`'s teardown JOINS: a genuinely
+    stalled fsync hung process exit even after the timeout report was
+    returned. The daemon-thread worker is never joined — the WHOLE
+    `asyncio.run` (teardown included) must return within the bound."""
+    import time as time_module
+
+    ledger_path = tmp_path / "state.jsonl"
+    ledger_path.write_text("entry-1\n")
+
+    def _stalled_fsync(fd: int) -> None:
+        time_module.sleep(1.5)
+
+    monkeypatch.setattr(os, "fsync", _stalled_fsync)
+    tracer = _FakeTracerProvider(returns=True)
+    ctx = _ctx_with(tmp_path, tracer=tracer, ledger_path=ledger_path)
+
+    start = time_module.monotonic()
+    report = asyncio.run(flush_observability(ctx, timeout_millis=200))
+    elapsed = time_module.monotonic() - start
+
+    assert elapsed < 1.2
+    assert "ledger" in report.failures
+    assert report.timed_out is True
+
+
+@pytest.mark.asyncio
+async def test_flush_surfaces_share_one_timeout_budget(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Codex round-48 P2 — per-surface full timeouts let flush consume ~2x
+    the caller's budget sequentially (sidecar 600ms + ledger 600ms). With
+    one shared monotonic deadline the ledger surface gets only the
+    remainder, so total wall time stays ~one budget."""
+    import time as time_module
+
+    ledger_path = tmp_path / "state.jsonl"
+    ledger_path.write_text("entry-1\n")
+    sidecar_path = tmp_path / "audit-entries.jsonl"
+    sidecar_path.write_text('{"tenant_tag":"_single","entry":{}}\n')
+
+    def _stalled_fsync(fd: int) -> None:
+        time_module.sleep(1.5)
+
+    monkeypatch.setattr(os, "fsync", _stalled_fsync)
+    tracer = _FakeTracerProvider(returns=True)
+    ctx = _ctx_with(tmp_path, tracer=tracer, ledger_path=ledger_path)
+    ctx.audit_writer = SimpleNamespace(
+        sidecar_path=sidecar_path,
+        sidecar_expected=lambda: True,
+    )
+
+    start = time_module.monotonic()
+    report = await flush_observability(ctx, timeout_millis=600)
+    elapsed = time_module.monotonic() - start
+
+    # Shared budget: sidecar consumes ~600ms, ledger gets ~0 remaining.
+    # Per-surface budgets would take ~1.2s.
+    assert elapsed < 0.9
+    assert "audit_sidecar" in report.failures
+    assert "ledger" in report.failures
+    assert report.timed_out is True
+
+
+@pytest.mark.asyncio
 async def test_flush_observability_runs_tracer_in_thread(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -164,12 +273,17 @@ async def test_flush_observability_runs_tracer_in_thread(
 
     await flush_observability(ctx, timeout_millis=1_000)
 
-    assert len(to_thread_calls) == 1
-    fn, args = to_thread_calls[0]
-    # Bound-method identity isn't stable across attribute accesses; compare
-    # by __func__ (the underlying function) instead.
-    assert getattr(fn, "__func__", None) is _FakeTracerProvider.force_flush
-    assert args == (1_000,)
+    # The ledger fsync ALSO dispatches via to_thread (codex round-47 P2);
+    # assert the tracer call specifically rather than an exact count.
+    tracer_calls = [
+        (fn, args)
+        for fn, args in to_thread_calls
+        # Bound-method identity isn't stable across attribute accesses;
+        # compare by __func__ (the underlying function) instead.
+        if getattr(fn, "__func__", None) is _FakeTracerProvider.force_flush
+    ]
+    assert len(tracer_calls) == 1
+    assert tracer_calls[0][1] == (1_000,)
 
 
 @pytest.mark.asyncio
@@ -938,3 +1052,86 @@ def test_shutdown_package_root_re_export() -> None:
     assert harness_runtime.ShutdownReport is ShutdownReport
     assert harness_runtime.ShutdownTimeout is ShutdownTimeout
     assert harness_runtime.AlreadyShutDown is AlreadyShutDown
+
+
+@pytest.mark.asyncio
+async def test_flush_observability_fsyncs_audit_sidecar_when_present(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """B-47 PR B1 (codex round-4) — the item-(e) sidecar is a SECOND durable
+    file the ledger fsync does not touch; a clean shutdown must flush it too
+    or a power loss keeps the IS ref and loses the signature."""
+    ledger_path = tmp_path / "state.jsonl"
+    ledger_path.write_text("entry-1\n")
+    sidecar_path = tmp_path / "audit-entries.jsonl"
+    sidecar_path.write_text('{"tenant_tag":"_single","entry":{}}\n')
+
+    fsynced_inodes: list[int] = []
+    real_fsync = os.fsync
+
+    def _spy_fsync(fd: int) -> None:
+        fsynced_inodes.append(os.fstat(fd).st_ino)
+        real_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", _spy_fsync)
+    tracer = _FakeTracerProvider(returns=True)
+    ctx = _ctx_with(tmp_path, tracer=tracer, ledger_path=ledger_path)
+    ctx.audit_writer = SimpleNamespace(sidecar_path=sidecar_path)
+
+    report = await flush_observability(ctx)
+
+    assert report.failures == ()
+    # BOTH files flushed, sidecar FIRST (mirrors sidecar-first writes —
+    # power loss between the fsyncs must not leave a flushed ref whose
+    # signature was still buffered).
+    assert fsynced_inodes == [
+        os.stat(sidecar_path).st_ino,
+        os.stat(sidecar_path.parent).st_ino,  # directory-entry durability
+        os.stat(ledger_path).st_ino,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_flush_records_failure_for_fifo_sidecar_without_hanging(tmp_path: Path) -> None:
+    """Codex round-35 (PR B1) — a pre-created FIFO at the sidecar path made
+    shutdown's blocking O_RDONLY open hang the entire flush. The open is now
+    non-blocking + regular-file-checked: the flush completes and records an
+    audit_sidecar failure instead of hanging."""
+    ledger_path = tmp_path / "state.jsonl"
+    ledger_path.write_text("entry-1\n")
+    fifo_path = tmp_path / "audit-entries.jsonl"
+    os.mkfifo(fifo_path)
+
+    tracer = _FakeTracerProvider(returns=True)
+    ctx = _ctx_with(tmp_path, tracer=tracer, ledger_path=ledger_path)
+    ctx.audit_writer = SimpleNamespace(sidecar_path=fifo_path)
+
+    report = await flush_observability(ctx)
+    assert "audit_sidecar" in report.failures
+
+
+@pytest.mark.asyncio
+async def test_flush_observability_absent_sidecar_is_clean_noop(tmp_path: Path) -> None:
+    """No sidecar (nothing ever appended) and no audit_writer attribute are
+    both clean no-ops — never a flush failure. Deletion-after-use (IS refs
+    exist, file missing — codex round-43) IS a failure."""
+    tracer = _FakeTracerProvider(returns=True)
+    ctx = _ctx_with(tmp_path, tracer=tracer)
+
+    report = await flush_observability(ctx)
+    assert report.failures == ()
+
+    ctx.audit_writer = SimpleNamespace(
+        sidecar_path=tmp_path / "never-created.jsonl",
+        sidecar_expected=lambda: False,  # genuine first use
+    )
+    report = await flush_observability(ctx)
+    assert report.failures == ()
+
+    ctx.audit_writer = SimpleNamespace(
+        sidecar_path=tmp_path / "deleted-after-use.jsonl",
+        sidecar_expected=lambda: True,  # IS refs exist, file gone
+    )
+    report = await flush_observability(ctx)
+    assert "audit_sidecar" in report.failures

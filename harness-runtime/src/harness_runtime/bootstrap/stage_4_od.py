@@ -26,17 +26,22 @@ U-RT-44/45 shutdown work if a true unregister API is needed.
 
 from __future__ import annotations
 
+from harness_core import PersonaTier
 from harness_core.workload_class import WorkloadClass
 
 from harness_runtime.bootstrap.factories.validator_framework_factory import (
     materialize_validator_framework_stage,
 )
 from harness_runtime.bootstrap.mutable_context import _MutableHarnessContext
+from harness_runtime.config.audit_signing import make_audit_signing_backend
 from harness_runtime.lifecycle.audit_writer import materialize_audit_writer_stage
 from harness_runtime.lifecycle.collector_daemon import materialize_collector_daemon_stage
 from harness_runtime.lifecycle.cost_attribution import materialize_cost_attribution_stage
 from harness_runtime.lifecycle.ring_buffer import materialize_ring_buffer_stage
-from harness_runtime.lifecycle.span_processor import materialize_span_processor_stage
+from harness_runtime.lifecycle.span_processor import (
+    materialize_span_processor_stage,
+    validate_audit_signing_for_span_stage,
+)
 from harness_runtime.lifecycle.tracer_provider import materialize_tracer_provider_stage
 from harness_runtime.types import RuntimeConfig
 
@@ -52,6 +57,24 @@ async def execute(
     _ = workload_class
     assert ctx.ledger_writer is not None, "stage 1 IS must precede stage 4 OD"
 
+    # 0. Audit-signing backend (B-47 PR B — OD spec v1.33 §21.2.1 composition
+    # root) — constructed AND validated BEFORE the one-shot global tracer
+    # registration (out-of-family Codex round-18: OTel registration cannot be
+    # undone, so a KMS config failure surfacing after it poisoned
+    # same-process bootstrap retry). `None` for the default `backend = "none"`
+    # config: every signing surface keeps the placeholder path byte-for-byte;
+    # a configured backend that cannot be built (missing boto3, alias ARN,
+    # missing consumer key) fails the stage loud — a deployment that asked
+    # for real signing never silently degrades. `tokenizer_will_bind` uses
+    # the persona predicate directly: stage 4 always materializes the audit
+    # writer below, so MTC ⇒ the token map WILL bind.
+    ctx.audit_signing_backend = make_audit_signing_backend(config.audit_signing)
+    validate_audit_signing_for_span_stage(
+        config,
+        signing_backend=ctx.audit_signing_backend,
+        tokenizer_will_bind=config.persona_tier == PersonaTier.MULTI_TENANT_COMPLIANCE,
+    )
+
     # 1. Tracer provider — globally registered.
     tracer = materialize_tracer_provider_stage(config)
     ctx.tracer_provider = tracer.provider
@@ -63,7 +86,12 @@ async def execute(
     ctx.audit_writer = audit.writer
 
     # 3. Span processor + exporter (attaches to the registered tracer provider).
-    materialize_span_processor_stage(config, tracer.provider, audit_writer=ctx.audit_writer)
+    materialize_span_processor_stage(
+        config,
+        tracer.provider,
+        audit_writer=ctx.audit_writer,
+        signing_backend=ctx.audit_signing_backend,
+    )
     # The span processor's lifetime is tied to the tracer provider; the stage
     # record is not held on HarnessContext (the BSP is reachable via the
     # tracer provider's processor list). The C-RT-10 shutdown will need to

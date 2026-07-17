@@ -197,12 +197,21 @@ class OpaqueRedactionTokenizer:
         token_map: RedactionTokenMap,
         token_prefix: str = "CONTENT",
         classifier: RedactionAttributeClassifier | None = None,
+        token_namespace: str | None = None,
     ) -> None:
         self._token_map = token_map
         self._token_prefix = token_prefix
         self._classifier = classifier
         self._counter = count(1)
         self._lock = Lock()
+        self._token_namespace = token_namespace
+        """Optional run-unique namespace folded into every token (B-47 PR B1,
+        out-of-family Codex round-29): the in-process counter restarts at 1
+        on every construction, so with a DURABLE token map (the audit-ledger
+        sidecar) two runs could mint the same `[REDACTED:CAT:000...001]` for
+        different raw values — an ambiguous token-to-raw lookup. A
+        composition root passes a per-construction namespace; `None` (the
+        default) preserves the legacy format byte-for-byte."""
 
     def tokenize(
         self,
@@ -222,7 +231,10 @@ class OpaqueRedactionTokenizer:
         category = _normalize_category(category)
         with self._lock:
             token_ordinal = next(self._counter)
-        token = f"[REDACTED:{category}:{token_ordinal:012x}]"
+        if self._token_namespace is not None:
+            token = f"[REDACTED:{category}:{self._token_namespace}:{token_ordinal:012x}]"
+        else:
+            token = f"[REDACTED:{category}:{token_ordinal:012x}]"
         self._token_map.append(
             RedactionTokenRecord(
                 token=token,

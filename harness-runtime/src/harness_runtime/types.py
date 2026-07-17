@@ -110,7 +110,15 @@ from harness_od.local_first_otlp_collector import (
 from harness_od.otel_genai_base import EventEmission, SpanRef
 from harness_od.per_cell_collector_placement_matrix import CollectorPlacement
 from harness_od.sampling_mode import SamplingMode
-from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    computed_field,
+    field_serializer,
+    field_validator,
+    model_validator,
+)
 
 # B-ENGINE-OUTPUT-REPLAY — durable output store (runtime spec C-RT-32). No harness
 # imports in that module → no import cycle.
@@ -433,6 +441,138 @@ class ProviderSecretsConfig(BaseModel):
             and not (self.gcp_project_id or "").strip()
         ):
             raise ValueError("gcp_project_id is required when backend is gcp-secret-manager")
+        return self
+
+
+class AuditSigningBackendKind(StrEnum):
+    """Audit-signing backend selector (OD spec v1.33 §21.2.1 / `B-47` PR B).
+
+    `NONE` (the default) preserves the placeholder signing path byte-for-byte
+    — no backend is constructed and every audit write behaves exactly as
+    before the seam existed. `AWS_KMS` selects ADR-D8's
+    `AwsKmsSigningBackend` (Ed25519, KMS-delegated — the private key never
+    enters harness process memory).
+    """
+
+    NONE = "none"
+    AWS_KMS = "aws-kms"
+
+
+class _ImmutableKeyArns(dict[str, str]):
+    """Immutable `key_arns` carrier (rounds 9 + 34).
+
+    A `dict` subclass with every mutation method disabled — unlike
+    `MappingProxyType` it pickles, so `copy.deepcopy` and
+    `model_copy(deep=True)` of a `RuntimeConfig` keep working while a
+    post-validation mutation to a blank/mislabeled value stays impossible.
+    """
+
+    def _refuse(self, *args: object, **kwargs: object) -> None:
+        raise TypeError(
+            "key_arns is immutable after validation — state that controls "
+            "signing must not be mutated post-validation; construct a new "
+            "AuditSigningConfig instead"
+        )
+
+    __setitem__ = _refuse
+    __delitem__ = _refuse
+    # `cfg.key_arns |= {...}` mutates in place BEFORE the frozen-field
+    # re-assignment raises (round-35 codex) — a caught ValidationError would
+    # leave the "immutable" mapping changed.
+    __ior__ = _refuse  # type: ignore[assignment]
+    update = _refuse  # type: ignore[assignment]
+    pop = _refuse  # type: ignore[assignment]
+    popitem = _refuse  # type: ignore[assignment]
+    clear = _refuse  # type: ignore[assignment]
+    setdefault = _refuse  # type: ignore[assignment]
+
+    def __reduce__(self) -> tuple[type[_ImmutableKeyArns], tuple[dict[str, str]]]:
+        # Pickle/deepcopy support (the whole point of choosing a dict
+        # subclass over MappingProxyType): reconstruction goes through the
+        # constructor — dict.__init__'s C-level populate — which bypasses
+        # the disabled mutation methods; copy.deepcopy's default dict
+        # `_reconstruct` would otherwise repopulate via the refused
+        # `__setitem__`.
+        return (_ImmutableKeyArns, (dict(self),))
+
+
+class AuditSigningConfig(BaseModel):
+    """Audit-signing composition-root config (`B-47` PR B; ADR-D8 §Decision
+    items 2/5).
+
+    Carries the deployment-time selection + the logical `key_id → physical
+    KMS key ARN` mapping ADR-D8 requires the composition root to own. Key
+    MATERIAL never lives in this config — only key *identifiers*; the AWS
+    credential chain is boto3's own (env / shared config / instance role),
+    never harness-managed. Mirrors `ProviderSecretsConfig`'s config-driven
+    backend-selector shape (the R-421 precedent).
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    backend: AuditSigningBackendKind = AuditSigningBackendKind.NONE
+    """Backend selector for audit-entry signing."""
+
+    key_arns: Mapping[str, str] = Field(default_factory=dict, validate_default=True)
+    """Logical `key_id` (e.g. `"harness-runtime-redaction-token"`) → physical
+    AWS KMS key ARN/ID. Aliases are rejected at backend construction
+    (`MutableKeyAliasRejectedError` — ADR-D8 §Decision item 2)."""
+
+    aws_region: str | None = None
+    """Optional region override for the boto3 KMS client; `None` defers to
+    boto3's own resolution chain."""
+
+    @field_serializer("key_arns")
+    def _serialize_key_arns(self, value: Mapping[str, str]) -> dict[str, str]:
+        # The stored value is an _ImmutableKeyArns (immutability, round-9
+        # codex); serialize as a plain dict so model_dump/model_dump_json
+        # stay warning-free and TOML/JSON round-trips re-validate cleanly.
+        return dict(value)
+
+    @field_validator("key_arns")
+    @classmethod
+    def _key_arns_entries_non_blank(cls, value: Mapping[str, str]) -> Mapping[str, str]:
+        # Out-of-family Codex round-6 finding (B-47 PR B1): a mapping whose
+        # required logical key points at "" / whitespace passed the
+        # non-empty-dict check and the coverage check, then failed inside
+        # boto3 on the FIRST real signing call — an invalid deployment must
+        # be rejected at config validation, not mid-run.
+        normalized: dict[str, str] = {}
+        for raw_key_id, raw_arn in value.items():
+            key_id, arn = raw_key_id.strip(), raw_arn.strip()
+            if not key_id:
+                raise ValueError("key_arns contains a blank logical key_id")
+            if not arn:
+                raise ValueError(
+                    f"key_arns[{raw_key_id!r}] is blank — every mapped value must "
+                    f"be a physical KMS key ARN/ID"
+                )
+            if key_id in normalized:
+                raise ValueError(
+                    f"key_arns contains duplicate logical key_id {key_id!r} "
+                    f"after whitespace normalization"
+                )
+            # Round-8 codex: return the NORMALIZED mapping — surrounding
+            # whitespace otherwise survives to the first real KMS Sign call
+            # as an invalid KeyId, defeating configuration-time rejection.
+            normalized[key_id] = arn
+        # Round-9 codex: an immutable view — ConfigDict(frozen=True) prevents
+        # REBINDING the field but not mutating the dict itself; a post-
+        # validation mutation to a blank value would defeat everything this
+        # validator just rejected. Round-34 codex: an _ImmutableKeyArns (dict
+        # subclass), NOT MappingProxyType — the proxy cannot be pickled, so
+        # copy.deepcopy / model_copy(deep=True) of any RuntimeConfig raised
+        # TypeError.
+        return _ImmutableKeyArns(normalized)
+
+    @model_validator(mode="after")
+    def _require_key_arns_for_aws_kms(self) -> Self:
+        if self.backend is AuditSigningBackendKind.AWS_KMS and not self.key_arns:
+            raise ValueError(
+                "key_arns must be non-empty when backend is aws-kms — the "
+                "composition root must supply an explicit key_id -> KMS key "
+                "ARN mapping (ADR-D8 §Decision item 2); no default key is assumed"
+            )
         return self
 
 
@@ -1568,6 +1708,12 @@ class RuntimeConfig(BaseModel):
     (per the docstring on `ProviderSecretsConfig`); actual secret values come
     from the OS keyring at request time per ADR-F5."""
 
+    audit_signing: AuditSigningConfig = Field(default_factory=AuditSigningConfig)
+    """Audit-signing composition-root config (`B-47` PR B; OD spec v1.33
+    §21.2.1). Default (`backend = "none"`) constructs no backend and preserves
+    the placeholder signing path byte-for-byte. Key identifiers only — never
+    key material."""
+
     otel: OTelConfig
     """OTLP endpoint, sampler mode, additional resource attrs. Enriched at U-RT-07.
 
@@ -1757,6 +1903,26 @@ class RuntimeConfig(BaseModel):
 
     tenant_id: str | None = None
     """Multi-tenant separation key per OD audit-ledger. `None` = single-tenant."""
+
+    @field_validator("tenant_id")
+    @classmethod
+    def _tenant_id_not_reserved(cls, value: str | None) -> str | None:
+        """Reject the two audit-scope-ambiguous literals at CONFIG LOAD
+        (codex round-47 P2): the audit writer refuses `""` and `"_single"`
+        (its single-tenant sidecar tag — see
+        `RuntimeAuditLedgerWriter._tenant_tag`, codex round-45 P1) on every
+        append/read, so a deployment configured with either would bootstrap
+        cleanly and then abort on the first audit touch in the compliance
+        span path. Fail at load instead; the writer-side check remains as
+        defense in depth.
+        """
+        if value in ("", "_single"):
+            raise ValueError(
+                f"tenant_id {value!r} is reserved: omit tenant_id (None) for "
+                f"single-tenant deployments; '_single' is the audit writer's "
+                f"single-tenant sidecar tag and may not be an operator tenant"
+            )
+        return value
 
     memory: RuntimeMemoryConfig = Field(default_factory=RuntimeMemoryConfig)
     """Automatic local memory substrate settings.

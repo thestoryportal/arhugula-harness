@@ -5,6 +5,13 @@
 # Runtime state — .harness/ is created at runtime by Bash append-write
 # (Meta-Architecture §10.1.3); state ledger + observability DB must not be committed.
 .harness/state.jsonl
+.harness/state.jsonl.lock
+# B-47 item (e) full-entry audit sidecar — carries ORIGINAL redaction-token
+# raw values (PII/secrets); must never be committed. Unanchored: the sidecar
+# lands beside WHATEVER directory PathBindingConfig places the state ledger
+# in, not only .harness/ (codex rounds 5+7, PR B1).
+audit-entries.jsonl
+audit-entries.jsonl.lock
 .harness/index.json
 .harness/observability.db
 .harness/*.db
