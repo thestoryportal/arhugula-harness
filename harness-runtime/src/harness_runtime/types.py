@@ -476,7 +476,7 @@ class AuditSigningConfig(BaseModel):
     backend: AuditSigningBackendKind = AuditSigningBackendKind.NONE
     """Backend selector for audit-entry signing."""
 
-    key_arns: Mapping[str, str] = Field(default_factory=dict)
+    key_arns: Mapping[str, str] = Field(default_factory=dict, validate_default=True)
     """Logical `key_id` (e.g. `"harness-runtime-redaction-token"`) → physical
     AWS KMS key ARN/ID. Aliases are rejected at backend construction
     (`MutableKeyAliasRejectedError` — ADR-D8 §Decision item 2)."""

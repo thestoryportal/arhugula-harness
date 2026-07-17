@@ -126,3 +126,13 @@ def test_key_arns_mapping_is_immutable_after_validation() -> None:
     )
     with pytest.raises(TypeError):
         config.key_arns["harness-runtime-redaction-token"] = ""  # type: ignore[index]
+
+
+def test_default_key_arns_is_immutable_too() -> None:
+    """Codex round-20 (PR B1) — pydantic skips field validators on defaults
+    unless validate_default is set, so the DEFAULT config's key_arns stayed a
+    mutable dict that bypassed every blank/normalization check. The default
+    is now validated (and therefore proxied) like any supplied value."""
+    config = AuditSigningConfig()
+    with pytest.raises(TypeError):
+        config.key_arns["x"] = "y"  # type: ignore[index]
