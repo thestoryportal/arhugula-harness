@@ -71,12 +71,18 @@ class AuditLedgerRedactionTokenMap(RedactionTokenMap):
         # per-tenant sidecar interleaves INDEPENDENT chain families (B-47
         # item (h)); seeding from another family's entry (cost/HITL/...)
         # would make the next redaction entry fail its own per-family chain
-        # check. The redaction-token composer synthesizes entry_core refs
-        # with the `redaction-token:` prefix — the family discriminator.
+        # check. Discriminate by the `audit.redaction_token.*` NAMESPACE keys
+        # the composer stamps on every redaction row (codex round-39: the
+        # earlier entry_core-prefix filter missed rows written with a
+        # caller-supplied `entry_core`, reseeding fresh maps from genesis
+        # despite an existing predecessor).
         family = [
             entry
             for entry in entries
-            if str(entry.payload.entry_core).startswith("redaction-token:")
+            if any(
+                key.startswith("audit.redaction_token.")
+                for key in entry.payload.audit_namespace_attrs
+            )
         ]
         if family:
             self._prior_entry_hash = family[-1].entry_hash

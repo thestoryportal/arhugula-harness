@@ -1230,6 +1230,51 @@ def test_fifo_sidecar_rejected_on_read_without_hanging(tmp_path: Path) -> None:
         writer.read_full_entries_for_tenant("tenant-A")
 
 
+def test_map_with_custom_entry_core_still_reseeds_from_its_family(tmp_path: Path) -> None:
+    """Codex round-39 (PR B1) — rows written with a caller-supplied
+    entry_core lack the redaction-token: ref prefix; the earlier filter
+    missed them and a restarted map reseeded from genesis despite an
+    existing predecessor. The namespace-key discriminator is entry-core-
+    independent: the restarted map must chain onto the custom-core row."""
+    from harness_od.audit_ledger_types import StateLedgerEntryRef
+    from harness_od.redaction_tokenizer import RedactionTokenRecord
+    from harness_runtime.lifecycle.redaction_token_audit_map import (
+        AuditLedgerRedactionTokenMap,
+    )
+
+    writer = _writer(tmp_path)
+
+    def _record(token: str) -> RedactionTokenRecord:
+        return RedactionTokenRecord(
+            token=token,
+            raw_value=f"raw for {token}",
+            semantic_category="PII",
+            attribute_key="gen_ai.input.messages",
+            trace_id="trace-1",
+            span_id=f"span-{token}",
+        )
+
+    map_run_1 = AuditLedgerRedactionTokenMap(
+        audit_writer=writer,
+        tenant_id="tenant-core",
+        signing_key_id="chain-key",
+        entry_core=StateLedgerEntryRef("custom-core-ref"),
+    )
+    map_run_1.append(_record("[REDACTED:PII:c1]"))
+
+    map_run_2 = AuditLedgerRedactionTokenMap(
+        audit_writer=writer,
+        tenant_id="tenant-core",
+        signing_key_id="chain-key",
+        entry_core=StateLedgerEntryRef("custom-core-ref"),
+    )
+    map_run_2.append(_record("[REDACTED:PII:c2]"))
+
+    entries = writer.read_full_entries_for_tenant("tenant-core")
+    assert len(entries) == 2
+    assert entries[1].payload.prior_entry_hash == entries[0].entry_hash
+
+
 def test_short_reads_never_mark_unread_suffix_as_folded(tmp_path: Path) -> None:
     """Codex round-37 (PR B1) — a short os.read with the offset advanced to
     the snapshot size marked the unread suffix as folded; a replay whose
