@@ -40,7 +40,6 @@ import re
 from collections.abc import Mapping
 from enum import Enum, StrEnum
 from pathlib import Path
-from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, NewType, Protocol, Self, runtime_checkable
 from urllib.parse import urlsplit
 
@@ -459,6 +458,40 @@ class AuditSigningBackendKind(StrEnum):
     AWS_KMS = "aws-kms"
 
 
+class _ImmutableKeyArns(dict[str, str]):
+    """Immutable `key_arns` carrier (rounds 9 + 34).
+
+    A `dict` subclass with every mutation method disabled — unlike
+    `MappingProxyType` it pickles, so `copy.deepcopy` and
+    `model_copy(deep=True)` of a `RuntimeConfig` keep working while a
+    post-validation mutation to a blank/mislabeled value stays impossible.
+    """
+
+    def _refuse(self, *args: object, **kwargs: object) -> None:
+        raise TypeError(
+            "key_arns is immutable after validation — state that controls "
+            "signing must not be mutated post-validation; construct a new "
+            "AuditSigningConfig instead"
+        )
+
+    __setitem__ = _refuse
+    __delitem__ = _refuse
+    update = _refuse  # type: ignore[assignment]
+    pop = _refuse  # type: ignore[assignment]
+    popitem = _refuse  # type: ignore[assignment]
+    clear = _refuse  # type: ignore[assignment]
+    setdefault = _refuse  # type: ignore[assignment]
+
+    def __reduce__(self) -> tuple[type[_ImmutableKeyArns], tuple[dict[str, str]]]:
+        # Pickle/deepcopy support (the whole point of choosing a dict
+        # subclass over MappingProxyType): reconstruction goes through the
+        # constructor — dict.__init__'s C-level populate — which bypasses
+        # the disabled mutation methods; copy.deepcopy's default dict
+        # `_reconstruct` would otherwise repopulate via the refused
+        # `__setitem__`.
+        return (_ImmutableKeyArns, (dict(self),))
+
+
 class AuditSigningConfig(BaseModel):
     """Audit-signing composition-root config (`B-47` PR B; ADR-D8 §Decision
     items 2/5).
@@ -487,9 +520,9 @@ class AuditSigningConfig(BaseModel):
 
     @field_serializer("key_arns")
     def _serialize_key_arns(self, value: Mapping[str, str]) -> dict[str, str]:
-        # The stored value is a MappingProxyType (immutability, round-9 codex);
-        # serialize as a plain dict so model_dump/model_dump_json stay
-        # warning-free and TOML/JSON round-trips re-validate cleanly.
+        # The stored value is an _ImmutableKeyArns (immutability, round-9
+        # codex); serialize as a plain dict so model_dump/model_dump_json
+        # stay warning-free and TOML/JSON round-trips re-validate cleanly.
         return dict(value)
 
     @field_validator("key_arns")
@@ -522,8 +555,11 @@ class AuditSigningConfig(BaseModel):
         # Round-9 codex: an immutable view — ConfigDict(frozen=True) prevents
         # REBINDING the field but not mutating the dict itself; a post-
         # validation mutation to a blank value would defeat everything this
-        # validator just rejected.
-        return MappingProxyType(normalized)
+        # validator just rejected. Round-34 codex: an _ImmutableKeyArns (dict
+        # subclass), NOT MappingProxyType — the proxy cannot be pickled, so
+        # copy.deepcopy / model_copy(deep=True) of any RuntimeConfig raised
+        # TypeError.
+        return _ImmutableKeyArns(normalized)
 
     @model_validator(mode="after")
     def _require_key_arns_for_aws_kms(self) -> Self:

@@ -128,6 +128,27 @@ def test_key_arns_mapping_is_immutable_after_validation() -> None:
         config.key_arns["harness-runtime-redaction-token"] = ""  # type: ignore[index]
 
 
+def test_config_deepcopy_and_model_copy_survive_immutability() -> None:
+    """Codex round-34 (PR B1) — MappingProxyType broke copy.deepcopy and
+    model_copy(deep=True) of every RuntimeConfig carrying the default
+    sub-config. The immutable carrier must pickle: copies succeed AND stay
+    immutable."""
+    import copy
+
+    config = AuditSigningConfig(
+        backend=AuditSigningBackendKind.AWS_KMS,
+        key_arns={"harness-runtime-redaction-token": _ARN},
+    )
+    duplicate = copy.deepcopy(config)
+    assert duplicate.key_arns == config.key_arns
+
+    shallow_deep = config.model_copy(deep=True)
+    assert shallow_deep.key_arns == config.key_arns
+
+    with pytest.raises(TypeError):
+        duplicate.key_arns["harness-runtime-redaction-token"] = ""  # type: ignore[index]
+
+
 def test_default_key_arns_is_immutable_too() -> None:
     """Codex round-20 (PR B1) — pydantic skips field validators on defaults
     unless validate_default is set, so the DEFAULT config's key_arns stayed a
