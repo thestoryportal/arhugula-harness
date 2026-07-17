@@ -702,3 +702,71 @@ def test_restarted_stage_tokenizers_never_collide_tokens(tmp_path: Path) -> None
         tokens.append(entry.payload.audit_namespace_attrs["audit.redaction_token.token"])
 
     assert tokens[0] != tokens[1], tokens
+
+
+def test_additional_key_ids_validated_independent_of_tokenizer_gate(tmp_path: Path) -> None:
+    """B-47 PR B2a — the HITL/sub-agent composers ("harness-runtime-dev")
+    and cost builders ("harness-cost-attribution-v1") sign on EVERY audit
+    write once the backend is threaded, tokenizer or not: a KMS mapping gap
+    for their key_ids must fail bootstrap validation even when
+    tokenizer_will_bind is False. Present ids pass."""
+    from harness_runtime.lifecycle.span_processor import (
+        SpanProcessorBindError,
+        validate_audit_signing_for_span_stage,
+    )
+    from harness_runtime.types import AuditSigningBackendKind, AuditSigningConfig
+
+    class _StubBackend:
+        algorithm = "ed25519"
+
+        def sign(self, *, message: bytes, key_id: str, key_period: int) -> bytes:
+            raise AssertionError("never reached")
+
+        def verify(self, *, message: bytes, signature: bytes, key_id: str, key_period: int) -> bool:
+            raise AssertionError("never reached")
+
+    base = _config(tmp_path)
+    arn = "arn:aws:kms:us-east-1:1:key/x"
+    config = base.model_copy(
+        update={
+            "audit_signing": AuditSigningConfig(
+                backend=AuditSigningBackendKind.AWS_KMS,
+                key_arns={"harness-cost-attribution-v1": arn},
+            )
+        }
+    )
+    with pytest.raises(SpanProcessorBindError, match="harness-runtime-dev"):
+        validate_audit_signing_for_span_stage(
+            config,
+            signing_backend=_StubBackend(),
+            tokenizer_will_bind=False,
+            additional_key_ids=("harness-runtime-dev", "harness-cost-attribution-v1"),
+        )
+
+    covered = base.model_copy(
+        update={
+            "audit_signing": AuditSigningConfig(
+                backend=AuditSigningBackendKind.AWS_KMS,
+                key_arns={
+                    "harness-runtime-dev": arn,
+                    "harness-cost-attribution-v1": arn,
+                },
+            )
+        }
+    )
+    validate_audit_signing_for_span_stage(
+        covered,
+        signing_backend=_StubBackend(),
+        tokenizer_will_bind=False,
+        additional_key_ids=("harness-runtime-dev", "harness-cost-attribution-v1"),
+    )
+
+    # A KMS config with additional ids but NO constructed backend must fail
+    # even without the tokenizer (never silently degrade).
+    with pytest.raises(SpanProcessorBindError, match="never silently degrade"):
+        validate_audit_signing_for_span_stage(
+            covered,
+            signing_backend=None,
+            tokenizer_will_bind=False,
+            additional_key_ids=("harness-runtime-dev",),
+        )

@@ -1726,3 +1726,31 @@ def test_runtime_config_rejects_reserved_tenant_ids(tmp_path: Path) -> None:
             RuntimeConfig.model_validate({**base, "tenant_id": reserved})
     accepted = RuntimeConfig.model_validate({**base, "tenant_id": "tenant-x"})
     assert accepted.tenant_id == "tenant-x"
+
+
+def test_reader_first_ever_append_race_does_not_false_report_loss(tmp_path: Path) -> None:
+    """Merge-gate round-1 concurrency lens (B-47 item (k)) — sampling
+    exists() BEFORE the refs predicate let a FIRST-EVER append land file+ref
+    between the two samples and falsely raise the round-36 loss error. The
+    refs predicate is sampled first now; refs-at-T0 ∧ not-exists-at-T1 is
+    sound under sidecar-first ordering."""
+    import unittest.mock as mock
+
+    writer = _writer(tmp_path)
+    entry = _make_audit_entry("1" * 64)
+    original = RuntimeAuditLedgerWriter.sidecar_expected
+    state = {"injected": False}
+
+    def _first_append_lands_mid_sample(self: RuntimeAuditLedgerWriter) -> bool:
+        if not state["injected"]:
+            state["injected"] = True
+            # The racing writer's FIRST-EVER append: creates the sidecar
+            # AND lands the IS ref while the reader is between samples.
+            writer.append("tenant-A", entry)
+        return original(self)
+
+    with mock.patch.object(
+        RuntimeAuditLedgerWriter, "sidecar_expected", _first_append_lands_mid_sample
+    ):
+        entries = writer.read_full_entries_for_tenant("tenant-A")
+    assert [e.entry_hash for e in entries] == [entry.entry_hash]

@@ -1135,3 +1135,158 @@ async def test_flush_observability_absent_sidecar_is_clean_noop(tmp_path: Path) 
     )
     report = await flush_observability(ctx)
     assert "audit_sidecar" in report.failures
+
+
+@pytest.mark.asyncio
+async def test_flush_first_ever_append_race_not_reported_as_loss(tmp_path: Path) -> None:
+    """Merge-gate round-1 concurrency lens (B-47 item (k)) — the flush
+    guard's exists()-then-refs order recorded a spurious audit_sidecar loss
+    failure when the deployment's FIRST-EVER audit append landed file+ref
+    between the two samples. Refs are sampled first now."""
+    sidecar_path = tmp_path / "audit-entries.jsonl"
+
+    def _expected_and_first_append_lands() -> bool:
+        # Simulate the racing first append: by the time the refs predicate
+        # answers True, the sidecar file exists (sidecar-first ordering).
+        sidecar_path.write_text('{"tenant_tag":"_single","entry":{}}\n')
+        return True
+
+    tracer = _FakeTracerProvider(returns=True)
+    ctx = _ctx_with(tmp_path, tracer=tracer)
+    ctx.audit_writer = SimpleNamespace(
+        sidecar_path=sidecar_path,
+        sidecar_expected=_expected_and_first_append_lands,
+    )
+
+    report = await flush_observability(ctx, timeout_millis=5_000)
+    assert "audit_sidecar" not in report.failures
+
+
+@pytest.mark.asyncio
+async def test_sidecar_timeout_sets_timed_out_independently(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """B-47 item (k) — the sidecar surface's own TimeoutError branch must set
+    timed_out; in the shared-stall witnesses the ledger surface also times
+    out and masks a deleted sidecar-side flag. Here the ledger surface fails
+    NON-timeout (missing file), so timed_out can only come from the sidecar
+    branch."""
+    import time as time_module
+
+    sidecar_path = tmp_path / "audit-entries.jsonl"
+    sidecar_path.write_text('{"tenant_tag":"_single","entry":{}}\n')
+    sidecar_ino = os.stat(sidecar_path).st_ino
+    real_fsync = os.fsync
+
+    def _stall_sidecar_only(fd: int) -> None:
+        if os.fstat(fd).st_ino == sidecar_ino:
+            time_module.sleep(1.5)
+        else:
+            real_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", _stall_sidecar_only)
+    tracer = _FakeTracerProvider(returns=True)
+    # NO ledger_writer attribute at all: that surface fails with an
+    # AttributeError through the generic except (which never sets
+    # timed_out), and the stalled sidecar consumes the whole shared budget
+    # anyway — so timed_out=True can ONLY come from the sidecar branch.
+    ctx = SimpleNamespace(
+        tracer_provider=tracer,
+        audit_writer=SimpleNamespace(
+            sidecar_path=sidecar_path,
+            sidecar_expected=lambda: True,
+        ),
+    )
+
+    report = await flush_observability(ctx, timeout_millis=200)
+    assert "audit_sidecar" in report.failures
+    assert "ledger" in report.failures
+    assert report.timed_out is True
+
+
+@pytest.mark.asyncio
+async def test_flush_with_real_audit_writer_end_to_end(tmp_path: Path) -> None:
+    """B-47 item (k) — every other sidecar-flush witness fabricates the
+    writer via SimpleNamespace, so renaming the REAL writer's duck-typed
+    surface (sidecar_path / sidecar_expected) silently disabled the
+    deletion-after-use guard without any test noticing. Wire a real
+    RuntimeAuditLedgerWriter through flush_observability: clean flush while
+    the sidecar exists; deleting the sidecar records the audit_sidecar
+    failure through the writer's REAL first-use authority."""
+    from datetime import UTC, datetime, timedelta
+
+    from harness_core.deployment_surface import DeploymentSurface
+    from harness_core.workload_class import WorkloadClass
+    from harness_is.path_class_registry import PathClass
+    from harness_is.path_resolver import PathResolver
+    from harness_is.state_ledger_entry_schema import Actor, ActorClass
+    from harness_od.audit_ledger_types import (
+        AuditLedgerEntry,
+        AuditPayload,
+        AuditSignatureAttributes,
+        SignatureAlgorithm,
+        StateLedgerEntryRef,
+        compute_entry_hash,
+    )
+    from harness_runtime.config.path_bindings import build_path_binding
+    from harness_runtime.lifecycle.audit_writer import RuntimeAuditLedgerWriter
+    from harness_runtime.lifecycle.state_ledger import materialize_state_ledger
+    from harness_runtime.types import PathBindingConfig
+
+    ledger = materialize_state_ledger(
+        PathResolver(
+            build_path_binding(
+                PathBindingConfig(
+                    raw_entries=(
+                        {
+                            "path_class": PathClass.STATE_LEDGER,
+                            "workflow_class": WorkloadClass.SOFTWARE_ENGINEERING,
+                            "deployment_surface": DeploymentSurface.LOCAL_DEVELOPMENT,
+                            "path": str(tmp_path / "state.jsonl"),
+                        },
+                    ),
+                )
+            )
+        ),
+        workflow_class=WorkloadClass.SOFTWARE_ENGINEERING,
+        deployment_surface=DeploymentSurface.LOCAL_DEVELOPMENT,
+        actor=Actor(actor_class=ActorClass.AGENT, actor_id="test-runtime"),
+    )
+    clock = {"now": datetime(2026, 5, 19, 12, 0, 0, tzinfo=UTC)}
+
+    def _tick() -> datetime:
+        clock["now"] = clock["now"] + timedelta(microseconds=1)
+        return clock["now"]
+
+    writer = RuntimeAuditLedgerWriter(ledger_writer=ledger, time_source=_tick)
+    payload = AuditPayload(
+        entry_core=StateLedgerEntryRef("entry-ref-e2e"),
+        audit_namespace_attrs={"audit.actor": "e2e"},
+        prior_entry_hash="0" * 64,
+    )
+    writer.append(
+        "tenant-A",
+        AuditLedgerEntry(
+            payload=payload,
+            signature_attrs=AuditSignatureAttributes(
+                audit_signature_value="sig:e2e",
+                audit_signature_algorithm=SignatureAlgorithm.ED25519,
+                audit_signature_key_id="test-key",
+                audit_signature_key_period="2026-Q2",
+            ),
+            entry_hash=compute_entry_hash(payload),
+        ),
+    )
+
+    tracer = _FakeTracerProvider(returns=True)
+    # NOT _ctx_with: its `path.write_text("")` convenience would TRUNCATE the
+    # real ledger, wiping the IS refs the guard consults.
+    ctx = SimpleNamespace(tracer_provider=tracer, ledger_writer=ledger, audit_writer=writer)
+
+    clean = await flush_observability(ctx, timeout_millis=5_000)
+    assert clean.failures == ()
+    assert clean.ledger_fsynced is True
+
+    writer.sidecar_path.unlink()
+    lossy = await flush_observability(ctx, timeout_millis=5_000)
+    assert "audit_sidecar" in lossy.failures

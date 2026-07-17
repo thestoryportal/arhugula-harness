@@ -765,8 +765,17 @@ class RuntimeAuditLedgerWriter:
         is_ref_hashes = {
             is_entry.action_id.rsplit(":", 1)[1] for is_entry in self.read_for_tenant(tenant_id)
         }
+        # Sample the IS-refs predicate BEFORE the existence check (merge-gate
+        # round-1 concurrency lens, B-47 item (k)): exists()-then-refs let a
+        # FIRST-EVER append land file+ref between the two samples and
+        # falsely raise the round-36 loss error. Refs-at-T0 with
+        # not-exists-at-T1 is sound under sidecar-first ordering: a ref at
+        # T0 implies its sidecar file existed at T0, so absence later is
+        # genuine deletion.
+        refs_existed = self.sidecar_expected()
         if not self._sidecar_path.exists():
-            self._assert_absence_is_first_use()
+            if refs_existed:
+                self._assert_absence_is_first_use()
             return []
         entries: list[AuditLedgerEntry] = []
         seen_hashes: set[str] = set()

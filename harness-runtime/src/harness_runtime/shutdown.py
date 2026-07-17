@@ -315,12 +315,12 @@ async def flush_observability(
         # fails `reportOptionalMemberAccess` — the probe does not prove
         # `audit_writer` is non-None; invoking the CAPTURED callable does.
         sidecar_expected = getattr(audit_writer, "sidecar_expected", None)
-        if (
-            sidecar_path is not None
-            and not sidecar_path.exists()
-            and sidecar_expected is not None
-            and sidecar_expected()
-        ):
+        # Refs predicate sampled BEFORE exists() (merge-gate round-1
+        # concurrency lens, B-47 item (k)): the reverse order let a
+        # first-ever audit append land file+ref between the samples and
+        # record a spurious audit_sidecar loss failure.
+        refs_existed = sidecar_expected() if sidecar_expected is not None else False
+        if sidecar_path is not None and refs_existed and not sidecar_path.exists():
             raise ValueError(
                 f"audit sidecar {sidecar_path} is missing but IS audit "
                 f"references exist — signed history deleted or lost"
