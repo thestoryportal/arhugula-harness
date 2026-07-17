@@ -478,8 +478,12 @@ class RuntimeAuditLedgerWriter:
         # B-40 shared read lock (side-effect-free: never O_CREAT, never mkdir)
         # — excludes a concurrent writer's partial line once the lock file
         # exists; the brand-new-file window carries the documented B-46
-        # residual, identical to the main-ledger read path.
-        with cross_process_read_lock(self._sidecar_path):
+        # residual, identical to the main-ledger read path. The per-path
+        # thread lock adds the SAME-PROCESS half (codex round-26): on
+        # Windows the cross-process lock is a no-op, so a verifier racing a
+        # writer thread in one process needs this to never observe a
+        # partially written record.
+        with self._sidecar_thread_lock, cross_process_read_lock(self._sidecar_path):
             with self._sidecar_path.open(encoding="utf-8") as fh:
                 for line in fh:
                     if not line.strip():

@@ -1072,3 +1072,34 @@ def test_writer_instances_over_one_sidecar_share_the_in_process_lock(tmp_path: P
     with tempfile.TemporaryDirectory() as other:
         writer_c = _writer(Path(other))
         assert writer_c._sidecar_thread_lock is not writer_a._sidecar_thread_lock
+
+
+def test_reader_holds_the_shared_in_process_lock(tmp_path: Path) -> None:
+    """Codex round-26 (PR B1) — on Windows the cross-process read lock is a
+    no-op, so the reader must hold the same per-path thread lock the writers
+    use or a same-process verifier can race a writer thread. Witness: a read
+    attempted while the lock is held blocks until release."""
+    import threading
+
+    writer = _writer(tmp_path)
+    writer.append("tenant-A", _make_audit_entry("1" * 64))
+
+    results: list[int] = []
+    started = threading.Event()
+
+    def _read() -> None:
+        started.set()
+        results.append(len(writer.read_full_entries_for_tenant("tenant-A")))
+
+    lock = writer._sidecar_thread_lock
+    lock.acquire()
+    try:
+        t = threading.Thread(target=_read)
+        t.start()
+        started.wait(timeout=5)
+        t.join(timeout=0.3)
+        assert t.is_alive(), "reader did not block on the shared in-process lock"
+    finally:
+        lock.release()
+    t.join(timeout=5)
+    assert results == [1]
