@@ -98,12 +98,19 @@ from typing import Any, Protocol, runtime_checkable
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
 from harness_cp.workflow_driver_types import StepExecutionContext, WorkflowStep
 
+from harness_runtime.lifecycle.audit_offload import drain_inflight_audit_work
+
 __all__ = [
     "AsyncStepDispatcher",
     "StepDispatchTimeoutError",
     "SyncDispatcherFacade",
     "materialize_sync_dispatcher_facade",
 ]
+
+#: Bounded post-cancel grace for in-flight audit work (codex round-3 P1) —
+#: one KMS sign + local file writes; generous relative to job length, small
+#: relative to the step bound.
+_AUDIT_DRAIN_GRACE_SECONDS = 10.0
 
 
 class StepDispatchTimeoutError(Exception):
@@ -216,6 +223,17 @@ class SyncDispatcherFacade:
             # `call_soon_threadsafe`, so `.cancel()` is safe to call here
             # from this (worker) thread.
             future.cancel()
+            # Codex round-3 P1 (B-47 PR B2a): cancelling this wrapper future
+            # marks it cancelled IMMEDIATELY — the inner coroutine's audit
+            # offload worker (KMS sign + F2/sidecar/ledger writes) may still
+            # be running, and without an explicit completion acknowledgement
+            # its writes could land AFTER this timeout is reported, racing
+            # retries and shutdown. Drain (bounded) every in-flight audit
+            # job from THIS worker thread before surfacing; audit jobs are
+            # short, so the grace is small relative to the step bound. A
+            # False return (bound expired) still surfaces the timeout — the
+            # residual window is then explicit, never silent.
+            drain_inflight_audit_work(timeout_seconds=_AUDIT_DRAIN_GRACE_SECONDS)
             raise StepDispatchTimeoutError(
                 f"step dispatch exceeded {self.result_timeout_seconds}s bound"
             ) from exc

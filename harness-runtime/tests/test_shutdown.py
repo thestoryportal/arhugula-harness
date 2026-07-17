@@ -1290,3 +1290,34 @@ async def test_flush_with_real_audit_writer_end_to_end(tmp_path: Path) -> None:
     writer.sidecar_path.unlink()
     lossy = await flush_observability(ctx, timeout_millis=5_000)
     assert "audit_sidecar" in lossy.failures
+
+
+@pytest.mark.asyncio
+async def test_flush_bounded_when_refs_scan_stalls(tmp_path: Path) -> None:
+    """Codex round-3 P2 (B-47 PR B2a) — `sidecar_expected()` deserializes
+    the ENTIRE IS ledger; run on the event loop it blocked shutdown outside
+    every bound. The whole guard (refs scan + exists + fsync) now runs in
+    the bounded worker."""
+    import time as time_module
+
+    sidecar_path = tmp_path / "audit-entries.jsonl"
+    sidecar_path.write_text('{"tenant_tag":"_single","entry":{}}\n')
+
+    def _slow_refs_scan() -> bool:
+        time_module.sleep(1.5)
+        return True
+
+    tracer = _FakeTracerProvider(returns=True)
+    ctx = _ctx_with(tmp_path, tracer=tracer)
+    ctx.audit_writer = SimpleNamespace(
+        sidecar_path=sidecar_path,
+        sidecar_expected=_slow_refs_scan,
+    )
+
+    start = time_module.monotonic()
+    report = await flush_observability(ctx, timeout_millis=200)
+    elapsed = time_module.monotonic() - start
+
+    assert elapsed < 1.2
+    assert "audit_sidecar" in report.failures
+    assert report.timed_out is True

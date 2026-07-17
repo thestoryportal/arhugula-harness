@@ -37,7 +37,11 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Final
 
-__all__ = ["AUDIT_OFFLOAD_MAX_WORKERS", "run_audit_off_loop"]
+__all__ = [
+    "AUDIT_OFFLOAD_MAX_WORKERS",
+    "drain_inflight_audit_work",
+    "run_audit_off_loop",
+]
 
 #: Small by design: audit jobs are short-lived (one signature + local file
 #: writes); long-running work (drivers, child workflows) must never run
@@ -48,6 +52,43 @@ _AUDIT_OFFLOAD_EXECUTOR: Final[ThreadPoolExecutor] = ThreadPoolExecutor(
     max_workers=AUDIT_OFFLOAD_MAX_WORKERS,
     thread_name_prefix="harness-audit-offload",
 )
+
+# In-flight audit jobs (codex round-3 P1 on PR B2a): `SyncDispatcherFacade`'s
+# timeout path cancels its `run_coroutine_threadsafe` future, which is marked
+# cancelled IMMEDIATELY — the facade has no handle on the coroutine's actual
+# completion, so the run_audit_off_loop join alone cannot stop an audit write
+# from landing after `StepDispatchTimeoutError` was raised. The facade calls
+# `drain_inflight_audit_work` (sync, from its worker thread) after cancelling
+# so every worker that was signing/writing at cancel time completes BEFORE
+# the timeout is surfaced. Scoped to ALL in-flight jobs, not per-step — audit
+# jobs are short and over-waiting is harmless; per-step keying is not worth
+# the plumbing.
+_INFLIGHT_LOCK: Final[threading.Lock] = threading.Lock()
+_INFLIGHT: Final[set[Any]] = set()
+
+
+def drain_inflight_audit_work(timeout_seconds: float) -> bool:
+    """Block (bounded) until every currently in-flight audit job completes.
+
+    Sync — callable from worker threads (the facade's timeout path), NEVER
+    from the event loop. Returns False when the bound expired with jobs
+    still running (the caller surfaces its timeout regardless; the residual
+    risk window is then explicit, not silent).
+    """
+    with _INFLIGHT_LOCK:
+        pending = list(_INFLIGHT)
+    if not pending:
+        return True
+    from concurrent.futures import wait as _wait
+
+    done, not_done = _wait(pending, timeout=timeout_seconds)
+    _ = done
+    return not not_done
+
+
+def _discard_inflight(future: Any) -> None:
+    with _INFLIGHT_LOCK:
+        _INFLIGHT.discard(future)
 
 
 async def run_audit_off_loop(fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Any:
@@ -60,6 +101,9 @@ async def run_audit_off_loop(fn: Callable[..., Any], /, *args: Any, **kwargs: An
     # so the join below must hold the CONCURRENT future, which faithfully
     # reports the worker's real completion.
     concurrent_future = _AUDIT_OFFLOAD_EXECUTOR.submit(call)
+    with _INFLIGHT_LOCK:
+        _INFLIGHT.add(concurrent_future)
+    concurrent_future.add_done_callback(_discard_inflight)
     try:
         return await asyncio.wrap_future(concurrent_future)
     except asyncio.CancelledError:
