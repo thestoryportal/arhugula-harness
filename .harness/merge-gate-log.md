@@ -119,3 +119,15 @@ Branch: b24-b27-fork-ratification-build · Date: 2026-07-15
 **Codex chain:** 49 rounds; rounds 1–48 each fixed-and-mutation-probed or registered ((e)–(j) close-out items); round 49 clean ("no actionable bugs").
 
 **Outcome:** all-APPROVE at round 1 → merge without HIL (CI-green precondition). Follow-up notes registered at forward-register B-47 item (k) for the PR-B2 arc.
+
+## PR #1036 — 2026-07-17 — `b-47-pr-b2a-signing-threading`
+
+**Round 1:** concurrency APPROVE (breaker epoch machine sound; executor spawn accounting sound; lock order total/acyclic; ack protocol has one narrow advisory flag-race + Thread.start rollback note — follow-on grade) · spec-conformance APPROVE (OD v1.33 §21.2.1 passthroughs verified; ADR-D8 item-5 quote byte-exact; C-AS-07 key wiring = impl-to-ADR not extension; §28.10.4 fail-open faithfully grounded with the MTC fork registered as item (m); resample-retry violates no IS timestamp contract; register rows match; 2 nits — close_out "no post-timeout commits" slightly overstated vs the bounded detach residual, stage-4 key-id literal duplication) · test-witness **BLOCK** (USE half of the backend pass-through unwitnessed at 5 of 6 composer families — single deletable kwargs the suite survived).
+
+**Fix:** five per-family USE-half witnesses driving the REAL compose paths with a counting ed25519-width backend (6 probes, 2 independently re-verified), plus codex rounds 12–18 executor hardening in the same window.
+
+**Round 2:** test-witness **BLOCK** narrowed to ONE surviving mutation (the prewarm-site kwarg). **Fix:** prewarm USE witness (probed). **Re-verify by the same lens:** APPROVE — all seven branch-new pass-through sites now carry real-path USE witnesses on top of the identity-keyed SET witness.
+
+**Codex chain:** 18 rounds; rounds 1–17 each fixed-and-probed or registered (B-48 sync-inner-on-loop fork; item (m) fail-closed policy fork); round 18 clean.
+
+**Outcome:** all-APPROVE → merge without HIL (CI-green precondition). Round-1 advisory notes (ack flag-race, Thread.start rollback, stage-4 literal duplication) fold into the B-47 PR-B2 design-cluster arc.
