@@ -577,3 +577,33 @@ def test_aws_kms_mapping_missing_token_map_key_fails_at_bootstrap(tmp_path: Path
     # on every failed/retried bootstrap.
     leaked = {t_.ident for t_ in threading.enumerate()} - threads_before
     assert leaked == set()
+
+
+def test_aws_kms_config_without_injected_backend_fails_at_bootstrap(tmp_path: Path) -> None:
+    """Codex round-16 (B-47 PR B1) — the composer is public: a direct caller
+    passing an explicitly-KMS config while omitting `signing_backend` must
+    fail loud at construction, not silently emit `unsigned:` placeholders
+    despite the configuration."""
+    from harness_runtime.lifecycle.span_processor import SpanProcessorBindError
+    from harness_runtime.types import AuditSigningBackendKind, AuditSigningConfig
+
+    base = _config(
+        tmp_path,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        tenant_id="tenant-x",
+    )
+    config = base.model_copy(
+        update={
+            "audit_signing": AuditSigningConfig(
+                backend=AuditSigningBackendKind.AWS_KMS,
+                key_arns={"harness-runtime-redaction-token": "arn:aws:kms:us-east-1:1:key/x"},
+            )
+        }
+    )
+    with pytest.raises(SpanProcessorBindError, match="never silently degrade"):
+        materialize_span_processor_stage(
+            config,
+            _provider(),
+            exporter=InMemorySpanExporter(),
+            audit_writer=_RecordingAuditWriter(),
+        )

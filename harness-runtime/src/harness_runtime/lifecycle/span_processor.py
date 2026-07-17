@@ -223,6 +223,24 @@ def materialize_span_processor_stage(
     )
     if (
         tokenizer_will_bind
+        and config.audit_signing.backend is AuditSigningBackendKind.AWS_KMS
+        and signing_backend is None
+    ):
+        # Out-of-family Codex round-16 (B-47 PR B1): stage 4 always supplies
+        # the constructed backend, but this composer is public — a direct
+        # caller passing an explicitly-KMS config while omitting
+        # `signing_backend` would otherwise get a token map silently
+        # emitting `unsigned:` placeholders despite the configuration. A
+        # deployment that asked for real signing never silently degrades.
+        raise SpanProcessorBindError(
+            "audit_signing.backend is 'aws-kms' but no signing_backend was "
+            "supplied to materialize_span_processor_stage — construct one "
+            "via make_audit_signing_backend(config.audit_signing) and pass "
+            "it through (stage 4 does); explicit KMS configuration must "
+            "never silently degrade to placeholder signing"
+        )
+    if (
+        tokenizer_will_bind
         and signing_backend is not None
         and config.audit_signing.backend is AuditSigningBackendKind.AWS_KMS
         and REDACTION_TOKEN_SIGNING_KEY_ID not in config.audit_signing.key_arns
