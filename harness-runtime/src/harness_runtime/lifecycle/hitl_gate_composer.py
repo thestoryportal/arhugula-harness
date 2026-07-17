@@ -1045,7 +1045,22 @@ class RuntimeHITLGateComposer:
         `asyncio.to_thread` copies contextvars, so the run-scoped
         cost-accumulator proxy still resolves.
         """
-        return await run_audit_off_loop(self._compose_and_persist_audit, *args, **kwargs)
+        try:
+            return await run_audit_off_loop(self._compose_and_persist_audit, *args, **kwargs)
+        except AUDIT_SIGNING_HARD_FAILURES as exc:
+            # Codex round-17 P1: queue saturation raises at submit — before
+            # the compose body's own handlers — bypassing the
+            # raise_on_failure contract. Honor it here.
+            logging.getLogger("harness.runtime.audit_signing").error(
+                "audit offload refused the job — signed audit record "
+                "OMITTED for HITL gate (offload boundary)",
+                exc_info=True,
+            )
+            if kwargs.get("raise_on_failure"):
+                raise HITLGateAuditComposeError(
+                    f"HITL gate audit composition refused at the offload boundary: {exc}"
+                ) from exc
+            return (None, None)
 
     def _compose_and_persist_audit(
         self,

@@ -823,10 +823,7 @@ class RuntimeLLMDispatcher:
                 # Honest cost attribution — synthetic step context so the spend
                 # appears in the audit ledger under workflow_id="__prewarm__"
                 # rather than being silently attributed to the last real workflow.
-                await run_audit_off_loop(
-                    # Codex round-1 P1 (PR B2a): KMS signing is sync network
-                    # I/O — off-loop (dedicated executor, round-2 P1).
-                    _attribute_cost_best_effort,
+                await _attribute_cost_off_loop_best_effort(
                     span=_span,
                     cost_chain=self.cost_chain,
                     audit_writer=self.audit_writer,
@@ -1748,9 +1745,7 @@ class RuntimeLLMDispatcher:
             # string-form preserving Decimal precision at the OTel boundary.
             # Wrapped in best-effort try/except: cost-attribution failure
             # MUST NOT fail the dispatch (cost is observability not contract).
-            await run_audit_off_loop(
-                # Codex round-1 P1 (PR B2a): off-loop — see prewarm site.
-                _attribute_cost_best_effort,
+            await _attribute_cost_off_loop_best_effort(
                 span=span,
                 cost_chain=self.cost_chain,
                 audit_writer=self.audit_writer,
@@ -2946,6 +2941,21 @@ def _response_to_mapping(response: Any) -> Mapping[str, Any]:
     raise LLMDispatchPayloadShapeError(
         f"provider response not coercible to Mapping[str, Any]: {type(response)!r}"
     )
+
+
+async def _attribute_cost_off_loop_best_effort(**kwargs: Any) -> None:
+    """Best-effort boundary AROUND the offload (codex round-17 P1): queue
+    saturation raises at submit — BEFORE fn runs — so the fn-internal
+    swallows never see it and an otherwise-successful dispatch failed.
+    Contained here: logged loudly, dispatch preserved."""
+    try:
+        await run_audit_off_loop(_attribute_cost_best_effort, **kwargs)
+    except AUDIT_SIGNING_HARD_FAILURES:
+        logging.getLogger("harness.runtime.audit_signing").error(
+            "audit offload refused the job — signed cost-audit record "
+            "OMITTED for llm_dispatch (offload boundary)",
+            exc_info=True,
+        )
 
 
 def _attribute_cost_best_effort(

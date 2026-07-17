@@ -635,3 +635,72 @@ def test_submit_fails_fast_when_queue_saturated(
     with pytest.raises(AuditSigningFailedError, match="saturated"):
         saturated.result(timeout=1.0)
     release.set()
+
+
+@pytest.mark.asyncio
+async def test_saturation_contained_at_offload_boundaries(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Codex round-17 P1 — queue saturation raises at submit, BEFORE fn
+    runs, so the fn-internal best-effort swallows never saw it and an
+    otherwise-successful dispatch failed. Each offload boundary now
+    contains it: logged loudly, fail-open preserved (and the HITL wrapper
+    honors raise_on_failure)."""
+    import logging as logging_module
+    from types import SimpleNamespace
+    from typing import Any, cast
+
+    from harness_runtime.lifecycle import audit_offload as offload_module
+    from harness_runtime.lifecycle.hitl_gate_composer import (
+        HITLGateAuditComposeError,
+        RuntimeHITLGateComposer,
+    )
+    from harness_runtime.lifecycle.llm_dispatch import (
+        _attribute_cost_off_loop_best_effort,
+    )
+    from harness_runtime.lifecycle.runtime_tool_dispatcher import RuntimeToolDispatcher
+
+    monkeypatch.setattr(offload_module, "AUDIT_OFFLOAD_QUEUE_CAP", 0)  # every submit refuses
+
+    with caplog.at_level(logging_module.ERROR, logger="harness.runtime.audit_signing"):
+        # llm boundary — returns cleanly.
+        await _attribute_cost_off_loop_best_effort(
+            span=SimpleNamespace(get_span_context=lambda: SimpleNamespace(span_id=1)),
+            cost_chain=object(),
+            audit_writer=object(),
+            rate_table=object(),
+            provider_name="anthropic",
+            model="m",
+            parent_idempotency_key="k",
+            workflow_id="w",
+            parent_action_id="a",
+            input_tokens=1,
+            output_tokens=1,
+            cache_creation=None,
+            cache_read=None,
+            tenant_id=None,
+        )
+
+        # tool boundary — returns None cleanly.
+        host = SimpleNamespace(server_name="s1", tool_registry=SimpleNamespace(names=lambda: []))
+        dispatcher = RuntimeToolDispatcher.for_single_host(
+            mcp_client_host=cast(Any, host),
+            per_server_trust_evaluator=cast(Any, object()),
+            mcp_namespace_emitter=cast(Any, object()),
+            trust_policy=cast(Any, object()),
+        )
+        assert await dispatcher._attribute_tool_cost_off_loop() is None
+
+        # hitl boundary — fail-open when raise_on_failure=False, typed raise
+        # when True.
+        composer = RuntimeHITLGateComposer.__new__(RuntimeHITLGateComposer)
+        assert await RuntimeHITLGateComposer._compose_and_persist_audit_off_loop(
+            composer, raise_on_failure=False
+        ) == (None, None)
+        with pytest.raises(HITLGateAuditComposeError, match="offload boundary"):
+            await RuntimeHITLGateComposer._compose_and_persist_audit_off_loop(
+                composer, raise_on_failure=True
+            )
+
+    assert sum("offload boundary" in r.message for r in caplog.records) >= 3

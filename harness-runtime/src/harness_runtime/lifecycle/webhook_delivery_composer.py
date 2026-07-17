@@ -327,7 +327,18 @@ class WebhookDeliveryComposer:
         `asyncio.to_thread` copies contextvars, so the run-scoped
         cost-accumulator proxy still resolves.
         """
-        return await run_audit_off_loop(self._attribute_webhook_cost_best_effort, *args, **kwargs)
+        try:
+            return await run_audit_off_loop(
+                self._attribute_webhook_cost_best_effort, *args, **kwargs
+            )
+        except AUDIT_SIGNING_HARD_FAILURES:
+            # Codex round-17 P1 — see tool dispatcher; fail-open preserved.
+            logging.getLogger("harness.runtime.audit_signing").error(
+                "audit offload refused the job — signed cost-audit record "
+                "OMITTED for webhook delivery (offload boundary)",
+                exc_info=True,
+            )
+            return None
 
     def _attribute_webhook_cost_best_effort(
         self,
