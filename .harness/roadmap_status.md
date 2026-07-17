@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `e7e1b5ab8903` |
-| `last_refreshed` | 2026-07-16T00:00:00Z |
-| `git_head` | `449a7078` —  |
+| `workspace_state_hash` | `cbb86f9174f5` |
+| `last_refreshed` | 2026-07-17T00:00:00Z |
+| `git_head` | `2ab2ef0b` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 91 |
 
@@ -56,11 +56,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| 1034 | 2026-07-17 | B-47 PR B1 merged — audit-signing composition root (config+factory+stage-4 threading) + full-entry durable sidecar; 49 codex rounds, merge-gate 3/3 APPROVE, items (e)-(k) registered; remainder = PR B2 (rest of (c), (d) C9 breaker, (e)-(k) persistence-substrate design cluster) |
 | 1033 | 2026-07-16 | feat(od): B-47 PR A -- OD spec v1.33 §21.2.1 SigningBackend seam on the production audit-signing path. Grounding found the real production signing path is the OD sign_audit_entry (placeholder), not the CP-side B-22 seam (zero callers); bundled-absorption delta + clearance marker land the OPTIONAL backend seam (absent path byte-preserved) + CXA converter and redaction-token writer passthroughs + shared immutable width table. 6-round codex chain (2 fixed inline, 2 verified+registered as B-47 close-out items e/f, 2 clean); merge-gate round-1 test-witness BLOCK (self-agreeing canonical-message witness) discharged at round 2 with a literal-bytes witness, reviewer-re-probed M1/M2/M3; 2708 tests green; B-47 remains registered_finding with close-out (a)-(f) = PR B composition root |
 | 1032 | 2026-07-16 | fix(cp): B-34 signature-representation enforcement at the C-CP-20 §20.2.1 seam -- both registered gaps closed now that B-36 supplies a real backend: reversible base64 serializer/validator on CPSignedAuditLedgerEntry.audit_signature_value (JSON round-trip lossless for real signature bytes; non-canonical spellings rejected per codex round-1 P2) + per-algorithm byte-length enforcement on write (fail-loud) and read (pre-backend SIGNATURE_MISMATCH) paths, ecdsa-p256 pinned to fixed-width raw r||s foreclosing DER by contract. 7 new mutation-probed witnesses; 2-round codex convergence; 3-lens merge-gate all-APPROVE; forward register now 37 closed / 7 registered_finding |
 | PR #1031 | 2026-07-16 | AWS KMS SigningBackend for B-36 audit-signing backend (ADR-D8) -- dyadic C10/C11 council selected KMS-delegated Ed25519 signing over Secrets-Manager-plus-local-signing; real AWS KMS key + least-privilege IAM identity provisioned and live-e2e-proven; 3 rounds of out-of-family Codex review to convergence; B-33 extended, B-34 narrowed, B-47 opened for the composition-root wiring follow-on |
 | PR #1030 | 2026-07-15 | B-25 RESOLVED (was left `operator_gated` at #1029) — dyadic C10⊥C4 council convening (run per the fork's own Q3 recommendation) found `is_deterministic_inhouse` carries zero verification today, converging both voices on Reading A over the filer's original Reading-B lean; operator selected Reading A via `AskUserQuestion` from the council's 4-option synthesis. `ADR-D2.md` v1.2→v1.3 + `Spec_Action_Surface_v1.md` v1.13→v1.14 + NEW `Implementation_Plan_Action_Surface_v1_6.md` (plan-layer companion fix, caught by codex round 1 — same category as B-24) reconcile the row-7 self-contradiction; 3 stale docstrings + 1 stale comment/test-docstring corrected; zero code behavior change (production already implemented Reading A); new mutation-probed witness test. 3-round out-of-family codex-review + 3-lens merge-gate, all converged/approved. Also produced `.harness/architect_recommendation_tool_determinism_attestation.md` (advisor()+Codex-reviewed exploratory memo on a future producer-side verification mechanism — not built, explicitly sequenced after B-25). |
-| PR #1029 | 2026-07-15 | B-24/B-27 ratified+built (enum dispatch fix; CLI exit code 5 for paused status), B-25 grounded but confirmed genuine operator gate (ADR-D2 self-contradiction, registered not built at this PR — resolved at #1030). 4-round out-of-family codex-review + 3-lens merge-gate, all converged. |
 ---
 
 ---
