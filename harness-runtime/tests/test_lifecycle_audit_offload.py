@@ -391,3 +391,55 @@ async def test_capacity_recovers_after_detaching_stalled_workers(
     result = await asyncio.wait_for(run_audit_off_loop(lambda: "recovered"), timeout=5.0)
     assert result == "recovered"
     release.set()
+
+
+@pytest.mark.asyncio
+async def test_detached_workers_retire_and_thread_count_converges(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Codex round-13 P2 — a detached worker whose stalled job eventually
+    returned kept serving the queue forever alongside its replacement:
+    repeated detaches grew the thread count without bound and allowed
+    concurrency above the cap. Detached workers now retire when their
+    stalled job finishes; the pool converges back to <= cap."""
+    import time as time_module
+
+    from harness_runtime.lifecycle import audit_offload as offload_module
+    from harness_runtime.lifecycle.audit_offload import AUDIT_OFFLOAD_MAX_WORKERS
+
+    monkeypatch.setattr(offload_module, "AUDIT_CANCEL_JOIN_GRACE_SECONDS", 0.2)
+
+    started = threading.Barrier(AUDIT_OFFLOAD_MAX_WORKERS + 1, timeout=10.0)
+    release = threading.Event()
+
+    def _stalled() -> None:
+        started.wait()
+        release.wait(timeout=30.0)
+
+    tasks = [
+        asyncio.create_task(run_audit_off_loop(_stalled)) for _ in range(AUDIT_OFFLOAD_MAX_WORKERS)
+    ]
+    await asyncio.to_thread(started.wait)
+    for task in tasks:
+        task.cancel()
+    for task in tasks:
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(asyncio.shield(task), timeout=5.0)
+
+    # Replacement capacity works while the stalled originals linger.
+    assert await asyncio.wait_for(run_audit_off_loop(lambda: "ok"), timeout=5.0) == "ok"
+
+    # Let every stalled job finish: its (marked) worker must EXIT, so the
+    # ALIVE audit-offload thread count converges back to <= cap.
+    release.set()
+    deadline = time_module.monotonic() + 8.0
+    while time_module.monotonic() < deadline:
+        alive = [
+            t_
+            for t_ in threading.enumerate()
+            if t_.name.startswith("harness-audit-offload") and t_.is_alive()
+        ]
+        if len(alive) <= AUDIT_OFFLOAD_MAX_WORKERS:
+            break
+        await asyncio.sleep(0.05)
+    assert len(alive) <= AUDIT_OFFLOAD_MAX_WORKERS, [t_.name for t_ in alive]

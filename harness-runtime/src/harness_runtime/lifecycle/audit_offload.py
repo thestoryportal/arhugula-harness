@@ -72,6 +72,12 @@ class _DaemonThreadAuditExecutor:
         self._queue: queue.SimpleQueue[tuple[Future[Any], Callable[[], Any]]] = queue.SimpleQueue()
         self._lock = threading.Lock()
         self._spawned = 0
+        # Futures whose worker must EXIT after finishing them (codex
+        # round-13 P2): a detached worker whose stalled job eventually
+        # returned would otherwise keep serving the queue forever alongside
+        # its replacement — repeated detaches grew the thread count without
+        # bound and allowed concurrency above the cap.
+        self._retire_after: set[Future[Any]] = set()
         # Jobs submitted and not yet finished (codex round-6 P1): the
         # earlier idle-count heuristic never RESERVED the idle capacity a
         # burst observed, so four jobs after a warm-up all saw idle > 0 and
@@ -93,7 +99,7 @@ class _DaemonThreadAuditExecutor:
         self._queue.put((future, fn))
         return future
 
-    def release_stalled_slot(self) -> None:
+    def release_stalled_slot(self, stalled_future: Future[Any]) -> None:
         """Recover pool capacity after a detach (codex round-12 P1).
 
         A DETACHED worker (stalled KMS/filesystem call that outlived the
@@ -106,6 +112,7 @@ class _DaemonThreadAuditExecutor:
         """
         with self._lock:
             self._spawned = max(0, self._spawned - 1)
+            self._retire_after.add(stalled_future)
 
     def _worker(self) -> None:
         while True:
@@ -122,6 +129,13 @@ class _DaemonThreadAuditExecutor:
             finally:
                 with self._lock:
                     self._outstanding -= 1
+                    retire = future in self._retire_after
+                    self._retire_after.discard(future)
+                if retire:
+                    # This worker's slot was released at detach; its
+                    # replacement is (or will be) serving the queue — exit
+                    # instead of doubling up (codex round-13 P2).
+                    return
 
 
 _AUDIT_OFFLOAD_EXECUTOR: Final[_DaemonThreadAuditExecutor] = _DaemonThreadAuditExecutor(
@@ -171,7 +185,7 @@ async def run_audit_off_loop(fn: Callable[..., Any], /, *args: Any, **kwargs: An
                 with contextlib.suppress(asyncio.CancelledError):
                     await asyncio.sleep(0.01)
             if not concurrent_future.done():
-                _AUDIT_OFFLOAD_EXECUTOR.release_stalled_slot()
+                _AUDIT_OFFLOAD_EXECUTOR.release_stalled_slot(concurrent_future)
                 logging.getLogger("harness.runtime.audit_signing").error(
                     "audit offload worker outlived the %.0fs cancellation "
                     "join grace — detaching (daemon worker cannot hold "
