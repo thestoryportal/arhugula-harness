@@ -354,3 +354,40 @@ async def test_stalled_worker_detaches_after_bounded_join_grace(
 
     assert any("outlived" in r.message for r in caplog.records)
     release.set()
+
+
+@pytest.mark.asyncio
+async def test_capacity_recovers_after_detaching_stalled_workers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Codex round-12 P1 — a detached (stalled) worker still occupied a pool
+    slot: with every worker stalled-detached, later audit jobs queued
+    forever and the breaker never opened. Detach now releases the slot so
+    the next submit spawns a replacement."""
+    from harness_runtime.lifecycle import audit_offload as offload_module
+    from harness_runtime.lifecycle.audit_offload import AUDIT_OFFLOAD_MAX_WORKERS
+
+    monkeypatch.setattr(offload_module, "AUDIT_CANCEL_JOIN_GRACE_SECONDS", 0.2)
+
+    started = threading.Barrier(AUDIT_OFFLOAD_MAX_WORKERS + 1, timeout=10.0)
+    release = threading.Event()
+
+    def _stalled() -> None:
+        started.wait()
+        release.wait(timeout=30.0)
+
+    # Stall EVERY worker, then detach them all via cancellation.
+    tasks = [
+        asyncio.create_task(run_audit_off_loop(_stalled)) for _ in range(AUDIT_OFFLOAD_MAX_WORKERS)
+    ]
+    await asyncio.to_thread(started.wait)
+    for task in tasks:
+        task.cancel()
+    for task in tasks:
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(asyncio.shield(task), timeout=5.0)
+
+    # A NEW audit job must still run — a replacement worker serves it.
+    result = await asyncio.wait_for(run_audit_off_loop(lambda: "recovered"), timeout=5.0)
+    assert result == "recovered"
+    release.set()

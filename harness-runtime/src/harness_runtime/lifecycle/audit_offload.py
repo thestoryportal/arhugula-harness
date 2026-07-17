@@ -93,6 +93,20 @@ class _DaemonThreadAuditExecutor:
         self._queue.put((future, fn))
         return future
 
+    def release_stalled_slot(self) -> None:
+        """Recover pool capacity after a detach (codex round-12 P1).
+
+        A DETACHED worker (stalled KMS/filesystem call that outlived the
+        cancellation-join grace) still occupied a pool slot: once all
+        workers were stalled-detached, every later audit job queued forever
+        and the breaker could never open. Decrementing `_spawned` lets the
+        next submit spawn a replacement; when a stalled worker eventually
+        finishes it simply serves the queue alongside — a transient
+        over-spawn bounded by the number of detach events, all daemon.
+        """
+        with self._lock:
+            self._spawned = max(0, self._spawned - 1)
+
     def _worker(self) -> None:
         while True:
             future, fn = self._queue.get()
@@ -157,6 +171,7 @@ async def run_audit_off_loop(fn: Callable[..., Any], /, *args: Any, **kwargs: An
                 with contextlib.suppress(asyncio.CancelledError):
                     await asyncio.sleep(0.01)
             if not concurrent_future.done():
+                _AUDIT_OFFLOAD_EXECUTOR.release_stalled_slot()
                 logging.getLogger("harness.runtime.audit_signing").error(
                     "audit offload worker outlived the %.0fs cancellation "
                     "join grace — detaching (daemon worker cannot hold "
