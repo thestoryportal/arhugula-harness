@@ -104,6 +104,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, cast
@@ -141,6 +142,7 @@ from harness_is.state_ledger_write import EntryPayload, WriteKey, WriteResult
 from harness_od.audit_ledger_types import SignatureAlgorithm, StateLedgerEntryRef
 from pydantic import BaseModel, ConfigDict, ValidationError
 
+from harness_runtime.lifecycle.audit_signing_errors import AUDIT_SIGNING_HARD_FAILURES
 from harness_runtime.lifecycle.audit_writer import RuntimeAuditLedgerWriter
 from harness_runtime.lifecycle.child_workflow_runner import ChildWorkflowRunner
 from harness_runtime.lifecycle.handoff import RuntimeHandoffRegistry
@@ -737,6 +739,19 @@ class RuntimeSubAgentDispatcher:
                 tenant_id=step_context.tenant_id,
                 audit_entry=od_entry,
             )
+        except AUDIT_SIGNING_HARD_FAILURES as exc:
+            # Codex round-4 P1 (PR B2a): signing failures are compliance
+            # events — surfaced loudly regardless of raise_on_failure.
+            logging.getLogger("harness.runtime.audit_signing").error(
+                "audit signing failed — signed audit record OMITTED for sub-agent dispatch",
+                exc_info=True,
+            )
+            if raise_on_failure:
+                raise SubAgentDispatchAuditComposeError(
+                    f"sub-agent dispatch audit composition failed for "
+                    f"parent_action_id={parent_action_id!r}: {exc}"
+                ) from exc
+            return cp_entry, None
         except Exception as exc:
             if raise_on_failure:
                 raise SubAgentDispatchAuditComposeError(

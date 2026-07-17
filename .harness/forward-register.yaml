@@ -855,7 +855,14 @@ items:
     round-36 loss error; witness the stage-4 signing_backend= kwarg through the REAL bootstrap stage
     (currently unwitnessed-but-fail-loud); one integration witness wiring a real RuntimeAuditLedgerWriter
     into flush_observability (seam currently SimpleNamespace-only); pin the migrate-CLI __main__ guard;
-    pin the sidecar timed_out flag with a sidecar-only stall. Fold into the PR-B2 arc.'
+    pin the sidecar timed_out flag with a sidecar-only stall. Fold into the PR-B2 arc; (m) fail-open
+    vs fail-closed for signing failures on best-effort audit paths (out-of-family Codex round-4 on PR
+    B2a): signing failures are now TYPED (AuditSigningFailedError via the breaker wrap) and surfaced
+    at ERROR level at all six best-effort swallow sites, but dispatch is still preserved (fail-open)
+    because the CP validator framework''s section 28.10.4 invariant 2 (observability MUST NOT fail
+    dispatch) is spec-committed. Whether MULTI_TENANT_COMPLIANCE should instead fail CLOSED on an
+    unsigned audit write is a genuine design-phase policy fork (section 21.2 signed-audit commitment
+    vs section 28.10.4) -- resolve with the (e)-(i) persistence-substrate design at PR B2.'
   council: 'conditional -- mechanical composition-root wiring once a real sign_audit_entry call site exists;
     revisit if the call-site design itself surfaces a cross-axis tension'
   heading: '### B-47 · `AwsKmsSigningBackend` has no production composition-root call site *(surfaced

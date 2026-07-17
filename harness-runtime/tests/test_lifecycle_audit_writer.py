@@ -1754,3 +1754,54 @@ def test_reader_first_ever_append_race_does_not_false_report_loss(tmp_path: Path
     ):
         entries = writer.read_full_entries_for_tenant("tenant-A")
     assert [e.entry_hash for e in entries] == [entry.entry_hash]
+
+
+def test_append_samples_timestamp_inside_serialization_lock(tmp_path: Path) -> None:
+    """Codex round-4 P1 (PR B2a) — with parallel audit workers, timestamps
+    sampled OUTSIDE the ordered critical section could commit out of order:
+    the earlier append raised NonMonotonicTimestampError AFTER its sidecar
+    row landed (an unanchored row). The time source must now be invoked
+    while the per-ledger append lock is held."""
+    from harness_runtime.lifecycle import audit_writer as audit_writer_module
+
+    ledger = _ledger_writer(tmp_path)
+    lock = audit_writer_module._append_lock_for(ledger.handle.canonical_path)
+    state = {"now": datetime(2026, 5, 19, 12, 0, 0, tzinfo=UTC)}
+
+    def _lock_held_tick() -> Timestamp:
+        assert lock.locked(), "timestamp sampled OUTSIDE the append lock"
+        state["now"] = state["now"] + timedelta(microseconds=1)
+        return state["now"]
+
+    writer = RuntimeAuditLedgerWriter(ledger_writer=ledger, time_source=_lock_held_tick)
+    writer.append("tenant-A", _make_audit_entry("1" * 64))
+    writer.append("tenant-A", _make_audit_entry("2" * 64))
+    assert len(writer.read_for_tenant("tenant-A")) == 2
+
+
+def test_concurrent_appends_never_raise_non_monotonic(tmp_path: Path) -> None:
+    """Codex round-4 P1 (PR B2a) — concurrency smoke: two threads hammering
+    one writer through a strictly-increasing shared clock must produce no
+    NonMonotonicTimestampError and a VALID chain."""
+    import threading as threading_module
+
+    writer = _writer(tmp_path)
+    errors: list[Exception] = []
+
+    def _hammer(prefix: str) -> None:
+        for i in range(25):
+            seed = f"{prefix}{i:02d}".encode().hex().ljust(64, "0")[:64]
+            try:
+                writer.append("tenant-A", _make_audit_entry(seed))
+            except Exception as exc:
+                errors.append(exc)
+
+    threads = [threading_module.Thread(target=_hammer, args=(p,)) for p in ("aa", "bb")]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join()
+
+    assert errors == []
+    entries = read_ledger(writer.ledger_writer.handle)
+    assert verify_chain(entries).status is VerificationStatus.VALID

@@ -33,13 +33,20 @@ from harness_as.secret_fail_class import SecretBackendBreakerKey, construct_brea
 from harness_as.secret_fetch import SecretScope
 from harness_cp.aws_kms_signing_backend import AwsKmsSigningBackend
 
+from harness_runtime.lifecycle.audit_signing_errors import (
+    AUDIT_SIGNING_HARD_FAILURES,
+    AuditSigningBreakerOpenError,
+    AuditSigningFailedError,
+)
 from harness_runtime.types import AuditSigningBackendKind, AuditSigningConfig
 
 if TYPE_CHECKING:
     from harness_cp.f5_signing_key_resolution import SigningBackend
 
 __all__ = [
+    "AUDIT_SIGNING_HARD_FAILURES",
     "AuditSigningBreakerOpenError",
+    "AuditSigningFailedError",
     "BreakerGuardedSigningBackend",
     "SigningBackendUnavailableError",
     "make_audit_signing_backend",
@@ -61,19 +68,6 @@ SIGNING_BREAKER_COOLDOWN_SECONDS: Final[float] = 30.0
 AWS_KMS_SIGNING_BREAKER_KEY: Final[SecretBackendBreakerKey] = construct_breaker_key(
     "aws-kms", SecretScope(name="audit-signing")
 )
-
-
-class AuditSigningBreakerOpenError(RuntimeError):
-    """The audit-signing breaker is OPEN — signing fails fast, never silently.
-
-    Raised INSTEAD of invoking the wrapped backend while the breaker is open
-    (or while another thread's half-open probe is in flight). Audit signing
-    is a compliance guarantee, so an unavailable KMS must fail the audit
-    write loudly and quickly — degrading to placeholder signatures is
-    forbidden (ADR-D8 / OD spec v1.33 §21.2.1 never-silently-degrade), and
-    hammering a down KMS from every span-end thread would stall the entire
-    hot path on network timeouts.
-    """
 
 
 class BreakerGuardedSigningBackend:
@@ -180,9 +174,15 @@ class BreakerGuardedSigningBackend:
         was_probe, admission_epoch = self._admit_or_raise()
         try:
             signature = self._inner.sign(message=message, key_id=key_id, key_period=key_period)
-        except Exception:
+        except Exception as exc:
             self._record_failure(was_probe=was_probe, admission_epoch=admission_epoch)
-            raise
+            # Typed wrap (codex round-4 P1): raw backend failures (boto3
+            # ClientError, UnknownSigningKeyIdError, ...) are otherwise
+            # indistinguishable from ordinary cost-observability failures at
+            # the best-effort swallow sites.
+            raise AuditSigningFailedError(
+                f"configured audit-signing backend failed to sign under key_id={key_id!r}: {exc}"
+            ) from exc
         self._record_success(admission_epoch=admission_epoch)
         return signature
 

@@ -452,3 +452,55 @@ async def test_cost_attribution_signing_runs_off_event_loop() -> None:
     # composition leaves it free to tick ~50. Threshold 10 = wide margins.
     assert ticks["n"] >= 10
     assert len(audit_writer.appended) == 1
+
+
+@pytest.mark.asyncio
+async def test_signing_failure_surfaced_loudly_never_silently_swallowed(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Codex round-4 P1 (PR B2a) — a CONFIGURED signing backend's failure
+    (KMS outage / open breaker) previously vanished into the blanket
+    best-effort `except Exception`: dispatch succeeded while the REQUIRED
+    signed audit record was silently omitted. Signing failures are typed
+    (AuditSigningFailedError via the breaker wrapper) and surfaced at
+    ERROR level; dispatch is still preserved (the MTC fail-closed policy
+    is a registered design question)."""
+    import logging as logging_module
+
+    from harness_runtime.config.audit_signing import BreakerGuardedSigningBackend
+
+    class _DownKms:
+        algorithm = "ed25519"
+
+        def sign(self, *, message: bytes, key_id: str, key_period: int) -> bytes:
+            raise RuntimeError("kms outage")
+
+        def verify(self, *, message: bytes, signature: bytes, key_id: str, key_period: int) -> bool:
+            return True
+
+    rate_table = _make_rate_table()
+    cost_chain = RuntimeCostAttributionChain()
+    audit_writer = _RecordingAuditWriter()
+    step = _make_step()
+    ctx = _make_step_context()
+    validator = _FixedValidator(
+        ValidatorResult(outcome=ValidatorOutcome.PASS, fail_class=None, fail_detail_hash=None)
+    )
+    hook = CostAttributingValidatorHook(
+        rate_table=rate_table,
+        cost_chain=cost_chain,
+        audit_writer=audit_writer,
+        signing_backend=BreakerGuardedSigningBackend(_DownKms()),
+    )
+    fw = ConcreteValidatorFramework(
+        validator_registry={step.step_id: validator},
+        post_evaluate_hook=hook,
+    )
+
+    with caplog.at_level(logging_module.ERROR, logger="harness.runtime.audit_signing"):
+        evaluation = await fw.evaluate(step, {}, step_context=ctx)
+
+    # Dispatch preserved; no signed record; failure surfaced LOUDLY.
+    assert evaluation is not None
+    assert audit_writer.appended == []
+    assert any("signed cost-audit record OMITTED" in r.message for r in caplog.records)

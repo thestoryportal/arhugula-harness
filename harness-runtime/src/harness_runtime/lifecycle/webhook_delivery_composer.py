@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import time
 import uuid
 from collections.abc import Callable
@@ -32,6 +33,7 @@ from harness_cp.hitl_timeout_degradation import (
 from harness_cp.validator_framework_types import HITLEscalationBrief
 
 from harness_runtime.lifecycle.audit_offload import run_audit_off_loop
+from harness_runtime.lifecycle.audit_signing_errors import AUDIT_SIGNING_HARD_FAILURES
 from harness_runtime.lifecycle.cost_record_sink import SupportsCostRecordAppend
 
 __all__ = [
@@ -390,6 +392,14 @@ class WebhookDeliveryComposer:
             # `RunResult.cost_attribution` rollup (runtime spec v1.53 §9 C-RT-09).
             if self._cost_record_sink is not None:
                 self._cost_record_sink.append(attached)
+        except AUDIT_SIGNING_HARD_FAILURES:
+            # Codex round-4 P1 (PR B2a): signing failures are compliance
+            # events, never silently swallowed with cost-observability
+            # failures. Surfaced loudly; delivery preserved.
+            logging.getLogger("harness.runtime.audit_signing").error(
+                "audit signing failed — signed cost-audit record OMITTED for webhook delivery",
+                exc_info=True,
+            )
         except Exception:
             pass  # observability-only; MUST NOT fail dispatch
 

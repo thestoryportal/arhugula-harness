@@ -102,6 +102,7 @@ from harness_runtime.lifecycle.audit_offload import drain_inflight_audit_work
 
 __all__ = [
     "AsyncStepDispatcher",
+    "AuditDrainIncompleteError",
     "StepDispatchTimeoutError",
     "SyncDispatcherFacade",
     "materialize_sync_dispatcher_facade",
@@ -127,6 +128,18 @@ class StepDispatchTimeoutError(Exception):
     graph). The driver matches by ``type(exc).__name__ ==
     "StepDispatchTimeoutError"`` per the existing HITLPauseRequestedSignal
     name-match pattern at ``workflow_driver.py:830``.
+    """
+
+
+class AuditDrainIncompleteError(StepDispatchTimeoutError):
+    """Step timed out AND its in-flight audit work outlived the drain grace.
+
+    Codex round-4 P1 (PR B2a): a `False` drain result silently discarded
+    meant the orphaned worker could still append after retry or shutdown
+    began. Subclasses `StepDispatchTimeoutError` so the driver's existing
+    timeout taxonomy handles it, while callers that care can discriminate:
+    this failure is UNRESOLVED — an audit write for the abandoned step may
+    still land, so a blind same-step retry risks a duplicate/late entry.
     """
 
 
@@ -233,7 +246,18 @@ class SyncDispatcherFacade:
             # short, so the grace is small relative to the step bound. A
             # False return (bound expired) still surfaces the timeout — the
             # residual window is then explicit, never silent.
-            drain_inflight_audit_work(timeout_seconds=_AUDIT_DRAIN_GRACE_SECONDS)
+            drained = drain_inflight_audit_work(timeout_seconds=_AUDIT_DRAIN_GRACE_SECONDS)
+            if not drained:
+                # Codex round-4 P1: an incomplete drain is an UNRESOLVED
+                # hard failure, not a plain timeout — the orphaned worker
+                # can still append after this raise.
+                raise AuditDrainIncompleteError(
+                    f"step dispatch exceeded {self.result_timeout_seconds}s "
+                    f"bound AND in-flight audit work did not complete within "
+                    f"the {_AUDIT_DRAIN_GRACE_SECONDS}s drain grace — audit "
+                    f"writes for the abandoned step may still land; do not "
+                    f"blindly retry this step"
+                ) from exc
             raise StepDispatchTimeoutError(
                 f"step dispatch exceeded {self.result_timeout_seconds}s bound"
             ) from exc

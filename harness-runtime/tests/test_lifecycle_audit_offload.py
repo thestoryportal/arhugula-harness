@@ -127,3 +127,55 @@ async def test_facade_timeout_waits_for_inflight_audit_work() -> None:
     release.set()
     await asyncio.to_thread(driver.join, 10.0)
     assert outcome == [("timeout", ["audit-write"])]
+
+
+@pytest.mark.asyncio
+async def test_incomplete_drain_raises_typed_hard_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Codex round-4 P1 — a False drain result was silently discarded: the
+    orphaned worker could still append after the plain timeout surfaced.
+    An incomplete drain now raises AuditDrainIncompleteError (an UNRESOLVED
+    hard failure discriminable from a plain step timeout)."""
+    from typing import Any
+
+    from harness_runtime.lifecycle import sync_dispatcher_facade as facade_module
+    from harness_runtime.lifecycle.sync_dispatcher_facade import (
+        AuditDrainIncompleteError,
+        materialize_sync_dispatcher_facade,
+    )
+
+    monkeypatch.setattr(facade_module, "_AUDIT_DRAIN_GRACE_SECONDS", 0.2)
+
+    started = threading.Event()
+    release = threading.Event()
+
+    def _outlives_the_grace() -> None:
+        started.set()
+        assert release.wait(timeout=10.0)
+
+    class _Inner:
+        async def dispatch(self, binding: Any, step: Any, *, step_context: Any) -> Any:
+            await run_audit_off_loop(_outlives_the_grace)
+            return {}
+
+    facade = materialize_sync_dispatcher_facade(_Inner(), result_timeout_seconds=0.2)
+
+    outcome: list[str] = []
+
+    def _drive() -> None:
+        try:
+            facade.dispatch(None, None, step_context=None)  # type: ignore[arg-type]
+            outcome.append("returned")
+        except AuditDrainIncompleteError:
+            outcome.append("drain-incomplete")
+        except Exception as exc:
+            outcome.append(type(exc).__name__)
+
+    driver = threading.Thread(target=_drive, daemon=True)
+    driver.start()
+    assert await asyncio.to_thread(started.wait, 10.0)
+    await asyncio.to_thread(driver.join, 10.0)
+    release.set()
+
+    assert outcome == ["drain-incomplete"]

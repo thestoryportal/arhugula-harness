@@ -118,6 +118,7 @@ import asyncio
 import hashlib
 import inspect
 import json
+import logging
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -176,6 +177,7 @@ from harness_runtime.lifecycle.ask_user_question_surface import (
     AskUserQuestionTimeoutError,
 )
 from harness_runtime.lifecycle.audit_offload import run_audit_off_loop
+from harness_runtime.lifecycle.audit_signing_errors import AUDIT_SIGNING_HARD_FAILURES
 from harness_runtime.lifecycle.hitl_auto_approve_policy import HITLAutoApprovePolicy
 from harness_runtime.lifecycle.resume_context_holder import ResumeContextHolder
 from harness_runtime.lifecycle.webhook_delivery_composer import (
@@ -1249,6 +1251,18 @@ class RuntimeHITLGateComposer:
                 tenant_id=step_context.tenant_id,
                 audit_entry=od_entry,
             )
+        except AUDIT_SIGNING_HARD_FAILURES as exc:
+            # Codex round-4 P1 (PR B2a): signing failures are compliance
+            # events — surfaced loudly regardless of raise_on_failure.
+            logging.getLogger("harness.runtime.audit_signing").error(
+                "audit signing failed — signed audit record OMITTED for HITL gate",
+                exc_info=True,
+            )
+            if raise_on_failure:
+                raise HITLGateAuditComposeError(
+                    f"HITL gate audit composition failed for action_id={hitl_action_id!r}: {exc}"
+                ) from exc
+            return cp_entry, None
         except Exception as exc:
             if raise_on_failure:
                 raise HITLGateAuditComposeError(

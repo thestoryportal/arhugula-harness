@@ -55,6 +55,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from collections.abc import Mapping, Sequence
 from contextvars import ContextVar
 from copy import deepcopy
@@ -92,6 +93,7 @@ from harness_cp.workflow_driver_types import StepExecutionContext, StepKind, Wor
 from harness_od.otel_genai_base import HIERARCHY_CORRELATION_KEY, GenAiOperation
 
 from harness_runtime.lifecycle.audit_offload import run_audit_off_loop
+from harness_runtime.lifecycle.audit_signing_errors import AUDIT_SIGNING_HARD_FAILURES
 from harness_runtime.lifecycle.cacheable_epoch import DEFAULT_CACHE_TTL, CacheTTL
 from harness_runtime.lifecycle.cost_record_sink import SupportsCostRecordAppend
 from harness_runtime.lifecycle.hitl_tool_loop import (
@@ -3031,6 +3033,17 @@ def _attribute_cost_best_effort(
             # An LLM dispatch always has a provider ⟹ always a family tag.
             provider_discriminator=cross_family_tag_for_provider(provider_name),
         )
+    except AUDIT_SIGNING_HARD_FAILURES:
+        # Codex round-4 P1 (PR B2a): a CONFIGURED signing backend's failure
+        # must never be silently swallowed with ordinary cost-observability
+        # failures — the signed audit record is a compliance artifact.
+        # Surfaced loudly; dispatch preserved (the MTC fail-closed policy
+        # question is registered at the B-47 close-out).
+        logging.getLogger("harness.runtime.audit_signing").error(
+            "audit signing failed — signed cost-audit record OMITTED for llm_dispatch",
+            exc_info=True,
+        )
+        return
     except Exception:
         # Cost-attribution is observability, not contract. Swallow.
         return

@@ -30,6 +30,7 @@ Composition surface:
 from __future__ import annotations
 
 import hashlib
+import logging
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -67,6 +68,7 @@ from harness_runtime.config.provider_secrets import (
     SecretResolutionError,
 )
 from harness_runtime.lifecycle.audit_offload import run_audit_off_loop
+from harness_runtime.lifecycle.audit_signing_errors import AUDIT_SIGNING_HARD_FAILURES
 from harness_runtime.lifecycle.cost_record_sink import SupportsCostRecordAppend
 from harness_runtime.lifecycle.effect_fence import (
     EffectFenceAbortedError,
@@ -628,6 +630,15 @@ class RuntimeToolDispatcher:
                 procedural_tier_snapshot_resolver=self._procedural_tier_snapshot_resolver,
                 signing_backend=self._signing_backend,
             )
+        except AUDIT_SIGNING_HARD_FAILURES:
+            # Codex round-4 P1 (PR B2a): signing failures are compliance
+            # events, never silently swallowed with cost-observability
+            # failures. Surfaced loudly; dispatch preserved.
+            logging.getLogger("harness.runtime.audit_signing").error(
+                "audit signing failed — signed cost-audit record OMITTED for tool dispatch",
+                exc_info=True,
+            )
+            return
         except Exception:
             # Cost-attribution is observability, not contract. Swallow.
             return
