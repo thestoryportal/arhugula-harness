@@ -228,6 +228,20 @@ class RuntimeAuditLedgerWriter:
         tenant scope. The OD-computed `entry_hash` provides the deduplication
         key (scoped by tenant via the action_id prefix).
         """
+        recomputed = compute_entry_hash(audit_entry.payload)
+        if recomputed != audit_entry.entry_hash:
+            # Write-side mirror of the fold's content-integrity check (codex
+            # round-27): a schema-valid entry whose stored hash does not match
+            # its payload would persist fine, then wedge EVERY post-restart
+            # append when the fold rescans it. Production composers always
+            # compute the genuine hash; reject the inconsistent entry before
+            # anything (sidecar or IS ref) is written.
+            raise ValueError(
+                f"audit_entry fails content-integrity before write: stored "
+                f"entry_hash={audit_entry.entry_hash!r} but recomputed "
+                f"{recomputed!r} — refusing to persist an entry that would "
+                f"wedge the sidecar fold after restart"
+            )
         action_id = self._action_id_for(tenant_id, audit_entry)
         # R-003: `procedural_tier_snapshot_ref` is left `None`-canonical here
         # (IS spec v1.3 §C-IS-05 §5.1). This append wraps pre-signed OD audit

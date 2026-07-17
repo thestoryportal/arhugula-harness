@@ -1103,3 +1103,19 @@ def test_reader_holds_the_shared_in_process_lock(tmp_path: Path) -> None:
         lock.release()
     t.join(timeout=5)
     assert results == [1]
+
+
+def test_inconsistent_entry_hash_rejected_before_any_write(tmp_path: Path) -> None:
+    """Codex round-27 (PR B1) — a schema-valid entry whose stored entry_hash
+    does not match its payload persisted fine, then wedged every
+    post-restart append at the fold's integrity check. Rejected up front:
+    nothing (sidecar row or IS ref) is written."""
+    writer = _writer(tmp_path)
+    good = _make_audit_entry("1" * 64)
+    bad = good.model_copy(update={"entry_hash": "f" * 64})
+
+    with pytest.raises(ValueError, match="before write"):
+        writer.append("tenant-A", bad)
+
+    assert not writer.sidecar_path.exists()
+    assert writer.read_for_tenant("tenant-A") == []

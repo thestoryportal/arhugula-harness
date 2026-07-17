@@ -132,19 +132,26 @@ def _stage(
 
 
 def _audit_entry(entry_hash: str = "a" * 64) -> AuditLedgerEntry:
+    """`entry_hash` is a SEED (folded into the payload); the stored hash is
+    the genuine `compute_entry_hash(payload)` — the writer's round-27
+    write-side integrity check rejects fabricated hashes, exactly as it
+    should for a tampered production entry."""
+    from harness_od.audit_ledger_types import compute_entry_hash
+
+    payload = AuditPayload(
+        entry_core=StateLedgerEntryRef(f"entry-ref-{entry_hash[:8]}"),
+        audit_namespace_attrs={"audit.actor": "od-emission-site", "audit.seed": entry_hash},
+        prior_entry_hash="0" * 64,
+    )
     return AuditLedgerEntry(
-        payload=AuditPayload(
-            entry_core=StateLedgerEntryRef(f"entry-ref-{entry_hash[:8]}"),
-            audit_namespace_attrs={"audit.actor": "od-emission-site"},
-            prior_entry_hash="0" * 64,
-        ),
+        payload=payload,
         signature_attrs=AuditSignatureAttributes(
             audit_signature_value=f"sig:{entry_hash[:8]}",
             audit_signature_algorithm=SignatureAlgorithm.ED25519,
             audit_signature_key_id="test-key",
             audit_signature_key_period="2026-Q2",
         ),
-        entry_hash=entry_hash,
+        entry_hash=compute_entry_hash(payload),
     )
 
 
