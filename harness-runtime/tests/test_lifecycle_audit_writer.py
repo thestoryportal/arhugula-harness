@@ -1119,3 +1119,47 @@ def test_inconsistent_entry_hash_rejected_before_any_write(tmp_path: Path) -> No
 
     assert not writer.sidecar_path.exists()
     assert writer.read_for_tenant("tenant-A") == []
+
+
+def test_membership_hit_retry_refsyncs_before_is_reference(tmp_path: Path) -> None:
+    """Codex round-28 (PR B1) — if the initial fsync raised after the row was
+    written, the retry hits the membership path; it must re-fsync the file
+    before the IS reference commits, or power loss keeps the ref while the
+    row was only page-cached."""
+    import os as os_module
+    import stat as stat_module
+    import unittest.mock as mock
+
+    writer = _writer(tmp_path)
+    entry = _make_audit_entry("1" * 64)
+    real_fsync = os_module.fsync
+    state = {"raised": False}
+    events: list[str] = []
+
+    def _fsync_dies_once(fd: int) -> None:
+        st = os_module.fstat(fd)
+        kind = "fsync_dir" if stat_module.S_ISDIR(st.st_mode) else "fsync_file"
+        if kind == "fsync_file" and not state["raised"]:
+            state["raised"] = True
+            raise OSError("simulated fsync failure after row write")
+        events.append(kind)
+        real_fsync(fd)
+
+    original_is_append = type(writer.ledger_writer).append
+
+    def _spy_is_append(self: object, payload: object, write_key: object) -> object:
+        events.append("is_append")
+        return original_is_append(self, payload, write_key)  # type: ignore[arg-type]
+
+    with (
+        mock.patch("harness_runtime.lifecycle.audit_writer.os.fsync", _fsync_dies_once),
+        mock.patch.object(type(writer.ledger_writer), "append", _spy_is_append),
+    ):
+        with pytest.raises(OSError, match="simulated fsync failure"):
+            writer.append("tenant-A", entry)
+        events.clear()
+        # Retry: membership hit — must re-fsync the FILE before is_append.
+        assert writer.append("tenant-A", entry) is WriteResult.APPENDED
+
+    assert "is_append" in events
+    assert "fsync_file" in events[: events.index("is_append")], events

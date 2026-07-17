@@ -364,6 +364,22 @@ class RuntimeAuditLedgerWriter:
                         f"non-payload fields differ) — tampered or corrupt "
                         f"row preserved as evidence, append refused"
                     )
+                # Re-establish durability on the membership-hit path (codex
+                # round-28): if a prior attempt wrote this row but its fsync
+                # raised, the retry lands here — returning without another
+                # fsync would let the IS reference commit while the row (or
+                # its directory entry) is still only page-cached.
+                fd = os.open(str(self._sidecar_path), os.O_RDONLY)
+                try:
+                    os.fsync(fd)
+                finally:
+                    os.close(fd)
+                if sys.platform != "win32":
+                    dir_fd = os.open(str(self._sidecar_path.parent), os.O_RDONLY)
+                    try:
+                        os.fsync(dir_fd)
+                    finally:
+                        os.close(dir_fd)
                 return
             encoded = (line + "\n").encode("utf-8")
             created = not self._sidecar_path.exists()
