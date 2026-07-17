@@ -443,3 +443,21 @@ async def test_detached_workers_retire_and_thread_count_converges(
             break
         await asyncio.sleep(0.05)
     assert len(alive) <= AUDIT_OFFLOAD_MAX_WORKERS, [t_.name for t_ in alive]
+
+
+def test_release_is_noop_when_worker_already_finished() -> None:
+    """Codex round-14 P2 — a stalled job can finish between the caller's
+    done() check and the release lock: the worker has already moved on, so
+    releasing would leak an unconsumed retire marker and spawn a
+    replacement alongside a live worker. Membership in the serving set
+    (same lock) makes the release a no-op in that boundary race."""
+    from harness_runtime.lifecycle.audit_offload import _DaemonThreadAuditExecutor
+
+    executor = _DaemonThreadAuditExecutor(2)
+    future = executor.submit(lambda: "done")
+    assert future.result(timeout=5.0) == "done"
+
+    spawned_before = executor._spawned
+    executor.release_stalled_slot(future)
+    assert executor._spawned == spawned_before
+    assert future not in executor._retire_after

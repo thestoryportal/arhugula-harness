@@ -78,6 +78,12 @@ class _DaemonThreadAuditExecutor:
         # its replacement — repeated detaches grew the thread count without
         # bound and allowed concurrency above the cap.
         self._retire_after: set[Future[Any]] = set()
+        # Futures currently being SERVED by a worker (codex round-14 P2):
+        # membership decides — under the one lock — whether a stalled-slot
+        # release is real (worker still busy: decrement + mark retire) or a
+        # boundary-race no-op (the job finished between the caller's done()
+        # check and this lock: nothing to release, no marker to leak).
+        self._serving: set[Future[Any]] = set()
         # Jobs submitted and not yet finished (codex round-6 P1): the
         # earlier idle-count heuristic never RESERVED the idle capacity a
         # burst observed, so four jobs after a warm-up all saw idle > 0 and
@@ -111,31 +117,43 @@ class _DaemonThreadAuditExecutor:
         over-spawn bounded by the number of detach events, all daemon.
         """
         with self._lock:
+            if stalled_future not in self._serving:
+                # Boundary race (codex round-14 P2): the job finished after
+                # the caller's done() check — its worker already moved on.
+                # Releasing here would leak an unconsumed retire marker and
+                # spawn a replacement alongside a live worker.
+                return
             self._spawned = max(0, self._spawned - 1)
             self._retire_after.add(stalled_future)
 
     def _worker(self) -> None:
         while True:
             future, fn = self._queue.get()
-            try:
-                if not future.set_running_or_notify_cancel():
-                    continue
+            if self._serve(future, fn):
+                # Slot released at detach; the replacement serves the queue.
+                # Exit AFTER the finally (ruff B012, codex round-14 P1: a
+                # return inside finally would suppress in-flight exceptions).
+                return
+
+    def _serve(self, future: Future[Any], fn: Callable[[], Any]) -> bool:
+        """Run one job; return True when this worker must retire."""
+        with self._lock:
+            self._serving.add(future)
+        try:
+            if future.set_running_or_notify_cancel():
                 try:
                     result = fn()
                 except BaseException as exc:
                     future.set_exception(exc)
                 else:
                     future.set_result(result)
-            finally:
-                with self._lock:
-                    self._outstanding -= 1
-                    retire = future in self._retire_after
-                    self._retire_after.discard(future)
-                if retire:
-                    # This worker's slot was released at detach; its
-                    # replacement is (or will be) serving the queue — exit
-                    # instead of doubling up (codex round-13 P2).
-                    return
+        finally:
+            with self._lock:
+                self._serving.discard(future)
+                self._outstanding -= 1
+                retire = future in self._retire_after
+                self._retire_after.discard(future)
+        return retire
 
 
 _AUDIT_OFFLOAD_EXECUTOR: Final[_DaemonThreadAuditExecutor] = _DaemonThreadAuditExecutor(
