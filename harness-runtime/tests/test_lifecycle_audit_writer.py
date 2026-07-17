@@ -1233,6 +1233,51 @@ def test_fifo_sidecar_rejected_on_read_without_hanging(tmp_path: Path) -> None:
         writer.read_full_entries_for_tenant("tenant-A")
 
 
+def test_reader_snapshots_is_refs_before_sidecar(tmp_path: Path) -> None:
+    """Codex round-44 (PR B1) — scanning the IS refs AFTER releasing the
+    sidecar lock let a concurrent append land row+ref between the two reads
+    and falsely report history loss. The refs snapshot must happen FIRST
+    (sidecar-first writes make that order race-free): a row+ref appended
+    right after the refs snapshot must NOT trip the coverage check."""
+    import unittest.mock as mock
+
+    writer = _writer(tmp_path)
+    writer.append("tenant-A", _make_audit_entry("1" * 64))
+
+    concurrent = _make_audit_entry("2" * 64)
+    original_read_for_tenant = RuntimeAuditLedgerWriter.read_for_tenant
+    state = {"calls": 0}
+
+    def _concurrent_append_before_second_scan(
+        self: RuntimeAuditLedgerWriter, tenant_id: str | None
+    ) -> object:
+        state["calls"] += 1
+        if state["calls"] >= 2:
+            # A ref-scan AFTER the sidecar read (the buggy order) sees this
+            # just-landed ref whose row the stale sidecar snapshot missed.
+            other = RuntimeAuditLedgerWriter(
+                ledger_writer=self.ledger_writer,
+                time_source=self.time_source,
+            )
+            with mock.patch.object(
+                RuntimeAuditLedgerWriter, "read_for_tenant", original_read_for_tenant
+            ):
+                other.append("tenant-A", concurrent)
+        return original_read_for_tenant(self, tenant_id)
+
+    with mock.patch.object(
+        RuntimeAuditLedgerWriter, "read_for_tenant", _concurrent_append_before_second_scan
+    ):
+        entries = writer.read_full_entries_for_tenant("tenant-A")
+
+    # Exactly ONE refs scan (the pre-sidecar snapshot) — a second scan is
+    # the buggy post-read order, and with it the concurrent append above
+    # produces a false loss report.
+    assert state["calls"] == 1
+    hashes = {e.entry_hash for e in entries}
+    assert _make_audit_entry("1" * 64).entry_hash in hashes
+
+
 def test_reader_rejects_tampered_payload_with_stale_hash(tmp_path: Path) -> None:
     """Codex round-42 P1 (PR B1) — a payload modified with its stale
     entry_hash retained passed schema validation AND the coverage check (the

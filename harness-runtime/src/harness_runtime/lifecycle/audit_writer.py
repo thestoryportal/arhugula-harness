@@ -685,6 +685,15 @@ class RuntimeAuditLedgerWriter:
         audit-entry sidecar must never be silently skipped.
         """
         tag = self._tenant_tag(tenant_id)
+        # Snapshot the IS refs BEFORE reading the sidecar (codex round-44):
+        # writes are sidecar-first, so every ref in this snapshot already has
+        # its row durable — a concurrent append between the two reads can add
+        # rows (harmless superset) but never a ref this snapshot contains
+        # without its row, eliminating the false history-loss report the
+        # reverse order produced.
+        is_ref_hashes = {
+            is_entry.action_id.rsplit(":", 1)[1] for is_entry in self.read_for_tenant(tenant_id)
+        }
         if not self._sidecar_path.exists():
             self._assert_absence_is_first_use()
             return []
@@ -743,10 +752,7 @@ class RuntimeAuditLedgerWriter:
         # this tenant must still be covered, or the verifier is silently
         # reading a partial history.
         rehydrated = {entry.entry_hash for entry in entries}
-        for is_entry in self.read_for_tenant(tenant_id):
-            # rsplit — a ':' inside the tenant tag must not shift the hash
-            # (codex round-41).
-            _, entry_hash = is_entry.action_id.rsplit(":", 1)
+        for entry_hash in is_ref_hashes:
             if entry_hash not in rehydrated:
                 raise ValueError(
                     f"IS ledger references audit entry {entry_hash!r} for "
