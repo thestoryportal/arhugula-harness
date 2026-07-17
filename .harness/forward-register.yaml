@@ -862,7 +862,17 @@ items:
     because the CP validator framework''s section 28.10.4 invariant 2 (observability MUST NOT fail
     dispatch) is spec-committed. Whether MULTI_TENANT_COMPLIANCE should instead fail CLOSED on an
     unsigned audit write is a genuine design-phase policy fork (section 21.2 signed-audit commitment
-    vs section 28.10.4) -- resolve with the (e)-(i) persistence-substrate design at PR B2.'
+    vs section 28.10.4) -- resolve with the (e)-(i) persistence-substrate design at PR B2. PR B2a
+    (2026-07-17) landed the REST of (c) -- signing backend threaded into all remaining production
+    audit composers (3x RuntimeHITLGateComposer + RuntimeSubAgentDispatcher + the 4 cost builders via
+    their carriers/factories, for_single_host included) with a real-bootstrap identity witness -- and
+    (d), the C9 BreakerGuardedSigningBackend wrapped at the factory (epoch-guarded closed/open/half-open,
+    fail-loud AuditSigningBreakerOpenError; keyed on the C-AS-07 SecretBackendBreakerKey), plus
+    bootstrap key-id validation, the dedicated daemon audit-offload executor with per-dispatch
+    completion ack (no post-timeout audit commits), typed + loudly-surfaced signing failures, append
+    serialization (in-lock timestamps), and the item-(k) witness follow-ups. REMAINING for the B-47
+    close: the (e)-(j)+(m) persistence-substrate + policy design cluster at PR B2 (with B-48 tracking
+    the sync-inner-on-loop fork revision separately).'
   council: 'conditional -- mechanical composition-root wiring once a real sign_audit_entry call site exists;
     revisit if the call-site design itself surfaces a cross-axis tension'
   heading: '### B-47 · `AwsKmsSigningBackend` has no production composition-root call site *(surfaced
