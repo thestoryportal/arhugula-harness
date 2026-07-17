@@ -825,9 +825,13 @@ items:
     (g) bounds the sidecar membership index (out-of-family Codex round-24 on PR B1) -- the in-memory
     identity-to-digest map grows linearly with complete audit history in a long-running MTC deployment.
     A bounded LRU alone cannot work (membership must prove ABSENCE, which needs complete knowledge or
-    a full scan), so the fix is a disk-backed index -- intersecting C-OD-21 section 21.2 and its own
-    hash-chained-SQLite storage commitment for the Tier-5 audit ledger; resolve jointly with the
-    (e)/(f) persistence-substrate design at PR B2 (JSONL sidecar vs SQLite is the real fork); (h)
+    a full scan), so the fix is a disk-backed index. CORRECTED 2026-07-17 (design-disposition leg,
+    .harness/b-47-pr-b2-design-disposition-v1.md section 0): the earlier phrase claiming section 21.2
+    carries a hash-chained-SQLite storage commitment was an over-reading -- section 21.2 commits the
+    Tier-5 durability CLASS (ADR-D1 v1.2 identifies Tier-5 as the F2 state-ledger class) plus
+    hash-chain/signature properties, naming NO storage engine; the spec sqlite references are Tier-3
+    trace ring-buffers. JSONL-vs-SQLite is impl discretion, NOT a spec fork; (g) is plain
+    performance engineering; (h)
     partitions chain verification by producer family (out-of-family Codex round-30 on PR B1) -- a
     per-tenant sidecar entry set interleaves INDEPENDENT OD chain families (the CXA section 0.3 action-id
     prefixes are the discriminator; the converter chains on CP-side event hashes, the redaction-token
@@ -871,8 +875,16 @@ items:
     bootstrap key-id validation, the dedicated daemon audit-offload executor with per-dispatch
     completion ack (no post-timeout audit commits), typed + loudly-surfaced signing failures, append
     serialization (in-lock timestamps), and the item-(k) witness follow-ups. REMAINING for the B-47
-    close: the (e)-(j)+(m) persistence-substrate + policy design cluster at PR B2 (with B-48 tracking
-    the sync-inner-on-loop fork revision separately).'
+    close: the (e)-(j)+(m) cluster, DISPOSITIONED 2026-07-17 at
+    .harness/b-47-pr-b2-design-disposition-v1.md -- (e) landed; (g)/(i) impl-discretion engineering
+    (no spec surface); (h) per-family chain verifier = the next BUILDABLE impl unit (CXA action-id
+    prefix partition + per-family verify_hash_chain_integrity); (f) tenant binding and (m)
+    fail-open-vs-fail-closed are the two GENUINE spec-delta forks (recommendations recorded in the
+    disposition doc -- (f): require tenant-scoped key_ids at MTC now + fifth message segment at the
+    next OD delta; (m): mirror OD v1.8 section C-OD-28.2 operator-configurable default-fail-closed
+    pattern via an audit_signing_fail_closed flag, default ON at MTC); (j) rides the next
+    runtime-spec delta as a one-row scripts-inventory addition. B-48 tracks the sync-inner-on-loop
+    fork revision separately.'
   council: 'conditional -- mechanical composition-root wiring once a real sign_audit_entry call site exists;
     revisit if the call-site design itself surfaces a cross-axis tension'
   heading: '### B-47 · `AwsKmsSigningBackend` has no production composition-root call site *(surfaced
