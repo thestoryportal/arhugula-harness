@@ -1000,13 +1000,24 @@ async def test_flush_records_failure_for_fifo_sidecar_without_hanging(tmp_path: 
 @pytest.mark.asyncio
 async def test_flush_observability_absent_sidecar_is_clean_noop(tmp_path: Path) -> None:
     """No sidecar (nothing ever appended) and no audit_writer attribute are
-    both clean no-ops — never a flush failure."""
+    both clean no-ops — never a flush failure. Deletion-after-use (IS refs
+    exist, file missing — codex round-43) IS a failure."""
     tracer = _FakeTracerProvider(returns=True)
     ctx = _ctx_with(tmp_path, tracer=tracer)
 
     report = await flush_observability(ctx)
     assert report.failures == ()
 
-    ctx.audit_writer = SimpleNamespace(sidecar_path=tmp_path / "never-created.jsonl")
+    ctx.audit_writer = SimpleNamespace(
+        sidecar_path=tmp_path / "never-created.jsonl",
+        sidecar_expected=lambda: False,  # genuine first use
+    )
     report = await flush_observability(ctx)
     assert report.failures == ()
+
+    ctx.audit_writer = SimpleNamespace(
+        sidecar_path=tmp_path / "deleted-after-use.jsonl",
+        sidecar_expected=lambda: True,  # IS refs exist, file gone
+    )
+    report = await flush_observability(ctx)
+    assert "audit_sidecar" in report.failures

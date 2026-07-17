@@ -206,9 +206,21 @@ async def flush_observability(
     try:
         audit_writer = getattr(ctx, "audit_writer", None)
         sidecar_path = getattr(audit_writer, "sidecar_path", None)
-        # Absent writer/attribute or not-yet-created sidecar = clean no-op
-        # (nothing durable to flush); only a FAILING fsync of an existing
-        # sidecar is a flush failure.
+        # Absent writer/attribute or genuinely-first-use sidecar = clean
+        # no-op. A MISSING sidecar whose IS refs exist is deletion-after-use
+        # (codex round-43) — recorded as an audit_sidecar failure via the
+        # writer's own first-use authority, consistent with its
+        # missing-sidecar guard.
+        if (
+            sidecar_path is not None
+            and not sidecar_path.exists()
+            and getattr(audit_writer, "sidecar_expected", None) is not None
+            and audit_writer.sidecar_expected()
+        ):
+            raise ValueError(
+                f"audit sidecar {sidecar_path} is missing but IS audit "
+                f"references exist — signed history deleted or lost"
+            )
         if sidecar_path is not None and sidecar_path.exists():
             # Non-blocking + regular-file check (round-35 codex): a
             # pre-created FIFO here made a blocking O_RDONLY open hang the

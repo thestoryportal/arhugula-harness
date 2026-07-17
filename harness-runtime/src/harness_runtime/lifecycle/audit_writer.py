@@ -398,6 +398,16 @@ class RuntimeAuditLedgerWriter:
         finally:
             os.close(fd)
 
+    def sidecar_expected(self) -> bool:
+        """True iff the IS ledger holds audit refs — i.e. the sidecar SHOULD
+        exist. Public so the shutdown flush can distinguish genuine first use
+        from deletion-after-use (codex round-43), consistent with the
+        writer's own missing-sidecar guard."""
+        return any(
+            entry.action_id.startswith(f"{self._ACTION_ID_PREFIX}:")
+            for entry in read_ledger(self.ledger_writer.handle)
+        )
+
     def _assert_absence_is_first_use(self) -> None:
         """A MISSING sidecar is only legitimate before any audit entry ever
         landed (codex round-36 P1): after entries exist, deletion — cleanup,
@@ -408,10 +418,7 @@ class RuntimeAuditLedgerWriter:
         \"has anything ever been appended\": its `audit:` refs are hash-chained
         and cannot be silently removed the way a plain file can.
         """
-        if any(
-            entry.action_id.startswith(f"{self._ACTION_ID_PREFIX}:")
-            for entry in read_ledger(self.ledger_writer.handle)
-        ):
+        if self.sidecar_expected():
             raise ValueError(
                 f"audit sidecar {self._sidecar_path} is MISSING but the IS "
                 f"ledger holds audit references — the durable signed-entry "
