@@ -1215,6 +1215,36 @@ def test_heal_never_truncates_through_a_symlink(tmp_path: Path) -> None:
     assert lure.read_bytes() == b"precious bytes with no trailing newline"
 
 
+def test_fifo_sidecar_rejected_on_read_without_hanging(tmp_path: Path) -> None:
+    """Codex round-33 P1 (PR B1) — the token map's SEEDING read runs before
+    its first append: a pre-created FIFO at the sidecar path made a plain
+    open block forever (hanging span completion), and a symlink supplied
+    attacker rows. The read path now opens O_NONBLOCK through the validated
+    helper: a FIFO returns immediately and is rejected as not-a-regular-file."""
+    import os as os_module
+
+    writer = _writer(tmp_path)
+    os_module.mkfifo(writer.sidecar_path)
+
+    with pytest.raises(ValueError, match="not a regular file"):
+        writer.read_full_entries_for_tenant("tenant-A")
+
+
+def test_symlinked_sidecar_rejected_on_read(tmp_path: Path) -> None:
+    """Codex round-33 P1 (PR B1) — a symlinked sidecar must not feed
+    attacker-controlled rows through the reader (the seeding path consumes
+    them before any validated append runs)."""
+    import os as os_module
+
+    writer = _writer(tmp_path)
+    lure = tmp_path / "attacker-rows.jsonl"
+    lure.write_text('{"tenant_tag":"tenant-A","entry":{}}\n')
+    os_module.symlink(lure, writer.sidecar_path)
+
+    with pytest.raises(OSError):
+        writer.read_full_entries_for_tenant("tenant-A")
+
+
 def test_map_reseeds_from_its_own_family_tail_not_foreign(tmp_path: Path) -> None:
     """Codex round-32 P1 (PR B1) — after a foreign family (cost/HITL/...)
     writes the tenant's LATEST sidecar row, a restarted map must reseed from

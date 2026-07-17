@@ -423,7 +423,7 @@ class RuntimeAuditLedgerWriter:
                 # raised, the retry lands here — returning without another
                 # fsync would let the IS reference commit while the row (or
                 # its directory entry) is still only page-cached.
-                fd = os.open(str(self._sidecar_path), os.O_RDONLY)
+                fd = self._open_sidecar_validated(os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
                 try:
                     os.fsync(fd)
                 finally:
@@ -436,7 +436,6 @@ class RuntimeAuditLedgerWriter:
                         os.close(dir_fd)
                 return
             encoded = (line + "\n").encode("utf-8")
-            created = not self._sidecar_path.exists()
             with os.fdopen(self._open_sidecar_for_append(), "ab") as fh:
                 fh.write(encoded)
                 fh.flush()
@@ -445,10 +444,13 @@ class RuntimeAuditLedgerWriter:
                 # the IS append could keep the ref while the signature row
                 # was never durable, defeating the sidecar-first guarantee.
                 os.fsync(fh.fileno())
-            if created and sys.platform != "win32":
-                # Directory-entry durability for the newly created file
-                # (mirrors the shutdown-path dir-fsync; POSIX-only per the
-                # documented B-45 Windows posture).
+            if sys.platform != "win32":
+                # Directory-entry durability on EVERY append (codex round-33
+                # P2 — a `created`-gated dir-fsync missed the retry after a
+                # crash between O_CREAT and the first write: the file already
+                # existed, so its directory entry was never made durable
+                # before the IS ref landed). One extra fsync per audit write
+                # is cheap; POSIX-only per the documented B-45 posture.
                 dir_fd = os.open(str(self._sidecar_path.parent), os.O_RDONLY)
                 try:
                     os.fsync(dir_fd)
@@ -505,9 +507,14 @@ class RuntimeAuditLedgerWriter:
             return
         if st is None:
             return
-        with self._sidecar_path.open("rb") as fh:
-            fh.seek(index.offset)
-            delta = fh.read(size - index.offset)
+        # Validated fd (codex round-33 P1): a plain path open here followed
+        # symlinks and would block forever on a pre-created FIFO.
+        fd = self._open_sidecar_validated(os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+        try:
+            os.lseek(fd, index.offset, os.SEEK_SET)
+            delta = os.read(fd, size - index.offset)
+        finally:
+            os.close(fd)
         # The heal ran under this same lock, so the region ends on a newline;
         # every split segment is a complete record.
         for raw in delta.split(b"\n"):
@@ -579,7 +586,14 @@ class RuntimeAuditLedgerWriter:
         # writer thread in one process needs this to never observe a
         # partially written record.
         with self._sidecar_thread_lock, cross_process_read_lock(self._sidecar_path):
-            with self._sidecar_path.open(encoding="utf-8") as fh:
+            # Validated fd (codex round-33 P1): the token map's SEEDING read
+            # runs before its first append, so a plain path open here let a
+            # pre-created FIFO hang span completion and a symlink supply
+            # attacker-controlled rows before the validated append path ever
+            # ran. O_NONBLOCK makes a FIFO open return instead of blocking;
+            # the fstat check then rejects it as not-a-regular-file.
+            fd = self._open_sidecar_validated(os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+            with os.fdopen(fd, encoding="utf-8") as fh:
                 for line in fh:
                     if not line.strip():
                         continue
