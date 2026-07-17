@@ -32,8 +32,10 @@ import asyncio
 import contextlib
 import contextvars
 import functools
+import logging
 import queue
 import threading
+import time
 from collections.abc import Callable
 from concurrent.futures import Future
 from typing import Any, Final
@@ -47,6 +49,11 @@ __all__ = [
 #: writes); long-running work (drivers, child workflows) must never run
 #: here or the exhaustion-deadlock this pool exists to prevent returns.
 AUDIT_OFFLOAD_MAX_WORKERS: Final[int] = 4
+
+#: Bounded cancellation-join grace (codex round-10 P1) — matches the
+#: facade's ack grace: long enough for one KMS sign + local file writes,
+#: short enough that a stalled backend cannot hold process exit.
+AUDIT_CANCEL_JOIN_GRACE_SECONDS: Final[float] = 10.0
 
 
 class _DaemonThreadAuditExecutor:
@@ -135,11 +142,25 @@ async def run_audit_off_loop(fn: Callable[..., Any], /, *args: Any, **kwargs: An
             # task/shutdown cancellation delivered a second CancelledError
             # that a single suppress absorbed once and then exited with the
             # worker still running — the write could land after the caller
-            # observed cancellation. The no-post-cancel-write guarantee is
-            # only discharged when the worker has ACTUALLY finished, so each
-            # further CancelledError is absorbed and the join resumes
-            # (10ms poll, only during this already-cancelled window).
-            while not concurrent_future.done():
+            # observed cancellation. Each further CancelledError is absorbed
+            # and the join resumes (10ms poll, only during this
+            # already-cancelled window) — but BOUNDED (codex round-10 P1):
+            # asyncio.run's cancellation cleanup waits for this pending
+            # task, so an unbounded join let a stalled KMS sign hold
+            # process exit indefinitely despite the daemon worker. Past the
+            # grace the worker is DETACHED with a loud ERROR — the residual
+            # (a possibly-late write) is then explicit and bounded, the
+            # same unresolved semantics the facade flags via
+            # audit_drain_incomplete.
+            deadline = time.monotonic() + AUDIT_CANCEL_JOIN_GRACE_SECONDS
+            while not concurrent_future.done() and time.monotonic() < deadline:
                 with contextlib.suppress(asyncio.CancelledError):
                     await asyncio.sleep(0.01)
+            if not concurrent_future.done():
+                logging.getLogger("harness.runtime.audit_signing").error(
+                    "audit offload worker outlived the %.0fs cancellation "
+                    "join grace — detaching (daemon worker cannot hold "
+                    "process exit); its audit write may land late",
+                    AUDIT_CANCEL_JOIN_GRACE_SECONDS,
+                )
         raise

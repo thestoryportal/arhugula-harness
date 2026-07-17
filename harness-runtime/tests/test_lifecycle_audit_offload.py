@@ -319,3 +319,38 @@ async def test_join_survives_repeated_cancellation() -> None:
         await task
     # The write landed BEFORE the cancellation became observable.
     assert wrote == ["audit-write"]
+
+
+@pytest.mark.asyncio
+async def test_stalled_worker_detaches_after_bounded_join_grace(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Codex round-10 P1 — the repeated-cancellation join was UNBOUNDED:
+    asyncio.run's cancellation cleanup waits for the pending task, so a
+    stalled KMS sign held process exit indefinitely despite the daemon
+    worker. Past the grace the worker detaches with a loud ERROR; the task
+    completes cancelled within the bound."""
+    import logging as logging_module
+
+    from harness_runtime.lifecycle import audit_offload as offload_module
+
+    monkeypatch.setattr(offload_module, "AUDIT_CANCEL_JOIN_GRACE_SECONDS", 0.3)
+
+    started = threading.Event()
+    release = threading.Event()
+
+    def _stalled() -> None:
+        started.set()
+        release.wait(timeout=30.0)
+
+    task = asyncio.create_task(run_audit_off_loop(_stalled))
+    assert await asyncio.to_thread(started.wait, 10.0)
+
+    with caplog.at_level(logging_module.ERROR, logger="harness.runtime.audit_signing"):
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(asyncio.shield(task), timeout=3.0)
+
+    assert any("outlived" in r.message for r in caplog.records)
+    release.set()
