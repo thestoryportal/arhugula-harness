@@ -131,6 +131,7 @@ from harness_cp.audit_hitl_span_namespace import (
     HITL_SPAN_NAMESPACE_SCHEMA,
 )
 from harness_cp.cp_shared_types import ActorIdentity, MCPTrustTier
+from harness_cp.f5_signing_key_resolution import SigningBackend
 from harness_cp.gate_level_rule import GateLevel as CPGateLevel
 from harness_cp.gate_level_rule import GateLevelComputation
 from harness_cp.handoff_context import (
@@ -934,6 +935,14 @@ class RuntimeHITLGateComposer:
     returning `None` for a given step (unresolvable `tool_id`) likewise feeds the
     no-floor default — see `step_mcp_trust_tier.py` for the fail-soft rationale."""
 
+    signing_backend: SigningBackend | None = None
+    """OD spec v1.33 §21.2.1 composition-root injection seam (B-47 PR B2a).
+
+    Threaded from `ctx.audit_signing_backend` at bootstrap stage-5; passed
+    verbatim as `backend=` to `cp_audit_to_od_audit` at substep 8c-HITL.
+    `None` (the default) preserves the placeholder signing path byte-for-byte.
+    """
+
     # Carrier-canonical attribute name constants (per spec §14.8.5 producer-
     # side carrier import discipline). Frozen at construction so a typo in
     # the spec carrier surfaces at dataclass instantiation, not first dispatch.
@@ -1220,6 +1229,7 @@ class RuntimeHITLGateComposer:
                 key_id=self.audit_signing_key_id,
                 algo=self.audit_signing_algorithm,
                 entry_core=entry_core,
+                backend=self.signing_backend,
             )
 
             # 8d-HITL — persist OD audit entry through IS hash chain.

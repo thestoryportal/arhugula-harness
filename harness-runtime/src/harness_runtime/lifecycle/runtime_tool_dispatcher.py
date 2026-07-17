@@ -348,6 +348,7 @@ class RuntimeToolDispatcher:
         cost_record_sink: SupportsCostRecordAppend | None = None,
         ledger_writer: Any = None,
         procedural_tier_snapshot_resolver: Any = None,
+        signing_backend: Any = None,
         tool_execution_drivers: dict[ServerName, ToolExecutionDriver] | None = None,
         provider_secret_resolver: Any = None,
         secret_fetch_audit_emitter: Callable[[SecretFetchEvent], Any] | None = None,
@@ -446,6 +447,9 @@ class RuntimeToolDispatcher:
         # `_attribute_tool_cost_best_effort` for the F2-write entry_core fix.
         self._ledger_writer = ledger_writer
         self._procedural_tier_snapshot_resolver = procedural_tier_snapshot_resolver
+        # B-47 PR B2a — OD spec v1.33 §21.2.1 signing-backend seam, threaded
+        # from `ctx.audit_signing_backend` by the stage-5 factory.
+        self._signing_backend = signing_backend
         # R-FS-1 arc CA — run-scoped cost-record sink (same list as
         # `ctx.cost_record_accumulator`, threaded by the stage-5 factory).
         # `_attribute_tool_cost_best_effort` appends each dispatch's returned
@@ -610,6 +614,7 @@ class RuntimeToolDispatcher:
                 tenant_id=step_context.tenant_id,
                 ledger_writer=self._ledger_writer,
                 procedural_tier_snapshot_resolver=self._procedural_tier_snapshot_resolver,
+                signing_backend=self._signing_backend,
             )
         except Exception:
             # Cost-attribution is observability, not contract. Swallow.

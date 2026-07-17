@@ -111,6 +111,7 @@ from typing import TYPE_CHECKING, Any, cast
 from harness_core.identity import ActionID
 from harness_cp.cp_shared_types import ActorIdentity
 from harness_cp.engine_class import EngineClass
+from harness_cp.f5_signing_key_resolution import SigningBackend
 from harness_cp.handoff_context import (
     ActionKind,
     HandoffContext,
@@ -598,6 +599,14 @@ class RuntimeSubAgentDispatcher:
     `RuntimeCpIsWiring.procedural_tier_snapshot_resolver` pattern for the 6
     §16.5 CP composers (`cp_is_wiring.py`)."""
 
+    signing_backend: SigningBackend | None = None
+    """OD spec v1.33 §21.2.1 composition-root injection seam (B-47 PR B2a).
+
+    Threaded from `ctx.audit_signing_backend` at bootstrap stage-5; passed
+    verbatim as `backend=` to `cp_audit_to_od_audit` at substep 8c. `None`
+    (the default) preserves the placeholder signing path byte-for-byte.
+    """
+
     # Module-bound canonical attribute name constants (per spec §14.7.5
     # "Producer-side attribute carrier reference" — imported from the
     # canonical carrier; not hand-coded as strings). Frozen at construction
@@ -720,6 +729,7 @@ class RuntimeSubAgentDispatcher:
                 key_id=self.audit_signing_key_id,
                 algo=self.audit_signing_algorithm,
                 entry_core=entry_core,
+                backend=self.signing_backend,
             )
 
             # 8d — persist OD audit entry through IS hash chain.

@@ -15,6 +15,7 @@ from harness_cp.aws_kms_signing_backend import (
 )
 from harness_runtime.config import audit_signing as audit_signing_module
 from harness_runtime.config.audit_signing import (
+    BreakerGuardedSigningBackend,
     SigningBackendUnavailableError,
     make_audit_signing_backend,
 )
@@ -50,7 +51,11 @@ def test_factory_constructs_kms_backend_with_injected_client() -> None:
         key_arns={"harness-runtime-redaction-token": _ARN},
     )
     backend = make_audit_signing_backend(config, kms_client=_FakeKmsClient())
-    assert isinstance(backend, AwsKmsSigningBackend)
+    # B-47 PR B2a — the factory wraps the concrete backend in the C9
+    # breaker at the single construction point; the Protocol surface
+    # (algorithm + sign/verify) is preserved by the wrapper.
+    assert isinstance(backend, BreakerGuardedSigningBackend)
+    assert isinstance(backend._inner, AwsKmsSigningBackend)
     assert backend.algorithm == "ed25519"
 
 

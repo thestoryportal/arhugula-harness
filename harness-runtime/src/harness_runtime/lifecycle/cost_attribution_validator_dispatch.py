@@ -57,6 +57,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any, cast
 
 from harness_cp.engine_namespace import ReplayDisposition
+from harness_cp.f5_signing_key_resolution import SigningBackend
 from harness_cxa.cp_audit_conversion import cp_audit_to_od_audit
 from harness_is.state_ledger_entry_schema import Identifier
 from harness_od.audit_ledger_types import AuditLedgerEntry
@@ -127,6 +128,7 @@ def attribute_validator_dispatch_cost(
     dispatch_disambiguator: str = "0",
     ledger_writer: Any = None,
     procedural_tier_snapshot_resolver: Callable[[], Identifier] | None = None,
+    signing_backend: SigningBackend | None = None,
 ) -> SpanCostRecord:
     """Run the §C-OD-26.1 canonical cost-attribution chain for one validator dispatch.
 
@@ -284,6 +286,7 @@ def attribute_validator_dispatch_cost(
         cost_payload,
         key_id=_DEFAULT_SIGNING_KEY_ID,
         entry_core=entry_core,
+        backend=signing_backend,
     )
     audit_writer.append(tenant_id, audit_entry)
 
@@ -322,6 +325,7 @@ class CostAttributingValidatorHook:
         cost_record_sink: SupportsCostRecordAppend | None = None,
         ledger_writer: Any = None,
         procedural_tier_snapshot_resolver: Callable[[], Identifier] | None = None,
+        signing_backend: SigningBackend | None = None,
     ) -> None:
         self._rate_table = rate_table
         self._cost_chain = cost_chain
@@ -333,6 +337,8 @@ class CostAttributingValidatorHook:
         # unit-test ergonomics.
         self._ledger_writer = ledger_writer
         self._procedural_tier_snapshot_resolver = procedural_tier_snapshot_resolver
+        # B-47 PR B2a — OD spec v1.33 §21.2.1 signing-backend seam (stage-4).
+        self._signing_backend = signing_backend
         # R-FS-1 arc CA — run-scoped cost-record sink (same list as
         # `ctx.cost_record_accumulator`, threaded by the stage-4 validator
         # factory). The returned SpanCostRecord is appended for the
@@ -395,6 +401,7 @@ class CostAttributingValidatorHook:
             dispatch_disambiguator=dispatch_disambiguator,
             ledger_writer=self._ledger_writer,
             procedural_tier_snapshot_resolver=self._procedural_tier_snapshot_resolver,
+            signing_backend=self._signing_backend,
         )
 
         # R-FS-1 arc CA — record into the run-scoped accumulator for the

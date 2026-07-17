@@ -515,6 +515,10 @@ class RuntimeLLMDispatcher:
     # `cp-audit:<action_id>` marker. None preserves unit-test ergonomics.
     ledger_writer: Any = None
     procedural_tier_snapshot_resolver: Any = None
+    # B-47 PR B2a — OD spec v1.33 §21.2.1 signing-backend seam, threaded from
+    # `ctx.audit_signing_backend` by `materialize_llm_dispatcher_stage`. None
+    # (unit-test ergonomics) preserves the placeholder signing path.
+    signing_backend: Any = None
     # R-FS-1 arc CA — run-scoped cost-record sink (the SAME list as
     # `ctx.cost_record_accumulator`, threaded by `materialize_llm_dispatcher_stage`
     # from the mutable bootstrap ctx). `_attribute_cost_best_effort` appends each
@@ -829,6 +833,7 @@ class RuntimeLLMDispatcher:
                     # (procedural_tier_snapshot_resolver=None) per IS §5.1.
                     ledger_writer=self.ledger_writer,
                     procedural_tier_snapshot_resolver=None,
+                    signing_backend=self.signing_backend,
                     provider_name="anthropic",
                     model=_model,
                     parent_idempotency_key="__prewarm__",
@@ -1745,6 +1750,7 @@ class RuntimeLLMDispatcher:
                 cost_record_sink=self.cost_record_sink,
                 ledger_writer=self.ledger_writer,
                 procedural_tier_snapshot_resolver=self.procedural_tier_snapshot_resolver,
+                signing_backend=self.signing_backend,
                 provider_name=provider_name,
                 model=model,
                 parent_idempotency_key=step_context.parent_idempotency_key,
@@ -2943,6 +2949,7 @@ def _attribute_cost_best_effort(
     cost_record_sink: SupportsCostRecordAppend | None = None,
     ledger_writer: Any = None,
     procedural_tier_snapshot_resolver: Any = None,
+    signing_backend: Any = None,
     provider_name: str,
     model: str,
     parent_idempotency_key: str,
@@ -3011,6 +3018,7 @@ def _attribute_cost_best_effort(
             tenant_id=tenant_id,
             ledger_writer=ledger_writer,
             procedural_tier_snapshot_resolver=procedural_tier_snapshot_resolver,
+            signing_backend=signing_backend,
             # R-FS-1 B-FALLBACK-CHAIN-FAMILY-COST-COMPOSITION — populate the
             # §15.3 cross-family family tag from the dispatched provider so the
             # PER_PROVIDER_DISCRIMINATOR rollup is non-vacuous in production.
@@ -3045,6 +3053,7 @@ def materialize_llm_dispatcher_stage(
     cost_record_sink: SupportsCostRecordAppend | None = None,
     ledger_writer: Any = None,
     procedural_tier_snapshot_resolver: Any = None,
+    signing_backend: Any = None,
     inter_step_channel: Any = None,
     memory_tool_registry: Any = None,
     deployment_surface: Any = None,
@@ -3132,6 +3141,7 @@ def materialize_llm_dispatcher_stage(
         cost_record_sink=cost_record_sink,
         ledger_writer=ledger_writer,
         procedural_tier_snapshot_resolver=procedural_tier_snapshot_resolver,
+        signing_backend=signing_backend,
         inter_step_channel=inter_step_channel,
         memory_tool_registry=memory_tool_registry,
         deployment_surface=deployment_surface,

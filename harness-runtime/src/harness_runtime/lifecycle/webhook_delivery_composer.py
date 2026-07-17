@@ -118,6 +118,7 @@ class WebhookDeliveryComposer:
         cost_record_sink: SupportsCostRecordAppend | None = None,
         ledger_writer: Any = None,
         procedural_tier_snapshot_resolver: Any = None,
+        signing_backend: Any = None,
         workflow_id: str | None = None,
         parent_action_id: str | None = None,
         parent_idempotency_key: str | None = None,
@@ -178,6 +179,8 @@ class WebhookDeliveryComposer:
         # state — see `webhook_delivery_composer_factory.py`).
         self._ledger_writer = ledger_writer
         self._procedural_tier_snapshot_resolver = procedural_tier_snapshot_resolver
+        # B-47 PR B2a — OD spec v1.33 §21.2.1 signing-backend seam (stage-5).
+        self._signing_backend = signing_backend
         self._workflow_id = workflow_id
         self._parent_action_id = parent_action_id
         self._parent_idempotency_key = parent_idempotency_key
@@ -360,6 +363,7 @@ class WebhookDeliveryComposer:
                 tenant_id=self._tenant_id,
                 ledger_writer=self._ledger_writer,
                 procedural_tier_snapshot_resolver=self._procedural_tier_snapshot_resolver,
+                signing_backend=self._signing_backend,
                 # B-23 (out-of-family Codex [P2], round 5) — `span_id` above
                 # is synthesized from `idempotency_key`, so a caller invoking
                 # `deliver_webhook()` twice with the same `idempotency_key`

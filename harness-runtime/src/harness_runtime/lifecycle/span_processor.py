@@ -166,6 +166,7 @@ def validate_audit_signing_for_span_stage(
     *,
     signing_backend: SigningBackend | None,
     tokenizer_will_bind: bool,
+    additional_key_ids: tuple[str, ...] = (),
 ) -> None:
     """Fail-at-bootstrap validation of the audit-signing wiring — pure, no
     construction side effects.
@@ -185,9 +186,30 @@ def validate_audit_signing_for_span_stage(
       FIRST redacted span mid-run — round 3; validated before any
       `BatchSpanProcessor` worker thread exists — round 6).
     """
-    if not tokenizer_will_bind:
-        return
     if config.audit_signing.backend is not AuditSigningBackendKind.AWS_KMS:
+        return
+    # B-47 PR B2a — `additional_key_ids` (the HITL/sub-agent composers' and
+    # cost builders' key_ids, passed by stage 4) sign on EVERY audit write
+    # once the backend is threaded, independent of the tokenizer — so their
+    # mapping check must NOT sit behind the tokenizer gate. The
+    # tokenizer-scoped checks below keep the original round-16/round-3 gate.
+    missing = tuple(k for k in additional_key_ids if k not in config.audit_signing.key_arns)
+    if missing:
+        raise SpanProcessorBindError(
+            f"audit_signing.key_arns is missing signing key(s) {missing!r} "
+            f"used by the runtime's audit composers — the aws-kms mapping "
+            f"must cover every composition-root signing consumer (ADR-D8 "
+            f"§Decision item 2: no default key is ever assumed); without "
+            f"this the FIRST HITL/sub-agent/cost audit write would die "
+            f"mid-run with UnknownSigningKeyIdError"
+        )
+    if additional_key_ids and signing_backend is None:
+        raise SpanProcessorBindError(
+            "audit_signing.backend is 'aws-kms' but no signing_backend was "
+            "constructed — explicit KMS configuration must never silently "
+            "degrade to placeholder signing"
+        )
+    if not tokenizer_will_bind:
         return
     if signing_backend is None:
         raise SpanProcessorBindError(
