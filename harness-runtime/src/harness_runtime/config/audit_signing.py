@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING, Any, Final
 from harness_as.secret_fail_class import SecretBackendBreakerKey, construct_breaker_key
 from harness_as.secret_fetch import SecretScope
 from harness_cp.aws_kms_signing_backend import AwsKmsSigningBackend
+from harness_cp.f5_signing_key_resolution import SIGNATURE_LENGTH_BY_ALGORITHM
 
 from harness_runtime.lifecycle.audit_signing_errors import (
     AUDIT_SIGNING_HARD_FAILURES,
@@ -183,6 +184,20 @@ class BreakerGuardedSigningBackend:
             raise AuditSigningFailedError(
                 f"configured audit-signing backend failed to sign under key_id={key_id!r}: {exc}"
             ) from exc
+        expected_length = SIGNATURE_LENGTH_BY_ALGORITHM.get(self.algorithm)
+        if expected_length is not None and len(signature) != expected_length:
+            # Codex round-9 P2: a "successful" KMS response carrying a
+            # malformed signature previously recorded breaker SUCCESS and
+            # then failed downstream as an untyped ValueError — silently
+            # swallowed by the best-effort paths, and repeated malformed
+            # responses never opened the breaker. Result validation belongs
+            # INSIDE the typed signing-failure boundary.
+            self._record_failure(was_probe=was_probe, admission_epoch=admission_epoch)
+            raise AuditSigningFailedError(
+                f"configured audit-signing backend returned a malformed "
+                f"signature for key_id={key_id!r}: {len(signature)} bytes, "
+                f"expected {expected_length} for {self.algorithm!r}"
+            )
         self._record_success(admission_epoch=admission_epoch)
         return signature
 

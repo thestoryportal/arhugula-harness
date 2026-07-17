@@ -191,7 +191,7 @@ class _FlakyBackend:
         self.sign_calls += 1
         if self.failing:
             raise RuntimeError("kms down")
-        return b"sig"
+        return b"s" * 64  # genuine ed25519 width — the wrapper validates length
 
     def verify(self, *, message: bytes, signature: bytes, key_id: str, key_period: int) -> bool:
         self.verify_calls += 1
@@ -250,8 +250,8 @@ def test_breaker_half_open_probe_closes_on_success() -> None:
     # Cooldown elapsed; the probe is admitted and succeeds → breaker closes.
     clock["now"] = 31.0
     inner.failing = False
-    assert guarded.sign(message=b"m", key_id="k", key_period=0) == b"sig"
-    assert guarded.sign(message=b"m", key_id="k", key_period=0) == b"sig"
+    assert guarded.sign(message=b"m", key_id="k", key_period=0) == b"s" * 64
+    assert guarded.sign(message=b"m", key_id="k", key_period=0) == b"s" * 64
     assert inner.sign_calls == 5
 
 
@@ -302,7 +302,7 @@ def test_stale_pre_open_success_does_not_close_open_breaker() -> None:
             if mine == 1:
                 entered.set()
                 assert release.wait(timeout=10.0)
-                return b"slow-sig"
+                return b"w" * 64
             raise RuntimeError("kms down")
 
         def verify(self, *, message: bytes, signature: bytes, key_id: str, key_period: int) -> bool:
@@ -328,8 +328,43 @@ def test_stale_pre_open_success_does_not_close_open_breaker() -> None:
 
     release.set()
     slow.join(timeout=10.0)
-    assert slow_result == [b"slow-sig"]
+    assert slow_result == [b"w" * 64]
 
     # The stale success must NOT have closed the breaker.
+    with pytest.raises(AuditSigningBreakerOpenError):
+        guarded.sign(message=b"m", key_id="k", key_period=0)
+
+
+def test_malformed_signature_is_typed_failure_and_counts_toward_breaker() -> None:
+    """Codex round-9 P2 — a 'successful' KMS response carrying a malformed
+    signature recorded breaker SUCCESS and failed downstream as an untyped
+    ValueError (silently swallowed by the best-effort paths; repeated
+    malformed responses never opened the breaker). Result validation now
+    lives inside the typed boundary."""
+    from harness_runtime.config.audit_signing import (
+        AuditSigningBreakerOpenError,
+        AuditSigningFailedError,
+    )
+
+    class _MalformedKms:
+        algorithm = "ed25519"
+
+        def sign(self, *, message: bytes, key_id: str, key_period: int) -> bytes:
+            return b"short"  # 5 bytes, not the ed25519 64
+
+        def verify(self, *, message: bytes, signature: bytes, key_id: str, key_period: int) -> bool:
+            return True
+
+    inner = _MalformedKms()
+    clock = {"now": 0.0}
+    guarded = BreakerGuardedSigningBackend(
+        inner, fail_threshold=3, cooldown_seconds=30.0, monotonic=lambda: clock["now"]
+    )
+
+    for _ in range(3):
+        with pytest.raises(AuditSigningFailedError, match="malformed"):
+            guarded.sign(message=b"m", key_id="k", key_period=0)
+
+    # Malformed responses COUNT toward the breaker: it is open now.
     with pytest.raises(AuditSigningBreakerOpenError):
         guarded.sign(message=b"m", key_id="k", key_period=0)

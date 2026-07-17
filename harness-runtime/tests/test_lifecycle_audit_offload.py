@@ -216,7 +216,7 @@ async def test_no_audit_write_lands_after_timeout_surfaces() -> None:
             # Sync work ON the loop delays cancellation delivery past the
             # facade's bound — the audit job is not yet submitted when the
             # facade cancels.
-            time_module.sleep(0.5)
+            time_module.sleep(0.5)  # noqa: ASYNC251 — deliberately BLOCKS the loop (the scenario under test)
             await run_audit_off_loop(lambda: wrote.append("late-audit-write"))
             return {}
 
@@ -286,7 +286,7 @@ def test_for_single_host_forwards_signing_backend() -> None:
         trust_policy=cast(Any, object()),
         signing_backend=sentinel,
     )
-    assert dispatcher._signing_backend is sentinel  # noqa: SLF001
+    assert dispatcher._signing_backend is sentinel
 
 
 @pytest.mark.asyncio

@@ -84,8 +84,8 @@ from harness_is.cross_process_ledger_lock import (
 )
 from harness_is.state_ledger_entry_schema import Identifier, StateLedgerEntry, Timestamp
 from harness_is.state_ledger_write import (
-    NonMonotonicTimestampError,
     EntryPayload,
+    NonMonotonicTimestampError,
     WriteKey,
     WriteResult,
     read_ledger,
