@@ -540,9 +540,27 @@ class RuntimeAuditLedgerWriter:
         fd = self._open_sidecar_validated(os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
         try:
             os.lseek(fd, index.offset, os.SEEK_SET)
-            delta = os.read(fd, size - index.offset)
+            # Drain to the snapshot size (codex round-37): a single os.read
+            # may return SHORT; advancing the offset to `size` would mark the
+            # unread suffix as folded, so a replay whose identity sits there
+            # would duplicate its sidecar row.
+            chunks: list[bytes] = []
+            remaining = size - index.offset
+            while remaining > 0:
+                chunk = os.read(fd, remaining)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            delta = b"".join(chunks)
         finally:
             os.close(fd)
+        # Fold only COMPLETE records and advance by bytes actually consumed —
+        # never by the snapshot size.
+        if not delta.endswith(b"\n"):
+            delta = delta[: delta.rfind(b"\n") + 1]
+        if not delta:
+            return
         # The heal ran under this same lock, so the region ends on a newline;
         # every split segment is a complete record.
         for raw in delta.split(b"\n"):
@@ -574,7 +592,7 @@ class RuntimeAuditLedgerWriter:
                     f"preserved as evidence, append refused"
                 )
             index.digests[(row["tenant_tag"], entry.entry_hash)] = _full_entry_digest(entry)
-        index.offset = size
+        index.offset += len(delta)
         post = self._sidecar_path.stat()
         index.inode = post.st_ino
         index.mtime_ns = post.st_mtime_ns

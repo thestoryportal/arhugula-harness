@@ -1230,6 +1230,37 @@ def test_fifo_sidecar_rejected_on_read_without_hanging(tmp_path: Path) -> None:
         writer.read_full_entries_for_tenant("tenant-A")
 
 
+def test_short_reads_never_mark_unread_suffix_as_folded(tmp_path: Path) -> None:
+    """Codex round-37 (PR B1) — a short os.read with the offset advanced to
+    the snapshot size marked the unread suffix as folded; a replay whose
+    identity sat there duplicated its sidecar row. With reads capped to 7
+    bytes per call, membership over foreign rows must stay exact (no
+    duplicate on replay)."""
+    import unittest.mock as mock
+
+    from harness_runtime.lifecycle import audit_writer as audit_writer_module
+
+    writer_a = _writer(tmp_path)
+    foreign = _make_audit_entry("a" * 64)
+    writer_a.append("tenant-s", foreign)
+
+    writer_b = RuntimeAuditLedgerWriter(
+        ledger_writer=writer_a.ledger_writer,
+        time_source=writer_a.time_source,
+    )
+    real_read = audit_writer_module.os.read
+
+    def _short_read(fd: int, n: int) -> bytes:
+        return real_read(fd, min(n, 7))
+
+    with mock.patch.object(audit_writer_module.os, "read", _short_read):
+        # Replaying the foreign entry through writer_b must dedup (its
+        # identity lives in the suffix a short-read-broken fold would miss).
+        assert writer_b.append("tenant-s", foreign) is WriteResult.IDEMPOTENT_NOOP
+
+    assert len(writer_b.read_full_entries_for_tenant("tenant-s")) == 1
+
+
 def test_deleted_sidecar_with_surviving_is_refs_fails_loud(tmp_path: Path) -> None:
     """Codex round-36 P1 (PR B1) — after entries exist, a deleted sidecar
     silently presented an empty history, and the next append minted a
