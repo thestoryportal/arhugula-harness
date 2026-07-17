@@ -175,6 +175,7 @@ from harness_runtime.lifecycle.ask_user_question_surface import (
     AskUserQuestionSurface,
     AskUserQuestionTimeoutError,
 )
+from harness_runtime.lifecycle.audit_offload import run_audit_off_loop
 from harness_runtime.lifecycle.hitl_auto_approve_policy import HITLAutoApprovePolicy
 from harness_runtime.lifecycle.resume_context_holder import ResumeContextHolder
 from harness_runtime.lifecycle.webhook_delivery_composer import (
@@ -1042,7 +1043,7 @@ class RuntimeHITLGateComposer:
         `asyncio.to_thread` copies contextvars, so the run-scoped
         cost-accumulator proxy still resolves.
         """
-        return await asyncio.to_thread(self._compose_and_persist_audit, *args, **kwargs)
+        return await run_audit_off_loop(self._compose_and_persist_audit, *args, **kwargs)
 
     def _compose_and_persist_audit(
         self,

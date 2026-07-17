@@ -31,6 +31,7 @@ from harness_cp.hitl_timeout_degradation import (
 )
 from harness_cp.validator_framework_types import HITLEscalationBrief
 
+from harness_runtime.lifecycle.audit_offload import run_audit_off_loop
 from harness_runtime.lifecycle.cost_record_sink import SupportsCostRecordAppend
 
 __all__ = [
@@ -324,7 +325,7 @@ class WebhookDeliveryComposer:
         `asyncio.to_thread` copies contextvars, so the run-scoped
         cost-accumulator proxy still resolves.
         """
-        return await asyncio.to_thread(self._attribute_webhook_cost_best_effort, *args, **kwargs)
+        return await run_audit_off_loop(self._attribute_webhook_cost_best_effort, *args, **kwargs)
 
     def _attribute_webhook_cost_best_effort(
         self,

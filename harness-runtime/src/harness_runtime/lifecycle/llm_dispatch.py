@@ -53,7 +53,6 @@ L5..L8 stage shape established at U-RT-21..U-RT-41.
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import json
 from collections.abc import Mapping, Sequence
@@ -92,6 +91,7 @@ from harness_cp.validator_fail_transient_staircase import CrossTrustBoundaryStat
 from harness_cp.workflow_driver_types import StepExecutionContext, StepKind, WorkflowStep
 from harness_od.otel_genai_base import HIERARCHY_CORRELATION_KEY, GenAiOperation
 
+from harness_runtime.lifecycle.audit_offload import run_audit_off_loop
 from harness_runtime.lifecycle.cacheable_epoch import DEFAULT_CACHE_TTL, CacheTTL
 from harness_runtime.lifecycle.cost_record_sink import SupportsCostRecordAppend
 from harness_runtime.lifecycle.hitl_tool_loop import (
@@ -821,9 +821,9 @@ class RuntimeLLMDispatcher:
                 # Honest cost attribution — synthetic step context so the spend
                 # appears in the audit ledger under workflow_id="__prewarm__"
                 # rather than being silently attributed to the last real workflow.
-                await asyncio.to_thread(
+                await run_audit_off_loop(
                     # Codex round-1 P1 (PR B2a): KMS signing is sync network
-                    # I/O — off-loop, same discipline as the composer paths.
+                    # I/O — off-loop (dedicated executor, round-2 P1).
                     _attribute_cost_best_effort,
                     span=_span,
                     cost_chain=self.cost_chain,
@@ -1746,7 +1746,7 @@ class RuntimeLLMDispatcher:
             # string-form preserving Decimal precision at the OTel boundary.
             # Wrapped in best-effort try/except: cost-attribution failure
             # MUST NOT fail the dispatch (cost is observability not contract).
-            await asyncio.to_thread(
+            await run_audit_off_loop(
                 # Codex round-1 P1 (PR B2a): off-loop — see prewarm site.
                 _attribute_cost_best_effort,
                 span=span,

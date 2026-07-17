@@ -52,7 +52,6 @@ Authority:
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Callable
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, cast
@@ -68,6 +67,7 @@ from harness_od.cost_record_audit_writer import (
 from harness_od.idempotency_join_dedup import DispatchKind, SpanCostRecord
 from harness_od.rate_table_types import RateTable
 
+from harness_runtime.lifecycle.audit_offload import run_audit_off_loop
 from harness_runtime.lifecycle.cost_attribution_f2_write import compose_cost_f2_entry_core
 from harness_runtime.lifecycle.cost_record_sink import SupportsCostRecordAppend
 from harness_runtime.types import AuditLedgerWriter, CostAttributionChain
@@ -387,9 +387,9 @@ class CostAttributingValidatorHook:
             f"{evaluation.burden_count}-{evaluation.result.outcome.value}-{branch_index}"
         )
 
-        attached = await asyncio.to_thread(
+        attached = await run_audit_off_loop(
             # Codex round-1 P1 (PR B2a): KMS signing is sync network I/O —
-            # off-loop, same discipline as the composer paths.
+            # off-loop (dedicated executor, round-2 P1).
             attribute_validator_dispatch_cost,
             rate_table=self._rate_table,
             cost_chain=self._cost_chain,
