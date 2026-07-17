@@ -840,7 +840,15 @@ items:
     predecessor (the sidecar lock serializes persistence only, not chain-position selection). The
     in-process half is serialized; the clean cross-process fix is an atomic writer operation, which
     the (e)/(g)/(h) SQLite persistence redesign gives transactionally -- resolve there. Already
-    documented in-code as a residual since round 13; formally registered now.'
+    documented in-code as a residual since round 13; formally registered now; (j) upgrade/migration
+    surface (out-of-family Codex rounds 44-48 on PR B1, all fixed in-PR): the JSONL sidecar gained
+    IS-refs-pre-snapshot reader ordering, warm-index truncation coverage, injective tenant tags with
+    config-load validation, duplicate-row rejection, bounded daemon-thread shutdown fsyncs under one
+    shared budget, and the explicit adopt_legacy_is_refs() pre-sidecar migration runnable via python -m
+    harness_runtime.admin.migrate_audit_sidecar. That module is deliberately NOT in the spec-committed
+    [project.scripts] inventory (runtime spec section 13.4 / 14.18.1) -- promoting it to a console
+    script is a design-substrate decision to take WITH the (e)/(g) SQLite persistence fork at PR B2,
+    since a substrate swap owes its own migration path from the JSONL sidecar anyway.'
   council: 'conditional -- mechanical composition-root wiring once a real sign_audit_entry call site exists;
     revisit if the call-site design itself surfaces a cross-axis tension'
   heading: '### B-47 · `AwsKmsSigningBackend` has no production composition-root call site *(surfaced
