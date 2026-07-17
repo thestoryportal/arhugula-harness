@@ -1726,3 +1726,117 @@ def test_runtime_config_rejects_reserved_tenant_ids(tmp_path: Path) -> None:
             RuntimeConfig.model_validate({**base, "tenant_id": reserved})
     accepted = RuntimeConfig.model_validate({**base, "tenant_id": "tenant-x"})
     assert accepted.tenant_id == "tenant-x"
+
+
+def test_reader_first_ever_append_race_does_not_false_report_loss(tmp_path: Path) -> None:
+    """Merge-gate round-1 concurrency lens (B-47 item (k)) — sampling
+    exists() BEFORE the refs predicate let a FIRST-EVER append land file+ref
+    between the two samples and falsely raise the round-36 loss error. The
+    refs predicate is sampled first now; refs-at-T0 ∧ not-exists-at-T1 is
+    sound under sidecar-first ordering."""
+    import unittest.mock as mock
+
+    writer = _writer(tmp_path)
+    entry = _make_audit_entry("1" * 64)
+    original = RuntimeAuditLedgerWriter.sidecar_expected
+    state = {"injected": False}
+
+    def _first_append_lands_mid_sample(self: RuntimeAuditLedgerWriter) -> bool:
+        if not state["injected"]:
+            state["injected"] = True
+            # The racing writer's FIRST-EVER append: creates the sidecar
+            # AND lands the IS ref while the reader is between samples.
+            writer.append("tenant-A", entry)
+        return original(self)
+
+    with mock.patch.object(
+        RuntimeAuditLedgerWriter, "sidecar_expected", _first_append_lands_mid_sample
+    ):
+        entries = writer.read_full_entries_for_tenant("tenant-A")
+    assert [e.entry_hash for e in entries] == [entry.entry_hash]
+
+
+def test_append_samples_timestamp_inside_serialization_lock(tmp_path: Path) -> None:
+    """Codex round-4 P1 (PR B2a) — with parallel audit workers, timestamps
+    sampled OUTSIDE the ordered critical section could commit out of order:
+    the earlier append raised NonMonotonicTimestampError AFTER its sidecar
+    row landed (an unanchored row). The time source must now be invoked
+    while the per-ledger append lock is held."""
+    from harness_runtime.lifecycle import audit_writer as audit_writer_module
+
+    ledger = _ledger_writer(tmp_path)
+    lock = audit_writer_module._append_lock_for(ledger.handle.canonical_path)
+    state = {"now": datetime(2026, 5, 19, 12, 0, 0, tzinfo=UTC)}
+
+    def _lock_held_tick() -> Timestamp:
+        assert lock.locked(), "timestamp sampled OUTSIDE the append lock"
+        state["now"] = state["now"] + timedelta(microseconds=1)
+        return state["now"]
+
+    writer = RuntimeAuditLedgerWriter(ledger_writer=ledger, time_source=_lock_held_tick)
+    writer.append("tenant-A", _make_audit_entry("1" * 64))
+    writer.append("tenant-A", _make_audit_entry("2" * 64))
+    assert len(writer.read_for_tenant("tenant-A")) == 2
+
+
+def test_concurrent_appends_never_raise_non_monotonic(tmp_path: Path) -> None:
+    """Codex round-4 P1 (PR B2a) — concurrency smoke: two threads hammering
+    one writer through a strictly-increasing shared clock must produce no
+    NonMonotonicTimestampError and a VALID chain."""
+    import threading as threading_module
+
+    writer = _writer(tmp_path)
+    errors: list[Exception] = []
+
+    def _hammer(prefix: str) -> None:
+        for i in range(25):
+            seed = f"{prefix}{i:02d}".encode().hex().ljust(64, "0")[:64]
+            try:
+                writer.append("tenant-A", _make_audit_entry(seed))
+            except Exception as exc:
+                errors.append(exc)
+
+    threads = [threading_module.Thread(target=_hammer, args=(p,)) for p in ("aa", "bb")]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join()
+
+    assert errors == []
+    entries = read_ledger(writer.ledger_writer.handle)
+    assert verify_chain(entries).status is VerificationStatus.VALID
+
+
+def test_stale_timestamp_resamples_instead_of_orphaning_sidecar_row(tmp_path: Path) -> None:
+    """Codex round-8 P1 (PR B2a) — the append lock serializes AUDIT appends
+    only; an ordinary F2/state write to the same ledger can commit a newer
+    timestamp between our sampling and our IS append, which then raised
+    NonMonotonicTimestampError AFTER the sidecar row was durable (an
+    unanchored signature, audit record omitted). The IS append is
+    timestamp-independent for the sidecar identity, so a stale sample now
+    resamples and retries."""
+    ledger = _ledger_writer(tmp_path)
+    base = datetime(2026, 5, 19, 12, 0, 0, tzinfo=UTC)
+    # First append at t+5s; the SECOND append's first sample is STALE (t+1s
+    # — as if a competing writer committed t+5s after we sampled), and its
+    # retry sample is fresh (t+6s).
+    ticks = [
+        base + timedelta(seconds=5),
+        base + timedelta(seconds=1),
+        base + timedelta(seconds=6),
+        base + timedelta(seconds=7),
+    ]
+
+    def _scripted_clock() -> Timestamp:
+        return ticks.pop(0)
+
+    writer = RuntimeAuditLedgerWriter(ledger_writer=ledger, time_source=_scripted_clock)
+    first = _make_audit_entry("1" * 64)
+    second = _make_audit_entry("2" * 64)
+    assert writer.append("tenant-A", first) is WriteResult.APPENDED
+    assert writer.append("tenant-A", second) is WriteResult.APPENDED
+
+    entries = read_ledger(writer.ledger_writer.handle)
+    assert verify_chain(entries).status is VerificationStatus.VALID
+    hashes = [e.entry_hash for e in writer.read_full_entries_for_tenant("tenant-A")]
+    assert hashes == [first.entry_hash, second.entry_hash]

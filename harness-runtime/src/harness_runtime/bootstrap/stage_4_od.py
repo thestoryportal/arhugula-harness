@@ -73,6 +73,13 @@ async def execute(
         config,
         signing_backend=ctx.audit_signing_backend,
         tokenizer_will_bind=config.persona_tier == PersonaTier.MULTI_TENANT_COMPLIANCE,
+        # B-47 PR B2a — the key_ids the threaded composers/builders sign
+        # under on EVERY audit write (tokenizer-independent): the stage-5
+        # HITL/sub-agent composers' "harness-runtime-dev" and the four cost
+        # builders' shared "harness-cost-attribution-v1"
+        # (`_DEFAULT_SIGNING_KEY_ID`). Validated here so a KMS mapping gap
+        # fails BOOTSTRAP, not the first mid-run audit write.
+        additional_key_ids=("harness-runtime-dev", "harness-cost-attribution-v1"),
     )
 
     # 1. Tracer provider — globally registered.
@@ -146,4 +153,7 @@ async def execute(
         # routing`), well before this stage-4 call.
         ledger_writer=ctx.ledger_writer,
         procedural_tier_snapshot_resolver=ctx.procedural_tier_snapshot_resolver,
+        # B-47 PR B2a — OD spec v1.33 §21.2.1 signing seam (constructed at
+        # step 0 of this same stage).
+        signing_backend=ctx.audit_signing_backend,
     )

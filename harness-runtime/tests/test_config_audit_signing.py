@@ -15,6 +15,7 @@ from harness_cp.aws_kms_signing_backend import (
 )
 from harness_runtime.config import audit_signing as audit_signing_module
 from harness_runtime.config.audit_signing import (
+    BreakerGuardedSigningBackend,
     SigningBackendUnavailableError,
     make_audit_signing_backend,
 )
@@ -50,7 +51,11 @@ def test_factory_constructs_kms_backend_with_injected_client() -> None:
         key_arns={"harness-runtime-redaction-token": _ARN},
     )
     backend = make_audit_signing_backend(config, kms_client=_FakeKmsClient())
-    assert isinstance(backend, AwsKmsSigningBackend)
+    # B-47 PR B2a — the factory wraps the concrete backend in the C9
+    # breaker at the single construction point; the Protocol surface
+    # (algorithm + sign/verify) is preserved by the wrapper.
+    assert isinstance(backend, BreakerGuardedSigningBackend)
+    assert isinstance(backend._inner, AwsKmsSigningBackend)
     assert backend.algorithm == "ed25519"
 
 
@@ -170,3 +175,196 @@ def test_default_key_arns_is_immutable_too() -> None:
     config = AuditSigningConfig()
     with pytest.raises(TypeError):
         config.key_arns["x"] = "y"  # type: ignore[index]
+
+
+class _FlakyBackend:
+    """Scripted inner backend: raises while `failing` is True."""
+
+    algorithm = "ed25519"
+
+    def __init__(self) -> None:
+        self.failing = True
+        self.sign_calls = 0
+        self.verify_calls = 0
+
+    def sign(self, *, message: bytes, key_id: str, key_period: int) -> bytes:
+        self.sign_calls += 1
+        if self.failing:
+            raise RuntimeError("kms down")
+        return b"s" * 64  # genuine ed25519 width — the wrapper validates length
+
+    def verify(self, *, message: bytes, signature: bytes, key_id: str, key_period: int) -> bool:
+        self.verify_calls += 1
+        return True
+
+
+def _guarded(inner: _FlakyBackend, clock: dict[str, float]) -> BreakerGuardedSigningBackend:
+    return BreakerGuardedSigningBackend(
+        inner,
+        fail_threshold=3,
+        cooldown_seconds=30.0,
+        monotonic=lambda: clock["now"],
+    )
+
+
+def test_breaker_opens_after_consecutive_failures_and_fails_fast() -> None:
+    """B-47 item (d), ADR-D8 §Decision item 5 — threshold consecutive sign
+    failures open the breaker; while open, sign raises WITHOUT touching the
+    backend (fail-loud-fast: no placeholder degradation, no hot-path stall)."""
+    from harness_runtime.config.audit_signing import AuditSigningBreakerOpenError
+
+    inner = _FlakyBackend()
+    clock = {"now": 0.0}
+    guarded = _guarded(inner, clock)
+
+    for _ in range(3):
+        with pytest.raises(RuntimeError, match="kms down"):
+            guarded.sign(message=b"m", key_id="k", key_period=0)
+    assert inner.sign_calls == 3
+
+    with pytest.raises(AuditSigningBreakerOpenError, match="breaker OPEN"):
+        guarded.sign(message=b"m", key_id="k", key_period=0)
+    assert inner.sign_calls == 3  # backend NOT touched while open
+
+    # verify passes through unguarded even while open (ADR-D8 scopes the
+    # breaker to the signing call).
+    assert guarded.verify(message=b"m", signature=b"s", key_id="k", key_period=0)
+    assert inner.verify_calls == 1
+
+
+def test_breaker_half_open_probe_closes_on_success() -> None:
+    from harness_runtime.config.audit_signing import AuditSigningBreakerOpenError
+
+    inner = _FlakyBackend()
+    clock = {"now": 0.0}
+    guarded = _guarded(inner, clock)
+    for _ in range(3):
+        with pytest.raises(RuntimeError):
+            guarded.sign(message=b"m", key_id="k", key_period=0)
+
+    # Cooldown not yet elapsed → still failing fast.
+    clock["now"] = 29.0
+    with pytest.raises(AuditSigningBreakerOpenError):
+        guarded.sign(message=b"m", key_id="k", key_period=0)
+
+    # Cooldown elapsed; the probe is admitted and succeeds → breaker closes.
+    clock["now"] = 31.0
+    inner.failing = False
+    assert guarded.sign(message=b"m", key_id="k", key_period=0) == b"s" * 64
+    assert guarded.sign(message=b"m", key_id="k", key_period=0) == b"s" * 64
+    assert inner.sign_calls == 5
+
+
+def test_breaker_half_open_probe_failure_reopens_cooldown() -> None:
+    from harness_runtime.config.audit_signing import AuditSigningBreakerOpenError
+
+    inner = _FlakyBackend()
+    clock = {"now": 0.0}
+    guarded = _guarded(inner, clock)
+    for _ in range(3):
+        with pytest.raises(RuntimeError):
+            guarded.sign(message=b"m", key_id="k", key_period=0)
+
+    clock["now"] = 31.0
+    with pytest.raises(RuntimeError, match="kms down"):  # probe admitted, fails
+        guarded.sign(message=b"m", key_id="k", key_period=0)
+    assert inner.sign_calls == 4
+
+    # Re-opened: a fresh cooldown window from the probe failure.
+    clock["now"] = 60.0
+    with pytest.raises(AuditSigningBreakerOpenError):
+        guarded.sign(message=b"m", key_id="k", key_period=0)
+    assert inner.sign_calls == 4
+
+
+def test_stale_pre_open_success_does_not_close_open_breaker() -> None:
+    """Codex round-1 P1 (PR B2a) — a slow call admitted while CLOSED can
+    succeed AFTER concurrent failures opened the breaker; that stale success
+    must not instantly close the newly-opened breaker (epoch guard)."""
+    import threading as threading_module
+
+    from harness_runtime.config.audit_signing import AuditSigningBreakerOpenError
+
+    entered = threading_module.Event()
+    release = threading_module.Event()
+
+    class _SlowFirstBackend:
+        algorithm = "ed25519"
+
+        def __init__(self) -> None:
+            self.calls = 0
+            self._lock = threading_module.Lock()
+
+        def sign(self, *, message: bytes, key_id: str, key_period: int) -> bytes:
+            with self._lock:
+                self.calls += 1
+                mine = self.calls
+            if mine == 1:
+                entered.set()
+                assert release.wait(timeout=10.0)
+                return b"w" * 64
+            raise RuntimeError("kms down")
+
+        def verify(self, *, message: bytes, signature: bytes, key_id: str, key_period: int) -> bool:
+            return True
+
+    inner = _SlowFirstBackend()
+    clock = {"now": 0.0}
+    guarded = _guarded(inner, clock)
+
+    slow_result: list[bytes] = []
+    slow = threading_module.Thread(
+        target=lambda: slow_result.append(guarded.sign(message=b"m", key_id="k", key_period=0)),
+        daemon=True,
+    )
+    slow.start()
+    assert entered.wait(timeout=10.0)
+
+    # While the slow (closed-epoch) call is in flight, three failures open
+    # the breaker.
+    for _ in range(3):
+        with pytest.raises(RuntimeError, match="kms down"):
+            guarded.sign(message=b"m", key_id="k", key_period=0)
+
+    release.set()
+    slow.join(timeout=10.0)
+    assert slow_result == [b"w" * 64]
+
+    # The stale success must NOT have closed the breaker.
+    with pytest.raises(AuditSigningBreakerOpenError):
+        guarded.sign(message=b"m", key_id="k", key_period=0)
+
+
+def test_malformed_signature_is_typed_failure_and_counts_toward_breaker() -> None:
+    """Codex round-9 P2 — a 'successful' KMS response carrying a malformed
+    signature recorded breaker SUCCESS and failed downstream as an untyped
+    ValueError (silently swallowed by the best-effort paths; repeated
+    malformed responses never opened the breaker). Result validation now
+    lives inside the typed boundary."""
+    from harness_runtime.config.audit_signing import (
+        AuditSigningBreakerOpenError,
+        AuditSigningFailedError,
+    )
+
+    class _MalformedKms:
+        algorithm = "ed25519"
+
+        def sign(self, *, message: bytes, key_id: str, key_period: int) -> bytes:
+            return b"short"  # 5 bytes, not the ed25519 64
+
+        def verify(self, *, message: bytes, signature: bytes, key_id: str, key_period: int) -> bool:
+            return True
+
+    inner = _MalformedKms()
+    clock = {"now": 0.0}
+    guarded = BreakerGuardedSigningBackend(
+        inner, fail_threshold=3, cooldown_seconds=30.0, monotonic=lambda: clock["now"]
+    )
+
+    for _ in range(3):
+        with pytest.raises(AuditSigningFailedError, match="malformed"):
+            guarded.sign(message=b"m", key_id="k", key_period=0)
+
+    # Malformed responses COUNT toward the breaker: it is open now.
+    with pytest.raises(AuditSigningBreakerOpenError):
+        guarded.sign(message=b"m", key_id="k", key_period=0)

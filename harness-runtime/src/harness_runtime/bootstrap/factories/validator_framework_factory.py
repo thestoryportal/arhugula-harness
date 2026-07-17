@@ -63,6 +63,7 @@ async def materialize_validator_framework_stage(
     cost_record_sink: SupportsCostRecordAppend | None = None,
     ledger_writer: Any = None,
     procedural_tier_snapshot_resolver: Any = None,
+    signing_backend: Any = None,
 ) -> ValidatorFramework | None:
     """Construct the stage-4 `ValidatorFramework` instance from operator-supplied
     config, or return `None` when the operator has not opted in.
@@ -123,6 +124,7 @@ async def materialize_validator_framework_stage(
             cost_record_sink=cost_record_sink,
             ledger_writer=ledger_writer,
             procedural_tier_snapshot_resolver=procedural_tier_snapshot_resolver,
+            signing_backend=signing_backend,
         )
 
     framework: ValidatorFramework = ConcreteValidatorFramework(

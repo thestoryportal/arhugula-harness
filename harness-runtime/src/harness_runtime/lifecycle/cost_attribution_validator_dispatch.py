@@ -52,11 +52,13 @@ Authority:
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, cast
 
 from harness_cp.engine_namespace import ReplayDisposition
+from harness_cp.f5_signing_key_resolution import SigningBackend
 from harness_cxa.cp_audit_conversion import cp_audit_to_od_audit
 from harness_is.state_ledger_entry_schema import Identifier
 from harness_od.audit_ledger_types import AuditLedgerEntry
@@ -66,6 +68,8 @@ from harness_od.cost_record_audit_writer import (
 from harness_od.idempotency_join_dedup import DispatchKind, SpanCostRecord
 from harness_od.rate_table_types import RateTable
 
+from harness_runtime.lifecycle.audit_offload import run_audit_off_loop
+from harness_runtime.lifecycle.audit_signing_errors import AUDIT_SIGNING_HARD_FAILURES
 from harness_runtime.lifecycle.cost_attribution_f2_write import compose_cost_f2_entry_core
 from harness_runtime.lifecycle.cost_record_sink import SupportsCostRecordAppend
 from harness_runtime.types import AuditLedgerWriter, CostAttributionChain
@@ -127,6 +131,7 @@ def attribute_validator_dispatch_cost(
     dispatch_disambiguator: str = "0",
     ledger_writer: Any = None,
     procedural_tier_snapshot_resolver: Callable[[], Identifier] | None = None,
+    signing_backend: SigningBackend | None = None,
 ) -> SpanCostRecord:
     """Run the §C-OD-26.1 canonical cost-attribution chain for one validator dispatch.
 
@@ -284,6 +289,7 @@ def attribute_validator_dispatch_cost(
         cost_payload,
         key_id=_DEFAULT_SIGNING_KEY_ID,
         entry_core=entry_core,
+        backend=signing_backend,
     )
     audit_writer.append(tenant_id, audit_entry)
 
@@ -322,6 +328,7 @@ class CostAttributingValidatorHook:
         cost_record_sink: SupportsCostRecordAppend | None = None,
         ledger_writer: Any = None,
         procedural_tier_snapshot_resolver: Callable[[], Identifier] | None = None,
+        signing_backend: SigningBackend | None = None,
     ) -> None:
         self._rate_table = rate_table
         self._cost_chain = cost_chain
@@ -333,6 +340,8 @@ class CostAttributingValidatorHook:
         # unit-test ergonomics.
         self._ledger_writer = ledger_writer
         self._procedural_tier_snapshot_resolver = procedural_tier_snapshot_resolver
+        # B-47 PR B2a — OD spec v1.33 §21.2.1 signing-backend seam (stage-4).
+        self._signing_backend = signing_backend
         # R-FS-1 arc CA — run-scoped cost-record sink (same list as
         # `ctx.cost_record_accumulator`, threaded by the stage-4 validator
         # factory). The returned SpanCostRecord is appended for the
@@ -380,22 +389,36 @@ class CostAttributingValidatorHook:
             f"{evaluation.burden_count}-{evaluation.result.outcome.value}-{branch_index}"
         )
 
-        attached = attribute_validator_dispatch_cost(
-            rate_table=self._rate_table,
-            cost_chain=self._cost_chain,
-            audit_writer=self._audit_writer,
-            validator_id=validator_id,
-            execution_time_ms=execution_time_ms,
-            span_id=span_id,
-            idempotency_key=idempotency_key,
-            parent_idempotency_key=step_context.parent_idempotency_key,
-            workflow_id=step_context.workflow_id,
-            parent_action_id=step_context.parent_action_id,
-            tenant_id=step_context.tenant_id,
-            dispatch_disambiguator=dispatch_disambiguator,
-            ledger_writer=self._ledger_writer,
-            procedural_tier_snapshot_resolver=self._procedural_tier_snapshot_resolver,
-        )
+        try:
+            attached = await run_audit_off_loop(
+                # Codex round-1 P1 (PR B2a): KMS signing is sync network I/O —
+                # off-loop (dedicated executor, round-2 P1).
+                attribute_validator_dispatch_cost,
+                rate_table=self._rate_table,
+                cost_chain=self._cost_chain,
+                audit_writer=self._audit_writer,
+                validator_id=validator_id,
+                execution_time_ms=execution_time_ms,
+                span_id=span_id,
+                idempotency_key=idempotency_key,
+                parent_idempotency_key=step_context.parent_idempotency_key,
+                workflow_id=step_context.workflow_id,
+                parent_action_id=step_context.parent_action_id,
+                tenant_id=step_context.tenant_id,
+                dispatch_disambiguator=dispatch_disambiguator,
+                ledger_writer=self._ledger_writer,
+                procedural_tier_snapshot_resolver=self._procedural_tier_snapshot_resolver,
+                signing_backend=self._signing_backend,
+            )
+        except AUDIT_SIGNING_HARD_FAILURES:
+            # Codex round-4 P1 (PR B2a): signing failures are compliance
+            # events — surfaced loudly, never silently swallowed by the
+            # CP framework's spec-committed §28.10.4 hook swallow.
+            logging.getLogger("harness.runtime.audit_signing").error(
+                "audit signing failed — signed cost-audit record OMITTED for validator dispatch",
+                exc_info=True,
+            )
+            return
 
         # R-FS-1 arc CA — record into the run-scoped accumulator for the
         # `RunResult.cost_attribution` rollup (runtime spec v1.53 §9 C-RT-09).

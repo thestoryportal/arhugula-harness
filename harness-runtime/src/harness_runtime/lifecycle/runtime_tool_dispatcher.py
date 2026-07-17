@@ -30,6 +30,7 @@ Composition surface:
 from __future__ import annotations
 
 import hashlib
+import logging
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -66,6 +67,8 @@ from harness_runtime.config.provider_secrets import (
     SecretAllowlistDeniedError,
     SecretResolutionError,
 )
+from harness_runtime.lifecycle.audit_offload import run_audit_off_loop
+from harness_runtime.lifecycle.audit_signing_errors import AUDIT_SIGNING_HARD_FAILURES
 from harness_runtime.lifecycle.cost_record_sink import SupportsCostRecordAppend
 from harness_runtime.lifecycle.effect_fence import (
     EffectFenceAbortedError,
@@ -348,6 +351,7 @@ class RuntimeToolDispatcher:
         cost_record_sink: SupportsCostRecordAppend | None = None,
         ledger_writer: Any = None,
         procedural_tier_snapshot_resolver: Any = None,
+        signing_backend: Any = None,
         tool_execution_drivers: dict[ServerName, ToolExecutionDriver] | None = None,
         provider_secret_resolver: Any = None,
         secret_fetch_audit_emitter: Callable[[SecretFetchEvent], Any] | None = None,
@@ -446,6 +450,9 @@ class RuntimeToolDispatcher:
         # `_attribute_tool_cost_best_effort` for the F2-write entry_core fix.
         self._ledger_writer = ledger_writer
         self._procedural_tier_snapshot_resolver = procedural_tier_snapshot_resolver
+        # B-47 PR B2a — OD spec v1.33 §21.2.1 signing-backend seam, threaded
+        # from `ctx.audit_signing_backend` by the stage-5 factory.
+        self._signing_backend = signing_backend
         # R-FS-1 arc CA — run-scoped cost-record sink (same list as
         # `ctx.cost_record_accumulator`, threaded by the stage-5 factory).
         # `_attribute_tool_cost_best_effort` appends each dispatch's returned
@@ -489,6 +496,7 @@ class RuntimeToolDispatcher:
         cost_record_sink: SupportsCostRecordAppend | None = None,
         ledger_writer: Any = None,
         procedural_tier_snapshot_resolver: Any = None,
+        signing_backend: Any = None,
         tool_execution_driver: ToolExecutionDriver | None = None,
         provider_secret_resolver: Any = None,
         secret_fetch_audit_emitter: Callable[[SecretFetchEvent], Any] | None = None,
@@ -531,6 +539,10 @@ class RuntimeToolDispatcher:
             cost_record_sink=cost_record_sink,
             ledger_writer=ledger_writer,
             procedural_tier_snapshot_resolver=procedural_tier_snapshot_resolver,
+            # B-47 PR B2a (codex round-6 P2): forwarded so single-host
+            # callers with a configured KMS backend do not silently produce
+            # placeholder-signed tool cost audits.
+            signing_backend=signing_backend,
             tool_execution_drivers=(
                 {server_name: tool_execution_driver} if tool_execution_driver is not None else None
             ),
@@ -540,6 +552,28 @@ class RuntimeToolDispatcher:
             effect_fence=effect_fence,
             effect_fencing_explicit=effect_fencing_explicit,
         )
+
+    async def _attribute_tool_cost_off_loop(self, *args: Any, **kwargs: Any) -> Any:
+        """Codex round-1 P1 (PR B2a) — run the sync compose helper off-thread.
+
+        With a real KMS backend the helper performs synchronous network
+        signing I/O (plus the pre-existing IS file writes + fsyncs); awaited
+        on the loop it would block every unrelated workflow for KMS latency.
+        `asyncio.to_thread` copies contextvars, so the run-scoped
+        cost-accumulator proxy still resolves.
+        """
+        try:
+            return await run_audit_off_loop(self._attribute_tool_cost_best_effort, *args, **kwargs)
+        except AUDIT_SIGNING_HARD_FAILURES:
+            # Codex round-17 P1: queue saturation raises at submit — before
+            # the fn-internal best-effort swallow — and would fail the
+            # dispatch. Contained here; fail-open preserved.
+            logging.getLogger("harness.runtime.audit_signing").error(
+                "audit offload refused the job — signed cost-audit record "
+                "OMITTED for tool dispatch (offload boundary)",
+                exc_info=True,
+            )
+            return None
 
     def _attribute_tool_cost_best_effort(
         self,
@@ -610,7 +644,17 @@ class RuntimeToolDispatcher:
                 tenant_id=step_context.tenant_id,
                 ledger_writer=self._ledger_writer,
                 procedural_tier_snapshot_resolver=self._procedural_tier_snapshot_resolver,
+                signing_backend=self._signing_backend,
             )
+        except AUDIT_SIGNING_HARD_FAILURES:
+            # Codex round-4 P1 (PR B2a): signing failures are compliance
+            # events, never silently swallowed with cost-observability
+            # failures. Surfaced loudly; dispatch preserved.
+            logging.getLogger("harness.runtime.audit_signing").error(
+                "audit signing failed — signed cost-audit record OMITTED for tool dispatch",
+                exc_info=True,
+            )
+            return
         except Exception:
             # Cost-attribution is observability, not contract. Swallow.
             return
@@ -1097,7 +1141,7 @@ class RuntimeToolDispatcher:
                 # U-OD-39 AC #1: cost-attribution invoked on every dispatch
                 # (success + failure paths). Failure-path response=None;
                 # per_output_byte cost_kind degrades to len('"null"')=6 bytes.
-                self._attribute_tool_cost_best_effort(
+                await self._attribute_tool_cost_off_loop(
                     outer_span=outer_span,
                     tool_id=tool_id,
                     tool_args=tool_args,
@@ -1110,7 +1154,7 @@ class RuntimeToolDispatcher:
                 self._emit_sandbox_violation(
                     tracer, MCPInvocationFailClass.PROTOCOL_ERROR, idempotency_key
                 )
-                self._attribute_tool_cost_best_effort(
+                await self._attribute_tool_cost_off_loop(
                     outer_span=outer_span,
                     tool_id=tool_id,
                     tool_args=tool_args,
@@ -1123,7 +1167,7 @@ class RuntimeToolDispatcher:
                 self._emit_sandbox_violation(
                     tracer, MCPInvocationFailClass.TRANSPORT, idempotency_key
                 )
-                self._attribute_tool_cost_best_effort(
+                await self._attribute_tool_cost_off_loop(
                     outer_span=outer_span,
                     tool_id=tool_id,
                     tool_args=tool_args,
@@ -1143,7 +1187,7 @@ class RuntimeToolDispatcher:
                 # U-OD-39 AC #1: cost-attribution on schema-violation failure.
                 # Response IS available here (validation failed AFTER call),
                 # so per_output_byte cost_kind reflects actual response bytes.
-                self._attribute_tool_cost_best_effort(
+                await self._attribute_tool_cost_off_loop(
                     outer_span=outer_span,
                     tool_id=tool_id,
                     tool_args=tool_args,
@@ -1170,7 +1214,7 @@ class RuntimeToolDispatcher:
             # AC #1 success branch + AC #3 mcp.tool.call piggyback (1 helper
             # invocation per dispatch attributes entire tool-dispatch surface
             # including nested mcp.tool.call span per §C-OD-26.2 table).
-            self._attribute_tool_cost_best_effort(
+            await self._attribute_tool_cost_off_loop(
                 outer_span=outer_span,
                 tool_id=tool_id,
                 tool_args=tool_args,

@@ -61,6 +61,7 @@ exception isolation; budgeted-remaining timeout pattern.
 from __future__ import annotations
 
 import asyncio
+import functools
 import os
 import stat
 import sys
@@ -125,6 +126,28 @@ def _fsync_sidecar_sync(sidecar_path: Path) -> None:
             os.fsync(dir_fd)
         finally:
             os.close(dir_fd)
+
+
+def _sidecar_guard_and_fsync_sync(audit_writer: Any, sidecar_path: Path) -> None:
+    """Deletion-after-use guard + sidecar fsync (blocking half).
+
+    The refs predicate (`sidecar_expected`) reads and deserializes the
+    ENTIRE IS ledger — codex round-3 P2 (B-47 PR B2a): sampled on the
+    event loop it blocked shutdown outside the bounded worker on a large
+    ledger. The whole guard now runs INSIDE the bounded worker with the
+    race-safe refs-before-exists ordering preserved (merge-gate round-1
+    concurrency lens: the reverse order let a first-ever audit append
+    land file+ref between the samples and record a spurious loss).
+    """
+    sidecar_expected = getattr(audit_writer, "sidecar_expected", None)
+    refs_existed = sidecar_expected() if sidecar_expected is not None else False
+    if refs_existed and not sidecar_path.exists():
+        raise ValueError(
+            f"audit sidecar {sidecar_path} is missing but IS audit "
+            f"references exist — signed history deleted or lost"
+        )
+    if sidecar_path.exists():
+        _fsync_sidecar_sync(sidecar_path)
 
 
 def _fsync_ledger_sync(ledger_path: Path) -> None:
@@ -310,30 +333,12 @@ async def flush_observability(
         # (codex round-43) — recorded as an audit_sidecar failure via the
         # writer's own first-use authority, consistent with its
         # missing-sidecar guard.
-        # Capture-then-narrow (codex round-47 P1): calling
-        # `audit_writer.sidecar_expected()` after a mere hasattr-style probe
-        # fails `reportOptionalMemberAccess` — the probe does not prove
-        # `audit_writer` is non-None; invoking the CAPTURED callable does.
-        sidecar_expected = getattr(audit_writer, "sidecar_expected", None)
-        if (
-            sidecar_path is not None
-            and not sidecar_path.exists()
-            and sidecar_expected is not None
-            and sidecar_expected()
-        ):
-            raise ValueError(
-                f"audit sidecar {sidecar_path} is missing but IS audit "
-                f"references exist — signed history deleted or lost"
-            )
-        if sidecar_path is not None and sidecar_path.exists():
-            # Bounded daemon worker (codex round-47 P2 + round-48 P1): fsync
-            # against a stalled filesystem (network mount, dying disk)
-            # blocks INDEFINITELY — run synchronously on the loop it would
-            # hang the whole shutdown past every advertised timeout. The
-            # worker lingers on the stalled syscall while shutdown proceeds
-            # and records the failure; remaining-budget per round-48 P2.
+        if sidecar_path is not None:
+            # The guard (full-ledger refs scan) AND the fsync both run in
+            # the bounded worker — neither touches the event loop (codex
+            # rounds 47 P2 / round-3 P2).
             await _run_fsync_bounded(
-                _fsync_sidecar_sync,
+                functools.partial(_sidecar_guard_and_fsync_sync, audit_writer),
                 sidecar_path,
                 max(0.0, deadline - time.monotonic()),
             )

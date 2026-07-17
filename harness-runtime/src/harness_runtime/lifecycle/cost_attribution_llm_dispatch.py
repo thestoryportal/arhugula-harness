@@ -61,6 +61,7 @@ from collections.abc import Callable, Mapping
 from typing import Any, cast
 
 from harness_cp.engine_namespace import ReplayDisposition
+from harness_cp.f5_signing_key_resolution import SigningBackend
 from harness_cxa.cp_audit_conversion import cp_audit_to_od_audit
 from harness_is.state_ledger_entry_schema import Identifier
 from harness_od.audit_ledger_types import AuditLedgerEntry
@@ -115,6 +116,7 @@ def attribute_llm_dispatch_cost(
     provider_discriminator: str | None = None,
     ledger_writer: Any = None,
     procedural_tier_snapshot_resolver: Callable[[], Identifier] | None = None,
+    signing_backend: SigningBackend | None = None,
 ) -> SpanCostRecord:
     """Run the §C-OD-26.1 v1.10 canonical cost-attribution chain for one LLM dispatch.
 
@@ -284,6 +286,7 @@ def attribute_llm_dispatch_cost(
         cost_payload,
         key_id=_DEFAULT_SIGNING_KEY_ID,
         entry_core=entry_core,
+        backend=signing_backend,
     )
     audit_writer.append(tenant_id, audit_entry)
 

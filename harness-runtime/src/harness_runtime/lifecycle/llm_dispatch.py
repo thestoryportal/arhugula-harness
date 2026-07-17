@@ -55,6 +55,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from collections.abc import Mapping, Sequence
 from contextvars import ContextVar
 from copy import deepcopy
@@ -91,6 +92,8 @@ from harness_cp.validator_fail_transient_staircase import CrossTrustBoundaryStat
 from harness_cp.workflow_driver_types import StepExecutionContext, StepKind, WorkflowStep
 from harness_od.otel_genai_base import HIERARCHY_CORRELATION_KEY, GenAiOperation
 
+from harness_runtime.lifecycle.audit_offload import run_audit_off_loop
+from harness_runtime.lifecycle.audit_signing_errors import AUDIT_SIGNING_HARD_FAILURES
 from harness_runtime.lifecycle.cacheable_epoch import DEFAULT_CACHE_TTL, CacheTTL
 from harness_runtime.lifecycle.cost_record_sink import SupportsCostRecordAppend
 from harness_runtime.lifecycle.hitl_tool_loop import (
@@ -515,6 +518,10 @@ class RuntimeLLMDispatcher:
     # `cp-audit:<action_id>` marker. None preserves unit-test ergonomics.
     ledger_writer: Any = None
     procedural_tier_snapshot_resolver: Any = None
+    # B-47 PR B2a — OD spec v1.33 §21.2.1 signing-backend seam, threaded from
+    # `ctx.audit_signing_backend` by `materialize_llm_dispatcher_stage`. None
+    # (unit-test ergonomics) preserves the placeholder signing path.
+    signing_backend: Any = None
     # R-FS-1 arc CA — run-scoped cost-record sink (the SAME list as
     # `ctx.cost_record_accumulator`, threaded by `materialize_llm_dispatcher_stage`
     # from the mutable bootstrap ctx). `_attribute_cost_best_effort` appends each
@@ -816,7 +823,7 @@ class RuntimeLLMDispatcher:
                 # Honest cost attribution — synthetic step context so the spend
                 # appears in the audit ledger under workflow_id="__prewarm__"
                 # rather than being silently attributed to the last real workflow.
-                _attribute_cost_best_effort(
+                await _attribute_cost_off_loop_best_effort(
                     span=_span,
                     cost_chain=self.cost_chain,
                     audit_writer=self.audit_writer,
@@ -829,6 +836,7 @@ class RuntimeLLMDispatcher:
                     # (procedural_tier_snapshot_resolver=None) per IS §5.1.
                     ledger_writer=self.ledger_writer,
                     procedural_tier_snapshot_resolver=None,
+                    signing_backend=self.signing_backend,
                     provider_name="anthropic",
                     model=_model,
                     parent_idempotency_key="__prewarm__",
@@ -1737,7 +1745,7 @@ class RuntimeLLMDispatcher:
             # string-form preserving Decimal precision at the OTel boundary.
             # Wrapped in best-effort try/except: cost-attribution failure
             # MUST NOT fail the dispatch (cost is observability not contract).
-            _attribute_cost_best_effort(
+            await _attribute_cost_off_loop_best_effort(
                 span=span,
                 cost_chain=self.cost_chain,
                 audit_writer=self.audit_writer,
@@ -1745,6 +1753,7 @@ class RuntimeLLMDispatcher:
                 cost_record_sink=self.cost_record_sink,
                 ledger_writer=self.ledger_writer,
                 procedural_tier_snapshot_resolver=self.procedural_tier_snapshot_resolver,
+                signing_backend=self.signing_backend,
                 provider_name=provider_name,
                 model=model,
                 parent_idempotency_key=step_context.parent_idempotency_key,
@@ -2934,6 +2943,21 @@ def _response_to_mapping(response: Any) -> Mapping[str, Any]:
     )
 
 
+async def _attribute_cost_off_loop_best_effort(**kwargs: Any) -> None:
+    """Best-effort boundary AROUND the offload (codex round-17 P1): queue
+    saturation raises at submit — BEFORE fn runs — so the fn-internal
+    swallows never see it and an otherwise-successful dispatch failed.
+    Contained here: logged loudly, dispatch preserved."""
+    try:
+        await run_audit_off_loop(_attribute_cost_best_effort, **kwargs)
+    except AUDIT_SIGNING_HARD_FAILURES:
+        logging.getLogger("harness.runtime.audit_signing").error(
+            "audit offload refused the job — signed cost-audit record "
+            "OMITTED for llm_dispatch (offload boundary)",
+            exc_info=True,
+        )
+
+
 def _attribute_cost_best_effort(
     *,
     span: Any,
@@ -2943,6 +2967,7 @@ def _attribute_cost_best_effort(
     cost_record_sink: SupportsCostRecordAppend | None = None,
     ledger_writer: Any = None,
     procedural_tier_snapshot_resolver: Any = None,
+    signing_backend: Any = None,
     provider_name: str,
     model: str,
     parent_idempotency_key: str,
@@ -3011,12 +3036,24 @@ def _attribute_cost_best_effort(
             tenant_id=tenant_id,
             ledger_writer=ledger_writer,
             procedural_tier_snapshot_resolver=procedural_tier_snapshot_resolver,
+            signing_backend=signing_backend,
             # R-FS-1 B-FALLBACK-CHAIN-FAMILY-COST-COMPOSITION — populate the
             # §15.3 cross-family family tag from the dispatched provider so the
             # PER_PROVIDER_DISCRIMINATOR rollup is non-vacuous in production.
             # An LLM dispatch always has a provider ⟹ always a family tag.
             provider_discriminator=cross_family_tag_for_provider(provider_name),
         )
+    except AUDIT_SIGNING_HARD_FAILURES:
+        # Codex round-4 P1 (PR B2a): a CONFIGURED signing backend's failure
+        # must never be silently swallowed with ordinary cost-observability
+        # failures — the signed audit record is a compliance artifact.
+        # Surfaced loudly; dispatch preserved (the MTC fail-closed policy
+        # question is registered at the B-47 close-out).
+        logging.getLogger("harness.runtime.audit_signing").error(
+            "audit signing failed — signed cost-audit record OMITTED for llm_dispatch",
+            exc_info=True,
+        )
+        return
     except Exception:
         # Cost-attribution is observability, not contract. Swallow.
         return
@@ -3045,6 +3082,7 @@ def materialize_llm_dispatcher_stage(
     cost_record_sink: SupportsCostRecordAppend | None = None,
     ledger_writer: Any = None,
     procedural_tier_snapshot_resolver: Any = None,
+    signing_backend: Any = None,
     inter_step_channel: Any = None,
     memory_tool_registry: Any = None,
     deployment_surface: Any = None,
@@ -3132,6 +3170,7 @@ def materialize_llm_dispatcher_stage(
         cost_record_sink=cost_record_sink,
         ledger_writer=ledger_writer,
         procedural_tier_snapshot_resolver=procedural_tier_snapshot_resolver,
+        signing_backend=signing_backend,
         inter_step_channel=inter_step_channel,
         memory_tool_registry=memory_tool_registry,
         deployment_surface=deployment_surface,

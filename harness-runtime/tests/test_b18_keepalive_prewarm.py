@@ -449,3 +449,44 @@ async def test_keepalive_drain_cancels_cleanly() -> None:
     assert results[0] is None or isinstance(results[0], asyncio.CancelledError)
     assert task.done()
     assert bare.calls == 0  # cancelled before first prewarm
+
+
+@pytest.mark.asyncio
+async def test_prewarm_cost_audit_signs_with_configured_backend() -> None:
+    """Merge-gate round-2 BLOCK (PR B2a) — USE-half witness for the PREWARM
+    call site's `signing_backend=self.signing_backend` kwarg: the dispatch
+    site and the shared builder hop were pinned, but deleting the
+    prewarm-site kwarg silently reverted __prewarm__ cost-audit records to
+    placeholder signing with the whole suite green."""
+
+    class _CountingBackend:
+        algorithm = "ed25519"
+
+        def __init__(self) -> None:
+            self.sign_calls = 0
+
+        def sign(self, *, message: bytes, key_id: str, key_period: int) -> bytes:
+            self.sign_calls += 1
+            return b"c" * 64
+
+        def verify(self, *, message: bytes, signature: bytes, key_id: str, key_period: int) -> bool:
+            return True
+
+    adapter = _FakeAnthropicAdapter(_FakeAnthropicClient())
+    backend = _CountingBackend()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": adapter},
+        tracer_provider=_tp(),
+        frozen_tool_superset=_LARGE_SUPERSET,
+        prewarm_model="claude-haiku-4-5",
+        cost_chain=RuntimeCostAttributionChain(),
+        audit_writer=_RecordingAuditWriter(),
+        rate_table=RATE_TABLE_V1,
+        cost_record_sink=_RecordingCostSink(),
+        signing_backend=backend,
+    )
+
+    outcome = await dispatcher.prewarm()
+
+    assert outcome is PrewarmOutcome.WARMED
+    assert backend.sign_calls >= 1

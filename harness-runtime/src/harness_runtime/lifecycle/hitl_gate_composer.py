@@ -118,6 +118,7 @@ import asyncio
 import hashlib
 import inspect
 import json
+import logging
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -131,6 +132,7 @@ from harness_cp.audit_hitl_span_namespace import (
     HITL_SPAN_NAMESPACE_SCHEMA,
 )
 from harness_cp.cp_shared_types import ActorIdentity, MCPTrustTier
+from harness_cp.f5_signing_key_resolution import SigningBackend
 from harness_cp.gate_level_rule import GateLevel as CPGateLevel
 from harness_cp.gate_level_rule import GateLevelComputation
 from harness_cp.handoff_context import (
@@ -174,6 +176,8 @@ from harness_runtime.lifecycle.ask_user_question_surface import (
     AskUserQuestionSurface,
     AskUserQuestionTimeoutError,
 )
+from harness_runtime.lifecycle.audit_offload import run_audit_off_loop
+from harness_runtime.lifecycle.audit_signing_errors import AUDIT_SIGNING_HARD_FAILURES
 from harness_runtime.lifecycle.hitl_auto_approve_policy import HITLAutoApprovePolicy
 from harness_runtime.lifecycle.resume_context_holder import ResumeContextHolder
 from harness_runtime.lifecycle.webhook_delivery_composer import (
@@ -934,6 +938,14 @@ class RuntimeHITLGateComposer:
     returning `None` for a given step (unresolvable `tool_id`) likewise feeds the
     no-floor default — see `step_mcp_trust_tier.py` for the fail-soft rationale."""
 
+    signing_backend: SigningBackend | None = None
+    """OD spec v1.33 §21.2.1 composition-root injection seam (B-47 PR B2a).
+
+    Threaded from `ctx.audit_signing_backend` at bootstrap stage-5; passed
+    verbatim as `backend=` to `cp_audit_to_od_audit` at substep 8c-HITL.
+    `None` (the default) preserves the placeholder signing path byte-for-byte.
+    """
+
     # Carrier-canonical attribute name constants (per spec §14.8.5 producer-
     # side carrier import discipline). Frozen at construction so a typo in
     # the spec carrier surfaces at dataclass instantiation, not first dispatch.
@@ -1023,6 +1035,32 @@ class RuntimeHITLGateComposer:
             brief=durable_brief,
             delivery_result=delivery_result,
         )
+
+    async def _compose_and_persist_audit_off_loop(self, *args: Any, **kwargs: Any) -> Any:
+        """Codex round-1 P1 (PR B2a) — run the sync compose helper off-thread.
+
+        With a real KMS backend the helper performs synchronous network
+        signing I/O (plus the pre-existing IS file writes + fsyncs); awaited
+        on the loop it would block every unrelated workflow for KMS latency.
+        `asyncio.to_thread` copies contextvars, so the run-scoped
+        cost-accumulator proxy still resolves.
+        """
+        try:
+            return await run_audit_off_loop(self._compose_and_persist_audit, *args, **kwargs)
+        except AUDIT_SIGNING_HARD_FAILURES as exc:
+            # Codex round-17 P1: queue saturation raises at submit — before
+            # the compose body's own handlers — bypassing the
+            # raise_on_failure contract. Honor it here.
+            logging.getLogger("harness.runtime.audit_signing").error(
+                "audit offload refused the job — signed audit record "
+                "OMITTED for HITL gate (offload boundary)",
+                exc_info=True,
+            )
+            if kwargs.get("raise_on_failure"):
+                raise HITLGateAuditComposeError(
+                    f"HITL gate audit composition refused at the offload boundary: {exc}"
+                ) from exc
+            return (None, None)
 
     def _compose_and_persist_audit(
         self,
@@ -1220,6 +1258,7 @@ class RuntimeHITLGateComposer:
                 key_id=self.audit_signing_key_id,
                 algo=self.audit_signing_algorithm,
                 entry_core=entry_core,
+                backend=self.signing_backend,
             )
 
             # 8d-HITL — persist OD audit entry through IS hash chain.
@@ -1227,6 +1266,18 @@ class RuntimeHITLGateComposer:
                 tenant_id=step_context.tenant_id,
                 audit_entry=od_entry,
             )
+        except AUDIT_SIGNING_HARD_FAILURES as exc:
+            # Codex round-4 P1 (PR B2a): signing failures are compliance
+            # events — surfaced loudly regardless of raise_on_failure.
+            logging.getLogger("harness.runtime.audit_signing").error(
+                "audit signing failed — signed audit record OMITTED for HITL gate",
+                exc_info=True,
+            )
+            if raise_on_failure:
+                raise HITLGateAuditComposeError(
+                    f"HITL gate audit composition failed for action_id={hitl_action_id!r}: {exc}"
+                ) from exc
+            return cp_entry, None
         except Exception as exc:
             if raise_on_failure:
                 raise HITLGateAuditComposeError(
@@ -1321,7 +1372,7 @@ class RuntimeHITLGateComposer:
                 # sync step-4h `raise_on_failure` discipline. An EDIT with a None
                 # proposal is still audited (the attempt is recorded, edited_hash
                 # None) BEFORE the routing raise — the sync record-then-raise shape.
-                self._compose_and_persist_audit(
+                await self._compose_and_persist_audit_off_loop(
                     parent_action_id=resumed_parent_action_id,
                     placement=placement,
                     cell=cast(HITLMatrixCell, _SentinelMatrixCell()),
@@ -1510,7 +1561,7 @@ class RuntimeHITLGateComposer:
                     # mis-attribute an auto-approve audit; benign over-audit
                     # foreclosed per adversarial F2-01 / advisor pre-done #3).
                     if gate_decision is not None and policy_applied:
-                        self._compose_and_persist_audit(
+                        await self._compose_and_persist_audit_off_loop(
                             parent_action_id=parent_action_id,
                             placement=placement,
                             cell=cell,
@@ -1582,7 +1633,7 @@ class RuntimeHITLGateComposer:
                     if removal_effective:
                         # Removal applied → skip the gate. Auto-audit (fail-closed):
                         # a removed preventive gate NEVER goes live un-audited.
-                        self._compose_and_persist_audit(
+                        await self._compose_and_persist_audit_off_loop(
                             parent_action_id=parent_action_id,
                             placement=placement,
                             cell=cell,
@@ -1717,7 +1768,7 @@ class RuntimeHITLGateComposer:
                                 # Residual hard-timeout — the partial entry
                                 # (response="") consistent with the pre-existing
                                 # v1.9 RT-FAIL-HITL-GATE-TIMEOUT disposition.
-                                self._compose_and_persist_audit(
+                                await self._compose_and_persist_audit_off_loop(
                                     parent_action_id=parent_action_id,
                                     placement=placement,
                                     cell=cell,
@@ -1733,7 +1784,7 @@ class RuntimeHITLGateComposer:
                                 # populated rejection_reason_hash over a SYSTEM
                                 # reason) that AGREES with RT-FAIL-HITL-GATE-REJECTED
                                 # (NOT the vacuous response="" partial).
-                                self._compose_and_persist_audit(
+                                await self._compose_and_persist_audit_off_loop(
                                     parent_action_id=parent_action_id,
                                     placement=placement,
                                     cell=cell,
@@ -1818,7 +1869,7 @@ class RuntimeHITLGateComposer:
                     # is primary fault.
                     raise_on_audit_failure = gate_result.response != HITLResponse.REJECT
                     try:
-                        _, write_result = self._compose_and_persist_audit(
+                        _, write_result = await self._compose_and_persist_audit_off_loop(
                             parent_action_id=parent_action_id,
                             placement=placement,
                             cell=cell,

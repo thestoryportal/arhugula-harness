@@ -52,14 +52,14 @@
 
 
 snapshot:
-  total: 48
+  total: 49
   open: 0
   design_substrate_gated: 2
-  registered_finding: 7
+  registered_finding: 8
   operator_gated: 1
   held: 1
   closed: 37
-  identity_digest: 958525332d5108f8
+  identity_digest: 6e61a453f1b65f75
   source: .harness/post-phase-8-forward-register.md
 items:
 - id: B-1
@@ -855,8 +855,49 @@ items:
     round-36 loss error; witness the stage-4 signing_backend= kwarg through the REAL bootstrap stage
     (currently unwitnessed-but-fail-loud); one integration witness wiring a real RuntimeAuditLedgerWriter
     into flush_observability (seam currently SimpleNamespace-only); pin the migrate-CLI __main__ guard;
-    pin the sidecar timed_out flag with a sidecar-only stall. Fold into the PR-B2 arc.'
+    pin the sidecar timed_out flag with a sidecar-only stall. Fold into the PR-B2 arc; (m) fail-open
+    vs fail-closed for signing failures on best-effort audit paths (out-of-family Codex round-4 on PR
+    B2a): signing failures are now TYPED (AuditSigningFailedError via the breaker wrap) and surfaced
+    at ERROR level at all six best-effort swallow sites, but dispatch is still preserved (fail-open)
+    because the CP validator framework''s section 28.10.4 invariant 2 (observability MUST NOT fail
+    dispatch) is spec-committed. Whether MULTI_TENANT_COMPLIANCE should instead fail CLOSED on an
+    unsigned audit write is a genuine design-phase policy fork (section 21.2 signed-audit commitment
+    vs section 28.10.4) -- resolve with the (e)-(i) persistence-substrate design at PR B2. PR B2a
+    (2026-07-17) landed the REST of (c) -- signing backend threaded into all remaining production
+    audit composers (3x RuntimeHITLGateComposer + RuntimeSubAgentDispatcher + the 4 cost builders via
+    their carriers/factories, for_single_host included) with a real-bootstrap identity witness -- and
+    (d), the C9 BreakerGuardedSigningBackend wrapped at the factory (epoch-guarded closed/open/half-open,
+    fail-loud AuditSigningBreakerOpenError; keyed on the C-AS-07 SecretBackendBreakerKey), plus
+    bootstrap key-id validation, the dedicated daemon audit-offload executor with per-dispatch
+    completion ack (no post-timeout audit commits), typed + loudly-surfaced signing failures, append
+    serialization (in-lock timestamps), and the item-(k) witness follow-ups. REMAINING for the B-47
+    close: the (e)-(j)+(m) persistence-substrate + policy design cluster at PR B2 (with B-48 tracking
+    the sync-inner-on-loop fork revision separately).'
   council: 'conditional -- mechanical composition-root wiring once a real sign_audit_entry call site exists;
     revisit if the call-site design itself surfaces a cross-axis tension'
   heading: '### B-47 · `AwsKmsSigningBackend` has no production composition-root call site *(surfaced
     at `B-36`''s own PR, out-of-family Codex review, 2026-07-16)*'
+- id: B-48
+  title: Sync sub-agent dispatch executes on the event loop (U-RT-60 wrap-asymmetry residual)
+  status: registered_finding
+  summary: 'Out-of-family Codex round-2 P1 on B-47 PR B2a: RuntimeHITLGateComposer._dispatch_inner
+    invokes the sync C-RT-17 sub-agent dispatcher DIRECTLY on the event loop (the U-RT-60
+    wrap-asymmetry fork Q3-ratified direct-call reading), so the entire sub-agent dispatch -- child
+    workflow execution (seconds-long), its F2/ledger writes, and now the B2a-threaded KMS signing --
+    blocks every concurrent workflow. Pre-existing at the fork ratification (child workflows already
+    ran on the loop through this path; the audit-signing threading only ADDS KMS network latency to an
+    already-blocking ratified surface). A worker-thread offload of the sync inner also needs the
+    recursion/executor design (child workflows re-enter the sync driver whose facade bridges back onto
+    the loop; a bounded offload pool can deadlock under recursive SUB_AGENT_DISPATCH depth) and a
+    re-validation of pause/resume + fan-out machinery under off-loop execution.'
+  close_out: 'Class 2 fork revision of the U-RT-60 wrap-asymmetry direct-call reading: offload the sync
+    inner dispatch in _dispatch_inner off the loop (unbounded-or-depth-aware executor -- NOT the 4-worker
+    audit-offload pool and NOT the loop default pool, both deadlock-prone under recursion/daemon
+    concurrency), verify child-workflow facade bridging, pause/resume flags, OTel span context, and B-21
+    fan-out under worker-thread execution, and re-run the r100 e2e. The B2a-landed mitigations already
+    cover every OTHER production signing path (async composers/builders offload via the dedicated
+    audit executor with join-on-cancel).'
+  council: 'conditional -- C1 orchestration vs C9 reliability tension if the offload design surfaces a
+    genuine recursion-depth bound question'
+  heading: '### B-48 · Sync sub-agent dispatch executes on the event loop *(surfaced at B-47 PR B2a,
+    out-of-family Codex round-2, 2026-07-17)*'

@@ -447,6 +447,9 @@ async def materialize_runtime_tool_dispatcher_stage(
         # entry's `entry_core` is a real F2 anchor.
         ledger_writer=ctx.ledger_writer,
         procedural_tier_snapshot_resolver=ctx.procedural_tier_snapshot_resolver,
+        # B-47 PR B2a — OD spec v1.33 §21.2.1 signing seam (stage-4 constructs
+        # the backend onto ctx before this stage-5 factory runs).
+        signing_backend=ctx.audit_signing_backend,
         # R-FS-1 arc CA + B-INTERSTEP-PERRUN-ISOLATION — thread the run-scoped
         # accumulator PROXY (not its `.records` list — that capture defeated per-run
         # isolation) so per-tool-dispatch SpanCostRecords `append` through to the

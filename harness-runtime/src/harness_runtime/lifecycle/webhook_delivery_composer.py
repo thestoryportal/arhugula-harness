@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import time
 import uuid
 from collections.abc import Callable
@@ -31,6 +32,8 @@ from harness_cp.hitl_timeout_degradation import (
 )
 from harness_cp.validator_framework_types import HITLEscalationBrief
 
+from harness_runtime.lifecycle.audit_offload import run_audit_off_loop
+from harness_runtime.lifecycle.audit_signing_errors import AUDIT_SIGNING_HARD_FAILURES
 from harness_runtime.lifecycle.cost_record_sink import SupportsCostRecordAppend
 
 __all__ = [
@@ -118,6 +121,7 @@ class WebhookDeliveryComposer:
         cost_record_sink: SupportsCostRecordAppend | None = None,
         ledger_writer: Any = None,
         procedural_tier_snapshot_resolver: Any = None,
+        signing_backend: Any = None,
         workflow_id: str | None = None,
         parent_action_id: str | None = None,
         parent_idempotency_key: str | None = None,
@@ -178,6 +182,8 @@ class WebhookDeliveryComposer:
         # state — see `webhook_delivery_composer_factory.py`).
         self._ledger_writer = ledger_writer
         self._procedural_tier_snapshot_resolver = procedural_tier_snapshot_resolver
+        # B-47 PR B2a — OD spec v1.33 §21.2.1 signing-backend seam (stage-5).
+        self._signing_backend = signing_backend
         self._workflow_id = workflow_id
         self._parent_action_id = parent_action_id
         self._parent_idempotency_key = parent_idempotency_key
@@ -298,7 +304,7 @@ class WebhookDeliveryComposer:
         # billable per flat_per_attempt semantics). Best-effort swallow
         # mirrors `_attribute_tool_cost_best_effort` at
         # runtime_tool_dispatcher.py:285.
-        self._attribute_webhook_cost_best_effort(
+        await self._attribute_webhook_cost_off_loop(
             url=url,
             request_body=request_body,
             idempotency_key=idempotency_key,
@@ -311,6 +317,28 @@ class WebhookDeliveryComposer:
                 f"{delivery_attempts} terminal_status={last_status_code}"
             )
         return result
+
+    async def _attribute_webhook_cost_off_loop(self, *args: Any, **kwargs: Any) -> Any:
+        """Codex round-1 P1 (PR B2a) — run the sync compose helper off-thread.
+
+        With a real KMS backend the helper performs synchronous network
+        signing I/O (plus the pre-existing IS file writes + fsyncs); awaited
+        on the loop it would block every unrelated workflow for KMS latency.
+        `asyncio.to_thread` copies contextvars, so the run-scoped
+        cost-accumulator proxy still resolves.
+        """
+        try:
+            return await run_audit_off_loop(
+                self._attribute_webhook_cost_best_effort, *args, **kwargs
+            )
+        except AUDIT_SIGNING_HARD_FAILURES:
+            # Codex round-17 P1 — see tool dispatcher; fail-open preserved.
+            logging.getLogger("harness.runtime.audit_signing").error(
+                "audit offload refused the job — signed cost-audit record "
+                "OMITTED for webhook delivery (offload boundary)",
+                exc_info=True,
+            )
+            return None
 
     def _attribute_webhook_cost_best_effort(
         self,
@@ -360,6 +388,7 @@ class WebhookDeliveryComposer:
                 tenant_id=self._tenant_id,
                 ledger_writer=self._ledger_writer,
                 procedural_tier_snapshot_resolver=self._procedural_tier_snapshot_resolver,
+                signing_backend=self._signing_backend,
                 # B-23 (out-of-family Codex [P2], round 5) — `span_id` above
                 # is synthesized from `idempotency_key`, so a caller invoking
                 # `deliver_webhook()` twice with the same `idempotency_key`
@@ -374,6 +403,14 @@ class WebhookDeliveryComposer:
             # `RunResult.cost_attribution` rollup (runtime spec v1.53 §9 C-RT-09).
             if self._cost_record_sink is not None:
                 self._cost_record_sink.append(attached)
+        except AUDIT_SIGNING_HARD_FAILURES:
+            # Codex round-4 P1 (PR B2a): signing failures are compliance
+            # events, never silently swallowed with cost-observability
+            # failures. Surfaced loudly; delivery preserved.
+            logging.getLogger("harness.runtime.audit_signing").error(
+                "audit signing failed — signed cost-audit record OMITTED for webhook delivery",
+                exc_info=True,
+            )
         except Exception:
             pass  # observability-only; MUST NOT fail dispatch
 

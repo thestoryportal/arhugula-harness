@@ -4236,3 +4236,119 @@ async def test_inter_step_channel_reaches_anthropic_hitl_tool_loop() -> None:
     first_messages = client.messages.calls[0]["messages"]
     assert first_messages[0]["content"].startswith("Upstream step output:")
     assert "DRAFT-hitl" in first_messages[0]["content"]
+
+
+# ---------------------------------------------------------------------------
+# B-47 PR B2a merge-gate round-1 — signing-backend USE-half witness
+# ---------------------------------------------------------------------------
+
+
+class _CountingBackend:
+    algorithm = "ed25519"
+
+    def __init__(self) -> None:
+        self.sign_calls = 0
+
+    def sign(self, *, message: bytes, key_id: str, key_period: int) -> bytes:
+        self.sign_calls += 1
+        return b"c" * 64  # genuine ed25519 width — the OD seam validates length
+
+    def verify(self, *, message: bytes, signature: bytes, key_id: str, key_period: int) -> bool:
+        return True
+
+
+class _FakeCostSpanContext:
+    span_id = 0x0123456789ABCDEF
+
+
+class _FakeCostSpan:
+    """Minimal span shape `_attribute_cost_best_effort` consumes: a
+    `get_span_context().span_id` int + `set_attribute`."""
+
+    def __init__(self) -> None:
+        self.attributes: dict[str, Any] = {}
+
+    def get_span_context(self) -> _FakeCostSpanContext:
+        return _FakeCostSpanContext()
+
+    def set_attribute(self, key: str, value: Any) -> None:
+        self.attributes[key] = value
+
+
+class _CostRecordingAuditWriter:
+    def __init__(self) -> None:
+        self.appended: list[tuple[str | None, object]] = []
+
+    def append(self, tenant_id: str | None, audit_entry: object) -> object:
+        self.appended.append((tenant_id, audit_entry))
+        return "appended"
+
+
+@pytest.mark.asyncio
+async def test_signing_backend_is_passed_into_cost_audit_composition() -> None:
+    """Merge-gate round-1 BLOCK (PR B2a) — USE-half witness: the bootstrap
+    witness proves the field is SET; this proves the field is PASSED into
+    composition.
+
+    Two halves, one per deletable kwarg family:
+
+    1. Module-fn half — calls the real `_attribute_cost_best_effort` with a
+       fake span + counting backend; pins the `signing_backend=signing_backend`
+       hop into `attribute_llm_dispatch_cost`.
+    2. Dispatcher-field half — drives a full `RuntimeLLMDispatcher.dispatch`
+       (fake anthropic adapter) with `signing_backend=` bound at construction;
+       pins the `signing_backend=self.signing_backend` call-site kwarg at the
+       step-4.5 cost-attribution site (the same wrapper the prewarm site
+       shares its hop with).
+    """
+    from harness_od.rate_table_v1 import RATE_TABLE_V1
+    from harness_runtime.lifecycle.cost_attribution import RuntimeCostAttributionChain
+
+    # --- Half 1: module-fn hop into attribute_llm_dispatch_cost ------------
+    hop_backend = _CountingBackend()
+    hop_audit_writer = _CostRecordingAuditWriter()
+    llm_dispatch_module._attribute_cost_best_effort(
+        span=_FakeCostSpan(),
+        cost_chain=RuntimeCostAttributionChain(),
+        audit_writer=hop_audit_writer,
+        rate_table=RATE_TABLE_V1,
+        signing_backend=hop_backend,
+        provider_name="anthropic",
+        model="claude-haiku-4-5",
+        parent_idempotency_key="parent-idem-1",
+        workflow_id="test-wf",
+        parent_action_id="workflow:test-wf:step:0",
+        input_tokens=1000,
+        output_tokens=500,
+        cache_creation=None,
+        cache_read=None,
+        tenant_id=None,
+    )
+    assert len(hop_audit_writer.appended) == 1, "cost-attribution must have fired"
+    assert hop_backend.sign_calls >= 1, (
+        "USE-half (hop): signing_backend must be passed into "
+        "attribute_llm_dispatch_cost (backend.sign never invoked)"
+    )
+
+    # --- Half 2: dispatcher field reaches the wrapper at the dispatch site --
+    field_backend = _CountingBackend()
+    field_audit_writer = _CostRecordingAuditWriter()
+    tp, _ = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": _AnthropicFakeAdapter(_AnthropicClient())},
+        tracer_provider=tp,
+        cost_chain=RuntimeCostAttributionChain(),
+        audit_writer=field_audit_writer,
+        rate_table=RATE_TABLE_V1,
+        signing_backend=field_backend,
+    )
+    await dispatcher.dispatch(
+        _binding("anthropic", model="claude-haiku-4-5"),
+        _step(),
+        step_context=_step_context(),
+    )
+    assert len(field_audit_writer.appended) == 1, "cost-attribution must have fired"
+    assert field_backend.sign_calls >= 1, (
+        "USE-half (dispatcher field): self.signing_backend must reach "
+        "_attribute_cost_best_effort at the step-4.5 dispatch site"
+    )

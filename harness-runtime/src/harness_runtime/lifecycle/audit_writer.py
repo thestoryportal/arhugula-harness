@@ -85,6 +85,7 @@ from harness_is.cross_process_ledger_lock import (
 from harness_is.state_ledger_entry_schema import Identifier, StateLedgerEntry, Timestamp
 from harness_is.state_ledger_write import (
     EntryPayload,
+    NonMonotonicTimestampError,
     WriteKey,
     WriteResult,
     read_ledger,
@@ -128,6 +129,31 @@ def _full_entry_digest(entry: AuditLedgerEntry) -> str:
 
 _SIDECAR_LOCKS: dict[str, threading.Lock] = {}
 _SIDECAR_LOCKS_GUARD = threading.Lock()
+
+_APPEND_LOCKS: dict[str, threading.Lock] = {}
+_APPEND_LOCKS_GUARD = threading.Lock()
+
+
+def _append_lock_for(path: Path) -> threading.Lock:
+    """One in-process lock per ledger path serializing the WHOLE append.
+
+    Codex round-4 P1 (PR B2a): with audit composition on the offload pool
+    plus the loop-thread paths, two appenders could sample timestamps in
+    one order and commit in the other — the later timestamp persisting
+    first left the earlier append raising NonMonotonicTimestampError AFTER
+    its sidecar row was written (an unanchored row). Timestamp sampling and
+    the sidecar+IS commits now happen inside ONE ordered critical section.
+    (Cross-process timestamp ordering remains the pre-existing B-40-tier
+    residual — the cross-process locks serialize the file writes, not the
+    sampling.)
+    """
+    key = str(path.resolve())
+    with _APPEND_LOCKS_GUARD:
+        lock = _APPEND_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _APPEND_LOCKS[key] = lock
+        return lock
 
 
 def _sidecar_lock_for(path: Path) -> threading.Lock:
@@ -263,39 +289,68 @@ class RuntimeAuditLedgerWriter:
                 f"{recomputed!r} — refusing to persist an entry that would "
                 f"wedge the sidecar fold after restart"
             )
-        action_id = self._action_id_for(tenant_id, audit_entry)
-        # R-003: `procedural_tier_snapshot_ref` is left `None`-canonical here
-        # (IS spec v1.3 §C-IS-05 §5.1). This append wraps pre-signed OD audit
-        # entries — a separate ledger family, not an active-workflow-context
-        # producer emission — so the D-derivative sidecar does not apply.
-        payload = EntryPayload(
-            action_id=action_id,
-            idempotency_key=action_id,
-            actor=self.ledger_writer.actor,
-            timestamp=self.time_source(),
-        )
-        write_key = WriteKey(
-            thread_id=Identifier(f"{self._ACTION_ID_PREFIX}:{self._tenant_tag(tenant_id)}"),
-            step_id=action_id,
-            idempotency_key=action_id,
-        )
-        # Item (e): persist the FULL signed entry SIDECAR-FIRST (out-of-family
-        # Codex round-3 finding on the PR-B1 landing). IS-first ordering lost
-        # the signed entry PERMANENTLY when the process died between the two
-        # writes and the exact event was never replayed (span-redaction and
-        # cost side effects do not replay) — and a later NEW event then seeded
-        # its chain from the pre-loss tail, forking the OD chain against the
-        # IS refs. Sidecar-first inverts the failure: the valuable data (the
-        # full signed entry) is durable before the chain ref lands; a crash
-        # between the writes leaves at worst a SURPLUS sidecar row with no IS
-        # ref — detectable by a verifier cross-checking refs, prunable, and
-        # chain-consistent (the row was genuinely signed at that position, so
-        # tail seeding keeps verifying). The membership-checked write keeps
-        # every path idempotent (a retry after either crash window never
-        # duplicates a row); the IS append remains the dedup authority for
-        # the RESULT the caller sees.
-        self._append_sidecar_line_if_missing(tenant_id, audit_entry)
-        return self.ledger_writer.append(payload, write_key)
+        # ONE ordered critical section per ledger path (codex round-4
+        # P1): timestamp sampling + sidecar write + IS append serialize
+        # together, so commit order always matches timestamp order.
+        with _append_lock_for(self.ledger_writer.handle.canonical_path):
+            action_id = self._action_id_for(tenant_id, audit_entry)
+            # R-003: `procedural_tier_snapshot_ref` is left `None`-canonical here
+            # (IS spec v1.3 §C-IS-05 §5.1). This append wraps pre-signed OD audit
+            # entries — a separate ledger family, not an active-workflow-context
+            # producer emission — so the D-derivative sidecar does not apply.
+            payload = EntryPayload(
+                action_id=action_id,
+                idempotency_key=action_id,
+                actor=self.ledger_writer.actor,
+                timestamp=self.time_source(),
+            )
+            write_key = WriteKey(
+                thread_id=Identifier(f"{self._ACTION_ID_PREFIX}:{self._tenant_tag(tenant_id)}"),
+                step_id=action_id,
+                idempotency_key=action_id,
+            )
+            # Item (e): persist the FULL signed entry SIDECAR-FIRST (out-of-family
+            # Codex round-3 finding on the PR-B1 landing). IS-first ordering lost
+            # the signed entry PERMANENTLY when the process died between the two
+            # writes and the exact event was never replayed (span-redaction and
+            # cost side effects do not replay) — and a later NEW event then seeded
+            # its chain from the pre-loss tail, forking the OD chain against the
+            # IS refs. Sidecar-first inverts the failure: the valuable data (the
+            # full signed entry) is durable before the chain ref lands; a crash
+            # between the writes leaves at worst a SURPLUS sidecar row with no IS
+            # ref — detectable by a verifier cross-checking refs, prunable, and
+            # chain-consistent (the row was genuinely signed at that position, so
+            # tail seeding keeps verifying). The membership-checked write keeps
+            # every path idempotent (a retry after either crash window never
+            # duplicates a row); the IS append remains the dedup authority for
+            # the RESULT the caller sees.
+            self._append_sidecar_line_if_missing(tenant_id, audit_entry)
+            # Bounded resample-retry (codex round-8 P1): this lock
+            # serializes AUDIT appends, but ordinary `LedgerWriter.append`
+            # F2/state writes to the SAME ledger do not take it — one can
+            # commit a newer timestamp between our sampling and our IS
+            # append, which then raises NonMonotonicTimestampError AFTER
+            # the sidecar row is durable (an unanchored signature). The IS
+            # append is retry-safe here: the OD entry (and so the sidecar
+            # identity) is timestamp-independent, and the idempotency key
+            # is unchanged — resample a fresh timestamp and retry. Bounded:
+            # a hot ledger could starve an unbounded loop; exhaustion
+            # propagates the error loudly (the sidecar row is preserved and
+            # the NEXT append's crash-repair path re-anchors it).
+            attempts_left = 5
+            while True:
+                try:
+                    return self.ledger_writer.append(payload, write_key)
+                except NonMonotonicTimestampError:
+                    attempts_left -= 1
+                    if attempts_left <= 0:
+                        raise
+                    payload = EntryPayload(
+                        action_id=payload.action_id,
+                        idempotency_key=payload.idempotency_key,
+                        actor=payload.actor,
+                        timestamp=self.time_source(),
+                    )
 
     def _sidecar_line_for(self, tenant_id: str | None, audit_entry: AuditLedgerEntry) -> str:
         return json.dumps(
@@ -765,8 +820,17 @@ class RuntimeAuditLedgerWriter:
         is_ref_hashes = {
             is_entry.action_id.rsplit(":", 1)[1] for is_entry in self.read_for_tenant(tenant_id)
         }
+        # Sample the IS-refs predicate BEFORE the existence check (merge-gate
+        # round-1 concurrency lens, B-47 item (k)): exists()-then-refs let a
+        # FIRST-EVER append land file+ref between the two samples and
+        # falsely raise the round-36 loss error. Refs-at-T0 with
+        # not-exists-at-T1 is sound under sidecar-first ordering: a ref at
+        # T0 implies its sidecar file existed at T0, so absence later is
+        # genuine deletion.
+        refs_existed = self.sidecar_expected()
         if not self._sidecar_path.exists():
-            self._assert_absence_is_first_use()
+            if refs_existed:
+                self._assert_absence_is_first_use()
             return []
         entries: list[AuditLedgerEntry] = []
         seen_hashes: set[str] = set()

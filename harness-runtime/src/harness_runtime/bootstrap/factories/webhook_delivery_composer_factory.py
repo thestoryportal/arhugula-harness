@@ -130,4 +130,6 @@ async def materialize_webhook_delivery_composer_stage(
         # cost wrapper early-returns), same as `cost_record_sink` above.
         ledger_writer=ctx.ledger_writer,
         procedural_tier_snapshot_resolver=ctx.procedural_tier_snapshot_resolver,
+        # B-47 PR B2a — OD spec v1.33 §21.2.1 signing seam.
+        signing_backend=ctx.audit_signing_backend,
     )

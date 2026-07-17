@@ -529,3 +529,68 @@ async def test_unknown_tool_id_in_rate_table_swallowed_at_dispatch(tracer_setup)
         assert audit_writer.appended == []
     finally:
         await host.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# B-47 PR B2a merge-gate round-1 — signing-backend USE-half witness
+# ---------------------------------------------------------------------------
+
+
+class _CountingBackend:
+    algorithm = "ed25519"
+
+    def __init__(self) -> None:
+        self.sign_calls = 0
+
+    def sign(self, *, message: bytes, key_id: str, key_period: int) -> bytes:
+        self.sign_calls += 1
+        return b"c" * 64  # genuine ed25519 width — the OD seam validates length
+
+    def verify(self, *, message: bytes, signature: bytes, key_id: str, key_period: int) -> bool:
+        return True
+
+
+@pytest.mark.asyncio
+async def test_signing_backend_is_passed_into_cost_audit_composition(tracer_setup) -> None:
+    """Merge-gate round-1 BLOCK (PR B2a) — USE-half witness: the bootstrap
+    witness proves the field is SET; this proves the field is PASSED into
+    composition.
+
+    Drives the real dispatch path (which reaches
+    `_attribute_tool_cost_best_effort` → `attribute_tool_dispatch_cost`) with
+    a counting backend on the dispatcher — the
+    `signing_backend=self._signing_backend` kwarg must deliver the backend to
+    the OD signing seam (sign invoked), not merely hold it as an inert field.
+    """
+    tracer_provider, _exporter = tracer_setup
+    host = await _build_started_host()
+    rate_table = _make_rate_table(
+        {"echo": ToolRate(cost_kind="flat_per_invocation", rate=Decimal("0.01"))}
+    )
+    backend = _CountingBackend()
+    audit_writer = _RecordingAuditWriter()
+    dispatcher = RuntimeToolDispatcher.for_single_host(
+        mcp_client_host=host,
+        per_server_trust_evaluator=PerServerTrustEvaluator(),
+        mcp_namespace_emitter=_make_emitter(),
+        trust_policy=_make_trust_policy(),
+        sandbox_decision_resolver=_good_sandbox_resolver,
+        tracer_provider=tracer_provider,
+        cost_chain=RuntimeCostAttributionChain(),
+        audit_writer=audit_writer,
+        rate_table=rate_table,
+        signing_backend=backend,
+    )
+    try:
+        await dispatcher.dispatch(
+            _make_binding(),
+            _make_step("echo", {"message": "hello"}),
+            step_context=_make_step_context(),
+        )
+        assert len(audit_writer.appended) == 1, "cost-attribution must have fired"
+        assert backend.sign_calls >= 1, (
+            "USE-half: the dispatcher's signing_backend must be passed into "
+            "attribute_tool_dispatch_cost (backend.sign never invoked)"
+        )
+    finally:
+        await host.shutdown()

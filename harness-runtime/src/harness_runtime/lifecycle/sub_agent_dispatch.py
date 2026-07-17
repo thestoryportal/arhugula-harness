@@ -104,6 +104,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, cast
@@ -111,6 +112,7 @@ from typing import TYPE_CHECKING, Any, cast
 from harness_core.identity import ActionID
 from harness_cp.cp_shared_types import ActorIdentity
 from harness_cp.engine_class import EngineClass
+from harness_cp.f5_signing_key_resolution import SigningBackend
 from harness_cp.handoff_context import (
     ActionKind,
     HandoffContext,
@@ -140,6 +142,7 @@ from harness_is.state_ledger_write import EntryPayload, WriteKey, WriteResult
 from harness_od.audit_ledger_types import SignatureAlgorithm, StateLedgerEntryRef
 from pydantic import BaseModel, ConfigDict, ValidationError
 
+from harness_runtime.lifecycle.audit_signing_errors import AUDIT_SIGNING_HARD_FAILURES
 from harness_runtime.lifecycle.audit_writer import RuntimeAuditLedgerWriter
 from harness_runtime.lifecycle.child_workflow_runner import ChildWorkflowRunner
 from harness_runtime.lifecycle.handoff import RuntimeHandoffRegistry
@@ -598,6 +601,14 @@ class RuntimeSubAgentDispatcher:
     `RuntimeCpIsWiring.procedural_tier_snapshot_resolver` pattern for the 6
     §16.5 CP composers (`cp_is_wiring.py`)."""
 
+    signing_backend: SigningBackend | None = None
+    """OD spec v1.33 §21.2.1 composition-root injection seam (B-47 PR B2a).
+
+    Threaded from `ctx.audit_signing_backend` at bootstrap stage-5; passed
+    verbatim as `backend=` to `cp_audit_to_od_audit` at substep 8c. `None`
+    (the default) preserves the placeholder signing path byte-for-byte.
+    """
+
     # Module-bound canonical attribute name constants (per spec §14.7.5
     # "Producer-side attribute carrier reference" — imported from the
     # canonical carrier; not hand-coded as strings). Frozen at construction
@@ -715,11 +726,27 @@ class RuntimeSubAgentDispatcher:
             entry_core = StateLedgerEntryRef(str(dispatch_action_id))
 
             # 8c — convert CP → OD (signing happens inside the converter).
+            #
+            # NOT routed through run_audit_off_loop (out-of-family Codex
+            # rounds 2 + 7 on PR B2a — registered as forward item B-48):
+            # this dispatcher is the U-RT-60 wrap-asymmetry fork's SYNC
+            # C-RT-17 inner, invoked directly on the event loop by
+            # RuntimeHITLGateComposer._dispatch_inner (the fork's Q3-RATIFIED
+            # reading). A sync function cannot await; blocking this loop
+            # thread on an offload future waits exactly as long as signing
+            # inline does — the loop stays blocked either way, as it already
+            # does for the ENTIRE sub-agent dispatch (child workflow
+            # execution, seconds-long, pre-existing). The effective fix is
+            # offloading the whole sync inner dispatch — a Class 2 fork
+            # revision with recursion-aware executor design and pause/resume
+            # + fan-out re-validation, owned by B-48 at
+            # .harness/forward-register.yaml.
             od_entry = cp_audit_to_od_audit(
                 cp_entry,
                 key_id=self.audit_signing_key_id,
                 algo=self.audit_signing_algorithm,
                 entry_core=entry_core,
+                backend=self.signing_backend,
             )
 
             # 8d — persist OD audit entry through IS hash chain.
@@ -727,6 +754,19 @@ class RuntimeSubAgentDispatcher:
                 tenant_id=step_context.tenant_id,
                 audit_entry=od_entry,
             )
+        except AUDIT_SIGNING_HARD_FAILURES as exc:
+            # Codex round-4 P1 (PR B2a): signing failures are compliance
+            # events — surfaced loudly regardless of raise_on_failure.
+            logging.getLogger("harness.runtime.audit_signing").error(
+                "audit signing failed — signed audit record OMITTED for sub-agent dispatch",
+                exc_info=True,
+            )
+            if raise_on_failure:
+                raise SubAgentDispatchAuditComposeError(
+                    f"sub-agent dispatch audit composition failed for "
+                    f"parent_action_id={parent_action_id!r}: {exc}"
+                ) from exc
+            return cp_entry, None
         except Exception as exc:
             if raise_on_failure:
                 raise SubAgentDispatchAuditComposeError(

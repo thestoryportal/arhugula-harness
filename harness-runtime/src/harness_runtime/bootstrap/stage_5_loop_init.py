@@ -337,6 +337,8 @@ async def execute(
             cost_chain=cast(Any, ctx.cost_chain),
             audit_writer=cast(Any, ctx.audit_writer),
             rate_table=RATE_TABLE_V1,
+            # B-47 PR B2a — OD spec v1.33 §21.2.1 signing seam (stage-4 step 0).
+            signing_backend=ctx.audit_signing_backend,
             # R-FS-1 arc CA + B-INTERSTEP-PERRUN-ISOLATION — thread the run-scoped
             # accumulator PROXY (NOT its `.records` list — that capture-at-bootstrap
             # defeated per-run isolation). Each per-LLM-dispatch SpanCostRecord
@@ -504,6 +506,8 @@ async def execute(
         tracer_provider=cast(Any, tracer_provider),
         audit_signing_key_id="harness-runtime-dev",
         audit_signing_algorithm=SignatureAlgorithm.ED25519,
+        # B-47 PR B2a — OD spec v1.33 §21.2.1 signing seam (stage-4 step 0).
+        signing_backend=ctx.audit_signing_backend,
         procedural_tier_snapshot_resolver=procedural_tier_snapshot_resolver,
         pause_resume_protocol=ctx.pause_resume_protocol,
         pause_requested_flag=ctx.pause_requested_flag,
@@ -593,6 +597,8 @@ async def execute(
         audit_writer=cast(Any, ctx.audit_writer),
         audit_signing_key_id="harness-runtime-dev",
         audit_signing_algorithm=SignatureAlgorithm.ED25519,
+        # B-47 PR B2a — OD spec v1.33 §21.2.1 signing seam (stage-4 step 0).
+        signing_backend=ctx.audit_signing_backend,
         time_source=lambda: datetime.now(UTC),
         procedural_tier_snapshot_resolver=procedural_tier_snapshot_resolver,
     )
@@ -615,6 +621,8 @@ async def execute(
         tracer_provider=cast(Any, tracer_provider),
         audit_signing_key_id="harness-runtime-dev",
         audit_signing_algorithm=SignatureAlgorithm.ED25519,
+        # B-47 PR B2a — OD spec v1.33 §21.2.1 signing seam (stage-4 step 0).
+        signing_backend=ctx.audit_signing_backend,
         procedural_tier_snapshot_resolver=procedural_tier_snapshot_resolver,
         pause_resume_protocol=ctx.pause_resume_protocol,
         pause_requested_flag=ctx.pause_requested_flag,
@@ -696,6 +704,8 @@ async def execute(
         tracer_provider=cast(Any, tracer_provider),
         audit_signing_key_id="harness-runtime-dev",
         audit_signing_algorithm=SignatureAlgorithm.ED25519,
+        # B-47 PR B2a — OD spec v1.33 §21.2.1 signing seam (stage-4 step 0).
+        signing_backend=ctx.audit_signing_backend,
         procedural_tier_snapshot_resolver=procedural_tier_snapshot_resolver,
         pause_resume_protocol=ctx.pause_resume_protocol,
         pause_requested_flag=ctx.pause_requested_flag,

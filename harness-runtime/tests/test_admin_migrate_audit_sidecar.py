@@ -131,3 +131,24 @@ def test_parser_shape() -> None:
     parser = build_parser()
     args = parser.parse_args(["/tmp/ledger.jsonl"])
     assert isinstance(args.ledger, Path)
+
+
+def test_module_runnable_via_python_m(tmp_path: Path) -> None:
+    """B-47 item (k) — the documented operator invocation is `python -m`;
+    the `if __name__ == "__main__"` guard is the only thing making that
+    real. Run the module AS __main__ and pin the exit path."""
+    import runpy
+    import sys
+    from unittest import mock
+
+    argv = ["migrate_audit_sidecar", str(tmp_path / "missing" / "state.jsonl")]
+    # Drop the already-imported module first: runpy re-executes the source,
+    # and the stale sys.modules entry triggers a RuntimeWarning otherwise.
+    already = sys.modules.pop("harness_runtime.admin.migrate_audit_sidecar", None)
+    try:
+        with mock.patch.object(sys, "argv", argv), pytest.raises(SystemExit) as excinfo:
+            runpy.run_module("harness_runtime.admin.migrate_audit_sidecar", run_name="__main__")
+    finally:
+        if already is not None:
+            sys.modules["harness_runtime.admin.migrate_audit_sidecar"] = already
+    assert excinfo.value.code == 2
