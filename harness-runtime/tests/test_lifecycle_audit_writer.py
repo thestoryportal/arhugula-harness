@@ -1602,3 +1602,63 @@ def test_prefix_related_tenants_scope_exactly(tmp_path: Path) -> None:
 
     refs = writer.read_for_tenant("tenant")
     assert [r.action_id for r in refs] == [f"audit:tenant:{parent.entry_hash}"]
+
+
+def test_pre_sidecar_ledger_adopts_legacy_refs_explicitly(tmp_path: Path) -> None:
+    """Codex round-46 P1 (PR B1) — a deployment upgraded in place has IS
+    `audit:` refs from the pre-sidecar runtime (which dropped every full
+    entry), so no sidecar can exist: the round-36 absence guard wedged every
+    append and read permanently, and the documented escape (reset BOTH
+    ledgers) destroys unrelated workflow history in the shared IS ledger.
+    `adopt_legacy_is_refs()` is the explicit one-time migration; the
+    fail-loud default is unchanged (silent auto-adoption would let genuine
+    deletion masquerade as an upgrade)."""
+    writer = _writer(tmp_path)
+    legacy_one = _make_audit_entry("1" * 64)
+    legacy_two = _make_audit_entry("2" * 64)
+    writer.append("tenant-A", legacy_one)
+    writer.append(None, legacy_two)
+    # Simulate the pre-sidecar runtime: IS refs exist, full entries dropped.
+    writer.sidecar_path.unlink()
+
+    fresh = RuntimeAuditLedgerWriter(
+        ledger_writer=writer.ledger_writer,
+        time_source=writer.time_source,
+    )
+    # Fail-loud default is unchanged before adoption.
+    with pytest.raises(ValueError, match="MISSING"):
+        fresh.read_full_entries_for_tenant("tenant-A")
+    with pytest.raises(ValueError, match="MISSING"):
+        fresh.append("tenant-A", _make_audit_entry("3" * 64))
+
+    assert fresh.adopt_legacy_is_refs() == 2
+
+    # Legacy refs no longer wedge reads (nothing to rehydrate) or appends.
+    assert fresh.read_full_entries_for_tenant("tenant-A") == []
+    new_entry = _make_audit_entry("3" * 64)
+    assert fresh.append("tenant-A", new_entry) is WriteResult.APPENDED
+    hashes = [e.entry_hash for e in fresh.read_full_entries_for_tenant("tenant-A")]
+    assert hashes == [new_entry.entry_hash]
+
+    # A COLD writer folding the baseline from disk gets the same exemption.
+    cold = RuntimeAuditLedgerWriter(
+        ledger_writer=writer.ledger_writer,
+        time_source=writer.time_source,
+    )
+    assert cold.append("tenant-A", _make_audit_entry("4" * 64)) is WriteResult.APPENDED
+
+    # POST-adoption entries keep full round-40 coverage: dropping the new
+    # rows (keeping the baseline line) is loss, not legacy.
+    lines = fresh.sidecar_path.read_bytes().splitlines(keepends=True)
+    fresh.sidecar_path.write_bytes(lines[0])
+    with pytest.raises(ValueError, match="truncated or lost"):
+        fresh.append("tenant-A", _make_audit_entry("5" * 64))
+
+
+def test_adoption_refused_when_sidecar_exists(tmp_path: Path) -> None:
+    """Codex round-46 P1 (PR B1) — adoption on an EXISTING sidecar would let
+    a missing-entry condition be laundered as legacy; it must refuse."""
+    writer = _writer(tmp_path)
+    writer.append("tenant-A", _make_audit_entry("1" * 64))
+    with pytest.raises(ValueError, match="already exists"):
+        writer.adopt_legacy_is_refs()

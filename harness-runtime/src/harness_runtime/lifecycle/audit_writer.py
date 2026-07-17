@@ -111,10 +111,11 @@ class _SidecarMembershipIndex:
     a dataclass field pair) so the frozen writer can mutate it in place.
     """
 
-    __slots__ = ("digests", "inode", "mtime_ns", "offset")
+    __slots__ = ("digests", "inode", "legacy_exempt", "mtime_ns", "offset")
 
     def __init__(self) -> None:
         self.digests: dict[tuple[str, str], str] = {}
+        self.legacy_exempt: set[tuple[str, str]] = set()
         self.offset: int = 0
         self.inode: int = -1
         self.mtime_ns: int = -1
@@ -442,7 +443,9 @@ class RuntimeAuditLedgerWriter:
                 f"audit sidecar {self._sidecar_path} is MISSING but the IS "
                 f"ledger holds audit references — the durable signed-entry "
                 f"history has been deleted or lost; refusing to continue "
-                f"(restore the sidecar from backup, or intentionally reset "
+                f"(restore the sidecar from backup; for a PRE-SIDECAR ledger "
+                f"upgraded in place, run adopt_legacy_is_refs() once to "
+                f"baseline the legacy references; or intentionally reset "
                 f"BOTH ledgers together)"
             )
 
@@ -466,6 +469,13 @@ class RuntimeAuditLedgerWriter:
             tag = prefix_and_tag[len(f"{self._ACTION_ID_PREFIX}:") :]
             identity = (tag, entry_hash)
             if identity == allowed_gap:
+                continue
+            if identity in self._sidecar_index.legacy_exempt:
+                # Pre-sidecar refs explicitly baselined by
+                # `adopt_legacy_is_refs()` (codex round-46 P1) — their full
+                # entries were produced then dropped by the pre-sidecar
+                # runtime and can never be recovered; the baseline records
+                # that as an operator-acknowledged fact, not a loss event.
                 continue
             if identity not in self._sidecar_index.digests:
                 raise ValueError(
@@ -609,6 +619,7 @@ class RuntimeAuditLedgerWriter:
         )
         reset_to_zero = truncated or inode_changed or same_size_mutated
         if reset_to_zero:
+            index.legacy_exempt.clear()
             # Full rescan ONLY for: truncation (torn-tail heal elsewhere),
             # file replacement (inode change), or a same-size in-place
             # mutation (codex round-21: size-equality alone trusted a stale
@@ -660,6 +671,12 @@ class RuntimeAuditLedgerWriter:
             if not raw.strip():
                 continue
             row = json.loads(raw)
+            if "legacy_baseline" in row:
+                # `adopt_legacy_is_refs()` baseline (codex round-46 P1):
+                # pre-sidecar IS refs whose full entries the old runtime
+                # dropped — exempt from coverage, never members (no entry).
+                index.legacy_exempt.update((pair[0], pair[1]) for pair in row["legacy_baseline"])
+                continue
             # Validate the WHOLE entry before accepting the row as membership
             # (codex round-15, PR B1): a newline-terminated row with valid
             # identity keys but corrupt remaining fields must not silently
@@ -727,6 +744,7 @@ class RuntimeAuditLedgerWriter:
             self._assert_absence_is_first_use()
             return []
         entries: list[AuditLedgerEntry] = []
+        exempt_hashes: set[str] = set()
         # B-40 shared read lock (side-effect-free: never O_CREAT, never mkdir)
         # — excludes a concurrent writer's partial line once the lock file
         # exists; the brand-new-file window carries the documented B-46
@@ -758,6 +776,14 @@ class RuntimeAuditLedgerWriter:
                         # `\n` still fails loud below (real corruption).
                         continue
                     row = json.loads(line)
+                    if "legacy_baseline" in row:
+                        # Pre-sidecar refs baselined by adopt_legacy_is_refs()
+                        # (codex round-46 P1) — no full entry exists to
+                        # rehydrate; exempt them from the coverage check.
+                        exempt_hashes.update(
+                            pair[1] for pair in row["legacy_baseline"] if pair[0] == tag
+                        )
+                        continue
                     if row["tenant_tag"] != tag:
                         continue
                     entry = AuditLedgerEntry.model_validate(row["entry"])
@@ -782,13 +808,77 @@ class RuntimeAuditLedgerWriter:
         # reading a partial history.
         rehydrated = {entry.entry_hash for entry in entries}
         for entry_hash in is_ref_hashes:
-            if entry_hash not in rehydrated:
+            if entry_hash not in rehydrated and entry_hash not in exempt_hashes:
                 raise ValueError(
                     f"IS ledger references audit entry {entry_hash!r} for "
                     f"tenant_tag={tag!r} but the sidecar holds no such row — "
                     f"signed history has been truncated or lost"
                 )
         return entries
+
+    def adopt_legacy_is_refs(self) -> int:
+        """One-time EXPLICIT migration for pre-sidecar ledgers (codex
+        round-46 P1) — returns the number of legacy references baselined.
+
+        A deployment upgraded in place has IS `audit:` references written by
+        the pre-sidecar runtime, which produced then DROPPED every full
+        signed entry — no sidecar can exist, so the round-36 absence guard
+        (correctly protecting against deletion) would wedge every append and
+        full-entry read permanently, and the only documented escape (reset
+        BOTH ledgers) would destroy unrelated workflow history in the shared
+        IS ledger. This method creates the sidecar with a single
+        `legacy_baseline` record enumerating every existing IS audit
+        reference; those identities are thereafter exempt from coverage
+        checks (their entries are unrecoverable BY CONSTRUCTION, an
+        operator-acknowledged fact, not a loss event) while every
+        post-adoption append gets full round-40 coverage protection.
+
+        Adoption is deliberately NOT automatic: silently baselining on first
+        touch would let a genuinely deleted sidecar masquerade as a legacy
+        upgrade, re-opening the exact loss-masking hole round-36 closed. The
+        operator runs this once, per upgraded deployment, while no writer is
+        active. Refuses to run when a sidecar already exists. A forged
+        baseline written by an attacker with sidecar write access sits in
+        the same adversarial-filesystem tier as mutate-and-restore-mtime —
+        dispositioned to the B-47 read-time verifier arc.
+        """
+        with self._sidecar_thread_lock, cross_process_write_lock(self._sidecar_path):
+            if self._sidecar_path.exists():
+                raise ValueError(
+                    f"audit sidecar {self._sidecar_path} already exists — "
+                    f"adopt_legacy_is_refs() is only for pre-sidecar ledgers "
+                    f"upgraded in place; a missing-entry condition on an "
+                    f"EXISTING sidecar is loss, not legacy"
+                )
+            legacy: list[list[str]] = []
+            for is_entry in read_ledger(self.ledger_writer.handle):
+                action_id = is_entry.action_id
+                if not action_id.startswith(f"{self._ACTION_ID_PREFIX}:"):
+                    continue
+                prefix_and_tag, entry_hash = action_id.rsplit(":", 1)
+                tag = prefix_and_tag[len(f"{self._ACTION_ID_PREFIX}:") :]
+                legacy.append([tag, entry_hash])
+            encoded = (
+                json.dumps({"legacy_baseline": legacy}, separators=(",", ":")) + "\n"
+            ).encode("utf-8")
+            with os.fdopen(self._open_sidecar_for_append(), "ab") as fh:
+                fh.write(encoded)
+                fh.flush()
+                os.fsync(fh.fileno())
+            if sys.platform != "win32":
+                dir_fd = os.open(str(self._sidecar_path.parent), os.O_RDONLY)
+                try:
+                    os.fsync(dir_fd)
+                finally:
+                    os.close(dir_fd)
+            index = self._sidecar_index
+            index.digests.clear()
+            index.legacy_exempt = {(pair[0], pair[1]) for pair in legacy}
+            index.offset = len(encoded)
+            post = self._sidecar_path.stat()
+            index.inode = post.st_ino
+            index.mtime_ns = post.st_mtime_ns
+            return len(legacy)
 
     def read_for_tenant(self, tenant_id: str | None) -> list[StateLedgerEntry]:
         """Tenant-scoped reader (C-OD-21 §21.1 cross-tenant separation surface).
