@@ -1233,6 +1233,23 @@ def test_fifo_sidecar_rejected_on_read_without_hanging(tmp_path: Path) -> None:
         writer.read_full_entries_for_tenant("tenant-A")
 
 
+def test_colon_bearing_tenant_id_round_trips_all_guards(tmp_path: Path) -> None:
+    """Codex round-41 (PR B1) — a tenant id containing ':' (action_id
+    'audit:tenant:west:<hash>') made the left-split coverage parse report
+    valid history as missing. Hashes parse from the right: append, fresh
+    fold, and full-entry read all round-trip."""
+    writer = _writer(tmp_path)
+    entry = _make_audit_entry("1" * 64)
+    assert writer.append("tenant:west", entry) is WriteResult.APPENDED
+
+    fresh = RuntimeAuditLedgerWriter(
+        ledger_writer=writer.ledger_writer,
+        time_source=writer.time_source,
+    )
+    assert fresh.append("tenant:west", _make_audit_entry("2" * 64)) is WriteResult.APPENDED
+    assert len(fresh.read_full_entries_for_tenant("tenant:west")) == 2
+
+
 def test_boundary_truncation_fails_loud_on_read_and_append(tmp_path: Path) -> None:
     """Codex round-40 P1 (PR B1) — truncation to a NEWLINE BOUNDARY leaves
     only valid-looking rows: the torn-tail heal sees nothing and the

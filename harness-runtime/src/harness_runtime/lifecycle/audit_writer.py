@@ -433,7 +433,11 @@ class RuntimeAuditLedgerWriter:
             action_id = is_entry.action_id
             if not action_id.startswith(f"{self._ACTION_ID_PREFIX}:"):
                 continue
-            _, tag, entry_hash = action_id.split(":", 2)
+            # Parse the hash from the RIGHT (codex round-41): a tenant id
+            # containing ':' (e.g. "tenant:west") made the left-split report
+            # valid history as missing. entry_hash is hex-64 — never ':'.
+            prefix_and_tag, entry_hash = action_id.rsplit(":", 1)
+            tag = prefix_and_tag[len(f"{self._ACTION_ID_PREFIX}:") :]
             identity = (tag, entry_hash)
             if identity == allowed_gap:
                 continue
@@ -718,7 +722,9 @@ class RuntimeAuditLedgerWriter:
         # reading a partial history.
         rehydrated = {entry.entry_hash for entry in entries}
         for is_entry in self.read_for_tenant(tenant_id):
-            _, _, entry_hash = is_entry.action_id.split(":", 2)
+            # rsplit — a ':' inside the tenant tag must not shift the hash
+            # (codex round-41).
+            _, entry_hash = is_entry.action_id.rsplit(":", 1)
             if entry_hash not in rehydrated:
                 raise ValueError(
                     f"IS ledger references audit entry {entry_hash!r} for "
