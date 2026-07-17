@@ -843,7 +843,8 @@ items:
     tenant can both read the same durable family tail and sign different entries with the identical
     predecessor (the sidecar lock serializes persistence only, not chain-position selection). The
     in-process half is serialized; the clean cross-process fix is an atomic writer operation, which
-    the (e)/(g)/(h) SQLite persistence redesign gives transactionally -- resolve there. Already
+    widening the existing B-40 lock scope across tail-read+compose+append gives (no new primitive;
+    no SQLite redesign is spec-forced -- corrected 2026-07-17 per the disposition doc). Already
     documented in-code as a residual since round 13; formally registered now; (j) upgrade/migration
     surface (out-of-family Codex rounds 44-48 on PR B1, all fixed in-PR): the JSONL sidecar gained
     IS-refs-pre-snapshot reader ordering, warm-index truncation coverage, injective tenant tags with
