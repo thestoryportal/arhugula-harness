@@ -66,6 +66,7 @@ stage shape established at U-RT-27..31.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import threading
@@ -99,17 +100,25 @@ class AuditWriterBindError(Exception):
 class _SidecarMembershipIndex:
     """Mutable holder for the incremental sidecar membership index.
 
-    `keys` — every `(tenant_tag, entry_hash)` seen up to `offset`. `offset` —
-    the byte position up to which the sidecar has been folded in. A plain
-    class (not a dataclass field pair) so the frozen writer can mutate it
-    in place.
+    `digests` — for every `(tenant_tag, entry_hash)` seen up to `offset`, the
+    SHA-256 over the canonically re-serialized FULL signed entry (payload +
+    signature_attrs + entry_hash — codex round-19: identity keyed on the
+    content hash alone let a row with mutated `signature_attrs` silently
+    satisfy membership for the legitimate entry). `offset` — the byte
+    position up to which the sidecar has been folded in. A plain class (not
+    a dataclass field pair) so the frozen writer can mutate it in place.
     """
 
-    __slots__ = ("keys", "offset")
+    __slots__ = ("digests", "offset")
 
     def __init__(self) -> None:
-        self.keys: set[tuple[str, str]] = set()
+        self.digests: dict[tuple[str, str], str] = {}
         self.offset: int = 0
+
+
+def _full_entry_digest(entry: AuditLedgerEntry) -> str:
+    """Canonical digest over the COMPLETE signed entry (round-19 identity)."""
+    return hashlib.sha256(entry.model_dump_json().encode("utf-8")).hexdigest()
 
 
 @dataclass(frozen=True, slots=True)
@@ -301,14 +310,30 @@ class RuntimeAuditLedgerWriter:
         with self._sidecar_thread_lock, cross_process_write_lock(self._sidecar_path):
             self._heal_torn_tail_locked()
             self._refresh_sidecar_index_locked()
-            if (tag, audit_entry.entry_hash) in self._sidecar_index.keys:
+            identity = (tag, audit_entry.entry_hash)
+            incoming_digest = _full_entry_digest(audit_entry)
+            stored_digest = self._sidecar_index.digests.get(identity)
+            if stored_digest is not None:
+                if stored_digest != incoming_digest:
+                    # Codex round-19: a durable row whose signature_attrs
+                    # were mutated (payload + entry_hash intact) must not
+                    # silently satisfy membership for the legitimate entry —
+                    # the corrupted signature would remain the only durable
+                    # copy. Fail loud; the row is preserved as evidence.
+                    raise ValueError(
+                        f"sidecar row for tenant_tag={tag!r} "
+                        f"entry_hash={audit_entry.entry_hash!r} diverges from "
+                        f"the entry being appended (signature_attrs or other "
+                        f"non-payload fields differ) — tampered or corrupt "
+                        f"row preserved as evidence, append refused"
+                    )
                 return
             encoded = (line + "\n").encode("utf-8")
             with os.fdopen(self._open_sidecar_for_append(), "ab") as fh:
                 fh.write(encoded)
             # Our own write never needs re-parsing: record it in the index
             # and advance past it.
-            self._sidecar_index.keys.add((tag, audit_entry.entry_hash))
+            self._sidecar_index.digests[identity] = incoming_digest
             self._sidecar_index.offset += len(encoded)
 
     def _refresh_sidecar_index_locked(self) -> None:
@@ -326,7 +351,7 @@ class RuntimeAuditLedgerWriter:
         index = self._sidecar_index
         size = self._sidecar_path.stat().st_size if self._sidecar_path.exists() else 0
         if size < index.offset:
-            index.keys.clear()
+            index.digests.clear()
             index.offset = 0
         if size == index.offset:
             return
@@ -363,7 +388,7 @@ class RuntimeAuditLedgerWriter:
                     f"but recomputed {recomputed!r} — tampered or corrupt row "
                     f"preserved as evidence, append refused"
                 )
-            index.keys.add((row["tenant_tag"], entry.entry_hash))
+            index.digests[(row["tenant_tag"], entry.entry_hash)] = _full_entry_digest(entry)
         index.offset = size
 
     def read_full_entries_for_tenant(self, tenant_id: str | None) -> list[AuditLedgerEntry]:

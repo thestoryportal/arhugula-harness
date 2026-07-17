@@ -929,3 +929,34 @@ def test_tampered_payload_with_stale_hash_fails_appends_loud(tmp_path: Path) -> 
     )
     with pytest.raises(ValueError, match="content-integrity"):
         fresh_writer.append("tenant-A", _make_audit_entry("3" * 64))
+
+
+def test_signature_mutated_row_fails_replay_loud_not_silent_noop(tmp_path: Path) -> None:
+    """Codex round-19 (PR B1) — a durable row whose signature_attrs were
+    mutated (payload + entry_hash intact) passed payload-only integrity and
+    silently satisfied membership on replay, leaving the corrupted signature
+    as the only durable copy. Membership now compares the COMPLETE signed
+    entry and fails loud on divergence."""
+    import json as json_module
+
+    writer = _writer(tmp_path)
+    entry = _make_audit_entry("1" * 64)
+    writer.append("tenant-A", entry)
+
+    # Mutate the durable row's signature value only.
+    raw_rows = [
+        json_module.loads(line)
+        for line in writer.sidecar_path.read_text().splitlines()
+        if line.strip()
+    ]
+    raw_rows[0]["entry"]["signature_attrs"]["audit_signature_value"] = "sig:EVIL"
+    writer.sidecar_path.write_text(
+        "\n".join(json_module.dumps(r, separators=(",", ":")) for r in raw_rows) + "\n"
+    )
+
+    fresh_writer = RuntimeAuditLedgerWriter(
+        ledger_writer=writer.ledger_writer,
+        time_source=writer.time_source,
+    )
+    with pytest.raises(ValueError, match="diverges from"):
+        fresh_writer.append("tenant-A", entry)
