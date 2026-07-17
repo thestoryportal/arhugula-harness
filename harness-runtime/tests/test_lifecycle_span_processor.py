@@ -607,3 +607,66 @@ def test_aws_kms_config_without_injected_backend_fails_at_bootstrap(tmp_path: Pa
             exporter=InMemorySpanExporter(),
             audit_writer=_RecordingAuditWriter(),
         )
+
+
+@pytest.mark.asyncio
+async def test_stage_4_validates_signing_before_one_shot_tracer_registration(
+    tmp_path: Path,
+) -> None:
+    """Codex round-18 (B-47 PR B1) — OTel tracer registration is one-shot per
+    process; a KMS config failure surfacing AFTER it poisoned same-process
+    bootstrap retry. Stage 4 must construct+validate the signing backend
+    BEFORE the tracer registrar is ever invoked."""
+    import unittest.mock as mock
+    from types import SimpleNamespace
+
+    from harness_runtime.bootstrap import stage_4_od
+    from harness_runtime.bootstrap.mutable_context import _MutableHarnessContext
+    from harness_runtime.lifecycle.span_processor import SpanProcessorBindError
+    from harness_runtime.types import AuditSigningBackendKind, AuditSigningConfig
+
+    base = _config(
+        tmp_path,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        tenant_id="tenant-x",
+    )
+    config = base.model_copy(
+        update={
+            "audit_signing": AuditSigningConfig(
+                backend=AuditSigningBackendKind.AWS_KMS,
+                key_arns={"some-other-key": "arn:aws:kms:us-east-1:1:key/x"},
+            )
+        }
+    )
+
+    ctx = _MutableHarnessContext()
+    ctx.ledger_writer = SimpleNamespace()  # stage-1 precondition only
+    tracer_calls: list[object] = []
+
+    class _FakeBackend:
+        algorithm = "ed25519"
+
+        def sign(self, *, message: bytes, key_id: str, key_period: int) -> bytes:
+            raise AssertionError("never reached")
+
+        def verify(self, *, message: bytes, signature: bytes, key_id: str, key_period: int) -> bool:
+            raise AssertionError("never reached")
+
+    with (
+        mock.patch.object(
+            stage_4_od,
+            "make_audit_signing_backend",
+            lambda _cfg: _FakeBackend(),
+        ),
+        mock.patch.object(
+            stage_4_od,
+            "materialize_tracer_provider_stage",
+            lambda _cfg: tracer_calls.append(_cfg),
+        ),
+    ):
+        from harness_core.workload_class import WorkloadClass
+
+        with pytest.raises(SpanProcessorBindError, match="ever assumed"):
+            await stage_4_od.execute(ctx, config, WorkloadClass.SOFTWARE_ENGINEERING)
+
+    assert tracer_calls == []  # the one-shot registrar was never invoked

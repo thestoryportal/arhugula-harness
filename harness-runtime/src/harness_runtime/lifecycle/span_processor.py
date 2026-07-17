@@ -160,6 +160,52 @@ class SpanProcessorStage:
         return self.processor.force_flush(timeout_millis=timeout_millis)
 
 
+def validate_audit_signing_for_span_stage(
+    config: RuntimeConfig,
+    *,
+    signing_backend: SigningBackend | None,
+    tokenizer_will_bind: bool,
+) -> None:
+    """Fail-at-bootstrap validation of the audit-signing wiring — pure, no
+    construction side effects.
+
+    Called by `materialize_span_processor_stage` itself (defense for direct
+    composer callers) and by stage 4 BEFORE the one-shot global tracer
+    registration (out-of-family Codex round-18, B-47 PR B1: a KMS config
+    failure surfacing after `set_tracer_provider` poisoned same-process
+    bootstrap retry with `TracerProviderConcurrentRegistrationError`).
+
+    Checks, both scoped to a tokenizer that will actually bind:
+    - explicit `aws-kms` config with no constructed backend → raise (a
+      deployment that asked for real signing never silently degrades —
+      round 16);
+    - an `aws-kms` mapping that omits the redaction-token map's signing key
+      → raise (would otherwise surface as `UnknownSigningKeyIdError` on the
+      FIRST redacted span mid-run — round 3; validated before any
+      `BatchSpanProcessor` worker thread exists — round 6).
+    """
+    if not tokenizer_will_bind:
+        return
+    if config.audit_signing.backend is not AuditSigningBackendKind.AWS_KMS:
+        return
+    if signing_backend is None:
+        raise SpanProcessorBindError(
+            "audit_signing.backend is 'aws-kms' but no signing_backend was "
+            "supplied to materialize_span_processor_stage — construct one "
+            "via make_audit_signing_backend(config.audit_signing) and pass "
+            "it through (stage 4 does); explicit KMS configuration must "
+            "never silently degrade to placeholder signing"
+        )
+    if REDACTION_TOKEN_SIGNING_KEY_ID not in config.audit_signing.key_arns:
+        raise SpanProcessorBindError(
+            f"audit_signing.key_arns is missing the redaction-token "
+            f"map's signing key {REDACTION_TOKEN_SIGNING_KEY_ID!r} — "
+            f"the aws-kms mapping must cover every composition-root "
+            f"signing consumer (ADR-D8 §Decision item 2: no default "
+            f"key is ever assumed)"
+        )
+
+
 def materialize_span_processor_stage(
     config: RuntimeConfig,
     provider: TracerProvider,
@@ -221,44 +267,9 @@ def materialize_span_processor_stage(
     tokenizer_will_bind = (
         config.persona_tier == PersonaTier.MULTI_TENANT_COMPLIANCE and audit_writer is not None
     )
-    if (
-        tokenizer_will_bind
-        and config.audit_signing.backend is AuditSigningBackendKind.AWS_KMS
-        and signing_backend is None
-    ):
-        # Out-of-family Codex round-16 (B-47 PR B1): stage 4 always supplies
-        # the constructed backend, but this composer is public — a direct
-        # caller passing an explicitly-KMS config while omitting
-        # `signing_backend` would otherwise get a token map silently
-        # emitting `unsigned:` placeholders despite the configuration. A
-        # deployment that asked for real signing never silently degrades.
-        raise SpanProcessorBindError(
-            "audit_signing.backend is 'aws-kms' but no signing_backend was "
-            "supplied to materialize_span_processor_stage — construct one "
-            "via make_audit_signing_backend(config.audit_signing) and pass "
-            "it through (stage 4 does); explicit KMS configuration must "
-            "never silently degrade to placeholder signing"
-        )
-    if (
-        tokenizer_will_bind
-        and signing_backend is not None
-        and config.audit_signing.backend is AuditSigningBackendKind.AWS_KMS
-        and REDACTION_TOKEN_SIGNING_KEY_ID not in config.audit_signing.key_arns
-    ):
-        # Out-of-family Codex P2 on the B-47 PR-B1 landing: a mapping that
-        # omits this consumer's key_id would boot fine and then raise
-        # UnknownSigningKeyIdError on the FIRST redacted span — an invalid
-        # deployment must fail at startup, not mid-run. Validated BEFORE any
-        # BatchSpanProcessor exists (round-6 P2): the BSP constructor starts
-        # a live worker thread that a post-construction raise would leak on
-        # every failed/retried bootstrap.
-        raise SpanProcessorBindError(
-            f"audit_signing.key_arns is missing the redaction-token "
-            f"map's signing key {REDACTION_TOKEN_SIGNING_KEY_ID!r} — "
-            f"the aws-kms mapping must cover every composition-root "
-            f"signing consumer (ADR-D8 §Decision item 2: no default "
-            f"key is ever assumed)"
-        )
+    validate_audit_signing_for_span_stage(
+        config, signing_backend=signing_backend, tokenizer_will_bind=tokenizer_will_bind
+    )
 
     try:
         resolved_exporter: SpanExporter = (
