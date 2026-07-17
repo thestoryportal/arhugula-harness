@@ -64,6 +64,7 @@ import asyncio
 import os
 import stat
 import sys
+import threading
 import time
 import weakref
 from collections.abc import Callable
@@ -135,6 +136,45 @@ def _fsync_ledger_sync(ledger_path: Path) -> None:
         os.fsync(fd)
     finally:
         os.close(fd)
+
+
+async def _run_fsync_bounded(
+    fn: Callable[[Path], None], path: Path, timeout_seconds: float
+) -> None:
+    """Run a blocking fsync half on a DAEMON thread with a bounded await.
+
+    NOT `asyncio.to_thread` (codex round-48 P1): to_thread uses the loop's
+    default executor, whose worker threads `asyncio.run`'s teardown JOINS —
+    a genuinely stalled fsync would still hang process exit AFTER the
+    timeout report was returned, defeating the bound at the process level.
+    A daemon thread is never joined; the stalled syscall lingers harmlessly
+    until process end. Raises `TimeoutError` on expiry (via
+    `asyncio.timeout` — expiry converts the internal CancelledError at the
+    block boundary); relays the worker's exception on failure.
+    """
+    loop = asyncio.get_running_loop()
+    done = asyncio.Event()
+    failure: list[BaseException] = []
+
+    def _worker() -> None:
+        try:
+            fn(path)
+        except BaseException as exc:  # relayed to the awaiting side
+            failure.append(exc)
+        finally:
+            try:
+                loop.call_soon_threadsafe(done.set)
+            except RuntimeError:
+                # Loop already closed — the awaiting side reported its
+                # timeout long ago and the process is exiting; nothing is
+                # listening for this completion signal anymore.
+                pass
+
+    threading.Thread(target=_worker, daemon=True, name="harness-flush-fsync").start()
+    async with asyncio.timeout(timeout_seconds):
+        await done.wait()
+    if failure:
+        raise failure[0]
 
 
 # ---------------------------------------------------------------------------
@@ -224,6 +264,14 @@ async def flush_observability(
     tracer_flushed = False
     ledger_fsynced = False
     timed_out = False
+    # ONE shared budget across all flush surfaces (codex round-48 P2):
+    # per-surface full timeouts let this coroutine consume ~3x the caller's
+    # remaining budget sequentially, violating the advertised top-level
+    # shutdown deadline even for finite stalls. The tracer's force_flush
+    # bounds itself internally with the full value (first surface — the
+    # full value IS the remaining budget at that point); each later surface
+    # gets only what is left on this monotonic deadline.
+    deadline = time.monotonic() + timeout_millis / 1000.0
 
     # Surface 1: tracer BSP force_flush. OTel's `force_flush` is sync and
     # returns False on internal timeout; we treat that as `timed_out=True`.
@@ -278,15 +326,16 @@ async def flush_observability(
                 f"references exist — signed history deleted or lost"
             )
         if sidecar_path is not None and sidecar_path.exists():
-            # Bounded worker (codex round-47 P2): fsync against a stalled
-            # filesystem (network mount, dying disk) blocks INDEFINITELY —
-            # run synchronously on the loop it would hang the whole shutdown
-            # past every advertised timeout. `wait_for` bounds the wait; the
-            # worker thread may linger on the stalled syscall, but shutdown
-            # proceeds and records the failure.
-            await asyncio.wait_for(
-                asyncio.to_thread(_fsync_sidecar_sync, sidecar_path),
-                timeout=timeout_millis / 1000.0,
+            # Bounded daemon worker (codex round-47 P2 + round-48 P1): fsync
+            # against a stalled filesystem (network mount, dying disk)
+            # blocks INDEFINITELY — run synchronously on the loop it would
+            # hang the whole shutdown past every advertised timeout. The
+            # worker lingers on the stalled syscall while shutdown proceeds
+            # and records the failure; remaining-budget per round-48 P2.
+            await _run_fsync_bounded(
+                _fsync_sidecar_sync,
+                sidecar_path,
+                max(0.0, deadline - time.monotonic()),
             )
     except TimeoutError:
         failures.append("audit_sidecar")
@@ -305,11 +354,12 @@ async def flush_observability(
     try:
         ledger = ctx.ledger_writer
         ledger_path = ledger.handle.canonical_path
-        # Bounded worker — same stalled-filesystem hang class as the sidecar
-        # surface above (codex round-47 P2).
-        await asyncio.wait_for(
-            asyncio.to_thread(_fsync_ledger_sync, ledger_path),
-            timeout=timeout_millis / 1000.0,
+        # Bounded daemon worker — same stalled-filesystem hang class as the
+        # sidecar surface above (codex round-47 P2 + round-48 P1/P2).
+        await _run_fsync_bounded(
+            _fsync_ledger_sync,
+            ledger_path,
+            max(0.0, deadline - time.monotonic()),
         )
         ledger_fsynced = True
     except TimeoutError:

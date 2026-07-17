@@ -186,6 +186,75 @@ async def test_flush_bounded_when_fsync_stalls(
     assert report.ledger_fsynced is False
 
 
+def test_asyncio_run_teardown_not_blocked_by_stalled_fsync(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Codex round-48 P1 — `asyncio.to_thread` workers live in the loop's
+    default executor, which `asyncio.run`'s teardown JOINS: a genuinely
+    stalled fsync hung process exit even after the timeout report was
+    returned. The daemon-thread worker is never joined — the WHOLE
+    `asyncio.run` (teardown included) must return within the bound."""
+    import time as time_module
+
+    ledger_path = tmp_path / "state.jsonl"
+    ledger_path.write_text("entry-1\n")
+
+    def _stalled_fsync(fd: int) -> None:
+        time_module.sleep(1.5)
+
+    monkeypatch.setattr(os, "fsync", _stalled_fsync)
+    tracer = _FakeTracerProvider(returns=True)
+    ctx = _ctx_with(tmp_path, tracer=tracer, ledger_path=ledger_path)
+
+    start = time_module.monotonic()
+    report = asyncio.run(flush_observability(ctx, timeout_millis=200))
+    elapsed = time_module.monotonic() - start
+
+    assert elapsed < 1.2
+    assert "ledger" in report.failures
+    assert report.timed_out is True
+
+
+@pytest.mark.asyncio
+async def test_flush_surfaces_share_one_timeout_budget(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Codex round-48 P2 — per-surface full timeouts let flush consume ~2x
+    the caller's budget sequentially (sidecar 600ms + ledger 600ms). With
+    one shared monotonic deadline the ledger surface gets only the
+    remainder, so total wall time stays ~one budget."""
+    import time as time_module
+
+    ledger_path = tmp_path / "state.jsonl"
+    ledger_path.write_text("entry-1\n")
+    sidecar_path = tmp_path / "audit-entries.jsonl"
+    sidecar_path.write_text('{"tenant_tag":"_single","entry":{}}\n')
+
+    def _stalled_fsync(fd: int) -> None:
+        time_module.sleep(1.5)
+
+    monkeypatch.setattr(os, "fsync", _stalled_fsync)
+    tracer = _FakeTracerProvider(returns=True)
+    ctx = _ctx_with(tmp_path, tracer=tracer, ledger_path=ledger_path)
+    ctx.audit_writer = SimpleNamespace(
+        sidecar_path=sidecar_path,
+        sidecar_expected=lambda: True,
+    )
+
+    start = time_module.monotonic()
+    report = await flush_observability(ctx, timeout_millis=600)
+    elapsed = time_module.monotonic() - start
+
+    # Shared budget: sidecar consumes ~600ms, ledger gets ~0 remaining.
+    # Per-surface budgets would take ~1.2s.
+    assert elapsed < 0.9
+    assert "audit_sidecar" in report.failures
+    assert "ledger" in report.failures
+    assert report.timed_out is True
+
+
 @pytest.mark.asyncio
 async def test_flush_observability_runs_tracer_in_thread(
     tmp_path: Path,

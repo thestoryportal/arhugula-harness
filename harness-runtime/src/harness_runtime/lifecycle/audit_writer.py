@@ -444,9 +444,10 @@ class RuntimeAuditLedgerWriter:
                 f"ledger holds audit references — the durable signed-entry "
                 f"history has been deleted or lost; refusing to continue "
                 f"(restore the sidecar from backup; for a PRE-SIDECAR ledger "
-                f"upgraded in place, run adopt_legacy_is_refs() once to "
-                f"baseline the legacy references; or intentionally reset "
-                f"BOTH ledgers together)"
+                f"upgraded in place, run `python -m "
+                f"harness_runtime.admin.migrate_audit_sidecar "
+                f"<state-ledger.jsonl>` once to baseline the legacy "
+                f"references; or intentionally reset BOTH ledgers together)"
             )
 
     def _assert_is_refs_covered_locked(self, *, allowed_gap: tuple[str, str] | None = None) -> None:
@@ -768,6 +769,7 @@ class RuntimeAuditLedgerWriter:
             self._assert_absence_is_first_use()
             return []
         entries: list[AuditLedgerEntry] = []
+        seen_hashes: set[str] = set()
         exempt_hashes: set[str] = set()
         # B-40 shared read lock (side-effect-free: never O_CREAT, never mkdir)
         # — excludes a concurrent writer's partial line once the lock file
@@ -825,25 +827,30 @@ class RuntimeAuditLedgerWriter:
                             f"entry_hash={entry.entry_hash!r} but recomputed "
                             f"{recomputed!r} — tampered or corrupt row"
                         )
-                    if any(entry.entry_hash == seen.entry_hash for seen in entries):
+                    if entry.entry_hash in seen_hashes:
                         # Reader mirror of the fold's conflicting-duplicate
                         # rejection (codex round-47 P1): no write path ever
                         # duplicates an identity, so a second row for the
                         # same hash is external mutation — returning both
                         # would feed verifiers a sequence no legitimate
-                        # writer produced.
+                        # writer produced. Set lookup, not a rescan of
+                        # `entries` (codex round-48 P2: the map's tail-seed
+                        # read runs on the first token after each restart —
+                        # O(N²) there stalls span completion on long-lived
+                        # compliance ledgers).
                         raise ValueError(
                             f"sidecar holds duplicate rows for "
                             f"tenant_tag={tag!r} "
                             f"entry_hash={entry.entry_hash!r} — tampered or "
                             f"corrupt rows preserved as evidence"
                         )
+                    seen_hashes.add(entry.entry_hash)
                     entries.append(entry)
         # Round-40 P1 (reader half): a sidecar truncated to a newline
         # boundary rehydrates only the surviving rows — every IS ref for
         # this tenant must still be covered, or the verifier is silently
         # reading a partial history.
-        rehydrated = {entry.entry_hash for entry in entries}
+        rehydrated = seen_hashes
         for entry_hash in is_ref_hashes:
             if entry_hash not in rehydrated and entry_hash not in exempt_hashes:
                 raise ValueError(
