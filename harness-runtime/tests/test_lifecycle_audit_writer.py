@@ -91,23 +91,29 @@ def _ledger_writer(tmp_path: Path) -> LedgerWriter:
 def _make_audit_entry(entry_hash: str, prior_hash: str = "0" * 64) -> AuditLedgerEntry:
     """Build a pre-signed `AuditLedgerEntry` for write-side tests.
 
-    The audit chain (`prior_entry_hash` / `entry_hash`) is OD-axis discipline;
-    the IS chain wraps each entry independently, so test inputs may use any
-    unique `entry_hash` values.
+    `entry_hash` is a SEED that disambiguates entries (folded into the
+    payload as `audit.seed`); the stored
+    `entry_hash` is the GENUINE `compute_entry_hash(payload)` — the B-47
+    item-(e) sidecar fold recomputes content integrity (codex round-17), so
+    fabricated hashes would fail every fold, exactly as a tampered
+    production row should.
     """
+    from harness_od.audit_ledger_types import compute_entry_hash
+
+    payload = AuditPayload(
+        entry_core=StateLedgerEntryRef(f"entry-ref-{entry_hash[:8]}"),
+        audit_namespace_attrs={"audit.actor": "test-emission-site", "audit.seed": entry_hash},
+        prior_entry_hash=prior_hash,
+    )
     return AuditLedgerEntry(
-        payload=AuditPayload(
-            entry_core=StateLedgerEntryRef(f"entry-ref-{entry_hash[:8]}"),
-            audit_namespace_attrs={"audit.actor": "test-emission-site"},
-            prior_entry_hash=prior_hash,
-        ),
+        payload=payload,
         signature_attrs=AuditSignatureAttributes(
             audit_signature_value=f"sig:{entry_hash[:8]}",
             audit_signature_algorithm=SignatureAlgorithm.ED25519,
             audit_signature_key_id="test-key",
             audit_signature_key_period="2026-Q2",
         ),
-        entry_hash=entry_hash,
+        entry_hash=compute_entry_hash(payload),
     )
 
 
@@ -202,7 +208,7 @@ def test_round_trip_single_entry_passes_chain_verification(tmp_path: Path) -> No
 
     tenant_view = writer.read_for_tenant(None)
     assert len(tenant_view) == 1
-    assert tenant_view[0].action_id.endswith(":" + "a" * 64)
+    assert tenant_view[0].action_id.endswith(":" + entry.entry_hash)
 
 
 def test_round_trip_with_tenant_id_passes_chain_verification(tmp_path: Path) -> None:
@@ -412,8 +418,8 @@ def test_sidecar_reader_is_tenant_scoped_and_empty_when_absent() -> None:
 
         [entry_a] = writer.read_full_entries_for_tenant("tenant-A")
         [entry_b] = writer.read_full_entries_for_tenant("tenant-B")
-        assert entry_a.entry_hash == "c" * 64
-        assert entry_b.entry_hash == "d" * 64
+        assert entry_a.payload.audit_namespace_attrs["audit.seed"] == "c" * 64
+        assert entry_b.payload.audit_namespace_attrs["audit.seed"] == "d" * 64
 
 
 # --- B-47 PR B — full composition-root chain witness -------------------------
@@ -890,4 +896,36 @@ def test_corrupt_keyed_sidecar_row_fails_appends_loud_not_silent(tmp_path: Path)
         time_source=writer.time_source,
     )
     with pytest.raises(pydantic.ValidationError):
+        fresh_writer.append("tenant-A", _make_audit_entry("3" * 64))
+
+
+def test_tampered_payload_with_stale_hash_fails_appends_loud(tmp_path: Path) -> None:
+    """Codex round-17 (PR B1) — a schema-valid sidecar row whose payload was
+    altered with the stale entry_hash left in place must fail the fold's
+    content-integrity recompute, not silently enter the membership index
+    (where a legitimate replay would NOOP and leave the tampered payload as
+    the only full copy)."""
+    import json as json_module
+
+    writer = _writer(tmp_path)
+    good = _make_audit_entry("1" * 64)
+    writer.append("tenant-A", good)
+
+    tampered = good.model_copy(
+        update={"payload": good.payload.model_copy(update={"prior_entry_hash": "f" * 64})}
+    )  # entry_hash left stale on purpose
+    with writer.sidecar_path.open("a", encoding="utf-8") as fh:
+        fh.write(
+            json_module.dumps(
+                {"tenant_tag": "tenant-B", "entry": tampered.model_dump(mode="json")},
+                separators=(",", ":"),
+            )
+            + "\n"
+        )
+
+    fresh_writer = RuntimeAuditLedgerWriter(
+        ledger_writer=writer.ledger_writer,
+        time_source=writer.time_source,
+    )
+    with pytest.raises(ValueError, match="content-integrity"):
         fresh_writer.append("tenant-A", _make_audit_entry("3" * 64))

@@ -86,7 +86,7 @@ from harness_is.state_ledger_write import (
     WriteResult,
     read_ledger,
 )
-from harness_od.audit_ledger_types import AuditLedgerEntry
+from harness_od.audit_ledger_types import AuditLedgerEntry, compute_entry_hash
 
 from harness_runtime.lifecycle.state_ledger import LedgerWriter
 from harness_runtime.types import RuntimeConfig
@@ -349,6 +349,20 @@ class RuntimeAuditLedgerWriter:
             # may be tampering). Validation happens once per folded byte —
             # no O(N²) regression.
             entry = AuditLedgerEntry.model_validate(row["entry"])
+            # Content-integrity check (codex round-17): a schema-valid row
+            # whose payload was altered with the stale entry_hash left in
+            # place must not enter the index — a replay of the legitimate
+            # entry would NOOP against the stale hash, leaving the tampered
+            # payload as the only full copy. Mirrors
+            # verify_hash_chain_integrity's recompute-before-trust posture.
+            recomputed = compute_entry_hash(entry.payload)
+            if recomputed != entry.entry_hash:
+                raise ValueError(
+                    f"sidecar row for tenant_tag={row['tenant_tag']!r} fails "
+                    f"content-integrity: stored entry_hash={entry.entry_hash!r} "
+                    f"but recomputed {recomputed!r} — tampered or corrupt row "
+                    f"preserved as evidence, append refused"
+                )
             index.keys.add((row["tenant_tag"], entry.entry_hash))
         index.offset = size
 
