@@ -420,6 +420,32 @@ class RuntimeAuditLedgerWriter:
                 f"BOTH ledgers together)"
             )
 
+    def _assert_is_refs_covered_locked(self, *, allowed_gap: tuple[str, str] | None = None) -> None:
+        """Every IS `audit:<tag>:<hash>` ref must have a sidecar row (codex
+        round-40 P1) — run after a FULL index fold, so bulk truncation to a
+        newline boundary (heal-invisible, absence-check-invisible) fails loud
+        instead of silently losing signed history. `allowed_gap` names the
+        one identity the caller is about to (re-)land — the legitimate
+        single-entry crash-repair path. Runs only on full rescans, never on
+        the incremental hot path.
+        """
+        for is_entry in read_ledger(self.ledger_writer.handle):
+            action_id = is_entry.action_id
+            if not action_id.startswith(f"{self._ACTION_ID_PREFIX}:"):
+                continue
+            _, tag, entry_hash = action_id.split(":", 2)
+            identity = (tag, entry_hash)
+            if identity == allowed_gap:
+                continue
+            if identity not in self._sidecar_index.digests:
+                raise ValueError(
+                    f"IS ledger references audit entry {entry_hash!r} for "
+                    f"tenant_tag={tag!r} but the sidecar holds no such row — "
+                    f"signed history has been truncated or lost; refusing to "
+                    f"continue (restore the sidecar from backup, or "
+                    f"intentionally reset BOTH ledgers together)"
+                )
+
     def _append_sidecar_line_if_missing(
         self, tenant_id: str | None, audit_entry: AuditLedgerEntry
     ) -> None:
@@ -446,7 +472,17 @@ class RuntimeAuditLedgerWriter:
                 # first use.
                 self._assert_absence_is_first_use()
             self._heal_torn_tail_locked()
+            folded_from_zero = self._sidecar_index.offset == 0
             self._refresh_sidecar_index_locked()
+            if folded_from_zero:
+                # Round-40 P1: truncation to a NEWLINE BOUNDARY (or to zero
+                # with the file kept) leaves only valid-looking rows — the
+                # torn-tail heal sees nothing to fix and round-36's absence
+                # check never fires. After any full fold, every IS audit ref
+                # must be covered by sidecar membership, EXCEPT the identity
+                # being appended right now (that one gap is the legitimate
+                # single-entry crash-repair path, rounds 1/3).
+                self._assert_is_refs_covered_locked(allowed_gap=(tag, audit_entry.entry_hash))
             identity = (tag, audit_entry.entry_hash)
             incoming_digest = _full_entry_digest(audit_entry)
             stored_digest = self._sidecar_index.digests.get(identity)
@@ -676,6 +712,19 @@ class RuntimeAuditLedgerWriter:
                     if row["tenant_tag"] != tag:
                         continue
                     entries.append(AuditLedgerEntry.model_validate(row["entry"]))
+        # Round-40 P1 (reader half): a sidecar truncated to a newline
+        # boundary rehydrates only the surviving rows — every IS ref for
+        # this tenant must still be covered, or the verifier is silently
+        # reading a partial history.
+        rehydrated = {entry.entry_hash for entry in entries}
+        for is_entry in self.read_for_tenant(tenant_id):
+            _, _, entry_hash = is_entry.action_id.split(":", 2)
+            if entry_hash not in rehydrated:
+                raise ValueError(
+                    f"IS ledger references audit entry {entry_hash!r} for "
+                    f"tenant_tag={tag!r} but the sidecar holds no such row — "
+                    f"signed history has been truncated or lost"
+                )
         return entries
 
     def read_for_tenant(self, tenant_id: str | None) -> list[StateLedgerEntry]:

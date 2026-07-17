@@ -664,11 +664,12 @@ def test_token_map_chain_advances_and_reseeds_across_restart(tmp_path: Path) -> 
 
 
 def test_torn_sidecar_tail_is_skipped_on_read_and_healed_on_write(tmp_path: Path) -> None:
-    """Codex round-2 P2 (PR B1) — a crash mid-write leaves an unterminated
-    JSON fragment at the sidecar tail. Reads skip it (side-effect-free; the
-    entry's IS ref survives); the next write-path call truncates the fragment
-    under the lock before appending, so nothing merges into it and the NOOP
-    repair re-lands the lost entry whole."""
+    """Codex round-2 P2 + round-40 (PR B1) — a crash mid-write leaves an
+    unterminated JSON fragment at the sidecar tail. A read while the torn
+    entry's IS ref survives now fails LOUD (round-40: that is a partial
+    history, not a skippable artifact); the next write-path call truncates
+    the fragment under the lock and the NOOP repair re-lands the lost entry
+    whole, after which reads succeed complete."""
     writer = _writer(tmp_path)
     first = _make_audit_entry("1" * 64)
     lost = _make_audit_entry("2" * 64)
@@ -681,9 +682,11 @@ def test_torn_sidecar_tail_is_skipped_on_read_and_healed_on_write(tmp_path: Path
     torn = lines[-1][: len(lines[-1]) // 2].rstrip(b"\n")
     writer._sidecar_path.write_bytes(b"".join(lines[:-1]) + torn)
 
-    # (a) Read skips the fragment; the intact record survives.
-    [only] = writer.read_full_entries_for_tenant("tenant-A")
-    assert only == first
+    # (a) Reading a partial history (torn row whose IS ref survives) fails
+    # loud — a verifier must never silently see fewer entries than the
+    # chain references (round-40).
+    with pytest.raises(ValueError, match="truncated or lost"):
+        writer.read_full_entries_for_tenant("tenant-A")
 
     # (b) The NOOP replay of the lost entry truncates the fragment and
     # re-lands the record whole.
@@ -1228,6 +1231,33 @@ def test_fifo_sidecar_rejected_on_read_without_hanging(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="not a regular file"):
         writer.read_full_entries_for_tenant("tenant-A")
+
+
+def test_boundary_truncation_fails_loud_on_read_and_append(tmp_path: Path) -> None:
+    """Codex round-40 P1 (PR B1) — truncation to a NEWLINE BOUNDARY leaves
+    only valid-looking rows: the torn-tail heal sees nothing and the
+    absence check never fires, so signed history silently vanished while
+    its IS refs survived. Both the reader and a fresh writer's append now
+    cross-check IS refs against sidecar membership and fail loud."""
+    writer = _writer(tmp_path)
+    first = _make_audit_entry("1" * 64)
+    second = _make_audit_entry("2" * 64)
+    writer.append("tenant-A", first)
+    writer.append("tenant-A", second)
+
+    # Truncate to the first record's boundary — a fully well-formed file.
+    raw = writer.sidecar_path.read_bytes()
+    lines = raw.splitlines(keepends=True)
+    writer.sidecar_path.write_bytes(lines[0])
+
+    fresh = RuntimeAuditLedgerWriter(
+        ledger_writer=writer.ledger_writer,
+        time_source=writer.time_source,
+    )
+    with pytest.raises(ValueError, match="truncated or lost"):
+        fresh.read_full_entries_for_tenant("tenant-A")
+    with pytest.raises(ValueError, match="truncated or lost"):
+        fresh.append("tenant-A", _make_audit_entry("3" * 64))
 
 
 def test_map_with_custom_entry_core_still_reseeds_from_its_family(tmp_path: Path) -> None:
