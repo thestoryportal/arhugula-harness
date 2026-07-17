@@ -369,7 +369,7 @@ advisor() also flagged a second-order question genuinely out of B-23's scope: th
 
 ### B-49 · Per-family audit chain verifier *(split from B-47 disposition, 2026-07-17)*
 - **What it is.** B-47 disposition item (h): a tenant's sidecar entries interleave independent OD chain families (CXA v2.10 §0.3 action-id prefixes discriminate — the converter chains on CP-side event hashes, the redaction-token map within itself, cost/HITL likewise), so `verify_hash_chain_integrity` over the raw per-tenant sequence fails by construction. Buildable now against cleared contracts.
-- **Close-out steps.** Build `verify_per_family_chains(entries)` (partition by `payload.entry_core` prefix, verify per family), witness with interleaved multi-family fixtures + mutation probes; wire into `harness-inspect` if natural. **Council: no.**
+- **Close-out steps.** Build `verify_per_family_chains(entries)` with a PER-PRODUCER verification policy — chain-verified families (redaction-token map; converter per its own semantics) vs per-entry-verified families (cost defaults `prior_event_hash` to genesis on every entry, `cost_record_audit_writer.py:50`; HITL uses `_empty_summary_hash()`, `hitl_gate_composer.py:1235`) — witnessed with interleaved multi-family fixtures + mutation probes. **Council: no.**
 
 ### B-50 · Sidecar scale engineering *(split from B-47 disposition, 2026-07-17)*
 - **What it is.** B-47 disposition items (g)+(i): the in-memory membership index refolds full history at restart (O(history) cold start); the redaction-chain tail-read+compose+append is not cross-process atomic. Both impl-discretion within Tier-5's committed properties — no spec fork (grounding corrected at `.harness/b-47-pr-b2-design-disposition-v1.md` §0).
@@ -377,7 +377,7 @@ advisor() also flagged a second-order question genuinely out of B-23's scope: th
 
 ### B-51 · Tenant-scope binding under deployment-scoped keys *(split from B-47 disposition, 2026-07-17)*
 - **What it is.** B-47 disposition item (f): the §21.2.1 canonical message binds entry-hash/key_id/algo/period but NOT tenant identity — under a deployment-scoped signing key a signed entry could be re-presented under another tenant.
-- **Close-out steps.** Class 2 fork doc first (recommendation recorded: require tenant-scoped key_ids at MTC now — config-validation, zero message-format risk — plus a fifth canonical-message segment at the next OD delta); implement on ratification. **Council: conditional** — C7 compliance vs C2 schema-minimalism at the fork leg.
+- **Close-out steps.** Class 2 fork doc first (recommendation REVISED at codex round-3: the fifth canonical-message segment is the PRIMARY fix — `key_arns` has no tenant association and composers use fixed global key_ids, so a key-scope presence check would be a false guarantee; interim MTC posture = operator guidance on distinct per-tenant key_ids); implement on ratification. **Council: conditional** — C7 compliance vs C2 schema-minimalism at the fork leg.
 
 ### B-52 · Audit-signing fail-closed policy at MTC *(split from B-47 disposition, 2026-07-17)*
 - **What it is.** B-47 disposition item (m): signing failures are typed + loudly surfaced (PR B2a) but dispatch stays fail-open — CP §28.10.4 invariant 2 is spec-committed, in tension with §21.2's signed-audit commitment at MULTI_TENANT_COMPLIANCE.

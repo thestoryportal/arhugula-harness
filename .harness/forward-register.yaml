@@ -919,10 +919,14 @@ items:
   status: open
   summary: 'B-47 disposition item (h): a tenant''s sidecar entries interleave independent OD chain
     families (CXA v2.10 section 0.3 action-id prefixes discriminate); running verify_hash_chain_integrity
-    over the raw per-tenant sequence fails by construction. Buildable against cleared contracts: partition
-    by payload.entry_core prefix, verify per family. No spec surface.'
-  close_out: 'Build verify_per_family_chains(entries) in harness-runtime (or harness-od), witness with
-    interleaved multi-family fixtures + mutation probes; wire into harness-inspect if natural.'
+    over the raw per-tenant sequence fails by construction. PRODUCER-AWARE (codex round-3 on the
+    disposition leg): cost projection defaults prior_event_hash to genesis on EVERY entry
+    (cost_record_audit_writer.py:50) and HITL uses _empty_summary_hash() (hitl_gate_composer.py:1235),
+    so those families get per-entry content-hash + signature checks, NOT chain verification;
+    chain-verified families = the redaction-token map + the converter per its own semantics.'
+  close_out: 'Build verify_per_family_chains(entries) with a per-producer verification policy (chained
+    vs per-entry families), witness with interleaved multi-family fixtures + mutation probes; wire into
+    harness-inspect if natural.'
   council: 'no -- mechanical partition + existing verifier'
   heading: '### B-49 · Per-family audit chain verifier *(split from B-47 disposition, 2026-07-17)*'
 - id: B-50
@@ -942,11 +946,13 @@ items:
   status: design_substrate_gated
   summary: 'B-47 disposition item (f): the section 21.2.1 canonical message does not bind tenant
     identity; under a deployment-scoped key a signed entry could be re-presented under another tenant.
-    Recommendation recorded: require tenant-scoped key_ids at MTC now (config validation, zero
-    message-format risk) + fifth canonical-message segment at the next OD delta. Class 2 fork doc owed
-    before any code change.'
-  close_out: 'Author the Class 2 fork doc with the recorded recommendation; on ratification implement
-    the MTC key-scope validation, then the spec-delta segment at the next OD amendment arc.'
+    Recommendation REVISED at codex round-3: the fifth canonical-message segment is the PRIMARY fix
+    (key_arns carries no tenant association and composers use fixed global key_ids, so a key-scope
+    presence check would be a false guarantee); interim MTC posture is operator guidance (distinct
+    per-tenant key_ids), not a validation claim. Class 2 fork doc owed before any code change.'
+  close_out: 'Author the Class 2 fork doc with the revised recommendation; on ratification land the
+    canonical-message segment at the next OD amendment arc (byte-compat-scoped per the B-22/B-31
+    precedents).'
   council: 'conditional -- C7 compliance vs C2 schema-minimalism at the fork leg'
   heading: '### B-51 · Tenant-scope binding under deployment-scoped keys *(split from B-47 disposition,
     2026-07-17)*'
