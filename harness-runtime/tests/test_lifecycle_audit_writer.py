@@ -1010,3 +1010,47 @@ def test_alternating_writers_stay_incremental_never_full_rescan(tmp_path: Path) 
             )
 
     assert len(writer_b.read_full_entries_for_tenant("tenant-alt")) == 6
+
+
+def test_sidecar_fsynced_before_is_reference_lands(tmp_path: Path) -> None:
+    """Codex round-23 (PR B1) — write+close reaches only the page cache; the
+    sidecar row must be fsync'd BEFORE the IS reference is appended, or power
+    loss could keep the ref while the signature row was never durable."""
+    import os as os_module
+    import unittest.mock as mock
+
+    import stat as stat_module
+
+    writer = _writer(tmp_path)
+    events: list[str] = []
+    real_fsync = os_module.fsync
+
+    def _spy_fsync(fd: int) -> None:
+        st = os_module.fstat(fd)
+        # Distinguish the sidecar FILE fsync from the creation-time parent
+        # DIRECTORY fsync — a dropped file-fsync must not be masked by the
+        # dir-fsync satisfying a naive "some fsync happened" check.
+        events.append("fsync_dir" if stat_module.S_ISDIR(st.st_mode) else "fsync_file")
+        real_fsync(fd)
+
+    original_is_append = type(writer.ledger_writer).append
+
+    def _spy_is_append(self: object, payload: object, write_key: object) -> object:
+        events.append("is_append")
+        return original_is_append(self, payload, write_key)  # type: ignore[arg-type]
+
+    with (
+        mock.patch("harness_runtime.lifecycle.audit_writer.os.fsync", _spy_fsync),
+        mock.patch.object(type(writer.ledger_writer), "append", _spy_is_append),
+    ):
+        writer.append("tenant-A", _make_audit_entry("1" * 64))
+        writer.append("tenant-A", _make_audit_entry("2" * 64))
+
+    # Every IS append is preceded by a sidecar FILE fsync in its own append
+    # cycle (the second append has no dir-fsync to hide behind).
+    is_append_positions = [i for i, e in enumerate(events) if e == "is_append"]
+    assert len(is_append_positions) == 2
+    prev = -1
+    for pos in is_append_positions:
+        assert "fsync_file" in events[prev + 1 : pos], events
+        prev = pos

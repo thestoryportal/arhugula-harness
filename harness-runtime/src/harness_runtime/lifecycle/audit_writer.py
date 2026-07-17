@@ -69,6 +69,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import sys
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -331,8 +332,24 @@ class RuntimeAuditLedgerWriter:
                     )
                 return
             encoded = (line + "\n").encode("utf-8")
+            created = not self._sidecar_path.exists()
             with os.fdopen(self._open_sidecar_for_append(), "ab") as fh:
                 fh.write(encoded)
+                fh.flush()
+                # Durability BEFORE the IS ref lands (codex round-23): a bare
+                # write+close only reaches the page cache — power loss after
+                # the IS append could keep the ref while the signature row
+                # was never durable, defeating the sidecar-first guarantee.
+                os.fsync(fh.fileno())
+            if created and sys.platform != "win32":
+                # Directory-entry durability for the newly created file
+                # (mirrors the shutdown-path dir-fsync; POSIX-only per the
+                # documented B-45 Windows posture).
+                dir_fd = os.open(str(self._sidecar_path.parent), os.O_RDONLY)
+                try:
+                    os.fsync(dir_fd)
+                finally:
+                    os.close(dir_fd)
             # Our own write never needs re-parsing: record it in the index
             # and advance past it.
             self._sidecar_index.digests[identity] = incoming_digest
