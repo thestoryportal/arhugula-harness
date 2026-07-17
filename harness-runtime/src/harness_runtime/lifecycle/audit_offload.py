@@ -65,38 +65,42 @@ class _DaemonThreadAuditExecutor:
         self._queue: queue.SimpleQueue[tuple[Future[Any], Callable[[], Any]]] = queue.SimpleQueue()
         self._lock = threading.Lock()
         self._spawned = 0
-        self._idle = 0
+        # Jobs submitted and not yet finished (codex round-6 P1): the
+        # earlier idle-count heuristic never RESERVED the idle capacity a
+        # burst observed, so four jobs after a warm-up all saw idle > 0 and
+        # ran serialized on one worker. Spawning tracks outstanding demand
+        # instead: workers exist while spawned < min(cap, outstanding).
+        self._outstanding = 0
 
     def submit(self, fn: Callable[[], Any]) -> Future[Any]:
         future: Future[Any] = Future()
-        self._queue.put((future, fn))
         with self._lock:
-            # Benign race on `_idle` (worst case: one extra worker up to the
-            # cap) — workers are lazy, long-lived, and daemon.
-            if self._idle == 0 and self._spawned < self._max_workers:
+            self._outstanding += 1
+            if self._spawned < min(self._max_workers, self._outstanding):
                 self._spawned += 1
                 threading.Thread(
                     target=self._worker,
                     daemon=True,
                     name=f"harness-audit-offload-{self._spawned}",
                 ).start()
+        self._queue.put((future, fn))
         return future
 
     def _worker(self) -> None:
         while True:
-            with self._lock:
-                self._idle += 1
             future, fn = self._queue.get()
-            with self._lock:
-                self._idle -= 1
-            if not future.set_running_or_notify_cancel():
-                continue
             try:
-                result = fn()
-            except BaseException as exc:
-                future.set_exception(exc)
-            else:
-                future.set_result(result)
+                if not future.set_running_or_notify_cancel():
+                    continue
+                try:
+                    result = fn()
+                except BaseException as exc:
+                    future.set_exception(exc)
+                else:
+                    future.set_result(result)
+            finally:
+                with self._lock:
+                    self._outstanding -= 1
 
 
 _AUDIT_OFFLOAD_EXECUTOR: Final[_DaemonThreadAuditExecutor] = _DaemonThreadAuditExecutor(

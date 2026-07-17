@@ -496,6 +496,7 @@ class RuntimeToolDispatcher:
         cost_record_sink: SupportsCostRecordAppend | None = None,
         ledger_writer: Any = None,
         procedural_tier_snapshot_resolver: Any = None,
+        signing_backend: Any = None,
         tool_execution_driver: ToolExecutionDriver | None = None,
         provider_secret_resolver: Any = None,
         secret_fetch_audit_emitter: Callable[[SecretFetchEvent], Any] | None = None,
@@ -538,6 +539,10 @@ class RuntimeToolDispatcher:
             cost_record_sink=cost_record_sink,
             ledger_writer=ledger_writer,
             procedural_tier_snapshot_resolver=procedural_tier_snapshot_resolver,
+            # B-47 PR B2a (codex round-6 P2): forwarded so single-host
+            # callers with a configured KMS backend do not silently produce
+            # placeholder-signed tool cost audits.
+            signing_backend=signing_backend,
             tool_execution_drivers=(
                 {server_name: tool_execution_driver} if tool_execution_driver is not None else None
             ),

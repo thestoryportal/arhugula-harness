@@ -239,3 +239,51 @@ async def test_no_audit_write_lands_after_timeout_surfaces() -> None:
     # is the final state.
     await asyncio.sleep(1.0)
     assert wrote == snapshot_at_raise[0]
+
+
+@pytest.mark.asyncio
+async def test_burst_after_warmup_runs_concurrently() -> None:
+    """Codex round-6 P1 — the idle-count spawn heuristic never RESERVED the
+    capacity a burst observed: four jobs after a warm-up all saw idle > 0
+    and serialized on ONE worker, pushing concurrent dispatches past their
+    timeouts. Spawning now tracks outstanding demand: a 4-job burst must
+    reach 4 concurrent workers."""
+    from harness_runtime.lifecycle.audit_offload import AUDIT_OFFLOAD_MAX_WORKERS
+
+    await run_audit_off_loop(lambda: "warm-up")
+
+    barrier = threading.Barrier(AUDIT_OFFLOAD_MAX_WORKERS, timeout=10.0)
+
+    def _job() -> str:
+        barrier.wait()  # passes ONLY if all four run concurrently
+        return "done"
+
+    results = await asyncio.wait_for(
+        asyncio.gather(*(run_audit_off_loop(_job) for _ in range(AUDIT_OFFLOAD_MAX_WORKERS))),
+        timeout=8.0,
+    )
+    assert results == ["done"] * AUDIT_OFFLOAD_MAX_WORKERS
+
+
+def test_for_single_host_forwards_signing_backend() -> None:
+    """Codex round-6 P2 — the single-host convenience constructor dropped
+    the signing backend, leaving single-server KMS deployments on
+    placeholder-signed tool cost audits."""
+    from types import SimpleNamespace
+    from typing import Any, cast
+
+    from harness_runtime.lifecycle.runtime_tool_dispatcher import RuntimeToolDispatcher
+
+    sentinel = object()
+    host = SimpleNamespace(
+        server_name="s1",
+        tool_registry=SimpleNamespace(names=lambda: []),
+    )
+    dispatcher = RuntimeToolDispatcher.for_single_host(
+        mcp_client_host=cast(Any, host),
+        per_server_trust_evaluator=cast(Any, object()),
+        mcp_namespace_emitter=cast(Any, object()),
+        trust_policy=cast(Any, object()),
+        signing_backend=sentinel,
+    )
+    assert dispatcher._signing_backend is sentinel  # noqa: SLF001
