@@ -32,14 +32,14 @@ import asyncio
 import contextlib
 import contextvars
 import functools
+import queue
 import threading
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future
 from typing import Any, Final
 
 __all__ = [
     "AUDIT_OFFLOAD_MAX_WORKERS",
-    "drain_inflight_audit_work",
     "run_audit_off_loop",
 ]
 
@@ -48,47 +48,60 @@ __all__ = [
 #: here or the exhaustion-deadlock this pool exists to prevent returns.
 AUDIT_OFFLOAD_MAX_WORKERS: Final[int] = 4
 
-_AUDIT_OFFLOAD_EXECUTOR: Final[ThreadPoolExecutor] = ThreadPoolExecutor(
-    max_workers=AUDIT_OFFLOAD_MAX_WORKERS,
-    thread_name_prefix="harness-audit-offload",
-)
 
-# In-flight audit jobs (codex round-3 P1 on PR B2a): `SyncDispatcherFacade`'s
-# timeout path cancels its `run_coroutine_threadsafe` future, which is marked
-# cancelled IMMEDIATELY — the facade has no handle on the coroutine's actual
-# completion, so the run_audit_off_loop join alone cannot stop an audit write
-# from landing after `StepDispatchTimeoutError` was raised. The facade calls
-# `drain_inflight_audit_work` (sync, from its worker thread) after cancelling
-# so every worker that was signing/writing at cancel time completes BEFORE
-# the timeout is surfaced. Scoped to ALL in-flight jobs, not per-step — audit
-# jobs are short and over-waiting is harmless; per-step keying is not worth
-# the plumbing.
-_INFLIGHT_LOCK: Final[threading.Lock] = threading.Lock()
-_INFLIGHT: Final[set[Any]] = set()
+class _DaemonThreadAuditExecutor:
+    """Hand-rolled daemon-thread work queue (framework-pull discipline).
 
-
-def drain_inflight_audit_work(timeout_seconds: float) -> bool:
-    """Block (bounded) until every currently in-flight audit job completes.
-
-    Sync — callable from worker threads (the facade's timeout path), NEVER
-    from the event loop. Returns False when the bound expired with jobs
-    still running (the caller surfaces its timeout regardless; the residual
-    risk window is then explicit, not silent).
+    NOT `ThreadPoolExecutor` (codex round-5 P1): its workers are non-daemon
+    and the interpreter JOINS them at exit — a KMS signing call that stalls
+    or merely outlives the shutdown budget would hold the whole process
+    open after the bounded runtime shutdown already returned its timeout
+    report. Daemon workers die with the process; a queued-but-unstarted job
+    still supports `Future.cancel()` via `set_running_or_notify_cancel`.
     """
-    with _INFLIGHT_LOCK:
-        pending = list(_INFLIGHT)
-    if not pending:
-        return True
-    from concurrent.futures import wait as _wait
 
-    done, not_done = _wait(pending, timeout=timeout_seconds)
-    _ = done
-    return not not_done
+    def __init__(self, max_workers: int) -> None:
+        self._max_workers = max_workers
+        self._queue: queue.SimpleQueue[tuple[Future[Any], Callable[[], Any]]] = queue.SimpleQueue()
+        self._lock = threading.Lock()
+        self._spawned = 0
+        self._idle = 0
+
+    def submit(self, fn: Callable[[], Any]) -> Future[Any]:
+        future: Future[Any] = Future()
+        self._queue.put((future, fn))
+        with self._lock:
+            # Benign race on `_idle` (worst case: one extra worker up to the
+            # cap) — workers are lazy, long-lived, and daemon.
+            if self._idle == 0 and self._spawned < self._max_workers:
+                self._spawned += 1
+                threading.Thread(
+                    target=self._worker,
+                    daemon=True,
+                    name=f"harness-audit-offload-{self._spawned}",
+                ).start()
+        return future
+
+    def _worker(self) -> None:
+        while True:
+            with self._lock:
+                self._idle += 1
+            future, fn = self._queue.get()
+            with self._lock:
+                self._idle -= 1
+            if not future.set_running_or_notify_cancel():
+                continue
+            try:
+                result = fn()
+            except BaseException as exc:
+                future.set_exception(exc)
+            else:
+                future.set_result(result)
 
 
-def _discard_inflight(future: Any) -> None:
-    with _INFLIGHT_LOCK:
-        _INFLIGHT.discard(future)
+_AUDIT_OFFLOAD_EXECUTOR: Final[_DaemonThreadAuditExecutor] = _DaemonThreadAuditExecutor(
+    AUDIT_OFFLOAD_MAX_WORKERS
+)
 
 
 async def run_audit_off_loop(fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Any:
@@ -101,9 +114,6 @@ async def run_audit_off_loop(fn: Callable[..., Any], /, *args: Any, **kwargs: An
     # so the join below must hold the CONCURRENT future, which faithfully
     # reports the worker's real completion.
     concurrent_future = _AUDIT_OFFLOAD_EXECUTOR.submit(call)
-    with _INFLIGHT_LOCK:
-        _INFLIGHT.add(concurrent_future)
-    concurrent_future.add_done_callback(_discard_inflight)
     try:
         return await asyncio.wrap_future(concurrent_future)
     except asyncio.CancelledError:

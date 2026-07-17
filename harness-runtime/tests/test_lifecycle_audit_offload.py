@@ -130,18 +130,20 @@ async def test_facade_timeout_waits_for_inflight_audit_work() -> None:
 
 
 @pytest.mark.asyncio
-async def test_incomplete_drain_raises_typed_hard_failure(
+async def test_unacked_cancellation_flags_timeout_unresolved(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Codex round-4 P1 — a False drain result was silently discarded: the
-    orphaned worker could still append after the plain timeout surfaced.
-    An incomplete drain now raises AuditDrainIncompleteError (an UNRESOLVED
-    hard failure discriminable from a plain step timeout)."""
+    """Codex rounds 4-5 — when the dispatch task cannot acknowledge
+    cancellation within the grace (stalled audit work), the timeout must be
+    flagged UNRESOLVED via `audit_drain_incomplete` while KEEPING the exact
+    `StepDispatchTimeoutError` type name: harness-cp's driver classifies by
+    `type(exc).__name__`, so a subclass would silently fall out of the
+    RT-FAIL-STEP-DISPATCH-TIMEOUT taxonomy."""
     from typing import Any
 
     from harness_runtime.lifecycle import sync_dispatcher_facade as facade_module
     from harness_runtime.lifecycle.sync_dispatcher_facade import (
-        AuditDrainIncompleteError,
+        StepDispatchTimeoutError,
         materialize_sync_dispatcher_facade,
     )
 
@@ -161,16 +163,14 @@ async def test_incomplete_drain_raises_typed_hard_failure(
 
     facade = materialize_sync_dispatcher_facade(_Inner(), result_timeout_seconds=0.2)
 
-    outcome: list[str] = []
+    outcome: list[tuple[str, bool]] = []
 
     def _drive() -> None:
         try:
             facade.dispatch(None, None, step_context=None)  # type: ignore[arg-type]
-            outcome.append("returned")
-        except AuditDrainIncompleteError:
-            outcome.append("drain-incomplete")
-        except Exception as exc:
-            outcome.append(type(exc).__name__)
+            outcome.append(("returned", False))
+        except StepDispatchTimeoutError as exc:
+            outcome.append((type(exc).__name__, getattr(exc, "audit_drain_incomplete", False)))
 
     driver = threading.Thread(target=_drive, daemon=True)
     driver.start()
@@ -178,4 +178,64 @@ async def test_incomplete_drain_raises_typed_hard_failure(
     await asyncio.to_thread(driver.join, 10.0)
     release.set()
 
-    assert outcome == ["drain-incomplete"]
+    # Exact type name preserved for the driver taxonomy; UNRESOLVED flagged.
+    assert outcome == [("StepDispatchTimeoutError", True)]
+
+
+@pytest.mark.asyncio
+async def test_audit_offload_workers_are_daemon_threads() -> None:
+    """Codex round-5 P1 — ThreadPoolExecutor workers are non-daemon and the
+    interpreter JOINS them at exit: a stalled KMS sign would hold the whole
+    process open after bounded shutdown already returned. The hand-rolled
+    executor's workers must be daemon."""
+    await run_audit_off_loop(lambda: "warm")
+    workers = [t_ for t_ in threading.enumerate() if t_.name.startswith("harness-audit-offload")]
+    assert workers, "no audit-offload worker thread found"
+    assert all(t_.daemon for t_ in workers)
+
+
+@pytest.mark.asyncio
+async def test_no_audit_write_lands_after_timeout_surfaces() -> None:
+    """Codex round-5 P1 — a dispatch busy in SYNC work on the loop has not
+    SUBMITTED its audit job when the facade cancels; an empty-snapshot
+    drain would let the write land after the timeout raise. The
+    per-dispatch ack closes it: whatever the task's audit path did is
+    finished before the raise; nothing lands afterwards."""
+    import time as time_module
+    from typing import Any
+
+    from harness_runtime.lifecycle.sync_dispatcher_facade import (
+        StepDispatchTimeoutError,
+        materialize_sync_dispatcher_facade,
+    )
+
+    wrote: list[str] = []
+
+    class _Inner:
+        async def dispatch(self, binding: Any, step: Any, *, step_context: Any) -> Any:
+            # Sync work ON the loop delays cancellation delivery past the
+            # facade's bound — the audit job is not yet submitted when the
+            # facade cancels.
+            time_module.sleep(0.5)
+            await run_audit_off_loop(lambda: wrote.append("late-audit-write"))
+            return {}
+
+    facade = materialize_sync_dispatcher_facade(_Inner(), result_timeout_seconds=0.1)
+
+    snapshot_at_raise: list[list[str]] = []
+
+    def _drive() -> None:
+        try:
+            facade.dispatch(None, None, step_context=None)  # type: ignore[arg-type]
+        except StepDispatchTimeoutError:
+            snapshot_at_raise.append(list(wrote))
+
+    driver = threading.Thread(target=_drive, daemon=True)
+    driver.start()
+    await asyncio.to_thread(driver.join, 10.0)
+    assert snapshot_at_raise, "facade did not raise the step timeout"
+
+    # Nothing may land AFTER the raise: whatever was written at raise time
+    # is the final state.
+    await asyncio.sleep(1.0)
+    assert wrote == snapshot_at_raise[0]

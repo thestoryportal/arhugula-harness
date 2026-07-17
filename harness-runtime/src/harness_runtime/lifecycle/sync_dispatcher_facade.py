@@ -91,6 +91,7 @@ See ``harness-runtime/tests/test_lifecycle_sync_dispatcher_facade.py``:
 from __future__ import annotations
 
 import asyncio
+import threading
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
@@ -98,19 +99,16 @@ from typing import Any, Protocol, runtime_checkable
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
 from harness_cp.workflow_driver_types import StepExecutionContext, WorkflowStep
 
-from harness_runtime.lifecycle.audit_offload import drain_inflight_audit_work
-
 __all__ = [
     "AsyncStepDispatcher",
-    "AuditDrainIncompleteError",
     "StepDispatchTimeoutError",
     "SyncDispatcherFacade",
     "materialize_sync_dispatcher_facade",
 ]
 
-#: Bounded post-cancel grace for in-flight audit work (codex round-3 P1) —
-#: one KMS sign + local file writes; generous relative to job length, small
-#: relative to the step bound.
+#: Bounded post-cancel grace for the dispatch task's completion ack (codex
+#: rounds 3-5) — covers CancelledError delivery + run_audit_off_loop's
+#: join-on-cancel of one KMS sign + local file writes.
 _AUDIT_DRAIN_GRACE_SECONDS = 10.0
 
 
@@ -128,18 +126,6 @@ class StepDispatchTimeoutError(Exception):
     graph). The driver matches by ``type(exc).__name__ ==
     "StepDispatchTimeoutError"`` per the existing HITLPauseRequestedSignal
     name-match pattern at ``workflow_driver.py:830``.
-    """
-
-
-class AuditDrainIncompleteError(StepDispatchTimeoutError):
-    """Step timed out AND its in-flight audit work outlived the drain grace.
-
-    Codex round-4 P1 (PR B2a): a `False` drain result silently discarded
-    meant the orphaned worker could still append after retry or shutdown
-    began. Subclasses `StepDispatchTimeoutError` so the driver's existing
-    timeout taxonomy handles it, while callers that care can discriminate:
-    this failure is UNRESOLVED — an audit write for the abandoned step may
-    still land, so a blind same-step retry risks a duplicate/late entry.
     """
 
 
@@ -221,7 +207,19 @@ class SyncDispatcherFacade:
         existing typed try/except per C-CP-25 §25.3.3.4 maps to fail-mode
         taxonomy as before.
         """
-        coro = self.inner.dispatch(binding, step, step_context=step_context)
+        # Per-dispatch completion acknowledgement (codex round-5 P1): set in
+        # the task's `finally`, i.e. AFTER CancelledError has propagated
+        # through the inner dispatch — including run_audit_off_loop's
+        # join-on-cancel — so waiting on it below proves THIS dispatch's
+        # audit work is complete-or-cancelled-before-start. A bare
+        # `future.cancel()` snapshot could observe an audit job that had
+        # not been SUBMITTED yet (task busy in sync work on the loop) and
+        # miss its later write entirely.
+        completion_ack = threading.Event()
+        coro = _ack_on_completion(
+            self.inner.dispatch(binding, step, step_context=step_context),
+            completion_ack,
+        )
         future = asyncio.run_coroutine_threadsafe(coro, self.loop)
         try:
             return future.result(timeout=self.result_timeout_seconds)
@@ -236,31 +234,33 @@ class SyncDispatcherFacade:
             # `call_soon_threadsafe`, so `.cancel()` is safe to call here
             # from this (worker) thread.
             future.cancel()
-            # Codex round-3 P1 (B-47 PR B2a): cancelling this wrapper future
-            # marks it cancelled IMMEDIATELY — the inner coroutine's audit
-            # offload worker (KMS sign + F2/sidecar/ledger writes) may still
-            # be running, and without an explicit completion acknowledgement
-            # its writes could land AFTER this timeout is reported, racing
-            # retries and shutdown. Drain (bounded) every in-flight audit
-            # job from THIS worker thread before surfacing; audit jobs are
-            # short, so the grace is small relative to the step bound. A
-            # False return (bound expired) still surfaces the timeout — the
-            # residual window is then explicit, never silent.
-            drained = drain_inflight_audit_work(timeout_seconds=_AUDIT_DRAIN_GRACE_SECONDS)
-            if not drained:
-                # Codex round-4 P1: an incomplete drain is an UNRESOLVED
-                # hard failure, not a plain timeout — the orphaned worker
-                # can still append after this raise.
-                raise AuditDrainIncompleteError(
-                    f"step dispatch exceeded {self.result_timeout_seconds}s "
-                    f"bound AND in-flight audit work did not complete within "
-                    f"the {_AUDIT_DRAIN_GRACE_SECONDS}s drain grace — audit "
-                    f"writes for the abandoned step may still land; do not "
-                    f"blindly retry this step"
-                ) from exc
-            raise StepDispatchTimeoutError(
+            # Codex rounds 3-5 (B-47 PR B2a): wait for the dispatch task to
+            # ACKNOWLEDGE cancellation before surfacing — the ack fires only
+            # after run_audit_off_loop's join-on-cancel, so no audit write
+            # for this step lands after the raise. When even the grace
+            # expires (a stalled KMS sign / sync work on the loop), the
+            # timeout is flagged UNRESOLVED via `audit_drain_incomplete` —
+            # NOT a subclass: harness-cp's driver classifies by
+            # `type(exc).__name__ == "StepDispatchTimeoutError"` (it cannot
+            # import runtime types), so a subclass would silently fall out
+            # of the RT-FAIL-STEP-DISPATCH-TIMEOUT taxonomy (codex round-5
+            # P2).
+            acked = completion_ack.wait(timeout=_AUDIT_DRAIN_GRACE_SECONDS)
+            timeout_error = StepDispatchTimeoutError(
                 f"step dispatch exceeded {self.result_timeout_seconds}s bound"
-            ) from exc
+                + (
+                    ""
+                    if acked
+                    else (
+                        f" AND the dispatch task did not acknowledge "
+                        f"cancellation within the {_AUDIT_DRAIN_GRACE_SECONDS}s "
+                        f"grace — audit writes for the abandoned step may "
+                        f"still land; do not blindly retry this step"
+                    )
+                )
+            )
+            timeout_error.audit_drain_incomplete = not acked  # type: ignore[attr-defined]
+            raise timeout_error from exc
 
     def cohort_key(
         self,
@@ -279,6 +279,15 @@ class SyncDispatcherFacade:
         if isinstance(self.inner, CohortKeyCapable):
             return self.inner.cohort_key(binding, step)
         return None
+
+
+async def _ack_on_completion(coro: Any, ack: threading.Event) -> Any:
+    """Await `coro`; set `ack` in the finally — the per-dispatch completion
+    acknowledgement the facade's timeout path waits on (codex round-5 P1)."""
+    try:
+        return await coro
+    finally:
+        ack.set()
 
 
 def materialize_sync_dispatcher_facade(
