@@ -496,7 +496,18 @@ class RuntimeAuditLedgerWriter:
         Rehydrates every persisted `AuditLedgerEntry` (payload +
         signature_attrs + entry_hash) for `tenant_id` — the surface a
         verifier needs to check real signatures after restart, which the
-        ref-only `read_for_tenant` cannot provide. Returns `[]` when the
+        ref-only `read_for_tenant` cannot provide.
+
+        **The returned sequence is NOT one verifiable hash chain** (codex
+        round-30, B-47 close-out item (h)): a tenant's entries come from
+        INDEPENDENT producer families — the CXA converter's entries chain on
+        CP-side event hashes, the redaction-token map chains within itself,
+        cost/HITL families likewise — discriminated by the CXA §0.3
+        action-id prefix on `payload.entry_core`. Running
+        `verify_hash_chain_integrity` over the raw per-tenant sequence fails
+        by construction once two families interleave; the PR-B2 verifier
+        must partition by family first. Per-entry signature verification and
+        content-hash recomputation remain valid over this sequence as-is. Returns `[]` when the
         sidecar does not exist yet (no audit entry has ever been appended
         through this writer). A malformed line fails loud — a corrupt
         audit-entry sidecar must never be silently skipped.

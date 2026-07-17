@@ -827,7 +827,14 @@ items:
     A bounded LRU alone cannot work (membership must prove ABSENCE, which needs complete knowledge or
     a full scan), so the fix is a disk-backed index -- intersecting C-OD-21 section 21.2 and its own
     hash-chained-SQLite storage commitment for the Tier-5 audit ledger; resolve jointly with the
-    (e)/(f) persistence-substrate design at PR B2 (JSONL sidecar vs SQLite is the real fork).'
+    (e)/(f) persistence-substrate design at PR B2 (JSONL sidecar vs SQLite is the real fork); (h)
+    partitions chain verification by producer family (out-of-family Codex round-30 on PR B1) -- a
+    tenant's sidecar entries interleave INDEPENDENT OD chain families (the CXA section 0.3 action-id
+    prefixes are the discriminator; the converter chains on CP-side event hashes, the redaction-token
+    map within itself), so the PR-B2 verifier must verify per family, never over the raw per-tenant
+    sequence; global re-sequencing at sign time would touch spec-committed converter prior-hash
+    semantics and is a design-phase question, not an impl patch. Reader docstring now states the
+    non-single-chain contract explicitly.'
   council: 'conditional -- mechanical composition-root wiring once a real sign_audit_entry call site exists;
     revisit if the call-site design itself surfaces a cross-axis tension'
   heading: '### B-47 · `AwsKmsSigningBackend` has no production composition-root call site *(surfaced
