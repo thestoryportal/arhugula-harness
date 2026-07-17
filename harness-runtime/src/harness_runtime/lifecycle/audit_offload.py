@@ -40,6 +40,8 @@ from collections.abc import Callable
 from concurrent.futures import Future
 from typing import Any, Final
 
+from harness_runtime.lifecycle.audit_signing_errors import AuditSigningFailedError
+
 __all__ = [
     "AUDIT_OFFLOAD_MAX_WORKERS",
     "run_audit_off_loop",
@@ -62,6 +64,14 @@ AUDIT_CANCEL_JOIN_GRACE_SECONDS: Final[float] = 10.0
 #: stop releasing capacity — later audit jobs queue and their callers hit
 #: their own bounded timeouts instead of growing the pool.
 AUDIT_DETACHED_WORKER_CAP: Final[int] = 8
+
+#: Hard bound on QUEUED-but-unserved audit jobs (codex round-16 P1): with
+#: every worker hung and the detach cap reached, each further dispatch
+#: enqueued its (future, fn, context) tuple forever — sustained traffic
+#: during a hung-backend outage could exhaust memory. At the cap, submit
+#: fails the future immediately with the TYPED signing failure (loudly
+#: surfaced by every best-effort site), keeping memory bounded.
+AUDIT_OFFLOAD_QUEUE_CAP: Final[int] = 64
 
 
 class _DaemonThreadAuditExecutor:
@@ -95,6 +105,10 @@ class _DaemonThreadAuditExecutor:
         # Detached workers whose stalled call is still running (codex
         # round-15 P1) — bounded by AUDIT_DETACHED_WORKER_CAP.
         self._detached_live = 0
+        # Stalled futures whose release was refused at the detach cap
+        # (codex round-16 P1) — reclaimed one-for-one when a retired
+        # worker returns its detached-live token.
+        self._cap_refused: set[Future[Any]] = set()
         # Jobs submitted and not yet finished (codex round-6 P1): the
         # earlier idle-count heuristic never RESERVED the idle capacity a
         # burst observed, so four jobs after a warm-up all saw idle > 0 and
@@ -105,6 +119,14 @@ class _DaemonThreadAuditExecutor:
     def submit(self, fn: Callable[[], Any]) -> Future[Any]:
         future: Future[Any] = Future()
         with self._lock:
+            if self._outstanding >= AUDIT_OFFLOAD_QUEUE_CAP:
+                saturated = AuditSigningFailedError(
+                    f"audit offload saturated: {self._outstanding} jobs "
+                    f"outstanding against a stalled backend — failing fast "
+                    f"instead of queueing unboundedly"
+                )
+                future.set_exception(saturated)
+                return future
             self._outstanding += 1
             self._spawn_for_demand_locked()
         self._queue.put((future, fn))
@@ -145,10 +167,12 @@ class _DaemonThreadAuditExecutor:
                 # against a hung backend. At the cap, keep the slot
                 # occupied — later jobs queue and their callers time out
                 # boundedly instead.
+                self._cap_refused.add(stalled_future)
                 logging.getLogger("harness.runtime.audit_signing").error(
                     "audit-offload detached-worker cap (%d) reached — not "
                     "releasing further capacity while stalled calls are "
-                    "outstanding; subsequent audit jobs will queue",
+                    "outstanding; subsequent audit jobs will queue (refusal "
+                    "recorded; reclaimed when capacity reopens)",
                     AUDIT_DETACHED_WORKER_CAP,
                 )
                 return
@@ -159,6 +183,21 @@ class _DaemonThreadAuditExecutor:
             # otherwise happens only in submit() — jobs ALREADY queued when
             # every worker detached would hang until some later submission.
             self._spawn_for_demand_locked()
+
+    def _reclaim_refused_locked(self) -> None:
+        """Release one cap-refused stalled future now that a detached-live
+        token returned (codex round-16 P1) — caller holds the lock. Without
+        this, a still-hung replacement kept its slot forever once refused,
+        even after capacity reopened."""
+        while self._cap_refused and self._detached_live < AUDIT_DETACHED_WORKER_CAP:
+            candidate = self._cap_refused.pop()
+            if candidate not in self._serving:
+                continue  # finished while waiting — nothing to release
+            self._detached_live += 1
+            self._spawned = max(0, self._spawned - 1)
+            self._retire_after.add(candidate)
+            self._spawn_for_demand_locked()
+            return
 
     def _worker(self) -> None:
         while True:
@@ -189,6 +228,7 @@ class _DaemonThreadAuditExecutor:
                 self._retire_after.discard(future)
                 if retire:
                     self._detached_live -= 1
+                    self._reclaim_refused_locked()
         return retire
 
 

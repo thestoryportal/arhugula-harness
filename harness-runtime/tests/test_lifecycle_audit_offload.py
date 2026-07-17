@@ -551,3 +551,87 @@ def test_detached_worker_cap_stops_capacity_release(
             break
         time_module.sleep(0.02)
     assert _detached_live_now() == 0  # retired worker returned its token
+
+
+def test_cap_refused_stall_reclaimed_when_capacity_reopens() -> None:
+    """Codex round-16 P1 — a cap-refused stalled future kept its slot
+    forever even after an older detached worker finished and returned its
+    token. The retire path now reclaims one refused stall per returned
+    token."""
+    import time as time_module
+
+    from harness_runtime.lifecycle import audit_offload as offload_module
+    from harness_runtime.lifecycle.audit_offload import _DaemonThreadAuditExecutor
+
+    executor = _DaemonThreadAuditExecutor(2)
+    ev0, ev1 = threading.Event(), threading.Event()
+    started = threading.Barrier(3, timeout=10.0)
+
+    def _stall(ev: threading.Event) -> None:
+        started.wait()
+        ev.wait(timeout=30.0)
+
+    f0 = executor.submit(lambda: _stall(ev0))
+    f1 = executor.submit(lambda: _stall(ev1))
+    started.wait()
+
+    original_cap = offload_module.AUDIT_DETACHED_WORKER_CAP
+    try:
+        offload_module.AUDIT_DETACHED_WORKER_CAP = 1  # type: ignore[misc]
+        executor.release_stalled_slot(f0)  # honored
+        executor.release_stalled_slot(f1)  # refused, recorded
+
+        with executor._lock:
+            assert executor._detached_live == 1
+            assert f1 in executor._cap_refused
+
+        # The honored stall finishes: its worker retires and returns the
+        # token — the refused stall must be reclaimed (released + marked).
+        ev0.set()
+        deadline = time_module.monotonic() + 5.0
+        reclaimed = False
+        while time_module.monotonic() < deadline:
+            with executor._lock:
+                reclaimed = f1 in executor._retire_after and not executor._cap_refused
+            if reclaimed:
+                break
+            time_module.sleep(0.02)
+        assert reclaimed, "refused stall was not reclaimed when capacity reopened"
+    finally:
+        offload_module.AUDIT_DETACHED_WORKER_CAP = original_cap  # type: ignore[misc]
+        ev1.set()
+        ev0.set()
+
+
+def test_submit_fails_fast_when_queue_saturated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Codex round-16 P1 — with every worker hung, each further dispatch
+    enqueued (future, fn, context) forever: sustained traffic during a
+    hung-backend outage could exhaust memory. At the queue cap, submit
+    fails the future immediately with the TYPED signing failure the
+    best-effort sites surface loudly."""
+    from harness_runtime.lifecycle import audit_offload as offload_module
+    from harness_runtime.lifecycle.audit_offload import (
+        AuditSigningFailedError,
+        _DaemonThreadAuditExecutor,
+    )
+
+    monkeypatch.setattr(offload_module, "AUDIT_OFFLOAD_QUEUE_CAP", 2)
+
+    executor = _DaemonThreadAuditExecutor(1)
+    release = threading.Event()
+    started = threading.Event()
+
+    def _stall() -> None:
+        started.set()
+        release.wait(timeout=30.0)
+
+    executor.submit(_stall)
+    assert started.wait(timeout=10.0)
+    executor.submit(lambda: None)  # queued (outstanding=2 == cap)
+
+    saturated = executor.submit(lambda: None)
+    with pytest.raises(AuditSigningFailedError, match="saturated"):
+        saturated.result(timeout=1.0)
+    release.set()
