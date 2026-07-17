@@ -834,7 +834,13 @@ items:
     map within itself), so the PR-B2 verifier must verify per family, never over the raw per-tenant
     sequence; global re-sequencing at sign time would touch spec-committed converter prior-hash
     semantics and is a design-phase question, not an impl patch. Reader docstring now states the
-    non-single-chain contract explicitly.'
+    non-single-chain contract explicitly; (i) makes redaction-chain tail-read + compose + append
+    cross-process atomic (out-of-family Codex round-32 on PR B1) -- two processes appending for one
+    tenant can both read the same durable family tail and sign different entries with the identical
+    predecessor (the sidecar lock serializes persistence only, not chain-position selection). The
+    in-process half is serialized; the clean cross-process fix is an atomic writer operation, which
+    the (e)/(g)/(h) SQLite persistence redesign gives transactionally -- resolve there. Already
+    documented in-code as a residual since round 13; formally registered now.'
   council: 'conditional -- mechanical composition-root wiring once a real sign_audit_entry call site exists;
     revisit if the call-site design itself surfaces a cross-axis tension'
   heading: '### B-47 · `AwsKmsSigningBackend` has no production composition-root call site *(surfaced

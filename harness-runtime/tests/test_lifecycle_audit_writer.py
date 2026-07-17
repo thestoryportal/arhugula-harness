@@ -1194,3 +1194,69 @@ def test_permissive_preexisting_sidecar_refused(tmp_path: Path) -> None:
     # Operator remedy works: tighten the mode and the append proceeds.
     writer.sidecar_path.chmod(0o600)
     assert writer.append("tenant-A", _make_audit_entry("1" * 64)) is WriteResult.APPENDED
+
+
+def test_heal_never_truncates_through_a_symlink(tmp_path: Path) -> None:
+    """Codex round-32 P1 (PR B1) — the path-based heal followed a pre-created
+    symlink and os.truncate'd an ATTACKER-CHOSEN writable target (any file
+    without a trailing newline) before append-time validation ran. Heal now
+    goes through the O_NOFOLLOW-validated descriptor: the append fails loud
+    and the lure file is byte-untouched."""
+    import os as os_module
+
+    writer = _writer(tmp_path)
+    lure = tmp_path / "victim-file"
+    lure.write_bytes(b"precious bytes with no trailing newline")
+    os_module.symlink(lure, writer.sidecar_path)
+
+    with pytest.raises(OSError):
+        writer.append("tenant-A", _make_audit_entry("1" * 64))
+
+    assert lure.read_bytes() == b"precious bytes with no trailing newline"
+
+
+def test_map_reseeds_from_its_own_family_tail_not_foreign(tmp_path: Path) -> None:
+    """Codex round-32 P1 (PR B1) — after a foreign family (cost/HITL/...)
+    writes the tenant's LATEST sidecar row, a restarted map must reseed from
+    the redaction-token family's own tail, not the foreign hash — or the next
+    redaction entry fails its own per-family chain check (item (h))."""
+    from harness_od.redaction_tokenizer import RedactionTokenRecord
+    from harness_runtime.lifecycle.redaction_token_audit_map import (
+        AuditLedgerRedactionTokenMap,
+    )
+
+    writer = _writer(tmp_path)
+
+    def _record(token: str) -> RedactionTokenRecord:
+        return RedactionTokenRecord(
+            token=token,
+            raw_value=f"raw for {token}",
+            semantic_category="PII",
+            attribute_key="gen_ai.input.messages",
+            trace_id="trace-1",
+            span_id=f"span-{token}",
+        )
+
+    map_run_1 = AuditLedgerRedactionTokenMap(
+        audit_writer=writer,
+        tenant_id="tenant-mix",
+        signing_key_id="chain-key",
+    )
+    map_run_1.append(_record("[REDACTED:PII:r1]"))
+
+    # A FOREIGN family entry lands last (entry_core "entry-ref-...", not
+    # "redaction-token:...").
+    writer.append("tenant-mix", _make_audit_entry("f" * 64))
+
+    # Restart: a fresh map must chain onto R1, not the foreign tail.
+    map_run_2 = AuditLedgerRedactionTokenMap(
+        audit_writer=writer,
+        tenant_id="tenant-mix",
+        signing_key_id="chain-key",
+    )
+    map_run_2.append(_record("[REDACTED:PII:r2]"))
+
+    entries = writer.read_full_entries_for_tenant("tenant-mix")
+    family = [e for e in entries if str(e.payload.entry_core).startswith("redaction-token:")]
+    assert len(family) == 2
+    assert family[1].payload.prior_entry_hash == family[0].entry_hash

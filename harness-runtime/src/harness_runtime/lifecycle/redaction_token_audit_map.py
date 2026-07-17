@@ -67,8 +67,19 @@ class AuditLedgerRedactionTokenMap(RedactionTokenMap):
         if reader is None:
             return
         entries = reader(self._tenant_id)
-        if entries:
-            self._prior_entry_hash = entries[-1].entry_hash
+        # Family-filter before selecting the tail (codex round-32 P1): the
+        # per-tenant sidecar interleaves INDEPENDENT chain families (B-47
+        # item (h)); seeding from another family's entry (cost/HITL/...)
+        # would make the next redaction entry fail its own per-family chain
+        # check. The redaction-token composer synthesizes entry_core refs
+        # with the `redaction-token:` prefix — the family discriminator.
+        family = [
+            entry
+            for entry in entries
+            if str(entry.payload.entry_core).startswith("redaction-token:")
+        ]
+        if family:
+            self._prior_entry_hash = family[-1].entry_hash
 
     def append(self, record: RedactionTokenRecord) -> None:
         with self._chain_lock:

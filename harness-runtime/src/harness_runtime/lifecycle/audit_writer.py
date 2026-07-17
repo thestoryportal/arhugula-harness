@@ -309,7 +309,10 @@ class RuntimeAuditLedgerWriter:
         Windows carries the documented B-45 platform posture (no O_NOFOLLOW;
         ACL semantics differ).
         """
-        flags = os.O_CREAT | os.O_WRONLY | os.O_APPEND
+        return self._open_sidecar_validated(os.O_CREAT | os.O_WRONLY | os.O_APPEND)
+
+    def _open_sidecar_validated(self, flags: int) -> int:
+        """The ONE validated open every sidecar fd goes through (rounds 31/32)."""
         if sys.platform != "win32":
             flags |= os.O_NOFOLLOW
         fd = os.open(self._sidecar_path, flags, 0o600)
@@ -352,20 +355,30 @@ class RuntimeAuditLedgerWriter:
         ends with one); truncate back to the last completed record. The
         truncated entry's IS chain ref survives, so the NOOP repair path
         re-lands it whole.
+
+        ALL operations go through one `O_NOFOLLOW`-validated descriptor
+        (codex round-32 P1): the earlier path-based `exists`/`stat`/`open`/
+        `os.truncate` sequence followed a pre-created symlink and truncated
+        an ATTACKER-CHOSEN writable target before the append-time validation
+        ever ran.
         """
-        if not self._sidecar_path.exists():
+        try:
+            fd = self._open_sidecar_validated(os.O_RDWR)
+        except FileNotFoundError:
             return
-        size = self._sidecar_path.stat().st_size
-        if size == 0:
-            return
-        with self._sidecar_path.open("rb") as fh:
-            fh.seek(-1, os.SEEK_END)
-            if fh.read(1) == b"\n":
+        try:
+            size = os.fstat(fd).st_size
+            if size == 0:
                 return
-            fh.seek(0)
-            data = fh.read()
-        keep = data.rfind(b"\n") + 1  # 0 when no completed record exists
-        os.truncate(self._sidecar_path, keep)
+            os.lseek(fd, -1, os.SEEK_END)
+            if os.read(fd, 1) == b"\n":
+                return
+            os.lseek(fd, 0, os.SEEK_SET)
+            data = os.read(fd, size)
+            keep = data.rfind(b"\n") + 1  # 0 when no completed record exists
+            os.ftruncate(fd, keep)
+        finally:
+            os.close(fd)
 
     def _append_sidecar_line_if_missing(
         self, tenant_id: str | None, audit_entry: AuditLedgerEntry
