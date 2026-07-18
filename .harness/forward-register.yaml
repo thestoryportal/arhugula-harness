@@ -902,7 +902,7 @@ items:
 - id: B-48
   title: Sync sub-agent dispatch executes on the event loop (U-RT-60 wrap-asymmetry residual)
   status: design_substrate_gated
-  summary: 'RATIFIED 2026-07-19 (option B with all filing-settled riders) -- apply arc open. Out-of-family Codex round-2 P1 on B-47 PR B2a: RuntimeHITLGateComposer._dispatch_inner
+  summary: 'RATIFIED 2026-07-18 (option B with all filing-settled riders) -- apply arc open. Out-of-family Codex round-2 P1 on B-47 PR B2a: RuntimeHITLGateComposer._dispatch_inner
     invokes the sync C-RT-17 sub-agent dispatcher DIRECTLY on the event loop (the U-RT-60
     wrap-asymmetry fork Q3-ratified direct-call reading), so the entire sub-agent dispatch -- child
     workflow execution (seconds-long), its F2/ledger writes, and now the B2a-threaded KMS signing --
@@ -922,8 +922,8 @@ items:
     ThreadPoolExecutor has no unbounded mode). Apply arc per the filing: construction-time dispatch-mode for all three stage-5
     composers, cancellation semantics first, pause/resume + resume-context per-child isolation, OTel
     context carry, drain-timestamp fix (IS back-flow) + xfail removal, deadlock-anchor XPASS promotion,
-    Runtime spec delta (C-RT-03 cap field) + Runtime plan delta. Awaiting operator selection (may batch
-    with the B-51/B-52/B-54 ratification).'
+    Runtime spec delta (C-RT-03 cap field) + Runtime plan delta. Selection RATIFIED 2026-07-18
+    (option B); the apply arc is the live next step.'
   council: 'yes at apply leg -- C1 orchestration vs C9 reliability dyad CONFIRMS the filing-settled
     position (fail-fast + typed error + RuntimeConfig ownership + default sub_agent_dispatch_max_workers
     = 256 in shared-budget frame units (N upstream frames + one inner frame per SYNC sub-agent branch; async inners uncharged), the filing-settled recommendation pending the operator gate) or surfaces a reasoned deviation back to the operator; it does NOT
@@ -981,7 +981,7 @@ items:
 - id: B-51
   title: Tenant-scope binding under deployment-scoped signing keys
   status: design_substrate_gated
-  summary: 'RATIFIED 2026-07-19 (all gate items as recommended) -- apply arc open; row flips to open once the OD v1.34 + CP v1.101 + Runtime v1.101 + plan deltas land. B-47 disposition item (f): the section 21.2.1 canonical message does not bind tenant
+  summary: 'RATIFIED 2026-07-18 (all gate items as recommended) -- apply arc open; row flips to open once the OD v1.34 + CP v1.101 + Runtime v1.101 + plan deltas land. B-47 disposition item (f): the section 21.2.1 canonical message does not bind tenant
     identity; under a deployment-scoped key a signed entry could be re-presented under another tenant.
     Recommendation REVISED at codex round-3: the fifth canonical-message segment is the PRIMARY fix
     (key_arns carries no tenant association and composers use fixed global key_ids, so a key-scope
@@ -989,7 +989,7 @@ items:
     round-10): composers select fixed global key_ids, so distinct per-tenant mapping entries would
     never be used -- cross-tenant replay under a deployment-scoped key remains unmitigated until the
     message segment lands or tenant-aware key selection is built. Class 1 fork doc FILED
-    2026-07-17 at .harness/class_1_fork_b51_b52_b54_od_signing_amendment_arc.md (leg 1) -- awaiting operator ratification.'
+    2026-07-17 at .harness/class_1_fork_b51_b52_b54_od_signing_amendment_arc.md (leg 1) -- RATIFIED 2026-07-18; the apply arc is the live next step.'
   close_out: 'Fork doc FILED (see summary). On operator ratification of the filing''s gate: land the
     canonical-message segment at the next OD amendment arc (byte-compat-scoped per the B-22/B-31
     precedents). The segment needs tenant identity AVAILABLE AT SIGNING (codex round-16): today
@@ -1007,13 +1007,13 @@ items:
 - id: B-52
   title: Audit-signing fail-closed policy at MULTI_TENANT_COMPLIANCE
   status: design_substrate_gated
-  summary: 'RATIFIED 2026-07-19 (two-spec shape; flag-false invalid at MTC; redaction path + prewarm posture as recommended) -- apply arc open. B-47 disposition item (m): signing failures are typed + loudly surfaced but dispatch stays
+  summary: 'RATIFIED 2026-07-18 (two-spec shape; flag-false invalid at MTC; redaction path + prewarm posture as recommended) -- apply arc open. B-47 disposition item (m): signing failures are typed + loudly surfaced but dispatch stays
     fail-open (CP section 28.10.4 invariant 2 is spec-committed). Recommendation recorded: mirror OD
     v1.8 section C-OD-28.2''s operator-configurable default-fail-closed pattern via an
     audit_signing_fail_closed flag, default ON at MTC. TWO-SPEC fork (codex rounds 4/8): the OD
     addendum AND a CP amendment (section 28.10.4 invariant 2 is CP-owned) -- or the weaker single-spec
     alternative keeping the validator hook fail-open. Class 1 fork doc FILED 2026-07-17 at
-    .harness/class_1_fork_b51_b52_b54_od_signing_amendment_arc.md (leg 2) -- awaiting operator ratification.'
+    .harness/class_1_fork_b51_b52_b54_od_signing_amendment_arc.md (leg 2) -- RATIFIED 2026-07-18; the apply arc is the live next step.'
   close_out: 'Fork doc FILED (see summary). On ratification: add the flag + the ZEROTH-site bootstrap
     invariant (fail-closed requires a configured backend) + consult the flag at ALL TEN
     surfacing sites -- the six fn-internal loud-surface handlers AND the four offload-boundary
@@ -1037,7 +1037,7 @@ items:
 - id: B-53
   title: Migration-CLI promotion into the spec-committed scripts inventory
   status: design_substrate_gated
-  summary: 'RATIFIED 2026-07-19 (harness migrate-audit-sidecar subcommand rides the Runtime v1.101 rider) -- apply arc open. B-47 disposition item (j): python -m harness_runtime.admin.migrate_audit_sidecar works
+  summary: 'RATIFIED 2026-07-18 (harness migrate-audit-sidecar subcommand rides the Runtime v1.101 rider) -- apply arc open. B-47 disposition item (j): python -m harness_runtime.admin.migrate_audit_sidecar works
     today; promotion = a `harness migrate-audit-sidecar` SUBCOMMAND under the existing flat harness
     console-script namespace (round-22/23 of the filing: no new [project.scripts] entry -- dispatch
     rides the committed harness_runtime.cli:main entry), recorded as a runtime spec section 13.4
@@ -1054,13 +1054,13 @@ items:
 - id: B-54
   title: Backend-aware audit signature verification API
   status: design_substrate_gated
-  summary: 'RATIFIED 2026-07-19 (section 21.2.2 API with all contract requirements, non-blocking default; section 20.3.1 reconciliation into the CP rider) -- apply arc open. Split from B-49 at codex round-11 of the disposition leg: verify_hash_chain_integrity
+  summary: 'RATIFIED 2026-07-18 (section 21.2.2 API with all contract requirements, non-blocking default; section 20.3.1 reconciliation into the CP rider) -- apply arc open. Split from B-49 at codex round-11 of the disposition leg: verify_hash_chain_integrity
     checks only unkeyed content hashes + links, which a ledger-rewriting attacker can recompute; the
     production SigningBackend.verify path (real KMS verification of persisted signature_attrs,
     key/period handling, legacy-placeholder semantics) has NO consumer and section 21.2.1 explicitly
     leaves verification out of scope -- so adding the verification API is spec surface. Without it the
     MTC tamper-evidence story stops at hash-chain level. Class 1 fork doc FILED 2026-07-17 at
-    .harness/class_1_fork_b51_b52_b54_od_signing_amendment_arc.md (leg 3) -- awaiting operator ratification.'
+    .harness/class_1_fork_b51_b52_b54_od_signing_amendment_arc.md (leg 3) -- RATIFIED 2026-07-18; the apply arc is the live next step.'
   close_out: 'Fork doc FILED (see summary; one OD amendment arc carries all three legs). On
     ratification specify per the filing''s finalized requirements (message-format cutover for pre-v1.34
     real signatures, tenant-scope verifier input, authenticated tenant-bound legacy cutover): specify
