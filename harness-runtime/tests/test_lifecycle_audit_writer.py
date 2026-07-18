@@ -33,7 +33,7 @@ from harness_is.state_ledger_entry_schema import (
     ActorClass,
     Timestamp,
 )
-from harness_is.state_ledger_write import WriteResult, read_ledger
+from harness_is.state_ledger_write import EntryPayload, WriteKey, WriteResult, read_ledger
 from harness_od.audit_ledger_types import (
     AuditLedgerEntry,
     AuditPayload,
@@ -2577,3 +2577,57 @@ def test_refold_written_snapshot_supports_subsequent_adoption(
     # row. A wrong fold-fed digest discards the snapshot instead: all 3
     # rows refold and this pins the difference.
     assert len(calls) == 1, "the fold-written snapshot must be adoptable (delta-only fold)"
+
+
+def test_first_sidecar_txn_with_concurrent_state_append_no_deadlock(tmp_path: Path) -> None:
+    """B-46 codex round-6 P1 — deterministic reproduction of the
+    cross-thread lock-order deadlock: the tenant transaction's FIRST
+    sidecar use holds the B-46 parent-dir lock (absent-file mode) while
+    its nested state-ledger append needs `_WRITE_LOCK`; a plain state
+    append on another thread that takes `_WRITE_LOCK` BEFORE the
+    cross-process lock blocks on that same dir — a dir→_WRITE_LOCK vs
+    _WRITE_LOCK→dir cycle. The single dir-first order breaks it; under
+    the order-revert regression this witness deadlocks (timeout kills
+    it)."""
+    import threading as threading_module
+    import time as time_module
+
+    writer = _writer(tmp_path)
+    txn_in_section = threading_module.Event()
+    plain_done = threading_module.Event()
+    txn_done = threading_module.Event()
+
+    def _txn() -> None:
+        # FIRST sidecar use → absent-file mode → parent-dir lock held
+        # across the whole transaction, including the nested IS append.
+        with writer.tenant_transaction("tenant-d") as txn:  # pyright: ignore[reportPrivateUsage]
+            txn_in_section.set()
+            # Give the plain appender time to take _WRITE_LOCK (under the
+            # regression) and block on our dir before we need it.
+            time_module.sleep(0.5)
+            txn.append(_make_audit_entry("1" * 64))
+        txn_done.set()
+
+    def _plain() -> None:
+        txn_in_section.wait(30)
+        # A plain state-ledger append against the same parent directory.
+        writer.ledger_writer.append(
+            EntryPayload(
+                action_id="plain:concurrent",
+                idempotency_key="plain-concurrent-1",
+                actor=Actor(actor_class=ActorClass.AGENT, actor_id="test-runtime"),
+                timestamp=datetime(2026, 5, 19, 13, 0, 0, tzinfo=UTC),
+            ),
+            WriteKey(thread_id="t-plain", step_id="s-1", idempotency_key="plain-concurrent-1"),
+        )
+        plain_done.set()
+
+    t1 = threading_module.Thread(target=_txn)
+    t2 = threading_module.Thread(target=_plain)
+    t1.start()
+    t2.start()
+    t1.join(30)
+    t2.join(30)
+    assert txn_done.is_set() and plain_done.is_set(), (
+        "dir/_WRITE_LOCK lock-order deadlock between the first sidecar txn and a plain append"
+    )

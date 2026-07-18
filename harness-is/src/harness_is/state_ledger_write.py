@@ -254,7 +254,12 @@ def append_ledger_entry(
         raise WriteKeyMismatchError(
             "write_key.idempotency_key must equal entry_payload.idempotency_key"
         )
-    with _WRITE_LOCK, cross_process_write_lock(ledger_handle.canonical_path):
+    # Lock order: CROSS-PROCESS (dir/file) FIRST, then _WRITE_LOCK —
+    # the ONE global order (B-46 codex round-6 P1): the audit
+    # tenant_transaction holds the absent-sidecar DIR lock across its
+    # nested state append (dir -> _WRITE_LOCK); a plain append taking
+    # _WRITE_LOCK first and then blocking on that dir deadlocked both.
+    with cross_process_write_lock(ledger_handle.canonical_path), _WRITE_LOCK:
         ledger = _read_ledger_unlocked(ledger_handle)
         if any(e.idempotency_key == entry_payload.idempotency_key for e in ledger):
             return WriteResult.IDEMPOTENT_NOOP

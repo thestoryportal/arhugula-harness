@@ -512,7 +512,9 @@ def append_memory_operation(
 ) -> MemoryOperationWriteResult:
     """Append one memory operation with strict idempotency semantics."""
 
-    with _WRITE_LOCK, cross_process_write_lock(ledger_handle.canonical_path):
+    # Lock order: cross-process first, then _WRITE_LOCK (the B-46
+    # round-6 single global order — see state_ledger_write).
+    with cross_process_write_lock(ledger_handle.canonical_path), _WRITE_LOCK:
         ledger = _read_memory_operation_ledger_unlocked(ledger_handle)
         for entry in ledger:
             if entry.idempotency_key != payload.idempotency_key:

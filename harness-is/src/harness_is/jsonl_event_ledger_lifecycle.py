@@ -26,7 +26,10 @@ from pathlib import Path
 from harness_core import DeploymentSurface, WorkloadClass
 from pydantic import BaseModel, ConfigDict
 
-from harness_is.cross_process_ledger_lock import cross_process_read_lock
+from harness_is.cross_process_ledger_lock import (
+    cross_process_read_lock,
+    cross_process_write_lock,
+)
 from harness_is.path_class_registry import PathClass
 from harness_is.path_resolver import PathResolver
 
@@ -72,15 +75,20 @@ def initialize_jsonl_event_ledger(
     directory = resolver.resolve_path(PathClass.STATE_LEDGER, workflow_class, deployment_surface)
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / STATE_LEDGER_JSONL_FILENAME
-    if not path.exists():
-        path.touch()
-        return JsonlLedgerHandle(canonical_path=path, exists=True, entry_count=0)
-    # B-40: same-host cross-process lock — this reads the same canonical file
-    # `append_ledger_entry` writes under `cross_process_write_lock`; without
-    # this, a concurrent resume/bootstrap can observe a torn/partial line and
-    # undercount `entry_count`, silently skipping the tamper-check gate at
-    # `harness_runtime.lifecycle.state_ledger.materialize_state_ledger`.
-    with cross_process_read_lock(path):
+    # B-40 + B-46: the existence probe, first-touch, and count all run
+    # under the cross-process WRITE lock — an unlocked missing-path
+    # `touch()` + `entry_count=0` return could complete while a first
+    # writer held the B-46 directory lock mid-append, silently skipping
+    # the tamper-check gate at
+    # `harness_runtime.lifecycle.state_ledger.materialize_state_ledger`
+    # (codex round-1 P1 on the B-46 landing). This initializer is a
+    # writer-side surface (it creates the file), so the write lock is the
+    # correct kind; the touch on the absent-file branch is exactly the
+    # caller-creates-under-the-dir-hold pattern the lock prescribes.
+    with cross_process_write_lock(path):
+        if not path.exists():
+            path.touch()
+            return JsonlLedgerHandle(canonical_path=path, exists=True, entry_count=0)
         entry_count = sum(1 for line in path.read_text().splitlines() if line.strip())
     return JsonlLedgerHandle(canonical_path=path, exists=True, entry_count=entry_count)
 
@@ -96,10 +104,12 @@ def validate_jsonl_event_ledger_format(
     NOT performed — only JSON-syntactic parseability (acceptance #6).
     """
     try:
-        if handle.canonical_path.stat().st_size == 0:
-            return LedgerFormatValidationResult.EMPTY
-        # B-40: same-host cross-process lock — see initialize_jsonl_event_ledger.
+        # B-40 + B-46: the size probe runs INSIDE the lock — an unlocked
+        # stat could return EMPTY while a first writer was mid-append
+        # under the directory lock (codex round-1 P1 on the B-46 landing).
         with cross_process_read_lock(handle.canonical_path):
+            if handle.canonical_path.stat().st_size == 0:
+                return LedgerFormatValidationResult.EMPTY
             text = handle.canonical_path.read_text()
     except OSError:
         return LedgerFormatValidationResult.IO_ERROR

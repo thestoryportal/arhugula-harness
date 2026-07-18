@@ -61,11 +61,11 @@ snapshot:
   total: 55
   open: 0
   design_substrate_gated: 6
-  registered_finding: 6
+  registered_finding: 5
   operator_gated: 1
   held: 1
-  closed: 41
-  identity_digest: 737dbc1d82c13305
+  closed: 42
+  identity_digest: 6e170f2ce3f41c4a
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -743,8 +743,10 @@ items:
     lock library) is its own scoped arc, not a hasty `sys.platform` branch bolted onto a PR already touching
     hash-chain integrity. **Close-out steps:** (1) pick a Windows backend (`msvcrt`-based exclusive-only
     lock with a documented downgrade of the shared-read guarantee, or a vetted portable library — a real
-    design choice, council-eligible if the tradeoff is non-obvious); (2) wire it into `cross_process_ledger_lock._flock`
-    behind the existing `_IS_WINDOWS` branch; (3) apply the same fix to `reconciler_pause_resume_substrate`'s
+    design choice, council-eligible if the tradeoff is non-obvious); (2) wire it in behind the `_IS_WINDOWS`
+    no-op branches of the canonical-file/directory lock context managers and `_DirLock` (the
+    pre-B-46 `_flock` symbol was deleted at PR 1052), also covering the transitional
+    legacy-sidecar protocol retirement once no pre-B-46 writers remain; (3) apply the same fix to `reconciler_pause_resume_substrate`'s
     `_workflow_lock` so both same-host lock primitives in this codebase reach genuine Windows parity together,
     not one at a time. No Windows CI exists today, so this is currently untested-by-CI on that platform
     regardless — low urgency until Windows becomes an active target, not blocking.
@@ -755,7 +757,8 @@ items:
     at B-40''s own PR, out-of-family Codex + advisor(), 2026-07-15)*'
 - id: B-46
   title: Cross-process ledger lock has a first-write TOCTOU on lazy sidecar provisioning
-  status: registered_finding
+  status: closed
+  pr: '#1052 (canonical-file lock redesign)'
   summary: '`harness_is.cross_process_ledger_lock`''s lock sidecar (B-40) is provisioned lazily by whichever
     writer touches a ledger first. A reader racing that very first writer can pass `cross_process_read_lock`''s
     "sidecar doesn''t exist yet" existence check before the writer creates it, then read the ledger unguarded
@@ -764,25 +767,23 @@ items:
     initialization probe (a fresh ledger can take the missing-file branch and return `entry_count=0` without
     waiting, even while another process already holds the writer lock but hasn''t yet created/populated
     the file).'
-  close_out: Registered, not built -- advisor()-confirmed non-regression (every read was unguarded, always,
-    before B-40 existed; this is a residual, not a new hole) and narrow in practice (once any writer has
-    ever created the sidecar for a given ledger, all subsequent reads/writes correctly serialize -- the
-    window is exactly the first concurrent write+read pair against a not-yet-touched ledger, which degrades
-    to a loud parse error in an already-degenerate scenario, not silent corruption). This finding and
-    B-40's round-3 P1 fix (readers must never create the sidecar or `mkdir`, to preserve `harness-inspect`'s
-    read-only-CLI contract) are in direct tension under a lazily-created sidecar -- no fix satisfies both
-    without changing the lock target. **Close-out steps:** lock the CANONICAL ledger file directly (a
-    separate fd opened purely for `flock`, independent of any fd used for actual I/O -- POSIX `flock`
-    is per open-file-description, so this is safe) instead of a lazily-created sidecar; when the canonical
-    file doesn't exist, there is genuinely nothing to read yet (no race is possible on a file that isn't
-    there); when it does exist, lock it read-only (`O_RDONLY`, no `O_CREAT` needed since it already exists)
-    or read-write (`O_CREAT|O_RDWR`, needed once, for the writer that creates it). This removes the provisioning
-    race entirely but touches the write path adjacent to hash-chain integrity and the `harness-inspect`
-    read-only contract -- its own scoped arc, not bolted onto B-40's PR. **Council:** no -- mechanical
-    redesign once scoped, same implementation-discretion category as B-45; not an open spec question.
+  close_out: 'CLOSED 2026-07-18 (PR #1052, refreshed at merge-gate round-1 to shipped HEAD) -- the
+    ratified shape BUILT and hardened through 9 codex rounds. Canonical-file flock (separate
+    lock-only fd) + per-directory EXCLUSIVE lock with a per-thread REENTRANT face covering the
+    absent-file state; non-blocking file-probe handoff (never block on a file lock while holding
+    the dir); the lock never creates the canonical file (audit round-36 guard preserved); readers
+    dir-first, never create/mkdir; inode-stability verify-retry; cross_process_replace_lock for
+    inode-replacing sections (shadow_git_rollback switched onto it); ONE global lock order
+    (cross-process before _WRITE_LOCK, 3 call sites reordered); transitional mixed-version
+    coexistence (writers PROVISION + lock the legacy .lock sidecar with O_NOFOLLOW + dev/ino
+    alias checks and loud non-regular refusal; readers lock it when present). RESIDUALS per the
+    module docstring -- absent parent dir at read time; a NEW reader racing a FRESH old-version
+    writer''s first sidecar creation (torn read, loud parse error). 20+ witnesses incl.
+    two-process fork-based dir-flock coverage; all mutation classes probe-killed.'
   council: no -- narrow implementation-discretion follow-on, same category as B-45; not an open spec question
   heading: '### B-46 · Cross-process ledger lock has a first-write TOCTOU on lazy sidecar provisioning
-    *(surfaced at B-40''s own PR, out-of-family Codex round 4 + advisor(), 2026-07-15)*'
+    *(surfaced at B-40''s own PR, out-of-family Codex round 4 + advisor(), 2026-07-15; CLOSED 2026-07-18
+    — PR #1052)*'
 - id: B-47
   title: AwsKmsSigningBackend has no production composition-root call site
   status: closed

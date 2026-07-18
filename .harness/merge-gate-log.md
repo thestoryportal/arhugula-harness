@@ -165,3 +165,25 @@ correction on `harness_breaker_schema.py` (verified zero executable-line change 
 byte-identical); everything else is design-substrate prose, registers, pointers, and the clearance marker.
 Codex: 4 rounds (misplaced B-33 row annotation; prose/CLAUDE.md/schema-comment stale-copy sweep completions;
 pointer-index heads), round-4 clean. X-AL-3 guard passed via the clearance marker (17 CI checks).
+
+## PR #1052 — 2026-07-18 — `b46-canonical-file-lock`
+
+| Lens | R1 | R2 |
+|---|---|---|
+| concurrency | APPROVE (latent-hazard note below) | — (stands) |
+| spec-conformance | BLOCK: register claims frozen at first commit; B-45 dangling `_flock` prescription | APPROVE |
+| test-witness | BLOCK: dir-flock cross-process face + replace wait-out unwitnessed | APPROVE |
+
+Outcome: MERGE. Codex: 11 rounds (9 finding rounds fixed + probe-killed: dir-lock reentrancy, ABBA breaks
+×2, inode-stability verify + replace lock, FIFO/nonblocking opens, legacy coexistence with writer-side
+provisioning, fail-closed non-regular sidecars, alias/symlink refusal, single dir-first global order vs
+_WRITE_LOCK, leak-safe error paths; round 10 + 11 clean). Gate blocks discharged with the register refresh
++ two witnesses (fork-based second-OS-process dir-flock pin; active-holder replace wait-out — both with
+the transitional legacy layer inhibited, since round-7 provisioning redundantly covers those surfaces
+today). ~24 mutation classes probe-killed. Follow-on notes: (1) lens-1 latent hazard — the reentrant
+`_DirLock.release()` retains the cross-process dir flock while an outer frame holds it, so the round-2
+release-dir-then-block escape is a no-op inside the B-50 nested composition; currently safe by call-graph
+(no file-lock holder re-enters the dir) — re-check at any future composition that nests dir reacquisition
+after a file hold; (2) `_DirLock.release()` decrements before unlock (theoretical wedge if LOCK_UN raised);
+(3) reader-path legacy-SH acquisition and ENOTSUP writer branch remain unwitnessed (correctness-neutral
+degradations, documented residual posture).
