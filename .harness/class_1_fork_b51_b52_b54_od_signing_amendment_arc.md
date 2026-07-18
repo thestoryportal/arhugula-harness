@@ -121,9 +121,13 @@ path.
 on, a KMS signing failure AFTER a successful provider response reaches
 `RetryBreakerFallbackDispatcher._run_per_candidate_attempts`, whose `_classify_provider_exception`
 currently maps the signing failure types to `TRANSIENT_RETRY` — re-calling the provider for an
-already-succeeded response (a duplicate external side effect) and polluting breaker/fallback state. The
-delta must classify audit-signing failures as TERMINAL and non-retryable once the external side effect has
-occurred. Delta shape: OD v1.34 addendum (policy +
+already-succeeded response (a duplicate external side effect) and polluting breaker/fallback state. And classification alone is
+insufficient (round-11 P1): a TERMINAL outcome still returns an abandoned candidate, after which the outer
+dispatch advances to the NEXT provider and records breaker failure — duplicating the external side effect
+anyway and polluting breaker state. The delta must require audit-signing failures raised after a successful
+provider response to BYPASS the classifier, breaker, and fallback machinery entirely (surface directly,
+preserving the already-obtained result for the audit-failure report), or define another result-preserving
+mechanism. Delta shape: OD v1.34 addendum (policy +
 flag + site enumeration) **plus** CP v1.100 → v1.101 amending §28.10.4 (cite: v1.24, last substantive definition) invariant 2 with the audit-signing
 carve-out. The weaker single-spec alternative (fail-open preserved at the one CP-owned hook, fail-closed at
 the other nine sites) is coherent but leaves the compliance tier's weakest link at the validator hook —
@@ -225,5 +229,11 @@ Per §4.3 the design-substrate amendments halt here. The operator ratifies, in o
    carries the §13.5.1 signature amendment alongside the §28.10.4 invariant-2 carve-out.
 
 On ratification: spec-writer apply pass (with the two dyadic council convenings at the apply leg), clearance
-markers per §4.5, then the register rows flip `design_substrate_gated` → open/buildable and the impl arc
-proceeds under the standard pipeline.
+markers per §4.5, **and the Phase-6 plan deltas in the same arc (filing codex round-11 P2): the OD plan pins
+U-OD-30 to the tenant-less `sign_audit_entry(payload, key_id, algo)` / `verify_hash_chain_integrity`
+signatures (`Implementation_Plan_Operational_Discipline_v2_6.md` §U-OD-30, preserved through the v2.28 head)
+and the plan lineage pins `cp_audit_to_od_audit` without tenant scope (v2.17) — implementing against the
+amended specs without clearing those plan deltas would leave the Phase-6 execution authority stale**, then
+the register rows flip `design_substrate_gated` → open/buildable and the impl arc proceeds under the
+standard pipeline. (The post-merge §12.2 terminating refresh repoints `roadmap_status.md`'s next-action at
+ratification — that refresh PR is separate by the §12.2.1 content rule.)
