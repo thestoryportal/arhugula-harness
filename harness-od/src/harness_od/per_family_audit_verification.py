@@ -31,9 +31,9 @@ violation; returns a frozen per-family report on success.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-
-from pydantic import BaseModel, ConfigDict
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from types import MappingProxyType
 
 from harness_od.audit_ledger_types import (
     AuditLedgerEntry,
@@ -57,20 +57,23 @@ REDACTION_TOKEN_FAMILY = "redaction-token"
 """Report key for the one chain-verified family."""
 
 
-class FamilyVerificationReport(BaseModel):
-    """Frozen result of a successful `verify_per_family_chains` run.
+@dataclass(frozen=True, slots=True)
+class FamilyVerificationReport:
+    """Deeply immutable result of a successful `verify_per_family_chains` run.
 
     `chained` maps each CHAIN-VERIFIED family to its entry count;
     `per_entry` maps each content-hash-only family (keyed by `entry_core`
     prefix, or `"(unprefixed)"`) to its entry count. Counts exist so a
     caller can assert coverage — a verifier that silently classified every
     row into an empty family would otherwise look identical to success.
+    The mappings are `MappingProxyType` views (codex round-1 on the B-49
+    landing): a frozen carrier over MUTABLE dicts would still allow
+    `report.chained[...] = ...` to alter verification evidence after the
+    fact.
     """
 
-    model_config = ConfigDict(frozen=True)
-
-    chained: dict[str, int]
-    per_entry: dict[str, int]
+    chained: Mapping[str, int]
+    per_entry: Mapping[str, int]
 
 
 def _is_redaction_row(entry: AuditLedgerEntry) -> bool:
@@ -132,4 +135,6 @@ def verify_per_family_chains(entries: Sequence[AuditLedgerEntry]) -> FamilyVerif
                 )
         chained[REDACTION_TOKEN_FAMILY] = len(redaction_rows)
 
-    return FamilyVerificationReport(chained=chained, per_entry=per_entry)
+    return FamilyVerificationReport(
+        chained=MappingProxyType(chained), per_entry=MappingProxyType(per_entry)
+    )

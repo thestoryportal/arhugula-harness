@@ -135,3 +135,16 @@ def test_empty_sequence_returns_empty_report() -> None:
 def test_unprefixed_core_counts_into_the_unprefixed_family() -> None:
     report = verify_per_family_chains([_entry(core="bare-ref", attrs={"audit.actor": "x"})])
     assert report.per_entry == {"(unprefixed)": 1}
+
+
+def test_report_is_deeply_immutable() -> None:
+    """Codex round-1 (B-49) — a frozen carrier over mutable dicts still let
+    `report.chained[...] = ...` alter verification evidence post-hoc."""
+    entries, _r1, _r2 = _interleaved()
+    report = verify_per_family_chains(entries)
+    with pytest.raises(TypeError):
+        report.chained["forged"] = 99  # type: ignore[index]
+    with pytest.raises(AttributeError):
+        report.per_entry.clear()  # type: ignore[attr-defined] — mappingproxy has no clear
+    with pytest.raises((AttributeError, TypeError)):
+        report.chained = {}  # type: ignore[misc]
