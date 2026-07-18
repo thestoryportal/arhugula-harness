@@ -151,7 +151,12 @@ dispatch advances to the NEXT provider and records breaker failure — duplicati
 anyway and polluting breaker state. The delta must require audit-signing failures raised after a successful
 provider response to BYPASS the classifier, breaker, and fallback machinery entirely (surface directly,
 preserving the already-obtained result for the audit-failure report), or define another result-preserving
-mechanism. Delta shape: OD v1.34 addendum (policy +
+mechanism. **And not only there (round-18 P1): EVERY enumerated site that signs after an external effect
+completes needs the same result-preserving/effect-fenced treatment — tools execute before cost
+attribution, webhooks POST before attribution, sub-agent workflows run before audit composition — a bare
+re-raise at any of them makes a SUCCEEDED effect look failed, inviting a retry/resume to execute the
+effect again. The delta specifies the post-effect discipline per site class, not just for
+`RetryBreakerFallbackDispatcher`.** Delta shape: OD v1.34 addendum (policy +
 flag + site enumeration) **plus** CP v1.100 → v1.101 amending §28.10.4 (cite: v1.24, last substantive definition) invariant 2 with the audit-signing
 carve-out. The weaker single-spec alternative (fail-open preserved at the one CP-owned hook, fail-closed at
 the other nine sites) is coherent but leaves the compliance tier's weakest link at the validator hook —
@@ -198,12 +203,17 @@ requirements sharpened at filing codex round-1:
   (signature does not match) → raise a NEW typed `AuditSignatureInvalid` (NOT `HashChainBreach`, which
   means content/linkage tampering — conflating them would hide WHICH trust property failed); (b) backend
   availability errors → propagate as-is (infrastructure failure, retryable by the caller, never a verdict);
-  (c) malformed signature metadata (bad algo tag, wrong-width value, syntactically invalid key_id) →
-  `AuditSignatureInvalid` with the malformation named (fail-loud, mirrors the sidecar's
-  corrupt-row-as-evidence posture) — but a syntactically valid key_id UNKNOWN to the backend's supplied
-  mapping (round-14 P2: `UnknownSigningKeyIdError` after rotation or an incomplete operator key mapping)
-  is branch (b) UNAVAILABLE/unverifiable, never a tampering verdict — the composition root failed to
-  supply the key, the row proved nothing.
+  (c) malformed signature metadata → `AuditSignatureInvalid` with the malformation named (fail-loud,
+  mirrors the sidecar's corrupt-row-as-evidence posture) — SCOPED to what the entry types can represent
+  (round-18 P2): on the `Sequence[AuditLedgerEntry]` shape, Pydantic already rejects a bad
+  `SignatureAlgorithm` tag at the reader boundary (that failure surfaces there, not in the verifier), and
+  `audit_signature_key_id` is an opaque `str` with no committed grammar — so branch (c) covers
+  wrong-width/undecodable signature VALUES, and the delta must either define a raw-row
+  validation/wrapping boundary + key-id grammar if it wants pre-parse malformation inside the verifier's
+  taxonomy, or leave those at the reader boundary. A key_id UNKNOWN to the backend's supplied mapping
+  (round-14 P2: `UnknownSigningKeyIdError` after rotation or an incomplete operator key mapping) is
+  branch (b) UNAVAILABLE/unverifiable, never a tampering verdict — the composition root failed to supply
+  the key, the row proved nothing.
 - **Message-format cutover for pre-v1.34 REAL signatures** (round-5 P1): an upgraded KMS-backed MTC ledger
   holds GENUINE v1.33-era signatures over the four-segment message on rows that carry tenant tags —
   five-tuple reconstruction fails them, and the placeholder exemption does not cover them. The contract
@@ -222,9 +232,10 @@ requirements sharpened at filing codex round-1:
   mutable at exactly the adversarial tier under discussion, so an attacker could rewrite the baseline to
   exempt forged post-cutover rows, recreating the downgrade path. The delta must require the cutover to be
   signed by a trusted key or anchored outside the rewritable ledger, AND to bind IMMUTABLE ledger
-  identities (round-5 P1) — the exact legacy entry hashes or an externally monotonic ledger position, not
-  merely a date/version/row-position (an adversary with rewrite access can forge an unsigned row "before"
-  a positional boundary and recompute the unkeyed hashes while the external record stays untouched) —
+  identities (round-5 P1, sharpened round-18 P1: a "monotonic ledger position" alternative is itself the
+  downgrade it guards against — position authenticates a boundary, not the contents before it, and the
+  adversary rewrites an exempt pre-boundary row in place; CONTENT-BOUND only) — the exact legacy entry
+  hashes (or a digest/root over them), never a date/version/row-position —
   AND to bind each legacy identity to its ORIGINAL TENANT (round-6 P1): `tenant_tag` is mutable, tenant is
   absent from `entry_hash`, and pre-v1.34 real signatures cover only the four-tuple, so a bare entry-hash
   cutover still lets an authenticated legacy row be moved from tenant A to B. The record binds signed

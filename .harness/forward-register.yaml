@@ -30,7 +30,11 @@
 #
 # STATUS ENUM (the ONLY place this mapping lives):
 #   open                   — actionable now, no blocker.
-#   design_substrate_gated — needs a Class 1 fork doc (X-AL-3) before any code change.
+#   design_substrate_gated — a Class 1 design-substrate change gates the build (X-AL-3):
+#                            the fork doc is either OWED, or FILED and awaiting operator
+#                            ratification + the spec-apply pass (the row's summary says
+#                            which phase; a filed doc does NOT flip the status — only
+#                            ratified + applied spec deltas open the row for code).
 #   registered_finding     — a real gap surfaced during another arc's review/build;
 #                            grounded against the spec (not skipped), and opens for BUILD
 #                            once grounding confirms a genuinely buildable slice or a live
