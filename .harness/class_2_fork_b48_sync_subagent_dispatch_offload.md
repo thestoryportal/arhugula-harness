@@ -76,7 +76,14 @@ the operator makes here, so the selection is safe to take now).
 
 ## §4 Verification obligations (the apply arc's acceptance criteria)
 
-0. **Dispatch-time cancellation semantics** (filing codex round-1 P1 — must be DEFINED before any offload
+1. **Construction-time dispatch-mode selection** (round-5 P2): `_dispatch_inner` today discovers
+   sync-vs-async only AFTER `self.inner.dispatch(...)` returns — too late to offload a sync child, while
+   moving EVERY invocation into a worker would break the documented Future/custom-awaitable support
+   (shapes that may need the loop at creation). The apply arc adds an explicit construction-time
+   mode/adapter (the composer knows its inner's wrap-asymmetry row when built at stage 5): sync inners
+   are submitted to the executor, async inners keep the direct await path — witnessed for BOTH
+   production inner rows.
+2. **Dispatch-time cancellation semantics** (filing codex round-1 P1 — must be DEFINED before any offload
    lands): `SyncDispatcherFacade.result_timeout_seconds` cancels the loop coroutine and awaits completion
    acknowledgement — but cancelling an executor FUTURE cannot stop a sync child already running in its
    worker; the coroutine could acknowledge cancellation while the child continues F2/audit writes and
@@ -85,23 +92,27 @@ the operator makes here, so the selection is safe to take now).
    surfacing `StepDispatchTimeoutError`, or ABANDONS with a documented effect-fence), plus a timeout
    witness proving no child effects land after the failure surfaces — join-on-shutdown does not cover
    dispatch-time cancellation.
-1. **Child-workflow facade bridging** — the sync driver's loop-bridge (`run_coroutine_threadsafe` shape)
+3. **Child-workflow facade bridging** — the sync driver's loop-bridge (`run_coroutine_threadsafe` shape)
    must be exercised from a WORKER thread with the parent awaiting off-loop; witness the full
    parent→child→grandchild chain.
-2. **Pause/resume** — `HITLPauseRequestedSignal` raised inside the worker must propagate through the
+4. **Pause/resume** — `HITLPauseRequestedSignal` raised inside the worker must propagate through the
    executor future to the awaiting composer unchanged; durable-async pause flags set from the worker thread
    must be visible to the resume path (no thread-local state).
-3. **OTel span context** — `contextvars` do NOT flow into pool threads automatically; the offload must carry
+5. **OTel span context** — `contextvars` do NOT flow into pool threads automatically; the offload must carry
    `contextvars.copy_context()` (or equivalent) so sub-agent spans keep their parent trace; witness a
    parent-child span-id assertion.
-4. **B-21 fan-out** — `PARALLELIZATION` branches dispatching sub-agents concurrently must not serialize on
+6. **B-21 fan-out** — `PARALLELIZATION` branches dispatching sub-agents concurrently must not serialize on
    the offload (N branches → N concurrent workers) and must keep the v1.97 paused-child-branch resume
    semantics; witness with a 2-branch fan-out. **Including pause-state ISOLATION (filing codex round-4
    P1): child runners share the parent `HarnessContext`, so one child's nested durable-HITL gate setting
    `ctx.pause_requested_flag` would be captured by a SIBLING branch with no gate (a false pause) once
    branches run genuinely parallel — the apply arc requires per-child/per-run pause state and a witness
-   proving only the branch that raised the signal is recorded paused.**
-5. **Timestamp-ordering interaction** — the B2a append-lock discipline covers the audit append path, but
+   proving only the branch that raised the signal is recorded paused. Resume state equally (round-5 P1):
+   stage 5 hands the SAME `ctx.resume_context_holder` to every HITL composer and `dispatch()` does an
+   unkeyed `consume_and_clear()` with no cross-task atomicity — a re-dispatched sibling could consume an
+   APPROVE/EDIT/REJECT intended for the paused child. Per-child/per-run resume-context isolation + a
+   targeted concurrent-resume witness are required alongside the pause-flag isolation.**
+7. **Timestamp-ordering interaction** — the B2a append-lock discipline covers the audit append path, but
    NOT the branch-drain path (filing codex round-4 P1): `drain_branch_buffers` samples `drain_timestamp`
    BEFORE the IS `_WRITE_LOCK`, so two fan-out children draining concurrently can append in inverted
    order and raise `NonMonotonicTimestampError` — pinned by the strict xfail
@@ -109,11 +120,11 @@ the operator makes here, so the selection is safe to take now).
    the lock) is assigned to THIS arc. The apply arc lands that fix and REMOVES the xfail; B-48 cannot
    close over an accepted-failing concurrency witness. Then re-run the existing concurrency witnesses
    plus the r100 e2e.
-6. **Loop-bridge deadlock resolution signal** — the superseded defect record's live anchor
+8. **Loop-bridge deadlock resolution signal** — the superseded defect record's live anchor
    `test_u_cp_89_hierarchical_delegation_depth2_live_ollama` (xfail strict=False) must flip XPASS under
    the offload (a sub-agent INFERENCE child's facade bridge finds the loop free); promote it from xfail
    on flip.
-7. All new witnesses PD-8 mutation-probed (revert the offload → the loop-blocking witness must fail; drop
+9. All new witnesses PD-8 mutation-probed (revert the offload → the loop-blocking witness must fail; drop
    the context-copy → the span witness must fail; etc.).
 
 ## §5 Spec surface
@@ -127,7 +138,11 @@ Class 1 spec back-flow (X-AL-3); landing it without the spec amendment would sil
 undocumented configuration contract. The apply arc therefore carries: (a) this fork doc's resolution note,
 (b) a Runtime spec delta amending C-RT-03 (the cap field + its typed fail-fast error) plus any §14.8.x
 venue sentence found at apply time against the then-current head, and (c) a Runtime plan delta for the new
-executor's acceptance criteria (the plan currently has none — same round-12 discipline as the B-51 filing).
+executor's acceptance criteria (the plan currently has none — same round-12 discipline as the B-51 filing),
+and (d) an **IS spec + plan back-flow for the §4-item-7 drain-timestamp fix (round-5 P2)**: moving
+timestamp authority inside the IS writer lock is a C-IS-07 write-contract change — the superseded defect
+record's own §8.3 identifies it as such — so landing it under Runtime deltas alone would silently change
+caller-supplied ledger timestamp semantics without the authoritative IS contract moving.
 This makes the selection's spec footprint identical in kind to the B-51/B-52/B-54 arc's Runtime rider — the
 apply passes can share one Runtime version bump if the operator answers both gates together.
 
@@ -136,5 +151,5 @@ apply passes can share one Runtime version bump if the operator answers both gat
 Select the executor design: **B (custom grow-on-demand executor + configurable hard cap + fail-fast at the
 cap — recommended)** vs C (depth-aware bounded pool) vs A (keep the ratified blocking direct-call). The
 C1/C9 council dyad convenes at the apply leg under B or C (the cap is a genuinely new capacity authority);
-the apply arc also defines the §4-item-0 cancellation semantics before any offload lands. May be answered
+the apply arc also defines the §4-item-2 cancellation semantics before any offload lands. May be answered
 in the same batch as the B-51/B-52/B-54 ratification gate (PR #1046).
