@@ -105,7 +105,16 @@ defaults, `sign_audit_entry(..., backend=None)` returns an `unsigned:*` placehol
 default-config MTC deployment never enters any catch site and accumulates exactly the unsigned trail this
 leg exists to prevent. The delta must classify an absent backend as a STARTUP/policy failure when
 `audit_signing_fail_closed` is ON (bootstrap validation: fail-closed ⇒ a configured backend is required),
-not merely police the runtime failure sites. Delta shape: OD v1.34 addendum (policy +
+not merely police the runtime failure sites.
+
+**And the twelfth path: prewarm's own swallow-all boundary (filing codex round-8 P1).** Even with the ten
+handlers re-raising, `RuntimeLLMDispatcher.prewarm()` catches EVERY exception after the provider call and
+returns `FAILED`, and its bootstrap/daemon callers (stage 5, `_keepalive_loop`) suppress failures — a KMS
+signing failure after a prewarm provider call leaves that call unaudited while the process continues. Leg 2
+must specify the MTC posture for prewarm/keepalive explicitly: disable prewarm at MTC under fail-closed,
+propagate its signing failure through the prewarm boundary, or another mechanism preventing unaudited
+provider calls — silence here would leave a fail-open bypass exactly where leg 1 newly identifies a signing
+path. Delta shape: OD v1.34 addendum (policy +
 flag + site enumeration) **plus** CP v1.100 → v1.101 amending §28.10.4 (cite: v1.24, last substantive definition) invariant 2 with the audit-signing
 carve-out. The weaker single-spec alternative (fail-open preserved at the one CP-owned hook, fail-closed at
 the other nine sites) is coherent but leaves the compliance tier's weakest link at the validator hook —

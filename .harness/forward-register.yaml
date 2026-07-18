@@ -980,9 +980,13 @@ items:
     canonical-message segment at the next OD amendment arc (byte-compat-scoped per the B-22/B-31
     precedents). The segment needs tenant identity AVAILABLE AT SIGNING (codex round-16): today
     sign_audit_entry/cp_audit_to_od_audit receive no tenant and the writer gets tenant_id only after
-    the entry is signed -- the fork must also specify a tenant-bearing signing API threaded through
-    the converters/composers (StepExecutionContext.tenant_id is in scope at every production call
-    site) or move signing to a tenant-aware boundary.'
+    the entry is signed -- the fork specifies a tenant-bearing signing API threaded through the
+    converters/composers AND the non-converter paths the filing enumerates (the direct
+    AuditLedgerRedactionTokenMap compose path; sign_rotation_pair -- thread or defer/prohibit
+    multi-tenant use pending B-33; the workflow-less RuntimeLLMDispatcher.prewarm path, which signs
+    with tenant_id=None -- deployment tenant or an explicit synthetic-scope policy), plus the MTC
+    tenant-scope bootstrap invariant with its _single-history migration/legacy-read story. See the
+    filing for the full rider.'
   council: 'conditional -- C7 compliance vs C2 schema-minimalism at the fork leg'
   heading: '### B-51 · Tenant-scope binding under deployment-scoped keys *(split from B-47 disposition,
     2026-07-17)*'
@@ -1006,7 +1010,10 @@ items:
     section 28.10.4 invariant 2 is CP-owned (Spec_Control_Plane_v1_24 line ~135, hook exceptions MUST
     be swallowed), so fail-closing the validator hook needs a CP carve-out for the audit-signing
     failure class; alternatively preserve fail-open at that one hook while fail-closing the other
-    five sites (weaker, single-spec).'
+    five sites (weaker, single-spec). The filing adds three more policy surfaces beyond the ten catch
+    sites: the direct AuditLedgerRedactionTokenMap signing path (recommend declaring it unconditionally
+    fail-closed), the zeroth-site absent-backend bootstrap invariant, and the prewarm/keepalive
+    swallow-all boundary (disable at MTC under fail-closed, or propagate signing failures through it).'
   council: 'conditional -- C7 compliance vs C1/C9 reliability at the fork leg'
   heading: '### B-52 · Audit-signing fail-closed policy at MTC *(split from B-47 disposition,
     2026-07-17)*'
