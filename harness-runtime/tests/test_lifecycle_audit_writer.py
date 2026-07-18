@@ -2348,9 +2348,7 @@ def test_snapshot_cadence_is_proportional_to_index_size(
     # sidecar itself is untouched, and this test never cold-starts from the
     # snapshot, so the synthetic identities never face a coverage check).
     index = writer._sidecar_index  # pyright: ignore[reportPrivateUsage]
-    index.digests.update(
-        {("tenant-A", f"{i:064d}"): "d" * 64 for i in range(80)}
-    )
+    index.digests.update({("tenant-A", f"{i:064d}"): "d" * 64 for i in range(80)})
 
     # One more append: unsnapshotted=1 < max(1, 81 // 8) — must NOT rewrite.
     writer.append("tenant-A", _make_audit_entry("2" * 64))
