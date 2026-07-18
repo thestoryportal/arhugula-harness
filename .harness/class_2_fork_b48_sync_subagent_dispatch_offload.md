@@ -107,7 +107,12 @@ inventing the number.
    `StepDispatchTimeoutError`. If the grace expires with the worker still inside a blocking call, the
    surfaced error carries an explicit `worker_draining_under_fence` disposition (never silent
    abandonment, never a pretended completion) and the fence guarantees the still-running call's result
-   cannot produce post-failure effects. Witness: no child effects land after the failure surfaces.
+   cannot produce post-failure effects. **The fence covers the ENTIRE offloaded job (round-13 P1), not
+   only child-driver step boundaries: `RuntimeSubAgentDispatcher.dispatch` itself persists audit entries
+   AFTER the child returns — on SUCCESS/DRAINED, and from its exception/FAILED/PAUSED paths — so a
+   tripped fence must also suppress those post-child `_compose_and_persist_audit` writes (or the writers
+   are wrapped job-wide), else entries land after `StepDispatchTimeoutError` despite the guarantee.**
+   Witness: no child effects land after the failure surfaces.
 3. **Child-workflow facade bridging** — the sync driver's loop-bridge (`run_coroutine_threadsafe` shape)
    must be exercised from a WORKER thread with the parent awaiting off-loop; witness the full
    parent→child→grandchild chain.
@@ -138,8 +143,12 @@ inventing the number.
 6. **B-21 fan-out** — `PARALLELIZATION` branches dispatching sub-agents concurrently must not serialize on
    the offload — N branches → N concurrent workers **for N ≤ cap; above the cap the (N+1)th dispatch
    fail-fasts per the §3 no-queue invariant (round-11 P2 — full concurrency and the hard cap cannot both
-   hold unqualified)** — and must keep the v1.97 paused-child-branch resume semantics; witness with a
-   2-branch fan-out. **Including pause-state ISOLATION (filing codex round-4
+   hold unqualified). And the cap must gate BOTH executor layers (round-13 P1):
+   `_run_fanout_to_completion` creates `ThreadPoolExecutor(max_workers=len(branch_plan))` and enters
+   `asyncio.to_thread` per branch BEFORE any dispatch reaches the capped executor — an unbounded manifest
+   would spawn N upstream CP threads before the excess fail-fasts, defeating the host ceiling; the apply
+   arc brings the upstream fan-out thread creation under the same capacity authority** — and must keep
+   the v1.97 paused-child-branch resume semantics; witness with a 2-branch fan-out. **Including pause-state ISOLATION (filing codex round-4
    P1): child runners share the parent `HarnessContext`, so one child's nested durable-HITL gate setting
    `ctx.pause_requested_flag` would be captured by a SIBLING branch with no gate (a false pause) once
    branches run genuinely parallel — the apply arc requires per-child/per-run pause state and a witness
