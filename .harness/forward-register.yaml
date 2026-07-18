@@ -52,14 +52,14 @@
 
 
 snapshot:
-  total: 54
+  total: 55
   open: 2
-  design_substrate_gated: 5
+  design_substrate_gated: 6
   registered_finding: 7
   operator_gated: 1
   held: 1
   closed: 38
-  identity_digest: 7b7e74695d686680
+  identity_digest: a6a9a6227a6c952a
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -1000,3 +1000,19 @@ items:
   council: 'no'
   heading: '### B-53 · Migration-CLI scripts-inventory promotion *(split from B-47 disposition,
     2026-07-17)*'
+- id: B-54
+  title: Backend-aware audit signature verification API
+  status: design_substrate_gated
+  summary: 'Split from B-49 at codex round-11 of the disposition leg: verify_hash_chain_integrity
+    checks only unkeyed content hashes + links, which a ledger-rewriting attacker can recompute; the
+    production SigningBackend.verify path (real KMS verification of persisted signature_attrs,
+    key/period handling, legacy-placeholder semantics) has NO consumer and section 21.2.1 explicitly
+    leaves verification out of scope -- so adding the verification API is spec surface. Without it the
+    MTC tamper-evidence story stops at hash-chain level.'
+  close_out: 'Route with the B-51/B-52 fork legs (one OD amendment arc can carry all three): specify
+    the verification contract (per-entry backend verify over the canonical message, placeholder
+    handling, failure taxonomy), then implement the verifier + wire into B-49''s per-family unit and
+    harness-inspect.'
+  council: 'conditional -- C7 compliance vs C9 availability if verification is made blocking anywhere'
+  heading: '### B-54 · Backend-aware audit signature verification API *(split from B-49 at the
+    disposition leg, 2026-07-17)*'
