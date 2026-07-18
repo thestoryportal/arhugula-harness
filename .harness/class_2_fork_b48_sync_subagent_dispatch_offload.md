@@ -7,7 +7,7 @@ and C each carry Class 1 back-flow RIDERS** (§5: the C-RT-03 `RuntimeConfig` ca
 drain-timestamp write-contract change are committed-contract amendments per §4.3); the riders halt for the
 same operator response and the spec-writer apply pass, exactly like the B-51/B-52/B-54 arc's riders.
 **Status: FILED — awaiting operator selection.** No `design-substrate/**` file is
-edited by this filing; B-48 stays `registered_finding` until the selection lands (X-AL-3). Surfaced by
+edited by this filing; B-48 flips to `design_substrate_gated` with this filing (round-9 P1 — a filed back-flow awaiting ratification is exactly that status; `registered_finding` would signal buildable-after-grounding and could route implementation before ratification). Surfaced by
 out-of-family Codex round-2 P1 on B-47 PR B2a (#1036); register row `B-48`.
 
 ## §1 The defect
@@ -74,9 +74,15 @@ positions precede the operator decision (round-2 P2), so both are named HERE:
   is a misconfigured workload or runaway recursion and must be LOUD and immediate — no queueing, no
   best-effort degradation; the ceiling belongs in RuntimeConfig where operators already own capacity.
 
-The positions AGREE on fail-fast + typed error + RuntimeConfig ownership and differ only on default sizing
-— a narrow question the **C1 ⊥ C9 dyad settles at the apply leg** (it does not change the B-vs-C selection
-the operator makes here, so the selection is safe to take now).
+The positions AGREE on fail-fast + typed error + RuntimeConfig ownership and differ only on default sizing.
+**That one disagreement is settled HERE, not deferred (round-9 P1 — the default is part of the C-RT-03
+contract the operator ratifies, so leaving it to the apply leg would make the spec-writer invent it without
+authority): recommended default `sub_agent_dispatch_max_workers = 64`** — generous against C1's
+starvation concern (production descent is single-digit deep and fan-out is branch-bounded, so 64 concurrent
+sub-agent dispatch chains indicates runaway recursion, exactly what C9 wants loud), validated ≥ 1 at config
+load, overridable like every capacity field. The dyad's convening at the apply leg is thereby reduced to
+CONFIRMING this pre-resolved position (or surfacing a reasoned deviation back to the operator), not
+inventing the number.
 
 ## §4 Verification obligations (the apply arc's acceptance criteria)
 
@@ -134,7 +140,12 @@ the operator makes here, so the selection is safe to take now).
    `test_u_cp_89_hierarchical_delegation_depth2_live_ollama` (xfail strict=False) must flip XPASS under
    the offload (a sub-agent INFERENCE child's facade bridge finds the loop free); promote it from xfail
    on flip.
-9. All new witnesses PD-8 mutation-probed (revert the offload → the loop-blocking witness must fail; drop
+9. **Cap saturation + no-queue witness** (round-9 P2): a deterministic cap+1 scenario — every worker
+   occupied, one more dispatch — must fail IMMEDIATELY with the typed error and provably enqueue nothing
+   (the below-capacity witnesses pass even on a queueing bounded pool, leaving the target deadlock
+   untested); plus shutdown drain-with-deadline coverage. The queue-vs-fail-fast branch is
+   mutation-probed (swap fail-fast for enqueue → the saturation witness must hang/fail).
+10. All new witnesses PD-8 mutation-probed (revert the offload → the loop-blocking witness must fail; drop
    the context-copy → the span witness must fail; etc.).
 
 ## §5 Spec surface
@@ -152,7 +163,12 @@ executor's acceptance criteria (the plan currently has none — same round-12 di
 and (d) an **IS spec + plan back-flow for the §4-item-7 drain-timestamp fix (round-5 P2)**: moving
 timestamp authority inside the IS writer lock is a C-IS-07 write-contract change — the superseded defect
 record's own §8.3 identifies it as such — so landing it under Runtime deltas alone would silently change
-caller-supplied ledger timestamp semantics without the authoritative IS contract moving.
+caller-supplied ledger timestamp semantics without the authoritative IS contract moving. And (e) **Runtime
+riders for the §4 semantic changes themselves (round-9 P1)**: per-child pause/resume carrier isolation and
+the dispatch-time cancellation/join/effect-fence policy alter committed Runtime surfaces (C-RT-04
+resume-context plumbing, C-RT-17 dispatch semantics, the §14.8.8/§14.8.9 pause lineage, and
+`RT-FAIL-STEP-DISPATCH-TIMEOUT`'s meaning under an abandoned worker) — those amendments ride the same
+Runtime spec + plan deltas explicitly, never implementation-only authority.
 This makes the selection's spec footprint identical in kind to the B-51/B-52/B-54 arc's Runtime rider — the
 apply passes can share one Runtime version bump if the operator answers both gates together.
 
