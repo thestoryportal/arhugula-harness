@@ -1141,8 +1141,16 @@ class _AuditWriterTenantTransaction:
         writer = self._writer
         if not writer._sidecar_path.exists():  # pyright: ignore[reportPrivateUsage]
             return None
+        # Mirror the append core's coverage gate (codex round-2 on the B-50
+        # landing): a full fold performed HERE warms the index, so the
+        # subsequent txn.append() would see offset > 0 and skip ITS
+        # round-40 coverage check — a boundary-truncated sidecar folded at
+        # tail-lookup time would mask incomplete history.
+        folded_from_zero = writer._sidecar_index.offset == 0  # pyright: ignore[reportPrivateUsage]
         writer._heal_torn_tail_locked()  # pyright: ignore[reportPrivateUsage]
-        writer._refresh_sidecar_index_locked()  # pyright: ignore[reportPrivateUsage]
+        rescanned = writer._refresh_sidecar_index_locked()  # pyright: ignore[reportPrivateUsage]
+        if folded_from_zero or rescanned:
+            writer._assert_is_refs_covered_locked()  # pyright: ignore[reportPrivateUsage]
         tag = writer._tenant_tag(self._tenant_id)  # pyright: ignore[reportPrivateUsage]
         return writer._sidecar_index.redaction_tails.get(tag)  # pyright: ignore[reportPrivateUsage]
 

@@ -2061,3 +2061,44 @@ def test_fresh_writer_instance_folds_the_family_tail(tmp_path: Path) -> None:
 
     report = verify_per_family_chains(writer1.read_full_entries_for_tenant("tenant-f"))
     assert report.chained == {REDACTION_TOKEN_FAMILY: 2}
+
+
+def test_transactional_append_detects_boundary_truncation(tmp_path: Path) -> None:
+    """B-50 codex round-2 — the tail lookup's fold warmed the index, so the
+    transaction's subsequent append skipped its full-fold coverage check: a
+    boundary-truncated sidecar was silently extended. The lookup now runs
+    the same coverage gate the append core does."""
+    from harness_od.redaction_tokenizer import RedactionTokenRecord
+    from harness_runtime.lifecycle.redaction_token_audit_map import (
+        AuditLedgerRedactionTokenMap,
+    )
+
+    def _record(token: str) -> RedactionTokenRecord:
+        return RedactionTokenRecord(
+            token=token,
+            raw_value=f"raw for {token}",
+            semantic_category="PII",
+            attribute_key="gen_ai.input.messages",
+            trace_id="trace-1",
+            span_id=f"span-{token}",
+        )
+
+    writer = _writer(tmp_path)
+    token_map = AuditLedgerRedactionTokenMap(
+        audit_writer=writer, tenant_id="tenant-t", signing_key_id="chain-key"
+    )
+    token_map.append(_record("[REDACTED:PII:t1]"))
+    token_map.append(_record("[REDACTED:PII:t2]"))
+
+    # Truncate to the first record's boundary — a well-formed file.
+    lines = writer.sidecar_path.read_bytes().splitlines(keepends=True)
+    writer.sidecar_path.write_bytes(lines[0])
+
+    fresh_writer = RuntimeAuditLedgerWriter(
+        ledger_writer=writer.ledger_writer, time_source=writer.time_source
+    )
+    fresh_map = AuditLedgerRedactionTokenMap(
+        audit_writer=fresh_writer, tenant_id="tenant-t", signing_key_id="chain-key"
+    )
+    with pytest.raises(ValueError, match="truncated or lost"):
+        fresh_map.append(_record("[REDACTED:PII:t3]"))
