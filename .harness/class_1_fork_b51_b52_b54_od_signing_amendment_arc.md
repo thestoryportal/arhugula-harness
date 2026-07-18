@@ -321,7 +321,9 @@ Per §4.3 the design-substrate amendments halt here. The operator ratifies, in o
    exception naming the authenticated-cutover rows (recommended) vs rejecting/quarantining all pre-backend
    unsigned rows at MTC.
 10. **Arc bundling** — one OD v1.33 → v1.34 delta carrying legs 1+3, with a CP v1.100 → v1.101 rider
-   carrying BOTH CP-owned halves, **and a Runtime v1.100 → v1.101 rider (filing codex round-9 P1): the
+   carrying ALL ratified CP-owned sections (round-25 P2 — not just the two halves: §13.5.1 tenant-bearing
+   converter signature; §28.10.4 invariant-2 carve-out; the item-5 §20.3.1 reconciliation if ratified; the
+   item-9 §20.1 narrow historical exception if ratified), **and a Runtime v1.100 → v1.101 rider (filing codex round-9 P1): the
    Runtime spec owns the prewarm/keepalive/boot contracts (B-18-KEEPALIVE lineage) that currently commit
    the swallow-all fail-open behavior, plus RuntimeConfig surface — the rider covers the MTC prewarm
    posture, the `audit_signing_fail_closed` flag's config contract, the tenant threading through
