@@ -34,7 +34,8 @@
 #                            the fork doc is either OWED, or FILED and awaiting operator
 #                            ratification + the spec-apply pass (the row's summary says
 #                            which phase; a filed doc does NOT flip the status — only
-#                            ratified + applied spec deltas open the row for code).
+#                            ratified + applied spec deltas AND the corresponding Phase-6
+#                            plan deltas open the row for code).
 #   registered_finding     — a real gap surfaced during another arc's review/build;
 #                            grounded against the spec (not skipped), and opens for BUILD
 #                            once grounding confirms a genuinely buildable slice or a live

@@ -216,6 +216,15 @@ requirements sharpened at filing codex round-1:
   (round-14 P2: `UnknownSigningKeyIdError` after rotation or an incomplete operator key mapping) is
   branch (b) UNAVAILABLE/unverifiable, never a tampering verdict — the composition root failed to supply
   the key, the row proved nothing.
+- **Legacy tenant bindings need a TRUSTED SOURCE, and §20.1 needs the exemption named** (round-20 P1×2):
+  at cutover time the only on-disk tenant association for a pre-cutover row is the MUTABLE `tenant_tag` —
+  if an attacker relabeled tenant A's row to B before migration, signing `(tenant_scope, entry_hash,
+  disposition)` from the tag would permanently bless the forgery. The cutover procedure must source tenant
+  bindings from an external authoritative mapping or manual operator attestation, or explicitly declare a
+  TOFU (trust-on-first-use) boundary and QUARANTINE unverifiable pre-cutover rows. And exempt `unsigned:*`
+  legacy rows still contradict C-CP-20 §20.1's per-entry signature requirement as written — the CP rider
+  must carry a NARROW, cutover-scoped historical exception in §20.1 (or those rows are rejected/
+  quarantined); "no §20.1 relaxation" (gate item 4) refers to the FORWARD posture only.
 - **Message-format cutover for pre-v1.34 REAL signatures** (round-5 P1): an upgraded KMS-backed MTC ledger
   holds GENUINE v1.33-era signatures over the four-segment message on rows that carry tenant tags —
   five-tuple reconstruction fails them, and the placeholder exemption does not cover them. The contract
@@ -293,6 +302,14 @@ Per §4.3 the design-substrate amendments halt here. The operator ratifies, in o
 8. **B-53 rides the Runtime rider** (round-19 P2): the migration-CLI promotion is a one-row Runtime §13.4
    scripts-inventory addition whose register close-out already says "ride the next runtime-spec delta" —
    fold it into the v1.101 rider (recommended) vs explicitly revising that disposition to wait again.
+9. **MTC prewarm posture under fail-closed** (round-20 P2 — a Class 1 behavior choice, not spec-writer
+   discretion): DISABLE prewarm/keepalive at MTC when `audit_signing_fail_closed` is ON (recommended —
+   prewarm is a latency optimization; compliance-tier audit integrity outranks warm caches, and the
+   operator regains it by accepting propagation) vs propagating signing failures through the prewarm
+   boundary (keeps prewarm, couples its availability to the signing backend).
+10. **§20.1 historical exception for cutover-exempt rows** (round-20 P1): a narrow, cutover-scoped §20.1
+   exception naming the authenticated-cutover rows (recommended) vs rejecting/quarantining all pre-backend
+   unsigned rows at MTC.
 6. **Arc bundling** — one OD v1.33 → v1.34 delta carrying legs 1+3, with a CP v1.100 → v1.101 rider
    carrying BOTH CP-owned halves, **and a Runtime v1.100 → v1.101 rider (filing codex round-9 P1): the
    Runtime spec owns the prewarm/keepalive/boot contracts (B-18-KEEPALIVE lineage) that currently commit
