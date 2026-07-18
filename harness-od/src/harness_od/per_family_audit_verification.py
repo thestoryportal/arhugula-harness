@@ -2,8 +2,9 @@
 
 A tenant's persisted audit entries interleave INDEPENDENT producer families,
 and most families do not chain at all: cost projection, HITL gate audits, and
-sub-agent dispatch deliberately emit genesis-style `prior_entry_hash` values
-on every entry, so running `verify_hash_chain_integrity` over a raw
+sub-agent dispatch deliberately emit constant non-chained `prior_entry_hash`
+values on every entry (zero-hash genesis for cost/dispatch; `sha256(b"")` for
+HITL — constant either way, never a predecessor link), so running `verify_hash_chain_integrity` over a raw
 per-tenant sequence — or even over a naive per-prefix partition — reports
 false tampering on the second untouched entry.
 

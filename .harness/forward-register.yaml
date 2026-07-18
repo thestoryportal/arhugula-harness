@@ -919,7 +919,7 @@ items:
 - id: B-49
   title: Per-family audit chain verifier
   status: closed
-  pr: 'this PR (b-49-per-family-audit-verifier branch)'
+  pr: '#1040'
   summary: 'B-47 disposition item (h): a tenant''s sidecar entries interleave independent OD chain
     families (CXA v2.10 section 0.3 action-id prefixes discriminate); running verify_hash_chain_integrity
     over the raw per-tenant sequence fails by construction. PRODUCER-AWARE (codex round-3 on the
