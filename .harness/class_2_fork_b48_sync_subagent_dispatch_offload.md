@@ -95,15 +95,14 @@ inventing the number.
    stage-5 composer constructions (round-6 P2): `hitl_inference` (async C-RT-15), `hitl_sub_agent` (sync
    C-RT-17 — the offloaded one), and `hitl_tool` (async `RetryBreakerToolDispatcher.dispatch`, which must
    stay on the direct await path).
-2. **Dispatch-time cancellation semantics** (filing codex round-1 P1 — must be DEFINED before any offload
-   lands): `SyncDispatcherFacade.result_timeout_seconds` cancels the loop coroutine and awaits completion
-   acknowledgement — but cancelling an executor FUTURE cannot stop a sync child already running in its
-   worker; the coroutine could acknowledge cancellation while the child continues F2/audit writes and
-   OVERLAPS a retry. The apply arc specifies cooperative cancellation (a cancel token the child driver
-   checks at step boundaries) or explicit join/abandon semantics (the timeout path JOINS the worker before
-   surfacing `StepDispatchTimeoutError`, or ABANDONS with a documented effect-fence), plus a timeout
-   witness proving no child effects land after the failure surfaces — join-on-shutdown does not cover
-   dispatch-time cancellation.
+2. **Dispatch-time cancellation semantics** (filing codex round-1 P1; policy fixed at round-11 P2 —
+   CONSISTENT with option B's committed bounded per-dispatch join, not reopened): cancelling an executor
+   FUTURE cannot stop a sync child already running in its worker, so the timeout path JOINS the worker
+   (bounded) before surfacing `StepDispatchTimeoutError` — no abandonment (an abandoned child could
+   continue F2/audit writes after the failure surfaces, contradicting the witness below). Cooperative
+   cancellation (a cancel token the child driver checks at step boundaries) may ADDITIONALLY shorten the
+   join but never replaces it. Witness: no child effects land after the failure surfaces —
+   join-on-shutdown does not cover dispatch-time cancellation.
 3. **Child-workflow facade bridging** — the sync driver's loop-bridge (`run_coroutine_threadsafe` shape)
    must be exercised from a WORKER thread with the parent awaiting off-loop; witness the full
    parent→child→grandchild chain.
@@ -127,8 +126,10 @@ inventing the number.
    binds a fresh registry per child with parent-side aggregation) and witnesses a NESTED cascade-deadline
    cancel through an offloaded child.
 6. **B-21 fan-out** — `PARALLELIZATION` branches dispatching sub-agents concurrently must not serialize on
-   the offload (N branches → N concurrent workers) and must keep the v1.97 paused-child-branch resume
-   semantics; witness with a 2-branch fan-out. **Including pause-state ISOLATION (filing codex round-4
+   the offload — N branches → N concurrent workers **for N ≤ cap; above the cap the (N+1)th dispatch
+   fail-fasts per the §3 no-queue invariant (round-11 P2 — full concurrency and the hard cap cannot both
+   hold unqualified)** — and must keep the v1.97 paused-child-branch resume semantics; witness with a
+   2-branch fan-out. **Including pause-state ISOLATION (filing codex round-4
    P1): child runners share the parent `HarnessContext`, so one child's nested durable-HITL gate setting
    `ctx.pause_requested_flag` would be captured by a SIBLING branch with no gate (a false pause) once
    branches run genuinely parallel — the apply arc requires per-child/per-run pause state and a witness
