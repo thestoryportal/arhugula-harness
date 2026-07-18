@@ -16,6 +16,16 @@ dispatch — child workflow execution (seconds-long), its F2/ledger writes, and 
 network calls — **runs synchronously ON the event loop**, blocking every concurrent workflow, the daemon
 keep-alive, and all pending timers for the full child-workflow duration.
 
+**Companion defect record superseded-for-routing (filing codex round-4 P2).** The same architectural
+surface carries the OPEN loop-bridge deadlock record
+`.harness/runtime_defect_sub_agent_inference_child_loop_bridge_deadlock.md` (a `SUB_AGENT_DISPATCH` worker
+dispatching an INFERENCE child deadlocks the sync/async bridge — the direct call occupies the loop the
+child's facade needs). That record classified the issue as an implementation defect with no fork required;
+this filing is now the ROUTING AUTHORITY for the fix (the offload is the resolution for both the blocking
+and the deadlock face), and the record's xfail anchor
+(`test_u_cp_89_hierarchical_delegation_depth2_live_ollama`, strict=False → flips XPASS on fix) is carried
+into §4 as an acceptance signal; the record is annotated rather than deleted (history preserved).
+
 This is the **Q3-ratified direct-call reading** of the U-RT-60 wrap-asymmetry fork
 (`.harness/class_1_tension_u_rt_60_wrap_asymmetry_sync_async_mismatch.md` §7.2 Q3, "RATIFIED implicitly with
 Q1"; the composer docstring cites it). The blocking behavior is therefore NOT an implementation bug against
@@ -86,11 +96,24 @@ the operator makes here, so the selection is safe to take now).
    parent-child span-id assertion.
 4. **B-21 fan-out** — `PARALLELIZATION` branches dispatching sub-agents concurrently must not serialize on
    the offload (N branches → N concurrent workers) and must keep the v1.97 paused-child-branch resume
-   semantics; witness with a 2-branch fan-out.
-5. **Timestamp-ordering interaction** — the B2a append-lock discipline (timestamps sampled inside the
-   per-ledger critical section) already covers cross-thread appends; re-run the existing concurrency
-   witnesses plus the r100 e2e.
-6. All new witnesses PD-8 mutation-probed (revert the offload → the loop-blocking witness must fail; drop
+   semantics; witness with a 2-branch fan-out. **Including pause-state ISOLATION (filing codex round-4
+   P1): child runners share the parent `HarnessContext`, so one child's nested durable-HITL gate setting
+   `ctx.pause_requested_flag` would be captured by a SIBLING branch with no gate (a false pause) once
+   branches run genuinely parallel — the apply arc requires per-child/per-run pause state and a witness
+   proving only the branch that raised the signal is recorded paused.**
+5. **Timestamp-ordering interaction** — the B2a append-lock discipline covers the audit append path, but
+   NOT the branch-drain path (filing codex round-4 P1): `drain_branch_buffers` samples `drain_timestamp`
+   BEFORE the IS `_WRITE_LOCK`, so two fan-out children draining concurrently can append in inverted
+   order and raise `NonMonotonicTimestampError` — pinned by the strict xfail
+   `test_concurrent_sibling_drains_invert_timestamp`, whose fix (writer-owned timestamp sampling inside
+   the lock) is assigned to THIS arc. The apply arc lands that fix and REMOVES the xfail; B-48 cannot
+   close over an accepted-failing concurrency witness. Then re-run the existing concurrency witnesses
+   plus the r100 e2e.
+6. **Loop-bridge deadlock resolution signal** — the superseded defect record's live anchor
+   `test_u_cp_89_hierarchical_delegation_depth2_live_ollama` (xfail strict=False) must flip XPASS under
+   the offload (a sub-agent INFERENCE child's facade bridge finds the loop free); promote it from xfail
+   on flip.
+7. All new witnesses PD-8 mutation-probed (revert the offload → the loop-blocking witness must fail; drop
    the context-copy → the span witness must fail; etc.).
 
 ## §5 Spec surface
