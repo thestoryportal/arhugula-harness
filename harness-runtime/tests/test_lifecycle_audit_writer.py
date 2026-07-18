@@ -2102,3 +2102,228 @@ def test_transactional_append_detects_boundary_truncation(tmp_path: Path) -> Non
     )
     with pytest.raises(ValueError, match="truncated or lost"):
         fresh_map.append(_record("[REDACTED:PII:t3]"))
+
+
+# ---------------------------------------------------------------------------
+# B-50 item (g) — disk-backed membership-index snapshot.
+# ---------------------------------------------------------------------------
+
+
+def _spy_entry_validations(monkeypatch: pytest.MonkeyPatch) -> list[object]:
+    """Count `AuditLedgerEntry.model_validate` calls — each sidecar row
+    folded costs exactly one, so the count IS the refold size."""
+    calls: list[object] = []
+    original = AuditLedgerEntry.model_validate
+
+    def _counting(data: object) -> AuditLedgerEntry:
+        calls.append(data)
+        return original(data)
+
+    monkeypatch.setattr(AuditLedgerEntry, "model_validate", _counting)
+    return calls
+
+
+def test_cold_writer_adopts_index_snapshot_without_refolding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """B-50 item (g) — a fresh writer over a snapshot-current sidecar must
+    adopt the snapshot and fold ZERO historical rows; with adoption disabled
+    (the contrasting baseline that proves the spy is sensitive) the same
+    cold start re-validates the full history."""
+    monkeypatch.setattr(RuntimeAuditLedgerWriter, "_SNAPSHOT_EVERY_APPENDS", 1)
+    writer = _writer(tmp_path)
+    for seed in ("1" * 64, "2" * 64, "3" * 64):
+        writer.append("tenant-A", _make_audit_entry(seed))
+    assert writer._snapshot_path.exists()  # pyright: ignore[reportPrivateUsage]
+
+    calls = _spy_entry_validations(monkeypatch)
+    adopted = RuntimeAuditLedgerWriter(
+        ledger_writer=writer.ledger_writer, time_source=writer.time_source
+    )
+    adopted.append("tenant-A", _make_audit_entry("4" * 64))
+    assert len(calls) == 0, "snapshot adoption must skip the historical refold"
+
+    monkeypatch.setattr(
+        RuntimeAuditLedgerWriter,
+        "_try_adopt_index_snapshot_locked",
+        lambda self, st: None,
+    )
+    baseline = RuntimeAuditLedgerWriter(
+        ledger_writer=writer.ledger_writer, time_source=writer.time_source
+    )
+    baseline.append("tenant-A", _make_audit_entry("5" * 64))
+    assert len(calls) == 4, "adoption-disabled baseline must refold the full history"
+
+
+def test_cold_adoption_recovers_redaction_tail_without_refold(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """B-50 item (g) — the snapshot carries `redaction_tails`, so a fresh
+    process's transactional token append chains on the durable tail with no
+    historical fold and the family chain stays VALID."""
+    from harness_od.per_family_audit_verification import (
+        REDACTION_TOKEN_FAMILY,
+        verify_per_family_chains,
+    )
+    from harness_od.redaction_tokenizer import RedactionTokenRecord
+    from harness_runtime.lifecycle.redaction_token_audit_map import (
+        AuditLedgerRedactionTokenMap,
+    )
+
+    def _record(token: str) -> RedactionTokenRecord:
+        return RedactionTokenRecord(
+            token=token,
+            raw_value=f"raw for {token}",
+            semantic_category="PII",
+            attribute_key="gen_ai.input.messages",
+            trace_id="trace-1",
+            span_id=f"span-{token}",
+        )
+
+    monkeypatch.setattr(RuntimeAuditLedgerWriter, "_SNAPSHOT_EVERY_APPENDS", 1)
+    writer = _writer(tmp_path)
+    AuditLedgerRedactionTokenMap(
+        audit_writer=writer, tenant_id="tenant-g", signing_key_id="chain-key"
+    ).append(_record("[REDACTED:PII:g1]"))
+
+    calls = _spy_entry_validations(monkeypatch)
+    fresh_writer = RuntimeAuditLedgerWriter(
+        ledger_writer=writer.ledger_writer, time_source=writer.time_source
+    )
+    AuditLedgerRedactionTokenMap(
+        audit_writer=fresh_writer, tenant_id="tenant-g", signing_key_id="chain-key"
+    ).append(_record("[REDACTED:PII:g2]"))
+    assert len(calls) == 0, "tail must come from the adopted snapshot, not a refold"
+
+    report = verify_per_family_chains(writer.read_full_entries_for_tenant("tenant-g"))
+    assert report.chained == {REDACTION_TOKEN_FAMILY: 2}
+
+
+def test_stale_snapshot_discarded_on_truncation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """B-50 item (g) — a snapshot whose offset lies past the truncated
+    sidecar's size must be DISCARDED, so the full refold's coverage check
+    still fails loud on the lost history. An adoption that skipped the
+    offset<=size validation would mask boundary truncation at append time."""
+    monkeypatch.setattr(RuntimeAuditLedgerWriter, "_SNAPSHOT_EVERY_APPENDS", 1)
+    writer = _writer(tmp_path)
+    writer.append("tenant-A", _make_audit_entry("1" * 64))
+    writer.append("tenant-A", _make_audit_entry("2" * 64))
+
+    lines = writer.sidecar_path.read_bytes().splitlines(keepends=True)
+    writer.sidecar_path.write_bytes(lines[0])
+
+    fresh = RuntimeAuditLedgerWriter(
+        ledger_writer=writer.ledger_writer, time_source=writer.time_source
+    )
+    with pytest.raises(ValueError, match="truncated or lost"):
+        fresh.append("tenant-A", _make_audit_entry("3" * 64))
+
+
+def test_corrupt_snapshot_discarded_and_refolded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """B-50 item (g) — a corrupt snapshot (failed self-digest) is silently
+    discarded and the cold start degrades to the correct full refold; the
+    cache can cost time, never correctness."""
+    monkeypatch.setattr(RuntimeAuditLedgerWriter, "_SNAPSHOT_EVERY_APPENDS", 1)
+    writer = _writer(tmp_path)
+    writer.append("tenant-A", _make_audit_entry("1" * 64))
+    writer.append("tenant-A", _make_audit_entry("2" * 64))
+
+    # SHAPE-VALID corruption (a bit-rotted digest value): every structural
+    # validation passes, so ONLY the self-digest check can catch it — a
+    # `"offxet"`-style key corruption would be discarded by the shape
+    # checks even without the digest (the first probe run proved exactly
+    # that insensitivity).
+    snapshot_path = writer._snapshot_path  # pyright: ignore[reportPrivateUsage]
+    payload = json.loads(snapshot_path.read_text())
+    stored = payload["body"]["digests"][0][2]
+    payload["body"]["digests"][0][2] = ("0" if stored[0] != "0" else "1") + stored[1:]
+    snapshot_path.write_text(json.dumps(payload, separators=(",", ":")))
+
+    calls = _spy_entry_validations(monkeypatch)
+    fresh = RuntimeAuditLedgerWriter(
+        ledger_writer=writer.ledger_writer, time_source=writer.time_source
+    )
+    fresh.append("tenant-A", _make_audit_entry("3" * 64))
+    assert len(calls) == 2, "corrupt snapshot must force the full refold"
+    assert len(fresh.read_full_entries_for_tenant("tenant-A")) == 3
+
+
+def test_replaced_sidecar_inode_discards_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """B-50 item (g) — a sidecar REPLACED since the snapshot was written
+    (different inode) must not be trusted through the stale snapshot. The
+    replacement is GROWN past the snapshot offset so neither the size nor
+    the same-size-mtime guard applies — only the inode check separates
+    "our file grew" (fold the delta) from "a different file stands here"
+    (full refold); without it a stale snapshot would vouch for a folded
+    region of a file it never saw."""
+    import shutil
+
+    monkeypatch.setattr(RuntimeAuditLedgerWriter, "_SNAPSHOT_EVERY_APPENDS", 1)
+    writer = _writer(tmp_path)
+    writer.append("tenant-A", _make_audit_entry("1" * 64))
+    writer.append("tenant-A", _make_audit_entry("2" * 64))
+    # Grow the sidecar past the snapshot's offset WITHOUT refreshing the
+    # snapshot (cadence pushed out of reach).
+    monkeypatch.setattr(RuntimeAuditLedgerWriter, "_SNAPSHOT_EVERY_APPENDS", 10_000)
+    writer.append("tenant-A", _make_audit_entry("3" * 64))
+
+    replacement = writer.sidecar_path.with_name("replacement.jsonl")
+    shutil.copyfile(writer.sidecar_path, replacement)
+    replacement.chmod(0o600)
+    import os as os_module
+
+    os_module.replace(replacement, writer.sidecar_path)
+
+    calls = _spy_entry_validations(monkeypatch)
+    fresh = RuntimeAuditLedgerWriter(
+        ledger_writer=writer.ledger_writer, time_source=writer.time_source
+    )
+    fresh.append("tenant-A", _make_audit_entry("4" * 64))
+    assert len(calls) == 3, "inode change must discard the snapshot and fully refold"
+
+
+def test_same_size_snapshot_mtime_drift_discards(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """B-50 item (g) — an in-place same-size mutation after the snapshot was
+    written (the `same_size_mutated` mirror) must discard the snapshot; the
+    forced refold then fails loud on the tampered row's content integrity.
+    A trusted stale snapshot would return early at offset==size and never
+    see the mutation."""
+    monkeypatch.setattr(RuntimeAuditLedgerWriter, "_SNAPSHOT_EVERY_APPENDS", 1)
+    writer = _writer(tmp_path)
+    writer.append("tenant-A", _make_audit_entry("1" * 64))
+
+    raw = writer.sidecar_path.read_bytes()
+    position = raw.find(b"test-emission-site")
+    assert position != -1
+    with writer.sidecar_path.open("r+b") as fh:
+        fh.seek(position)
+        fh.write(b"TEST-emission-site")
+
+    fresh = RuntimeAuditLedgerWriter(
+        ledger_writer=writer.ledger_writer, time_source=writer.time_source
+    )
+    with pytest.raises(ValueError, match="content-integrity"):
+        fresh.append("tenant-A", _make_audit_entry("2" * 64))
+
+
+def test_snapshot_write_cadence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """B-50 item (g) — the snapshot is written at the append cadence, not on
+    every append: below the threshold no snapshot exists; crossing it
+    persists one."""
+    writer = _writer(tmp_path)
+    snapshot_path = writer._snapshot_path  # pyright: ignore[reportPrivateUsage]
+    writer.append("tenant-A", _make_audit_entry("1" * 64))
+    writer.append("tenant-A", _make_audit_entry("2" * 64))
+    assert not snapshot_path.exists(), "below-cadence appends must not write the snapshot"
+
+    monkeypatch.setattr(RuntimeAuditLedgerWriter, "_SNAPSHOT_EVERY_APPENDS", 2)
+    writer.append("tenant-A", _make_audit_entry("3" * 64))
+    assert snapshot_path.exists(), "crossing the cadence must persist the snapshot"

@@ -53,13 +53,13 @@
 
 snapshot:
   total: 55
-  open: 1
+  open: 0
   design_substrate_gated: 6
   registered_finding: 7
   operator_gated: 1
   held: 1
-  closed: 39
-  identity_digest: 503b90a10153ea57
+  closed: 40
+  identity_digest: d792d0e343266f5c
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -940,15 +940,21 @@ items:
   heading: '### B-49 · Per-family audit chain verifier *(split from B-47 disposition, 2026-07-17)*'
 - id: B-50
   title: Sidecar scale engineering -- disk-backed membership index + POSIX cross-process chain atomicity
-  status: open
-  summary: 'B-47 disposition items (g)+(i). Item (i) LANDED 2026-07-17 (b-50-transactional-token-map):
+  status: closed
+  pr: '#1042 (item (i) transactional token map) + #1044 (item (g) index snapshot)'
+  summary: 'B-47 disposition items (g)+(i), BOTH LANDED. Item (i) 2026-07-17 (b-50-transactional-token-map):
     RuntimeAuditLedgerWriter.tenant_transaction holds the full lock stack (append lock + sidecar
     thread lock + cross-process flock) across tail-read + compose + append via unlocked-inner cores;
     the token map derives its prior from the DURABLE tail inside the transaction (the in-memory
     cached position -- a second authority that could drift -- is gone on the production path; duck
-    writers keep the fallback). POSIX-only cross-process hold per B-45. REMAINING: item (g), the
-    disk-backed membership index (O(history) cold-start refold), impl-discretion within Tier-5''s
-    committed properties.'
+    writers keep the fallback). POSIX-only cross-process hold per B-45. Item (g) 2026-07-17
+    (b-50-index-snapshot): offset-checkpointed snapshot beside the sidecar (audit-entries.index-snapshot.json)
+    -- a DERIVED CACHE adopted at zero-offset cold start with discard-on-any-anomaly validation
+    (self-digest, inode, offset<=size, same-size mtime drift), atomic temp+replace+fsync writes,
+    cadence 64 appends + immediate after any from-zero fold / legacy adoption; chosen over sqlite3 to
+    stay one-authority JSONL-canonical (ADR-D5 v1.4). Forged-snapshot tampering sits in the same
+    adversarial-filesystem tier as the forged legacy baseline (round-46 posture) -- read-time verifier
+    arc owns it.'
   close_out: 'Disk-backed index (stdlib sqlite3 on the 3.12 baseline, or offset-checkpointed snapshot).
     For (i): NOT a plain outer-lock widening (codex round-6 -- POSIX flock is non-reentrant across
     separately-opened descriptors, so an outer hold self-deadlocks when read_full_entries_for_tenant
