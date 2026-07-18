@@ -570,3 +570,78 @@ def test_verify_error_does_not_leak_the_file_lock(
     t.start()
     t.join(_WAIT)
     assert done.is_set(), "file lock leaked by the failed verify"
+
+
+def test_absent_file_write_waits_for_legacy_holder(tmp_path: Path) -> None:
+    """Codex round-5 P1 (B-46 landing) — rolling upgrade: a pre-B-46
+    writer creates + locks the legacy sidecar BEFORE creating the
+    canonical file. A new-version FIRST write reaching the absent-file
+    branch must wait that holder out (and re-check the canonical it may
+    have created) rather than fork the chain."""
+    import fcntl
+    import os as os_module
+
+    ledger = tmp_path / "ledger.jsonl"
+    legacy = tmp_path / "ledger.jsonl.lock"
+    legacy.touch()
+    old_holds = threading.Event()
+    release_old = threading.Event()
+    new_entered = threading.Event()
+    observed: list[str] = []
+
+    def _old_writer() -> None:
+        fd = os_module.open(legacy, os_module.O_RDWR)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            old_holds.set()
+            release_old.wait(_WAIT)
+            ledger.write_text("old-row\n")  # the pre-B-46 first append
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os_module.close(fd)
+
+    def _new_writer() -> None:
+        with cross_process_write_lock(ledger):
+            observed.append(ledger.read_text() if ledger.exists() else "<absent>")
+            with ledger.open("a") as fh:
+                fh.write("new-row\n")
+        new_entered.set()
+
+    old = threading.Thread(target=_old_writer)
+    old.start()
+    assert old_holds.wait(_WAIT)
+    new = threading.Thread(target=_new_writer)
+    new.start()
+    assert not new_entered.wait(0.5), (
+        "new writer entered the absent-file branch past a legacy holder"
+    )
+    release_old.set()
+    old.join(_WAIT)
+    new.join(_WAIT)
+    assert new_entered.is_set()
+    # The re-check saw the canonical the old writer created (no fork).
+    assert observed == ["old-row\n"]
+    assert ledger.read_text() == "old-row\nnew-row\n"
+
+
+def test_fifo_legacy_sidecar_does_not_hang(tmp_path: Path) -> None:
+    """Codex round-5 P2 (B-46 landing) — a FIFO planted at the legacy
+    sidecar path must not stall the lock (nonblocking open + regular-file
+    check treat it as absent; old-version processes could never
+    coordinate through it either)."""
+    import os as os_module
+
+    ledger = tmp_path / "ledger.jsonl"
+    ledger.write_text("seed\n")
+    os_module.mkfifo(tmp_path / "ledger.jsonl.lock")
+    done = threading.Event()
+
+    def _write() -> None:
+        with cross_process_write_lock(ledger):
+            pass
+        done.set()
+
+    t = threading.Thread(target=_write)
+    t.start()
+    t.join(_WAIT)
+    assert done.is_set(), "write lock hung on a FIFO legacy sidecar"

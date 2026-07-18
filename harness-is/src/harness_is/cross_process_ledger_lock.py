@@ -162,12 +162,24 @@ def _acquire_legacy_sidecar_if_present(canonical_path: Path, *, exclusive: bool)
     transition window it has always covered. Returns the locked fd, or -1
     when the sidecar does not exist."""
     import fcntl  # POSIX-only; callers gate win32.
+    import stat as stat_module
 
     try:
-        fd = os.open(_legacy_lock_file_path(canonical_path), os.O_RDONLY)
+        fd = os.open(
+            _legacy_lock_file_path(canonical_path),
+            os.O_RDONLY | getattr(os, "O_NONBLOCK", 0),
+        )
     except FileNotFoundError:
         return -1
     try:
+        if not stat_module.S_ISREG(os.fstat(fd).st_mode):
+            # A planted/mangled sidecar (e.g. a FIFO) cannot carry the
+            # legacy protocol — old-version processes would hang on it,
+            # never coordinate through it — and a blocking open here
+            # would stall every cooperating ledger operation (round-5
+            # P2). Treat as absent.
+            os.close(fd)
+            return -1
         fcntl.flock(fd, fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)
     except BaseException:
         os.close(fd)
@@ -219,8 +231,19 @@ def cross_process_write_lock(canonical_path: Path) -> Generator[None, None, None
                 # section — the B-50 tenant_transaction composition —
                 # cannot self-deadlock). Later writers re-check under
                 # THEIR dir hold, see the file, and hand off below.
-                yield
-                return
+                # Rolling-upgrade coexistence (round-5 P1): a pre-B-46
+                # writer creates + locks the legacy sidecar BEFORE
+                # creating the canonical file — acquire the sidecar too
+                # when present, and re-check the canonical afterwards (it
+                # may have appeared while we waited on the old writer).
+                legacy_fd = _acquire_legacy_sidecar_if_present(canonical_path, exclusive=True)
+                try:
+                    if canonical_path.exists():
+                        continue
+                    yield
+                    return
+                finally:
+                    _release_legacy_sidecar(legacy_fd)
             # Handoff: probe the file lock NON-BLOCKING under the dir
             # hold; on contention, RELEASE the dir first and only then
             # block on the file alone (codex round-2 P1 — blocking on a
@@ -338,19 +361,28 @@ def cross_process_replace_lock(canonical_path: Path) -> Generator[None, None, No
             os.close(file_fd)
             dir_lock.release()
             raise
-        # Hold BOTH the dir lock and the (old-inode) file lock across the
-        # replacement section.
+        # Hold the dir lock, the (old-inode) file lock, AND — during a
+        # rolling upgrade — the legacy sidecar lock across the replacement
+        # section (round-5 P1: a pre-B-46 writer holding only the sidecar
+        # would otherwise append concurrently and have its rows
+        # overwritten by the rewrite).
         try:
+            legacy_fd = _acquire_legacy_sidecar_if_present(canonical_path, exclusive=True)
             try:
                 yield
             finally:
+                _release_legacy_sidecar(legacy_fd)
                 fcntl.flock(file_fd, fcntl.LOCK_UN)
                 os.close(file_fd)
             return
         finally:
             dir_lock.release()
     try:
-        yield
+        legacy_fd = _acquire_legacy_sidecar_if_present(canonical_path, exclusive=True)
+        try:
+            yield
+        finally:
+            _release_legacy_sidecar(legacy_fd)
     finally:
         dir_lock.release()
 
@@ -391,9 +423,18 @@ def cross_process_read_lock(canonical_path: Path) -> Generator[None, None, None]
                 # absent-file-mode first writer for the caller's section.
                 # (Exclusive rather than shared — a deliberate
                 # simplification: absent-file reads are the rare
-                # pre-first-write window and read nothing.)
-                yield
-                return
+                # pre-first-write window and read nothing.) Rolling
+                # upgrade (round-5 P1): also wait out a legacy-sidecar
+                # holder and re-check for the canonical it may have
+                # created.
+                legacy_fd = _acquire_legacy_sidecar_if_present(canonical_path, exclusive=False)
+                try:
+                    if canonical_path.exists():
+                        continue
+                    yield
+                    return
+                finally:
+                    _release_legacy_sidecar(legacy_fd)
             try:
                 try:
                     fcntl.flock(file_fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
