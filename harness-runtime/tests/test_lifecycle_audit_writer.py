@@ -2438,3 +2438,53 @@ def test_hard_linked_snapshot_tmp_refused_without_truncating_target(
     assert sidecar_before in writer.sidecar_path.read_bytes(), (
         "the linked sidecar must never be truncated by the snapshot install"
     )
+
+
+def test_from_zero_fold_persists_snapshot_under_default_cadence(tmp_path: Path) -> None:
+    """Merge-gate round-1 test-witness lens (item (g)) — the from-zero fold
+    must persist the snapshot IMMEDIATELY, independent of the cadence
+    threshold: under the default floor of 64 a small-ledger cold start
+    would otherwise never checkpoint, repeating the O(history) refold at
+    every process start ("paid at most once" is the feature's core claim).
+    No cadence monkeypatch here — that is the point."""
+    writer = _writer(tmp_path)
+    writer.append("tenant-A", _make_audit_entry("1" * 64))
+    writer.append("tenant-A", _make_audit_entry("2" * 64))
+    snapshot_path = writer._snapshot_path  # pyright: ignore[reportPrivateUsage]
+    assert not snapshot_path.exists(), "own appends below the floor must not checkpoint"
+
+    fresh = RuntimeAuditLedgerWriter(
+        ledger_writer=writer.ledger_writer, time_source=writer.time_source
+    )
+    fresh.append("tenant-A", _make_audit_entry("3" * 64))
+    assert snapshot_path.exists(), (
+        "a from-zero fold must persist the snapshot immediately, not wait for the cadence"
+    )
+
+
+def test_adopt_legacy_persists_snapshot_immediately(tmp_path: Path) -> None:
+    """Merge-gate round-1 test-witness lens (item (g)) — `adopt_legacy_is_refs`
+    rebuilds the index wholesale from the (potentially huge) baseline; it
+    must persist the snapshot immediately so a migrated deployment never
+    re-folds the baseline at cold start. The snapshot body must carry the
+    `legacy_exempt` pairs (the fold spy is structurally blind to baseline
+    rows, so this is pinned on the file itself)."""
+    writer = _writer(tmp_path)
+    legacy_one = _make_audit_entry("1" * 64)
+    legacy_two = _make_audit_entry("2" * 64)
+    writer.append("tenant-A", legacy_one)
+    writer.append(None, legacy_two)
+    writer.sidecar_path.unlink()
+
+    fresh = RuntimeAuditLedgerWriter(
+        ledger_writer=writer.ledger_writer, time_source=writer.time_source
+    )
+    assert fresh.adopt_legacy_is_refs() == 2
+
+    snapshot_path = fresh._snapshot_path  # pyright: ignore[reportPrivateUsage]
+    assert snapshot_path.exists(), "legacy adoption must checkpoint immediately"
+    body = json.loads(snapshot_path.read_text())["body"]
+    assert sorted(map(tuple, body["legacy_exempt"])) == sorted(
+        [("tenant-A", legacy_one.entry_hash), ("_single", legacy_two.entry_hash)]
+    )
+    assert body["digests"] == []
