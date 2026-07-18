@@ -194,6 +194,17 @@ def cross_process_write_lock(canonical_path: Path) -> Generator[None, None, None
                     dir_lock.release()
                     dir_held = False
                     fcntl.flock(file_fd, fcntl.LOCK_EX)
+            except OSError as exc:
+                import errno as errno_module
+
+                if exc.errno == errno_module.ENOTSUP:
+                    # Un-flockable object (see the reader) — the caller's
+                    # validated open owns the loud rejection.
+                    os.close(file_fd)
+                    yield
+                    return
+                os.close(file_fd)
+                raise
             except BaseException:
                 os.close(file_fd)
                 raise
@@ -332,6 +343,20 @@ def cross_process_read_lock(canonical_path: Path) -> Generator[None, None, None]
                     dir_lock.release()
                     dir_held = False
                     fcntl.flock(file_fd, fcntl.LOCK_SH)
+            except OSError as exc:
+                import errno as errno_module
+
+                if exc.errno == errno_module.ENOTSUP:
+                    # An un-flockable object (macOS raises ENOTSUP for a
+                    # FIFO): the lock layer cannot serialize it and must
+                    # not own the rejection either — yield unguarded and
+                    # let the CALLER's validated open fail loudly with its
+                    # documented not-a-regular-file error.
+                    os.close(file_fd)
+                    yield
+                    return
+                os.close(file_fd)
+                raise
             except BaseException:
                 os.close(file_fd)
                 raise
