@@ -59,13 +59,13 @@
 
 snapshot:
   total: 55
-  open: 0
-  design_substrate_gated: 6
+  open: 4
+  design_substrate_gated: 2
   registered_finding: 5
   operator_gated: 1
   held: 1
   closed: 42
-  identity_digest: 6e170f2ce3f41c4a
+  identity_digest: dc669e1c7a8f375d
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -980,8 +980,8 @@ items:
     2026-07-17 — item (i) PR #1042, item (g) PR #1044)*'
 - id: B-51
   title: Tenant-scope binding under deployment-scoped signing keys
-  status: design_substrate_gated
-  summary: 'RATIFIED 2026-07-18 (all gate items as recommended) -- apply arc open; row flips to open once the OD v1.34 + CP v1.101 + Runtime v1.101 + plan deltas land. B-47 disposition item (f): the section 21.2.1 canonical message does not bind tenant
+  status: open
+  summary: 'RATIFIED 2026-07-18 (all gate items as recommended) -- OPEN (spec + plan deltas APPLIED 2026-07-18: OD v1.34 + CP v1.101 + Runtime v1.101 + plan deltas v2.29/v2.38/v2.49). B-47 disposition item (f): the section 21.2.1 canonical message does not bind tenant
     identity; under a deployment-scoped key a signed entry could be re-presented under another tenant.
     Recommendation REVISED at codex round-3: the fifth canonical-message segment is the PRIMARY fix
     (key_arns carries no tenant association and composers use fixed global key_ids, so a key-scope
@@ -1007,7 +1007,7 @@ items:
     2026-07-17)*'
 - id: B-52
   title: Audit-signing fail-closed policy at MULTI_TENANT_COMPLIANCE
-  status: design_substrate_gated
+  status: open
   summary: 'RATIFIED 2026-07-18 (two-spec shape; flag-false invalid at MTC; redaction path + prewarm posture as recommended) -- apply arc open. B-47 disposition item (m): signing failures are typed + loudly surfaced but dispatch stays
     fail-open (CP section 28.10.4 invariant 2 is spec-committed). Recommendation recorded: mirror OD
     v1.8 section C-OD-28.2''s operator-configurable default-fail-closed pattern via an
@@ -1036,7 +1036,7 @@ items:
     2026-07-17)*'
 - id: B-53
   title: Migration-CLI promotion into the spec-committed scripts inventory
-  status: design_substrate_gated
+  status: open
   summary: 'RATIFIED 2026-07-18 (harness migrate-audit-sidecar subcommand rides the Runtime v1.101 rider) -- apply arc open. B-47 disposition item (j): python -m harness_runtime.admin.migrate_audit_sidecar works
     today; promotion = a `harness migrate-audit-sidecar` SUBCOMMAND under the existing flat harness
     console-script namespace (round-22/23 of the filing: no new [project.scripts] entry -- dispatch
@@ -1053,7 +1053,7 @@ items:
     2026-07-17)*'
 - id: B-54
   title: Backend-aware audit signature verification API
-  status: design_substrate_gated
+  status: open
   summary: 'RATIFIED 2026-07-18 (section 21.2.2 API with all contract requirements, non-blocking default; section 20.3.1 reconciliation into the CP rider) -- apply arc open. Split from B-49 at codex round-11 of the disposition leg: verify_hash_chain_integrity
     checks only unkeyed content hashes + links, which a ledger-rewriting attacker can recompute; the
     production SigningBackend.verify path (real KMS verification of persisted signature_attrs,
