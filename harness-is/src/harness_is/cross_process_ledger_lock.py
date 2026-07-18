@@ -75,18 +75,6 @@ from pathlib import Path
 _IS_WINDOWS = sys.platform == "win32"
 
 
-@contextmanager
-def _flock_fd(fd: int, *, exclusive: bool) -> Generator[None, None, None]:
-    """Hold `flock` on an already-open fd (POSIX-only; callers gate win32)."""
-    import fcntl  # POSIX-only; never reached on Windows.
-
-    fcntl.flock(fd, fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)
-    try:
-        yield
-    finally:
-        fcntl.flock(fd, fcntl.LOCK_UN)
-
-
 class _DirLock:
     """Per-directory lock: one cross-process `flock` EX face + a per-thread
     REENTRANT in-process face.
@@ -114,7 +102,14 @@ class _DirLock:
 
         self._rlock.acquire()
         if self._refcount == 0:
-            self._fd = os.open(self._path, os.O_RDONLY)
+            try:
+                self._fd = os.open(self._path, os.O_RDONLY)
+            except BaseException:
+                # Codex round-1 P2: a failed open (dir removed, EMFILE,
+                # transient permission error) must not leave the RLock
+                # permanently held — later threads would block forever.
+                self._rlock.release()
+                raise
             try:
                 fcntl.flock(self._fd, fcntl.LOCK_EX)
             except BaseException:
@@ -221,57 +216,49 @@ def cross_process_read_lock(canonical_path: Path) -> Generator[None, None, None]
     if _IS_WINDOWS:
         yield
         return
+    import fcntl  # POSIX-only; never reached on Windows.
+
+    if not canonical_path.parent.exists():
+        # No parent directory: nothing to read AND no bootstrapped
+        # deployment to race — the documented residual window. (Readers
+        # never mkdir; the harness-inspect read-only contract.)
+        yield
+        return
+    # Dir-first, symmetric with the writer (codex round-1 P1 on this
+    # landing): a file-first fast path could open a file the CALLER of an
+    # absent-file-mode writer had just created and take an uncontested
+    # SHARED lock while that writer — holding only the directory lock —
+    # was still mid-append. Acquiring the directory lock first blocks on
+    # exactly that writer; the hold is transitional (released right after
+    # the file handoff) so long reads never couple sibling ledgers.
+    dir_lock = _dir_lock_for(canonical_path.parent)
+    dir_lock.acquire()
+    dir_held = True
     try:
-        file_fd = os.open(canonical_path, os.O_RDONLY)
-    except FileNotFoundError:
         try:
-            dir_fd = os.open(canonical_path.parent, os.O_RDONLY)
+            file_fd = os.open(canonical_path, os.O_RDONLY)
         except FileNotFoundError:
-            # No parent directory: nothing to read AND no bootstrapped
-            # deployment to race — the documented residual window.
+            # Genuinely nothing to read; the dir hold excludes an
+            # absent-file-mode first writer for the caller's section.
+            # (The dir lock is exclusive rather than shared — a deliberate
+            # simplification: absent-file reads are the rare
+            # pre-first-write window, read nothing, and the one lock kind
+            # keeps the per-thread reentrancy face sound.)
             yield
             return
-        import fcntl  # POSIX-only; never reached on Windows.
-
-        os.close(dir_fd)
-        dir_lock = _dir_lock_for(canonical_path.parent)
-        dir_lock.acquire()
-        dir_held = True
         try:
-            try:
-                file_fd = os.open(canonical_path, os.O_RDONLY)
-            except FileNotFoundError:
-                # Genuinely nothing to read; the dir hold excludes an
-                # absent-file-mode first writer for the caller's section.
-                # (The dir lock is exclusive rather than shared — a
-                # deliberate simplification: absent-file reads are the
-                # rare pre-first-write window, read nothing, and the one
-                # lock kind keeps the per-thread reentrancy face sound.)
-                yield
-                return
-            # File appeared: hand off to its SHARED lock and release the
-            # directory lock before the caller's section (a dir hold
-            # across a long read would block every writer to every ledger
-            # in the directory).
-            try:
-                fcntl.flock(file_fd, fcntl.LOCK_SH)
-            except BaseException:
-                os.close(file_fd)
-                raise
-            finally:
-                dir_lock.release()
-                dir_held = False
-            try:
-                yield
-            finally:
-                fcntl.flock(file_fd, fcntl.LOCK_UN)
-                os.close(file_fd)
+            fcntl.flock(file_fd, fcntl.LOCK_SH)
+        except BaseException:
+            os.close(file_fd)
+            raise
         finally:
-            if dir_held:
-                dir_lock.release()
-        return
-    try:
-        with _flock_fd(file_fd, exclusive=False):
+            dir_lock.release()
+            dir_held = False
+        try:
             yield
+        finally:
+            fcntl.flock(file_fd, fcntl.LOCK_UN)
+            os.close(file_fd)
     finally:
-        os.close(file_fd)
+        if dir_held:
+            dir_lock.release()

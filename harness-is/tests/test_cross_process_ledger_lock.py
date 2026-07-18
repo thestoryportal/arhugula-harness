@@ -209,3 +209,126 @@ def test_nested_same_thread_same_directory_writes_do_not_deadlock(tmp_path: Path
     assert done.is_set(), "nested same-thread same-directory write deadlocked"
     assert state.read_text() == "genesis\nnested\n"
     assert sidecar.read_text() == "first\n"
+
+
+def test_reader_blocks_after_midsection_file_creation(tmp_path: Path) -> None:
+    """Codex round-1 P1 (B-46 landing) — the reader must be dir-first: a
+    file-first fast path could open the file the absent-mode writer's
+    CALLER just created and take an uncontested SHARED lock while that
+    writer (holding only the directory lock) was still mid-append."""
+    ledger = tmp_path / "ledger.jsonl"
+    file_created = threading.Event()
+    release_writer = threading.Event()
+    reader_entered = threading.Event()
+
+    def _first_writer() -> None:
+        with cross_process_write_lock(ledger):
+            ledger.write_text("partial")  # created MID-SECTION, append unfinished
+            file_created.set()
+            release_writer.wait(_WAIT)
+            with ledger.open("a") as fh:
+                fh.write(" complete\n")
+
+    def _reader() -> None:
+        with cross_process_read_lock(ledger):
+            reader_entered.set()
+
+    w = threading.Thread(target=_first_writer)
+    w.start()
+    assert file_created.wait(_WAIT)
+    r = threading.Thread(target=_reader)
+    r.start()
+    assert not reader_entered.wait(0.5), (
+        "reader entered mid-section after the caller created the file — file-first fast path"
+    )
+    release_writer.set()
+    w.join(_WAIT)
+    r.join(_WAIT)
+    assert reader_entered.is_set()
+    assert ledger.read_text() == "partial complete\n"
+
+
+def test_lifecycle_probe_waits_for_first_writer(tmp_path: Path) -> None:
+    """Codex round-1 P1 (B-46 landing) — `initialize_jsonl_event_ledger`'s
+    missing-path touch + count must run under the write lock, not before
+    it: an unlocked probe completed with entry_count=0 while a first
+    writer held the directory lock mid-append."""
+    from harness_core.deployment_surface import DeploymentSurface
+    from harness_core.workload_class import WorkloadClass
+    from harness_is.jsonl_event_ledger_lifecycle import (
+        STATE_LEDGER_JSONL_FILENAME,
+        initialize_jsonl_event_ledger,
+    )
+    from harness_is.path_class_registry import PathClass
+
+    ledger = tmp_path / STATE_LEDGER_JSONL_FILENAME
+
+    class _Resolver:
+        def resolve_path(
+            self, path_class: PathClass, wc: WorkloadClass, ds: DeploymentSurface
+        ) -> Path:
+            return tmp_path
+
+    writer_in = threading.Event()
+    release_writer = threading.Event()
+    probe_done = threading.Event()
+    counts: list[int] = []
+
+    def _first_writer() -> None:
+        with cross_process_write_lock(ledger):
+            writer_in.set()
+            release_writer.wait(_WAIT)
+            ledger.write_text('{"row": 1}\n')
+
+    def _probe() -> None:
+        handle = initialize_jsonl_event_ledger(
+            _Resolver(),  # type: ignore[arg-type] — structural stand-in
+            workflow_class=WorkloadClass.SOFTWARE_ENGINEERING,
+            deployment_surface=DeploymentSurface.LOCAL_DEVELOPMENT,
+        )
+        counts.append(handle.entry_count)
+        probe_done.set()
+
+    w = threading.Thread(target=_first_writer)
+    w.start()
+    assert writer_in.wait(_WAIT)
+    p = threading.Thread(target=_probe)
+    p.start()
+    assert not probe_done.wait(0.5), "probe completed while the first writer held the lock"
+    release_writer.set()
+    w.join(_WAIT)
+    p.join(_WAIT)
+    assert counts == [1], f"probe undercounted after waiting: {counts}"
+
+
+def test_dir_lock_survives_failed_open(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Codex round-1 P2 (B-46 landing) — a failed dir open inside
+    `_DirLock.acquire` must release the in-process RLock; a poisoned lock
+    would block every later acquisition on that directory forever."""
+    import os as os_module
+
+    ledger = tmp_path / "ledger.jsonl"
+    real_open = os_module.open
+    state = {"fail_next_dir_open": True}
+
+    def _flaky_open(path: object, flags: int, *args: object) -> int:
+        if state["fail_next_dir_open"] and str(path) == str(tmp_path):
+            state["fail_next_dir_open"] = False
+            raise PermissionError("transient")
+        return real_open(path, flags, *args)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(os_module, "open", _flaky_open)
+    with pytest.raises(PermissionError):
+        with cross_process_write_lock(ledger):
+            pass  # pragma: no cover — never entered
+
+    done = threading.Event()
+
+    def _retry() -> None:
+        with cross_process_write_lock(ledger):
+            done.set()
+
+    t = threading.Thread(target=_retry)
+    t.start()
+    t.join(_WAIT)
+    assert done.is_set(), "dir lock poisoned by the failed open"
