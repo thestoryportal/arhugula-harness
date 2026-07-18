@@ -45,8 +45,11 @@ key_ids, so cross-tenant replay under a deployment-scoped key remains unmitigate
 The fifth segment needs tenant identity AT SIGNING. Today `sign_audit_entry` / `cp_audit_to_od_audit` receive
 no tenant, and `RuntimeAuditLedgerWriter` sees `tenant_id` only post-signing. The v1.34 delta MUST therefore
 also specify the tenant-bearing signing API threaded through the converters/composers —
-`StepExecutionContext.tenant_id` is in scope at every production call site — or move signing to a
-tenant-aware boundary. Without the rider the segment is unpopulatable.
+`StepExecutionContext.tenant_id` is in scope at every converter-based production call site, **and the rider
+must explicitly include the one non-converter path: `AuditLedgerRedactionTokenMap` calls
+`compose_redaction_token_audit_entry` directly and holds tenant scope as its own `_tenant_id` (filing codex
+round-1 P2 — omitting it would leave redaction-token signatures tenant-unbound after the converter sites are
+updated)** — or move signing to a tenant-aware boundary. Without the rider the segment is unpopulatable.
 
 ### Council
 
@@ -105,9 +108,21 @@ New C-OD-21 §21.2.2 verification API in the same v1.34 delta, mirroring the inj
 (CP v1.98 §20.2.1 `SigningBackend`, B-22): optional `backend` parameter; absent → current behavior
 (hash-chain + content integrity only) PRESERVED VERBATIM; present → reconstruct the canonical message —
 INCLUDING the leg-1 fifth segment if ratified, which is why B-54 must land jointly with or after B-51 in the
-same delta — project `"DEPLOYMENT_BOUND"` → `key_period=0` exactly as signing does, and discriminate
-legacy/placeholder signatures (pre-backend rows) as EXEMPT-by-construction rather than fail-loud, mirroring
-the `adopt_legacy_is_refs` operator-acknowledged-fact posture.
+same delta — and project `"DEPLOYMENT_BOUND"` → `key_period=0` exactly as signing does. Two contract
+requirements sharpened at filing codex round-1:
+
+- **Tenant scope is a verifier INPUT** (round-1 P1): the verifier consumes `Sequence[AuditLedgerEntry]`
+  (B-49 shape), but the tenant tag lives in the sidecar wrapper and is stripped by
+  `read_full_entries_for_tenant` — the fifth segment is unreconstructable from the entries alone. The
+  §21.2.2 contract must take the expected tenant scope as a parameter (verification is already per-tenant
+  at every consumer) or specify an equivalent signed discriminator persisted on the entry.
+- **Legacy exemption must NOT be inferred from the signature value** (round-1 P1): `signature_attrs` are
+  mutable and excluded from `entry_hash`, so classifying placeholder-SHAPED values (`unsigned:*`) as exempt
+  hands an attacker a downgrade path — replace a real signature with a placeholder shape and the row skips
+  verification. The contract must gate exemption on an operator-recorded cutover instead — the
+  `adopt_legacy_is_refs`-style explicit baseline (which rows/periods predate the backend), a config-declared
+  pre-backend key-period set, or an equivalent signed cutover record — mirroring the round-46
+  deliberately-NOT-automatic adoption posture, not the row's own mutable bytes.
 
 ### Council
 
