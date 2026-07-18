@@ -2410,3 +2410,31 @@ def test_snapshot_cadence_counts_legacy_exempt_members(
     assert snapshot_path.read_bytes() == before, (
         "a small delta over a large legacy baseline must not rewrite the snapshot"
     )
+
+
+def test_hard_linked_snapshot_tmp_refused_without_truncating_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex round-3 P1 (item (g) landing) — a hard link planted at the
+    fixed snapshot .tmp path passes the regular-file and uid checks; the
+    temp-install truncate would then destroy the LINKED authoritative file
+    (here: the sidecar itself). The writer must refuse on st_nlink > 1 and
+    leave the linked target byte-identical."""
+    import os as os_module
+
+    monkeypatch.setattr(RuntimeAuditLedgerWriter, "_SNAPSHOT_EVERY_APPENDS", 1)
+    writer = _writer(tmp_path)
+    snapshot_path = writer._snapshot_path  # pyright: ignore[reportPrivateUsage]
+    tmp_file = snapshot_path.with_name(snapshot_path.name + ".tmp")
+
+    # First append creates the sidecar and a snapshot; plant the link after.
+    writer.append("tenant-A", _make_audit_entry("1" * 64))
+    sidecar_before = writer.sidecar_path.read_bytes()
+    os_module.link(writer.sidecar_path, tmp_file)
+
+    with pytest.raises(ValueError, match="hard links"):
+        writer.append("tenant-A", _make_audit_entry("2" * 64))
+    assert writer.sidecar_path.read_bytes() != b""
+    assert sidecar_before in writer.sidecar_path.read_bytes(), (
+        "the linked sidecar must never be truncated by the snapshot install"
+    )

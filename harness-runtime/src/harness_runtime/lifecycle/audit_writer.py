@@ -374,6 +374,19 @@ class RuntimeAuditLedgerWriter:
                     f"{tmp_st.st_uid}, not the effective uid {os.geteuid()} — "
                     f"refusing to write over another account's file"
                 )
+            if tmp_st.st_nlink > 1:
+                # Codex round-3 P1 on this landing: a HARD LINK planted at
+                # the fixed .tmp path passes the regular-file and uid
+                # checks (O_NOFOLLOW only rejects symlinks; a same-uid link
+                # to the sidecar or IS ledger is trivially plantable), and
+                # the ftruncate below would destroy the linked
+                # AUTHORITATIVE file to install a cache. A legitimate temp
+                # file always has exactly one link.
+                raise ValueError(
+                    f"snapshot temp file {tmp_path} has {tmp_st.st_nlink} "
+                    f"hard links — refusing to truncate a file linked "
+                    f"elsewhere (possible plant over the sidecar or ledger)"
+                )
             os.ftruncate(fd, 0)
         except BaseException:
             os.close(fd)
