@@ -57,13 +57,14 @@ Wrapping the sync inner in an executor is not free:
 | # | Executor design | Assessment |
 |---|---|---|
 | A | Keep the direct call (status quo) | Rejected — seconds-long loop stalls at every sub-agent gate, now plus KMS latency; single-workflow deployments mask it, MTC/daemon deployments do not |
-| B | **Custom grow-on-demand dispatch executor with a CONFIGURABLE hard cap + fail-fast** — a thread is created when no free worker exists (idle workers reused), threads named; a RuntimeConfig ceiling (generous default) is a SAFETY VALVE: at the cap, dispatch fails FAST with a typed error — never queues (queueing re-creates the recursive deadlock). Lifecycle defined on its OWN terms (round-2 P2 — the B2a audit executor is NOT a join-on-shutdown precedent: `_DaemonThreadAuditExecutor` deliberately runs daemon workers with no shutdown API, and `run_audit_off_loop` joins per-job on cancellation only): daemon worker threads + bounded per-DISPATCH join on cancellation (the `run_audit_off_loop` per-job-join shape), and a drain-with-deadline at shutdown that must NOT block on workers currently bridged into the event loop | **RECOMMENDED** — deadlock-free under arbitrary `SUB_AGENT_DISPATCH` recursion below the cap, resource-exhaustion-bounded above it, loud at the boundary. Grounding (rounds 1/15, reconciled): C-CP-25 §25.11 / CP plan v2.37 DO commit a depth bound + per-parent fan-out cap 3 — but ONLY for `HIERARCHICAL_DELEGATION`; `StepExecutionContext.sub_agent_descent` is a BOOLEAN (not a depth counter), `compose_child_workflow_runner` documents unbounded stack depth for generic recursion, and no committed bound covers total ACTIVE FRAMES across concurrent roots/daemon requests — the executor cap COMPOSES with (does not duplicate) the delegation depth bound, remains a genuinely NEW capacity authority for the surfaces the CP bound does not cover, and stock `ThreadPoolExecutor` has NO unbounded mode (`max_workers=None` = bounded default) — the executor must be custom |
+| B | **Custom grow-on-demand dispatch executor with a CONFIGURABLE hard cap + fail-fast** — a thread is created when no free worker exists (idle workers reused), threads named; a RuntimeConfig ceiling (generous default) is a SAFETY VALVE: at the cap, dispatch fails FAST with a typed error — never queues (queueing re-creates the recursive deadlock). Lifecycle defined on its OWN terms (round-2 P2 — the B2a audit executor is NOT a join-on-shutdown precedent: `_DaemonThreadAuditExecutor` deliberately runs daemon workers with no shutdown API, and `run_audit_off_loop` joins per-job on cancellation only): daemon worker threads + bounded per-DISPATCH join on cancellation (the `run_audit_off_loop` per-job-join shape), and a drain-with-deadline at shutdown that must NOT block on workers currently bridged into the event loop | **RECOMMENDED** — deadlock-free under arbitrary `SUB_AGENT_DISPATCH` recursion below the cap, resource-exhaustion-bounded above it, loud at the boundary. Grounding (rounds 1/15/17, final): C-CP-25 §25.11's `HIERARCHICAL_DELEGATION` "with depth" phrase and the plan's "depth bound" define NO value and NO carrier (`sub_agent_descent` is a BOOLEAN; `compose_child_workflow_runner` explicitly permits unbounded recursive re-entry) — only the per-parent fan-out cap 3 is materialized. **The executor cap is therefore the ONLY effective recursion-capacity bound**, and the UNMATERIALIZED delegation depth bound is itself a CP contract/implementation gap registered in the §5 CP rider. Stock `ThreadPoolExecutor` has NO unbounded mode (`max_workers=None` = bounded default) — the executor must be custom |
 | C | Depth-aware bounded executor (per-depth accounting; beyond-budget dispatch must FAIL FAST or draw on RESERVED per-depth capacity — round-2 P1: QUEUEING is disallowed in any variant, since a queued descendant whose parents hold every worker is exactly the §2 deadlock) | Heavier machinery for the same fail-fast boundary; per-depth accounting only pays off if a depth-shaped policy (deeper = scarcer) is actually wanted — the flat cap of B is simpler and equally loud |
 
 **Council note (register: conditional — C1 orchestration ⊥ C9 reliability) — condition MET.** The filing's
-first draft claimed a sufficient bound already existed; rounds 1/15 settled the honest picture: the CP
-delegation depth bound is real but topology-scoped — no committed bound covers generic recursion or total
-active frames across concurrent roots. A genuine recursion-capacity question therefore EXISTS —
+first draft claimed a sufficient bound already existed; rounds 1/15/17 settled the honest picture: the
+spec's delegation "depth bound" phrase is UNMATERIALIZED (no value, no carrier — a CP gap the §5 rider
+registers), so the executor cap is the only effective recursion-capacity bound anywhere. A genuine
+recursion-capacity question therefore EXISTS —
 whose authority is the cap, what default, fail-fast semantics at the boundary. Per §13.4 the voices'
 positions precede the operator decision (round-2 P2), so both are named HERE:
 
@@ -157,7 +158,13 @@ inventing the number.
    `_run_fanout_to_completion` creates `ThreadPoolExecutor(max_workers=len(branch_plan))` and enters
    `asyncio.to_thread` per branch BEFORE any dispatch reaches the capped executor — an unbounded manifest
    would spawn N upstream CP threads before the excess fail-fasts, defeating the host ceiling; the apply
-   arc brings the upstream fan-out thread creation under the same capacity authority** — and must keep
+   arc brings the upstream fan-out thread creation under the same capacity authority, with the
+   ACCOUNTING MODEL defined (round-17 P1): ONE shared frame budget covers BOTH layers — an active branch
+   consumes an upstream CP frame AND an inner dispatch frame (2 frames while active), reserved
+   ATOMICALLY at branch admission (both-or-fail-fast, preventing partial-acquisition exhaustion where N
+   upstream frames starve the inner jobs); the concurrency guarantee is therefore N branches fully
+   concurrent when 2N ≤ cap, fail-fast beyond, witnessed at the boundary (2N = cap) and past it
+   (2N + 2 > cap)** — and must keep
    the v1.97 paused-child-branch resume semantics; witness with a 2-branch fan-out. **Including pause-state ISOLATION (filing codex round-4
    P1): child runners share the parent `HarnessContext`, so one child's nested durable-HITL gate setting
    `ctx.pause_requested_flag` would be captured by a SIBLING branch with no gate (a false pause) once
@@ -211,7 +218,10 @@ record's own §8.3 identifies it as such — so landing it under Runtime deltas 
 caller-supplied ledger timestamp semantics without the authoritative IS contract moving. And (f) a **CP spec/plan rider for the fan-out cap gating (round-15 P1)**: bringing
 `_run_fanout_to_completion`'s branch-plan execution under the capacity authority changes CP-owned
 concurrency/cardinality semantics (C-CP-25 §25.11) from unconditional concurrent execution to a typed
-fail-fast outcome above the cap — that half rides an explicit CP amendment, never Runtime authority alone.
+fail-fast outcome above the cap — that half rides an explicit CP amendment, never Runtime authority alone;
+**the same rider registers the UNMATERIALIZED §25.11 delegation depth bound (round-17 P2 — "with depth"
+names no value and no carrier; `compose_child_workflow_runner` permits unbounded re-entry) for CP
+disposition: materialize it or formally delegate recursion capacity to the executor cap.**
 And (e) **Runtime
 riders for the §4 semantic changes themselves (round-9 P1)**: per-child pause/resume carrier isolation and
 the dispatch-time cancellation/join/effect-fence policy alter committed Runtime surfaces (C-RT-04
