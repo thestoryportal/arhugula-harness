@@ -6,7 +6,7 @@ in-execution operator decision between substantive designs, revising a ratified 
 and C each carry Class 1 back-flow RIDERS** (§5: the C-RT-03 `RuntimeConfig` cap field and the C-IS-07
 drain-timestamp write-contract change are committed-contract amendments per §4.3); the riders halt for the
 same operator response and the spec-writer apply pass, exactly like the B-51/B-52/B-54 arc's riders.
-**Status: FILED — awaiting operator selection.** No `design-substrate/**` file is
+**Status: RATIFIED 2026-07-19 — the operator selected OPTION B AS RECOMMENDED** (custom grow-on-demand executor; ONE shared frame budget with occupied+N+S admission, sync-only inner charging, default `sub_agent_dispatch_max_workers = 256`; atomic reservation; fail-fast, never queue) **with all filing-settled riders** (C-RT-03 cap field + typed fail-fast error; C-IS-07 drain-timestamp back-flow + xfail removal; CP §25.11 fan-out gating + formal delegation of recursion capacity to the executor cap; Runtime spec+plan deltas; B-39 as the explicit dependency of the fan-out-resume half). The apply arc proceeds per §4/§5.** No `design-substrate/**` file is
 edited by this filing; B-48 flips to `design_substrate_gated` with this filing (round-9 P1 — a filed back-flow awaiting ratification is exactly that status; `registered_finding` would signal buildable-after-grounding and could route implementation before ratification). Surfaced by
 out-of-family Codex round-2 P1 on B-47 PR B2a (#1036); register row `B-48`.
 
