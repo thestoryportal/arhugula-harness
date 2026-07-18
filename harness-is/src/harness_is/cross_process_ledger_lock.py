@@ -58,9 +58,14 @@ the reader to create the directory, which the read-only contract forbids. For
 every shipped ledger the parent is the state directory provisioned at
 bootstrap, so the residual requires reading a ledger whose deployment was
 never bootstrapped — a microseconds-wide race against `mkdir` itself, vs the
-indefinitely-armed pre-B-46 window. Legacy `<ledger>.lock` sibling files from
-the first landing are inert orphans (harmless; no reader or writer consults
-them any longer).
+indefinitely-armed pre-B-46 window. Legacy `<ledger>.lock` sibling files are NOT orphans during the
+compatibility window: writers PROVISION + lock them (round-7 — an
+exists-check missed a fresh pre-B-46 process creating one mid-window) and
+readers lock them when present. The one transitional residual left open: a
+NEW-version reader racing a FRESH old-version writer's very first sidecar
+creation can take a torn read (loud parse error, never silent corruption —
+the historical posture); full retirement of the legacy protocol rides the
+B-45 successor arc.
 """
 
 from __future__ import annotations
@@ -147,6 +152,34 @@ def _dir_lock_for(parent: Path) -> _DirLock:
 def _legacy_lock_file_path(canonical_path: Path) -> Path:
     """The pre-B-46 sibling advisory-lock file (`<ledger>.lock`)."""
     return canonical_path.with_name(canonical_path.name + ".lock")
+
+
+def _acquire_legacy_sidecar_for_writer(canonical_path: Path) -> int:
+    """Writer-side legacy coordination (codex round-7 P1): writers PROVISION
+    the legacy sidecar (`O_CREAT`, atomic existence) rather than
+    exists-checking it — a fresh pre-B-46 process arriving mid-window could
+    otherwise create + lock the sidecar our exists-check missed and append
+    concurrently (forked chain). Writers may create files (they mutate the
+    ledger anyway); the sidecar therefore stays provisioned for the
+    compatibility window — its removal rides the B-45 successor arc that
+    retires the legacy protocol entirely. Returns the locked fd."""
+    import fcntl
+    import stat as stat_module
+
+    fd = os.open(
+        _legacy_lock_file_path(canonical_path),
+        os.O_CREAT | os.O_RDWR | getattr(os, "O_NONBLOCK", 0),
+        0o600,
+    )
+    try:
+        if not stat_module.S_ISREG(os.fstat(fd).st_mode):
+            os.close(fd)
+            return -1
+        fcntl.flock(fd, fcntl.LOCK_EX)
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
 
 
 def _acquire_legacy_sidecar_if_present(canonical_path: Path, *, exclusive: bool) -> int:
@@ -236,7 +269,7 @@ def cross_process_write_lock(canonical_path: Path) -> Generator[None, None, None
                 # creating the canonical file — acquire the sidecar too
                 # when present, and re-check the canonical afterwards (it
                 # may have appeared while we waited on the old writer).
-                legacy_fd = _acquire_legacy_sidecar_if_present(canonical_path, exclusive=True)
+                legacy_fd = _acquire_legacy_sidecar_for_writer(canonical_path)
                 try:
                     if canonical_path.exists():
                         continue
@@ -298,7 +331,7 @@ def cross_process_write_lock(canonical_path: Path) -> Generator[None, None, None
                 os.close(file_fd)
                 continue
             try:
-                legacy_fd = _acquire_legacy_sidecar_if_present(canonical_path, exclusive=True)
+                legacy_fd = _acquire_legacy_sidecar_for_writer(canonical_path)
             except BaseException:
                 fcntl.flock(file_fd, fcntl.LOCK_UN)
                 os.close(file_fd)
@@ -368,7 +401,7 @@ def cross_process_replace_lock(canonical_path: Path) -> Generator[None, None, No
         # overwritten by the rewrite).
         try:
             try:
-                legacy_fd = _acquire_legacy_sidecar_if_present(canonical_path, exclusive=True)
+                legacy_fd = _acquire_legacy_sidecar_for_writer(canonical_path)
             except BaseException:
                 # Round-6 P2: a legacy-acquisition failure must not leave
                 # the canonical file lock held until process restart.
@@ -385,7 +418,7 @@ def cross_process_replace_lock(canonical_path: Path) -> Generator[None, None, No
         finally:
             dir_lock.release()
     try:
-        legacy_fd = _acquire_legacy_sidecar_if_present(canonical_path, exclusive=True)
+        legacy_fd = _acquire_legacy_sidecar_for_writer(canonical_path)
         try:
             yield
         finally:

@@ -645,3 +645,51 @@ def test_fifo_legacy_sidecar_does_not_hang(tmp_path: Path) -> None:
     t.start()
     t.join(_WAIT)
     assert done.is_set(), "write lock hung on a FIFO legacy sidecar"
+
+
+def test_writer_provisions_legacy_sidecar_against_fresh_old_process(tmp_path: Path) -> None:
+    """Codex round-7 P1 (B-46 landing) — a fresh pre-B-46 process arriving
+    MID-WINDOW creates the legacy sidecar an exists-check missed. Writers
+    now PROVISION + lock the sidecar, so the old process's create+lock
+    blocks until the new writer's section ends (no concurrent append, no
+    chain fork)."""
+    import fcntl
+    import os as os_module
+
+    ledger = tmp_path / "ledger.jsonl"
+    ledger.write_text("seed\n")
+    legacy = tmp_path / "ledger.jsonl.lock"
+    assert not legacy.exists()
+
+    new_in = threading.Event()
+    release_new = threading.Event()
+    old_entered = threading.Event()
+
+    def _new_writer() -> None:
+        with cross_process_write_lock(ledger):
+            new_in.set()
+            release_new.wait(_WAIT)
+
+    def _fresh_old_process() -> None:
+        # The pre-B-46 protocol: create the sidecar lazily, lock it EX.
+        fd = os_module.open(legacy, os_module.O_CREAT | os_module.O_RDWR, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            old_entered.set()
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os_module.close(fd)
+
+    n = threading.Thread(target=_new_writer)
+    n.start()
+    assert new_in.wait(_WAIT)
+    assert legacy.exists(), "the new writer did not provision the legacy sidecar"
+    o = threading.Thread(target=_fresh_old_process)
+    o.start()
+    assert not old_entered.wait(0.5), (
+        "a fresh old-version process entered concurrently — the provisioning race is open"
+    )
+    release_new.set()
+    n.join(_WAIT)
+    o.join(_WAIT)
+    assert old_entered.is_set()
