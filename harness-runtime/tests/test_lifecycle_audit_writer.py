@@ -2547,3 +2547,33 @@ def test_reused_permissive_tmp_installs_owner_only_snapshot(
     writer.append("tenant-A", _make_audit_entry("1" * 64))
     mode = stat_module.S_IMODE(os_module.stat(snapshot_path).st_mode)
     assert mode == 0o600, f"installed snapshot must be owner-only, got {mode:o}"
+
+
+def test_refold_written_snapshot_supports_subsequent_adoption(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Merge-gate round-2 test-witness note (item (g)) — the FOLD site must
+    feed the running prefix hash: a from-zero fold that persisted a
+    wrong-digest snapshot would make every later cold start discard it and
+    silently re-pay the O(history) refold forever (correctness-neutral,
+    amortization defeated). Chain: fold-written snapshot → a second cold
+    writer must adopt it with ZERO row validations."""
+    writer = _writer(tmp_path)
+    writer.append("tenant-A", _make_audit_entry("1" * 64))
+    writer.append("tenant-A", _make_audit_entry("2" * 64))
+
+    folder = RuntimeAuditLedgerWriter(
+        ledger_writer=writer.ledger_writer, time_source=writer.time_source
+    )
+    folder.append("tenant-A", _make_audit_entry("3" * 64))  # from-zero fold → snapshot
+
+    calls = _spy_entry_validations(monkeypatch)
+    adopter = RuntimeAuditLedgerWriter(
+        ledger_writer=writer.ledger_writer, time_source=writer.time_source
+    )
+    adopter.append("tenant-A", _make_audit_entry("4" * 64))
+    # The fold-written snapshot covers rows 1-2; the folder's own row 3 is
+    # a legitimate post-snapshot delta — adoption folds exactly that one
+    # row. A wrong fold-fed digest discards the snapshot instead: all 3
+    # rows refold and this pins the difference.
+    assert len(calls) == 1, "the fold-written snapshot must be adoptable (delta-only fold)"
