@@ -967,7 +967,11 @@ items:
     code change.'
   close_out: 'Author the Class 1 fork doc with the revised recommendation; on ratification land the
     canonical-message segment at the next OD amendment arc (byte-compat-scoped per the B-22/B-31
-    precedents).'
+    precedents). The segment needs tenant identity AVAILABLE AT SIGNING (codex round-16): today
+    sign_audit_entry/cp_audit_to_od_audit receive no tenant and the writer gets tenant_id only after
+    the entry is signed -- the fork must also specify a tenant-bearing signing API threaded through
+    the converters/composers (StepExecutionContext.tenant_id is in scope at every production call
+    site) or move signing to a tenant-aware boundary.'
   council: 'conditional -- C7 compliance vs C2 schema-minimalism at the fork leg'
   heading: '### B-51 · Tenant-scope binding under deployment-scoped keys *(split from B-47 disposition,
     2026-07-17)*'
