@@ -917,7 +917,10 @@ items:
     concurrency), verify child-workflow facade bridging, pause/resume flags, OTel span context, and B-21
     fan-out under worker-thread execution, and re-run the r100 e2e. The B2a-landed mitigations already
     cover every OTHER production signing path (async composers/builders offload via the dedicated
-    audit executor with join-on-cancel).'
+    audit executor with join-on-cancel). Class 2 fork doc FILED 2026-07-18 at
+    .harness/class_2_fork_b48_sync_subagent_dispatch_offload.md -- recommendation: dedicated unbounded
+    executor deferring to the existing descent/fan-out bounds (option B); awaiting operator selection
+    (may batch with the B-51/B-52/B-54 ratification).'
   council: 'conditional -- C1 orchestration vs C9 reliability tension if the offload design surfaces a
     genuine recursion-depth bound question'
   heading: '### B-48 · Sync sub-agent dispatch executes on the event loop *(surfaced at B-47 PR B2a,

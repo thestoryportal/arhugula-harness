@@ -1,0 +1,91 @@
+# Class 2 Fork — B-48: sync sub-agent dispatch executes on the event loop (U-RT-60 direct-call revision)
+
+**Filed:** 2026-07-18 · autonomous-loop fork-first leg (after the B-51/B-52/B-54 filing, PR #1046). Class 2
+(in-execution operator decision between substantive executor designs; revises a ratified reading, not a
+committed contract shape). **Status: FILED — awaiting operator selection.** No `design-substrate/**` file is
+edited by this filing; B-48 stays `registered_finding` until the selection lands (X-AL-3). Surfaced by
+out-of-family Codex round-2 P1 on B-47 PR B2a (#1036); register row `B-48`.
+
+## §1 The defect
+
+`RuntimeHITLGateComposer._dispatch_inner` (`harness-runtime/src/harness_runtime/lifecycle/hitl_gate_composer.py`,
+`async def _dispatch_inner` — the sole inner-invocation site) calls `self.inner.dispatch(...)` DIRECTLY and
+awaits only if the result is awaitable. For the async C-RT-15 LLM inner that is correct. For the **sync
+C-RT-17 sub-agent dispatcher** (SUB_AGENT_BOUNDARY row of the §14.8.1 wrap-asymmetry table) the entire
+dispatch — child workflow execution (seconds-long), its F2/ledger writes, and the B2a-threaded KMS signing
+network calls — **runs synchronously ON the event loop**, blocking every concurrent workflow, the daemon
+keep-alive, and all pending timers for the full child-workflow duration.
+
+This is the **Q3-ratified direct-call reading** of the U-RT-60 wrap-asymmetry fork
+(`.harness/class_1_tension_u_rt_60_wrap_asymmetry_sync_async_mismatch.md` §7.2 Q3, "RATIFIED implicitly with
+Q1"; the composer docstring cites it). The blocking behavior is therefore NOT an implementation bug against
+the ratified state — child workflows already ran on the loop through this path at ratification time; the B2a
+audit-signing threading only ADDED KMS network latency to an already-blocking ratified surface. Changing it
+is a **revision of a ratified reading** → this Class 2 filing, per the register's own routing (a plain patch
+was explicitly NOT taken at B2a).
+
+## §2 Why a naive offload deadlocks (the design constraint)
+
+Wrapping the sync inner in an executor is not free:
+
+- **Recursion re-entry.** A child workflow dispatched by the sync C-RT-17 inner re-enters the sync driver,
+  whose facade bridges back onto the event loop; a `SUB_AGENT_DISPATCH` step inside the child dispatches a
+  grandchild through the SAME offload path. Under a BOUNDED pool, `depth+1` concurrent dispatch chains can
+  occupy every worker with parents blocked waiting on children that need a worker — classic recursive-offload
+  deadlock.
+- **The two existing pools are ineligible** (register close_out): the 4-worker audit-offload executor
+  (deadlock-prone under recursion AND would couple sub-agent latency to audit throughput) and the loop's
+  default `ThreadPoolExecutor` (bounded at `min(32, cpu+4)`; shared with `asyncio.to_thread` users and the
+  daemon — exhaustion under recursion/daemon concurrency).
+
+## §3 Options (the Class 2 selection)
+
+| # | Executor design | Assessment |
+|---|---|---|
+| A | Keep the direct call (status quo) | Rejected — seconds-long loop stalls at every sub-agent gate, now plus KMS latency; single-workflow deployments mask it, MTC/daemon deployments do not |
+| B | **Dedicated UNBOUNDED `ThreadPoolExecutor` for sub-agent dispatch** (named threads, join-on-shutdown mirroring the B2a audit-executor lifecycle discipline) | **RECOMMENDED** — deadlock-free by construction under arbitrary `SUB_AGENT_DISPATCH` recursion; thread growth is bounded IN PRACTICE by the committed recursion/fan-out limits (`sub_agent_descent` depth caps + B-21 fan-out bounds), so "unbounded" is bounded by the orchestration contracts that already exist — the pool bound would duplicate an existing authority |
+| C | Depth-aware bounded executor (cap + per-depth accounting, reject/queue beyond) | Workable but adds machinery that re-derives the bound the descent caps already enforce; a second authority over recursion depth (the exact two-authorities smell) — only preferable if the operator wants a hard thread ceiling independent of orchestration limits |
+
+**Council note (register: conditional — C1 orchestration ⊥ C9 reliability).** The tension is real only if a
+genuine recursion-depth bound question survives grounding. Probe-first result (§10.9): the depth bound
+ALREADY exists as an orchestration contract (`StepExecutionContext.sub_agent_descent`, CP v1.86 descent
+carrier + gate-level caps), so option B does not create unbounded behavior — it defers to the existing
+authority. No council convening is needed unless the operator selects C (which re-opens the bound-ownership
+question — convene the C1/C9 dyad at that apply leg).
+
+## §4 Verification obligations (the apply arc's acceptance criteria)
+
+1. **Child-workflow facade bridging** — the sync driver's loop-bridge (`run_coroutine_threadsafe` shape)
+   must be exercised from a WORKER thread with the parent awaiting off-loop; witness the full
+   parent→child→grandchild chain.
+2. **Pause/resume** — `HITLPauseRequestedSignal` raised inside the worker must propagate through the
+   executor future to the awaiting composer unchanged; durable-async pause flags set from the worker thread
+   must be visible to the resume path (no thread-local state).
+3. **OTel span context** — `contextvars` do NOT flow into pool threads automatically; the offload must carry
+   `contextvars.copy_context()` (or equivalent) so sub-agent spans keep their parent trace; witness a
+   parent-child span-id assertion.
+4. **B-21 fan-out** — `PARALLELIZATION` branches dispatching sub-agents concurrently must not serialize on
+   the offload (N branches → N concurrent workers) and must keep the v1.97 paused-child-branch resume
+   semantics; witness with a 2-branch fan-out.
+5. **Timestamp-ordering interaction** — the B2a append-lock discipline (timestamps sampled inside the
+   per-ledger critical section) already covers cross-thread appends; re-run the existing concurrency
+   witnesses plus the r100 e2e.
+6. All new witnesses PD-8 mutation-probed (revert the offload → the loop-blocking witness must fail; drop
+   the context-copy → the span witness must fail; etc.).
+
+## §5 Spec surface
+
+The §14.8.1 wrap-asymmetry table (Runtime spec, committed lineage) describes the sync/async inner shapes;
+the Q3 reading lives in the ratified fork doc, and the composer's execution VENUE (on-loop vs offloaded) is
+not pinned by any grep-verified spec sentence — but the revision touches the ratified Q3 record, so the
+apply arc carries: (a) this fork doc's resolution note, (b) a bounded Runtime spec delta ONLY IF the apply
+pass finds §14.8.x text asserting on-loop execution (verify at apply time against the then-current head;
+none found at this filing's grep), and (c) a Runtime plan delta for the new executor's acceptance criteria
+(the plan currently has none — same round-12 discipline as the B-51 filing).
+
+## §6 The operator selection (ONE decision)
+
+Select the executor design: **B (dedicated unbounded pool deferring to the existing descent/fan-out
+bounds — recommended)** vs C (depth-aware bounded pool — re-opens bound ownership; convenes the C1/C9
+council dyad) vs A (keep the ratified blocking direct-call). May be answered in the same batch as the
+B-51/B-52/B-54 ratification gate (PR #1046).
