@@ -1,4 +1,4 @@
-"""Cross-process advisory lock for ledger writers (B-40, C-IS-09 §9.3 / C-MEM-08).
+"""Cross-process advisory lock for ledger writers (B-40 + B-46, C-IS-09 §9.3 / C-MEM-08).
 
 C-IS-07 §7.3 ("the C3-pole append-only write contract serializes writers") and
 C-IS-09 §9.3 ("concurrent writes across sibling worktrees against the same
@@ -22,79 +22,131 @@ chain (`harness_is.__init__` eagerly imports `memory_operation_ledger`, which
 imports this module), an unconditional top-level `import fcntl` would make
 `import harness_is` itself fail on Windows. On `sys.platform == "win32"` the
 context managers below therefore degrade to a no-op (yield without locking):
-Windows sits at exact pre-B-40 parity (the in-process `threading.Lock`
-callers already hold around the same critical sections is unaffected and is
-cross-platform; only the *cross-process* dimension this module adds is
-unavailable). This is a registered gap, not a silent one — see the B-45
-follow-on forward-register row for genuine cross-platform locking (also
-covers the identical POSIX-only-`fcntl` gap already shipped at
-`harness_runtime.lifecycle.reconciler_pause_resume_substrate`).
+Windows sits at exact pre-B-40 parity. This is a registered gap, not a silent
+one — the B-45 forward-register row.
 
-A second registered gap (B-46, out-of-family Codex round 4): the lock
-sidecar is provisioned lazily by whichever writer touches a ledger first,
-so a reader racing that very first writer can pass `cross_process_read_lock`'s
-"sidecar doesn't exist yet" check before the writer creates it, then read
-unguarded while that writer is mid-append. This is NOT a regression (every
-read was unguarded, always, before this module existed) and is narrower
-than it sounds (once any writer has ever created the sidecar, all
-subsequent reads/writes serialize correctly) — but it means the "closes
-the torn-read race" claim below only holds after a ledger's first write
-under this lock, not before. The durable fix is locking the canonical
-ledger file directly instead of a lazily-created sidecar, which removes
-the provisioning race entirely; that is a larger, `harness-inspect`
-compatibility-affecting redesign properly scoped to B-46, not bolted onto
-this module's first landing.
+**Lock target (B-46 redesign — this module's second landing).** The first
+landing locked a lazily-created sibling `<ledger>.lock` file, which carried a
+first-write TOCTOU: a reader racing the very first writer could pass the
+"sidecar doesn't exist yet" check and read unguarded while that writer was
+mid-append — the race window stayed ARMED for a ledger's entire pre-first-write
+life. Per the B-46 register close-out, the lock target is now the CANONICAL
+file itself (a separate fd opened purely for `flock` — POSIX `flock` is per
+open-file-description, so a lock fd is independent of any I/O fd), with a
+parent-DIRECTORY lock covering the one state the file lock cannot: the file
+not existing yet.
+
+- **Writers** acquire the parent-directory lock EXCLUSIVE first, then — if the
+  canonical file exists — hand off to an EXCLUSIVE lock on the file and
+  release the directory. If the file does NOT exist, the writer holds the
+  directory lock for the whole critical section; the CALLER creates the file
+  inside it (the lock itself NEVER creates the canonical file — file
+  existence must keep meaning "a real append happened", which the audit
+  writer's round-36 absence guard depends on).
+- **Readers** take a SHARED lock on the canonical file when it exists. When it
+  does not, they take a SHARED lock on the parent directory instead — which
+  excludes exactly the absent-file-mode first writer — and re-check; a file
+  that appeared in between is then read under its own SHARED lock. Readers
+  never create files or directories and never `mkdir` (the `harness-inspect`
+  read-only-CLI contract; Codex round 3 of the first landing).
+
+The dir→file acquisition order is the SINGLE ordering everywhere (no cycle;
+writers release the directory only after holding the file lock or finishing an
+absent-file section). Residual, documented honestly: a reader whose ledger
+PARENT DIRECTORY does not exist yields unguarded — closing that would require
+the reader to create the directory, which the read-only contract forbids. For
+every shipped ledger the parent is the state directory provisioned at
+bootstrap, so the residual requires reading a ledger whose deployment was
+never bootstrapped — a microseconds-wide race against `mkdir` itself, vs the
+indefinitely-armed pre-B-46 window. Legacy `<ledger>.lock` sibling files from
+the first landing are inert orphans (harmless; no reader or writer consults
+them any longer).
 """
 
 from __future__ import annotations
 
 import os
 import sys
+import threading
 from collections.abc import Generator
 from contextlib import contextmanager
-from enum import Enum, auto
 from pathlib import Path
 
 _IS_WINDOWS = sys.platform == "win32"
 
 
-class _LockKind(Enum):
-    """Platform-neutral stand-in for `fcntl.LOCK_EX` / `fcntl.LOCK_SH` — the
-    real POSIX constants are resolved locally inside `_flock`, which is never
-    reached on Windows (see the module docstring)."""
-
-    EXCLUSIVE = auto()
-    SHARED = auto()
-
-
-def _lock_file_path(canonical_path: Path) -> Path:
-    """The sibling advisory-lock file for a canonical ledger path."""
-    return canonical_path.with_name(canonical_path.name + ".lock")
-
-
 @contextmanager
-def _flock(canonical_path: Path, kind: _LockKind, open_flags: int) -> Generator[None, None, None]:
-    if _IS_WINDOWS:
-        # No same-host advisory-lock primitive wired for Windows yet (see the
-        # module docstring) — degrade to a no-op rather than fail the import
-        # or the call. Pre-B-40 parity: cross-process serialization is simply
-        # unavailable on this platform, same as before this module existed.
-        yield
-        return
-    import fcntl  # POSIX-only; module load never reaches here on Windows.
+def _flock_fd(fd: int, *, exclusive: bool) -> Generator[None, None, None]:
+    """Hold `flock` on an already-open fd (POSIX-only; callers gate win32)."""
+    import fcntl  # POSIX-only; never reached on Windows.
 
-    mode = fcntl.LOCK_EX if kind is _LockKind.EXCLUSIVE else fcntl.LOCK_SH
-    lock_path = _lock_file_path(canonical_path)
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(lock_path, open_flags, 0o600)
+    fcntl.flock(fd, fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)
     try:
-        fcntl.flock(fd, mode)
-        try:
-            yield
-        finally:
-            fcntl.flock(fd, fcntl.LOCK_UN)
+        yield
     finally:
-        os.close(fd)
+        fcntl.flock(fd, fcntl.LOCK_UN)
+
+
+class _DirLock:
+    """Per-directory lock: one cross-process `flock` EX face + a per-thread
+    REENTRANT in-process face.
+
+    `flock` contends between separate fds even within one process, so a
+    naive per-acquisition dir fd self-deadlocks the B-50
+    `tenant_transaction` composition: the audit sidecar's absent-file
+    section (dir EX held) performs the IS state-ledger append inside it,
+    whose own write lock touches the SAME parent directory from the SAME
+    thread. The `threading.RLock` face makes same-thread nesting legal
+    (refcounted; the single flock fd is acquired at depth 0 and released at
+    depth 0), while other threads and other processes still block.
+    """
+
+    __slots__ = ("_fd", "_path", "_refcount", "_rlock")
+
+    def __init__(self, path: Path) -> None:
+        self._path = path
+        self._rlock = threading.RLock()
+        self._refcount = 0
+        self._fd = -1
+
+    def acquire(self) -> None:
+        import fcntl  # POSIX-only; callers gate win32.
+
+        self._rlock.acquire()
+        if self._refcount == 0:
+            self._fd = os.open(self._path, os.O_RDONLY)
+            try:
+                fcntl.flock(self._fd, fcntl.LOCK_EX)
+            except BaseException:
+                os.close(self._fd)
+                self._fd = -1
+                self._rlock.release()
+                raise
+        self._refcount += 1
+
+    def release(self) -> None:
+        import fcntl
+
+        self._refcount -= 1
+        if self._refcount == 0:
+            fcntl.flock(self._fd, fcntl.LOCK_UN)
+            os.close(self._fd)
+            self._fd = -1
+        self._rlock.release()
+
+
+_DIR_LOCKS: dict[str, _DirLock] = {}
+_DIR_LOCKS_GUARD = threading.Lock()
+
+
+def _dir_lock_for(parent: Path) -> _DirLock:
+    key = str(parent.resolve())
+    with _DIR_LOCKS_GUARD:
+        lock = _DIR_LOCKS.get(key)
+        if lock is None:
+            lock = _DirLock(parent)
+            _DIR_LOCKS[key] = lock
+        return lock
 
 
 @contextmanager
@@ -103,38 +155,123 @@ def cross_process_write_lock(canonical_path: Path) -> Generator[None, None, None
 
     Callers still hold their own in-process `threading.Lock` around the same
     section (unchanged) — this lock adds the cross-process dimension the
-    thread lock cannot provide.
+    thread lock cannot provide. The lock NEVER creates the canonical file:
+    when it does not exist yet, the parent-directory lock is held for the
+    whole section and the caller's own append creates the file inside it
+    (preserving "file existence == a real append happened" for the audit
+    writer's absence guard).
     """
-    with _flock(canonical_path, _LockKind.EXCLUSIVE, os.O_CREAT | os.O_RDWR):
+    if _IS_WINDOWS:
         yield
+        return
+    import fcntl  # POSIX-only; never reached on Windows.
+
+    canonical_path.parent.mkdir(parents=True, exist_ok=True)
+    dir_lock = _dir_lock_for(canonical_path.parent)
+    dir_lock.acquire()
+    dir_held = True
+    try:
+        try:
+            file_fd = os.open(canonical_path, os.O_RDWR)
+        except FileNotFoundError:
+            # First write: the caller creates the file under the directory
+            # lock (held for the whole section; per-thread REENTRANT so a
+            # nested same-directory write inside the section — the B-50
+            # tenant_transaction composition — cannot self-deadlock).
+            # Later writers re-check under THEIR dir hold, see the file,
+            # and hand off below.
+            yield
+            return
+        # Handoff: acquire the file lock, then RELEASE the directory lock
+        # before the caller's section — holding dir EX across the section
+        # would falsely serialize different ledgers sharing one parent
+        # directory (the audit sidecar and the state ledger share the
+        # state dir). The dir→file order is preserved; the dir hold spans
+        # only the acquisition.
+        try:
+            fcntl.flock(file_fd, fcntl.LOCK_EX)
+        except BaseException:
+            os.close(file_fd)
+            raise
+        finally:
+            dir_lock.release()
+            dir_held = False
+        try:
+            yield
+        finally:
+            fcntl.flock(file_fd, fcntl.LOCK_UN)
+            os.close(file_fd)
+    finally:
+        if dir_held:
+            dir_lock.release()
 
 
 @contextmanager
 def cross_process_read_lock(canonical_path: Path) -> Generator[None, None, None]:
     """Hold a shared same-host lock across a read, excluding a concurrent writer.
 
-    Blocks while a writer holds `cross_process_write_lock` on the same path
-    IF the lock sidecar already exists — closing the torn/partial-line read
-    race against a concurrent append **once the ledger has been written at
-    least once under this lock**. The very first write/read race against a
-    brand-new ledger (no sidecar yet) is NOT closed by this function — see
-    the B-46 forward-register row (TOCTOU on lazy sidecar provisioning;
-    identical to the always-unlocked pre-B-40 behavior in that one narrow
-    window, so not a regression, but not the full guarantee either).
-
-    Opens the lock sidecar read-only (`O_RDONLY`), NEVER `O_CREAT`: a read
-    must stay genuinely side-effect free (Codex-caught, round 3 — an earlier
-    version fell back to `O_CREAT` for a ledger with no sidecar yet, which
-    also `mkdir`'d the parent directory, breaking `harness-inspect`'s no-writes
-    read-only-CLI invariant and raising `PermissionError` against a read-only
-    parent). If the sidecar doesn't exist, the read proceeds unguarded
-    (identical to pre-B-40 behavior for this one window; the very next
-    writer to append creates the sidecar, after which subsequent reads DO
-    lock against it).
+    Side-effect free (the `harness-inspect` read-only contract): never
+    creates files or directories, never `mkdir`s. When the canonical file
+    exists it is locked SHARED directly; when it does not, the parent
+    directory is locked SHARED — excluding the absent-file-mode first
+    writer — and the file is re-checked once under that lock. Only a ledger
+    whose PARENT DIRECTORY does not exist yields unguarded (see module
+    docstring).
     """
-    lock_path = _lock_file_path(canonical_path)
-    if not lock_path.exists():
+    if _IS_WINDOWS:
         yield
         return
-    with _flock(canonical_path, _LockKind.SHARED, os.O_RDONLY):
-        yield
+    try:
+        file_fd = os.open(canonical_path, os.O_RDONLY)
+    except FileNotFoundError:
+        try:
+            dir_fd = os.open(canonical_path.parent, os.O_RDONLY)
+        except FileNotFoundError:
+            # No parent directory: nothing to read AND no bootstrapped
+            # deployment to race — the documented residual window.
+            yield
+            return
+        import fcntl  # POSIX-only; never reached on Windows.
+
+        os.close(dir_fd)
+        dir_lock = _dir_lock_for(canonical_path.parent)
+        dir_lock.acquire()
+        dir_held = True
+        try:
+            try:
+                file_fd = os.open(canonical_path, os.O_RDONLY)
+            except FileNotFoundError:
+                # Genuinely nothing to read; the dir hold excludes an
+                # absent-file-mode first writer for the caller's section.
+                # (The dir lock is exclusive rather than shared — a
+                # deliberate simplification: absent-file reads are the
+                # rare pre-first-write window, read nothing, and the one
+                # lock kind keeps the per-thread reentrancy face sound.)
+                yield
+                return
+            # File appeared: hand off to its SHARED lock and release the
+            # directory lock before the caller's section (a dir hold
+            # across a long read would block every writer to every ledger
+            # in the directory).
+            try:
+                fcntl.flock(file_fd, fcntl.LOCK_SH)
+            except BaseException:
+                os.close(file_fd)
+                raise
+            finally:
+                dir_lock.release()
+                dir_held = False
+            try:
+                yield
+            finally:
+                fcntl.flock(file_fd, fcntl.LOCK_UN)
+                os.close(file_fd)
+        finally:
+            if dir_held:
+                dir_lock.release()
+        return
+    try:
+        with _flock_fd(file_fd, exclusive=False):
+            yield
+    finally:
+        os.close(file_fd)
