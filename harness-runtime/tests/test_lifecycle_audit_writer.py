@@ -2362,3 +2362,51 @@ def test_snapshot_cadence_is_proportional_to_index_size(
     assert snapshot_path.read_bytes() != before, (
         "sustained growth past the proportional threshold must checkpoint"
     )
+
+
+def test_planted_fifo_at_snapshot_tmp_fails_loud_not_blocking(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex round-2 P1 (item (g) landing) — a FIFO planted at the fixed
+    snapshot .tmp path must fail LOUD and immediately (writer-side
+    nonblocking FIFO open => ENXIO), never block awaiting a reader while
+    the full audit lock stack is held."""
+    import errno
+    import os as os_module
+
+    if not hasattr(os_module, "mkfifo"):  # pragma: no cover — win32
+        pytest.skip("mkfifo unavailable")
+
+    monkeypatch.setattr(RuntimeAuditLedgerWriter, "_SNAPSHOT_EVERY_APPENDS", 1)
+    writer = _writer(tmp_path)
+    snapshot_path = writer._snapshot_path  # pyright: ignore[reportPrivateUsage]
+    fifo = snapshot_path.with_name(snapshot_path.name + ".tmp")
+    os_module.mkfifo(fifo)
+
+    with pytest.raises(OSError) as excinfo:
+        writer.append("tenant-A", _make_audit_entry("1" * 64))
+    assert excinfo.value.errno == errno.ENXIO
+
+
+def test_snapshot_cadence_counts_legacy_exempt_members(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex round-2 P2 (item (g) landing) — a migrated ledger's
+    `legacy_exempt` baseline can dominate the serialized snapshot; a
+    digests-only threshold rewrote the whole baseline every cadence floor.
+    The threshold must count ALL serialized membership state."""
+    monkeypatch.setattr(RuntimeAuditLedgerWriter, "_SNAPSHOT_EVERY_APPENDS", 1)
+    writer = _writer(tmp_path)
+    writer.append("tenant-A", _make_audit_entry("1" * 64))
+    snapshot_path = writer._snapshot_path  # pyright: ignore[reportPrivateUsage]
+    before = snapshot_path.read_bytes()
+
+    # Simulate a large migrated baseline (synthetic in-memory members only;
+    # no cold start from the snapshot happens in this test).
+    index = writer._sidecar_index  # pyright: ignore[reportPrivateUsage]
+    index.legacy_exempt.update(("tenant-A", f"{i:064d}") for i in range(80))
+
+    writer.append("tenant-A", _make_audit_entry("2" * 64))
+    assert snapshot_path.read_bytes() == before, (
+        "a small delta over a large legacy baseline must not rewrite the snapshot"
+    )

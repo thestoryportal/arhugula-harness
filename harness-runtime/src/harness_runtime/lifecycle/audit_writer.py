@@ -347,15 +347,43 @@ class RuntimeAuditLedgerWriter:
         payload = {"body": body, "self_digest": _snapshot_body_digest(body)}
         encoded = json.dumps(payload, separators=(",", ":")).encode("utf-8")
         tmp_path = self._snapshot_path.with_name(self._SNAPSHOT_FILENAME + ".tmp")
-        flags = os.O_CREAT | os.O_WRONLY | os.O_TRUNC
+        # O_NONBLOCK (codex round-2 P1 on this landing): a FIFO planted at
+        # the fixed .tmp path would otherwise BLOCK this open awaiting a
+        # reader while the append, sidecar-thread, and cross-process locks
+        # are all held — one planted FIFO stalls every audit writer the
+        # moment the cadence fires. Nonblocking, a writer-side FIFO open
+        # fails immediately (ENXIO, loud); the fstat check below rejects
+        # any other non-regular or foreign-owned plant, and O_TRUNC is
+        # deferred to ftruncate AFTER validation so a refused plant is
+        # never modified. O_NONBLOCK has no effect on regular-file writes.
+        flags = os.O_CREAT | os.O_WRONLY | getattr(os, "O_NONBLOCK", 0)
         if sys.platform != "win32":
             flags |= os.O_NOFOLLOW
+        fd = os.open(tmp_path, flags, 0o600)
+        try:
+            tmp_st = os.fstat(fd)
+            if not stat.S_ISREG(tmp_st.st_mode):
+                raise ValueError(
+                    f"snapshot temp file {tmp_path} is not a regular file "
+                    f"(mode={tmp_st.st_mode:o}) — refusing to write the index "
+                    f"snapshot over a planted special file"
+                )
+            if sys.platform != "win32" and tmp_st.st_uid != os.geteuid():
+                raise ValueError(
+                    f"snapshot temp file {tmp_path} is owned by uid "
+                    f"{tmp_st.st_uid}, not the effective uid {os.geteuid()} — "
+                    f"refusing to write over another account's file"
+                )
+            os.ftruncate(fd, 0)
+        except BaseException:
+            os.close(fd)
+            raise
         # Buffered writer, not a bare os.write (codex round-1 P2 on this
         # landing): a single os.write may return SHORT on a regular file,
         # silently installing truncated JSON that every cold start then
         # discards — correctness survives (self-digest → refold) but the
         # cache is defeated; BufferedWriter.write loops until complete.
-        with os.fdopen(os.open(tmp_path, flags, 0o600), "wb") as fh:
+        with os.fdopen(fd, "wb") as fh:
             fh.write(encoded)
             fh.flush()
             os.fsync(fh.fileno())
@@ -370,9 +398,18 @@ class RuntimeAuditLedgerWriter:
 
     def _maybe_write_index_snapshot_locked(self) -> None:
         index = self._sidecar_index
+        # Threshold over ALL serialized membership state, not digests alone
+        # (codex round-2 P2 on this landing): a migrated ledger's
+        # `legacy_exempt` baseline can dominate the snapshot — a
+        # digests-only threshold stayed at the floor and re-sorted +
+        # rewrote the whole baseline every 64 appends, recreating exactly
+        # the O(history) lock-held stalls the geometric cadence removes.
+        serialized_members = (
+            len(index.digests) + len(index.legacy_exempt) + len(index.redaction_tails)
+        )
         threshold = max(
             self._SNAPSHOT_EVERY_APPENDS,
-            len(index.digests) // self._SNAPSHOT_GROWTH_DIVISOR,
+            serialized_members // self._SNAPSHOT_GROWTH_DIVISOR,
         )
         if index.unsnapshotted >= threshold:
             self._write_index_snapshot_locked()
