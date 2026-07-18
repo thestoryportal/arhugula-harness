@@ -332,3 +332,51 @@ def test_dir_lock_survives_failed_open(tmp_path: Path, monkeypatch: pytest.Monke
     t.start()
     t.join(_WAIT)
     assert done.is_set(), "dir lock poisoned by the failed open"
+
+
+def test_txn_with_reader_on_sibling_ledgers_does_not_deadlock(tmp_path: Path) -> None:
+    """Codex round-2 P1 (B-46 landing) — the ABBA cycle: a transaction
+    holds an existing sidecar's FILE lock and then writes the sibling
+    state ledger (wants the dir); a concurrent sidecar reader holds the
+    dir (transitional) waiting on that same file lock. Blocking on a file
+    while holding the dir deadlocks both; the non-blocking probe +
+    release-dir-then-block rule breaks the cycle. Under the regression
+    this witness hangs (suite timeout kills it)."""
+    sidecar = tmp_path / "audit-entries.jsonl"
+    state = tmp_path / "state.jsonl"
+    sidecar.write_text("seed\n")
+    state.write_text("genesis\n")
+    txn_holds_sidecar = threading.Event()
+    reader_started = threading.Event()
+    all_done = threading.Event()
+    reader_done = threading.Event()
+
+    def _txn() -> None:
+        with cross_process_write_lock(sidecar):  # file EX on sidecar
+            txn_holds_sidecar.set()
+            reader_started.wait(_WAIT)
+            # Give the reader time to take the dir and block on the sidecar.
+            import time as time_module
+
+            time_module.sleep(0.3)
+            with cross_process_write_lock(state):  # wants the dir
+                with state.open("a") as fh:
+                    fh.write("txn\n")
+        all_done.set()
+
+    def _reader() -> None:
+        reader_started.set()
+        with cross_process_read_lock(sidecar):  # dir → blocks on file SH
+            pass
+        reader_done.set()
+
+    t1 = threading.Thread(target=_txn)
+    t2 = threading.Thread(target=_reader)
+    t1.start()
+    assert txn_holds_sidecar.wait(_WAIT)
+    t2.start()
+    t1.join(_WAIT * 2)
+    t2.join(_WAIT)
+    assert all_done.is_set(), "ABBA deadlock: txn blocked on the dir held by the reader"
+    assert reader_done.is_set()
+    assert state.read_text() == "genesis\ntxn\n"

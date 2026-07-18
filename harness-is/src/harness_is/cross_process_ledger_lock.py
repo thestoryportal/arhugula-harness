@@ -177,20 +177,30 @@ def cross_process_write_lock(canonical_path: Path) -> Generator[None, None, None
             # and hand off below.
             yield
             return
-        # Handoff: acquire the file lock, then RELEASE the directory lock
-        # before the caller's section — holding dir EX across the section
-        # would falsely serialize different ledgers sharing one parent
-        # directory (the audit sidecar and the state ledger share the
-        # state dir). The dir→file order is preserved; the dir hold spans
-        # only the acquisition.
+        # Handoff: probe the file lock NON-BLOCKING under the dir hold;
+        # on contention, RELEASE the dir first and only then block on the
+        # file alone (codex round-2 P1 — blocking on a file lock while
+        # holding the dir deadlocks against a holder of that file lock
+        # that later wants this dir: the tenant_transaction holds the
+        # sidecar's file lock across a sibling state-ledger append, while
+        # a concurrent sidecar reader holds the dir waiting on that same
+        # file lock). Never blocking on a file while holding the dir
+        # breaks the cycle; the dir hold spans only the probe, so sibling
+        # ledgers never serialize either.
         try:
-            fcntl.flock(file_fd, fcntl.LOCK_EX)
+            try:
+                fcntl.flock(file_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                dir_lock.release()
+                dir_held = False
+                fcntl.flock(file_fd, fcntl.LOCK_EX)
         except BaseException:
             os.close(file_fd)
             raise
         finally:
-            dir_lock.release()
-            dir_held = False
+            if dir_held:
+                dir_lock.release()
+                dir_held = False
         try:
             yield
         finally:
@@ -247,13 +257,22 @@ def cross_process_read_lock(canonical_path: Path) -> Generator[None, None, None]
             yield
             return
         try:
-            fcntl.flock(file_fd, fcntl.LOCK_SH)
+            try:
+                fcntl.flock(file_fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+            except BlockingIOError:
+                # Same no-blocking-on-file-while-holding-dir rule as the
+                # writer (codex round-2 P1): release the dir, then block
+                # on the file alone.
+                dir_lock.release()
+                dir_held = False
+                fcntl.flock(file_fd, fcntl.LOCK_SH)
         except BaseException:
             os.close(file_fd)
             raise
         finally:
-            dir_lock.release()
-            dir_held = False
+            if dir_held:
+                dir_lock.release()
+                dir_held = False
         try:
             yield
         finally:
