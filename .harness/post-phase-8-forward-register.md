@@ -387,8 +387,8 @@ advisor() also flagged a second-order question genuinely out of B-23's scope: th
 
 ### B-53 · Migration-CLI scripts-inventory promotion *(split from B-47 disposition, 2026-07-17)*
 - **Fork FILED 2026-07-17** via `.harness/class_1_fork_b51_b52_b54_od_signing_amendment_arc.md` (gate item 7) — rides the arc's Runtime v1.100 → v1.101 rider; awaiting the same ratification.
-- **What it is.** B-47 disposition item (j): `python -m harness_runtime.admin.migrate_audit_sidecar` works today; promotion into `[project.scripts]` extends the runtime spec §13.4 committed CLI inventory. LOW urgency.
-- **Close-out steps.** One-row scripts-inventory addition folded into the next runtime-spec delta + the pyproject entry. **Council: no.**
+- **What it is.** B-47 disposition item (j): `python -m harness_runtime.admin.migrate_audit_sidecar` works today; promotion = a `harness migrate-audit-sidecar` subcommand under the existing flat `harness` console-script namespace (no new `[project.scripts]` entry — dispatch rides `harness_runtime.cli:main`), recorded as a runtime spec §13.4 inventory row. LOW urgency.
+- **Close-out steps.** One-row §13.4 inventory addition riding the B-51/B-52/B-54 arc's Runtime v1.101 rider + clearance marker, then the CLI subcommand implementation (no pyproject change). **Council: no.**
 
 ### B-54 · Backend-aware audit signature verification API *(split from B-49 at the disposition leg, 2026-07-17)*
 - **Fork doc FILED 2026-07-17** at `.harness/class_1_fork_b51_b52_b54_od_signing_amendment_arc.md` — awaiting operator ratification.

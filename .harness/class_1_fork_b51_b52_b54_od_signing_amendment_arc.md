@@ -327,7 +327,10 @@ Per §4.3 the design-substrate amendments halt here. The operator ratifies, in o
    posture, the `audit_signing_fail_closed` flag's config contract, the tenant threading through
    runtime-owned call sites, AND the operator-facing verifier inputs (round-14 P1): wiring leg 3 into
    `harness-inspect` per the B-54 close-out needs C-RT-13 CLI/config surface for the audit sidecar path,
-   expected tenant scope, verification backend/key mapping, and the authenticated cutover record — absent
+   expected tenant scope, verification backend/key mapping, the authenticated cutover record, AND an
+   authoritative persona-tier/RuntimeConfig input (round-24 P1 — without it the inspector cannot
+   distinguish MTC's mandatory UNVERIFIED-nonzero posture from lower tiers' preserved hash-only
+   behavior) — absent
    from the current CLI contract, so leaving them out of the rider would force the impl arc to invent an
    unratified CLI surface; without the rider the implementation would contradict a committed Runtime
    surface (X-AL-3)** (recommended), vs splitting. The CP rider is not leg 2's alone (filing
@@ -335,7 +338,10 @@ Per §4.3 the design-substrate amendments halt here. The operator ratifies, in o
    declares its signature), so leg 1's tenant-bearing converter signature change amends CP too — the rider
    carries the §13.5.1 signature amendment alongside the §28.10.4 invariant-2 carve-out.
 
-On ratification: spec-writer apply pass (with the two dyadic council convenings at the apply leg), clearance
+On ratification: spec-writer apply pass (with the two dyadic council convenings at the apply leg — plus the
+conditional THIRD dyad for leg 3, round-24 P2: if gate item 5's recommended §20.3.1 reconciliation ratifies,
+verification remains a blocking fail-on-invalid audit walk, which is exactly the condition the leg-3
+council section names — C7 ⊥ C1/C9 convenes before that half lands), clearance
 markers per §4.5, **and the Phase-6 plan deltas in the same arc (filing codex round-11 P2): the OD plan pins
 U-OD-30 to the tenant-less `sign_audit_entry(payload, key_id, algo)` / `verify_hash_chain_integrity`
 signatures (`Implementation_Plan_Operational_Discipline_v2_6.md` §U-OD-30, preserved through the v2.28 head)
