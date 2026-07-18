@@ -157,3 +157,11 @@ Branch: b24-b27-fork-ratification-build · Date: 2026-07-15
 | test-witness | BLOCK: immediate-snapshot-write sites unwitnessed | APPROVE |
 
 Outcome: MERGE. R1 block discharged with two no-monkeypatch witnesses (from-zero fold + adopt_legacy immediate persistence), both probe-killed. Codex: 7 rounds, 7 findings fixed + probe-killed (quadratic cadence P1, short-write P2, FIFO plant P1, legacy-count cadence P2, sidecar-bytes binding P1, temp-mode clamp P2), 1 REJECTED (round-5 P2 "keep B-50 open / on-disk lookup structure" — re-litigates the ratified disposition; offset-checkpointed snapshot is the register close_out's named alternative; RAM asymptotics unchanged from main). Follow-on notes: (1) R2 lens-1 — a pre-held fd on a planted 0644 temp survives the fchmod clamp (snapshot metadata only; unlink+O_EXCL recreation would close it); (2) R2 lens-3 — adoption-side same-size mtime early-out is now redundant with the prefix digest (behavior-preserving); (3) fold-site prefix feed pinned post-gate per lens-3 recommendation (M15). 15 mutation classes probe-killed total.
+
+## PR #1050 — 2026-07-18 — `b43-stale-prose-correction`
+
+Gate treated as DOC-ONLY (scope-gate rationale logged): the sole `harness-*/src` delta is a comment-block
+correction on `harness_breaker_schema.py` (verified zero executable-line change — the `cause` field line is
+byte-identical); everything else is design-substrate prose, registers, pointers, and the clearance marker.
+Codex: 4 rounds (misplaced B-33 row annotation; prose/CLAUDE.md/schema-comment stale-copy sweep completions;
+pointer-index heads), round-4 clean. X-AL-3 guard passed via the clearance marker (17 CI checks).
