@@ -109,8 +109,14 @@ enumeration misses (filing codex round-2): `AuditLedgerRedactionTokenMap.append`
 `RedactionSpanProcessor.on_end` catches only `KeyError`/`TypeError` (`redaction_span_processor.py:300-314`)
 — a KMS failure there propagates today (de-facto fail-closed) and would BYPASS the flag entirely. The delta
 must either bring this path under the flag or declare it unconditionally fail-closed in the policy
-enumeration; recommend the latter (raw redaction values must never persist against an unsigned row — the
-path's current propagate behavior is the correct posture, so declare it rather than soften it).**
+enumeration; recommend the latter — raw redaction values must never persist against an unsigned row. **But
+declaring is NOT sufficient (filing codex round-16 P1): the path is NOT uniformly fail-closed today — a
+configured backend returning a length-correct non-bytes signature raises `TypeError` inside
+`sign_audit_entry`, which `RedactionSpanProcessor.on_end`'s `(KeyError, TypeError)` catch SWALLOWS; token
+assignment never completes and the original raw MTC attribute stays exportable. The delta must make the
+fail-closed posture real: route signing failures through the round-14 single typed boundary (so the span
+processor's blind catch can no longer swallow them) or require explicit raw-value removal before any
+swallow.**
 
 **And the zeroth site (filing codex round-3 P1): the ABSENT backend.** With current `RuntimeConfig`
 defaults, `sign_audit_entry(..., backend=None)` returns an `unsigned:*` placeholder WITHOUT raising — a
