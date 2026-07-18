@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `1f110d4cb145` |
+| `workspace_state_hash` | `6baa9a4dcec1` |
 | `last_refreshed` | 2026-07-17T00:00:00Z |
-| `git_head` | `9cddfeca` —  |
+| `git_head` | `02414fd5` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 91 |
 
@@ -24,7 +24,7 @@
 
 **Frontier.** R-FS-1 Tier-1 is closed. The frozen order is complete (11/11), the standalone `B-*` register derives **69 closed / 0 forward / 0 gated / 4 resolved**, `closure_gate.py` G1.1 is **0+0**, automatable Tier-1 predicates pass, and manual G1.4/G1.7/G1.8 sign-off is recorded at `.harness/r-fs-1-tier1-manual-signoff.json`.
 
-**Current next action.** **PR #1038 MERGED — B-47 CLOSED (composition root landed end-to-end at #1033/#1034/#1036; design cluster dispositioned at `.harness/b-47-pr-b2-design-disposition-v1.md`).** **PR #1042 MERGED — B-50 item (i) LANDED** (transactional token-map atomicity; durable-tail authority; O(delta) index tails). The frontier remains the ONE open register row: **B-50, item (g) half** (sidecar scale engineering — disk-backed membership index via stdlib sqlite3 or offset-checkpointed snapshot; POSIX transactional token-map atomicity via unlocked-inner variants or a lock-ownership API, NOT a plain outer-lock hold). Fork-first arcs (Class 1 back-flow per §4.3 before any code): B-51 (tenant binding — fifth canonical-message segment + tenant-bearing signing API), B-52 (fail-closed policy — two-spec OD+CP fork), B-54 (backend signature verification API; rides the same OD amendment arc), B-53 (CLI promotion, low), B-48 (Class 2 fork revision of the U-RT-60 sync-inner reading), B-33 (Class 1 fork first). Register: 55 items / 2 open / 6 design_substrate_gated / 38 closed. **Standing note:** operator has granted forward-work merge permission without per-instance HIL, conditioned on CI fully passing green before any merge, broadened to cover this autonomous loop's PRs — applied through PR #1038.
+**Current next action.** **PR #1038 MERGED — B-47 CLOSED (composition root landed end-to-end at #1033/#1034/#1036; design cluster dispositioned at `.harness/b-47-pr-b2-design-disposition-v1.md`).** **PR #1044 MERGED — B-50 CLOSED (items (i)+(g) both landed); the open register queue is EMPTY.** The frontier is now the fork-first register arcs, per the disposition doc's routing: **B-51/B-52/B-54** (one OD amendment arc can carry all three; Class 1 fork docs FIRST per §4.3), **B-48** (Class 2 fork revision of U-RT-60), **B-33** (Class 1 fork first), **B-53** (CLI promotion, low) (sidecar scale engineering — disk-backed membership index via stdlib sqlite3 or offset-checkpointed snapshot; POSIX transactional token-map atomicity via unlocked-inner variants or a lock-ownership API, NOT a plain outer-lock hold). Fork-first arcs (Class 1 back-flow per §4.3 before any code): B-51 (tenant binding — fifth canonical-message segment + tenant-bearing signing API), B-52 (fail-closed policy — two-spec OD+CP fork), B-54 (backend signature verification API; rides the same OD amendment arc), B-53 (CLI promotion, low), B-48 (Class 2 fork revision of the U-RT-60 sync-inner reading), B-33 (Class 1 fork first). Register: 55 items / 2 open / 6 design_substrate_gated / 38 closed. **Standing note:** operator has granted forward-work merge permission without per-instance HIL, conditioned on CI fully passing green before any merge, broadened to cover this autonomous loop's PRs — applied through PR #1038.
 
 **Recurring lanes** continue on cadence: `R-600-pattern-bake-in-sweep` (cadence-8 closed this refresh, PD-8 promoted; next due ~10 PRs out) and `R-IF-roadmap-refresh`. Out-of-family review continues as a codified default gate, not as an open roadmap arc.
 
@@ -56,11 +56,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| 1044 | 2026-07-17 | B-50 item (g) merged — offset-checkpointed membership-index snapshot (discard-on-anomaly adoption incl. covered-prefix raw-byte digest; geometric cadence; plant-hardened temp install). 7 codex rounds + merge-gate 2 rounds (3 lenses APPROVE); 15 mutation classes probe-killed. B-50 CLOSED — open register queue EMPTY; frontier = fork-first arcs (B-51/B-52/B-54 OD amendment, B-48, B-33, B-53) |
 | 1042 | 2026-07-17 | B-50 item (i) merged — tenant_transaction (full lock stack, unlocked-inner cores), durable-tail-as-authority token map, O(delta) index-maintained family tails with the coverage gate mirrored at lookup; 3 codex rounds + merge-gate 3/3 round-1; B-50 (g) disk-backed index remains the open half |
 | 1040 | 2026-07-17 | B-49 merged — producer-aware per-family audit verification (chain-verify redaction family via namespace keys; content-hash checks for genesis-prior families; deeply immutable report; real-path sidecar witness); 3 codex rounds + merge-gate 3/3 round-1; B-49 row closed; frontier = B-50 (last open row) |
 | 1038 | 2026-07-17 | B-47 design-disposition leg merged — Tier-5/SQLite grounding corrected (ADR-D5 v1.4 JSONL-canonical), B-47 CLOSED, remainders split: B-49 per-family verifier (open), B-50 sidecar scale engineering (open), B-51/B-52/B-54 Class 1 spec-delta forks, B-53 CLI promotion; 17 codex rounds |
 | 1036 | 2026-07-17 | B-47 PR B2a merged — rest of (c) signing threading into every production audit composer + (d) C9 BreakerGuardedSigningBackend + bootstrap key-id validation + daemon audit-offload executor (ack/join/detach/reclaim/saturation hardening) + item-(k) witnesses; 18 codex rounds + 2-round merge-gate (USE-half witness discharge); B-48 + item (m) registered; remainder = PR B2 design cluster (e)-(j)+(m) |
-| 1034 | 2026-07-17 | B-47 PR B1 merged — audit-signing composition root (config+factory+stage-4 threading) + full-entry durable sidecar; 49 codex rounds, merge-gate 3/3 APPROVE, items (e)-(k) registered; remainder = PR B2 (rest of (c), (d) C9 breaker, (e)-(k) persistence-substrate design cluster) |
 ---
 
 ---
