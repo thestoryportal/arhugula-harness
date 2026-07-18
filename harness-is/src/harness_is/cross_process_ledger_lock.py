@@ -173,8 +173,16 @@ def _acquire_legacy_sidecar_for_writer(canonical_path: Path) -> int:
     )
     try:
         if not stat_module.S_ISREG(os.fstat(fd).st_mode):
-            os.close(fd)
-            return -1
+            # Fail CLOSED (round-8 P2): on Linux an old B-40 writer can
+            # flock a FIFO sidecar — treating it as absent would let old
+            # and new writers append concurrently (forked chain). Loud
+            # refusal (the enclosing handler closes the fd); the operator
+            # removes the mangled sidecar.
+            raise ValueError(
+                f"legacy lock sidecar {_legacy_lock_file_path(canonical_path)} "
+                f"is not a regular file — refusing to write without "
+                f"mixed-version serialization (remove the mangled sidecar)"
+            )
         fcntl.flock(fd, fcntl.LOCK_EX)
     except BaseException:
         os.close(fd)
@@ -206,13 +214,16 @@ def _acquire_legacy_sidecar_if_present(canonical_path: Path, *, exclusive: bool)
         return -1
     try:
         if not stat_module.S_ISREG(os.fstat(fd).st_mode):
-            # A planted/mangled sidecar (e.g. a FIFO) cannot carry the
-            # legacy protocol — old-version processes would hang on it,
-            # never coordinate through it — and a blocking open here
-            # would stall every cooperating ledger operation (round-5
-            # P2). Treat as absent.
-            os.close(fd)
-            return -1
+            # Fail CLOSED (round-8 P2, superseding the round-5 treat-as-
+            # absent): on Linux an old writer CAN flock a FIFO sidecar, so
+            # ignoring it loses mixed-version serialization. Loud refusal
+            # (no hang — the open above is nonblocking; the enclosing
+            # handler closes the fd).
+            raise ValueError(
+                f"legacy lock sidecar {_legacy_lock_file_path(canonical_path)} "
+                f"is not a regular file — refusing to proceed without "
+                f"mixed-version serialization (remove the mangled sidecar)"
+            )
         fcntl.flock(fd, fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)
     except BaseException:
         os.close(fd)
@@ -384,11 +395,16 @@ def cross_process_replace_lock(canonical_path: Path) -> Generator[None, None, No
             fcntl.flock(file_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             # An active holder: release the dir, wait it out on the file
-            # alone (ABBA rule), then retry the whole acquisition.
+            # alone (ABBA rule), then retry the whole acquisition. The
+            # descriptor is closed on EVERY exit (round-8 P2 — an
+            # interrupted blocking flock must not leak one fd per
+            # attempt).
             dir_lock.release()
-            fcntl.flock(file_fd, fcntl.LOCK_EX)
-            fcntl.flock(file_fd, fcntl.LOCK_UN)
-            os.close(file_fd)
+            try:
+                fcntl.flock(file_fd, fcntl.LOCK_EX)
+                fcntl.flock(file_fd, fcntl.LOCK_UN)
+            finally:
+                os.close(file_fd)
             continue
         except BaseException:
             os.close(file_fd)

@@ -624,27 +624,33 @@ def test_absent_file_write_waits_for_legacy_holder(tmp_path: Path) -> None:
     assert ledger.read_text() == "old-row\nnew-row\n"
 
 
-def test_fifo_legacy_sidecar_does_not_hang(tmp_path: Path) -> None:
-    """Codex round-5 P2 (B-46 landing) — a FIFO planted at the legacy
-    sidecar path must not stall the lock (nonblocking open + regular-file
-    check treat it as absent; old-version processes could never
-    coordinate through it either)."""
+def test_fifo_legacy_sidecar_fails_loud_without_hanging(tmp_path: Path) -> None:
+    """Codex rounds 5+8 (B-46 landing) — a FIFO planted at the legacy
+    sidecar path must neither STALL the lock (nonblocking open) nor be
+    silently ignored (on Linux an old writer CAN flock a FIFO, so
+    treating it as absent loses mixed-version serialization): the write
+    fails LOUD, promptly."""
     import os as os_module
 
     ledger = tmp_path / "ledger.jsonl"
     ledger.write_text("seed\n")
     os_module.mkfifo(tmp_path / "ledger.jsonl.lock")
     done = threading.Event()
+    outcomes: list[str] = []
 
     def _write() -> None:
-        with cross_process_write_lock(ledger):
-            pass
+        try:
+            with cross_process_write_lock(ledger):
+                outcomes.append("entered")
+        except ValueError:
+            outcomes.append("refused")
         done.set()
 
     t = threading.Thread(target=_write)
     t.start()
     t.join(_WAIT)
     assert done.is_set(), "write lock hung on a FIFO legacy sidecar"
+    assert outcomes == ["refused"], f"mangled sidecar was not refused: {outcomes}"
 
 
 def test_writer_provisions_legacy_sidecar_against_fresh_old_process(tmp_path: Path) -> None:
