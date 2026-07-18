@@ -81,8 +81,10 @@ the operator makes here, so the selection is safe to take now).
    moving EVERY invocation into a worker would break the documented Future/custom-awaitable support
    (shapes that may need the loop at creation). The apply arc adds an explicit construction-time
    mode/adapter (the composer knows its inner's wrap-asymmetry row when built at stage 5): sync inners
-   are submitted to the executor, async inners keep the direct await path — witnessed for BOTH
-   production inner rows.
+   are submitted to the executor, async inners keep the direct await path — witnessed for ALL THREE
+   stage-5 composer constructions (round-6 P2): `hitl_inference` (async C-RT-15), `hitl_sub_agent` (sync
+   C-RT-17 — the offloaded one), and `hitl_tool` (async `RetryBreakerToolDispatcher.dispatch`, which must
+   stay on the direct await path).
 2. **Dispatch-time cancellation semantics** (filing codex round-1 P1 — must be DEFINED before any offload
    lands): `SyncDispatcherFacade.result_timeout_seconds` cancels the loop coroutine and awaits completion
    acknowledgement — but cancelling an executor FUTURE cannot stop a sync child already running in its
