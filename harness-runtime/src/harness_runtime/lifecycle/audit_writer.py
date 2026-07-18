@@ -66,6 +66,7 @@ stage shape established at U-RT-27..31.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -76,7 +77,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from harness_is.cross_process_ledger_lock import (
     cross_process_read_lock,
@@ -91,6 +92,7 @@ from harness_is.state_ledger_write import (
     read_ledger,
 )
 from harness_od.audit_ledger_types import AuditLedgerEntry, compute_entry_hash
+from harness_od.per_family_audit_verification import REDACTION_TOKEN_NAMESPACE_PREFIX
 
 from harness_runtime.lifecycle.state_ledger import LedgerWriter
 from harness_runtime.types import RuntimeConfig
@@ -112,14 +114,30 @@ class _SidecarMembershipIndex:
     a dataclass field pair) so the frozen writer can mutate it in place.
     """
 
-    __slots__ = ("digests", "inode", "legacy_exempt", "mtime_ns", "offset")
+    __slots__ = ("digests", "inode", "legacy_exempt", "mtime_ns", "offset", "redaction_tails")
 
     def __init__(self) -> None:
         self.digests: dict[tuple[str, str], str] = {}
         self.legacy_exempt: set[tuple[str, str]] = set()
+        # Per-tenant-tag durable tail of the redaction-token family (B-50
+        # item (i), codex round-1): maintained transactionally during folds
+        # and our own appends so the token map's per-append tail lookup is
+        # O(delta), not an O(history) full rehydration. Legacy-baselined
+        # ledgers have no recoverable tails (full entries were dropped
+        # pre-sidecar) — absent means the family restarts from genesis.
+        self.redaction_tails: dict[str, str] = {}
         self.offset: int = 0
         self.inode: int = -1
         self.mtime_ns: int = -1
+
+
+def _has_redaction_namespace_keys(entry: AuditLedgerEntry) -> bool:
+    """Redaction-family discriminator — namespace keys, never entry_core
+    prefix (PR B1 codex round-39; shared constant from the B-49 verifier)."""
+    return any(
+        key.startswith(REDACTION_TOKEN_NAMESPACE_PREFIX)
+        for key in entry.payload.audit_namespace_attrs
+    )
 
 
 def _full_entry_digest(entry: AuditLedgerEntry) -> str:
@@ -154,6 +172,13 @@ def _append_lock_for(path: Path) -> threading.Lock:
             lock = threading.Lock()
             _APPEND_LOCKS[key] = lock
         return lock
+
+
+@contextlib.contextmanager
+def _combined_sidecar_read_locks(thread_lock: threading.Lock, sidecar_path: Path) -> Any:
+    """Thread + cross-process read locks as one context (reader lock shape)."""
+    with thread_lock, cross_process_read_lock(sidecar_path):
+        yield
 
 
 def _sidecar_lock_for(path: Path) -> threading.Lock:
@@ -275,82 +300,96 @@ class RuntimeAuditLedgerWriter:
         tenant scope. The OD-computed `entry_hash` provides the deduplication
         key (scoped by tenant via the action_id prefix).
         """
+        # ONE ordered critical section per ledger path (codex round-4
+        # P1): timestamp sampling + sidecar write + IS append serialize
+        # together, so commit order always matches timestamp order.
+        with _append_lock_for(self.ledger_writer.handle.canonical_path):
+            return self._append_core(tenant_id, audit_entry, sidecar_locks_held=False)
+
+    def _append_core(
+        self,
+        tenant_id: str | None,
+        audit_entry: AuditLedgerEntry,
+        *,
+        sidecar_locks_held: bool,
+    ) -> WriteResult:
+        """Append core — caller holds the per-ledger append lock; when
+        `sidecar_locks_held`, the sidecar thread+process locks too (the
+        B-50 item (i) transaction path)."""
         recomputed = compute_entry_hash(audit_entry.payload)
         if recomputed != audit_entry.entry_hash:
             # Write-side mirror of the fold's content-integrity check (codex
             # round-27): a schema-valid entry whose stored hash does not match
             # its payload would persist fine, then wedge EVERY post-restart
-            # append when the fold rescans it. Production composers always
-            # compute the genuine hash; reject the inconsistent entry before
-            # anything (sidecar or IS ref) is written.
+            # append when the fold rescans it. In the core so the B-50
+            # transaction path is covered too.
             raise ValueError(
                 f"audit_entry fails content-integrity before write: stored "
                 f"entry_hash={audit_entry.entry_hash!r} but recomputed "
                 f"{recomputed!r} — refusing to persist an entry that would "
                 f"wedge the sidecar fold after restart"
             )
-        # ONE ordered critical section per ledger path (codex round-4
-        # P1): timestamp sampling + sidecar write + IS append serialize
-        # together, so commit order always matches timestamp order.
-        with _append_lock_for(self.ledger_writer.handle.canonical_path):
-            action_id = self._action_id_for(tenant_id, audit_entry)
-            # R-003: `procedural_tier_snapshot_ref` is left `None`-canonical here
-            # (IS spec v1.3 §C-IS-05 §5.1). This append wraps pre-signed OD audit
-            # entries — a separate ledger family, not an active-workflow-context
-            # producer emission — so the D-derivative sidecar does not apply.
-            payload = EntryPayload(
-                action_id=action_id,
-                idempotency_key=action_id,
-                actor=self.ledger_writer.actor,
-                timestamp=self.time_source(),
-            )
-            write_key = WriteKey(
-                thread_id=Identifier(f"{self._ACTION_ID_PREFIX}:{self._tenant_tag(tenant_id)}"),
-                step_id=action_id,
-                idempotency_key=action_id,
-            )
-            # Item (e): persist the FULL signed entry SIDECAR-FIRST (out-of-family
-            # Codex round-3 finding on the PR-B1 landing). IS-first ordering lost
-            # the signed entry PERMANENTLY when the process died between the two
-            # writes and the exact event was never replayed (span-redaction and
-            # cost side effects do not replay) — and a later NEW event then seeded
-            # its chain from the pre-loss tail, forking the OD chain against the
-            # IS refs. Sidecar-first inverts the failure: the valuable data (the
-            # full signed entry) is durable before the chain ref lands; a crash
-            # between the writes leaves at worst a SURPLUS sidecar row with no IS
-            # ref — detectable by a verifier cross-checking refs, prunable, and
-            # chain-consistent (the row was genuinely signed at that position, so
-            # tail seeding keeps verifying). The membership-checked write keeps
-            # every path idempotent (a retry after either crash window never
-            # duplicates a row); the IS append remains the dedup authority for
-            # the RESULT the caller sees.
+        action_id = self._action_id_for(tenant_id, audit_entry)
+        # R-003: `procedural_tier_snapshot_ref` is left `None`-canonical here
+        # (IS spec v1.3 §C-IS-05 §5.1). This append wraps pre-signed OD audit
+        # entries — a separate ledger family, not an active-workflow-context
+        # producer emission — so the D-derivative sidecar does not apply.
+        payload = EntryPayload(
+            action_id=action_id,
+            idempotency_key=action_id,
+            actor=self.ledger_writer.actor,
+            timestamp=self.time_source(),
+        )
+        write_key = WriteKey(
+            thread_id=Identifier(f"{self._ACTION_ID_PREFIX}:{self._tenant_tag(tenant_id)}"),
+            step_id=action_id,
+            idempotency_key=action_id,
+        )
+        # Item (e): persist the FULL signed entry SIDECAR-FIRST (out-of-family
+        # Codex round-3 finding on the PR-B1 landing). IS-first ordering lost
+        # the signed entry PERMANENTLY when the process died between the two
+        # writes and the exact event was never replayed (span-redaction and
+        # cost side effects do not replay) — and a later NEW event then seeded
+        # its chain from the pre-loss tail, forking the OD chain against the
+        # IS refs. Sidecar-first inverts the failure: the valuable data (the
+        # full signed entry) is durable before the chain ref lands; a crash
+        # between the writes leaves at worst a SURPLUS sidecar row with no IS
+        # ref — detectable by a verifier cross-checking refs, prunable, and
+        # chain-consistent (the row was genuinely signed at that position, so
+        # tail seeding keeps verifying). The membership-checked write keeps
+        # every path idempotent (a retry after either crash window never
+        # duplicates a row); the IS append remains the dedup authority for
+        # the RESULT the caller sees.
+        if sidecar_locks_held:
+            self._append_sidecar_line_if_missing_locked(tenant_id, audit_entry)
+        else:
             self._append_sidecar_line_if_missing(tenant_id, audit_entry)
-            # Bounded resample-retry (codex round-8 P1): this lock
-            # serializes AUDIT appends, but ordinary `LedgerWriter.append`
-            # F2/state writes to the SAME ledger do not take it — one can
-            # commit a newer timestamp between our sampling and our IS
-            # append, which then raises NonMonotonicTimestampError AFTER
-            # the sidecar row is durable (an unanchored signature). The IS
-            # append is retry-safe here: the OD entry (and so the sidecar
-            # identity) is timestamp-independent, and the idempotency key
-            # is unchanged — resample a fresh timestamp and retry. Bounded:
-            # a hot ledger could starve an unbounded loop; exhaustion
-            # propagates the error loudly (the sidecar row is preserved and
-            # the NEXT append's crash-repair path re-anchors it).
-            attempts_left = 5
-            while True:
-                try:
-                    return self.ledger_writer.append(payload, write_key)
-                except NonMonotonicTimestampError:
-                    attempts_left -= 1
-                    if attempts_left <= 0:
-                        raise
-                    payload = EntryPayload(
-                        action_id=payload.action_id,
-                        idempotency_key=payload.idempotency_key,
-                        actor=payload.actor,
-                        timestamp=self.time_source(),
-                    )
+        # Bounded resample-retry (codex round-8 P1): this lock
+        # serializes AUDIT appends, but ordinary `LedgerWriter.append`
+        # F2/state writes to the SAME ledger do not take it — one can
+        # commit a newer timestamp between our sampling and our IS
+        # append, which then raises NonMonotonicTimestampError AFTER
+        # the sidecar row is durable (an unanchored signature). The IS
+        # append is retry-safe here: the OD entry (and so the sidecar
+        # identity) is timestamp-independent, and the idempotency key
+        # is unchanged — resample a fresh timestamp and retry. Bounded:
+        # a hot ledger could starve an unbounded loop; exhaustion
+        # propagates the error loudly (the sidecar row is preserved and
+        # the NEXT append's crash-repair path re-anchors it).
+        attempts_left = 5
+        while True:
+            try:
+                return self.ledger_writer.append(payload, write_key)
+            except NonMonotonicTimestampError:
+                attempts_left -= 1
+                if attempts_left <= 0:
+                    raise
+                payload = EntryPayload(
+                    action_id=payload.action_id,
+                    idempotency_key=payload.idempotency_key,
+                    actor=payload.actor,
+                    timestamp=self.time_source(),
+                )
 
     def _sidecar_line_for(self, tenant_id: str | None, audit_entry: AuditLedgerEntry) -> str:
         return json.dumps(
@@ -558,94 +597,105 @@ class RuntimeAuditLedgerWriter:
         — the PR-A representation discipline), so `model_dump(mode="json")`
         round-trips losslessly.
         """
+        with self._sidecar_thread_lock, cross_process_write_lock(self._sidecar_path):
+            self._append_sidecar_line_if_missing_locked(tenant_id, audit_entry)
+
+    def _append_sidecar_line_if_missing_locked(
+        self, tenant_id: str | None, audit_entry: AuditLedgerEntry
+    ) -> None:
+        """Sidecar-append core — caller holds BOTH sidecar locks (B-50
+        item (i): the unlocked-inner shape a `tenant_transaction` composes
+        under one outer hold; POSIX flock is non-reentrant, so the core
+        must never reacquire)."""
         tag = self._tenant_tag(tenant_id)
         line = self._sidecar_line_for(tenant_id, audit_entry)
-        with self._sidecar_thread_lock, cross_process_write_lock(self._sidecar_path):
-            if not self._sidecar_path.exists():
-                # Round-36 P1: creating a REPLACEMENT sidecar after the
-                # original disappeared would silently split history (old IS
-                # refs unrecoverable). Absence is only legitimate at genuine
-                # first use.
-                self._assert_absence_is_first_use()
-            self._heal_torn_tail_locked()
-            folded_from_zero = self._sidecar_index.offset == 0
-            rescanned_from_zero = self._refresh_sidecar_index_locked()
-            if folded_from_zero or rescanned_from_zero:
-                # `rescanned_from_zero` (codex round-45 P1): a WARM index
-                # (offset > 0) whose file was truncated/replaced resets to
-                # zero INSIDE the refresh — gating on the pre-refresh offset
-                # alone skipped the coverage check exactly when truncation
-                # was detected, extending an incomplete history.
-                # Round-40 P1: truncation to a NEWLINE BOUNDARY (or to zero
-                # with the file kept) leaves only valid-looking rows — the
-                # torn-tail heal sees nothing to fix and round-36's absence
-                # check never fires. After any full fold, every IS audit ref
-                # must be covered by sidecar membership, EXCEPT the identity
-                # being appended right now (that one gap is the legitimate
-                # single-entry crash-repair path, rounds 1/3).
-                self._assert_is_refs_covered_locked(allowed_gap=(tag, audit_entry.entry_hash))
-            identity = (tag, audit_entry.entry_hash)
-            incoming_digest = _full_entry_digest(audit_entry)
-            stored_digest = self._sidecar_index.digests.get(identity)
-            if stored_digest is not None:
-                if stored_digest != incoming_digest:
-                    # Codex round-19: a durable row whose signature_attrs
-                    # were mutated (payload + entry_hash intact) must not
-                    # silently satisfy membership for the legitimate entry —
-                    # the corrupted signature would remain the only durable
-                    # copy. Fail loud; the row is preserved as evidence.
-                    raise ValueError(
-                        f"sidecar row for tenant_tag={tag!r} "
-                        f"entry_hash={audit_entry.entry_hash!r} diverges from "
-                        f"the entry being appended (signature_attrs or other "
-                        f"non-payload fields differ) — tampered or corrupt "
-                        f"row preserved as evidence, append refused"
-                    )
-                # Re-establish durability on the membership-hit path (codex
-                # round-28): if a prior attempt wrote this row but its fsync
-                # raised, the retry lands here — returning without another
-                # fsync would let the IS reference commit while the row (or
-                # its directory entry) is still only page-cached.
-                fd = self._open_sidecar_validated(os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
-                try:
-                    os.fsync(fd)
-                finally:
-                    os.close(fd)
-                if sys.platform != "win32":
-                    dir_fd = os.open(str(self._sidecar_path.parent), os.O_RDONLY)
-                    try:
-                        os.fsync(dir_fd)
-                    finally:
-                        os.close(dir_fd)
-                return
-            encoded = (line + "\n").encode("utf-8")
-            with os.fdopen(self._open_sidecar_for_append(), "ab") as fh:
-                fh.write(encoded)
-                fh.flush()
-                # Durability BEFORE the IS ref lands (codex round-23): a bare
-                # write+close only reaches the page cache — power loss after
-                # the IS append could keep the ref while the signature row
-                # was never durable, defeating the sidecar-first guarantee.
-                os.fsync(fh.fileno())
+        if not self._sidecar_path.exists():
+            # Round-36 P1: creating a REPLACEMENT sidecar after the
+            # original disappeared would silently split history (old IS
+            # refs unrecoverable). Absence is only legitimate at genuine
+            # first use.
+            self._assert_absence_is_first_use()
+        self._heal_torn_tail_locked()
+        folded_from_zero = self._sidecar_index.offset == 0
+        rescanned_from_zero = self._refresh_sidecar_index_locked()
+        if folded_from_zero or rescanned_from_zero:
+            # `rescanned_from_zero` (codex round-45 P1): a WARM index
+            # (offset > 0) whose file was truncated/replaced resets to
+            # zero INSIDE the refresh — gating on the pre-refresh offset
+            # alone skipped the coverage check exactly when truncation
+            # was detected, extending an incomplete history.
+            # Round-40 P1: truncation to a NEWLINE BOUNDARY (or to zero
+            # with the file kept) leaves only valid-looking rows — the
+            # torn-tail heal sees nothing to fix and round-36's absence
+            # check never fires. After any full fold, every IS audit ref
+            # must be covered by sidecar membership, EXCEPT the identity
+            # being appended right now (that one gap is the legitimate
+            # single-entry crash-repair path, rounds 1/3).
+            self._assert_is_refs_covered_locked(allowed_gap=(tag, audit_entry.entry_hash))
+        identity = (tag, audit_entry.entry_hash)
+        incoming_digest = _full_entry_digest(audit_entry)
+        stored_digest = self._sidecar_index.digests.get(identity)
+        if stored_digest is not None:
+            if stored_digest != incoming_digest:
+                # Codex round-19: a durable row whose signature_attrs
+                # were mutated (payload + entry_hash intact) must not
+                # silently satisfy membership for the legitimate entry —
+                # the corrupted signature would remain the only durable
+                # copy. Fail loud; the row is preserved as evidence.
+                raise ValueError(
+                    f"sidecar row for tenant_tag={tag!r} "
+                    f"entry_hash={audit_entry.entry_hash!r} diverges from "
+                    f"the entry being appended (signature_attrs or other "
+                    f"non-payload fields differ) — tampered or corrupt "
+                    f"row preserved as evidence, append refused"
+                )
+            # Re-establish durability on the membership-hit path (codex
+            # round-28): if a prior attempt wrote this row but its fsync
+            # raised, the retry lands here — returning without another
+            # fsync would let the IS reference commit while the row (or
+            # its directory entry) is still only page-cached.
+            fd = self._open_sidecar_validated(os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
             if sys.platform != "win32":
-                # Directory-entry durability on EVERY append (codex round-33
-                # P2 — a `created`-gated dir-fsync missed the retry after a
-                # crash between O_CREAT and the first write: the file already
-                # existed, so its directory entry was never made durable
-                # before the IS ref landed). One extra fsync per audit write
-                # is cheap; POSIX-only per the documented B-45 posture.
                 dir_fd = os.open(str(self._sidecar_path.parent), os.O_RDONLY)
                 try:
                     os.fsync(dir_fd)
                 finally:
                     os.close(dir_fd)
-            # Our own write never needs re-parsing: record it in the index
-            # and advance past it.
-            self._sidecar_index.digests[identity] = incoming_digest
-            self._sidecar_index.offset += len(encoded)
-            post = self._sidecar_path.stat()
-            self._sidecar_index.inode = post.st_ino
-            self._sidecar_index.mtime_ns = post.st_mtime_ns
+            return
+        encoded = (line + "\n").encode("utf-8")
+        with os.fdopen(self._open_sidecar_for_append(), "ab") as fh:
+            fh.write(encoded)
+            fh.flush()
+            # Durability BEFORE the IS ref lands (codex round-23): a bare
+            # write+close only reaches the page cache — power loss after
+            # the IS append could keep the ref while the signature row
+            # was never durable, defeating the sidecar-first guarantee.
+            os.fsync(fh.fileno())
+        if sys.platform != "win32":
+            # Directory-entry durability on EVERY append (codex round-33
+            # P2 — a `created`-gated dir-fsync missed the retry after a
+            # crash between O_CREAT and the first write: the file already
+            # existed, so its directory entry was never made durable
+            # before the IS ref landed). One extra fsync per audit write
+            # is cheap; POSIX-only per the documented B-45 posture.
+            dir_fd = os.open(str(self._sidecar_path.parent), os.O_RDONLY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+        # Our own write never needs re-parsing: record it in the index
+        # and advance past it.
+        self._sidecar_index.digests[identity] = incoming_digest
+        if _has_redaction_namespace_keys(audit_entry):
+            self._sidecar_index.redaction_tails[tag] = audit_entry.entry_hash
+        self._sidecar_index.offset += len(encoded)
+        post = self._sidecar_path.stat()
+        self._sidecar_index.inode = post.st_ino
+        self._sidecar_index.mtime_ns = post.st_mtime_ns
 
     def _refresh_sidecar_index_locked(self) -> bool:
         """Incrementally fold NEW sidecar bytes into the membership index —
@@ -676,6 +726,7 @@ class RuntimeAuditLedgerWriter:
         reset_to_zero = truncated or inode_changed or same_size_mutated
         if reset_to_zero:
             index.legacy_exempt.clear()
+            index.redaction_tails.clear()
             # Full rescan ONLY for: truncation (torn-tail heal elsewhere),
             # file replacement (inode change), or a same-size in-place
             # mutation (codex round-21: size-equality alone trusted a stale
@@ -782,6 +833,8 @@ class RuntimeAuditLedgerWriter:
                     f"or corrupt rows preserved as evidence"
                 )
             index.digests[identity] = digest
+            if _has_redaction_namespace_keys(entry):
+                index.redaction_tails[row["tenant_tag"]] = entry.entry_hash
         index.offset += len(delta)
         post = self._sidecar_path.stat()
         index.inode = post.st_ino
@@ -789,6 +842,11 @@ class RuntimeAuditLedgerWriter:
         return reset_to_zero
 
     def read_full_entries_for_tenant(self, tenant_id: str | None) -> list[AuditLedgerEntry]:
+        return self._read_full_entries_core(tenant_id, sidecar_locks_held=False)
+
+    def _read_full_entries_core(
+        self, tenant_id: str | None, *, sidecar_locks_held: bool
+    ) -> list[AuditLedgerEntry]:
         """Tenant-scoped FULL-entry reader over the item-(e) sidecar.
 
         Rehydrates every persisted `AuditLedgerEntry` (payload +
@@ -843,7 +901,12 @@ class RuntimeAuditLedgerWriter:
         # Windows the cross-process lock is a no-op, so a verifier racing a
         # writer thread in one process needs this to never observe a
         # partially written record.
-        with self._sidecar_thread_lock, cross_process_read_lock(self._sidecar_path):
+        lock_ctx: Any = (
+            contextlib.nullcontext()
+            if sidecar_locks_held
+            else _combined_sidecar_read_locks(self._sidecar_thread_lock, self._sidecar_path)
+        )
+        with lock_ctx:
             # Validated fd (codex round-33 P1): the token map's SEEDING read
             # runs before its first append, so a plain path open here let a
             # pre-created FIFO hang span completion and a symlink supply
@@ -981,12 +1044,33 @@ class RuntimeAuditLedgerWriter:
                     os.close(dir_fd)
             index = self._sidecar_index
             index.digests.clear()
+            index.redaction_tails.clear()
             index.legacy_exempt = {(pair[0], pair[1]) for pair in legacy}
             index.offset = len(encoded)
             post = self._sidecar_path.stat()
             index.inode = post.st_ino
             index.mtime_ns = post.st_mtime_ns
             return len(legacy)
+
+    @contextlib.contextmanager
+    def tenant_transaction(self, tenant_id: str | None) -> Any:
+        """Atomic tail-read + compose + append transaction — B-50 item (i).
+
+        Holds the FULL writer lock stack — the per-ledger append lock, the
+        sidecar thread lock, and the cross-process sidecar write flock —
+        across everything done inside the `with` block, so two processes
+        can no longer both read the same durable family tail and sign
+        different successors against one predecessor (the pre-B-50 residual
+        documented since PR B1 round 13). The yielded handle exposes
+        UNLOCKED-INNER variants (POSIX `flock` is non-reentrant across
+        separately opened descriptors — a plain outer hold around the
+        locking public methods would self-deadlock; codex round-6 on the
+        disposition leg). POSIX-only atomicity: the flock half is a win32
+        no-op per the documented B-45 platform posture.
+        """
+        with _append_lock_for(self.ledger_writer.handle.canonical_path):
+            with self._sidecar_thread_lock, cross_process_write_lock(self._sidecar_path):
+                yield _AuditWriterTenantTransaction(self, tenant_id)
 
     def read_for_tenant(self, tenant_id: str | None) -> list[StateLedgerEntry]:
         """Tenant-scoped reader (C-OD-21 §21.1 cross-tenant separation surface).
@@ -1017,6 +1101,50 @@ class RuntimeAuditLedgerWriter:
         entries = read_ledger(self.ledger_writer.handle)
         prefix = f"{self._ACTION_ID_PREFIX}:"
         return [e for e in entries if e.action_id.startswith(prefix)]
+
+
+class _AuditWriterTenantTransaction:
+    """Handle yielded by `RuntimeAuditLedgerWriter.tenant_transaction`.
+
+    Both operations assume the transaction's lock stack is HELD — they call
+    the writer's unlocked-inner cores and must never be used outside the
+    `with` block (the handle is deliberately private and unexported).
+    """
+
+    __slots__ = ("_tenant_id", "_writer")
+
+    def __init__(self, writer: RuntimeAuditLedgerWriter, tenant_id: str | None) -> None:
+        self._writer = writer
+        self._tenant_id = tenant_id
+
+    def append(self, audit_entry: AuditLedgerEntry) -> WriteResult:
+        return self._writer._append_core(  # pyright: ignore[reportPrivateUsage]
+            self._tenant_id, audit_entry, sidecar_locks_held=True
+        )
+
+    def redaction_family_tail(self) -> str | None:
+        """The durable redaction-family tail hash for this tenant, or None
+        when the family has no (recoverable) entries — O(delta): heals +
+        folds any bytes other processes appended (under the held flock),
+        then answers from the transactionally maintained index (codex
+        round-1 on the B-50 landing: a full rehydration per append was
+        O(history) on the span-finalization hot path).
+        """
+        writer = self._writer
+        if not writer._sidecar_path.exists():  # pyright: ignore[reportPrivateUsage]
+            return None
+        # Mirror the append core's coverage gate (codex round-2 on the B-50
+        # landing): a full fold performed HERE warms the index, so the
+        # subsequent txn.append() would see offset > 0 and skip ITS
+        # round-40 coverage check — a boundary-truncated sidecar folded at
+        # tail-lookup time would mask incomplete history.
+        folded_from_zero = writer._sidecar_index.offset == 0  # pyright: ignore[reportPrivateUsage]
+        writer._heal_torn_tail_locked()  # pyright: ignore[reportPrivateUsage]
+        rescanned = writer._refresh_sidecar_index_locked()  # pyright: ignore[reportPrivateUsage]
+        if folded_from_zero or rescanned:
+            writer._assert_is_refs_covered_locked()  # pyright: ignore[reportPrivateUsage]
+        tag = writer._tenant_tag(self._tenant_id)  # pyright: ignore[reportPrivateUsage]
+        return writer._sidecar_index.redaction_tails.get(tag)  # pyright: ignore[reportPrivateUsage]
 
 
 @dataclass(frozen=True, slots=True)

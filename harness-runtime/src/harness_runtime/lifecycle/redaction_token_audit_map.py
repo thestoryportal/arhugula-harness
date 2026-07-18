@@ -46,6 +46,7 @@ class AuditLedgerRedactionTokenMap(RedactionTokenMap):
         self._signing_algorithm = signing_algorithm
         self._entry_core = entry_core
         self._prior_entry_hash = prior_entry_hash
+        self._initial_prior_entry_hash = prior_entry_hash
         self._timestamp = timestamp
         self._signing_backend = signing_backend
         self._chain_lock = threading.Lock()
@@ -89,35 +90,59 @@ class AuditLedgerRedactionTokenMap(RedactionTokenMap):
 
     def append(self, record: RedactionTokenRecord) -> None:
         with self._chain_lock:
-            if not self._chain_seeded:
-                self._seed_chain_from_durable_tail()
-                self._chain_seeded = True
-            audit_entry = compose_redaction_token_audit_entry(
-                record,
-                key_id=self._signing_key_id,
-                algo=self._signing_algorithm,
-                entry_core=self._entry_core,
-                prior_entry_hash=self._prior_entry_hash,
-                timestamp=self._timestamp,
-                backend=self._signing_backend,
-            )
-            try:
-                self._audit_writer.append(self._tenant_id, audit_entry)
-            except BaseException:
-                # Partial-failure reconciliation (out-of-family Codex round-13
-                # on the PR-B1 landing): under sidecar-first persistence the
-                # failed append may have landed the entry durably (sidecar
-                # written, IS append raised). Holding the in-memory position
-                # would make the NEXT distinct record link to the pre-orphan
-                # predecessor while the full reader includes the orphan —
-                # breaking `verify_hash_chain_integrity`. Invalidate the seed
-                # so the next append re-reads the durable tail (which includes
-                # the orphan iff it landed) before signing.
-                self._chain_seeded = False
-                raise
-            # Advance ONLY after a successful persist. In-process appends
-            # serialize on `_chain_lock`; cross-process simultaneous writers
-            # to one tenant remain a registered residual (B-47 remainder —
-            # same-host lock exists at the sidecar, but each process holds
-            # its own chain position).
-            self._prior_entry_hash = audit_entry.entry_hash
+            txn_factory = getattr(self._audit_writer, "tenant_transaction", None)
+            if txn_factory is None:
+                # Duck-typed writers without the B-50 transaction surface
+                # keep the pre-B-50 cached-position behavior (test fakes;
+                # the production runtime writer always has it).
+                self._append_with_cached_position(record)
+                return
+            # B-50 item (i): tail-read + compose + append run under ONE
+            # held lock stack (append lock + sidecar thread lock +
+            # cross-process flock), so a concurrent writer in another
+            # process can no longer read the same durable tail and sign a
+            # different successor against one predecessor. The DURABLE tail
+            # read inside the transaction is the single source of truth for
+            # the chain position — the pre-B-50 in-memory cached position
+            # (with its seed/invalidate machinery) is gone on this path:
+            # a cache over the durable tail was a second authority that
+            # could drift (another process's append; a partial failure).
+            # POSIX-only cross-process hold per B-45; in-process writers
+            # still serialize on _chain_lock + the transaction locks.
+            with txn_factory(self._tenant_id) as txn:
+                tail = txn.redaction_family_tail()
+                prior_entry_hash = tail if tail is not None else self._initial_prior_entry_hash
+                audit_entry = compose_redaction_token_audit_entry(
+                    record,
+                    key_id=self._signing_key_id,
+                    algo=self._signing_algorithm,
+                    entry_core=self._entry_core,
+                    prior_entry_hash=prior_entry_hash,
+                    timestamp=self._timestamp,
+                    backend=self._signing_backend,
+                )
+                txn.append(audit_entry)
+
+    def _append_with_cached_position(self, record: RedactionTokenRecord) -> None:
+        """Pre-B-50 fallback for duck writers without `tenant_transaction`."""
+        if not self._chain_seeded:
+            self._seed_chain_from_durable_tail()
+            self._chain_seeded = True
+        audit_entry = compose_redaction_token_audit_entry(
+            record,
+            key_id=self._signing_key_id,
+            algo=self._signing_algorithm,
+            entry_core=self._entry_core,
+            prior_entry_hash=self._prior_entry_hash,
+            timestamp=self._timestamp,
+            backend=self._signing_backend,
+        )
+        try:
+            self._audit_writer.append(self._tenant_id, audit_entry)
+        except BaseException:
+            # Partial-failure reconciliation (codex round-13, PR B1): the
+            # failed append may have landed the entry durably; invalidate
+            # the seed so the next append re-reads the durable tail.
+            self._chain_seeded = False
+            raise
+        self._prior_entry_hash = audit_entry.entry_hash

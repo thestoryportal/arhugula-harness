@@ -1883,3 +1883,222 @@ def test_per_family_verifier_over_real_sidecar_rehydration(tmp_path: Path) -> No
     report = verify_per_family_chains(entries)
     assert report.chained == {REDACTION_TOKEN_FAMILY: 2}
     assert sum(report.per_entry.values()) == 2
+
+
+def test_two_map_instances_never_fork_the_chain(tmp_path: Path) -> None:
+    """B-50 item (i) — two writers with INDEPENDENT chain positions over one
+    durable tail (two processes; simulated here as two map instances) could
+    both read the same tail and sign different successors against one
+    predecessor. Under the tenant transaction, the durable tail read inside
+    the held lock stack is the single source of truth: alternating appends
+    from two instances that never share in-memory state must produce one
+    VALID redaction chain."""
+    from harness_od.per_family_audit_verification import (
+        REDACTION_TOKEN_FAMILY,
+        verify_per_family_chains,
+    )
+    from harness_od.redaction_tokenizer import RedactionTokenRecord
+    from harness_runtime.lifecycle.redaction_token_audit_map import (
+        AuditLedgerRedactionTokenMap,
+    )
+
+    writer = _writer(tmp_path)
+
+    def _map() -> AuditLedgerRedactionTokenMap:
+        return AuditLedgerRedactionTokenMap(
+            audit_writer=writer,
+            tenant_id="tenant-x",
+            signing_key_id="chain-key",
+        )
+
+    def _record(token: str) -> RedactionTokenRecord:
+        return RedactionTokenRecord(
+            token=token,
+            raw_value=f"raw for {token}",
+            semantic_category="PII",
+            attribute_key="gen_ai.input.messages",
+            trace_id="trace-1",
+            span_id=f"span-{token}",
+        )
+
+    map_a, map_b = _map(), _map()
+    map_a.append(_record("[REDACTED:PII:a1]"))
+    map_b.append(_record("[REDACTED:PII:b1]"))  # b never saw a's in-memory state
+    map_a.append(_record("[REDACTED:PII:a2]"))  # pre-B-50: a's cached position forked here
+    map_b.append(_record("[REDACTED:PII:b2]"))
+
+    entries = writer.read_full_entries_for_tenant("tenant-x")
+    report = verify_per_family_chains(entries)
+    assert report.chained == {REDACTION_TOKEN_FAMILY: 4}
+
+
+def test_tenant_transaction_excludes_concurrent_appends(tmp_path: Path) -> None:
+    """B-50 item (i) — the transaction must HOLD the writer lock stack for
+    its whole extent: a public append racing an open transaction blocks
+    until the transaction exits (yielding outside the locks would leave the
+    read-compose-append window unprotected)."""
+    import threading as threading_module
+
+    writer = _writer(tmp_path)
+    in_txn = threading_module.Event()
+    release = threading_module.Event()
+    b_done = threading_module.Event()
+
+    def _a() -> None:
+        with writer.tenant_transaction("tenant-x") as txn:
+            in_txn.set()
+            assert release.wait(timeout=10.0)
+            txn.append(_make_audit_entry("1" * 64))
+
+    def _b() -> None:
+        writer.append("tenant-x", _make_audit_entry("2" * 64))
+        b_done.set()
+
+    a = threading_module.Thread(target=_a, daemon=True)
+    a.start()
+    assert in_txn.wait(timeout=10.0)
+    b = threading_module.Thread(target=_b, daemon=True)
+    b.start()
+
+    import time as time_module
+
+    time_module.sleep(0.3)
+    assert not b_done.is_set(), "public append proceeded while a transaction was open"
+
+    release.set()
+    a.join(timeout=10.0)
+    b.join(timeout=10.0)
+    assert b_done.is_set()
+    assert len(writer.read_full_entries_for_tenant("tenant-x")) == 2
+
+
+def test_token_append_does_not_rehydrate_full_history(tmp_path: Path) -> None:
+    """B-50 codex round-1 — the transactional prior lookup must be O(delta)
+    via the index-maintained family tail, never an O(history) full
+    rehydration per append (the span-finalization hot path)."""
+    import unittest.mock as mock
+
+    from harness_od.redaction_tokenizer import RedactionTokenRecord
+    from harness_runtime.lifecycle.redaction_token_audit_map import (
+        AuditLedgerRedactionTokenMap,
+    )
+
+    writer = _writer(tmp_path)
+    token_map = AuditLedgerRedactionTokenMap(
+        audit_writer=writer,
+        tenant_id="tenant-p",
+        signing_key_id="chain-key",
+    )
+
+    def _record(token: str) -> RedactionTokenRecord:
+        return RedactionTokenRecord(
+            token=token,
+            raw_value=f"raw for {token}",
+            semantic_category="PII",
+            attribute_key="gen_ai.input.messages",
+            trace_id="trace-1",
+            span_id=f"span-{token}",
+        )
+
+    calls = {"n": 0}
+    original = RuntimeAuditLedgerWriter._read_full_entries_core
+
+    def _counting(
+        self: RuntimeAuditLedgerWriter, tenant_id: str | None, **kwargs: object
+    ) -> object:
+        calls["n"] += 1
+        return original(self, tenant_id, **kwargs)  # type: ignore[arg-type]
+
+    with mock.patch.object(RuntimeAuditLedgerWriter, "_read_full_entries_core", _counting):
+        for i in range(3):
+            token_map.append(_record(f"[REDACTED:PII:p{i}]"))
+    assert calls["n"] == 0, f"full rehydration ran {calls['n']} times on the append path"
+
+    # And the chain is still valid.
+    from harness_od.per_family_audit_verification import verify_per_family_chains
+
+    report = verify_per_family_chains(writer.read_full_entries_for_tenant("tenant-p"))
+    assert report.chained == {"redaction-token": 3}
+
+
+def test_fresh_writer_instance_folds_the_family_tail(tmp_path: Path) -> None:
+    """B-50 codex round-1 (fold half) — a FRESH writer (new process; cold
+    index) must recover the redaction family tail by FOLDING the existing
+    sidecar rows, not only from its own appends: a map on the fresh writer
+    must chain onto the durable tail, not restart from genesis."""
+    from harness_od.per_family_audit_verification import (
+        REDACTION_TOKEN_FAMILY,
+        verify_per_family_chains,
+    )
+    from harness_od.redaction_tokenizer import RedactionTokenRecord
+    from harness_runtime.lifecycle.redaction_token_audit_map import (
+        AuditLedgerRedactionTokenMap,
+    )
+
+    def _record(token: str) -> RedactionTokenRecord:
+        return RedactionTokenRecord(
+            token=token,
+            raw_value=f"raw for {token}",
+            semantic_category="PII",
+            attribute_key="gen_ai.input.messages",
+            trace_id="trace-1",
+            span_id=f"span-{token}",
+        )
+
+    writer1 = _writer(tmp_path)
+    AuditLedgerRedactionTokenMap(
+        audit_writer=writer1, tenant_id="tenant-f", signing_key_id="chain-key"
+    ).append(_record("[REDACTED:PII:f1]"))
+
+    # Fresh writer over the same path — cold index, tail known only via fold.
+    writer2 = RuntimeAuditLedgerWriter(
+        ledger_writer=writer1.ledger_writer,
+        time_source=writer1.time_source,
+    )
+    AuditLedgerRedactionTokenMap(
+        audit_writer=writer2, tenant_id="tenant-f", signing_key_id="chain-key"
+    ).append(_record("[REDACTED:PII:f2]"))
+
+    report = verify_per_family_chains(writer1.read_full_entries_for_tenant("tenant-f"))
+    assert report.chained == {REDACTION_TOKEN_FAMILY: 2}
+
+
+def test_transactional_append_detects_boundary_truncation(tmp_path: Path) -> None:
+    """B-50 codex round-2 — the tail lookup's fold warmed the index, so the
+    transaction's subsequent append skipped its full-fold coverage check: a
+    boundary-truncated sidecar was silently extended. The lookup now runs
+    the same coverage gate the append core does."""
+    from harness_od.redaction_tokenizer import RedactionTokenRecord
+    from harness_runtime.lifecycle.redaction_token_audit_map import (
+        AuditLedgerRedactionTokenMap,
+    )
+
+    def _record(token: str) -> RedactionTokenRecord:
+        return RedactionTokenRecord(
+            token=token,
+            raw_value=f"raw for {token}",
+            semantic_category="PII",
+            attribute_key="gen_ai.input.messages",
+            trace_id="trace-1",
+            span_id=f"span-{token}",
+        )
+
+    writer = _writer(tmp_path)
+    token_map = AuditLedgerRedactionTokenMap(
+        audit_writer=writer, tenant_id="tenant-t", signing_key_id="chain-key"
+    )
+    token_map.append(_record("[REDACTED:PII:t1]"))
+    token_map.append(_record("[REDACTED:PII:t2]"))
+
+    # Truncate to the first record's boundary — a well-formed file.
+    lines = writer.sidecar_path.read_bytes().splitlines(keepends=True)
+    writer.sidecar_path.write_bytes(lines[0])
+
+    fresh_writer = RuntimeAuditLedgerWriter(
+        ledger_writer=writer.ledger_writer, time_source=writer.time_source
+    )
+    fresh_map = AuditLedgerRedactionTokenMap(
+        audit_writer=fresh_writer, tenant_id="tenant-t", signing_key_id="chain-key"
+    )
+    with pytest.raises(ValueError, match="truncated or lost"):
+        fresh_map.append(_record("[REDACTED:PII:t3]"))
