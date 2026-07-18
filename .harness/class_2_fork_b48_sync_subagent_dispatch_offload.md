@@ -77,10 +77,12 @@ positions precede the operator decision (round-2 P2), so both are named HERE:
 The positions AGREE on fail-fast + typed error + RuntimeConfig ownership and differ only on default sizing.
 **That one disagreement is settled HERE, not deferred (round-9 P1 — the default is part of the C-RT-03
 contract the operator ratifies, so leaving it to the apply leg would make the spec-writer invent it without
-authority): recommended default `sub_agent_dispatch_max_workers = 64`** — generous against C1's
-starvation concern (production descent is single-digit deep and fan-out is branch-bounded, so 64 concurrent
-sub-agent dispatch chains indicates runaway recursion, exactly what C9 wants loud), validated ≥ 1 at config
-load, overridable like every capacity field. The dyad's convening at the apply leg is thereby reduced to
+authority): recommended default `sub_agent_dispatch_max_workers = 128`, sized in ACTIVE DISPATCH FRAMES
+(round-12 P2 — each parent worker stays BLOCKED while its descendants run, so the executor consumes one
+worker per active frame, not per root chain: a legitimate 3-wide × depth-4 hierarchy demands
+3+9+27+81 = 120 frames; 64 would reject it).** 128 accommodates that shape with headroom; deeper/wider
+topologies size the field to their own frame arithmetic (the config exists precisely because legitimate
+workloads vary), validated ≥ 1 at config load. The dyad's convening at the apply leg is thereby reduced to
 CONFIRMING this pre-resolved position (or surfacing a reasoned deviation back to the operator), not
 inventing the number.
 
@@ -95,14 +97,17 @@ inventing the number.
    stage-5 composer constructions (round-6 P2): `hitl_inference` (async C-RT-15), `hitl_sub_agent` (sync
    C-RT-17 — the offloaded one), and `hitl_tool` (async `RetryBreakerToolDispatcher.dispatch`, which must
    stay on the direct await path).
-2. **Dispatch-time cancellation semantics** (filing codex round-1 P1; policy fixed at round-11 P2 —
-   CONSISTENT with option B's committed bounded per-dispatch join, not reopened): cancelling an executor
-   FUTURE cannot stop a sync child already running in its worker, so the timeout path JOINS the worker
-   (bounded) before surfacing `StepDispatchTimeoutError` — no abandonment (an abandoned child could
-   continue F2/audit writes after the failure surfaces, contradicting the witness below). Cooperative
-   cancellation (a cancel token the child driver checks at step boundaries) may ADDITIONALLY shorten the
-   join but never replaces it. Witness: no child effects land after the failure surfaces —
-   join-on-shutdown does not cover dispatch-time cancellation.
+2. **Dispatch-time cancellation semantics** (round-1 P1; policy completed at rounds 11/12): cancelling an
+   executor FUTURE cannot stop a sync child already running in its worker. The policy has THREE mandatory
+   parts (round-12 P1 — a bounded join alone cannot satisfy no-late-effects when the child is stuck in a
+   provider/KMS call): (a) a cooperative CANCEL TOKEN the child driver checks at every step boundary;
+   (b) an EFFECT FENCE the token trips — once tripped, the child driver performs no further F2/audit
+   writes (in-flight step results are discarded at the fence, mirroring the at-most-once effect
+   discipline); (c) a bounded JOIN to the fence acknowledgement before surfacing
+   `StepDispatchTimeoutError`. If the grace expires with the worker still inside a blocking call, the
+   surfaced error carries an explicit `worker_draining_under_fence` disposition (never silent
+   abandonment, never a pretended completion) and the fence guarantees the still-running call's result
+   cannot produce post-failure effects. Witness: no child effects land after the failure surfaces.
 3. **Child-workflow facade bridging** — the sync driver's loop-bridge (`run_coroutine_threadsafe` shape)
    must be exercised from a WORKER thread with the parent awaiting off-loop; witness the full
    parent→child→grandchild chain.
@@ -124,7 +129,12 @@ inventing the number.
    watchdog cancels them from another thread (not thread-safe; RuntimeError under asyncio debug, outer
    hard deadline can fail); the apply arc gives the registry a cross-thread-safe cancellation handle (or
    binds a fresh registry per child with parent-side aggregation) and witnesses a NESTED cascade-deadline
-   cancel through an offloaded child.
+   cancel through an offloaded child. **And the parent-side abandonment path (round-12 P1):
+   `_run_fanout_to_completion` cancels the `asyncio.to_thread` future on barrier deadline and abandons
+   the thread via `shutdown(wait=False)` — nothing today carries that cancellation INTO the offloaded
+   job, so the parent can report failure while the child keeps writing until its own step timeout. The
+   apply arc wires an explicit parent→job cancellation channel (the same item-2 cancel token, tripped by
+   the barrier deadline) and witnesses a parent-barrier-deadline cancel reaching the child's fence.**
 6. **B-21 fan-out** — `PARALLELIZATION` branches dispatching sub-agents concurrently must not serialize on
    the offload — N branches → N concurrent workers **for N ≤ cap; above the cap the (N+1)th dispatch
    fail-fasts per the §3 no-queue invariant (round-11 P2 — full concurrency and the hard cap cannot both
