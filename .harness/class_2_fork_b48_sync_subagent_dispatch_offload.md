@@ -201,6 +201,11 @@ inventing the number.
    `test_u_cp_89_hierarchical_delegation_depth2_live_ollama` (xfail strict=False) must flip XPASS under
    the offload (a sub-agent INFERENCE child's facade bridge finds the loop free); promote it from xfail
    on flip.
+8-bis. **Loop-responsiveness witness — the PRIMARY defect's own proof** (round-20 P2): with a slow sync
+   child (or a stubbed slow KMS call) running through the offload, an UNRELATED concurrent workflow and a
+   pending loop timer must demonstrably advance during the dispatch (the §1 defect is exactly their
+   starvation); mutation probe: revert to the direct call → this witness must fail. The deadlock XPASS
+   and capacity tests do not cover this — they prove bridge progress and admission, not loop liveness.
 9. **Cap saturation + no-queue witness** (round-9 P2): a deterministic cap+1 scenario — every worker
    occupied, one more dispatch — must fail IMMEDIATELY with the typed error and provably enqueue nothing
    (the below-capacity witnesses pass even on a queueing bounded pool, leaving the target deadlock
