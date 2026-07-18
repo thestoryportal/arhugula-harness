@@ -830,9 +830,10 @@ items:
     fork -- a SQLite migration would itself reopen a settled ADR commitment; (g) is plain
     performance engineering; (h)
     partitions chain verification by producer family (out-of-family Codex round-30 on PR B1) -- a
-    per-tenant sidecar entry set interleaves INDEPENDENT OD chain families (the CXA section 0.3 action-id
-    prefixes are the discriminator; the converter chains on CP-side event hashes, the redaction-token
-    map within itself), so the verifier must be per-family AND producer-aware -- chain
+    per-tenant sidecar entry set interleaves INDEPENDENT OD entry families, so the verifier must be
+    per-family AND producer-aware -- families discriminated per the B-49 policy (redaction rows by
+    their audit.redaction_token.* namespace keys, since caller-supplied entry_core rows have no
+    reliable prefix; others by action-id prefix) -- chain
     verification ONLY for the redaction-token family; per-entry CONTENT-HASH checks for cost, HITL,
     and sub-agent dispatch, which intentionally emit genesis-style predecessors on every entry
     (superseded by the B-49 policy, codex rounds 3/5/7/8 on the disposition leg); global
