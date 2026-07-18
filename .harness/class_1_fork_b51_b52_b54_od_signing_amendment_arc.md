@@ -170,6 +170,16 @@ INCLUDING the leg-1 fifth segment if ratified, which is why B-54 must land joint
 same delta — and project `"DEPLOYMENT_BOUND"` → `key_period=0` exactly as signing does. Two contract
 requirements sharpened at filing codex round-1:
 
+- **Absent-backend inspection at MTC is UNVERIFIED, not success** (round-15 P1): with no backend/key
+  mapping supplied — today's `harness-inspect` default — the optional-`backend` shape would emit the
+  existing hash/content success while checking ZERO signatures, presenting tampered signature metadata as
+  a passing audit against §20.3.1. The contract must require backend inputs for MTC inspection or return
+  an explicit UNVERIFIED result with a nonzero CLI exit; silent hash-only success at MTC is prohibited.
+- **Multi-algorithm history needs a resolver, not one backend** (round-15 P2): a single `SigningBackend`
+  exposes one `.algorithm`, but a ledger legitimately holds rows from multiple permitted algorithms after
+  an operator algorithm change — the contract must key backend resolution on each row's STORED algorithm
+  (a per-algorithm mapping mirroring the key-id mapping) or explicitly prohibit algorithm changes and
+  specify the migration.
 - **Failure taxonomy** (round-13 P2 — a substantive contract choice, ratified here rather than left to the
   spec-writing pass): recommend a typed three-way discrimination — (a) `backend.verify` returns false
   (signature does not match) → raise a NEW typed `AuditSignatureInvalid` (NOT `HashChainBreach`, which
