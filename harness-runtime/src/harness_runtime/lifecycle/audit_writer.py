@@ -402,6 +402,13 @@ class RuntimeAuditLedgerWriter:
                     f"hard links — refusing to truncate a file linked "
                     f"elsewhere (possible plant over the sidecar or ledger)"
                 )
+            if sys.platform != "win32" and stat.S_IMODE(tmp_st.st_mode) & 0o077:
+                # Codex round-6 P2 on this landing: os.open's 0o600 mode is
+                # ignored for a PRE-EXISTING temp file, so a reused 0644
+                # plant would ride os.replace into a group/world-readable
+                # installed snapshot (tenant tags + entry hashes). Clamp on
+                # the open fd before any bytes are written.
+                os.fchmod(fd, 0o600)
             os.ftruncate(fd, 0)
         except BaseException:
             os.close(fd)

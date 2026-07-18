@@ -2521,3 +2521,29 @@ def test_bit_rotted_prefix_discards_snapshot_despite_clean_metadata(
     )
     with pytest.raises(ValueError, match="content-integrity"):
         fresh.append("tenant-A", _make_audit_entry("2" * 64))
+
+
+def test_reused_permissive_tmp_installs_owner_only_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex round-6 P2 (item (g) landing) — os.open's 0o600 mode is
+    ignored for a PRE-EXISTING temp file: a reused 0644 temp would ride
+    os.replace into a world-readable installed snapshot (tenant tags +
+    entry hashes). The writer must clamp the open fd to owner-only."""
+    import os as os_module
+    import stat as stat_module
+    import sys as sys_module
+
+    if sys_module.platform == "win32":  # pragma: no cover
+        pytest.skip("POSIX mode semantics")
+
+    monkeypatch.setattr(RuntimeAuditLedgerWriter, "_SNAPSHOT_EVERY_APPENDS", 1)
+    writer = _writer(tmp_path)
+    snapshot_path = writer._snapshot_path  # pyright: ignore[reportPrivateUsage]
+    tmp_file = snapshot_path.with_name(snapshot_path.name + ".tmp")
+    tmp_file.write_bytes(b"stale")
+    tmp_file.chmod(0o644)
+
+    writer.append("tenant-A", _make_audit_entry("1" * 64))
+    mode = stat_module.S_IMODE(os_module.stat(snapshot_path).st_mode)
+    assert mode == 0o600, f"installed snapshot must be owner-only, got {mode:o}"
