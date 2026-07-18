@@ -270,9 +270,23 @@ class RuntimeAuditLedgerWriter:
     posture: one authority, one derived JSON cache."""
 
     _SNAPSHOT_EVERY_APPENDS: ClassVar[int] = 64
-    """Write cadence: persist the snapshot after this many index mutations
-    (own appends + folded rows), plus immediately after any from-zero fold
-    or legacy adoption so the expensive refold is paid at most once."""
+    """Write-cadence FLOOR: persist the snapshot once at least this many
+    index mutations (own appends + folded rows) have accumulated — but see
+    `_SNAPSHOT_GROWTH_DIVISOR`: for a large index the threshold is
+    proportional to the index size, so each rewrite is amortized against
+    real growth. A fixed cadence alone rewrote the O(N) snapshot every 64
+    appends — Θ(N²/64) cumulative checkpoint bytes on the audit hot path
+    (codex round-1 P1 on this landing). The snapshot is also written
+    immediately after any from-zero fold or legacy adoption so the
+    expensive refold is paid at most once."""
+
+    _SNAPSHOT_GROWTH_DIVISOR: ClassVar[int] = 8
+    """Proportional half of the cadence: rewrite only once the index has
+    grown by at least `len(digests) / 8` mutations since the last snapshot.
+    Geometric checkpointing — total snapshot bytes over a ledger's life are
+    O(N · divisor), i.e. amortized O(1) per append, and the (rare) O(N)
+    rewrite stall shrinks in frequency as the ledger grows. A cold start
+    then folds at most ~1/8 of history as delta."""
 
     _SIDECAR_FILENAME: ClassVar[str] = "audit-entries.jsonl"
     """`B-47` close-out item (e) — the full-entry durable sidecar.
@@ -336,12 +350,15 @@ class RuntimeAuditLedgerWriter:
         flags = os.O_CREAT | os.O_WRONLY | os.O_TRUNC
         if sys.platform != "win32":
             flags |= os.O_NOFOLLOW
-        fd = os.open(tmp_path, flags, 0o600)
-        try:
-            os.write(fd, encoded)
-            os.fsync(fd)
-        finally:
-            os.close(fd)
+        # Buffered writer, not a bare os.write (codex round-1 P2 on this
+        # landing): a single os.write may return SHORT on a regular file,
+        # silently installing truncated JSON that every cold start then
+        # discards — correctness survives (self-digest → refold) but the
+        # cache is defeated; BufferedWriter.write loops until complete.
+        with os.fdopen(os.open(tmp_path, flags, 0o600), "wb") as fh:
+            fh.write(encoded)
+            fh.flush()
+            os.fsync(fh.fileno())
         os.replace(tmp_path, self._snapshot_path)
         if sys.platform != "win32":
             dir_fd = os.open(str(self._snapshot_path.parent), os.O_RDONLY)
@@ -352,7 +369,12 @@ class RuntimeAuditLedgerWriter:
         index.unsnapshotted = 0
 
     def _maybe_write_index_snapshot_locked(self) -> None:
-        if self._sidecar_index.unsnapshotted >= self._SNAPSHOT_EVERY_APPENDS:
+        index = self._sidecar_index
+        threshold = max(
+            self._SNAPSHOT_EVERY_APPENDS,
+            len(index.digests) // self._SNAPSHOT_GROWTH_DIVISOR,
+        )
+        if index.unsnapshotted >= threshold:
             self._write_index_snapshot_locked()
 
     def _try_adopt_index_snapshot_locked(self, st: os.stat_result) -> None:

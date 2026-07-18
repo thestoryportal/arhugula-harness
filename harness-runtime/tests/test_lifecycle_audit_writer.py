@@ -2327,3 +2327,40 @@ def test_snapshot_write_cadence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(RuntimeAuditLedgerWriter, "_SNAPSHOT_EVERY_APPENDS", 2)
     writer.append("tenant-A", _make_audit_entry("3" * 64))
     assert snapshot_path.exists(), "crossing the cadence must persist the snapshot"
+
+
+def test_snapshot_cadence_is_proportional_to_index_size(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex round-1 P1 (item (g) landing) — a FIXED cadence rewrote the
+    O(N) snapshot every 64 appends: Θ(N²/64) cumulative checkpoint bytes on
+    the audit hot path. The threshold must scale with the index size
+    (geometric checkpointing), so a large index is NOT rewritten after a
+    small delta."""
+    monkeypatch.setattr(RuntimeAuditLedgerWriter, "_SNAPSHOT_EVERY_APPENDS", 1)
+    writer = _writer(tmp_path)
+    writer.append("tenant-A", _make_audit_entry("1" * 64))
+    snapshot_path = writer._snapshot_path  # pyright: ignore[reportPrivateUsage]
+    assert snapshot_path.exists()
+    before = snapshot_path.read_bytes()
+
+    # Simulate a LARGE folded index (synthetic in-memory members only — the
+    # sidecar itself is untouched, and this test never cold-starts from the
+    # snapshot, so the synthetic identities never face a coverage check).
+    index = writer._sidecar_index  # pyright: ignore[reportPrivateUsage]
+    index.digests.update(
+        {("tenant-A", f"{i:064d}"): "d" * 64 for i in range(80)}
+    )
+
+    # One more append: unsnapshotted=1 < max(1, 81 // 8) — must NOT rewrite.
+    writer.append("tenant-A", _make_audit_entry("2" * 64))
+    assert snapshot_path.read_bytes() == before, (
+        "a small delta on a large index must not rewrite the O(N) snapshot"
+    )
+
+    # Enough further appends to cross the proportional threshold DO rewrite.
+    for i in range(3, 14):
+        writer.append("tenant-A", _make_audit_entry(f"{i:02d}".ljust(64, "a")[:64]))
+    assert snapshot_path.read_bytes() != before, (
+        "sustained growth past the proportional threshold must checkpoint"
+    )
