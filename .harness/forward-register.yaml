@@ -1045,10 +1045,9 @@ items:
     (ratification-gate item 7): rides the B-51/B-52/B-54 arc''s Runtime v1.100 -> v1.101 rider as the
     one-row addition -- ratified with the same gate (item 7); section 13.4 row LANDED at Runtime
     v1.101 (PR 1056); impl arc (U-RT-102 amended, incl. the retag mode) next.'
-  close_out: 'Class 1 back-flow per section 4.3 (a spec-inventory revision IS a design-artifact
-    change): a one-row section 13.4 inventory addition riding the B-51/B-52/B-54 arc''s Runtime
-    v1.101 rider + clearance marker, then the CLI subcommand implementation (no pyproject change);
-    nothing blocks on it.'
+  close_out: 'Class 1 back-flow COMPLETE (PR 1056): the section 13.4 inventory row + clearance marker LANDED
+    at Runtime v1.101 — remaining work is the U-RT-102 IMPLEMENTATION only (flat-namespace dispatch,
+    record-authenticated retag mode, completeness refusal; no pyproject change); nothing blocks on it.'
   council: 'no'
   heading: '### B-53 · Migration-CLI scripts-inventory promotion *(split from B-47 disposition,
     2026-07-17)*'
