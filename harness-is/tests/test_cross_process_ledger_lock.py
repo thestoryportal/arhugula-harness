@@ -699,3 +699,36 @@ def test_writer_provisions_legacy_sidecar_against_fresh_old_process(tmp_path: Pa
     n.join(_WAIT)
     o.join(_WAIT)
     assert old_entered.is_set()
+
+
+def test_aliased_legacy_sidecar_refused_without_hanging(tmp_path: Path) -> None:
+    """Codex round-9 P2 (B-46 landing) — a sidecar aliasing the canonical
+    ledger (hard link or symlink) passes S_ISREG but self-deadlocks on
+    the inode this process already holds; both shapes must be refused
+    LOUD and promptly (O_NOFOLLOW for the symlink; a dev/ino alias check
+    for the hard link)."""
+    import os as os_module
+
+    def _attempt(target: Path, done: threading.Event, outcomes: list[str]) -> None:
+        try:
+            with cross_process_write_lock(target):
+                outcomes.append("entered")
+        except (ValueError, OSError):
+            outcomes.append("refused")
+        done.set()
+
+    for alias_kind in ("hardlink", "symlink"):
+        ledger = tmp_path / f"ledger-{alias_kind}.jsonl"
+        ledger.write_text("seed\n")
+        legacy = tmp_path / f"ledger-{alias_kind}.jsonl.lock"
+        if alias_kind == "hardlink":
+            os_module.link(ledger, legacy)
+        else:
+            os_module.symlink(ledger, legacy)
+        done = threading.Event()
+        outcomes: list[str] = []
+        t = threading.Thread(target=_attempt, args=(ledger, done, outcomes))
+        t.start()
+        t.join(_WAIT)
+        assert done.is_set(), f"write lock hung on a {alias_kind} legacy sidecar"
+        assert outcomes == ["refused"], f"{alias_kind} alias not refused: {outcomes}"

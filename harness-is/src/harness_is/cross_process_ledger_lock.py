@@ -166,11 +166,13 @@ def _acquire_legacy_sidecar_for_writer(canonical_path: Path) -> int:
     import fcntl
     import stat as stat_module
 
-    fd = os.open(
-        _legacy_lock_file_path(canonical_path),
-        os.O_CREAT | os.O_RDWR | getattr(os, "O_NONBLOCK", 0),
-        0o600,
-    )
+    open_flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_NONBLOCK", 0)
+    if not _IS_WINDOWS:
+        # O_NOFOLLOW (round-9 P2): a symlink sidecar — including a
+        # dangling one O_CREAT would otherwise materialize as the
+        # CANONICAL file — fails loud with ELOOP.
+        open_flags |= os.O_NOFOLLOW
+    fd = os.open(_legacy_lock_file_path(canonical_path), open_flags, 0o600)
     try:
         if not stat_module.S_ISREG(os.fstat(fd).st_mode):
             # Fail CLOSED (round-8 P2): on Linux an old B-40 writer can
@@ -182,6 +184,23 @@ def _acquire_legacy_sidecar_for_writer(canonical_path: Path) -> int:
                 f"legacy lock sidecar {_legacy_lock_file_path(canonical_path)} "
                 f"is not a regular file — refusing to write without "
                 f"mixed-version serialization (remove the mangled sidecar)"
+            )
+        sidecar_stat = os.fstat(fd)
+        try:
+            canonical_stat = os.stat(canonical_path)
+        except FileNotFoundError:
+            canonical_stat = None
+        if canonical_stat is not None and (
+            sidecar_stat.st_dev == canonical_stat.st_dev
+            and sidecar_stat.st_ino == canonical_stat.st_ino
+        ):
+            # Alias check (round-9 P2): a hard link to the canonical file
+            # passes S_ISREG but self-deadlocks on the inode this process
+            # already holds LOCK_EX on. Loud refusal, no hang.
+            raise ValueError(
+                f"legacy lock sidecar {_legacy_lock_file_path(canonical_path)} "
+                f"aliases the canonical ledger — refusing (remove the "
+                f"mangled sidecar)"
             )
         fcntl.flock(fd, fcntl.LOCK_EX)
     except BaseException:
@@ -205,11 +224,11 @@ def _acquire_legacy_sidecar_if_present(canonical_path: Path, *, exclusive: bool)
     import fcntl  # POSIX-only; callers gate win32.
     import stat as stat_module
 
+    open_flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)
+    if not _IS_WINDOWS:
+        open_flags |= os.O_NOFOLLOW  # round-9 P2 — symlink sidecar fails loud
     try:
-        fd = os.open(
-            _legacy_lock_file_path(canonical_path),
-            os.O_RDONLY | getattr(os, "O_NONBLOCK", 0),
-        )
+        fd = os.open(_legacy_lock_file_path(canonical_path), open_flags)
     except FileNotFoundError:
         return -1
     try:
@@ -223,6 +242,21 @@ def _acquire_legacy_sidecar_if_present(canonical_path: Path, *, exclusive: bool)
                 f"legacy lock sidecar {_legacy_lock_file_path(canonical_path)} "
                 f"is not a regular file — refusing to proceed without "
                 f"mixed-version serialization (remove the mangled sidecar)"
+            )
+        sidecar_stat = os.fstat(fd)
+        try:
+            canonical_stat = os.stat(canonical_path)
+        except FileNotFoundError:
+            canonical_stat = None
+        if canonical_stat is not None and (
+            sidecar_stat.st_dev == canonical_stat.st_dev
+            and sidecar_stat.st_ino == canonical_stat.st_ino
+        ):
+            # Alias check (round-9 P2) — see the writer helper.
+            raise ValueError(
+                f"legacy lock sidecar {_legacy_lock_file_path(canonical_path)} "
+                f"aliases the canonical ledger — refusing (remove the "
+                f"mangled sidecar)"
             )
         fcntl.flock(fd, fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)
     except BaseException:
