@@ -32,7 +32,7 @@ The Runtime-owned PD-8 witness obligations of the v1.101 change-note ((a)–(e),
 
 **Implements:** Runtime spec v1.101 §3 C-RT-03 (`audit_signing_fail_closed` field row; `tenant_id` row MTC amendment; the NEW MTC audit-signing config-validation invariant). Policy semantics OD-owned (OD v1.34 §21.2.3 rows 1–4 — cross-referenced).
 
-**Depends on:** [U-RT-103] (RuntimeConfigSource layered loading — the field must ride all three source layers).
+**Depends on:** [U-RT-103 (RuntimeConfigSource layered loading — the field must ride all three source layers), U-OD-30 (cross-axis: OD — bootstrap tenant validation DELEGATES to the OD-exported normalizer; co-land)].
 
 **Files affected (logical):** the RuntimeConfig schema module; `config/loader.py` (`_ENV_SCALAR_FIELDS`); `config_source.py` (`_RuntimeEnvSettings`); the bootstrap config-validation site.
 
@@ -61,7 +61,7 @@ The Runtime-owned PD-8 witness obligations of the v1.101 change-note ((a)–(e),
 
 1. Under `audit_signing_fail_closed=ON` at MULTI_TENANT_COMPLIANCE, BOTH B-18-KEEPALIVE surfaces are disabled AS CONTRACT TERMS: (i) the `prompt_cache_boot_prewarm` stage-5 LOOP_INIT boot ping is NOT fired; (ii) the `_keepalive_loop` daemon coroutine is NOT SPAWNED — the LOOP itself, not merely a `prewarm()` early-return (dyad-2 precision note 1: the loop's own swallow-all outer catch must be unreachable BY CONTRACT, not by coincidence of call order).
 2. The disable is a POLICY SKIP composing with the existing `PrewarmOutcome` `SKIPPED_*` outcome family — a policy skip is NOT a `FAILED` outcome and MUST NOT count toward the keepalive `consec_fail` self-disable accounting. *(Member name is implementation discretion; non-binding suggestion: `SKIPPED_POLICY_FAIL_CLOSED`.)*
-3. The disable keys on the RESOLVED flag, NOT the tier (codex round-2 P1 on the apply PR): an EXPLICIT `audit_signing_fail_closed=true` at solo-developer/team-binding disables prewarm + keepalive identically (otherwise `prewarm()`'s swallow-all at `llm_dispatch.py:851-857` + the keepalive outer catch at `app.py:416-420` convert a post-paid-call signing failure into `FAILED` under an operator's explicit fail-closed opt-in). Flag-OFF behavior (the non-MTC default) BYTE-PRESERVED — the v1.99 contract stands verbatim for it (opt-in-default-off; 5m-TTL-only keep-alive; swallow-all best-effort posture).
+3. The disable keys on the RESOLVED flag, NOT the tier (codex round-2 P1 on the apply PR): an EXPLICIT `audit_signing_fail_closed=true` at solo-developer/team-binding disables prewarm + keepalive identically (otherwise `prewarm()`'s swallow-all at `llm_dispatch.py:851-857` + the keepalive outer catch at `app.py:416-420` convert a post-paid-call signing failure into `FAILED` under an operator's explicit fail-closed opt-in). FLAGGED APPLY-PASS INTERPRETATION (codex rounds 2 vs 9 surfaced both readings of gate item 8's MTC wording): the item-8 text names the default-ON MTC case; at a lower tier the flag is ON only by the operator's own EXPLICIT opt-in, and the ONLY two hole-closing shapes are (i) this resolved-flag disable or (ii) MTC-only disable + lower-tier propagation of signing failures through the prewarm boundary — (ii) is FORECLOSED by the committed v1.99 bootstrap-isolation contract (prewarm failure MUST NOT propagate as `BootstrapFailure`), so (i) is the only shape closing the explicit-opt-in fail-open hole without breaking a committed Runtime contract; the disable applies the SAME ratified integrity-over-latency tradeoff, triggered by the operator's own explicit choice. Recorded here as a flagged interpretation, not silent extension. Flag-OFF behavior (the non-MTC default) BYTE-PRESERVED — the v1.99 contract stands verbatim for it (opt-in-default-off; 5m-TTL-only keep-alive; swallow-all best-effort posture).
 
 **Tests (mutation-probed per PD-8):** **Witness (b) — resolved-flag disable:** `test_flag_on_boot_prewarm_not_fired` (parametrized: MTC default-ON AND solo-developer explicit `true`), `test_flag_on_keepalive_loop_never_spawned` (LOOP-level witness — asserts the coroutine/task is never created, not merely that `prewarm()` early-returns; same parametrization), `test_policy_skip_is_skipped_family_and_never_increments_consec_fail`, `test_flag_off_byte_preservation_control` (flag unset at solo/team — v1.99 behavior verbatim).
 
@@ -115,7 +115,7 @@ The Runtime-owned PD-8 witness obligations of the v1.101 change-note ((a)–(e),
 
 **Implements:** Runtime spec v1.101 NEW §13.5 (C-RT-13 verification inputs rows 1–7) + the §13 `harness-inspect` exit-contract amendment. Verification SEMANTICS OD-owned (OD v1.34 §21.2.2 — cross-referenced; API at OD plan v2.29 U-OD-55).
 
-**Depends on:** [U-RT-47 (the landed `harness-inspect` admin surface), U-OD-55 (cross-axis: OD — the verification API this surface invokes)].
+**Depends on:** [U-RT-47 (the landed `harness-inspect` admin surface), U-OD-55 (cross-axis: OD — the verification API this surface invokes), U-CP-44/U-CP-45 (cross-axis: CP — the injected-verifier Protocol + CP-owned result boundary this unit's walk adapter implements; co-land)].
 
 **Files affected (logical):** the `harness_runtime.admin.inspect` surface + its CLI/config input parsing. Plus (codex round-8 P1): the composition-root adapter module injecting the real U-OD-55 verifier into the §20.3.1 CP walk (the CP v2.38 co-land pin's runtime-owned half).
 
