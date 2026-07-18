@@ -143,7 +143,8 @@ The v2.31 U-RT-102 body (Typer parent app + subcommand stubs) is PRESERVED VERBA
 - `harness migrate-audit-sidecar` is registered under the existing flat `harness <subcommand>` namespace (the committed Q-J=(a) command model; NO nesting) and DISPATCHES to the EXISTING B-47 migration module `main` (`harness_runtime.admin.migrate_audit_sidecar`) — the `python -m` module path stays as the implementation; no logic is duplicated into the CLI layer.
 - The §13.4 subcommand-structure invariant holds at 6 flat subcommands; the Track A hyphenated standalone binaries are untouched.
 
-- NEW (codex round-1 P1 on the apply PR): the subcommand additionally carries the OD v1.34 §21.2.1 row-6 RETAG mode — given an authenticated cutover record, it retags each NAMED row's sidecar `tenant_tag` from `"_single"` to the record's attested `tenant_scope` (entry content and `entry_hash` byte-unchanged — the tag lives in the sidecar wrapper outside the hash), making the rows reachable by `read_full_entries_for_tenant(tenant)` for §21.2.2 verification; rows NOT named by the record are NOT retagged.
+- NEW (codex round-1 P1 on the apply PR): the subcommand additionally carries the OD v1.34 §21.2.1 row-6 RETAG mode — it retags each NAMED row's sidecar `tenant_tag` from `"_single"` to the record's attested `tenant_scope` (entry content and `entry_hash` byte-unchanged — the tag lives in the sidecar wrapper outside the hash), making the rows reachable by `read_full_entries_for_tenant(tenant)` for §21.2.2 verification; rows NOT named by the record are NOT retagged.
+- AUTHENTICATION IS U-RT-102's OWN OBLIGATION (codex round-5 P1): BEFORE any retag, the subcommand VALIDATES the cutover record's trust anchor per Runtime §13.5 row 4 (the operator-designated record-signing key — a reserved row-3-mapping entry distinct from row-derived keys — or the out-of-band anchor supplied with the record); a record failing authentication is REJECTED with a typed error and ZERO tags are changed (never treated as absent, never partial). The forged-record witness `test_forged_cutover_record_rejected_typed_never_treated_as_absent` binds HERE (the retag half) as well as at U-RT-138 (the inspect half) — mutation probe: removing the U-RT-102-side validation while U-RT-138's passes fails the retag-mode case.
 
 **Tests (v2.49 additions — mutation-probed per PD-8):** **Witness (e) — migrate-audit-sidecar subcommand:** `test_harness_migrate_audit_sidecar_dispatches_existing_module_main_under_flat_namespace`. **Witness (f) — `_single`-history retag:** `test_retag_named_rows_reachable_by_tenant_read_content_and_hash_unchanged` (post-retag, the named rows are returned by `read_full_entries_for_tenant(attested_tenant)` with byte-identical entry content + `entry_hash`; an UNNAMED `"_single"` row is NOT retagged and is absent from that read — mutation probe: dropping the named-rows filter or mutating entry content fails the test).
 
@@ -154,10 +155,11 @@ The v2.31 U-RT-102 body (Typer parent app + subcommand stubs) is PRESERVED VERBA
 Five new units; acyclic (Kahn-verifiable):
 
 ```
-L0-within-delta: U-RT-134 (← U-RT-103, prior-landed)
+L0-within-delta: U-RT-134 (← U-RT-103 prior-landed; + U-OD-30 cross-axis, see Also line)
 L1-within-delta: U-RT-135 (← U-RT-134), U-RT-136 (← U-RT-134 + U-CP-73 cross-axis)
-Independent:     U-RT-137 (← U-CP-72, U-OD-30 cross-axis), U-RT-138 (← U-RT-47 prior-landed + U-OD-55 cross-axis)
-Amended:         U-RT-102 (no new edges — dispatch to a landed module)
+Independent:     U-RT-137 (← U-CP-72, U-OD-30 cross-axis), U-RT-138 (← U-RT-47 prior-landed + U-OD-55 cross-axis + U-CP-44/U-CP-45 cross-axis — the injected-verifier Protocol + CP-owned result boundary it adapts and integration-tests)
+Also:            U-RT-134 (← U-OD-30 cross-axis — bootstrap tenant validation DELEGATES to the OD-exported normalizer)
+Amended:         U-RT-102 (← U-RT-138 partial — the §13.5 row-4 record-authentication component; otherwise dispatch to a landed module)
 ```
 
 Cross-axis edges: U-RT-136 → U-CP-73 (CP); U-RT-137 → U-CP-72 (CP), U-OD-30 (OD); U-RT-138 → U-OD-55 (OD). Co-land pins per §0.4 (one impl arc per fork gate item 10). All prior edges + acyclicity PRESERVED VERBATIM.
