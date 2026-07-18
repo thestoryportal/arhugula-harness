@@ -144,6 +144,46 @@ def _dir_lock_for(parent: Path) -> _DirLock:
         return lock
 
 
+def _legacy_lock_file_path(canonical_path: Path) -> Path:
+    """The pre-B-46 sibling advisory-lock file (`<ledger>.lock`)."""
+    return canonical_path.with_name(canonical_path.name + ".lock")
+
+
+def _acquire_legacy_sidecar_if_present(canonical_path: Path, *, exclusive: bool) -> int:
+    """Transitional mixed-version coordination (codex round-4 P1): a
+    pre-B-46 process on a sibling worktree locks `<ledger>.lock`, which the
+    canonical-file lock never touches — without this, old and new writers
+    never contend and can fork the chain. When the legacy sidecar EXISTS on
+    disk, acquire it too (same mode), ordered strictly AFTER the canonical
+    file lock everywhere (old processes hold only the sidecar and none of
+    our locks, so no cross-version cycle is possible). New deployments
+    never create the sidecar, so this is a no-op for them; the legacy
+    lazy-provisioning TOCTOU survives only for the mixed-version
+    transition window it has always covered. Returns the locked fd, or -1
+    when the sidecar does not exist."""
+    import fcntl  # POSIX-only; callers gate win32.
+
+    try:
+        fd = os.open(_legacy_lock_file_path(canonical_path), os.O_RDONLY)
+    except FileNotFoundError:
+        return -1
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def _release_legacy_sidecar(fd: int) -> None:
+    if fd < 0:
+        return
+    import fcntl
+
+    fcntl.flock(fd, fcntl.LOCK_UN)
+    os.close(fd)
+
+
 @contextmanager
 def cross_process_write_lock(canonical_path: Path) -> Generator[None, None, None]:
     """Hold an exclusive same-host lock across a read-prior -> append critical section.
@@ -218,18 +258,32 @@ def cross_process_write_lock(canonical_path: Path) -> Generator[None, None, None
             # not serialize against post-replacement writers. If the path
             # no longer names our locked inode, retry from the top (each
             # retry requires an actual replacement event, so the loop
-            # terminates in every real workload).
+            # terminates in every real workload). Any verify error
+            # releases the acquired lock (round-4 P2 — a raised stat must
+            # not leave the fd locked until process exit).
             try:
-                path_ino = os.stat(canonical_path).st_ino
-            except FileNotFoundError:
-                path_ino = -1
+                try:
+                    path_ino = os.stat(canonical_path).st_ino
+                except FileNotFoundError:
+                    path_ino = -1
+            except BaseException:
+                fcntl.flock(file_fd, fcntl.LOCK_UN)
+                os.close(file_fd)
+                raise
             if path_ino != os.fstat(file_fd).st_ino:
                 fcntl.flock(file_fd, fcntl.LOCK_UN)
                 os.close(file_fd)
                 continue
             try:
+                legacy_fd = _acquire_legacy_sidecar_if_present(canonical_path, exclusive=True)
+            except BaseException:
+                fcntl.flock(file_fd, fcntl.LOCK_UN)
+                os.close(file_fd)
+                raise
+            try:
                 yield
             finally:
+                _release_legacy_sidecar(legacy_fd)
                 fcntl.flock(file_fd, fcntl.LOCK_UN)
                 os.close(file_fd)
             return
@@ -264,6 +318,12 @@ def cross_process_replace_lock(canonical_path: Path) -> Generator[None, None, No
             file_fd = os.open(canonical_path, os.O_RDWR | getattr(os, "O_NONBLOCK", 0))
         except FileNotFoundError:
             break  # nothing to wait out; dir hold covers the section
+        except BaseException:
+            # Round-4 P2: an unexpected open failure (unreadable target,
+            # a directory at the path) must not leave the dir lock held
+            # forever for every ledger in the parent.
+            dir_lock.release()
+            raise
         try:
             fcntl.flock(file_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
@@ -364,18 +424,31 @@ def cross_process_read_lock(canonical_path: Path) -> Generator[None, None, None]
                 if dir_held:
                     dir_lock.release()
                     dir_held = False
-            # Inode-stability verify (round-3 P1) — mirror of the writer.
+            # Inode-stability verify (round-3 P1) — mirror of the writer,
+            # with the same leak-safe wrap (round-4 P2).
             try:
-                path_ino = os.stat(canonical_path).st_ino
-            except FileNotFoundError:
-                path_ino = -1
+                try:
+                    path_ino = os.stat(canonical_path).st_ino
+                except FileNotFoundError:
+                    path_ino = -1
+            except BaseException:
+                fcntl.flock(file_fd, fcntl.LOCK_UN)
+                os.close(file_fd)
+                raise
             if path_ino != os.fstat(file_fd).st_ino:
                 fcntl.flock(file_fd, fcntl.LOCK_UN)
                 os.close(file_fd)
                 continue
             try:
+                legacy_fd = _acquire_legacy_sidecar_if_present(canonical_path, exclusive=False)
+            except BaseException:
+                fcntl.flock(file_fd, fcntl.LOCK_UN)
+                os.close(file_fd)
+                raise
+            try:
                 yield
             finally:
+                _release_legacy_sidecar(legacy_fd)
                 fcntl.flock(file_fd, fcntl.LOCK_UN)
                 os.close(file_fd)
             return

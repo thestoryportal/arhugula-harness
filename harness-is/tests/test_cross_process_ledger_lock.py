@@ -489,3 +489,84 @@ def test_acquisition_retries_across_inode_swap(
         pass
     assert len(calls) == 2, f"expected a retry after the inode swap (2 opens), saw {len(calls)}"
     assert ledger.read_text() == "new\n"
+
+
+def test_mixed_version_legacy_sidecar_coexistence(tmp_path: Path) -> None:
+    """Codex round-4 P1 (B-46 landing) — a pre-B-46 process locks the
+    sibling `<ledger>.lock` sidecar; when that sidecar EXISTS, the new
+    lock must ALSO contend on it (transitional dual-locking) or old and
+    new writers never contend and can fork the chain."""
+    import fcntl
+    import os as os_module
+
+    ledger = tmp_path / "ledger.jsonl"
+    ledger.write_text("seed\n")
+    legacy = tmp_path / "ledger.jsonl.lock"
+    legacy.touch()  # a pre-B-46 process provisioned it
+
+    old_holds = threading.Event()
+    release_old = threading.Event()
+    new_entered = threading.Event()
+
+    def _old_process_writer() -> None:
+        fd = os_module.open(legacy, os_module.O_RDWR)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)  # the pre-B-46 protocol
+            old_holds.set()
+            release_old.wait(_WAIT)
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os_module.close(fd)
+
+    def _new_writer() -> None:
+        with cross_process_write_lock(ledger):
+            new_entered.set()
+
+    old = threading.Thread(target=_old_process_writer)
+    old.start()
+    assert old_holds.wait(_WAIT)
+    new = threading.Thread(target=_new_writer)
+    new.start()
+    assert not new_entered.wait(0.5), (
+        "new-version writer entered while a legacy-sidecar holder was active — chain fork risk"
+    )
+    release_old.set()
+    old.join(_WAIT)
+    new.join(_WAIT)
+    assert new_entered.is_set()
+
+
+def test_verify_error_does_not_leak_the_file_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex round-4 P2 (B-46 landing) — a raised stat during the inode
+    verify must release the just-acquired file lock; a leaked lock blocks
+    every later access to the ledger until process exit."""
+    import os as os_module
+
+    ledger = tmp_path / "ledger.jsonl"
+    ledger.write_text("seed\n")
+    real_stat = os_module.stat
+    state = {"raise_next": True}
+
+    def _flaky_stat(path: object, **kw: object):  # type: ignore[no-untyped-def]
+        if state["raise_next"] and str(path) == str(ledger):
+            state["raise_next"] = False
+            raise PermissionError("transient stat failure")
+        return real_stat(path, **kw)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(os_module, "stat", _flaky_stat)
+    with pytest.raises(PermissionError):
+        with cross_process_write_lock(ledger):
+            pass  # pragma: no cover — never entered
+
+    done = threading.Event()
+
+    def _retry() -> None:
+        with cross_process_write_lock(ledger):
+            done.set()
+
+    t = threading.Thread(target=_retry)
+    t.start()
+    t.join(_WAIT)
+    assert done.is_set(), "file lock leaked by the failed verify"
