@@ -114,9 +114,18 @@ inventing the number.
    `HITLPauseRequestedSignal` or worker-set flag exercises a path production never takes and can miss
    snapshot loss). Durable-async pause flags set from the worker thread must be visible to the resume
    path (no thread-local state).
-5. **OTel span context** — `contextvars` do NOT flow into pool threads automatically; the offload must carry
-   `contextvars.copy_context()` (or equivalent) so sub-agent spans keep their parent trace; witness a
-   parent-child span-id assertion.
+5. **OTel span context — and SELECTIVE contextvar carry** (round-10 P1×2): `contextvars` do NOT flow into
+   pool threads automatically, so the offload carries `contextvars.copy_context()` for trace continuity
+   (witness a parent-child span-id assertion) — but a WHOLESALE copy smuggles loop-affine state across
+   threads: (a) `INTER_STEP_CHANNEL_VAR` — the copied parent channel is shared by concurrent sibling
+   children (`compose_child_workflow_runner` binds no fresh channel), letting one child's step output
+   enter another child's payload via `most_recent_output()`; the apply arc binds a PER-CHILD channel and
+   witnesses sibling isolation; (b) `_BRANCH_INFLIGHT_DISPATCHES` — a child fan-out would register
+   Futures owned by its worker-thread loop into the PARENT registry while the parent's cascade-cancel
+   watchdog cancels them from another thread (not thread-safe; RuntimeError under asyncio debug, outer
+   hard deadline can fail); the apply arc gives the registry a cross-thread-safe cancellation handle (or
+   binds a fresh registry per child with parent-side aggregation) and witnesses a NESTED cascade-deadline
+   cancel through an offloaded child.
 6. **B-21 fan-out** — `PARALLELIZATION` branches dispatching sub-agents concurrently must not serialize on
    the offload (N branches → N concurrent workers) and must keep the v1.97 paused-child-branch resume
    semantics; witness with a 2-branch fan-out. **Including pause-state ISOLATION (filing codex round-4

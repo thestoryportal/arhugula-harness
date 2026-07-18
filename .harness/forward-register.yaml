@@ -922,8 +922,10 @@ items:
     context carry, drain-timestamp fix (IS back-flow) + xfail removal, deadlock-anchor XPASS promotion,
     Runtime spec delta (C-RT-03 cap field) + Runtime plan delta. Awaiting operator selection (may batch
     with the B-51/B-52/B-54 ratification).'
-  council: 'yes at apply leg -- C1 orchestration vs C9 reliability dyad owns the cap default + typed
-    fail-fast semantics (condition MET at filing codex round-1: no committed recursion bound exists)'
+  council: 'yes at apply leg -- C1 orchestration vs C9 reliability dyad CONFIRMS the filing-settled
+    position (fail-fast + typed error + RuntimeConfig ownership + default sub_agent_dispatch_max_workers
+    = 64, ratified with the filing) or surfaces a reasoned deviation back to the operator; it does NOT
+    re-derive the default (one-authority discipline, filing codex round-10)'
   heading: '### B-48 · Sync sub-agent dispatch executes on the event loop *(surfaced at B-47 PR B2a,
     out-of-family Codex round-2, 2026-07-17)*'
 - id: B-49
