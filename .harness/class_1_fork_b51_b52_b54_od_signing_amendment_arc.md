@@ -161,8 +161,12 @@ requirements sharpened at filing codex round-1:
   AND to bind each legacy identity to its ORIGINAL TENANT (round-6 P1): `tenant_tag` is mutable, tenant is
   absent from `entry_hash`, and pre-v1.34 real signatures cover only the four-tuple, so a bare entry-hash
   cutover still lets an authenticated legacy row be moved from tenant A to B. The record binds signed
-  `(tenant_scope, entry_hash)` pairs and the verifier compares that scope against its tenant input; the
-  round-46 explicit-operator-action posture carries over, its carrier does not.
+  `(tenant_scope, entry_hash, verification_disposition)` TRIPLES (round-7 P1 — an upgraded ledger holds
+  both pre-v1.34 REAL four-tuple signatures and older `unsigned:*` placeholders; a bare pair cannot tell
+  the verifier which mode a listed row takes, and inspecting `signature_attrs` to decide reintroduces the
+  forbidden downgrade — the disposition/message-format-version is part of the authenticated record), and
+  the verifier compares the recorded scope against its tenant input; the round-46
+  explicit-operator-action posture carries over, its carrier does not.
   A config-declared pre-backend KEY-PERIOD set is NOT a viable cutover mechanism (filing codex round-3 P2):
   both the placeholder era and the real-KMS era store `"DEPLOYMENT_BOUND"` / project `key_period=0`, so a
   period set either exempts every row or none; period-based cutover only becomes possible if B-33
@@ -191,8 +195,11 @@ Per §4.3 the design-substrate amendments halt here. The operator ratifies, in o
    cutover so pre-v1.34 REAL four-tuple signatures keep verifying; tenant scope as verifier input;
    authenticated tenant-bound cutover-gated legacy exemption) and its NON-BLOCKING default — or an
    alternative/defer.
-4. **Arc bundling** — one OD v1.33 → v1.34 delta carrying legs 1+3, with the CP v1.100 → v1.101 rider for leg 2
-   (recommended), vs splitting.
+4. **Arc bundling** — one OD v1.33 → v1.34 delta carrying legs 1+3, with a CP v1.100 → v1.101 rider
+   carrying BOTH CP-owned halves (recommended), vs splitting. The CP rider is not leg 2's alone (filing
+   codex round-7 P1): `cp_audit_to_od_audit` is a CP-owned contract (`Spec_Control_Plane_v1_7.md` §13.5.1
+   declares its signature), so leg 1's tenant-bearing converter signature change amends CP too — the rider
+   carries the §13.5.1 signature amendment alongside the §28.10.4 invariant-2 carve-out.
 
 On ratification: spec-writer apply pass (with the two dyadic council convenings at the apply leg), clearance
 markers per §4.5, then the register rows flip `design_substrate_gated` → open/buildable and the impl arc
