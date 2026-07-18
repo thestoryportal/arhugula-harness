@@ -926,7 +926,7 @@ items:
     (option B); the apply arc is the live next step.'
   council: 'yes at apply leg -- C1 orchestration vs C9 reliability dyad CONFIRMS the filing-settled
     position (fail-fast + typed error + RuntimeConfig ownership + default sub_agent_dispatch_max_workers
-    = 256 in shared-budget frame units (N upstream frames + one inner frame per SYNC sub-agent branch; async inners uncharged), the filing-settled recommendation pending the operator gate) or surfaces a reasoned deviation back to the operator; it does NOT
+    = 256 in shared-budget frame units (N upstream frames + one inner frame per SYNC sub-agent branch; async inners uncharged), the filing-settled recommendation, RATIFIED 2026-07-18) or surfaces a reasoned deviation back to the operator; it does NOT
     re-derive the default (one-authority discipline, filing codex round-10)'
   heading: '### B-48 · Sync sub-agent dispatch executes on the event loop *(surfaced at B-47 PR B2a,
     out-of-family Codex round-2, 2026-07-17)*'
@@ -990,7 +990,7 @@ items:
     never be used -- cross-tenant replay under a deployment-scoped key remains unmitigated until the
     message segment lands or tenant-aware key selection is built. Class 1 fork doc FILED
     2026-07-17 at .harness/class_1_fork_b51_b52_b54_od_signing_amendment_arc.md (leg 1) -- RATIFIED 2026-07-18; the apply arc is the live next step.'
-  close_out: 'Fork doc FILED (see summary). On operator ratification of the filing''s gate: land the
+  close_out: 'Fork doc RATIFIED 2026-07-18 (see summary). Apply pass: land the
     canonical-message segment at the next OD amendment arc (byte-compat-scoped per the B-22/B-31
     precedents). The segment needs tenant identity AVAILABLE AT SIGNING (codex round-16): today
     sign_audit_entry/cp_audit_to_od_audit receive no tenant and the writer gets tenant_id only after
@@ -1014,7 +1014,7 @@ items:
     addendum AND a CP amendment (section 28.10.4 invariant 2 is CP-owned) -- or the weaker single-spec
     alternative keeping the validator hook fail-open. Class 1 fork doc FILED 2026-07-17 at
     .harness/class_1_fork_b51_b52_b54_od_signing_amendment_arc.md (leg 2) -- RATIFIED 2026-07-18; the apply arc is the live next step.'
-  close_out: 'Fork doc FILED (see summary). On ratification: add the flag + the ZEROTH-site bootstrap
+  close_out: 'Fork doc RATIFIED 2026-07-18 (see summary). Apply pass: add the flag + the ZEROTH-site bootstrap
     invariant (fail-closed requires a configured backend) + consult the flag at ALL TEN
     surfacing sites -- the six fn-internal loud-surface handlers AND the four offload-boundary
     saturation handlers (llm/tool/webhook/hitl outer catches, codex round-6) -- or centralize the
@@ -1043,7 +1043,7 @@ items:
     rides the committed harness_runtime.cli:main entry), recorded as a runtime spec section 13.4
     inventory row. LOW urgency. Fork FILED 2026-07-17 via .harness/class_1_fork_b51_b52_b54_od_signing_amendment_arc.md
     (ratification-gate item 7): rides the B-51/B-52/B-54 arc''s Runtime v1.100 -> v1.101 rider as the
-    one-row addition -- awaiting the same operator ratification.'
+    one-row addition -- ratified with the same gate (item 7) 2026-07-18.'
   close_out: 'Class 1 back-flow per section 4.3 (a spec-inventory revision IS a design-artifact
     change): a one-row section 13.4 inventory addition riding the B-51/B-52/B-54 arc''s Runtime
     v1.101 rider + clearance marker, then the CLI subcommand implementation (no pyproject change);
@@ -1061,8 +1061,8 @@ items:
     leaves verification out of scope -- so adding the verification API is spec surface. Without it the
     MTC tamper-evidence story stops at hash-chain level. Class 1 fork doc FILED 2026-07-17 at
     .harness/class_1_fork_b51_b52_b54_od_signing_amendment_arc.md (leg 3) -- RATIFIED 2026-07-18; the apply arc is the live next step.'
-  close_out: 'Fork doc FILED (see summary; one OD amendment arc carries all three legs). On
-    ratification specify per the filing''s finalized requirements (message-format cutover for pre-v1.34
+  close_out: 'Fork doc RATIFIED 2026-07-18 (see summary; one OD amendment arc carries all three legs).
+    Apply pass per the filing''s finalized requirements (message-format cutover for pre-v1.34
     real signatures, tenant-scope verifier input, authenticated tenant-bound legacy cutover): specify
     the verification contract (per-entry backend verify over the canonical message, placeholder
     handling, failure taxonomy), then implement the verifier + wire into B-49''s per-family unit and
