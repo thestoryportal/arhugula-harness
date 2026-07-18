@@ -114,7 +114,16 @@ class _SidecarMembershipIndex:
     a dataclass field pair) so the frozen writer can mutate it in place.
     """
 
-    __slots__ = ("digests", "inode", "legacy_exempt", "mtime_ns", "offset", "redaction_tails")
+    __slots__ = (
+        "digests",
+        "inode",
+        "legacy_exempt",
+        "mtime_ns",
+        "offset",
+        "prefix_hash",
+        "redaction_tails",
+        "unsnapshotted",
+    )
 
     def __init__(self) -> None:
         self.digests: dict[tuple[str, str], str] = {}
@@ -129,6 +138,19 @@ class _SidecarMembershipIndex:
         self.offset: int = 0
         self.inode: int = -1
         self.mtime_ns: int = -1
+        # Index mutations (rows folded or appended) since the on-disk
+        # snapshot was last written — the B-50 item (g) write cadence.
+        self.unsnapshotted: int = 0
+        # Running SHA-256 over the folded sidecar bytes [0:offset] (codex
+        # round-5 P1 on the item-(g) landing): persisted in the snapshot as
+        # `prefix_digest` and re-derived by a raw-byte streaming read at
+        # adoption, binding the cache to the AUTHORITATIVE bytes it vouches
+        # for — silent bit rot in the folded prefix (size/inode/mtime
+        # intact) would otherwise pass adoption's metadata checks and let a
+        # legitimate replay NOOP against a digest computed from the
+        # pre-rot row. Maintained incrementally (O(1) amortized per
+        # append), so snapshot writes never re-read history.
+        self.prefix_hash = hashlib.sha256()
 
 
 def _has_redaction_namespace_keys(entry: AuditLedgerEntry) -> bool:
@@ -143,6 +165,21 @@ def _has_redaction_namespace_keys(entry: AuditLedgerEntry) -> bool:
 def _full_entry_digest(entry: AuditLedgerEntry) -> str:
     """Canonical digest over the COMPLETE signed entry (round-19 identity)."""
     return hashlib.sha256(entry.model_dump_json().encode("utf-8")).hexdigest()
+
+
+def _snapshot_body_digest(body: dict[str, Any]) -> str:
+    """Integrity self-digest over a snapshot body (canonical JSON).
+
+    Catches CORRUPTION (torn write, bit rot), not tampering — an adversary
+    with filesystem write access can recompute it. That tier is the same
+    adversarial-filesystem tier as a forged `legacy_baseline` row or a
+    mutate-and-restore-mtime edit (codex round-46 posture) — dispositioned
+    to the B-47 read-time verifier arc, and bounded here by the fact that
+    the snapshot is a DERIVED CACHE: discarding it on any anomaly always
+    degrades to the correct full refold, never to wrong state.
+    """
+    canonical = json.dumps(body, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 _SIDECAR_LOCKS: dict[str, threading.Lock] = {}
@@ -229,6 +266,39 @@ class RuntimeAuditLedgerWriter:
     _SINGLE_TENANT_TAG: ClassVar[str] = "_single"
     _ACTION_ID_PREFIX: ClassVar[str] = "audit"
 
+    _SNAPSHOT_FILENAME: ClassVar[str] = "audit-entries.index-snapshot.json"
+    """B-50 item (g) — the disk-backed membership-index snapshot.
+
+    A DERIVED CACHE of the fold state (`_SidecarMembershipIndex`) written
+    beside the sidecar so a fresh process adopts it and folds only the
+    delta, instead of re-parsing + re-validating the full O(history)
+    sidecar at every cold start. The sidecar remains the single source of
+    truth: adoption discards the snapshot on ANY anomaly (self-digest
+    mismatch, inode change, offset past the current size, same-size mtime
+    drift) and falls back to the correct full refold — a bad snapshot can
+    cost time, never correctness. Chosen over a second storage engine
+    (stdlib `sqlite3`) to stay inside the ADR-D5 v1.4 JSONL-canonical
+    posture: one authority, one derived JSON cache."""
+
+    _SNAPSHOT_EVERY_APPENDS: ClassVar[int] = 64
+    """Write-cadence FLOOR: persist the snapshot once at least this many
+    index mutations (own appends + folded rows) have accumulated — but see
+    `_SNAPSHOT_GROWTH_DIVISOR`: for a large index the threshold is
+    proportional to the index size, so each rewrite is amortized against
+    real growth. A fixed cadence alone rewrote the O(N) snapshot every 64
+    appends — Θ(N²/64) cumulative checkpoint bytes on the audit hot path
+    (codex round-1 P1 on this landing). The snapshot is also written
+    immediately after any from-zero fold or legacy adoption so the
+    expensive refold is paid at most once."""
+
+    _SNAPSHOT_GROWTH_DIVISOR: ClassVar[int] = 8
+    """Proportional half of the cadence: rewrite only once the index has
+    grown by at least `len(digests) / 8` mutations since the last snapshot.
+    Geometric checkpointing — total snapshot bytes over a ledger's life are
+    O(N · divisor), i.e. amortized O(1) per append, and the (rare) O(N)
+    rewrite stall shrinks in frequency as the ledger grows. A cold start
+    then folds at most ~1/8 of history as delta."""
+
     _SIDECAR_FILENAME: ClassVar[str] = "audit-entries.jsonl"
     """`B-47` close-out item (e) — the full-entry durable sidecar.
 
@@ -257,6 +327,229 @@ class RuntimeAuditLedgerWriter:
     @property
     def _sidecar_path(self) -> Path:
         return self.sidecar_path
+
+    @property
+    def _snapshot_path(self) -> Path:
+        return self.ledger_writer.handle.canonical_path.parent / self._SNAPSHOT_FILENAME
+
+    def _write_index_snapshot_locked(self) -> None:
+        """Persist the membership index as the item-(g) snapshot — MUST be
+        called with both sidecar write locks held.
+
+        Atomic replace (temp file in the same directory, fsync, `os.replace`,
+        directory fsync) so a crash mid-write leaves either the previous
+        snapshot or the new one, never a torn file — and a symlink planted at
+        either path is refused (`O_NOFOLLOW` on the temp create; `os.replace`
+        swaps the snapshot NAME, never writing through a link). Failures
+        propagate: the sidecar row is already durable when this runs, so an
+        abort here lands on the established crash-retry path (fold sees the
+        row, membership-hit, continue) — never a torn commit.
+        """
+        index = self._sidecar_index
+        body: dict[str, Any] = {
+            "version": 1,
+            "offset": index.offset,
+            "inode": index.inode,
+            "mtime_ns": index.mtime_ns,
+            "digests": [[tag, entry_hash, d] for (tag, entry_hash), d in index.digests.items()],
+            "legacy_exempt": sorted([tag, entry_hash] for tag, entry_hash in index.legacy_exempt),
+            "redaction_tails": index.redaction_tails,
+            # Binds the cache to the AUTHORITATIVE bytes it vouches for
+            # (codex round-5 P1): adoption re-derives this by a raw-byte
+            # streaming read of sidecar[0:offset] and discards on mismatch.
+            "prefix_digest": index.prefix_hash.hexdigest(),
+        }
+        payload = {"body": body, "self_digest": _snapshot_body_digest(body)}
+        encoded = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        tmp_path = self._snapshot_path.with_name(self._SNAPSHOT_FILENAME + ".tmp")
+        # O_NONBLOCK (codex round-2 P1 on this landing): a FIFO planted at
+        # the fixed .tmp path would otherwise BLOCK this open awaiting a
+        # reader while the append, sidecar-thread, and cross-process locks
+        # are all held — one planted FIFO stalls every audit writer the
+        # moment the cadence fires. Nonblocking, a writer-side FIFO open
+        # fails immediately (ENXIO, loud); the fstat check below rejects
+        # any other non-regular or foreign-owned plant, and O_TRUNC is
+        # deferred to ftruncate AFTER validation so a refused plant is
+        # never modified. O_NONBLOCK has no effect on regular-file writes.
+        flags = os.O_CREAT | os.O_WRONLY | getattr(os, "O_NONBLOCK", 0)
+        if sys.platform != "win32":
+            flags |= os.O_NOFOLLOW
+        fd = os.open(tmp_path, flags, 0o600)
+        try:
+            tmp_st = os.fstat(fd)
+            if not stat.S_ISREG(tmp_st.st_mode):
+                raise ValueError(
+                    f"snapshot temp file {tmp_path} is not a regular file "
+                    f"(mode={tmp_st.st_mode:o}) — refusing to write the index "
+                    f"snapshot over a planted special file"
+                )
+            if sys.platform != "win32" and tmp_st.st_uid != os.geteuid():
+                raise ValueError(
+                    f"snapshot temp file {tmp_path} is owned by uid "
+                    f"{tmp_st.st_uid}, not the effective uid {os.geteuid()} — "
+                    f"refusing to write over another account's file"
+                )
+            if tmp_st.st_nlink > 1:
+                # Codex round-3 P1 on this landing: a HARD LINK planted at
+                # the fixed .tmp path passes the regular-file and uid
+                # checks (O_NOFOLLOW only rejects symlinks; a same-uid link
+                # to the sidecar or IS ledger is trivially plantable), and
+                # the ftruncate below would destroy the linked
+                # AUTHORITATIVE file to install a cache. A legitimate temp
+                # file always has exactly one link.
+                raise ValueError(
+                    f"snapshot temp file {tmp_path} has {tmp_st.st_nlink} "
+                    f"hard links — refusing to truncate a file linked "
+                    f"elsewhere (possible plant over the sidecar or ledger)"
+                )
+            if sys.platform != "win32" and stat.S_IMODE(tmp_st.st_mode) & 0o077:
+                # Codex round-6 P2 on this landing: os.open's 0o600 mode is
+                # ignored for a PRE-EXISTING temp file, so a reused 0644
+                # plant would ride os.replace into a group/world-readable
+                # installed snapshot (tenant tags + entry hashes). Clamp on
+                # the open fd before any bytes are written.
+                os.fchmod(fd, 0o600)
+            os.ftruncate(fd, 0)
+        except BaseException:
+            os.close(fd)
+            raise
+        # Buffered writer, not a bare os.write (codex round-1 P2 on this
+        # landing): a single os.write may return SHORT on a regular file,
+        # silently installing truncated JSON that every cold start then
+        # discards — correctness survives (self-digest → refold) but the
+        # cache is defeated; BufferedWriter.write loops until complete.
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(encoded)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp_path, self._snapshot_path)
+        if sys.platform != "win32":
+            dir_fd = os.open(str(self._snapshot_path.parent), os.O_RDONLY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+        index.unsnapshotted = 0
+
+    def _maybe_write_index_snapshot_locked(self) -> None:
+        index = self._sidecar_index
+        # Threshold over ALL serialized membership state, not digests alone
+        # (codex round-2 P2 on this landing): a migrated ledger's
+        # `legacy_exempt` baseline can dominate the snapshot — a
+        # digests-only threshold stayed at the floor and re-sorted +
+        # rewrote the whole baseline every 64 appends, recreating exactly
+        # the O(history) lock-held stalls the geometric cadence removes.
+        serialized_members = (
+            len(index.digests) + len(index.legacy_exempt) + len(index.redaction_tails)
+        )
+        threshold = max(
+            self._SNAPSHOT_EVERY_APPENDS,
+            serialized_members // self._SNAPSHOT_GROWTH_DIVISOR,
+        )
+        if index.unsnapshotted >= threshold:
+            self._write_index_snapshot_locked()
+
+    def _try_adopt_index_snapshot_locked(self, st: os.stat_result) -> None:
+        """Adopt the on-disk index snapshot into a ZERO-offset index — MUST
+        be called with both sidecar write locks held, `st` the current
+        sidecar stat.
+
+        Discard-on-any-anomaly: parse failure, self-digest mismatch, shape
+        violation, inode change (sidecar replaced since the snapshot),
+        offset past the current size (sidecar truncated since), a
+        same-size mtime drift (in-place mutation — the `same_size_mutated`
+        mirror), or a covered-prefix digest mismatch (raw sidecar bytes
+        diverge from what the snapshot vouches for — codex round-5 P1) all
+        silently fall back to the full refold. Silence is the
+        correct posture here, not a swallowed failure: every discard
+        degrades to the exact behavior that existed before this cache, and
+        the anomalies are EXPECTED states (a snapshot goes stale the moment
+        another process heals a torn tail). The index is only mutated after
+        every validation passes — no partial adoption.
+        """
+        snapshot_path = self._snapshot_path
+        if not snapshot_path.exists():
+            return
+        flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)
+        if sys.platform != "win32":
+            flags |= os.O_NOFOLLOW
+        try:
+            fd = os.open(snapshot_path, flags)
+            try:
+                snap_st = os.fstat(fd)
+                if not stat.S_ISREG(snap_st.st_mode):
+                    return
+                if sys.platform != "win32" and snap_st.st_uid != os.geteuid():
+                    return
+                with os.fdopen(fd, encoding="utf-8") as fh:
+                    fd = -1
+                    payload = json.load(fh)
+            finally:
+                if fd >= 0:
+                    os.close(fd)
+            body = payload["body"]
+            if payload["self_digest"] != _snapshot_body_digest(body):
+                return
+            if body["version"] != 1:
+                return
+            offset = body["offset"]
+            inode = body["inode"]
+            mtime_ns = body["mtime_ns"]
+            if not (isinstance(offset, int) and isinstance(inode, int)):
+                return
+            if not isinstance(mtime_ns, int):
+                return
+            if inode != st.st_ino or offset > st.st_size:
+                return
+            if offset == st.st_size and mtime_ns != st.st_mtime_ns:
+                return
+            digests = {
+                (str(tag), str(entry_hash)): str(digest)
+                for tag, entry_hash, digest in body["digests"]
+            }
+            legacy_exempt = {
+                (str(tag), str(entry_hash)) for tag, entry_hash in body["legacy_exempt"]
+            }
+            redaction_tails = {str(tag): str(tail) for tag, tail in body["redaction_tails"].items()}
+            prefix_digest = str(body["prefix_digest"])
+            # Bind the cache to the AUTHORITATIVE bytes it vouches for
+            # (codex round-5 P1): metadata checks alone accept silent bit
+            # rot in the folded prefix (size/inode/mtime intact), letting a
+            # legitimate replay NOOP against a digest computed from the
+            # pre-rot row. A raw-byte streaming read of sidecar[0:offset]
+            # restores the cold-refold's detection parity WITHOUT the
+            # expensive part (no JSON parse, no schema validation, no
+            # per-row re-serialization) — mismatch discards the snapshot,
+            # and the forced full refold then fails loud on the rotted row.
+            prefix_hash = hashlib.sha256()
+            if offset > 0:
+                fd = self._open_sidecar_validated(os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+                try:
+                    remaining = offset
+                    while remaining > 0:
+                        chunk = os.read(fd, min(remaining, 1 << 20))
+                        if not chunk:
+                            return
+                        prefix_hash.update(chunk)
+                        remaining -= len(chunk)
+                finally:
+                    os.close(fd)
+            if prefix_hash.hexdigest() != prefix_digest:
+                return
+        except (OSError, ValueError, KeyError, TypeError):
+            # json.JSONDecodeError is a ValueError; ELOOP (planted symlink)
+            # and permission errors are OSError — all are discard-anomalies,
+            # not failures (see docstring).
+            return
+        index = self._sidecar_index
+        index.digests = digests
+        index.legacy_exempt = legacy_exempt
+        index.redaction_tails = redaction_tails
+        index.offset = offset
+        index.inode = inode
+        index.mtime_ns = mtime_ns
+        index.prefix_hash = prefix_hash
+        index.unsnapshotted = 0
 
     @classmethod
     def _tenant_tag(cls, tenant_id: str | None) -> str:
@@ -693,9 +986,12 @@ class RuntimeAuditLedgerWriter:
         if _has_redaction_namespace_keys(audit_entry):
             self._sidecar_index.redaction_tails[tag] = audit_entry.entry_hash
         self._sidecar_index.offset += len(encoded)
+        self._sidecar_index.prefix_hash.update(encoded)
         post = self._sidecar_path.stat()
         self._sidecar_index.inode = post.st_ino
         self._sidecar_index.mtime_ns = post.st_mtime_ns
+        self._sidecar_index.unsnapshotted += 1
+        self._maybe_write_index_snapshot_locked()
 
     def _refresh_sidecar_index_locked(self) -> bool:
         """Incrementally fold NEW sidecar bytes into the membership index —
@@ -740,6 +1036,15 @@ class RuntimeAuditLedgerWriter:
             # that tier.
             index.digests.clear()
             index.offset = 0
+            index.prefix_hash = hashlib.sha256()
+        if index.offset == 0 and st is not None:
+            # B-50 item (g): a zero-offset index (cold start, or the reset
+            # above) adopts the on-disk snapshot when every validation
+            # passes, folding only the delta below instead of the full
+            # history. Adoption after the reset is deliberate — the
+            # snapshot's own inode/offset/mtime checks decide staleness
+            # independently of why the offset is zero.
+            self._try_adopt_index_snapshot_locked(st)
         if st is not None and size == index.offset:
             index.inode = st.st_ino
             index.mtime_ns = st.st_mtime_ns
@@ -748,6 +1053,7 @@ class RuntimeAuditLedgerWriter:
             return reset_to_zero
         # Validated fd (codex round-33 P1): a plain path open here followed
         # symlinks and would block forever on a pre-created FIFO.
+        pre_fold_offset = index.offset
         fd = self._open_sidecar_validated(os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
         try:
             os.lseek(fd, index.offset, os.SEEK_SET)
@@ -777,6 +1083,7 @@ class RuntimeAuditLedgerWriter:
         for raw in delta.split(b"\n"):
             if not raw.strip():
                 continue
+            index.unsnapshotted += 1
             row = json.loads(raw)
             if "legacy_baseline" in row:
                 # `adopt_legacy_is_refs()` baseline (codex round-46 P1):
@@ -836,9 +1143,17 @@ class RuntimeAuditLedgerWriter:
             if _has_redaction_namespace_keys(entry):
                 index.redaction_tails[row["tenant_tag"]] = entry.entry_hash
         index.offset += len(delta)
+        index.prefix_hash.update(delta)
         post = self._sidecar_path.stat()
         index.inode = post.st_ino
         index.mtime_ns = post.st_mtime_ns
+        if pre_fold_offset == 0:
+            # A from-zero fold is the O(history) event the item-(g)
+            # snapshot amortizes — persist immediately so it is paid at
+            # most once per anomaly, not once per process start.
+            self._write_index_snapshot_locked()
+        else:
+            self._maybe_write_index_snapshot_locked()
         return reset_to_zero
 
     def read_full_entries_for_tenant(self, tenant_id: str | None) -> list[AuditLedgerEntry]:
@@ -1047,9 +1362,14 @@ class RuntimeAuditLedgerWriter:
             index.redaction_tails.clear()
             index.legacy_exempt = {(pair[0], pair[1]) for pair in legacy}
             index.offset = len(encoded)
+            index.prefix_hash = hashlib.sha256(encoded)
             post = self._sidecar_path.stat()
             index.inode = post.st_ino
             index.mtime_ns = post.st_mtime_ns
+            # Item (g): a legacy adoption rebuilds the index wholesale —
+            # persist immediately so the (rare, potentially huge) baseline
+            # fold never repeats at the next cold start.
+            self._write_index_snapshot_locked()
             return len(legacy)
 
     @contextlib.contextmanager
