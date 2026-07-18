@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Class | Runtime **implementation** defect (NOT a design-substrate fork — no ADR/spec/plan revision required; the design contracts C-CP-25 §25.11 + C-RT-59 sub-agent dispatch + C-RT-15 LLM dispatch are sound). |
+| Class | HISTORICAL (2026-06-14 classification): Runtime implementation defect, no spec/plan revision. **Superseded 2026-07-18 — the B-48 filing routes the fix and carries Class 1 back-flow riders** (C-RT-03 cap field; C-IS-07 drain-timestamp) — see the Status row. The original contract-soundness claim (C-CP-25 §25.11 + C-RT-59 + C-RT-15) stands for the DEADLOCK face; the executor-capacity and timestamp-authority surfaces the resolution touches were not in its scope. |
 | Locus | `harness-runtime` sync/async bridge: `lifecycle/sync_dispatcher_facade.py` (`SyncDispatcherFacade.dispatch`) ⨯ `lifecycle/hitl_gate_composer.py` (async `dispatch`) ⨯ `lifecycle/sub_agent_dispatch.py` + `lifecycle/child_workflow_runner.py` (sync child re-entry). |
 | Status | OPEN — **routing superseded 2026-07-18 by the B-48 Class 2 filing** (`.harness/class_2_fork_b48_sync_subagent_dispatch_offload.md`): the executor-offload revision is the resolution path for BOTH the loop-blocking and this deadlock face; this record's fix directions are historical, its xfail anchor is carried into the filing's §4 as an acceptance signal. Blocks a genuine real-provider sub-agent recursion e2e. xfail-anchored (NOT silently skipped). |
 | Discovered | 2026-06-14, during R-FS-1 arc #15 (U-CP-89 `HIERARCHICAL_DELEGATION`), by the first live depth-2 sub-agent e2e against a real provider (Ollama). |

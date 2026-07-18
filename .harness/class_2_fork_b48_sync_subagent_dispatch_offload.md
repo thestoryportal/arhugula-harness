@@ -1,8 +1,12 @@
 # Class 2 Fork — B-48: sync sub-agent dispatch executes on the event loop (U-RT-60 direct-call revision)
 
-**Filed:** 2026-07-18 · autonomous-loop fork-first leg (after the B-51/B-52/B-54 filing, PR #1046). Class 2
-(in-execution operator decision between substantive executor designs; revises a ratified reading, not a
-committed contract shape). **Status: FILED — awaiting operator selection.** No `design-substrate/**` file is
+**Filed:** 2026-07-18 · autonomous-loop fork-first leg (after the B-51/B-52/B-54 filing, PR #1046).
+**Hybrid classification (sharpened at filing codex round-8): the executor SELECTION is Class 2** (an
+in-execution operator decision between substantive designs, revising a ratified reading) — **but options B
+and C each carry Class 1 back-flow RIDERS** (§5: the C-RT-03 `RuntimeConfig` cap field and the C-IS-07
+drain-timestamp write-contract change are committed-contract amendments per §4.3); the riders halt for the
+same operator response and the spec-writer apply pass, exactly like the B-51/B-52/B-54 arc's riders.
+**Status: FILED — awaiting operator selection.** No `design-substrate/**` file is
 edited by this filing; B-48 stays `registered_finding` until the selection lands (X-AL-3). Surfaced by
 out-of-family Codex round-2 P1 on B-47 PR B2a (#1036); register row `B-48`.
 
