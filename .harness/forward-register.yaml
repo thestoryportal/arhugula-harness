@@ -921,9 +921,13 @@ items:
     disposition leg): cost projection defaults prior_event_hash to genesis on EVERY entry
     (cost_record_audit_writer.py:50) and HITL uses _empty_summary_hash() (hitl_gate_composer.py:1235),
     and production sub-agent dispatch likewise emits prior_event_hash genesis per entry
-    (sub_agent_gate_level_descent.py:215), so cost/HITL/dispatch families get per-entry content-hash +
-    signature checks, NOT chain verification; chain-verified = ONLY families with real chain-position
-    wiring today (the redaction-token map, which seeds from its durable tail).'
+    (sub_agent_gate_level_descent.py:215), so cost/HITL/dispatch families get per-entry CONTENT-HASH
+    checks only, NOT chain verification; chain-verified = ONLY the redaction-token family,
+    discriminated by the audit.redaction_token.* NAMESPACE KEYS the composer stamps (NOT by
+    entry_core/action-id prefix, which misses caller-supplied entry_core rows -- PR B1 codex
+    round-39). Backend SIGNATURE verification is OUT of scope (codex round-7: section 21.2.1 leaves
+    verification out of scope; verify_hash_chain_integrity never touches signature_attrs) -- a
+    backend-aware verification API is spec surface routed to the fork legs.'
   close_out: 'Build verify_per_family_chains(entries) with a per-producer verification policy (chained
     vs per-entry families), witness with interleaved multi-family fixtures + mutation probes; wire into
     harness-inspect if natural.'
@@ -952,8 +956,11 @@ items:
     identity; under a deployment-scoped key a signed entry could be re-presented under another tenant.
     Recommendation REVISED at codex round-3: the fifth canonical-message segment is the PRIMARY fix
     (key_arns carries no tenant association and composers use fixed global key_ids, so a key-scope
-    presence check would be a false guarantee); interim MTC posture is operator guidance (distinct
-    per-tenant key_ids), not a validation claim. Class 2 fork doc owed before any code change.'
+    presence check would be a false guarantee). NO EFFECTIVE INTERIM MITIGATION EXISTS (codex
+    round-10): composers select fixed global key_ids, so distinct per-tenant mapping entries would
+    never be used -- cross-tenant replay under a deployment-scoped key remains unmitigated until the
+    message segment lands or tenant-aware key selection is built. Class 2 fork doc owed before any
+    code change.'
   close_out: 'Author the Class 2 fork doc with the revised recommendation; on ratification land the
     canonical-message segment at the next OD amendment arc (byte-compat-scoped per the B-22/B-31
     precedents).'
@@ -972,7 +979,9 @@ items:
   close_out: 'Author the Class 2 fork doc; on ratification add the flag + consult it at ALL TEN
     surfacing sites -- the six fn-internal loud-surface handlers AND the four offload-boundary
     saturation handlers (llm/tool/webhook/hitl outer catches, codex round-6) -- or centralize the
-    policy check ahead of every catch. The delta is TWO-SPEC (codex round-4): the OD text AND a CP amendment --
+    policy check ahead of every catch. Under the weaker single-spec option (validator hook stays
+    fail-open) NINE handlers must still enforce the policy: the five other fn-internal catches plus
+    the four offload-boundary catches (codex round-10). The delta is TWO-SPEC (codex round-4): the OD text AND a CP amendment --
     section 28.10.4 invariant 2 is CP-owned (Spec_Control_Plane_v1_24 line ~135, hook exceptions MUST
     be swallowed), so fail-closing the validator hook needs a CP carve-out for the audit-signing
     failure class; alternatively preserve fail-open at that one hook while fail-closing the other
