@@ -915,10 +915,10 @@ items:
     .harness/class_2_fork_b48_sync_subagent_dispatch_offload.md -- the filing is the routing authority
     (it supersedes this row''s earlier unbounded-or-depth-aware phrasing AND the loop-bridge deadlock
     defect record''s fix directions). Recommendation: option B = custom grow-on-demand executor +
-    configurable RuntimeConfig hard cap + fail-fast at the cap, NEVER queue (the committed
-    HIERARCHICAL_DELEGATION depth bound is topology-scoped -- descent flag is boolean, cap-of-3 is
-    delegation-only, generic recursion + aggregate active frames unbounded, ThreadPoolExecutor has no
-    unbounded mode). Apply arc per the filing: construction-time dispatch-mode for all three stage-5
+    configurable RuntimeConfig hard cap + fail-fast at the cap, NEVER queue (the only MATERIALIZED bound is the
+    per-parent fan-out cap 3 for HIERARCHICAL_DELEGATION; the section-25.11 depth phrase names no value
+    or carrier, descent flag is boolean, generic recursion + aggregate active frames unbounded,
+    ThreadPoolExecutor has no unbounded mode). Apply arc per the filing: construction-time dispatch-mode for all three stage-5
     composers, cancellation semantics first, pause/resume + resume-context per-child isolation, OTel
     context carry, drain-timestamp fix (IS back-flow) + xfail removal, deadlock-anchor XPASS promotion,
     Runtime spec delta (C-RT-03 cap field) + Runtime plan delta. Awaiting operator selection (may batch

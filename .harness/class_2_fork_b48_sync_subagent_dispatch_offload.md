@@ -159,7 +159,7 @@ inventing the number.
    apply arc wires an explicit parent→job cancellation channel (the same item-2 cancel token, tripped by
    the barrier deadline) and witnesses a parent-barrier-deadline cancel reaching the child's fence.**
 6. **B-21 fan-out** — `PARALLELIZATION` branches dispatching sub-agents concurrently must not serialize on
-   the offload — N branches (S of them sync sub-agent) run fully concurrent **when N + S ≤ cap (round-21
+   the offload — N branches (S of them sync sub-agent) run fully concurrent **when occupied + N + S ≤ cap (round-21
    P1 — stated in the same units as the shared-budget rule below; the earlier N ≤ cap phrasing admitted
    fan-outs the budget rejects); beyond that the next dispatch fail-fasts per the §3 no-queue invariant
    (round-11 P2 — full concurrency and the hard cap cannot both hold unqualified). And the cap must gate BOTH executor layers (round-13 P1):
@@ -173,8 +173,10 @@ inventing the number.
    inners stay on direct await and consume no inner worker — charging them would reject unrelated async
    work despite free executor capacity, round-19 P2). Reservation is ATOMIC per branch
    (all-frames-or-fail-fast, preventing partial-acquisition exhaustion); the guarantee: a fan-out of N
-   branches with S sync sub-agent branches runs fully concurrent when N + S ≤ cap, fail-fast beyond,
-   witnessed at the boundary (N + S = cap) and past it** — and must keep
+   branches with S sync sub-agent branches runs fully concurrent when occupied + N + S ≤ cap (round-22
+   P2 — the budget is SHARED, so ancestors and concurrent workflows already holding frames count;
+   admission is against AVAILABLE capacity, never the local fan-out alone), fail-fast beyond, witnessed
+   at the boundary, past it, and under CONTENTION (a second workflow holding frames)** — and must keep
    the v1.97 paused-child-branch resume semantics; witness with a 2-branch fan-out. **Including pause-state ISOLATION (filing codex round-4
    P1): child runners share the parent `HarnessContext`, so one child's nested durable-HITL gate setting
    `ctx.pause_requested_flag` would be captured by a SIBLING branch with no gate (a false pause) once
@@ -253,10 +255,13 @@ apply passes can share one Runtime version bump if the operator answers both gat
 ## §6 The operator selection (ONE decision)
 
 Select the executor design: **B (custom grow-on-demand executor + configurable hard cap + fail-fast at the
-cap — recommended)** vs C (depth-aware bounded pool) vs A (keep the ratified blocking direct-call). The
-selection carries the filing-settled riders: default 256 shared-budget frames; recursion capacity FORMALLY
-DELEGATED to the executor cap (the §25.11 unmaterialized depth phrase retires — override available: direct
-the CP rider to materialize a separate depth bound instead). The
+cap — recommended)** vs C (depth-aware bounded pool) vs A (keep the ratified blocking direct-call). Under B or C
+(round-22 P2 — the riders are meaningless under A), the selection carries the filing-settled riders:
+default 256 shared-budget frames; recursion capacity FORMALLY DELEGATED to the executor cap (the §25.11
+unmaterialized depth phrase retires — override available: direct the CP rider to materialize a separate
+depth bound instead). Under A the filing stands as a REJECTED-fix record: no riders, the defect record's
+OPEN status is restored as the routing authority, and the loop-blocking + deadlock defects remain accepted
+operating posture (recorded explicitly, not silently). The
 C1/C9 council dyad convenes at the apply leg under B or C (the cap is a genuinely new capacity authority);
 the apply arc also defines the §4-item-2 cancellation semantics before any offload lands. May be answered
 in the same batch as the B-51/B-52/B-54 ratification gate (PR #1046).
