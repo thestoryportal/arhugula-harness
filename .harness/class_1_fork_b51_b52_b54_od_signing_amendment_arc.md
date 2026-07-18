@@ -157,7 +157,11 @@ requirements sharpened at filing codex round-1:
   signed by a trusted key or anchored outside the rewritable ledger, AND to bind IMMUTABLE ledger
   identities (round-5 P1) — the exact legacy entry hashes or an externally monotonic ledger position, not
   merely a date/version/row-position (an adversary with rewrite access can forge an unsigned row "before"
-  a positional boundary and recompute the unkeyed hashes while the external record stays untouched); the
+  a positional boundary and recompute the unkeyed hashes while the external record stays untouched) —
+  AND to bind each legacy identity to its ORIGINAL TENANT (round-6 P1): `tenant_tag` is mutable, tenant is
+  absent from `entry_hash`, and pre-v1.34 real signatures cover only the four-tuple, so a bare entry-hash
+  cutover still lets an authenticated legacy row be moved from tenant A to B. The record binds signed
+  `(tenant_scope, entry_hash)` pairs and the verifier compares that scope against its tenant input; the
   round-46 explicit-operator-action posture carries over, its carrier does not.
   A config-declared pre-backend KEY-PERIOD set is NOT a viable cutover mechanism (filing codex round-3 P2):
   both the placeholder era and the real-KMS era store `"DEPLOYMENT_BOUND"` / project `key_period=0`, so a
@@ -183,8 +187,10 @@ Per §4.3 the design-substrate amendments halt here. The operator ratifies, in o
 2. **Leg 2 two-spec shape** (OD flag + CP §28.10.4 carve-out, redaction path declared unconditionally
    fail-closed) vs the weaker single-spec alternative.
 3. **Leg 3 acceptance** (filing codex round-2 — leg 3 needs its own explicit ratification, not a ride-along):
-   the new C-OD-21 §21.2.2 backend verification API with its two contract requirements (tenant scope as
-   verifier input; cutover-gated legacy exemption) and its NON-BLOCKING default — or an alternative/defer.
+   the new C-OD-21 §21.2.2 backend verification API with its three contract requirements (message-format
+   cutover so pre-v1.34 REAL four-tuple signatures keep verifying; tenant scope as verifier input;
+   authenticated tenant-bound cutover-gated legacy exemption) and its NON-BLOCKING default — or an
+   alternative/defer.
 4. **Arc bundling** — one OD v1.33 → v1.34 delta carrying legs 1+3, with the CP v1.100 → v1.101 rider for leg 2
    (recommended), vs splitting.
 

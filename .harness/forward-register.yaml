@@ -976,7 +976,7 @@ items:
     never be used -- cross-tenant replay under a deployment-scoped key remains unmitigated until the
     message segment lands or tenant-aware key selection is built. Class 1 fork doc FILED
     2026-07-17 at .harness/class_1_fork_b51_b52_b54_od_signing_amendment_arc.md (leg 1) -- awaiting operator ratification.'
-  close_out: 'Author the Class 1 fork doc with the revised recommendation; on ratification land the
+  close_out: 'Fork doc FILED (see summary). On operator ratification of the filing''s gate: land the
     canonical-message segment at the next OD amendment arc (byte-compat-scoped per the B-22/B-31
     precedents). The segment needs tenant identity AVAILABLE AT SIGNING (codex round-16): today
     sign_audit_entry/cp_audit_to_od_audit receive no tenant and the writer gets tenant_id only after
@@ -996,7 +996,8 @@ items:
     addendum AND a CP amendment (section 28.10.4 invariant 2 is CP-owned) -- or the weaker single-spec
     alternative keeping the validator hook fail-open. Class 1 fork doc FILED 2026-07-17 at
     .harness/class_1_fork_b51_b52_b54_od_signing_amendment_arc.md (leg 2) -- awaiting operator ratification.'
-  close_out: 'Author the Class 1 fork doc; on ratification add the flag + consult it at ALL TEN
+  close_out: 'Fork doc FILED (see summary). On ratification: add the flag + the ZEROTH-site bootstrap
+    invariant (fail-closed requires a configured backend) + consult the flag at ALL TEN
     surfacing sites -- the six fn-internal loud-surface handlers AND the four offload-boundary
     saturation handlers (llm/tool/webhook/hitl outer catches, codex round-6) -- or centralize the
     policy check ahead of every catch. Under the weaker single-spec option (validator hook stays
@@ -1031,7 +1032,9 @@ items:
     leaves verification out of scope -- so adding the verification API is spec surface. Without it the
     MTC tamper-evidence story stops at hash-chain level. Class 1 fork doc FILED 2026-07-17 at
     .harness/class_1_fork_b51_b52_b54_od_signing_amendment_arc.md (leg 3) -- awaiting operator ratification.'
-  close_out: 'Route with the B-51/B-52 fork legs (one OD amendment arc can carry all three): specify
+  close_out: 'Fork doc FILED (see summary; one OD amendment arc carries all three legs). On
+    ratification specify per the filing''s finalized requirements (message-format cutover for pre-v1.34
+    real signatures, tenant-scope verifier input, authenticated tenant-bound legacy cutover): specify
     the verification contract (per-entry backend verify over the canonical message, placeholder
     handling, failure taxonomy), then implement the verifier + wire into B-49''s per-family unit and
     harness-inspect.'
