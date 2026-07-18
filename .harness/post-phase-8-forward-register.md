@@ -381,7 +381,7 @@ advisor() also flagged a second-order question genuinely out of B-23's scope: th
 
 ### B-52 · Audit-signing fail-closed policy at MTC *(split from B-47 disposition, 2026-07-17)*
 - **What it is.** B-47 disposition item (m): signing failures are typed + loudly surfaced (PR B2a) but dispatch stays fail-open — CP §28.10.4 invariant 2 is spec-committed, in tension with §21.2's signed-audit commitment at MULTI_TENANT_COMPLIANCE.
-- **Close-out steps.** Class 2 fork doc (recommendation recorded: mirror OD v1.8 §C-OD-28.2's operator-configurable default-fail-closed pattern — `audit_signing_fail_closed` flag, default ON at MTC — with an OD delta carving out the validator-hook swallow); implement on ratification. **Council: conditional** — C7 compliance vs C1/C9 reliability at the fork leg.
+- **Close-out steps.** Class 2 fork doc (recommendation recorded: mirror OD v1.8 §C-OD-28.2's operator-configurable default-fail-closed pattern — `audit_signing_fail_closed` flag, default ON at MTC). The delta is TWO-SPEC (codex round-4): §28.10.4 invariant 2 is CP-owned, so the validator-hook carve-out needs a CP amendment alongside the OD addendum (or preserve fail-open at that one hook — weaker, single-spec); implement on ratification. **Council: conditional** — C7 compliance vs C1/C9 reliability at the fork leg.
 
 ### B-53 · Migration-CLI scripts-inventory promotion *(split from B-47 disposition, 2026-07-17)*
 - **What it is.** B-47 disposition item (j): `python -m harness_runtime.admin.migrate_audit_sidecar` works today; promotion into `[project.scripts]` extends the runtime spec §13.4 committed CLI inventory. LOW urgency.

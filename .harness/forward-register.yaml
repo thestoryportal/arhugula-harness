@@ -881,8 +881,9 @@ items:
     (no spec surface); (h) per-family chain verifier = the next BUILDABLE impl unit (CXA action-id
     prefix partition + per-family verify_hash_chain_integrity); (f) tenant binding and (m)
     fail-open-vs-fail-closed are the two GENUINE spec-delta forks (recommendations recorded in the
-    disposition doc -- (f): require tenant-scoped key_ids at MTC now + fifth message segment at the
-    next OD delta; (m): mirror OD v1.8 section C-OD-28.2 operator-configurable default-fail-closed
+    disposition doc -- (f): SUPERSEDED here -- see B-51 for the
+    revised recommendation (fifth canonical-message segment primary; key-scope validation shown
+    unenforceable); (m): mirror OD v1.8 section C-OD-28.2 operator-configurable default-fail-closed
     pattern via an audit_signing_fail_closed flag, default ON at MTC); (j) rides the next
     runtime-spec delta as a one-row scripts-inventory addition. B-48 tracks the sync-inner-on-loop
     fork revision separately.'
@@ -965,7 +966,11 @@ items:
     audit_signing_fail_closed flag, default ON at MTC -- needs an OD delta carving out the validator-hook
     swallow. Class 2 fork doc owed.'
   close_out: 'Author the Class 2 fork doc; on ratification add the flag + consult it at the six
-    loud-surface sites + the OD delta text.'
+    loud-surface sites. The delta is TWO-SPEC (codex round-4): the OD text AND a CP amendment --
+    section 28.10.4 invariant 2 is CP-owned (Spec_Control_Plane_v1_24 line ~135, hook exceptions MUST
+    be swallowed), so fail-closing the validator hook needs a CP carve-out for the audit-signing
+    failure class; alternatively preserve fail-open at that one hook while fail-closing the other
+    five sites (weaker, single-spec).'
   council: 'conditional -- C7 compliance vs C1/C9 reliability at the fork leg'
   heading: '### B-52 · Audit-signing fail-closed policy at MTC *(split from B-47 disposition,
     2026-07-17)*'
