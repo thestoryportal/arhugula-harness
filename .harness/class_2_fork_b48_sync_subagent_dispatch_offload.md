@@ -82,7 +82,8 @@ contract the operator ratifies, so leaving it to the apply leg would make the sp
 authority): recommended default `sub_agent_dispatch_max_workers = 256`, sized in SHARED-BUDGET FRAMES
 under the §4 two-layer accounting (rounds 12/17/18 — each parent worker stays BLOCKED while its
 descendants run, and each active branch reserves TWO frames, one upstream CP + one inner dispatch: a
-legitimate 3-wide × depth-4 hierarchy holds 3+9+27+81 = 120 active pairs = 240 frames; 128 would
+legitimate all-sync 3-wide × depth-4 hierarchy holds 3+9+27+81 = 120 active branches = 240 frames
+under the N+S accounting (every branch sync ⇒ S = N); 128 would
 fail-fast the very topology used to size it).** 256 accommodates that shape with headroom; deeper/wider
 topologies size the field to their own frame arithmetic (the config exists precisely because legitimate
 workloads vary), validated ≥ 1 at config load. The dyad's convening at the apply leg is thereby reduced to
@@ -122,9 +123,14 @@ inventing the number.
    **Guarantee stated honestly (round-14 P1): the fence stops every operation NOT YET STARTED — it cannot
    abort a synchronous append or external call the worker is already inside, which may complete after the
    error surfaces. The `worker_draining_under_fence` disposition therefore means
-   AMBIGUOUS-EFFECTS / DO-NOT-RETRY (the at-most-once discipline): the step is non-retryable until the
-   drain completes and the join reports what actually landed.** Witness: no NEW child effects begin after
-   the failure surfaces, and a drained-under-fence step is not retried.
+   AMBIGUOUS-EFFECTS / PERMANENTLY TERMINAL for that dispatch (round-19 P1 — "non-retryable until drained"
+   is unenforceable as prose: the driver reduces `StepDispatchTimeoutError` to a fail-class string, so
+   nothing today stops a caller rerunning while the abandoned worker completes an in-flight effect; a
+   TERMINAL disposition needs no new retry-gate carrier — the step fails permanently, and re-running the
+   WORKFLOW after drain is an operator action informed by the drain report; the alternative, a
+   CP/runtime retry gate keyed to the dispatch, is heavier machinery the apply arc may propose only via
+   the CP rider).** Witness: no NEW child effects begin after
+   the failure surfaces, and a drained-under-fence step is terminal (not retried by any automatic path).
 3. **Child-workflow facade bridging** — the sync driver's loop-bridge (`run_coroutine_threadsafe` shape)
    must be exercised from a WORKER thread with the parent awaiting off-loop; witness the full
    parent→child→grandchild chain.
@@ -160,12 +166,14 @@ inventing the number.
    `asyncio.to_thread` per branch BEFORE any dispatch reaches the capped executor — an unbounded manifest
    would spawn N upstream CP threads before the excess fail-fasts, defeating the host ceiling; the apply
    arc brings the upstream fan-out thread creation under the same capacity authority, with the
-   ACCOUNTING MODEL defined (round-17 P1): ONE shared frame budget covers BOTH layers — an active branch
-   consumes an upstream CP frame AND an inner dispatch frame (2 frames while active), reserved
-   ATOMICALLY at branch admission (both-or-fail-fast, preventing partial-acquisition exhaustion where N
-   upstream frames starve the inner jobs); the concurrency guarantee is therefore N branches fully
-   concurrent when 2N ≤ cap, fail-fast beyond, witnessed at the boundary (2N = cap) and past it
-   (2N + 2 > cap)** — and must keep
+   ACCOUNTING MODEL defined (rounds 17/19): ONE shared frame budget covers BOTH layers, charged by what
+   a branch actually uses — every active branch reserves an upstream CP frame, and ONLY sync/offloaded
+   `SUB_AGENT_DISPATCH` branches reserve the additional inner-dispatch frame (async INFERENCE/TOOL
+   inners stay on direct await and consume no inner worker — charging them would reject unrelated async
+   work despite free executor capacity, round-19 P2). Reservation is ATOMIC per branch
+   (all-frames-or-fail-fast, preventing partial-acquisition exhaustion); the guarantee: a fan-out of N
+   branches with S sync sub-agent branches runs fully concurrent when N + S ≤ cap, fail-fast beyond,
+   witnessed at the boundary (N + S = cap) and past it** — and must keep
    the v1.97 paused-child-branch resume semantics; witness with a 2-branch fan-out. **Including pause-state ISOLATION (filing codex round-4
    P1): child runners share the parent `HarnessContext`, so one child's nested durable-HITL gate setting
    `ctx.pause_requested_flag` would be captured by a SIBLING branch with no gate (a false pause) once
