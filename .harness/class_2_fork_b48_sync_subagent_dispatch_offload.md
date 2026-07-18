@@ -97,11 +97,16 @@ the operator makes here, so the selection is safe to take now).
 
 The §14.8.1 wrap-asymmetry table (Runtime spec, committed lineage) describes the sync/async inner shapes;
 the Q3 reading lives in the ratified fork doc, and the composer's execution VENUE (on-loop vs offloaded) is
-not pinned by any grep-verified spec sentence — but the revision touches the ratified Q3 record, so the
-apply arc carries: (a) this fork doc's resolution note, (b) a bounded Runtime spec delta ONLY IF the apply
-pass finds §14.8.x text asserting on-loop execution (verify at apply time against the then-current head;
-none found at this filing's grep), and (c) a Runtime plan delta for the new executor's acceptance criteria
-(the plan currently has none — same round-12 discipline as the B-51 filing).
+not pinned by any grep-verified spec sentence. But the Runtime spec delta is **UNCONDITIONAL for options B
+and C regardless** (filing codex round-3 P1): the capacity cap is a NEW `RuntimeConfig` field, and
+`RuntimeConfig` is the C-RT-03 contract — adding any field to it is an H_T design extension requiring
+Class 1 spec back-flow (X-AL-3); landing it without the spec amendment would silently create an
+undocumented configuration contract. The apply arc therefore carries: (a) this fork doc's resolution note,
+(b) a Runtime spec delta amending C-RT-03 (the cap field + its typed fail-fast error) plus any §14.8.x
+venue sentence found at apply time against the then-current head, and (c) a Runtime plan delta for the new
+executor's acceptance criteria (the plan currently has none — same round-12 discipline as the B-51 filing).
+This makes the selection's spec footprint identical in kind to the B-51/B-52/B-54 arc's Runtime rider — the
+apply passes can share one Runtime version bump if the operator answers both gates together.
 
 ## §6 The operator selection (ONE decision)
 
