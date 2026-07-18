@@ -105,7 +105,11 @@ inventing the number.
    (b) an EFFECT FENCE the token trips — once tripped, the child driver performs no further F2/audit
    writes (in-flight step results are discarded at the fence, mirroring the at-most-once effect
    discipline); (c) a bounded JOIN to the fence acknowledgement before surfacing
-   `StepDispatchTimeoutError`. If the grace expires with the worker still inside a blocking call, the
+   `StepDispatchTimeoutError` — and the token CASCADES through recursive dispatch (round-16 P1): a
+   timed-out child blocked inside a nested `SUB_AGENT_DISPATCH` cannot reach its next token check while
+   the grandchild runs as a SEPARATE executor job, so descendant jobs inherit/link the ancestor's cancel
+   token and tripping it fences the whole descent chain; witnessed with a parent→child→grandchild
+   cancellation chain. If the grace expires with the worker still inside a blocking call, the
    surfaced error carries an explicit `worker_draining_under_fence` disposition (never silent
    abandonment, never a pretended completion) and the fence guarantees the still-running call's result
    cannot produce post-failure effects. **The fence covers the ENTIRE offloaded job (round-13 P1), not
