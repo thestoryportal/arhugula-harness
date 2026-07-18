@@ -30,7 +30,13 @@
 #
 # STATUS ENUM (the ONLY place this mapping lives):
 #   open                   — actionable now, no blocker.
-#   design_substrate_gated — needs a Class 1 fork doc (X-AL-3) before any code change.
+#   design_substrate_gated — a Class 1 design-substrate change gates the build (X-AL-3):
+#                            the fork doc is either OWED, or FILED and awaiting operator
+#                            ratification + the spec-apply pass (the row's summary says
+#                            which phase; a filed doc does NOT flip the status — only
+#                            ratified + applied spec deltas — plus the corresponding Phase-6
+#                            plan deltas where the change touches a plan-pinned contract —
+#                            open the row for code).
 #   registered_finding     — a real gap surfaced during another arc's review/build;
 #                            grounded against the spec (not skipped), and opens for BUILD
 #                            once grounding confirms a genuinely buildable slice or a live
@@ -974,15 +980,19 @@ items:
     presence check would be a false guarantee). NO EFFECTIVE INTERIM MITIGATION EXISTS (codex
     round-10): composers select fixed global key_ids, so distinct per-tenant mapping entries would
     never be used -- cross-tenant replay under a deployment-scoped key remains unmitigated until the
-    message segment lands or tenant-aware key selection is built. Class 1 fork doc owed before any
-    code change.'
-  close_out: 'Author the Class 1 fork doc with the revised recommendation; on ratification land the
+    message segment lands or tenant-aware key selection is built. Class 1 fork doc FILED
+    2026-07-17 at .harness/class_1_fork_b51_b52_b54_od_signing_amendment_arc.md (leg 1) -- awaiting operator ratification.'
+  close_out: 'Fork doc FILED (see summary). On operator ratification of the filing''s gate: land the
     canonical-message segment at the next OD amendment arc (byte-compat-scoped per the B-22/B-31
     precedents). The segment needs tenant identity AVAILABLE AT SIGNING (codex round-16): today
     sign_audit_entry/cp_audit_to_od_audit receive no tenant and the writer gets tenant_id only after
-    the entry is signed -- the fork must also specify a tenant-bearing signing API threaded through
-    the converters/composers (StepExecutionContext.tenant_id is in scope at every production call
-    site) or move signing to a tenant-aware boundary.'
+    the entry is signed -- the fork specifies a tenant-bearing signing API threaded through the
+    converters/composers AND the non-converter paths the filing enumerates (the direct
+    AuditLedgerRedactionTokenMap compose path; sign_rotation_pair -- thread or defer/prohibit
+    multi-tenant use pending B-33; the workflow-less RuntimeLLMDispatcher.prewarm path, which signs
+    with tenant_id=None -- deployment tenant or an explicit synthetic-scope policy), plus the MTC
+    tenant-scope bootstrap invariant with its _single-history migration/legacy-read story. See the
+    filing for the full rider.'
   council: 'conditional -- C7 compliance vs C2 schema-minimalism at the fork leg'
   heading: '### B-51 · Tenant-scope binding under deployment-scoped keys *(split from B-47 disposition,
     2026-07-17)*'
@@ -994,8 +1004,10 @@ items:
     v1.8 section C-OD-28.2''s operator-configurable default-fail-closed pattern via an
     audit_signing_fail_closed flag, default ON at MTC. TWO-SPEC fork (codex rounds 4/8): the OD
     addendum AND a CP amendment (section 28.10.4 invariant 2 is CP-owned) -- or the weaker single-spec
-    alternative keeping the validator hook fail-open. Class 1 fork doc owed.'
-  close_out: 'Author the Class 1 fork doc; on ratification add the flag + consult it at ALL TEN
+    alternative keeping the validator hook fail-open. Class 1 fork doc FILED 2026-07-17 at
+    .harness/class_1_fork_b51_b52_b54_od_signing_amendment_arc.md (leg 2) -- awaiting operator ratification.'
+  close_out: 'Fork doc FILED (see summary). On ratification: add the flag + the ZEROTH-site bootstrap
+    invariant (fail-closed requires a configured backend) + consult the flag at ALL TEN
     surfacing sites -- the six fn-internal loud-surface handlers AND the four offload-boundary
     saturation handlers (llm/tool/webhook/hitl outer catches, codex round-6) -- or centralize the
     policy check ahead of every catch. Under the weaker single-spec option (validator hook stays
@@ -1004,7 +1016,13 @@ items:
     section 28.10.4 invariant 2 is CP-owned (Spec_Control_Plane_v1_24 line ~135, hook exceptions MUST
     be swallowed), so fail-closing the validator hook needs a CP carve-out for the audit-signing
     failure class; alternatively preserve fail-open at that one hook while fail-closing the other
-    five sites (weaker, single-spec).'
+    five sites (weaker, single-spec). The filing adds three more policy surfaces beyond the ten catch
+    sites: the direct AuditLedgerRedactionTokenMap signing path (recommend declaring it unconditionally
+    fail-closed), the zeroth-site absent-backend bootstrap invariant, and the prewarm/keepalive
+    swallow-all boundary (disable at MTC under fail-closed, or propagate signing failures through it).
+    Post-response signing failures must BYPASS the RetryBreakerFallbackDispatcher machinery entirely
+    (classifier/breaker/fallback -- a retry or fallback would duplicate the paid provider call and
+    corrupt breaker state); result-preserving surfacing per the filing.'
   council: 'conditional -- C7 compliance vs C1/C9 reliability at the fork leg'
   heading: '### B-52 · Audit-signing fail-closed policy at MTC *(split from B-47 disposition,
     2026-07-17)*'
@@ -1012,11 +1030,16 @@ items:
   title: Migration-CLI promotion into the spec-committed scripts inventory
   status: design_substrate_gated
   summary: 'B-47 disposition item (j): python -m harness_runtime.admin.migrate_audit_sidecar works
-    today; promoting it to [project.scripts] extends the runtime spec section 13.4 committed CLI
-    inventory. LOW urgency; rides the next runtime-spec delta as a one-row addition.'
+    today; promotion = a `harness migrate-audit-sidecar` SUBCOMMAND under the existing flat harness
+    console-script namespace (round-22/23 of the filing: no new [project.scripts] entry -- dispatch
+    rides the committed harness_runtime.cli:main entry), recorded as a runtime spec section 13.4
+    inventory row. LOW urgency. Fork FILED 2026-07-17 via .harness/class_1_fork_b51_b52_b54_od_signing_amendment_arc.md
+    (ratification-gate item 7): rides the B-51/B-52/B-54 arc''s Runtime v1.100 -> v1.101 rider as the
+    one-row addition -- awaiting the same operator ratification.'
   close_out: 'Class 1 back-flow per section 4.3 (a spec-inventory revision IS a design-artifact
-    change): a one-row scripts-inventory addition riding the next runtime-spec delta + clearance
-    marker, then the pyproject entry; nothing blocks on it.'
+    change): a one-row section 13.4 inventory addition riding the B-51/B-52/B-54 arc''s Runtime
+    v1.101 rider + clearance marker, then the CLI subcommand implementation (no pyproject change);
+    nothing blocks on it.'
   council: 'no'
   heading: '### B-53 · Migration-CLI scripts-inventory promotion *(split from B-47 disposition,
     2026-07-17)*'
@@ -1028,8 +1051,11 @@ items:
     production SigningBackend.verify path (real KMS verification of persisted signature_attrs,
     key/period handling, legacy-placeholder semantics) has NO consumer and section 21.2.1 explicitly
     leaves verification out of scope -- so adding the verification API is spec surface. Without it the
-    MTC tamper-evidence story stops at hash-chain level.'
-  close_out: 'Route with the B-51/B-52 fork legs (one OD amendment arc can carry all three): specify
+    MTC tamper-evidence story stops at hash-chain level. Class 1 fork doc FILED 2026-07-17 at
+    .harness/class_1_fork_b51_b52_b54_od_signing_amendment_arc.md (leg 3) -- awaiting operator ratification.'
+  close_out: 'Fork doc FILED (see summary; one OD amendment arc carries all three legs). On
+    ratification specify per the filing''s finalized requirements (message-format cutover for pre-v1.34
+    real signatures, tenant-scope verifier input, authenticated tenant-bound legacy cutover): specify
     the verification contract (per-entry backend verify over the canonical message, placeholder
     handling, failure taxonomy), then implement the verifier + wire into B-49''s per-family unit and
     harness-inspect.'
