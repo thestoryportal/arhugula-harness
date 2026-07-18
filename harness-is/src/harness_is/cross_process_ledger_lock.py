@@ -162,53 +162,126 @@ def cross_process_write_lock(canonical_path: Path) -> Generator[None, None, None
     import fcntl  # POSIX-only; never reached on Windows.
 
     canonical_path.parent.mkdir(parents=True, exist_ok=True)
-    dir_lock = _dir_lock_for(canonical_path.parent)
-    dir_lock.acquire()
-    dir_held = True
-    try:
-        try:
-            file_fd = os.open(canonical_path, os.O_RDWR)
-        except FileNotFoundError:
-            # First write: the caller creates the file under the directory
-            # lock (held for the whole section; per-thread REENTRANT so a
-            # nested same-directory write inside the section — the B-50
-            # tenant_transaction composition — cannot self-deadlock).
-            # Later writers re-check under THEIR dir hold, see the file,
-            # and hand off below.
-            yield
-            return
-        # Handoff: probe the file lock NON-BLOCKING under the dir hold;
-        # on contention, RELEASE the dir first and only then block on the
-        # file alone (codex round-2 P1 — blocking on a file lock while
-        # holding the dir deadlocks against a holder of that file lock
-        # that later wants this dir: the tenant_transaction holds the
-        # sidecar's file lock across a sibling state-ledger append, while
-        # a concurrent sidecar reader holds the dir waiting on that same
-        # file lock). Never blocking on a file while holding the dir
-        # breaks the cycle; the dir hold spans only the probe, so sibling
-        # ledgers never serialize either.
+    while True:
+        dir_lock = _dir_lock_for(canonical_path.parent)
+        dir_lock.acquire()
+        dir_held = True
         try:
             try:
-                fcntl.flock(file_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError:
-                dir_lock.release()
-                dir_held = False
-                fcntl.flock(file_fd, fcntl.LOCK_EX)
-        except BaseException:
-            os.close(file_fd)
-            raise
+                # O_NONBLOCK (codex round-3 P1): a planted FIFO must not
+                # stall this open — a FIFO fd returns immediately and the
+                # caller's own validated open rejects it downstream.
+                file_fd = os.open(canonical_path, os.O_RDWR | getattr(os, "O_NONBLOCK", 0))
+            except FileNotFoundError:
+                # First write: the caller creates the file under the
+                # directory lock (held for the whole section; per-thread
+                # REENTRANT so a nested same-directory write inside the
+                # section — the B-50 tenant_transaction composition —
+                # cannot self-deadlock). Later writers re-check under
+                # THEIR dir hold, see the file, and hand off below.
+                yield
+                return
+            # Handoff: probe the file lock NON-BLOCKING under the dir
+            # hold; on contention, RELEASE the dir first and only then
+            # block on the file alone (codex round-2 P1 — blocking on a
+            # file lock while holding the dir deadlocks against a holder
+            # of that file lock that later wants this dir). The dir hold
+            # spans only the probe, so sibling ledgers never serialize.
+            try:
+                try:
+                    fcntl.flock(file_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    dir_lock.release()
+                    dir_held = False
+                    fcntl.flock(file_fd, fcntl.LOCK_EX)
+            except BaseException:
+                os.close(file_fd)
+                raise
+            finally:
+                if dir_held:
+                    dir_lock.release()
+                    dir_held = False
+            # Inode-stability verify (codex round-3 P1): flock rides the
+            # INODE, and `cross_process_replace_lock` (rollback) swaps the
+            # canonical inode — a lock riding a pre-replacement fd would
+            # not serialize against post-replacement writers. If the path
+            # no longer names our locked inode, retry from the top (each
+            # retry requires an actual replacement event, so the loop
+            # terminates in every real workload).
+            try:
+                path_ino = os.stat(canonical_path).st_ino
+            except FileNotFoundError:
+                path_ino = -1
+            if path_ino != os.fstat(file_fd).st_ino:
+                fcntl.flock(file_fd, fcntl.LOCK_UN)
+                os.close(file_fd)
+                continue
+            try:
+                yield
+            finally:
+                fcntl.flock(file_fd, fcntl.LOCK_UN)
+                os.close(file_fd)
+            return
         finally:
             if dir_held:
                 dir_lock.release()
-                dir_held = False
+
+
+@contextmanager
+def cross_process_replace_lock(canonical_path: Path) -> Generator[None, None, None]:
+    """Hold EXCLUSION for a section that REPLACES the canonical file's inode
+    (shadow-git rollback's `git checkout` + `write_bytes`).
+
+    Holds the parent-directory lock for the WHOLE section — the directory
+    is the only inode-stable target across replacement — and additionally
+    waits out any active file-lock holder first (non-blocking probe, then
+    release-dir-and-block-and-retry per the round-2 ABBA rule). New
+    writers/readers block at their transitional dir acquisition for the
+    section's duration; stragglers that locked the pre-replacement inode
+    are caught by the acquisition-side inode verify and retry.
+    """
+    if _IS_WINDOWS:
+        yield
+        return
+    import fcntl  # POSIX-only; never reached on Windows.
+
+    canonical_path.parent.mkdir(parents=True, exist_ok=True)
+    dir_lock = _dir_lock_for(canonical_path.parent)
+    while True:
+        dir_lock.acquire()
         try:
-            yield
-        finally:
+            file_fd = os.open(canonical_path, os.O_RDWR | getattr(os, "O_NONBLOCK", 0))
+        except FileNotFoundError:
+            break  # nothing to wait out; dir hold covers the section
+        try:
+            fcntl.flock(file_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            # An active holder: release the dir, wait it out on the file
+            # alone (ABBA rule), then retry the whole acquisition.
+            dir_lock.release()
+            fcntl.flock(file_fd, fcntl.LOCK_EX)
             fcntl.flock(file_fd, fcntl.LOCK_UN)
             os.close(file_fd)
-    finally:
-        if dir_held:
+            continue
+        except BaseException:
+            os.close(file_fd)
             dir_lock.release()
+            raise
+        # Hold BOTH the dir lock and the (old-inode) file lock across the
+        # replacement section.
+        try:
+            try:
+                yield
+            finally:
+                fcntl.flock(file_fd, fcntl.LOCK_UN)
+                os.close(file_fd)
+            return
+        finally:
+            dir_lock.release()
+    try:
+        yield
+    finally:
+        dir_lock.release()
 
 
 @contextmanager
@@ -216,12 +289,11 @@ def cross_process_read_lock(canonical_path: Path) -> Generator[None, None, None]
     """Hold a shared same-host lock across a read, excluding a concurrent writer.
 
     Side-effect free (the `harness-inspect` read-only contract): never
-    creates files or directories, never `mkdir`s. When the canonical file
-    exists it is locked SHARED directly; when it does not, the parent
-    directory is locked SHARED — excluding the absent-file-mode first
-    writer — and the file is re-checked once under that lock. Only a ledger
-    whose PARENT DIRECTORY does not exist yields unguarded (see module
-    docstring).
+    creates files or directories, never `mkdir`s. Dir-first, symmetric
+    with the writer (codex round-1 P1): a file-first fast path could open
+    a file an absent-file-mode writer's caller had just created and take
+    an uncontested SHARED lock mid-append. Only a ledger whose PARENT
+    DIRECTORY does not exist yields unguarded (see module docstring).
     """
     if _IS_WINDOWS:
         yield
@@ -234,50 +306,54 @@ def cross_process_read_lock(canonical_path: Path) -> Generator[None, None, None]
         # never mkdir; the harness-inspect read-only contract.)
         yield
         return
-    # Dir-first, symmetric with the writer (codex round-1 P1 on this
-    # landing): a file-first fast path could open a file the CALLER of an
-    # absent-file-mode writer had just created and take an uncontested
-    # SHARED lock while that writer — holding only the directory lock —
-    # was still mid-append. Acquiring the directory lock first blocks on
-    # exactly that writer; the hold is transitional (released right after
-    # the file handoff) so long reads never couple sibling ledgers.
-    dir_lock = _dir_lock_for(canonical_path.parent)
-    dir_lock.acquire()
-    dir_held = True
-    try:
-        try:
-            file_fd = os.open(canonical_path, os.O_RDONLY)
-        except FileNotFoundError:
-            # Genuinely nothing to read; the dir hold excludes an
-            # absent-file-mode first writer for the caller's section.
-            # (The dir lock is exclusive rather than shared — a deliberate
-            # simplification: absent-file reads are the rare
-            # pre-first-write window, read nothing, and the one lock kind
-            # keeps the per-thread reentrancy face sound.)
-            yield
-            return
+    while True:
+        dir_lock = _dir_lock_for(canonical_path.parent)
+        dir_lock.acquire()
+        dir_held = True
         try:
             try:
-                fcntl.flock(file_fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
-            except BlockingIOError:
-                # Same no-blocking-on-file-while-holding-dir rule as the
-                # writer (codex round-2 P1): release the dir, then block
-                # on the file alone.
-                dir_lock.release()
-                dir_held = False
-                fcntl.flock(file_fd, fcntl.LOCK_SH)
-        except BaseException:
-            os.close(file_fd)
-            raise
+                # O_NONBLOCK (codex round-3 P1): a planted FIFO must not
+                # stall this open; the caller's validated open rejects it.
+                file_fd = os.open(canonical_path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+            except FileNotFoundError:
+                # Genuinely nothing to read; the dir hold excludes an
+                # absent-file-mode first writer for the caller's section.
+                # (Exclusive rather than shared — a deliberate
+                # simplification: absent-file reads are the rare
+                # pre-first-write window and read nothing.)
+                yield
+                return
+            try:
+                try:
+                    fcntl.flock(file_fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    # Round-2 P1 ABBA rule: never block on a file lock
+                    # while holding the dir.
+                    dir_lock.release()
+                    dir_held = False
+                    fcntl.flock(file_fd, fcntl.LOCK_SH)
+            except BaseException:
+                os.close(file_fd)
+                raise
+            finally:
+                if dir_held:
+                    dir_lock.release()
+                    dir_held = False
+            # Inode-stability verify (round-3 P1) — mirror of the writer.
+            try:
+                path_ino = os.stat(canonical_path).st_ino
+            except FileNotFoundError:
+                path_ino = -1
+            if path_ino != os.fstat(file_fd).st_ino:
+                fcntl.flock(file_fd, fcntl.LOCK_UN)
+                os.close(file_fd)
+                continue
+            try:
+                yield
+            finally:
+                fcntl.flock(file_fd, fcntl.LOCK_UN)
+                os.close(file_fd)
+            return
         finally:
             if dir_held:
                 dir_lock.release()
-                dir_held = False
-        try:
-            yield
-        finally:
-            fcntl.flock(file_fd, fcntl.LOCK_UN)
-            os.close(file_fd)
-    finally:
-        if dir_held:
-            dir_lock.release()

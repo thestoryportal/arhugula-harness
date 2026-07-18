@@ -31,7 +31,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict
 
-from harness_is.cross_process_ledger_lock import cross_process_write_lock
+from harness_is.cross_process_ledger_lock import cross_process_replace_lock
 from harness_is.jsonl_event_ledger_lifecycle import JsonlLedgerHandle
 from harness_is.state_ledger_entry_schema import (
     Actor,
@@ -106,7 +106,12 @@ def rollback_to_checkpoint(
     # another thread OR another process — landing between the read and the
     # restore-write below is silently overwritten and lost.
     ledger_path = ledger_handle.canonical_path
-    with ledger_write_lock(), cross_process_write_lock(ledger_path):
+    # B-46 round-3: rollback REPLACES the ledger inode (git checkout +
+    # write_bytes), so it needs the inode-stable REPLACE lock — the dir
+    # is held for the whole section and active file-lock holders are
+    # waited out first; plain write_lock rides the old inode and loses
+    # exclusion the moment the inode swaps.
+    with ledger_write_lock(), cross_process_replace_lock(ledger_path):
         ledger_bytes = ledger_path.read_bytes() if ledger_path.exists() else None
 
         checkout = _git(repository_root, "checkout", shadow_ref, "--", ".")

@@ -380,3 +380,112 @@ def test_txn_with_reader_on_sibling_ledgers_does_not_deadlock(tmp_path: Path) ->
     assert all_done.is_set(), "ABBA deadlock: txn blocked on the dir held by the reader"
     assert reader_done.is_set()
     assert state.read_text() == "genesis\ntxn\n"
+
+
+def test_fifo_at_canonical_path_does_not_hang_read_lock(tmp_path: Path) -> None:
+    """Codex round-3 P1 (B-46 landing) — a planted FIFO at the canonical
+    path must not STALL the lock layer: with O_NONBLOCK the open returns
+    immediately. The outcome is then platform-shaped and either is safe —
+    macOS `flock` REJECTS a FIFO fd loudly (ENOTSUP), Linux permits it and
+    the caller's validated open rejects the non-regular file downstream.
+    The guarantee under test is completion-without-hang; the blocking-open
+    regression hangs this witness."""
+    import os as os_module
+
+    fifo = tmp_path / "ledger.jsonl"
+    os_module.mkfifo(fifo)
+    completed = threading.Event()
+    outcomes: list[str] = []
+
+    def _read() -> None:
+        try:
+            with cross_process_read_lock(fifo):
+                outcomes.append("entered")
+        except OSError:
+            outcomes.append("rejected")
+        completed.set()
+
+    t = threading.Thread(target=_read)
+    t.start()
+    t.join(_WAIT)
+    assert completed.is_set(), "read lock hung on a planted FIFO"
+    assert outcomes in (["entered"], ["rejected"])
+
+
+def test_replace_section_excludes_writers_and_appends_survive(tmp_path: Path) -> None:
+    """Codex round-3 P1 (B-46 landing) — the rollback composition: a
+    section that REPLACES the ledger inode then rewrites content must
+    exclude concurrent writers for its WHOLE duration; under a plain
+    file lock (old inode) a concurrent append lands between the replace
+    and the rewrite and is silently LOST."""
+    import os as os_module
+
+    from harness_is.cross_process_ledger_lock import cross_process_replace_lock
+
+    ledger = tmp_path / "ledger.jsonl"
+    ledger.write_text("original\n")
+    replaced = threading.Event()
+    proceed_rewrite = threading.Event()
+    writer_done = threading.Event()
+
+    def _replacer() -> None:
+        with cross_process_replace_lock(ledger):
+            staging = tmp_path / "staging.tmp"
+            staging.write_text("rolled-back\n")
+            os_module.replace(staging, ledger)  # inode swap
+            replaced.set()
+            proceed_rewrite.wait(_WAIT)
+            ledger.write_bytes(b"rolled-back\n")  # the rollback rewrite
+
+    def _writer() -> None:
+        with cross_process_write_lock(ledger):
+            with ledger.open("a") as fh:
+                fh.write("append\n")
+        writer_done.set()
+
+    r = threading.Thread(target=_replacer)
+    r.start()
+    assert replaced.wait(_WAIT)
+    w = threading.Thread(target=_writer)
+    w.start()
+    # The writer must NOT complete while the replace section is active.
+    assert not writer_done.wait(0.5), "writer entered during the replace section"
+    proceed_rewrite.set()
+    r.join(_WAIT)
+    w.join(_WAIT)
+    assert writer_done.is_set()
+    assert ledger.read_text() == "rolled-back\nappend\n", (
+        "the concurrent append was lost across the inode replacement"
+    )
+
+
+def test_acquisition_retries_across_inode_swap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex round-3 P1 (mechanism witness) — a lock acquired on an fd
+    whose inode was swapped out between open and flock must be DISCARDED
+    and retried: flock rides the inode, so a stale-inode lock would not
+    serialize against post-replacement writers. The patched open swaps
+    the file after the first call; the verify forces a second open."""
+    import os as os_module
+
+    ledger = tmp_path / "ledger.jsonl"
+    ledger.write_text("old\n")
+    replacement_source = tmp_path / "next.tmp"
+    replacement_source.write_text("new\n")
+    real_open = os_module.open
+    calls: list[str] = []
+
+    def _swapping_open(path: object, flags: int, *args: object) -> int:
+        fd = real_open(path, flags, *args)  # type: ignore[arg-type]
+        if str(path) == str(ledger):
+            calls.append("open")
+            if len(calls) == 1:
+                os_module.replace(replacement_source, ledger)  # inode swap
+        return fd
+
+    monkeypatch.setattr(os_module, "open", _swapping_open)
+    with cross_process_write_lock(ledger):
+        pass
+    assert len(calls) == 2, f"expected a retry after the inode swap (2 opens), saw {len(calls)}"
+    assert ledger.read_text() == "new\n"

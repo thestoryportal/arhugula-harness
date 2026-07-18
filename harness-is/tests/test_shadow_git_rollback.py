@@ -280,3 +280,34 @@ def test_rollback_cross_process_lock_prevents_lost_concurrent_append(
     assert {"act-pre", "act-concurrent"} <= action_ids
     assert len(ledger) == 3
     assert verify_chain(ledger).status is VerificationStatus.VALID
+
+
+def test_rollback_holds_the_replace_lock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """B-46 codex round-3 (wiring witness) — `rollback_to_checkpoint`
+    REPLACES the ledger inode, so it must run under
+    `cross_process_replace_lock` (dir held across the section), not the
+    plain inode-riding write lock. Spies the lock through the REAL
+    rollback path; a call-site downgrade to the plain lock never fires
+    the spy."""
+    from contextlib import contextmanager
+
+    from harness_is import shadow_git_rollback as rollback_module
+
+    repo = _repo(tmp_path)
+    checkpoint_id = _checkpoint(repo)
+    handle = _ledger(repo)
+    fired: list[str] = []
+    real = rollback_module.cross_process_replace_lock
+
+    @contextmanager
+    def _spy(path: Path):  # type: ignore[no-untyped-def]
+        fired.append(str(path))
+        with real(path):
+            yield
+
+    monkeypatch.setattr(rollback_module, "cross_process_replace_lock", _spy)
+    result = rollback_to_checkpoint(repo, handle, checkpoint_id, _RUN)
+    assert result.status is RollbackStatus.RESTORED
+    assert fired == [str(handle.canonical_path)], (
+        "rollback did not take the replace lock on the ledger path"
+    )
