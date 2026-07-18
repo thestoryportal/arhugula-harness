@@ -962,7 +962,8 @@ items:
     outer transaction calls, or a lock-ownership/transaction API on the writer. POSIX-only; Windows
     rides B-45.'
   council: 'no'
-  heading: '### B-50 · Sidecar scale engineering *(split from B-47 disposition, 2026-07-17)*'
+  heading: '### B-50 · Sidecar scale engineering *(split from B-47 disposition, 2026-07-17; CLOSED
+    2026-07-17 — item (i) PR #1042, item (g) PR #1044)*'
 - id: B-51
   title: Tenant-scope binding under deployment-scoped signing keys
   status: design_substrate_gated
