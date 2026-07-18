@@ -92,7 +92,12 @@ contradicts the tier's audit posture. The tension is TWO-SPEC (disposition codex
 
 Mirror the §28.2 precedent: an `audit_signing_fail_closed` RuntimeConfig flag, per-persona default — ON at
 MULTI_TENANT_COMPLIANCE, OFF elsewhere (persona-tier discipline per workspace CLAUDE.md §10.2) — consulted at
-ALL TEN sites (or centralized immediately ahead of every catch). **Plus the eleventh path the ten-site
+ALL TEN sites (or centralized immediately ahead of every catch). **Flag semantics at MTC (filing codex
+round-12 P1): an operator-explicit `false` at MTC would persist unsigned history in direct contradiction of
+C-CP-20 §20.1's per-entry cryptographic-signature requirement — the delta must either make `false` INVALID
+at MTC (config validation; the flag is then only a non-MTC opt-in) or carry an explicit §20.1 relaxation in
+the CP rider; the ratification gate decides which (recommend the former — no relaxation of a committed
+compliance invariant).** **Plus the eleventh path the ten-site
 enumeration misses (filing codex round-2): `AuditLedgerRedactionTokenMap.append` signs via
 `compose_redaction_token_audit_entry` directly (`redaction_token_audit_map.py:112-123`) and
 `RedactionSpanProcessor.on_end` catches only `KeyError`/`TypeError` (`redaction_span_processor.py:300-314`)
@@ -200,7 +205,13 @@ Conditional, preserved verbatim from the register rows (filing codex round-2 —
 whether verification may ever be BLOCKING): the recommended §21.2.2 contract is a non-blocking verify API
 (seam shape settled by the B-22 precedent — no council needed for that half), but IF ratification makes
 verification blocking anywhere (e.g. read-path enforcement), the C7-compliance ⊥ C1/C9-reliability dyad
-convenes at the apply leg before that half lands.
+convenes at the apply leg before that half lands. **And the non-blocking default must be RECONCILED with
+C-CP-20 §20.3.1 (filing codex round-12 P1): that CP-owned contract already commits walking audit entries,
+verifying every signature, and FAILING the audit on invalid signatures (semantics preserved through CP
+v1.98) — ratifying a non-blocking OD API without touching §20.3.1 leaves canonical CP and OD requirements
+contradictory. The CP rider must either bring §20.3.1 into scope (aligning its blocking audit-walk with the
+new backend-aware API) or the OD API must conform to §20.3.1's fail-on-invalid semantics where that
+protocol invokes it; the ratification gate decides.**
 
 ---
 
@@ -232,7 +243,10 @@ On ratification: spec-writer apply pass (with the two dyadic council convenings 
 markers per §4.5, **and the Phase-6 plan deltas in the same arc (filing codex round-11 P2): the OD plan pins
 U-OD-30 to the tenant-less `sign_audit_entry(payload, key_id, algo)` / `verify_hash_chain_integrity`
 signatures (`Implementation_Plan_Operational_Discipline_v2_6.md` §U-OD-30, preserved through the v2.28 head)
-and the plan lineage pins `cp_audit_to_od_audit` without tenant scope (v2.17) — implementing against the
+and the plan lineage pins `cp_audit_to_od_audit` without tenant scope (v2.17), and the Runtime plan (v2.48
+head) has no acceptance criteria for the new RuntimeConfig flag, bootstrap validation, handler policy,
+prewarm/keepalive posture, or tenant threading — the apply arc carries OD, CP, AND Runtime plan deltas
+(round-12 P2) — implementing against the
 amended specs without clearing those plan deltas would leave the Phase-6 execution authority stale**, then
 the register rows flip `design_substrate_gated` → open/buildable and the impl arc proceeds under the
 standard pipeline. (The post-merge §12.2 terminating refresh repoints `roadmap_status.md`'s next-action at
