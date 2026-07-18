@@ -329,68 +329,67 @@ class RuntimeAuditLedgerWriter:
                 f"{recomputed!r} — refusing to persist an entry that would "
                 f"wedge the sidecar fold after restart"
             )
-        if True:
-            action_id = self._action_id_for(tenant_id, audit_entry)
-            # R-003: `procedural_tier_snapshot_ref` is left `None`-canonical here
-            # (IS spec v1.3 §C-IS-05 §5.1). This append wraps pre-signed OD audit
-            # entries — a separate ledger family, not an active-workflow-context
-            # producer emission — so the D-derivative sidecar does not apply.
-            payload = EntryPayload(
-                action_id=action_id,
-                idempotency_key=action_id,
-                actor=self.ledger_writer.actor,
-                timestamp=self.time_source(),
-            )
-            write_key = WriteKey(
-                thread_id=Identifier(f"{self._ACTION_ID_PREFIX}:{self._tenant_tag(tenant_id)}"),
-                step_id=action_id,
-                idempotency_key=action_id,
-            )
-            # Item (e): persist the FULL signed entry SIDECAR-FIRST (out-of-family
-            # Codex round-3 finding on the PR-B1 landing). IS-first ordering lost
-            # the signed entry PERMANENTLY when the process died between the two
-            # writes and the exact event was never replayed (span-redaction and
-            # cost side effects do not replay) — and a later NEW event then seeded
-            # its chain from the pre-loss tail, forking the OD chain against the
-            # IS refs. Sidecar-first inverts the failure: the valuable data (the
-            # full signed entry) is durable before the chain ref lands; a crash
-            # between the writes leaves at worst a SURPLUS sidecar row with no IS
-            # ref — detectable by a verifier cross-checking refs, prunable, and
-            # chain-consistent (the row was genuinely signed at that position, so
-            # tail seeding keeps verifying). The membership-checked write keeps
-            # every path idempotent (a retry after either crash window never
-            # duplicates a row); the IS append remains the dedup authority for
-            # the RESULT the caller sees.
-            if sidecar_locks_held:
-                self._append_sidecar_line_if_missing_locked(tenant_id, audit_entry)
-            else:
-                self._append_sidecar_line_if_missing(tenant_id, audit_entry)
-            # Bounded resample-retry (codex round-8 P1): this lock
-            # serializes AUDIT appends, but ordinary `LedgerWriter.append`
-            # F2/state writes to the SAME ledger do not take it — one can
-            # commit a newer timestamp between our sampling and our IS
-            # append, which then raises NonMonotonicTimestampError AFTER
-            # the sidecar row is durable (an unanchored signature). The IS
-            # append is retry-safe here: the OD entry (and so the sidecar
-            # identity) is timestamp-independent, and the idempotency key
-            # is unchanged — resample a fresh timestamp and retry. Bounded:
-            # a hot ledger could starve an unbounded loop; exhaustion
-            # propagates the error loudly (the sidecar row is preserved and
-            # the NEXT append's crash-repair path re-anchors it).
-            attempts_left = 5
-            while True:
-                try:
-                    return self.ledger_writer.append(payload, write_key)
-                except NonMonotonicTimestampError:
-                    attempts_left -= 1
-                    if attempts_left <= 0:
-                        raise
-                    payload = EntryPayload(
-                        action_id=payload.action_id,
-                        idempotency_key=payload.idempotency_key,
-                        actor=payload.actor,
-                        timestamp=self.time_source(),
-                    )
+        action_id = self._action_id_for(tenant_id, audit_entry)
+        # R-003: `procedural_tier_snapshot_ref` is left `None`-canonical here
+        # (IS spec v1.3 §C-IS-05 §5.1). This append wraps pre-signed OD audit
+        # entries — a separate ledger family, not an active-workflow-context
+        # producer emission — so the D-derivative sidecar does not apply.
+        payload = EntryPayload(
+            action_id=action_id,
+            idempotency_key=action_id,
+            actor=self.ledger_writer.actor,
+            timestamp=self.time_source(),
+        )
+        write_key = WriteKey(
+            thread_id=Identifier(f"{self._ACTION_ID_PREFIX}:{self._tenant_tag(tenant_id)}"),
+            step_id=action_id,
+            idempotency_key=action_id,
+        )
+        # Item (e): persist the FULL signed entry SIDECAR-FIRST (out-of-family
+        # Codex round-3 finding on the PR-B1 landing). IS-first ordering lost
+        # the signed entry PERMANENTLY when the process died between the two
+        # writes and the exact event was never replayed (span-redaction and
+        # cost side effects do not replay) — and a later NEW event then seeded
+        # its chain from the pre-loss tail, forking the OD chain against the
+        # IS refs. Sidecar-first inverts the failure: the valuable data (the
+        # full signed entry) is durable before the chain ref lands; a crash
+        # between the writes leaves at worst a SURPLUS sidecar row with no IS
+        # ref — detectable by a verifier cross-checking refs, prunable, and
+        # chain-consistent (the row was genuinely signed at that position, so
+        # tail seeding keeps verifying). The membership-checked write keeps
+        # every path idempotent (a retry after either crash window never
+        # duplicates a row); the IS append remains the dedup authority for
+        # the RESULT the caller sees.
+        if sidecar_locks_held:
+            self._append_sidecar_line_if_missing_locked(tenant_id, audit_entry)
+        else:
+            self._append_sidecar_line_if_missing(tenant_id, audit_entry)
+        # Bounded resample-retry (codex round-8 P1): this lock
+        # serializes AUDIT appends, but ordinary `LedgerWriter.append`
+        # F2/state writes to the SAME ledger do not take it — one can
+        # commit a newer timestamp between our sampling and our IS
+        # append, which then raises NonMonotonicTimestampError AFTER
+        # the sidecar row is durable (an unanchored signature). The IS
+        # append is retry-safe here: the OD entry (and so the sidecar
+        # identity) is timestamp-independent, and the idempotency key
+        # is unchanged — resample a fresh timestamp and retry. Bounded:
+        # a hot ledger could starve an unbounded loop; exhaustion
+        # propagates the error loudly (the sidecar row is preserved and
+        # the NEXT append's crash-repair path re-anchors it).
+        attempts_left = 5
+        while True:
+            try:
+                return self.ledger_writer.append(payload, write_key)
+            except NonMonotonicTimestampError:
+                attempts_left -= 1
+                if attempts_left <= 0:
+                    raise
+                payload = EntryPayload(
+                    action_id=payload.action_id,
+                    idempotency_key=payload.idempotency_key,
+                    actor=payload.actor,
+                    timestamp=self.time_source(),
+                )
 
     def _sidecar_line_for(self, tenant_id: str | None, audit_entry: AuditLedgerEntry) -> str:
         return json.dumps(
@@ -610,94 +609,93 @@ class RuntimeAuditLedgerWriter:
         must never reacquire)."""
         tag = self._tenant_tag(tenant_id)
         line = self._sidecar_line_for(tenant_id, audit_entry)
-        if True:
-            if not self._sidecar_path.exists():
-                # Round-36 P1: creating a REPLACEMENT sidecar after the
-                # original disappeared would silently split history (old IS
-                # refs unrecoverable). Absence is only legitimate at genuine
-                # first use.
-                self._assert_absence_is_first_use()
-            self._heal_torn_tail_locked()
-            folded_from_zero = self._sidecar_index.offset == 0
-            rescanned_from_zero = self._refresh_sidecar_index_locked()
-            if folded_from_zero or rescanned_from_zero:
-                # `rescanned_from_zero` (codex round-45 P1): a WARM index
-                # (offset > 0) whose file was truncated/replaced resets to
-                # zero INSIDE the refresh — gating on the pre-refresh offset
-                # alone skipped the coverage check exactly when truncation
-                # was detected, extending an incomplete history.
-                # Round-40 P1: truncation to a NEWLINE BOUNDARY (or to zero
-                # with the file kept) leaves only valid-looking rows — the
-                # torn-tail heal sees nothing to fix and round-36's absence
-                # check never fires. After any full fold, every IS audit ref
-                # must be covered by sidecar membership, EXCEPT the identity
-                # being appended right now (that one gap is the legitimate
-                # single-entry crash-repair path, rounds 1/3).
-                self._assert_is_refs_covered_locked(allowed_gap=(tag, audit_entry.entry_hash))
-            identity = (tag, audit_entry.entry_hash)
-            incoming_digest = _full_entry_digest(audit_entry)
-            stored_digest = self._sidecar_index.digests.get(identity)
-            if stored_digest is not None:
-                if stored_digest != incoming_digest:
-                    # Codex round-19: a durable row whose signature_attrs
-                    # were mutated (payload + entry_hash intact) must not
-                    # silently satisfy membership for the legitimate entry —
-                    # the corrupted signature would remain the only durable
-                    # copy. Fail loud; the row is preserved as evidence.
-                    raise ValueError(
-                        f"sidecar row for tenant_tag={tag!r} "
-                        f"entry_hash={audit_entry.entry_hash!r} diverges from "
-                        f"the entry being appended (signature_attrs or other "
-                        f"non-payload fields differ) — tampered or corrupt "
-                        f"row preserved as evidence, append refused"
-                    )
-                # Re-establish durability on the membership-hit path (codex
-                # round-28): if a prior attempt wrote this row but its fsync
-                # raised, the retry lands here — returning without another
-                # fsync would let the IS reference commit while the row (or
-                # its directory entry) is still only page-cached.
-                fd = self._open_sidecar_validated(os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
-                try:
-                    os.fsync(fd)
-                finally:
-                    os.close(fd)
-                if sys.platform != "win32":
-                    dir_fd = os.open(str(self._sidecar_path.parent), os.O_RDONLY)
-                    try:
-                        os.fsync(dir_fd)
-                    finally:
-                        os.close(dir_fd)
-                return
-            encoded = (line + "\n").encode("utf-8")
-            with os.fdopen(self._open_sidecar_for_append(), "ab") as fh:
-                fh.write(encoded)
-                fh.flush()
-                # Durability BEFORE the IS ref lands (codex round-23): a bare
-                # write+close only reaches the page cache — power loss after
-                # the IS append could keep the ref while the signature row
-                # was never durable, defeating the sidecar-first guarantee.
-                os.fsync(fh.fileno())
+        if not self._sidecar_path.exists():
+            # Round-36 P1: creating a REPLACEMENT sidecar after the
+            # original disappeared would silently split history (old IS
+            # refs unrecoverable). Absence is only legitimate at genuine
+            # first use.
+            self._assert_absence_is_first_use()
+        self._heal_torn_tail_locked()
+        folded_from_zero = self._sidecar_index.offset == 0
+        rescanned_from_zero = self._refresh_sidecar_index_locked()
+        if folded_from_zero or rescanned_from_zero:
+            # `rescanned_from_zero` (codex round-45 P1): a WARM index
+            # (offset > 0) whose file was truncated/replaced resets to
+            # zero INSIDE the refresh — gating on the pre-refresh offset
+            # alone skipped the coverage check exactly when truncation
+            # was detected, extending an incomplete history.
+            # Round-40 P1: truncation to a NEWLINE BOUNDARY (or to zero
+            # with the file kept) leaves only valid-looking rows — the
+            # torn-tail heal sees nothing to fix and round-36's absence
+            # check never fires. After any full fold, every IS audit ref
+            # must be covered by sidecar membership, EXCEPT the identity
+            # being appended right now (that one gap is the legitimate
+            # single-entry crash-repair path, rounds 1/3).
+            self._assert_is_refs_covered_locked(allowed_gap=(tag, audit_entry.entry_hash))
+        identity = (tag, audit_entry.entry_hash)
+        incoming_digest = _full_entry_digest(audit_entry)
+        stored_digest = self._sidecar_index.digests.get(identity)
+        if stored_digest is not None:
+            if stored_digest != incoming_digest:
+                # Codex round-19: a durable row whose signature_attrs
+                # were mutated (payload + entry_hash intact) must not
+                # silently satisfy membership for the legitimate entry —
+                # the corrupted signature would remain the only durable
+                # copy. Fail loud; the row is preserved as evidence.
+                raise ValueError(
+                    f"sidecar row for tenant_tag={tag!r} "
+                    f"entry_hash={audit_entry.entry_hash!r} diverges from "
+                    f"the entry being appended (signature_attrs or other "
+                    f"non-payload fields differ) — tampered or corrupt "
+                    f"row preserved as evidence, append refused"
+                )
+            # Re-establish durability on the membership-hit path (codex
+            # round-28): if a prior attempt wrote this row but its fsync
+            # raised, the retry lands here — returning without another
+            # fsync would let the IS reference commit while the row (or
+            # its directory entry) is still only page-cached.
+            fd = self._open_sidecar_validated(os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
             if sys.platform != "win32":
-                # Directory-entry durability on EVERY append (codex round-33
-                # P2 — a `created`-gated dir-fsync missed the retry after a
-                # crash between O_CREAT and the first write: the file already
-                # existed, so its directory entry was never made durable
-                # before the IS ref landed). One extra fsync per audit write
-                # is cheap; POSIX-only per the documented B-45 posture.
                 dir_fd = os.open(str(self._sidecar_path.parent), os.O_RDONLY)
                 try:
                     os.fsync(dir_fd)
                 finally:
                     os.close(dir_fd)
-            # Our own write never needs re-parsing: record it in the index
-            # and advance past it.
-            self._sidecar_index.digests[identity] = incoming_digest
-            if _has_redaction_namespace_keys(audit_entry):
-                self._sidecar_index.redaction_tails[tag] = audit_entry.entry_hash
-            self._sidecar_index.offset += len(encoded)
-            post = self._sidecar_path.stat()
-            self._sidecar_index.inode = post.st_ino
-            self._sidecar_index.mtime_ns = post.st_mtime_ns
+            return
+        encoded = (line + "\n").encode("utf-8")
+        with os.fdopen(self._open_sidecar_for_append(), "ab") as fh:
+            fh.write(encoded)
+            fh.flush()
+            # Durability BEFORE the IS ref lands (codex round-23): a bare
+            # write+close only reaches the page cache — power loss after
+            # the IS append could keep the ref while the signature row
+            # was never durable, defeating the sidecar-first guarantee.
+            os.fsync(fh.fileno())
+        if sys.platform != "win32":
+            # Directory-entry durability on EVERY append (codex round-33
+            # P2 — a `created`-gated dir-fsync missed the retry after a
+            # crash between O_CREAT and the first write: the file already
+            # existed, so its directory entry was never made durable
+            # before the IS ref landed). One extra fsync per audit write
+            # is cheap; POSIX-only per the documented B-45 posture.
+            dir_fd = os.open(str(self._sidecar_path.parent), os.O_RDONLY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+        # Our own write never needs re-parsing: record it in the index
+        # and advance past it.
+        self._sidecar_index.digests[identity] = incoming_digest
+        if _has_redaction_namespace_keys(audit_entry):
+            self._sidecar_index.redaction_tails[tag] = audit_entry.entry_hash
+        self._sidecar_index.offset += len(encoded)
+        post = self._sidecar_path.stat()
+        self._sidecar_index.inode = post.st_ino
+        self._sidecar_index.mtime_ns = post.st_mtime_ns
 
     def _refresh_sidecar_index_locked(self) -> bool:
         """Incrementally fold NEW sidecar bytes into the membership index —
@@ -1046,6 +1044,7 @@ class RuntimeAuditLedgerWriter:
                     os.close(dir_fd)
             index = self._sidecar_index
             index.digests.clear()
+            index.redaction_tails.clear()
             index.legacy_exempt = {(pair[0], pair[1]) for pair in legacy}
             index.offset = len(encoded)
             post = self._sidecar_path.stat()
@@ -1117,13 +1116,6 @@ class _AuditWriterTenantTransaction:
     def __init__(self, writer: RuntimeAuditLedgerWriter, tenant_id: str | None) -> None:
         self._writer = writer
         self._tenant_id = tenant_id
-
-    def read_full_entries(self) -> list[AuditLedgerEntry]:
-        # The handle is the writer's own private companion (same module);
-        # pyright's cross-class private-usage rule needs the explicit nod.
-        return self._writer._read_full_entries_core(  # pyright: ignore[reportPrivateUsage]
-            self._tenant_id, sidecar_locks_held=True
-        )
 
     def append(self, audit_entry: AuditLedgerEntry) -> WriteResult:
         return self._writer._append_core(  # pyright: ignore[reportPrivateUsage]

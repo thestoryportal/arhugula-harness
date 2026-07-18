@@ -139,3 +139,11 @@ Branch: b24-b27-fork-ratification-build · Date: 2026-07-15
 **Codex chain:** 3 rounds (immutability depth ×2 fixed+probed; round 3 clean).
 
 **Outcome:** all-APPROVE at round 1 → merge without HIL (CI-green precondition).
+
+## PR #1042 — 2026-07-17 — `b-50-transactional-token-map`
+
+**Round 1:** concurrency APPROVE (global lock order total and verified against every path incl. shutdown + adopt; inner cores genuinely non-reacquiring; coverage-gate/double-fold interplay correct; P3 note — adopt_legacy didn't clear redaction_tails, fixed pre-merge) · spec-conformance APPROVE (register close_out matched exactly — transaction API + unlocked-inner, both prescribed alternatives at once; no OD chain-position commitment violated — durable-tail-as-authority STRENGTHENS the committed invariant; B-45 win32 no-op verified byte-accurate) · test-witness APPROVE (all five new witnesses real-path; core mutants killed incl. the exact round-2 coverage regression; noted follow-ons — duck-writer fallback machinery now unkilled (pre-B-50 body preserved verbatim, non-production-only), flock half in-process-unobservable per the standing B-45 posture, unused handle read_full_entries removed pre-merge).
+
+**Codex chain:** 3 rounds (O(delta) tails P1 + coverage-gate P1 fixed+probed; round 3 clean with its own multi-process stress probe).
+
+**Outcome:** all-APPROVE at round 1 → merge without HIL (CI-green precondition). `if True:` refactor residues dedented pre-merge.
