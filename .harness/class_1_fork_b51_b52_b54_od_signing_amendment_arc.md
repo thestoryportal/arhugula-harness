@@ -78,7 +78,13 @@ leg per §10.9 — not at this filing.
 
 Audit-signing failures are typed and loudly surfaced (ERROR) at all ten surfacing sites — the six
 fn-internal handlers and the four offload-boundary saturation handlers (disposition codex round-6) — but
-dispatch proceeds: fail-open. At MULTI_TENANT_COMPLIANCE an unsigned audit trail silently accumulating
+dispatch proceeds: fail-open. **The typed set is also INCOMPLETE (filing codex round-14 P1): a configured
+backend advertising a mismatched algorithm or returning a malformed/non-byte signature raises plain
+`ValueError`/`TypeError` from `sign_audit_entry` AFTER the breaker wrapper — outside the two
+`AUDIT_SIGNING_HARD_FAILURES` runtime errors the handlers special-case — and the generic best-effort
+catches swallow those. The delta must define ONE typed boundary around ALL signing and
+signature-validation failures before the flag can be meaningfully consulted; policing the ten catches
+alone still leaves MTC fail-open for the untyped class.** At MULTI_TENANT_COMPLIANCE an unsigned audit trail silently accumulating
 contradicts the tier's audit posture. The tension is TWO-SPEC (disposition codex round-4):
 
 - **OD side** — the sibling precedent is already committed: OD v1.8 §28.2 rate-table resolution —
@@ -169,9 +175,12 @@ requirements sharpened at filing codex round-1:
   (signature does not match) → raise a NEW typed `AuditSignatureInvalid` (NOT `HashChainBreach`, which
   means content/linkage tampering — conflating them would hide WHICH trust property failed); (b) backend
   availability errors → propagate as-is (infrastructure failure, retryable by the caller, never a verdict);
-  (c) malformed/unknown signature metadata (bad algo tag, wrong-width value, unknown key_id) →
+  (c) malformed signature metadata (bad algo tag, wrong-width value, syntactically invalid key_id) →
   `AuditSignatureInvalid` with the malformation named (fail-loud, mirrors the sidecar's
-  corrupt-row-as-evidence posture).
+  corrupt-row-as-evidence posture) — but a syntactically valid key_id UNKNOWN to the backend's supplied
+  mapping (round-14 P2: `UnknownSigningKeyIdError` after rotation or an incomplete operator key mapping)
+  is branch (b) UNAVAILABLE/unverifiable, never a tampering verdict — the composition root failed to
+  supply the key, the row proved nothing.
 - **Message-format cutover for pre-v1.34 REAL signatures** (round-5 P1): an upgraded KMS-backed MTC ledger
   holds GENUINE v1.33-era signatures over the four-segment message on rows that carry tenant tags —
   five-tuple reconstruction fails them, and the placeholder exemption does not cover them. The contract
@@ -246,9 +255,13 @@ Per §4.3 the design-substrate amendments halt here. The operator ratifies, in o
    carrying BOTH CP-owned halves, **and a Runtime v1.100 → v1.101 rider (filing codex round-9 P1): the
    Runtime spec owns the prewarm/keepalive/boot contracts (B-18-KEEPALIVE lineage) that currently commit
    the swallow-all fail-open behavior, plus RuntimeConfig surface — the rider covers the MTC prewarm
-   posture, the `audit_signing_fail_closed` flag's config contract, and the tenant threading through
-   runtime-owned call sites; without it the implementation would contradict a committed Runtime surface
-   (X-AL-3)** (recommended), vs splitting. The CP rider is not leg 2's alone (filing
+   posture, the `audit_signing_fail_closed` flag's config contract, the tenant threading through
+   runtime-owned call sites, AND the operator-facing verifier inputs (round-14 P1): wiring leg 3 into
+   `harness-inspect` per the B-54 close-out needs C-RT-13 CLI/config surface for the audit sidecar path,
+   expected tenant scope, verification backend/key mapping, and the authenticated cutover record — absent
+   from the current CLI contract, so leaving them out of the rider would force the impl arc to invent an
+   unratified CLI surface; without the rider the implementation would contradict a committed Runtime
+   surface (X-AL-3)** (recommended), vs splitting. The CP rider is not leg 2's alone (filing
    codex round-7 P1): `cp_audit_to_od_audit` is a CP-owned contract (`Spec_Control_Plane_v1_7.md` §13.5.1
    declares its signature), so leg 1's tenant-bearing converter signature change amends CP too — the rider
    carries the §13.5.1 signature amendment alongside the §28.10.4 invariant-2 carve-out.
