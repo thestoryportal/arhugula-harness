@@ -10,9 +10,12 @@ v1.33 clearance marker at `.harness/clearance/spec-operational-discipline-v1-33-
 authority — pointer refresh owed at the next CLAUDE.md maintenance PR, not this filing).
 
 **Why one filing:** all three legs amend the same C-OD-21 signing surface introduced/refined at OD v1.33
-§21.2.1; one OD amendment arc (v1.33 → v1.34, plus a bounded CP v1.24 → v1.25 rider for leg 2) can carry all
+§21.2.1; one OD amendment arc (v1.33 → v1.34, plus a bounded CP delta rider for leg 2) can carry all
 three coherently, and leg 3's verification API must reconstruct whatever message shape leg 1 ratifies — they
-interlock.
+interlock. **CP delta versioning (filing codex round-5 P1): the CP head is `Spec_Control_Plane_v1_100.md`
+(cleared 2026-07-15) — §28.10.4's CITE stays `v1.24` (last substantive definition, per the delta-baseline
+§-cite convention), but the amendment itself is authored as CP v1.100 → v1.101; every earlier "v1.24 →
+v1.25" phrasing in this filing is corrected to that.**
 
 ---
 
@@ -34,7 +37,7 @@ binds tenant identity via the canonical message's `key_id` segment)"*.
 | # | Option | Assessment |
 |---|---|---|
 | 1 | Bind tenant into `AuditPayload.audit_namespace_attrs` (entry_hash-borne, hence message-bound transitively) | Weakest — attr-borne, caller-supplied, not schema-enforced; absence is indistinguishable from single-tenant |
-| 2 | **Fifth canonical-message segment carrying the tenant scope token** | **RECOMMENDED** — byte-compat-scoped per the B-22 → B-31 precedents: single-tenant/absent → the existing four-tuple PRESERVED VERBATIM (drop-when-`None`); multi-tenant → fifth length-prefixed segment. Metadata relabeling (tenant swap) then breaks verification, the exact §21.2.1 discipline. **Rider (filing codex round-4 P1): drop-when-`None` needs a bootstrap invariant at MULTI_TENANT_COMPLIANCE — current `RuntimeConfig` accepts MTC with `tenant_id=None` (writer normalizes to `_single`), which would silently keep a compliance deployment on the tenant-unbound four-tuple; the delta must require tenant scope at MTC (config validation) or make signing fail absent tenant there** |
+| 2 | **Fifth canonical-message segment carrying the tenant scope token** | **RECOMMENDED** — byte-compat-scoped per the B-22 → B-31 precedents: single-tenant/absent → the existing four-tuple PRESERVED VERBATIM (drop-when-`None`); multi-tenant → fifth length-prefixed segment. Metadata relabeling (tenant swap) then breaks verification, the exact §21.2.1 discipline. **Rider (filing codex round-4 P1): drop-when-`None` needs a bootstrap invariant at MULTI_TENANT_COMPLIANCE — current `RuntimeConfig` accepts MTC with `tenant_id=None` (writer normalizes to `_single`), which would silently keep a compliance deployment on the tenant-unbound four-tuple; the delta must require tenant scope at MTC (config validation) or make signing fail absent tenant there. And the invariant needs an UPGRADE story (round-5 P1): an existing MTC deployment with `tenant_id=None` has history persisted under the `_single` tag — requiring a real tenant at bootstrap orphans that history from tenant-scoped reads, so the delta must specify an authenticated migration/retagging procedure or an explicit legacy-read strategy before the invariant enables** |
 | 3 | REQUIRE tenant-scoped `key_id`s at MULTI_TENANT_COMPLIANCE (config-validation only) | REJECTED as primary (disposition codex round-3/round-10): `key_arns` maps logical ids to ARNs with NO tenant association and every production composer supplies FIXED global key_ids (`stage_4_od.py`), so a presence check would accept one shared key for every tenant — a false guarantee; tenant-aware key SELECTION would be a mechanism change comparable to option 2 with worse key-management ergonomics. v1.33's key_id note describes a posture an operator MAY adopt, not one the runtime can enforce today |
 
 **No effective interim mitigation exists** (disposition codex round-10): composers select fixed global
@@ -53,7 +56,11 @@ updated), and the second non-converter path `sign_rotation_pair` (filing codex r
 `sign_audit_entry` twice with no tenant parameter — thread tenant scope through it, or explicitly
 defer/prohibit its multi-tenant use in the delta (it already cannot take the §21.2.1 backend seam naively
 pending B-33's rotation-aware message binding, per OD v1.33's own out-of-scope row — the same deferral can
-carry both constraints)** — or move signing to a tenant-aware boundary. Without the rider the segment is
+carry both constraints), and the workflow-less prewarm path (round-5 P1): `RuntimeLLMDispatcher.prewarm()`
+invokes the LLM cost-attribution converter with `tenant_id=None` because it runs OUTSIDE any workflow —
+under MTC, drop-when-`None` leaves that signed row tenant-unbound while fail-on-missing breaks prewarm; the
+delta must thread the deployment tenant into prewarm or define an explicit synthetic-scope policy for
+workflow-less audit rows** — or move signing to a tenant-aware boundary. Without the rider the segment is
 unpopulatable.
 
 ### Council
@@ -99,7 +106,7 @@ default-config MTC deployment never enters any catch site and accumulates exactl
 leg exists to prevent. The delta must classify an absent backend as a STARTUP/policy failure when
 `audit_signing_fail_closed` is ON (bootstrap validation: fail-closed ⇒ a configured backend is required),
 not merely police the runtime failure sites. Delta shape: OD v1.34 addendum (policy +
-flag + site enumeration) **plus** CP v1.24 → v1.25 amending §28.10.4 invariant 2 with the audit-signing
+flag + site enumeration) **plus** CP v1.100 → v1.101 amending §28.10.4 (cite: v1.24, last substantive definition) invariant 2 with the audit-signing
 carve-out. The weaker single-spec alternative (fail-open preserved at the one CP-owned hook, fail-closed at
 the other nine sites) is coherent but leaves the compliance tier's weakest link at the validator hook —
 surface both to the operator; recommend the two-spec shape.
@@ -130,6 +137,11 @@ INCLUDING the leg-1 fifth segment if ratified, which is why B-54 must land joint
 same delta — and project `"DEPLOYMENT_BOUND"` → `key_period=0` exactly as signing does. Two contract
 requirements sharpened at filing codex round-1:
 
+- **Message-format cutover for pre-v1.34 REAL signatures** (round-5 P1): an upgraded KMS-backed MTC ledger
+  holds GENUINE v1.33-era signatures over the four-segment message on rows that carry tenant tags —
+  five-tuple reconstruction fails them, and the placeholder exemption does not cover them. The contract
+  must version the message format via an authenticated cutover: pre-cutover real signatures verify against
+  the four-tuple, post-cutover rows require the five-tuple.
 - **Tenant scope is a verifier INPUT** (round-1 P1): the verifier consumes `Sequence[AuditLedgerEntry]`
   (B-49 shape), but the tenant tag lives in the sidecar wrapper and is stripped by
   `read_full_entries_for_tenant` — the fifth segment is unreconstructable from the entries alone. The
@@ -142,8 +154,11 @@ requirements sharpened at filing codex round-1:
   itself be AUTHENTICATED (filing codex round-4 P1): a plain `adopt_legacy_is_refs`-style sidecar row is
   mutable at exactly the adversarial tier under discussion, so an attacker could rewrite the baseline to
   exempt forged post-cutover rows, recreating the downgrade path. The delta must require the cutover to be
-  signed by a trusted key or anchored outside the rewritable ledger (e.g. bootstrap config / key custody
-  record); the round-46 explicit-operator-action posture carries over, its carrier does not.
+  signed by a trusted key or anchored outside the rewritable ledger, AND to bind IMMUTABLE ledger
+  identities (round-5 P1) — the exact legacy entry hashes or an externally monotonic ledger position, not
+  merely a date/version/row-position (an adversary with rewrite access can forge an unsigned row "before"
+  a positional boundary and recompute the unkeyed hashes while the external record stays untouched); the
+  round-46 explicit-operator-action posture carries over, its carrier does not.
   A config-declared pre-backend KEY-PERIOD set is NOT a viable cutover mechanism (filing codex round-3 P2):
   both the placeholder era and the real-KMS era store `"DEPLOYMENT_BOUND"` / project `key_period=0`, so a
   period set either exempts every row or none; period-based cutover only becomes possible if B-33
@@ -170,7 +185,7 @@ Per §4.3 the design-substrate amendments halt here. The operator ratifies, in o
 3. **Leg 3 acceptance** (filing codex round-2 — leg 3 needs its own explicit ratification, not a ride-along):
    the new C-OD-21 §21.2.2 backend verification API with its two contract requirements (tenant scope as
    verifier input; cutover-gated legacy exemption) and its NON-BLOCKING default — or an alternative/defer.
-4. **Arc bundling** — one OD v1.33 → v1.34 delta carrying legs 1+3, with the CP v1.24 → v1.25 rider for leg 2
+4. **Arc bundling** — one OD v1.33 → v1.34 delta carrying legs 1+3, with the CP v1.100 → v1.101 rider for leg 2
    (recommended), vs splitting.
 
 On ratification: spec-writer apply pass (with the two dyadic council convenings at the apply leg), clearance
