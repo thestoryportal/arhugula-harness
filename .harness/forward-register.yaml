@@ -941,11 +941,14 @@ items:
 - id: B-50
   title: Sidecar scale engineering -- disk-backed membership index + POSIX cross-process chain atomicity
   status: open
-  summary: 'B-47 disposition items (g)+(i): the in-memory membership index refolds full history at
-    restart (O(history) cold start); the redaction-chain tail-read+compose+append is not cross-process
-    atomic. Both impl-discretion within Tier-5''s committed properties (no spec fork -- corrected
-    grounding at the disposition doc). (i) fix is POSIX-only lock-scope widening of the B-40 lock;
-    Windows closure rides B-45.'
+  summary: 'B-47 disposition items (g)+(i). Item (i) LANDED 2026-07-17 (b-50-transactional-token-map):
+    RuntimeAuditLedgerWriter.tenant_transaction holds the full lock stack (append lock + sidecar
+    thread lock + cross-process flock) across tail-read + compose + append via unlocked-inner cores;
+    the token map derives its prior from the DURABLE tail inside the transaction (the in-memory
+    cached position -- a second authority that could drift -- is gone on the production path; duck
+    writers keep the fallback). POSIX-only cross-process hold per B-45. REMAINING: item (g), the
+    disk-backed membership index (O(history) cold-start refold), impl-discretion within Tier-5''s
+    committed properties.'
   close_out: 'Disk-backed index (stdlib sqlite3 on the 3.12 baseline, or offset-checkpointed snapshot).
     For (i): NOT a plain outer-lock widening (codex round-6 -- POSIX flock is non-reentrant across
     separately-opened descriptors, so an outer hold self-deadlocks when read_full_entries_for_tenant

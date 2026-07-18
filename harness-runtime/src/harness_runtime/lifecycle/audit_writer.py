@@ -66,6 +66,7 @@ stage shape established at U-RT-27..31.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -76,7 +77,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from harness_is.cross_process_ledger_lock import (
     cross_process_read_lock,
@@ -154,6 +155,13 @@ def _append_lock_for(path: Path) -> threading.Lock:
             lock = threading.Lock()
             _APPEND_LOCKS[key] = lock
         return lock
+
+
+@contextlib.contextmanager
+def _combined_sidecar_read_locks(thread_lock: threading.Lock, sidecar_path: Path) -> Any:
+    """Thread + cross-process read locks as one context (reader lock shape)."""
+    with thread_lock, cross_process_read_lock(sidecar_path):
+        yield
 
 
 def _sidecar_lock_for(path: Path) -> threading.Lock:
@@ -275,24 +283,36 @@ class RuntimeAuditLedgerWriter:
         tenant scope. The OD-computed `entry_hash` provides the deduplication
         key (scoped by tenant via the action_id prefix).
         """
+        # ONE ordered critical section per ledger path (codex round-4
+        # P1): timestamp sampling + sidecar write + IS append serialize
+        # together, so commit order always matches timestamp order.
+        with _append_lock_for(self.ledger_writer.handle.canonical_path):
+            return self._append_core(tenant_id, audit_entry, sidecar_locks_held=False)
+
+    def _append_core(
+        self,
+        tenant_id: str | None,
+        audit_entry: AuditLedgerEntry,
+        *,
+        sidecar_locks_held: bool,
+    ) -> WriteResult:
+        """Append core — caller holds the per-ledger append lock; when
+        `sidecar_locks_held`, the sidecar thread+process locks too (the
+        B-50 item (i) transaction path)."""
         recomputed = compute_entry_hash(audit_entry.payload)
         if recomputed != audit_entry.entry_hash:
             # Write-side mirror of the fold's content-integrity check (codex
             # round-27): a schema-valid entry whose stored hash does not match
             # its payload would persist fine, then wedge EVERY post-restart
-            # append when the fold rescans it. Production composers always
-            # compute the genuine hash; reject the inconsistent entry before
-            # anything (sidecar or IS ref) is written.
+            # append when the fold rescans it. In the core so the B-50
+            # transaction path is covered too.
             raise ValueError(
                 f"audit_entry fails content-integrity before write: stored "
                 f"entry_hash={audit_entry.entry_hash!r} but recomputed "
                 f"{recomputed!r} — refusing to persist an entry that would "
                 f"wedge the sidecar fold after restart"
             )
-        # ONE ordered critical section per ledger path (codex round-4
-        # P1): timestamp sampling + sidecar write + IS append serialize
-        # together, so commit order always matches timestamp order.
-        with _append_lock_for(self.ledger_writer.handle.canonical_path):
+        if True:
             action_id = self._action_id_for(tenant_id, audit_entry)
             # R-003: `procedural_tier_snapshot_ref` is left `None`-canonical here
             # (IS spec v1.3 §C-IS-05 §5.1). This append wraps pre-signed OD audit
@@ -324,7 +344,10 @@ class RuntimeAuditLedgerWriter:
             # every path idempotent (a retry after either crash window never
             # duplicates a row); the IS append remains the dedup authority for
             # the RESULT the caller sees.
-            self._append_sidecar_line_if_missing(tenant_id, audit_entry)
+            if sidecar_locks_held:
+                self._append_sidecar_line_if_missing_locked(tenant_id, audit_entry)
+            else:
+                self._append_sidecar_line_if_missing(tenant_id, audit_entry)
             # Bounded resample-retry (codex round-8 P1): this lock
             # serializes AUDIT appends, but ordinary `LedgerWriter.append`
             # F2/state writes to the SAME ledger do not take it — one can
@@ -558,9 +581,19 @@ class RuntimeAuditLedgerWriter:
         — the PR-A representation discipline), so `model_dump(mode="json")`
         round-trips losslessly.
         """
+        with self._sidecar_thread_lock, cross_process_write_lock(self._sidecar_path):
+            self._append_sidecar_line_if_missing_locked(tenant_id, audit_entry)
+
+    def _append_sidecar_line_if_missing_locked(
+        self, tenant_id: str | None, audit_entry: AuditLedgerEntry
+    ) -> None:
+        """Sidecar-append core — caller holds BOTH sidecar locks (B-50
+        item (i): the unlocked-inner shape a `tenant_transaction` composes
+        under one outer hold; POSIX flock is non-reentrant, so the core
+        must never reacquire)."""
         tag = self._tenant_tag(tenant_id)
         line = self._sidecar_line_for(tenant_id, audit_entry)
-        with self._sidecar_thread_lock, cross_process_write_lock(self._sidecar_path):
+        if True:
             if not self._sidecar_path.exists():
                 # Round-36 P1: creating a REPLACEMENT sidecar after the
                 # original disappeared would silently split history (old IS
@@ -789,6 +822,11 @@ class RuntimeAuditLedgerWriter:
         return reset_to_zero
 
     def read_full_entries_for_tenant(self, tenant_id: str | None) -> list[AuditLedgerEntry]:
+        return self._read_full_entries_core(tenant_id, sidecar_locks_held=False)
+
+    def _read_full_entries_core(
+        self, tenant_id: str | None, *, sidecar_locks_held: bool
+    ) -> list[AuditLedgerEntry]:
         """Tenant-scoped FULL-entry reader over the item-(e) sidecar.
 
         Rehydrates every persisted `AuditLedgerEntry` (payload +
@@ -843,7 +881,12 @@ class RuntimeAuditLedgerWriter:
         # Windows the cross-process lock is a no-op, so a verifier racing a
         # writer thread in one process needs this to never observe a
         # partially written record.
-        with self._sidecar_thread_lock, cross_process_read_lock(self._sidecar_path):
+        lock_ctx: Any = (
+            contextlib.nullcontext()
+            if sidecar_locks_held
+            else _combined_sidecar_read_locks(self._sidecar_thread_lock, self._sidecar_path)
+        )
+        with lock_ctx:
             # Validated fd (codex round-33 P1): the token map's SEEDING read
             # runs before its first append, so a plain path open here let a
             # pre-created FIFO hang span completion and a symlink supply
@@ -988,6 +1031,26 @@ class RuntimeAuditLedgerWriter:
             index.mtime_ns = post.st_mtime_ns
             return len(legacy)
 
+    @contextlib.contextmanager
+    def tenant_transaction(self, tenant_id: str | None) -> Any:
+        """Atomic tail-read + compose + append transaction — B-50 item (i).
+
+        Holds the FULL writer lock stack — the per-ledger append lock, the
+        sidecar thread lock, and the cross-process sidecar write flock —
+        across everything done inside the `with` block, so two processes
+        can no longer both read the same durable family tail and sign
+        different successors against one predecessor (the pre-B-50 residual
+        documented since PR B1 round 13). The yielded handle exposes
+        UNLOCKED-INNER variants (POSIX `flock` is non-reentrant across
+        separately opened descriptors — a plain outer hold around the
+        locking public methods would self-deadlock; codex round-6 on the
+        disposition leg). POSIX-only atomicity: the flock half is a win32
+        no-op per the documented B-45 platform posture.
+        """
+        with _append_lock_for(self.ledger_writer.handle.canonical_path):
+            with self._sidecar_thread_lock, cross_process_write_lock(self._sidecar_path):
+                yield _AuditWriterTenantTransaction(self, tenant_id)
+
     def read_for_tenant(self, tenant_id: str | None) -> list[StateLedgerEntry]:
         """Tenant-scoped reader (C-OD-21 §21.1 cross-tenant separation surface).
 
@@ -1017,6 +1080,33 @@ class RuntimeAuditLedgerWriter:
         entries = read_ledger(self.ledger_writer.handle)
         prefix = f"{self._ACTION_ID_PREFIX}:"
         return [e for e in entries if e.action_id.startswith(prefix)]
+
+
+class _AuditWriterTenantTransaction:
+    """Handle yielded by `RuntimeAuditLedgerWriter.tenant_transaction`.
+
+    Both operations assume the transaction's lock stack is HELD — they call
+    the writer's unlocked-inner cores and must never be used outside the
+    `with` block (the handle is deliberately private and unexported).
+    """
+
+    __slots__ = ("_tenant_id", "_writer")
+
+    def __init__(self, writer: RuntimeAuditLedgerWriter, tenant_id: str | None) -> None:
+        self._writer = writer
+        self._tenant_id = tenant_id
+
+    def read_full_entries(self) -> list[AuditLedgerEntry]:
+        # The handle is the writer's own private companion (same module);
+        # pyright's cross-class private-usage rule needs the explicit nod.
+        return self._writer._read_full_entries_core(  # pyright: ignore[reportPrivateUsage]
+            self._tenant_id, sidecar_locks_held=True
+        )
+
+    def append(self, audit_entry: AuditLedgerEntry) -> WriteResult:
+        return self._writer._append_core(  # pyright: ignore[reportPrivateUsage]
+            self._tenant_id, audit_entry, sidecar_locks_held=True
+        )
 
 
 @dataclass(frozen=True, slots=True)
