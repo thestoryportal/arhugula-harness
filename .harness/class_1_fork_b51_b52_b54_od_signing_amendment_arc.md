@@ -190,6 +190,12 @@ INCLUDING the leg-1 fifth segment if ratified, which is why B-54 must land joint
 same delta — and project `"DEPLOYMENT_BOUND"` → `key_period=0` exactly as signing does. Two contract
 requirements sharpened at filing codex round-1:
 
+- **Legacy-baseline identities are part of the verification INPUT** (round-23 P1): on a
+  `migrate_audit_sidecar`-upgraded ledger, `adopt_legacy_is_refs()` records baseline identities with NO
+  full entries and `read_full_entries_for_tenant()` skips that record — a verifier fed only the returned
+  `AuditLedgerEntry` sequence reports success while silently omitting the historical IS audit references.
+  The contract must cross-check the baseline identities against the authenticated cutover record and
+  report them explicitly (exempt / quarantined / UNVERIFIED with the nonzero outcome), never omit them.
 - **Absent-backend inspection at MTC is UNVERIFIED, not success** (round-15 P1): with no backend/key
   mapping supplied — today's `harness-inspect` default — the optional-`backend` shape would emit the
   existing hash/content success while checking ZERO signatures, presenting tampered signature metadata as

@@ -34,8 +34,9 @@
 #                            the fork doc is either OWED, or FILED and awaiting operator
 #                            ratification + the spec-apply pass (the row's summary says
 #                            which phase; a filed doc does NOT flip the status — only
-#                            ratified + applied spec deltas AND the corresponding Phase-6
-#                            plan deltas open the row for code).
+#                            ratified + applied spec deltas — plus the corresponding Phase-6
+#                            plan deltas where the change touches a plan-pinned contract —
+#                            open the row for code).
 #   registered_finding     — a real gap surfaced during another arc's review/build;
 #                            grounded against the spec (not skipped), and opens for BUILD
 #                            once grounding confirms a genuinely buildable slice or a live
@@ -1029,13 +1030,16 @@ items:
   title: Migration-CLI promotion into the spec-committed scripts inventory
   status: design_substrate_gated
   summary: 'B-47 disposition item (j): python -m harness_runtime.admin.migrate_audit_sidecar works
-    today; promoting it to [project.scripts] extends the runtime spec section 13.4 committed CLI
-    inventory. LOW urgency. Fork FILED 2026-07-17 via .harness/class_1_fork_b51_b52_b54_od_signing_amendment_arc.md
+    today; promotion = a `harness migrate-audit-sidecar` SUBCOMMAND under the existing flat harness
+    console-script namespace (round-22/23 of the filing: no new [project.scripts] entry -- dispatch
+    rides the committed harness_runtime.cli:main entry), recorded as a runtime spec section 13.4
+    inventory row. LOW urgency. Fork FILED 2026-07-17 via .harness/class_1_fork_b51_b52_b54_od_signing_amendment_arc.md
     (ratification-gate item 7): rides the B-51/B-52/B-54 arc''s Runtime v1.100 -> v1.101 rider as the
     one-row addition -- awaiting the same operator ratification.'
   close_out: 'Class 1 back-flow per section 4.3 (a spec-inventory revision IS a design-artifact
-    change): a one-row scripts-inventory addition riding the next runtime-spec delta + clearance
-    marker, then the pyproject entry; nothing blocks on it.'
+    change): a one-row section 13.4 inventory addition riding the B-51/B-52/B-54 arc''s Runtime
+    v1.101 rider + clearance marker, then the CLI subcommand implementation (no pyproject change);
+    nothing blocks on it.'
   council: 'no'
   heading: '### B-53 · Migration-CLI scripts-inventory promotion *(split from B-47 disposition,
     2026-07-17)*'
