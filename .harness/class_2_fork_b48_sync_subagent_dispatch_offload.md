@@ -79,10 +79,11 @@ positions precede the operator decision (round-2 P2), so both are named HERE:
 The positions AGREE on fail-fast + typed error + RuntimeConfig ownership and differ only on default sizing.
 **That one disagreement is settled HERE, not deferred (round-9 P1 — the default is part of the C-RT-03
 contract the operator ratifies, so leaving it to the apply leg would make the spec-writer invent it without
-authority): recommended default `sub_agent_dispatch_max_workers = 128`, sized in ACTIVE DISPATCH FRAMES
-(round-12 P2 — each parent worker stays BLOCKED while its descendants run, so the executor consumes one
-worker per active frame, not per root chain: a legitimate 3-wide × depth-4 hierarchy demands
-3+9+27+81 = 120 frames; 64 would reject it).** 128 accommodates that shape with headroom; deeper/wider
+authority): recommended default `sub_agent_dispatch_max_workers = 256`, sized in SHARED-BUDGET FRAMES
+under the §4 two-layer accounting (rounds 12/17/18 — each parent worker stays BLOCKED while its
+descendants run, and each active branch reserves TWO frames, one upstream CP + one inner dispatch: a
+legitimate 3-wide × depth-4 hierarchy holds 3+9+27+81 = 120 active pairs = 240 frames; 128 would
+fail-fast the very topology used to size it).** 256 accommodates that shape with headroom; deeper/wider
 topologies size the field to their own frame arithmetic (the config exists precisely because legitimate
 workloads vary), validated ≥ 1 at config load. The dyad's convening at the apply leg is thereby reduced to
 CONFIRMING this pre-resolved position (or surfacing a reasoned deviation back to the operator), not
@@ -219,9 +220,13 @@ caller-supplied ledger timestamp semantics without the authoritative IS contract
 `_run_fanout_to_completion`'s branch-plan execution under the capacity authority changes CP-owned
 concurrency/cardinality semantics (C-CP-25 §25.11) from unconditional concurrent execution to a typed
 fail-fast outcome above the cap — that half rides an explicit CP amendment, never Runtime authority alone;
-**the same rider registers the UNMATERIALIZED §25.11 delegation depth bound (round-17 P2 — "with depth"
-names no value and no carrier; `compose_child_workflow_runner` permits unbounded re-entry) for CP
-disposition: materialize it or formally delegate recursion capacity to the executor cap.**
+**the same rider resolves the UNMATERIALIZED §25.11 delegation depth bound (rounds 17/18 — "with depth"
+names no value and no carrier; `compose_child_workflow_runner` permits unbounded re-entry) with the
+policy DECIDED in this filing, not left to the apply pass: FORMALLY DELEGATE recursion capacity to the
+executor cap (the rider retires the unmaterialized phrase in favor of the single capacity authority —
+materializing a second, separate depth bound would recreate the two-authorities smell the filing rejects
+at option C). The alternative (materialize a CP depth bound) is exposed at §6 for the operator to
+override.**
 And (e) **Runtime
 riders for the §4 semantic changes themselves (round-9 P1)**: per-child pause/resume carrier isolation and
 the dispatch-time cancellation/join/effect-fence policy alter committed Runtime surfaces (C-RT-04
@@ -235,6 +240,9 @@ apply passes can share one Runtime version bump if the operator answers both gat
 
 Select the executor design: **B (custom grow-on-demand executor + configurable hard cap + fail-fast at the
 cap — recommended)** vs C (depth-aware bounded pool) vs A (keep the ratified blocking direct-call). The
+selection carries the filing-settled riders: default 256 shared-budget frames; recursion capacity FORMALLY
+DELEGATED to the executor cap (the §25.11 unmaterialized depth phrase retires — override available: direct
+the CP rider to materialize a separate depth bound instead). The
 C1/C9 council dyad convenes at the apply leg under B or C (the cap is a genuinely new capacity authority);
 the apply arc also defines the §4-item-2 cancellation semantics before any offload lands. May be answered
 in the same batch as the B-51/B-52/B-54 ratification gate (PR #1046).
