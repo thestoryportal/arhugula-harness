@@ -376,10 +376,12 @@ advisor() also flagged a second-order question genuinely out of B-23's scope: th
 - **Close-out steps.** Disk-backed index (stdlib `sqlite3` on the 3.12 baseline, or an offset-checkpointed snapshot); make the token map's tail-read+compose+append transactional — NOT a plain outer-lock hold (POSIX `flock` is non-reentrant across separately-opened descriptors; the inner reader/append reacquiring the sidecar lock would self-deadlock): unlocked inner variants under an outer transaction, or a lock-ownership API on the writer. POSIX-only (`_flock` is a win32 no-op; Windows closure rides B-45). **Council: no.**
 
 ### B-51 · Tenant-scope binding under deployment-scoped keys *(split from B-47 disposition, 2026-07-17)*
+- **Fork doc FILED 2026-07-17** at `.harness/class_1_fork_b51_b52_b54_od_signing_amendment_arc.md` — awaiting operator ratification.
 - **What it is.** B-47 disposition item (f): the §21.2.1 canonical message binds entry-hash/key_id/algo/period but NOT tenant identity — under a deployment-scoped signing key a signed entry could be re-presented under another tenant.
 - **Close-out steps.** Class 1 fork doc first (recommendation REVISED at codex round-3: the fifth canonical-message segment is the PRIMARY fix — `key_arns` has no tenant association and composers use fixed global key_ids, so a key-scope presence check would be a false guarantee; NO effective interim mitigation exists — composers select fixed global key_ids, so per-tenant mapping entries would never be used; cross-tenant replay stays unmitigated until the segment lands — and the segment itself needs a tenant-bearing signing API, since `sign_audit_entry`/`cp_audit_to_od_audit` receive no tenant today and the writer sees `tenant_id` only post-signing); implement on ratification. **Council: conditional** — C7 compliance vs C2 schema-minimalism at the fork leg.
 
 ### B-52 · Audit-signing fail-closed policy at MTC *(split from B-47 disposition, 2026-07-17)*
+- **Fork doc FILED 2026-07-17** at `.harness/class_1_fork_b51_b52_b54_od_signing_amendment_arc.md` — awaiting operator ratification.
 - **What it is.** B-47 disposition item (m): signing failures are typed + loudly surfaced (PR B2a) but dispatch stays fail-open — CP §28.10.4 invariant 2 is spec-committed, in tension with §21.2's signed-audit commitment at MULTI_TENANT_COMPLIANCE.
 - **Close-out steps.** Class 1 fork doc (recommendation recorded: mirror OD v1.8 §C-OD-28.2's operator-configurable default-fail-closed pattern — `audit_signing_fail_closed` flag, default ON at MTC). The delta is TWO-SPEC (codex round-4): §28.10.4 invariant 2 is CP-owned, so the validator-hook carve-out needs a CP amendment alongside the OD addendum (or preserve fail-open at that one hook — weaker, single-spec); implement on ratification. **Council: conditional** — C7 compliance vs C1/C9 reliability at the fork leg.
 
@@ -388,6 +390,7 @@ advisor() also flagged a second-order question genuinely out of B-23's scope: th
 - **Close-out steps.** One-row scripts-inventory addition folded into the next runtime-spec delta + the pyproject entry. **Council: no.**
 
 ### B-54 · Backend-aware audit signature verification API *(split from B-49 at the disposition leg, 2026-07-17)*
+- **Fork doc FILED 2026-07-17** at `.harness/class_1_fork_b51_b52_b54_od_signing_amendment_arc.md` — awaiting operator ratification.
 - **What it is.** `verify_hash_chain_integrity` checks only unkeyed content hashes + links — recomputable by a ledger-rewriting attacker. The production `SigningBackend.verify` path (real KMS verification of persisted `signature_attrs`) has NO consumer, and §21.2.1 explicitly leaves verification out of scope, so adding the API is spec surface. Without it, MTC tamper-evidence stops at hash-chain level.
 - **Close-out steps.** Route with the B-51/B-52 fork legs (one OD amendment arc can carry all three): specify the verification contract (per-entry backend verify over the canonical message, placeholder handling, failure taxonomy), then implement + wire into B-49's per-family unit and `harness-inspect`. **Council: conditional** — C7 compliance vs C9 availability if verification is made blocking anywhere.
 

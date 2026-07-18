@@ -974,8 +974,8 @@ items:
     presence check would be a false guarantee). NO EFFECTIVE INTERIM MITIGATION EXISTS (codex
     round-10): composers select fixed global key_ids, so distinct per-tenant mapping entries would
     never be used -- cross-tenant replay under a deployment-scoped key remains unmitigated until the
-    message segment lands or tenant-aware key selection is built. Class 1 fork doc owed before any
-    code change.'
+    message segment lands or tenant-aware key selection is built. Class 1 fork doc FILED
+    2026-07-17 at .harness/class_1_fork_b51_b52_b54_od_signing_amendment_arc.md (leg 1) -- awaiting operator ratification.'
   close_out: 'Author the Class 1 fork doc with the revised recommendation; on ratification land the
     canonical-message segment at the next OD amendment arc (byte-compat-scoped per the B-22/B-31
     precedents). The segment needs tenant identity AVAILABLE AT SIGNING (codex round-16): today
@@ -994,7 +994,8 @@ items:
     v1.8 section C-OD-28.2''s operator-configurable default-fail-closed pattern via an
     audit_signing_fail_closed flag, default ON at MTC. TWO-SPEC fork (codex rounds 4/8): the OD
     addendum AND a CP amendment (section 28.10.4 invariant 2 is CP-owned) -- or the weaker single-spec
-    alternative keeping the validator hook fail-open. Class 1 fork doc owed.'
+    alternative keeping the validator hook fail-open. Class 1 fork doc FILED 2026-07-17 at
+    .harness/class_1_fork_b51_b52_b54_od_signing_amendment_arc.md (leg 2) -- awaiting operator ratification.'
   close_out: 'Author the Class 1 fork doc; on ratification add the flag + consult it at ALL TEN
     surfacing sites -- the six fn-internal loud-surface handlers AND the four offload-boundary
     saturation handlers (llm/tool/webhook/hitl outer catches, codex round-6) -- or centralize the
@@ -1028,7 +1029,8 @@ items:
     production SigningBackend.verify path (real KMS verification of persisted signature_attrs,
     key/period handling, legacy-placeholder semantics) has NO consumer and section 21.2.1 explicitly
     leaves verification out of scope -- so adding the verification API is spec surface. Without it the
-    MTC tamper-evidence story stops at hash-chain level.'
+    MTC tamper-evidence story stops at hash-chain level. Class 1 fork doc FILED 2026-07-17 at
+    .harness/class_1_fork_b51_b52_b54_od_signing_amendment_arc.md (leg 3) -- awaiting operator ratification.'
   close_out: 'Route with the B-51/B-52 fork legs (one OD amendment arc can carry all three): specify
     the verification contract (per-entry backend verify over the canonical message, placeholder
     handling, failure taxonomy), then implement the verifier + wire into B-49''s per-family unit and
