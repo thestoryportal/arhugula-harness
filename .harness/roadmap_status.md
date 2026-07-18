@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `cc76fcc1c7ee` |
+| `workspace_state_hash` | `e5fc8c6b04c6` |
 | `last_refreshed` | 2026-07-17T00:00:00Z |
-| `git_head` | `386660fc` —  |
+| `git_head` | `0ffe14b6` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 91 |
 
@@ -24,7 +24,7 @@
 
 **Frontier.** R-FS-1 Tier-1 is closed. The frozen order is complete (11/11), the standalone `B-*` register derives **69 closed / 0 forward / 0 gated / 4 resolved**, `closure_gate.py` G1.1 is **0+0**, automatable Tier-1 predicates pass, and manual G1.4/G1.7/G1.8 sign-off is recorded at `.harness/r-fs-1-tier1-manual-signoff.json`.
 
-**Current next action.** **PR #1038 MERGED — B-47 CLOSED (composition root landed end-to-end at #1033/#1034/#1036; design cluster dispositioned at `.harness/b-47-pr-b2-design-disposition-v1.md`).** The frontier is now the two OPEN register rows: **B-49** (per-family audit chain verifier — producer-aware policy: chain verification ONLY for the redaction-token family discriminated by `audit.redaction_token.*` namespace keys; per-entry CONTENT-HASH checks for cost/HITL/dispatch which emit genesis predecessors; backend signature verification is OUT of scope → B-54) and **B-50** (sidecar scale engineering — disk-backed membership index via stdlib sqlite3 or offset-checkpointed snapshot; POSIX transactional token-map atomicity via unlocked-inner variants or a lock-ownership API, NOT a plain outer-lock hold). Fork-first arcs (Class 1 back-flow per §4.3 before any code): B-51 (tenant binding — fifth canonical-message segment + tenant-bearing signing API), B-52 (fail-closed policy — two-spec OD+CP fork), B-54 (backend signature verification API; rides the same OD amendment arc), B-53 (CLI promotion, low), B-48 (Class 2 fork revision of the U-RT-60 sync-inner reading), B-33 (Class 1 fork first). Register: 55 items / 2 open / 6 design_substrate_gated / 38 closed. **Standing note:** operator has granted forward-work merge permission without per-instance HIL, conditioned on CI fully passing green before any merge, broadened to cover this autonomous loop's PRs — applied through PR #1038.
+**Current next action.** **PR #1038 MERGED — B-47 CLOSED (composition root landed end-to-end at #1033/#1034/#1036; design cluster dispositioned at `.harness/b-47-pr-b2-design-disposition-v1.md`).** **PR #1040 MERGED — B-49 CLOSED.** The frontier is now the ONE open register row: **B-50** (sidecar scale engineering — disk-backed membership index via stdlib sqlite3 or offset-checkpointed snapshot; POSIX transactional token-map atomicity via unlocked-inner variants or a lock-ownership API, NOT a plain outer-lock hold). Fork-first arcs (Class 1 back-flow per §4.3 before any code): B-51 (tenant binding — fifth canonical-message segment + tenant-bearing signing API), B-52 (fail-closed policy — two-spec OD+CP fork), B-54 (backend signature verification API; rides the same OD amendment arc), B-53 (CLI promotion, low), B-48 (Class 2 fork revision of the U-RT-60 sync-inner reading), B-33 (Class 1 fork first). Register: 55 items / 2 open / 6 design_substrate_gated / 38 closed. **Standing note:** operator has granted forward-work merge permission without per-instance HIL, conditioned on CI fully passing green before any merge, broadened to cover this autonomous loop's PRs — applied through PR #1038.
 
 **Recurring lanes** continue on cadence: `R-600-pattern-bake-in-sweep` (cadence-8 closed this refresh, PD-8 promoted; next due ~10 PRs out) and `R-IF-roadmap-refresh`. Out-of-family review continues as a codified default gate, not as an open roadmap arc.
 
@@ -56,11 +56,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| 1040 | 2026-07-17 | B-49 merged — producer-aware per-family audit verification (chain-verify redaction family via namespace keys; content-hash checks for genesis-prior families; deeply immutable report; real-path sidecar witness); 3 codex rounds + merge-gate 3/3 round-1; B-49 row closed; frontier = B-50 (last open row) |
 | 1038 | 2026-07-17 | B-47 design-disposition leg merged — Tier-5/SQLite grounding corrected (ADR-D5 v1.4 JSONL-canonical), B-47 CLOSED, remainders split: B-49 per-family verifier (open), B-50 sidecar scale engineering (open), B-51/B-52/B-54 Class 1 spec-delta forks, B-53 CLI promotion; 17 codex rounds |
 | 1036 | 2026-07-17 | B-47 PR B2a merged — rest of (c) signing threading into every production audit composer + (d) C9 BreakerGuardedSigningBackend + bootstrap key-id validation + daemon audit-offload executor (ack/join/detach/reclaim/saturation hardening) + item-(k) witnesses; 18 codex rounds + 2-round merge-gate (USE-half witness discharge); B-48 + item (m) registered; remainder = PR B2 design cluster (e)-(j)+(m) |
 | 1034 | 2026-07-17 | B-47 PR B1 merged — audit-signing composition root (config+factory+stage-4 threading) + full-entry durable sidecar; 49 codex rounds, merge-gate 3/3 APPROVE, items (e)-(k) registered; remainder = PR B2 (rest of (c), (d) C9 breaker, (e)-(k) persistence-substrate design cluster) |
 | 1033 | 2026-07-16 | feat(od): B-47 PR A -- OD spec v1.33 §21.2.1 SigningBackend seam on the production audit-signing path. Grounding found the real production signing path is the OD sign_audit_entry (placeholder), not the CP-side B-22 seam (zero callers); bundled-absorption delta + clearance marker land the OPTIONAL backend seam (absent path byte-preserved) + CXA converter and redaction-token writer passthroughs + shared immutable width table. 6-round codex chain (2 fixed inline, 2 verified+registered as B-47 close-out items e/f, 2 clean); merge-gate round-1 test-witness BLOCK (self-agreeing canonical-message witness) discharged at round 2 with a literal-bytes witness, reviewer-re-probed M1/M2/M3; 2708 tests green; B-47 remains registered_finding with close-out (a)-(f) = PR B composition root |
-| 1032 | 2026-07-16 | fix(cp): B-34 signature-representation enforcement at the C-CP-20 §20.2.1 seam -- both registered gaps closed now that B-36 supplies a real backend: reversible base64 serializer/validator on CPSignedAuditLedgerEntry.audit_signature_value (JSON round-trip lossless for real signature bytes; non-canonical spellings rejected per codex round-1 P2) + per-algorithm byte-length enforcement on write (fail-loud) and read (pre-backend SIGNATURE_MISMATCH) paths, ecdsa-p256 pinned to fixed-width raw r||s foreclosing DER by contract. 7 new mutation-probed witnesses; 2-round codex convergence; 3-lens merge-gate all-APPROVE; forward register now 37 closed / 7 registered_finding |
 ---
 
 ---
