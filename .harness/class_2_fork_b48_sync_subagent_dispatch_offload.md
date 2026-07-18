@@ -112,7 +112,12 @@ inventing the number.
    AFTER the child returns — on SUCCESS/DRAINED, and from its exception/FAILED/PAUSED paths — so a
    tripped fence must also suppress those post-child `_compose_and_persist_audit` writes (or the writers
    are wrapped job-wide), else entries land after `StepDispatchTimeoutError` despite the guarantee.**
-   Witness: no child effects land after the failure surfaces.
+   **Guarantee stated honestly (round-14 P1): the fence stops every operation NOT YET STARTED — it cannot
+   abort a synchronous append or external call the worker is already inside, which may complete after the
+   error surfaces. The `worker_draining_under_fence` disposition therefore means
+   AMBIGUOUS-EFFECTS / DO-NOT-RETRY (the at-most-once discipline): the step is non-retryable until the
+   drain completes and the join reports what actually landed.** Witness: no NEW child effects begin after
+   the failure surfaces, and a drained-under-fence step is not retried.
 3. **Child-workflow facade bridging** — the sync driver's loop-bridge (`run_coroutine_threadsafe` shape)
    must be exercised from a WORKER thread with the parent awaiting off-loop; witness the full
    parent→child→grandchild chain.
@@ -156,7 +161,13 @@ inventing the number.
    stage 5 hands the SAME `ctx.resume_context_holder` to every HITL composer and `dispatch()` does an
    unkeyed `consume_and_clear()` with no cross-task atomicity — a re-dispatched sibling could consume an
    APPROVE/EDIT/REJECT intended for the paused child. Per-child/per-run resume-context isolation + a
-   targeted concurrent-resume witness are required alongside the pause-flag isolation.**
+   targeted concurrent-resume witness are required alongside the pause-flag isolation. This is exactly
+   `B-39`'s still-gated CP design question (round-14 P1 — the branch-unique one-shot response threading
+   through CP's `ResumeContext`/driver is UNDESIGNED per that register row): **B-39 is an explicit
+   DEPENDENCY of this apply arc's fan-out-resume half, carrying its own CP spec/plan back-flow — B-48
+   does not absorb that CP decision under Runtime authority.** Until B-39 resolves, concurrent siblings
+   with durable-HITL gates remain restricted (the pre-offload serialization masked this; the apply arc
+   may sequence gated siblings as an interim documented constraint).**
 7. **Timestamp-ordering interaction** — the B2a append-lock discipline covers the audit append path, but
    NOT the branch-drain path (filing codex round-4 P1): `drain_branch_buffers` samples `drain_timestamp`
    BEFORE the IS `_WRITE_LOCK`, so two fan-out children draining concurrently can append in inverted
