@@ -10,9 +10,10 @@ v1.33 clearance marker at `.harness/clearance/spec-operational-discipline-v1-33-
 authority — pointer refresh owed at the next CLAUDE.md maintenance PR, not this filing).
 
 **Why one filing:** all three legs amend the same C-OD-21 signing surface introduced/refined at OD v1.33
-§21.2.1; one OD amendment arc (v1.33 → v1.34, plus a bounded CP delta rider for leg 2) can carry all
-three coherently, and leg 3's verification API must reconstruct whatever message shape leg 1 ratifies — they
-interlock. **CP delta versioning (filing codex round-5 P1): the CP head is `Spec_Control_Plane_v1_100.md`
+§21.2.1; one OD amendment arc (v1.33 → v1.34, plus a bounded CP delta rider carrying BOTH CP-owned halves —
+leg 1's §13.5.1 tenant-bearing converter-signature amendment AND leg 2's §28.10.4 carve-out — plus a Runtime
+rider, see the ratification gate) can carry all three coherently, and leg 3's verification API must
+reconstruct whatever message shape leg 1 ratifies — they interlock. **CP delta versioning (filing codex round-5 P1): the CP head is `Spec_Control_Plane_v1_100.md`
 (cleared 2026-07-15) — §28.10.4's CITE stays `v1.24` (last substantive definition, per the delta-baseline
 §-cite convention), but the amendment itself is authored as CP v1.100 → v1.101; every earlier "v1.24 →
 v1.25" phrasing in this filing is corrected to that.**
@@ -114,7 +115,15 @@ signing failure after a prewarm provider call leaves that call unaudited while t
 must specify the MTC posture for prewarm/keepalive explicitly: disable prewarm at MTC under fail-closed,
 propagate its signing failure through the prewarm boundary, or another mechanism preventing unaudited
 provider calls — silence here would leave a fail-open bypass exactly where leg 1 newly identifies a signing
-path. Delta shape: OD v1.34 addendum (policy +
+path.
+
+**And the retry-classification interaction (filing codex round-10 P1).** Once fail-closed propagation is
+on, a KMS signing failure AFTER a successful provider response reaches
+`RetryBreakerFallbackDispatcher._run_per_candidate_attempts`, whose `_classify_provider_exception`
+currently maps the signing failure types to `TRANSIENT_RETRY` — re-calling the provider for an
+already-succeeded response (a duplicate external side effect) and polluting breaker/fallback state. The
+delta must classify audit-signing failures as TERMINAL and non-retryable once the external side effect has
+occurred. Delta shape: OD v1.34 addendum (policy +
 flag + site enumeration) **plus** CP v1.100 → v1.101 amending §28.10.4 (cite: v1.24, last substantive definition) invariant 2 with the audit-signing
 carve-out. The weaker single-spec alternative (fail-open preserved at the one CP-owned hook, fail-closed at
 the other nine sites) is coherent but leaves the compliance tier's weakest link at the validator hook —
