@@ -53,13 +53,13 @@
 
 snapshot:
   total: 55
-  open: 2
+  open: 1
   design_substrate_gated: 6
   registered_finding: 7
   operator_gated: 1
   held: 1
-  closed: 38
-  identity_digest: a6a9a6227a6c952a
+  closed: 39
+  identity_digest: 503b90a10153ea57
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -918,7 +918,8 @@ items:
     out-of-family Codex round-2, 2026-07-17)*'
 - id: B-49
   title: Per-family audit chain verifier
-  status: open
+  status: closed
+  pr: 'this PR (b-49-per-family-audit-verifier branch)'
   summary: 'B-47 disposition item (h): a tenant''s sidecar entries interleave independent OD chain
     families (CXA v2.10 section 0.3 action-id prefixes discriminate); running verify_hash_chain_integrity
     over the raw per-tenant sequence fails by construction. PRODUCER-AWARE (codex round-3 on the
