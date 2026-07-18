@@ -79,7 +79,14 @@ contradicts the tier's audit posture. The tension is TWO-SPEC (disposition codex
 
 Mirror the §28.2 precedent: an `audit_signing_fail_closed` RuntimeConfig flag, per-persona default — ON at
 MULTI_TENANT_COMPLIANCE, OFF elsewhere (persona-tier discipline per workspace CLAUDE.md §10.2) — consulted at
-ALL TEN sites (or centralized immediately ahead of every catch). Delta shape: OD v1.34 addendum (policy +
+ALL TEN sites (or centralized immediately ahead of every catch). **Plus the eleventh path the ten-site
+enumeration misses (filing codex round-2): `AuditLedgerRedactionTokenMap.append` signs via
+`compose_redaction_token_audit_entry` directly (`redaction_token_audit_map.py:112-123`) and
+`RedactionSpanProcessor.on_end` catches only `KeyError`/`TypeError` (`redaction_span_processor.py:300-314`)
+— a KMS failure there propagates today (de-facto fail-closed) and would BYPASS the flag entirely. The delta
+must either bring this path under the flag or declare it unconditionally fail-closed in the policy
+enumeration; recommend the latter (raw redaction values must never persist against an unsigned row — the
+path's current propagate behavior is the correct posture, so declare it rather than soften it).** Delta shape: OD v1.34 addendum (policy +
 flag + site enumeration) **plus** CP v1.24 → v1.25 amending §28.10.4 invariant 2 with the audit-signing
 carve-out. The weaker single-spec alternative (fail-open preserved at the one CP-owned hook, fail-closed at
 the other nine sites) is coherent but leaves the compliance tier's weakest link at the validator hook —
@@ -126,8 +133,11 @@ requirements sharpened at filing codex round-1:
 
 ### Council
 
-None needed — mechanical mirror of two committed precedents (register: council 'no' equivalent; the seam
-shape is settled by B-22).
+Conditional, preserved verbatim from the register rows (filing codex round-2 — this filing does NOT resolve
+whether verification may ever be BLOCKING): the recommended §21.2.2 contract is a non-blocking verify API
+(seam shape settled by the B-22 precedent — no council needed for that half), but IF ratification makes
+verification blocking anywhere (e.g. read-path enforcement), the C7-compliance ⊥ C1/C9-reliability dyad
+convenes at the apply leg before that half lands.
 
 ---
 
@@ -135,9 +145,14 @@ shape is settled by B-22).
 
 Per §4.3 the design-substrate amendments halt here. The operator ratifies, in one decision:
 
-1. **Leg 1 option 2** (fifth segment + tenant-bearing signing API rider) — or names an alternative.
-2. **Leg 2 two-spec shape** (OD flag + CP §28.10.4 carve-out) vs the weaker single-spec alternative.
-3. **Arc bundling** — one OD v1.33 → v1.34 delta carrying legs 1+3, with the CP v1.24 → v1.25 rider for leg 2
+1. **Leg 1 option 2** (fifth segment + tenant-bearing signing API rider, incl. the redaction-map path) — or
+   names an alternative.
+2. **Leg 2 two-spec shape** (OD flag + CP §28.10.4 carve-out, redaction path declared unconditionally
+   fail-closed) vs the weaker single-spec alternative.
+3. **Leg 3 acceptance** (filing codex round-2 — leg 3 needs its own explicit ratification, not a ride-along):
+   the new C-OD-21 §21.2.2 backend verification API with its two contract requirements (tenant scope as
+   verifier input; cutover-gated legacy exemption) and its NON-BLOCKING default — or an alternative/defer.
+4. **Arc bundling** — one OD v1.33 → v1.34 delta carrying legs 1+3, with the CP v1.24 → v1.25 rider for leg 2
    (recommended), vs splitting.
 
 On ratification: spec-writer apply pass (with the two dyadic council convenings at the apply leg), clearance
