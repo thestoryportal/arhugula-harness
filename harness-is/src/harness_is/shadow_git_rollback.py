@@ -111,7 +111,9 @@ def rollback_to_checkpoint(
     # is held for the whole section and active file-lock holders are
     # waited out first; plain write_lock rides the old inode and loses
     # exclusion the moment the inode swaps.
-    with ledger_write_lock(), cross_process_replace_lock(ledger_path):
+    # Lock order: cross-process first, then the in-process write lock
+    # (the B-46 round-6 single global order — see state_ledger_write).
+    with cross_process_replace_lock(ledger_path), ledger_write_lock():
         ledger_bytes = ledger_path.read_bytes() if ledger_path.exists() else None
 
         checkout = _git(repository_root, "checkout", shadow_ref, "--", ".")

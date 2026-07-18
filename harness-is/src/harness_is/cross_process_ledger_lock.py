@@ -367,7 +367,14 @@ def cross_process_replace_lock(canonical_path: Path) -> Generator[None, None, No
         # would otherwise append concurrently and have its rows
         # overwritten by the rewrite).
         try:
-            legacy_fd = _acquire_legacy_sidecar_if_present(canonical_path, exclusive=True)
+            try:
+                legacy_fd = _acquire_legacy_sidecar_if_present(canonical_path, exclusive=True)
+            except BaseException:
+                # Round-6 P2: a legacy-acquisition failure must not leave
+                # the canonical file lock held until process restart.
+                fcntl.flock(file_fd, fcntl.LOCK_UN)
+                os.close(file_fd)
+                raise
             try:
                 yield
             finally:
