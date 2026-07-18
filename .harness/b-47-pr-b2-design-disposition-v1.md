@@ -53,9 +53,11 @@ register text is corrected in the same PR as this doc.
 **Now (this PR):** this doc + register corrections (item (g) premise fixed; items re-labeled per the
 table; (h) opened as the next buildable impl item).
 
-**Next impl iterations (Claude-buildable, no gate):** (h) per-family verifier unit; (g) disk-backed
-index; (i) lock-scope widening in the token map. Plus B-48 (its own registered fork-revision arc) and
-B-33 (Class 1 fork leg).
+**Next impl iterations (Claude-buildable, no gate):** B-49 (per-family verifier, content-hash
+policy) and B-50 (disk-backed index; transactional token-map atomicity per the unlocked-inner shape).
+
+**Fork-first arcs (NOT direct-build — their fork docs precede any code, per §4.3):** B-48 (Class 2
+fork revision of the U-RT-60 direct-call reading) and B-33 (Class 1 fork doc first).
 
 **Design-phase legs (fork docs → operator ratification per §4.3):** (f) and (m) — each gets a Class 2
 fork doc with the recommendation above when its leg opens; (j) rides the next runtime-spec delta.

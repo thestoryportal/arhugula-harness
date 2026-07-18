@@ -823,8 +823,11 @@ items:
     .harness/b-47-pr-b2-design-disposition-v1.md section 0): the earlier phrase claiming section 21.2
     carries a hash-chained-SQLite storage commitment was an over-reading -- section 21.2 commits the
     Tier-5 durability CLASS (ADR-D1 v1.2 identifies Tier-5 as the F2 state-ledger class) plus
-    hash-chain/signature properties, naming NO storage engine; the spec sqlite references are Tier-3
-    trace ring-buffers. JSONL-vs-SQLite is impl discretion, NOT a spec fork; (g) is plain
+    hash-chain/signature properties, naming NO storage engine; ADR-D5 v1.4 reclassified its earlier
+    audit-ledger SQLite schema as a NONCANONICAL DEFERRED model and committed JSONL-via-IS-composition
+    as canonical (OD v1.31 completed the reconciliation); the remaining spec sqlite references are the
+    Tier-3 trace ring-buffers, a separate data class. JSONL-vs-SQLite is impl discretion, NOT a spec
+    fork -- a SQLite migration would itself reopen a settled ADR commitment; (g) is plain
     performance engineering; (h)
     partitions chain verification by producer family (out-of-family Codex round-30 on PR B1) -- a
     per-tenant sidecar entry set interleaves INDEPENDENT OD chain families (the CXA section 0.3 action-id
