@@ -43,15 +43,26 @@ Wrapping the sync inner in an executor is not free:
 | # | Executor design | Assessment |
 |---|---|---|
 | A | Keep the direct call (status quo) | Rejected — seconds-long loop stalls at every sub-agent gate, now plus KMS latency; single-workflow deployments mask it, MTC/daemon deployments do not |
-| B | **Custom grow-on-demand dispatch executor with a CONFIGURABLE hard cap + fail-fast** — a thread is created when no free worker exists (idle workers reused), threads named + join-on-shutdown mirroring the B2a audit-executor lifecycle; a RuntimeConfig ceiling (generous default) is a SAFETY VALVE: at the cap, dispatch fails FAST with a typed error — never queues (queueing re-creates the recursive deadlock) | **RECOMMENDED** — deadlock-free under arbitrary `SUB_AGENT_DISPATCH` recursion below the cap, resource-exhaustion-bounded above it, loud at the boundary. Filing codex round-1 P1 grounded the constraint honestly: NO committed recursion bound exists today (`StepExecutionContext.sub_agent_descent` is a BOOLEAN, not a depth counter; the cap-of-3 governs only HIERARCHICAL_DELEGATION direct children; `compose_child_workflow_runner` documents unbounded stack depth), and stock `ThreadPoolExecutor` has NO unbounded mode (`max_workers=None` = bounded default) — so the executor must be custom, and its cap is a genuinely NEW capacity authority |
-| C | Depth-aware bounded executor (per-depth accounting, reject/queue beyond depth budget) | Heavier machinery for the same fail-fast boundary; per-depth accounting only pays off if a depth-shaped policy (deeper = scarcer) is actually wanted — the flat cap of B is simpler and equally loud |
+| B | **Custom grow-on-demand dispatch executor with a CONFIGURABLE hard cap + fail-fast** — a thread is created when no free worker exists (idle workers reused), threads named; a RuntimeConfig ceiling (generous default) is a SAFETY VALVE: at the cap, dispatch fails FAST with a typed error — never queues (queueing re-creates the recursive deadlock). Lifecycle defined on its OWN terms (round-2 P2 — the B2a audit executor is NOT a join-on-shutdown precedent: `_DaemonThreadAuditExecutor` deliberately runs daemon workers with no shutdown API, and `run_audit_off_loop` joins per-job on cancellation only): daemon worker threads + bounded per-DISPATCH join on cancellation (the `run_audit_off_loop` per-job-join shape), and a drain-with-deadline at shutdown that must NOT block on workers currently bridged into the event loop | **RECOMMENDED** — deadlock-free under arbitrary `SUB_AGENT_DISPATCH` recursion below the cap, resource-exhaustion-bounded above it, loud at the boundary. Filing codex round-1 P1 grounded the constraint honestly: NO committed recursion bound exists today (`StepExecutionContext.sub_agent_descent` is a BOOLEAN, not a depth counter; the cap-of-3 governs only HIERARCHICAL_DELEGATION direct children; `compose_child_workflow_runner` documents unbounded stack depth), and stock `ThreadPoolExecutor` has NO unbounded mode (`max_workers=None` = bounded default) — so the executor must be custom, and its cap is a genuinely NEW capacity authority |
+| C | Depth-aware bounded executor (per-depth accounting; beyond-budget dispatch must FAIL FAST or draw on RESERVED per-depth capacity — round-2 P1: QUEUEING is disallowed in any variant, since a queued descendant whose parents hold every worker is exactly the §2 deadlock) | Heavier machinery for the same fail-fast boundary; per-depth accounting only pays off if a depth-shaped policy (deeper = scarcer) is actually wanted — the flat cap of B is simpler and equally loud |
 
 **Council note (register: conditional — C1 orchestration ⊥ C9 reliability) — condition MET.** The filing's
 first draft claimed the depth bound already existed; codex round-1 P1 refuted that (boolean descent flag,
 delegation-only cap, documented unbounded stack). A genuine recursion-capacity question therefore EXISTS —
-whose authority is the cap, what default, fail-fast semantics at the boundary — and the **C1 ⊥ C9 dyad
-convenes at the apply leg regardless of the option selected** (it owns the cap's default + the fail-fast
-error's interaction with the orchestration contracts).
+whose authority is the cap, what default, fail-fast semantics at the boundary. Per §13.4 the voices'
+positions precede the operator decision (round-2 P2), so both are named HERE:
+
+- **C1 (orchestration):** the cap must never silently starve legitimate descent below its ceiling; a cap
+  breach must surface as a TYPED orchestration error the driver/topology machinery can attribute to the
+  dispatch step (not a generic executor error), so the workflow fails at the step that overflowed, with
+  the descent chain in the message.
+- **C9 (reliability):** the host needs a hard ceiling with a conservative-but-generous default; a breach
+  is a misconfigured workload or runaway recursion and must be LOUD and immediate — no queueing, no
+  best-effort degradation; the ceiling belongs in RuntimeConfig where operators already own capacity.
+
+The positions AGREE on fail-fast + typed error + RuntimeConfig ownership and differ only on default sizing
+— a narrow question the **C1 ⊥ C9 dyad settles at the apply leg** (it does not change the B-vs-C selection
+the operator makes here, so the selection is safe to take now).
 
 ## §4 Verification obligations (the apply arc's acceptance criteria)
 
