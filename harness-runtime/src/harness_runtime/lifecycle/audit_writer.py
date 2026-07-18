@@ -120,6 +120,7 @@ class _SidecarMembershipIndex:
         "legacy_exempt",
         "mtime_ns",
         "offset",
+        "prefix_hash",
         "redaction_tails",
         "unsnapshotted",
     )
@@ -140,6 +141,16 @@ class _SidecarMembershipIndex:
         # Index mutations (rows folded or appended) since the on-disk
         # snapshot was last written — the B-50 item (g) write cadence.
         self.unsnapshotted: int = 0
+        # Running SHA-256 over the folded sidecar bytes [0:offset] (codex
+        # round-5 P1 on the item-(g) landing): persisted in the snapshot as
+        # `prefix_digest` and re-derived by a raw-byte streaming read at
+        # adoption, binding the cache to the AUTHORITATIVE bytes it vouches
+        # for — silent bit rot in the folded prefix (size/inode/mtime
+        # intact) would otherwise pass adoption's metadata checks and let a
+        # legitimate replay NOOP against a digest computed from the
+        # pre-rot row. Maintained incrementally (O(1) amortized per
+        # append), so snapshot writes never re-read history.
+        self.prefix_hash = hashlib.sha256()
 
 
 def _has_redaction_namespace_keys(entry: AuditLedgerEntry) -> bool:
@@ -343,6 +354,10 @@ class RuntimeAuditLedgerWriter:
             "digests": [[tag, entry_hash, d] for (tag, entry_hash), d in index.digests.items()],
             "legacy_exempt": sorted([tag, entry_hash] for tag, entry_hash in index.legacy_exempt),
             "redaction_tails": index.redaction_tails,
+            # Binds the cache to the AUTHORITATIVE bytes it vouches for
+            # (codex round-5 P1): adoption re-derives this by a raw-byte
+            # streaming read of sidecar[0:offset] and discards on mismatch.
+            "prefix_digest": index.prefix_hash.hexdigest(),
         }
         payload = {"body": body, "self_digest": _snapshot_body_digest(body)}
         encoded = json.dumps(payload, separators=(",", ":")).encode("utf-8")
@@ -434,9 +449,11 @@ class RuntimeAuditLedgerWriter:
 
         Discard-on-any-anomaly: parse failure, self-digest mismatch, shape
         violation, inode change (sidecar replaced since the snapshot),
-        offset past the current size (sidecar truncated since), or a
+        offset past the current size (sidecar truncated since), a
         same-size mtime drift (in-place mutation — the `same_size_mutated`
-        mirror) all silently fall back to the full refold. Silence is the
+        mirror), or a covered-prefix digest mismatch (raw sidecar bytes
+        diverge from what the snapshot vouches for — codex round-5 P1) all
+        silently fall back to the full refold. Silence is the
         correct posture here, not a swallowed failure: every discard
         degrades to the exact behavior that existed before this cache, and
         the anomalies are EXPECTED states (a snapshot goes stale the moment
@@ -487,6 +504,31 @@ class RuntimeAuditLedgerWriter:
                 (str(tag), str(entry_hash)) for tag, entry_hash in body["legacy_exempt"]
             }
             redaction_tails = {str(tag): str(tail) for tag, tail in body["redaction_tails"].items()}
+            prefix_digest = str(body["prefix_digest"])
+            # Bind the cache to the AUTHORITATIVE bytes it vouches for
+            # (codex round-5 P1): metadata checks alone accept silent bit
+            # rot in the folded prefix (size/inode/mtime intact), letting a
+            # legitimate replay NOOP against a digest computed from the
+            # pre-rot row. A raw-byte streaming read of sidecar[0:offset]
+            # restores the cold-refold's detection parity WITHOUT the
+            # expensive part (no JSON parse, no schema validation, no
+            # per-row re-serialization) — mismatch discards the snapshot,
+            # and the forced full refold then fails loud on the rotted row.
+            prefix_hash = hashlib.sha256()
+            if offset > 0:
+                fd = self._open_sidecar_validated(os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+                try:
+                    remaining = offset
+                    while remaining > 0:
+                        chunk = os.read(fd, min(remaining, 1 << 20))
+                        if not chunk:
+                            return
+                        prefix_hash.update(chunk)
+                        remaining -= len(chunk)
+                finally:
+                    os.close(fd)
+            if prefix_hash.hexdigest() != prefix_digest:
+                return
         except (OSError, ValueError, KeyError, TypeError):
             # json.JSONDecodeError is a ValueError; ELOOP (planted symlink)
             # and permission errors are OSError — all are discard-anomalies,
@@ -499,6 +541,7 @@ class RuntimeAuditLedgerWriter:
         index.offset = offset
         index.inode = inode
         index.mtime_ns = mtime_ns
+        index.prefix_hash = prefix_hash
         index.unsnapshotted = 0
 
     @classmethod
@@ -936,6 +979,7 @@ class RuntimeAuditLedgerWriter:
         if _has_redaction_namespace_keys(audit_entry):
             self._sidecar_index.redaction_tails[tag] = audit_entry.entry_hash
         self._sidecar_index.offset += len(encoded)
+        self._sidecar_index.prefix_hash.update(encoded)
         post = self._sidecar_path.stat()
         self._sidecar_index.inode = post.st_ino
         self._sidecar_index.mtime_ns = post.st_mtime_ns
@@ -985,6 +1029,7 @@ class RuntimeAuditLedgerWriter:
             # that tier.
             index.digests.clear()
             index.offset = 0
+            index.prefix_hash = hashlib.sha256()
         if index.offset == 0 and st is not None:
             # B-50 item (g): a zero-offset index (cold start, or the reset
             # above) adopts the on-disk snapshot when every validation
@@ -1091,6 +1136,7 @@ class RuntimeAuditLedgerWriter:
             if _has_redaction_namespace_keys(entry):
                 index.redaction_tails[row["tenant_tag"]] = entry.entry_hash
         index.offset += len(delta)
+        index.prefix_hash.update(delta)
         post = self._sidecar_path.stat()
         index.inode = post.st_ino
         index.mtime_ns = post.st_mtime_ns
@@ -1309,6 +1355,7 @@ class RuntimeAuditLedgerWriter:
             index.redaction_tails.clear()
             index.legacy_exempt = {(pair[0], pair[1]) for pair in legacy}
             index.offset = len(encoded)
+            index.prefix_hash = hashlib.sha256(encoded)
             post = self._sidecar_path.stat()
             index.inode = post.st_ino
             index.mtime_ns = post.st_mtime_ns

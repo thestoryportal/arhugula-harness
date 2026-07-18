@@ -950,7 +950,7 @@ items:
     writers keep the fallback). POSIX-only cross-process hold per B-45. Item (g) 2026-07-17
     (b-50-index-snapshot): offset-checkpointed snapshot beside the sidecar (audit-entries.index-snapshot.json)
     -- a DERIVED CACHE adopted at zero-offset cold start with discard-on-any-anomaly validation
-    (self-digest, inode, offset<=size, same-size mtime drift), atomic temp+replace+fsync writes,
+    (self-digest, covered-prefix raw-byte digest, inode, offset<=size, same-size mtime drift), atomic temp+replace+fsync writes,
     cadence floor 64 appends (geometric: max(64, members/8)) + immediate after any from-zero fold / legacy adoption; chosen over sqlite3 to
     stay one-authority JSONL-canonical (ADR-D5 v1.4). Forged-snapshot tampering sits in the same
     adversarial-filesystem tier as the forged legacy baseline (round-46 posture) -- read-time verifier

@@ -2488,3 +2488,36 @@ def test_adopt_legacy_persists_snapshot_immediately(tmp_path: Path) -> None:
         [("tenant-A", legacy_one.entry_hash), ("_single", legacy_two.entry_hash)]
     )
     assert body["digests"] == []
+
+
+def test_bit_rotted_prefix_discards_snapshot_despite_clean_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex round-5 P1 (item (g) landing) — silent bit rot in the folded
+    prefix leaves size, inode, AND mtime intact (restored here via utime),
+    so adoption's metadata checks all pass; only the covered-prefix digest
+    binds the snapshot to the authoritative bytes. Without it a cold
+    writer would trust pre-rot membership and never fail loud on the
+    rotted row."""
+    import os as os_module
+
+    monkeypatch.setattr(RuntimeAuditLedgerWriter, "_SNAPSHOT_EVERY_APPENDS", 1)
+    writer = _writer(tmp_path)
+    writer.append("tenant-A", _make_audit_entry("1" * 64))
+    snapshot_path = writer._snapshot_path  # pyright: ignore[reportPrivateUsage]
+    body = json.loads(snapshot_path.read_text())["body"]
+
+    raw = writer.sidecar_path.read_bytes()
+    position = raw.find(b"test-emission-site")
+    assert position != -1
+    with writer.sidecar_path.open("r+b") as fh:
+        fh.seek(position)
+        fh.write(b"TEST-emission-site")
+    st = os_module.stat(writer.sidecar_path)
+    os_module.utime(writer.sidecar_path, ns=(st.st_atime_ns, body["mtime_ns"]))
+
+    fresh = RuntimeAuditLedgerWriter(
+        ledger_writer=writer.ledger_writer, time_source=writer.time_source
+    )
+    with pytest.raises(ValueError, match="content-integrity"):
+        fresh.append("tenant-A", _make_audit_entry("2" * 64))
