@@ -781,20 +781,14 @@ items:
   title: AwsKmsSigningBackend has no production composition-root call site
   status: closed
   pr: '#1033 (PR A seam) + #1034 (PR B1 sidecar) + #1036 (PR B2a threading/breaker); remainder split to B-49..B-53 at the 2026-07-17 disposition'
-  summary: 'B-36 (ADR-D8) selected + implemented AwsKmsSigningBackend and live-e2e-proved it against a
-    real KMS key, but zero production code path constructs it and passes it as sign_audit_entry(backend=...)
-    / verify_audit_entry_signature(backend=...). It is reachable only from tests. A MULTI_TENANT_COMPLIANCE
-    deployment cannot get real signed audit entries until a harness_runtime bootstrap composition-root
-    arc wires this backend in (out-of-family Codex review finding on the B-36 landing). PR A (2026-07-16)
-    landed the missing call-site seam — OD spec v1.33 NEW section 21.2.1 (clearance filed) adds backend=...
-    to the OD sign_audit_entry (the function production audit writes actually route through, via cp_audit_to_od_audit,
-    which also gained the passthrough); absent path preserved byte-identically, present path real signature,
-    mutation-probed. Remainder (PR B, the actual close) is the harness_runtime composition root per close_out
-    items (a)-(d), plus (e) surfaced by out-of-family Codex round 3 on PR A and verified directly --
-    RuntimeAuditLedgerWriter.append persists only the action_id wrap (entry_hash), serializing neither
-    payload nor signature_attrs, so a real KMS signature would be produced then dropped at durable
-    persistence (pre-existing shape, placeholder signatures were equally discarded); PR B must persist
-    the signed entry or an equivalent durable sidecar before real signatures can be claimed durable.'
+  summary: 'CLOSED 2026-07-17. The composition root is LANDED end-to-end: OD spec v1.33 section
+    21.2.1 seam (PR #1033), the full-entry durable sidecar + config/factory + token-map threading
+    (PR #1034), and the remaining composer/cost threading + C9 breaker + bootstrap validation +
+    audit-offload hardening (PR #1036) -- a MULTI_TENANT_COMPLIANCE deployment with aws-kms configured
+    gets real signed audit entries on every production audit write, durably persisted. Residual work
+    split to B-49 (per-family verifier), B-50 (sidecar scale engineering), B-51 (tenant binding fork),
+    B-52 (fail-closed policy fork), B-53 (CLI promotion); B-48 tracks the sync-inner-on-loop fork.
+    Full landing narrative preserved at the heading section in the prose register.'
   close_out: 'Author a harness_runtime composition-root unit (mirrors the ProviderSecretResolver / GcpSecretManagerResolver
     precedent at R-421) that: (a) resolves a key_id -> KMS key ARN mapping from RuntimeConfig at MULTI_TENANT_COMPLIANCE
     deployment-time; (b) constructs AwsKmsSigningBackend with a boto3 KMS client sourced from the runtime''s
@@ -923,8 +917,10 @@ items:
     over the raw per-tenant sequence fails by construction. PRODUCER-AWARE (codex round-3 on the
     disposition leg): cost projection defaults prior_event_hash to genesis on EVERY entry
     (cost_record_audit_writer.py:50) and HITL uses _empty_summary_hash() (hitl_gate_composer.py:1235),
-    so those families get per-entry content-hash + signature checks, NOT chain verification;
-    chain-verified families = the redaction-token map + the converter per its own semantics.'
+    and production sub-agent dispatch likewise emits prior_event_hash genesis per entry
+    (sub_agent_gate_level_descent.py:215), so cost/HITL/dispatch families get per-entry content-hash +
+    signature checks, NOT chain verification; chain-verified = ONLY families with real chain-position
+    wiring today (the redaction-token map, which seeds from its durable tail).'
   close_out: 'Build verify_per_family_chains(entries) with a per-producer verification policy (chained
     vs per-entry families), witness with interleaved multi-family fixtures + mutation probes; wire into
     harness-inspect if natural.'
