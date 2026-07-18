@@ -732,3 +732,128 @@ def test_aliased_legacy_sidecar_refused_without_hanging(tmp_path: Path) -> None:
         t.join(_WAIT)
         assert done.is_set(), f"write lock hung on a {alias_kind} legacy sidecar"
         assert outcomes == ["refused"], f"{alias_kind} alias not refused: {outcomes}"
+
+
+def _mp_first_writer_worker(ledger: Path, in_section: object, release: object) -> None:
+    """Module-level (picklable) worker: a genuine second OS process performing
+    the FIRST write of an absent ledger. Forked BEFORE any lock is touched
+    (fork-after-lock duplicates locked threading state into the child — the
+    documented hazard in test_shadow_git_rollback)."""
+    with cross_process_write_lock(ledger):
+        in_section.set()  # type: ignore[attr-defined]
+        release.wait(timeout=10)  # type: ignore[attr-defined]
+        ledger.write_text("child\n")
+
+
+def test_dir_flock_excludes_a_genuine_second_process(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Merge-gate round-1 test-witness lens (B-46) — the dir lock's
+    CROSS-PROCESS flock face is the headline first-write guarantee, and
+    every thread-based witness contends only on the in-process RLock face
+    (the per-process `_DirLock` singleton). This witness forks a genuine
+    second OS process (fresh RLock, fresh fds — only the flock can
+    exclude it) holding the absent-file section; the parent's write must
+    block, and the deterministic backstop pins the no-overwrite ordering.
+    The transitional legacy-sidecar provisioning is inhibited BEFORE the
+    fork (both processes inherit the patch), because it redundantly
+    covers absent-file exclusion today — this witness pins the dir flock
+    ALONE, the guard that becomes sole once B-45 retires the legacy
+    protocol."""
+    import multiprocessing
+
+    from harness_is import cross_process_ledger_lock as lock_module
+
+    monkeypatch.setattr(
+        lock_module, "_acquire_legacy_sidecar_for_writer", lambda canonical_path: -1
+    )
+    ledger = tmp_path / "ledger.jsonl"
+    ctx = multiprocessing.get_context("fork")
+    in_section = ctx.Event()
+    release = ctx.Event()
+    proc = ctx.Process(target=_mp_first_writer_worker, args=(ledger, in_section, release))
+    proc.start()
+    try:
+        assert in_section.wait(timeout=10)
+        parent_entered = threading.Event()
+
+        def _parent_write() -> None:
+            with cross_process_write_lock(ledger):
+                with ledger.open("a") as fh:
+                    fh.write("parent\n")
+            parent_entered.set()
+
+        t = threading.Thread(target=_parent_write)
+        t.start()
+        assert not parent_entered.wait(0.5), (
+            "parent entered while a second OS process held the absent-file dir flock"
+        )
+        release.set()
+        t.join(_WAIT * 2)
+        proc.join(10)
+        assert parent_entered.is_set()
+        assert ledger.read_text() == "child\nparent\n", (
+            "append ordering broken — the dir flock did not exclude the second process"
+        )
+    finally:
+        release.set()
+        proc.join(5)
+        if proc.is_alive():  # pragma: no cover — cleanup path
+            proc.terminate()
+
+
+def test_replace_lock_waits_out_an_active_file_holder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Merge-gate round-1 test-witness lens (B-46) — the replace lock's
+    BlockingIOError wait-out branch: an ACTIVE file-lock holder must be
+    waited out before the inode swap, or its in-flight append is
+    clobbered by the checkout/restore-write (silent row loss). The
+    transitional legacy provisioning is inhibited so the wait-out branch
+    ALONE is pinned (it becomes sole once B-45 retires the legacy
+    protocol)."""
+    import os as os_module
+
+    from harness_is import cross_process_ledger_lock as lock_module
+    from harness_is.cross_process_ledger_lock import cross_process_replace_lock
+
+    monkeypatch.setattr(
+        lock_module, "_acquire_legacy_sidecar_for_writer", lambda canonical_path: -1
+    )
+
+    ledger = tmp_path / "ledger.jsonl"
+    ledger.write_text("seed\n")
+    holder_in = threading.Event()
+    release_holder = threading.Event()
+    replacer_entered = threading.Event()
+
+    def _holder() -> None:
+        with cross_process_write_lock(ledger):
+            holder_in.set()
+            release_holder.wait(_WAIT)
+            with ledger.open("a") as fh:
+                fh.write("held\n")
+
+    def _replacer() -> None:
+        with cross_process_replace_lock(ledger):
+            replacer_entered.set()
+            staging = tmp_path / "staging.tmp"
+            staging.write_text("rolled\n")
+            os_module.replace(staging, ledger)
+            ledger.write_bytes(b"rolled\n")
+
+    h = threading.Thread(target=_holder)
+    h.start()
+    assert holder_in.wait(_WAIT)
+    r = threading.Thread(target=_replacer)
+    r.start()
+    assert not replacer_entered.wait(0.5), (
+        "replace section entered while an active writer held the file lock"
+    )
+    release_holder.set()
+    h.join(_WAIT)
+    r.join(_WAIT)
+    assert replacer_entered.is_set()
+    assert ledger.read_text() == "rolled\n", (
+        "the active holder's append was clobbered mid-flight (wait-out missing)"
+    )
