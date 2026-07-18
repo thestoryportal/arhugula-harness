@@ -164,6 +164,14 @@ INCLUDING the leg-1 fifth segment if ratified, which is why B-54 must land joint
 same delta — and project `"DEPLOYMENT_BOUND"` → `key_period=0` exactly as signing does. Two contract
 requirements sharpened at filing codex round-1:
 
+- **Failure taxonomy** (round-13 P2 — a substantive contract choice, ratified here rather than left to the
+  spec-writing pass): recommend a typed three-way discrimination — (a) `backend.verify` returns false
+  (signature does not match) → raise a NEW typed `AuditSignatureInvalid` (NOT `HashChainBreach`, which
+  means content/linkage tampering — conflating them would hide WHICH trust property failed); (b) backend
+  availability errors → propagate as-is (infrastructure failure, retryable by the caller, never a verdict);
+  (c) malformed/unknown signature metadata (bad algo tag, wrong-width value, unknown key_id) →
+  `AuditSignatureInvalid` with the malformation named (fail-loud, mirrors the sidecar's
+  corrupt-row-as-evidence posture).
 - **Message-format cutover for pre-v1.34 REAL signatures** (round-5 P1): an upgraded KMS-backed MTC ledger
   holds GENUINE v1.33-era signatures over the four-segment message on rows that carry tenant tags —
   five-tuple reconstruction fails them, and the placeholder exemption does not cover them. The contract
@@ -224,11 +232,17 @@ Per §4.3 the design-substrate amendments halt here. The operator ratifies, in o
 2. **Leg 2 two-spec shape** (OD flag + CP §28.10.4 carve-out, redaction path declared unconditionally
    fail-closed) vs the weaker single-spec alternative.
 3. **Leg 3 acceptance** (filing codex round-2 — leg 3 needs its own explicit ratification, not a ride-along):
-   the new C-OD-21 §21.2.2 backend verification API with its three contract requirements (message-format
+   the new C-OD-21 §21.2.2 backend verification API with its contract requirements (message-format
    cutover so pre-v1.34 REAL four-tuple signatures keep verifying; tenant scope as verifier input;
-   authenticated tenant-bound cutover-gated legacy exemption) and its NON-BLOCKING default — or an
-   alternative/defer.
-4. **Arc bundling** — one OD v1.33 → v1.34 delta carrying legs 1+3, with a CP v1.100 → v1.101 rider
+   authenticated tenant-bound cutover-gated legacy exemption; the typed failure taxonomy) and its
+   NON-BLOCKING default — or an alternative/defer.
+4. **Leg 2 flag-OFF semantics at MTC** (round-12/13): make explicit `false` INVALID at MTC (recommended —
+   no relaxation of C-CP-20 §20.1's per-entry signature requirement) vs carrying a §20.1 relaxation in the
+   CP rider.
+5. **Leg 3 ⊥ C-CP-20 §20.3.1 reconciliation** (round-12/13): bring §20.3.1's blocking audit-walk into the
+   CP rider aligned with the new API (recommended) vs making the OD API conform to §20.3.1's
+   fail-on-invalid semantics where that protocol invokes it.
+6. **Arc bundling** — one OD v1.33 → v1.34 delta carrying legs 1+3, with a CP v1.100 → v1.101 rider
    carrying BOTH CP-owned halves, **and a Runtime v1.100 → v1.101 rider (filing codex round-9 P1): the
    Runtime spec owns the prewarm/keepalive/boot contracts (B-18-KEEPALIVE lineage) that currently commit
    the swallow-all fail-open behavior, plus RuntimeConfig surface — the rider covers the MTC prewarm
