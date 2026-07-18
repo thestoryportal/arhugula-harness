@@ -296,21 +296,25 @@ Per §4.3 the design-substrate amendments halt here. The operator ratifies, in o
 5. **Leg 3 ⊥ C-CP-20 §20.3.1 reconciliation** (round-12/13): bring §20.3.1's blocking audit-walk into the
    CP rider aligned with the new API (recommended) vs making the OD API conform to §20.3.1's
    fail-on-invalid semantics where that protocol invokes it.
-7. **Rotation-pair disposition at MTC** (round-17/19): PROHIBIT `sign_rotation_pair` at MTC until B-33's
+6. **Rotation-pair disposition at MTC** (round-17/19): PROHIBIT `sign_rotation_pair` at MTC until B-33's
    rotation-aware message binding lands (recommended — B-33 stays out of this bundle) vs pulling B-33 into
    the arc for backend-aware rotation now.
-8. **B-53 rides the Runtime rider** (round-19 P2): the migration-CLI promotion is a one-row Runtime §13.4
+7. **B-53 rides the Runtime rider** (round-19 P2): the migration-CLI promotion is a one-row Runtime §13.4
    scripts-inventory addition whose register close-out already says "ride the next runtime-spec delta" —
    fold it into the v1.101 rider (recommended) vs explicitly revising that disposition to wait again.
-9. **MTC prewarm posture under fail-closed** (round-20 P2 — a Class 1 behavior choice, not spec-writer
+   Command shape ratified with it (round-22 P2): a `harness migrate-audit-sidecar` subcommand under the
+   existing flat `harness <subcommand>` namespace (recommended — §13.4's committed command model; the
+   `python -m` module path stays as the implementation), NOT a standalone-only script diverging from
+   that invariant; the Runtime plan delta carries its acceptance criteria.
+8. **MTC prewarm posture under fail-closed** (round-20 P2 — a Class 1 behavior choice, not spec-writer
    discretion): DISABLE prewarm/keepalive at MTC when `audit_signing_fail_closed` is ON (recommended —
    prewarm is a latency optimization; compliance-tier audit integrity outranks warm caches, and the
    operator regains it by accepting propagation) vs propagating signing failures through the prewarm
    boundary (keeps prewarm, couples its availability to the signing backend).
-10. **§20.1 historical exception for cutover-exempt rows** (round-20 P1): a narrow, cutover-scoped §20.1
+9. **§20.1 historical exception for cutover-exempt rows** (round-20 P1): a narrow, cutover-scoped §20.1
    exception naming the authenticated-cutover rows (recommended) vs rejecting/quarantining all pre-backend
    unsigned rows at MTC.
-6. **Arc bundling** — one OD v1.33 → v1.34 delta carrying legs 1+3, with a CP v1.100 → v1.101 rider
+10. **Arc bundling** — one OD v1.33 → v1.34 delta carrying legs 1+3, with a CP v1.100 → v1.101 rider
    carrying BOTH CP-owned halves, **and a Runtime v1.100 → v1.101 rider (filing codex round-9 P1): the
    Runtime spec owns the prewarm/keepalive/boot contracts (B-18-KEEPALIVE lineage) that currently commit
    the swallow-all fail-open behavior, plus RuntimeConfig surface — the rider covers the MTC prewarm
