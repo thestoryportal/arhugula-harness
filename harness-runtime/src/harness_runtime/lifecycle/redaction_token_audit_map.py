@@ -6,7 +6,6 @@ Authority: H_T-OD-4.
 from __future__ import annotations
 
 import threading
-from typing import Any
 
 from harness_cp.f5_signing_key_resolution import SigningBackend
 from harness_od.audit_ledger_types import SignatureAlgorithm, StateLedgerEntryRef
@@ -111,7 +110,8 @@ class AuditLedgerRedactionTokenMap(RedactionTokenMap):
             # POSIX-only cross-process hold per B-45; in-process writers
             # still serialize on _chain_lock + the transaction locks.
             with txn_factory(self._tenant_id) as txn:
-                prior_entry_hash = self._durable_family_tail_hash(txn.read_full_entries())
+                tail = txn.redaction_family_tail()
+                prior_entry_hash = tail if tail is not None else self._initial_prior_entry_hash
                 audit_entry = compose_redaction_token_audit_entry(
                     record,
                     key_id=self._signing_key_id,
@@ -122,23 +122,6 @@ class AuditLedgerRedactionTokenMap(RedactionTokenMap):
                     backend=self._signing_backend,
                 )
                 txn.append(audit_entry)
-
-    def _durable_family_tail_hash(self, entries: list[Any]) -> str:
-        """The redaction family's durable tail hash, or the constructor
-        genesis when the family is empty — namespace-key discriminated
-        (codex round-39, PR B1: entry_core prefixes miss caller-supplied
-        cores)."""
-        family = [
-            entry
-            for entry in entries
-            if any(
-                key.startswith("audit.redaction_token.")
-                for key in entry.payload.audit_namespace_attrs
-            )
-        ]
-        if family:
-            return family[-1].entry_hash
-        return self._initial_prior_entry_hash
 
     def _append_with_cached_position(self, record: RedactionTokenRecord) -> None:
         """Pre-B-50 fallback for duck writers without `tenant_transaction`."""

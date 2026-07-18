@@ -92,6 +92,7 @@ from harness_is.state_ledger_write import (
     read_ledger,
 )
 from harness_od.audit_ledger_types import AuditLedgerEntry, compute_entry_hash
+from harness_od.per_family_audit_verification import REDACTION_TOKEN_NAMESPACE_PREFIX
 
 from harness_runtime.lifecycle.state_ledger import LedgerWriter
 from harness_runtime.types import RuntimeConfig
@@ -113,14 +114,30 @@ class _SidecarMembershipIndex:
     a dataclass field pair) so the frozen writer can mutate it in place.
     """
 
-    __slots__ = ("digests", "inode", "legacy_exempt", "mtime_ns", "offset")
+    __slots__ = ("digests", "inode", "legacy_exempt", "mtime_ns", "offset", "redaction_tails")
 
     def __init__(self) -> None:
         self.digests: dict[tuple[str, str], str] = {}
         self.legacy_exempt: set[tuple[str, str]] = set()
+        # Per-tenant-tag durable tail of the redaction-token family (B-50
+        # item (i), codex round-1): maintained transactionally during folds
+        # and our own appends so the token map's per-append tail lookup is
+        # O(delta), not an O(history) full rehydration. Legacy-baselined
+        # ledgers have no recoverable tails (full entries were dropped
+        # pre-sidecar) — absent means the family restarts from genesis.
+        self.redaction_tails: dict[str, str] = {}
         self.offset: int = 0
         self.inode: int = -1
         self.mtime_ns: int = -1
+
+
+def _has_redaction_namespace_keys(entry: AuditLedgerEntry) -> bool:
+    """Redaction-family discriminator — namespace keys, never entry_core
+    prefix (PR B1 codex round-39; shared constant from the B-49 verifier)."""
+    return any(
+        key.startswith(REDACTION_TOKEN_NAMESPACE_PREFIX)
+        for key in entry.payload.audit_namespace_attrs
+    )
 
 
 def _full_entry_digest(entry: AuditLedgerEntry) -> str:
@@ -675,6 +692,8 @@ class RuntimeAuditLedgerWriter:
             # Our own write never needs re-parsing: record it in the index
             # and advance past it.
             self._sidecar_index.digests[identity] = incoming_digest
+            if _has_redaction_namespace_keys(audit_entry):
+                self._sidecar_index.redaction_tails[tag] = audit_entry.entry_hash
             self._sidecar_index.offset += len(encoded)
             post = self._sidecar_path.stat()
             self._sidecar_index.inode = post.st_ino
@@ -709,6 +728,7 @@ class RuntimeAuditLedgerWriter:
         reset_to_zero = truncated or inode_changed or same_size_mutated
         if reset_to_zero:
             index.legacy_exempt.clear()
+            index.redaction_tails.clear()
             # Full rescan ONLY for: truncation (torn-tail heal elsewhere),
             # file replacement (inode change), or a same-size in-place
             # mutation (codex round-21: size-equality alone trusted a stale
@@ -815,6 +835,8 @@ class RuntimeAuditLedgerWriter:
                     f"or corrupt rows preserved as evidence"
                 )
             index.digests[identity] = digest
+            if _has_redaction_namespace_keys(entry):
+                index.redaction_tails[row["tenant_tag"]] = entry.entry_hash
         index.offset += len(delta)
         post = self._sidecar_path.stat()
         index.inode = post.st_ino
@@ -1107,6 +1129,22 @@ class _AuditWriterTenantTransaction:
         return self._writer._append_core(  # pyright: ignore[reportPrivateUsage]
             self._tenant_id, audit_entry, sidecar_locks_held=True
         )
+
+    def redaction_family_tail(self) -> str | None:
+        """The durable redaction-family tail hash for this tenant, or None
+        when the family has no (recoverable) entries — O(delta): heals +
+        folds any bytes other processes appended (under the held flock),
+        then answers from the transactionally maintained index (codex
+        round-1 on the B-50 landing: a full rehydration per append was
+        O(history) on the span-finalization hot path).
+        """
+        writer = self._writer
+        if not writer._sidecar_path.exists():  # pyright: ignore[reportPrivateUsage]
+            return None
+        writer._heal_torn_tail_locked()  # pyright: ignore[reportPrivateUsage]
+        writer._refresh_sidecar_index_locked()  # pyright: ignore[reportPrivateUsage]
+        tag = writer._tenant_tag(self._tenant_id)  # pyright: ignore[reportPrivateUsage]
+        return writer._sidecar_index.redaction_tails.get(tag)  # pyright: ignore[reportPrivateUsage]
 
 
 @dataclass(frozen=True, slots=True)

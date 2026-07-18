@@ -1970,3 +1970,94 @@ def test_tenant_transaction_excludes_concurrent_appends(tmp_path: Path) -> None:
     b.join(timeout=10.0)
     assert b_done.is_set()
     assert len(writer.read_full_entries_for_tenant("tenant-x")) == 2
+
+
+def test_token_append_does_not_rehydrate_full_history(tmp_path: Path) -> None:
+    """B-50 codex round-1 — the transactional prior lookup must be O(delta)
+    via the index-maintained family tail, never an O(history) full
+    rehydration per append (the span-finalization hot path)."""
+    import unittest.mock as mock
+
+    from harness_od.redaction_tokenizer import RedactionTokenRecord
+    from harness_runtime.lifecycle.redaction_token_audit_map import (
+        AuditLedgerRedactionTokenMap,
+    )
+
+    writer = _writer(tmp_path)
+    token_map = AuditLedgerRedactionTokenMap(
+        audit_writer=writer,
+        tenant_id="tenant-p",
+        signing_key_id="chain-key",
+    )
+
+    def _record(token: str) -> RedactionTokenRecord:
+        return RedactionTokenRecord(
+            token=token,
+            raw_value=f"raw for {token}",
+            semantic_category="PII",
+            attribute_key="gen_ai.input.messages",
+            trace_id="trace-1",
+            span_id=f"span-{token}",
+        )
+
+    calls = {"n": 0}
+    original = RuntimeAuditLedgerWriter._read_full_entries_core
+
+    def _counting(
+        self: RuntimeAuditLedgerWriter, tenant_id: str | None, **kwargs: object
+    ) -> object:
+        calls["n"] += 1
+        return original(self, tenant_id, **kwargs)  # type: ignore[arg-type]
+
+    with mock.patch.object(RuntimeAuditLedgerWriter, "_read_full_entries_core", _counting):
+        for i in range(3):
+            token_map.append(_record(f"[REDACTED:PII:p{i}]"))
+    assert calls["n"] == 0, f"full rehydration ran {calls['n']} times on the append path"
+
+    # And the chain is still valid.
+    from harness_od.per_family_audit_verification import verify_per_family_chains
+
+    report = verify_per_family_chains(writer.read_full_entries_for_tenant("tenant-p"))
+    assert report.chained == {"redaction-token": 3}
+
+
+def test_fresh_writer_instance_folds_the_family_tail(tmp_path: Path) -> None:
+    """B-50 codex round-1 (fold half) — a FRESH writer (new process; cold
+    index) must recover the redaction family tail by FOLDING the existing
+    sidecar rows, not only from its own appends: a map on the fresh writer
+    must chain onto the durable tail, not restart from genesis."""
+    from harness_od.per_family_audit_verification import (
+        REDACTION_TOKEN_FAMILY,
+        verify_per_family_chains,
+    )
+    from harness_od.redaction_tokenizer import RedactionTokenRecord
+    from harness_runtime.lifecycle.redaction_token_audit_map import (
+        AuditLedgerRedactionTokenMap,
+    )
+
+    def _record(token: str) -> RedactionTokenRecord:
+        return RedactionTokenRecord(
+            token=token,
+            raw_value=f"raw for {token}",
+            semantic_category="PII",
+            attribute_key="gen_ai.input.messages",
+            trace_id="trace-1",
+            span_id=f"span-{token}",
+        )
+
+    writer1 = _writer(tmp_path)
+    AuditLedgerRedactionTokenMap(
+        audit_writer=writer1, tenant_id="tenant-f", signing_key_id="chain-key"
+    ).append(_record("[REDACTED:PII:f1]"))
+
+    # Fresh writer over the same path — cold index, tail known only via fold.
+    writer2 = RuntimeAuditLedgerWriter(
+        ledger_writer=writer1.ledger_writer,
+        time_source=writer1.time_source,
+    )
+    AuditLedgerRedactionTokenMap(
+        audit_writer=writer2, tenant_id="tenant-f", signing_key_id="chain-key"
+    ).append(_record("[REDACTED:PII:f2]"))
+
+    report = verify_per_family_chains(writer1.read_full_entries_for_tenant("tenant-f"))
+    assert report.chained == {REDACTION_TOKEN_FAMILY: 2}
