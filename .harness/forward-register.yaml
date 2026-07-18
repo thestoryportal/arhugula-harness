@@ -60,12 +60,12 @@
 snapshot:
   total: 55
   open: 0
-  design_substrate_gated: 7
+  design_substrate_gated: 6
   registered_finding: 6
   operator_gated: 1
   held: 1
-  closed: 40
-  identity_digest: fe8c847dae333c50
+  closed: 41
+  identity_digest: 737dbc1d82c13305
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -452,8 +452,12 @@ items:
 - id: B-33
   title: verify_rotation_6_steps cannot prove a rotation boundary occurred
   status: registered_finding
-  summary: Generic hash-chain continuity check passes any intact ledger; cannot confirm a genuine rotation-pair
-    boundary.
+  summary: 'GROUNDED 2026-07-18 (autonomous loop): execute_key_rotation -- the sole
+    verify_rotation_6_steps caller -- still has ONLY test consumers (no production/CLI wiring);
+    the wait-for-real-caller boundary HOLDS, and rotation at MTC is explicitly deferred pending
+    B-33 by both the B-51/B-52/B-54 and B-48 filings. Dormant per its ratified boundary.
+    Original finding: generic hash-chain continuity check passes any intact ledger; cannot
+    confirm a genuine rotation-pair boundary.'
   close_out: File a Class 1 fork for an IS rotation-correlation carrier (mirrors OD §24.7); extend once
     B-36's backend lands. B-36 CLOSED 2026-07-16 (ADR-D8, AwsKmsSigningBackend) — this residual now has
     a real backend to build the rotation-correlation carrier against; still open, unblocked rather than
@@ -687,7 +691,8 @@ items:
 - id: B-43
   title: OD spec v1.32 §7.1 prose still describes harness.breaker.cause as vacuous-today, stale since
     B-38
-  status: design_substrate_gated
+  status: closed
+  pr: '#1050 (in-place correction + clearance marker)'
   summary: 'Spec_Operational_Discipline_v1_32.md §7.1''s harness.breaker.cause row states: "Vacuous-today,
     honestly documented ... the attribute is present in the schema (forward-compatible typed slot) and
     absent from every emitted event until a follow-on classifier arc supplies real signal." B-38 (PR #1020)
@@ -695,16 +700,11 @@ items:
     at all 3 real record_failure() call sites and the attribute reaches the real span. The spec prose
     was never updated to reflect this and is now factually wrong about current runtime behavior for 3
     of the 4 enum values (CAPABILITY_SHORTFALL remains genuinely vacuous, per B-38''s own grounding).'
-  close_out: 'NOT closed -- editing design-substrate/Spec_Operational_Discipline_v1_32.md requires design-phase
-    posture (workspace CLAUDE.md §11) plus a clearance marker (§4.5), not a Phase-7 docstring fix; bundling
-    it into B-42''s code-only PR would trip the X-AL-3 CI guard (design-substrate edit without back-flow
-    doc) and create a mixed-posture PR per §11.2''s explicit halt-and-ask case. The same stale-vacuous
-    framing likely also appears at harness-od/CLAUDE.md §1.2 (spec-pointer summary) and §4.1 (graduation-note
-    context) -- both mode-agnostic, not design-substrate, so those ARE Phase-7-editable, but were deliberately
-    left untouched here to keep this a pure registration pass; a future design-phase pass on the spec
-    itself should sweep all copies at once rather than fixing them piecemeal across postures. Council:
-    no -- this is a narrow prose-accuracy delta over an already-cleared spec version (v1.32 stays canonical;
-    likely a v1.33 ADDITIVE prose-only delta), not a contract change.'
+  close_out: 'CLOSED 2026-07-18: in-place correction of the v1.32 §7.1 cause row + change-note
+    historical annotation + harness-od/CLAUDE.md pointer mirror, with clearance marker
+    .harness/clearance/spec-operational-discipline-v1-32-b43-correction-cleared-2026-07-18.md
+    (ADR-D7 in-place-correction precedent; no contract change, so no new OD delta -- avoids
+    colliding with the pending B-51/B-52/B-54 v1.34 numbering).'
   council: no — prose-accuracy delta over a cleared spec, not a contract change; needs design-phase posture,
     not council
   heading: '### B-43 · OD spec v1.32 §7.1 prose still describes `harness.breaker.cause` as vacuous-today,
