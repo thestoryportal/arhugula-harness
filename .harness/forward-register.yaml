@@ -452,8 +452,12 @@ items:
 - id: B-33
   title: verify_rotation_6_steps cannot prove a rotation boundary occurred
   status: registered_finding
-  summary: Generic hash-chain continuity check passes any intact ledger; cannot confirm a genuine rotation-pair
-    boundary.
+  summary: 'GROUNDED 2026-07-18 (autonomous loop): execute_key_rotation -- the sole
+    verify_rotation_6_steps caller -- still has ONLY test consumers (no production/CLI wiring);
+    the wait-for-real-caller boundary HOLDS, and rotation at MTC is explicitly deferred pending
+    B-33 by both the B-51/B-52/B-54 and B-48 filings. Dormant per its ratified boundary.
+    Original finding: generic hash-chain continuity check passes any intact ledger; cannot
+    confirm a genuine rotation-pair boundary.'
   close_out: File a Class 1 fork for an IS rotation-correlation carrier (mirrors OD §24.7); extend once
     B-36's backend lands. B-36 CLOSED 2026-07-16 (ADR-D8, AwsKmsSigningBackend) — this residual now has
     a real backend to build the rotation-correlation carrier against; still open, unblocked rather than
@@ -513,10 +517,7 @@ items:
 - id: B-36
   title: Concrete F5 audit-signature backend selection
   status: closed
-  summary: 'GROUNDED 2026-07-18 (autonomous loop): execute_key_rotation -- the sole
-    verify_rotation_6_steps caller -- still has ONLY test consumers (no production/CLI wiring);
-    the wait-for-real-caller boundary HOLDS, and rotation at MTC is explicitly deferred pending
-    B-33 by both the B-51/B-52/B-54 and B-48 filings. Dormant per its ratified boundary. CLOSED 2026-07-16: AwsKmsSigningBackend (ADR-D8) implements the C-CP-20 SigningBackend
+  summary: 'CLOSED 2026-07-16: AwsKmsSigningBackend (ADR-D8) implements the C-CP-20 SigningBackend
     Protocol, live-e2e-proven against a real provisioned KMS key. Composition-root wiring into a real
     production sign_audit_entry call site is a separate follow-on -- see B-47.'
   close_out: 'CLOSED 2026-07-16 via ADR-D8 (AWS KMS delegated signing, ECC_NIST_EDWARDS25519/Ed25519 —

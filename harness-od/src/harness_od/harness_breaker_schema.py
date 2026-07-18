@@ -186,9 +186,11 @@ class HarnessBreakerEvent(BaseModel):
     tool_id: str | None = None
     #: `harness.breaker.model_version` — set when available (§7.1).
     model_version: str | None = None
-    #: `harness.breaker.cause` — classified trip cause (v1.32 NEW). Vacuous
-    #: today: no runtime call site can non-speculatively populate this; always
-    #: `None` until a follow-on classifier arc supplies real signal.
+    #: `harness.breaker.cause` — classified trip cause (v1.32 NEW). Populated
+    #: by `retry_breaker_fallback._classify_breaker_cause` (B-38) at the real
+    #: `record_failure()` sites for rate_limit / auth_failure / 5xx_streak;
+    #: `None` when classification yields none (capability_shortfall remains a
+    #: forward-compatible slot with no classifier signal yet).
     cause: BreakerCause | None = None
     #: `harness.breaker.cooldown_ms` — the cooldown *duration* set for this
     #: trip (v1.32 NEW), in milliseconds. `None` on non-trip transitions
