@@ -918,8 +918,11 @@ items:
     fan-out under worker-thread execution, and re-run the r100 e2e. The B2a-landed mitigations already
     cover every OTHER production signing path (async composers/builders offload via the dedicated
     audit executor with join-on-cancel). Class 2 fork doc FILED 2026-07-18 at
-    .harness/class_2_fork_b48_sync_subagent_dispatch_offload.md -- recommendation: dedicated unbounded
-    executor deferring to the existing descent/fan-out bounds (option B); awaiting operator selection
+    .harness/class_2_fork_b48_sync_subagent_dispatch_offload.md -- recommendation REVISED at filing
+    codex round-1 (no committed recursion bound exists -- descent flag is boolean, cap-of-3 is
+    delegation-only, ThreadPoolExecutor has no unbounded mode): option B = custom grow-on-demand
+    executor + configurable hard cap + fail-fast at the cap; C1/C9 council convenes at the apply leg;
+    dispatch-time cancellation semantics defined before any offload lands. Awaiting operator selection
     (may batch with the B-51/B-52/B-54 ratification).'
   council: 'conditional -- C1 orchestration vs C9 reliability tension if the offload design surfaces a
     genuine recursion-depth bound question'

@@ -43,18 +43,27 @@ Wrapping the sync inner in an executor is not free:
 | # | Executor design | Assessment |
 |---|---|---|
 | A | Keep the direct call (status quo) | Rejected — seconds-long loop stalls at every sub-agent gate, now plus KMS latency; single-workflow deployments mask it, MTC/daemon deployments do not |
-| B | **Dedicated UNBOUNDED `ThreadPoolExecutor` for sub-agent dispatch** (named threads, join-on-shutdown mirroring the B2a audit-executor lifecycle discipline) | **RECOMMENDED** — deadlock-free by construction under arbitrary `SUB_AGENT_DISPATCH` recursion; thread growth is bounded IN PRACTICE by the committed recursion/fan-out limits (`sub_agent_descent` depth caps + B-21 fan-out bounds), so "unbounded" is bounded by the orchestration contracts that already exist — the pool bound would duplicate an existing authority |
-| C | Depth-aware bounded executor (cap + per-depth accounting, reject/queue beyond) | Workable but adds machinery that re-derives the bound the descent caps already enforce; a second authority over recursion depth (the exact two-authorities smell) — only preferable if the operator wants a hard thread ceiling independent of orchestration limits |
+| B | **Custom grow-on-demand dispatch executor with a CONFIGURABLE hard cap + fail-fast** — a thread is created when no free worker exists (idle workers reused), threads named + join-on-shutdown mirroring the B2a audit-executor lifecycle; a RuntimeConfig ceiling (generous default) is a SAFETY VALVE: at the cap, dispatch fails FAST with a typed error — never queues (queueing re-creates the recursive deadlock) | **RECOMMENDED** — deadlock-free under arbitrary `SUB_AGENT_DISPATCH` recursion below the cap, resource-exhaustion-bounded above it, loud at the boundary. Filing codex round-1 P1 grounded the constraint honestly: NO committed recursion bound exists today (`StepExecutionContext.sub_agent_descent` is a BOOLEAN, not a depth counter; the cap-of-3 governs only HIERARCHICAL_DELEGATION direct children; `compose_child_workflow_runner` documents unbounded stack depth), and stock `ThreadPoolExecutor` has NO unbounded mode (`max_workers=None` = bounded default) — so the executor must be custom, and its cap is a genuinely NEW capacity authority |
+| C | Depth-aware bounded executor (per-depth accounting, reject/queue beyond depth budget) | Heavier machinery for the same fail-fast boundary; per-depth accounting only pays off if a depth-shaped policy (deeper = scarcer) is actually wanted — the flat cap of B is simpler and equally loud |
 
-**Council note (register: conditional — C1 orchestration ⊥ C9 reliability).** The tension is real only if a
-genuine recursion-depth bound question survives grounding. Probe-first result (§10.9): the depth bound
-ALREADY exists as an orchestration contract (`StepExecutionContext.sub_agent_descent`, CP v1.86 descent
-carrier + gate-level caps), so option B does not create unbounded behavior — it defers to the existing
-authority. No council convening is needed unless the operator selects C (which re-opens the bound-ownership
-question — convene the C1/C9 dyad at that apply leg).
+**Council note (register: conditional — C1 orchestration ⊥ C9 reliability) — condition MET.** The filing's
+first draft claimed the depth bound already existed; codex round-1 P1 refuted that (boolean descent flag,
+delegation-only cap, documented unbounded stack). A genuine recursion-capacity question therefore EXISTS —
+whose authority is the cap, what default, fail-fast semantics at the boundary — and the **C1 ⊥ C9 dyad
+convenes at the apply leg regardless of the option selected** (it owns the cap's default + the fail-fast
+error's interaction with the orchestration contracts).
 
 ## §4 Verification obligations (the apply arc's acceptance criteria)
 
+0. **Dispatch-time cancellation semantics** (filing codex round-1 P1 — must be DEFINED before any offload
+   lands): `SyncDispatcherFacade.result_timeout_seconds` cancels the loop coroutine and awaits completion
+   acknowledgement — but cancelling an executor FUTURE cannot stop a sync child already running in its
+   worker; the coroutine could acknowledge cancellation while the child continues F2/audit writes and
+   OVERLAPS a retry. The apply arc specifies cooperative cancellation (a cancel token the child driver
+   checks at step boundaries) or explicit join/abandon semantics (the timeout path JOINS the worker before
+   surfacing `StepDispatchTimeoutError`, or ABANDONS with a documented effect-fence), plus a timeout
+   witness proving no child effects land after the failure surfaces — join-on-shutdown does not cover
+   dispatch-time cancellation.
 1. **Child-workflow facade bridging** — the sync driver's loop-bridge (`run_coroutine_threadsafe` shape)
    must be exercised from a WORKER thread with the parent awaiting off-loop; witness the full
    parent→child→grandchild chain.
@@ -85,7 +94,8 @@ none found at this filing's grep), and (c) a Runtime plan delta for the new exec
 
 ## §6 The operator selection (ONE decision)
 
-Select the executor design: **B (dedicated unbounded pool deferring to the existing descent/fan-out
-bounds — recommended)** vs C (depth-aware bounded pool — re-opens bound ownership; convenes the C1/C9
-council dyad) vs A (keep the ratified blocking direct-call). May be answered in the same batch as the
-B-51/B-52/B-54 ratification gate (PR #1046).
+Select the executor design: **B (custom grow-on-demand executor + configurable hard cap + fail-fast at the
+cap — recommended)** vs C (depth-aware bounded pool) vs A (keep the ratified blocking direct-call). The
+C1/C9 council dyad convenes at the apply leg under B or C (the cap is a genuinely new capacity authority);
+the apply arc also defines the §4-item-0 cancellation semantics before any offload lands. May be answered
+in the same batch as the B-51/B-52/B-54 ratification gate (PR #1046).
