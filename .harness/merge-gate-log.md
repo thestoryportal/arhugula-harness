@@ -147,3 +147,13 @@ Branch: b24-b27-fork-ratification-build · Date: 2026-07-15
 **Codex chain:** 3 rounds (O(delta) tails P1 + coverage-gate P1 fixed+probed; round 3 clean with its own multi-process stress probe).
 
 **Outcome:** all-APPROVE at round 1 → merge without HIL (CI-green precondition). `if True:` refactor residues dedented pre-merge.
+
+## PR #1044 — 2026-07-17 — `b-50-index-snapshot`
+
+| Lens | R1 | R2 |
+|---|---|---|
+| concurrency | APPROVE | APPROVE (delta) |
+| spec-conformance | APPROVE (cosmetic cadence-floor phrasing note, fixed) | — (stands; delta re-verified vs register in-line) |
+| test-witness | BLOCK: immediate-snapshot-write sites unwitnessed | APPROVE |
+
+Outcome: MERGE. R1 block discharged with two no-monkeypatch witnesses (from-zero fold + adopt_legacy immediate persistence), both probe-killed. Codex: 7 rounds, 7 findings fixed + probe-killed (quadratic cadence P1, short-write P2, FIFO plant P1, legacy-count cadence P2, sidecar-bytes binding P1, temp-mode clamp P2), 1 REJECTED (round-5 P2 "keep B-50 open / on-disk lookup structure" — re-litigates the ratified disposition; offset-checkpointed snapshot is the register close_out's named alternative; RAM asymptotics unchanged from main). Follow-on notes: (1) R2 lens-1 — a pre-held fd on a planted 0644 temp survives the fchmod clamp (snapshot metadata only; unlink+O_EXCL recreation would close it); (2) R2 lens-3 — adoption-side same-size mtime early-out is now redundant with the prefix digest (behavior-preserving); (3) fold-site prefix feed pinned post-gate per lens-3 recommendation (M15). 15 mutation classes probe-killed total.
