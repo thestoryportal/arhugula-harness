@@ -97,9 +97,13 @@ the operator makes here, so the selection is safe to take now).
 3. **Child-workflow facade bridging** — the sync driver's loop-bridge (`run_coroutine_threadsafe` shape)
    must be exercised from a WORKER thread with the parent awaiting off-loop; witness the full
    parent→child→grandchild chain.
-4. **Pause/resume** — `HITLPauseRequestedSignal` raised inside the worker must propagate through the
-   executor future to the awaiting composer unchanged; durable-async pause flags set from the worker thread
-   must be visible to the resume path (no thread-local state).
+4. **Pause/resume** — the witness must exercise the REAL cross-executor carrier (round-7 P2): a child's
+   nested durable-HITL gate pausing surfaces from the sync `RuntimeSubAgentDispatcher` as
+   `SubAgentChildPausedError` carrying the child's pause SNAPSHOT — witness THAT error and its snapshot
+   crossing the executor future into the parent's fan-out pause handling intact (a synthetic
+   `HITLPauseRequestedSignal` or worker-set flag exercises a path production never takes and can miss
+   snapshot loss). Durable-async pause flags set from the worker thread must be visible to the resume
+   path (no thread-local state).
 5. **OTel span context** — `contextvars` do NOT flow into pool threads automatically; the offload must carry
    `contextvars.copy_context()` (or equivalent) so sub-agent spans keep their parent trace; witness a
    parent-child span-id assertion.
