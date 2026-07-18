@@ -49,7 +49,12 @@ also specify the tenant-bearing signing API threaded through the converters/comp
 must explicitly include the one non-converter path: `AuditLedgerRedactionTokenMap` calls
 `compose_redaction_token_audit_entry` directly and holds tenant scope as its own `_tenant_id` (filing codex
 round-1 P2 — omitting it would leave redaction-token signatures tenant-unbound after the converter sites are
-updated)** — or move signing to a tenant-aware boundary. Without the rider the segment is unpopulatable.
+updated), and the second non-converter path `sign_rotation_pair` (filing codex round-3 P2), which calls
+`sign_audit_entry` twice with no tenant parameter — thread tenant scope through it, or explicitly
+defer/prohibit its multi-tenant use in the delta (it already cannot take the §21.2.1 backend seam naively
+pending B-33's rotation-aware message binding, per OD v1.33's own out-of-scope row — the same deferral can
+carry both constraints)** — or move signing to a tenant-aware boundary. Without the rider the segment is
+unpopulatable.
 
 ### Council
 
@@ -86,7 +91,14 @@ enumeration misses (filing codex round-2): `AuditLedgerRedactionTokenMap.append`
 — a KMS failure there propagates today (de-facto fail-closed) and would BYPASS the flag entirely. The delta
 must either bring this path under the flag or declare it unconditionally fail-closed in the policy
 enumeration; recommend the latter (raw redaction values must never persist against an unsigned row — the
-path's current propagate behavior is the correct posture, so declare it rather than soften it).** Delta shape: OD v1.34 addendum (policy +
+path's current propagate behavior is the correct posture, so declare it rather than soften it).**
+
+**And the zeroth site (filing codex round-3 P1): the ABSENT backend.** With current `RuntimeConfig`
+defaults, `sign_audit_entry(..., backend=None)` returns an `unsigned:*` placeholder WITHOUT raising — a
+default-config MTC deployment never enters any catch site and accumulates exactly the unsigned trail this
+leg exists to prevent. The delta must classify an absent backend as a STARTUP/policy failure when
+`audit_signing_fail_closed` is ON (bootstrap validation: fail-closed ⇒ a configured backend is required),
+not merely police the runtime failure sites. Delta shape: OD v1.34 addendum (policy +
 flag + site enumeration) **plus** CP v1.24 → v1.25 amending §28.10.4 invariant 2 with the audit-signing
 carve-out. The weaker single-spec alternative (fail-open preserved at the one CP-owned hook, fail-closed at
 the other nine sites) is coherent but leaves the compliance tier's weakest link at the validator hook —
@@ -127,9 +139,12 @@ requirements sharpened at filing codex round-1:
   mutable and excluded from `entry_hash`, so classifying placeholder-SHAPED values (`unsigned:*`) as exempt
   hands an attacker a downgrade path — replace a real signature with a placeholder shape and the row skips
   verification. The contract must gate exemption on an operator-recorded cutover instead — the
-  `adopt_legacy_is_refs`-style explicit baseline (which rows/periods predate the backend), a config-declared
-  pre-backend key-period set, or an equivalent signed cutover record — mirroring the round-46
-  deliberately-NOT-automatic adoption posture, not the row's own mutable bytes.
+  `adopt_legacy_is_refs`-style explicit ROW baseline, or an equivalent signed/versioned cutover record —
+  mirroring the round-46 deliberately-NOT-automatic adoption posture, not the row's own mutable bytes.
+  A config-declared pre-backend KEY-PERIOD set is NOT a viable cutover mechanism (filing codex round-3 P2):
+  both the placeholder era and the real-KMS era store `"DEPLOYMENT_BOUND"` / project `key_period=0`, so a
+  period set either exempts every row or none; period-based cutover only becomes possible if B-33
+  introduces distinct periods first.
 
 ### Council
 
