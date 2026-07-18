@@ -829,9 +829,12 @@ items:
     partitions chain verification by producer family (out-of-family Codex round-30 on PR B1) -- a
     per-tenant sidecar entry set interleaves INDEPENDENT OD chain families (the CXA section 0.3 action-id
     prefixes are the discriminator; the converter chains on CP-side event hashes, the redaction-token
-    map within itself), so the PR-B2 verifier must verify per family, never over the raw per-tenant
-    sequence; global re-sequencing at sign time would touch spec-committed converter prior-hash
-    semantics and is a design-phase question, not an impl patch. Reader docstring now states the
+    map within itself), so the verifier must be per-family AND producer-aware -- chain
+    verification ONLY for the redaction-token family; per-entry CONTENT-HASH checks for cost, HITL,
+    and sub-agent dispatch, which intentionally emit genesis-style predecessors on every entry
+    (superseded by the B-49 policy, codex rounds 3/5/7/8 on the disposition leg); global
+    re-sequencing at sign time would touch spec-committed converter prior-hash semantics and is a
+    design-phase question, not an impl patch. Reader docstring now states the
     non-single-chain contract explicitly; (i) makes redaction-chain tail-read + compose + append
     cross-process atomic (out-of-family Codex round-32 on PR B1) -- two processes appending for one
     tenant can both read the same durable family tail and sign different entries with the identical
@@ -963,8 +966,9 @@ items:
   summary: 'B-47 disposition item (m): signing failures are typed + loudly surfaced but dispatch stays
     fail-open (CP section 28.10.4 invariant 2 is spec-committed). Recommendation recorded: mirror OD
     v1.8 section C-OD-28.2''s operator-configurable default-fail-closed pattern via an
-    audit_signing_fail_closed flag, default ON at MTC -- needs an OD delta carving out the validator-hook
-    swallow. Class 2 fork doc owed.'
+    audit_signing_fail_closed flag, default ON at MTC. TWO-SPEC fork (codex rounds 4/8): the OD
+    addendum AND a CP amendment (section 28.10.4 invariant 2 is CP-owned) -- or the weaker single-spec
+    alternative keeping the validator hook fail-open. Class 2 fork doc owed.'
   close_out: 'Author the Class 2 fork doc; on ratification add the flag + consult it at ALL TEN
     surfacing sites -- the six fn-internal loud-surface handlers AND the four offload-boundary
     saturation handlers (llm/tool/webhook/hitl outer catches, codex round-6) -- or centralize the
