@@ -27,8 +27,13 @@ v1.25" phrasing in this filing is corrected to that.**
 OD v1.33 §21.2.1 commits the canonical signing message as the length-prefixed injective four-tuple
 `(compute_entry_hash(payload), key_id, algo.value, "DEPLOYMENT_BOUND")`. Under a DEPLOYMENT-scoped key no
 segment carries tenant identity: a signed audit entry produced for tenant A re-presented as tenant B's history
-verifies cleanly — tenant scoping lives only in the UNSIGNED sidecar `tenant_tag` and the IS `action_id`
-wrap, both plaintext-editable at the adversarial-filesystem tier. v1.33's own out-of-scope row already routes
+verifies cleanly — tenant scoping lives in the UNSIGNED sidecar `tenant_tag` and the IS `action_id`
+wrap, both plaintext-editable at the adversarial-filesystem tier. **One family is a partial exception
+(filing codex round-17 P2): production cost-attribution rows fold tenant presence+value into the
+`entry_core` action-id via `compose_cost_f2_entry_core`, so `compute_entry_hash` binds tenant identity into
+the signed first segment for THAT family — the exposure statement is per-family, and the fork's legacy
+migration must distinguish already-tenant-bearing families from genuinely unbound rows; the fifth segment
+remains the UNIFORM fix.** v1.33's own out-of-scope row already routes
 this: *"tenant-scope binding into the signed message under a DEPLOYMENT-scoped key (`B-47` close-out item (f)
 — resolve jointly with the persistence design at the composition-root arc; a TENANT-scoped `key_id` already
 binds tenant identity via the canonical message's `key_id` segment)"*.
@@ -54,10 +59,12 @@ must explicitly include the one non-converter path: `AuditLedgerRedactionTokenMa
 `compose_redaction_token_audit_entry` directly and holds tenant scope as its own `_tenant_id` (filing codex
 round-1 P2 — omitting it would leave redaction-token signatures tenant-unbound after the converter sites are
 updated), and the second non-converter path `sign_rotation_pair` (filing codex round-3 P2), which calls
-`sign_audit_entry` twice with no tenant parameter — thread tenant scope through it, or explicitly
-defer/prohibit its multi-tenant use in the delta (it already cannot take the §21.2.1 backend seam naively
-pending B-33's rotation-aware message binding, per OD v1.33's own out-of-scope row — the same deferral can
-carry both constraints), and the workflow-less prewarm path (round-5 P1): `RuntimeLLMDispatcher.prewarm()`
+`sign_audit_entry` twice with no tenant parameter — and tenant threading ALONE is insufficient (round-17
+P2): it still calls with `backend=None`, emitting `unsigned:*` placeholders that bypass the leg-2
+fail-closed policy at MTC and create post-cutover unsigned rows leg 3 cannot exempt as legacy — so the
+delta must either land backend-aware rotation together with B-33's rotation-aware message binding, or
+PROHIBIT rotation-pair signing at MTC until B-33 lands (it already cannot take the §21.2.1 backend seam
+naively, per OD v1.33's own out-of-scope row — the same deferral carries all constraints), and the workflow-less prewarm path (round-5 P1): `RuntimeLLMDispatcher.prewarm()`
 invokes the LLM cost-attribution converter with `tenant_id=None` because it runs OUTSIDE any workflow —
 under MTC, drop-when-`None` leaves that signed row tenant-unbound while fail-on-missing breaks prewarm; the
 delta must thread the deployment tenant into prewarm or define an explicit synthetic-scope policy for
