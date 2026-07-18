@@ -159,9 +159,10 @@ inventing the number.
    apply arc wires an explicit parent→job cancellation channel (the same item-2 cancel token, tripped by
    the barrier deadline) and witnesses a parent-barrier-deadline cancel reaching the child's fence.**
 6. **B-21 fan-out** — `PARALLELIZATION` branches dispatching sub-agents concurrently must not serialize on
-   the offload — N branches → N concurrent workers **for N ≤ cap; above the cap the (N+1)th dispatch
-   fail-fasts per the §3 no-queue invariant (round-11 P2 — full concurrency and the hard cap cannot both
-   hold unqualified). And the cap must gate BOTH executor layers (round-13 P1):
+   the offload — N branches (S of them sync sub-agent) run fully concurrent **when N + S ≤ cap (round-21
+   P1 — stated in the same units as the shared-budget rule below; the earlier N ≤ cap phrasing admitted
+   fan-outs the budget rejects); beyond that the next dispatch fail-fasts per the §3 no-queue invariant
+   (round-11 P2 — full concurrency and the hard cap cannot both hold unqualified). And the cap must gate BOTH executor layers (round-13 P1):
    `_run_fanout_to_completion` creates `ThreadPoolExecutor(max_workers=len(branch_plan))` and enters
    `asyncio.to_thread` per branch BEFORE any dispatch reaches the capped executor — an unbounded manifest
    would spawn N upstream CP threads before the excess fail-fasts, defeating the host ceiling; the apply
