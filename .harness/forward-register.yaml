@@ -1030,7 +1030,9 @@ items:
   status: design_substrate_gated
   summary: 'B-47 disposition item (j): python -m harness_runtime.admin.migrate_audit_sidecar works
     today; promoting it to [project.scripts] extends the runtime spec section 13.4 committed CLI
-    inventory. LOW urgency; rides the next runtime-spec delta as a one-row addition.'
+    inventory. LOW urgency. Fork FILED 2026-07-17 via .harness/class_1_fork_b51_b52_b54_od_signing_amendment_arc.md
+    (ratification-gate item 8): rides the B-51/B-52/B-54 arc's Runtime v1.100 -> v1.101 rider as the
+    one-row addition -- awaiting the same operator ratification.'
   close_out: 'Class 1 back-flow per section 4.3 (a spec-inventory revision IS a design-artifact
     change): a one-row scripts-inventory addition riding the next runtime-spec delta + clearance
     marker, then the pyproject entry; nothing blocks on it.'
