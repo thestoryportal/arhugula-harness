@@ -8,11 +8,11 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `760427f9f1d9` |
+| `workspace_state_hash` | `2366280aba46` |
 | `last_refreshed` | 2026-07-18T00:00:00Z |
-| `git_head` | `dd076ddf` —  |
+| `git_head` | `9cbf63f8` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
-| `open_fork_doc_count` | 92 |
+| `open_fork_doc_count` | 93 |
 
 **Hash recipe.** `sha256(git_head[:8] + "|" + sorted_open_pr_csv + "|" + open_fork_doc_count + "|" + latest_retirement_batch_path)[:12]`. See `Project_Roadmap_v1.md` §7.1.
 
@@ -24,7 +24,7 @@
 
 **Frontier.** R-FS-1 Tier-1 is closed. The frozen order is complete (11/11), the standalone `B-*` register derives **69 closed / 0 forward / 0 gated / 4 resolved**, `closure_gate.py` G1.1 is **0+0**, automatable Tier-1 predicates pass, and manual G1.4/G1.7/G1.8 sign-off is recorded at `.harness/r-fs-1-tier1-manual-signoff.json`.
 
-**Current next action.** **PR #1038 MERGED — B-47 CLOSED (composition root landed end-to-end at #1033/#1034/#1036; design cluster dispositioned at `.harness/b-47-pr-b2-design-disposition-v1.md`).** **PR #1046 MERGED — the B-51/B-52/B-54(+B-53) Class 1 fork filing is FILED** at `.harness/class_1_fork_b51_b52_b54_od_signing_amendment_arc.md` (26 codex rounds). **The OD amendment arc now awaits OPERATOR RATIFICATION of the filing's 10-item gate** — do NOT re-author; on ratification the spec-writer apply pass runs (OD v1.34 + CP v1.101 + Runtime v1.101 + plan deltas + councils). Claude-buildable meanwhile: **B-48** (Class 2 fork doc, U-RT-60 sync-inner revision), **B-33** (Class 1 fork doc, rotation-correlation carrier — open when a real caller surfaces per its register note) (sidecar scale engineering — disk-backed membership index via stdlib sqlite3 or offset-checkpointed snapshot; POSIX transactional token-map atomicity via unlocked-inner variants or a lock-ownership API, NOT a plain outer-lock hold). Fork-first arcs (Class 1 back-flow per §4.3 before any code): B-51 (tenant binding — fifth canonical-message segment + tenant-bearing signing API), B-52 (fail-closed policy — two-spec OD+CP fork), B-54 (backend signature verification API; rides the same OD amendment arc), B-53 (CLI promotion, low), B-48 (Class 2 fork revision of the U-RT-60 sync-inner reading), B-33 (Class 1 fork first). Register: 55 items / 2 open / 6 design_substrate_gated / 38 closed. **Standing note:** operator has granted forward-work merge permission without per-instance HIL, conditioned on CI fully passing green before any merge, broadened to cover this autonomous loop's PRs — applied through PR #1038.
+**Current next action.** **PR #1038 MERGED — B-47 CLOSED (composition root landed end-to-end at #1033/#1034/#1036; design cluster dispositioned at `.harness/b-47-pr-b2-design-disposition-v1.md`).** **PR #1046 MERGED — the B-51/B-52/B-54(+B-53) Class 1 fork filing is FILED** at `.harness/class_1_fork_b51_b52_b54_od_signing_amendment_arc.md` (26 codex rounds). **The OD amendment arc now awaits OPERATOR RATIFICATION of the filing's 10-item gate** — do NOT re-author; on ratification the spec-writer apply pass runs (OD v1.34 + CP v1.101 + Runtime v1.101 + plan deltas + councils). **B-48 fork doc now also FILED** (PR #1048, `.harness/class_2_fork_b48_sync_subagent_dispatch_offload.md` — awaiting the same batched operator response; do NOT open its apply arc before selection). Claude-buildable remainder: **B-33 grounding pass only** (its register row says open when a real caller surfaces — confirm-or-file, low) (sidecar scale engineering — disk-backed membership index via stdlib sqlite3 or offset-checkpointed snapshot; POSIX transactional token-map atomicity via unlocked-inner variants or a lock-ownership API, NOT a plain outer-lock hold). Fork-first arcs (Class 1 back-flow per §4.3 before any code): B-51 (tenant binding — fifth canonical-message segment + tenant-bearing signing API), B-52 (fail-closed policy — two-spec OD+CP fork), B-54 (backend signature verification API; rides the same OD amendment arc), B-53 (CLI promotion, low), B-48 (Class 2 fork revision of the U-RT-60 sync-inner reading), B-33 (Class 1 fork first). Register: 55 items / 2 open / 6 design_substrate_gated / 38 closed. **Standing note:** operator has granted forward-work merge permission without per-instance HIL, conditioned on CI fully passing green before any merge, broadened to cover this autonomous loop's PRs — applied through PR #1038.
 
 **Recurring lanes** continue on cadence: `R-600-pattern-bake-in-sweep` (cadence-8 closed this refresh, PD-8 promoted; next due ~10 PRs out) and `R-IF-roadmap-refresh`. Out-of-family review continues as a codified default gate, not as an open roadmap arc.
 
@@ -56,11 +56,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| 1048 | 2026-07-18 | B-48 Class 2 fork filing merged — sync sub-agent dispatch offload (23 codex rounds): custom grow-on-demand executor + occupied+N+S frame budget (default 256), token+fence+join cancellation cascading through recursive dispatch, B-39 dependency, CP/IS/Runtime riders. B-48 flipped design_substrate_gated. Awaiting operator selection (batches with the B-51/B-52/B-54 gate) |
 | 1046 | 2026-07-18 | B-51/B-52/B-54(+B-53) Class 1 fork filing merged — one consolidated ratification package for the OD audit-signing amendment arc (OD v1.34 + CP v1.101 + Runtime v1.101 riders), 26 codex rounds to convergence. NEXT GENUINE GATE: operator ratification of the filing's 10-item gate. Remaining Claude-buildable frontier: B-48 (Class 2 fork doc, U-RT-60) and B-33 (Class 1 fork doc, rotation-correlation carrier) |
 | 1044 | 2026-07-17 | B-50 item (g) merged — offset-checkpointed membership-index snapshot (discard-on-anomaly adoption incl. covered-prefix raw-byte digest; geometric cadence; plant-hardened temp install). 7 codex rounds + merge-gate 2 rounds (3 lenses APPROVE); 15 mutation classes probe-killed. B-50 CLOSED — open register queue EMPTY; frontier = fork-first arcs (B-51/B-52/B-54 OD amendment, B-48, B-33, B-53) |
 | 1042 | 2026-07-17 | B-50 item (i) merged — tenant_transaction (full lock stack, unlocked-inner cores), durable-tail-as-authority token map, O(delta) index-maintained family tails with the coverage gate mirrored at lookup; 3 codex rounds + merge-gate 3/3 round-1; B-50 (g) disk-backed index remains the open half |
 | 1040 | 2026-07-17 | B-49 merged — producer-aware per-family audit verification (chain-verify redaction family via namespace keys; content-hash checks for genesis-prior families; deeply immutable report; real-path sidecar witness); 3 codex rounds + merge-gate 3/3 round-1; B-49 row closed; frontier = B-50 (last open row) |
-| 1038 | 2026-07-17 | B-47 design-disposition leg merged — Tier-5/SQLite grounding corrected (ADR-D5 v1.4 JSONL-canonical), B-47 CLOSED, remainders split: B-49 per-family verifier (open), B-50 sidecar scale engineering (open), B-51/B-52/B-54 Class 1 spec-delta forks, B-53 CLI promotion; 17 codex rounds |
 ---
 
 ---
