@@ -131,3 +131,11 @@ Branch: b24-b27-fork-ratification-build · Date: 2026-07-15
 **Codex chain:** 18 rounds; rounds 1–17 each fixed-and-probed or registered (B-48 sync-inner-on-loop fork; item (m) fail-closed policy fork); round 18 clean.
 
 **Outcome:** all-APPROVE → merge without HIL (CI-green precondition). Round-1 advisory notes (ack flag-race, Thread.start rollback, stage-4 literal duplication) fold into the B-47 PR-B2 design-cluster arc.
+
+## PR #1040 — 2026-07-17 — `b-49-per-family-audit-verifier`
+
+**Round 1:** concurrency APPROVE (pure function, no shared state; report deeply immutable with publication-before-escape; one advisory TOCTOU note inherent to the pure-verifier caller contract, unreachable via the real read path) · spec-conformance APPROVE (C-OD-21 §21.2 + disposition item (h) verbatim; all three genesis-prior cites verified at exact lines; namespace-key discriminator mirrors the real map; X-AL-3 clean — signature verification correctly excluded to B-54; same-PR register close conformant; 2 nits fixed pre-merge: pr back-fill #1040, "genesis-style" precision) · test-witness APPROVE (real-path witness through the real token map + sidecar rehydration; every load-bearing line mutation-killed, several both ways; sole unkilled mutation is a non-load-bearing message-priority ordering).
+
+**Codex chain:** 3 rounds (immutability depth ×2 fixed+probed; round 3 clean).
+
+**Outcome:** all-APPROVE at round 1 → merge without HIL (CI-green precondition).

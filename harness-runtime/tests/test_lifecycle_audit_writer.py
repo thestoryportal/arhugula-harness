@@ -1840,3 +1840,46 @@ def test_stale_timestamp_resamples_instead_of_orphaning_sidecar_row(tmp_path: Pa
     assert verify_chain(entries).status is VerificationStatus.VALID
     hashes = [e.entry_hash for e in writer.read_full_entries_for_tenant("tenant-A")]
     assert hashes == [first.entry_hash, second.entry_hash]
+
+
+def test_per_family_verifier_over_real_sidecar_rehydration(tmp_path: Path) -> None:
+    """B-49 real-path witness — the REAL redaction-token map produces two
+    chained rows; genesis-prior fixture entries interleave; the per-family
+    verifier passes over the rehydrated sequence (a raw
+    verify_hash_chain_integrity over the same sequence fails by
+    construction, which is B-49's reason to exist)."""
+    from harness_od.per_family_audit_verification import (
+        REDACTION_TOKEN_FAMILY,
+        verify_per_family_chains,
+    )
+    from harness_od.redaction_tokenizer import RedactionTokenRecord
+    from harness_runtime.lifecycle.redaction_token_audit_map import (
+        AuditLedgerRedactionTokenMap,
+    )
+
+    writer = _writer(tmp_path)
+    token_map = AuditLedgerRedactionTokenMap(
+        audit_writer=writer,
+        tenant_id="tenant-v",
+        signing_key_id="chain-key",
+    )
+
+    def _record(token: str) -> RedactionTokenRecord:
+        return RedactionTokenRecord(
+            token=token,
+            raw_value=f"raw for {token}",
+            semantic_category="PII",
+            attribute_key="gen_ai.input.messages",
+            trace_id="trace-1",
+            span_id=f"span-{token}",
+        )
+
+    writer.append("tenant-v", _make_audit_entry("a" * 64))  # genesis-prior fixture row
+    token_map.append(_record("[REDACTED:PII:v1]"))
+    writer.append("tenant-v", _make_audit_entry("b" * 64))  # interleaved
+    token_map.append(_record("[REDACTED:PII:v2]"))
+
+    entries = writer.read_full_entries_for_tenant("tenant-v")
+    report = verify_per_family_chains(entries)
+    assert report.chained == {REDACTION_TOKEN_FAMILY: 2}
+    assert sum(report.per_entry.values()) == 2
