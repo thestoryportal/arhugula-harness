@@ -182,7 +182,9 @@ way to VERIFY them — the recoverability the sidecar exists to provide has no c
 ### Recommendation
 
 New C-OD-21 §21.2.2 verification API in the same v1.34 delta, mirroring the injection seam precedent
-(CP v1.98 §20.2.1 `SigningBackend`, B-22): optional `backend` parameter; absent → current behavior
+(CP v1.98 §20.2.1 `SigningBackend`, B-22): an optional verification-backend RESOLVER parameter — keyed by
+each row's stored algorithm (and key_id) per the multi-algorithm requirement below, NOT a single
+`SigningBackend | None` whose one `.algorithm` cannot verify mixed history (round-19 P2); absent → current behavior
 (hash-chain + content integrity only) PRESERVED VERBATIM; present → reconstruct the canonical message —
 INCLUDING the leg-1 fifth segment if ratified, which is why B-54 must land jointly with or after B-51 in the
 same delta — and project `"DEPLOYMENT_BOUND"` → `key_period=0` exactly as signing does. Two contract
@@ -285,6 +287,12 @@ Per §4.3 the design-substrate amendments halt here. The operator ratifies, in o
 5. **Leg 3 ⊥ C-CP-20 §20.3.1 reconciliation** (round-12/13): bring §20.3.1's blocking audit-walk into the
    CP rider aligned with the new API (recommended) vs making the OD API conform to §20.3.1's
    fail-on-invalid semantics where that protocol invokes it.
+7. **Rotation-pair disposition at MTC** (round-17/19): PROHIBIT `sign_rotation_pair` at MTC until B-33's
+   rotation-aware message binding lands (recommended — B-33 stays out of this bundle) vs pulling B-33 into
+   the arc for backend-aware rotation now.
+8. **B-53 rides the Runtime rider** (round-19 P2): the migration-CLI promotion is a one-row Runtime §13.4
+   scripts-inventory addition whose register close-out already says "ride the next runtime-spec delta" —
+   fold it into the v1.101 rider (recommended) vs explicitly revising that disposition to wait again.
 6. **Arc bundling** — one OD v1.33 → v1.34 delta carrying legs 1+3, with a CP v1.100 → v1.101 rider
    carrying BOTH CP-owned halves, **and a Runtime v1.100 → v1.101 rider (filing codex round-9 P1): the
    Runtime spec owns the prewarm/keepalive/boot contracts (B-18-KEEPALIVE lineage) that currently commit
