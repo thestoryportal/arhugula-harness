@@ -10,8 +10,9 @@ v1.33 clearance marker at `.harness/clearance/spec-operational-discipline-v1-33-
 authority — pointer refresh owed at the next CLAUDE.md maintenance PR, not this filing).
 
 **Why one filing:** all three legs amend the same C-OD-21 signing surface introduced/refined at OD v1.33
-§21.2.1; one OD amendment arc (v1.33 → v1.34, plus a bounded CP delta rider carrying BOTH CP-owned halves —
-leg 1's §13.5.1 tenant-bearing converter-signature amendment AND leg 2's §28.10.4 carve-out — plus a Runtime
+§21.2.1; one OD amendment arc (v1.33 → v1.34, plus a bounded CP delta rider carrying every ratified
+CP-owned section — leg 1's §13.5.1 tenant-bearing converter-signature amendment, leg 2's §28.10.4
+carve-out, and the conditional §20.3.1 / §20.1 items per gate items 5 and 9 — plus a Runtime
 rider, see the ratification gate) can carry all three coherently, and leg 3's verification API must
 reconstruct whatever message shape leg 1 ratifies — they interlock. **CP delta versioning (filing codex round-5 P1): the CP head is `Spec_Control_Plane_v1_100.md`
 (cleared 2026-07-15) — §28.10.4's CITE stays `v1.24` (last substantive definition, per the delta-baseline
