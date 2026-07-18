@@ -934,8 +934,12 @@ items:
     atomic. Both impl-discretion within Tier-5''s committed properties (no spec fork -- corrected
     grounding at the disposition doc). (i) fix is POSIX-only lock-scope widening of the B-40 lock;
     Windows closure rides B-45.'
-  close_out: 'Disk-backed index (stdlib sqlite3 on the 3.12 baseline, or offset-checkpointed snapshot);
-    widen the B-40 lock across the token map''s tail-read+compose+append with a POSIX-only qualifier.'
+  close_out: 'Disk-backed index (stdlib sqlite3 on the 3.12 baseline, or offset-checkpointed snapshot).
+    For (i): NOT a plain outer-lock widening (codex round-6 -- POSIX flock is non-reentrant across
+    separately-opened descriptors, so an outer hold self-deadlocks when read_full_entries_for_tenant
+    and append reacquire the sidecar lock); needs UNLOCKED inner variants of the tail-read/append the
+    outer transaction calls, or a lock-ownership/transaction API on the writer. POSIX-only; Windows
+    rides B-45.'
   council: 'no'
   heading: '### B-50 · Sidecar scale engineering *(split from B-47 disposition, 2026-07-17)*'
 - id: B-51
@@ -961,8 +965,10 @@ items:
     v1.8 section C-OD-28.2''s operator-configurable default-fail-closed pattern via an
     audit_signing_fail_closed flag, default ON at MTC -- needs an OD delta carving out the validator-hook
     swallow. Class 2 fork doc owed.'
-  close_out: 'Author the Class 2 fork doc; on ratification add the flag + consult it at the six
-    loud-surface sites. The delta is TWO-SPEC (codex round-4): the OD text AND a CP amendment --
+  close_out: 'Author the Class 2 fork doc; on ratification add the flag + consult it at ALL TEN
+    surfacing sites -- the six fn-internal loud-surface handlers AND the four offload-boundary
+    saturation handlers (llm/tool/webhook/hitl outer catches, codex round-6) -- or centralize the
+    policy check ahead of every catch. The delta is TWO-SPEC (codex round-4): the OD text AND a CP amendment --
     section 28.10.4 invariant 2 is CP-owned (Spec_Control_Plane_v1_24 line ~135, hook exceptions MUST
     be swallowed), so fail-closing the validator hook needs a CP carve-out for the audit-signing
     failure class; alternatively preserve fail-open at that one hook while fail-closing the other
