@@ -34,7 +34,7 @@ binds tenant identity via the canonical message's `key_id` segment)"*.
 | # | Option | Assessment |
 |---|---|---|
 | 1 | Bind tenant into `AuditPayload.audit_namespace_attrs` (entry_hash-borne, hence message-bound transitively) | Weakest — attr-borne, caller-supplied, not schema-enforced; absence is indistinguishable from single-tenant |
-| 2 | **Fifth canonical-message segment carrying the tenant scope token** | **RECOMMENDED** — byte-compat-scoped per the B-22 → B-31 precedents: single-tenant/absent → the existing four-tuple PRESERVED VERBATIM (drop-when-`None`); multi-tenant → fifth length-prefixed segment. Metadata relabeling (tenant swap) then breaks verification, the exact §21.2.1 discipline |
+| 2 | **Fifth canonical-message segment carrying the tenant scope token** | **RECOMMENDED** — byte-compat-scoped per the B-22 → B-31 precedents: single-tenant/absent → the existing four-tuple PRESERVED VERBATIM (drop-when-`None`); multi-tenant → fifth length-prefixed segment. Metadata relabeling (tenant swap) then breaks verification, the exact §21.2.1 discipline. **Rider (filing codex round-4 P1): drop-when-`None` needs a bootstrap invariant at MULTI_TENANT_COMPLIANCE — current `RuntimeConfig` accepts MTC with `tenant_id=None` (writer normalizes to `_single`), which would silently keep a compliance deployment on the tenant-unbound four-tuple; the delta must require tenant scope at MTC (config validation) or make signing fail absent tenant there** |
 | 3 | REQUIRE tenant-scoped `key_id`s at MULTI_TENANT_COMPLIANCE (config-validation only) | REJECTED as primary (disposition codex round-3/round-10): `key_arns` maps logical ids to ARNs with NO tenant association and every production composer supplies FIXED global key_ids (`stage_4_od.py`), so a presence check would accept one shared key for every tenant — a false guarantee; tenant-aware key SELECTION would be a mechanism change comparable to option 2 with worse key-management ergonomics. v1.33's key_id note describes a posture an operator MAY adopt, not one the runtime can enforce today |
 
 **No effective interim mitigation exists** (disposition codex round-10): composers select fixed global
@@ -138,9 +138,12 @@ requirements sharpened at filing codex round-1:
 - **Legacy exemption must NOT be inferred from the signature value** (round-1 P1): `signature_attrs` are
   mutable and excluded from `entry_hash`, so classifying placeholder-SHAPED values (`unsigned:*`) as exempt
   hands an attacker a downgrade path — replace a real signature with a placeholder shape and the row skips
-  verification. The contract must gate exemption on an operator-recorded cutover instead — the
-  `adopt_legacy_is_refs`-style explicit ROW baseline, or an equivalent signed/versioned cutover record —
-  mirroring the round-46 deliberately-NOT-automatic adoption posture, not the row's own mutable bytes.
+  verification. The contract must gate exemption on an operator-recorded cutover instead — and the cutover record must
+  itself be AUTHENTICATED (filing codex round-4 P1): a plain `adopt_legacy_is_refs`-style sidecar row is
+  mutable at exactly the adversarial tier under discussion, so an attacker could rewrite the baseline to
+  exempt forged post-cutover rows, recreating the downgrade path. The delta must require the cutover to be
+  signed by a trusted key or anchored outside the rewritable ledger (e.g. bootstrap config / key custody
+  record); the round-46 explicit-operator-action posture carries over, its carrier does not.
   A config-declared pre-backend KEY-PERIOD set is NOT a viable cutover mechanism (filing codex round-3 P2):
   both the placeholder era and the real-KMS era store `"DEPLOYMENT_BOUND"` / project `key_period=0`, so a
   period set either exempts every row or none; period-based cutover only becomes possible if B-33
