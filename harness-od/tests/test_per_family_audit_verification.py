@@ -148,3 +148,16 @@ def test_report_is_deeply_immutable() -> None:
         report.per_entry.clear()  # type: ignore[attr-defined] — mappingproxy has no clear
     with pytest.raises((AttributeError, TypeError)):
         report.chained = {}  # type: ignore[misc]
+
+
+def test_direct_construction_copies_and_freezes_sources() -> None:
+    """Codex round-2 (B-49) — the immutability invariant belongs to the
+    TYPE: a direct constructor caller retaining its source dict must not
+    hold a mutation handle into the report."""
+    source = {"cost": 1}
+    report = FamilyVerificationReport(chained={}, per_entry=source)
+    source["cost"] = 999
+    source["forged"] = 1
+    assert report.per_entry == {"cost": 1}
+    with pytest.raises(TypeError):
+        report.per_entry["x"] = 1  # type: ignore[index]

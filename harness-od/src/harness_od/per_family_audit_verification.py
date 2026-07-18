@@ -75,6 +75,13 @@ class FamilyVerificationReport:
     chained: Mapping[str, int]
     per_entry: Mapping[str, int]
 
+    def __post_init__(self) -> None:
+        # The invariant belongs to the TYPE (codex round-2 on the B-49
+        # landing): a direct constructor caller passing a mutable dict must
+        # not retain a mutation handle into the report — copy then wrap.
+        object.__setattr__(self, "chained", MappingProxyType(dict(self.chained)))
+        object.__setattr__(self, "per_entry", MappingProxyType(dict(self.per_entry)))
+
 
 def _is_redaction_row(entry: AuditLedgerEntry) -> bool:
     return any(
@@ -135,6 +142,4 @@ def verify_per_family_chains(entries: Sequence[AuditLedgerEntry]) -> FamilyVerif
                 )
         chained[REDACTION_TOKEN_FAMILY] = len(redaction_rows)
 
-    return FamilyVerificationReport(
-        chained=MappingProxyType(chained), per_entry=MappingProxyType(per_entry)
-    )
+    return FamilyVerificationReport(chained=chained, per_entry=per_entry)
