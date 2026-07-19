@@ -175,7 +175,8 @@ Six new units; acyclic (Kahn-verifiable):
 ```
 L0-within-delta: U-RT-134 (← U-RT-103 prior-landed; + U-OD-30 cross-axis, see Also line)
 L1-within-delta: U-RT-135 (← U-RT-134), U-RT-136 (← U-RT-134 + U-CP-73 cross-axis)
-Independent:     U-RT-137 (← U-CP-72, U-OD-30 cross-axis), U-RT-138 (← U-RT-47 prior-landed + U-OD-55 cross-axis + U-CP-44/U-CP-45 cross-axis — the injected-verifier Protocol + CP-owned result boundary it adapts and integration-tests)
+Independent:     U-RT-137 (← U-CP-72, U-OD-30 cross-axis)
+L1-after-134:    U-RT-138 (← U-RT-134 — the record-key/binding carriers + bootstrap validation the inspect path consumes, codex rounds 49/50 — + U-RT-47 prior-landed + U-OD-55 cross-axis + U-CP-44/U-CP-45 cross-axis — the injected-verifier Protocol + CP-owned result boundary it adapts and integration-tests)
 Also:            U-RT-134 (← U-OD-30 cross-axis — normalizer delegation; ← U-OD-55 cross-axis — the record carrier for greenfield empty-record initialization)
 Amended:         U-RT-102 (dispatch surface only — NO new edges; record modes re-homed at U-RT-139)
 New (L2-within-delta): U-RT-139 (← U-RT-102, U-RT-134, U-RT-138 [completed — atomic edge per codex round-47], U-OD-55 cross-axis — the record-mode home; breaks the U-RT-102→U-RT-134→U-RT-103→U-RT-102 cycle codex round-40 exposed)
