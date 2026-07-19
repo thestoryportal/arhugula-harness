@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 55
+  total: 56
   open: 4
   design_substrate_gated: 2
   registered_finding: 5
-  operator_gated: 1
+  operator_gated: 2
   held: 1
   closed: 42
-  identity_digest: dc669e1c7a8f375d
+  identity_digest: 3614299ab85972c5
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -1067,3 +1067,26 @@ items:
     MET by ratified gate item 5 (section 20.3.1 reconciled into the CP rider)'
   heading: '### B-54 · Backend-aware audit signature verification API *(split from B-49 at the
     disposition leg, 2026-07-17)*'
+- id: B-55
+  title: Lower-tier fail-closed prewarm/keepalive posture (operator disposition)
+  status: operator_gated
+  summary: 'Registered at the B-51/B-52/B-54 apply arc (PR 1056, codex rounds 2/9/21/34): gate item 8
+    ratified the prewarm/keepalive disable at MTC ONLY, but an EXPLICIT audit_signing_fail_closed=true
+    at solo-developer/team-binding would leave the prewarm/keepalive swallow boundary active under a
+    resolved-ON policy (a post-paid-call signing failure logged as FAILED, not raised). Neither
+    remaining alternative is decidable without the operator: EXTENDING the disable below MTC is a
+    behavior change item 8 did not ratify; PROPAGATION through the prewarm boundary breaks the
+    committed v1.99 bootstrap-isolation contract (prewarm failure MUST NOT propagate as
+    BootstrapFailure). INTERIM (Runtime v1.101): lower-tier explicit true is REJECTED at config
+    validation with a typed error naming this row -- the half-honored state is unrepresentable; the
+    flag is MTC-effective-only until this dispositions.'
+  close_out: 'Operator selects: (a) extend the gate-item-8 disable to any tier with the resolved flag
+    ON (one-line Runtime spec delta + U-RT-135 widening), or (b) define typed propagation through the
+    prewarm boundary (requires amending the v1.99 bootstrap-isolation contract -- a larger delta), or
+    (c) ratify the interim rejection as the permanent posture (spec note only). Recommendation at the
+    apply arc: (a) -- the same integrity-over-latency tradeoff the operator already ratified at MTC,
+    triggered only by the operator''s own explicit opt-in.'
+  council: 'no -- a bounded three-option operator selection; the C7/C9 positions are already recorded
+    at the apply-arc dyad 2 and the codex rounds cited in the summary'
+  heading: '### B-55 · Lower-tier fail-closed prewarm/keepalive posture *(registered at the B-51/B-52/B-54
+    apply arc, 2026-07-18)*'
