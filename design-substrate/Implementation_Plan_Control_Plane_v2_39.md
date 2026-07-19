@@ -42,7 +42,7 @@ The v2.37 U-CP-86 body is PRESERVED VERBATIM; v2.39 adds:
 - **(§1 row 3.)** Per-branch reservation is ATOMIC (all-frames-or-fail-fast).
 - **(§1 row 6 — apply-note 1.)** The strategy's `_cancel_fanout` construction site (`:8336`) is RECOVERY machinery and admission-EXEMPT — admission that can reject recovery converts a capacity breach into a stranded parent.
 - **(§1 row 7.)** The v1.97 (`B-21`) `PeerFanOutResumeState.paused_child_branches` resume semantics are PRESERVED VERBATIM: admission gating changes WHETHER a branch starts, never how a paused one resumes.
-- **(§3 — the B-39 interim constraint.)** Until `B-39` resolves, concurrent sibling branches carrying durable-HITL gates are SEQUENCED (the driver MUST NOT run two durable-HITL-gated siblings genuinely concurrently); siblings without durable-HITL gates run fully concurrent per the admission rule. This is a DOCUMENTED interim constraint with the CP v1.102 §3 removal condition — B-48 does NOT absorb B-39's CP design (the branch-unique one-shot response routing stays B-39-gated).
+- **(§3 — the B-39 interim constraint.)** Until `B-39` resolves: (a) two durable-HITL-gated siblings never run genuinely concurrently; AND (b) during a PENDING-RESPONSE resume window (a paused durable-HITL branch resuming with a one-shot APPROVE/EDIT/REJECT outstanding) ALL sibling dispatches — gated AND ungated — are SEQUENCED around the resumed target (codex rounds 10/11/12: `dispatch()`'s unconditional `consume_and_clear()` lets an ungated sibling steal the response); OUTSIDE a pending-response window, ungated siblings run fully concurrent per §1. Criteria + tests apply at BOTH strategy sites.
 
 **Tests (v2.39 additions — mutation-probed per PD-8):**
 
