@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 58
+  total: 59
   open: 5
   design_substrate_gated: 1
-  registered_finding: 7
+  registered_finding: 8
   operator_gated: 2
   held: 1
   closed: 42
-  identity_digest: eb21daec7f2bf84f
+  identity_digest: 47aeb1258dc9abf8
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -1125,3 +1125,18 @@ items:
   council: 'no -- bounded follow-on; the C3/C9 reasoning is recorded at the IS v1.11 change-note'
   heading: '### B-57 · Direct-writer caller-supplied timestamp capture-order inversion *(registered at
     the B-48 apply arc, 2026-07-19)*'
+- id: B-58
+  title: Pre-existing harness-cp function-level import of runtime escalation error types
+  status: registered_finding
+  summary: 'Registered at the B-48 apply arc (codex round-27): workflow_driver.py:4737 imports three
+    ValidatorEscalation* exception classes from harness_runtime.lifecycle.validator_escalation_composer
+    at function level -- a pre-existing cross-package import in the OD->CP-canonical-direction
+    workspace (the carrier-home-defect class: cross-axis exception types living in one package,
+    consumed by another). Observed prior state, present at the merge base; the B-48 capacity-seam
+    package-graph witness EXCLUDES it explicitly rather than silently passing over it.'
+  close_out: 'IF a hygiene arc opens: re-home the three exception classes to harness-core (the U-CORE-03
+    precedent) and drop the function-level import. Until then the import stands as documented prior
+    state; nothing blocks on it.'
+  council: 'no -- bounded carrier-home hygiene follow-on'
+  heading: '### B-58 · Pre-existing harness-cp function-level import of runtime escalation error types
+    *(registered at the B-48 apply arc, 2026-07-19)*'
