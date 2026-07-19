@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 57
+  total: 58
   open: 5
   design_substrate_gated: 1
-  registered_finding: 6
+  registered_finding: 7
   operator_gated: 2
   held: 1
   closed: 42
-  identity_digest: 7b64a1b30ccc172a
+  identity_digest: eb21daec7f2bf84f
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -1108,3 +1108,20 @@ items:
     codex rounds'
   heading: '### B-56 · Corrected-relabel repair for already-tagged audit history *(registered at the
     B-51/B-52/B-54 apply arc, 2026-07-18)*'
+- id: B-57
+  title: Direct-writer caller-supplied timestamp capture-order inversion
+  status: registered_finding
+  summary: 'Registered at the B-48 apply arc (IS v1.11 change-note; apply-PR codex round-13 made the
+    row real): the C-IS-07 section 7.6 writer-owned fix covers the buffered/branch-DRAIN path only
+    (the ratified narrow scope, pinned by the sibling-drain xfail). DIRECT appends keep caller-supplied
+    timestamps with detect-then-refuse semantics -- two uncoordinated concurrent direct writers (e.g.
+    the audit/cost interleave) can still capture timestamps outside the lock in inverted order and hit
+    NonMonotonicTimestampError. The superseded defect record section 8.3 phrased the fix this broadly;
+    the filing did not ratify it.'
+  close_out: 'IF the direct-path inversion materializes in practice (a real NonMonotonicTimestampError
+    from production direct writers): a narrow IS spec delta extending section 7.6''s writer-owned
+    sampling to an opt-in direct-append mode (or per-writer serialization guidance) + U-IS-11 widening.
+    Until then detect-then-refuse is the committed posture and this row is the queryable record.'
+  council: 'no -- bounded follow-on; the C3/C9 reasoning is recorded at the IS v1.11 change-note'
+  heading: '### B-57 · Direct-writer caller-supplied timestamp capture-order inversion *(registered at
+    the B-48 apply arc, 2026-07-19)*'
