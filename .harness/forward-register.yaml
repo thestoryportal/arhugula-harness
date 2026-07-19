@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 55
-  open: 0
-  design_substrate_gated: 6
-  registered_finding: 5
-  operator_gated: 1
+  total: 57
+  open: 4
+  design_substrate_gated: 2
+  registered_finding: 6
+  operator_gated: 2
   held: 1
   closed: 42
-  identity_digest: 6e170f2ce3f41c4a
+  identity_digest: 7a3e0c76cb4548d8
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -980,8 +980,8 @@ items:
     2026-07-17 — item (i) PR #1042, item (g) PR #1044)*'
 - id: B-51
   title: Tenant-scope binding under deployment-scoped signing keys
-  status: design_substrate_gated
-  summary: 'RATIFIED 2026-07-18 (all gate items as recommended) -- apply arc open; row flips to open once the OD v1.34 + CP v1.101 + Runtime v1.101 + plan deltas land. B-47 disposition item (f): the section 21.2.1 canonical message does not bind tenant
+  status: open
+  summary: 'RATIFIED 2026-07-18 (all gate items as recommended) -- OPEN (spec + plan deltas APPLIED 2026-07-18: OD v1.34 + CP v1.101 + Runtime v1.101 + plan deltas v2.29/v2.38/v2.49). B-47 disposition item (f): the section 21.2.1 canonical message does not bind tenant
     identity; under a deployment-scoped key a signed entry could be re-presented under another tenant.
     Recommendation REVISED at codex round-3: the fifth canonical-message segment is the PRIMARY fix
     (key_arns carries no tenant association and composers use fixed global key_ids, so a key-scope
@@ -989,33 +989,31 @@ items:
     round-10): composers select fixed global key_ids, so distinct per-tenant mapping entries would
     never be used -- cross-tenant replay under a deployment-scoped key remains unmitigated until the
     message segment lands or tenant-aware key selection is built. Class 1 fork doc FILED
-    2026-07-17 at .harness/class_1_fork_b51_b52_b54_od_signing_amendment_arc.md (leg 1) -- RATIFIED 2026-07-18; the apply arc is the live next step.'
-  close_out: 'Fork doc RATIFIED 2026-07-18 (see summary). Apply pass: land the
-    canonical-message segment at the next OD amendment arc (byte-compat-scoped per the B-22/B-31
-    precedents). The segment needs tenant identity AVAILABLE AT SIGNING (codex round-16): today
-    sign_audit_entry/cp_audit_to_od_audit receive no tenant and the writer gets tenant_id only after
-    the entry is signed -- the fork specifies a tenant-bearing signing API threaded through the
-    converters/composers AND the non-converter paths the filing enumerates (the direct
-    AuditLedgerRedactionTokenMap compose path; sign_rotation_pair -- thread or defer/prohibit
-    multi-tenant use pending B-33; the workflow-less RuntimeLLMDispatcher.prewarm path, which signs
-    with tenant_id=None -- deployment tenant or an explicit synthetic-scope policy), plus the MTC
-    tenant-scope bootstrap invariant with its _single-history migration/legacy-read story. See the
-    filing for the full rider.'
+    2026-07-17 at .harness/class_1_fork_b51_b52_b54_od_signing_amendment_arc.md (leg 1) -- spec+plan deltas APPLIED 2026-07-18 (PR 1056); the impl arc is the live next step (U-OD-30 amended + U-CP-72 + U-RT-137).'
+  close_out: 'Fork doc RATIFIED 2026-07-18; spec deltas APPLIED at OD v1.34 + CP v1.101 + Runtime v1.101 + plans (PR 1056). IMPL ARC: implement the
+    APPLIED fifth-segment + tenant-bearing API per U-OD-30 (amended) + U-CP-72 + U-RT-137 (the
+    canonical-message contract now LIVES at OD v1.34 section 21.2.1 — no further OD amendment owed). The applied obligations (rejected alternatives REMOVED per the ratified gate): the tenant-bearing
+    API threads the converters/composers AND the redaction-map compose path (OD v1.34 section 21.2.1
+    rows 3-4); sign_rotation_pair is PROHIBITED at MTC until B-33 (row 7 -- threading was rejected);
+    the workflow-less prewarm path is REMOVED at MTC by the gate-item-8 disable (U-RT-135 -- no
+    synthetic-scope policy); the MTC tenant bootstrap invariant + the record-authenticated retag
+    migration story land per U-RT-134/U-RT-139. See OD v1.34 + the plan deltas for the full
+    contracts.'
   council: 'yes at apply leg -- C7 compliance vs C2 schema-minimalism dyad, REQUIRED by the
     ratified filing''s final section (dyad 1)'
   heading: '### B-51 · Tenant-scope binding under deployment-scoped keys *(split from B-47 disposition,
     2026-07-17)*'
 - id: B-52
   title: Audit-signing fail-closed policy at MULTI_TENANT_COMPLIANCE
-  status: design_substrate_gated
-  summary: 'RATIFIED 2026-07-18 (two-spec shape; flag-false invalid at MTC; redaction path + prewarm posture as recommended) -- apply arc open. B-47 disposition item (m): signing failures are typed + loudly surfaced but dispatch stays
+  status: open
+  summary: 'RATIFIED 2026-07-18 (two-spec shape; flag-false invalid at MTC; redaction path + prewarm posture as recommended) -- spec+plan deltas APPLIED (PR 1056); impl arc open. B-47 disposition item (m): signing failures are typed + loudly surfaced but dispatch stays
     fail-open (CP section 28.10.4 invariant 2 is spec-committed). Recommendation recorded: mirror OD
     v1.8 section C-OD-28.2''s operator-configurable default-fail-closed pattern via an
     audit_signing_fail_closed flag, default ON at MTC. TWO-SPEC fork (codex rounds 4/8): the OD
     addendum AND a CP amendment (section 28.10.4 invariant 2 is CP-owned); the weaker single-spec
     alternative was REJECTED at ratification. Class 1 fork doc FILED 2026-07-17 at
-    .harness/class_1_fork_b51_b52_b54_od_signing_amendment_arc.md (leg 2) -- RATIFIED 2026-07-18; the apply arc is the live next step.'
-  close_out: 'Fork doc RATIFIED 2026-07-18 (see summary). Apply pass: add the flag + the ZEROTH-site bootstrap
+    .harness/class_1_fork_b51_b52_b54_od_signing_amendment_arc.md (leg 2) -- spec+plan deltas APPLIED 2026-07-18 (PR 1056); the impl arc is the live next step (U-OD-30 §21.2.3 criteria + U-CP-73 + U-RT-134/135/136).'
+  close_out: 'Fork doc RATIFIED 2026-07-18; spec deltas APPLIED (PR 1056). IMPL ARC: add the flag + the ZEROTH-site bootstrap
     invariant (fail-closed requires a configured backend) + consult the flag at ALL TEN
     surfacing sites -- the six fn-internal loud-surface handlers AND the four offload-boundary
     saturation handlers (llm/tool/webhook/hitl outer catches, codex round-6) -- or centralize the
@@ -1036,38 +1034,77 @@ items:
     2026-07-17)*'
 - id: B-53
   title: Migration-CLI promotion into the spec-committed scripts inventory
-  status: design_substrate_gated
-  summary: 'RATIFIED 2026-07-18 (harness migrate-audit-sidecar subcommand rides the Runtime v1.101 rider) -- apply arc open. B-47 disposition item (j): python -m harness_runtime.admin.migrate_audit_sidecar works
+  status: open
+  summary: 'RATIFIED 2026-07-18 (harness migrate-audit-sidecar subcommand rides the Runtime v1.101 rider) -- section 13.4 row LANDED (PR 1056); impl arc open. B-47 disposition item (j): python -m harness_runtime.admin.migrate_audit_sidecar works
     today; promotion = a `harness migrate-audit-sidecar` SUBCOMMAND under the existing flat harness
     console-script namespace (round-22/23 of the filing: no new [project.scripts] entry -- dispatch
     rides the committed harness_runtime.cli:main entry), recorded as a runtime spec section 13.4
     inventory row. LOW urgency. Fork FILED 2026-07-17 via .harness/class_1_fork_b51_b52_b54_od_signing_amendment_arc.md
     (ratification-gate item 7): rides the B-51/B-52/B-54 arc''s Runtime v1.100 -> v1.101 rider as the
-    one-row addition -- ratified with the same gate (item 7) 2026-07-18.'
-  close_out: 'Class 1 back-flow per section 4.3 (a spec-inventory revision IS a design-artifact
-    change): a one-row section 13.4 inventory addition riding the B-51/B-52/B-54 arc''s Runtime
-    v1.101 rider + clearance marker, then the CLI subcommand implementation (no pyproject change);
-    nothing blocks on it.'
+    one-row addition -- ratified with the same gate (item 7); section 13.4 row LANDED at Runtime
+    v1.101 (PR 1056); impl arc (U-RT-102 dispatch + U-RT-139 record/retag modes) next.'
+  close_out: 'Class 1 back-flow COMPLETE (PR 1056): the section 13.4 inventory row + clearance marker LANDED
+    at Runtime v1.101 — remaining work is the U-RT-102 (dispatch) + U-RT-139 (record modes: authoring,
+    authentication, retag, completeness refusal) IMPLEMENTATION; no pyproject change; nothing blocks on it.'
   council: 'no'
   heading: '### B-53 · Migration-CLI scripts-inventory promotion *(split from B-47 disposition,
     2026-07-17)*'
 - id: B-54
   title: Backend-aware audit signature verification API
-  status: design_substrate_gated
-  summary: 'RATIFIED 2026-07-18 (section 21.2.2 API with all contract requirements, non-blocking default; section 20.3.1 reconciliation into the CP rider) -- apply arc open. Split from B-49 at codex round-11 of the disposition leg: verify_hash_chain_integrity
+  status: open
+  summary: 'RATIFIED 2026-07-18 (section 21.2.2 API with all contract requirements, non-blocking default; section 20.3.1 reconciliation into the CP rider) -- spec+plan deltas APPLIED (PR 1056); impl arc open. Split from B-49 at codex round-11 of the disposition leg: verify_hash_chain_integrity
     checks only unkeyed content hashes + links, which a ledger-rewriting attacker can recompute; the
     production SigningBackend.verify path (real KMS verification of persisted signature_attrs,
     key/period handling, legacy-placeholder semantics) has NO consumer and section 21.2.1 explicitly
     leaves verification out of scope -- so adding the verification API is spec surface. Without it the
     MTC tamper-evidence story stops at hash-chain level. Class 1 fork doc FILED 2026-07-17 at
-    .harness/class_1_fork_b51_b52_b54_od_signing_amendment_arc.md (leg 3) -- RATIFIED 2026-07-18; the apply arc is the live next step.'
-  close_out: 'Fork doc RATIFIED 2026-07-18 (see summary; one OD amendment arc carries all three legs).
-    Apply pass per the filing''s finalized requirements (message-format cutover for pre-v1.34
-    real signatures, tenant-scope verifier input, authenticated tenant-bound legacy cutover): specify
-    the verification contract (per-entry backend verify over the canonical message, placeholder
-    handling, failure taxonomy), then implement the verifier + wire into B-49''s per-family unit and
-    harness-inspect.'
+    .harness/class_1_fork_b51_b52_b54_od_signing_amendment_arc.md (leg 3) -- spec+plan deltas APPLIED 2026-07-18 (PR 1056); the impl arc is the live next step (NEW U-OD-55 + U-CP-44/45/42 + U-RT-138).'
+  close_out: 'Fork doc RATIFIED 2026-07-18; spec deltas APPLIED (PR 1056; one OD amendment arc carried all
+    three legs). IMPL ARC (the verification contract is SPECIFIED at OD v1.34 section 21.2.2 + CP v1.101
+    section 3 -- PR 1056): implement the verifier per NEW U-OD-55 + wire into B-49''s per-family unit
+    and harness-inspect per U-RT-138 (with the U-CP-44/45 injected-verifier boundary).'
   council: 'yes at apply leg -- C7 compliance vs C9 availability dyad; the blocking condition is
     MET by ratified gate item 5 (section 20.3.1 reconciled into the CP rider)'
   heading: '### B-54 · Backend-aware audit signature verification API *(split from B-49 at the
     disposition leg, 2026-07-17)*'
+- id: B-55
+  title: Lower-tier fail-closed prewarm/keepalive posture (operator disposition)
+  status: operator_gated
+  summary: 'Registered at the B-51/B-52/B-54 apply arc (PR 1056, codex rounds 2/9/21/34): gate item 8
+    ratified the prewarm/keepalive disable at MTC ONLY, but an EXPLICIT audit_signing_fail_closed=true
+    at solo-developer/team-binding would leave the prewarm/keepalive swallow boundary active under a
+    resolved-ON policy (a post-paid-call signing failure logged as FAILED, not raised). Neither
+    remaining alternative is decidable without the operator: EXTENDING the disable below MTC is a
+    behavior change item 8 did not ratify; PROPAGATION through the prewarm boundary breaks the
+    committed v1.99 bootstrap-isolation contract (prewarm failure MUST NOT propagate as
+    BootstrapFailure). INTERIM (Runtime v1.101): lower-tier explicit true is ACCEPTED
+    and honored at every catch-site surface (the ratified non-MTC opt-in); ONLY the prewarm/keepalive
+    swallow boundary keeps its v1.99 posture there until this row dispositions.'
+  close_out: 'Operator selects: (a) extend the gate-item-8 disable to any tier with the resolved flag
+    ON (one-line Runtime spec delta + U-RT-135 widening), or (b) define typed propagation through the
+    prewarm boundary (requires amending the v1.99 bootstrap-isolation contract -- a larger delta), or
+    (c) ratify the interim rejection as the permanent posture (spec note only). Recommendation at the
+    apply arc: (a) -- the same integrity-over-latency tradeoff the operator already ratified at MTC,
+    triggered only by the operator''s own explicit opt-in.'
+  council: 'no -- a bounded three-option operator selection; the C7/C9 positions are already recorded
+    at the apply-arc dyad 2 and the codex rounds cited in the summary'
+  heading: '### B-55 · Lower-tier fail-closed prewarm/keepalive posture *(registered at the B-51/B-52/B-54
+    apply arc, 2026-07-18)*'
+- id: B-56
+  title: Corrected-relabel repair for already-tagged audit history
+  status: registered_finding
+  summary: 'Registered at the B-51/B-52/B-54 apply arc (codex rounds 34/42): an already-tagged sidecar
+    row whose mutable source_tag differs from the operator-attested tenant_scope is the relabel
+    scenario the OD v1.34 section 21.2.2 row-5 trusted-source rule exists to detect -- but the
+    ratified arc authorizes retagging ONLY source_tag="_single" rows, so the repair (a cross-tenant
+    tag rewrite + generalized alias) is NOT buildable without its own spec delta. Current disposition:
+    record validation REJECTS the mismatch typed (never silently repaired, never silently exempted)
+    and surfaces it for operator investigation.'
+  close_out: 'IF operator demand materializes: a narrow OD v1.34+ delta authorizing the corrected-
+    relabel retag (scope: record-attested mismatches only; the generalized (source_tag, entry_hash)
+    alias; the same atomicity/completeness discipline as the _single retag) + U-RT-139 widening.
+    Until then the typed rejection is the complete posture.'
+  council: 'no -- bounded follow-on; the C7/C10 trust reasoning is already recorded at the apply-arc
+    codex rounds'
+  heading: '### B-56 · Corrected-relabel repair for already-tagged audit history *(registered at the
+    B-51/B-52/B-54 apply arc, 2026-07-18)*'
