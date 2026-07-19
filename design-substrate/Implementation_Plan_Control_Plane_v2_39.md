@@ -22,7 +22,7 @@ Per the fork's §5 rider (f) (the CP spec/plan rider: "bringing `_run_fanout_to_
 
 ### §0.4 Scope discipline
 
-ADDITIVE / amended-unit scope only. ONE new atomic unit (U-CP-101); ZERO new contract IDs; THREE new within-axis DAG edges — U-CP-85/86/88 → U-CP-101 (rounds 18/19; otherwise amendments only). NEW cross-axis CONSUMPTION edges declared CP-side (atomic, unit-to-unit): U-CP-86 → U-RT-141, U-CP-88 → U-RT-141, U-CP-85 → U-RT-141 (the Runtime plan v2.50 executor unit whose capacity authority these amendments consume — Runtime v1.102 §14.8.10.1 cross-referenced). The CP witness classes of the CP v1.102 change-note ((a)–(g), each mutation-probed per Workflow v1.18 PD-8) are transcribed as `Tests:` criteria at their home units: (a) + (c) + (e) → U-CP-86/U-CP-88; (b) + (f) → U-CP-85; (g) → U-CP-82. The typed capacity error's step-attributability (the dyad's C1 condition) is a doc-level criterion at U-CP-89 (its definition site is Runtime-owned, U-RT-140). Co-land pins (recorded, not DAG edges — one B-48 impl arc): U-CP-86/U-CP-88 ⊕ U-RT-141; U-CP-85/U-CP-86 ⊕ U-RT-144; U-CP-82 ⊕ IS plan v2.7 U-IS-11.
+ADDITIVE / amended-unit scope only. ONE new atomic unit (U-CP-101); ZERO new contract IDs; THREE new within-axis DAG edges — U-CP-85/86/88 → U-CP-101 (rounds 18/19; otherwise amendments only). Cross-axis relationships (rounds 20/21/24/25 — ONE authoritative graph): the ONLY DAG dependency edges are U-CP-85/86/88 → U-CP-101 (within-axis), U-CP-101 → U-CORE-03, and U-CP-82 → U-IS-11; U-RT-141 is a CO-LAND/INTEGRATION PIN of the one B-48 impl arc, never a CP dependency (the Runtime adapter implements the U-CP-101 Protocol — the one Runtime→CP edge, safe direction).50 executor unit whose capacity authority these amendments consume — Runtime v1.102 §14.8.10.1 cross-referenced). The CP witness classes of the CP v1.102 change-note ((a)–(g), each mutation-probed per Workflow v1.18 PD-8) are transcribed as `Tests:` criteria at their home units: (a) + (c) + (e) → U-CP-86/U-CP-88; (b) + (f) → U-CP-85; (g) → U-CP-82. The typed capacity error's step-attributability (the dyad's C1 condition) is a doc-level criterion at U-CP-89 (its definition site is Runtime-owned, U-RT-140). Co-land pins (recorded, not DAG edges — one B-48 impl arc): U-CP-86/U-CP-88 ⊕ U-RT-141; U-CP-85/U-CP-86 ⊕ U-RT-144; U-CP-82 ⊕ IS plan v2.7 U-IS-11.
 
 ---
 
@@ -32,7 +32,7 @@ ADDITIVE / amended-unit scope only. ONE new atomic unit (U-CP-101); ZERO new con
 
 The v2.37 U-CP-86 body is PRESERVED VERBATIM; v2.39 adds:
 
-**Implements (addition):** + C-CP-25 §25.11 (AMENDED at CP v1.102 §1 — fan-out capacity gating) + the CP v1.102 §3 interim constraint. Consumes the Runtime §14.8.10.1 executor capacity authority (Runtime plan v2.50 U-RT-141 — cross-axis).
+**Implements (addition):** + C-CP-25 §25.11 (AMENDED at CP v1.102 §1 — fan-out capacity gating) + the CP v1.102 §3 interim constraint. Admits through the U-CP-101 capacity-authority Protocol (the Runtime §14.8.10.1 executor reaches it via the U-RT-141 adapter — co-land pin, not a dependency).
 
 **Depends on (addition):** + [U-CP-101 (within-axis — the capacity-authority Protocol + default authority the gated sites admit through; codex rounds 18/21)]. *(U-RT-141 is a co-land/integration pin only, not a dependency.)*
 
@@ -54,7 +54,7 @@ The v2.37 U-CP-86 body is PRESERVED VERBATIM; v2.39 adds:
 
 The v2.37 U-CP-88 body is PRESERVED VERBATIM; v2.39 adds:
 
-**Implements (addition):** + C-CP-25 §25.11 (AMENDED at CP v1.102 §1) + the CP v1.102 §3 interim constraint. Consumes the Runtime §14.8.10.1 executor capacity authority (Runtime plan v2.50 U-RT-141 — cross-axis).
+**Implements (addition):** + C-CP-25 §25.11 (AMENDED at CP v1.102 §1) + the CP v1.102 §3 interim constraint. Admits through the U-CP-101 capacity-authority Protocol (the Runtime §14.8.10.1 executor reaches it via the U-RT-141 adapter — co-land pin, not a dependency).
 
 **Depends on (addition):** + [U-CP-101 (within-axis — the capacity-authority declaration; codex rounds 18/21)]. *(U-RT-141 co-land pin only.)*
 
@@ -124,7 +124,7 @@ The v2.37 U-CP-82 body is PRESERVED VERBATIM; v2.39 adds:
 
 | Contract surface | Units covering (delta) |
 |---|---|
-| C-CP-25 §25.11 fan-out capacity gating (AMENDED at CP v1.102 §1 rows 1–4, 6–7) | **U-CP-86 + U-CP-88 (amended)** (+ Runtime plan v2.50 U-RT-141 cross-axis — the capacity authority) |
+| C-CP-25 §25.11 fan-out capacity gating (AMENDED at CP v1.102 §1 rows 1–4, 6–7) | **U-CP-86 + U-CP-88 (amended)** (+ U-CP-101 the declaration; U-RT-141 co-land pin) |
 | C-CP-25 §25.11 admission-rejection = branch failure under §25.15 (CP v1.102 §1 row 5, apply-note 2) | **U-CP-85 (amended)** |
 | C-CP-25 §25.11 `HIERARCHICAL_DELEGATION` row — depth-phrase retirement + formal delegation (CP v1.102 §2) | **U-CP-89 (amended)** |
 | C-CP-25 §25.11 B-39 interim sequencing constraint (NEW at CP v1.102 §3) | **U-CP-86 + U-CP-88 (amended)** |
