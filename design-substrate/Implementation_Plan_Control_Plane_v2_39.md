@@ -102,6 +102,8 @@ The v2.37 U-CP-89 body is PRESERVED VERBATIM **except** its Scope/Signatures phr
 
 ## §5 U-CP-82 amendment — drain-path timestamp call-site change + strict-xfail REMOVAL (CP v1.102 §1 row 8; fork §4 item 7 — co-owned with IS)
 
+**Depends on (v2.39 addition):** [U-IS-11 (cross-axis: IS — the writer-owned drain-timestamp API this call-site change consumes; codex round-16)].
+
 The v2.37 U-CP-82 body is PRESERVED VERBATIM; v2.39 adds:
 
 **Implements (addition):** + C-CP-25 §25.11 (AMENDED at CP v1.102 §1 row 8 — the drain-path timestamp-authority binding). The CONTRACT is IS-owned: C-IS-07 §7.6 (IS spec v1.11 — writer-owned timestamp sampling INSIDE the IS `_WRITE_LOCK` on the buffered/branch-drain surface), homed at IS plan v2.7 U-IS-11 — cross-referenced, never restated.
@@ -128,7 +130,7 @@ The v2.37 U-CP-82 body is PRESERVED VERBATIM; v2.39 adds:
 | C-CP-25 §25.11 B-39 interim sequencing constraint (NEW at CP v1.102 §3) | **U-CP-86 + U-CP-88 (amended)** |
 | C-CP-25 §25.11 drain-path timestamp-authority binding (CP v1.102 §1 row 8) + fork §4 item 7 xfail removal | **U-CP-82 (amended)** (contract IS-owned at IS plan v2.7 U-IS-11 — cross-axis) |
 
-DAG: ZERO new within-axis edges; NEW cross-axis consumption edges (atomic, unit-to-unit, declared CP-side): U-CP-86 → U-RT-141, U-CP-88 → U-RT-141, U-CP-85 → U-RT-141. Acyclicity preserved (Kahn-verifiable: the new edges point CP → Runtime only; no Runtime v2.50 unit depends on any U-CP-* unit, so no cycle can close). Co-land pins recorded (not DAG edges): U-CP-86/U-CP-88 ⊕ U-RT-141; U-CP-85/U-CP-86 ⊕ U-RT-144; U-CP-82 ⊕ IS plan v2.7 U-IS-11 — all land in the one B-48 impl arc.
+DAG: ZERO new within-axis edges; NEW cross-axis consumption edges (atomic, unit-to-unit, declared CP-side): U-CP-86 → U-RT-141, U-CP-88 → U-RT-141, U-CP-85 → U-RT-141, U-CP-82 → U-IS-11 (the writer-owned drain-timestamp API its call-site change consumes — a DAG edge, not only the co-land pin; codex rounds 14/16). Acyclicity preserved (Kahn-verifiable: the new edges point CP → Runtime only; no Runtime v2.50 unit depends on any U-CP-* unit, so no cycle can close). Co-land pins recorded (not DAG edges): U-CP-86/U-CP-88 ⊕ U-RT-141; U-CP-85/U-CP-86 ⊕ U-RT-144; U-CP-82 ⊕ IS plan v2.7 U-IS-11 — all land in the one B-48 impl arc.
 
 ---
 
