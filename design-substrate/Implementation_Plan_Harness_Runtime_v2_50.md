@@ -152,7 +152,7 @@ L3-within-delta: U-RT-143 (← U-RT-141, U-RT-142)
 L4-within-delta: U-RT-144 (← U-RT-142, U-RT-143)
 ```
 
-Cross-axis edges: the CP fan-out amendments consume the executor's capacity authority — declared CP-SIDE at plan v2.39 (U-CP-86 → U-RT-141, U-CP-88 → U-RT-141, U-CP-85 → U-RT-141; amendments of existing units, so these are recorded consumption edges + co-land pins, not new CP unit nodes). IS ← nothing new (the IS plan v2.7 U-IS-11 amendment has ZERO dependency on any Runtime unit; IS 0-outbound preserved). Co-land pins per §0.4 (one B-48 impl arc). All prior edges + acyclicity PRESERVED VERBATIM.
+Cross-axis relationships (reconciled rounds 20-26 — ONE authoritative graph): the CP fan-out amendments (U-CP-85/86/88) depend ONLY on U-CP-101 (the CP-declared Protocol + default authority); U-RT-141 ← U-CP-101 (the adapter implements the Protocol — the one Runtime→CP edge, cycle-safe) and ← U-CORE-03; U-RT-141 is a CO-LAND/INTEGRATION PIN of the one B-48 impl arc for the CP units, never a CP dependency.
 
 ---
 
