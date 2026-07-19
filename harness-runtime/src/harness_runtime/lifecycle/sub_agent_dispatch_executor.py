@@ -113,6 +113,9 @@ class SubAgentDispatchExecutor:
         self._spawned = 0
         self._completed = 0
         self._outstanding: set[Future[Any]] = set()
+        # codex round-7 [P2] "stop workers that finish after the drain
+        # snapshot" — see `drain()` + `_worker()` for the race this closes.
+        self._draining = False
 
     # -- frame budget (the ONE shared budget; occupied+N+S accounting) --------
 
@@ -283,7 +286,22 @@ class SubAgentDispatchExecutor:
             # THIS channel (exclusive), so it's safe to publish first: any
             # job it pushes just waits in the channel's own buffer until we
             # reach `.get()` below.
+            #
+            # codex round-7 [P2] "stop workers that finish after the drain
+            # snapshot" — `drain()` sweeps + sentinels `_idle_channels`
+            # ONCE, under this SAME lock, and flips `_draining` under that
+            # same hold. A worker finishing its job strictly AFTER that
+            # sweep would otherwise re-register on a channel `drain()` will
+            # never look at again, blocking forever on `.get()` (an
+            # unbounded per-`run()`-call daemon-thread leak on a long-lived
+            # server process). Checking `_draining` here, under the SAME
+            # lock `drain()` uses for its own set-and-sweep, makes the two
+            # sides strictly ordered — whichever runs first under the lock
+            # is the one that's honored, so a late worker self-exits instead
+            # of registering into a channel nothing will ever signal.
             with self._lock:
+                if self._draining:
+                    return
                 self._idle_channels.append(my_channel)
             item = my_channel.get()
             if item is None:
@@ -356,6 +374,13 @@ class SubAgentDispatchExecutor:
             completed_during = self._completed - completed_before
             idle_channels = list(self._idle_channels)
             self._idle_channels.clear()
+            # codex round-7 [P2] — flip under the SAME lock hold as the
+            # sweep above, closing the race with `_worker()`'s own
+            # check-then-append (also lock-held): a worker that hasn't
+            # registered yet when this runs sees `_draining=True` on its
+            # next re-registration attempt and self-exits instead; a worker
+            # already registered here got its sentinel in this sweep.
+            self._draining = True
         for channel in idle_channels:
             channel.put(None)
         return (completed_during, still_outstanding)

@@ -8450,15 +8450,35 @@ def _execute_parallelization(
             # `_capture_branch_terminal` store I/O. `_cancel_branch` is the
             # strict-tier (PAUSE / CASCADE_CANCEL) path only — PROCEED's
             # `_proceed_branch` writes none.
-            _mark_branch_dispatched(
-                ctx,
-                manifest_entry,
-                run_idempotency_key=run_idempotency_key,
-                branch_index=branch_index,
-                step_id=step.step_id,
-                step_kind=step.step_kind,
-                step=step,
-            )
+            try:
+                _mark_branch_dispatched(
+                    ctx,
+                    manifest_entry,
+                    run_idempotency_key=run_idempotency_key,
+                    branch_index=branch_index,
+                    step_id=step.step_id,
+                    step_kind=step.step_kind,
+                    step=step,
+                )
+            except BaseException:
+                # codex round-7 [P1] — the marker write is the ONLY statement
+                # before `inflight` exists; `_dispatch_releasing_admission`
+                # (the sole releaser of `_admission`, tied to the REAL
+                # worker-thread completion) is only ever scheduled AFTER this
+                # call succeeds. If the marker write itself raises, that
+                # releaser never runs — and this coroutine's own `finally`
+                # below deliberately does NOT release `_admission` either (it
+                # defers to the dispatch-tied releaser, see that comment) — so
+                # without this, `_admission`'s frame would leak permanently
+                # regardless of which downstream disposition (cancelled /
+                # re-dispatchable-on-resume) this branch ends up recorded
+                # under. Release explicitly, mirroring the existing
+                # never-reached-its-own-dispatch-finally pattern already used
+                # for withheld warm-up admissions (`_release_unconsumed_
+                # fanout_admissions`).
+                if isinstance(_admission, CapacityLease):
+                    _admission.release_unless_job_bound()
+                raise
             # Schedule the (sync) dispatch off-loop; `dispatch_branch_step_shielded`
             # keeps it alive against THIS branch's cancellation so an in-flight effect
             # runs to its own completion (obl. 1), and registers it for the barrier's
@@ -11967,15 +11987,25 @@ def _execute_orchestrator_workers(
             # so the marker/capture sets are partition-consistent. SYNCHRONOUS (atomic with the
             # `ensure_future` dispatch — see `_cancel_branch`). `_cancel_worker` is the strict-tier
             # path only — PROCEED's `_proceed_worker` writes no marker.
-            _mark_branch_dispatched(
-                ctx,
-                manifest_entry,
-                run_idempotency_key=run_idempotency_key,
-                branch_index=branch_index,
-                step_id=step.step_id,
-                step_kind=step.step_kind,
-                step=step,
-            )
+            try:
+                _mark_branch_dispatched(
+                    ctx,
+                    manifest_entry,
+                    run_idempotency_key=run_idempotency_key,
+                    branch_index=branch_index,
+                    step_id=step.step_id,
+                    step_kind=step.step_kind,
+                    step=step,
+                )
+            except BaseException:
+                # codex round-7 [P1] — see `_cancel_branch`'s identical guard
+                # (byte-identical rationale: the marker write is the only
+                # statement before `_dispatch_releasing_admission` is ever
+                # scheduled; without this, a marker-write failure leaks
+                # `_admission` permanently).
+                if isinstance(_admission, CapacityLease):
+                    _admission.release_unless_job_bound()
+                raise
             # Schedule the (sync) dispatch off-loop; `dispatch_branch_step_shielded`
             # keeps it alive against THIS branch's cancellation so an in-flight effect
             # runs to its own completion (obl. 1), and registers it for the barrier's

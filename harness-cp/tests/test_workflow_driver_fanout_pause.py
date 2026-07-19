@@ -29,6 +29,7 @@ import threading
 import time
 from typing import Any, cast
 
+import pytest
 from harness_core import PersonaTier, StepID, WorkloadClass
 from harness_core.workflow_event_class import WorkflowEventClass
 from harness_cp.cp_shared_types import ModelBinding
@@ -3121,4 +3122,77 @@ def test_b39_phase0_strike_on_first_of_two_resumed_targets_releases_the_second()
     assert authority.available == 12, (
         f"expected full frame-budget recovery (12); got {authority.available} — "
         f"sub-worker-b's admission leaked"
+    )
+
+
+class _CancelledOnFirstResumedTargetRegistry:
+    """`sub-worker-a` (the FIRST resumed target) raises `asyncio.CancelledError`
+    synchronously — `_proceed_worker`'s Phase-0 loop has an INNER
+    `except BaseException as _resumed_exc:` that captures an ORDINARY failure
+    as that branch's own result (never aborting — `test_b39_resumed_target_
+    phase0_failure_under_proceed_does_not_abort_sibling` above pins this), so
+    only a `CancelledError` (the explicit `except asyncio.CancelledError:
+    raise` ABOVE that inner catch-all) reaches the OUTER `except BaseException:`
+    that this fix's release wrapper guards — the genuine "Phase-0 strike"
+    shape under PROCEED."""
+
+    def __init__(self) -> None:
+        self._echo = _OrderRecordingEcho(order=[], order_lock=threading.Lock())
+
+    def lookup(self, step_kind: StepKind) -> StepDispatcher:
+        if step_kind is StepKind.SUB_AGENT_DISPATCH:
+            return cast(StepDispatcher, self)
+        if step_kind is StepKind.DECLARATIVE_STEP:
+            return cast(StepDispatcher, self._echo)
+        raise StepKindDispatcherNotBoundError(step_kind)
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        raise asyncio.CancelledError(f"deadline strike at {step.step_id}")
+
+
+def test_b39_phase0_strike_on_first_of_two_resumed_targets_releases_the_second_under_proceed() -> (
+    None
+):
+    """Same fix as `test_b39_phase0_strike_on_first_of_two_resumed_targets_
+    releases_the_second`, but for `_proceed_worker`'s own twin Phase-0 loop
+    (round-6 concurrency-lens BLOCK named all 4 symmetric sites; this one and
+    its `_proceed_fanout`/`_cancel_fanout` PARALLELIZATION siblings had zero
+    witness before this test — test-witness lens round 7).
+
+    Mutation probe: reverting `_proceed_worker`'s release set to
+    `_rest_plan`-only (dropping `_resumed_target_plan[_resumed_index + 1:]`)
+    leaves `authority.available` short by `sub-worker-b`'s admitted frames.
+
+    A `CancelledError` is a `BaseException`, not an `Exception` — it
+    propagates straight out of `execute_workflow` (no top-level `except
+    Exception:` swallows it, by design: cancellation must always reach the
+    caller), so this test catches it directly rather than reading a
+    `RunResult.status`."""
+    authority = DefaultCapacityAuthority(frame_budget=12)
+    registry = cast(StepDispatcherRegistry, _CancelledOnFirstResumedTargetRegistry())
+    snapshot = _two_resumed_targets_snapshot(orchestrator_output={"role": "parent-orch"})
+    ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    ctx_obj.capacity_authority = authority  # type: ignore[attr-defined]
+    ctx = cast(DriverContext, ctx_obj)
+
+    with pytest.raises(asyncio.CancelledError):
+        execute_workflow(
+            _manifest(
+                "wf-b39-two-resumed-fail-proceed",
+                TopologyPattern.ORCHESTRATOR_WORKERS,
+                persona_tier=PersonaTier.SOLO_DEVELOPER,
+            ),
+            _two_resumed_targets_parent_steps(),
+            run_id="wf-b39-two-resumed-fail-proceed-run",
+            ctx=ctx,
+            default_model_binding=_DEFAULT_BINDING,
+            step_dispatchers=registry,
+            pause_snapshot_input=snapshot,
+        )
+
+    assert authority.available == 12, (
+        f"expected full frame-budget recovery (12); got {authority.available} — "
+        f"sub-worker-b's admission leaked under the PROCEED-tier Phase-0 loop"
     )

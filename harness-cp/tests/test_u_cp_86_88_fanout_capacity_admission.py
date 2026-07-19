@@ -234,6 +234,42 @@ def test_cancel_policy_initial_admission_gated_over_cap() -> None:
     assert authority.available == 2  # all leases released post-run (no leak)
 
 
+def test_cascade_cancel_branch_marker_write_failure_releases_admission(
+    monkeypatch: Any,
+) -> None:
+    """Codex round-7 [P1] "release admission when dispatch marker creation
+    fails": under CASCADE_CANCEL (`_cancel_branch`), `_mark_branch_dispatched`
+    is the ONLY statement before `inflight` is created — if it raises,
+    `_dispatch_releasing_admission` (the sole releaser of that branch's lease,
+    tied to the REAL worker-thread completion) is never scheduled, and
+    `_cancel_branch`'s own `finally` deliberately does NOT release the lease
+    either (it defers to the dispatch-tied releaser). Without the fix, every
+    admitted branch's frame leaks permanently.
+
+    Mutation probe: removing the `try/except BaseException: ... release_
+    unless_job_bound(); raise` guard around the `_mark_branch_dispatched`
+    call in `_cancel_branch` (and its `_cancel_worker` twin) restores the
+    leak — `authority.available` stays at 0 post-run instead of recovering
+    to the full `frame_budget`.
+    """
+    import harness_cp.workflow_driver as workflow_driver_module
+
+    def _raising_marker(*_args: Any, **_kwargs: Any) -> None:
+        raise RuntimeError("simulated marker-store write failure")
+
+    monkeypatch.setattr(workflow_driver_module, "_mark_branch_dispatched", _raising_marker)
+
+    authority = DefaultCapacityAuthority(frame_budget=4)
+    result = _run(
+        n_branches=4,
+        capacity_authority=authority,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,  # CASCADE_CANCEL tier
+        workflow_id="wf-cap-marker-failure",
+    )
+    assert result.status == RunStatus.FAILED
+    assert authority.available == 4  # every admitted branch's lease released, none leaked
+
+
 def test_fanout_admission_under_contention_second_workflow_holding_frames_counted() -> None:
     """Admission is against AVAILABLE capacity, never the local fan-out alone:
     a SECOND workflow's fan-out that would fit ALONE is rejected because a

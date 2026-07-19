@@ -115,6 +115,7 @@ Audit-compose failure: composer annotates `hitl.gate.evaluated` via
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import contextvars
 import hashlib
 import inspect
@@ -1172,6 +1173,16 @@ class RuntimeHITLGateComposer:
                 #   intentionally accumulates cost across every branch and
                 #   every nested descendant of the same run; per-branch
                 #   isolation would misattribute cost.
+                #
+                #   ROUTED_PRIMARY_SPAN_TRACE (harness_runtime.lifecycle.
+                #   llm_dispatch) / _CURRENT_TOOL_CTX (harness_runtime.
+                #   lifecycle.mcp_server) — NOT AMBIENT HERE, no disposition
+                #   needed (not an omission — both are set-then-read within a
+                #   single tightly-scoped call elsewhere, never bound at the
+                #   point this offload boundary's `copy_context()` snapshot
+                #   is taken). Listed so a future contextvar audit finds this
+                #   comment already accounts for them rather than re-deriving
+                #   it (merge-gate concurrency-lens round-7 note).
                 from harness_cp.workflow_driver import (
                     reset_offloaded_job_branch_inflight_registry,
                 )
@@ -1282,7 +1293,28 @@ class RuntimeHITLGateComposer:
         # WebhookDeliveryExhaustedError propagates to the caller (driver-side fault).
         composer = self.webhook_delivery_composer
         assert composer is not None  # caller verified joint binding present
-        delivery_result = await composer.deliver_webhook_for_brief(durable_brief, idempotency_key)
+        # codex round-7 [P1] "fence HITL webhook and audit effect entry
+        # points" — the B-48 offload boundary's `cancel_token.check()`/
+        # `.ack()` pair (`_dispatch_inner_offloaded` above) only brackets
+        # `self.inner.dispatch(...)`; `ack()` fires the instant that inner
+        # dispatch's worker thread returns, BEFORE this composer's OWN
+        # step-4-bis webhook delivery runs on the event loop. Without this,
+        # a job-wide fence trip racing in right after `ack()` would see
+        # `_effects_in_flight == 0` and report the job fully drained while
+        # this delivery is still in flight — the same TOCTOU shape the
+        # round-6 durable-write fix closed at `workflow_driver.py`, here for
+        # a THIRD effect-bearing site. Non-offloaded dispatch (no ambient
+        # token) gets `nullcontext()` — byte-unchanged.
+        from harness_cp.sub_agent_dispatch_cancellation import DISPATCH_CANCEL_TOKEN_VAR
+
+        _cancel_token = DISPATCH_CANCEL_TOKEN_VAR.get()
+        _webhook_fence_guard: contextlib.AbstractContextManager[None] = (
+            _cancel_token.effect_entry() if _cancel_token is not None else contextlib.nullcontext()
+        )
+        with _webhook_fence_guard:
+            delivery_result = await composer.deliver_webhook_for_brief(
+                durable_brief, idempotency_key
+            )
         # §14.8.8.1 step 5: set the caller-signal pause flag (observed by
         # workflow_driver per-step pre-entry detection per C-RT-24 §14.14.3).
         self.pause_requested_flag.set()
@@ -1301,9 +1333,25 @@ class RuntimeHITLGateComposer:
         on the loop it would block every unrelated workflow for KMS latency.
         `asyncio.to_thread` copies contextvars, so the run-scoped
         cost-accumulator proxy still resolves.
+
+        codex round-7 [P1] "fence HITL webhook and audit effect entry
+        points" — this is the SHARED choke point for every HITL audit
+        persist call (§14.8.8.6 step 4h, the durable-async resume audit, the
+        validator-escalation audit, ...). Like `_escalate_to_secondary_
+        channel`'s webhook delivery, it can run on the event loop AFTER the
+        B-48 offload boundary's `ack()` already fired, so it needs the same
+        `effect_entry()` guard the round-6 durable-write fix applied —
+        otherwise a fence trip racing this write sees a falsely-drained job.
         """
+        from harness_cp.sub_agent_dispatch_cancellation import DISPATCH_CANCEL_TOKEN_VAR
+
+        _cancel_token = DISPATCH_CANCEL_TOKEN_VAR.get()
+        _audit_fence_guard: contextlib.AbstractContextManager[None] = (
+            _cancel_token.effect_entry() if _cancel_token is not None else contextlib.nullcontext()
+        )
         try:
-            return await run_audit_off_loop(self._compose_and_persist_audit, *args, **kwargs)
+            with _audit_fence_guard:
+                return await run_audit_off_loop(self._compose_and_persist_audit, *args, **kwargs)
         except AUDIT_SIGNING_HARD_FAILURES as exc:
             # Codex round-17 P1: queue saturation raises at submit — before
             # the compose body's own handlers — bypassing the

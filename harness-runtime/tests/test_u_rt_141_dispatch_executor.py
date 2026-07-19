@@ -217,6 +217,56 @@ def test_drain_stops_idle_workers_so_they_do_not_leak_across_process_lifetime() 
     )
 
 
+def test_drain_stops_a_worker_that_finishes_strictly_after_the_drain_snapshot() -> None:
+    """Codex round-7 [P2] "stop workers that finish after the drain snapshot":
+    round-5b's fix only sentinels workers ALREADY idle when `drain()` takes its
+    snapshot. A worker whose job is still OUTSTANDING at that snapshot — and
+    finishes strictly AFTER `drain()` has already swept + returned — would
+    re-register on a fresh channel `drain()` will never look at again and
+    block forever, the same leaked-daemon-thread hazard round-5b closed for
+    the already-idle case.
+
+    Mutation probe: reverting `_worker()`'s `if self._draining: return` guard
+    (restoring plain unconditional re-registration) makes this worker block on
+    `my_channel.get()` forever — the join-with-timeout below observes
+    `is_alive() is True` past the poll window instead of the thread exiting.
+    """
+    executor = SubAgentDispatchExecutor(frame_budget=4)
+    job_release = threading.Event()
+    worker_holder: list[threading.Thread] = []
+
+    def late_finishing_job() -> None:
+        worker_holder.append(threading.current_thread())
+        job_release.wait(timeout=5)
+
+    future = executor.submit(late_finishing_job)
+
+    # `drain()` times out with the job still outstanding — its own snapshot +
+    # sweep + `_draining=True` flip all happen while the worker is still
+    # blocked inside `late_finishing_job`, well before it ever reaches the
+    # re-registration point.
+    completed, still_outstanding = executor.drain(deadline_seconds=0.2)
+    assert still_outstanding == 1
+    assert completed == 0
+    assert executor._draining is True
+
+    # NOW the job finishes — strictly after drain's snapshot/sweep returned.
+    job_release.set()
+    future.result(timeout=5)
+    worker = worker_holder[0]
+
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline and worker.is_alive():
+        time.sleep(0.01)
+    assert not worker.is_alive(), (
+        f"worker thread {worker.name!r} is still alive after finishing its "
+        f"job strictly after drain()'s snapshot — it re-registered as idle "
+        f"on a channel drain() will never sweep again"
+    )
+    # It never got the chance to publish a channel drain() could sweep.
+    assert executor._idle_channels == []
+
+
 def test_atomic_reservation_no_partial_acquisition_under_concurrent_fanouts() -> None:
     """Whole-fan-out atomicity: two racing 3-frame fan-outs vs 4 free — one
     whole, one deterministically degraded (executor-budget variant of the

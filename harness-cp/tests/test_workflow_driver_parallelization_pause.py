@@ -29,6 +29,7 @@ import asyncio
 import threading
 from typing import Any, cast
 
+import pytest
 from harness_core import PersonaTier, StepID, WorkloadClass
 from harness_core.workflow_event_class import WorkflowEventClass
 from harness_cp.cp_shared_types import ModelBinding
@@ -52,12 +53,14 @@ from harness_cp.pause_resume_protocol_types import (
     FanOutBranchResumeState,
     FanOutResumeState,
     HandoffResumeState,
+    PausedChildBranchResumeState,
     PauseSnapshot,
     PeerFanOutResumeState,
     ResumeContext,
     WorkflowPauseReason,
 )
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
+from harness_cp.sub_agent_dispatch_capacity_authority import DefaultCapacityAuthority
 from harness_cp.topology_pattern import TopologyPattern
 from harness_cp.workflow_driver import (
     DriverContext,
@@ -2484,3 +2487,173 @@ def test_peer_resume_rejects_paused_child_workflow_id_swap() -> None:
     )
     assert resumed.status is RunStatus.FAILED
     assert "paused-child-workflow-id-changed" in (resumed.fail_class or "")
+
+
+# ---------------------------------------------------------------------------
+# B-39/B-48 Phase-0 lease-leak fix — PARALLELIZATION twins (round-6
+# concurrency-lens BLOCK named 4 symmetric sites; the ORCHESTRATOR_WORKERS
+# pair is witnessed in test_workflow_driver_fanout_pause.py — these two cover
+# `_cancel_fanout`/`_proceed_fanout`, which had zero coverage anywhere in the
+# repo before test-witness lens round 7 flagged the gap).
+# ---------------------------------------------------------------------------
+
+
+def _two_resumed_peer_targets_snapshot() -> PauseSnapshot:
+    """Two resumed durable-HITL peer targets (`branch-0`, `branch-1`) + one
+    genuinely fresh peer sibling (`branch-2`, absent from `paused_child_branches`)."""
+    return _captured_snapshot(
+        peer_fan_out_resume=PeerFanOutResumeState(
+            branches=(),
+            branch_count=3,
+            paused_child_branches=(
+                PausedChildBranchResumeState(
+                    branch_index=0,
+                    step_id="branch-0",
+                    child_workflow_id="wf-child-a",
+                    child_snapshot=_hitl_pending_child_pause_snapshot("wf-child-a"),
+                ),
+                PausedChildBranchResumeState(
+                    branch_index=1,
+                    step_id="branch-1",
+                    child_workflow_id="wf-child-b",
+                    child_snapshot=_hitl_pending_child_pause_snapshot("wf-child-b"),
+                ),
+            ),
+        ),
+        workflow_id="wf-b39-peer-two-resumed",
+    )
+
+
+def _two_resumed_peer_targets_steps() -> list[WorkflowStep]:
+    return [
+        WorkflowStep(
+            step_id=StepID("branch-0"),
+            step_kind=StepKind.SUB_AGENT_DISPATCH,
+            step_payload={"child_workflow_id": "wf-child-a"},
+        ),
+        WorkflowStep(
+            step_id=StepID("branch-1"),
+            step_kind=StepKind.SUB_AGENT_DISPATCH,
+            step_payload={"child_workflow_id": "wf-child-b"},
+        ),
+        WorkflowStep(
+            step_id=StepID("branch-2"), step_kind=StepKind.DECLARATIVE_STEP, step_payload={}
+        ),
+    ]
+
+
+class _FirstResumedPeerTargetFailsRegistry:
+    """`branch-0` (the FIRST resumed target in Phase-0 iteration order) RAISES
+    synchronously — the Phase-0 loop must never reach `branch-1` (the SECOND
+    resumed target)."""
+
+    def __init__(self) -> None:
+        self._echo = _CountingDispatcher()
+
+    def lookup(self, step_kind: StepKind) -> StepDispatcher:
+        if step_kind is StepKind.SUB_AGENT_DISPATCH:
+            return cast(StepDispatcher, self)
+        if step_kind is StepKind.DECLARATIVE_STEP:
+            return cast(StepDispatcher, self._echo)
+        raise StepKindDispatcherNotBoundError(step_kind)
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        msg = f"resumed-target dispatch failed at {step.step_id}"
+        raise RuntimeError(msg)
+
+
+def test_b39_peer_phase0_strike_on_first_of_two_resumed_targets_releases_the_second() -> None:
+    """Round-6 concurrency-lens BLOCK, PARALLELIZATION twin of the
+    ORCHESTRATOR_WORKERS test of the same shape: `_cancel_fanout`'s Phase-0
+    `except BaseException` release handler must release BOTH `_rest_plan`
+    (`branch-2`) AND any `_resumed_target_plan` entry strictly AFTER the one
+    that raised (`branch-1`) — not just `_rest_plan`.
+
+    Mutation probe: reverting to releasing only `_rest_plan` (dropping
+    `_resumed_target_plan[_resumed_index + 1:]` from the release set) leaves
+    `authority.available` short by `branch-1`'s admitted frames."""
+    authority = DefaultCapacityAuthority(frame_budget=12)
+    registry = cast(StepDispatcherRegistry, _FirstResumedPeerTargetFailsRegistry())
+    snapshot = _two_resumed_peer_targets_snapshot()
+    ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    ctx_obj.capacity_authority = authority  # type: ignore[attr-defined]
+    ctx = cast(DriverContext, ctx_obj)
+
+    result = execute_workflow(
+        _manifest("wf-b39-peer-two-resumed-fail"),
+        _two_resumed_peer_targets_steps(),
+        run_id="wf-b39-peer-two-resumed-fail-run",
+        ctx=ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=registry,
+        pause_snapshot_input=snapshot,
+    )
+
+    assert result.status is not RunStatus.SUCCESS
+    assert authority.available == 12, (
+        f"expected full frame-budget recovery (12); got {authority.available} — "
+        f"branch-1's admission leaked"
+    )
+
+
+class _CancelledOnFirstResumedPeerTargetRegistry:
+    """PROCEED twin: `_proceed_fanout`'s Phase-0 loop has an INNER
+    `except BaseException as _resumed_exc:` that captures an ORDINARY
+    failure as that branch's own result (never aborting), so only a
+    `CancelledError` (the explicit `except asyncio.CancelledError: raise`
+    ABOVE that inner catch-all) reaches the OUTER `except BaseException:`
+    that this fix's release wrapper guards."""
+
+    def __init__(self) -> None:
+        self._echo = _CountingDispatcher()
+
+    def lookup(self, step_kind: StepKind) -> StepDispatcher:
+        if step_kind is StepKind.SUB_AGENT_DISPATCH:
+            return cast(StepDispatcher, self)
+        if step_kind is StepKind.DECLARATIVE_STEP:
+            return cast(StepDispatcher, self._echo)
+        raise StepKindDispatcherNotBoundError(step_kind)
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        raise asyncio.CancelledError(f"deadline strike at {step.step_id}")
+
+
+def test_b39_peer_phase0_strike_on_first_of_two_resumed_targets_releases_the_second_under_proceed() -> (
+    None
+):
+    """Round-6 concurrency-lens BLOCK, PARALLELIZATION-PROCEED twin — the
+    `_proceed_fanout` symmetric site to the CANCEL-path test above.
+
+    Mutation probe: reverting `_proceed_fanout`'s release set to
+    `_rest_plan`-only leaves `authority.available` short by `branch-1`'s
+    admitted frames.
+
+    A `CancelledError` is a `BaseException`, not an `Exception` — it
+    propagates straight out of `execute_workflow` by design, so this test
+    catches it directly rather than reading a `RunResult.status`."""
+    authority = DefaultCapacityAuthority(frame_budget=12)
+    registry = cast(StepDispatcherRegistry, _CancelledOnFirstResumedPeerTargetRegistry())
+    snapshot = _two_resumed_peer_targets_snapshot()
+    ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    ctx_obj.capacity_authority = authority  # type: ignore[attr-defined]
+    ctx = cast(DriverContext, ctx_obj)
+
+    with pytest.raises(asyncio.CancelledError):
+        execute_workflow(
+            _manifest("wf-b39-peer-two-resumed-fail-proceed", PersonaTier.SOLO_DEVELOPER),
+            _two_resumed_peer_targets_steps(),
+            run_id="wf-b39-peer-two-resumed-fail-proceed-run",
+            ctx=ctx,
+            default_model_binding=_DEFAULT_BINDING,
+            step_dispatchers=registry,
+            pause_snapshot_input=snapshot,
+        )
+
+    assert authority.available == 12, (
+        f"expected full frame-budget recovery (12); got {authority.available} — "
+        f"branch-1's admission leaked under the PROCEED-tier Phase-0 loop"
+    )

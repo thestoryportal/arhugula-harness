@@ -803,6 +803,44 @@ def test_ow_partition_strict_tiers_two_cohorts_leaders_serialize_before_follower
     assert "B" in witness.cohorts_done_on_entry[3]
 
 
+def test_cascade_cancel_worker_marker_write_failure_releases_admission(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Codex round-7 [P1] "release admission when dispatch marker creation
+    fails" — the ORCHESTRATOR_WORKERS twin of `_cancel_branch`'s fix
+    (`_cancel_worker`, byte-identical rationale + guard): `_mark_branch_
+    dispatched` is the only statement before `inflight` is created, so a
+    raise there must release `_admission` explicitly (`_dispatch_releasing_
+    admission` never gets scheduled otherwise, and this coroutine's own
+    `finally` deliberately does not release it either).
+
+    Mutation probe: removing the `try/except BaseException: ... release_
+    unless_job_bound(); raise` guard around `_mark_branch_dispatched` in
+    `_cancel_worker` restores the leak — `authority.available` stays short
+    of the full `frame_budget` post-run.
+    """
+    import harness_cp.workflow_driver as workflow_driver_module
+
+    def _raising_marker(*_args: Any, **_kwargs: Any) -> None:
+        raise RuntimeError("simulated marker-store write failure")
+
+    monkeypatch.setattr(workflow_driver_module, "_mark_branch_dispatched", _raising_marker)
+
+    authority = DefaultCapacityAuthority(frame_budget=4)
+    result = _run(
+        steps=[_orch_step(), _worker(0, None), _worker(1, None)],
+        registry=_registry(_Echo()),
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,  # CASCADE_CANCEL tier
+        capacity_authority=authority,
+        workflow_id="wf-ow-marker-failure",
+    )
+    assert result.status is not RunStatus.SUCCESS
+    assert authority.available == 4, (
+        f"expected full frame-budget recovery (4); got {authority.available} — "
+        f"a worker's admission leaked on marker-write failure"
+    )
+
+
 # ---------------------------------------------------------------------------
 # OWP3 / OWP4 — non-beneficiary placement + gate-False controls
 # ---------------------------------------------------------------------------
