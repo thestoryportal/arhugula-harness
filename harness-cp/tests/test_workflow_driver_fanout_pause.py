@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+import time
 from typing import Any, cast
 
 from harness_core import PersonaTier, StepID, WorkloadClass
@@ -2674,4 +2675,169 @@ def test_orchestrator_all_scoped_abort_under_proceed_requires_strict_tier() -> N
     assert result.status is RunStatus.FAILED
     assert "orchestrator-workers-effect-fence-resume-requires-strict-tier" in (
         result.fail_class or ""
+    )
+
+
+# ---------------------------------------------------------------------------
+# B-39 interim constraint (CP spec v1.102 §3, fork §4 item 6, change-note item
+# (e)) — a fan-out resuming a paused durable-HITL branch sequences ALL sibling
+# dispatches (gated and ungated) around the resumed target: the resumed target
+# dispatches FIRST, before ANY sibling.
+# ---------------------------------------------------------------------------
+
+
+def _resumed_target_snapshot(
+    *, orchestrator_output: dict[str, Any], child_snapshot: PauseSnapshot
+) -> PauseSnapshot:
+    """A HAND-CONSTRUCTED parent-level PauseSnapshot (mirrors this file's own
+    `_hitl_pending_child_pause_snapshot` convention, used elsewhere in this
+    file to isolate ORCHESTRATOR_WORKERS/HIERARCHICAL_DELEGATION resume
+    behavior from pause-CAPTURE race timing): `sub-worker` (branch 0) is a
+    recovered paused-child (the resumed target); `sibling-worker` (branch 1)
+    is ABSENT from both `branches` and `paused_child_branches` — genuinely
+    not-yet-dispatched, re-dispatchable by omission (§25.15.2 obligation 7)."""
+    state_summary, anchor = _pause_context_reader()
+    fan_out_resume = FanOutResumeState(
+        orchestrator_output=orchestrator_output,
+        orchestrator_step_id="parent-orch",
+        branches=(),
+        worker_count=2,
+        paused_child_branches=(
+            PausedChildBranchResumeState(
+                branch_index=0,
+                step_id="sub-worker",
+                child_workflow_id="wf-child",
+                child_snapshot=child_snapshot,
+            ),
+        ),
+    )
+    return PauseSnapshot(
+        workflow_id="wf-b39-order",
+        run_id="wf-b39-order-run",
+        step_index=0,
+        pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
+        state_summary=state_summary,
+        snapshot_hash=_compute_snapshot_hash(
+            workflow_id="wf-b39-order",
+            run_id="wf-b39-order-run",
+            step_index=0,
+            state_summary=state_summary,
+            fan_out_resume=fan_out_resume,
+        ),
+        created_at=1_700_000_000_000,
+        state_ledger_anchor=anchor,
+        fan_out_resume=fan_out_resume,
+    )
+
+
+class _OrderRecordingSubWorker:
+    """The resumed target's dispatcher: records "sub-worker-start", sleeps
+    briefly (a REAL thread sleep — this runs off-loop via `asyncio.to_thread`
+    so it does not block the event loop, but it DOES hold this dispatch open
+    long enough that a concurrently-dispatched sibling would land its own
+    entry strictly BETWEEN start and done if B-39 sequencing were broken),
+    then records "sub-worker-done"."""
+
+    def __init__(self, *, order: list[str], order_lock: threading.Lock) -> None:
+        self._order = order
+        self._lock = order_lock
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        with self._lock:
+            self._order.append("sub-worker-start")
+        time.sleep(0.1)
+        with self._lock:
+            self._order.append("sub-worker-done")
+        return {"role": "sub-worker"}
+
+
+class _OrderRecordingEcho:
+    """`parent-orch` + `sibling-worker`: records its own step_id the instant
+    it is dispatched."""
+
+    def __init__(self, *, order: list[str], order_lock: threading.Lock) -> None:
+        self._order = order
+        self._lock = order_lock
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        with self._lock:
+            self._order.append(str(step.step_id))
+        return {"role": str(step.step_id)}
+
+
+class _OrderRecordingRegistry:
+    def __init__(self, *, order: list[str]) -> None:
+        self._lock = threading.Lock()
+        self._sub_worker = _OrderRecordingSubWorker(order=order, order_lock=self._lock)
+        self._echo = _OrderRecordingEcho(order=order, order_lock=self._lock)
+
+    def lookup(self, step_kind: StepKind) -> StepDispatcher:
+        if step_kind is StepKind.SUB_AGENT_DISPATCH:
+            return cast(StepDispatcher, self._sub_worker)
+        if step_kind is StepKind.DECLARATIVE_STEP:
+            return cast(StepDispatcher, self._echo)
+        raise StepKindDispatcherNotBoundError(step_kind)
+
+
+def _b39_parent_steps() -> list[WorkflowStep]:
+    return [
+        WorkflowStep(
+            step_id=StepID("parent-orch"),
+            step_kind=StepKind.DECLARATIVE_STEP,
+            step_payload={"role": "parent-orch"},
+        ),
+        WorkflowStep(
+            step_id=StepID("sub-worker"),
+            step_kind=StepKind.SUB_AGENT_DISPATCH,
+            step_payload={"child_workflow_id": "wf-child"},
+        ),
+        WorkflowStep(
+            step_id=StepID("sibling-worker"),
+            step_kind=StepKind.DECLARATIVE_STEP,
+            step_payload={"role": "sibling-worker"},
+        ),
+    ]
+
+
+def test_b39_resumed_target_dispatches_before_any_sibling() -> None:
+    """CP spec v1.102 §3 row 1 (fork §4 item 6, change-note item (e)): a fan-out
+    resuming a paused durable-HITL branch (`sub-worker`, branch 0) sequences
+    the FRESH, never-dispatched sibling (`sibling-worker`, branch 1) behind
+    it — the resumed target dispatches FIRST, fully completes, and ONLY THEN
+    does the sibling begin. `sub-worker` holds its dispatch open for 0.1s;
+    `sibling-worker` is a near-instant echo — if it dispatched concurrently
+    (the pre-B-39 baseline: ALL branches in `branch_plan` fan out together),
+    its entry would land strictly BETWEEN "sub-worker-start" and
+    "sub-worker-done". Mutation probe: reverting the B-39 phase-0 split
+    (dispatching `_resumed_target_plan` + `_rest_plan` together via the
+    ordinary concurrent barrier) reproduces exactly that interleaving and
+    fails this assertion."""
+    order: list[str] = []
+    registry = cast(StepDispatcherRegistry, _OrderRecordingRegistry(order=order))
+    child_snapshot = _hitl_pending_child_pause_snapshot("wf-child")
+    snapshot = _resumed_target_snapshot(
+        orchestrator_output={"role": "parent-orch"}, child_snapshot=child_snapshot
+    )
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+
+    result = execute_workflow(
+        _manifest("wf-b39-order", TopologyPattern.ORCHESTRATOR_WORKERS),
+        _b39_parent_steps(),
+        run_id="wf-b39-order-run",
+        ctx=ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=registry,
+        pause_snapshot_input=snapshot,
+    )
+
+    assert result.status is RunStatus.SUCCESS, (
+        f"expected a clean resume; got {result.status} fail_class={result.fail_class!r}"
+    )
+    assert order == ["sub-worker-start", "sub-worker-done", "sibling-worker"], (
+        f"resumed-target-first sequencing violated — dispatch order was {order!r} "
+        f"(sibling-worker must land strictly AFTER sub-worker-done)"
     )

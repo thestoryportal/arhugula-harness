@@ -7654,6 +7654,31 @@ def _execute_parallelization(
 
     deadline = _DEFAULT_FANOUT_BARRIER_DEADLINE_SECONDS
 
+    # B-39 interim constraint (CP spec v1.102 §3, fork §4 item 6): a branch
+    # resuming a paused durable-HITL child (`_recovered_paused_child`, this
+    # round) dispatches FIRST, ONE AT A TIME, before ANY sibling — gated or
+    # ungated — begins. `RuntimeHITLGateComposer.dispatch()`'s unconditional
+    # `consume_and_clear()` means a concurrently-dispatched sibling could
+    # steal the resumed target's one-shot APPROVE/EDIT/REJECT (B-39's
+    # still-open CP design question — this is the documented interim
+    # mitigation, NOT its resolution; B-48 does not absorb that design under
+    # Runtime authority). `_rest_plan` (NOT a `branch_plan` reassignment —
+    # `branch_plan` stays the FULL set) feeds the §25.19 warm-up partition
+    # and the "rest" dispatch below; `branch_plan` itself must keep EVERY
+    # branch, including resumed targets, because `_synthesize_undispatched_
+    # terminals`'s existing "paused-child, RECOVERED" union arm iterates
+    # `branch_plan` and is the ONLY place that records a terminal for a
+    # resumed target whose re-dispatch fails before `_cancel_branch`'s own
+    # try/except can engage (e.g. a lookup failure) — `_writer_has_branch_
+    # disposition` makes re-scanning an already-recorded branch a no-op, so
+    # including resumed targets in that scan is always safe. The actual
+    # sequential phase-0 dispatch happens inside `_cancel_fanout` (after
+    # `_cancel_branch` is defined), using `_resumed_target_plan` saved here.
+    # A fresh (non-resume) run always has an empty `_recovered_paused_child`,
+    # so `_rest_plan` byte-matches `branch_plan` there (no behavior change).
+    _resumed_target_plan = [plan for plan in branch_plan if plan[0] in _recovered_paused_child]
+    _rest_plan = [plan for plan in branch_plan if plan[0] not in _recovered_paused_child]
+
     # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE — an effect-fence pause is a STRICT-TIER construct (only
     # PAUSE / CASCADE_CANCEL compose the ambiguous-pause through the barrier). Resuming one under a
     # manifest/persona that now resolves to PROCEED is incoherent: the PROCEED `_proceed_branch`
@@ -7704,10 +7729,10 @@ def _execute_parallelization(
             ]
         ],
     ]:
-        if len(branch_plan) < 2:  # H3: live len, not cell cap; zero oracle calls
-            return list(branch_plan), []
+        if len(_rest_plan) < 2:  # H3: live len, not cell cap; zero oracle calls
+            return list(_rest_plan), []
         cohort_members: dict[tuple[StepKind, str], list[int]] = {}
-        for branch_index, step, _child, _writer, binding in branch_plan:
+        for branch_index, step, _child, _writer, binding in _rest_plan:
             dispatcher = branch_dispatchers[branch_index]
             if not isinstance(dispatcher, CohortKeyCapable):
                 continue
@@ -7722,14 +7747,14 @@ def _execute_parallelization(
             for ordinal in members[1:]
         }
         if not follower_ordinals:
-            return list(branch_plan), []
+            return list(_rest_plan), []
         return (
-            [plan for plan in branch_plan if plan[0] not in follower_ordinals],
-            [plan for plan in branch_plan if plan[0] in follower_ordinals],
+            [plan for plan in _rest_plan if plan[0] not in follower_ordinals],
+            [plan for plan in _rest_plan if plan[0] in follower_ordinals],
         )
 
     _warmup_phase1, _warmup_phase2 = (
-        _warmup_phase_split() if _d4.concurrent_cache_warmup else (list(branch_plan), [])
+        _warmup_phase_split() if _d4.concurrent_cache_warmup else (list(_rest_plan), [])
     )
     _warmup_gate: bool = bool(_warmup_phase2)
 
@@ -8361,9 +8386,36 @@ def _execute_parallelization(
                 _admission.release()
 
     async def _cancel_fanout() -> list[None]:
+        # B-39 interim constraint (CP spec v1.102 §3) — Phase 0: dispatch every
+        # resumed-target branch (`_resumed_target_plan`, saved above BEFORE the
+        # §25.19 warm-up split) ONE AT A TIME via the SAME `cascade_cancel_
+        # barrier` the non-warmup "rest" path below already uses — reusing its
+        # self-contained watchdog + timeout + TaskGroup + exception-conversion
+        # machinery rather than re-deriving a partial copy (a lone-branch
+        # barrier call is exactly this sequencing: the barrier returns only
+        # after that ONE branch fully completes, so the NEXT resumed target —
+        # or the rest — never starts concurrently with it). `_effective_
+        # deadline` shrinks by each phase-0 call's elapsed time so the total
+        # budget across phase-0 + the rest stays `deadline` (never doubled —
+        # mirrors the warm-up phases' own one-shared-budget discipline, DDR §4).
+        # A branch failure/re-pause propagates unchanged (`BaseExceptionGroup`)
+        # to the SAME outer `except BaseExceptionGroup` this function's other
+        # paths already rely on; a phase-0 deadline strike propagates as the
+        # SAME `BranchBarrierDeadlineExceededError` the outer
+        # `except BranchBarrierDeadlineExceededError` already handles.
+        _effective_deadline = deadline
+        for _target_plan in _resumed_target_plan:
+            _phase0_start = asyncio.get_running_loop().time()
+            await cascade_cancel_barrier(
+                (_cancel_branch(*_target_plan),), deadline_seconds=_effective_deadline
+            )
+            _effective_deadline = max(
+                0.0, _effective_deadline - (asyncio.get_running_loop().time() - _phase0_start)
+            )
         if not _warmup_gate:
             return await cascade_cancel_barrier(
-                (_cancel_branch(*plan) for plan in branch_plan), deadline_seconds=deadline
+                (_cancel_branch(*plan) for plan in _rest_plan),
+                deadline_seconds=_effective_deadline,
             )
         # B-18-3C-PREWARM-CASCADE (partitioned at B-18-EPOCH-PARTITION, §25.19) —
         # Phase 1 (cohort leaders + non-beneficiaries; cache-writes) then Phase 2
@@ -8389,14 +8441,14 @@ def _execute_parallelization(
             # cut `asyncio.shield` cannot absorb (see the original's do-NOT-optimize-
             # away note); the `asyncio.timeout` below bounds only gate-stuck branches
             # with no in-flight dispatch for this watchdog to cut.
-            await asyncio.sleep(deadline)
+            await asyncio.sleep(_effective_deadline)
             for inflight in list(inflight_dispatches):
                 if not inflight.done():
                     inflight.cancel()
 
         cutoff_task = asyncio.ensure_future(_deadline_cutoff())
         try:
-            async with asyncio.timeout(deadline):
+            async with asyncio.timeout(_effective_deadline):
                 # B-18-EPOCH-PARTITION (§25.19) — Phase 1: cohort leaders + non-beneficiary
                 # branches under a TaskGroup (per-cohort cache-writes; each branch's dispatch
                 # marker + terminal records are written inside `_cancel_branch`,
@@ -8441,7 +8493,7 @@ def _execute_parallelization(
         except TimeoutError as exc:
             # Barrier-deadline parity with `cascade_cancel_barrier` (§25.11): the
             # timeout cancelled the fan-out body with no branch failure.
-            raise BranchBarrierDeadlineExceededError(deadline) from exc
+            raise BranchBarrierDeadlineExceededError(_effective_deadline) from exc
         finally:
             # Reap the watchdog + restore the registry — byte-matching the original
             # barrier's finally (await-with-suppress so the watchdog never outlives
@@ -11135,6 +11187,31 @@ def _execute_orchestrator_workers(
 
     deadline = _DEFAULT_FANOUT_BARRIER_DEADLINE_SECONDS
 
+    # B-39 interim constraint (CP spec v1.102 §3, fork §4 item 6): a branch
+    # resuming a paused durable-HITL child (`_recovered_paused_child`, this
+    # round) dispatches FIRST, ONE AT A TIME, before ANY sibling — gated or
+    # ungated — begins. `RuntimeHITLGateComposer.dispatch()`'s unconditional
+    # `consume_and_clear()` means a concurrently-dispatched sibling could
+    # steal the resumed target's one-shot APPROVE/EDIT/REJECT (B-39's
+    # still-open CP design question — this is the documented interim
+    # mitigation, NOT its resolution; B-48 does not absorb that design under
+    # Runtime authority). `_rest_plan` (NOT a `branch_plan` reassignment —
+    # `branch_plan` stays the FULL set) feeds the §25.19 warm-up partition
+    # and the "rest" dispatch below; `branch_plan` itself must keep EVERY
+    # branch, including resumed targets, because `_synthesize_undispatched_
+    # terminals`'s existing "paused-child, RECOVERED" union arm iterates
+    # `branch_plan` and is the ONLY place that records a terminal for a
+    # resumed target whose re-dispatch fails before `_cancel_worker`'s own
+    # try/except can engage (e.g. a lookup failure) — `_writer_has_branch_
+    # disposition` makes re-scanning an already-recorded branch a no-op, so
+    # including resumed targets in that scan is always safe. The actual
+    # sequential phase-0 dispatch happens inside `_cancel_fanout` (after
+    # `_cancel_worker` is defined), using `_resumed_target_plan` saved here.
+    # A fresh (non-resume) run always has an empty `_recovered_paused_child`,
+    # so `_rest_plan` byte-matches `branch_plan` there (no behavior change).
+    _resumed_target_plan = [plan for plan in branch_plan if plan[0] in _recovered_paused_child]
+    _rest_plan = [plan for plan in branch_plan if plan[0] not in _recovered_paused_child]
+
     # (The obligation-4 scan closure — formerly defined here — moved ABOVE the
     # `not branch_plan` block for the B-18-FENCE-LEDGER-RECONSTRUCT-RESIDUAL call
     # site inside it, CP spec v1.94. Late binding keeps the seven pre-existing
@@ -11192,10 +11269,10 @@ def _execute_orchestrator_workers(
             ]
         ],
     ]:
-        if len(branch_plan) < 2:  # live len, not cell cap; zero oracle calls
-            return list(branch_plan), []
+        if len(_rest_plan) < 2:  # live len, not cell cap; zero oracle calls
+            return list(_rest_plan), []
         cohort_members: dict[tuple[StepKind, str], list[int]] = {}
-        for branch_index, step, _child, _writer, binding in branch_plan:
+        for branch_index, step, _child, _writer, binding in _rest_plan:
             try:
                 dispatcher = step_dispatchers.lookup(step.step_kind)
             except StepKindDispatcherNotBoundError:
@@ -11213,14 +11290,14 @@ def _execute_orchestrator_workers(
             for ordinal in members[1:]
         }
         if not follower_ordinals:
-            return list(branch_plan), []
+            return list(_rest_plan), []
         return (
-            [plan for plan in branch_plan if plan[0] not in follower_ordinals],
-            [plan for plan in branch_plan if plan[0] in follower_ordinals],
+            [plan for plan in _rest_plan if plan[0] not in follower_ordinals],
+            [plan for plan in _rest_plan if plan[0] in follower_ordinals],
         )
 
     _warmup_phase1, _warmup_phase2 = (
-        _warmup_phase_split() if _d4.concurrent_cache_warmup else (list(branch_plan), [])
+        _warmup_phase_split() if _d4.concurrent_cache_warmup else (list(_rest_plan), [])
     )
     _warmup_gate: bool = bool(_warmup_phase2)
 
@@ -11665,9 +11742,36 @@ def _execute_orchestrator_workers(
                 _admission.release()
 
     async def _cancel_fanout() -> list[None]:
+        # B-39 interim constraint (CP spec v1.102 §3) — Phase 0: dispatch every
+        # resumed-target branch (`_resumed_target_plan`, saved above BEFORE the
+        # §25.19 warm-up split) ONE AT A TIME via the SAME `cascade_cancel_
+        # barrier` the non-warmup "rest" path below already uses — reusing its
+        # self-contained watchdog + timeout + TaskGroup + exception-conversion
+        # machinery rather than re-deriving a partial copy (a lone-branch
+        # barrier call is exactly this sequencing: the barrier returns only
+        # after that ONE branch fully completes, so the NEXT resumed target —
+        # or the rest — never starts concurrently with it). `_effective_
+        # deadline` shrinks by each phase-0 call's elapsed time so the total
+        # budget across phase-0 + the rest stays `deadline` (never doubled —
+        # mirrors the warm-up phases' own one-shared-budget discipline).
+        # A branch failure/re-pause propagates unchanged (`BaseExceptionGroup`)
+        # to the SAME outer `except BaseExceptionGroup` this function's other
+        # paths already rely on; a phase-0 deadline strike propagates as the
+        # SAME `BranchBarrierDeadlineExceededError` the outer
+        # `except BranchBarrierDeadlineExceededError` already handles.
+        _effective_deadline = deadline
+        for _target_plan in _resumed_target_plan:
+            _phase0_start = asyncio.get_running_loop().time()
+            await cascade_cancel_barrier(
+                (_cancel_worker(*_target_plan),), deadline_seconds=_effective_deadline
+            )
+            _effective_deadline = max(
+                0.0, _effective_deadline - (asyncio.get_running_loop().time() - _phase0_start)
+            )
         if not _warmup_gate:
             return await cascade_cancel_barrier(
-                (_cancel_worker(*plan) for plan in branch_plan), deadline_seconds=deadline
+                (_cancel_worker(*plan) for plan in _rest_plan),
+                deadline_seconds=_effective_deadline,
             )
         # B-18-PREWARM-OW (CP spec v1.96, §25.19) — Phase 1 (cohort leaders +
         # non-beneficiaries; cache-writes) then Phase 2 (the followers; cache-hits)
@@ -11694,14 +11798,14 @@ def _execute_orchestrator_workers(
             # cut `asyncio.shield` cannot absorb; the `asyncio.timeout` below bounds
             # only gate-stuck workers with no in-flight dispatch for this watchdog
             # to cut.
-            await asyncio.sleep(deadline)
+            await asyncio.sleep(_effective_deadline)
             for inflight in list(inflight_dispatches):
                 if not inflight.done():
                     inflight.cancel()
 
         cutoff_task = asyncio.ensure_future(_deadline_cutoff())
         try:
-            async with asyncio.timeout(deadline):
+            async with asyncio.timeout(_effective_deadline):
                 # Phase 1: cohort leaders + non-beneficiary workers under a TaskGroup
                 # (per-cohort cache-writes; each worker's dispatch marker + terminal
                 # records are written inside `_cancel_worker`, ordinal-keyed,
@@ -11745,7 +11849,7 @@ def _execute_orchestrator_workers(
         except TimeoutError as exc:
             # Barrier-deadline parity with `cascade_cancel_barrier` (§25.11): the
             # timeout cancelled the fan-out body with no worker failure.
-            raise BranchBarrierDeadlineExceededError(deadline) from exc
+            raise BranchBarrierDeadlineExceededError(_effective_deadline) from exc
         finally:
             # Reap the watchdog + restore the registry — byte-matching the original
             # barrier's finally (await-with-suppress so the watchdog never outlives
