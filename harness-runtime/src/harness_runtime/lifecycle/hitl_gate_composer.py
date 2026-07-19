@@ -1072,8 +1072,14 @@ class RuntimeHITLGateComposer:
         assert executor is not None  # __post_init__ invariant
         step_id = str(getattr(step, "step_id", "<unknown-step>"))
         own_lease = None
-        if BRANCH_CAPACITY_LEASE_VAR.get() is None:
+        branch_lease = BRANCH_CAPACITY_LEASE_VAR.get()
+        if branch_lease is None:
             own_lease = executor.reserve(1, step_id=step_id, descent_chain=(step_id,))
+        else:
+            # The fan-out's atomic allocation already holds this branch's
+            # frames; release ownership transfers to THIS job (lease held to
+            # actual job termination — never parent return; §14.8.10.1).
+            branch_lease.bind_release_to_job()
         # §14.8.10.3: ack ownership moves to the WORKER job — a cancelled
         # loop-side task's finally fires while the worker may still run, so a
         # task-level ack would falsely report the fence drained. The worker's
@@ -1113,8 +1119,12 @@ class RuntimeHITLGateComposer:
                     cancel_token.ack()
 
         future = executor.submit(_job)
-        if own_lease is not None:
-            release_lease = own_lease.release
+        job_lease = own_lease if own_lease is not None else branch_lease
+        if job_lease is not None:
+            release_lease = job_lease.release
+            # Fires at ACTUAL job termination — including when an abandoned
+            # (drained-under-fence) worker eventually finishes; exactly-once
+            # guarded at the lease.
             future.add_done_callback(lambda _f: release_lease())
         return cast(Mapping[str, Any], await asyncio.wrap_future(future))
 

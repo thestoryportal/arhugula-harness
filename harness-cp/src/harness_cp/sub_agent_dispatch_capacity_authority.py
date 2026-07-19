@@ -56,7 +56,7 @@ class CapacityLease:
     budget and returns True; every subsequent call is a no-op returning False.
     """
 
-    __slots__ = ("_frames", "_release_fn", "_released", "step_id")
+    __slots__ = ("_frames", "_job_bound", "_release_fn", "_released", "step_id")
 
     def __init__(self, *, frames: int, step_id: str, release_fn: object) -> None:
         self._frames = frames
@@ -64,6 +64,7 @@ class CapacityLease:
         # Stored as object to keep the carrier dumb; invoked via a narrow cast.
         self._release_fn = release_fn
         self._released = False
+        self._job_bound = False
 
     @property
     def frames(self) -> int:
@@ -72,6 +73,24 @@ class CapacityLease:
     @property
     def released(self) -> bool:
         return self._released
+
+    @property
+    def job_bound(self) -> bool:
+        return self._job_bound
+
+    def bind_release_to_job(self) -> None:
+        """Transfer release ownership to the offloaded executor JOB.
+
+        The lease contract (Runtime spec v1.102 §14.8.10.1) holds frames
+        until ACTUAL job termination or fence-drain acknowledgement — never
+        parent return. When a fan-out branch's dispatch reaches the offload
+        venue, the venue calls this and attaches the release to the job
+        future's completion; the CP branch teardown then skips its own
+        release (`job_bound` guard), so a timed-out branch whose worker
+        still drains keeps its frames leased. Branches that never reach the
+        offload (async inners; pre-dispatch failures) stay CP-released.
+        """
+        self._job_bound = True
 
     def release(self) -> bool:
         """Return the leased frames to the budget; exactly-once."""

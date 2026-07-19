@@ -106,6 +106,12 @@ from harness_cp.per_step_override_evaluator import (
 from harness_cp.sub_agent_dispatch_cancellation import (
     DISPATCH_CANCEL_TOKEN_VAR as _DISPATCH_CANCEL_TOKEN_VAR,
 )
+from harness_cp.sub_agent_dispatch_capacity_authority import (
+    BRANCH_CAPACITY_LEASE_VAR as _BRANCH_CAPACITY_LEASE_VAR,
+)
+from harness_cp.sub_agent_dispatch_capacity_authority import (
+    DefaultCapacityAuthority as _DefaultCapacityAuthority,
+)
 from harness_cp.topology_pattern import CascadePolicy, TopologyPattern
 from harness_cp.workflow_driver_errors import (
     BranchBarrierDeadlineExceededError,
@@ -2049,6 +2055,52 @@ def cascade_policy_run_status(policy: CascadePolicy) -> RunStatus:
     and does not consult this function.
     """
     return _CASCADE_POLICY_RUN_STATUS[policy]
+
+
+# B-48 (U-CP-101): the CP-owned default bounded authority — the never-ungated
+# fallback gating every fan-out when no runtime adapter is composed (pure-CP
+# tests / embedding). ONE process-local instance: a fallback, never a second
+# live authority beside a composed one.
+_DEFAULT_FANOUT_CAPACITY_AUTHORITY = _DefaultCapacityAuthority()
+
+
+def _admit_fanout_branch_plan(
+    ctx: DriverContext,
+    branch_plan: Sequence[tuple[int, WorkflowStep, Any, Any, Any]],
+    *,
+    workflow_id: str,
+) -> dict[int, Any]:
+    """B-48 (C-CP-25 §25.11, CP spec v1.102 §1) — WHOLE-fan-out atomic admission.
+
+    ONE atomic allocation call decides the entire fan-out under the single
+    capacity authority: `ctx.capacity_authority` when the runtime composed
+    the U-RT-141 adapter (the configured `sub_agent_dispatch_max_workers`
+    budget), else the CP-owned default bounded authority — NEVER ungated
+    (U-CP-101; the default is a fallback instance, not a second live
+    authority). Frame charging per the Runtime §14.8.10.1 accounting model:
+    every branch reserves ONE upstream CP frame; ONLY sync/offloaded
+    `SUB_AGENT_DISPATCH` branches reserve the additional inner-dispatch
+    frame (async INFERENCE/TOOL inners are uncharged).
+
+    Returns ``{branch_index: CapacityLease | SubAgentDispatchCapacityError}``
+    — the input-order fitting prefix admitted as leases; deterministic
+    excess branches carry their per-branch rejection (apply-note 2:
+    admission-rejection = a BRANCH FAILURE composing with the EXISTING
+    §25.15 `cascade_policy` table — no new control-transfer mode).
+    """
+    authority = getattr(ctx, "capacity_authority", None)
+    if authority is None:
+        authority = _DEFAULT_FANOUT_CAPACITY_AUTHORITY
+    requirements = tuple(
+        2 if plan[1].step_kind is StepKind.SUB_AGENT_DISPATCH else 1 for plan in branch_plan
+    )
+    step_ids = tuple(str(plan[1].step_id) for plan in branch_plan)
+    results = authority.reserve_fanout(
+        requirements,
+        step_ids=step_ids,
+        descent_chain=(workflow_id,),
+    )
+    return {plan[0]: result for plan, result in zip(branch_plan, results, strict=True)}
 
 
 def resume_should_redispatch(
