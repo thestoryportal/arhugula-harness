@@ -58,6 +58,8 @@ if TYPE_CHECKING:
     from harness_cp.validator_framework import SyncValidatorFrameworkFacade
     from harness_cp.validator_framework_types import ValidatorEvaluation
 
+from harness_core import SubAgentDispatchCapacityError
+
 from harness_cp.cp_shared_types import ActorIdentity, AgentRole, ModelBinding
 from harness_cp.engine_class import EngineClass
 from harness_cp.gate_level_rule import GateLevel
@@ -7303,6 +7305,14 @@ def _execute_parallelization(
             fail_class=f"parallelization-step-kind-not-bound: {exc}",
         ), 0
 
+    # B-48 (C-CP-25 §25.11; CP spec v1.102 §1 row 3) — WHOLE-fan-out ATOMIC
+    # admission, ONE call, decided BEFORE either cascade_policy path below
+    # dispatches a single branch. Shared by both `_proceed_branch` (PROCEED)
+    # and `_cancel_branch` (CASCADE_CANCEL/PAUSE) — only one of the two runs
+    # per invocation, gated by the `cascade_policy is CascadePolicy.PROCEED`
+    # branch further down; this ONE admission result feeds whichever runs.
+    _branch_admissions = _admit_fanout_branch_plan(ctx, branch_plan, workflow_id=workflow_id)
+
     if reconciler_engine_resume_required:
         _synth_replay_validation_fail = _captured_synthesis_replay_validation_failure(
             ctx=ctx,
@@ -7911,10 +7921,27 @@ def _execute_parallelization(
             binding: StepEffectiveBinding,
         ) -> None:
             dispatcher = branch_dispatchers[branch_index]
+            _admission = _branch_admissions[branch_index]
             try:
-                output = await asyncio.to_thread(
-                    dispatcher.dispatch, binding, step, step_context=child
-                )
+                if isinstance(_admission, SubAgentDispatchCapacityError):
+                    # B-48 apply-note 2: admission-rejection composes as a
+                    # BRANCH FAILURE through this SAME exception arm — no new
+                    # control-transfer mode.
+                    raise _admission
+                _lease_token = _BRANCH_CAPACITY_LEASE_VAR.set(_admission)
+                try:
+                    output = await asyncio.to_thread(
+                        dispatcher.dispatch, binding, step, step_context=child
+                    )
+                finally:
+                    _BRANCH_CAPACITY_LEASE_VAR.reset(_lease_token)
+                    # Lease-lifecycle (§14.8.10.1): held until ACTUAL job
+                    # termination — an offloaded (SUB_AGENT_DISPATCH) branch
+                    # transfers release ownership to its executor job
+                    # (`job_bound`); this CP-side release only fires for
+                    # branches that never reached the offload venue.
+                    if not _admission.job_bound:
+                        _admission.release()
             except asyncio.CancelledError:
                 # The §25.11 wall-clock deadline cancelled this in-flight branch.
                 # Its dispatch was scheduled (the effect may have landed) → record
@@ -8099,109 +8126,209 @@ def _execute_parallelization(
         binding: StepEffectiveBinding,
     ) -> None:
         dispatcher = branch_dispatchers[branch_index]
-        # B-FANOUT-CRASH-RESUME-STRICT-TIER-INCOMPLETE (R-FS-1) — reserve-before-DISPATCH:
-        # durably mark this branch DISPATCHED, fsynced STRICTLY BEFORE the effect can fire
-        # (THE named invariant: marker-absent ⟺ effect-not-fired within an instrumented run),
-        # so a strict-tier crash-resume re-dispatches only PROVABLY-not-run branches. SYNCHRONOUS
-        # (not off-loop) so the marker write + the `ensure_future` dispatch are ATOMIC with no
-        # yield between them: a cascade-cancel can NOT land after the marker but before the
-        # dispatch (which would leave a false-positive marker — and would shift the cancel from
-        # the in-flight `completed` boundary to a not-yet-dispatched `cancelled` one). Matches the
-        # existing synchronous `_capture_branch_terminal` store I/O. `_cancel_branch` is the
-        # strict-tier (PAUSE / CASCADE_CANCEL) path only — PROCEED's `_proceed_branch` writes none.
-        _mark_branch_dispatched(
-            ctx,
-            manifest_entry,
-            run_idempotency_key=run_idempotency_key,
-            branch_index=branch_index,
-            step_id=step.step_id,
-            step_kind=step.step_kind,
-            step=step,
-        )
-        # Schedule the (sync) dispatch off-loop; `dispatch_branch_step_shielded`
-        # keeps it alive against THIS branch's cancellation so an in-flight effect
-        # runs to its own completion (obl. 1), and registers it for the barrier's
-        # deadline watchdog (the hard "...or barrier-deadline timeout" cut-off).
-        inflight: asyncio.Future[Mapping[str, Any]] = asyncio.ensure_future(
-            asyncio.to_thread(dispatcher.dispatch, binding, step, step_context=child)
-        )
+        _admission = _branch_admissions[branch_index]
+        if isinstance(_admission, SubAgentDispatchCapacityError):
+            # B-48 apply-note 2: rejected — this branch NEVER reaches its
+            # dispatch boundary, so it skips the reserve-before-dispatch
+            # marker entirely (the marker's own named invariant: marker-
+            # absent ⟺ effect-not-fired). `_synthesize_undispatched_terminals`'s
+            # existing never-dispatched arm synthesizes its `cancelled`
+            # disposition; raising here cascades the barrier exactly like
+            # any other branch failure under CASCADE_CANCEL/PAUSE — no new
+            # control-transfer mode.
+            raise _admission
+        # B-48 (§14.8.10.1): bind the lease BEFORE the marker/ensure_future
+        # so the worker-thread/loop-side context (captured at Task creation)
+        # carries it. A plain synchronous ContextVar.set — no yield — so it
+        # does not disturb the marker+ensure_future atomicity below.
+        _lease_token = _BRANCH_CAPACITY_LEASE_VAR.set(_admission)
         try:
-            output = await dispatch_branch_step_shielded(inflight)
-        except asyncio.CancelledError:
-            # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE (R-FS-1) — this branch was cancelled because a
-            # SIBLING raised first, but its OWN in-flight dispatch may have raised the runtime
-            # effect fence (the shield suppresses the in-flight exception + re-raises
-            # CancelledError, so the fence error lands in `inflight.exception()`). Name-matched
-            # (NOT isinstance — a harness-runtime type harness-cp cannot import; `type(None)`
-            # is "NoneType" so a deadline-cut / clean cancel is safely skipped). Capture as
-            # effect-fence-paused (NOT a terminal branch — else resume skips it + drops the
-            # pause): stash the reserve key + re-raise, no step/terminal entry (the disjoint
-            # pause disposition, the peer analogue of the ORCHESTRATOR_WORKERS in-flight catch).
-            _inflight_exc = (
-                inflight.exception() if (inflight.done() and not inflight.cancelled()) else None
+            # B-FANOUT-CRASH-RESUME-STRICT-TIER-INCOMPLETE (R-FS-1) —
+            # reserve-before-DISPATCH: durably mark this branch DISPATCHED,
+            # fsynced STRICTLY BEFORE the effect can fire (THE named
+            # invariant: marker-absent ⟺ effect-not-fired within an
+            # instrumented run), so a strict-tier crash-resume re-dispatches
+            # only PROVABLY-not-run branches. SYNCHRONOUS (not off-loop) so
+            # the marker write + the `ensure_future` dispatch are ATOMIC with
+            # no yield between them: a cascade-cancel can NOT land after the
+            # marker but before the dispatch (which would leave a
+            # false-positive marker — and would shift the cancel from the
+            # in-flight `completed` boundary to a not-yet-dispatched
+            # `cancelled` one). Matches the existing synchronous
+            # `_capture_branch_terminal` store I/O. `_cancel_branch` is the
+            # strict-tier (PAUSE / CASCADE_CANCEL) path only — PROCEED's
+            # `_proceed_branch` writes none.
+            _mark_branch_dispatched(
+                ctx,
+                manifest_entry,
+                run_idempotency_key=run_idempotency_key,
+                branch_index=branch_index,
+                step_id=step.step_id,
+                step_kind=step.step_kind,
+                step=step,
             )
-            if isinstance(_inflight_exc, SubAgentChildPausedError):
-                # B-21 — this branch was cancelled because a SIBLING raised first, but its OWN
-                # in-flight child sub-workflow may have PAUSED: `dispatch_branch_step_shielded`
-                # suppresses the in-flight exception while draining a cancelled dispatch +
-                # re-raises `CancelledError`, so a `SubAgentChildPausedError` lands in
-                # `inflight.exception()` rather than reaching the typed handler below (the
-                # ORCHESTRATOR_WORKERS in-flight cancellation-race capture, Codex [P1]). Capture
-                # it as a paused-child (NOT a terminal `completed` branch — else the snapshot
-                # records it terminal, resume skips it, and the child's PauseSnapshot is
-                # DROPPED): stash + re-raise, no step/terminal entry recorded.
+            # Schedule the (sync) dispatch off-loop; `dispatch_branch_step_shielded`
+            # keeps it alive against THIS branch's cancellation so an in-flight effect
+            # runs to its own completion (obl. 1), and registers it for the barrier's
+            # deadline watchdog (the hard "...or barrier-deadline timeout" cut-off).
+            inflight: asyncio.Future[Mapping[str, Any]] = asyncio.ensure_future(
+                asyncio.to_thread(dispatcher.dispatch, binding, step, step_context=child)
+            )
+            try:
+                output = await dispatch_branch_step_shielded(inflight)
+            except asyncio.CancelledError:
+                # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE (R-FS-1) — this branch was cancelled because a
+                # SIBLING raised first, but its OWN in-flight dispatch may have raised the runtime
+                # effect fence (the shield suppresses the in-flight exception + re-raises
+                # CancelledError, so the fence error lands in `inflight.exception()`). Name-matched
+                # (NOT isinstance — a harness-runtime type harness-cp cannot import; `type(None)`
+                # is "NoneType" so a deadline-cut / clean cancel is safely skipped). Capture as
+                # effect-fence-paused (NOT a terminal branch — else resume skips it + drops the
+                # pause): stash the reserve key + re-raise, no step/terminal entry (the disjoint
+                # pause disposition, the peer analogue of the ORCHESTRATOR_WORKERS in-flight catch).
+                _inflight_exc = (
+                    inflight.exception() if (inflight.done() and not inflight.cancelled()) else None
+                )
+                if isinstance(_inflight_exc, SubAgentChildPausedError):
+                    # B-21 — this branch was cancelled because a SIBLING raised first, but its OWN
+                    # in-flight child sub-workflow may have PAUSED: `dispatch_branch_step_shielded`
+                    # suppresses the in-flight exception while draining a cancelled dispatch +
+                    # re-raises `CancelledError`, so a `SubAgentChildPausedError` lands in
+                    # `inflight.exception()` rather than reaching the typed handler below (the
+                    # ORCHESTRATOR_WORKERS in-flight cancellation-race capture, Codex [P1]). Capture
+                    # it as a paused-child (NOT a terminal `completed` branch — else the snapshot
+                    # records it terminal, resume skips it, and the child's PauseSnapshot is
+                    # DROPPED): stash + re-raise, no step/terminal entry recorded.
+                    paused_child_dispositions[branch_index] = (
+                        _inflight_exc.child_workflow_id,
+                        _inflight_exc.child_snapshot,
+                    )
+                    raise
+                if type(_inflight_exc).__name__ == "EffectFenceAbortedError":
+                    # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE — an in-flight
+                    # branch whose re-dispatch raised the operator's ABORT
+                    # (symmetric with the own-dispatch catch) → terminal
+                    # FAILED.
+                    effect_fence_aborted_dispositions.add(branch_index)
+                    raise
+                if type(_inflight_exc).__name__ == "EffectFenceAmbiguousUncommittedError":
+                    _inflight_fence_key = getattr(_inflight_exc, "idempotency_key", None)
+                    effect_fence_paused_dispositions[branch_index] = (
+                        _inflight_fence_key if isinstance(_inflight_fence_key, str) else ""
+                    )
+                    raise
+                # In-flight at cancel-time: the effect ran (shielded to completion) or
+                # the deadline cut it. Record the step entry (obl. 3) + the
+                # discriminating terminal (obl. 4): `completed` = ran (ran-and-errored
+                # is still completed — dispatch-boundary), `timed_out` = the deadline
+                # cut the in-flight step. A not-yet-dispatched branch NEVER reaches here
+                # (no inflight) — its `cancelled` disposition is the post-barrier scan.
+                append_branch_step_ledger_entry(
+                    branch_writer=writer,
+                    branch_context=child,
+                    run_idempotency_key=run_idempotency_key,
+                    local_step_index=0,
+                    timestamp=fanout_timestamp,
+                    procedural_tier_snapshot_ref=snapshot_ref,
+                )
+                terminal: Literal["completed", "timed_out"] = (
+                    "timed_out" if (inflight.cancelled() or not inflight.done()) else "completed"
+                )
+                append_branch_terminal_ledger_entry(
+                    branch_writer=writer,
+                    branch_context=child,
+                    run_idempotency_key=run_idempotency_key,
+                    terminal_status=terminal,
+                    timestamp=fanout_timestamp,
+                    procedural_tier_snapshot_ref=snapshot_ref,
+                )
+                terminal_dispositions[branch_index] = terminal  # B-FANOUT-PAUSE-PARALLELIZATION
+                # A sibling that was IN-FLIGHT when the barrier cancelled this branch
+                # ran to completion under the shield (`terminal == "completed"` ⟹
+                # `inflight.done()` and not cancelled). Collect its successful OUTPUT
+                # so the salvaged aggregate keeps it (a ran-and-errored in-flight,
+                # `exception() is not None`, has no output).
+                if terminal == "completed" and inflight.exception() is None:
+                    # B-FANOUT-OUTPUT-REPLAY — a sibling that LANDED under the shield (its effect
+                    # fired) is captured WITH output (out-of-family Codex [P1]) — else crash-resume
+                    # RE-DISPATCHES it (double-fire). The buffered terminal append above is not
+                    # durable until the drain, so this still satisfies RESERVE-before-COMMIT.
+                    _capture_branch_terminal(
+                        ctx,
+                        manifest_entry,
+                        run_idempotency_key=run_idempotency_key,
+                        branch_index=branch_index,
+                        step_id=step.step_id,
+                        terminal_status="completed",
+                        output=inflight.result(),
+                    )
+                    collected[branch_index] = (str(step.step_id), inflight.result())
+                else:
+                    # A timed-out (deadline-cut, ambiguous) OR ran-and-errored (effect LANDED, no
+                    # output) in-flight sibling — capture the DISPOSITION with no output so
+                    # crash-resume recovers-as-terminal (`completed`) or FAILS CLOSED (`timed_out`),
+                    # never silently re-dispatching a landed effect (the disposition class closer).
+                    _capture_branch_terminal(
+                        ctx,
+                        manifest_entry,
+                        run_idempotency_key=run_idempotency_key,
+                        branch_index=branch_index,
+                        step_id=step.step_id,
+                        terminal_status=terminal,
+                        output=None,
+                    )
+                raise  # honor the cancellation (the barrier cancelled this branch)
+            except SubAgentChildPausedError as _paused:
+                # B-21 — this branch's own dispatch is a `SUB_AGENT_DISPATCH` step whose
+                # recursive child sub-workflow PAUSED (a grandchild failed under
+                # `cascade_policy=pause`; the ORCHESTRATOR_WORKERS paused-child catch applied
+                # peer-shaped). NOT a terminal branch (it is re-dispatched-via-child-resume on
+                # resume) and NOT a failure in itself: stash the child's snapshot keyed by
+                # branch ordinal, record NO terminal entry (its ordinal stays out of
+                # `terminal_dispositions`, so it lands in `paused_child_branches`, never
+                # `branches`; any pre-dispatch override entry already buffered stays).
+                # Re-raise so the TaskGroup halts the fan-out at the pause boundary (siblings:
+                # in-flight finish / not-yet-dispatched left re-dispatchable — the §25.15.1
+                # pause semantic, driving the pause branch below).
                 paused_child_dispositions[branch_index] = (
-                    _inflight_exc.child_workflow_id,
-                    _inflight_exc.child_snapshot,
+                    _paused.child_workflow_id,
+                    _paused.child_snapshot,
                 )
                 raise
-            if type(_inflight_exc).__name__ == "EffectFenceAbortedError":
-                # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE — an in-flight branch whose re-dispatch raised
-                # the operator's ABORT (symmetric with the own-dispatch catch) → terminal FAILED.
-                effect_fence_aborted_dispositions.add(branch_index)
-                raise
-            if type(_inflight_exc).__name__ == "EffectFenceAmbiguousUncommittedError":
-                _inflight_fence_key = getattr(_inflight_exc, "idempotency_key", None)
-                effect_fence_paused_dispositions[branch_index] = (
-                    _inflight_fence_key if isinstance(_inflight_fence_key, str) else ""
-                )
-                raise
-            # In-flight at cancel-time: the effect ran (shielded to completion) or
-            # the deadline cut it. Record the step entry (obl. 3) + the
-            # discriminating terminal (obl. 4): `completed` = ran (ran-and-errored
-            # is still completed — dispatch-boundary), `timed_out` = the deadline
-            # cut the in-flight step. A not-yet-dispatched branch NEVER reaches here
-            # (no inflight) — its `cancelled` disposition is the post-barrier scan.
-            append_branch_step_ledger_entry(
-                branch_writer=writer,
-                branch_context=child,
-                run_idempotency_key=run_idempotency_key,
-                local_step_index=0,
-                timestamp=fanout_timestamp,
-                procedural_tier_snapshot_ref=snapshot_ref,
-            )
-            terminal: Literal["completed", "timed_out"] = (
-                "timed_out" if (inflight.cancelled() or not inflight.done()) else "completed"
-            )
-            append_branch_terminal_ledger_entry(
-                branch_writer=writer,
-                branch_context=child,
-                run_idempotency_key=run_idempotency_key,
-                terminal_status=terminal,
-                timestamp=fanout_timestamp,
-                procedural_tier_snapshot_ref=snapshot_ref,
-            )
-            terminal_dispositions[branch_index] = terminal  # B-FANOUT-PAUSE-PARALLELIZATION
-            # A sibling that was IN-FLIGHT when the barrier cancelled this branch
-            # ran to completion under the shield (`terminal == "completed"` ⟹
-            # `inflight.done()` and not cancelled). Collect its successful OUTPUT
-            # so the salvaged aggregate keeps it (a ran-and-errored in-flight,
-            # `exception() is not None`, has no output).
-            if terminal == "completed" and inflight.exception() is None:
-                # B-FANOUT-OUTPUT-REPLAY — a sibling that LANDED under the shield (its effect
-                # fired) is captured WITH output (out-of-family Codex [P1]) — else crash-resume
-                # RE-DISPATCHES it (double-fire). The buffered terminal append above is not
-                # durable until the drain, so this still satisfies RESERVE-before-COMMIT.
+            except Exception as _exc:
+                # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE (R-FS-1) — this
+                # branch's OWN dispatch raised the runtime effect fence's
+                # `EffectFenceAmbiguousUncommittedError` (C-RT-31 §14.22; the
+                # peer analogue of the ORCHESTRATOR_WORKERS catch).
+                # Name-matched (harness-cp cannot import harness-runtime).
+                # NOT a terminal branch — record NO step/terminal entry (a
+                # `completed` terminal would make resume SKIP it + drop the
+                # pause): stash the held reserve's idempotency_key keyed by
+                # ordinal ("" when absent → resume re-pauses INERT, never an
+                # auto-re-fire) so the post-barrier compose lands it in
+                # `effect_fence_paused_branches`, then re-raise so the
+                # TaskGroup halts the fan-out at the pause boundary (the
+                # post-barrier guard fails honestly if no protocol is bound).
+                if type(_exc).__name__ == "EffectFenceAbortedError":
+                    # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE — the operator resolved THIS branch's fence
+                    # pause with ABORT on resume → a TERMINAL decision: record the abort ordinal +
+                    # re-raise so the post-barrier forces RunStatus.FAILED (tier-agnostic), never a
+                    # re-pause (the LINEAR effect-fence ABORT → FAILED analogue; Codex [P1]).
+                    effect_fence_aborted_dispositions.add(branch_index)
+                    raise
+                if type(_exc).__name__ == "EffectFenceAmbiguousUncommittedError":
+                    _fence_key = getattr(_exc, "idempotency_key", None)
+                    effect_fence_paused_dispositions[branch_index] = (
+                        _fence_key if isinstance(_fence_key, str) else ""
+                    )
+                    raise
+                # THIS branch's own dispatch ERRORED — the failure that triggers the
+                # cascade. The effect ran-and-errored → record the step entry (obl. 3)
+                # + a `completed` terminal (dispatch-boundary, not step-outcome — the
+                # carrier forecloses `failed`). Re-raise so the TaskGroup cascade-
+                # cancels the siblings.
+                # B-FANOUT-OUTPUT-REPLAY — capture the `completed` disposition (effect may have
+                # LANDED, no output) so crash-resume recovers it as terminal, never re-firing it.
                 _capture_branch_terminal(
                     ctx,
                     manifest_entry,
@@ -8209,103 +8336,39 @@ def _execute_parallelization(
                     branch_index=branch_index,
                     step_id=step.step_id,
                     terminal_status="completed",
-                    output=inflight.result(),
-                )
-                collected[branch_index] = (str(step.step_id), inflight.result())
-            else:
-                # A timed-out (deadline-cut, ambiguous) OR ran-and-errored (effect LANDED, no
-                # output) in-flight sibling — capture the DISPOSITION with no output so
-                # crash-resume recovers-as-terminal (`completed`) or FAILS CLOSED (`timed_out`),
-                # never silently re-dispatching a landed effect (the disposition class closer).
-                _capture_branch_terminal(
-                    ctx,
-                    manifest_entry,
-                    run_idempotency_key=run_idempotency_key,
-                    branch_index=branch_index,
-                    step_id=step.step_id,
-                    terminal_status=terminal,
                     output=None,
                 )
-            raise  # honor the cancellation (the barrier cancelled this branch)
-        except SubAgentChildPausedError as _paused:
-            # B-21 — this branch's own dispatch is a `SUB_AGENT_DISPATCH` step whose
-            # recursive child sub-workflow PAUSED (a grandchild failed under
-            # `cascade_policy=pause`; the ORCHESTRATOR_WORKERS paused-child catch applied
-            # peer-shaped). NOT a terminal branch (it is re-dispatched-via-child-resume on
-            # resume) and NOT a failure in itself: stash the child's snapshot keyed by
-            # branch ordinal, record NO terminal entry (its ordinal stays out of
-            # `terminal_dispositions`, so it lands in `paused_child_branches`, never
-            # `branches`; any pre-dispatch override entry already buffered stays).
-            # Re-raise so the TaskGroup halts the fan-out at the pause boundary (siblings:
-            # in-flight finish / not-yet-dispatched left re-dispatchable — the §25.15.1
-            # pause semantic, driving the pause branch below).
-            paused_child_dispositions[branch_index] = (
-                _paused.child_workflow_id,
-                _paused.child_snapshot,
-            )
-            raise
-        except Exception as _exc:
-            # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE (R-FS-1) — this branch's OWN dispatch raised the
-            # runtime effect fence's `EffectFenceAmbiguousUncommittedError` (C-RT-31 §14.22; the
-            # peer analogue of the ORCHESTRATOR_WORKERS catch). Name-matched (harness-cp cannot
-            # import harness-runtime). NOT a terminal branch — record NO step/terminal entry (a
-            # `completed` terminal would make resume SKIP it + drop the pause): stash the held
-            # reserve's idempotency_key keyed by ordinal ("" when absent → resume re-pauses INERT,
-            # never an auto-re-fire) so the post-barrier compose lands it in
-            # `effect_fence_paused_branches`, then re-raise so the TaskGroup halts the fan-out at
-            # the pause boundary (the post-barrier guard fails honestly if no protocol is bound).
-            if type(_exc).__name__ == "EffectFenceAbortedError":
-                # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE — the operator resolved THIS branch's fence
-                # pause with ABORT on resume → a TERMINAL decision: record the abort ordinal +
-                # re-raise so the post-barrier forces RunStatus.FAILED (tier-agnostic), never a
-                # re-pause (the LINEAR effect-fence ABORT → FAILED analogue; Codex [P1]).
-                effect_fence_aborted_dispositions.add(branch_index)
-                raise
-            if type(_exc).__name__ == "EffectFenceAmbiguousUncommittedError":
-                _fence_key = getattr(_exc, "idempotency_key", None)
-                effect_fence_paused_dispositions[branch_index] = (
-                    _fence_key if isinstance(_fence_key, str) else ""
+                append_branch_step_ledger_entry(
+                    branch_writer=writer,
+                    branch_context=child,
+                    run_idempotency_key=run_idempotency_key,
+                    local_step_index=0,
+                    timestamp=fanout_timestamp,
+                    procedural_tier_snapshot_ref=snapshot_ref,
                 )
+                append_branch_terminal_ledger_entry(
+                    branch_writer=writer,
+                    branch_context=child,
+                    run_idempotency_key=run_idempotency_key,
+                    terminal_status="completed",
+                    timestamp=fanout_timestamp,
+                    procedural_tier_snapshot_ref=snapshot_ref,
+                )
+                # B-FANOUT-PAUSE-PARALLELIZATION — this failed branch is terminal
+                # (`completed`, dispatch-boundary, NO collected output) so a `pause`
+                # snapshot records it + obligation 7 does NOT re-dispatch its landed
+                # effect on resume.
+                terminal_dispositions[branch_index] = "completed"
                 raise
-            # THIS branch's own dispatch ERRORED — the failure that triggers the
-            # cascade. The effect ran-and-errored → record the step entry (obl. 3)
-            # + a `completed` terminal (dispatch-boundary, not step-outcome — the
-            # carrier forecloses `failed`). Re-raise so the TaskGroup cascade-
-            # cancels the siblings.
-            # B-FANOUT-OUTPUT-REPLAY — capture the `completed` disposition (effect may have
-            # LANDED, no output) so crash-resume recovers it as terminal, never re-firing it.
-            _capture_branch_terminal(
-                ctx,
-                manifest_entry,
-                run_idempotency_key=run_idempotency_key,
-                branch_index=branch_index,
-                step_id=step.step_id,
-                terminal_status="completed",
-                output=None,
-            )
-            append_branch_step_ledger_entry(
-                branch_writer=writer,
-                branch_context=child,
-                run_idempotency_key=run_idempotency_key,
-                local_step_index=0,
-                timestamp=fanout_timestamp,
-                procedural_tier_snapshot_ref=snapshot_ref,
-            )
-            append_branch_terminal_ledger_entry(
-                branch_writer=writer,
-                branch_context=child,
-                run_idempotency_key=run_idempotency_key,
-                terminal_status="completed",
-                timestamp=fanout_timestamp,
-                procedural_tier_snapshot_ref=snapshot_ref,
-            )
-            # B-FANOUT-PAUSE-PARALLELIZATION — this failed branch is terminal
-            # (`completed`, dispatch-boundary, NO collected output) so a `pause`
-            # snapshot records it + obligation 7 does NOT re-dispatch its landed
-            # effect on resume.
-            terminal_dispositions[branch_index] = "completed"
-            raise
-        _record_clean(branch_index, step, child, writer, output)
+            _record_clean(branch_index, step, child, writer, output)
+        finally:
+            _BRANCH_CAPACITY_LEASE_VAR.reset(_lease_token)
+            # Lease-lifecycle (§14.8.10.1): an offloaded (SUB_AGENT_DISPATCH)
+            # branch transfers release ownership to its executor job
+            # (`job_bound`); this CP-side release only fires for branches
+            # that never reached the offload venue.
+            if not _admission.job_bound:
+                _admission.release()
 
     async def _cancel_fanout() -> list[None]:
         if not _warmup_gate:
@@ -10425,6 +10488,15 @@ def _execute_orchestrator_workers(
         branch_plan.append((branch_index, step, child, writer, binding))
     branch_writers = [plan[3] for plan in branch_plan]
 
+    # B-48 (C-CP-25 §25.11; CP spec v1.102 §1 row 3) — WHOLE-fan-out ATOMIC
+    # admission, ONE call, decided BEFORE either cascade_policy path below
+    # dispatches a single worker. Shared by both `_proceed_worker` (PROCEED)
+    # and `_cancel_worker` (CASCADE_CANCEL/PAUSE) — only one of the two runs
+    # per invocation. O-W resolves dispatchers INLINE per-worker (no shared
+    # `branch_dispatchers` dict), but admission only needs each branch's
+    # `step.step_kind` (already in `branch_plan`), so it needs no dispatcher.
+    _branch_admissions = _admit_fanout_branch_plan(ctx, branch_plan, workflow_id=workflow_id)
+
     # Worker outputs collected as each branch CLEANLY completes (branch-index
     # keyed). Populated on the fan-out loop thread after the awaited dispatch
     # returns; read on the driver thread AFTER the barrier (single-threaded) for
@@ -11173,10 +11245,27 @@ def _execute_orchestrator_workers(
             binding: StepEffectiveBinding,
         ) -> None:
             dispatcher = step_dispatchers.lookup(step.step_kind)
+            _admission = _branch_admissions[branch_index]
             try:
-                output = await asyncio.to_thread(
-                    dispatcher.dispatch, binding, step, step_context=child
-                )
+                if isinstance(_admission, SubAgentDispatchCapacityError):
+                    # B-48 apply-note 2: admission-rejection composes as a
+                    # BRANCH FAILURE through this SAME exception arm — no new
+                    # control-transfer mode.
+                    raise _admission
+                _lease_token = _BRANCH_CAPACITY_LEASE_VAR.set(_admission)
+                try:
+                    output = await asyncio.to_thread(
+                        dispatcher.dispatch, binding, step, step_context=child
+                    )
+                finally:
+                    _BRANCH_CAPACITY_LEASE_VAR.reset(_lease_token)
+                    # Lease-lifecycle (§14.8.10.1): held until ACTUAL job
+                    # termination — an offloaded (SUB_AGENT_DISPATCH) branch
+                    # transfers release ownership to its executor job
+                    # (`job_bound`); this CP-side release only fires for
+                    # branches that never reached the offload venue.
+                    if not _admission.job_bound:
+                        _admission.release()
             except asyncio.CancelledError:
                 # The §25.11 wall-clock deadline (`_proceed_fanout`'s
                 # `asyncio.timeout`) cancelled this in-flight worker. Its dispatch
@@ -11356,108 +11445,198 @@ def _execute_orchestrator_workers(
         binding: StepEffectiveBinding,
     ) -> None:
         dispatcher = step_dispatchers.lookup(step.step_kind)
-        # B-FANOUT-CRASH-RESUME-STRICT-TIER-INCOMPLETE (R-FS-1) — reserve-before-DISPATCH:
-        # durably mark this WORKER branch DISPATCHED, fsynced STRICTLY BEFORE the effect can
-        # fire (the worker analogue of the parallelization marker; same store, same gate). The
-        # worker `branch_index` is the 0-based `worker_steps` ordinal `record_branch` also uses,
-        # so the marker/capture sets are partition-consistent. SYNCHRONOUS (atomic with the
-        # `ensure_future` dispatch — see `_cancel_branch`). `_cancel_worker` is the strict-tier
-        # path only — PROCEED's `_proceed_worker` writes no marker.
-        _mark_branch_dispatched(
-            ctx,
-            manifest_entry,
-            run_idempotency_key=run_idempotency_key,
-            branch_index=branch_index,
-            step_id=step.step_id,
-            step_kind=step.step_kind,
-            step=step,
-        )
-        # Schedule the (sync) dispatch off-loop; `dispatch_branch_step_shielded`
-        # keeps it alive against THIS branch's cancellation so an in-flight effect
-        # runs to its own completion (obl. 1), and registers it for the barrier's
-        # deadline watchdog (the hard "...or barrier-deadline timeout" cut-off).
-        inflight: asyncio.Future[Mapping[str, Any]] = asyncio.ensure_future(
-            asyncio.to_thread(dispatcher.dispatch, binding, step, step_context=child)
-        )
+        _admission = _branch_admissions[branch_index]
+        if isinstance(_admission, SubAgentDispatchCapacityError):
+            # B-48 apply-note 2: rejected — this worker NEVER reaches its
+            # dispatch boundary, so it skips the reserve-before-dispatch
+            # marker entirely (the marker's own named invariant: marker-
+            # absent ⟺ effect-not-fired). `_synthesize_undispatched_terminals`'s
+            # existing never-dispatched arm synthesizes its `cancelled`
+            # disposition; raising here cascades the barrier exactly like
+            # any other branch failure under CASCADE_CANCEL/PAUSE — no new
+            # control-transfer mode.
+            raise _admission
+        # B-48 (§14.8.10.1): bind the lease BEFORE the marker/ensure_future
+        # so the worker-thread/loop-side context (captured at Task creation)
+        # carries it. A plain synchronous ContextVar.set — no yield — so it
+        # does not disturb the marker+ensure_future atomicity below.
+        _lease_token = _BRANCH_CAPACITY_LEASE_VAR.set(_admission)
         try:
-            output = await dispatch_branch_step_shielded(inflight)
-        except asyncio.CancelledError:
-            # B-HIERARCHICAL-PAUSE (Codex [P1]) — this branch was cancelled because a
-            # SIBLING raised first, but its OWN in-flight child sub-workflow may have
-            # PAUSED: `dispatch_branch_step_shielded` suppresses the in-flight exception
-            # while draining a cancelled dispatch + re-raises `CancelledError`, so a
-            # `SubAgentChildPausedError` lands in `inflight.exception()` rather than
-            # reaching the typed handler below. Capture it as a paused-child (NOT a
-            # terminal `completed` branch — else the snapshot records it terminal,
-            # resume skips it, and the child's PauseSnapshot is DROPPED), matching the
-            # direct-pause path: stash + re-raise, no step/terminal entry recorded.
-            _inflight_exc = (
-                inflight.exception() if (inflight.done() and not inflight.cancelled()) else None
+            # B-FANOUT-CRASH-RESUME-STRICT-TIER-INCOMPLETE (R-FS-1) — reserve-before-DISPATCH:
+            # durably mark this WORKER branch DISPATCHED, fsynced STRICTLY BEFORE the effect can
+            # fire (the worker analogue of the parallelization marker; same store, same gate). The
+            # worker `branch_index` is the 0-based `worker_steps` ordinal `record_branch` also uses,
+            # so the marker/capture sets are partition-consistent. SYNCHRONOUS (atomic with the
+            # `ensure_future` dispatch — see `_cancel_branch`). `_cancel_worker` is the strict-tier
+            # path only — PROCEED's `_proceed_worker` writes no marker.
+            _mark_branch_dispatched(
+                ctx,
+                manifest_entry,
+                run_idempotency_key=run_idempotency_key,
+                branch_index=branch_index,
+                step_id=step.step_id,
+                step_kind=step.step_kind,
+                step=step,
             )
-            if isinstance(_inflight_exc, SubAgentChildPausedError):
+            # Schedule the (sync) dispatch off-loop; `dispatch_branch_step_shielded`
+            # keeps it alive against THIS branch's cancellation so an in-flight effect
+            # runs to its own completion (obl. 1), and registers it for the barrier's
+            # deadline watchdog (the hard "...or barrier-deadline timeout" cut-off).
+            inflight: asyncio.Future[Mapping[str, Any]] = asyncio.ensure_future(
+                asyncio.to_thread(dispatcher.dispatch, binding, step, step_context=child)
+            )
+            try:
+                output = await dispatch_branch_step_shielded(inflight)
+            except asyncio.CancelledError:
+                # B-HIERARCHICAL-PAUSE (Codex [P1]) — this branch was cancelled because a
+                # SIBLING raised first, but its OWN in-flight child sub-workflow may have
+                # PAUSED: `dispatch_branch_step_shielded` suppresses the in-flight exception
+                # while draining a cancelled dispatch + re-raises `CancelledError`, so a
+                # `SubAgentChildPausedError` lands in `inflight.exception()` rather than
+                # reaching the typed handler below. Capture it as a paused-child (NOT a
+                # terminal `completed` branch — else the snapshot records it terminal,
+                # resume skips it, and the child's PauseSnapshot is DROPPED), matching the
+                # direct-pause path: stash + re-raise, no step/terminal entry recorded.
+                _inflight_exc = (
+                    inflight.exception() if (inflight.done() and not inflight.cancelled()) else None
+                )
+                if isinstance(_inflight_exc, SubAgentChildPausedError):
+                    paused_child_dispositions[branch_index] = (
+                        _inflight_exc.child_workflow_id,
+                        _inflight_exc.child_snapshot,
+                    )
+                    raise
+                # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE (R-FS-1) — this branch was cancelled because
+                # a SIBLING raised first, but its OWN in-flight dispatch raised the runtime effect
+                # fence (the shield suppresses the in-flight exception + re-raises CancelledError,
+                # so the fence error lands in `inflight.exception()`, not the typed handler below).
+                # Name-matched (NOT isinstance — it is a harness-runtime type harness-cp cannot
+                # import; `type(None).__name__` is "NoneType" so a no-inflight cancel is safely
+                # skipped). Capture it as effect-fence-paused (NOT a terminal `completed` branch —
+                # else resume skips it + drops the pause), matching the SubAgentChildPausedError
+                # in-flight shape: stash the reserve key + re-raise, no step/terminal entry.
+                if type(_inflight_exc).__name__ == "EffectFenceAbortedError":
+                    # an in-flight worker whose re-dispatch raised the operator's ABORT → FAILED.
+                    effect_fence_aborted_dispositions.add(branch_index)
+                    raise
+                if type(_inflight_exc).__name__ == "EffectFenceAmbiguousUncommittedError":
+                    _inflight_fence_key = getattr(_inflight_exc, "idempotency_key", None)
+                    effect_fence_paused_dispositions[branch_index] = (
+                        _inflight_fence_key if isinstance(_inflight_fence_key, str) else ""
+                    )
+                    raise
+                # In-flight at cancel-time: the effect ran (shielded to completion) or
+                # the deadline cut it. Record the step entry (obl. 3) + the
+                # discriminating terminal (obl. 4): `completed` = ran (ran-and-errored
+                # is still completed — dispatch-boundary), `timed_out` = the deadline
+                # cut the in-flight step. A not-yet-dispatched worker NEVER reaches here
+                # (it has no inflight) — its `cancelled`/re-dispatchable disposition is
+                # handled post-barrier by the empty-buffer scan.
+                append_branch_step_ledger_entry(
+                    branch_writer=writer,
+                    branch_context=child,
+                    run_idempotency_key=run_idempotency_key,
+                    local_step_index=0,
+                    timestamp=fanout_timestamp,
+                    procedural_tier_snapshot_ref=snapshot_ref,
+                )
+                terminal: Literal["completed", "timed_out"] = (
+                    "timed_out" if (inflight.cancelled() or not inflight.done()) else "completed"
+                )
+                append_branch_terminal_ledger_entry(
+                    branch_writer=writer,
+                    branch_context=child,
+                    run_idempotency_key=run_idempotency_key,
+                    terminal_status=terminal,
+                    timestamp=fanout_timestamp,
+                    procedural_tier_snapshot_ref=snapshot_ref,
+                )
+                terminal_dispositions[branch_index] = terminal  # B-FANOUT-PAUSE
+                # B-FANOUT-PAUSE (Codex [P1]) — a sibling that was IN-FLIGHT when the
+                # barrier cancelled this branch ran to completion under the shield
+                # (`terminal == "completed"` ⟹ `inflight.done()` and not cancelled). Its
+                # successful OUTPUT must be collected so a `pause` snapshot recovers it
+                # (else it stores `output=None` → resume skips a successfully-completed
+                # branch + drops its output, corrupting the resumed aggregate). A
+                # ran-and-errored in-flight (`exception() is not None`) has no output.
+                if terminal == "completed" and inflight.exception() is None:
+                    # B-FANOUT-OUTPUT-REPLAY — a sibling that LANDED under the shield (its effect
+                    # fired) is captured WITH output (out-of-family Codex [P1]) — else crash-resume
+                    # RE-DISPATCHES it (double-fire). The buffered terminal append above is not
+                    # durable until the drain, so this still satisfies RESERVE-before-COMMIT.
+                    _capture_branch_terminal(
+                        ctx,
+                        manifest_entry,
+                        run_idempotency_key=run_idempotency_key,
+                        branch_index=branch_index,
+                        step_id=step.step_id,
+                        terminal_status="completed",
+                        output=inflight.result(),
+                    )
+                    collected[branch_index] = (str(step.step_id), inflight.result())
+                else:
+                    # A timed-out (deadline-cut, ambiguous) OR ran-and-errored (effect LANDED, no
+                    # output) in-flight sibling — capture the DISPOSITION with no output so
+                    # crash-resume recovers-as-terminal (`completed`) or FAILS CLOSED (`timed_out`),
+                    # never silently re-dispatching a landed effect (the disposition class closer).
+                    _capture_branch_terminal(
+                        ctx,
+                        manifest_entry,
+                        run_idempotency_key=run_idempotency_key,
+                        branch_index=branch_index,
+                        step_id=step.step_id,
+                        terminal_status=terminal,
+                        output=None,
+                    )
+                raise  # honor the cancellation (the barrier cancelled this branch)
+            except SubAgentChildPausedError as _paused:
+                # B-HIERARCHICAL-PAUSE — this worker's recursive child sub-workflow PAUSED
+                # (a grandchild failed under cascade_policy=pause). NOT a terminal branch
+                # (it is re-dispatched-via-child-resume on resume) and NOT a failure: stash
+                # the child's snapshot keyed by branch ordinal, record NO terminal entry
+                # (its ordinal stays out of `terminal_dispositions`, so it lands in
+                # `paused_child_branches`, never `branches`; any pre-dispatch override entry
+                # already buffered stays). Re-raise so the TaskGroup halts the fan-out at the
+                # pause boundary (siblings: in-flight finish / not-yet-dispatched left
+                # re-dispatchable — the §25.15.1 pause semantic), driving the pause branch.
                 paused_child_dispositions[branch_index] = (
-                    _inflight_exc.child_workflow_id,
-                    _inflight_exc.child_snapshot,
+                    _paused.child_workflow_id,
+                    _paused.child_snapshot,
                 )
                 raise
-            # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE (R-FS-1) — this branch was cancelled because
-            # a SIBLING raised first, but its OWN in-flight dispatch raised the runtime effect
-            # fence (the shield suppresses the in-flight exception + re-raises CancelledError,
-            # so the fence error lands in `inflight.exception()`, not the typed handler below).
-            # Name-matched (NOT isinstance — it is a harness-runtime type harness-cp cannot
-            # import; `type(None).__name__` is "NoneType" so a no-inflight cancel is safely
-            # skipped). Capture it as effect-fence-paused (NOT a terminal `completed` branch —
-            # else resume skips it + drops the pause), matching the SubAgentChildPausedError
-            # in-flight shape: stash the reserve key + re-raise, no step/terminal entry.
-            if type(_inflight_exc).__name__ == "EffectFenceAbortedError":
-                # an in-flight worker whose re-dispatch raised the operator's ABORT → FAILED.
-                effect_fence_aborted_dispositions.add(branch_index)
-                raise
-            if type(_inflight_exc).__name__ == "EffectFenceAmbiguousUncommittedError":
-                _inflight_fence_key = getattr(_inflight_exc, "idempotency_key", None)
-                effect_fence_paused_dispositions[branch_index] = (
-                    _inflight_fence_key if isinstance(_inflight_fence_key, str) else ""
-                )
-                raise
-            # In-flight at cancel-time: the effect ran (shielded to completion) or
-            # the deadline cut it. Record the step entry (obl. 3) + the
-            # discriminating terminal (obl. 4): `completed` = ran (ran-and-errored
-            # is still completed — dispatch-boundary), `timed_out` = the deadline
-            # cut the in-flight step. A not-yet-dispatched worker NEVER reaches here
-            # (it has no inflight) — its `cancelled`/re-dispatchable disposition is
-            # handled post-barrier by the empty-buffer scan.
-            append_branch_step_ledger_entry(
-                branch_writer=writer,
-                branch_context=child,
-                run_idempotency_key=run_idempotency_key,
-                local_step_index=0,
-                timestamp=fanout_timestamp,
-                procedural_tier_snapshot_ref=snapshot_ref,
-            )
-            terminal: Literal["completed", "timed_out"] = (
-                "timed_out" if (inflight.cancelled() or not inflight.done()) else "completed"
-            )
-            append_branch_terminal_ledger_entry(
-                branch_writer=writer,
-                branch_context=child,
-                run_idempotency_key=run_idempotency_key,
-                terminal_status=terminal,
-                timestamp=fanout_timestamp,
-                procedural_tier_snapshot_ref=snapshot_ref,
-            )
-            terminal_dispositions[branch_index] = terminal  # B-FANOUT-PAUSE
-            # B-FANOUT-PAUSE (Codex [P1]) — a sibling that was IN-FLIGHT when the
-            # barrier cancelled this branch ran to completion under the shield
-            # (`terminal == "completed"` ⟹ `inflight.done()` and not cancelled). Its
-            # successful OUTPUT must be collected so a `pause` snapshot recovers it
-            # (else it stores `output=None` → resume skips a successfully-completed
-            # branch + drops its output, corrupting the resumed aggregate). A
-            # ran-and-errored in-flight (`exception() is not None`) has no output.
-            if terminal == "completed" and inflight.exception() is None:
-                # B-FANOUT-OUTPUT-REPLAY — a sibling that LANDED under the shield (its effect
-                # fired) is captured WITH output (out-of-family Codex [P1]) — else crash-resume
-                # RE-DISPATCHES it (double-fire). The buffered terminal append above is not
-                # durable until the drain, so this still satisfies RESERVE-before-COMMIT.
+            except Exception as _exc:
+                # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE (R-FS-1) — this TOOL_STEP worker's OWN
+                # dispatch raised the runtime effect fence's `EffectFenceAmbiguousUncommittedError`
+                # (C-RT-31 §14.22): the fence lost a reserve to a prior uncommitted attempt AND
+                # found no captured output, so whether THIS branch's effect fired is GENUINELY
+                # ambiguous (the worker analogue of the linear B-EFFECT-FENCE-HITL-ROUTE at the
+                # per-step loop). Name-matched (harness-cp cannot import harness-runtime). It is
+                # NOT a terminal branch — record NO step/terminal entry (a `completed` terminal
+                # would make resume SKIP it + drop the pause): stash the held reserve's
+                # idempotency_key keyed by ordinal ("" when absent → resume re-pauses INERT,
+                # never an auto-re-fire) so the post-barrier compose lands it in
+                # `effect_fence_paused_branches`, then re-raise so the TaskGroup halts the fan-out
+                # at the pause boundary (the SubAgentChildPausedError disposition shape; the
+                # post-barrier guard FAILS HONESTLY if no PauseResumeProtocol is bound).
+                if type(_exc).__name__ == "EffectFenceAbortedError":
+                    # operator ABORT on resume → terminal FAILED (NOT a re-pause); Codex [P1].
+                    effect_fence_aborted_dispositions.add(branch_index)
+                    raise
+                if type(_exc).__name__ == "EffectFenceAmbiguousUncommittedError":
+                    _fence_key = getattr(_exc, "idempotency_key", None)
+                    effect_fence_paused_dispositions[branch_index] = (
+                        _fence_key if isinstance(_fence_key, str) else ""
+                    )
+                    raise
+                # THIS worker's own dispatch ERRORED — the failure that triggers the
+                # cascade. The effect ran-and-errored → record the step entry (obl. 3 —
+                # every dispatched effectful step gets its own entry REGARDLESS of
+                # disposition; the step failure lives at this entry) + a `completed`
+                # terminal (dispatch-boundary, not step-outcome — the carrier forecloses
+                # `failed`). Re-raise so the TaskGroup cascade-cancels the siblings.
+                # B-FANOUT-OUTPUT-REPLAY — capture the `completed` disposition (effect may have
+                # LANDED, no output) so crash-resume recovers it as terminal, never re-firing it
+                # (out-of-family Codex [P1] — the worker analogue of the parallelization site).
                 _capture_branch_terminal(
                     ctx,
                     manifest_entry,
@@ -11465,100 +11644,35 @@ def _execute_orchestrator_workers(
                     branch_index=branch_index,
                     step_id=step.step_id,
                     terminal_status="completed",
-                    output=inflight.result(),
-                )
-                collected[branch_index] = (str(step.step_id), inflight.result())
-            else:
-                # A timed-out (deadline-cut, ambiguous) OR ran-and-errored (effect LANDED, no
-                # output) in-flight sibling — capture the DISPOSITION with no output so
-                # crash-resume recovers-as-terminal (`completed`) or FAILS CLOSED (`timed_out`),
-                # never silently re-dispatching a landed effect (the disposition class closer).
-                _capture_branch_terminal(
-                    ctx,
-                    manifest_entry,
-                    run_idempotency_key=run_idempotency_key,
-                    branch_index=branch_index,
-                    step_id=step.step_id,
-                    terminal_status=terminal,
                     output=None,
                 )
-            raise  # honor the cancellation (the barrier cancelled this branch)
-        except SubAgentChildPausedError as _paused:
-            # B-HIERARCHICAL-PAUSE — this worker's recursive child sub-workflow PAUSED
-            # (a grandchild failed under cascade_policy=pause). NOT a terminal branch
-            # (it is re-dispatched-via-child-resume on resume) and NOT a failure: stash
-            # the child's snapshot keyed by branch ordinal, record NO terminal entry
-            # (its ordinal stays out of `terminal_dispositions`, so it lands in
-            # `paused_child_branches`, never `branches`; any pre-dispatch override entry
-            # already buffered stays). Re-raise so the TaskGroup halts the fan-out at the
-            # pause boundary (siblings: in-flight finish / not-yet-dispatched left
-            # re-dispatchable — the §25.15.1 pause semantic), driving the pause branch.
-            paused_child_dispositions[branch_index] = (
-                _paused.child_workflow_id,
-                _paused.child_snapshot,
-            )
-            raise
-        except Exception as _exc:
-            # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE (R-FS-1) — this TOOL_STEP worker's OWN
-            # dispatch raised the runtime effect fence's `EffectFenceAmbiguousUncommittedError`
-            # (C-RT-31 §14.22): the fence lost a reserve to a prior uncommitted attempt AND
-            # found no captured output, so whether THIS branch's effect fired is GENUINELY
-            # ambiguous (the worker analogue of the linear B-EFFECT-FENCE-HITL-ROUTE at the
-            # per-step loop). Name-matched (harness-cp cannot import harness-runtime). It is
-            # NOT a terminal branch — record NO step/terminal entry (a `completed` terminal
-            # would make resume SKIP it + drop the pause): stash the held reserve's
-            # idempotency_key keyed by ordinal ("" when absent → resume re-pauses INERT,
-            # never an auto-re-fire) so the post-barrier compose lands it in
-            # `effect_fence_paused_branches`, then re-raise so the TaskGroup halts the fan-out
-            # at the pause boundary (the SubAgentChildPausedError disposition shape; the
-            # post-barrier guard FAILS HONESTLY if no PauseResumeProtocol is bound).
-            if type(_exc).__name__ == "EffectFenceAbortedError":
-                # operator ABORT on resume → terminal FAILED (NOT a re-pause); Codex [P1].
-                effect_fence_aborted_dispositions.add(branch_index)
-                raise
-            if type(_exc).__name__ == "EffectFenceAmbiguousUncommittedError":
-                _fence_key = getattr(_exc, "idempotency_key", None)
-                effect_fence_paused_dispositions[branch_index] = (
-                    _fence_key if isinstance(_fence_key, str) else ""
+                append_branch_step_ledger_entry(
+                    branch_writer=writer,
+                    branch_context=child,
+                    run_idempotency_key=run_idempotency_key,
+                    local_step_index=0,
+                    timestamp=fanout_timestamp,
+                    procedural_tier_snapshot_ref=snapshot_ref,
                 )
+                append_branch_terminal_ledger_entry(
+                    branch_writer=writer,
+                    branch_context=child,
+                    run_idempotency_key=run_idempotency_key,
+                    terminal_status="completed",
+                    timestamp=fanout_timestamp,
+                    procedural_tier_snapshot_ref=snapshot_ref,
+                )
+                terminal_dispositions[branch_index] = "completed"  # B-FANOUT-PAUSE
                 raise
-            # THIS worker's own dispatch ERRORED — the failure that triggers the
-            # cascade. The effect ran-and-errored → record the step entry (obl. 3 —
-            # every dispatched effectful step gets its own entry REGARDLESS of
-            # disposition; the step failure lives at this entry) + a `completed`
-            # terminal (dispatch-boundary, not step-outcome — the carrier forecloses
-            # `failed`). Re-raise so the TaskGroup cascade-cancels the siblings.
-            # B-FANOUT-OUTPUT-REPLAY — capture the `completed` disposition (effect may have
-            # LANDED, no output) so crash-resume recovers it as terminal, never re-firing it
-            # (out-of-family Codex [P1] — the worker analogue of the parallelization site).
-            _capture_branch_terminal(
-                ctx,
-                manifest_entry,
-                run_idempotency_key=run_idempotency_key,
-                branch_index=branch_index,
-                step_id=step.step_id,
-                terminal_status="completed",
-                output=None,
-            )
-            append_branch_step_ledger_entry(
-                branch_writer=writer,
-                branch_context=child,
-                run_idempotency_key=run_idempotency_key,
-                local_step_index=0,
-                timestamp=fanout_timestamp,
-                procedural_tier_snapshot_ref=snapshot_ref,
-            )
-            append_branch_terminal_ledger_entry(
-                branch_writer=writer,
-                branch_context=child,
-                run_idempotency_key=run_idempotency_key,
-                terminal_status="completed",
-                timestamp=fanout_timestamp,
-                procedural_tier_snapshot_ref=snapshot_ref,
-            )
-            terminal_dispositions[branch_index] = "completed"  # B-FANOUT-PAUSE
-            raise
-        _record_clean(branch_index, step, child, writer, output)
+            _record_clean(branch_index, step, child, writer, output)
+        finally:
+            _BRANCH_CAPACITY_LEASE_VAR.reset(_lease_token)
+            # Lease-lifecycle (§14.8.10.1): an offloaded (SUB_AGENT_DISPATCH)
+            # branch transfers release ownership to its executor job
+            # (`job_bound`); this CP-side release only fires for branches
+            # that never reached the offload venue.
+            if not _admission.job_bound:
+                _admission.release()
 
     async def _cancel_fanout() -> list[None]:
         if not _warmup_gate:
