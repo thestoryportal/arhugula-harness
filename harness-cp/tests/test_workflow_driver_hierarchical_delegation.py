@@ -84,6 +84,9 @@ from harness_cp.sub_agent_brief import (
     SubAgentBrief,
     compute_brief_summary_hash,
 )
+from harness_cp.sub_agent_dispatch_cancellation import (
+    DISPATCH_CANCEL_TOKEN_VAR,
+)
 from harness_cp.sub_agent_dispatch_capacity_authority import DefaultCapacityAuthority
 from harness_cp.sub_agent_gate_level_descent import dispatch_sub_agent
 from harness_cp.topology_pattern import TopologyPattern
@@ -320,6 +323,14 @@ class _HierarchicalDispatcher:
         self.ctx = ctx
         self.registry: StepDispatcherRegistry | None = None
         self.contexts: dict[str, StepExecutionContext] = {}
+        # B-48 (codex #5): the ambient `DISPATCH_CANCEL_TOKEN_VAR` a REAL
+        # `_cancel_worker`/`_cancel_branch` call site binds before dispatch —
+        # captured here (this runs on the worker thread inside the SAME
+        # context copy `asyncio.to_thread` carried) so a test can assert the
+        # barrier's deadline watchdog actually tripped IT, proving the wiring
+        # through the production `_execute_orchestrator_workers` path (not a
+        # synthetic harness that bypasses `_cancel_branch`/`_cancel_worker`).
+        self.captured_cancel_tokens: dict[str, Any] = {}
         self._fail = fail_step_ids or set()
         self._block = block_step_ids or set()
         self._release = release
@@ -333,6 +344,7 @@ class _HierarchicalDispatcher:
     ) -> dict[str, Any]:
         step_id = str(step.step_id)
         self.contexts[step_id] = step_context
+        self.captured_cancel_tokens[step_id] = DISPATCH_CANCEL_TOKEN_VAR.get()
         if step.step_kind is StepKind.SUB_AGENT_DISPATCH:
             assert self.registry is not None, "registry must be wired before dispatch"
             child_manifest = cast(WorkflowManifestEntry, step.step_payload["child_manifest"])
@@ -810,6 +822,15 @@ def test_hierarchical_delegation_outer_deadline_bounds_parent_over_wedged_grandc
     assert elapsed < 3.0, (
         f"outer deadline did not bound the parent over a wedged grandchild ({elapsed:.2f}s)"
     )
+    # B-48 (codex #5; §14.8.10.3): the OUTER barrier's deadline watchdog cut
+    # the grandchild's `inflight` off directly — proving (through the REAL
+    # `_execute_orchestrator_workers` / `_cancel_worker` production path, at
+    # RECURSION DEPTH, not a synthetic harness) that the ambient per-dispatch
+    # fence tripped at the SAME moment, not bounded by any facade-level
+    # timeout (there is no facade in this test at all).
+    wedged_token = disp.captured_cancel_tokens["g-wedge"]
+    assert wedged_token is not None
+    assert wedged_token.tripped
 
 
 # ---------------------------------------------------------------------------

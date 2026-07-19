@@ -103,6 +103,48 @@ def test_shutdown_drain_with_deadline_never_blocks_on_loop_bridged_worker() -> N
     del completed
 
 
+def test_completed_job_count_tracks_real_completions_not_spawned_workers() -> None:
+    """The `_completed` counter (feeding `drain()`'s first return element)
+    must track actual job completions, not spawned worker threads.
+
+    Mutation probe: computing `self._spawned - still_outstanding` instead of
+    a real completion counter undercounts whenever a worker is reused — one
+    spawned worker serially completing 3 jobs has `_spawned == 1`, so that
+    formula reports 1 completion instead of 3. Sequential submission (each
+    `.result()` awaited before the next `submit`) guarantees idle-worker
+    reuse, never a second spawn (same assumption as the sibling
+    `test_grow_on_demand_workers_named_daemon_and_reused` witness).
+    """
+    executor = SubAgentDispatchExecutor(frame_budget=8)
+    for _ in range(3):
+        executor.submit(lambda: None).result(timeout=5)
+    assert executor._spawned == 1  # reused the same idle worker every time
+    assert executor._completed == 3
+
+
+def test_drain_completed_count_uses_real_counter_not_spawned_tally() -> None:
+    """`drain()`'s first return element must come from the real completion
+    counter, not `_spawned - still_outstanding` — a `_spawned` tally
+    inflated by earlier, unrelated worker churn must not leak into this
+    call's completed count.
+
+    Mutation probe: reverting to `self._spawned - still_outstanding` would
+    report 50 completions (the artificially inflated spawn tally minus zero
+    outstanding) instead of the real 1.
+    """
+    executor = SubAgentDispatchExecutor(frame_budget=8)
+    executor._spawned = 50  # simulates unrelated worker churn earlier in life
+    gate = threading.Event()
+    executor.submit(lambda: gate.wait(timeout=5))
+    completed, still_outstanding = executor.drain(deadline_seconds=0.1)
+    assert completed == 0
+    assert still_outstanding == 1
+    gate.set()
+    completed, still_outstanding = executor.drain(deadline_seconds=5.0)
+    assert completed == 1
+    assert still_outstanding == 0
+
+
 def test_atomic_reservation_no_partial_acquisition_under_concurrent_fanouts() -> None:
     """Whole-fan-out atomicity: two racing 3-frame fan-outs vs 4 free — one
     whole, one deterministically degraded (executor-budget variant of the
@@ -129,6 +171,25 @@ def test_atomic_reservation_no_partial_acquisition_under_concurrent_fanouts() ->
     for t in threads:
         t.join()
     assert sorted(admitted_counts) == [1, 3]
+
+
+def test_reserve_fanout_prefix_break_rejects_all_after_first_miss_at_executor() -> None:
+    """Executor-budget variant of the U-CP-101 fitting-prefix witness.
+
+    Mutation probe: dropping the `admitting` early-stop lets a later smaller
+    branch (needs 1, still available since the earlier miss never touched
+    `remaining`) wrongly admit after an earlier branch was rejected.
+    """
+    executor = SubAgentDispatchExecutor(frame_budget=1)
+    results = executor.reserve_fanout(
+        (2, 1),
+        step_ids=("b0", "b1"),
+        descent_chain=("wf", "fanout"),
+    )
+    assert isinstance(results[0], SubAgentDispatchCapacityError)
+    assert isinstance(results[1], SubAgentDispatchCapacityError)
+    assert results[1].requested_frames == 1
+    assert executor.available_frames == 1
 
 
 def test_lease_release_exactly_once_at_executor_budget() -> None:

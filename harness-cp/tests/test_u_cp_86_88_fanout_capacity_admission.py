@@ -16,6 +16,7 @@ sites gated identically — `test_cancel_policy_initial_admission_gated_over_cap
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 from typing import Any, cast
 
 from harness_core import PersonaTier, StepID, WorkloadClass
@@ -27,13 +28,18 @@ from harness_cp.cross_family_fallback_chain import (
 )
 from harness_cp.engine_class import EngineClass
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
-from harness_cp.sub_agent_dispatch_capacity_authority import DefaultCapacityAuthority
+from harness_cp.sub_agent_dispatch_capacity_authority import (
+    CapacityLease,
+    DefaultCapacityAuthority,
+)
 from harness_cp.topology_pattern import TopologyPattern
 from harness_cp.workflow_driver import (
     DriverContext,
     StepDispatcher,
     StepDispatcherRegistry,
     StepKindDispatcherNotBoundError,
+    _admit_fanout_branch_plan,
+    _release_unconsumed_fanout_admissions,
     execute_workflow,
 )
 from harness_cp.workflow_driver_types import RunStatus, StepKind, WorkflowStep
@@ -261,3 +267,48 @@ def test_default_authority_used_when_no_capacity_authority_injected() -> None:
         step_dispatchers=registry,
     )
     assert result.status == RunStatus.SUCCESS
+
+
+def test_release_unconsumed_fanout_admissions_returns_leases_skips_errors() -> None:
+    """`_release_unconsumed_fanout_admissions` (B-48 lease-leak fix,
+    out-of-family Codex [P1]) releases every admitted lease in an admission
+    map and safely skips rejected-branch entries.
+
+    Mutation probe: dropping the `isinstance(admission, CapacityLease)`
+    guard and calling `.release_unless_job_bound()` unconditionally would
+    raise `AttributeError` on a `SubAgentDispatchCapacityError` entry (no
+    such method); dropping the call to the helper entirely leaves
+    `authority.available` short by every admitted branch's frames — the
+    exact permanent-short-by-fan-out-width leak the post-admission
+    early-return sites (reconciler validation, effect-fence strict-tier
+    guard, B-39 Phase-0 abort) would otherwise cause.
+    """
+    authority = DefaultCapacityAuthority(frame_budget=3)
+    ctx = cast(DriverContext, SimpleNamespace(capacity_authority=authority))
+    branch_plan = [(i, _branch_step(i), None, None, None) for i in range(3)]
+    admissions = _admit_fanout_branch_plan(ctx, branch_plan, workflow_id="wf")
+    assert authority.available == 0  # all 3 admitted (1 frame each, DECLARATIVE_STEP)
+    assert all(isinstance(a, CapacityLease) for a in admissions.values())
+
+    _release_unconsumed_fanout_admissions(admissions)
+    assert authority.available == 3
+
+    # Exactly-once at the CapacityLease level: a second call is a no-op, not
+    # a double-credit.
+    _release_unconsumed_fanout_admissions(admissions)
+    assert authority.available == 3
+
+
+def test_release_unconsumed_fanout_admissions_skips_rejected_branches() -> None:
+    """A `SubAgentDispatchCapacityError` (rejected branch) entry carries no
+    lease and must never reach `.release_unless_job_bound()`."""
+    authority = DefaultCapacityAuthority(frame_budget=1)
+    ctx = cast(DriverContext, SimpleNamespace(capacity_authority=authority))
+    branch_plan = [(i, _branch_step(i), None, None, None) for i in range(2)]
+    admissions = _admit_fanout_branch_plan(ctx, branch_plan, workflow_id="wf")
+    assert authority.available == 0  # branch 0 admitted (1 frame); branch 1 rejected
+    assert isinstance(admissions[0], CapacityLease)
+    assert not isinstance(admissions[1], CapacityLease)
+
+    _release_unconsumed_fanout_admissions(admissions)
+    assert authority.available == 1  # only the admitted branch-0 lease returns frames

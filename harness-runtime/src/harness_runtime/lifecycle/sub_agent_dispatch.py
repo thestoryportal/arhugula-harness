@@ -139,7 +139,12 @@ from harness_cp.workflow_driver_types import (
 from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
 from harness_cxa.cp_audit_conversion import cp_audit_to_od_audit
 from harness_is.state_ledger_entry_schema import Identifier, Timestamp
-from harness_is.state_ledger_write import EntryPayload, WriteKey, WriteResult
+from harness_is.state_ledger_write import (
+    WRITER_OWNED_TIMESTAMP,
+    EntryPayload,
+    WriteKey,
+    WriteResult,
+)
 from harness_od.audit_ledger_types import SignatureAlgorithm, StateLedgerEntryRef
 from pydantic import BaseModel, ConfigDict, ValidationError
 
@@ -574,9 +579,12 @@ class RuntimeSubAgentDispatcher:
     - `audit_signing_key_id` / `audit_signing_algorithm` — signing config
       passed to the converter at 8c (`cp_audit_to_od_audit`); operator
       surface deferred per ADR-D5 v1.3 §1.4.1.
-    - `time_source` — timestamp injection point for the F2 dispatch
-      entry at 8b (test determinism; default `datetime.now(UTC)` at the
-      construction site).
+    - `time_source` — retained as a required construction kwarg for API
+      stability; the 8b F2 dispatch entry's timestamp is now writer-owned
+      (IS spec C-IS-07 §7.6 — sampled by `append_ledger_entry` itself,
+      inside its write lock, at actual append time) rather than sourced
+      from this callable, closing a concurrent-sibling-offload timestamp-
+      inversion gap `time_source()` could not close from outside the lock.
     """
 
     handoff_registry: RuntimeHandoffRegistry
@@ -748,7 +756,17 @@ class RuntimeSubAgentDispatcher:
                 action_id=dispatch_action_id,
                 idempotency_key=dispatch_action_id,
                 actor=step_context.parent_actor,
-                timestamp=self.time_source(),
+                # Writer-owned (IS spec C-IS-07 §7.6): concurrent sibling
+                # branches under an offloaded fan-out (B-48) each reach this
+                # 8b write from a separate worker thread with no ordering
+                # relative to one another — capturing `self.time_source()`
+                # here (outside `append_ledger_entry`'s `_WRITE_LOCK`) would
+                # reproduce the same capture-vs-physical-append-order
+                # inversion the sentinel was built to close for
+                # `drain_branch_buffers`. `WRITER_OWNED_TIMESTAMP` defers
+                # sampling to inside the lock, at the entry's actual append
+                # moment.
+                timestamp=WRITER_OWNED_TIMESTAMP,
                 procedural_tier_snapshot_ref=(self.procedural_tier_snapshot_resolver()),
             )
             f2_key = WriteKey(

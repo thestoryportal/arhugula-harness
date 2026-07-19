@@ -1122,10 +1122,14 @@ class RuntimeHITLGateComposer:
         job_lease = own_lease if own_lease is not None else branch_lease
         if job_lease is not None:
             release_lease = job_lease.release
+
             # Fires at ACTUAL job termination — including when an abandoned
             # (drained-under-fence) worker eventually finishes; exactly-once
             # guarded at the lease.
-            future.add_done_callback(lambda _f: release_lease())
+            def _release_on_done(_f: Any) -> None:
+                release_lease()
+
+            future.add_done_callback(_release_on_done)
         return cast(Mapping[str, Any], await asyncio.wrap_future(future))
 
     async def _escalate_to_secondary_channel(

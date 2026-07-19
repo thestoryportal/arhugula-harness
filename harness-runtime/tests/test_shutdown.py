@@ -509,6 +509,18 @@ class _FakeAuditWriter:
         return [SimpleNamespace(response_hash=bytes.fromhex(self._head))]
 
 
+class _FakeDispatchExecutor:
+    """Spy for the B-48 stage-5 sub-agent-dispatch executor's `drain()`."""
+
+    def __init__(self, *, still_outstanding: int = 0) -> None:
+        self.drain_called_with: float | None = None
+        self._still_outstanding = still_outstanding
+
+    def drain(self, *, deadline_seconds: float) -> tuple[int, int]:
+        self.drain_called_with = deadline_seconds
+        return (0, self._still_outstanding)
+
+
 class _FakeCtx:
     """Plain class so weakref + WeakValueDictionary work (SimpleNamespace doesn't)."""
 
@@ -615,6 +627,52 @@ async def test_shutdown_delegates_step_2_to_flush(tmp_path: Path) -> None:
     # force_flush should have been called with ~2000ms budget (allow drift).
     assert len(tracer.calls) == 1
     assert 0 < tracer.calls[0] <= 2_000
+
+
+@pytest.mark.asyncio
+async def test_shutdown_drains_stage_5_dispatch_executor(tmp_path: Path) -> None:
+    """Step 3 must drain the B-48 stage-5 sub-agent-dispatch executor.
+
+    Mutation probe: removing the `_drain_dispatch_executor` wiring from
+    `shutdown()` leaves `drain_called_with` at None — the executor's daemon
+    worker threads and their held frame leases would go undrained at
+    shutdown, silently (the "stateless-by-design no-op" framing this
+    docstring corrected).
+    """
+    dispatch_executor = _FakeDispatchExecutor(still_outstanding=0)
+    ctx = _shutdown_ctx(
+        tmp_path, tracer=_FakeTracerWithShutdown(), daemon=_FakeCollectorDaemon(), providers={}
+    )
+    ctx.sub_agent_dispatch_executor = dispatch_executor
+    report = await shutdown(ctx, timeout=5.0)
+    assert dispatch_executor.drain_called_with is not None
+    assert "sub_agent_dispatch_executor" not in report.failures
+    assert report.timed_out is False
+
+
+@pytest.mark.asyncio
+async def test_shutdown_reports_failure_when_dispatch_executor_cannot_drain(
+    tmp_path: Path,
+) -> None:
+    dispatch_executor = _FakeDispatchExecutor(still_outstanding=2)
+    ctx = _shutdown_ctx(
+        tmp_path, tracer=_FakeTracerWithShutdown(), daemon=_FakeCollectorDaemon(), providers={}
+    )
+    ctx.sub_agent_dispatch_executor = dispatch_executor
+    report = await shutdown(ctx, timeout=5.0)
+    assert "sub_agent_dispatch_executor" in report.failures
+    assert report.timed_out is True
+
+
+@pytest.mark.asyncio
+async def test_shutdown_missing_dispatch_executor_attr_is_a_noop(tmp_path: Path) -> None:
+    """No `sub_agent_dispatch_executor` attr (pre-B-48 ctx shape) — no-op, no failure."""
+    ctx = _shutdown_ctx(
+        tmp_path, tracer=_FakeTracerWithShutdown(), daemon=_FakeCollectorDaemon(), providers={}
+    )
+    assert not hasattr(ctx, "sub_agent_dispatch_executor")
+    report = await shutdown(ctx, timeout=5.0)
+    assert "sub_agent_dispatch_executor" not in report.failures
 
 
 @pytest.mark.asyncio

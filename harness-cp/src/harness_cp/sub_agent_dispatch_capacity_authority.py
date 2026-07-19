@@ -56,7 +56,7 @@ class CapacityLease:
     budget and returns True; every subsequent call is a no-op returning False.
     """
 
-    __slots__ = ("_frames", "_job_bound", "_release_fn", "_released", "step_id")
+    __slots__ = ("_frames", "_job_bound", "_lock", "_release_fn", "_released", "step_id")
 
     def __init__(self, *, frames: int, step_id: str, release_fn: object) -> None:
         self._frames = frames
@@ -65,6 +65,11 @@ class CapacityLease:
         self._release_fn = release_fn
         self._released = False
         self._job_bound = False
+        # Guards `_released`/`_job_bound`: the CP branch teardown thread and
+        # the executor's done-callback thread (fired synchronously on
+        # whichever thread calls `future.set_result`/`set_exception` —
+        # `hitl_gate_composer.py`) both touch this lease concurrently.
+        self._lock = threading.Lock()
 
     @property
     def frames(self) -> int:
@@ -86,17 +91,39 @@ class CapacityLease:
         parent return. When a fan-out branch's dispatch reaches the offload
         venue, the venue calls this and attaches the release to the job
         future's completion; the CP branch teardown then skips its own
-        release (`job_bound` guard), so a timed-out branch whose worker
-        still drains keeps its frames leased. Branches that never reach the
-        offload (async inners; pre-dispatch failures) stay CP-released.
+        release via `release_unless_job_bound` (never a bare `job_bound`
+        read-then-`release()`, which would TOCTOU-race this call), so a
+        timed-out branch whose worker still drains keeps its frames leased.
+        Branches that never reach the offload (async inners; pre-dispatch
+        failures) stay CP-released.
         """
-        self._job_bound = True
+        with self._lock:
+            self._job_bound = True
 
     def release(self) -> bool:
         """Return the leased frames to the budget; exactly-once."""
-        if self._released:
-            return False
-        self._released = True
+        with self._lock:
+            if self._released:
+                return False
+            self._released = True
+        fn = self._release_fn
+        assert callable(fn)
+        fn(self._frames)
+        return True
+
+    def release_unless_job_bound(self) -> bool:
+        """CP branch teardown's release: atomic vs. a racing `bind_release_to_job`.
+
+        A bare `if not lease.job_bound: lease.release()` has a TOCTOU window
+        between the read and the call — a concurrent `bind_release_to_job()`
+        landing in that window would let this path double-release alongside
+        the job's own done-callback release. This method makes the
+        bound-check and the released-flip a single critical section.
+        """
+        with self._lock:
+            if self._job_bound or self._released:
+                return False
+            self._released = True
         fn = self._release_fn
         assert callable(fn)
         fn(self._frames)
@@ -227,15 +254,22 @@ class DefaultCapacityAuthority:
         with self._lock:
             remaining = self._available
             acquired = 0
+            admitting = True
             for frames, step_id in zip(branch_requirements, step_ids, strict=True):
-                if frames <= remaining:
+                if admitting and frames <= remaining:
                     remaining -= frames
                     acquired += frames
                     results.append(
                         CapacityLease(frames=frames, step_id=step_id, release_fn=self._release)
                     )
                 else:
-                    # Deterministic excess: input-order fitting prefix only.
+                    # Deterministic excess: input-order fitting prefix only —
+                    # once one branch misses, every later branch is rejected
+                    # too, even a smaller one that would individually fit
+                    # (else the "prefix" invariant breaks: a later smaller
+                    # branch could admit into space the first miss left
+                    # untouched).
+                    admitting = False
                     results.append(
                         SubAgentDispatchCapacityError(
                             requested_frames=frames,

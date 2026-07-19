@@ -52,6 +52,7 @@ from harness_cp.pause_resume_protocol_types import (
     WorkflowPauseReason,
 )
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
+from harness_cp.sub_agent_dispatch_capacity_authority import DefaultCapacityAuthority
 from harness_cp.topology_pattern import TopologyPattern
 from harness_cp.workflow_driver import (
     DriverContext,
@@ -2841,3 +2842,63 @@ def test_b39_resumed_target_dispatches_before_any_sibling() -> None:
         f"resumed-target-first sequencing violated — dispatch order was {order!r} "
         f"(sibling-worker must land strictly AFTER sub-worker-done)"
     )
+
+
+class _FailingSubWorker:
+    """The resumed target's dispatcher RAISES — simulating a Phase-0 failure
+    that must not reach `sibling-worker`'s dispatch (still admitted, never
+    started)."""
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        msg = "resumed-target dispatch failed"
+        raise RuntimeError(msg)
+
+
+class _FailingSubWorkerRegistry:
+    def __init__(self) -> None:
+        self._sub_worker = _FailingSubWorker()
+        self._echo = _OrderRecordingEcho(order=[], order_lock=threading.Lock())
+
+    def lookup(self, step_kind: StepKind) -> StepDispatcher:
+        if step_kind is StepKind.SUB_AGENT_DISPATCH:
+            return cast(StepDispatcher, self._sub_worker)
+        if step_kind is StepKind.DECLARATIVE_STEP:
+            return cast(StepDispatcher, self._echo)
+        raise StepKindDispatcherNotBoundError(step_kind)
+
+
+def test_b39_resumed_target_phase0_failure_releases_rest_plan_admissions() -> None:
+    """B-48 lease-leak fix (out-of-family Codex [P1], directly implicating the
+    B-39 Phase-0 sequencing added this arc): when the resumed target's Phase-0
+    dispatch RAISES, `_rest_plan` (here: `sibling-worker`, branch 1) never
+    reaches its own dispatch `finally` — its whole-fan-out-admitted lease
+    would leak forever without the `except BaseException` release wrapped
+    around the Phase-0 loop in `_cancel_fanout`.
+    """
+    authority = DefaultCapacityAuthority(frame_budget=4)
+    registry = cast(StepDispatcherRegistry, _FailingSubWorkerRegistry())
+    child_snapshot = _hitl_pending_child_pause_snapshot("wf-child")
+    snapshot = _resumed_target_snapshot(
+        orchestrator_output={"role": "parent-orch"}, child_snapshot=child_snapshot
+    )
+    ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    ctx_obj.capacity_authority = authority  # type: ignore[attr-defined]
+    ctx = cast(DriverContext, ctx_obj)
+
+    result = execute_workflow(
+        _manifest("wf-b39-phase0-fail", TopologyPattern.ORCHESTRATOR_WORKERS),
+        _b39_parent_steps(),
+        run_id="wf-b39-phase0-fail-run",
+        ctx=ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=registry,
+        pause_snapshot_input=snapshot,
+    )
+
+    assert result.status is not RunStatus.SUCCESS
+    # Mutation probe: dropping the `except BaseException` release wrapper
+    # around the Phase-0 loop leaves this short by 1 (`sibling-worker`'s
+    # admitted-but-never-dispatched frame) — `available` would read 3, not 4.
+    assert authority.available == 4

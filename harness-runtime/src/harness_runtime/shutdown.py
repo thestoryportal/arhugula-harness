@@ -455,6 +455,24 @@ def _discard_cached_report(ctx_id: int) -> None:
     _cached_reports.pop(ctx_id, None)
 
 
+async def _drain_dispatch_executor(ctx: HarnessContext, remaining: float) -> bool:
+    """Step 3 stage-5 dispatch executor — `drain(deadline_seconds=remaining)`.
+
+    B-48 (U-RT-141) gave stage 5 a real stateful resource: the grow-on-demand
+    sub-agent-dispatch executor's daemon worker threads, holding frame leases
+    until actual job termination. `drain()` is sync/polling (never joins a
+    loop-bridged worker) so it is dispatched off the loop via `to_thread`.
+    Returns True iff every outstanding job drained within the deadline.
+    """
+    dispatch_executor = getattr(ctx, "sub_agent_dispatch_executor", None)
+    if dispatch_executor is None:
+        return True
+    _completed, still_outstanding = await asyncio.to_thread(
+        dispatch_executor.drain, deadline_seconds=max(0.0, remaining)
+    )
+    return still_outstanding == 0
+
+
 async def _close_collector_daemon(ctx: HarnessContext, remaining: float) -> bool:
     """Step 3 collector — `await daemon.stop(timeout_seconds=remaining)`."""
     daemon = ctx.collector_daemon
@@ -559,9 +577,11 @@ async def shutdown(
        U-RT-44) is STRUCK per `[[fork-u-rt-44-workflow-loop-drain]]`;
        resolution lands at U-RT-49 when the CP workflow loop materializes.
     2. **Flush observability** — delegates to `flush_observability(ctx)`.
-    3. **Close stage-5/4/3b/3a in reverse** — collector daemon, tracer
-       provider, then every provider client. Stage-5 emitter/dispatcher
-       and stage-3b routing/registries are stateless-by-design no-ops.
+    3. **Close stage-5/4/3b/3a in reverse** — the stage-5 sub-agent-dispatch
+       executor (B-48 U-RT-141: drained first, being the latest-opened of
+       this bundle), collector daemon, tracer provider, then every provider
+       client. Stage-5's LLM emitter/dispatcher (pre-B-48) and stage-3b
+       routing/registries remain stateless-by-design no-ops.
     4. **Close stage-2 resources** — MCP clients + host. Both are
        placeholder dataclasses at HEAD (U-RT-22); no-op until a real
        MCP runtime lands.
@@ -612,6 +632,21 @@ async def shutdown(
         failures.extend(f"flush:{tag}" for tag in flush_report.failures)
     if flush_report.timed_out:
         timed_out = True
+
+    # Step 3 (pre-3a) — stage-5 sub-agent-dispatch executor (B-48 U-RT-141).
+    # Reverse-stage order: LOOP_INIT (stage 5) opened after OD (stage 4), so
+    # it drains before the collector/tracer close below.
+    # Step 3 (pre-3a) — stage-5 sub-agent-dispatch executor (B-48 U-RT-141).
+    # Reverse-stage order: LOOP_INIT (stage 5) opened after OD (stage 4), so
+    # it drains before the collector/tracer close below.
+    remaining = max(0.0, deadline - time.monotonic())
+    try:
+        drained_clean = await _drain_dispatch_executor(ctx, remaining)
+        if not drained_clean:
+            failures.append("sub_agent_dispatch_executor")
+            timed_out = True
+    except Exception:
+        failures.append("sub_agent_dispatch_executor")
 
     # Step 3a — collector daemon.
     remaining = max(0.0, deadline - time.monotonic())

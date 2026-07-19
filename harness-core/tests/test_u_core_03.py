@@ -55,16 +55,20 @@ def test_capacity_error_root_descent_and_carrier_shape() -> None:
     }
 
 
-def test_capacity_error_importable_from_cp_and_runtime_without_cycle() -> None:
-    """AC #2 — leaf-safe: the packages that raise/handle it import it cleanly.
-
-    Mutation probe: relocating the class into `harness_runtime` makes the CP
-    import fail (harness-cp has no harness-runtime dependency).
-    """
-    import harness_cp  # noqa: F401  (import proves no cycle through harness_core)
-    import harness_runtime  # noqa: F401
+def test_capacity_error_direct_import_matches_package_export() -> None:
+    """AC #2 — the package-level re-export is the same object as the direct
+    carrier-module import (no shadowing/copy)."""
     from harness_core.sub_agent_dispatch_capacity import (
         SubAgentDispatchCapacityError as DirectImport,
     )
 
     assert DirectImport is SubAgentDispatchCapacityError
+
+
+# NB: the cross-package "harness_cp AND harness_runtime both import this
+# without a cycle" leaf-safety witness lives at
+# `harness-runtime/tests/test_u_core_03_cross_package_import.py` — it needs
+# BOTH sibling axis packages installed simultaneously, which the CI axis-
+# isolation job for harness-core deliberately does NOT provide (harness-core
+# must have zero import dependency on its consumers; a test requiring their
+# presence cannot run inside harness-core's own isolated job).

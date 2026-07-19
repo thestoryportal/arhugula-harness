@@ -24,6 +24,7 @@ in-memory OTel span exporter + SimpleSpanProcessor for synchronous flushing.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, cast
@@ -50,6 +51,11 @@ from harness_cp.routing_manifest_residence import (
     RoutingManifest,
     WorkloadRoutingOverride,
     validate_routing_manifest,
+)
+from harness_cp.sub_agent_dispatch_cancellation import (
+    DISPATCH_CANCEL_TOKEN_VAR,
+    DispatchCancelToken,
+    FenceAckOutcome,
 )
 from harness_cp.workflow_driver import StepDispatcher
 from harness_cp.workflow_driver_types import (
@@ -249,6 +255,84 @@ def test_wrapper_satisfies_step_dispatcher_protocol() -> None:
         sleep_fn=_noop_sleep,
     )
     assert isinstance(wrapper, StepDispatcher)
+
+
+# ---------------------------------------------------------------------------
+# B-48 (U-RT-143) — the real provider attempt is an effect-entry, not a bare
+# pre-attempt check.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _SlowInnerDispatcher:
+    """Signals `started` once inside `dispatch`, then blocks on `release` —
+    lets a test trip the ambient cancel token WHILE the real call is
+    genuinely in flight, deterministically (no timing races)."""
+
+    started: asyncio.Event
+    release: asyncio.Event
+    result: Mapping[str, Any]
+
+    async def dispatch(
+        self,
+        binding: StepEffectiveBinding,
+        step: WorkflowStep,
+        *,
+        step_context: Any = None,
+    ) -> Mapping[str, Any]:
+        self.started.set()
+        await self.release.wait()
+        return self.result
+
+
+@pytest.mark.asyncio
+async def test_trip_during_real_attempt_marks_job_ack_ambiguous() -> None:
+    """B-48 lease-leak-adjacent correctness fix (out-of-family Codex [P1]):
+    a fence trip landing WHILE the real provider attempt is genuinely in
+    flight must resolve the job's ack as ACKED_EFFECT_AMBIGUOUS, never
+    ACKED_CLEAN — the attempt's outcome (billed? succeeded? failed?) is
+    unknown at the moment of trip.
+
+    Mutation probe: reverting the per-attempt guard from `effect_entry()`
+    back to a bare pre-attempt `check()` never marks the attempt in-flight,
+    so `token.trip()` (called here while the mock inner is genuinely
+    blocked mid-dispatch) computes `_inflight_at_trip = False` — this test's
+    assertion would then see ACKED_CLEAN.
+    """
+    token = DispatchCancelToken()
+    var_token = DISPATCH_CANCEL_TOKEN_VAR.set(token)
+    try:
+        started = asyncio.Event()
+        release = asyncio.Event()
+        inner = cast(
+            Any, _SlowInnerDispatcher(started=started, release=release, result={"ok": True})
+        )
+        tp, _ = _tracer_provider_with_exporter()
+        wrapper = RetryBreakerFallbackDispatcher(
+            inner=inner,
+            retry_breaker=_retry_breaker_with_llm_policy(),
+            fallback_chain=_chain(_candidate("anthropic", "claude-test-1")),
+            tracer_provider=tp,
+            sleep_fn=_noop_sleep,
+        )
+
+        dispatch_task = asyncio.create_task(
+            wrapper.dispatch(_binding(), _step(), step_context=_step_context())
+        )
+        await asyncio.wait_for(started.wait(), timeout=5.0)
+        # The real attempt is now genuinely in flight (blocked on `release`).
+        # A tripped token cannot abort an operation already inside the
+        # guard (§14.8.10.3's honestly-stated limit) — it only marks the
+        # ambiguity for the fence-ack contract.
+        token.trip()
+        release.set()
+        result = await asyncio.wait_for(dispatch_task, timeout=5.0)
+        assert result == {"ok": True}
+    finally:
+        DISPATCH_CANCEL_TOKEN_VAR.reset(var_token)
+
+    token.ack()
+    assert token.wait_ack(grace_seconds=0.1) is FenceAckOutcome.ACKED_EFFECT_AMBIGUOUS
 
 
 # ---------------------------------------------------------------------------

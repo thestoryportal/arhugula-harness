@@ -64,6 +64,37 @@ def test_protocol_lease_release_exactly_once_across_outcomes() -> None:
     assert authority.available == 4  # not 4 + 3*n over-credit
 
 
+def test_release_unless_job_bound_atomic_vs_bind() -> None:
+    """CP branch teardown's atomic bound-check-and-release.
+
+    Mutation probe: reverting the CP call sites to a bare
+    `if not lease.job_bound: lease.release()` reintroduces a TOCTOU window
+    between the read and the call — a `bind_release_to_job()` landing in
+    that window lets teardown double-release alongside the job's own
+    later release. `release_unless_job_bound` collapses the check and the
+    released-flip into one critical section, so once bound, teardown's call
+    is provably a no-op regardless of interleaving.
+    """
+    authority = DefaultCapacityAuthority(frame_budget=4)
+    lease = authority.reserve(3, step_id="s1", descent_chain=("s1",))
+    assert authority.available == 1
+    lease.bind_release_to_job()
+    # Teardown's guarded call must be a no-op once bound — frames stay held
+    # for the job's own done-callback release, never double-credited here.
+    assert lease.release_unless_job_bound() is False
+    assert authority.available == 1
+    assert lease.release() is True
+    assert authority.available == 4
+
+
+def test_release_unless_job_bound_releases_when_not_bound() -> None:
+    authority = DefaultCapacityAuthority(frame_budget=4)
+    lease = authority.reserve(3, step_id="s1", descent_chain=("s1",))
+    assert lease.release_unless_job_bound() is True
+    assert authority.available == 4
+    assert lease.release_unless_job_bound() is False  # exactly-once
+
+
 def test_reserve_fanout_whole_fit_returns_all_leases() -> None:
     authority = DefaultCapacityAuthority(frame_budget=8)
     results = authority.reserve_fanout(
@@ -91,6 +122,28 @@ def test_reserve_fanout_fitting_prefix_deterministic_rejections() -> None:
     assert rejection.requested_frames == 2
     assert rejection.available_capacity == 1
     assert rejection.step_id == "b2"
+    assert authority.available == 1
+
+
+def test_reserve_fanout_prefix_break_rejects_all_after_first_miss() -> None:
+    """A later SMALLER branch must not admit after an earlier branch missed.
+
+    Mutation probe: dropping the `admitting` early-stop lets branch 1 (needs
+    1, and 1 is still available since branch 0's failed 2-frame request never
+    touched `remaining`) wrongly admit after branch 0 was rejected — breaking
+    the documented "input-order fitting prefix" invariant.
+    """
+    authority = DefaultCapacityAuthority(frame_budget=1)
+    results = authority.reserve_fanout(
+        (2, 1),
+        step_ids=("b0", "b1"),
+        descent_chain=("wf", "fanout"),
+    )
+    assert isinstance(results[0], SubAgentDispatchCapacityError)
+    assert isinstance(results[1], SubAgentDispatchCapacityError)
+    assert results[1].requested_frames == 1
+    assert results[1].available_capacity == 1
+    # Nothing was acquired — the whole-fan-out budget is untouched.
     assert authority.available == 1
 
 

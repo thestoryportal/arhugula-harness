@@ -108,8 +108,14 @@ from harness_cp.per_step_override_evaluator import (
 from harness_cp.sub_agent_dispatch_cancellation import (
     DISPATCH_CANCEL_TOKEN_VAR as _DISPATCH_CANCEL_TOKEN_VAR,
 )
+from harness_cp.sub_agent_dispatch_cancellation import (
+    DispatchCancelToken as _DispatchCancelToken,
+)
 from harness_cp.sub_agent_dispatch_capacity_authority import (
     BRANCH_CAPACITY_LEASE_VAR as _BRANCH_CAPACITY_LEASE_VAR,
+)
+from harness_cp.sub_agent_dispatch_capacity_authority import (
+    CapacityLease,
 )
 from harness_cp.sub_agent_dispatch_capacity_authority import (
     DefaultCapacityAuthority as _DefaultCapacityAuthority,
@@ -2095,6 +2101,25 @@ def _admit_fanout_branch_plan(
     return {plan[0]: result for plan, result in zip(branch_plan, results, strict=True)}
 
 
+def _release_unconsumed_fanout_admissions(admissions: Mapping[int, Any]) -> None:
+    """Release every admitted-but-never-dispatched lease in `admissions`.
+
+    `_admit_fanout_branch_plan` reserves the WHOLE fan-out's frames atomically
+    before a single branch dispatches (§25.11). A guard that fails the run
+    AFTER admission but BEFORE any branch reaches its own dispatch `finally`
+    (the reconciler-resume-validation gate; the effect-fence-resume-requires-
+    strict-tier gate) must release those leases here — otherwise they leak
+    permanently (out-of-family Codex [P1]: no branch `finally` ever runs to
+    call `release_unless_job_bound()` for them, so the shared frame budget is
+    silently short by this run's whole fan-out width forever).
+    `SubAgentDispatchCapacityError` entries (rejected branches) carry no
+    lease and are skipped.
+    """
+    for admission in admissions.values():
+        if isinstance(admission, CapacityLease):
+            admission.release_unless_job_bound()
+
+
 def resume_should_redispatch(
     terminal_status: Literal["cancelled", "completed", "timed_out"] | None,
 ) -> bool:
@@ -2341,6 +2366,28 @@ async def dispatch_branch_step_shielded[T](inflight: asyncio.Future[T]) -> T:
                 # it escape) is what keeps a cancelled-and-errored branch from
                 # being spuriously marked FAILED with no terminal record (F2-01).
                 pass
+        if inflight.cancelled():
+            # B-48 (codex #5; §14.8.10.3): `inflight` is done+cancelled ONLY via
+            # a DIRECT `.cancel()` — the barrier's deadline watchdog cutting this
+            # dispatch off, or the second-cancellation-while-draining branch just
+            # above — never via the branch's own TaskGroup cancellation (the
+            # shield absorbs that while the effect runs to completion, leaving
+            # `inflight` done-and-NOT-cancelled). Trip the ambient per-dispatch
+            # fence NOW: the facade's own `except TimeoutError` handler
+            # (`sync_dispatcher_facade.py`) also trips it, but only when ITS OWN
+            # `result_timeout_seconds` bound organically expires — a
+            # SEPARATE, operator-configurable timer that can outlive this
+            # barrier's deadline. Waiting for it would leave the fence
+            # unfenced for up to that bound after the branch is already
+            # recorded `timed_out`, during which a new retry attempt could
+            # still begin. The ambient token here is the per-dispatch token
+            # bound by the caller (`_cancel_branch` / `_cancel_worker`) before
+            # `inflight` was created — the facade's own `cancel_token` links to
+            # it as a child, so tripping it here cascades into the worker
+            # thread's retry loop immediately.
+            _ambient_token = _DISPATCH_CANCEL_TOKEN_VAR.get()
+            if _ambient_token is not None:
+                _ambient_token.trip()
         raise
     finally:
         if chain:
@@ -7313,6 +7360,7 @@ def _execute_parallelization(
             run_id=run_id,
         )
         if _synth_replay_validation_fail is not None:
+            _release_unconsumed_fanout_admissions(_branch_admissions)
             return _synth_replay_validation_fail, 0
         (
             _reconciler_resume_fail,
@@ -7324,6 +7372,7 @@ def _execute_parallelization(
             step_id="fanout-crash-resume",
         )
         if _reconciler_resume_fail is not None:
+            _release_unconsumed_fanout_admissions(_branch_admissions)
             return _reconciler_resume_fail, 0
 
     # § 25.3.2 — Emit workflow.start (the fan-out begins). Single-threaded on the
@@ -7688,6 +7737,10 @@ def _execute_parallelization(
     # requires a strict tier (out-of-family Codex [P2] R3; the tier-change material-diff is allowed
     # otherwise, so this guard is the load-bearing strict-tier requirement).
     if _recovered_effect_fence_paused and cascade_policy is CascadePolicy.PROCEED:
+        # B-48 lease-leak fix (out-of-family Codex [P1]): this fail-closed
+        # guard fires AFTER admission, BEFORE any branch dispatch reaches its
+        # own `finally` release.
+        _release_unconsumed_fanout_admissions(_branch_admissions)
         return _finish(
             RunStatus.FAILED,
             fail_class="parallelization-effect-fence-resume-requires-strict-tier",
@@ -7955,8 +8008,7 @@ def _execute_parallelization(
                     # transfers release ownership to its executor job
                     # (`job_bound`); this CP-side release only fires for
                     # branches that never reached the offload venue.
-                    if not _admission.job_bound:
-                        _admission.release()
+                    _admission.release_unless_job_bound()
             except asyncio.CancelledError:
                 # The §25.11 wall-clock deadline cancelled this in-flight branch.
                 # Its dispatch was scheduled (the effect may have landed) → record
@@ -8157,6 +8209,16 @@ def _execute_parallelization(
         # carries it. A plain synchronous ContextVar.set — no yield — so it
         # does not disturb the marker+ensure_future atomicity below.
         _lease_token = _BRANCH_CAPACITY_LEASE_VAR.set(_admission)
+        # B-48 (codex #5; §14.8.10.3): bind a per-branch cancel token ahead of
+        # `inflight` too — the worker-thread/loop-side context copy carries it
+        # into `SyncDispatcherFacade.dispatch`, whose OWN `cancel_token` links
+        # to it as a CHILD (`DispatchCancelToken(parent=DISPATCH_CANCEL_TOKEN_VAR.get())`),
+        # and `dispatch_branch_step_shielded` reads the SAME ambient token
+        # (same task, no context-copy boundary) to trip it the instant this
+        # barrier's watchdog cuts `inflight` off directly — not bounded by the
+        # facade's own, separately-configurable `result_timeout_seconds`.
+        _cancel_token = _DispatchCancelToken(parent=_DISPATCH_CANCEL_TOKEN_VAR.get())
+        _cancel_token_ctx = _DISPATCH_CANCEL_TOKEN_VAR.set(_cancel_token)
         try:
             # B-FANOUT-CRASH-RESUME-STRICT-TIER-INCOMPLETE (R-FS-1) —
             # reserve-before-DISPATCH: durably mark this branch DISPATCHED,
@@ -8378,12 +8440,12 @@ def _execute_parallelization(
             _record_clean(branch_index, step, child, writer, output)
         finally:
             _BRANCH_CAPACITY_LEASE_VAR.reset(_lease_token)
+            _DISPATCH_CANCEL_TOKEN_VAR.reset(_cancel_token_ctx)
             # Lease-lifecycle (§14.8.10.1): an offloaded (SUB_AGENT_DISPATCH)
             # branch transfers release ownership to its executor job
             # (`job_bound`); this CP-side release only fires for branches
             # that never reached the offload venue.
-            if not _admission.job_bound:
-                _admission.release()
+            _admission.release_unless_job_bound()
 
     async def _cancel_fanout() -> list[None]:
         # B-39 interim constraint (CP spec v1.102 §3) — Phase 0: dispatch every
@@ -8404,14 +8466,25 @@ def _execute_parallelization(
         # SAME `BranchBarrierDeadlineExceededError` the outer
         # `except BranchBarrierDeadlineExceededError` already handles.
         _effective_deadline = deadline
-        for _target_plan in _resumed_target_plan:
-            _phase0_start = asyncio.get_running_loop().time()
-            await cascade_cancel_barrier(
-                (_cancel_branch(*_target_plan),), deadline_seconds=_effective_deadline
+        try:
+            for _target_plan in _resumed_target_plan:
+                _phase0_start = asyncio.get_running_loop().time()
+                await cascade_cancel_barrier(
+                    (_cancel_branch(*_target_plan),), deadline_seconds=_effective_deadline
+                )
+                _effective_deadline = max(
+                    0.0,
+                    _effective_deadline - (asyncio.get_running_loop().time() - _phase0_start),
+                )
+        except BaseException:
+            # B-48 lease-leak fix (out-of-family Codex [P1]): a Phase-0
+            # resumed-target failure/deadline-strike raises BEFORE `_rest_plan`
+            # ever dispatches, so its branches' own `finally` releases never
+            # run — their already-admitted whole-fan-out leases would leak.
+            _release_unconsumed_fanout_admissions(
+                {plan[0]: _branch_admissions[plan[0]] for plan in _rest_plan}
             )
-            _effective_deadline = max(
-                0.0, _effective_deadline - (asyncio.get_running_loop().time() - _phase0_start)
-            )
+            raise
         if not _warmup_gate:
             return await cascade_cancel_barrier(
                 (_cancel_branch(*plan) for plan in _rest_plan),
@@ -11222,6 +11295,10 @@ def _execute_orchestrator_workers(
     # would degrade to PARTIAL, dropping the operator's decision). Fail closed — the resume requires
     # a strict tier (out-of-family Codex [P2] R3; the parallelization analogue).
     if _recovered_effect_fence_paused and cascade_policy is CascadePolicy.PROCEED:
+        # B-48 lease-leak fix (out-of-family Codex [P1]): this fail-closed
+        # guard fires AFTER admission, BEFORE any worker dispatch reaches its
+        # own `finally` release.
+        _release_unconsumed_fanout_admissions(_branch_admissions)
         return _finish(
             RunStatus.FAILED,
             fail_class="orchestrator-workers-effect-fence-resume-requires-strict-tier",
@@ -11331,8 +11408,7 @@ def _execute_orchestrator_workers(
                     # transfers release ownership to its executor job
                     # (`job_bound`); this CP-side release only fires for
                     # branches that never reached the offload venue.
-                    if not _admission.job_bound:
-                        _admission.release()
+                    _admission.release_unless_job_bound()
             except asyncio.CancelledError:
                 # The §25.11 wall-clock deadline (`_proceed_fanout`'s
                 # `asyncio.timeout`) cancelled this in-flight worker. Its dispatch
@@ -11528,6 +11604,10 @@ def _execute_orchestrator_workers(
         # carries it. A plain synchronous ContextVar.set — no yield — so it
         # does not disturb the marker+ensure_future atomicity below.
         _lease_token = _BRANCH_CAPACITY_LEASE_VAR.set(_admission)
+        # B-48 (codex #5; §14.8.10.3): bind a per-branch cancel token — see
+        # `_cancel_branch`'s identical rationale.
+        _cancel_token = _DispatchCancelToken(parent=_DISPATCH_CANCEL_TOKEN_VAR.get())
+        _cancel_token_ctx = _DISPATCH_CANCEL_TOKEN_VAR.set(_cancel_token)
         try:
             # B-FANOUT-CRASH-RESUME-STRICT-TIER-INCOMPLETE (R-FS-1) — reserve-before-DISPATCH:
             # durably mark this WORKER branch DISPATCHED, fsynced STRICTLY BEFORE the effect can
@@ -11734,12 +11814,12 @@ def _execute_orchestrator_workers(
             _record_clean(branch_index, step, child, writer, output)
         finally:
             _BRANCH_CAPACITY_LEASE_VAR.reset(_lease_token)
+            _DISPATCH_CANCEL_TOKEN_VAR.reset(_cancel_token_ctx)
             # Lease-lifecycle (§14.8.10.1): an offloaded (SUB_AGENT_DISPATCH)
             # branch transfers release ownership to its executor job
             # (`job_bound`); this CP-side release only fires for branches
             # that never reached the offload venue.
-            if not _admission.job_bound:
-                _admission.release()
+            _admission.release_unless_job_bound()
 
     async def _cancel_fanout() -> list[None]:
         # B-39 interim constraint (CP spec v1.102 §3) — Phase 0: dispatch every
@@ -11760,14 +11840,25 @@ def _execute_orchestrator_workers(
         # SAME `BranchBarrierDeadlineExceededError` the outer
         # `except BranchBarrierDeadlineExceededError` already handles.
         _effective_deadline = deadline
-        for _target_plan in _resumed_target_plan:
-            _phase0_start = asyncio.get_running_loop().time()
-            await cascade_cancel_barrier(
-                (_cancel_worker(*_target_plan),), deadline_seconds=_effective_deadline
+        try:
+            for _target_plan in _resumed_target_plan:
+                _phase0_start = asyncio.get_running_loop().time()
+                await cascade_cancel_barrier(
+                    (_cancel_worker(*_target_plan),), deadline_seconds=_effective_deadline
+                )
+                _effective_deadline = max(
+                    0.0,
+                    _effective_deadline - (asyncio.get_running_loop().time() - _phase0_start),
+                )
+        except BaseException:
+            # B-48 lease-leak fix (out-of-family Codex [P1]): a Phase-0
+            # resumed-target failure/deadline-strike raises BEFORE `_rest_plan`
+            # ever dispatches, so its workers' own `finally` releases never
+            # run — their already-admitted whole-fan-out leases would leak.
+            _release_unconsumed_fanout_admissions(
+                {plan[0]: _branch_admissions[plan[0]] for plan in _rest_plan}
             )
-            _effective_deadline = max(
-                0.0, _effective_deadline - (asyncio.get_running_loop().time() - _phase0_start)
-            )
+            raise
         if not _warmup_gate:
             return await cascade_cancel_barrier(
                 (_cancel_worker(*plan) for plan in _rest_plan),

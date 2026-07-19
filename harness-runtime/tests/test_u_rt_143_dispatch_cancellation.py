@@ -127,6 +127,53 @@ def test_effect_entry_tracks_inflight_at_trip_and_blocks_new_effects() -> None:
             pytest.fail("a new effect began after the fence tripped")
 
 
+def test_descendant_inflight_at_trip_bubbles_to_parent_ack() -> None:
+    """B-48 correctness fix (out-of-family Codex [P1]) — a descendant's own
+    effect-in-flight-at-trip must make the PARENT's ack ambiguous too, not
+    only the descendant's. The parent itself has ZERO effects in flight; only
+    the CHILD does. Cascading `parent.trip()` while the child holds an open
+    `effect_entry()` must still resolve the PARENT's `wait_ack()` as
+    ACKED_EFFECT_AMBIGUOUS — a grandchild's effect landing after its own trip
+    is exactly as ambiguous to the operator as the parent's own effect would
+    be.
+
+    Mutation probe: reverting `trip()` to discard its children's return value
+    (the pre-fix shape) leaves `parent._inflight_at_trip` at its own
+    (`False`) reading — this test's assertion would then see ACKED_CLEAN.
+    """
+    parent = DispatchCancelToken()
+    child = DispatchCancelToken(parent=parent)
+    guard = child.effect_entry()
+    guard.__enter__()  # child effect in flight; parent has NO effect in flight
+    parent.trip()  # cascades to the child; child's own in-flight flag is True
+    guard.__exit__(None, None, None)
+    parent.ack()
+    assert parent.wait_ack(grace_seconds=0.1) is FenceAckOutcome.ACKED_EFFECT_AMBIGUOUS
+    # The child's own ack independently reflects the same ambiguity.
+    child.ack()
+    assert child.wait_ack(grace_seconds=0.1) is FenceAckOutcome.ACKED_EFFECT_AMBIGUOUS
+
+
+def test_late_linked_child_inflight_at_trip_bubbles_to_already_tripped_parent() -> None:
+    """The `_link_child` late-join cascade path (a token linked to an
+    ALREADY-tripped ancestor) must ALSO bubble an in-flight-at-trip flag up
+    — not only the main `trip()` cascade path. Exercises `_link_child`
+    directly (deliberately, as a private-but-load-bearing correctness
+    surface): a child with an open effect, linked into an already-tripped
+    parent that itself has zero effects in flight.
+    """
+    parent = DispatchCancelToken()
+    parent.trip()  # parent tripped with NO effects anywhere; starts clean
+    child = DispatchCancelToken()
+    with child.effect_entry():
+        # Mutation probe: reverting `_link_child` to discard `child.trip()`'s
+        # return value leaves `parent._inflight_at_trip` at its pre-existing
+        # (`False`) reading regardless of what the newly-linked child reports.
+        parent._link_child(child)  # exercising the internal cascade path directly
+    parent.ack()
+    assert parent.wait_ack(grace_seconds=0.1) is FenceAckOutcome.ACKED_EFFECT_AMBIGUOUS
+
+
 def test_clean_trip_between_operations_acks_clean() -> None:
     token = DispatchCancelToken()
     with token.effect_entry():
@@ -351,10 +398,15 @@ def test_no_new_child_effects_after_failure_surfaces_including_post_child_audit_
 
 
 def test_tripped_token_stops_new_retry_attempt_within_step() -> None:
-    """The per-attempt retry loop consults the token before any new
-    provider attempt (mutation probe: step-boundary-only checking lets
-    another paid attempt begin and fails). Witnessed at the consult
-    contract: a tripped ambient token raises BEFORE the attempt body."""
+    """The per-attempt retry loop guards the REAL provider attempt with
+    `effect_entry()` (B-48 fix, out-of-family Codex [P1]: a bare pre-attempt
+    `check()` only proves the token wasn't tripped at that instant — it never
+    marks the attempt in-flight, so a trip landing WHILE the paid call is
+    genuinely running would leave the job's `wait_ack()` falsely reporting
+    ACKED_CLEAN). Witnessed at the consult contract: a tripped ambient
+    token's `effect_entry()` raises BEFORE the attempt body, same as
+    `check()` did, but ALSO would have marked the attempt in-flight had it
+    not been tripped already."""
     token = DispatchCancelToken()
     token.trip()
     var_token = DISPATCH_CANCEL_TOKEN_VAR.set(token)
@@ -362,11 +414,13 @@ def test_tripped_token_stops_new_retry_attempt_within_step() -> None:
         with pytest.raises(DispatchFenceTrippedSignal):
             ambient = DISPATCH_CANCEL_TOKEN_VAR.get()
             assert ambient is not None
-            ambient.check()  # the exact consult the retry loop performs
+            with ambient.effect_entry():  # the exact guard the retry loop uses
+                pytest.fail("a new attempt began after the fence tripped")
     finally:
         DISPATCH_CANCEL_TOKEN_VAR.reset(var_token)
-    # Source pin (the consult sits inside the per-attempt loop, before the
-    # attempt span/body — not only at step boundaries).
+    # Source pin (the guard wraps the REAL provider call inside the
+    # per-attempt loop, before the attempt span/body — not only at step
+    # boundaries, and not a bare non-effect-tracking `check()`).
     from pathlib import Path
 
     import harness_runtime.lifecycle.retry_breaker_fallback as rbf
@@ -374,8 +428,9 @@ def test_tripped_token_stops_new_retry_attempt_within_step() -> None:
     source = Path(cast(str, rbf.__file__)).read_text()
     loop_idx = source.index("for attempt in range(policy.max_attempts):")
     span_idx = source.index('"harness.runtime.retry_attempt"')
-    check_idx = source.index("_cancel_token.check()")
-    assert loop_idx < check_idx < span_idx
+    guard_idx = source.index("_cancel_token.effect_entry()")
+    dispatch_idx = source.index("with _effect_guard:")
+    assert loop_idx < guard_idx < span_idx < dispatch_idx
 
 
 @pytest.mark.asyncio

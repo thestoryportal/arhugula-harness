@@ -1,12 +1,11 @@
 """Sync-facing facade over an async ``StepDispatcher`` (U-RT-59 Path B).
 
 Per ``.harness/class_1_tension_u_rt_59_async_sync_step_dispatcher.md``.
-This module is **discovery-status** at landing: the facade is implemented and
-unit-tested for cross-loop survival semantics, but it is NOT yet wired into
-``harness_runtime.bootstrap.stage_5_loop_init``. Production wiring (binding
-``INFERENCE_STEP → SyncDispatcherFacade(ctx.llm_dispatcher)`` at stage 5)
-is owed at a follow-on arc, post-operator-ratification of the discovery
-result.
+This module was **discovery-status** at landing (the facade implemented and
+unit-tested for cross-loop survival semantics, ahead of production wiring);
+it is now WIRED into ``harness_runtime.bootstrap.stage_5_loop_init`` (binding
+``INFERENCE_STEP → SyncDispatcherFacade(ctx.llm_dispatcher)`` and siblings at
+stage 5, per the Path B wiring landing referenced below).
 
 Why the facade exists
 ---------------------

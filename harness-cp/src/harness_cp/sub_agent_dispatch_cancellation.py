@@ -120,23 +120,40 @@ class DispatchCancelToken:
         with self._lock:
             self._children.append(child)
             already_tripped = self._tripped_event.is_set()
-        if already_tripped:
-            child.trip()
+        if already_tripped and child.trip():
+            # A late-joining descendant whose own effect was in flight at
+            # ITS trip must still mark THIS token ambiguous — see `trip()`'s
+            # docstring on why descendant ambiguity bubbles up.
+            with self._lock:
+                self._inflight_at_trip = True
 
-    def trip(self) -> None:
+    def trip(self) -> bool:
         """Trip the fence; cascades through the whole descent chain.
 
         Atomically records whether an effect-bearing operation was in flight
-        at trip time (the fence-ack contract's in-flight flag).
+        at trip time (the fence-ack contract's in-flight flag) — THEN bubbles
+        up any descendant's own in-flight-at-trip flag: a grandchild's effect
+        landing after ITS trip is exactly as ambiguous to the operator as
+        this token's own effect would be, so the top-level `wait_ack()` must
+        report ambiguous whenever ANY token in the descent chain does, not
+        only when THIS token's own `_effects_in_flight` was nonzero.
+        Returns the (possibly bubbled-up) in-flight-at-trip flag so a caller
+        cascading from an ancestor can bubble it further.
         """
         with self._lock:
             if self._tripped_event.is_set():
-                return
+                return self._inflight_at_trip
             self._inflight_at_trip = self._effects_in_flight > 0
             self._tripped_event.set()
             children = tuple(self._children)
+        descendant_inflight = False
         for child in children:
-            child.trip()
+            if child.trip():
+                descendant_inflight = True
+        if descendant_inflight:
+            with self._lock:
+                self._inflight_at_trip = True
+        return self._inflight_at_trip
 
     # -- consultation (worker side) -------------------------------------------
 

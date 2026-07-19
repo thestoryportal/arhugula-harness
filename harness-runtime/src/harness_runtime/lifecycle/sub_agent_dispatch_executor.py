@@ -95,6 +95,7 @@ class SubAgentDispatchExecutor:
         )
         self._idle_workers = 0
         self._spawned = 0
+        self._completed = 0
         self._outstanding: set[Future[Any]] = set()
 
     # -- frame budget (the ONE shared budget; occupied+N+S accounting) --------
@@ -169,8 +170,9 @@ class SubAgentDispatchExecutor:
         with self._lock:
             remaining = self._available
             acquired = 0
+            admitting = True
             for frames, step_id in zip(branch_requirements, step_ids, strict=True):
-                if frames <= remaining:
+                if admitting and frames <= remaining:
                     remaining -= frames
                     acquired += frames
                     results.append(
@@ -181,6 +183,10 @@ class SubAgentDispatchExecutor:
                         )
                     )
                 else:
+                    # Deterministic excess: input-order fitting prefix only —
+                    # once one branch misses, every later branch is rejected
+                    # too, even a smaller one that would individually fit.
+                    admitting = False
                     results.append(
                         SubAgentDispatchCapacityError(
                             requested_frames=frames,
@@ -238,6 +244,7 @@ class SubAgentDispatchExecutor:
         with self._lock:
             self._outstanding.discard(future)
             self._idle_workers += 1
+            self._completed += 1
 
     # -- lifecycle on its own terms (§14.8.10.1) ------------------------------
 
@@ -245,12 +252,18 @@ class SubAgentDispatchExecutor:
         """Drain-with-deadline at shutdown; NEVER blocks on loop-bridged workers.
 
         Polls outstanding futures (join-free) until done or deadline. Returns
-        ``(completed_within_deadline, still_outstanding_at_deadline)``.
+        ``(completed_within_deadline, still_outstanding_at_deadline)`` — the
+        first element is jobs whose done-callback actually fired during THIS
+        drain call (a real completion count, not spawned-worker count: a
+        single reused worker can complete many jobs, so `_spawned -
+        still_outstanding` undercounts whenever idle-worker reuse happens).
         Abandoned workers are daemon threads — they cannot block interpreter
         exit, and their frame leases stay held until their fence acks (the
         lease discipline; never released by drain itself).
         """
         deadline = time.monotonic() + deadline_seconds
+        with self._lock:
+            completed_before = self._completed
         while time.monotonic() < deadline:
             with self._lock:
                 outstanding = len(self._outstanding)
@@ -259,7 +272,8 @@ class SubAgentDispatchExecutor:
             time.sleep(_DRAIN_POLL_SECONDS)
         with self._lock:
             still_outstanding = len(self._outstanding)
-        return (self._spawned - still_outstanding, still_outstanding)
+            completed_during = self._completed - completed_before
+        return (completed_during, still_outstanding)
 
 
 class RuntimeCapacityAuthorityAdapter:
