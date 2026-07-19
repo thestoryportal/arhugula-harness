@@ -2679,6 +2679,31 @@ class HarnessContext(BaseModel):
     Typed `Any` to avoid the `lifecycle.llm_dispatch → types` import cycle.
     """
 
+    sub_agent_dispatch_executor: Any = None
+    """B-48 (U-RT-141) — the §14.8.10.1 grow-on-demand sub-agent dispatch
+    executor (`SubAgentDispatchExecutor`), sized by
+    `config.sub_agent_dispatch_max_workers` at stage 5 LOOP_INIT.
+
+    Offloaded sync `SUB_AGENT_DISPATCH` inners are SUBMITTED to it
+    (§14.8.10.2 mode selection); its shared frame budget is the ONE
+    capacity authority. `None` for embedders that never dispatch
+    sub-agents. Typed `Any` per the `bare_llm_dispatcher` cycle-avoidance
+    precedent (C-RT-04 field-addition minor-bump path).
+    """
+
+    capacity_authority: Any = None
+    """B-48 (U-RT-141) — `RuntimeCapacityAuthorityAdapter` implementing the
+    CP-declared U-CP-101 `CapacityAuthority` Protocol over the real
+    executor budget (Runtime spec v1.102 §14.8.10.4 C-RT-04 binding).
+
+    The CP fan-out reads THIS binding through its structural
+    `DriverContext` satisfaction, so a configured
+    `sub_agent_dispatch_max_workers` reaches CP admission instead of the
+    CP default-256 fallback. `None` → CP's own default bounded authority
+    gates identically (never ungated). Typed `Any` per the
+    `bare_llm_dispatcher` cycle-avoidance precedent.
+    """
+
     sub_agent_dispatcher: Any
     """Per-step sub-agent dispatch composer (U-RT-59; C-RT-17 §14.7) +
     HITL gate composer wrap layer (U-RT-60; C-RT-18 §14.8).
