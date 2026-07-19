@@ -1077,9 +1077,9 @@ items:
     remaining alternative is decidable without the operator: EXTENDING the disable below MTC is a
     behavior change item 8 did not ratify; PROPAGATION through the prewarm boundary breaks the
     committed v1.99 bootstrap-isolation contract (prewarm failure MUST NOT propagate as
-    BootstrapFailure). INTERIM (Runtime v1.101): lower-tier explicit true is REJECTED at config
-    validation with a typed error naming this row -- the half-honored state is unrepresentable; the
-    flag is MTC-effective-only until this dispositions.'
+    BootstrapFailure). INTERIM (Runtime v1.101): lower-tier explicit true is ACCEPTED
+    and honored at every catch-site surface (the ratified non-MTC opt-in); ONLY the prewarm/keepalive
+    swallow boundary keeps its v1.99 posture there until this row dispositions.'
   close_out: 'Operator selects: (a) extend the gate-item-8 disable to any tier with the resolved flag
     ON (one-line Runtime spec delta + U-RT-135 widening), or (b) define typed propagation through the
     prewarm boundary (requires amending the v1.99 bootstrap-isolation contract -- a larger delta), or
