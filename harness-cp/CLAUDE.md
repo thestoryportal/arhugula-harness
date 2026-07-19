@@ -21,7 +21,7 @@ CP posture per `Cross_Axis_Composition_Document_v2_19.md` §2.4: **largest cross
 
 ### 1.3 Scope inclusion — 9 clusters
 
-Per the canonical CP plan 9-cluster table (head `Implementation_Plan_Control_Plane_v2_38.md`; the `_v1.md` §3.3 origin was superseded by the delta-only v2.x chain — cluster structure summarized inline below):
+Per the canonical CP plan 9-cluster table (head `Implementation_Plan_Control_Plane_v2_39.md`; the `_v1.md` §3.3 origin was superseded by the delta-only v2.x chain — cluster structure summarized inline below):
 
 | Cluster | Scope | Carrier units | Anchor contracts |
 |---|---|---|---|
