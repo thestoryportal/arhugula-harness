@@ -1148,7 +1148,7 @@ C-RT-08 §8 WorkflowObject Protocol PRESERVED VERBATIM — loader projects to ex
 
 ---
 
-## §13.5 (NEW at v1.101) — C-RT-13 audit-signature verification inputs (`harness-inspect` / admin surfaces)
+## §13.5 (NEW at v1.101) — audit-signature verification inputs (`harness-inspect` / admin surfaces; extends the §13 admin-CLI contract)
 
 *Runtime-owned operator-facing input surface for the OD v1.34 §21.2.2 backend-aware signature-verification API (the B-51/B-52/B-54 rider, fork gate item 10 leg 3). Verification SEMANTICS (resolver, cutover eras, legacy exemption, failure taxonomy, non-blocking default) are OD-owned at `Spec_Operational_Discipline_v1_34.md` §21.2.2 — cross-referenced, never restated. §13.1-§13.3 body + §13.4 PRESERVED VERBATIM except the v1.101 §13.4 inventory row/count and the one §13 `harness-inspect` exit bullet extended at v1.101.*
 
