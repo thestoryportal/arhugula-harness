@@ -88,6 +88,7 @@ from harness_cp.sub_agent_dispatch_cancellation import (
     DISPATCH_CANCEL_TOKEN_VAR,
     DispatchCancelToken,
     DispatchFenceTrippedSignal,
+    FenceAckOutcome,
 )
 from harness_cp.sub_agent_dispatch_capacity_authority import DefaultCapacityAuthority
 from harness_cp.sub_agent_gate_level_descent import dispatch_sub_agent
@@ -1371,3 +1372,84 @@ def test_linear_driver_rechecks_cancel_token_before_ledger_write_after_dispatch(
     finally:
         DISPATCH_CANCEL_TOKEN_VAR.reset(reset_token)
     assert ledger.appends == []
+
+
+class _NormalDispatch:
+    """A `StepDispatcher` that returns cleanly — no trip anywhere in
+    `.dispatch()`. The ONLY trip in this test happens from inside the
+    ledger's own `append()` (below), i.e. strictly between the post-dispatch
+    `effect_entry()`/`check()` consult and step completion — the exact
+    window round-6 codex flagged as uncounted by a plain check-then-write."""
+
+    def lookup(self, step_kind: StepKind) -> StepDispatcher:
+        return cast(StepDispatcher, self)
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        return {"role": str(step.step_id), "echoed": dict(step.step_payload)}
+
+
+class _TripDuringLedgerAppend(_RecordingLedger):
+    """Trips the ambient token from inside `append()` — simulating a fence
+    trip landing WHILE the durable-write block is executing, after the
+    post-dispatch consult already passed cleanly."""
+
+    def append(self, payload: Any, write_key: Any) -> Any:
+        token = DISPATCH_CANCEL_TOKEN_VAR.get()
+        assert token is not None, "test setup must bind an ambient token"
+        token.trip()
+        return super().append(payload, write_key)
+
+
+def test_linear_driver_durable_write_counts_as_inflight_effect_at_trip_time() -> None:
+    """A fence tripped from INSIDE the durable-write block (during the ledger
+    append itself, not before it) must still be reported as ambiguous by
+    `wait_ack()` — never falsely `ACKED_CLEAN`. A plain check-then-write
+    (task #48's original shape) only consults the fence BEFORE the write; it
+    never marks the write as in-flight, so a trip landing in this exact
+    window is invisible to `_effects_in_flight` and `wait_ack()` reports a
+    false clean despite the write having raced the trip.
+
+    Mutation probe: replacing the `with _durable_write_fence_guard:` block in
+    `workflow_driver.py` back with the plain `_dispatch_cancel_token.check()`
+    call (task #48's shape, no `effect_entry()`) makes this test's final
+    assertion fail — `wait_ack()` reports `ACKED_CLEAN` instead of
+    `ACKED_EFFECT_AMBIGUOUS`, because the write below is no longer counted
+    as an in-flight effect at the moment `append()` trips the token."""
+    ledger = _TripDuringLedgerAppend()
+    emitter = _Emitter()
+    ctx = cast(DriverContext, _Ctx(ledger=ledger, emitter=emitter))
+    registry = cast(StepDispatcherRegistry, _NormalDispatch())
+    manifest = _manifest(
+        workflow_id="wf-linear-durable-write-inflight",
+        topology_pattern=TopologyPattern.SINGLE_THREADED_LINEAR,
+    )
+    steps = [_leaf_worker("only-step")]
+    token = DispatchCancelToken()
+    reset_token = DISPATCH_CANCEL_TOKEN_VAR.set(token)
+    try:
+        result = execute_workflow(
+            manifest,
+            steps,
+            run_id="run-durable-write-inflight",
+            ctx=ctx,
+            default_model_binding=_DEFAULT_BINDING,
+            step_dispatchers=registry,
+        )
+        # The write completes (effect_entry() cannot abort an operation
+        # already inside the guard — §14.8.10.3's honestly-stated limit);
+        # the ledger entry lands and the run reports success. What must
+        # differ from the OLD shape is the fence-ack outcome below, not
+        # whether the write happened.
+        assert result.status is RunStatus.SUCCESS
+        assert ledger.entry_count == 1
+        token.ack()
+        outcome = token.wait_ack(grace_seconds=1.0)
+        assert outcome is FenceAckOutcome.ACKED_EFFECT_AMBIGUOUS, (
+            f"expected the durable write racing the trip to be reported "
+            f"ambiguous, got {outcome} — the write was not counted as an "
+            f"in-flight effect at trip time"
+        )
+    finally:
+        DISPATCH_CANCEL_TOKEN_VAR.reset(reset_token)

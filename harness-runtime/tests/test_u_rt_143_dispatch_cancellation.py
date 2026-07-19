@@ -465,3 +465,152 @@ async def test_draining_worker_retains_lease_until_fence_ack(
         await asyncio.sleep(0.02)
     assert executor.available_frames == 1
     executor.reserve(1, step_id="s-new", descent_chain=("s-new",)).release()
+
+
+# ---------------------------------------------------------------------------
+# BRANCH_CAPACITY_LEASE_VAR isolation at the offload boundary (round-6 codex
+# [P1] #1) — exercised through the REAL `hitl_gate_composer.py` offload path
+# (not the free-function-in-isolation shape the round-5b registry test used;
+# closes the test-witness lens gap on that test).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_nested_sub_agent_dispatch_inside_offload_self_reserves_not_ancestor_lease() -> None:
+    """A fan-out branch's own admitted `CapacityLease` (bound into
+    `BRANCH_CAPACITY_LEASE_VAR` the way `_proceed_branch`/`_cancel_branch`
+    do before dispatching) must NOT be visible to a NESTED SUB_AGENT_DISPATCH
+    running inside that branch's already-offloaded job — `copy_context()`
+    would otherwise carry it forward, and the nested dispatch would
+    `bind_release_to_job()` the SAME lease a second time, releasing the
+    ANCESTOR's frames when the nested (not the ancestor) job completes,
+    while the ancestor job is still running — exceeding the shared
+    occupied+N+S frame budget (Runtime spec v1.102 §14.8.10.1).
+
+    Chained real facades (mirrors
+    `test_parent_child_grandchild_cancellation_chain_fences_whole_descent`):
+    the ancestor's inner calls the nested facade directly, both facades
+    constructed up-front on this test's own event loop so the blocking
+    inner call from a worker thread is safe.
+
+    Also asserts, at this SAME real call site, that `_BRANCH_INFLIGHT_DISPATCHES`
+    reads `None` (not a sentinel bound in this test's own ambient context)
+    and `INTER_STEP_CHANNEL_VAR` reads a fresh channel (not the sentinel) —
+    closing the test-witness lens's gap on the round-5b registry test, which
+    only proved the free function's mechanism in isolation, never that it is
+    wired into the real `hitl_gate_composer.py` offload call site.
+
+    Mutation probe: deleting `BRANCH_CAPACITY_LEASE_VAR.set(None)` from
+    `hitl_gate_composer.py`'s `_run_with_child_channel` makes
+    `nested_lease_seen` capture the ancestor's own `CapacityLease` object
+    instead of `None`, and `frames_during_nested` capture `2` instead of
+    `1` (the nested dispatch never self-reserves — it silently reuses the
+    ancestor's already-admitted frames instead)."""
+    executor = SubAgentDispatchExecutor(frame_budget=4)
+
+    from harness_runtime.lifecycle.inter_step_output_channel import (
+        INTER_STEP_CHANNEL_VAR,
+        InterStepOutputChannel,
+    )
+
+    frames_during_nested: list[int] = []
+
+    class _NestedLeafInner:
+        def dispatch(self, binding: Any, step: Any, *, step_context: Any) -> Mapping[str, Any]:
+            frames_during_nested.append(executor.available_frames)
+            return {"level": "nested-leaf"}
+
+    nested_composer = _make_composer(
+        inner=_NestedLeafInner(), mode=InnerDispatchMode.OFFLOAD_SYNC, executor=executor
+    )
+    nested_facade = materialize_sync_dispatcher_facade(
+        cast(Any, nested_composer), result_timeout_seconds=5.0
+    )
+
+    nested_lease_seen: list[Any] = []
+    nested_inflight_registry_seen: list[Any] = []
+    nested_inter_step_channel_seen: list[Any] = []
+
+    class _NestedDispatchInner:
+        """The ancestor job's own inner — performs a NESTED
+        SUB_AGENT_DISPATCH from inside the ancestor's offloaded worker
+        thread, the exact recursive shape codex's finding describes."""
+
+        def dispatch(self, binding: Any, step: Any, *, step_context: Any) -> Mapping[str, Any]:
+            from harness_cp.sub_agent_dispatch_capacity_authority import (
+                BRANCH_CAPACITY_LEASE_VAR,
+            )
+            from harness_cp.workflow_driver import _BRANCH_INFLIGHT_DISPATCHES
+
+            nested_lease_seen.append(BRANCH_CAPACITY_LEASE_VAR.get())
+            nested_inflight_registry_seen.append(_BRANCH_INFLIGHT_DISPATCHES.get())
+            nested_inter_step_channel_seen.append(INTER_STEP_CHANNEL_VAR.get())
+            return nested_facade.dispatch(
+                binding, _make_step("step-nested"), step_context=step_context
+            )
+
+    ancestor_composer = _make_composer(
+        inner=_NestedDispatchInner(), mode=InnerDispatchMode.OFFLOAD_SYNC, executor=executor
+    )
+    ancestor_facade = materialize_sync_dispatcher_facade(
+        cast(Any, ancestor_composer), result_timeout_seconds=5.0
+    )
+
+    from harness_cp.sub_agent_dispatch_capacity_authority import BRANCH_CAPACITY_LEASE_VAR
+    from harness_cp.workflow_driver import _BRANCH_INFLIGHT_DISPATCHES
+
+    # Mirrors the fan-out's own atomic per-branch admission (2 frames, the
+    # sync SUB_AGENT_DISPATCH branch charge per §14.8.10.1) before the CP
+    # driver dispatches this branch — plus sentinels for the other two
+    # contextvars this offload boundary must isolate.
+    ancestor_lease = executor.reserve(
+        2, step_id="ancestor-branch", descent_chain=("ancestor-branch",)
+    )
+    sentinel_registry_chain = (frozenset(),)
+    sentinel_channel = InterStepOutputChannel()
+    lease_token = BRANCH_CAPACITY_LEASE_VAR.set(ancestor_lease)
+    registry_token = _BRANCH_INFLIGHT_DISPATCHES.set(sentinel_registry_chain)
+    channel_token = INTER_STEP_CHANNEL_VAR.set(sentinel_channel)
+    try:
+        result = await asyncio.to_thread(
+            ancestor_facade.dispatch,
+            object(),
+            _make_step("step-ancestor"),
+            step_context=_make_step_context(),
+        )
+    finally:
+        BRANCH_CAPACITY_LEASE_VAR.reset(lease_token)
+        _BRANCH_INFLIGHT_DISPATCHES.reset(registry_token)
+        INTER_STEP_CHANNEL_VAR.reset(channel_token)
+
+    assert result == {"level": "nested-leaf"}
+    assert nested_lease_seen == [None], (
+        f"nested dispatch saw {nested_lease_seen[0]!r} instead of None — the "
+        f"ancestor's lease leaked into the copied context instead of being "
+        f"reset at the offload boundary"
+    )
+    assert nested_inflight_registry_seen == [None], (
+        f"nested dispatch saw {nested_inflight_registry_seen[0]!r} instead "
+        f"of None — the ancestor's own offload boundary did not reset "
+        f"_BRANCH_INFLIGHT_DISPATCHES at the real hitl_gate_composer.py "
+        f"call site"
+    )
+    assert nested_inter_step_channel_seen[0] is not sentinel_channel, (
+        "nested dispatch saw the test's sentinel INTER_STEP_CHANNEL_VAR "
+        "instead of a fresh per-job channel — the ancestor's own offload "
+        "boundary did not rebind INTER_STEP_CHANNEL_VAR at the real "
+        "hitl_gate_composer.py call site"
+    )
+    assert frames_during_nested == [1], (
+        f"expected the nested dispatch to self-reserve its own frame "
+        f"(available=1 while it runs: budget 4 - ancestor's 2 - nested's "
+        f"own 1), got {frames_during_nested} — it likely reused the "
+        f"ancestor's lease instead of reserving independently"
+    )
+    # Both jobs release exactly-once on their own completion (no leak,
+    # regardless of which lease each bound to — this alone would NOT catch
+    # the bug above, hence the two load-bearing assertions before it).
+    deadline = time.monotonic() + 3.0
+    while executor.available_frames < 4 and time.monotonic() < deadline:
+        await asyncio.sleep(0.02)
+    assert executor.available_frames == 4

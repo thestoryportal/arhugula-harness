@@ -2992,3 +2992,133 @@ def test_b39_resumed_target_phase0_failure_under_proceed_does_not_abort_sibling(
     # Phase-0 failure was captured as the resumed target's own result, not
     # re-raised to skip the rest.
     assert "sibling-worker" in str(result.partial_state)
+
+
+def _two_resumed_targets_snapshot(*, orchestrator_output: dict[str, Any]) -> PauseSnapshot:
+    """Two resumed durable-HITL targets (`sub-worker-a` branch 0, `sub-worker-b`
+    branch 1) + one genuinely fresh sibling (`sibling-worker`, branch 2, absent
+    from both `branches` and `paused_child_branches`)."""
+    state_summary, anchor = _pause_context_reader()
+    fan_out_resume = FanOutResumeState(
+        orchestrator_output=orchestrator_output,
+        orchestrator_step_id="parent-orch",
+        branches=(),
+        worker_count=3,
+        paused_child_branches=(
+            PausedChildBranchResumeState(
+                branch_index=0,
+                step_id="sub-worker-a",
+                child_workflow_id="wf-child-a",
+                child_snapshot=_hitl_pending_child_pause_snapshot("wf-child-a"),
+            ),
+            PausedChildBranchResumeState(
+                branch_index=1,
+                step_id="sub-worker-b",
+                child_workflow_id="wf-child-b",
+                child_snapshot=_hitl_pending_child_pause_snapshot("wf-child-b"),
+            ),
+        ),
+    )
+    return PauseSnapshot(
+        workflow_id="wf-b39-two-resumed",
+        run_id="wf-b39-two-resumed-run",
+        step_index=0,
+        pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
+        state_summary=state_summary,
+        snapshot_hash=_compute_snapshot_hash(
+            workflow_id="wf-b39-two-resumed",
+            run_id="wf-b39-two-resumed-run",
+            step_index=0,
+            state_summary=state_summary,
+            fan_out_resume=fan_out_resume,
+        ),
+        created_at=1_700_000_000_000,
+        state_ledger_anchor=anchor,
+        fan_out_resume=fan_out_resume,
+    )
+
+
+def _two_resumed_targets_parent_steps() -> list[WorkflowStep]:
+    return [
+        WorkflowStep(
+            step_id=StepID("parent-orch"),
+            step_kind=StepKind.DECLARATIVE_STEP,
+            step_payload={"role": "parent-orch"},
+        ),
+        WorkflowStep(
+            step_id=StepID("sub-worker-a"),
+            step_kind=StepKind.SUB_AGENT_DISPATCH,
+            step_payload={"child_workflow_id": "wf-child-a"},
+        ),
+        WorkflowStep(
+            step_id=StepID("sub-worker-b"),
+            step_kind=StepKind.SUB_AGENT_DISPATCH,
+            step_payload={"child_workflow_id": "wf-child-b"},
+        ),
+        WorkflowStep(
+            step_id=StepID("sibling-worker"),
+            step_kind=StepKind.DECLARATIVE_STEP,
+            step_payload={"role": "sibling-worker"},
+        ),
+    ]
+
+
+class _FirstResumedTargetFailsRegistry:
+    """`sub-worker-a` (the FIRST resumed target in Phase-0 iteration order)
+    RAISES synchronously — the Phase-0 loop never reaches `sub-worker-b` (the
+    SECOND resumed target) at all. `sub-worker-b` would also raise if it were
+    ever dispatched (proving, if this test's mutation probe is right, that it
+    genuinely never runs — not that it ran and happened to succeed)."""
+
+    def __init__(self) -> None:
+        self._echo = _OrderRecordingEcho(order=[], order_lock=threading.Lock())
+
+    def lookup(self, step_kind: StepKind) -> StepDispatcher:
+        if step_kind is StepKind.SUB_AGENT_DISPATCH:
+            return cast(StepDispatcher, self)
+        if step_kind is StepKind.DECLARATIVE_STEP:
+            return cast(StepDispatcher, self._echo)
+        raise StepKindDispatcherNotBoundError(step_kind)
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        msg = f"resumed-target dispatch failed at {step.step_id}"
+        raise RuntimeError(msg)
+
+
+def test_b39_phase0_strike_on_first_of_two_resumed_targets_releases_the_second() -> None:
+    """Round-6 concurrency-lens BLOCK: the Phase-0 `except BaseException` release
+    handler released only `_rest_plan`'s admissions, never any `_resumed_target_plan`
+    entry left un-dispatched when the strike lands on a NON-LAST Phase-0 iteration.
+    With 2 resumed targets (`sub-worker-a` branch 0, `sub-worker-b` branch 1) and
+    `sub-worker-a` raising on Phase-0's FIRST iteration, `sub-worker-b` (Phase-0's
+    SECOND, never-reached iteration) previously leaked its admitted frame(s)
+    forever — on top of `sibling-worker`'s (`_rest_plan`) already-covered leak.
+
+    Mutation probe: reverting to releasing only `_rest_plan` (dropping
+    `_resumed_target_plan[_resumed_index + 1:]` from the release set) leaves
+    `authority.available` short by `sub-worker-b`'s admitted frames after this
+    run — this test's `available == frame_budget` assertion would then fail."""
+    authority = DefaultCapacityAuthority(frame_budget=12)
+    registry = cast(StepDispatcherRegistry, _FirstResumedTargetFailsRegistry())
+    snapshot = _two_resumed_targets_snapshot(orchestrator_output={"role": "parent-orch"})
+    ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    ctx_obj.capacity_authority = authority  # type: ignore[attr-defined]
+    ctx = cast(DriverContext, ctx_obj)
+
+    result = execute_workflow(
+        _manifest("wf-b39-two-resumed-fail"),
+        _two_resumed_targets_parent_steps(),
+        run_id="wf-b39-two-resumed-fail-run",
+        ctx=ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=registry,
+        pause_snapshot_input=snapshot,
+    )
+
+    assert result.status is not RunStatus.SUCCESS
+    assert authority.available == 12, (
+        f"expected full frame-budget recovery (12); got {authority.available} — "
+        f"sub-worker-b's admission leaked"
+    )

@@ -1114,35 +1114,64 @@ class RuntimeHITLGateComposer:
         carried = contextvars.copy_context()
 
         def _job() -> Mapping[str, Any]:
-            # §14.8.10.4 item 5 (U-RT-144) — SELECTIVE contextvar carry: the
-            # copied context preserves trace continuity, but the copied PARENT
-            # inter-step channel would be shared by concurrent sibling
-            # children (one child's step output entering another's payload
-            # via `most_recent_output()`) — a fresh PER-CHILD channel is
-            # bound inside the job's own context instead.
-            #
-            # round-5b codex [P1] #2 "isolate loop-owned cancellation
-            # registries before offload" — the SAME selective-carry treatment
-            # for `harness_cp.workflow_driver._BRANCH_INFLIGHT_DISPATCHES`
-            # (the `cascade_cancel_barrier` deadline-watchdog registry chain):
-            # if `self.inner.dispatch(...)` below recurses into a NESTED
-            # fan-out (this offloaded dispatch's own child manifest declares
-            # PARALLELIZATION/ORCHESTRATOR_WORKERS/HIERARCHICAL_DELEGATION),
-            # that nested `cascade_cancel_barrier` would otherwise `.get()`
-            # the copied PARENT chain and register ITS OWN futures — bound to
-            # THIS worker thread's own event loop — into the parent loop's
-            # registry sets. The parent's deadline watchdog runs on the
-            # PARENT's loop/thread and calls `.cancel()` directly on whatever
-            # it finds there; cancelling a different loop's Future
-            # cross-thread is not safe. Resetting the chain to `None` here
-            # severs that leak — the outer branch's own wrapping future
-            # (registered on the PARENT's side, per the existing
-            # `dispatch_branch_step_shielded` call that scheduled THIS
-            # offload) remains the correct, thread-safe cutoff for the whole
-            # offloaded job including any nested fan-out inside it; a nested
-            # barrier's OWN watchdog still bounds ITS OWN in-flight work
-            # correctly on its own loop, just isolated from the parent chain.
+            # §14.8.10.4 item 5 (U-RT-144) — the copied context preserves
+            # trace continuity across the offload; the per-worker-scoped
+            # contextvar disposition (carry vs. reset, and why) is
+            # enumerated inside `_run_with_child_channel` below.
             def _run_with_child_channel() -> Mapping[str, Any]:
+                # Consolidated contextvar disposition at this offload
+                # boundary (round-6 codex review). `copy_context()` above
+                # carries EVERY contextvar bound in the calling (CP branch)
+                # context into the worker thread; each name below is an
+                # explicit decision, not an oversight — a future contextvar
+                # added to either module belongs in this enumeration too:
+                #
+                #   DISPATCH_CANCEL_TOKEN_VAR — CARRY (left bound to the
+                #   ambient token). A nested dispatch (this job's
+                #   `self.inner.dispatch(...)` recursing into another
+                #   SUB_AGENT_DISPATCH, sequential or fanned-out) constructs
+                #   its OWN child token PARENTED to whatever
+                #   `DISPATCH_CANCEL_TOKEN_VAR.get()` returns
+                #   (`workflow_driver._proceed_branch`/`_cancel_branch`);
+                #   carrying the ambient value forward is what makes that
+                #   parent -> child cascade-on-trip linkage correct.
+                #   Resetting it here would sever cancellation propagation
+                #   into the descent chain.
+                #
+                #   BRANCH_CAPACITY_LEASE_VAR — RESET (round-6 codex [P1]
+                #   #1). Left bound, a nested descendant SUB_AGENT_DISPATCH
+                #   would read the OUTER branch's own admitted lease (this
+                #   function's `branch_lease` above) via `.get()` and
+                #   `bind_release_to_job()` it a second time — the
+                #   descendant's own completion callback would then release
+                #   the ANCESTOR's frames while the ancestor's job is still
+                #   running, exceeding the shared occupied+N+S budget.
+                #   Clearing it forces the descendant to self-reserve its own
+                #   frames via `executor.reserve(...)`, independent of the
+                #   ancestor's lifecycle.
+                #
+                #   INTER_STEP_CHANNEL_VAR — RESET. A fresh per-child
+                #   channel; the copied PARENT channel would otherwise be
+                #   shared by concurrent sibling children (one child's step
+                #   output entering another's payload via
+                #   `most_recent_output()`).
+                #
+                #   _BRANCH_INFLIGHT_DISPATCHES (harness_cp.workflow_driver)
+                #   — RESET via
+                #   `reset_offloaded_job_branch_inflight_registry()`
+                #   (round-5b codex [P1] #2). A nested `cascade_cancel_barrier`
+                #   would otherwise register futures bound to THIS worker
+                #   thread's event loop into the parent loop's registry
+                #   sets, and the parent's deadline watchdog would
+                #   `.cancel()` them cross-thread.
+                #
+                #   COST_ACCUM_VAR (harness_runtime.types) — CARRY (not
+                #   touched here; not read/set anywhere on this path).
+                #   Whole-*run* isolation (B-INTERSTEP-PERRUN-ISOLATION),
+                #   bound once at the run's `api.py` entry point and
+                #   intentionally accumulates cost across every branch and
+                #   every nested descendant of the same run; per-branch
+                #   isolation would misattribute cost.
                 from harness_cp.workflow_driver import (
                     reset_offloaded_job_branch_inflight_registry,
                 )
@@ -1154,6 +1183,7 @@ class RuntimeHITLGateComposer:
 
                 INTER_STEP_CHANNEL_VAR.set(InterStepOutputChannel())
                 reset_offloaded_job_branch_inflight_registry()
+                BRANCH_CAPACITY_LEASE_VAR.set(None)
                 return cast(
                     Mapping[str, Any],
                     self.inner.dispatch(binding, step, step_context=step_context),

@@ -4985,67 +4985,71 @@ def _execute_workflow_body(
                         _ = hitl_response
 
         # B-48 (U-RT-143; Runtime spec v1.102 §14.8.10.3 part 1 — extended
-        # round-5b codex [P1] "fence child ledger writes after dispatch"):
-        # re-consult the ambient cancel token here, AFTER dispatch (+ any
-        # HITL/validator post-processing above) returns and BEFORE this
-        # step's output is committed to durable storage below. The
-        # step-boundary check at this loop's top only catches a fence
-        # tripped BEFORE this step began; a fence tripped WHILE this step's
-        # dispatch (or its HITL/validator gate) was running would otherwise
-        # still commit — silently defeating "the runtime discards in-flight
-        # results" for a step that happened to finish just after the trip.
-        # Raises before either durable-write call below runs (a
-        # BaseException, same as the step-boundary check); non-offloaded
-        # runs (no ambient token) are byte-unchanged.
+        # round-5b codex [P1] "fence child ledger writes after dispatch",
+        # then round-6 codex [P1] "guard durable writes atomically against
+        # fence trips"): a plain check-then-write here left a TOCTOU window —
+        # a trip landing AFTER the check but BEFORE either write below still
+        # let both writes land, uncounted by `_effects_in_flight`, so
+        # `wait_ack()` could report `ACKED_CLEAN` despite a write that raced
+        # the trip. `effect_entry()` makes the consult-and-mark atomic: it
+        # raises the same signal the check did if already tripped, and while
+        # held both writes below count as in-flight, so a trip racing them
+        # correctly surfaces as `ACKED_EFFECT_AMBIGUOUS` instead of a false
+        # clean. Non-offloaded runs (no ambient token) get `nullcontext()` —
+        # byte-unchanged.
         _dispatch_cancel_token = _DISPATCH_CANCEL_TOKEN_VAR.get()
-        if _dispatch_cancel_token is not None:
-            _dispatch_cancel_token.check()
+        _durable_write_fence_guard: contextlib.AbstractContextManager[None] = (
+            _dispatch_cancel_token.effect_entry()
+            if _dispatch_cancel_token is not None
+            else contextlib.nullcontext()
+        )
 
-        # B-ENGINE-OUTPUT-REPLAY (runtime spec C-RT-32) — durably persist this
-        # step's output to the output-carrying event-history store BEFORE the
-        # ledger-append below (RESERVE-before-COMMIT: the store always holds ≥ the
-        # ledger's materialized prefix). Opt-in; no-op when unbound. The store-write
-        # precedes the ledger materialization `resume_at` counts, so a durable-class
-        # resume never finds a materialized step with a missing stored output. GATED on
-        # the durable-output-store engine classes via the SHARED
-        # `_FINAL_STATE_RECONSTRUCT_ENGINE_CLASSES` constant (EVENT_SOURCED_REPLAY +
-        # WAL_SEGMENT — the C-CP-08 §8.1 cached-output-replay refinement — PLUS
-        # SAVE_POINT_CHECKPOINT at v1.79 and RECONCILER_LOOP at v1.80 for the final_state
-        # reconstruction) so a non-durable run with the flag on does not write a
-        # never-consumed journal (advisor pre-merge catch). The record half is SAFE only
-        # because a consumer fires for the SAME classes: B-ENGINE-OUTPUT-REPLAY-WAL-SEGMENT
-        # added WAL to BOTH this producer gate AND the resume-side rehydrate;
-        # B-CHILD-...-SAVE-POINT added SAVE_POINT and B-CHILD-...-RECONCILER added RECONCILER
-        # to BOTH this producer gate AND the final_state seed (their only consumer — neither
-        # has a cached-output-replay channel rehydrate). Using ONE constant at both sites
-        # makes "never record-only" structural — never a never-consumed journal.
-        if manifest_entry.engine_class in _FINAL_STATE_RECONSTRUCT_ENGINE_CLASSES:
-            _record_durable_step_output(
-                ctx, run_idempotency_key, step_index, str(step.step_id), step_output
-            )
+        with _durable_write_fence_guard:
+            # B-ENGINE-OUTPUT-REPLAY (runtime spec C-RT-32) — durably persist this
+            # step's output to the output-carrying event-history store BEFORE the
+            # ledger-append below (RESERVE-before-COMMIT: the store always holds ≥ the
+            # ledger's materialized prefix). Opt-in; no-op when unbound. The store-write
+            # precedes the ledger materialization `resume_at` counts, so a durable-class
+            # resume never finds a materialized step with a missing stored output. GATED on
+            # the durable-output-store engine classes via the SHARED
+            # `_FINAL_STATE_RECONSTRUCT_ENGINE_CLASSES` constant (EVENT_SOURCED_REPLAY +
+            # WAL_SEGMENT — the C-CP-08 §8.1 cached-output-replay refinement — PLUS
+            # SAVE_POINT_CHECKPOINT at v1.79 and RECONCILER_LOOP at v1.80 for the final_state
+            # reconstruction) so a non-durable run with the flag on does not write a
+            # never-consumed journal (advisor pre-merge catch). The record half is SAFE only
+            # because a consumer fires for the SAME classes: B-ENGINE-OUTPUT-REPLAY-WAL-SEGMENT
+            # added WAL to BOTH this producer gate AND the resume-side rehydrate;
+            # B-CHILD-...-SAVE-POINT added SAVE_POINT and B-CHILD-...-RECONCILER added RECONCILER
+            # to BOTH this producer gate AND the final_state seed (their only consumer — neither
+            # has a cached-output-replay channel rehydrate). Using ONE constant at both sites
+            # makes "never record-only" structural — never a never-consumed journal.
+            if manifest_entry.engine_class in _FINAL_STATE_RECONSTRUCT_ENGINE_CLASSES:
+                _record_durable_step_output(
+                    ctx, run_idempotency_key, step_index, str(step.step_id), step_output
+                )
 
-        # § 25.3.3.7 — State-ledger append via U-IS-11 composition.
-        # Reuse pre-dispatch step_idempotency_key composed at the
-        # StepExecutionContext site above (identical per-step value).
-        step_idempotency_key = step_idempotency_key_pre
-        try:
-            _append_step_ledger_entry(
-                ctx=ctx,
-                workflow_id=manifest_entry.workflow_id,
-                step_index=step_index,
-                step_idempotency_key=step_idempotency_key,
-                step_output=step_output,
-            )
-        except Exception as exc:
-            return RunResult(
-                workflow_id=manifest_entry.workflow_id,
-                run_id=run_id,
-                status=RunStatus.FAILED,
-                terminal_step_index=step_index,
-                partial_state=dict(accumulated),
-                final_state=None,
-                fail_class=f"ledger-append-failed: {type(exc).__name__}: {exc}",
-            ), steps_executed
+            # § 25.3.3.7 — State-ledger append via U-IS-11 composition.
+            # Reuse pre-dispatch step_idempotency_key composed at the
+            # StepExecutionContext site above (identical per-step value).
+            step_idempotency_key = step_idempotency_key_pre
+            try:
+                _append_step_ledger_entry(
+                    ctx=ctx,
+                    workflow_id=manifest_entry.workflow_id,
+                    step_index=step_index,
+                    step_idempotency_key=step_idempotency_key,
+                    step_output=step_output,
+                )
+            except Exception as exc:
+                return RunResult(
+                    workflow_id=manifest_entry.workflow_id,
+                    run_id=run_id,
+                    status=RunStatus.FAILED,
+                    terminal_step_index=step_index,
+                    partial_state=dict(accumulated),
+                    final_state=None,
+                    fail_class=f"ledger-append-failed: {type(exc).__name__}: {exc}",
+                ), steps_executed
 
         # Accumulate step output under its step id for terminal state.
         accumulated[str(step.step_id)] = dict(step_output)
@@ -8247,8 +8251,9 @@ def _execute_parallelization(
                 # reconstruction (confirmed via direct grounding — worse than
                 # a bare sequencing race under warm-up-gate-on).
                 _resumed_target_results: dict[int, Any] = {}
+                _resumed_index = -1
                 try:
-                    for _target_plan in _resumed_target_plan:
+                    for _resumed_index, _target_plan in enumerate(_resumed_target_plan):
                         try:
                             _resumed_target_results[_target_plan[0]] = await _proceed_branch(
                                 *_target_plan
@@ -8258,15 +8263,26 @@ def _execute_parallelization(
                         except BaseException as _resumed_exc:
                             _resumed_target_results[_target_plan[0]] = _resumed_exc
                 except BaseException:
-                    # codex round-4 [P1] twin (task #40): a deadline strike
-                    # during Phase-0 means `_rest_plan` (gate-False) /
+                    # codex round-4 [P1] twin (task #40; extended round-6
+                    # concurrency-lens BLOCK): a deadline strike during
+                    # Phase-0 means `_rest_plan` (gate-False) /
                     # `_warmup_phase2` (gate-True; Phase 1 never even starts)
                     # never got a `_proceed_branch` call to release their
                     # UPFRONT-reserved admissions via `_dispatch_releasing_
-                    # admission`'s own finally. Without this, they
-                    # permanently reduce the shared frame budget.
+                    # admission`'s own finally. The SAME is true for any
+                    # `_resumed_target_plan` entry strictly AFTER the one
+                    # that raised (`_resumed_index`) when 2+ resumed targets
+                    # exist and the strike lands mid-loop — those entries
+                    # never got a `_proceed_branch` call either. The entry AT
+                    # `_resumed_index` is NOT included: its own dispatch
+                    # already ran (or is running) and releases via its own
+                    # finally, like every other branch. Without this, the
+                    # withheld frames permanently reduce the shared budget.
                     _release_unconsumed_fanout_admissions(
-                        {plan[0]: _branch_admissions[plan[0]] for plan in _rest_plan}
+                        {
+                            plan[0]: _branch_admissions[plan[0]]
+                            for plan in (*_resumed_target_plan[_resumed_index + 1 :], *_rest_plan)
+                        }
                     )
                     raise
                 if not _warmup_gate:
@@ -8675,8 +8691,9 @@ def _execute_parallelization(
         # SAME `BranchBarrierDeadlineExceededError` the outer
         # `except BranchBarrierDeadlineExceededError` already handles.
         _effective_deadline = deadline
+        _resumed_index = -1
         try:
-            for _target_plan in _resumed_target_plan:
+            for _resumed_index, _target_plan in enumerate(_resumed_target_plan):
                 _phase0_start = asyncio.get_running_loop().time()
                 await cascade_cancel_barrier(
                     (_cancel_branch(*_target_plan),), deadline_seconds=_effective_deadline
@@ -8686,12 +8703,24 @@ def _execute_parallelization(
                     _effective_deadline - (asyncio.get_running_loop().time() - _phase0_start),
                 )
         except BaseException:
-            # B-48 lease-leak fix (out-of-family Codex [P1]): a Phase-0
-            # resumed-target failure/deadline-strike raises BEFORE `_rest_plan`
-            # ever dispatches, so its branches' own `finally` releases never
+            # B-48 lease-leak fix (out-of-family Codex [P1], extended
+            # round-6 concurrency-lens BLOCK): a Phase-0 resumed-target
+            # failure/deadline-strike raises BEFORE `_rest_plan` ever
+            # dispatches, so its branches' own `finally` releases never
             # run — their already-admitted whole-fan-out leases would leak.
+            # The SAME is true for any `_resumed_target_plan` entry strictly
+            # AFTER the one that raised (`_resumed_index`) when 2+ resumed
+            # targets exist and the strike lands mid-loop, not on the last
+            # iteration — those entries never got a `_cancel_branch` call
+            # either, so their leases would leak identically. The entry AT
+            # `_resumed_index` is NOT included here: its own dispatch
+            # already ran (or is running) and releases via its own
+            # `finally`, exactly like every other branch in this file.
             _release_unconsumed_fanout_admissions(
-                {plan[0]: _branch_admissions[plan[0]] for plan in _rest_plan}
+                {
+                    plan[0]: _branch_admissions[plan[0]]
+                    for plan in (*_resumed_target_plan[_resumed_index + 1 :], *_rest_plan)
+                }
             )
             raise
         if not _warmup_gate:
@@ -11769,8 +11798,9 @@ def _execute_orchestrator_workers(
                 # a `KeyError` at the branch_plan-order reconstruction under
                 # warm-up-gate-on.
                 _resumed_target_results: dict[int, Any] = {}
+                _resumed_index = -1
                 try:
-                    for _target_plan in _resumed_target_plan:
+                    for _resumed_index, _target_plan in enumerate(_resumed_target_plan):
                         try:
                             _resumed_target_results[_target_plan[0]] = await _proceed_worker(
                                 *_target_plan
@@ -11780,13 +11810,21 @@ def _execute_orchestrator_workers(
                         except BaseException as _resumed_exc:
                             _resumed_target_results[_target_plan[0]] = _resumed_exc
                 except BaseException:
-                    # codex round-4 [P1] twin (task #40): a deadline strike
-                    # during Phase-0 means `_rest_plan` (gate-False) /
+                    # codex round-4 [P1] twin (task #40; extended round-6
+                    # concurrency-lens BLOCK): a deadline strike during
+                    # Phase-0 means `_rest_plan` (gate-False) /
                     # `_warmup_phase2` (gate-True) never got a
-                    # `_proceed_worker` call to release their UPFRONT-reserved
-                    # admissions.
+                    # `_proceed_worker` call to release their UPFRONT-
+                    # reserved admissions. The SAME is true for any
+                    # `_resumed_target_plan` entry strictly AFTER the one
+                    # that raised (`_resumed_index`) when 2+ resumed targets
+                    # exist and the strike lands mid-loop — see the
+                    # PARALLELIZATION twin's comment for the full rationale.
                     _release_unconsumed_fanout_admissions(
-                        {plan[0]: _branch_admissions[plan[0]] for plan in _rest_plan}
+                        {
+                            plan[0]: _branch_admissions[plan[0]]
+                            for plan in (*_resumed_target_plan[_resumed_index + 1 :], *_rest_plan)
+                        }
                     )
                     raise
                 if not _warmup_gate:
@@ -12163,8 +12201,9 @@ def _execute_orchestrator_workers(
         # SAME `BranchBarrierDeadlineExceededError` the outer
         # `except BranchBarrierDeadlineExceededError` already handles.
         _effective_deadline = deadline
+        _resumed_index = -1
         try:
-            for _target_plan in _resumed_target_plan:
+            for _resumed_index, _target_plan in enumerate(_resumed_target_plan):
                 _phase0_start = asyncio.get_running_loop().time()
                 await cascade_cancel_barrier(
                     (_cancel_worker(*_target_plan),), deadline_seconds=_effective_deadline
@@ -12174,12 +12213,21 @@ def _execute_orchestrator_workers(
                     _effective_deadline - (asyncio.get_running_loop().time() - _phase0_start),
                 )
         except BaseException:
-            # B-48 lease-leak fix (out-of-family Codex [P1]): a Phase-0
-            # resumed-target failure/deadline-strike raises BEFORE `_rest_plan`
-            # ever dispatches, so its workers' own `finally` releases never
-            # run — their already-admitted whole-fan-out leases would leak.
+            # B-48 lease-leak fix (out-of-family Codex [P1], extended
+            # round-6 concurrency-lens BLOCK): a Phase-0 resumed-target
+            # failure/deadline-strike raises BEFORE `_rest_plan` ever
+            # dispatches, so its workers' own `finally` releases never run —
+            # their already-admitted whole-fan-out leases would leak. The
+            # SAME is true for any `_resumed_target_plan` entry strictly
+            # AFTER the one that raised (`_resumed_index`) when 2+ resumed
+            # targets exist and the strike lands mid-loop — see the
+            # PARALLELIZATION `_cancel_fanout` twin's comment for the full
+            # rationale.
             _release_unconsumed_fanout_admissions(
-                {plan[0]: _branch_admissions[plan[0]] for plan in _rest_plan}
+                {
+                    plan[0]: _branch_admissions[plan[0]]
+                    for plan in (*_resumed_target_plan[_resumed_index + 1 :], *_rest_plan)
+                }
             )
             raise
         if not _warmup_gate:
