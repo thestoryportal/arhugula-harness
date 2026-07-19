@@ -17,4 +17,4 @@ reviewer_chain:
 
 # Clearance — Implementation_Plan_Harness_Runtime_v2_49 (B-51/B-52/B-54(+B-53) arc plan delta)
 
-NEW U-RT-134..U-RT-138 (flag + tier-agnostic backend validation; resolved-flag prewarm/keepalive disable; handler wiring; tenant threading + normalizer delegation; §13.5 inspect inputs) + U-RT-102 amended (B-53 subcommand + retag mode + forged-record rejection). Acceptance criteria transcribe the ratified spec deltas (OD v1.34 / CP v1.101 / Runtime v1.101) into Phase-6 execution authority with PD-8-probed Tests: criteria; PRESERVED VERBATIM discipline over all prior chain bodies.
+NEW U-RT-134..U-RT-139 (flag + backend validation; MTC prewarm/keepalive disable; handler wiring; tenant threading + normalizer delegation + redaction call-site rewire; §13.5 inspect inputs; U-RT-139 record modes — authoring/authentication/retag) + U-RT-102 amended (B-53 subcommand dispatch). Acceptance criteria transcribe the ratified spec deltas (OD v1.34 / CP v1.101 / Runtime v1.101) into Phase-6 execution authority with PD-8-probed Tests: criteria; PRESERVED VERBATIM discipline over all prior chain bodies.
