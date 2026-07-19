@@ -59,7 +59,7 @@ Canonical spec heads are IS `Spec_Information_Substrate_v1.md` (v1.11, cleared 2
 
 ### 2.4 Per-Axis Plans + CXA (Phase 6 Execution Authority)
 
-Canonical plan heads are core `Implementation_Plan_Harness_Core_v1_2.md`, IS `Implementation_Plan_Information_Substrate_v2_7.md`, AS `Implementation_Plan_Action_Surface_v1_4.md`, CP `Implementation_Plan_Control_Plane_v2_39.md`, OD `Implementation_Plan_Operational_Discipline_v2_29.md`, Runtime `Implementation_Plan_Harness_Runtime_v2_50.md`, CXA `Cross_Axis_Composition_Document_v2_21.md`, and **Memory `Implementation_Plan_Memory_Substrate_v1.md` (U-MEM-01..25; cleared 2026-07-09)**. Full per-plan and CXA lineage is indexed at `claude-artifact-pointers.md` §2.4 in `.harness`.
+Canonical plan heads are core `Implementation_Plan_Harness_Core_v1_3.md`, IS `Implementation_Plan_Information_Substrate_v2_7.md`, AS `Implementation_Plan_Action_Surface_v1_4.md`, CP `Implementation_Plan_Control_Plane_v2_39.md`, OD `Implementation_Plan_Operational_Discipline_v2_29.md`, Runtime `Implementation_Plan_Harness_Runtime_v2_50.md`, CXA `Cross_Axis_Composition_Document_v2_21.md`, and **Memory `Implementation_Plan_Memory_Substrate_v1.md` (U-MEM-01..25; cleared 2026-07-09)**. Full per-plan and CXA lineage is indexed at `claude-artifact-pointers.md` §2.4 in `.harness`.
 
 ### 2.5 Per-Axis Subdirectory `CLAUDE.md` Pointers
 
