@@ -15,4 +15,4 @@ reviewer_chain:
 
 # Clearance — Spec_Information_Substrate_v1 v1.11 (B-48 apply arc)
 
-v1.10→v1.11: C-IS-07 §7.1 additive timestamp-authority row + NEW §7.6 (writer-owned drain-path timestamp sampling inside _WRITE_LOCK — monotonicity by construction; direct-path caller semantics preserved detect-then-refuse; broader §8.3 phrasing surfaced as residual). PD-8 witness obligations ride the same-arc plan deltas.
+v1.10→v1.11: C-IS-07 §7.1 additive timestamp-authority row + NEW §7.6 (writer-owned drain-path timestamp sampling inside _WRITE_LOCK — monotonicity by construction; direct-path caller semantics preserved detect-then-refuse EXCEPT the offloaded sub-agent audit appends — carved out at apply-PR rounds 28/29 into B-48's writer-owned scope; the broader §8.3 phrasing otherwise remains the B-57 residual). PD-8 witness obligations ride the same-arc plan deltas.
