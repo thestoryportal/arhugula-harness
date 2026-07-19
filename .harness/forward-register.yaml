@@ -59,13 +59,13 @@
 
 snapshot:
   total: 57
-  open: 4
-  design_substrate_gated: 2
+  open: 5
+  design_substrate_gated: 1
   registered_finding: 6
   operator_gated: 2
   held: 1
   closed: 42
-  identity_digest: 7a3e0c76cb4548d8
+  identity_digest: 7b64a1b30ccc172a
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -901,8 +901,8 @@ items:
     at `B-36`''s own PR, out-of-family Codex review, 2026-07-16)*'
 - id: B-48
   title: Sync sub-agent dispatch executes on the event loop (U-RT-60 wrap-asymmetry residual)
-  status: design_substrate_gated
-  summary: 'RATIFIED 2026-07-18 (option B with all filing-settled riders) -- apply arc open. Out-of-family Codex round-2 P1 on B-47 PR B2a: RuntimeHITLGateComposer._dispatch_inner
+  status: open
+  summary: 'OPEN -- spec+plan deltas APPLIED 2026-07-19 (Runtime v1.102 + CP v1.102 + IS v1.11 + plans v2.50/v2.39/v2.7); the executor impl arc (U-RT-140..144 + the CP/IS amendments) is the live next step. Out-of-family Codex round-2 P1 on B-47 PR B2a: RuntimeHITLGateComposer._dispatch_inner
     invokes the sync C-RT-17 sub-agent dispatcher DIRECTLY on the event loop (the U-RT-60
     wrap-asymmetry fork Q3-ratified direct-call reading), so the entire sub-agent dispatch -- child
     workflow execution (seconds-long), its F2/ledger writes, and now the B2a-threaded KMS signing --
@@ -922,8 +922,8 @@ items:
     ThreadPoolExecutor has no unbounded mode). Apply arc per the filing: construction-time dispatch-mode for all three stage-5
     composers, cancellation semantics first, pause/resume + resume-context per-child isolation, OTel
     context carry, drain-timestamp fix (IS back-flow) + xfail removal, deadlock-anchor XPASS promotion,
-    Runtime spec delta (C-RT-03 cap field) + Runtime plan delta. Selection RATIFIED 2026-07-18
-    (option B); the apply arc is the live next step.'
+    Runtime spec delta (C-RT-03 cap field) + Runtime plan delta. Selection RATIFIED 2026-07-18 (option B);
+    spec-apply COMPLETE 2026-07-19 -- the impl arc is the live next step.'
   council: 'yes at apply leg -- C1 orchestration vs C9 reliability dyad CONFIRMS the filing-settled
     position (fail-fast + typed error + RuntimeConfig ownership + default sub_agent_dispatch_max_workers
     = 256 in shared-budget frame units (N upstream frames + one inner frame per SYNC sub-agent branch; async inners uncharged), the filing-settled recommendation, RATIFIED 2026-07-18) or surfaces a reasoned deviation back to the operator; it does NOT
