@@ -1885,47 +1885,37 @@ def drain_branch_buffers(
     "lowest branch-index on tie"). Within a branch, entries drain in their
     buffered step order. Returns the count of entries drained.
 
-    **Drain-time timestamp — the IS-monotonicity realization of the module's own
-    "timestamp records the ledger-*append* event" semantic.** Every buffered
-    payload is re-stamped to a single drain-moment timestamp at this — its actual
-    append — point, NOT the buffer-time value the strategy supplied. A fan-out is
-    one barrier-drain persist event, so one drain = one timestamp. This keeps the
-    shared ZERO-tolerance IS ledger (`_CLOCK_SKEW_TOLERANCE = timedelta(0)`)
-    strictly non-decreasing for **CAUSALLY-ORDERED** drains: the within-level
-    scrambled-completion drain (buffer-time wall-clocks can invert branch-index
-    order, but the single barrier drain runs on one thread, so `now()` here is
-    `>=` whatever preceded the fan-out), AND the single-path cross-level recursion
-    inversion (one `SUB_AGENT_DISPATCH` child drains its entries DURING the
-    parent's barrier — causally *before* this post-barrier parent drain — so the
-    child's `now()` `<=` the parent's). The buffer-time `timestamp=` the append
-    helpers carry is a placeholder this drain overrides; the zero-tolerance writer
-    remains the live safety net for the DIRECT (linear / runtime) append paths.
-
-    **NOT covered (a known gap; the runtime concurrency fork).** `drain_timestamp`
-    is captured here, OUTSIDE the IS writer's serialization point (the module-level
-    `_WRITE_LOCK` inside `append_ledger_entry`). So this is monotonic-by-
-    construction ONLY for causally-ordered drains, NOT for **concurrent** appends
-    to the shared writer that this drain cannot order: (a) two `SUB_AGENT_DISPATCH`
-    SIBLING children draining on separate fan-out threads (each captures its own
-    `now()` outside `_WRITE_LOCK`; the lock can serialize their physical appends in
-    the opposite order → `NonMonotonicTimestampError`), and (b) a runtime audit /
-    cost write interleaving between this drain's capture and its appends. Both are
-    unreachable today — the runtime sync/async-bridge deadlock blocks concurrent
-    sub-agent recursion end-to-end — and were equally broken under the prior
-    fan-out-start-timestamp policy (NOT a regression). The clean fix is
-    timestamp-authority INSIDE `_WRITE_LOCK` (an IS write-path change, contract-
-    touching) and belongs to the same arc as the deadlock; see
-    `.harness/runtime_defect_sub_agent_inference_child_loop_bridge_deadlock.md`
-    §8 + `test_concurrent_sibling_drains_invert_timestamp` (xfail, strict). The
-    §25.12 determinism boundary is untouched regardless (it constrains append
-    *order* — still a pure function of branch_index — never timestamp *values*;
-    the chain is not byte-stable across replay).
+    **Drain-time timestamp — writer-owned, inside the IS write lock (C-IS-07
+    §7.6, v1.11; B-48 apply arc).** Every buffered payload is re-stamped with
+    the `WRITER_OWNED_TIMESTAMP` sentinel, NOT a locally-captured `now()` — the
+    buffer-time value the strategy supplied is discarded regardless (both are
+    placeholders). `append_ledger_entry` recognizes the sentinel and samples
+    the persisted timestamp itself, INSIDE its `_WRITE_LOCK` critical section,
+    at the entry's actual physical-append moment. This supersedes the prior
+    one-drain-one-timestamp policy (entries of one drain MAY now carry
+    distinct, non-decreasing instants, each sampled at its own append) and
+    closes the concurrency gap that policy could not cover: two
+    `SUB_AGENT_DISPATCH` SIBLING children draining on separate fan-out
+    threads no longer race a shared-writer capture-vs-append-order inversion,
+    because sampling now happens where physical append order is decided, not
+    before it — the C-IS-05 §5 monotonic-non-decreasing constraint holds by
+    construction for this surface. The zero-tolerance writer remains the live
+    safety net (caller-supplied semantics, unchanged) for the DIRECT
+    (linear / runtime) append paths — this sentinel is opt-in per entry on
+    THIS surface only, never a default. The §25.12 determinism boundary is
+    untouched (it constrains append *order* — still a pure function of
+    branch_index — never timestamp *values*; the chain is not byte-stable
+    across replay). See `test_concurrent_sibling_drains_invert_timestamp`
+    (the closed witness) + IS spec v1.11 §7.6.
     """
-    drain_timestamp = datetime.now(UTC)
+    from harness_is.state_ledger_write import WRITER_OWNED_TIMESTAMP
+
     drained = 0
     for buffer in sorted(branch_buffers, key=lambda b: b.branch_index):
         for payload, write_key in buffer.buffered_entries:
-            real_writer.append(payload.model_copy(update={"timestamp": drain_timestamp}), write_key)
+            real_writer.append(
+                payload.model_copy(update={"timestamp": WRITER_OWNED_TIMESTAMP}), write_key
+            )
             drained += 1
     return drained
 
