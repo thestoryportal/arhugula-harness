@@ -63,7 +63,7 @@ The Runtime-owned PD-8 witness obligations of the v1.101 change-note ((a)–(e),
 2. The disable is a POLICY SKIP composing with the existing `PrewarmOutcome` `SKIPPED_*` outcome family — a policy skip is NOT a `FAILED` outcome and MUST NOT count toward the keepalive `consec_fail` self-disable accounting. *(Member name is implementation discretion; non-binding suggestion: `SKIPPED_POLICY_FAIL_CLOSED`.)*
 3. The disable is MTC-SCOPED per ratified gate item 8 (codex rounds 2/9/21 — twice-contested scope resolved to the ratified letter): at MULTI_TENANT_COMPLIANCE with the flag ON, both surfaces are disabled; an EXPLICIT lower-tier `fail_closed=true` is ACCEPTED and honored at every catch-site surface; ONLY the prewarm/keepalive swallow boundary keeps its v1.99 posture there — the `B-55` register row HOLDS that disposition (extend / propagate / ratify-as-is), and this criterion does not pre-decide it. Flag-OFF and non-MTC behavior BYTE-PRESERVED — the v1.99 contract stands verbatim (opt-in-default-off; 5m-TTL-only keep-alive; swallow-all best-effort posture).
 
-**Tests (mutation-probed per PD-8):** **Witness (b) — MTC disable:** `test_mtc_flag_on_boot_prewarm_not_fired`, `test_mtc_flag_on_keepalive_loop_never_spawned` (LOOP-level witness — asserts the coroutine/task is never created, not merely that `prewarm()` early-returns), `test_policy_skip_is_skipped_family_and_never_increments_consec_fail`, `test_non_mtc_byte_preservation_control` (flag UNSET at solo/team — v1.99 prewarm behavior verbatim; the explicit-`true` case is covered by the U-RT-134 rejection witness).
+**Tests (mutation-probed per PD-8):** **Witness (b) — MTC disable:** `test_mtc_flag_on_boot_prewarm_not_fired`, `test_mtc_flag_on_keepalive_loop_never_spawned` (LOOP-level witness — asserts the coroutine/task is never created, not merely that `prewarm()` early-returns), `test_policy_skip_is_skipped_family_and_never_increments_consec_fail`, `test_non_mtc_byte_preservation_control` (flag UNSET at solo/team — v1.99 prewarm behavior verbatim), `test_lower_tier_explicit_true_prewarm_still_active_pending_b55` (explicit `true` + backend at solo/team — prewarm/keepalive REMAIN active with their v1.99 posture; mutation probe: extending the MTC disable to the resolved flag prematurely decides the B-55 operator-gated fork and FAILS this control).
 
 **Rollback boundary:** revert the disable; the gate-item-8 fail-open bypass (post-provider-call signing failure swallowed while the process continues) reopens at MTC.
 
@@ -167,7 +167,7 @@ Also:            U-RT-134 (← U-OD-30 cross-axis — normalizer delegation; ←
 Amended:         U-RT-102 (← U-RT-138 partial — the §13.5 row-4 record-authentication component; otherwise dispatch to a landed module)
 ```
 
-Cross-axis edges: U-RT-134 → U-OD-30 (OD — normalizer delegation, codex round-7); U-RT-136 → U-CP-73 (CP); U-RT-137 → U-CP-72 (CP), U-OD-30 (OD); U-RT-138 → U-OD-55 (OD), U-CP-44/U-CP-45 (CP — injected-verifier Protocol + result boundary, codex round-7). Co-land pins per §0.4 (one impl arc per fork gate item 10). All prior edges + acyclicity PRESERVED VERBATIM.
+Cross-axis edges: U-RT-134 → U-OD-30 (OD — normalizer delegation, codex round-7), U-OD-55 (OD — the record carrier for greenfield empty-record initialization, codex round-37); U-RT-136 → U-CP-73 (CP); U-RT-137 → U-CP-72 (CP), U-OD-30 (OD); U-RT-138 → U-OD-55 (OD), U-CP-44/U-CP-45 (CP — injected-verifier Protocol + result boundary, codex round-7). Co-land pins per §0.4 (one impl arc per fork gate item 10). All prior edges + acyclicity PRESERVED VERBATIM.
 
 ---
 
