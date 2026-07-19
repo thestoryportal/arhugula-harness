@@ -34,7 +34,7 @@ The v2.37 U-CP-86 body is PRESERVED VERBATIM; v2.39 adds:
 
 **Implements (addition):** + C-CP-25 §25.11 (AMENDED at CP v1.102 §1 — fan-out capacity gating) + the CP v1.102 §3 interim constraint. Consumes the Runtime §14.8.10.1 executor capacity authority (Runtime plan v2.50 U-RT-141 — cross-axis).
 
-**Depends on (addition):** + [U-RT-141 (cross-axis: Runtime — the shared frame budget + admission the gated proceed site consumes; co-land)].
+**Depends on (addition):** + [U-CP-101 (within-axis — the capacity-authority Protocol + default authority the gated sites admit through; codex rounds 18/21)]. *(U-RT-141 is a co-land/integration pin only, not a dependency.)*
 
 **Acceptance criteria (v2.39 additions):**
 
@@ -56,7 +56,7 @@ The v2.37 U-CP-88 body is PRESERVED VERBATIM; v2.39 adds:
 
 **Implements (addition):** + C-CP-25 §25.11 (AMENDED at CP v1.102 §1) + the CP v1.102 §3 interim constraint. Consumes the Runtime §14.8.10.1 executor capacity authority (Runtime plan v2.50 U-RT-141 — cross-axis).
 
-**Depends on (addition):** + [U-RT-141 (cross-axis: Runtime; co-land)].
+**Depends on (addition):** + [U-CP-101 (within-axis — the capacity-authority declaration; codex rounds 18/21)]. *(U-RT-141 co-land pin only.)*
 
 **Acceptance criteria (v2.39 additions):** the SAME five criteria as the §1 U-CP-86 amendment, applied at this strategy's construction sites — `_proceed_fanout` at `workflow_driver.py:11238` admission-GATED; `_cancel_fanout` at `:11589` admission-EXEMPT; occupied + N + S ≤ cap with shared-budget/contention semantics; atomic reservation; typed fail-fast never-queue; v1.97 resume semantics preserved; durable-HITL-gated sibling workers SEQUENCED until B-39. (Criteria bound per-site, not duplicated in prose — the contract text is CP v1.102 §1/§3; the sibling U-CP-86 amendment names the rows.) [SUPERSEDED by the sharpened rule: initial branch-dispatching admission gated at ALL FOUR sites (incl. cancel-policy execution); only frame-releasing teardown of already-admitted branches exempt (rounds 6/15/17/18)]
 
@@ -70,7 +70,7 @@ The v2.37 U-CP-85 body (the 8 §25.15.2 obligations) is PRESERVED VERBATIM; v2.3
 
 **Implements (addition):** + C-CP-25 §25.11 (AMENDED at CP v1.102 §1 row 5 — apply-note 2: admission-rejection = BRANCH FAILURE composing with the EXISTING §25.15 `cascade_policy` table).
 
-**Depends on (addition):** + [U-RT-141 (cross-axis: Runtime — the typed capacity error consumed as a branch-failure cause; co-land)].
+**Depends on (addition):** + [U-CP-101 (within-axis — the declaration; the typed capacity error itself is the U-CORE-03 carrier reached through it; codex rounds 18/21)]. *(U-RT-141 co-land pin only.)*
 
 **Acceptance criteria (v2.39 additions):**
 
@@ -137,7 +137,7 @@ The v2.37 U-CP-82 body is PRESERVED VERBATIM; v2.39 adds:
 
 **Depends on:** [U-CORE-03 (cross-axis: the shared capacity error the Protocol raises)].
 
-**Consumed by:** U-CP-85/86/88 (the declaration they admit through) and, cross-axis, Runtime v2.50 U-CP-101 (the declaration; U-RT-141 remains only a co-land/integration pin — codex round-20) (the adapter IMPLEMENTS this Protocol — the Runtime→CP dependency is legitimate and acyclic: no CP unit depends on any Runtime unit).
+**Consumed by:** U-CP-85/86/88 (the declaration they admit through) and, cross-axis, Runtime v2.50 U-RT-141 (the adapter IMPLEMENTS this Protocol — the Runtime→CP dependency is legitimate and acyclic: no CP unit depends on any Runtime unit).
 
 **Tests (PD-8):** `test_default_authority_gates_at_256_and_raises_core_error_with_step_context` (mutation probe: an ungated default passes unbounded fan-out and fails); `test_protocol_lease_release_exactly_once_across_outcomes`.
 
