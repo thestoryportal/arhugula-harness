@@ -102,7 +102,7 @@ The filing's §4 obligations home as `Tests:` criteria (every new witness PD-8 m
 
 **Depends on:** [U-RT-141 (executor jobs the token/fence govern), U-RT-142 (the offloaded venue)].
 
-**Files affected (logical):** the child-driver step-boundary check sites; `lifecycle/sub_agent_dispatch.py` (the four post-child `_compose_and_persist_audit` sites at `:1018`/`:1051`/`:1088`/`:1126`); `lifecycle/sync_dispatcher_facade.py` (the bounded join at `:115` lineage); the cancel-token/fence carriers. *(Carrier shapes are implementation discretion.)*
+**Files affected (logical):** the child-driver step-boundary check sites; `lifecycle/sub_agent_dispatch.py` (the four post-child `_compose_and_persist_audit` sites at `:1018`/`:1051`/`:1088`/`:1126`); `lifecycle/sync_dispatcher_facade.py` (the bounded join at `:115` lineage); the cancel-token/fence carriers. *(Carrier shapes are implementation discretion.)* (codex round-28: these appends also adopt the IS §7.6-widened writer-owned timestamp sampling — B-48's concurrency newly exercises this direct path; co-land with the IS U-IS-11 widening).
 
 **Acceptance criteria:**
 

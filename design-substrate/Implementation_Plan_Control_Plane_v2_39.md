@@ -60,7 +60,7 @@ The v2.37 U-CP-88 body is PRESERVED VERBATIM; v2.39 adds:
 
 **Acceptance criteria (v2.39 additions):** the SAME criteria as the §1 U-CP-86 amendment, applied at this strategy's construction sites under the SHARPENED rule (rounds 6/15/17/26): INITIAL branch-dispatching admission gated at BOTH this strategy's sites — `_proceed_fanout` at `workflow_driver.py:11238` AND `_cancel_fanout` at `:11589` (its CASCADE_CANCEL/PAUSE execution dispatches branches) — with only frame-releasing teardown of already-admitted branches exempt; occupied+N+S shared-budget admission, atomic reservation, typed step-attributable fail-fast, §25.15 branch-failure composition, and the interim-sequencing constraint all apply identically.
 
-**Tests (v2.39 additions — mutation-probed per PD-8):** the witness-(a)/(c)/(e) classes above parametrized over this strategy's sites (the shared fan-out machinery makes one parametrized suite over both strategies acceptable — the acceptance requirement is that BOTH strategies' proceed sites are exercised gated and BOTH cancel sites exempt; a suite covering only one strategy's sites is an acceptance FAILURE).
+**Tests (v2.39 additions — mutation-probed per PD-8):** the witness-(a)/(c)/(e) classes above parametrized over this strategy's sites — INITIAL admission gated at BOTH this strategy's construction sites (`_proceed_fanout` :11238 AND `_cancel_fanout` :11589 under CASCADE_CANCEL/PAUSE execution, per the sharpened rule rounds 6/15/17/26/28), with the teardown-exemption case tested SEPARATELY (frame-releasing teardown of already-admitted branches never rejected); the shared fan-out machinery makes one parametrized suite over both strategies acceptable.
 
 ---
 

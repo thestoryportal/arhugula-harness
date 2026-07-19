@@ -1116,7 +1116,9 @@ items:
     (the ratified narrow scope, pinned by the sibling-drain xfail). DIRECT appends keep caller-supplied
     timestamps with detect-then-refuse semantics -- two uncoordinated concurrent direct writers (e.g.
     the audit/cost interleave) can still capture timestamps outside the lock in inverted order and hit
-    NonMonotonicTimestampError. The superseded defect record section 8.3 phrased the fix this broadly;
+    NonMonotonicTimestampError. SCOPE NOTE (round-28): the offloaded SUB-AGENT audit append path was
+    carved OUT of this row into B-48 itself (its own concurrency exercises it -- IS section 7.6
+    scope-widening); B-57 covers the remaining direct writers. The superseded defect record section 8.3 phrased the fix this broadly;
     the filing did not ratify it.'
   close_out: 'IF the direct-path inversion materializes in practice (a real NonMonotonicTimestampError
     from production direct writers): a narrow IS spec delta extending section 7.6''s writer-owned
