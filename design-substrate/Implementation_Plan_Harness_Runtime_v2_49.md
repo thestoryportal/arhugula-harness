@@ -14,7 +14,7 @@
 
 ### §0.2 Revision scope
 
-Per the fork's ratification-gate plan-delta clause (filing codex round-11 P2 / round-12 P2): "the Runtime plan (v2.48 head) has no acceptance criteria for the new RuntimeConfig flag, bootstrap validation, handler policy, prewarm/keepalive posture, or tenant threading." v2.49 decomposes the Runtime v1.101 rider surfaces (A)–(F) into five new units + one amendment. OD/CP-owned contract text is CROSS-REFERENCED to the same-arc OD plan v2.29 (U-OD-30 amended; U-OD-55 NEW) and CP plan v2.38 (U-CP-42/44/45/72/73 amended) — never restated. Naming discretion per the spec is respected throughout: exact CLI flag / `harness.toml` key names, the C-RT-14 fail-class identifier for the UNVERIFIED-nonzero exit, and the `PrewarmOutcome` policy-skip member name are implementation discretion — the units below pin BEHAVIOR criteria and mark any proposed name as a non-binding suggestion.
+Per the fork's ratification-gate plan-delta clause (filing codex round-11 P2 / round-12 P2): "the Runtime plan (v2.48 head) has no acceptance criteria for the new RuntimeConfig flag, bootstrap validation, handler policy, prewarm/keepalive posture, or tenant threading." v2.49 decomposes the Runtime v1.101 rider surfaces (A)–(F) into six new units + one amendment. OD/CP-owned contract text is CROSS-REFERENCED to the same-arc OD plan v2.29 (U-OD-30 amended; U-OD-55 NEW) and CP plan v2.38 (U-CP-42/44/45/72/73 amended) — never restated. Naming discretion per the spec is respected throughout: exact CLI flag / `harness.toml` key names, the C-RT-14 fail-class identifier for the UNVERIFIED-nonzero exit, and the `PrewarmOutcome` policy-skip member name are implementation discretion — the units below pin BEHAVIOR criteria and mark any proposed name as a non-binding suggestion.
 
 ### §0.3 Sections revised
 
@@ -169,7 +169,7 @@ The v2.31 U-RT-102 body (Typer parent app + subcommand stubs) is PRESERVED VERBA
 
 ## §2 DAG topology delta (v2.48 → v2.49)
 
-Five new units; acyclic (Kahn-verifiable):
+Six new units; acyclic (Kahn-verifiable):
 
 ```
 L0-within-delta: U-RT-134 (← U-RT-103 prior-landed; + U-OD-30 cross-axis, see Also line)
