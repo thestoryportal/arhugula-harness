@@ -66,7 +66,7 @@ from typing import Any, cast
 
 import pytest
 from harness_as.sandbox_tier import SandboxTier
-from harness_core import ActionID, PersonaTier, StepID, WorkloadClass
+from harness_core import ActionID, PersonaTier, StepID, SubAgentDispatchCapacityError, WorkloadClass
 from harness_core.workflow_event_class import WorkflowEventClass
 from harness_cp.cp_shared_types import ModelBinding
 from harness_cp.cross_family_fallback_chain import (
@@ -84,6 +84,7 @@ from harness_cp.sub_agent_brief import (
     SubAgentBrief,
     compute_brief_summary_hash,
 )
+from harness_cp.sub_agent_dispatch_capacity_authority import DefaultCapacityAuthority
 from harness_cp.sub_agent_gate_level_descent import dispatch_sub_agent
 from harness_cp.topology_pattern import TopologyPattern
 from harness_cp.workflow_driver import (
@@ -91,6 +92,7 @@ from harness_cp.workflow_driver import (
     StepDispatcher,
     StepDispatcherRegistry,
     StepKindDispatcherNotBoundError,
+    _admit_fanout_branch_plan,
     execute_workflow,
     resume_should_redispatch,
 )
@@ -263,9 +265,17 @@ class _Emitter:
 
 class _Ctx:
     """Minimal fake `DriverContext` (the strategy reads
-    `procedural_tier_snapshot_resolver` via `getattr(..., None)` — absent → None)."""
+    `procedural_tier_snapshot_resolver` via `getattr(..., None)` — absent → None).
 
-    def __init__(self, *, ledger: Any, emitter: _Emitter) -> None:
+    `capacity_authority` (B-48/U-CP-101): injectable so a test can pin an
+    explicit frame budget for precise admission assertions across a
+    RECURSIVE descent (every level's `execute_workflow(child_manifest, ...)`
+    call shares this SAME `ctx`, hence the SAME authority instance — the
+    mechanism by which an ancestor's held frames are visible to a
+    descendant's admission call). `None` → the strategy falls back to the
+    module-level default authority (production behavior)."""
+
+    def __init__(self, *, ledger: Any, emitter: _Emitter, capacity_authority: Any = None) -> None:
         import asyncio
 
         from opentelemetry.trace import NoOpTracerProvider
@@ -279,6 +289,7 @@ class _Ctx:
         self.tracer_provider = NoOpTracerProvider()
         self.validator_framework = None
         self.tenant_id = None
+        self.capacity_authority = capacity_authority
 
 
 class _HierarchicalDispatcher:
@@ -367,9 +378,12 @@ def _run(
     workflow_id: str = "wf-hd",
     dispatcher: _HierarchicalDispatcher | None = None,
     emitter: _Emitter | None = None,
+    capacity_authority: Any = None,
 ) -> tuple[Any, _HierarchicalDispatcher, _Emitter]:
     emitter = emitter if emitter is not None else _Emitter()
-    ctx = cast(DriverContext, _Ctx(ledger=ledger, emitter=emitter))
+    ctx = cast(
+        DriverContext, _Ctx(ledger=ledger, emitter=emitter, capacity_authority=capacity_authority)
+    )
     disp = dispatcher if dispatcher is not None else _HierarchicalDispatcher(ctx=ctx)
     registry = cast(StepDispatcherRegistry, _Registry(cast(StepDispatcher, disp)))
     disp.registry = registry
@@ -977,3 +991,164 @@ def test_hierarchical_without_synthesis_uses_deterministic_compose() -> None:
     assert result.final_state is not None
     assert set(result.final_state) == {"orchestrator", "worker_outputs"}
     assert not any(str(wk.step_id).startswith("post-join-synthesis") for _p, wk in ledger.appends)
+
+
+# ---------------------------------------------------------------------------
+# B-48 (U-CP-89 amendment, CP spec v1.102 §2) — HIERARCHICAL_DELEGATION
+# depth-phrase RETIRED: recursion capacity is FORMALLY DELEGATED to the
+# Runtime §14.8.10 executor cap under the shared frame budget; the strategy
+# implements NO depth bound and carries NO depth carrier. The per-parent
+# WIDTH cap 3 (C-CP-10 §10.3) is preserved and orthogonal to that capacity
+# gate. Plan v2.39 §4 tests.
+# ---------------------------------------------------------------------------
+
+
+def _deep_single_child_chain(depth: int, *, leaf_name: str = "leaf") -> list[WorkflowStep]:
+    """`depth` nested HIERARCHICAL_DELEGATION levels, each with exactly ONE
+    SUB_AGENT_DISPATCH worker recursing into the next level (worker_count=1
+    stays well under the width cap 3 at every level) — a genuine multi-level
+    descent bottoming out at a single leaf `DECLARATIVE_STEP`."""
+    steps = _level([_orchestrator_step("orch-0"), _leaf_worker(leaf_name)])
+    for level in range(1, depth):
+        child_manifest = _manifest(workflow_id=f"wf-hd-depth-{level}")
+        steps = _level(
+            [
+                _orchestrator_step(f"orch-{level}"),
+                _sub_agent_worker(f"sub-{level}", child_manifest=child_manifest, child_steps=steps),
+            ]
+        )
+    return steps
+
+
+def test_delegation_below_cap_unbounded_by_any_cp_depth_bound() -> None:
+    """CP spec v1.102 §2: the strategy carries NO depth carrier and enforces NO
+    depth bound — recursion capacity is delegated wholesale to the shared
+    frame budget. A single-child chain 10 levels deep (well past the width
+    cap 3, and past any historically-implied depth value the retired
+    "with a depth bound" phrase might have named) proceeds to SUCCESS while
+    frames remain, proving nothing in the CP driver itself counts or caps
+    descent depth. Mutation probe: introducing a CP-side depth check (e.g. a
+    `depth > N: fail` guard mirroring the width-cap-3 pattern) would reject
+    this legal descent and fail the test."""
+    depth = 10
+    authority = DefaultCapacityAuthority(frame_budget=64)  # 2 frames/level * 9 << 64
+    root_steps = _deep_single_child_chain(depth)
+    ledger = _RecordingLedger()
+    result, _disp, _emitter = _run(steps=root_steps, ledger=ledger, capacity_authority=authority)
+
+    assert result.status is RunStatus.SUCCESS
+    # Descend to the innermost fold to prove GENUINE depth (not a truncated
+    # 1-level run): depth-1 nested `["sub-N"]["child"]` hops reach the leaf.
+    node = result.final_state
+    assert node is not None
+    for level in range(depth - 1, 0, -1):
+        node = node["worker_outputs"][f"sub-{level}"]["child"]
+    assert "leaf" in node["worker_outputs"]
+    assert authority.available == authority.frame_budget  # every frame released, no leak
+
+
+def test_capacity_breach_during_descent_surfaces_typed_step_attributable_with_descent_chain() -> (
+    None
+):
+    """CP spec v1.102 §2 row 4: a capacity breach mid-descent surfaces the SAME
+    typed `SubAgentDispatchCapacityError` the U-CORE-03 carrier defines
+    (pairs with that carrier's own error-shape unit tests) — attributable to
+    the SPECIFIC overflowing dispatch step, carrying a descent_chain, never a
+    generic executor error. Exercises the REAL production admission helper
+    `_admit_fanout_branch_plan` (every `_execute_orchestrator_workers` /
+    `_execute_parallelization` call site calls exactly this) across a
+    simulated 2-level recursive descent against ONE shared authority: an
+    ANCESTOR level's SUB_AGENT_DISPATCH branch holds its frames open
+    (in-flight, recursing — mirroring how a real descent's ancestor branch
+    keeps its lease for the ENTIRE duration of its child's own
+    `execute_workflow` call) when the DESCENDANT level's own admission call
+    runs out of room.
+
+    Mutation probe: swapping the descendant's `step_id`/`descent_chain`
+    inputs for the ancestor's (or otherwise losing per-level attribution)
+    would still pass a same-exception-type check but fail the specific-
+    identity assertions below."""
+    authority = DefaultCapacityAuthority(frame_budget=2)
+
+    # Ancestor level: one root SUB_AGENT_DISPATCH branch (2 frames) admitted
+    # and deliberately held open — models an in-flight recursive descent.
+    ancestor_step = _sub_agent_worker(
+        "root-sub", child_manifest=_manifest(workflow_id="wf-descent-child"), child_steps=[]
+    )
+    ancestor_ctx = cast(
+        DriverContext,
+        _Ctx(ledger=_RecordingLedger(), emitter=_Emitter(), capacity_authority=authority),
+    )
+    ancestor_admissions = _admit_fanout_branch_plan(
+        ancestor_ctx, [(0, ancestor_step, None, None, None)], workflow_id="wf-hd-root"
+    )
+    ancestor_lease = ancestor_admissions[0]
+    assert not isinstance(ancestor_lease, SubAgentDispatchCapacityError)
+    assert authority.available == 0  # the whole budget-2 is now held by the ancestor
+
+    # Descendant level (the recursed child): its own SUB_AGENT_DISPATCH worker
+    # needs 2 MORE frames, but the ancestor above is still holding both.
+    descendant_step = _sub_agent_worker(
+        "grandchild-sub",
+        child_manifest=_manifest(workflow_id="wf-descent-grandchild"),
+        child_steps=[],
+    )
+    descendant_ctx = cast(
+        DriverContext,
+        _Ctx(ledger=_RecordingLedger(), emitter=_Emitter(), capacity_authority=authority),
+    )
+    descendant_admissions = _admit_fanout_branch_plan(
+        descendant_ctx, [(0, descendant_step, None, None, None)], workflow_id="wf-descent-child"
+    )
+    breach = descendant_admissions[0]
+
+    assert isinstance(breach, SubAgentDispatchCapacityError)
+    # Step-attributable: names the OVERFLOWING branch's OWN step, never the
+    # ancestor's still-holding branch.
+    assert breach.step_id == "grandchild-sub"
+    assert breach.step_id != str(ancestor_step.step_id)
+    # Descent-chain-carrying: the message names the LEVEL at which the breach
+    # occurred (per the `_admit_fanout_branch_plan(..., descent_chain=(workflow_id,))`
+    # binding).
+    assert breach.descent_chain == ("wf-descent-child",)
+    assert "wf-descent-child" in str(breach)
+    assert "grandchild-sub" in str(breach)
+
+    ancestor_lease.release()
+    assert authority.available == authority.frame_budget
+
+
+def test_width_cap_3_per_parent_still_enforced() -> None:
+    """CP spec v1.102 §2 row 3 (preservation control): the per-parent WIDTH cap
+    3 (C-CP-10 §10.3) is orthogonal to — and NOT subsumed by — the B-48
+    capacity-authority admission gate. A 4-child level fails the width-cap
+    detect-then-refuse check EVEN UNDER A GENEROUS injected capacity budget
+    (so the failure cannot be a capacity rejection), and — because the width
+    check runs BEFORE `_execute_orchestrator_workers` /
+    `_admit_fanout_branch_plan` is ever reached (parity with the existing
+    detect-then-refuse "no side effects" contract) — ZERO frames are ever
+    reserved from the authority.
+
+    Mutation probe: if the width check were removed (or ran AFTER admission),
+    either this test's fail_class would no longer name the width-cap defect,
+    or `authority.available` would drop below the full budget."""
+    authority = DefaultCapacityAuthority(frame_budget=256)  # ample; not the constraint
+    ledger = _RecordingLedger()
+    result, _disp, _emitter = _run(
+        steps=_level(
+            [
+                _orchestrator_step(),
+                _leaf_worker("w0"),
+                _leaf_worker("w1"),
+                _leaf_worker("w2"),
+                _leaf_worker("w3"),
+            ]
+        ),
+        ledger=ledger,
+        capacity_authority=authority,
+    )
+    assert result.status is RunStatus.FAILED
+    assert result.fail_class is not None
+    assert "hierarchical-delegation-fanout-cap-exceeded" in result.fail_class
+    assert "capacity" not in result.fail_class  # not conflated with a capacity rejection
+    assert authority.available == authority.frame_budget  # no admission ever attempted
