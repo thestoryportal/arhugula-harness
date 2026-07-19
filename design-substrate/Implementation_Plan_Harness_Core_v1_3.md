@@ -14,7 +14,7 @@ The B-48 executor arc (Runtime spec v1.102 §14.8.10 + CP spec v1.102 §25.11 + 
 
 **Depends on:** [U-CORE-01 (the package skeleton/carrier conventions)].
 
-**Consumed by (cross-package, declared here for the DAG):** Runtime plan v2.50 U-RT-140 (taxonomy row mapping) + U-RT-141 (the executor + capacity-authority adapter raise it); CP plan v2.39 U-CP-85/86/88 amendments (raise/handle through the Protocol).
+**Consumed by (cross-package, declared here for the DAG):** Runtime plan v2.50 U-RT-140 (taxonomy row mapping) + U-RT-141 (the executor + capacity-authority adapter raise it) + CP plan v2.39 U-CP-101 (the Protocol declaration raises it); U-CP-85/86/88 consume it ONLY through U-CP-101 (no direct edge — codex round-34).
 
 **Acceptance criteria:**
 
@@ -30,6 +30,6 @@ The B-48 executor arc (Runtime spec v1.102 §14.8.10 + CP spec v1.102 §25.11 + 
 |---|---|
 | The shared capacity error class (Runtime v1.102 §14.8.10.5 canonical type; CP v1.102 §1 Protocol raise) | U-CORE-03 (NEW) |
 
-DAG: U-CORE-03 ← U-CORE-01. Cross-package consumers (declared, Kahn-relevant for the one B-48 impl arc): U-RT-140, U-RT-141, and the U-CP-85/86/88 amendments all ← U-CORE-03. Acyclic — U-CORE-03 has no outbound edge beyond U-CORE-01.
+DAG: U-CORE-03 ← U-CORE-01. Cross-package consumers (declared, Kahn-relevant, reconciled at codex round-34 — the CP consumers reach the error THROUGH the U-CP-101 Protocol, not by direct dependency): U-RT-140, U-RT-141, and U-CP-101 ← U-CORE-03; U-CP-85/86/88 ← U-CP-101 only (the CP plan's authoritative shape — both graphs identical). Acyclic — U-CORE-03 has no outbound edge beyond U-CORE-01.
 
 *End of Implementation Plan — Harness Core v1.3. Three units (U-CORE-01 + U-CORE-02 + U-CORE-03). Clearance marker at `.harness/clearance/implementation-plan-harness-core-v1-3-cleared-2026-07-19.md`.*
