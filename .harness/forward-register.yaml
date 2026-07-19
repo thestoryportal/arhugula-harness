@@ -1064,8 +1064,7 @@ items:
   close_out: 'Fork doc RATIFIED 2026-07-18; spec deltas APPLIED (PR 1056; one OD amendment arc carried all
     three legs). IMPL ARC (the verification contract is SPECIFIED at OD v1.34 section 21.2.2 + CP v1.101
     section 3 -- PR 1056): implement the verifier per NEW U-OD-55 + wire into B-49''s per-family unit
-    and harness-inspect per U-RT-138 (with the U-CP-44/45 injected-verifier boundary).''s per-family unit and
-    harness-inspect.'
+    and harness-inspect per U-RT-138 (with the U-CP-44/45 injected-verifier boundary).'
   council: 'yes at apply leg -- C7 compliance vs C9 availability dyad; the blocking condition is
     MET by ratified gate item 5 (section 20.3.1 reconciled into the CP rider)'
   heading: '### B-54 · Backend-aware audit signature verification API *(split from B-49 at the
