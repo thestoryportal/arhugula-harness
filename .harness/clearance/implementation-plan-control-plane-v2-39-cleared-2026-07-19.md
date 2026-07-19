@@ -15,4 +15,4 @@ reviewer_chain:
 
 # Clearance — Implementation_Plan_Control_Plane_v2_39 (B-48 apply arc plan delta)
 
-ZERO new units; U-CP-85/86/88/89/82 amended (§25.11 capacity gating, admission-rejection-as-branch-failure, depth-phrase retirement, drain call-site + xfail removal); cross-axis edges to U-RT-141. Acceptance criteria transcribe the ratified spec deltas with PD-8-probed Tests: criteria; PRESERVED VERBATIM discipline over prior chain bodies.
+ONE new unit (U-CP-101 — the capacity-authority Protocol + default-authority declaration home) + U-CP-85/86/88/89/82 amended (§25.11 capacity gating — admission at all four fan-out sites, teardown-only exemption; admission-rejection-as-branch-failure; depth-phrase retirement; drain call-site + xfail removal); edges: U-CP-85/86/88 → U-CP-101 → U-CORE-03; U-CP-82 → U-IS-11; U-RT-141 implements the U-CP-101 Protocol. Acceptance criteria transcribe the ratified spec deltas with PD-8-probed Tests: criteria; PRESERVED VERBATIM discipline over prior chain bodies.
