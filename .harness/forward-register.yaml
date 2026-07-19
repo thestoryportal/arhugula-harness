@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 57
-  open: 4
-  design_substrate_gated: 2
-  registered_finding: 6
+  total: 59
+  open: 5
+  design_substrate_gated: 1
+  registered_finding: 8
   operator_gated: 2
   held: 1
   closed: 42
-  identity_digest: 7a3e0c76cb4548d8
+  identity_digest: 47aeb1258dc9abf8
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -901,8 +901,8 @@ items:
     at `B-36`''s own PR, out-of-family Codex review, 2026-07-16)*'
 - id: B-48
   title: Sync sub-agent dispatch executes on the event loop (U-RT-60 wrap-asymmetry residual)
-  status: design_substrate_gated
-  summary: 'RATIFIED 2026-07-18 (option B with all filing-settled riders) -- apply arc open. Out-of-family Codex round-2 P1 on B-47 PR B2a: RuntimeHITLGateComposer._dispatch_inner
+  status: open
+  summary: 'OPEN -- spec+plan deltas APPLIED 2026-07-19 (Runtime v1.102 + CP v1.102 + IS v1.11 + plans v2.50/v2.39/v2.7 + Core v1.3); the executor impl arc (U-CORE-03 + U-RT-140..144 + U-CP-101 + the CP/IS amendments) is the live next step. Out-of-family Codex round-2 P1 on B-47 PR B2a: RuntimeHITLGateComposer._dispatch_inner
     invokes the sync C-RT-17 sub-agent dispatcher DIRECTLY on the event loop (the U-RT-60
     wrap-asymmetry fork Q3-ratified direct-call reading), so the entire sub-agent dispatch -- child
     workflow execution (seconds-long), its F2/ledger writes, and now the B2a-threaded KMS signing --
@@ -922,8 +922,8 @@ items:
     ThreadPoolExecutor has no unbounded mode). Apply arc per the filing: construction-time dispatch-mode for all three stage-5
     composers, cancellation semantics first, pause/resume + resume-context per-child isolation, OTel
     context carry, drain-timestamp fix (IS back-flow) + xfail removal, deadlock-anchor XPASS promotion,
-    Runtime spec delta (C-RT-03 cap field) + Runtime plan delta. Selection RATIFIED 2026-07-18
-    (option B); the apply arc is the live next step.'
+    Runtime spec delta (C-RT-03 cap field) + Runtime plan delta. Selection RATIFIED 2026-07-18 (option B);
+    spec-apply COMPLETE 2026-07-19 -- the impl arc is the live next step.'
   council: 'yes at apply leg -- C1 orchestration vs C9 reliability dyad CONFIRMS the filing-settled
     position (fail-fast + typed error + RuntimeConfig ownership + default sub_agent_dispatch_max_workers
     = 256 in shared-budget frame units (N upstream frames + one inner frame per SYNC sub-agent branch; async inners uncharged), the filing-settled recommendation, RATIFIED 2026-07-18) or surfaces a reasoned deviation back to the operator; it does NOT
@@ -1108,3 +1108,37 @@ items:
     codex rounds'
   heading: '### B-56 · Corrected-relabel repair for already-tagged audit history *(registered at the
     B-51/B-52/B-54 apply arc, 2026-07-18)*'
+- id: B-57
+  title: Direct-writer caller-supplied timestamp capture-order inversion
+  status: registered_finding
+  summary: 'Registered at the B-48 apply arc (IS v1.11 change-note; apply-PR codex round-13 made the
+    row real): the C-IS-07 section 7.6 writer-owned fix covers the buffered/branch-DRAIN path only
+    (the ratified narrow scope, pinned by the sibling-drain xfail). DIRECT appends keep caller-supplied
+    timestamps with detect-then-refuse semantics -- two uncoordinated concurrent direct writers (e.g.
+    the audit/cost interleave) can still capture timestamps outside the lock in inverted order and hit
+    NonMonotonicTimestampError. SCOPE NOTE (round-28): the offloaded SUB-AGENT audit append path was
+    carved OUT of this row into B-48 itself (its own concurrency exercises it -- IS section 7.6
+    scope-widening); B-57 covers the remaining direct writers. The superseded defect record section 8.3 phrased the fix this broadly;
+    the filing did not ratify it.'
+  close_out: 'IF the direct-path inversion materializes in practice (a real NonMonotonicTimestampError
+    from production direct writers): a narrow IS spec delta extending section 7.6''s writer-owned
+    sampling to an opt-in direct-append mode (or per-writer serialization guidance) + U-IS-11 widening.
+    Until then detect-then-refuse is the committed posture and this row is the queryable record.'
+  council: 'no -- bounded follow-on; the C3/C9 reasoning is recorded at the IS v1.11 change-note'
+  heading: '### B-57 · Direct-writer caller-supplied timestamp capture-order inversion *(registered at
+    the B-48 apply arc, 2026-07-19)*'
+- id: B-58
+  title: Pre-existing harness-cp function-level import of runtime escalation error types
+  status: registered_finding
+  summary: 'Registered at the B-48 apply arc (codex round-27): workflow_driver.py:4737 imports three
+    ValidatorEscalation* exception classes from harness_runtime.lifecycle.validator_escalation_composer
+    at function level -- a pre-existing cross-package import in the OD->CP-canonical-direction
+    workspace (the carrier-home-defect class: cross-axis exception types living in one package,
+    consumed by another). Observed prior state, present at the merge base; the B-48 capacity-seam
+    package-graph witness EXCLUDES it explicitly rather than silently passing over it.'
+  close_out: 'IF a hygiene arc opens: re-home the three exception classes to harness-core (the U-CORE-03
+    precedent) and drop the function-level import. Until then the import stands as documented prior
+    state; nothing blocks on it.'
+  council: 'no -- bounded carrier-home hygiene follow-on'
+  heading: '### B-58 · Pre-existing harness-cp function-level import of runtime escalation error types
+    *(registered at the B-48 apply arc, 2026-07-19)*'
