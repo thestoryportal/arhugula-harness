@@ -32,7 +32,7 @@ The filing's §4 obligations home as `Tests:` criteria (every new witness PD-8 m
 
 **Implements:** Runtime spec v1.102 §3 C-RT-03 (`sub_agent_dispatch_max_workers: int = 256` field row — the ONE shared frame budget, sized in FRAME units; a minor OPTIONAL-with-default addition on the C-RT-03 contract-v2 head) + §14.8.10.5 (the typed fail-fast capacity error row).
 
-**Depends on:** [U-RT-103 (RuntimeConfigSource layered loading — the field must ride all three source layers)].
+**Depends on:** [U-RT-103 (RuntimeConfigSource layered loading — the field must ride all three source layers), U-CORE-03 (cross-package: harness-core — the shared capacity error this unit's taxonomy row maps to; Core plan v1.3; codex round-8)].
 
 **Files affected (logical):** the RuntimeConfig schema module; `config/loader.py` (`_ENV_SCALAR_FIELDS`); `config_source.py` (`_RuntimeEnvSettings`); the typed-error surface for the capacity error.
 
@@ -145,7 +145,7 @@ The filing's §4 obligations home as `Tests:` criteria (every new witness PD-8 m
 Five new units; acyclic (Kahn-verifiable — each layer depends only on earlier layers + prior-landed units):
 
 ```
-L0-within-delta: U-RT-140 (← U-RT-103 prior-landed)
+L0-within-delta: U-RT-140 (← U-RT-103 prior-landed) — plus U-RT-140/U-RT-141 ← U-CORE-03 (Core plan v1.3, codex round-8)
 L1-within-delta: U-RT-141 (← U-RT-140)
 L2-within-delta: U-RT-142 (← U-RT-141; + U-RT-60 prior-landed)
 L3-within-delta: U-RT-143 (← U-RT-141, U-RT-142)
