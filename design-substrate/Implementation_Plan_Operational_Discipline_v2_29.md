@@ -100,6 +100,8 @@ fn sign_audit_entry(payload : AuditPayload, key_id : string, algo : SignatureAlg
 
 Dependency graph: +U-OD-55 with edges U-OD-55 → U-OD-00, U-OD-55 → U-OD-30 (both upstream; acyclic — Kahn-verifiable, no inbound edge from either). All prior edges preserved verbatim.
 
+**Canonical topology registration (codex round-28):** the inherited §4 node count is AMENDED 55 → **56** and the level decomposition gains **U-OD-55 at L9** — after its U-OD-30 dependency (whose amended criteria land at its existing level) — so topology-driven execution schedules the verifier unit; every other level assignment is preserved verbatim.
+
 ---
 
 ## §4 Filing footer
