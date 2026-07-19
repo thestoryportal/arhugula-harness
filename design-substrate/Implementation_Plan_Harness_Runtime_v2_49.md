@@ -32,7 +32,7 @@ The Runtime-owned PD-8 witness obligations of the v1.101 change-note ((a)–(e),
 
 **Implements:** Runtime spec v1.101 §3 C-RT-03 (`audit_signing_fail_closed` field row; `tenant_id` row MTC amendment; the NEW MTC audit-signing config-validation invariant). Policy semantics OD-owned (OD v1.34 §21.2.3 rows 1–4 — cross-referenced).
 
-**Depends on:** [U-RT-103 (RuntimeConfigSource layered loading — the field must ride all three source layers), U-OD-30 (cross-axis: OD — bootstrap tenant validation DELEGATES to the OD-exported normalizer; co-land)].
+**Depends on:** [U-RT-103 (RuntimeConfigSource layered loading — the field must ride all three source layers), U-OD-30 (cross-axis: OD — bootstrap tenant validation DELEGATES to the OD-exported normalizer; co-land), U-OD-55 (cross-axis: OD — the record carrier/canonical bytes/signing API the greenfield empty-record initialization consumes; codex round-32; co-land)].
 
 **Files affected (logical):** the RuntimeConfig schema module; `config/loader.py` (`_ENV_SCALAR_FIELDS`); `config_source.py` (`_RuntimeEnvSettings`); the bootstrap config-validation site.
 
@@ -163,7 +163,7 @@ Five new units; acyclic (Kahn-verifiable):
 L0-within-delta: U-RT-134 (← U-RT-103 prior-landed; + U-OD-30 cross-axis, see Also line)
 L1-within-delta: U-RT-135 (← U-RT-134), U-RT-136 (← U-RT-134 + U-CP-73 cross-axis)
 Independent:     U-RT-137 (← U-CP-72, U-OD-30 cross-axis), U-RT-138 (← U-RT-47 prior-landed + U-OD-55 cross-axis + U-CP-44/U-CP-45 cross-axis — the injected-verifier Protocol + CP-owned result boundary it adapts and integration-tests)
-Also:            U-RT-134 (← U-OD-30 cross-axis — bootstrap tenant validation DELEGATES to the OD-exported normalizer)
+Also:            U-RT-134 (← U-OD-30 cross-axis — normalizer delegation; ← U-OD-55 cross-axis — the record carrier for greenfield empty-record initialization)
 Amended:         U-RT-102 (← U-RT-138 partial — the §13.5 row-4 record-authentication component; otherwise dispatch to a landed module)
 ```
 
