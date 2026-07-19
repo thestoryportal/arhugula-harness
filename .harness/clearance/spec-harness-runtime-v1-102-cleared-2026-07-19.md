@@ -15,4 +15,4 @@ reviewer_chain:
 
 # Clearance — Spec_Harness_Runtime_v1 v1.102 (B-48 apply arc)
 
-v1.101→v1.102: the C-RT-03 sub_agent_dispatch_max_workers field (minor, on the contract-v2 head) + NEW §14.8.10 executor contract (grow-on-demand, occupied+N+S shared-budget admission, atomic reservation, fail-fast never queue, cancel-path admission exemption, three-part cancellation policy + token cascade + job-wide fence + worker_draining_under_fence TERMINAL, pause/resume + selective contextvar riders with the B-39 boundary). PD-8 witness obligations ride the same-arc plan deltas.
+v1.101→v1.102: the C-RT-03 sub_agent_dispatch_max_workers field (minor, on the contract-v2 head) + NEW §14.8.10 executor contract (grow-on-demand, occupied+N+S shared-budget admission, atomic reservation, fail-fast never queue, ADMISSION RULE (sharpened rounds 6/15/17): initial branch-dispatching admission gated at ALL FOUR sites (incl. cancel-policy execution); only frame-releasing teardown of already-admitted branches exempt (rounds 6/15/17)

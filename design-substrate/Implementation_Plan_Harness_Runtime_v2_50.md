@@ -51,7 +51,7 @@ The filing's §4 obligations home as `Tests:` criteria (every new witness PD-8 m
 
 ### §1.2 U-RT-141 — grow-on-demand dispatch executor + shared frame budget + admission + lifecycle (v1.102 §14.8.10.1)
 
-**Implements:** Runtime spec v1.102 §14.8.10.1 (custom grow-on-demand executor; occupied+N+S admission over ONE shared frame budget; atomic per-branch reservation; fail-fast at the cap NEVER queue; lifecycle on its own terms; fan-out resume semantics preserved). The CP-owned fan-out admission semantics (proceed-sites gated / cancel-sites exempt; admission-rejection = branch failure under §25.15) are DEFINED at CP spec v1.102 §1 and homed at CP plan v2.39 (U-CP-85/86/88) — cross-referenced, never restated.
+**Implements:** Runtime spec v1.102 §14.8.10.1 (custom grow-on-demand executor; occupied+N+S admission over ONE shared frame budget; atomic per-branch reservation; fail-fast at the cap NEVER queue; lifecycle on its own terms; fan-out resume semantics preserved). The CP-owned fan-out admission semantics (ADMISSION RULE (sharpened rounds 6/15/17): initial branch-dispatching admission gated at ALL FOUR sites (incl. cancel-policy execution); only frame-releasing teardown of already-admitted branches exempt (rounds 6/15/17); admission-rejection = branch failure under §25.15) are DEFINED at CP spec v1.102 §1 and homed at CP plan v2.39 (U-CP-85/86/88) — cross-referenced, never restated.
 
 **Depends on:** [U-RT-140 (the cap field + typed capacity error), U-CORE-03 (cross-package: harness-core — the shared capacity error the adapter raises; Core plan v1.3; codex round-9)].
 

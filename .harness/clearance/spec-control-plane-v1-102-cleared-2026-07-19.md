@@ -15,4 +15,4 @@ reviewer_chain:
 
 # Clearance — Spec_Control_Plane_v1_102 v1.102 (B-48 apply arc)
 
-v1.101→v1.102: AMENDED §25.11 (fan-out capacity gating under the single authority; proceed-sites gated, cancel-sites exempt; admission-rejection = §25.15 branch failure; depth phrase retired via FORMAL DELEGATION, width-3 preserved) + the B-39 interim sequencing constraint. PD-8 witness obligations ride the same-arc plan deltas.
+v1.101→v1.102: AMENDED §25.11 (fan-out capacity gating under the single authority; ADMISSION RULE (sharpened rounds 6/15/17): initial branch-dispatching admission gated at ALL FOUR sites (incl. cancel-policy execution); only frame-releasing teardown of already-admitted branches exempt (rounds 6/15/17); admission-rejection = §25.15 branch failure; depth phrase retired via FORMAL DELEGATION, width-3 preserved) + the B-39 interim sequencing constraint. PD-8 witness obligations ride the same-arc plan deltas.

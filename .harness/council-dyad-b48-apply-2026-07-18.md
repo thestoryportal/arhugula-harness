@@ -3,7 +3,7 @@
 VERDICT: 16/16 CONFIRM (all §4 obligations 1-10 + §5 riders a-f), ZERO deviations. T-perm-3 (C1⊥C9 capacity-authority) surfaced + probe-resolved: §25.11's "with depth" names no value/carrier (Spec_Control_Plane_v1_32.md byte-verified) and sub_agent_descent is boolean (workflow_driver_types.py:319) — NO second authority exists on main; formal delegation to the executor cap stands, width-3 (C-CP-10 §10.3) preserved, typed step-attributable error required.
 
 TWO APPLY-NOTES for the spec-writer (both §4-6):
-1. CANCEL-PATH ADMISSION EXEMPTION: _run_fanout_to_completion has FOUR construction sites — the two _proceed_fanout strategy sites (workflow_driver.py:7974, 11238) are admission-GATED; the two _cancel_fanout sites (:8336, :11589) are recovery machinery and MUST be admission-EXEMPT (admission that can reject recovery converts a capacity breach into a stranded parent).
+1. CANCEL-PATH ADMISSION EXEMPTION: _run_fanout_to_completion has FOUR construction sites — the two _proceed_fanout strategy sites (workflow_driver.py:7974, 11238) are admission-GATED; ADMISSION RULE (sharpened rounds 6/15/17): initial branch-dispatching admission gated at ALL FOUR sites (incl. cancel-policy execution); only frame-releasing teardown of already-admitted branches exempt (rounds 6/15/17).
 2. ADMISSION-REJECTION = BRANCH FAILURE: a cap-rejected branch enters the fan-out as a branch outcome composing with the EXISTING §25.15 cascade_policy table — no new control-transfer mode.
 
 CITE-HYGIENE: the rider cites the real carrier — dedicated loop + ThreadPoolExecutor(max_workers=max(1,len(branch_plan)), thread_name_prefix="cp-fanout") installed as loop default executor at workflow_driver.py:6288-6316; shutdown(wait=False) abandonment at :6339.
