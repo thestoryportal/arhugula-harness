@@ -992,15 +992,13 @@ items:
     2026-07-17 at .harness/class_1_fork_b51_b52_b54_od_signing_amendment_arc.md (leg 1) -- spec+plan deltas APPLIED 2026-07-18 (PR 1056); the impl arc is the live next step (U-OD-30 amended + U-CP-72 + U-RT-137).'
   close_out: 'Fork doc RATIFIED 2026-07-18; spec deltas APPLIED at OD v1.34 + CP v1.101 + Runtime v1.101 + plans (PR 1056). IMPL ARC: implement the
     APPLIED fifth-segment + tenant-bearing API per U-OD-30 (amended) + U-CP-72 + U-RT-137 (the
-    canonical-message contract now LIVES at OD v1.34 section 21.2.1 — no further OD amendment owed). The segment needs tenant identity AVAILABLE AT SIGNING (codex round-16): today
-    sign_audit_entry/cp_audit_to_od_audit receive no tenant and the writer gets tenant_id only after
-    the entry is signed -- the fork specifies a tenant-bearing signing API threaded through the
-    converters/composers AND the non-converter paths the filing enumerates (the direct
-    AuditLedgerRedactionTokenMap compose path; sign_rotation_pair -- thread or defer/prohibit
-    multi-tenant use pending B-33; the workflow-less RuntimeLLMDispatcher.prewarm path, which signs
-    with tenant_id=None -- deployment tenant or an explicit synthetic-scope policy), plus the MTC
-    tenant-scope bootstrap invariant with its _single-history migration/legacy-read story. See the
-    filing for the full rider.'
+    canonical-message contract now LIVES at OD v1.34 section 21.2.1 — no further OD amendment owed). The applied obligations (rejected alternatives REMOVED per the ratified gate): the tenant-bearing
+    API threads the converters/composers AND the redaction-map compose path (OD v1.34 section 21.2.1
+    rows 3-4); sign_rotation_pair is PROHIBITED at MTC until B-33 (row 7 -- threading was rejected);
+    the workflow-less prewarm path is REMOVED at MTC by the gate-item-8 disable (U-RT-135 -- no
+    synthetic-scope policy); the MTC tenant bootstrap invariant + the record-authenticated retag
+    migration story land per U-RT-134/U-RT-102. See OD v1.34 + the plan deltas for the full
+    contracts.'
   council: 'yes at apply leg -- C7 compliance vs C2 schema-minimalism dyad, REQUIRED by the
     ratified filing''s final section (dyad 1)'
   heading: '### B-51 · Tenant-scope binding under deployment-scoped keys *(split from B-47 disposition,
