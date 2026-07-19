@@ -26,6 +26,8 @@ ADDITIVE / amended-unit scope only. ZERO new atomic units; ZERO new contract IDs
 
 ---
 
+**Cross-package capacity-authority carrier (codex round-1 on the apply PR — the cycle-safe seam, mirroring the Arc A verifier-seam precedent):** `harness-cp` has NO `harness-runtime` dependency and must not gain one — the amended U-CP-85/86/88 therefore consume the executor cap through a CP-DECLARED capacity-authority Protocol (frame-unit admission surface: atomic `try_reserve(frames) -> bool`-shaped acquisition + paired release; exact names implementation-discretion, non-binding), injected into the fan-out execution path via the existing DriverContext/runtime-services injection pattern (the §14.9.3-style composition-root threading). U-RT-141 SUPPLIES the adapter over the real executor at the `harness-runtime` composition root and INTEGRATION-TESTS the real authority through the CP fan-out (co-land pin). Package-graph witness: `harness-cp` contains no `harness_runtime` import (mutation probe: adding one fails). Absent-injected-authority behavior: the fan-out runs UNGATED exactly as pre-v1.102 (byte-preserved for non-composed callers/tests) — the composition root always injects in production. CXA disposition, grounded: `harness-runtime` is the composition layer, not a 4×4-matrix axis — runtime-service injection through a CP-declared protocol is the committed §14.9.3 pattern (trust-evaluator precedent), NOT a new inter-axis edge; no CXA delta owed.
+
 ## §1 U-CP-86 amendment — `PARALLELIZATION` fan-out under the single capacity authority (CP v1.102 §1 + §3)
 
 The v2.37 U-CP-86 body is PRESERVED VERBATIM; v2.39 adds:
