@@ -103,6 +103,9 @@ from harness_cp.per_step_override_evaluator import (
     compose_override_entry_payload,
     resolve_step_binding,
 )
+from harness_cp.sub_agent_dispatch_cancellation import (
+    DISPATCH_CANCEL_TOKEN_VAR as _DISPATCH_CANCEL_TOKEN_VAR,
+)
 from harness_cp.topology_pattern import CascadePolicy, TopologyPattern
 from harness_cp.workflow_driver_errors import (
     BranchBarrierDeadlineExceededError,
@@ -4191,6 +4194,19 @@ def _execute_workflow_body(
                 idempotency_key=resume_snapshot.effect_fence_resume.idempotency_key,
             )
     for step_index, step in enumerate(steps[resume_at:], start=resume_at):
+        # B-48 (U-RT-143; Runtime spec v1.102 §14.8.10.3 part 1): cooperative
+        # CANCEL-TOKEN consult at every step boundary. When this driver runs
+        # as an OFFLOADED sub-agent child (the token rides the ambient
+        # per-job ContextVar carried into the worker), a tripped job-wide
+        # effect fence stops the child BEFORE its next step begins — the
+        # signal is a BaseException, so no recovery arm below can swallow it;
+        # it propagates to the job boundary where the runtime discards
+        # in-flight results and acks the fence. Non-offloaded runs (no
+        # ambient token) are byte-unchanged.
+        _dispatch_cancel_token = _DISPATCH_CANCEL_TOKEN_VAR.get()
+        if _dispatch_cancel_token is not None:
+            _dispatch_cancel_token.check()
+
         # § 25.4 row "Per-step pre-entry" — drain check before entering next
         # step (U-CP-57 AC #2; Path B operator-ratified — no `step.boundary`
         # emit at this site to preserve §5.2 step.kind 5-value enum). On

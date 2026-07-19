@@ -92,6 +92,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
@@ -228,12 +229,29 @@ class SyncDispatcherFacade:
         )
 
         branch_lease = BRANCH_CAPACITY_LEASE_VAR.get()
+        # B-48 (U-RT-143; §14.8.10.3): a fresh per-dispatch cancel token,
+        # LINKED to any ambient ancestor token — this thread is a worker of an
+        # enclosing offloaded job during recursive descent, so its context
+        # carries the ancestor's token and tripping the ancestor fences this
+        # whole chain (the token cascade). The token is re-bound into the
+        # loop-side task (same bridge problem as the branch lease) so the
+        # offload venue, the child driver's step boundaries, the retry loop's
+        # effect entries, and the post-child audit persists all read it.
+        from harness_cp.sub_agent_dispatch_cancellation import (
+            DISPATCH_CANCEL_TOKEN_VAR,
+            DispatchCancelToken,
+            FenceAckOutcome,
+        )
+
+        cancel_token = DispatchCancelToken(parent=DISPATCH_CANCEL_TOKEN_VAR.get())
         coro = _ack_on_completion(
-            _rebind_branch_lease(
+            _rebind_dispatch_context(
                 self.inner.dispatch(binding, step, step_context=step_context),
                 branch_lease,
+                cancel_token,
             ),
             completion_ack,
+            cancel_token,
         )
         future = asyncio.run_coroutine_threadsafe(coro, self.loop)
         try:
@@ -249,32 +267,53 @@ class SyncDispatcherFacade:
             # `call_soon_threadsafe`, so `.cancel()` is safe to call here
             # from this (worker) thread.
             future.cancel()
+            # B-48 (U-RT-143; §14.8.10.3 part 2/3): trip the JOB-WIDE effect
+            # fence — no further F2/audit writes begin anywhere in the job
+            # (post-child persists included; cascades through descent) —
+            # then run the bounded join to the fence acknowledgement.
+            cancel_token.trip()
             # Codex rounds 3-5 (B-47 PR B2a): wait for the dispatch task to
             # ACKNOWLEDGE cancellation before surfacing — the ack fires only
             # after run_audit_off_loop's join-on-cancel, so no audit write
-            # for this step lands after the raise. When even the grace
-            # expires (a stalled KMS sign / sync work on the loop), the
-            # timeout is flagged UNRESOLVED via `audit_drain_incomplete` —
-            # NOT a subclass: harness-cp's driver classifies by
-            # `type(exc).__name__ == "StepDispatchTimeoutError"` (it cannot
-            # import runtime types), so a subclass would silently fall out
-            # of the RT-FAIL-STEP-DISPATCH-TIMEOUT taxonomy (codex round-5
-            # P2).
+            # for this step lands after the raise. B-48 extends the join to
+            # the WORKER job's fence ack (an offloaded worker outlives the
+            # cancelled task); the two waits share ONE grace deadline. The
+            # disposition rides attributes, NOT a subclass: harness-cp's
+            # driver classifies by `type(exc).__name__ ==
+            # "StepDispatchTimeoutError"` (it cannot import runtime types),
+            # so a subclass would silently fall out of the
+            # RT-FAIL-STEP-DISPATCH-TIMEOUT taxonomy (codex round-5 P2).
+            join_deadline = time.monotonic() + _AUDIT_DRAIN_GRACE_SECONDS
             acked = completion_ack.wait(timeout=_AUDIT_DRAIN_GRACE_SECONDS)
+            remaining_grace = max(0.0, join_deadline - time.monotonic())
+            fence_outcome = cancel_token.wait_ack(grace_seconds=remaining_grace)
+            drain_incomplete = not acked or fence_outcome is FenceAckOutcome.UNACKED_DRAINING
             timeout_error = StepDispatchTimeoutError(
                 f"step dispatch exceeded {self.result_timeout_seconds}s bound"
                 + (
                     ""
-                    if acked
+                    if not drain_incomplete
                     else (
-                        f" AND the dispatch task did not acknowledge "
-                        f"cancellation within the {_AUDIT_DRAIN_GRACE_SECONDS}s "
-                        f"grace — audit writes for the abandoned step may "
-                        f"still land; do not blindly retry this step"
+                        f" AND the dispatch did not acknowledge the tripped "
+                        f"effect fence within the {_AUDIT_DRAIN_GRACE_SECONDS}s "
+                        f"grace (disposition: {fence_outcome.value}) — the "
+                        f"worker is draining under the fence; effects are "
+                        f"AMBIGUOUS and this step is PERMANENTLY TERMINAL; "
+                        f"do not retry — workflow re-run after drain is an "
+                        f"operator action"
                     )
                 )
+                + (
+                    f" (disposition: {fence_outcome.value} — an effect-bearing "
+                    f"operation was in flight at fence trip; effects AMBIGUOUS, "
+                    f"step PERMANENTLY TERMINAL, worker finished — no drain in "
+                    f"progress)"
+                    if fence_outcome is FenceAckOutcome.ACKED_EFFECT_AMBIGUOUS
+                    else ""
+                )
             )
-            timeout_error.audit_drain_incomplete = not acked  # type: ignore[attr-defined]
+            timeout_error.audit_drain_incomplete = drain_incomplete  # type: ignore[attr-defined]
+            timeout_error.fence_ack_outcome = fence_outcome.value  # type: ignore[attr-defined]
             raise timeout_error from exc
 
     def cohort_key(
@@ -296,35 +335,43 @@ class SyncDispatcherFacade:
         return None
 
 
-async def _ack_on_completion(coro: Any, ack: threading.Event) -> Any:
-    """Await `coro`; set `ack` in the finally — the per-dispatch completion
-    acknowledgement the facade's timeout path waits on (codex round-5 P1)."""
+async def _ack_on_completion(coro: Any, ack: threading.Event, cancel_token: Any) -> Any:
+    """Await `coro`; ack in the finally — the per-dispatch completion
+    acknowledgement the facade's timeout path waits on (codex round-5 P1).
+
+    B-48 (U-RT-143): also acks the dispatch's cancel token FROM THE TASK —
+    honored only when ack ownership was not deferred to a worker job (the
+    offload venue defers it, since a cancelled task's finally fires while
+    the worker may still be running)."""
     try:
         return await coro
     finally:
         ack.set()
+        cancel_token.ack_from_task()
 
 
-async def _rebind_branch_lease(coro: Any, lease: Any) -> Any:
-    """Re-bind a fan-out branch's capacity lease inside the loop-side task.
+async def _rebind_dispatch_context(coro: Any, lease: Any, cancel_token: Any) -> Any:
+    """Re-bind the branch lease + cancel token inside the loop-side task.
 
-    B-48 (U-RT-142): a ContextVar set in the branch worker thread does not
+    B-48 (U-RT-142/143): ContextVars set in the branch worker thread do not
     survive `run_coroutine_threadsafe` (the task is created in the loop's
-    context), so the facade captures the lease worker-side and re-sets it
-    here — inside the running task, where nested awaits (the composer's
-    offload venue) can read it. `None` (no fan-out lease) awaits verbatim.
+    context), so the facade captures them worker-side and re-sets them here —
+    inside the running task, where nested awaits (the composer's offload
+    venue, the retry loop's effect entries) can read them.
     """
-    if lease is None:
-        return await coro
+    from harness_cp.sub_agent_dispatch_cancellation import DISPATCH_CANCEL_TOKEN_VAR
     from harness_cp.sub_agent_dispatch_capacity_authority import (
         BRANCH_CAPACITY_LEASE_VAR,
     )
 
-    token = BRANCH_CAPACITY_LEASE_VAR.set(lease)
+    token_reset = DISPATCH_CANCEL_TOKEN_VAR.set(cancel_token)
+    lease_reset = BRANCH_CAPACITY_LEASE_VAR.set(lease) if lease is not None else None
     try:
         return await coro
     finally:
-        BRANCH_CAPACITY_LEASE_VAR.reset(token)
+        if lease_reset is not None:
+            BRANCH_CAPACITY_LEASE_VAR.reset(lease_reset)
+        DISPATCH_CANCEL_TOKEN_VAR.reset(token_reset)
 
 
 def materialize_sync_dispatcher_facade(

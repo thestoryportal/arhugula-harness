@@ -102,6 +102,7 @@ KMS / keystore deferral).
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import logging
@@ -665,7 +666,28 @@ class RuntimeSubAgentDispatcher:
         paths), the failure is swallowed and ``(cp_entry, None)`` is
         returned — the dispatch fact at 8a is preserved per spec
         §14.7.2 step 8 failure-semantics paragraph.
+
+        B-48 (U-RT-143; §14.8.10.3 part 2): the JOB-WIDE effect fence covers
+        these post-child persists — all four call sites route through here,
+        so ONE fence consult suppresses the 8b/8c/8d writes after the fence
+        trips (else entries land after `StepDispatchTimeoutError` despite
+        the no-late-effects guarantee). The 8a composition still runs (pure,
+        no effect); the write half is guarded as an effect entry so the
+        fence-ack's in-flight-at-trip flag is truthful.
         """
+        from harness_cp.sub_agent_dispatch_cancellation import (
+            DISPATCH_CANCEL_TOKEN_VAR,
+        )
+
+        _fence_token = DISPATCH_CANCEL_TOKEN_VAR.get()
+        if _fence_token is not None and _fence_token.tripped:
+            logging.getLogger("harness.runtime.sub_agent_dispatch").warning(
+                "sub-agent dispatch audit persist SUPPRESSED by tripped "
+                "effect fence (parent_action_id=%s) — no F2/audit write "
+                "begins after the fence (Runtime spec v1.102 §14.8.10.3)",
+                parent_action_id,
+            )
+            return (None, None)
         # Per-dispatch discriminator, resolved once and shared by both the 8a
         # CP audit entry's action_id and the 8b F2 dispatch-action action_id
         # below — `descent` carries no `child_index` field today; `getattr`
@@ -705,7 +727,19 @@ class RuntimeSubAgentDispatcher:
         # chain hash + the OD type accepts opaque str).
         dispatch_action_id = Identifier(f"dispatch:{parent_action_id}:{child_index}")
 
+        # B-48 (U-RT-143): the 8b-8d write phase is an EFFECT ENTRY — entering
+        # consults the fence (closing the check-then-write race window) and
+        # marks the write in flight so the fence-ack's in-flight-at-trip flag
+        # is truthful. `DispatchFenceTrippedSignal` is a BaseException: the
+        # `except Exception` swallow arms below cannot absorb it, so a fence
+        # trip propagates to the job boundary per the at-most-once discipline.
+        _effect_guard = (
+            _fence_token.effect_entry() if _fence_token is not None else contextlib.nullcontext()
+        )
+        _effect_entered = False
         try:
+            _effect_guard.__enter__()
+            _effect_entered = True
             # 8b — F2-write the dispatch action. branch_metadata intentionally
             # omitted (defaults None): CP spec v1.32 §25.13 / IS spec v1.8 §5.4
             # scope that sidecar to the CP WorkflowDriver's branch-spawn/terminal
@@ -774,6 +808,11 @@ class RuntimeSubAgentDispatcher:
                     f"parent_action_id={parent_action_id!r}: {exc}"
                 ) from exc
             return cp_entry, None
+        finally:
+            # Paired exit for the B-48 effect guard — decrement in-flight
+            # only if entry succeeded (a fence trip at entry never counted).
+            if _effect_entered:
+                _effect_guard.__exit__(None, None, None)
 
         return cp_entry, write_result
 

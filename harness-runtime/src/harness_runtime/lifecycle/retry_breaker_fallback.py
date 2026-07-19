@@ -872,6 +872,21 @@ class RetryBreakerFallbackDispatcher:
         replay_disposition = REPLAY_DISPOSITION_MAPPING[binding.engine_class]
 
         for attempt in range(policy.max_attempts):
+            # B-48 (U-RT-143; §14.8.10.3 part 1, EFFECT-ENTRY EXTENSION,
+            # codex round-37): the per-attempt loop can begin another paid
+            # provider call without returning to the driver, so the job's
+            # cancel token is consulted BEFORE any new attempt — a tripped
+            # token means no new attempt begins (in-step retries cannot
+            # outlive the fence; an attempt already in flight remains the
+            # honestly-stated limit). `DispatchFenceTrippedSignal` is a
+            # BaseException — it propagates past the generic arms below.
+            from harness_cp.sub_agent_dispatch_cancellation import (
+                DISPATCH_CANCEL_TOKEN_VAR,
+            )
+
+            _cancel_token = DISPATCH_CANCEL_TOKEN_VAR.get()
+            if _cancel_token is not None:
+                _cancel_token.check()
             with tracer.start_as_current_span("harness.runtime.retry_attempt") as inner_span:
                 # CP-canonical retry.* 6-attribute namespace per Spec_Control_Plane_v1_3.md
                 # §3.5 + ADR-D1 v1.2 §1.1.1 + landed carrier at

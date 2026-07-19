@@ -1061,6 +1061,9 @@ class RuntimeHITLGateComposer:
         `contextvars.copy_context()` for trace continuity (§14.8.10.4 item 5;
         the per-child channel/registry riders are U-RT-144's layer).
         """
+        from harness_cp.sub_agent_dispatch_cancellation import (
+            DISPATCH_CANCEL_TOKEN_VAR,
+        )
         from harness_cp.sub_agent_dispatch_capacity_authority import (
             BRANCH_CAPACITY_LEASE_VAR,
         )
@@ -1071,10 +1074,30 @@ class RuntimeHITLGateComposer:
         own_lease = None
         if BRANCH_CAPACITY_LEASE_VAR.get() is None:
             own_lease = executor.reserve(1, step_id=step_id, descent_chain=(step_id,))
+        # §14.8.10.3: ack ownership moves to the WORKER job — a cancelled
+        # loop-side task's finally fires while the worker may still run, so a
+        # task-level ack would falsely report the fence drained. The worker's
+        # own finally acks at ACTUAL job termination; the fence is consulted
+        # once more at job start (a token tripped before the worker picked
+        # the job up means no effect has begun — the cleanest abort).
+        cancel_token = DISPATCH_CANCEL_TOKEN_VAR.get()
+        if cancel_token is not None:
+            cancel_token.defer_ack_to_job()
         carried = contextvars.copy_context()
-        future = executor.submit(
-            lambda: carried.run(self.inner.dispatch, binding, step, step_context=step_context)
-        )
+
+        def _job() -> Mapping[str, Any]:
+            try:
+                if cancel_token is not None:
+                    cancel_token.check()
+                return cast(
+                    Mapping[str, Any],
+                    carried.run(self.inner.dispatch, binding, step, step_context=step_context),
+                )
+            finally:
+                if cancel_token is not None:
+                    cancel_token.ack()
+
+        future = executor.submit(_job)
         if own_lease is not None:
             release_lease = own_lease.release
             future.add_done_callback(lambda _f: release_lease())
