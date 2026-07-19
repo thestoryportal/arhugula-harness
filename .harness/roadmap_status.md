@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `b3fdc31a5867` |
-| `last_refreshed` | 2026-07-18T00:00:00Z |
-| `git_head` | `6c3f83ac` —  |
+| `workspace_state_hash` | `64a8edeadf51` |
+| `last_refreshed` | 2026-07-19T00:00:00Z |
+| `git_head` | `153d4ba9` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 93 |
 
@@ -24,7 +24,7 @@
 
 **Frontier.** R-FS-1 Tier-1 is closed. The frozen order is complete (11/11), the standalone `B-*` register derives **69 closed / 0 forward / 0 gated / 4 resolved**, `closure_gate.py` G1.1 is **0+0**, automatable Tier-1 predicates pass, and manual G1.4/G1.7/G1.8 sign-off is recorded at `.harness/r-fs-1-tier1-manual-signoff.json`.
 
-**Current next action.** **PR #1056 MERGED — ARC A (the B-51/B-52/B-54(+B-53) spec-apply pass) COMPLETE.** OD v1.33→v1.34 + CP v1.100→v1.101 (C-RT-03 contract v1→v2 per its own evolution clause) + Runtime v1.100→v1.101 + plan deltas v2.29/v2.38/v2.49 (NEW U-OD-55, U-RT-134..139) + CXA v2.20→v2.21 (§2.3.9 B-54 verifier seam, R-planned) + 7 clearance markers, hardened over 54 out-of-family codex rounds; register rows B-51/B-52/B-53/B-54 OPEN (impl units named per-row); NEW rows B-55 (operator_gated — lower-tier fail-closed prewarm posture) + B-56 (registered_finding — corrected-relabel repair). NEXT SESSION — **Arc B, the B-48 apply arc** per `.harness/class_2_fork_b48_sync_subagent_dispatch_offload.md` §4/§5 (RATIFIED option B): C-RT-03 cap field, C-IS-07 drain-timestamp back-flow + xfail removal, CP §25.11 riders, Runtime deltas, C1/C9 apply-leg council, then the grow-on-demand executor per obligations 1-10. THEN the B-51/B-52/B-54/B-53 impl arcs (U-OD-30/55 + U-CP-72/73/44/45/42 + U-RT-134..139 + U-RT-102 against the amended specs). Dormant boundaries unchanged. Register: 57 items / 4 open / 2 design_substrate_gated / 6 registered_finding / 2 operator_gated / 1 held / 42 closed. **Standing note:** operator has granted forward-work merge permission without per-instance HIL, conditioned on CI fully passing green before any merge — applied through PR #1056.
+**Current next action.** **PR #1058 MERGED — ARC B (the B-48 spec-apply bundle) COMPLETE** (50 codex rounds to convergence): Runtime v1.101→v1.102 (C-RT-03 `sub_agent_dispatch_max_workers` + NEW §14.8.10 executor contract — whole-fan-out atomic admission, reservation leases, three-part cancellation + effect-entry token, two-outcome fence-ack, §3 C-RT-04 `capacity_authority` binding) + CP v1.101→v1.102 (§25.11 gating at all four sites, formal depth delegation, B-39 interim target-first sequencing, NEW U-CP-101 Protocol home) + IS v1.10→v1.11 (§7.6 writer-owned drain timestamps + the offloaded sub-agent audit carve-out) + Core plan v1.3 (U-CORE-03) + plans v2.50/v2.39/v2.7 + 8 clearance markers; C1⊥C9 dyad 16/16 CONFIRM; NEW register rows B-57 (direct-writer timestamp residual) + B-58 (pre-existing cp→runtime import). NEXT SESSION — **the B-48 EXECUTOR IMPL ARC**: implement U-CORE-03 → U-CP-101 → {U-RT-140..144, U-CP-82/85/86/88/89 amendments, U-IS-11 §7.6} per the one-arc co-land pins, all witnesses PD-8 mutation-probed, through the full pipeline (tests → codex convergence → merge-gate 3-lens [CODE PR — gate FIRES] → CI → merge → refresh). THEN the B-51/B-52/B-54/B-53 impl arcs (U-OD-30/55 + U-CP-72/73/44/45/42 + U-RT-134..139 + U-RT-102). Register: 59 items / 5 open / 1 design_substrate_gated / 8 registered_finding / 2 operator_gated / 1 held / 42 closed. **Standing note:** operator merge permission without per-instance HIL, conditioned on CI fully green — applied through PR #1058.
 
 **Recurring lanes** continue on cadence: `R-600-pattern-bake-in-sweep` (cadence-8 closed this refresh, PD-8 promoted; next due ~10 PRs out) and `R-IF-roadmap-refresh`. Out-of-family review continues as a codified default gate, not as an open roadmap arc.
 
@@ -56,11 +56,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1058 | 2026-07-19 | Arc B spec bundle COMPLETE: B-48 ratified apply — Runtime v1.102 (C-RT-03 cap + §14.8.10 executor contract) + CP v1.102 (§25.11 gating + NEW U-CP-101) + IS v1.11 (§7.6 writer-owned drain timestamps) + Core v1.3 (U-CORE-03) + plans v2.50/v2.39/v2.7 + 8 markers; 50 codex rounds; B-57/B-58 registered |
 | PR #1056 | 2026-07-18 | Arc A COMPLETE: B-51/B-52/B-54(+B-53) ratified apply pass — OD v1.34 + CP v1.101 + Runtime v1.101 (C-RT-03 contract v2) + plan deltas v2.29/v2.38/v2.49 + CXA v2.21 §2.3.9 + 7 clearance markers + 3 all-CONFIRM council dyads; 54 codex rounds to convergence; B-55/B-56 registered |
 | PR #1054 | 2026-07-18 | Operator ratification of both fork gates recorded (B-51/B-52/B-54+B-53 ten-item gate + B-48 option B); councils promoted to required; apply arcs open |
 | 1052 | 2026-07-18 | B-46 CLOSED — canonical-file cross-process lock (11 codex rounds + 2-round merge-gate, ~24 mutation classes killed). FORWARD MENU EXHAUSTED: every remaining register row awaits the batched operator gates (B-51/B-52/B-54(+B-53) ratification + B-48 selection) or holds a ratified dormancy boundary (B-16/B-30/B-33/B-44/B-45/B-17/R-1). Loop stands down for operator review |
 | 1050 | 2026-07-18 | B-43 CLOSED (in-place v1.32 §7.1 correction + clearance marker + full stale-copy sweep incl. root CLAUDE.md §2.3 + pointer-index heads CP v1.100/OD v1.33/Runtime v1.100); B-33 grounded dormant (sole rotation caller still test-only). Remaining Claude-buildable: B-46 (canonical-file locking arc). Then stand-down: all else awaits the batched operator gates |
-| 1048 | 2026-07-18 | B-48 Class 2 fork filing merged — sync sub-agent dispatch offload (23 codex rounds): custom grow-on-demand executor + occupied+N+S frame budget (default 256), token+fence+join cancellation cascading through recursive dispatch, B-39 dependency, CP/IS/Runtime riders. B-48 flipped design_substrate_gated. Awaiting operator selection (batches with the B-51/B-52/B-54 gate) |
 ---
 
 ---
