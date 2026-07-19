@@ -55,6 +55,21 @@ def test_capacity_error_root_descent_and_carrier_shape() -> None:
     }
 
 
+def test_capacity_error_carries_canonical_rt_fail_class_marker() -> None:
+    """B-48 (codex round-4 [P2] "surface the canonical capacity failure
+    class"): `harness_cp.workflow_driver._step_fail_class` reads
+    `getattr(exc, "rt_fail_class", None)` (it cannot import runtime/core
+    exception TYPES across some boundaries, so it name/attribute-matches) —
+    without this marker, a persisted/user-facing failure would surface the
+    bare Python class name `SubAgentDispatchCapacityError` instead of the
+    Runtime spec v1.102 §14.8.10.5 taxonomy code."""
+    err = SubAgentDispatchCapacityError(
+        requested_frames=1, available_capacity=0, step_id="s", descent_chain=()
+    )
+    assert err.rt_fail_class == "RT-FAIL-SUB-AGENT-DISPATCH-CAPACITY"
+    assert type(err).rt_fail_class == "RT-FAIL-SUB-AGENT-DISPATCH-CAPACITY"
+
+
 def test_capacity_error_direct_import_matches_package_export() -> None:
     """AC #2 — the package-level re-export is the same object as the direct
     carrier-module import (no shadowing/copy)."""

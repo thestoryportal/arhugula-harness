@@ -33,6 +33,15 @@ class SubAgentDispatchCapacityError(Exception):
 
     __slots__ = ("available_capacity", "descent_chain", "requested_frames", "step_id")
 
+    #: codex round-4 [P2] "surface the canonical capacity failure class" —
+    #: `harness_cp.workflow_driver._step_fail_class` reads this via
+    #: `getattr(exc, "rt_fail_class", None)` so a persisted/user-facing
+    #: failure carries the Runtime spec v1.102 §14.8.10.5 taxonomy code
+    #: instead of the bare Python class name. A CLASS attribute (not a
+    #: `__slots__` member) — identical for every instance, no per-instance
+    #: storage needed.
+    rt_fail_class = "RT-FAIL-SUB-AGENT-DISPATCH-CAPACITY"
+
     def __init__(
         self,
         *,

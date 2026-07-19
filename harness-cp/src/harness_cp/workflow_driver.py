@@ -2275,6 +2275,41 @@ async def cascade_cancel_barrier[T](
         _BRANCH_INFLIGHT_DISPATCHES.reset(registry_token)
 
 
+def _dispatch_releasing_admission(
+    dispatcher: StepDispatcher,
+    binding: StepEffectiveBinding,
+    step: WorkflowStep,
+    step_context: StepExecutionContext,
+    admission: CapacityLease | SubAgentDispatchCapacityError,
+) -> Mapping[str, Any]:
+    """Run `dispatcher.dispatch(...)`; release `admission`'s frame lease in
+    THIS function's own `finally` (B-48; codex round-3 [P1] "hold leases
+    until abandoned branch threads terminate" + concurrency-lens Finding 1).
+
+    Runs on the SAME worker thread as `dispatcher.dispatch` itself (both are
+    the callable passed to `asyncio.to_thread`), so this `finally` fires at
+    the dispatch's REAL completion — success, error, OR the dispatcher's own
+    internal timeout — regardless of what the ASYNCIO-level wrapping Task's
+    cancellation state is. A cascade-cancel / barrier-deadline cuts `inflight`
+    off at the asyncio layer (`inflight.cancel()`), but that does NOT stop a
+    already-running sync blocking call on its worker thread (the same
+    property `SyncDispatcherFacade.dispatch`'s own internal
+    `result_timeout_seconds` bound exists to eventually resolve) — a release
+    keyed off the asyncio Task's own (cancelled) completion state races ahead
+    of the real work and under-counts real occupied frames while the
+    orphaned thread keeps running. Tying release to THIS function's own
+    return/raise closes that gap for every dispatcher shape uniformly
+    (facade-backed or a synthetic test dispatcher), since `dispatcher.
+    dispatch` is always invoked as a plain sync callable on the worker
+    thread regardless of what wraps it.
+    """
+    try:
+        return dispatcher.dispatch(binding, step, step_context=step_context)
+    finally:
+        if isinstance(admission, CapacityLease):
+            admission.release_unless_job_bound()
+
+
 async def dispatch_branch_step_shielded[T](inflight: asyncio.Future[T]) -> T:
     """Await an in-flight effectful step dispatch with `asyncio.shield` so a
     cascade-cancel of this branch does NOT abandon the in-flight effect
@@ -7998,17 +8033,27 @@ def _execute_parallelization(
                     raise _admission
                 _lease_token = _BRANCH_CAPACITY_LEASE_VAR.set(_admission)
                 try:
+                    # Lease-lifecycle (§14.8.10.1): `_dispatch_releasing_
+                    # admission` releases `_admission` in ITS OWN finally,
+                    # tied to the dispatch's REAL worker-thread completion —
+                    # a §25.11 deadline cancelling THIS await does not stop
+                    # an already-running sync dispatch, so releasing here
+                    # instead (keyed off asyncio-level cancellation) would
+                    # under-count real occupied frames while the orphaned
+                    # thread keeps running (codex [P1] + concurrency-lens
+                    # Finding 1). An offloaded (SUB_AGENT_DISPATCH) branch
+                    # still transfers release ownership to its executor job
+                    # (`job_bound`) inside that same finally.
                     output = await asyncio.to_thread(
-                        dispatcher.dispatch, binding, step, step_context=child
+                        _dispatch_releasing_admission,
+                        dispatcher,
+                        binding,
+                        step,
+                        child,
+                        _admission,
                     )
                 finally:
                     _BRANCH_CAPACITY_LEASE_VAR.reset(_lease_token)
-                    # Lease-lifecycle (§14.8.10.1): held until ACTUAL job
-                    # termination — an offloaded (SUB_AGENT_DISPATCH) branch
-                    # transfers release ownership to its executor job
-                    # (`job_bound`); this CP-side release only fires for
-                    # branches that never reached the offload venue.
-                    _admission.release_unless_job_bound()
             except asyncio.CancelledError:
                 # The §25.11 wall-clock deadline cancelled this in-flight branch.
                 # Its dispatch was scheduled (the effect may have landed) → record
@@ -8056,6 +8101,20 @@ def _execute_parallelization(
                     _paused.child_workflow_id,
                     _paused.child_snapshot,
                 )
+                raise
+            except SubAgentDispatchCapacityError:
+                # codex round-4 [P2] "avoid recording rejected branches as
+                # executed" — this branch was REJECTED at admission (`raise
+                # _admission` above); the dispatcher was NEVER called, so it
+                # must NOT record a step entry or a `completed` terminal (the
+                # generic `except Exception` below would falsely claim
+                # execution — the durable ledger + `_finish`'s step count
+                # would then over-report). Zero footprint here; re-raise so
+                # the `return_exceptions=True` gather still marks the branch
+                # failed — `_synthesize_undispatched_terminals` (called before
+                # `_finish` at every `_proceed_fanout` exit) synthesizes its
+                # `cancelled` terminal from the marker-absence, exactly like
+                # the CASCADE_CANCEL/PAUSE tiers' identical rejection path.
                 raise
             except Exception:
                 # Ran-and-errored → record the step entry (obl. 3) + a `completed`
@@ -8173,6 +8232,12 @@ def _execute_parallelization(
                 salvage=True,
             )
         any_failed = any(isinstance(r, BaseException) for r in results)
+        # codex round-4 [P2] — a rejected (never-dispatched) branch has ZERO
+        # ledger footprint from `_proceed_branch`/`_proceed_worker` itself;
+        # synthesize its `cancelled` terminal here, mirroring the
+        # deadline-struck + paused-child exits above (idempotent no-op for
+        # branches that already recorded a disposition).
+        _synthesize_undispatched_terminals()
         if any_failed:
             return _finish(RunStatus.PARTIAL, fail_class=None, salvage=True)
         return _finish(RunStatus.SUCCESS, fail_class=None, salvage=False)
@@ -8248,8 +8313,14 @@ def _execute_parallelization(
             # keeps it alive against THIS branch's cancellation so an in-flight effect
             # runs to its own completion (obl. 1), and registers it for the barrier's
             # deadline watchdog (the hard "...or barrier-deadline timeout" cut-off).
+            # `_dispatch_releasing_admission` releases `_admission` in ITS OWN
+            # finally, tied to the dispatch's REAL worker-thread completion —
+            # see its own docstring for why a deadline-cutoff/cascade-cancel
+            # must NOT release via this coroutine's own asyncio-level state.
             inflight: asyncio.Future[Mapping[str, Any]] = asyncio.ensure_future(
-                asyncio.to_thread(dispatcher.dispatch, binding, step, step_context=child)
+                asyncio.to_thread(
+                    _dispatch_releasing_admission, dispatcher, binding, step, child, _admission
+                )
             )
             try:
                 output = await dispatch_branch_step_shielded(inflight)
@@ -8441,11 +8512,15 @@ def _execute_parallelization(
         finally:
             _BRANCH_CAPACITY_LEASE_VAR.reset(_lease_token)
             _DISPATCH_CANCEL_TOKEN_VAR.reset(_cancel_token_ctx)
-            # Lease-lifecycle (§14.8.10.1): an offloaded (SUB_AGENT_DISPATCH)
-            # branch transfers release ownership to its executor job
-            # (`job_bound`); this CP-side release only fires for branches
-            # that never reached the offload venue.
-            _admission.release_unless_job_bound()
+            # Lease-lifecycle (§14.8.10.1): `_dispatch_releasing_admission`
+            # (wrapping the dispatch call itself) releases `_admission` in
+            # ITS OWN finally, tied to the REAL worker-thread completion —
+            # releasing here too, unconditionally, would race ahead of an
+            # orphaned in-flight dispatch on the barrier-cutoff path and
+            # under-count real occupied frames (codex [P1] + concurrency-lens
+            # Finding 1). An offloaded (SUB_AGENT_DISPATCH) branch still
+            # transfers release ownership to its executor job (`job_bound`)
+            # inside that same finally.
 
     async def _cancel_fanout() -> list[None]:
         # B-39 interim constraint (CP spec v1.102 §3) — Phase 0: dispatch every
@@ -8532,25 +8607,40 @@ def _execute_parallelization(
                 # TimeoutError into an ExceptionGroup that `except TimeoutError` below does
                 # NOT catch (no implicit group unwrap) — a branch FAILURE, never the barrier
                 # deadline (W7 pins by execution).
-                async with asyncio.TaskGroup() as warmup_task_group:
-                    phase1_tasks = [
-                        warmup_task_group.create_task(_cancel_branch(*plan))
-                        for plan in _warmup_phase1
-                    ]
-                # NORMATIVE (§25.19; pre-build review B2, empirically convergent): collect
-                # `task.result()` BEFORE releasing Phase 2 — CPython's TaskGroup SWALLOWS a
-                # child that raises SPONTANEOUS CancelledError (a watchdog-cut future — e.g.
-                # an OUTER nested-fan-out barrier's earlier-armed watchdog cutting this
-                # inner Phase 1 inside the window where this inner timeout has not fired —
-                # or a sub-agent child's naked escape through `dispatch()`): the group exits
-                # CLEAN with task.cancelled()=True. Without this resurface the followers
-                # would dispatch AFTER the cut, inverting the v1.90 item-4 effect-set subset
-                # invariant on the tiers that exist to bound effects. `task.result()`
-                # re-raises the CancelledError — byte-matching the Phase-2 collection idiom
-                # below (EP9 pins; the K=1 degenerate case reduces to the pre-arc solo
-                # re-raise exactly).
-                for phase1_task in phase1_tasks:
-                    phase1_task.result()
+                try:
+                    async with asyncio.TaskGroup() as warmup_task_group:
+                        phase1_tasks = [
+                            warmup_task_group.create_task(_cancel_branch(*plan))
+                            for plan in _warmup_phase1
+                        ]
+                    # NORMATIVE (§25.19; pre-build review B2, empirically convergent): collect
+                    # `task.result()` BEFORE releasing Phase 2 — CPython's TaskGroup SWALLOWS a
+                    # child that raises SPONTANEOUS CancelledError (a watchdog-cut future — e.g.
+                    # an OUTER nested-fan-out barrier's earlier-armed watchdog cutting this
+                    # inner Phase 1 inside the window where this inner timeout has not fired —
+                    # or a sub-agent child's naked escape through `dispatch()`): the group exits
+                    # CLEAN with task.cancelled()=True. Without this resurface the followers
+                    # would dispatch AFTER the cut, inverting the v1.90 item-4 effect-set subset
+                    # invariant on the tiers that exist to bound effects. `task.result()`
+                    # re-raises the CancelledError — byte-matching the Phase-2 collection idiom
+                    # below (EP9 pins; the K=1 degenerate case reduces to the pre-arc solo
+                    # re-raise exactly).
+                    for phase1_task in phase1_tasks:
+                        phase1_task.result()
+                except BaseException:
+                    # codex round-4 [P1] "release withheld warm-up admissions after
+                    # Phase 1 fails" — `_warmup_phase2`'s admissions were reserved
+                    # UPFRONT (the whole `branch_plan`, before the phase split), but
+                    # a Phase-1 failure/deadline-cut never instantiates a Phase-2
+                    # `_cancel_branch` coroutine at all (the comment above this
+                    # block, "no un-awaited-coroutine leak to reap") — so nothing
+                    # else ever calls `release_unless_job_bound()` for THOSE
+                    # branches; without this they permanently reduce the shared
+                    # frame budget.
+                    _release_unconsumed_fanout_admissions(
+                        {plan[0]: _branch_admissions[plan[0]] for plan in _warmup_phase2}
+                    )
+                    raise
                 # Phase 2: the followers under TaskGroup (cache-hits; non-empty by the
                 # gate). A branch failure raises ExceptionGroup (a BaseExceptionGroup
                 # subclass) → propagates unchanged → caller: `branch_failed = True` —
@@ -11398,17 +11488,21 @@ def _execute_orchestrator_workers(
                     raise _admission
                 _lease_token = _BRANCH_CAPACITY_LEASE_VAR.set(_admission)
                 try:
+                    # Lease-lifecycle (§14.8.10.1): see `_proceed_branch`'s
+                    # identical rationale — `_dispatch_releasing_admission`
+                    # releases `_admission` in ITS OWN finally, tied to the
+                    # dispatch's REAL worker-thread completion, not this
+                    # await's asyncio-level cancellation state.
                     output = await asyncio.to_thread(
-                        dispatcher.dispatch, binding, step, step_context=child
+                        _dispatch_releasing_admission,
+                        dispatcher,
+                        binding,
+                        step,
+                        child,
+                        _admission,
                     )
                 finally:
                     _BRANCH_CAPACITY_LEASE_VAR.reset(_lease_token)
-                    # Lease-lifecycle (§14.8.10.1): held until ACTUAL job
-                    # termination — an offloaded (SUB_AGENT_DISPATCH) branch
-                    # transfers release ownership to its executor job
-                    # (`job_bound`); this CP-side release only fires for
-                    # branches that never reached the offload venue.
-                    _admission.release_unless_job_bound()
             except asyncio.CancelledError:
                 # The §25.11 wall-clock deadline (`_proceed_fanout`'s
                 # `asyncio.timeout`) cancelled this in-flight worker. Its dispatch
@@ -11458,6 +11552,14 @@ def _execute_orchestrator_workers(
                     _paused.child_workflow_id,
                     _paused.child_snapshot,
                 )
+                raise
+            except SubAgentDispatchCapacityError:
+                # codex round-4 [P2] — see `_proceed_branch`'s identical
+                # rationale: this worker was REJECTED at admission (never
+                # dispatched) — zero footprint here; `_synthesize_
+                # undispatched_terminals` (called before `_finish` at every
+                # `_proceed_fanout` exit) synthesizes its `cancelled`
+                # terminal from the marker-absence.
                 raise
             except Exception:
                 # Ran-and-errored → record the step entry (obl. 3) + a `completed`
@@ -11569,6 +11671,12 @@ def _execute_orchestrator_workers(
                 salvage=True,
             )
         any_failed = any(isinstance(r, BaseException) for r in results)
+        # codex round-4 [P2] — a rejected (never-dispatched) branch has ZERO
+        # ledger footprint from `_proceed_branch`/`_proceed_worker` itself;
+        # synthesize its `cancelled` terminal here, mirroring the
+        # deadline-struck + paused-child exits above (idempotent no-op for
+        # branches that already recorded a disposition).
+        _synthesize_undispatched_terminals()
         if any_failed:
             return _finish(RunStatus.PARTIAL, fail_class=None, salvage=True)
         return _finish(RunStatus.SUCCESS, fail_class=None, salvage=False)
@@ -11629,8 +11737,14 @@ def _execute_orchestrator_workers(
             # keeps it alive against THIS branch's cancellation so an in-flight effect
             # runs to its own completion (obl. 1), and registers it for the barrier's
             # deadline watchdog (the hard "...or barrier-deadline timeout" cut-off).
+            # `_dispatch_releasing_admission` releases `_admission` in ITS OWN
+            # finally, tied to the dispatch's REAL worker-thread completion —
+            # see its own docstring for why a deadline-cutoff/cascade-cancel
+            # must NOT release via this coroutine's own asyncio-level state.
             inflight: asyncio.Future[Mapping[str, Any]] = asyncio.ensure_future(
-                asyncio.to_thread(dispatcher.dispatch, binding, step, step_context=child)
+                asyncio.to_thread(
+                    _dispatch_releasing_admission, dispatcher, binding, step, child, _admission
+                )
             )
             try:
                 output = await dispatch_branch_step_shielded(inflight)
@@ -11815,11 +11929,15 @@ def _execute_orchestrator_workers(
         finally:
             _BRANCH_CAPACITY_LEASE_VAR.reset(_lease_token)
             _DISPATCH_CANCEL_TOKEN_VAR.reset(_cancel_token_ctx)
-            # Lease-lifecycle (§14.8.10.1): an offloaded (SUB_AGENT_DISPATCH)
-            # branch transfers release ownership to its executor job
-            # (`job_bound`); this CP-side release only fires for branches
-            # that never reached the offload venue.
-            _admission.release_unless_job_bound()
+            # Lease-lifecycle (§14.8.10.1): `_dispatch_releasing_admission`
+            # (wrapping the dispatch call itself) releases `_admission` in
+            # ITS OWN finally, tied to the REAL worker-thread completion —
+            # releasing here too, unconditionally, would race ahead of an
+            # orphaned in-flight dispatch on the barrier-cutoff path and
+            # under-count real occupied frames (codex [P1] + concurrency-lens
+            # Finding 1). An offloaded (SUB_AGENT_DISPATCH) branch still
+            # transfers release ownership to its executor job (`job_bound`)
+            # inside that same finally.
 
     async def _cancel_fanout() -> list[None]:
         # B-39 interim constraint (CP spec v1.102 §3) — Phase 0: dispatch every
@@ -11906,26 +12024,36 @@ def _execute_orchestrator_workers(
                 # (b) wraps a child's bare TimeoutError into an ExceptionGroup that
                 # `except TimeoutError` below does NOT catch (no implicit group
                 # unwrap) — a worker FAILURE, never the barrier deadline.
-                async with asyncio.TaskGroup() as warmup_task_group:
-                    phase1_tasks = [
-                        warmup_task_group.create_task(_cancel_worker(*plan))
-                        for plan in _warmup_phase1
-                    ]
-                # NORMATIVE (§25.19 item 4): collect `task.result()` BEFORE releasing
-                # Phase 2 — CPython's TaskGroup SWALLOWS a child that raises
-                # SPONTANEOUS CancelledError (a watchdog-cut future — e.g. an OUTER
-                # nested-fan-out barrier's earlier-armed watchdog cutting this inner
-                # Phase 1 inside the window where the inner timeout has not fired; HD
-                # recursion re-enters this executor, so the nested vehicle is REAL
-                # here): the group exits CLEAN with task.cancelled()=True. Without
-                # this resurface the followers would dispatch AFTER the cut,
-                # inverting the effect-set subset invariant on the tiers that exist
-                # to bound effects. `task.result()` re-raises the CancelledError —
-                # byte-matching the Phase-2 collection idiom below (OWP9 pins;
-                # verified by execution to transfer to `_cancel_worker`'s
-                # record-then-reraise handler shape).
-                for phase1_task in phase1_tasks:
-                    phase1_task.result()
+                try:
+                    async with asyncio.TaskGroup() as warmup_task_group:
+                        phase1_tasks = [
+                            warmup_task_group.create_task(_cancel_worker(*plan))
+                            for plan in _warmup_phase1
+                        ]
+                    # NORMATIVE (§25.19 item 4): collect `task.result()` BEFORE releasing
+                    # Phase 2 — CPython's TaskGroup SWALLOWS a child that raises
+                    # SPONTANEOUS CancelledError (a watchdog-cut future — e.g. an OUTER
+                    # nested-fan-out barrier's earlier-armed watchdog cutting this inner
+                    # Phase 1 inside the window where the inner timeout has not fired; HD
+                    # recursion re-enters this executor, so the nested vehicle is REAL
+                    # here): the group exits CLEAN with task.cancelled()=True. Without
+                    # this resurface the followers would dispatch AFTER the cut,
+                    # inverting the effect-set subset invariant on the tiers that exist
+                    # to bound effects. `task.result()` re-raises the CancelledError —
+                    # byte-matching the Phase-2 collection idiom below (OWP9 pins;
+                    # verified by execution to transfer to `_cancel_worker`'s
+                    # record-then-reraise handler shape).
+                    for phase1_task in phase1_tasks:
+                        phase1_task.result()
+                except BaseException:
+                    # codex round-4 [P1] — see `_execute_parallelization`'s identical
+                    # rationale: `_warmup_phase2`'s admissions were reserved upfront
+                    # but a Phase-1 failure never instantiates their `_cancel_worker`
+                    # coroutines, so nothing else releases them.
+                    _release_unconsumed_fanout_admissions(
+                        {plan[0]: _branch_admissions[plan[0]] for plan in _warmup_phase2}
+                    )
+                    raise
                 # Phase 2: the followers under TaskGroup (cache-hits; non-empty by
                 # the gate). A worker failure raises ExceptionGroup (a
                 # BaseExceptionGroup subclass) → propagates unchanged → caller:

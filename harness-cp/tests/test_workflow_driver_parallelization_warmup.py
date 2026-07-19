@@ -136,6 +136,7 @@ from harness_cp.pause_resume_protocol_types import (
     WorkflowPauseReason,
 )
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
+from harness_cp.sub_agent_dispatch_capacity_authority import DefaultCapacityAuthority
 from harness_cp.topology_pattern import TopologyPattern
 from harness_cp.workflow_driver import (
     DriverContext,
@@ -259,6 +260,7 @@ class _Ctx:
         pause_resume_protocol: Any = None,
         engine_output_store: Any = None,
         resume_context_holder: Any = None,
+        capacity_authority: Any = None,
     ) -> None:
         from opentelemetry.trace import NoOpTracerProvider
 
@@ -275,6 +277,10 @@ class _Ctx:
         # B-18-FENCE-LEDGER-FIDELITY — the driver reads this via
         # `getattr(ctx, "resume_context_holder", None)`; None ≡ absent.
         self.resume_context_holder = resume_context_holder
+        # B-48/U-CP-101 — injectable so a test can pin an explicit frame
+        # budget for precise admission assertions. `None` → the strategy
+        # falls back to the module-level default authority.
+        self.capacity_authority = capacity_authority
 
 
 class _InferenceRegistry:
@@ -316,6 +322,7 @@ def _run(
     workflow_id: str = "wf-warmup",
     resume_context_holder: Any = None,
     emitter: _Emitter | None = None,
+    capacity_authority: Any = None,
 ) -> Any:
     if ledger is None:
         ledger = _RecordingLedger()
@@ -329,6 +336,7 @@ def _run(
             pause_resume_protocol=_protocol() if with_pause_protocol else None,
             engine_output_store=store,
             resume_context_holder=resume_context_holder,
+            capacity_authority=capacity_authority,
         ),
     )
     return execute_workflow(
@@ -845,6 +853,35 @@ def test_cascade_cancel_warmup_branch0_failure_siblings_withheld_cancelled_faile
         and payload.branch_metadata.terminal_status == "cancelled"
     }
     assert cancelled == {1, 2}
+
+
+def test_cascade_cancel_warmup_branch0_failure_releases_withheld_phase2_admissions() -> None:
+    """B-48 (codex round-4 [P1] "release withheld warm-up admissions after
+    Phase 1 fails"): `_admit_fanout_branch_plan` reserves frames for the
+    WHOLE `branch_plan` (branches 0, 1, 2) upfront, but a Phase-1 failure
+    (branch[0]) withholds Phase 2 (branches 1, 2) entirely — their
+    `_cancel_branch` coroutines are never even CREATED (W2 above: no dispatch
+    marker for them), so nothing else ever calls `release_unless_job_bound()`
+    for their admissions. Without the fix, this permanently reduces the
+    shared frame budget by the withheld branches' frame count on every
+    Phase-1 failure."""
+    n = 3
+    authority = DefaultCapacityAuthority(frame_budget=4)
+    dispatcher = _RecordingCohortDispatcher(fail={0})
+    result = _run(
+        steps=[_inference_step(i) for i in range(n)],
+        dispatcher=dispatcher,
+        concurrent_cache_warmup=True,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+        store=_MiniFanoutStore(),
+        capacity_authority=authority,
+    )
+    assert result.status is RunStatus.FAILED
+    assert dispatcher.dispatched == [0]
+    # All 3 branches' frames are back — including the 2 WITHHELD ones that
+    # never reached `_cancel_branch` at all.
+    assert authority.available == authority.frame_budget
 
 
 def test_pause_warmup_branch0_failure_pauses_then_resume_redispatches_siblings() -> None:

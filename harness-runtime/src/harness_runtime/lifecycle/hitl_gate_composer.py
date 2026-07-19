@@ -1118,8 +1118,22 @@ class RuntimeHITLGateComposer:
                 if cancel_token is not None:
                     cancel_token.ack()
 
-        future = executor.submit(_job)
         job_lease = own_lease if own_lease is not None else branch_lease
+        try:
+            future = executor.submit(_job)
+        except BaseException:
+            # codex round-4 [P2] "roll back submission when worker creation
+            # fails" — `submit()` never returned a future, so the
+            # `add_done_callback`-based release below can never attach. The
+            # job unconditionally never ran (regardless of whether
+            # `bind_release_to_job()` already flipped `job_bound` above —
+            # that binding was a promise the now-failed submit broke), so
+            # this MUST be the unconditional `.release()`, not
+            # `release_unless_job_bound()` (which would wrongly no-op here
+            # and leak the lease forever).
+            if job_lease is not None:
+                job_lease.release()
+            raise
         if job_lease is not None:
             release_lease = job_lease.release
 
@@ -1130,6 +1144,23 @@ class RuntimeHITLGateComposer:
                 release_lease()
 
             future.add_done_callback(_release_on_done)
+        if cancel_token is not None:
+            # codex round-4 [P2] "acknowledge executor jobs canceled before
+            # starting" — if `future` is cancelled AFTER ack ownership was
+            # deferred to the job (above) but BEFORE the worker ever calls
+            # `set_running_or_notify_cancel()` successfully, `_job` never
+            # runs at all — its own `finally: cancel_token.ack()` never
+            # fires, and `wait_ack()` waits out the FULL grace period and
+            # reports `worker_draining_under_fence` even though nothing was
+            # ever active. `future.cancelled()` and "`_job` ran" are
+            # mutually exclusive (`set_running_or_notify_cancel()` is the
+            # atomic gate), so this can never double-ack against `_job`'s
+            # own finally.
+            def _ack_if_never_started(_f: Any) -> None:
+                if _f.cancelled():
+                    cancel_token.ack()
+
+            future.add_done_callback(_ack_if_never_started)
         return cast(Mapping[str, Any], await asyncio.wrap_future(future))
 
     async def _escalate_to_secondary_channel(

@@ -184,6 +184,40 @@ def test_fanout_past_boundary_next_branch_fail_fasts_typed_step_attributable() -
     assert authority.available == 3  # all leases released post-run
 
 
+def test_fanout_past_boundary_rejected_branch_recorded_cancelled_not_completed() -> None:
+    """B-48 (codex round-4 [P2] "avoid recording rejected branches as
+    executed"): the SAME over-cap PROCEED scenario as the sibling test above
+    — the rejected branch's dispatcher was NEVER called, so its ledger
+    terminal must be `cancelled` (the never-dispatched disposition), NEVER
+    `completed` (which would falsely claim the dispatcher ran and count it
+    as executed in the durable ledger + step count)."""
+    authority = DefaultCapacityAuthority(frame_budget=3)
+    ledger = _RecordingLedger()
+    ctx = cast(DriverContext, _Ctx(ledger=ledger, capacity_authority=authority))
+    steps = [_branch_step(i) for i in range(4)]
+    registry = cast(StepDispatcherRegistry, _Registry(_EchoDispatcher()))
+    result = execute_workflow(
+        _manifest(workflow_id="wf-cap-rejected-terminal", persona_tier=PersonaTier.SOLO_DEVELOPER),
+        steps,
+        run_id="run-1",
+        ctx=ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=registry,
+    )
+    assert result.status == RunStatus.PARTIAL
+    branch3_statuses = [
+        payload.branch_metadata.terminal_status
+        for payload, _wk in ledger.appends
+        if payload.branch_metadata is not None and payload.branch_metadata.branch_index == 3
+    ]
+    # Branch 3 is the rejected excess (frame_budget=3, 4 branches, 1 frame
+    # each) — exactly ONE ledger entry (the synthesized `cancelled`
+    # terminal), never `completed`, and never a step entry (`None`) at all —
+    # a step entry would itself be evidence the (never-called) dispatcher's
+    # attempt was being recorded.
+    assert branch3_statuses == ["cancelled"]
+
+
 def test_cancel_policy_initial_admission_gated_over_cap() -> None:
     """CASCADE_CANCEL tier: an over-cap fan-out's admission-rejected branch
     cascades the barrier — FAILED with the SAME generic fail_class ANY

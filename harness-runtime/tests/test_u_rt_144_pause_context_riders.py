@@ -160,6 +160,91 @@ async def test_worker_set_pause_flag_visible_to_resume_path() -> None:
 
 
 @pytest.mark.asyncio
+async def test_ack_fires_when_job_cancelled_before_worker_starts() -> None:
+    """B-48 (codex round-4 [P2] "acknowledge executor jobs canceled before
+    starting"): ack ownership is deferred to the job (`defer_ack_to_job()`),
+    but if the returned future is cancelled BEFORE the worker ever calls
+    `set_running_or_notify_cancel()` successfully, `_job` never runs — its
+    own `finally: cancel_token.ack()` never fires. Without the done-callback
+    fix, `wait_ack()` would wait out the full grace period and misreport
+    `worker_draining_under_fence` even though nothing was ever active."""
+    from harness_cp.sub_agent_dispatch_cancellation import (
+        DISPATCH_CANCEL_TOKEN_VAR,
+        DispatchCancelToken,
+        FenceAckOutcome,
+    )
+
+    class _NeverCalledInner:
+        def dispatch(self, binding: Any, step: Any, *, step_context: Any) -> Mapping[str, Any]:
+            raise AssertionError("dispatch must never run — future was pre-cancelled")
+
+    class _PreCancelledFutureExecutor:
+        """Delegates admission to a real executor; `submit()` returns an
+        ALREADY-CANCELLED future so `set_running_or_notify_cancel()` is
+        guaranteed to see it cancelled — deterministic, no timing race."""
+
+        def __init__(self, real: SubAgentDispatchExecutor) -> None:
+            self._real = real
+
+        def reserve(self, *args: Any, **kwargs: Any) -> Any:
+            return self._real.reserve(*args, **kwargs)
+
+        def submit(self, fn: Any) -> Any:
+            from concurrent.futures import Future
+
+            future: Future[Any] = Future()
+            future.cancel()
+            assert future.cancelled()
+            return future
+
+    real_executor = SubAgentDispatchExecutor(frame_budget=4)
+    fake_executor = _PreCancelledFutureExecutor(real_executor)
+    composer = _make_composer(inner=_NeverCalledInner(), executor=cast(Any, fake_executor))
+
+    token = DispatchCancelToken()
+    reset = DISPATCH_CANCEL_TOKEN_VAR.set(token)
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await composer._dispatch_inner(
+                object(), _make_step(), step_context=_make_step_context()
+            )
+    finally:
+        DISPATCH_CANCEL_TOKEN_VAR.reset(reset)
+
+    # A short grace suffices — the ack must already have fired via the
+    # done-callback, not the (never-run) `_job`'s own finally.
+    outcome = token.wait_ack(grace_seconds=0.2)
+    assert outcome is not FenceAckOutcome.UNACKED_DRAINING
+
+
+@pytest.mark.asyncio
+async def test_submit_failure_releases_own_lease_not_leaked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """B-48 (codex round-4 [P2] "roll back submission when worker creation
+    fails"): if `executor.submit()` itself raises (e.g. the OS refuses a
+    new thread), the offload venue's own single-frame reservation (no
+    ambient `BRANCH_CAPACITY_LEASE_VAR` — a standalone SUB_AGENT_DISPATCH,
+    not a fan-out branch) must still be released — `add_done_callback`
+    never attaches since `submit()` never returned a future."""
+
+    class _NeverCalledInner:
+        def dispatch(self, binding: Any, step: Any, *, step_context: Any) -> Mapping[str, Any]:
+            raise AssertionError("dispatch must never run — submit() failed first")
+
+    executor = SubAgentDispatchExecutor(frame_budget=4)
+
+    def _submit_raises(fn: Any) -> Any:
+        raise RuntimeError("can't start new thread (simulated OS refusal)")
+
+    monkeypatch.setattr(executor, "submit", _submit_raises)
+    composer = _make_composer(inner=_NeverCalledInner(), executor=executor)
+    with pytest.raises(RuntimeError, match="can't start new thread"):
+        await composer._dispatch_inner(object(), _make_step(), step_context=_make_step_context())
+    assert executor.available_frames == executor.frame_budget
+
+
+@pytest.mark.asyncio
 async def test_parent_child_span_id_continuity_through_offload() -> None:
     """Item 5 — the offload carries `contextvars.copy_context()` for trace
     continuity: a span started inside the worker parents to the loop-side

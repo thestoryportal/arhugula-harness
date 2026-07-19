@@ -94,6 +94,7 @@ from harness_cp.pause_resume_protocol_types import (
     WorkflowPauseReason,
 )
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
+from harness_cp.sub_agent_dispatch_capacity_authority import DefaultCapacityAuthority
 from harness_cp.topology_pattern import TopologyPattern
 from harness_cp.workflow_driver import (
     DriverContext,
@@ -209,6 +210,7 @@ class _Ctx:
         emitter: _Emitter,
         pause_resume_protocol: Any = None,
         engine_output_store: Any = None,
+        capacity_authority: Any = None,
     ) -> None:
         from opentelemetry.trace import NoOpTracerProvider
 
@@ -223,6 +225,9 @@ class _Ctx:
         self.tenant_id = None
         self.engine_output_store = engine_output_store
         self.resume_context_holder = None
+        # B-48/U-CP-101 — injectable so a test can pin an explicit frame
+        # budget for precise admission assertions.
+        self.capacity_authority = capacity_authority
 
 
 def _pause_context_reader() -> tuple[StateSummary, str]:
@@ -701,6 +706,7 @@ def _run(
     with_pause_protocol: bool = False,
     pause_snapshot_input: PauseSnapshot | None = None,
     workflow_id: str = "wf-ow-warmup",
+    capacity_authority: Any = None,
 ) -> Any:
     if ledger is None:
         ledger = _RecordingLedger()
@@ -713,6 +719,7 @@ def _run(
             emitter=emitter,
             pause_resume_protocol=_protocol() if with_pause_protocol else None,
             engine_output_store=store,
+            capacity_authority=capacity_authority,
         ),
     )
     return execute_workflow(
@@ -866,6 +873,29 @@ def test_ow_partition_cascade_cancel_leader_failure_withholds_all_followers() ->
     # nor store record (ledger-only synthesis).
     assert store.present_dispatched_indexes(run_key) == {0, 2}
     assert store.present_branch_indexes(run_key) == {0, 2}
+
+
+def test_ow_partition_cascade_cancel_leader_failure_releases_withheld_follower_admissions() -> None:
+    """B-48 (codex round-4 [P1]; the `_execute_orchestrator_workers` twin of
+    `_execute_parallelization`'s "release withheld warm-up admissions after
+    Phase 1 fails"): `_admit_fanout_branch_plan` reserves frames for all 4
+    workers upfront, but leader 0's Phase-1 failure withholds followers {1,
+    3} entirely (never dispatched, per the sibling test above) — their
+    `_cancel_worker` coroutines are never created, so nothing else releases
+    their admissions without the fix."""
+    authority = DefaultCapacityAuthority(frame_budget=4)
+    dispatcher = _CohortScriptedWorker({0: "fail", 2: "ok"}, barrier_indexes=frozenset({0, 2}))
+    result = _run(
+        steps=[_orch_step(), _worker(0, "A"), _worker(1, "A"), _worker(2, "B"), _worker(3, "B")],
+        registry=_registry(dispatcher),
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+        store=_MiniOWStore(),
+        capacity_authority=authority,
+    )
+    assert result.status is RunStatus.FAILED
+    assert sorted(dispatcher.dispatched) == [0, 2]
+    assert authority.available == authority.frame_budget
 
 
 def test_ow_partition_proceed_leader_failure_still_releases_all_followers() -> None:

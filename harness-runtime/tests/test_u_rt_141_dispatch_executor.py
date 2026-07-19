@@ -41,9 +41,12 @@ def test_cap_saturation_next_dispatch_fails_immediately_typed_and_enqueues_nothi
     elapsed = time.monotonic() - started
     assert elapsed < 0.5  # immediate — no queue wait
     assert excinfo.value.step_id == "s-over"
-    # Provably zero queue growth: the work queue holds no pending item for the
-    # rejected dispatch (admission never reached submission).
-    assert executor._work.qsize() == 0
+    # Provably zero queue growth: a rejected admission never reaches
+    # `submit()` at all — no outstanding future, no idle channel consumed,
+    # no worker spawned (admission never reached submission).
+    assert executor._outstanding == set()
+    assert executor._idle_channels == []
+    assert executor._spawned == 0
     for lease in leases:
         lease.release()
     assert executor.available_frames == 4
@@ -82,6 +85,33 @@ def test_grow_on_demand_workers_named_daemon_and_reused() -> None:
     gate.set()
     names = {fut1.result(timeout=5), fut2.result(timeout=5)}
     assert len(names) == 2  # mutation probe: a single-worker queue serializes
+
+
+def test_submit_rolls_back_bookkeeping_when_thread_start_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """B-48 (codex round-4 [P2] "roll back submission when worker creation
+    fails"): if the OS refuses a new thread, `submit()` must roll back
+    `_outstanding`/`_spawned` and re-raise — without this, a phantom future
+    stays in `_outstanding` forever (`drain()` never reaches zero outstanding)
+    and `_spawned` over-counts a worker that never ran."""
+    executor = SubAgentDispatchExecutor(frame_budget=4)
+
+    def _start_raises(self: threading.Thread) -> None:
+        raise RuntimeError("can't start new thread (simulated OS refusal)")
+
+    monkeypatch.setattr(threading.Thread, "start", _start_raises)
+
+    with pytest.raises(RuntimeError, match="can't start new thread"):
+        executor.submit(lambda: "never runs")
+
+    assert executor._outstanding == set()
+    assert executor._spawned == 0
+    # The executor is still usable afterward (state genuinely rolled back,
+    # not merely masked) — restore real thread starting and confirm a
+    # normal submit still works.
+    monkeypatch.undo()
+    assert executor.submit(lambda: "ok").result(timeout=5) == "ok"
 
 
 def test_shutdown_drain_with_deadline_never_blocks_on_loop_bridged_worker() -> None:

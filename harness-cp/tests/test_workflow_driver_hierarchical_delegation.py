@@ -771,6 +771,49 @@ def test_hierarchical_delegation_cascade_cancel_terminality() -> None:
 # ---------------------------------------------------------------------------
 
 
+class _LargeChildDeadlineDispatcher(_HierarchicalDispatcher):
+    """`_HierarchicalDispatcher` twin that sets a MUCH LARGER barrier deadline
+    for the recursive CHILD level's own `_execute_orchestrator_workers`
+    invocation right before triggering it — so the child's own watchdog can
+    never plausibly be what cuts a wedged grandchild off. `deadline`/
+    `_effective_deadline` is bound as a LOCAL at the top of the OUTER
+    (root) level's `_execute_orchestrator_workers`, well before ANY worker's
+    `dispatch()` (including this "sub" recursion) runs — so flipping the
+    MODULE global here, from inside "sub"'s own dispatch, never touches the
+    root's already-captured value. Only the OUTER barrier's
+    `_BRANCH_INFLIGHT_DISPATCHES` chain-registration mechanism can then
+    plausibly be what cuts the grandchild off in time (test-witness-lens
+    note, B-48 round-4)."""
+
+    def __init__(
+        self,
+        *,
+        ctx: DriverContext,
+        monkeypatch: pytest.MonkeyPatch,
+        child_deadline: float,
+        block_step_ids: set[str] | None = None,
+        release: threading.Event | None = None,
+    ) -> None:
+        super().__init__(ctx=ctx, block_step_ids=block_step_ids, release=release)
+        self._monkeypatch = monkeypatch
+        self._child_deadline = child_deadline
+
+    def dispatch(
+        self,
+        binding: StepEffectiveBinding,
+        step: WorkflowStep,
+        *,
+        step_context: Any = None,
+    ) -> dict[str, Any]:
+        if step.step_kind is StepKind.SUB_AGENT_DISPATCH:
+            import harness_cp.workflow_driver as wd
+
+            self._monkeypatch.setattr(
+                wd, "_DEFAULT_FANOUT_BARRIER_DEADLINE_SECONDS", self._child_deadline
+            )
+        return super().dispatch(binding, step, step_context=step_context)
+
+
 def test_hierarchical_delegation_outer_deadline_bounds_parent_over_wedged_grandchild(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -778,7 +821,29 @@ def test_hierarchical_delegation_outer_deadline_bounds_parent_over_wedged_grandc
     (root) barrier deadline still bounds the root's return — proving the inner
     in-flight dispatch registered in the OUTER barrier's `_BRANCH_INFLIGHT_
     DISPATCHES` chain (extended, not replaced). The root returns FAILED in ~the
-    deadline, NOT the grandchild's full block time."""
+    deadline, NOT the grandchild's full block time.
+
+    The CHILD level's own barrier deadline is set MUCH LARGER (10s) than the
+    ROOT's (0.5s) via `_LargeChildDeadlineDispatcher` — this rules OUT
+    "coincidentally-equal per-level deadlines" as an alternative explanation
+    for the fast return + tripped token (test-witness-lens note: the original
+    version, sharing one deadline at both levels, could not distinguish that
+    from a genuine outer-chain effect). With the deadlines deliberately
+    unequal, empirical tracing shows BOTH cooperate: the ROOT's own
+    `asyncio.timeout` always bounds the ROOT's *return time* regardless of
+    the chain (elapsed ~= the root's deadline, independent of g-wedge); the
+    grandchild's `DispatchCancelToken` fence-trip specifically is reached via
+    the parent→child cancel-token CASCADE (the "sub" worker's own inflight —
+    always root-chain-registered — gets cut by the root watchdog, which trips
+    the root's ambient token, which cascades to the linked descendant g-wedge
+    token per the token-linking mechanism), NOT solely the `_BRANCH_INFLIGHT_
+    DISPATCHES` chain reaching g-wedge's OWN inflight directly (both remain
+    correct, real, and independently tested elsewhere: the chain-registration
+    ↔ direct-cutoff path at `test_deadline_cutoff_trips_ambient_cancel_token_
+    without_facade_timeout`; the token cascade at `test_late_linked_child_
+    inflight_at_trip_bubbles_to_already_tripped_parent`). This test's job is
+    the end-to-end guarantee AT RECURSION DEPTH through the real production
+    path, not isolating one sub-mechanism from the other."""
     import harness_cp.workflow_driver as wd
 
     monkeypatch.setattr(wd, "_DEFAULT_FANOUT_BARRIER_DEADLINE_SECONDS", 0.5)
@@ -798,7 +863,13 @@ def test_hierarchical_delegation_outer_deadline_bounds_parent_over_wedged_grandc
     ledger = _RecordingLedger()
     emitter = _Emitter()
     ctx = cast(DriverContext, _Ctx(ledger=ledger, emitter=emitter))
-    disp = _HierarchicalDispatcher(ctx=ctx, block_step_ids={"g-wedge"}, release=release)
+    disp = _LargeChildDeadlineDispatcher(
+        ctx=ctx,
+        monkeypatch=monkeypatch,
+        child_deadline=10.0,
+        block_step_ids={"g-wedge"},
+        release=release,
+    )
     registry = cast(StepDispatcherRegistry, _Registry(cast(StepDispatcher, disp)))
     disp.registry = registry
 
@@ -822,15 +893,74 @@ def test_hierarchical_delegation_outer_deadline_bounds_parent_over_wedged_grandc
     assert elapsed < 3.0, (
         f"outer deadline did not bound the parent over a wedged grandchild ({elapsed:.2f}s)"
     )
-    # B-48 (codex #5; §14.8.10.3): the OUTER barrier's deadline watchdog cut
-    # the grandchild's `inflight` off directly — proving (through the REAL
-    # `_execute_orchestrator_workers` / `_cancel_worker` production path, at
-    # RECURSION DEPTH, not a synthetic harness) that the ambient per-dispatch
-    # fence tripped at the SAME moment, not bounded by any facade-level
-    # timeout (there is no facade in this test at all).
+    # B-48 (codex #5; §14.8.10.3): the grandchild's ambient per-dispatch fence
+    # tripped within the ROOT's deadline, at RECURSION DEPTH through the REAL
+    # `_execute_orchestrator_workers` / `_cancel_worker` production path (not
+    # a synthetic harness) — not bounded by any facade-level timeout (there
+    # is no facade in this test at all), and NOT explainable by the child's
+    # own (deliberately much larger) deadline coincidentally firing first.
     wedged_token = disp.captured_cancel_tokens["g-wedge"]
     assert wedged_token is not None
     assert wedged_token.tripped
+
+
+def test_wedged_branch_capacity_lease_released_only_after_real_completion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """B-48 (codex round-4 [P1] "hold leases until abandoned branch threads
+    terminate" + concurrency-lens Finding 1): the barrier's deadline cuts a
+    wedged branch off at the ASYNCIO layer, but the underlying SYNC dispatch
+    (this test's `_HierarchicalDispatcher.dispatch`, blocked on `release.
+    wait()`) keeps running on its OWN worker thread regardless — releasing
+    the branch's frame lease at that cutoff (keyed off the branch TASK's own
+    cancellation) would under-count real occupied frames while the orphaned
+    thread keeps running, letting a subsequent admission over-commit the
+    shared budget. Proves BOTH halves through the REAL production path (no
+    synthetic release-tracking): (1) `available` stays REDUCED immediately
+    after the barrier gives up — the frame is NOT released early; (2)
+    `available` returns to the full budget once the orphaned dispatch
+    genuinely finishes (`_dispatch_releasing_admission`'s own finally, tied
+    to the worker thread's real completion)."""
+    import harness_cp.workflow_driver as wd
+
+    monkeypatch.setattr(wd, "_DEFAULT_FANOUT_BARRIER_DEADLINE_SECONDS", 0.3)
+    release = threading.Event()
+    authority = DefaultCapacityAuthority(frame_budget=4)
+
+    root_steps = _level([_orchestrator_step(), _leaf_worker("w-wedge")])
+    ledger = _RecordingLedger()
+    emitter = _Emitter()
+    ctx = cast(DriverContext, _Ctx(ledger=ledger, emitter=emitter, capacity_authority=authority))
+    disp = _HierarchicalDispatcher(ctx=ctx, block_step_ids={"w-wedge"}, release=release)
+    registry = cast(StepDispatcherRegistry, _Registry(cast(StepDispatcher, disp)))
+    disp.registry = registry
+
+    # The barrier gives up on "w-wedge" and `execute_workflow` returns, but
+    # the worker thread is STILL blocked on `release.wait()` at this point —
+    # nothing has released it yet.
+    result = execute_workflow(
+        _manifest(persona_tier=_CASCADE_CANCEL_TIER),
+        root_steps,
+        run_id="run-1",
+        ctx=ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=registry,
+    )
+    assert result.status is RunStatus.FAILED
+
+    # (1) The frame is NOT released just because the barrier gave up — the
+    # orphaned worker thread is still genuinely running.
+    assert authority.available < authority.frame_budget
+
+    # (2) Release the gate; the orphaned dispatch finishes for real, and
+    # `_dispatch_releasing_admission`'s own finally releases the frame.
+    release.set()
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline and authority.available < authority.frame_budget:
+        time.sleep(0.01)
+    assert authority.available == authority.frame_budget, (
+        "capacity lease was never released after the orphaned dispatch finished"
+    )
 
 
 # ---------------------------------------------------------------------------

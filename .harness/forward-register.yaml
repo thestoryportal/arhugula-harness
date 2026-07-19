@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 59
+  total: 60
   open: 5
   design_substrate_gated: 1
-  registered_finding: 8
+  registered_finding: 9
   operator_gated: 2
   held: 1
   closed: 42
-  identity_digest: 47aeb1258dc9abf8
+  identity_digest: b8209659af7b1823
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -1155,4 +1155,28 @@ items:
     state; nothing blocks on it.'
   council: 'no -- bounded carrier-home hygiene follow-on'
   heading: '### B-58 · Pre-existing harness-cp function-level import of runtime escalation error types
+    *(registered at the B-48 apply arc, 2026-07-19)*'
+- id: B-59
+  title: Capacity authority not preserved across sequential bootstrap invocations
+  status: registered_finding
+  summary: 'Registered at the B-48 apply arc (codex round-4 [P1] "preserve one capacity authority
+    across bootstrap runs"): if `api.run()`''s shutdown times out while a daemon dispatch worker
+    is still draining (the documented abandoned-worker-keeps-its-lease-until-fence-ack behavior),
+    the process releases its lock and permits another `api.run()` invocation -- but the NEXT
+    bootstrap constructs a FRESH `SubAgentDispatchExecutor` with the full configured frame budget.
+    The old, still-draining worker''s occupied frame is invisible to the new executor''s accounting,
+    so the process can transiently exceed the single-shared-cap promise across the boundary. The
+    B-48 fork''s own §4 verification obligations scope entirely to a SINGLE dispatch/workflow-run''s
+    offload mechanics (construction-time mode selection, dispatch-time cancellation, fan-out
+    admission, warm-up partitioning, etc.) -- multiple SEQUENTIAL bootstrap invocations sharing one
+    OS process is a genuinely new, unspecified surface the fork never anticipated.'
+  close_out: 'A real fix needs one of two architectural choices the fork never ratified: (a) a
+    process-scoped capacity-authority singleton that survives across `api.run()` invocations
+    (surviving drain state, not just the frame count), or (b) block a NEW bootstrap from starting
+    until the PRIOR executor has fully drained (a stronger cross-invocation barrier than today''s
+    per-run shutdown timeout). Route through Class 2 fork back-flow before building -- this is an
+    architectural decision on multi-bootstrap-per-process semantics, not a bounded bug fix.'
+  council: 'yes if opened -- C1 orchestration (process lifecycle) vs C9 reliability (capacity
+    invariant integrity) is a nameable tension'
+  heading: '### B-59 · Capacity authority not preserved across sequential bootstrap invocations
     *(registered at the B-48 apply arc, 2026-07-19)*'

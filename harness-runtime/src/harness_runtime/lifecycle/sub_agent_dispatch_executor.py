@@ -69,6 +69,12 @@ DISPATCH_WORKER_THREAD_NAME_PREFIX: Final[str] = "harness-subagent-dispatch"
 # thread-join from the loop thread; polling futures is join-free.
 _DRAIN_POLL_SECONDS: Final[float] = 0.01
 
+#: A queued job: the caller's future + the job callable. `None` is a
+#: defensive stop-sentinel (never sent in production — workers are daemon
+#: threads with lifecycle on the executor's own terms per §14.8.10.1; kept
+#: as a safe `_worker` exit path, not load-bearing).
+_WorkItem = tuple[Future[Any], Callable[[], Any]] | None
+
 
 class SubAgentDispatchExecutor:
     """Custom grow-on-demand executor over the ONE shared frame budget.
@@ -90,10 +96,20 @@ class SubAgentDispatchExecutor:
         self._budget = frame_budget
         self._available = frame_budget
         self._lock = threading.Lock()
-        self._work: queue.SimpleQueue[tuple[Future[Any], Callable[[], Any]] | None] = (
-            queue.SimpleQueue()
-        )
-        self._idle_workers = 0
+        # Per-worker hand-off channels (§14.8.10.1 "idle reuse" — B-48 codex
+        # round-4: a SHARED queue lets any looped-back worker race for ANY
+        # queued item, so "reuse worker X" was not actually a hand-off to X —
+        # a freshly-spawned worker finishing its own (possibly instant) job
+        # could loop back and steal a job a `submit()` call believed it had
+        # handed to a SPECIFIC already-idle worker, silently serializing two
+        # "concurrent" jobs onto one thread while another sits starved. A
+        # channel is exclusive to exactly one worker: `submit()` atomically
+        # pops one from `_idle_channels` under `_lock` (guaranteeing that
+        # worker — and only that worker — receives this job), or spawns a
+        # fresh worker and hands its job directly via thread args (bypassing
+        # channels entirely, so a brand-new worker never contests a reuse
+        # claim either).
+        self._idle_channels: list[queue.SimpleQueue[_WorkItem]] = []
         self._spawned = 0
         self._completed = 0
         self._outstanding: set[Future[Any]] = set()
@@ -207,43 +223,90 @@ class SubAgentDispatchExecutor:
         `reserve`/`reserve_fanout` or at the CP fan-out via the adapter);
         submission itself never blocks: an idle worker picks the job up
         immediately, or a fresh daemon worker is spawned for it.
+
+        Reuse hands the job to a SPECIFIC popped-under-`_lock` channel —
+        exclusive to exactly one worker — never a shared queue every worker
+        polls (a shared queue lets a DIFFERENT worker that loops back first
+        win the race to dequeue a job "reuse" believed was earmarked for a
+        specific already-idle worker, silently serializing two "concurrent"
+        submissions onto one thread while the intended worker starves; the
+        recursive-offload deadlock hazard this executor exists to
+        foreclose). A freshly-spawned worker's job is handed to it directly
+        via thread constructor args, bypassing channels entirely too.
         """
         future: Future[Any] = Future()
         with self._lock:
             self._outstanding.add(future)
-            spawn = self._idle_workers == 0
-            if spawn:
+            channel = self._idle_channels.pop() if self._idle_channels else None
+            if channel is None:
                 self._spawned += 1
                 worker_name = f"{DISPATCH_WORKER_THREAD_NAME_PREFIX}-{self._spawned}"
             else:
-                self._idle_workers -= 1
                 worker_name = None
         if worker_name is not None:
-            threading.Thread(target=self._worker, daemon=True, name=worker_name).start()
-        self._work.put((future, fn))
+            try:
+                threading.Thread(
+                    target=self._worker,
+                    args=(future, fn),
+                    daemon=True,
+                    name=worker_name,
+                ).start()
+            except BaseException:
+                # codex round-4 [P2] "roll back submission when worker
+                # creation fails" — the OS refused a new thread (e.g.
+                # `RuntimeError: can't start new thread`). `future` was
+                # never returned to the caller, so nothing else will ever
+                # call `_job_done` for it — without this rollback it stays
+                # in `_outstanding` forever (`drain()` never reaches zero)
+                # and `_spawned` over-counts a worker that never ran. Re-raise
+                # so the caller's own admission/lease cleanup still fires
+                # (exactly as it would for any other `submit()` exception).
+                with self._lock:
+                    self._outstanding.discard(future)
+                    self._spawned -= 1
+                raise
+        else:
+            assert channel is not None
+            channel.put((future, fn))
         return future
 
-    def _worker(self) -> None:
+    def _worker(
+        self,
+        first_future: Future[Any],
+        first_fn: Callable[[], Any],
+    ) -> None:
+        self._run_job(first_future, first_fn)
+        my_channel: queue.SimpleQueue[_WorkItem] = queue.SimpleQueue()
         while True:
-            item = self._work.get()
+            # Register as idle-and-listening on OUR OWN channel BEFORE
+            # blocking on it — a `submit()` racing in here can only ever pop
+            # THIS channel (exclusive), so it's safe to publish first: any
+            # job it pushes just waits in the channel's own buffer until we
+            # reach `.get()` below.
+            with self._lock:
+                self._idle_channels.append(my_channel)
+            item = my_channel.get()
             if item is None:
                 return
             future, fn = item
-            if not future.set_running_or_notify_cancel():
-                self._job_done(future)
-                continue
-            try:
-                result = fn()
-            except BaseException as exc:
-                future.set_exception(exc)
-            else:
-                future.set_result(result)
+            self._run_job(future, fn)
+
+    def _run_job(self, future: Future[Any], fn: Callable[[], Any]) -> None:
+        if not future.set_running_or_notify_cancel():
             self._job_done(future)
+            return
+        try:
+            result = fn()
+        except BaseException as exc:
+            self._job_done(future)
+            future.set_exception(exc)
+        else:
+            self._job_done(future)
+            future.set_result(result)
 
     def _job_done(self, future: Future[Any]) -> None:
         with self._lock:
             self._outstanding.discard(future)
-            self._idle_workers += 1
             self._completed += 1
 
     # -- lifecycle on its own terms (§14.8.10.1) ------------------------------
