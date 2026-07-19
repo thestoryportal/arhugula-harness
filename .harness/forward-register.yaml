@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 56
+  total: 57
   open: 4
   design_substrate_gated: 2
-  registered_finding: 5
+  registered_finding: 6
   operator_gated: 2
   held: 1
   closed: 42
-  identity_digest: 3614299ab85972c5
+  identity_digest: 7a3e0c76cb4548d8
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -1090,3 +1090,21 @@ items:
     at the apply-arc dyad 2 and the codex rounds cited in the summary'
   heading: '### B-55 · Lower-tier fail-closed prewarm/keepalive posture *(registered at the B-51/B-52/B-54
     apply arc, 2026-07-18)*'
+- id: B-56
+  title: Corrected-relabel repair for already-tagged audit history
+  status: registered_finding
+  summary: 'Registered at the B-51/B-52/B-54 apply arc (codex rounds 34/42): an already-tagged sidecar
+    row whose mutable source_tag differs from the operator-attested tenant_scope is the relabel
+    scenario the OD v1.34 section 21.2.2 row-5 trusted-source rule exists to detect -- but the
+    ratified arc authorizes retagging ONLY source_tag="_single" rows, so the repair (a cross-tenant
+    tag rewrite + generalized alias) is NOT buildable without its own spec delta. Current disposition:
+    record validation REJECTS the mismatch typed (never silently repaired, never silently exempted)
+    and surfaces it for operator investigation.'
+  close_out: 'IF operator demand materializes: a narrow OD v1.34+ delta authorizing the corrected-
+    relabel retag (scope: record-attested mismatches only; the generalized (source_tag, entry_hash)
+    alias; the same atomicity/completeness discipline as the _single retag) + U-RT-139 widening.
+    Until then the typed rejection is the complete posture.'
+  council: 'no -- bounded follow-on; the C7/C10 trust reasoning is already recorded at the apply-arc
+    codex rounds'
+  heading: '### B-56 · Corrected-relabel repair for already-tagged audit history *(registered at the
+    B-51/B-52/B-54 apply arc, 2026-07-18)*'
