@@ -2166,6 +2166,31 @@ _BRANCH_INFLIGHT_DISPATCHES: ContextVar[tuple[set[asyncio.Future[Any]], ...] | N
 )
 
 
+def reset_offloaded_job_branch_inflight_registry() -> None:
+    """Sever `_BRANCH_INFLIGHT_DISPATCHES` in the CURRENT context (round-5b
+    codex [P1] #2 "isolate loop-owned cancellation registries before
+    offload"). The runtime's B-48 offload venue calls this inside a copied,
+    per-job `contextvars.Context` before running the offloaded dispatch
+    (mirrors the existing per-child `INTER_STEP_CHANNEL_VAR` rebind at
+    `hitl_gate_composer.py`).
+
+    Without this, a nested fan-out running INSIDE that offloaded dispatch
+    would `.get()` the copied PARENT chain (each set a `set[asyncio.Future]`
+    owned by the PARENT event loop) and register its OWN futures — bound to
+    the offloaded worker thread's own event loop — into it. The parent's
+    deadline watchdog runs on the parent's loop/thread and calls `.cancel()`
+    directly on whatever it finds in its set; cancelling a Future that
+    belongs to a different loop from a different thread is not safe. The
+    outer branch's own wrapping future (registered on the PARENT's side by
+    the `dispatch_branch_step_shielded` call that scheduled this offload)
+    remains the correct, thread-safe cutoff for the whole offloaded job,
+    including any nested fan-out inside it — a nested barrier's own watchdog
+    still bounds its own in-flight work correctly on its own loop, just
+    isolated from the parent's registry chain.
+    """
+    _BRANCH_INFLIGHT_DISPATCHES.set(None)
+
+
 async def cascade_cancel_barrier[T](
     branch_coros: Iterable[Coroutine[Any, Any, T]],
     *,
@@ -4958,6 +4983,23 @@ def _execute_workflow_body(
                         # CP composer arc per scoping doc adjacent obs (d));
                         # workflow proceeds with original validator outcome.
                         _ = hitl_response
+
+        # B-48 (U-RT-143; Runtime spec v1.102 §14.8.10.3 part 1 — extended
+        # round-5b codex [P1] "fence child ledger writes after dispatch"):
+        # re-consult the ambient cancel token here, AFTER dispatch (+ any
+        # HITL/validator post-processing above) returns and BEFORE this
+        # step's output is committed to durable storage below. The
+        # step-boundary check at this loop's top only catches a fence
+        # tripped BEFORE this step began; a fence tripped WHILE this step's
+        # dispatch (or its HITL/validator gate) was running would otherwise
+        # still commit — silently defeating "the runtime discards in-flight
+        # results" for a step that happened to finish just after the trip.
+        # Raises before either durable-write call below runs (a
+        # BaseException, same as the step-boundary check); non-offloaded
+        # runs (no ambient token) are byte-unchanged.
+        _dispatch_cancel_token = _DISPATCH_CANCEL_TOKEN_VAR.get()
+        if _dispatch_cancel_token is not None:
+            _dispatch_cancel_token.check()
 
         # B-ENGINE-OUTPUT-REPLAY (runtime spec C-RT-32) — durably persist this
         # step's output to the output-carrying event-history store BEFORE the
@@ -8182,13 +8224,62 @@ def _execute_parallelization(
 
         async def _proceed_fanout() -> list[Any]:
             async with asyncio.timeout(deadline):
+                # B-39 interim constraint (CP spec v1.102 §3, fork §4 item 6;
+                # round-5b codex [P1] #3 "sequence resumed targets on the
+                # PROCEED path") — the PROCEED-tier twin of `_cancel_fanout`'s
+                # own Phase-0: dispatch every resumed durable-HITL target
+                # FIRST, ONE AT A TIME, before ANY sibling begins. PROCEED has
+                # no sibling-cancellation mode, so a resumed target's own
+                # ORDINARY failure must NOT abort the rest — captured as that
+                # branch's own result here, exactly mirroring what
+                # `asyncio.gather(..., return_exceptions=True)` does for every
+                # other branch below. Only a genuine deadline strike
+                # (`CancelledError` from the enclosing `asyncio.timeout`)
+                # propagates, converting to `TimeoutError` at this block's
+                # `__aexit__` — identical to the existing Phase-1/Phase-2
+                # deadline paths. `_rest_plan` (computed above, BEFORE the
+                # §25.19 warm-up split) already excludes these targets from
+                # both the gate-False gather and the warm-up phases below;
+                # without this Phase-0, `_warmup_phase_split()` — which
+                # partitions `_rest_plan`, NOT `branch_plan` — would silently
+                # omit a resumed target from `results_by_ordinal` entirely,
+                # producing a `KeyError` at the branch_plan-order
+                # reconstruction (confirmed via direct grounding — worse than
+                # a bare sequencing race under warm-up-gate-on).
+                _resumed_target_results: dict[int, Any] = {}
+                try:
+                    for _target_plan in _resumed_target_plan:
+                        try:
+                            _resumed_target_results[_target_plan[0]] = await _proceed_branch(
+                                *_target_plan
+                            )
+                        except asyncio.CancelledError:
+                            raise
+                        except BaseException as _resumed_exc:
+                            _resumed_target_results[_target_plan[0]] = _resumed_exc
+                except BaseException:
+                    # codex round-4 [P1] twin (task #40): a deadline strike
+                    # during Phase-0 means `_rest_plan` (gate-False) /
+                    # `_warmup_phase2` (gate-True; Phase 1 never even starts)
+                    # never got a `_proceed_branch` call to release their
+                    # UPFRONT-reserved admissions via `_dispatch_releasing_
+                    # admission`'s own finally. Without this, they
+                    # permanently reduce the shared frame budget.
+                    _release_unconsumed_fanout_admissions(
+                        {plan[0]: _branch_admissions[plan[0]] for plan in _rest_plan}
+                    )
+                    raise
                 if not _warmup_gate:
-                    # Default: all branches concurrent (return_exceptions=True: a failing
-                    # branch does NOT cancel siblings — the proceed semantic).
-                    return await asyncio.gather(
-                        *(_proceed_branch(*plan) for plan in branch_plan),
+                    # Default: all remaining branches concurrent (return_exceptions=True: a
+                    # failing branch does NOT cancel siblings — the proceed semantic).
+                    rest_results = await asyncio.gather(
+                        *(_proceed_branch(*plan) for plan in _rest_plan),
                         return_exceptions=True,
                     )
+                    results_by_ordinal: dict[int, Any] = dict(_resumed_target_results)
+                    for plan, result in zip(_rest_plan, rest_results, strict=True):
+                        results_by_ordinal[plan[0]] = result
+                    return [results_by_ordinal[plan[0]] for plan in branch_plan]
                 # B-18-EPOCH-PARTITION (§25.19) — Phase 1: cohort leaders + non-beneficiary
                 # branches concurrent (per-cohort cache-writes; None/singleton branches keep
                 # their baseline immediacy), then Phase 2: the followers (cache-hits). Both
@@ -8227,7 +8318,7 @@ def _execute_parallelization(
                     *(_proceed_branch(*plan) for plan in _warmup_phase2),
                     return_exceptions=True,
                 )
-                results_by_ordinal: dict[int, Any] = {}
+                results_by_ordinal = dict(_resumed_target_results)
                 for plan, result in zip(_warmup_phase1, phase1_results, strict=True):
                     results_by_ordinal[plan[0]] = result
                 for plan, result in zip(_warmup_phase2, phase2_results, strict=True):
@@ -11663,12 +11754,51 @@ def _execute_orchestrator_workers(
             # `return_exceptions=True`: a failing worker does NOT cancel siblings
             # (the proceed semantic). Bounded by the §25.11 wall-clock deadline.
             async with asyncio.timeout(deadline):
+                # B-39 interim constraint (CP spec v1.102 §3, fork §4 item 6;
+                # round-5b codex [P1] #3 "sequence resumed targets on the
+                # PROCEED path") — ORCHESTRATOR_WORKERS twin of the
+                # PARALLELIZATION `_proceed_fanout` Phase-0 fix above (and of
+                # this same function's own `_cancel_fanout` Phase-0). See
+                # that fix's comment for the full rationale: a resumed
+                # target's ordinary failure is captured as its own result
+                # (never cancels siblings under PROCEED); only a genuine
+                # deadline strike propagates to the existing PARTIAL path
+                # below. Without this, `_warmup_phase_split()` — which
+                # partitions `_rest_plan`, NOT `branch_plan` — would silently
+                # omit a resumed target from `results_by_ordinal`, producing
+                # a `KeyError` at the branch_plan-order reconstruction under
+                # warm-up-gate-on.
+                _resumed_target_results: dict[int, Any] = {}
+                try:
+                    for _target_plan in _resumed_target_plan:
+                        try:
+                            _resumed_target_results[_target_plan[0]] = await _proceed_worker(
+                                *_target_plan
+                            )
+                        except asyncio.CancelledError:
+                            raise
+                        except BaseException as _resumed_exc:
+                            _resumed_target_results[_target_plan[0]] = _resumed_exc
+                except BaseException:
+                    # codex round-4 [P1] twin (task #40): a deadline strike
+                    # during Phase-0 means `_rest_plan` (gate-False) /
+                    # `_warmup_phase2` (gate-True) never got a
+                    # `_proceed_worker` call to release their UPFRONT-reserved
+                    # admissions.
+                    _release_unconsumed_fanout_admissions(
+                        {plan[0]: _branch_admissions[plan[0]] for plan in _rest_plan}
+                    )
+                    raise
                 if not _warmup_gate:
-                    # Default: all workers concurrent (the pre-arc baseline).
-                    return await asyncio.gather(
-                        *(_proceed_worker(*plan) for plan in branch_plan),
+                    # Default: all remaining workers concurrent (the pre-arc baseline).
+                    rest_results = await asyncio.gather(
+                        *(_proceed_worker(*plan) for plan in _rest_plan),
                         return_exceptions=True,
                     )
+                    results_by_ordinal: dict[int, Any] = dict(_resumed_target_results)
+                    for plan, result in zip(_rest_plan, rest_results, strict=True):
+                        results_by_ordinal[plan[0]] = result
+                    return [results_by_ordinal[plan[0]] for plan in branch_plan]
                 # B-18-PREWARM-OW (CP spec v1.96, §25.19) — Phase 1: cohort leaders +
                 # non-beneficiary workers concurrent (per-cohort cache-writes), then
                 # Phase 2: the followers (cache-hits). Both phases bounded by the ONE
@@ -11704,7 +11834,7 @@ def _execute_orchestrator_workers(
                     *(_proceed_worker(*plan) for plan in _warmup_phase2),
                     return_exceptions=True,
                 )
-                results_by_ordinal: dict[int, Any] = {}
+                results_by_ordinal = dict(_resumed_target_results)
                 for plan, result in zip(_warmup_phase1, phase1_results, strict=True):
                     results_by_ordinal[plan[0]] = result
                 for plan, result in zip(_warmup_phase2, phase2_results, strict=True):
@@ -13128,5 +13258,6 @@ __all__ = [
     "dispatch_branch_step_shielded",
     "drain_branch_buffers",
     "execute_workflow",
+    "reset_offloaded_job_branch_inflight_registry",
     "resume_should_redispatch",
 ]

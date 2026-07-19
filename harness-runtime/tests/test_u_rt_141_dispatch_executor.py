@@ -175,6 +175,48 @@ def test_drain_completed_count_uses_real_counter_not_spawned_tally() -> None:
     assert still_outstanding == 0
 
 
+def test_drain_stops_idle_workers_so_they_do_not_leak_across_process_lifetime() -> None:
+    """Round-5b codex [P2] #4 "stop idle dispatch workers during shutdown": a
+    worker that finished its job and is sitting idle (blocked on its own
+    channel) must actually TERMINATE when `drain()` runs. Track A is
+    bootstrap-per-`run()`-call (no cached `HarnessContext`) — without this, a
+    long-running server process accumulates one leaked, permanently-blocked
+    daemon thread per call that dispatched at least one sync sub-agent,
+    unboundedly over the process's lifetime.
+
+    Mutation probe: removing the idle-channel stop-sentinel sweep from
+    `drain()` leaves this worker thread alive (still blocked on
+    `channel.get()`) well past this test's poll window.
+
+    Identifies the worker by the actual `threading.Thread` OBJECT (not by
+    name) — worker names are per-executor-instance sequential
+    (`...-dispatch-1`, `...-dispatch-2`, ...), so a name alone can collide
+    with an unrelated worker from a DIFFERENT executor instance elsewhere in
+    this test module's run."""
+    executor = SubAgentDispatchExecutor(frame_budget=4)
+    worker_holder: list[threading.Thread] = []
+
+    def job() -> None:
+        worker_holder.append(threading.current_thread())
+
+    executor.submit(job).result(timeout=5)
+    worker = worker_holder[0]
+    # The worker is idle now — registered on its own channel, blocked on `.get()`.
+    assert worker.is_alive()
+
+    executor.drain(deadline_seconds=0.2)
+
+    # Join-free by design (per this module's own drain discipline) — poll for
+    # the woken thread to actually return.
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline and worker.is_alive():
+        time.sleep(0.01)
+    assert not worker.is_alive(), (
+        f"worker thread {worker.name!r} is still alive after drain() — "
+        f"the idle-channel stop sentinel was not sent"
+    )
+
+
 def test_atomic_reservation_no_partial_acquisition_under_concurrent_fanouts() -> None:
     """Whole-fan-out atomicity: two racing 3-frame fan-outs vs 4 free — one
     whole, one deterministically degraded (executor-budget variant of the

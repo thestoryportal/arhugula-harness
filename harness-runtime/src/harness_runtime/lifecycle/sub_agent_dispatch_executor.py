@@ -320,9 +320,27 @@ class SubAgentDispatchExecutor:
         drain call (a real completion count, not spawned-worker count: a
         single reused worker can complete many jobs, so `_spawned -
         still_outstanding` undercounts whenever idle-worker reuse happens).
-        Abandoned workers are daemon threads — they cannot block interpreter
-        exit, and their frame leases stay held until their fence acks (the
-        lease discipline; never released by drain itself).
+        Abandoned (still-outstanding) workers are daemon threads — they
+        cannot block interpreter exit, and their frame leases stay held
+        until their fence acks (the lease discipline; never released by
+        drain itself).
+
+        Round-5b codex [P2] #4 "stop idle dispatch workers during shutdown":
+        every currently-IDLE worker (nothing outstanding on it) gets the
+        stop sentinel so its blocked channel `.get()` wakes and the thread
+        exits, rather than blocking forever. Track A is bootstrap-per-`run()`
+        call (no cached `HarnessContext`) — without this, a long-running
+        server process accumulates one leaked, permanently-blocked daemon
+        thread set per call that dispatched at least one sync sub-agent,
+        unboundedly over the process's lifetime (daemon-ness only means the
+        thread never blocks interpreter EXIT — it says nothing about
+        accumulating for the remaining lifetime of a process that outlives
+        any single `run()` call). Best-effort: a worker that finishes its
+        OWN job strictly AFTER this method's outstanding-count snapshot
+        races the stop sweep — it re-registers as idle and blocks again,
+        exactly as before this fix (drain is a shutdown-time operation, not
+        a live-traffic guarantee); the lease discipline above is unaffected
+        either way.
         """
         deadline = time.monotonic() + deadline_seconds
         with self._lock:
@@ -336,6 +354,10 @@ class SubAgentDispatchExecutor:
         with self._lock:
             still_outstanding = len(self._outstanding)
             completed_during = self._completed - completed_before
+            idle_channels = list(self._idle_channels)
+            self._idle_channels.clear()
+        for channel in idle_channels:
+            channel.put(None)
         return (completed_during, still_outstanding)
 
 

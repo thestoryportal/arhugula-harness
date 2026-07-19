@@ -927,17 +927,36 @@ items:
     #1060, pending merge): U-CORE-03 + U-RT-140..144 (grow-on-demand executor, occupied+N+S shared
     frame budget, atomic per-branch reservation via DefaultCapacityAuthority, exactly-once
     CapacityLease release under TOCTOU, shutdown drain wiring) + U-CP-101 (fan-out admission
-    gating at all four construction sites) + the B-39 interim sequential-dispatch constraint. Four
-    decorrelated pre-merge reviews (merge-gate 3-lens + out-of-family Codex) surfaced 8 findings,
-    all fixed with PD-8 mutation-probed witnesses: input-order fitting-prefix admission,
+    gating at all four construction sites) + the B-39 interim sequential-dispatch constraint. FIVE
+    successive rounds of decorrelated pre-merge review (merge-gate 3-lens + out-of-family Codex,
+    each re-run to convergence before the next) surfaced 24 findings total, ALL fixed with PD-8
+    mutation-probed witnesses across the arc: round 1 (8) -- input-order fitting-prefix admission,
     CapacityLease.release() TOCTOU, completed-job counting, executor.drain() wired into shutdown,
     IS C-IS-07 writer-owned timestamp widened to the sub-agent audit path, lease-leak on
     post-admission early-return paths, descendant cancel-token ambiguity bubbling, real provider
-    attempts marked in-flight for the fence-ack contract, and the fan-out barrier deadline
-    watchdog tripping the job-wide fence directly at cutoff rather than waiting on the facade''s
-    own, separately-configurable result_timeout_seconds bound. Merge-gate re-run + codex-review
-    convergence + CI green are the live next step before merge -- this row transitions to closed
-    at that PR''s merge.'
+    attempts marked in-flight for the fence-ack contract, fan-out barrier deadline watchdog tripping
+    the job-wide fence directly at cutoff; round 2 (5) -- capacity-lease premature-release ordering
+    race, warm-up Phase-2 admission leak on Phase-1 failure, PROCEED-tier rejected branch
+    mis-recorded as executed, executor thread-start-failure lease/future leak, capacity-error
+    rt_fail_class marker; round 3 (6 fixed + 1 registered) -- bind_release_to_job() TOCTOU abort-
+    before-submit, PROCEED-tier warm-up Phase-2 leak on deadline cutoff, shutdown ordering
+    (drain-before-flush-observability), cancellation fence applied to nested tool-retry attempts,
+    fence tripped on PROCEED-tier barrier cancellation, dispatch-executor drain bounded within the
+    shutdown deadline, plus the IS writer-owned-timestamp-vs-future-dated-prior-entry gap assessed
+    and confirmed spec-conformant (no fix needed, per Spec_Information_Substrate_v1.md section 7.6
+    clause (c)); round 4/5b (4) -- child ledger writes re-fenced after dispatch (a fence tripped
+    mid-dispatch no longer silently commits), the deadline-watchdog inflight-dispatch registry
+    isolated per offloaded job (severs a cross-thread .cancel() hazard on nested fan-out under
+    offload, mirroring the existing INTER_STEP_CHANNEL_VAR per-child rebind), the B-39 resumed-
+    target-dispatches-first sequencing extended to the PROCEED cascade policy (previously only
+    enforced on the strict/cascade-cancel path -- confirmed via direct grounding to be a KeyError
+    crash under concurrent_cache_warmup, not merely a race), and drain() sending the idle-worker
+    stop sentinel so daemon threads actually terminate instead of accumulating one leaked set per
+    top-level run()/resume() call for the life of a long-running server process. Round 4/5b
+    fixes landed with full local verification green (ruff + pyright + pytest across harness-cp,
+    harness-runtime, harness-core, harness-is). A further merge-gate (3-lens) + codex-review pass
+    against this round is the live next step, followed by CI green, before merge -- this row
+    transitions to closed at that PR''s merge.'
   council: 'yes at apply leg -- C1 orchestration vs C9 reliability dyad CONFIRMS the filing-settled
     position (fail-fast + typed error + RuntimeConfig ownership + default sub_agent_dispatch_max_workers
     = 256 in shared-budget frame units (N upstream frames + one inner frame per SYNC sub-agent branch; async inners uncharged), the filing-settled recommendation, RATIFIED 2026-07-18) or surfaces a reasoned deviation back to the operator; it does NOT

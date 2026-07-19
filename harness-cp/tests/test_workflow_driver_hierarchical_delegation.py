@@ -86,6 +86,8 @@ from harness_cp.sub_agent_brief import (
 )
 from harness_cp.sub_agent_dispatch_cancellation import (
     DISPATCH_CANCEL_TOKEN_VAR,
+    DispatchCancelToken,
+    DispatchFenceTrippedSignal,
 )
 from harness_cp.sub_agent_dispatch_capacity_authority import DefaultCapacityAuthority
 from harness_cp.sub_agent_gate_level_descent import dispatch_sub_agent
@@ -1303,3 +1305,69 @@ def test_width_cap_3_per_parent_still_enforced() -> None:
     assert "hierarchical-delegation-fanout-cap-exceeded" in result.fail_class
     assert "capacity" not in result.fail_class  # not conflated with a capacity rejection
     assert authority.available == authority.frame_budget  # no admission ever attempted
+
+
+# ---------------------------------------------------------------------------
+# B-48 round-5b codex [P1] #1 — fence child ledger writes after dispatch
+# (Runtime spec v1.102 §14.8.10.3 part 1, extended). Linear-driver scope: the
+# SINGLE_THREADED_LINEAR per-step loop that `execute_workflow` runs directly
+# (an offloaded SUB_AGENT_DISPATCH child re-enters exactly this loop).
+# ---------------------------------------------------------------------------
+
+
+class _TripDuringDispatch:
+    """A `StepDispatcher` that trips the ambient `DISPATCH_CANCEL_TOKEN_VAR`
+    token from INSIDE `.dispatch()` — simulating a fence tripped WHILE this
+    step's dispatch was in flight — then returns a perfectly normal result,
+    as a real dispatch racing a concurrent parent-side trip would."""
+
+    def lookup(self, step_kind: StepKind) -> StepDispatcher:
+        return cast(StepDispatcher, self)
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        token = DISPATCH_CANCEL_TOKEN_VAR.get()
+        assert token is not None, "test setup must bind an ambient token"
+        token.trip()
+        return {"role": str(step.step_id), "echoed": dict(step.step_payload)}
+
+
+def test_linear_driver_rechecks_cancel_token_before_ledger_write_after_dispatch() -> None:
+    """A fence tripped DURING a step's dispatch — after the pre-dispatch
+    step-boundary check already passed, and even though the dispatch itself
+    then returns a completely normal (non-exception) result — must still stop
+    that step's output from being committed to the durable ledger. Without
+    the post-dispatch re-check this asserts, `_append_step_ledger_entry`
+    would run unconditionally on any dispatch that returns cleanly,
+    regardless of a trip that landed mid-flight.
+
+    Mutation probe: deleting the `_dispatch_cancel_token.check()` call this
+    test pins (the one directly preceding the B-ENGINE-OUTPUT-REPLAY /
+    ledger-append block) makes `execute_workflow` return normally with the
+    step's entry appended to the ledger, instead of raising
+    `DispatchFenceTrippedSignal` with zero ledger footprint."""
+    ledger = _RecordingLedger()
+    emitter = _Emitter()
+    ctx = cast(DriverContext, _Ctx(ledger=ledger, emitter=emitter))
+    registry = cast(StepDispatcherRegistry, _TripDuringDispatch())
+    manifest = _manifest(
+        workflow_id="wf-linear-fence-recheck",
+        topology_pattern=TopologyPattern.SINGLE_THREADED_LINEAR,
+    )
+    steps = [_leaf_worker("only-step")]
+    token = DispatchCancelToken()
+    reset_token = DISPATCH_CANCEL_TOKEN_VAR.set(token)
+    try:
+        with pytest.raises(DispatchFenceTrippedSignal):
+            execute_workflow(
+                manifest,
+                steps,
+                run_id="run-fence-recheck",
+                ctx=ctx,
+                default_model_binding=_DEFAULT_BINDING,
+                step_dispatchers=registry,
+            )
+    finally:
+        DISPATCH_CANCEL_TOKEN_VAR.reset(reset_token)
+    assert ledger.appends == []

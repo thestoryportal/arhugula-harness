@@ -2902,3 +2902,93 @@ def test_b39_resumed_target_phase0_failure_releases_rest_plan_admissions() -> No
     # around the Phase-0 loop leaves this short by 1 (`sibling-worker`'s
     # admitted-but-never-dispatched frame) — `available` would read 3, not 4.
     assert authority.available == 4
+
+
+def test_b39_resumed_target_dispatches_before_any_sibling_under_proceed() -> None:
+    """Round-5b codex [P1] #3 "sequence resumed targets on the PROCEED path":
+    the SAME B-39 ordering guarantee as
+    `test_b39_resumed_target_dispatches_before_any_sibling`, but under a
+    PROCEED-resolved persona (`SOLO_DEVELOPER`) — the tier `_cancel_fanout`'s
+    own Phase-0 does NOT cover. Before this fix, `_proceed_fanout` dispatched
+    the FULL `branch_plan` (including the resumed target) concurrently via a
+    single `asyncio.gather`, so `sibling-worker` would land strictly between
+    "sub-worker-start" and "sub-worker-done" — exactly the interleaving this
+    test's dispatcher pair is built to catch.
+
+    Mutation probe: reverting `_proceed_fanout`'s gate-False branch to gather
+    over `branch_plan` again (dropping the Phase-0 loop) reproduces that
+    interleaving and fails the order assertion below."""
+    order: list[str] = []
+    registry = cast(StepDispatcherRegistry, _OrderRecordingRegistry(order=order))
+    child_snapshot = _hitl_pending_child_pause_snapshot("wf-child")
+    snapshot = _resumed_target_snapshot(
+        orchestrator_output={"role": "parent-orch"}, child_snapshot=child_snapshot
+    )
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+
+    result = execute_workflow(
+        _manifest(
+            "wf-b39-order-proceed",
+            TopologyPattern.ORCHESTRATOR_WORKERS,
+            persona_tier=PersonaTier.SOLO_DEVELOPER,
+        ),
+        _b39_parent_steps(),
+        run_id="wf-b39-order-proceed-run",
+        ctx=ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=registry,
+        pause_snapshot_input=snapshot,
+    )
+
+    assert result.status is RunStatus.SUCCESS, (
+        f"expected a clean resume; got {result.status} fail_class={result.fail_class!r}"
+    )
+    assert order == ["sub-worker-start", "sub-worker-done", "sibling-worker"], (
+        f"resumed-target-first sequencing violated under PROCEED — dispatch order was "
+        f"{order!r} (sibling-worker must land strictly AFTER sub-worker-done)"
+    )
+
+
+def test_b39_resumed_target_phase0_failure_under_proceed_does_not_abort_sibling() -> None:
+    """PROCEED's defining difference from `_cancel_fanout`'s Phase-0 (which
+    this fix could NOT simply copy verbatim): a resumed target's ORDINARY
+    failure must not cancel/skip siblings — `sibling-worker` still dispatches
+    and the run still degrades to PARTIAL (not FAILED), exactly as an
+    ordinary mid-fan-out PROCEED branch failure already does. Only a genuine
+    deadline strike may abort the rest under PROCEED.
+
+    Mutation probe: re-raising the Phase-0 failure instead of capturing it as
+    that branch's own result (i.e. letting `_FailingSubWorker`'s exception
+    propagate straight out of the `for _target_plan in _resumed_target_plan`
+    loop) would prevent `sibling-worker` from ever dispatching — this
+    assertion catches that."""
+    registry = cast(StepDispatcherRegistry, _FailingSubWorkerRegistry())
+    child_snapshot = _hitl_pending_child_pause_snapshot("wf-child")
+    snapshot = _resumed_target_snapshot(
+        orchestrator_output={"role": "parent-orch"}, child_snapshot=child_snapshot
+    )
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+
+    result = execute_workflow(
+        _manifest(
+            "wf-b39-phase0-fail-proceed",
+            TopologyPattern.ORCHESTRATOR_WORKERS,
+            persona_tier=PersonaTier.SOLO_DEVELOPER,
+        ),
+        _b39_parent_steps(),
+        run_id="wf-b39-phase0-fail-proceed-run",
+        ctx=ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=registry,
+        pause_snapshot_input=snapshot,
+    )
+
+    assert result.status is RunStatus.PARTIAL, (
+        f"a resumed-target failure must degrade to PARTIAL under proceed, not abort the "
+        f"sibling; got {result.status} fail_class={result.fail_class!r}"
+    )
+    assert result.partial_state is not None
+    # `sibling-worker` DID dispatch (its echoed output is present) — proof the
+    # Phase-0 failure was captured as the resumed target's own result, not
+    # re-raised to skip the rest.
+    assert "sibling-worker" in str(result.partial_state)

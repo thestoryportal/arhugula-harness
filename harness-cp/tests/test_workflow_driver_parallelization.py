@@ -871,3 +871,75 @@ def test_parallelization_without_synthesis_uses_deterministic_fold() -> None:
     # No post-join-synthesis entry; 3 branches × {step, terminal} = 6.
     assert not any(str(wk.step_id).startswith("post-join-synthesis") for _p, wk in ledger.appends)
     assert len(ledger.appends) == 6
+
+
+# ---------------------------------------------------------------------------
+# B-48 round-5b codex [P1] #2 — isolate `_BRANCH_INFLIGHT_DISPATCHES` before
+# offload (Runtime spec v1.102 §14.8.10.4 item 5, the `INTER_STEP_CHANNEL_VAR`
+# per-child-rebind precedent extended to the deadline-watchdog registry chain).
+# ---------------------------------------------------------------------------
+
+
+def test_reset_offloaded_job_branch_inflight_registry_isolates_copied_context() -> None:
+    """A `contextvars.copy_context()` snapshot (exactly what the B-48 offload
+    venue takes before running an offloaded dispatch on a worker thread)
+    shares the SAME `set` object instances the parent's `cascade_cancel_
+    barrier` registered in `_BRANCH_INFLIGHT_DISPATCHES` — the copy is
+    shallow, so mutating a set found through the copied context mutates the
+    PARENT's real set too. `reset_offloaded_job_branch_inflight_registry`
+    must run INSIDE the copied context (mirroring the real
+    `hitl_gate_composer._job` closure) so a nested barrier starting inside
+    that offloaded job builds an entirely fresh chain instead of extending
+    the parent's.
+
+    This inlines `cascade_cancel_barrier`'s + `dispatch_branch_step_shielded`'s
+    own two-line registration pattern (`parent_chain = ...get() or ()`,
+    `...set((*parent_chain, new_set))`, then `for registry in chain:
+    registry.add(future)`) rather than driving the full async barrier, to
+    isolate the contextvar-identity mechanism under test from asyncio/
+    threading timing.
+
+    Mutation probe: removing the `reset_offloaded_job_branch_inflight_
+    registry()` call from `hitl_gate_composer._job`'s `_run_with_child_
+    channel` (or emptying this function's own body) makes `parent_set`
+    non-empty after this test's simulated nested registration — the exact
+    cross-thread-`.cancel()`-hazard shape codex round-5b flagged.
+    """
+    import contextvars
+
+    from harness_cp.workflow_driver import (
+        _BRANCH_INFLIGHT_DISPATCHES,
+        reset_offloaded_job_branch_inflight_registry,
+    )
+
+    parent_set: set[asyncio.Future[Any]] = set()
+    parent_token = _BRANCH_INFLIGHT_DISPATCHES.set((parent_set,))
+    try:
+        # The B-48 offload venue's carry point (`hitl_gate_composer._dispatch_
+        # inner_offloaded`): a snapshot taken while the parent chain is live.
+        carried = contextvars.copy_context()
+
+        def _nested_job() -> set[asyncio.Future[Any]]:
+            reset_offloaded_job_branch_inflight_registry()
+            # Mirror `cascade_cancel_barrier`'s own registration exactly.
+            child_set: set[asyncio.Future[Any]] = set()
+            nested_parent_chain = _BRANCH_INFLIGHT_DISPATCHES.get() or ()
+            _BRANCH_INFLIGHT_DISPATCHES.set((*nested_parent_chain, child_set))
+            # Mirror `dispatch_branch_step_shielded`'s own registration.
+            sentinel_future: asyncio.Future[Any] = asyncio.Future(loop=asyncio.new_event_loop())
+            for registry in _BRANCH_INFLIGHT_DISPATCHES.get() or ():
+                registry.add(sentinel_future)
+            return child_set
+
+        child_set = carried.run(_nested_job)
+
+        # The nested job's own future landed in ITS OWN fresh set...
+        assert len(child_set) == 1
+        # ...and NEVER touched the parent's real set object — the parent's
+        # deadline watchdog (running on the parent's own loop/thread) will
+        # never see it, so it can never cross-thread `.cancel()` it.
+        assert parent_set == set()
+        # The parent's OWN binding (outside the copied context) is untouched.
+        assert _BRANCH_INFLIGHT_DISPATCHES.get() == (parent_set,)
+    finally:
+        _BRANCH_INFLIGHT_DISPATCHES.reset(parent_token)

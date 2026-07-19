@@ -1120,13 +1120,40 @@ class RuntimeHITLGateComposer:
             # children (one child's step output entering another's payload
             # via `most_recent_output()`) — a fresh PER-CHILD channel is
             # bound inside the job's own context instead.
+            #
+            # round-5b codex [P1] #2 "isolate loop-owned cancellation
+            # registries before offload" — the SAME selective-carry treatment
+            # for `harness_cp.workflow_driver._BRANCH_INFLIGHT_DISPATCHES`
+            # (the `cascade_cancel_barrier` deadline-watchdog registry chain):
+            # if `self.inner.dispatch(...)` below recurses into a NESTED
+            # fan-out (this offloaded dispatch's own child manifest declares
+            # PARALLELIZATION/ORCHESTRATOR_WORKERS/HIERARCHICAL_DELEGATION),
+            # that nested `cascade_cancel_barrier` would otherwise `.get()`
+            # the copied PARENT chain and register ITS OWN futures — bound to
+            # THIS worker thread's own event loop — into the parent loop's
+            # registry sets. The parent's deadline watchdog runs on the
+            # PARENT's loop/thread and calls `.cancel()` directly on whatever
+            # it finds there; cancelling a different loop's Future
+            # cross-thread is not safe. Resetting the chain to `None` here
+            # severs that leak — the outer branch's own wrapping future
+            # (registered on the PARENT's side, per the existing
+            # `dispatch_branch_step_shielded` call that scheduled THIS
+            # offload) remains the correct, thread-safe cutoff for the whole
+            # offloaded job including any nested fan-out inside it; a nested
+            # barrier's OWN watchdog still bounds ITS OWN in-flight work
+            # correctly on its own loop, just isolated from the parent chain.
             def _run_with_child_channel() -> Mapping[str, Any]:
+                from harness_cp.workflow_driver import (
+                    reset_offloaded_job_branch_inflight_registry,
+                )
+
                 from harness_runtime.lifecycle.inter_step_output_channel import (
                     INTER_STEP_CHANNEL_VAR,
                     InterStepOutputChannel,
                 )
 
                 INTER_STEP_CHANNEL_VAR.set(InterStepOutputChannel())
+                reset_offloaded_job_branch_inflight_registry()
                 return cast(
                     Mapping[str, Any],
                     self.inner.dispatch(binding, step, step_context=step_context),
