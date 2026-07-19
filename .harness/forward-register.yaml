@@ -990,9 +990,9 @@ items:
     never be used -- cross-tenant replay under a deployment-scoped key remains unmitigated until the
     message segment lands or tenant-aware key selection is built. Class 1 fork doc FILED
     2026-07-17 at .harness/class_1_fork_b51_b52_b54_od_signing_amendment_arc.md (leg 1) -- spec+plan deltas APPLIED 2026-07-18 (PR 1056); the impl arc is the live next step (U-OD-30 amended + U-CP-72 + U-RT-137).'
-  close_out: 'Fork doc RATIFIED 2026-07-18; spec deltas APPLIED at OD v1.34 + CP v1.101 + Runtime v1.101 + plans (PR 1056). IMPL ARC: land the
-    canonical-message segment at the next OD amendment arc (byte-compat-scoped per the B-22/B-31
-    precedents). The segment needs tenant identity AVAILABLE AT SIGNING (codex round-16): today
+  close_out: 'Fork doc RATIFIED 2026-07-18; spec deltas APPLIED at OD v1.34 + CP v1.101 + Runtime v1.101 + plans (PR 1056). IMPL ARC: implement the
+    APPLIED fifth-segment + tenant-bearing API per U-OD-30 (amended) + U-CP-72 + U-RT-137 (the
+    canonical-message contract now LIVES at OD v1.34 section 21.2.1 — no further OD amendment owed). The segment needs tenant identity AVAILABLE AT SIGNING (codex round-16): today
     sign_audit_entry/cp_audit_to_od_audit receive no tenant and the writer gets tenant_id only after
     the entry is signed -- the fork specifies a tenant-bearing signing API threaded through the
     converters/composers AND the non-converter paths the filing enumerates (the direct
@@ -1062,10 +1062,9 @@ items:
     MTC tamper-evidence story stops at hash-chain level. Class 1 fork doc FILED 2026-07-17 at
     .harness/class_1_fork_b51_b52_b54_od_signing_amendment_arc.md (leg 3) -- spec+plan deltas APPLIED 2026-07-18 (PR 1056); the impl arc is the live next step (NEW U-OD-55 + U-CP-44/45/42 + U-RT-138).'
   close_out: 'Fork doc RATIFIED 2026-07-18; spec deltas APPLIED (PR 1056; one OD amendment arc carried all
-    three legs). IMPL ARC per the applied requirements (message-format cutover for pre-v1.34
-    real signatures, tenant-scope verifier input, authenticated tenant-bound legacy cutover): specify
-    the verification contract (per-entry backend verify over the canonical message, placeholder
-    handling, failure taxonomy), then implement the verifier + wire into B-49''s per-family unit and
+    three legs). IMPL ARC (the verification contract is SPECIFIED at OD v1.34 section 21.2.2 + CP v1.101
+    section 3 -- PR 1056): implement the verifier per NEW U-OD-55 + wire into B-49''s per-family unit
+    and harness-inspect per U-RT-138 (with the U-CP-44/45 injected-verifier boundary).''s per-family unit and
     harness-inspect.'
   council: 'yes at apply leg -- C7 compliance vs C9 availability dyad; the blocking condition is
     MET by ratified gate item 5 (section 20.3.1 reconciled into the CP rider)'
