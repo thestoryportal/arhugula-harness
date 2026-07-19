@@ -216,8 +216,23 @@ class SyncDispatcherFacade:
         # not been SUBMITTED yet (task busy in sync work on the loop) and
         # miss its later write entirely.
         completion_ack = threading.Event()
+        # B-48 (U-RT-142): re-bind the fan-out branch's capacity lease across
+        # the loop bridge. The CP fan-out sets BRANCH_CAPACITY_LEASE_VAR
+        # before `asyncio.to_thread(dispatcher.dispatch, ...)` (context copies
+        # into THIS worker thread), but `run_coroutine_threadsafe` creates the
+        # loop-side task in the LOOP's context — without the re-bind the
+        # offload venue would double-charge an inner-dispatch frame the
+        # fan-out's atomic allocation already holds (occupied+N+S model).
+        from harness_cp.sub_agent_dispatch_capacity_authority import (
+            BRANCH_CAPACITY_LEASE_VAR,
+        )
+
+        branch_lease = BRANCH_CAPACITY_LEASE_VAR.get()
         coro = _ack_on_completion(
-            self.inner.dispatch(binding, step, step_context=step_context),
+            _rebind_branch_lease(
+                self.inner.dispatch(binding, step, step_context=step_context),
+                branch_lease,
+            ),
             completion_ack,
         )
         future = asyncio.run_coroutine_threadsafe(coro, self.loop)
@@ -288,6 +303,28 @@ async def _ack_on_completion(coro: Any, ack: threading.Event) -> Any:
         return await coro
     finally:
         ack.set()
+
+
+async def _rebind_branch_lease(coro: Any, lease: Any) -> Any:
+    """Re-bind a fan-out branch's capacity lease inside the loop-side task.
+
+    B-48 (U-RT-142): a ContextVar set in the branch worker thread does not
+    survive `run_coroutine_threadsafe` (the task is created in the loop's
+    context), so the facade captures the lease worker-side and re-sets it
+    here — inside the running task, where nested awaits (the composer's
+    offload venue) can read it. `None` (no fan-out lease) awaits verbatim.
+    """
+    if lease is None:
+        return await coro
+    from harness_cp.sub_agent_dispatch_capacity_authority import (
+        BRANCH_CAPACITY_LEASE_VAR,
+    )
+
+    token = BRANCH_CAPACITY_LEASE_VAR.set(lease)
+    try:
+        return await coro
+    finally:
+        BRANCH_CAPACITY_LEASE_VAR.reset(token)
 
 
 def materialize_sync_dispatcher_facade(

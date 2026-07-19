@@ -36,6 +36,7 @@ Admission semantics (CP spec v1.102 §1 rows 1-6):
 from __future__ import annotations
 
 import threading
+from contextvars import ContextVar
 from typing import Protocol, final, runtime_checkable
 
 from harness_core import SubAgentDispatchCapacityError
@@ -87,6 +88,19 @@ class CapacityLease:
 # admitted lease OR the (unraised) rejection error carrying the U-CORE-03
 # data for that branch. Discriminate with isinstance.
 BranchAdmission = CapacityLease | SubAgentDispatchCapacityError
+
+# Double-charge discriminator (occupied+N+S accounting, Runtime spec v1.102
+# §14.8.10.1): a fan-out branch's inner-dispatch frame is charged AT THE
+# FAN-OUT's atomic allocation (2 frames per sync SUB_AGENT_DISPATCH branch),
+# so the runtime offload venue must NOT reserve again inside that branch.
+# The gated fan-out sites bind the branch's lease here before dispatching the
+# branch (`asyncio.to_thread` copies context into the branch worker); the
+# runtime facade re-binds it across the loop bridge; the offload venue reads
+# it — present → frames already leased (skip reservation), absent → the
+# single-frame non-fan-out reservation applies.
+BRANCH_CAPACITY_LEASE_VAR: ContextVar[CapacityLease | None] = ContextVar(
+    "branch_capacity_lease", default=None
+)
 
 
 @runtime_checkable

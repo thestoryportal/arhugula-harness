@@ -115,6 +115,7 @@ Audit-compose failure: composer annotates `hitl.gate.evaluated` via
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import hashlib
 import inspect
 import json
@@ -122,6 +123,7 @@ import logging
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from enum import StrEnum
 from typing import TYPE_CHECKING, Any, NoReturn, cast
 
 from harness_as import BlastRadiusTier, GateLevel
@@ -199,9 +201,28 @@ __all__ = [
     "HITLGateRejectedError",
     "HITLGateTimeoutError",
     "HITLPauseRequestedSignal",
+    "InnerDispatchMode",
     "RuntimeHITLGateComposer",
     "compose_hitl_action_id",
 ]
+
+
+class InnerDispatchMode(StrEnum):
+    """B-48 (U-RT-142) — the §14.8.10.2 construction-time dispatch mode.
+
+    Selected at stage-5 construction per the composer's inner's §14.8.1
+    wrap-asymmetry row — never discovered post-call:
+
+    - ``DIRECT_AWAIT`` — async inners (C-RT-15 inference; the tool path)
+      keep the direct await path, preserving the documented Future/custom-
+      awaitable support (shapes that may need the loop at creation).
+    - ``OFFLOAD_SYNC`` — the sync C-RT-17 sub-agent inner is SUBMITTED to
+      the §14.8.10.1 grow-on-demand executor (off-loop), unblocking the
+      event loop for concurrent workflows / timers / the daemon.
+    """
+
+    DIRECT_AWAIT = "direct-await"
+    OFFLOAD_SYNC = "offload-sync"
 
 
 # ---------------------------------------------------------------------------
@@ -946,6 +967,24 @@ class RuntimeHITLGateComposer:
     `None` (the default) preserves the placeholder signing path byte-for-byte.
     """
 
+    inner_dispatch_mode: InnerDispatchMode = InnerDispatchMode.DIRECT_AWAIT
+    """B-48 (U-RT-142; Runtime spec v1.102 §14.8.10.2) — construction-time
+    dispatch-mode selection replacing the post-call awaitability discovery.
+
+    The composer knows its inner's §14.8.1 wrap-asymmetry row when built at
+    stage 5: `DIRECT_AWAIT` (async C-RT-15 inference / async tool inners —
+    the documented Future/custom-awaitable direct await path, PRESERVED) or
+    `OFFLOAD_SYNC` (the sync C-RT-17 sub-agent inner, SUBMITTED to the
+    §14.8.10.1 grow-on-demand executor). Default `DIRECT_AWAIT` keeps every
+    direct-construction/test fixture byte-compatible."""
+
+    dispatch_executor: Any = None
+    """B-48 (U-RT-142) — the §14.8.10.1 `SubAgentDispatchExecutor` sync
+    inners are submitted to. REQUIRED when `inner_dispatch_mode` is
+    `OFFLOAD_SYNC` (enforced at `__post_init__`); ignored under
+    `DIRECT_AWAIT`. Typed `Any` per the composer's dispatcher-handle
+    convention (no `lifecycle → lifecycle` hard coupling at the field)."""
+
     # Carrier-canonical attribute name constants (per spec §14.8.5 producer-
     # side carrier import discipline). Frozen at construction so a typo in
     # the spec carrier surfaces at dataclass instantiation, not first dispatch.
@@ -964,6 +1003,14 @@ class RuntimeHITLGateComposer:
             "_audit_attr_names",
             tuple(a.attribute_name for a in AUDIT_NAMESPACE_SCHEMA),
         )
+        # B-48 (U-RT-142) construction invariant: the offload mode is
+        # meaningless without an executor to submit to — fail at stage-5
+        # construction, never at first dispatch.
+        if self.inner_dispatch_mode is InnerDispatchMode.OFFLOAD_SYNC and (
+            self.dispatch_executor is None
+        ):
+            msg = "inner_dispatch_mode=OFFLOAD_SYNC requires dispatch_executor"
+            raise ValueError(msg)
 
     async def _dispatch_inner(
         self,
@@ -972,18 +1019,66 @@ class RuntimeHITLGateComposer:
         *,
         step_context: StepExecutionContext,
     ) -> Mapping[str, Any]:
-        """Invoke `self.inner.dispatch(...)`; await if awaitable.
+        """Invoke the inner per the CONSTRUCTION-TIME dispatch mode (§14.8.10.2).
 
-        Per the U-RT-60 wrap-asymmetry fork Q3 ratification, the composer's
-        inner may be sync (C-RT-17 sub-agent dispatcher at SUB_AGENT_BOUNDARY)
-        or async (C-RT-15 bare LLM dispatcher at PRE_ACTION). `isawaitable`
-        is defensive vs `iscoroutine` — tolerates Future / custom `__await__`
-        shapes in addition to bare coroutines.
+        B-48 (U-RT-142) replaced the post-call awaitability discovery: the
+        composer knows its inner's §14.8.1 wrap-asymmetry row when built at
+        stage 5. Under `DIRECT_AWAIT` the pre-v1.102 body is PRESERVED —
+        `isawaitable` (not `iscoroutine`) tolerates Future / custom
+        `__await__` shapes that may need the loop at creation, which is why
+        moving EVERY invocation into a worker was foreclosed. Under
+        `OFFLOAD_SYNC` the sync C-RT-17 inner is SUBMITTED to the
+        §14.8.10.1 executor so the event loop stays free.
         """
+        if self.inner_dispatch_mode is InnerDispatchMode.OFFLOAD_SYNC:
+            return await self._dispatch_inner_offloaded(binding, step, step_context=step_context)
         result = self.inner.dispatch(binding, step, step_context=step_context)
         if inspect.isawaitable(result):
             result = await result
         return cast(Mapping[str, Any], result)
+
+    async def _dispatch_inner_offloaded(
+        self,
+        binding: Any,
+        step: WorkflowStep,
+        *,
+        step_context: StepExecutionContext,
+    ) -> Mapping[str, Any]:
+        """Submit the sync inner to the §14.8.10.1 executor (B-48 offload venue).
+
+        Admission (occupied+N+S accounting): a fan-out branch's inner-dispatch
+        frame was already charged at the fan-out's ATOMIC allocation (CP spec
+        v1.102 §1 row 3) and rides `BRANCH_CAPACITY_LEASE_VAR` — present →
+        no second reservation (double-charging would breach the N+S model);
+        absent → this is a single non-fan-out dispatch and the single-frame
+        all-or-fail-fast reservation applies (§14.8.10.1). The typed capacity
+        error propagates through the existing fail path — never queued.
+
+        Lease lifecycle: an own-lease releases at ACTUAL job termination (the
+        future's done callback — which also fires when an abandoned worker
+        eventually finishes), exactly-once; a fan-out branch lease is
+        CP-owned and never released here. Context carry: the offload carries
+        `contextvars.copy_context()` for trace continuity (§14.8.10.4 item 5;
+        the per-child channel/registry riders are U-RT-144's layer).
+        """
+        from harness_cp.sub_agent_dispatch_capacity_authority import (
+            BRANCH_CAPACITY_LEASE_VAR,
+        )
+
+        executor = self.dispatch_executor
+        assert executor is not None  # __post_init__ invariant
+        step_id = str(getattr(step, "step_id", "<unknown-step>"))
+        own_lease = None
+        if BRANCH_CAPACITY_LEASE_VAR.get() is None:
+            own_lease = executor.reserve(1, step_id=step_id, descent_chain=(step_id,))
+        carried = contextvars.copy_context()
+        future = executor.submit(
+            lambda: carried.run(self.inner.dispatch, binding, step, step_context=step_context)
+        )
+        if own_lease is not None:
+            release_lease = own_lease.release
+            future.add_done_callback(lambda _f: release_lease())
+        return cast(Mapping[str, Any], await asyncio.wrap_future(future))
 
     async def _escalate_to_secondary_channel(
         self,
