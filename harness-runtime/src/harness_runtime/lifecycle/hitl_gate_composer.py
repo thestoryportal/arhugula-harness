@@ -1086,13 +1086,28 @@ class RuntimeHITLGateComposer:
         carried = contextvars.copy_context()
 
         def _job() -> Mapping[str, Any]:
+            # §14.8.10.4 item 5 (U-RT-144) — SELECTIVE contextvar carry: the
+            # copied context preserves trace continuity, but the copied PARENT
+            # inter-step channel would be shared by concurrent sibling
+            # children (one child's step output entering another's payload
+            # via `most_recent_output()`) — a fresh PER-CHILD channel is
+            # bound inside the job's own context instead.
+            def _run_with_child_channel() -> Mapping[str, Any]:
+                from harness_runtime.lifecycle.inter_step_output_channel import (
+                    INTER_STEP_CHANNEL_VAR,
+                    InterStepOutputChannel,
+                )
+
+                INTER_STEP_CHANNEL_VAR.set(InterStepOutputChannel())
+                return cast(
+                    Mapping[str, Any],
+                    self.inner.dispatch(binding, step, step_context=step_context),
+                )
+
             try:
                 if cancel_token is not None:
                     cancel_token.check()
-                return cast(
-                    Mapping[str, Any],
-                    carried.run(self.inner.dispatch, binding, step, step_context=step_context),
-                )
+                return carried.run(_run_with_child_channel)
             finally:
                 if cancel_token is not None:
                     cancel_token.ack()
