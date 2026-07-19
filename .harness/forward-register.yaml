@@ -954,8 +954,27 @@ items:
     stop sentinel so daemon threads actually terminate instead of accumulating one leaked set per
     top-level run()/resume() call for the life of a long-running server process. Round 4/5b
     fixes landed with full local verification green (ruff + pyright + pytest across harness-cp,
-    harness-runtime, harness-core, harness-is). A further merge-gate (3-lens) + codex-review pass
-    against this round is the live next step, followed by CI green, before merge -- this row
+    harness-runtime, harness-core, harness-is); round 6 (2) -- BRANCH_CAPACITY_LEASE_VAR reset at
+    the offload boundary (a nested SUB_AGENT_DISPATCH descendant was reading and re-binding the
+    ancestor branch''s own admitted lease via copy_context(), risking a premature ancestor-frame
+    release while the ancestor''s job was still running) and the post-dispatch durable-write
+    (ledger append) guarded atomically with DispatchCancelToken.effect_entry() instead of a plain
+    check-then-write, closing a TOCTOU window where a fence trip landing between the check and the
+    write went uncounted by wait_ack(); round 7 (3) -- the branch/worker capacity lease released
+    when the pre-dispatch marker write (_mark_branch_dispatched) itself raises (it is the only
+    statement before the dispatch-tied releaser is ever scheduled, so a marker-store failure
+    previously leaked the frame permanently), HITL webhook delivery (deliver_webhook_for_brief)
+    and audit persistence (_compose_and_persist_audit_off_loop) fenced with the same
+    effect_entry() guard (both can run on the event loop after the offload boundary''s ack()
+    already fired, so a job-wide fence trip racing them previously reported a false-clean drain),
+    and sub_agent_dispatch_executor.drain() tracking a _draining flag under the same lock as its
+    idle-channel sweep (a worker whose job outlasted the drain snapshot previously re-registered on
+    a channel drain() would never look at again, leaking the daemon thread). SEVEN successive
+    rounds of decorrelated pre-merge review (merge-gate 3-lens + out-of-family Codex, each re-run to
+    convergence before the next) have now surfaced 29 findings total, ALL fixed with PD-8
+    mutation-probed witnesses; all fixes landed with full local verification green (ruff + pyright
+    + pytest across harness-cp, harness-runtime, harness-core, harness-is). Round 8 (merge-gate
+    3-lens + codex-review) is the live next step, followed by CI green, before merge -- this row
     transitions to closed at that PR''s merge.'
   council: 'yes at apply leg -- C1 orchestration vs C9 reliability dyad CONFIRMS the filing-settled
     position (fail-fast + typed error + RuntimeConfig ownership + default sub_agent_dispatch_max_workers
