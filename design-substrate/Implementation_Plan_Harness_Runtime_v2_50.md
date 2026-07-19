@@ -148,7 +148,7 @@ Five new units; acyclic (Kahn-verifiable — each layer depends only on earlier 
 L0-within-delta: U-RT-140 (← U-RT-103 prior-landed) — plus U-RT-140/U-RT-141 ← U-CORE-03 (Core plan v1.3, codex round-8)
 L1-within-delta: U-RT-141 (← U-RT-140; + U-CORE-03 [Core plan v1.3] + U-CP-101 [cross-axis: the Protocol it implements — the ONE Runtime→CP edge, safe direction; codex round-22])
 L2-within-delta: U-RT-142 (← U-RT-141; + U-RT-60 prior-landed)
-L3-within-delta: U-RT-143 (← U-RT-141, U-RT-142)
+L3-within-delta: U-RT-143 (← U-RT-141, U-RT-142 + U-IS-11 cross-axis — the §7.6-widened writer-owned timestamp API its offloaded audit writes consume; codex round-35)
 L4-within-delta: U-RT-144 (← U-RT-142, U-RT-143)
 ```
 
