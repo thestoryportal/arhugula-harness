@@ -83,7 +83,7 @@ class CapacityLease:
     def job_bound(self) -> bool:
         return self._job_bound
 
-    def bind_release_to_job(self) -> None:
+    def bind_release_to_job(self) -> bool:
         """Transfer release ownership to the offloaded executor JOB.
 
         The lease contract (Runtime spec v1.102 §14.8.10.1) holds frames
@@ -96,9 +96,26 @@ class CapacityLease:
         timed-out branch whose worker still drains keeps its frames leased.
         Branches that never reach the offload (async inners; pre-dispatch
         failures) stay CP-released.
+
+        Returns False if the lease was ALREADY released before this call
+        landed — the reverse race the plain `job_bound = True` write used to
+        miss: `SyncDispatcherFacade.dispatch()`'s own `result_timeout_seconds`
+        bound can fire and return `StepDispatchTimeoutError` to the CP branch
+        (which then calls `release_unless_job_bound()` in its `finally`)
+        BEFORE the cooperatively-cancelled loop-side task reaches this call —
+        `future.cancel()` only requests cancellation at the next await point,
+        so synchronous code between awaits (this call included) can still run
+        after the facade has already given up. A caller that ignores a False
+        return and proceeds to submit new work would run it with the shared
+        frame budget already under-counted by this branch's frames for the
+        job's whole lifetime. Once False, the caller MUST abort before
+        `executor.submit(...)` — never treat the bind as having succeeded.
         """
         with self._lock:
+            if self._released:
+                return False
             self._job_bound = True
+            return True
 
     def release(self) -> bool:
         """Return the leased frames to the budget; exactly-once."""

@@ -525,3 +525,86 @@ def test_reserved_key_and_default_policy_match_spec() -> None:
     assert DEFAULT_TOOL_DISPATCH_RETRY_POLICY.max_attempts == 3
     assert DEFAULT_TOOL_DISPATCH_RETRY_POLICY.backoff == "full_jitter"
     assert DEFAULT_TOOL_DISPATCH_RETRY_POLICY.jitter == "full_jitter"
+
+
+# ---------------------------------------------------------------------------
+# B-48 (codex round-4 [P1]): per-attempt effect-entry fence — the
+# RetryBreakerFallbackDispatcher sibling fix, applied here.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _SlowInnerToolDispatcher:
+    """Signals `started` once inside `dispatch`, then blocks on `release` —
+    lets a test trip the ambient cancel token WHILE the real tool call is
+    genuinely in flight, deterministically (no timing races)."""
+
+    started: Any
+    release: Any
+    result: Mapping[str, Any]
+
+    async def dispatch(
+        self,
+        binding: StepEffectiveBinding,
+        step: WorkflowStep,
+        *,
+        step_context: Any = None,
+    ) -> Mapping[str, Any]:
+        self.started.set()
+        await self.release.wait()
+        return self.result
+
+
+@pytest.mark.asyncio
+async def test_trip_during_real_tool_attempt_marks_job_ack_ambiguous() -> None:
+    """B-48 (codex round-4 [P1] "apply the cancellation fence to nested
+    tool-retry attempts"): the tool-dispatch sibling of
+    `test_lifecycle_retry_breaker_fallback.test_trip_during_real_attempt_marks_job_ack_ambiguous`.
+    A fence trip landing WHILE the real MCP tool attempt is genuinely in
+    flight must resolve the job's ack as ACKED_EFFECT_AMBIGUOUS, never
+    ACKED_CLEAN.
+
+    Mutation probe: reverting the per-attempt guard from `effect_entry()`
+    back to a bare (or absent) pre-attempt check never marks the attempt
+    in-flight, so `token.trip()` (called here while the mock inner is
+    genuinely blocked mid-dispatch) computes `_inflight_at_trip = False` —
+    this test's assertion would then see ACKED_CLEAN.
+    """
+    import asyncio
+
+    from harness_cp.sub_agent_dispatch_cancellation import (
+        DISPATCH_CANCEL_TOKEN_VAR,
+        DispatchCancelToken,
+        FenceAckOutcome,
+    )
+
+    token = DispatchCancelToken()
+    var_token = DISPATCH_CANCEL_TOKEN_VAR.set(token)
+    try:
+        started = asyncio.Event()
+        release = asyncio.Event()
+        inner = _SlowInnerToolDispatcher(started=started, release=release, result={"ok": True})
+        tp, _ = _tracer_provider_with_exporter()
+        wrapper = RetryBreakerToolDispatcher(
+            inner=inner,
+            retry_breaker=_retry_breaker_with_tool_policy(),
+            tracer_provider=tp,
+        )
+
+        dispatch_task = asyncio.create_task(
+            wrapper.dispatch(_binding(), _step(), step_context=_step_context())
+        )
+        await asyncio.wait_for(started.wait(), timeout=5.0)
+        # The real attempt is now genuinely in flight (blocked on `release`).
+        # A tripped token cannot abort an operation already inside the
+        # guard (§14.8.10.3's honestly-stated limit) — it only marks the
+        # ambiguity for the fence-ack contract.
+        token.trip()
+        release.set()
+        result = await asyncio.wait_for(dispatch_task, timeout=5.0)
+        assert result == {"ok": True}
+    finally:
+        DISPATCH_CANCEL_TOKEN_VAR.reset(var_token)
+
+    token.ack()
+    assert token.wait_ack(grace_seconds=0.1) is FenceAckOutcome.ACKED_EFFECT_AMBIGUOUS

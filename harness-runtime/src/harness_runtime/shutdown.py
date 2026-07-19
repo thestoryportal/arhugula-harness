@@ -48,14 +48,18 @@ distinguishing signal.
 
 **U-RT-46 `shutdown()` orchestrator** lands the full C-RT-10 reverse-stage
 close sequence. Step 1 drain sets `ctx.drained_flag` (in-flight wait STRUCK
-per `[[fork-u-rt-44-workflow-loop-drain]]`); step 2 delegates to
-`flush_observability` above; step 3 closes the collector daemon, tracer
-provider (sync API wrapped in `asyncio.to_thread`), and every provider
-client; steps 4-5 are no-ops at HEAD per the close-surface map (MCP
-clients/host are placeholders per U-RT-22; index/cache have no close
-surface; worktree leases none-allocated until U-RT-49+); step 6 reads
-the audit-ledger head hash for consistency verification. Per-resource
-exception isolation; budgeted-remaining timeout pattern.
+per `[[fork-u-rt-44-workflow-loop-drain]]`); step 1b drains the stage-5
+sub-agent-dispatch executor (B-48 U-RT-141) — BEFORE the observability
+flush, so a job still finishing during the drain gets its spans/audit
+entries written before the tracer/exporters close (codex round-4 [P1]);
+step 2 delegates to `flush_observability` above; step 3 closes the
+collector daemon, tracer provider (sync API wrapped in `asyncio.to_thread`),
+and every provider client; steps 4-5 are no-ops at HEAD per the
+close-surface map (MCP clients/host are placeholders per U-RT-22;
+index/cache have no close surface; worktree leases none-allocated until
+U-RT-49+); step 6 reads the audit-ledger head hash for consistency
+verification. Per-resource exception isolation; budgeted-remaining timeout
+pattern.
 """
 
 from __future__ import annotations
@@ -576,12 +580,15 @@ async def shutdown(
     1. **Drain** — set `ctx.drained_flag`. The in-flight wait (AC #2 of
        U-RT-44) is STRUCK per `[[fork-u-rt-44-workflow-loop-drain]]`;
        resolution lands at U-RT-49 when the CP workflow loop materializes.
+    1b. **Drain the stage-5 sub-agent-dispatch executor** (B-48 U-RT-141) —
+       BEFORE the observability flush (codex round-4 [P1]): a job still
+       finishing during this drain must get its spans/audit entries written
+       while the tracer/exporters are still open, not after.
     2. **Flush observability** — delegates to `flush_observability(ctx)`.
-    3. **Close stage-5/4/3b/3a in reverse** — the stage-5 sub-agent-dispatch
-       executor (B-48 U-RT-141: drained first, being the latest-opened of
-       this bundle), collector daemon, tracer provider, then every provider
-       client. Stage-5's LLM emitter/dispatcher (pre-B-48) and stage-3b
-       routing/registries remain stateless-by-design no-ops.
+    3. **Close collector/tracer/provider clients in reverse** — collector
+       daemon, tracer provider, then every provider client. Stage-5's LLM
+       emitter/dispatcher (pre-B-48) and stage-3b routing/registries remain
+       stateless-by-design no-ops.
     4. **Close stage-2 resources** — MCP clients + host. Both are
        placeholder dataclasses at HEAD (U-RT-22); no-op until a real
        MCP runtime lands.
@@ -625,6 +632,38 @@ async def shutdown(
     # Step 1 — drain. Idempotent: `Event.set()` is a no-op if already set.
     ctx.drained_flag.set()
 
+    # Step 1b — stage-5 sub-agent-dispatch executor (B-48 U-RT-141), drained
+    # BEFORE observability flush (codex round-4 [P1] "drain dispatch jobs
+    # before flushing observability"): a job still running when flush would
+    # otherwise fire can emit spans/audit entries THROUGH the drain window —
+    # draining first means every such write lands before step 2 flushes and
+    # step 3b closes the tracer/exporters, instead of racing (or losing) a
+    # write that happens during/after those close. Reverse-stage order:
+    # LOOP_INIT (stage 5) opened after OD (stage 4), so it closes before the
+    # collector/tracer close below regardless of this reordering.
+    remaining = max(0.0, deadline - time.monotonic())
+    try:
+        # codex round-4 [P2] "include drain scheduling in the shutdown
+        # deadline" — `_drain_dispatch_executor`'s own `asyncio.to_thread`
+        # call is scheduled onto the loop's DEFAULT thread pool; if that pool
+        # is saturated (other `to_thread` work queued ahead of it), the
+        # SCHEDULING delay alone can push past `remaining` before `drain()`
+        # ever starts counting its own internal budget. `asyncio.wait_for`
+        # bounds the whole operation — scheduling delay plus drain time —
+        # to `remaining`, mirroring the same fix already applied to step 3b
+        # (`_close_tracer_provider`) below.
+        drained_clean = await asyncio.wait_for(
+            _drain_dispatch_executor(ctx, remaining), timeout=remaining
+        )
+        if not drained_clean:
+            failures.append("sub_agent_dispatch_executor")
+            timed_out = True
+    except TimeoutError:
+        failures.append("sub_agent_dispatch_executor")
+        timed_out = True
+    except Exception:
+        failures.append("sub_agent_dispatch_executor")
+
     # Step 2 — flush observability.
     remaining = max(0.0, deadline - time.monotonic())
     flush_report = await flush_observability(ctx, timeout_millis=int(remaining * 1000))
@@ -632,21 +671,6 @@ async def shutdown(
         failures.extend(f"flush:{tag}" for tag in flush_report.failures)
     if flush_report.timed_out:
         timed_out = True
-
-    # Step 3 (pre-3a) — stage-5 sub-agent-dispatch executor (B-48 U-RT-141).
-    # Reverse-stage order: LOOP_INIT (stage 5) opened after OD (stage 4), so
-    # it drains before the collector/tracer close below.
-    # Step 3 (pre-3a) — stage-5 sub-agent-dispatch executor (B-48 U-RT-141).
-    # Reverse-stage order: LOOP_INIT (stage 5) opened after OD (stage 4), so
-    # it drains before the collector/tracer close below.
-    remaining = max(0.0, deadline - time.monotonic())
-    try:
-        drained_clean = await _drain_dispatch_executor(ctx, remaining)
-        if not drained_clean:
-            failures.append("sub_agent_dispatch_executor")
-            timed_out = True
-    except Exception:
-        failures.append("sub_agent_dispatch_executor")
 
     # Step 3a — collector daemon.
     remaining = max(0.0, deadline - time.monotonic())

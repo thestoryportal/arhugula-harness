@@ -898,6 +898,73 @@ def test_ow_partition_cascade_cancel_leader_failure_releases_withheld_follower_a
     assert authority.available == authority.frame_budget
 
 
+def test_ow_partition_proceed_deadline_strike_releases_withheld_follower_admissions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """B-48 (codex round-4 [P1] "release admissions withheld by warm-up
+    timeouts"): PROCEED-tier + deadline twin of
+    `test_ow_partition_cascade_cancel_leader_failure_releases_withheld_follower_admissions`
+    (OWP5's admission half) and the PARALLELIZATION deadline-strike sibling.
+    Both leaders wedge past the deadline (neither self-releases before the
+    barrier strikes), so the snapshot taken IMMEDIATELY on `_run` returning —
+    before this test's own `finally` unblocks them — is race-free: no leader
+    could possibly have released yet. Mutation probe: dropping the try/except
+    around Phase-1's gather leaves the withheld followers' 2 frames stuck
+    forever (the snapshot would show frame_budget - 4, not frame_budget - 2)."""
+    from harness_cp import workflow_driver as wd
+
+    monkeypatch.setattr(wd, "_DEFAULT_FANOUT_BARRIER_DEADLINE_SECONDS", 0.2)
+
+    class _WedgeBothLeadersDispatcher:
+        def __init__(self, *, release: threading.Event) -> None:
+            self._release = release
+            self._lock = threading.Lock()
+            self.dispatched: list[int] = []
+
+        def dispatch(
+            self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+        ) -> dict[str, Any]:
+            idx = int(step.step_payload["index"])
+            with self._lock:
+                self.dispatched.append(idx)
+            if idx in (0, 2):
+                self._release.wait(timeout=5.0)
+            return {"index": idx}
+
+        def cohort_key(self, binding: StepEffectiveBinding, step: WorkflowStep) -> str | None:
+            cohort = step.step_payload.get("cohort")
+            return f"cohort-{cohort}" if cohort is not None else None
+
+    authority = DefaultCapacityAuthority(frame_budget=4)
+    release = threading.Event()
+    dispatcher = _WedgeBothLeadersDispatcher(release=release)
+    available_on_return: int | None = None
+    try:
+        result = _run(
+            steps=[
+                _orch_step(),
+                _worker(0, "A"),
+                _worker(1, "A"),
+                _worker(2, "B"),
+                _worker(3, "B"),
+            ],
+            registry=_registry(dispatcher),
+            persona_tier=PersonaTier.SOLO_DEVELOPER,
+            engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+            store=_MiniOWStore(),
+            capacity_authority=authority,
+        )
+        # Race-free: captured before `finally` unblocks either wedged leader —
+        # neither leader's frame could possibly have released yet, so any
+        # frames back at this exact point came ONLY from the followers.
+        available_on_return = authority.available
+    finally:
+        release.set()
+    assert result.status is RunStatus.PARTIAL
+    assert sorted(dispatcher.dispatched) == [0, 2]
+    assert available_on_return == authority.frame_budget - 2
+
+
 def test_ow_partition_proceed_leader_failure_still_releases_all_followers() -> None:
     """OWP6 (PROCEED, H1 lineage): leader 0 (cohort A) FAILS in Phase 1 —
     Phase 2 still dispatches (including the failed cohort's follower) → PARTIAL;

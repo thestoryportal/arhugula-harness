@@ -314,3 +314,70 @@ async def test_sibling_children_channel_isolation_no_cross_child_output() -> Non
     assert observed["a"] == {"from": "a"}  # never sibling b's output
     assert observed["b"] == {"from": "b"}
     assert parent_channel.most_recent_output() is None  # parent unpolluted
+
+
+@pytest.mark.asyncio
+async def test_bind_release_to_job_already_released_aborts_before_submit() -> None:
+    """Concurrency-lens finding (round 3): `SyncDispatcherFacade.dispatch()`'s
+    own `result_timeout_seconds` bound can release this branch's lease (the
+    CP branch's `finally` calling `release_unless_job_bound()`) BEFORE this
+    cooperatively-cancelled loop-side task reaches `bind_release_to_job()` —
+    a bare `future.cancel()` only requests cancellation at the next await
+    point, so the offload-setup code between awaits can still run after the
+    facade already gave up. Mutation probe: reverting `bind_release_to_job`
+    to the bare `self._job_bound = True` write (dropping the `_released`
+    check) would let this scenario silently proceed to `executor.submit()`,
+    running new work against a lease the CP side already returned to the
+    budget — undercounting the shared frame budget for the job's whole
+    lifetime. This test asserts `executor.submit()` is never reached and the
+    standard fence signal is raised instead."""
+    from harness_cp.sub_agent_dispatch_cancellation import (
+        DISPATCH_CANCEL_TOKEN_VAR,
+        DispatchCancelToken,
+        DispatchFenceTrippedSignal,
+    )
+    from harness_cp.sub_agent_dispatch_capacity_authority import (
+        BRANCH_CAPACITY_LEASE_VAR,
+        DefaultCapacityAuthority,
+    )
+
+    class _NeverCalledInner:
+        def dispatch(self, binding: Any, step: Any, *, step_context: Any) -> Mapping[str, Any]:
+            raise AssertionError("dispatch must never run — lease already released")
+
+    class _SubmitTrackingExecutor:
+        """Delegates admission to a real executor; `submit()` fails the test
+        outright — the fix must abort BEFORE reaching submit at all."""
+
+        def __init__(self, real: SubAgentDispatchExecutor) -> None:
+            self._real = real
+
+        def reserve(self, *args: Any, **kwargs: Any) -> Any:
+            return self._real.reserve(*args, **kwargs)
+
+        def submit(self, fn: Any) -> Any:
+            raise AssertionError("submit must never be called — the bind reported release")
+
+    real_executor = SubAgentDispatchExecutor(frame_budget=4)
+    fake_executor = _SubmitTrackingExecutor(real_executor)
+    composer = _make_composer(inner=_NeverCalledInner(), executor=cast(Any, fake_executor))
+
+    authority = DefaultCapacityAuthority(frame_budget=4)
+    branch_lease = authority.reserve(1, step_id="branch-0", descent_chain=("branch-0",))
+    # Simulate the facade's own timeout path: the CP branch already gave up
+    # and released the lease via `release_unless_job_bound()` before this
+    # loop-side task reached the offload-setup code.
+    assert branch_lease.release_unless_job_bound() is True
+
+    token = DispatchCancelToken()
+    token.trip()  # the facade's timeout handler always trips before releasing
+    lease_reset = BRANCH_CAPACITY_LEASE_VAR.set(branch_lease)
+    token_reset = DISPATCH_CANCEL_TOKEN_VAR.set(token)
+    try:
+        with pytest.raises(DispatchFenceTrippedSignal):
+            await composer._dispatch_inner(
+                object(), _make_step(), step_context=_make_step_context()
+            )
+    finally:
+        BRANCH_CAPACITY_LEASE_VAR.reset(lease_reset)
+        DISPATCH_CANCEL_TOKEN_VAR.reset(token_reset)

@@ -95,6 +95,34 @@ def test_release_unless_job_bound_releases_when_not_bound() -> None:
     assert lease.release_unless_job_bound() is False  # exactly-once
 
 
+def test_bind_release_to_job_reports_false_when_already_released() -> None:
+    """The reverse race: `release_unless_job_bound()` can win BEFORE
+    `bind_release_to_job()` lands (a cooperatively-cancelled caller's
+    `future.cancel()` only requests cancellation at the next await point, so
+    synchronous offload-setup code can still run after the caller already
+    released). Mutation probe: reverting `bind_release_to_job` to the bare
+    `self._job_bound = True` write (no `_released` check, no return value)
+    would report success here regardless — the caller could not distinguish
+    a genuine bind from a lease that already returned its frames to the
+    budget."""
+    authority = DefaultCapacityAuthority(frame_budget=4)
+    lease = authority.reserve(3, step_id="s1", descent_chain=("s1",))
+    assert lease.release_unless_job_bound() is True
+    assert authority.available == 4
+    assert lease.bind_release_to_job() is False
+    assert lease.job_bound is False  # never flips once already released
+
+
+def test_bind_release_to_job_reports_true_when_not_yet_released() -> None:
+    authority = DefaultCapacityAuthority(frame_budget=4)
+    lease = authority.reserve(3, step_id="s1", descent_chain=("s1",))
+    assert lease.bind_release_to_job() is True
+    assert lease.job_bound is True
+    # Once bound, teardown's guarded release is a no-op — frames stay held.
+    assert lease.release_unless_job_bound() is False
+    assert authority.available == 1
+
+
 def test_reserve_fanout_whole_fit_returns_all_leases() -> None:
     authority = DefaultCapacityAuthority(frame_budget=8)
     results = authority.reserve_fanout(

@@ -1322,6 +1322,55 @@ def test_proceed_warmup_phase1_deadline_strike_records_cancelled_for_withheld(
     assert elapsed < 1.5
 
 
+def test_proceed_warmup_phase1_deadline_strike_releases_withheld_phase2_admissions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """B-48 (codex round-4 [P1] "release admissions withheld by warm-up
+    timeouts"): PROCEED-tier twin of
+    `test_cascade_cancel_warmup_branch0_failure_releases_withheld_phase2_admissions`.
+    Unlike the strict tier's TaskGroup (already fixed), `_proceed_fanout`'s
+    Phase-1 gather is a SEPARATE, sequential `await` from Phase 2's — the
+    outer `asyncio.timeout(deadline)` firing while Phase-1's gather is still
+    running cancels it BEFORE Phase 2's own gather statement is ever reached,
+    so `_warmup_phase2`'s upfront-reserved admissions never get a
+    `_proceed_branch` call to release them (mutation probe: dropping the
+    try/except around Phase-1's gather leaves `authority.available` short by
+    the withheld branches' frames, permanently reducing the shared budget)."""
+    from harness_cp import workflow_driver as wd
+
+    monkeypatch.setattr(wd, "_DEFAULT_FANOUT_BARRIER_DEADLINE_SECONDS", 0.2)
+    n = 3
+    authority = DefaultCapacityAuthority(frame_budget=4)
+    release = threading.Event()
+    dispatcher = _WedgeBranch0CohortDispatcher(release=release, self_release_seconds=2.0)
+    store = _MiniFanoutStore()
+    try:
+        result = _run(
+            steps=[_inference_step(i) for i in range(n)],
+            dispatcher=cast(StepDispatcher, dispatcher),
+            concurrent_cache_warmup=True,
+            persona_tier=PersonaTier.SOLO_DEVELOPER,
+            engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+            store=store,
+            capacity_authority=authority,
+        )
+    finally:
+        release.set()
+    assert result.status is RunStatus.PARTIAL
+    assert dispatcher.dispatched == [0]
+    # The 2 WITHHELD siblings' frames must be back by the time `_run` returns
+    # (released synchronously inside `_proceed_fanout`'s except-block, before
+    # `_run_fanout_to_completion` returns) — deterministic, race-free. Whether
+    # branch[0]'s OWN frame has ALSO come back depends on how fast its wedged
+    # worker thread unblocks after `release.set()` in `finally` above (a
+    # separate, racy background completion), so this asserts the FIX's lower
+    # bound rather than pinning an exact count: broken (leaked withheld
+    # siblings) can only ever reach frame_budget - 2 (the pre-existing spare
+    # + branch[0]'s eventual own release); fixed reaches frame_budget - 1
+    # immediately and frame_budget once branch[0] also completes.
+    assert authority.available >= authority.frame_budget - 1
+
+
 def test_pause_warmup_phase1_deadline_strike_failed_with_cancelled_terminals(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

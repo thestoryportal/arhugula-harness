@@ -8025,6 +8025,14 @@ def _execute_parallelization(
         ) -> None:
             dispatcher = branch_dispatchers[branch_index]
             _admission = _branch_admissions[branch_index]
+            # codex round-4 [P2] "trip the fence on proceed-barrier
+            # cancellation" — declared before the try so the except handler
+            # below is well-defined even in the (asyncio-impossible, but
+            # statically-unprovable) case a CancelledError lands before the
+            # token is bound; the two synchronous statements between here
+            # and the assignment below contain no await, so cancellation
+            # cannot actually land there under asyncio's cooperative model.
+            _cancel_token: _DispatchCancelToken | None = None
             try:
                 if isinstance(_admission, SubAgentDispatchCapacityError):
                     # B-48 apply-note 2: admission-rejection composes as a
@@ -8032,6 +8040,20 @@ def _execute_parallelization(
                     # control-transfer mode.
                     raise _admission
                 _lease_token = _BRANCH_CAPACITY_LEASE_VAR.set(_admission)
+                # PROCEED has no sibling-cancellation mode (a branch failure
+                # never cancels another branch under `return_exceptions=True`),
+                # so ANY CancelledError reaching this coroutine's own frame is,
+                # by construction, the §25.11 barrier deadline cutting it off
+                # — bind a per-branch token (mirroring `_cancel_branch`'s
+                # strict-tier binding) so the CancelledError handler below can
+                # trip the fence, exactly as `dispatch_branch_step_shielded`
+                # does for the strict tiers (task #28). Without this, a
+                # PROCEED branch's timeout never trips the ambient fence —
+                # only the facade's own, separately-configurable
+                # `result_timeout_seconds` would eventually catch it, leaving
+                # the job's cancel token un-tripped for the gap in between.
+                _cancel_token = _DispatchCancelToken(parent=_DISPATCH_CANCEL_TOKEN_VAR.get())
+                _cancel_token_ctx = _DISPATCH_CANCEL_TOKEN_VAR.set(_cancel_token)
                 try:
                     # Lease-lifecycle (§14.8.10.1): `_dispatch_releasing_
                     # admission` releases `_admission` in ITS OWN finally,
@@ -8053,12 +8075,15 @@ def _execute_parallelization(
                         _admission,
                     )
                 finally:
+                    _DISPATCH_CANCEL_TOKEN_VAR.reset(_cancel_token_ctx)
                     _BRANCH_CAPACITY_LEASE_VAR.reset(_lease_token)
             except asyncio.CancelledError:
                 # The §25.11 wall-clock deadline cancelled this in-flight branch.
                 # Its dispatch was scheduled (the effect may have landed) → record
                 # the step entry (obl. 3 — no silent gap) + a `timed_out` terminal,
                 # then re-raise to honor the cancellation.
+                if _cancel_token is not None:
+                    _cancel_token.trip()
                 append_branch_step_ledger_entry(
                     branch_writer=writer,
                     branch_context=child,
@@ -8176,10 +8201,28 @@ def _execute_parallelization(
                 # shape); the DEADLINE CancelledError still propagates (the gather itself is
                 # cancelled → TimeoutError at the timeout __aexit__), preserving M2/ML
                 # semantics. Results reassembled in branch_plan ordinal order.
-                phase1_results = await asyncio.gather(
-                    *(_proceed_branch(*plan) for plan in _warmup_phase1),
-                    return_exceptions=True,
-                )
+                try:
+                    phase1_results = await asyncio.gather(
+                        *(_proceed_branch(*plan) for plan in _warmup_phase1),
+                        return_exceptions=True,
+                    )
+                except BaseException:
+                    # codex round-4 [P1] "release admissions withheld by
+                    # warm-up timeouts" — PROCEED-tier twin of the strict-tier
+                    # fix above `_cancel_branch`'s TaskGroup. Under PROCEED,
+                    # branch FAILURES never raise here (return_exceptions=True
+                    # captures them as results); the ONLY way this gather
+                    # itself raises is the outer `asyncio.timeout(deadline)`
+                    # cancelling it (or a spontaneous CancelledError) BEFORE
+                    # Phase 2's gather statement is ever reached — meaning
+                    # `_warmup_phase2`'s UPFRONT-reserved admissions never get
+                    # a `_proceed_branch` call to release them via
+                    # `_dispatch_releasing_admission`'s own finally. Without
+                    # this, they permanently reduce the shared frame budget.
+                    _release_unconsumed_fanout_admissions(
+                        {plan[0]: _branch_admissions[plan[0]] for plan in _warmup_phase2}
+                    )
+                    raise
                 phase2_results = await asyncio.gather(
                     *(_proceed_branch(*plan) for plan in _warmup_phase2),
                     return_exceptions=True,
@@ -11480,6 +11523,11 @@ def _execute_orchestrator_workers(
         ) -> None:
             dispatcher = step_dispatchers.lookup(step.step_kind)
             _admission = _branch_admissions[branch_index]
+            # See `_proceed_branch`'s identical rationale for declaring this
+            # before the try (pyright possibly-unbound guard; asyncio cannot
+            # actually deliver cancellation before the assignment below,
+            # since nothing between here and there awaits).
+            _cancel_token: _DispatchCancelToken | None = None
             try:
                 if isinstance(_admission, SubAgentDispatchCapacityError):
                     # B-48 apply-note 2: admission-rejection composes as a
@@ -11487,6 +11535,15 @@ def _execute_orchestrator_workers(
                     # control-transfer mode.
                     raise _admission
                 _lease_token = _BRANCH_CAPACITY_LEASE_VAR.set(_admission)
+                # codex round-4 [P2] "trip the fence on proceed-barrier
+                # cancellation" — see `_proceed_branch`'s identical rationale:
+                # PROCEED has no sibling-cancellation mode, so any
+                # CancelledError reaching this coroutine's own frame is the
+                # §25.11 barrier deadline. Bind a per-worker token so the
+                # handler below can trip it, mirroring
+                # `dispatch_branch_step_shielded`'s strict-tier behavior.
+                _cancel_token = _DispatchCancelToken(parent=_DISPATCH_CANCEL_TOKEN_VAR.get())
+                _cancel_token_ctx = _DISPATCH_CANCEL_TOKEN_VAR.set(_cancel_token)
                 try:
                     # Lease-lifecycle (§14.8.10.1): see `_proceed_branch`'s
                     # identical rationale — `_dispatch_releasing_admission`
@@ -11502,6 +11559,7 @@ def _execute_orchestrator_workers(
                         _admission,
                     )
                 finally:
+                    _DISPATCH_CANCEL_TOKEN_VAR.reset(_cancel_token_ctx)
                     _BRANCH_CAPACITY_LEASE_VAR.reset(_lease_token)
             except asyncio.CancelledError:
                 # The §25.11 wall-clock deadline (`_proceed_fanout`'s
@@ -11512,6 +11570,8 @@ def _execute_orchestrator_workers(
                 # WITHOUT this branch a deadline-cancelled worker would buffer
                 # nothing and its dispatched effect would be an unrecorded silent
                 # gap (decorrelated-review [P2]).
+                if _cancel_token is not None:
+                    _cancel_token.trip()
                 append_branch_step_ledger_entry(
                     branch_writer=writer,
                     branch_context=child,
@@ -11621,10 +11681,25 @@ def _execute_orchestrator_workers(
                 # propagates (the gather itself is cancelled → TimeoutError at the
                 # timeout __aexit__), preserving the deadline-exit scan semantics.
                 # Results reassembled in branch_plan ordinal order.
-                phase1_results = await asyncio.gather(
-                    *(_proceed_worker(*plan) for plan in _warmup_phase1),
-                    return_exceptions=True,
-                )
+                try:
+                    phase1_results = await asyncio.gather(
+                        *(_proceed_worker(*plan) for plan in _warmup_phase1),
+                        return_exceptions=True,
+                    )
+                except BaseException:
+                    # codex round-4 [P1] "release admissions withheld by
+                    # warm-up timeouts" — ORCHESTRATOR_WORKERS twin of the
+                    # PARALLELIZATION `_proceed_fanout` fix above. Branch
+                    # failures never raise here (return_exceptions=True); the
+                    # only way this gather raises is the outer
+                    # `asyncio.timeout(deadline)` cancelling it before Phase
+                    # 2's gather is ever reached — leaving `_warmup_phase2`'s
+                    # upfront-reserved admissions with no `_proceed_worker`
+                    # call to release them.
+                    _release_unconsumed_fanout_admissions(
+                        {plan[0]: _branch_admissions[plan[0]] for plan in _warmup_phase2}
+                    )
+                    raise
                 phase2_results = await asyncio.gather(
                     *(_proceed_worker(*plan) for plan in _warmup_phase2),
                     return_exceptions=True,

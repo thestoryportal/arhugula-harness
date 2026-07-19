@@ -512,12 +512,17 @@ class _FakeAuditWriter:
 class _FakeDispatchExecutor:
     """Spy for the B-48 stage-5 sub-agent-dispatch executor's `drain()`."""
 
-    def __init__(self, *, still_outstanding: int = 0) -> None:
+    def __init__(self, *, still_outstanding: int = 0, drain_sleep_seconds: float = 0.0) -> None:
         self.drain_called_with: float | None = None
         self._still_outstanding = still_outstanding
+        self._drain_sleep_seconds = drain_sleep_seconds
 
     def drain(self, *, deadline_seconds: float) -> tuple[int, int]:
         self.drain_called_with = deadline_seconds
+        if self._drain_sleep_seconds:
+            import time as _time
+
+            _time.sleep(self._drain_sleep_seconds)
         return (0, self._still_outstanding)
 
 
@@ -648,6 +653,70 @@ async def test_shutdown_drains_stage_5_dispatch_executor(tmp_path: Path) -> None
     assert dispatch_executor.drain_called_with is not None
     assert "sub_agent_dispatch_executor" not in report.failures
     assert report.timed_out is False
+
+
+@pytest.mark.asyncio
+async def test_shutdown_drains_dispatch_executor_before_flushing_observability(
+    tmp_path: Path,
+) -> None:
+    """codex round-4 [P1] "drain dispatch jobs before flushing observability":
+    a job still running when the observability flush fires can emit spans/
+    audit entries THROUGH the flush window and past the tracer/exporter
+    close that follows — draining the stage-5 executor first means any such
+    write lands while the tracer is still open. Mutation probe: swapping the
+    drain and flush steps back to flush-then-drain would record
+    `["flush", "drain"]` here instead."""
+    call_order: list[str] = []
+
+    class _OrderRecordingDispatchExecutor:
+        def drain(self, *, deadline_seconds: float) -> tuple[int, int]:
+            call_order.append("drain")
+            return (0, 0)
+
+    class _OrderRecordingTracer(_FakeTracerWithShutdown):
+        def force_flush(self, timeout_millis: int = 30_000) -> bool:
+            call_order.append("flush")
+            return super().force_flush(timeout_millis)
+
+    ctx = _shutdown_ctx(
+        tmp_path,
+        tracer=_OrderRecordingTracer(returns=True),
+        daemon=_FakeCollectorDaemon(),
+        providers={},
+    )
+    ctx.sub_agent_dispatch_executor = _OrderRecordingDispatchExecutor()
+    report = await shutdown(ctx, timeout=5.0)
+    assert call_order == ["drain", "flush"]
+    assert "sub_agent_dispatch_executor" not in report.failures
+
+
+@pytest.mark.asyncio
+async def test_shutdown_bounded_by_timeout_when_dispatch_executor_drain_hangs(
+    tmp_path: Path,
+) -> None:
+    """codex round-4 [P2] "include drain scheduling in the shutdown deadline":
+    a hanging (or scheduling-delayed) dispatch-executor drain must not block
+    the rest of the shutdown sequence indefinitely — mirrors
+    `test_shutdown_bounded_by_timeout_when_tracer_shutdown_hangs`. Previously
+    `await _drain_dispatch_executor(ctx, remaining)` had no `asyncio.wait_for`
+    wrapper of its own, so a slow-to-schedule-or-run drain (e.g. the loop's
+    default thread pool saturated by other `to_thread` work) could push the
+    whole shutdown sequence past its overall deadline.
+
+    Mutation probe: removing the `asyncio.wait_for(...)` wrapper around this
+    step reverts to waiting out the full 0.3s sleep instead of bounding to
+    ~0.02s — this test's elapsed-time assertion would then fail."""
+    dispatch_executor = _FakeDispatchExecutor(drain_sleep_seconds=0.3)
+    ctx = _shutdown_ctx(
+        tmp_path, tracer=_FakeTracerWithShutdown(), daemon=_FakeCollectorDaemon(), providers={}
+    )
+    ctx.sub_agent_dispatch_executor = dispatch_executor
+    start = asyncio.get_event_loop().time()
+    report = await asyncio.wait_for(shutdown(ctx, timeout=0.02), timeout=1.0)
+    elapsed = asyncio.get_event_loop().time() - start
+    assert elapsed < 0.3, "shutdown() waited out the full hang instead of bounding it"
+    assert "sub_agent_dispatch_executor" in report.failures
+    assert report.timed_out is True
 
 
 @pytest.mark.asyncio

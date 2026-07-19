@@ -1063,6 +1063,7 @@ class RuntimeHITLGateComposer:
         """
         from harness_cp.sub_agent_dispatch_cancellation import (
             DISPATCH_CANCEL_TOKEN_VAR,
+            DispatchFenceTrippedSignal,
         )
         from harness_cp.sub_agent_dispatch_capacity_authority import (
             BRANCH_CAPACITY_LEASE_VAR,
@@ -1079,7 +1080,28 @@ class RuntimeHITLGateComposer:
             # The fan-out's atomic allocation already holds this branch's
             # frames; release ownership transfers to THIS job (lease held to
             # actual job termination — never parent return; §14.8.10.1).
-            branch_lease.bind_release_to_job()
+            #
+            # Concurrency-lens finding (round 3): `SyncDispatcherFacade
+            # .dispatch()`'s own `result_timeout_seconds` bound can fire and
+            # return `StepDispatchTimeoutError` to the CP branch — which
+            # releases this lease in its own `finally` — BEFORE this
+            # cooperatively-cancelled loop-side task reaches here (a bare
+            # `future.cancel()` only requests cancellation at the next await
+            # point; this line can still run after the facade gave up). If
+            # the bind reports the lease was already released, the branch is
+            # already terminally failed on the CP side — submitting new work
+            # now would run undercounted against the shared frame budget for
+            # the job's whole lifetime. The facade's timeout handler always
+            # trips the ambient fence BEFORE releasing (dispatch() line
+            # 273 `cancel_token.trip()` precedes the raise that lets the CP
+            # branch's finally run), so consulting the token here always
+            # raises the standard fence signal instead of silently
+            # proceeding.
+            if not branch_lease.bind_release_to_job():
+                cancel_token = DISPATCH_CANCEL_TOKEN_VAR.get()
+                if cancel_token is not None:
+                    cancel_token.check()
+                raise DispatchFenceTrippedSignal
         # §14.8.10.3: ack ownership moves to the WORKER job — a cancelled
         # loop-side task's finally fires while the worker may still run, so a
         # task-level ack would falsely report the fence drained. The worker's

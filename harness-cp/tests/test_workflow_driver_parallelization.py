@@ -673,6 +673,67 @@ def test_parallelization_barrier_deadline_does_not_hang(monkeypatch: pytest.Monk
     assert elapsed < 1.5
 
 
+class _TokenCapturingBlockingDispatcher:
+    """`_BlockingDispatcher` + captures the ambient `DISPATCH_CANCEL_TOKEN_VAR`
+    at dispatch-entry (this runs on the worker thread inside the SAME context
+    copy `asyncio.to_thread` carried, mirroring the hierarchical-delegation
+    `_HierarchicalDispatcher.captured_cancel_tokens` pattern) — so a test can
+    assert the PROCEED-tier barrier's deadline cutoff actually TRIPPED it,
+    through the real `_proceed_branch` production path (not a synthetic
+    harness that bypasses it)."""
+
+    def __init__(self, *, release: threading.Event, self_release_seconds: float) -> None:
+        self._release = release
+        self._self_release_seconds = self_release_seconds
+        self.captured_token: Any = "unset"
+
+    def dispatch(
+        self,
+        binding: StepEffectiveBinding,
+        step: WorkflowStep,
+        *,
+        step_context: Any = None,
+    ) -> dict[str, Any]:
+        from harness_cp.sub_agent_dispatch_cancellation import DISPATCH_CANCEL_TOKEN_VAR
+
+        self.captured_token = DISPATCH_CANCEL_TOKEN_VAR.get()
+        self._release.wait(timeout=self._self_release_seconds)
+        return {"branch": int(step.step_payload["index"])}
+
+
+def test_proceed_barrier_deadline_trips_ambient_cancel_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """B-48 (codex round-4 [P2] "trip the fence on proceed-barrier
+    cancellation"): PROCEED has no sibling-cancellation mode, so any
+    CancelledError reaching `_proceed_branch`'s own frame is the §25.11
+    barrier deadline — the fix binds a per-branch token there and trips it
+    in the CancelledError handler, mirroring `dispatch_branch_step_shielded`'s
+    strict-tier behavior. Mutation probe: removing the `_cancel_token.trip()`
+    call (or the token binding itself) leaves the captured token permanently
+    untripped — nothing else in this synthetic harness (no facade) would
+    ever trip it."""
+    from harness_cp import workflow_driver as wd
+
+    monkeypatch.setattr(wd, "_DEFAULT_FANOUT_BARRIER_DEADLINE_SECONDS", 0.2)
+    release = threading.Event()
+    dispatcher = _TokenCapturingBlockingDispatcher(release=release, self_release_seconds=2.0)
+    ledger = _RecordingLedger()
+    try:
+        result = _run(
+            steps=[_branch_step(i) for i in range(1)],
+            dispatcher=cast(StepDispatcher, dispatcher),
+            ledger=ledger,
+            persona_tier=PersonaTier.SOLO_DEVELOPER,
+        )
+    finally:
+        release.set()
+    assert result.status is RunStatus.PARTIAL
+    assert dispatcher.captured_token is not None
+    assert dispatcher.captured_token != "unset"
+    assert dispatcher.captured_token.tripped
+
+
 # ---------------------------------------------------------------------------
 # Live e2e — real IS writer; §6.3 hash chain re-verifies post-drain
 # ---------------------------------------------------------------------------
