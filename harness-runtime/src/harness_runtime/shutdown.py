@@ -642,6 +642,21 @@ async def shutdown(
     # LOOP_INIT (stage 5) opened after OD (stage 4), so it closes before the
     # collector/tracer close below regardless of this reordering.
     remaining = max(0.0, deadline - time.monotonic())
+    # codex round-8 [P2] "enter draining state before scheduling the bounded
+    # wait" — `_drain_dispatch_executor`'s `dispatch_executor.drain(...)`
+    # call (which flips `_draining`) runs off-loop via `asyncio.to_thread`,
+    # bounded below by `asyncio.wait_for`. At (or near) a zero-remaining
+    # budget the whole coroutine can be cancelled before `drain()` ever gets
+    # scheduled, so `_draining` never flips — `reserve`/`reserve_fanout`/
+    # `submit` keep admitting + launching NEW work against an executor whose
+    # shutdown is already underway. `begin_draining()` is plain synchronous
+    # code (no await, no scheduling delay, no timeout budget) — call it
+    # directly here so the admission surface ALWAYS closes regardless of how
+    # much wall-clock budget remains; `drain()` below still runs its own
+    # (idempotent) `begin_draining()` call as its first step.
+    _pre_drain_executor = getattr(ctx, "sub_agent_dispatch_executor", None)
+    if _pre_drain_executor is not None:
+        _pre_drain_executor.begin_draining()
     try:
         # codex round-4 [P2] "include drain scheduling in the shutdown
         # deadline" — `_drain_dispatch_executor`'s own `asyncio.to_thread`

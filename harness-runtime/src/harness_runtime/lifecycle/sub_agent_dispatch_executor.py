@@ -152,12 +152,19 @@ class SubAgentDispatchExecutor:
         At the cap the typed capacity error raises IMMEDIATELY — never queue
         (§14.8.10.1; the U-RT-140 taxonomy row RT-FAIL-SUB-AGENT-DISPATCH-
         CAPACITY maps to the raised `harness_core` type).
+
+        Codex round-8 [P1] "reject new admissions after drain begins" — once
+        `begin_draining()`/`drain()` has run, the executor is shutting down
+        (later shutdown steps close the observability/provider clients any
+        newly-admitted job's dispatch would need); admission must close
+        atomically with that transition, not just the launch-time `submit()`
+        gate below.
         """
         with self._lock:
-            if frames > self._available:
+            if self._draining or frames > self._available:
                 raise SubAgentDispatchCapacityError(
                     requested_frames=frames,
-                    available_capacity=self._available,
+                    available_capacity=0 if self._draining else self._available,
                     step_id=step_id,
                     descent_chain=descent_chain,
                 )
@@ -178,6 +185,11 @@ class SubAgentDispatchExecutor:
         get per-branch rejections. Never incremental hold-and-wait (racing
         per-branch acquisition lets two fan-outs mutually degrade when either
         could have run whole); never partial-then-raise.
+
+        Codex round-8 [P1] "reject new admissions after drain begins" — same
+        rationale as `reserve()`; once draining, every branch is rejected
+        (the existing deterministic-excess shape, starting from `admitting
+        = False` instead of discovering the miss mid-scan).
         """
         if len(branch_requirements) != len(step_ids):
             msg = (
@@ -189,7 +201,7 @@ class SubAgentDispatchExecutor:
         with self._lock:
             remaining = self._available
             acquired = 0
-            admitting = True
+            admitting = not self._draining
             for frames, step_id in zip(branch_requirements, step_ids, strict=True):
                 if admitting and frames <= remaining:
                     remaining -= frames
@@ -219,7 +231,7 @@ class SubAgentDispatchExecutor:
 
     # -- job submission (grow-on-demand workers) ------------------------------
 
-    def submit(self, fn: Callable[[], Any]) -> Future[Any]:
+    def submit(self, fn: Callable[[], Any], *, step_id: str = "<unknown-step>") -> Future[Any]:
         """Run an ALREADY-ADMITTED job on a worker; grow-on-demand, no queue wait.
 
         The caller holds the job's frame lease (admission happened at
@@ -236,9 +248,28 @@ class SubAgentDispatchExecutor:
         recursive-offload deadlock hazard this executor exists to
         foreclose). A freshly-spawned worker's job is handed to it directly
         via thread constructor args, bypassing channels entirely too.
+
+        Codex round-8 [P1] "reject new admissions after drain begins" — the
+        caller may already hold a frame lease reserved BEFORE draining
+        started (a legitimate race: shutdown can begin between an already-
+        successful `reserve()`/`reserve_fanout()` and this call), but
+        LAUNCHING the job past this point means running NEW work against an
+        executor whose shutdown is already underway — including against
+        provider/observability clients later shutdown steps may already
+        have closed. Reject here too, symmetric with `reserve`/
+        `reserve_fanout`; the caller's existing `except BaseException:
+        release lease; raise` rollback (already required for the thread-
+        start-failure path below) handles this identically.
         """
         future: Future[Any] = Future()
         with self._lock:
+            if self._draining:
+                raise SubAgentDispatchCapacityError(
+                    requested_frames=0,
+                    available_capacity=0,
+                    step_id=step_id,
+                    descent_chain=(step_id,),
+                )
             self._outstanding.add(future)
             channel = self._idle_channels.pop() if self._idle_channels else None
             if channel is None:
@@ -329,6 +360,35 @@ class SubAgentDispatchExecutor:
 
     # -- lifecycle on its own terms (§14.8.10.1) ------------------------------
 
+    def begin_draining(self) -> None:
+        """Synchronous, non-blocking: close the ENTIRE admission surface and
+        stop currently-idle workers. Idempotent (safe to call more than
+        once — a repeat call sees `_draining` already True and simply sweeps
+        whatever is, or isn't, sitting in `_idle_channels`).
+
+        Codex round-8 [P1] "reject new admissions after drain begins" +
+        [P2] "enter draining state before scheduling the bounded wait":
+        `drain()`'s own flag-flip (round-7 [P2]) only happened at the TAIL of
+        its poll loop — reachable only if `drain()` itself got a chance to
+        run. A caller that bounds drain scheduling in a zero/near-zero
+        `asyncio.wait_for` budget can have the whole coroutine (including
+        `drain()`'s body) cancelled before it ever starts, so `_draining`
+        never flips and `reserve`/`reserve_fanout`/`submit` keep admitting +
+        launching NEW work against an executor whose shutdown is already
+        underway — including after later shutdown steps have closed the
+        observability/provider clients that work would need. Splitting this
+        out as a plain synchronous method lets the caller invoke it directly
+        (no `await`, no scheduling delay, no timeout budget) BEFORE it even
+        considers a bounded wait, so the admission surface always closes
+        regardless of how much wall-clock budget remains.
+        """
+        with self._lock:
+            idle_channels = list(self._idle_channels)
+            self._idle_channels.clear()
+            self._draining = True
+        for channel in idle_channels:
+            channel.put(None)
+
     def drain(self, *, deadline_seconds: float) -> tuple[int, int]:
         """Drain-with-deadline at shutdown; NEVER blocks on loop-bridged workers.
 
@@ -360,6 +420,7 @@ class SubAgentDispatchExecutor:
         a live-traffic guarantee); the lease discipline above is unaffected
         either way.
         """
+        self.begin_draining()
         deadline = time.monotonic() + deadline_seconds
         with self._lock:
             completed_before = self._completed
@@ -372,17 +433,6 @@ class SubAgentDispatchExecutor:
         with self._lock:
             still_outstanding = len(self._outstanding)
             completed_during = self._completed - completed_before
-            idle_channels = list(self._idle_channels)
-            self._idle_channels.clear()
-            # codex round-7 [P2] — flip under the SAME lock hold as the
-            # sweep above, closing the race with `_worker()`'s own
-            # check-then-append (also lock-held): a worker that hasn't
-            # registered yet when this runs sees `_draining=True` on its
-            # next re-registration attempt and self-exits instead; a worker
-            # already registered here got its sentinel in this sweep.
-            self._draining = True
-        for channel in idle_channels:
-            channel.put(None)
         return (completed_during, still_outstanding)
 
 

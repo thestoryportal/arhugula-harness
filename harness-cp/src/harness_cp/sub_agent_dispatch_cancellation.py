@@ -96,6 +96,7 @@ class DispatchCancelToken:
     __slots__ = (
         "_ack_deferred_to_job",
         "_ack_event",
+        "_cascade_done_event",
         "_children",
         "_effects_in_flight",
         "_inflight_at_trip",
@@ -107,6 +108,7 @@ class DispatchCancelToken:
         self._lock = threading.Lock()
         self._tripped_event = threading.Event()
         self._ack_event = threading.Event()
+        self._cascade_done_event = threading.Event()
         self._effects_in_flight = 0
         self._inflight_at_trip = False
         self._ack_deferred_to_job = False
@@ -139,21 +141,44 @@ class DispatchCancelToken:
         only when THIS token's own `_effects_in_flight` was nonzero.
         Returns the (possibly bubbled-up) in-flight-at-trip flag so a caller
         cascading from an ancestor can bubble it further.
+
+        Concurrent-trip race (out-of-family Codex round-8 [P1]): two callers
+        can trip the SAME token concurrently (e.g. a barrier cascade and a
+        facade timeout both tripping a shared nested token). The LOSER must
+        NOT read `_inflight_at_trip` off the WINNER's early-return path until
+        the winner's OWN cascade to its children — and any resulting bubble-
+        up — has fully finished; reading it mid-cascade would observe a
+        not-yet-bubbled snapshot and could falsely classify a still-pending
+        grandchild effect as clean. `_cascade_done_event` gates exactly that
+        window: only the winner computes+cascades, and only after it fully
+        finishes (the `finally` below) does ANY caller's read of
+        `_inflight_at_trip` become visible.
         """
+        children: tuple[DispatchCancelToken, ...] = ()
         with self._lock:
             if self._tripped_event.is_set():
-                return self._inflight_at_trip
-            self._inflight_at_trip = self._effects_in_flight > 0
-            self._tripped_event.set()
-            children = tuple(self._children)
-        descendant_inflight = False
-        for child in children:
-            if child.trip():
-                descendant_inflight = True
-        if descendant_inflight:
+                is_winner = False
+            else:
+                self._inflight_at_trip = self._effects_in_flight > 0
+                self._tripped_event.set()
+                children = tuple(self._children)
+                is_winner = True
+        if not is_winner:
+            self._cascade_done_event.wait()
             with self._lock:
-                self._inflight_at_trip = True
-        return self._inflight_at_trip
+                return self._inflight_at_trip
+        try:
+            descendant_inflight = False
+            for child in children:
+                if child.trip():
+                    descendant_inflight = True
+            if descendant_inflight:
+                with self._lock:
+                    self._inflight_at_trip = True
+            with self._lock:
+                return self._inflight_at_trip
+        finally:
+            self._cascade_done_event.set()
 
     # -- consultation (worker side) -------------------------------------------
 

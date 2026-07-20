@@ -803,6 +803,62 @@ def test_ow_partition_strict_tiers_two_cohorts_leaders_serialize_before_follower
     assert "B" in witness.cohorts_done_on_entry[3]
 
 
+def _unbound_kind_worker(index: int) -> WorkflowStep:
+    """A worker step whose `step_kind` (`TOOL_STEP`) is deliberately absent
+    from `_registry()`'s `_KindMap` — `step_dispatchers.lookup(...)` raises
+    `StepKindDispatcherNotBoundError` synchronously for it."""
+    return WorkflowStep(
+        step_id=StepID(f"worker-{index}"),
+        step_kind=StepKind.TOOL_STEP,
+        step_payload={"index": index},
+    )
+
+
+def test_proceed_worker_dispatcher_lookup_failure_releases_admission() -> None:
+    """Codex round-8 [P2] "release admissions when worker lookup fails" —
+    `_proceed_worker`'s `step_dispatchers.lookup(step.step_kind)` is the
+    only statement before `_dispatch_releasing_admission` is ever scheduled;
+    an unbound `StepKind` raising there must not strand this worker's
+    already-reserved frame.
+
+    Mutation probe: removing the `try/except BaseException: ... release_
+    unless_job_bound(); raise` guard around the lookup in `_proceed_worker`
+    leaks the worker's admitted frame — `authority.available` stays short of
+    the full `frame_budget` post-run.
+    """
+    authority = DefaultCapacityAuthority(frame_budget=4)
+    result = _run(
+        steps=[_orch_step(), _unbound_kind_worker(0)],
+        registry=_registry(_Echo()),
+        persona_tier=PersonaTier.SOLO_DEVELOPER,  # PROCEED tier
+        capacity_authority=authority,
+        workflow_id="wf-ow-proceed-lookup-failure",
+    )
+    assert result.status is not RunStatus.SUCCESS
+    assert authority.available == 4, (
+        f"expected full frame-budget recovery (4); got {authority.available} — "
+        f"the worker's admission leaked on dispatcher-lookup failure"
+    )
+
+
+def test_cascade_cancel_worker_dispatcher_lookup_failure_releases_admission() -> None:
+    """Codex round-8 [P2] sibling witness for `_cancel_worker` (CASCADE_
+    CANCEL tier) — same rationale as the PROCEED-tier witness above."""
+    authority = DefaultCapacityAuthority(frame_budget=4)
+    result = _run(
+        steps=[_orch_step(), _unbound_kind_worker(0)],
+        registry=_registry(_Echo()),
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,  # CASCADE_CANCEL tier
+        capacity_authority=authority,
+        workflow_id="wf-ow-cascade-cancel-lookup-failure",
+    )
+    assert result.status is not RunStatus.SUCCESS
+    assert authority.available == 4, (
+        f"expected full frame-budget recovery (4); got {authority.available} — "
+        f"the worker's admission leaked on dispatcher-lookup failure"
+    )
+
+
 def test_cascade_cancel_worker_marker_write_failure_releases_admission(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

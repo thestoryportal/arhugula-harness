@@ -514,8 +514,12 @@ class _FakeDispatchExecutor:
 
     def __init__(self, *, still_outstanding: int = 0, drain_sleep_seconds: float = 0.0) -> None:
         self.drain_called_with: float | None = None
+        self.begin_draining_called = False
         self._still_outstanding = still_outstanding
         self._drain_sleep_seconds = drain_sleep_seconds
+
+    def begin_draining(self) -> None:
+        self.begin_draining_called = True
 
     def drain(self, *, deadline_seconds: float) -> tuple[int, int]:
         self.drain_called_with = deadline_seconds
@@ -656,6 +660,31 @@ async def test_shutdown_drains_stage_5_dispatch_executor(tmp_path: Path) -> None
 
 
 @pytest.mark.asyncio
+async def test_shutdown_flips_draining_even_at_zero_remaining_budget(tmp_path: Path) -> None:
+    """Codex round-8 [P2] "enter draining state before scheduling the bounded
+    wait": at `timeout=0.0` the bounded `asyncio.wait_for(...)` around
+    `_drain_dispatch_executor` can cancel the whole coroutine before
+    `dispatch_executor.drain(...)` (which flips `_draining` as its own first
+    step) ever gets scheduled off-loop. The executor's admission surface
+    must still close — `shutdown()` must call `begin_draining()` directly,
+    independent of that bounded wait's own scheduling.
+
+    Mutation probe: removing the eager `_pre_drain_executor.begin_draining()`
+    call in `shutdown()` (leaving only `drain()`'s own internal call) makes
+    `dispatch_executor.begin_draining_called` false here — at `timeout=0.0`
+    `drain()` never runs at all (this test's `drain_called_with` stays
+    `None`, confirming the bounded-wait cancellation actually happened).
+    """
+    dispatch_executor = _FakeDispatchExecutor(still_outstanding=0)
+    ctx = _shutdown_ctx(
+        tmp_path, tracer=_FakeTracerWithShutdown(), daemon=_FakeCollectorDaemon(), providers={}
+    )
+    ctx.sub_agent_dispatch_executor = dispatch_executor
+    await shutdown(ctx, timeout=0.0)
+    assert dispatch_executor.begin_draining_called is True
+
+
+@pytest.mark.asyncio
 async def test_shutdown_drains_dispatch_executor_before_flushing_observability(
     tmp_path: Path,
 ) -> None:
@@ -669,6 +698,9 @@ async def test_shutdown_drains_dispatch_executor_before_flushing_observability(
     call_order: list[str] = []
 
     class _OrderRecordingDispatchExecutor:
+        def begin_draining(self) -> None:
+            pass
+
         def drain(self, *, deadline_seconds: float) -> tuple[int, int]:
             call_order.append("drain")
             return (0, 0)

@@ -11661,8 +11661,19 @@ def _execute_orchestrator_workers(
             writer: BufferingLedgerWriter,
             binding: StepEffectiveBinding,
         ) -> None:
-            dispatcher = step_dispatchers.lookup(step.step_kind)
             _admission = _branch_admissions[branch_index]
+            try:
+                dispatcher = step_dispatchers.lookup(step.step_kind)
+            except BaseException:
+                # codex round-8 [P2] "release admissions when worker lookup
+                # fails" — an unbound StepKind raises HERE, before this
+                # branch's admission ever reaches `_dispatch_releasing_
+                # admission` (the sole releaser, scheduled only after this
+                # lookup succeeds). Release explicitly, mirroring the
+                # round-7 marker-write-failure guard's identical rationale.
+                if isinstance(_admission, CapacityLease):
+                    _admission.release_unless_job_bound()
+                raise
             # See `_proceed_branch`'s identical rationale for declaring this
             # before the try (pyright possibly-unbound guard; asyncio cannot
             # actually deliver cancellation before the assignment below,
@@ -11958,8 +11969,15 @@ def _execute_orchestrator_workers(
         writer: BufferingLedgerWriter,
         binding: StepEffectiveBinding,
     ) -> None:
-        dispatcher = step_dispatchers.lookup(step.step_kind)
         _admission = _branch_admissions[branch_index]
+        try:
+            dispatcher = step_dispatchers.lookup(step.step_kind)
+        except BaseException:
+            # codex round-8 [P2] "release admissions when worker lookup
+            # fails" — see `_proceed_worker`'s identical guard.
+            if isinstance(_admission, CapacityLease):
+                _admission.release_unless_job_bound()
+            raise
         if isinstance(_admission, SubAgentDispatchCapacityError):
             # B-48 apply-note 2: rejected — this worker NEVER reaches its
             # dispatch boundary, so it skips the reserve-before-dispatch

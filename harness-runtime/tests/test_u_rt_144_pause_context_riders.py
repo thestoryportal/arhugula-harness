@@ -189,7 +189,7 @@ async def test_ack_fires_when_job_cancelled_before_worker_starts() -> None:
         def reserve(self, *args: Any, **kwargs: Any) -> Any:
             return self._real.reserve(*args, **kwargs)
 
-        def submit(self, fn: Any) -> Any:
+        def submit(self, fn: Any, **kwargs: Any) -> Any:
             from concurrent.futures import Future
 
             future: Future[Any] = Future()
@@ -234,7 +234,7 @@ async def test_submit_failure_releases_own_lease_not_leaked(
 
     executor = SubAgentDispatchExecutor(frame_budget=4)
 
-    def _submit_raises(fn: Any) -> Any:
+    def _submit_raises(fn: Any, **kwargs: Any) -> Any:
         raise RuntimeError("can't start new thread (simulated OS refusal)")
 
     monkeypatch.setattr(executor, "submit", _submit_raises)

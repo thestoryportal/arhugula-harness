@@ -267,6 +267,77 @@ def test_drain_stops_a_worker_that_finishes_strictly_after_the_drain_snapshot() 
     assert executor._idle_channels == []
 
 
+def test_reserve_rejects_once_draining_has_begun() -> None:
+    """Codex round-8 [P1] "reject new admissions after drain begins" —
+    `reserve()` must consult `_draining`, not just capacity. Without this,
+    the survivor of a shutdown-in-progress could reserve fresh frames and
+    launch NEW work against an executor whose observability/provider
+    clients later shutdown steps may already be closing.
+
+    Mutation probe: dropping the `self._draining or` disjunct from
+    `reserve()`'s guard condition makes this call succeed (plenty of frames
+    free) instead of raising.
+    """
+    executor = SubAgentDispatchExecutor(frame_budget=4)
+    executor.begin_draining()
+    with pytest.raises(SubAgentDispatchCapacityError):
+        executor.reserve(1, step_id="late", descent_chain=("late",))
+
+
+def test_reserve_fanout_rejects_every_branch_once_draining_has_begun() -> None:
+    """Codex round-8 [P1] sibling witness for `reserve_fanout()` — same
+    rationale, whole-fan-out shape (every branch rejected, not a partial
+    admit).
+
+    Mutation probe: reverting `admitting = not self._draining` to
+    `admitting = True` lets every branch admit despite draining (plenty of
+    frames free).
+    """
+    executor = SubAgentDispatchExecutor(frame_budget=4)
+    executor.begin_draining()
+    results = executor.reserve_fanout(
+        (1, 1), step_ids=("late-0", "late-1"), descent_chain=("wf", "late")
+    )
+    assert all(isinstance(r, SubAgentDispatchCapacityError) for r in results)
+    assert executor.available_frames == 4  # nothing was charged
+
+
+def test_submit_rejects_once_draining_has_begun() -> None:
+    """Codex round-8 [P1] sibling witness for `submit()` — the caller may
+    already hold a lease reserved BEFORE draining started (a legitimate
+    race), but LAUNCHING the job past this point means running NEW work
+    against a shutting-down executor. `submit()` must reject independently
+    of whether the caller's own admission predates the drain.
+
+    Mutation probe: removing the `if self._draining: raise ...` guard from
+    `submit()` lets this job actually run (the worker would execute `fn`)
+    instead of raising before ever touching `_outstanding`.
+    """
+    executor = SubAgentDispatchExecutor(frame_budget=4)
+    lease = executor.reserve(1, step_id="pre-drain", descent_chain=("pre-drain",))
+    executor.begin_draining()
+    with pytest.raises(SubAgentDispatchCapacityError):
+        executor.submit(lambda: "should never run", step_id="pre-drain")
+    assert executor._outstanding == set()
+    lease.release()
+
+
+def test_begin_draining_is_idempotent_and_drain_still_reports_correctly() -> None:
+    """A caller may invoke `begin_draining()` eagerly (before a bounded wait
+    with no remaining budget) and `drain()` may ALSO call it again as its
+    own first step — the second call must be a harmless no-op, not a
+    double-sentinel or a crash, and `drain()`'s own return value must still
+    be correct."""
+    executor = SubAgentDispatchExecutor(frame_budget=4)
+    executor.submit(lambda: None).result(timeout=5)  # leaves one idle worker
+    executor.begin_draining()
+    assert executor._draining is True
+    assert executor._idle_channels == []
+    completed, still_outstanding = executor.drain(deadline_seconds=0.1)
+    assert completed == 0
+    assert still_outstanding == 0
+
+
 def test_atomic_reservation_no_partial_acquisition_under_concurrent_fanouts() -> None:
     """Whole-fan-out atomicity: two racing 3-frame fan-outs vs 4 free — one
     whole, one deterministically degraded (executor-budget variant of the

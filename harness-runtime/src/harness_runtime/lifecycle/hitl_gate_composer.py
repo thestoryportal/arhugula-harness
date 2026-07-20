@@ -1210,7 +1210,7 @@ class RuntimeHITLGateComposer:
 
         job_lease = own_lease if own_lease is not None else branch_lease
         try:
-            future = executor.submit(_job)
+            future = executor.submit(_job, step_id=step_id)
         except BaseException:
             # codex round-4 [P2] "roll back submission when worker creation
             # fails" — `submit()` never returned a future, so the
