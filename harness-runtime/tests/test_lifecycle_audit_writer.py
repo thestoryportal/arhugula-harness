@@ -468,7 +468,7 @@ def test_full_chain_stage_to_real_signature_to_sidecar_rehydration(tmp_path: Pat
 
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
     from harness_od.multi_tenant_trace_separation_and_audit_ledger import (
-        _canonical_od_signing_message,
+        canonical_od_signing_message,
     )
     from harness_runtime.lifecycle.span_processor import materialize_span_processor_stage
     from opentelemetry.sdk.trace import TracerProvider
@@ -520,7 +520,7 @@ def test_full_chain_stage_to_real_signature_to_sidecar_rehydration(tmp_path: Pat
     raw = base64.b64decode(value, validate=True)
     assert len(raw) == 64
 
-    expected_message = _canonical_od_signing_message(
+    expected_message = canonical_od_signing_message(
         entry.entry_hash,
         key_id="harness-runtime-redaction-token",
         algo_value="ed25519",

@@ -551,7 +551,7 @@ def test_sign_with_backend_real_signature_verifies_over_canonical_message() -> N
     import base64
 
     from harness_od.multi_tenant_trace_separation_and_audit_ledger import (
-        _canonical_od_signing_message,
+        canonical_od_signing_message,
     )
 
     payload = _payload("h0")
@@ -565,7 +565,7 @@ def test_sign_with_backend_real_signature_verifies_over_canonical_message() -> N
     assert sig.audit_signature_key_id == "key-1"
     assert sig.audit_signature_key_period == "DEPLOYMENT_BOUND"
 
-    expected_message = _canonical_od_signing_message(
+    expected_message = canonical_od_signing_message(
         compute_entry_hash(payload),
         key_id="key-1",
         algo_value="ed25519",
@@ -584,7 +584,7 @@ def test_sign_with_backend_message_binds_key_id_metadata() -> None:
     import pytest as _pytest
     from cryptography.exceptions import InvalidSignature
     from harness_od.multi_tenant_trace_separation_and_audit_ledger import (
-        _canonical_od_signing_message,
+        canonical_od_signing_message,
     )
 
     payload = _payload("h0")
@@ -592,7 +592,7 @@ def test_sign_with_backend_message_binds_key_id_metadata() -> None:
     sig = sign_audit_entry(payload, "key-1", SignatureAlgorithm.ED25519, backend=backend)
     raw = base64.b64decode(sig.audit_signature_value, validate=True)
 
-    relabeled_message = _canonical_od_signing_message(
+    relabeled_message = canonical_od_signing_message(
         compute_entry_hash(payload),
         key_id="some-other-key",
         algo_value="ed25519",
@@ -650,7 +650,7 @@ def test_sign_with_backend_still_requires_key_id() -> None:
 def test_canonical_message_exact_bytes_pin_all_four_bindings_and_injectivity() -> None:
     """§21.2.1 item 3 — merge-gate test-witness lens BLOCK fix: the earlier
     round-trip witness reconstructed the expected message with the SAME
-    `_canonical_od_signing_message` helper the implementation calls, so it
+    `canonical_od_signing_message` helper the implementation calls, so it
     could not catch a mutated helper (dropped entry-hash/algo/period binding,
     or a de-injectivized join). This witness constructs the committed message
     LITERALLY — `{len}:{part}` segments joined by `|` over the exact

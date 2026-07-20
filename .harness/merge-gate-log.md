@@ -211,3 +211,31 @@ bootstrap without a tenant scope) are pre-assigned by the ratified plan to not-y
 (CP's amendment to the existing `cp_audit_to_od_audit` converter, U-CP-72; Runtime's MTC bootstrap-tenant-
 required invariant, U-RT-134) — verified against the plan text directly, not taken on faith. Every new
 behavior PD-8 mutation-probed. Full harness-od (1057) + harness-runtime (2762) suites green throughout.
+
+## PR #1062 — 2026-07-20 — `feat/od-u-od-55-signature-verification`
+
+| Lens | R1 | R2 |
+|---|---|---|
+| concurrency | APPROVE | — |
+| spec-conformance | APPROVE | — |
+| test-witness | BLOCK: cutover-record half of `test_verify_verdict_requires_literal_true` used a wrong-length dummy signature that short-circuited before ever reaching `backend.verify`, so it never exercised the literal-True-verdict discipline it claimed to pin | APPROVE (fixed: real signature wired in; re-verified the mutation now genuinely fails the test) |
+
+Outcome: MERGE. Second leg of the B-51/B-52/B-54 arc — NEW U-OD-55 per OD spec v1.34 §21.2.2 +
+plan v2.29 §2: backend-aware audit-signature verification API extending the B-49 per-family verifier
+with a per-row `BackendResolver`, tenant scope as verifier input, the message-format cutover decided
+exclusively by an authenticated `AuditCutoverRecord` (never inferred from signature shape), a typed
+failure taxonomy (`AuditSignatureInvalid` / `AuditVerificationBackendUnavailableError` /
+`VerificationBackendKeyUnknownError`), and the NEW `harness_od.audit_cutover_record` module (schema-
+versioned Pydantic carrier, golden-vector-pinned canonical message, source-scoped uniqueness
+validation). Codex: 12 rounds — 25+ genuine findings fixed with PD-8 mutation-probed witnesses across
+rounds 1-9 (authentication gating, record-key pinning, algorithm/shape defense, disposition-priority
+correction for already-tagged-vs-`"_single"`-alias rows, validator-bypassing-construction revalidation
+propagated to the caller, other-tenant baseline-identity exclusion); rounds 10 + 12 converged on the
+same architectural gap (`SigningBackend.verify()` infra failures at a concrete real backend are not
+translated into the typed availability error — confirmed cross-axis: the `SigningBackend` Protocol
+documents no such contract, and a CP-axis backend cannot raise the OD-owned exception type without
+inverting the established OD-consumes-CP axis-import direction) — registered as `B-63` at
+`.harness/forward-register.yaml` rather than blind-fixed, with the already-impossible-claim docstring
+corrected in place; round 11 fixed a stale forward-register CI-gate snapshot/digest plus a genuine
+`tzinfo.utcoffset() is None` naive-datetime edge case the carrier's construction-time guard missed.
+Full harness-od suite (1094) + pyright clean throughout; `tools/forward_register.py --check` green.

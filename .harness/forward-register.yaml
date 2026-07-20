@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 63
+  total: 64
   open: 4
   design_substrate_gated: 1
-  registered_finding: 12
+  registered_finding: 13
   operator_gated: 2
   held: 1
   closed: 43
-  identity_digest: 36889a042c3ce3b1
+  identity_digest: 46e466a03db6b28e
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -1343,3 +1343,49 @@ items:
     confirmed'
   heading: '### B-62 · A single effect_entry() guard spans multiple independent sequential writes
     *(registered at the B-48 apply arc, codex round-10, 2026-07-19)*'
+
+- id: B-63
+  title: SigningBackend.verify() infra failures are not typed-availability at the concrete backend
+  status: registered_finding
+  summary: 'Registered at the U-OD-55 impl arc (codex round-10 [P2] "translate verify outages into
+    the OD availability type"): OD spec v1.34 section 21.2.2 row 7(b) requires backend availability
+    errors during verification to surface through a dedicated typed availability error. The
+    `AwsKmsSigningBackend.verify()` concrete backend (harness-cp, B-36/ADR-D8) catches only
+    `KMSInvalidSignatureException` and returns False for it; any OTHER boto3/KMS failure (credential,
+    network, throttling, service exception) propagates as a raw vendor exception, unclassified.
+    Confirmed architecturally cross-axis at grounding: the `SigningBackend` Protocol
+    (`harness_cp.f5_signing_key_resolution`) documents no availability-exception contract at all
+    (checked directly, not inferred) -- and even if it did, the OD-owned
+    `AuditVerificationBackendUnavailableError` cannot be raised by a CP-axis backend without CP
+    importing FROM OD, which the axis-import direction (OD consumes CP; not the reverse) forbids. A
+    blanket `except Exception` at the OD-axis verifier call site is not a substitute -- it would
+    misclassify genuine backend defects as availability, which the same row 7(b) text forbids
+    ("raises that are NOT the typed availability error and NOT AuditSignatureInvalid are DEFECTS and
+    propagate unwrapped"). U-OD-55''s own per_family_audit_verification.py docstring previously
+    claimed "a well-behaved backend implementation is expected to raise THIS type itself" -- corrected
+    in-place at this same PR to state the gap accurately (no such contract exists yet) rather than
+    assert an architecturally-impossible design. CONCRETE INSTANCE (codex round-12, same PR): when a
+    resolver returns `AwsKmsSigningBackend` for a key_id absent from that instance''s OWN internal
+    `_key_arns` mapping, `verify()` raises `UnknownSigningKeyIdError` (a `KeyError` subclass) BEFORE
+    reaching KMS -- semantically identical to "the composition root failed to supply the key" (the
+    exact category `AuditVerificationBackendUnavailableError`''s docstring already describes), but
+    unreachable to translate at the OD-axis verifier without importing a name from ONE SPECIFIC
+    backend''s implementation module (`harness_cp.aws_kms_signing_backend`, not the generic
+    `SigningBackend` Protocol module) -- the same wrong-direction coupling this row already forecloses,
+    confirmed by grep: `UnknownSigningKeyIdError` is defined and used ONLY in that one backend module,
+    not on the Protocol. Same registered gap, not a second independent defect -- the close_out below
+    already covers it (the shared contract, once it exists, is what any concrete backend''s "unknown
+    key" condition would raise).'
+  close_out: 'Needs a shared/CP-side (or harness-core) typed availability-exception contract that
+    `SigningBackend` implementations (starting with `AwsKmsSigningBackend`) raise for infra failures
+    distinct from a genuine signature mismatch, PLUS a translation catch at the OD-axis verifier call
+    sites (`_verify_entry_signature` / `verify_cutover_record_signature`) that maps the CP/core type
+    to `AuditVerificationBackendUnavailableError`. Cross-axis scope (touches harness-cp production
+    code already shipped under B-36/PR #1031) -- out of U-OD-55''s OD-axis-only reach; does not block
+    U-OD-55''s merge (the resolver-path availability typing -- unknown key_id -- is already correct
+    and covers the row 7(b) example explicitly named in spec text; this residual is the real-backend
+    infra-failure sub-case only).'
+  council: 'no -- narrow, single cross-axis contract addition once a concrete infra-failure taxonomy
+    is confirmed against the deployed backend(s)'
+  heading: '### B-63 · SigningBackend.verify() infra failures are not typed-availability at the
+    concrete backend *(registered at the U-OD-55 impl arc, codex round-10, 2026-07-20)*'
