@@ -877,3 +877,46 @@ async def test_hitl_flag_on_raises_typed_family_not_compose_wrap_on_raise_on_fai
     off_composer = _hitl_composer(flag=False, ledger=_MockLedgerWriter(raise_family=True))
     with pytest.raises(HITLGateAuditComposeError):
         _invoke(off_composer)
+
+
+@pytest.mark.asyncio
+async def test_dispatch_threads_flag_into_cost_helper_end_to_end(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Merge-gate test-witness lens (G2): the REAL dispatch body threads
+    `self.audit_signing_fail_closed` into `_attribute_cost_off_loop_best_
+    effort` — proven end-to-end with the REAL offload wrapper and REAL
+    helper (only the innermost `attribute_llm_dispatch_cost` is patched to
+    raise the family): flag-ON dispatch raises the carrier; flag-OFF the
+    same failure is log-and-proceed and the response returns.
+
+    Mutation probe: deleting the in-dispatch
+    `audit_signing_fail_closed=self.audit_signing_fail_closed` kwarg leaves
+    the helper at its False default → no raise → no carrier → the ON leg
+    FAILS (the fence would be dead code)."""
+    import harness_runtime.lifecycle.cost_attribution_llm_dispatch as attr_mod
+    from harness_runtime.lifecycle.llm_dispatch import RuntimeLLMDispatcher
+
+    monkeypatch.setattr(attr_mod, "attribute_llm_dispatch_cost", _raise_family_sync)
+
+    def _dispatcher_with_substrates(*, flag: bool) -> Any:
+        adapter = _AnthropicFakeAdapter(SimpleNamespace(messages=_AnthropicMessages()))
+        return RuntimeLLMDispatcher(
+            providers={"anthropic": adapter},
+            tracer_provider=_tp(),
+            cost_chain=cast(Any, object()),
+            audit_writer=cast(Any, object()),
+            rate_table=cast(Any, object()),
+            audit_signing_fail_closed=flag,
+        )
+
+    with pytest.raises(PostEffectAuditSigningError) as excinfo:
+        await _dispatcher_with_substrates(flag=True).dispatch(
+            _inference_binding(), _inference_step(), step_context=_step_context()
+        )
+    assert cast("dict[str, Any]", excinfo.value.result)["id"] == "msg_u136_carrier"
+
+    off_result = await _dispatcher_with_substrates(flag=False).dispatch(
+        _inference_binding(), _inference_step(), step_context=_step_context()
+    )
+    assert off_result["id"] == "msg_u136_carrier"
