@@ -59,13 +59,13 @@
 
 snapshot:
   total: 63
-  open: 5
+  open: 4
   design_substrate_gated: 1
   registered_finding: 12
   operator_gated: 2
   held: 1
-  closed: 42
-  identity_digest: fe0fcaacc1c0b234
+  closed: 43
+  identity_digest: 36889a042c3ce3b1
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -901,7 +901,8 @@ items:
     at `B-36`''s own PR, out-of-family Codex review, 2026-07-16)*'
 - id: B-48
   title: Sync sub-agent dispatch executes on the event loop (U-RT-60 wrap-asymmetry residual)
-  status: open
+  status: closed
+  pr: '#1060'
   summary: 'OPEN -- spec+plan deltas APPLIED 2026-07-19 (Runtime v1.102 + CP v1.102 + IS v1.11 + plans v2.50/v2.39/v2.7 + Core v1.3); the executor impl arc (U-CORE-03 + U-RT-140..144 + U-CP-101 + the CP/IS amendments) is the live next step. Out-of-family Codex round-2 P1 on B-47 PR B2a: RuntimeHITLGateComposer._dispatch_inner
     invokes the sync C-RT-17 sub-agent dispatcher DIRECTLY on the event loop (the U-RT-60
     wrap-asymmetry fork Q3-ratified direct-call reading), so the entire sub-agent dispatch -- child
