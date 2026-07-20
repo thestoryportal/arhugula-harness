@@ -1364,7 +1364,18 @@ items:
     propagate unwrapped"). U-OD-55''s own per_family_audit_verification.py docstring previously
     claimed "a well-behaved backend implementation is expected to raise THIS type itself" -- corrected
     in-place at this same PR to state the gap accurately (no such contract exists yet) rather than
-    assert an architecturally-impossible design.'
+    assert an architecturally-impossible design. CONCRETE INSTANCE (codex round-12, same PR): when a
+    resolver returns `AwsKmsSigningBackend` for a key_id absent from that instance''s OWN internal
+    `_key_arns` mapping, `verify()` raises `UnknownSigningKeyIdError` (a `KeyError` subclass) BEFORE
+    reaching KMS -- semantically identical to "the composition root failed to supply the key" (the
+    exact category `AuditVerificationBackendUnavailableError`''s docstring already describes), but
+    unreachable to translate at the OD-axis verifier without importing a name from ONE SPECIFIC
+    backend''s implementation module (`harness_cp.aws_kms_signing_backend`, not the generic
+    `SigningBackend` Protocol module) -- the same wrong-direction coupling this row already forecloses,
+    confirmed by grep: `UnknownSigningKeyIdError` is defined and used ONLY in that one backend module,
+    not on the Protocol. Same registered gap, not a second independent defect -- the close_out below
+    already covers it (the shared contract, once it exists, is what any concrete backend''s "unknown
+    key" condition would raise).'
   close_out: 'Needs a shared/CP-side (or harness-core) typed availability-exception contract that
     `SigningBackend` implementations (starting with `AwsKmsSigningBackend`) raise for infra failures
     distinct from a genuine signature mismatch, PLUS a translation catch at the OD-axis verifier call
