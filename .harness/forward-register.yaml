@@ -969,13 +969,30 @@ items:
     already fired, so a job-wide fence trip racing them previously reported a false-clean drain),
     and sub_agent_dispatch_executor.drain() tracking a _draining flag under the same lock as its
     idle-channel sweep (a worker whose job outlasted the drain snapshot previously re-registered on
-    a channel drain() would never look at again, leaking the daemon thread). SEVEN successive
-    rounds of decorrelated pre-merge review (merge-gate 3-lens + out-of-family Codex, each re-run to
-    convergence before the next) have now surfaced 29 findings total, ALL fixed with PD-8
-    mutation-probed witnesses; all fixes landed with full local verification green (ruff + pyright
-    + pytest across harness-cp, harness-runtime, harness-core, harness-is). Round 8 (merge-gate
-    3-lens + codex-review) is the live next step, followed by CI green, before merge -- this row
-    transitions to closed at that PR''s merge.'
+    a channel drain() would never look at again, leaking the daemon thread); round 8 (4) -- a
+    concurrent-tripper race in DispatchCancelToken.trip() (a second caller tripping an
+    already-tripping token could read _inflight_at_trip before the FIRST caller''s own cascade to
+    its children, and any resulting bubble-up of a grandchild''s in-flight effect, had finished --
+    a false ACKED_CLEAN; closed via a _cascade_done_event gating the early-return path until the
+    winner''s full cascade completes), reserve()/reserve_fanout()/submit() never consulting
+    _draining (only _worker()''s re-registration path did, so a shutdown-in-progress survivor
+    could still admit and launch new work against clients later shutdown steps may already be
+    closing; closed by extracting a synchronous idempotent begin_draining() that drain() calls as
+    its own first step AND that shutdown() now calls directly, eagerly, before the bounded
+    asyncio.wait_for around drain scheduling -- at a near-zero remaining budget that wait_for can
+    cancel the whole coroutine before drain() itself ever runs), and step_dispatchers.lookup()
+    in _proceed_worker/_cancel_worker (ORCHESTRATOR_WORKERS) stranding a branch''s admission when
+    an unbound StepKind raises there (closed with the same release-on-raise guard as round 7''s
+    marker-write fix; confirmed PARALLELIZATION''s _proceed_branch/_cancel_branch index a
+    pre-resolved dispatcher list at the equivalent point and cannot raise the same way, so they
+    did not need the identical guard). EIGHT successive rounds of decorrelated pre-merge review
+    (merge-gate 3-lens + out-of-family Codex, each re-run to convergence before the next) have now
+    surfaced 33 findings total, ALL fixed with PD-8 mutation-probed witnesses; all fixes landed
+    with full local verification green (ruff + pyright + pytest across harness-cp, harness-runtime,
+    harness-core, harness-is). Round 9 (merge-gate 3-lens + codex-review) is the pre-committed
+    FINAL gate per operator-advisor guidance -- clean converges to merge; any further finding in
+    the same executor-lifecycle/token-classification class routes to operator escalation rather
+    than a further reactive fix round -- this row transitions to closed at that PR''s merge.'
   council: 'yes at apply leg -- C1 orchestration vs C9 reliability dyad CONFIRMS the filing-settled
     position (fail-fast + typed error + RuntimeConfig ownership + default sub_agent_dispatch_max_workers
     = 256 in shared-budget frame units (N upstream frames + one inner frame per SYNC sub-agent branch; async inners uncharged), the filing-settled recommendation, RATIFIED 2026-07-18) or surfaces a reasoned deviation back to the operator; it does NOT
