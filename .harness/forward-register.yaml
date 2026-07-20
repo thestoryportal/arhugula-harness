@@ -989,10 +989,36 @@ items:
     (merge-gate 3-lens + out-of-family Codex, each re-run to convergence before the next) have now
     surfaced 33 findings total, ALL fixed with PD-8 mutation-probed witnesses; all fixes landed
     with full local verification green (ruff + pyright + pytest across harness-cp, harness-runtime,
-    harness-core, harness-is). Round 9 (merge-gate 3-lens + codex-review) is the pre-committed
-    FINAL gate per operator-advisor guidance -- clean converges to merge; any further finding in
-    the same executor-lifecycle/token-classification class routes to operator escalation rather
-    than a further reactive fix round -- this row transitions to closed at that PR''s merge.'
+    harness-core, harness-is). Round 9 (merge-gate 3-lens + codex-review) was the pre-committed
+    terminal gate per operator-advisor guidance; codex round 9 surfaced 2 new [P2] findings in the
+    same executor-lifecycle class, triggering the escalation clause -- surfaced to the operator via
+    AskUserQuestion, who selected "fix both, one more gate." Round 9 fixes (2) -- SubAgentDispatchExecutor
+    ._run_job() published the future''s result/exception AFTER calling _job_done() (which removes the
+    future from _outstanding), so a completion callback (lease release, asyncio bridge) reading the
+    future via drain()''s outstanding-set snapshot could observe it as already-done-and-gone before the
+    result/exception was actually set; reordered to publish first, closed via a
+    test_job_done_runs_after_future_is_already_published spy witness. The second finding -- the
+    WHOLE-fan-out admission call running BEFORE ~600 lines of pre-dispatch setup (reconciler-engine
+    calls, durable-store writes, untrusted-index reads, the warm-up cohort-key split''s external
+    dispatcher-interface call) with no release path for a setup failure -- turned out to have a far
+    larger reachable surface than codex''s two named examples (direct grounding via an Explore
+    subagent enumerated ~12 raise sites per topology, not 2, plus a structural asymmetry: ORCHESTRATOR_
+    WORKERS''s reconciler-gate + lifecycle-emit calls run BEFORE admission there, so only PARALLELIZATION
+    carried that particular risk). Fixed by DEFERRING the single _admit_fanout_branch_plan() call to
+    immediately before the cascade_policy split at both sites -- eliminating the ownerless window
+    entirely rather than adding N per-statement release guards (advisor-recommended: grep-verified
+    that nothing between the old and new call sites reads _branch_admissions, so no site was skipped);
+    the 3 now-superseded release-on-early-return call sites were removed as dead code rather than kept.
+    Both fixes mutation-probed: reverting either deferral (moving admission back to its pre-fix
+    position) makes the corresponding witness fail (a real, non-vacuous leak reproduces -- e.g. 2/4
+    frames stranded on the cohort-key-split witness). NINE successive rounds of decorrelated pre-merge
+    review have now surfaced 35 findings total, ALL fixed with PD-8 mutation-probed witnesses; all
+    fixes landed with full local verification green (ruff + pyright + pytest across harness-cp,
+    harness-runtime, harness-core, harness-is). Round 10 (merge-gate 3-lens + codex-review) is the
+    operator-approved FINAL gate -- clean converges to merge; any further finding in the same
+    executor-lifecycle/token-classification class routes to a SECOND operator escalation (not a
+    further reactive fix round), per the "one more gate" scope the operator approved -- this row
+    transitions to closed at that PR''s merge.'
   council: 'yes at apply leg -- C1 orchestration vs C9 reliability dyad CONFIRMS the filing-settled
     position (fail-fast + typed error + RuntimeConfig ownership + default sub_agent_dispatch_max_workers
     = 256 in shared-budget frame units (N upstream frames + one inner frame per SYNC sub-agent branch; async inners uncharged), the filing-settled recommendation, RATIFIED 2026-07-18) or surfaces a reasoned deviation back to the operator; it does NOT
