@@ -189,17 +189,23 @@ class FamilyVerificationReport:
     chained: Mapping[str, int]
     per_entry: Mapping[str, int]
     signature_dispositions: Mapping[str, int] = field(default_factory=dict[str, int])
-    baseline_divergences: tuple[str, ...] = ()
+    baseline_divergences: Sequence[str] = ()
 
     def __post_init__(self) -> None:
         # The invariant belongs to the TYPE (codex round-2 on the B-49
         # landing): a direct constructor caller passing a mutable dict must
         # not retain a mutation handle into the report — copy then wrap.
+        # `baseline_divergences` gets the SAME treatment (out-of-family
+        # Codex [P2] finding, round 7): the `tuple[str, ...]` annotation was
+        # never enforced at runtime, so a caller passing a `list` retained a
+        # live mutation handle into this "deeply immutable" carrier —
+        # `tuple(...)` copies it, same as the dicts above.
         object.__setattr__(self, "chained", MappingProxyType(dict(self.chained)))
         object.__setattr__(self, "per_entry", MappingProxyType(dict(self.per_entry)))
         object.__setattr__(
             self, "signature_dispositions", MappingProxyType(dict(self.signature_dispositions))
         )
+        object.__setattr__(self, "baseline_divergences", tuple(self.baseline_divergences))
 
 
 def _is_redaction_row(entry: AuditLedgerEntry) -> bool:

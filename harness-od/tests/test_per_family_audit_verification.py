@@ -161,3 +161,16 @@ def test_direct_construction_copies_and_freezes_sources() -> None:
     assert report.per_entry == {"cost": 1}
     with pytest.raises(TypeError):
         report.per_entry["x"] = 1  # type: ignore[index]
+
+
+def test_baseline_divergences_direct_construction_copies_and_freezes() -> None:
+    """Out-of-family Codex [P2] finding, round 7 (U-OD-55): the
+    `tuple[str, ...]` annotation on `baseline_divergences` was never
+    enforced at runtime — a caller passing a `list` retained a live
+    mutation handle into this "deeply immutable" carrier. Mirrors the
+    `per_entry`/`chained` dict-copy discipline above."""
+    source = ["a divergence"]
+    report = FamilyVerificationReport(chained={}, per_entry={}, baseline_divergences=source)
+    source.append("mutated after construction")
+    assert report.baseline_divergences == ("a divergence",)
+    assert isinstance(report.baseline_divergences, tuple)
