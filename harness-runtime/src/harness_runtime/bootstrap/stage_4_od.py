@@ -38,7 +38,10 @@ from harness_runtime.lifecycle.audit_signing_fail_closed_validation import (
     initialize_mtc_audit_signing_record,
     validate_mtc_audit_signing_config,
 )
-from harness_runtime.lifecycle.audit_writer import materialize_audit_writer_stage
+from harness_runtime.lifecycle.audit_writer import (
+    AUDIT_SIDECAR_FILENAME,
+    materialize_audit_writer_stage,
+)
 from harness_runtime.lifecycle.collector_daemon import materialize_collector_daemon_stage
 from harness_runtime.lifecycle.cost_attribution import materialize_cost_attribution_stage
 from harness_runtime.lifecycle.ring_buffer import materialize_ring_buffer_stage
@@ -100,7 +103,17 @@ async def execute(
     # signing-config gap (missing/invalid inputs; the additional_key_ids
     # mapping) has already been rejected, so a record is never written to
     # disk only to have bootstrap fail moments later on an unrelated gap.
-    initialize_mtc_audit_signing_record(config, signing_backend=ctx.audit_signing_backend)
+    # The sidecar path (the ledger-freshness gate's input — codex [P1]
+    # round-4) is derived from the STAGE-1 ledger handle directly, since the
+    # audit writer itself materializes only at step 2 below; both share
+    # `AUDIT_SIDECAR_FILENAME` as the single source of truth.
+    initialize_mtc_audit_signing_record(
+        config,
+        signing_backend=ctx.audit_signing_backend,
+        audit_sidecar_path=(
+            ctx.ledger_writer.handle.canonical_path.parent / AUDIT_SIDECAR_FILENAME
+        ),
+    )
 
     # 1. Tracer provider — globally registered.
     tracer = materialize_tracer_provider_stage(config)

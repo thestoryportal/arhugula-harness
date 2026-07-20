@@ -39,7 +39,9 @@ first found.
 
 from __future__ import annotations
 
+import contextlib
 import os
+import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -162,6 +164,7 @@ def validate_and_initialize_mtc_audit_signing(
     config: RuntimeConfig,
     *,
     signing_backend: SigningBackend | None,
+    audit_sidecar_path: Path | None = None,
 ) -> None:
     """Enforce the C-RT-03 v1.101 audit-signing config-validation invariant,
     then (on success) initialize/verify the cutover record.
@@ -174,7 +177,9 @@ def validate_and_initialize_mtc_audit_signing(
     triggering this function's side-effecting record I/O first.
     """
     validate_mtc_audit_signing_config(config)
-    initialize_mtc_audit_signing_record(config, signing_backend=signing_backend)
+    initialize_mtc_audit_signing_record(
+        config, signing_backend=signing_backend, audit_sidecar_path=audit_sidecar_path
+    )
 
 
 def validate_mtc_audit_signing_config(config: RuntimeConfig) -> None:
@@ -334,6 +339,7 @@ def initialize_mtc_audit_signing_record(
     config: RuntimeConfig,
     *,
     signing_backend: SigningBackend | None,
+    audit_sidecar_path: Path | None = None,
 ) -> None:
     """Pass 3 — side-effecting cutover-record load-or-greenfield-init.
 
@@ -344,6 +350,18 @@ def initialize_mtc_audit_signing_record(
     touched — avoiding a signed greenfield record being written to disk
     only for an unrelated signing-config gap to fail bootstrap moments
     later.
+
+    `audit_sidecar_path` is the deployment's `audit-entries.jsonl` full-entry
+    sidecar (derived from the stage-1 IS ledger handle — stage 4 passes
+    `ctx.audit_writer.sidecar_path`'s parent-derived location). It gates the
+    GREENFIELD branch: the spec permits minting a signed EMPTY record only
+    "when the ledger is fresh" (C-RT-03 v1.101 Invariants, codex round-26/30
+    lineage) — a missing record on a ledger that ALREADY HAS audit rows is
+    trust-anchor LOSS, and silently re-minting an empty record would hide it
+    while orphaning every legacy disposition (out-of-family Codex [P1]
+    round-4 finding). `None` skips the freshness gate (a caller that cannot
+    resolve the sidecar location — the production stage-4 wiring always
+    supplies it).
     """
     # Out-of-family Codex [P2] finding: re-apply the SAME `_is_blank`
     # normalization `validate_mtc_audit_signing_config` uses — reading
@@ -392,12 +410,41 @@ def initialize_mtc_audit_signing_record(
                 "refusing to treat it as a greenfield record or overwrite it",
             )
         )
+    # Ledger-freshness gate (out-of-family Codex [P1] round-4): greenfield
+    # empty-record minting is permitted ONLY for a fresh ledger. An absent
+    # record alongside a sidecar that already carries audit rows means the
+    # trust anchor was lost/deleted — surface it, never paper over it.
+    if audit_sidecar_path is not None and _sidecar_has_rows(audit_sidecar_path):
+        raise AuditSigningConfigInvalidError(
+            (
+                f"audit_cutover_record_path={record_path!r} does not exist but "
+                f"the audit sidecar at {str(audit_sidecar_path)!r} already "
+                "carries audit rows — the ledger is NOT fresh, so the missing "
+                "record is trust-anchor loss; refusing to mint a fresh empty "
+                "record over it (the spec permits empty-record initialization "
+                "only when the ledger is fresh)",
+            )
+        )
     _greenfield_sign_empty_record(
         path,
         key_id=record_key_id,
         ledger_binding_id=record_binding_id,
         signing_backend=signing_backend,
     )
+
+
+def _sidecar_has_rows(sidecar_path: Path) -> bool:
+    """True iff the `audit-entries.jsonl` sidecar exists and carries at
+    least one non-blank row. Read-only; an unreadable sidecar is treated as
+    HAVING rows (fail closed — refusing a greenfield mint is the safe
+    direction when freshness cannot be proven)."""
+    if not sidecar_path.is_file():
+        return False
+    try:
+        with sidecar_path.open("r", encoding="utf-8") as handle:
+            return any(line.strip() for line in handle)
+    except OSError:
+        return True
 
 
 def _greenfield_sign_empty_record(
@@ -444,15 +491,30 @@ def _greenfield_sign_empty_record(
         ) from exc
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = record.model_dump_json() + "\n" + signature.hex() + "\n"
-    # Out-of-family Codex [P2] finding: write-then-atomic-rename, not a
-    # direct `write_text` — a crash or a concurrent reader mid-write would
-    # otherwise leave a partial/truncated trust-anchor file that every
-    # later bootstrap rejects as unparseable (fail-safe was the goal; a
-    # torn write defeats it). `os.replace` is atomic on POSIX and Windows
-    # within the same filesystem (the temp file is a sibling of `path`).
-    tmp_path = path.with_name(f".{path.name}.tmp-{os.getpid()}")
-    tmp_path.write_text(payload, encoding="utf-8")
-    os.replace(tmp_path, path)
+    # Out-of-family Codex [P2] round-2 finding: write-then-atomic-rename,
+    # not a direct `write_text` — a crash or a concurrent reader mid-write
+    # would otherwise leave a partial/truncated trust-anchor file that every
+    # later bootstrap rejects as unparseable. Out-of-family Codex [P1]
+    # round-4 sharpening: the temp file is created via `tempfile.mkstemp`
+    # (randomized name, O_CREAT|O_EXCL, mode 0600) rather than a
+    # PREDICTABLE `.{name}.tmp-{pid}` sibling — a co-located local
+    # principal could pre-create the predictable name as a symlink, have
+    # the runtime's `write_text` follow it (overwriting the symlink's
+    # target with runtime privileges), then have `os.replace` move the
+    # symlink itself into the trusted record path. `mkstemp` never follows
+    # an existing entry; the fd is fsynced before the atomic rename so the
+    # renamed file's CONTENT is durable, not just its directory entry.
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.tmp-")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_name, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp_name)
+        raise
 
 
 def _verify_existing_record(

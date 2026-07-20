@@ -98,6 +98,14 @@ from harness_od.per_family_audit_verification import REDACTION_TOKEN_NAMESPACE_P
 from harness_runtime.lifecycle.state_ledger import LedgerWriter
 from harness_runtime.types import RuntimeConfig
 
+AUDIT_SIDECAR_FILENAME = "audit-entries.jsonl"
+"""The full-entry durable sidecar's filename, beside the IS ledger file
+(`B-47` item (e)). Public module constant so callers that need the sidecar
+LOCATION before a `RuntimeAuditLedgerWriter` exists (U-RT-134's stage-4
+ledger-freshness gate reads it from the stage-1 ledger handle, BEFORE the
+audit writer materializes) share one source of truth with the writer's own
+`_SIDECAR_FILENAME`."""
+
 
 class AuditWriterBindError(Exception):
     """Raised when audit-writer stage materialization fails."""
@@ -300,7 +308,7 @@ class RuntimeAuditLedgerWriter:
     rewrite stall shrinks in frequency as the ledger grows. A cold start
     then folds at most ~1/8 of history as delta."""
 
-    _SIDECAR_FILENAME: ClassVar[str] = "audit-entries.jsonl"
+    _SIDECAR_FILENAME: ClassVar[str] = AUDIT_SIDECAR_FILENAME
     """`B-47` close-out item (e) — the full-entry durable sidecar.
 
     The IS wrap persists only the `audit:<tag>:<entry_hash>` reference (the

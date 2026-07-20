@@ -503,6 +503,58 @@ def test_existing_record_with_wrong_binding_id_rejected(tmp_path: Path) -> None:
         validate_and_initialize_mtc_audit_signing(mismatched_config, signing_backend=backend)
 
 
+def test_greenfield_minting_rejected_when_sidecar_has_rows(tmp_path: Path) -> None:
+    """Out-of-family Codex [P1] round-4 finding: the spec permits minting a
+    signed EMPTY record only when the ledger is FRESH. An absent record
+    alongside an audit sidecar that already carries rows is trust-anchor
+    LOSS — a typed rejection, never a silent re-mint that would orphan
+    every legacy disposition."""
+    sidecar = tmp_path / "audit-entries.jsonl"
+    sidecar.write_text('{"tenant_tag": "_single", "entry": {}}\n', encoding="utf-8")
+    record_path = tmp_path / "record.json"
+    kwargs = _mtc_ready_kwargs(tmp_path)
+    kwargs["audit_cutover_record_path"] = str(record_path)
+    config = _config(tmp_path, **kwargs)
+    with pytest.raises(AuditSigningConfigInvalidError, match="NOT fresh"):
+        validate_and_initialize_mtc_audit_signing(
+            config, signing_backend=_FakeBackend(), audit_sidecar_path=sidecar
+        )
+    assert not record_path.exists()  # nothing minted
+
+    # Control: an ABSENT (or empty) sidecar IS fresh — greenfield proceeds.
+    fresh_sidecar = tmp_path / "no-such-sidecar.jsonl"
+    validate_and_initialize_mtc_audit_signing(
+        config, signing_backend=_FakeBackend(), audit_sidecar_path=fresh_sidecar
+    )
+    assert record_path.is_file()
+
+
+def test_greenfield_temp_file_symlink_planting_does_not_overwrite_target(tmp_path: Path) -> None:
+    """Out-of-family Codex [P1] round-4 finding: the temp file must be
+    created with randomized-name/exclusive semantics (`tempfile.mkstemp`)
+    — a co-located principal pre-creating the OLD predictable
+    `.{name}.tmp-{pid}` path as a symlink must neither get its target
+    overwritten with runtime privileges nor have the symlink renamed into
+    the trusted record path."""
+    import os as _os
+
+    record_path = tmp_path / "record.json"
+    victim = tmp_path / "victim.txt"
+    victim.write_text("precious", encoding="utf-8")
+    planted = record_path.with_name(f".{record_path.name}.tmp-{_os.getpid()}")
+    planted.symlink_to(victim)
+
+    kwargs = _mtc_ready_kwargs(tmp_path)
+    kwargs["audit_cutover_record_path"] = str(record_path)
+    config = _config(tmp_path, **kwargs)
+    validate_and_initialize_mtc_audit_signing(config, signing_backend=_FakeBackend())
+
+    assert victim.read_text(encoding="utf-8") == "precious"  # never followed
+    assert record_path.is_file() and not record_path.is_symlink()
+    lines = record_path.read_text(encoding="utf-8").splitlines()
+    assert AuditCutoverRecord.model_validate_json(lines[0]).rows == ()
+
+
 def test_existing_record_tampered_signature_rejected(tmp_path: Path) -> None:
     record_path = tmp_path / "record.json"
     backend = _FakeBackend()
