@@ -142,11 +142,20 @@ class AuditCutoverRecord(BaseModel):
                 "rather than be silently interpreted under current "
                 "semantics (out-of-family Codex [P2] finding, round 3)"
             )
-        if self.authored_at.tzinfo is None:
+        # `utcoffset() is None` (not `tzinfo is None`) — a `tzinfo` object
+        # whose `utcoffset()` returns `None` makes the datetime NAIVE despite
+        # carrying a non-`None` `tzinfo` (out-of-family Codex [P2] finding,
+        # round 10): `tzinfo is None` alone would accept such a value, and
+        # the later `astimezone(UTC)` conversion would then interpret it
+        # using the HOST timezone — the same record producing different
+        # canonical bytes and signatures on different hosts.
+        if self.authored_at.utcoffset() is None:
             raise CutoverRecordValidationError(
                 "cutover record authored_at must be a timezone-AWARE datetime "
-                "— a naive value would encode host-timezone-dependent bytes "
-                "into the signed message (OD spec v1.34 §21.2.2 row 4)"
+                "with a DEFINED UTC offset — a naive value (including a "
+                "tzinfo whose utcoffset() returns None) would encode "
+                "host-timezone-dependent bytes into the signed message (OD "
+                "spec v1.34 §21.2.2 row 4)"
             )
         # A MISSING trust identifier represented as an empty string would
         # still satisfy an `is None` check downstream, and an empty

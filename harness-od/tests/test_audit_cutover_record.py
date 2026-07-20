@@ -12,7 +12,7 @@ regression.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, tzinfo
 
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -343,6 +343,37 @@ def test_record_rejects_unsupported_schema_version() -> None:
         AuditCutoverRecord(
             schema_version=2,
             authored_at=datetime(2026, 7, 19, tzinfo=UTC),
+            algorithm=SignatureAlgorithm.ED25519,
+            key_id="k",
+            ledger_binding_id="sidecar-1",
+            rows=(),
+        )
+
+
+def test_record_rejects_undefined_utc_offset_tzinfo() -> None:
+    """A `tzinfo` object that is not `None` but whose `utcoffset()` itself
+    returns `None` makes the datetime NAIVE despite carrying a non-`None`
+    `tzinfo` — out-of-family Codex [P2] finding, round 10: a `tzinfo is
+    None` check alone accepts this shape, and the later `astimezone(UTC)`
+    conversion inside `canonical_cutover_record_message` would then
+    interpret it using the HOST timezone, making the same record produce
+    different canonical bytes (and therefore different signatures) on
+    different hosts."""
+
+    class _UndefinedOffsetTzinfo(tzinfo):
+        def utcoffset(self, dt: datetime | None) -> timedelta | None:
+            return None
+
+        def dst(self, dt: datetime | None) -> timedelta | None:
+            return None
+
+        def tzname(self, dt: datetime | None) -> str | None:
+            return "undefined"
+
+    with pytest.raises(ValidationError, match="timezone-AWARE"):
+        AuditCutoverRecord(
+            schema_version=1,
+            authored_at=datetime(2026, 7, 19, tzinfo=_UndefinedOffsetTzinfo()),
             algorithm=SignatureAlgorithm.ED25519,
             key_id="k",
             ledger_binding_id="sidecar-1",

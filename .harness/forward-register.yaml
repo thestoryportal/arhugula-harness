@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 63
+  total: 64
   open: 4
   design_substrate_gated: 1
-  registered_finding: 12
+  registered_finding: 13
   operator_gated: 2
   held: 1
   closed: 43
-  identity_digest: 36889a042c3ce3b1
+  identity_digest: 46e466a03db6b28e
 items:
 - id: B-1
   title: Layered capability-aware routing activation
