@@ -672,7 +672,13 @@ def test_verify_verdict_requires_literal_true() -> None:
         verify_per_family_chains([entry], tenant_scope=None, backend_resolver=resolver)
 
     # Cutover-record path: same discipline over verify_cutover_record_signature.
-    record, _real_sig = _signed_record(
+    # `record_sig` MUST be a real, correctly-sized signature (not a dummy
+    # wrong-length value) — merge-gate test-witness lens finding: a
+    # wrong-length dummy short-circuits at the byte-width check BEFORE
+    # `backend.verify` is ever called, so the assertion below would pass
+    # for a reason unrelated to the literal-`True`-verdict discipline it
+    # claims to pin.
+    record, record_sig = _signed_record(
         AuditCutoverRecordRow(
             source_tag="_single",
             tenant_scope="tenant-x",
@@ -687,7 +693,7 @@ def test_verify_verdict_requires_literal_true() -> None:
             tenant_scope="tenant-x",
             backend_resolver=resolver,
             cutover_record=record,
-            cutover_record_signature=b"irrelevant-bytes",
+            cutover_record_signature=record_sig,
             expected_cutover_record_key_id="cutover-key",
             ledger_binding_id="sidecar-1",
         )
