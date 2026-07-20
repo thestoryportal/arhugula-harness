@@ -55,6 +55,7 @@ from harness_od.audit_cutover_record import (
     AuditCutoverRecordRow,
     CutoverRecordValidationError,
     VerificationDisposition,
+    revalidated_cutover_record,
     verify_cutover_record_signature,
 )
 from harness_od.audit_ledger_types import (
@@ -258,78 +259,62 @@ def _resolve_cutover_disposition(
     deliberately permits TWO rows sharing a destination when at most one is
     NON-quarantined (distinct SOURCE rows migrating to the same target; the
     `source_tag` disambiguates them in the SOURCE-uniqueness check).
-    NON-quarantined rows (`placeholder_exempt` / `four_tuple_real`) DO
-    legitimately govern a full entry regardless of `source_tag` — a
-    `"_single"` migration row that was RETAGGED under this real tenant is
-    exactly the primary use case. The record's own uniqueness rule
-    guarantees AT MOST ONE non-quarantined row per destination, so a match
-    there is NEVER ambiguous (out-of-family Codex [P2] finding, round 3:
-    an earlier version rejected this legitimate collision shape outright
-    as "ambiguous").
 
-    A QUARANTINED row is different: BY THE MIGRATION CONTRACT it is NEVER
-    retagged, so a `source_tag == "_single"` quarantined row can NEVER be
-    the actual full entry — only an ALREADY-TAGGED quarantined row
-    (`source_tag == normalized_scope`) can (out-of-family Codex [P2]
-    finding, round 5: treating a `"_single"`-tagged quarantined row as
-    governing a full entry silently skipped that entry's REAL signature
-    verification and misreported a genuinely post-cutover row as
-    "quarantined"). Only when ZERO non-quarantined rows match do
-    already-tagged quarantined rows apply; source-identity uniqueness
-    guarantees at most one such row per destination too, so this is also
-    never genuinely ambiguous — the residual "more than one" raise is
-    defense in depth against a record that bypassed normal construction.
+    Resolution PRIORITY (out-of-family Codex [P1] finding, round 9 —
+    corrects an earlier version that preferred ANY non-quarantined row,
+    including a `"_single"` migration alias, over an already-tagged row):
+
+    1. An ALREADY-TAGGED row (`source_tag == normalized_scope`) ALWAYS
+       governs, REGARDLESS of its own disposition. An already-tagged row
+       occupies this destination independent of any migration — the
+       `harness migrate-audit-sidecar` procedure REFUSES to retag a
+       `"_single"` row into an ALREADY-OCCUPIED destination (a colliding
+       identity the writer itself rejects on fold), so if an already-tagged
+       row exists here, NO `"_single"` migration could also have landed at
+       the same destination. Preferring a `"_single"` alias's disposition
+       over an occupying already-tagged row's — even when the alias is
+       non-quarantined — would silently apply an exemption that never
+       actually took effect and skip the REAL row's verification.
+    2. Absent an already-tagged row, a `"_single"`-tagged row governs ONLY
+       if it is NON-quarantined (`placeholder_exempt` / `four_tuple_real`)
+       — a QUARANTINED `"_single"` row is, BY THE MIGRATION CONTRACT, NEVER
+       retagged (out-of-family Codex [P2] finding, round 5), so it can
+       never be the actual full entry either.
+    3. Otherwise `None` — the entry is post-cutover.
+
+    Source-identity uniqueness guarantees AT MOST ONE row per priority tier
+    for any given `(normalized_scope, entry_hash)` pair, so resolution is
+    NEVER genuinely ambiguous; the residual "more than one" raises below
+    are defense in depth against a record that bypassed normal
+    construction/validation, not reachable production cases.
     """
     matches = rows_by_entry_hash.get(entry.entry_hash, [])
-    non_quarantined = [
-        row
-        for row in matches
-        if row.verification_disposition is not VerificationDisposition.QUARANTINED
-    ]
-    if len(non_quarantined) == 1:
-        return non_quarantined[0]
-    if non_quarantined:
-        # Structurally impossible per the record's own destination-
-        # uniqueness rule — defense in depth, not a reachable production case.
+    already_tagged = [row for row in matches if row.source_tag == normalized_scope]
+    if len(already_tagged) > 1:
         raise CutoverRecordValidationError(
-            f"cutover record has {len(non_quarantined)} NON-quarantined rows "
-            f"dispositioning the same destination identity (tenant_scope="
-            f"{normalized_scope!r}, entry_hash={entry.entry_hash!r}) — "
-            "the record's own uniqueness rule should have forbidden this "
-            "(OD spec v1.34 §21.2.2 row 4)"
-        )
-    # A QUARANTINED row is, BY THE MIGRATION CONTRACT, NEVER retagged — so
-    # only an ALREADY-TAGGED quarantined row (source_tag == normalized_scope,
-    # meaning it was tagged under this real tenant independent of this
-    # cutover record, and is merely flagged quarantined post-hoc) can
-    # legitimately govern a FULL entry read under this tenant scope. A
-    # `source_tag == "_single"` quarantined row can NEVER be the full entry
-    # matching this hash — treating it as such would wrongly report a
-    # genuinely post-cutover tenant row as "quarantined" and SKIP its real
-    # signature verification entirely (out-of-family Codex [P2] finding,
-    # round 5). Such a row remains a legitimate BASELINE-ONLY identity — the
-    # caller's separate baseline cross-check still covers it; this function
-    # only decides FULL-entry governance.
-    quarantined_already_tagged = [
-        row
-        for row in matches
-        if row.verification_disposition is VerificationDisposition.QUARANTINED
-        and row.source_tag == normalized_scope
-    ]
-    if len(quarantined_already_tagged) > 1:
-        # Structurally impossible per source-identity uniqueness (an
-        # already-tagged row's source_tag is PINNED to normalized_scope, so
-        # at most one such row can exist per entry_hash) — defense in depth
-        # against a record that bypassed normal construction/validation.
-        raise CutoverRecordValidationError(
-            f"cutover record has {len(quarantined_already_tagged)} "
-            "already-tagged QUARANTINED rows dispositioning the same "
-            f"destination identity (tenant_scope={normalized_scope!r}, "
-            f"entry_hash={entry.entry_hash!r}) — the record's own "
+            f"cutover record has {len(already_tagged)} already-tagged rows "
+            f"(source_tag == tenant_scope={normalized_scope!r}) for the same "
+            f"entry_hash={entry.entry_hash!r} — the record's own "
             "source-identity uniqueness rule should have forbidden this "
             "(OD spec v1.34 §21.2.2 row 4)"
         )
-    return quarantined_already_tagged[0] if quarantined_already_tagged else None
+    if already_tagged:
+        return already_tagged[0]
+    single_tagged_migrated = [
+        row
+        for row in matches
+        if row.source_tag == "_single"
+        and row.verification_disposition is not VerificationDisposition.QUARANTINED
+    ]
+    if len(single_tagged_migrated) > 1:
+        raise CutoverRecordValidationError(
+            f"cutover record has {len(single_tagged_migrated)} NON-quarantined "
+            f'"_single" rows for the same entry_hash={entry.entry_hash!r} — '
+            "the record's own source-identity uniqueness rule (at most one "
+            '"_single" row per entry_hash) should have forbidden this (OD '
+            "spec v1.34 §21.2.2 row 4)"
+        )
+    return single_tagged_migrated[0] if single_tagged_migrated else None
 
 
 def _verify_entry_signature(
@@ -533,6 +518,17 @@ def verify_per_family_chains(
 
     if backend_resolver is not None:
         if cutover_record is not None:
+            # Revalidate BEFORE using ANY field — `model_copy(update=...)`
+            # and `model_construct()` both bypass `AuditCutoverRecord`'s
+            # own `@model_validator`, and this function indexes/iterates
+            # `cutover_record.rows` extensively below (out-of-family Codex
+            # [P2] finding, round 9: `verify_cutover_record_signature`
+            # already revalidates internally, but that revalidated instance
+            # was local to it and never propagated back here — a signed
+            # `model_construct()` row carrying a raw disposition string
+            # would authenticate successfully yet be silently mishandled by
+            # every downstream identity/enum comparison in THIS function).
+            cutover_record = revalidated_cutover_record(cutover_record)
             # `not value` (not `value is None`) — an EMPTY-STRING trust
             # identifier is the classic "missing configuration represented
             # as an empty default" footgun: it would still satisfy an
@@ -668,7 +664,28 @@ def verify_per_family_chains(
             )
             recorded_by_identity = {(row.source_tag, row.entry_hash): row for row in scoped_rows}
             recorded_identities = set(recorded_by_identity)
-            observed_identities = set(observed_baseline_identities)
+            # `observed_baseline_identities` are SOURCE-tagged
+            # (source_tag, entry_hash) — they carry NO tenant information
+            # of their own, so an unfiltered comparison against a
+            # ledger-wide record's OTHER-tenant rows reports every one of
+            # them as a false divergence when verifying a DIFFERENT tenant
+            # (out-of-family Codex [P2] finding, round 9). Source-identity
+            # uniqueness (`AuditCutoverRecord._validate_rows`) guarantees
+            # any `(source_tag, entry_hash)` the FULL record dispositions
+            # for another tenant is NOT ALSO valid for this one — exclude
+            # those known-other-tenant identities before diffing; an
+            # identity the record says nothing about at all is still a
+            # genuine divergence.
+            other_tenant_source_identities: set[tuple[str, str]] = (
+                {
+                    (row.source_tag, row.entry_hash)
+                    for row in cutover_record.rows
+                    if row.tenant_scope != normalized_scope
+                }
+                if cutover_record is not None
+                else set()
+            )
+            observed_identities = set(observed_baseline_identities) - other_tenant_source_identities
             for identity in sorted(recorded_identities - observed_identities):
                 baseline_divergences.append(
                     f"recorded cutover identity {identity!r} is missing from "

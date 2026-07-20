@@ -42,6 +42,7 @@ __all__ = [
     "CutoverRecordValidationError",
     "VerificationDisposition",
     "canonical_cutover_record_message",
+    "revalidated_cutover_record",
     "sign_cutover_record",
     "verify_cutover_record_signature",
 ]
@@ -286,7 +287,7 @@ def canonical_cutover_record_message(record: AuditCutoverRecord) -> bytes:
     return b"|".join(f"{len(encoded)}:".encode() + encoded for encoded in encoded_parts)
 
 
-def _revalidated(record: AuditCutoverRecord) -> AuditCutoverRecord:
+def revalidated_cutover_record(record: AuditCutoverRecord) -> AuditCutoverRecord:
     """Round-trip `record` through `model_validate(model_dump())` to force
     `_validate_rows` to run, even if `record` was produced via a Pydantic
     API that SKIPS validators — `model_copy(update=...)` and
@@ -310,10 +311,10 @@ def sign_cutover_record(record: AuditCutoverRecord, *, backend: SigningBackend) 
     with `record.algorithm` — mirrors `sign_audit_entry`'s algorithm-
     disagreement guard: a backend must not attest a record under an
     algorithm other than the one the record declares. Revalidates `record`
-    first (see `_revalidated`) so a validator-bypassing construction path
+    first (see `revalidated_cutover_record`) so a validator-bypassing construction path
     can never be signed.
     """
-    record = _revalidated(record)
+    record = revalidated_cutover_record(record)
     if backend.algorithm != record.algorithm.value:
         raise CutoverRecordValidationError(
             f"backend.algorithm={backend.algorithm!r} disagrees with the "
@@ -372,14 +373,14 @@ def verify_cutover_record_signature(
     declares. Accepts ONLY the LITERAL boolean `True` verdict from
     `backend.verify` — a truthy non-`bool` SDK value (e.g.
     `{"SignatureValid": False}`) is treated as failing, not passing.
-    Revalidates `record` first (see `_revalidated`) so a validator-
+    Revalidates `record` first (see `revalidated_cutover_record`) so a validator-
     bypassing construction path (`model_copy(update=...)`,
     `model_construct()`) can never be accepted as authenticated — an
     invalid record is treated as a failing (`False`) verdict, consistent
     with this function's bool-only contract, rather than raising.
     """
     try:
-        record = _revalidated(record)
+        record = revalidated_cutover_record(record)
     except (CutoverRecordValidationError, ValidationError):
         return False
     if backend.algorithm != record.algorithm.value:

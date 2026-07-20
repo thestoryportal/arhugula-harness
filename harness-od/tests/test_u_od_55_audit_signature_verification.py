@@ -743,6 +743,58 @@ def test_colliding_quarantined_baseline_identity_preserved() -> None:
     assert entry.entry_hash in report.baseline_divergences[0]
 
 
+def test_cutover_record_revalidation_propagates_to_disposition_resolution() -> None:
+    """`verify_cutover_record_signature` revalidates its OWN local copy
+    internally (round 8), but that revalidated instance was discarded —
+    the ORIGINAL, possibly-construction-bypassed `cutover_record` object is
+    what `verify_per_family_chains` then indexes/iterates for disposition
+    resolution — out-of-family Codex [P2] finding, round 9. A
+    `model_construct()`-built ALREADY-TAGGED row (`source_tag ==
+    tenant_scope`, which always governs regardless of its own disposition
+    — see `_resolve_cutover_disposition` priority 1) whose
+    `verification_disposition` holds the RAW STRING `"quarantined"` (not
+    the enum member) is DATA-valid — it round-trips cleanly through
+    `model_dump()`/`model_validate()` and so authenticates against a
+    signature computed over the properly-typed original — but the
+    dispatch logic's `disposition is VerificationDisposition.QUARANTINED`
+    IDENTITY check on an un-revalidated raw string would silently miss it,
+    falling through to a REAL signature check that was never meant to run
+    for this row."""
+    backend = _Ed25519Backend()
+    entry = _signed_entry("propagation-ref", backend=backend, tenant_id=None)
+    valid_record, record_sig = _signed_record(
+        AuditCutoverRecordRow(
+            source_tag="tenant-x",
+            tenant_scope="tenant-x",
+            entry_hash=entry.entry_hash,
+            verification_disposition=VerificationDisposition.QUARANTINED,
+        ),
+        backend=backend,
+    )
+    raw_string_row = AuditCutoverRecordRow.model_construct(
+        source_tag="tenant-x",
+        tenant_scope="tenant-x",
+        entry_hash=entry.entry_hash,
+        verification_disposition="quarantined",  # DATA-valid, TYPE-bypassed
+    )
+    mutant_record = valid_record.model_copy(update={"rows": (raw_string_row,)})
+
+    def resolver(algo: SignatureAlgorithm, key_id: str) -> _Ed25519Backend:
+        del algo, key_id
+        return backend
+
+    report = verify_per_family_chains(
+        [entry],
+        tenant_scope="tenant-x",
+        backend_resolver=resolver,
+        cutover_record=mutant_record,
+        cutover_record_signature=record_sig,
+        expected_cutover_record_key_id="cutover-key",
+        ledger_binding_id="sidecar-1",
+    )
+    assert report.signature_dispositions == {"quarantined": 1}
+
+
 def test_verify_path_not_breaker_instrumented() -> None:
     """Row 9 (dyad-3 pin): the OD verifier itself adds NO breaker/retry
     instrumentation around `backend.verify` — exactly one call per
@@ -833,6 +885,46 @@ def test_declared_vs_observed_baseline_divergence_reported_both_ways() -> None:
     joined = " ".join(report.baseline_divergences)
     assert "d" * 64 in joined and "missing from the observed baseline" in joined
     assert "e" * 64 in joined and "missing from the cutover record" in joined
+
+
+def test_baseline_divergence_excludes_known_other_tenant_identities() -> None:
+    """Out-of-family Codex [P2] finding, round 9: `observed_baseline_identities`
+    are SOURCE-tagged (`source_tag`, `entry_hash`) with no tenant
+    information of their own — an unfiltered comparison against a
+    ledger-wide record's rows for OTHER tenants would falsely report every
+    one of them as "missing from the cutover record" when verifying a
+    DIFFERENT tenant. An identity the record explicitly dispositions for
+    ANOTHER tenant must be excluded from THIS tenant's divergence report,
+    not treated as a genuine gap."""
+    backend = _Ed25519Backend()
+
+    def resolver(algo: SignatureAlgorithm, key_id: str) -> _Ed25519Backend:
+        del algo, key_id
+        return backend
+
+    record, record_sig = _signed_record(
+        AuditCutoverRecordRow(
+            source_tag="_single",
+            tenant_scope="tenant-y",  # a DIFFERENT tenant from the one verified below
+            entry_hash="f" * 64,
+            verification_disposition=VerificationDisposition.PLACEHOLDER_EXEMPT,
+        ),
+        backend=backend,
+    )
+    report = verify_per_family_chains(
+        [],
+        tenant_scope="tenant-x",  # verifying tenant-x, not tenant-y
+        backend_resolver=resolver,
+        cutover_record=record,
+        cutover_record_signature=record_sig,
+        expected_cutover_record_key_id="cutover-key",
+        ledger_binding_id="sidecar-1",
+        # Observed by the sidecar reader for tenant-y's record — but this
+        # verification run is scoped to tenant-x, which knows nothing
+        # about it. It is NOT a genuine tenant-x divergence.
+        observed_baseline_identities=[("_single", "f" * 64)],
+    )
+    assert report.baseline_divergences == ()
 
 
 def test_record_ledger_binding_mismatch_rejected() -> None:
