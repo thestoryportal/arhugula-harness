@@ -148,6 +148,21 @@ class AuditCutoverRecord(BaseModel):
             # target) — the two are the SAME trigger condition, not two
             # independent checks, since `source_tag` is fixed to the literal
             # `"_single"` on both rows in that case.
+            if row.source_tag != "_single" and row.source_tag != row.tenant_scope:
+                raise CutoverRecordValidationError(
+                    f"cutover record row has an already-tagged source_tag="
+                    f"{row.source_tag!r} that disagrees with its own "
+                    f"tenant_scope={row.tenant_scope!r} — an already-tagged "
+                    "row's source tag IS its current tenant tag, so a "
+                    "row claiming to move it to a DIFFERENT tenant is a "
+                    "cross-tenant relabel this arc does not authorize "
+                    "(out-of-family Codex [P1] finding: verification later "
+                    "matches only (tenant_scope, entry_hash), so an "
+                    "unvalidated mismatch here would let a signed record "
+                    "smuggle a cross-tenant relabel/exemption; B-56 carries "
+                    "the future explicit-relabel mechanism)"
+                )
+
             source_identity = (row.source_tag, row.entry_hash)
             if source_identity in seen_source_identity:
                 alias_note = (

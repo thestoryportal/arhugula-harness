@@ -40,6 +40,7 @@ from harness_od.multi_tenant_trace_separation_and_audit_ledger import (
 from harness_od.per_family_audit_verification import (
     AuditSignatureInvalid,
     AuditVerificationBackendUnavailableError,
+    VerificationBackendKeyUnknownError,
     verify_per_family_chains,
 )
 
@@ -172,6 +173,7 @@ def test_pre_cutover_real_four_tuple_signature_verifies() -> None:
         backend_resolver=resolver,
         cutover_record=record,
         cutover_record_signature=record_sig,
+        expected_cutover_record_key_id="cutover-key",
         ledger_binding_id="sidecar-1",
     )
     assert report.signature_dispositions == {"verified": 1}
@@ -209,6 +211,7 @@ def test_post_cutover_tenant_row_verifies_only_against_five_tuple() -> None:
             backend_resolver=resolver,
             cutover_record=wrong_era_record,
             cutover_record_signature=wrong_era_sig,
+            expected_cutover_record_key_id="cutover-key",
             ledger_binding_id="sidecar-1",
         )
 
@@ -256,7 +259,7 @@ def test_signature_invalid_vs_hash_chain_breach_vs_availability_distinguishable_
 
     def resolver(algo: SignatureAlgorithm, key_id: str) -> _Ed25519Backend:
         if key_id == "unknown-key":
-            raise KeyError(key_id)
+            raise VerificationBackendKeyUnknownError(key_id)
         return backend
 
     # (1) hash-chain breach — content tampered, stale hash kept.
@@ -296,21 +299,33 @@ def test_signature_invalid_vs_hash_chain_breach_vs_availability_distinguishable_
 
 
 def test_availability_typed_vs_defect_unwrapped() -> None:
-    """An unknown `key_id` (resolver raises `KeyError`) surfaces as the
-    typed availability error; an injected resolver raising `TypeError`
-    (a programming defect, not "unknown key") propagates UNWRAPPED.
-    Mutation probe: wrapping everything indiscriminately would fail this
-    test's second assertion (a bare `TypeError`, not the availability type,
-    must escape)."""
+    """An unknown `key_id` (resolver raises the CONTRACTUAL
+    `VerificationBackendKeyUnknownError`) surfaces as the typed availability
+    error; an injected resolver raising `TypeError` (a programming defect,
+    not "unknown key") propagates UNWRAPPED. Mutation probe: wrapping
+    everything indiscriminately would fail this test's second assertion
+    (a bare `TypeError`, not the availability type, must escape) — and a
+    resolver raising a bare built-in `KeyError` (NOT the dedicated type)
+    is likewise treated as a defect, not an availability signal."""
     backend = _Ed25519Backend()
     entry = _signed_entry("avail-ref-2", backend=backend, tenant_id=None)
 
     def key_error_resolver(algo: SignatureAlgorithm, key_id: str) -> _Ed25519Backend:
         del algo, key_id
-        raise KeyError("unknown-key")
+        raise VerificationBackendKeyUnknownError("unknown-key")
 
     with pytest.raises(AuditVerificationBackendUnavailableError):
         verify_per_family_chains([entry], tenant_scope=None, backend_resolver=key_error_resolver)
+
+    def bare_key_error_resolver(algo: SignatureAlgorithm, key_id: str) -> _Ed25519Backend:
+        del algo, key_id
+        raise KeyError("looks like unknown key but is NOT the contractual type")
+
+    with pytest.raises(KeyError) as bare_excinfo:
+        verify_per_family_chains(
+            [entry], tenant_scope=None, backend_resolver=bare_key_error_resolver
+        )
+    assert not isinstance(bare_excinfo.value, AuditVerificationBackendUnavailableError)
 
     def type_error_resolver(algo: SignatureAlgorithm, key_id: str) -> _Ed25519Backend:
         del algo, key_id
@@ -375,6 +390,7 @@ def test_cutover_record_requires_authentication() -> None:
             backend_resolver=resolver,
             cutover_record=record,
             cutover_record_signature=record_sig,
+            expected_cutover_record_key_id="cutover-key",
         )
 
     # (b) missing cutover_record_signature.
@@ -407,6 +423,54 @@ def test_cutover_record_requires_authentication() -> None:
             backend_resolver=resolver,
             cutover_record=tampered_record,
             cutover_record_signature=record_sig,  # the ORIGINAL record's signature, wrong content
+            expected_cutover_record_key_id="cutover-key",
+            ledger_binding_id="sidecar-1",
+        )
+
+
+def test_cutover_record_key_must_match_pinned_expectation() -> None:
+    """The record-signing key is the operator-PINNED
+    `expected_cutover_record_key_id` — NEVER a row-derived/self-claimed key
+    (out-of-family Codex [P1] finding, round 2). A record VALIDLY signed
+    under an ORDINARY per-entry key (one the resolver happily supplies for
+    entry verification) must NOT be trusted for exemption authority just
+    because the resolver *could* resolve it — `expected_cutover_record_key_id`
+    is REQUIRED, and a mismatch is REJECTED even though the record's own
+    signature is genuinely valid under its claimed key."""
+    backend = _Ed25519Backend()
+    # The record claims key_id="test-key" — the SAME key every ordinary
+    # entry in this test suite signs under — and its signature genuinely
+    # verifies under that key. The pinned expectation is a DIFFERENT key.
+    entry = _signed_entry("key-pin-ref", backend=backend, key_id="test-key", tenant_id=None)
+    record = AuditCutoverRecord(
+        schema_version=1,
+        authored_at=datetime(2026, 7, 19, tzinfo=UTC),
+        algorithm=SignatureAlgorithm.ED25519,
+        key_id="test-key",  # an ORDINARY per-entry key, not the pinned record key
+        ledger_binding_id="sidecar-1",
+        rows=(
+            AuditCutoverRecordRow(
+                source_tag="_single",
+                tenant_scope="tenant-x",
+                entry_hash=entry.entry_hash,
+                verification_disposition=VerificationDisposition.FOUR_TUPLE_REAL,
+            ),
+        ),
+    )
+    record_sig = sign_cutover_record(record, backend=backend)
+
+    def resolver(algo: SignatureAlgorithm, key_id: str) -> _Ed25519Backend:
+        del algo, key_id
+        return backend  # resolves EVERY key_id, including "test-key"
+
+    with pytest.raises(CutoverRecordValidationError, match="does not match"):
+        verify_per_family_chains(
+            [entry],
+            tenant_scope="tenant-x",
+            backend_resolver=resolver,
+            cutover_record=record,
+            cutover_record_signature=record_sig,
+            expected_cutover_record_key_id="audit-cutover-record-key",  # the REAL pinned key
             ledger_binding_id="sidecar-1",
         )
 
@@ -450,6 +514,7 @@ def test_ambiguous_cutover_disposition_rejected() -> None:
             backend_resolver=resolver,
             cutover_record=record,
             cutover_record_signature=record_sig,
+            expected_cutover_record_key_id="cutover-key",
             ledger_binding_id="sidecar-1",
         )
 
@@ -496,6 +561,7 @@ def test_legacy_baseline_identities_reported_never_omitted() -> None:
         backend_resolver=resolver,
         cutover_record=matching_record,
         cutover_record_signature=matching_sig,
+        expected_cutover_record_key_id="cutover-key",
         ledger_binding_id="sidecar-1",
         # SOURCE identity — the shape the sidecar reader observes
         # ("_single", the record row's own source_tag), not the record's
@@ -503,6 +569,9 @@ def test_legacy_baseline_identities_reported_never_omitted() -> None:
         observed_baseline_identities=[("_single", "c" * 64)],
     )
     assert report.baseline_divergences == ()
+    # A MATCHED identity is reported too — never silently dropped just
+    # because it didn't diverge (out-of-family Codex [P1] finding, round 2).
+    assert report.signature_dispositions == {"exempt": 1}
 
 
 def test_declared_vs_observed_baseline_divergence_reported_both_ways() -> None:
@@ -531,6 +600,7 @@ def test_declared_vs_observed_baseline_divergence_reported_both_ways() -> None:
         backend_resolver=resolver,
         cutover_record=record,
         cutover_record_signature=record_sig,
+        expected_cutover_record_key_id="cutover-key",
         ledger_binding_id="sidecar-1",
         # SOURCE-identity-shaped, observed but NOT recorded.
         observed_baseline_identities=[("_single", "e" * 64)],
@@ -586,6 +656,7 @@ def test_record_ledger_binding_mismatch_rejected() -> None:
         backend_resolver=resolver,
         cutover_record=record,
         cutover_record_signature=record_sig,
+        expected_cutover_record_key_id="cutover-key",
         ledger_binding_id="sidecar-A",
     )
     assert report.signature_dispositions == {"verified": 1}

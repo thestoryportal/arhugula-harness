@@ -122,7 +122,10 @@ def test_record_canonical_message_deterministic_and_tamper_evident() -> None:
         ledger_binding_id=record.ledger_binding_id,
         rows=(
             AuditCutoverRecordRow(
-                source_tag="tenant-a-was-already-tagged",  # rewritten source_tag
+                # rewritten source_tag — from the migration default "_single"
+                # to an already-tagged tag; MUST equal tenant_scope to stay
+                # valid under the record's own already-tagged-source rule.
+                source_tag=record.rows[0].tenant_scope,
                 tenant_scope=record.rows[0].tenant_scope,
                 entry_hash=record.rows[0].entry_hash,
                 verification_disposition=record.rows[0].verification_disposition,

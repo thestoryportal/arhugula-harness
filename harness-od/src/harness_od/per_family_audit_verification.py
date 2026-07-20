@@ -73,6 +73,7 @@ __all__ = [
     "AuditSignatureInvalid",
     "AuditVerificationBackendUnavailableError",
     "FamilyVerificationReport",
+    "VerificationBackendKeyUnknownError",
     "verify_per_family_chains",
 ]
 
@@ -112,16 +113,41 @@ class AuditVerificationBackendUnavailableError(Exception):
 
     An infrastructure/availability failure, retryable by the caller — NEVER
     a verdict on the entry's trustworthiness (an unresolvable key proves
-    nothing about the signature it can't check). Raised ONLY for the
-    resolver's `KeyError` (an unresolvable `key_id`) — a `backend.verify`
-    call that itself raises is deliberately left UNGUARDED (row 9's
-    breaker-asymmetry rationale: this module never breaker-couples or
-    reclassifies the read path itself, and there is no established typed
+    nothing about the signature it can't check). Raised ONLY when
+    `backend_resolver` raises the dedicated `VerificationBackendKeyUnknownError`
+    (see that type's docstring — a bare built-in `KeyError` from inside a
+    resolver is NOT treated as "unknown key": it is indistinguishable from
+    an accidental programming `KeyError`, so it propagates unwrapped as a
+    defect; out-of-family Codex [P2] finding, round 2 on this arc). A
+    `backend.verify` call that itself raises is deliberately left UNGUARDED
+    (row 9's breaker-asymmetry rationale: this module never breaker-couples
+    or reclassifies the read path itself, and there is no established typed
     "verify-side hard failures" family to key a narrow catch on; see
-    `test_verify_path_not_breaker_instrumented`). Raises that indicate a
-    genuine PROGRAMMING defect (e.g. a resolver raising `TypeError`) are
-    NOT wrapped here either — they propagate unwrapped so a defect is
-    never mistaken for a retryable outage.
+    `test_verify_path_not_breaker_instrumented`) — a well-behaved backend
+    implementation is expected to raise THIS type itself for its own
+    genuine infrastructure failures (e.g. a network timeout talking to a
+    KMS); translating a specific vendor SDK's exceptions into this contract
+    is that backend implementation's responsibility, not this module's (a
+    concrete backend, e.g. ADR-D8's `AwsKmsSigningBackend`, is CP-axis
+    scope, out of U-OD-55's reach).
+    """
+
+
+class VerificationBackendKeyUnknownError(Exception):
+    """The CONTRACTUAL signal a `BackendResolver` raises to report "no
+    backend is configured for this `(algorithm, key_id)`" — e.g. a key
+    rotation the operator's key mapping hasn't caught up with, or a
+    genuinely incomplete mapping.
+
+    A resolver MUST raise this specific type (or a subclass) for that
+    condition — NOT a bare built-in `KeyError` (out-of-family Codex [P2]
+    finding, round 2: a resolver's own internal bug can ALSO raise
+    `KeyError`, e.g. from a missing internal config field; treating every
+    `KeyError` as "unknown key" would misclassify that bug as a retryable
+    availability gap instead of the defect it is). `verify_per_family_chains`
+    catches ONLY this type and wraps it into
+    `AuditVerificationBackendUnavailableError`; any other exception from a
+    resolver call propagates unwrapped.
     """
 
 
@@ -129,7 +155,9 @@ BackendResolver = Callable[[SignatureAlgorithm, str], SigningBackend]
 """Per-row verification-backend resolver keyed on an entry's STORED
 `(audit_signature_algorithm, audit_signature_key_id)` — NOT a single
 `SigningBackend | None` (OD spec v1.34 §21.2.2 row 1): one backend exposes
-one `.algorithm` and cannot verify mixed multi-algorithm history."""
+one `.algorithm` and cannot verify mixed multi-algorithm history. Must
+raise `VerificationBackendKeyUnknownError` (not a bare `KeyError`) to report an
+unresolvable `(algorithm, key_id)` pair."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -273,7 +301,7 @@ def _verify_entry_signature(
 
     try:
         backend = backend_resolver(algo, sig_attrs.audit_signature_key_id)
-    except KeyError as exc:
+    except VerificationBackendKeyUnknownError as exc:
         raise AuditVerificationBackendUnavailableError(
             "no verification backend available for (algorithm="
             f"{algo.value!r}, key_id={sig_attrs.audit_signature_key_id!r}) "
@@ -321,6 +349,7 @@ def verify_per_family_chains(
     backend_resolver: BackendResolver | None = None,
     cutover_record: AuditCutoverRecord | None = None,
     cutover_record_signature: bytes | None = None,
+    expected_cutover_record_key_id: str | None = None,
     ledger_binding_id: str | None = None,
     observed_baseline_identities: Sequence[tuple[str, str]] = (),
 ) -> FamilyVerificationReport:
@@ -338,22 +367,30 @@ def verify_per_family_chains(
     `tenant_scope` is normalized via the SAME §21.2.1 tag rule-set signing
     uses (`signing_token`) — one source of truth at both ends (row 2).
 
-    Supplying `cutover_record` REQUIRES both `cutover_record_signature` and
-    `ledger_binding_id` — a record is trusted ONLY once its OWN signature
-    verifies against a backend resolved via `backend_resolver` (row 4:
-    "AUTHENTICATED"; out-of-family Codex [P1] finding — an unsigned or
-    unverified record must never gate a live exemption) AND its signed
-    `ledger_binding_id` matches the deployment's configured binding (row 4's
-    cross-ledger guard; Codex [P1] finding — omitting `ledger_binding_id`
-    must not silently skip this check, so it is REQUIRED, not merely
-    compared when both happen to be present). `observed_baseline_identities`
-    are cross-checked against the cutover record's BASELINE-ONLY rows (SOURCE
-    identity `(source_tag, entry_hash)` — the shape the sidecar reader
-    observes; rows whose `entry_hash` already has a full entry in `entries`
-    are excluded, since those were content/signature-verified above and are
-    not baseline-only) in BOTH directions, reported explicitly via
-    `FamilyVerificationReport.baseline_divergences` (row 6) — never silently
-    omitted.
+    Supplying `cutover_record` REQUIRES `cutover_record_signature`,
+    `expected_cutover_record_key_id`, and `ledger_binding_id` — a record is
+    trusted ONLY once: (a) its `key_id` matches the operator-PINNED
+    `expected_cutover_record_key_id` (row 4 — the record-signing key is
+    NEVER a row-derived/self-claimed key; a record signed under an
+    ordinary per-entry key in the resolver's mapping must not be trusted);
+    (b) its OWN signature verifies against a backend resolved via
+    `backend_resolver` for that pinned key (row 4: "AUTHENTICATED" — an
+    unsigned or unverified record must never gate a live exemption); and
+    (c) its signed `ledger_binding_id` matches the deployment's configured
+    binding (row 4's cross-ledger guard — omitting `ledger_binding_id` must
+    not silently skip this check, so it is REQUIRED, not merely compared
+    when both happen to be present). `observed_baseline_identities` are
+    cross-checked against the cutover record's BASELINE-ONLY rows FILTERED
+    TO THE REQUESTED `tenant_scope` (SOURCE identity `(source_tag,
+    entry_hash)` — the shape the sidecar reader observes; rows whose
+    `entry_hash` already has a full entry in `entries` are excluded, since
+    those were content/signature-verified above and are not baseline-only;
+    a ledger-wide record's OTHER-tenant rows are excluded too, or every
+    other tenant's baseline would report as a false divergence) in BOTH
+    directions — reported explicitly via
+    `FamilyVerificationReport.baseline_divergences` (row 6) — never
+    silently omitted; MATCHED identities are ALSO reported, via
+    `signature_dispositions`, never silently dropped either.
     """
     for i, entry in enumerate(entries):
         recomputed = compute_entry_hash(entry.payload)
@@ -420,9 +457,28 @@ def verify_per_family_chains(
                     "must never gate a legacy exemption (OD spec v1.34 "
                     "§21.2.2 row 4: AUTHENTICATED)"
                 )
+            if expected_cutover_record_key_id is None:
+                raise CutoverRecordValidationError(
+                    "expected_cutover_record_key_id is REQUIRED whenever "
+                    "cutover_record is supplied — the record-signing key is "
+                    "the operator-PINNED audit_cutover_record_key_id, never "
+                    "a row-derived key (OD spec v1.34 §21.2.2 row 4); "
+                    "without this pin, a record signed under ANY ordinary "
+                    "per-entry key in the resolver's mapping would be "
+                    "trusted (out-of-family Codex [P1] finding, round 2)"
+                )
+            if cutover_record.key_id != expected_cutover_record_key_id:
+                raise CutoverRecordValidationError(
+                    f"cutover record's key_id={cutover_record.key_id!r} does "
+                    "not match the operator-pinned "
+                    f"expected_cutover_record_key_id="
+                    f"{expected_cutover_record_key_id!r} — the record-signing "
+                    "key is never a row-derived/self-claimed key (OD spec "
+                    "v1.34 §21.2.2 row 4)"
+                )
             try:
                 record_backend = backend_resolver(cutover_record.algorithm, cutover_record.key_id)
-            except KeyError as exc:
+            except VerificationBackendKeyUnknownError as exc:
                 raise AuditVerificationBackendUnavailableError(
                     "no verification backend available for the cutover "
                     f"record's (algorithm={cutover_record.algorithm.value!r}, "
@@ -469,13 +525,26 @@ def verify_per_family_chains(
             # not destination-tagged). Rows whose entry_hash already has a
             # FULL entry in `entries` are excluded — those were content- and
             # signature-verified above and are not baseline-only identities
-            # this cross-check is meant to cover.
+            # this cross-check is meant to cover. A ledger-wide record's rows
+            # are further filtered to the CURRENT requested tenant scope
+            # (out-of-family Codex [P1] finding, round 2: an unfiltered
+            # comparison reports every OTHER tenant's rows as false
+            # divergence when verifying one tenant); the untenanted (`None`
+            # `normalized_scope`) case has no baseline-cutover story, so no
+            # record rows apply.
             full_entry_hashes = {entry.entry_hash for entry in entries}
-            recorded_identities = {
-                (row.source_tag, row.entry_hash)
-                for row in (cutover_record.rows if cutover_record is not None else ())
-                if row.entry_hash not in full_entry_hashes
-            }
+            scoped_rows = (
+                [
+                    row
+                    for row in cutover_record.rows
+                    if row.tenant_scope == normalized_scope
+                    and row.entry_hash not in full_entry_hashes
+                ]
+                if cutover_record is not None and normalized_scope is not None
+                else []
+            )
+            recorded_by_identity = {(row.source_tag, row.entry_hash): row for row in scoped_rows}
+            recorded_identities = set(recorded_by_identity)
             observed_identities = set(observed_baseline_identities)
             for identity in sorted(recorded_identities - observed_identities):
                 baseline_divergences.append(
@@ -487,6 +556,30 @@ def verify_per_family_chains(
                     f"observed baseline identity {identity!r} is missing "
                     "from the cutover record (OD spec v1.34 §21.2.2 row 6)"
                 )
+            # MATCHED identities are reported EXPLICITLY too (row 6: "exempt
+            # / quarantined / UNVERIFIED with the nonzero outcome, never
+            # omitted") — out-of-family Codex [P1] finding, round 2: a
+            # matched identity previously vanished from BOTH the divergence
+            # report AND signature_dispositions, silently.
+            for identity in sorted(recorded_identities & observed_identities):
+                matched_row = recorded_by_identity[identity]
+                if matched_row.verification_disposition is VerificationDisposition.QUARANTINED:
+                    signature_dispositions["quarantined"] = (
+                        signature_dispositions.get("quarantined", 0) + 1
+                    )
+                elif (
+                    matched_row.verification_disposition
+                    is VerificationDisposition.PLACEHOLDER_EXEMPT
+                ):
+                    signature_dispositions["exempt"] = signature_dispositions.get("exempt", 0) + 1
+                else:
+                    # FOUR_TUPLE_REAL on a baseline-only identity: there is
+                    # no full entry to cryptographically verify against
+                    # (that is what makes it baseline-only) — the disposition
+                    # is recorded, but "verified" would overclaim.
+                    signature_dispositions["baseline_real_unverifiable"] = (
+                        signature_dispositions.get("baseline_real_unverifiable", 0) + 1
+                    )
 
     return FamilyVerificationReport(
         chained=chained,
