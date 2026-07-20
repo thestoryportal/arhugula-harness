@@ -27,6 +27,8 @@ result, per CP v1.101 §2 catch-ordering contract + OD v1.34 §21.2.3 row 7.
 
 from __future__ import annotations
 
+import logging
+import uuid
 from enum import StrEnum
 
 from harness_od.audit_signing_errors import (
@@ -41,6 +43,7 @@ __all__ = [
     "AuditSigningFailedError",
     "PostEffectAuditSigningError",
     "PostEffectClass",
+    "report_post_effect_audit_failure",
 ]
 
 
@@ -78,8 +81,38 @@ class PostEffectAuditSigningError(AuditSigningFailedError):
         effect_class: PostEffectClass,
         result: object,
     ) -> None:
-        super().__init__(message)
+        #: Stable reference joining the caller-visible failure surface to the
+        #: audit-failure report: the CP driver stringifies step exceptions
+        #: into `RunResult.fail_class` (it cannot import this carrier), so
+        #: the reference is EMBEDDED in the message — the caller receives the
+        #: failure "carrying the result reference" (plan v2.49 §1.3 acc 1b)
+        #: and resolves the preserved payload at the report log line.
+        self.result_ref = f"post-effect-{uuid.uuid4().hex[:12]}"
+        super().__init__(
+            f"{message} [effect_class={effect_class.value} result_ref={self.result_ref}]"
+        )
         self.effect_class = effect_class
         #: The already-obtained effect result (opaque payload) — preserved
         #: for the audit-failure report at the outermost dispatch boundary.
         self.result = result
+
+
+def report_post_effect_audit_failure(exc: PostEffectAuditSigningError) -> None:
+    """The acc-1b audit-failure report at the outermost dispatch boundary.
+
+    Consumes the carrier's `effect_class` + preserved `result` into a
+    structured ERROR log keyed by `result_ref` BEFORE the CP driver's
+    generic step-exception handler stringifies the exception into
+    `RunResult.fail_class` — without this, the completed effect payload
+    would be discarded despite riding the carrier (out-of-family Codex
+    round-1 P1 on this arc). The repr is bounded so an arbitrarily large
+    provider/tool/webhook/sub-agent payload cannot blow up the log record.
+    """
+    logging.getLogger("harness.runtime.audit_signing").error(
+        "post-effect audit signing failure — completed %s effect PRESERVED "
+        "(result_ref=%s): %s | result=%.4000r",
+        exc.effect_class.value,
+        exc.result_ref,
+        exc,
+        exc.result,
+    )

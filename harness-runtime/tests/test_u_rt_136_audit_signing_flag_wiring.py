@@ -763,3 +763,70 @@ async def test_flag_on_typed_family_raises_through_real_framework_evaluate(
     framework_off = await _build(_runtime_config(tmp_path, fail_closed_explicit=False))
     evaluation = await framework_off.evaluate(step, {}, step_context=_step_context())
     assert evaluation.result.outcome is ValidatorOutcome.PASS
+
+
+# ---------------------------------------------------------------------------
+# Acc 1b, outermost-boundary half (out-of-family Codex round-1 P1) — the
+# audit-failure report at the facade + the caller-carried result reference.
+# ---------------------------------------------------------------------------
+
+
+def test_carrier_message_carries_effect_class_and_result_ref() -> None:
+    """The CP driver stringifies step exceptions into `RunResult.fail_class`
+    (it cannot import the carrier), so the caller-visible failure surface
+    must carry the result REFERENCE inside the message itself — joining the
+    fail_class string to the audit-failure report log line.
+
+    Mutation probe: dropping the message suffix (or the `result_ref`
+    attribute) severs the caller→report join and FAILS."""
+    carrier = PostEffectAuditSigningError(
+        "audit signing failed after a completed provider response (test)",
+        effect_class=PostEffectClass.PROVIDER_RESPONSE,
+        result={"id": "msg_ref"},
+    )
+    assert carrier.result_ref.startswith("post-effect-")
+    assert f"result_ref={carrier.result_ref}" in str(carrier)
+    assert "effect_class=provider-response" in str(carrier)
+
+
+@pytest.mark.asyncio
+async def test_facade_consumes_carrier_into_audit_failure_report_and_reraises(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The REAL `SyncDispatcherFacade` — the outermost runtime dispatch
+    boundary every step-kind path funnels through — consumes the carrier
+    into the structured audit-failure report (ERROR log keyed by
+    `result_ref`, carrying the preserved payload) and re-raises it intact.
+
+    Mutation probe: deleting the facade's carrier arm drops the report
+    (no `result_ref` ERROR record) and FAILS."""
+    import asyncio
+
+    from harness_runtime.lifecycle.sync_dispatcher_facade import (
+        materialize_sync_dispatcher_facade,
+    )
+
+    inner = _CarrierRaisingInner(result_payload={"id": "msg_facade_preserved"})
+    facade = materialize_sync_dispatcher_facade(cast(Any, inner), result_timeout_seconds=10.0)
+
+    with caplog.at_level(logging.ERROR, logger=_AUDIT_LOGGER):
+        with pytest.raises(PostEffectAuditSigningError) as excinfo:
+            await asyncio.to_thread(
+                facade.dispatch,
+                _inference_binding(),
+                _inference_step(),
+                step_context=_step_context(),
+            )
+
+    carrier = excinfo.value
+    report_records = [
+        r
+        for r in caplog.records
+        if r.levelno == logging.ERROR and carrier.result_ref in r.getMessage()
+    ]
+    assert report_records, "the facade must emit the result_ref-keyed audit-failure report"
+    assert "msg_facade_preserved" in report_records[0].getMessage(), (
+        "the report must carry the preserved effect payload"
+    )
+    # The re-raised carrier still holds the payload for any richer consumer.
+    assert cast("dict[str, Any]", carrier.result)["id"] == "msg_facade_preserved"
