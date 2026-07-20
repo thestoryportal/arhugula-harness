@@ -61,6 +61,7 @@ from harness_od.audit_ledger_types import SignatureAlgorithm
 from harness_od.multi_tenant_trace_separation_and_audit_ledger import signing_token
 from pydantic import ValidationError
 
+from harness_runtime.lifecycle.audit_writer import AUDIT_WRITER_RESERVED_FILENAMES
 from harness_runtime.lifecycle.span_processor import REDACTION_TOKEN_SIGNING_KEY_ID
 from harness_runtime.types import AuditSigningBackendKind, RuntimeConfig
 
@@ -410,21 +411,28 @@ def initialize_mtc_audit_signing_record(
 
     path = Path(record_path)
     if audit_sidecar_path is not None:
-        # Out-of-family Codex [P2] round-6 finding: a record path resolving
-        # to the SIDECAR itself would, on a fresh deployment, write the
-        # two-line record INTO `audit-entries.jsonl` — which the audit
-        # writer later parses as `{"tenant_tag","entry"}` JSONL and dies on
-        # its first fold/append. Reject the collision before any branch.
+        # Out-of-family Codex [P2] rounds 6+9: a record path resolving to
+        # ANY audit-writer-owned file is rejected before any branch — the
+        # sidecar itself (a fresh-deployment mint would corrupt
+        # `audit-entries.jsonl` for the writer's first fold) AND the
+        # membership-index snapshot + its `.tmp` sibling (the writer's next
+        # `_write_index_snapshot_locked` replace would DESTROY the
+        # authenticated record, bricking every subsequent MTC bootstrap).
         try:
-            collides = path.resolve() == audit_sidecar_path.resolve()
+            resolved = path.resolve()
+            reserved_dir = audit_sidecar_path.resolve().parent
+            collides = any(
+                resolved == reserved_dir / name for name in AUDIT_WRITER_RESERVED_FILENAMES
+            )
         except OSError:
             collides = False  # unresolvable paths cannot be proven colliding
         if collides:
             raise AuditSigningConfigInvalidError(
                 (
-                    f"audit_cutover_record_path={record_path!r} resolves to the "
-                    "audit sidecar itself — the cutover record and the "
-                    "audit-entries sidecar must be distinct files",
+                    f"audit_cutover_record_path={record_path!r} resolves to an "
+                    "audit-writer-owned file (the audit-entries sidecar or its "
+                    "index snapshot) — the cutover record must be a distinct "
+                    "file the audit writer never truncates or replaces",
                 )
             )
         # Out-of-family Codex [P1] round-6 finding: the spec requires the

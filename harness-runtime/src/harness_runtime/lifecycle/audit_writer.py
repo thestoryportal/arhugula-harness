@@ -106,6 +106,24 @@ ledger-freshness gate reads it from the stage-1 ledger handle, BEFORE the
 audit writer materializes) share one source of truth with the writer's own
 `_SIDECAR_FILENAME`."""
 
+AUDIT_SNAPSHOT_FILENAME = "audit-entries.index-snapshot.json"
+"""The membership-index snapshot's filename, beside the sidecar — public for
+the same reason as `AUDIT_SIDECAR_FILENAME` (shared with the writer's own
+`_SNAPSHOT_FILENAME`)."""
+
+AUDIT_WRITER_RESERVED_FILENAMES: frozenset[str] = frozenset(
+    {
+        AUDIT_SIDECAR_FILENAME,
+        AUDIT_SNAPSHOT_FILENAME,
+        AUDIT_SNAPSHOT_FILENAME + ".tmp",
+    }
+)
+"""Every filename the audit writer owns (and truncates/replaces) beside the
+IS ledger. U-RT-134's record-path collision check rejects a cutover-record
+path resolving to ANY of these (out-of-family Codex [P2] round-9: a record
+written to the snapshot path would be destroyed by the writer's next
+`_write_index_snapshot_locked` replace)."""
+
 _AUDIT_ACTION_ID_PREFIX = "audit"
 """The IS-ledger action_id prefix audit wraps carry — module-level so
 `ledger_holds_audit_refs` (usable before a writer instance exists) and the
@@ -297,7 +315,7 @@ class RuntimeAuditLedgerWriter:
     _SINGLE_TENANT_TAG: ClassVar[str] = "_single"
     _ACTION_ID_PREFIX: ClassVar[str] = _AUDIT_ACTION_ID_PREFIX
 
-    _SNAPSHOT_FILENAME: ClassVar[str] = "audit-entries.index-snapshot.json"
+    _SNAPSHOT_FILENAME: ClassVar[str] = AUDIT_SNAPSHOT_FILENAME
     """B-50 item (g) — the disk-backed membership-index snapshot.
 
     A DERIVED CACHE of the fold state (`_SidecarMembershipIndex`) written

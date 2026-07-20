@@ -798,11 +798,28 @@ def test_record_path_colliding_with_sidecar_rejected(tmp_path: Path) -> None:
     kwargs = _mtc_ready_kwargs(tmp_path)
     kwargs["audit_cutover_record_path"] = str(sidecar)
     config = _config(tmp_path, **kwargs)
-    with pytest.raises(AuditSigningConfigInvalidError, match="sidecar itself"):
+    with pytest.raises(AuditSigningConfigInvalidError, match="audit-writer-owned"):
         validate_and_initialize_mtc_audit_signing(
             config, signing_backend=_FakeBackend(), audit_sidecar_path=sidecar
         )
     assert not sidecar.exists()  # nothing written
+
+
+def test_record_path_colliding_with_snapshot_files_rejected(tmp_path: Path) -> None:
+    """Out-of-family Codex [P2] round-9 finding: the collision check covers
+    ALL audit-writer-owned filenames — a record at the index-snapshot path
+    (or its .tmp sibling) would be destroyed by the writer's next snapshot
+    replace, bricking every subsequent MTC bootstrap."""
+    sidecar = tmp_path / "audit-entries.jsonl"
+    for reserved in ("audit-entries.index-snapshot.json", "audit-entries.index-snapshot.json.tmp"):
+        kwargs = _mtc_ready_kwargs(tmp_path)
+        kwargs["audit_cutover_record_path"] = str(tmp_path / reserved)
+        config = _config(tmp_path, **kwargs)
+        with pytest.raises(AuditSigningConfigInvalidError, match="audit-writer-owned"):
+            validate_and_initialize_mtc_audit_signing(
+                config, signing_backend=_FakeBackend(), audit_sidecar_path=sidecar
+            )
+        assert not (tmp_path / reserved).exists()
 
 
 def test_explicit_false_at_mtc_wins_over_missing_inputs(tmp_path: Path) -> None:

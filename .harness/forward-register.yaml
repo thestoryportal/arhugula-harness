@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 64
+  total: 65
   open: 4
   design_substrate_gated: 1
-  registered_finding: 13
+  registered_finding: 14
   operator_gated: 2
   held: 1
   closed: 43
-  identity_digest: 46e466a03db6b28e
+  identity_digest: 4f69ed808ca069cd
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -1389,3 +1389,33 @@ items:
     is confirmed against the deployed backend(s)'
   heading: '### B-63 · SigningBackend.verify() infra failures are not typed-availability at the
     concrete backend *(registered at the U-OD-55 impl arc, codex round-10, 2026-07-20)*'
+
+- id: B-64
+  title: Greenfield cutover-record freshness probe and publication are not atomic cross-process
+  status: registered_finding
+  summary: 'Registered at the U-RT-134 impl arc (codex round-9 [P1], the arc''s pre-committed
+    terminal review round): `initialize_mtc_audit_signing_record`''s ledger-freshness probes (sidecar
+    rows + IS `audit:` refs, each under its own short-lived cross_process_read_lock) release their
+    locks BEFORE `_greenfield_sign_empty_record` publishes the record, so a concurrent audit append
+    landing in the probe->publish window could in principle let an empty cutover record be minted
+    over just-written history. Registered rather than fixed at the terminal round because (a) the
+    practical attack paths are already closed: at MTC an appender only runs POST-bootstrap, and its
+    own bootstrap either verified an existing record or minted one (this PR''s invariant), so a
+    racing appender implies the record exists and the greenfield branch is never taken; simultaneous
+    DUAL-greenfield bootstraps converge via the round-7 no-clobber `os.link` publication (the loser
+    verifies the winner); and (b) the residual hardening -- holding the sidecar/ledger locks across
+    probe + publication -- interacts with `harness_is.cross_process_ledger_lock` nesting semantics
+    (a read-lock probe nested inside a held write lock on the same path) and needs its own
+    deadlock-safety analysis, not a terminal-round patch.'
+  close_out: 'Hold `cross_process_write_lock(sidecar_path)` (or an equivalent single lock scope)
+    across BOTH freshness probes and the no-clobber publication in
+    `harness_runtime.lifecycle.audit_signing_fail_closed_validation.initialize_mtc_audit_signing_record`,
+    after confirming the IS lock implementation''s same-process nesting semantics (replace the inner
+    read-lock acquisitions with lock-free reads under the held write lock if nesting is unsafe).
+    Witness: a two-thread/two-process interleaving test that starts an append inside the
+    probe->publish window and asserts the greenfield mint is refused. Does not block U-RT-134''s
+    merge (terminal-round registration per the B-48 r10 precedent).'
+  council: 'no -- single-module locking-scope hardening; needs a deadlock-safety probe of the IS
+    lock nesting semantics, not a design decision'
+  heading: '### B-64 · Greenfield cutover-record freshness probe and publication are not atomic
+    cross-process *(registered at the U-RT-134 impl arc, codex round-9, 2026-07-20)*'
