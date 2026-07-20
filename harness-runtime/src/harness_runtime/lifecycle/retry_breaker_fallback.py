@@ -85,6 +85,7 @@ from harness_cp.validator_fail_transient_staircase import StaircaseStage
 from harness_cp.workflow_driver_types import StepExecutionContext, WorkflowStep
 from harness_od.harness_breaker_schema import BreakerCause, BreakerScope
 
+from harness_runtime.lifecycle.audit_signing_errors import AUDIT_SIGNING_HARD_FAILURES
 from harness_runtime.lifecycle.cross_family_cost_tag import provider_family_for_provider
 from harness_runtime.lifecycle.fallback_chain import (
     FallbackChainExhaustedError,
@@ -913,6 +914,19 @@ class RetryBreakerFallbackDispatcher:
                     with _effect_guard:
                         result = await self.inner.dispatch(rebound, step, step_context=step_context)
                 except asyncio.CancelledError:
+                    raise
+                except AUDIT_SIGNING_HARD_FAILURES:
+                    # U-RT-136 post-effect catch-ordering fence (CP v1.101 §2,
+                    # provider-response site class): a signing failure raised
+                    # AFTER a completed provider response must NEVER be
+                    # classified `TRANSIENT_RETRY` (re-firing a completed PAID
+                    # call), NEVER advance candidates, and NEVER record
+                    # breaker failure — the generic arm below does all three.
+                    # The completed response travels on the
+                    # `PostEffectAuditSigningError` carrier raised by the
+                    # inner dispatcher; propagate it untouched.
+                    inner_span.set_attribute("retry.delay_ms", 0)
+                    inner_span.set_attribute("retry.terminal", "audit-signing-fail-closed")
                     raise
                 except Exception as exc:
                     last_failure_detail = _failure_detail(exc)

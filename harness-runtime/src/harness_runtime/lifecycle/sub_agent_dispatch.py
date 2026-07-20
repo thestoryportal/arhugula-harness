@@ -148,7 +148,11 @@ from harness_is.state_ledger_write import (
 from harness_od.audit_ledger_types import SignatureAlgorithm, StateLedgerEntryRef
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from harness_runtime.lifecycle.audit_signing_errors import AUDIT_SIGNING_HARD_FAILURES
+from harness_runtime.lifecycle.audit_signing_errors import (
+    AUDIT_SIGNING_HARD_FAILURES,
+    PostEffectAuditSigningError,
+    PostEffectClass,
+)
 from harness_runtime.lifecycle.audit_writer import RuntimeAuditLedgerWriter
 from harness_runtime.lifecycle.child_workflow_runner import ChildWorkflowRunner
 from harness_runtime.lifecycle.handoff import RuntimeHandoffRegistry
@@ -618,6 +622,15 @@ class RuntimeSubAgentDispatcher:
     (the default) preserves the placeholder signing path byte-for-byte.
     """
 
+    audit_signing_fail_closed: bool = False
+    """U-RT-136 — the resolved OD v1.34 §21.2.3 `audit_signing_fail_closed`
+    policy, threaded from `resolve_audit_signing_fail_closed(config)` at
+    bootstrap stage-5. ON → the audit-compose catch site raises the typed
+    family even on `raise_on_failure=False` paths, and the SUCCESS/DRAINED
+    completion site converts a signing-caused compose failure into the
+    result-preserving `PostEffectAuditSigningError` carrier (CP v1.101 §2);
+    OFF (default) byte-preserves the loudly-surfaced proceed behavior."""
+
     # Module-bound canonical attribute name constants (per spec §14.7.5
     # "Producer-side attribute carrier reference" — imported from the
     # canonical carrier; not hand-coded as strings). Frozen at construction
@@ -818,6 +831,13 @@ class RuntimeSubAgentDispatcher:
                     f"sub-agent dispatch audit composition failed for "
                     f"parent_action_id={parent_action_id!r}: {exc}"
                 ) from exc
+            # U-RT-136 (OD v1.34 §21.2.3 rows 1/5): under fail-closed the
+            # typed family RAISES even on the raise_on_failure=False paths
+            # (child FAILED / exception-bubble / PAUSED — no completed child
+            # result exists to preserve on these paths; a PAUSED child's
+            # snapshot remains durable in the child's own ledger).
+            if self.audit_signing_fail_closed:
+                raise
             return cp_entry, None
         except Exception as exc:
             if raise_on_failure:
@@ -1187,8 +1207,23 @@ class RuntimeSubAgentDispatcher:
                     step_context=step_context,
                     raise_on_failure=True,
                 )
-            except SubAgentDispatchAuditComposeError:
+            except SubAgentDispatchAuditComposeError as exc:
                 span.set_attribute("subagent.result_status", "failed")
+                # U-RT-136 post-effect fence site (sub-agent-result class):
+                # the child workflow COMPLETED (SUCCESS/DRAINED) — under
+                # fail-closed a signing-caused compose failure re-raises as
+                # the result-preserving carrier so the completed child output
+                # is not discarded (CP v1.101 §2). Non-signing compose
+                # failures keep the existing ComposeError surface verbatim.
+                if self.audit_signing_fail_closed and isinstance(
+                    exc.__cause__, AUDIT_SIGNING_HARD_FAILURES
+                ):
+                    raise PostEffectAuditSigningError(
+                        f"audit signing failed after a completed child "
+                        f"sub-workflow ({payload.child_workflow_id!r}): {exc}",
+                        effect_class=PostEffectClass.SUB_AGENT_RESULT,
+                        result=step_output,
+                    ) from exc
                 raise
 
             # --- Step 9: return step output --------------------------------

@@ -36,6 +36,7 @@ from harness_runtime.bootstrap.mutable_context import _MutableHarnessContext
 from harness_runtime.config.audit_signing import make_audit_signing_backend
 from harness_runtime.lifecycle.audit_signing_fail_closed_validation import (
     initialize_mtc_audit_signing_record,
+    resolve_audit_signing_fail_closed,
     validate_mtc_audit_signing_config,
 )
 from harness_runtime.lifecycle.audit_writer import (
@@ -194,4 +195,8 @@ async def execute(
         # B-47 PR B2a — OD spec v1.33 §21.2.1 signing seam (constructed at
         # step 0 of this same stage).
         signing_backend=ctx.audit_signing_backend,
+        # U-RT-136 ⊕ U-CP-73 — the resolved OD v1.34 §21.2.3 policy: makes
+        # the hook's audit-signing catch flag-consulting AND injects the
+        # CP firing site's §28.10.4 invariant-2 carve-out when ON.
+        audit_signing_fail_closed=resolve_audit_signing_fail_closed(config),
     )

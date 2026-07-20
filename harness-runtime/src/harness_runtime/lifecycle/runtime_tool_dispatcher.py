@@ -68,7 +68,11 @@ from harness_runtime.config.provider_secrets import (
     SecretResolutionError,
 )
 from harness_runtime.lifecycle.audit_offload import run_audit_off_loop
-from harness_runtime.lifecycle.audit_signing_errors import AUDIT_SIGNING_HARD_FAILURES
+from harness_runtime.lifecycle.audit_signing_errors import (
+    AUDIT_SIGNING_HARD_FAILURES,
+    PostEffectAuditSigningError,
+    PostEffectClass,
+)
 from harness_runtime.lifecycle.cost_record_sink import SupportsCostRecordAppend
 from harness_runtime.lifecycle.effect_fence import (
     EffectFenceAbortedError,
@@ -352,6 +356,7 @@ class RuntimeToolDispatcher:
         ledger_writer: Any = None,
         procedural_tier_snapshot_resolver: Any = None,
         signing_backend: Any = None,
+        audit_signing_fail_closed: bool = False,
         tool_execution_drivers: dict[ServerName, ToolExecutionDriver] | None = None,
         provider_secret_resolver: Any = None,
         secret_fetch_audit_emitter: Callable[[SecretFetchEvent], Any] | None = None,
@@ -453,6 +458,11 @@ class RuntimeToolDispatcher:
         # B-47 PR B2a — OD spec v1.33 §21.2.1 signing-backend seam, threaded
         # from `ctx.audit_signing_backend` by the stage-5 factory.
         self._signing_backend = signing_backend
+        # U-RT-136 — the resolved OD v1.34 §21.2.3 `audit_signing_fail_closed`
+        # policy, threaded from `resolve_audit_signing_fail_closed(config)` by
+        # the stage-5 factory. ON → both cost-attribution catch sites raise
+        # the typed family; OFF (default) byte-preserves log-and-proceed.
+        self._audit_signing_fail_closed = audit_signing_fail_closed
         # R-FS-1 arc CA — run-scoped cost-record sink (same list as
         # `ctx.cost_record_accumulator`, threaded by the stage-5 factory).
         # `_attribute_tool_cost_best_effort` appends each dispatch's returned
@@ -497,6 +507,7 @@ class RuntimeToolDispatcher:
         ledger_writer: Any = None,
         procedural_tier_snapshot_resolver: Any = None,
         signing_backend: Any = None,
+        audit_signing_fail_closed: bool = False,
         tool_execution_driver: ToolExecutionDriver | None = None,
         provider_secret_resolver: Any = None,
         secret_fetch_audit_emitter: Callable[[SecretFetchEvent], Any] | None = None,
@@ -543,6 +554,7 @@ class RuntimeToolDispatcher:
             # callers with a configured KMS backend do not silently produce
             # placeholder-signed tool cost audits.
             signing_backend=signing_backend,
+            audit_signing_fail_closed=audit_signing_fail_closed,
             tool_execution_drivers=(
                 {server_name: tool_execution_driver} if tool_execution_driver is not None else None
             ),
@@ -567,12 +579,16 @@ class RuntimeToolDispatcher:
         except AUDIT_SIGNING_HARD_FAILURES:
             # Codex round-17 P1: queue saturation raises at submit — before
             # the fn-internal best-effort swallow — and would fail the
-            # dispatch. Contained here; fail-open preserved.
+            # dispatch. Contained here; fail-open preserved under flag OFF.
+            # U-RT-136 (OD v1.34 §21.2.3 rows 1/5): under fail-closed the
+            # typed family RAISES.
             logging.getLogger("harness.runtime.audit_signing").error(
                 "audit offload refused the job — signed cost-audit record "
                 "OMITTED for tool dispatch (offload boundary)",
                 exc_info=True,
             )
+            if self._audit_signing_fail_closed:
+                raise
             return None
 
     def _attribute_tool_cost_best_effort(
@@ -649,11 +665,15 @@ class RuntimeToolDispatcher:
         except AUDIT_SIGNING_HARD_FAILURES:
             # Codex round-4 P1 (PR B2a): signing failures are compliance
             # events, never silently swallowed with cost-observability
-            # failures. Surfaced loudly; dispatch preserved.
+            # failures. Surfaced loudly; dispatch preserved under flag OFF.
+            # U-RT-136 (OD v1.34 §21.2.3 rows 1/5): under fail-closed the
+            # typed family RAISES.
             logging.getLogger("harness.runtime.audit_signing").error(
                 "audit signing failed — signed cost-audit record OMITTED for tool dispatch",
                 exc_info=True,
             )
+            if self._audit_signing_fail_closed:
+                raise
             return
         except Exception:
             # Cost-attribution is observability, not contract. Swallow.
@@ -1187,14 +1207,25 @@ class RuntimeToolDispatcher:
                 # U-OD-39 AC #1: cost-attribution on schema-violation failure.
                 # Response IS available here (validation failed AFTER call),
                 # so per_output_byte cost_kind reflects actual response bytes.
-                await self._attribute_tool_cost_off_loop(
-                    outer_span=outer_span,
-                    tool_id=tool_id,
-                    tool_args=tool_args,
-                    response=response,
-                    idempotency_key=idempotency_key,
-                    step_context=step_context,
-                )
+                # U-RT-136 post-effect fence site (tool-result class): the
+                # tool EXECUTED — under fail-closed a signing failure raises
+                # the result-preserving carrier (CP v1.101 §2).
+                try:
+                    await self._attribute_tool_cost_off_loop(
+                        outer_span=outer_span,
+                        tool_id=tool_id,
+                        tool_args=tool_args,
+                        response=response,
+                        idempotency_key=idempotency_key,
+                        step_context=step_context,
+                    )
+                except AUDIT_SIGNING_HARD_FAILURES as sign_exc:
+                    raise PostEffectAuditSigningError(
+                        f"audit signing failed after an executed tool call "
+                        f"(tool={tool_id!r}, schema-violation path): {sign_exc}",
+                        effect_class=PostEffectClass.TOOL_RESULT,
+                        result=response,
+                    ) from sign_exc
                 raise ToolInvocationSchemaViolationError(
                     f"RT-FAIL-TOOL-INVOCATION-SCHEMA-VIOLATION: tool="
                     f"{tool_id!r} response failed output_schema validation: "
@@ -1214,14 +1245,25 @@ class RuntimeToolDispatcher:
             # AC #1 success branch + AC #3 mcp.tool.call piggyback (1 helper
             # invocation per dispatch attributes entire tool-dispatch surface
             # including nested mcp.tool.call span per §C-OD-26.2 table).
-            await self._attribute_tool_cost_off_loop(
-                outer_span=outer_span,
-                tool_id=tool_id,
-                tool_args=tool_args,
-                response=response,
-                idempotency_key=idempotency_key,
-                step_context=step_context,
-            )
+            # U-RT-136 post-effect fence site (tool-result class): the tool
+            # EXECUTED — under fail-closed a signing failure raises the
+            # result-preserving carrier (CP v1.101 §2).
+            try:
+                await self._attribute_tool_cost_off_loop(
+                    outer_span=outer_span,
+                    tool_id=tool_id,
+                    tool_args=tool_args,
+                    response=response,
+                    idempotency_key=idempotency_key,
+                    step_context=step_context,
+                )
+            except AUDIT_SIGNING_HARD_FAILURES as sign_exc:
+                raise PostEffectAuditSigningError(
+                    f"audit signing failed after an executed tool call "
+                    f"(tool={tool_id!r}): {sign_exc}",
+                    effect_class=PostEffectClass.TOOL_RESULT,
+                    result=response,
+                ) from sign_exc
 
             # --- Step 10b: effect-fence output capture (B-EFFECT-FENCE-HITL-ROUTE)
             # Crash-atomically record the validated output keyed on the same

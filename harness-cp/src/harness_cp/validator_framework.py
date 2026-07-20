@@ -152,6 +152,7 @@ class ConcreteValidatorFramework:
         validator_registry: Mapping[StepID, Validator],
         *,
         post_evaluate_hook: ValidatorPostEvaluateHook | None = None,
+        audit_signing_raise_through: tuple[type[BaseException], ...] = (),
     ) -> None:
         """Construct with the operator-populated per-step Validator registry.
 
@@ -165,10 +166,23 @@ class ConcreteValidatorFramework:
         `None` default preserves all pre-v1.24 construction sites byte-
         identical. Non-`None` opts in to post-evaluate observability hook
         firing per §28.10.3 (best-effort swallow per §28.10.4 invariant 2).
+
+        Per CP spec v1.101 §2 (U-CP-73, §28.10.4 invariant-2 AMENDED),
+        `audit_signing_raise_through` is the NARROW carve-out from the hook
+        swallow: exception classes in this tuple raise THROUGH the firing
+        site; every other hook exception remains swallowed. The composition
+        root (Runtime's validator-framework factory) injects the
+        `AUDIT_SIGNING_HARD_FAILURES` family ONLY when the resolved
+        `audit_signing_fail_closed` policy is ON — injection keeps
+        `harness-cp` free of a `harness-od` import (the family's canonical
+        home) per the axis direction, and the empty-tuple default preserves
+        invariant 2's unconditional swallow byte-for-byte under flag OFF
+        (§2 row 3) and at every pre-v1.101 construction site.
         """
         self._validator_registry = validator_registry
         self._burden_count: int = 0
         self._post_evaluate_hook = post_evaluate_hook
+        self._audit_signing_raise_through = audit_signing_raise_through
 
     @property
     def burden_count(self) -> int:
@@ -244,6 +258,15 @@ class ConcreteValidatorFramework:
                     evaluation=evaluation,
                     execution_time_ms=execution_time_ms,
                 )
+            except self._audit_signing_raise_through:
+                # CP v1.101 §2 rows 1-2 (U-CP-73) — the NARROW invariant-2
+                # carve-out: the injected typed audit-signing family raises
+                # through the firing site (an unsigned cost-audit record at
+                # MTC is a compliance event). Empty tuple (flag OFF / legacy
+                # construction) matches nothing → invariant 2 unconditional.
+                # Invariant 4 held: the raise does not modify `evaluation`,
+                # and the hook fired at most once.
+                raise
             except Exception:
                 pass  # §28.10.4 invariant 2 — observability MUST NOT fail dispatch
 

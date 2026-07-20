@@ -34,6 +34,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from harness_runtime.lifecycle.audit_signing_fail_closed_validation import (
+    resolve_audit_signing_fail_closed,
+)
 from harness_runtime.lifecycle.webhook_delivery_composer import WebhookDeliveryComposer
 from harness_runtime.types import RuntimeConfig
 
@@ -132,4 +135,6 @@ async def materialize_webhook_delivery_composer_stage(
         procedural_tier_snapshot_resolver=ctx.procedural_tier_snapshot_resolver,
         # B-47 PR B2a — OD spec v1.33 §21.2.1 signing seam.
         signing_backend=ctx.audit_signing_backend,
+        # U-RT-136 — OD v1.34 §21.2.3 fail-closed policy (rows 1/5/7).
+        audit_signing_fail_closed=resolve_audit_signing_fail_closed(config),
     )

@@ -695,6 +695,10 @@ async def test_saturation_contained_at_offload_boundaries(
         # hitl boundary — fail-open when raise_on_failure=False, typed raise
         # when True.
         composer = RuntimeHITLGateComposer.__new__(RuntimeHITLGateComposer)
+        # U-RT-136 — the boundary is now flag-consulting; a `__new__` fixture
+        # instance carries no dataclass defaults, so bind the OFF value the
+        # stage-5 default would supply.
+        composer.audit_signing_fail_closed = False
         assert await RuntimeHITLGateComposer._compose_and_persist_audit_off_loop(
             composer, raise_on_failure=False
         ) == (None, None)
