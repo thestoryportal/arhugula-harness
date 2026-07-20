@@ -59,8 +59,13 @@ def _parse_bool(raw: str) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
-_TRUTHY_SPELLINGS = frozenset({"1", "true", "yes", "on"})
-_FALSY_SPELLINGS = frozenset({"0", "false", "no", "off"})
+_TRUTHY_SPELLINGS = frozenset({"1", "true", "t", "yes", "y", "on"})
+_FALSY_SPELLINGS = frozenset({"0", "false", "f", "no", "n", "off"})
+# The spelling sets above match pydantic-settings' own str→bool domain so
+# BOTH documented loaders agree on every value of
+# HARNESS_AUDIT_SIGNING_FAIL_CLOSED (out-of-family Codex [P2] round-7:
+# `t`/`y`/`f`/`n` were accepted by `_RuntimeEnvSettings` but rejected here —
+# the same env var must not change behavior by construction path).
 
 
 def _parse_strict_bool(raw: str) -> bool:

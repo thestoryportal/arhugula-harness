@@ -50,6 +50,7 @@ from pathlib import Path
 
 from harness_core import PersonaTier
 from harness_cp.f5_signing_key_resolution import SigningBackend
+from harness_is.cross_process_ledger_lock import cross_process_read_lock
 from harness_od.audit_cutover_record import (
     AuditCutoverRecord,
     CutoverRecordValidationError,
@@ -505,7 +506,13 @@ def _sidecar_has_rows(sidecar_path: Path) -> bool:
     if not sidecar_path.is_file():
         return False
     try:
-        with sidecar_path.open("r", encoding="utf-8") as handle:
+        # Same shared-read-lock rationale as `_reject_record_key_used_by_
+        # persisted_rows` ([P2] round-7): writers hold the matching write
+        # lock, so an unlocked read could see a partially flushed row.
+        with (
+            cross_process_read_lock(sidecar_path),
+            sidecar_path.open("r", encoding="utf-8") as handle,
+        ):
             return any(line.strip() for line in handle)
     except OSError:
         return True
@@ -528,7 +535,14 @@ def _reject_record_key_used_by_persisted_rows(
     record_arn = _resolve_record_key_arn(config, record_key_id)
     record_material = _canonical_kms_key_identity(record_arn) if record_arn is not None else None
     try:
-        with sidecar_path.open("r", encoding="utf-8") as handle:
+        # Out-of-family Codex [P2] round-7: hold the IS-shared READ lock for
+        # the complete scan — sidecar writers hold the matching write lock,
+        # so an unlocked read could parse a partially flushed final row and
+        # report a permanent RT-FAIL-CONFIG for an otherwise valid ledger.
+        with (
+            cross_process_read_lock(sidecar_path),
+            sidecar_path.open("r", encoding="utf-8") as handle,
+        ):
             for line_number, line in enumerate(handle, start=1):
                 if not line.strip():
                     continue
@@ -546,7 +560,18 @@ def _reject_record_key_used_by_persisted_rows(
                         )
                     ) from exc
                 if not isinstance(row_key_id, str):
-                    continue
+                    # Out-of-family Codex [P1] round-7: a null/int key id is
+                    # equally unprovable history — fail closed, never skip.
+                    raise AuditSigningConfigInvalidError(
+                        (
+                            f"audit sidecar {str(sidecar_path)!r} line {line_number} "
+                            f"carries a non-string audit_signature_key_id "
+                            f"({type(row_key_id).__name__}) — cannot prove the "
+                            "record key is distinct from every persisted "
+                            "row-signing key; refusing the pinned "
+                            f"audit_cutover_record_key_id={record_key_id!r}",
+                        )
+                    )
                 same_logical = row_key_id == record_key_id
                 row_arn = _resolve_record_key_arn(config, row_key_id)
                 same_material = (
@@ -657,29 +682,48 @@ def _greenfield_sign_empty_record(
     # an existing entry; the fd is fsynced before the atomic rename so the
     # renamed file's CONTENT is durable, not just its directory entry.
     fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.tmp-")
+    lost_publication_race = False
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(payload)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(tmp_name, path)
+        # Out-of-family Codex [P1] round-7 finding: NO-CLOBBER publication
+        # via `os.link` (fails with FileExistsError when the target exists)
+        # instead of an unconditional `os.replace` — two concurrent first
+        # bootstraps could both observe the record absent, both sign, and
+        # the second replace would silently swap the trust anchor out from
+        # under the first winner. The loser keeps the WINNER's record and
+        # verifies it below instead (both processes converge on ONE anchor).
+        try:
+            os.link(tmp_name, path)
+        except FileExistsError:
+            lost_publication_race = True
         # Out-of-family Codex [P2] round-5 finding: fsync the PARENT
-        # DIRECTORY after the atomic replace (mirrors the audit-writer's
-        # own snapshot persistence) — fsyncing only the file's content
-        # leaves the rename's directory entry non-durable; a power loss
-        # after LATER sidecar writes became durable could vanish the record
-        # while audit rows survive, making every subsequent bootstrap
-        # reject the ledger as non-fresh.
-        if sys.platform != "win32":
+        # DIRECTORY after publication (mirrors the audit-writer's own
+        # snapshot persistence) — fsyncing only the file's content leaves
+        # the new directory entry non-durable; a power loss after LATER
+        # sidecar writes became durable could vanish the record while audit
+        # rows survive, making every subsequent bootstrap reject the ledger
+        # as non-fresh.
+        if not lost_publication_race and sys.platform != "win32":
             dir_fd = os.open(str(path.parent), os.O_RDONLY)
             try:
                 os.fsync(dir_fd)
             finally:
                 os.close(dir_fd)
-    except BaseException:
+    finally:
         with contextlib.suppress(OSError):
             os.unlink(tmp_name)
-        raise
+    if lost_publication_race:
+        # The winner's record must still be one THIS config + backend
+        # accepts — a lost race converges, it never silently diverges.
+        _verify_existing_record(
+            path,
+            expected_key_id=key_id,
+            expected_ledger_binding_id=ledger_binding_id,
+            signing_backend=signing_backend,
+        )
 
 
 def _verify_existing_record(

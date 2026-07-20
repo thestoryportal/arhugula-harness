@@ -666,6 +666,80 @@ def test_record_key_used_by_persisted_sidecar_rows_rejected(tmp_path: Path) -> N
         )
 
 
+def test_non_string_persisted_key_id_fails_closed(tmp_path: Path) -> None:
+    """Out-of-family Codex [P1] round-7 finding: a persisted row whose
+    `audit_signature_key_id` is null/int is equally unprovable history —
+    a typed rejection, never a silent skip."""
+    import json as _json
+
+    sidecar = tmp_path / "audit-entries.jsonl"
+    row = {"tenant_tag": "_single", "entry": {"signature_attrs": {"audit_signature_key_id": None}}}
+    sidecar.write_text(_json.dumps(row) + "\n", encoding="utf-8")
+    kwargs = _mtc_ready_kwargs(tmp_path)
+    config = _config(tmp_path, **kwargs)
+    with pytest.raises(AuditSigningConfigInvalidError, match="non-string"):
+        validate_and_initialize_mtc_audit_signing(
+            config, signing_backend=_FakeBackend(), audit_sidecar_path=sidecar
+        )
+
+
+def test_greenfield_publication_race_converges_on_winner(tmp_path: Path) -> None:
+    """Out-of-family Codex [P1] round-7 finding: two concurrent first
+    bootstraps must converge on ONE trust anchor — the loser's `os.link`
+    publication fails no-clobber, the winner's record survives byte-
+    identical, and the loser VERIFIES it rather than silently clobbering."""
+    from harness_runtime.lifecycle.audit_signing_fail_closed_validation import (
+        _greenfield_sign_empty_record,
+    )
+
+    record_path = tmp_path / "record.json"
+    winner_backend = _FakeBackend(secret=b"winner")
+    kwargs = _mtc_ready_kwargs(tmp_path)
+    kwargs["audit_cutover_record_path"] = str(record_path)
+    config = _config(tmp_path, **kwargs)
+    validate_and_initialize_mtc_audit_signing(config, signing_backend=winner_backend)
+    winner_bytes = record_path.read_bytes()
+
+    # Same-config loser (simulating the race window AFTER its absent-check):
+    # publication fails no-clobber, winner unchanged, verification passes.
+    _greenfield_sign_empty_record(
+        record_path,
+        key_id="cutover-key",
+        ledger_binding_id="sidecar-1",
+        signing_backend=winner_backend,
+    )
+    assert record_path.read_bytes() == winner_bytes
+
+    # A loser whose backend CANNOT verify the winner's record fails typed —
+    # divergence is surfaced, never silent.
+    with pytest.raises(AuditSigningConfigInvalidError, match="signature verification"):
+        _greenfield_sign_empty_record(
+            record_path,
+            key_id="cutover-key",
+            ledger_binding_id="sidecar-1",
+            signing_backend=_FakeBackend(secret=b"different-deployment"),
+        )
+    assert record_path.read_bytes() == winner_bytes  # still the winner's
+
+
+def test_env_coercion_domain_matches_pydantic_settings() -> None:
+    """Out-of-family Codex [P2] round-7 finding: both documented loaders
+    must accept the SAME spelling set for HARNESS_AUDIT_SIGNING_FAIL_CLOSED
+    — pydantic-settings accepts t/y/f/n, so the strict loader parser does
+    too (and both still reject genuine typos)."""
+    _env_key, coerce = _ENV_SCALAR_FIELDS["audit_signing_fail_closed"]
+    for truthy in ("1", "true", "t", "yes", "y", "on", "TRUE", "Y"):
+        assert coerce(truthy) is True, truthy
+        sidecar = _RuntimeEnvSettings.model_validate({"audit_signing_fail_closed": truthy})
+        assert sidecar.audit_signing_fail_closed is True, truthy
+    for falsy in ("0", "false", "f", "no", "n", "off", "FALSE", "N"):
+        assert coerce(falsy) is False, falsy
+        sidecar = _RuntimeEnvSettings.model_validate({"audit_signing_fail_closed": falsy})
+        assert sidecar.audit_signing_fail_closed is False, falsy
+    with pytest.raises(ValueError):
+        coerce("treu")
+
+
 def test_record_path_colliding_with_sidecar_rejected(tmp_path: Path) -> None:
     """Out-of-family Codex [P2] round-6 finding: a record path resolving to
     the sidecar itself would write the two-line record into
