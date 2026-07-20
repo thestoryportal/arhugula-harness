@@ -125,13 +125,27 @@ class AuditVerificationBackendUnavailableError(Exception):
     (row 9's breaker-asymmetry rationale: this module never breaker-couples
     or reclassifies the read path itself, and there is no established typed
     "verify-side hard failures" family to key a narrow catch on; see
-    `test_verify_path_not_breaker_instrumented`) — a well-behaved backend
-    implementation is expected to raise THIS type itself for its own
-    genuine infrastructure failures (e.g. a network timeout talking to a
-    KMS); translating a specific vendor SDK's exceptions into this contract
-    is that backend implementation's responsibility, not this module's (a
-    concrete backend, e.g. ADR-D8's `AwsKmsSigningBackend`, is CP-axis
-    scope, out of U-OD-55's reach).
+    `test_verify_path_not_breaker_instrumented`).
+
+    KNOWN GAP (out-of-family Codex [P2] finding, round 10 — registered as
+    `B-63` at `.harness/forward-register.yaml`, not fixed here): OD spec
+    v1.34 §21.2.2 row 7(b) calls for backend-verify infrastructure failures
+    to surface typed, but NO contract requiring this exists yet at the
+    `SigningBackend` Protocol (`harness_cp.f5_signing_key_resolution` —
+    checked directly: the Protocol documents `sign`/`verify` with no
+    error-taxonomy terms at all), and a CP-axis concrete backend (e.g.
+    ADR-D8's `AwsKmsSigningBackend`) cannot raise THIS type itself even if
+    it wanted to — CP importing an OD-owned exception would invert the
+    established OD-consumes-CP axis-import direction. A blanket catch at
+    this call site is not a substitute: it would misclassify genuine
+    backend defects as availability, which the same row 7(b) text forbids.
+    Until a shared/CP-side availability-exception contract exists (B-63),
+    a real backend's infra failures (credential/network/throttling) that
+    aren't the vendor's specific signature-mismatch exception propagate
+    UNGUARDED as whatever the backend raised — an accepted residual, not a
+    verdict on U-OD-55's resolver-path availability typing (which IS
+    complete: the row 7(b) example the spec names explicitly, an unknown
+    `key_id`, is fully covered above).
     """
 
 
