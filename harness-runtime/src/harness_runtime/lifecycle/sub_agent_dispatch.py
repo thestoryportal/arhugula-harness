@@ -102,6 +102,7 @@ KMS / keystore deferral).
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import logging
@@ -138,7 +139,12 @@ from harness_cp.workflow_driver_types import (
 from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
 from harness_cxa.cp_audit_conversion import cp_audit_to_od_audit
 from harness_is.state_ledger_entry_schema import Identifier, Timestamp
-from harness_is.state_ledger_write import EntryPayload, WriteKey, WriteResult
+from harness_is.state_ledger_write import (
+    WRITER_OWNED_TIMESTAMP,
+    EntryPayload,
+    WriteKey,
+    WriteResult,
+)
 from harness_od.audit_ledger_types import SignatureAlgorithm, StateLedgerEntryRef
 from pydantic import BaseModel, ConfigDict, ValidationError
 
@@ -573,9 +579,12 @@ class RuntimeSubAgentDispatcher:
     - `audit_signing_key_id` / `audit_signing_algorithm` — signing config
       passed to the converter at 8c (`cp_audit_to_od_audit`); operator
       surface deferred per ADR-D5 v1.3 §1.4.1.
-    - `time_source` — timestamp injection point for the F2 dispatch
-      entry at 8b (test determinism; default `datetime.now(UTC)` at the
-      construction site).
+    - `time_source` — retained as a required construction kwarg for API
+      stability; the 8b F2 dispatch entry's timestamp is now writer-owned
+      (IS spec C-IS-07 §7.6 — sampled by `append_ledger_entry` itself,
+      inside its write lock, at actual append time) rather than sourced
+      from this callable, closing a concurrent-sibling-offload timestamp-
+      inversion gap `time_source()` could not close from outside the lock.
     """
 
     handoff_registry: RuntimeHandoffRegistry
@@ -665,7 +674,28 @@ class RuntimeSubAgentDispatcher:
         paths), the failure is swallowed and ``(cp_entry, None)`` is
         returned — the dispatch fact at 8a is preserved per spec
         §14.7.2 step 8 failure-semantics paragraph.
+
+        B-48 (U-RT-143; §14.8.10.3 part 2): the JOB-WIDE effect fence covers
+        these post-child persists — all four call sites route through here,
+        so ONE fence consult suppresses the 8b/8c/8d writes after the fence
+        trips (else entries land after `StepDispatchTimeoutError` despite
+        the no-late-effects guarantee). The 8a composition still runs (pure,
+        no effect); the write half is guarded as an effect entry so the
+        fence-ack's in-flight-at-trip flag is truthful.
         """
+        from harness_cp.sub_agent_dispatch_cancellation import (
+            DISPATCH_CANCEL_TOKEN_VAR,
+        )
+
+        _fence_token = DISPATCH_CANCEL_TOKEN_VAR.get()
+        if _fence_token is not None and _fence_token.tripped:
+            logging.getLogger("harness.runtime.sub_agent_dispatch").warning(
+                "sub-agent dispatch audit persist SUPPRESSED by tripped "
+                "effect fence (parent_action_id=%s) — no F2/audit write "
+                "begins after the fence (Runtime spec v1.102 §14.8.10.3)",
+                parent_action_id,
+            )
+            return (None, None)
         # Per-dispatch discriminator, resolved once and shared by both the 8a
         # CP audit entry's action_id and the 8b F2 dispatch-action action_id
         # below — `descent` carries no `child_index` field today; `getattr`
@@ -705,7 +735,19 @@ class RuntimeSubAgentDispatcher:
         # chain hash + the OD type accepts opaque str).
         dispatch_action_id = Identifier(f"dispatch:{parent_action_id}:{child_index}")
 
+        # B-48 (U-RT-143): the 8b-8d write phase is an EFFECT ENTRY — entering
+        # consults the fence (closing the check-then-write race window) and
+        # marks the write in flight so the fence-ack's in-flight-at-trip flag
+        # is truthful. `DispatchFenceTrippedSignal` is a BaseException: the
+        # `except Exception` swallow arms below cannot absorb it, so a fence
+        # trip propagates to the job boundary per the at-most-once discipline.
+        _effect_guard = (
+            _fence_token.effect_entry() if _fence_token is not None else contextlib.nullcontext()
+        )
+        _effect_entered = False
         try:
+            _effect_guard.__enter__()
+            _effect_entered = True
             # 8b — F2-write the dispatch action. branch_metadata intentionally
             # omitted (defaults None): CP spec v1.32 §25.13 / IS spec v1.8 §5.4
             # scope that sidecar to the CP WorkflowDriver's branch-spawn/terminal
@@ -714,7 +756,17 @@ class RuntimeSubAgentDispatcher:
                 action_id=dispatch_action_id,
                 idempotency_key=dispatch_action_id,
                 actor=step_context.parent_actor,
-                timestamp=self.time_source(),
+                # Writer-owned (IS spec C-IS-07 §7.6): concurrent sibling
+                # branches under an offloaded fan-out (B-48) each reach this
+                # 8b write from a separate worker thread with no ordering
+                # relative to one another — capturing `self.time_source()`
+                # here (outside `append_ledger_entry`'s `_WRITE_LOCK`) would
+                # reproduce the same capture-vs-physical-append-order
+                # inversion the sentinel was built to close for
+                # `drain_branch_buffers`. `WRITER_OWNED_TIMESTAMP` defers
+                # sampling to inside the lock, at the entry's actual append
+                # moment.
+                timestamp=WRITER_OWNED_TIMESTAMP,
                 procedural_tier_snapshot_ref=(self.procedural_tier_snapshot_resolver()),
             )
             f2_key = WriteKey(
@@ -774,6 +826,11 @@ class RuntimeSubAgentDispatcher:
                     f"parent_action_id={parent_action_id!r}: {exc}"
                 ) from exc
             return cp_entry, None
+        finally:
+            # Paired exit for the B-48 effect guard — decrement in-flight
+            # only if entry succeeded (a fence trip at entry never counted).
+            if _effect_entered:
+                _effect_guard.__exit__(None, None, None)
 
         return cp_entry, write_result
 

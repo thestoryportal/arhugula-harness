@@ -115,6 +115,8 @@ Audit-compose failure: composer annotates `hitl.gate.evaluated` via
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import contextvars
 import hashlib
 import inspect
 import json
@@ -122,6 +124,7 @@ import logging
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from enum import StrEnum
 from typing import TYPE_CHECKING, Any, NoReturn, cast
 
 from harness_as import BlastRadiusTier, GateLevel
@@ -199,9 +202,28 @@ __all__ = [
     "HITLGateRejectedError",
     "HITLGateTimeoutError",
     "HITLPauseRequestedSignal",
+    "InnerDispatchMode",
     "RuntimeHITLGateComposer",
     "compose_hitl_action_id",
 ]
+
+
+class InnerDispatchMode(StrEnum):
+    """B-48 (U-RT-142) — the §14.8.10.2 construction-time dispatch mode.
+
+    Selected at stage-5 construction per the composer's inner's §14.8.1
+    wrap-asymmetry row — never discovered post-call:
+
+    - ``DIRECT_AWAIT`` — async inners (C-RT-15 inference; the tool path)
+      keep the direct await path, preserving the documented Future/custom-
+      awaitable support (shapes that may need the loop at creation).
+    - ``OFFLOAD_SYNC`` — the sync C-RT-17 sub-agent inner is SUBMITTED to
+      the §14.8.10.1 grow-on-demand executor (off-loop), unblocking the
+      event loop for concurrent workflows / timers / the daemon.
+    """
+
+    DIRECT_AWAIT = "direct-await"
+    OFFLOAD_SYNC = "offload-sync"
 
 
 # ---------------------------------------------------------------------------
@@ -946,6 +968,24 @@ class RuntimeHITLGateComposer:
     `None` (the default) preserves the placeholder signing path byte-for-byte.
     """
 
+    inner_dispatch_mode: InnerDispatchMode = InnerDispatchMode.DIRECT_AWAIT
+    """B-48 (U-RT-142; Runtime spec v1.102 §14.8.10.2) — construction-time
+    dispatch-mode selection replacing the post-call awaitability discovery.
+
+    The composer knows its inner's §14.8.1 wrap-asymmetry row when built at
+    stage 5: `DIRECT_AWAIT` (async C-RT-15 inference / async tool inners —
+    the documented Future/custom-awaitable direct await path, PRESERVED) or
+    `OFFLOAD_SYNC` (the sync C-RT-17 sub-agent inner, SUBMITTED to the
+    §14.8.10.1 grow-on-demand executor). Default `DIRECT_AWAIT` keeps every
+    direct-construction/test fixture byte-compatible."""
+
+    dispatch_executor: Any = None
+    """B-48 (U-RT-142) — the §14.8.10.1 `SubAgentDispatchExecutor` sync
+    inners are submitted to. REQUIRED when `inner_dispatch_mode` is
+    `OFFLOAD_SYNC` (enforced at `__post_init__`); ignored under
+    `DIRECT_AWAIT`. Typed `Any` per the composer's dispatcher-handle
+    convention (no `lifecycle → lifecycle` hard coupling at the field)."""
+
     # Carrier-canonical attribute name constants (per spec §14.8.5 producer-
     # side carrier import discipline). Frozen at construction so a typo in
     # the spec carrier surfaces at dataclass instantiation, not first dispatch.
@@ -964,6 +1004,14 @@ class RuntimeHITLGateComposer:
             "_audit_attr_names",
             tuple(a.attribute_name for a in AUDIT_NAMESPACE_SCHEMA),
         )
+        # B-48 (U-RT-142) construction invariant: the offload mode is
+        # meaningless without an executor to submit to — fail at stage-5
+        # construction, never at first dispatch.
+        if self.inner_dispatch_mode is InnerDispatchMode.OFFLOAD_SYNC and (
+            self.dispatch_executor is None
+        ):
+            msg = "inner_dispatch_mode=OFFLOAD_SYNC requires dispatch_executor"
+            raise ValueError(msg)
 
     async def _dispatch_inner(
         self,
@@ -972,18 +1020,238 @@ class RuntimeHITLGateComposer:
         *,
         step_context: StepExecutionContext,
     ) -> Mapping[str, Any]:
-        """Invoke `self.inner.dispatch(...)`; await if awaitable.
+        """Invoke the inner per the CONSTRUCTION-TIME dispatch mode (§14.8.10.2).
 
-        Per the U-RT-60 wrap-asymmetry fork Q3 ratification, the composer's
-        inner may be sync (C-RT-17 sub-agent dispatcher at SUB_AGENT_BOUNDARY)
-        or async (C-RT-15 bare LLM dispatcher at PRE_ACTION). `isawaitable`
-        is defensive vs `iscoroutine` — tolerates Future / custom `__await__`
-        shapes in addition to bare coroutines.
+        B-48 (U-RT-142) replaced the post-call awaitability discovery: the
+        composer knows its inner's §14.8.1 wrap-asymmetry row when built at
+        stage 5. Under `DIRECT_AWAIT` the pre-v1.102 body is PRESERVED —
+        `isawaitable` (not `iscoroutine`) tolerates Future / custom
+        `__await__` shapes that may need the loop at creation, which is why
+        moving EVERY invocation into a worker was foreclosed. Under
+        `OFFLOAD_SYNC` the sync C-RT-17 inner is SUBMITTED to the
+        §14.8.10.1 executor so the event loop stays free.
         """
+        if self.inner_dispatch_mode is InnerDispatchMode.OFFLOAD_SYNC:
+            return await self._dispatch_inner_offloaded(binding, step, step_context=step_context)
         result = self.inner.dispatch(binding, step, step_context=step_context)
         if inspect.isawaitable(result):
             result = await result
         return cast(Mapping[str, Any], result)
+
+    async def _dispatch_inner_offloaded(
+        self,
+        binding: Any,
+        step: WorkflowStep,
+        *,
+        step_context: StepExecutionContext,
+    ) -> Mapping[str, Any]:
+        """Submit the sync inner to the §14.8.10.1 executor (B-48 offload venue).
+
+        Admission (occupied+N+S accounting): a fan-out branch's inner-dispatch
+        frame was already charged at the fan-out's ATOMIC allocation (CP spec
+        v1.102 §1 row 3) and rides `BRANCH_CAPACITY_LEASE_VAR` — present →
+        no second reservation (double-charging would breach the N+S model);
+        absent → this is a single non-fan-out dispatch and the single-frame
+        all-or-fail-fast reservation applies (§14.8.10.1). The typed capacity
+        error propagates through the existing fail path — never queued.
+
+        Lease lifecycle: an own-lease releases at ACTUAL job termination (the
+        future's done callback — which also fires when an abandoned worker
+        eventually finishes), exactly-once; a fan-out branch lease is
+        CP-owned and never released here. Context carry: the offload carries
+        `contextvars.copy_context()` for trace continuity (§14.8.10.4 item 5;
+        the per-child channel/registry riders are U-RT-144's layer).
+        """
+        from harness_cp.sub_agent_dispatch_cancellation import (
+            DISPATCH_CANCEL_TOKEN_VAR,
+            DispatchFenceTrippedSignal,
+        )
+        from harness_cp.sub_agent_dispatch_capacity_authority import (
+            BRANCH_CAPACITY_LEASE_VAR,
+        )
+
+        executor = self.dispatch_executor
+        assert executor is not None  # __post_init__ invariant
+        step_id = str(getattr(step, "step_id", "<unknown-step>"))
+        own_lease = None
+        branch_lease = BRANCH_CAPACITY_LEASE_VAR.get()
+        if branch_lease is None:
+            own_lease = executor.reserve(1, step_id=step_id, descent_chain=(step_id,))
+        else:
+            # The fan-out's atomic allocation already holds this branch's
+            # frames; release ownership transfers to THIS job (lease held to
+            # actual job termination — never parent return; §14.8.10.1).
+            #
+            # Concurrency-lens finding (round 3): `SyncDispatcherFacade
+            # .dispatch()`'s own `result_timeout_seconds` bound can fire and
+            # return `StepDispatchTimeoutError` to the CP branch — which
+            # releases this lease in its own `finally` — BEFORE this
+            # cooperatively-cancelled loop-side task reaches here (a bare
+            # `future.cancel()` only requests cancellation at the next await
+            # point; this line can still run after the facade gave up). If
+            # the bind reports the lease was already released, the branch is
+            # already terminally failed on the CP side — submitting new work
+            # now would run undercounted against the shared frame budget for
+            # the job's whole lifetime. The facade's timeout handler always
+            # trips the ambient fence BEFORE releasing (dispatch() line
+            # 273 `cancel_token.trip()` precedes the raise that lets the CP
+            # branch's finally run), so consulting the token here always
+            # raises the standard fence signal instead of silently
+            # proceeding.
+            if not branch_lease.bind_release_to_job():
+                cancel_token = DISPATCH_CANCEL_TOKEN_VAR.get()
+                if cancel_token is not None:
+                    cancel_token.check()
+                raise DispatchFenceTrippedSignal
+        # §14.8.10.3: ack ownership moves to the WORKER job — a cancelled
+        # loop-side task's finally fires while the worker may still run, so a
+        # task-level ack would falsely report the fence drained. The worker's
+        # own finally acks at ACTUAL job termination; the fence is consulted
+        # once more at job start (a token tripped before the worker picked
+        # the job up means no effect has begun — the cleanest abort).
+        cancel_token = DISPATCH_CANCEL_TOKEN_VAR.get()
+        if cancel_token is not None:
+            cancel_token.defer_ack_to_job()
+        carried = contextvars.copy_context()
+
+        def _job() -> Mapping[str, Any]:
+            # §14.8.10.4 item 5 (U-RT-144) — the copied context preserves
+            # trace continuity across the offload; the per-worker-scoped
+            # contextvar disposition (carry vs. reset, and why) is
+            # enumerated inside `_run_with_child_channel` below.
+            def _run_with_child_channel() -> Mapping[str, Any]:
+                # Consolidated contextvar disposition at this offload
+                # boundary (round-6 codex review). `copy_context()` above
+                # carries EVERY contextvar bound in the calling (CP branch)
+                # context into the worker thread; each name below is an
+                # explicit decision, not an oversight — a future contextvar
+                # added to either module belongs in this enumeration too:
+                #
+                #   DISPATCH_CANCEL_TOKEN_VAR — CARRY (left bound to the
+                #   ambient token). A nested dispatch (this job's
+                #   `self.inner.dispatch(...)` recursing into another
+                #   SUB_AGENT_DISPATCH, sequential or fanned-out) constructs
+                #   its OWN child token PARENTED to whatever
+                #   `DISPATCH_CANCEL_TOKEN_VAR.get()` returns
+                #   (`workflow_driver._proceed_branch`/`_cancel_branch`);
+                #   carrying the ambient value forward is what makes that
+                #   parent -> child cascade-on-trip linkage correct.
+                #   Resetting it here would sever cancellation propagation
+                #   into the descent chain.
+                #
+                #   BRANCH_CAPACITY_LEASE_VAR — RESET (round-6 codex [P1]
+                #   #1). Left bound, a nested descendant SUB_AGENT_DISPATCH
+                #   would read the OUTER branch's own admitted lease (this
+                #   function's `branch_lease` above) via `.get()` and
+                #   `bind_release_to_job()` it a second time — the
+                #   descendant's own completion callback would then release
+                #   the ANCESTOR's frames while the ancestor's job is still
+                #   running, exceeding the shared occupied+N+S budget.
+                #   Clearing it forces the descendant to self-reserve its own
+                #   frames via `executor.reserve(...)`, independent of the
+                #   ancestor's lifecycle.
+                #
+                #   INTER_STEP_CHANNEL_VAR — RESET. A fresh per-child
+                #   channel; the copied PARENT channel would otherwise be
+                #   shared by concurrent sibling children (one child's step
+                #   output entering another's payload via
+                #   `most_recent_output()`).
+                #
+                #   _BRANCH_INFLIGHT_DISPATCHES (harness_cp.workflow_driver)
+                #   — RESET via
+                #   `reset_offloaded_job_branch_inflight_registry()`
+                #   (round-5b codex [P1] #2). A nested `cascade_cancel_barrier`
+                #   would otherwise register futures bound to THIS worker
+                #   thread's event loop into the parent loop's registry
+                #   sets, and the parent's deadline watchdog would
+                #   `.cancel()` them cross-thread.
+                #
+                #   COST_ACCUM_VAR (harness_runtime.types) — CARRY (not
+                #   touched here; not read/set anywhere on this path).
+                #   Whole-*run* isolation (B-INTERSTEP-PERRUN-ISOLATION),
+                #   bound once at the run's `api.py` entry point and
+                #   intentionally accumulates cost across every branch and
+                #   every nested descendant of the same run; per-branch
+                #   isolation would misattribute cost.
+                #
+                #   ROUTED_PRIMARY_SPAN_TRACE (harness_runtime.lifecycle.
+                #   llm_dispatch) / _CURRENT_TOOL_CTX (harness_runtime.
+                #   lifecycle.mcp_server) — NOT AMBIENT HERE, no disposition
+                #   needed (not an omission — both are set-then-read within a
+                #   single tightly-scoped call elsewhere, never bound at the
+                #   point this offload boundary's `copy_context()` snapshot
+                #   is taken). Listed so a future contextvar audit finds this
+                #   comment already accounts for them rather than re-deriving
+                #   it (merge-gate concurrency-lens round-7 note).
+                from harness_cp.workflow_driver import (
+                    reset_offloaded_job_branch_inflight_registry,
+                )
+
+                from harness_runtime.lifecycle.inter_step_output_channel import (
+                    INTER_STEP_CHANNEL_VAR,
+                    InterStepOutputChannel,
+                )
+
+                INTER_STEP_CHANNEL_VAR.set(InterStepOutputChannel())
+                reset_offloaded_job_branch_inflight_registry()
+                BRANCH_CAPACITY_LEASE_VAR.set(None)
+                return cast(
+                    Mapping[str, Any],
+                    self.inner.dispatch(binding, step, step_context=step_context),
+                )
+
+            try:
+                if cancel_token is not None:
+                    cancel_token.check()
+                return carried.run(_run_with_child_channel)
+            finally:
+                if cancel_token is not None:
+                    cancel_token.ack()
+
+        job_lease = own_lease if own_lease is not None else branch_lease
+        try:
+            future = executor.submit(_job, step_id=step_id)
+        except BaseException:
+            # codex round-4 [P2] "roll back submission when worker creation
+            # fails" — `submit()` never returned a future, so the
+            # `add_done_callback`-based release below can never attach. The
+            # job unconditionally never ran (regardless of whether
+            # `bind_release_to_job()` already flipped `job_bound` above —
+            # that binding was a promise the now-failed submit broke), so
+            # this MUST be the unconditional `.release()`, not
+            # `release_unless_job_bound()` (which would wrongly no-op here
+            # and leak the lease forever).
+            if job_lease is not None:
+                job_lease.release()
+            raise
+        if job_lease is not None:
+            release_lease = job_lease.release
+
+            # Fires at ACTUAL job termination — including when an abandoned
+            # (drained-under-fence) worker eventually finishes; exactly-once
+            # guarded at the lease.
+            def _release_on_done(_f: Any) -> None:
+                release_lease()
+
+            future.add_done_callback(_release_on_done)
+        if cancel_token is not None:
+            # codex round-4 [P2] "acknowledge executor jobs canceled before
+            # starting" — if `future` is cancelled AFTER ack ownership was
+            # deferred to the job (above) but BEFORE the worker ever calls
+            # `set_running_or_notify_cancel()` successfully, `_job` never
+            # runs at all — its own `finally: cancel_token.ack()` never
+            # fires, and `wait_ack()` waits out the FULL grace period and
+            # reports `worker_draining_under_fence` even though nothing was
+            # ever active. `future.cancelled()` and "`_job` ran" are
+            # mutually exclusive (`set_running_or_notify_cancel()` is the
+            # atomic gate), so this can never double-ack against `_job`'s
+            # own finally.
+            def _ack_if_never_started(_f: Any) -> None:
+                if _f.cancelled():
+                    cancel_token.ack()
+
+            future.add_done_callback(_ack_if_never_started)
+        return cast(Mapping[str, Any], await asyncio.wrap_future(future))
 
     async def _escalate_to_secondary_channel(
         self,
@@ -1025,7 +1293,28 @@ class RuntimeHITLGateComposer:
         # WebhookDeliveryExhaustedError propagates to the caller (driver-side fault).
         composer = self.webhook_delivery_composer
         assert composer is not None  # caller verified joint binding present
-        delivery_result = await composer.deliver_webhook_for_brief(durable_brief, idempotency_key)
+        # codex round-7 [P1] "fence HITL webhook and audit effect entry
+        # points" — the B-48 offload boundary's `cancel_token.check()`/
+        # `.ack()` pair (`_dispatch_inner_offloaded` above) only brackets
+        # `self.inner.dispatch(...)`; `ack()` fires the instant that inner
+        # dispatch's worker thread returns, BEFORE this composer's OWN
+        # step-4-bis webhook delivery runs on the event loop. Without this,
+        # a job-wide fence trip racing in right after `ack()` would see
+        # `_effects_in_flight == 0` and report the job fully drained while
+        # this delivery is still in flight — the same TOCTOU shape the
+        # round-6 durable-write fix closed at `workflow_driver.py`, here for
+        # a THIRD effect-bearing site. Non-offloaded dispatch (no ambient
+        # token) gets `nullcontext()` — byte-unchanged.
+        from harness_cp.sub_agent_dispatch_cancellation import DISPATCH_CANCEL_TOKEN_VAR
+
+        _cancel_token = DISPATCH_CANCEL_TOKEN_VAR.get()
+        _webhook_fence_guard: contextlib.AbstractContextManager[None] = (
+            _cancel_token.effect_entry() if _cancel_token is not None else contextlib.nullcontext()
+        )
+        with _webhook_fence_guard:
+            delivery_result = await composer.deliver_webhook_for_brief(
+                durable_brief, idempotency_key
+            )
         # §14.8.8.1 step 5: set the caller-signal pause flag (observed by
         # workflow_driver per-step pre-entry detection per C-RT-24 §14.14.3).
         self.pause_requested_flag.set()
@@ -1044,9 +1333,25 @@ class RuntimeHITLGateComposer:
         on the loop it would block every unrelated workflow for KMS latency.
         `asyncio.to_thread` copies contextvars, so the run-scoped
         cost-accumulator proxy still resolves.
+
+        codex round-7 [P1] "fence HITL webhook and audit effect entry
+        points" — this is the SHARED choke point for every HITL audit
+        persist call (§14.8.8.6 step 4h, the durable-async resume audit, the
+        validator-escalation audit, ...). Like `_escalate_to_secondary_
+        channel`'s webhook delivery, it can run on the event loop AFTER the
+        B-48 offload boundary's `ack()` already fired, so it needs the same
+        `effect_entry()` guard the round-6 durable-write fix applied —
+        otherwise a fence trip racing this write sees a falsely-drained job.
         """
+        from harness_cp.sub_agent_dispatch_cancellation import DISPATCH_CANCEL_TOKEN_VAR
+
+        _cancel_token = DISPATCH_CANCEL_TOKEN_VAR.get()
+        _audit_fence_guard: contextlib.AbstractContextManager[None] = (
+            _cancel_token.effect_entry() if _cancel_token is not None else contextlib.nullcontext()
+        )
         try:
-            return await run_audit_off_loop(self._compose_and_persist_audit, *args, **kwargs)
+            with _audit_fence_guard:
+                return await run_audit_off_loop(self._compose_and_persist_audit, *args, **kwargs)
         except AUDIT_SIGNING_HARD_FAILURES as exc:
             # Codex round-17 P1: queue saturation raises at submit — before
             # the compose body's own handlers — bypassing the

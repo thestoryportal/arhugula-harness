@@ -60,6 +60,7 @@ composition over these primitives.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Protocol, cast
@@ -872,6 +873,31 @@ class RetryBreakerFallbackDispatcher:
         replay_disposition = REPLAY_DISPOSITION_MAPPING[binding.engine_class]
 
         for attempt in range(policy.max_attempts):
+            # B-48 (U-RT-143; §14.8.10.3 part 1, EFFECT-ENTRY EXTENSION,
+            # codex round-37 + out-of-family Codex [P1] round-N): the
+            # per-attempt loop can begin another paid provider call without
+            # returning to the driver, so the job's cancel token guards the
+            # REAL provider attempt below via `effect_entry()` — not a bare
+            # `check()`. A bare pre-attempt `check()` only proves the token
+            # wasn't tripped at that instant; it never marks the attempt
+            # in-flight, so a trip landing WHILE the paid call is genuinely
+            # running would leave `_inflight_at_trip` False and the job's
+            # `wait_ack()` would falsely report ACKED_CLEAN for an attempt
+            # whose outcome is actually unknown. `effect_entry()` closes
+            # that gap: entering re-checks the fence (same tripped-token
+            # rejection `check()` gave) AND counts the attempt as in-flight
+            # for the duration of the real call. `DispatchFenceTrippedSignal`
+            # is a BaseException — it propagates past the generic arms below.
+            from harness_cp.sub_agent_dispatch_cancellation import (
+                DISPATCH_CANCEL_TOKEN_VAR,
+            )
+
+            _cancel_token = DISPATCH_CANCEL_TOKEN_VAR.get()
+            _effect_guard = (
+                _cancel_token.effect_entry()
+                if _cancel_token is not None
+                else contextlib.nullcontext()
+            )
             with tracer.start_as_current_span("harness.runtime.retry_attempt") as inner_span:
                 # CP-canonical retry.* 6-attribute namespace per Spec_Control_Plane_v1_3.md
                 # §3.5 + ADR-D1 v1.2 §1.1.1 + landed carrier at
@@ -884,7 +910,8 @@ class RetryBreakerFallbackDispatcher:
                 inner_span.set_attribute("engine.replay_disposition", replay_disposition.value)
 
                 try:
-                    result = await self.inner.dispatch(rebound, step, step_context=step_context)
+                    with _effect_guard:
+                        result = await self.inner.dispatch(rebound, step, step_context=step_context)
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:

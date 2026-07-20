@@ -31,6 +31,8 @@ import asyncio
 import threading
 from typing import Any, cast
 
+import harness_cp.workflow_driver as _workflow_driver_module
+import pytest
 from harness_core import PersonaTier, StepID, WorkloadClass
 from harness_core.workflow_event_class import WorkflowEventClass
 from harness_cp.cp_shared_types import ModelBinding
@@ -951,6 +953,137 @@ def test_reconciler_orchestrator_effect_fence_proceed_rejects_before_cas() -> No
     assert steps_executed == 0
     assert len(loop.attempts) == 0
     assert not store.reconciler_fanout_resume_finalized("rk-rec-proceed-fence-orch")
+
+
+def test_parallelization_reconciler_cas_gate_failure_never_admits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Codex round-9 [P2] "whole-fan-out admission leaks on pre-dispatch setup
+    failure" — B-48's WHOLE-fan-out `_admit_fanout_branch_plan` call is now
+    DEFERRED to immediately before the `cascade_policy` split, past the ENTIRE
+    pre-dispatch setup section — including the RECONCILER-engine CAS gate this
+    test drives (`_attempt_reconciler_engine_resume_gate`, reached only AFTER
+    `branch_plan`/`branch_dispatchers` are built, exactly where admission used
+    to run). Mirrors `test_reconciler_fanout_crash_resume_abort_fails_before_
+    branch_replay` (a genuine crash + CAS-gate ABORT), with an admission spy
+    added: the CAS gate's ABORT must reject before any admission call, not
+    merely release one after the fact.
+
+    Mutation probe: reverting the deferral (moving `_admit_fanout_branch_plan`
+    back to its pre-fix position, immediately after `branch_dispatchers` is
+    resolved) makes `_admit_fanout_branch_plan` fire once for this run before
+    the CAS gate ever runs — the spy's call count would read 1, not 0, failing
+    the assertion below.
+    """
+    store = _InMemoryBranchStore()
+    steps = [_step(f"branch-{i}", i) for i in range(3)]
+    _run(
+        workflow_id="wf-rec-fanout-abort-admit-spy",
+        topology=TopologyPattern.PARALLELIZATION,
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3),
+        store=store,
+        engine_class=EngineClass.RECONCILER_LOOP,
+    )
+    store.forget_branch(store.sole_run_key(), 1)
+
+    # Spy installed AFTER the seed run above (which itself admits normally on
+    # the happy path) — only the resume run's admission calls are in scope.
+    admit_calls: list[int] = []
+    _real_admit = _workflow_driver_module._admit_fanout_branch_plan
+
+    def _spy_admit(*args: Any, **kwargs: Any) -> Any:
+        admit_calls.append(1)
+        return _real_admit(*args, **kwargs)
+
+    monkeypatch.setattr(_workflow_driver_module, "_admit_fanout_branch_plan", _spy_admit)
+
+    loop = _FakeReconcilerRecoveryLoop(ResumeOutcomeKind.ABORT_REVALIDATION_FAILED)
+    resume = _CountingDispatcher(n=3)
+    r2 = _run(
+        workflow_id="wf-rec-fanout-abort-admit-spy",
+        topology=TopologyPattern.PARALLELIZATION,
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        engine_class=EngineClass.RECONCILER_LOOP,
+        engine_recovery_loop=loop,
+    )
+
+    assert r2.status is RunStatus.FAILED
+    assert r2.fail_class == CP_FAIL_RESUME_MATERIAL_DIFF_DETECTED
+    assert resume.dispatched == []
+    assert admit_calls == [], (
+        f"expected the RECONCILER CAS gate to reject BEFORE any admission call "
+        f"({len(admit_calls)} calls observed on the resume run) — admission is "
+        f"no longer deferred past the pre-dispatch reconciler gate"
+    )
+
+
+def test_orchestrator_workers_reconciler_cas_gate_failure_never_admits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ORCHESTRATOR_WORKERS sibling of the PARALLELIZATION test above;
+    `steps[0]` is the orchestrator (not a fan-out branch), `steps[1:]` are the
+    workers.
+
+    Round-10 test-witness lens finding (non-blocking): unlike its
+    PARALLELIZATION sibling, this is NOT a mutation-probed witness for the
+    admission-deferral fix — `_execute_orchestrator_workers`'s reconciler CAS
+    gate (workflow_driver.py, inside the non-empty-steps branch) runs BEFORE
+    `branch_plan` is even built, so it returns FAILED ahead of EITHER the
+    pre-fix or the post-fix admission call site; reverting the O-W deferral
+    would not move admission ahead of this particular guard, so `admit_calls`
+    stays `[]` either way. This test still verifies a real, useful invariant
+    (a CAS-gate ABORT on O-W never admits) — it is just not evidence for the
+    admission-deferral claim specifically. The genuinely mutation-sensitive
+    O-W witness for that claim is `test_warmup_phase_split_cohort_key_
+    failure_never_admits` in test_workflow_driver_orchestrator_workers_
+    warmup.py, whose trigger (the warm-up cohort-key split) sits between the
+    old and new O-W admission positions."""
+    store = _InMemoryBranchStore()
+    steps = [_step("orch", 0)] + [_step(f"branch-{i}", i) for i in range(3)]
+    _run(
+        workflow_id="wf-rec-ow-abort-admit-spy",
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+        steps=steps,
+        dispatcher=_CountingDispatcher(n=3),
+        store=store,
+        engine_class=EngineClass.RECONCILER_LOOP,
+    )
+    store.forget_branch(store.sole_run_key(), 1)
+
+    # Spy installed AFTER the seed run above (which itself admits normally on
+    # the happy path) — only the resume run's admission calls are in scope.
+    admit_calls: list[int] = []
+    _real_admit = _workflow_driver_module._admit_fanout_branch_plan
+
+    def _spy_admit(*args: Any, **kwargs: Any) -> Any:
+        admit_calls.append(1)
+        return _real_admit(*args, **kwargs)
+
+    monkeypatch.setattr(_workflow_driver_module, "_admit_fanout_branch_plan", _spy_admit)
+
+    loop = _FakeReconcilerRecoveryLoop(ResumeOutcomeKind.ABORT_REVALIDATION_FAILED)
+    resume = _CountingDispatcher(n=3)
+    r2 = _run(
+        workflow_id="wf-rec-ow-abort-admit-spy",
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+        steps=steps,
+        dispatcher=resume,
+        store=store,
+        engine_class=EngineClass.RECONCILER_LOOP,
+        engine_recovery_loop=loop,
+    )
+
+    assert r2.status is RunStatus.FAILED
+    assert r2.fail_class == CP_FAIL_RESUME_MATERIAL_DIFF_DETECTED
+    assert resume.dispatched == []
+    assert admit_calls == [], (
+        f"expected the RECONCILER CAS gate to reject BEFORE any admission call "
+        f"({len(admit_calls)} calls observed on the resume run) — admission is "
+        f"no longer deferred past the pre-dispatch reconciler gate"
+    )
 
 
 def test_reconciler_fanout_complete_recovery_skips_second_cas_redrive() -> None:

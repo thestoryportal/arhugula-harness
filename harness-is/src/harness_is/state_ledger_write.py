@@ -41,7 +41,7 @@ from __future__ import annotations
 
 import json
 import threading
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict
@@ -66,6 +66,20 @@ from harness_is.state_ledger_entry_schema import (
 #: Clock-skew tolerance for the timestamp-monotonicity check (C-IS-05 §5).
 #: Configuration-supplied; defaults to zero (strict non-decreasing order).
 _CLOCK_SKEW_TOLERANCE = timedelta(0)
+
+#: C-IS-07 §7.6 (v1.11) — writer-owned timestamp sentinel. A caller on the
+#: buffered/branch-drain append surface stamps this exact value as
+#: `EntryPayload.timestamp` to request writer-owned sampling: `
+#: append_ledger_entry` recognizes it and substitutes `datetime.now(UTC)`
+#: sampled INSIDE `_WRITE_LOCK` (the same critical section that reads the
+#: prior entry and computes `prior_event_hash`), so sampling order equals
+#: physical-append order and the C-IS-05 §5 monotonic-non-decreasing
+#: constraint holds by construction for concurrent sibling drains. Every
+#: DIRECT append path keeps caller-supplied timestamp semantics verbatim —
+#: this sentinel is opt-in per entry, never a default. The epoch value is a
+#: sentinel choice, not a real production timestamp (the harness has no
+#: legitimate 1970 wall-clock value).
+WRITER_OWNED_TIMESTAMP: Timestamp = datetime.fromtimestamp(0, tz=UTC)
 
 #: Serializes the read-prior-then-append critical section (acceptance #7).
 _WRITE_LOCK = threading.Lock()
@@ -249,6 +263,13 @@ def append_ledger_entry(
     `prior_event_hash` are computed internally before persisting (acceptance
     #6/#8). A timestamp earlier than the prior entry's (beyond clock-skew
     tolerance) is rejected (acceptance #9).
+
+    C-IS-07 §7.6 (v1.11): `entry_payload.timestamp == WRITER_OWNED_TIMESTAMP`
+    is the writer-owned-sampling opt-in — the persisted timestamp is sampled
+    fresh INSIDE the write-serialization critical section instead of using
+    the caller's value (the buffered/branch-drain surface's mechanism for
+    monotonic-by-construction concurrent sibling appends). Every other
+    timestamp value keeps caller-supplied semantics verbatim.
     """
     if write_key.idempotency_key != entry_payload.idempotency_key:
         raise WriteKeyMismatchError(
@@ -264,10 +285,17 @@ def append_ledger_entry(
         if any(e.idempotency_key == entry_payload.idempotency_key for e in ledger):
             return WriteResult.IDEMPOTENT_NOOP
         prior_entry = ledger[-1] if ledger else None
-        if (
-            prior_entry is not None
-            and entry_payload.timestamp < prior_entry.timestamp - _CLOCK_SKEW_TOLERANCE
-        ):
+        # C-IS-07 §7.6 (v1.11) — the WRITER_OWNED_TIMESTAMP sentinel resolves
+        # to a fresh sample HERE, inside the lock, so sampling order equals
+        # physical-append order (never the raw sentinel — that would always
+        # sort before every real entry and trip the monotonicity check
+        # below). Every other timestamp value is caller-supplied verbatim.
+        timestamp = (
+            datetime.now(UTC)
+            if entry_payload.timestamp == WRITER_OWNED_TIMESTAMP
+            else entry_payload.timestamp
+        )
+        if prior_entry is not None and timestamp < prior_entry.timestamp - _CLOCK_SKEW_TOLERANCE:
             raise NonMonotonicTimestampError(
                 "entry timestamp precedes the prior entry's beyond clock-skew tolerance"
             )
@@ -276,7 +304,7 @@ def append_ledger_entry(
             idempotency_key=entry_payload.idempotency_key,
             actor=entry_payload.actor,
             response_hash=ALL_ZEROS_SENTINEL,  # placeholder — recomputed below
-            timestamp=entry_payload.timestamp,
+            timestamp=timestamp,
             prior_event_hash=construct_prior_event_hash(prior_entry),
             # v1.3 NEW sidecar (U-IS-11 v2.4 AC #11/#12/#13/#14). Threaded
             # through from EntryPayload; canonicalize() includes it in the

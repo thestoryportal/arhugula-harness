@@ -48,14 +48,18 @@ distinguishing signal.
 
 **U-RT-46 `shutdown()` orchestrator** lands the full C-RT-10 reverse-stage
 close sequence. Step 1 drain sets `ctx.drained_flag` (in-flight wait STRUCK
-per `[[fork-u-rt-44-workflow-loop-drain]]`); step 2 delegates to
-`flush_observability` above; step 3 closes the collector daemon, tracer
-provider (sync API wrapped in `asyncio.to_thread`), and every provider
-client; steps 4-5 are no-ops at HEAD per the close-surface map (MCP
-clients/host are placeholders per U-RT-22; index/cache have no close
-surface; worktree leases none-allocated until U-RT-49+); step 6 reads
-the audit-ledger head hash for consistency verification. Per-resource
-exception isolation; budgeted-remaining timeout pattern.
+per `[[fork-u-rt-44-workflow-loop-drain]]`); step 1b drains the stage-5
+sub-agent-dispatch executor (B-48 U-RT-141) — BEFORE the observability
+flush, so a job still finishing during the drain gets its spans/audit
+entries written before the tracer/exporters close (codex round-4 [P1]);
+step 2 delegates to `flush_observability` above; step 3 closes the
+collector daemon, tracer provider (sync API wrapped in `asyncio.to_thread`),
+and every provider client; steps 4-5 are no-ops at HEAD per the
+close-surface map (MCP clients/host are placeholders per U-RT-22;
+index/cache have no close surface; worktree leases none-allocated until
+U-RT-49+); step 6 reads the audit-ledger head hash for consistency
+verification. Per-resource exception isolation; budgeted-remaining timeout
+pattern.
 """
 
 from __future__ import annotations
@@ -455,6 +459,24 @@ def _discard_cached_report(ctx_id: int) -> None:
     _cached_reports.pop(ctx_id, None)
 
 
+async def _drain_dispatch_executor(ctx: HarnessContext, remaining: float) -> bool:
+    """Step 3 stage-5 dispatch executor — `drain(deadline_seconds=remaining)`.
+
+    B-48 (U-RT-141) gave stage 5 a real stateful resource: the grow-on-demand
+    sub-agent-dispatch executor's daemon worker threads, holding frame leases
+    until actual job termination. `drain()` is sync/polling (never joins a
+    loop-bridged worker) so it is dispatched off the loop via `to_thread`.
+    Returns True iff every outstanding job drained within the deadline.
+    """
+    dispatch_executor = getattr(ctx, "sub_agent_dispatch_executor", None)
+    if dispatch_executor is None:
+        return True
+    _completed, still_outstanding = await asyncio.to_thread(
+        dispatch_executor.drain, deadline_seconds=max(0.0, remaining)
+    )
+    return still_outstanding == 0
+
+
 async def _close_collector_daemon(ctx: HarnessContext, remaining: float) -> bool:
     """Step 3 collector — `await daemon.stop(timeout_seconds=remaining)`."""
     daemon = ctx.collector_daemon
@@ -558,10 +580,15 @@ async def shutdown(
     1. **Drain** — set `ctx.drained_flag`. The in-flight wait (AC #2 of
        U-RT-44) is STRUCK per `[[fork-u-rt-44-workflow-loop-drain]]`;
        resolution lands at U-RT-49 when the CP workflow loop materializes.
+    1b. **Drain the stage-5 sub-agent-dispatch executor** (B-48 U-RT-141) —
+       BEFORE the observability flush (codex round-4 [P1]): a job still
+       finishing during this drain must get its spans/audit entries written
+       while the tracer/exporters are still open, not after.
     2. **Flush observability** — delegates to `flush_observability(ctx)`.
-    3. **Close stage-5/4/3b/3a in reverse** — collector daemon, tracer
-       provider, then every provider client. Stage-5 emitter/dispatcher
-       and stage-3b routing/registries are stateless-by-design no-ops.
+    3. **Close collector/tracer/provider clients in reverse** — collector
+       daemon, tracer provider, then every provider client. Stage-5's LLM
+       emitter/dispatcher (pre-B-48) and stage-3b routing/registries remain
+       stateless-by-design no-ops.
     4. **Close stage-2 resources** — MCP clients + host. Both are
        placeholder dataclasses at HEAD (U-RT-22); no-op until a real
        MCP runtime lands.
@@ -604,6 +631,53 @@ async def shutdown(
 
     # Step 1 — drain. Idempotent: `Event.set()` is a no-op if already set.
     ctx.drained_flag.set()
+
+    # Step 1b — stage-5 sub-agent-dispatch executor (B-48 U-RT-141), drained
+    # BEFORE observability flush (codex round-4 [P1] "drain dispatch jobs
+    # before flushing observability"): a job still running when flush would
+    # otherwise fire can emit spans/audit entries THROUGH the drain window —
+    # draining first means every such write lands before step 2 flushes and
+    # step 3b closes the tracer/exporters, instead of racing (or losing) a
+    # write that happens during/after those close. Reverse-stage order:
+    # LOOP_INIT (stage 5) opened after OD (stage 4), so it closes before the
+    # collector/tracer close below regardless of this reordering.
+    remaining = max(0.0, deadline - time.monotonic())
+    # codex round-8 [P2] "enter draining state before scheduling the bounded
+    # wait" — `_drain_dispatch_executor`'s `dispatch_executor.drain(...)`
+    # call (which flips `_draining`) runs off-loop via `asyncio.to_thread`,
+    # bounded below by `asyncio.wait_for`. At (or near) a zero-remaining
+    # budget the whole coroutine can be cancelled before `drain()` ever gets
+    # scheduled, so `_draining` never flips — `reserve`/`reserve_fanout`/
+    # `submit` keep admitting + launching NEW work against an executor whose
+    # shutdown is already underway. `begin_draining()` is plain synchronous
+    # code (no await, no scheduling delay, no timeout budget) — call it
+    # directly here so the admission surface ALWAYS closes regardless of how
+    # much wall-clock budget remains; `drain()` below still runs its own
+    # (idempotent) `begin_draining()` call as its first step.
+    _pre_drain_executor = getattr(ctx, "sub_agent_dispatch_executor", None)
+    if _pre_drain_executor is not None:
+        _pre_drain_executor.begin_draining()
+    try:
+        # codex round-4 [P2] "include drain scheduling in the shutdown
+        # deadline" — `_drain_dispatch_executor`'s own `asyncio.to_thread`
+        # call is scheduled onto the loop's DEFAULT thread pool; if that pool
+        # is saturated (other `to_thread` work queued ahead of it), the
+        # SCHEDULING delay alone can push past `remaining` before `drain()`
+        # ever starts counting its own internal budget. `asyncio.wait_for`
+        # bounds the whole operation — scheduling delay plus drain time —
+        # to `remaining`, mirroring the same fix already applied to step 3b
+        # (`_close_tracer_provider`) below.
+        drained_clean = await asyncio.wait_for(
+            _drain_dispatch_executor(ctx, remaining), timeout=remaining
+        )
+        if not drained_clean:
+            failures.append("sub_agent_dispatch_executor")
+            timed_out = True
+    except TimeoutError:
+        failures.append("sub_agent_dispatch_executor")
+        timed_out = True
+    except Exception:
+        failures.append("sub_agent_dispatch_executor")
 
     # Step 2 — flush observability.
     remaining = max(0.0, deadline - time.monotonic())

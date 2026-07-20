@@ -63,7 +63,10 @@ from harness_runtime.lifecycle.frozen_tool_superset import (
     CHILD_DOWNGRADE_REMOVE_TIERS,
     compute_frozen_tool_superset,
 )
-from harness_runtime.lifecycle.hitl_gate_composer import RuntimeHITLGateComposer
+from harness_runtime.lifecycle.hitl_gate_composer import (
+    InnerDispatchMode,
+    RuntimeHITLGateComposer,
+)
 from harness_runtime.lifecycle.inter_step_output_channel import RunScopedInterStepOutputChannel
 from harness_runtime.lifecycle.lifecycle_emitter import materialize_lifecycle_emitter_stage
 from harness_runtime.lifecycle.llm_dispatch import (
@@ -88,6 +91,10 @@ from harness_runtime.lifecycle.step_blast_radius import make_step_blast_radius_r
 from harness_runtime.lifecycle.step_dispatchers import StepKindDispatcherRegistry
 from harness_runtime.lifecycle.step_mcp_trust_tier import make_step_mcp_trust_tier_resolver
 from harness_runtime.lifecycle.sub_agent_dispatch import RuntimeSubAgentDispatcher
+from harness_runtime.lifecycle.sub_agent_dispatch_executor import (
+    RuntimeCapacityAuthorityAdapter,
+    SubAgentDispatchExecutor,
+)
 from harness_runtime.lifecycle.sync_dispatcher_facade import (
     materialize_sync_dispatcher_facade,
 )
@@ -582,6 +589,17 @@ async def execute(
     # "Deferred to implementation discretion" + ADR-D5 v1.3 §1.4.1 (HSM /
     # KMS / keystore custody). v1.7 MVP binds a deployment-default value;
     # operator-tunable surface is a follow-on RuntimeConfig extension.
+    # B-48 (U-RT-141/U-RT-142; Runtime spec v1.102 §14.8.10) — the grow-on-
+    # demand dispatch executor sized by the C-RT-03 shared frame budget, plus
+    # the U-CP-101 capacity-authority adapter over the SAME budget (one
+    # authority per process). Bound BEFORE the sub-agent composer so the
+    # composer's OFFLOAD_SYNC construction can reference the executor, and
+    # frozen into HarnessContext so the CP fan-out reads the configured cap
+    # instead of its default-256 fallback.
+    dispatch_executor = SubAgentDispatchExecutor(frame_budget=config.sub_agent_dispatch_max_workers)
+    ctx.sub_agent_dispatch_executor = dispatch_executor
+    ctx.capacity_authority = RuntimeCapacityAuthorityAdapter(dispatch_executor)
+
     bare_sub_agent_dispatcher = RuntimeSubAgentDispatcher(
         handoff_registry=ctx.handoff_registry,  # type: ignore[arg-type]  # narrowed at stage 3b
         topology_dispatcher=topology.dispatcher,
@@ -630,6 +648,12 @@ async def execute(
         resume_context_holder=ctx.resume_context_holder,
         blast_radius_resolver=blast_radius_resolver,
         hitl_auto_approve_policy=hitl_auto_approve_policy,
+        # B-48 (U-RT-142; §14.8.10.2 row 2): the sync C-RT-17 inner is
+        # SUBMITTED to the §14.8.10.1 executor — mode known at construction,
+        # never discovered post-call. hitl_inference/hitl_tool keep the
+        # DIRECT_AWAIT default (async inners; §14.8.10.2 rows 1/3).
+        inner_dispatch_mode=InnerDispatchMode.OFFLOAD_SYNC,
+        dispatch_executor=dispatch_executor,
     )
     ctx.sub_agent_dispatcher = hitl_sub_agent
 

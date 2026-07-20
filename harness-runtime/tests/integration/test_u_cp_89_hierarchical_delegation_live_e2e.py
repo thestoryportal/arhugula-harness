@@ -162,19 +162,6 @@ def _make_depth2_hierarchical_workflow(chain: Any) -> Any:
     return _Workflow()
 
 
-@pytest.mark.xfail(
-    reason=(
-        "blocked by .harness/runtime_defect_sub_agent_inference_child_loop_bridge_deadlock.md "
-        "— a SUB_AGENT_DISPATCH worker of an INFERENCE child deadlocks the runtime "
-        "sync/async bridge (nested `run_coroutine_threadsafe` to the loop-bound provider "
-        "loop while that loop is mid-step executing the outer HITL-gate bridge → "
-        "RT-FAIL-STEP-DISPATCH-TIMEOUT). Pre-existing (U-RT-59 facade + HITL bridge), "
-        "exposed by U-CP-89's first real-provider sub-agent e2e; NOT the CP strategy. "
-        "Integration NOT verified past the sub-agent INFERENCE seam — flips to XPASS "
-        "when the runtime fork lands (strict=False)."
-    ),
-    strict=False,
-)
 @pytest.mark.skipif(
     not _ollama_reachable(),
     reason="live hierarchical-delegation depth-2 e2e requires a local ollama daemon on 127.0.0.1:11434",
@@ -218,8 +205,14 @@ async def test_u_cp_89_hierarchical_delegation_depth2_live_ollama(
 
 
 # NB: the depth-2 isolation experiment (linear child / pipeline-automation) that
-# proved this deadlock is topology-INDEPENDENT (a LINEAR child deadlocks
-# identically) is recorded in
-# `.harness/runtime_defect_sub_agent_inference_child_loop_bridge_deadlock.md`; it
-# is not retained as a test (it asserts the same xfail-blocked seam as the test
-# above).
+# originally proved this deadlock topology-INDEPENDENT (a LINEAR child
+# deadlocked identically) is recorded in
+# `.harness/runtime_defect_sub_agent_inference_child_loop_bridge_deadlock.md`.
+# RESOLVED by the B-48 sync sub-agent dispatch offload executor (Runtime spec
+# v1.102 §14.8.10): the sync SUB_AGENT_DISPATCH worker now runs on a dedicated
+# `SubAgentDispatchExecutor` thread instead of the loop-bound HITL-gate bridge
+# thread, so the nested `run_coroutine_threadsafe` call for the INFERENCE
+# child no longer contends with the outer bridge for the same loop slot. This
+# test flipped XFAIL(strict=False) → XPASS and was promoted (filing §4 item 8
+# of `.harness/class_2_fork_b48_sync_subagent_dispatch_offload.md`); the
+# isolation experiment above is not retained as a test.

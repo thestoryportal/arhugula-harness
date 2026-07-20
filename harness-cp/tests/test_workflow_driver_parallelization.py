@@ -673,6 +673,67 @@ def test_parallelization_barrier_deadline_does_not_hang(monkeypatch: pytest.Monk
     assert elapsed < 1.5
 
 
+class _TokenCapturingBlockingDispatcher:
+    """`_BlockingDispatcher` + captures the ambient `DISPATCH_CANCEL_TOKEN_VAR`
+    at dispatch-entry (this runs on the worker thread inside the SAME context
+    copy `asyncio.to_thread` carried, mirroring the hierarchical-delegation
+    `_HierarchicalDispatcher.captured_cancel_tokens` pattern) — so a test can
+    assert the PROCEED-tier barrier's deadline cutoff actually TRIPPED it,
+    through the real `_proceed_branch` production path (not a synthetic
+    harness that bypasses it)."""
+
+    def __init__(self, *, release: threading.Event, self_release_seconds: float) -> None:
+        self._release = release
+        self._self_release_seconds = self_release_seconds
+        self.captured_token: Any = "unset"
+
+    def dispatch(
+        self,
+        binding: StepEffectiveBinding,
+        step: WorkflowStep,
+        *,
+        step_context: Any = None,
+    ) -> dict[str, Any]:
+        from harness_cp.sub_agent_dispatch_cancellation import DISPATCH_CANCEL_TOKEN_VAR
+
+        self.captured_token = DISPATCH_CANCEL_TOKEN_VAR.get()
+        self._release.wait(timeout=self._self_release_seconds)
+        return {"branch": int(step.step_payload["index"])}
+
+
+def test_proceed_barrier_deadline_trips_ambient_cancel_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """B-48 (codex round-4 [P2] "trip the fence on proceed-barrier
+    cancellation"): PROCEED has no sibling-cancellation mode, so any
+    CancelledError reaching `_proceed_branch`'s own frame is the §25.11
+    barrier deadline — the fix binds a per-branch token there and trips it
+    in the CancelledError handler, mirroring `dispatch_branch_step_shielded`'s
+    strict-tier behavior. Mutation probe: removing the `_cancel_token.trip()`
+    call (or the token binding itself) leaves the captured token permanently
+    untripped — nothing else in this synthetic harness (no facade) would
+    ever trip it."""
+    from harness_cp import workflow_driver as wd
+
+    monkeypatch.setattr(wd, "_DEFAULT_FANOUT_BARRIER_DEADLINE_SECONDS", 0.2)
+    release = threading.Event()
+    dispatcher = _TokenCapturingBlockingDispatcher(release=release, self_release_seconds=2.0)
+    ledger = _RecordingLedger()
+    try:
+        result = _run(
+            steps=[_branch_step(i) for i in range(1)],
+            dispatcher=cast(StepDispatcher, dispatcher),
+            ledger=ledger,
+            persona_tier=PersonaTier.SOLO_DEVELOPER,
+        )
+    finally:
+        release.set()
+    assert result.status is RunStatus.PARTIAL
+    assert dispatcher.captured_token is not None
+    assert dispatcher.captured_token != "unset"
+    assert dispatcher.captured_token.tripped
+
+
 # ---------------------------------------------------------------------------
 # Live e2e — real IS writer; §6.3 hash chain re-verifies post-drain
 # ---------------------------------------------------------------------------
@@ -810,3 +871,75 @@ def test_parallelization_without_synthesis_uses_deterministic_fold() -> None:
     # No post-join-synthesis entry; 3 branches × {step, terminal} = 6.
     assert not any(str(wk.step_id).startswith("post-join-synthesis") for _p, wk in ledger.appends)
     assert len(ledger.appends) == 6
+
+
+# ---------------------------------------------------------------------------
+# B-48 round-5b codex [P1] #2 — isolate `_BRANCH_INFLIGHT_DISPATCHES` before
+# offload (Runtime spec v1.102 §14.8.10.4 item 5, the `INTER_STEP_CHANNEL_VAR`
+# per-child-rebind precedent extended to the deadline-watchdog registry chain).
+# ---------------------------------------------------------------------------
+
+
+def test_reset_offloaded_job_branch_inflight_registry_isolates_copied_context() -> None:
+    """A `contextvars.copy_context()` snapshot (exactly what the B-48 offload
+    venue takes before running an offloaded dispatch on a worker thread)
+    shares the SAME `set` object instances the parent's `cascade_cancel_
+    barrier` registered in `_BRANCH_INFLIGHT_DISPATCHES` — the copy is
+    shallow, so mutating a set found through the copied context mutates the
+    PARENT's real set too. `reset_offloaded_job_branch_inflight_registry`
+    must run INSIDE the copied context (mirroring the real
+    `hitl_gate_composer._job` closure) so a nested barrier starting inside
+    that offloaded job builds an entirely fresh chain instead of extending
+    the parent's.
+
+    This inlines `cascade_cancel_barrier`'s + `dispatch_branch_step_shielded`'s
+    own two-line registration pattern (`parent_chain = ...get() or ()`,
+    `...set((*parent_chain, new_set))`, then `for registry in chain:
+    registry.add(future)`) rather than driving the full async barrier, to
+    isolate the contextvar-identity mechanism under test from asyncio/
+    threading timing.
+
+    Mutation probe: removing the `reset_offloaded_job_branch_inflight_
+    registry()` call from `hitl_gate_composer._job`'s `_run_with_child_
+    channel` (or emptying this function's own body) makes `parent_set`
+    non-empty after this test's simulated nested registration — the exact
+    cross-thread-`.cancel()`-hazard shape codex round-5b flagged.
+    """
+    import contextvars
+
+    from harness_cp.workflow_driver import (
+        _BRANCH_INFLIGHT_DISPATCHES,
+        reset_offloaded_job_branch_inflight_registry,
+    )
+
+    parent_set: set[asyncio.Future[Any]] = set()
+    parent_token = _BRANCH_INFLIGHT_DISPATCHES.set((parent_set,))
+    try:
+        # The B-48 offload venue's carry point (`hitl_gate_composer._dispatch_
+        # inner_offloaded`): a snapshot taken while the parent chain is live.
+        carried = contextvars.copy_context()
+
+        def _nested_job() -> set[asyncio.Future[Any]]:
+            reset_offloaded_job_branch_inflight_registry()
+            # Mirror `cascade_cancel_barrier`'s own registration exactly.
+            child_set: set[asyncio.Future[Any]] = set()
+            nested_parent_chain = _BRANCH_INFLIGHT_DISPATCHES.get() or ()
+            _BRANCH_INFLIGHT_DISPATCHES.set((*nested_parent_chain, child_set))
+            # Mirror `dispatch_branch_step_shielded`'s own registration.
+            sentinel_future: asyncio.Future[Any] = asyncio.Future(loop=asyncio.new_event_loop())
+            for registry in _BRANCH_INFLIGHT_DISPATCHES.get() or ():
+                registry.add(sentinel_future)
+            return child_set
+
+        child_set = carried.run(_nested_job)
+
+        # The nested job's own future landed in ITS OWN fresh set...
+        assert len(child_set) == 1
+        # ...and NEVER touched the parent's real set object — the parent's
+        # deadline watchdog (running on the parent's own loop/thread) will
+        # never see it, so it can never cross-thread `.cancel()` it.
+        assert parent_set == set()
+        # The parent's OWN binding (outside the copied context) is untouched.
+        assert _BRANCH_INFLIGHT_DISPATCHES.get() == (parent_set,)
+    finally:
+        _BRANCH_INFLIGHT_DISPATCHES.reset(parent_token)

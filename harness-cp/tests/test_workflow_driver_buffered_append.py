@@ -33,12 +33,11 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import threading
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
 from harness_as.sandbox_tier import SandboxTier
-from harness_cp import workflow_driver
 from harness_cp.cp_shared_types import AgentRole
 from harness_cp.gate_level_rule import GateLevel
 from harness_cp.workflow_driver import (
@@ -426,58 +425,44 @@ async def test_bounded_barrier_preserves_branch_local_timeout_error() -> None:
 
 
 # ---------------------------------------------------------------------------
-# CONCURRENT-sibling-drain timestamp gap (xfail — the runtime concurrency fork)
+# CONCURRENT-sibling-drain timestamp gap — CLOSED (C-IS-07 §7.6, v1.11)
 # ---------------------------------------------------------------------------
 #
-# `drain_branch_buffers` re-stamps each buffered entry to a `drain_timestamp`
-# captured ONCE at drain entry — OUTSIDE the IS writer's `_WRITE_LOCK`. For a
-# SINGLE drain (the only path reachable today) physical-append-order ==
-# timestamp-order. But two CONCURRENT sibling drains (two `SUB_AGENT_DISPATCH`
-# children on separate fan-out threads, each draining into the ONE shared real
-# writer) each capture their OWN `drain_timestamp` outside the lock; the lock can
-# then serialize their physical appends in capture-OPPOSITE order, so a drain that
-# captured the EARLIER timestamp physically appends AFTER one that captured a
-# later timestamp → the zero-tolerance writer rejects it (`NonMonotonicTimestamp
-# Error`). Found independently by BOTH decorrelated reviewers (codex P1 +
-# adversarial F1-01). Unreachable today (the runtime sync/async-bridge deadlock
-# blocks concurrent sub-agent recursion end-to-end) and EQUALLY broken under the
-# prior fan-out-start-timestamp policy (NOT a U-CP-89 regression). The clean fix
-# is timestamp-authority INSIDE `_WRITE_LOCK` (an IS write-path change, contract-
-# touching) belonging to the same arc as the deadlock; see
+# `drain_branch_buffers` used to re-stamp each buffered entry to a
+# `drain_timestamp` captured ONCE at drain entry — OUTSIDE the IS writer's
+# `_WRITE_LOCK`. For a SINGLE drain (the only path reachable pre-B-48)
+# physical-append-order == timestamp-order. But two CONCURRENT sibling drains
+# (two `SUB_AGENT_DISPATCH` children on separate fan-out threads, each
+# draining into the ONE shared real writer) each captured their OWN
+# `drain_timestamp` outside the lock; the lock could then serialize their
+# physical appends in capture-OPPOSITE order, so a drain that captured the
+# EARLIER timestamp physically appended AFTER one that captured a later
+# timestamp → the zero-tolerance writer rejected it
+# (`NonMonotonicTimestampError`). Found independently by BOTH decorrelated
+# reviewers (codex P1 + adversarial F1-01).
+#
+# CLOSED by the B-48 apply arc: `drain_branch_buffers` now stamps the
+# `WRITER_OWNED_TIMESTAMP` sentinel instead of a locally-captured `now()`;
+# `append_ledger_entry` samples the persisted timestamp itself INSIDE
+# `_WRITE_LOCK`, at physical-append time — sampling order equals append order
+# by construction, so capture-order no longer matters. See
+# `harness_cp.workflow_driver.drain_branch_buffers` +
 # `.harness/runtime_defect_sub_agent_inference_child_loop_bridge_deadlock.md` §8.
-
-
-class _SequencedClock:
-    """Substitute for `workflow_driver.datetime`: `.now(tz)` returns strictly-
-    increasing real UTC datetimes, one per call (call N → base + N seconds), so
-    the FIRST drain to capture its `drain_timestamp` gets a strictly-EARLIER value
-    than the SECOND — removing the wall-clock race so the inversion is
-    deterministic, not timing-dependent."""
-
-    _base = datetime(2026, 1, 1, tzinfo=UTC)
-
-    def __init__(self) -> None:
-        self._n = 0
-        self._lock = threading.Lock()
-
-    def now(self, tz: object = None) -> datetime:
-        with self._lock:
-            ts = self._base + timedelta(seconds=self._n)
-            self._n += 1
-            return ts
 
 
 class _InterleavingRealWriter:
     """Wraps the REAL `append_ledger_entry` (real dedup + zero-tolerance
     monotonicity check + hash-chain + JSONL persistence) and deterministically
-    interleaves two concurrent sibling drains: the FIRST drain to reach `append`
-    is PARKED until the SECOND has physically appended, so the first-capturing
-    drain (earlier `drain_timestamp`) physically appends SECOND. This is the
-    capture-opposite-order serialization the real `_WRITE_LOCK` permits because
-    `drain_branch_buffers` captures `drain_timestamp` OUTSIDE that lock. When the
-    IS-write-path fix lands (timestamp-authority inside `_WRITE_LOCK`), the wrapped
-    real `append_ledger_entry` assigns the timestamp in physical-append order →
-    no inversion → this test flips to XPASS (the strict-xfail signal)."""
+    interleaves two concurrent sibling drains: the FIRST drain to reach
+    `append` is PARKED until the SECOND has physically appended, so the
+    FIRST-ARRIVING drain physically appends SECOND — the exact
+    capture-vs-append-order inversion the pre-v1.11 policy could not survive.
+    Under the writer-owned-inside-lock fix, `append_ledger_entry` samples each
+    entry's persisted timestamp AT ITS OWN physical append, so arrival order
+    is irrelevant to timestamp order — this witnesses that directly (mutation
+    probe: reverting `drain_branch_buffers` to a locally-captured
+    `drain_timestamp` reintroduces the capture-opposite-order inversion and
+    this test's `errors == []` / non-decreasing assertions fail again)."""
 
     def __init__(self, *, handle: JsonlLedgerHandle) -> None:
         self._handle = handle
@@ -491,13 +476,13 @@ class _InterleavingRealWriter:
             self._arrivals += 1
             mine = self._arrivals
         if mine == 1:
-            # Drain A: announce arrival (it has already captured its EARLIER
-            # drain_timestamp), park until B physically appends, THEN append 2nd.
+            # Drain A: the FIRST arrival — park until B physically appends,
+            # THEN append second (the capture-vs-append-order inversion).
             self.first_parked.set()
             assert self.second_appended.wait(timeout=5.0), "sibling B never appended"
             append_ledger_entry(self._handle, payload, write_key)
         else:
-            # Drain B: append 1st (LATER timestamp), then release A.
+            # Drain B: append 1st, then release A.
             append_ledger_entry(self._handle, payload, write_key)
             self.second_appended.set()
 
@@ -531,30 +516,16 @@ def _one_entry_buffer(
     return buffer
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "concurrent-sibling-drain timestamp inversion: drain_branch_buffers "
-        "captures drain_timestamp OUTSIDE the IS writer's _WRITE_LOCK, so two "
-        "concurrent sibling drains can serialize their physical appends in "
-        "capture-opposite order → NonMonotonicTimestampError. Found by BOTH "
-        "decorrelated reviewers (codex P1 + adversarial F1-01). Unreachable today "
-        "behind the runtime sync/async-bridge deadlock; clean fix is timestamp-"
-        "authority inside _WRITE_LOCK (IS write-path change, same arc as the "
-        "deadlock fork). Flips to XPASS when that fix lands — see "
-        ".harness/runtime_defect_sub_agent_inference_child_loop_bridge_deadlock.md §8."
-    ),
-)
-def test_concurrent_sibling_drains_invert_timestamp(
-    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Two concurrent sibling drains into the ONE shared REAL writer must keep the
-    ledger non-decreasing (the CORRECT behavior this asserts). They currently do
-    NOT: the first-capturing drain (earlier drain_timestamp) is forced to append
-    SECOND, tripping the zero-tolerance monotonicity check — the gap both
-    reviewers flagged. Deterministic via `_SequencedClock` (ordered captures) +
-    `_InterleavingRealWriter` (capture-opposite physical-append order)."""
-    monkeypatch.setattr(workflow_driver, "datetime", _SequencedClock())
+def test_concurrent_sibling_drains_invert_timestamp(tmp_path: Any) -> None:
+    """Two concurrent sibling drains into the ONE shared REAL writer keep the
+    ledger non-decreasing — CLOSED by C-IS-07 §7.6 (v1.11): the FIRST-ARRIVING
+    drain (`_InterleavingRealWriter` parks it) physically appends SECOND, yet
+    no `NonMonotonicTimestampError` fires and both entries persist, because
+    `append_ledger_entry` now samples each entry's timestamp INSIDE
+    `_WRITE_LOCK` at its own physical-append moment — arrival/capture order no
+    longer determines timestamp order. Previously strict-xfail (both
+    decorrelated reviewers, codex P1 + adversarial F1-01); promoted to a
+    passing witness when the fix landed (filing §4 item 7)."""
     handle = JsonlLedgerHandle(
         canonical_path=tmp_path / "ledger.jsonl", exists=False, entry_count=0
     )
@@ -575,10 +546,15 @@ def test_concurrent_sibling_drains_invert_timestamp(
     thread_b = threading.Thread(target=_drain, args=(buffer_b,))
     thread_a.start()
     assert writer.first_parked.wait(timeout=5.0), "drain A never reached its append"
-    thread_b.start()  # B captures its LATER drain_timestamp now (after A parked)
+    thread_b.start()  # B physically appends FIRST (releases A, parked since arrival).
     thread_b.join(timeout=5.0)
     thread_a.join(timeout=5.0)
 
-    # CORRECT behavior (the xfail target): no monotonicity error, both persisted.
     assert errors == []
-    assert len(read_ledger(handle)) == 2
+    persisted = read_ledger(handle)
+    assert len(persisted) == 2
+    # Monotonic BY CONSTRUCTION in physical-append order — B's entry (appended
+    # first) sorts no later than A's (appended second), regardless of which
+    # drain reached `.append()` first.
+    timestamps = [e.timestamp for e in persisted]
+    assert timestamps == sorted(timestamps)

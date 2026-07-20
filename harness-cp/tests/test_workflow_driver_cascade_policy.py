@@ -536,6 +536,50 @@ async def test_branch_timed_out_when_deadline_cuts_off_in_flight() -> None:
     assert statuses == [None, "timed_out"]
 
 
+async def test_deadline_cutoff_trips_ambient_cancel_token_without_facade_timeout() -> None:
+    """B-48 (codex #5; §14.8.10.3): the barrier's deadline watchdog trips the
+    AMBIENT `DISPATCH_CANCEL_TOKEN_VAR` token the instant it cuts an in-flight
+    dispatch off directly — `dispatch_branch_step_shielded` does this itself
+    (not gated on any facade-level `result_timeout_seconds`, which is a
+    separate, operator-configurable bound that can outlive this barrier's
+    deadline). This synthetic harness has NO facade at all — a fix that only
+    called `inflight.cancel()` without also tripping the ambient token would
+    leave `token.tripped` permanently False here, proving the trip is the
+    barrier's OWN doing, not a side effect of something facade-side."""
+    from harness_cp.sub_agent_dispatch_cancellation import (
+        DISPATCH_CANCEL_TOKEN_VAR,
+        DispatchCancelToken,
+    )
+
+    parent = _linear_ctx()
+    trace: list[tuple[str, int, int]] = []
+    dispositions: dict[int, str] = {}
+    buf = BufferingLedgerWriter(actor=_ACTOR, branch_index=0)
+    token = DispatchCancelToken()
+    reset = DISPATCH_CANCEL_TOKEN_VAR.set(token)
+    try:
+        with pytest.raises(BranchBarrierDeadlineExceededError):
+            await cascade_cancel_barrier(
+                [
+                    _cascade_branch(
+                        parent=parent,
+                        branch_index=0,
+                        run_idempotency_key="rik",
+                        buffer=buf,
+                        dispositions=dispositions,
+                        trace=trace,
+                        steps=[_Step(gate=_FAST, dispatch=_STUCK)],
+                    )
+                ],
+                deadline_seconds=_SLOW,
+            )
+    finally:
+        DISPATCH_CANCEL_TOKEN_VAR.reset(reset)
+
+    assert dispositions[0] == "timed_out"
+    assert token.tripped
+
+
 async def test_cascade_deadline_multi_branch_all_in_flight_timed_out() -> None:
     """Multi-branch deadline (U-CP-88 is ALWAYS multi-branch — the single-branch
     deadline case is degenerate): 3 branches ALL with an in-flight dispatch >> the

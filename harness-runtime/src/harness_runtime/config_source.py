@@ -162,6 +162,11 @@ class _RuntimeEnvSettings(BaseSettings):
     # `prompt_cache_prewarm_model` (str) is file/CLI-only — not here.
     prompt_cache_boot_prewarm: bool | None = None
     prompt_cache_keepalive: bool | None = None
+    # B-48 (U-RT-140, C-RT-03 v1.102) — env-keyed: the shared frame budget gates
+    # a CORRECTNESS property (fail-fast admission vs the recursive-offload
+    # deadlock). Mirrored in loader.py _ENV_SCALAR_FIELDS
+    # ([[runtimeconfig-scalar-needs-both-env-loaders]]).
+    sub_agent_dispatch_max_workers: int | None = None
 
 
 class RuntimeConfigSource:

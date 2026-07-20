@@ -1980,6 +1980,28 @@ class RuntimeConfig(BaseModel):
     Lane 6 (2026-05-20) addition; spec §3 (C-RT-03) "Deferred to
     implementation discretion" clause covers this configuration."""
 
+    sub_agent_dispatch_max_workers: int = Field(default=256, ge=1)
+    """The ONE shared sub-agent dispatch frame budget, in FRAME units
+    (C-RT-03 v1.102 surface A; Runtime spec §14.8.10.1; U-RT-140).
+
+    Covers BOTH executor layers under the occupied+N+S accounting: every
+    active branch reserves one upstream CP frame; only sync/offloaded
+    `SUB_AGENT_DISPATCH` branches reserve the additional inner-dispatch
+    frame (async INFERENCE/TOOL inners are uncharged). `occupied` counts
+    ancestors blocked on descendants AND concurrent workflows holding
+    frames — admission is against AVAILABLE capacity, never the local
+    fan-out alone. At the cap, admission fail-fasts with the typed
+    `harness_core.SubAgentDispatchCapacityError` (RT-FAIL-SUB-AGENT-
+    DISPATCH-CAPACITY) — NEVER queues (the queued-descendant recursive-
+    offload deadlock per the B-48 filing §2).
+
+    Default 256 per the ratified filing §3 sizing: a legitimate all-sync
+    3-wide × depth-4 hierarchy holds 3+9+27+81 = 120 active branches × 2
+    frames = 240 ≤ 256, with headroom. Values < 1 are a typed
+    config-validation rejection. Env-keyed
+    `HARNESS_SUB_AGENT_DISPATCH_MAX_WORKERS` via BOTH loaders
+    ([[runtimeconfig-scalar-needs-both-env-loaders]])."""
+
     step_dispatch_timeout_seconds: float = 30.0
     """Per-step worker-thread blocking bound (C-RT-03 v1.31; RT-FAIL-STEP-
     DISPATCH-TIMEOUT).
@@ -2655,6 +2677,31 @@ class HarnessContext(BaseModel):
 
     `None` for non-inference workflows (no bare dispatcher is built).
     Typed `Any` to avoid the `lifecycle.llm_dispatch → types` import cycle.
+    """
+
+    sub_agent_dispatch_executor: Any = None
+    """B-48 (U-RT-141) — the §14.8.10.1 grow-on-demand sub-agent dispatch
+    executor (`SubAgentDispatchExecutor`), sized by
+    `config.sub_agent_dispatch_max_workers` at stage 5 LOOP_INIT.
+
+    Offloaded sync `SUB_AGENT_DISPATCH` inners are SUBMITTED to it
+    (§14.8.10.2 mode selection); its shared frame budget is the ONE
+    capacity authority. `None` for embedders that never dispatch
+    sub-agents. Typed `Any` per the `bare_llm_dispatcher` cycle-avoidance
+    precedent (C-RT-04 field-addition minor-bump path).
+    """
+
+    capacity_authority: Any = None
+    """B-48 (U-RT-141) — `RuntimeCapacityAuthorityAdapter` implementing the
+    CP-declared U-CP-101 `CapacityAuthority` Protocol over the real
+    executor budget (Runtime spec v1.102 §14.8.10.4 C-RT-04 binding).
+
+    The CP fan-out reads THIS binding through its structural
+    `DriverContext` satisfaction, so a configured
+    `sub_agent_dispatch_max_workers` reaches CP admission instead of the
+    CP default-256 fallback. `None` → CP's own default bounded authority
+    gates identically (never ungated). Typed `Any` per the
+    `bare_llm_dispatcher` cycle-avoidance precedent.
     """
 
     sub_agent_dispatcher: Any

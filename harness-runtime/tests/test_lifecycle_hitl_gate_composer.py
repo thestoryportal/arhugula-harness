@@ -3416,3 +3416,141 @@ def test_signing_backend_is_passed_into_audit_composition(
         "USE-half: the composer's signing_backend must be passed into "
         "cp_audit_to_od_audit at 8c-HITL (backend.sign never invoked)"
     )
+
+
+@pytest.mark.asyncio
+async def test_hitl_audit_persist_counts_as_inflight_effect_at_trip_time(
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Codex round-7 [P1] "fence HITL webhook and audit effect entry points" —
+    `_compose_and_persist_audit_off_loop` must count as an in-flight effect
+    under the ambient `DISPATCH_CANCEL_TOKEN_VAR`, the same discipline the
+    round-6 durable-write fix applied at `workflow_driver.py`. A fence tripped
+    from INSIDE the real `_compose_and_persist_audit` call (mirroring that
+    fix's `_TripDuringLedgerAppend` witness) must be reported ambiguous by
+    `wait_ack()`, never falsely `ACKED_CLEAN` — a job-wide fence trip racing
+    this write must not conclude the job drained clean while an audit entry
+    is still landing.
+
+    Mutation probe: removing the `effect_entry()` guard around
+    `run_audit_off_loop(...)` in `_compose_and_persist_audit_off_loop` makes
+    the final assertion fail — `wait_ack()` reports `ACKED_CLEAN` instead of
+    `ACKED_EFFECT_AMBIGUOUS`, because the write is no longer counted as an
+    in-flight effect at the moment it trips the token.
+    """
+    from harness_cp.sub_agent_dispatch_cancellation import (
+        DISPATCH_CANCEL_TOKEN_VAR,
+        DispatchCancelToken,
+        FenceAckOutcome,
+    )
+
+    provider, _ = tracer_provider
+    composer = _make_composer(
+        inner=_MockInnerDispatcher(),
+        surface=_MockAskUserQuestionSurface([]),
+        tracer_provider=provider,
+    )
+    token = DispatchCancelToken()
+    real_compose = type(composer)._compose_and_persist_audit
+
+    def _trip_during_compose(self: Any, *args: Any, **kwargs: Any) -> Any:
+        token.trip()
+        return real_compose(self, *args, **kwargs)
+
+    monkeypatch.setattr(type(composer), "_compose_and_persist_audit", _trip_during_compose)
+
+    reset_token = DISPATCH_CANCEL_TOKEN_VAR.set(token)
+    try:
+        cp_entry, write_result = await composer._compose_and_persist_audit_off_loop(
+            parent_action_id=cast(Any, "workflow:test:step:0"),
+            placement=HITLPlacement(position=HITLPlacementKind.PRE_ACTION),
+            cell=cast(Any, None),
+            gate_result=None,
+            step_context=_make_step_context(),
+            raise_on_failure=True,
+            auto_approved=True,
+        )
+    finally:
+        DISPATCH_CANCEL_TOKEN_VAR.reset(reset_token)
+
+    # The write completes (effect_entry() cannot abort an operation already
+    # inside the guard); what must differ from the unfenced shape is the
+    # fence-ack outcome below, not whether the write happened.
+    assert write_result is not None
+    assert cp_entry.response == HITLResponse.APPROVE.value
+    token.ack()
+    outcome = token.wait_ack(grace_seconds=1.0)
+    assert outcome is FenceAckOutcome.ACKED_EFFECT_AMBIGUOUS, (
+        f"expected the audit write racing the trip to be reported ambiguous, "
+        f"got {outcome} — the write was not counted as an in-flight effect "
+        f"at trip time"
+    )
+
+
+@pytest.mark.asyncio
+async def test_hitl_webhook_delivery_counts_as_inflight_effect_at_trip_time(
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+) -> None:
+    """Codex round-7 [P1] sibling witness — `_escalate_to_secondary_channel`'s
+    webhook delivery (§14.8.8.1 step 3+4) must ALSO count as an in-flight
+    effect under the ambient fence, same rationale + same mutation probe as
+    the audit-persist witness above.
+
+    Mutation probe: removing the `effect_entry()` guard around
+    `composer.deliver_webhook_for_brief(...)` in `_escalate_to_secondary_
+    channel` makes the final assertion fail — `wait_ack()` reports
+    `ACKED_CLEAN` instead of `ACKED_EFFECT_AMBIGUOUS`.
+    """
+    from harness_as import BlastRadiusTier
+    from harness_cp.sub_agent_dispatch_cancellation import (
+        DISPATCH_CANCEL_TOKEN_VAR,
+        DispatchCancelToken,
+        FenceAckOutcome,
+    )
+    from harness_runtime.lifecycle.hitl_auto_approve_policy import HITLAutoApprovePolicy
+    from harness_runtime.lifecycle.hitl_gate_composer import HITLPauseRequestedSignal
+    from harness_runtime.lifecycle.webhook_delivery_composer import WebhookDeliveryResult
+
+    provider, _ = tracer_provider
+
+    token = DispatchCancelToken()
+
+    class _TripDuringWebhookDelivery:
+        async def deliver_webhook_for_brief(self, brief: Any, idempotency_key: str) -> Any:
+            token.trip()
+            return WebhookDeliveryResult(
+                delivered=True,
+                status_code=200,
+                response_idempotency_key=idempotency_key,
+                delivery_attempts=1,
+                final_attempt_at=0,
+            )
+
+    composer = _timeout_composer(
+        tracer_provider=provider,
+        blast=BlastRadiusTier.LOCAL_MUTATION,
+        policy=HITLAutoApprovePolicy(),
+        webhook=_TripDuringWebhookDelivery(),
+    )
+
+    reset_token = DISPATCH_CANCEL_TOKEN_VAR.set(token)
+    try:
+        with pytest.raises(HITLPauseRequestedSignal):
+            await composer._escalate_to_secondary_channel(
+                parent_action_id=cast(Any, "workflow:test:step:0"),
+                step=_pre_action_step(),
+                placement=HITLPlacement(position=HITLPlacementKind.PRE_ACTION),
+                palette=frozenset({HITLResponse.APPROVE}),
+                escalation_reason="test-escalation",
+            )
+    finally:
+        DISPATCH_CANCEL_TOKEN_VAR.reset(reset_token)
+
+    token.ack()
+    outcome = token.wait_ack(grace_seconds=1.0)
+    assert outcome is FenceAckOutcome.ACKED_EFFECT_AMBIGUOUS, (
+        f"expected the webhook delivery racing the trip to be reported "
+        f"ambiguous, got {outcome} — the delivery was not counted as an "
+        f"in-flight effect at trip time"
+    )

@@ -468,15 +468,19 @@ async def test_scrambled_completion_persists_branch_index_order(tmp_path: Path) 
 
 def test_branch_index_drain_sanitizes_buffer_time_timestamps(tmp_path: Path) -> None:
     """Drain-time stamping is the IS-monotonicity realization (monotonic BY
-    CONSTRUCTION), superseding the earlier caller-supplied shared-fan-out-timestamp
-    policy. Even when a branch buffers an EXECUTION-time wall-clock that would
-    invert branch-index order (branch 0 — drained FIRST — stamped LATER than branch
-    1), `drain_branch_buffers` re-stamps every entry to ONE drain-moment value at
-    its actual append point, so the REAL zero-tolerance writer APPENDs all of them
-    (no `NonMonotonicTimestampError`) and the persisted timestamps are
-    non-decreasing. (Previously: the caller owned the timestamp and the writer
-    rejected the inversion; the safety-net for the DIRECT append paths is preserved
-    by `test_direct_decreasing_timestamp_still_rejected_by_real_writer`.)"""
+    CONSTRUCTION per C-IS-07 §7.6, v1.11), superseding the earlier caller-supplied
+    shared-fan-out-timestamp policy. Even when a branch buffers an EXECUTION-time
+    wall-clock that would invert branch-index order (branch 0 — drained FIRST —
+    stamped LATER than branch 1), `drain_branch_buffers` discards the buffered
+    placeholder and `append_ledger_entry` samples each entry's PERSISTED
+    timestamp itself, INSIDE its write lock, at that entry's own physical-append
+    point — so the REAL zero-tolerance writer APPENDs all of them (no
+    `NonMonotonicTimestampError`) and the persisted timestamps are non-decreasing.
+    (v1.11 supersedes the pre-B-48 "one drain = one shared timestamp" re-stamp:
+    entries of one drain MAY now carry distinct, non-decreasing instants, each
+    sampled at its own append — this test no longer asserts a single shared
+    value.) The safety-net for the DIRECT append paths is preserved by
+    `test_direct_decreasing_timestamp_still_rejected_by_real_writer`."""
     real = _RealLedgerWriter(handle=_handle(tmp_path), actor=_ACTOR)
     late = datetime(2026, 6, 13, 12, 0, 5, tzinfo=UTC)
     early = datetime(2026, 6, 13, 12, 0, 0, tzinfo=UTC)
@@ -501,10 +505,10 @@ def test_branch_index_drain_sanitizes_buffer_time_timestamps(tmp_path: Path) -> 
     drain_branch_buffers(real, [b0, b1])
     assert all(r is WriteResult.APPENDED for r in real.results)
     persisted = [e.timestamp for e in read_ledger(real._handle)]
-    # The drain collapsed the inverted buffer-time stamps to one drain-moment
-    # value — neither the buffered `late`/`early` survived.
+    # Writer-owned, sampled inside the lock at each entry's own physical
+    # append — non-decreasing by construction; neither buffered `late`/`early`
+    # value survived (both were placeholders the drain always discards).
     assert persisted == sorted(persisted)
-    assert len(set(persisted)) == 1
     assert late not in persisted and early not in persisted
 
 

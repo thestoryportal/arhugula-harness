@@ -174,6 +174,8 @@ def test_harness_context_declares_all_c_rt_04_fields() -> None:
         "hitl_tool_loop",  # R-CXA-2 — model-driven HITL tool-loop producer
         "engine_recovery_loop",  # R-CXA-2 — engine pause/resume recovery-loop producer
         "per_server_trust_evaluator",  # U-RT-72 — C-RT-04 §4 v1.16 (U-RT-75 populates)
+        "sub_agent_dispatch_executor",  # B-48 U-RT-141 — §14.8.10.1 grow-on-demand executor
+        "capacity_authority",  # B-48 U-RT-141 — U-CP-101 adapter binding (§14.8.10.4)
         "mcp_namespace_emitter",  # U-RT-72 — C-RT-04 §4 v1.16 (U-RT-75 populates)
         "memory_tool_registry",  # U-RT-79 — C-RT-04 §4 v1.17 Memory tool storage-backend registry (U-RT-80 populates)
         # U-RT-87 (v2.20) — pause/resume protocol binding + caller-signal flag

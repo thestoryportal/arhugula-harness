@@ -1039,3 +1039,69 @@ def test_orchestrator_workers_synthesis_with_zero_workers_fails_closed() -> None
     # no disclosing ledger entry.
     assert synth.received_siblings is None
     assert not any(str(wk.step_id).startswith("post-join-synthesis") for _p, wk in ledger.appends)
+
+
+# ---------------------------------------------------------------------------
+# B-48 (codex round-4 [P2]): trip the ambient fence on PROCEED-tier barrier
+# cancellation — the ORCHESTRATOR_WORKERS twin of the PARALLELIZATION witness
+# at test_workflow_driver_parallelization.py::test_proceed_barrier_deadline_trips_ambient_cancel_token.
+# ---------------------------------------------------------------------------
+
+
+class _TokenCapturingWorkerDispatcher:
+    """Wedges any WORKER step (identified by an `"index"` payload key —
+    the orchestrator's own step carries `"role"` instead) past the
+    (monkeypatched) barrier deadline, and captures the ambient
+    `DISPATCH_CANCEL_TOKEN_VAR` at dispatch-entry — mirroring the
+    hierarchical-delegation `captured_cancel_tokens` pattern — so a test can
+    assert the PROCEED-tier barrier's deadline cutoff actually TRIPPED it,
+    through the real `_proceed_worker` production path."""
+
+    def __init__(self, *, release: threading.Event, self_release_seconds: float) -> None:
+        self._release = release
+        self._self_release_seconds = self_release_seconds
+        self.captured_token: Any = "unset"
+
+    def dispatch(
+        self,
+        binding: StepEffectiveBinding,
+        step: WorkflowStep,
+        *,
+        step_context: Any = None,
+    ) -> dict[str, Any]:
+        if "index" not in step.step_payload:
+            return {"role": "orchestrator"}
+        from harness_cp.sub_agent_dispatch_cancellation import DISPATCH_CANCEL_TOKEN_VAR
+
+        self.captured_token = DISPATCH_CANCEL_TOKEN_VAR.get()
+        self._release.wait(timeout=self._self_release_seconds)
+        return {"index": int(step.step_payload["index"])}
+
+
+def test_ow_proceed_barrier_deadline_trips_ambient_cancel_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """B-48 (codex round-4 [P2] "trip the fence on proceed-barrier
+    cancellation"): the ORCHESTRATOR_WORKERS twin of the PARALLELIZATION
+    fix — `_proceed_worker`'s CancelledError handler now binds + trips a
+    per-worker cancel token, mirroring `_cancel_worker`'s strict-tier
+    behavior. Mutation probe: removing the trip call leaves the captured
+    token permanently untripped."""
+    from harness_cp import workflow_driver as wd
+
+    monkeypatch.setattr(wd, "_DEFAULT_FANOUT_BARRIER_DEADLINE_SECONDS", 0.2)
+    release = threading.Event()
+    dispatcher = _TokenCapturingWorkerDispatcher(release=release, self_release_seconds=2.0)
+    ledger = _RecordingLedger()
+    try:
+        result = _run(
+            steps=_steps(1),
+            dispatcher=cast(StepDispatcher, dispatcher),
+            ledger=ledger,
+        )
+    finally:
+        release.set()
+    assert result.status is RunStatus.PARTIAL
+    assert dispatcher.captured_token is not None
+    assert dispatcher.captured_token != "unset"
+    assert dispatcher.captured_token.tripped

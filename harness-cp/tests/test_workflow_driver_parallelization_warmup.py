@@ -136,6 +136,7 @@ from harness_cp.pause_resume_protocol_types import (
     WorkflowPauseReason,
 )
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
+from harness_cp.sub_agent_dispatch_capacity_authority import DefaultCapacityAuthority
 from harness_cp.topology_pattern import TopologyPattern
 from harness_cp.workflow_driver import (
     DriverContext,
@@ -259,6 +260,7 @@ class _Ctx:
         pause_resume_protocol: Any = None,
         engine_output_store: Any = None,
         resume_context_holder: Any = None,
+        capacity_authority: Any = None,
     ) -> None:
         from opentelemetry.trace import NoOpTracerProvider
 
@@ -275,6 +277,10 @@ class _Ctx:
         # B-18-FENCE-LEDGER-FIDELITY — the driver reads this via
         # `getattr(ctx, "resume_context_holder", None)`; None ≡ absent.
         self.resume_context_holder = resume_context_holder
+        # B-48/U-CP-101 — injectable so a test can pin an explicit frame
+        # budget for precise admission assertions. `None` → the strategy
+        # falls back to the module-level default authority.
+        self.capacity_authority = capacity_authority
 
 
 class _InferenceRegistry:
@@ -316,6 +322,7 @@ def _run(
     workflow_id: str = "wf-warmup",
     resume_context_holder: Any = None,
     emitter: _Emitter | None = None,
+    capacity_authority: Any = None,
 ) -> Any:
     if ledger is None:
         ledger = _RecordingLedger()
@@ -329,6 +336,7 @@ def _run(
             pause_resume_protocol=_protocol() if with_pause_protocol else None,
             engine_output_store=store,
             resume_context_holder=resume_context_holder,
+            capacity_authority=capacity_authority,
         ),
     )
     return execute_workflow(
@@ -423,6 +431,26 @@ class _FailBranch0Dispatcher:
 
     def cohort_key(self, binding: StepEffectiveBinding, step: WorkflowStep) -> str | None:
         return "test-cohort-uniform"
+
+
+class _CohortKeyRaisingDispatcher:
+    """CohortKeyCapable dispatcher whose `cohort_key()` raises unconditionally
+    — codex round-9 [P2] "whole-fan-out admission leaks on pre-dispatch setup
+    failure": `_warmup_phase_split()`'s per-branch `dispatcher.cohort_key(...)`
+    oracle call is one of the genuinely-reachable raise sites inside the
+    pre-dispatch setup window B-48's admission is now deferred past."""
+
+    def dispatch(
+        self,
+        binding: StepEffectiveBinding,
+        step: WorkflowStep,
+        *,
+        step_context: Any = None,
+    ) -> dict[str, Any]:
+        return {"branch": step.step_payload["index"]}
+
+    def cohort_key(self, binding: StepEffectiveBinding, step: WorkflowStep) -> str | None:
+        raise RuntimeError("simulated cohort_key() oracle failure")
 
 
 class _ReverseCompletionDispatcher:
@@ -845,6 +873,35 @@ def test_cascade_cancel_warmup_branch0_failure_siblings_withheld_cancelled_faile
         and payload.branch_metadata.terminal_status == "cancelled"
     }
     assert cancelled == {1, 2}
+
+
+def test_cascade_cancel_warmup_branch0_failure_releases_withheld_phase2_admissions() -> None:
+    """B-48 (codex round-4 [P1] "release withheld warm-up admissions after
+    Phase 1 fails"): `_admit_fanout_branch_plan` reserves frames for the
+    WHOLE `branch_plan` (branches 0, 1, 2) upfront, but a Phase-1 failure
+    (branch[0]) withholds Phase 2 (branches 1, 2) entirely — their
+    `_cancel_branch` coroutines are never even CREATED (W2 above: no dispatch
+    marker for them), so nothing else ever calls `release_unless_job_bound()`
+    for their admissions. Without the fix, this permanently reduces the
+    shared frame budget by the withheld branches' frame count on every
+    Phase-1 failure."""
+    n = 3
+    authority = DefaultCapacityAuthority(frame_budget=4)
+    dispatcher = _RecordingCohortDispatcher(fail={0})
+    result = _run(
+        steps=[_inference_step(i) for i in range(n)],
+        dispatcher=dispatcher,
+        concurrent_cache_warmup=True,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+        store=_MiniFanoutStore(),
+        capacity_authority=authority,
+    )
+    assert result.status is RunStatus.FAILED
+    assert dispatcher.dispatched == [0]
+    # All 3 branches' frames are back — including the 2 WITHHELD ones that
+    # never reached `_cancel_branch` at all.
+    assert authority.available == authority.frame_budget
 
 
 def test_pause_warmup_branch0_failure_pauses_then_resume_redispatches_siblings() -> None:
@@ -1283,6 +1340,88 @@ def test_proceed_warmup_phase1_deadline_strike_records_cancelled_for_withheld(
     assert store.present_branch_indexes(store.sole_run_key()) == {0}
     # Returned at ~the 0.2s deadline, not the 2.0s wedge (bounded-barrier guard).
     assert elapsed < 1.5
+
+
+def test_proceed_warmup_phase1_deadline_strike_releases_withheld_phase2_admissions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """B-48 (codex round-4 [P1] "release admissions withheld by warm-up
+    timeouts"): PROCEED-tier twin of
+    `test_cascade_cancel_warmup_branch0_failure_releases_withheld_phase2_admissions`.
+    Unlike the strict tier's TaskGroup (already fixed), `_proceed_fanout`'s
+    Phase-1 gather is a SEPARATE, sequential `await` from Phase 2's — the
+    outer `asyncio.timeout(deadline)` firing while Phase-1's gather is still
+    running cancels it BEFORE Phase 2's own gather statement is ever reached,
+    so `_warmup_phase2`'s upfront-reserved admissions never get a
+    `_proceed_branch` call to release them (mutation probe: dropping the
+    try/except around Phase-1's gather leaves `authority.available` short by
+    the withheld branches' frames, permanently reducing the shared budget)."""
+    from harness_cp import workflow_driver as wd
+
+    monkeypatch.setattr(wd, "_DEFAULT_FANOUT_BARRIER_DEADLINE_SECONDS", 0.2)
+    n = 3
+    authority = DefaultCapacityAuthority(frame_budget=4)
+    release = threading.Event()
+    dispatcher = _WedgeBranch0CohortDispatcher(release=release, self_release_seconds=2.0)
+    store = _MiniFanoutStore()
+    try:
+        result = _run(
+            steps=[_inference_step(i) for i in range(n)],
+            dispatcher=cast(StepDispatcher, dispatcher),
+            concurrent_cache_warmup=True,
+            persona_tier=PersonaTier.SOLO_DEVELOPER,
+            engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+            store=store,
+            capacity_authority=authority,
+        )
+    finally:
+        release.set()
+    assert result.status is RunStatus.PARTIAL
+    assert dispatcher.dispatched == [0]
+    # The 2 WITHHELD siblings' frames must be back by the time `_run` returns
+    # (released synchronously inside `_proceed_fanout`'s except-block, before
+    # `_run_fanout_to_completion` returns) — deterministic, race-free. Whether
+    # branch[0]'s OWN frame has ALSO come back depends on how fast its wedged
+    # worker thread unblocks after `release.set()` in `finally` above (a
+    # separate, racy background completion), so this asserts the FIX's lower
+    # bound rather than pinning an exact count: broken (leaked withheld
+    # siblings) can only ever reach frame_budget - 2 (the pre-existing spare
+    # + branch[0]'s eventual own release); fixed reaches frame_budget - 1
+    # immediately and frame_budget once branch[0] also completes.
+    assert authority.available >= authority.frame_budget - 1
+
+
+def test_warmup_phase_split_cohort_key_failure_never_admits() -> None:
+    """Codex round-9 [P2] "whole-fan-out admission leaks on pre-dispatch setup
+    failure" — B-48's WHOLE-fan-out admission call is now DEFERRED to
+    immediately before the `cascade_policy` split, i.e. AFTER `_warmup_phase_
+    split()` runs (the split's own `dispatcher.cohort_key(...)` oracle call is
+    unguarded and was one of the genuinely-reachable pre-dispatch raise sites
+    inside the ~600-line setup window admission used to run BEFORE). A raise
+    here must leave the capacity authority completely untouched — there was
+    never anything to admit yet, let alone release.
+
+    Mutation probe: moving `_admit_fanout_branch_plan` back to its pre-fix
+    position (immediately after `branch_dispatchers` is resolved, BEFORE the
+    warm-up split runs) would admit the fan-out's frames before this raise —
+    `authority.available` would then read short of the full `frame_budget`
+    (a genuine leak, since nothing downstream of the crash releases it),
+    failing the assertion below.
+    """
+    authority = DefaultCapacityAuthority(frame_budget=4)
+    with pytest.raises(RuntimeError, match="simulated cohort_key"):
+        _run(
+            steps=[_inference_step(0), _inference_step(1)],
+            dispatcher=cast(StepDispatcher, _CohortKeyRaisingDispatcher()),
+            concurrent_cache_warmup=True,
+            persona_tier=PersonaTier.SOLO_DEVELOPER,
+            capacity_authority=authority,
+        )
+    assert authority.available == authority.frame_budget == 4, (
+        f"expected the frame budget completely untouched ({authority.available} "
+        f"available of {authority.frame_budget}) — admission ran before the "
+        f"warm-up cohort-key split failed"
+    )
 
 
 def test_pause_warmup_phase1_deadline_strike_failed_with_cancelled_terminals(

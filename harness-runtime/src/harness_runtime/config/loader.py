@@ -92,6 +92,14 @@ _ENV_SCALAR_FIELDS: dict[str, tuple[str, Any]] = {
     # correctness, only which model is warmed; no env entry needed.
     "prompt_cache_boot_prewarm": (f"{ENV_PREFIX}PROMPT_CACHE_BOOT_PREWARM", _parse_bool),
     "prompt_cache_keepalive": (f"{ENV_PREFIX}PROMPT_CACHE_KEEPALIVE", _parse_bool),
+    # B-48 (U-RT-140, C-RT-03 v1.102): env-keyed because the shared frame budget
+    # gates a CORRECTNESS property (fail-fast admission vs the recursive-offload
+    # deadlock); an operator who sets HARNESS_SUB_AGENT_DISPATCH_MAX_WORKERS must
+    # NOT be silently dropped ([[runtimeconfig-scalar-needs-both-env-loaders]]).
+    "sub_agent_dispatch_max_workers": (
+        f"{ENV_PREFIX}SUB_AGENT_DISPATCH_MAX_WORKERS",
+        int,
+    ),
 }
 
 

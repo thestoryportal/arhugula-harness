@@ -66,7 +66,7 @@ from typing import Any, cast
 
 import pytest
 from harness_as.sandbox_tier import SandboxTier
-from harness_core import ActionID, PersonaTier, StepID, WorkloadClass
+from harness_core import ActionID, PersonaTier, StepID, SubAgentDispatchCapacityError, WorkloadClass
 from harness_core.workflow_event_class import WorkflowEventClass
 from harness_cp.cp_shared_types import ModelBinding
 from harness_cp.cross_family_fallback_chain import (
@@ -84,6 +84,13 @@ from harness_cp.sub_agent_brief import (
     SubAgentBrief,
     compute_brief_summary_hash,
 )
+from harness_cp.sub_agent_dispatch_cancellation import (
+    DISPATCH_CANCEL_TOKEN_VAR,
+    DispatchCancelToken,
+    DispatchFenceTrippedSignal,
+    FenceAckOutcome,
+)
+from harness_cp.sub_agent_dispatch_capacity_authority import DefaultCapacityAuthority
 from harness_cp.sub_agent_gate_level_descent import dispatch_sub_agent
 from harness_cp.topology_pattern import TopologyPattern
 from harness_cp.workflow_driver import (
@@ -91,6 +98,7 @@ from harness_cp.workflow_driver import (
     StepDispatcher,
     StepDispatcherRegistry,
     StepKindDispatcherNotBoundError,
+    _admit_fanout_branch_plan,
     execute_workflow,
     resume_should_redispatch,
 )
@@ -263,9 +271,17 @@ class _Emitter:
 
 class _Ctx:
     """Minimal fake `DriverContext` (the strategy reads
-    `procedural_tier_snapshot_resolver` via `getattr(..., None)` — absent → None)."""
+    `procedural_tier_snapshot_resolver` via `getattr(..., None)` — absent → None).
 
-    def __init__(self, *, ledger: Any, emitter: _Emitter) -> None:
+    `capacity_authority` (B-48/U-CP-101): injectable so a test can pin an
+    explicit frame budget for precise admission assertions across a
+    RECURSIVE descent (every level's `execute_workflow(child_manifest, ...)`
+    call shares this SAME `ctx`, hence the SAME authority instance — the
+    mechanism by which an ancestor's held frames are visible to a
+    descendant's admission call). `None` → the strategy falls back to the
+    module-level default authority (production behavior)."""
+
+    def __init__(self, *, ledger: Any, emitter: _Emitter, capacity_authority: Any = None) -> None:
         import asyncio
 
         from opentelemetry.trace import NoOpTracerProvider
@@ -279,6 +295,7 @@ class _Ctx:
         self.tracer_provider = NoOpTracerProvider()
         self.validator_framework = None
         self.tenant_id = None
+        self.capacity_authority = capacity_authority
 
 
 class _HierarchicalDispatcher:
@@ -309,6 +326,14 @@ class _HierarchicalDispatcher:
         self.ctx = ctx
         self.registry: StepDispatcherRegistry | None = None
         self.contexts: dict[str, StepExecutionContext] = {}
+        # B-48 (codex #5): the ambient `DISPATCH_CANCEL_TOKEN_VAR` a REAL
+        # `_cancel_worker`/`_cancel_branch` call site binds before dispatch —
+        # captured here (this runs on the worker thread inside the SAME
+        # context copy `asyncio.to_thread` carried) so a test can assert the
+        # barrier's deadline watchdog actually tripped IT, proving the wiring
+        # through the production `_execute_orchestrator_workers` path (not a
+        # synthetic harness that bypasses `_cancel_branch`/`_cancel_worker`).
+        self.captured_cancel_tokens: dict[str, Any] = {}
         self._fail = fail_step_ids or set()
         self._block = block_step_ids or set()
         self._release = release
@@ -322,6 +347,7 @@ class _HierarchicalDispatcher:
     ) -> dict[str, Any]:
         step_id = str(step.step_id)
         self.contexts[step_id] = step_context
+        self.captured_cancel_tokens[step_id] = DISPATCH_CANCEL_TOKEN_VAR.get()
         if step.step_kind is StepKind.SUB_AGENT_DISPATCH:
             assert self.registry is not None, "registry must be wired before dispatch"
             child_manifest = cast(WorkflowManifestEntry, step.step_payload["child_manifest"])
@@ -367,9 +393,12 @@ def _run(
     workflow_id: str = "wf-hd",
     dispatcher: _HierarchicalDispatcher | None = None,
     emitter: _Emitter | None = None,
+    capacity_authority: Any = None,
 ) -> tuple[Any, _HierarchicalDispatcher, _Emitter]:
     emitter = emitter if emitter is not None else _Emitter()
-    ctx = cast(DriverContext, _Ctx(ledger=ledger, emitter=emitter))
+    ctx = cast(
+        DriverContext, _Ctx(ledger=ledger, emitter=emitter, capacity_authority=capacity_authority)
+    )
     disp = dispatcher if dispatcher is not None else _HierarchicalDispatcher(ctx=ctx)
     registry = cast(StepDispatcherRegistry, _Registry(cast(StepDispatcher, disp)))
     disp.registry = registry
@@ -745,6 +774,49 @@ def test_hierarchical_delegation_cascade_cancel_terminality() -> None:
 # ---------------------------------------------------------------------------
 
 
+class _LargeChildDeadlineDispatcher(_HierarchicalDispatcher):
+    """`_HierarchicalDispatcher` twin that sets a MUCH LARGER barrier deadline
+    for the recursive CHILD level's own `_execute_orchestrator_workers`
+    invocation right before triggering it — so the child's own watchdog can
+    never plausibly be what cuts a wedged grandchild off. `deadline`/
+    `_effective_deadline` is bound as a LOCAL at the top of the OUTER
+    (root) level's `_execute_orchestrator_workers`, well before ANY worker's
+    `dispatch()` (including this "sub" recursion) runs — so flipping the
+    MODULE global here, from inside "sub"'s own dispatch, never touches the
+    root's already-captured value. Only the OUTER barrier's
+    `_BRANCH_INFLIGHT_DISPATCHES` chain-registration mechanism can then
+    plausibly be what cuts the grandchild off in time (test-witness-lens
+    note, B-48 round-4)."""
+
+    def __init__(
+        self,
+        *,
+        ctx: DriverContext,
+        monkeypatch: pytest.MonkeyPatch,
+        child_deadline: float,
+        block_step_ids: set[str] | None = None,
+        release: threading.Event | None = None,
+    ) -> None:
+        super().__init__(ctx=ctx, block_step_ids=block_step_ids, release=release)
+        self._monkeypatch = monkeypatch
+        self._child_deadline = child_deadline
+
+    def dispatch(
+        self,
+        binding: StepEffectiveBinding,
+        step: WorkflowStep,
+        *,
+        step_context: Any = None,
+    ) -> dict[str, Any]:
+        if step.step_kind is StepKind.SUB_AGENT_DISPATCH:
+            import harness_cp.workflow_driver as wd
+
+            self._monkeypatch.setattr(
+                wd, "_DEFAULT_FANOUT_BARRIER_DEADLINE_SECONDS", self._child_deadline
+            )
+        return super().dispatch(binding, step, step_context=step_context)
+
+
 def test_hierarchical_delegation_outer_deadline_bounds_parent_over_wedged_grandchild(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -752,7 +824,29 @@ def test_hierarchical_delegation_outer_deadline_bounds_parent_over_wedged_grandc
     (root) barrier deadline still bounds the root's return — proving the inner
     in-flight dispatch registered in the OUTER barrier's `_BRANCH_INFLIGHT_
     DISPATCHES` chain (extended, not replaced). The root returns FAILED in ~the
-    deadline, NOT the grandchild's full block time."""
+    deadline, NOT the grandchild's full block time.
+
+    The CHILD level's own barrier deadline is set MUCH LARGER (10s) than the
+    ROOT's (0.5s) via `_LargeChildDeadlineDispatcher` — this rules OUT
+    "coincidentally-equal per-level deadlines" as an alternative explanation
+    for the fast return + tripped token (test-witness-lens note: the original
+    version, sharing one deadline at both levels, could not distinguish that
+    from a genuine outer-chain effect). With the deadlines deliberately
+    unequal, empirical tracing shows BOTH cooperate: the ROOT's own
+    `asyncio.timeout` always bounds the ROOT's *return time* regardless of
+    the chain (elapsed ~= the root's deadline, independent of g-wedge); the
+    grandchild's `DispatchCancelToken` fence-trip specifically is reached via
+    the parent→child cancel-token CASCADE (the "sub" worker's own inflight —
+    always root-chain-registered — gets cut by the root watchdog, which trips
+    the root's ambient token, which cascades to the linked descendant g-wedge
+    token per the token-linking mechanism), NOT solely the `_BRANCH_INFLIGHT_
+    DISPATCHES` chain reaching g-wedge's OWN inflight directly (both remain
+    correct, real, and independently tested elsewhere: the chain-registration
+    ↔ direct-cutoff path at `test_deadline_cutoff_trips_ambient_cancel_token_
+    without_facade_timeout`; the token cascade at `test_late_linked_child_
+    inflight_at_trip_bubbles_to_already_tripped_parent`). This test's job is
+    the end-to-end guarantee AT RECURSION DEPTH through the real production
+    path, not isolating one sub-mechanism from the other."""
     import harness_cp.workflow_driver as wd
 
     monkeypatch.setattr(wd, "_DEFAULT_FANOUT_BARRIER_DEADLINE_SECONDS", 0.5)
@@ -772,7 +866,13 @@ def test_hierarchical_delegation_outer_deadline_bounds_parent_over_wedged_grandc
     ledger = _RecordingLedger()
     emitter = _Emitter()
     ctx = cast(DriverContext, _Ctx(ledger=ledger, emitter=emitter))
-    disp = _HierarchicalDispatcher(ctx=ctx, block_step_ids={"g-wedge"}, release=release)
+    disp = _LargeChildDeadlineDispatcher(
+        ctx=ctx,
+        monkeypatch=monkeypatch,
+        child_deadline=10.0,
+        block_step_ids={"g-wedge"},
+        release=release,
+    )
     registry = cast(StepDispatcherRegistry, _Registry(cast(StepDispatcher, disp)))
     disp.registry = registry
 
@@ -795,6 +895,74 @@ def test_hierarchical_delegation_outer_deadline_bounds_parent_over_wedged_grandc
     # the grandchild's 5s block. Generous 3s ceiling absorbs scheduling jitter.
     assert elapsed < 3.0, (
         f"outer deadline did not bound the parent over a wedged grandchild ({elapsed:.2f}s)"
+    )
+    # B-48 (codex #5; §14.8.10.3): the grandchild's ambient per-dispatch fence
+    # tripped within the ROOT's deadline, at RECURSION DEPTH through the REAL
+    # `_execute_orchestrator_workers` / `_cancel_worker` production path (not
+    # a synthetic harness) — not bounded by any facade-level timeout (there
+    # is no facade in this test at all), and NOT explainable by the child's
+    # own (deliberately much larger) deadline coincidentally firing first.
+    wedged_token = disp.captured_cancel_tokens["g-wedge"]
+    assert wedged_token is not None
+    assert wedged_token.tripped
+
+
+def test_wedged_branch_capacity_lease_released_only_after_real_completion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """B-48 (codex round-4 [P1] "hold leases until abandoned branch threads
+    terminate" + concurrency-lens Finding 1): the barrier's deadline cuts a
+    wedged branch off at the ASYNCIO layer, but the underlying SYNC dispatch
+    (this test's `_HierarchicalDispatcher.dispatch`, blocked on `release.
+    wait()`) keeps running on its OWN worker thread regardless — releasing
+    the branch's frame lease at that cutoff (keyed off the branch TASK's own
+    cancellation) would under-count real occupied frames while the orphaned
+    thread keeps running, letting a subsequent admission over-commit the
+    shared budget. Proves BOTH halves through the REAL production path (no
+    synthetic release-tracking): (1) `available` stays REDUCED immediately
+    after the barrier gives up — the frame is NOT released early; (2)
+    `available` returns to the full budget once the orphaned dispatch
+    genuinely finishes (`_dispatch_releasing_admission`'s own finally, tied
+    to the worker thread's real completion)."""
+    import harness_cp.workflow_driver as wd
+
+    monkeypatch.setattr(wd, "_DEFAULT_FANOUT_BARRIER_DEADLINE_SECONDS", 0.3)
+    release = threading.Event()
+    authority = DefaultCapacityAuthority(frame_budget=4)
+
+    root_steps = _level([_orchestrator_step(), _leaf_worker("w-wedge")])
+    ledger = _RecordingLedger()
+    emitter = _Emitter()
+    ctx = cast(DriverContext, _Ctx(ledger=ledger, emitter=emitter, capacity_authority=authority))
+    disp = _HierarchicalDispatcher(ctx=ctx, block_step_ids={"w-wedge"}, release=release)
+    registry = cast(StepDispatcherRegistry, _Registry(cast(StepDispatcher, disp)))
+    disp.registry = registry
+
+    # The barrier gives up on "w-wedge" and `execute_workflow` returns, but
+    # the worker thread is STILL blocked on `release.wait()` at this point —
+    # nothing has released it yet.
+    result = execute_workflow(
+        _manifest(persona_tier=_CASCADE_CANCEL_TIER),
+        root_steps,
+        run_id="run-1",
+        ctx=ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=registry,
+    )
+    assert result.status is RunStatus.FAILED
+
+    # (1) The frame is NOT released just because the barrier gave up — the
+    # orphaned worker thread is still genuinely running.
+    assert authority.available < authority.frame_budget
+
+    # (2) Release the gate; the orphaned dispatch finishes for real, and
+    # `_dispatch_releasing_admission`'s own finally releases the frame.
+    release.set()
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline and authority.available < authority.frame_budget:
+        time.sleep(0.01)
+    assert authority.available == authority.frame_budget, (
+        "capacity lease was never released after the orphaned dispatch finished"
     )
 
 
@@ -977,3 +1145,311 @@ def test_hierarchical_without_synthesis_uses_deterministic_compose() -> None:
     assert result.final_state is not None
     assert set(result.final_state) == {"orchestrator", "worker_outputs"}
     assert not any(str(wk.step_id).startswith("post-join-synthesis") for _p, wk in ledger.appends)
+
+
+# ---------------------------------------------------------------------------
+# B-48 (U-CP-89 amendment, CP spec v1.102 §2) — HIERARCHICAL_DELEGATION
+# depth-phrase RETIRED: recursion capacity is FORMALLY DELEGATED to the
+# Runtime §14.8.10 executor cap under the shared frame budget; the strategy
+# implements NO depth bound and carries NO depth carrier. The per-parent
+# WIDTH cap 3 (C-CP-10 §10.3) is preserved and orthogonal to that capacity
+# gate. Plan v2.39 §4 tests.
+# ---------------------------------------------------------------------------
+
+
+def _deep_single_child_chain(depth: int, *, leaf_name: str = "leaf") -> list[WorkflowStep]:
+    """`depth` nested HIERARCHICAL_DELEGATION levels, each with exactly ONE
+    SUB_AGENT_DISPATCH worker recursing into the next level (worker_count=1
+    stays well under the width cap 3 at every level) — a genuine multi-level
+    descent bottoming out at a single leaf `DECLARATIVE_STEP`."""
+    steps = _level([_orchestrator_step("orch-0"), _leaf_worker(leaf_name)])
+    for level in range(1, depth):
+        child_manifest = _manifest(workflow_id=f"wf-hd-depth-{level}")
+        steps = _level(
+            [
+                _orchestrator_step(f"orch-{level}"),
+                _sub_agent_worker(f"sub-{level}", child_manifest=child_manifest, child_steps=steps),
+            ]
+        )
+    return steps
+
+
+def test_delegation_below_cap_unbounded_by_any_cp_depth_bound() -> None:
+    """CP spec v1.102 §2: the strategy carries NO depth carrier and enforces NO
+    depth bound — recursion capacity is delegated wholesale to the shared
+    frame budget. A single-child chain 10 levels deep (well past the width
+    cap 3, and past any historically-implied depth value the retired
+    "with a depth bound" phrase might have named) proceeds to SUCCESS while
+    frames remain, proving nothing in the CP driver itself counts or caps
+    descent depth. Mutation probe: introducing a CP-side depth check (e.g. a
+    `depth > N: fail` guard mirroring the width-cap-3 pattern) would reject
+    this legal descent and fail the test."""
+    depth = 10
+    authority = DefaultCapacityAuthority(frame_budget=64)  # 2 frames/level * 9 << 64
+    root_steps = _deep_single_child_chain(depth)
+    ledger = _RecordingLedger()
+    result, _disp, _emitter = _run(steps=root_steps, ledger=ledger, capacity_authority=authority)
+
+    assert result.status is RunStatus.SUCCESS
+    # Descend to the innermost fold to prove GENUINE depth (not a truncated
+    # 1-level run): depth-1 nested `["sub-N"]["child"]` hops reach the leaf.
+    node = result.final_state
+    assert node is not None
+    for level in range(depth - 1, 0, -1):
+        node = node["worker_outputs"][f"sub-{level}"]["child"]
+    assert "leaf" in node["worker_outputs"]
+    assert authority.available == authority.frame_budget  # every frame released, no leak
+
+
+def test_capacity_breach_during_descent_surfaces_typed_step_attributable_with_descent_chain() -> (
+    None
+):
+    """CP spec v1.102 §2 row 4: a capacity breach mid-descent surfaces the SAME
+    typed `SubAgentDispatchCapacityError` the U-CORE-03 carrier defines
+    (pairs with that carrier's own error-shape unit tests) — attributable to
+    the SPECIFIC overflowing dispatch step, carrying a descent_chain, never a
+    generic executor error. Exercises the REAL production admission helper
+    `_admit_fanout_branch_plan` (every `_execute_orchestrator_workers` /
+    `_execute_parallelization` call site calls exactly this) across a
+    simulated 2-level recursive descent against ONE shared authority: an
+    ANCESTOR level's SUB_AGENT_DISPATCH branch holds its frames open
+    (in-flight, recursing — mirroring how a real descent's ancestor branch
+    keeps its lease for the ENTIRE duration of its child's own
+    `execute_workflow` call) when the DESCENDANT level's own admission call
+    runs out of room.
+
+    Mutation probe: swapping the descendant's `step_id`/`descent_chain`
+    inputs for the ancestor's (or otherwise losing per-level attribution)
+    would still pass a same-exception-type check but fail the specific-
+    identity assertions below."""
+    authority = DefaultCapacityAuthority(frame_budget=2)
+
+    # Ancestor level: one root SUB_AGENT_DISPATCH branch (2 frames) admitted
+    # and deliberately held open — models an in-flight recursive descent.
+    ancestor_step = _sub_agent_worker(
+        "root-sub", child_manifest=_manifest(workflow_id="wf-descent-child"), child_steps=[]
+    )
+    ancestor_ctx = cast(
+        DriverContext,
+        _Ctx(ledger=_RecordingLedger(), emitter=_Emitter(), capacity_authority=authority),
+    )
+    ancestor_admissions = _admit_fanout_branch_plan(
+        ancestor_ctx, [(0, ancestor_step, None, None, None)], workflow_id="wf-hd-root"
+    )
+    ancestor_lease = ancestor_admissions[0]
+    assert not isinstance(ancestor_lease, SubAgentDispatchCapacityError)
+    assert authority.available == 0  # the whole budget-2 is now held by the ancestor
+
+    # Descendant level (the recursed child): its own SUB_AGENT_DISPATCH worker
+    # needs 2 MORE frames, but the ancestor above is still holding both.
+    descendant_step = _sub_agent_worker(
+        "grandchild-sub",
+        child_manifest=_manifest(workflow_id="wf-descent-grandchild"),
+        child_steps=[],
+    )
+    descendant_ctx = cast(
+        DriverContext,
+        _Ctx(ledger=_RecordingLedger(), emitter=_Emitter(), capacity_authority=authority),
+    )
+    descendant_admissions = _admit_fanout_branch_plan(
+        descendant_ctx, [(0, descendant_step, None, None, None)], workflow_id="wf-descent-child"
+    )
+    breach = descendant_admissions[0]
+
+    assert isinstance(breach, SubAgentDispatchCapacityError)
+    # Step-attributable: names the OVERFLOWING branch's OWN step, never the
+    # ancestor's still-holding branch.
+    assert breach.step_id == "grandchild-sub"
+    assert breach.step_id != str(ancestor_step.step_id)
+    # Descent-chain-carrying: the message names the LEVEL at which the breach
+    # occurred (per the `_admit_fanout_branch_plan(..., descent_chain=(workflow_id,))`
+    # binding).
+    assert breach.descent_chain == ("wf-descent-child",)
+    assert "wf-descent-child" in str(breach)
+    assert "grandchild-sub" in str(breach)
+
+    ancestor_lease.release()
+    assert authority.available == authority.frame_budget
+
+
+def test_width_cap_3_per_parent_still_enforced() -> None:
+    """CP spec v1.102 §2 row 3 (preservation control): the per-parent WIDTH cap
+    3 (C-CP-10 §10.3) is orthogonal to — and NOT subsumed by — the B-48
+    capacity-authority admission gate. A 4-child level fails the width-cap
+    detect-then-refuse check EVEN UNDER A GENEROUS injected capacity budget
+    (so the failure cannot be a capacity rejection), and — because the width
+    check runs BEFORE `_execute_orchestrator_workers` /
+    `_admit_fanout_branch_plan` is ever reached (parity with the existing
+    detect-then-refuse "no side effects" contract) — ZERO frames are ever
+    reserved from the authority.
+
+    Mutation probe: if the width check were removed (or ran AFTER admission),
+    either this test's fail_class would no longer name the width-cap defect,
+    or `authority.available` would drop below the full budget."""
+    authority = DefaultCapacityAuthority(frame_budget=256)  # ample; not the constraint
+    ledger = _RecordingLedger()
+    result, _disp, _emitter = _run(
+        steps=_level(
+            [
+                _orchestrator_step(),
+                _leaf_worker("w0"),
+                _leaf_worker("w1"),
+                _leaf_worker("w2"),
+                _leaf_worker("w3"),
+            ]
+        ),
+        ledger=ledger,
+        capacity_authority=authority,
+    )
+    assert result.status is RunStatus.FAILED
+    assert result.fail_class is not None
+    assert "hierarchical-delegation-fanout-cap-exceeded" in result.fail_class
+    assert "capacity" not in result.fail_class  # not conflated with a capacity rejection
+    assert authority.available == authority.frame_budget  # no admission ever attempted
+
+
+# ---------------------------------------------------------------------------
+# B-48 round-5b codex [P1] #1 — fence child ledger writes after dispatch
+# (Runtime spec v1.102 §14.8.10.3 part 1, extended). Linear-driver scope: the
+# SINGLE_THREADED_LINEAR per-step loop that `execute_workflow` runs directly
+# (an offloaded SUB_AGENT_DISPATCH child re-enters exactly this loop).
+# ---------------------------------------------------------------------------
+
+
+class _TripDuringDispatch:
+    """A `StepDispatcher` that trips the ambient `DISPATCH_CANCEL_TOKEN_VAR`
+    token from INSIDE `.dispatch()` — simulating a fence tripped WHILE this
+    step's dispatch was in flight — then returns a perfectly normal result,
+    as a real dispatch racing a concurrent parent-side trip would."""
+
+    def lookup(self, step_kind: StepKind) -> StepDispatcher:
+        return cast(StepDispatcher, self)
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        token = DISPATCH_CANCEL_TOKEN_VAR.get()
+        assert token is not None, "test setup must bind an ambient token"
+        token.trip()
+        return {"role": str(step.step_id), "echoed": dict(step.step_payload)}
+
+
+def test_linear_driver_rechecks_cancel_token_before_ledger_write_after_dispatch() -> None:
+    """A fence tripped DURING a step's dispatch — after the pre-dispatch
+    step-boundary check already passed, and even though the dispatch itself
+    then returns a completely normal (non-exception) result — must still stop
+    that step's output from being committed to the durable ledger. Without
+    the post-dispatch re-check this asserts, `_append_step_ledger_entry`
+    would run unconditionally on any dispatch that returns cleanly,
+    regardless of a trip that landed mid-flight.
+
+    Mutation probe: deleting the `_dispatch_cancel_token.check()` call this
+    test pins (the one directly preceding the B-ENGINE-OUTPUT-REPLAY /
+    ledger-append block) makes `execute_workflow` return normally with the
+    step's entry appended to the ledger, instead of raising
+    `DispatchFenceTrippedSignal` with zero ledger footprint."""
+    ledger = _RecordingLedger()
+    emitter = _Emitter()
+    ctx = cast(DriverContext, _Ctx(ledger=ledger, emitter=emitter))
+    registry = cast(StepDispatcherRegistry, _TripDuringDispatch())
+    manifest = _manifest(
+        workflow_id="wf-linear-fence-recheck",
+        topology_pattern=TopologyPattern.SINGLE_THREADED_LINEAR,
+    )
+    steps = [_leaf_worker("only-step")]
+    token = DispatchCancelToken()
+    reset_token = DISPATCH_CANCEL_TOKEN_VAR.set(token)
+    try:
+        with pytest.raises(DispatchFenceTrippedSignal):
+            execute_workflow(
+                manifest,
+                steps,
+                run_id="run-fence-recheck",
+                ctx=ctx,
+                default_model_binding=_DEFAULT_BINDING,
+                step_dispatchers=registry,
+            )
+    finally:
+        DISPATCH_CANCEL_TOKEN_VAR.reset(reset_token)
+    assert ledger.appends == []
+
+
+class _NormalDispatch:
+    """A `StepDispatcher` that returns cleanly — no trip anywhere in
+    `.dispatch()`. The ONLY trip in this test happens from inside the
+    ledger's own `append()` (below), i.e. strictly between the post-dispatch
+    `effect_entry()`/`check()` consult and step completion — the exact
+    window round-6 codex flagged as uncounted by a plain check-then-write."""
+
+    def lookup(self, step_kind: StepKind) -> StepDispatcher:
+        return cast(StepDispatcher, self)
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        return {"role": str(step.step_id), "echoed": dict(step.step_payload)}
+
+
+class _TripDuringLedgerAppend(_RecordingLedger):
+    """Trips the ambient token from inside `append()` — simulating a fence
+    trip landing WHILE the durable-write block is executing, after the
+    post-dispatch consult already passed cleanly."""
+
+    def append(self, payload: Any, write_key: Any) -> Any:
+        token = DISPATCH_CANCEL_TOKEN_VAR.get()
+        assert token is not None, "test setup must bind an ambient token"
+        token.trip()
+        return super().append(payload, write_key)
+
+
+def test_linear_driver_durable_write_counts_as_inflight_effect_at_trip_time() -> None:
+    """A fence tripped from INSIDE the durable-write block (during the ledger
+    append itself, not before it) must still be reported as ambiguous by
+    `wait_ack()` — never falsely `ACKED_CLEAN`. A plain check-then-write
+    (task #48's original shape) only consults the fence BEFORE the write; it
+    never marks the write as in-flight, so a trip landing in this exact
+    window is invisible to `_effects_in_flight` and `wait_ack()` reports a
+    false clean despite the write having raced the trip.
+
+    Mutation probe: replacing the `with _durable_write_fence_guard:` block in
+    `workflow_driver.py` back with the plain `_dispatch_cancel_token.check()`
+    call (task #48's shape, no `effect_entry()`) makes this test's final
+    assertion fail — `wait_ack()` reports `ACKED_CLEAN` instead of
+    `ACKED_EFFECT_AMBIGUOUS`, because the write below is no longer counted
+    as an in-flight effect at the moment `append()` trips the token."""
+    ledger = _TripDuringLedgerAppend()
+    emitter = _Emitter()
+    ctx = cast(DriverContext, _Ctx(ledger=ledger, emitter=emitter))
+    registry = cast(StepDispatcherRegistry, _NormalDispatch())
+    manifest = _manifest(
+        workflow_id="wf-linear-durable-write-inflight",
+        topology_pattern=TopologyPattern.SINGLE_THREADED_LINEAR,
+    )
+    steps = [_leaf_worker("only-step")]
+    token = DispatchCancelToken()
+    reset_token = DISPATCH_CANCEL_TOKEN_VAR.set(token)
+    try:
+        result = execute_workflow(
+            manifest,
+            steps,
+            run_id="run-durable-write-inflight",
+            ctx=ctx,
+            default_model_binding=_DEFAULT_BINDING,
+            step_dispatchers=registry,
+        )
+        # The write completes (effect_entry() cannot abort an operation
+        # already inside the guard — §14.8.10.3's honestly-stated limit);
+        # the ledger entry lands and the run reports success. What must
+        # differ from the OLD shape is the fence-ack outcome below, not
+        # whether the write happened.
+        assert result.status is RunStatus.SUCCESS
+        assert ledger.entry_count == 1
+        token.ack()
+        outcome = token.wait_ack(grace_seconds=1.0)
+        assert outcome is FenceAckOutcome.ACKED_EFFECT_AMBIGUOUS, (
+            f"expected the durable write racing the trip to be reported "
+            f"ambiguous, got {outcome} — the write was not counted as an "
+            f"in-flight effect at trip time"
+        )
+    finally:
+        DISPATCH_CANCEL_TOKEN_VAR.reset(reset_token)

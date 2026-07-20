@@ -38,6 +38,7 @@ Acceptance-criterion coverage (per Phase-2 Session-3 Track-A v2.5 L9-ter):
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, cast
@@ -890,6 +891,96 @@ def test_step8b_sibling_branches_get_distinct_action_ids_via_branch_index(
     )
     action_ids = {str(e.action_id) for e in dispatch_entries}
     assert len(action_ids) == 2, f"sibling dispatch action_ids collided: {action_ids}"
+
+
+class _InterleavingAuditLedgerWriter(LedgerWriter):
+    """Real `LedgerWriter` (so `.handle`/`.actor` satisfy `RuntimeAuditLedgerWriter`'s
+    duck-typing) whose `append` deterministically interleaves two concurrent
+    sibling 8b F2 writes: the FIRST arrival is PARKED until the SECOND has
+    physically appended, so the FIRST-ARRIVING write physically appends
+    SECOND — the exact capture-vs-append-order inversion IS spec C-IS-07
+    §7.6's `WRITER_OWNED_TIMESTAMP` sentinel closes. Mirrors
+    `harness_cp.tests.test_workflow_driver_buffered_append
+    ._InterleavingRealWriter`; this is the sibling witness for the offloaded
+    sub-agent-dispatch audit path (B-48), which reaches this same closing
+    fix through a distinct production call site
+    (`sub_agent_dispatch.py:_compose_and_persist_audit` 8b), not
+    `drain_branch_buffers`.
+    """
+
+    def __init__(self, *, handle: Any, actor: Any) -> None:
+        # `LedgerWriter` is `@dataclass(frozen=True)` WITHOUT its own
+        # `__post_init__` — the dataclass codegen only wires a
+        # `self.__post_init__()` call into `__init__` when the DECORATED
+        # class defines one, so a subclass-added `__post_init__` is never
+        # invoked. Calling the inherited `__init__` directly (not going
+        # through `object.__setattr__` per-field) then attaching the extra
+        # state below is the reliable path.
+        super().__init__(handle=handle, actor=actor)
+        object.__setattr__(self, "_arrivals", 0)
+        object.__setattr__(self, "_arrival_lock", threading.Lock())
+        object.__setattr__(self, "first_parked", threading.Event())
+        object.__setattr__(self, "second_appended", threading.Event())
+
+    def append(self, payload: Any, write_key: Any) -> Any:
+        with self._arrival_lock:  # type: ignore[attr-defined]
+            self._arrivals += 1  # type: ignore[attr-defined]
+            mine = self._arrivals  # type: ignore[attr-defined]
+        if mine == 1:
+            self.first_parked.set()  # type: ignore[attr-defined]
+            assert self.second_appended.wait(timeout=5.0), "sibling 2 never appended"  # type: ignore[attr-defined]
+            return super().append(payload, write_key)
+        result = super().append(payload, write_key)
+        self.second_appended.set()  # type: ignore[attr-defined]
+        return result
+
+
+def test_concurrent_sibling_subagent_audit_appends_never_invert(tmp_path: Path) -> None:
+    """IS spec C-IS-07 §7.6 — two concurrent sibling `SUB_AGENT_DISPATCH`
+    branches' 8b F2 audit writes into the ONE shared ledger keep the ledger
+    non-decreasing, even under the exact capture-vs-append-order inversion
+    (the first-arriving write is parked until the second physically
+    appends). Mutation probe: reverting `_compose_and_persist_audit`'s 8b
+    write to `timestamp=self.time_source()` (captured outside the writer's
+    lock) reproduces the inversion and this test's `errors == []` /
+    non-decreasing assertion fails with `NonMonotonicTimestampError` — this
+    is the offloaded sub-agent-dispatch audit path CLOSED alongside
+    `drain_branch_buffers` (a distinct production call site reaching the
+    same C-IS-07 §7.6 fix)."""
+    from harness_is.jsonl_event_ledger_lifecycle import JsonlLedgerHandle
+    from harness_is.state_ledger_write import read_ledger
+
+    handle = JsonlLedgerHandle(
+        canonical_path=tmp_path / "ledger.jsonl", exists=False, entry_count=0
+    )
+    interleaving_writer = _InterleavingAuditLedgerWriter(handle=handle, actor=_ACTOR)
+    dispatcher, _, _ = _dispatcher(tmp_path, ledger_writer_override=interleaving_writer)  # type: ignore[arg-type]
+
+    branch_0 = _step_context().model_copy(update={"branch_index": 0})
+    branch_1 = _step_context().model_copy(update={"branch_index": 1})
+
+    errors: list[BaseException] = []
+
+    def _dispatch(step_context: StepExecutionContext) -> None:
+        try:
+            dispatcher.dispatch(_binding(), _step(), step_context=step_context)
+        except BaseException as exc:  # record any dispatch failure for the assert
+            errors.append(exc)
+
+    thread_a = threading.Thread(target=_dispatch, args=(branch_0,))
+    thread_b = threading.Thread(target=_dispatch, args=(branch_1,))
+    thread_a.start()
+    assert interleaving_writer.first_parked.wait(timeout=5.0), "branch 0 never reached 8b"
+    thread_b.start()  # branch 1 physically appends FIRST (releases branch 0, parked).
+    thread_b.join(timeout=5.0)
+    thread_a.join(timeout=5.0)
+
+    assert errors == []
+    entries = read_ledger(handle)
+    dispatch_entries = [e for e in entries if str(e.action_id).startswith("dispatch:")]
+    assert len(dispatch_entries) == 2
+    timestamps = [e.timestamp for e in dispatch_entries]
+    assert timestamps == sorted(timestamps)
 
 
 def test_step8b_f2_entry_populates_procedural_tier_snapshot_ref(

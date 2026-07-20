@@ -94,6 +94,7 @@ from harness_cp.pause_resume_protocol_types import (
     WorkflowPauseReason,
 )
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
+from harness_cp.sub_agent_dispatch_capacity_authority import DefaultCapacityAuthority
 from harness_cp.topology_pattern import TopologyPattern
 from harness_cp.workflow_driver import (
     DriverContext,
@@ -209,6 +210,7 @@ class _Ctx:
         emitter: _Emitter,
         pause_resume_protocol: Any = None,
         engine_output_store: Any = None,
+        capacity_authority: Any = None,
     ) -> None:
         from opentelemetry.trace import NoOpTracerProvider
 
@@ -223,6 +225,9 @@ class _Ctx:
         self.tenant_id = None
         self.engine_output_store = engine_output_store
         self.resume_context_holder = None
+        # B-48/U-CP-101 — injectable so a test can pin an explicit frame
+        # budget for precise admission assertions.
+        self.capacity_authority = capacity_authority
 
 
 def _pause_context_reader() -> tuple[StateSummary, str]:
@@ -420,6 +425,22 @@ class _Echo:
 # ---------------------------------------------------------------------------
 # Cohort-keyed dispatchers
 # ---------------------------------------------------------------------------
+
+
+class _CohortKeyRaisingDispatcher:
+    """CohortKeyCapable dispatcher whose `cohort_key()` raises unconditionally
+    — codex round-9 [P2] "whole-fan-out admission leaks on pre-dispatch setup
+    failure": `_warmup_phase_split()`'s per-worker `dispatcher.cohort_key(...)`
+    oracle call is one of the genuinely-reachable raise sites inside the
+    pre-dispatch setup window B-48's admission is now deferred past."""
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        return dict(step.step_payload)
+
+    def cohort_key(self, binding: StepEffectiveBinding, step: WorkflowStep) -> str | None:
+        raise RuntimeError("simulated cohort_key() oracle failure")
 
 
 class _PartitionOrderingWitness:
@@ -701,6 +722,7 @@ def _run(
     with_pause_protocol: bool = False,
     pause_snapshot_input: PauseSnapshot | None = None,
     workflow_id: str = "wf-ow-warmup",
+    capacity_authority: Any = None,
 ) -> Any:
     if ledger is None:
         ledger = _RecordingLedger()
@@ -713,6 +735,7 @@ def _run(
             emitter=emitter,
             pause_resume_protocol=_protocol() if with_pause_protocol else None,
             engine_output_store=store,
+            capacity_authority=capacity_authority,
         ),
     )
     return execute_workflow(
@@ -796,6 +819,133 @@ def test_ow_partition_strict_tiers_two_cohorts_leaders_serialize_before_follower
     assert "B" in witness.cohorts_done_on_entry[3]
 
 
+def _unbound_kind_worker(index: int) -> WorkflowStep:
+    """A worker step whose `step_kind` (`TOOL_STEP`) is deliberately absent
+    from `_registry()`'s `_KindMap` — `step_dispatchers.lookup(...)` raises
+    `StepKindDispatcherNotBoundError` synchronously for it."""
+    return WorkflowStep(
+        step_id=StepID(f"worker-{index}"),
+        step_kind=StepKind.TOOL_STEP,
+        step_payload={"index": index},
+    )
+
+
+def test_proceed_worker_dispatcher_lookup_failure_releases_admission() -> None:
+    """Codex round-8 [P2] "release admissions when worker lookup fails" —
+    `_proceed_worker`'s `step_dispatchers.lookup(step.step_kind)` is the
+    only statement before `_dispatch_releasing_admission` is ever scheduled;
+    an unbound `StepKind` raising there must not strand this worker's
+    already-reserved frame.
+
+    Mutation probe: removing the `try/except BaseException: ... release_
+    unless_job_bound(); raise` guard around the lookup in `_proceed_worker`
+    leaks the worker's admitted frame — `authority.available` stays short of
+    the full `frame_budget` post-run.
+    """
+    authority = DefaultCapacityAuthority(frame_budget=4)
+    result = _run(
+        steps=[_orch_step(), _unbound_kind_worker(0)],
+        registry=_registry(_Echo()),
+        persona_tier=PersonaTier.SOLO_DEVELOPER,  # PROCEED tier
+        capacity_authority=authority,
+        workflow_id="wf-ow-proceed-lookup-failure",
+    )
+    assert result.status is not RunStatus.SUCCESS
+    assert authority.available == 4, (
+        f"expected full frame-budget recovery (4); got {authority.available} — "
+        f"the worker's admission leaked on dispatcher-lookup failure"
+    )
+
+
+def test_cascade_cancel_worker_dispatcher_lookup_failure_releases_admission() -> None:
+    """Codex round-8 [P2] sibling witness for `_cancel_worker` (CASCADE_
+    CANCEL tier) — same rationale as the PROCEED-tier witness above."""
+    authority = DefaultCapacityAuthority(frame_budget=4)
+    result = _run(
+        steps=[_orch_step(), _unbound_kind_worker(0)],
+        registry=_registry(_Echo()),
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,  # CASCADE_CANCEL tier
+        capacity_authority=authority,
+        workflow_id="wf-ow-cascade-cancel-lookup-failure",
+    )
+    assert result.status is not RunStatus.SUCCESS
+    assert authority.available == 4, (
+        f"expected full frame-budget recovery (4); got {authority.available} — "
+        f"the worker's admission leaked on dispatcher-lookup failure"
+    )
+
+
+def test_warmup_phase_split_cohort_key_failure_never_admits() -> None:
+    """Codex round-9 [P2] "whole-fan-out admission leaks on pre-dispatch setup
+    failure" — B-48's WHOLE-fan-out admission call is now DEFERRED to
+    immediately before the `cascade_policy` split, i.e. AFTER O-W's
+    `_warmup_phase_split()` runs (the split's own `dispatcher.cohort_key(...)`
+    oracle call is unguarded and was one of the genuinely-reachable
+    pre-dispatch raise sites inside the setup window admission used to run
+    BEFORE). A raise here must leave the capacity authority completely
+    untouched — there was never anything to admit yet, let alone release.
+
+    Mutation probe: moving `_admit_fanout_branch_plan` back to its pre-fix
+    position (immediately after `branch_plan` is built, BEFORE the warm-up
+    split runs) would admit the fan-out's frames before this raise —
+    `authority.available` would then read short of the full `frame_budget`
+    (a genuine leak, since nothing downstream of the crash releases it),
+    failing the assertion below.
+    """
+    authority = DefaultCapacityAuthority(frame_budget=4)
+    with pytest.raises(RuntimeError, match="simulated cohort_key"):
+        _run(
+            steps=[_orch_step(), _worker(0, "A"), _worker(1, "A")],
+            registry=_registry(_CohortKeyRaisingDispatcher()),
+            persona_tier=PersonaTier.SOLO_DEVELOPER,
+            capacity_authority=authority,
+            workflow_id="wf-ow-cohort-key-failure",
+        )
+    assert authority.available == authority.frame_budget == 4, (
+        f"expected the frame budget completely untouched ({authority.available} "
+        f"available of {authority.frame_budget}) — admission ran before the "
+        f"warm-up cohort-key split failed"
+    )
+
+
+def test_cascade_cancel_worker_marker_write_failure_releases_admission(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Codex round-7 [P1] "release admission when dispatch marker creation
+    fails" — the ORCHESTRATOR_WORKERS twin of `_cancel_branch`'s fix
+    (`_cancel_worker`, byte-identical rationale + guard): `_mark_branch_
+    dispatched` is the only statement before `inflight` is created, so a
+    raise there must release `_admission` explicitly (`_dispatch_releasing_
+    admission` never gets scheduled otherwise, and this coroutine's own
+    `finally` deliberately does not release it either).
+
+    Mutation probe: removing the `try/except BaseException: ... release_
+    unless_job_bound(); raise` guard around `_mark_branch_dispatched` in
+    `_cancel_worker` restores the leak — `authority.available` stays short
+    of the full `frame_budget` post-run.
+    """
+    import harness_cp.workflow_driver as workflow_driver_module
+
+    def _raising_marker(*_args: Any, **_kwargs: Any) -> None:
+        raise RuntimeError("simulated marker-store write failure")
+
+    monkeypatch.setattr(workflow_driver_module, "_mark_branch_dispatched", _raising_marker)
+
+    authority = DefaultCapacityAuthority(frame_budget=4)
+    result = _run(
+        steps=[_orch_step(), _worker(0, None), _worker(1, None)],
+        registry=_registry(_Echo()),
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,  # CASCADE_CANCEL tier
+        capacity_authority=authority,
+        workflow_id="wf-ow-marker-failure",
+    )
+    assert result.status is not RunStatus.SUCCESS
+    assert authority.available == 4, (
+        f"expected full frame-budget recovery (4); got {authority.available} — "
+        f"a worker's admission leaked on marker-write failure"
+    )
+
+
 # ---------------------------------------------------------------------------
 # OWP3 / OWP4 — non-beneficiary placement + gate-False controls
 # ---------------------------------------------------------------------------
@@ -866,6 +1016,96 @@ def test_ow_partition_cascade_cancel_leader_failure_withholds_all_followers() ->
     # nor store record (ledger-only synthesis).
     assert store.present_dispatched_indexes(run_key) == {0, 2}
     assert store.present_branch_indexes(run_key) == {0, 2}
+
+
+def test_ow_partition_cascade_cancel_leader_failure_releases_withheld_follower_admissions() -> None:
+    """B-48 (codex round-4 [P1]; the `_execute_orchestrator_workers` twin of
+    `_execute_parallelization`'s "release withheld warm-up admissions after
+    Phase 1 fails"): `_admit_fanout_branch_plan` reserves frames for all 4
+    workers upfront, but leader 0's Phase-1 failure withholds followers {1,
+    3} entirely (never dispatched, per the sibling test above) — their
+    `_cancel_worker` coroutines are never created, so nothing else releases
+    their admissions without the fix."""
+    authority = DefaultCapacityAuthority(frame_budget=4)
+    dispatcher = _CohortScriptedWorker({0: "fail", 2: "ok"}, barrier_indexes=frozenset({0, 2}))
+    result = _run(
+        steps=[_orch_step(), _worker(0, "A"), _worker(1, "A"), _worker(2, "B"), _worker(3, "B")],
+        registry=_registry(dispatcher),
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+        store=_MiniOWStore(),
+        capacity_authority=authority,
+    )
+    assert result.status is RunStatus.FAILED
+    assert sorted(dispatcher.dispatched) == [0, 2]
+    assert authority.available == authority.frame_budget
+
+
+def test_ow_partition_proceed_deadline_strike_releases_withheld_follower_admissions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """B-48 (codex round-4 [P1] "release admissions withheld by warm-up
+    timeouts"): PROCEED-tier + deadline twin of
+    `test_ow_partition_cascade_cancel_leader_failure_releases_withheld_follower_admissions`
+    (OWP5's admission half) and the PARALLELIZATION deadline-strike sibling.
+    Both leaders wedge past the deadline (neither self-releases before the
+    barrier strikes), so the snapshot taken IMMEDIATELY on `_run` returning —
+    before this test's own `finally` unblocks them — is race-free: no leader
+    could possibly have released yet. Mutation probe: dropping the try/except
+    around Phase-1's gather leaves the withheld followers' 2 frames stuck
+    forever (the snapshot would show frame_budget - 4, not frame_budget - 2)."""
+    from harness_cp import workflow_driver as wd
+
+    monkeypatch.setattr(wd, "_DEFAULT_FANOUT_BARRIER_DEADLINE_SECONDS", 0.2)
+
+    class _WedgeBothLeadersDispatcher:
+        def __init__(self, *, release: threading.Event) -> None:
+            self._release = release
+            self._lock = threading.Lock()
+            self.dispatched: list[int] = []
+
+        def dispatch(
+            self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+        ) -> dict[str, Any]:
+            idx = int(step.step_payload["index"])
+            with self._lock:
+                self.dispatched.append(idx)
+            if idx in (0, 2):
+                self._release.wait(timeout=5.0)
+            return {"index": idx}
+
+        def cohort_key(self, binding: StepEffectiveBinding, step: WorkflowStep) -> str | None:
+            cohort = step.step_payload.get("cohort")
+            return f"cohort-{cohort}" if cohort is not None else None
+
+    authority = DefaultCapacityAuthority(frame_budget=4)
+    release = threading.Event()
+    dispatcher = _WedgeBothLeadersDispatcher(release=release)
+    available_on_return: int | None = None
+    try:
+        result = _run(
+            steps=[
+                _orch_step(),
+                _worker(0, "A"),
+                _worker(1, "A"),
+                _worker(2, "B"),
+                _worker(3, "B"),
+            ],
+            registry=_registry(dispatcher),
+            persona_tier=PersonaTier.SOLO_DEVELOPER,
+            engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+            store=_MiniOWStore(),
+            capacity_authority=authority,
+        )
+        # Race-free: captured before `finally` unblocks either wedged leader —
+        # neither leader's frame could possibly have released yet, so any
+        # frames back at this exact point came ONLY from the followers.
+        available_on_return = authority.available
+    finally:
+        release.set()
+    assert result.status is RunStatus.PARTIAL
+    assert sorted(dispatcher.dispatched) == [0, 2]
+    assert available_on_return == authority.frame_budget - 2
 
 
 def test_ow_partition_proceed_leader_failure_still_releases_all_followers() -> None:

@@ -457,6 +457,10 @@ _ALLOWLISTED_CROSS_AXIS_SYMBOLS: frozenset[tuple[str, str]] = frozenset(
         ("harness_is.state_ledger_write", "EntryPayload"),
         ("harness_is.state_ledger_write", "WriteKey"),
         ("harness_is.state_ledger_write", "WriteResult"),
+        # B-48 apply arc (C-IS-07 §7.6, v1.11) — U-CP-82's `drain_branch_buffers`
+        # requests writer-owned timestamp sampling via this sentinel constant on
+        # the SAME CP→IS `state_ledger_write` seam the entries above already use.
+        ("harness_is.state_ledger_write", "WRITER_OWNED_TIMESTAMP"),
         ("harness_is.chain_verification", "ChainVerificationResult"),
         # U-CP-34 → U-IS-11 picks `append_ledger_entry` as the canonical seam
         # symbol; the JsonlLedgerHandle import is the carrier type per C-IS-07.

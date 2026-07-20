@@ -355,6 +355,23 @@ class _MutableHarnessContext:
     ``config.trust_policy``. Required on the frozen HarnessContext per
     spec v1.16 §4 C-RT-04."""
 
+    sub_agent_dispatch_executor: Any = None
+    """B-48 (U-RT-141) — the §14.8.10.1 grow-on-demand dispatch executor
+    (`SubAgentDispatchExecutor`), constructed at stage 5 LOOP_INIT from
+    `config.sub_agent_dispatch_max_workers`. Optional on the frozen
+    HarnessContext (C-RT-04 field-addition minor-bump path, the
+    `bare_llm_dispatcher` precedent); `None` for embedders that never
+    dispatch sub-agents."""
+
+    capacity_authority: Any = None
+    """B-48 (U-RT-141) — the `RuntimeCapacityAuthorityAdapter` implementing
+    the CP-declared U-CP-101 `CapacityAuthority` Protocol over the real
+    executor budget. Bound at stage 5 alongside the executor; the CP fan-out
+    reads THIS binding through its structural `DriverContext` so a configured
+    cap reaches admission instead of the CP default-256 fallback (Runtime
+    spec v1.102 §14.8.10.4 C-RT-04 binding; plan v2.50 U-RT-141 codex
+    round-39). `None` → CP's own default bounded authority gates."""
+
     mcp_namespace_emitter: Any = None
     """U-RT-72; U-CP-69 MCPClientNamespaceEmitter. Bound at stage 5 within
     ``materialize_runtime_tool_dispatcher_stage`` (U-RT-75) step 2 from the
@@ -551,6 +568,8 @@ class _MutableHarnessContext:
             hitl_tool_loop=self.hitl_tool_loop,
             engine_recovery_loop=self.engine_recovery_loop,
             per_server_trust_evaluator=self.per_server_trust_evaluator,
+            sub_agent_dispatch_executor=self.sub_agent_dispatch_executor,
+            capacity_authority=self.capacity_authority,
             mcp_namespace_emitter=self.mcp_namespace_emitter,
             memory_tool_registry=self.memory_tool_registry,
             validator_framework=self.validator_framework,

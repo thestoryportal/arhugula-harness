@@ -52,6 +52,7 @@ inside this async function we use plain `with` per OTel API contract
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
@@ -195,6 +196,28 @@ class RetryBreakerToolDispatcher:
             last_failure_class: str = "unknown"
 
             for attempt in range(policy.max_attempts):
+                # B-48 (U-RT-143; §14.8.10.3 part 1, EFFECT-ENTRY EXTENSION;
+                # codex round-4 [P1] "apply the cancellation fence to nested
+                # tool-retry attempts"): mirrors the sibling
+                # `RetryBreakerFallbackDispatcher` fix — the per-attempt loop
+                # can begin another real MCP tool call without returning to
+                # the driver, so a nested TOOL_STEP under a timed-out
+                # SUB_AGENT_DISPATCH job must guard the REAL attempt with
+                # `effect_entry()`, not a bare pre-attempt check: entering
+                # re-consults the fence AND counts the attempt as in-flight
+                # for the duration of the real call, so a trip landing WHILE
+                # the call is genuinely running is correctly reported
+                # ambiguous rather than falsely ACKED_CLEAN.
+                from harness_cp.sub_agent_dispatch_cancellation import (
+                    DISPATCH_CANCEL_TOKEN_VAR,
+                )
+
+                _cancel_token = DISPATCH_CANCEL_TOKEN_VAR.get()
+                _effect_guard = (
+                    _cancel_token.effect_entry()
+                    if _cancel_token is not None
+                    else contextlib.nullcontext()
+                )
                 with tracer.start_as_current_span(
                     "harness.runtime.tool_retry_attempt"
                 ) as inner_span:
@@ -203,7 +226,10 @@ class RetryBreakerToolDispatcher:
                     inner_span.set_attribute("engine.replay_disposition", replay_disposition.value)
 
                     try:
-                        result = await self.inner.dispatch(binding, step, step_context=step_context)
+                        with _effect_guard:
+                            result = await self.inner.dispatch(
+                                binding, step, step_context=step_context
+                            )
                     except asyncio.CancelledError:
                         raise
                     except _TRANSIENT_TOOL_DISPATCH_ERRORS as exc:
