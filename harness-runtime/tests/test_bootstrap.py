@@ -172,7 +172,15 @@ class _FakeDaemon:
 def _patch_collector(monkeypatch: pytest.MonkeyPatch) -> _FakeDaemon:
     """Replace stage 4's collector materialization + ring buffer + tracer
     with no-op fakes. Tracer must not globally register (one-time-per-process
-    invariant per C-RT-06 forbids repeated `set_tracer_provider`)."""
+    invariant per C-RT-06 forbids repeated `set_tracer_provider`).
+
+    `validate_audit_signing_for_span_stage` is ALSO patched to a no-op:
+    stage 4 calls it directly (defense-in-depth, independent of the mocked
+    `materialize_span_processor_stage` below — U-OD-30/B-51 landing, OD
+    spec v1.34 §21.2.3 row 6) BEFORE tracer registration, and these
+    bootstrap-chain tests are not exercising audit-signing wiring — the
+    default `audit_signing.backend="none"` config has no real
+    `SigningBackend` to supply."""
     daemon = _FakeDaemon()
 
     class _Stage:
@@ -206,6 +214,11 @@ def _patch_collector(monkeypatch: pytest.MonkeyPatch) -> _FakeDaemon:
         _stage_4_od_mod,
         "materialize_span_processor_stage",
         lambda config, _p, **_k: None,
+    )
+    monkeypatch.setattr(
+        _stage_4_od_mod,
+        "validate_audit_signing_for_span_stage",
+        lambda *_a, **_k: None,
     )
     return daemon
 

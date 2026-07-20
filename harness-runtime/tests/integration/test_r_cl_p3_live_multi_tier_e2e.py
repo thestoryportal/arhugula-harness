@@ -224,6 +224,16 @@ async def test_r_cl_p3_live_multi_tier_api_run(
     monkeypatch.setattr(
         _stage_4_od_mod, "materialize_ring_buffer_stage", lambda cfg, _d, **_kw: None
     )
+    # U-OD-30/B-51 landing (OD spec v1.34 §21.2.3 row 6) — stage 4 calls
+    # `validate_audit_signing_for_span_stage` directly, independent of the
+    # mocked `materialize_span_processor_stage` above; at MULTI_TENANT_
+    # COMPLIANCE with the default `audit_signing.backend="none"` config (no
+    # real SigningBackend configured for this live-Ollama e2e), it now
+    # raises before tracer registration. This test exercises live provider
+    # dispatch, not audit-signing wiring.
+    monkeypatch.setattr(
+        _stage_4_od_mod, "validate_audit_signing_for_span_stage", lambda *_a, **_kw: None
+    )
 
     echo_value = f"hello-p3-{persona_tier_name.lower()}"
 

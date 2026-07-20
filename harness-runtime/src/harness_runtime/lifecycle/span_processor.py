@@ -178,6 +178,15 @@ def validate_audit_signing_for_span_stage(
     bootstrap retry with `TracerProviderConcurrentRegistrationError`).
 
     Checks, both scoped to a tokenizer that will actually bind:
+    - a tokenizer that will bind with NO signing_backend at all, regardless
+      of `config.audit_signing.backend` kind → raise (out-of-family Codex
+      P1, U-OD-30/B-51 landing: OD spec v1.34 §21.2.3 row 6 made the
+      redaction-token signing path unconditionally backend-REQUIRED at
+      every persona tier — `compose_redaction_token_audit_entry` now raises
+      `AuditSigningFailedError` on the first content-bearing span instead
+      of returning the `unsigned:*` placeholder; a plain unconfigured
+      `audit_signing.backend` previously sailed through this validator's
+      aws-kms-scoped checks below and only failed mid-run);
     - explicit `aws-kms` config with no constructed backend → raise (a
       deployment that asked for real signing never silently degrades —
       round 16);
@@ -186,6 +195,18 @@ def validate_audit_signing_for_span_stage(
       FIRST redacted span mid-run — round 3; validated before any
       `BatchSpanProcessor` worker thread exists — round 6).
     """
+    if tokenizer_will_bind and signing_backend is None:
+        raise SpanProcessorBindError(
+            "tokenizer_will_bind is True (MULTI_TENANT_COMPLIANCE with an "
+            "audit writer configured) but no signing_backend was supplied — "
+            "the redaction-token signing path is unconditionally "
+            "fail-closed at every persona tier (OD spec v1.34 §21.2.3 row "
+            "6): an absent backend would raise mid-run on the FIRST "
+            "content-bearing span instead of failing here at bootstrap. "
+            "Construct a SigningBackend (e.g. via "
+            "make_audit_signing_backend(config.audit_signing)) and pass it "
+            "through."
+        )
     if config.audit_signing.backend is not AuditSigningBackendKind.AWS_KMS:
         return
     # B-47 PR B2a — `additional_key_ids` (the HITL/sub-agent composers' and
