@@ -1714,6 +1714,78 @@ class RuntimeConfig(BaseModel):
     the placeholder signing path byte-for-byte. Key identifiers only — never
     key material."""
 
+    audit_ledger_binding_id: str | None = None
+    """Stable per-sidecar LEDGER BINDING identifier the OD v1.34 §21.2.2
+    record wire contract signs (C-RT-03 v1.101; codex rounds 39/44/47).
+
+    File/CLI-only (not env-keyed). `None` by default. REQUIRED nonempty
+    whenever `audit_cutover_record_path` is set, AT ANY TIER (codex
+    round-52 — every record carries a signed binding, so a record without a
+    configured binding would pass bootstrap only to fail at record
+    consumption) and REQUIRED with the other record inputs at
+    MULTI_TENANT_COMPLIANCE. Lives in TRUSTED deployment configuration, NOT
+    inside the rewritable sidecar it identifies — a genesis line stored
+    alongside the data could be copied together with a record from sidecar A
+    to sidecar B, defeating the cross-sidecar defense. Greenfield
+    initialization signs it into the empty record; record verification and
+    migration compare the record's signed binding against THIS config value
+    (record↔config, never record↔sidecar); a mismatch is a typed rejection.
+    """
+
+    audit_cutover_record_key_id: str | None = None
+    """Operator-PINNED record-signing key id (C-RT-03 v1.101; codex
+    round-19 — without an explicit carrier naming the record key, any
+    compromised ordinary row-signing key could sign a malicious exemption
+    record).
+
+    File/CLI-only (not env-keyed). `None` by default. REQUIRED whenever
+    `audit_cutover_record_path` is set. Bootstrap ENFORCES: the pinned id
+    must resolve to exactly one `(algorithm, backing-key)` mapping entry
+    (`config.audit_signing.key_arns[key_id]` plus the configured backend's
+    single `algorithm`); the record's own metadata must match BOTH the
+    pinned id AND that mapping entry's algorithm (codex round-39 — the
+    algorithm authority is the MAPPING, never the record's own
+    attacker-rewritable metadata); and the pinned id must be DISTINCT from
+    every other key id in `key_arns` AND resolve to PHYSICALLY DISTINCT key
+    material (codex round-23 — two logical ids mapping to one KMS ARN
+    defeat the separation). Any violation is `RT-FAIL-CONFIG` at bootstrap.
+    """
+
+    audit_cutover_record_path: str | None = None
+    """Path to the OD v1.34 §21.2.2 row-4 AUTHENTICATED cutover record for a
+    deployment with retagged `"_single"` history (C-RT-03 v1.101; codex
+    round-13).
+
+    File/CLI-only, NOT env-keyed (mirrors the other RuntimeConfig
+    path/collection fields). `None` by default. When set, bootstrap
+    VALIDATES the record fail-closed against its trust anchor — a
+    tampered/forged/unparseable record is `RT-FAIL-CONFIG`, never ignored.
+    When `None`, permissible ONLY below MULTI_TENANT_COMPLIANCE (codex
+    round-30: at MTC the path + key + binding id are REQUIRED at every
+    bootstrap, greenfield included — initialization signs the empty
+    record, so a recordless MTC ledger that becomes unverifiable after its
+    first append cannot arise).
+    """
+
+    audit_signing_fail_closed: bool | None = None
+    """Audit-signing fail-closed policy switch — the RuntimeConfig CARRIER
+    of the OD-owned `B-52` policy (`Spec_Operational_Discipline_v1_34.md`
+    §21.2.3; C-RT-03 v1.101).
+
+    Bool-like TRI-STATE: unset (`None`) → per-persona default (ON at
+    `multi-tenant-compliance`, OFF at `solo-developer` / `team-binding` —
+    OD v1.34 §21.2.3 row 2); explicit `true` → fail-closed; explicit
+    `false` → INVALID at MULTI_TENANT_COMPLIANCE (config-validation error
+    per §21.2.3 row 3 — a non-MTC opt-in knob only). Resolved-ON ⇒ a
+    configured `SigningBackend` REQUIRED at bootstrap, at EVERY persona
+    tier (§21.2.3 row 4 zeroth-site invariant). Env-keyed via BOTH
+    `config/loader.py::_ENV_SCALAR_FIELDS` (`HARNESS_AUDIT_SIGNING_FAIL_CLOSED`)
+    AND `config_source.py::_RuntimeEnvSettings` per
+    `[[runtimeconfig-scalar-needs-both-env-loaders]]`. Resolution + the
+    bootstrap enforcement site live at
+    `harness_runtime.lifecycle.audit_signing_fail_closed_validation`.
+    """
+
     otel: OTelConfig
     """OTLP endpoint, sampler mode, additional resource attrs. Enriched at U-RT-07.
 

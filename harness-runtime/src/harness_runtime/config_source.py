@@ -167,6 +167,11 @@ class _RuntimeEnvSettings(BaseSettings):
     # deadlock). Mirrored in loader.py _ENV_SCALAR_FIELDS
     # ([[runtimeconfig-scalar-needs-both-env-loaders]]).
     sub_agent_dispatch_max_workers: int | None = None
+    # B-51/B-52/B-54 (U-RT-134, C-RT-03 v1.101) — env-keyed: gates a
+    # CORRECTNESS/compliance property (fail-closed audit signing). Mirrored in
+    # loader.py _ENV_SCALAR_FIELDS ([[runtimeconfig-scalar-needs-both-env-loaders]]).
+    # The three sibling record-carrier fields are file/CLI-only — not here.
+    audit_signing_fail_closed: bool | None = None
 
 
 class RuntimeConfigSource:

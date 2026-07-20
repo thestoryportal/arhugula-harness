@@ -180,7 +180,15 @@ def _patch_collector(monkeypatch: pytest.MonkeyPatch) -> _FakeDaemon:
     spec v1.34 §21.2.3 row 6) BEFORE tracer registration, and these
     bootstrap-chain tests are not exercising audit-signing wiring — the
     default `audit_signing.backend="none"` config has no real
-    `SigningBackend` to supply."""
+    `SigningBackend` to supply.
+
+    `validate_mtc_audit_signing_config` + `initialize_mtc_audit_signing_record`
+    (U-RT-134, C-RT-03 v1.101) are patched the same way, for the same
+    reason: at MULTI_TENANT_COMPLIANCE with no tenant_id/backend/record
+    inputs configured (the default shape these bootstrap-chain tests use),
+    the first would otherwise raise `IncompatibleConfigVersion` before ANY
+    of the fakes above are reached — these tests are not exercising the
+    audit-signing config invariant."""
     daemon = _FakeDaemon()
 
     class _Stage:
@@ -218,6 +226,16 @@ def _patch_collector(monkeypatch: pytest.MonkeyPatch) -> _FakeDaemon:
     monkeypatch.setattr(
         _stage_4_od_mod,
         "validate_audit_signing_for_span_stage",
+        lambda *_a, **_k: None,
+    )
+    monkeypatch.setattr(
+        _stage_4_od_mod,
+        "validate_mtc_audit_signing_config",
+        lambda *_a, **_k: None,
+    )
+    monkeypatch.setattr(
+        _stage_4_od_mod,
+        "initialize_mtc_audit_signing_record",
         lambda *_a, **_k: None,
     )
     return daemon

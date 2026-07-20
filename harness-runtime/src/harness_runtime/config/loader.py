@@ -59,6 +59,34 @@ def _parse_bool(raw: str) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+_TRUTHY_SPELLINGS = frozenset({"1", "true", "yes", "on"})
+_FALSY_SPELLINGS = frozenset({"0", "false", "no", "off"})
+
+
+def _parse_strict_bool(raw: str) -> bool:
+    """Strict env-var bool coercion — reject anything not a recognized
+    spelling, rather than `_parse_bool`'s silent-`False`-on-typo behavior.
+
+    Out-of-family Codex [P1] finding: `_parse_bool`'s permissive fallback
+    means a lower-tier typo like `HARNESS_AUDIT_SIGNING_FAIL_CLOSED=treu`
+    silently resolves to `False` — fail-OPEN on a typo, for a field whose
+    entire purpose is enforcing fail-closed audit signing. Scoped to THIS
+    one security-sensitive field only; `_parse_bool`'s existing lenient
+    behavior for every other `_ENV_SCALAR_FIELDS` entry is unchanged (a
+    broader tightening is out of this unit's scope).
+    """
+    normalized = raw.strip().lower()
+    if normalized in _TRUTHY_SPELLINGS:
+        return True
+    if normalized in _FALSY_SPELLINGS:
+        return False
+    raise ValueError(
+        f"HARNESS_AUDIT_SIGNING_FAIL_CLOSED={raw!r} is not a recognized boolean "
+        f"spelling (expected one of {sorted(_TRUTHY_SPELLINGS | _FALSY_SPELLINGS)}) "
+        "— rejected rather than silently resolved to False"
+    )
+
+
 # Top-level scalar field map: field name -> (env var key, coercion callable).
 # Sub-config fields are not in this map at L1 entry; they come in via kwargs.
 #
@@ -99,6 +127,18 @@ _ENV_SCALAR_FIELDS: dict[str, tuple[str, Any]] = {
     "sub_agent_dispatch_max_workers": (
         f"{ENV_PREFIX}SUB_AGENT_DISPATCH_MAX_WORKERS",
         int,
+    ),
+    # B-51/B-52/B-54 (U-RT-134, C-RT-03 v1.101): env-keyed because the flag
+    # gates a CORRECTNESS/compliance property (fail-closed audit signing); an
+    # operator who sets HARNESS_AUDIT_SIGNING_FAIL_CLOSED must NOT be silently
+    # dropped ([[runtimeconfig-scalar-needs-both-env-loaders]]). The three
+    # sibling record-carrier fields (audit_cutover_record_path/key_id,
+    # audit_ledger_binding_id) are file/CLI-only per the spec — NOT env-keyed.
+    # `_parse_strict_bool`, not `_parse_bool` (out-of-family Codex [P1]
+    # finding) — a typo must reject, not silently fail open.
+    "audit_signing_fail_closed": (
+        f"{ENV_PREFIX}AUDIT_SIGNING_FAIL_CLOSED",
+        _parse_strict_bool,
     ),
 }
 

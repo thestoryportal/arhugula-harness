@@ -34,6 +34,10 @@ from harness_runtime.bootstrap.factories.validator_framework_factory import (
 )
 from harness_runtime.bootstrap.mutable_context import _MutableHarnessContext
 from harness_runtime.config.audit_signing import make_audit_signing_backend
+from harness_runtime.lifecycle.audit_signing_fail_closed_validation import (
+    initialize_mtc_audit_signing_record,
+    validate_mtc_audit_signing_config,
+)
 from harness_runtime.lifecycle.audit_writer import materialize_audit_writer_stage
 from harness_runtime.lifecycle.collector_daemon import materialize_collector_daemon_stage
 from harness_runtime.lifecycle.cost_attribution import materialize_cost_attribution_stage
@@ -57,7 +61,16 @@ async def execute(
     _ = workload_class
     assert ctx.ledger_writer is not None, "stage 1 IS must precede stage 4 OD"
 
-    # 0. Audit-signing backend (B-47 PR B — OD spec v1.33 §21.2.1 composition
+    # 0a. Audit-signing config-VALUE-SHAPE validation (U-RT-134, C-RT-03
+    # v1.101) — runs FIRST, before `make_audit_signing_backend` is even
+    # called (out-of-family Codex [P2] finding: an invalid explicit-`false`-
+    # at-MTC config could otherwise fail on backend CONSTRUCTION first —
+    # missing boto3, region resolution, credential discovery — instead of
+    # deterministically producing the spec-mandated typed
+    # `AuditSigningConfigInvalidError`/`IncompatibleConfigVersion`). This
+    # pass touches config only — no backend I/O, no side effects.
+    validate_mtc_audit_signing_config(config)
+    # 0b. Audit-signing backend (B-47 PR B — OD spec v1.33 §21.2.1 composition
     # root) — constructed AND validated BEFORE the one-shot global tracer
     # registration (out-of-family Codex round-18: OTel registration cannot be
     # undone, so a KMS config failure surfacing after it poisoned
@@ -81,6 +94,13 @@ async def execute(
         # fails BOOTSTRAP, not the first mid-run audit write.
         additional_key_ids=("harness-runtime-dev", "harness-cost-attribution-v1"),
     )
+    # U-RT-134 — side-effecting cutover-record load-or-greenfield-init, run
+    # LAST of the three audit-signing checks (still before tracer
+    # registration, same round-18 rationale): by this point every OTHER
+    # signing-config gap (missing/invalid inputs; the additional_key_ids
+    # mapping) has already been rejected, so a record is never written to
+    # disk only to have bootstrap fail moments later on an unrelated gap.
+    initialize_mtc_audit_signing_record(config, signing_backend=ctx.audit_signing_backend)
 
     # 1. Tracer provider — globally registered.
     tracer = materialize_tracer_provider_stage(config)

@@ -702,7 +702,16 @@ async def test_stage_4_validates_signing_before_one_shot_tracer_registration(
             "audit_signing": AuditSigningConfig(
                 backend=AuditSigningBackendKind.AWS_KMS,
                 key_arns={"some-other-key": "arn:aws:kms:us-east-1:1:key/x"},
-            )
+            ),
+            # U-RT-134 (C-RT-03 v1.101) — MTC also requires the cutover-record
+            # trio at bootstrap; supplying it here lets execution reach the
+            # `validate_audit_signing_for_span_stage` check under test (which
+            # raises FIRST, on the unrelated missing-redaction-key gap) —
+            # record init (which would call the fake backend's sign/verify,
+            # asserted "never reached" below) is never attempted.
+            "audit_cutover_record_path": str(tmp_path / "cutover-record.json"),
+            "audit_cutover_record_key_id": "some-other-key",
+            "audit_ledger_binding_id": "sidecar-1",
         }
     )
 
@@ -737,6 +746,56 @@ async def test_stage_4_validates_signing_before_one_shot_tracer_registration(
             await stage_4_od.execute(ctx, config, WorkloadClass.SOFTWARE_ENGINEERING)
 
     assert tracer_calls == []  # the one-shot registrar was never invoked
+
+
+@pytest.mark.asyncio
+async def test_stage_4_config_value_validation_wins_over_backend_construction_failure(
+    tmp_path: Path,
+) -> None:
+    """Out-of-family Codex [P2] finding: `validate_mtc_audit_signing_config`
+    (pure, config-only) now runs BEFORE `make_audit_signing_backend` — an
+    invalid config VALUE (explicit `false` at MTC) must surface the typed
+    `AuditSigningConfigInvalidError` deterministically, not whatever error
+    backend construction happens to raise first (missing boto3, region
+    resolution, credential discovery)."""
+    import unittest.mock as mock
+    from types import SimpleNamespace
+
+    from harness_runtime.bootstrap import stage_4_od
+    from harness_runtime.bootstrap.mutable_context import _MutableHarnessContext
+    from harness_runtime.lifecycle.audit_signing_fail_closed_validation import (
+        AuditSigningConfigInvalidError,
+    )
+    from harness_runtime.types import AuditSigningBackendKind, AuditSigningConfig
+
+    config = _config(
+        tmp_path,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        tenant_id="tenant-x",
+    ).model_copy(
+        update={
+            "audit_signing_fail_closed": False,  # invalid VALUE at MTC
+            "audit_signing": AuditSigningConfig(
+                backend=AuditSigningBackendKind.AWS_KMS,
+                key_arns={"cutover-key": "arn:aws:kms:us-east-1:1:key/x"},
+            ),
+            "audit_cutover_record_path": str(tmp_path / "record.json"),
+            "audit_cutover_record_key_id": "cutover-key",
+            "audit_ledger_binding_id": "sidecar-1",
+        }
+    )
+
+    ctx = _MutableHarnessContext()
+    ctx.ledger_writer = SimpleNamespace()
+
+    def _construction_boom(_cfg: object) -> None:
+        raise RuntimeError("simulated backend-construction failure (e.g. missing boto3)")
+
+    from harness_core.workload_class import WorkloadClass
+
+    with mock.patch.object(stage_4_od, "make_audit_signing_backend", _construction_boom):
+        with pytest.raises(AuditSigningConfigInvalidError, match="audit_signing_fail_closed=false"):
+            await stage_4_od.execute(ctx, config, WorkloadClass.SOFTWARE_ENGINEERING)
 
 
 def test_restarted_stage_tokenizers_never_collide_tokens(tmp_path: Path) -> None:
