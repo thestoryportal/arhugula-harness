@@ -825,8 +825,15 @@ async def test_facade_consumes_carrier_into_audit_failure_report_and_reraises(
         if r.levelno == logging.ERROR and carrier.result_ref in r.getMessage()
     ]
     assert report_records, "the facade must emit the result_ref-keyed audit-failure report"
-    assert "msg_facade_preserved" in report_records[0].getMessage(), (
-        "the report must carry the preserved effect payload"
-    )
+    report = report_records[0].getMessage()
+    # Codex round-2 P1 — the payload itself is REDACTED from the log (tenant
+    # prompts / PII / tool credentials must not replicate into ordinary log
+    # aggregation under an MTC KMS outage); only the type + repr digest join
+    # the report to a recovered payload.
+    assert "msg_facade_preserved" not in report, "the raw payload must NOT reach the log"
+    import hashlib as _hashlib
+
+    expected_digest = _hashlib.sha256(repr(carrier.result).encode("utf-8")).hexdigest()
+    assert expected_digest in report, "the report must carry the payload's repr digest"
     # The re-raised carrier still holds the payload for any richer consumer.
     assert cast("dict[str, Any]", carrier.result)["id"] == "msg_facade_preserved"

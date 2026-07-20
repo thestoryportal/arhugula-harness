@@ -27,6 +27,7 @@ result, per CP v1.101 §2 catch-ordering contract + OD v1.34 §21.2.3 row 7.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import uuid
 from enum import StrEnum
@@ -105,14 +106,28 @@ def report_post_effect_audit_failure(exc: PostEffectAuditSigningError) -> None:
     generic step-exception handler stringifies the exception into
     `RunResult.fail_class` — without this, the completed effect payload
     would be discarded despite riding the carrier (out-of-family Codex
-    round-1 P1 on this arc). The repr is bounded so an arbitrarily large
-    provider/tool/webhook/sub-agent payload cannot blow up the log record.
+    round-1 P1 on this arc).
+
+    The payload itself is NEVER written to the log (out-of-family Codex
+    round-2 P1): a provider response / tool result / sub-agent output can
+    carry tenant prompts, PII, or tool-returned credentials, and at MTC the
+    flag defaults ON — a KMS outage must not replicate every affected
+    payload into ordinary log aggregation (the OD v1.34 §21.2.1
+    never-silently-degrade posture cuts both ways). The report carries only
+    redacted metadata: the payload's type name and a SHA-256 digest of its
+    repr, which lets an operator VERIFY a recovered payload matches the
+    report without the log ever holding the content. The object itself
+    stays on the in-memory carrier for richer (protected) consumers.
     """
+    result_repr = repr(exc.result)
     logging.getLogger("harness.runtime.audit_signing").error(
         "post-effect audit signing failure — completed %s effect PRESERVED "
-        "(result_ref=%s): %s | result=%.4000r",
+        "on the carrier (result_ref=%s): %s | result REDACTED "
+        "(type=%s, repr_sha256=%s, repr_len=%d)",
         exc.effect_class.value,
         exc.result_ref,
         exc,
-        exc.result,
+        type(exc.result).__name__,
+        hashlib.sha256(result_repr.encode("utf-8", errors="replace")).hexdigest(),
+        len(result_repr),
     )
