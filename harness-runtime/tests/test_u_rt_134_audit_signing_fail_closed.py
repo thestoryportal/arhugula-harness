@@ -511,8 +511,9 @@ def test_greenfield_minting_rejected_when_sidecar_has_rows(tmp_path: Path) -> No
     every legacy disposition."""
     sidecar = tmp_path / "audit-entries.jsonl"
     # A well-formed row (the round-6 persisted-row key scan runs first and
-    # must PASS — its key differs from the pinned record key) so the
-    # freshness gate is the check that fires.
+    # must PASS — its key differs from the pinned record key AND is mapped,
+    # per the round-8 unmapped-key fail-closed rule) so the freshness gate
+    # is the check that fires.
     sidecar.write_text(
         '{"tenant_tag": "_single", "entry": {"signature_attrs": '
         '{"audit_signature_key_id": "some-row-key"}}}\n',
@@ -521,6 +522,7 @@ def test_greenfield_minting_rejected_when_sidecar_has_rows(tmp_path: Path) -> No
     record_path = tmp_path / "record.json"
     kwargs = _mtc_ready_kwargs(tmp_path)
     kwargs["audit_cutover_record_path"] = str(record_path)
+    kwargs["key_arns"] = {"cutover-key": _ARN_B, "some-row-key": _ARN_A}
     config = _config(tmp_path, **kwargs)
     with pytest.raises(AuditSigningConfigInvalidError, match="NOT fresh"):
         validate_and_initialize_mtc_audit_signing(
@@ -678,6 +680,53 @@ def test_non_string_persisted_key_id_fails_closed(tmp_path: Path) -> None:
     kwargs = _mtc_ready_kwargs(tmp_path)
     config = _config(tmp_path, **kwargs)
     with pytest.raises(AuditSigningConfigInvalidError, match="non-string"):
+        validate_and_initialize_mtc_audit_signing(
+            config, signing_backend=_FakeBackend(), audit_sidecar_path=sidecar
+        )
+
+
+def test_legacy_baseline_sidecar_rows_skipped_not_rejected(tmp_path: Path) -> None:
+    """Out-of-family Codex [P1] round-8 finding: `adopt_legacy_is_refs()`
+    baseline rows (`{"legacy_baseline": ...}`, no `entry`) are legitimate —
+    the row-key scan must skip them exactly as the audit writer's own fold
+    path does, not convert them into a false RT-FAIL-CONFIG that bricks
+    every migrated deployment."""
+    import json as _json
+
+    record_path = tmp_path / "record.json"
+    backend = _FakeBackend()
+    kwargs = _mtc_ready_kwargs(tmp_path)
+    kwargs["audit_cutover_record_path"] = str(record_path)
+    config = _config(tmp_path, **kwargs)
+    validate_and_initialize_mtc_audit_signing(config, signing_backend=backend)
+
+    sidecar = tmp_path / "audit-entries.jsonl"
+    sidecar.write_text(
+        _json.dumps({"legacy_baseline": [["_single", "a" * 64]]}) + "\n", encoding="utf-8"
+    )
+    # Record exists + sidecar holds ONLY a baseline row → verify path, scan
+    # skips the baseline row, bootstrap validation succeeds.
+    validate_and_initialize_mtc_audit_signing(
+        config, signing_backend=backend, audit_sidecar_path=sidecar
+    )
+
+
+def test_unmapped_persisted_row_key_fails_closed(tmp_path: Path) -> None:
+    """Out-of-family Codex [P1] round-8 finding: a persisted row key absent
+    from `key_arns` makes PHYSICAL distinctness unprovable — fail closed
+    (operator remedy: add the historical key's ARN as a documentation
+    mapping), never silently treat it as distinct."""
+    import json as _json
+
+    sidecar = tmp_path / "audit-entries.jsonl"
+    row = {
+        "tenant_tag": "_single",
+        "entry": {"signature_attrs": {"audit_signature_key_id": "removed-historical-key"}},
+    }
+    sidecar.write_text(_json.dumps(row) + "\n", encoding="utf-8")
+    kwargs = _mtc_ready_kwargs(tmp_path)
+    config = _config(tmp_path, **kwargs)
+    with pytest.raises(AuditSigningConfigInvalidError, match="cannot be proven"):
         validate_and_initialize_mtc_audit_signing(
             config, signing_backend=_FakeBackend(), audit_sidecar_path=sidecar
         )

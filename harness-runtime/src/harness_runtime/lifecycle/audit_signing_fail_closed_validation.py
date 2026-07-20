@@ -547,8 +547,18 @@ def _reject_record_key_used_by_persisted_rows(
                 if not line.strip():
                     continue
                 try:
-                    row = json.loads(line)
-                    row_key_id = row["entry"]["signature_attrs"]["audit_signature_key_id"]
+                    row: object = json.loads(line)
+                    if isinstance(row, dict) and "legacy_baseline" in row:
+                        # `adopt_legacy_is_refs()` baseline rows (out-of-family
+                        # Codex [P1] round-8) — pre-sidecar IS refs whose full
+                        # entries the old runtime dropped. Legitimate, carry NO
+                        # `entry` and therefore no row-signing key to compare;
+                        # the audit writer's own fold path skips them the same
+                        # way (`audit_writer.py` `"legacy_baseline" in row`).
+                        continue
+                    row_key_id: object = row["entry"]["signature_attrs"][  # type: ignore[index]
+                        "audit_signature_key_id"
+                    ]
                 except (ValueError, KeyError, TypeError) as exc:
                     raise AuditSigningConfigInvalidError(
                         (
@@ -562,11 +572,12 @@ def _reject_record_key_used_by_persisted_rows(
                 if not isinstance(row_key_id, str):
                     # Out-of-family Codex [P1] round-7: a null/int key id is
                     # equally unprovable history — fail closed, never skip.
+                    bad_type_name = type(row_key_id).__name__  # type: ignore[reportUnknownVariableType]
                     raise AuditSigningConfigInvalidError(
                         (
                             f"audit sidecar {str(sidecar_path)!r} line {line_number} "
                             f"carries a non-string audit_signature_key_id "
-                            f"({type(row_key_id).__name__}) — cannot prove the "
+                            f"({bad_type_name}) — cannot prove the "
                             "record key is distinct from every persisted "
                             "row-signing key; refusing the pinned "
                             f"audit_cutover_record_key_id={record_key_id!r}",
@@ -574,9 +585,29 @@ def _reject_record_key_used_by_persisted_rows(
                     )
                 same_logical = row_key_id == record_key_id
                 row_arn = _resolve_record_key_arn(config, row_key_id)
+                if row_arn is None:
+                    # Out-of-family Codex [P1] round-8: an unmapped historical
+                    # row key makes PHYSICAL distinctness unprovable — a
+                    # deployment could map the record key to the same KMS key
+                    # a since-removed logical row id used and pass. Fail
+                    # closed; the operator remedy is adding the historical
+                    # id's ARN to `audit_signing.key_arns` (a documentation
+                    # mapping — nothing signs under it). (Placeholder-era rows
+                    # carry `unsigned:*` only in the signature VALUE — their
+                    # key_id field is a real id, so no carve-out is needed.)
+                    raise AuditSigningConfigInvalidError(
+                        (
+                            f"persisted audit row (sidecar line {line_number}) was "
+                            f"signed under key id {row_key_id!r}, which has no "
+                            "entry in audit_signing.key_arns — physical "
+                            "distinctness from the pinned "
+                            f"audit_cutover_record_key_id={record_key_id!r} cannot "
+                            "be proven; add the historical key's ARN to key_arns "
+                            "so separation is verifiable",
+                        )
+                    )
                 same_material = (
                     record_material is not None
-                    and row_arn is not None
                     and _canonical_kms_key_identity(row_arn) == record_material
                 )
                 if same_logical or same_material:
