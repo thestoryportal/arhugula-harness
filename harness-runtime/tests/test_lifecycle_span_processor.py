@@ -99,6 +99,32 @@ class _RecordingAuditWriter:
         return "appended"
 
 
+class _RedactionMapTestBackend:
+    """Module-level TEST-ONLY `SigningBackend` double (real Ed25519).
+
+    OD spec v1.34 §21.2.3 row 6 — the redaction-token signing path now
+    REQUIRES a configured backend at every persona tier; the tests below
+    exercise multi-tenant WIRING (tokenizer gating, tenant threading,
+    namespacing), not signing correctness, so a single shared real-crypto
+    double is threaded through them.
+    """
+
+    algorithm = "ed25519"
+
+    def __init__(self) -> None:
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+        self._private_key = Ed25519PrivateKey.generate()
+
+    def sign(self, *, message: bytes, key_id: str, key_period: int) -> bytes:
+        del key_id, key_period
+        return self._private_key.sign(message)
+
+    def verify(self, *, message: bytes, signature: bytes, key_id: str, key_period: int) -> bool:
+        del message, signature, key_id, key_period
+        return True
+
+
 # ---------------------------------------------------------------------------
 # AC #1 — spans flush on demand.
 # ---------------------------------------------------------------------------
@@ -313,6 +339,7 @@ def test_materialize_multi_tenant_tokenizes_content_with_audit_map(
         provider,
         exporter=in_memory,
         audit_writer=audit_writer,
+        signing_backend=_RedactionMapTestBackend(),
     )
     assert stage.redaction_processor.tokenizer_enabled is True
 
@@ -579,11 +606,51 @@ def test_aws_kms_mapping_missing_token_map_key_fails_at_bootstrap(tmp_path: Path
     assert leaked == set()
 
 
+def test_default_audit_signing_config_at_mtc_fails_at_bootstrap_not_mid_run(
+    tmp_path: Path,
+) -> None:
+    """U-OD-30/B-51 landing (out-of-family Codex P1) — before this arc, an
+    UNCONFIGURED `audit_signing.backend` (the default — no `aws-kms`, no
+    injected `signing_backend`) at MULTI_TENANT_COMPLIANCE with an audit
+    writer sailed through `validate_audit_signing_for_span_stage` (which
+    only checked the aws-kms-configured case) and only failed later, when
+    `RedactionSpanProcessor.on_end` hit the FIRST content-bearing span and
+    `compose_redaction_token_audit_entry` raised mid-run (OD spec v1.34
+    §21.2.3 row 6 made that path unconditionally backend-required). This
+    now fails at bootstrap, before the tracer pipeline goes live. Mutation
+    probe: removing the new unconditional check (or gating it behind the
+    aws-kms early-return) lets construction succeed here."""
+    from harness_runtime.lifecycle.span_processor import SpanProcessorBindError
+
+    config = _config(
+        tmp_path,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        tenant_id="tenant-default-audit-signing",
+    )
+    with pytest.raises(SpanProcessorBindError, match="unconditionally"):
+        materialize_span_processor_stage(
+            config,
+            _provider(),
+            exporter=InMemorySpanExporter(),
+            audit_writer=_RecordingAuditWriter(),
+        )
+
+
 def test_aws_kms_config_without_injected_backend_fails_at_bootstrap(tmp_path: Path) -> None:
     """Codex round-16 (B-47 PR B1) — the composer is public: a direct caller
     passing an explicitly-KMS config while omitting `signing_backend` must
     fail loud at construction, not silently emit `unsigned:` placeholders
-    despite the configuration."""
+    despite the configuration.
+
+    U-OD-30/B-51 landing (out-of-family Codex P1) — the NEW unconditional
+    tokenizer-will-bind-requires-a-backend check (OD spec v1.34 §21.2.3 row
+    6) now fires FIRST for this exact scenario (it is a strict
+    generalization of the aws-kms-specific check below it); the match
+    string is updated to the check that actually gates this test's
+    construction. `test_aws_kms_mapping_missing_token_map_key_fails_at_
+    bootstrap` below exercises the narrower aws-kms-specific mapping check
+    with a real backend supplied, so the aws-kms-specific code path stays
+    covered."""
     from harness_runtime.lifecycle.span_processor import SpanProcessorBindError
     from harness_runtime.types import AuditSigningBackendKind, AuditSigningConfig
 
@@ -600,7 +667,7 @@ def test_aws_kms_config_without_injected_backend_fails_at_bootstrap(tmp_path: Pa
             )
         }
     )
-    with pytest.raises(SpanProcessorBindError, match="never silently degrade"):
+    with pytest.raises(SpanProcessorBindError, match="unconditionally"):
         materialize_span_processor_stage(
             config,
             _provider(),
@@ -692,6 +759,7 @@ def test_restarted_stage_tokenizers_never_collide_tokens(tmp_path: Path) -> None
             provider,
             exporter=in_memory,
             audit_writer=audit_writer,
+            signing_backend=_RedactionMapTestBackend(),
         )
         assert stage.redaction_processor.tokenizer_enabled is True
         tracer = provider.get_tracer(f"ns-run-{run}")

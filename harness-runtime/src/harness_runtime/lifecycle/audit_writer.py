@@ -92,6 +92,7 @@ from harness_is.state_ledger_write import (
     read_ledger,
 )
 from harness_od.audit_ledger_types import AuditLedgerEntry, compute_entry_hash
+from harness_od.multi_tenant_trace_separation_and_audit_ledger import sidecar_tag
 from harness_od.per_family_audit_verification import REDACTION_TOKEN_NAMESPACE_PREFIX
 
 from harness_runtime.lifecycle.state_ledger import LedgerWriter
@@ -555,25 +556,20 @@ class RuntimeAuditLedgerWriter:
     def _tenant_tag(cls, tenant_id: str | None) -> str:
         """Resolve the tenant scoping tag for an append/read call.
 
-        The encoding must be INJECTIVE (codex round-45 P1): the sidecar
-        persists FULL signed entries (including redaction-token raw values)
-        keyed by this tag, so a literal operator tenant ID colliding with
-        the single-tenant sentinel would disclose single-tenant audit
-        payloads to that tenant's reader. `None` is the one documented
-        single-tenant signal (RuntimeConfig.tenant_id); the empty string is
-        a config bug, not single-tenant intent — both ambiguous inputs are
-        refused rather than silently normalized.
+        Delegates to `harness_od.sidecar_tag` (OD spec v1.34 §21.2.1 row 2 —
+        out-of-family Codex P2, PR #1061 round 3: the writer previously
+        duplicated this rule-set instead of calling the newly-declared
+        normalization authority, an enforcement criterion the plan text
+        pins explicitly — "the runtime writer's `_tenant_tag` MUST delegate
+        to it"). `sidecar_tag` shares the SAME injective encoding this
+        writer already relied on (codex round-45 P1): `None` -> the writer's
+        `_SINGLE_TENANT_TAG` literal; the empty string and the reserved
+        literal itself are refused — a real tenant may never alias the
+        single-tenant audit scope. Delegating (rather than duplicating)
+        means signing's fifth-segment tag and this sidecar/action-ID join
+        key cannot drift out of sync.
         """
-        if tenant_id is None:
-            return cls._SINGLE_TENANT_TAG
-        if tenant_id in ("", cls._SINGLE_TENANT_TAG):
-            raise ValueError(
-                f"tenant_id {tenant_id!r} is reserved: None is the "
-                f"single-tenant signal and {cls._SINGLE_TENANT_TAG!r} is its "
-                f"sidecar tag — an operator tenant may not alias the "
-                f"single-tenant audit scope"
-            )
-        return tenant_id
+        return sidecar_tag(tenant_id)
 
     @classmethod
     def _action_id_for(cls, tenant_id: str | None, audit_entry: AuditLedgerEntry) -> Identifier:

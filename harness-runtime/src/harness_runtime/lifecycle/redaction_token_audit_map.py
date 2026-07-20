@@ -24,8 +24,10 @@ class AuditLedgerRedactionTokenMap(RedactionTokenMap):
     passed through on every `append` — this map is a production audit writer
     the deployment-time composition root must be able to reach with a real
     `SigningBackend` (out-of-family Codex P1 finding on the B-47 PR-A
-    landing). Absent (the default), the placeholder signing path is
-    preserved byte-for-byte.
+    landing). Absent (the default), `append` raises `AuditSigningFailedError`
+    at every persona tier — OD spec v1.34 §21.2.3 row 6 made the
+    redaction-token signing path unconditionally backend-required, so the
+    pre-v1.34 placeholder-preserved behavior no longer applies on this path.
     """
 
     def __init__(
@@ -120,6 +122,7 @@ class AuditLedgerRedactionTokenMap(RedactionTokenMap):
                     prior_entry_hash=prior_entry_hash,
                     timestamp=self._timestamp,
                     backend=self._signing_backend,
+                    tenant_id=self._tenant_id,
                 )
                 txn.append(audit_entry)
 
@@ -136,6 +139,7 @@ class AuditLedgerRedactionTokenMap(RedactionTokenMap):
             prior_entry_hash=self._prior_entry_hash,
             timestamp=self._timestamp,
             backend=self._signing_backend,
+            tenant_id=self._tenant_id,
         )
         try:
             self._audit_writer.append(self._tenant_id, audit_entry)

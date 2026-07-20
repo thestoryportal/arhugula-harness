@@ -23,6 +23,10 @@ from harness_od.audit_ledger_types import (
     StateLedgerEntryRef,
     compute_entry_hash,
 )
+from harness_od.audit_signing_errors import (
+    AuditSigningBreakerOpenError,
+    AuditSigningFailedError,
+)
 from harness_od.multi_tenant_trace_separation_and_audit_ledger import (
     AUDIT_SIGNATURE_REQUIRED_AT_TIER_5_LEDGER,
     PER_TENANT_SEPARATION_BINDINGS,
@@ -33,8 +37,10 @@ from harness_od.multi_tenant_trace_separation_and_audit_ledger import (
     TenantIdMissingViolation,
     TenantSeparationStrategy,
     assert_tenant_id_on_every_span_at_multi_tenant_cells,
+    sidecar_tag,
     sign_audit_entry,
     sign_rotation_pair,
+    signing_token,
     verify_hash_chain_integrity,
     verify_rotation_pairs,
 )
@@ -608,9 +614,10 @@ def test_sign_with_backend_passes_deployment_bound_period_zero() -> None:
 def test_sign_with_backend_rejects_algorithm_disagreement() -> None:
     """§21.2.1 item 4 — a backend whose declared algorithm disagrees with the
     caller-selected algo must not attest: a mislabeled algorithm never lands
-    on the attribute set."""
+    on the attribute set. §21.2.3 row 5 — routes through the typed
+    `AuditSigningFailedError` boundary, not a bare `ValueError`."""
     backend = _InMemoryEd25519Backend()
-    with pytest.raises(ValueError, match="disagrees"):
+    with pytest.raises(AuditSigningFailedError, match="disagrees"):
         sign_audit_entry(_payload("h0"), "key-1", SignatureAlgorithm.ECDSA_P256, backend=backend)
 
 
@@ -618,13 +625,13 @@ def test_sign_with_backend_rejects_wrong_length_signature() -> None:
     """§21.2.1 item 4 — a backend returning a signature whose byte-length
     contradicts the declared algorithm's fixed width (C-CP-20 §20.4: ed25519
     is exactly 64 bytes) fails loud rather than landing a malformed
-    attribute set."""
+    attribute set. §21.2.3 row 5 — typed `AuditSigningFailedError`."""
 
     class _PaddingBackend(_InMemoryEd25519Backend):
         def sign(self, *, message: bytes, key_id: str, key_period: int) -> bytes:
             return super().sign(message=message, key_id=key_id, key_period=key_period) + b"\x00"
 
-    with pytest.raises(ValueError, match="65-byte signature"):
+    with pytest.raises(AuditSigningFailedError, match="len=65"):
         sign_audit_entry(
             _payload("h0"), "key-1", SignatureAlgorithm.ED25519, backend=_PaddingBackend()
         )
@@ -687,3 +694,228 @@ def test_canonical_message_exact_bytes_pin_all_four_bindings_and_injectivity() -
     plain_join = "|".join((entry_hash, "key-1", "ed25519", "DEPLOYMENT_BOUND")).encode()
     with _pytest.raises(InvalidSignature):
         backend.public_key.verify(raw, plain_join)
+
+
+# --- U-OD-30 amendment (OD spec v1.34 §21.2.1/§21.2.3) — tenant-bearing
+# signing, the tenant-tag normalizer, and the typed AuditSigningFailedError
+# boundary ----------------------------------------------------------------
+
+
+def test_tenant_tag_normalizer_none_passthrough() -> None:
+    """§21.2.1 row 2 — `signing_token(None)` drops the segment (`None`);
+    `sidecar_tag(None)` preserves the writer's pre-amendment `"_single"`
+    byte-shape."""
+    assert signing_token(None) is None
+    assert sidecar_tag(None) == "_single"
+
+
+def test_tenant_tag_normalizer_same_token_for_real_tenant() -> None:
+    """§21.2.1 row 2 — for a real (non-`None`) tenant, `signing_token` and
+    `sidecar_tag` return the IDENTICAL token: the signed segment and the
+    sidecar join key are the SAME token by construction."""
+    assert signing_token("acme-corp") == sidecar_tag("acme-corp") == "acme-corp"
+
+
+def test_tenant_tag_normalization_refuses_empty_and_single_literal() -> None:
+    """§21.2.1 row 2 — the shared rule-set REFUSES the empty string (use
+    `None` for untenanted) and the reserved `"_single"` sidecar literal, at
+    BOTH projections (one authority, not two independently-drifting checks).
+    Mutation probe: removing either refusal branch lets that value through
+    both `signing_token` and `sidecar_tag` unrejected."""
+    for bad in ("", "_single"):
+        with pytest.raises(ValueError, match="tenant_id"):
+            signing_token(bad)
+        with pytest.raises(ValueError, match="tenant_id"):
+            sidecar_tag(bad)
+
+
+def test_tenant_absent_message_and_attrs_byte_identical_to_v1_33_path() -> None:
+    """Witness (b) — with `tenant_id` absent, the canonical message and the
+    resulting `AuditSignatureAttributes` are byte-identical to the
+    pre-amendment (v1.33) path for every existing caller: calling with an
+    explicit `tenant_id=None` produces the EXACT same signature bytes as
+    calling without the keyword at all."""
+    import base64
+
+    payload = _payload("h0")
+    backend = _InMemoryEd25519Backend()
+    sig_no_kwarg = sign_audit_entry(payload, "key-1", SignatureAlgorithm.ED25519, backend=backend)
+
+    entry_hash = compute_entry_hash(payload)
+
+    def literal_message(*parts: str) -> bytes:
+        return "|".join(f"{len(part)}:{part}" for part in parts).encode()
+
+    expected_four_tuple = literal_message(entry_hash, "key-1", "ed25519", "DEPLOYMENT_BOUND")
+    backend.public_key.verify(
+        base64.b64decode(sig_no_kwarg.audit_signature_value, validate=True), expected_four_tuple
+    )
+
+    sig_explicit_none = sign_audit_entry(
+        _payload("h0"), "key-1", SignatureAlgorithm.ED25519, backend=backend, tenant_id=None
+    )
+    # Ed25519 (RFC 8032) is DETERMINISTIC for a fixed key + message — the
+    # same backend signing the byte-identical four-tuple message must
+    # produce the byte-identical signature, which is the load-bearing proof
+    # that tenant_id=None composes the EXACT same message as omitting the
+    # keyword entirely (a de-normalization bug that dropped a stray byte
+    # would flip this to a different, still-valid signature).
+    assert sig_explicit_none.audit_signature_value == sig_no_kwarg.audit_signature_value
+    assert sig_explicit_none == sig_no_kwarg
+
+
+def test_five_segment_message_tenant_tag_swap_breaks_verification() -> None:
+    """Witness (a) — a tenant-tag swap on a signed entry breaks verification:
+    the message is injective across all five segments, so a five-tuple
+    signed under `tenant_id="tenant-a"` does not verify against the literal
+    five-tuple message for `"tenant-b"`. Mutation probe: dropping the tenant
+    segment from the canonical message would make this pass wrongly (the
+    swapped message would collapse to the same four-tuple prefix either way)
+    — this witness pins the FULL five-part literal bytes, not a helper
+    round-trip."""
+    import base64
+
+    from cryptography.exceptions import InvalidSignature
+
+    payload = _payload("h0")
+    backend = _InMemoryEd25519Backend()
+    sig = sign_audit_entry(
+        payload, "key-1", SignatureAlgorithm.ED25519, backend=backend, tenant_id="tenant-a"
+    )
+    raw = base64.b64decode(sig.audit_signature_value, validate=True)
+    entry_hash = compute_entry_hash(payload)
+
+    def literal_message(*parts: str) -> bytes:
+        return "|".join(f"{len(part)}:{part}" for part in parts).encode()
+
+    correct = literal_message(entry_hash, "key-1", "ed25519", "DEPLOYMENT_BOUND", "tenant-a")
+    backend.public_key.verify(raw, correct)  # raises on mismatch — sanity pin
+
+    swapped = literal_message(entry_hash, "key-1", "ed25519", "DEPLOYMENT_BOUND", "tenant-b")
+    with pytest.raises(InvalidSignature):
+        backend.public_key.verify(raw, swapped)
+
+
+def test_five_tuple_message_distinct_from_four_tuple_injective() -> None:
+    """§21.2.1 row 1 — a tenant-bearing (five-segment) signature does NOT
+    verify against the tenant-absent (four-tuple) message: the length-prefix
+    encoding keeps the four-tuple/five-tuple pair injective, so a verifier
+    that forgets to include the tenant segment cannot be fooled into
+    accepting a tenant-bound signature as tenant-absent (or vice versa)."""
+    import base64
+
+    from cryptography.exceptions import InvalidSignature
+
+    payload = _payload("h0")
+    backend = _InMemoryEd25519Backend()
+    sig = sign_audit_entry(
+        payload, "key-1", SignatureAlgorithm.ED25519, backend=backend, tenant_id="tenant-a"
+    )
+    raw = base64.b64decode(sig.audit_signature_value, validate=True)
+    entry_hash = compute_entry_hash(payload)
+
+    def literal_message(*parts: str) -> bytes:
+        return "|".join(f"{len(part)}:{part}" for part in parts).encode()
+
+    four_tuple = literal_message(entry_hash, "key-1", "ed25519", "DEPLOYMENT_BOUND")
+    with pytest.raises(InvalidSignature):
+        backend.public_key.verify(raw, four_tuple)
+
+
+def test_sign_audit_entry_rejects_empty_tenant_and_reserved_literal() -> None:
+    """§21.2.1 row 2 — `sign_audit_entry` applies the shared normalizer to
+    its `tenant_id` BEFORE composing the message; the empty string and the
+    reserved `"_single"` literal are refused at the signing entry point
+    too, not only at the bare normalizer functions."""
+    for bad in ("", "_single"):
+        with pytest.raises(ValueError, match="tenant_id"):
+            sign_audit_entry(_payload("h0"), "key-1", SignatureAlgorithm.ED25519, tenant_id=bad)
+
+
+def test_sign_audit_entry_preserves_typed_breaker_open_error_unwrapped() -> None:
+    """Out-of-family Codex P2 (PR #1061 round 2) — a production
+    `BreakerGuardedSigningBackend` raises the ALREADY-typed
+    `AuditSigningBreakerOpenError` when the breaker is open; that must
+    propagate UNCHANGED (not double-wrapped into `AuditSigningFailedError`)
+    — it is a distinct, caller-retryable AVAILABILITY signal, not a signing
+    failure, and callers key on the exact type to distinguish them.
+    Mutation probe: removing the `except AUDIT_SIGNING_HARD_FAILURES: raise`
+    re-raise arm lets the generic `except Exception` wrap it instead."""
+
+    class _BreakerOpenBackend(_InMemoryEd25519Backend):
+        def sign(self, *, message: bytes, key_id: str, key_period: int) -> bytes:
+            raise AuditSigningBreakerOpenError("breaker is open")
+
+    with pytest.raises(AuditSigningBreakerOpenError, match="breaker is open"):
+        sign_audit_entry(
+            _payload("h0"), "key-1", SignatureAlgorithm.ED25519, backend=_BreakerOpenBackend()
+        )
+
+
+def test_sign_audit_entry_rejects_untyped_backend_error_wraps_typed() -> None:
+    """§21.2.3 row 5 — `backend.sign` raising an UNTYPED exception (a bug in
+    a third-party backend, not one of this module's own validations) is
+    wrapped into the typed `AuditSigningFailedError`, never left to escape
+    raw. Mutation probe: removing the wrapping try/except would let the
+    injected `RuntimeError("boom")` propagate unwrapped and this assertion
+    would see the wrong exception TYPE."""
+
+    class _ExplodingBackend(_InMemoryEd25519Backend):
+        def sign(self, *, message: bytes, key_id: str, key_period: int) -> bytes:
+            del message, key_id, key_period
+            raise RuntimeError("boom")
+
+    with pytest.raises(AuditSigningFailedError, match="boom"):
+        sign_audit_entry(
+            _payload("h0"), "key-1", SignatureAlgorithm.ED25519, backend=_ExplodingBackend()
+        )
+
+
+def test_sign_audit_entry_rejects_non_bytes_signature() -> None:
+    """§21.2.1 row 4 / §21.2.3 row 5 — a backend returning a non-`bytes`
+    value (e.g. accidentally returning `str`) is rejected as malformed
+    through the typed boundary, not left to raise an untyped `TypeError`
+    out of `base64.b64encode` for a blind upstream catch to swallow."""
+
+    class _StringBackend(_InMemoryEd25519Backend):
+        def sign(self, *, message: bytes, key_id: str, key_period: int) -> bytes:
+            del message, key_id, key_period
+            return "not-bytes"  # type: ignore[return-value]
+
+    with pytest.raises(AuditSigningFailedError, match="type=str"):
+        sign_audit_entry(
+            _payload("h0"), "key-1", SignatureAlgorithm.ED25519, backend=_StringBackend()
+        )
+
+
+def test_sign_rotation_pair_has_no_production_caller() -> None:
+    """§21.2.1 row 7 (acc #21) — `sign_rotation_pair` is PROHIBITED at
+    MULTI_TENANT_COMPLIANCE until `B-33`; the function takes no tier input
+    and has ZERO production callers on `main`, so the enforceable slice at
+    THIS arc is a static caller-regression guard: no production source file
+    under harness-runtime/harness-cp/harness-cxa/harness-od calls
+    `sign_rotation_pair(` anywhere — including an intra-module call inside
+    the defining module itself. Only the `def sign_rotation_pair(` site and
+    test files are excluded. Mutation probe: adding ANY production caller
+    (including one inside this very module) fails this test."""
+    import re
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parents[2]
+    packages = ["harness-runtime", "harness-cp", "harness-cxa", "harness-od"]
+    call_pattern = re.compile(r"\bsign_rotation_pair\s*\(")
+    def_pattern = re.compile(r"^def sign_rotation_pair\(", re.MULTILINE)
+    offenders: list[str] = []
+    for package in packages:
+        src_root = repo_root / package / "src"
+        if not src_root.is_dir():
+            continue
+        for path in src_root.rglob("*.py"):
+            text = path.read_text(encoding="utf-8")
+            for match in call_pattern.finditer(text):
+                line_start = text.rfind("\n", 0, match.start()) + 1
+                line = text[line_start : text.find("\n", match.start())]
+                if def_pattern.match(line):
+                    continue  # the def site itself
+                offenders.append(f"{path.relative_to(repo_root)}:{line.strip()}")
+    assert offenders == [], f"sign_rotation_pair has production callers: {offenders}"

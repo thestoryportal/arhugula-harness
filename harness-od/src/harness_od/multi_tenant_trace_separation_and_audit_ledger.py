@@ -77,6 +77,10 @@ from harness_od.audit_ledger_types import (
     StateLedgerEntryRef,
     compute_entry_hash,
 )
+from harness_od.audit_signing_errors import (
+    AUDIT_SIGNING_HARD_FAILURES,
+    AuditSigningFailedError,
+)
 from harness_od.observability_matrix import CellID
 from harness_od.otel_genai_base import SpanRef
 
@@ -89,8 +93,10 @@ __all__ = [
     "RotationPairIntegrityBreach",
     "TenantIdMissingViolation",
     "TenantSeparationStrategy",
+    "sidecar_tag",
     "sign_audit_entry",
     "sign_rotation_pair",
+    "signing_token",
     "verify_hash_chain_integrity",
     "verify_rotation_pairs",
 ]
@@ -213,9 +219,69 @@ _DEPLOYMENT_BOUND_KEY_PERIOD: int = 0
 
 _DEPLOYMENT_BOUND_TOKEN: str = "DEPLOYMENT_BOUND"
 
+#: The reserved sidecar single-tenant join-key literal (§21.2.1 row 2) — a
+#: real `tenant_id` may never collide with the writer's own untenanted tag.
+_RESERVED_SIDECAR_TENANT_TAG: str = "_single"
+
+
+def _normalize_tenant_tag(tenant_id: str | None) -> str | None:
+    """Shared §21.2.1 row 2 tenant-tag rule-set — the ONE authority both
+    `signing_token` and `sidecar_tag` project from. `None` passes through as
+    `None` (the untenanted/single-tenant case); the empty string and the
+    reserved `"_single"` sidecar literal are REFUSED — a caller must never
+    hand a real tenant_id that collides with either the drop-segment sentinel
+    or the writer's own reserved join key.
+    """
+    if tenant_id is None:
+        return None
+    if tenant_id == "":
+        raise ValueError(
+            "tenant_id must not be the empty string (OD spec v1.34 §21.2.1 "
+            "row 2) — pass None for the untenanted/single-tenant case"
+        )
+    if tenant_id == _RESERVED_SIDECAR_TENANT_TAG:
+        raise ValueError(
+            f"tenant_id={tenant_id!r} is the reserved sidecar single-tenant "
+            "join key (OD spec v1.34 §21.2.1 row 2) and cannot be used as a "
+            "real tenant identifier"
+        )
+    return tenant_id
+
+
+def signing_token(tenant_id: str | None) -> str | None:
+    """The §21.2.1 row 2 projection for the fifth canonical-message segment.
+
+    `None` -> `None` (no segment — the byte-compat drop-when-absent case).
+    Any other value passes through unchanged after the shared refusal rules
+    (empty string / the reserved `"_single"` literal). `sign_audit_entry`
+    applies this normalizer to its `tenant_id` before composing the signed
+    message; the U-OD-55 verifier applies the IDENTICAL normalizer to its
+    tenant-scope input, so the signed segment and `sidecar_tag`'s join key
+    are the same token by construction.
+    """
+    return _normalize_tenant_tag(tenant_id)
+
+
+def sidecar_tag(tenant_id: str | None) -> str:
+    """The §21.2.1 row 2 projection for the writer's sidecar join key.
+
+    `None` -> `"_single"` (the writer's preserved single-tenant byte-shape,
+    predating this amendment). For any non-`None` tenant this returns the
+    IDENTICAL token `signing_token` would — `harness_od` cannot import the
+    runtime writer, so this rule-set lives here and the writer delegates its
+    `sidecar_tag` half (the U-RT-137 enforcement criterion).
+    """
+    normalized = _normalize_tenant_tag(tenant_id)
+    return normalized if normalized is not None else _RESERVED_SIDECAR_TENANT_TAG
+
 
 def _canonical_od_signing_message(
-    entry_hash: str, *, key_id: str, algo_value: str, key_period_token: str
+    entry_hash: str,
+    *,
+    key_id: str,
+    algo_value: str,
+    key_period_token: str,
+    tenant_tag: str | None = None,
 ) -> bytes:
     """The bytes a §21.2.1 backend actually signs — binds `entry_hash` to its
     signature metadata (mirrors `C-CP-20 §20.3.1`'s canonical-signing-message
@@ -224,10 +290,18 @@ def _canonical_od_signing_message(
     relabeled on an already-signed entry and its signature would still verify).
 
     Length-prefixing each segment (the B-23 injectivity shape) makes the
-    four-tuple `(entry_hash, key_id, algo_value, key_period_token)`
-    collision-free — no ambiguous field-boundary shift.
+    tuple collision-free — no ambiguous field-boundary shift. `tenant_tag`
+    (already `signing_token`-normalized by the caller) is APPENDED as a
+    fifth length-prefixed segment when present (OD spec v1.34 §21.2.1 row 1);
+    absent (`None`), the four-tuple message is PRESERVED VERBATIM
+    byte-for-byte — the length-prefix encoding keeps the four-tuple/five-
+    tuple pair injective (a four-tuple message can never equal a five-tuple
+    message: the byte count committed by each segment's own length prefix
+    forecloses any field-boundary reinterpretation).
     """
     parts = (entry_hash, key_id, algo_value, key_period_token)
+    if tenant_tag is not None:
+        parts = (*parts, tenant_tag)
     return b"|".join(f"{len(part)}:{part}".encode() for part in parts)
 
 
@@ -237,13 +311,17 @@ def sign_audit_entry(
     algo: SignatureAlgorithm,
     *,
     backend: SigningBackend | None = None,
+    tenant_id: str | None = None,
 ) -> AuditSignatureAttributes:
     """Sign an audit-ledger entry payload (C-OD-21 §21.2 + §21.2.1).
 
     Produces an `AuditSignatureAttributes` (the 4-attribute `audit.signature.*`
     set) over `payload` with the operator-selected `algo`. Raises `ValueError`
-    at function precondition when `key_id` is missing (empty) — §21.2 requires
-    a key identifier for the signing operation.
+    at function precondition when `key_id` is missing (empty), or when
+    `tenant_id` is the empty string or the reserved `"_single"` sidecar
+    literal (`signing_token`'s refusal rules) — §21.2 requires a key
+    identifier for the signing operation; §21.2.1 row 2 forecloses a real
+    tenant colliding with the drop-segment sentinel or the writer's join key.
 
     **Without `backend` (the default) — the placeholder path, PRESERVED
     VERBATIM (OD spec v1.33 §21.2.1 item 2).** The concrete cryptographic
@@ -251,22 +329,32 @@ def sign_audit_entry(
     deferred per ADR-D5 v1.3 §1.4.1 + §21.2 "Deferred to implementation
     discretion"; this library surface produces the typed `audit.signature.*`
     attribute record with the deterministic placeholder value a composition
-    root replaces with the live signing call.
+    root replaces with the live signing call. `tenant_id` is still validated
+    (fail loud on refusal) but does not alter the placeholder's byte shape.
 
     **With `backend` (§21.2.1, OD spec v1.33 — the composition-root injection
     seam, mirror of `C-CP-20 §20.2.1`/`B-22`).** A deployment-time composition
     root has wired a real `SigningBackend` (e.g. ADR-D8's
     `AwsKmsSigningBackend`): the returned `audit_signature_value` is a genuine
     signature over the canonical message binding `compute_entry_hash(payload)`
-    to `(key_id, algo, key_period)` — see `_canonical_od_signing_message` —
-    carried as standard base64 text (the `str` carrier type is unchanged; raw
-    signature bytes are arbitrary binary — the B-34 representation discipline
-    applied at birth). Fail-loud validations: a `backend.algorithm` disagreeing
-    with `algo.value` raises (a mislabeled algorithm must not be persisted);
-    a backend-returned signature whose byte-length contradicts the declared
-    algorithm's fixed width (`SIGNATURE_LENGTH_BY_ALGORITHM`, byte-identical
-    to `C-CP-20 §20.4`'s committed widths) raises rather than landing a
-    malformed attribute set. `key_period=0` is passed to the backend as the
+    to `(key_id, algo, key_period[, tenant_tag])` — see
+    `_canonical_od_signing_message` — carried as standard base64 text (the
+    `str` carrier type is unchanged; raw signature bytes are arbitrary binary
+    — the B-34 representation discipline applied at birth). `tenant_id`
+    (OD v1.34 §21.2.1 row 1) is normalized via `signing_token` before being
+    folded into the message: present -> the FIVE-segment message; absent
+    (`None`, the default) -> the four-tuple message PRESERVED VERBATIM
+    byte-for-byte — zero regression for every existing caller and every
+    single-tenant deployment. Every signing/validation failure below routes
+    through the typed `AuditSigningFailedError` (OD spec v1.34 §21.2.3 row 5
+    — "the single typed boundary"; NEVER a bare `ValueError`/`TypeError`, so
+    a blind `except (KeyError, TypeError)` upstream cannot swallow it): a
+    `backend.algorithm` disagreeing with `algo.value` (a mislabeled algorithm
+    must not be persisted); a backend-returned signature that is not `bytes`
+    or whose byte-length contradicts the declared algorithm's fixed width
+    (`SIGNATURE_LENGTH_BY_ALGORITHM`, byte-identical to `C-CP-20 §20.4`'s
+    committed widths); or `backend.sign(...)` raising any other (untyped)
+    exception. `key_period=0` is passed to the backend as the
     `"DEPLOYMENT_BOUND"` token's fixed integer projection — rotation-aware
     key-period selection is `B-33`'s scope.
     """
@@ -275,6 +363,7 @@ def sign_audit_entry(
             "sign_audit_entry precondition violated: key_id is required "
             "(C-OD-21 §21.2 — audit.signature.key_id)"
         )
+    tenant_tag = signing_token(tenant_id)
     if backend is None:
         # The live signing backend (HSM / KMS / keystore) is wired at a
         # deployment-time composition root (§21.2.1); absent one, the library
@@ -286,11 +375,11 @@ def sign_audit_entry(
             audit_signature_key_period="DEPLOYMENT_BOUND",
         )
     if backend.algorithm != algo.value:
-        raise ValueError(
+        raise AuditSigningFailedError(
             f"backend.algorithm={backend.algorithm!r} disagrees with the "
             f"caller-selected algo={algo.value!r} — a backend must not attest "
             f"under an algorithm other than the one recorded on the entry "
-            f"(OD spec v1.33 §21.2.1)"
+            f"(OD spec v1.34 §21.2.3 row 5 / v1.33 §21.2.1)"
         )
     entry_hash = compute_entry_hash(payload)
     message = _canonical_od_signing_message(
@@ -298,16 +387,50 @@ def sign_audit_entry(
         key_id=key_id,
         algo_value=algo.value,
         key_period_token=_DEPLOYMENT_BOUND_TOKEN,
+        tenant_tag=tenant_tag,
     )
-    signature = backend.sign(
-        message=message, key_id=key_id, key_period=_DEPLOYMENT_BOUND_KEY_PERIOD
-    )
+    try:
+        signature = backend.sign(
+            message=message, key_id=key_id, key_period=_DEPLOYMENT_BOUND_KEY_PERIOD
+        )
+    except AUDIT_SIGNING_HARD_FAILURES:
+        # Out-of-family Codex P2 (PR #1061 round 2): a production
+        # `BreakerGuardedSigningBackend` raises the ALREADY-typed
+        # `AuditSigningBreakerOpenError` when the breaker is open — that is
+        # a distinct, caller-retryable AVAILABILITY signal, not a signing
+        # failure. Re-raising unchanged (rather than double-wrapping into
+        # `AuditSigningFailedError`) preserves the discriminator; only a
+        # genuinely UNTYPED backend exception below gets wrapped.
+        raise
+    except Exception as exc:
+        raise AuditSigningFailedError(
+            f"backend.sign raised {exc!r} while signing an audit entry "
+            f"(key_id={key_id!r}, algo={algo.value!r}) — untyped backend "
+            "errors must route through the typed AUDIT_SIGNING_HARD_FAILURES "
+            "boundary (OD spec v1.34 §21.2.3 row 5)"
+        ) from exc
     expected_length = SIGNATURE_LENGTH_BY_ALGORITHM[algo.value]
-    if len(signature) != expected_length:
-        raise ValueError(
-            f"backend returned a {len(signature)}-byte signature; algorithm "
+    # `SigningBackend.sign` is typed to return `bytes`, so pyright sees the
+    # isinstance check as statically unnecessary — it is a RUNTIME defense
+    # against a backend that violates its own Protocol at runtime (a
+    # duck-typed / third-party backend is not statically verified).
+    if (
+        not isinstance(  # pyright: ignore[reportUnnecessaryIsInstance]
+            signature, bytes
+        )
+        or len(signature) != expected_length
+    ):
+        actual_len = (
+            len(signature)
+            if isinstance(signature, bytes)  # pyright: ignore[reportUnnecessaryIsInstance]
+            else "n/a"
+        )
+        raise AuditSigningFailedError(
+            f"backend returned a malformed signature (type="
+            f"{type(signature).__name__}, len={actual_len}); algorithm "
             f"{algo.value!r} signatures are exactly {expected_length} bytes "
-            f"(OD spec v1.33 §21.2.1 / C-CP-20 §20.4 committed widths)"
+            "of type bytes (OD spec v1.34 §21.2.3 row 5 / C-CP-20 §20.4 "
+            "committed widths)"
         )
     return AuditSignatureAttributes(
         audit_signature_value=base64.b64encode(signature).decode("ascii"),
