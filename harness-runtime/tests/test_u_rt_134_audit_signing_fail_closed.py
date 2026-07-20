@@ -354,6 +354,42 @@ def test_bootstrap_rejects_record_key_id_equal_to_row_signing_consumer_id(tmp_pa
         validate_and_initialize_mtc_audit_signing(config, signing_backend=_FakeBackend())
 
 
+def test_bootstrap_rejects_redaction_token_key_as_record_key(tmp_path: Path) -> None:
+    """Out-of-family Codex [P1] round-3 finding: the redaction-token map's
+    signing key (`harness-runtime-redaction-token`) is equally a row-signing
+    consumer at MTC — pinning it as the record key must be rejected by the
+    same same-entry check as the composer/cost-builder ids."""
+    kwargs = _mtc_ready_kwargs(tmp_path)
+    kwargs["audit_cutover_record_key_id"] = "harness-runtime-redaction-token"
+    kwargs["key_arns"] = {"harness-runtime-redaction-token": _ARN_A}
+    config = _config(tmp_path, **kwargs)
+    with pytest.raises(AuditSigningConfigInvalidError, match="row-signing consumer key ids"):
+        validate_and_initialize_mtc_audit_signing(config, signing_backend=_FakeBackend())
+
+
+def test_existing_non_regular_record_path_rejected_not_overwritten(tmp_path: Path) -> None:
+    """Out-of-family Codex [P2] round-3 finding: an existing DIRECTORY (or
+    special file / broken symlink) at the record path must be a typed
+    rejection — not treated as greenfield (untyped `IsADirectoryError` at
+    the rename; a broken symlink would be silently overwritten)."""
+    record_dir = tmp_path / "record.json"
+    record_dir.mkdir()
+    kwargs = _mtc_ready_kwargs(tmp_path)
+    kwargs["audit_cutover_record_path"] = str(record_dir)
+    config = _config(tmp_path, **kwargs)
+    with pytest.raises(AuditSigningConfigInvalidError, match="not a regular file"):
+        validate_and_initialize_mtc_audit_signing(config, signing_backend=_FakeBackend())
+    assert record_dir.is_dir()  # untouched
+
+    broken_symlink = tmp_path / "record2.json"
+    broken_symlink.symlink_to(tmp_path / "does-not-exist")
+    kwargs["audit_cutover_record_path"] = str(broken_symlink)
+    config = _config(tmp_path, **kwargs)
+    with pytest.raises(AuditSigningConfigInvalidError, match="not a regular file"):
+        validate_and_initialize_mtc_audit_signing(config, signing_backend=_FakeBackend())
+    assert broken_symlink.is_symlink()  # untouched, not replaced
+
+
 def test_bootstrap_rejects_record_key_sharing_arn_spelled_as_bare_uuid(tmp_path: Path) -> None:
     """Out-of-family Codex [P1] finding: AWS KMS accepts both a full ARN
     and its bare key UUID for the SAME physical key — two logical ids

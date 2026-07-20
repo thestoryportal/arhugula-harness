@@ -55,6 +55,7 @@ from harness_od.audit_ledger_types import SignatureAlgorithm
 from harness_od.multi_tenant_trace_separation_and_audit_ledger import signing_token
 from pydantic import ValidationError
 
+from harness_runtime.lifecycle.span_processor import REDACTION_TOKEN_SIGNING_KEY_ID
 from harness_runtime.types import AuditSigningBackendKind, RuntimeConfig
 
 __all__ = [
@@ -126,12 +127,20 @@ def _is_blank(value: str | None) -> bool:
 
 
 #: The row-signing consumer key ids every audit write signs under once a
-#: backend is threaded, tokenizer or not (mirrors `stage_4_od.py`'s
-#: `additional_key_ids` tuple passed to `validate_audit_signing_for_span_
-#: stage` — kept in sync manually; matches the existing scattered-literal
-#: convention across `cost_attribution_*.py`'s own `_DEFAULT_SIGNING_KEY_ID`).
+#: backend is threaded (mirrors `stage_4_od.py`'s `additional_key_ids`
+#: tuple passed to `validate_audit_signing_for_span_stage` — kept in sync
+#: manually; matches the existing scattered-literal convention across
+#: `cost_attribution_*.py`'s own `_DEFAULT_SIGNING_KEY_ID`) PLUS the
+#: redaction-token map's signing key (imported from its canonical home —
+#: out-of-family Codex [P1] round-3 finding: the redaction key is equally a
+#: row-signing consumer at MTC, and omitting it here let a compromised
+#: redaction key double as the cutover-record trust anchor).
 _ROW_SIGNING_CONSUMER_KEY_IDS: frozenset[str] = frozenset(
-    {"harness-runtime-dev", "harness-cost-attribution-v1"}
+    {
+        "harness-runtime-dev",
+        "harness-cost-attribution-v1",
+        REDACTION_TOKEN_SIGNING_KEY_ID,
+    }
 )
 
 
@@ -360,19 +369,33 @@ def initialize_mtc_audit_signing_record(
     assert signing_backend is not None  # config validated first (resolved_fail_closed at MTC)
 
     path = Path(record_path)
-    if not path.is_file():
-        _greenfield_sign_empty_record(
+    if path.is_file():
+        _verify_existing_record(
             path,
-            key_id=record_key_id,
-            ledger_binding_id=record_binding_id,
+            expected_key_id=record_key_id,
+            expected_ledger_binding_id=record_binding_id,
             signing_backend=signing_backend,
         )
         return
-
-    _verify_existing_record(
+    # Out-of-family Codex [P2] round-3 finding: `not is_file()` alone
+    # conflates "nothing there yet" (genuine greenfield) with "something
+    # there that is NOT a regular file" — a directory (untyped
+    # `IsADirectoryError` at the rename, temp file left behind), a
+    # FIFO/special file, or a broken symlink (which `os.replace` would
+    # silently overwrite). Only a genuinely-absent path is greenfield;
+    # anything else is a typed configuration rejection, never overwritten.
+    if path.exists() or path.is_symlink():
+        raise AuditSigningConfigInvalidError(
+            (
+                f"audit_cutover_record_path={record_path!r} exists but is not a "
+                "regular file (directory, special file, or broken symlink) — "
+                "refusing to treat it as a greenfield record or overwrite it",
+            )
+        )
+    _greenfield_sign_empty_record(
         path,
-        expected_key_id=record_key_id,
-        expected_ledger_binding_id=record_binding_id,
+        key_id=record_key_id,
+        ledger_binding_id=record_binding_id,
         signing_backend=signing_backend,
     )
 
