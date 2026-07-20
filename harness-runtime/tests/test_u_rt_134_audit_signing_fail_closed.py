@@ -510,7 +510,14 @@ def test_greenfield_minting_rejected_when_sidecar_has_rows(tmp_path: Path) -> No
     LOSS — a typed rejection, never a silent re-mint that would orphan
     every legacy disposition."""
     sidecar = tmp_path / "audit-entries.jsonl"
-    sidecar.write_text('{"tenant_tag": "_single", "entry": {}}\n', encoding="utf-8")
+    # A well-formed row (the round-6 persisted-row key scan runs first and
+    # must PASS — its key differs from the pinned record key) so the
+    # freshness gate is the check that fires.
+    sidecar.write_text(
+        '{"tenant_tag": "_single", "entry": {"signature_attrs": '
+        '{"audit_signature_key_id": "some-row-key"}}}\n',
+        encoding="utf-8",
+    )
     record_path = tmp_path / "record.json"
     kwargs = _mtc_ready_kwargs(tmp_path)
     kwargs["audit_cutover_record_path"] = str(record_path)
@@ -624,6 +631,88 @@ def test_greenfield_temp_file_symlink_planting_does_not_overwrite_target(tmp_pat
     assert record_path.is_file() and not record_path.is_symlink()
     lines = record_path.read_text(encoding="utf-8").splitlines()
     assert AuditCutoverRecord.model_validate_json(lines[0]).rows == ()
+
+
+def test_record_key_used_by_persisted_sidecar_rows_rejected(tmp_path: Path) -> None:
+    """Out-of-family Codex [P1] round-6 finding: the spec requires the
+    pinned record key be distinct from EVERY key id appearing on ledger
+    rows — including a historical/custom id persisted on existing sidecar
+    rows that is no longer in `key_arns` nor in the hard-coded consumer
+    set. An unparseable sidecar row is fail-closed (separation cannot be
+    proven)."""
+    import json as _json
+
+    sidecar = tmp_path / "audit-entries.jsonl"
+    row = {
+        "tenant_tag": "_single",
+        "entry": {"signature_attrs": {"audit_signature_key_id": "historical-key"}},
+    }
+    sidecar.write_text(_json.dumps(row) + "\n", encoding="utf-8")
+
+    kwargs = _mtc_ready_kwargs(tmp_path)
+    kwargs["audit_cutover_record_key_id"] = "historical-key"
+    kwargs["key_arns"] = {"historical-key": _ARN_B}
+    config = _config(tmp_path, **kwargs)
+    with pytest.raises(AuditSigningConfigInvalidError, match="already used to sign"):
+        validate_and_initialize_mtc_audit_signing(
+            config, signing_backend=_FakeBackend(), audit_sidecar_path=sidecar
+        )
+
+    # Unparseable row → fail closed.
+    sidecar.write_text("not-json\n", encoding="utf-8")
+    with pytest.raises(AuditSigningConfigInvalidError, match="unparseable"):
+        validate_and_initialize_mtc_audit_signing(
+            config, signing_backend=_FakeBackend(), audit_sidecar_path=sidecar
+        )
+
+
+def test_record_path_colliding_with_sidecar_rejected(tmp_path: Path) -> None:
+    """Out-of-family Codex [P2] round-6 finding: a record path resolving to
+    the sidecar itself would write the two-line record into
+    `audit-entries.jsonl`, which the audit writer later fails to parse —
+    rejected before any branch."""
+    sidecar = tmp_path / "audit-entries.jsonl"
+    kwargs = _mtc_ready_kwargs(tmp_path)
+    kwargs["audit_cutover_record_path"] = str(sidecar)
+    config = _config(tmp_path, **kwargs)
+    with pytest.raises(AuditSigningConfigInvalidError, match="sidecar itself"):
+        validate_and_initialize_mtc_audit_signing(
+            config, signing_backend=_FakeBackend(), audit_sidecar_path=sidecar
+        )
+    assert not sidecar.exists()  # nothing written
+
+
+def test_explicit_false_at_mtc_wins_over_missing_inputs(tmp_path: Path) -> None:
+    """Out-of-family Codex [P2] round-6 finding: an explicit
+    `audit_signing_fail_closed=false` PROVES the config is v2-aware, so the
+    invalid-VALUE taxonomy (`RT-FAIL-CONFIG`) must win over the
+    missing-input version-incompat reading even when required MTC inputs
+    are ALSO absent."""
+    config = _config(
+        tmp_path,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        audit_signing_fail_closed=False,
+        # tenant/record inputs all missing — Pass 1 would have plenty to say.
+    )
+    with pytest.raises(AuditSigningConfigInvalidError, match="audit_signing_fail_closed=false"):
+        validate_and_initialize_mtc_audit_signing(config, signing_backend=None)
+
+
+def test_existing_record_with_trailing_lines_rejected(tmp_path: Path) -> None:
+    """Out-of-family Codex [P2] round-6 finding: unsigned trailing content
+    appended to the record file must be rejected — exactly one record line
+    + one signature line, aside from the final newline."""
+    record_path = tmp_path / "record.json"
+    backend = _FakeBackend()
+    kwargs = _mtc_ready_kwargs(tmp_path)
+    kwargs["audit_cutover_record_path"] = str(record_path)
+    config = _config(tmp_path, **kwargs)
+    validate_and_initialize_mtc_audit_signing(config, signing_backend=backend)
+
+    original = record_path.read_text(encoding="utf-8")
+    record_path.write_text(original + "unsigned trailing garbage\n", encoding="utf-8")
+    with pytest.raises(AuditSigningConfigInvalidError, match="exactly 2 lines"):
+        validate_and_initialize_mtc_audit_signing(config, signing_backend=backend)
 
 
 def test_existing_record_tampered_signature_rejected(tmp_path: Path) -> None:

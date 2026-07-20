@@ -40,6 +40,7 @@ first found.
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 import sys
 import tempfile
@@ -222,7 +223,8 @@ def validate_mtc_audit_signing_config(config: RuntimeConfig) -> None:
         None if _is_blank(config.audit_ledger_binding_id) else config.audit_ledger_binding_id
     )
 
-    # --- Pass 1: MISSING v1-required-at-MTC inputs -> IncompatibleConfigVersion.
+    # --- Pass 1: MISSING v1-required-at-MTC inputs (collected, raised LAST —
+    # see the precedence note above the raises below).
     missing: list[str] = []
     if resolved_fail_closed and not backend_configured:
         missing.append(
@@ -239,8 +241,6 @@ def validate_mtc_audit_signing_config(config: RuntimeConfig) -> None:
             missing.append("audit_cutover_record_key_id (required at MULTI_TENANT_COMPLIANCE)")
         if record_binding_id is None:
             missing.append("audit_ledger_binding_id (required at MULTI_TENANT_COMPLIANCE)")
-    if missing:
-        raise IncompatibleConfigVersion(tuple(missing))
 
     # --- Pass 2: INVALID v2 values -> AuditSigningConfigInvalidError.
     invalid: list[str] = []
@@ -337,8 +337,17 @@ def validate_mtc_audit_signing_config(config: RuntimeConfig) -> None:
                     "distinct from every row-signing key"
                 )
 
+    # Precedence (out-of-family Codex [P2] round-6): INVALID v2 VALUES win
+    # over MISSING inputs. An explicit `audit_signing_fail_closed=false` (or
+    # any other v2-field misuse) PROVES the config is v2-aware — classifying
+    # it as "predates the contract" (`RT-FAIL-CONFIG-VERSION`) would be
+    # semantically wrong and would hide the decisive policy violation. Both
+    # passes are collected before either raises so the discriminator is
+    # deterministic, not first-check-wins.
     if invalid:
         raise AuditSigningConfigInvalidError(tuple(invalid))
+    if missing:
+        raise IncompatibleConfigVersion(tuple(missing))
 
 
 def initialize_mtc_audit_signing_record(
@@ -399,6 +408,36 @@ def initialize_mtc_audit_signing_record(
     assert signing_backend is not None  # config validated first (resolved_fail_closed at MTC)
 
     path = Path(record_path)
+    if audit_sidecar_path is not None:
+        # Out-of-family Codex [P2] round-6 finding: a record path resolving
+        # to the SIDECAR itself would, on a fresh deployment, write the
+        # two-line record INTO `audit-entries.jsonl` — which the audit
+        # writer later parses as `{"tenant_tag","entry"}` JSONL and dies on
+        # its first fold/append. Reject the collision before any branch.
+        try:
+            collides = path.resolve() == audit_sidecar_path.resolve()
+        except OSError:
+            collides = False  # unresolvable paths cannot be proven colliding
+        if collides:
+            raise AuditSigningConfigInvalidError(
+                (
+                    f"audit_cutover_record_path={record_path!r} resolves to the "
+                    "audit sidecar itself — the cutover record and the "
+                    "audit-entries sidecar must be distinct files",
+                )
+            )
+        # Out-of-family Codex [P1] round-6 finding: the spec requires the
+        # pinned record key be distinct from "every key id appearing on
+        # ledger rows" — the config-mapping checks in
+        # `validate_mtc_audit_signing_config` cover CURRENT consumers, but a
+        # HISTORICAL/custom key id persisted on existing sidecar rows (no
+        # longer in `key_arns`, not in the hard-coded consumer set) would
+        # otherwise pass, letting that row key's holder sign a malicious
+        # exemption record. Applies to BOTH the verify and greenfield
+        # branches (an existing record pinned to a row key is equally wrong).
+        _reject_record_key_used_by_persisted_rows(
+            config, sidecar_path=audit_sidecar_path, record_key_id=record_key_id
+        )
     if path.is_file():
         _verify_existing_record(
             path,
@@ -470,6 +509,69 @@ def _sidecar_has_rows(sidecar_path: Path) -> bool:
             return any(line.strip() for line in handle)
     except OSError:
         return True
+
+
+def _reject_record_key_used_by_persisted_rows(
+    config: RuntimeConfig, *, sidecar_path: Path, record_key_id: str
+) -> None:
+    """Reject a record key that any PERSISTED sidecar row already signed
+    under (out-of-family Codex [P1] round-6; spec text: the pinned id "MUST
+    be DISTINCT from every key id appearing on ledger rows").
+
+    Compares logical key ids directly, plus canonical backing material when
+    the row's id resolves through `config.audit_signing.key_arns`. A
+    sidecar row that cannot be parsed is fail-closed: separation cannot be
+    PROVEN over unreadable history, so the record key is refused.
+    """
+    if not sidecar_path.is_file():
+        return
+    record_arn = _resolve_record_key_arn(config, record_key_id)
+    record_material = _canonical_kms_key_identity(record_arn) if record_arn is not None else None
+    try:
+        with sidecar_path.open("r", encoding="utf-8") as handle:
+            for line_number, line in enumerate(handle, start=1):
+                if not line.strip():
+                    continue
+                try:
+                    row = json.loads(line)
+                    row_key_id = row["entry"]["signature_attrs"]["audit_signature_key_id"]
+                except (ValueError, KeyError, TypeError) as exc:
+                    raise AuditSigningConfigInvalidError(
+                        (
+                            f"audit sidecar {str(sidecar_path)!r} line {line_number} "
+                            f"is unparseable ({type(exc).__name__}) — cannot prove "
+                            "the record key is distinct from every persisted "
+                            "row-signing key; refusing the pinned "
+                            f"audit_cutover_record_key_id={record_key_id!r}",
+                        )
+                    ) from exc
+                if not isinstance(row_key_id, str):
+                    continue
+                same_logical = row_key_id == record_key_id
+                row_arn = _resolve_record_key_arn(config, row_key_id)
+                same_material = (
+                    record_material is not None
+                    and row_arn is not None
+                    and _canonical_kms_key_identity(row_arn) == record_material
+                )
+                if same_logical or same_material:
+                    raise AuditSigningConfigInvalidError(
+                        (
+                            f"audit_cutover_record_key_id={record_key_id!r} was "
+                            f"already used to sign persisted audit row(s) (e.g. "
+                            f"sidecar line {line_number}, key id {row_key_id!r}) "
+                            "— the record key must be distinct from every key id "
+                            "appearing on ledger rows",
+                        )
+                    )
+    except OSError as exc:
+        raise AuditSigningConfigInvalidError(
+            (
+                f"audit sidecar {str(sidecar_path)!r} could not be read ({exc}) "
+                "— cannot prove the record key is distinct from every persisted "
+                "row-signing key",
+            )
+        ) from exc
 
 
 def _greenfield_sign_empty_record(
@@ -590,7 +692,15 @@ def _verify_existing_record(
     """Load + fail-closed-verify an on-disk cutover record against config."""
     try:
         raw = path.read_text(encoding="utf-8")
-        record_line, signature_line, *_ = raw.splitlines()
+        lines = raw.splitlines()
+        # Out-of-family Codex [P2] round-6 finding: require EXACTLY one
+        # record line + one signature line (aside from the final newline) —
+        # a starred unpack would silently discard trailing lines, letting
+        # arbitrary unsigned content ride along in an accepted trust-anchor
+        # file despite the fail-closed tamper contract.
+        if len(lines) != 2:
+            raise ValueError(f"expected exactly 2 lines (record + signature), found {len(lines)}")
+        record_line, signature_line = lines
         record = AuditCutoverRecord.model_validate_json(record_line)
         signature = bytes.fromhex(signature_line)
     except (OSError, ValueError, ValidationError) as exc:
