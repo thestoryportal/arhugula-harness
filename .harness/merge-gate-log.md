@@ -187,3 +187,27 @@ release-dir-then-block escape is a no-op inside the B-50 nested composition; cur
 after a file hold; (2) `_DirLock.release()` decrements before unlock (theoretical wedge if LOCK_UN raised);
 (3) reader-path legacy-SH acquisition and ENOTSUP writer branch remain unwitnessed (correctness-neutral
 degradations, documented residual posture).
+
+## PR #1061 — 2026-07-19 — `feat/od-u-od-30-tenant-signing`
+
+| Lens | R1 |
+|---|---|
+| concurrency | APPROVE |
+| spec-conformance | APPROVE (2 informational stale-comment nits, fixed same-round) |
+| test-witness | APPROVE (1 informational dead-code nit, fixed same-round) |
+
+Outcome: MERGE. First independently-landable leg of the B-51/B-52/B-54 arc — U-OD-30 (amended) per OD
+spec v1.34 §21.2.1/§21.2.3 + plan v2.29 §1: tenant-bearing `sign_audit_entry` fifth canonical-message
+segment (byte-compat drop-when-`None`), the `signing_token`/`sidecar_tag` normalizer, `AUDIT_SIGNING_
+HARD_FAILURES` re-homed from `harness_runtime` to `harness_od` (OD owns "the single typed boundary";
+Runtime composes OD, never the reverse), unconditional backend-required redaction-token signing path,
+`sign_rotation_pair` MTC static caller-regression guard. Codex: 3 rounds — R1 fixed [P1] fail-late bootstrap
+validation (MTC deployments with no signing backend now fail at bootstrap, not mid-run on first
+content-bearing span); R2 fixed [P2] a bare `except Exception` double-wrapping the already-typed
+`AuditSigningBreakerOpenError`, destroying the availability-vs-signing-failure discriminator; R3 fixed
+[P2] `RuntimeAuditLedgerWriter._tenant_tag` duplicating (rather than delegating to) the new OD normalizer,
+and confirmed 2 further [P1] findings (converter-based production call sites still four-segment; MTC can
+bootstrap without a tenant scope) are pre-assigned by the ratified plan to not-yet-built sibling units
+(CP's amendment to the existing `cp_audit_to_od_audit` converter, U-CP-72; Runtime's MTC bootstrap-tenant-
+required invariant, U-RT-134) — verified against the plan text directly, not taken on faith. Every new
+behavior PD-8 mutation-probed. Full harness-od (1057) + harness-runtime (2762) suites green throughout.
