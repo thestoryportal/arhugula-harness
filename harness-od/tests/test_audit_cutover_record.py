@@ -499,3 +499,43 @@ def test_verify_cutover_record_signature_self_defends_direct_callers() -> None:
         verify_cutover_record_signature(record, real_signature, backend=_TruthyNonBoolBackend())
         is False
     )
+
+
+def test_validator_bypassing_construction_rejected_at_sign_and_verify() -> None:
+    """`model_copy(update=...)` SKIPS `@model_validator` entirely — out-of-
+    family Codex [P1] finding, round 8: an unsupported `schema_version`
+    smuggled in this way must NOT be signable, and must NOT be accepted as
+    authenticated even if a caller somehow obtained a signature over it
+    (e.g. from a version of this code before the check existed, or a
+    cross-process replay). Both boundaries revalidate before doing
+    anything else."""
+    valid_record = _golden_record()
+    backend = _Ed25519Backend()
+
+    # bypasses `_validate_rows` — a plain `AuditCutoverRecord(...)` call
+    # with schema_version=2 would raise; model_copy does not.
+    bypassed = valid_record.model_copy(update={"schema_version": 2})
+
+    # Pydantic wraps a `@model_validator`-raised `CutoverRecordValidationError`
+    # into its own `ValidationError` (same pattern as the other construction-
+    # rejection tests in this file, e.g. `test_row_tenant_scope_must_pass_
+    # normalization`) — `_revalidated` re-triggers that same wrapping.
+    with pytest.raises(ValidationError, match="unsupported"):
+        sign_cutover_record(bypassed, backend=backend)
+
+    # Sign the ORIGINAL valid record, then verify a `model_copy`'d MUTANT
+    # sharing the same nominal identity but an invalid row shape — this
+    # simulates a signature obtained before the bypass was corrected.
+    real_signature = sign_cutover_record(valid_record, backend=backend)
+    duplicate_source_bypass = valid_record.model_copy(
+        update={
+            "rows": (
+                valid_record.rows[0],
+                valid_record.rows[0],  # duplicate — _validate_rows forbids this
+            )
+        }
+    )
+    assert (
+        verify_cutover_record_signature(duplicate_source_bypass, real_signature, backend=backend)
+        is False
+    )

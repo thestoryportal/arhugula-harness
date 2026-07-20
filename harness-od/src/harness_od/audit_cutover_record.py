@@ -31,7 +31,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 
 from harness_cp.f5_signing_key_resolution import SIGNATURE_LENGTH_BY_ALGORITHM, SigningBackend
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
 
 from harness_od.audit_ledger_types import SignatureAlgorithm
 from harness_od.multi_tenant_trace_separation_and_audit_ledger import signing_token
@@ -286,6 +286,21 @@ def canonical_cutover_record_message(record: AuditCutoverRecord) -> bytes:
     return b"|".join(f"{len(encoded)}:".encode() + encoded for encoded in encoded_parts)
 
 
+def _revalidated(record: AuditCutoverRecord) -> AuditCutoverRecord:
+    """Round-trip `record` through `model_validate(model_dump())` to force
+    `_validate_rows` to run, even if `record` was produced via a Pydantic
+    API that SKIPS validators — `model_copy(update=...)` and
+    `model_construct()` both bypass `@model_validator` (out-of-family Codex
+    [P1] finding, round 8): without this, an unsupported schema_version or
+    duplicate/conflicting source rows could be signed — and subsequently
+    ACCEPTED by `verify_cutover_record_signature` — despite `_validate_rows`
+    existing specifically to forbid them. This carrier is a TRUST ANCHOR;
+    both the sign and verify boundaries revalidate before doing anything
+    else, so no construction path can smuggle an invalid record through.
+    """
+    return AuditCutoverRecord.model_validate(record.model_dump())
+
+
 def sign_cutover_record(record: AuditCutoverRecord, *, backend: SigningBackend) -> bytes:
     """Sign `record` via `backend` — the same `C-CP-20 §20.2.1` `SigningBackend`
     protocol §21.2.1 signing uses, over `canonical_cutover_record_message`,
@@ -294,8 +309,11 @@ def sign_cutover_record(record: AuditCutoverRecord, *, backend: SigningBackend) 
     Raises `CutoverRecordValidationError` when `backend.algorithm` disagrees
     with `record.algorithm` — mirrors `sign_audit_entry`'s algorithm-
     disagreement guard: a backend must not attest a record under an
-    algorithm other than the one the record declares.
+    algorithm other than the one the record declares. Revalidates `record`
+    first (see `_revalidated`) so a validator-bypassing construction path
+    can never be signed.
     """
+    record = _revalidated(record)
     if backend.algorithm != record.algorithm.value:
         raise CutoverRecordValidationError(
             f"backend.algorithm={backend.algorithm!r} disagrees with the "
@@ -354,7 +372,16 @@ def verify_cutover_record_signature(
     declares. Accepts ONLY the LITERAL boolean `True` verdict from
     `backend.verify` — a truthy non-`bool` SDK value (e.g.
     `{"SignatureValid": False}`) is treated as failing, not passing.
+    Revalidates `record` first (see `_revalidated`) so a validator-
+    bypassing construction path (`model_copy(update=...)`,
+    `model_construct()`) can never be accepted as authenticated — an
+    invalid record is treated as a failing (`False`) verdict, consistent
+    with this function's bool-only contract, rather than raising.
     """
+    try:
+        record = _revalidated(record)
+    except (CutoverRecordValidationError, ValidationError):
+        return False
     if backend.algorithm != record.algorithm.value:
         return False
     expected_length = SIGNATURE_LENGTH_BY_ALGORITHM[record.algorithm.value]
