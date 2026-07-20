@@ -1023,9 +1023,24 @@ def test_parallelization_reconciler_cas_gate_failure_never_admits(
 def test_orchestrator_workers_reconciler_cas_gate_failure_never_admits(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """ORCHESTRATOR_WORKERS sibling of the PARALLELIZATION admission-deferral
-    witness above — same rationale, same mutation probe; `steps[0]` is the
-    orchestrator (not a fan-out branch), `steps[1:]` are the workers."""
+    """ORCHESTRATOR_WORKERS sibling of the PARALLELIZATION test above;
+    `steps[0]` is the orchestrator (not a fan-out branch), `steps[1:]` are the
+    workers.
+
+    Round-10 test-witness lens finding (non-blocking): unlike its
+    PARALLELIZATION sibling, this is NOT a mutation-probed witness for the
+    admission-deferral fix — `_execute_orchestrator_workers`'s reconciler CAS
+    gate (workflow_driver.py, inside the non-empty-steps branch) runs BEFORE
+    `branch_plan` is even built, so it returns FAILED ahead of EITHER the
+    pre-fix or the post-fix admission call site; reverting the O-W deferral
+    would not move admission ahead of this particular guard, so `admit_calls`
+    stays `[]` either way. This test still verifies a real, useful invariant
+    (a CAS-gate ABORT on O-W never admits) — it is just not evidence for the
+    admission-deferral claim specifically. The genuinely mutation-sensitive
+    O-W witness for that claim is `test_warmup_phase_split_cohort_key_
+    failure_never_admits` in test_workflow_driver_orchestrator_workers_
+    warmup.py, whose trigger (the warm-up cohort-key split) sits between the
+    old and new O-W admission positions."""
     store = _InMemoryBranchStore()
     steps = [_step("orch", 0)] + [_step(f"branch-{i}", i) for i in range(3)]
     _run(
