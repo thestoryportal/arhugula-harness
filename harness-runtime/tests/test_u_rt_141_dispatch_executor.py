@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import threading
 import time
+from typing import Any
 
 import pytest
 from harness_core import SubAgentDispatchCapacityError
@@ -336,6 +337,38 @@ def test_begin_draining_is_idempotent_and_drain_still_reports_correctly() -> Non
     completed, still_outstanding = executor.drain(deadline_seconds=0.1)
     assert completed == 0
     assert still_outstanding == 0
+
+
+def test_job_done_runs_after_future_is_already_published(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Codex round-9 [P2] "complete futures before marking executor jobs
+    done" — `_job_done()` (which removes the future from `_outstanding`,
+    the state `drain()`'s poll loop reads) must run AFTER the future has
+    published its result via `set_result()`/`set_exception()` — those calls
+    fire the future's done-callbacks (lease release, the `asyncio.wrap_
+    future` bridge) SYNCHRONOUSLY. With the old ordering, `drain()` could
+    observe zero outstanding in the narrow window before those callbacks
+    had actually run.
+
+    Mutation probe: reverting `_run_job()` to call `_job_done(future)`
+    BEFORE `future.set_result(result)` makes the spied `future.done()`
+    snapshot below read `False` instead of `True` at the moment `_job_done`
+    is invoked.
+    """
+    executor = SubAgentDispatchExecutor(frame_budget=4)
+    observed_done_state: list[bool] = []
+    real_job_done = executor._job_done
+
+    def _spy_job_done(future: Any) -> None:
+        observed_done_state.append(future.done())
+        real_job_done(future)
+
+    monkeypatch.setattr(executor, "_job_done", _spy_job_done)
+    assert executor.submit(lambda: "ok").result(timeout=5) == "ok"
+    assert observed_done_state == [True], (
+        "_job_done() ran while the future was not yet done — a completion "
+        "callback (lease release, asyncio bridge) may not have fired before "
+        "drain() could observe this job as no longer outstanding"
+    )
 
 
 def test_atomic_reservation_no_partial_acquisition_under_concurrent_fanouts() -> None:

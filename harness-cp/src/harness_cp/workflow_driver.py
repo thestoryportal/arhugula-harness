@@ -7423,13 +7423,17 @@ def _execute_parallelization(
             fail_class=f"parallelization-step-kind-not-bound: {exc}",
         ), 0
 
-    # B-48 (C-CP-25 §25.11; CP spec v1.102 §1 row 3) — WHOLE-fan-out ATOMIC
-    # admission, ONE call, decided BEFORE either cascade_policy path below
-    # dispatches a single branch. Shared by both `_proceed_branch` (PROCEED)
-    # and `_cancel_branch` (CASCADE_CANCEL/PAUSE) — only one of the two runs
-    # per invocation, gated by the `cascade_policy is CascadePolicy.PROCEED`
-    # branch further down; this ONE admission result feeds whichever runs.
-    _branch_admissions = _admit_fanout_branch_plan(ctx, branch_plan, workflow_id=workflow_id)
+    # B-48 (C-CP-25 §25.11; CP spec v1.102 §1 row 3; codex round-9 [P2] "whole-
+    # fan-out admission leaks on pre-dispatch setup failure") — admission is
+    # DEFERRED to immediately before the cascade_policy split below (was: right
+    # here, before ~600 lines of pre-dispatch setup with its own raise sites —
+    # a durable-store write, a reconciler-engine call, untrusted-index reads,
+    # dispatcher-interface calls — none of which release on failure). Nothing
+    # between here and the deferred call site reads `_branch_admissions`
+    # (verified by direct grep of this function's body), so every pre-dispatch
+    # setup failure below now returns/raises with NOTHING admitted — there is
+    # no lease to leak, and the 3 release-on-early-return call sites this
+    # deferral obsoletes are removed rather than kept as dead code.
 
     if reconciler_engine_resume_required:
         _synth_replay_validation_fail = _captured_synthesis_replay_validation_failure(
@@ -7441,7 +7445,6 @@ def _execute_parallelization(
             run_id=run_id,
         )
         if _synth_replay_validation_fail is not None:
-            _release_unconsumed_fanout_admissions(_branch_admissions)
             return _synth_replay_validation_fail, 0
         (
             _reconciler_resume_fail,
@@ -7453,7 +7456,6 @@ def _execute_parallelization(
             step_id="fanout-crash-resume",
         )
         if _reconciler_resume_fail is not None:
-            _release_unconsumed_fanout_admissions(_branch_admissions)
             return _reconciler_resume_fail, 0
 
     # § 25.3.2 — Emit workflow.start (the fan-out begins). Single-threaded on the
@@ -7818,10 +7820,8 @@ def _execute_parallelization(
     # requires a strict tier (out-of-family Codex [P2] R3; the tier-change material-diff is allowed
     # otherwise, so this guard is the load-bearing strict-tier requirement).
     if _recovered_effect_fence_paused and cascade_policy is CascadePolicy.PROCEED:
-        # B-48 lease-leak fix (out-of-family Codex [P1]): this fail-closed
-        # guard fires AFTER admission, BEFORE any branch dispatch reaches its
-        # own `finally` release.
-        _release_unconsumed_fanout_admissions(_branch_admissions)
+        # B-48 (codex round-9 [P2] admission-deferral): admission has not yet
+        # happened at this point (deferred below) — nothing to release.
         return _finish(
             RunStatus.FAILED,
             fail_class="parallelization-effect-fence-resume-requires-strict-tier",
@@ -8054,6 +8054,22 @@ def _execute_parallelization(
                 procedural_tier_snapshot_ref=snapshot_ref,
             )
             branch_writers.append(_r_writer)
+
+    # B-48 (C-CP-25 §25.11; CP spec v1.102 §1 row 3) — WHOLE-fan-out ATOMIC
+    # admission, ONE call, decided immediately before either cascade_policy
+    # path below dispatches a single branch (codex round-9 [P2]: deferred
+    # here — down from right after `branch_plan` was built — so the ~600
+    # lines of pre-dispatch setup above run with NOTHING admitted; a failure
+    # anywhere in that setup is then a plain early-return/raise with no lease
+    # to leak, rather than requiring a release call at every one of its raise
+    # sites). Shared by both `_proceed_branch` (PROCEED) and `_cancel_branch`
+    # (CASCADE_CANCEL/PAUSE) — only one of the two runs per invocation, gated
+    # by the `cascade_policy is CascadePolicy.PROCEED` branch immediately
+    # below; this ONE admission result feeds whichever runs. Nothing between
+    # this call and the first branch dispatch can raise (only `async def`
+    # definitions follow, until `_run_fanout_to_completion` actually awaits
+    # one).
+    _branch_admissions = _admit_fanout_branch_plan(ctx, branch_plan, workflow_id=workflow_id)
 
     # === proceed: branches run to completion → SUCCESS | PARTIAL (degraded) ===
     if cascade_policy is CascadePolicy.PROCEED:
@@ -10876,14 +10892,12 @@ def _execute_orchestrator_workers(
         branch_plan.append((branch_index, step, child, writer, binding))
     branch_writers = [plan[3] for plan in branch_plan]
 
-    # B-48 (C-CP-25 §25.11; CP spec v1.102 §1 row 3) — WHOLE-fan-out ATOMIC
-    # admission, ONE call, decided BEFORE either cascade_policy path below
-    # dispatches a single worker. Shared by both `_proceed_worker` (PROCEED)
-    # and `_cancel_worker` (CASCADE_CANCEL/PAUSE) — only one of the two runs
-    # per invocation. O-W resolves dispatchers INLINE per-worker (no shared
-    # `branch_dispatchers` dict), but admission only needs each branch's
-    # `step.step_kind` (already in `branch_plan`), so it needs no dispatcher.
-    _branch_admissions = _admit_fanout_branch_plan(ctx, branch_plan, workflow_id=workflow_id)
+    # B-48 (C-CP-25 §25.11; CP spec v1.102 §1 row 3; codex round-9 [P2] "whole-
+    # fan-out admission leaks on pre-dispatch setup failure") — admission is
+    # DEFERRED to immediately before the cascade_policy split below (was:
+    # right here — see the PARALLELIZATION site's identical deferral for the
+    # full rationale). Nothing between here and the deferred call site reads
+    # `_branch_admissions` (verified by direct grep of this function's body).
 
     # Worker outputs collected as each branch CLEANLY completes (branch-index
     # keyed). Populated on the fan-out loop thread after the awaited dispatch
@@ -11568,10 +11582,8 @@ def _execute_orchestrator_workers(
     # would degrade to PARTIAL, dropping the operator's decision). Fail closed — the resume requires
     # a strict tier (out-of-family Codex [P2] R3; the parallelization analogue).
     if _recovered_effect_fence_paused and cascade_policy is CascadePolicy.PROCEED:
-        # B-48 lease-leak fix (out-of-family Codex [P1]): this fail-closed
-        # guard fires AFTER admission, BEFORE any worker dispatch reaches its
-        # own `finally` release.
-        _release_unconsumed_fanout_admissions(_branch_admissions)
+        # B-48 (codex round-9 [P2] admission-deferral): admission has not yet
+        # happened at this point (deferred below) — nothing to release.
         return _finish(
             RunStatus.FAILED,
             fail_class="orchestrator-workers-effect-fence-resume-requires-strict-tier",
@@ -11650,6 +11662,19 @@ def _execute_orchestrator_workers(
         _warmup_phase_split() if _d4.concurrent_cache_warmup else (list(_rest_plan), [])
     )
     _warmup_gate: bool = bool(_warmup_phase2)
+
+    # B-48 (C-CP-25 §25.11; CP spec v1.102 §1 row 3) — WHOLE-fan-out ATOMIC
+    # admission, ONE call, decided immediately before either cascade_policy
+    # path below dispatches a single worker (codex round-9 [P2]: deferred
+    # here — see the PARALLELIZATION site's identical deferral for the full
+    # rationale). Shared by both `_proceed_worker` (PROCEED) and
+    # `_cancel_worker` (CASCADE_CANCEL/PAUSE) — only one of the two runs per
+    # invocation, gated by the `cascade_policy is CascadePolicy.PROCEED`
+    # branch immediately below; this ONE admission result feeds whichever
+    # runs. O-W resolves dispatchers INLINE per-worker (no shared
+    # `branch_dispatchers` dict), but admission only needs each branch's
+    # `step.step_kind` (already in `branch_plan`), so it needs no dispatcher.
+    _branch_admissions = _admit_fanout_branch_plan(ctx, branch_plan, workflow_id=workflow_id)
 
     # === proceed: siblings run to completion → SUCCESS | PARTIAL (degraded) ===
     if cascade_policy is CascadePolicy.PROCEED:

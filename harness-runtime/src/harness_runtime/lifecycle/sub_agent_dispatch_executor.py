@@ -341,17 +341,29 @@ class SubAgentDispatchExecutor:
             self._run_job(future, fn)
 
     def _run_job(self, future: Future[Any], fn: Callable[[], Any]) -> None:
+        # Codex round-9 [P2] "complete futures before marking executor jobs
+        # done" — publish the result/exception BEFORE `_job_done()` removes
+        # this future from `_outstanding`. `Future.set_result`/
+        # `set_exception` fire the future's done-callbacks (lease release,
+        # the `asyncio.wrap_future` bridge) SYNCHRONOUSLY on this thread;
+        # the old ordering removed the future from `_outstanding` first, so
+        # `drain()`'s poll loop (`len(self._outstanding) == 0`) could
+        # observe "fully drained" in the narrow window before those
+        # callbacks had actually run. The `not future.set_running_or_notify_
+        # cancel()` branch is unaffected — that path means the future was
+        # ALREADY cancelled (and its own callbacks already fired) by
+        # whoever called `.cancel()` on it, before this method ever ran.
         if not future.set_running_or_notify_cancel():
             self._job_done(future)
             return
         try:
             result = fn()
         except BaseException as exc:
-            self._job_done(future)
             future.set_exception(exc)
-        else:
             self._job_done(future)
+        else:
             future.set_result(result)
+            self._job_done(future)
 
     def _job_done(self, future: Future[Any]) -> None:
         with self._lock:

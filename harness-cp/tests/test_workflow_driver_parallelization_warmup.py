@@ -433,6 +433,26 @@ class _FailBranch0Dispatcher:
         return "test-cohort-uniform"
 
 
+class _CohortKeyRaisingDispatcher:
+    """CohortKeyCapable dispatcher whose `cohort_key()` raises unconditionally
+    — codex round-9 [P2] "whole-fan-out admission leaks on pre-dispatch setup
+    failure": `_warmup_phase_split()`'s per-branch `dispatcher.cohort_key(...)`
+    oracle call is one of the genuinely-reachable raise sites inside the
+    pre-dispatch setup window B-48's admission is now deferred past."""
+
+    def dispatch(
+        self,
+        binding: StepEffectiveBinding,
+        step: WorkflowStep,
+        *,
+        step_context: Any = None,
+    ) -> dict[str, Any]:
+        return {"branch": step.step_payload["index"]}
+
+    def cohort_key(self, binding: StepEffectiveBinding, step: WorkflowStep) -> str | None:
+        raise RuntimeError("simulated cohort_key() oracle failure")
+
+
 class _ReverseCompletionDispatcher:
     """Forces reverse-index completion order: branch i waits for branch i+1 to
     complete first.  On the all-concurrent path this succeeds (all threads run
@@ -1369,6 +1389,39 @@ def test_proceed_warmup_phase1_deadline_strike_releases_withheld_phase2_admissio
     # + branch[0]'s eventual own release); fixed reaches frame_budget - 1
     # immediately and frame_budget once branch[0] also completes.
     assert authority.available >= authority.frame_budget - 1
+
+
+def test_warmup_phase_split_cohort_key_failure_never_admits() -> None:
+    """Codex round-9 [P2] "whole-fan-out admission leaks on pre-dispatch setup
+    failure" — B-48's WHOLE-fan-out admission call is now DEFERRED to
+    immediately before the `cascade_policy` split, i.e. AFTER `_warmup_phase_
+    split()` runs (the split's own `dispatcher.cohort_key(...)` oracle call is
+    unguarded and was one of the genuinely-reachable pre-dispatch raise sites
+    inside the ~600-line setup window admission used to run BEFORE). A raise
+    here must leave the capacity authority completely untouched — there was
+    never anything to admit yet, let alone release.
+
+    Mutation probe: moving `_admit_fanout_branch_plan` back to its pre-fix
+    position (immediately after `branch_dispatchers` is resolved, BEFORE the
+    warm-up split runs) would admit the fan-out's frames before this raise —
+    `authority.available` would then read short of the full `frame_budget`
+    (a genuine leak, since nothing downstream of the crash releases it),
+    failing the assertion below.
+    """
+    authority = DefaultCapacityAuthority(frame_budget=4)
+    with pytest.raises(RuntimeError, match="simulated cohort_key"):
+        _run(
+            steps=[_inference_step(0), _inference_step(1)],
+            dispatcher=cast(StepDispatcher, _CohortKeyRaisingDispatcher()),
+            concurrent_cache_warmup=True,
+            persona_tier=PersonaTier.SOLO_DEVELOPER,
+            capacity_authority=authority,
+        )
+    assert authority.available == authority.frame_budget == 4, (
+        f"expected the frame budget completely untouched ({authority.available} "
+        f"available of {authority.frame_budget}) — admission ran before the "
+        f"warm-up cohort-key split failed"
+    )
 
 
 def test_pause_warmup_phase1_deadline_strike_failed_with_cancelled_terminals(
