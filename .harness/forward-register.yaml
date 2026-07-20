@@ -1095,7 +1095,7 @@ items:
     round-10): composers select fixed global key_ids, so distinct per-tenant mapping entries would
     never be used -- cross-tenant replay under a deployment-scoped key remains unmitigated until the
     message segment lands or tenant-aware key selection is built. Class 1 fork doc FILED
-    2026-07-17 at .harness/class_1_fork_b51_b52_b54_od_signing_amendment_arc.md (leg 1) -- spec+plan deltas APPLIED 2026-07-18 (PR 1056); the impl arc is the live next step (U-OD-30 amended + U-CP-72 + U-RT-137).'
+    2026-07-17 at .harness/class_1_fork_b51_b52_b54_od_signing_amendment_arc.md (leg 1) -- spec+plan deltas APPLIED 2026-07-18 (PR 1056); the impl arc is the live next step (U-OD-30 amended + U-CP-72 + U-RT-137). U-OD-30 (amended) LANDED 2026-07-19 (PR 1061): tenant-bearing sign_audit_entry fifth-segment + signing_token/sidecar_tag normalizer, 3 codex rounds, merge-gate 3-lens APPROVE. STILL OPEN: U-CP-72 converter amendment (threads tenant through cp_audit_to_od_audit + every production call site) and U-RT-137 (writer normalizer delegation -- the RuntimeAuditLedgerWriter._tenant_tag half already landed in PR 1061 as a merge-gate finding fix; the redaction-map AuditLedgerRedactionTokenMap tenant threading also already landed in PR 1061).'
   close_out: 'Fork doc RATIFIED 2026-07-18; spec deltas APPLIED at OD v1.34 + CP v1.101 + Runtime v1.101 + plans (PR 1056). IMPL ARC: implement the
     APPLIED fifth-segment + tenant-bearing API per U-OD-30 (amended) + U-CP-72 + U-RT-137 (the
     canonical-message contract now LIVES at OD v1.34 section 21.2.1 — no further OD amendment owed). The applied obligations (rejected alternatives REMOVED per the ratified gate): the tenant-bearing
