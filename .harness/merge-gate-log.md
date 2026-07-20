@@ -239,3 +239,28 @@ inverting the established OD-consumes-CP axis-import direction) — registered a
 corrected in place; round 11 fixed a stale forward-register CI-gate snapshot/digest plus a genuine
 `tzinfo.utcoffset() is None` naive-datetime edge case the carrier's construction-time guard missed.
 Full harness-od suite (1094) + pyright clean throughout; `tools/forward_register.py --check` green.
+
+## PR #1063 — 2026-07-20 — feat/rt-u-rt-134-audit-signing-fail-closed
+
+| Lens | R1 | R2 |
+|---|---|---|
+| concurrency | APPROVE | — |
+| spec-conformance | APPROVE | — |
+| test-witness | BLOCK: no test proved the real stage_4_od.execute() reaches initialize_mtc_audit_signing_record with its derived sidecar-path/IS-refs wiring ([[wired-handler-unreachable]]) | APPROVE |
+
+Outcome: MERGE (pending CI). U-RT-134 (`audit_signing_fail_closed` carrier + dual env-loader
+registration + MTC bootstrap config-validation invariant + greenfield cutover-record signing),
+the third leg of the B-51/B-52/B-54/B-53 arc. Nine out-of-family Codex rounds preceded the gate
+(round 9 pre-committed terminal per the B-48 r10 precedent): rounds 1–8 findings ALL fixed with
+PD-8 mutation-probed witnesses (strict env-bool coercion; blank-string normalization; record-key
+physical distinctness incl. canonical KMS identity, row-signing consumer ids, the redaction-token
+key, and persisted-row keys with unmapped-key fail-closed + legacy-baseline recognition; taxonomy
+precedence — invalid v2 values over missing inputs; non-regular/reserved-filename path collisions;
+atomic + symlink-safe + fsynced + NO-CLOBBER greenfield publication with verify-after-sign and the
+ledger-freshness gate on both the sidecar and hash-chained IS-refs halves; locked sidecar scans);
+round-9's residual cross-process probe→publish atomicity registered as forward item B-64 (grounded:
+practical paths closed by MTC bootstrap ordering + the no-clobber convergence). The gate's one
+BLOCK was fixed with a real-stage-4 wiring witness (real stages 0+1 + real execute(); all three
+round-1-named mutations now fail it; lambda-neuter probe run + restored) and re-gated APPROVE.
+Concurrency lens's approve-note (the persisted-row scan is a third probe in the B-64 window) folded
+into B-64's close_out. Full suite 2806 passed / 0 failed; ruff + pyright clean.

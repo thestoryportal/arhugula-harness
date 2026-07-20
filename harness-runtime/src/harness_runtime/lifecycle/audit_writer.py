@@ -98,6 +98,54 @@ from harness_od.per_family_audit_verification import REDACTION_TOKEN_NAMESPACE_P
 from harness_runtime.lifecycle.state_ledger import LedgerWriter
 from harness_runtime.types import RuntimeConfig
 
+AUDIT_SIDECAR_FILENAME = "audit-entries.jsonl"
+"""The full-entry durable sidecar's filename, beside the IS ledger file
+(`B-47` item (e)). Public module constant so callers that need the sidecar
+LOCATION before a `RuntimeAuditLedgerWriter` exists (U-RT-134's stage-4
+ledger-freshness gate reads it from the stage-1 ledger handle, BEFORE the
+audit writer materializes) share one source of truth with the writer's own
+`_SIDECAR_FILENAME`."""
+
+AUDIT_SNAPSHOT_FILENAME = "audit-entries.index-snapshot.json"
+"""The membership-index snapshot's filename, beside the sidecar — public for
+the same reason as `AUDIT_SIDECAR_FILENAME` (shared with the writer's own
+`_SNAPSHOT_FILENAME`)."""
+
+AUDIT_WRITER_RESERVED_FILENAMES: frozenset[str] = frozenset(
+    {
+        AUDIT_SIDECAR_FILENAME,
+        AUDIT_SNAPSHOT_FILENAME,
+        AUDIT_SNAPSHOT_FILENAME + ".tmp",
+    }
+)
+"""Every filename the audit writer owns (and truncates/replaces) beside the
+IS ledger. U-RT-134's record-path collision check rejects a cutover-record
+path resolving to ANY of these (out-of-family Codex [P2] round-9: a record
+written to the snapshot path would be destroyed by the writer's next
+`_write_index_snapshot_locked` replace)."""
+
+_AUDIT_ACTION_ID_PREFIX = "audit"
+"""The IS-ledger action_id prefix audit wraps carry — module-level so
+`ledger_holds_audit_refs` (usable before a writer instance exists) and the
+writer's own `_ACTION_ID_PREFIX` share one definition."""
+
+
+def ledger_holds_audit_refs(ledger_writer: LedgerWriter) -> bool:
+    """True iff the hash-chained IS ledger holds `audit:` references — the
+    AUTHORITY for "has any audit entry ever been appended" (its refs cannot
+    be silently removed the way a plain sidecar file can; same principle as
+    `RuntimeAuditLedgerWriter._assert_absence_is_first_use`, codex round-36).
+
+    Module-level (needing only the stage-1 `LedgerWriter`) so U-RT-134's
+    stage-4 ledger-freshness gate can consult it BEFORE the audit writer
+    materializes — a deleted/truncated sidecar alongside surviving IS refs
+    must read as NOT fresh (out-of-family Codex [P1] U-RT-134 round-5).
+    """
+    return any(
+        entry.action_id.startswith(f"{_AUDIT_ACTION_ID_PREFIX}:")
+        for entry in read_ledger(ledger_writer.handle)
+    )
+
 
 class AuditWriterBindError(Exception):
     """Raised when audit-writer stage materialization fails."""
@@ -265,9 +313,9 @@ class RuntimeAuditLedgerWriter:
     Mutated only under `_sidecar_thread_lock` + the cross-process write lock."""
 
     _SINGLE_TENANT_TAG: ClassVar[str] = "_single"
-    _ACTION_ID_PREFIX: ClassVar[str] = "audit"
+    _ACTION_ID_PREFIX: ClassVar[str] = _AUDIT_ACTION_ID_PREFIX
 
-    _SNAPSHOT_FILENAME: ClassVar[str] = "audit-entries.index-snapshot.json"
+    _SNAPSHOT_FILENAME: ClassVar[str] = AUDIT_SNAPSHOT_FILENAME
     """B-50 item (g) — the disk-backed membership-index snapshot.
 
     A DERIVED CACHE of the fold state (`_SidecarMembershipIndex`) written
@@ -300,7 +348,7 @@ class RuntimeAuditLedgerWriter:
     rewrite stall shrinks in frequency as the ledger grows. A cold start
     then folds at most ~1/8 of history as delta."""
 
-    _SIDECAR_FILENAME: ClassVar[str] = "audit-entries.jsonl"
+    _SIDECAR_FILENAME: ClassVar[str] = AUDIT_SIDECAR_FILENAME
     """`B-47` close-out item (e) — the full-entry durable sidecar.
 
     The IS wrap persists only the `audit:<tag>:<entry_hash>` reference (the
@@ -806,10 +854,7 @@ class RuntimeAuditLedgerWriter:
         exist. Public so the shutdown flush can distinguish genuine first use
         from deletion-after-use (codex round-43), consistent with the
         writer's own missing-sidecar guard."""
-        return any(
-            entry.action_id.startswith(f"{self._ACTION_ID_PREFIX}:")
-            for entry in read_ledger(self.ledger_writer.handle)
-        )
+        return ledger_holds_audit_refs(self.ledger_writer)
 
     def _assert_absence_is_first_use(self) -> None:
         """A MISSING sidecar is only legitimate before any audit entry ever

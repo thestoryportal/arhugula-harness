@@ -234,6 +234,16 @@ async def test_r_cl_p3_live_multi_tier_api_run(
     monkeypatch.setattr(
         _stage_4_od_mod, "validate_audit_signing_for_span_stage", lambda *_a, **_kw: None
     )
+    # U-RT-134 (C-RT-03 v1.101) — same rationale: at MULTI_TENANT_COMPLIANCE
+    # with no tenant_id/backend/record inputs configured, the new bootstrap
+    # config-validation invariant would otherwise raise
+    # `IncompatibleConfigVersion` before tracer registration too.
+    monkeypatch.setattr(
+        _stage_4_od_mod, "validate_mtc_audit_signing_config", lambda *_a, **_kw: None
+    )
+    monkeypatch.setattr(
+        _stage_4_od_mod, "initialize_mtc_audit_signing_record", lambda *_a, **_kw: None
+    )
 
     echo_value = f"hello-p3-{persona_tier_name.lower()}"
 
