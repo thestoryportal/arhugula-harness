@@ -249,28 +249,30 @@ def _resolve_cutover_disposition(
 
     Matches on `(tenant_scope, entry_hash)` — the DESTINATION identity —
     but the record's own uniqueness rule (`AuditCutoverRecord._validate_rows`)
-    deliberately permits TWO (or more) rows sharing a destination when at
-    most one is NON-quarantined (distinct SOURCE rows migrating to the same
-    target; the `source_tag` disambiguates them in the SOURCE-uniqueness
-    check). A QUARANTINED row's source is, BY THE MIGRATION CONTRACT, never
-    retagged — so its content can never legitimately surface as a full
-    entry under this tenant scope in the first place (out-of-family Codex
-    [P2] finding, round 3: an earlier version of this lookup rejected the
-    ENTIRE legitimate quarantined+non-quarantined collision shape as
-    "ambiguous", making a record shape the carrier's own validator
-    explicitly accepts unusable at verify-time). Filtering to NON-quarantined
-    matches first resolves this: the record's own uniqueness rule guarantees
-    AT MOST ONE non-quarantined row per destination, so a match there is
-    NEVER ambiguous. Only when ZERO non-quarantined rows match do quarantined
-    rows apply — and if MORE THAN ONE quarantined row collides on the same
-    destination (permitted — quarantined rows are excluded from the
-    destination-uniqueness check entirely), this lookup has no `source_tag`
-    to disambiguate with (`entry_hash` is the only identity `AuditLedgerEntry`
-    carries), and because the canonical message SORTS rows before signing,
-    deserialized row ORDER is NOT authenticated — silently picking "the
-    first match" would let an attacker flip which disposition wins without
-    invalidating the record's signature (out-of-family Codex [P1] finding,
-    round 1). THAT case still raises rather than guesses.
+    deliberately permits TWO rows sharing a destination when at most one is
+    NON-quarantined (distinct SOURCE rows migrating to the same target; the
+    `source_tag` disambiguates them in the SOURCE-uniqueness check).
+    NON-quarantined rows (`placeholder_exempt` / `four_tuple_real`) DO
+    legitimately govern a full entry regardless of `source_tag` — a
+    `"_single"` migration row that was RETAGGED under this real tenant is
+    exactly the primary use case. The record's own uniqueness rule
+    guarantees AT MOST ONE non-quarantined row per destination, so a match
+    there is NEVER ambiguous (out-of-family Codex [P2] finding, round 3:
+    an earlier version rejected this legitimate collision shape outright
+    as "ambiguous").
+
+    A QUARANTINED row is different: BY THE MIGRATION CONTRACT it is NEVER
+    retagged, so a `source_tag == "_single"` quarantined row can NEVER be
+    the actual full entry — only an ALREADY-TAGGED quarantined row
+    (`source_tag == normalized_scope`) can (out-of-family Codex [P2]
+    finding, round 5: treating a `"_single"`-tagged quarantined row as
+    governing a full entry silently skipped that entry's REAL signature
+    verification and misreported a genuinely post-cutover row as
+    "quarantined"). Only when ZERO non-quarantined rows match do
+    already-tagged quarantined rows apply; source-identity uniqueness
+    guarantees at most one such row per destination too, so this is also
+    never genuinely ambiguous — the residual "more than one" raise is
+    defense in depth against a record that bypassed normal construction.
     """
     matches = rows_by_entry_hash.get(entry.entry_hash, [])
     non_quarantined = [
@@ -290,22 +292,38 @@ def _resolve_cutover_disposition(
             "the record's own uniqueness rule should have forbidden this "
             "(OD spec v1.34 §21.2.2 row 4)"
         )
-    quarantined = [
+    # A QUARANTINED row is, BY THE MIGRATION CONTRACT, NEVER retagged — so
+    # only an ALREADY-TAGGED quarantined row (source_tag == normalized_scope,
+    # meaning it was tagged under this real tenant independent of this
+    # cutover record, and is merely flagged quarantined post-hoc) can
+    # legitimately govern a FULL entry read under this tenant scope. A
+    # `source_tag == "_single"` quarantined row can NEVER be the full entry
+    # matching this hash — treating it as such would wrongly report a
+    # genuinely post-cutover tenant row as "quarantined" and SKIP its real
+    # signature verification entirely (out-of-family Codex [P2] finding,
+    # round 5). Such a row remains a legitimate BASELINE-ONLY identity — the
+    # caller's separate baseline cross-check still covers it; this function
+    # only decides FULL-entry governance.
+    quarantined_already_tagged = [
         row
         for row in matches
         if row.verification_disposition is VerificationDisposition.QUARANTINED
+        and row.source_tag == normalized_scope
     ]
-    if len(quarantined) > 1:
+    if len(quarantined_already_tagged) > 1:
+        # Structurally impossible per source-identity uniqueness (an
+        # already-tagged row's source_tag is PINNED to normalized_scope, so
+        # at most one such row can exist per entry_hash) — defense in depth
+        # against a record that bypassed normal construction/validation.
         raise CutoverRecordValidationError(
-            f"cutover record has {len(quarantined)} QUARANTINED rows "
-            f"dispositioning the same destination identity (tenant_scope="
-            f"{normalized_scope!r}, entry_hash={entry.entry_hash!r}) with NO "
-            "non-quarantined row to prefer — ambiguous without a source_tag "
-            "input this entry-only lookup cannot supply; the verifier "
-            "refuses to guess which disposition applies (OD spec v1.34 "
-            "§21.2.2 row 4)"
+            f"cutover record has {len(quarantined_already_tagged)} "
+            "already-tagged QUARANTINED rows dispositioning the same "
+            f"destination identity (tenant_scope={normalized_scope!r}, "
+            f"entry_hash={entry.entry_hash!r}) — the record's own "
+            "source-identity uniqueness rule should have forbidden this "
+            "(OD spec v1.34 §21.2.2 row 4)"
         )
-    return quarantined[0] if quarantined else None
+    return quarantined_already_tagged[0] if quarantined_already_tagged else None
 
 
 def _verify_entry_signature(

@@ -337,7 +337,24 @@ def verify_cutover_record_signature(
     of `sign_cutover_record`. Returns the backend's raw boolean verdict; the
     U-OD-55 caller (`verify_per_family_chains`) is responsible for raising
     the typed taxonomy over a `False` result or a backend error.
+
+    Validates `signature`'s type and exact byte width for the record's
+    declared algorithm BEFORE ever calling `backend.verify` — mirroring
+    `sign_cutover_record`'s own defense and the per-entry verify path's
+    malformed-signature guard (out-of-family Codex [P2] finding, round 5):
+    a permissive or faulty backend adapter must not be able to authenticate
+    an under-width signature (e.g. a 1-byte value) by returning a bare
+    `True` for it.
     """
+    expected_length = SIGNATURE_LENGTH_BY_ALGORITHM[record.algorithm.value]
+    # `signature` is typed `bytes`, so pyright sees the isinstance check as
+    # statically unnecessary — it is a RUNTIME defense against a caller
+    # (or a persisted/deserialized value) violating the static type.
+    if (
+        not isinstance(signature, bytes)  # pyright: ignore[reportUnnecessaryIsInstance]
+        or len(signature) != expected_length
+    ):
+        return False
     message = canonical_cutover_record_message(record)
     return backend.verify(
         message=message, signature=signature, key_id=record.key_id, key_period=_RECORD_KEY_PERIOD

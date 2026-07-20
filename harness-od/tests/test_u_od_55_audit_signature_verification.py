@@ -590,19 +590,19 @@ def test_quarantined_and_nonquarantined_destination_collision_resolves() -> None
     assert report.signature_dispositions == {"verified": 1}
 
 
-def test_ambiguous_cutover_disposition_rejected() -> None:
-    """When TWO quarantined rows (different source tags — the record's
-    own uniqueness rule excludes quarantined rows from the destination
-    check entirely, so this is a legitimately-constructible record) share
-    the same DESTINATION identity with NO non-quarantined row to prefer,
-    this entry-only lookup has no `source_tag` to disambiguate which
-    quarantined disposition governs. The verifier must REJECT rather than
-    silently pick one: because the canonical message SORTS rows before
-    signing, deserialized row order is unauthenticated, so silently
-    trusting "the first match" would let an attacker flip which disposition
-    applies without invalidating the record's signature."""
+def test_single_tagged_quarantined_row_never_governs_full_entry() -> None:
+    """A `source_tag="_single"` quarantined row can NEVER govern a FULL
+    entry — BY THE MIGRATION CONTRACT it is never retagged, so its content
+    structurally cannot surface as a real tenant's full entry. When it
+    collides on `entry_hash` with an ALREADY-TAGGED quarantined row for the
+    SAME destination (a legitimately-constructible record — source-identity
+    uniqueness treats them as distinct source rows), the already-tagged row
+    deterministically governs the full entry; the `"_single"` row remains a
+    genuine, still-unobserved, baseline-only divergence — out-of-family
+    Codex [P2] finding, round 5: an earlier version let the `"_single"` row
+    win nondeterministically and skipped the entry's real signature check."""
     backend = _Ed25519Backend()
-    entry = _signed_entry("ambiguous-ref", backend=backend, tenant_id=None)
+    entry = _signed_entry("single-tagged-quarantine-ref", backend=backend, tenant_id=None)
     record, record_sig = _signed_record(
         AuditCutoverRecordRow(
             source_tag="_single",
@@ -627,16 +627,20 @@ def test_ambiguous_cutover_disposition_rejected() -> None:
         del algo, key_id
         return backend
 
-    with pytest.raises(CutoverRecordValidationError, match="ambiguous"):
-        verify_per_family_chains(
-            [entry],
-            tenant_scope="tenant-x",
-            backend_resolver=resolver,
-            cutover_record=record,
-            cutover_record_signature=record_sig,
-            expected_cutover_record_key_id="cutover-key",
-            ledger_binding_id="sidecar-1",
-        )
+    report = verify_per_family_chains(
+        [entry],
+        tenant_scope="tenant-x",
+        backend_resolver=resolver,
+        cutover_record=record,
+        cutover_record_signature=record_sig,
+        expected_cutover_record_key_id="cutover-key",
+        ledger_binding_id="sidecar-1",
+        observed_baseline_identities=[],
+    )
+    assert report.signature_dispositions == {"quarantined": 1}
+    assert len(report.baseline_divergences) == 1
+    assert "_single" in report.baseline_divergences[0]
+    assert entry.entry_hash in report.baseline_divergences[0]
 
 
 def test_verify_verdict_requires_literal_true() -> None:
