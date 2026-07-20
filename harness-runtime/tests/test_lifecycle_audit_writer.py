@@ -1608,6 +1608,28 @@ def test_warm_writer_detects_truncation_on_next_append(tmp_path: Path) -> None:
         writer.append("tenant-A", _make_audit_entry("3" * 64))
 
 
+def test_tenant_tag_delegates_to_od_sidecar_tag_authority(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Out-of-family Codex P2 (PR #1061 round 3) — `_tenant_tag` must
+    DELEGATE to `harness_od.sidecar_tag` (the ONE OD-owned normalization
+    authority per OD spec v1.34 §21.2.1 row 2), not duplicate its rules
+    locally: whenever normalization changes, signing and persistence could
+    otherwise silently drift apart. Black-box behavior alone cannot
+    distinguish delegation from a coincidentally-identical duplicate — this
+    monkeypatches the OD authority itself and confirms `_tenant_tag`
+    reflects the patched behavior, proving it is actually CALLED, not just
+    logically equivalent. Mutation probe: reverting to the pre-fix inline
+    duplicate leaves this monkeypatch un-consulted and the test fails."""
+    import harness_runtime.lifecycle.audit_writer as _audit_writer_mod
+
+    monkeypatch.setattr(
+        _audit_writer_mod, "sidecar_tag", lambda tenant_id: f"DELEGATED:{tenant_id}"
+    )
+    assert RuntimeAuditLedgerWriter._tenant_tag("tenant-x") == "DELEGATED:tenant-x"
+    assert RuntimeAuditLedgerWriter._tenant_tag(None) == "DELEGATED:None"
+
+
 def test_reserved_tenant_ids_refused_everywhere(tmp_path: Path) -> None:
     """Codex round-45 P1 (PR B1) — `None`, `""`, and the literal `"_single"`
     all collapsed to one sidecar tag, so an operator tenant named `_single`
@@ -1617,12 +1639,17 @@ def test_reserved_tenant_ids_refused_everywhere(tmp_path: Path) -> None:
     writer = _writer(tmp_path)
     writer.append(None, _make_audit_entry("1" * 64))
 
-    for reserved in ("", "_single"):
-        with pytest.raises(ValueError, match="reserved"):
+    # U-OD-30/B-51 landing (out-of-family Codex P2, PR #1061 round 3): the
+    # writer now delegates to `harness_od.sidecar_tag` (the ONE OD-owned
+    # normalization authority) instead of duplicating the same rule-set, so
+    # the exact refusal message per reserved value now comes from there —
+    # the injective refusal BEHAVIOR (both raise ValueError) is unchanged.
+    for reserved, match in (("", "empty string"), ("_single", "reserved")):
+        with pytest.raises(ValueError, match=match):
             writer.append(reserved, _make_audit_entry("2" * 64))
-        with pytest.raises(ValueError, match="reserved"):
+        with pytest.raises(ValueError, match=match):
             writer.read_full_entries_for_tenant(reserved)
-        with pytest.raises(ValueError, match="reserved"):
+        with pytest.raises(ValueError, match=match):
             writer.read_for_tenant(reserved)
 
     # The single-tenant scope stays reachable via its documented signal.
