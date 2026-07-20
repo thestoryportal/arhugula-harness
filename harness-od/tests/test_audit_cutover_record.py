@@ -405,3 +405,56 @@ def test_sign_cutover_record_rejects_malformed_signature() -> None:
 
     with pytest.raises(CutoverRecordValidationError, match="malformed"):
         sign_cutover_record(_golden_record(), backend=_NonBytesSignatureBackend())  # type: ignore[arg-type]
+
+
+def test_source_tag_defaults_to_single() -> None:
+    """A migration row omitting `source_tag` gets the documented `"_single"`
+    default — out-of-family Codex [P2] finding, round 4: the wire contract
+    + class docstring both say migration rows default to `"_single"`, but
+    the field had no actual default, rejecting the documented shape."""
+    row = AuditCutoverRecordRow(
+        tenant_scope="tenant-x",
+        entry_hash=_HASH_A,
+        verification_disposition=VerificationDisposition.FOUR_TUPLE_REAL,
+    )
+    assert row.source_tag == "_single"
+
+
+def test_row_tenant_scope_must_pass_normalization() -> None:
+    """A row's `tenant_scope` must pass the SAME §21.2.1 row-2 normalization
+    signing enforces — out-of-family Codex [P2] finding, round 4: a row
+    with `tenant_scope=""` or the reserved `"_single"` literal would be
+    accepted at construction (even signed) but could NEVER match a
+    verifier's normalized `tenant_scope` input, making it dead-on-arrival."""
+    with pytest.raises(ValidationError, match="normalization"):
+        AuditCutoverRecord(
+            schema_version=1,
+            authored_at=datetime(2026, 7, 19, tzinfo=UTC),
+            algorithm=SignatureAlgorithm.ED25519,
+            key_id="k",
+            ledger_binding_id="sidecar-1",
+            rows=(
+                AuditCutoverRecordRow(
+                    source_tag="_single",
+                    tenant_scope="",
+                    entry_hash=_HASH_A,
+                    verification_disposition=VerificationDisposition.FOUR_TUPLE_REAL,
+                ),
+            ),
+        )
+    with pytest.raises(ValidationError, match="normalization"):
+        AuditCutoverRecord(
+            schema_version=1,
+            authored_at=datetime(2026, 7, 19, tzinfo=UTC),
+            algorithm=SignatureAlgorithm.ED25519,
+            key_id="k",
+            ledger_binding_id="sidecar-1",
+            rows=(
+                AuditCutoverRecordRow(
+                    source_tag="_single",
+                    tenant_scope="_single",  # the reserved literal, not a real tenant
+                    entry_hash=_HASH_A,
+                    verification_disposition=VerificationDisposition.QUARANTINED,
+                ),
+            ),
+        )

@@ -34,6 +34,7 @@ from harness_cp.f5_signing_key_resolution import SIGNATURE_LENGTH_BY_ALGORITHM, 
 from pydantic import BaseModel, ConfigDict, model_validator
 
 from harness_od.audit_ledger_types import SignatureAlgorithm
+from harness_od.multi_tenant_trace_separation_and_audit_ledger import signing_token
 
 __all__ = [
     "AuditCutoverRecord",
@@ -97,7 +98,7 @@ class AuditCutoverRecordRow(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    source_tag: str
+    source_tag: str = "_single"
     tenant_scope: str
     entry_hash: str
     verification_disposition: VerificationDisposition
@@ -161,6 +162,24 @@ class AuditCutoverRecord(BaseModel):
         seen_source_identity: set[tuple[str, str]] = set()
         seen_destination: set[tuple[str, str]] = set()
         for row in self.rows:
+            try:
+                signing_token(row.tenant_scope)
+            except ValueError as exc:
+                # A row's `tenant_scope` MUST pass the SAME §21.2.1 row-2
+                # normalization signing enforces — otherwise an operator
+                # could author (and even sign) a record whose row can NEVER
+                # match a verifier's `normalized_scope` input (which is
+                # ALWAYS either `None` or a value that already survived
+                # this exact check), producing an authenticated row that
+                # can never be applied (out-of-family Codex [P2] finding,
+                # round 4).
+                raise CutoverRecordValidationError(
+                    f"cutover record row has tenant_scope={row.tenant_scope!r} "
+                    f"which fails the §21.2.1 row-2 tenant-tag normalization "
+                    f"({exc}) — a row whose tenant_scope can never match a "
+                    "verifier's normalized tenant_scope input can never be "
+                    "applied (OD spec v1.34 §21.2.2 row 4)"
+                ) from exc
             # A duplicate (source_tag, entry_hash) is the general rule; for
             # source_tag == "_single" specifically it IS the one-to-many
             # `("_single", entry_hash)` alias the spec names as its own

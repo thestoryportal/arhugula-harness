@@ -639,6 +639,106 @@ def test_ambiguous_cutover_disposition_rejected() -> None:
         )
 
 
+def test_verify_verdict_requires_literal_true() -> None:
+    """A duck-typed backend adapter returning a truthy non-`bool` value
+    (e.g. a raw SDK response object) must NOT be accepted as a passing
+    verdict — out-of-family Codex [P1] finding, round 4: `if not is_valid`
+    treats many non-`bool` shapes as passing; only the LITERAL `True`
+    verdict is trusted. Covers both the per-entry AND cutover-record
+    verify paths."""
+    backend = _Ed25519Backend()
+    entry = _signed_entry("truthy-verdict-ref", backend=backend, tenant_id=None)
+
+    class _TruthyNonBoolBackend:
+        algorithm = "ed25519"
+
+        def sign(self, *, message: bytes, key_id: str, key_period: int) -> bytes:
+            raise AssertionError("must not be called")
+
+        def verify(
+            self, *, message: bytes, signature: bytes, key_id: str, key_period: int
+        ) -> object:
+            return {"SignatureValid": True}  # truthy, but NOT the literal bool True
+
+    def resolver(algo: SignatureAlgorithm, key_id: str) -> _TruthyNonBoolBackend:
+        del algo, key_id
+        return _TruthyNonBoolBackend()
+
+    with pytest.raises(AuditSignatureInvalid):
+        verify_per_family_chains([entry], tenant_scope=None, backend_resolver=resolver)
+
+    # Cutover-record path: same discipline over verify_cutover_record_signature.
+    record, _real_sig = _signed_record(
+        AuditCutoverRecordRow(
+            source_tag="_single",
+            tenant_scope="tenant-x",
+            entry_hash=entry.entry_hash,
+            verification_disposition=VerificationDisposition.FOUR_TUPLE_REAL,
+        ),
+        backend=backend,
+    )
+    with pytest.raises(CutoverRecordValidationError, match="does not verify"):
+        verify_per_family_chains(
+            [entry],
+            tenant_scope="tenant-x",
+            backend_resolver=resolver,
+            cutover_record=record,
+            cutover_record_signature=b"irrelevant-bytes",
+            expected_cutover_record_key_id="cutover-key",
+            ledger_binding_id="sidecar-1",
+        )
+
+
+def test_colliding_quarantined_baseline_identity_preserved() -> None:
+    """A record legitimately carries a quarantined `("_single", H)` row and
+    a non-quarantined `("tenant-x", H)` row sharing `entry_hash=H` — the
+    non-quarantined row governs a FULL entry present in `entries`, but the
+    quarantined `("_single", H)` row is a DIFFERENT, still baseline-only,
+    SOURCE identity. Excluding it from the baseline cross-check just
+    because its entry_hash collides with the full entry's OWN destination
+    row would silently drop a genuine divergence — out-of-family Codex
+    [P1] finding, round 4."""
+    backend = _Ed25519Backend()
+    entry = _signed_entry("collision-baseline-ref", backend=backend, tenant_id=None)
+    record, record_sig = _signed_record(
+        AuditCutoverRecordRow(
+            source_tag="_single",
+            tenant_scope="tenant-x",
+            entry_hash=entry.entry_hash,
+            verification_disposition=VerificationDisposition.QUARANTINED,
+        ),
+        AuditCutoverRecordRow(
+            source_tag="tenant-x",
+            tenant_scope="tenant-x",
+            entry_hash=entry.entry_hash,
+            verification_disposition=VerificationDisposition.FOUR_TUPLE_REAL,
+        ),
+        backend=backend,
+    )
+
+    def resolver(algo: SignatureAlgorithm, key_id: str) -> _Ed25519Backend:
+        del algo, key_id
+        return backend
+
+    # The full entry resolves via the non-quarantined "tenant-x" row; the
+    # quarantined "_single" row is NOT observed in the sidecar baseline —
+    # a genuine divergence that must still surface.
+    report = verify_per_family_chains(
+        [entry],
+        tenant_scope="tenant-x",
+        backend_resolver=resolver,
+        cutover_record=record,
+        cutover_record_signature=record_sig,
+        expected_cutover_record_key_id="cutover-key",
+        ledger_binding_id="sidecar-1",
+        observed_baseline_identities=[],
+    )
+    assert report.signature_dispositions == {"verified": 1}
+    assert len(report.baseline_divergences) == 1
+    assert "_single" in report.baseline_divergences[0]
+    assert entry.entry_hash in report.baseline_divergences[0]
+
+
 def test_verify_path_not_breaker_instrumented() -> None:
     """Row 9 (dyad-3 pin): the OD verifier itself adds NO breaker/retry
     instrumentation around `backend.verify` — exactly one call per

@@ -52,6 +52,7 @@ from harness_cp.f5_signing_key_resolution import SIGNATURE_LENGTH_BY_ALGORITHM, 
 
 from harness_od.audit_cutover_record import (
     AuditCutoverRecord,
+    AuditCutoverRecordRow,
     CutoverRecordValidationError,
     VerificationDisposition,
     verify_cutover_record_signature,
@@ -214,15 +215,37 @@ def _per_entry_family_key(entry: AuditLedgerEntry) -> str:
     return prefix if sep else "(unprefixed)"
 
 
+def _index_cutover_rows_by_entry_hash(
+    cutover_record: AuditCutoverRecord | None, normalized_scope: str | None
+) -> dict[str, list[AuditCutoverRecordRow]]:
+    """Pre-index a cutover record's rows by `entry_hash`, scoped to the
+    CURRENT `normalized_scope` — built ONCE per `verify_per_family_chains`
+    call rather than re-scanning all M record rows for every one of N
+    entries (out-of-family Codex [P2] finding, round 4: an O(N×M) full
+    scan makes large-history verification prohibitively slow)."""
+    index: dict[str, list[AuditCutoverRecordRow]] = {}
+    if cutover_record is None or normalized_scope is None:
+        return index
+    for row in cutover_record.rows:
+        if row.tenant_scope == normalized_scope:
+            index.setdefault(row.entry_hash, []).append(row)
+    return index
+
+
 def _resolve_cutover_disposition(
-    entry: AuditLedgerEntry, cutover_record: AuditCutoverRecord | None, normalized_scope: str | None
-) -> VerificationDisposition | None:
-    """The cutover-record row governing `entry`, if any (OD spec v1.34
+    entry: AuditLedgerEntry,
+    rows_by_entry_hash: dict[str, list[AuditCutoverRecordRow]],
+    normalized_scope: str | None,
+) -> AuditCutoverRecordRow | None:
+    """The cutover-record ROW governing `entry`, if any (OD spec v1.34
     §21.2.2 row 4 — the verifier compares each recorded scope against its
-    row-2 tenant input). A cutover record only disposition rows for a REAL
-    tenant scope (the untenanted/single-tenant case has no legacy-migration
-    story to exempt); absent a match, the entry is treated as post-cutover
-    per row 3.
+    row-2 tenant input). Returns the ROW itself (not just its disposition)
+    so the caller can track the exact `(source_tag, entry_hash)` SOURCE
+    identity a full entry consumed — needed to correctly scope the
+    baseline-only cross-check (see its call site). A cutover record only
+    dispositions rows for a REAL tenant scope (the untenanted/single-tenant
+    case has no legacy-migration story to exempt); absent a match, the
+    entry is treated as post-cutover per row 3.
 
     Matches on `(tenant_scope, entry_hash)` — the DESTINATION identity —
     but the record's own uniqueness rule (`AuditCutoverRecord._validate_rows`)
@@ -249,20 +272,14 @@ def _resolve_cutover_disposition(
     invalidating the record's signature (out-of-family Codex [P1] finding,
     round 1). THAT case still raises rather than guesses.
     """
-    if cutover_record is None or normalized_scope is None:
-        return None
-    matches = [
-        row
-        for row in cutover_record.rows
-        if row.tenant_scope == normalized_scope and row.entry_hash == entry.entry_hash
-    ]
+    matches = rows_by_entry_hash.get(entry.entry_hash, [])
     non_quarantined = [
         row
         for row in matches
         if row.verification_disposition is not VerificationDisposition.QUARANTINED
     ]
     if len(non_quarantined) == 1:
-        return non_quarantined[0].verification_disposition
+        return non_quarantined[0]
     if non_quarantined:
         # Structurally impossible per the record's own destination-
         # uniqueness rule — defense in depth, not a reachable production case.
@@ -288,7 +305,7 @@ def _resolve_cutover_disposition(
             "refuses to guess which disposition applies (OD spec v1.34 "
             "§21.2.2 row 4)"
         )
-    return quarantined[0].verification_disposition if quarantined else None
+    return quarantined[0] if quarantined else None
 
 
 def _verify_entry_signature(
@@ -384,11 +401,18 @@ def _verify_entry_signature(
         key_id=sig_attrs.audit_signature_key_id,
         key_period=_DEPLOYMENT_BOUND_KEY_PERIOD,
     )
-    if not is_valid:
+    # `is not True` (not `not is_valid`) — a duck-typed backend adapter
+    # returning a truthy non-`bool` SDK value (e.g. `{"SignatureValid":
+    # False}`) would satisfy `not is_valid` as falsy-ish in SOME shapes but
+    # pass a bare truthiness check in others; requiring the LITERAL `True`
+    # fails closed on anything that isn't exactly the expected boolean
+    # verdict (out-of-family Codex [P1] finding, round 4).
+    if is_valid is not True:
         raise AuditSignatureInvalid(
             f"entry entry_hash={entry.entry_hash!r} failed backend signature "
-            "verification against the reconstructed canonical message (OD "
-            "spec v1.34 §21.2.2 row 7(a))"
+            "verification against the reconstructed canonical message — "
+            f"backend.verify returned {is_valid!r} (OD spec v1.34 §21.2.2 "
+            "row 7(a))"
         )
 
 
@@ -552,8 +576,13 @@ def verify_per_family_chains(
                     "a different algorithm than the one it claims (OD spec "
                     "v1.34 §21.2.2 row 4)"
                 )
-            if not verify_cutover_record_signature(
-                cutover_record, cutover_record_signature, backend=record_backend
+            # `is not True` — same literal-boolean defense as the per-entry
+            # verify path above (out-of-family Codex [P1] finding, round 4).
+            if (
+                verify_cutover_record_signature(
+                    cutover_record, cutover_record_signature, backend=record_backend
+                )
+                is not True
             ):
                 raise CutoverRecordValidationError(
                     "cutover_record_signature does not verify against the "
@@ -563,9 +592,21 @@ def verify_per_family_chains(
                 )
 
         normalized_scope = signing_token(tenant_scope)
+        rows_by_entry_hash = _index_cutover_rows_by_entry_hash(cutover_record, normalized_scope)
+        # The exact SOURCE identity (source_tag, entry_hash) each FULL entry
+        # consumed — used to scope the baseline-only cross-check below to
+        # ONLY the row actually accounted for by a full entry, not every row
+        # sharing that entry_hash (out-of-family Codex [P1] finding, round
+        # 4: a hash-only exclusion silently dropped a DIFFERENT, still-
+        # baseline-only quarantined source row that happens to collide on
+        # entry_hash with a full entry's own destination row).
+        consumed_source_identities: set[tuple[str, str]] = set()
 
         for entry in entries:
-            disposition = _resolve_cutover_disposition(entry, cutover_record, normalized_scope)
+            matched_row = _resolve_cutover_disposition(entry, rows_by_entry_hash, normalized_scope)
+            disposition = matched_row.verification_disposition if matched_row else None
+            if matched_row is not None:
+                consumed_source_identities.add((matched_row.source_tag, matched_row.entry_hash))
             if disposition is VerificationDisposition.QUARANTINED:
                 signature_dispositions["quarantined"] = (
                     signature_dispositions.get("quarantined", 0) + 1
@@ -588,23 +629,22 @@ def verify_per_family_chains(
             # DESTINATION-keyed (tenant_scope, entry_hash) comparison wrongly
             # reports divergence for a legitimate "_single" -> real-tenant
             # migration row, since the observed identity is source-tagged,
-            # not destination-tagged). Rows whose entry_hash already has a
-            # FULL entry in `entries` are excluded — those were content- and
-            # signature-verified above and are not baseline-only identities
-            # this cross-check is meant to cover. A ledger-wide record's rows
-            # are further filtered to the CURRENT requested tenant scope
-            # (out-of-family Codex [P1] finding, round 2: an unfiltered
-            # comparison reports every OTHER tenant's rows as false
-            # divergence when verifying one tenant); the untenanted (`None`
-            # `normalized_scope`) case has no baseline-cutover story, so no
-            # record rows apply.
-            full_entry_hashes = {entry.entry_hash for entry in entries}
+            # not destination-tagged). Only the row ACTUALLY consumed by a
+            # full entry above is excluded — NOT every row sharing that
+            # entry_hash (round 4 fix: a quarantined "_single" row colliding
+            # on entry_hash with a full entry's own destination row is a
+            # DIFFERENT, still baseline-only, source identity and must stay
+            # in this cross-check). A ledger-wide record's rows are further
+            # filtered to the CURRENT requested tenant scope (round 2 fix:
+            # an unfiltered comparison reports every OTHER tenant's rows as
+            # false divergence); the untenanted (`None` `normalized_scope`)
+            # case has no baseline-cutover story, so no record rows apply.
             scoped_rows = (
                 [
                     row
-                    for row in cutover_record.rows
-                    if row.tenant_scope == normalized_scope
-                    and row.entry_hash not in full_entry_hashes
+                    for rows in rows_by_entry_hash.values()
+                    for row in rows
+                    if (row.source_tag, row.entry_hash) not in consumed_source_identities
                 ]
                 if cutover_record is not None and normalized_scope is not None
                 else []
