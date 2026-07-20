@@ -21,6 +21,7 @@ from harness_od.audit_ledger_types import (
     StateLedgerEntryRef,
     compute_entry_hash,
 )
+from harness_od.audit_signing_errors import AuditSigningFailedError
 from harness_od.multi_tenant_trace_separation_and_audit_ledger import sign_audit_entry
 from harness_od.redaction_tokenizer import RedactionTokenRecord
 
@@ -77,6 +78,7 @@ def compose_redaction_token_audit_entry(
     prior_entry_hash: str = _ZERO_HASH,
     timestamp: str = "",
     backend: SigningBackend | None = None,
+    tenant_id: str | None = None,
 ) -> AuditLedgerEntry:
     """Compose one signed audit entry for a redaction-token map record.
 
@@ -88,15 +90,41 @@ def compose_redaction_token_audit_entry(
     a composition root must be able to reach (out-of-family Codex P1 finding
     on the B-47 PR-A landing: without this passthrough, a KMS-injected
     deployment would still emit placeholder `unsigned:` attributes for the
-    raw-value token map).
+    raw-value token map). `tenant_id` (OD spec v1.34 §21.2.1 row 4) is
+    likewise forwarded verbatim to `sign_audit_entry` — the runtime
+    `AuditLedgerRedactionTokenMap` carrier, which already holds tenant scope
+    as its own `_tenant_id`, supplies it.
+
+    **`backend` is REQUIRED on THIS path — OD spec v1.34 §21.2.3 row 6
+    (redaction-token signing: UNCONDITIONALLY fail-closed at EVERY persona
+    tier).** Unlike `sign_audit_entry`'s general default (an absent backend
+    returns the `unsigned:*` placeholder without raising), the redaction path
+    refuses that placeholder at every tier: raw redaction values must never
+    persist against an unsigned row, and a solo/team deployment's default
+    `fail_closed=False` posture must not make this guarantee vacuous. An
+    absent backend here is itself a typed `AuditSigningFailedError` — routed
+    through the SAME typed boundary `sign_audit_entry` uses, so a blind
+    upstream catch (e.g. `RedactionSpanProcessor.on_end`'s
+    `(KeyError, TypeError)`) cannot swallow it.
     """
+    if backend is None:
+        raise AuditSigningFailedError(
+            "compose_redaction_token_audit_entry precondition violated: a "
+            "configured SigningBackend is REQUIRED on the redaction-token "
+            "signing path at every persona tier — the placeholder "
+            "`unsigned:*` signature path is unconditionally refused here "
+            "(OD spec v1.34 §21.2.3 row 6); raw redaction values must never "
+            "persist against an unsigned row"
+        )
     action_id = _redaction_token_action_id(record)
     payload = AuditPayload(
         entry_core=entry_core or StateLedgerEntryRef(f"redaction-token:{action_id}"),
         audit_namespace_attrs=_redaction_token_attrs(record, timestamp=timestamp),
         prior_entry_hash=prior_entry_hash,
     )
-    signature_attrs = sign_audit_entry(payload, key_id=key_id, algo=algo, backend=backend)
+    signature_attrs = sign_audit_entry(
+        payload, key_id=key_id, algo=algo, backend=backend, tenant_id=tenant_id
+    )
     return AuditLedgerEntry(
         payload=payload,
         signature_attrs=signature_attrs,

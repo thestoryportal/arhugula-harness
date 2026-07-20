@@ -99,6 +99,32 @@ class _RecordingAuditWriter:
         return "appended"
 
 
+class _RedactionMapTestBackend:
+    """Module-level TEST-ONLY `SigningBackend` double (real Ed25519).
+
+    OD spec v1.34 §21.2.3 row 6 — the redaction-token signing path now
+    REQUIRES a configured backend at every persona tier; the tests below
+    exercise multi-tenant WIRING (tokenizer gating, tenant threading,
+    namespacing), not signing correctness, so a single shared real-crypto
+    double is threaded through them.
+    """
+
+    algorithm = "ed25519"
+
+    def __init__(self) -> None:
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+        self._private_key = Ed25519PrivateKey.generate()
+
+    def sign(self, *, message: bytes, key_id: str, key_period: int) -> bytes:
+        del key_id, key_period
+        return self._private_key.sign(message)
+
+    def verify(self, *, message: bytes, signature: bytes, key_id: str, key_period: int) -> bool:
+        del message, signature, key_id, key_period
+        return True
+
+
 # ---------------------------------------------------------------------------
 # AC #1 — spans flush on demand.
 # ---------------------------------------------------------------------------
@@ -313,6 +339,7 @@ def test_materialize_multi_tenant_tokenizes_content_with_audit_map(
         provider,
         exporter=in_memory,
         audit_writer=audit_writer,
+        signing_backend=_RedactionMapTestBackend(),
     )
     assert stage.redaction_processor.tokenizer_enabled is True
 
@@ -692,6 +719,7 @@ def test_restarted_stage_tokenizers_never_collide_tokens(tmp_path: Path) -> None
             provider,
             exporter=in_memory,
             audit_writer=audit_writer,
+            signing_backend=_RedactionMapTestBackend(),
         )
         assert stage.redaction_processor.tokenizer_enabled is True
         tracer = provider.get_tracer(f"ns-run-{run}")

@@ -65,6 +65,37 @@ from harness_runtime.types import (
 # ---------------------------------------------------------------------------
 
 
+class _RedactionMapTestBackend:
+    """Module-level TEST-ONLY `SigningBackend` double (real Ed25519).
+
+    OD spec v1.34 §21.2.3 row 6 — the redaction-token signing path now
+    REQUIRES a configured backend at every persona tier (`compose_
+    redaction_token_audit_entry` raises `AuditSigningFailedError` on
+    `backend=None`); every `AuditLedgerRedactionTokenMap` construction below
+    tests DURABILITY/chain-seeding/tenant-isolation behavior, not signing
+    correctness, so a single shared real-crypto double (not a fake/stub) is
+    threaded through them all rather than re-deriving a fixture per test.
+    """
+
+    algorithm = "ed25519"
+
+    def __init__(self) -> None:
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+        self._private_key = Ed25519PrivateKey.generate()
+
+    def sign(self, *, message: bytes, key_id: str, key_period: int) -> bytes:
+        del key_id, key_period
+        return self._private_key.sign(message)
+
+    def verify(self, *, message: bytes, signature: bytes, key_id: str, key_period: int) -> bool:
+        del message, signature, key_id, key_period
+        return True
+
+
+_REDACTION_MAP_TEST_BACKEND = _RedactionMapTestBackend()
+
+
 def _resolver_for(tmp_path: Path) -> PathResolver:
     config = PathBindingConfig(
         raw_entries=(
@@ -494,6 +525,12 @@ def test_full_chain_stage_to_real_signature_to_sidecar_rehydration(tmp_path: Pat
         key_id="harness-runtime-redaction-token",
         algo_value="ed25519",
         key_period_token="DEPLOYMENT_BOUND",
+        # OD spec v1.34 §21.2.1 row 1 — the stage's config carries
+        # tenant_id="tenant-b47" at MULTI_TENANT_COMPLIANCE, so the REAL
+        # signed message includes the fifth tenant segment; reconstructing
+        # the four-tuple here would verify against the WRONG (pre-amendment)
+        # message shape.
+        tenant_tag="tenant-b47",
     )
     backend.public_key.verify(raw, expected_message)  # raises on mismatch
 
@@ -572,6 +609,7 @@ def test_unreplayed_orphan_row_keeps_chain_continuity(tmp_path: Path) -> None:
         audit_writer=writer,
         tenant_id="tenant-orphan",
         signing_key_id="chain-key",
+        signing_backend=_REDACTION_MAP_TEST_BACKEND,
     )
     token_map.append(_record("[REDACTED:PII:1]"))
 
@@ -589,6 +627,7 @@ def test_unreplayed_orphan_row_keeps_chain_continuity(tmp_path: Path) -> None:
         audit_writer=writer,
         tenant_id="tenant-orphan",
         signing_key_id="chain-key",
+        signing_backend=_REDACTION_MAP_TEST_BACKEND,
     )
     fresh_map.append(_record("[REDACTED:PII:3]"))
 
@@ -638,6 +677,7 @@ def test_token_map_chain_advances_and_reseeds_across_restart(tmp_path: Path) -> 
         audit_writer=writer,
         tenant_id="tenant-chain",
         signing_key_id="chain-key",
+        signing_backend=_REDACTION_MAP_TEST_BACKEND,
     )
     map_run_1.append(_record("[REDACTED:PII:1]"))
     map_run_1.append(_record("[REDACTED:PII:2]"))
@@ -647,6 +687,7 @@ def test_token_map_chain_advances_and_reseeds_across_restart(tmp_path: Path) -> 
         audit_writer=writer,
         tenant_id="tenant-chain",
         signing_key_id="chain-key",
+        signing_backend=_REDACTION_MAP_TEST_BACKEND,
     )
     map_run_2.append(_record("[REDACTED:PII:3]"))
 
@@ -840,6 +881,7 @@ def test_same_map_instance_reconciles_chain_after_partial_failure(tmp_path: Path
         audit_writer=writer,
         tenant_id="tenant-partial",
         signing_key_id="chain-key",
+        signing_backend=_REDACTION_MAP_TEST_BACKEND,
     )
     token_map.append(_record("[REDACTED:PII:1]"))
 
@@ -1376,6 +1418,7 @@ def test_map_with_custom_entry_core_still_reseeds_from_its_family(tmp_path: Path
         tenant_id="tenant-core",
         signing_key_id="chain-key",
         entry_core=StateLedgerEntryRef("custom-core-ref"),
+        signing_backend=_REDACTION_MAP_TEST_BACKEND,
     )
     map_run_1.append(_record("[REDACTED:PII:c1]"))
 
@@ -1384,6 +1427,7 @@ def test_map_with_custom_entry_core_still_reseeds_from_its_family(tmp_path: Path
         tenant_id="tenant-core",
         signing_key_id="chain-key",
         entry_core=StateLedgerEntryRef("custom-core-ref"),
+        signing_backend=_REDACTION_MAP_TEST_BACKEND,
     )
     map_run_2.append(_record("[REDACTED:PII:c2]"))
 
@@ -1520,6 +1564,7 @@ def test_map_reseeds_from_its_own_family_tail_not_foreign(tmp_path: Path) -> Non
         audit_writer=writer,
         tenant_id="tenant-mix",
         signing_key_id="chain-key",
+        signing_backend=_REDACTION_MAP_TEST_BACKEND,
     )
     map_run_1.append(_record("[REDACTED:PII:r1]"))
 
@@ -1532,6 +1577,7 @@ def test_map_reseeds_from_its_own_family_tail_not_foreign(tmp_path: Path) -> Non
         audit_writer=writer,
         tenant_id="tenant-mix",
         signing_key_id="chain-key",
+        signing_backend=_REDACTION_MAP_TEST_BACKEND,
     )
     map_run_2.append(_record("[REDACTED:PII:r2]"))
 
@@ -1862,6 +1908,7 @@ def test_per_family_verifier_over_real_sidecar_rehydration(tmp_path: Path) -> No
         audit_writer=writer,
         tenant_id="tenant-v",
         signing_key_id="chain-key",
+        signing_backend=_REDACTION_MAP_TEST_BACKEND,
     )
 
     def _record(token: str) -> RedactionTokenRecord:
@@ -1909,6 +1956,7 @@ def test_two_map_instances_never_fork_the_chain(tmp_path: Path) -> None:
             audit_writer=writer,
             tenant_id="tenant-x",
             signing_key_id="chain-key",
+            signing_backend=_REDACTION_MAP_TEST_BACKEND,
         )
 
     def _record(token: str) -> RedactionTokenRecord:
@@ -1988,6 +2036,7 @@ def test_token_append_does_not_rehydrate_full_history(tmp_path: Path) -> None:
         audit_writer=writer,
         tenant_id="tenant-p",
         signing_key_id="chain-key",
+        signing_backend=_REDACTION_MAP_TEST_BACKEND,
     )
 
     def _record(token: str) -> RedactionTokenRecord:
@@ -2047,7 +2096,10 @@ def test_fresh_writer_instance_folds_the_family_tail(tmp_path: Path) -> None:
 
     writer1 = _writer(tmp_path)
     AuditLedgerRedactionTokenMap(
-        audit_writer=writer1, tenant_id="tenant-f", signing_key_id="chain-key"
+        audit_writer=writer1,
+        tenant_id="tenant-f",
+        signing_key_id="chain-key",
+        signing_backend=_REDACTION_MAP_TEST_BACKEND,
     ).append(_record("[REDACTED:PII:f1]"))
 
     # Fresh writer over the same path — cold index, tail known only via fold.
@@ -2056,7 +2108,10 @@ def test_fresh_writer_instance_folds_the_family_tail(tmp_path: Path) -> None:
         time_source=writer1.time_source,
     )
     AuditLedgerRedactionTokenMap(
-        audit_writer=writer2, tenant_id="tenant-f", signing_key_id="chain-key"
+        audit_writer=writer2,
+        tenant_id="tenant-f",
+        signing_key_id="chain-key",
+        signing_backend=_REDACTION_MAP_TEST_BACKEND,
     ).append(_record("[REDACTED:PII:f2]"))
 
     report = verify_per_family_chains(writer1.read_full_entries_for_tenant("tenant-f"))
@@ -2085,7 +2140,10 @@ def test_transactional_append_detects_boundary_truncation(tmp_path: Path) -> Non
 
     writer = _writer(tmp_path)
     token_map = AuditLedgerRedactionTokenMap(
-        audit_writer=writer, tenant_id="tenant-t", signing_key_id="chain-key"
+        audit_writer=writer,
+        tenant_id="tenant-t",
+        signing_key_id="chain-key",
+        signing_backend=_REDACTION_MAP_TEST_BACKEND,
     )
     token_map.append(_record("[REDACTED:PII:t1]"))
     token_map.append(_record("[REDACTED:PII:t2]"))
@@ -2098,7 +2156,10 @@ def test_transactional_append_detects_boundary_truncation(tmp_path: Path) -> Non
         ledger_writer=writer.ledger_writer, time_source=writer.time_source
     )
     fresh_map = AuditLedgerRedactionTokenMap(
-        audit_writer=fresh_writer, tenant_id="tenant-t", signing_key_id="chain-key"
+        audit_writer=fresh_writer,
+        tenant_id="tenant-t",
+        signing_key_id="chain-key",
+        signing_backend=_REDACTION_MAP_TEST_BACKEND,
     )
     with pytest.raises(ValueError, match="truncated or lost"):
         fresh_map.append(_record("[REDACTED:PII:t3]"))
@@ -2183,7 +2244,10 @@ def test_cold_adoption_recovers_redaction_tail_without_refold(
     monkeypatch.setattr(RuntimeAuditLedgerWriter, "_SNAPSHOT_EVERY_APPENDS", 1)
     writer = _writer(tmp_path)
     AuditLedgerRedactionTokenMap(
-        audit_writer=writer, tenant_id="tenant-g", signing_key_id="chain-key"
+        audit_writer=writer,
+        tenant_id="tenant-g",
+        signing_key_id="chain-key",
+        signing_backend=_REDACTION_MAP_TEST_BACKEND,
     ).append(_record("[REDACTED:PII:g1]"))
 
     calls = _spy_entry_validations(monkeypatch)
@@ -2191,7 +2255,10 @@ def test_cold_adoption_recovers_redaction_tail_without_refold(
         ledger_writer=writer.ledger_writer, time_source=writer.time_source
     )
     AuditLedgerRedactionTokenMap(
-        audit_writer=fresh_writer, tenant_id="tenant-g", signing_key_id="chain-key"
+        audit_writer=fresh_writer,
+        tenant_id="tenant-g",
+        signing_key_id="chain-key",
+        signing_backend=_REDACTION_MAP_TEST_BACKEND,
     ).append(_record("[REDACTED:PII:g2]"))
     assert len(calls) == 0, "tail must come from the adopted snapshot, not a refold"
 

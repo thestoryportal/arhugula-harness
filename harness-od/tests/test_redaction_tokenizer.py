@@ -8,6 +8,8 @@ remain separate cross-axis work.
 
 from __future__ import annotations
 
+import pytest
+from harness_od.audit_signing_errors import AuditSigningFailedError
 from harness_od.redaction_token_audit import compose_redaction_token_audit_entry
 from harness_od.redaction_tokenizer import (
     DeterministicRedactionClassifier,
@@ -127,6 +129,31 @@ def test_eval_grade_classifier_uses_tool_result_category() -> None:
     assert classification.category == "TOOL_RESULT"
 
 
+class _Ed25519Backend:
+    """TEST-ONLY C-CP-20 §20.2.1 `SigningBackend` double (real Ed25519).
+
+    OD spec v1.34 §21.2.3 row 6 — `compose_redaction_token_audit_entry`
+    requires a configured backend at every persona tier; this test exercises
+    the composer's attribute-shape contract, not signing correctness, so a
+    minimal real-crypto double stands in.
+    """
+
+    algorithm = "ed25519"
+
+    def __init__(self) -> None:
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+        self._private_key = Ed25519PrivateKey.generate()
+
+    def sign(self, *, message: bytes, key_id: str, key_period: int) -> bytes:
+        del key_id, key_period
+        return self._private_key.sign(message)
+
+    def verify(self, *, message: bytes, signature: bytes, key_id: str, key_period: int) -> bool:
+        del message, signature, key_id, key_period
+        return True
+
+
 def test_redaction_token_record_composes_signed_audit_entry() -> None:
     record = RedactionTokenRecord(
         token="[REDACTED:CONTENT:000000000001]",
@@ -136,7 +163,9 @@ def test_redaction_token_record_composes_signed_audit_entry() -> None:
         span_id="span-1",
     )
 
-    entry = compose_redaction_token_audit_entry(record, key_id="redaction-test-key")
+    entry = compose_redaction_token_audit_entry(
+        record, key_id="redaction-test-key", backend=_Ed25519Backend()
+    )
 
     attrs = entry.payload.audit_namespace_attrs
     assert attrs["audit.redaction_token.action_id"].startswith("redaction_token:")
@@ -149,3 +178,21 @@ def test_redaction_token_record_composes_signed_audit_entry() -> None:
     assert attrs["audit.redaction_token.span_id"] == "span-1"
     assert len(attrs["audit.redaction_token.raw_value_sha256"]) == 64
     assert entry.signature_attrs.audit_signature_key_id == "redaction-test-key"
+
+
+def test_redaction_token_absent_backend_raises_typed_every_tier() -> None:
+    """Witness (f) — OD spec v1.34 §21.2.3 row 6 — the redaction-token
+    signing path is UNCONDITIONALLY fail-closed at every persona tier: an
+    absent `backend` is itself a typed `AuditSigningFailedError`, not the
+    `unsigned:*` placeholder — raw redaction values must never persist
+    against an unsigned row. Mutation probe: letting the placeholder through
+    on this path (reverting the zeroth-site check) fails this test."""
+    record = RedactionTokenRecord(
+        token="[REDACTED:CONTENT:000000000002]",
+        attribute_key="gen_ai.input.messages",
+        raw_value="customer ssn 123-45-6789",
+        trace_id="trace-1",
+        span_id="span-1",
+    )
+    with pytest.raises(AuditSigningFailedError, match="REQUIRED"):
+        compose_redaction_token_audit_entry(record, key_id="redaction-test-key")

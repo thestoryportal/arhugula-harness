@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+from harness_od.audit_signing_errors import AuditSigningFailedError
 from harness_od.redaction_tokenizer import OpaqueRedactionTokenizer
 from harness_runtime.lifecycle.redaction_token_audit_map import AuditLedgerRedactionTokenMap
 
@@ -17,10 +19,12 @@ class _RecordingAuditWriter:
 
 def test_audit_ledger_redaction_token_map_writes_signed_audit_entry() -> None:
     audit_writer = _RecordingAuditWriter()
+    backend = _Ed25519Backend()
     token_map = AuditLedgerRedactionTokenMap(
         audit_writer=audit_writer,
         tenant_id="tenant-r008",
         signing_key_id="redaction-token-test-key",
+        signing_backend=backend,
     )
     tokenizer = OpaqueRedactionTokenizer(token_map=token_map)
 
@@ -96,22 +100,26 @@ def test_token_map_threads_signing_backend_to_real_signature() -> None:
     assert len(base64.b64decode(value, validate=True)) == 64
 
 
-def test_token_map_without_backend_preserves_placeholder() -> None:
-    """§21.2.1 item 2 at this writer — absent `signing_backend` (every existing
-    caller), the placeholder signing path is byte-identical to pre-seam
-    behavior."""
+def test_token_map_without_backend_raises_typed_error_at_every_tier() -> None:
+    """OD spec v1.34 §21.2.3 row 6 — the redaction-token signing path is
+    UNCONDITIONALLY fail-closed at every persona tier: an absent
+    `signing_backend` is no longer preserved as the `unsigned:*` placeholder
+    on THIS path (superseding the pre-v1.34 `unsigned:*`-preserved
+    behavior this test previously pinned) — it raises the typed
+    `AuditSigningFailedError` instead, and NOTHING is appended to the
+    durable writer (a signing failure that did not complete must never
+    leave a raw redaction value bound to an unsigned row)."""
     audit_writer = _RecordingAuditWriter()
     token_map = AuditLedgerRedactionTokenMap(
         audit_writer=audit_writer,
         tenant_id="tenant-r008",
         signing_key_id="redaction-token-test-key",
     )
-    OpaqueRedactionTokenizer(token_map=token_map).tokenize(
-        attribute_key="k",
-        raw_value="v",
-        trace_id=None,
-        span_id=None,
-    )
-    _tenant_id, audit_entry = audit_writer.appended[0]
-    value = audit_entry.signature_attrs.audit_signature_value
-    assert value.startswith("unsigned:redaction-token-test-key:")
+    with pytest.raises(AuditSigningFailedError, match="REQUIRED"):
+        OpaqueRedactionTokenizer(token_map=token_map).tokenize(
+            attribute_key="k",
+            raw_value="v",
+            trace_id=None,
+            span_id=None,
+        )
+    assert audit_writer.appended == []

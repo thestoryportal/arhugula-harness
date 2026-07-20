@@ -120,6 +120,7 @@ class AuditLedgerRedactionTokenMap(RedactionTokenMap):
                     prior_entry_hash=prior_entry_hash,
                     timestamp=self._timestamp,
                     backend=self._signing_backend,
+                    tenant_id=self._tenant_id,
                 )
                 txn.append(audit_entry)
 
@@ -136,6 +137,7 @@ class AuditLedgerRedactionTokenMap(RedactionTokenMap):
             prior_entry_hash=self._prior_entry_hash,
             timestamp=self._timestamp,
             backend=self._signing_backend,
+            tenant_id=self._tenant_id,
         )
         try:
             self._audit_writer.append(self._tenant_id, audit_entry)
