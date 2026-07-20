@@ -870,3 +870,144 @@ def test_existing_record_tampered_signature_rejected(tmp_path: Path) -> None:
     record_path.write_text(lines[0] + "\n" + tampered_sig.hex() + "\n")
     with pytest.raises(AuditSigningConfigInvalidError, match="signature verification"):
         validate_and_initialize_mtc_audit_signing(config, signing_backend=backend)
+
+
+# ---------------------------------------------------------------------------
+# Real stage-4 wiring witness (merge-gate test-witness lens BLOCK fix).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_stage_4_wires_record_initialization_through_real_ledger_handle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Merge-gate test-witness lens finding ([[wired-handler-unreachable]]):
+    every prior witness called `validate_and_initialize_mtc_audit_signing`
+    directly with hand-supplied sidecar-path/IS-refs inputs — nothing proved
+    the REAL `stage_4_od.execute()` reaches `initialize_mtc_audit_signing_
+    record` with its production-DERIVED wiring (sidecar path + IS-refs probe
+    from the stage-1 ledger handle). This witness runs real stages 0+1, then
+    real stage-4 `execute()` (only the unrelated OD materializers mocked),
+    and pins all three wiring halves: (1) greenfield record materializes at
+    the configured path through `execute()`; (2) a sidecar row AT THE
+    DERIVED location (ledger canonical_path.parent / audit-entries.jsonl)
+    trips NOT-fresh through `execute()`; (3) the `ledger_has_audit_refs`
+    lambda genuinely consults `ledger_holds_audit_refs` over the STAGE-1
+    ledger writer (a neutered/dropped lambda fails this half)."""
+    from types import SimpleNamespace
+
+    from harness_core.workload_class import WorkloadClass
+    from harness_is.path_class_registry import PathClass
+    from harness_runtime.bootstrap import stage_0_preamble, stage_1_is, stage_4_od
+    from harness_runtime.bootstrap.mutable_context import _MutableHarnessContext
+    from harness_runtime.types import PathBindingConfig
+
+    workload = WorkloadClass.SOFTWARE_ENGINEERING
+    record_path = tmp_path / "record.json"
+    kwargs = _mtc_ready_kwargs(tmp_path)
+    kwargs["audit_cutover_record_path"] = str(record_path)
+    kwargs["key_arns"] = {"cutover-key": _ARN_B, "some-row-key": _ARN_A}
+    config = _config(tmp_path, **kwargs).model_copy(
+        update={
+            "path_bindings": PathBindingConfig(
+                raw_entries=tuple(
+                    {
+                        "path_class": pc,
+                        "workflow_class": workload,
+                        "deployment_surface": DeploymentSurface.LOCAL_DEVELOPMENT,
+                        "path": str(tmp_path / pc.value.lower()),
+                    }
+                    for pc in PathClass
+                ),
+            )
+        }
+    )
+
+    async def _run_stage_4(ctx: _MutableHarnessContext) -> None:
+        class _FakeDaemon:
+            async def start(self) -> None:
+                return None
+
+        monkeypatch.setattr(stage_4_od, "make_audit_signing_backend", lambda _cfg: _FakeBackend())
+        monkeypatch.setattr(
+            stage_4_od, "validate_audit_signing_for_span_stage", lambda *_a, **_k: None
+        )
+        monkeypatch.setattr(
+            stage_4_od,
+            "materialize_tracer_provider_stage",
+            lambda _cfg: SimpleNamespace(provider=SimpleNamespace()),
+        )
+        monkeypatch.setattr(
+            stage_4_od,
+            "materialize_audit_writer_stage",
+            lambda _cfg, _lw, **_k: SimpleNamespace(writer=SimpleNamespace()),
+        )
+        monkeypatch.setattr(stage_4_od, "materialize_span_processor_stage", lambda *_a, **_k: None)
+        monkeypatch.setattr(
+            stage_4_od,
+            "materialize_collector_daemon_stage",
+            lambda _cfg, **_k: SimpleNamespace(daemon=_FakeDaemon()),
+        )
+        monkeypatch.setattr(stage_4_od, "materialize_ring_buffer_stage", lambda *_a, **_k: None)
+        monkeypatch.setattr(
+            stage_4_od,
+            "materialize_cost_attribution_stage",
+            lambda _cfg: SimpleNamespace(chain=SimpleNamespace()),
+        )
+
+        async def _no_validator(*_a: object, **_k: object) -> None:
+            return None
+
+        monkeypatch.setattr(stage_4_od, "materialize_validator_framework_stage", _no_validator)
+        await stage_4_od.execute(ctx, config, workload)
+
+    ctx = _MutableHarnessContext()
+    await stage_0_preamble.execute(ctx, config, workload)
+    await stage_1_is.execute(ctx, config, workload)
+    assert ctx.ledger_writer is not None
+
+    # (1) Greenfield through the REAL stage-4 path: fresh ledger, no
+    # sidecar, record absent -> execute() mints it at the configured path.
+    assert not record_path.exists()
+    await _run_stage_4(ctx)
+    assert record_path.is_file()
+    lines = record_path.read_text(encoding="utf-8").splitlines()
+    assert AuditCutoverRecord.model_validate_json(lines[0]).ledger_binding_id == "sidecar-1"
+
+    # (2) The DERIVED sidecar location is the real one: a row written at
+    # ledger canonical_path.parent / audit-entries.jsonl (NOT a path the
+    # test hands to the validator) trips NOT-fresh through execute().
+    import json as _json
+
+    record_path.unlink()
+    derived_sidecar = ctx.ledger_writer.handle.canonical_path.parent / "audit-entries.jsonl"
+    derived_sidecar.write_text(
+        _json.dumps(
+            {
+                "tenant_tag": "_single",
+                "entry": {"signature_attrs": {"audit_signature_key_id": "some-row-key"}},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(AuditSigningConfigInvalidError, match="NOT fresh"):
+        await _run_stage_4(ctx)
+    assert not record_path.exists()
+    derived_sidecar.unlink()
+
+    # (3) The IS-refs lambda half: execute() must consult
+    # `ledger_holds_audit_refs` over the STAGE-1 ledger writer — a probe
+    # patched to report refs makes execute() refuse, proving the lambda is
+    # wired (a `lambda: False` or dropped kwarg would never call this).
+    probe_calls: list[object] = []
+
+    def _recording_probe(ledger_writer: object) -> bool:
+        probe_calls.append(ledger_writer)
+        return True
+
+    monkeypatch.setattr(stage_4_od, "ledger_holds_audit_refs", _recording_probe)
+    with pytest.raises(AuditSigningConfigInvalidError, match="NOT fresh"):
+        await _run_stage_4(ctx)
+    assert probe_calls == [ctx.ledger_writer]
+    assert not record_path.exists()

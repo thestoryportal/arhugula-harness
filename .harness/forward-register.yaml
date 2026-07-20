@@ -1408,7 +1408,8 @@ items:
     (a read-lock probe nested inside a held write lock on the same path) and needs its own
     deadlock-safety analysis, not a terminal-round patch.'
   close_out: 'Hold `cross_process_write_lock(sidecar_path)` (or an equivalent single lock scope)
-    across BOTH freshness probes and the no-clobber publication in
+    across ALL THREE probes (the persisted-row key scan shares the same probe->publish window --
+    merge-gate concurrency lens, PR #1063) and the no-clobber publication in
     `harness_runtime.lifecycle.audit_signing_fail_closed_validation.initialize_mtc_audit_signing_record`,
     after confirming the IS lock implementation''s same-process nesting semantics (replace the inner
     read-lock acquisitions with lock-free reads under the held write lock if nesting is unsafe).
