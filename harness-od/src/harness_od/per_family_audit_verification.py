@@ -585,22 +585,15 @@ def verify_per_family_chains(
                     "key_id is an availability gap, not a verdict (OD spec "
                     "v1.34 §21.2.2 row 7(b))"
                 ) from exc
-            if record_backend.algorithm != cutover_record.algorithm.value:
-                raise CutoverRecordValidationError(
-                    f"cutover record declares algorithm="
-                    f"{cutover_record.algorithm.value!r} but the resolved "
-                    f"backend.algorithm={record_backend.algorithm!r} "
-                    "disagrees — a backend must not attest the record under "
-                    "a different algorithm than the one it claims (OD spec "
-                    "v1.34 §21.2.2 row 4)"
-                )
-            # `is not True` — same literal-boolean defense as the per-entry
-            # verify path above (out-of-family Codex [P1] finding, round 4).
-            if (
-                verify_cutover_record_signature(
-                    cutover_record, cutover_record_signature, backend=record_backend
-                )
-                is not True
+            # `verify_cutover_record_signature` is itself fully self-defending
+            # (algorithm match + signature shape + literal-boolean verdict —
+            # out-of-family Codex [P2] finding, round 6: it is a PUBLIC,
+            # independently-exported function, so every guard lives there
+            # rather than being duplicated at this one call site) — a
+            # `False` result covers a backend-algorithm disagreement, a
+            # malformed signature, AND a genuine verification failure alike.
+            if not verify_cutover_record_signature(
+                cutover_record, cutover_record_signature, backend=record_backend
             ):
                 raise CutoverRecordValidationError(
                     "cutover_record_signature does not verify against the "

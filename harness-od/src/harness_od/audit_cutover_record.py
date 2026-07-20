@@ -334,18 +334,29 @@ def verify_cutover_record_signature(
     record: AuditCutoverRecord, signature: bytes, *, backend: SigningBackend
 ) -> bool:
     """Verify `signature` over `record` via `backend` — the read-side mirror
-    of `sign_cutover_record`. Returns the backend's raw boolean verdict; the
-    U-OD-55 caller (`verify_per_family_chains`) is responsible for raising
-    the typed taxonomy over a `False` result or a backend error.
+    of `sign_cutover_record`. Returns `True` ONLY for a genuine, exact
+    verdict; the U-OD-55 caller (`verify_per_family_chains`) is responsible
+    for raising the typed taxonomy over a `False` result or a backend
+    error.
 
-    Validates `signature`'s type and exact byte width for the record's
-    declared algorithm BEFORE ever calling `backend.verify` — mirroring
-    `sign_cutover_record`'s own defense and the per-entry verify path's
-    malformed-signature guard (out-of-family Codex [P2] finding, round 5):
-    a permissive or faulty backend adapter must not be able to authenticate
-    an under-width signature (e.g. a 1-byte value) by returning a bare
-    `True` for it.
+    This is a PUBLIC, independently-exported function — a direct caller
+    that never goes through `verify_per_family_chains` gets NO other
+    guard, so every defense lives HERE rather than at that one call site
+    (out-of-family Codex [P2] finding, round 6: an earlier version relied
+    on the caller to check `backend.algorithm` and the literal-`True`
+    verdict, leaving this public helper itself unsafe for direct use).
+    Rejects, before ever consulting `backend.verify`: (a) `signature`'s
+    type/exact byte width for the record's declared algorithm — mirrors
+    `sign_cutover_record`'s own defense (round 5) — a permissive or faulty
+    backend adapter must not authenticate an under-width signature; (b) a
+    `backend.algorithm` disagreeing with `record.algorithm` — a backend
+    must not attest under an algorithm other than the one the record
+    declares. Accepts ONLY the LITERAL boolean `True` verdict from
+    `backend.verify` — a truthy non-`bool` SDK value (e.g.
+    `{"SignatureValid": False}`) is treated as failing, not passing.
     """
+    if backend.algorithm != record.algorithm.value:
+        return False
     expected_length = SIGNATURE_LENGTH_BY_ALGORITHM[record.algorithm.value]
     # `signature` is typed `bytes`, so pyright sees the isinstance check as
     # statically unnecessary — it is a RUNTIME defense against a caller
@@ -356,6 +367,12 @@ def verify_cutover_record_signature(
     ):
         return False
     message = canonical_cutover_record_message(record)
-    return backend.verify(
-        message=message, signature=signature, key_id=record.key_id, key_period=_RECORD_KEY_PERIOD
+    return (
+        backend.verify(
+            message=message,
+            signature=signature,
+            key_id=record.key_id,
+            key_period=_RECORD_KEY_PERIOD,
+        )
+        is True
     )

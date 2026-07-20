@@ -458,3 +458,44 @@ def test_row_tenant_scope_must_pass_normalization() -> None:
                 ),
             ),
         )
+
+
+def test_verify_cutover_record_signature_self_defends_direct_callers() -> None:
+    """`verify_cutover_record_signature` is a PUBLIC, independently-exported
+    function — a direct caller that never goes through
+    `verify_per_family_chains` gets NO other guard, so it must reject a
+    wrong-algorithm backend AND a truthy non-`bool` verdict entirely on its
+    own (out-of-family Codex [P2] finding, round 6)."""
+    record = _golden_record()
+    real_backend = _Ed25519Backend()
+    real_signature = sign_cutover_record(record, backend=real_backend)
+
+    class _WrongAlgoBackend:
+        algorithm = "ecdsa-p256"
+
+        def sign(self, *, message: bytes, key_id: str, key_period: int) -> bytes:
+            raise AssertionError("must not be called")
+
+        def verify(self, *, message: bytes, signature: bytes, key_id: str, key_period: int) -> bool:
+            return True  # a permissive/faulty backend attesting anyway
+
+    assert (
+        verify_cutover_record_signature(record, real_signature, backend=_WrongAlgoBackend())
+        is False
+    )
+
+    class _TruthyNonBoolBackend:
+        algorithm = "ed25519"
+
+        def sign(self, *, message: bytes, key_id: str, key_period: int) -> bytes:
+            raise AssertionError("must not be called")
+
+        def verify(
+            self, *, message: bytes, signature: bytes, key_id: str, key_period: int
+        ) -> object:
+            return {"SignatureValid": False}  # truthy dict, not the literal bool True
+
+    assert (
+        verify_cutover_record_signature(record, real_signature, backend=_TruthyNonBoolBackend())
+        is False
+    )
