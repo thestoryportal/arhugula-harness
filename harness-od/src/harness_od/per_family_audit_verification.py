@@ -224,17 +224,30 @@ def _resolve_cutover_disposition(
     story to exempt); absent a match, the entry is treated as post-cutover
     per row 3.
 
-    Matches on `(tenant_scope, entry_hash)` — the DESTINATION identity — but
-    the record's own uniqueness rule (`AuditCutoverRecord._validate_rows`)
-    deliberately permits TWO rows sharing a destination when one is
-    `quarantined` (distinct SOURCE rows migrating to the same target; the
-    `source_tag` disambiguates them in the SOURCE-uniqueness check). This
-    entry-only lookup has no `source_tag` to disambiguate with (`entry_hash`
-    is the only identity `AuditLedgerEntry` carries) — and because the
-    canonical message SORTS rows before signing, deserialized row ORDER is
-    NOT authenticated, so silently picking "the first match" would let an
-    attacker flip which disposition wins without invalidating the record's
-    signature (out-of-family Codex [P1] finding). Raise rather than guess.
+    Matches on `(tenant_scope, entry_hash)` — the DESTINATION identity —
+    but the record's own uniqueness rule (`AuditCutoverRecord._validate_rows`)
+    deliberately permits TWO (or more) rows sharing a destination when at
+    most one is NON-quarantined (distinct SOURCE rows migrating to the same
+    target; the `source_tag` disambiguates them in the SOURCE-uniqueness
+    check). A QUARANTINED row's source is, BY THE MIGRATION CONTRACT, never
+    retagged — so its content can never legitimately surface as a full
+    entry under this tenant scope in the first place (out-of-family Codex
+    [P2] finding, round 3: an earlier version of this lookup rejected the
+    ENTIRE legitimate quarantined+non-quarantined collision shape as
+    "ambiguous", making a record shape the carrier's own validator
+    explicitly accepts unusable at verify-time). Filtering to NON-quarantined
+    matches first resolves this: the record's own uniqueness rule guarantees
+    AT MOST ONE non-quarantined row per destination, so a match there is
+    NEVER ambiguous. Only when ZERO non-quarantined rows match do quarantined
+    rows apply — and if MORE THAN ONE quarantined row collides on the same
+    destination (permitted — quarantined rows are excluded from the
+    destination-uniqueness check entirely), this lookup has no `source_tag`
+    to disambiguate with (`entry_hash` is the only identity `AuditLedgerEntry`
+    carries), and because the canonical message SORTS rows before signing,
+    deserialized row ORDER is NOT authenticated — silently picking "the
+    first match" would let an attacker flip which disposition wins without
+    invalidating the record's signature (out-of-family Codex [P1] finding,
+    round 1). THAT case still raises rather than guesses.
     """
     if cutover_record is None or normalized_scope is None:
         return None
@@ -243,16 +256,39 @@ def _resolve_cutover_disposition(
         for row in cutover_record.rows
         if row.tenant_scope == normalized_scope and row.entry_hash == entry.entry_hash
     ]
-    if len(matches) > 1:
+    non_quarantined = [
+        row
+        for row in matches
+        if row.verification_disposition is not VerificationDisposition.QUARANTINED
+    ]
+    if len(non_quarantined) == 1:
+        return non_quarantined[0].verification_disposition
+    if non_quarantined:
+        # Structurally impossible per the record's own destination-
+        # uniqueness rule — defense in depth, not a reachable production case.
         raise CutoverRecordValidationError(
-            f"cutover record has {len(matches)} rows dispositioning the same "
-            f"destination identity (tenant_scope={normalized_scope!r}, "
-            f"entry_hash={entry.entry_hash!r}) — ambiguous without a "
-            "source_tag input this entry-only lookup cannot supply; the "
-            "verifier refuses to guess which disposition applies (OD spec "
-            "v1.34 §21.2.2 row 4)"
+            f"cutover record has {len(non_quarantined)} NON-quarantined rows "
+            f"dispositioning the same destination identity (tenant_scope="
+            f"{normalized_scope!r}, entry_hash={entry.entry_hash!r}) — "
+            "the record's own uniqueness rule should have forbidden this "
+            "(OD spec v1.34 §21.2.2 row 4)"
         )
-    return matches[0].verification_disposition if matches else None
+    quarantined = [
+        row
+        for row in matches
+        if row.verification_disposition is VerificationDisposition.QUARANTINED
+    ]
+    if len(quarantined) > 1:
+        raise CutoverRecordValidationError(
+            f"cutover record has {len(quarantined)} QUARANTINED rows "
+            f"dispositioning the same destination identity (tenant_scope="
+            f"{normalized_scope!r}, entry_hash={entry.entry_hash!r}) with NO "
+            "non-quarantined row to prefer — ambiguous without a source_tag "
+            "input this entry-only lookup cannot supply; the verifier "
+            "refuses to guess which disposition applies (OD spec v1.34 "
+            "§21.2.2 row 4)"
+        )
+    return quarantined[0].verification_disposition if quarantined else None
 
 
 def _verify_entry_signature(
@@ -308,6 +344,20 @@ def _verify_entry_signature(
             "— an unresolvable key_id at verify-time is an availability "
             "gap, not a verdict (OD spec v1.34 §21.2.2 row 7(b))"
         ) from exc
+    if backend.algorithm != algo.value:
+        # ed25519 and ecdsa-p256 are BOTH 64 bytes (SIGNATURE_LENGTH_BY_
+        # ALGORITHM), so the length check above cannot by itself catch a
+        # misconfigured resolver returning a WRONG-algorithm backend for
+        # this entry's stored algorithm (out-of-family Codex [P1] finding,
+        # round 3) — a backend must not attest under an algorithm other
+        # than the one the entry itself claims.
+        raise AuditSignatureInvalid(
+            f"entry entry_hash={entry.entry_hash!r} declares algorithm "
+            f"{algo.value!r} but the resolved backend.algorithm="
+            f"{backend.algorithm!r} disagrees — a backend must not attest "
+            "under a different algorithm than the one the entry claims "
+            "(OD spec v1.34 §21.2.2 row 7(a))"
+        )
 
     tenant_tag_for_message = (
         None if disposition is VerificationDisposition.FOUR_TUPLE_REAL else normalized_scope
@@ -435,12 +485,18 @@ def verify_per_family_chains(
 
     if backend_resolver is not None:
         if cutover_record is not None:
-            if ledger_binding_id is None:
+            # `not value` (not `value is None`) — an EMPTY-STRING trust
+            # identifier is the classic "missing configuration represented
+            # as an empty default" footgun: it would still satisfy an
+            # `is None` check and a subsequent equality compare against an
+            # equally-empty record field (out-of-family Codex [P1] finding,
+            # round 3). Both REQUIRED-ness checks below reject empty too.
+            if not ledger_binding_id:
                 raise CutoverRecordValidationError(
-                    "ledger_binding_id is REQUIRED whenever cutover_record is "
-                    "supplied — a caller that omits it must not silently "
-                    "skip the cross-ledger binding guard (OD spec v1.34 "
-                    "§21.2.2 row 4)"
+                    "ledger_binding_id is REQUIRED (and non-empty) whenever "
+                    "cutover_record is supplied — a caller that omits it, or "
+                    "supplies the empty string, must not silently skip the "
+                    "cross-ledger binding guard (OD spec v1.34 §21.2.2 row 4)"
                 )
             if cutover_record.ledger_binding_id != ledger_binding_id:
                 raise CutoverRecordValidationError(
@@ -457,15 +513,16 @@ def verify_per_family_chains(
                     "must never gate a legacy exemption (OD spec v1.34 "
                     "§21.2.2 row 4: AUTHENTICATED)"
                 )
-            if expected_cutover_record_key_id is None:
+            if not expected_cutover_record_key_id:
                 raise CutoverRecordValidationError(
-                    "expected_cutover_record_key_id is REQUIRED whenever "
-                    "cutover_record is supplied — the record-signing key is "
-                    "the operator-PINNED audit_cutover_record_key_id, never "
-                    "a row-derived key (OD spec v1.34 §21.2.2 row 4); "
-                    "without this pin, a record signed under ANY ordinary "
-                    "per-entry key in the resolver's mapping would be "
-                    "trusted (out-of-family Codex [P1] finding, round 2)"
+                    "expected_cutover_record_key_id is REQUIRED (and "
+                    "non-empty) whenever cutover_record is supplied — the "
+                    "record-signing key is the operator-PINNED "
+                    "audit_cutover_record_key_id, never a row-derived key "
+                    "(OD spec v1.34 §21.2.2 row 4); without this pin, a "
+                    "record signed under ANY ordinary per-entry key in the "
+                    "resolver's mapping would be trusted (out-of-family "
+                    "Codex [P1] finding, round 2)"
                 )
             if cutover_record.key_id != expected_cutover_record_key_id:
                 raise CutoverRecordValidationError(
@@ -486,6 +543,15 @@ def verify_per_family_chains(
                     "key_id is an availability gap, not a verdict (OD spec "
                     "v1.34 §21.2.2 row 7(b))"
                 ) from exc
+            if record_backend.algorithm != cutover_record.algorithm.value:
+                raise CutoverRecordValidationError(
+                    f"cutover record declares algorithm="
+                    f"{cutover_record.algorithm.value!r} but the resolved "
+                    f"backend.algorithm={record_backend.algorithm!r} "
+                    "disagrees — a backend must not attest the record under "
+                    "a different algorithm than the one it claims (OD spec "
+                    "v1.34 §21.2.2 row 4)"
+                )
             if not verify_cutover_record_signature(
                 cutover_record, cutover_record_signature, backend=record_backend
             ):

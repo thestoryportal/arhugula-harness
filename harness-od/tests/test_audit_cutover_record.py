@@ -331,3 +331,77 @@ def test_sign_cutover_record_rejects_algorithm_disagreement() -> None:
 
     with pytest.raises(CutoverRecordValidationError, match="disagrees"):
         sign_cutover_record(_golden_record(), backend=_WrongAlgoBackend())
+
+
+def test_record_rejects_unsupported_schema_version() -> None:
+    """An externally-authored record with a `schema_version` other than the
+    one this arc defines must FAIL CLOSED at construction — out-of-family
+    Codex [P2] finding, round 3: silently interpreting an unrecognized
+    version under current v1 semantics is how a future wire-format change
+    gets misread."""
+    with pytest.raises(ValidationError, match="unsupported"):
+        AuditCutoverRecord(
+            schema_version=2,
+            authored_at=datetime(2026, 7, 19, tzinfo=UTC),
+            algorithm=SignatureAlgorithm.ED25519,
+            key_id="k",
+            ledger_binding_id="sidecar-1",
+            rows=(),
+        )
+
+
+def test_record_rejects_empty_key_id_and_binding() -> None:
+    """A MISSING trust identifier represented as an empty string is the
+    classic footgun — out-of-family Codex [P1] finding, round 3: the
+    carrier itself must reject empty `key_id` / `ledger_binding_id`, not
+    just the verifier's own separately-supplied expectations."""
+    with pytest.raises(ValidationError, match="key_id"):
+        AuditCutoverRecord(
+            schema_version=1,
+            authored_at=datetime(2026, 7, 19, tzinfo=UTC),
+            algorithm=SignatureAlgorithm.ED25519,
+            key_id="",
+            ledger_binding_id="sidecar-1",
+            rows=(),
+        )
+    with pytest.raises(ValidationError, match="ledger_binding_id"):
+        AuditCutoverRecord(
+            schema_version=1,
+            authored_at=datetime(2026, 7, 19, tzinfo=UTC),
+            algorithm=SignatureAlgorithm.ED25519,
+            key_id="k",
+            ledger_binding_id="",
+            rows=(),
+        )
+
+
+def test_sign_cutover_record_rejects_malformed_signature() -> None:
+    """A duck-typed/faulty signing adapter returning a non-bytes value or
+    the wrong fixed width must be REJECTED, not silently published as a
+    usable cutover-record signature — out-of-family Codex [P2] finding,
+    round 3: this record IS a trust anchor and must never emit an
+    out-of-contract artifact, mirroring `sign_audit_entry`'s own defense."""
+
+    class _ShortSignatureBackend:
+        algorithm = "ed25519"
+
+        def sign(self, *, message: bytes, key_id: str, key_period: int) -> bytes:
+            return b"too-short"
+
+        def verify(self, *, message: bytes, signature: bytes, key_id: str, key_period: int) -> bool:
+            raise AssertionError("must not be called")
+
+    with pytest.raises(CutoverRecordValidationError, match="malformed"):
+        sign_cutover_record(_golden_record(), backend=_ShortSignatureBackend())
+
+    class _NonBytesSignatureBackend:
+        algorithm = "ed25519"
+
+        def sign(self, *, message: bytes, key_id: str, key_period: int) -> str:  # wrong type
+            return "not-bytes-at-all"
+
+        def verify(self, *, message: bytes, signature: bytes, key_id: str, key_period: int) -> bool:
+            raise AssertionError("must not be called")
+
+    with pytest.raises(CutoverRecordValidationError, match="malformed"):
+        sign_cutover_record(_golden_record(), backend=_NonBytesSignatureBackend())  # type: ignore[arg-type]

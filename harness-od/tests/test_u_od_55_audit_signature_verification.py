@@ -428,6 +428,77 @@ def test_cutover_record_requires_authentication() -> None:
         )
 
 
+def test_wrong_algorithm_backend_rejected() -> None:
+    """A misconfigured resolver returning a backend whose `.algorithm`
+    disagrees with the entry's stored algorithm must be REJECTED before
+    `verify` is ever called — out-of-family Codex [P1] finding, round 3:
+    ed25519 and ecdsa-p256 signatures are BOTH 64 bytes, so the byte-length
+    check alone cannot catch this; only an explicit algorithm compare can."""
+    backend = _Ed25519Backend()
+    entry = _signed_entry("algo-mismatch-ref", backend=backend, tenant_id=None)
+
+    class _WrongAlgoBackend:
+        algorithm = "ecdsa-p256"  # entry declares ed25519
+
+        def sign(self, *, message: bytes, key_id: str, key_period: int) -> bytes:
+            raise AssertionError("must not be called")
+
+        def verify(self, *, message: bytes, signature: bytes, key_id: str, key_period: int) -> bool:
+            raise AssertionError("must not be reached — algorithm check precedes verify()")
+
+    def resolver(algo: SignatureAlgorithm, key_id: str) -> _WrongAlgoBackend:
+        del algo, key_id
+        return _WrongAlgoBackend()
+
+    with pytest.raises(AuditSignatureInvalid, match="algorithm"):
+        verify_per_family_chains([entry], tenant_scope=None, backend_resolver=resolver)
+
+
+def test_empty_expected_trust_identifiers_rejected() -> None:
+    """An empty-string `expected_cutover_record_key_id` or `ledger_binding_id`
+    is a "missing configuration represented as an empty default" footgun —
+    out-of-family Codex [P1] finding, round 3: an `is None`-only check would
+    let an empty expectation "authenticate" against an equally-empty record
+    field. Both must be REQUIRED and non-empty."""
+    backend = _Ed25519Backend()
+    entry = _signed_entry("empty-trust-ref", backend=backend, tenant_id=None)
+    record, record_sig = _signed_record(
+        AuditCutoverRecordRow(
+            source_tag="_single",
+            tenant_scope="tenant-x",
+            entry_hash=entry.entry_hash,
+            verification_disposition=VerificationDisposition.FOUR_TUPLE_REAL,
+        ),
+        backend=backend,
+    )
+
+    def resolver(algo: SignatureAlgorithm, key_id: str) -> _Ed25519Backend:
+        del algo, key_id
+        return backend
+
+    with pytest.raises(CutoverRecordValidationError, match="ledger_binding_id"):
+        verify_per_family_chains(
+            [entry],
+            tenant_scope="tenant-x",
+            backend_resolver=resolver,
+            cutover_record=record,
+            cutover_record_signature=record_sig,
+            expected_cutover_record_key_id="cutover-key",
+            ledger_binding_id="",  # empty, not None
+        )
+
+    with pytest.raises(CutoverRecordValidationError, match="expected_cutover_record_key_id"):
+        verify_per_family_chains(
+            [entry],
+            tenant_scope="tenant-x",
+            backend_resolver=resolver,
+            cutover_record=record,
+            cutover_record_signature=record_sig,
+            expected_cutover_record_key_id="",  # empty, not None
+            ledger_binding_id="sidecar-1",
+        )
+
+
 def test_cutover_record_key_must_match_pinned_expectation() -> None:
     """The record-signing key is the operator-PINNED
     `expected_cutover_record_key_id` — NEVER a row-derived/self-claimed key
@@ -475,12 +546,57 @@ def test_cutover_record_key_must_match_pinned_expectation() -> None:
         )
 
 
-def test_ambiguous_cutover_disposition_rejected() -> None:
-    """When a record legitimately carries a quarantined row and a
+def test_quarantined_and_nonquarantined_destination_collision_resolves() -> None:
+    """A record legitimately carries a quarantined row and a
     non-quarantined row sharing the same DESTINATION identity
     `(tenant_scope, entry_hash)` — permitted by the record's own
-    source-scoped uniqueness rule — this entry-only lookup has no
-    `source_tag` to disambiguate. The verifier must REJECT rather than
+    source-scoped uniqueness rule (a quarantined source is never retagged,
+    so its content structurally cannot surface as this tenant's full entry).
+    The verifier MUST resolve this to the non-quarantined disposition, NOT
+    reject the record as ambiguous — out-of-family Codex [P2] finding,
+    round 3: an earlier version rejected this legitimate, carrier-accepted
+    shape outright, making it unusable."""
+    backend = _Ed25519Backend()
+    entry = _signed_entry("collision-ref", backend=backend, tenant_id=None)
+    record, record_sig = _signed_record(
+        AuditCutoverRecordRow(
+            source_tag="_single",
+            tenant_scope="tenant-x",
+            entry_hash=entry.entry_hash,
+            verification_disposition=VerificationDisposition.QUARANTINED,
+        ),
+        AuditCutoverRecordRow(
+            source_tag="tenant-x",
+            tenant_scope="tenant-x",
+            entry_hash=entry.entry_hash,
+            verification_disposition=VerificationDisposition.FOUR_TUPLE_REAL,
+        ),
+        backend=backend,
+    )
+
+    def resolver(algo: SignatureAlgorithm, key_id: str) -> _Ed25519Backend:
+        del algo, key_id
+        return backend
+
+    report = verify_per_family_chains(
+        [entry],
+        tenant_scope="tenant-x",
+        backend_resolver=resolver,
+        cutover_record=record,
+        cutover_record_signature=record_sig,
+        expected_cutover_record_key_id="cutover-key",
+        ledger_binding_id="sidecar-1",
+    )
+    assert report.signature_dispositions == {"verified": 1}
+
+
+def test_ambiguous_cutover_disposition_rejected() -> None:
+    """When TWO quarantined rows (different source tags — the record's
+    own uniqueness rule excludes quarantined rows from the destination
+    check entirely, so this is a legitimately-constructible record) share
+    the same DESTINATION identity with NO non-quarantined row to prefer,
+    this entry-only lookup has no `source_tag` to disambiguate which
+    quarantined disposition governs. The verifier must REJECT rather than
     silently pick one: because the canonical message SORTS rows before
     signing, deserialized row order is unauthenticated, so silently
     trusting "the first match" would let an attacker flip which disposition
@@ -495,10 +611,14 @@ def test_ambiguous_cutover_disposition_rejected() -> None:
             verification_disposition=VerificationDisposition.QUARANTINED,
         ),
         AuditCutoverRecordRow(
+            # an already-tagged source must equal its own tenant_scope
+            # (the cross-tenant-relabel guard) — "tenant-x" is a distinct
+            # SOURCE identity from "_single" above while still targeting
+            # the same destination.
             source_tag="tenant-x",
             tenant_scope="tenant-x",
             entry_hash=entry.entry_hash,
-            verification_disposition=VerificationDisposition.FOUR_TUPLE_REAL,
+            verification_disposition=VerificationDisposition.QUARANTINED,
         ),
         backend=backend,
     )

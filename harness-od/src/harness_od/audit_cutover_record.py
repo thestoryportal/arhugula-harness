@@ -30,7 +30,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from enum import StrEnum
 
-from harness_cp.f5_signing_key_resolution import SigningBackend
+from harness_cp.f5_signing_key_resolution import SIGNATURE_LENGTH_BY_ALGORITHM, SigningBackend
 from pydantic import BaseModel, ConfigDict, model_validator
 
 from harness_od.audit_ledger_types import SignatureAlgorithm
@@ -132,11 +132,31 @@ class AuditCutoverRecord(BaseModel):
 
     @model_validator(mode="after")
     def _validate_rows(self) -> AuditCutoverRecord:
+        if self.schema_version != _RECORD_SCHEMA_VERSION:
+            raise CutoverRecordValidationError(
+                f"cutover record schema_version={self.schema_version!r} is "
+                f"unsupported — only {_RECORD_SCHEMA_VERSION!r} is defined "
+                "at this arc; an unrecognized version must FAIL CLOSED "
+                "rather than be silently interpreted under current "
+                "semantics (out-of-family Codex [P2] finding, round 3)"
+            )
         if self.authored_at.tzinfo is None:
             raise CutoverRecordValidationError(
                 "cutover record authored_at must be a timezone-AWARE datetime "
                 "— a naive value would encode host-timezone-dependent bytes "
                 "into the signed message (OD spec v1.34 §21.2.2 row 4)"
+            )
+        # A MISSING trust identifier represented as an empty string would
+        # still satisfy an `is None` check downstream, and an empty
+        # `expected_...` compared against an equally-empty record field
+        # would "authenticate" (out-of-family Codex [P1] finding, round 3).
+        if not self.key_id:
+            raise CutoverRecordValidationError(
+                "cutover record key_id must be non-empty (OD spec v1.34 §21.2.2 row 4)"
+            )
+        if not self.ledger_binding_id:
+            raise CutoverRecordValidationError(
+                "cutover record ledger_binding_id must be non-empty (OD spec v1.34 §21.2.2 row 4)"
             )
         seen_source_identity: set[tuple[str, str]] = set()
         seen_destination: set[tuple[str, str]] = set()
@@ -264,7 +284,31 @@ def sign_cutover_record(record: AuditCutoverRecord, *, backend: SigningBackend) 
             "spec v1.34 §21.2.2 row 4)"
         )
     message = canonical_cutover_record_message(record)
-    return backend.sign(message=message, key_id=record.key_id, key_period=_RECORD_KEY_PERIOD)
+    signature = backend.sign(message=message, key_id=record.key_id, key_period=_RECORD_KEY_PERIOD)
+    expected_length = SIGNATURE_LENGTH_BY_ALGORITHM[record.algorithm.value]
+    # `SigningBackend.sign` is typed to return `bytes`, so pyright sees the
+    # isinstance check as statically unnecessary — it is a RUNTIME defense
+    # against a duck-typed/faulty backend violating its own Protocol (out-
+    # of-family Codex [P2] finding, round 3: mirrors sign_audit_entry's
+    # defense — this record IS a trust anchor and must never publish a
+    # malformed or wrong-width signature as if it were usable).
+    if (
+        not isinstance(signature, bytes)  # pyright: ignore[reportUnnecessaryIsInstance]
+        or len(signature) != expected_length
+    ):
+        actual_len = (
+            len(signature)
+            if isinstance(signature, bytes)  # pyright: ignore[reportUnnecessaryIsInstance]
+            else "n/a"
+        )
+        raise CutoverRecordValidationError(
+            f"backend returned a malformed cutover-record signature (type="
+            f"{type(signature).__name__}, len={actual_len}); algorithm "
+            f"{record.algorithm.value!r} signatures are exactly "
+            f"{expected_length} bytes of type bytes (OD spec v1.34 §21.2.2 "
+            "row 4 / C-CP-20 §20.4 committed widths)"
+        )
+    return signature
 
 
 def verify_cutover_record_signature(
