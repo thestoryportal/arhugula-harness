@@ -41,7 +41,9 @@ from __future__ import annotations
 
 import contextlib
 import os
+import sys
 import tempfile
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -165,6 +167,7 @@ def validate_and_initialize_mtc_audit_signing(
     *,
     signing_backend: SigningBackend | None,
     audit_sidecar_path: Path | None = None,
+    ledger_has_audit_refs: Callable[[], bool] | None = None,
 ) -> None:
     """Enforce the C-RT-03 v1.101 audit-signing config-validation invariant,
     then (on success) initialize/verify the cutover record.
@@ -178,7 +181,10 @@ def validate_and_initialize_mtc_audit_signing(
     """
     validate_mtc_audit_signing_config(config)
     initialize_mtc_audit_signing_record(
-        config, signing_backend=signing_backend, audit_sidecar_path=audit_sidecar_path
+        config,
+        signing_backend=signing_backend,
+        audit_sidecar_path=audit_sidecar_path,
+        ledger_has_audit_refs=ledger_has_audit_refs,
     )
 
 
@@ -340,6 +346,7 @@ def initialize_mtc_audit_signing_record(
     *,
     signing_backend: SigningBackend | None,
     audit_sidecar_path: Path | None = None,
+    ledger_has_audit_refs: Callable[[], bool] | None = None,
 ) -> None:
     """Pass 3 — side-effecting cutover-record load-or-greenfield-init.
 
@@ -351,17 +358,22 @@ def initialize_mtc_audit_signing_record(
     only for an unrelated signing-config gap to fail bootstrap moments
     later.
 
-    `audit_sidecar_path` is the deployment's `audit-entries.jsonl` full-entry
-    sidecar (derived from the stage-1 IS ledger handle — stage 4 passes
-    `ctx.audit_writer.sidecar_path`'s parent-derived location). It gates the
-    GREENFIELD branch: the spec permits minting a signed EMPTY record only
-    "when the ledger is fresh" (C-RT-03 v1.101 Invariants, codex round-26/30
-    lineage) — a missing record on a ledger that ALREADY HAS audit rows is
-    trust-anchor LOSS, and silently re-minting an empty record would hide it
-    while orphaning every legacy disposition (out-of-family Codex [P1]
-    round-4 finding). `None` skips the freshness gate (a caller that cannot
-    resolve the sidecar location — the production stage-4 wiring always
-    supplies it).
+    `audit_sidecar_path` (the deployment's `audit-entries.jsonl` full-entry
+    sidecar location, derived from the stage-1 IS ledger handle) and
+    `ledger_has_audit_refs` (a lazy probe of the hash-chained IS ledger for
+    `audit:` references — stage 4 passes `audit_writer.ledger_holds_audit_
+    refs` over `ctx.ledger_writer`) together gate the GREENFIELD branch: the
+    spec permits minting a signed EMPTY record only "when the ledger is
+    fresh" (C-RT-03 v1.101 Invariants) — a missing record on a ledger that
+    ALREADY HAS audit rows is trust-anchor LOSS, and silently re-minting an
+    empty record would hide it while orphaning every legacy disposition
+    (out-of-family Codex [P1] round-4 finding). The IS-refs probe is the
+    AUTHORITY half (round-5 sharpening): a deleted/truncated sidecar
+    alongside surviving hash-chained IS refs must still read NOT-fresh —
+    the sidecar check alone would pass exactly the loss case the gate
+    exists for. `None` skips the respective half (the production stage-4
+    wiring always supplies both); a probe that RAISES reads as not-fresh
+    (fail closed).
     """
     # Out-of-family Codex [P2] finding: re-apply the SAME `_is_blank`
     # normalization `validate_mtc_audit_signing_config` uses — reading
@@ -410,19 +422,32 @@ def initialize_mtc_audit_signing_record(
                 "refusing to treat it as a greenfield record or overwrite it",
             )
         )
-    # Ledger-freshness gate (out-of-family Codex [P1] round-4): greenfield
-    # empty-record minting is permitted ONLY for a fresh ledger. An absent
-    # record alongside a sidecar that already carries audit rows means the
-    # trust anchor was lost/deleted — surface it, never paper over it.
-    if audit_sidecar_path is not None and _sidecar_has_rows(audit_sidecar_path):
+    # Ledger-freshness gate (out-of-family Codex [P1] round-4 + round-5):
+    # greenfield empty-record minting is permitted ONLY for a fresh ledger.
+    # Two halves — the sidecar rows check AND the hash-chained IS ledger's
+    # `audit:` refs (the AUTHORITY: a plain sidecar file can be deleted or
+    # truncated, the IS chain cannot be silently emptied). Either half
+    # firing means the missing record is trust-anchor LOSS — surface it,
+    # never paper over it.
+    not_fresh = audit_sidecar_path is not None and _sidecar_has_rows(audit_sidecar_path)
+    if not not_fresh and ledger_has_audit_refs is not None:
+        try:
+            not_fresh = ledger_has_audit_refs()
+        except Exception:
+            # Fail closed: an IS ledger that cannot be read cannot PROVE
+            # freshness, and minting a trust anchor over unknown history is
+            # the exact hazard this gate forecloses.
+            not_fresh = True
+    if not_fresh:
         raise AuditSigningConfigInvalidError(
             (
                 f"audit_cutover_record_path={record_path!r} does not exist but "
-                f"the audit sidecar at {str(audit_sidecar_path)!r} already "
-                "carries audit rows — the ledger is NOT fresh, so the missing "
-                "record is trust-anchor loss; refusing to mint a fresh empty "
-                "record over it (the spec permits empty-record initialization "
-                "only when the ledger is fresh)",
+                "the deployment's audit history is NOT fresh (the sidecar "
+                "carries rows and/or the hash-chained IS ledger holds audit "
+                "references) — the missing record is trust-anchor loss; "
+                "refusing to mint a fresh empty record over it (the spec "
+                "permits empty-record initialization only when the ledger is "
+                "fresh)",
             )
         )
     _greenfield_sign_empty_record(
@@ -489,6 +514,31 @@ def _greenfield_sign_empty_record(
         raise AuditSigningConfigInvalidError(
             (f"greenfield cutover-record signing failed: {exc}",)
         ) from exc
+    # Out-of-family Codex [P1] round-5 finding: round-trip the fresh
+    # signature through the VERIFIER before publishing — a backend that can
+    # sign but not verify (AWS KMS `Sign` and `Verify` are separate IAM
+    # permissions), or a faulty backend emitting a wrong-but-correctly-sized
+    # signature, would otherwise persist a record that THIS bootstrap
+    # accepts and every SUBSEQUENT bootstrap rejects.
+    try:
+        round_trip_ok = verify_cutover_record_signature(record, signature, backend=signing_backend)
+    except Exception as exc:
+        raise AuditSigningConfigInvalidError(
+            (
+                f"greenfield cutover-record verification round-trip RAISED "
+                f"({type(exc).__name__}: {exc}) — a backend that can sign but "
+                "not verify (e.g. missing the KMS Verify permission) must fail "
+                "THIS bootstrap, not every subsequent one",
+            )
+        ) from exc
+    if not round_trip_ok:
+        raise AuditSigningConfigInvalidError(
+            (
+                "greenfield cutover-record signature failed its own "
+                "verification round-trip — refusing to publish a trust anchor "
+                "this deployment cannot verify",
+            )
+        )
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = record.model_dump_json() + "\n" + signature.hex() + "\n"
     # Out-of-family Codex [P2] round-2 finding: write-then-atomic-rename,
@@ -511,6 +561,19 @@ def _greenfield_sign_empty_record(
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(tmp_name, path)
+        # Out-of-family Codex [P2] round-5 finding: fsync the PARENT
+        # DIRECTORY after the atomic replace (mirrors the audit-writer's
+        # own snapshot persistence) — fsyncing only the file's content
+        # leaves the rename's directory entry non-durable; a power loss
+        # after LATER sidecar writes became durable could vanish the record
+        # while audit rows survive, making every subsequent bootstrap
+        # reject the ledger as non-fresh.
+        if sys.platform != "win32":
+            dir_fd = os.open(str(path.parent), os.O_RDONLY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
     except BaseException:
         with contextlib.suppress(OSError):
             os.unlink(tmp_name)

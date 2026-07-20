@@ -106,6 +106,28 @@ ledger-freshness gate reads it from the stage-1 ledger handle, BEFORE the
 audit writer materializes) share one source of truth with the writer's own
 `_SIDECAR_FILENAME`."""
 
+_AUDIT_ACTION_ID_PREFIX = "audit"
+"""The IS-ledger action_id prefix audit wraps carry — module-level so
+`ledger_holds_audit_refs` (usable before a writer instance exists) and the
+writer's own `_ACTION_ID_PREFIX` share one definition."""
+
+
+def ledger_holds_audit_refs(ledger_writer: LedgerWriter) -> bool:
+    """True iff the hash-chained IS ledger holds `audit:` references — the
+    AUTHORITY for "has any audit entry ever been appended" (its refs cannot
+    be silently removed the way a plain sidecar file can; same principle as
+    `RuntimeAuditLedgerWriter._assert_absence_is_first_use`, codex round-36).
+
+    Module-level (needing only the stage-1 `LedgerWriter`) so U-RT-134's
+    stage-4 ledger-freshness gate can consult it BEFORE the audit writer
+    materializes — a deleted/truncated sidecar alongside surviving IS refs
+    must read as NOT fresh (out-of-family Codex [P1] U-RT-134 round-5).
+    """
+    return any(
+        entry.action_id.startswith(f"{_AUDIT_ACTION_ID_PREFIX}:")
+        for entry in read_ledger(ledger_writer.handle)
+    )
+
 
 class AuditWriterBindError(Exception):
     """Raised when audit-writer stage materialization fails."""
@@ -273,7 +295,7 @@ class RuntimeAuditLedgerWriter:
     Mutated only under `_sidecar_thread_lock` + the cross-process write lock."""
 
     _SINGLE_TENANT_TAG: ClassVar[str] = "_single"
-    _ACTION_ID_PREFIX: ClassVar[str] = "audit"
+    _ACTION_ID_PREFIX: ClassVar[str] = _AUDIT_ACTION_ID_PREFIX
 
     _SNAPSHOT_FILENAME: ClassVar[str] = "audit-entries.index-snapshot.json"
     """B-50 item (g) — the disk-backed membership-index snapshot.
@@ -814,10 +836,7 @@ class RuntimeAuditLedgerWriter:
         exist. Public so the shutdown flush can distinguish genuine first use
         from deletion-after-use (codex round-43), consistent with the
         writer's own missing-sidecar guard."""
-        return any(
-            entry.action_id.startswith(f"{self._ACTION_ID_PREFIX}:")
-            for entry in read_ledger(self.ledger_writer.handle)
-        )
+        return ledger_holds_audit_refs(self.ledger_writer)
 
     def _assert_absence_is_first_use(self) -> None:
         """A MISSING sidecar is only legitimate before any audit entry ever

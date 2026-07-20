@@ -529,6 +529,77 @@ def test_greenfield_minting_rejected_when_sidecar_has_rows(tmp_path: Path) -> No
     assert record_path.is_file()
 
 
+def test_greenfield_minting_rejected_when_is_ledger_has_audit_refs(tmp_path: Path) -> None:
+    """Out-of-family Codex [P1] round-5 finding: the hash-chained IS ledger
+    is the freshness AUTHORITY — a deleted/truncated sidecar alongside
+    surviving `audit:` IS refs must still read NOT-fresh (the sidecar-only
+    check would pass exactly the loss case the gate exists for). A probe
+    that RAISES also reads not-fresh (fail closed)."""
+    record_path = tmp_path / "record.json"
+    kwargs = _mtc_ready_kwargs(tmp_path)
+    kwargs["audit_cutover_record_path"] = str(record_path)
+    config = _config(tmp_path, **kwargs)
+    absent_sidecar = tmp_path / "audit-entries.jsonl"  # deleted/never-written
+
+    with pytest.raises(AuditSigningConfigInvalidError, match="NOT fresh"):
+        validate_and_initialize_mtc_audit_signing(
+            config,
+            signing_backend=_FakeBackend(),
+            audit_sidecar_path=absent_sidecar,
+            ledger_has_audit_refs=lambda: True,
+        )
+    assert not record_path.exists()
+
+    def _raising_probe() -> bool:
+        raise OSError("simulated unreadable IS ledger")
+
+    with pytest.raises(AuditSigningConfigInvalidError, match="NOT fresh"):
+        validate_and_initialize_mtc_audit_signing(
+            config,
+            signing_backend=_FakeBackend(),
+            audit_sidecar_path=absent_sidecar,
+            ledger_has_audit_refs=_raising_probe,
+        )
+    assert not record_path.exists()
+
+    # Control: no IS refs + no sidecar rows = genuinely fresh → mint proceeds.
+    validate_and_initialize_mtc_audit_signing(
+        config,
+        signing_backend=_FakeBackend(),
+        audit_sidecar_path=absent_sidecar,
+        ledger_has_audit_refs=lambda: False,
+    )
+    assert record_path.is_file()
+
+
+def test_greenfield_signature_verified_before_publication(tmp_path: Path) -> None:
+    """Out-of-family Codex [P1] round-5 finding: a backend that can SIGN
+    but not VERIFY (KMS Sign/Verify are separate IAM permissions), or one
+    emitting a wrong-but-correctly-sized signature, must fail THIS
+    bootstrap — not persist a record every subsequent bootstrap rejects."""
+
+    class _SignOnlyBackend(_FakeBackend):
+        def verify(self, *, message: bytes, signature: bytes, key_id: str, key_period: int) -> bool:
+            raise PermissionError("simulated missing kms:Verify permission")
+
+    class _WrongSignatureBackend(_FakeBackend):
+        def sign(self, *, message: bytes, key_id: str, key_period: int) -> bytes:
+            return b"\x00" * 64  # correctly sized, cryptographically wrong
+
+    record_path = tmp_path / "record.json"
+    kwargs = _mtc_ready_kwargs(tmp_path)
+    kwargs["audit_cutover_record_path"] = str(record_path)
+    config = _config(tmp_path, **kwargs)
+
+    with pytest.raises(AuditSigningConfigInvalidError, match="round-trip RAISED"):
+        validate_and_initialize_mtc_audit_signing(config, signing_backend=_SignOnlyBackend())
+    assert not record_path.exists()
+
+    with pytest.raises(AuditSigningConfigInvalidError, match="verification round-trip"):
+        validate_and_initialize_mtc_audit_signing(config, signing_backend=_WrongSignatureBackend())
+    assert not record_path.exists()
+
+
 def test_greenfield_temp_file_symlink_planting_does_not_overwrite_target(tmp_path: Path) -> None:
     """Out-of-family Codex [P1] round-4 finding: the temp file must be
     created with randomized-name/exclusive semantics (`tempfile.mkstemp`)
