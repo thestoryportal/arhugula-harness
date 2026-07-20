@@ -69,6 +69,7 @@ __all__ = [
     "AuditSigningConfigInvalidError",
     "IncompatibleConfigVersion",
     "initialize_mtc_audit_signing_record",
+    "mtc_audit_prewarm_disabled",
     "resolve_audit_signing_fail_closed",
     "validate_and_initialize_mtc_audit_signing",
     "validate_mtc_audit_signing_config",
@@ -123,6 +124,25 @@ def resolve_audit_signing_fail_closed(config: RuntimeConfig) -> bool:
     if config.audit_signing_fail_closed is not None:
         return config.audit_signing_fail_closed
     return config.persona_tier == PersonaTier.MULTI_TENANT_COMPLIANCE
+
+
+def mtc_audit_prewarm_disabled(config: RuntimeConfig) -> bool:
+    """U-RT-135 (Runtime spec v1.101 surface C; fork gate item 8) — True iff
+    BOTH B-18-KEEPALIVE surfaces (the stage-5 boot prewarm ping AND the
+    daemon `_keepalive_loop` spawn) are disabled as contract terms:
+    `persona_tier == MULTI_TENANT_COMPLIANCE` AND the resolved
+    `audit_signing_fail_closed` is ON.
+
+    Deliberately MTC-SCOPED per the ratified gate-item-8 letter (plan v2.49
+    §1.2 criterion 3): a lower-tier explicit `fail_closed=true` keeps the
+    v1.99 prewarm/keepalive posture — the `B-55` register row HOLDS the
+    extend/propagate/ratify-as-is disposition, and this predicate must not
+    pre-decide it. One source of truth for both call sites (the stage-5
+    dispatcher binding and the daemon spawn guard).
+    """
+    return config.persona_tier is PersonaTier.MULTI_TENANT_COMPLIANCE and (
+        resolve_audit_signing_fail_closed(config)
+    )
 
 
 def _resolve_record_key_arn(config: RuntimeConfig, key_id: str) -> str | None:

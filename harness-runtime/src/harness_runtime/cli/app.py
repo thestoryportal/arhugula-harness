@@ -388,6 +388,31 @@ class DaemonStartupError(RuntimeError):
 _KEEPALIVE_INTERVAL_SECONDS: float = 240.0
 
 
+def _should_spawn_keepalive(runtime_config: Any, bare: Any) -> bool:
+    """B-18-KEEPALIVE spawn predicate — extracted so the U-RT-135 MTC
+    fail-closed disable is a testable contract term at the SPAWN site (plan
+    v2.49 §1.2 criterion 1(ii): the LOOP itself is not spawned — its
+    swallow-all outer catch must be unreachable BY CONTRACT, not by
+    coincidence of `prewarm()`'s own policy early-return).
+
+    The v1.99 conditions are preserved verbatim: keepalive opt-in flag ON,
+    a bare dispatcher bound, and the 5m cache TTL (1h epochs excluded). The
+    U-RT-135 addition is the MTC fail-closed veto via
+    `mtc_audit_prewarm_disabled` — MTC-scoped only (a lower-tier explicit
+    opt-in keeps the v1.99 posture pending `B-55`).
+    """
+    from harness_runtime.lifecycle.audit_signing_fail_closed_validation import (
+        mtc_audit_prewarm_disabled,
+    )
+
+    return (
+        runtime_config.prompt_cache_keepalive
+        and bare is not None
+        and getattr(bare, "cache_ttl", None) == "5m"
+        and not mtc_audit_prewarm_disabled(runtime_config)
+    )
+
+
 async def _keepalive_loop(
     ctx: Any,
     bare: Any,
@@ -480,11 +505,7 @@ async def _daemon_main(
         # B-18-KEEPALIVE — spawn the 5m-TTL keep-alive loop (DDR §5).
         # 1h-TTL epochs are long enough that prewarm never matters; excluded.
         _bare = ctx.bare_llm_dispatcher
-        if (
-            runtime_config.prompt_cache_keepalive
-            and _bare is not None
-            and getattr(_bare, "cache_ttl", None) == "5m"
-        ):
+        if _should_spawn_keepalive(runtime_config, _bare):
             keepalive_task = asyncio.create_task(
                 _keepalive_loop(ctx, _bare),
                 name="keepalive-prewarm",

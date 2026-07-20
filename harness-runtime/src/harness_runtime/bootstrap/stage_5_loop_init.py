@@ -53,6 +53,9 @@ from harness_runtime.bootstrap.factories.webhook_delivery_composer_factory impor
     materialize_webhook_delivery_composer_stage,
 )
 from harness_runtime.bootstrap.mutable_context import _MutableHarnessContext
+from harness_runtime.lifecycle.audit_signing_fail_closed_validation import (
+    mtc_audit_prewarm_disabled,
+)
 from harness_runtime.lifecycle.cacheable_epoch import select_cache_ttl
 from harness_runtime.lifecycle.child_workflow_runner import compose_child_workflow_runner
 from harness_runtime.lifecycle.engine_output_store import (
@@ -418,6 +421,13 @@ async def execute(
             # resolved inside `prewarm()` from routing_manifest first, then this
             # fallback. None → prewarm returns SKIPPED_NOT_ELIGIBLE.
             prewarm_model=config.prompt_cache_prewarm_model,
+            # U-RT-135 (Runtime spec v1.101 surface C) — under fail-closed at
+            # MULTI_TENANT_COMPLIANCE, `prewarm()` returns the POLICY skip
+            # (`SKIPPED_POLICY_FAIL_CLOSED`) before any eligibility gate, so
+            # the boot ping below never fires and any keepalive invocation is
+            # inert. MTC-scoped per ratified gate item 8 (B-55 holds the
+            # lower-tier disposition).
+            prewarm_policy_fail_closed=mtc_audit_prewarm_disabled(config),
         )
         # B-18-KEEPALIVE — stash the bare dispatcher on ctx so the daemon
         # keep-alive loop (Step 5) can call `bare.prewarm()` directly without
