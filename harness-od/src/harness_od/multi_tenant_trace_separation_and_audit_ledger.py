@@ -93,6 +93,7 @@ __all__ = [
     "RotationPairIntegrityBreach",
     "TenantIdMissingViolation",
     "TenantSeparationStrategy",
+    "canonical_od_signing_message",
     "sidecar_tag",
     "sign_audit_entry",
     "sign_rotation_pair",
@@ -275,7 +276,7 @@ def sidecar_tag(tenant_id: str | None) -> str:
     return normalized if normalized is not None else _RESERVED_SIDECAR_TENANT_TAG
 
 
-def _canonical_od_signing_message(
+def canonical_od_signing_message(
     entry_hash: str,
     *,
     key_id: str,
@@ -298,6 +299,11 @@ def _canonical_od_signing_message(
     tuple pair injective (a four-tuple message can never equal a five-tuple
     message: the byte count committed by each segment's own length prefix
     forecloses any field-boundary reinterpretation).
+
+    Exported (was module-private through OD spec v1.33) so the U-OD-55
+    verifier can reconstruct the IDENTICAL message this function produced at
+    signing time — one source of truth for both directions (OD spec v1.34
+    §21.2.2 row 1).
     """
     parts = (entry_hash, key_id, algo_value, key_period_token)
     if tenant_tag is not None:
@@ -338,7 +344,7 @@ def sign_audit_entry(
     `AwsKmsSigningBackend`): the returned `audit_signature_value` is a genuine
     signature over the canonical message binding `compute_entry_hash(payload)`
     to `(key_id, algo, key_period[, tenant_tag])` — see
-    `_canonical_od_signing_message` — carried as standard base64 text (the
+    `canonical_od_signing_message` — carried as standard base64 text (the
     `str` carrier type is unchanged; raw signature bytes are arbitrary binary
     — the B-34 representation discipline applied at birth). `tenant_id`
     (OD v1.34 §21.2.1 row 1) is normalized via `signing_token` before being
@@ -382,7 +388,7 @@ def sign_audit_entry(
             f"(OD spec v1.34 §21.2.3 row 5 / v1.33 §21.2.1)"
         )
     entry_hash = compute_entry_hash(payload)
-    message = _canonical_od_signing_message(
+    message = canonical_od_signing_message(
         entry_hash,
         key_id=key_id,
         algo_value=algo.value,
