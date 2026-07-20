@@ -232,14 +232,13 @@ def validate_audit_signing_for_span_stage(
         )
     if not tokenizer_will_bind:
         return
-    if signing_backend is None:
-        raise SpanProcessorBindError(
-            "audit_signing.backend is 'aws-kms' but no signing_backend was "
-            "supplied to materialize_span_processor_stage — construct one "
-            "via make_audit_signing_backend(config.audit_signing) and pass "
-            "it through (stage 4 does); explicit KMS configuration must "
-            "never silently degrade to placeholder signing"
-        )
+    # `signing_backend is None` is UNREACHABLE below this point: the top
+    # unconditional check already raised for tokenizer_will_bind=True with
+    # no backend, regardless of `config.audit_signing.backend` kind — so by
+    # the time we reach here (aws-kms configured AND tokenizer will bind),
+    # `signing_backend` is guaranteed non-`None` (out-of-family Codex
+    # test-witness lens finding, PR #1061 merge-gate round; the old
+    # aws-kms-specific "no backend" raise this replaced is now dead code).
     if REDACTION_TOKEN_SIGNING_KEY_ID not in config.audit_signing.key_arns:
         raise SpanProcessorBindError(
             f"audit_signing.key_arns is missing the redaction-token "
@@ -341,7 +340,10 @@ def materialize_span_processor_stage(
                     tenant_id=config.tenant_id,
                     signing_key_id=REDACTION_TOKEN_SIGNING_KEY_ID,
                     # B-47 PR B — the composition-root-constructed backend
-                    # (OD spec v1.33 §21.2.1). None = placeholder signing.
+                    # (OD spec v1.33 §21.2.1). Within this tokenizer_will_bind
+                    # branch, `signing_backend` can no longer be `None` — the
+                    # unconditional check above (OD spec v1.34 §21.2.3 row 6)
+                    # already raised SpanProcessorBindError otherwise.
                     signing_backend=signing_backend,
                 ),
                 classifier=EvalGradeSemanticRedactionClassifier(),
