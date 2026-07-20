@@ -1681,6 +1681,42 @@ async def test_bootstrap_stage_5_stashes_bare_dispatcher_on_ctx(
 
 
 @pytest.mark.asyncio
+async def test_bootstrap_stage_5_binds_mtc_fail_closed_prewarm_policy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """U-RT-135 wiring witness — the REAL stage 5 binds
+    `prewarm_policy_fail_closed = mtc_audit_prewarm_disabled(config)` onto
+    the bare dispatcher: True at MULTI_TENANT_COMPLIANCE (per-persona
+    default resolves the flag ON), False at the solo-developer control.
+    (The U-RT-134 config-validation invariant is nooped by _patch_collector,
+    so the minimal MTC config here bootstraps — this witness pins the
+    stage-5 BINDING, not the validation.) Mutation probe: dropping the
+    stage-5 kwarg leaves the dataclass default False and fails the MTC half."""
+    _patch_providers(monkeypatch)
+    _patch_collector(monkeypatch)
+    mtc_root = tmp_path / "mtc"
+    mtc_root.mkdir()
+    mtc_config = _config(mtc_root).model_copy(
+        update={
+            "persona_tier": PersonaTier.MULTI_TENANT_COMPLIANCE,
+            "tenant_id": "tenant-x",
+            "path_bindings": _path_bindings(mtc_root),
+        }
+    )
+    ctx = await run_bootstrap(mtc_config, workload_class=_WORKLOAD)
+    assert ctx.bare_llm_dispatcher is not None
+    assert ctx.bare_llm_dispatcher.prewarm_policy_fail_closed is True
+
+    solo_root = tmp_path / "solo"
+    solo_root.mkdir()
+    solo_config = _config(solo_root).model_copy(update={"path_bindings": _path_bindings(solo_root)})
+    ctx2 = await run_bootstrap(solo_config, workload_class=_WORKLOAD)
+    assert ctx2.bare_llm_dispatcher is not None
+    assert ctx2.bare_llm_dispatcher.prewarm_policy_fail_closed is False
+
+
+@pytest.mark.asyncio
 async def test_bootstrap_stage_5_prewarm_failure_does_not_abort_bootstrap(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

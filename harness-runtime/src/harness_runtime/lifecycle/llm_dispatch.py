@@ -459,6 +459,13 @@ class PrewarmOutcome(StrEnum):
     """No cacheable prefix or no resolved Anthropic model — no paid call made."""
     SKIPPED_NO_ANTHROPIC = "skipped_no_anthropic"
     """Anthropic adapter absent from `providers` — no paid call made."""
+    SKIPPED_POLICY_FAIL_CLOSED = "skipped_policy_fail_closed"
+    """U-RT-135 (Runtime spec v1.101 surface C; OD v1.34 §21.2.3 row 8):
+    `audit_signing_fail_closed` resolved ON at MULTI_TENANT_COMPLIANCE —
+    prewarm is a latency optimization whose swallow-all posture is a
+    fail-open bypass at the compliance tier, so no paid call is made. A
+    POLICY skip, not a `FAILED` outcome: it MUST NOT count toward the
+    keepalive `consec_fail` self-disable accounting."""
     FAILED = "failed"
     """Provider call raised; exception swallowed (best-effort); no retry."""
 
@@ -724,6 +731,13 @@ class RuntimeLLMDispatcher:
     # resolution source in `prewarm()`. File/CLI-only on RuntimeConfig (not env-
     # keyed — does not gate correctness, only which model is warmed).
     prewarm_model: str | None = None
+    # U-RT-135 (Runtime spec v1.101 surface C) — the MTC fail-closed policy
+    # disable, bound at stage 5 from `mtc_audit_prewarm_disabled(config)`
+    # (persona_tier == MULTI_TENANT_COMPLIANCE AND the resolved
+    # `audit_signing_fail_closed` is ON). When True, `prewarm()` returns the
+    # POLICY skip before any eligibility gate — no paid call, ever. Default
+    # False preserves the v1.99 posture byte-for-byte everywhere else.
+    prewarm_policy_fail_closed: bool = False
 
     async def prewarm(self) -> PrewarmOutcome:
         """Boot-time prompt-cache pre-warm (B-18-KEEPALIVE; ADR-D3 §1.5:189).
@@ -738,6 +752,12 @@ class RuntimeLLMDispatcher:
         `RetryBreakerFallbackDispatcher` or `RuntimeHITLGateComposer` wrappers
         (boot hangs on AskUserQuestion + breaker trips are not appropriate here).
         """
+        # 0. U-RT-135 policy gate — FIRST, before any eligibility check:
+        # under fail-closed at MTC, prewarm's swallow-all posture is a
+        # fail-open bypass (OD v1.34 §21.2.3 row 8), so no ping is fired.
+        if self.prewarm_policy_fail_closed:
+            return PrewarmOutcome.SKIPPED_POLICY_FAIL_CLOSED
+
         # 1. Anthropic-only gate.
         if "anthropic" not in self.providers:
             return PrewarmOutcome.SKIPPED_NO_ANTHROPIC
@@ -3107,6 +3127,7 @@ def materialize_llm_dispatcher_stage(
     routing_activation: bool = False,
     embedding_classifier: LayerDecisionFn | None = None,
     prewarm_model: str | None = None,
+    prewarm_policy_fail_closed: bool = False,
 ) -> RuntimeLLMDispatcher:
     """Stage 5 LOOP_INIT composer factory for the LLM dispatcher (U-RT-52).
 
@@ -3195,6 +3216,9 @@ def materialize_llm_dispatcher_stage(
         routing_activation=routing_activation,
         embedding_classifier=embedding_classifier,
         prewarm_model=prewarm_model,
+        # U-RT-135 — the MTC fail-closed prewarm disable (stage 5 passes
+        # `mtc_audit_prewarm_disabled(config)`).
+        prewarm_policy_fail_closed=prewarm_policy_fail_closed,
     )
 
 

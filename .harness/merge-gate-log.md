@@ -264,3 +264,22 @@ BLOCK was fixed with a real-stage-4 wiring witness (real stages 0+1 + real execu
 round-1-named mutations now fail it; lambda-neuter probe run + restored) and re-gated APPROVE.
 Concurrency lens's approve-note (the persisted-row scan is a third probe in the B-64 window) folded
 into B-64's close_out. Full suite 2806 passed / 0 failed; ruff + pyright clean.
+
+## PR #1064 — 2026-07-20 — feat/rt-u-rt-135-mtc-prewarm-disable
+
+| Lens | R1 | R2 |
+|---|---|---|
+| concurrency | APPROVE | — |
+| spec-conformance | APPROVE | — |
+| test-witness | APPROVE | — |
+
+Outcome: MERGE (pending CI re-verify). U-RT-135 (MTC prewarm/keepalive disable under
+fail-closed — Runtime spec v1.101 surface C, ratified fork gate item 8), fourth leg of the
+B-51/B-52/B-54/B-53 arc. Out-of-family Codex converged CLEAN in one round (zero findings —
+policy consistently applied to both surfaces, non-MTC preserved). All five plan-named
+witnesses + a real-run_bootstrap stage-5 wiring witness + a real-_daemon_main loop-level
+witness; four PD-8 mutation probes (dropped stage-5 kwarg / any-tier predicate extension /
+removed spawn veto / removed prewarm() gate) each failed their witness and were restored.
+Spec lens verified the B-55 operator-gated row is honored, not pre-decided; one Class-3
+informational (authoring-era line-cite shift in the v1.101 change-note, correctly left for
+a doc-hygiene pass — X-AL-3 forbids fixing it here). Suite 2813/0; 16/16 CI SUCCESS.
