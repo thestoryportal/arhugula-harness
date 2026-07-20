@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 60
+  total: 63
   open: 5
   design_substrate_gated: 1
-  registered_finding: 9
+  registered_finding: 12
   operator_gated: 2
   held: 1
   closed: 42
-  identity_digest: b8209659af7b1823
+  identity_digest: fe0fcaacc1c0b234
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -1014,11 +1014,21 @@ items:
     frames stranded on the cohort-key-split witness). NINE successive rounds of decorrelated pre-merge
     review have now surfaced 35 findings total, ALL fixed with PD-8 mutation-probed witnesses; all
     fixes landed with full local verification green (ruff + pyright + pytest across harness-cp,
-    harness-runtime, harness-core, harness-is). Round 10 (merge-gate 3-lens + codex-review) is the
-    operator-approved FINAL gate -- clean converges to merge; any further finding in the same
-    executor-lifecycle/token-classification class routes to a SECOND operator escalation (not a
-    further reactive fix round), per the "one more gate" scope the operator approved -- this row
-    transitions to closed at that PR''s merge.'
+    harness-runtime, harness-core, harness-is). Round 10 (merge-gate 3-lens + codex-review) ran as
+    the operator-approved FINAL gate. All 3 merge-gate lenses APPROVED (concurrency, spec-conformance,
+    test-witness -- the latter flagged one non-blocking docstring overclaim on the O-W CAS-gate test,
+    fixed in the same round). Codex round-10 surfaced 3 NEW [P1] findings against the PRE-EXISTING
+    cancellation-fence machinery built across rounds 4-8 (nonlinear-topology children skip the fence
+    check at their strategy entry point; buffered fan-out ledger drain writes are not fenced; one
+    effect_entry() guard spans multiple independent sequential writes) -- NOT regressions in round
+    9/10''s own 2-commit delta (verified: none of the 3 findings cite a line this arc''s round-9/10
+    commits touched). This is the pre-committed escalation trigger (a new finding in the same
+    executor-lifecycle/token class after the agreed "one more gate"); surfaced to the operator via
+    AskUserQuestion, who selected "Register + merge now" -- CI was fully green, all 3 lenses had
+    already approved, and the 3 findings are bounded pre-existing coverage gaps, not evidence the
+    round-9 fix itself regressed anything. Registered as B-60/B-61/B-62 (own rows, each citing
+    file:line + codex''s exact rationale + a Class-2-fork-shaped close_out) rather than folded into
+    this row or blind-fixed. PR #1060 MERGED to main -- this row transitions to closed.'
   council: 'yes at apply leg -- C1 orchestration vs C9 reliability dyad CONFIRMS the filing-settled
     position (fail-fast + typed error + RuntimeConfig ownership + default sub_agent_dispatch_max_workers
     = 256 in shared-budget frame units (N upstream frames + one inner frame per SYNC sub-agent branch; async inners uncharged), the filing-settled recommendation, RATIFIED 2026-07-18) or surfaces a reasoned deviation back to the operator; it does NOT
@@ -1261,3 +1271,74 @@ items:
     invariant integrity) is a nameable tension'
   heading: '### B-59 · Capacity authority not preserved across sequential bootstrap invocations
     *(registered at the B-48 apply arc, 2026-07-19)*'
+
+- id: B-60
+  title: Cancellation fence not checked at nonlinear-topology child entry points
+  status: registered_finding
+  summary: 'Registered at the B-48 apply arc (codex round-10 [P1] "check cancellation before
+    nonlinear topology dispatch"): when an offloaded child workflow uses PARALLELIZATION,
+    ORCHESTRATOR_WORKERS, or HIERARCHICAL_DELEGATION, `_execute_workflow_body` returns into the
+    topology-strategy handler before ever reaching the linear step loop''s `_dispatch_cancel_token.check()`
+    (workflow_driver.py:4357-4359). If an ancestor timeout trips the token between fan-out phases (e.g.
+    between warm-up Phase 1 and Phase 2, or between a HIERARCHICAL_DELEGATION recursion level), the
+    child can continue scheduling later work past the fence grace at those branch/level boundaries --
+    the linear-path check this arc added does not extend to the nonlinear dispatch entry points. Not a
+    regression introduced by round 9/10''s admission-deferral or future-publication fixes; a pre-existing
+    coverage gap in the round 4-8 cancellation-fence work, surfaced for the first time at round 10.'
+  close_out: 'Needs equivalent `_dispatch_cancel_token.check()` calls at each nonlinear-topology
+    strategy''s entry point (before `_execute_parallelization` / `_execute_orchestrator_workers` /
+    the HIERARCHICAL_DELEGATION recursion re-entry begins dispatching) and likely at each fan-out
+    phase boundary (post warm-up Phase 1, pre Phase 2) -- not just once at function entry, since the
+    fence can trip mid-fan-out. Ground against CP spec v1.102 / Runtime spec v1.102 section 14.8.10.3''s
+    fence-ack contract before building: determine whether ''check once at strategy entry'' or ''check at
+    every phase boundary'' is the spec-intended granularity.'
+  council: 'yes if opened -- C1 orchestration (fan-out phase structure) vs C9 reliability (fence
+    completeness) is a nameable tension'
+  heading: '### B-60 · Cancellation fence not checked at nonlinear-topology child entry points
+    *(registered at the B-48 apply arc, codex round-10, 2026-07-19)*'
+
+- id: B-61
+  title: Buffered fan-out ledger drain writes are not fenced
+  status: registered_finding
+  summary: 'Registered at the B-48 apply arc (codex round-10 [P1] "fence each buffered ledger
+    append"): `drain_branch_buffers`''s real `writer.append(...)` calls (workflow_driver.py:1922-1924)
+    run without `effect_entry()` or `check()`. When a timed-out offloaded child is inside a nested
+    fan-out, its cancel token can trip while branch tasks are still finishing; `_finish()` still
+    reaches these physical ledger appends afterward, uncounted by `_effects_in_flight` and unblocked
+    by the fence -- so `wait_ack()` can classify the timeout as `ACKED_CLEAN` even though F2 ledger
+    entries actually begin writing after the trip. Not a regression introduced by round 9/10''s
+    admission-deferral or future-publication fixes; a pre-existing coverage gap in the round 4-8
+    cancellation-fence work (the effect_entry() guard was applied to the direct dispatch write paths,
+    not the buffered-writer drain path), surfaced for the first time at round 10.'
+  close_out: 'Needs the same `effect_entry()`/`check()` guard `drain_branch_buffers`''s sibling direct
+    writes already carry (per the round 6/7 fixes), applied at each real `writer.append()` inside the
+    drain loop. Ground against whether drain time is single-threaded-post-barrier (making a coarser
+    single guard around the whole drain loop sufficient) or whether per-append granularity is required
+    -- resolves the discriminator B-62 below shares.'
+  council: 'no -- narrow, single-site guard-application fix once the drain-loop threading model is
+    confirmed'
+  heading: '### B-61 · Buffered fan-out ledger drain writes are not fenced
+    *(registered at the B-48 apply arc, codex round-10, 2026-07-19)*'
+
+- id: B-62
+  title: A single effect_entry() guard spans multiple independent sequential writes
+  status: registered_finding
+  summary: 'Registered at the B-48 apply arc (codex round-10 [P1] "split the fence guard between
+    sequential writes"): at sub_agent_dispatch.py:744-750 (and the durable-output/ledger pair in
+    `_execute_workflow_body`), one `effect_entry()` guard wraps a SEQUENCE of independent effects
+    (ledger append, then signing, then audit append). If the token trips while the FIRST write is
+    executing, the guard remains entered for the whole block -- it permits the already-running
+    operation to finish (correct), but ALSO permits the subsequent signing + audit append to begin
+    without a fresh consultation of the token, since the guard was entered before the trip and never
+    re-checked mid-block. Not a regression introduced by round 9/10''s admission-deferral or
+    future-publication fixes; a pre-existing granularity gap in the round 4-8 cancellation-fence work,
+    surfaced for the first time at round 10.'
+  close_out: 'Needs each independent effect (ledger append / signing / audit append) wrapped in its
+    OWN `effect_entry()` call rather than one guard spanning all three, so a trip between operations
+    is caught before the next one begins. Ground against whether signing is itself effect-bearing
+    (network call to the KMS backend per ADR-D8) or purely computational before deciding scope --
+    shares the drain-loop threading-model discriminator with B-61.'
+  council: 'no -- narrow, per-site guard-splitting fix once the signing effect-classification is
+    confirmed'
+  heading: '### B-62 · A single effect_entry() guard spans multiple independent sequential writes
+    *(registered at the B-48 apply arc, codex round-10, 2026-07-19)*'
