@@ -23,7 +23,10 @@ from harness_od.audit_ledger_types import (
     StateLedgerEntryRef,
     compute_entry_hash,
 )
-from harness_od.audit_signing_errors import AuditSigningFailedError
+from harness_od.audit_signing_errors import (
+    AuditSigningBreakerOpenError,
+    AuditSigningFailedError,
+)
 from harness_od.multi_tenant_trace_separation_and_audit_ledger import (
     AUDIT_SIGNATURE_REQUIRED_AT_TIER_5_LEDGER,
     PER_TENANT_SEPARATION_BINDINGS,
@@ -827,6 +830,26 @@ def test_sign_audit_entry_rejects_empty_tenant_and_reserved_literal() -> None:
     for bad in ("", "_single"):
         with pytest.raises(ValueError, match="tenant_id"):
             sign_audit_entry(_payload("h0"), "key-1", SignatureAlgorithm.ED25519, tenant_id=bad)
+
+
+def test_sign_audit_entry_preserves_typed_breaker_open_error_unwrapped() -> None:
+    """Out-of-family Codex P2 (PR #1061 round 2) — a production
+    `BreakerGuardedSigningBackend` raises the ALREADY-typed
+    `AuditSigningBreakerOpenError` when the breaker is open; that must
+    propagate UNCHANGED (not double-wrapped into `AuditSigningFailedError`)
+    — it is a distinct, caller-retryable AVAILABILITY signal, not a signing
+    failure, and callers key on the exact type to distinguish them.
+    Mutation probe: removing the `except AUDIT_SIGNING_HARD_FAILURES: raise`
+    re-raise arm lets the generic `except Exception` wrap it instead."""
+
+    class _BreakerOpenBackend(_InMemoryEd25519Backend):
+        def sign(self, *, message: bytes, key_id: str, key_period: int) -> bytes:
+            raise AuditSigningBreakerOpenError("breaker is open")
+
+    with pytest.raises(AuditSigningBreakerOpenError, match="breaker is open"):
+        sign_audit_entry(
+            _payload("h0"), "key-1", SignatureAlgorithm.ED25519, backend=_BreakerOpenBackend()
+        )
 
 
 def test_sign_audit_entry_rejects_untyped_backend_error_wraps_typed() -> None:

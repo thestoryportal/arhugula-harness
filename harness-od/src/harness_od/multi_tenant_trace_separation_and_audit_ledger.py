@@ -77,7 +77,10 @@ from harness_od.audit_ledger_types import (
     StateLedgerEntryRef,
     compute_entry_hash,
 )
-from harness_od.audit_signing_errors import AuditSigningFailedError
+from harness_od.audit_signing_errors import (
+    AUDIT_SIGNING_HARD_FAILURES,
+    AuditSigningFailedError,
+)
 from harness_od.observability_matrix import CellID
 from harness_od.otel_genai_base import SpanRef
 
@@ -390,6 +393,15 @@ def sign_audit_entry(
         signature = backend.sign(
             message=message, key_id=key_id, key_period=_DEPLOYMENT_BOUND_KEY_PERIOD
         )
+    except AUDIT_SIGNING_HARD_FAILURES:
+        # Out-of-family Codex P2 (PR #1061 round 2): a production
+        # `BreakerGuardedSigningBackend` raises the ALREADY-typed
+        # `AuditSigningBreakerOpenError` when the breaker is open — that is
+        # a distinct, caller-retryable AVAILABILITY signal, not a signing
+        # failure. Re-raising unchanged (rather than double-wrapping into
+        # `AuditSigningFailedError`) preserves the discriminator; only a
+        # genuinely UNTYPED backend exception below gets wrapped.
+        raise
     except Exception as exc:
         raise AuditSigningFailedError(
             f"backend.sign raised {exc!r} while signing an audit entry "
