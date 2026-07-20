@@ -86,7 +86,7 @@ _GOLDEN_MESSAGE = (
     + _HASH_A.encode()
     + b"|15:four_tuple_real|7:_single|8:tenant-b|64:"
     + _HASH_B.encode()
-    + b"|18:placeholder_exempt|20:2026-07-19T12:00:00Z|7:ed25519|16:cutover-test-key|18:sidecar-golden-001"
+    + b"|18:placeholder_exempt|27:2026-07-19T12:00:00.000000Z|7:ed25519|16:cutover-test-key|18:sidecar-golden-001"
 )
 
 

@@ -54,6 +54,7 @@ from harness_od.audit_cutover_record import (
     AuditCutoverRecord,
     CutoverRecordValidationError,
     VerificationDisposition,
+    verify_cutover_record_signature,
 )
 from harness_od.audit_ledger_types import (
     AuditLedgerEntry,
@@ -111,14 +112,16 @@ class AuditVerificationBackendUnavailableError(Exception):
 
     An infrastructure/availability failure, retryable by the caller — NEVER
     a verdict on the entry's trustworthiness (an unresolvable key proves
-    nothing about the signature it can't check). A `backend.verify` call
-    that itself raises is also routed here (verify-side backend errors are
-    caller-retryable per §21.2.2 row 9's breaker-asymmetry rationale — this
-    module never breaker-couples the read path itself; see
+    nothing about the signature it can't check). Raised ONLY for the
+    resolver's `KeyError` (an unresolvable `key_id`) — a `backend.verify`
+    call that itself raises is deliberately left UNGUARDED (row 9's
+    breaker-asymmetry rationale: this module never breaker-couples or
+    reclassifies the read path itself, and there is no established typed
+    "verify-side hard failures" family to key a narrow catch on; see
     `test_verify_path_not_breaker_instrumented`). Raises that indicate a
     genuine PROGRAMMING defect (e.g. a resolver raising `TypeError`) are
-    NOT wrapped here — they propagate unwrapped so a defect is never mistaken
-    for a retryable outage.
+    NOT wrapped here either — they propagate unwrapped so a defect is
+    never mistaken for a retryable outage.
     """
 
 
@@ -192,13 +195,36 @@ def _resolve_cutover_disposition(
     tenant scope (the untenanted/single-tenant case has no legacy-migration
     story to exempt); absent a match, the entry is treated as post-cutover
     per row 3.
+
+    Matches on `(tenant_scope, entry_hash)` — the DESTINATION identity — but
+    the record's own uniqueness rule (`AuditCutoverRecord._validate_rows`)
+    deliberately permits TWO rows sharing a destination when one is
+    `quarantined` (distinct SOURCE rows migrating to the same target; the
+    `source_tag` disambiguates them in the SOURCE-uniqueness check). This
+    entry-only lookup has no `source_tag` to disambiguate with (`entry_hash`
+    is the only identity `AuditLedgerEntry` carries) — and because the
+    canonical message SORTS rows before signing, deserialized row ORDER is
+    NOT authenticated, so silently picking "the first match" would let an
+    attacker flip which disposition wins without invalidating the record's
+    signature (out-of-family Codex [P1] finding). Raise rather than guess.
     """
     if cutover_record is None or normalized_scope is None:
         return None
-    for row in cutover_record.rows:
-        if row.tenant_scope == normalized_scope and row.entry_hash == entry.entry_hash:
-            return row.verification_disposition
-    return None
+    matches = [
+        row
+        for row in cutover_record.rows
+        if row.tenant_scope == normalized_scope and row.entry_hash == entry.entry_hash
+    ]
+    if len(matches) > 1:
+        raise CutoverRecordValidationError(
+            f"cutover record has {len(matches)} rows dispositioning the same "
+            f"destination identity (tenant_scope={normalized_scope!r}, "
+            f"entry_hash={entry.entry_hash!r}) — ambiguous without a "
+            "source_tag input this entry-only lookup cannot supply; the "
+            "verifier refuses to guess which disposition applies (OD spec "
+            "v1.34 §21.2.2 row 4)"
+        )
+    return matches[0].verification_disposition if matches else None
 
 
 def _verify_entry_signature(
@@ -265,20 +291,21 @@ def _verify_entry_signature(
         key_period_token=_DEPLOYMENT_BOUND_TOKEN,
         tenant_tag=tenant_tag_for_message,
     )
-    try:
-        is_valid = backend.verify(
-            message=message,
-            signature=signature_bytes,
-            key_id=sig_attrs.audit_signature_key_id,
-            key_period=_DEPLOYMENT_BOUND_KEY_PERIOD,
-        )
-    except Exception as exc:
-        raise AuditVerificationBackendUnavailableError(
-            f"backend.verify raised {exc!r} while verifying entry "
-            f"entry_hash={entry.entry_hash!r} — verify-side backend errors "
-            "are caller-retryable infrastructure failures, never a verdict "
-            "(OD spec v1.34 §21.2.2 row 7(b) / row 9)"
-        ) from exc
+    # NOTE (out-of-family Codex [P2]): `backend.verify` is called UNGUARDED —
+    # unlike the resolver's KeyError-specific catch above, there is no
+    # established typed "verify-side hard failures" family (mirroring
+    # AUDIT_SIGNING_HARD_FAILURES on the sign side) to key a narrow catch on,
+    # and row 9 explicitly reserves breaker/availability handling for the
+    # Runtime-owned wrapper — this module must not invent its own wrapping
+    # policy for backend.verify. A raised exception here (programming defect
+    # OR an already-typed availability error a production backend raises)
+    # propagates UNWRAPPED to the caller, never silently reclassified.
+    is_valid = backend.verify(
+        message=message,
+        signature=signature_bytes,
+        key_id=sig_attrs.audit_signature_key_id,
+        key_period=_DEPLOYMENT_BOUND_KEY_PERIOD,
+    )
     if not is_valid:
         raise AuditSignatureInvalid(
             f"entry entry_hash={entry.entry_hash!r} failed backend signature "
@@ -293,6 +320,7 @@ def verify_per_family_chains(
     tenant_scope: str | None = None,
     backend_resolver: BackendResolver | None = None,
     cutover_record: AuditCutoverRecord | None = None,
+    cutover_record_signature: bytes | None = None,
     ledger_binding_id: str | None = None,
     observed_baseline_identities: Sequence[tuple[str, str]] = (),
 ) -> FamilyVerificationReport:
@@ -309,15 +337,23 @@ def verify_per_family_chains(
 
     `tenant_scope` is normalized via the SAME §21.2.1 tag rule-set signing
     uses (`signing_token`) — one source of truth at both ends (row 2).
-    `cutover_record` + `ledger_binding_id` gate legacy exemption (rows 3-5):
-    when both are supplied, a record whose signed `ledger_binding_id`
-    disagrees with the deployment's configured binding is REJECTED before
-    any row is dispositioned — a record authored for a different sidecar
-    must never authorize exemptions here (row 4's cross-ledger guard).
-    `observed_baseline_identities` are cross-checked against the cutover
-    record's own `(tenant_scope, entry_hash)` rows in BOTH directions and
-    reported explicitly via `FamilyVerificationReport.baseline_divergences`
-    (row 6) — never silently omitted.
+
+    Supplying `cutover_record` REQUIRES both `cutover_record_signature` and
+    `ledger_binding_id` — a record is trusted ONLY once its OWN signature
+    verifies against a backend resolved via `backend_resolver` (row 4:
+    "AUTHENTICATED"; out-of-family Codex [P1] finding — an unsigned or
+    unverified record must never gate a live exemption) AND its signed
+    `ledger_binding_id` matches the deployment's configured binding (row 4's
+    cross-ledger guard; Codex [P1] finding — omitting `ledger_binding_id`
+    must not silently skip this check, so it is REQUIRED, not merely
+    compared when both happen to be present). `observed_baseline_identities`
+    are cross-checked against the cutover record's BASELINE-ONLY rows (SOURCE
+    identity `(source_tag, entry_hash)` — the shape the sidecar reader
+    observes; rows whose `entry_hash` already has a full entry in `entries`
+    are excluded, since those were content/signature-verified above and are
+    not baseline-only) in BOTH directions, reported explicitly via
+    `FamilyVerificationReport.baseline_divergences` (row 6) — never silently
+    omitted.
     """
     for i, entry in enumerate(entries):
         recomputed = compute_entry_hash(entry.payload)
@@ -361,18 +397,48 @@ def verify_per_family_chains(
     baseline_divergences: list[str] = []
 
     if backend_resolver is not None:
-        if (
-            cutover_record is not None
-            and ledger_binding_id is not None
-            and cutover_record.ledger_binding_id != ledger_binding_id
-        ):
-            raise CutoverRecordValidationError(
-                "cutover record's signed ledger_binding_id="
-                f"{cutover_record.ledger_binding_id!r} does not match the "
-                f"configured deployment binding {ledger_binding_id!r} — a "
-                "record authored for a different sidecar must not authorize "
-                "exemptions here (OD spec v1.34 §21.2.2 row 4)"
-            )
+        if cutover_record is not None:
+            if ledger_binding_id is None:
+                raise CutoverRecordValidationError(
+                    "ledger_binding_id is REQUIRED whenever cutover_record is "
+                    "supplied — a caller that omits it must not silently "
+                    "skip the cross-ledger binding guard (OD spec v1.34 "
+                    "§21.2.2 row 4)"
+                )
+            if cutover_record.ledger_binding_id != ledger_binding_id:
+                raise CutoverRecordValidationError(
+                    "cutover record's signed ledger_binding_id="
+                    f"{cutover_record.ledger_binding_id!r} does not match the "
+                    f"configured deployment binding {ledger_binding_id!r} — a "
+                    "record authored for a different sidecar must not "
+                    "authorize exemptions here (OD spec v1.34 §21.2.2 row 4)"
+                )
+            if cutover_record_signature is None:
+                raise CutoverRecordValidationError(
+                    "cutover_record_signature is REQUIRED whenever "
+                    "cutover_record is supplied — an unauthenticated record "
+                    "must never gate a legacy exemption (OD spec v1.34 "
+                    "§21.2.2 row 4: AUTHENTICATED)"
+                )
+            try:
+                record_backend = backend_resolver(cutover_record.algorithm, cutover_record.key_id)
+            except KeyError as exc:
+                raise AuditVerificationBackendUnavailableError(
+                    "no verification backend available for the cutover "
+                    f"record's (algorithm={cutover_record.algorithm.value!r}, "
+                    f"key_id={cutover_record.key_id!r}) — an unresolvable "
+                    "key_id is an availability gap, not a verdict (OD spec "
+                    "v1.34 §21.2.2 row 7(b))"
+                ) from exc
+            if not verify_cutover_record_signature(
+                cutover_record, cutover_record_signature, backend=record_backend
+            ):
+                raise CutoverRecordValidationError(
+                    "cutover_record_signature does not verify against the "
+                    "record's canonical message — an unauthenticated or "
+                    "tampered record must never gate a legacy exemption (OD "
+                    "spec v1.34 §21.2.2 row 4: AUTHENTICATED)"
+                )
 
         normalized_scope = signing_token(tenant_scope)
 
@@ -395,9 +461,20 @@ def verify_per_family_chains(
             signature_dispositions["verified"] = signature_dispositions.get("verified", 0) + 1
 
         if cutover_record is not None or observed_baseline_identities:
+            # SOURCE identity (source_tag, entry_hash) — the shape the
+            # sidecar reader observes (out-of-family Codex [P2] finding: a
+            # DESTINATION-keyed (tenant_scope, entry_hash) comparison wrongly
+            # reports divergence for a legitimate "_single" -> real-tenant
+            # migration row, since the observed identity is source-tagged,
+            # not destination-tagged). Rows whose entry_hash already has a
+            # FULL entry in `entries` are excluded — those were content- and
+            # signature-verified above and are not baseline-only identities
+            # this cross-check is meant to cover.
+            full_entry_hashes = {entry.entry_hash for entry in entries}
             recorded_identities = {
-                (row.tenant_scope, row.entry_hash)
+                (row.source_tag, row.entry_hash)
                 for row in (cutover_record.rows if cutover_record is not None else ())
+                if row.entry_hash not in full_entry_hashes
             }
             observed_identities = set(observed_baseline_identities)
             for identity in sorted(recorded_identities - observed_identities):

@@ -23,6 +23,7 @@ from harness_od.audit_cutover_record import (
     AuditCutoverRecordRow,
     CutoverRecordValidationError,
     VerificationDisposition,
+    sign_cutover_record,
 )
 from harness_od.audit_ledger_types import (
     AuditLedgerEntry,
@@ -125,6 +126,13 @@ def _record(
     )
 
 
+def _signed_record(
+    *rows: AuditCutoverRecordRow, backend: _Ed25519Backend, ledger_binding_id: str = "sidecar-1"
+) -> tuple[AuditCutoverRecord, bytes]:
+    record = _record(*rows, ledger_binding_id=ledger_binding_id)
+    return record, sign_cutover_record(record, backend=backend)
+
+
 def test_absent_resolver_preserves_hash_only_behavior_verbatim() -> None:
     """Row 1: absent `backend_resolver` — current (B-49) behavior PRESERVED
     VERBATIM, including over entries whose `signature_attrs` this arc could
@@ -144,13 +152,14 @@ def test_pre_cutover_real_four_tuple_signature_verifies() -> None:
     tenant (era membership is decided by the record, never inferred)."""
     backend = _Ed25519Backend()
     entry = _signed_entry("pre-cutover-ref", backend=backend, tenant_id=None)
-    record = _record(
+    record, record_sig = _signed_record(
         AuditCutoverRecordRow(
             source_tag="_single",
             tenant_scope="tenant-x",
             entry_hash=entry.entry_hash,
             verification_disposition=VerificationDisposition.FOUR_TUPLE_REAL,
-        )
+        ),
+        backend=backend,
     )
 
     def resolver(algo: SignatureAlgorithm, key_id: str) -> _Ed25519Backend:
@@ -162,6 +171,7 @@ def test_pre_cutover_real_four_tuple_signature_verifies() -> None:
         tenant_scope="tenant-x",
         backend_resolver=resolver,
         cutover_record=record,
+        cutover_record_signature=record_sig,
         ledger_binding_id="sidecar-1",
     )
     assert report.signature_dispositions == {"verified": 1}
@@ -183,13 +193,14 @@ def test_post_cutover_tenant_row_verifies_only_against_five_tuple() -> None:
     report = verify_per_family_chains([entry], tenant_scope="tenant-x", backend_resolver=resolver)
     assert report.signature_dispositions == {"verified": 1}
 
-    wrong_era_record = _record(
+    wrong_era_record, wrong_era_sig = _signed_record(
         AuditCutoverRecordRow(
             source_tag="tenant-x",
             tenant_scope="tenant-x",
             entry_hash=entry.entry_hash,
             verification_disposition=VerificationDisposition.FOUR_TUPLE_REAL,
-        )
+        ),
+        backend=backend,
     )
     with pytest.raises(AuditSignatureInvalid):
         verify_per_family_chains(
@@ -197,6 +208,7 @@ def test_post_cutover_tenant_row_verifies_only_against_five_tuple() -> None:
             tenant_scope="tenant-x",
             backend_resolver=resolver,
             cutover_record=wrong_era_record,
+            cutover_record_signature=wrong_era_sig,
             ledger_binding_id="sidecar-1",
         )
 
@@ -309,6 +321,139 @@ def test_availability_typed_vs_defect_unwrapped() -> None:
     assert not isinstance(excinfo.value, AuditVerificationBackendUnavailableError)
 
 
+def test_backend_verify_exception_propagates_unwrapped() -> None:
+    """`backend.verify` itself is called UNGUARDED (out-of-family Codex [P2]
+    finding on this arc): unlike the resolver's KeyError-specific catch,
+    there is no established typed 'verify-side hard failures' family to key
+    a narrow catch on, so a raised exception — programming defect OR an
+    already-typed error a production backend raises — propagates unwrapped,
+    never reclassified as the availability type."""
+    entry = _signed_entry("verify-raises-ref", backend=_Ed25519Backend(), tenant_id=None)
+
+    class _RaisingVerifyBackend:
+        algorithm = "ed25519"
+
+        def sign(self, *, message: bytes, key_id: str, key_period: int) -> bytes:
+            raise AssertionError("must not be called")
+
+        def verify(self, *, message: bytes, signature: bytes, key_id: str, key_period: int) -> bool:
+            raise AssertionError("verify-side defect, not an availability gap")
+
+    def resolver(algo: SignatureAlgorithm, key_id: str) -> _RaisingVerifyBackend:
+        del algo, key_id
+        return _RaisingVerifyBackend()
+
+    with pytest.raises(AssertionError, match="verify-side defect"):
+        verify_per_family_chains([entry], tenant_scope=None, backend_resolver=resolver)
+
+
+def test_cutover_record_requires_authentication() -> None:
+    """A `cutover_record` MUST be authenticated before any disposition is
+    consulted — an unsigned or unverified record must never gate a live
+    exemption (OD spec v1.34 §21.2.2 row 4: AUTHENTICATED). Covers: missing
+    `cutover_record_signature`, missing `ledger_binding_id`, and a
+    signature that fails to verify."""
+    backend = _Ed25519Backend()
+    entry = _signed_entry("auth-required-ref", backend=backend, tenant_id=None)
+    row = AuditCutoverRecordRow(
+        source_tag="_single",
+        tenant_scope="tenant-x",
+        entry_hash=entry.entry_hash,
+        verification_disposition=VerificationDisposition.FOUR_TUPLE_REAL,
+    )
+    record, record_sig = _signed_record(row, backend=backend)
+
+    def resolver(algo: SignatureAlgorithm, key_id: str) -> _Ed25519Backend:
+        del algo, key_id
+        return backend
+
+    # (a) missing ledger_binding_id.
+    with pytest.raises(CutoverRecordValidationError, match="ledger_binding_id"):
+        verify_per_family_chains(
+            [entry],
+            tenant_scope="tenant-x",
+            backend_resolver=resolver,
+            cutover_record=record,
+            cutover_record_signature=record_sig,
+        )
+
+    # (b) missing cutover_record_signature.
+    with pytest.raises(CutoverRecordValidationError, match="cutover_record_signature"):
+        verify_per_family_chains(
+            [entry],
+            tenant_scope="tenant-x",
+            backend_resolver=resolver,
+            cutover_record=record,
+            ledger_binding_id="sidecar-1",
+        )
+
+    # (c) a signature that does not verify against THIS record — must be
+    # REJECTED, not silently trusted; mutation probe: skipping this check
+    # entirely would let an attacker exempt any row by attaching a record's
+    # signature to a DIFFERENT (tampered) record's content.
+    tampered_record, _tampered_sig = _signed_record(
+        AuditCutoverRecordRow(
+            source_tag="_single",
+            tenant_scope="tenant-x",
+            entry_hash=entry.entry_hash,
+            verification_disposition=VerificationDisposition.PLACEHOLDER_EXEMPT,  # differs from `row`
+        ),
+        backend=backend,
+    )
+    with pytest.raises(CutoverRecordValidationError, match="does not verify"):
+        verify_per_family_chains(
+            [entry],
+            tenant_scope="tenant-x",
+            backend_resolver=resolver,
+            cutover_record=tampered_record,
+            cutover_record_signature=record_sig,  # the ORIGINAL record's signature, wrong content
+            ledger_binding_id="sidecar-1",
+        )
+
+
+def test_ambiguous_cutover_disposition_rejected() -> None:
+    """When a record legitimately carries a quarantined row and a
+    non-quarantined row sharing the same DESTINATION identity
+    `(tenant_scope, entry_hash)` — permitted by the record's own
+    source-scoped uniqueness rule — this entry-only lookup has no
+    `source_tag` to disambiguate. The verifier must REJECT rather than
+    silently pick one: because the canonical message SORTS rows before
+    signing, deserialized row order is unauthenticated, so silently
+    trusting "the first match" would let an attacker flip which disposition
+    applies without invalidating the record's signature."""
+    backend = _Ed25519Backend()
+    entry = _signed_entry("ambiguous-ref", backend=backend, tenant_id=None)
+    record, record_sig = _signed_record(
+        AuditCutoverRecordRow(
+            source_tag="_single",
+            tenant_scope="tenant-x",
+            entry_hash=entry.entry_hash,
+            verification_disposition=VerificationDisposition.QUARANTINED,
+        ),
+        AuditCutoverRecordRow(
+            source_tag="tenant-x",
+            tenant_scope="tenant-x",
+            entry_hash=entry.entry_hash,
+            verification_disposition=VerificationDisposition.FOUR_TUPLE_REAL,
+        ),
+        backend=backend,
+    )
+
+    def resolver(algo: SignatureAlgorithm, key_id: str) -> _Ed25519Backend:
+        del algo, key_id
+        return backend
+
+    with pytest.raises(CutoverRecordValidationError, match="ambiguous"):
+        verify_per_family_chains(
+            [entry],
+            tenant_scope="tenant-x",
+            backend_resolver=resolver,
+            cutover_record=record,
+            cutover_record_signature=record_sig,
+            ledger_binding_id="sidecar-1",
+        )
+
+
 def test_verify_path_not_breaker_instrumented() -> None:
     """Row 9 (dyad-3 pin): the OD verifier itself adds NO breaker/retry
     instrumentation around `backend.verify` — exactly one call per
@@ -336,21 +481,26 @@ def test_legacy_baseline_identities_reported_never_omitted() -> None:
         del algo, key_id
         return backend
 
-    matching_record = _record(
+    matching_record, matching_sig = _signed_record(
         AuditCutoverRecordRow(
             source_tag="_single",
             tenant_scope="tenant-x",
             entry_hash="c" * 64,
             verification_disposition=VerificationDisposition.PLACEHOLDER_EXEMPT,
-        )
+        ),
+        backend=backend,
     )
     report = verify_per_family_chains(
         [],
         tenant_scope="tenant-x",
         backend_resolver=resolver,
         cutover_record=matching_record,
+        cutover_record_signature=matching_sig,
         ledger_binding_id="sidecar-1",
-        observed_baseline_identities=[("tenant-x", "c" * 64)],
+        # SOURCE identity — the shape the sidecar reader observes
+        # ("_single", the record row's own source_tag), not the record's
+        # DESTINATION tenant_scope.
+        observed_baseline_identities=[("_single", "c" * 64)],
     )
     assert report.baseline_divergences == ()
 
@@ -366,21 +516,24 @@ def test_declared_vs_observed_baseline_divergence_reported_both_ways() -> None:
         del algo, key_id
         return backend
 
-    record = _record(
+    record, record_sig = _signed_record(
         AuditCutoverRecordRow(
             source_tag="_single",
             tenant_scope="tenant-x",
             entry_hash="d" * 64,  # recorded but NOT observed below
             verification_disposition=VerificationDisposition.PLACEHOLDER_EXEMPT,
-        )
+        ),
+        backend=backend,
     )
     report = verify_per_family_chains(
         [],
         tenant_scope="tenant-x",
         backend_resolver=resolver,
         cutover_record=record,
+        cutover_record_signature=record_sig,
         ledger_binding_id="sidecar-1",
-        observed_baseline_identities=[("tenant-x", "e" * 64)],  # observed but NOT recorded
+        # SOURCE-identity-shaped, observed but NOT recorded.
+        observed_baseline_identities=[("_single", "e" * 64)],
     )
     assert len(report.baseline_divergences) == 2
     joined = " ".join(report.baseline_divergences)
@@ -397,13 +550,14 @@ def test_record_ledger_binding_mismatch_rejected() -> None:
     # genuinely verifies once the binding check passes — isolating the
     # assertion to the binding guard specifically, not era selection.
     entry = _signed_entry("binding-ref", backend=backend, tenant_id=None)
-    record = _record(
+    record, record_sig = _signed_record(
         AuditCutoverRecordRow(
             source_tag="_single",
             tenant_scope="tenant-x",
             entry_hash=entry.entry_hash,
             verification_disposition=VerificationDisposition.FOUR_TUPLE_REAL,
         ),
+        backend=backend,
         ledger_binding_id="sidecar-A",
     )
 
@@ -411,6 +565,8 @@ def test_record_ledger_binding_mismatch_rejected() -> None:
         del algo, key_id
         return backend
 
+    # No cutover_record_signature needed here — the binding-mismatch guard
+    # (checked BEFORE record authentication) fires first regardless.
     with pytest.raises(CutoverRecordValidationError, match="ledger_binding_id"):
         verify_per_family_chains(
             [entry],
@@ -420,14 +576,16 @@ def test_record_ledger_binding_mismatch_rejected() -> None:
             ledger_binding_id="sidecar-B",
         )
 
-    # Same record + matching binding proceeds cleanly (the entry genuinely
-    # verifies as FOUR_TUPLE_REAL) — proving the guard fired specifically on
-    # the binding mismatch above, not on some other latent defect.
+    # Same record + matching binding + valid signature proceeds cleanly
+    # (the entry genuinely verifies as FOUR_TUPLE_REAL) — proving the guard
+    # fired specifically on the binding mismatch above, not on some other
+    # latent defect.
     report = verify_per_family_chains(
         [entry],
         tenant_scope="tenant-x",
         backend_resolver=resolver,
         cutover_record=record,
+        cutover_record_signature=record_sig,
         ledger_binding_id="sidecar-A",
     )
     assert report.signature_dispositions == {"verified": 1}

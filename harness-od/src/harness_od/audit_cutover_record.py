@@ -132,6 +132,12 @@ class AuditCutoverRecord(BaseModel):
 
     @model_validator(mode="after")
     def _validate_rows(self) -> AuditCutoverRecord:
+        if self.authored_at.tzinfo is None:
+            raise CutoverRecordValidationError(
+                "cutover record authored_at must be a timezone-AWARE datetime "
+                "— a naive value would encode host-timezone-dependent bytes "
+                "into the signed message (OD spec v1.34 §21.2.2 row 4)"
+            )
         seen_source_identity: set[tuple[str, str]] = set()
         seen_destination: set[tuple[str, str]] = set()
         for row in self.rows:
@@ -192,6 +198,19 @@ def canonical_cutover_record_message(record: AuditCutoverRecord) -> bytes:
     Reordering the ROWS yields the SAME message (sorted canonical form) —
     but changing ANY field of ANY row, `source_tag` included, or any
     metadata field, changes the message and therefore breaks the signature.
+
+    `authored_at` is formatted at MICROSECOND precision (never truncated) —
+    two records `authored_at` a few hundred milliseconds apart must not
+    collapse to byte-identical messages (out-of-family Codex finding on
+    this arc's own PR: second-precision formatting made sub-second-apart
+    `authored_at` values indistinguishable). `AuditCutoverRecord`'s own
+    validator REQUIRES a timezone-aware `authored_at`, so `.astimezone(UTC)`
+    here is a genuine zone conversion, never a host-timezone-dependent
+    interpretation of a naive value. Each field is prefixed by its UTF-8
+    BYTE length, not its Python character count (out-of-family Codex
+    finding: a non-ASCII field's character count understates its encoded
+    byte length, breaking cross-implementation parsing) — computed by
+    encoding first, then prefixing the encoded length.
     """
     sorted_rows = sorted(
         record.rows, key=lambda row: (row.source_tag.encode(), row.entry_hash.encode())
@@ -203,13 +222,14 @@ def canonical_cutover_record_message(record: AuditCutoverRecord) -> bytes:
         )
     parts.extend(
         (
-            record.authored_at.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            record.authored_at.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z",
             record.algorithm.value,
             record.key_id,
             record.ledger_binding_id,
         )
     )
-    return b"|".join(f"{len(part)}:{part}".encode() for part in parts)
+    encoded_parts = (part.encode("utf-8") for part in parts)
+    return b"|".join(f"{len(encoded)}:".encode() + encoded for encoded in encoded_parts)
 
 
 def sign_cutover_record(record: AuditCutoverRecord, *, backend: SigningBackend) -> bytes:
