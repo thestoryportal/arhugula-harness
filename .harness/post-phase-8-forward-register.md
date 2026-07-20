@@ -458,7 +458,13 @@ non-resumable pause variant) is a design decision over C-CP-25 §25.10+/§25.15 
 register discipline (B-64/B-60..62 precedents); blast radius today is bounded to flag-ON fan-out
 topologies. Close-out: spec-leg the disposition, wire the name-match fence ahead of the
 branch-failure → PAUSED/PARTIAL conversions, witness a flag-ON fan-out run asserting no resumable
-snapshot + result_ref surfaced + no re-dispatch on resume.
+snapshot + result_ref surfaced + no re-dispatch on resume. Second facet (codex round-3 P1, same
+design surface): payload RECOVERABILITY beyond the in-memory carrier — after the driver's
+string conversion the caller holds an opaque `result_ref` with no persisted lookup (the report
+log is digest-only per the round-2 redaction fix); the ratified acc-1b letter requires only
+report + caller-carried reference (delivered), so a protected result store keyed by
+`result_ref` (or carrying the payload through the CP/runtime result model) resolves in the
+same spec leg.
 
 ### B-48 · Sync sub-agent dispatch executes on the event loop *(surfaced at B-47 PR B2a, out-of-family Codex round-2, 2026-07-17)*
 - **CLOSED 2026-07-19 (PR #1060)** — spec+plan deltas APPLIED (Runtime v1.102 §14.8.10 + CP v1.102 §25.11 + IS v1.11 §7.6 + plans v2.50/v2.39/v2.7 + Core v1.3 (U-CORE-03) + clearance markers; C1⊥C9 dyad 16/16 CONFIRM at `.harness/council-dyad-b48-apply-2026-07-18.md`); executor impl arc (U-CORE-03 + U-RT-140..144 + U-CP-101 + the B-39 interim constraint) LANDED — 10 successive rounds of decorrelated pre-merge review (merge-gate 3-lens + out-of-family Codex, each re-run to convergence), 35 findings fixed with PD-8 mutation-probed witnesses. Round 10 (the operator-approved final gate) converged clean on 9's fixes; codex round-10 surfaced 3 further findings against pre-existing cancellation-fence coverage from rounds 4-8 (not a round-9/10 regression), escalated to the operator per the pre-committed terminal rule, and registered separately as B-60/B-61/B-62 rather than blind-fixed (operator selected "register + merge now").

@@ -837,3 +837,43 @@ async def test_facade_consumes_carrier_into_audit_failure_report_and_reraises(
     assert expected_digest in report, "the report must carry the payload's repr digest"
     # The re-raised carrier still holds the payload for any richer consumer.
     assert cast("dict[str, Any]", carrier.result)["id"] == "msg_facade_preserved"
+
+
+# ---------------------------------------------------------------------------
+# Codex round-3 P2 — the typed family wins over the legacy ComposeError wrap
+# under fail-closed, on the raise_on_failure=True arms too.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_hitl_flag_on_raises_typed_family_not_compose_wrap_on_raise_on_failure_true() -> None:
+    """OD v1.34 §21.2.3 row 5 (single typed boundary): under fail-closed ON,
+    the HITL compose-audit failure surfaces AS the typed family even on the
+    raise_on_failure=True arm — the legacy `HITLGateAuditComposeError` wrap
+    is the flag-OFF surface only. A family-discriminating consumer must
+    never see the wrap under ON.
+
+    Mutation probe: re-ordering the wrap ahead of the flag check makes the
+    ON leg raise HITLGateAuditComposeError → the family assertion FAILS."""
+    from harness_runtime.lifecycle.hitl_gate_composer import HITLGateAuditComposeError
+
+    def _invoke(composer: Any) -> Any:
+        return composer._compose_and_persist_audit(
+            parent_action_id=cast(Any, "workflow:test-wf-136:step:0"),
+            placement=HITLPlacement(position=HITLPlacementKind.PRE_ACTION),
+            cell=cast(Any, None),
+            gate_result=None,
+            step_context=_step_context(),
+            raise_on_failure=True,
+            auto_approved=True,
+        )
+
+    on_composer = _hitl_composer(flag=True, ledger=_MockLedgerWriter(raise_family=True))
+    with pytest.raises(AUDIT_SIGNING_HARD_FAILURES) as excinfo:
+        _invoke(on_composer)
+    assert not isinstance(excinfo.value, HITLGateAuditComposeError)
+
+    # Flag-OFF control — the legacy wrap byte-preserved.
+    off_composer = _hitl_composer(flag=False, ledger=_MockLedgerWriter(raise_family=True))
+    with pytest.raises(HITLGateAuditComposeError):
+        _invoke(off_composer)

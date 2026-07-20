@@ -1369,14 +1369,18 @@ class RuntimeHITLGateComposer:
                 "OMITTED for HITL gate (offload boundary)",
                 exc_info=True,
             )
+            # U-RT-136 (OD v1.34 §21.2.3 rows 1/5): under fail-closed the
+            # typed family RAISES — checked BEFORE the raise_on_failure wrap
+            # (codex round-3 P2: wrapping first would surface
+            # HITLGateAuditComposeError instead of the single typed boundary,
+            # bypassing every family-discriminating consumer). The legacy
+            # wrap is the flag-OFF surface, preserved verbatim.
+            if self.audit_signing_fail_closed:
+                raise
             if kwargs.get("raise_on_failure"):
                 raise HITLGateAuditComposeError(
                     f"HITL gate audit composition refused at the offload boundary: {exc}"
                 ) from exc
-            # U-RT-136 (OD v1.34 §21.2.3 rows 1/5): under fail-closed the
-            # typed family RAISES even on the raise_on_failure=False path.
-            if self.audit_signing_fail_closed:
-                raise
             return (None, None)
 
     def _compose_and_persist_audit(
@@ -1590,16 +1594,18 @@ class RuntimeHITLGateComposer:
                 "audit signing failed — signed audit record OMITTED for HITL gate",
                 exc_info=True,
             )
+            # U-RT-136 (OD v1.34 §21.2.3 rows 1/5): under fail-closed the
+            # typed family RAISES — on BOTH raise_on_failure arms, checked
+            # BEFORE the wrap (codex round-3 P2: wrapping first would
+            # surface HITLGateAuditComposeError instead of the single typed
+            # boundary). Under OFF, both arms are byte-preserved: the wrap
+            # for True, the REJECT-path audit-suppression proceed for False.
+            if self.audit_signing_fail_closed:
+                raise
             if raise_on_failure:
                 raise HITLGateAuditComposeError(
                     f"HITL gate audit composition failed for action_id={hitl_action_id!r}: {exc}"
                 ) from exc
-            # U-RT-136 (OD v1.34 §21.2.3 rows 1/5): under fail-closed the
-            # typed family RAISES even on the raise_on_failure=False path
-            # (the REJECT-path audit-suppression proceed is the fail-open
-            # bypass the flag closes).
-            if self.audit_signing_fail_closed:
-                raise
             return cp_entry, None
         except Exception as exc:
             if raise_on_failure:

@@ -1446,7 +1446,14 @@ items:
     branch-failure -> PAUSED/PARTIAL conversions in `workflow_driver.py` so the condition stays
     terminal and result-referenced. Witness: a fan-out run under flag-ON whose branch raises the
     carrier asserts (a) no resumable PAUSED snapshot is minted for that branch, (b) the surfaced
-    failure carries the result_ref, (c) resume never re-dispatches the completed step.'
+    failure carries the result_ref, (c) resume never re-dispatches the completed step. SECOND facet
+    (codex round-3 [P1], same design surface): the payload is only reachable on the IN-MEMORY
+    carrier -- once the driver stringifies to `RunResult.fail_class` the caller holds an opaque
+    `result_ref` with no persisted lookup (the report log is digest-only by the round-2 redaction
+    fix). The ratified acc-1b letter requires only report + caller-carried reference (delivered);
+    payload RECOVERABILITY (a protected store keyed by result_ref, or carrying the payload
+    through the CP/runtime result model) is the same unspecified beyond-the-boundary surface --
+    resolve it in the same spec leg.'
   council: 'maybe -- C1 (orchestration/cascade semantics) vs C7/C8 (audit/compliance terminality)
     dyad if the spec leg opens; the mechanical fence wiring after ratification is single-axis'
   heading: '### B-65 · Post-effect signing carrier disposition at CP topology cascade handlers

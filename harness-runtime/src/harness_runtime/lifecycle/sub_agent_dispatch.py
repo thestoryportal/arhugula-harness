@@ -826,18 +826,23 @@ class RuntimeSubAgentDispatcher:
                 "audit signing failed — signed audit record OMITTED for sub-agent dispatch",
                 exc_info=True,
             )
+            # U-RT-136 (OD v1.34 §21.2.3 rows 1/5): under fail-closed the
+            # typed family RAISES — on BOTH raise_on_failure arms, checked
+            # BEFORE the wrap (codex round-3 P2: wrapping first would
+            # surface SubAgentDispatchAuditComposeError instead of the
+            # single typed boundary; the SUCCESS/DRAINED call site catches
+            # the family and re-raises the result-preserving carrier). On
+            # the raise_on_failure=False paths (child FAILED /
+            # exception-bubble / PAUSED) no completed child result exists to
+            # preserve; a PAUSED child's snapshot remains durable in the
+            # child's own ledger. Under OFF, both arms byte-preserved.
+            if self.audit_signing_fail_closed:
+                raise
             if raise_on_failure:
                 raise SubAgentDispatchAuditComposeError(
                     f"sub-agent dispatch audit composition failed for "
                     f"parent_action_id={parent_action_id!r}: {exc}"
                 ) from exc
-            # U-RT-136 (OD v1.34 §21.2.3 rows 1/5): under fail-closed the
-            # typed family RAISES even on the raise_on_failure=False paths
-            # (child FAILED / exception-bubble / PAUSED — no completed child
-            # result exists to preserve on these paths; a PAUSED child's
-            # snapshot remains durable in the child's own ledger).
-            if self.audit_signing_fail_closed:
-                raise
             return cp_entry, None
         except Exception as exc:
             if raise_on_failure:
@@ -1207,23 +1212,24 @@ class RuntimeSubAgentDispatcher:
                     step_context=step_context,
                     raise_on_failure=True,
                 )
-            except SubAgentDispatchAuditComposeError as exc:
-                span.set_attribute("subagent.result_status", "failed")
+            except AUDIT_SIGNING_HARD_FAILURES as exc:
                 # U-RT-136 post-effect fence site (sub-agent-result class):
-                # the child workflow COMPLETED (SUCCESS/DRAINED) — under
-                # fail-closed a signing-caused compose failure re-raises as
-                # the result-preserving carrier so the completed child output
-                # is not discarded (CP v1.101 §2). Non-signing compose
-                # failures keep the existing ComposeError surface verbatim.
-                if self.audit_signing_fail_closed and isinstance(
-                    exc.__cause__, AUDIT_SIGNING_HARD_FAILURES
-                ):
-                    raise PostEffectAuditSigningError(
-                        f"audit signing failed after a completed child "
-                        f"sub-workflow ({payload.child_workflow_id!r}): {exc}",
-                        effect_class=PostEffectClass.SUB_AGENT_RESULT,
-                        result=step_output,
-                    ) from exc
+                # the child workflow COMPLETED (SUCCESS/DRAINED) and the
+                # helper re-raised the typed family (fail-closed ON — the
+                # only path the raw family escapes the helper's catch) —
+                # re-raise as the result-preserving carrier so the completed
+                # child output is not discarded (CP v1.101 §2).
+                span.set_attribute("subagent.result_status", "failed")
+                raise PostEffectAuditSigningError(
+                    f"audit signing failed after a completed child "
+                    f"sub-workflow ({payload.child_workflow_id!r}): {exc}",
+                    effect_class=PostEffectClass.SUB_AGENT_RESULT,
+                    result=step_output,
+                ) from exc
+            except SubAgentDispatchAuditComposeError:
+                # Non-signing compose failures (and every flag-OFF signing
+                # failure) keep the existing ComposeError surface verbatim.
+                span.set_attribute("subagent.result_status", "failed")
                 raise
 
             # --- Step 9: return step output --------------------------------
