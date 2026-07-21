@@ -44,6 +44,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
+from harness_core import PersonaTier
 from harness_is.cross_process_ledger_lock import cross_process_replace_lock
 from harness_od.audit_cutover_record import (
     AuditCutoverRecord,
@@ -298,7 +299,10 @@ def _validate_signing_config(config: RuntimeConfig, *, signing_backend: SigningB
         validate_audit_signing_for_span_stage(
             config,
             signing_backend=signing_backend,
-            tokenizer_will_bind=True,
+            # Derived from the persona EXACTLY as bootstrap does (stage_4_od)
+            # — hardcoding True rejected valid lower-tier configs whose
+            # redaction tokenizer never binds.
+            tokenizer_will_bind=(config.persona_tier == PersonaTier.MULTI_TENANT_COMPLIANCE),
             additional_key_ids=("harness-runtime-dev", "harness-cost-attribution-v1"),
         )
     except (
@@ -591,6 +595,18 @@ def author_cutover_record(
     composed: list[AuditCutoverRecordRow] = []
     unattested: list[str] = []
 
+    def _lookup_attestation(source_tag: str, entry_hash: str) -> TenantAttestation | None:
+        """Attestations key by FULL source identity `"<source_tag>:<entry_hash>"`
+        first, falling back to the bare hash (canonical for `"_single"`
+        identities). Two already-tagged rows legitimately sharing a legacy
+        `entry_hash` across tenants can then be attested independently
+        (post-fix codex: hash-only keying made the second row always read
+        the first row's tenant and refuse as relabeled)."""
+        keyed = attestation.get(f"{source_tag}:{entry_hash}")
+        if keyed is not None:
+            return keyed
+        return attestation.get(entry_hash)
+
     if tofu_quarantine_tenant is not None and not tofu_quarantine_tenant.strip():
         raise RecordMigrationError(
             "--tofu-quarantine tenant must be non-blank — an empty scope "
@@ -647,7 +663,7 @@ def author_cutover_record(
             # relabel — refuse); absent attestation, the declared-TOFU
             # decision QUARANTINES the row under its observed tag; neither
             # → unattested refusal.
-            attested = attestation.get(entry.entry_hash)
+            attested = _lookup_attestation(tag, entry.entry_hash)
             if attested is not None:
                 if attested.tenant != tag:
                     raise RecordMigrationError(
@@ -672,12 +688,30 @@ def author_cutover_record(
             )
     for tag, entry_hash in rows.baseline_pairs():
         if tag != _SINGLE_TAG:
+            # A tagged baseline pair's tag is MUTABLE sidecar data (post-fix
+            # codex P1): the association requires the same external binding
+            # discipline as already-tagged full rows — a matching
+            # attestation, or the declared-TOFU quarantine, or refusal.
+            attested = _lookup_attestation(tag, entry_hash)
+            if attested is not None:
+                if attested.tenant != tag:
+                    raise RecordMigrationError(
+                        f"tagged baseline pair {entry_hash!r} carries observed "
+                        f"tag {tag!r} but the attestation binds "
+                        f"{attested.tenant!r} — a relabeled wrapper; refusing"
+                    )
+                disposition = VerificationDisposition.PLACEHOLDER_EXEMPT
+            elif tofu_quarantine_tenant is not None:
+                disposition = VerificationDisposition.QUARANTINED
+            else:
+                unattested.append(entry_hash)
+                continue
             composed.append(
                 AuditCutoverRecordRow(
                     source_tag=tag,
                     tenant_scope=tag,
                     entry_hash=entry_hash,
-                    verification_disposition=VerificationDisposition.PLACEHOLDER_EXEMPT,
+                    verification_disposition=disposition,
                 )
             )
             continue

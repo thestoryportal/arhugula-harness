@@ -1070,6 +1070,14 @@ def test_deleted_retagged_destination_still_fails_coverage(dep: _Deployment) -> 
     with pytest.raises(ValueError, match="truncated or lost"):
         fresh.read_full_entries_for_tenant(None)
 
+    # The APPEND-time join (`_assert_is_refs_covered_locked`, the fold-path
+    # `alias in digests` term) must fail the same truncation — round-2
+    # merge-gate lens: the read-path term alone left the append path free
+    # to extend a silently-truncated history.
+    appender = dep.writer(cutover_record=record)
+    with pytest.raises(ValueError, match="truncated or lost"):
+        appender.append(_TENANT, dep.signed_entry("ref-new"))
+
 
 def test_rewrapped_quarantined_row_never_alias_covered(dep: _Deployment) -> None:
     """The QUARANTINE exclusion in the alias derivation is load-bearing: an
@@ -1194,3 +1202,106 @@ def test_cli_author_then_retag_end_to_end(
         ]
     )
     assert exit_code == 2
+
+
+# ---------------------------------------------------------------------------
+# Post-gate-fix codex findings (this leg).
+# ---------------------------------------------------------------------------
+
+
+def test_tagged_baseline_pair_requires_external_binding(dep: _Deployment) -> None:
+    """A tagged baseline pair's tag is mutable sidecar data — it needs the
+    same external binding as already-tagged full rows: matching attestation
+    → exempt; TOFU → quarantined under the observed tag; mismatch/absent →
+    refusal."""
+    entry = dep.signed_entry("ref-full", placeholder=True)
+    dep.writer().append(None, entry)
+    baseline_hash = "e" * 64
+    dep.append_baseline_line([("tenant-b", baseline_hash)])
+
+    base_attestation = {entry.entry_hash: TenantAttestation(tenant=_TENANT)}
+    with pytest.raises(RecordMigrationError, match="no attestation"):
+        author_cutover_record(
+            dep.config(),
+            sidecar_path=dep.sidecar_path,
+            signing_backend=dep.record_backend,
+            attestation=dict(base_attestation),
+        )
+    with pytest.raises(RecordMigrationError, match="relabeled wrapper"):
+        author_cutover_record(
+            dep.config(),
+            sidecar_path=dep.sidecar_path,
+            signing_backend=dep.record_backend,
+            attestation={
+                **base_attestation,
+                baseline_hash: TenantAttestation(tenant="tenant-c"),
+            },
+        )
+    record = author_cutover_record(
+        dep.config(),
+        sidecar_path=dep.sidecar_path,
+        signing_backend=dep.record_backend,
+        attestation={
+            **base_attestation,
+            baseline_hash: TenantAttestation(tenant="tenant-b"),
+        },
+    )
+    by_hash = {row.entry_hash: row for row in record.rows}
+    assert by_hash[baseline_hash].verification_disposition is (
+        VerificationDisposition.PLACEHOLDER_EXEMPT
+    )
+    assert by_hash[baseline_hash].source_tag == "tenant-b"
+
+
+def test_source_keyed_attestation_disambiguates_shared_hash(dep: _Deployment) -> None:
+    """Two already-tagged rows legitimately sharing a legacy entry_hash
+    across tenants attest independently through the source-keyed form
+    `"<source_tag>:<entry_hash>"` — hash-only keying refused the second as
+    relabeled."""
+    entry = dep.signed_entry("ref-shared")
+    writer = dep.writer()
+    writer.append("tenant-b", entry)
+    writer.append("tenant-c", entry)  # same hash, different tenant scope
+
+    record = author_cutover_record(
+        dep.config(),
+        sidecar_path=dep.sidecar_path,
+        signing_backend=dep.record_backend,
+        attestation={
+            f"tenant-b:{entry.entry_hash}": TenantAttestation(tenant="tenant-b"),
+            f"tenant-c:{entry.entry_hash}": TenantAttestation(tenant="tenant-c"),
+        },
+    )
+    scopes = {row.source_tag for row in record.rows}
+    assert scopes == {"tenant-b", "tenant-c"}
+
+
+def test_lower_tier_config_without_redaction_key_accepted(dep: _Deployment) -> None:
+    """The tokenizer predicate mirrors bootstrap: at a sub-MTC tier the
+    redaction-token key is NOT required — record modes accept the same
+    config normal bootstrap accepts."""
+    entry = dep.signed_entry("ref-1", placeholder=True)
+    dep.writer().append(None, entry)
+    solo_map = {
+        _ROW_KEY: _ARN_ROW,
+        _RECORD_KEY: _ARN_RECORD,
+        "harness-runtime-dev": _ARN_ROW + "-dev",
+        "harness-cost-attribution-v1": _ARN_ROW + "-cost",
+        # redaction-token key ABSENT — valid sub-MTC
+    }
+    config = dep.config().model_copy(
+        update={
+            "persona_tier": PersonaTier.SOLO_DEVELOPER,
+            "tenant_id": None,
+            "audit_signing": AuditSigningConfig(
+                backend=AuditSigningBackendKind.AWS_KMS, key_arns=solo_map
+            ),
+        }
+    )
+    record = author_cutover_record(
+        config,
+        sidecar_path=dep.sidecar_path,
+        signing_backend=dep.record_backend,
+        attestation={entry.entry_hash: TenantAttestation(tenant=_TENANT)},
+    )
+    assert record.rows
