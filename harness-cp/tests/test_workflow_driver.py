@@ -2713,3 +2713,56 @@ def test_non_marker_exception_falls_back_to_type_name_at_dispatch() -> None:
     assert result.status is RunStatus.FAILED
     assert result.fail_class is not None
     assert "step-failure: ValueError: boom" in result.fail_class
+
+
+# ---------------------------------------------------------------------------
+# B-62 — per-effect fence split at the step-write phase (durable journal vs
+# ledger append).
+# ---------------------------------------------------------------------------
+
+
+def test_b62_trip_during_durable_output_write_stops_step_ledger_append() -> None:
+    """B-62: the durable-output journal write and the step ledger append are
+    INDEPENDENT effects, each entering its OWN `effect_entry()`. A trip
+    landing WHILE the journal write executes previously rode the single
+    pre-trip guard into the ledger append; now the append's fresh consult
+    refuses before it begins, and the signal (a BaseException) propagates
+    past the `except Exception` ledger-append arm to the job boundary."""
+    from harness_cp.sub_agent_dispatch_cancellation import (
+        DISPATCH_CANCEL_TOKEN_VAR,
+        DispatchCancelToken,
+        DispatchFenceTrippedSignal,
+        FenceAckOutcome,
+    )
+
+    token = DispatchCancelToken()
+
+    class _TrippingStore(_FakeOutputStore):
+        def record(self, run_key: str, step_index: int, step_id: str, output: Any) -> None:
+            super().record(run_key, step_index, step_id, output)
+            token.trip()  # the trip lands while the journal write executes
+
+    store = _TrippingStore({}, journal_present=False)
+    ctx = _esr_resume_ctx(0)
+    ctx.engine_output_store = store
+    reset = DISPATCH_CANCEL_TOKEN_VAR.set(token)
+    try:
+        with pytest.raises(DispatchFenceTrippedSignal):
+            execute_workflow(
+                manifest_entry=_manifest(engine_class=EngineClass.EVENT_SOURCED_REPLAY),
+                steps=[_step(0)],
+                run_id="run-1",
+                ctx=cast(DriverContext, ctx),
+                default_model_binding=_DEFAULT_BINDING,
+                step_dispatchers=_registry(cast(StepDispatcher, _EchoDispatcher())),
+            )
+    finally:
+        DISPATCH_CANCEL_TOKEN_VAR.reset(reset)
+
+    # The journal write executed (the trip raced it); the STEP ledger append
+    # never began — no appended payload carries the step's action shape.
+    assert 0 in store._outputs  # pyright: ignore[reportPrivateUsage]
+    assert ctx.ledger_writer.appends == []
+    # The raced journal write reads AMBIGUOUS at the ack, never a false clean.
+    token.ack()
+    assert token.wait_ack(grace_seconds=0.1) is FenceAckOutcome.ACKED_EFFECT_AMBIGUOUS

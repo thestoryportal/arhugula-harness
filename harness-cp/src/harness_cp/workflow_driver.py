@@ -1916,12 +1916,34 @@ def drain_branch_buffers(
     """
     from harness_is.state_ledger_write import WRITER_OWNED_TIMESTAMP
 
+    # B-61: each physical append is fenced as its OWN effect entry — the
+    # per-effect `effect_entry()` contract ("tripped → no new effect
+    # begins"), not one coarse guard over the whole drain. A cancel token
+    # tripping mid-drain (a timed-out offloaded child inside a nested
+    # fan-out whose `_finish()` still reaches this drain) stops the
+    # REMAINING appends before they begin and counts the in-flight one for
+    # a truthful `ACKED_EFFECT_AMBIGUOUS` — previously these appends ran
+    # unfenced, so `wait_ack()` could report `ACKED_CLEAN` while F2 entries
+    # began writing after the trip. A partial drain is resume-safe:
+    # `append_ledger_entry` DEDUPS by idempotency_key, so a re-drain
+    # completes the remainder without double-append. Non-offloaded runs
+    # (no ambient token) get `nullcontext()` — byte-unchanged. The raised
+    # `DispatchFenceTrippedSignal` is a BaseException by design: the
+    # terminal-path `except Exception` arms around the drain call sites
+    # cannot absorb it, so a trip propagates to the job boundary per the
+    # at-most-once discipline (the child's RunResult is already abandoned
+    # by the tripping parent).
+    token = _DISPATCH_CANCEL_TOKEN_VAR.get()
     drained = 0
     for buffer in sorted(branch_buffers, key=lambda b: b.branch_index):
         for payload, write_key in buffer.buffered_entries:
-            real_writer.append(
-                payload.model_copy(update={"timestamp": WRITER_OWNED_TIMESTAMP}), write_key
+            guard: contextlib.AbstractContextManager[None] = (
+                token.effect_entry() if token is not None else contextlib.nullcontext()
             )
+            with guard:
+                real_writer.append(
+                    payload.model_copy(update={"timestamp": WRITER_OWNED_TIMESTAMP}), write_key
+                )
             drained += 1
     return drained
 
@@ -4993,46 +5015,55 @@ def _execute_workflow_body(
         # `wait_ack()` could report `ACKED_CLEAN` despite a write that raced
         # the trip. `effect_entry()` makes the consult-and-mark atomic: it
         # raises the same signal the check did if already tripped, and while
-        # held both writes below count as in-flight, so a trip racing them
-        # correctly surfaces as `ACKED_EFFECT_AMBIGUOUS` instead of a false
-        # clean. Non-offloaded runs (no ambient token) get `nullcontext()` —
-        # byte-unchanged.
+        # held the write counts as in-flight, so a trip racing it correctly
+        # surfaces as `ACKED_EFFECT_AMBIGUOUS` instead of a false clean.
+        # B-62 granularity split: the durable-output journal write and the
+        # ledger append are INDEPENDENT effects — each enters its OWN
+        # `effect_entry()` (per the contract, "tripped → no new effect
+        # begins" must be consulted per effect), so a trip landing while the
+        # journal write executes stops the ledger append from BEGINNING
+        # instead of riding a guard entered before the trip. Non-offloaded
+        # runs (no ambient token) get `nullcontext()` — byte-unchanged.
         _dispatch_cancel_token = _DISPATCH_CANCEL_TOKEN_VAR.get()
-        _durable_write_fence_guard: contextlib.AbstractContextManager[None] = (
-            _dispatch_cancel_token.effect_entry()
-            if _dispatch_cancel_token is not None
-            else contextlib.nullcontext()
-        )
 
-        with _durable_write_fence_guard:
-            # B-ENGINE-OUTPUT-REPLAY (runtime spec C-RT-32) — durably persist this
-            # step's output to the output-carrying event-history store BEFORE the
-            # ledger-append below (RESERVE-before-COMMIT: the store always holds ≥ the
-            # ledger's materialized prefix). Opt-in; no-op when unbound. The store-write
-            # precedes the ledger materialization `resume_at` counts, so a durable-class
-            # resume never finds a materialized step with a missing stored output. GATED on
-            # the durable-output-store engine classes via the SHARED
-            # `_FINAL_STATE_RECONSTRUCT_ENGINE_CLASSES` constant (EVENT_SOURCED_REPLAY +
-            # WAL_SEGMENT — the C-CP-08 §8.1 cached-output-replay refinement — PLUS
-            # SAVE_POINT_CHECKPOINT at v1.79 and RECONCILER_LOOP at v1.80 for the final_state
-            # reconstruction) so a non-durable run with the flag on does not write a
-            # never-consumed journal (advisor pre-merge catch). The record half is SAFE only
-            # because a consumer fires for the SAME classes: B-ENGINE-OUTPUT-REPLAY-WAL-SEGMENT
-            # added WAL to BOTH this producer gate AND the resume-side rehydrate;
-            # B-CHILD-...-SAVE-POINT added SAVE_POINT and B-CHILD-...-RECONCILER added RECONCILER
-            # to BOTH this producer gate AND the final_state seed (their only consumer — neither
-            # has a cached-output-replay channel rehydrate). Using ONE constant at both sites
-            # makes "never record-only" structural — never a never-consumed journal.
-            if manifest_entry.engine_class in _FINAL_STATE_RECONSTRUCT_ENGINE_CLASSES:
+        # B-ENGINE-OUTPUT-REPLAY (runtime spec C-RT-32) — durably persist this
+        # step's output to the output-carrying event-history store BEFORE the
+        # ledger-append below (RESERVE-before-COMMIT: the store always holds ≥ the
+        # ledger's materialized prefix). Opt-in; no-op when unbound. The store-write
+        # precedes the ledger materialization `resume_at` counts, so a durable-class
+        # resume never finds a materialized step with a missing stored output. GATED on
+        # the durable-output-store engine classes via the SHARED
+        # `_FINAL_STATE_RECONSTRUCT_ENGINE_CLASSES` constant (EVENT_SOURCED_REPLAY +
+        # WAL_SEGMENT — the C-CP-08 §8.1 cached-output-replay refinement — PLUS
+        # SAVE_POINT_CHECKPOINT at v1.79 and RECONCILER_LOOP at v1.80 for the final_state
+        # reconstruction) so a non-durable run with the flag on does not write a
+        # never-consumed journal (advisor pre-merge catch). The record half is SAFE only
+        # because a consumer fires for the SAME classes: B-ENGINE-OUTPUT-REPLAY-WAL-SEGMENT
+        # added WAL to BOTH this producer gate AND the resume-side rehydrate;
+        # B-CHILD-...-SAVE-POINT added SAVE_POINT and B-CHILD-...-RECONCILER added RECONCILER
+        # to BOTH this producer gate AND the final_state seed (their only consumer — neither
+        # has a cached-output-replay channel rehydrate). Using ONE constant at both sites
+        # makes "never record-only" structural — never a never-consumed journal.
+        if manifest_entry.engine_class in _FINAL_STATE_RECONSTRUCT_ENGINE_CLASSES:
+            with (
+                _dispatch_cancel_token.effect_entry()
+                if _dispatch_cancel_token is not None
+                else contextlib.nullcontext()
+            ):
                 _record_durable_step_output(
                     ctx, run_idempotency_key, step_index, str(step.step_id), step_output
                 )
 
-            # § 25.3.3.7 — State-ledger append via U-IS-11 composition.
-            # Reuse pre-dispatch step_idempotency_key composed at the
-            # StepExecutionContext site above (identical per-step value).
-            step_idempotency_key = step_idempotency_key_pre
-            try:
+        # § 25.3.3.7 — State-ledger append via U-IS-11 composition.
+        # Reuse pre-dispatch step_idempotency_key composed at the
+        # StepExecutionContext site above (identical per-step value).
+        step_idempotency_key = step_idempotency_key_pre
+        try:
+            with (
+                _dispatch_cancel_token.effect_entry()
+                if _dispatch_cancel_token is not None
+                else contextlib.nullcontext()
+            ):
                 _append_step_ledger_entry(
                     ctx=ctx,
                     workflow_id=manifest_entry.workflow_id,
@@ -5040,16 +5071,16 @@ def _execute_workflow_body(
                     step_idempotency_key=step_idempotency_key,
                     step_output=step_output,
                 )
-            except Exception as exc:
-                return RunResult(
-                    workflow_id=manifest_entry.workflow_id,
-                    run_id=run_id,
-                    status=RunStatus.FAILED,
-                    terminal_step_index=step_index,
-                    partial_state=dict(accumulated),
-                    final_state=None,
-                    fail_class=f"ledger-append-failed: {type(exc).__name__}: {exc}",
-                ), steps_executed
+        except Exception as exc:
+            return RunResult(
+                workflow_id=manifest_entry.workflow_id,
+                run_id=run_id,
+                status=RunStatus.FAILED,
+                terminal_step_index=step_index,
+                partial_state=dict(accumulated),
+                final_state=None,
+                fail_class=f"ledger-append-failed: {type(exc).__name__}: {exc}",
+            ), steps_executed
 
         # Accumulate step output under its step id for terminal state.
         accumulated[str(step.step_id)] = dict(step_output)
