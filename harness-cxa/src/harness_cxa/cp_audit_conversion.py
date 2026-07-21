@@ -184,6 +184,7 @@ def cp_audit_to_od_audit(
     algo: SignatureAlgorithm = SignatureAlgorithm.ED25519,
     entry_core: StateLedgerEntryRef | None = None,
     backend: SigningBackend | None = None,
+    tenant_id: str | None = None,
 ) -> AuditLedgerEntry:
     """Convert any CP-side audit carrier to a signed OD `AuditLedgerEntry`.
 
@@ -197,6 +198,16 @@ def cp_audit_to_od_audit(
     genuine cryptographic signature. This converter neither selects nor
     constructs a backend — that is the deployment-time composition root's job
     (`B-47` remainder).
+
+    `tenant_id` (U-CP-72 amendment per CP spec v1.101 §1 rows 1-2) is forwarded
+    RAW to `sign_audit_entry`'s same-named parameter — the same passthrough
+    shape as `backend`. The converter neither validates, normalizes, nor
+    defaults the value beyond passing `None` through: tenant-tag normalization
+    is OD-owned (OD spec v1.34 §21.2.1 row 2) and happens AT SIGNING, never
+    here. Byte-compat drop-when-`None` (§1 row 3): absent/`None` → the
+    four-tuple canonical signing message byte-for-byte (zero regression for
+    every existing caller); present → the five-segment message per OD v1.34
+    §21.2.1 rows 1-2.
 
     Dispatches on the carrier type:
 
@@ -316,7 +327,9 @@ def cp_audit_to_od_audit(
             f"CostRecordAuditPayload"
         )
 
-    signature_attrs = sign_audit_entry(payload, key_id=key_id, algo=algo, backend=backend)
+    signature_attrs = sign_audit_entry(
+        payload, key_id=key_id, algo=algo, backend=backend, tenant_id=tenant_id
+    )
     entry_hash = compute_entry_hash(payload)
 
     return AuditLedgerEntry(

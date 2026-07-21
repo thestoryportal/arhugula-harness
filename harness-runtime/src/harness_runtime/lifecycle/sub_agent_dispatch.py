@@ -806,12 +806,16 @@ class RuntimeSubAgentDispatcher:
             # revision with recursion-aware executor design and pause/resume
             # + fan-out re-validation, owned by B-48 at
             # .harness/forward-register.yaml.
+            # U-RT-137 (CP v1.101 §1 row 4) — the signing tenant is sourced
+            # from `StepExecutionContext.tenant_id` and passed RAW; tenant-tag
+            # normalization is OD-owned at signing (OD v1.34 §21.2.1 row 2).
             od_entry = cp_audit_to_od_audit(
                 cp_entry,
                 key_id=self.audit_signing_key_id,
                 algo=self.audit_signing_algorithm,
                 entry_core=entry_core,
                 backend=self.signing_backend,
+                tenant_id=step_context.tenant_id,
             )
 
             # 8d — persist OD audit entry through IS hash chain.

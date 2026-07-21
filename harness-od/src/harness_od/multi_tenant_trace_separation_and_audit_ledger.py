@@ -323,10 +323,12 @@ def sign_audit_entry(
 
     Produces an `AuditSignatureAttributes` (the 4-attribute `audit.signature.*`
     set) over `payload` with the operator-selected `algo`. Raises `ValueError`
-    at function precondition when `key_id` is missing (empty), or when
+    at function precondition when `key_id` is missing (empty) — §21.2
+    requires a key identifier for the signing operation. Raises
+    `AuditSigningFailedError` (the §21.2.3 row-5 typed family) when
     `tenant_id` is the empty string or the reserved `"_single"` sidecar
-    literal (`signing_token`'s refusal rules) — §21.2 requires a key
-    identifier for the signing operation; §21.2.1 row 2 forecloses a real
+    literal (`signing_token`'s refusal rules, routed through the typed
+    boundary at this signing entry point) — §21.2.1 row 2 forecloses a real
     tenant colliding with the drop-segment sentinel or the writer's join key.
 
     **Without `backend` (the default) — the placeholder path, PRESERVED
@@ -369,7 +371,20 @@ def sign_audit_entry(
             "sign_audit_entry precondition violated: key_id is required "
             "(C-OD-21 §21.2 — audit.signature.key_id)"
         )
-    tenant_tag = signing_token(tenant_id)
+    try:
+        tenant_tag = signing_token(tenant_id)
+    except ValueError as exc:
+        # OD spec v1.34 §21.2.3 row 5 (the single typed boundary) — at the
+        # SIGNING entry point the tenant refusal routes through the typed
+        # family, so fail-closed consumers (the ten Runtime catch sites, the
+        # post-effect fences) discriminate it like every other signing
+        # failure instead of a generic ValueError falling to their
+        # best-effort swallow arms (merge-gate concurrency lens, PR #1066 —
+        # defense-in-depth: RuntimeConfig already refuses reserved tenants
+        # at load, so this path is construction-time misuse, not live
+        # config). The bare normalizer functions keep their ValueError
+        # (they are the rule-set, not the signing boundary).
+        raise AuditSigningFailedError(str(exc)) from exc
     if backend is None:
         # The live signing backend (HSM / KMS / keystore) is wired at a
         # deployment-time composition root (§21.2.1); absent one, the library

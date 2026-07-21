@@ -826,9 +826,13 @@ def test_sign_audit_entry_rejects_empty_tenant_and_reserved_literal() -> None:
     """§21.2.1 row 2 — `sign_audit_entry` applies the shared normalizer to
     its `tenant_id` BEFORE composing the message; the empty string and the
     reserved `"_single"` literal are refused at the signing entry point
-    too, not only at the bare normalizer functions."""
+    too, not only at the bare normalizer functions. At the SIGNING boundary
+    the refusal is a member of the §21.2.3 row-5 typed family (so
+    fail-closed consumers discriminate it like every other signing failure
+    — U-RT-137 / merge-gate PR #1066); the bare normalizer functions keep
+    their `ValueError` (pinned by the sibling test above)."""
     for bad in ("", "_single"):
-        with pytest.raises(ValueError, match="tenant_id"):
+        with pytest.raises(AuditSigningFailedError, match="tenant_id"):
             sign_audit_entry(_payload("h0"), "key-1", SignatureAlgorithm.ED25519, tenant_id=bad)
 
 

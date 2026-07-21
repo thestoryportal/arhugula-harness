@@ -287,6 +287,10 @@ def attribute_llm_dispatch_cost(
         key_id=_DEFAULT_SIGNING_KEY_ID,
         entry_core=entry_core,
         backend=signing_backend,
+        # U-RT-137 (CP v1.101 §1 row 4) -- the signing tenant originates from
+        # StepExecutionContext.tenant_id at the dispatch wrapper and is passed
+        # RAW; normalization is OD-owned at signing (OD v1.34 §21.2.1 row 2).
+        tenant_id=tenant_id,
     )
     audit_writer.append(tenant_id, audit_entry)
 

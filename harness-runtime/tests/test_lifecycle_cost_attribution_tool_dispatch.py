@@ -27,6 +27,7 @@ from pathlib import Path
 import pytest
 from harness_is.state_ledger_entry_schema import Actor, ActorClass, Identifier
 from harness_is.state_ledger_write import read_ledger
+from harness_od.audit_signing_errors import AuditSigningFailedError
 from harness_od.rate_table_types import RateTable, ToolRate, WebhookRate
 from harness_runtime.lifecycle.cost_attribution import RuntimeCostAttributionChain
 from harness_runtime.lifecycle.cost_attribution_tool_dispatch import (
@@ -454,9 +455,13 @@ def test_explicit_tenant_literally_named_single_does_not_alias_no_tenant(
 ) -> None:
     """Regression guard (out-of-family Codex [P2], round 4) — a bare
     `tenant_id or "_single"` encoding would alias `tenant_id=None` with a
-    genuine `tenant_id="_single"` (`RuntimeConfig` does not forbid an
-    operator naming a tenant that). The length-prefixed encoding must keep
-    them distinct."""
+    non-None tenant. The length-prefixed encoding must keep them distinct.
+
+    U-RT-137 update: `"_single"` is now a REFUSED reserved value at signing
+    (OD v1.34 §21.2.1 row 2 — the shared rule-set forbids a real tenant
+    colliding with the writer's reserved sidecar join key), which is a
+    strictly STRONGER non-aliasing guarantee than distinct F2 identities.
+    The identity-distinctness half is preserved with a legal tenant value."""
     rate_table = _make_rate_table(
         {"echo": ToolRate(cost_kind="flat_per_invocation", rate=Decimal("0.005"))}
     )
@@ -476,13 +481,17 @@ def test_explicit_tenant_literally_named_single_does_not_alias_no_tenant(
         ledger_writer=ledger_writer,
     )
     attribute_tool_dispatch_cost(tenant_id=None, **common)
-    attribute_tool_dispatch_cost(tenant_id="_single", **common)
+    attribute_tool_dispatch_cost(tenant_id="tenant-not-single", **common)
 
     entries = read_ledger(ledger_writer.handle)
     cost_entries = [e for e in entries if str(e.action_id).startswith("cost:")]
     assert len(cost_entries) == 2, (
-        f"tenant_id=None and tenant_id='_single' must not alias to the same "
+        f"tenant_id=None and a non-None tenant must not alias to the same "
         f"F2 identity; got {len(cost_entries)} distinct entries"
     )
     entry_cores = {str(e.payload.entry_core) for _, e in audit_writer.appended}
     assert len(entry_cores) == 2
+
+    # The reserved sidecar literal is refused AT SIGNING (fail-loud, not alias).
+    with pytest.raises(AuditSigningFailedError, match="reserved sidecar"):
+        attribute_tool_dispatch_cost(tenant_id="_single", **common)
