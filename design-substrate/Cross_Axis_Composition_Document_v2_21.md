@@ -14,7 +14,7 @@ The RATIFIED B-51/B-52/B-54 arc (fork `.harness/class_1_fork_b51_b52_b54_od_sign
 
 **Frozen verbatim (NOT touched by v2.21):** §2.1 aggregate 4×4 matrix (107) + 37/48/22 sub-split; §2.2 axis-level dependency graph; §2.3.1–§2.3.8 per-bucket rows (including the 2 R-PM-1 edges); §2.4; §3.
 
-### §0.3 The registered edge (runtime-mediated, R-planned)
+### §0.3 The registered edge (runtime-mediated, R-live)
 
 Direction respects the consumer→producer convention; the IMPORT-level axis acyclicity (OD→CP canonical per §2.3.3; `harness-cp` MUST NOT import `harness-od`) is PRESERVED — the edge is mediated entirely at the runtime composition root:
 
@@ -24,16 +24,16 @@ Direction respects the consumer→producer convention; the IMPORT-level axis acy
 
 ### §0.4 Why R-class, and why "R-planned" not "R-live"
 
-Same classification logic as v2.20 §0.4: no new genuine-typed (G) inter-axis import seam is created — the Protocol is CP-owned, the adapter runtime-owned, so the edge is **R (runtime-mediated composition)**. UNLIKE the R-PM-1 edges (materialized-live at their registration), this edge's producers are SPEC-APPLIED but the impl arc is pending (U-OD-55 / U-CP-44/45 amendments / U-RT-138 are open plan units at OD v2.29 / CP v2.38 / Runtime v2.49) — the §2.3.9 table tags it **`R-planned`**; the impl arc's landing PR SHOULD flip the tag to `R-live` (a one-cell edit + clearance, mirroring how §0.4 precision was handled at v2.20).
+Same classification logic as v2.20 §0.4: no new genuine-typed (G) inter-axis import seam is created — the Protocol is CP-owned, the adapter runtime-owned, so the edge is **R (runtime-mediated composition)**. UNLIKE the R-PM-1 edges (materialized-live at their registration), this edge's producers are SPEC-APPLIED but the impl arc is pending (U-OD-55 / U-CP-44/45 amendments / U-RT-138 are open plan units at OD v2.29 / CP v2.38 / Runtime v2.49) — the §2.3.9 table tagged it **`R-planned`** at registration; the impl arc landed at PR #1067 (2026-07-20) and the tag is now **`R-live`** per this section's own one-cell-edit + clearance prescription (marker at `.harness/clearance/cross-axis-composition-v2-21-r-live-flip-cleared-2026-07-20.md`).
 
 ### §0.5 Aggregate clause
 
-**107 plan-canonical (FROZEN) + 2 R-PM-1 forward-capability (§2.3.8, `R-live`) + 1 B-54 audit-verification forward-capability (§2.3.9, `R-planned`) = 110 total cross-axis relationships.**
+**107 plan-canonical (FROZEN) + 2 R-PM-1 forward-capability (§2.3.8, `R-live`) + 1 B-54 audit-verification forward-capability (§2.3.9, `R-live` since 2026-07-20/PR #1067) = 110 total cross-axis relationships.**
 
 ## §2.3.9 — B-54 audit-verification forward-capability seam (NEW at v2.21)
 
 | # | Edge | Class | Consumer | Producer | Mediation | Status |
 |---|---|---|---|---|---|---|
-| 1 | CP→OD audit-signature verification | R (runtime-mediated) | C-CP-20 §20.3.1 walk via the CP-owned injected-verifier Protocol (CP v1.101 §3) | C-OD-21 §21.2.2 backend-aware verifier (OD v1.34; U-OD-55) | U-RT-138 composition-root adapter (`harness-runtime` imports both; `harness-cp` never imports `harness-od` — package-graph witness at CP plan v2.38) | **`R-planned`** — spec-applied at the Arc A apply pass (PR #1056); flips `R-live` at the impl arc's landing PR |
+| 1 | CP→OD audit-signature verification | R (runtime-mediated) | C-CP-20 §20.3.1 walk via the CP-owned injected-verifier Protocol (CP v1.101 §3) | C-OD-21 §21.2.2 backend-aware verifier (OD v1.34; U-OD-55) | U-RT-138 composition-root adapter (`harness-runtime` imports both; `harness-cp` never imports `harness-od` — package-graph witness at CP plan v2.38) | **`R-live`** — spec-applied at the Arc A apply pass (PR #1056); FLIPPED `R-planned` → `R-live` in-place 2026-07-20 at the impl arc's landing (PR #1067: U-CP-44/45/42 ⊕ U-RT-138 — the walk, the CP result boundary, the U-RT-138 adapter, and the `harness-inspect` §13.5 injection site all landed; the one-cell flip this row itself prescribed) |
 
 *All prior sections preserved verbatim per the delta convention. Clearance marker at `.harness/clearance/cross-axis-composition-v2-21-cleared-2026-07-18.md`.*

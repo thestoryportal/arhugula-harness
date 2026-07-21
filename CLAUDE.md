@@ -18,7 +18,7 @@ The harness has four design axes plus a cross-axis composition surface:
 | **AS** — Action Surface | Tool contracts (typed I/O schemas), MCP integration (FastMCP host + client), sandbox (4-tier blast radius), skills filesystem |
 | **CP** — Control Plane | Routing (capability-aware multi-LLM), retry / breaker / idempotency, workflow lifecycle, topology (6-class enum), HITL placement |
 | **OD** — Operational Discipline | HITL primitives (4-response palette), audit ledger schema, cost attribution (5-step chain), observability (15-namespace OTel schema per C-OD-05 §5.1) |
-| **CXA** — Cross-Axis Composition | **107 plan-canonical cross-axis relationships** across 7 composition buckets per `Cross_Axis_Composition_Document_v2_21.md` §2.3 — **37 genuine typed seams + 48 convention-level + 22 phase-2-runtime** (this plan-derived 7c baseline is FROZEN), **+2 R-PM-1 prompts-management forward-capability seams at §2.3.8 (CP→IS + OD→CP, runtime-mediated `R-live`) +1 B-54 audit-verification seam at §2.3.9 (CP→OD, runtime-mediated `R-planned`; v2.21, 2026-07-18) = 110 total**.|
+| **CXA** — Cross-Axis Composition | **107 plan-canonical cross-axis relationships** across 7 composition buckets per `Cross_Axis_Composition_Document_v2_21.md` §2.3 — **37 genuine typed seams + 48 convention-level + 22 phase-2-runtime** (this plan-derived 7c baseline is FROZEN), **+2 R-PM-1 prompts-management forward-capability seams at §2.3.8 (CP→IS + OD→CP, runtime-mediated `R-live`) +1 B-54 audit-verification seam at §2.3.9 (CP→OD, runtime-mediated `R-live` since 2026-07-20/PR #1067; registered `R-planned` at v2.21, 2026-07-18) = 110 total**.|
 
 ### 1.2 What this workspace is NOT
 
