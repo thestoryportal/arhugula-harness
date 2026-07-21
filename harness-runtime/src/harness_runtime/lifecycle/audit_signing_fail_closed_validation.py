@@ -513,6 +513,15 @@ def initialize_mtc_audit_signing_record(
                 config, sidecar_path=audit_sidecar_path, record_key_id=record_key_id
             )
         if path.is_file():
+            # Out-of-family Codex [P2] B-64 round-3: release the sidecar
+            # lock BEFORE the existing-record verification — the row-key
+            # scan is complete and NO publication follows on this branch,
+            # so the B-64 atomicity requirement (probes+publication) does
+            # not apply; holding the exclusive lock across the KMS network
+            # verify would block every concurrent sidecar append/read for
+            # the SDK's latency/retry window (multi-process availability
+            # regression vs the pre-B-64 short-lived read lock).
+            stack.close()
             return _verify_existing_record(
                 path,
                 expected_key_id=record_key_id,

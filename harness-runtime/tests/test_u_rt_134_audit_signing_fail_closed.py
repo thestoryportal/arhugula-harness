@@ -1160,3 +1160,66 @@ def test_b64_mangled_legacy_lock_sidecar_surfaces_typed_config_error(tmp_path: P
             config, signing_backend=_FakeBackend(), audit_sidecar_path=sidecar
         )
     assert not record_path.exists()  # nothing minted over the failure
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="cross_process_write_lock degrades to a no-op on Windows — the B-45 register row",
+)
+def test_b64_verify_branch_releases_sidecar_lock_before_record_verification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Out-of-family Codex [P2] B-64 round-3: on the EXISTING-record branch
+    the exclusive sidecar lock is released BEFORE `_verify_existing_record`
+    (which reaches the KMS network verify) — no publication follows there,
+    so holding the lock would only block concurrent appends/reads for the
+    SDK's latency window. Witness: while verification runs, another thread
+    must be able to acquire the sidecar write lock."""
+    from harness_is.cross_process_ledger_lock import cross_process_write_lock
+    from harness_runtime.lifecycle import audit_signing_fail_closed_validation as validation
+
+    record_path = tmp_path / "record.json"
+    sidecar = tmp_path / "audit-entries.jsonl"
+    kwargs = _mtc_ready_kwargs(tmp_path)
+    kwargs["audit_cutover_record_path"] = str(record_path)
+    kwargs["key_arns"] = {"cutover-key": _ARN_B, "some-row-key": _ARN_A}
+    config = _config(tmp_path, **kwargs)
+    backend = _FakeBackend()
+
+    # First call mints the record (greenfield, sidecar absent); then a
+    # persisted row makes the second call take the verify branch with an
+    # EXISTING sidecar (file-mode lock).
+    minted = validation.initialize_mtc_audit_signing_record(
+        config, signing_backend=backend, audit_sidecar_path=sidecar
+    )
+    assert minted is not None and record_path.is_file()
+    sidecar.write_text(
+        '{"tenant_tag": "_single", "entry": {"signature_attrs": '
+        '{"audit_signature_key_id": "some-row-key"}}}\n',
+        encoding="utf-8",
+    )
+
+    lock_released_during_verify: list[bool] = []
+    real_verify = validation._verify_existing_record  # pyright: ignore[reportPrivateUsage]
+
+    def instrumented_verify(path: Path, **verify_kwargs: object):
+        acquired = threading.Event()
+
+        def try_lock() -> None:
+            with cross_process_write_lock(sidecar):
+                acquired.set()
+
+        prober = threading.Thread(target=try_lock)
+        prober.start()
+        lock_released_during_verify.append(acquired.wait(timeout=5.0))
+        prober.join(timeout=5.0)
+        return real_verify(path, **verify_kwargs)  # pyright: ignore[reportArgumentType]
+
+    monkeypatch.setattr(validation, "_verify_existing_record", instrumented_verify)
+    verified = validation.initialize_mtc_audit_signing_record(
+        config, signing_backend=backend, audit_sidecar_path=sidecar
+    )
+    assert verified is not None
+    # The load-bearing assertion: the sidecar lock was already released
+    # while the record verification ran.
+    assert lock_released_during_verify == [True]
