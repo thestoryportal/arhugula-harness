@@ -53,7 +53,7 @@ from harness_od.audit_cutover_record import (
     sign_cutover_record,
     verify_cutover_record_signature,
 )
-from harness_od.audit_ledger_types import AuditLedgerEntry
+from harness_od.audit_ledger_types import AuditLedgerEntry, compute_entry_hash
 
 from harness_runtime.lifecycle.audit_signing_fail_closed_validation import (
     AuditSigningConfigInvalidError,
@@ -125,12 +125,50 @@ class _SidecarRows:
 
 
 def _read_sidecar_rows(sidecar_path: Path) -> _SidecarRows:
-    """Read-only, fail-loud parse of every sidecar line."""
+    """Read-only, fail-loud parse of every sidecar line.
+
+    Opens the sidecar with the WRITER's regular-file/no-follow posture
+    (codex round-4 P1: a symlinked sidecar would let author/retag sign or
+    import attacker-selected history the writer itself refuses), refuses a
+    torn tail (an unterminated final line is an UNCOMMITTED fragment the
+    writer's heal contract discards — migration must never promote it),
+    and applies the writer's content-recompute + duplicate-identity checks
+    so a sidecar the next fold would reject is refused BEFORE anything is
+    signed or replaced.
+    """
+    if sidecar_path.is_symlink():
+        raise RecordMigrationError(
+            f"sidecar {sidecar_path} is a symlink — migration reads only the "
+            f"writer-owned regular file, never a redirection"
+        )
     try:
-        text = sidecar_path.read_text(encoding="utf-8")
+        nofollow = getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(str(sidecar_path), os.O_RDONLY | nofollow)
     except OSError as exc:
         raise RecordMigrationError(f"sidecar {sidecar_path} unreadable: {exc}") from exc
+    try:
+        stat_result = os.fstat(fd)
+        import stat as _stat
+
+        if not _stat.S_ISREG(stat_result.st_mode):
+            raise RecordMigrationError(f"sidecar {sidecar_path} is not a regular file — refusing")
+        with os.fdopen(fd, encoding="utf-8") as handle:
+            fd = -1
+            text = handle.read()
+    except OSError as exc:
+        raise RecordMigrationError(f"sidecar {sidecar_path} unreadable: {exc}") from exc
+    finally:
+        if fd >= 0:
+            os.close(fd)
+    if text and not text.endswith("\n"):
+        raise RecordMigrationError(
+            f"sidecar {sidecar_path} ends in an unterminated line — a torn "
+            f"tail is an uncommitted fragment (the writer's heal contract "
+            f"discards it); run the harness once to heal, then re-run the "
+            f"migration"
+        )
     lines: list[dict[str, object]] = []
+    seen_full_identities: set[tuple[str, str]] = set()
     for line_number, line in enumerate(text.splitlines(), start=1):
         if not line.strip():
             continue
@@ -154,6 +192,25 @@ def _read_sidecar_rows(sidecar_path: Path) -> _SidecarRows:
             raise RecordMigrationError(
                 f"sidecar line {line_number} lacks tenant_tag/entry — refusing"
             )
+        else:
+            # Writer-equivalent integrity at parse (codex round-4 P2): a
+            # stale-hash payload or duplicate identity would let the retag
+            # report success and replace the file the next fold rejects.
+            entry = AuditLedgerEntry.model_validate(row["entry"])
+            recomputed = compute_entry_hash(entry.payload)
+            if recomputed != entry.entry_hash:
+                raise RecordMigrationError(
+                    f"sidecar line {line_number} fails content-integrity: "
+                    f"stored entry_hash={entry.entry_hash!r} but recomputed "
+                    f"{recomputed!r} — tampered or corrupt row; refusing"
+                )
+            identity = (cast("str", row["tenant_tag"]), entry.entry_hash)
+            if identity in seen_full_identities:
+                raise RecordMigrationError(
+                    f"sidecar line {line_number}: duplicate identity "
+                    f"{identity!r} — external mutation; refusing"
+                )
+            seen_full_identities.add(identity)
         lines.append(row)
     return _SidecarRows(lines=tuple(lines))
 
@@ -339,6 +396,18 @@ def _retag_locked(record: AuditCutoverRecord, *, sidecar_path: Path) -> RetagOut
         if record_row is None or record_row.verification_disposition not in _TENANT_READABLE:
             continue
         destination = (record_row.tenant_scope, entry.entry_hash)
+        if destination in observed_identities:
+            collisions.append(destination)
+    # Baseline alias DESTINATIONS collide too (codex round-4 P1): a
+    # baseline pair aliasing onto an occupied tenant identity omitted from
+    # the record would conflate the baseline with an unrelated full row.
+    for tag, entry_hash in rows.baseline_pairs():
+        if tag != _SINGLE_TAG:
+            continue
+        record_row = single_rows.get((_SINGLE_TAG, entry_hash))
+        if record_row is None or record_row.verification_disposition not in _TENANT_READABLE:
+            continue
+        destination = (record_row.tenant_scope, entry_hash)
         if destination in observed_identities:
             collisions.append(destination)
     if collisions:

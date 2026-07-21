@@ -852,3 +852,118 @@ def test_stage4_consumer_mapping_gap_refused(dep: _Deployment) -> None:
             attestation={entry.entry_hash: _TENANT},
         )
     assert not dep.record_path.exists()
+
+
+# ---------------------------------------------------------------------------
+# Codex round-4 findings (this leg).
+# ---------------------------------------------------------------------------
+
+
+def test_symlinked_sidecar_refused(dep: _Deployment) -> None:
+    """A symlinked sidecar must never be read/replaced through the link —
+    the migration mirrors the writer's no-follow posture."""
+    entry = dep.signed_entry("ref-1", placeholder=True)
+    dep.writer().append(None, entry)
+    real = dep.root / "moved-sidecar.jsonl"
+    dep.sidecar_path.rename(real)
+    dep.sidecar_path.symlink_to(real)
+    dep.write_record(_row(entry.entry_hash))
+
+    # Pins the EXPLICIT pre-open refusal (the O_NOFOLLOW open would also
+    # refuse, but via a wrapped-OSError shape — the explicit branch gives
+    # the operator the actionable diagnosis).
+    with pytest.raises(RecordMigrationError, match="migration reads only"):
+        retag_sidecar(
+            dep.config(), sidecar_path=dep.sidecar_path, signing_backend=dep.record_backend
+        )
+    assert real.read_bytes()  # untouched through the link
+
+
+def test_torn_tail_sidecar_refused(dep: _Deployment) -> None:
+    """An unterminated final sidecar line is an UNCOMMITTED fragment — the
+    migration refuses rather than promote data the writer's heal contract
+    would discard."""
+    entry = dep.signed_entry("ref-1", placeholder=True)
+    dep.writer().append(None, entry)
+    dep.write_record(_row(entry.entry_hash))
+    raw = dep.sidecar_path.read_text(encoding="utf-8")
+    dep.sidecar_path.write_text(raw.rstrip("\n"), encoding="utf-8")  # strip the terminator
+
+    with pytest.raises(RecordMigrationError, match="unterminated"):
+        retag_sidecar(
+            dep.config(), sidecar_path=dep.sidecar_path, signing_backend=dep.record_backend
+        )
+
+
+def test_baseline_alias_destination_collision_refused(dep: _Deployment) -> None:
+    """A baseline pair aliasing onto an OCCUPIED tenant identity (an
+    existing full row omitted from the record) refuses — the alias would
+    conflate the baseline with an unrelated full row."""
+    entry = dep.signed_entry("ref-1", placeholder=True)
+    writer = dep.writer()
+    writer.append(_TENANT, entry)  # occupies ("tenant-a", H)
+    dep.append_baseline_line([("_single", entry.entry_hash)])
+    dep.write_record(_row(entry.entry_hash))  # aliases baseline onto ("tenant-a", H)
+    before = dep.sidecar_path.read_bytes()
+
+    with pytest.raises(RecordMigrationError, match="collide"):
+        retag_sidecar(
+            dep.config(), sidecar_path=dep.sidecar_path, signing_backend=dep.record_backend
+        )
+    assert dep.sidecar_path.read_bytes() == before
+
+
+def test_corrupt_sidecar_row_refused_before_any_signing(dep: _Deployment) -> None:
+    """A stale-hash payload the next fold would reject refuses the
+    migration up front — never sign/replace first and brick after."""
+    entry = dep.signed_entry("ref-1", placeholder=True)
+    dep.writer().append(None, entry)
+    rows = [json.loads(line) for line in dep.sidecar_path.read_text().splitlines() if line.strip()]
+    rows[0]["entry"]["payload"]["audit_namespace_attrs"] = {"audit.actor": "TAMPERED"}
+    dep.sidecar_path.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+    dep.write_record(_row(entry.entry_hash))
+
+    with pytest.raises(RecordMigrationError, match="content-integrity"):
+        retag_sidecar(
+            dep.config(), sidecar_path=dep.sidecar_path, signing_backend=dep.record_backend
+        )
+
+
+def test_cli_config_refusal_precedes_backend_construction(
+    dep: _Deployment, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The pure config-shape refusal fires BEFORE backend construction —
+    an invalid MTC config surfaces the deterministic typed message, never
+    an SDK/credential failure (and never external setup)."""
+    from harness_runtime.admin.migrate_audit_sidecar import main
+
+    entry = dep.signed_entry("ref-1", placeholder=True)
+    dep.writer().append(None, entry)
+    config_path = dep.root / "harness.toml"
+    # MTC config MISSING the record inputs — bootstrap rejects it purely.
+    config_path.write_text(
+        "\n".join(
+            [
+                "[runtime]",
+                'deployment_surface = "local-development"',
+                f'repository_root = "{dep.root}"',
+                'default_topology = "single-threaded-linear"',
+                'persona_tier = "multi-tenant-compliance"',
+                f'tenant_id = "{_TENANT}"',
+                "",
+                "[runtime.otel]",
+                'otlp_endpoint = "http://localhost:4318"',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    def exploding_backend(config: object) -> object:
+        raise RuntimeError("SDK/credential discovery must not run first")
+
+    monkeypatch.setattr(
+        "harness_runtime.config.audit_signing.make_audit_signing_backend", exploding_backend
+    )
+    exit_code = main([str(dep.ledger_path), "--retag", "--runtime-config", str(config_path)])
+    assert exit_code == 1  # typed refusal, the exploding backend never ran

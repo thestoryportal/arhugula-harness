@@ -184,7 +184,28 @@ def _run_record_mode(args: argparse.Namespace, ledger_path: Path) -> int:
     except RuntimeConfigLoadError as exc:
         print(f"error: --runtime-config unusable: {exc}", file=sys.stderr)
         return 2
-    backend = make_audit_signing_backend(config.audit_signing)
+    # Pure config-shape validation FIRST (codex round-4 P2): a config
+    # bootstrap rejects deterministically must refuse HERE — before backend
+    # construction triggers SDK/credential discovery or an availability
+    # failure masks the typed config refusal.
+    from harness_runtime.lifecycle.audit_signing_fail_closed_validation import (
+        AuditSigningConfigInvalidError,
+        IncompatibleConfigVersion,
+        validate_mtc_audit_signing_config,
+    )
+
+    try:
+        validate_mtc_audit_signing_config(config)
+    except (AuditSigningConfigInvalidError, IncompatibleConfigVersion) as exc:
+        print(f"record migration refused: {exc}", file=sys.stderr)
+        return 1
+    from harness_runtime.config.audit_signing import SigningBackendUnavailableError
+
+    try:
+        backend = make_audit_signing_backend(config.audit_signing)
+    except SigningBackendUnavailableError as exc:
+        print(f"record migration refused: signing backend unavailable: {exc}", file=sys.stderr)
+        return 1
     if backend is None:
         print(
             'error: the config selects no audit-signing backend (backend="none") '
@@ -238,6 +259,11 @@ def _run_record_mode(args: argparse.Namespace, ledger_path: Path) -> int:
             )
     except RecordMigrationError as exc:
         print(f"record migration refused: {exc}", file=sys.stderr)
+        return 1
+    except SigningBackendUnavailableError as exc:
+        # Expected availability failures honor the CLI's nonzero contract
+        # (codex round-4 P2); programming defects still propagate.
+        print(f"record migration refused: signing backend unavailable: {exc}", file=sys.stderr)
         return 1
     return 0
 
