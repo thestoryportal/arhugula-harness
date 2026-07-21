@@ -558,3 +558,109 @@ def test_concurrent_sibling_drains_invert_timestamp(tmp_path: Any) -> None:
     # drain reached `.append()` first.
     timestamps = [e.timestamp for e in persisted]
     assert timestamps == sorted(timestamps)
+
+
+# ---------------------------------------------------------------------------
+# B-61 — per-append effect fence at the barrier drain.
+# ---------------------------------------------------------------------------
+
+
+def test_b61_drain_appends_are_fenced_per_entry_and_stop_after_trip() -> None:
+    """B-61: each physical drain append enters its OWN `effect_entry()` — a
+    cancel token tripping MID-DRAIN (while an append executes) stops the
+    remaining appends before they begin, and the in-flight append counts
+    toward a truthful `ACKED_EFFECT_AMBIGUOUS`. Previously these appends ran
+    unfenced: every buffered entry kept landing after the trip and
+    `wait_ack()` could classify the timeout `ACKED_CLEAN`. A partial drain
+    is resume-safe (`append_ledger_entry` dedups by idempotency_key), so
+    per-append granularity is strictly better than one coarse guard —
+    which would let post-trip appends ride the pre-trip entry."""
+    from harness_cp.sub_agent_dispatch_cancellation import (
+        DISPATCH_CANCEL_TOKEN_VAR,
+        DispatchCancelToken,
+        DispatchFenceTrippedSignal,
+        FenceAckOutcome,
+    )
+
+    parent = _linear_ctx()
+    buffers = [_one_entry_buffer(parent, branch_index=i) for i in range(3)]
+    token = DispatchCancelToken()
+
+    class _TrippingWriter:
+        """The trip lands WHILE the first append executes (inside its guard)."""
+
+        def __init__(self) -> None:
+            self.appended: list[Any] = []
+
+        def append(self, payload: Any, write_key: Any) -> Any:
+            self.appended.append((payload, write_key))
+            if len(self.appended) == 1:
+                token.trip()
+            return None
+
+    writer = _TrippingWriter()
+    reset = DISPATCH_CANCEL_TOKEN_VAR.set(token)
+    try:
+        with pytest.raises(DispatchFenceTrippedSignal):
+            drain_branch_buffers(writer, buffers)
+    finally:
+        DISPATCH_CANCEL_TOKEN_VAR.reset(reset)
+
+    # The load-bearing assertions: exactly ONE physical append (the one the
+    # trip raced) — the second and third were refused at their own guard
+    # entry — and the raced append reads AMBIGUOUS, never a false clean.
+    assert len(writer.appended) == 1
+    token.ack()
+    assert token.wait_ack(grace_seconds=0.1) is FenceAckOutcome.ACKED_EFFECT_AMBIGUOUS
+
+
+def test_b61_drain_without_ambient_token_is_byte_unchanged() -> None:
+    """No ambient token (the non-offloaded path) → nullcontext guards; every
+    buffered entry drains exactly as before B-61."""
+    parent = _linear_ctx()
+    buffers = [_one_entry_buffer(parent, branch_index=i) for i in range(3)]
+
+    class _CountingWriter:
+        def __init__(self) -> None:
+            self.appended: list[Any] = []
+
+        def append(self, payload: Any, write_key: Any) -> Any:
+            self.appended.append((payload, write_key))
+            return None
+
+    writer = _CountingWriter()
+    assert drain_branch_buffers(writer, buffers) == 3
+    assert len(writer.appended) == 3
+
+
+def test_b61_pre_tripped_token_refuses_the_whole_drain() -> None:
+    """A token already tripped BEFORE the drain begins refuses the very first
+    append (zero physical writes) — the `_finish()`-after-timeout shape the
+    register row named."""
+    from harness_cp.sub_agent_dispatch_cancellation import (
+        DISPATCH_CANCEL_TOKEN_VAR,
+        DispatchCancelToken,
+        DispatchFenceTrippedSignal,
+    )
+
+    parent = _linear_ctx()
+    buffers = [_one_entry_buffer(parent, branch_index=0)]
+    token = DispatchCancelToken()
+    token.trip()
+
+    class _CountingWriter:
+        def __init__(self) -> None:
+            self.appended: list[Any] = []
+
+        def append(self, payload: Any, write_key: Any) -> Any:
+            self.appended.append((payload, write_key))
+            return None
+
+    writer = _CountingWriter()
+    reset = DISPATCH_CANCEL_TOKEN_VAR.set(token)
+    try:
+        with pytest.raises(DispatchFenceTrippedSignal):
+            drain_branch_buffers(writer, buffers)
+    finally:
+        DISPATCH_CANCEL_TOKEN_VAR.reset(reset)
+    assert writer.appended == []

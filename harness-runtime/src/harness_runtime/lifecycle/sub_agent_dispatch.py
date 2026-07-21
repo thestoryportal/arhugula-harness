@@ -689,12 +689,14 @@ class RuntimeSubAgentDispatcher:
         §14.7.2 step 8 failure-semantics paragraph.
 
         B-48 (U-RT-143; §14.8.10.3 part 2): the JOB-WIDE effect fence covers
-        these post-child persists — all four call sites route through here,
-        so ONE fence consult suppresses the 8b/8c/8d writes after the fence
-        trips (else entries land after `StepDispatchTimeoutError` despite
-        the no-late-effects guarantee). The 8a composition still runs (pure,
-        no effect); the write half is guarded as an effect entry so the
-        fence-ack's in-flight-at-trip flag is truthful.
+        these post-child persists — all four call sites route through here.
+        B-62 granularity: 8b, 8c (signing — KMS network call at MTC), and 8d
+        each enter their OWN `effect_entry()` consult, so a trip landing
+        during one effect stops the NEXT from beginning (one guard spanning
+        all three previously let post-trip effects ride the pre-trip entry).
+        The 8a composition still runs (pure, no effect); each write half is
+        guarded as an effect entry so the fence-ack's in-flight-at-trip flag
+        is truthful.
         """
         from harness_cp.sub_agent_dispatch_cancellation import (
             DISPATCH_CANCEL_TOKEN_VAR,
@@ -754,13 +756,21 @@ class RuntimeSubAgentDispatcher:
         # is truthful. `DispatchFenceTrippedSignal` is a BaseException: the
         # `except Exception` swallow arms below cannot absorb it, so a fence
         # trip propagates to the job boundary per the at-most-once discipline.
-        _effect_guard = (
-            _fence_token.effect_entry() if _fence_token is not None else contextlib.nullcontext()
-        )
-        _effect_entered = False
+        # B-62 granularity split: 8b (F2 ledger append), 8c (signing — a KMS
+        # network call at MTC, effect-bearing per ADR-D8, not purely
+        # computational), and 8d (audit append) are INDEPENDENT effects —
+        # each enters its OWN `effect_entry()` per the contract ("tripped →
+        # no new effect begins" is consulted per effect). One guard spanning
+        # all three let a trip landing during 8b ride the pre-trip entry
+        # into 8c + 8d without a fresh consult.
+        def _dispatch_effect_guard() -> contextlib.AbstractContextManager[None]:
+            return (
+                _fence_token.effect_entry()
+                if _fence_token is not None
+                else contextlib.nullcontext()
+            )
+
         try:
-            _effect_guard.__enter__()
-            _effect_entered = True
             # 8b — F2-write the dispatch action. branch_metadata intentionally
             # omitted (defaults None): CP spec v1.32 §25.13 / IS spec v1.8 §5.4
             # scope that sidecar to the CP WorkflowDriver's branch-spawn/terminal
@@ -787,7 +797,8 @@ class RuntimeSubAgentDispatcher:
                 step_id=dispatch_action_id,
                 idempotency_key=dispatch_action_id,
             )
-            self.ledger_writer.append(f2_payload, f2_key)
+            with _dispatch_effect_guard():
+                self.ledger_writer.append(f2_payload, f2_key)
             entry_core = StateLedgerEntryRef(str(dispatch_action_id))
 
             # 8c — convert CP → OD (signing happens inside the converter).
@@ -809,20 +820,22 @@ class RuntimeSubAgentDispatcher:
             # U-RT-137 (CP v1.101 §1 row 4) — the signing tenant is sourced
             # from `StepExecutionContext.tenant_id` and passed RAW; tenant-tag
             # normalization is OD-owned at signing (OD v1.34 §21.2.1 row 2).
-            od_entry = cp_audit_to_od_audit(
-                cp_entry,
-                key_id=self.audit_signing_key_id,
-                algo=self.audit_signing_algorithm,
-                entry_core=entry_core,
-                backend=self.signing_backend,
-                tenant_id=step_context.tenant_id,
-            )
+            with _dispatch_effect_guard():
+                od_entry = cp_audit_to_od_audit(
+                    cp_entry,
+                    key_id=self.audit_signing_key_id,
+                    algo=self.audit_signing_algorithm,
+                    entry_core=entry_core,
+                    backend=self.signing_backend,
+                    tenant_id=step_context.tenant_id,
+                )
 
             # 8d — persist OD audit entry through IS hash chain.
-            write_result = self.audit_writer.append(
-                tenant_id=step_context.tenant_id,
-                audit_entry=od_entry,
-            )
+            with _dispatch_effect_guard():
+                write_result = self.audit_writer.append(
+                    tenant_id=step_context.tenant_id,
+                    audit_entry=od_entry,
+                )
         except AUDIT_SIGNING_HARD_FAILURES as exc:
             # Codex round-4 P1 (PR B2a): signing failures are compliance
             # events — surfaced loudly regardless of raise_on_failure.
@@ -855,11 +868,6 @@ class RuntimeSubAgentDispatcher:
                     f"parent_action_id={parent_action_id!r}: {exc}"
                 ) from exc
             return cp_entry, None
-        finally:
-            # Paired exit for the B-48 effect guard — decrement in-flight
-            # only if entry succeeded (a fence trip at entry never counted).
-            if _effect_entered:
-                _effect_guard.__exit__(None, None, None)
 
         return cp_entry, write_result
 
