@@ -622,9 +622,10 @@ def daemon_command(
 
 # --- Track A admin subcommand registration (PR #84 Reading A apply) --------
 #
-# Spec §13.4 + §14.18.1 declare 5-subcommand parent dispatcher; standalone
+# Spec §13.4 + §14.18.1 declare the flat parent dispatcher (subcommand-count
+# invariant 6 at v1.101 — B-53 adds `migrate-audit-sidecar`); standalone
 # `harness-inspect` + `harness-shutdown` binaries at [project.scripts] are
-# PRESERVED VERBATIM (operator muscle memory). The 2 subcommands here are
+# PRESERVED VERBATIM (operator muscle memory). The admin subcommands here are
 # pass-through wrappers — they forward all extra args (including --help) to
 # the admin modules' argparse-based `main(argv)` entrypoints unchanged.
 #
@@ -679,6 +680,32 @@ def shutdown_command(ctx: typer.Context) -> None:
     from harness_runtime.admin import shutdown_cli as _shutdown_admin
 
     raise typer.Exit(code=_shutdown_admin.main(ctx.args))
+
+
+@app.command(
+    "migrate-audit-sidecar",
+    context_settings={
+        "ignore_unknown_options": True,
+        "allow_extra_args": True,
+        "help_option_names": [],
+    },
+    help=(
+        "One-time audit-sidecar migration: legacy-baseline adoption plus the "
+        "U-RT-139 record modes (--author / --retag)."
+    ),
+    short_help="Audit-sidecar migration (delegates to the B-47/U-RT-139 module).",
+)
+def migrate_audit_sidecar_command(ctx: typer.Context) -> None:
+    """Pass-through wrapper for the B-53 migration subcommand (Runtime spec
+    v1.101 §13.4 row 6; U-RT-102 amendment at plan v2.49 §1.6).
+
+    Forwards all extra args verbatim to
+    `harness_runtime.admin.migrate_audit_sidecar:main` — the `python -m`
+    module path stays as the implementation; no logic is duplicated here.
+    """
+    from harness_runtime.admin import migrate_audit_sidecar as _migrate_admin
+
+    raise typer.Exit(code=_migrate_admin.main(ctx.args))
 
 
 # Click UsageError exits with code 2 by default. Per runtime spec v1.35
