@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import threading
 from pathlib import Path
 
 import pytest
@@ -1011,3 +1012,88 @@ async def test_stage_4_wires_record_initialization_through_real_ledger_handle(
         await _run_stage_4(ctx)
     assert probe_calls == [ctx.ledger_writer]
     assert not record_path.exists()
+
+
+# ---------------------------------------------------------------------------
+# B-64 — probe->publish window atomicity (greenfield mint vs concurrent append).
+# ---------------------------------------------------------------------------
+
+
+def test_b64_probe_publish_window_excludes_concurrent_sidecar_append(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """B-64 close-out witness: `initialize_mtc_audit_signing_record` holds
+    `cross_process_write_lock(sidecar)` across the freshness probes AND the
+    no-clobber publication, so a concurrent audit append — which holds the
+    SAME write lock (`audit_writer.py`'s `_sidecar_thread_lock,
+    cross_process_write_lock(...)` append sites) — cannot land INSIDE the
+    probe->publish window and have an empty cutover record minted over its
+    just-written history.
+
+    Two-thread interleaving: the appender ATTEMPTS its locked append while
+    initialization is provably inside the window (after the freshness probe
+    returned "fresh", before publication); it must stay blocked until the
+    mint completes. Without the B-64 lock (mutation: drop the outer
+    `cross_process_write_lock` scope), the append lands inside the window
+    and `completed_during_window` reads `[True]` — this test pins the lock.
+    """
+    from harness_is.cross_process_ledger_lock import cross_process_write_lock
+    from harness_runtime.lifecycle import audit_signing_fail_closed_validation as validation
+
+    record_path = tmp_path / "record.json"
+    sidecar = tmp_path / "audit-entries.jsonl"
+    kwargs = _mtc_ready_kwargs(tmp_path)
+    kwargs["audit_cutover_record_path"] = str(record_path)
+    kwargs["key_arns"] = {"cutover-key": _ARN_B, "some-row-key": _ARN_A}
+    config = _config(tmp_path, **kwargs)
+
+    in_window = threading.Event()
+    appender_started = threading.Event()
+    append_completed = threading.Event()
+    completed_during_window: list[bool] = []
+
+    real_probe = validation._sidecar_has_rows_locked  # pyright: ignore[reportPrivateUsage]
+
+    def instrumented_probe(sidecar_path: Path) -> bool:
+        result = real_probe(sidecar_path)
+        in_window.set()
+        assert appender_started.wait(timeout=10.0)
+        # The appender is now attempting its locked append. Give it real
+        # time to land if the window were unguarded; record whether it did.
+        completed_during_window.append(append_completed.wait(timeout=0.5))
+        return result
+
+    monkeypatch.setattr(validation, "_sidecar_has_rows_locked", instrumented_probe)
+
+    def concurrent_append() -> None:
+        assert in_window.wait(timeout=10.0)
+        appender_started.set()
+        with cross_process_write_lock(sidecar), sidecar.open("a", encoding="utf-8") as handle:
+            handle.write(
+                '{"tenant_tag": "_single", "entry": {"signature_attrs": '
+                '{"audit_signature_key_id": "some-row-key"}}}\n'
+            )
+        append_completed.set()
+
+    appender = threading.Thread(target=concurrent_append)
+    appender.start()
+    try:
+        record = validation.initialize_mtc_audit_signing_record(
+            config,
+            signing_backend=_FakeBackend(),
+            audit_sidecar_path=sidecar,
+        )
+    finally:
+        appender.join(timeout=10.0)
+    assert not appender.is_alive()
+
+    # The load-bearing assertion: the append could NOT complete inside the
+    # probe->publish window (it blocked on the held write lock).
+    assert completed_during_window == [False]
+    # Convergence: the mint completed (fresh EMPTY record), and the append
+    # landed strictly AFTER publication — the anchor covers pre-append state.
+    assert record is not None
+    assert record.rows == ()
+    assert record_path.is_file()
+    assert append_completed.is_set()
+    assert sidecar.is_file()

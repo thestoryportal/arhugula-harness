@@ -50,7 +50,10 @@ from pathlib import Path
 
 from harness_core import PersonaTier
 from harness_cp.f5_signing_key_resolution import SigningBackend
-from harness_is.cross_process_ledger_lock import cross_process_read_lock
+from harness_is.cross_process_ledger_lock import (
+    cross_process_read_lock,
+    cross_process_write_lock,
+)
 from harness_od.audit_cutover_record import (
     AuditCutoverRecord,
     CutoverRecordValidationError,
@@ -469,112 +472,165 @@ def initialize_mtc_audit_signing_record(
         # otherwise pass, letting that row key's holder sign a malicious
         # exemption record. Applies to BOTH the verify and greenfield
         # branches (an existing record pinned to a row key is equally wrong).
-        _reject_record_key_used_by_persisted_rows(
-            config, sidecar_path=audit_sidecar_path, record_key_id=record_key_id
-        )
-    if path.is_file():
-        return _verify_existing_record(
+    # B-64 close-out: hold the sidecar WRITE lock across the persisted-row
+    # key scan, BOTH freshness probes, and the no-clobber publication — the
+    # probes previously released their short-lived locks before
+    # `_greenfield_sign_empty_record` published, so a concurrent audit
+    # append landing in the probe->publish window could let an empty
+    # cutover record be minted over just-written history. A sidecar
+    # appender holds this same write lock for its append, so nothing can
+    # land inside the window. Same-path inner reads run LOCK-FREE under
+    # this hold (the `_locked` helper variants) — a nested
+    # `cross_process_read_lock` on the SAME path self-deadlocks (POSIX
+    # `flock` contends between fds within one process). The nested
+    # `ledger_has_audit_refs` probe locks the IS STATE-LEDGER path (a
+    # different inode; the dir lock's per-thread reentrant face makes the
+    # same-parent nesting legal — the documented B-50 composition).
+    with contextlib.ExitStack() as stack:
+        if audit_sidecar_path is not None:
+            stack.enter_context(cross_process_write_lock(audit_sidecar_path))
+            _reject_record_key_used_by_persisted_rows_locked(
+                config, sidecar_path=audit_sidecar_path, record_key_id=record_key_id
+            )
+        if path.is_file():
+            return _verify_existing_record(
+                path,
+                expected_key_id=record_key_id,
+                expected_ledger_binding_id=record_binding_id,
+                signing_backend=signing_backend,
+            )
+        # Out-of-family Codex [P2] round-3 finding: `not is_file()` alone
+        # conflates "nothing there yet" (genuine greenfield) with "something
+        # there that is NOT a regular file" — a directory (untyped
+        # `IsADirectoryError` at the rename, temp file left behind), a
+        # FIFO/special file, or a broken symlink (which `os.replace` would
+        # silently overwrite). Only a genuinely-absent path is greenfield;
+        # anything else is a typed configuration rejection, never overwritten.
+        if path.exists() or path.is_symlink():
+            raise AuditSigningConfigInvalidError(
+                (
+                    f"audit_cutover_record_path={record_path!r} exists but is not a "
+                    "regular file (directory, special file, or broken symlink) — "
+                    "refusing to treat it as a greenfield record or overwrite it",
+                )
+            )
+        # Ledger-freshness gate (out-of-family Codex [P1] round-4 + round-5):
+        # greenfield empty-record minting is permitted ONLY for a fresh ledger.
+        # Two halves — the sidecar rows check AND the hash-chained IS ledger's
+        # `audit:` refs (the AUTHORITY: a plain sidecar file can be deleted or
+        # truncated, the IS chain cannot be silently emptied). Either half
+        # firing means the missing record is trust-anchor LOSS — surface it,
+        # never paper over it.
+        not_fresh = audit_sidecar_path is not None and _sidecar_has_rows_locked(audit_sidecar_path)
+        if not not_fresh and ledger_has_audit_refs is not None:
+            try:
+                not_fresh = ledger_has_audit_refs()
+            except Exception:
+                # Fail closed: an IS ledger that cannot be read cannot PROVE
+                # freshness, and minting a trust anchor over unknown history is
+                # the exact hazard this gate forecloses.
+                not_fresh = True
+        if not_fresh:
+            raise AuditSigningConfigInvalidError(
+                (
+                    f"audit_cutover_record_path={record_path!r} does not exist but "
+                    "the deployment's audit history is NOT fresh (the sidecar "
+                    "carries rows and/or the hash-chained IS ledger holds audit "
+                    "references) — the missing record is trust-anchor loss; "
+                    "refusing to mint a fresh empty record over it (the spec "
+                    "permits empty-record initialization only when the ledger is "
+                    "fresh)",
+                )
+            )
+        return _greenfield_sign_empty_record(
             path,
-            expected_key_id=record_key_id,
-            expected_ledger_binding_id=record_binding_id,
+            key_id=record_key_id,
+            ledger_binding_id=record_binding_id,
             signing_backend=signing_backend,
         )
-    # Out-of-family Codex [P2] round-3 finding: `not is_file()` alone
-    # conflates "nothing there yet" (genuine greenfield) with "something
-    # there that is NOT a regular file" — a directory (untyped
-    # `IsADirectoryError` at the rename, temp file left behind), a
-    # FIFO/special file, or a broken symlink (which `os.replace` would
-    # silently overwrite). Only a genuinely-absent path is greenfield;
-    # anything else is a typed configuration rejection, never overwritten.
-    if path.exists() or path.is_symlink():
-        raise AuditSigningConfigInvalidError(
-            (
-                f"audit_cutover_record_path={record_path!r} exists but is not a "
-                "regular file (directory, special file, or broken symlink) — "
-                "refusing to treat it as a greenfield record or overwrite it",
-            )
-        )
-    # Ledger-freshness gate (out-of-family Codex [P1] round-4 + round-5):
-    # greenfield empty-record minting is permitted ONLY for a fresh ledger.
-    # Two halves — the sidecar rows check AND the hash-chained IS ledger's
-    # `audit:` refs (the AUTHORITY: a plain sidecar file can be deleted or
-    # truncated, the IS chain cannot be silently emptied). Either half
-    # firing means the missing record is trust-anchor LOSS — surface it,
-    # never paper over it.
-    not_fresh = audit_sidecar_path is not None and _sidecar_has_rows(audit_sidecar_path)
-    if not not_fresh and ledger_has_audit_refs is not None:
-        try:
-            not_fresh = ledger_has_audit_refs()
-        except Exception:
-            # Fail closed: an IS ledger that cannot be read cannot PROVE
-            # freshness, and minting a trust anchor over unknown history is
-            # the exact hazard this gate forecloses.
-            not_fresh = True
-    if not_fresh:
-        raise AuditSigningConfigInvalidError(
-            (
-                f"audit_cutover_record_path={record_path!r} does not exist but "
-                "the deployment's audit history is NOT fresh (the sidecar "
-                "carries rows and/or the hash-chained IS ledger holds audit "
-                "references) — the missing record is trust-anchor loss; "
-                "refusing to mint a fresh empty record over it (the spec "
-                "permits empty-record initialization only when the ledger is "
-                "fresh)",
-            )
-        )
-    return _greenfield_sign_empty_record(
-        path,
-        key_id=record_key_id,
-        ledger_binding_id=record_binding_id,
-        signing_backend=signing_backend,
-    )
 
 
-def _sidecar_has_rows(sidecar_path: Path) -> bool:
+def _sidecar_has_rows_locked(sidecar_path: Path) -> bool:
     """True iff the `audit-entries.jsonl` sidecar exists and carries at
     least one non-blank row. Read-only; an unreadable sidecar is treated as
     HAVING rows (fail closed — refusing a greenfield mint is the safe
-    direction when freshness cannot be proven)."""
+    direction when freshness cannot be proven).
+
+    CALLER-HELD-LOCK INVARIANT (B-64): the sole caller
+    (`initialize_mtc_audit_signing_record`) holds
+    `cross_process_write_lock(sidecar_path)` across this probe and the
+    greenfield publication — a stronger exclusion than the shared read
+    lock this helper used to take itself (writers hold the same write
+    lock, so no partially flushed row is observable). Taking a nested
+    read lock here would self-deadlock: POSIX `flock` contends between
+    fds within one process."""
     if not sidecar_path.is_file():
         return False
     try:
-        # Same shared-read-lock rationale as `_reject_record_key_used_by_
-        # persisted_rows` ([P2] round-7): writers hold the matching write
-        # lock, so an unlocked read could see a partially flushed row.
-        with (
-            cross_process_read_lock(sidecar_path),
-            sidecar_path.open("r", encoding="utf-8") as handle,
-        ):
+        with sidecar_path.open("r", encoding="utf-8") as handle:
             return any(line.strip() for line in handle)
     except OSError:
         return True
 
 
-def _reject_record_key_used_by_persisted_rows(
+def _reject_record_key_used_by_persisted_rows(  # pyright: ignore[reportUnusedFunction] — consumed cross-module by admin/record_migration.py (shared trust-anchor component)
     config: RuntimeConfig, *, sidecar_path: Path, record_key_id: str
 ) -> None:
     """Reject a record key that any PERSISTED sidecar row already signed
     under (out-of-family Codex [P1] round-6; spec text: the pinned id "MUST
     be DISTINCT from every key id appearing on ledger rows").
 
+    LOCKING WRAPPER (B-64 split): holds the IS-shared READ lock for the
+    complete scan ([P2] round-7 — sidecar writers hold the matching write
+    lock, so an unlocked read could parse a partially flushed final row
+    and report a permanent RT-FAIL-CONFIG for an otherwise valid ledger).
+    For callers that already hold a lock on `sidecar_path` (the B-64
+    bootstrap window in `initialize_mtc_audit_signing_record`), use the
+    `_locked` core directly — calling THIS wrapper under a held same-path
+    lock self-deadlocks (POSIX `flock` contends between fds within one
+    process; the `record_migration.py` retag ordering comment depends on
+    the same fact).
+    """
+    if not sidecar_path.is_file():
+        return
+    try:
+        with cross_process_read_lock(sidecar_path):
+            _reject_record_key_used_by_persisted_rows_locked(
+                config, sidecar_path=sidecar_path, record_key_id=record_key_id
+            )
+    except OSError as exc:
+        # Lock acquisition itself failed — same typed fail-closed surface
+        # as an unreadable sidecar (separation cannot be proven).
+        raise AuditSigningConfigInvalidError(
+            (
+                f"audit sidecar {str(sidecar_path)!r} could not be read ({exc}) "
+                "— cannot prove the record key is distinct from every persisted "
+                "row-signing key",
+            )
+        ) from exc
+
+
+def _reject_record_key_used_by_persisted_rows_locked(
+    config: RuntimeConfig, *, sidecar_path: Path, record_key_id: str
+) -> None:
+    """Lock-free scan core of `_reject_record_key_used_by_persisted_rows`.
+
     Compares logical key ids directly, plus canonical backing material when
     the row's id resolves through `config.audit_signing.key_arns`. A
     sidecar row that cannot be parsed is fail-closed: separation cannot be
     PROVEN over unreadable history, so the record key is refused.
+
+    CALLER-HELD-LOCK INVARIANT (B-64): the caller holds a
+    `cross_process_read_lock` (the wrapper above) or
+    `cross_process_write_lock` (`initialize_mtc_audit_signing_record`'s
+    probe->publish window) on `sidecar_path` for the complete scan.
     """
     if not sidecar_path.is_file():
         return
     record_arn = _resolve_record_key_arn(config, record_key_id)
     record_material = _canonical_kms_key_identity(record_arn) if record_arn is not None else None
     try:
-        # Out-of-family Codex [P2] round-7: hold the IS-shared READ lock for
-        # the complete scan — sidecar writers hold the matching write lock,
-        # so an unlocked read could parse a partially flushed final row and
-        # report a permanent RT-FAIL-CONFIG for an otherwise valid ledger.
-        with (
-            cross_process_read_lock(sidecar_path),
-            sidecar_path.open("r", encoding="utf-8") as handle,
-        ):
+        with sidecar_path.open("r", encoding="utf-8") as handle:
             for line_number, line in enumerate(handle, start=1):
                 if not line.strip():
                     continue
