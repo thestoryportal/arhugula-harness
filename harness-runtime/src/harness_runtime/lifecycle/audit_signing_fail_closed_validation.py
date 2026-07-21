@@ -488,7 +488,22 @@ def initialize_mtc_audit_signing_record(
     # same-parent nesting legal — the documented B-50 composition).
     with contextlib.ExitStack() as stack:
         if audit_sidecar_path is not None:
-            stack.enter_context(cross_process_write_lock(audit_sidecar_path))
+            try:
+                stack.enter_context(cross_process_write_lock(audit_sidecar_path))
+            except OSError as exc:
+                # Out-of-family Codex [P2] B-64 round-1: acquisition can
+                # raise raw (a directory at the sidecar path, permission
+                # denied) — before B-64 those OSErrors surfaced inside the
+                # helpers' own try/except and were translated; keep the
+                # RT-FAIL-CONFIG taxonomy instead of leaking an
+                # unclassified bootstrap exception.
+                raise AuditSigningConfigInvalidError(
+                    (
+                        f"audit sidecar {str(audit_sidecar_path)!r} could not be "
+                        f"locked for the record probe->publish window ({exc}) — "
+                        "cannot serialize against concurrent audit appends",
+                    )
+                ) from exc
             _reject_record_key_used_by_persisted_rows_locked(
                 config, sidecar_path=audit_sidecar_path, record_key_id=record_key_id
             )

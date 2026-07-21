@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import sys
 import threading
 from pathlib import Path
 
@@ -1019,6 +1020,10 @@ async def test_stage_4_wires_record_initialization_through_real_ledger_handle(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="cross_process_write_lock degrades to a no-op on Windows — the B-45 register row",
+)
 def test_b64_probe_publish_window_excludes_concurrent_sidecar_append(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1097,3 +1102,31 @@ def test_b64_probe_publish_window_excludes_concurrent_sidecar_append(
     assert record_path.is_file()
     assert append_completed.is_set()
     assert sidecar.is_file()
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="cross_process_write_lock degrades to a no-op on Windows — the B-45 register row",
+)
+def test_b64_unlockable_sidecar_path_surfaces_typed_config_error(tmp_path: Path) -> None:
+    """Out-of-family Codex [P2] B-64 round-1: lock ACQUISITION failures (a
+    directory at the sidecar path) must stay inside the RT-FAIL-CONFIG
+    taxonomy — before B-64 the helpers' own try/except translated these
+    OSErrors, and the hoisted lock must not regress to leaking a raw
+    `IsADirectoryError` from bootstrap."""
+    sidecar_as_dir = tmp_path / "audit-entries.jsonl"
+    sidecar_as_dir.mkdir()
+    record_path = tmp_path / "record.json"
+    kwargs = _mtc_ready_kwargs(tmp_path)
+    kwargs["audit_cutover_record_path"] = str(record_path)
+    config = _config(tmp_path, **kwargs)
+
+    from harness_runtime.lifecycle.audit_signing_fail_closed_validation import (
+        initialize_mtc_audit_signing_record,
+    )
+
+    with pytest.raises(AuditSigningConfigInvalidError, match="could not be locked"):
+        initialize_mtc_audit_signing_record(
+            config, signing_backend=_FakeBackend(), audit_sidecar_path=sidecar_as_dir
+        )
+    assert not record_path.exists()  # nothing minted over the failure
