@@ -128,8 +128,65 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Emit JSON output. Default is human-readable.",
     )
+    _add_audit_verification_arguments(parser)
     _add_holdout_arguments(parser)
     return parser
+
+
+def _add_audit_verification_arguments(parser: argparse.ArgumentParser) -> None:
+    """Register the five §13.5 audit-verification inputs (U-RT-138; Runtime
+    spec v1.101 C-RT-13 rows 1-7). Names are plan-suggested (non-binding
+    discretion); semantics are spec-pinned at `inspect_audit_verification`."""
+    parser.add_argument(
+        "--audit-sidecar",
+        type=Path,
+        default=None,
+        help=(
+            "Path to the audit-entries.jsonl sidecar (§13.5 input (i)). "
+            "Default: <ledger dir>/audit-entries.jsonl, like the existing "
+            "§13 path resolution."
+        ),
+    )
+    parser.add_argument(
+        "--expected-tenant",
+        type=str,
+        default=None,
+        help=(
+            "Expected tenant scope for signature verification (§13.5 input "
+            "(ii)); normalization happens INSIDE the OD API, never here."
+        ),
+    )
+    parser.add_argument(
+        "--signing-key-map",
+        type=Path,
+        default=None,
+        help=(
+            "JSON file keyed '<algorithm>:<key_id>' mapping to "
+            "AuditSigningConfig-shaped backend specs — the operator-supplied "
+            "form of the OD v1.34 §21.2.2 row-1 per-row resolver (§13.5 "
+            "input (iii); NOT a single backend)."
+        ),
+    )
+    parser.add_argument(
+        "--cutover-record",
+        type=Path,
+        default=None,
+        help=(
+            "Path to the authenticated cutover record (§13.5 input (iv)) — "
+            "REQUIRED with any sidecar row; era is never observation-inferred."
+        ),
+    )
+    parser.add_argument(
+        "--runtime-config",
+        type=Path,
+        default=None,
+        help=(
+            "Path to the authoritative RuntimeConfig TOML (§13.5 input (v)) "
+            "— without it the inspector cannot distinguish MTC's mandatory "
+            "UNVERIFIED-nonzero posture from lower tiers' preserved "
+            "hash-only behavior, and reports UNVERIFIED with a nonzero exit."
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -591,6 +648,15 @@ def main(argv: list[str] | None = None) -> int:
         )
         return _EXIT_INSPECT_PATH
 
+    # --- §13.5 audit-verification disposition (U-RT-138) -------------------
+    # Engagement predicate: any audit input supplied OR the resolved sidecar
+    # exists. Once engaged, the disposition governs the exit code; a
+    # "hash-only-preserved" outcome (sub-MTC + authoritative config + no
+    # inputs) falls through to the pre-v1.101 summary verbatim.
+    audit_exit = _run_audit_verification_if_engaged(args, ledger_path, entries)
+    if audit_exit is not None:
+        return audit_exit
+
     if args.json:
         output = _format_json(ledger_path=ledger_path, entries=entries, last_n=last_n)
     else:
@@ -598,6 +664,84 @@ def main(argv: list[str] | None = None) -> int:
 
     sys.stdout.write(output)
     return _EXIT_OK
+
+
+def _run_audit_verification_if_engaged(
+    args: argparse.Namespace,
+    ledger_path: Path,
+    entries: list[StateLedgerEntry],
+) -> int | None:
+    """Run the §13.5 audit-verification when engaged.
+
+    Returns an exit code when the audit disposition terminates the
+    inspection (verified / unverified / failed / forged-record), or `None`
+    when not engaged or when hash-only behavior is preserved (the caller
+    proceeds with the plain summary).
+    """
+    from harness_runtime.admin.inspect_audit_verification import (
+        ForgedCutoverRecordError,
+        run_audit_inspection,
+    )
+    from harness_runtime.config_source import RuntimeConfigLoadError, RuntimeConfigSource
+    from harness_runtime.lifecycle.audit_writer import AUDIT_SIDECAR_FILENAME
+
+    sidecar_path: Path = (
+        args.audit_sidecar
+        if args.audit_sidecar is not None
+        else ledger_path.parent / AUDIT_SIDECAR_FILENAME
+    )
+    engaged = (
+        args.audit_sidecar is not None
+        or args.expected_tenant is not None
+        or args.signing_key_map is not None
+        or args.cutover_record is not None
+        or sidecar_path.is_file()
+    )
+    if not engaged:
+        return None
+
+    runtime_config = None
+    if args.runtime_config is not None:
+        try:
+            runtime_config = RuntimeConfigSource.load(config_file=args.runtime_config)
+        except RuntimeConfigLoadError as exc:
+            print(
+                f"harness-inspect: RT-FAIL-INSPECT-PATH — --runtime-config unusable: {exc}",
+                file=sys.stderr,
+            )
+            return _EXIT_INSPECT_PATH
+
+    ledger_audit_refs = frozenset(
+        str(entry.action_id) for entry in entries if str(entry.action_id).startswith("audit:")
+    )
+    try:
+        outcome = run_audit_inspection(
+            sidecar_path=sidecar_path,
+            runtime_config=runtime_config,
+            expected_tenant=args.expected_tenant,
+            key_map_path=args.signing_key_map,
+            cutover_record_path=args.cutover_record,
+            ledger_audit_refs=ledger_audit_refs,
+        )
+    except ForgedCutoverRecordError as exc:
+        # Typed rejection — never downgraded to absent-record fallback.
+        print(
+            f"harness-inspect: RT-FAIL-AUDIT-UNVERIFIED — forged/untrusted cutover record: {exc}",
+            file=sys.stderr,
+        )
+        from harness_runtime.admin.inspect_audit_verification import EXIT_AUDIT_UNVERIFIED
+
+        return EXIT_AUDIT_UNVERIFIED
+
+    if outcome.disposition == "hash-only-preserved":
+        return None  # pre-v1.101 behavior verbatim — plain summary proceeds.
+
+    payload = outcome.as_report()
+    if args.json:
+        sys.stdout.write(json.dumps(payload, indent=2) + "\n")
+    else:
+        sys.stdout.write(f"audit verification: {outcome.disposition.upper()}\n{outcome.detail}\n")
+    return outcome.exit_code
 
 
 if __name__ == "__main__":  # pragma: no cover — invoked via console_script
