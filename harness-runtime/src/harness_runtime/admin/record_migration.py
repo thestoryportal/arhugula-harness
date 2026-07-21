@@ -245,6 +245,15 @@ def retag_sidecar(
     )
     if not sidecar_path.is_file():
         raise RecordMigrationError(f"sidecar not found at {sidecar_path} — nothing to retag")
+    # The B-46 exclusion spans the ENTIRE read→validate→compose→replace
+    # section (codex round-2 P1): a writer appending between an unlocked
+    # read and the replacement would have its row silently deleted by the
+    # stale snapshot while its IS reference survives.
+    with cross_process_replace_lock(sidecar_path):
+        return _retag_locked(record, sidecar_path=sidecar_path)
+
+
+def _retag_locked(record: AuditCutoverRecord, *, sidecar_path: Path) -> RetagOutcome:
     rows = _read_sidecar_rows(sidecar_path)
 
     single_rows = {(row.source_tag, row.entry_hash): row for row in record.rows}
@@ -265,6 +274,33 @@ def retag_sidecar(
             f"{len(undispositioned)} observed '_single' identity(ies) the "
             f"record does not disposition — refusing to retag (era is never "
             f"observation-inferred): " + ", ".join(f"({t!r}, {h!r})" for t, h in undispositioned)
+        )
+
+    # Destination-collision refusal (codex round-2 P1): a retag target
+    # `(tenant_scope, H)` colliding with an OBSERVED sidecar identity would
+    # mint duplicate destination rows the next fold rejects — refuse with
+    # zero changes instead of reporting a success that bricks the ledger.
+    observed_identities: set[tuple[str, str]] = set()
+    for tag, entry in rows.single_full_identities():
+        observed_identities.add((tag, entry.entry_hash))
+    for tag, entry_hash in rows.baseline_pairs():
+        observed_identities.add((tag, entry_hash))
+    collisions: list[tuple[str, str]] = []
+    for tag, entry in rows.single_full_identities():
+        if tag != _SINGLE_TAG:
+            continue
+        record_row = single_rows.get((_SINGLE_TAG, entry.entry_hash))
+        if record_row is None or record_row.verification_disposition not in _TENANT_READABLE:
+            continue
+        destination = (record_row.tenant_scope, entry.entry_hash)
+        if destination in observed_identities:
+            collisions.append(destination)
+    if collisions:
+        raise RecordMigrationError(
+            f"{len(collisions)} retag destination(s) collide with observed "
+            f"sidecar identity(ies) — refusing to retag (a duplicate "
+            f"destination row would fail the next fold): "
+            + ", ".join(f"({t!r}, {h!r})" for t, h in collisions)
         )
 
     # Compose the rewritten lines (entry content + entry_hash byte-unchanged;
@@ -321,47 +357,48 @@ def _atomic_replace_sidecar(sidecar_path: Path, content: str) -> None:
     retagged. Never mixed. The membership-index snapshot is removed inside
     the same exclusion so the next fold rebuilds from the rewritten sidecar.
     """
-    with cross_process_replace_lock(sidecar_path):
-        tmp_path = sidecar_path.with_name(sidecar_path.name + ".retag.tmp")
-        # A stale tmp from a prior crash is removed, then the file is created
-        # EXCLUSIVELY (never truncate-in-place: a pre-created hard link to
-        # the ledger or sidecar would be destroyed by O_TRUNC — codex
-        # round-1 P1) with O_NOFOLLOW guarded for Windows.
+    # Caller (`retag_sidecar`) holds the B-46 replace lock across the whole
+    # read+compose+replace section.
+    tmp_path = sidecar_path.with_name(sidecar_path.name + ".retag.tmp")
+    # A stale tmp from a prior crash is removed, then the file is created
+    # EXCLUSIVELY (never truncate-in-place: a pre-created hard link to
+    # the ledger or sidecar would be destroyed by O_TRUNC — codex
+    # round-1 P1) with O_NOFOLLOW guarded for Windows.
+    with contextlib.suppress(OSError):
+        os.unlink(tmp_path)
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(str(tmp_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL | nofollow, 0o600)
+    stat_result = os.fstat(fd)
+    import stat as _stat
+
+    if not _stat.S_ISREG(stat_result.st_mode) or stat_result.st_nlink != 1:
+        os.close(fd)
         with contextlib.suppress(OSError):
             os.unlink(tmp_path)
-        nofollow = getattr(os, "O_NOFOLLOW", 0)
-        fd = os.open(str(tmp_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL | nofollow, 0o600)
-        stat_result = os.fstat(fd)
-        import stat as _stat
-
-        if not _stat.S_ISREG(stat_result.st_mode) or stat_result.st_nlink != 1:
-            os.close(fd)
-            with contextlib.suppress(OSError):
-                os.unlink(tmp_path)
-            raise RecordMigrationError(
-                f"retag temp file {tmp_path} is not a fresh regular file "
-                f"(mode={stat_result.st_mode:o}, nlink={stat_result.st_nlink}) "
-                f"— refusing to write through it"
-            )
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                handle.write(content)
-                handle.flush()
-                os.fsync(handle.fileno())
-        except BaseException:
-            with contextlib.suppress(OSError):
-                os.unlink(tmp_path)
-            raise
-        os.replace(tmp_path, sidecar_path)
-        snapshot = sidecar_path.parent / AUDIT_SNAPSHOT_FILENAME
+        raise RecordMigrationError(
+            f"retag temp file {tmp_path} is not a fresh regular file "
+            f"(mode={stat_result.st_mode:o}, nlink={stat_result.st_nlink}) "
+            f"— refusing to write through it"
+        )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+    except BaseException:
         with contextlib.suppress(OSError):
-            snapshot.unlink()
-        if sys.platform != "win32":
-            dir_fd = os.open(str(sidecar_path.parent), os.O_RDONLY)
-            try:
-                os.fsync(dir_fd)
-            finally:
-                os.close(dir_fd)
+            os.unlink(tmp_path)
+        raise
+    os.replace(tmp_path, sidecar_path)
+    snapshot = sidecar_path.parent / AUDIT_SNAPSHOT_FILENAME
+    with contextlib.suppress(OSError):
+        snapshot.unlink()
+    if sys.platform != "win32":
+        dir_fd = os.open(str(sidecar_path.parent), os.O_RDONLY)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
 
 
 # ---------------------------------------------------------------------------

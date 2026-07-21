@@ -1355,9 +1355,34 @@ class RuntimeAuditLedgerWriter:
                             pair[1] for pair in row["legacy_baseline"] if pair[0] == tag
                         )
                         continue
-                    all_identities.add((row["tenant_tag"], row["entry"]["entry_hash"]))
                     if row["tenant_tag"] != tag:
+                        # Rows under OTHER tags are validated before their
+                        # identity can serve as an ALIAS TARGET (codex
+                        # round-2 P2): a tampered destination row keeping
+                        # the raw entry_hash but carrying modified content
+                        # must fail the read, not silently satisfy the
+                        # alias coverage.
+                        other_entry = AuditLedgerEntry.model_validate(row["entry"])
+                        other_recomputed = compute_entry_hash(other_entry.payload)
+                        if other_recomputed != other_entry.entry_hash:
+                            raise ValueError(
+                                f"sidecar row for tenant_tag={row['tenant_tag']!r} "
+                                f"fails content-integrity on read: stored "
+                                f"entry_hash={other_entry.entry_hash!r} but "
+                                f"recomputed {other_recomputed!r} — tampered "
+                                f"or corrupt row"
+                            )
+                        other_identity = (row["tenant_tag"], other_entry.entry_hash)
+                        if other_identity in all_identities:
+                            raise ValueError(
+                                f"sidecar holds duplicate rows for "
+                                f"tenant_tag={row['tenant_tag']!r} "
+                                f"entry_hash={other_entry.entry_hash!r} — "
+                                f"tampered or corrupt rows preserved as evidence"
+                            )
+                        all_identities.add(other_identity)
                         continue
+                    all_identities.add((row["tenant_tag"], row["entry"]["entry_hash"]))
                     entry = AuditLedgerEntry.model_validate(row["entry"])
                     # Round-42 codex: the reader needs the same round-17
                     # content recompute as the append-side fold — a payload

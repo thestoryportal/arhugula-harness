@@ -659,3 +659,81 @@ def test_author_crash_before_publication_leaves_no_partial_record(
         )
     assert not dep.record_path.exists()
     assert not dep.record_path.with_name(dep.record_path.name + ".author.tmp").exists()
+
+
+# ---------------------------------------------------------------------------
+# Codex round-2 findings (this leg).
+# ---------------------------------------------------------------------------
+
+
+def test_retag_refuses_on_destination_collision(dep: _Deployment) -> None:
+    """A retag destination colliding with an OBSERVED sidecar identity
+    (the same entry already tenant-tagged, omitted from the record) would
+    mint duplicate destination rows — typed refusal, zero changes."""
+    entry = dep.signed_entry("ref-1", placeholder=True)
+    writer = dep.writer()
+    writer.append(None, entry)  # ("_single", H)
+    writer.append(_TENANT, entry)  # ("tenant-a", H) — the collision target
+    dep.write_record(_row(entry.entry_hash))  # maps ("_single", H) -> ("tenant-a", H)
+    before = dep.sidecar_path.read_bytes()
+
+    with pytest.raises(RecordMigrationError, match="collide"):
+        retag_sidecar(
+            dep.config(), sidecar_path=dep.sidecar_path, signing_backend=dep.record_backend
+        )
+    assert dep.sidecar_path.read_bytes() == before
+
+
+def test_retag_read_happens_inside_replace_lock(
+    dep: _Deployment, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The B-46 exclusion spans read→compose→replace: the sidecar READ runs
+    while the replace lock is held — a concurrent append can never land
+    between an unlocked snapshot and the replacement."""
+    entry = dep.signed_entry("ref-1", placeholder=True)
+    dep.writer().append(None, entry)
+    dep.write_record(_row(entry.entry_hash))
+
+    import contextlib as _contextlib
+
+    import harness_runtime.admin.record_migration as rm
+
+    lock_held = {"value": False}
+    reads_under_lock: list[bool] = []
+
+    @_contextlib.contextmanager
+    def tracking_lock(path: object):  # noqa: ANN202
+        lock_held["value"] = True
+        try:
+            yield
+        finally:
+            lock_held["value"] = False
+
+    real_read = rm._read_sidecar_rows  # noqa: SLF001
+
+    def tracking_read(path: object):  # noqa: ANN202
+        reads_under_lock.append(lock_held["value"])
+        return real_read(path)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(rm, "cross_process_replace_lock", tracking_lock)
+    monkeypatch.setattr(rm, "_read_sidecar_rows", tracking_read)
+    retag_sidecar(dep.config(), sidecar_path=dep.sidecar_path, signing_backend=dep.record_backend)
+    assert reads_under_lock == [True]
+
+
+def test_tampered_alias_target_row_detected_on_single_read(dep: _Deployment) -> None:
+    """A retagged destination row tampered in content (raw entry_hash
+    retained) must FAIL the `_single`-scope read — never silently satisfy
+    the alias coverage."""
+    entry = dep.signed_entry("ref-1", placeholder=True)
+    dep.writer().append(None, entry)
+    record = dep.write_record(_row(entry.entry_hash))
+    retag_sidecar(dep.config(), sidecar_path=dep.sidecar_path, signing_backend=dep.record_backend)
+
+    rows = [json.loads(line) for line in dep.sidecar_path.read_text().splitlines() if line.strip()]
+    rows[0]["entry"]["payload"]["audit_namespace_attrs"] = {"audit.actor": "TAMPERED"}
+    dep.sidecar_path.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+
+    fresh = dep.writer(cutover_record=record)
+    with pytest.raises(ValueError, match="content-integrity"):
+        fresh.read_full_entries_for_tenant(None)
