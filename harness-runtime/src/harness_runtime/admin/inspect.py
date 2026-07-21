@@ -765,6 +765,7 @@ def _run_audit_verification_if_engaged(
             key_map_path=args.signing_key_map,
             cutover_record_path=cutover_record_path,
             ledger_audit_refs=ledger_audit_refs,
+            sidecar_explicit=args.audit_sidecar is not None,
         )
     except ForgedCutoverRecordError as exc:
         # Typed rejection — never downgraded to absent-record fallback.

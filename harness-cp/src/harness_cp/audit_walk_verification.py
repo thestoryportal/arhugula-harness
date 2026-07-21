@@ -286,6 +286,28 @@ def run_blocking_audit_walk(
     # row 1's result-boundary contract), never misclassified as rerunnable
     # infrastructure.
 
+    # An INVALID per-entry verdict fails the walk even when the verifier
+    # did not ALSO populate `outcome.invalid` — the public outcome type
+    # admits that state, so it must be gated, not assumed away (codex
+    # round-5 P1 on the U-RT-138 leg).
+    invalid_verdicts = tuple(
+        v for v in outcome.entry_verdicts if v.kind is WalkEntryVerdictKind.INVALID
+    )
+    if outcome.invalid is None and invalid_verdicts:
+        first = invalid_verdicts[0]
+        return BlockingAuditWalkResult(
+            kind=WalkResultKind.FAILED,
+            detail=(
+                f"audit FAILED: {len(invalid_verdicts)} INVALID entry "
+                f"verdict(s) (first: {first.entry_ref}: {first.reason}) — a "
+                f"verifier-reported invalid entry never falls through to "
+                f"PASSED (C-CP-20 §20.3.1)"
+            ),
+            failure_discriminator=WalkInvalidDiscriminator.SIGNATURE_INVALID,
+            signature_dispositions=outcome.signature_dispositions,
+            baseline_divergences=outcome.baseline_divergences,
+        )
+
     exempt = tuple(
         v for v in outcome.entry_verdicts if v.kind is WalkEntryVerdictKind.EXEMPT_PLACEHOLDER
     )

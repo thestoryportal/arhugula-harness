@@ -864,3 +864,88 @@ def test_summary_composes_with_audit_disposition(
     payload = json.loads(out)
     assert "head_hash" in payload
     assert payload["audit_verification"]["disposition"] == "verified"
+
+
+# ---------------------------------------------------------------------------
+# Codex round-5 findings (this leg).
+# ---------------------------------------------------------------------------
+
+
+def test_explicit_missing_sidecar_path_is_input_error(
+    fx: _Fixture, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """An EXPLICIT `--audit-sidecar` naming a missing path is an operator
+    input error (exit 3) — a path typo must never become a green
+    compliance result via a silently substituted empty sidecar."""
+    _greenfield_passing(fx)
+    fx.write_ledger(["action-0"])  # no audit refs — zero-row-looking ledger
+    fx.sidecar_path.unlink()
+
+    exit_code = main(fx.full_verification_argv("--expected-tenant", _TENANT))
+    out = capsys.readouterr().out
+    assert exit_code == 3, out
+    assert "missing/non-file path" in out
+
+
+def test_mtc_zero_row_ledger_record_free_verifies(
+    fx: _Fixture, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """§13.5 row 6 verbatim: record-free success is permitted ONLY for a
+    zero-row ledger. MTC + key mapping + NO record + no sidecar rows + no
+    IS audit refs → VERIFIED exit 0; the same inputs WITH a row present
+    stay UNVERIFIED (covered by test_rows_present_without_record...)."""
+    fx.write_ledger(["action-0"])  # no audit: refs
+    fx.write_config()  # MTC
+    fx.write_key_map(("ed25519", _ROW_KEY), ("ed25519", _RECORD_KEY))
+
+    # Default sidecar path (never created) — NOT explicit.
+    argv = [
+        "--ledger-path",
+        str(fx.ledger_path),
+        "--runtime-config",
+        str(fx.config_path),
+        "--signing-key-map",
+        str(fx.key_map_path),
+    ]
+    exit_code = main(argv)
+    out = capsys.readouterr().out
+    assert exit_code == 0, out
+    assert "VERIFIED" in out
+
+
+def test_backend_construction_unavailable_is_unverified(
+    fx: _Fixture, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A key-map entry whose backend cannot be CONSTRUCTED (missing
+    optional SDK — the typed `SigningBackendUnavailableError`) is an
+    explicit UNVERIFIED disposition, never a traceback."""
+    from harness_runtime.config.audit_signing import SigningBackendUnavailableError
+
+    _greenfield_passing(fx)
+
+    def unavailable(config: object) -> object:
+        raise SigningBackendUnavailableError("boto3 is not installed (test)")
+
+    monkeypatch.setattr(
+        "harness_runtime.config.audit_signing.make_audit_signing_backend", unavailable
+    )
+    exit_code = main(fx.full_verification_argv("--expected-tenant", _TENANT))
+    out = capsys.readouterr().out
+    assert exit_code == 3, out
+    assert "backend unavailable" in out
+
+
+def test_tampered_tenant_tag_is_disposition_not_traceback(
+    fx: _Fixture, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A tampered sidecar tag the OD rule-set refuses (empty string) is a
+    parse-time UNVERIFIED disposition — never a raw `signing_token`
+    ValueError escaping mid-walk."""
+    _greenfield_passing(fx)
+    entry = fx.signed_entry("ref-tampered", tenant_id=None)
+    fx.write_sidecar([("", entry)])
+
+    exit_code = main(fx.full_verification_argv("--expected-tenant", _TENANT))
+    out = capsys.readouterr().out
+    assert exit_code == 3, out
+    assert "invalid tenant tag" in out

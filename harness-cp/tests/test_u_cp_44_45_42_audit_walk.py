@@ -317,3 +317,39 @@ def test_walk_baseline_divergence_fails_explicitly() -> None:
     )
     assert result.kind is WalkResultKind.FAILED
     assert result.baseline_divergences
+
+
+def test_invalid_entry_verdict_fails_walk_without_invalid_signal() -> None:
+    """Codex round-5 (U-RT-138 leg): a verifier returning a type-valid
+    `WalkEntryVerdict(kind=INVALID)` WITHOUT also populating
+    `outcome.invalid` must still FAIL the walk — the public outcome type
+    admits that state, so the walk gates it explicitly rather than falling
+    through to PASSED.
+
+    Mutation probe: dropping the invalid-verdict gate lets this outcome
+    reach the final PASSED branch → FAILS."""
+
+    class _InvalidVerdictVerifier:
+        def verify(
+            self,
+            audit_entries: Sequence[object],
+            *,
+            tenant_scope: str | None,
+            observed_baseline_identities: Sequence[tuple[str, str]],
+        ) -> WalkVerificationOutcome:
+            del audit_entries, tenant_scope, observed_baseline_identities
+            return WalkVerificationOutcome(
+                entry_verdicts=(
+                    WalkEntryVerdict(
+                        entry_ref="entry-0",
+                        kind=WalkEntryVerdictKind.INVALID,
+                        reason="signature mismatch (verifier-reported)",
+                    ),
+                ),
+                signature_dispositions={"verified": 0},
+            )
+
+    result = run_blocking_audit_walk([object()], verifier=_InvalidVerdictVerifier())
+    assert result.kind is WalkResultKind.FAILED
+    assert result.failure_discriminator is WalkInvalidDiscriminator.SIGNATURE_INVALID
+    assert "INVALID entry verdict" in result.detail

@@ -182,6 +182,22 @@ def _read_sidecar(sidecar_path: Path) -> _SidecarContent:
     key_pairs: set[str] = set()
     seen_identities: set[tuple[str, str]] = set()
 
+    def _validate_tag(tag: str, line_number: int) -> None:
+        # Persisted tags obey the OD §21.2.1 rule-set: the `_single`
+        # sentinel, or a tag `signing_token` accepts. A tampered impossible
+        # tag (e.g. "") is a parse-time disposition, never a raw normalizer
+        # ValueError escaping mid-walk (codex round-5 P2).
+        if tag == _SINGLE_TAG:
+            return
+        from harness_od.multi_tenant_trace_separation_and_audit_ledger import signing_token
+
+        try:
+            signing_token(tag)
+        except ValueError as exc:
+            raise ValueError(
+                f"sidecar line {line_number}: invalid tenant tag {tag!r}: {exc}"
+            ) from exc
+
     def _claim_identity(tag: str, entry_hash: str, line_number: int) -> None:
         # The writer's membership index treats ANY duplicate
         # `(tenant_tag, entry_hash)` as external mutation — the read side
@@ -231,6 +247,7 @@ def _read_sidecar(sidecar_path: Path) -> _SidecarContent:
                         f"sidecar line {line_number}: malformed legacy_baseline pair {pair!r}"
                     )
                 tag_str, hash_str = cast("list[str]", pair)
+                _validate_tag(tag_str, line_number)
                 _claim_identity(tag_str, hash_str, line_number)
                 observed.append((tag_str, hash_str))
                 baseline.append((tag_str, hash_str))
@@ -240,6 +257,7 @@ def _read_sidecar(sidecar_path: Path) -> _SidecarContent:
         if not isinstance(entry_obj, dict) or not isinstance(tag, str):
             raise ValueError(f"sidecar line {line_number} lacks tenant_tag/entry")
         entry = AuditLedgerEntry.model_validate(entry_obj)
+        _validate_tag(tag, line_number)
         _claim_identity(tag, entry.entry_hash, line_number)
         entries.append((tag, entry))
         observed.append((tag, entry.entry_hash))
@@ -266,7 +284,10 @@ def _load_key_map(path: Path) -> tuple[dict[str, SigningBackend], dict[str, str]
     physical-distinctness check must compare backing material, not logical
     `key_id` strings; two distinct ids aliasing one ARN share a key.
     """
-    from harness_runtime.config.audit_signing import make_audit_signing_backend
+    from harness_runtime.config.audit_signing import (
+        SigningBackendUnavailableError,
+        make_audit_signing_backend,
+    )
     from harness_runtime.types import AuditSigningConfig
 
     raw: object = json.loads(path.read_text(encoding="utf-8"))
@@ -278,7 +299,14 @@ def _load_key_map(path: Path) -> tuple[dict[str, SigningBackend], dict[str, str]
         if ":" not in map_key:
             raise ValueError(f"key-map key {map_key!r} must be '<algorithm>:<key_id>'")
         config = AuditSigningConfig.model_validate(spec)
-        backend = make_audit_signing_backend(config)
+        try:
+            backend = make_audit_signing_backend(config)
+        except SigningBackendUnavailableError as exc:
+            # Construction-availability (missing optional SDK, etc.) is an
+            # input/infrastructure failure — surfaces as the explicit
+            # UNVERIFIED disposition, never a traceback (codex round-5 P2);
+            # genuine programming defects still propagate.
+            raise ValueError(f"key-map entry {map_key!r} backend unavailable: {exc}") from exc
         if backend is None:
             raise ValueError(
                 f"key-map entry {map_key!r} resolves to no backend "
@@ -404,19 +432,21 @@ def _load_authenticated_record(
     return record, signature
 
 
-def _alias_source_tags(record: AuditCutoverRecord) -> dict[tuple[str, str], str]:
+def _alias_source_tags(record: AuditCutoverRecord | None) -> dict[tuple[str, str], str]:
     """Record-derived alias map keyed by DESTINATION identity
     `(tenant_scope, entry_hash)` → `source_tag` — never `entry_hash` alone
     (codex round-1 P2 on this leg: two record rows legitimately sharing a
     pre-v1.34 entry hash across tenants would overwrite each other in a
     hash-only dict, making reverse coverage row-order-dependent)."""
+    if record is None:
+        return {}
     return {(row.tenant_scope, row.entry_hash): row.source_tag for row in record.rows}
 
 
 def _surplus_rows(
     observed_identities: tuple[tuple[str, str], ...],
     ledger_audit_refs: frozenset[str],
-    record: AuditCutoverRecord,
+    record: AuditCutoverRecord | None,
 ) -> tuple[str, ...]:
     """Reverse coverage (codex rounds 52/53): sidecar rows absent from the
     IS ledger's `audit:` refs are SURPLUS — with the record-derived alias
@@ -438,7 +468,7 @@ def _surplus_rows(
 def _missing_ledger_refs(
     observed_identities: tuple[tuple[str, str], ...],
     ledger_audit_refs: frozenset[str],
-    record: AuditCutoverRecord,
+    record: AuditCutoverRecord | None,
 ) -> tuple[str, ...]:
     """FORWARD coverage (codex round-1 P1 on this leg): an IS ledger
     `audit:` ref whose sidecar row is DELETED never reaches the verifier —
@@ -463,6 +493,7 @@ def run_audit_inspection(
     key_map_path: Path | None,
     cutover_record_path: Path | None,
     ledger_audit_refs: frozenset[str],
+    sidecar_explicit: bool = False,
 ) -> AuditInspectionOutcome:
     """The §13.5 audit-verification disposition (caller pre-checks the
     engagement predicate and resolves the IS ledger's `audit:` refs)."""
@@ -487,43 +518,16 @@ def run_audit_inspection(
             return _unverified(f"--expected-tenant invalid: {exc}")
 
     is_mtc = runtime_config.persona_tier == PersonaTier.MULTI_TENANT_COMPLIANCE
-    have_backend_inputs = key_map_path is not None and cutover_record_path is not None
     any_verification_input = (
         key_map_path is not None or cutover_record_path is not None or expected_tenant is not None
     )
 
-    if not have_backend_inputs:
-        if is_mtc:
-            return _unverified(
-                "MULTI_TENANT_COMPLIANCE inspection requires --signing-key-map "
-                "AND --cutover-record — silent hash-only success is prohibited "
-                "(OD v1.34 §21.2.2 row 8)"
-            )
-        if any_verification_input:
-            # Verification was REQUESTED but the input set is incomplete —
-            # never silently fall back to hash-only (the record is required
-            # whenever any row exists; era is never observation-inferred).
-            missing = [
-                name
-                for name, value in (
-                    ("--signing-key-map", key_map_path),
-                    ("--cutover-record", cutover_record_path),
-                )
-                if value is None
-            ]
-            return _unverified(
-                f"verification inputs incomplete (missing {', '.join(missing)}) "
-                f"— a partial input set never degrades to hash-only"
-            )
-        return AuditInspectionOutcome(
-            disposition="hash-only-preserved",
-            exit_code=0,
-            detail=(
-                "sub-MTC tier per the supplied authoritative config, no "
-                "verification inputs — pre-v1.101 hash-only inspection "
-                "behavior preserved verbatim"
-            ),
-        )
+    # An EXPLICITLY supplied sidecar path that is not a file is an operator
+    # input error — never silently substituted with an empty sidecar (codex
+    # round-5 P1: a path typo must not become a green compliance result).
+    # The DEFAULT path not existing is the legitimate zero-row case.
+    if sidecar_explicit and not sidecar_path.is_file():
+        return _unverified(f"--audit-sidecar names a missing/non-file path: {sidecar_path}")
 
     try:
         sidecar = (
@@ -539,6 +543,44 @@ def run_audit_inspection(
     except (ValueError, OSError) as exc:
         return _unverified(f"audit sidecar {sidecar_path} unreadable/unparseable: {exc}")
 
+    # §13.5 row 6: the key mapping (row 3) is REQUIRED at MTC; the cutover
+    # record (row 4) is REQUIRED whenever ANY row exists — record-free
+    # success is permitted ONLY for a zero-row ledger (spec verbatim; the
+    # round-2 rejection of this carve-out over-read the acceptance clause
+    # and is corrected here against the spec text).
+    rows_exist = bool(sidecar.observed_identities) or bool(ledger_audit_refs)
+
+    if key_map_path is None:
+        if is_mtc:
+            return _unverified(
+                "MULTI_TENANT_COMPLIANCE inspection requires --signing-key-map "
+                "(and --cutover-record whenever any row exists) — silent "
+                "hash-only success is prohibited (OD v1.34 §21.2.2 row 8)"
+            )
+        if any_verification_input:
+            # Verification was REQUESTED but the input set is incomplete —
+            # never silently fall back to hash-only.
+            return _unverified(
+                "verification inputs incomplete (missing --signing-key-map) "
+                "— a partial input set never degrades to hash-only"
+            )
+        return AuditInspectionOutcome(
+            disposition="hash-only-preserved",
+            exit_code=0,
+            detail=(
+                "sub-MTC tier per the supplied authoritative config, no "
+                "verification inputs — pre-v1.101 hash-only inspection "
+                "behavior preserved verbatim"
+            ),
+        )
+
+    if cutover_record_path is None and rows_exist:
+        return _unverified(
+            "row(s) present with NO --cutover-record — the record is "
+            "required whenever any row exists; era is never "
+            "observation-inferred"
+        )
+
     try:
         key_map, key_materials = _load_key_map(
             key_map_path  # type: ignore[arg-type]  # narrowed above
@@ -550,20 +592,25 @@ def run_audit_inspection(
     # its authentication failures are TYPED and never absent-fallback. An
     # unreadable/missing record FILE is an input failure, not a forgery —
     # explicit UNVERIFIED, never a traceback (codex round-1 P2 on this leg).
-    try:
-        record, signature = _load_authenticated_record(
-            cutover_record_path,  # type: ignore[arg-type]  # narrowed above
-            pinned_key_id=runtime_config.audit_cutover_record_key_id,
-            ledger_binding_id=runtime_config.audit_ledger_binding_id,
-            key_map=key_map,
-            key_materials=key_materials,
-            row_key_ids=sidecar.row_key_ids,
-            row_key_pairs=sidecar.row_key_pairs,
-        )
-    except OSError as exc:
-        return _unverified(f"--cutover-record unreadable: {exc}")
+    record: AuditCutoverRecord | None = None
+    signature: bytes | None = None
+    if cutover_record_path is not None:
+        try:
+            record, signature = _load_authenticated_record(
+                cutover_record_path,
+                pinned_key_id=runtime_config.audit_cutover_record_key_id,
+                ledger_binding_id=runtime_config.audit_ledger_binding_id,
+                key_map=key_map,
+                key_materials=key_materials,
+                row_key_ids=sidecar.row_key_ids,
+                row_key_pairs=sidecar.row_key_pairs,
+            )
+        except OSError as exc:
+            return _unverified(f"--cutover-record unreadable: {exc}")
 
     surplus = _surplus_rows(sidecar.observed_identities, ledger_audit_refs, record)
+    # `record is None` only on the zero-row path (guarded above) — every
+    # check below is then vacuous over empty row/baseline/ref sets.
     if surplus and is_mtc:
         return AuditInspectionOutcome(
             disposition="failed",
@@ -594,7 +641,9 @@ def run_audit_inspection(
     # grouping — the OD §21.2.2 row-6 check must never be bypassable by
     # simply not naming an identity in the record. Tier-independent, like
     # the walk's own divergence failures.
-    recorded_source_identities = {(row.source_tag, row.entry_hash) for row in record.rows}
+    recorded_source_identities: set[tuple[str, str]] = (
+        {(row.source_tag, row.entry_hash) for row in record.rows} if record is not None else set()
+    )
     unrecorded = [
         (tag, entry_hash)
         for tag, entry_hash in sidecar.baseline_identities
@@ -683,7 +732,7 @@ def run_audit_inspection(
 
 def _scoped_walk_groups(
     sidecar: _SidecarContent,
-    record: AuditCutoverRecord,
+    record: AuditCutoverRecord | None,
     expected_tenant: str | None,
 ) -> list[tuple[str | None, list[AuditLedgerEntry], list[tuple[str, str]]]]:
     """Partition sidecar content into per-tenant-scope walk groups.
@@ -703,14 +752,15 @@ def _scoped_walk_groups(
     - unclaimed `"_single"` rows walk untenanted (`scope=None`, the
       pre-tenant four-tuple era).
     """
-    claimed = {(row.tenant_scope, row.entry_hash) for row in record.rows}
+    record_rows = record.rows if record is not None else ()
+    claimed = {(row.tenant_scope, row.entry_hash) for row in record_rows}
     if expected_tenant is not None:
         scopes = [expected_tenant]
     else:
         scopes = sorted(
             {tag for tag, _ in sidecar.tagged_entries if tag != _SINGLE_TAG}
             | {tag for tag, _ in sidecar.baseline_identities if tag != _SINGLE_TAG}
-            | {row.tenant_scope for row in record.rows}
+            | {row.tenant_scope for row in record_rows}
         )
 
     groups: list[tuple[str | None, list[AuditLedgerEntry], list[tuple[str, str]]]] = []
