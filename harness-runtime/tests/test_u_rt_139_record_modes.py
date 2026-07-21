@@ -116,7 +116,15 @@ class _Deployment:
             tenant_id=_TENANT,
             audit_signing=AuditSigningConfig(
                 backend=AuditSigningBackendKind.AWS_KMS,
-                key_arns={_ROW_KEY: _ARN_ROW, _RECORD_KEY: _ARN_RECORD},
+                # Every composition-root signing consumer must be mapped for
+                # the stage-4 validation the record modes now run up front.
+                key_arns={
+                    _ROW_KEY: _ARN_ROW,
+                    _RECORD_KEY: _ARN_RECORD,
+                    "harness-runtime-redaction-token": _ARN_ROW + "-redaction",
+                    "harness-runtime-dev": _ARN_ROW + "-dev",
+                    "harness-cost-attribution-v1": _ARN_ROW + "-cost",
+                },
             ),
             audit_cutover_record_path=str(self.record_path),
             audit_cutover_record_key_id=_RECORD_KEY,
@@ -408,7 +416,7 @@ def test_record_from_other_deployment_rejected_by_binding_compare(dep: _Deployme
 
 
 def test_forged_cutover_record_rejected_typed_never_treated_as_absent(
-    dep: _Deployment, monkeypatch: pytest.MonkeyPatch
+    dep: _Deployment, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """AUTHENTICATION IS U-RT-139's OWN OBLIGATION (plan codex round-5):
     a tampered record is REJECTED with a typed error through the REAL CLI
@@ -440,6 +448,9 @@ def test_forged_cutover_record_rejected_typed_never_treated_as_absent(
                 "[runtime.audit_signing.key_arns]",
                 f'"{_ROW_KEY}" = "{_ARN_ROW}"',
                 f'"{_RECORD_KEY}" = "{_ARN_RECORD}"',
+                f'"harness-runtime-redaction-token" = "{_ARN_ROW}-redaction"',
+                f'"harness-runtime-dev" = "{_ARN_ROW}-dev"',
+                f'"harness-cost-attribution-v1" = "{_ARN_ROW}-cost"',
                 "",
                 "[runtime.otel]",
                 'otlp_endpoint = "http://localhost:4318"',
@@ -455,6 +466,9 @@ def test_forged_cutover_record_rejected_typed_never_treated_as_absent(
     exit_code = main([str(dep.ledger_path), "--retag", "--runtime-config", str(config_path)])
     assert exit_code == 1
     assert dep.sidecar_path.read_bytes() == before
+    captured = capsys.readouterr()
+    # Pins the AUTHENTICATION branch specifically (not a config rejection).
+    assert "REJECTED" in captured.err
 
 
 # ---------------------------------------------------------------------------
@@ -702,16 +716,16 @@ def test_retag_read_happens_inside_replace_lock(
     reads_under_lock: list[bool] = []
 
     @_contextlib.contextmanager
-    def tracking_lock(path: object):  # noqa: ANN202
+    def tracking_lock(path: object):
         lock_held["value"] = True
         try:
             yield
         finally:
             lock_held["value"] = False
 
-    real_read = rm._read_sidecar_rows  # noqa: SLF001
+    real_read = rm._read_sidecar_rows
 
-    def tracking_read(path: object):  # noqa: ANN202
+    def tracking_read(path: object):
         reads_under_lock.append(lock_held["value"])
         return real_read(path)  # type: ignore[arg-type]
 
@@ -737,3 +751,104 @@ def test_tampered_alias_target_row_detected_on_single_read(dep: _Deployment) -> 
     fresh = dep.writer(cutover_record=record)
     with pytest.raises(ValueError, match="content-integrity"):
         fresh.read_full_entries_for_tenant(None)
+
+
+# ---------------------------------------------------------------------------
+# Codex round-3 findings (this leg).
+# ---------------------------------------------------------------------------
+
+
+def test_record_path_aliasing_migration_temp_refused(dep: _Deployment) -> None:
+    """A record path aliasing a writer- or migration-owned file (here the
+    retag temp name) is refused — the retag's stale-temp cleanup would
+    otherwise DELETE the trust anchor it had just authenticated."""
+    entry = dep.signed_entry("ref-1", placeholder=True)
+    dep.writer().append(None, entry)
+    config = dep.config().model_copy(
+        update={
+            "audit_cutover_record_path": str(
+                dep.sidecar_path.with_name(dep.sidecar_path.name + ".retag.tmp")
+            )
+        }
+    )
+    with pytest.raises(RecordMigrationError, match="migration-owned"):
+        author_cutover_record(
+            config,
+            sidecar_path=dep.sidecar_path,
+            signing_backend=dep.record_backend,
+            attestation={entry.entry_hash: _TENANT},
+        )
+
+
+def test_author_unverifiable_signature_refused(dep: _Deployment) -> None:
+    """A backend that signs but cannot verify (split KMS permissions, or a
+    faulty same-width signature) fails AT AUTHORING — never publishing a
+    record every later bootstrap/retag rejects."""
+
+    class _SignOnlyBackend(_FakeBackend):
+        def verify(self, *, message: bytes, signature: bytes, key_id: str, key_period: int) -> bool:
+            return False
+
+    entry = dep.signed_entry("ref-1", placeholder=True)
+    dep.writer().append(None, entry)
+    with pytest.raises(RecordMigrationError, match="round-trip"):
+        author_cutover_record(
+            dep.config(),
+            sidecar_path=dep.sidecar_path,
+            signing_backend=_SignOnlyBackend(secret=b"record-secret"),
+            attestation={entry.entry_hash: _TENANT},
+        )
+    assert not dep.record_path.exists()
+
+
+def test_blank_tenant_bindings_rejected(dep: _Deployment) -> None:
+    """A blank attested tenant or a blank --tofu-quarantine scope is
+    rejected explicitly — never a silently-incomplete signed record that
+    retag then refuses while re-authoring refuses the existing file."""
+    entry = dep.signed_entry("ref-1", placeholder=True)
+    dep.writer().append(None, entry)
+
+    with pytest.raises(RecordMigrationError, match="blank tenant"):
+        author_cutover_record(
+            dep.config(),
+            sidecar_path=dep.sidecar_path,
+            signing_backend=dep.record_backend,
+            attestation={entry.entry_hash: ""},
+        )
+    with pytest.raises(RecordMigrationError, match="non-blank"):
+        author_cutover_record(
+            dep.config(),
+            sidecar_path=dep.sidecar_path,
+            signing_backend=dep.record_backend,
+            attestation={},
+            tofu_quarantine_tenant="  ",
+        )
+    assert not dep.record_path.exists()
+
+
+def test_stage4_consumer_mapping_gap_refused(dep: _Deployment) -> None:
+    """A config the stage-4 span-stage validation would reject (missing a
+    composition-root consumer key mapping) refuses record modes up front."""
+    entry = dep.signed_entry("ref-1", placeholder=True)
+    dep.writer().append(None, entry)
+    thin_map = {
+        _ROW_KEY: _ARN_ROW,
+        _RECORD_KEY: _ARN_RECORD,
+        "harness-runtime-redaction-token": _ARN_ROW + "-redaction",
+        # "harness-runtime-dev" + cost key MISSING
+    }
+    config = dep.config().model_copy(
+        update={
+            "audit_signing": AuditSigningConfig(
+                backend=AuditSigningBackendKind.AWS_KMS, key_arns=thin_map
+            )
+        }
+    )
+    with pytest.raises(RecordMigrationError, match="rejected at bootstrap"):
+        author_cutover_record(
+            config,
+            sidecar_path=dep.sidecar_path,
+            signing_backend=dep.record_backend,
+            attestation={entry.entry_hash: _TENANT},
+        )
+    assert not dep.record_path.exists()

@@ -51,6 +51,7 @@ from harness_od.audit_cutover_record import (
     CutoverRecordValidationError,
     VerificationDisposition,
     sign_cutover_record,
+    verify_cutover_record_signature,
 )
 from harness_od.audit_ledger_types import AuditLedgerEntry
 
@@ -59,7 +60,10 @@ from harness_runtime.lifecycle.audit_signing_fail_closed_validation import (
     _reject_record_key_used_by_persisted_rows,  # pyright: ignore[reportPrivateUsage]  # shared trust-anchor component
     _verify_existing_record,  # pyright: ignore[reportPrivateUsage]  # shared trust-anchor component
 )
-from harness_runtime.lifecycle.audit_writer import AUDIT_SNAPSHOT_FILENAME
+from harness_runtime.lifecycle.audit_writer import (
+    AUDIT_SNAPSHOT_FILENAME,
+    AUDIT_WRITER_RESERVED_FILENAMES,
+)
 
 if TYPE_CHECKING:
     from harness_cp.f5_signing_key_resolution import SigningBackend
@@ -176,7 +180,34 @@ def _record_trust_inputs(config: RuntimeConfig) -> tuple[Path, str, str]:
     )
 
 
-def _validate_signing_config(config: RuntimeConfig) -> None:
+_MIGRATION_TEMP_SUFFIXES = (".retag.tmp", ".author.tmp")
+
+
+def _reject_reserved_record_path(record_path: Path, *, sidecar_path: Path) -> None:
+    """The record path must never alias a writer- or migration-owned file
+    (codex round-3 P1: `audit-entries.jsonl.retag.tmp` as the record path
+    let the retag's stale-temp cleanup DELETE the trust anchor it had just
+    authenticated). Mirrors bootstrap's own reserved-filename rejection,
+    extended with this module's temp names."""
+    reserved = set(AUDIT_WRITER_RESERVED_FILENAMES)
+    for suffix in _MIGRATION_TEMP_SUFFIXES:
+        reserved.add(sidecar_path.name + suffix)
+    reserved.add(sidecar_path.name)
+    try:
+        resolved = record_path.resolve()
+        reserved_dir = sidecar_path.resolve().parent
+        collides = any(resolved == reserved_dir / name for name in reserved)
+    except OSError:
+        collides = False
+    if collides:
+        raise RecordMigrationError(
+            f"audit_cutover_record_path={str(record_path)!r} resolves to a "
+            f"writer- or migration-owned file — the trust anchor must be a "
+            f"distinct file nothing here truncates, replaces, or unlinks"
+        )
+
+
+def _validate_signing_config(config: RuntimeConfig, *, signing_backend: SigningBackend) -> None:
     """Run the FULL bootstrap config-shape validation before any record-mode
     side effect (codex round-1 P1: a config normal bootstrap would reject —
     e.g. record key sharing a row key's backing material — must not author
@@ -185,10 +216,24 @@ def _validate_signing_config(config: RuntimeConfig) -> None:
         IncompatibleConfigVersion,
         validate_mtc_audit_signing_config,
     )
+    from harness_runtime.lifecycle.span_processor import (
+        SpanProcessorBindError,
+        validate_audit_signing_for_span_stage,
+    )
 
     try:
         validate_mtc_audit_signing_config(config)
-    except (AuditSigningConfigInvalidError, IncompatibleConfigVersion) as exc:
+        validate_audit_signing_for_span_stage(
+            config,
+            signing_backend=signing_backend,
+            tokenizer_will_bind=True,
+            additional_key_ids=("harness-runtime-dev", "harness-cost-attribution-v1"),
+        )
+    except (
+        AuditSigningConfigInvalidError,
+        IncompatibleConfigVersion,
+        SpanProcessorBindError,
+    ) as exc:
         raise RecordMigrationError(
             f"signing config would be rejected at bootstrap — refusing record "
             f"modes against it: {exc}"
@@ -208,6 +253,7 @@ def _authenticate_record(
     downgrade exemption/era decisions), and ZERO tags are changed.
     """
     record_path, record_key_id, binding_id = _record_trust_inputs(config)
+    _reject_reserved_record_path(record_path, sidecar_path=sidecar_path)
     if not record_path.is_file():
         raise RecordMigrationError(
             f"cutover record not found at {record_path} — the retag mode "
@@ -239,7 +285,7 @@ def retag_sidecar(
     signing_backend: SigningBackend,
 ) -> RetagOutcome:
     """OD v1.34 §21.2.1 row-6 retag, driven by the authenticated record."""
-    _validate_signing_config(config)
+    _validate_signing_config(config, signing_backend=signing_backend)
     record = _authenticate_record(
         config, sidecar_path=sidecar_path, signing_backend=signing_backend
     )
@@ -433,8 +479,9 @@ def author_cutover_record(
     rows (`four_tuple_real` under their existing `source_tag` — era cannot
     be inferred from mutable signature values afterward).
     """
-    _validate_signing_config(config)
+    _validate_signing_config(config, signing_backend=signing_backend)
     record_path, record_key_id, binding_id = _record_trust_inputs(config)
+    _reject_reserved_record_path(record_path, sidecar_path=sidecar_path)
     if record_path.exists():
         raise RecordMigrationError(
             f"cutover record already exists at {record_path} — refusing to "
@@ -455,10 +502,22 @@ def author_cutover_record(
     composed: list[AuditCutoverRecordRow] = []
     unattested: list[str] = []
 
+    if tofu_quarantine_tenant is not None and not tofu_quarantine_tenant.strip():
+        raise RecordMigrationError(
+            "--tofu-quarantine tenant must be non-blank — an empty scope "
+            "would silently omit every unattested identity from the record"
+        )
+
     def _tenant_for(entry_hash: str) -> tuple[str, bool]:
         """(tenant_scope, quarantined) for a `\"_single\"` identity."""
         attested = attestation.get(entry_hash)
         if attested is not None:
+            if not attested.strip():
+                raise RecordMigrationError(
+                    f"attestation for {entry_hash!r} maps to a blank tenant "
+                    f"— rejected (a blank binding would silently omit the "
+                    f"identity from the signed record)"
+                )
             return attested, False
         if tofu_quarantine_tenant is not None:
             return tofu_quarantine_tenant, True
@@ -554,6 +613,24 @@ def author_cutover_record(
     except (CutoverRecordValidationError, ValueError) as exc:
         raise RecordMigrationError(f"record composition/signing failed: {exc}") from exc
 
+    # Round-trip the fresh signature through VERIFICATION before publishing
+    # (codex round-3 P1, mirroring the greenfield mint): a backend that can
+    # sign but not verify — or emits an invalid same-width signature — must
+    # fail HERE, not at every subsequent bootstrap/retag.
+    try:
+        round_trip_ok = verify_cutover_record_signature(record, signature, backend=signing_backend)
+    except Exception as exc:
+        raise RecordMigrationError(
+            f"authored-record verification round-trip RAISED "
+            f"({type(exc).__name__}: {exc}) — refusing to publish an "
+            f"unverifiable trust anchor"
+        ) from exc
+    if not round_trip_ok:
+        raise RecordMigrationError(
+            "authored-record signature failed its verification round-trip — "
+            "refusing to publish an unverifiable trust anchor"
+        )
+    record_path.parent.mkdir(parents=True, exist_ok=True)
     _publish_record_exclusively(
         record_path, record.model_dump_json() + "\n" + signature.hex() + "\n"
     )
