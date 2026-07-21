@@ -27,6 +27,7 @@ from pathlib import Path
 import pytest
 from harness_is.state_ledger_entry_schema import Actor, ActorClass, Identifier
 from harness_is.state_ledger_write import read_ledger
+from harness_od.audit_signing_errors import AuditSigningFailedError
 from harness_od.rate_table_types import RateTable, ToolRate, WebhookRate
 from harness_runtime.lifecycle.cost_attribution import RuntimeCostAttributionChain
 from harness_runtime.lifecycle.cost_attribution_tool_dispatch import (
@@ -492,5 +493,5 @@ def test_explicit_tenant_literally_named_single_does_not_alias_no_tenant(
     assert len(entry_cores) == 2
 
     # The reserved sidecar literal is refused AT SIGNING (fail-loud, not alias).
-    with pytest.raises(ValueError, match="reserved sidecar"):
+    with pytest.raises(AuditSigningFailedError, match="reserved sidecar"):
         attribute_tool_dispatch_cost(tenant_id="_single", **common)

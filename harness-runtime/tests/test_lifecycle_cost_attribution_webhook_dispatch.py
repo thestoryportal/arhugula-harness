@@ -19,6 +19,7 @@ from pathlib import Path
 import pytest
 from harness_is.state_ledger_entry_schema import Actor, ActorClass
 from harness_is.state_ledger_write import read_ledger
+from harness_od.audit_signing_errors import AuditSigningFailedError
 from harness_od.rate_table_types import RateTable, WebhookRate
 from harness_runtime.lifecycle.cost_attribution import RuntimeCostAttributionChain
 from harness_runtime.lifecycle.cost_attribution_webhook_dispatch import (
@@ -443,5 +444,5 @@ def test_empty_string_tenant_does_not_alias_no_tenant(
     assert len(entry_cores) == 2
 
     # The reserved empty string is refused AT SIGNING (fail-loud, not alias).
-    with pytest.raises(ValueError, match="must not be the empty string"):
+    with pytest.raises(AuditSigningFailedError, match="must not be the empty string"):
         attribute_webhook_dispatch_cost(tenant_id="", **common)

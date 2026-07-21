@@ -17,6 +17,7 @@ from harness_as.gate_level_composition import GateLevel
 from harness_core.identity import ActionID
 from harness_cp.per_step_override_evaluator import CPAuditLedgerEntry
 from harness_cxa.cp_audit_conversion import cp_audit_to_od_audit
+from harness_od.audit_signing_errors import AuditSigningFailedError
 from harness_od.multi_tenant_trace_separation_and_audit_ledger import (
     canonical_od_signing_message,
     signing_token,
@@ -85,7 +86,9 @@ def test_converter_tenant_id_reaches_sign_audit_entry_unmodified_five_segment_me
     Mutation probe: dropping the converter's `tenant_id=tenant_id` forward
     reverts signing to the four-tuple → the segment-count assertion FAILS;
     adding converter-side validation (e.g. rejecting the empty string before
-    signing) breaks the refusal half's origin expectation."""
+    signing) breaks the refusal half's origin expectation. The refusal is a
+    member of the §21.2.3 row-5 typed family at the signing boundary
+    (merge-gate concurrency lens, PR #1066)."""
     import pytest
 
     raw_tenant = "Tenant A"  # spaces/case preserved — raw passthrough proof
@@ -105,7 +108,7 @@ def test_converter_tenant_id_reaches_sign_audit_entry_unmodified_five_segment_me
 
     # OD-owned refusal at signing — the converter passes even a REFUSED value
     # through raw; the typed refusal fires inside `sign_audit_entry`.
-    with pytest.raises(ValueError, match="tenant_id must not be the empty string"):
+    with pytest.raises(AuditSigningFailedError, match="tenant_id must not be the empty string"):
         cp_audit_to_od_audit(
             _cp_entry(),
             key_id="key-72",
