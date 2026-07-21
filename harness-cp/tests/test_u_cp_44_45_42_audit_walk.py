@@ -247,12 +247,13 @@ def test_exception_gates_on_disposition(disposition: str, expected_kind: WalkRes
 
 
 def test_row_absent_from_cutover_record_not_exempted_including_unsigned_shaped_value() -> None:
-    """§4 row 3: membership is NEVER keyed on signature-value shape — an
-    `unsigned:*`-shaped value on a row ABSENT from the record does not
-    exempt it; such a row is a verification FAILURE (the verifier surfaces
-    it as invalid), not a legacy row. The walk contains NO signature-shape
-    inspection (the mutation this witness forecloses: CP-side
-    `unsigned:`-prefix exemption logic would flip this to PASSED)."""
+    """§4 row 3 (CP result boundary): an entry the record does NOT exempt
+    fails when the verifier reports it invalid — the walk never invents an
+    exemption of its own. (The `unsigned:*`-VALUE-shape half of row 3 —
+    membership decided by the record, never by signature-value shape — is
+    enforced INSIDE the OD verifier and witnessed there; the CP walk holds
+    no signature-shape logic at all, which the module's import surface and
+    this file's no-OD-import scan pin structurally.)"""
     result = run_blocking_audit_walk(
         _ENTRIES,
         verifier=_FakeVerifier(

@@ -1277,3 +1277,66 @@ def test_non_utf8_cutover_record_typed_rejection(
     captured = capsys.readouterr()
     assert exit_code == 3
     assert "not valid UTF-8" in captured.err
+
+
+# ---------------------------------------------------------------------------
+# Merge-gate test-witness lens notes (PR #1067).
+# ---------------------------------------------------------------------------
+
+
+def test_exempt_entries_reported_through_real_adapter(
+    fx: _Fixture, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The exempt report section survives the REAL adapter boundary: a
+    baseline identity the record marks PLACEHOLDER_EXEMPT passes AND
+    appears in the JSON walk report's `exempt_entries` — 'reported
+    explicitly, never silently passed' is pinned at the production
+    boundary, not only via the CP fake-verifier witness."""
+    entry = fx.signed_entry("ref-1", tenant_id=None)
+    fx.write_sidecar([], baseline=[("_single", entry.entry_hash)])
+    fx.write_ledger([f"audit:_single:{entry.entry_hash}"])
+    fx.write_config()
+    fx.write_key_map(("ed25519", _ROW_KEY), ("ed25519", _RECORD_KEY))
+    fx.write_record(
+        AuditCutoverRecordRow(
+            source_tag="_single",
+            tenant_scope=_TENANT,
+            entry_hash=entry.entry_hash,
+            verification_disposition=VerificationDisposition.PLACEHOLDER_EXEMPT,
+        )
+    )
+
+    exit_code = main(fx.full_verification_argv("--expected-tenant", _TENANT, "--json"))
+    out = capsys.readouterr().out
+    assert exit_code == 0, out
+    payload = json.loads(out)
+    walk = payload["audit_verification"]["walk"]
+    assert walk["signature_dispositions"].get("exempt", 0) == 1
+    assert len(walk["exempt_entries"]) == 1
+    assert walk["exempt_entries"][0]["kind"] == "exempt-placeholder"
+
+
+def test_explicit_cutover_record_overrides_config_resident_path(
+    fx: _Fixture, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """CLI precedence: an explicit `--cutover-record` OVERRIDES the
+    config-resident `audit_cutover_record_path`. The config points at a
+    TAMPERED record; the CLI points at the good one — the inspection
+    verifies (a precedence inversion would hit the tampered record and
+    fail)."""
+    _greenfield_passing(fx)
+    tampered_path = fx.root / "tampered-record"
+    good = fx.record_path.read_text(encoding="utf-8").splitlines()
+    sig = bytearray.fromhex(good[1])
+    sig[0] ^= 0xFF
+    tampered_path.write_text(good[0] + "\n" + sig.hex() + "\n", encoding="utf-8")
+    config_text = fx.config_path.read_text(encoding="utf-8").replace(
+        "[runtime.otel]",
+        f'audit_cutover_record_path = "{tampered_path}"\n\n[runtime.otel]',
+    )
+    fx.config_path.write_text(config_text, encoding="utf-8")
+
+    exit_code = main(fx.full_verification_argv("--expected-tenant", _TENANT))
+    out = capsys.readouterr().out
+    assert exit_code == 0, out
+    assert "VERIFIED" in out
