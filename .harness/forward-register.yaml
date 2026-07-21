@@ -61,11 +61,11 @@ snapshot:
   total: 66
   open: 0
   design_substrate_gated: 1
-  registered_finding: 14
+  registered_finding: 12
   operator_gated: 2
   held: 1
-  closed: 48
-  identity_digest: 5762efe7321ab556
+  closed: 50
+  identity_digest: e67cbbe8c5bb4a8c
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -1304,7 +1304,8 @@ items:
 
 - id: B-61
   title: Buffered fan-out ledger drain writes are not fenced
-  status: registered_finding
+  status: closed
+  pr: '#1072'
   summary: 'Registered at the B-48 apply arc (codex round-10 [P1] "fence each buffered ledger
     append"): `drain_branch_buffers`''s real `writer.append(...)` calls (workflow_driver.py:1922-1924)
     run without `effect_entry()` or `check()`. When a timed-out offloaded child is inside a nested
@@ -1327,7 +1328,8 @@ items:
 
 - id: B-62
   title: A single effect_entry() guard spans multiple independent sequential writes
-  status: registered_finding
+  status: closed
+  pr: '#1072'
   summary: 'Registered at the B-48 apply arc (codex round-10 [P1] "split the fence guard between
     sequential writes"): at sub_agent_dispatch.py:744-750 (and the durable-output/ledger pair in
     `_execute_workflow_body`), one `effect_entry()` guard wraps a SEQUENCE of independent effects
