@@ -24,7 +24,7 @@ Direction respects the consumer→producer convention; the IMPORT-level axis acy
 
 ### §0.4 Why R-class, and why "R-planned" not "R-live"
 
-Same classification logic as v2.20 §0.4: no new genuine-typed (G) inter-axis import seam is created — the Protocol is CP-owned, the adapter runtime-owned, so the edge is **R (runtime-mediated composition)**. UNLIKE the R-PM-1 edges (materialized-live at their registration), this edge's producers are SPEC-APPLIED but the impl arc is pending (U-OD-55 / U-CP-44/45 amendments / U-RT-138 are open plan units at OD v2.29 / CP v2.38 / Runtime v2.49) — the §2.3.9 table tagged it **`R-planned`** at registration; the impl arc landed at PR #1067 (2026-07-20) and the tag is now **`R-live`** per this section's own one-cell-edit + clearance prescription (marker at `.harness/clearance/cross-axis-composition-v2-21-r-live-flip-2026-07-20.md`).
+Same classification logic as v2.20 §0.4: no new genuine-typed (G) inter-axis import seam is created — the Protocol is CP-owned, the adapter runtime-owned, so the edge is **R (runtime-mediated composition)**. UNLIKE the R-PM-1 edges (materialized-live at their registration), this edge's producers are SPEC-APPLIED but the impl arc is pending (U-OD-55 / U-CP-44/45 amendments / U-RT-138 are open plan units at OD v2.29 / CP v2.38 / Runtime v2.49) — the §2.3.9 table tagged it **`R-planned`** at registration; the impl arc landed at PR #1067 (2026-07-20) and the tag is now **`R-live`** per this section's own one-cell-edit + clearance prescription (marker at `.harness/clearance/cross-axis-composition-v2-21-r-live-flip-cleared-2026-07-20.md`).
 
 ### §0.5 Aggregate clause
 
