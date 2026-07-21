@@ -151,6 +151,7 @@ def _unverified(detail: str) -> AuditInspectionOutcome:
 class _SidecarContent:
     entries: tuple[AuditLedgerEntry, ...]
     observed_identities: tuple[tuple[str, str], ...]
+    baseline_identities: tuple[tuple[str, str], ...]
     row_key_ids: frozenset[str]
 
 
@@ -164,6 +165,7 @@ def _read_sidecar(sidecar_path: Path) -> _SidecarContent:
     """
     entries: list[AuditLedgerEntry] = []
     observed: list[tuple[str, str]] = []
+    baseline: list[tuple[str, str]] = []
     key_ids: set[str] = set()
     for line_number, line in enumerate(
         sidecar_path.read_text(encoding="utf-8").splitlines(), start=1
@@ -179,6 +181,13 @@ def _read_sidecar(sidecar_path: Path) -> _SidecarContent:
             entry_hash = row.get("entry_hash")
             if isinstance(tag, str) and isinstance(entry_hash, str):
                 observed.append((tag, entry_hash))
+                # BASELINE-ONLY observation — the shape the OD verifier's
+                # §21.2.2 row-6 cross-check consumes. Full-entry rows are
+                # NOT baselines (they are content/signature-verified
+                # directly; passing them here would report every verified
+                # row as a false "missing from the cutover record"
+                # divergence).
+                baseline.append((tag, entry_hash))
             continue
         entry_obj = row.get("entry")
         tag = row.get("tenant_tag")
@@ -191,6 +200,7 @@ def _read_sidecar(sidecar_path: Path) -> _SidecarContent:
     return _SidecarContent(
         entries=tuple(entries),
         observed_identities=tuple(observed),
+        baseline_identities=tuple(baseline),
         row_key_ids=frozenset(key_ids),
     )
 
@@ -261,7 +271,18 @@ def _load_authenticated_record(
             f"sidecar rows — the record key MUST be physically distinct from "
             f"every row-signing key"
         )
-    if ledger_binding_id is not None and record.ledger_binding_id != ledger_binding_id:
+    if ledger_binding_id is None:
+        # The OD verifier hard-REQUIRES the binding once a record is
+        # supplied (§21.2.2 row 4 cross-ledger guard) — refuse HERE with the
+        # typed rejection rather than letting the walk raise an unwrapped
+        # CutoverRecordValidationError defect.
+        raise ForgedCutoverRecordError(
+            "no audit_ledger_binding_id in the supplied runtime config — a "
+            "cutover record cannot be bound to this deployment's sidecar "
+            "without it (the §21.2.2 row-4 cross-ledger guard is REQUIRED, "
+            "never skipped)"
+        )
+    if record.ledger_binding_id != ledger_binding_id:
         raise ForgedCutoverRecordError(
             f"cutover record ledger_binding_id={record.ledger_binding_id!r} "
             f"disagrees with the configured audit_ledger_binding_id="
@@ -329,6 +350,9 @@ def run_audit_inspection(
 
     is_mtc = runtime_config.persona_tier == PersonaTier.MULTI_TENANT_COMPLIANCE
     have_backend_inputs = key_map_path is not None and cutover_record_path is not None
+    any_verification_input = (
+        key_map_path is not None or cutover_record_path is not None or expected_tenant is not None
+    )
 
     if not have_backend_inputs:
         if is_mtc:
@@ -336,6 +360,22 @@ def run_audit_inspection(
                 "MULTI_TENANT_COMPLIANCE inspection requires --signing-key-map "
                 "AND --cutover-record — silent hash-only success is prohibited "
                 "(OD v1.34 §21.2.2 row 8)"
+            )
+        if any_verification_input:
+            # Verification was REQUESTED but the input set is incomplete —
+            # never silently fall back to hash-only (the record is required
+            # whenever any row exists; era is never observation-inferred).
+            missing = [
+                name
+                for name, value in (
+                    ("--signing-key-map", key_map_path),
+                    ("--cutover-record", cutover_record_path),
+                )
+                if value is None
+            ]
+            return _unverified(
+                f"verification inputs incomplete (missing {', '.join(missing)}) "
+                f"— a partial input set never degrades to hash-only"
             )
         return AuditInspectionOutcome(
             disposition="hash-only-preserved",
@@ -351,7 +391,12 @@ def run_audit_inspection(
         sidecar = (
             _read_sidecar(sidecar_path)
             if sidecar_path.is_file()
-            else _SidecarContent(entries=(), observed_identities=(), row_key_ids=frozenset())
+            else _SidecarContent(
+                entries=(),
+                observed_identities=(),
+                baseline_identities=(),
+                row_key_ids=frozenset(),
+            )
         )
     except (ValueError, OSError) as exc:
         return _unverified(f"audit sidecar {sidecar_path} unreadable/unparseable: {exc}")
@@ -403,7 +448,7 @@ def run_audit_inspection(
         sidecar.entries,
         verifier=adapter,
         tenant_scope=expected_tenant,
-        observed_baseline_identities=sidecar.observed_identities,
+        observed_baseline_identities=sidecar.baseline_identities,
     )
     if walk.kind is WalkResultKind.PASSED:
         return AuditInspectionOutcome(
