@@ -91,6 +91,7 @@ from harness_is.state_ledger_write import (
     WriteResult,
     read_ledger,
 )
+from harness_od.audit_cutover_record import AuditCutoverRecord, VerificationDisposition
 from harness_od.audit_ledger_types import AuditLedgerEntry, compute_entry_hash
 from harness_od.multi_tenant_trace_separation_and_audit_ledger import sidecar_tag
 from harness_od.per_family_audit_verification import REDACTION_TOKEN_NAMESPACE_PREFIX
@@ -293,6 +294,20 @@ class RuntimeAuditLedgerWriter:
     time_source: Callable[[], Timestamp]
     """Timestamp injection point (test determinism). Default: `datetime.now(UTC)`."""
 
+    cutover_record: AuditCutoverRecord | None = None
+    """U-RT-139 live-writer wiring — the AUTHENTICATED cutover record
+    (validated fail-closed at bootstrap by
+    `initialize_mtc_audit_signing_record`, or supplied by the migration
+    subcommand after its own authentication step). The coverage join
+    consults its `"_single"`-to-tenant aliases so a retagged deployment's
+    immutable `audit:_single:<hash>` IS references still report full
+    history against tenant-retagged sidecar identities. The SIGNED record
+    is the alias AUTHORITY (codex round-11 on the plan): a free-standing
+    alias mapping would be attacker-writable at exactly the adversarial
+    tier the record's signature forecloses. `None` = no record configured
+    (pre-cutover / sub-MTC deployments; the join is byte-identical to the
+    pre-U-RT-139 behavior)."""
+
     @property
     def _sidecar_thread_lock(self) -> threading.Lock:
         """In-process half of the sidecar critical section, SHARED across all
@@ -304,6 +319,14 @@ class RuntimeAuditLedgerWriter:
         via a module-level registry (the IS writer's module-level-lock
         pattern)."""
         return _sidecar_lock_for(self._sidecar_path)
+
+    _record_alias_map: dict[tuple[str, str], tuple[str, str]] | None = field(
+        default=None, init=False, repr=False
+    )
+    """Memoized `("_single", hash)` -> `(tenant_scope, hash)` alias index
+    derived ONCE from `cutover_record` (codex round-1 on U-RT-139: a
+    per-miss linear scan over the record's rows made the first post-retag
+    fold O(N^2) under the sidecar lock)."""
 
     _sidecar_index: _SidecarMembershipIndex = field(
         default_factory=lambda: _SidecarMembershipIndex(), init=False
@@ -878,6 +901,32 @@ class RuntimeAuditLedgerWriter:
                 f"references; or intentionally reset BOTH ledgers together)"
             )
 
+    def _record_alias_for(self, identity: tuple[str, str]) -> tuple[str, str] | None:
+        """The record-derived retag alias for a `("_single", entry_hash)`
+        IS-reference identity, or `None`.
+
+        Only `source_tag == "_single"` rows with a TENANT-READABLE
+        disposition (`placeholder_exempt` / `four_tuple_real`) alias —
+        a QUARANTINED `"_single"` row is, by the migration contract,
+        NEVER retagged, so its IS reference must keep matching the
+        un-retagged sidecar row directly (OD v1.34 §21.2.1 row 6).
+        """
+        if self.cutover_record is None:
+            return None
+        tag = identity[0]
+        if tag != self._SINGLE_TENANT_TAG:
+            return None
+        if self._record_alias_map is None:
+            alias_map = {
+                (self._SINGLE_TENANT_TAG, row.entry_hash): (row.tenant_scope, row.entry_hash)
+                for row in self.cutover_record.rows
+                if row.source_tag == self._SINGLE_TENANT_TAG
+                and row.verification_disposition is not VerificationDisposition.QUARANTINED
+            }
+            object.__setattr__(self, "_record_alias_map", alias_map)
+        assert self._record_alias_map is not None
+        return self._record_alias_map.get(identity)
+
     def _assert_is_refs_covered_locked(self, *, allowed_gap: tuple[str, str] | None = None) -> None:
         """Every IS `audit:<tag>:<hash>` ref must have a sidecar row (codex
         round-40 P1) — run after a FULL index fold, so bulk truncation to a
@@ -907,6 +956,13 @@ class RuntimeAuditLedgerWriter:
                 # that as an operator-acknowledged fact, not a loss event.
                 continue
             if identity not in self._sidecar_index.digests:
+                # U-RT-139: a retagged deployment's immutable
+                # `audit:_single:<hash>` reference is covered by the
+                # tenant-retagged sidecar row IFF the AUTHENTICATED cutover
+                # record aliases it (`("_single", h)` -> `(tenant, h)`).
+                alias = self._record_alias_for(identity)
+                if alias is not None and alias in self._sidecar_index.digests:
+                    continue
                 raise ValueError(
                     f"IS ledger references audit entry {entry_hash!r} for "
                     f"tenant_tag={tag!r} but the sidecar holds no such row — "
@@ -1249,6 +1305,12 @@ class RuntimeAuditLedgerWriter:
         entries: list[AuditLedgerEntry] = []
         seen_hashes: set[str] = set()
         exempt_hashes: set[str] = set()
+        # U-RT-139: every (tenant_tag, entry_hash) identity seen in the scan
+        # regardless of the requested tag — the alias-projected coverage
+        # consult below needs OTHER tags' membership, and this read path
+        # scans the file directly (the membership index may not be folded
+        # on a fresh writer).
+        all_identities: set[tuple[str, str]] = set()
         # B-40 shared read lock (side-effect-free: never O_CREAT, never mkdir)
         # — excludes a concurrent writer's partial line once the lock file
         # exists; the brand-new-file window carries the documented B-46
@@ -1294,7 +1356,33 @@ class RuntimeAuditLedgerWriter:
                         )
                         continue
                     if row["tenant_tag"] != tag:
+                        # Rows under OTHER tags are validated before their
+                        # identity can serve as an ALIAS TARGET (codex
+                        # round-2 P2): a tampered destination row keeping
+                        # the raw entry_hash but carrying modified content
+                        # must fail the read, not silently satisfy the
+                        # alias coverage.
+                        other_entry = AuditLedgerEntry.model_validate(row["entry"])
+                        other_recomputed = compute_entry_hash(other_entry.payload)
+                        if other_recomputed != other_entry.entry_hash:
+                            raise ValueError(
+                                f"sidecar row for tenant_tag={row['tenant_tag']!r} "
+                                f"fails content-integrity on read: stored "
+                                f"entry_hash={other_entry.entry_hash!r} but "
+                                f"recomputed {other_recomputed!r} — tampered "
+                                f"or corrupt row"
+                            )
+                        other_identity = (row["tenant_tag"], other_entry.entry_hash)
+                        if other_identity in all_identities:
+                            raise ValueError(
+                                f"sidecar holds duplicate rows for "
+                                f"tenant_tag={row['tenant_tag']!r} "
+                                f"entry_hash={other_entry.entry_hash!r} — "
+                                f"tampered or corrupt rows preserved as evidence"
+                            )
+                        all_identities.add(other_identity)
                         continue
+                    all_identities.add((row["tenant_tag"], row["entry"]["entry_hash"]))
                     entry = AuditLedgerEntry.model_validate(row["entry"])
                     # Round-42 codex: the reader needs the same round-17
                     # content recompute as the append-side fold — a payload
@@ -1336,6 +1424,15 @@ class RuntimeAuditLedgerWriter:
         rehydrated = seen_hashes
         for entry_hash in is_ref_hashes:
             if entry_hash not in rehydrated and entry_hash not in exempt_hashes:
+                # U-RT-139: an immutable `audit:_single:<hash>` reference
+                # whose row was RETAGGED per the authenticated cutover
+                # record is covered by the alias-projected identity — the
+                # row now lives under the tenant tag, which this per-tag
+                # rehydration loop cannot see; membership comes from the
+                # already-folded index.
+                alias = self._record_alias_for((tag, entry_hash))
+                if alias is not None and alias in all_identities:
+                    continue
                 raise ValueError(
                     f"IS ledger references audit entry {entry_hash!r} for "
                     f"tenant_tag={tag!r} but the sidecar holds no such row — "
@@ -1524,6 +1621,7 @@ def materialize_audit_writer_stage(
     ledger_writer: LedgerWriter,
     *,
     time_source: Callable[[], Timestamp] | None = None,
+    cutover_record: AuditCutoverRecord | None = None,
 ) -> AuditWriterStage:
     """Build the stage 4 OD audit-writer registry.
 
@@ -1541,5 +1639,7 @@ def materialize_audit_writer_stage(
         time_source if time_source is not None else lambda: datetime.now(UTC)
     )
     return AuditWriterStage(
-        writer=RuntimeAuditLedgerWriter(ledger_writer=ledger_writer, time_source=ts),
+        writer=RuntimeAuditLedgerWriter(
+            ledger_writer=ledger_writer, time_source=ts, cutover_record=cutover_record
+        ),
     )

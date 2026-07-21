@@ -1827,3 +1827,99 @@ async def test_u_rt_136_bootstrap_wires_resolved_flag_into_every_composer(
             assert value == (), f"{name}: {value!r}"
         else:
             assert value is False, f"{name} must stay OFF by default"
+
+
+@pytest.mark.asyncio
+async def test_u_rt_139_bootstrap_threads_verified_record_into_writer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """U-RT-139 live-writer wiring, BY EXECUTION through the real
+    `run_bootstrap` (merge-gate test-witness lens on PR #1069 — the
+    workspace's named bootstrap-wiring defect class): a pre-existing
+    AUTHENTICATED cutover record at the configured path reaches
+    `ctx.audit_writer.cutover_record` through the whole chain —
+    `initialize_mtc_audit_signing_record`'s return value → `stage_4_od` →
+    `materialize_audit_writer_stage` → the writer field.
+
+    Mutation probes (per link): reverting `initialize_mtc_audit_signing_
+    record` to return None, dropping `cutover_record=cutover_record` at
+    stage_4_od, or dropping the factory passthrough each leave the writer
+    field None → the equality assertion FAILS (the severed-wiring mutation
+    that bricks a retagged deployment's restart)."""
+    import hashlib
+    import hmac as _hmac
+    from datetime import UTC as _UTC
+    from datetime import datetime as _datetime
+
+    from harness_od.audit_cutover_record import AuditCutoverRecord, sign_cutover_record
+    from harness_od.audit_ledger_types import SignatureAlgorithm
+    from harness_runtime.types import AuditSigningBackendKind, AuditSigningConfig
+
+    class _RecordBackend:
+        algorithm = "ed25519"
+
+        def sign(self, *, message: bytes, key_id: str, key_period: int) -> bytes:
+            del key_id, key_period
+            return _hmac.new(b"bootstrap-record", message, hashlib.sha512).digest()
+
+        def verify(self, *, message: bytes, signature: bytes, key_id: str, key_period: int) -> bool:
+            del key_id, key_period
+            expected = _hmac.new(b"bootstrap-record", message, hashlib.sha512).digest()
+            return _hmac.compare_digest(expected, signature)
+
+    backend = _RecordBackend()
+    record_path = tmp_path / "cutover-record"
+    record = AuditCutoverRecord(
+        schema_version=1,
+        authored_at=_datetime(2026, 7, 21, tzinfo=_UTC),
+        algorithm=SignatureAlgorithm.ED25519,
+        key_id="cutover-record-key",
+        ledger_binding_id="bootstrap-sidecar-1",
+        rows=(),
+    )
+    signature = sign_cutover_record(record, backend=backend)
+    record_path.write_text(
+        record.model_dump_json() + "\n" + signature.hex() + "\n", encoding="utf-8"
+    )
+
+    _patch_providers(monkeypatch)
+    _patch_collector(monkeypatch)
+    monkeypatch.setattr(
+        "harness_runtime.bootstrap.stage_4_od.make_audit_signing_backend",
+        lambda config: backend,
+    )
+    # `_patch_collector` neuters `initialize_mtc_audit_signing_record` (a
+    # None-returning lambda) so ordinary bootstrap tests stay hermetic —
+    # THIS witness exists precisely to exercise that link, so restore the
+    # REAL function for it.
+    import harness_runtime.bootstrap.stage_4_od as _s4
+    import harness_runtime.lifecycle.audit_signing_fail_closed_validation as _validation
+
+    monkeypatch.setattr(
+        _s4,
+        "initialize_mtc_audit_signing_record",
+        _validation.initialize_mtc_audit_signing_record,
+    )
+    arn = "arn:aws:kms:us-east-1:111122223333:key"
+    cfg = _config(tmp_path).model_copy(
+        update={
+            "audit_signing": AuditSigningConfig(
+                backend=AuditSigningBackendKind.AWS_KMS,
+                key_arns={
+                    "cutover-record-key": f"{arn}/record",
+                    "harness-runtime-redaction-token": f"{arn}/redaction",
+                    "harness-runtime-dev": f"{arn}/dev",
+                    "harness-cost-attribution-v1": f"{arn}/cost",
+                },
+            ),
+            "audit_cutover_record_path": str(record_path),
+            "audit_cutover_record_key_id": "cutover-record-key",
+            "audit_ledger_binding_id": "bootstrap-sidecar-1",
+        }
+    )
+    ctx = await run_bootstrap(cfg, workload_class=_WORKLOAD)
+    assert ctx.audit_writer.cutover_record == record, (
+        "the AUTHENTICATED cutover record did not thread through bootstrap "
+        "into the writer — a retagged deployment's restart would brick"
+    )
