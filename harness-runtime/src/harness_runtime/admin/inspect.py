@@ -42,7 +42,7 @@ import sqlite3
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from harness_core import DeploymentSurface, PersonaTier
 from harness_is.jsonl_event_ledger_lifecycle import JsonlLedgerHandle
@@ -50,6 +50,9 @@ from harness_is.state_ledger_entry_schema import StateLedgerEntry
 from harness_is.state_ledger_write import read_ledger
 from harness_od.observability_matrix import CellID
 from harness_od.operator_burden_eval_primitives import OperatorBurdenEvalPrimitive
+
+if TYPE_CHECKING:
+    from harness_runtime.admin.inspect_audit_verification import AuditInspectionOutcome
 
 __all__ = ["build_parser", "main"]
 
@@ -128,8 +131,65 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Emit JSON output. Default is human-readable.",
     )
+    _add_audit_verification_arguments(parser)
     _add_holdout_arguments(parser)
     return parser
+
+
+def _add_audit_verification_arguments(parser: argparse.ArgumentParser) -> None:
+    """Register the five §13.5 audit-verification inputs (U-RT-138; Runtime
+    spec v1.101 C-RT-13 rows 1-7). Names are plan-suggested (non-binding
+    discretion); semantics are spec-pinned at `inspect_audit_verification`."""
+    parser.add_argument(
+        "--audit-sidecar",
+        type=Path,
+        default=None,
+        help=(
+            "Path to the audit-entries.jsonl sidecar (§13.5 input (i)). "
+            "Default: <ledger dir>/audit-entries.jsonl, like the existing "
+            "§13 path resolution."
+        ),
+    )
+    parser.add_argument(
+        "--expected-tenant",
+        type=str,
+        default=None,
+        help=(
+            "Expected tenant scope for signature verification (§13.5 input "
+            "(ii)); normalization happens INSIDE the OD API, never here."
+        ),
+    )
+    parser.add_argument(
+        "--signing-key-map",
+        type=Path,
+        default=None,
+        help=(
+            "JSON file keyed '<algorithm>:<key_id>' mapping to "
+            "AuditSigningConfig-shaped backend specs — the operator-supplied "
+            "form of the OD v1.34 §21.2.2 row-1 per-row resolver (§13.5 "
+            "input (iii); NOT a single backend)."
+        ),
+    )
+    parser.add_argument(
+        "--cutover-record",
+        type=Path,
+        default=None,
+        help=(
+            "Path to the authenticated cutover record (§13.5 input (iv)) — "
+            "REQUIRED with any sidecar row; era is never observation-inferred."
+        ),
+    )
+    parser.add_argument(
+        "--runtime-config",
+        type=Path,
+        default=None,
+        help=(
+            "Path to the authoritative RuntimeConfig TOML (§13.5 input (v)) "
+            "— without it the inspector cannot distinguish MTC's mandatory "
+            "UNVERIFIED-nonzero posture from lower tiers' preserved "
+            "hash-only behavior, and reports UNVERIFIED with a nonzero exit."
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -297,6 +357,7 @@ def _format_human(
     ledger_path: Path,
     entries: list[StateLedgerEntry],
     last_n: int,
+    audit_section: str | None = None,
 ) -> str:
     lines: list[str] = []
     lines.append("harness-inspect — read-only summary")
@@ -322,6 +383,12 @@ def _format_human(
     lines.append("")
     lines.append(f"Spans: N/A — {_SPANS_UNAVAILABLE_REASON}")
     lines.append(f"Cost rollup: N/A — {_COST_UNAVAILABLE_REASON}")
+    if audit_section is not None:
+        # §13.5 audit disposition COMPOSES with the established C-RT-13
+        # summary — it never replaces the ledger head / entries / spans /
+        # cost sections (codex round-4 P2).
+        lines.append("")
+        lines.append(audit_section)
     return "\n".join(lines) + "\n"
 
 
@@ -330,6 +397,7 @@ def _format_json(
     ledger_path: Path,
     entries: list[StateLedgerEntry],
     last_n: int,
+    audit_report: dict[str, Any] | None = None,
 ) -> str:
     head = _entry_head_hash(entries[-1]) if entries else None
     payload: dict[str, Any] = {
@@ -342,6 +410,8 @@ def _format_json(
         "cost_rollup": None,
         "cost_rollup_unavailable_reason": _COST_UNAVAILABLE_REASON,
     }
+    if audit_report is not None:
+        payload.update(audit_report)
     return json.dumps(payload, indent=2, sort_keys=True) + "\n"
 
 
@@ -591,13 +661,167 @@ def main(argv: list[str] | None = None) -> int:
         )
         return _EXIT_INSPECT_PATH
 
+    # --- §13.5 audit-verification disposition (U-RT-138) -------------------
+    # Engagement predicate: any audit input supplied OR the resolved sidecar
+    # exists. Once engaged, the disposition governs the EXIT CODE while the
+    # report COMPOSES with the established summary (codex round-4 P2 — the
+    # ledger head / entries / spans / cost sections are never replaced); a
+    # "hash-only-preserved" outcome (sub-MTC + authoritative config + no
+    # inputs) falls through to the pre-v1.101 summary verbatim.
+    audit = _run_audit_verification_if_engaged(args, ledger_path, entries)
+    if isinstance(audit, int):
+        return audit  # RT-FAIL-INSPECT-PATH input error — summary skipped
+
     if args.json:
-        output = _format_json(ledger_path=ledger_path, entries=entries, last_n=last_n)
+        output = _format_json(
+            ledger_path=ledger_path,
+            entries=entries,
+            last_n=last_n,
+            audit_report=audit.as_report() if audit is not None else None,
+        )
     else:
-        output = _format_human(ledger_path=ledger_path, entries=entries, last_n=last_n)
+        output = _format_human(
+            ledger_path=ledger_path,
+            entries=entries,
+            last_n=last_n,
+            audit_section=(
+                f"audit verification: {audit.disposition.upper()}\n{audit.detail}"
+                if audit is not None
+                else None
+            ),
+        )
 
     sys.stdout.write(output)
-    return _EXIT_OK
+    return audit.exit_code if audit is not None else _EXIT_OK
+
+
+def _run_audit_verification_if_engaged(
+    args: argparse.Namespace,
+    ledger_path: Path,
+    entries: list[StateLedgerEntry],
+) -> AuditInspectionOutcome | int | None:
+    """Run the §13.5 audit-verification when engaged.
+
+    Returns the `AuditInspectionOutcome` for the caller to COMPOSE into the
+    summary (verified / unverified / failed / forged-record), a bare exit
+    code for an RT-FAIL-INSPECT-PATH input error (summary skipped, matching
+    the other path-error exits), or `None` when not engaged or when
+    hash-only behavior is preserved (the plain summary proceeds verbatim).
+    """
+    from harness_runtime.admin.inspect_audit_verification import (
+        ForgedCutoverRecordError,
+        run_audit_inspection,
+    )
+    from harness_runtime.config_source import RuntimeConfigLoadError, RuntimeConfigSource
+    from harness_runtime.lifecycle.audit_writer import AUDIT_SIDECAR_FILENAME
+
+    sidecar_path: Path = (
+        args.audit_sidecar
+        if args.audit_sidecar is not None
+        else ledger_path.parent / AUDIT_SIDECAR_FILENAME
+    )
+    engaged = (
+        args.audit_sidecar is not None
+        or args.expected_tenant is not None
+        or args.signing_key_map is not None
+        or args.cutover_record is not None
+        or args.runtime_config is not None
+        or sidecar_path.is_file()
+    )
+    if not engaged:
+        return None
+
+    runtime_config = None
+    if args.runtime_config is not None:
+        try:
+            runtime_config = RuntimeConfigSource.load(config_file=args.runtime_config)
+        except RuntimeConfigLoadError as exc:
+            print(
+                f"harness-inspect: RT-FAIL-INSPECT-PATH — --runtime-config unusable: {exc}",
+                file=sys.stderr,
+            )
+            return _EXIT_INSPECT_PATH
+
+    # The IS chain anchors reverse/forward coverage — a forged `action_id`
+    # planted to match a copied sidecar row breaks the hash chain, so the
+    # chain MUST be valid before any `audit:` ref is trusted (codex round-9
+    # P1 on this leg).
+    from harness_is.chain_verification import VerificationStatus, verify_chain
+    from harness_is.entry_hash import compute_response_hash
+
+    chain = verify_chain(entries)
+    # `verify_chain` validates prior-linkage — which transitively covers
+    # every entry's content EXCEPT the tail's (no successor links to it):
+    # a forged tail `action_id` would pass linkage, so the tail's stored
+    # `response_hash` is recomputed explicitly.
+    tail_forged = bool(entries) and entries[-1].response_hash != compute_response_hash(entries[-1])
+    if chain.status is not VerificationStatus.VALID or tail_forged:
+        from harness_runtime.admin.inspect_audit_verification import (
+            EXIT_AUDIT_FAILED,
+            AuditInspectionOutcome,
+        )
+
+        if tail_forged:
+            failure_note = f"tail entry (position {len(entries)}) response_hash mismatch"
+        else:
+            failure_type = chain.failure_type.value if chain.failure_type else "unknown"
+            failure_note = f"position {chain.failure_position} ({failure_type})"
+        return AuditInspectionOutcome(
+            disposition="failed",
+            exit_code=EXIT_AUDIT_FAILED,
+            detail=(
+                f"IS state-ledger hash chain INVALID at {failure_note} — "
+                f"the ledger's audit: references cannot anchor coverage "
+                f"over a tampered chain"
+            ),
+        )
+
+    ledger_audit_refs = frozenset(
+        str(entry.action_id) for entry in entries if str(entry.action_id).startswith("audit:")
+    )
+    # The authoritative config's `audit_cutover_record_path` is the
+    # inspect-time default for input (iv); an explicit --cutover-record
+    # overrides it (codex round-3 P2 — a fully configured MTC deployment
+    # must not report UNVERIFIED just because the CLI didn't duplicate the
+    # configured path).
+    cutover_record_path: Path | None = args.cutover_record
+    if (
+        cutover_record_path is None
+        and runtime_config is not None
+        and runtime_config.audit_cutover_record_path is not None
+    ):
+        cutover_record_path = Path(runtime_config.audit_cutover_record_path)
+    try:
+        outcome = run_audit_inspection(
+            sidecar_path=sidecar_path,
+            runtime_config=runtime_config,
+            expected_tenant=args.expected_tenant,
+            key_map_path=args.signing_key_map,
+            cutover_record_path=cutover_record_path,
+            ledger_audit_refs=ledger_audit_refs,
+            sidecar_explicit=args.audit_sidecar is not None,
+        )
+    except ForgedCutoverRecordError as exc:
+        # Typed rejection — never downgraded to absent-record fallback.
+        print(
+            f"harness-inspect: RT-FAIL-AUDIT-UNVERIFIED — forged/untrusted cutover record: {exc}",
+            file=sys.stderr,
+        )
+        from harness_runtime.admin.inspect_audit_verification import (
+            AUDIT_UNVERIFIED_FAIL_CLASS,
+            EXIT_AUDIT_UNVERIFIED,
+            AuditInspectionOutcome,
+        )
+
+        return AuditInspectionOutcome(
+            disposition="unverified",
+            exit_code=EXIT_AUDIT_UNVERIFIED,
+            detail=(f"{AUDIT_UNVERIFIED_FAIL_CLASS}: forged/untrusted cutover record: {exc}"),
+        )
+
+    if outcome.disposition == "hash-only-preserved":
+        return None  # pre-v1.101 behavior verbatim — plain summary proceeds.
+    return outcome
 
 
 if __name__ == "__main__":  # pragma: no cover — invoked via console_script
