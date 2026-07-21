@@ -204,6 +204,17 @@ def _read_sidecar_rows(sidecar_path: Path) -> _SidecarRows:
                     f"sidecar line {line_number}: mixed baseline/full-entry row "
                     f"shapes — external mutation; refusing"
                 )
+            pairs_obj = row["legacy_baseline"]
+            if not isinstance(pairs_obj, list) or not all(
+                isinstance(pair, list)
+                and len(cast("list[object]", pair)) == 2
+                and all(isinstance(part, str) for part in cast("list[object]", pair))
+                for pair in cast("list[object]", pairs_obj)
+            ):
+                raise RecordMigrationError(
+                    f"sidecar line {line_number}: legacy_baseline must be an "
+                    f"array of [tag, hash] string pairs — malformed; refusing"
+                )
         elif not isinstance(row.get("tenant_tag"), str) or not isinstance(row.get("entry"), dict):
             raise RecordMigrationError(
                 f"sidecar line {line_number} lacks tenant_tag/entry — refusing"
@@ -316,6 +327,45 @@ def _validate_signing_config(config: RuntimeConfig, *, signing_backend: SigningB
         ) from exc
 
 
+def _refuse_missing_ledger_refs(
+    rows: _SidecarRows,
+    ledger_audit_refs: frozenset[str],
+    record: AuditCutoverRecord | None,
+) -> None:
+    """Refuse when the immutable IS ledger references audit rows the
+    sidecar no longer holds (final codex round P1: authoring over a cleanly
+    truncated sidecar published a signed INCOMPLETE record that the next
+    writer refold rejected). Refs match raw observed identities or, when a
+    record is supplied, their record-derived aliases."""
+    observed: set[tuple[str, str]] = set()
+    for tag, entry in rows.single_full_identities():
+        observed.add((tag, entry.entry_hash))
+    for tag, entry_hash in rows.baseline_pairs():
+        observed.add((tag, entry_hash))
+    aliases: dict[tuple[str, str], tuple[str, str]] = {}
+    if record is not None:
+        for row in record.rows:
+            if row.source_tag == _SINGLE_TAG and row.verification_disposition in _TENANT_READABLE:
+                aliases[(_SINGLE_TAG, row.entry_hash)] = (row.tenant_scope, row.entry_hash)
+    missing: list[str] = []
+    for ref in ledger_audit_refs:
+        prefix_and_tag, entry_hash = ref.rsplit(":", 1)
+        tag = prefix_and_tag[len("audit:") :]
+        identity = (tag, entry_hash)
+        if identity in observed:
+            continue
+        alias = aliases.get(identity)
+        if alias is not None and alias in observed:
+            continue
+        missing.append(ref)
+    if missing:
+        raise RecordMigrationError(
+            f"{len(missing)} IS ledger audit: reference(s) have NO surviving "
+            f"sidecar row — refusing (signing/retagging over truncated "
+            f"history would publish an incomplete trust anchor): " + ", ".join(sorted(missing))
+        )
+
+
 def _authenticate_record(
     config: RuntimeConfig,
     *,
@@ -364,6 +414,7 @@ def retag_sidecar(
     *,
     sidecar_path: Path,
     signing_backend: SigningBackend,
+    ledger_audit_refs: frozenset[str] = frozenset(),
 ) -> RetagOutcome:
     """OD v1.34 §21.2.1 row-6 retag, driven by the authenticated record."""
     _validate_signing_config(config, signing_backend=signing_backend)
@@ -377,11 +428,17 @@ def retag_sidecar(
     # read and the replacement would have its row silently deleted by the
     # stale snapshot while its IS reference survives.
     with cross_process_replace_lock(sidecar_path):
-        return _retag_locked(record, sidecar_path=sidecar_path)
+        return _retag_locked(record, sidecar_path=sidecar_path, ledger_audit_refs=ledger_audit_refs)
 
 
-def _retag_locked(record: AuditCutoverRecord, *, sidecar_path: Path) -> RetagOutcome:
+def _retag_locked(
+    record: AuditCutoverRecord,
+    *,
+    sidecar_path: Path,
+    ledger_audit_refs: frozenset[str] = frozenset(),
+) -> RetagOutcome:
     rows = _read_sidecar_rows(sidecar_path)
+    _refuse_missing_ledger_refs(rows, ledger_audit_refs, record)
 
     single_rows = {(row.source_tag, row.entry_hash): row for row in record.rows}
 
@@ -552,6 +609,7 @@ def author_cutover_record(
     signing_backend: SigningBackend,
     attestation: dict[str, TenantAttestation],
     tofu_quarantine_tenant: str | None = None,
+    ledger_audit_refs: frozenset[str] = frozenset(),
 ) -> AuditCutoverRecord:
     """Compose + validate + sign + EMIT the cutover record.
 
@@ -581,9 +639,15 @@ def author_cutover_record(
             f"overwrite a trust anchor (remove it deliberately first if "
             f"re-authoring is intended)"
         )
-    _reject_record_key_used_by_persisted_rows(
-        config, sidecar_path=sidecar_path, record_key_id=record_key_id
-    )
+    try:
+        _reject_record_key_used_by_persisted_rows(
+            config, sidecar_path=sidecar_path, record_key_id=record_key_id
+        )
+    except AuditSigningConfigInvalidError as exc:
+        # Expected trust rejection (e.g. a historical row key omitted from
+        # the mapping) honors the CLI's typed-refusal contract (final codex
+        # round P2), never a traceback.
+        raise RecordMigrationError(f"record-key validation refused: {exc}") from exc
     if not sidecar_path.is_file():
         raise RecordMigrationError(
             f"sidecar not found at {sidecar_path} — a deployment with no "
@@ -591,6 +655,7 @@ def author_cutover_record(
             f"initialization, not here"
         )
     rows = _read_sidecar_rows(sidecar_path)
+    _refuse_missing_ledger_refs(rows, ledger_audit_refs, record=None)
 
     composed: list[AuditCutoverRecordRow] = []
     unattested: list[str] = []

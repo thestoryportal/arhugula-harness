@@ -215,6 +215,20 @@ def _run_record_mode(args: argparse.Namespace, ledger_path: Path) -> int:
         )
         return 2
     sidecar_path = ledger_path.parent / AUDIT_SIDECAR_FILENAME
+    # The immutable IS ledger's audit: refs anchor forward coverage — the
+    # record modes refuse over truncated sidecar history (final codex P1).
+    from harness_is.jsonl_event_ledger_lifecycle import JsonlLedgerHandle as _Handle
+    from harness_is.state_ledger_write import read_ledger as _read_ledger
+
+    ledger_text = ledger_path.read_text()
+    entry_count = sum(1 for line in ledger_text.splitlines() if line.strip())
+    ledger_audit_refs = frozenset(
+        str(entry.action_id)
+        for entry in _read_ledger(
+            _Handle(canonical_path=ledger_path, exists=True, entry_count=entry_count)
+        )
+        if str(entry.action_id).startswith("audit:")
+    )
 
     from harness_runtime.admin.record_migration import TenantAttestation
 
@@ -263,13 +277,19 @@ def _run_record_mode(args: argparse.Namespace, ledger_path: Path) -> int:
                 signing_backend=backend,
                 attestation=attestation,
                 tofu_quarantine_tenant=args.tofu_quarantine,
+                ledger_audit_refs=ledger_audit_refs,
             )
             print(
                 f"authored cutover record with {len(record.rows)} row(s) at "
                 f"{config.audit_cutover_record_path}"
             )
         if args.retag:
-            outcome = retag_sidecar(config, sidecar_path=sidecar_path, signing_backend=backend)
+            outcome = retag_sidecar(
+                config,
+                sidecar_path=sidecar_path,
+                signing_backend=backend,
+                ledger_audit_refs=ledger_audit_refs,
+            )
             print(
                 f"retagged {outcome.retagged} row(s); "
                 f"{outcome.quarantined_left} quarantined left '_single'; "

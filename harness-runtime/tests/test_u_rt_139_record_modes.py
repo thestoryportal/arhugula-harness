@@ -1305,3 +1305,82 @@ def test_lower_tier_config_without_redaction_key_accepted(dep: _Deployment) -> N
         attestation={entry.entry_hash: TenantAttestation(tenant=_TENANT)},
     )
     assert record.rows
+
+
+# ---------------------------------------------------------------------------
+# Final codex round (this leg).
+# ---------------------------------------------------------------------------
+
+
+def test_record_modes_refuse_over_truncated_sidecar_history(dep: _Deployment) -> None:
+    """IS refs whose sidecar rows were deleted refuse BOTH record modes —
+    never publish a signed incomplete anchor the next refold rejects."""
+    entry_a = dep.signed_entry("ref-a", placeholder=True)
+    entry_b = dep.signed_entry("ref-b", placeholder=True)
+    writer = dep.writer()
+    writer.append(None, entry_a)
+    writer.append(None, entry_b)
+    refs = frozenset({f"audit:_single:{entry_a.entry_hash}", f"audit:_single:{entry_b.entry_hash}"})
+    # Cleanly truncate: keep only entry_a's row.
+    lines = [
+        line for line in dep.sidecar_path.read_text().splitlines() if entry_b.entry_hash not in line
+    ]
+    dep.sidecar_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    with pytest.raises(RecordMigrationError, match="NO surviving sidecar row"):
+        author_cutover_record(
+            dep.config(),
+            sidecar_path=dep.sidecar_path,
+            signing_backend=dep.record_backend,
+            attestation={entry_a.entry_hash: TenantAttestation(tenant=_TENANT)},
+            ledger_audit_refs=refs,
+        )
+    assert not dep.record_path.exists()
+
+    dep.write_record(_row(entry_a.entry_hash))
+    with pytest.raises(RecordMigrationError, match="NO surviving sidecar row"):
+        retag_sidecar(
+            dep.config(),
+            sidecar_path=dep.sidecar_path,
+            signing_backend=dep.record_backend,
+            ledger_audit_refs=refs,
+        )
+
+
+def test_historical_row_key_missing_from_mapping_typed_refusal(dep: _Deployment) -> None:
+    """A persisted row signed under a key omitted from the mapping refuses
+    authoring TYPED (never a traceback through the CLI contract)."""
+    entry = dep.signed_entry("ref-1")  # signed under row-key
+    dep.writer().append(None, entry)
+    thin = dict(dep.config().audit_signing.key_arns)
+    del thin[_ROW_KEY]  # the historical key vanishes from the mapping
+    config = dep.config().model_copy(
+        update={
+            "audit_signing": AuditSigningConfig(
+                backend=AuditSigningBackendKind.AWS_KMS, key_arns=thin
+            )
+        }
+    )
+    with pytest.raises(RecordMigrationError):
+        author_cutover_record(
+            config,
+            sidecar_path=dep.sidecar_path,
+            signing_backend=dep.record_backend,
+            attestation={entry.entry_hash: TenantAttestation(tenant=_TENANT)},
+        )
+    assert not dep.record_path.exists()
+
+
+def test_malformed_baseline_pair_typed_refusal(dep: _Deployment) -> None:
+    """A valid-JSON but malformed baseline row ([['_single']] — not a
+    two-string pair) refuses TYPED at parse, never an IndexError crash."""
+    entry = dep.signed_entry("ref-1", placeholder=True)
+    dep.writer().append(None, entry)
+    with dep.sidecar_path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps({"legacy_baseline": [["_single"]]}) + "\n")
+    dep.write_record(_row(entry.entry_hash))
+
+    with pytest.raises(RecordMigrationError, match="string pairs"):
+        retag_sidecar(
+            dep.config(), sidecar_path=dep.sidecar_path, signing_backend=dep.record_backend
+        )
