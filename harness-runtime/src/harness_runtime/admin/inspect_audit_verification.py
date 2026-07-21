@@ -70,6 +70,7 @@ from harness_cp.audit_walk_verification import (
 )
 from harness_od.audit_cutover_record import (
     AuditCutoverRecord,
+    VerificationDisposition,
     verify_cutover_record_signature,
 )
 from harness_od.audit_ledger_types import AuditLedgerEntry, SignatureAlgorithm
@@ -313,8 +314,21 @@ def _load_key_map(path: Path) -> tuple[dict[str, SigningBackend], dict[str, str]
         SigningBackendUnavailableError,
         make_audit_signing_backend,
     )
+
+    try:
+        from botocore.exceptions import (  # pyright: ignore[reportMissingTypeStubs]
+            BotoCoreError,
+            ClientError,
+        )
+
+        boto_construction_errors: tuple[type[Exception], ...] = (
+            cast("type[Exception]", BotoCoreError),
+            cast("type[Exception]", ClientError),
+        )
+    except ImportError:  # boto3 optional — absent SDK surfaces as the typed error below
+        boto_construction_errors = ()
     from harness_runtime.lifecycle.audit_signing_fail_closed_validation import (
-        _canonical_kms_key_identity,
+        _canonical_kms_key_identity,  # pyright: ignore[reportPrivateUsage]  # single-source normalizer
     )
     from harness_runtime.types import AuditSigningConfig
 
@@ -331,6 +345,16 @@ def _load_key_map(path: Path) -> tuple[dict[str, SigningBackend], dict[str, str]
     for map_key, spec in cast("dict[str, object]", raw).items():
         if ":" not in map_key:
             raise ValueError(f"key-map key {map_key!r} must be '<algorithm>:<key_id>'")
+        algo_prefix = map_key.split(":", 1)[0]
+        try:
+            SignatureAlgorithm(algo_prefix)
+        except ValueError as exc:
+            # A bogus algorithm prefix would otherwise satisfy the MTC
+            # mandatory-input check on the zero-row path with an unusable
+            # mapping (codex round-9 P2).
+            raise ValueError(
+                f"key-map key {map_key!r}: {algo_prefix!r} is not an admissible SignatureAlgorithm"
+            ) from exc
         config = AuditSigningConfig.model_validate(spec)
         key_id = map_key.split(":", 1)[1]
         if key_id not in config.key_arns:
@@ -344,16 +368,22 @@ def _load_key_map(path: Path) -> tuple[dict[str, SigningBackend], dict[str, str]
             )
         try:
             backend = make_audit_signing_backend(config)
-        except SigningBackendUnavailableError as exc:
-            # Construction-availability (missing optional SDK, etc.) is an
-            # input/infrastructure failure — surfaces as the explicit
-            # UNVERIFIED disposition, never a traceback (codex round-5 P2);
+        except (SigningBackendUnavailableError, *boto_construction_errors) as exc:
+            # Construction-availability (missing optional SDK, missing AWS
+            # region/credentials — botocore's own config errors, codex
+            # round-8 P1) is an input/infrastructure failure — surfaces as
+            # the explicit UNVERIFIED disposition, never a traceback;
             # genuine programming defects still propagate.
             raise ValueError(f"key-map entry {map_key!r} backend unavailable: {exc}") from exc
         if backend is None:
             raise ValueError(
                 f"key-map entry {map_key!r} resolves to no backend "
                 f'(backend="none" is not a verification backend)'
+            )
+        if backend.algorithm != algo_prefix:
+            raise ValueError(
+                f"key-map entry {map_key!r}: constructed backend attests "
+                f"{backend.algorithm!r}, not the declared {algo_prefix!r}"
             )
         backends[map_key] = backend
         # Canonicalized like bootstrap's own distinctness validation — a
@@ -376,7 +406,15 @@ def _load_authenticated_record(
 ) -> tuple[AuditCutoverRecord, bytes]:
     """Load + authenticate the cutover record — typed rejection, never
     absent-record fallback."""
-    lines = record_path.read_text(encoding="utf-8").splitlines()
+    try:
+        lines = record_path.read_text(encoding="utf-8").splitlines()
+    except UnicodeDecodeError as exc:
+        # Invalid UTF-8 is a malformed/forged record, not an unhandled
+        # traceback (codex round-9 P2); OSError stays with the caller's
+        # unreadable-file UNVERIFIED path.
+        raise ForgedCutoverRecordError(
+            f"cutover record {record_path} is not valid UTF-8: {exc}"
+        ) from exc
     if len(lines) != 2:
         raise ForgedCutoverRecordError(
             f"cutover record {record_path} must be exactly 2 lines "
@@ -721,6 +759,33 @@ def run_audit_inspection(
         expected_cutover_record_key_id=runtime_config.audit_cutover_record_key_id,
         ledger_binding_id=runtime_config.audit_ledger_binding_id,
     )
+    # Quarantine gate BEFORE walking (any tier): a full row whose SOURCE
+    # identity a record row marks QUARANTINED never passes (§20.1.1) and
+    # must fail with the quarantine taxonomy — not degrade into a
+    # signature-invalid misreport, not fall into the MTC undispositioned
+    # gate's misleading message (codex round-8 P2).
+    quarantined_sources = {
+        (row.source_tag, row.entry_hash)
+        for row in (record.rows if record is not None else ())
+        if row.verification_disposition is VerificationDisposition.QUARANTINED
+    }
+    quarantined_full = [
+        (tag, entry.entry_hash)
+        for tag, entry in sidecar.tagged_entries
+        if (tag, entry.entry_hash) in quarantined_sources
+    ]
+    if quarantined_full:
+        return AuditInspectionOutcome(
+            disposition="failed",
+            exit_code=EXIT_AUDIT_FAILED,
+            detail=(
+                f"{len(quarantined_full)} QUARANTINED row(s) present — a "
+                f"quarantined disposition NEVER passes (C-CP-20 §20.1.1); "
+                f"recovery per the §4.1.28 operator-escalation protocol: "
+                + ", ".join(f"({tag!r}, {entry_hash!r})" for tag, entry_hash in quarantined_full)
+            ),
+        )
+
     groups = _scoped_walk_groups(sidecar, record, expected_tenant)
     if is_mtc:
         # MTC requires EVERY legacy `_single` identity to be
@@ -758,7 +823,7 @@ def run_audit_inspection(
             disposition="failed",
             exit_code=EXIT_AUDIT_FAILED,
             detail=failed.detail,
-            walk_result=failed,
+            walk_result=_merge_walk_evidence(failed, walks),
         )
     incomplete = next((w for w in walks if w.kind is WalkResultKind.INCOMPLETE_UNVERIFIED), None)
     if incomplete is not None:
@@ -766,7 +831,7 @@ def run_audit_inspection(
             disposition="unverified",
             exit_code=EXIT_AUDIT_UNVERIFIED,
             detail=f"{AUDIT_UNVERIFIED_FAIL_CLASS}: {incomplete.detail}",
-            walk_result=incomplete,
+            walk_result=_merge_walk_evidence(incomplete, walks),
         )
     merged = _merge_passed_walks(walks)
     return AuditInspectionOutcome(
@@ -797,7 +862,29 @@ def _scoped_walk_groups(
       pre-tenant four-tuple era).
     """
     record_rows = record.rows if record is not None else ()
-    claimed = {(row.tenant_scope, row.entry_hash) for row in record_rows}
+    # FULL-row pulls use only NON-quarantined claims: by the migration
+    # contract a QUARANTINED `_single` row is NEVER retagged, so it can
+    # never be tenant property — pulling it into the tenant walk would
+    # five-tuple-verify a legitimate four-tuple signature and misreport
+    # `signature-invalid` instead of the quarantine taxonomy (codex
+    # round-8 P2; the pre-walk quarantine gate in `run_audit_inspection`
+    # reports it). BASELINE pulls keep ALL claims so the OD cross-check
+    # can count quarantined baselines explicitly.
+    # Claims are SOURCE-faithful (codex round-9 P1): a `_single`-tagged
+    # sidecar row is pulled into a tenant group ONLY by a record row whose
+    # `source_tag == "_single"` — an already-tagged record row (source ==
+    # its own tenant) attests a DIFFERENT source identity, and consuming
+    # its exemption for the `_single` row would apply it to a row the
+    # record never attested.
+    claimed_single = {
+        (row.tenant_scope, row.entry_hash)
+        for row in record_rows
+        if row.source_tag == _SINGLE_TAG
+        and row.verification_disposition is not VerificationDisposition.QUARANTINED
+    }
+    claimed_any_by_source = {
+        (row.tenant_scope, row.source_tag, row.entry_hash) for row in record_rows
+    }
     if expected_tenant is not None:
         scopes = [expected_tenant]
     else:
@@ -814,13 +901,14 @@ def _scoped_walk_groups(
         for tag, entry in sidecar.tagged_entries:
             if tag == scope:
                 group_entries.append(entry)
-            elif tag == _SINGLE_TAG and (scope, entry.entry_hash) in claimed:
+            elif tag == _SINGLE_TAG and (scope, entry.entry_hash) in claimed_single:
                 group_entries.append(entry)
                 consumed_single_hashes.add(entry.entry_hash)
         group_baselines = [
             (tag, entry_hash)
             for tag, entry_hash in sidecar.baseline_identities
-            if tag == scope or (tag == _SINGLE_TAG and (scope, entry_hash) in claimed)
+            if tag == scope
+            or (tag == _SINGLE_TAG and (scope, _SINGLE_TAG, entry_hash) in claimed_any_by_source)
         ]
         groups.append((scope, group_entries, group_baselines))
 
@@ -832,6 +920,34 @@ def _scoped_walk_groups(
     if leftover or not groups:
         groups.append((None, leftover, []))
     return groups
+
+
+def _merge_walk_evidence(
+    primary: BlockingAuditWalkResult, walks: list[BlockingAuditWalkResult]
+) -> BlockingAuditWalkResult:
+    """The primary walk's verdict, carrying EVERY scope walk's evidence.
+
+    All walks have already executed — selecting one scope's report would
+    silently discard the other tenants' dispositions, divergences, and
+    entry sections from the human/JSON reports (codex round-8 P2).
+    """
+    if len(walks) == 1:
+        return primary
+    dispositions: dict[str, int] = {}
+    for walk in walks:
+        for key, count in walk.signature_dispositions.items():
+            dispositions[key] = dispositions.get(key, 0) + count
+    return BlockingAuditWalkResult(
+        kind=primary.kind,
+        detail=primary.detail,
+        failure_discriminator=primary.failure_discriminator,
+        rerunnable=primary.rerunnable,
+        signature_dispositions=dispositions,
+        exempt_entries=tuple(v for w in walks for v in w.exempt_entries),
+        quarantined_entries=tuple(v for w in walks for v in w.quarantined_entries),
+        unverified_entries=tuple(v for w in walks for v in w.unverified_entries),
+        baseline_divergences=tuple(d for w in walks for d in w.baseline_divergences),
+    )
 
 
 def _merge_passed_walks(walks: list[BlockingAuditWalkResult]) -> BlockingAuditWalkResult:

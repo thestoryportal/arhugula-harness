@@ -833,6 +833,14 @@ def test_row_key_algorithm_mismatch_rejected(
     `ed25519:row-key` row is NOT covered by an `ecdsa-p256:row-key`
     mapping entry (key_id-only matching would prove nothing)."""
     _greenfield_passing(fx)
+
+    class _EcdsaBackend(_Ed25519Backend):
+        algorithm = "ecdsa-p256"
+
+    # The ecdsa map entry constructs an algorithm-consistent backend so the
+    # load-time backend/prefix check passes — the surface under test is the
+    # PAIR-exact row mapping, not load validation.
+    fx._backends_by_key_id[_ROW_KEY] = _EcdsaBackend()
     fx.write_key_map(("ecdsa-p256", _ROW_KEY), ("ed25519", _RECORD_KEY))
 
     exit_code = main(fx.full_verification_argv("--expected-tenant", _TENANT))
@@ -1076,3 +1084,196 @@ def test_mixed_baseline_and_full_entry_row_rejected(
     out = capsys.readouterr().out
     assert exit_code == 3, out
     assert "mutually exclusive" in out
+
+
+# ---------------------------------------------------------------------------
+# Codex round-8 findings (this leg).
+# ---------------------------------------------------------------------------
+
+
+def test_quarantined_single_row_reports_quarantine_not_signature_invalid(
+    fx: _Fixture, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A full `_single` row whose record disposition is QUARANTINED fails
+    with the explicit quarantine taxonomy (§20.1.1 — recovery per §4.1.28)
+    — never pulled into the tenant walk where its legitimate four-tuple
+    signature would misreport as signature-invalid."""
+    entry = fx.signed_entry("ref-q", tenant_id=None)
+    fx.write_sidecar([("_single", entry)])
+    fx.write_ledger([f"audit:_single:{entry.entry_hash}"])
+    fx.write_config()
+    fx.write_key_map(("ed25519", _ROW_KEY), ("ed25519", _RECORD_KEY))
+    fx.write_record(
+        AuditCutoverRecordRow(
+            source_tag="_single",
+            tenant_scope=_TENANT,
+            entry_hash=entry.entry_hash,
+            verification_disposition=VerificationDisposition.QUARANTINED,
+        )
+    )
+
+    exit_code = main(fx.full_verification_argv("--expected-tenant", _TENANT))
+    out = capsys.readouterr().out
+    assert exit_code == 4, out
+    assert "QUARANTINED" in out
+    assert "signature" not in out.lower().split("quarantined")[0]  # quarantine taxonomy leads
+
+
+def test_multi_scope_failure_report_aggregates_all_walk_evidence(
+    fx: _Fixture, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """When one tenant's walk fails in a shared sidecar, the JSON report
+    still carries the OTHER tenant's dispositions — evidence from every
+    executed walk is aggregated, never discarded."""
+    entry_a = fx.signed_entry("ref-a", tenant_id="tenant-a")
+    entry_b = fx.signed_entry("ref-b", tenant_id="tenant-b")
+    fx.write_sidecar([("tenant-a", entry_a), ("tenant-b", entry_b)])
+    fx.write_ledger(
+        [f"audit:tenant-a:{entry_a.entry_hash}", f"audit:tenant-b:{entry_b.entry_hash}"]
+    )
+    fx.write_config()
+    fx.write_key_map(("ed25519", _ROW_KEY), ("ed25519", _RECORD_KEY))
+    fx.write_record()
+    # Tamper tenant-b's signature so its walk FAILS while tenant-a's passes.
+    rows = [json.loads(line) for line in fx.sidecar_path.read_text().splitlines()]
+    assert rows[1]["tenant_tag"] == "tenant-b"
+    rows[1]["entry"]["signature_attrs"]["audit_signature_value"] = "QUJD" * 21 + "QQ=="
+    fx.sidecar_path.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+
+    exit_code = main(fx.full_verification_argv("--json"))
+    out = capsys.readouterr().out
+    assert exit_code == 4
+    payload = json.loads(out)
+    walk = payload["audit_verification"]["walk"]
+    assert walk["kind"] == "failed"
+    # tenant-a's verified count survives in the aggregated evidence.
+    assert walk["signature_dispositions"].get("verified", 0) >= 1
+
+
+def test_boto_construction_error_is_unverified_not_traceback(
+    fx: _Fixture, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """botocore's own construction-time config errors (e.g. NoRegionError)
+    surface as the explicit UNVERIFIED disposition, never a traceback."""
+    from botocore.exceptions import NoRegionError
+
+    _greenfield_passing(fx)
+
+    def no_region(config: object) -> object:
+        raise NoRegionError()
+
+    monkeypatch.setattr(
+        "harness_runtime.config.audit_signing.make_audit_signing_backend", no_region
+    )
+    exit_code = main(fx.full_verification_argv("--expected-tenant", _TENANT))
+    out = capsys.readouterr().out
+    assert exit_code == 3, out
+    assert "backend unavailable" in out
+
+
+# ---------------------------------------------------------------------------
+# Codex round-9 findings (this leg).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("forge_position", [0, -1])
+def test_tampered_is_chain_fails_before_trusting_audit_refs(
+    fx: _Fixture, capsys: pytest.CaptureFixture[str], forge_position: int
+) -> None:
+    """The IS hash chain anchors coverage: an `action_id` forged to match a
+    planted sidecar row FAILS the inspection (exit 4) before any `audit:`
+    ref is trusted — a non-tail forge breaks the successor's linkage, and a
+    TAIL forge (which linkage cannot see) is caught by the explicit
+    tail response_hash recompute."""
+    entry = fx.signed_entry("ref-1", tenant_id=_TENANT)
+    fx.write_sidecar([(_TENANT, entry)])  # the planted row a forger targets
+    fx.write_ledger(["action-0", "action-1"])
+    fx.write_config()
+    fx.write_key_map(("ed25519", _ROW_KEY), ("ed25519", _RECORD_KEY))
+    fx.write_record()
+    lines = [json.loads(line) for line in fx.ledger_path.read_text().splitlines()]
+    lines[forge_position]["action_id"] = f"audit:{_TENANT}:{entry.entry_hash}"
+    fx.ledger_path.write_text("\n".join(json.dumps(row) for row in lines) + "\n", encoding="utf-8")
+
+    exit_code = main(fx.full_verification_argv("--expected-tenant", _TENANT))
+    out = capsys.readouterr().out
+    assert exit_code == 4, out
+    assert "hash chain INVALID" in out
+
+
+def test_already_tagged_record_row_never_claims_single_sidecar_row(
+    fx: _Fixture, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Claims are SOURCE-faithful: an already-tagged record row
+    (source_tag == its tenant) attests a DIFFERENT source identity — it
+    must never pull a `_single`-tagged sidecar row into the tenant walk
+    and hand it a placeholder_exempt disposition the record never issued
+    for that row."""
+    entry = fx.signed_entry("ref-1", tenant_id=None)
+    fx.write_sidecar([("_single", entry)])
+    fx.write_ledger([f"audit:_single:{entry.entry_hash}"])
+    fx.write_config()  # MTC
+    fx.write_key_map(("ed25519", _ROW_KEY), ("ed25519", _RECORD_KEY))
+    fx.write_record(
+        AuditCutoverRecordRow(
+            source_tag=_TENANT,  # already-tagged — attests tenant-a's OWN row
+            tenant_scope=_TENANT,
+            entry_hash=entry.entry_hash,
+            verification_disposition=VerificationDisposition.PLACEHOLDER_EXEMPT,
+        )
+    )
+
+    exit_code = main(fx.full_verification_argv("--expected-tenant", _TENANT))
+    out = capsys.readouterr().out
+    # The _single row is NOT claimed → at MTC it is undispositioned → FAILED,
+    # never VERIFIED-through-a-wrong-source exemption.
+    assert exit_code == 4, out
+    assert "NO cutover-record disposition" in out
+
+
+def test_bogus_algorithm_prefix_in_key_map_rejected(
+    fx: _Fixture, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A key-map key with an inadmissible algorithm prefix is rejected at
+    load — a `bogus-algorithm:row-key` mapping must not satisfy the MTC
+    mandatory-input check on the zero-row path."""
+    fx.write_ledger(["action-0"])
+    fx.write_config()  # MTC
+    fx.key_map_path.write_text(
+        json.dumps(
+            {
+                "bogus-algorithm:row-key": {
+                    "backend": AuditSigningBackendKind.AWS_KMS.value,
+                    "key_arns": {"row-key": "arn:aws:kms:us-east-1:000000000000:key/x"},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    argv = [
+        "--ledger-path",
+        str(fx.ledger_path),
+        "--runtime-config",
+        str(fx.config_path),
+        "--signing-key-map",
+        str(fx.key_map_path),
+    ]
+    exit_code = main(argv)
+    out = capsys.readouterr().out
+    assert exit_code == 3, out
+    assert "not an admissible SignatureAlgorithm" in out
+
+
+def test_non_utf8_cutover_record_typed_rejection(
+    fx: _Fixture, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A cutover-record file with invalid UTF-8 is a typed forged/malformed
+    rejection (exit 3), never an unhandled UnicodeDecodeError traceback."""
+    _greenfield_passing(fx)
+    fx.record_path.write_bytes(b"\xff\xfe\x00garbage")
+
+    exit_code = main(fx.full_verification_argv("--expected-tenant", _TENANT))
+    captured = capsys.readouterr()
+    assert exit_code == 3
+    assert "not valid UTF-8" in captured.err

@@ -742,6 +742,40 @@ def _run_audit_verification_if_engaged(
             )
             return _EXIT_INSPECT_PATH
 
+    # The IS chain anchors reverse/forward coverage — a forged `action_id`
+    # planted to match a copied sidecar row breaks the hash chain, so the
+    # chain MUST be valid before any `audit:` ref is trusted (codex round-9
+    # P1 on this leg).
+    from harness_is.chain_verification import VerificationStatus, verify_chain
+    from harness_is.entry_hash import compute_response_hash
+
+    chain = verify_chain(entries)
+    # `verify_chain` validates prior-linkage — which transitively covers
+    # every entry's content EXCEPT the tail's (no successor links to it):
+    # a forged tail `action_id` would pass linkage, so the tail's stored
+    # `response_hash` is recomputed explicitly.
+    tail_forged = bool(entries) and entries[-1].response_hash != compute_response_hash(entries[-1])
+    if chain.status is not VerificationStatus.VALID or tail_forged:
+        from harness_runtime.admin.inspect_audit_verification import (
+            EXIT_AUDIT_FAILED,
+            AuditInspectionOutcome,
+        )
+
+        if tail_forged:
+            failure_note = f"tail entry (position {len(entries)}) response_hash mismatch"
+        else:
+            failure_type = chain.failure_type.value if chain.failure_type else "unknown"
+            failure_note = f"position {chain.failure_position} ({failure_type})"
+        return AuditInspectionOutcome(
+            disposition="failed",
+            exit_code=EXIT_AUDIT_FAILED,
+            detail=(
+                f"IS state-ledger hash chain INVALID at {failure_note} — "
+                f"the ledger's audit: references cannot anchor coverage "
+                f"over a tampered chain"
+            ),
+        )
+
     ledger_audit_refs = frozenset(
         str(entry.action_id) for entry in entries if str(entry.action_id).startswith("audit:")
     )
