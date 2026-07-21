@@ -46,6 +46,7 @@ from harness_od.audit_ledger_types import (
 from harness_od.multi_tenant_trace_separation_and_audit_ledger import sign_audit_entry
 from harness_runtime.admin.record_migration import (
     RecordMigrationError,
+    TenantAttestation,
     author_cutover_record,
     retag_sidecar,
 )
@@ -498,9 +499,16 @@ def test_authoring_round_trip_record_verifies_and_drives_retag(dep: _Deployment)
         sidecar_path=dep.sidecar_path,
         signing_backend=dep.record_backend,
         attestation={
-            placeholder_entry.entry_hash: _TENANT,
-            real_entry.entry_hash: _TENANT,
-            baseline_hash: _TENANT,
+            # Exemption is an EXPLICIT operator decision (codex round-5 P1)
+            # — never inferred from the mutable signature-value shape.
+            placeholder_entry.entry_hash: TenantAttestation(
+                tenant=_TENANT, placeholder_exempt=True
+            ),
+            real_entry.entry_hash: TenantAttestation(tenant=_TENANT),
+            baseline_hash: TenantAttestation(tenant=_TENANT),
+            # Already-tagged rows need an external binding MATCHING the
+            # observed tag.
+            tagged_entry.entry_hash: TenantAttestation(tenant="tenant-b"),
         },
     )
     assert dep.record_path.is_file()
@@ -575,7 +583,7 @@ def test_authoring_refuses_to_overwrite_existing_record(dep: _Deployment) -> Non
             dep.config(),
             sidecar_path=dep.sidecar_path,
             signing_backend=dep.record_backend,
-            attestation={entry.entry_hash: _TENANT},
+            attestation={entry.entry_hash: TenantAttestation(tenant=_TENANT)},
         )
 
 
@@ -626,7 +634,7 @@ def test_record_modes_refuse_config_bootstrap_would_reject(dep: _Deployment) -> 
             config,
             sidecar_path=dep.sidecar_path,
             signing_backend=dep.record_backend,
-            attestation={entry.entry_hash: _TENANT},
+            attestation={entry.entry_hash: TenantAttestation(tenant=_TENANT)},
         )
     assert not dep.record_path.exists()
 
@@ -644,7 +652,7 @@ def test_author_record_path_symlink_refused(dep: _Deployment) -> None:
             dep.config(),
             sidecar_path=dep.sidecar_path,
             signing_backend=dep.record_backend,
-            attestation={entry.entry_hash: _TENANT},
+            attestation={entry.entry_hash: TenantAttestation(tenant=_TENANT)},
         )
     assert not target.exists()  # nothing was created through the link
 
@@ -669,7 +677,7 @@ def test_author_crash_before_publication_leaves_no_partial_record(
             dep.config(),
             sidecar_path=dep.sidecar_path,
             signing_backend=dep.record_backend,
-            attestation={entry.entry_hash: _TENANT},
+            attestation={entry.entry_hash: TenantAttestation(tenant=_TENANT)},
         )
     assert not dep.record_path.exists()
     assert not dep.record_path.with_name(dep.record_path.name + ".author.tmp").exists()
@@ -776,7 +784,7 @@ def test_record_path_aliasing_migration_temp_refused(dep: _Deployment) -> None:
             config,
             sidecar_path=dep.sidecar_path,
             signing_backend=dep.record_backend,
-            attestation={entry.entry_hash: _TENANT},
+            attestation={entry.entry_hash: TenantAttestation(tenant=_TENANT)},
         )
 
 
@@ -796,7 +804,7 @@ def test_author_unverifiable_signature_refused(dep: _Deployment) -> None:
             dep.config(),
             sidecar_path=dep.sidecar_path,
             signing_backend=_SignOnlyBackend(secret=b"record-secret"),
-            attestation={entry.entry_hash: _TENANT},
+            attestation={entry.entry_hash: TenantAttestation(tenant=_TENANT)},
         )
     assert not dep.record_path.exists()
 
@@ -813,7 +821,7 @@ def test_blank_tenant_bindings_rejected(dep: _Deployment) -> None:
             dep.config(),
             sidecar_path=dep.sidecar_path,
             signing_backend=dep.record_backend,
-            attestation={entry.entry_hash: ""},
+            attestation={entry.entry_hash: TenantAttestation(tenant="")},
         )
     with pytest.raises(RecordMigrationError, match="non-blank"):
         author_cutover_record(
@@ -849,7 +857,7 @@ def test_stage4_consumer_mapping_gap_refused(dep: _Deployment) -> None:
             config,
             sidecar_path=dep.sidecar_path,
             signing_backend=dep.record_backend,
-            attestation={entry.entry_hash: _TENANT},
+            attestation={entry.entry_hash: TenantAttestation(tenant=_TENANT)},
         )
     assert not dep.record_path.exists()
 
@@ -967,3 +975,77 @@ def test_cli_config_refusal_precedes_backend_construction(
     )
     exit_code = main([str(dep.ledger_path), "--retag", "--runtime-config", str(config_path)])
     assert exit_code == 1  # typed refusal, the exploding backend never ran
+
+
+# ---------------------------------------------------------------------------
+# Codex round-5 findings (terminal round, this leg).
+# ---------------------------------------------------------------------------
+
+
+def test_placeholder_shape_never_infers_exemption(dep: _Deployment) -> None:
+    """The `unsigned:*` signature-value shape is attacker-writable (outside
+    entry_hash) — a PLAIN tenant attestation dispositions the row
+    four_tuple_real, so a downgraded signature FAILS verification loudly
+    instead of earning a signed exemption. Exemption requires the EXPLICIT
+    operator attestation."""
+    entry = dep.signed_entry("ref-1", placeholder=True)  # unsigned:* value
+    dep.writer().append(None, entry)
+
+    record = author_cutover_record(
+        dep.config(),
+        sidecar_path=dep.sidecar_path,
+        signing_backend=dep.record_backend,
+        attestation={entry.entry_hash: TenantAttestation(tenant=_TENANT)},  # plain
+    )
+    assert record.rows[0].verification_disposition is VerificationDisposition.FOUR_TUPLE_REAL
+
+    # The explicit operator decision still grants exemption.
+    dep.record_path.unlink()
+    record = author_cutover_record(
+        dep.config(),
+        sidecar_path=dep.sidecar_path,
+        signing_backend=dep.record_backend,
+        attestation={entry.entry_hash: TenantAttestation(tenant=_TENANT, placeholder_exempt=True)},
+    )
+    assert record.rows[0].verification_disposition is (VerificationDisposition.PLACEHOLDER_EXEMPT)
+
+
+def test_already_tagged_rows_require_external_binding(dep: _Deployment) -> None:
+    """The wrapper tag is mutable — an already-tagged row authenticates
+    ONLY through an external binding: a MISMATCHED attestation (relabel
+    evidence) refuses; absent attestation the declared-TOFU decision
+    QUARANTINES under the observed tag; neither → unattested refusal."""
+    entry = dep.signed_entry("ref-1")
+    dep.writer().append("tenant-b", entry)
+
+    # Mismatch — refuse.
+    with pytest.raises(RecordMigrationError, match="relabeled wrapper"):
+        author_cutover_record(
+            dep.config(),
+            sidecar_path=dep.sidecar_path,
+            signing_backend=dep.record_backend,
+            attestation={entry.entry_hash: TenantAttestation(tenant="tenant-c")},
+        )
+    assert not dep.record_path.exists()
+
+    # No attestation, no TOFU — unattested refusal.
+    with pytest.raises(RecordMigrationError, match="no attestation"):
+        author_cutover_record(
+            dep.config(),
+            sidecar_path=dep.sidecar_path,
+            signing_backend=dep.record_backend,
+            attestation={},
+        )
+
+    # Declared TOFU — quarantined under the OBSERVED tag.
+    record = author_cutover_record(
+        dep.config(),
+        sidecar_path=dep.sidecar_path,
+        signing_backend=dep.record_backend,
+        attestation={},
+        tofu_quarantine_tenant=_TENANT,
+    )
+    row = record.rows[0]
+    assert row.source_tag == "tenant-b"
+    assert row.tenant_scope == "tenant-b"
+    assert row.verification_disposition is VerificationDisposition.QUARANTINED

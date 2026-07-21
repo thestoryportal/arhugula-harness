@@ -216,24 +216,44 @@ def _run_record_mode(args: argparse.Namespace, ledger_path: Path) -> int:
         return 2
     sidecar_path = ledger_path.parent / AUDIT_SIDECAR_FILENAME
 
-    attestation: dict[str, str] = {}
+    from harness_runtime.admin.record_migration import TenantAttestation
+
+    attestation: dict[str, TenantAttestation] = {}
     if args.attestation is not None:
         try:
             parsed = json.loads(args.attestation.read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:
             print(f"error: --attestation unusable: {exc}", file=sys.stderr)
             return 2
-        if not isinstance(parsed, dict) or not all(
-            isinstance(k, str) and isinstance(v, str)
-            for k, v in cast("dict[object, object]", parsed).items()
-        ):
-            print(
-                "error: --attestation must be a JSON object mapping entry_hash "
-                "strings to tenant strings",
-                file=sys.stderr,
-            )
+        if not isinstance(parsed, dict):
+            print("error: --attestation must be a JSON object", file=sys.stderr)
             return 2
-        attestation = cast("dict[str, str]", parsed)
+        for key, value in cast("dict[object, object]", parsed).items():
+            if not isinstance(key, str):
+                print("error: --attestation keys must be entry_hash strings", file=sys.stderr)
+                return 2
+            if isinstance(value, str):
+                attestation[key] = TenantAttestation(tenant=value)
+            elif (
+                isinstance(value, dict)
+                and isinstance(cast("dict[str, object]", value).get("tenant"), str)
+                and isinstance(
+                    cast("dict[str, object]", value).get("placeholder_exempt", False), bool
+                )
+            ):
+                spec = cast("dict[str, object]", value)
+                attestation[key] = TenantAttestation(
+                    tenant=cast("str", spec["tenant"]),
+                    placeholder_exempt=cast("bool", spec.get("placeholder_exempt", False)),
+                )
+            else:
+                print(
+                    "error: --attestation values must be a tenant string or "
+                    '{"tenant": str, "placeholder_exempt": bool} — exemption '
+                    "is an EXPLICIT operator decision, never inferred",
+                    file=sys.stderr,
+                )
+                return 2
 
     try:
         if args.author:

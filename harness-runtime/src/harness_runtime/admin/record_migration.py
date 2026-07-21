@@ -78,7 +78,6 @@ __all__ = [
 ]
 
 _SINGLE_TAG = "_single"
-_PLACEHOLDER_SIGNATURE_PREFIX = "unsigned:"
 
 _TENANT_READABLE = (
     VerificationDisposition.PLACEHOLDER_EXEMPT,
@@ -88,6 +87,22 @@ _TENANT_READABLE = (
 
 class RecordMigrationError(Exception):
     """Typed refusal — authoring/retag stopped with ZERO changes on disk."""
+
+
+@dataclass(frozen=True)
+class TenantAttestation:
+    """One operator-attested tenant binding (OD v1.34 §21.2.2 row 5).
+
+    `placeholder_exempt` must be EXPLICIT (codex round-5 P1): the
+    `unsigned:*` signature-value shape is attacker-writable (signature
+    attrs are outside `entry_hash`), so exemption is never inferred from
+    it — a plain tenant attestation dispositions a full row
+    `four_tuple_real`, and a row whose signature was downgraded then FAILS
+    verification loudly instead of being skipped.
+    """
+
+    tenant: str
+    placeholder_exempt: bool = False
 
 
 @dataclass(frozen=True)
@@ -526,7 +541,7 @@ def author_cutover_record(
     *,
     sidecar_path: Path,
     signing_backend: SigningBackend,
-    attestation: dict[str, str],
+    attestation: dict[str, TenantAttestation],
     tofu_quarantine_tenant: str | None = None,
 ) -> AuditCutoverRecord:
     """Compose + validate + sign + EMIT the cutover record.
@@ -577,11 +592,11 @@ def author_cutover_record(
             "would silently omit every unattested identity from the record"
         )
 
-    def _tenant_for(entry_hash: str) -> tuple[str, bool]:
-        """(tenant_scope, quarantined) for a `\"_single\"` identity."""
+    def _tenant_for(entry_hash: str) -> tuple[TenantAttestation | None, bool]:
+        """(attestation, quarantined) for a `\"_single\"` identity."""
         attested = attestation.get(entry_hash)
         if attested is not None:
-            if not attested.strip():
+            if not attested.tenant.strip():
                 raise RecordMigrationError(
                     f"attestation for {entry_hash!r} maps to a blank tenant "
                     f"— rejected (a blank binding would silently omit the "
@@ -589,9 +604,9 @@ def author_cutover_record(
                 )
             return attested, False
         if tofu_quarantine_tenant is not None:
-            return tofu_quarantine_tenant, True
+            return TenantAttestation(tenant=tofu_quarantine_tenant), True
         unattested.append(entry_hash)
-        return "", False
+        return None, False
 
     seen_single: set[str] = set()
     for tag, entry in rows.single_full_identities():
@@ -599,34 +614,55 @@ def author_cutover_record(
             if entry.entry_hash in seen_single:
                 continue
             seen_single.add(entry.entry_hash)
-            tenant, quarantined = _tenant_for(entry.entry_hash)
-            if not tenant:
+            attested, quarantined = _tenant_for(entry.entry_hash)
+            if attested is None:
                 continue
             if quarantined:
                 disposition = VerificationDisposition.QUARANTINED
-            elif entry.signature_attrs.audit_signature_value.startswith(
-                _PLACEHOLDER_SIGNATURE_PREFIX
-            ):
+            elif attested.placeholder_exempt:
+                # EXPLICIT operator attestation only (codex round-5 P1) —
+                # never inferred from the attacker-writable `unsigned:*`
+                # signature-value shape.
                 disposition = VerificationDisposition.PLACEHOLDER_EXEMPT
             else:
                 disposition = VerificationDisposition.FOUR_TUPLE_REAL
             composed.append(
                 AuditCutoverRecordRow(
                     source_tag=_SINGLE_TAG,
-                    tenant_scope=tenant,
+                    tenant_scope=attested.tenant,
                     entry_hash=entry.entry_hash,
                     verification_disposition=disposition,
                 )
             )
         else:
-            # Already-tenant-tagged v1.33-era row: genuine FOUR-tuple
-            # signature under its existing source_tag.
+            # Already-tenant-tagged v1.33-era row. The wrapper tag is
+            # MUTABLE (codex round-5 P1: four-tuple signatures do not bind
+            # tenant), so the binding requires EXTERNAL attestation: an
+            # attested tenant must MATCH the observed tag (a mismatch is a
+            # relabel — refuse); absent attestation, the declared-TOFU
+            # decision QUARANTINES the row under its observed tag; neither
+            # → unattested refusal.
+            attested = attestation.get(entry.entry_hash)
+            if attested is not None:
+                if attested.tenant != tag:
+                    raise RecordMigrationError(
+                        f"already-tagged row {entry.entry_hash!r} carries "
+                        f"observed tag {tag!r} but the attestation binds "
+                        f"{attested.tenant!r} — a relabeled wrapper; refusing "
+                        f"to authenticate either association"
+                    )
+                disposition = VerificationDisposition.FOUR_TUPLE_REAL
+            elif tofu_quarantine_tenant is not None:
+                disposition = VerificationDisposition.QUARANTINED
+            else:
+                unattested.append(entry.entry_hash)
+                continue
             composed.append(
                 AuditCutoverRecordRow(
                     source_tag=tag,
                     tenant_scope=tag,
                     entry_hash=entry.entry_hash,
-                    verification_disposition=VerificationDisposition.FOUR_TUPLE_REAL,
+                    verification_disposition=disposition,
                 )
             )
     for tag, entry_hash in rows.baseline_pairs():
@@ -643,14 +679,17 @@ def author_cutover_record(
         if entry_hash in seen_single:
             continue
         seen_single.add(entry_hash)
-        tenant, quarantined = _tenant_for(entry_hash)
-        if not tenant:
+        attested, quarantined = _tenant_for(entry_hash)
+        if attested is None:
             continue
         composed.append(
             AuditCutoverRecordRow(
                 source_tag=_SINGLE_TAG,
-                tenant_scope=tenant,
+                tenant_scope=attested.tenant,
                 entry_hash=entry_hash,
+                # A baseline pair has NO full entry — exemption is the only
+                # meaningful non-quarantine disposition and there is no
+                # signature to downgrade.
                 verification_disposition=(
                     VerificationDisposition.QUARANTINED
                     if quarantined
