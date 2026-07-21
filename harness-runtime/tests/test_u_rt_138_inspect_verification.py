@@ -158,11 +158,20 @@ class _Fixture:
             payload=payload, signature_attrs=sig_attrs, entry_hash=compute_entry_hash(payload)
         )
 
-    def write_sidecar(self, rows: list[tuple[str, AuditLedgerEntry]]) -> None:
+    def write_sidecar(
+        self,
+        rows: list[tuple[str, AuditLedgerEntry]],
+        *,
+        baseline: list[tuple[str, str]] | None = None,
+    ) -> None:
         lines = [
             json.dumps({"tenant_tag": tag, "entry": entry.model_dump(mode="json")})
             for tag, entry in rows
         ]
+        if baseline is not None:
+            # The writer's real `adopt_legacy_is_refs` shape: ONE row with
+            # an ARRAY of [tag, hash] pairs.
+            lines.append(json.dumps({"legacy_baseline": [[t, h] for t, h in baseline]}))
         self.sidecar_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     def write_record(
@@ -501,3 +510,134 @@ def test_inspect_verification_writes_nothing_readonly_fixture(
         os.chmod(fx.root, stat.S_IRWXU)
         for child in fx.root.iterdir():
             os.chmod(child, stat.S_IRUSR | stat.S_IWUSR)
+
+
+# ---------------------------------------------------------------------------
+# Codex round-1 findings (this leg) — coverage, grouping, baseline shapes.
+# ---------------------------------------------------------------------------
+
+
+def test_deleted_sidecar_row_with_ledger_ref_fails_forward_coverage(
+    fx: _Fixture, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """FORWARD coverage: an IS `audit:` ref whose sidecar row was DELETED
+    fails the MTC audit (exit 4) — an authenticated empty record must never
+    report VERIFIED over truncated audit history."""
+    _greenfield_passing(fx)
+    fx.write_sidecar([])  # the row is gone; the ledger ref survives
+
+    exit_code = main(fx.full_verification_argv("--expected-tenant", _TENANT))
+    out = capsys.readouterr().out
+    assert exit_code == 4
+    assert "FAILED" in out
+    assert "forward coverage" in out
+
+
+def test_baseline_only_four_tuple_real_is_unverified_not_passed(
+    fx: _Fixture, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A FOUR_TUPLE_REAL record disposition on a BASELINE-ONLY identity (the
+    writer\'s `{"legacy_baseline": [[tag, hash], ...]}` array shape) has no
+    full entry to cryptographically verify — explicit UNVERIFIED nonzero,
+    never PASSED (and never a parse-drop that reports a false divergence)."""
+    entry = fx.signed_entry("ref-1", tenant_id=None)
+    fx.write_sidecar([], baseline=[("_single", entry.entry_hash)])
+    fx.write_ledger([f"audit:_single:{entry.entry_hash}"])
+    fx.write_config()
+    fx.write_key_map(("ed25519", _ROW_KEY), ("ed25519", _RECORD_KEY))
+    fx.write_record(
+        AuditCutoverRecordRow(
+            source_tag="_single",
+            tenant_scope=_TENANT,
+            entry_hash=entry.entry_hash,
+            verification_disposition=VerificationDisposition.FOUR_TUPLE_REAL,
+        )
+    )
+
+    exit_code = main(fx.full_verification_argv("--expected-tenant", _TENANT))
+    out = capsys.readouterr().out
+    assert exit_code == 3, out
+    assert "UNVERIFIED" in out
+
+
+def test_multi_tenant_sidecar_verifies_per_scope(
+    fx: _Fixture, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The OD verifier is single-scope — a shared sidecar with two tenants\'
+    valid five-tuple rows must verify per tenant group, not falsely report
+    SIGNATURE_INVALID by reconstructing B\'s message under A\'s segment."""
+    entry_a = fx.signed_entry("ref-a", tenant_id="tenant-a")
+    entry_b = fx.signed_entry("ref-b", tenant_id="tenant-b")
+    fx.write_sidecar([("tenant-a", entry_a), ("tenant-b", entry_b)])
+    fx.write_ledger(
+        [f"audit:tenant-a:{entry_a.entry_hash}", f"audit:tenant-b:{entry_b.entry_hash}"]
+    )
+    fx.write_config()
+    fx.write_key_map(("ed25519", _ROW_KEY), ("ed25519", _RECORD_KEY))
+    fx.write_record()
+
+    # Full audit (no --expected-tenant): both groups verify.
+    exit_code = main(fx.full_verification_argv())
+    out = capsys.readouterr().out
+    assert exit_code == 0, out
+    assert "VERIFIED" in out
+
+    # Scoped audit: tenant-a alone verifies; B\'s rows are out of scope,
+    # their ledger coverage still satisfied globally.
+    exit_code = main(fx.full_verification_argv("--expected-tenant", "tenant-a"))
+    out = capsys.readouterr().out
+    assert exit_code == 0, out
+    assert "VERIFIED" in out
+
+
+def test_alias_collision_across_tenants_order_independent(
+    fx: _Fixture, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Aliases are keyed by DESTINATION identity `(tenant_scope,
+    entry_hash)` — two record rows legitimately sharing a pre-v1.34 entry
+    hash across tenants must not overwrite each other (hash-only keying made
+    reverse coverage row-order-dependent: the LATER row\'s source tag won,
+    falsely marking the migrated row surplus)."""
+    entry = fx.signed_entry("ref-1", tenant_id=None)  # four-tuple era
+    h = entry.entry_hash
+    fx.write_sidecar([(_TENANT, entry)], baseline=[("tenant-b", h)])
+    fx.write_ledger([f"audit:_single:{h}", f"audit:tenant-b:{h}"])
+    fx.write_config()
+    fx.write_key_map(("ed25519", _ROW_KEY), ("ed25519", _RECORD_KEY))
+    fx.write_record(
+        # The _single→tenant-a migrated row FIRST; the same-hash tenant-b
+        # row SECOND (the order that poisons a hash-only alias dict).
+        AuditCutoverRecordRow(
+            source_tag="_single",
+            tenant_scope=_TENANT,
+            entry_hash=h,
+            verification_disposition=VerificationDisposition.FOUR_TUPLE_REAL,
+        ),
+        AuditCutoverRecordRow(
+            source_tag="tenant-b",
+            tenant_scope="tenant-b",
+            entry_hash=h,
+            verification_disposition=VerificationDisposition.PLACEHOLDER_EXEMPT,
+        ),
+    )
+
+    exit_code = main(fx.full_verification_argv("--expected-tenant", _TENANT))
+    out = capsys.readouterr().out
+    assert exit_code == 0, out
+    assert "VERIFIED" in out
+
+
+def test_missing_cutover_record_file_unverified_not_traceback(
+    fx: _Fixture, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A missing/unreadable `--cutover-record` FILE is an input failure —
+    explicit UNVERIFIED nonzero, never a raw traceback and never treated as
+    forged or absent."""
+    _greenfield_passing(fx)
+    fx.record_path.unlink()
+
+    exit_code = main(fx.full_verification_argv("--expected-tenant", _TENANT))
+    out = capsys.readouterr().out
+    assert exit_code == 3
+    assert "UNVERIFIED" in out
+    assert "--cutover-record unreadable" in out

@@ -32,6 +32,8 @@ from typing import cast
 
 from harness_cp.audit_walk_verification import (
     AuditWalkVerifierUnavailableError,
+    WalkEntryVerdict,
+    WalkEntryVerdictKind,
     WalkInvalidDiscriminator,
     WalkInvalidSignal,
     WalkVerificationOutcome,
@@ -106,7 +108,35 @@ class OdVerifierWalkAdapter:
         # Any other raise (TypeError/KeyError/programming error) propagates
         # unwrapped as a defect — the CP result-boundary contract.
 
+        # Aggregate dispositions that must NOT pass silently are surfaced
+        # as per-entry verdicts so the walk's §20.1.1 gates fire (codex
+        # round-1 P1 on this leg: `baseline_real_unverifiable` — a
+        # FOUR_TUPLE_REAL disposition on a baseline-only identity has no
+        # full entry to cryptographically verify, so "verified"/PASSED
+        # would overclaim; the walk must report INCOMPLETE_UNVERIFIED).
+        verdicts: list[WalkEntryVerdict] = []
+        for i in range(report.signature_dispositions.get("baseline_real_unverifiable", 0)):
+            verdicts.append(
+                WalkEntryVerdict(
+                    entry_ref=f"baseline-real-unverifiable-{i}",
+                    kind=WalkEntryVerdictKind.UNVERIFIED,
+                    reason=(
+                        "FOUR_TUPLE_REAL disposition on a baseline-only "
+                        "identity — no full entry exists to verify "
+                        "cryptographically (OD v1.34 §21.2.2 row 6)"
+                    ),
+                )
+            )
+        for i in range(report.signature_dispositions.get("exempt", 0)):
+            verdicts.append(
+                WalkEntryVerdict(
+                    entry_ref=f"exempt-{i}",
+                    kind=WalkEntryVerdictKind.EXEMPT_PLACEHOLDER,
+                    reason="placeholder_exempt per the authenticated cutover record",
+                )
+            )
         return WalkVerificationOutcome(
+            entry_verdicts=tuple(verdicts),
             signature_dispositions=dict(report.signature_dispositions),
             baseline_divergences=tuple(report.baseline_divergences),
         )

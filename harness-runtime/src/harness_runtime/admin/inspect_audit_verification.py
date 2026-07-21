@@ -147,12 +147,19 @@ def _unverified(detail: str) -> AuditInspectionOutcome:
     )
 
 
+_SINGLE_TAG = "_single"
+
+
 @dataclass(frozen=True)
 class _SidecarContent:
-    entries: tuple[AuditLedgerEntry, ...]
+    tagged_entries: tuple[tuple[str, AuditLedgerEntry], ...]
     observed_identities: tuple[tuple[str, str], ...]
     baseline_identities: tuple[tuple[str, str], ...]
     row_key_ids: frozenset[str]
+
+    @property
+    def entries(self) -> tuple[AuditLedgerEntry, ...]:
+        return tuple(entry for _, entry in self.tagged_entries)
 
 
 def _read_sidecar(sidecar_path: Path) -> _SidecarContent:
@@ -163,7 +170,7 @@ def _read_sidecar(sidecar_path: Path) -> _SidecarContent:
     unparseable row raises `ValueError` (fail-closed — verification cannot
     run over unprovable history).
     """
-    entries: list[AuditLedgerEntry] = []
+    entries: list[tuple[str, AuditLedgerEntry]] = []
     observed: list[tuple[str, str]] = []
     baseline: list[tuple[str, str]] = []
     key_ids: set[str] = set()
@@ -177,28 +184,43 @@ def _read_sidecar(sidecar_path: Path) -> _SidecarContent:
             raise ValueError(f"sidecar line {line_number} is not a JSON object")
         row = cast("dict[str, object]", parsed)
         if "legacy_baseline" in row:
-            tag = row.get("tenant_tag")
-            entry_hash = row.get("entry_hash")
-            if isinstance(tag, str) and isinstance(entry_hash, str):
-                observed.append((tag, entry_hash))
-                # BASELINE-ONLY observation — the shape the OD verifier's
-                # §21.2.2 row-6 cross-check consumes. Full-entry rows are
-                # NOT baselines (they are content/signature-verified
-                # directly; passing them here would report every verified
-                # row as a false "missing from the cutover record"
-                # divergence).
-                baseline.append((tag, entry_hash))
+            # The writer's actual shape (`adopt_legacy_is_refs`, mirrored by
+            # the sidecar folder at `audit_writer.py`):
+            # `{"legacy_baseline": [[tag, hash], ...]}` — ONE row carrying
+            # an ARRAY of source-identity pairs (codex round-1 P1 on this
+            # leg: the previous per-row tenant_tag/entry_hash reading
+            # silently dropped every baseline pair). These are BASELINE-ONLY
+            # observations — the shape the OD verifier's §21.2.2 row-6
+            # cross-check consumes; full-entry rows are NOT baselines.
+            pairs_obj = row["legacy_baseline"]
+            if not isinstance(pairs_obj, list):
+                raise ValueError(
+                    f"sidecar line {line_number}: legacy_baseline must be an "
+                    f"array of [tag, hash] pairs"
+                )
+            for pair in cast("list[object]", pairs_obj):
+                if (
+                    not isinstance(pair, list)
+                    or len(cast("list[object]", pair)) != 2
+                    or not all(isinstance(part, str) for part in cast("list[object]", pair))
+                ):
+                    raise ValueError(
+                        f"sidecar line {line_number}: malformed legacy_baseline pair {pair!r}"
+                    )
+                tag_str, hash_str = cast("list[str]", pair)
+                observed.append((tag_str, hash_str))
+                baseline.append((tag_str, hash_str))
             continue
         entry_obj = row.get("entry")
         tag = row.get("tenant_tag")
         if not isinstance(entry_obj, dict) or not isinstance(tag, str):
             raise ValueError(f"sidecar line {line_number} lacks tenant_tag/entry")
         entry = AuditLedgerEntry.model_validate(entry_obj)
-        entries.append(entry)
+        entries.append((tag, entry))
         observed.append((tag, entry.entry_hash))
         key_ids.add(entry.signature_attrs.audit_signature_key_id)
     return _SidecarContent(
-        entries=tuple(entries),
+        tagged_entries=tuple(entries),
         observed_identities=tuple(observed),
         baseline_identities=tuple(baseline),
         row_key_ids=frozenset(key_ids),
@@ -307,6 +329,15 @@ def _load_authenticated_record(
     return record, signature
 
 
+def _alias_source_tags(record: AuditCutoverRecord) -> dict[tuple[str, str], str]:
+    """Record-derived alias map keyed by DESTINATION identity
+    `(tenant_scope, entry_hash)` → `source_tag` — never `entry_hash` alone
+    (codex round-1 P2 on this leg: two record rows legitimately sharing a
+    pre-v1.34 entry hash across tenants would overwrite each other in a
+    hash-only dict, making reverse coverage row-order-dependent)."""
+    return {(row.tenant_scope, row.entry_hash): row.source_tag for row in record.rows}
+
+
 def _surplus_rows(
     observed_identities: tuple[tuple[str, str], ...],
     ledger_audit_refs: frozenset[str],
@@ -316,17 +347,37 @@ def _surplus_rows(
     IS ledger's `audit:` refs are SURPLUS — with the record-derived alias
     projection so migrated history (IS ids still `audit:_single:<hash>`)
     matches and is NOT reported surplus."""
-    recorded_source_tags = {row.entry_hash: row.source_tag for row in record.rows}
+    aliases = _alias_source_tags(record)
     surplus: list[str] = []
     for tag, entry_hash in observed_identities:
         current_ref = f"audit:{tag}:{entry_hash}"
         if current_ref in ledger_audit_refs:
             continue
-        source_tag = recorded_source_tags.get(entry_hash)
+        source_tag = aliases.get((tag, entry_hash))
         if source_tag is not None and f"audit:{source_tag}:{entry_hash}" in ledger_audit_refs:
             continue  # migrated row — matches through the alias projection
         surplus.append(current_ref)
     return tuple(surplus)
+
+
+def _missing_ledger_refs(
+    observed_identities: tuple[tuple[str, str], ...],
+    ledger_audit_refs: frozenset[str],
+    record: AuditCutoverRecord,
+) -> tuple[str, ...]:
+    """FORWARD coverage (codex round-1 P1 on this leg): an IS ledger
+    `audit:` ref whose sidecar row is DELETED never reaches the verifier —
+    without this check an authenticated empty record could report VERIFIED
+    over truncated audit history. Alias-projected the same way as
+    `_surplus_rows` so migrated history covers its `_single`-form ref."""
+    aliases = _alias_source_tags(record)
+    covered: set[str] = set()
+    for tag, entry_hash in observed_identities:
+        covered.add(f"audit:{tag}:{entry_hash}")
+        source_tag = aliases.get((tag, entry_hash))
+        if source_tag is not None:
+            covered.add(f"audit:{source_tag}:{entry_hash}")
+    return tuple(sorted(ledger_audit_refs - covered))
 
 
 def run_audit_inspection(
@@ -392,7 +443,7 @@ def run_audit_inspection(
             _read_sidecar(sidecar_path)
             if sidecar_path.is_file()
             else _SidecarContent(
-                entries=(),
+                tagged_entries=(),
                 observed_identities=(),
                 baseline_identities=(),
                 row_key_ids=frozenset(),
@@ -407,14 +458,19 @@ def run_audit_inspection(
         return _unverified(f"--signing-key-map unusable: {exc}")
 
     # The record is REQUIRED whenever ANY row exists (era never inferred);
-    # its authentication failures are TYPED and never absent-fallback.
-    record, signature = _load_authenticated_record(
-        cutover_record_path,  # type: ignore[arg-type]  # narrowed above
-        pinned_key_id=runtime_config.audit_cutover_record_key_id,
-        ledger_binding_id=runtime_config.audit_ledger_binding_id,
-        key_map=key_map,
-        row_key_ids=sidecar.row_key_ids,
-    )
+    # its authentication failures are TYPED and never absent-fallback. An
+    # unreadable/missing record FILE is an input failure, not a forgery —
+    # explicit UNVERIFIED, never a traceback (codex round-1 P2 on this leg).
+    try:
+        record, signature = _load_authenticated_record(
+            cutover_record_path,  # type: ignore[arg-type]  # narrowed above
+            pinned_key_id=runtime_config.audit_cutover_record_key_id,
+            ledger_binding_id=runtime_config.audit_ledger_binding_id,
+            key_map=key_map,
+            row_key_ids=sidecar.row_key_ids,
+        )
+    except OSError as exc:
+        return _unverified(f"--cutover-record unreadable: {exc}")
 
     surplus = _surplus_rows(sidecar.observed_identities, ledger_audit_refs, record)
     if surplus and is_mtc:
@@ -427,6 +483,18 @@ def run_audit_inspection(
                 f"audit (reverse coverage)"
             ),
             surplus_rows=surplus,
+        )
+
+    missing = _missing_ledger_refs(sidecar.observed_identities, ledger_audit_refs, record)
+    if missing and is_mtc:
+        return AuditInspectionOutcome(
+            disposition="failed",
+            exit_code=EXIT_AUDIT_FAILED,
+            detail=(
+                f"{len(missing)} IS ledger audit: ref(s) with NO surviving "
+                f"sidecar row — deleted/truncated audit history fails the "
+                f"MTC audit (forward coverage): {', '.join(missing)}"
+            ),
         )
 
     def resolver(algo: SignatureAlgorithm, key_id: str) -> object:
@@ -444,26 +512,112 @@ def run_audit_inspection(
         expected_cutover_record_key_id=runtime_config.audit_cutover_record_key_id,
         ledger_binding_id=runtime_config.audit_ledger_binding_id,
     )
-    walk = run_blocking_audit_walk(
-        sidecar.entries,
-        verifier=adapter,
-        tenant_scope=expected_tenant,
-        observed_baseline_identities=sidecar.baseline_identities,
-    )
-    if walk.kind is WalkResultKind.PASSED:
-        return AuditInspectionOutcome(
-            disposition="verified", exit_code=0, detail=walk.detail, walk_result=walk
+    walks = [
+        run_blocking_audit_walk(
+            group_entries,
+            verifier=adapter,
+            tenant_scope=scope,
+            observed_baseline_identities=group_baselines,
         )
-    if walk.kind is WalkResultKind.FAILED:
+        for scope, group_entries, group_baselines in _scoped_walk_groups(
+            sidecar, record, expected_tenant
+        )
+    ]
+    failed = next((w for w in walks if w.kind is WalkResultKind.FAILED), None)
+    if failed is not None:
         return AuditInspectionOutcome(
             disposition="failed",
             exit_code=EXIT_AUDIT_FAILED,
-            detail=walk.detail,
-            walk_result=walk,
+            detail=failed.detail,
+            walk_result=failed,
         )
+    incomplete = next((w for w in walks if w.kind is WalkResultKind.INCOMPLETE_UNVERIFIED), None)
+    if incomplete is not None:
+        return AuditInspectionOutcome(
+            disposition="unverified",
+            exit_code=EXIT_AUDIT_UNVERIFIED,
+            detail=f"{AUDIT_UNVERIFIED_FAIL_CLASS}: {incomplete.detail}",
+            walk_result=incomplete,
+        )
+    merged = _merge_passed_walks(walks)
     return AuditInspectionOutcome(
-        disposition="unverified",
-        exit_code=EXIT_AUDIT_UNVERIFIED,
-        detail=f"{AUDIT_UNVERIFIED_FAIL_CLASS}: {walk.detail}",
-        walk_result=walk,
+        disposition="verified", exit_code=0, detail=merged.detail, walk_result=merged
+    )
+
+
+def _scoped_walk_groups(
+    sidecar: _SidecarContent,
+    record: AuditCutoverRecord,
+    expected_tenant: str | None,
+) -> list[tuple[str | None, list[AuditLedgerEntry], list[tuple[str, str]]]]:
+    """Partition sidecar content into per-tenant-scope walk groups.
+
+    The OD verifier is SINGLE-scope (its five-segment message reconstruction
+    uses one tenant token) — passing a mixed multi-tenant batch under one
+    `expected_tenant` falsely reports SIGNATURE_INVALID for every other
+    tenant's valid rows (codex round-1 P1 on this leg). Grouping:
+
+    - each explicit tenant tag (or ONLY `expected_tenant` when supplied)
+      walks under its own scope;
+    - a `"_single"`-tagged row CLAIMED by an authenticated record row for a
+      scope (destination identity match) joins THAT scope's walk — its
+      recorded disposition governs it there;
+    - record `tenant_scope`s with no sidecar tag still get a walk (their
+      baseline claims must be cross-checked, never skipped);
+    - unclaimed `"_single"` rows walk untenanted (`scope=None`, the
+      pre-tenant four-tuple era).
+    """
+    claimed = {(row.tenant_scope, row.entry_hash) for row in record.rows}
+    if expected_tenant is not None:
+        scopes = [expected_tenant]
+    else:
+        scopes = sorted(
+            {tag for tag, _ in sidecar.tagged_entries if tag != _SINGLE_TAG}
+            | {tag for tag, _ in sidecar.baseline_identities if tag != _SINGLE_TAG}
+            | {row.tenant_scope for row in record.rows}
+        )
+
+    groups: list[tuple[str | None, list[AuditLedgerEntry], list[tuple[str, str]]]] = []
+    consumed_single_hashes: set[str] = set()
+    for scope in scopes:
+        group_entries: list[AuditLedgerEntry] = []
+        for tag, entry in sidecar.tagged_entries:
+            if tag == scope:
+                group_entries.append(entry)
+            elif tag == _SINGLE_TAG and (scope, entry.entry_hash) in claimed:
+                group_entries.append(entry)
+                consumed_single_hashes.add(entry.entry_hash)
+        group_baselines = [
+            (tag, entry_hash)
+            for tag, entry_hash in sidecar.baseline_identities
+            if tag == scope or (tag == _SINGLE_TAG and (scope, entry_hash) in claimed)
+        ]
+        groups.append((scope, group_entries, group_baselines))
+
+    leftover = [
+        entry
+        for tag, entry in sidecar.tagged_entries
+        if tag == _SINGLE_TAG and entry.entry_hash not in consumed_single_hashes
+    ]
+    if leftover or not groups:
+        groups.append((None, leftover, []))
+    return groups
+
+
+def _merge_passed_walks(walks: list[BlockingAuditWalkResult]) -> BlockingAuditWalkResult:
+    """Merge all-PASSED per-scope walks into one report carrier."""
+    if len(walks) == 1:
+        return walks[0]
+    dispositions: dict[str, int] = {}
+    for walk in walks:
+        for key, count in walk.signature_dispositions.items():
+            dispositions[key] = dispositions.get(key, 0) + count
+    return BlockingAuditWalkResult(
+        kind=WalkResultKind.PASSED,
+        detail=(
+            f"audit PASSED across {len(walks)} tenant-scope walk group(s): "
+            + "; ".join(w.detail for w in walks)
+        ),
+        signature_dispositions=dispositions,
+        exempt_entries=tuple(v for w in walks for v in w.exempt_entries),
     )
