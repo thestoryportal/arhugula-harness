@@ -715,13 +715,25 @@ def _run_audit_verification_if_engaged(
     ledger_audit_refs = frozenset(
         str(entry.action_id) for entry in entries if str(entry.action_id).startswith("audit:")
     )
+    # The authoritative config's `audit_cutover_record_path` is the
+    # inspect-time default for input (iv); an explicit --cutover-record
+    # overrides it (codex round-3 P2 — a fully configured MTC deployment
+    # must not report UNVERIFIED just because the CLI didn't duplicate the
+    # configured path).
+    cutover_record_path: Path | None = args.cutover_record
+    if (
+        cutover_record_path is None
+        and runtime_config is not None
+        and runtime_config.audit_cutover_record_path is not None
+    ):
+        cutover_record_path = Path(runtime_config.audit_cutover_record_path)
     try:
         outcome = run_audit_inspection(
             sidecar_path=sidecar_path,
             runtime_config=runtime_config,
             expected_tenant=args.expected_tenant,
             key_map_path=args.signing_key_map,
-            cutover_record_path=args.cutover_record,
+            cutover_record_path=cutover_record_path,
             ledger_audit_refs=ledger_audit_refs,
         )
     except ForgedCutoverRecordError as exc:

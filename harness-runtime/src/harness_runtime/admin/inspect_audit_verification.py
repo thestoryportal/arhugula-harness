@@ -174,6 +174,23 @@ def _read_sidecar(sidecar_path: Path) -> _SidecarContent:
     observed: list[tuple[str, str]] = []
     baseline: list[tuple[str, str]] = []
     key_ids: set[str] = set()
+    seen_identities: set[tuple[str, str]] = set()
+
+    def _claim_identity(tag: str, entry_hash: str, line_number: int) -> None:
+        # The writer's membership index treats ANY duplicate
+        # `(tenant_tag, entry_hash)` as external mutation — the read side
+        # fails closed on the second occurrence (codex round-3 P1: coverage
+        # uses sets and non-chained signatures verify independently, so a
+        # duplicated row would otherwise still VERIFY).
+        identity = (tag, entry_hash)
+        if identity in seen_identities:
+            raise ValueError(
+                f"sidecar line {line_number}: duplicate identity {identity!r} "
+                f"— the writer never appends a duplicate; treating as "
+                f"external mutation"
+            )
+        seen_identities.add(identity)
+
     for line_number, line in enumerate(
         sidecar_path.read_text(encoding="utf-8").splitlines(), start=1
     ):
@@ -208,6 +225,7 @@ def _read_sidecar(sidecar_path: Path) -> _SidecarContent:
                         f"sidecar line {line_number}: malformed legacy_baseline pair {pair!r}"
                     )
                 tag_str, hash_str = cast("list[str]", pair)
+                _claim_identity(tag_str, hash_str, line_number)
                 observed.append((tag_str, hash_str))
                 baseline.append((tag_str, hash_str))
             continue
@@ -216,6 +234,7 @@ def _read_sidecar(sidecar_path: Path) -> _SidecarContent:
         if not isinstance(entry_obj, dict) or not isinstance(tag, str):
             raise ValueError(f"sidecar line {line_number} lacks tenant_tag/entry")
         entry = AuditLedgerEntry.model_validate(entry_obj)
+        _claim_identity(tag, entry.entry_hash, line_number)
         entries.append((tag, entry))
         observed.append((tag, entry.entry_hash))
         key_ids.add(entry.signature_attrs.audit_signature_key_id)
@@ -311,6 +330,19 @@ def _load_authenticated_record(
     # key_ids aliasing the same KMS ARN share one physical key — the record
     # trust anchor must be independent of every row-signing key's material.
     record_map_key = f"{record.algorithm.value}:{record.key_id}"
+    # A persisted row key with NO key-map entry makes record/row physical
+    # separation UNPROVABLE (codex round-3 P1: a record marking that row
+    # placeholder_exempt skips signature resolution entirely, so nothing
+    # else would surface the gap) — fail closed, matching bootstrap's
+    # every-key-mapped validation.
+    mapped_key_ids = {map_key.split(":", 1)[1] for map_key in key_materials}
+    unmapped = sorted(row_key_ids - mapped_key_ids)
+    if unmapped:
+        raise ForgedCutoverRecordError(
+            f"sidecar row-signing key(s) {unmapped!r} have no "
+            f"--signing-key-map entry — record/row physical key separation "
+            f"cannot be proven for unmapped persisted keys"
+        )
     record_material = key_materials.get(record_map_key)
     row_materials = {
         material
@@ -429,6 +461,18 @@ def run_audit_inspection(
             "from lower tiers (the config DEFAULT tier is SOLO_DEVELOPER and "
             "is never assumed here); explicit UNVERIFIED, nonzero exit"
         )
+
+    if expected_tenant is not None:
+        # Validate through the SAME OD rule-set signing uses — a reserved
+        # ("_single") or empty tenant is an INPUT error reported as the
+        # explicit nonzero disposition, never an unwrapped normalizer
+        # ValueError mid-walk (codex round-3 P2).
+        from harness_od.multi_tenant_trace_separation_and_audit_ledger import signing_token
+
+        try:
+            signing_token(expected_tenant)
+        except ValueError as exc:
+            return _unverified(f"--expected-tenant invalid: {exc}")
 
     is_mtc = runtime_config.persona_tier == PersonaTier.MULTI_TENANT_COMPLIANCE
     have_backend_inputs = key_map_path is not None and cutover_record_path is not None

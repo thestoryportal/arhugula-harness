@@ -718,3 +718,76 @@ def test_record_key_sharing_row_material_rejected(
     captured = capsys.readouterr()
     assert exit_code == 3
     assert "shares backing key material" in captured.err
+
+
+# ---------------------------------------------------------------------------
+# Codex round-3 findings (this leg).
+# ---------------------------------------------------------------------------
+
+
+def test_duplicate_sidecar_identity_fails_closed(
+    fx: _Fixture, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The writer never appends a duplicate `(tenant_tag, entry_hash)` —
+    a duplicated row is external mutation and must fail closed at read,
+    never verify (coverage sets and independent signatures would both
+    still pass a byte-identical duplicate)."""
+    _greenfield_passing(fx)
+    line = fx.sidecar_path.read_text(encoding="utf-8").splitlines()[0]
+    fx.sidecar_path.write_text(line + "\n" + line + "\n", encoding="utf-8")
+
+    exit_code = main(fx.full_verification_argv("--expected-tenant", _TENANT))
+    out = capsys.readouterr().out
+    assert exit_code == 3, out
+    assert "duplicate identity" in out
+
+
+def test_unmapped_row_key_fails_closed(fx: _Fixture, capsys: pytest.CaptureFixture[str]) -> None:
+    """A persisted row-signing key with no key-map entry makes record/row
+    physical separation UNPROVABLE — rejected, even though an exempt
+    disposition would have skipped its signature resolution entirely."""
+    _greenfield_passing(fx)
+    fx.write_key_map(("ed25519", _RECORD_KEY))  # row key mapping removed
+
+    exit_code = main(fx.full_verification_argv("--expected-tenant", _TENANT))
+    captured = capsys.readouterr()
+    assert exit_code == 3
+    assert "cannot be proven for unmapped persisted keys" in captured.err
+
+
+def test_config_resident_cutover_record_path_is_inspect_default(
+    fx: _Fixture, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A fully configured MTC deployment (config carries
+    `audit_cutover_record_path`) verifies without duplicating the record
+    path on the CLI — the config field is the inspect-time default for
+    input (iv), with an explicit `--cutover-record` still overriding."""
+    _greenfield_passing(fx)
+    config_text = fx.config_path.read_text(encoding="utf-8")
+    config_text = config_text.replace(
+        "[runtime.otel]",
+        f'audit_cutover_record_path = "{fx.record_path}"\n\n[runtime.otel]',
+    )
+    fx.config_path.write_text(config_text, encoding="utf-8")
+
+    argv = fx.argv(
+        "--signing-key-map", str(fx.key_map_path), "--expected-tenant", _TENANT
+    )  # NO --cutover-record
+    exit_code = main(argv)
+    out = capsys.readouterr().out
+    assert exit_code == 0, out
+    assert "VERIFIED" in out
+
+
+def test_reserved_or_empty_expected_tenant_is_input_disposition(
+    fx: _Fixture, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`--expected-tenant _single` (reserved) or an empty string is an
+    INPUT error — the explicit nonzero UNVERIFIED disposition, never an
+    unwrapped OD-normalizer ValueError traceback mid-walk."""
+    _greenfield_passing(fx)
+    for bad_tenant in ("_single", ""):
+        exit_code = main(fx.full_verification_argv("--expected-tenant", bad_tenant))
+        out = capsys.readouterr().out
+        assert exit_code == 3, (bad_tenant, out)
+        assert "--expected-tenant invalid" in out
