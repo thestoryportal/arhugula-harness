@@ -421,7 +421,9 @@ def test_forged_cutover_record_rejected_typed_never_treated_as_absent(
     captured = capsys.readouterr()
     assert exit_code == 3
     assert "forged/untrusted cutover record" in captured.err
-    assert "harness-inspect — read-only summary" not in captured.out  # no hash-only fallback
+    # The summary still prints (it COMPOSES, round-4 P2) — the no-fallback
+    # guard is the nonzero exit + the explicit UNVERIFIED audit section.
+    assert "audit verification: UNVERIFIED" in captured.out
 
 
 def test_inspect_rejects_record_signed_by_row_key(
@@ -791,3 +793,74 @@ def test_reserved_or_empty_expected_tenant_is_input_disposition(
         out = capsys.readouterr().out
         assert exit_code == 3, (bad_tenant, out)
         assert "--expected-tenant invalid" in out
+
+
+# ---------------------------------------------------------------------------
+# Codex round-4 findings (this leg).
+# ---------------------------------------------------------------------------
+
+
+def test_undispositioned_single_row_fails_mtc(
+    fx: _Fixture, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """At MTC every legacy `_single` identity must be cutover-dispositioned
+    — a full `_single` row the record omits must NOT verify through the
+    untenanted fallback walk (exit 4). A sub-MTC single-tenant deployment
+    with the same inputs legitimately verifies its `_single` history."""
+    entry = fx.signed_entry("ref-1", tenant_id=None)
+    fx.write_sidecar([("_single", entry)])
+    fx.write_ledger([f"audit:_single:{entry.entry_hash}"])
+    fx.write_config()  # MTC
+    fx.write_key_map(("ed25519", _ROW_KEY), ("ed25519", _RECORD_KEY))
+    fx.write_record()  # authenticated EMPTY — no disposition for the row
+
+    exit_code = main(fx.full_verification_argv())
+    out = capsys.readouterr().out
+    assert exit_code == 4, out
+    assert "NO cutover-record disposition" in out
+
+    fx.write_config(tier="solo-developer")
+    exit_code = main(fx.full_verification_argv())
+    out = capsys.readouterr().out
+    assert exit_code == 0, out
+    assert "VERIFIED" in out
+
+
+def test_row_key_algorithm_mismatch_rejected(
+    fx: _Fixture, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Row keys are mapped by exact `(algorithm, key_id)` pair — an
+    `ed25519:row-key` row is NOT covered by an `ecdsa-p256:row-key`
+    mapping entry (key_id-only matching would prove nothing)."""
+    _greenfield_passing(fx)
+    fx.write_key_map(("ecdsa-p256", _ROW_KEY), ("ed25519", _RECORD_KEY))
+
+    exit_code = main(fx.full_verification_argv("--expected-tenant", _TENANT))
+    captured = capsys.readouterr()
+    assert exit_code == 3
+    assert "no exact" in captured.err
+    assert "ed25519:row-key" in captured.err
+
+
+def test_summary_composes_with_audit_disposition(
+    fx: _Fixture, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The §13.5 audit report COMPOSES with the established C-RT-13 summary
+    (ledger head, recent entries, spans, cost rollup) — it never replaces
+    it, in either output mode."""
+    _greenfield_passing(fx)
+
+    exit_code = main(fx.full_verification_argv("--expected-tenant", _TENANT))
+    out = capsys.readouterr().out
+    assert exit_code == 0
+    assert "harness-inspect — read-only summary" in out
+    assert "head_hash:" in out
+    assert "Spans: N/A" in out
+    assert "audit verification: VERIFIED" in out
+
+    exit_code = main(fx.full_verification_argv("--expected-tenant", _TENANT, "--json"))
+    out = capsys.readouterr().out
+    assert exit_code == 0
+    payload = json.loads(out)
+    assert "head_hash" in payload
+    assert payload["audit_verification"]["disposition"] == "verified"

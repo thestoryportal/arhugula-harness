@@ -156,6 +156,11 @@ class _SidecarContent:
     observed_identities: tuple[tuple[str, str], ...]
     baseline_identities: tuple[tuple[str, str], ...]
     row_key_ids: frozenset[str]
+    #: `"<algorithm>:<key_id>"` map-key form — the EXACT pair a row's
+    #: signature declares (codex round-4 P1: a key_id-only mapped check let
+    #: an `ed25519:row-key` row count as mapped via an unrelated
+    #: `ecdsa-p256:row-key` entry).
+    row_key_pairs: frozenset[str] = frozenset()
 
     @property
     def entries(self) -> tuple[AuditLedgerEntry, ...]:
@@ -174,6 +179,7 @@ def _read_sidecar(sidecar_path: Path) -> _SidecarContent:
     observed: list[tuple[str, str]] = []
     baseline: list[tuple[str, str]] = []
     key_ids: set[str] = set()
+    key_pairs: set[str] = set()
     seen_identities: set[tuple[str, str]] = set()
 
     def _claim_identity(tag: str, entry_hash: str, line_number: int) -> None:
@@ -238,11 +244,16 @@ def _read_sidecar(sidecar_path: Path) -> _SidecarContent:
         entries.append((tag, entry))
         observed.append((tag, entry.entry_hash))
         key_ids.add(entry.signature_attrs.audit_signature_key_id)
+        key_pairs.add(
+            f"{entry.signature_attrs.audit_signature_algorithm.value}"
+            f":{entry.signature_attrs.audit_signature_key_id}"
+        )
     return _SidecarContent(
         tagged_entries=tuple(entries),
         observed_identities=tuple(observed),
         baseline_identities=tuple(baseline),
         row_key_ids=frozenset(key_ids),
+        row_key_pairs=frozenset(key_pairs),
     )
 
 
@@ -289,6 +300,7 @@ def _load_authenticated_record(
     key_map: dict[str, SigningBackend],
     key_materials: dict[str, str],
     row_key_ids: frozenset[str],
+    row_key_pairs: frozenset[str],
 ) -> tuple[AuditCutoverRecord, bytes]:
     """Load + authenticate the cutover record — typed rejection, never
     absent-record fallback."""
@@ -335,19 +347,19 @@ def _load_authenticated_record(
     # placeholder_exempt skips signature resolution entirely, so nothing
     # else would surface the gap) — fail closed, matching bootstrap's
     # every-key-mapped validation.
-    mapped_key_ids = {map_key.split(":", 1)[1] for map_key in key_materials}
-    unmapped = sorted(row_key_ids - mapped_key_ids)
+    unmapped = sorted(pair for pair in row_key_pairs if pair not in key_materials)
     if unmapped:
         raise ForgedCutoverRecordError(
-            f"sidecar row-signing key(s) {unmapped!r} have no "
-            f"--signing-key-map entry — record/row physical key separation "
+            f"sidecar row-signing key pair(s) {unmapped!r} have no exact "
+            f"--signing-key-map entry (matching is by (algorithm, key_id), "
+            f"never key_id alone) — record/row physical key separation "
             f"cannot be proven for unmapped persisted keys"
         )
     record_material = key_materials.get(record_map_key)
     row_materials = {
         material
         for map_key, material in key_materials.items()
-        if map_key != record_map_key and map_key.split(":", 1)[1] in row_key_ids
+        if map_key != record_map_key and map_key in row_key_pairs
     }
     if record_material is not None and record_material in row_materials:
         raise ForgedCutoverRecordError(
@@ -546,6 +558,7 @@ def run_audit_inspection(
             key_map=key_map,
             key_materials=key_materials,
             row_key_ids=sidecar.row_key_ids,
+            row_key_pairs=sidecar.row_key_pairs,
         )
     except OSError as exc:
         return _unverified(f"--cutover-record unreadable: {exc}")
@@ -615,6 +628,28 @@ def run_audit_inspection(
         expected_cutover_record_key_id=runtime_config.audit_cutover_record_key_id,
         ledger_binding_id=runtime_config.audit_ledger_binding_id,
     )
+    groups = _scoped_walk_groups(sidecar, record, expected_tenant)
+    if is_mtc:
+        # MTC requires EVERY legacy `_single` identity to be
+        # cutover-dispositioned (era never observation-inferred) — an
+        # undispositioned `_single` full row must never verify through the
+        # untenanted fallback walk as a current single-tenant row (codex
+        # round-4 P1). Sub-MTC single-tenant deployments legitimately walk
+        # their `_single` history untenanted.
+        undispositioned = [
+            entry for scope, group_entries, _ in groups if scope is None for entry in group_entries
+        ]
+        if undispositioned:
+            return AuditInspectionOutcome(
+                disposition="failed",
+                exit_code=EXIT_AUDIT_FAILED,
+                detail=(
+                    f"{len(undispositioned)} '_single' row(s) with NO cutover-"
+                    f"record disposition — MULTI_TENANT_COMPLIANCE requires "
+                    f"every legacy identity to be dispositioned by the "
+                    f"authenticated record (era is never observation-inferred)"
+                ),
+            )
     walks = [
         run_blocking_audit_walk(
             group_entries,
@@ -622,9 +657,7 @@ def run_audit_inspection(
             tenant_scope=scope,
             observed_baseline_identities=group_baselines,
         )
-        for scope, group_entries, group_baselines in _scoped_walk_groups(
-            sidecar, record, expected_tenant
-        )
+        for scope, group_entries, group_baselines in groups
     ]
     failed = next((w for w in walks if w.kind is WalkResultKind.FAILED), None)
     if failed is not None:

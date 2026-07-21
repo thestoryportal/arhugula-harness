@@ -42,7 +42,7 @@ import sqlite3
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from harness_core import DeploymentSurface, PersonaTier
 from harness_is.jsonl_event_ledger_lifecycle import JsonlLedgerHandle
@@ -50,6 +50,9 @@ from harness_is.state_ledger_entry_schema import StateLedgerEntry
 from harness_is.state_ledger_write import read_ledger
 from harness_od.observability_matrix import CellID
 from harness_od.operator_burden_eval_primitives import OperatorBurdenEvalPrimitive
+
+if TYPE_CHECKING:
+    from harness_runtime.admin.inspect_audit_verification import AuditInspectionOutcome
 
 __all__ = ["build_parser", "main"]
 
@@ -354,6 +357,7 @@ def _format_human(
     ledger_path: Path,
     entries: list[StateLedgerEntry],
     last_n: int,
+    audit_section: str | None = None,
 ) -> str:
     lines: list[str] = []
     lines.append("harness-inspect — read-only summary")
@@ -379,6 +383,12 @@ def _format_human(
     lines.append("")
     lines.append(f"Spans: N/A — {_SPANS_UNAVAILABLE_REASON}")
     lines.append(f"Cost rollup: N/A — {_COST_UNAVAILABLE_REASON}")
+    if audit_section is not None:
+        # §13.5 audit disposition COMPOSES with the established C-RT-13
+        # summary — it never replaces the ledger head / entries / spans /
+        # cost sections (codex round-4 P2).
+        lines.append("")
+        lines.append(audit_section)
     return "\n".join(lines) + "\n"
 
 
@@ -387,6 +397,7 @@ def _format_json(
     ledger_path: Path,
     entries: list[StateLedgerEntry],
     last_n: int,
+    audit_report: dict[str, Any] | None = None,
 ) -> str:
     head = _entry_head_hash(entries[-1]) if entries else None
     payload: dict[str, Any] = {
@@ -399,6 +410,8 @@ def _format_json(
         "cost_rollup": None,
         "cost_rollup_unavailable_reason": _COST_UNAVAILABLE_REASON,
     }
+    if audit_report is not None:
+        payload.update(audit_report)
     return json.dumps(payload, indent=2, sort_keys=True) + "\n"
 
 
@@ -650,33 +663,50 @@ def main(argv: list[str] | None = None) -> int:
 
     # --- §13.5 audit-verification disposition (U-RT-138) -------------------
     # Engagement predicate: any audit input supplied OR the resolved sidecar
-    # exists. Once engaged, the disposition governs the exit code; a
+    # exists. Once engaged, the disposition governs the EXIT CODE while the
+    # report COMPOSES with the established summary (codex round-4 P2 — the
+    # ledger head / entries / spans / cost sections are never replaced); a
     # "hash-only-preserved" outcome (sub-MTC + authoritative config + no
     # inputs) falls through to the pre-v1.101 summary verbatim.
-    audit_exit = _run_audit_verification_if_engaged(args, ledger_path, entries)
-    if audit_exit is not None:
-        return audit_exit
+    audit = _run_audit_verification_if_engaged(args, ledger_path, entries)
+    if isinstance(audit, int):
+        return audit  # RT-FAIL-INSPECT-PATH input error — summary skipped
 
     if args.json:
-        output = _format_json(ledger_path=ledger_path, entries=entries, last_n=last_n)
+        output = _format_json(
+            ledger_path=ledger_path,
+            entries=entries,
+            last_n=last_n,
+            audit_report=audit.as_report() if audit is not None else None,
+        )
     else:
-        output = _format_human(ledger_path=ledger_path, entries=entries, last_n=last_n)
+        output = _format_human(
+            ledger_path=ledger_path,
+            entries=entries,
+            last_n=last_n,
+            audit_section=(
+                f"audit verification: {audit.disposition.upper()}\n{audit.detail}"
+                if audit is not None
+                else None
+            ),
+        )
 
     sys.stdout.write(output)
-    return _EXIT_OK
+    return audit.exit_code if audit is not None else _EXIT_OK
 
 
 def _run_audit_verification_if_engaged(
     args: argparse.Namespace,
     ledger_path: Path,
     entries: list[StateLedgerEntry],
-) -> int | None:
+) -> "AuditInspectionOutcome | int | None":
     """Run the §13.5 audit-verification when engaged.
 
-    Returns an exit code when the audit disposition terminates the
-    inspection (verified / unverified / failed / forged-record), or `None`
-    when not engaged or when hash-only behavior is preserved (the caller
-    proceeds with the plain summary).
+    Returns the `AuditInspectionOutcome` for the caller to COMPOSE into the
+    summary (verified / unverified / failed / forged-record), a bare exit
+    code for an RT-FAIL-INSPECT-PATH input error (summary skipped, matching
+    the other path-error exits), or `None` when not engaged or when
+    hash-only behavior is preserved (the plain summary proceeds verbatim).
     """
     from harness_runtime.admin.inspect_audit_verification import (
         ForgedCutoverRecordError,
@@ -742,19 +772,21 @@ def _run_audit_verification_if_engaged(
             f"harness-inspect: RT-FAIL-AUDIT-UNVERIFIED — forged/untrusted cutover record: {exc}",
             file=sys.stderr,
         )
-        from harness_runtime.admin.inspect_audit_verification import EXIT_AUDIT_UNVERIFIED
+        from harness_runtime.admin.inspect_audit_verification import (
+            AUDIT_UNVERIFIED_FAIL_CLASS,
+            EXIT_AUDIT_UNVERIFIED,
+            AuditInspectionOutcome,
+        )
 
-        return EXIT_AUDIT_UNVERIFIED
+        return AuditInspectionOutcome(
+            disposition="unverified",
+            exit_code=EXIT_AUDIT_UNVERIFIED,
+            detail=(f"{AUDIT_UNVERIFIED_FAIL_CLASS}: forged/untrusted cutover record: {exc}"),
+        )
 
     if outcome.disposition == "hash-only-preserved":
         return None  # pre-v1.101 behavior verbatim — plain summary proceeds.
-
-    payload = outcome.as_report()
-    if args.json:
-        sys.stdout.write(json.dumps(payload, indent=2) + "\n")
-    else:
-        sys.stdout.write(f"audit verification: {outcome.disposition.upper()}\n{outcome.detail}\n")
-    return outcome.exit_code
+    return outcome
 
 
 if __name__ == "__main__":  # pragma: no cover — invoked via console_script
