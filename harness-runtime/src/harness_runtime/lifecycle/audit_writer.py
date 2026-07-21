@@ -320,6 +320,14 @@ class RuntimeAuditLedgerWriter:
         pattern)."""
         return _sidecar_lock_for(self._sidecar_path)
 
+    _record_alias_map: dict[tuple[str, str], tuple[str, str]] | None = field(
+        default=None, init=False, repr=False
+    )
+    """Memoized `("_single", hash)` -> `(tenant_scope, hash)` alias index
+    derived ONCE from `cutover_record` (codex round-1 on U-RT-139: a
+    per-miss linear scan over the record's rows made the first post-retag
+    fold O(N^2) under the sidecar lock)."""
+
     _sidecar_index: _SidecarMembershipIndex = field(
         default_factory=lambda: _SidecarMembershipIndex(), init=False
     )
@@ -905,17 +913,19 @@ class RuntimeAuditLedgerWriter:
         """
         if self.cutover_record is None:
             return None
-        tag, entry_hash = identity
+        tag = identity[0]
         if tag != self._SINGLE_TENANT_TAG:
             return None
-        for row in self.cutover_record.rows:
-            if (
-                row.source_tag == self._SINGLE_TENANT_TAG
-                and row.entry_hash == entry_hash
+        if self._record_alias_map is None:
+            alias_map = {
+                (self._SINGLE_TENANT_TAG, row.entry_hash): (row.tenant_scope, row.entry_hash)
+                for row in self.cutover_record.rows
+                if row.source_tag == self._SINGLE_TENANT_TAG
                 and row.verification_disposition is not VerificationDisposition.QUARANTINED
-            ):
-                return (row.tenant_scope, entry_hash)
-        return None
+            }
+            object.__setattr__(self, "_record_alias_map", alias_map)
+        assert self._record_alias_map is not None
+        return self._record_alias_map.get(identity)
 
     def _assert_is_refs_covered_locked(self, *, allowed_gap: tuple[str, str] | None = None) -> None:
         """Every IS `audit:<tag>:<hash>` ref must have a sidecar row (codex

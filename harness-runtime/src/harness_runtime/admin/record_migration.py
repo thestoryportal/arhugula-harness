@@ -176,6 +176,25 @@ def _record_trust_inputs(config: RuntimeConfig) -> tuple[Path, str, str]:
     )
 
 
+def _validate_signing_config(config: RuntimeConfig) -> None:
+    """Run the FULL bootstrap config-shape validation before any record-mode
+    side effect (codex round-1 P1: a config normal bootstrap would reject —
+    e.g. record key sharing a row key's backing material — must not author
+    or retag first and brick the deployment after)."""
+    from harness_runtime.lifecycle.audit_signing_fail_closed_validation import (
+        IncompatibleConfigVersion,
+        validate_mtc_audit_signing_config,
+    )
+
+    try:
+        validate_mtc_audit_signing_config(config)
+    except (AuditSigningConfigInvalidError, IncompatibleConfigVersion) as exc:
+        raise RecordMigrationError(
+            f"signing config would be rejected at bootstrap — refusing record "
+            f"modes against it: {exc}"
+        ) from exc
+
+
 def _authenticate_record(
     config: RuntimeConfig,
     *,
@@ -220,6 +239,7 @@ def retag_sidecar(
     signing_backend: SigningBackend,
 ) -> RetagOutcome:
     """OD v1.34 §21.2.1 row-6 retag, driven by the authenticated record."""
+    _validate_signing_config(config)
     record = _authenticate_record(
         config, sidecar_path=sidecar_path, signing_backend=signing_backend
     )
@@ -303,7 +323,26 @@ def _atomic_replace_sidecar(sidecar_path: Path, content: str) -> None:
     """
     with cross_process_replace_lock(sidecar_path):
         tmp_path = sidecar_path.with_name(sidecar_path.name + ".retag.tmp")
-        fd = os.open(str(tmp_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+        # A stale tmp from a prior crash is removed, then the file is created
+        # EXCLUSIVELY (never truncate-in-place: a pre-created hard link to
+        # the ledger or sidecar would be destroyed by O_TRUNC — codex
+        # round-1 P1) with O_NOFOLLOW guarded for Windows.
+        with contextlib.suppress(OSError):
+            os.unlink(tmp_path)
+        nofollow = getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(str(tmp_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL | nofollow, 0o600)
+        stat_result = os.fstat(fd)
+        import stat as _stat
+
+        if not _stat.S_ISREG(stat_result.st_mode) or stat_result.st_nlink != 1:
+            os.close(fd)
+            with contextlib.suppress(OSError):
+                os.unlink(tmp_path)
+            raise RecordMigrationError(
+                f"retag temp file {tmp_path} is not a fresh regular file "
+                f"(mode={stat_result.st_mode:o}, nlink={stat_result.st_nlink}) "
+                f"— refusing to write through it"
+            )
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
                 handle.write(content)
@@ -357,6 +396,7 @@ def author_cutover_record(
     rows (`four_tuple_real` under their existing `source_tag` — era cannot
     be inferred from mutable signature values afterward).
     """
+    _validate_signing_config(config)
     record_path, record_key_id, binding_id = _record_trust_inputs(config)
     if record_path.exists():
         raise RecordMigrationError(
@@ -477,7 +517,45 @@ def author_cutover_record(
     except (CutoverRecordValidationError, ValueError) as exc:
         raise RecordMigrationError(f"record composition/signing failed: {exc}") from exc
 
-    record_path.write_text(
-        record.model_dump_json() + "\n" + signature.hex() + "\n", encoding="utf-8"
+    _publish_record_exclusively(
+        record_path, record.model_dump_json() + "\n" + signature.hex() + "\n"
     )
     return record
+
+
+def _publish_record_exclusively(record_path: Path, content: str) -> None:
+    """Crash-safe, exclusive trust-anchor publication (codex round-1 P1s):
+    temp file + fsync + `os.link` (fails on ANY existing path entry,
+    including a dangling symlink — never follows) + directory fsync.
+    Mirrors the greenfield mint's own publication discipline."""
+    if record_path.is_symlink():
+        raise RecordMigrationError(
+            f"configured record path {record_path} is a symlink — the trust "
+            f"anchor must be a regular file path, never a redirection"
+        )
+    tmp_path = record_path.with_name(record_path.name + ".author.tmp")
+    with contextlib.suppress(OSError):
+        os.unlink(tmp_path)
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(str(tmp_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL | nofollow, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.link(tmp_path, record_path)
+        except FileExistsError as exc:
+            raise RecordMigrationError(
+                f"record path {record_path} appeared during authoring — "
+                f"refusing to overwrite (concurrent authoring or a path swap)"
+            ) from exc
+        if sys.platform != "win32":
+            dir_fd = os.open(str(record_path.parent), os.O_RDONLY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+    finally:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp_path)

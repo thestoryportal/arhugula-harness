@@ -34,9 +34,9 @@ import argparse
 import json
 import sys
 from collections.abc import Sequence
-from typing import cast
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 
 from harness_is.jsonl_event_ledger_lifecycle import JsonlLedgerHandle
 from harness_is.state_ledger_entry_schema import Actor, ActorClass

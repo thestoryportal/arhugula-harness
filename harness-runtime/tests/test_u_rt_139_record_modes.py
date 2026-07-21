@@ -563,3 +563,99 @@ def test_authoring_refuses_to_overwrite_existing_record(dep: _Deployment) -> Non
             signing_backend=dep.record_backend,
             attestation={entry.entry_hash: _TENANT},
         )
+
+
+# ---------------------------------------------------------------------------
+# Codex round-1 hardenings (this leg).
+# ---------------------------------------------------------------------------
+
+
+def test_retag_tmp_hardlink_to_ledger_never_destroys_it(dep: _Deployment) -> None:
+    """A pre-created `.retag.tmp` HARD LINK to the state ledger must never
+    let the temp write destroy the linked file (the old truncate-in-place
+    open would have) — the stale tmp is unlinked and re-created
+    exclusively; the ledger survives byte-identical and the retag
+    completes."""
+    entry = dep.signed_entry("ref-1", placeholder=True)
+    dep.writer().append(None, entry)
+    dep.write_record(_row(entry.entry_hash))
+    ledger_before = dep.ledger_path.read_bytes()
+    tmp = dep.sidecar_path.with_name(dep.sidecar_path.name + ".retag.tmp")
+    import os as _os
+
+    _os.link(dep.ledger_path, tmp)  # the attacker's planted hard link
+
+    outcome = retag_sidecar(
+        dep.config(), sidecar_path=dep.sidecar_path, signing_backend=dep.record_backend
+    )
+    assert outcome.retagged == 1
+    assert dep.ledger_path.read_bytes() == ledger_before  # never truncated
+
+
+def test_record_modes_refuse_config_bootstrap_would_reject(dep: _Deployment) -> None:
+    """A config normal bootstrap rejects (record key sharing a row key's
+    backing material) must refuse record modes BEFORE any side effect —
+    never author/retag first and brick the deployment after."""
+    entry = dep.signed_entry("ref-1", placeholder=True)
+    dep.writer().append(None, entry)
+    config = dep.config().model_copy(
+        update={
+            "audit_signing": AuditSigningConfig(
+                backend=AuditSigningBackendKind.AWS_KMS,
+                key_arns={_ROW_KEY: _ARN_ROW, _RECORD_KEY: _ARN_ROW},  # shared material
+            )
+        }
+    )
+
+    with pytest.raises(RecordMigrationError, match="rejected at bootstrap"):
+        author_cutover_record(
+            config,
+            sidecar_path=dep.sidecar_path,
+            signing_backend=dep.record_backend,
+            attestation={entry.entry_hash: _TENANT},
+        )
+    assert not dep.record_path.exists()
+
+
+def test_author_record_path_symlink_refused(dep: _Deployment) -> None:
+    """A (dangling) symlink at the configured record path must never be
+    followed — the trust anchor is a regular file, not a redirection."""
+    entry = dep.signed_entry("ref-1", placeholder=True)
+    dep.writer().append(None, entry)
+    target = dep.root / "attacker-chosen-target"
+    dep.record_path.symlink_to(target)  # dangling — exists() is False
+
+    with pytest.raises(RecordMigrationError, match="symlink"):
+        author_cutover_record(
+            dep.config(),
+            sidecar_path=dep.sidecar_path,
+            signing_backend=dep.record_backend,
+            attestation={entry.entry_hash: _TENANT},
+        )
+    assert not target.exists()  # nothing was created through the link
+
+
+def test_author_crash_before_publication_leaves_no_partial_record(
+    dep: _Deployment, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Crash-safe publication: a failure at the exclusive-link step leaves
+    NO record file and NO temp residue — never a torn trust anchor beside
+    an (about-to-be) retagged sidecar."""
+    entry = dep.signed_entry("ref-1", placeholder=True)
+    dep.writer().append(None, entry)
+
+    import harness_runtime.admin.record_migration as rm
+
+    def crash_link(src: object, dst: object) -> None:
+        raise OSError("simulated crash at publication")
+
+    monkeypatch.setattr(rm.os, "link", crash_link)
+    with pytest.raises(OSError, match="simulated crash"):
+        author_cutover_record(
+            dep.config(),
+            sidecar_path=dep.sidecar_path,
+            signing_backend=dep.record_backend,
+            attestation={entry.entry_hash: _TENANT},
+        )
+    assert not dep.record_path.exists()
+    assert not dep.record_path.with_name(dep.record_path.name + ".author.tmp").exists()
