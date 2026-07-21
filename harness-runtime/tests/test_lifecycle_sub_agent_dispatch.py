@@ -2135,3 +2135,123 @@ def test_signing_backend_is_passed_into_audit_composition(tmp_path: Path) -> Non
         "USE-half: the dispatcher's signing_backend must be passed into "
         "cp_audit_to_od_audit at 8c (backend.sign never invoked)"
     )
+
+
+# ---------------------------------------------------------------------------
+# U-RT-136 (CP v1.101 §2, sub-agent-result site class) — post-effect carrier.
+# ---------------------------------------------------------------------------
+
+
+class _FamilyRaisingAuditWriter:
+    """Audit writer whose 8d append raises the typed signing family."""
+
+    def append(self, *, tenant_id: Any, audit_entry: Any) -> Any:
+        from harness_runtime.lifecycle.audit_signing_errors import (
+            AuditSigningFailedError,
+        )
+
+        _ = (tenant_id, audit_entry)
+        raise AuditSigningFailedError("kms unavailable (u-rt-136 sub-agent test)")
+
+
+def test_u_rt_136_post_effect_signing_failure_carries_completed_child_result(
+    tmp_path: Path,
+) -> None:
+    """The child sub-workflow COMPLETED (SUCCESS) and the step-8 audit
+    composition then failed on a signing failure under
+    `audit_signing_fail_closed=ON`: `dispatch` raises the result-preserving
+    `PostEffectAuditSigningError` whose `.result` is the completed child
+    output — never discarded (CP v1.101 §2). Non-signing compose failures
+    and the flag-OFF path keep the existing
+    `SubAgentDispatchAuditComposeError` surface verbatim.
+
+    Mutation probe: dropping the cause-chain discrimination (or the carrier
+    wrap) at the SUCCESS/DRAINED site makes the ON leg raise the plain
+    ComposeError without the result → FAILS."""
+    from harness_runtime.lifecycle.audit_signing_errors import (
+        PostEffectAuditSigningError,
+        PostEffectClass,
+    )
+
+    dispatcher, _runner, _exporter = _dispatcher(
+        tmp_path,
+        audit_writer_override=cast(Any, _FamilyRaisingAuditWriter()),
+    )
+    dispatcher.audit_signing_fail_closed = True
+    with pytest.raises(PostEffectAuditSigningError) as excinfo:
+        dispatcher.dispatch(_binding(), _step(), step_context=_step_context())
+    carrier = excinfo.value
+    assert carrier.effect_class is PostEffectClass.SUB_AGENT_RESULT
+    assert cast("dict[str, Any]", carrier.result) == {"child_field": "value"}
+
+    # Flag-OFF control — the pre-U-RT-136 surface verbatim: the SUCCESS-path
+    # compose failure still raises SubAgentDispatchAuditComposeError.
+    off_dispatcher, _r2, _e2 = _dispatcher(
+        tmp_path,
+        audit_writer_override=cast(Any, _FamilyRaisingAuditWriter()),
+    )
+    with pytest.raises(SubAgentDispatchAuditComposeError):
+        off_dispatcher.dispatch(_binding(), _step(), step_context=_step_context())
+
+
+def test_u_rt_136_failed_and_paused_child_outcomes_preserved_on_carrier(
+    tmp_path: Path,
+) -> None:
+    """Codex round-4 P1: under fail-closed, a signing failure at the child
+    FAILED / PAUSED audit steps raises the result-preserving carrier with
+    `result` = the child RunResult — the fail-class attribution and the
+    pause SNAPSHOT survive (a bare family raise would drop the snapshot, the
+    parent could not capture the child's cursor, and a later run would
+    re-execute the child's completed effects).
+
+    Mutation probe: reverting either wrap to the bare family raise loses
+    `.result` and FAILS."""
+    from harness_runtime.lifecycle.audit_signing_errors import (
+        PostEffectAuditSigningError,
+        PostEffectClass,
+    )
+
+    # FAILED child + signing failure at the best-effort audit step.
+    failed_dispatcher, _r1, _e1 = _dispatcher(
+        tmp_path,
+        child_result=_failed_result(),
+        audit_writer_override=cast(Any, _FamilyRaisingAuditWriter()),
+    )
+    failed_dispatcher.audit_signing_fail_closed = True
+    with pytest.raises(PostEffectAuditSigningError) as failed_exc:
+        failed_dispatcher.dispatch(_binding(), _step(), step_context=_step_context())
+    failed_carrier = failed_exc.value
+    assert failed_carrier.effect_class is PostEffectClass.SUB_AGENT_RESULT
+    preserved_failed = cast(RunResult, failed_carrier.result)
+    assert preserved_failed.status is RunStatus.FAILED
+    assert preserved_failed.fail_class is not None
+
+    # PAUSED child + signing failure — the pause snapshot rides the carrier.
+    snap = _child_snapshot()
+    paused_dispatcher, _r2, _e2 = _dispatcher(
+        tmp_path,
+        child_result=_paused_result(snap),
+        audit_writer_override=cast(Any, _FamilyRaisingAuditWriter()),
+    )
+    paused_dispatcher.audit_signing_fail_closed = True
+    with pytest.raises(PostEffectAuditSigningError) as paused_exc:
+        paused_dispatcher.dispatch(_binding(), _step(), step_context=_step_context())
+    preserved_paused = cast(RunResult, paused_exc.value.result)
+    assert preserved_paused.status is RunStatus.PAUSED
+    assert preserved_paused.pause_snapshot is snap
+
+    # Flag-OFF controls — the pre-U-RT-136 surfaces verbatim.
+    off_failed, _r3, _e3 = _dispatcher(
+        tmp_path,
+        child_result=_failed_result(),
+        audit_writer_override=cast(Any, _FamilyRaisingAuditWriter()),
+    )
+    with pytest.raises(SubAgentChildFailedError):
+        off_failed.dispatch(_binding(), _step(), step_context=_step_context())
+    off_paused, _r4, _e4 = _dispatcher(
+        tmp_path,
+        child_result=_paused_result(_child_snapshot()),
+        audit_writer_override=cast(Any, _FamilyRaisingAuditWriter()),
+    )
+    with pytest.raises(SubAgentChildPausedError):
+        off_paused.dispatch(_binding(), _step(), step_context=_step_context())

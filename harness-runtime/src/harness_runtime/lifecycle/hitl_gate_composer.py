@@ -968,6 +968,14 @@ class RuntimeHITLGateComposer:
     `None` (the default) preserves the placeholder signing path byte-for-byte.
     """
 
+    audit_signing_fail_closed: bool = False
+    """U-RT-136 — the resolved OD v1.34 §21.2.3 `audit_signing_fail_closed`
+    policy, threaded from `resolve_audit_signing_fail_closed(config)` at
+    bootstrap stage-5. ON → the two audit-compose catch sites raise the
+    typed family even on `raise_on_failure=False` paths (the fail-open
+    proceed is the defect the flag closes); OFF (default) byte-preserves
+    the loudly-surfaced proceed behavior."""
+
     inner_dispatch_mode: InnerDispatchMode = InnerDispatchMode.DIRECT_AWAIT
     """B-48 (U-RT-142; Runtime spec v1.102 §14.8.10.2) — construction-time
     dispatch-mode selection replacing the post-call awaitability discovery.
@@ -1361,6 +1369,14 @@ class RuntimeHITLGateComposer:
                 "OMITTED for HITL gate (offload boundary)",
                 exc_info=True,
             )
+            # U-RT-136 (OD v1.34 §21.2.3 rows 1/5): under fail-closed the
+            # typed family RAISES — checked BEFORE the raise_on_failure wrap
+            # (codex round-3 P2: wrapping first would surface
+            # HITLGateAuditComposeError instead of the single typed boundary,
+            # bypassing every family-discriminating consumer). The legacy
+            # wrap is the flag-OFF surface, preserved verbatim.
+            if self.audit_signing_fail_closed:
+                raise
             if kwargs.get("raise_on_failure"):
                 raise HITLGateAuditComposeError(
                     f"HITL gate audit composition refused at the offload boundary: {exc}"
@@ -1578,6 +1594,14 @@ class RuntimeHITLGateComposer:
                 "audit signing failed — signed audit record OMITTED for HITL gate",
                 exc_info=True,
             )
+            # U-RT-136 (OD v1.34 §21.2.3 rows 1/5): under fail-closed the
+            # typed family RAISES — on BOTH raise_on_failure arms, checked
+            # BEFORE the wrap (codex round-3 P2: wrapping first would
+            # surface HITLGateAuditComposeError instead of the single typed
+            # boundary). Under OFF, both arms are byte-preserved: the wrap
+            # for True, the REJECT-path audit-suppression proceed for False.
+            if self.audit_signing_fail_closed:
+                raise
             if raise_on_failure:
                 raise HITLGateAuditComposeError(
                     f"HITL gate audit composition failed for action_id={hitl_action_id!r}: {exc}"

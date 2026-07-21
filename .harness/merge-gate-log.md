@@ -283,3 +283,13 @@ removed spawn veto / removed prewarm() gate) each failed their witness and were 
 Spec lens verified the B-55 operator-gated row is honored, not pre-decided; one Class-3
 informational (authoring-era line-cite shift in the v1.101 change-note, correctly left for
 a doc-hygiene pass — X-AL-3 forbids fixing it here). Suite 2813/0; 16/16 CI SUCCESS.
+
+## PR #1065 — 2026-07-20 — feat/u-rt-136-u-cp-73-audit-signing-flag-wiring
+
+| Lens | Verdict |
+|---|---|
+| Concurrency / races | APPROVE (R1 — offload transit, daemon-reuse flag threading, facade×B-48 fence, catch ordering, tool-fence fail-safe all traced clean; residual = registered B-65) |
+| Spec conformance / ledgers | APPROVE (R1 — U-RT-136 acc 1/1b/2/3/4 + CP v2.38 §2 verified against cited files; X-AL-3 clean; B-55 honored; B-65 registration consistent; Class-3 note: pre-existing harness_runtime import at harness-cp workflow_driver.py:4904 from PR #1060 — axis-direction follow-up, not this PR) |
+| Test-witness adequacy | R1 BLOCK (8 bootstrap/factory wiring lines + in-dispatch llm threading grep-provable only — the #1063 defect class) → fixed with the real-run_bootstrap 9-surface ON/OFF wiring witness + the end-to-end dispatch threading witness (both PD-8 probed) → R2 APPROVE (per-line deletion mutations each pinned; OFF-control load-bearing; no line unwitnessed) |
+
+Outcome: MERGE (all-approve). Out-of-family Codex: rounds 1-4 fixed (boundary consumption, redaction, typed-family-vs-wrap ordering, FAILED/PAUSED outcome preservation); round 5 CLEAN; round 6 re-surfaced only the already-registered B-65 residual on byte-identical source (register-and-hold, both other lenses endorsed the registration). 10 PD-8 mutation probes run + restored across the arc.

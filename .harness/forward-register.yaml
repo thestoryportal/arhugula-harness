@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 65
+  total: 66
   open: 4
   design_substrate_gated: 1
-  registered_finding: 14
+  registered_finding: 15
   operator_gated: 2
   held: 1
   closed: 43
-  identity_digest: 4f69ed808ca069cd
+  identity_digest: f4198cb33293b436
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -1420,3 +1420,41 @@ items:
     lock nesting semantics, not a design decision'
   heading: '### B-64 · Greenfield cutover-record freshness probe and publication are not atomic
     cross-process *(registered at the U-RT-134 impl arc, codex round-9, 2026-07-20)*'
+- id: B-65
+  title: Post-effect signing carrier disposition at CP topology cascade handlers is unspecified
+  status: registered_finding
+  summary: 'Registered at the U-RT-136/U-CP-73 impl arc (out-of-family codex round-2 [P1]).
+    Under `audit_signing_fail_closed=ON`, a `PostEffectAuditSigningError` raised at a fan-out
+    branch reaches the CP workflow driver''s topology cascade handling as a generic branch
+    failure: under `cascade_policy=pause` it converts to a resumable PAUSED result whose resume
+    RE-DISPATCHES the same step (re-firing the already-completed PAID effect the carrier exists
+    to protect), and under PROCEED-tier handling it reduces to PARTIAL without the `result_ref`.
+    The v1.101 CP rider''s catch-ordering contract enumerates the per-attempt classifiers and
+    forbids TRANSIENT_RETRY/candidate-advance/breaker-failure (all closed at this arc); it does
+    NOT specify branch-vs-workflow terminality of the carrier under each cascade_policy, and the
+    correct disposition (terminal-for-workflow vs terminal-for-branch-with-siblings-preserved vs
+    a non-resumable pause variant) is a design decision over C-CP-25 SS25.10+ cascade semantics
+    -- harness-cp additionally cannot import the runtime carrier, so any driver-side fence uses
+    the established type-name-match pattern. Registered rather than fix-looped per the terminal
+    register discipline (B-64/B-60..62 precedents); blast radius today is bounded to flag-ON
+    fan-out topologies (MTC default-ON is the audience), and the carrier''s family membership
+    keeps it out of retry/breaker everywhere the arc fenced.'
+  close_out: 'Route the cascade disposition question to the CP spec (Class 2 fork or rider
+    amendment over C-CP-25 SS25.10+/SS25.15): decide the carrier''s terminality per
+    cascade_policy, then wire a name-match fence (`type(exc).__name__ ==
+    "PostEffectAuditSigningError"`, the StepDispatchTimeoutError precedent) ahead of the
+    branch-failure -> PAUSED/PARTIAL conversions in `workflow_driver.py` so the condition stays
+    terminal and result-referenced. Witness: a fan-out run under flag-ON whose branch raises the
+    carrier asserts (a) no resumable PAUSED snapshot is minted for that branch, (b) the surfaced
+    failure carries the result_ref, (c) resume never re-dispatches the completed step. SECOND facet
+    (codex round-3 [P1], same design surface): the payload is only reachable on the IN-MEMORY
+    carrier -- once the driver stringifies to `RunResult.fail_class` the caller holds an opaque
+    `result_ref` with no persisted lookup (the report log is digest-only by the round-2 redaction
+    fix). The ratified acc-1b letter requires only report + caller-carried reference (delivered);
+    payload RECOVERABILITY (a protected store keyed by result_ref, or carrying the payload
+    through the CP/runtime result model) is the same unspecified beyond-the-boundary surface --
+    resolve it in the same spec leg.'
+  council: 'maybe -- C1 (orchestration/cascade semantics) vs C7/C8 (audit/compliance terminality)
+    dyad if the spec leg opens; the mechanical fence wiring after ratification is single-axis'
+  heading: '### B-65 · Post-effect signing carrier disposition at CP topology cascade handlers
+    is unspecified *(registered at the U-RT-136/U-CP-73 impl arc, codex round-2, 2026-07-20)*'

@@ -93,7 +93,11 @@ from harness_cp.workflow_driver_types import StepExecutionContext, StepKind, Wor
 from harness_od.otel_genai_base import HIERARCHY_CORRELATION_KEY, GenAiOperation
 
 from harness_runtime.lifecycle.audit_offload import run_audit_off_loop
-from harness_runtime.lifecycle.audit_signing_errors import AUDIT_SIGNING_HARD_FAILURES
+from harness_runtime.lifecycle.audit_signing_errors import (
+    AUDIT_SIGNING_HARD_FAILURES,
+    PostEffectAuditSigningError,
+    PostEffectClass,
+)
 from harness_runtime.lifecycle.cacheable_epoch import DEFAULT_CACHE_TTL, CacheTTL
 from harness_runtime.lifecycle.cost_record_sink import SupportsCostRecordAppend
 from harness_runtime.lifecycle.hitl_tool_loop import (
@@ -738,6 +742,16 @@ class RuntimeLLMDispatcher:
     # POLICY skip before any eligibility gate — no paid call, ever. Default
     # False preserves the v1.99 posture byte-for-byte everywhere else.
     prewarm_policy_fail_closed: bool = False
+    # U-RT-136 (Runtime spec v1.101 surface D) — the RESOLVED OD v1.34
+    # §21.2.3 `audit_signing_fail_closed` policy, bound at stage 5 from
+    # `resolve_audit_signing_fail_closed(config)`. ON → a post-provider-call
+    # signing failure raises the result-preserving carrier instead of
+    # proceeding with the signed record omitted. Default False byte-preserves
+    # the loudly-surfaced (ERROR-logged) proceed behavior at both catch
+    # sites. NOT consulted at `prewarm()`'s cost-attribution call — the
+    # lower-tier prewarm disposition is held at B-55 (fork gate item 8
+    # decided MTC-scoped only; MTC+ON never reaches prewarm per U-RT-135).
+    audit_signing_fail_closed: bool = False
 
     async def prewarm(self) -> PrewarmOutcome:
         """Boot-time prompt-cache pre-warm (B-18-KEEPALIVE; ADR-D3 §1.5:189).
@@ -1765,30 +1779,44 @@ class RuntimeLLMDispatcher:
             # string-form preserving Decimal precision at the OTel boundary.
             # Wrapped in best-effort try/except: cost-attribution failure
             # MUST NOT fail the dispatch (cost is observability not contract).
-            await _attribute_cost_off_loop_best_effort(
-                span=span,
-                cost_chain=self.cost_chain,
-                audit_writer=self.audit_writer,
-                rate_table=self.rate_table,
-                cost_record_sink=self.cost_record_sink,
-                ledger_writer=self.ledger_writer,
-                procedural_tier_snapshot_resolver=self.procedural_tier_snapshot_resolver,
-                signing_backend=self.signing_backend,
-                provider_name=provider_name,
-                model=model,
-                parent_idempotency_key=step_context.parent_idempotency_key,
-                workflow_id=step_context.workflow_id,
-                parent_action_id=step_context.parent_action_id,
-                input_tokens=usage_attrs.input_tokens,
-                output_tokens=usage_attrs.output_tokens,
-                cache_creation=(
-                    cache_attrs.cache_creation_input_tokens if cache_attrs is not None else None
-                ),
-                cache_read=(
-                    cache_attrs.cache_read_input_tokens if cache_attrs is not None else None
-                ),
-                tenant_id=step_context.tenant_id,
-            )
+            # U-RT-136 post-effect fence site (provider-response class): a
+            # signing failure escaping under `audit_signing_fail_closed=ON`
+            # re-raises as the result-preserving carrier — the provider
+            # response is a completed PAID effect; a bare raise would
+            # discard it (CP v1.101 §2 catch-ordering contract).
+            try:
+                await _attribute_cost_off_loop_best_effort(
+                    span=span,
+                    cost_chain=self.cost_chain,
+                    audit_writer=self.audit_writer,
+                    rate_table=self.rate_table,
+                    cost_record_sink=self.cost_record_sink,
+                    ledger_writer=self.ledger_writer,
+                    procedural_tier_snapshot_resolver=self.procedural_tier_snapshot_resolver,
+                    signing_backend=self.signing_backend,
+                    audit_signing_fail_closed=self.audit_signing_fail_closed,
+                    provider_name=provider_name,
+                    model=model,
+                    parent_idempotency_key=step_context.parent_idempotency_key,
+                    workflow_id=step_context.workflow_id,
+                    parent_action_id=step_context.parent_action_id,
+                    input_tokens=usage_attrs.input_tokens,
+                    output_tokens=usage_attrs.output_tokens,
+                    cache_creation=(
+                        cache_attrs.cache_creation_input_tokens if cache_attrs is not None else None
+                    ),
+                    cache_read=(
+                        cache_attrs.cache_read_input_tokens if cache_attrs is not None else None
+                    ),
+                    tenant_id=step_context.tenant_id,
+                )
+            except AUDIT_SIGNING_HARD_FAILURES as exc:
+                raise PostEffectAuditSigningError(
+                    f"audit signing failed after a completed provider response "
+                    f"(provider={provider_name!r}, model={model!r}): {exc}",
+                    effect_class=PostEffectClass.PROVIDER_RESPONSE,
+                    result=response,
+                ) from exc
 
             # --- Step 5: return step output mapping ---------------------
             return response
@@ -2976,6 +3004,10 @@ async def _attribute_cost_off_loop_best_effort(**kwargs: Any) -> None:
             "OMITTED for llm_dispatch (offload boundary)",
             exc_info=True,
         )
+        # U-RT-136 (OD v1.34 §21.2.3 rows 1/5): under fail-closed the typed
+        # family RAISES; the loudly-surfaced proceed above is the OFF arm.
+        if kwargs.get("audit_signing_fail_closed"):
+            raise
 
 
 def _attribute_cost_best_effort(
@@ -2988,6 +3020,7 @@ def _attribute_cost_best_effort(
     ledger_writer: Any = None,
     procedural_tier_snapshot_resolver: Any = None,
     signing_backend: Any = None,
+    audit_signing_fail_closed: bool = False,
     provider_name: str,
     model: str,
     parent_idempotency_key: str,
@@ -3067,12 +3100,15 @@ def _attribute_cost_best_effort(
         # Codex round-4 P1 (PR B2a): a CONFIGURED signing backend's failure
         # must never be silently swallowed with ordinary cost-observability
         # failures — the signed audit record is a compliance artifact.
-        # Surfaced loudly; dispatch preserved (the MTC fail-closed policy
-        # question is registered at the B-47 close-out).
+        # Surfaced loudly; dispatch preserved under flag OFF. U-RT-136
+        # (OD v1.34 §21.2.3 rows 1/5): under fail-closed the typed family
+        # RAISES instead (the B-47-registered policy question, now decided).
         logging.getLogger("harness.runtime.audit_signing").error(
             "audit signing failed — signed cost-audit record OMITTED for llm_dispatch",
             exc_info=True,
         )
+        if audit_signing_fail_closed:
+            raise
         return
     except Exception:
         # Cost-attribution is observability, not contract. Swallow.
@@ -3128,6 +3164,7 @@ def materialize_llm_dispatcher_stage(
     embedding_classifier: LayerDecisionFn | None = None,
     prewarm_model: str | None = None,
     prewarm_policy_fail_closed: bool = False,
+    audit_signing_fail_closed: bool = False,
 ) -> RuntimeLLMDispatcher:
     """Stage 5 LOOP_INIT composer factory for the LLM dispatcher (U-RT-52).
 
@@ -3219,6 +3256,9 @@ def materialize_llm_dispatcher_stage(
         # U-RT-135 — the MTC fail-closed prewarm disable (stage 5 passes
         # `mtc_audit_prewarm_disabled(config)`).
         prewarm_policy_fail_closed=prewarm_policy_fail_closed,
+        # U-RT-136 — the resolved OD v1.34 §21.2.3 policy (stage 5 passes
+        # `resolve_audit_signing_fail_closed(config)`).
+        audit_signing_fail_closed=audit_signing_fail_closed,
     )
 
 

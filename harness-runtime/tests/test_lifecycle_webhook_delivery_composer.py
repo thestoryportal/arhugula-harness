@@ -5,7 +5,7 @@ Per `Implementation_Plan_Harness_Runtime_v2_11.md` §1 U-RT-69 (5 ACs).
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 import httpx
 import pytest
@@ -470,3 +470,71 @@ def test_signing_backend_is_passed_into_cost_audit_composition() -> None:
         "USE-half: the composer's signing_backend must be passed into "
         "attribute_webhook_dispatch_cost (backend.sign never invoked)"
     )
+
+
+# ---------------------------------------------------------------------------
+# U-RT-136 (CP v1.101 §2, webhook-receipt site class) — post-effect carrier.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_u_rt_136_post_effect_signing_failure_carries_webhook_receipt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The POST completed (200) and cost-attribution signing then failed
+    under `audit_signing_fail_closed=ON`: `deliver_webhook` raises the
+    result-preserving `PostEffectAuditSigningError` whose `.result` is the
+    already-composed `WebhookDeliveryResult` (delivered=True receipt) — the
+    completed external effect is never discarded (CP v1.101 §2).
+
+    Mutation probe: swapping the carrier wrap for a bare re-raise loses the
+    receipt and FAILS the `.result` assertions."""
+    import harness_runtime.lifecycle.cost_attribution_webhook_dispatch as attr_mod
+    from harness_runtime.lifecycle.audit_signing_errors import (
+        AuditSigningFailedError,
+        PostEffectAuditSigningError,
+        PostEffectClass,
+    )
+
+    def _signing_fails(**_k: Any) -> Any:
+        raise AuditSigningFailedError("kms unavailable (u-rt-136 webhook test)")
+
+    monkeypatch.setattr(attr_mod, "attribute_webhook_dispatch_cost", _signing_fails)
+
+    client = _RecordingClient([_MockResponse(200)])
+    composer = WebhookDeliveryComposer(
+        retry_max_attempts=1,
+        http_client_factory=lambda: client,
+        rate_table=cast(Any, object()),
+        cost_chain=cast(Any, object()),
+        audit_writer=cast(Any, object()),
+        workflow_id="wf-136",
+        parent_action_id="workflow:wf-136:step:0",
+        parent_idempotency_key="parent-idem-136",
+        audit_signing_fail_closed=True,
+    )
+    with pytest.raises(PostEffectAuditSigningError) as excinfo:
+        await composer.deliver_webhook(_make_webhook_config(), _make_payload(), "idem-136")
+    carrier = excinfo.value
+    assert carrier.effect_class is PostEffectClass.WEBHOOK_RECEIPT
+    receipt = cast(WebhookDeliveryResult, carrier.result)
+    assert receipt.delivered is True
+    assert receipt.status_code == 200
+
+    # Flag-OFF control — behavior preserved verbatim: delivery result
+    # returned, signing failure ERROR-logged and swallowed.
+    off_client = _RecordingClient([_MockResponse(200)])
+    off_composer = WebhookDeliveryComposer(
+        retry_max_attempts=1,
+        http_client_factory=lambda: off_client,
+        rate_table=cast(Any, object()),
+        cost_chain=cast(Any, object()),
+        audit_writer=cast(Any, object()),
+        workflow_id="wf-136",
+        parent_action_id="workflow:wf-136:step:0",
+        parent_idempotency_key="parent-idem-136",
+    )
+    off_result = await off_composer.deliver_webhook(
+        _make_webhook_config(), _make_payload(), "idem-136-off"
+    )
+    assert off_result.delivered is True

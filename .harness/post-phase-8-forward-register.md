@@ -442,6 +442,30 @@ advisor() also flagged a second-order question genuinely out of B-23's scope: th
 - **Why registered, not fixed.** The practical attack paths are already closed: at MTC an appender only runs POST-bootstrap, and its own bootstrap either verified an existing record or minted one (the U-RT-134 invariant itself), so a racing appender implies the record exists and the greenfield branch is never taken; simultaneous dual-greenfield bootstraps converge via the round-7 no-clobber `os.link` publication (the loser verifies the winner). The residual hardening — holding the sidecar/ledger locks across probe + publication — interacts with `harness_is.cross_process_ledger_lock` same-process nesting semantics and needs its own deadlock-safety analysis, not a terminal-round patch.
 - **Close-out.** Hold `cross_process_write_lock(sidecar_path)` (or an equivalent single lock scope) across ALL THREE probes (the persisted-row key scan shares the same probe→publish window — merge-gate concurrency lens, PR #1063) and the no-clobber publication, after confirming the IS lock implementation's same-process nesting semantics (replace inner read-lock acquisitions with lock-free reads under the held write lock if nesting is unsafe). Witness: an interleaving test that starts an append inside the probe→publish window and asserts the greenfield mint is refused. Does not block U-RT-134's merge (terminal-round registration per the B-48 r10 precedent).
 
+### B-65 · Post-effect signing carrier disposition at CP topology cascade handlers is unspecified *(registered at the U-RT-136/U-CP-73 impl arc, codex round-2, 2026-07-20)*
+
+Under `audit_signing_fail_closed=ON`, a `PostEffectAuditSigningError` (the U-RT-136 result-preserving
+post-effect carrier) raised at a fan-out branch reaches the CP workflow driver's topology cascade
+handling as a generic branch failure: under `cascade_policy=pause` it converts to a resumable PAUSED
+result whose resume RE-DISPATCHES the same step — re-firing the already-completed PAID effect the
+carrier exists to protect — and PROCEED-tier handling reduces it to PARTIAL without the `result_ref`.
+The v1.101 CP rider's catch-ordering contract enumerates the per-attempt classifiers (all fenced at
+this arc) but does NOT specify branch-vs-workflow terminality of the carrier per `cascade_policy`;
+that disposition (terminal-for-workflow vs terminal-for-branch-with-siblings-preserved vs a
+non-resumable pause variant) is a design decision over C-CP-25 §25.10+/§25.15 cascade semantics, and
+`harness-cp` cannot import the runtime carrier (any driver-side fence uses the established
+`type(exc).__name__` match — the `StepDispatchTimeoutError` precedent). Registered per the terminal
+register discipline (B-64/B-60..62 precedents); blast radius today is bounded to flag-ON fan-out
+topologies. Close-out: spec-leg the disposition, wire the name-match fence ahead of the
+branch-failure → PAUSED/PARTIAL conversions, witness a flag-ON fan-out run asserting no resumable
+snapshot + result_ref surfaced + no re-dispatch on resume. Second facet (codex round-3 P1, same
+design surface): payload RECOVERABILITY beyond the in-memory carrier — after the driver's
+string conversion the caller holds an opaque `result_ref` with no persisted lookup (the report
+log is digest-only per the round-2 redaction fix); the ratified acc-1b letter requires only
+report + caller-carried reference (delivered), so a protected result store keyed by
+`result_ref` (or carrying the payload through the CP/runtime result model) resolves in the
+same spec leg.
+
 ### B-48 · Sync sub-agent dispatch executes on the event loop *(surfaced at B-47 PR B2a, out-of-family Codex round-2, 2026-07-17)*
 - **CLOSED 2026-07-19 (PR #1060)** — spec+plan deltas APPLIED (Runtime v1.102 §14.8.10 + CP v1.102 §25.11 + IS v1.11 §7.6 + plans v2.50/v2.39/v2.7 + Core v1.3 (U-CORE-03) + clearance markers; C1⊥C9 dyad 16/16 CONFIRM at `.harness/council-dyad-b48-apply-2026-07-18.md`); executor impl arc (U-CORE-03 + U-RT-140..144 + U-CP-101 + the B-39 interim constraint) LANDED — 10 successive rounds of decorrelated pre-merge review (merge-gate 3-lens + out-of-family Codex, each re-run to convergence), 35 findings fixed with PD-8 mutation-probed witnesses. Round 10 (the operator-approved final gate) converged clean on 9's fixes; codex round-10 surfaced 3 further findings against pre-existing cancellation-fence coverage from rounds 4-8 (not a round-9/10 regression), escalated to the operator per the pre-committed terminal rule, and registered separately as B-60/B-61/B-62 rather than blind-fixed (operator selected "register + merge now").
 - **Fork doc FILED 2026-07-18** at `.harness/class_2_fork_b48_sync_subagent_dispatch_offload.md` — recommendation (grounded at filing rounds 1/15: the only materialized bound is HIERARCHICAL_DELEGATION's per-parent fan-out cap 3; the §25.11 depth phrase is unmaterialized, generic recursion and aggregate active frames unbounded): option B = custom grow-on-demand executor + configurable hard cap + fail-fast; C1/C9 council at apply; cancellation semantics defined first. Selection RATIFIED 2026-07-18 (option B); spec-apply COMPLETE 2026-07-19 — impl arc live.

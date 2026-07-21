@@ -55,6 +55,7 @@ from harness_runtime.bootstrap.factories.webhook_delivery_composer_factory impor
 from harness_runtime.bootstrap.mutable_context import _MutableHarnessContext
 from harness_runtime.lifecycle.audit_signing_fail_closed_validation import (
     mtc_audit_prewarm_disabled,
+    resolve_audit_signing_fail_closed,
 )
 from harness_runtime.lifecycle.cacheable_epoch import select_cache_ttl
 from harness_runtime.lifecycle.child_workflow_runner import compose_child_workflow_runner
@@ -428,6 +429,11 @@ async def execute(
             # inert. MTC-scoped per ratified gate item 8 (B-55 holds the
             # lower-tier disposition).
             prewarm_policy_fail_closed=mtc_audit_prewarm_disabled(config),
+            # U-RT-136 (Runtime spec v1.101 surface D) — under fail-closed a
+            # post-provider-call signing failure raises the result-preserving
+            # `PostEffectAuditSigningError` carrier instead of proceeding
+            # with the signed record omitted (OD v1.34 §21.2.3 rows 1/5/7).
+            audit_signing_fail_closed=resolve_audit_signing_fail_closed(config),
         )
         # B-18-KEEPALIVE — stash the bare dispatcher on ctx so the daemon
         # keep-alive loop (Step 5) can call `bare.prewarm()` directly without
@@ -525,6 +531,8 @@ async def execute(
         audit_signing_algorithm=SignatureAlgorithm.ED25519,
         # B-47 PR B2a — OD spec v1.33 §21.2.1 signing seam (stage-4 step 0).
         signing_backend=ctx.audit_signing_backend,
+        # U-RT-136 — OD v1.34 §21.2.3 fail-closed policy (rows 1/5).
+        audit_signing_fail_closed=resolve_audit_signing_fail_closed(config),
         procedural_tier_snapshot_resolver=procedural_tier_snapshot_resolver,
         pause_resume_protocol=ctx.pause_resume_protocol,
         pause_requested_flag=ctx.pause_requested_flag,
@@ -627,6 +635,8 @@ async def execute(
         audit_signing_algorithm=SignatureAlgorithm.ED25519,
         # B-47 PR B2a — OD spec v1.33 §21.2.1 signing seam (stage-4 step 0).
         signing_backend=ctx.audit_signing_backend,
+        # U-RT-136 — OD v1.34 §21.2.3 fail-closed policy (rows 1/5/7).
+        audit_signing_fail_closed=resolve_audit_signing_fail_closed(config),
         time_source=lambda: datetime.now(UTC),
         procedural_tier_snapshot_resolver=procedural_tier_snapshot_resolver,
     )
@@ -651,6 +661,8 @@ async def execute(
         audit_signing_algorithm=SignatureAlgorithm.ED25519,
         # B-47 PR B2a — OD spec v1.33 §21.2.1 signing seam (stage-4 step 0).
         signing_backend=ctx.audit_signing_backend,
+        # U-RT-136 — OD v1.34 §21.2.3 fail-closed policy (rows 1/5).
+        audit_signing_fail_closed=resolve_audit_signing_fail_closed(config),
         procedural_tier_snapshot_resolver=procedural_tier_snapshot_resolver,
         pause_resume_protocol=ctx.pause_resume_protocol,
         pause_requested_flag=ctx.pause_requested_flag,
@@ -740,6 +752,8 @@ async def execute(
         audit_signing_algorithm=SignatureAlgorithm.ED25519,
         # B-47 PR B2a — OD spec v1.33 §21.2.1 signing seam (stage-4 step 0).
         signing_backend=ctx.audit_signing_backend,
+        # U-RT-136 — OD v1.34 §21.2.3 fail-closed policy (rows 1/5).
+        audit_signing_fail_closed=resolve_audit_signing_fail_closed(config),
         procedural_tier_snapshot_resolver=procedural_tier_snapshot_resolver,
         pause_resume_protocol=ctx.pause_resume_protocol,
         pause_requested_flag=ctx.pause_requested_flag,

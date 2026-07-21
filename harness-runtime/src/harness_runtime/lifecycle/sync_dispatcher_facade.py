@@ -99,6 +99,11 @@ from typing import Any, Protocol, runtime_checkable
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
 from harness_cp.workflow_driver_types import StepExecutionContext, WorkflowStep
 
+from harness_runtime.lifecycle.audit_signing_errors import (
+    PostEffectAuditSigningError,
+    report_post_effect_audit_failure,
+)
+
 __all__ = [
     "AsyncStepDispatcher",
     "StepDispatchTimeoutError",
@@ -255,6 +260,18 @@ class SyncDispatcherFacade:
         future = asyncio.run_coroutine_threadsafe(coro, self.loop)
         try:
             return future.result(timeout=self.result_timeout_seconds)
+        except PostEffectAuditSigningError as exc:
+            # U-RT-136 (plan v2.49 §1.3 acc 1b) — the OUTERMOST runtime
+            # dispatch boundary: every step-kind path (inference / tool /
+            # sub-agent, nested children included) funnels through this
+            # facade before the CP driver's generic handler stringifies the
+            # exception into `RunResult.fail_class`. Consume the carrier
+            # here into the audit-failure report (structured log keyed by
+            # `result_ref`, carrying the preserved effect payload), then
+            # re-raise — the caller's fail_class string carries the same
+            # `result_ref` via the carrier's message.
+            report_post_effect_audit_failure(exc)
+            raise
         except TimeoutError as exc:
             # `future.result(timeout=...)` only stops *waiting* — the inner
             # coroutine (and its cost/audit-ledger write) keeps running

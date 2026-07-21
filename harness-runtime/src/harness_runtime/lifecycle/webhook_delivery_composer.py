@@ -33,7 +33,11 @@ from harness_cp.hitl_timeout_degradation import (
 from harness_cp.validator_framework_types import HITLEscalationBrief
 
 from harness_runtime.lifecycle.audit_offload import run_audit_off_loop
-from harness_runtime.lifecycle.audit_signing_errors import AUDIT_SIGNING_HARD_FAILURES
+from harness_runtime.lifecycle.audit_signing_errors import (
+    AUDIT_SIGNING_HARD_FAILURES,
+    PostEffectAuditSigningError,
+    PostEffectClass,
+)
 from harness_runtime.lifecycle.cost_record_sink import SupportsCostRecordAppend
 
 __all__ = [
@@ -122,6 +126,7 @@ class WebhookDeliveryComposer:
         ledger_writer: Any = None,
         procedural_tier_snapshot_resolver: Any = None,
         signing_backend: Any = None,
+        audit_signing_fail_closed: bool = False,
         workflow_id: str | None = None,
         parent_action_id: str | None = None,
         parent_idempotency_key: str | None = None,
@@ -184,6 +189,10 @@ class WebhookDeliveryComposer:
         self._procedural_tier_snapshot_resolver = procedural_tier_snapshot_resolver
         # B-47 PR B2a — OD spec v1.33 §21.2.1 signing-backend seam (stage-5).
         self._signing_backend = signing_backend
+        # U-RT-136 — the resolved OD v1.34 §21.2.3 `audit_signing_fail_closed`
+        # policy (stage-5 factory). ON → both cost-attribution catch sites
+        # raise the typed family; OFF (default) byte-preserves log-and-proceed.
+        self._audit_signing_fail_closed = audit_signing_fail_closed
         self._workflow_id = workflow_id
         self._parent_action_id = parent_action_id
         self._parent_idempotency_key = parent_idempotency_key
@@ -304,11 +313,24 @@ class WebhookDeliveryComposer:
         # billable per flat_per_attempt semantics). Best-effort swallow
         # mirrors `_attribute_tool_cost_best_effort` at
         # runtime_tool_dispatcher.py:285.
-        await self._attribute_webhook_cost_off_loop(
-            url=url,
-            request_body=request_body,
-            idempotency_key=idempotency_key,
-        )
+        # U-RT-136 post-effect fence site (webhook-receipt class): the POST
+        # was attempted (delivered or exhausted — either way a completed
+        # external effect with a receipt) — under fail-closed a signing
+        # failure raises the result-preserving carrier (CP v1.101 §2).
+        try:
+            await self._attribute_webhook_cost_off_loop(
+                url=url,
+                request_body=request_body,
+                idempotency_key=idempotency_key,
+            )
+        except AUDIT_SIGNING_HARD_FAILURES as sign_exc:
+            raise PostEffectAuditSigningError(
+                f"audit signing failed after a completed webhook POST "
+                f"(webhook_id={webhook_config.webhook_id!r}, "
+                f"delivered={delivered}): {sign_exc}",
+                effect_class=PostEffectClass.WEBHOOK_RECEIPT,
+                result=result,
+            ) from sign_exc
 
         if not delivered:
             raise WebhookDeliveryExhaustedError(
@@ -332,12 +354,16 @@ class WebhookDeliveryComposer:
                 self._attribute_webhook_cost_best_effort, *args, **kwargs
             )
         except AUDIT_SIGNING_HARD_FAILURES:
-            # Codex round-17 P1 — see tool dispatcher; fail-open preserved.
+            # Codex round-17 P1 — see tool dispatcher; fail-open preserved
+            # under flag OFF. U-RT-136 (OD v1.34 §21.2.3 rows 1/5): under
+            # fail-closed the typed family RAISES.
             logging.getLogger("harness.runtime.audit_signing").error(
                 "audit offload refused the job — signed cost-audit record "
                 "OMITTED for webhook delivery (offload boundary)",
                 exc_info=True,
             )
+            if self._audit_signing_fail_closed:
+                raise
             return None
 
     def _attribute_webhook_cost_best_effort(
@@ -406,11 +432,15 @@ class WebhookDeliveryComposer:
         except AUDIT_SIGNING_HARD_FAILURES:
             # Codex round-4 P1 (PR B2a): signing failures are compliance
             # events, never silently swallowed with cost-observability
-            # failures. Surfaced loudly; delivery preserved.
+            # failures. Surfaced loudly; delivery preserved under flag OFF.
+            # U-RT-136 (OD v1.34 §21.2.3 rows 1/5): under fail-closed the
+            # typed family RAISES.
             logging.getLogger("harness.runtime.audit_signing").error(
                 "audit signing failed — signed cost-audit record OMITTED for webhook delivery",
                 exc_info=True,
             )
+            if self._audit_signing_fail_closed:
+                raise
         except Exception:
             pass  # observability-only; MUST NOT fail dispatch
 

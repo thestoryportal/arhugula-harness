@@ -148,7 +148,11 @@ from harness_is.state_ledger_write import (
 from harness_od.audit_ledger_types import SignatureAlgorithm, StateLedgerEntryRef
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from harness_runtime.lifecycle.audit_signing_errors import AUDIT_SIGNING_HARD_FAILURES
+from harness_runtime.lifecycle.audit_signing_errors import (
+    AUDIT_SIGNING_HARD_FAILURES,
+    PostEffectAuditSigningError,
+    PostEffectClass,
+)
 from harness_runtime.lifecycle.audit_writer import RuntimeAuditLedgerWriter
 from harness_runtime.lifecycle.child_workflow_runner import ChildWorkflowRunner
 from harness_runtime.lifecycle.handoff import RuntimeHandoffRegistry
@@ -618,6 +622,15 @@ class RuntimeSubAgentDispatcher:
     (the default) preserves the placeholder signing path byte-for-byte.
     """
 
+    audit_signing_fail_closed: bool = False
+    """U-RT-136 — the resolved OD v1.34 §21.2.3 `audit_signing_fail_closed`
+    policy, threaded from `resolve_audit_signing_fail_closed(config)` at
+    bootstrap stage-5. ON → the audit-compose catch site raises the typed
+    family even on `raise_on_failure=False` paths, and the SUCCESS/DRAINED
+    completion site converts a signing-caused compose failure into the
+    result-preserving `PostEffectAuditSigningError` carrier (CP v1.101 §2);
+    OFF (default) byte-preserves the loudly-surfaced proceed behavior."""
+
     # Module-bound canonical attribute name constants (per spec §14.7.5
     # "Producer-side attribute carrier reference" — imported from the
     # canonical carrier; not hand-coded as strings). Frozen at construction
@@ -813,6 +826,18 @@ class RuntimeSubAgentDispatcher:
                 "audit signing failed — signed audit record OMITTED for sub-agent dispatch",
                 exc_info=True,
             )
+            # U-RT-136 (OD v1.34 §21.2.3 rows 1/5): under fail-closed the
+            # typed family RAISES — on BOTH raise_on_failure arms, checked
+            # BEFORE the wrap (codex round-3 P2: wrapping first would
+            # surface SubAgentDispatchAuditComposeError instead of the
+            # single typed boundary; the SUCCESS/DRAINED call site catches
+            # the family and re-raises the result-preserving carrier). On
+            # the raise_on_failure=False paths (child FAILED /
+            # exception-bubble / PAUSED) no completed child result exists to
+            # preserve; a PAUSED child's snapshot remains durable in the
+            # child's own ledger. Under OFF, both arms byte-preserved.
+            if self.audit_signing_fail_closed:
+                raise
             if raise_on_failure:
                 raise SubAgentDispatchAuditComposeError(
                     f"sub-agent dispatch audit composition failed for "
@@ -1072,6 +1097,12 @@ class RuntimeSubAgentDispatcher:
                 # Best-effort audit composition — dispatch fact at 8a is
                 # preserved; downstream 8b/8c/8d failures are swallowed so
                 # the child's original exception remains the primary fault.
+                # U-RT-136: under fail-closed the helper re-raises the typed
+                # family INSTEAD — deliberately NOT carrier-wrapped here (the
+                # child RAISED: no completed result exists to preserve, unlike
+                # the FAILED/PAUSED/SUCCESS branches below); the child's
+                # original exception stays visible as the raise's implicit
+                # `__context__`.
                 _ = self._compose_and_persist_audit(
                     parent_action_id=parent_action_id,
                     descent=descent,
@@ -1105,13 +1136,27 @@ class RuntimeSubAgentDispatcher:
                 # the primary fault is SubAgentChildFailedError. Audit-write
                 # failures are swallowed so the child failure remains the
                 # surfaced error per spec §14.7.2 step 8 failure-semantics.
-                _ = self._compose_and_persist_audit(
-                    parent_action_id=parent_action_id,
-                    descent=descent,
-                    payload=payload,
-                    step_context=step_context,
-                    raise_on_failure=False,
-                )
+                # U-RT-136 (codex round-4 P1): under fail-closed the helper
+                # re-raises the typed family — preserve the FAILED child
+                # outcome on the carrier (the child workflow COMPLETED, with
+                # a failure disposition; dropping it would lose fail-class
+                # attribution and permit a repeat execution).
+                try:
+                    _ = self._compose_and_persist_audit(
+                        parent_action_id=parent_action_id,
+                        descent=descent,
+                        payload=payload,
+                        step_context=step_context,
+                        raise_on_failure=False,
+                    )
+                except AUDIT_SIGNING_HARD_FAILURES as sign_exc:
+                    raise PostEffectAuditSigningError(
+                        f"audit signing failed after child sub-workflow "
+                        f"{payload.child_workflow_id!r} terminated FAILED "
+                        f"(fail_class={child_result.fail_class!r}): {sign_exc}",
+                        effect_class=PostEffectClass.SUB_AGENT_RESULT,
+                        result=child_result,
+                    ) from sign_exc
                 raise SubAgentChildFailedError(
                     f"child sub-workflow {payload.child_workflow_id!r} "
                     f"terminated with RunStatus.FAILED; fail_class="
@@ -1142,13 +1187,28 @@ class RuntimeSubAgentDispatcher:
                 # other disposition (SUCCESS/DRAINED/FAILED). Downstream 8b/8c/8d failures
                 # are swallowed (raise_on_failure=False) so the pause remains the surfaced
                 # outcome.
-                _ = self._compose_and_persist_audit(
-                    parent_action_id=parent_action_id,
-                    descent=descent,
-                    payload=payload,
-                    step_context=step_context,
-                    raise_on_failure=False,
-                )
+                # U-RT-136 (codex round-4 P1): under fail-closed the helper
+                # re-raises the typed family — preserve the PAUSED child
+                # outcome (INCLUDING its pause_snapshot) on the carrier; a
+                # bare family raise would replace SubAgentChildPausedError,
+                # the parent could not capture the child's cursor, and a
+                # later run would re-execute the child's completed effects.
+                try:
+                    _ = self._compose_and_persist_audit(
+                        parent_action_id=parent_action_id,
+                        descent=descent,
+                        payload=payload,
+                        step_context=step_context,
+                        raise_on_failure=False,
+                    )
+                except AUDIT_SIGNING_HARD_FAILURES as sign_exc:
+                    raise PostEffectAuditSigningError(
+                        f"audit signing failed after child sub-workflow "
+                        f"{payload.child_workflow_id!r} PAUSED "
+                        f"(pause snapshot preserved on the carrier): {sign_exc}",
+                        effect_class=PostEffectClass.SUB_AGENT_RESULT,
+                        result=child_result,
+                    ) from sign_exc
                 if child_result.pause_snapshot is None:
                     raise SubAgentChildFailedError(
                         f"child sub-workflow {payload.child_workflow_id!r} returned "
@@ -1187,7 +1247,23 @@ class RuntimeSubAgentDispatcher:
                     step_context=step_context,
                     raise_on_failure=True,
                 )
+            except AUDIT_SIGNING_HARD_FAILURES as exc:
+                # U-RT-136 post-effect fence site (sub-agent-result class):
+                # the child workflow COMPLETED (SUCCESS/DRAINED) and the
+                # helper re-raised the typed family (fail-closed ON — the
+                # only path the raw family escapes the helper's catch) —
+                # re-raise as the result-preserving carrier so the completed
+                # child output is not discarded (CP v1.101 §2).
+                span.set_attribute("subagent.result_status", "failed")
+                raise PostEffectAuditSigningError(
+                    f"audit signing failed after a completed child "
+                    f"sub-workflow ({payload.child_workflow_id!r}): {exc}",
+                    effect_class=PostEffectClass.SUB_AGENT_RESULT,
+                    result=step_output,
+                ) from exc
             except SubAgentDispatchAuditComposeError:
+                # Non-signing compose failures (and every flag-OFF signing
+                # failure) keep the existing ComposeError surface verbatim.
                 span.set_attribute("subagent.result_status", "failed")
                 raise
 

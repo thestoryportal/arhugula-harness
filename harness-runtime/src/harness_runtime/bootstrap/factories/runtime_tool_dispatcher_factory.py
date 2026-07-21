@@ -59,6 +59,9 @@ from harness_runtime.config.sandbox_defaults import (
     resolve_per_tool_sandbox_defaults,
 )
 from harness_runtime.lifecycle.as_is_wiring import RuntimeAsIsWiring
+from harness_runtime.lifecycle.audit_signing_fail_closed_validation import (
+    resolve_audit_signing_fail_closed,
+)
 from harness_runtime.lifecycle.docker_tool_execution_driver import (
     DockerToolRunnerExecutionDriver,
     GVisorRunscToolRunnerExecutionDriver,
@@ -450,6 +453,8 @@ async def materialize_runtime_tool_dispatcher_stage(
         # B-47 PR B2a — OD spec v1.33 §21.2.1 signing seam (stage-4 constructs
         # the backend onto ctx before this stage-5 factory runs).
         signing_backend=ctx.audit_signing_backend,
+        # U-RT-136 — OD v1.34 §21.2.3 fail-closed policy (rows 1/5/7).
+        audit_signing_fail_closed=resolve_audit_signing_fail_closed(config),
         # R-FS-1 arc CA + B-INTERSTEP-PERRUN-ISOLATION — thread the run-scoped
         # accumulator PROXY (not its `.records` list — that capture defeated per-run
         # isolation) so per-tool-dispatch SpanCostRecords `append` through to the

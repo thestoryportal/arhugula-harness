@@ -36,6 +36,7 @@ from harness_cp.validator_framework_types import (
 )
 from harness_od.rate_table_types import RateTable
 
+from harness_runtime.lifecycle.audit_signing_errors import AUDIT_SIGNING_HARD_FAILURES
 from harness_runtime.lifecycle.cost_attribution_validator_dispatch import (
     CostAttributingValidatorHook,
 )
@@ -64,6 +65,7 @@ async def materialize_validator_framework_stage(
     ledger_writer: Any = None,
     procedural_tier_snapshot_resolver: Any = None,
     signing_backend: Any = None,
+    audit_signing_fail_closed: bool = False,
 ) -> ValidatorFramework | None:
     """Construct the stage-4 `ValidatorFramework` instance from operator-supplied
     config, or return `None` when the operator has not opted in.
@@ -125,11 +127,22 @@ async def materialize_validator_framework_stage(
             ledger_writer=ledger_writer,
             procedural_tier_snapshot_resolver=procedural_tier_snapshot_resolver,
             signing_backend=signing_backend,
+            # U-RT-136 (CP v1.101 §2 row 1) — the hook's audit-signing catch
+            # is flag-consulting: ON → the typed family raises through it.
+            audit_signing_fail_closed=audit_signing_fail_closed,
         )
 
+    # U-RT-136 ⊕ U-CP-73 (CP v1.101 §2) — the composition root is the ONLY
+    # place that knows both the resolved policy AND the OD-homed typed
+    # family, so the CP firing site's invariant-2 carve-out is INJECTED here:
+    # flag ON → the family raises through `evaluate()`'s hook swallow; flag
+    # OFF → empty tuple, invariant 2's swallow unconditional (§2 row 3).
     framework: ValidatorFramework = ConcreteValidatorFramework(
         validator_registry={},
         post_evaluate_hook=post_evaluate_hook,
+        audit_signing_raise_through=(
+            AUDIT_SIGNING_HARD_FAILURES if audit_signing_fail_closed else ()
+        ),
     )
 
     # Spec §14.13.5 invariant 3 — Protocol-conformance enforcement. The

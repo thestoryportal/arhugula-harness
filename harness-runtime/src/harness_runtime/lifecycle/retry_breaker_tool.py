@@ -64,6 +64,7 @@ from harness_cp.validator_fail_taxonomy import ValidatorRetryExitClass
 from harness_cp.validator_fail_transient_staircase import StaircaseStage
 from harness_cp.workflow_driver_types import StepExecutionContext, WorkflowStep
 
+from harness_runtime.lifecycle.audit_signing_errors import AUDIT_SIGNING_HARD_FAILURES
 from harness_runtime.lifecycle.runtime_tool_dispatcher import (
     MCPHostUnreachableError,
     ToolInvocationTimeoutError,
@@ -231,6 +232,18 @@ class RetryBreakerToolDispatcher:
                                 binding, step, step_context=step_context
                             )
                     except asyncio.CancelledError:
+                        raise
+                    except AUDIT_SIGNING_HARD_FAILURES:
+                        # U-RT-136 post-effect catch-ordering fence (CP v1.101
+                        # §2, tool-execution site class): a signing failure
+                        # after an EXECUTED tool call must NEVER be retried or
+                        # classified into any staircase class — the completed
+                        # effect travels on the `PostEffectAuditSigningError`
+                        # carrier raised by the inner dispatcher. Ordered
+                        # AHEAD of the transient and generic fail-fast arms;
+                        # no staircase `retry.fail_class` is stamped.
+                        inner_span.set_attribute("retry.delay_ms", 0)
+                        inner_span.set_attribute("retry.terminal", "audit-signing-fail-closed")
                         raise
                     except _TRANSIENT_TOOL_DISPATCH_ERRORS as exc:
                         # Transient: classify + advance staircase.

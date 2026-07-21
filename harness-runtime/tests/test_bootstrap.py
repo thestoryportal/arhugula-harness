@@ -1744,3 +1744,86 @@ async def test_bootstrap_stage_5_prewarm_failure_does_not_abort_bootstrap(
     # Must not raise BootstrapFailure — best-effort means failure is swallowed.
     ctx = await run_bootstrap(cfg, workload_class=_WORKLOAD)
     assert isinstance(ctx, HarnessContext)
+
+
+# ---------------------------------------------------------------------------
+# U-RT-136 (merge-gate test-witness lens, PR #1065) — the REAL bootstrap
+# threads the RESOLVED `audit_signing_fail_closed` into every composer.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_u_rt_136_bootstrap_wires_resolved_flag_into_every_composer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The 8 stage/factory wiring lines are exercised BY EXECUTION through the
+    real `run_bootstrap`: with solo-tier explicit `audit_signing_fail_closed=
+    true` (resolved-ON without the MTC bootstrap invariants U-RT-134 owns),
+    every composer the ten catch sites live on carries the resolved flag —
+    and the OFF control (flag unset) leaves every one False/empty.
+
+    Mutation probe (per line): deleting any single
+    `audit_signing_fail_closed=resolve_audit_signing_fail_closed(config)`
+    kwarg at stage 4/5 or the tool/webhook/validator factories reverts that
+    composer to the False default → the matching ON assertion FAILS (the
+    exact silently-fail-open-in-production wiring deletion the merge-gate
+    test-witness lens flagged)."""
+    from harness_cp.workflow_driver_types import StepKind
+    from harness_runtime.lifecycle.audit_signing_errors import (
+        AUDIT_SIGNING_HARD_FAILURES,
+    )
+    from harness_runtime.types import (
+        ValidatorFrameworkConfig,
+        WebhookDeliveryComposerConfig,
+    )
+
+    def _collect(ctx: HarnessContext) -> dict[str, object]:
+        inference_facade = ctx.step_dispatchers.lookup(StepKind.INFERENCE_STEP)
+        retry_wrapper = inference_facade.inner  # C-RT-16 wrapper
+        hitl_inference = retry_wrapper.inner
+        sub_agent_facade = ctx.step_dispatchers.lookup(StepKind.SUB_AGENT_DISPATCH)
+        hitl_sub_agent = sub_agent_facade.inner
+        tool_facade = ctx.step_dispatchers.lookup(StepKind.TOOL_STEP)
+        hitl_tool = tool_facade.inner
+        bare_tool = ctx.tool_dispatcher.inner
+        framework = ctx.validator_framework
+        assert framework is not None
+        webhook = ctx.webhook_delivery_composer
+        assert webhook is not None
+        return {
+            "llm (stage-5 factory)": ctx.bare_llm_dispatcher.audit_signing_fail_closed,
+            "hitl inference (stage-5)": hitl_inference.audit_signing_fail_closed,
+            "hitl sub-agent (stage-5)": hitl_sub_agent.audit_signing_fail_closed,
+            "hitl tool (stage-5)": hitl_tool.audit_signing_fail_closed,
+            "bare sub-agent (stage-5)": hitl_sub_agent.inner.audit_signing_fail_closed,
+            "bare tool (factory)": bare_tool._audit_signing_fail_closed,
+            "webhook (factory)": webhook._audit_signing_fail_closed,
+            "validator hook (stage-4)": framework._post_evaluate_hook._audit_signing_fail_closed,
+            "cp carve-out tuple (stage-4)": framework._audit_signing_raise_through,
+        }
+
+    _patch_providers(monkeypatch)
+    _patch_collector(monkeypatch)
+
+    opt_ins = {
+        "validator_framework_config": ValidatorFrameworkConfig(),
+        "webhook_delivery_composer_config": WebhookDeliveryComposerConfig(),
+    }
+    on_cfg = _config(tmp_path).model_copy(update={"audit_signing_fail_closed": True, **opt_ins})
+    on_ctx = await run_bootstrap(on_cfg, workload_class=_WORKLOAD)
+    on_fields = _collect(on_ctx)
+    for name, value in on_fields.items():
+        if name == "cp carve-out tuple (stage-4)":
+            assert value == AUDIT_SIGNING_HARD_FAILURES, f"{name}: {value!r}"
+        else:
+            assert value is True, f"{name} not wired ON through the real bootstrap"
+
+    off_cfg = _config(tmp_path).model_copy(update=dict(opt_ins))
+    off_ctx = await run_bootstrap(off_cfg, workload_class=_WORKLOAD)
+    off_fields = _collect(off_ctx)
+    for name, value in off_fields.items():
+        if name == "cp carve-out tuple (stage-4)":
+            assert value == (), f"{name}: {value!r}"
+        else:
+            assert value is False, f"{name} must stay OFF by default"

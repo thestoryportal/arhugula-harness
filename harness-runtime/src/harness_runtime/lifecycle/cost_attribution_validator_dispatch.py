@@ -329,6 +329,7 @@ class CostAttributingValidatorHook:
         ledger_writer: Any = None,
         procedural_tier_snapshot_resolver: Callable[[], Identifier] | None = None,
         signing_backend: SigningBackend | None = None,
+        audit_signing_fail_closed: bool = False,
     ) -> None:
         self._rate_table = rate_table
         self._cost_chain = cost_chain
@@ -342,6 +343,12 @@ class CostAttributingValidatorHook:
         self._procedural_tier_snapshot_resolver = procedural_tier_snapshot_resolver
         # B-47 PR B2a — OD spec v1.33 §21.2.1 signing-backend seam (stage-4).
         self._signing_backend = signing_backend
+        # U-RT-136 — the resolved OD v1.34 §21.2.3 policy (stage-4 factory).
+        # This is the catch CP v1.101 §2 row 1 makes flag-consulting: ON →
+        # the typed family raises THROUGH the hook (the CP firing site's
+        # §28.10.4 invariant-2 carve-out lets it propagate); OFF (default)
+        # byte-preserves the ERROR-log + return.
+        self._audit_signing_fail_closed = audit_signing_fail_closed
         # R-FS-1 arc CA — run-scoped cost-record sink (same list as
         # `ctx.cost_record_accumulator`, threaded by the stage-4 validator
         # factory). The returned SpanCostRecord is appended for the
@@ -414,10 +421,14 @@ class CostAttributingValidatorHook:
             # Codex round-4 P1 (PR B2a): signing failures are compliance
             # events — surfaced loudly, never silently swallowed by the
             # CP framework's spec-committed §28.10.4 hook swallow.
+            # U-RT-136 (CP v1.101 §2 row 1): this catch is flag-consulting —
+            # under fail-closed the typed family RAISES through the hook.
             logging.getLogger("harness.runtime.audit_signing").error(
                 "audit signing failed — signed cost-audit record OMITTED for validator dispatch",
                 exc_info=True,
             )
+            if self._audit_signing_fail_closed:
+                raise
             return
 
         # R-FS-1 arc CA — record into the run-scoped accumulator for the
