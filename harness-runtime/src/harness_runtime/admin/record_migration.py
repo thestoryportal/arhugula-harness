@@ -331,6 +331,11 @@ def _authenticate_record(
             f"cutover record not found at {record_path} — the retag mode "
             f"requires an existing AUTHENTICATED record (author one first)"
         )
+    # ORDERING IS LOAD-BEARING (merge-gate concurrency lens): the
+    # `_reject_record_key_used_by_persisted_rows` scan below takes the
+    # sidecar READ lock — it must stay OUTSIDE the replace-lock section in
+    # `retag_sidecar` (hoisting it inside would self-deadlock: POSIX flock
+    # contends between fds within one process).
     try:
         _reject_record_key_used_by_persisted_rows(
             config, sidecar_path=sidecar_path, record_key_id=record_key_id
@@ -755,11 +760,22 @@ def _publish_record_exclusively(record_path: Path, content: str) -> None:
             f"configured record path {record_path} is a symlink — the trust "
             f"anchor must be a regular file path, never a redirection"
         )
-    tmp_path = record_path.with_name(record_path.name + ".author.tmp")
+    # PID-suffixed temp (merge-gate concurrency lens on PR #1069): a fixed
+    # name let two concurrent --author runs cross-unlink each other's temp
+    # and publish a torn anchor (bounded: consumers verify fail-closed, and
+    # concurrent authoring is outside the documented posture) — a unique
+    # name removes the interleaving entirely.
+    tmp_path = record_path.with_name(f"{record_path.name}.author.{os.getpid()}.tmp")
     with contextlib.suppress(OSError):
         os.unlink(tmp_path)
     nofollow = getattr(os, "O_NOFOLLOW", 0)
-    fd = os.open(str(tmp_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL | nofollow, 0o600)
+    try:
+        fd = os.open(str(tmp_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL | nofollow, 0o600)
+    except FileExistsError as exc:
+        raise RecordMigrationError(
+            f"authoring temp {tmp_path} already exists and could not be "
+            f"cleared — refusing (concurrent authoring?)"
+        ) from exc
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(content)

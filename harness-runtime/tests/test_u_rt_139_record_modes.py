@@ -1049,3 +1049,148 @@ def test_already_tagged_rows_require_external_binding(dep: _Deployment) -> None:
     assert row.source_tag == "tenant-b"
     assert row.tenant_scope == "tenant-b"
     assert row.verification_disposition is VerificationDisposition.QUARANTINED
+
+
+# ---------------------------------------------------------------------------
+# Merge-gate test-witness lens (PR #1069) — alias-guard + CLI-author gaps.
+# ---------------------------------------------------------------------------
+
+
+def test_deleted_retagged_destination_still_fails_coverage(dep: _Deployment) -> None:
+    """Alias-target MEMBERSHIP is load-bearing: post-retag, deleting the
+    tenant-tagged destination row must still fail coverage — the record
+    vouches for the alias TARGET's presence, never for absence."""
+    entry = dep.signed_entry("ref-1", placeholder=True)
+    dep.writer().append(None, entry)
+    record = dep.write_record(_row(entry.entry_hash))
+    retag_sidecar(dep.config(), sidecar_path=dep.sidecar_path, signing_backend=dep.record_backend)
+    dep.sidecar_path.write_text("", encoding="utf-8")  # destination row deleted
+
+    fresh = dep.writer(cutover_record=record)
+    with pytest.raises(ValueError, match="truncated or lost"):
+        fresh.read_full_entries_for_tenant(None)
+
+
+def test_rewrapped_quarantined_row_never_alias_covered(dep: _Deployment) -> None:
+    """The QUARANTINE exclusion in the alias derivation is load-bearing: an
+    externally-rewrapped quarantined row (`_single` -> tenant tag — the
+    wrapper is attacker-writable) must FAIL coverage, never be silently
+    alias-covered into tenant readability."""
+    entry = dep.signed_entry("ref-q")
+    dep.writer().append(None, entry)
+    record = dep.write_record(
+        _row(entry.entry_hash, disposition=VerificationDisposition.QUARANTINED)
+    )
+    retag_sidecar(dep.config(), sidecar_path=dep.sidecar_path, signing_backend=dep.record_backend)
+    rows = [json.loads(line) for line in dep.sidecar_path.read_text().splitlines() if line.strip()]
+    assert rows[0]["tenant_tag"] == "_single"  # quarantined stayed
+    rows[0]["tenant_tag"] = _TENANT  # the attacker's rewrap
+    dep.sidecar_path.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+
+    fresh = dep.writer(cutover_record=record)
+    with pytest.raises(ValueError, match="truncated or lost"):
+        fresh.read_full_entries_for_tenant(None)
+
+
+def test_cli_author_then_retag_end_to_end(
+    dep: _Deployment, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The `--author --retag` CLI path through the real `main(argv)`: both
+    attestation value shapes parse (plain tenant -> four_tuple_real;
+    explicit object -> placeholder_exempt), `--tofu-quarantine` reaches the
+    library (unattested row quarantined), authoring precedes retag, and the
+    invocation exits 0 with the sidecar retagged."""
+    from harness_runtime.admin.migrate_audit_sidecar import main
+
+    exempt_entry = dep.signed_entry("ref-exempt", placeholder=True)
+    real_entry = dep.signed_entry("ref-real")
+    tofu_entry = dep.signed_entry("ref-tofu", placeholder=True)
+    writer = dep.writer()
+    writer.append(None, exempt_entry)
+    writer.append(None, real_entry)
+    writer.append(None, tofu_entry)
+
+    attestation_path = dep.root / "attestation.json"
+    attestation_path.write_text(
+        json.dumps(
+            {
+                exempt_entry.entry_hash: {"tenant": _TENANT, "placeholder_exempt": True},
+                real_entry.entry_hash: _TENANT,
+            }
+        ),
+        encoding="utf-8",
+    )
+    config_path = dep.root / "harness.toml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "[runtime]",
+                'deployment_surface = "local-development"',
+                f'repository_root = "{dep.root}"',
+                'default_topology = "single-threaded-linear"',
+                'persona_tier = "multi-tenant-compliance"',
+                f'tenant_id = "{_TENANT}"',
+                f'audit_cutover_record_path = "{dep.record_path}"',
+                f'audit_cutover_record_key_id = "{_RECORD_KEY}"',
+                f'audit_ledger_binding_id = "{_BINDING}"',
+                "",
+                "[runtime.audit_signing]",
+                'backend = "aws-kms"',
+                "[runtime.audit_signing.key_arns]",
+                f'"{_ROW_KEY}" = "{_ARN_ROW}"',
+                f'"{_RECORD_KEY}" = "{_ARN_RECORD}"',
+                f'"harness-runtime-redaction-token" = "{_ARN_ROW}-redaction"',
+                f'"harness-runtime-dev" = "{_ARN_ROW}-dev"',
+                f'"harness-cost-attribution-v1" = "{_ARN_ROW}-cost"',
+                "",
+                "[runtime.otel]",
+                'otlp_endpoint = "http://localhost:4318"',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "harness_runtime.config.audit_signing.make_audit_signing_backend",
+        lambda config: dep.record_backend,
+    )
+    exit_code = main(
+        [
+            str(dep.ledger_path),
+            "--author",
+            "--retag",
+            "--runtime-config",
+            str(config_path),
+            "--attestation",
+            str(attestation_path),
+            "--tofu-quarantine",
+            "tenant-tofu",
+        ]
+    )
+    assert exit_code == 0, capsys.readouterr().err
+    record_line = dep.record_path.read_text().splitlines()[0]
+    record = AuditCutoverRecord.model_validate_json(record_line)
+    dispositions = {row.entry_hash: row.verification_disposition for row in record.rows}
+    assert dispositions[exempt_entry.entry_hash] is VerificationDisposition.PLACEHOLDER_EXEMPT
+    assert dispositions[real_entry.entry_hash] is VerificationDisposition.FOUR_TUPLE_REAL
+    assert dispositions[tofu_entry.entry_hash] is VerificationDisposition.QUARANTINED
+    tags = {
+        json.loads(line)["tenant_tag"]
+        for line in dep.sidecar_path.read_text().splitlines()
+        if line.strip()
+    }
+    assert tags == {_TENANT, "_single"}  # readable rows retagged; quarantined stayed
+
+    # Malformed attestation value shape → usage exit 2, nothing changed.
+    attestation_path.write_text(json.dumps({exempt_entry.entry_hash: 7}), encoding="utf-8")
+    exit_code = main(
+        [
+            str(dep.ledger_path),
+            "--author",
+            "--runtime-config",
+            str(config_path),
+            "--attestation",
+            str(attestation_path),
+        ]
+    )
+    assert exit_code == 2
