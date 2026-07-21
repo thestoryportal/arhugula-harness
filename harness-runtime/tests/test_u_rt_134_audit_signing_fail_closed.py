@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -1011,3 +1013,228 @@ async def test_stage_4_wires_record_initialization_through_real_ledger_handle(
         await _run_stage_4(ctx)
     assert probe_calls == [ctx.ledger_writer]
     assert not record_path.exists()
+
+
+# ---------------------------------------------------------------------------
+# B-64 — probe->publish window atomicity (greenfield mint vs concurrent append).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="cross_process_write_lock degrades to a no-op on Windows — the B-45 register row",
+)
+def test_b64_probe_publish_window_excludes_concurrent_sidecar_append(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """B-64 close-out witness: `initialize_mtc_audit_signing_record` holds
+    `cross_process_write_lock(sidecar)` across the freshness probes AND the
+    no-clobber publication, so a concurrent audit append — which holds the
+    SAME write lock (`audit_writer.py`'s `_sidecar_thread_lock,
+    cross_process_write_lock(...)` append sites) — cannot land INSIDE the
+    probe->publish window and have an empty cutover record minted over its
+    just-written history.
+
+    Two-thread interleaving: the appender ATTEMPTS its locked append while
+    initialization is provably inside the window (after the freshness probe
+    returned "fresh", before publication); it must stay blocked until the
+    mint completes. Without the B-64 lock (mutation: drop the outer
+    `cross_process_write_lock` scope), the append lands inside the window
+    and `completed_during_window` reads `[True]` — this test pins the lock.
+    """
+    from harness_is.cross_process_ledger_lock import cross_process_write_lock
+    from harness_runtime.lifecycle import audit_signing_fail_closed_validation as validation
+
+    record_path = tmp_path / "record.json"
+    sidecar = tmp_path / "audit-entries.jsonl"
+    kwargs = _mtc_ready_kwargs(tmp_path)
+    kwargs["audit_cutover_record_path"] = str(record_path)
+    kwargs["key_arns"] = {"cutover-key": _ARN_B, "some-row-key": _ARN_A}
+    config = _config(tmp_path, **kwargs)
+
+    in_window = threading.Event()
+    appender_started = threading.Event()
+    append_completed = threading.Event()
+    completed_during_window: list[bool] = []
+
+    real_probe = validation._sidecar_has_rows_locked  # pyright: ignore[reportPrivateUsage]
+
+    def instrumented_probe(sidecar_path: Path) -> bool:
+        result = real_probe(sidecar_path)
+        in_window.set()
+        assert appender_started.wait(timeout=10.0)
+        # The appender is now attempting its locked append. Give it real
+        # time to land if the window were unguarded; record whether it did.
+        completed_during_window.append(append_completed.wait(timeout=0.5))
+        return result
+
+    monkeypatch.setattr(validation, "_sidecar_has_rows_locked", instrumented_probe)
+
+    # Second in-window check AT PUBLICATION ENTRY (merge-gate test-witness
+    # lens): the probe-time check alone would stay green if a future edit
+    # released the lock between the probes and `_greenfield_sign_empty_
+    # record` (the round-3 verify-branch `stack.close()` edit-class applied
+    # to the wrong branch) — the publication half of the B-64 window must
+    # itself be witnessed as still-exclusive.
+    real_greenfield = validation._greenfield_sign_empty_record  # pyright: ignore[reportPrivateUsage]
+
+    def instrumented_greenfield(path: Path, **greenfield_kwargs: object):
+        completed_during_window.append(append_completed.wait(timeout=0.5))
+        return real_greenfield(path, **greenfield_kwargs)  # pyright: ignore[reportArgumentType]
+
+    monkeypatch.setattr(validation, "_greenfield_sign_empty_record", instrumented_greenfield)
+
+    def concurrent_append() -> None:
+        assert in_window.wait(timeout=10.0)
+        appender_started.set()
+        with cross_process_write_lock(sidecar), sidecar.open("a", encoding="utf-8") as handle:
+            handle.write(
+                '{"tenant_tag": "_single", "entry": {"signature_attrs": '
+                '{"audit_signature_key_id": "some-row-key"}}}\n'
+            )
+        append_completed.set()
+
+    appender = threading.Thread(target=concurrent_append)
+    appender.start()
+    try:
+        record = validation.initialize_mtc_audit_signing_record(
+            config,
+            signing_backend=_FakeBackend(),
+            audit_sidecar_path=sidecar,
+        )
+    finally:
+        appender.join(timeout=10.0)
+    assert not appender.is_alive()
+
+    # The load-bearing assertion: the append could NOT complete inside the
+    # probe->publish window — neither at the probe NOR at publication entry
+    # (it stayed blocked on the held write lock through both halves).
+    assert completed_during_window == [False, False]
+    # Convergence: the mint completed (fresh EMPTY record), and the append
+    # landed strictly AFTER publication — the anchor covers pre-append state.
+    assert record is not None
+    assert record.rows == ()
+    assert record_path.is_file()
+    assert append_completed.is_set()
+    assert sidecar.is_file()
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="cross_process_write_lock degrades to a no-op on Windows — the B-45 register row",
+)
+def test_b64_unlockable_sidecar_path_surfaces_typed_config_error(tmp_path: Path) -> None:
+    """Out-of-family Codex [P2] B-64 round-1: lock ACQUISITION failures (a
+    directory at the sidecar path) must stay inside the RT-FAIL-CONFIG
+    taxonomy — before B-64 the helpers' own try/except translated these
+    OSErrors, and the hoisted lock must not regress to leaking a raw
+    `IsADirectoryError` from bootstrap."""
+    sidecar_as_dir = tmp_path / "audit-entries.jsonl"
+    sidecar_as_dir.mkdir()
+    record_path = tmp_path / "record.json"
+    kwargs = _mtc_ready_kwargs(tmp_path)
+    kwargs["audit_cutover_record_path"] = str(record_path)
+    config = _config(tmp_path, **kwargs)
+
+    from harness_runtime.lifecycle.audit_signing_fail_closed_validation import (
+        initialize_mtc_audit_signing_record,
+    )
+
+    with pytest.raises(AuditSigningConfigInvalidError, match="could not be locked"):
+        initialize_mtc_audit_signing_record(
+            config, signing_backend=_FakeBackend(), audit_sidecar_path=sidecar_as_dir
+        )
+    assert not record_path.exists()  # nothing minted over the failure
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="os.mkfifo + the legacy-lock validation path are POSIX-only",
+)
+def test_b64_mangled_legacy_lock_sidecar_surfaces_typed_config_error(tmp_path: Path) -> None:
+    """Out-of-family Codex [P2] B-64 round-2: the lock module's legacy
+    `<sidecar>.lock` validation raises plain `ValueError` for a mangled
+    artifact (FIFO / non-regular / canonical-alias) — acquisition-time
+    translation must keep that inside the RT-FAIL-CONFIG taxonomy too, not
+    leak a raw `ValueError` from bootstrap."""
+    import os as os_module
+
+    sidecar = tmp_path / "audit-entries.jsonl"  # absent — greenfield path
+    os_module.mkfifo(tmp_path / "audit-entries.jsonl.lock")  # mangled legacy artifact
+    record_path = tmp_path / "record.json"
+    kwargs = _mtc_ready_kwargs(tmp_path)
+    kwargs["audit_cutover_record_path"] = str(record_path)
+    config = _config(tmp_path, **kwargs)
+
+    from harness_runtime.lifecycle.audit_signing_fail_closed_validation import (
+        initialize_mtc_audit_signing_record,
+    )
+
+    with pytest.raises(AuditSigningConfigInvalidError, match="could not be locked"):
+        initialize_mtc_audit_signing_record(
+            config, signing_backend=_FakeBackend(), audit_sidecar_path=sidecar
+        )
+    assert not record_path.exists()  # nothing minted over the failure
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="cross_process_write_lock degrades to a no-op on Windows — the B-45 register row",
+)
+def test_b64_verify_branch_releases_sidecar_lock_before_record_verification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Out-of-family Codex [P2] B-64 round-3: on the EXISTING-record branch
+    the exclusive sidecar lock is released BEFORE `_verify_existing_record`
+    (which reaches the KMS network verify) — no publication follows there,
+    so holding the lock would only block concurrent appends/reads for the
+    SDK's latency window. Witness: while verification runs, another thread
+    must be able to acquire the sidecar write lock."""
+    from harness_is.cross_process_ledger_lock import cross_process_write_lock
+    from harness_runtime.lifecycle import audit_signing_fail_closed_validation as validation
+
+    record_path = tmp_path / "record.json"
+    sidecar = tmp_path / "audit-entries.jsonl"
+    kwargs = _mtc_ready_kwargs(tmp_path)
+    kwargs["audit_cutover_record_path"] = str(record_path)
+    kwargs["key_arns"] = {"cutover-key": _ARN_B, "some-row-key": _ARN_A}
+    config = _config(tmp_path, **kwargs)
+    backend = _FakeBackend()
+
+    # First call mints the record (greenfield, sidecar absent); then a
+    # persisted row makes the second call take the verify branch with an
+    # EXISTING sidecar (file-mode lock).
+    minted = validation.initialize_mtc_audit_signing_record(
+        config, signing_backend=backend, audit_sidecar_path=sidecar
+    )
+    assert minted is not None and record_path.is_file()
+    sidecar.write_text(
+        '{"tenant_tag": "_single", "entry": {"signature_attrs": '
+        '{"audit_signature_key_id": "some-row-key"}}}\n',
+        encoding="utf-8",
+    )
+
+    lock_released_during_verify: list[bool] = []
+    real_verify = validation._verify_existing_record  # pyright: ignore[reportPrivateUsage]
+
+    def instrumented_verify(path: Path, **verify_kwargs: object):
+        acquired = threading.Event()
+
+        def try_lock() -> None:
+            with cross_process_write_lock(sidecar):
+                acquired.set()
+
+        prober = threading.Thread(target=try_lock)
+        prober.start()
+        lock_released_during_verify.append(acquired.wait(timeout=5.0))
+        prober.join(timeout=5.0)
+        return real_verify(path, **verify_kwargs)  # pyright: ignore[reportArgumentType]
+
+    monkeypatch.setattr(validation, "_verify_existing_record", instrumented_verify)
+    verified = validation.initialize_mtc_audit_signing_record(
+        config, signing_backend=backend, audit_sidecar_path=sidecar
+    )
+    assert verified is not None
+    # The load-bearing assertion: the sidecar lock was already released
+    # while the record verification ran.
+    assert lock_released_during_verify == [True]
