@@ -293,3 +293,13 @@ a doc-hygiene pass — X-AL-3 forbids fixing it here). Suite 2813/0; 16/16 CI SU
 | Test-witness adequacy | R1 BLOCK (8 bootstrap/factory wiring lines + in-dispatch llm threading grep-provable only — the #1063 defect class) → fixed with the real-run_bootstrap 9-surface ON/OFF wiring witness + the end-to-end dispatch threading witness (both PD-8 probed) → R2 APPROVE (per-line deletion mutations each pinned; OFF-control load-bearing; no line unwitnessed) |
 
 Outcome: MERGE (all-approve). Out-of-family Codex: rounds 1-4 fixed (boundary consumption, redaction, typed-family-vs-wrap ordering, FAILED/PAUSED outcome preservation); round 5 CLEAN; round 6 re-surfaced only the already-registered B-65 residual on byte-identical source (register-and-hold, both other lenses endorsed the registration). 10 PD-8 mutation probes run + restored across the arc.
+
+## PR #1066 — 2026-07-20 — feat/u-rt-137-u-cp-72-tenant-threading
+
+| Lens | Verdict |
+|---|---|
+| Concurrency / races | APPROVE (R1 — frozen-context tenant reads, redaction lock-stack unwind clean, F2-orphan = pre-existing signing-failure class gated by config validation; adjacent note FIXED pre-merge: the reserved-tenant refusal now routes through AuditSigningFailedError at the signing boundary instead of a bare ValueError falling to the generic swallow arms) |
+| Spec conformance / ledgers | APPROVE (R1 — six-site enumeration complete; U-RT-137 acc 1-4 + U-CP-72 acc 6-8 verified against cited files; X-AL-3 clean; anti-aliasing updates spec-faithful per OD v1.34 §21.2.1 row 2 verbatim refusal commitment; Class-3 notes: webhook cost path production-dormant pre-existing FM-2; plan-vs-as-landed witness-name drift from #1061) |
+| Test-witness adequacy | APPROVE (R1 — all eight production edits + both redaction compose occurrences independently pinned; pre-existing residual noted: wrapper-level five-segment e2e missing for the llm/validator/webhook wrapper origination lines from B-23, outside this diff) |
+
+Outcome: MERGE (all-approve). Out-of-family Codex: round 1 CLEAN, round 2 (post taxonomy fix) CLEAN. 5 PD-8 mutation probes run + restored (converter forward; hitl call-site; BOTH redaction compose occurrences — the second added after probe 1 exposed half-coverage; OD family-wrap revert).
