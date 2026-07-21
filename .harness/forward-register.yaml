@@ -61,11 +61,11 @@ snapshot:
   total: 66
   open: 0
   design_substrate_gated: 1
-  registered_finding: 15
+  registered_finding: 14
   operator_gated: 2
   held: 1
-  closed: 47
-  identity_digest: c746c5225d4163db
+  closed: 48
+  identity_digest: 5762efe7321ab556
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -1396,7 +1396,8 @@ items:
 
 - id: B-64
   title: Greenfield cutover-record freshness probe and publication are not atomic cross-process
-  status: registered_finding
+  status: closed
+  pr: '#1071'
   summary: 'Registered at the U-RT-134 impl arc (codex round-9 [P1], the arc''s pre-committed
     terminal review round): `initialize_mtc_audit_signing_record`''s ledger-freshness probes (sidecar
     rows + IS `audit:` refs, each under its own short-lived cross_process_read_lock) release their
