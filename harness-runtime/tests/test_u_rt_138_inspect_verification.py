@@ -641,3 +641,80 @@ def test_missing_cutover_record_file_unverified_not_traceback(
     assert exit_code == 3
     assert "UNVERIFIED" in out
     assert "--cutover-record unreadable" in out
+
+
+# ---------------------------------------------------------------------------
+# Codex round-2 findings (this leg).
+# ---------------------------------------------------------------------------
+
+
+def test_config_only_mtc_inspection_engages_unverified(
+    fx: _Fixture, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`--runtime-config` is §13.5 input (v) — it ENGAGES the audit surface
+    by itself. An MTC config with no sidecar and no other audit inputs must
+    produce the explicit UNVERIFIED nonzero result, never the legacy
+    summary; a sub-MTC config alone still preserves the plain summary."""
+    fx.write_ledger(["action-0"])
+    fx.write_config(tier="multi-tenant-compliance")
+
+    # ONLY --runtime-config — no --audit-sidecar (whose mere presence
+    # already engages); the default sidecar path does not exist.
+    config_only = ["--ledger-path", str(fx.ledger_path), "--runtime-config", str(fx.config_path)]
+    exit_code = main(config_only)
+    out = capsys.readouterr().out
+    assert exit_code == 3
+    assert "UNVERIFIED" in out
+
+    fx.write_config(tier="solo-developer", pinned_key=None, binding=None)
+    exit_code = main(config_only)
+    out = capsys.readouterr().out
+    assert exit_code == 0
+    assert "read-only summary" in out
+
+
+def test_unrecorded_baseline_identity_fails(
+    fx: _Fixture, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Observed-vs-recorded completeness: a legacy-baseline identity the
+    authenticated record does NOT claim (by source identity, any scope)
+    must fail the audit — the scope grouping must never silently drop it
+    (an empty signed record + a matching IS ref is not a pass)."""
+    entry = fx.signed_entry("ref-1", tenant_id=None)
+    fx.write_sidecar([], baseline=[("_single", entry.entry_hash)])
+    fx.write_ledger([f"audit:_single:{entry.entry_hash}"])
+    fx.write_config()
+    fx.write_key_map(("ed25519", _ROW_KEY), ("ed25519", _RECORD_KEY))
+    fx.write_record()  # authenticated EMPTY — claims nothing
+
+    exit_code = main(fx.full_verification_argv("--expected-tenant", _TENANT))
+    out = capsys.readouterr().out
+    assert exit_code == 4, out
+    assert "absent from the authenticated cutover record" in out
+
+
+def test_record_key_sharing_row_material_rejected(
+    fx: _Fixture, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Backing-material distinctness: a record key whose key-map entry
+    aliases the SAME KMS ARN as a row-signing key is rejected even though
+    the logical key_ids differ — logical distinctness is not physical
+    independence."""
+    _greenfield_passing(fx)
+    shared_arn = "arn:aws:kms:us-east-1:000000000000:key/shared"
+    payload = {
+        f"ed25519:{_ROW_KEY}": {
+            "backend": AuditSigningBackendKind.AWS_KMS.value,
+            "key_arns": {_ROW_KEY: shared_arn},
+        },
+        f"ed25519:{_RECORD_KEY}": {
+            "backend": AuditSigningBackendKind.AWS_KMS.value,
+            "key_arns": {_RECORD_KEY: shared_arn},
+        },
+    }
+    fx.key_map_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    exit_code = main(fx.full_verification_argv("--expected-tenant", _TENANT))
+    captured = capsys.readouterr()
+    assert exit_code == 3
+    assert "shares backing key material" in captured.err

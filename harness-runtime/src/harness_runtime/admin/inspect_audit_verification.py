@@ -227,8 +227,15 @@ def _read_sidecar(sidecar_path: Path) -> _SidecarContent:
     )
 
 
-def _load_key_map(path: Path) -> dict[str, SigningBackend]:
-    """Parse the operator key map into per-`(algorithm, key_id)` backends."""
+def _load_key_map(path: Path) -> tuple[dict[str, SigningBackend], dict[str, str]]:
+    """Parse the operator key map into per-`(algorithm, key_id)` backends.
+
+    Also returns per-entry BACKING-MATERIAL fingerprints (the physical KMS
+    ARN the logical `key_id` maps to, falling back to the whole canonical
+    `key_arns` mapping) — codex round-2 P1 on this leg: the record-key
+    physical-distinctness check must compare backing material, not logical
+    `key_id` strings; two distinct ids aliasing one ARN share a key.
+    """
     from harness_runtime.config.audit_signing import make_audit_signing_backend
     from harness_runtime.types import AuditSigningConfig
 
@@ -236,17 +243,23 @@ def _load_key_map(path: Path) -> dict[str, SigningBackend]:
     if not isinstance(raw, dict):
         raise ValueError("--signing-key-map must be a JSON object")
     backends: dict[str, SigningBackend] = {}
+    materials: dict[str, str] = {}
     for map_key, spec in cast("dict[str, object]", raw).items():
         if ":" not in map_key:
             raise ValueError(f"key-map key {map_key!r} must be '<algorithm>:<key_id>'")
-        backend = make_audit_signing_backend(AuditSigningConfig.model_validate(spec))
+        config = AuditSigningConfig.model_validate(spec)
+        backend = make_audit_signing_backend(config)
         if backend is None:
             raise ValueError(
                 f"key-map entry {map_key!r} resolves to no backend "
                 f'(backend="none" is not a verification backend)'
             )
         backends[map_key] = backend
-    return backends
+        key_id = map_key.split(":", 1)[1]
+        materials[map_key] = config.key_arns.get(key_id) or json.dumps(
+            sorted(config.key_arns.items()), separators=(",", ":")
+        )
+    return backends, materials
 
 
 def _load_authenticated_record(
@@ -255,6 +268,7 @@ def _load_authenticated_record(
     pinned_key_id: str | None,
     ledger_binding_id: str | None,
     key_map: dict[str, SigningBackend],
+    key_materials: dict[str, str],
     row_key_ids: frozenset[str],
 ) -> tuple[AuditCutoverRecord, bytes]:
     """Load + authenticate the cutover record — typed rejection, never
@@ -292,6 +306,23 @@ def _load_authenticated_record(
             f"cutover record key_id={record.key_id!r} also signs ordinary "
             f"sidecar rows — the record key MUST be physically distinct from "
             f"every row-signing key"
+        )
+    # BACKING-material distinctness (codex round-2 P1): two distinct logical
+    # key_ids aliasing the same KMS ARN share one physical key — the record
+    # trust anchor must be independent of every row-signing key's material.
+    record_map_key = f"{record.algorithm.value}:{record.key_id}"
+    record_material = key_materials.get(record_map_key)
+    row_materials = {
+        material
+        for map_key, material in key_materials.items()
+        if map_key != record_map_key and map_key.split(":", 1)[1] in row_key_ids
+    }
+    if record_material is not None and record_material in row_materials:
+        raise ForgedCutoverRecordError(
+            f"cutover record key {record_map_key!r} shares backing key "
+            f"material with a row-signing key — the record trust anchor "
+            f"must be physically independent (logical key_id distinctness "
+            f"is not sufficient)"
         )
     if ledger_binding_id is None:
         # The OD verifier hard-REQUIRES the binding once a record is
@@ -453,7 +484,9 @@ def run_audit_inspection(
         return _unverified(f"audit sidecar {sidecar_path} unreadable/unparseable: {exc}")
 
     try:
-        key_map = _load_key_map(key_map_path)  # type: ignore[arg-type]  # narrowed above
+        key_map, key_materials = _load_key_map(
+            key_map_path  # type: ignore[arg-type]  # narrowed above
+        )
     except (ValueError, OSError) as exc:
         return _unverified(f"--signing-key-map unusable: {exc}")
 
@@ -467,6 +500,7 @@ def run_audit_inspection(
             pinned_key_id=runtime_config.audit_cutover_record_key_id,
             ledger_binding_id=runtime_config.audit_ledger_binding_id,
             key_map=key_map,
+            key_materials=key_materials,
             row_key_ids=sidecar.row_key_ids,
         )
     except OSError as exc:
@@ -494,6 +528,31 @@ def run_audit_inspection(
                 f"{len(missing)} IS ledger audit: ref(s) with NO surviving "
                 f"sidecar row — deleted/truncated audit history fails the "
                 f"MTC audit (forward coverage): {', '.join(missing)}"
+            ),
+        )
+
+    # Observed-vs-recorded baseline COMPLETENESS (codex round-2 P1): an
+    # observed legacy-baseline identity no record row claims (by SOURCE
+    # identity, any scope) would otherwise be silently dropped by the scope
+    # grouping — the OD §21.2.2 row-6 check must never be bypassable by
+    # simply not naming an identity in the record. Tier-independent, like
+    # the walk's own divergence failures.
+    recorded_source_identities = {(row.source_tag, row.entry_hash) for row in record.rows}
+    unrecorded = [
+        (tag, entry_hash)
+        for tag, entry_hash in sidecar.baseline_identities
+        if (tag, entry_hash) not in recorded_source_identities
+    ]
+    if unrecorded:
+        return AuditInspectionOutcome(
+            disposition="failed",
+            exit_code=EXIT_AUDIT_FAILED,
+            detail=(
+                f"{len(unrecorded)} observed legacy-baseline identity(ies) "
+                f"absent from the authenticated cutover record (OD v1.34 "
+                f"§21.2.2 row 6 completeness — an unrecorded baseline never "
+                f"passes): "
+                + ", ".join(f"({tag!r}, {entry_hash!r})" for tag, entry_hash in unrecorded)
             ),
         )
 

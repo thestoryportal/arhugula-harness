@@ -695,6 +695,7 @@ def _run_audit_verification_if_engaged(
         or args.expected_tenant is not None
         or args.signing_key_map is not None
         or args.cutover_record is not None
+        or args.runtime_config is not None
         or sidecar_path.is_file()
     )
     if not engaged:
