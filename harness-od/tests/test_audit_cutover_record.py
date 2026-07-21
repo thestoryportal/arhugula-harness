@@ -570,3 +570,56 @@ def test_validator_bypassing_construction_rejected_at_sign_and_verify() -> None:
         verify_cutover_record_signature(duplicate_source_bypass, real_signature, backend=backend)
         is False
     )
+
+
+# ---------------------------------------------------------------------------
+# B-63 — record-verify infra failures translate to the OD availability type.
+# ---------------------------------------------------------------------------
+
+
+def test_b63_record_verify_availability_raise_maps_to_od_availability_type() -> None:
+    """B-63: a backend infra failure during cutover-record verification
+    surfaces as `AuditVerificationBackendUnavailableError` (cause chained) —
+    never a `False` (unauthenticated) verdict and never a raw vendor leak
+    (OD v1.34 §21.2.2 row 7(b))."""
+    from harness_core import SigningBackendUnavailableError
+    from harness_od.per_family_audit_verification import (
+        AuditVerificationBackendUnavailableError,
+    )
+
+    signer = _Ed25519Backend()
+    record = _golden_record()
+    signature = sign_cutover_record(record, backend=signer)
+
+    class _UnavailableBackend:
+        algorithm = "ed25519"
+
+        def sign(self, *, message: bytes, key_id: str, key_period: int) -> bytes:
+            raise AssertionError("sign must not be reached")
+
+        def verify(self, *, message: bytes, signature: bytes, key_id: str, key_period: int) -> bool:
+            raise SigningBackendUnavailableError("kms throttled (test)")
+
+    with pytest.raises(AuditVerificationBackendUnavailableError) as excinfo:
+        verify_cutover_record_signature(record, signature, backend=_UnavailableBackend())
+    assert isinstance(excinfo.value.__cause__, SigningBackendUnavailableError)
+
+
+def test_b63_record_verify_defect_raise_propagates_unwrapped() -> None:
+    """The defect posture is preserved at the record verifier too: a
+    non-availability raise propagates unwrapped."""
+    signer = _Ed25519Backend()
+    record = _golden_record()
+    signature = sign_cutover_record(record, backend=signer)
+
+    class _DefectBackend:
+        algorithm = "ed25519"
+
+        def sign(self, *, message: bytes, key_id: str, key_period: int) -> bytes:
+            raise AssertionError("sign must not be reached")
+
+        def verify(self, *, message: bytes, signature: bytes, key_id: str, key_period: int) -> bool:
+            raise RuntimeError("programming defect (test)")
+
+    with pytest.raises(RuntimeError, match="programming defect"):
+        verify_cutover_record_signature(record, signature, backend=_DefectBackend())

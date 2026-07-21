@@ -982,3 +982,63 @@ def test_record_ledger_binding_mismatch_rejected() -> None:
         ledger_binding_id="sidecar-A",
     )
     assert report.signature_dispositions == {"verified": 1}
+
+
+# ---------------------------------------------------------------------------
+# B-63 — backend.verify infra failures translate to the OD availability type.
+# ---------------------------------------------------------------------------
+
+
+class _UnavailableBackend:
+    """A backend whose verify raises the shared B-63 availability contract."""
+
+    algorithm = "ed25519"
+
+    def sign(self, *, message: bytes, key_id: str, key_period: int) -> bytes:
+        raise AssertionError("sign must not be reached")
+
+    def verify(self, *, message: bytes, signature: bytes, key_id: str, key_period: int) -> bool:
+        from harness_core import SigningBackendUnavailableError
+
+        raise SigningBackendUnavailableError("kms throttled (test)")
+
+
+class _DefectBackend:
+    """A backend whose verify raises a programming defect (non-availability)."""
+
+    algorithm = "ed25519"
+
+    def sign(self, *, message: bytes, key_id: str, key_period: int) -> bytes:
+        raise AssertionError("sign must not be reached")
+
+    def verify(self, *, message: bytes, signature: bytes, key_id: str, key_period: int) -> bool:
+        raise RuntimeError("programming defect (test)")
+
+
+def test_b63_backend_verify_availability_raise_maps_to_od_availability_type() -> None:
+    """B-63: the resolved backend's `verify()` raising the shared
+    `harness_core.SigningBackendUnavailableError` surfaces as the OD-owned
+    `AuditVerificationBackendUnavailableError` (cause chained) — an
+    availability gap, never a verdict and never a raw leak (OD v1.34
+    §21.2.2 row 7(b))."""
+    from harness_core import SigningBackendUnavailableError
+
+    signer = _Ed25519Backend()
+    entry = _signed_entry("ref-1", backend=signer)
+    with pytest.raises(AuditVerificationBackendUnavailableError) as excinfo:
+        verify_per_family_chains(
+            [entry], tenant_scope=None, backend_resolver=lambda _a, _k: _UnavailableBackend()
+        )
+    assert isinstance(excinfo.value.__cause__, SigningBackendUnavailableError)
+
+
+def test_b63_backend_verify_defect_raise_propagates_unwrapped() -> None:
+    """Row 7(b)'s defect posture is PRESERVED: a non-availability raise from
+    `backend.verify` propagates unwrapped — the B-63 catch is keyed narrowly
+    on the shared type, never a blanket reclassification."""
+    signer = _Ed25519Backend()
+    entry = _signed_entry("ref-1", backend=signer)
+    with pytest.raises(RuntimeError, match="programming defect"):
+        verify_per_family_chains(
+            [entry], tenant_scope=None, backend_resolver=lambda _a, _k: _DefectBackend()
+        )

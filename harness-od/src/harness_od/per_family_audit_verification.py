@@ -36,9 +36,10 @@ Raises `HashChainBreach` (the existing U-OD-30 error arm) on content/linkage
 tampering; raises the NEW `AuditSignatureInvalid` on a signature that fails
 backend verification or is malformed; raises the NEW
 `AuditVerificationBackendUnavailableError` when a resolver cannot supply a
-backend for a `(algorithm, key_id)` pair (an infrastructure/availability gap,
-never a verdict). Returns a frozen per-family + per-signature report on
-success.
+backend for a `(algorithm, key_id)` pair OR the resolved backend's `verify()`
+raises the shared `harness_core.SigningBackendUnavailableError` infra-failure
+contract (B-63) — an infrastructure/availability gap either way, never a
+verdict. Returns a frozen per-family + per-signature report on success.
 """
 
 from __future__ import annotations
@@ -48,6 +49,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from types import MappingProxyType
 
+from harness_core import SigningBackendUnavailableError
 from harness_cp.f5_signing_key_resolution import SIGNATURE_LENGTH_BY_ALGORITHM, SigningBackend
 
 from harness_od.audit_cutover_record import (
@@ -115,37 +117,25 @@ class AuditVerificationBackendUnavailableError(Exception):
 
     An infrastructure/availability failure, retryable by the caller — NEVER
     a verdict on the entry's trustworthiness (an unresolvable key proves
-    nothing about the signature it can't check). Raised ONLY when
-    `backend_resolver` raises the dedicated `VerificationBackendKeyUnknownError`
-    (see that type's docstring — a bare built-in `KeyError` from inside a
-    resolver is NOT treated as "unknown key": it is indistinguishable from
-    an accidental programming `KeyError`, so it propagates unwrapped as a
-    defect; out-of-family Codex [P2] finding, round 2 on this arc). A
-    `backend.verify` call that itself raises is deliberately left UNGUARDED
-    (row 9's breaker-asymmetry rationale: this module never breaker-couples
-    or reclassifies the read path itself, and there is no established typed
-    "verify-side hard failures" family to key a narrow catch on; see
+    nothing about the signature it can't check). Raised on exactly TWO
+    narrowly-typed conditions, never from a blanket catch: (1) the
+    `backend_resolver` raises the dedicated
+    `VerificationBackendKeyUnknownError` (see that type's docstring — a
+    bare built-in `KeyError` from inside a resolver is NOT treated as
+    "unknown key": it is indistinguishable from an accidental programming
+    `KeyError`, so it propagates unwrapped as a defect; out-of-family Codex
+    [P2] finding, round 2 on this arc); (2) B-63 (closed): the resolved
+    backend's `verify()` raises the shared
+    `harness_core.SigningBackendUnavailableError` — the typed contract
+    concrete backends (starting with ADR-D8's `AwsKmsSigningBackend`)
+    raise for infra failures (credential/network/throttling/service, and
+    an unmapped `key_id` at the backend's own mapping), homed in
+    `harness-core` so neither axis imports against the OD-consumes-CP
+    direction. Any OTHER raise from a resolver or `backend.verify` is a
+    programming DEFECT and propagates unwrapped (OD v1.34 §21.2.2 row
+    7(b)); row 9's breaker asymmetry is untouched — the read path is
+    still never breaker-coupled (see
     `test_verify_path_not_breaker_instrumented`).
-
-    KNOWN GAP (out-of-family Codex [P2] finding, round 10 — registered as
-    `B-63` at `.harness/forward-register.yaml`, not fixed here): OD spec
-    v1.34 §21.2.2 row 7(b) calls for backend-verify infrastructure failures
-    to surface typed, but NO contract requiring this exists yet at the
-    `SigningBackend` Protocol (`harness_cp.f5_signing_key_resolution` —
-    checked directly: the Protocol documents `sign`/`verify` with no
-    error-taxonomy terms at all), and a CP-axis concrete backend (e.g.
-    ADR-D8's `AwsKmsSigningBackend`) cannot raise THIS type itself even if
-    it wanted to — CP importing an OD-owned exception would invert the
-    established OD-consumes-CP axis-import direction. A blanket catch at
-    this call site is not a substitute: it would misclassify genuine
-    backend defects as availability, which the same row 7(b) text forbids.
-    Until a shared/CP-side availability-exception contract exists (B-63),
-    a real backend's infra failures (credential/network/throttling) that
-    aren't the vendor's specific signature-mismatch exception propagate
-    UNGUARDED as whatever the backend raised — an accepted residual, not a
-    verdict on U-OD-55's resolver-path availability typing (which IS
-    complete: the row 7(b) example the spec names explicitly, an unknown
-    `key_id`, is fully covered above).
     """
 
 
@@ -409,21 +399,31 @@ def _verify_entry_signature(
         key_period_token=_DEPLOYMENT_BOUND_TOKEN,
         tenant_tag=tenant_tag_for_message,
     )
-    # NOTE (out-of-family Codex [P2]): `backend.verify` is called UNGUARDED —
-    # unlike the resolver's KeyError-specific catch above, there is no
-    # established typed "verify-side hard failures" family (mirroring
-    # AUDIT_SIGNING_HARD_FAILURES on the sign side) to key a narrow catch on,
-    # and row 9 explicitly reserves breaker/availability handling for the
-    # Runtime-owned wrapper — this module must not invent its own wrapping
-    # policy for backend.verify. A raised exception here (programming defect
-    # OR an already-typed availability error a production backend raises)
-    # propagates UNWRAPPED to the caller, never silently reclassified.
-    is_valid = backend.verify(
-        message=message,
-        signature=signature_bytes,
-        key_id=sig_attrs.audit_signature_key_id,
-        key_period=_DEPLOYMENT_BOUND_KEY_PERIOD,
-    )
+    # B-63: `backend.verify` infra failures now HAVE the established typed
+    # family the pre-B-63 UNGUARDED posture was waiting on — the shared
+    # `harness_core.SigningBackendUnavailableError` contract that concrete
+    # backends (starting with `AwsKmsSigningBackend`) raise when they could
+    # not render a verdict for infrastructure reasons. The catch below is
+    # keyed NARROWLY on that type and maps it to the OD-owned availability
+    # error per OD v1.34 §21.2.2 row 7(b); any OTHER raise (a programming
+    # defect) still propagates UNWRAPPED, never silently reclassified —
+    # and row 9's breaker asymmetry is untouched (typed translation is not
+    # breaker-coupling).
+    try:
+        is_valid = backend.verify(
+            message=message,
+            signature=signature_bytes,
+            key_id=sig_attrs.audit_signature_key_id,
+            key_period=_DEPLOYMENT_BOUND_KEY_PERIOD,
+        )
+    except SigningBackendUnavailableError as exc:
+        raise AuditVerificationBackendUnavailableError(
+            f"verification backend unavailable for entry entry_hash="
+            f"{entry.entry_hash!r} (key_id="
+            f"{sig_attrs.audit_signature_key_id!r}): {exc} — an "
+            "infrastructure failure at verify-time is an availability gap, "
+            "not a verdict (OD spec v1.34 §21.2.2 row 7(b); B-63)"
+        ) from exc
     # `is not True` (not `not is_valid`) — a duck-typed backend adapter
     # returning a truthy non-`bool` SDK value (e.g. `{"SignatureValid":
     # False}`) would satisfy `not is_valid` as falsy-ish in SOME shapes but

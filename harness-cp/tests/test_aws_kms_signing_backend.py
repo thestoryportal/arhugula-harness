@@ -169,3 +169,93 @@ def test_construction_rejects_kms_alias(alias_value: str) -> None:
     logical `key_id` — rejected at construction, not merely documented."""
     with pytest.raises(MutableKeyAliasRejectedError, match=_KEY_ID):
         AwsKmsSigningBackend(key_arns={_KEY_ID: alias_value}, kms_client=_FakeKmsClient())
+
+
+# ---------------------------------------------------------------------------
+# B-63 — verify() infra failures are typed availability, defects unwrapped.
+# ---------------------------------------------------------------------------
+
+
+def _availability_raising_client(exc: BaseException) -> _FakeKmsClient:
+    client = _FakeKmsClient()
+
+    def _raising_verify(**_kwargs: object) -> dict[str, bool]:
+        raise exc
+
+    client.verify = _raising_verify  # type: ignore[method-assign]
+    return client
+
+
+def test_b63_verify_boto_client_error_raises_typed_availability() -> None:
+    """A boto `ClientError` from the Verify call (throttling / missing IAM
+    Verify permission / service 5xx) is INFRASTRUCTURE — typed as the shared
+    `SigningBackendUnavailableError` with the vendor exception chained,
+    never a `False` verdict and never a raw vendor leak (OD v1.34 §21.2.2
+    row 7(b); B-63)."""
+    from botocore.exceptions import ClientError
+    from harness_core import SigningBackendUnavailableError
+
+    vendor_exc = ClientError(
+        {"Error": {"Code": "ThrottlingException", "Message": "rate exceeded"}}, "Verify"
+    )
+    backend = AwsKmsSigningBackend({_KEY_ID: _KEY_ARN}, _availability_raising_client(vendor_exc))
+    with pytest.raises(SigningBackendUnavailableError) as excinfo:
+        backend.verify(message=b"m", signature=b"s" * 64, key_id=_KEY_ID, key_period=1)
+    assert excinfo.value.__cause__ is vendor_exc
+
+
+def test_b63_verify_botocore_error_raises_typed_availability() -> None:
+    """A `BotoCoreError` (network/endpoint/credential resolution) is equally
+    availability-classed."""
+    from botocore.exceptions import EndpointConnectionError
+    from harness_core import SigningBackendUnavailableError
+
+    vendor_exc = EndpointConnectionError(endpoint_url="https://kms.test")
+    backend = AwsKmsSigningBackend({_KEY_ID: _KEY_ARN}, _availability_raising_client(vendor_exc))
+    with pytest.raises(SigningBackendUnavailableError):
+        backend.verify(message=b"m", signature=b"s" * 64, key_id=_KEY_ID, key_period=1)
+
+
+def test_b63_verify_non_boto_raise_propagates_unwrapped_as_defect() -> None:
+    """A non-boto raise (a programming defect, e.g. `TypeError`) is NOT
+    availability — it propagates unwrapped per the same spec row ("raises
+    that are NOT the typed availability error ... are DEFECTS")."""
+    from harness_core import SigningBackendUnavailableError
+
+    backend = AwsKmsSigningBackend(
+        {_KEY_ID: _KEY_ARN}, _availability_raising_client(TypeError("defect"))
+    )
+    with pytest.raises(TypeError):
+        backend.verify(message=b"m", signature=b"s" * 64, key_id=_KEY_ID, key_period=1)
+    # And the defect is NOT catchable as availability (taxonomy separation).
+    try:
+        backend.verify(message=b"m", signature=b"s" * 64, key_id=_KEY_ID, key_period=1)
+    except SigningBackendUnavailableError:  # pragma: no cover - failure branch
+        pytest.fail("a programming defect was misclassified as availability")
+    except TypeError:
+        pass
+
+
+def test_b63_invalid_signature_exception_still_means_false_not_availability() -> None:
+    """The modeled mismatch exception keeps meaning `False` — the
+    availability catch must not swallow it (it is caught FIRST)."""
+    backend = AwsKmsSigningBackend({_KEY_ID: _KEY_ARN}, _FakeKmsClient())
+    signature = backend.sign(message=b"message", key_id=_KEY_ID, key_period=1)
+    assert (
+        backend.verify(message=b"TAMPERED", signature=signature, key_id=_KEY_ID, key_period=1)
+        is False
+    )
+
+
+def test_b63_unknown_key_id_is_catchable_as_shared_availability_type() -> None:
+    """The register row's concrete instance: an unmapped `key_id` is
+    availability by spec text — `UnknownSigningKeyIdError` is catchable as
+    BOTH the shared `SigningBackendUnavailableError` AND the pre-B-63
+    `KeyError` base (existing callers keep working)."""
+    from harness_core import SigningBackendUnavailableError
+
+    backend = AwsKmsSigningBackend({_KEY_ID: _KEY_ARN}, _FakeKmsClient())
+    with pytest.raises(SigningBackendUnavailableError):
+        backend.verify(message=b"m", signature=b"s" * 64, key_id="unmapped", key_period=1)
+    with pytest.raises(KeyError):
+        backend.sign(message=b"m", key_id="unmapped", key_period=1)

@@ -30,6 +30,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from enum import StrEnum
 
+from harness_core import SigningBackendUnavailableError
 from harness_cp.f5_signing_key_resolution import SIGNATURE_LENGTH_BY_ALGORITHM, SigningBackend
 from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
 
@@ -404,12 +405,29 @@ def verify_cutover_record_signature(
     ):
         return False
     message = canonical_cutover_record_message(record)
-    return (
-        backend.verify(
+    try:
+        verdict = backend.verify(
             message=message,
             signature=signature,
             key_id=record.key_id,
             key_period=_RECORD_KEY_PERIOD,
         )
-        is True
-    )
+    except SigningBackendUnavailableError as exc:
+        # B-63: a backend infra failure (the shared `harness_core` typed
+        # contract concrete backends raise) is an availability gap, never a
+        # `False` verdict — mapped to the OD-owned availability error per
+        # OD v1.34 §21.2.2 row 7(b). Deferred import: `per_family_audit_
+        # verification` imports FROM this module, so a top-level import
+        # here would cycle; the catch path resolves it at call time. Any
+        # OTHER raise is a programming defect and propagates unwrapped.
+        from harness_od.per_family_audit_verification import (
+            AuditVerificationBackendUnavailableError,
+        )
+
+        raise AuditVerificationBackendUnavailableError(
+            f"verification backend unavailable for cutover record key_id="
+            f"{record.key_id!r}: {exc} — an infrastructure failure at "
+            "verify-time is an availability gap, not a verdict (OD spec "
+            "v1.34 §21.2.2 row 7(b); B-63)"
+        ) from exc
+    return verdict is True
