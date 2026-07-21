@@ -158,6 +158,12 @@ class WalkVerificationOutcome(BaseModel):
 
     invalid: WalkInvalidSignal | None = None
     entry_verdicts: tuple[WalkEntryVerdict, ...] = ()
+    # ACCEPTED RESIDUAL (codex round-8 P2 on the U-RT-138 leg): `dict` is
+    # not deeply frozen — a same-process caller could mutate it between
+    # verification and reporting. `MappingProxyType` here breaks pydantic
+    # deep-copy ("cannot pickle 'mappingproxy'", hit on this very field in
+    # part 1); report paths copy via `dict(...)`, and the consumers are
+    # construct-then-immediately-report CLI surfaces.
     signature_dispositions: dict[str, int] = Field(default_factory=dict)
     baseline_divergences: tuple[str, ...] = ()
 
