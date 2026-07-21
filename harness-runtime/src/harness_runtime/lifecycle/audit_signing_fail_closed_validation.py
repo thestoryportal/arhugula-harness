@@ -378,8 +378,13 @@ def initialize_mtc_audit_signing_record(
     signing_backend: SigningBackend | None,
     audit_sidecar_path: Path | None = None,
     ledger_has_audit_refs: Callable[[], bool] | None = None,
-) -> None:
+) -> AuditCutoverRecord | None:
     """Pass 3 — side-effecting cutover-record load-or-greenfield-init.
+
+    Returns the AUTHENTICATED record (loaded, or the freshly-minted
+    greenfield empty record) so the caller can thread it into the audit
+    writer's coverage join (U-RT-139 live wiring) — `None` when no record
+    path is configured.
 
     Split from `validate_mtc_audit_signing_config` (which MUST run first —
     it guarantees the record inputs are present and valid) so callers can
@@ -417,7 +422,7 @@ def initialize_mtc_audit_signing_record(
         None if _is_blank(config.audit_cutover_record_path) else config.audit_cutover_record_path
     )
     if record_path is None:
-        return
+        return None
     record_key_id = (
         None
         if _is_blank(config.audit_cutover_record_key_id)
@@ -468,13 +473,12 @@ def initialize_mtc_audit_signing_record(
             config, sidecar_path=audit_sidecar_path, record_key_id=record_key_id
         )
     if path.is_file():
-        _verify_existing_record(
+        return _verify_existing_record(
             path,
             expected_key_id=record_key_id,
             expected_ledger_binding_id=record_binding_id,
             signing_backend=signing_backend,
         )
-        return
     # Out-of-family Codex [P2] round-3 finding: `not is_file()` alone
     # conflates "nothing there yet" (genuine greenfield) with "something
     # there that is NOT a regular file" — a directory (untyped
@@ -518,7 +522,7 @@ def initialize_mtc_audit_signing_record(
                 "fresh)",
             )
         )
-    _greenfield_sign_empty_record(
+    return _greenfield_sign_empty_record(
         path,
         key_id=record_key_id,
         ledger_binding_id=record_binding_id,
@@ -664,8 +668,10 @@ def _greenfield_sign_empty_record(
     key_id: str,
     ledger_binding_id: str,
     signing_backend: SigningBackend,
-) -> None:
-    """Sign + write a fresh, empty `AuditCutoverRecord` (codex round-30/51)."""
+) -> AuditCutoverRecord:
+    """Sign + write a fresh, empty `AuditCutoverRecord` (codex round-30/51).
+
+    Returns the minted record for the caller's live-writer wiring."""
     try:
         algorithm = SignatureAlgorithm(signing_backend.algorithm)
     except ValueError as exc:
@@ -777,12 +783,13 @@ def _greenfield_sign_empty_record(
     if lost_publication_race:
         # The winner's record must still be one THIS config + backend
         # accepts — a lost race converges, it never silently diverges.
-        _verify_existing_record(
+        return _verify_existing_record(
             path,
             expected_key_id=key_id,
             expected_ledger_binding_id=ledger_binding_id,
             signing_backend=signing_backend,
         )
+    return record
 
 
 def _verify_existing_record(
@@ -791,8 +798,12 @@ def _verify_existing_record(
     expected_key_id: str,
     expected_ledger_binding_id: str,
     signing_backend: SigningBackend,
-) -> None:
-    """Load + fail-closed-verify an on-disk cutover record against config."""
+) -> AuditCutoverRecord:
+    """Load + fail-closed-verify an on-disk cutover record against config.
+
+    Returns the VERIFIED record (U-RT-139 live-writer wiring — the
+    coverage join consults its `_single`→tenant aliases; the signed record
+    is the alias AUTHORITY, never a free-standing mapping file)."""
     try:
         raw = path.read_text(encoding="utf-8")
         lines = raw.splitlines()
@@ -841,3 +852,4 @@ def _verify_existing_record(
                 "signed under different key material",
             )
         )
+    return record

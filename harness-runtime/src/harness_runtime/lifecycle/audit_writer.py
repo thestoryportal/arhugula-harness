@@ -91,6 +91,7 @@ from harness_is.state_ledger_write import (
     WriteResult,
     read_ledger,
 )
+from harness_od.audit_cutover_record import AuditCutoverRecord, VerificationDisposition
 from harness_od.audit_ledger_types import AuditLedgerEntry, compute_entry_hash
 from harness_od.multi_tenant_trace_separation_and_audit_ledger import sidecar_tag
 from harness_od.per_family_audit_verification import REDACTION_TOKEN_NAMESPACE_PREFIX
@@ -292,6 +293,20 @@ class RuntimeAuditLedgerWriter:
 
     time_source: Callable[[], Timestamp]
     """Timestamp injection point (test determinism). Default: `datetime.now(UTC)`."""
+
+    cutover_record: AuditCutoverRecord | None = None
+    """U-RT-139 live-writer wiring — the AUTHENTICATED cutover record
+    (validated fail-closed at bootstrap by
+    `initialize_mtc_audit_signing_record`, or supplied by the migration
+    subcommand after its own authentication step). The coverage join
+    consults its `"_single"`-to-tenant aliases so a retagged deployment's
+    immutable `audit:_single:<hash>` IS references still report full
+    history against tenant-retagged sidecar identities. The SIGNED record
+    is the alias AUTHORITY (codex round-11 on the plan): a free-standing
+    alias mapping would be attacker-writable at exactly the adversarial
+    tier the record's signature forecloses. `None` = no record configured
+    (pre-cutover / sub-MTC deployments; the join is byte-identical to the
+    pre-U-RT-139 behavior)."""
 
     @property
     def _sidecar_thread_lock(self) -> threading.Lock:
@@ -878,6 +893,30 @@ class RuntimeAuditLedgerWriter:
                 f"references; or intentionally reset BOTH ledgers together)"
             )
 
+    def _record_alias_for(self, identity: tuple[str, str]) -> tuple[str, str] | None:
+        """The record-derived retag alias for a `("_single", entry_hash)`
+        IS-reference identity, or `None`.
+
+        Only `source_tag == "_single"` rows with a TENANT-READABLE
+        disposition (`placeholder_exempt` / `four_tuple_real`) alias —
+        a QUARANTINED `"_single"` row is, by the migration contract,
+        NEVER retagged, so its IS reference must keep matching the
+        un-retagged sidecar row directly (OD v1.34 §21.2.1 row 6).
+        """
+        if self.cutover_record is None:
+            return None
+        tag, entry_hash = identity
+        if tag != self._SINGLE_TENANT_TAG:
+            return None
+        for row in self.cutover_record.rows:
+            if (
+                row.source_tag == self._SINGLE_TENANT_TAG
+                and row.entry_hash == entry_hash
+                and row.verification_disposition is not VerificationDisposition.QUARANTINED
+            ):
+                return (row.tenant_scope, entry_hash)
+        return None
+
     def _assert_is_refs_covered_locked(self, *, allowed_gap: tuple[str, str] | None = None) -> None:
         """Every IS `audit:<tag>:<hash>` ref must have a sidecar row (codex
         round-40 P1) — run after a FULL index fold, so bulk truncation to a
@@ -907,6 +946,13 @@ class RuntimeAuditLedgerWriter:
                 # that as an operator-acknowledged fact, not a loss event.
                 continue
             if identity not in self._sidecar_index.digests:
+                # U-RT-139: a retagged deployment's immutable
+                # `audit:_single:<hash>` reference is covered by the
+                # tenant-retagged sidecar row IFF the AUTHENTICATED cutover
+                # record aliases it (`("_single", h)` -> `(tenant, h)`).
+                alias = self._record_alias_for(identity)
+                if alias is not None and alias in self._sidecar_index.digests:
+                    continue
                 raise ValueError(
                     f"IS ledger references audit entry {entry_hash!r} for "
                     f"tenant_tag={tag!r} but the sidecar holds no such row — "
@@ -1524,6 +1570,7 @@ def materialize_audit_writer_stage(
     ledger_writer: LedgerWriter,
     *,
     time_source: Callable[[], Timestamp] | None = None,
+    cutover_record: AuditCutoverRecord | None = None,
 ) -> AuditWriterStage:
     """Build the stage 4 OD audit-writer registry.
 
@@ -1541,5 +1588,7 @@ def materialize_audit_writer_stage(
         time_source if time_source is not None else lambda: datetime.now(UTC)
     )
     return AuditWriterStage(
-        writer=RuntimeAuditLedgerWriter(ledger_writer=ledger_writer, time_source=ts),
+        writer=RuntimeAuditLedgerWriter(
+            ledger_writer=ledger_writer, time_source=ts, cutover_record=cutover_record
+        ),
     )

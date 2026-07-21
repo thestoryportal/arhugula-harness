@@ -112,7 +112,7 @@ async def execute(
     # IS-refs probe (the freshness AUTHORITY — a deleted sidecar alongside
     # surviving hash-chained `audit:` refs must still read NOT-fresh).
     stage_1_ledger_writer = ctx.ledger_writer
-    initialize_mtc_audit_signing_record(
+    cutover_record = initialize_mtc_audit_signing_record(
         config,
         signing_backend=ctx.audit_signing_backend,
         audit_sidecar_path=(
@@ -128,7 +128,10 @@ async def execute(
     # 2. Audit-ledger writer (depends on stage 1 ledger writer). The redaction
     # token-map path consumes this at multi-tenant cells, so it must exist
     # before the span processor is attached.
-    audit = materialize_audit_writer_stage(config, ctx.ledger_writer)
+    # U-RT-139 live-writer wiring: the AUTHENTICATED record's aliases feed
+    # the writer's coverage join so a retagged deployment's restart fold and
+    # every append see full history against immutable `audit:_single:` refs.
+    audit = materialize_audit_writer_stage(config, ctx.ledger_writer, cutover_record=cutover_record)
     ctx.audit_writer = audit.writer
 
     # 3. Span processor + exporter (attaches to the registered tracer provider).
