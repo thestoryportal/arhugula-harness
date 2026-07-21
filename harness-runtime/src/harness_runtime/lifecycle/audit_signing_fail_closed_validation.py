@@ -490,13 +490,18 @@ def initialize_mtc_audit_signing_record(
         if audit_sidecar_path is not None:
             try:
                 stack.enter_context(cross_process_write_lock(audit_sidecar_path))
-            except OSError as exc:
-                # Out-of-family Codex [P2] B-64 round-1: acquisition can
-                # raise raw (a directory at the sidecar path, permission
-                # denied) — before B-64 those OSErrors surfaced inside the
-                # helpers' own try/except and were translated; keep the
-                # RT-FAIL-CONFIG taxonomy instead of leaking an
-                # unclassified bootstrap exception.
+            except (OSError, ValueError) as exc:
+                # Out-of-family Codex [P2] B-64 rounds 1+2: acquisition can
+                # raise raw — OSError (a directory at the sidecar path,
+                # permission denied) or ValueError (the lock module's
+                # legacy `<sidecar>.lock` validation: FIFO / non-regular /
+                # canonical-alias artifacts). Before B-64 the OSError half
+                # surfaced inside the helpers' own try/except and was
+                # translated; keep the RT-FAIL-CONFIG taxonomy instead of
+                # leaking an unclassified bootstrap exception. (No
+                # double-wrap risk: `AuditSigningConfigInvalidError` IS a
+                # ValueError subclass but cannot originate from the
+                # harness-is lock module.)
                 raise AuditSigningConfigInvalidError(
                     (
                         f"audit sidecar {str(audit_sidecar_path)!r} could not be "

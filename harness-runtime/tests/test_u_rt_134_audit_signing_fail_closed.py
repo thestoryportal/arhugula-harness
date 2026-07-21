@@ -1130,3 +1130,33 @@ def test_b64_unlockable_sidecar_path_surfaces_typed_config_error(tmp_path: Path)
             config, signing_backend=_FakeBackend(), audit_sidecar_path=sidecar_as_dir
         )
     assert not record_path.exists()  # nothing minted over the failure
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="os.mkfifo + the legacy-lock validation path are POSIX-only",
+)
+def test_b64_mangled_legacy_lock_sidecar_surfaces_typed_config_error(tmp_path: Path) -> None:
+    """Out-of-family Codex [P2] B-64 round-2: the lock module's legacy
+    `<sidecar>.lock` validation raises plain `ValueError` for a mangled
+    artifact (FIFO / non-regular / canonical-alias) — acquisition-time
+    translation must keep that inside the RT-FAIL-CONFIG taxonomy too, not
+    leak a raw `ValueError` from bootstrap."""
+    import os as os_module
+
+    sidecar = tmp_path / "audit-entries.jsonl"  # absent — greenfield path
+    os_module.mkfifo(tmp_path / "audit-entries.jsonl.lock")  # mangled legacy artifact
+    record_path = tmp_path / "record.json"
+    kwargs = _mtc_ready_kwargs(tmp_path)
+    kwargs["audit_cutover_record_path"] = str(record_path)
+    config = _config(tmp_path, **kwargs)
+
+    from harness_runtime.lifecycle.audit_signing_fail_closed_validation import (
+        initialize_mtc_audit_signing_record,
+    )
+
+    with pytest.raises(AuditSigningConfigInvalidError, match="could not be locked"):
+        initialize_mtc_audit_signing_record(
+            config, signing_backend=_FakeBackend(), audit_sidecar_path=sidecar
+        )
+    assert not record_path.exists()  # nothing minted over the failure
