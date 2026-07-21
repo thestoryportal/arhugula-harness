@@ -30,12 +30,19 @@ def _plain(text: str) -> str:
 # AC #1 — extended at PR #84 Reading A apply: parent app now registers all
 # 4 subcommands per spec §13.4 + §14.18.1 5-subcommand promise (Track A
 # admin: inspect + shutdown; Track B operator: run + daemon).
-def test_harness_top_help_lists_all_four_subcommands() -> None:
+def test_harness_top_help_lists_all_flat_subcommands() -> None:
     result = runner.invoke(app, ["--help"])
     assert result.exit_code == 0
     out = _plain(result.stdout)
-    for subcommand in ("run", "daemon", "inspect", "shutdown"):
+    # §13.4 flat namespace at v1.101 (B-53 adds migrate-audit-sidecar; the
+    # spec-side count invariant is 6, one row of which is not yet
+    # implemented at HEAD — pre-existing, outside the B-53 amendment).
+    for subcommand in ("run", "daemon", "inspect", "shutdown", "migrate-audit-sidecar"):
         assert subcommand in out, f"parent app help missing {subcommand!r}"
+    # EXACT registry names — a renamed/misregistered command must fail this,
+    # not slip through a substring match.
+    registered = {command.name for command in app.registered_commands}
+    assert registered == {"run", "daemon", "inspect", "shutdown", "migrate-audit-sidecar"}
 
 
 # PR #84 Reading A — `harness inspect --help` delegates to admin module's
@@ -149,3 +156,73 @@ def test_unknown_flag_exits_code_3_with_arg_invalid_fail_class(
     assert excinfo.value.code == 3
     captured = capsys.readouterr()
     assert "RT-FAIL-CLI-ARG-INVALID" in captured.err
+
+
+# U-RT-102 amendment (plan v2.49 §1.6 / spec v1.101 §13.4 row 6, B-53):
+# `harness migrate-audit-sidecar` dispatches the EXISTING migration module's
+# main under the flat namespace — no logic duplicated into the CLI layer.
+def test_harness_migrate_audit_sidecar_dispatches_existing_module_main_under_flat_namespace(
+    tmp_path: Path,
+) -> None:
+    # Half 1 — help delegation: the admin module's argparse inventory shows
+    # through (typer auto-help disabled), proving the pass-through reaches
+    # `harness_runtime.admin.migrate_audit_sidecar:main`.
+    result = runner.invoke(app, ["migrate-audit-sidecar", "--help"])
+    assert result.exit_code == 0
+    out = _plain(result.output)
+    for flag in ("--retag", "--author", "--runtime-config", "--attestation", "--tofu-quarantine"):
+        assert flag in out, (
+            f"`harness migrate-audit-sidecar --help` missing {flag!r} — "
+            "delegation to admin/migrate_audit_sidecar.py main() may have regressed"
+        )
+
+    # Half 2 — the real BODY runs (not just help plumbing): the
+    # legacy-baseline adoption mode against a real pre-sidecar ledger.
+    # Mutation probe: rewiring the dispatch to a different module main (or
+    # dropping the arg forwarding) fails the exit-0 + baseline assertions.
+    from datetime import UTC, datetime
+
+    from harness_is.jsonl_event_ledger_lifecycle import JsonlLedgerHandle
+    from harness_is.state_ledger_entry_schema import Actor, ActorClass, Identifier
+    from harness_is.state_ledger_write import EntryPayload, WriteKey, append_ledger_entry
+
+    ledger_path = tmp_path / "state.jsonl"
+    ledger_path.touch()
+    handle = JsonlLedgerHandle(canonical_path=ledger_path, exists=True, entry_count=0)
+    append_ledger_entry(
+        handle,
+        EntryPayload(
+            action_id=Identifier("audit:_single:" + "a" * 64),
+            idempotency_key=Identifier("idem-0"),
+            actor=Actor(actor_class=ActorClass.AGENT, actor_id="test"),
+            timestamp=datetime(2026, 7, 21, tzinfo=UTC),
+        ),
+        WriteKey(
+            thread_id=Identifier("thread-0"),
+            step_id=Identifier("step-0"),
+            idempotency_key=Identifier("idem-0"),
+        ),
+    )
+    result = runner.invoke(app, ["migrate-audit-sidecar", str(ledger_path)])
+    assert result.exit_code == 0, result.output
+    assert "baselined 1 legacy audit reference" in _plain(result.output)
+    sidecar = ledger_path.parent / "audit-entries.jsonl"
+    assert sidecar.is_file()
+    assert "legacy_baseline" in sidecar.read_text()
+
+
+# Codex on the B-53 promotion: argparse PARSE failures under the parent CLI
+# honor the §14.18.4 contract (RT-FAIL-CLI-ARG-INVALID → exit 3); body
+# return codes pass through unchanged.
+def test_harness_migrate_audit_sidecar_parse_failure_maps_to_arg_invalid(
+    tmp_path: Path,
+) -> None:
+    result = runner.invoke(app, ["migrate-audit-sidecar", "--no-such-option"])
+    assert result.exit_code == 3
+    assert "RT-FAIL-CLI-ARG-INVALID" in _plain(result.output)
+
+    # Body-level usage return (exit 2 by the module contract) is preserved.
+    ledger = tmp_path / "state.jsonl"
+    ledger.touch()
+    result = runner.invoke(app, ["migrate-audit-sidecar", str(ledger), "--retag"])
+    assert result.exit_code == 2  # module body: --retag requires --runtime-config
