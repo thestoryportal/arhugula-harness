@@ -1295,6 +1295,12 @@ class RuntimeAuditLedgerWriter:
         entries: list[AuditLedgerEntry] = []
         seen_hashes: set[str] = set()
         exempt_hashes: set[str] = set()
+        # U-RT-139: every (tenant_tag, entry_hash) identity seen in the scan
+        # regardless of the requested tag — the alias-projected coverage
+        # consult below needs OTHER tags' membership, and this read path
+        # scans the file directly (the membership index may not be folded
+        # on a fresh writer).
+        all_identities: set[tuple[str, str]] = set()
         # B-40 shared read lock (side-effect-free: never O_CREAT, never mkdir)
         # — excludes a concurrent writer's partial line once the lock file
         # exists; the brand-new-file window carries the documented B-46
@@ -1339,6 +1345,7 @@ class RuntimeAuditLedgerWriter:
                             pair[1] for pair in row["legacy_baseline"] if pair[0] == tag
                         )
                         continue
+                    all_identities.add((row["tenant_tag"], row["entry"]["entry_hash"]))
                     if row["tenant_tag"] != tag:
                         continue
                     entry = AuditLedgerEntry.model_validate(row["entry"])
@@ -1382,6 +1389,15 @@ class RuntimeAuditLedgerWriter:
         rehydrated = seen_hashes
         for entry_hash in is_ref_hashes:
             if entry_hash not in rehydrated and entry_hash not in exempt_hashes:
+                # U-RT-139: an immutable `audit:_single:<hash>` reference
+                # whose row was RETAGGED per the authenticated cutover
+                # record is covered by the alias-projected identity — the
+                # row now lives under the tenant tag, which this per-tag
+                # rehydration loop cannot see; membership comes from the
+                # already-folded index.
+                alias = self._record_alias_for((tag, entry_hash))
+                if alias is not None and alias in all_identities:
+                    continue
                 raise ValueError(
                     f"IS ledger references audit entry {entry_hash!r} for "
                     f"tenant_tag={tag!r} but the sidecar holds no such row — "
