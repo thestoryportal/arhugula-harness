@@ -1070,6 +1070,20 @@ def test_b64_probe_publish_window_excludes_concurrent_sidecar_append(
 
     monkeypatch.setattr(validation, "_sidecar_has_rows_locked", instrumented_probe)
 
+    # Second in-window check AT PUBLICATION ENTRY (merge-gate test-witness
+    # lens): the probe-time check alone would stay green if a future edit
+    # released the lock between the probes and `_greenfield_sign_empty_
+    # record` (the round-3 verify-branch `stack.close()` edit-class applied
+    # to the wrong branch) — the publication half of the B-64 window must
+    # itself be witnessed as still-exclusive.
+    real_greenfield = validation._greenfield_sign_empty_record  # pyright: ignore[reportPrivateUsage]
+
+    def instrumented_greenfield(path: Path, **greenfield_kwargs: object):
+        completed_during_window.append(append_completed.wait(timeout=0.5))
+        return real_greenfield(path, **greenfield_kwargs)  # pyright: ignore[reportArgumentType]
+
+    monkeypatch.setattr(validation, "_greenfield_sign_empty_record", instrumented_greenfield)
+
     def concurrent_append() -> None:
         assert in_window.wait(timeout=10.0)
         appender_started.set()
@@ -1093,8 +1107,9 @@ def test_b64_probe_publish_window_excludes_concurrent_sidecar_append(
     assert not appender.is_alive()
 
     # The load-bearing assertion: the append could NOT complete inside the
-    # probe->publish window (it blocked on the held write lock).
-    assert completed_during_window == [False]
+    # probe->publish window — neither at the probe NOR at publication entry
+    # (it stayed blocked on the held write lock through both halves).
+    assert completed_during_window == [False, False]
     # Convergence: the mint completed (fresh EMPTY record), and the append
     # landed strictly AFTER publication — the anchor covers pre-append state.
     assert record is not None
