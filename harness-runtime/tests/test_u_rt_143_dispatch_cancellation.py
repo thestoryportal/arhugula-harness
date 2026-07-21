@@ -701,3 +701,79 @@ def test_b62_trip_during_8b_stops_8c_signing_and_8d_audit_append() -> None:
     # The raced 8b write reads AMBIGUOUS at the ack, never a false clean.
     token.ack()
     assert token.wait_ack(grace_seconds=0.1) is FenceAckOutcome.ACKED_EFFECT_AMBIGUOUS
+
+
+def test_b62_trip_during_8c_signing_stops_8d_audit_append() -> None:
+    """B-62 (merge-gate test-witness lens G1): the 8d audit-append guard is
+    itself load-bearing — a trip landing WHILE 8c signing executes (inside
+    8c's guard) must be refused at 8d's OWN fresh consult before the audit
+    append begins. Without this witness, downgrading the 8d guard to
+    nullcontext (or re-merging it into 8c's) would slip through: the
+    8b-trip witness never reaches 8d."""
+    from types import SimpleNamespace
+    from typing import Any, cast
+
+    import harness_runtime.lifecycle.sub_agent_dispatch as dispatch_mod
+    from harness_is.state_ledger_entry_schema import Identifier
+    from harness_od.audit_ledger_types import SignatureAlgorithm
+    from harness_runtime.lifecycle.sub_agent_dispatch import RuntimeSubAgentDispatcher
+
+    token = DispatchCancelToken()
+    audit_appends: list[object] = []
+
+    class _RecordingLedgerWriter:
+        def __init__(self) -> None:
+            self.appends: list[Any] = []
+
+        def append(self, payload: Any, key: Any) -> Any:
+            self.appends.append((payload, key))
+            return ("entry-hash", payload, key)
+
+    def _tripping_converter(*args: Any, **kwargs: Any) -> Any:
+        token.trip()  # the trip lands while 8c signing executes
+        return SimpleNamespace()
+
+    class _RecordingAuditWriter:
+        def append(self, *, tenant_id: Any, audit_entry: Any) -> Any:
+            audit_appends.append((tenant_id, audit_entry))
+            return ("write-result", audit_entry)
+
+    dispatcher = RuntimeSubAgentDispatcher.__new__(RuntimeSubAgentDispatcher)
+    dispatcher.handoff_registry = cast(
+        Any,
+        SimpleNamespace(
+            dispatch_response_hash=lambda _b: "0" * 64,
+            compose_dispatch_audit=lambda **_k: SimpleNamespace(),
+        ),
+    )
+    ledger = _RecordingLedgerWriter()
+    dispatcher.ledger_writer = cast(Any, ledger)
+    dispatcher.audit_writer = cast(Any, _RecordingAuditWriter())
+    dispatcher.procedural_tier_snapshot_resolver = lambda: Identifier("b" * 64)
+    dispatcher.audit_signing_key_id = "harness-runtime-test"
+    dispatcher.audit_signing_algorithm = SignatureAlgorithm.ED25519
+    dispatcher.signing_backend = None
+    dispatcher.audit_signing_fail_closed = False
+
+    payload = SimpleNamespace(brief=object(), child_workflow_id="child-wf")
+    original_converter = dispatch_mod.cp_audit_to_od_audit
+    dispatch_mod.cp_audit_to_od_audit = _tripping_converter
+    reset = DISPATCH_CANCEL_TOKEN_VAR.set(token)
+    try:
+        with pytest.raises(DispatchFenceTrippedSignal):
+            dispatcher._compose_and_persist_audit(
+                parent_action_id=cast(Any, "workflow:test-b62-8d:step:0"),
+                descent=SimpleNamespace(),
+                payload=cast(Any, payload),
+                step_context=_make_step_context(),
+                raise_on_failure=True,
+            )
+    finally:
+        DISPATCH_CANCEL_TOKEN_VAR.reset(reset)
+        dispatch_mod.cp_audit_to_od_audit = original_converter
+
+    # 8b + 8c executed (the trip raced 8c); 8d never BEGAN.
+    assert len(ledger.appends) == 1
+    assert audit_appends == []
+    token.ack()
+    assert token.wait_ack(grace_seconds=0.1) is FenceAckOutcome.ACKED_EFFECT_AMBIGUOUS
