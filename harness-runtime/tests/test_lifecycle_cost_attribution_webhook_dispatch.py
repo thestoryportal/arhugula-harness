@@ -404,10 +404,17 @@ def test_empty_string_tenant_does_not_alias_no_tenant(
     audit_writer: _RecordingAuditWriter,
     tmp_path: Path,
 ) -> None:
-    """Regression guard (out-of-family Codex [P2], round 5) — the legal,
-    falsy `tenant_id=""` must not alias `tenant_id=None`'s F2 identity (a
-    bare `if tenant_id` truthiness check would collapse both onto the
-    same no-tenant sentinel)."""
+    """Regression guard (out-of-family Codex [P2], round 5) — a non-`None`
+    tenant must not alias `tenant_id=None`'s F2 identity (a bare
+    `if tenant_id` truthiness check would collapse falsy values onto the
+    same no-tenant sentinel).
+
+    U-RT-137 update: the empty string is now REFUSED at signing (OD v1.34
+    §21.2.1 row 2 — the tenant threads through `cp_audit_to_od_audit` to
+    `sign_audit_entry`, whose shared rule-set rejects `""`), which is a
+    strictly STRONGER non-aliasing guarantee than distinct F2 identities —
+    the value can no longer produce an entry at all. The identity-
+    distinctness half is preserved with a legal tenant value."""
     rate_table = _make_rate_table(flat_per_attempt=Decimal("0.01"), plus_egress=False)
     ledger_writer = _build_ledger_writer(tmp_path)
     common = dict(
@@ -424,13 +431,17 @@ def test_empty_string_tenant_does_not_alias_no_tenant(
         ledger_writer=ledger_writer,
     )
     attribute_webhook_dispatch_cost(tenant_id=None, **common)
-    attribute_webhook_dispatch_cost(tenant_id="", **common)
+    attribute_webhook_dispatch_cost(tenant_id="tenant-nonempty", **common)
 
     entries = read_ledger(ledger_writer.handle)
     cost_entries = [e for e in entries if str(e.action_id).startswith("cost:")]
     assert len(cost_entries) == 2, (
-        f"tenant_id=None and tenant_id='' must not alias to the same F2 "
+        f"tenant_id=None and a non-None tenant must not alias to the same F2 "
         f"identity; got {len(cost_entries)} distinct entries"
     )
     entry_cores = {str(e.payload.entry_core) for _, e in audit_writer.appended}
     assert len(entry_cores) == 2
+
+    # The reserved empty string is refused AT SIGNING (fail-loud, not alias).
+    with pytest.raises(ValueError, match="must not be the empty string"):
+        attribute_webhook_dispatch_cost(tenant_id="", **common)

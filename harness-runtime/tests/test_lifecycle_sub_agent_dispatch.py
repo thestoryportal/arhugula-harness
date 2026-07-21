@@ -2255,3 +2255,80 @@ def test_u_rt_136_failed_and_paused_child_outcomes_preserved_on_carrier(
     )
     with pytest.raises(SubAgentChildPausedError):
         off_paused.dispatch(_binding(), _step(), step_context=_step_context())
+
+
+# ---------------------------------------------------------------------------
+# U-RT-137 (CP v1.101 §1 row 4) — the sub-agent 8c compose threads
+# `step_context.tenant_id` into the five-segment signed canonical message.
+# ---------------------------------------------------------------------------
+
+
+class _CapturingEd25519Backend137:
+    """TEST-ONLY SigningBackend double recording every signed message."""
+
+    algorithm = "ed25519"
+
+    def __init__(self) -> None:
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+        self._private_key = Ed25519PrivateKey.generate()
+        self.messages: list[bytes] = []
+
+    def sign(self, *, message: bytes, key_id: str, key_period: int) -> bytes:
+        del key_id, key_period
+        self.messages.append(message)
+        return self._private_key.sign(message)
+
+    def verify(self, *, message: bytes, signature: bytes, key_id: str, key_period: int) -> bool:
+        del message, signature, key_id, key_period
+        return True
+
+
+def test_u_rt_137_sub_agent_compose_signs_five_segment_with_tenant(tmp_path: Path) -> None:
+    """Runtime plan v2.49 §1.4 acc 1 (sub-agent site): the 8c compose sources
+    the signing tenant from `StepExecutionContext.tenant_id` and passes it
+    RAW to the converter — the backend-observed canonical message carries
+    five length-prefixed segments whose fifth is the OD-normalized tenant
+    token; tenant-absent stays the four-tuple (acc 4).
+
+    Mutation probe: dropping the call-site `tenant_id=step_context.tenant_id`
+    argument reverts to the four-tuple → the segment-count assertion FAILS."""
+    from harness_od.multi_tenant_trace_separation_and_audit_ledger import signing_token
+
+    def _parse_segments(message: bytes) -> list[str]:
+        out: list[str] = []
+        rest = message.decode()
+        while rest:
+            length_str, _, tail = rest.partition(":")
+            n = int(length_str)
+            out.append(tail[:n])
+            rest = tail[n:]
+            if rest.startswith("|"):
+                rest = rest[1:]
+        return out
+
+    backend = _CapturingEd25519Backend137()
+    dispatcher, _runner, _exporter = _dispatcher(tmp_path, signing_backend=backend)
+    tenant_ctx = StepExecutionContext(
+        workflow_id="test",
+        parent_action_id=_step_context().parent_action_id,
+        parent_gate_level=_step_context().parent_gate_level,
+        parent_sandbox_tier=_step_context().parent_sandbox_tier,
+        parent_actor=_ACTOR,
+        parent_entry_hash="",
+        parent_idempotency_key=_step_context().parent_idempotency_key,
+        tenant_id="tenant-137",
+        step_index=0,
+    )
+    dispatcher.dispatch(_binding(), _step(), step_context=tenant_ctx)
+    assert backend.messages, "the 8c compose must consult the signing backend"
+    segments = _parse_segments(backend.messages[-1])
+    assert len(segments) == 5
+    assert segments[4] == signing_token("tenant-137")
+
+    # Tenant-absent control (acc 4): the default fixture context has
+    # tenant_id=None → the four-tuple, byte-compat with the pre-amendment path.
+    absent_backend = _CapturingEd25519Backend137()
+    absent_dispatcher, _r2, _e2 = _dispatcher(tmp_path, signing_backend=absent_backend)
+    absent_dispatcher.dispatch(_binding(), _step(), step_context=_step_context())
+    assert len(_parse_segments(absent_backend.messages[-1])) == 4
