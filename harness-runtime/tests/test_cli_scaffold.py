@@ -209,3 +209,20 @@ def test_harness_migrate_audit_sidecar_dispatches_existing_module_main_under_fla
     sidecar = ledger_path.parent / "audit-entries.jsonl"
     assert sidecar.is_file()
     assert "legacy_baseline" in sidecar.read_text()
+
+
+# Codex on the B-53 promotion: argparse PARSE failures under the parent CLI
+# honor the §14.18.4 contract (RT-FAIL-CLI-ARG-INVALID → exit 3); body
+# return codes pass through unchanged.
+def test_harness_migrate_audit_sidecar_parse_failure_maps_to_arg_invalid(
+    tmp_path: Path,
+) -> None:
+    result = runner.invoke(app, ["migrate-audit-sidecar", "--no-such-option"])
+    assert result.exit_code == 3
+    assert "RT-FAIL-CLI-ARG-INVALID" in _plain(result.output)
+
+    # Body-level usage return (exit 2 by the module contract) is preserved.
+    ledger = tmp_path / "state.jsonl"
+    ledger.touch()
+    result = runner.invoke(app, ["migrate-audit-sidecar", str(ledger), "--retag"])
+    assert result.exit_code == 2  # module body: --retag requires --runtime-config

@@ -705,7 +705,23 @@ def migrate_audit_sidecar_command(ctx: typer.Context) -> None:
     """
     from harness_runtime.admin import migrate_audit_sidecar as _migrate_admin
 
-    raise typer.Exit(code=_migrate_admin.main(ctx.args))
+    try:
+        code = _migrate_admin.main(ctx.args)
+    except SystemExit as exc:
+        # argparse PARSE failures raise SystemExit(2) inside the admin
+        # module — under the parent CLI they honor the §14.18.4 arg-parse
+        # contract (RT-FAIL-CLI-ARG-INVALID → exit 3). Body return codes
+        # (0 success / 1 refused / 2 usage-by-return) pass through
+        # unchanged. (The older inspect/shutdown wrappers predate this
+        # remap and keep their landed behavior.)
+        if exc.code == 2:
+            _print_fail_class(
+                _ARG_INVALID_FAIL_CLASS,
+                "migrate-audit-sidecar argument parsing failed (see stderr above)",
+            )
+            raise typer.Exit(code=_ARG_INVALID_EXIT_CODE) from exc
+        raise
+    raise typer.Exit(code=code)
 
 
 # Click UsageError exits with code 2 by default. Per runtime spec v1.35
