@@ -1027,3 +1027,52 @@ def test_json_walk_report_carries_typed_fields(
     assert "exempt_entries" in walk
     assert "quarantined_entries" in walk
     assert "unverified_entries" in walk
+
+
+# ---------------------------------------------------------------------------
+# Codex round-7 findings (this leg).
+# ---------------------------------------------------------------------------
+
+
+def test_record_key_arn_spelling_variants_share_material(
+    fx: _Fixture, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Backing identities are CANONICALIZED before comparison (the
+    bootstrap normalizer): a bare UUID and its full ARN spelling are the
+    same physical key — a record key aliasing a row key's material under
+    an alternate spelling is rejected."""
+    _greenfield_passing(fx)
+    payload = {
+        f"ed25519:{_ROW_KEY}": {
+            "backend": AuditSigningBackendKind.AWS_KMS.value,
+            "key_arns": {_ROW_KEY: "arn:aws:kms:us-east-1:000000000000:key/shared-uuid"},
+        },
+        f"ed25519:{_RECORD_KEY}": {
+            "backend": AuditSigningBackendKind.AWS_KMS.value,
+            "key_arns": {_RECORD_KEY: "shared-uuid"},  # bare-UUID spelling
+        },
+    }
+    fx.key_map_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    exit_code = main(fx.full_verification_argv("--expected-tenant", _TENANT))
+    captured = capsys.readouterr()
+    assert exit_code == 3
+    assert "shares backing key material" in captured.err
+
+
+def test_mixed_baseline_and_full_entry_row_rejected(
+    fx: _Fixture, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Sidecar row shapes are mutually exclusive — a full-entry row
+    tampered to ALSO carry `legacy_baseline` fails closed instead of
+    silently skipping its entry's content-hash/signature verification."""
+    _greenfield_passing(fx)
+    rows = [json.loads(line) for line in fx.sidecar_path.read_text().splitlines()]
+    tag, entry_hash = rows[0]["tenant_tag"], rows[0]["entry"]["entry_hash"]
+    rows[0]["legacy_baseline"] = [[tag, entry_hash]]
+    fx.sidecar_path.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+
+    exit_code = main(fx.full_verification_argv("--expected-tenant", _TENANT))
+    out = capsys.readouterr().out
+    assert exit_code == 3, out
+    assert "mutually exclusive" in out

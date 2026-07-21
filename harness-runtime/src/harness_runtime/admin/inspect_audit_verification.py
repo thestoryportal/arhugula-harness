@@ -237,6 +237,17 @@ def _read_sidecar(sidecar_path: Path) -> _SidecarContent:
             raise ValueError(f"sidecar line {line_number} is not a JSON object")
         row = cast("dict[str, object]", parsed)
         if "legacy_baseline" in row:
+            if "entry" in row or "tenant_tag" in row:
+                # Row shapes are MUTUALLY EXCLUSIVE — a full-entry row
+                # tampered to ALSO carry `legacy_baseline` must never have
+                # its entry silently skipped into an exempt baseline pair
+                # (codex round-7 P1: that skip bypasses content-hash and
+                # signature verification for an altered payload).
+                raise ValueError(
+                    f"sidecar line {line_number}: a row carries BOTH "
+                    f"legacy_baseline and full-entry keys — shapes are "
+                    f"mutually exclusive; treating as external mutation"
+                )
             # The writer's actual shape (`adopt_legacy_is_refs`, mirrored by
             # the sidecar folder at `audit_writer.py`):
             # `{"legacy_baseline": [[tag, hash], ...]}` — ONE row carrying
@@ -302,6 +313,9 @@ def _load_key_map(path: Path) -> tuple[dict[str, SigningBackend], dict[str, str]
         SigningBackendUnavailableError,
         make_audit_signing_backend,
     )
+    from harness_runtime.lifecycle.audit_signing_fail_closed_validation import (
+        _canonical_kms_key_identity,
+    )
     from harness_runtime.types import AuditSigningConfig
 
     raw: object = json.loads(path.read_text(encoding="utf-8"))
@@ -342,7 +356,11 @@ def _load_key_map(path: Path) -> tuple[dict[str, SigningBackend], dict[str, str]
                 f'(backend="none" is not a verification backend)'
             )
         backends[map_key] = backend
-        materials[map_key] = config.key_arns[key_id]
+        # Canonicalized like bootstrap's own distinctness validation — a
+        # bare UUID and its full ARN spelling are the SAME physical key
+        # (codex round-7 P1); raw-string comparison would let an ordinary
+        # row key sign the record under an alternate spelling.
+        materials[map_key] = _canonical_kms_key_identity(config.key_arns[key_id])
     return backends, materials
 
 
