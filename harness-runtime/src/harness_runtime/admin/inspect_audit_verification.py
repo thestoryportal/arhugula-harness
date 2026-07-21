@@ -129,11 +129,25 @@ class AuditInspectionOutcome:
             }
         }
         if self.walk_result is not None:
+            walk = self.walk_result
             base["audit_verification"]["walk"] = {
-                "kind": self.walk_result.kind.value,
-                "detail": self.walk_result.detail,
-                "signature_dispositions": dict(self.walk_result.signature_dispositions),
-                "baseline_divergences": list(self.walk_result.baseline_divergences),
+                "kind": walk.kind.value,
+                "detail": walk.detail,
+                "failure_discriminator": (
+                    walk.failure_discriminator.value
+                    if walk.failure_discriminator is not None
+                    else None
+                ),
+                "rerunnable": walk.rerunnable,
+                "signature_dispositions": dict(walk.signature_dispositions),
+                "baseline_divergences": list(walk.baseline_divergences),
+                # The §20.3.1 explicit report sections — machine consumers
+                # must never have to parse free-form text (codex round-6 P2).
+                "exempt_entries": [v.model_dump(mode="json") for v in walk.exempt_entries],
+                "quarantined_entries": [
+                    v.model_dump(mode="json") for v in walk.quarantined_entries
+                ],
+                "unverified_entries": [v.model_dump(mode="json") for v in walk.unverified_entries],
             }
         base["audit_verification"].update(self.report)
         return base
@@ -295,10 +309,25 @@ def _load_key_map(path: Path) -> tuple[dict[str, SigningBackend], dict[str, str]
         raise ValueError("--signing-key-map must be a JSON object")
     backends: dict[str, SigningBackend] = {}
     materials: dict[str, str] = {}
+    if not raw:
+        # An empty mapping is the row-3 input NOT supplied in substance — at
+        # MTC it would otherwise let a zero-row walk emit a false VERIFIED
+        # (codex round-6 P1).
+        raise ValueError("--signing-key-map contains no entries")
     for map_key, spec in cast("dict[str, object]", raw).items():
         if ":" not in map_key:
             raise ValueError(f"key-map key {map_key!r} must be '<algorithm>:<key_id>'")
         config = AuditSigningConfig.model_validate(spec)
+        key_id = map_key.split(":", 1)[1]
+        if key_id not in config.key_arns:
+            # Validated BEFORE construction: a malformed entry whose
+            # declared key ID its own backend config cannot resolve would
+            # otherwise surface later as an unwrapped
+            # UnknownSigningKeyIdError mid-verification (codex round-6 P2).
+            raise ValueError(
+                f"key-map entry {map_key!r}: declared key id {key_id!r} is "
+                f"absent from its backend config's key_arns"
+            )
         try:
             backend = make_audit_signing_backend(config)
         except SigningBackendUnavailableError as exc:
@@ -313,10 +342,7 @@ def _load_key_map(path: Path) -> tuple[dict[str, SigningBackend], dict[str, str]
                 f'(backend="none" is not a verification backend)'
             )
         backends[map_key] = backend
-        key_id = map_key.split(":", 1)[1]
-        materials[map_key] = config.key_arns.get(key_id) or json.dumps(
-            sorted(config.key_arns.items()), separators=(",", ":")
-        )
+        materials[map_key] = config.key_arns[key_id]
     return backends, materials
 
 

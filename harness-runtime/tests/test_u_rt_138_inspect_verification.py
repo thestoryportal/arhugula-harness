@@ -949,3 +949,81 @@ def test_tampered_tenant_tag_is_disposition_not_traceback(
     out = capsys.readouterr().out
     assert exit_code == 3, out
     assert "invalid tenant tag" in out
+
+
+# ---------------------------------------------------------------------------
+# Codex round-6 findings (this leg).
+# ---------------------------------------------------------------------------
+
+
+def test_empty_key_map_rejected_never_false_verified(
+    fx: _Fixture, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """An MTC zero-row ledger with a `{}` key map must NOT verify — an
+    empty mapping is the row-3 input not supplied in substance."""
+    fx.write_ledger(["action-0"])
+    fx.write_config()  # MTC
+    fx.key_map_path.write_text("{}", encoding="utf-8")
+
+    argv = [
+        "--ledger-path",
+        str(fx.ledger_path),
+        "--runtime-config",
+        str(fx.config_path),
+        "--signing-key-map",
+        str(fx.key_map_path),
+    ]
+    exit_code = main(argv)
+    out = capsys.readouterr().out
+    assert exit_code == 3, out
+    assert "contains no entries" in out
+
+
+def test_key_map_entry_missing_declared_key_id_rejected(
+    fx: _Fixture, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A map entry whose declared key id is absent from its own backend
+    config's key_arns is rejected at load — never an unwrapped
+    UnknownSigningKeyIdError mid-verification."""
+    _greenfield_passing(fx)
+    payload = {
+        f"ed25519:{_ROW_KEY}": {
+            "backend": AuditSigningBackendKind.AWS_KMS.value,
+            "key_arns": {"some-other-key": "arn:aws:kms:us-east-1:000000000000:key/x"},
+        },
+        f"ed25519:{_RECORD_KEY}": {
+            "backend": AuditSigningBackendKind.AWS_KMS.value,
+            "key_arns": {_RECORD_KEY: "arn:aws:kms:us-east-1:000000000000:key/record-key"},
+        },
+    }
+    fx.key_map_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    exit_code = main(fx.full_verification_argv("--expected-tenant", _TENANT))
+    out = capsys.readouterr().out
+    assert exit_code == 3, out
+    assert "absent from its backend config" in out
+
+
+def test_json_walk_report_carries_typed_fields(
+    fx: _Fixture, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The --json walk report serializes the typed result boundary:
+    failure_discriminator, rerunnable, and the explicit entry sections —
+    machine consumers never parse free-form text. Exercised on a FAILED
+    (tampered-signature) walk where the discriminator is load-bearing."""
+    _greenfield_passing(fx)
+    rows = [json.loads(line) for line in fx.sidecar_path.read_text().splitlines()]
+    rows[0]["entry"]["signature_attrs"]["audit_signature_value"] = "QUJD" * 21 + "QQ=="
+    fx.write_sidecar([])  # rewrite below with the tampered row
+    fx.sidecar_path.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+
+    exit_code = main(fx.full_verification_argv("--expected-tenant", _TENANT, "--json"))
+    out = capsys.readouterr().out
+    assert exit_code == 4
+    payload = json.loads(out)
+    walk = payload["audit_verification"]["walk"]
+    assert walk["failure_discriminator"] == "signature-invalid"
+    assert walk["rerunnable"] is False
+    assert "exempt_entries" in walk
+    assert "quarantined_entries" in walk
+    assert "unverified_entries" in walk

@@ -360,7 +360,11 @@ def run_blocking_audit_walk(
                 f"cutover record and the observed set (CP v1.101 §3 row 6 — "
                 f"reported explicitly, never silently passed)"
             ),
-            failure_discriminator=WalkInvalidDiscriminator.SIGNATURE_INVALID,
+            # No row-4 discriminator: signatures and hash chains are VALID
+            # here — the failed trust property is row-6 baseline
+            # completeness, and labeling it SIGNATURE_INVALID misstates it
+            # to result consumers (codex round-6 P2).
+            failure_discriminator=None,
             signature_dispositions=outcome.signature_dispositions,
             exempt_entries=exempt,
             quarantined_entries=quarantined,

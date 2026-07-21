@@ -699,7 +699,7 @@ def _run_audit_verification_if_engaged(
     args: argparse.Namespace,
     ledger_path: Path,
     entries: list[StateLedgerEntry],
-) -> "AuditInspectionOutcome | int | None":
+) -> AuditInspectionOutcome | int | None:
     """Run the §13.5 audit-verification when engaged.
 
     Returns the `AuditInspectionOutcome` for the caller to COMPOSE into the

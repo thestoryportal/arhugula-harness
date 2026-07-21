@@ -353,3 +353,29 @@ def test_invalid_entry_verdict_fails_walk_without_invalid_signal() -> None:
     assert result.kind is WalkResultKind.FAILED
     assert result.failure_discriminator is WalkInvalidDiscriminator.SIGNATURE_INVALID
     assert "INVALID entry verdict" in result.detail
+
+
+def test_baseline_divergence_failure_has_no_row4_discriminator() -> None:
+    """Codex round-6 (U-RT-138 leg): a baseline-divergence failure is a
+    row-6 completeness failure — signatures and hash chains are VALID, so
+    the row-4 `SIGNATURE_INVALID` discriminator must not be attached.
+
+    Mutation probe: restoring `SIGNATURE_INVALID` on that branch → FAILS."""
+
+    class _DivergenceVerifier:
+        def verify(
+            self,
+            audit_entries: Sequence[object],
+            *,
+            tenant_scope: str | None,
+            observed_baseline_identities: Sequence[tuple[str, str]],
+        ) -> WalkVerificationOutcome:
+            del audit_entries, tenant_scope, observed_baseline_identities
+            return WalkVerificationOutcome(
+                baseline_divergences=("recorded identity missing from observed baseline",),
+            )
+
+    result = run_blocking_audit_walk([], verifier=_DivergenceVerifier())
+    assert result.kind is WalkResultKind.FAILED
+    assert result.failure_discriminator is None
+    assert "legacy-baseline divergence" in result.detail
