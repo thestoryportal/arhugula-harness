@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `d20def9c9a7c` |
+| `workspace_state_hash` | `487a4cc5019f` |
 | `last_refreshed` | 2026-07-21T00:00:00Z |
-| `git_head` | `9fa8b274` —  |
+| `git_head` | `c85f1911` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 93 |
 
@@ -49,11 +49,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| 1072 | 2026-07-21 | B-61/B-62 per-effect fence granularity (closed; register 50 closed / 12 registered_finding) |
 | 1071 | 2026-07-21 | B-64 greenfield cutover-record probe->publish lock (closed; register 48 closed / 14 registered_finding) |
 | 1070 | 2026-07-21 | U-RT-102 amendment (B-53 flat-namespace subcommand + arg-parse remap) — the FINAL leg; the ratified B-51/B-52/B-54(+B-53) audit-signing amendment arc is COMPLETE (10 legs, PRs #1061..#1070); forward-register rows B-51..54 closed with PR cites |
 | 1069 | 2026-07-21 | hash reconvergence after the split gate-log commit (content unchanged) |
 | 1068 | 2026-07-20 | CXA v2.21 §2.3.9 B-54 seam R-planned → R-live in-place flip (prescribed at registration; PR #1067 landed the impl arc) + clearance marker + root CLAUDE.md pointer + residual-comment restore |
-| 1067 | 2026-07-20 | U-CP-44/45/42 ⊕ U-RT-138: §20.3.1 blocking audit-walk (CP-owned injected-verifier Protocol + result boundary) + OdVerifierWalkAdapter + inspect §13.5 five verification inputs with MTC exit contract; 9 codex rounds + merge-gate 3-lens all-approve; leg 8 of the B-51/B-52/B-54(+B-53) arc — next legs U-RT-139 + U-RT-102 amendment |
 ---
 
 ---
