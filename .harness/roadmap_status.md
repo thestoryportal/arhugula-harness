@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `3ed126d66267` |
+| `workspace_state_hash` | `d20def9c9a7c` |
 | `last_refreshed` | 2026-07-21T00:00:00Z |
-| `git_head` | `45b14c2f` —  |
+| `git_head` | `9fa8b274` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 93 |
 
@@ -49,11 +49,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| 1071 | 2026-07-21 | B-64 greenfield cutover-record probe->publish lock (closed; register 48 closed / 14 registered_finding) |
 | 1070 | 2026-07-21 | U-RT-102 amendment (B-53 flat-namespace subcommand + arg-parse remap) — the FINAL leg; the ratified B-51/B-52/B-54(+B-53) audit-signing amendment arc is COMPLETE (10 legs, PRs #1061..#1070); forward-register rows B-51..54 closed with PR cites |
 | 1069 | 2026-07-21 | hash reconvergence after the split gate-log commit (content unchanged) |
 | 1068 | 2026-07-20 | CXA v2.21 §2.3.9 B-54 seam R-planned → R-live in-place flip (prescribed at registration; PR #1067 landed the impl arc) + clearance marker + root CLAUDE.md pointer + residual-comment restore |
 | 1067 | 2026-07-20 | U-CP-44/45/42 ⊕ U-RT-138: §20.3.1 blocking audit-walk (CP-owned injected-verifier Protocol + result boundary) + OdVerifierWalkAdapter + inspect §13.5 five verification inputs with MTC exit contract; 9 codex rounds + merge-gate 3-lens all-approve; leg 8 of the B-51/B-52/B-54(+B-53) arc — next legs U-RT-139 + U-RT-102 amendment |
-| PR #1066 | 2026-07-20 | **U-RT-137 ⊕ U-CP-72 RESOLVED — tenant-bearing converter + call-site tenant threading (seventh leg of the B-51/B-52/B-54/B-53 arc; Runtime plan v2.49 §1.4 + CP plan v2.38 §1; CP v1.101 §1 + OD v1.34 §21.2.1 rows 1-3).** `cp_audit_to_od_audit` gains the optional `tenant_id` RAW passthrough (drop-when-None byte-compat, four-tuple byte-identical witnessed); all SIX converter-based production call sites thread `StepExecutionContext.tenant_id` (hitl 8c, sub-agent 8c, four cost builders); the redaction rewire's plan-named end-to-end SIGNED-message witness covers BOTH compose paths (transaction + cached-position — the second pinned after a PD-8 probe exposed half-coverage); prewarm stays tenant=None (no synthetic scope; acc 2); reserved tenants (""/"_single") now REFUSE at signing through the typed family (merge-gate concurrency-lens note fixed pre-merge: the refusal routes through AuditSigningFailedError per §21.2.3 row 5 instead of a bare ValueError falling to the generic swallow arms); anti-aliasing tests updated spec-faithfully. Codex rounds 1+2 CLEAN; merge-gate 3-lens all-APPROVE R1 (Class-3 notes: webhook cost path production-dormant FM-2 pre-existing; #1061 witness-name drift; wrapper-level five-segment e2e residual for llm/validator/webhook origination lines). 5 PD-8 probes run + restored. Suites: runtime 2611 + 224 integration, od 1094, cxa 33; 16/16 CI; main CI green. |
 ---
 
 ---
