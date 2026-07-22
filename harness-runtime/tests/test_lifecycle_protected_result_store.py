@@ -652,3 +652,57 @@ def test_gc_sweep_does_not_reclaim_fresh_temp_files(tmp_path: Path) -> None:
 
     store.gc_sweep(now=time.time())
     assert fresh.exists()
+
+
+def test_directory_open_durability_failure_degrades_to_unresolvable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """codex [P1] round 6 on the B-65-A CP-side arc: `_fsync_dir`'s directory-
+    OPEN failure (as opposed to the fsync call round 5 already fixed) ALSO
+    swallowed every `OSError` unconditionally. The sole caller
+    (`_publish_atomic`) only reaches this AFTER `mkdir` + `os.link` already
+    succeeded on the SAME directory, so a real open failure here (EIO,
+    EMFILE, a permission change mid-flight) is a genuine durability signal,
+    not a "fsync unsupported" case — it must reach the existing typed-
+    unresolvable path too.
+
+    Mutation probe: reverting the directory-open branch to swallow every
+    `OSError` unconditionally makes this test return a `str` ref instead of
+    `UnresolvableResultRef`."""
+    store = _store(tmp_path)
+    real_open = os.open
+
+    def _flaky_open(path: object, flags: int, *args: object, **kwargs: object) -> int:
+        # `_fsync_dir` opens with exactly `os.O_RDONLY`; `tempfile.mkstemp`
+        # (the SAME write's temp-file creation, earlier in the call chain)
+        # uses different flags — discriminate on that, not call order.
+        if flags == os.O_RDONLY:
+            raise OSError(errno.EIO, "simulated disk failure opening directory")
+        return real_open(path, flags, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(os, "open", _flaky_open)
+    ref = store.write_once("tenant-a", "payload")
+    assert isinstance(ref, UnresolvableResultRef)
+    assert "store write failed" in ref.reason
+
+
+def test_directory_open_unsupported_errno_still_degrades_gracefully(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Companion to the test above — a genuinely-UNSUPPORTED directory open
+    (EINVAL/ENOTSUP/EOPNOTSUPP) must stay best-effort.
+
+    Mutation probe: broadening the fix to raise on EVERY `OSError` makes
+    this test return `UnresolvableResultRef` instead of a valid `str` ref."""
+    store = _store(tmp_path)
+    real_open = os.open
+
+    def _unsupported_open(path: object, flags: int, *args: object, **kwargs: object) -> int:
+        if flags == os.O_RDONLY:
+            raise OSError(errno.ENOTSUP, "directory open not supported (simulated)")
+        return real_open(path, flags, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(os, "open", _unsupported_open)
+    ref = store.write_once("tenant-a", "payload")
+    assert isinstance(ref, str)
+    assert store.read("tenant-a", ref) == "payload"

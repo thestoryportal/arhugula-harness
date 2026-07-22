@@ -436,7 +436,19 @@ class ProtectedResultStore:
         """
         try:
             dir_fd = os.open(directory, os.O_RDONLY)
-        except OSError:
+        except OSError as exc:
+            # codex [P1] round 6 on this arc — the sole caller
+            # (`_publish_atomic`) only reaches here AFTER `mkdir` +
+            # `os.link` already succeeded on this SAME directory, so a
+            # real open failure here (EIO, EMFILE, a permission change
+            # mid-flight) is a genuine durability signal, not a
+            # "directory fsync unsupported" case — swallowing it
+            # unconditionally (the pre-fix behavior) let `write_once`
+            # publish a live ref with no durability guarantee at all.
+            # Same errno carve-out as the `fsync()` call below, for
+            # symmetry — no platform is expected to hit it here.
+            if exc.errno not in cls._FSYNC_UNSUPPORTED_ERRNOS:
+                raise
             return
         try:
             os.fsync(dir_fd)

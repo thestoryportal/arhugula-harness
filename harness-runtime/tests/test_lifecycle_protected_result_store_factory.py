@@ -76,17 +76,36 @@ def test_custom_key_env_var_name_honored(tmp_path: Path, monkeypatch: pytest.Mon
     assert isinstance(store, ProtectedResultStore)
 
 
-@pytest.mark.parametrize("bad_ttl", [0.0, -1.0])
+@pytest.mark.parametrize(
+    "bad_ttl",
+    [
+        0.0,
+        -1.0,
+        # codex [P2] round 6 on this arc: `gt=0.0` alone admits `inf` (and
+        # any value overflowing to it) — infinity satisfies "greater than
+        # zero", so `current_time - written_at > inf` is never True and the
+        # GC's bounded-retention guarantee is silently defeated. Rejected
+        # via `allow_inf_nan=False`.
+        float("inf"),
+        1e309,  # overflows to inf at the float boundary
+        float("nan"),
+    ],
+)
 def test_nonpositive_ttl_rejected_at_construction(tmp_path: Path, bad_ttl: float) -> None:
-    """codex [P2] on the B-65-A CP-side arc: a zero/negative TTL is rejected at
-    `RuntimeConfig` CONSTRUCTION (the `Field(gt=0.0)` constraint) — without it,
-    the first successful write would immediately collect its own newly-created
-    entry during the opportunistic sweep, returning a live-looking `str` ref
-    whose subsequent read 404s. `model_copy(update=...)` deliberately bypasses
+    """codex [P2] on the B-65-A CP-side arc: a zero/negative/non-finite TTL is
+    rejected at `RuntimeConfig` CONSTRUCTION (the `Field(gt=0.0,
+    allow_inf_nan=False)` constraint) — without it, the first successful
+    write would immediately collect its own newly-created entry during the
+    opportunistic sweep, returning a live-looking `str` ref whose subsequent
+    read 404s (or, for `inf`, would never expire at all — an unbounded
+    sensitive-payload store). `model_copy(update=...)` deliberately bypasses
     pydantic validation (verified empirically, unrelated to this fix), so this
     witness constructs a FRESH config directly — the real deployment-config-
     loading shape, not the `model_copy` test-convenience shape used elsewhere
-    in this file."""
+    in this file.
+
+    Mutation probe: dropping `allow_inf_nan=False` makes the `inf`/`1e309`/
+    `nan` cases construct successfully instead of raising."""
     from pydantic import ValidationError
 
     with pytest.raises(ValidationError):

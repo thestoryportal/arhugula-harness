@@ -149,6 +149,22 @@ from harness_runtime.lifecycle.pause_resume_protocol_types import (
     PauseResumeProtocolConfig,
 )
 
+# B-65-A — protected post-effect result store (runtime spec v1.103 §14.8.11).
+# Same no-import-cycle precedent as EngineOutputStore above (leaf module, no
+# harness imports at module level). codex [P1] round 6 on this arc: the
+# field previously existed ONLY on `_MutableHarnessContext` — `freeze()`
+# never carried it onto this frozen model, so `shutdown()`'s step 5b sweep
+# (wired at round 4) was UNREACHABLE in production; every real bootstrap
+# handed `shutdown()` a frozen ctx with no such attribute at all.
+from harness_runtime.lifecycle.protected_result_store import ProtectedResultStore
+
+# B-65-A — protected post-effect result store (runtime spec v1.103 §14.8.11).
+# Same no-import-cycle precedent as EngineOutputStore above (leaf module, no
+# harness imports at module level). codex [P1] round 6 on this arc: the
+# field previously existed ONLY on `_MutableHarnessContext` — `freeze()`
+# never carried it onto this frozen model, so `shutdown()`'s step 5b sweep
+# (wired at round 4) was UNREACHABLE in production; every real bootstrap
+# handed `shutdown()` a frozen ctx with no such attribute at all.
 # U-RT-94 — ResumeContextHolder sidecar import (per spec v1.25 §4 C-RT-04
 # NEW field row + §14.8.8.9 carrier definition).
 from harness_runtime.lifecycle.resume_context_holder import ResumeContextHolder
@@ -1807,7 +1823,12 @@ class RuntimeConfig(BaseModel):
     harmless — `ctx.protected_result_store` stays `None`.
     """
 
-    protected_result_store_ttl_seconds: float = Field(default=86400.0, gt=0.0)
+    # codex [P2] round 6 on this arc — `gt=0.0` alone admits `inf` (and any
+    # value that overflows to it, e.g. `1e309`): infinity satisfies "greater
+    # than zero", so a TOML/env override could defeat the GC's bounded-
+    # retention guarantee entirely (`current_time - written_at > inf` is
+    # never True). `allow_inf_nan=False` requires a genuinely finite value.
+    protected_result_store_ttl_seconds: float = Field(default=86400.0, gt=0.0, allow_inf_nan=False)
     """B-65-A (Runtime spec v1.103 §14.8.11) — the deployment-configurable
     TTL (spec AC 7) for unacknowledged protected-store entries; a GC sweep
     (bootstrap/shutdown + an opportunistic in-write trigger) collects
@@ -2743,6 +2764,17 @@ class HarnessContext(BaseModel):
     F2 ledger-append (RESERVE-before-COMMIT) and rehydrates the inter-step channel
     from it on an EVENT_SOURCED_REPLAY resume. Read by the driver via the
     `cp_is_wiring` getattr idiom (harness-cp does not import the holder)."""
+
+    protected_result_store: ProtectedResultStore | None = None
+    """B-65-A (runtime spec v1.103 §14.8.11; RATIFIED B-65 Class 2 fork §3b) —
+    the protected post-effect result store, bound at bootstrap stage 4 OD via
+    `materialize_protected_result_store_stage(config)`. `None` at fail-closed
+    =OFF or an absent/malformed signing key (mirrors the composition-root's
+    established "`None` = unit-test ergonomics, production wiring injects a
+    real instance" convention). Read by `llm_dispatch.py` /
+    `runtime_tool_dispatcher.py` / `webhook_delivery_composer.py`'s post-
+    effect fences via `resolve_result_ref_off_loop`, and by `shutdown()`'s
+    step 5b GC sweep."""
 
     # U-RT-94 — Runtime-internal sidecar carrier for one-shot ResumeContext
     # delivery across the pause-resume cycle. Bound at stage 5 LOOP_INIT to

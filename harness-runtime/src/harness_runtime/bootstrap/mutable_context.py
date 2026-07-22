@@ -600,6 +600,14 @@ class _MutableHarnessContext:
             procedural_tier_snapshot_resolver=self.procedural_tier_snapshot_resolver,
             inter_step_output_channel=self.inter_step_output_channel,
             engine_output_store=self.engine_output_store,
+            # codex [P1] round 6 on the B-65-A arc — this field was set on
+            # the mutable builder at stage 4 OD but never forwarded here, so
+            # the frozen ctx `run()`/`resume()` actually pass to
+            # `shutdown()` never carried it: `getattr(ctx,
+            # "protected_result_store", None)` always returned `None`,
+            # making the round-4 step 5b GC sweep unreachable in every real
+            # bootstrap.
+            protected_result_store=self.protected_result_store,
         )
         self.frozen = ctx
         return ctx
