@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `f8999d117166` |
+| `workspace_state_hash` | `415560ba74f7` |
 | `last_refreshed` | 2026-07-21T00:00:00Z |
-| `git_head` | `ff2123db` —  |
+| `git_head` | `cf5d8be5` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 93 |
 
@@ -49,11 +49,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| 1074 | 2026-07-21 | B-58 validator-escalation carriers re-homed to harness-core (closed; register 52 closed / 10 registered_finding) |
 | 1073 | 2026-07-21 | B-63 typed availability for SigningBackend.verify (closed; register 51 closed / 11 registered_finding) |
 | 1072 | 2026-07-21 | B-61/B-62 per-effect fence granularity (closed; register 50 closed / 12 registered_finding) |
 | 1071 | 2026-07-21 | B-64 greenfield cutover-record probe->publish lock (closed; register 48 closed / 14 registered_finding) |
 | 1070 | 2026-07-21 | U-RT-102 amendment (B-53 flat-namespace subcommand + arg-parse remap) — the FINAL leg; the ratified B-51/B-52/B-54(+B-53) audit-signing amendment arc is COMPLETE (10 legs, PRs #1061..#1070); forward-register rows B-51..54 closed with PR cites |
-| 1069 | 2026-07-21 | hash reconvergence after the split gate-log commit (content unchanged) |
 ---
 
 ---
