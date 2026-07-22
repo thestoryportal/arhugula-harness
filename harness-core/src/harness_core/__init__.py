@@ -12,6 +12,9 @@ Members:
 - `AttributeValueType`, `Cardinality` — U-CP-00b schema-attribute enums,
   re-homed here per the U-AS-31 Class 1 fork resolution (cross-axis: CP + AS).
 - The nine identity-alias `str`-newtypes — U-CORE-01 identity module.
+- The three `ValidatorEscalationGate*Error` carriers — B-58 re-home of
+  the validator-escalation HITL-gate failure types (cross-axis: runtime
+  composer raises, CP driver catches; U-CORE-03 precedent).
 - `SigningBackendUnavailableError` — B-63 shared typed availability
   contract for `SigningBackend` infra failures (cross-axis: CP produces,
   OD translates at the verification boundary).
@@ -43,6 +46,11 @@ from harness_core.sandbox_decision_policy import SandboxDecisionPolicy
 from harness_core.schema_attribute_enums import AttributeValueType, Cardinality
 from harness_core.signing_backend_availability import SigningBackendUnavailableError
 from harness_core.sub_agent_dispatch_capacity import SubAgentDispatchCapacityError
+from harness_core.validator_escalation_errors import (
+    ValidatorEscalationGateAuditComposeError,
+    ValidatorEscalationGateRejectedError,
+    ValidatorEscalationGateTimeoutError,
+)
 from harness_core.workflow_event_class import WorkflowEventClass
 from harness_core.workload_class import WorkloadClass
 
@@ -64,6 +72,9 @@ __all__ = [
     "SubAgentDispatchCapacityError",
     "ThreadID",
     "UnitId",
+    "ValidatorEscalationGateAuditComposeError",
+    "ValidatorEscalationGateRejectedError",
+    "ValidatorEscalationGateTimeoutError",
     "WorkflowEventClass",
     "WorkflowID",
     "WorkloadClass",

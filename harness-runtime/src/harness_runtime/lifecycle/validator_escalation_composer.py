@@ -50,31 +50,16 @@ __all__ = [
 ]
 
 
-class ValidatorEscalationGateAuditComposeError(Exception):
-    """Audit composition substep raised a typed error on APPROVE/EDIT/RESPOND.
-
-    Maps to ``RT-FAIL-VALIDATOR-ESCALATION-GATE-COMPOSE`` per runtime spec
-    v1.22 §14.15.5. SUPPRESSED on REJECT path — the rejection brief is the
-    primary fault.
-    """
-
-
-class ValidatorEscalationGateRejectedError(Exception):
-    """Operator selected REJECT at the validator-escalation HITL gate.
-
-    Mirrors ``HITLGateRejectedError`` from the wrap-time composer; maps to
-    the existing ``RT-FAIL-HITL-GATE-REJECTED`` fail class per spec §14.8
-    failure-mode taxonomy (re-used at §14.15 per scoping doc §4).
-    """
-
-
-class ValidatorEscalationGateTimeoutError(Exception):
-    """``AskUserQuestionSurface.ask`` timed out at validator-escalation gate.
-
-    Mirrors ``HITLGateTimeoutError`` from the wrap-time composer; maps to
-    ``RT-FAIL-HITL-GATE-TIMEOUT`` per spec §14.8 failure-mode taxonomy.
-    """
-
+# B-58 re-home: the three gate-failure carriers now live in `harness_core.
+# validator_escalation_errors` (cross-axis: this composer raises them, the
+# CP driver's escalation arms catch them — the carrier-home discipline /
+# U-CORE-03 precedent). Re-exported here VERBATIM (same objects, `__all__`
+# unchanged) so every existing importer of this module keeps working.
+from harness_core import (
+    ValidatorEscalationGateAuditComposeError,
+    ValidatorEscalationGateRejectedError,
+    ValidatorEscalationGateTimeoutError,
+)
 
 # Default timeout for validator-escalation gate invocation (v1.22 MVP).
 # Implementation discretion at the C-RT-25 landing arc per spec §14.15.8;

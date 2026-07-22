@@ -526,7 +526,16 @@ def test_driver_does_not_own_bounded_wait_timeout() -> None:
     # crash-resume disposition policy domain, CP spec v1.63 §1) is NOT a driver-owned
     # bounded-wait timeout primitive, so it is exempt from this guard (it carries "timeout"
     # only as part of the deadline-cut disposition concept).
-    _timeout_symbol_allowlist = {"FanoutTimeoutDisposition"}
+    # `ValidatorEscalationGateTimeoutError` (B-58): the harness-core-homed
+    # HITL-gate deadline carrier, module-level imported for the escalation
+    # `except` arms — the deadline it names is OWNED by the runtime
+    # composer's `AskUserQuestionSurface.ask` (C-RT-25 §14.15), not a
+    # driver bounded-wait primitive; same exemption class as
+    # `FanoutTimeoutDisposition`.
+    _timeout_symbol_allowlist = {
+        "FanoutTimeoutDisposition",
+        "ValidatorEscalationGateTimeoutError",
+    }
     public_names = [n for n in dir(workflow_driver) if not n.startswith("_")]
     for name in public_names:
         if name in _timeout_symbol_allowlist:
