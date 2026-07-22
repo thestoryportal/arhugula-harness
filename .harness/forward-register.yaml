@@ -62,10 +62,10 @@ snapshot:
   open: 0
   design_substrate_gated: 2
   registered_finding: 8
-  operator_gated: 3
+  operator_gated: 2
   held: 1
-  closed: 55
-  identity_digest: 1f2dea99fa1fcf15
+  closed: 56
+  identity_digest: de28fcc0c03936e5
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -1436,8 +1436,23 @@ items:
 - id: B-65
   filing: .harness/class_2_fork_b65_post_effect_signing_carrier_cascade_disposition.md
   title: Post-effect signing carrier disposition at CP topology cascade handlers is unspecified
-  status: operator_gated
-  summary: 'Registered at the U-RT-136/U-CP-73 impl arc (out-of-family codex round-2 [P1]).
+  status: closed
+  pr: '1078 (impl leg); spec leg at PR #1077 (CP spec v1.103 §25.15 + Runtime spec v1.103
+    §14.8.11)'
+  summary: 'CLOSED 2026-07-22 (PR #1078) -- the RATIFIED option-A apply arc landed in full:
+    name-match fence ahead of every branch-failure -> PAUSED/PARTIAL conversion across all 6
+    topology handlers in workflow_driver.py + the encrypted/tenant-bound/ack-gated-retention
+    ProtectedResultStore + result_ref threading through all 4 post-effect raise-site families
+    (llm_dispatch/runtime_tool_dispatcher/sub_agent_dispatch/webhook_delivery_composer). 11
+    out-of-family Codex rounds to terminal (round 11''s two findings closed the arc: one fixed
+    via a collision-free tenant-scope encoding, one registered as B-68). Merge-gate round-1
+    test-witness BLOCK (missing e2e coverage for 3 of 4 raise-site families) fixed +
+    PD-8-probed, APPROVE at round 2. Both packages full-green throughout. Second facet (payload
+    recoverability beyond the in-memory carrier) is DELIVERED by the same store -- it IS the
+    resolution, not a separate follow-on.
+
+    Original registration (2026-07-20, out-of-family codex round-2 [P1]) preserved below.
+    Registered at the U-RT-136/U-CP-73 impl arc (out-of-family codex round-2 [P1]).
     Under `audit_signing_fail_closed=ON`, a `PostEffectAuditSigningError` raised at a fan-out
     branch reaches the CP workflow driver''s topology cascade handling as a generic branch
     failure: under `cascade_policy=pause` it converts to a resumable PAUSED result whose resume
@@ -1498,7 +1513,7 @@ items:
 - id: B-67
   title: Protected result store's TTL GC sweep has no shutdown-time hook — bootstrap half only
   status: closed
-  pr: pending (impl/b65a-protected-result-store, round-4 fix; flips alongside B-65 at merge)
+  pr: '1078 (round-4 fix, landed alongside B-65)'
   summary: 'CORRECTED at out-of-family Codex round 4: this row''s own premise ("this runtime
     has no graceful-teardown chain to hook") was FALSE — `shutdown(ctx)` at
     `harness_runtime/shutdown.py` IS that chain, invoked unconditionally in `run()`''s/
