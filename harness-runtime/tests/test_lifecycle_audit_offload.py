@@ -16,7 +16,11 @@ import threading
 from pathlib import Path
 
 import pytest
-from harness_runtime.lifecycle.audit_offload import resolve_result_ref_off_loop, run_audit_off_loop
+from harness_runtime.lifecycle.audit_offload import (
+    resolve_result_ref_off_loop,
+    run_audit_off_loop,
+    run_off_loop_detach_on_cancel,
+)
 from harness_runtime.lifecycle.protected_result_store import UnresolvableResultRef
 
 
@@ -825,3 +829,47 @@ async def test_cancelled_ref_resolution_loses_carrier_but_write_lands_durably(
     envelope = pickle.loads(store._codec.decrypt(entries[0].read_bytes()))
     assert envelope.tenant_id == "tenant-a"
     assert pickle.loads(envelope.payload) == {"x": 1}
+
+
+@pytest.mark.asyncio
+async def test_run_off_loop_detach_on_cancel_releases_slot_for_replacement_capacity() -> None:
+    """codex [P2] round 10 — stalling every worker via `run_off_loop_detach_
+    on_cancel` (the no-join variant introduced at round 9 for the shutdown
+    sweep) must still release each slot on detach, exactly like
+    `run_audit_off_loop`'s own join-based detach does (the sibling
+    `test_capacity_recovers_after_detaching_stalled_workers` above) —
+    otherwise a handful of stalled shutdown sweeps across a long-lived
+    process's lifetime (`shutdown()` runs per `api.run`/`resume`
+    invocation) would permanently exhaust the shared 4-worker pool and
+    starve later audit-signing/ref-resolution jobs entirely.
+
+    Mutation probe: removing the `release_stalled_slot` call in
+    `run_off_loop_detach_on_cancel`'s except-block makes the final
+    `run_audit_off_loop` call below hang past its `wait_for` timeout
+    instead of returning."""
+    from harness_runtime.lifecycle.audit_offload import AUDIT_OFFLOAD_MAX_WORKERS
+
+    started = threading.Barrier(AUDIT_OFFLOAD_MAX_WORKERS + 1, timeout=10.0)
+    release = threading.Event()
+
+    def _stalled() -> None:
+        started.wait()
+        release.wait(timeout=30.0)
+
+    # Stall every worker via the NO-JOIN variant, then detach them all.
+    tasks = [
+        asyncio.create_task(run_off_loop_detach_on_cancel(_stalled))
+        for _ in range(AUDIT_OFFLOAD_MAX_WORKERS)
+    ]
+    await asyncio.to_thread(started.wait)
+    for task in tasks:
+        task.cancel()
+    for task in tasks:
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(asyncio.shield(task), timeout=5.0)
+
+    # A NEW job through the dedicated pool must still run — a replacement
+    # worker serves it, proving the slots were released, not leaked.
+    result = await asyncio.wait_for(run_audit_off_loop(lambda: "recovered"), timeout=5.0)
+    assert result == "recovered"
+    release.set()

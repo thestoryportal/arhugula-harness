@@ -596,3 +596,46 @@ async def test_legacy_ctor_tenant_used_when_per_call_tenant_omitted(
     assert isinstance(ref, str), f"expected a resolvable ref, got {ref!r}"
     receipt = cast(WebhookDeliveryResult, store.read("tenant-a", ref))
     assert receipt.delivered is True
+
+
+@pytest.mark.asyncio
+async def test_deliver_webhook_threads_effective_tenant_into_cost_attribution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """codex [P2] round 10: `_attribute_webhook_cost_best_effort` used
+    `self._tenant_id` (ctor-bound, always `None` from the bootstrap
+    factory today) even when a per-call `tenant_id` was supplied — as the
+    real HITL webhook-escalation site does via `step_context.tenant_id`.
+    The SAME delivery's audit record and its protected-store recovery ref
+    would then diverge: the ref tenant-scoped, the audit record
+    untenanted. `deliver_webhook` now threads its already-resolved
+    `effective_tenant_id` into the cost-attribution call too.
+
+    Mutation probe: reverting `_attribute_webhook_cost_best_effort`'s
+    `tenant_id=` kwarg back to `self._tenant_id` makes the captured kwarg
+    `None` instead of `"tenant-a"`."""
+    import harness_runtime.lifecycle.cost_attribution_webhook_dispatch as attr_mod
+
+    captured: dict[str, Any] = {}
+
+    def _capture(**kwargs: Any) -> Any:
+        captured.update(kwargs)
+        return None
+
+    monkeypatch.setattr(attr_mod, "attribute_webhook_dispatch_cost", _capture)
+
+    client = _RecordingClient([_MockResponse(200)])
+    composer = WebhookDeliveryComposer(
+        retry_max_attempts=1,
+        http_client_factory=lambda: client,
+        rate_table=cast(Any, object()),
+        cost_chain=cast(Any, object()),
+        audit_writer=cast(Any, object()),
+        workflow_id="wf-tenant-attr",
+        parent_action_id="workflow:wf-tenant-attr:step:0",
+        parent_idempotency_key="parent-idem-tenant-attr",
+    )
+    await composer.deliver_webhook(
+        _make_webhook_config(), _make_payload(), "idem-tenant-attr", tenant_id="tenant-a"
+    )
+    assert captured.get("tenant_id") == "tenant-a"

@@ -314,11 +314,22 @@ async def run_off_loop_detach_on_cancel(
     durability requirement of its own — an incomplete sweep just leaves
     stale entries for the NEXT opportunistic/bootstrap sweep to reap — so
     this variant cancels the concurrent future if it hasn't started yet,
-    and otherwise returns immediately: the worker keeps running on its
-    daemon thread (harmless — daemon threads die with the process, and the
-    dedicated executor's own `finally` block still reclaims its
-    bookkeeping whenever the worker eventually finishes). The caller's OWN
-    `asyncio.wait_for(..., timeout=...)` is the only bound that matters.
+    and otherwise detaches immediately: the worker keeps running on its
+    daemon thread (harmless — daemon threads die with the process). The
+    caller's OWN `asyncio.wait_for(..., timeout=...)` is the only bound
+    that matters.
+
+    **Releases the pool slot on detach (codex [P2] round 10).** A detach
+    that never calls `release_stalled_slot` — as an earlier version of
+    this function did not — leaves the stalled worker's slot permanently
+    counted against the shared, only-4-workers-wide `_AUDIT_OFFLOAD_
+    EXECUTOR`: since `shutdown()` runs per `api.run`/`resume` invocation,
+    a handful of stalled sweeps across a long-lived process's lifetime
+    could exhaust every worker and starve subsequent audit-signing/
+    ref-resolution jobs entirely. `release_stalled_slot` is the SAME
+    mechanism `run_audit_off_loop`'s own detach path already uses, and its
+    `_serving`-membership check makes it safe even if the job happened to
+    finish in the race window between this cancellation and the call.
     """
     context = contextvars.copy_context()
     call = functools.partial(context.run, functools.partial(fn, *args, **kwargs))
@@ -326,7 +337,8 @@ async def run_off_loop_detach_on_cancel(
     try:
         return await asyncio.wrap_future(concurrent_future)
     except asyncio.CancelledError:
-        concurrent_future.cancel()  # no-op if already running — best-effort only.
+        if not concurrent_future.cancel():
+            _AUDIT_OFFLOAD_EXECUTOR.release_stalled_slot(concurrent_future)
         raise
 
 

@@ -2023,3 +2023,72 @@ async def test_bootstrap_survives_protected_result_store_gc_sweep_failure(
     assert ctx.protected_result_store is real_store, (
         "the store must still be wired despite its own GC sweep failing"
     )
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_protected_result_store_sweep_does_not_block_event_loop(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """codex [P2] round 10: `gc_sweep` enumerates + decrypts every entry and
+    can genuinely run long (many entries, a slow filesystem) — calling it
+    SYNCHRONOUSLY inside this async bootstrap stage would block the event
+    loop for that whole duration. Routing through the same no-join
+    dedicated-pool helper `shutdown()`'s step 5b already uses (round 9)
+    frees the loop regardless of sweep duration. A concurrently-running
+    heartbeat coroutine, timestamped rather than merely counted, proves
+    the loop never stalls for the sweep's fixed sleep duration.
+
+    Mutation probe: reverting stage 4 OD to a synchronous
+    `ctx.protected_result_store.gc_sweep()` call makes the max gap between
+    consecutive heartbeat timestamps jump to roughly the sweep's 0.3s
+    sleep, well past the 0.15s bound, because the sweep then executes
+    directly on the loop's own thread instead of a worker thread."""
+    import asyncio
+    import time as time_module
+
+    from harness_runtime.lifecycle.protected_result_store import ProtectedResultStore
+
+    _patch_providers(monkeypatch)
+    _patch_collector(monkeypatch)
+
+    real_store = ProtectedResultStore(
+        tmp_path / "protected-results", codec=Fernet(Fernet.generate_key()), ttl_seconds=86400.0
+    )
+
+    def _blocking_gc_sweep(*, now: float | None = None) -> list[str]:
+        time_module.sleep(0.3)
+        return []
+
+    monkeypatch.setattr(real_store, "gc_sweep", _blocking_gc_sweep)
+    monkeypatch.setattr(
+        _stage_4_od_mod, "materialize_protected_result_store_stage", lambda _config: real_store
+    )
+
+    heartbeat_timestamps: list[float] = []
+
+    async def _heartbeat() -> None:
+        while True:
+            heartbeat_timestamps.append(time_module.monotonic())
+            await asyncio.sleep(0.02)
+
+    heartbeat_task = asyncio.create_task(_heartbeat())
+    await run_bootstrap(_config(tmp_path), workload_class=_WORKLOAD)
+    heartbeat_task.cancel()
+
+    # A fully-blocked loop gives the heartbeat ZERO chances to run at all
+    # (there is no suspension point anywhere for the scheduler to switch
+    # to it) — so an empty/near-empty timestamp list is ITSELF the
+    # blocked-loop signal, not merely an inconclusive gap computation.
+    assert len(heartbeat_timestamps) >= 5, (
+        f"only {len(heartbeat_timestamps)} heartbeats ran during bootstrap — "
+        f"the loop never got a scheduling opportunity, i.e. it was blocked"
+    )
+    gaps = [
+        heartbeat_timestamps[i + 1] - heartbeat_timestamps[i]
+        for i in range(len(heartbeat_timestamps) - 1)
+    ]
+    max_gap = max(gaps)
+    assert max_gap < 0.15, (
+        f"heartbeat stalled for {max_gap:.3f}s during the sweep — the loop was blocked"
+    )

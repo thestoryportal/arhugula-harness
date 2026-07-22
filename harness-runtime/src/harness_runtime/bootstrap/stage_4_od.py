@@ -39,6 +39,7 @@ from harness_runtime.bootstrap.factories.validator_framework_factory import (
 )
 from harness_runtime.bootstrap.mutable_context import _MutableHarnessContext
 from harness_runtime.config.audit_signing import make_audit_signing_backend
+from harness_runtime.lifecycle.audit_offload import run_off_loop_detach_on_cancel
 from harness_runtime.lifecycle.audit_signing_fail_closed_validation import (
     initialize_mtc_audit_signing_record,
     resolve_audit_signing_fail_closed,
@@ -106,8 +107,20 @@ async def execute(
         # bootstrap entirely just to reap a PRIOR process's abandoned
         # entries — the shutdown()-step-5b sweep isolates its own failure
         # the same way; this call should too.
+        #
+        # codex [P2] round 10 on this arc — the sweep enumerates + decrypts
+        # every entry and can genuinely run long on a store with many
+        # entries or a slow filesystem; calling it SYNCHRONOUSLY here
+        # blocks this async bootstrap stage's event loop for however long
+        # that takes. `shutdown()`'s step 5b already offloads the SAME
+        # operation for this exact reason (round 8/9) — the bootstrap half
+        # now does too, via the same no-join dedicated-pool helper (no
+        # `wait_for` bound needed here: bootstrap has no caller-supplied
+        # deadline analogous to `shutdown(timeout=...)`, and offloading to
+        # a worker thread frees the loop regardless of how long the sweep
+        # itself takes).
         try:
-            ctx.protected_result_store.gc_sweep()
+            await run_off_loop_detach_on_cancel(ctx.protected_result_store.gc_sweep)
         except Exception:
             logging.getLogger("harness.runtime.protected_result_store").error(
                 "bootstrap-half GC sweep failed (startup proceeds regardless)",

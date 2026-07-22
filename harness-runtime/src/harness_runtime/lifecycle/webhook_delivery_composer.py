@@ -349,6 +349,7 @@ class WebhookDeliveryComposer:
                 url=url,
                 request_body=request_body,
                 idempotency_key=idempotency_key,
+                tenant_id=effective_tenant_id,
             )
         except AUDIT_SIGNING_HARD_FAILURES as sign_exc:
             # codex [P1] on the B-65-A CP-side arc round 4 — offload via the
@@ -408,6 +409,7 @@ class WebhookDeliveryComposer:
         url: str,
         request_body: dict[str, Any],
         idempotency_key: str,
+        tenant_id: str | None = None,
     ) -> None:
         """Wrap U-OD-40 cost-attribution invocation in best-effort exception
         swallowing per OD §C-OD-26.2 row "hitl.webhook.deliver" + U-OD-40
@@ -420,6 +422,14 @@ class WebhookDeliveryComposer:
         Skipped when any of (rate_table, cost_chain, audit_writer,
         workflow_id, parent_action_id, parent_idempotency_key) is None
         (operator opt-out / bootstrap not yet wired).
+
+        `tenant_id` (codex [P2] round 10 on this arc): `deliver_webhook`
+        passes its already-resolved `effective_tenant_id` — the SAME
+        tenant scope the protected-store write for this identical delivery
+        uses — so the audit record and the recovery ref never diverge.
+        Defaults to `None` (falling back to `self._tenant_id` below) for
+        callers that invoke this helper directly, bypassing
+        `deliver_webhook`'s own resolution.
         """
         if (
             self._rate_table is None
@@ -447,7 +457,7 @@ class WebhookDeliveryComposer:
                 parent_idempotency_key=self._parent_idempotency_key,
                 workflow_id=self._workflow_id,
                 parent_action_id=self._parent_action_id,
-                tenant_id=self._tenant_id,
+                tenant_id=tenant_id if tenant_id is not None else self._tenant_id,
                 ledger_writer=self._ledger_writer,
                 procedural_tier_snapshot_resolver=self._procedural_tier_snapshot_resolver,
                 signing_backend=self._signing_backend,
