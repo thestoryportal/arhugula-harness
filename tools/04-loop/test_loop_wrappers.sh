@@ -57,6 +57,15 @@ CLAUDE_PROJECT_DIR="$REPO" bash "$RESOLVE" R-999 >/dev/null 2>&1 && bad "note-le
 CLAUDE_PROJECT_DIR="$REPO" bash "$RESOLVE" R-999 "" >/dev/null 2>&1 && bad "empty-note resolve.sh accepted" || ok "empty-note resolve.sh exits nonzero"
 grep -q "R-999" "$LEDGER" && bad "note-less R-999 row was written" || ok "no note-less resolved row written"
 
+# 4c) resolve.sh rejects a well-formed but NOT-currently-pending item-id (codex [P2]
+#     round 3: never-deferred / already-resolved / typo'd ids must not silently succeed).
+CLAUDE_PROJECT_DIR="$REPO" bash "$RESOLVE" R-777 "never deferred" >/dev/null 2>&1 && bad "resolve.sh accepted a non-pending item" || ok "resolve.sh rejects a non-pending item (exit nonzero)"
+grep -q "R-777" "$LEDGER" && bad "non-pending R-777 row was written" || ok "no row written for a non-pending item"
+
+# 4d) resolve.sh rejects a malformed item-id (not R-* or B-*).
+CLAUDE_PROJECT_DIR="$REPO" bash "$RESOLVE" not-an-id "some note" >/dev/null 2>&1 && bad "resolve.sh accepted a malformed item-id" || ok "resolve.sh rejects a malformed item-id (exit nonzero)"
+grep -q "not-an-id" "$LEDGER" && bad "malformed-id row was written" || ok "no row written for a malformed item-id"
+
 # 5) halt.sh raises the halt marker + logs a STOP row.
 CLAUDE_PROJECT_DIR="$REPO" bash "$HALT" "forward menu exhausted — 2 awaiting input" >/dev/null 2>&1
 [ -f "$REPO/.harness/.loop-halt" ] && ok "halt.sh raises .loop-halt" || bad ".loop-halt not raised"

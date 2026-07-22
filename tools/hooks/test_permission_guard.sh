@@ -68,9 +68,9 @@ OUT=$(run_on "$(pl Bash "tools/04-loop/defer.sh R-300 'needs OpenAI credentials 
 OUT=$(run_on "$(pl Bash "bash tools/04-loop/defer.sh R-410 'needs container runtime'" '')")
 [ "$(dec "$OUT")" = "allow" ] && ok "allow 'bash tools/04-loop/defer.sh ...'" || bad "bash defer.sh not allowed: $OUT"
 OUT=$(run_on "$(pl Bash "tools/04-loop/resolve.sh R-410 'ratified via council dyad — see PR #1234'" '')")
-[ "$(dec "$OUT")" = "allow" ] && ok "allow resolve.sh wrapper" || bad "resolve.sh not allowed: $OUT"
+[ -z "$(dec "$OUT")" ] && ok "resolve.sh NOT auto-allowed (falls to ask — resolution needs a human present, unlike defer/halt)" || bad "resolve.sh wrongly auto-allowed: $OUT"
 OUT=$(run_on "$(pl Bash "bash tools/04-loop/resolve.sh R-410 'operator ran gh secret set to unblock this'" '')")
-[ "$(dec "$OUT")" = "allow" ] && ok "allow resolve.sh wrapper (even with 'gh secret set' in the note)" || bad "resolve.sh not allowed: $OUT"
+[ "$(dec "$OUT")" = "deny" ] && ok "resolve.sh with a 'gh secret set' note hits the deny-list (no bypass exemption)" || bad "resolve.sh credential note not denied: $OUT"
 OUT=$(run_on "$(pl Bash "tools/04-loop/halt.sh 'forward menu exhausted — 3 awaiting input'" '')")
 [ "$(dec "$OUT")" = "allow" ] && ok "allow halt.sh wrapper (stand-down)" || bad "halt.sh not allowed: $OUT"
 OUT=$(run_on "$(pl Bash 'source tools/hooks/lib.sh && loop_defer R-1 x' '')")
