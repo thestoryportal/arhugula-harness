@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 66
+  total: 67
   open: 0
   design_substrate_gated: 1
   registered_finding: 10
   operator_gated: 2
   held: 1
-  closed: 52
-  identity_digest: 14300b977dd2f559
+  closed: 53
+  identity_digest: 7283d14b643ee253
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -1280,7 +1280,8 @@ items:
 
 - id: B-60
   title: Cancellation fence not checked at nonlinear-topology child entry points
-  status: registered_finding
+  status: closed
+  pr: '#1075'
   summary: 'Registered at the B-48 apply arc (codex round-10 [P1] "check cancellation before
     nonlinear topology dispatch"): when an offloaded child workflow uses PARALLELIZATION,
     ORCHESTRATOR_WORKERS, or HIERARCHICAL_DELEGATION, `_execute_workflow_body` returns into the
@@ -1467,3 +1468,26 @@ items:
     dyad if the spec leg opens; the mechanical fence wiring after ratification is single-axis'
   heading: '### B-65 · Post-effect signing carrier disposition at CP topology cascade handlers
     is unspecified *(registered at the U-RT-136/U-CP-73 impl arc, codex round-2, 2026-07-20)*'
+- id: B-66
+  title: B-60 fence-consult order at admission discrimination has no single-site witness
+  status: registered_finding
+  summary: 'Registered at the B-60 close (PR #1075 merge-gate test-witness lens, rounds 1-2,
+    empirically verified by the lens): (1) the round-10 reorder (per-branch fence consult BEFORE
+    the SubAgentDispatchCapacityError admission discrimination in _proceed_branch/_proceed_worker)
+    has NO single-site behavioral discriminator -- the all-rejected+tripped outcome is pinned
+    JOINTLY with the B-61 drain fence (the lens verified non-vacuity: reverting the order AND
+    disabling the drain fence together fails the witness; either alone preserves the outcome);
+    a protocol-bound all-rejected variant pauses PRE-branch for fix and mutation alike. (2) The
+    _cancel_worker PRE-marker consult is individually shadowed by its own post-marker sibling
+    (disable-pre-alone leaves the b60 set green; the residual marker-present/effect-never-fired
+    state equals the handled crash-between-marker-and-dispatch window). Both orders are
+    strictly-earlier semantics, comment-documented at their sites.'
+  close_out: 'IF a future edit reverts either order (the change-detector class a behavioral
+    witness cannot pin): the in-code comments at the four sites are the guard, and this row is
+    the queryable record. A runnable discriminator would have to be an implementation-order spy
+    (monkeypatched call-order assertion) -- a change-detector, not a witness; build one only if
+    a regression actually occurs. Until then the joint pinning + defense-in-depth layering is
+    the accepted posture (merge-gate round-2 APPROVE, 2026-07-21).'
+  council: no -- documentation-of-accepted-residual row; no design decision pending
+  heading: '### B-66 · B-60 fence-consult order at admission discrimination has no single-site
+    witness *(registered at the B-60 close, merge-gate test-witness lens, 2026-07-21)*'
