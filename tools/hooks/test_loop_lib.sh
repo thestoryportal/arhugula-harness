@@ -117,6 +117,8 @@ SKIP=$(loop_skip_set)
 loop_defer R-410 "needs container runtime"
 loop_defer R-300 "needs OpenAI creds"
 loop_resolve R-410 "ratified via council dyad, PR #1234"
+RC=$?
+[ "$RC" -eq 0 ] && ok "loop_resolve returns 0 on a verified write" || bad "loop_resolve returned $RC on a verified write"
 SKIP=$(loop_skip_set)
 [ "$SKIP" = "R-300" ] && ok "loop_resolve clears item from skip-set ($SKIP)" || bad "resolve did not clear skip-set: [$SKIP]"
 SUM=$(loop_pending_hil_summary)
@@ -124,7 +126,26 @@ printf '%s' "$SUM" | grep -q "R-410" && bad "resolved item still in pending summ
   || ok "loop_resolve clears item from pending summary"
 printf '%s' "$SUM" | grep -q "R-300" && ok "unresolved item still in pending summary" || bad "unresolved item dropped: $SUM"
 
+# 15b) loop_resolve returns FAILURE (not false success) when the ledger write doesn't
+#      take effect — codex [P2] round 5: loop_log always exits 0 by design, so a write
+#      failure must be caught by verifying the EFFECT, not the return code, in the
+#      underlying function itself (this defect previously lived only in the now-removed
+#      resolve.sh wrapper's own check — moving loop_resolve's write path here without
+#      also moving that verification was the regression this test pins).
+loop_defer R-888 "needs infra"
+chmod 0444 "$(loop_status_path)"
+loop_resolve R-888 "ratified" 2>/dev/null
+RC=$?
+chmod 0644 "$(loop_status_path)"
+[ "$RC" -ne 0 ] && ok "loop_resolve returns nonzero when the ledger write does not take effect" || bad "loop_resolve returned 0 despite a failed write"
+SKIP=$(loop_skip_set)
+printf '%s' "$SKIP" | grep -q "R-888" && ok "R-888 remains pending after the failed resolve" || bad "R-888 unexpectedly cleared despite failed write: [$SKIP]"
+
 # 16) Re-deferring an already-resolved item re-flags it (last-write-wins, not sticky-resolved).
+: > "$(loop_status_path)"; loop_activate "re-deferral test" >/dev/null
+loop_defer R-300 "needs OpenAI creds"
+loop_defer R-410 "needs container runtime"
+loop_resolve R-410 "ratified" >/dev/null
 loop_defer R-410 "regressed — needs container runtime again"
 SKIP=$(loop_skip_set)
 [ "$SKIP" = "R-300 R-410" ] && ok "re-deferral after resolve re-flags the item ($SKIP)" || bad "re-deferral not re-flagged: [$SKIP]"

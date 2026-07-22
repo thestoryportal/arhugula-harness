@@ -105,6 +105,18 @@ loop_defer() {
 loop_resolve() {
   local item="$1"; shift
   loop_log RESOLVED-HIL "${item} — $*"
+  # loop_log ALWAYS exits 0 by design (a ledger write must never break the calling hook),
+  # so an unwritable ledger would otherwise make this report success while the item stays
+  # pending — an attended resolution would appear recorded while SessionStart keeps
+  # reporting the stale gate (codex [P2] round 5 on the resolve.sh arc: this same defect
+  # lived in the now-removed resolve.sh wrapper's own post-write check; moved here so the
+  # underlying function's return code is meaningful regardless of caller). Verify the
+  # EFFECT — the item must have left the skip-set (defined below; called after both are
+  # sourced, so no ordering issue) — rather than trust loop_log's return.
+  case " $(loop_skip_set) " in
+    *" ${item} "*) return 1 ;;
+    *) return 0 ;;
+  esac
 }
 
 # The run-scoped SKIP-SET: item-IDs deferred SINCE the last ACTIVATE and not subsequently

@@ -71,6 +71,31 @@ fi
 #    session never sees an auto-decision (other than the §0 hard-DENY above).
 loop_mode_active || exit 0
 
+# Canonicalize a path (relative or absolute) to its physical, symlink-resolved absolute
+# form. Factored out of _safe_path so any OTHER path-IDENTITY check (e.g. the
+# loop_status.md ledger exclusion below) uses the SAME resolution and can't be bypassed by
+# an alias (`.harness//loop_status.md`, `.harness/./loop_status.md`, a symlink) that would
+# fool a naive literal string/case match (codex [P1] round 5 on the resolve.sh arc — a
+# `_safe_path`-style raw-string comparison for the ledger exclusion had exactly this gap).
+# Degrades gracefully to the un-resolved concatenation if a component doesn't exist yet
+# (e.g. `.harness/` not yet created) — still consistent as long as both sides of a
+# comparison call this same function.
+_resolve_abs() {
+  local p="$1"
+  local abs; case "$p" in /*) abs="$p" ;; *) abs="$PROJECT_DIR/$p" ;; esac
+  local dir base rp tgt hops=0
+  dir=$(dirname "$abs"); base=$(basename "$abs")
+  if rp=$(cd "$dir" 2>/dev/null && pwd -P); then abs="$rp/$base"; fi
+  # Follow the symlink CHAIN physically (bounded).
+  while [ -L "$abs" ] && [ "$hops" -lt 16 ]; do
+    tgt=$(readlink "$abs" 2>/dev/null) || break
+    case "$tgt" in /*) abs="$tgt" ;; *) abs="$(dirname "$abs")/$tgt" ;; esac
+    if rp=$(cd "$(dirname "$abs")" 2>/dev/null && pwd -P); then abs="$rp/$(basename "$abs")"; fi
+    hops=$((hops + 1))
+  done
+  printf '%s' "$abs"
+}
+
 # A path is safe to auto-allow iff it is NOT a secret/credential file, is INSIDE the
 # worktree (not .git/, no `..` traversal). Empty = no explicit path (defaults to cwd =
 # worktree) = safe. Used for both read tools (Read/Grep/Glob) and edit tools, so reads of
@@ -81,21 +106,10 @@ _safe_path() {
   case "$p" in
     *.env|*.env.*|*/.env|*credentials*|*.pem|*id_rsa*|*id_ed25519*|*keyring*|*secret*|*.key) return 1 ;;
   esac
-  local abs; case "$p" in /*) abs="$p" ;; *) abs="$PROJECT_DIR/$p" ;; esac
   # Resolve symlinks PHYSICALLY before the containment check: an in-worktree symlink to an
   # outside/secret file would otherwise pass the string-prefix test while the OS follows it
-  # out. Resolve the dir via `pwd -P`, and one level of a symlinked final component.
-  local dir base rp tgt hops=0
-  dir=$(dirname "$abs"); base=$(basename "$abs")
-  if rp=$(cd "$dir" 2>/dev/null && pwd -P); then abs="$rp/$base"; fi
-  # Follow the symlink CHAIN physically (bounded) — a link to a link to outside the repo
-  # would otherwise keep `abs` under $root after only one hop.
-  while [ -L "$abs" ] && [ "$hops" -lt 16 ]; do
-    tgt=$(readlink "$abs" 2>/dev/null) || break
-    case "$tgt" in /*) abs="$tgt" ;; *) abs="$(dirname "$abs")/$tgt" ;; esac
-    if rp=$(cd "$(dirname "$abs")" 2>/dev/null && pwd -P); then abs="$rp/$(basename "$abs")"; fi
-    hops=$((hops + 1))
-  done
+  # out.
+  local abs; abs=$(_resolve_abs "$p")
   # Re-check secret patterns on the resolved target too.
   case "$abs" in
     *.env|*.env.*|*/.env|*credentials*|*.pem|*id_rsa*|*id_ed25519*|*keyring*|*secret*|*.key) return 1 ;;
@@ -256,10 +270,20 @@ case "$TOOL" in
     # The ONLY writers are loop_log's own appends: from defer.sh/halt.sh (always allowed,
     # §2 above) or from loop_resolve called directly in an attended session (no wrapper —
     # see the §2 comment on why resolution has none).
+    #
+    # Compared by CANONICAL absolute path (_resolve_abs), not a literal string/case match
+    # (codex [P1] round 5) — a raw-string check would let `.harness//loop_status.md`,
+    # `.harness/./loop_status.md`, or a symlink alias slip through to the `*)` branch and
+    # auto-allow, defeating this exclusion entirely.
     case "$FPATH" in
       */design-substrate/*|design-substrate/*) : ;;  # ask (absolute OR relative path)
-      */.harness/loop_status.md|.harness/loop_status.md) : ;;  # ask — ledger is audit-only
-      *) _safe_path "$FPATH" && emit_allow ;;
+      *)
+        if [ -n "$FPATH" ] && [ "$(_resolve_abs "$FPATH")" = "$(_resolve_abs "$PROJECT_DIR/.harness/loop_status.md")" ]; then
+          :  # ask — ledger is audit-only
+        else
+          _safe_path "$FPATH" && emit_allow
+        fi
+        ;;
     esac
     ;;
 esac

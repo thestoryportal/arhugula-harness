@@ -108,6 +108,17 @@ OUT=$(run_on "$(pl Write '' "$REPO/.harness/loop_status.md")")
 [ -z "$OUT" ] && ok "loop_status.md Write → ask (no auto-approve)" || bad "loop_status.md Write auto-decided: $OUT"
 OUT=$(run_on "$(pl Edit '' '.harness/loop_status.md')")
 [ -z "$OUT" ] && ok "loop_status.md Edit (relative path) → ask" || bad "loop_status.md relative Edit auto-decided: $OUT"
+# 4g) loop_status.md ALIASES must also → ask (codex [P1] round 5: a literal string/case
+#     match on $FPATH is bypassable by a path that resolves to the same file but doesn't
+#     match the literal pattern — double slash, a `./` segment, or a symlink).
+OUT=$(run_on "$(pl Edit '' "$REPO/.harness//loop_status.md")")
+[ -z "$OUT" ] && ok "loop_status.md double-slash alias → ask (canonical-path compared)" || bad "double-slash alias auto-decided: $OUT"
+OUT=$(run_on "$(pl Edit '' "$REPO/.harness/./loop_status.md")")
+[ -z "$OUT" ] && ok "loop_status.md dot-segment alias → ask (canonical-path compared)" || bad "dot-segment alias auto-decided: $OUT"
+ln -sf "$REPO/.harness/loop_status.md" "$REPO/.harness/loop_status_link.md" 2>/dev/null
+OUT=$(run_on "$(pl Edit '' "$REPO/.harness/loop_status_link.md")")
+[ -z "$OUT" ] && ok "loop_status.md symlink alias → ask (canonical-path compared)" || bad "symlink alias auto-decided: $OUT"
+rm -f "$REPO/.harness/loop_status_link.md"
 OUT=$(run_on "$(pl Bash 'python scripts/migrate.py --wipe' '')")
 [ -z "$OUT" ] && ok "unknown bash → ask" || bad "unknown bash auto-decided: $OUT"
 
