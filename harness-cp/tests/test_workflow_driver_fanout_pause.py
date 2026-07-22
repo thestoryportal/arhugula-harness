@@ -3560,3 +3560,43 @@ def test_b60_phase0_group_wrapped_fence_signal_reraise_proceed_tier() -> None:
             pause_snapshot_input=paused.pause_snapshot,
         )
     assert len(sub_agent.resume_calls) == 1
+
+
+def test_b60_depth2_nested_group_fence_signal_unwrapped() -> None:
+    """Merge-gate test-witness lens M3: the leaf-extraction WHILE loop in
+    `_reraise_fence_signal_from_group` must survive depth-2 nesting (the
+    round-5/6 production shape: branch TaskGroup inside a phase TaskGroup)
+    — a single-level unwrap would re-raise a GROUP, not the signal."""
+    from harness_cp.sub_agent_dispatch_cancellation import DispatchFenceTrippedSignal
+
+    class _NestedGroupDispatcher:
+        def dispatch(
+            self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+        ) -> dict[str, Any]:
+            if str(step.step_id) == "b":
+                raise BaseExceptionGroup(
+                    "outer", [BaseExceptionGroup("inner", [DispatchFenceTrippedSignal()])]
+                )
+            return {"ok": str(step.step_id)}
+
+    class _Reg:
+        def lookup(self, step_kind: StepKind) -> StepDispatcher:
+            return cast(StepDispatcher, _NestedGroupDispatcher())
+
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    with pytest.raises(DispatchFenceTrippedSignal):
+        execute_workflow(
+            _manifest("wf-b60-d2", TopologyPattern.PARALLELIZATION, PersonaTier.SOLO_DEVELOPER),
+            [
+                WorkflowStep(
+                    step_id=StepID("a"), step_kind=StepKind.DECLARATIVE_STEP, step_payload={}
+                ),
+                WorkflowStep(
+                    step_id=StepID("b"), step_kind=StepKind.DECLARATIVE_STEP, step_payload={}
+                ),
+            ],
+            run_id="run-b60d2",
+            ctx=ctx,
+            default_model_binding=_DEFAULT_BINDING,
+            step_dispatchers=cast(StepDispatcherRegistry, _Reg()),
+        )

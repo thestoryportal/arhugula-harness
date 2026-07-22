@@ -1556,3 +1556,90 @@ def test_b60_orchestrator_marker_trip_stops_orchestrator_dispatch() -> None:
     # The marker landed (the trip rode it); the orchestrator dispatch and
     # every worker never began.
     assert echo.calls == []
+
+
+def test_b60_ow_intra_phase_worker_marker_trip_stops_sibling() -> None:
+    """Merge-gate test-witness lens closure item 3: the OW WORKER-level
+    intra-phase consults (pre/post marker in `_cancel_worker`) — a token
+    tripping while worker 0's marker writes must stop worker 0's own
+    dispatch AND worker 1's marker+dispatch (the parallelization intra
+    witness's OW twin)."""
+    from harness_cp.sub_agent_dispatch_cancellation import (
+        DISPATCH_CANCEL_TOKEN_VAR,
+        DispatchCancelToken,
+        DispatchFenceTrippedSignal,
+    )
+
+    token = DispatchCancelToken()
+
+    class _TrippingWorkerMarkerStore(_MiniOWStore):
+        def record_branch_dispatched(self, run_key: str, branch_index: int, *a: Any, **k: Any):
+            result = super().record_branch_dispatched(run_key, branch_index, *a, **k)
+            if branch_index == 0:
+                token.trip()
+            return result
+
+    class _CountingWorker:
+        def __init__(self) -> None:
+            self.calls: list[int] = []
+
+        def dispatch(
+            self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+        ) -> dict[str, Any]:
+            self.calls.append(int(step.step_payload["index"]))
+            return {"ok": 1}
+
+    worker = _CountingWorker()
+    store = _TrippingWorkerMarkerStore()
+    reset = DISPATCH_CANCEL_TOKEN_VAR.set(token)
+    try:
+        with pytest.raises(DispatchFenceTrippedSignal):
+            _run(
+                steps=[_orch_step(), _worker(0, None), _worker(1, None)],
+                registry=_KindMap(
+                    {StepKind.DECLARATIVE_STEP: _Echo(), StepKind.INFERENCE_STEP: worker}
+                ),
+                persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+                engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+                store=store,
+                concurrent_cache_warmup=False,
+            )
+    finally:
+        DISPATCH_CANCEL_TOKEN_VAR.reset(reset)
+    # Worker 0's marker landed (the trip rode it); its OWN dispatch was
+    # refused post-marker, and worker 1 never marked nor dispatched.
+    assert worker.calls == []
+
+
+def test_b60_ow_pre_tripped_entry_no_orchestrator_marker() -> None:
+    """Merge-gate test-witness lens closure item 4 (kills the M2
+    strategy-entry-narrowing mutation): a PRE-tripped token on an
+    ORCHESTRATOR_WORKERS run refuses at the strategy entry — before even
+    the orchestrator's durable reserve marker writes."""
+    from harness_cp.sub_agent_dispatch_cancellation import (
+        DISPATCH_CANCEL_TOKEN_VAR,
+        DispatchCancelToken,
+        DispatchFenceTrippedSignal,
+    )
+
+    token = DispatchCancelToken()
+    token.trip()
+    store = _MiniOWStore()
+    echo = _Echo()
+    reset = DISPATCH_CANCEL_TOKEN_VAR.set(token)
+    try:
+        with pytest.raises(DispatchFenceTrippedSignal):
+            _run(
+                steps=[_orch_step(), _worker(0, None)],
+                registry=_KindMap({StepKind.DECLARATIVE_STEP: echo, StepKind.INFERENCE_STEP: echo}),
+                persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+                engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+                store=store,
+                concurrent_cache_warmup=False,
+            )
+    finally:
+        DISPATCH_CANCEL_TOKEN_VAR.reset(reset)
+    # No orchestrator reserve marker was ever written (the strategy-entry
+    # consult refused before the marker; `_orch_marker` is the store state —
+    # `orchestrator_dispatched` is the accessor METHOD).
+    assert not store._orch_marker  # pyright: ignore[reportPrivateUsage]

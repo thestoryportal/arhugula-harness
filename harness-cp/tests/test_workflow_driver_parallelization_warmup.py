@@ -2997,3 +2997,74 @@ def test_b60_intra_phase_trip_stops_sibling_marker_and_dispatch() -> None:
     # marker AND dispatch never began.
     assert store.present_dispatched_indexes(store.sole_run_key()) == {0}
     assert dispatcher.dispatched == []
+
+
+def test_b60_all_rejected_with_trip_terminates_at_fence_not_paused() -> None:
+    """B-60 all-rejected+tripped terminal witness: every branch capacity-
+    rejected AND the token tripped during reservation -> the run terminates
+    at the fence with NO branch-failure/cancelled terminals folded. HONESTY
+    NOTE (merge-gate round 1): this pins the OUTCOME jointly with the B-61
+    drain fence, not the round-10 consult ORDER in isolation — empirically
+    no single-site discriminator for the order exists (with a pause
+    protocol bound, admission-rejection pauses PRE-branch for fix and
+    mutation alike; without one, the drain fence backstops). The order is
+    strictly-earlier, comment-documented at both sites, and registered as
+    a forward residual."""
+    from harness_core import SubAgentDispatchCapacityError
+    from harness_cp.sub_agent_dispatch_cancellation import (
+        DISPATCH_CANCEL_TOKEN_VAR,
+        DispatchCancelToken,
+        DispatchFenceTrippedSignal,
+    )
+
+    token = DispatchCancelToken()
+
+    class _AllRejectingTrippingAuthority:
+        """Duck-typed authority (DefaultCapacityAuthority is @final):
+        rejects EVERY branch and trips the token during reservation."""
+
+        frame_budget = 1
+        available = 1
+
+        def reserve_fanout(
+            self,
+            branch_requirements: tuple[int, ...],
+            *,
+            step_ids: tuple[str, ...],
+            descent_chain: tuple[str, ...],
+        ):
+            token.trip()  # the trip lands during reservation
+            return tuple(
+                SubAgentDispatchCapacityError(
+                    requested_frames=req,
+                    available_capacity=0,
+                    step_id=sid,
+                    descent_chain=descent_chain,
+                )
+                for req, sid in zip(branch_requirements, step_ids, strict=True)
+            )
+
+    authority = _AllRejectingTrippingAuthority()
+    dispatcher = _RecordingCohortDispatcher()
+    ledger = _RecordingLedger()
+    reset = DISPATCH_CANCEL_TOKEN_VAR.set(token)
+    try:
+        with pytest.raises(DispatchFenceTrippedSignal):
+            _run(
+                steps=[_inference_step(i) for i in range(2)],
+                dispatcher=dispatcher,
+                ledger=ledger,
+                concurrent_cache_warmup=False,
+                persona_tier=PersonaTier.TEAM_BINDING,  # pause tier
+                capacity_authority=authority,
+            )
+    finally:
+        DISPATCH_CANCEL_TOKEN_VAR.reset(reset)
+    # Fold-side discriminators: nothing dispatched, and NO branch-failure /
+    # cancelled terminal was folded for the rejected branches (the run
+    # terminated at the fence, not at the cascade fold).
+    assert dispatcher.dispatched == []
+    assert not any(
+        p.branch_metadata is not None and p.branch_metadata.terminal_status is not None
+        for p, _k in ledger.appends
+    )
