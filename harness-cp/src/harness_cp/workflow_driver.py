@@ -9385,7 +9385,15 @@ def _execute_parallelization(
         and cascade_policy is CascadePolicy.PAUSE
         and not branch_plan
         and any(
-            terminal_dispositions[_bi] == "completed" and _bi not in collected
+            (terminal_dispositions[_bi] == "completed" and _bi not in collected)
+            # B-65 (codex [P2] round 5 on this arc) — a recovered
+            # post_effect_signing_failed branch is ALSO a genuine
+            # re-establish trigger: it carries a non-None result_ref (never
+            # folded into `collected`, per its own dedicated channel), so
+            # the base clause alone would silently exclude it and this
+            # complete-recovery crash-resume would finalize PARTIAL instead
+            # of reconstructing the interrupted PAUSED state.
+            or terminal_dispositions[_bi] == _POST_EFFECT_SIGNING_FAILED_TERMINAL_STATUS
             for _bi in terminal_dispositions
         )
     )
@@ -11864,7 +11872,13 @@ def _execute_orchestrator_workers(
         # RECOVER_AS_TERMINAL `timed_out` worker (which finalizes PARTIAL via `_degraded` below;
         # out-of-family Codex [P2]).
         _crash_pause_trigger = any(
-            terminal_dispositions[_bi] == "completed" and _bi not in collected
+            (terminal_dispositions[_bi] == "completed" and _bi not in collected)
+            # B-65 (codex [P2] round 5 on this arc) — see the PARALLELIZATION
+            # sibling's identical fix: a recovered post_effect_signing_failed
+            # worker carries a non-None result_ref never folded into
+            # `collected`, so the base clause alone would silently exclude
+            # it here too.
+            or terminal_dispositions[_bi] == _POST_EFFECT_SIGNING_FAILED_TERMINAL_STATUS
             for _bi in terminal_dispositions
         )
         if (

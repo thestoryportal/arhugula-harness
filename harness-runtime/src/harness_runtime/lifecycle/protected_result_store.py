@@ -21,6 +21,7 @@ and encryption happen at `write_once`/`read`, never at construction.
 from __future__ import annotations
 
 import dataclasses
+import errno
 import hashlib
 import logging
 import os
@@ -128,13 +129,23 @@ def compose_composite_key(tenant_id: str | None) -> str:
 class _StoredEnvelope:
     """The versioned serialization envelope (spec v1.103 §14.8.11 — non-
     Mapping/arbitrary-object results stored as an OPAQUE byte-envelope +
-    type tag, never lossy coercion)."""
+    type tag, never lossy coercion).
+
+    `composite_key` (codex [P1] round 5 on this arc) binds the envelope to
+    the EXACT reference it was written under — `tenant_id` alone only binds
+    it to the tenant SCOPE, so under a writable-disk threat, copying tenant
+    A's ciphertext from reference B's path onto reference A's path would
+    still pass Fernet authentication AND the tenant-only check (both refs
+    share tenant A), silently returning B's payload for a request naming
+    A. Checking the full composite key at `read()` closes that gap.
+    """
 
     tenant_id: str | None
     type_tag: str
     serializer_version: int
     written_at: float
     payload: bytes
+    composite_key: str
 
 
 class ProtectedResultStore:
@@ -196,6 +207,7 @@ class ProtectedResultStore:
             serializer_version=self._SERIALIZER_VERSION,
             written_at=time.time(),
             payload=serialized,
+            composite_key=composite_key,
         )
         try:
             ciphertext = self._codec.encrypt(
@@ -275,17 +287,23 @@ class ProtectedResultStore:
                 "ciphertext failed authentication — wrong key or tampered bytes"
             ) from exc
         envelope: _StoredEnvelope = pickle.loads(plaintext)
-        # codex [P1] on this arc — the composite-key pre-check above only proves
-        # the REQUESTED path claims the right tenant; under writable-disk
-        # tampering (a valid ciphertext copied to a forged composite-key path),
-        # the SHARED Fernet key still authenticates it, so decryption alone
-        # cannot catch the swap. Bind the DECRYPTED envelope's own `tenant_id`
-        # to the request too — the second half of tenant-bound retrieval.
-        if envelope.tenant_id != expected_tag:
+        # codex [P1] round 5 on this arc — a tenant-ONLY check (the prior
+        # `envelope.tenant_id != expected_tag` form) only proves the
+        # decrypted envelope belongs to the right TENANT, not the right
+        # ENTRY: under writable-disk tampering, copying tenant A's
+        # ciphertext from reference B's path onto reference A's path still
+        # authenticates (same Fernet key) and still passes a tenant-only
+        # check (both refs are tenant A's), silently returning B's payload
+        # for a `read(tenant_a, ref_a)` call. Binding to the FULL
+        # `composite_key` the envelope was written under is strictly
+        # stronger (it already encodes the tenant tag as its prefix) and
+        # closes that gap — the mismatch is refused before the wrong
+        # payload is ever deserialized.
+        if envelope.composite_key != composite_key:
             raise ProtectedStoreCrossTenantError(
-                "decrypted envelope tenant scope does not match the composite "
-                "key's claimed scope or the retrieval request — refusing "
-                "(disk-tamper / forged-reference guard)"
+                "decrypted envelope's composite key does not match the "
+                "requested reference — refusing (disk-tamper / "
+                "forged-reference guard)"
             )
         return pickle.loads(envelope.payload)
 
@@ -353,6 +371,40 @@ class ProtectedResultStore:
                     tenant_tag,
                     current_time - written_at,
                 )
+        # codex [P2] round 5 on this arc — a process KILLED between
+        # `_publish_atomic`'s temp-write and its `finally: os.unlink(tmp_name)`
+        # leaves a `.tmp-*` file behind indefinitely: this loop (and every
+        # bootstrap/shutdown/opportunistic sweep, which all funnel through
+        # this method) previously enumerated only `*.entry`, so repeated
+        # crashes could accumulate stale ciphertext or exhaust disk with no
+        # bound. `.tmp-*` files carry no envelope to decrypt (a crash mid-
+        # write may leave them incomplete) — mtime is the only available age
+        # signal, same fallback already used for undecryptable `.entry`
+        # files above. Reuses the store's own TTL rather than a new config
+        # surface (temp files never survive a normal write for more than
+        # milliseconds, so any bound this generous only ever catches
+        # genuine crash orphans).
+        for tmp_entry_path in self._root.glob(".tmp-*"):
+            try:
+                tmp_mtime = tmp_entry_path.stat().st_mtime
+            except OSError:
+                continue
+            if current_time - tmp_mtime > self._ttl_seconds:
+                try:
+                    tmp_entry_path.unlink(missing_ok=True)
+                except OSError as exc:
+                    logger.error(
+                        "protected result store: crash-orphaned temp-file GC "
+                        "unlink failed (%s): %s",
+                        tmp_entry_path.name,
+                        exc,
+                    )
+                    continue
+                logger.warning(
+                    "protected result store: crash-orphaned temp-file GC'd (%s, age_s=%.1f)",
+                    tmp_entry_path.name,
+                    current_time - tmp_mtime,
+                )
         self._last_gc_at = current_time
         return expired
 
@@ -361,13 +413,26 @@ class ProtectedResultStore:
         if now - self._last_gc_at >= _OPPORTUNISTIC_GC_INTERVAL_SECONDS:
             self.gc_sweep(now=now)
 
-    @staticmethod
-    def _fsync_dir(directory: Path) -> None:
+    #: Errno values meaning "directory fsync is unsupported here" — safe to
+    #: swallow. Anything else (EIO, ENOSPC, ...) is a genuine durability
+    #: failure and must propagate (codex [P1] round 5 on this arc).
+    _FSYNC_UNSUPPORTED_ERRNOS = frozenset({errno.EINVAL, errno.ENOTSUP, errno.EOPNOTSUPP})
+
+    @classmethod
+    def _fsync_dir(cls, directory: Path) -> None:
         """fsync a directory so a freshly-linked entry's dirent is durable.
 
-        Best-effort: directory fsync is unsupported on some platforms/
-        filesystems, where it is a no-op rather than a failure (mirrors
-        `EngineOutputStore._fsync_dir`).
+        Best-effort ONLY for genuinely-unsupported directory fsync (some
+        platforms/filesystems raise EINVAL/ENOTSUP/EOPNOTSUPP rather than
+        succeeding — the `EngineOutputStore._fsync_dir` precedent this
+        mirrors swallows EVERY `OSError`, which let a REAL durability
+        failure here — EIO, ENOSPC, a dying disk — pass silently, so
+        `write_once` would publish a live-looking `composite_key` for an
+        entry that might not survive a crash. Any OTHER `OSError`
+        propagates to the caller's EXISTING typed-unresolvable path
+        (`write_once`'s `except OSError` around `_publish_atomic`) —
+        this method adds no new degradation path, it just stops
+        swallowing the one case that path already exists to catch.
         """
         try:
             dir_fd = os.open(directory, os.O_RDONLY)
@@ -375,8 +440,9 @@ class ProtectedResultStore:
             return
         try:
             os.fsync(dir_fd)
-        except OSError:
-            pass
+        except OSError as exc:
+            if exc.errno not in cls._FSYNC_UNSUPPORTED_ERRNOS:
+                raise
         finally:
             os.close(dir_fd)
 

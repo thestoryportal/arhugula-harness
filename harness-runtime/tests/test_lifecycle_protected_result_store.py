@@ -5,6 +5,7 @@ module never monkeypatches the codec.
 
 from __future__ import annotations
 
+import errno
 import os
 import time
 from pathlib import Path
@@ -145,6 +146,36 @@ def test_disk_tampered_forged_reference_refused_after_decrypt(tmp_path: Path) ->
 
     with pytest.raises(ProtectedStoreCrossTenantError):
         store.read("tenant-b", forged_ref)
+
+
+def test_same_tenant_forged_reference_refused_by_composite_key_binding(
+    tmp_path: Path,
+) -> None:
+    """codex [P1] round 5 on the B-65-A CP-side arc: the tenant-ONLY envelope
+    check above closes the CROSS-tenant disk-tamper case but not the
+    SAME-tenant one — copying tenant-a's real ciphertext from ref B's path
+    onto ref A's path still authenticates (same Fernet key) AND still
+    passes a tenant-only check (both refs are tenant-a's own), so
+    `read(tenant_a, ref_a)` would silently return ref_b's payload instead
+    of ref_a's. Binding the envelope to the FULL composite key it was
+    written under closes this.
+
+    Mutation probe: reverting the `envelope.composite_key != composite_key`
+    check back to the tenant-only `envelope.tenant_id != expected_tag` form
+    makes this test return ref_b's payload under ref_a's identity instead
+    of raising."""
+    store = _store(tmp_path)
+    ref_a = store.write_once("tenant-a", "ref-a's real secret")
+    ref_b = store.write_once("tenant-a", "ref-b's real secret")
+    entry_a_path = store._entry_path(ref_a)  # type: ignore[arg-type]
+    entry_b_path = store._entry_path(ref_b)  # type: ignore[arg-type]
+
+    # Copy ref_b's real ciphertext onto ref_a's path — both belong to the
+    # SAME tenant, so the tenant-only check alone would accept this.
+    entry_a_path.write_bytes(entry_b_path.read_bytes())
+
+    with pytest.raises(ProtectedStoreCrossTenantError):
+        store.read("tenant-a", ref_a)
 
 
 def test_result_ref_resolves_preserved_payload_under_owning_tenant(tmp_path: Path) -> None:
@@ -527,3 +558,97 @@ def test_gc_unlink_failure_does_not_propagate_or_replace_the_carrier(
     assert isinstance(ref_b, str)
     assert store.read("tenant-a", ref_b) == "an unrelated second write"
     assert any("GC unlink failed" in record.message for record in caplog.records)
+
+
+def test_directory_fsync_durability_failure_degrades_to_unresolvable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """codex [P2] round 5 on the B-65-A CP-side arc: `_fsync_dir`'s prior
+    swallow-every-`OSError` behavior let a REAL durability failure (EIO,
+    ENOSPC, a dying disk) on the destination-directory fsync pass silently
+    AFTER `os.link` already committed the entry — `write_once` would then
+    return a live-looking `composite_key` for an entry that might not
+    survive a crash. A genuine I/O error must reach the EXISTING typed-
+    unresolvable path instead.
+
+    Mutation probe: reverting `_fsync_dir` to swallow every `OSError`
+    makes this test return a `str` ref instead of `UnresolvableResultRef`.
+    """
+    store = _store(tmp_path)
+    real_fsync = os.fsync
+    calls = {"n": 0}
+
+    def _flaky_fsync(fd: int) -> None:
+        calls["n"] += 1
+        # First call is the temp-file's own fsync (inside `_publish_atomic`,
+        # before the `os.link` commit); second is the DESTINATION-directory
+        # fsync (`_fsync_dir`, after the commit) — the one this fix targets.
+        if calls["n"] == 2:
+            raise OSError(errno.EIO, "simulated disk failure")
+        real_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", _flaky_fsync)
+    ref = store.write_once("tenant-a", "payload")
+    assert isinstance(ref, UnresolvableResultRef)
+    assert "store write failed" in ref.reason
+
+
+def test_directory_fsync_unsupported_errno_still_degrades_gracefully(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Companion to the test above — a genuinely-UNSUPPORTED directory
+    fsync (EINVAL/ENOTSUP/EOPNOTSUPP, real on some platforms/filesystems)
+    must stay best-effort, not regress into a false failure.
+
+    Mutation probe: broadening the fix to raise on EVERY `OSError`
+    (over-correcting past what codex asked for) makes this test return
+    `UnresolvableResultRef` instead of a valid `str` ref."""
+    store = _store(tmp_path)
+    real_fsync = os.fsync
+    calls = {"n": 0}
+
+    def _unsupported_fsync(fd: int) -> None:
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise OSError(errno.ENOTSUP, "directory fsync not supported (simulated)")
+        real_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", _unsupported_fsync)
+    ref = store.write_once("tenant-a", "payload")
+    assert isinstance(ref, str)
+    assert store.read("tenant-a", ref) == "payload"
+
+
+def test_gc_sweep_reclaims_crash_orphaned_temp_files(tmp_path: Path) -> None:
+    """codex [P2] round 5 on the B-65-A CP-side arc: a process KILLED
+    between `_publish_atomic`'s temp-write and its own `finally:
+    os.unlink(tmp_name)` cleanup leaves a `.tmp-*` file behind indefinitely
+    — every sweep (bootstrap/shutdown/opportunistic, all funneling through
+    `gc_sweep`) previously enumerated only `*.entry`, so repeated crashes
+    could accumulate stale ciphertext or exhaust disk with no bound.
+
+    Mutation probe: removing the `.tmp-*` glob loop from `gc_sweep` makes
+    this stale temp file survive the sweep instead of being reclaimed."""
+    store = _store(tmp_path, ttl_seconds=1.0)
+    store_root = tmp_path / "store"
+    store_root.mkdir(parents=True, exist_ok=True)
+    orphan = store_root / ".tmp-crash-orphan-abc123"
+    orphan.write_bytes(b"partial ciphertext from a killed write")
+    old_time = time.time() - 10.0
+    os.utime(orphan, (old_time, old_time))
+
+    store.gc_sweep(now=time.time())
+    assert not orphan.exists()
+
+
+def test_gc_sweep_does_not_reclaim_fresh_temp_files(tmp_path: Path) -> None:
+    """A temp file mid-write (well within the TTL) must NOT be reclaimed —
+    only a genuinely stale (crash-orphaned) one."""
+    store = _store(tmp_path, ttl_seconds=86400.0)
+    store_root = tmp_path / "store"
+    store_root.mkdir(parents=True, exist_ok=True)
+    fresh = store_root / ".tmp-in-progress-write"
+    fresh.write_bytes(b"a write still in flight")
+
+    store.gc_sweep(now=time.time())
+    assert fresh.exists()

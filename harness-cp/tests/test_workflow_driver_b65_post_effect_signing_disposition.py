@@ -698,3 +698,158 @@ def test_crash_resume_cascade_cancel_carrier_branch_carries_ref_into_failed_repo
     partial = resumed.partial_state
     assert partial is not None
     assert partial["post_effect_signing_failures"] == {"branch-1": {"result_ref": "crash-ref-1"}}
+
+
+def test_crash_resume_parallelization_pause_reestablishes_paused_not_partial() -> None:
+    """codex [P2] round 5 on the B-65-A CP-side arc: a COMPLETE-recovery crash
+    resume under PAUSE tier (nothing left to dispatch — both branches already
+    durably recorded) where the only non-clean branch is a recovered
+    post_effect_signing_failed carrier must RE-ESTABLISH the PAUSED
+    disposition a live worker-failure pause would have produced. Before this
+    fix, `_crash_pause_reestablish` recognized only `terminal_status ==
+    "completed"` as a pause trigger — a carrier branch (distinct
+    terminal_status, never folded into `collected`) silently failed that
+    check, so the run finalized PARTIAL instead, dropping the operator's
+    `pause` election and losing the resumable snapshot's REPAIR path.
+
+    Mutation probe: reverting the predicate to the `"completed"`-only form
+    makes this test finalize PARTIAL instead of reconstructing PAUSED."""
+    import importlib.util
+
+    _sibling_path = (
+        Path(__file__).parent / "test_workflow_driver_fanout_output_replay_full_chain.py"
+    )
+    _spec = importlib.util.spec_from_file_location(
+        "test_workflow_driver_fanout_output_replay_full_chain", _sibling_path
+    )
+    assert _spec is not None and _spec.loader is not None
+    _sibling = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(_sibling)
+    _InMemoryBranchStore = _sibling._InMemoryBranchStore
+    _run_persona = _sibling._run_persona
+    _step = _sibling._step
+    _pause_protocol = _sibling._pause_protocol
+
+    class _CarrierThenSurviveDispatcher:
+        """branch-0 completes cleanly; branch-1 raises the B-65 carrier."""
+
+        def __init__(self) -> None:
+            self.dispatched: list[str] = []
+
+        def dispatch(
+            self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+        ) -> dict[str, Any]:
+            step_id = str(step.step_id)
+            self.dispatched.append(step_id)
+            if step_id == "branch-1":
+                raise PostEffectAuditSigningError(
+                    "post-effect signing failed at branch-1", result_ref="crash-pause-ref"
+                )
+            return {"role": step_id}
+
+    store = _InMemoryBranchStore()
+    steps = [_step("branch-0", 0), _step("branch-1", 1)]
+    _run_persona(
+        workflow_id="wf-b65-crash-pause",
+        steps=steps,
+        dispatcher=_CarrierThenSurviveDispatcher(),
+        store=store,
+        persona_tier=_PAUSE_TIER,
+        pause_resume_protocol=_pause_protocol(),
+    )
+
+    # The crash: a FRESH driver invocation reads the SAME durable store —
+    # both branches are already durably captured (branch-0 cleanly,
+    # branch-1 via the carrier), so this resume has NOTHING left to
+    # dispatch and must reconstruct the interrupted PAUSED disposition.
+    resume_dispatcher = _CarrierThenSurviveDispatcher()
+    resumed = _run_persona(
+        workflow_id="wf-b65-crash-pause",
+        steps=steps,
+        dispatcher=resume_dispatcher,
+        store=store,
+        persona_tier=_PAUSE_TIER,
+        pause_resume_protocol=_pause_protocol(),
+    )
+
+    assert resumed.status is RunStatus.PAUSED
+    assert resume_dispatcher.dispatched == []  # nothing re-fired — pure crash recovery
+    assert resumed.pause_snapshot is not None
+    peer = resumed.pause_snapshot.peer_fan_out_resume
+    assert peer is not None
+    by_index = {b.branch_index: b for b in peer.branches}
+    assert by_index[1].terminal_status == "post_effect_signing_failed"
+    assert by_index[1].output == {"result_ref": "crash-pause-ref"}
+
+
+def test_crash_resume_orchestrator_workers_pause_reestablishes_paused_not_partial() -> None:
+    """ORCHESTRATOR_WORKERS analogue of the PARALLELIZATION test above — the
+    same crash-recovery `_crash_pause_trigger` predicate gap existed at this
+    topology's own site (a separate code path, not shared with
+    PARALLELIZATION's `_crash_pause_reestablish`).
+
+    Mutation probe: reverting this topology's predicate to the
+    `"completed"`-only form makes this test finalize PARTIAL instead of
+    reconstructing PAUSED."""
+    import importlib.util
+
+    _sibling_path = (
+        Path(__file__).parent / "test_workflow_driver_fanout_output_replay_full_chain.py"
+    )
+    _spec = importlib.util.spec_from_file_location(
+        "test_workflow_driver_fanout_output_replay_full_chain", _sibling_path
+    )
+    assert _spec is not None and _spec.loader is not None
+    _sibling = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(_sibling)
+    _InMemoryBranchStore = _sibling._InMemoryBranchStore
+    _run_persona = _sibling._run_persona
+    _step = _sibling._step
+    _pause_protocol = _sibling._pause_protocol
+
+    class _CarrierThenSurviveDispatcher:
+        def __init__(self) -> None:
+            self.dispatched: list[str] = []
+
+        def dispatch(
+            self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+        ) -> dict[str, Any]:
+            step_id = str(step.step_id)
+            self.dispatched.append(step_id)
+            if step_id == "worker-1":
+                raise PostEffectAuditSigningError(
+                    "post-effect signing failed at worker-1", result_ref="crash-ow-pause-ref"
+                )
+            return {"role": step_id}
+
+    store = _InMemoryBranchStore()
+    steps = [_step("orch", 0), _step("worker-0", 0), _step("worker-1", 1)]
+    _run_persona(
+        workflow_id="wf-b65-crash-ow-pause",
+        steps=steps,
+        dispatcher=_CarrierThenSurviveDispatcher(),
+        store=store,
+        persona_tier=_PAUSE_TIER,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+        pause_resume_protocol=_pause_protocol(),
+    )
+
+    resume_dispatcher = _CarrierThenSurviveDispatcher()
+    resumed = _run_persona(
+        workflow_id="wf-b65-crash-ow-pause",
+        steps=steps,
+        dispatcher=resume_dispatcher,
+        store=store,
+        persona_tier=_PAUSE_TIER,
+        topology=TopologyPattern.ORCHESTRATOR_WORKERS,
+        pause_resume_protocol=_pause_protocol(),
+    )
+
+    assert resumed.status is RunStatus.PAUSED
+    assert resume_dispatcher.dispatched == []
+    assert resumed.pause_snapshot is not None
+    fan_out = resumed.pause_snapshot.fan_out_resume
+    assert fan_out is not None
+    by_index = {b.branch_index: b for b in fan_out.branches}
+    assert by_index[1].terminal_status == "post_effect_signing_failed"
+    assert by_index[1].output == {"result_ref": "crash-ow-pause-ref"}
