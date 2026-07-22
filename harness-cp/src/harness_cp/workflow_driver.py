@@ -9689,6 +9689,13 @@ def _execute_evaluator_optimizer(
     def _dispatch_and_buffer(
         step: WorkflowStep, *, declared_step_index: int, entry_index: int
     ) -> Mapping[str, Any]:
+        # B-60 (codex round-4 on PR #1075): per-DISPATCH fence consult — a
+        # token tripping while `generate` executes must stop the SAME
+        # iteration's `evaluate` from beginning (per-iteration checking
+        # alone leaves that gap). Placed here so every EO dispatch —
+        # generate, evaluate, and the resume-pending evaluate path —
+        # consults uniformly.
+        _consult_dispatch_fence()
         # Dispatch one declared step on the driver thread (sequential — no
         # to_thread / barrier), buffer its plain ledger entry under the monotonic
         # entry_index, and emit one STEP_BOUNDARY. The pre-dispatch gate fires
@@ -9856,11 +9863,10 @@ def _execute_evaluator_optimizer(
         # iterations=0 + resume_pending_evaluate=False → byte-identical to the pre-arc
         # `for _iteration in range(MAX)` loop.
         while not accepted and iterations < _DEFAULT_EVALUATOR_OPTIMIZER_MAX_ITERATIONS:
-            # B-60 (codex round-1 on PR #1075): per-iteration fence consult —
-            # the sequential generate→evaluate loop is this strategy's own
-            # step-boundary cadence; a token tripping mid-iteration must stop
-            # the NEXT iteration's dispatches from beginning.
-            _consult_dispatch_fence()
+            # B-60: the fence consult lives in `_dispatch_and_buffer` (per
+            # DISPATCH, codex round-4) — every generate/evaluate consults
+            # before beginning, covering both the next-iteration and the
+            # same-iteration-after-generate trip windows.
             iterations += 1
             last_generate_output = _dispatch_and_buffer(
                 generate_step, declared_step_index=0, entry_index=entry_index

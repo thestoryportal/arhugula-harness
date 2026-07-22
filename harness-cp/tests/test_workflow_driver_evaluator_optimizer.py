@@ -769,3 +769,41 @@ def test_b60_mid_iteration_trip_stops_next_iteration() -> None:
     # generate never began.
     assert dispatcher.generate_calls == 1
     assert dispatcher.evaluate_calls == 1
+
+
+def test_b60_mid_generate_trip_stops_same_iteration_evaluate() -> None:
+    """B-60 (codex round-4 on PR #1075): a trip landing DURING `generate`
+    must stop the SAME iteration's `evaluate` from beginning — the consult
+    is per-DISPATCH (inside `_dispatch_and_buffer`), not merely
+    per-iteration."""
+    from harness_cp.sub_agent_dispatch_cancellation import (
+        DISPATCH_CANCEL_TOKEN_VAR,
+        DispatchCancelToken,
+        DispatchFenceTrippedSignal,
+    )
+
+    token = DispatchCancelToken()
+
+    class _TrippingGenerateDispatcher(_EvalOptDispatcher):
+        def dispatch(
+            self,
+            binding: StepEffectiveBinding,
+            step: WorkflowStep,
+            *,
+            step_context: Any = None,
+        ) -> dict[str, Any]:
+            result = super().dispatch(binding, step, step_context=step_context)
+            if str(step.step_id) == _GENERATE:
+                token.trip()  # trip lands at the end of generate
+            return result
+
+    dispatcher = _TrippingGenerateDispatcher(accept_on_iteration=None)
+    ledger = _RecordingLedger()
+    reset = DISPATCH_CANCEL_TOKEN_VAR.set(token)
+    try:
+        with pytest.raises(DispatchFenceTrippedSignal):
+            _run(steps=_loop_steps(), dispatcher=dispatcher, ledger=ledger)
+    finally:
+        DISPATCH_CANCEL_TOKEN_VAR.reset(reset)
+    assert dispatcher.generate_calls == 1
+    assert dispatcher.evaluate_calls == 0
