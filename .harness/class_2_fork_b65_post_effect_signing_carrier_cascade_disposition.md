@@ -50,7 +50,12 @@ re-dispatch trigger.
 Propagating the opaque `result_ref` alone leaves callers unable to RECOVER the completed
 paid-effect's payload (the report log stores only a digest). The register row requires this
 same leg to resolve payload recoverability. The rider therefore ALSO selects the recovery
-mechanism: **recommended — a DEDICATED protected result store keyed by `result_ref`** with
+mechanism: **recommended — a DEDICATED protected result store keyed by `result_ref`**
+(WIDENED first — codex round-5 [P2]: the current `PostEffectAuditSigningError` ref is
+`uuid4().hex[:12]` / 48 bits, adequate for log correlation but collision-prone as durable
+identity; the rider promotes it to a full-strength identifier — full uuid4 or equivalent —
+composed with the normalized tenant scope as a composite key, with collision-safe
+write-once creation refusing typed on an existing key) with
 an explicit protection contract (codex round-2 [P1] on this filing: the existing
 `EngineOutputStore` is UNSUITABLE — plaintext JSONL, no tenant-authorized lookup,
 Mapping-only where carrier results can be arbitrary objects, and under an MTC signing
