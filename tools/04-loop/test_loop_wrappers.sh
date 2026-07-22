@@ -1,16 +1,19 @@
 #!/usr/bin/env bash
 # Hermetic test for the loop-control wrappers (U-HK-14/15): tools/04-loop/defer.sh +
-# tools/04-loop/resolve.sh + tools/04-loop/halt.sh. These are the allowlisted,
-# single-invocation entry points the autonomous loop uses to record a per-item
-# deferral/resolution and to stand the run down — the executable path that replaced the
-# denied/malformed raw `source … && loop_defer …`.
+# tools/04-loop/halt.sh. These are the allowlisted, single-invocation entry points the
+# autonomous loop uses to record a per-item deferral and to stand the run down — the
+# executable path that replaced the denied/malformed raw `source … && loop_defer …`.
 # Asserts they source BOTH libs correctly (functions defined), write the ledger, raise
-# the halt marker, and reject a no-arg defer/resolve.
+# the halt marker, and reject a no-arg defer.
+#
+# Resolution (loop_resolve / RESOLVED-HIL) deliberately has NO wrapper here: it is
+# attended-only by design (permission-guard.sh never auto-allows it — a headless child
+# can't self-assert that a human answered a gate), so it's exercised directly via
+# loop_lib.sh in tools/hooks/test_loop_lib.sh, not through a guard-bypass entry point.
 
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEFER="$SCRIPT_DIR/defer.sh"
-RESOLVE="$SCRIPT_DIR/resolve.sh"
 HALT="$SCRIPT_DIR/halt.sh"
 
 PASS=0; FAIL=0
@@ -43,41 +46,7 @@ CLAUDE_PROJECT_DIR="$REPO" bash "$DEFER" R-555 >/dev/null 2>&1 && bad "reason-le
 CLAUDE_PROJECT_DIR="$REPO" bash "$DEFER" R-555 "" >/dev/null 2>&1 && bad "empty-reason defer.sh accepted" || ok "empty-reason defer.sh exits nonzero"
 grep -q "R-555" "$LEDGER" && bad "reason-less R-555 row was written" || ok "no reason-less row written"
 
-# 4) resolve.sh writes a RESOLVED-HIL row and clears the item from the skip-set —
-#    matching loop_resolve's last-write-wins semantics, exercised through the actual
-#    guard-allowlisted entry point rather than the sourced function directly.
-CLAUDE_PROJECT_DIR="$REPO" bash "$RESOLVE" R-410 "ratified via council dyad — see PR #1234" >/dev/null 2>&1
-grep -qE '\| RESOLVED-HIL \| R-410 — ratified via council dyad' "$LEDGER" && ok "resolve.sh writes R-410 row" || bad "R-410 resolved row missing"
-SKIP=$(cd "$REPO" && . "$SCRIPT_DIR/../hooks/lib.sh" && . "$SCRIPT_DIR/../hooks/loop_lib.sh" && CLAUDE_PROJECT_DIR="$REPO" loop_skip_set)
-[ "$SKIP" = "R-300" ] && ok "resolve.sh clears R-410 from skip-set ($SKIP)" || bad "skip-set not cleared: [$SKIP]"
-
-# 4b) resolve.sh with no args / no note → usage error (exit 2), no malformed row.
-CLAUDE_PROJECT_DIR="$REPO" bash "$RESOLVE" >/dev/null 2>&1 && bad "no-arg resolve.sh did not error" || ok "no-arg resolve.sh exits nonzero"
-CLAUDE_PROJECT_DIR="$REPO" bash "$RESOLVE" R-999 >/dev/null 2>&1 && bad "note-less resolve.sh accepted" || ok "note-less resolve.sh exits nonzero"
-CLAUDE_PROJECT_DIR="$REPO" bash "$RESOLVE" R-999 "" >/dev/null 2>&1 && bad "empty-note resolve.sh accepted" || ok "empty-note resolve.sh exits nonzero"
-grep -q "R-999" "$LEDGER" && bad "note-less R-999 row was written" || ok "no note-less resolved row written"
-
-# 4c) resolve.sh rejects a well-formed but NOT-currently-pending item-id (codex [P2]
-#     round 3: never-deferred / already-resolved / typo'd ids must not silently succeed).
-CLAUDE_PROJECT_DIR="$REPO" bash "$RESOLVE" R-777 "never deferred" >/dev/null 2>&1 && bad "resolve.sh accepted a non-pending item" || ok "resolve.sh rejects a non-pending item (exit nonzero)"
-grep -q "R-777" "$LEDGER" && bad "non-pending R-777 row was written" || ok "no row written for a non-pending item"
-
-# 4d) resolve.sh rejects a malformed item-id (not R-* or B-*).
-CLAUDE_PROJECT_DIR="$REPO" bash "$RESOLVE" not-an-id "some note" >/dev/null 2>&1 && bad "resolve.sh accepted a malformed item-id" || ok "resolve.sh rejects a malformed item-id (exit nonzero)"
-grep -q "not-an-id" "$LEDGER" && bad "malformed-id row was written" || ok "no row written for a malformed item-id"
-
-# 4e) resolve.sh reports FAILURE (not false success) when the ledger write doesn't take
-#     effect — codex [P2] round 4: loop_log always exits 0 by design (a ledger write must
-#     never break the calling hook), so a write failure must be caught by verifying the
-#     EFFECT (the item leaves the skip-set), not the return code.
-CLAUDE_PROJECT_DIR="$REPO" bash "$DEFER" R-888 "needs infra" >/dev/null 2>&1
-chmod 0444 "$LEDGER"
-CLAUDE_PROJECT_DIR="$REPO" bash "$RESOLVE" R-888 "ratified" >/dev/null 2>&1 && bad "resolve.sh reported success on a failed write" || ok "resolve.sh reports failure when the ledger write does not take effect"
-chmod 0644 "$LEDGER"
-SKIP=$(cd "$REPO" && . "$SCRIPT_DIR/../hooks/lib.sh" && . "$SCRIPT_DIR/../hooks/loop_lib.sh" && CLAUDE_PROJECT_DIR="$REPO" loop_skip_set)
-printf '%s' "$SKIP" | grep -q "R-888" && ok "R-888 remains pending after the failed resolve (ledger unaffected)" || bad "R-888 unexpectedly cleared despite failed write: [$SKIP]"
-
-# 5) halt.sh raises the halt marker + logs a STOP row.
+# 4) halt.sh raises the halt marker + logs a STOP row.
 CLAUDE_PROJECT_DIR="$REPO" bash "$HALT" "forward menu exhausted — 2 awaiting input" >/dev/null 2>&1
 [ -f "$REPO/.harness/.loop-halt" ] && ok "halt.sh raises .loop-halt" || bad ".loop-halt not raised"
 grep -q '| STOP | forward menu exhausted' "$LEDGER" && ok "halt.sh logs STOP reason" || bad "STOP not logged"

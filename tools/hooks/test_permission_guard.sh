@@ -67,10 +67,6 @@ OUT=$(run_on "$(pl Bash "tools/04-loop/defer.sh R-300 'needs OpenAI credentials 
 [ "$(dec "$OUT")" = "allow" ] && ok "allow defer.sh wrapper (even with 'credentials' in the reason)" || bad "defer.sh not allowed: $OUT"
 OUT=$(run_on "$(pl Bash "bash tools/04-loop/defer.sh R-410 'needs container runtime'" '')")
 [ "$(dec "$OUT")" = "allow" ] && ok "allow 'bash tools/04-loop/defer.sh ...'" || bad "bash defer.sh not allowed: $OUT"
-OUT=$(run_on "$(pl Bash "tools/04-loop/resolve.sh R-410 'ratified via council dyad — see PR #1234'" '')")
-[ -z "$(dec "$OUT")" ] && ok "resolve.sh NOT auto-allowed (falls to ask — resolution needs a human present, unlike defer/halt)" || bad "resolve.sh wrongly auto-allowed: $OUT"
-OUT=$(run_on "$(pl Bash "bash tools/04-loop/resolve.sh R-410 'operator ran gh secret set to unblock this'" '')")
-[ "$(dec "$OUT")" = "deny" ] && ok "resolve.sh with a 'gh secret set' note hits the deny-list (no bypass exemption)" || bad "resolve.sh credential note not denied: $OUT"
 OUT=$(run_on "$(pl Bash "tools/04-loop/halt.sh 'forward menu exhausted — 3 awaiting input'" '')")
 [ "$(dec "$OUT")" = "allow" ] && ok "allow halt.sh wrapper (stand-down)" || bad "halt.sh not allowed: $OUT"
 OUT=$(run_on "$(pl Bash 'source tools/hooks/lib.sh && loop_defer R-1 x' '')")
@@ -79,8 +75,6 @@ OUT=$(run_on "$(pl Bash 'source tools/hooks/lib.sh && loop_defer R-1 x' '')")
 #     secret VALUE into the ledger). Literal "credentials" is fine (4b); `$VAR` is not.
 OUT=$(run_on "$(pl Bash 'tools/04-loop/defer.sh R-300 $OPENAI_API_KEY' '')")
 [ -z "$(dec "$OUT")" ] && ok "defer.sh with \$VAR expansion NOT auto-allowed (no secret leak)" || bad "defer.sh \$VAR auto-allowed (secret-leak vector): $OUT"
-OUT=$(run_on "$(pl Bash 'tools/04-loop/resolve.sh R-300 $OPENAI_API_KEY' '')")
-[ -z "$(dec "$OUT")" ] && ok "resolve.sh with \$VAR expansion NOT auto-allowed (no secret leak)" || bad "resolve.sh \$VAR auto-allowed (secret-leak vector): $OUT"
 # 4d) A deferral REASON that names an operator action (gh secret / .env) must ALLOW — the
 #     wrapper short-circuits BEFORE the free-text deny scan, else the deferral is denied,
 #     no ledger row is written, and the headless loop retries the gated item to the cap.
@@ -93,8 +87,6 @@ OUT=$(run_on "$(pl Bash 'gh secret set FOO' '')")
 [ "$(dec "$OUT")" = "deny" ] && ok "real 'gh secret set' still denied (short-circuit is wrapper-only)" || bad "gh secret leaked through: $OUT"
 OUT=$(run_on "$(pl Bash 'tools/04-loop/defer.sh R-1 x; rm -rf /' '')")
 [ "$(dec "$OUT")" = "deny" ] && ok "wrapper + chained 'rm -rf' still denied (control-op → deny-list)" || bad "chained rm-rf via wrapper not denied: $OUT"
-OUT=$(run_on "$(pl Bash 'tools/04-loop/resolve.sh R-1 x; rm -rf /' '')")
-[ "$(dec "$OUT")" = "deny" ] && ok "resolve.sh + chained 'rm -rf' still denied (control-op → deny-list)" || bad "chained rm-rf via resolve.sh not denied: $OUT"
 OUT=$(run_on "$(pl Bash 'bash tools/hooks/test_loop_lib.sh' '')")
 [ "$(dec "$OUT")" = "allow" ] && ok "allow hermetic test run" || bad "test run not allowed: $OUT"
 OUT=$(run_on "$(pl Bash 'gh pr create --fill' '')")
@@ -107,10 +99,9 @@ OUT=$(run_on "$(pl Edit '' "$REPO/tools/hooks/foo.sh")")
 # 5) ASK (no output) — design-substrate Edit + unknown bash + bare git push (non-force).
 OUT=$(run_on "$(pl Edit '' '/repo/design-substrate/Spec_X.md')")
 [ -z "$OUT" ] && ok "design-substrate Edit → ask (no auto-approve)" || bad "design-substrate auto-decided: $OUT"
-# 5b) loop_status.md Edit/Write → ask (codex [P1] round 4: excluding resolve.sh from the
-#     Bash short-circuit does nothing if a plain Edit/Write to the ledger is still
-#     auto-allowed — an unattended agent could append a fabricated RESOLVED-HIL row
-#     directly, bypassing the resolve.sh gate entirely).
+# 4f) loop_status.md Edit/Write → ask (codex [P1] round 4, U-HK-11/14/15): the ledger is
+#     a human-reviewed audit trail; a plain Edit/Write tool call must not be able to
+#     append a fabricated RESOLVED-HIL row and self-clear a gate, even in loop mode.
 OUT=$(run_on "$(pl Edit '' "$REPO/.harness/loop_status.md")")
 [ -z "$OUT" ] && ok "loop_status.md Edit → ask (no auto-approve; ledger is audit-only)" || bad "loop_status.md Edit auto-decided: $OUT"
 OUT=$(run_on "$(pl Write '' "$REPO/.harness/loop_status.md")")

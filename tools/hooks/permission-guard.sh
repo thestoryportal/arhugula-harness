@@ -172,15 +172,15 @@ esac
 # this exemption a safe deferral whose reason names the gate would be DENIED, no DEFERRED-HIL
 # row would be written, and the headless loop would retry the same gated item to the cap.
 #
-# resolve.sh is DELIBERATELY EXCLUDED from this short-circuit (codex [P1] round 3 on this
-# arc). defer.sh/halt.sh only ever ASK for future attention — logging one can never cause
-# harm regardless of who calls it. resolve.sh ASSERTS that a human already answered a gate;
-# blanket-auto-allowing that in headless loop mode would let an unattended agent self-author
-# "operator approved" and clear its own HIL/vendor/design gate with no external check at all.
-# resolve.sh therefore falls through to the normal deny-list-then-ask flow below like any
-# other command — reachable only from an attended session where a human can actually see
-# and approve the specific call (or where the note text itself trips the deny-list, which is
-# an acceptable false-positive-friction tradeoff, not a safety gap).
+# Deliberately NOT here: any mechanism that CLEARS a gate (asserts a human already
+# answered it) rather than just logging one for future attention. defer.sh/halt.sh are
+# safe to blanket-allow because logging can never cause harm regardless of who calls it;
+# a gate-clearing action is fundamentally different — it must go through the normal
+# deny-list-then-ask flow, reachable only from an attended session. This is why there is
+# no `resolve.sh` wrapper: an unattended headless child could never legitimately answer a
+# HIL gate on its own, so a mechanism that let it try (even indirectly, by clearing a
+# ledger row) would be a bypass, not a convenience. Resolution is recorded directly via
+# loop_lib.sh's loop_resolve from an attended session — no wrapper needed or wanted.
 # Strictly bounded to a SINGLE CLEAN invocation: wrapper prefix + NO control operators (so it
 # can't chain a real dangerous command) + NO $VAR expansion (so it can't expand a secret VALUE
 # into the ledger). $(...) and newlines are control-operator-rejected here too.
@@ -247,15 +247,15 @@ case "$TOOL" in
     # (X-AL-3 back-flow) — those, plus secret/outside/.git/traversal paths (via _safe_path),
     # fall through to ask.
     #
-    # loop_status.md is ALSO excluded (codex [P1] round 4 on the resolve.sh arc): excluding
-    # resolve.sh from the loop-control-wrapper short-circuit (§2 above) does nothing to stop
-    # an unattended agent from appending a RESOLVED-HIL row directly via a plain Edit/Write
-    # tool call — this ledger is meant to be a human-reviewed audit trail, not a file an
-    # agent edits to assert its own gates are cleared. Raw Bash-level redirection into it
-    # (`echo … >> .harness/loop_status.md`) is separately already blocked: any `>` trips the
-    # control-operator check in §3's Bash-prefix block below, falling through to ask. The
-    # ONLY legitimate write path is loop_log (called from defer.sh/halt.sh, always allowed;
-    # or from resolve.sh, which itself now requires the normal ask/deny flow — see §2).
+    # loop_status.md is ALSO excluded (codex [P1] round 4, U-HK-11/14/15): it is a
+    # human-reviewed audit trail, not a file any agent — attended or not — should be able
+    # to self-edit via a plain Edit/Write tool call to assert its own gates are cleared
+    # (e.g. hand-appending a RESOLVED-HIL row). Raw Bash-level redirection into it
+    # (`echo … >> .harness/loop_status.md`) is separately already blocked: any `>` trips
+    # the control-operator check in §3's Bash-prefix block below, falling through to ask.
+    # The ONLY writers are loop_log's own appends: from defer.sh/halt.sh (always allowed,
+    # §2 above) or from loop_resolve called directly in an attended session (no wrapper —
+    # see the §2 comment on why resolution has none).
     case "$FPATH" in
       */design-substrate/*|design-substrate/*) : ;;  # ask (absolute OR relative path)
       */.harness/loop_status.md|.harness/loop_status.md) : ;;  # ask — ledger is audit-only
@@ -290,7 +290,7 @@ if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ]; then
     TRIM=$(printf '%s' "$CMD" | sed 's/^[[:space:]]*//')
     # (Loop-control wrappers defer.sh/halt.sh are auto-allowed earlier — at the top of the
     # deny block — so a deferral reason naming an operator action isn't tripped by the
-    # free-text deny scan. resolve.sh is deliberately NOT included — see §2.)
+    # free-text deny scan. See §2.)
     # Allowlist = commands that are safe REGARDLESS of their arguments (the dev/git arc
     # + pure builtins with no filesystem reach). Deliberately NOT here:
     #  - content readers / programmable filters (cat/head/tail/grep/rg/find/jq/sed/awk/
