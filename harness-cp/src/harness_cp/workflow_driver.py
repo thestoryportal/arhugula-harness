@@ -9782,6 +9782,11 @@ def _execute_evaluator_optimizer(
         # iterations=0 + resume_pending_evaluate=False → byte-identical to the pre-arc
         # `for _iteration in range(MAX)` loop.
         while not accepted and iterations < _DEFAULT_EVALUATOR_OPTIMIZER_MAX_ITERATIONS:
+            # B-60 (codex round-1 on PR #1075): per-iteration fence consult —
+            # the sequential generate→evaluate loop is this strategy's own
+            # step-boundary cadence; a token tripping mid-iteration must stop
+            # the NEXT iteration's dispatches from beginning.
+            _consult_dispatch_fence()
             iterations += 1
             last_generate_output = _dispatch_and_buffer(
                 generate_step, declared_step_index=0, entry_index=entry_index
@@ -10826,6 +10831,14 @@ def _execute_orchestrator_workers(
             timestamp=fanout_timestamp,
             procedural_tier_snapshot_ref=snapshot_ref,
         )
+
+    # B-60 (codex round-1 on PR #1075, reproduced): the orchestrator's
+    # SEQUENTIAL dispatch above is this strategy's Phase 1 — a token
+    # tripping during it passed the strategy-entry consult, so without a
+    # fresh consult HERE the worker fan-out below still begins scheduling.
+    # Placed BEFORE branch-plan composition and fan-out admission, so no
+    # admission release is owed on the raise.
+    _consult_dispatch_fence()
 
     # --- 2) the worker fan-out plan (per-role child contexts under the orchestrator) ---
     # B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-SUBAGENT — reset `is_orchestrator_dispatch`
@@ -13217,6 +13230,11 @@ def _execute_decentralized_handoff(
             )
 
     for stage_index, step in enumerate(steps):
+        # B-60 (codex round-1 on PR #1075): per-stage fence consult — the
+        # sequential handoff chain is this strategy's step-boundary cadence;
+        # a token tripping mid-chain must stop the NEXT stage's dispatch
+        # from beginning.
+        _consult_dispatch_fence()
         # Resolve the per-step binding FIRST (deterministic, pure — matches the
         # linear/orchestrator sites that call it outside the dispatch try) so a
         # per-step ROLE override (CP spec v1.38 §6.1, B4 Slice 4) can take
