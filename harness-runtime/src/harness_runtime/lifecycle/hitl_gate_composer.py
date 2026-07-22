@@ -1269,10 +1269,20 @@ class RuntimeHITLGateComposer:
         placement: HITLPlacement,
         palette: frozenset[HITLResponse],
         escalation_reason: str,
+        tenant_id: str | None,
     ) -> NoReturn:
         """Deliver the gate to the secondary channel (webhook) + set the pause
         flag + raise `HITLPauseRequestedSignal` — the shared §14.8.8.1
         durable-async sequence.
+
+        `tenant_id` (B-65-A, Runtime spec v1.103 §14.8.11): the CALLER's
+        `step_context.tenant_id` — NOT `self.webhook_delivery_composer.
+        _tenant_id` (a ctor-bound field the bootstrap factory never
+        populates; using it here would silently scope every post-effect
+        recovery entry to the untenanted case regardless of which tenant's
+        workflow is actually escalating). Threaded to `deliver_webhook_for_
+        brief` so a post-effect signing failure's protected-store write
+        lands under the OWNING tenant.
 
         Factored (U-RT-119) so BOTH the §14.8.2 step-4-bis durable-async-cell
         branch AND the §14.8.9 `escalate-secondary-channel` timeout dispatch
@@ -1321,7 +1331,7 @@ class RuntimeHITLGateComposer:
         )
         with _webhook_fence_guard:
             delivery_result = await composer.deliver_webhook_for_brief(
-                durable_brief, idempotency_key
+                durable_brief, idempotency_key, tenant_id=tenant_id
             )
         # §14.8.8.1 step 5: set the caller-signal pause flag (observed by
         # workflow_driver per-step pre-entry detection per C-RT-24 §14.14.3).
@@ -2016,6 +2026,7 @@ class RuntimeHITLGateComposer:
                         placement=placement,
                         palette=palette,
                         escalation_reason="durable_async_cell_synchrony",
+                        tenant_id=step_context.tenant_id,
                     )
                 # End of step 4-bis. Fall through to step 4f sync-blocking.
 
@@ -2147,6 +2158,7 @@ class RuntimeHITLGateComposer:
                                 placement=placement,
                                 palette=palette,
                                 escalation_reason="hitl_timeout_escalate_secondary_channel",
+                                tenant_id=step_context.tenant_id,
                             )
                         # fail-closed (solo default; team configurable; multi
                         # default) AND escalate-degraded-when-unbound (the §14.8.9

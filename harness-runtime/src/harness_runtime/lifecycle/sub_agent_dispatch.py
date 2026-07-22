@@ -156,6 +156,7 @@ from harness_runtime.lifecycle.audit_signing_errors import (
 from harness_runtime.lifecycle.audit_writer import RuntimeAuditLedgerWriter
 from harness_runtime.lifecycle.child_workflow_runner import ChildWorkflowRunner
 from harness_runtime.lifecycle.handoff import RuntimeHandoffRegistry
+from harness_runtime.lifecycle.protected_result_store import resolve_result_ref
 from harness_runtime.lifecycle.state_ledger import LedgerWriter
 from harness_runtime.lifecycle.topology_dispatcher import RuntimeTopologyDispatcher
 
@@ -630,6 +631,14 @@ class RuntimeSubAgentDispatcher:
     completion site converts a signing-caused compose failure into the
     result-preserving `PostEffectAuditSigningError` carrier (CP v1.101 §2);
     OFF (default) byte-preserves the loudly-surfaced proceed behavior."""
+
+    protected_result_store: Any = None
+    """B-65-A (Runtime spec v1.103 §14.8.11; RATIFIED B-65 Class 2 fork
+    §3b) — the protected post-effect result store, threaded from `ctx.
+    protected_result_store` at bootstrap stage-5. `None` preserves
+    unit-test ergonomics (`resolve_result_ref` degrades to an
+    `UnresolvableResultRef` naming the missing store, never a second
+    unrelated error)."""
 
     # Module-bound canonical attribute name constants (per spec §14.7.5
     # "Producer-side attribute carrier reference" — imported from the
@@ -1168,6 +1177,9 @@ class RuntimeSubAgentDispatcher:
                         f"(fail_class={child_result.fail_class!r}): {sign_exc}",
                         effect_class=PostEffectClass.SUB_AGENT_RESULT,
                         result=child_result,
+                        result_ref=resolve_result_ref(
+                            self.protected_result_store, step_context.tenant_id, child_result
+                        ),
                     ) from sign_exc
                 raise SubAgentChildFailedError(
                     f"child sub-workflow {payload.child_workflow_id!r} "
@@ -1220,6 +1232,9 @@ class RuntimeSubAgentDispatcher:
                         f"(pause snapshot preserved on the carrier): {sign_exc}",
                         effect_class=PostEffectClass.SUB_AGENT_RESULT,
                         result=child_result,
+                        result_ref=resolve_result_ref(
+                            self.protected_result_store, step_context.tenant_id, child_result
+                        ),
                     ) from sign_exc
                 if child_result.pause_snapshot is None:
                     raise SubAgentChildFailedError(
@@ -1272,6 +1287,9 @@ class RuntimeSubAgentDispatcher:
                     f"sub-workflow ({payload.child_workflow_id!r}): {exc}",
                     effect_class=PostEffectClass.SUB_AGENT_RESULT,
                     result=step_output,
+                    result_ref=resolve_result_ref(
+                        self.protected_result_store, step_context.tenant_id, step_output
+                    ),
                 ) from exc
             except SubAgentDispatchAuditComposeError:
                 # Non-signing compose failures (and every flag-OFF signing

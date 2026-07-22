@@ -39,6 +39,7 @@ from harness_runtime.lifecycle.audit_signing_errors import (
     PostEffectClass,
 )
 from harness_runtime.lifecycle.cost_record_sink import SupportsCostRecordAppend
+from harness_runtime.lifecycle.protected_result_store import resolve_result_ref
 
 __all__ = [
     "WebhookDeliveryComposer",
@@ -127,6 +128,7 @@ class WebhookDeliveryComposer:
         procedural_tier_snapshot_resolver: Any = None,
         signing_backend: Any = None,
         audit_signing_fail_closed: bool = False,
+        protected_result_store: Any = None,
         workflow_id: str | None = None,
         parent_action_id: str | None = None,
         parent_idempotency_key: str | None = None,
@@ -193,6 +195,12 @@ class WebhookDeliveryComposer:
         # policy (stage-5 factory). ON → both cost-attribution catch sites
         # raise the typed family; OFF (default) byte-preserves log-and-proceed.
         self._audit_signing_fail_closed = audit_signing_fail_closed
+        # B-65-A (Runtime spec v1.103 §14.8.11; RATIFIED B-65 Class 2 fork
+        # §3b) — the protected post-effect result store, threaded from
+        # `ctx.protected_result_store` at bootstrap stage-5. None preserves
+        # unit-test ergonomics (`resolve_result_ref` degrades to an
+        # `UnresolvableResultRef` naming the missing store).
+        self._protected_result_store = protected_result_store
         self._workflow_id = workflow_id
         self._parent_action_id = parent_action_id
         self._parent_idempotency_key = parent_idempotency_key
@@ -209,6 +217,8 @@ class WebhookDeliveryComposer:
         webhook_config: WebhookConfig,
         payload: WebhookPayload,
         idempotency_key: str,
+        *,
+        tenant_id: str | None = None,
     ) -> WebhookDeliveryResult:
         """Deliver `payload` to `webhook_config.endpoint_url` via HTTP POST
         with retry orchestration per spec §14.10.1.
@@ -216,6 +226,13 @@ class WebhookDeliveryComposer:
         Per spec §14.10.5 inv 1: same `idempotency_key` → same outcome
         within retention window. The idempotency-key header is set on every
         attempt to enable server-side deduplication.
+
+        `tenant_id` (B-65-A, Runtime spec v1.103 §14.8.11): the OWNING
+        tenant scope for the protected-store write on a post-effect signing
+        failure — the CALLER's `step_context.tenant_id`, not this
+        composer's ctor-bound `self._tenant_id` (which the bootstrap
+        factory never populates). Default `None` preserves the raw 3-arg
+        surface's existing call shape for untenanted/test callers.
 
         :raises WebhookDeliveryExhaustedError: when all retry attempts fail.
         """
@@ -330,6 +347,7 @@ class WebhookDeliveryComposer:
                 f"delivered={delivered}): {sign_exc}",
                 effect_class=PostEffectClass.WEBHOOK_RECEIPT,
                 result=result,
+                result_ref=resolve_result_ref(self._protected_result_store, tenant_id, result),
             ) from sign_exc
 
         if not delivered:
@@ -448,6 +466,8 @@ class WebhookDeliveryComposer:
         self,
         brief: HITLEscalationBrief,
         idempotency_key: str,
+        *,
+        tenant_id: str | None = None,
     ) -> WebhookDeliveryResult:
         """Spec-canonical 2-arg brief surface per runtime spec v1.34 §14.10.1
         Reading (H) absorption + §14.8.8.1 step 3 consumer cite.
@@ -501,7 +521,9 @@ class WebhookDeliveryComposer:
         )
 
         payload = project_brief_to_payload(brief, idempotency_key)
-        return await self.deliver_webhook(self._webhook_config, payload, idempotency_key)
+        return await self.deliver_webhook(
+            self._webhook_config, payload, idempotency_key, tenant_id=tenant_id
+        )
 
 
 # --- factory ----------------------------------------------------------------

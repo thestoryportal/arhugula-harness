@@ -80,6 +80,7 @@ from harness_runtime.lifecycle.effect_fence import (
     EffectFenceProtocol,
 )
 from harness_runtime.lifecycle.mcp_client_host import MCPClientHost
+from harness_runtime.lifecycle.protected_result_store import resolve_result_ref
 
 if TYPE_CHECKING:
     # Type-only: the multi-server routing carriers (U-RT-127/128). Imported
@@ -357,6 +358,7 @@ class RuntimeToolDispatcher:
         procedural_tier_snapshot_resolver: Any = None,
         signing_backend: Any = None,
         audit_signing_fail_closed: bool = False,
+        protected_result_store: Any = None,
         tool_execution_drivers: dict[ServerName, ToolExecutionDriver] | None = None,
         provider_secret_resolver: Any = None,
         secret_fetch_audit_emitter: Callable[[SecretFetchEvent], Any] | None = None,
@@ -463,6 +465,12 @@ class RuntimeToolDispatcher:
         # the stage-5 factory. ON → both cost-attribution catch sites raise
         # the typed family; OFF (default) byte-preserves log-and-proceed.
         self._audit_signing_fail_closed = audit_signing_fail_closed
+        # B-65-A (Runtime spec v1.103 §14.8.11; RATIFIED B-65 Class 2 fork
+        # §3b) — the protected post-effect result store, threaded from
+        # `ctx.protected_result_store` by the stage-5 factory. None
+        # preserves unit-test ergonomics (`resolve_result_ref` degrades to
+        # an `UnresolvableResultRef` naming the missing store).
+        self._protected_result_store = protected_result_store
         # R-FS-1 arc CA — run-scoped cost-record sink (same list as
         # `ctx.cost_record_accumulator`, threaded by the stage-5 factory).
         # `_attribute_tool_cost_best_effort` appends each dispatch's returned
@@ -508,6 +516,7 @@ class RuntimeToolDispatcher:
         procedural_tier_snapshot_resolver: Any = None,
         signing_backend: Any = None,
         audit_signing_fail_closed: bool = False,
+        protected_result_store: Any = None,
         tool_execution_driver: ToolExecutionDriver | None = None,
         provider_secret_resolver: Any = None,
         secret_fetch_audit_emitter: Callable[[SecretFetchEvent], Any] | None = None,
@@ -555,6 +564,7 @@ class RuntimeToolDispatcher:
             # placeholder-signed tool cost audits.
             signing_backend=signing_backend,
             audit_signing_fail_closed=audit_signing_fail_closed,
+            protected_result_store=protected_result_store,
             tool_execution_drivers=(
                 {server_name: tool_execution_driver} if tool_execution_driver is not None else None
             ),
@@ -1225,6 +1235,9 @@ class RuntimeToolDispatcher:
                         f"(tool={tool_id!r}, schema-violation path): {sign_exc}",
                         effect_class=PostEffectClass.TOOL_RESULT,
                         result=response,
+                        result_ref=resolve_result_ref(
+                            self._protected_result_store, step_context.tenant_id, response
+                        ),
                     ) from sign_exc
                 raise ToolInvocationSchemaViolationError(
                     f"RT-FAIL-TOOL-INVOCATION-SCHEMA-VIOLATION: tool="
@@ -1263,6 +1276,9 @@ class RuntimeToolDispatcher:
                     f"(tool={tool_id!r}): {sign_exc}",
                     effect_class=PostEffectClass.TOOL_RESULT,
                     result=response,
+                    result_ref=resolve_result_ref(
+                        self._protected_result_store, step_context.tenant_id, response
+                    ),
                 ) from sign_exc
 
             # --- Step 10b: effect-fence output capture (B-EFFECT-FENCE-HITL-ROUTE)

@@ -41,6 +41,7 @@ __all__ = [
     "ResultRefValue",
     "UnresolvableResultRef",
     "compose_composite_key",
+    "resolve_result_ref",
 ]
 
 _UNTENANTED_TAG = "_untenanted"
@@ -319,3 +320,21 @@ class ProtectedResultStore:
             pass
         finally:
             os.close(dir_fd)
+
+
+def resolve_result_ref(
+    store: ProtectedResultStore | None, tenant_id: str | None, result: object
+) -> ResultRefValue:
+    """The shared raise-site helper (all four `PostEffectClass` dispatchers):
+    write `result` to `store` under `tenant_id` and return the resolved ref.
+
+    `store is None` mirrors the composition-root's established
+    "`None` = unit-test ergonomics, production wiring injects a real
+    instance" convention (`RuntimeLLMDispatcher.cost_chain` et al.) — a
+    dispatcher constructed without the store still raises the ORIGINAL
+    `PostEffectAuditSigningError` correctly, just with an unresolvable ref
+    naming why, rather than raising a second, unrelated error.
+    """
+    if store is None:
+        return UnresolvableResultRef(reason="no protected result store configured")
+    return store.write_once(tenant_id, result)

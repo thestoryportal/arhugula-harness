@@ -110,6 +110,7 @@ from harness_runtime.lifecycle.memory_tool_dispatch import (
     execute_with_memory_callbacks,
     step_has_memory_tool,
 )
+from harness_runtime.lifecycle.protected_result_store import resolve_result_ref
 from harness_runtime.memory_context import (
     RuntimeMemoryContext,
     compose_system_prompt_with_memory_packet,
@@ -752,6 +753,13 @@ class RuntimeLLMDispatcher:
     # lower-tier prewarm disposition is held at B-55 (fork gate item 8
     # decided MTC-scoped only; MTC+ON never reaches prewarm per U-RT-135).
     audit_signing_fail_closed: bool = False
+    # B-65-A (Runtime spec v1.103 §14.8.11; RATIFIED B-65 Class 2 fork §3b) —
+    # the protected post-effect result store, threaded from `ctx.
+    # protected_result_store` at stage 5. `None` preserves unit-test
+    # ergonomics (the raise-site helper `resolve_result_ref` degrades to an
+    # `UnresolvableResultRef` naming the missing store, never a second
+    # unrelated error) — production wiring always injects a real instance.
+    protected_result_store: Any = None
 
     async def prewarm(self) -> PrewarmOutcome:
         """Boot-time prompt-cache pre-warm (B-18-KEEPALIVE; ADR-D3 §1.5:189).
@@ -1816,6 +1824,9 @@ class RuntimeLLMDispatcher:
                     f"(provider={provider_name!r}, model={model!r}): {exc}",
                     effect_class=PostEffectClass.PROVIDER_RESPONSE,
                     result=response,
+                    result_ref=resolve_result_ref(
+                        self.protected_result_store, step_context.tenant_id, response
+                    ),
                 ) from exc
 
             # --- Step 5: return step output mapping ---------------------
