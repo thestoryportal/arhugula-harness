@@ -100,6 +100,25 @@ loop_defer R-300 "needs creds"
 SKIP=$(loop_skip_set)
 [ "$SKIP" = "R-300 R-410" ] && ok "'ACTIVATE' in a reason does not drop deferrals ($SKIP)" || bad "kind whole-row match dropped a deferral: [$SKIP]"
 
+# 15) loop_resolve clears a matching item from BOTH loop_skip_set and
+#     loop_pending_hil_summary — an item whose gate was later answered must not nag
+#     forever just because loop mode never re-ACTIVATEd.
+: > "$(loop_status_path)"; loop_activate "resolve test" >/dev/null
+loop_defer R-410 "needs container runtime"
+loop_defer R-300 "needs OpenAI creds"
+loop_resolve R-410 "ratified via council dyad, PR #1234"
+SKIP=$(loop_skip_set)
+[ "$SKIP" = "R-300" ] && ok "loop_resolve clears item from skip-set ($SKIP)" || bad "resolve did not clear skip-set: [$SKIP]"
+SUM=$(loop_pending_hil_summary)
+printf '%s' "$SUM" | grep -q "R-410" && bad "resolved item still in pending summary: $SUM" \
+  || ok "loop_resolve clears item from pending summary"
+printf '%s' "$SUM" | grep -q "R-300" && ok "unresolved item still in pending summary" || bad "unresolved item dropped: $SUM"
+
+# 16) Re-deferring an already-resolved item re-flags it (last-write-wins, not sticky-resolved).
+loop_defer R-410 "regressed — needs container runtime again"
+SKIP=$(loop_skip_set)
+[ "$SKIP" = "R-300 R-410" ] && ok "re-deferral after resolve re-flags the item ($SKIP)" || bad "re-deferral not re-flagged: [$SKIP]"
+
 echo "----"
 echo "loop_lib: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

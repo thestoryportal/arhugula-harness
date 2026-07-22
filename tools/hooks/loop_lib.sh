@@ -57,8 +57,10 @@ loop_status_ensure() {
 default — rows are written only while loop mode is active (`HARNESS_LOOP=1` or the
 `.harness/.loop-active` marker). Review after an unattended run: each `DEFERRED-HIL`
 is a genuine gate (creds / vendor / paid call / destructive op) the loop refused to
-auto-fire and worked around; `DENY` is a hard-stop the permission guard blocked;
-`RESOLVE-SPLIT` is a Codex+Advisor disagreement where the safer default was taken.*
+auto-fire and worked around; a later `RESOLVED-HIL` row for the same item-id clears it
+once the gate is answered (ratification, operator selection, etc.); `DENY` is a
+hard-stop the permission guard blocked; `RESOLVE-SPLIT` is a Codex+Advisor disagreement
+where the safer default was taken.*
 
 | timestamp | kind | detail |
 |---|---|---|
@@ -68,8 +70,8 @@ EOF
 }
 
 # Append a ledger row. Usage: loop_log <kind> <detail...>
-# kind is a short uppercase token (ACTIVATE / DEACTIVATE / DEFERRED-HIL / COMPLETED /
-# DENY / RESOLVE-SPLIT / RESUME). detail is free text (pipes are escaped so the
+# kind is a short uppercase token (ACTIVATE / DEACTIVATE / DEFERRED-HIL / RESOLVED-HIL /
+# COMPLETED / DENY / RESOLVE-SPLIT / RESUME). detail is free text (pipes are escaped so the
 # markdown table stays well-formed). Always exits 0 (a ledger write must never break
 # the calling hook). No-op if the project dir cannot be resolved.
 loop_log() {
@@ -93,40 +95,65 @@ loop_defer() {
   loop_log DEFERRED-HIL "${item} — $*"
 }
 
-# The run-scoped SKIP-SET: item-IDs already deferred SINCE the last ACTIVATE. This is the
-# mechanical anti-re-loop guard — `stop-loop.sh` injects it so a fresh headless `claude -p`
-# child (no memory of prior turns) does not re-attempt an item a prior turn already
-# deferred against the single static dashboard pointer. Echoes space-separated item-IDs
-# (unique), empty if none. The persistent ledger IS the cross-context memory.
+# Log that a previously-deferred item's gate was subsequently answered (ratified,
+# selected, decided) OUTSIDE the append-only DEFERRED-HIL row itself — e.g. via a later
+# council/dyad ratification or operator AskUserQuestion that this ledger never witnessed
+# directly. Without this, loop_skip_set/loop_pending_hil_summary have no way to represent
+# "resolved" and the SessionStart hook nags about an already-answered gate forever (until
+# the next ACTIVATE row happens to reset the window by accident).
+# Usage: loop_resolve <item-id> <how it was resolved + evidence pointer>
+loop_resolve() {
+  local item="$1"; shift
+  loop_log RESOLVED-HIL "${item} — $*"
+}
+
+# The run-scoped SKIP-SET: item-IDs deferred SINCE the last ACTIVATE and not subsequently
+# RESOLVED. This is the mechanical anti-re-loop guard — `stop-loop.sh` injects it so a
+# fresh headless `claude -p` child (no memory of prior turns) does not re-attempt an item
+# a prior turn already deferred against the single static dashboard pointer. Echoes
+# space-separated item-IDs (unique), empty if none. The persistent ledger IS the
+# cross-context memory.
 loop_skip_set() {
   local p; p=$(loop_status_path)
   [ -f "$p" ] || return 0
-  # Extract ONLY the LEADING item token of each DEFERRED-HIL detail (loop_defer writes
-  # "<item> — <reason>"). Scanning the whole detail would wrongly skip an item merely
-  # MENTIONED in a reason, e.g. `loop_defer R-410 "blocked until R-300 decides"` must skip
-  # R-410 only, never R-300.
+  # Extract ONLY the LEADING item token of each DEFERRED-HIL/RESOLVED-HIL detail
+  # (loop_defer/loop_resolve write "<item> — <reason>"). Scanning the whole detail would
+  # wrongly match an item merely MENTIONED in a reason, e.g. `loop_defer R-410 "blocked
+  # until R-300 decides"` must key on R-410 only, never R-300.
   # Match the KIND COLUMN ($3) exactly — a whole-row regex would let a reason CONTAINING
   # the word "ACTIVATE"/"DEFERRED-HIL" reset the run boundary and drop real deferrals.
+  # Per-token LAST-WRITE-WINS since the last ACTIVATE: a later RESOLVED-HIL row clears a
+  # prior DEFERRED-HIL for the same item; a later re-DEFERRED-HIL row re-flags it.
   awk -F'|' '
     { k = $3; gsub(/^[ \t]+|[ \t]+$/, "", k) }
-    k == "ACTIVATE"     { act = NR }
-    k == "DEFERRED-HIL" { d[NR] = $4 }
-    END { for (n in d) if (n > act) { s=d[n]; sub(/^[ \t]+/, "", s); split(s, a, /[ \t]/); print a[1] } }
+    k == "ACTIVATE" { delete state }
+    k == "DEFERRED-HIL" || k == "RESOLVED-HIL" {
+      s = $4; sub(/^[ \t]+/, "", s); split(s, a, /[ \t]/); tok = a[1]
+      state[tok] = (k == "DEFERRED-HIL") ? "PENDING" : "RESOLVED"
+    }
+    END { for (t in state) if (state[t] == "PENDING") print t }
   ' "$p" 2>/dev/null | grep -E '^R-[A-Za-z0-9._-]+$' | sort -u | tr '\n' ' ' | sed 's/ $//'
 }
 
-# Operator-facing summary of the LAST run's deferrals, for SessionStart surfacing ("clearly
-# presented when they engage next"). Compact one line; empty when there are none. Lists up
-# to 3 items + a "+N more" tail so the SessionStart context stays bounded.
+# Operator-facing summary of the LAST run's still-PENDING deferrals (a RESOLVED-HIL row
+# clears an item per the same last-write-wins rule as loop_skip_set), for SessionStart
+# surfacing ("clearly presented when they engage next"). Compact one line; empty when
+# there are none. Lists up to 3 items + a "+N more" tail so the SessionStart context
+# stays bounded. Item order among >3 pending items is not chronologically guaranteed
+# (awk associative-array iteration) — acceptable for advisory summary text.
 loop_pending_hil_summary() {
   local p; p=$(loop_status_path)
   [ -f "$p" ] || return 0
   local rows n
   rows=$(awk -F'|' '
-    { kind = $3; gsub(/^[ \t]+|[ \t]+$/, "", kind) }
-    kind == "ACTIVATE"     { act = NR }
-    kind == "DEFERRED-HIL" { d[NR] = $4 }
-    END { for (j = 1; j <= NR; j++) if (j in d && j > act) { s=d[j]; gsub(/^ +| +$/, "", s); print s } }
+    { k = $3; gsub(/^[ \t]+|[ \t]+$/, "", k) }
+    k == "ACTIVATE" { delete state; delete detail }
+    k == "DEFERRED-HIL" || k == "RESOLVED-HIL" {
+      s = $4; sub(/^[ \t]+/, "", s); split(s, a, /[ \t]/); tok = a[1]
+      if (k == "DEFERRED-HIL") { state[tok] = "PENDING"; detail[tok] = s }
+      else { state[tok] = "RESOLVED" }
+    }
+    END { for (t in state) if (state[t] == "PENDING") print detail[t] }
   ' "$p" 2>/dev/null)
   [ -z "$rows" ] && return 0
   n=$(printf '%s\n' "$rows" | grep -c .)
