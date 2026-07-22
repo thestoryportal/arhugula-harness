@@ -60,7 +60,13 @@ an explicit protection contract (codex round-2 [P1] on this filing: the existing
 `EngineOutputStore` is UNSUITABLE — plaintext JSONL, no tenant-authorized lookup,
 Mapping-only where carrier results can be arbitrary objects, and under an MTC signing
 outage the payload may hold tenant prompts/PII/credentials). The contract: encrypted at
-rest (the deployment's signing/KMS boundary or an equivalent envelope), tenant-BOUND
+rest via an envelope path INDEPENDENT of the audit-signing KMS (codex round-10 [P2]: the
+carrier's primary trigger IS a signing-KMS outage — encrypting recovery records through
+that same boundary loses the payload in exactly the scenario the store exists for; a
+locally-held data-encryption key wrapped at provisioning time, or an equivalent
+outage-independent envelope, is the required shape), with a FAIL-CLOSED disposition on a
+store-write failure (the carrier surfaces WITHOUT a resolvable ref and says so typed —
+never a silently-unresolvable reference), tenant-BOUND
 lookup (the same normalized tenant scope the audit path uses — cross-tenant resolution
 refused typed), a defined serialization envelope for non-Mapping results (opaque
 byte-envelope + type tag, never lossy coercion), and write-once at the carrier's raise
