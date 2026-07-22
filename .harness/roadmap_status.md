@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `1feaa2787acc` |
+| `workspace_state_hash` | `5decaa908ba9` |
 | `last_refreshed` | 2026-07-22T00:00:00Z |
-| `git_head` | `8ba5e6e4` — prose-fix, not a PR |
+| `git_head` | `43875cac` — B-59-A spec leg |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 96 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Section 02 names the next Claude/Codex-executable frontier. Completion history lives in `Recently completed`; the full remaining itemization lives in `Remaining forward work` (next section).
 
-**Frontier:** B-65-A CLOSED at PR #1078 (protected result store + terminal-with-result cascade disposition; B-68 registered as its own residual). **Corrected 2026-07-22 (this entry previously mis-described both items below as still decision-gated — they are not; commit `e5256a88` records the operator's 2026-07-21 batched ratification of all four B-59/B-65/B-33/B-55 recommendations, Option A selected for each. `forward-register.yaml`'s `status: operator_gated` field is unchanged by design — per B-65-A's own observed lifecycle, that enum flips to `closed` only at apply-arc close, not at ratification; it does not distinguish "awaiting decision" from "ratified, awaiting build.")** Next per the pre-existing sequencing: **B-59-A** — RATIFIED, Option A (process-scoped capacity-authority singleton, adopt-new-budget-carry-occupied reconciliation, every-admission-surface rider incl. direct `reserve(1)`) — capacity authority not preserved across sequential bootstrap invocations (`.harness/class_2_fork_b59_capacity_authority_across_bootstraps.md` §3/§4/§5; apply arc = Runtime spec v1.102 §14.8.10 + CP spec v1.102 §25.11 amendment riders + impl, satisfying the doc's 5 verification obligations; mirror the B-65-A spec-leg-then-impl-leg PR sequencing). Then **B-33-A** — RATIFIED, Option A (open-dict additive IS carrier + 3-step verifier extension + injected OD-join evidence DTO from the composition root) — `verify_rotation_6_steps` cannot prove a rotation boundary occurred (`.harness/class_1_fork_b33_rotation_correlation_carrier.md` §3; apply arc per that section).
+**Frontier:** B-59-A SPEC LEG CLOSED at PR #1080 (CP v1.103→v1.104 §25.11 admission-guarantee row-2 span clarification + Runtime v1.103→v1.104 NEW §14.8.10.6 cross-bootstrap capacity-authority continuity + NEW RT-FAIL-CAPACITY-AUTHORITY-BUDGET-SHRINK taxonomy row + Runtime plan v2.52 NEW U-RT-146; no CP plan unit owed; 5 codex rounds to clean convergence). **Next: B-59-A IMPL LEG** — implement U-RT-146 (`design-substrate/Implementation_Plan_Harness_Runtime_v2_52.md` §1.1): factor the frame-ledger accounting out of `SubAgentDispatchExecutor` into a separately-adoptable process-lifetime ledger object (the executor's worker-pool + `_draining` flag stay per-bootstrap, rebuilt fresh each `api.run()`, delegating admission to the adopted ledger under an IDENTICAL lock object — never two separately-locked critical sections); wire the adopt-or-construct-first-time branch at `bootstrap/stage_5_loop_init.py:620-622`; satisfy all 7 acceptance criteria (adopt-not-reconstruct, atomicity, adopt-new-budget-carry-occupied incl. the valid-shrink-honored case, every-admission-surface, lease-release byte-unchanged, per-run isolation, interpreter-exit posture) with the full PD-8 mutation-probed test suite named at U-RT-146. Mirrors the B-65-A spec-leg→impl-leg precedent (#1077→#1078) — highest-blast-radius half (process-lifetime mutable state in a per-run-isolation codebase); start fresh, not mid-session. Then **B-33-A** — RATIFIED, Option A (open-dict additive IS carrier + 3-step verifier extension + injected OD-join evidence DTO from the composition root) — `verify_rotation_6_steps` cannot prove a rotation boundary occurred (`.harness/class_1_fork_b33_rotation_correlation_carrier.md` §3; apply arc per that section).
 
 
 ## Remaining forward work
@@ -49,11 +49,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1080 | 2026-07-22 | B-59-A spec leg merged: CP v1.103→v1.104 (§25.11 admission-guarantee row-2 span clarification) + Runtime v1.103→v1.104 (NEW §14.8.10.6 cross-bootstrap capacity-authority continuity + RT-FAIL-CAPACITY-AUTHORITY-BUDGET-SHRINK taxonomy row) + Runtime plan v2.52 (NEW U-RT-146); no CP plan unit owed; 5 codex rounds to clean convergence (ledger-vs-executor split + lock-identity structural witness). Next: B-59-A impl leg. |
 | commit 8ba5e6e4 | 2026-07-22 | Direct-commit prose correction: B-59-A/B-33-A frontier text updated from stale operator_gated framing to RATIFIED/build-ready (fork docs' own Status lines + git history commit e5256a88 confirm 2026-07-21 ratification). |
 | 1079 | 2026-07-22 | loop_status.md DEFERRED-HIL rows can be RESOLVED (fix-loop-status-resolved-hil) |
 | PR #1078 | 2026-07-22 | B-65-A protected result store + terminal-with-result cascade disposition — 11 out-of-family codex rounds to terminal; merge-gate 3-lens round-1 BLOCK (missing e2e coverage) fixed + PD-8 probed, round-2 all-APPROVE; B-65 closed, B-68 registered (narrow TTL-dependent GC/publish race). |
 | 1077 | 2026-07-22 | B-65-A spec leg merged: CP v1.103 §25.15 terminal-with-result rider + Runtime v1.103 §14.8.11 protected result store + plans v2.40/v2.51 (U-CP-85 amended, U-RT-145 new) + 4 clearance markers; codex 10 rounds terminal. Next: B-65-A impl leg. |
-| 1076 | 2026-07-21 | B-17 hold reaffirmed; next: B-65-A apply arc (then B-59-A, B-33-A) |
 ---
 
 ---
