@@ -70,11 +70,19 @@ def normalize_tenant_scope(tenant_id: str | None) -> str | None:
     """
     if tenant_id is None:
         return None
-    if tenant_id in ("", _RESERVED_SIDECAR_TENANT_TAG):
+    if tenant_id in ("", _RESERVED_SIDECAR_TENANT_TAG, _UNTENANTED_TAG):
+        # codex [P1] round 7 on this arc — a real tenant_id literally equal
+        # to `_UNTENANTED_TAG` encodes to the SAME composite-key prefix as
+        # `tenant_id=None` (both hex-encode the string "_untenanted"),
+        # letting a caller asserting one scope read an entry written under
+        # the other by prefix collision. Reject it here, at the single
+        # normalization boundary every write/read path already funnels
+        # through, closing the collision at its source.
         raise ValueError(
             f"tenant_id must not be empty or the reserved sidecar tag "
-            f"{_RESERVED_SIDECAR_TENANT_TAG!r} — pass None for the "
-            f"untenanted/single-tenant case (got {tenant_id!r})"
+            f"{_RESERVED_SIDECAR_TENANT_TAG!r} or the reserved untenanted tag "
+            f"{_UNTENANTED_TAG!r} — pass None for the untenanted/single-tenant "
+            f"case (got {tenant_id!r})"
         )
     return tenant_id
 
@@ -409,9 +417,29 @@ class ProtectedResultStore:
         return expired
 
     def _maybe_opportunistic_gc_sweep(self) -> None:
+        """Best-effort in-write housekeeping — never blocks the write.
+
+        codex [P1] round 7 on this arc: called from `write_once` BEFORE its
+        own try/except block, so an uncaught sweep exception (e.g. a
+        directory-enumeration `PermissionError` inside `gc_sweep`) would
+        propagate out of `write_once` entirely, replacing the caller's
+        typed `UnresolvableResultRef` degradation with an unrelated raw
+        exception — risking the raise-site caller (fed by an ALREADY-
+        completed paid effect) falling through to generic retry/fallback
+        handling instead of the fail-closed carrier path. The
+        bootstrap/`shutdown()`-step-5b callers of `gc_sweep()` directly are
+        unaffected — they already handle/report its exceptions themselves.
+        """
         now = time.time()
         if now - self._last_gc_at >= _OPPORTUNISTIC_GC_INTERVAL_SECONDS:
-            self.gc_sweep(now=now)
+            try:
+                self.gc_sweep(now=now)
+            except Exception as exc:
+                logger.error(
+                    "protected result store: opportunistic in-write GC sweep "
+                    "failed (write proceeds regardless): %s",
+                    exc,
+                )
 
     #: Errno values meaning "directory fsync is unsupported here" — safe to
     #: swallow. Anything else (EIO, ENOSPC, ...) is a genuine durability

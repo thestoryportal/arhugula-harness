@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from cryptography.fernet import Fernet
 from harness_core.deployment_surface import DeploymentSurface
 from harness_core.persona_tier import PersonaTier
 from harness_core.workload_class import WorkloadClass
@@ -54,6 +55,7 @@ from harness_runtime.lifecycle.prompt_selection import (
     PromptVersionUnapprovedError,
 )
 from harness_runtime.lifecycle.providers import ProviderClientsStage
+from harness_runtime.shutdown import shutdown
 from harness_runtime.types import (
     COST_ACCUM_VAR,
     BootstrapStage,
@@ -1923,3 +1925,57 @@ async def test_u_rt_139_bootstrap_threads_verified_record_into_writer(
         "the AUTHENTICATED cutover record did not thread through bootstrap "
         "into the writer — a retagged deployment's restart would brick"
     )
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_wires_protected_result_store_through_to_shutdown_sweep(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """B-65-A end-to-end witness (advisor-recommended, round-7 gate): a real
+    stage-4-OD-constructed `ProtectedResultStore` must survive `freeze()` on
+    the frozen `HarnessContext` and be swept by `shutdown()`'s step 5b.
+
+    This is the exact seam codex round 4 and round 6 each found broken in a
+    different half: round 4 wired the shutdown sweep but the unit test used
+    a duck-typed `_FakeCtx` that bypassed real `freeze()`; round 6 found
+    `freeze()` itself never forwarded the field, so a real bootstrap's
+    `ctx.protected_result_store` was always `None` even though stage 4 OD
+    had constructed a real store — the round-4 sweep was dead code in
+    production. Neither unit test could catch this because each exercised
+    only one half of the bootstrap→freeze→shutdown chain in isolation. This
+    test runs the real `run_bootstrap` → real `freeze()` → real `shutdown()`
+    chain, so a regression in either half fails here.
+
+    Mutation probe: reverting either the round-6 `freeze()` fix (dropping
+    `protected_result_store=self.protected_result_store,` from the
+    `HarnessContext(...)` call) or the round-4 `shutdown()` fix (dropping
+    step 5b) makes this test fail — the former via the first assertion, the
+    latter via the spy call-count assertion.
+    """
+    monkeypatch.setenv("HARNESS_PROTECTED_RESULT_STORE_KEY", Fernet.generate_key().decode("ascii"))
+    _patch_providers(monkeypatch)
+    _patch_collector(monkeypatch)
+
+    ctx = await run_bootstrap(_config(tmp_path), workload_class=_WORKLOAD)
+
+    assert ctx.protected_result_store is not None, (
+        "stage 4 OD set a real key env var, so the frozen ctx must carry a "
+        "real store — `None` here means freeze() dropped the field again"
+    )
+
+    real_sweep = ctx.protected_result_store.gc_sweep
+    sweep_calls: list[None] = []
+
+    def _spy_sweep() -> None:
+        sweep_calls.append(None)
+        real_sweep()
+
+    monkeypatch.setattr(ctx.protected_result_store, "gc_sweep", _spy_sweep)
+
+    report = await shutdown(ctx)
+
+    assert sweep_calls, (
+        "shutdown() never invoked protected_result_store.gc_sweep() — step 5b regressed"
+    )
+    assert "protected_result_store" not in report.failures

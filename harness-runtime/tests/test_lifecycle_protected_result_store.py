@@ -706,3 +706,60 @@ def test_directory_open_unsupported_errno_still_degrades_gracefully(
     ref = store.write_once("tenant-a", "payload")
     assert isinstance(ref, str)
     assert store.read("tenant-a", ref) == "payload"
+
+
+def test_normalize_tenant_scope_rejects_untenanted_sentinel_literal() -> None:
+    """codex [P1] round 7: a real tenant_id literally equal to the internal
+    `_UNTENANTED_TAG` ("_untenanted") hex-encodes to the SAME composite-key
+    prefix as `tenant_id=None` — the store cannot tell "untenanted" from a
+    real tenant named "_untenanted" apart from the tag alone, letting a
+    caller asserting one scope read an entry written under the other by
+    prefix collision. Rejected at the normalization boundary, mirroring the
+    existing "" / "_single" rejection.
+
+    Mutation probe: removing `_UNTENANTED_TAG` from the rejected tuple in
+    `normalize_tenant_scope` makes this `pytest.raises` assertion fail (no
+    exception raised)."""
+    with pytest.raises(ValueError, match="_untenanted"):
+        normalize_tenant_scope("_untenanted")
+
+
+def test_write_once_refuses_untenanted_sentinel_as_real_tenant_id(tmp_path: Path) -> None:
+    """Companion to the test above at the actual raise-site call — `write_once`
+    must refuse the collision-causing literal before ever composing a
+    composite key or touching disk, not just the standalone normalization
+    function.
+
+    Mutation probe: same as above — a reverted `normalize_tenant_scope`
+    lets this call through, raising nothing and returning a `str` ref
+    instead of raising `ValueError`."""
+    store = _store(tmp_path)
+    with pytest.raises(ValueError, match="_untenanted"):
+        store.write_once("_untenanted", {"x": 1})
+
+
+def test_write_once_survives_opportunistic_gc_sweep_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """codex [P1] round 7: an exception raised inside the periodic
+    opportunistic in-write GC sweep (e.g. a directory-enumeration
+    `PermissionError`) must NOT propagate out of `write_once` — that would
+    replace the well-typed `UnresolvableResultRef` degradation with an
+    unrelated raw exception, risking the raise-site caller (fed by an
+    ALREADY-completed paid effect) falling through to generic retry/
+    fallback handling instead of the fail-closed carrier path.
+
+    Mutation probe: removing the try/except around `self.gc_sweep(now=now)`
+    in `_maybe_opportunistic_gc_sweep` makes this test's `write_once` call
+    raise `RuntimeError` instead of returning a `str` ref."""
+    store = _store(tmp_path)
+    store._last_gc_at = 0.0  # force the opportunistic-interval branch true
+
+    def _boom(*, now: float | None = None) -> list[str]:
+        raise RuntimeError("simulated directory-enumeration failure")
+
+    monkeypatch.setattr(store, "gc_sweep", _boom)
+
+    ref = store.write_once(None, {"x": 1})
+    assert isinstance(ref, str)
+    assert store.read(None, ref) == {"x": 1}
