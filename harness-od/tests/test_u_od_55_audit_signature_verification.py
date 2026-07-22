@@ -337,12 +337,14 @@ def test_availability_typed_vs_defect_unwrapped() -> None:
 
 
 def test_backend_verify_exception_propagates_unwrapped() -> None:
-    """`backend.verify` itself is called UNGUARDED (out-of-family Codex [P2]
-    finding on this arc): unlike the resolver's KeyError-specific catch,
-    there is no established typed 'verify-side hard failures' family to key
-    a narrow catch on, so a raised exception — programming defect OR an
-    already-typed error a production backend raises — propagates unwrapped,
-    never reclassified as the availability type."""
+    """A `backend.verify` raise that is NOT the B-63 shared availability
+    contract (`harness_core.SigningBackendUnavailableError`) is a
+    programming DEFECT and propagates unwrapped — the B-63 translation
+    catch is keyed NARROWLY on the shared type (see
+    `test_b63_backend_verify_availability_raise_maps_to_od_availability_
+    type` for the availability half), never a blanket reclassification
+    (OD v1.34 §21.2.2 row 7(b): "raises that are NOT the typed
+    availability error and NOT AuditSignatureInvalid are DEFECTS")."""
     entry = _signed_entry("verify-raises-ref", backend=_Ed25519Backend(), tenant_id=None)
 
     class _RaisingVerifyBackend:

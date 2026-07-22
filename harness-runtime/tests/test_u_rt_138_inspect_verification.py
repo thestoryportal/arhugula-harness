@@ -925,14 +925,14 @@ def test_backend_construction_unavailable_is_unverified(
     fx: _Fixture, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A key-map entry whose backend cannot be CONSTRUCTED (missing
-    optional SDK — the typed `SigningBackendUnavailableError`) is an
+    optional SDK — the typed `SigningBackendSdkUnavailableError`) is an
     explicit UNVERIFIED disposition, never a traceback."""
-    from harness_runtime.config.audit_signing import SigningBackendUnavailableError
+    from harness_runtime.config.audit_signing import SigningBackendSdkUnavailableError
 
     _greenfield_passing(fx)
 
     def unavailable(config: object) -> object:
-        raise SigningBackendUnavailableError("boto3 is not installed (test)")
+        raise SigningBackendSdkUnavailableError("boto3 is not installed (test)")
 
     monkeypatch.setattr(
         "harness_runtime.config.audit_signing.make_audit_signing_backend", unavailable

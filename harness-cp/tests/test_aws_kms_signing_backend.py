@@ -26,8 +26,24 @@ _KEY_ID = "tenant_bound:acme-corp"
 _KEY_ARN = "arn:aws:kms:us-east-1:123456789012:key/test-fixture-key-id"
 
 
-class _KMSInvalidSignatureException(Exception):
-    """Mirrors the botocore-generated exception class shape at `client.exceptions`."""
+from botocore.exceptions import ClientError as _BotoClientError
+
+
+class _KMSInvalidSignatureException(_BotoClientError):
+    """Mirrors the botocore-generated exception class at `client.exceptions`.
+
+    Subclasses the REAL `botocore.exceptions.ClientError` — as the generated
+    modeled exceptions on a real client do — so the backend's catch ORDER is
+    pinned by the unit suite (merge-gate test-witness lens, PR #1073): with a
+    plain-`Exception` fake, reordering the `(BotoCoreError, ClientError)`
+    availability catch BEFORE the mismatch catch would pass every unit test
+    while reclassifying real-client signature mismatches as availability."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            {"Error": {"Code": "KMSInvalidSignatureException", "Message": "invalid"}},
+            "Verify",
+        )
 
 
 class _FakeKmsExceptions:

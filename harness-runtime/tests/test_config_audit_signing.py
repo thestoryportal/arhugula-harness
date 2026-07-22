@@ -16,7 +16,7 @@ from harness_cp.aws_kms_signing_backend import (
 from harness_runtime.config import audit_signing as audit_signing_module
 from harness_runtime.config.audit_signing import (
     BreakerGuardedSigningBackend,
-    SigningBackendUnavailableError,
+    SigningBackendSdkUnavailableError,
     make_audit_signing_backend,
 )
 from harness_runtime.types import AuditSigningBackendKind, AuditSigningConfig
@@ -83,7 +83,7 @@ def test_missing_boto3_fails_loud_not_silent(monkeypatch: pytest.MonkeyPatch) ->
         backend=AuditSigningBackendKind.AWS_KMS,
         key_arns={"k": _ARN},
     )
-    with pytest.raises(SigningBackendUnavailableError, match="boto3"):
+    with pytest.raises(SigningBackendSdkUnavailableError, match="boto3"):
         make_audit_signing_backend(config)
 
 

@@ -49,7 +49,7 @@ __all__ = [
     "AuditSigningBreakerOpenError",
     "AuditSigningFailedError",
     "BreakerGuardedSigningBackend",
-    "SigningBackendUnavailableError",
+    "SigningBackendSdkUnavailableError",
     "make_audit_signing_backend",
 ]
 
@@ -207,7 +207,7 @@ class BreakerGuardedSigningBackend:
         )
 
 
-class SigningBackendUnavailableError(RuntimeError):
+class SigningBackendSdkUnavailableError(RuntimeError):
     """The selected audit-signing backend cannot be constructed.
 
     Raised when the configured backend's vendor SDK is not importable
@@ -223,7 +223,7 @@ def _default_kms_client(region: str | None) -> Any:
     try:
         boto3 = import_module("boto3")
     except ModuleNotFoundError as exc:
-        raise SigningBackendUnavailableError(
+        raise SigningBackendSdkUnavailableError(
             "audit_signing.backend is 'aws-kms' but boto3 is not installed — "
             "install the aws extra or set audit_signing.backend to 'none' "
             "(placeholder signing); real signing is never silently skipped"
@@ -246,7 +246,7 @@ def make_audit_signing_backend(
     `AwsKmsSigningBackend` over the config's `key_id → KMS key ARN` mapping;
     a KMS *alias* in the mapping fails loud at construction
     (`MutableKeyAliasRejectedError`), and a missing `boto3` fails loud
-    (`SigningBackendUnavailableError`) — a deployment that asked for real
+    (`SigningBackendSdkUnavailableError`) — a deployment that asked for real
     signing never silently degrades.
 
     `kms_client` is the hermetic-test injection seam (mirrors R-421's
