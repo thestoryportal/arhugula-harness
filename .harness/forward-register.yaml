@@ -60,12 +60,12 @@
 snapshot:
   total: 67
   open: 0
-  design_substrate_gated: 1
-  registered_finding: 10
+  design_substrate_gated: 2
+  registered_finding: 9
   operator_gated: 2
   held: 1
   closed: 53
-  identity_digest: 7283d14b643ee253
+  identity_digest: 9d285155fdf00f96
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -452,7 +452,7 @@ items:
 - id: B-33
   filing: .harness/class_1_fork_b33_rotation_correlation_carrier.md
   title: verify_rotation_6_steps cannot prove a rotation boundary occurred
-  status: registered_finding
+  status: design_substrate_gated
   summary: 'GROUNDED 2026-07-18 (autonomous loop): execute_key_rotation -- the sole
     verify_rotation_6_steps caller -- still has ONLY test consumers (no production/CLI wiring);
     the wait-for-real-caller boundary HOLDS, and rotation at MTC is explicitly deferred pending
