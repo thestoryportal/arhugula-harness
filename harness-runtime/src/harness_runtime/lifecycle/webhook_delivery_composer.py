@@ -32,14 +32,16 @@ from harness_cp.hitl_timeout_degradation import (
 )
 from harness_cp.validator_framework_types import HITLEscalationBrief
 
-from harness_runtime.lifecycle.audit_offload import run_audit_off_loop
+from harness_runtime.lifecycle.audit_offload import (
+    resolve_result_ref_off_loop,
+    run_audit_off_loop,
+)
 from harness_runtime.lifecycle.audit_signing_errors import (
     AUDIT_SIGNING_HARD_FAILURES,
     PostEffectAuditSigningError,
     PostEffectClass,
 )
 from harness_runtime.lifecycle.cost_record_sink import SupportsCostRecordAppend
-from harness_runtime.lifecycle.protected_result_store import resolve_result_ref
 
 __all__ = [
     "WebhookDeliveryComposer",
@@ -341,11 +343,13 @@ class WebhookDeliveryComposer:
                 idempotency_key=idempotency_key,
             )
         except AUDIT_SIGNING_HARD_FAILURES as sign_exc:
-            # codex [P2] on the B-65-A CP-side arc — offload the synchronous
-            # store I/O so a signing outage can't block unrelated event-loop
-            # work.
-            _result_ref = await asyncio.to_thread(
-                resolve_result_ref, self._protected_result_store, tenant_id, result
+            # codex [P1] on the B-65-A CP-side arc round 4 — offload via the
+            # dedicated pool, NOT `asyncio.to_thread` (the loop's default
+            # executor is the same exhaustion-deadlock hazard `run_audit_
+            # off_loop` exists to avoid; see `audit_offload.py` module
+            # docstring).
+            _result_ref = await resolve_result_ref_off_loop(
+                self._protected_result_store, tenant_id, result
             )
             raise PostEffectAuditSigningError(
                 f"audit signing failed after a completed webhook POST "

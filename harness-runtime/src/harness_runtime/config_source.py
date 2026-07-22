@@ -172,6 +172,17 @@ class _RuntimeEnvSettings(BaseSettings):
     # loader.py _ENV_SCALAR_FIELDS ([[runtimeconfig-scalar-needs-both-env-loaders]]).
     # The three sibling record-carrier fields are file/CLI-only — not here.
     audit_signing_fail_closed: bool | None = None
+    # B-65-A (Runtime spec v1.103 §14.8.11, codex round-4 [P2]) — env-keyed:
+    # the TTL is the retention window for tenant-scoped protected payloads
+    # (possibly PII/credentials) at the MTC tier, a compliance property, not
+    # a mere tuning knob. Mirrored in loader.py _ENV_SCALAR_FIELDS
+    # ([[runtimeconfig-scalar-needs-both-env-loaders]]).
+    protected_result_store_ttl_seconds: float | None = None
+    # B-65-A (Runtime spec v1.103 §14.8.11, codex round-4 [P2]) — env-keyed:
+    # the TTL is the retention window for tenant-scoped protected payloads
+    # (possibly PII/credentials) at the MTC tier, a compliance property, not
+    # a mere tuning knob. Mirrored in loader.py _ENV_SCALAR_FIELDS
+    # ([[runtimeconfig-scalar-needs-both-env-loaders]]).
 
 
 class RuntimeConfigSource:

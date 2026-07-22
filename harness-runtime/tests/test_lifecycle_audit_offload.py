@@ -14,7 +14,8 @@ import contextvars
 import threading
 
 import pytest
-from harness_runtime.lifecycle.audit_offload import run_audit_off_loop
+from harness_runtime.lifecycle.audit_offload import resolve_result_ref_off_loop, run_audit_off_loop
+from harness_runtime.lifecycle.protected_result_store import UnresolvableResultRef
 
 
 @pytest.mark.asyncio
@@ -708,3 +709,49 @@ async def test_saturation_contained_at_offload_boundaries(
             )
 
     assert sum("offload boundary" in r.message for r in caplog.records) >= 3
+
+
+@pytest.mark.asyncio
+async def test_resolve_result_ref_off_loop_runs_when_default_executor_is_exhausted() -> None:
+    """B-65-A codex round-4 P1 — `resolve_result_ref_off_loop` must resolve
+    the ref via the DEDICATED pool, not the loop's default executor: with
+    every default-executor worker blocked (the same daemon-concurrency
+    picture as `test_offload_runs_when_default_executor_is_exhausted`
+    above), it must still complete. Mutation probe: reverting the call site
+    back to `asyncio.to_thread(resolve_result_ref, ...)` would deadlock this
+    test at the `wait_for` timeout instead of returning."""
+    loop = asyncio.get_running_loop()
+    release = threading.Event()
+    blockers = [loop.run_in_executor(None, release.wait, 10.0) for _ in range(32)]
+    try:
+        ref = await asyncio.wait_for(
+            resolve_result_ref_off_loop(None, None, {"k": "v"}), timeout=5.0
+        )
+        assert isinstance(ref, UnresolvableResultRef)
+        assert ref.reason == "no protected result store configured"
+    finally:
+        release.set()
+        await asyncio.gather(*blockers)
+
+
+@pytest.mark.asyncio
+async def test_resolve_result_ref_off_loop_degrades_on_queue_saturation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """B-65-A codex round-4 P1/advisor tripwire — `resolve_result_ref`
+    itself never raises (it degrades to `UnresolvableResultRef`), but the
+    executor's OWN queue-saturation guard (`submit` at
+    `AUDIT_OFFLOAD_QUEUE_CAP`) raises `AuditSigningFailedError` BEFORE
+    `resolve_result_ref` ever runs. Without the wrapper's own try/except,
+    that typed exception would escape and REPLACE the caller's
+    `PostEffectAuditSigningError` construction with an unrelated error,
+    silently dropping the original carrier. Mutation probe: removing the
+    wrapper's `except AuditSigningFailedError` clause makes this raise
+    instead of returning a discriminated ref."""
+    from harness_runtime.lifecycle import audit_offload as offload_module
+
+    monkeypatch.setattr(offload_module, "AUDIT_OFFLOAD_QUEUE_CAP", 0)
+
+    ref = await resolve_result_ref_off_loop(None, None, {"k": "v"})
+    assert isinstance(ref, UnresolvableResultRef)
+    assert "saturated" in ref.reason

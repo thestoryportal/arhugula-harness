@@ -659,6 +659,73 @@ async def test_shutdown_drains_stage_5_dispatch_executor(tmp_path: Path) -> None
     assert report.timed_out is False
 
 
+class _FakeProtectedResultStore:
+    """Spy for `ProtectedResultStore.gc_sweep` — records calls, optionally raises."""
+
+    def __init__(self, *, raises: Exception | None = None) -> None:
+        self.swept = False
+        self._raises = raises
+
+    def gc_sweep(self, *, now: float | None = None) -> list[str]:
+        self.swept = True
+        if self._raises is not None:
+            raise self._raises
+        return []
+
+
+@pytest.mark.asyncio
+async def test_shutdown_step_5b_sweeps_protected_result_store(tmp_path: Path) -> None:
+    """B-65-A codex round-4 [P2] — this is the SHUTDOWN half of the
+    "GC sweep at bootstrap/shutdown" fallback (spec v1.103 §14.8.11 AC 7);
+    the row this closes previously claimed no graceful-teardown chain
+    existed to hook it into. Mutation probe: removing step 5b from
+    `shutdown()` leaves `store.swept` False — a long-lived daemon that
+    never restarts would then never reap its OWN expired entries at exit,
+    only a NEXT process's bootstrap sweep would (which never arrives if it
+    never restarts).
+    """
+    store = _FakeProtectedResultStore()
+    ctx = _shutdown_ctx(
+        tmp_path, tracer=_FakeTracerWithShutdown(), daemon=_FakeCollectorDaemon(), providers={}
+    )
+    ctx.protected_result_store = store
+    report = await shutdown(ctx, timeout=5.0)
+    assert store.swept is True
+    assert "protected_result_store" not in report.failures
+    assert report.timed_out is False
+
+
+@pytest.mark.asyncio
+async def test_shutdown_isolates_protected_result_store_sweep_failure(tmp_path: Path) -> None:
+    """B-65-A codex round-4 [P2] — per-resource exception isolation must
+    cover the new step 5b like every other step: a raising sweep must not
+    abort the rest of shutdown. Mutation probe: an unguarded call would
+    propagate the exception out of `shutdown()`, failing this test with the
+    stub's `RuntimeError` instead of a clean `ShutdownReport`.
+    """
+    store = _FakeProtectedResultStore(raises=RuntimeError("disk full"))
+    tracer = _FakeTracerWithShutdown(returns=True)
+    ctx = _shutdown_ctx(tmp_path, tracer=tracer, daemon=_FakeCollectorDaemon(), providers={})
+    ctx.protected_result_store = store
+    report = await shutdown(ctx, timeout=5.0)
+    assert store.swept is True
+    assert "protected_result_store" in report.failures
+    assert report.audit_ledger_head_hash == "deadbeef"
+    assert tracer.shutdown_called is True
+
+
+@pytest.mark.asyncio
+async def test_shutdown_skips_protected_result_store_sweep_when_absent(tmp_path: Path) -> None:
+    """`None` store (fail-closed=OFF composition) must not be swept or
+    recorded as a failure — mirrors the bootstrap-stage guard verbatim."""
+    ctx = _shutdown_ctx(
+        tmp_path, tracer=_FakeTracerWithShutdown(), daemon=_FakeCollectorDaemon(), providers={}
+    )
+    ctx.protected_result_store = None
+    report = await shutdown(ctx, timeout=5.0)
+    assert "protected_result_store" not in report.failures
+
+
 @pytest.mark.asyncio
 async def test_shutdown_flips_draining_even_at_zero_remaining_budget(tmp_path: Path) -> None:
     """Codex round-8 [P2] "enter draining state before scheduling the bounded

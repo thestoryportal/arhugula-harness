@@ -103,6 +103,47 @@ def test_nonpositive_ttl_rejected_at_construction(tmp_path: Path, bad_ttl: float
         )
 
 
+def test_ttl_env_only_override_honored_through_both_loaders(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """codex round-4 [P2]: the TTL gates a compliance property (retention
+    window for tenant-scoped protected payloads at the MTC tier) and must
+    be registered in BOTH `config/loader.py::_ENV_SCALAR_FIELDS` and
+    `config_source.py::_RuntimeEnvSettings`
+    ([[runtimeconfig-scalar-needs-both-env-loaders]]). Mutation probe:
+    removing EITHER loader registration fails one half."""
+    from harness_core.deployment_surface import DeploymentSurface as _DS
+    from harness_cp.topology_pattern import TopologyPattern as _TP
+    from harness_runtime.config.loader import materialize_runtime_config
+
+    def _kwargs() -> dict[str, object]:
+        return {
+            "deployment_surface": _DS.LOCAL_DEVELOPMENT,
+            "repository_root": tmp_path,
+            "path_bindings": PathBindingConfig(),
+            "provider_secrets": ProviderSecretsConfig(),
+            "otel": OTelConfig(otlp_endpoint="http://localhost:4317"),
+            "collector": CollectorConfig(),
+            "default_topology": _TP.SINGLE_THREADED_LINEAR,
+            "mcp_clients": [],
+        }
+
+    # Half 1 — config/loader.py::_ENV_SCALAR_FIELDS path (explicit env map).
+    config = materialize_runtime_config(
+        env={"HARNESS_PROTECTED_RESULT_STORE_TTL_SECONDS": "123.5"}, **_kwargs()
+    )
+    assert config.protected_result_store_ttl_seconds == 123.5
+
+    # Half 2 — config_source.py::_RuntimeEnvSettings path (process env).
+    monkeypatch.setenv("HARNESS_PROTECTED_RESULT_STORE_TTL_SECONDS", "456.5")
+    from harness_runtime.config_source import RuntimeConfigSource
+
+    config2 = RuntimeConfigSource.load(
+        cli_overrides={k: str(v) if isinstance(v, Path) else v for k, v in _kwargs().items()}
+    )
+    assert config2.protected_result_store_ttl_seconds == 456.5
+
+
 def test_ttl_threaded_from_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Mutation probe: hardcoding a fixed TTL instead of reading
     `config.protected_result_store_ttl_seconds` fails this witness."""

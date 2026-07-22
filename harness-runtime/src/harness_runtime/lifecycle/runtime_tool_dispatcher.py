@@ -29,7 +29,6 @@ Composition surface:
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import logging
 import time
@@ -68,7 +67,10 @@ from harness_runtime.config.provider_secrets import (
     SecretAllowlistDeniedError,
     SecretResolutionError,
 )
-from harness_runtime.lifecycle.audit_offload import run_audit_off_loop
+from harness_runtime.lifecycle.audit_offload import (
+    resolve_result_ref_off_loop,
+    run_audit_off_loop,
+)
 from harness_runtime.lifecycle.audit_signing_errors import (
     AUDIT_SIGNING_HARD_FAILURES,
     PostEffectAuditSigningError,
@@ -81,7 +83,6 @@ from harness_runtime.lifecycle.effect_fence import (
     EffectFenceProtocol,
 )
 from harness_runtime.lifecycle.mcp_client_host import MCPClientHost
-from harness_runtime.lifecycle.protected_result_store import resolve_result_ref
 
 if TYPE_CHECKING:
     # Type-only: the multi-server routing carriers (U-RT-127/128). Imported
@@ -1231,11 +1232,12 @@ class RuntimeToolDispatcher:
                         step_context=step_context,
                     )
                 except AUDIT_SIGNING_HARD_FAILURES as sign_exc:
-                    # codex [P2] on the B-65-A CP-side arc — offload the
-                    # synchronous store I/O so a signing outage can't block
-                    # unrelated event-loop work.
-                    _result_ref = await asyncio.to_thread(
-                        resolve_result_ref,
+                    # codex [P1] on the B-65-A CP-side arc round 4 — offload
+                    # via the dedicated pool, NOT `asyncio.to_thread` (the
+                    # loop's default executor is the same exhaustion-
+                    # deadlock hazard `run_audit_off_loop` exists to avoid;
+                    # see `audit_offload.py` module docstring).
+                    _result_ref = await resolve_result_ref_off_loop(
                         self._protected_result_store,
                         step_context.tenant_id,
                         response,
@@ -1279,11 +1281,12 @@ class RuntimeToolDispatcher:
                     step_context=step_context,
                 )
             except AUDIT_SIGNING_HARD_FAILURES as sign_exc:
-                # codex [P2] on the B-65-A CP-side arc — offload the synchronous
-                # store I/O so a signing outage can't block unrelated
-                # event-loop work.
-                _result_ref = await asyncio.to_thread(
-                    resolve_result_ref,
+                # codex [P1] on the B-65-A CP-side arc round 4 — offload via
+                # the dedicated pool, NOT `asyncio.to_thread` (the loop's
+                # default executor is the same exhaustion-deadlock hazard
+                # `run_audit_off_loop` exists to avoid; see `audit_offload.
+                # py` module docstring).
+                _result_ref = await resolve_result_ref_off_loop(
                     self._protected_result_store,
                     step_context.tenant_id,
                     response,

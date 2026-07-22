@@ -84,18 +84,16 @@ async def execute(
     # is a normal outcome at fail-closed=OFF (the carrier is never raised on
     # that path).
     ctx.protected_result_store = materialize_protected_result_store_stage(config)
-    # B-65-A (Runtime spec v1.103 §14.8.11 AC 7, codex [P1] on this arc) — the
-    # BOOTSTRAP half of the "GC sweep at bootstrap/shutdown" fallback: reaps
-    # entries a PRIOR crashed/killed process abandoned past their TTL before
-    # any of THIS process's own writes could trigger the opportunistic sweep.
-    # The SHUTDOWN half is NOT wired here — this runtime has no graceful-
-    # teardown chain to hook yet (`_rollback` in `bootstrap/__init__.py` is
-    # bootstrap-FAILURE-only; the drain signal handler only sets
-    # `drained_flag`, per the registered `[[fork-u-rt-44-workflow-loop-drain]]`
-    # gap) — building one solely for this store would invent runtime
-    # infrastructure ahead of the rest of the harness (advisor-reconciled).
-    # Tracked as a forward-register row tied to that same drain fork, not a
-    # silent scope-narrowing.
+    # B-65-A (Runtime spec v1.103 §14.8.11 AC 7) — the BOOTSTRAP half of the
+    # "GC sweep at bootstrap/shutdown" fallback: reaps entries a PRIOR
+    # crashed/killed process abandoned past their TTL before any of THIS
+    # process's own writes could trigger the opportunistic sweep (a killed
+    # process never reaches its own `shutdown()`, so only the NEXT process's
+    # bootstrap can reap what it left behind). The SHUTDOWN half is wired at
+    # `shutdown.py` step 5b (codex round-4 [P2] correction — this comment
+    # previously claimed no graceful-teardown chain existed; `shutdown(ctx)`
+    # is invoked unconditionally in `run()`'s/`resume()`'s `finally` and is
+    # the correct hook).
     if ctx.protected_result_store is not None:
         ctx.protected_result_store.gc_sweep()
     # 0b. Audit-signing backend (B-47 PR B — OD spec v1.33 §21.2.1 composition

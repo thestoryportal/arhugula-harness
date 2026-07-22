@@ -53,7 +53,6 @@ L5..L8 stage shape established at U-RT-21..U-RT-41.
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import json
 import logging
@@ -93,7 +92,10 @@ from harness_cp.validator_fail_transient_staircase import CrossTrustBoundaryStat
 from harness_cp.workflow_driver_types import StepExecutionContext, StepKind, WorkflowStep
 from harness_od.otel_genai_base import HIERARCHY_CORRELATION_KEY, GenAiOperation
 
-from harness_runtime.lifecycle.audit_offload import run_audit_off_loop
+from harness_runtime.lifecycle.audit_offload import (
+    resolve_result_ref_off_loop,
+    run_audit_off_loop,
+)
 from harness_runtime.lifecycle.audit_signing_errors import (
     AUDIT_SIGNING_HARD_FAILURES,
     PostEffectAuditSigningError,
@@ -111,7 +113,6 @@ from harness_runtime.lifecycle.memory_tool_dispatch import (
     execute_with_memory_callbacks,
     step_has_memory_tool,
 )
-from harness_runtime.lifecycle.protected_result_store import resolve_result_ref
 from harness_runtime.memory_context import (
     RuntimeMemoryContext,
     compose_system_prompt_with_memory_packet,
@@ -1820,12 +1821,15 @@ class RuntimeLLMDispatcher:
                     tenant_id=step_context.tenant_id,
                 )
             except AUDIT_SIGNING_HARD_FAILURES as exc:
-                # codex [P2] on the B-65-A CP-side arc — `resolve_result_ref` is
-                # synchronous I/O (pickle+encrypt+fsync, plus an opportunistic
-                # decrypt-sweep of the whole store); offload it so a signing
-                # outage can't block unrelated event-loop work.
-                _result_ref = await asyncio.to_thread(
-                    resolve_result_ref,
+                # codex [P1] on the B-65-A CP-side arc round 4 — `resolve_
+                # result_ref` is synchronous I/O (pickle+encrypt+fsync, plus
+                # an opportunistic decrypt-sweep of the whole store);
+                # `asyncio.to_thread` would queue it onto the LOOP'S DEFAULT
+                # executor, which `execute_workflow`'s own sync drivers can
+                # exhaust while blocked awaiting a loop coroutine — the same
+                # deadlock class `run_audit_off_loop`'s dedicated pool exists
+                # to avoid (see `audit_offload.py` module docstring).
+                _result_ref = await resolve_result_ref_off_loop(
                     self.protected_result_store,
                     step_context.tenant_id,
                     response,

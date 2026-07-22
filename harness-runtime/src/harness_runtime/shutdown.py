@@ -758,6 +758,34 @@ async def shutdown(
                 failures.append("mcp_client_host")
     # Step 5 — ledger/index/cache/worktree: covered by step 2 / no close surface.
 
+    # Step 5b — protected result store GC sweep (B-65-A; spec v1.103
+    # §14.8.11 AC 7, codex round-4 [P2]) — the SHUTDOWN half of the
+    # "GC sweep at bootstrap/shutdown" fallback (the BOOTSTRAP half runs at
+    # `stage_4_od.py` and reaps a PRIOR process's abandoned entries; this
+    # half reaps THIS process's own before exit, so a long-lived daemon that
+    # never restarts still bounds the store between opportunistic in-write
+    # sweeps). Sync file I/O (unlink of expired entries) is safe on the
+    # loop's default executor HERE — unlike the request-path raise sites in
+    # `llm_dispatch.py`/`runtime_tool_dispatcher.py`/
+    # `webhook_delivery_composer.py`, `shutdown()` only runs AFTER
+    # `execute_workflow` has already returned (it is awaited in `run()`'s/
+    # `resume()`'s `finally`, not concurrently with the driver), so no sync
+    # driver can be occupying the default pool while this runs. Best-effort:
+    # swept-key digests discarded, any exception isolated per the same
+    # per-resource pattern as the steps above.
+    _protected_result_store = getattr(ctx, "protected_result_store", None)
+    if _protected_result_store is not None:
+        remaining = max(0.0, deadline - time.monotonic())
+        try:
+            await asyncio.wait_for(
+                asyncio.to_thread(_protected_result_store.gc_sweep), timeout=remaining
+            )
+        except TimeoutError:
+            failures.append("protected_result_store")
+            timed_out = True
+        except Exception:
+            failures.append("protected_result_store")
+
     if time.monotonic() > deadline:
         timed_out = True
 

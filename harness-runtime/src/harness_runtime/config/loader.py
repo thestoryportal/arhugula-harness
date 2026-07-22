@@ -145,6 +145,19 @@ _ENV_SCALAR_FIELDS: dict[str, tuple[str, Any]] = {
         f"{ENV_PREFIX}AUDIT_SIGNING_FAIL_CLOSED",
         _parse_strict_bool,
     ),
+    # B-65-A (Runtime spec v1.103 §14.8.11, codex round-4 [P2]): env-keyed
+    # because the TTL is the retention window for tenant-scoped protected
+    # payloads (possibly PII/credentials) at the MTC tier — a compliance
+    # property, not a mere tuning knob; an operator who sets
+    # HARNESS_PROTECTED_RESULT_STORE_TTL_SECONDS must NOT be silently
+    # dropped ([[runtimeconfig-scalar-needs-both-env-loaders]]). `float`
+    # directly, matching the bare-builtin-coercion precedent (`str`/`Path`
+    # above) — the `gt=0.0` constraint is enforced by `RuntimeConfig`
+    # itself at construction, not re-validated here.
+    "protected_result_store_ttl_seconds": (
+        f"{ENV_PREFIX}PROTECTED_RESULT_STORE_TTL_SECONDS",
+        float,
+    ),
 }
 
 

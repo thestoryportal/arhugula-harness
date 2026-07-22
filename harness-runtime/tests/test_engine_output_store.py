@@ -270,6 +270,14 @@ def test_post_effect_signing_failed_with_shapeless_output_is_corrupt_fail_closed
         '"terminal_status": "post_effect_signing_failed"}',
         '{"output": {"result_ref": {"unresolvable_reason": "x", "extra": "y"}}, '
         '"step_id": "w1", "terminal_status": "post_effect_signing_failed"}',
+        # codex round-4 [P2]: an EMPTY string is syntactically the right type
+        # but carries no usable ref — must be rejected like the other
+        # malformed shapes, not accepted as "readable" merely because
+        # `isinstance(x, str)` was True.
+        '{"output": {"result_ref": ""}, "step_id": "w1", '
+        '"terminal_status": "post_effect_signing_failed"}',
+        '{"output": {"result_ref": {"unresolvable_reason": ""}}, "step_id": "w1", '
+        '"terminal_status": "post_effect_signing_failed"}',
     ],
 )
 def test_post_effect_signing_failed_with_malformed_ref_value_is_corrupt_fail_closed(
@@ -278,9 +286,9 @@ def test_post_effect_signing_failed_with_malformed_ref_value_is_corrupt_fail_clo
     """codex [P2] on the B-65-A CP-side arc: the `"result_ref"` key existing is
     not enough — its VALUE must be either a plain string ref or the EXACT
     `{"unresolvable_reason": <str>}` shape. A `null`/numeric ref, a non-string
-    `unresolvable_reason`, or an unresolvable dict with EXTRA keys previously
-    slipped through as "readable" (the pre-fix check only verified key
-    presence) with no usable ref. Must be treated as corrupt."""
+    `unresolvable_reason`, an unresolvable dict with EXTRA keys, or (round-4)
+    an EMPTY string in either variant previously slipped through as
+    "readable" with no usable ref. Must be treated as corrupt."""
     store = EngineOutputStore(journal_dir=tmp_path / "eo")
     store.record_branch(_RUN_KEY, 0, "w0", "completed", {"o": 0})
     store._branch_file(_RUN_KEY, 1).write_text(malformed_ref_json, encoding="utf-8")

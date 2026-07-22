@@ -41,9 +41,16 @@ from concurrent.futures import Future
 from typing import Any, Final
 
 from harness_runtime.lifecycle.audit_signing_errors import AuditSigningFailedError
+from harness_runtime.lifecycle.protected_result_store import (
+    ProtectedResultStore,
+    ResultRefValue,
+    UnresolvableResultRef,
+    resolve_result_ref,
+)
 
 __all__ = [
     "AUDIT_OFFLOAD_MAX_WORKERS",
+    "resolve_result_ref_off_loop",
     "run_audit_off_loop",
 ]
 
@@ -287,3 +294,27 @@ async def run_audit_off_loop(fn: Callable[..., Any], /, *args: Any, **kwargs: An
                     AUDIT_CANCEL_JOIN_GRACE_SECONDS,
                 )
         raise
+
+
+async def resolve_result_ref_off_loop(
+    store: ProtectedResultStore | None, tenant_id: str | None, result: object
+) -> ResultRefValue:
+    """Off-loop `resolve_result_ref` (B-65-A codex round-4 P1).
+
+    `resolve_result_ref` calls into `write_once`, whose I/O (pickle + encrypt
+    + fsync, plus an opportunistic decrypt-sweep) is exactly the class of
+    work `asyncio.to_thread` must not carry — the loop's default executor is
+    the same exhaustion-deadlock hazard `run_audit_off_loop` exists to avoid
+    (see module docstring). `resolve_result_ref`/`write_once` never raise
+    for any expected failure class (collision / serializer / encryption /
+    durable-publication I/O) — they degrade to `UnresolvableResultRef`. The
+    ONLY way this offload can raise is the executor's own queue-saturation
+    guard (`_DaemonThreadAuditExecutor.submit` at `AUDIT_OFFLOAD_QUEUE_CAP`),
+    which never runs `resolve_result_ref` at all. Caught here and folded
+    into the same discriminated-unresolvable contract so this wrapper keeps
+    the never-raises guarantee end-to-end, exactly like the direct call.
+    """
+    try:
+        return await run_audit_off_loop(resolve_result_ref, store, tenant_id, result)
+    except AuditSigningFailedError as exc:
+        return UnresolvableResultRef(reason=f"result-ref offload saturated: {exc}")

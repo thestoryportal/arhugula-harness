@@ -61,11 +61,11 @@ snapshot:
   total: 68
   open: 0
   design_substrate_gated: 2
-  registered_finding: 8
+  registered_finding: 7
   operator_gated: 3
   held: 1
-  closed: 54
-  identity_digest: b44abc573b9c2cc3
+  closed: 55
+  identity_digest: 119066a56732f1a0
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -1497,20 +1497,23 @@ items:
     witness *(registered at the B-60 close, merge-gate test-witness lens, 2026-07-21)*'
 - id: B-67
   title: Protected result store's TTL GC sweep has no shutdown-time hook — bootstrap half only
-  status: registered_finding
-  summary: 'Runtime spec v1.103 §14.8.11 AC 7 requires a GC sweep "at bootstrap/shutdown"; the
-    B-65-A arc wired bootstrap (stage_4_od.py) + the opportunistic in-write sweep, but NOT
-    shutdown -- this runtime has no graceful-teardown chain to hook (bootstrap/__init__.py''s
-    _rollback is bootstrap-FAILURE-only; the drain signal handler only sets drained_flag, per
-    the SAME structural gap [[fork-u-rt-44-workflow-loop-drain]] already names). Building a
-    shutdown hook solely for this store would invent runtime infrastructure ahead of the rest
-    of the harness (advisor-reconciled). Bounded residual, not a correctness gap: expired
-    entries still get reaped by the bootstrap + opportunistic sweeps; only a clean-exit-then-
-    never-restart process leaves expired (still-encrypted) ciphertext past its TTL.'
-  close_out: 'Land alongside [[fork-u-rt-44-workflow-loop-drain]]''s own resolution: when that
-    fork wires a real signal-handler -> shutdown chain, add ctx.protected_result_store.
-    gc_sweep() (guarded on non-None) to it, mirroring the bootstrap call site verbatim.'
-  council: no -- a pure follow-on wiring step once the prerequisite infrastructure exists
+  status: closed
+  pr: pending (impl/b65a-protected-result-store, round-4 fix; flips alongside B-65 at merge)
+  summary: 'CORRECTED at out-of-family Codex round 4: this row''s own premise ("this runtime
+    has no graceful-teardown chain to hook") was FALSE — `shutdown(ctx)` at
+    `harness_runtime/shutdown.py` IS that chain, invoked unconditionally in `run()`''s/
+    `resume()`''s `finally` block regardless of workflow outcome (verified by direct read of
+    `api.py` lines ~671/941). Fixed by wiring a new step 5b in `shutdown()`: a bounded,
+    best-effort `ctx.protected_result_store.gc_sweep()` off the default executor via
+    `asyncio.to_thread` (safe here specifically because shutdown only runs AFTER
+    `execute_workflow` has already returned — no sync driver can be occupying the default pool
+    concurrently, unlike the request-path raise sites this same round also fixed). The
+    `stage_4_od.py` comment carrying the false premise was corrected in the same commit. Both
+    halves (bootstrap reaps a PRIOR process''s abandoned entries; shutdown reaps THIS
+    process''s own before exit) are now wired.'
+  close_out: 'Closed by the fix described above (harness-runtime/src/harness_runtime/shutdown.py
+    step 5b + stage_4_od.py comment correction), landing on impl/b65a-protected-result-store.'
+  council: no -- corrective wiring fix once the false premise was caught by review
   heading: '### B-67 · Protected result store''s TTL GC sweep has no shutdown-time hook —
     bootstrap half only *(registered at the B-65-A impl arc, out-of-family Codex round 1 [P1],
-    2026-07-22)*'
+    2026-07-22; CLOSED at round 4 correction, same date)*'

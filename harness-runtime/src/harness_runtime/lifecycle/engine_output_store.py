@@ -1055,13 +1055,26 @@ class EngineOutputStore:
                 if not isinstance(output, dict) or "result_ref" not in output:
                     continue
                 _ref_value = cast("object", output["result_ref"])
-                _ref_value_valid = isinstance(_ref_value, str) or (
+                # codex [P2] round 4 — an EMPTY string (either variant: a
+                # blank `str` ref, or a blank `unresolvable_reason`) is
+                # syntactically valid per the shape checks alone but
+                # carries no usable ref/reason, the same
+                # "readable-but-useless" gap `[[durable-recovery-presence-
+                # validity-scope]]` names for `scoped_aborted` above —
+                # require non-empty content, not merely the right type.
+                _ref_value_valid = (isinstance(_ref_value, str) and _ref_value != "") or (
                     isinstance(_ref_value, dict)
                     and set(cast("dict[object, object]", _ref_value).keys())
                     == {"unresolvable_reason"}
                     and isinstance(
-                        cast("dict[object, object]", _ref_value).get("unresolvable_reason"), str
+                        (
+                            _reason := cast("dict[object, object]", _ref_value).get(
+                                "unresolvable_reason"
+                            )
+                        ),
+                        str,
                     )
+                    and _reason != ""
                 )
                 if not _ref_value_valid:
                     continue
