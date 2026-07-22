@@ -344,8 +344,9 @@ def test_parallelization_cascade_cancel_terminal_with_result() -> None:
 def test_parallelization_unresolvable_ref_discriminator_survives() -> None:
     """A store-unresolvable declaration (a dict-shaped `result_ref`, mirroring the
     Runtime `UnresolvableResultRef` union member) is carried as a structured dict —
-    never collapsed into a bare string (CP spec v1.103 §25.15 row 6: 'never a lossy
-    stringification')."""
+    never collapsed into a bare string (Runtime spec v1.103 §14.8.11: the store's
+    envelope is 'never lossy coercion'; CP spec v1.103 §25.15 row 6 requires CP to
+    carry the reference field verbatim)."""
     manifest = _manifest(topology=TopologyPattern.PARALLELIZATION, persona_tier=_PROCEED_TIER)
     ctx = cast(DriverContext, _Ctx(ledger=_RecordingLedger(), emitter=_Emitter()))
     unresolvable = {"result_ref": {"unresolvable_reason": "no protected result store configured"}}
@@ -593,7 +594,7 @@ def test_decentralized_handoff_pause_never_pauses_always_terminal_with_result() 
 def test_decentralized_handoff_proceed_carrier_preserves_partial_not_failed() -> None:
     """codex [P2] on the B-65-A CP-side arc: under PROCEED, an ordinary stage
     failure maps to PARTIAL (survivors salvaged) — the carrier changes
-    RESUMABILITY, not run-level status (CP spec v1.103 §25.15 row 3: "the
+    RESUMABILITY, not run-level status (CP spec v1.103 §25.15 row 5: "the
     run-level status still follows the policy for the REMAINING branches").
     The earlier fix unconditionally returned FAILED even under PROCEED,
     bypassing that mapping.

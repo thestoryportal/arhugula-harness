@@ -1557,8 +1557,10 @@ def _post_effect_signing_result_ref_output(exc: BaseException) -> Mapping[str, A
     JSON-serializes `output`, so a raw `UnresolvableResultRef` dataclass would not
     round-trip) and the in-memory fold. A resolvable ref stays a plain string; an
     unresolvable declaration becomes a small dict carrying its `reason` — never
-    collapsed into one opaque string (CP spec v1.103 §25.15 row 6: "never a lossy
-    stringification" — the reader, not CP, discriminates the shape)."""
+    collapsed into one opaque string (Runtime spec v1.103 §14.8.11: the store's
+    envelope is "never lossy coercion"; CP spec v1.103 §25.15 row 6 requires CP
+    to carry the reference field VERBATIM as an opaque value — the reader, not
+    CP, discriminates the shape)."""
     result_ref = getattr(exc, "result_ref", None)
     if isinstance(result_ref, str):
         return {"result_ref": result_ref}
@@ -14030,7 +14032,7 @@ def _execute_decentralized_handoff(
             # (the paid effect COMPLETED; only the post-effect audit signing
             # failed). Name-matched (harness-cp cannot import the runtime type).
             # TERMINAL-with-result changes RESUMABILITY, not run-level status
-            # (CP spec v1.103 §25.15 row 3: "the run-level status still follows
+            # (CP spec v1.103 §25.15 row 5: "the run-level status still follows
             # the policy for the REMAINING branches") — codex [P1] on this arc:
             # unconditionally returning FAILED here bypassed the PROCEED→PARTIAL
             # mapping right below, contradicting the fork's own §3 rider

@@ -1529,12 +1529,21 @@ items:
     (operator-settable, `gt=0.0`, no floor) is shorter than the write''s own encrypt+fsync
     latency -- and unlink it before `write_once()` returns. The caller then holds a
     "live-looking" `composite_key` whose first `read()` raises an unhandled `FileNotFoundError`
-    instead of the store''s typed refusals. Advisor-reviewed: reachability needs a TTL roughly
-    seven orders of magnitude below the factory default (86400s vs. single-digit-ms write
-    latency); the complete fix is a genuine concurrency-control redesign (serializing GC against
-    in-flight publications), not a mechanical patch, and a partial mitigation (mtime-authority
-    switch) only narrows rather than closes the window -- registered per the terminal register
-    discipline (B-64/B-67 precedents) rather than shipping a round-11 partial fix to a race.'
+    instead of the store''s typed refusals. Advisor-reviewed: the TTL-shorter-than-write-latency
+    precondition is unchanged (needs a TTL roughly seven orders of magnitude below the factory
+    default -- 86400s vs. single-digit-ms write latency -- to matter at all); the complete fix
+    is a genuine concurrency-control redesign (serializing GC against in-flight publications),
+    not a mechanical patch, and a partial mitigation (mtime-authority switch) only narrows
+    rather than closes the window. Merge-gate round-1 concurrency lens (PR #1078) independently
+    confirmed the race AND sharpened the frequency assessment: `shutdown()` step 5b fires
+    `gc_sweep()` UNCONDITIONALLY once per `run()`/`resume()` call, with no interval throttle
+    (unlike the in-write opportunistic trigger''s 300s `_OPPORTUNISTIC_GC_INTERVAL_SECONDS`
+    gate) -- on a daemon serving many concurrent short-lived workflow runs against the SAME
+    shared store instance, concurrent-sweep frequency is materially higher than the
+    opportunistic-trigger-only framing implies, though the TTL precondition above still gates
+    whether any given overlap actually unlinks a live entry. Registered per the terminal
+    register discipline (B-64/B-67 precedents) rather than shipping a round-11 partial fix to
+    a race.'
   close_out: 'Design a `gc_sweep()`/`write_once()` synchronization primitive (in-flight-write
     registry the sweep consults before unlinking, or a lock scoped to the publication critical
     section) over Runtime spec v1.103 §14.8.11; witness with a test pinning a TTL shorter than

@@ -329,6 +329,7 @@ def _dispatcher(
     audit_writer_override: RuntimeAuditLedgerWriter | None = None,
     ledger_writer_override: LedgerWriter | None = None,
     signing_backend: Any | None = None,
+    protected_result_store: Any | None = None,
 ) -> tuple[RuntimeSubAgentDispatcher, _MockChildWorkflowRunner, InMemorySpanExporter]:
     """Compose a RuntimeSubAgentDispatcher with mocked child runner + real
     handoff/topology registries + real `LedgerWriter` + `RuntimeAuditLedgerWriter`
@@ -362,8 +363,23 @@ def _dispatcher(
         time_source=lambda: datetime.now(UTC),
         procedural_tier_snapshot_resolver=lambda: _Identifier("b" * 64),
         signing_backend=signing_backend,
+        protected_result_store=protected_result_store,
     )
     return dispatcher, runner, exporter
+
+
+def _protected_store(tmp_path: Path) -> Any:
+    """A real `ProtectedResultStore` (real Fernet + real filesystem) for
+    merge-gate round-1 test-witness wiring proofs — see the `_dispatcher`
+    call sites above."""
+    from cryptography.fernet import Fernet
+    from harness_runtime.lifecycle.protected_result_store import ProtectedResultStore
+
+    return ProtectedResultStore(
+        tmp_path / "b65a-store",
+        codec=Fernet(Fernet.generate_key()),
+        ttl_seconds=86400.0,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -2167,15 +2183,29 @@ def test_u_rt_136_post_effect_signing_failure_carries_completed_child_result(
 
     Mutation probe: dropping the cause-chain discrimination (or the carrier
     wrap) at the SUCCESS/DRAINED site makes the ON leg raise the plain
-    ComposeError without the result → FAILS."""
+    ComposeError without the result → FAILS.
+
+    Merge-gate round-1 test-witness lens on PR #1078: also proves the
+    success-path raise site (sub_agent_dispatch.py:1290) threads a REAL
+    `ProtectedResultStore` correctly — `resolve_result_ref` is called
+    synchronously (not via the off-loop wrapper the other two dispatchers
+    use), so a wrong/dropped `self.protected_result_store` or wrong
+    `step_context.tenant_id` at this specific call would stay green under
+    every pre-existing carrier assertion (they only check `.result`, never
+    `.result_ref`). Mutation probe: swapping `result_ref=resolve_result_ref(
+    self.protected_result_store, ...)` for a hardcoded `UnresolvableResultRef`
+    or `None` makes the `store.read(...)` below raise instead of returning
+    the original completed child output."""
     from harness_runtime.lifecycle.audit_signing_errors import (
         PostEffectAuditSigningError,
         PostEffectClass,
     )
 
+    store = _protected_store(tmp_path)
     dispatcher, _runner, _exporter = _dispatcher(
         tmp_path,
         audit_writer_override=cast(Any, _FamilyRaisingAuditWriter()),
+        protected_result_store=store,
     )
     dispatcher.audit_signing_fail_closed = True
     with pytest.raises(PostEffectAuditSigningError) as excinfo:
@@ -2183,6 +2213,11 @@ def test_u_rt_136_post_effect_signing_failure_carries_completed_child_result(
     carrier = excinfo.value
     assert carrier.effect_class is PostEffectClass.SUB_AGENT_RESULT
     assert cast("dict[str, Any]", carrier.result) == {"child_field": "value"}
+    assert isinstance(carrier.result_ref, str), (
+        f"expected a resolvable store ref, got {carrier.result_ref!r} — the "
+        f"store was not threaded correctly through the success-path raise site"
+    )
+    assert store.read(None, carrier.result_ref) == carrier.result
 
     # Flag-OFF control — the pre-U-RT-136 surface verbatim: the SUCCESS-path
     # compose failure still raises SubAgentDispatchAuditComposeError.
@@ -2205,17 +2240,29 @@ def test_u_rt_136_failed_and_paused_child_outcomes_preserved_on_carrier(
     re-execute the child's completed effects).
 
     Mutation probe: reverting either wrap to the bare family raise loses
-    `.result` and FAILS."""
+    `.result` and FAILS.
+
+    Merge-gate round-1 test-witness lens on PR #1078: also proves the
+    FAILED-path (sub_agent_dispatch.py:1180) and PAUSED-path (line 1235)
+    raise sites each independently thread a REAL `ProtectedResultStore`
+    correctly — two DISTINCT call sites, each with its own store/tenant_id
+    argument list; a fix that wires only one correctly stays green on the
+    other's pre-existing `.result`-only assertions. Mutation probe: at
+    EITHER site, swapping the real `resolve_result_ref(...)` call for a
+    hardcoded `UnresolvableResultRef`/`None` makes that site's `store.read`
+    below raise instead of returning the preserved child `RunResult`."""
     from harness_runtime.lifecycle.audit_signing_errors import (
         PostEffectAuditSigningError,
         PostEffectClass,
     )
 
     # FAILED child + signing failure at the best-effort audit step.
+    failed_store = _protected_store(tmp_path)
     failed_dispatcher, _r1, _e1 = _dispatcher(
         tmp_path,
         child_result=_failed_result(),
         audit_writer_override=cast(Any, _FamilyRaisingAuditWriter()),
+        protected_result_store=failed_store,
     )
     failed_dispatcher.audit_signing_fail_closed = True
     with pytest.raises(PostEffectAuditSigningError) as failed_exc:
@@ -2225,13 +2272,21 @@ def test_u_rt_136_failed_and_paused_child_outcomes_preserved_on_carrier(
     preserved_failed = cast(RunResult, failed_carrier.result)
     assert preserved_failed.status is RunStatus.FAILED
     assert preserved_failed.fail_class is not None
+    assert isinstance(failed_carrier.result_ref, str), (
+        f"expected a resolvable store ref, got {failed_carrier.result_ref!r} "
+        f"— the store was not threaded correctly through the FAILED-path site"
+    )
+    recovered_failed = cast(RunResult, failed_store.read(None, failed_carrier.result_ref))
+    assert recovered_failed.status is RunStatus.FAILED
 
     # PAUSED child + signing failure — the pause snapshot rides the carrier.
     snap = _child_snapshot()
+    paused_store = _protected_store(tmp_path)
     paused_dispatcher, _r2, _e2 = _dispatcher(
         tmp_path,
         child_result=_paused_result(snap),
         audit_writer_override=cast(Any, _FamilyRaisingAuditWriter()),
+        protected_result_store=paused_store,
     )
     paused_dispatcher.audit_signing_fail_closed = True
     with pytest.raises(PostEffectAuditSigningError) as paused_exc:
@@ -2239,6 +2294,13 @@ def test_u_rt_136_failed_and_paused_child_outcomes_preserved_on_carrier(
     preserved_paused = cast(RunResult, paused_exc.value.result)
     assert preserved_paused.status is RunStatus.PAUSED
     assert preserved_paused.pause_snapshot is snap
+    paused_ref = paused_exc.value.result_ref
+    assert isinstance(paused_ref, str), (
+        f"expected a resolvable store ref, got {paused_ref!r} — the store "
+        f"was not threaded correctly through the PAUSED-path site"
+    )
+    recovered_paused = cast(RunResult, paused_store.read(None, paused_ref))
+    assert recovered_paused.status is RunStatus.PAUSED
 
     # Flag-OFF controls — the pre-U-RT-136 surfaces verbatim.
     off_failed, _r3, _e3 = _dispatcher(
