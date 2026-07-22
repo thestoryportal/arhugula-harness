@@ -1807,11 +1807,14 @@ class RuntimeConfig(BaseModel):
     harmless — `ctx.protected_result_store` stays `None`.
     """
 
-    protected_result_store_ttl_seconds: float = 86400.0
+    protected_result_store_ttl_seconds: float = Field(default=86400.0, gt=0.0)
     """B-65-A (Runtime spec v1.103 §14.8.11) — the deployment-configurable
     TTL (spec AC 7) for unacknowledged protected-store entries; a GC sweep
     (bootstrap/shutdown + an opportunistic in-write trigger) collects
-    entries past this age. File/CLI-only — a mistuned TTL changes WHEN
+    entries past this age. `gt=0.0` (codex [P1] on this arc): a zero/negative
+    TTL would collect a freshly-written entry during its OWN opportunistic
+    sweep, returning a live-looking `str` ref whose subsequent read 404s.
+    File/CLI-only — a mistuned TTL changes WHEN
     recovery entries are reclaimed, never a correctness property, so it is
     not env-keyed per the same rationale as `prompt_cache_prewarm_model`.
     Default 24h.

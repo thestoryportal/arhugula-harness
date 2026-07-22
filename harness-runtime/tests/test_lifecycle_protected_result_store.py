@@ -377,3 +377,49 @@ def test_opportunistic_gc_runs_on_write_after_interval(
     monkeypatch.setattr(time, "time", _later)
     store.write_once("tenant-a", "triggers the opportunistic sweep")
     assert not entry_a.exists()
+
+
+def test_gc_unlink_failure_does_not_propagate_or_replace_the_carrier(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """codex [P1] on the B-65-A CP-side arc: `write_once()` calls the opportunistic
+    sweep UNGUARDED — if `gc_sweep()`'s unlink of an expired entry raises OSError
+    (e.g. permission denied), that error must NOT propagate out of `write_once()`.
+    `write_once()` is called from `resolve_result_ref()`, evaluated as a kwarg
+    expression while CONSTRUCTING `PostEffectAuditSigningError` at every raise
+    site — an uncaught OSError there would replace the typed carrier with an
+    unrelated GC error, and retry/pause handling would then treat the completed
+    effect as an ordinary failure and RE-DISPATCH it (the exact at-most-once
+    violation this whole store exists to prevent).
+
+    Mutation probe: removing the `try/except OSError` around the sweep's unlink
+    makes this test raise `OSError` instead of returning a valid `str` ref."""
+    store = _store(tmp_path, ttl_seconds=1.0)
+    monkeypatch.setattr(
+        "harness_runtime.lifecycle.protected_result_store._OPPORTUNISTIC_GC_INTERVAL_SECONDS",
+        0.0,
+    )
+    store.write_once("tenant-a", "will expire and fail to unlink")
+
+    real_time = time.time
+    monkeypatch.setattr(time, "time", lambda: real_time() + 10.0)
+
+    real_unlink = Path.unlink
+
+    def _raise_on_unlink(self: Path, *, missing_ok: bool = False) -> None:
+        if self.suffix == ".entry":
+            raise OSError("permission denied (simulated)")
+        real_unlink(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", _raise_on_unlink)
+
+    import logging
+
+    caplog.set_level(logging.ERROR, logger="harness.runtime.protected_result_store")
+    # The SECOND write's opportunistic sweep tries to GC the first (now-expired)
+    # entry, whose unlink is rigged to fail — this call must still return a
+    # valid ref for the SECOND write, never raise.
+    ref_b = store.write_once("tenant-a", "an unrelated second write")
+    assert isinstance(ref_b, str)
+    assert store.read("tenant-a", ref_b) == "an unrelated second write"
+    assert any("GC unlink failed" in record.message for record in caplog.records)

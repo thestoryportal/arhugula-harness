@@ -196,6 +196,48 @@ def test_scoped_aborted_with_output_is_corrupt_fail_closed(tmp_path: Path) -> No
     assert present - readable == {1}  # the fail-closed corrupt set
 
 
+def test_post_effect_signing_failed_disposition_round_trip_not_corrupt(tmp_path: Path) -> None:
+    """B-65 (CP spec v1.103 §25.15) — `post_effect_signing_failed` is an ADDITIVE
+    recognized disposition (a branch whose dispatch raised the post-effect audit-
+    signing carrier: output is the carrier's `result_ref`, NEVER None, never
+    re-dispatched). It round-trips AND is NOT treated as corrupt — without the
+    additive accept it would be dropped -> surfaced in the fail-closed corrupt
+    set, so a crash-resume of this disposition would ALWAYS fail closed instead
+    of recovering the ref (codex [P1] on this arc: this exact gap made the CP
+    driver's crash-recovery handling for this status unreachable)."""
+    store = EngineOutputStore(journal_dir=tmp_path / "eo")
+    store.record_branch(_RUN_KEY, 0, "w0", "post_effect_signing_failed", {"result_ref": "ref-abc"})
+    store.record_branch(_RUN_KEY, 1, "w1", "completed", {"out": 1})  # a survivor
+
+    fresh = EngineOutputStore(journal_dir=tmp_path / "eo")  # crash + restart
+    records = fresh.read_branch_records(_RUN_KEY)
+    assert records == {
+        0: ("w0", "post_effect_signing_failed", {"result_ref": "ref-abc"}),
+        1: ("w1", "completed", {"out": 1}),
+    }
+    # NOT corrupt — readable as a terminal, not in the fail-closed set.
+    assert fresh.present_branch_indexes(_RUN_KEY) - set(records.keys()) == set()
+
+
+def test_post_effect_signing_failed_without_output_is_corrupt_fail_closed(
+    tmp_path: Path,
+) -> None:
+    """The SYMMETRIC invariant to `scoped_aborted`'s "output must be None": a
+    `post_effect_signing_failed` record with `output is None` is a MALFORMED /
+    tampered sidecar (this disposition carries the carrier's `result_ref` by
+    construction, never None). Must be treated as corrupt — never readable."""
+    store = EngineOutputStore(journal_dir=tmp_path / "eo")
+    store.record_branch(_RUN_KEY, 0, "w0", "completed", {"o": 0})
+    store._branch_file(_RUN_KEY, 1).write_text(
+        '{"output": null, "step_id": "w1", "terminal_status": "post_effect_signing_failed"}',
+        encoding="utf-8",
+    )
+    readable = set(store.read_branch_records(_RUN_KEY).keys())
+    present = store.present_branch_indexes(_RUN_KEY)
+    assert readable == {0}  # the malformed no-output record is omitted
+    assert present - readable == {1}  # the fail-closed corrupt set
+
+
 def test_unknown_disposition_is_unreadable_fail_closed(tmp_path: Path) -> None:
     """A parseable record with an UNKNOWN terminal_status (tamper / a future schema) is
     treated as UNREADABLE — omitted from read_branch_records but surfaced by

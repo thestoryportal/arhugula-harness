@@ -227,6 +227,26 @@ def test_fail_closed_on_without_store_key_rejected_at_bootstrap_every_tier(
         validate_and_initialize_mtc_audit_signing(config, signing_backend=_FakeBackend())
 
 
+def test_fail_closed_on_with_malformed_store_key_rejected_at_bootstrap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """codex [P1] on the B-65-A CP-side arc: a NON-EMPTY but malformed Fernet
+    key (present, but not a valid 32-byte base64url key) must ALSO be rejected
+    at bootstrap under resolved-ON — the pre-fix check only verified the env
+    var was non-empty, so a malformed key passed this gate while
+    `materialize_protected_result_store_stage()` silently returned `None`
+    (fail-OPEN wearing a fail-closed label). Mutation probe: reverting the
+    check to presence-only makes this test pass a malformed key through."""
+    monkeypatch.setenv("HARNESS_PROTECTED_RESULT_STORE_KEY", "not-a-valid-fernet-key")
+    config = _config(
+        tmp_path,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        audit_signing_fail_closed=True,
+    )
+    with pytest.raises(IncompatibleConfigVersion, match="protected result store key"):
+        validate_and_initialize_mtc_audit_signing(config, signing_backend=_FakeBackend())
+
+
 def test_fail_closed_off_without_store_key_accepted(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

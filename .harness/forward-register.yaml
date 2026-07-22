@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 67
+  total: 68
   open: 0
   design_substrate_gated: 2
-  registered_finding: 7
+  registered_finding: 8
   operator_gated: 3
   held: 1
   closed: 54
-  identity_digest: de7d4c458a636c58
+  identity_digest: b44abc573b9c2cc3
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -1495,3 +1495,22 @@ items:
   council: no -- documentation-of-accepted-residual row; no design decision pending
   heading: '### B-66 · B-60 fence-consult order at admission discrimination has no single-site
     witness *(registered at the B-60 close, merge-gate test-witness lens, 2026-07-21)*'
+- id: B-67
+  title: Protected result store's TTL GC sweep has no shutdown-time hook — bootstrap half only
+  status: registered_finding
+  summary: 'Runtime spec v1.103 §14.8.11 AC 7 requires a GC sweep "at bootstrap/shutdown"; the
+    B-65-A arc wired bootstrap (stage_4_od.py) + the opportunistic in-write sweep, but NOT
+    shutdown -- this runtime has no graceful-teardown chain to hook (bootstrap/__init__.py''s
+    _rollback is bootstrap-FAILURE-only; the drain signal handler only sets drained_flag, per
+    the SAME structural gap [[fork-u-rt-44-workflow-loop-drain]] already names). Building a
+    shutdown hook solely for this store would invent runtime infrastructure ahead of the rest
+    of the harness (advisor-reconciled). Bounded residual, not a correctness gap: expired
+    entries still get reaped by the bootstrap + opportunistic sweeps; only a clean-exit-then-
+    never-restart process leaves expired (still-encrypted) ciphertext past its TTL.'
+  close_out: 'Land alongside [[fork-u-rt-44-workflow-loop-drain]]''s own resolution: when that
+    fork wires a real signal-handler -> shutdown chain, add ctx.protected_result_store.
+    gc_sweep() (guarded on non-None) to it, mirroring the bootstrap call site verbatim.'
+  council: no -- a pure follow-on wiring step once the prerequisite infrastructure exists
+  heading: '### B-67 · Protected result store''s TTL GC sweep has no shutdown-time hook —
+    bootstrap half only *(registered at the B-65-A impl arc, out-of-family Codex round 1 [P1],
+    2026-07-22)*'

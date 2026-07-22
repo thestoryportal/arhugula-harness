@@ -84,6 +84,20 @@ async def execute(
     # is a normal outcome at fail-closed=OFF (the carrier is never raised on
     # that path).
     ctx.protected_result_store = materialize_protected_result_store_stage(config)
+    # B-65-A (Runtime spec v1.103 §14.8.11 AC 7, codex [P1] on this arc) — the
+    # BOOTSTRAP half of the "GC sweep at bootstrap/shutdown" fallback: reaps
+    # entries a PRIOR crashed/killed process abandoned past their TTL before
+    # any of THIS process's own writes could trigger the opportunistic sweep.
+    # The SHUTDOWN half is NOT wired here — this runtime has no graceful-
+    # teardown chain to hook yet (`_rollback` in `bootstrap/__init__.py` is
+    # bootstrap-FAILURE-only; the drain signal handler only sets
+    # `drained_flag`, per the registered `[[fork-u-rt-44-workflow-loop-drain]]`
+    # gap) — building one solely for this store would invent runtime
+    # infrastructure ahead of the rest of the harness (advisor-reconciled).
+    # Tracked as a forward-register row tied to that same drain fork, not a
+    # silent scope-narrowing.
+    if ctx.protected_result_store is not None:
+        ctx.protected_result_store.gc_sweep()
     # 0b. Audit-signing backend (B-47 PR B — OD spec v1.33 §21.2.1 composition
     # root) — constructed AND validated BEFORE the one-shot global tracer
     # registration (out-of-family Codex round-18: OTel registration cannot be

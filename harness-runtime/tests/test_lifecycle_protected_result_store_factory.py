@@ -76,6 +76,33 @@ def test_custom_key_env_var_name_honored(tmp_path: Path, monkeypatch: pytest.Mon
     assert isinstance(store, ProtectedResultStore)
 
 
+@pytest.mark.parametrize("bad_ttl", [0.0, -1.0])
+def test_nonpositive_ttl_rejected_at_construction(tmp_path: Path, bad_ttl: float) -> None:
+    """codex [P2] on the B-65-A CP-side arc: a zero/negative TTL is rejected at
+    `RuntimeConfig` CONSTRUCTION (the `Field(gt=0.0)` constraint) — without it,
+    the first successful write would immediately collect its own newly-created
+    entry during the opportunistic sweep, returning a live-looking `str` ref
+    whose subsequent read 404s. `model_copy(update=...)` deliberately bypasses
+    pydantic validation (verified empirically, unrelated to this fix), so this
+    witness constructs a FRESH config directly — the real deployment-config-
+    loading shape, not the `model_copy` test-convenience shape used elsewhere
+    in this file."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        RuntimeConfig(
+            deployment_surface=DeploymentSurface.LOCAL_DEVELOPMENT,
+            repository_root=tmp_path,
+            path_bindings=PathBindingConfig(),
+            provider_secrets=ProviderSecretsConfig(),
+            otel=OTelConfig(otlp_endpoint="http://localhost:4317"),
+            collector=CollectorConfig(),
+            default_topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+            mcp_clients=[],
+            protected_result_store_ttl_seconds=bad_ttl,
+        )
+
+
 def test_ttl_threaded_from_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Mutation probe: hardcoding a fixed TTL instead of reading
     `config.protected_result_store_ttl_seconds` fails this witness."""

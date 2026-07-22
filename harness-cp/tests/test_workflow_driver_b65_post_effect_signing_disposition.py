@@ -291,9 +291,12 @@ def test_parallelization_pause_never_mints_resumable_and_never_redispatches() ->
     pr = snap.peer_fan_out_resume
     assert pr is not None
     by_index = {b.branch_index: b for b in pr.branches}
-    # branch-1 (the carrier) is recorded terminal — never re-dispatchable.
-    assert by_index[1].terminal_status == "completed"
+    # branch-1 (the carrier) is recorded terminal — DISTINCT durable status (never
+    # "completed" — that value reads as clean success on resume, codex [P1]) —
+    # never re-dispatchable, carrying the ref in the snapshot entry itself.
+    assert by_index[1].terminal_status == "post_effect_signing_failed"
     assert by_index[1].step_id == "branch-1"
+    assert by_index[1].output == {"result_ref": "ref-xyz789"}
     # witness (b): the run's OWN report (partial_state) carries the result_ref.
     partial = result.partial_state
     assert partial is not None
@@ -302,7 +305,7 @@ def test_parallelization_pause_never_mints_resumable_and_never_redispatches() ->
     # witness (a)+(c): resume never re-dispatches branch-1 — dispatched exactly once.
     resume_ctx = cast(DriverContext, _Ctx(ledger=_RecordingLedger(), emitter=_Emitter()))
     resume_dispatcher = _GatedCarrierDispatcher(victim="branch-1", result_ref="ref-xyz789")
-    _run(
+    resumed_result = _run(
         manifest=manifest,
         steps=_peer_steps(2),
         dispatcher=resume_dispatcher,
@@ -310,6 +313,13 @@ def test_parallelization_pause_never_mints_resumable_and_never_redispatches() ->
         pause_snapshot_input=snap,
     )
     assert "branch-1" not in resume_dispatcher.dispatched
+    # witness (b) at the RESUME boundary (codex [P1]): the RESUMED run's own
+    # report must ALSO carry the ref — not just the original pause's report.
+    resumed_partial = resumed_result.partial_state
+    assert resumed_partial is not None
+    assert resumed_partial["post_effect_signing_failures"] == {
+        "branch-1": {"result_ref": "ref-xyz789"}
+    }
 
 
 def test_parallelization_cascade_cancel_terminal_with_result() -> None:
@@ -421,15 +431,18 @@ def test_orchestrator_workers_pause_never_mints_resumable_and_never_redispatches
     fr = snap.fan_out_resume
     assert fr is not None
     by_index = {b.branch_index: b for b in fr.branches}
-    assert by_index[1].terminal_status == "completed"
+    # DISTINCT durable status (never "completed" — codex [P1]), carrying the ref
+    # in the snapshot entry itself.
+    assert by_index[1].terminal_status == "post_effect_signing_failed"
     assert by_index[1].step_id == "worker-1"
+    assert by_index[1].output == {"result_ref": "ow-ref-2"}
     partial = result.partial_state
     assert partial is not None
     assert partial["post_effect_signing_failures"] == {"worker-1": {"result_ref": "ow-ref-2"}}
 
     resume_ctx = cast(DriverContext, _Ctx(ledger=_RecordingLedger(), emitter=_Emitter()))
     resume_dispatcher = _GatedCarrierDispatcher(victim="worker-1", result_ref="ow-ref-2")
-    _run(
+    resumed_result = _run(
         manifest=manifest,
         steps=_orchestrator_worker_steps(2),
         dispatcher=resume_dispatcher,
@@ -437,6 +450,13 @@ def test_orchestrator_workers_pause_never_mints_resumable_and_never_redispatches
         pause_snapshot_input=snap,
     )
     assert "worker-1" not in resume_dispatcher.dispatched
+    # witness (b) at the RESUME boundary (codex [P1]): the RESUMED run's own
+    # report must ALSO carry the ref.
+    resumed_partial = resumed_result.partial_state
+    assert resumed_partial is not None
+    assert resumed_partial["post_effect_signing_failures"] == {
+        "worker-1": {"result_ref": "ow-ref-2"}
+    }
 
 
 def test_orchestrator_workers_cascade_cancel_terminal_with_result() -> None:

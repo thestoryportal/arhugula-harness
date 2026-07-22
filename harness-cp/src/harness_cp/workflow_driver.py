@@ -8113,7 +8113,8 @@ def _execute_parallelization(
     # `branch_metadata=None`). LEDGER-only for a never-dispatched branch — NEVER
     # `_mark_branch_dispatched` / `_capture_branch_terminal`: dispatch-marker ABSENCE is
     # the durable provably-never-ran witness (CP spec v1.90 §25.17 item 4), and a store
-    # terminal outside {completed, timed_out, scoped_aborted} is corrupt to crash-resume.
+    # terminal outside {completed, timed_out, scoped_aborted, post_effect_signing_failed}
+    # is corrupt to crash-resume (`EngineOutputStore._read_last_branch_disposition`).
     # Synthesized entries are PER-ATTEMPT AUDIT records, not resume authority (resume
     # keys on snapshot omission; a stale-snapshot double-resume leaves the first
     # attempt's `cancelled` standing via branch-terminal idempotency — the recorded
@@ -9393,7 +9394,21 @@ def _execute_parallelization(
         # is captured per branch so resume validates body identity.
         peer_fan_out_resume = PeerFanOutResumeState(
             branches=tuple(
+                # B-65 (codex [P1] on this arc) — a carrier branch's snapshot entry MUST
+                # carry the DISTINCT durable terminal_status + its `result_ref` output
+                # (never the driver-local "completed"/`collected`-sourced None the
+                # generic branch below uses) — else `api.resume`'s seed loop reads it
+                # as an ordinary ran-and-errored branch and DROPS the ref from the
+                # resumed run's report (the live-pause analogue of the P1-3 durable-
+                # store fix; the two must move together).
                 FanOutBranchResumeState(
+                    branch_index=_bi,
+                    step_id=str(steps[_bi].step_id),
+                    terminal_status=_POST_EFFECT_SIGNING_FAILED_TERMINAL_STATUS,
+                    output=post_effect_signing_failures[_bi],
+                )
+                if _bi in post_effect_signing_failures
+                else FanOutBranchResumeState(
                     branch_index=_bi,
                     step_id=str(steps[_bi].step_id),
                     terminal_status=_status,
@@ -11366,6 +11381,26 @@ def _execute_orchestrator_workers(
     # `collected` (the ORCHESTRATOR_WORKERS analogue of the PARALLELIZATION channel — see
     # that function's declaration comment for why it never enters the voting fold).
     post_effect_signing_failures: dict[int, Mapping[str, Any]] = {}
+
+    def _fold_post_effect_signing_failures(aggregate: dict[str, Any]) -> dict[str, Any]:
+        """B-65 (CP spec v1.103 §25.15 row 6) — merge the non-voting post-effect-
+        signing-failure refs into a reported aggregate, keyed by step_id. `_finish`
+        AND every direct (non-`_finish`) `_aggregate_orchestrator_workers(...)`
+        call site in the `not branch_plan` complete-recovery block route through
+        this ONE function (codex [P1] on this arc: the direct sites were missed
+        when `_finish`'s own merge was added — a single call site can't be
+        edited-but-forgotten-elsewhere again). No-op (byte-identical `aggregate`)
+        when empty."""
+        if not post_effect_signing_failures:
+            return aggregate
+        return {
+            **aggregate,
+            "post_effect_signing_failures": {
+                str(worker_steps[_bi].step_id): _ref
+                for _bi, _ref in sorted(post_effect_signing_failures.items())
+            },
+        }
+
     # B-FANOUT-PAUSE — branch_index -> terminal disposition ("completed" / "timed_out")
     # for every branch that reached a terminal boundary. Written from the same
     # post-await loop-thread sites as `collected` (single-threaded → safe). Read
@@ -11840,7 +11875,9 @@ def _execute_orchestrator_workers(
                     run_id=run_id,
                     status=RunStatus.FAILED,
                     terminal_step_index=None,
-                    partial_state=_aggregate_orchestrator_workers(orchestrator_output, collected),
+                    partial_state=_fold_post_effect_signing_failures(
+                        _aggregate_orchestrator_workers(orchestrator_output, collected)
+                    ),
                     final_state=None,
                     fail_class="orchestrator-workers-pause-resume-protocol-not-bound",
                 ), _reestablish_steps
@@ -11848,7 +11885,20 @@ def _execute_orchestrator_workers(
                 orchestrator_output=dict(orchestrator_output),
                 orchestrator_step_id=str(orchestrator_step.step_id),
                 branches=tuple(
+                    # B-65 (codex [P1] on this arc) — see the live-pause snapshot site's
+                    # comment: a carrier worker's RE-ESTABLISHED snapshot entry MUST ALSO
+                    # carry the distinct durable terminal_status + its `result_ref`
+                    # output (a complete-recovery crash-resume can re-establish a PAUSED
+                    # state whose degraded worker is the carrier, not just an ordinary
+                    # ran-and-errored one).
                     FanOutBranchResumeState(
+                        branch_index=_bi,
+                        step_id=str(worker_steps[_bi].step_id),
+                        terminal_status=_POST_EFFECT_SIGNING_FAILED_TERMINAL_STATUS,
+                        output=post_effect_signing_failures[_bi],
+                    )
+                    if _bi in post_effect_signing_failures
+                    else FanOutBranchResumeState(
                         branch_index=_bi,
                         step_id=str(worker_steps[_bi].step_id),
                         terminal_status=_status,
@@ -11884,7 +11934,9 @@ def _execute_orchestrator_workers(
                 run_id=run_id,
                 status=RunStatus.PAUSED,
                 terminal_step_index=None,
-                partial_state=_aggregate_orchestrator_workers(orchestrator_output, collected),
+                partial_state=_fold_post_effect_signing_failures(
+                    _aggregate_orchestrator_workers(orchestrator_output, collected)
+                ),
                 final_state=None,
                 fail_class=None,
                 pause_snapshot=_reestablish_snapshot,
@@ -11903,7 +11955,9 @@ def _execute_orchestrator_workers(
                 run_id=run_id,
                 status=RunStatus.FAILED,
                 terminal_step_index=None,
-                partial_state=_aggregate_orchestrator_workers(orchestrator_output, collected),
+                partial_state=_fold_post_effect_signing_failures(
+                    _aggregate_orchestrator_workers(orchestrator_output, collected)
+                ),
                 final_state=None,
                 fail_class="orchestrator-workers-effect-fence-branch-aborted",
             ), (1 if orchestrator_writer is not None else 0) + _rematerialized_steps
@@ -11932,7 +11986,9 @@ def _execute_orchestrator_workers(
         _aggregate = (
             _synth
             if _synth is not None
-            else _aggregate_orchestrator_workers(orchestrator_output, collected)
+            else _fold_post_effect_signing_failures(
+                _aggregate_orchestrator_workers(orchestrator_output, collected)
+            )
         )
         result = RunResult(
             workflow_id=workflow_id,
@@ -12002,20 +12058,10 @@ def _execute_orchestrator_workers(
         aggregate = (
             _synth
             if _synth is not None
-            else _aggregate_orchestrator_workers(orchestrator_output, collected)
+            else _fold_post_effect_signing_failures(
+                _aggregate_orchestrator_workers(orchestrator_output, collected)
+            )
         )
-        # B-65 (CP spec v1.103 §25.15 row 6) — merge the non-voting post-effect-
-        # signing-failure refs into the reported aggregate, keyed by step_id (the
-        # ORCHESTRATOR_WORKERS analogue of the PARALLELIZATION `_finish` merge — see
-        # that comment for why `status` can never be SUCCESS when this is non-empty).
-        if post_effect_signing_failures:
-            aggregate = {
-                **aggregate,
-                "post_effect_signing_failures": {
-                    str(worker_steps[_bi].step_id): _ref
-                    for _bi, _ref in sorted(post_effect_signing_failures.items())
-                },
-            }
         result = RunResult(
             workflow_id=workflow_id,
             run_id=run_id,
@@ -13204,7 +13250,18 @@ def _execute_orchestrator_workers(
             orchestrator_output=dict(orchestrator_output),
             orchestrator_step_id=str(orchestrator_step.step_id),
             branches=tuple(
+                # B-65 (codex [P1] on this arc) — see the PARALLELIZATION twin site's
+                # comment: a carrier worker's snapshot entry MUST carry the distinct
+                # durable terminal_status + its `result_ref` output, never the
+                # driver-local "completed"/`collected`-sourced None.
                 FanOutBranchResumeState(
+                    branch_index=_bi,
+                    step_id=str(worker_steps[_bi].step_id),
+                    terminal_status=_POST_EFFECT_SIGNING_FAILED_TERMINAL_STATUS,
+                    output=post_effect_signing_failures[_bi],
+                )
+                if _bi in post_effect_signing_failures
+                else FanOutBranchResumeState(
                     branch_index=_bi,
                     step_id=str(worker_steps[_bi].step_id),
                     terminal_status=_status,

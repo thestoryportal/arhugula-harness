@@ -284,8 +284,24 @@ class ProtectedResultStore:
             except Exception:
                 continue
             if current_time - envelope.written_at > self._ttl_seconds:
-                entry_path.unlink(missing_ok=True)
                 digest = entry_path.stem
+                try:
+                    entry_path.unlink(missing_ok=True)
+                except OSError as exc:
+                    # codex [P1] on this arc — a sweep-time unlink failure (e.g.
+                    # permission denied) must NEVER propagate: `write_once()` calls
+                    # this opportunistically, and an uncaught OSError here would
+                    # replace the caller's typed `PostEffectAuditSigningError` with
+                    # an unrelated GC error, defeating the at-most-once carrier
+                    # entirely. Log + skip this entry; the sweep continues.
+                    logger.error(
+                        "protected result store: TTL-expired entry GC unlink failed "
+                        "(digest=%s, tenant=%s): %s",
+                        digest,
+                        envelope.tenant_id,
+                        exc,
+                    )
+                    continue
                 expired.append(digest)
                 logger.warning(
                     "protected result store: TTL-expired entry GC'd "

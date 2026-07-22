@@ -185,7 +185,8 @@ class EngineOutputStore:
         """Append one branch terminal-DISPOSITION record to the branch's OWN file, durably.
 
         The store records the branch's terminal **disposition** (``completed`` /
-        ``timed_out`` / ``scoped_aborted``) for EVERY branch that reaches a terminal boundary
+        ``timed_out`` / ``scoped_aborted`` / ``post_effect_signing_failed``) for EVERY
+        branch that reaches a terminal boundary
         — NOT only output-bearing clean successes — so a crash-resume can distinguish
         recover-and-fold (``completed`` with ``output``), recover-as-terminal (``completed``
         with ``output is None`` — a ran-and-errored branch whose effect LANDED, never
@@ -224,8 +225,10 @@ class EngineOutputStore:
         UNREADABLE branch file is omitted here and surfaced by `present_branch_indexes` so
         the caller fails closed (never silently re-dispatching a corrupt branch). ``output``
         is ``None`` for a terminal-no-output branch (ran-and-errored / timed-out /
-        scoped-aborted). ``terminal_status`` is one of ``completed`` / ``timed_out`` /
-        ``scoped_aborted`` (any other value is treated as corrupt → fail-closed).
+        scoped-aborted) and NON-``None`` for ``post_effect_signing_failed`` (the carrier's
+        `result_ref`, by construction). ``terminal_status`` is one of ``completed`` /
+        ``timed_out`` / ``scoped_aborted`` / ``post_effect_signing_failed`` (any other
+        value, or a mismatched output-presence for the latter two, is corrupt → fail-closed).
         """
         branches_dir = self._branches_dir(run_key)
         if not branches_dir.exists():
@@ -1016,7 +1019,18 @@ class EngineOutputStore:
             # all-abort FAILED across a crash. Recognized here (NOT corrupt) so it flows through
             # `read_branch_records`; omitting it would fail-closed a mixed abort+survivor recovery
             # (`[[closed-schema-extension-enforced-vs-advisory]]` — the guard is ENFORCED).
-            if terminal_status not in ("completed", "timed_out", "scoped_aborted"):
+            # `post_effect_signing_failed` (B-65; CP spec v1.103 §25.15) is ALSO ADDITIVE — a
+            # branch whose dispatch raised the Runtime post-effect audit-signing carrier (the
+            # paid effect COMPLETED; only the post-effect audit signing failed): TERMINAL-with-
+            # result under every cascade_policy, never re-dispatched. Recognized here (NOT
+            # corrupt) so crash-resume recovers it — omitting it would fail-closed every crash
+            # recovery of this disposition (codex [P1] on this arc).
+            if terminal_status not in (
+                "completed",
+                "timed_out",
+                "scoped_aborted",
+                "post_effect_signing_failed",
+            ):
                 continue
             # A `scoped_aborted` branch is recorded output=None BY CONSTRUCTION (the operator
             # aborted it — nothing folds). A `scoped_aborted` record carrying a non-None output is
@@ -1027,6 +1041,12 @@ class EngineOutputStore:
             # folded PARTIAL/SUCCESS (`[[durable-recovery-presence-validity-scope]]`: presence ≠
             # validity; out-of-family Codex [P2]).
             if terminal_status == "scoped_aborted" and output is not None:
+                continue
+            # The SYMMETRIC invariant for `post_effect_signing_failed`: it carries the carrier's
+            # `result_ref` BY CONSTRUCTION (never None) — a record with `output is None` is a
+            # MALFORMED / tampered sidecar, treated as corrupt (never readable), mirroring the
+            # `scoped_aborted` check above.
+            if terminal_status == "post_effect_signing_failed" and output is None:
                 continue
             if output is not None and not isinstance(output, dict):
                 continue
