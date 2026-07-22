@@ -45,10 +45,23 @@ follows the policy for the REMAINING branches." Rationale: the carrier is defini
 resumability; the audit gap is an operator-repair item (the migrate/inspect surfaces), not a
 re-dispatch trigger.
 
+## §3b Result recovery (the same spec leg — codex round-1 [P1] on this filing)
+
+Propagating the opaque `result_ref` alone leaves callers unable to RECOVER the completed
+paid-effect's payload (the report log stores only a digest). The register row requires this
+same leg to resolve payload recoverability. The rider therefore ALSO selects the recovery
+mechanism: **recommended — a protected result store keyed by `result_ref`** (write-once at
+the carrier's raise site, tenant-scoped read via the existing engine-output-store
+plumbing/protection class; the alternative — carrying the payload through the CP/runtime
+result model — widens `RunResult` for a rare failure mode and rides every fold). The §2
+witness extends: (d) the surfaced failure's `result_ref` RESOLVES to the preserved payload
+through the store.
+
 ## §4 The operator selection (ONE decision)
 
-- **(A) RECOMMENDED — adopt the §3 rider: carrier is branch-terminal-with-result under every
-  cascade_policy; wire the name-match fence + witnesses per §2.**
+- **(A) RECOMMENDED — adopt the §3 rider + §3b protected result store: carrier is
+  branch-terminal-with-result under every cascade_policy; wire the name-match fence +
+  witnesses per §2 incl. the §3b resolution witness.**
 - (B) policy-split variant: terminal under `pause`/`cascade-cancel` but under `proceed` keep
   the current PARTIAL while ADDING the result_ref to the fold (weaker — still no re-fire, but
   the branch reads degraded rather than terminal-with-result).

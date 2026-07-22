@@ -450,6 +450,7 @@ items:
     *(split from B-32 after a same-session Codex review found the first routing attempt had 3 real defects;
     not shipped)*'
 - id: B-33
+  filing: .harness/class_1_fork_b33_rotation_correlation_carrier.md
   title: verify_rotation_6_steps cannot prove a rotation boundary occurred
   status: registered_finding
   summary: 'GROUNDED 2026-07-18 (autonomous loop): execute_key_rotation -- the sole
@@ -1254,6 +1255,7 @@ items:
   heading: '### B-58 · Pre-existing harness-cp function-level import of runtime escalation error types
     *(registered at the B-48 apply arc, 2026-07-19)*'
 - id: B-59
+  filing: .harness/class_2_fork_b59_capacity_authority_across_bootstraps.md
   title: Capacity authority not preserved across sequential bootstrap invocations
   status: registered_finding
   summary: 'Registered at the B-48 apply arc (codex round-4 [P1] "preserve one capacity authority
@@ -1431,6 +1433,7 @@ items:
   heading: '### B-64 · Greenfield cutover-record freshness probe and publication are not atomic
     cross-process *(registered at the U-RT-134 impl arc, codex round-9, 2026-07-20)*'
 - id: B-65
+  filing: .harness/class_2_fork_b65_post_effect_signing_carrier_cascade_disposition.md
   title: Post-effect signing carrier disposition at CP topology cascade handlers is unspecified
   status: registered_finding
   summary: 'Registered at the U-RT-136/U-CP-73 impl arc (out-of-family codex round-2 [P1]).

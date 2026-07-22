@@ -69,13 +69,20 @@ Riders if A is selected: (1) adopt-new-budget-carry-occupied reconciliation rule
 budget-shrink-below-occupied typed refusal; (2) a conftest reset fixture + an isolation
 witness (two sequential in-process bootstraps see one authority); (3) the B-48 fence-ack
 lease-release path byte-unchanged (witnessed by a drained-worker crossing the boundary and
-releasing into the adopted authority).
+releasing into the adopted authority); (4) **every executor admission surface** backs onto
+the singleton — the DIRECT non-fan-out `reserve(1)` path as well as the CP fan-out adapter's
+`reserve_fanout` (codex round-1 [P1] on this filing: globalizing only fan-out accounting
+while each executor keeps a per-run direct budget still exceeds the cap on a run-2 single
+offload).
 
 ## §4 Verification obligations (the apply arc's acceptance criteria)
 
 1. Two sequential `api.run()` invocations in ONE process with a still-draining worker from
    run 1: run 2's fan-out admission sees `budget - occupied`, not the full budget (the defect's
    direct witness; PD-8: revert to fresh-construction → over-admission reproduces).
+1b. The DIRECT-dispatch twin (codex round-1 [P1]): run 2's single NON-fan-out offload
+   (`reserve(1)`) also sees `budget - occupied` — pins that the singleton backs every
+   admission surface, not only the fan-out adapter.
 2. The straggler's eventual done-callback releases into the authority run 2 reads (no phantom
    frame after the release; no double release).
 3. Budget reconfiguration across runs: grow honored immediately; shrink below current occupied
