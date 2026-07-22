@@ -10832,6 +10832,14 @@ def _execute_orchestrator_workers(
                         str(orchestrator_step.step_id),
                         str(orchestrator_step.step_kind.value),
                     )
+            # B-60 (codex round-7 on PR #1075, reproduced): consult at the
+            # orchestrator's OWN marker -> dispatch boundary — a token
+            # tripping while the reserve marker writes must stop the
+            # orchestrator's LLM/tool dispatch from beginning (the
+            # strategy-entry consult already passed). The signal is a
+            # BaseException; the `except Exception` arm below cannot absorb
+            # it.
+            _consult_dispatch_fence()
             orchestrator_output = _orch_dispatcher.dispatch(
                 orchestrator_binding, orchestrator_step, step_context=orchestrator_context
             )

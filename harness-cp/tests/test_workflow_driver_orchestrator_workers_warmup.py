@@ -1503,3 +1503,56 @@ def test_b60_ow_phase1_trip_stops_phase2_scheduling_cascade_tier() -> None:
     dispatcher, authority = _b60_ow_run(PersonaTier.MULTI_TENANT_COMPLIANCE)
     assert dispatcher.dispatched == [0]
     assert authority.available == authority.frame_budget
+
+
+def test_b60_orchestrator_marker_trip_stops_orchestrator_dispatch() -> None:
+    """B-60 (codex round-7 on PR #1075, reproduced): a token tripping while
+    the orchestrator's reserve marker writes must stop the orchestrator's
+    OWN dispatch from beginning — the marker/dispatch boundary consult."""
+    from harness_cp.sub_agent_dispatch_cancellation import (
+        DISPATCH_CANCEL_TOKEN_VAR,
+        DispatchCancelToken,
+        DispatchFenceTrippedSignal,
+    )
+
+    token = DispatchCancelToken()
+
+    class _TrippingOrchMarkerStore(_MiniOWStore):
+        def record_orchestrator_dispatched(self, *a: Any, **k: Any):
+            result = super().record_orchestrator_dispatched(*a, **k)
+            token.trip()
+            return result
+
+    class _CountingEcho:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def dispatch(
+            self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+        ) -> dict[str, Any]:
+            self.calls.append(str(step.step_id))
+            return {"ok": str(step.step_id)}
+
+    echo = _CountingEcho()
+    store = _TrippingOrchMarkerStore()
+    reset = DISPATCH_CANCEL_TOKEN_VAR.set(token)
+    try:
+        with pytest.raises(DispatchFenceTrippedSignal):
+            _run(
+                steps=[_orch_step(), _worker(0, None)],
+                registry=_KindMap(
+                    {
+                        StepKind.DECLARATIVE_STEP: echo,
+                        StepKind.INFERENCE_STEP: echo,
+                    }
+                ),
+                persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+                engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+                store=store,
+                concurrent_cache_warmup=False,
+            )
+    finally:
+        DISPATCH_CANCEL_TOKEN_VAR.reset(reset)
+    # The marker landed (the trip rode it); the orchestrator dispatch and
+    # every worker never began.
+    assert echo.calls == []
