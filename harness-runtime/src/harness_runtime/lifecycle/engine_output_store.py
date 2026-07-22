@@ -1043,16 +1043,28 @@ class EngineOutputStore:
             if terminal_status == "scoped_aborted" and output is not None:
                 continue
             # The SYMMETRIC invariant for `post_effect_signing_failed`: it carries the carrier's
-            # `result_ref` BY CONSTRUCTION, under a `"result_ref"` key (the CP-side
-            # `_post_effect_signing_result_ref_output` encoder's exact shape) — a record with
-            # `output is None`, a non-dict output, or a dict MISSING the key (codex [P2] on this
-            # arc: an arbitrary non-empty dict like `{}` would otherwise slip through as
-            # "readable" with no usable ref) is a MALFORMED / tampered sidecar, treated as
-            # corrupt (never readable), mirroring the `scoped_aborted` check above.
-            if terminal_status == "post_effect_signing_failed" and (
-                not isinstance(output, dict) or "result_ref" not in output
-            ):
-                continue
+            # `result_ref` BY CONSTRUCTION, under a `"result_ref"` key whose VALUE is either a
+            # resolvable string ref or the exact `{"unresolvable_reason": <str>}` discriminated-
+            # union shape (the CP-side `_post_effect_signing_result_ref_output` encoder's exact
+            # shape) — a record with `output is None`, a non-dict output, a dict missing the
+            # key, or a key present with a malformed value (codex [P2] on this arc: `null`, a
+            # number, or an unresolvable declaration missing/mistyping `reason` previously
+            # slipped through as "readable" with no usable ref) is a MALFORMED / tampered
+            # sidecar, treated as corrupt (never readable), mirroring `scoped_aborted` above.
+            if terminal_status == "post_effect_signing_failed":
+                if not isinstance(output, dict) or "result_ref" not in output:
+                    continue
+                _ref_value = cast("object", output["result_ref"])
+                _ref_value_valid = isinstance(_ref_value, str) or (
+                    isinstance(_ref_value, dict)
+                    and set(cast("dict[object, object]", _ref_value).keys())
+                    == {"unresolvable_reason"}
+                    and isinstance(
+                        cast("dict[object, object]", _ref_value).get("unresolvable_reason"), str
+                    )
+                )
+                if not _ref_value_valid:
+                    continue
             if output is not None and not isinstance(output, dict):
                 continue
             result = (step_id, terminal_status, cast("dict[str, Any] | None", output))

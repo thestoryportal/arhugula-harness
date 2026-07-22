@@ -341,13 +341,19 @@ class WebhookDeliveryComposer:
                 idempotency_key=idempotency_key,
             )
         except AUDIT_SIGNING_HARD_FAILURES as sign_exc:
+            # codex [P2] on the B-65-A CP-side arc — offload the synchronous
+            # store I/O so a signing outage can't block unrelated event-loop
+            # work.
+            _result_ref = await asyncio.to_thread(
+                resolve_result_ref, self._protected_result_store, tenant_id, result
+            )
             raise PostEffectAuditSigningError(
                 f"audit signing failed after a completed webhook POST "
                 f"(webhook_id={webhook_config.webhook_id!r}, "
                 f"delivered={delivered}): {sign_exc}",
                 effect_class=PostEffectClass.WEBHOOK_RECEIPT,
                 result=result,
-                result_ref=resolve_result_ref(self._protected_result_store, tenant_id, result),
+                result_ref=_result_ref,
             ) from sign_exc
 
         if not delivered:

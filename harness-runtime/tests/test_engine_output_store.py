@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from harness_runtime.lifecycle.engine_output_store import (
     EngineOutputStore,
     engine_output_dir_for,
@@ -255,6 +256,37 @@ def test_post_effect_signing_failed_with_shapeless_output_is_corrupt_fail_closed
     readable = set(store.read_branch_records(_RUN_KEY).keys())
     present = store.present_branch_indexes(_RUN_KEY)
     assert readable == {0}  # the shapeless-output record is omitted
+    assert present - readable == {1}  # the fail-closed corrupt set
+
+
+@pytest.mark.parametrize(
+    "malformed_ref_json",
+    [
+        '{"output": {"result_ref": null}, "step_id": "w1", '
+        '"terminal_status": "post_effect_signing_failed"}',
+        '{"output": {"result_ref": 42}, "step_id": "w1", '
+        '"terminal_status": "post_effect_signing_failed"}',
+        '{"output": {"result_ref": {"unresolvable_reason": 42}}, "step_id": "w1", '
+        '"terminal_status": "post_effect_signing_failed"}',
+        '{"output": {"result_ref": {"unresolvable_reason": "x", "extra": "y"}}, '
+        '"step_id": "w1", "terminal_status": "post_effect_signing_failed"}',
+    ],
+)
+def test_post_effect_signing_failed_with_malformed_ref_value_is_corrupt_fail_closed(
+    tmp_path: Path, malformed_ref_json: str
+) -> None:
+    """codex [P2] on the B-65-A CP-side arc: the `"result_ref"` key existing is
+    not enough — its VALUE must be either a plain string ref or the EXACT
+    `{"unresolvable_reason": <str>}` shape. A `null`/numeric ref, a non-string
+    `unresolvable_reason`, or an unresolvable dict with EXTRA keys previously
+    slipped through as "readable" (the pre-fix check only verified key
+    presence) with no usable ref. Must be treated as corrupt."""
+    store = EngineOutputStore(journal_dir=tmp_path / "eo")
+    store.record_branch(_RUN_KEY, 0, "w0", "completed", {"o": 0})
+    store._branch_file(_RUN_KEY, 1).write_text(malformed_ref_json, encoding="utf-8")
+    readable = set(store.read_branch_records(_RUN_KEY).keys())
+    present = store.present_branch_indexes(_RUN_KEY)
+    assert readable == {0}  # the malformed-ref-value record is omitted
     assert present - readable == {1}  # the fail-closed corrupt set
 
 

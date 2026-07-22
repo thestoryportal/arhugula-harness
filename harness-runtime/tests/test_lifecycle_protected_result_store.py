@@ -447,6 +447,42 @@ def test_opportunistic_gc_runs_on_write_after_interval(
     assert not entry_a.exists()
 
 
+def test_write_sweeps_before_publishing_never_sees_its_own_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """codex [P2] on the B-65-A CP-side arc: `write_once()` must run its
+    opportunistic sweep BEFORE composing/publishing THIS entry, never after
+    — else a deployment-configured TTL shorter than the write's own
+    serialize+encrypt+fsync latency (valid under `gt=0.0`) would let the
+    sweep immediately collect the entry the same call is about to return a
+    live-looking ref for. Verified directly by ORDER: the sweep is spied to
+    record how many `.entry` files exist in the store root at the moment it
+    runs — for a store's FIRST-ever write, that count must be zero (the new
+    entry cannot exist yet if the sweep genuinely ran first).
+
+    Mutation probe: reverting to a post-publish sweep call makes the spied
+    count 1 (the just-published entry is already on disk when the sweep
+    that would see it runs) instead of 0."""
+    store = _store(tmp_path, ttl_seconds=1.0)
+    monkeypatch.setattr(
+        "harness_runtime.lifecycle.protected_result_store._OPPORTUNISTIC_GC_INTERVAL_SECONDS",
+        0.0,
+    )
+    entry_counts_at_sweep_time: list[int] = []
+    real_sweep = store._maybe_opportunistic_gc_sweep
+
+    def _spying_sweep() -> None:
+        entry_counts_at_sweep_time.append(len(list((tmp_path / "store").glob("*.entry"))))
+        real_sweep()
+
+    monkeypatch.setattr(store, "_maybe_opportunistic_gc_sweep", _spying_sweep)
+
+    ref = store.write_once("tenant-a", "the store's first-ever write")
+    assert entry_counts_at_sweep_time == [0]
+    assert isinstance(ref, str)
+    assert store.read("tenant-a", ref) == "the store's first-ever write"
+
+
 def test_gc_unlink_failure_does_not_propagate_or_replace_the_carrier(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:

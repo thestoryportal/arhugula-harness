@@ -57,6 +57,15 @@ dependencies = [
     # scalar coercion gap). Strictness preserved via StrictSafeLoader subclass
     # at `lifecycle/strict_safe_loader.py`. U-RT-104.
     "pyyaml>=6.0",
+    # Fernet at-rest encryption — the encrypted-memory-tool codec
+    # (`memory_tool_encrypted.py`) and the B-65-A protected post-effect
+    # result store (`protected_result_store.py`) both lazy-import
+    # `cryptography.fernet` behind an RT-FAIL/fail-loud gate (codex [P1] on
+    # the B-65-A arc: it was previously root-workspace dev-group-only, so a
+    # standalone `harness-runtime` install always hit the ImportError branch
+    # even with a valid key, silently defeating both features' fail-closed
+    # invariant).
+    "cryptography>=44.0",
 ]
 
 [project.optional-dependencies]

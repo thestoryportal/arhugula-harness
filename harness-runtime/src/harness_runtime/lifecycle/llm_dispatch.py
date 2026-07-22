@@ -53,6 +53,7 @@ L5..L8 stage shape established at U-RT-21..U-RT-41.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -1819,14 +1820,22 @@ class RuntimeLLMDispatcher:
                     tenant_id=step_context.tenant_id,
                 )
             except AUDIT_SIGNING_HARD_FAILURES as exc:
+                # codex [P2] on the B-65-A CP-side arc — `resolve_result_ref` is
+                # synchronous I/O (pickle+encrypt+fsync, plus an opportunistic
+                # decrypt-sweep of the whole store); offload it so a signing
+                # outage can't block unrelated event-loop work.
+                _result_ref = await asyncio.to_thread(
+                    resolve_result_ref,
+                    self.protected_result_store,
+                    step_context.tenant_id,
+                    response,
+                )
                 raise PostEffectAuditSigningError(
                     f"audit signing failed after a completed provider response "
                     f"(provider={provider_name!r}, model={model!r}): {exc}",
                     effect_class=PostEffectClass.PROVIDER_RESPONSE,
                     result=response,
-                    result_ref=resolve_result_ref(
-                        self.protected_result_store, step_context.tenant_id, response
-                    ),
+                    result_ref=_result_ref,
                 ) from exc
 
             # --- Step 5: return step output mapping ---------------------

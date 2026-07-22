@@ -169,6 +169,14 @@ class ProtectedResultStore:
         `PostEffectAuditSigningError` still propagates unobstructed at the
         raise site (spec v1.103 §14.8.11 FAIL-CLOSED write disposition).
         """
+        # codex [P2] on this arc — sweep BEFORE composing/publishing THIS entry,
+        # never after: a post-publish sweep call would see the just-written
+        # entry too, and under a deployment-configured TTL shorter than this
+        # write's own serialize+encrypt+fsync latency (valid per `gt=0.0`), it
+        # would immediately GC the entry this same call is about to return a
+        # live-looking ref for. Sweeping first can only ever touch OLDER
+        # entries — this one doesn't exist yet.
+        self._maybe_opportunistic_gc_sweep()
         tag = normalize_tenant_scope(tenant_id)
         composite_key = compose_composite_key(tenant_id)
 
@@ -221,7 +229,6 @@ class ProtectedResultStore:
             )
             return UnresolvableResultRef(reason=f"store write failed: {type(exc).__name__}")
 
-        self._maybe_opportunistic_gc_sweep()
         return composite_key
 
     def _publish_atomic(self, entry_path: Path, data: bytes) -> None:

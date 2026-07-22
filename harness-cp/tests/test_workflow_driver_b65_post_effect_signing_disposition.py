@@ -590,6 +590,31 @@ def test_decentralized_handoff_pause_never_pauses_always_terminal_with_result() 
     assert partial["stages"] == {"stage-0": {"role": "stage-0"}}
 
 
+def test_decentralized_handoff_proceed_carrier_preserves_partial_not_failed() -> None:
+    """codex [P2] on the B-65-A CP-side arc: under PROCEED, an ordinary stage
+    failure maps to PARTIAL (survivors salvaged) — the carrier changes
+    RESUMABILITY, not run-level status (CP spec v1.103 §25.15 row 3: "the
+    run-level status still follows the policy for the REMAINING branches").
+    The earlier fix unconditionally returned FAILED even under PROCEED,
+    bypassing that mapping.
+
+    Mutation probe: reverting to unconditional `RunStatus.FAILED` makes this
+    test's `status is RunStatus.PARTIAL` assertion fail while the PAUSE
+    sibling test (which correctly expects FAILED) stays green — proving the
+    two cascade_policy branches are genuinely distinct code paths."""
+    manifest = _manifest(topology=TopologyPattern.DECENTRALIZED_HANDOFF, persona_tier=_PROCEED_TIER)
+    ctx = cast(DriverContext, _Ctx(ledger=_RecordingLedger(), emitter=_Emitter()))
+    dispatcher = _HandoffCarrierDispatcher(result_ref="dh-ref-proceed")
+    result = _run(manifest=manifest, steps=_handoff_steps(), dispatcher=dispatcher, ctx=ctx)
+
+    assert result.status is RunStatus.PARTIAL
+    assert result.fail_class is None
+    partial = result.partial_state
+    assert partial is not None
+    assert partial["post_effect_signing_failures"] == {"stage-1": {"result_ref": "dh-ref-proceed"}}
+    assert partial["stages"] == {"stage-0": {"role": "stage-0"}}
+
+
 # ---------------------------------------------------------------------------
 # Crash-resume (a genuine two-phase crash+restart, not a live pause_snapshot_
 # input resume): reuses the `_run_persona`/`_InMemoryBranchStore` harness from

@@ -14015,22 +14015,35 @@ def _execute_decentralized_handoff(
             # dispatch raised the Runtime-owned post-effect audit-signing carrier
             # (the paid effect COMPLETED; only the post-effect audit signing
             # failed). Name-matched (harness-cp cannot import the runtime type).
-            # TERMINAL-with-result under EVERY cascade_policy, including `pause`:
-            # unlike the ordinary stage-failure path below, this NEVER mints a
-            # resumable PAUSED (a resume would re-dispatch this same stage,
-            # RE-FIRING the already-completed effect). Report FAILED, carrying the
-            # carrier's `result_ref` in the salvaged aggregate alongside the
-            # completed-stage prefix.
+            # TERMINAL-with-result changes RESUMABILITY, not run-level status
+            # (CP spec v1.103 §25.15 row 3: "the run-level status still follows
+            # the policy for the REMAINING branches") — codex [P1] on this arc:
+            # unconditionally returning FAILED here bypassed the PROCEED→PARTIAL
+            # mapping right below, contradicting the fork's own §3 rider
+            # ("proceed ... folds carry the carrier's result_ref into the
+            # PARTIAL/FAILED report" — PROCEED gets PARTIAL, not FAILED). ONLY
+            # `pause` is actually foreclosed here: it must NEVER mint a resumable
+            # PAUSED (a resume would re-dispatch this same stage, RE-FIRING the
+            # already-completed effect) — `cascade-cancel`'s existing FAILED is
+            # unaffected either way (a plain stage failure already means FAILED
+            # there). Both dispositions carry the carrier's `result_ref` in the
+            # salvaged aggregate alongside the completed-stage prefix.
             if type(exc).__name__ == "PostEffectAuditSigningError":
                 post_effect_signing_failures[str(step.step_id)] = (
                     _post_effect_signing_result_ref_output(exc)
                 )
                 return _finish(
-                    RunStatus.FAILED,
+                    RunStatus.PARTIAL
+                    if cascade_policy is CascadePolicy.PROCEED
+                    else (RunStatus.FAILED),
                     fail_class=(
-                        "decentralized-handoff-post-effect-signing-failed: the completed "
-                        "effect's audit signing failed; the effect itself landed and is "
-                        f"NOT re-dispatched — underlying: {type(exc).__name__}: {exc}"
+                        None
+                        if cascade_policy is CascadePolicy.PROCEED
+                        else (
+                            "decentralized-handoff-post-effect-signing-failed: the completed "
+                            "effect's audit signing failed; the effect itself landed and is "
+                            f"NOT re-dispatched — underlying: {type(exc).__name__}: {exc}"
+                        )
                     ),
                     salvage=True,
                 )
