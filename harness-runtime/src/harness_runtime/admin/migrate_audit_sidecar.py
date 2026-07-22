@@ -199,6 +199,10 @@ def _run_record_mode(args: argparse.Namespace, ledger_path: Path) -> int:
     except (AuditSigningConfigInvalidError, IncompatibleConfigVersion) as exc:
         print(f"record migration refused: {exc}", file=sys.stderr)
         return 1
+    from harness_od.per_family_audit_verification import (
+        AuditVerificationBackendUnavailableError,
+    )
+
     from harness_runtime.config.audit_signing import SigningBackendSdkUnavailableError
 
     try:
@@ -304,6 +308,18 @@ def _run_record_mode(args: argparse.Namespace, ledger_path: Path) -> int:
         # Expected availability failures honor the CLI's nonzero contract
         # (codex round-4 P2); programming defects still propagate.
         print(f"record migration refused: signing backend unavailable: {exc}", file=sys.stderr)
+        return 1
+    except AuditVerificationBackendUnavailableError as exc:
+        # B-63 (codex round-2 P1 on PR #1073): a KMS infra failure while
+        # AUTHENTICATING the record now surfaces as the OD-typed
+        # availability error from `verify_cutover_record_signature` — an
+        # expected, retryable outage honoring the same typed-refusal
+        # contract, never a traceback. Zero tags changed (the raise
+        # precedes any rewrite).
+        print(
+            f"record migration refused: record-verification backend unavailable (retryable): {exc}",
+            file=sys.stderr,
+        )
         return 1
     return 0
 

@@ -1340,3 +1340,39 @@ def test_explicit_cutover_record_overrides_config_resident_path(
     out = capsys.readouterr().out
     assert exit_code == 0, out
     assert "VERIFIED" in out
+
+
+def test_b63_record_verify_availability_maps_to_unverified_not_traceback(
+    fx: _Fixture, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """B-63 (codex round-2 P1, PR #1073): a KMS infra failure while
+    authenticating the cutover record (backend.verify raises the shared
+    `harness_core.SigningBackendUnavailableError`, translated to the OD
+    availability type by `verify_cutover_record_signature`) maps to the
+    fail-closed UNVERIFIED exit (3) with RETRYABLE wording — availability
+    cannot PROVE trust, but it is not the forged-record incident either,
+    and never a traceback."""
+    from harness_core import SigningBackendUnavailableError
+
+    _greenfield_passing(fx)
+
+    real_record_backend = fx.record_backend
+
+    class _UnavailableVerifyBackend:
+        algorithm = "ed25519"
+
+        def sign(self, *, message: bytes, key_id: str, key_period: int) -> bytes:
+            return real_record_backend.sign(message=message, key_id=key_id, key_period=key_period)
+
+        def verify(self, *, message: bytes, signature: bytes, key_id: str, key_period: int) -> bool:
+            raise SigningBackendUnavailableError("kms throttled (test)")
+
+    fx._backends_by_key_id[_RECORD_KEY] = _UnavailableVerifyBackend()  # pyright: ignore[reportPrivateUsage]
+
+    exit_code = main(fx.full_verification_argv("--expected-tenant", _TENANT))
+    captured = capsys.readouterr()
+    assert exit_code == 3
+    assert "verification backend unavailable (retryable)" in captured.err
+    assert "forged/untrusted" not in captured.err
+    assert "Traceback" not in captured.err
+    assert "audit verification: UNVERIFIED" in captured.out
