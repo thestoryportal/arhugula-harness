@@ -22,7 +22,7 @@ Per the fork's §2 prescription shape ("wire a name-match fence (`type(exc).__na
 
 ### §0.4 Scope discipline
 
-Amended-unit scope only. ZERO new atomic units; ZERO new contract IDs; ZERO new DAG edges. Cross-axis co-land pin (recorded, not a DAG edge — one B-65 impl arc): U-CP-85 ⊕ Runtime plan v2.51 U-RT-145 (the protected result store + widened `result_ref` the CP fold carries as an opaque string; the fence itself is import-free name-match, so no new package dependency and no new CXA seam). The CP witness classes (fork §2 (a)–(c), each mutation-probed per Workflow v1.18 PD-8) are transcribed as `Tests:` criteria at U-CP-85; witness (d)'s store-resolution half homes at U-RT-145.
+Amended-unit scope only. ZERO new atomic units; ZERO new contract IDs; ZERO new DAG edges. Cross-axis co-land pin (recorded, not a DAG edge — one B-65 impl arc): U-CP-85 ⊕ Runtime plan v2.51 U-RT-145 (the protected result store + widened `result_ref` the CP fold carries as an opaque reference VALUE (a discriminated union of live-ref | unresolvable-declaration — carried verbatim with the discriminator intact, never lossily stringified); the fence itself is import-free name-match, so no new package dependency and no new CXA seam). The CP witness classes (fork §2 (a)–(c), each mutation-probed per Workflow v1.18 PD-8) are transcribed as `Tests:` criteria at U-CP-85; witness (d)'s store-resolution half homes at U-RT-145.
 
 ---
 
