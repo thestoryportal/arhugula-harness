@@ -238,6 +238,26 @@ def test_post_effect_signing_failed_without_output_is_corrupt_fail_closed(
     assert present - readable == {1}  # the fail-closed corrupt set
 
 
+def test_post_effect_signing_failed_with_shapeless_output_is_corrupt_fail_closed(
+    tmp_path: Path,
+) -> None:
+    """codex [P2] on the B-65-A CP-side arc: a `post_effect_signing_failed`
+    record whose `output` is a non-None dict MISSING the `"result_ref"` key
+    (e.g. `{}`) is ALSO malformed — the pre-fix check only verified `output
+    is not None`, so an arbitrary non-empty dict slipped through as
+    "readable" with no usable ref. Must be treated as corrupt."""
+    store = EngineOutputStore(journal_dir=tmp_path / "eo")
+    store.record_branch(_RUN_KEY, 0, "w0", "completed", {"o": 0})
+    store._branch_file(_RUN_KEY, 1).write_text(
+        '{"output": {}, "step_id": "w1", "terminal_status": "post_effect_signing_failed"}',
+        encoding="utf-8",
+    )
+    readable = set(store.read_branch_records(_RUN_KEY).keys())
+    present = store.present_branch_indexes(_RUN_KEY)
+    assert readable == {0}  # the shapeless-output record is omitted
+    assert present - readable == {1}  # the fail-closed corrupt set
+
+
 def test_unknown_disposition_is_unreadable_fail_closed(tmp_path: Path) -> None:
     """A parseable record with an UNKNOWN terminal_status (tamper / a future schema) is
     treated as UNREADABLE — omitted from read_branch_records but surfaced by

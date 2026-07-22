@@ -16,6 +16,7 @@ from harness_runtime.lifecycle.protected_result_store import (
     ProtectedStoreCrossTenantError,
     ProtectedStoreTamperError,
     UnresolvableResultRef,
+    _encode_tenant_tag,
     compose_composite_key,
     normalize_tenant_scope,
 )
@@ -103,6 +104,49 @@ def test_cross_tenant_read_refused_typed(tmp_path: Path) -> None:
         store.read("tenant-b", ref)
 
 
+def test_tenant_id_containing_colon_round_trips_under_owning_tenant(tmp_path: Path) -> None:
+    """codex [P2] on the B-65-A CP-side arc: a tenant_id containing `:` (a
+    valid tenant_id per `normalize_tenant_scope` — only the empty string and
+    the reserved sidecar tag are refused, e.g. `"org:west"`) must still
+    round-trip under its OWN tenant. Before the hex-encoding fix, the raw tag
+    collided with the key's own `tag:uuid` separator, so `read()`'s
+    `split(":", 1)[0]` extracted only `"org"` and the OWNING tenant got a
+    false cross-tenant refusal reading its own data."""
+    store = _store(tmp_path)
+    ref = store.write_once("org:west", "the owning tenant's own payload")
+    assert store.read("org:west", ref) == "the owning tenant's own payload"
+    # A genuinely different tenant is still refused (the fix must not widen
+    # the refusal to a no-op).
+    with pytest.raises(ProtectedStoreCrossTenantError):
+        store.read("org:east", ref)
+
+
+def test_disk_tampered_forged_reference_refused_after_decrypt(tmp_path: Path) -> None:
+    """codex [P1] on the B-65-A CP-side arc: the composite-key pre-check alone
+    only proves the REQUESTED path claims the right tenant — it cannot catch
+    a writable-disk tamper where tenant-A's REAL encrypted entry is copied to
+    a path whose composite key claims tenant-B's ownership (the shared Fernet
+    key still authenticates it, so decryption succeeds). `read()` must ALSO
+    bind the DECRYPTED envelope's own `tenant_id` to the request.
+
+    Mutation probe: removing the post-decrypt `envelope.tenant_id` check
+    makes this test return tenant-A's payload under tenant-B's read instead
+    of raising."""
+    store = _store(tmp_path)
+    real_ref = store.write_once("tenant-a", "tenant-a's real secret")
+    real_entry_path = store._entry_path(real_ref)  # type: ignore[arg-type]
+
+    # Forge a composite key that CLAIMS tenant-b ownership, then copy tenant-a's
+    # REAL ciphertext to that forged path (the disk-tamper threat model — the
+    # attacker controls the filesystem but not the shared Fernet key).
+    forged_ref = _encode_tenant_tag("tenant-b") + ":" + "f" * 32
+    forged_entry_path = store._entry_path(forged_ref)  # type: ignore[arg-type]
+    forged_entry_path.write_bytes(real_entry_path.read_bytes())
+
+    with pytest.raises(ProtectedStoreCrossTenantError):
+        store.read("tenant-b", forged_ref)
+
+
 def test_result_ref_resolves_preserved_payload_under_owning_tenant(tmp_path: Path) -> None:
     """Fork §2 witness (d): the preserved effect payload is recoverable via
     the ref under the OWNING tenant scope."""
@@ -126,7 +170,7 @@ def test_write_once_existing_key_refused_typed(
     overwrite) instead of `os.link` no-replace would silently succeed here
     and fail this witness."""
     store = _store(tmp_path)
-    fixed_key = "tenant-a:" + "0" * 32
+    fixed_key = _encode_tenant_tag("tenant-a") + ":" + "0" * 32
     monkeypatch.setattr(
         "harness_runtime.lifecycle.protected_result_store.compose_composite_key",
         lambda tenant_id: fixed_key,
@@ -277,7 +321,7 @@ def test_crash_between_temp_write_and_commit_leaves_no_destination_entry(
     write against the same key succeeds. Mutation probe: direct
     write-in-place publication (no temp-then-commit) fails this witness."""
     store = _store(tmp_path)
-    fixed_key = "tenant-a:" + "1" * 32
+    fixed_key = _encode_tenant_tag("tenant-a") + ":" + "1" * 32
     monkeypatch.setattr(
         "harness_runtime.lifecycle.protected_result_store.compose_composite_key",
         lambda tenant_id: fixed_key,
@@ -343,6 +387,30 @@ def test_ttl_expiry_gc_sweep_emits_typed_report_line(
     assert any("TTL-expired" in record.message for record in caplog.records)
     with pytest.raises(FileNotFoundError):
         store.read("tenant-a", ref)
+
+
+def test_gc_sweep_expires_undecryptable_entry_via_mtime_fallback(tmp_path: Path) -> None:
+    """codex [P2] on the B-65-A CP-side arc: an entry that fails to decrypt
+    (a DEK rotation invalidating the key, or genuine corruption) must NOT be
+    skipped forever — without a fallback age signal it would accumulate
+    indefinitely, defeating the bounded-retention guarantee. `gc_sweep()`
+    falls back to the filesystem's own mtime when decryption fails.
+
+    Mutation probe: removing the `except Exception` fallback (reverting to a
+    bare `continue`) makes this entry never expire — the assertion below
+    would then fail."""
+    store = _store(tmp_path, ttl_seconds=1.0)
+    ref = store.write_once("tenant-a", "will become undecryptable")
+    entry_path = store._entry_path(ref)  # type: ignore[arg-type]
+    # Simulate a DEK rotation / corruption: overwrite with garbage bytes that
+    # fail Fernet authentication, backdating the file's mtime past the TTL.
+    entry_path.write_bytes(b"not valid ciphertext at all")
+    old_time = time.time() - 10.0
+    os.utime(entry_path, (old_time, old_time))
+
+    expired = store.gc_sweep(now=time.time())
+    assert len(expired) == 1
+    assert not entry_path.exists()
 
 
 def test_gc_sweep_does_not_collect_unexpired_entries(tmp_path: Path) -> None:

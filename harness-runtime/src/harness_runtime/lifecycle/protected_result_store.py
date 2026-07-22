@@ -105,12 +105,23 @@ class ProtectedStoreTamperError(RuntimeError):
     refused typed BEFORE any deserialization runs (spec v1.103 §14.8.11)."""
 
 
+def _encode_tenant_tag(tag: str) -> str:
+    """codex [P2] on the B-65-A CP-side arc: hex-encode the tag before
+    composing the key — a raw tag containing `:` (a valid tenant_id per
+    `normalize_tenant_scope`, e.g. `"org:west"`) would otherwise collide with
+    the key's own `tag:uuid` separator, making `read()`'s `split(":", 1)[0]`
+    extract only `"org"` and wrongly refuse the OWNING tenant's own read.
+    Hex is deterministic, reversible, and never contains `:`."""
+    return tag.encode("utf-8").hex()
+
+
 def compose_composite_key(tenant_id: str | None) -> str:
     """Full-strength tenant-composite key — widens the 48-bit
     `uuid4().hex[:12]` carrier default (spec v1.103 §14.8.11) to a full
     uuid4 composed with the normalized tenant scope."""
     tag = normalize_tenant_scope(tenant_id)
-    return f"{tag if tag is not None else _UNTENANTED_TAG}:{uuid.uuid4().hex}"
+    encoded_tag = _encode_tenant_tag(tag if tag is not None else _UNTENANTED_TAG)
+    return f"{encoded_tag}:{uuid.uuid4().hex}"
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -240,12 +251,12 @@ class ProtectedResultStore:
         A cross-tenant attempt or tampered/wrong-key ciphertext refuses
         TYPED before any deserialization runs.
         """
-        owning_tag = composite_key.split(":", 1)[0]
+        owning_tag_encoded = composite_key.split(":", 1)[0]
         expected_tag = normalize_tenant_scope(tenant_id)
         expected_tag_str = expected_tag if expected_tag is not None else _UNTENANTED_TAG
-        if owning_tag != expected_tag_str:
+        if owning_tag_encoded != _encode_tenant_tag(expected_tag_str):
             raise ProtectedStoreCrossTenantError(
-                f"composite key owned by tenant scope {owning_tag!r}, "
+                f"composite key owned by a different tenant scope than "
                 f"retrieval attempted under {expected_tag_str!r}"
             )
         entry_path = self._entry_path(composite_key)
@@ -257,6 +268,18 @@ class ProtectedResultStore:
                 "ciphertext failed authentication — wrong key or tampered bytes"
             ) from exc
         envelope: _StoredEnvelope = pickle.loads(plaintext)
+        # codex [P1] on this arc — the composite-key pre-check above only proves
+        # the REQUESTED path claims the right tenant; under writable-disk
+        # tampering (a valid ciphertext copied to a forged composite-key path),
+        # the SHARED Fernet key still authenticates it, so decryption alone
+        # cannot catch the swap. Bind the DECRYPTED envelope's own `tenant_id`
+        # to the request too — the second half of tenant-bound retrieval.
+        if envelope.tenant_id != expected_tag:
+            raise ProtectedStoreCrossTenantError(
+                "decrypted envelope tenant scope does not match the composite "
+                "key's claimed scope or the retrieval request — refusing "
+                "(disk-tamper / forged-reference guard)"
+            )
         return pickle.loads(envelope.payload)
 
     def ack_delete(self, composite_key: str) -> None:
@@ -281,9 +304,22 @@ class ProtectedResultStore:
             try:
                 plaintext = self._codec.decrypt(entry_path.read_bytes())
                 envelope: _StoredEnvelope = pickle.loads(plaintext)
+                written_at = envelope.written_at
+                tenant_tag: str | None = envelope.tenant_id
             except Exception:
-                continue
-            if current_time - envelope.written_at > self._ttl_seconds:
+                # codex [P2] on this arc — an undecryptable entry (a DEK
+                # rotation invalidating the key, or genuine corruption) must
+                # NOT be skipped forever: without a fallback age signal it
+                # would never expire, defeating the bounded-retention
+                # guarantee. Fall back to the filesystem's own mtime (a
+                # trusted, always-available age signal) rather than treating
+                # "unreadable" as "immortal".
+                try:
+                    written_at = entry_path.stat().st_mtime
+                except OSError:
+                    continue
+                tenant_tag = None
+            if current_time - written_at > self._ttl_seconds:
                 digest = entry_path.stem
                 try:
                     entry_path.unlink(missing_ok=True)
@@ -298,7 +334,7 @@ class ProtectedResultStore:
                         "protected result store: TTL-expired entry GC unlink failed "
                         "(digest=%s, tenant=%s): %s",
                         digest,
-                        envelope.tenant_id,
+                        tenant_tag,
                         exc,
                     )
                     continue
@@ -307,8 +343,8 @@ class ProtectedResultStore:
                     "protected result store: TTL-expired entry GC'd "
                     "(digest=%s, tenant=%s, age_s=%.1f)",
                     digest,
-                    envelope.tenant_id,
-                    current_time - envelope.written_at,
+                    tenant_tag,
+                    current_time - written_at,
                 )
         self._last_gc_at = current_time
         return expired

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from pathlib import Path
 from typing import Any, cast
 
 from harness_core import PersonaTier, StepID, WorkloadClass
@@ -587,3 +588,88 @@ def test_decentralized_handoff_pause_never_pauses_always_terminal_with_result() 
     assert partial["post_effect_signing_failures"] == {"stage-1": {"result_ref": "dh-ref-1"}}
     # the completed stage-0 prefix is still salvaged alongside the carrier's ref.
     assert partial["stages"] == {"stage-0": {"role": "stage-0"}}
+
+
+# ---------------------------------------------------------------------------
+# Crash-resume (a genuine two-phase crash+restart, not a live pause_snapshot_
+# input resume): reuses the `_run_persona`/`_InMemoryBranchStore` harness from
+# the sibling `..._fanout_output_replay_full_chain.py` file (a faithful mirror
+# of the real EngineOutputStore fan-out branch API) — the SAME store persists
+# across both `_run_persona` calls, modeling "the durable capture survived a
+# crash, the F2 ledger did not."
+# ---------------------------------------------------------------------------
+
+
+def test_crash_resume_cascade_cancel_carrier_branch_carries_ref_into_failed_report() -> None:
+    """codex [P1] on the B-65-A CP-side arc: under CASCADE_CANCEL, a crash landing
+    AFTER the carrier's durable capture but BEFORE the live run returned its own
+    FAILED report must reproduce the SAME `result_ref`-carrying report on resume
+    — not the bare `partial_state=None` the crash-recovery early-exit used
+    before this fix (an inconsistency with the live path, which the earlier
+    `test_parallelization_cascade_cancel_terminal_with_result` test already
+    pins for the NON-crash case).
+
+    Mutation probe: reverting the crash-recovery early-exit's `partial_state`
+    back to unconditional `None` makes this test's assertion fail while the
+    live-path sibling test stays green — proving they were genuinely
+    divergent, not the same code path."""
+    import importlib.util
+
+    _sibling_path = (
+        Path(__file__).parent / "test_workflow_driver_fanout_output_replay_full_chain.py"
+    )
+    _spec = importlib.util.spec_from_file_location(
+        "test_workflow_driver_fanout_output_replay_full_chain", _sibling_path
+    )
+    assert _spec is not None and _spec.loader is not None
+    _sibling = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(_sibling)
+    _InMemoryBranchStore = _sibling._InMemoryBranchStore
+    _run_persona = _sibling._run_persona
+    _step = _sibling._step
+
+    class _CarrierThenSurviveDispatcher:
+        """branch-0 completes cleanly; branch-1 raises the B-65 carrier."""
+
+        def __init__(self) -> None:
+            self.dispatched: list[str] = []
+
+        def dispatch(
+            self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+        ) -> dict[str, Any]:
+            step_id = str(step.step_id)
+            self.dispatched.append(step_id)
+            if step_id == "branch-1":
+                raise PostEffectAuditSigningError(
+                    "post-effect signing failed at branch-1", result_ref="crash-ref-1"
+                )
+            return {"role": step_id}
+
+    store = _InMemoryBranchStore()
+    steps = [_step("branch-0", 0), _step("branch-1", 1)]
+    _run_persona(
+        workflow_id="wf-b65-crash-cc",
+        steps=steps,
+        dispatcher=_CarrierThenSurviveDispatcher(),
+        store=store,
+        persona_tier=_CASCADE_CANCEL_TIER,
+    )
+
+    # The crash: a FRESH driver invocation reads the SAME durable store (no
+    # live in-memory state carried over) — the store already durably captured
+    # BOTH branches (branch-0 cleanly, branch-1 via the carrier fence), so this
+    # resume has NOTHING left to dispatch.
+    resume_dispatcher = _CarrierThenSurviveDispatcher()
+    resumed = _run_persona(
+        workflow_id="wf-b65-crash-cc",
+        steps=steps,
+        dispatcher=resume_dispatcher,
+        store=store,
+        persona_tier=_CASCADE_CANCEL_TIER,
+    )
+
+    assert resumed.status is RunStatus.FAILED
+    assert resume_dispatcher.dispatched == []  # nothing re-fired — pure crash recovery
+    partial = resumed.partial_state
+    assert partial is not None
+    assert partial["post_effect_signing_failures"] == {"branch-1": {"result_ref": "crash-ref-1"}}

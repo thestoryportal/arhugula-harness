@@ -3484,13 +3484,34 @@ def _execute_workflow_body(
                         # obligation 6). Store-only audit (NOT ledger re-materialization — the
                         # deliberate choice): the §25.12 disposition keystone IS the durable
                         # crash-recovery audit substrate, and a FAILED run attests no aggregate.
+                        # B-65 (codex [P1] on this arc) — EXCEPT for a recovered carrier branch:
+                        # the LIVE cascade-cancel path (§25.15 row 6) carries its `result_ref`
+                        # into the FAILED report, so this crash-recovered mirror must too — else
+                        # a crash landing between the durable capture and the live return loses
+                        # the ref the live path would have preserved (an inconsistency, not a
+                        # "FAILED attests no aggregate" case — that precedent is for a PLAIN
+                        # ran-and-errored branch, which still gets `partial_state=None` here).
+                        _crash_post_effect_signing_failures = {
+                            str(b.step_id): b.output
+                            for b in _crash_fan_out_resume.branches
+                            if b.terminal_status == _POST_EFFECT_SIGNING_FAILED_TERMINAL_STATUS
+                            and b.output is not None
+                        }
                         return (
                             RunResult(
                                 workflow_id=manifest_entry.workflow_id,
                                 run_id=run_id,
                                 status=RunStatus.FAILED,
                                 terminal_step_index=None,
-                                partial_state=None,
+                                partial_state=(
+                                    {
+                                        "post_effect_signing_failures": (
+                                            _crash_post_effect_signing_failures
+                                        )
+                                    }
+                                    if _crash_post_effect_signing_failures
+                                    else None
+                                ),
                                 final_state=None,
                                 fail_class=(
                                     "fan-out-crash-resume-cascade-cancel: a branch failed before "

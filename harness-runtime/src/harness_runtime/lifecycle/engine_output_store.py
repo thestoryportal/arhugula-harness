@@ -1043,10 +1043,15 @@ class EngineOutputStore:
             if terminal_status == "scoped_aborted" and output is not None:
                 continue
             # The SYMMETRIC invariant for `post_effect_signing_failed`: it carries the carrier's
-            # `result_ref` BY CONSTRUCTION (never None) — a record with `output is None` is a
-            # MALFORMED / tampered sidecar, treated as corrupt (never readable), mirroring the
-            # `scoped_aborted` check above.
-            if terminal_status == "post_effect_signing_failed" and output is None:
+            # `result_ref` BY CONSTRUCTION, under a `"result_ref"` key (the CP-side
+            # `_post_effect_signing_result_ref_output` encoder's exact shape) — a record with
+            # `output is None`, a non-dict output, or a dict MISSING the key (codex [P2] on this
+            # arc: an arbitrary non-empty dict like `{}` would otherwise slip through as
+            # "readable" with no usable ref) is a MALFORMED / tampered sidecar, treated as
+            # corrupt (never readable), mirroring the `scoped_aborted` check above.
+            if terminal_status == "post_effect_signing_failed" and (
+                not isinstance(output, dict) or "result_ref" not in output
+            ):
                 continue
             if output is not None and not isinstance(output, dict):
                 continue
