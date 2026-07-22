@@ -246,8 +246,19 @@ case "$TOOL" in
     # Edits are git-reversible ONLY inside the worktree. Auto-allow EXCEPT design-substrate
     # (X-AL-3 back-flow) — those, plus secret/outside/.git/traversal paths (via _safe_path),
     # fall through to ask.
+    #
+    # loop_status.md is ALSO excluded (codex [P1] round 4 on the resolve.sh arc): excluding
+    # resolve.sh from the loop-control-wrapper short-circuit (§2 above) does nothing to stop
+    # an unattended agent from appending a RESOLVED-HIL row directly via a plain Edit/Write
+    # tool call — this ledger is meant to be a human-reviewed audit trail, not a file an
+    # agent edits to assert its own gates are cleared. Raw Bash-level redirection into it
+    # (`echo … >> .harness/loop_status.md`) is separately already blocked: any `>` trips the
+    # control-operator check in §3's Bash-prefix block below, falling through to ask. The
+    # ONLY legitimate write path is loop_log (called from defer.sh/halt.sh, always allowed;
+    # or from resolve.sh, which itself now requires the normal ask/deny flow — see §2).
     case "$FPATH" in
       */design-substrate/*|design-substrate/*) : ;;  # ask (absolute OR relative path)
+      */.harness/loop_status.md|.harness/loop_status.md) : ;;  # ask — ledger is audit-only
       *) _safe_path "$FPATH" && emit_allow ;;
     esac
     ;;

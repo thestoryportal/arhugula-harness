@@ -107,6 +107,16 @@ OUT=$(run_on "$(pl Edit '' "$REPO/tools/hooks/foo.sh")")
 # 5) ASK (no output) — design-substrate Edit + unknown bash + bare git push (non-force).
 OUT=$(run_on "$(pl Edit '' '/repo/design-substrate/Spec_X.md')")
 [ -z "$OUT" ] && ok "design-substrate Edit → ask (no auto-approve)" || bad "design-substrate auto-decided: $OUT"
+# 5b) loop_status.md Edit/Write → ask (codex [P1] round 4: excluding resolve.sh from the
+#     Bash short-circuit does nothing if a plain Edit/Write to the ledger is still
+#     auto-allowed — an unattended agent could append a fabricated RESOLVED-HIL row
+#     directly, bypassing the resolve.sh gate entirely).
+OUT=$(run_on "$(pl Edit '' "$REPO/.harness/loop_status.md")")
+[ -z "$OUT" ] && ok "loop_status.md Edit → ask (no auto-approve; ledger is audit-only)" || bad "loop_status.md Edit auto-decided: $OUT"
+OUT=$(run_on "$(pl Write '' "$REPO/.harness/loop_status.md")")
+[ -z "$OUT" ] && ok "loop_status.md Write → ask (no auto-approve)" || bad "loop_status.md Write auto-decided: $OUT"
+OUT=$(run_on "$(pl Edit '' '.harness/loop_status.md')")
+[ -z "$OUT" ] && ok "loop_status.md Edit (relative path) → ask" || bad "loop_status.md relative Edit auto-decided: $OUT"
 OUT=$(run_on "$(pl Bash 'python scripts/migrate.py --wipe' '')")
 [ -z "$OUT" ] && ok "unknown bash → ask" || bad "unknown bash auto-decided: $OUT"
 

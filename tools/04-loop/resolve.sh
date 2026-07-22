@@ -44,4 +44,12 @@ case " $(loop_skip_set) " in
   *) echo "resolve.sh: '${_item}' is not currently a pending DEFERRED-HIL item — nothing to resolve" >&2; exit 3 ;;
 esac
 loop_resolve "$_item" "$_note"
+# loop_log/loop_resolve ALWAYS exit 0 by design (a ledger write must never break the
+# calling hook) — so a write failure (unwritable ledger, disk full, etc.) would otherwise
+# report success while the item stays pending (codex [P2] round 4 on this arc). Verify the
+# EFFECT rather than trust the return code: the item must no longer be in the skip-set.
+case " $(loop_skip_set) " in
+  *" ${_item} "*) echo "resolve.sh: ledger write for '${_item}' did not take effect — item is still pending (check .harness/loop_status.md is writable)" >&2; exit 4 ;;
+  *) ;;
+esac
 echo "[loop] resolved ${_item} (logged to loop_status.md; cleared from the skip-set and pending summary)"

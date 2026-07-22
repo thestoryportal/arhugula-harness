@@ -66,6 +66,17 @@ grep -q "R-777" "$LEDGER" && bad "non-pending R-777 row was written" || ok "no r
 CLAUDE_PROJECT_DIR="$REPO" bash "$RESOLVE" not-an-id "some note" >/dev/null 2>&1 && bad "resolve.sh accepted a malformed item-id" || ok "resolve.sh rejects a malformed item-id (exit nonzero)"
 grep -q "not-an-id" "$LEDGER" && bad "malformed-id row was written" || ok "no row written for a malformed item-id"
 
+# 4e) resolve.sh reports FAILURE (not false success) when the ledger write doesn't take
+#     effect — codex [P2] round 4: loop_log always exits 0 by design (a ledger write must
+#     never break the calling hook), so a write failure must be caught by verifying the
+#     EFFECT (the item leaves the skip-set), not the return code.
+CLAUDE_PROJECT_DIR="$REPO" bash "$DEFER" R-888 "needs infra" >/dev/null 2>&1
+chmod 0444 "$LEDGER"
+CLAUDE_PROJECT_DIR="$REPO" bash "$RESOLVE" R-888 "ratified" >/dev/null 2>&1 && bad "resolve.sh reported success on a failed write" || ok "resolve.sh reports failure when the ledger write does not take effect"
+chmod 0644 "$LEDGER"
+SKIP=$(cd "$REPO" && . "$SCRIPT_DIR/../hooks/lib.sh" && . "$SCRIPT_DIR/../hooks/loop_lib.sh" && CLAUDE_PROJECT_DIR="$REPO" loop_skip_set)
+printf '%s' "$SKIP" | grep -q "R-888" && ok "R-888 remains pending after the failed resolve (ledger unaffected)" || bad "R-888 unexpectedly cleared despite failed write: [$SKIP]"
+
 # 5) halt.sh raises the halt marker + logs a STOP row.
 CLAUDE_PROJECT_DIR="$REPO" bash "$HALT" "forward menu exhausted — 2 awaiting input" >/dev/null 2>&1
 [ -f "$REPO/.harness/.loop-halt" ] && ok "halt.sh raises .loop-halt" || bad ".loop-halt not raised"
