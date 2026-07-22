@@ -275,3 +275,23 @@ def test_b63_unknown_key_id_is_catchable_as_shared_availability_type() -> None:
         backend.verify(message=b"m", signature=b"s" * 64, key_id="unmapped", key_period=1)
     with pytest.raises(KeyError):
         backend.sign(message=b"m", key_id="unmapped", key_period=1)
+
+
+def test_b63_param_validation_error_propagates_unwrapped_as_defect() -> None:
+    """Codex round-3 P2: botocore's `ParamValidationError` (client-side
+    argument validation — a programming defect) subclasses `BotoCoreError`
+    but must NOT be masked as retryable availability — it re-raises
+    unwrapped per the taxonomy."""
+    from botocore.exceptions import ParamValidationError
+    from harness_core import SigningBackendUnavailableError
+
+    vendor_exc = ParamValidationError(report="Invalid parameter (test)")
+    backend = AwsKmsSigningBackend({_KEY_ID: _KEY_ARN}, _availability_raising_client(vendor_exc))
+    with pytest.raises(ParamValidationError):
+        backend.verify(message=b"m", signature=b"s" * 64, key_id=_KEY_ID, key_period=1)
+    try:
+        backend.verify(message=b"m", signature=b"s" * 64, key_id=_KEY_ID, key_period=1)
+    except SigningBackendUnavailableError:  # pragma: no cover - failure branch
+        pytest.fail("a client-side validation defect was misclassified as availability")
+    except ParamValidationError:
+        pass

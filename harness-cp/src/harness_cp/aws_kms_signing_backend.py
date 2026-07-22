@@ -140,6 +140,7 @@ class AwsKmsSigningBackend:
         from botocore.exceptions import (  # pyright: ignore[reportMissingTypeStubs]
             BotoCoreError,
             ClientError,
+            ParamValidationError,
         )
 
         try:
@@ -152,6 +153,13 @@ class AwsKmsSigningBackend:
             )
         except self._kms.exceptions.KMSInvalidSignatureException:
             return False
+        except ParamValidationError:
+            # Codex round-3 P2 (PR #1073): botocore's client-side argument
+            # validation failing is a PROGRAMMING DEFECT (malformed call,
+            # not a service condition) even though it subclasses
+            # BotoCoreError — re-raised unwrapped per the taxonomy, never
+            # masked as retryable availability.
+            raise
         except (BotoCoreError, ClientError) as exc:
             raise SigningBackendUnavailableError(
                 f"AWS KMS Verify unavailable for key_id={key_id!r} "
