@@ -8409,6 +8409,13 @@ def _execute_parallelization(
                             # which releases every still-undispatched
                             # admission and propagates.
                             raise
+                        except BaseExceptionGroup as _resumed_group:
+                            # Codex round-6: a resumed target's nested
+                            # TaskGroup delivers the signal WRAPPED — split;
+                            # signal present -> raises into the outer arm;
+                            # absent -> captured like any branch result.
+                            _reraise_fence_signal_from_group(_resumed_group)
+                            _resumed_target_results[_target_plan[0]] = _resumed_group
                         except BaseException as _resumed_exc:
                             _resumed_target_results[_target_plan[0]] = _resumed_exc
                 except BaseException:
@@ -12071,6 +12078,13 @@ def _execute_orchestrator_workers(
                             # which releases every still-undispatched
                             # admission and propagates.
                             raise
+                        except BaseExceptionGroup as _resumed_group:
+                            # Codex round-6: a resumed target's nested
+                            # TaskGroup delivers the signal WRAPPED — split;
+                            # signal present -> raises into the outer arm;
+                            # absent -> captured like any branch result.
+                            _reraise_fence_signal_from_group(_resumed_group)
+                            _resumed_target_results[_target_plan[0]] = _resumed_group
                         except BaseException as _resumed_exc:
                             _resumed_target_results[_target_plan[0]] = _resumed_exc
                 except BaseException:

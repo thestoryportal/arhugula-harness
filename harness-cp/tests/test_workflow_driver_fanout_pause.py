@@ -3515,3 +3515,48 @@ def test_b60_group_wrapped_fence_signal_not_captured_by_rest_gather() -> None:
             default_model_binding=_DEFAULT_BINDING,
             step_dispatchers=cast(StepDispatcherRegistry, _Reg()),
         )
+
+
+def test_b60_phase0_group_wrapped_fence_signal_reraise_proceed_tier() -> None:
+    """Codex round-6 on PR #1075: a resumed target whose nested TaskGroup
+    wraps the fence signal delivers a `BaseExceptionGroup` to the Phase-0
+    capture loop — the group arm must split-and-reraise, never store it as
+    an ordinary branch result that lets the second target proceed."""
+    from harness_cp.sub_agent_dispatch_cancellation import DispatchFenceTrippedSignal
+
+    class _GroupTrippingSubAgent(_B60PausingThenTrippingSubAgent):
+        def dispatch(
+            self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+        ) -> dict[str, Any]:
+            child_resume = getattr(step_context, "child_resume_snapshot", None)
+            if child_resume is None:
+                return super().dispatch(binding, step, step_context=step_context)
+            self.resume_calls.append(str(step.step_id))
+            raise BaseExceptionGroup("inner", [DispatchFenceTrippedSignal()])
+
+    sub_agent = _GroupTrippingSubAgent()
+    registry = cast(StepDispatcherRegistry, _B60Registry(sub_agent=sub_agent))
+    steps = [_b60_sub_worker(1), _b60_sub_worker(2)]
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    paused = execute_workflow(
+        _manifest("wf-b60-p0g", TopologyPattern.PARALLELIZATION),
+        steps,
+        run_id="run-b60pg",
+        ctx=ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=registry,
+    )
+    assert paused.status is RunStatus.PAUSED
+
+    ctx2 = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    with pytest.raises(DispatchFenceTrippedSignal):
+        execute_workflow(
+            _manifest("wf-b60-p0g", TopologyPattern.PARALLELIZATION, PersonaTier.SOLO_DEVELOPER),
+            steps,
+            run_id="run-b60pg",
+            ctx=ctx2,
+            default_model_binding=_DEFAULT_BINDING,
+            step_dispatchers=registry,
+            pause_snapshot_input=paused.pause_snapshot,
+        )
+    assert len(sub_agent.resume_calls) == 1
