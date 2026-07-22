@@ -62,10 +62,10 @@ snapshot:
   open: 0
   design_substrate_gated: 2
   registered_finding: 7
-  operator_gated: 4
+  operator_gated: 3
   held: 1
-  closed: 53
-  identity_digest: ba2150a3ceb31dd4
+  closed: 54
+  identity_digest: de7d4c458a636c58
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -1180,7 +1180,8 @@ items:
     disposition leg, 2026-07-17)*'
 - id: B-55
   title: Lower-tier fail-closed prewarm/keepalive posture (operator disposition)
-  status: operator_gated
+  status: closed
+  pr: 'ratified-2026-07-21 (operator AUQ: MTC-only scoping ratified as-is — no code change; the gate-item-8 letter becomes the permanent contract)'
   summary: 'Registered at the B-51/B-52/B-54 apply arc (PR 1056, codex rounds 2/9/21/34): gate item 8
     ratified the prewarm/keepalive disable at MTC ONLY, but an EXPLICIT audit_signing_fail_closed=true
     at solo-developer/team-binding would leave the prewarm/keepalive swallow boundary active under a

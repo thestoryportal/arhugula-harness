@@ -1,6 +1,6 @@
 # Class 1 Fork — B-33: `verify_rotation_6_steps` cannot prove a rotation boundary occurred
 
-**Status: FILED (draft) — awaiting out-of-family review + operator ratification at §4.**
+**Status: RATIFIED 2026-07-21 — the operator selected OPTION A AS RECOMMENDED** (open-dict additive IS carrier + 3-step verifier extension + injected OD-join evidence DTO from the composition root; apply arc per §3).
 Registered pre-B-36; GROUNDED 2026-07-18 (the wait-for-real-caller boundary held:
 `execute_key_rotation` — the sole `verify_rotation_6_steps` caller — still has only test
 consumers, and rotation at MTC is explicitly deferred pending B-33 by both the B-51/B-52/B-54

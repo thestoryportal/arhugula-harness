@@ -1,6 +1,6 @@
 # Class 2 Fork — B-65: post-effect signing carrier disposition at CP topology cascade handlers
 
-**Status: FILED (draft) — awaiting out-of-family review + operator selection at §4.** Registered
+**Status: RATIFIED 2026-07-21 — the operator selected OPTION A AS RECOMMENDED** (§3 terminal-with-result rider + §3b protected result store: outage-independent envelope, tenant-bound lookup, full-strength composite keys, idempotent retrieval with ack-gated deletion + TTL GC fallback, fail-closed writes; §2(a-d) witnesses bind the apply arc). Registered
 at the U-RT-136/U-CP-73 impl arc (out-of-family codex round-2 [P1]); the register row's
 close_out routes the cascade-disposition question to the CP spec (Class 2 fork or rider
 amendment over C-CP-25 §25.10+/§25.15) BEFORE wiring. Filed per the no-parking discipline;

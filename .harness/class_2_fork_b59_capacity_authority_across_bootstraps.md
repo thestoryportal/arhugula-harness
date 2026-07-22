@@ -1,6 +1,6 @@
 # Class 2 Fork — B-59: capacity authority not preserved across sequential bootstrap invocations
 
-**Status: FILED (draft) — awaiting out-of-family review + operator selection at §6.** Registered
+**Status: RATIFIED 2026-07-21 — the operator selected OPTION A AS RECOMMENDED** (process-scoped singleton authority, adopt-new-budget-carry-occupied, every-admission-surface rider incl. direct `reserve(1)`; all §3-A riders + §4 witnesses 1/1b/2-5 bind the apply arc). Registered
 at the B-48 apply arc (codex round-4 [P1] "preserve one capacity authority across bootstrap
 runs"); the register row's close_out mandates Class 2 back-flow BEFORE building ("this is an
 architectural decision on multi-bootstrap-per-process semantics, not a bounded bug fix").
