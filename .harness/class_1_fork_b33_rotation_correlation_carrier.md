@@ -41,6 +41,14 @@ pair. Design questions the spec delta must answer (mirroring §24.7's own choice
    identified by the carrier + the key-period transition, verified against the B-36 backend's
    key identities (`AwsKmsSigningBackend` `key_arns` mapping — physical-key distinctness at
    the boundary, the same canonical-material comparison the cutover-record checks use).
+4. **OD-join mechanism (codex round-2 [P1] on this filing)**: a required correlation STRING
+   does not prove a dual-signature OD pair exists, and `harness-cp` cannot import the OD
+   ledger type without reversing the axis-import direction. The join is therefore an
+   **INJECTED verifier / typed evidence DTO supplied by the runtime composition root** (the
+   §20.3.1 injected-verifier precedent from the B-54 arc): the root reads the OD pair, builds
+   the evidence carrier (correlation id + both key periods + pair presence), and
+   `verify_rotation_6_steps` validates the IS-side carrier AGAINST that evidence — never a
+   caller-supplied id trusted on its own.
 
 ## §3 Scope + sequencing
 

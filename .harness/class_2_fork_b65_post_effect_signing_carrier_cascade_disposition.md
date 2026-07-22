@@ -50,12 +50,21 @@ re-dispatch trigger.
 Propagating the opaque `result_ref` alone leaves callers unable to RECOVER the completed
 paid-effect's payload (the report log stores only a digest). The register row requires this
 same leg to resolve payload recoverability. The rider therefore ALSO selects the recovery
-mechanism: **recommended — a protected result store keyed by `result_ref`** (write-once at
-the carrier's raise site, tenant-scoped read via the existing engine-output-store
-plumbing/protection class; the alternative — carrying the payload through the CP/runtime
-result model — widens `RunResult` for a rare failure mode and rides every fold). The §2
-witness extends: (d) the surfaced failure's `result_ref` RESOLVES to the preserved payload
-through the store.
+mechanism: **recommended — a DEDICATED protected result store keyed by `result_ref`** with
+an explicit protection contract (codex round-2 [P1] on this filing: the existing
+`EngineOutputStore` is UNSUITABLE — plaintext JSONL, no tenant-authorized lookup,
+Mapping-only where carrier results can be arbitrary objects, and under an MTC signing
+outage the payload may hold tenant prompts/PII/credentials). The contract: encrypted at
+rest (the deployment's signing/KMS boundary or an equivalent envelope), tenant-BOUND
+lookup (the same normalized tenant scope the audit path uses — cross-tenant resolution
+refused typed), a defined serialization envelope for non-Mapping results (opaque
+byte-envelope + type tag, never lossy coercion), and write-once at the carrier's raise
+site. The alternative — carrying the payload through the CP/runtime result model — avoids
+a new store but widens `RunResult` for a rare failure mode, rides every fold, and leaves
+the SAME plaintext/tenancy questions on the persisted RunResult surfaces; if the operator
+prefers it, the protection contract applies there instead. The §2 witness extends: (d) the
+surfaced failure's `result_ref` RESOLVES to the preserved payload through the protected
+store under the OWNING tenant, and a cross-tenant read is refused typed.
 
 ## §4 The operator selection (ONE decision)
 
