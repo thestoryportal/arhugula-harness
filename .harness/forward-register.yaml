@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 68
+  total: 69
   open: 0
   design_substrate_gated: 2
-  registered_finding: 7
+  registered_finding: 8
   operator_gated: 3
   held: 1
   closed: 55
-  identity_digest: 119066a56732f1a0
+  identity_digest: 1f2dea99fa1fcf15
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -1517,3 +1517,32 @@ items:
   heading: '### B-67 · Protected result store''s TTL GC sweep has no shutdown-time hook —
     bootstrap half only *(registered at the B-65-A impl arc, out-of-family Codex round 1 [P1],
     2026-07-22; CLOSED at round 4 correction, same date)*'
+- id: B-68
+  title: Protected result store's opportunistic GC can race a concurrent in-flight publication under a short TTL
+  status: registered_finding
+  summary: 'Registered at the B-65-A impl arc (out-of-family Codex round 11 [P2]). `write_once()`
+    captures `_StoredEnvelope.written_at` via `time.time()` BEFORE serialization/encryption/
+    `_publish_atomic`''s fsync+`os.link` commit -- a real, non-instantaneous gap. A CONCURRENT
+    sweep (another in-process opportunistic call, or the bootstrap/shutdown-half sweep from a
+    co-resident process sharing the store directory) running during that gap can judge the
+    just-published entry already expired -- IF the deployment-configured `ttl_seconds`
+    (operator-settable, `gt=0.0`, no floor) is shorter than the write''s own encrypt+fsync
+    latency -- and unlink it before `write_once()` returns. The caller then holds a
+    "live-looking" `composite_key` whose first `read()` raises an unhandled `FileNotFoundError`
+    instead of the store''s typed refusals. Advisor-reviewed: reachability needs a TTL roughly
+    seven orders of magnitude below the factory default (86400s vs. single-digit-ms write
+    latency); the complete fix is a genuine concurrency-control redesign (serializing GC against
+    in-flight publications), not a mechanical patch, and a partial mitigation (mtime-authority
+    switch) only narrows rather than closes the window -- registered per the terminal register
+    discipline (B-64/B-67 precedents) rather than shipping a round-11 partial fix to a race.'
+  close_out: 'Design a `gc_sweep()`/`write_once()` synchronization primitive (in-flight-write
+    registry the sweep consults before unlinking, or a lock scoped to the publication critical
+    section) over Runtime spec v1.103 §14.8.11; witness with a test pinning a TTL shorter than
+    an injected artificial publication delay, asserting the sweep never removes the in-flight
+    entry. Optional lower-cost interim hardening: degrade `read()`''s raw `FileNotFoundError`
+    to a typed refusal.'
+  council: no -- narrow TTL-dependent race with a documented reachability precondition; the full
+    fix is a concurrency-control design decision, not an immediate judgment call
+  heading: '### B-68 · Protected result store''s opportunistic GC can race a concurrent
+    in-flight publication under a short TTL *(registered at the B-65-A impl arc, out-of-family
+    Codex round 11 [P2], 2026-07-22)*'

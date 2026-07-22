@@ -17,7 +17,7 @@ from harness_runtime.lifecycle.protected_result_store import (
     ProtectedStoreCrossTenantError,
     ProtectedStoreTamperError,
     UnresolvableResultRef,
-    _encode_tenant_tag,
+    _encode_scope_prefix,
     compose_composite_key,
     normalize_tenant_scope,
 )
@@ -140,7 +140,7 @@ def test_disk_tampered_forged_reference_refused_after_decrypt(tmp_path: Path) ->
     # Forge a composite key that CLAIMS tenant-b ownership, then copy tenant-a's
     # REAL ciphertext to that forged path (the disk-tamper threat model — the
     # attacker controls the filesystem but not the shared Fernet key).
-    forged_ref = _encode_tenant_tag("tenant-b") + ":" + "f" * 32
+    forged_ref = _encode_scope_prefix("tenant-b") + ":" + "f" * 32
     forged_entry_path = store._entry_path(forged_ref)  # type: ignore[arg-type]
     forged_entry_path.write_bytes(real_entry_path.read_bytes())
 
@@ -201,7 +201,7 @@ def test_write_once_existing_key_refused_typed(
     overwrite) instead of `os.link` no-replace would silently succeed here
     and fail this witness."""
     store = _store(tmp_path)
-    fixed_key = _encode_tenant_tag("tenant-a") + ":" + "0" * 32
+    fixed_key = _encode_scope_prefix("tenant-a") + ":" + "0" * 32
     monkeypatch.setattr(
         "harness_runtime.lifecycle.protected_result_store.compose_composite_key",
         lambda tenant_id: fixed_key,
@@ -352,7 +352,7 @@ def test_crash_between_temp_write_and_commit_leaves_no_destination_entry(
     write against the same key succeeds. Mutation probe: direct
     write-in-place publication (no temp-then-commit) fails this witness."""
     store = _store(tmp_path)
-    fixed_key = _encode_tenant_tag("tenant-a") + ":" + "1" * 32
+    fixed_key = _encode_scope_prefix("tenant-a") + ":" + "1" * 32
     monkeypatch.setattr(
         "harness_runtime.lifecycle.protected_result_store.compose_composite_key",
         lambda tenant_id: fixed_key,
@@ -708,43 +708,45 @@ def test_directory_open_unsupported_errno_still_degrades_gracefully(
     assert store.read("tenant-a", ref) == "payload"
 
 
-def test_normalize_tenant_scope_rejects_untenanted_sentinel_literal() -> None:
-    """codex [P1] round 7: a real tenant_id literally equal to the internal
-    `_UNTENANTED_TAG` ("_untenanted") hex-encodes to the SAME composite-key
-    prefix as `tenant_id=None` — the store cannot tell "untenanted" from a
-    real tenant named "_untenanted" apart from the tag alone, letting a
-    caller asserting one scope read an entry written under the other by
-    prefix collision. Rejected at the normalization boundary, mirroring the
-    existing "" / "_single" rejection.
+def test_normalize_tenant_scope_accepts_untenanted_literal_as_valid_tenant() -> None:
+    """codex [P2] round 11: `_untenanted` is a config-valid tenant_id —
+    `RuntimeConfig.tenant_id`'s own validator reserves only `""`/`"_single"`
+    (`types.py::_tenant_id_not_reserved`) — so round 7's blanket rejection of
+    this literal was itself the defect: a real deployment configured with
+    this tenant_id would pass config load cleanly and then have EVERY
+    post-effect result silently degrade to `UnresolvableResultRef` forever.
+    The collision round 7 guarded against is now closed at the ENCODING
+    layer instead (see `_encode_scope_prefix`), so no literal needs
+    reserving.
 
-    Mutation probe: removing `_UNTENANTED_TAG` from the rejected tuple in
-    `normalize_tenant_scope` makes this `pytest.raises` assertion fail (no
-    exception raised)."""
-    with pytest.raises(ValueError, match="_untenanted"):
-        normalize_tenant_scope("_untenanted")
+    Mutation probe: reintroducing the `_UNTENANTED_TAG` rejection in
+    `normalize_tenant_scope` makes this call raise instead of returning."""
+    assert normalize_tenant_scope("_untenanted") == "_untenanted"
 
 
-def test_write_once_degrades_untenanted_sentinel_to_unresolvable(tmp_path: Path) -> None:
-    """codex [P1] round 8: `write_once` is reached ONLY via the post-effect
-    raise-site helper `resolve_result_ref`, itself only called while
-    constructing a `PostEffectAuditSigningError` for an ALREADY-completed
-    paid effect — so unlike the standalone `normalize_tenant_scope` (still
-    correctly loud outside this context), `write_once` must NEVER raise the
-    collision-rejection `ValueError` here. A raw `ValueError` escaping this
-    danger window would replace the typed carrier construction entirely;
-    `resolve_result_ref_off_loop`'s narrower catch doesn't fold it, so the
-    caller's own `except AUDIT_SIGNING_HARD_FAILURES` never fires and CP
-    could treat an already-completed effect as an ordinary resumable
-    failure and redispatch it. Degrades to the same `UnresolvableResultRef`
-    disposition as every other expected failure class instead.
+def test_write_once_distinguishes_untenanted_tenant_from_none_scope(tmp_path: Path) -> None:
+    """codex [P2] round 11: proves the cross-scope collision the round-7 fix
+    guarded against (a real tenant literally named "_untenanted" vs. the
+    `None` untenanted scope, which both hex-encoded to the same prefix under
+    the old scheme) is now closed by the disjoint `u`/`t`-prefixed encoding
+    rather than by reserving the literal — both scopes are live and
+    accepted, but a write under one is never readable under the other.
 
-    Mutation probe: removing the try/except around the `normalize_tenant_
-    scope`/`compose_composite_key` calls in `write_once` makes this
-    `isinstance` assertion fail with an uncaught `ValueError` instead."""
+    Mutation probe: reverting `_encode_scope_prefix` to hex-encode a
+    reserved sentinel string for the `None` case (the pre-round-11 scheme)
+    makes the cross-scope `read()` assertions below succeed instead of
+    raising."""
     store = _store(tmp_path)
-    ref = store.write_once("_untenanted", {"x": 1})
-    assert isinstance(ref, UnresolvableResultRef)
-    assert "illegal tenant_id" in ref.reason
+    tenant_ref = store.write_once("_untenanted", "real tenant's secret")
+    none_ref = store.write_once(None, "untenanted scope's secret")
+    assert isinstance(tenant_ref, str)
+    assert isinstance(none_ref, str)
+    assert store.read("_untenanted", tenant_ref) == "real tenant's secret"
+    assert store.read(None, none_ref) == "untenanted scope's secret"
+    with pytest.raises(ProtectedStoreCrossTenantError):
+        store.read(None, tenant_ref)
+    with pytest.raises(ProtectedStoreCrossTenantError):
+        store.read("_untenanted", none_ref)
 
 
 def test_write_once_survives_opportunistic_gc_sweep_failure(

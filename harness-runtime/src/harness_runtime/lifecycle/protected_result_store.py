@@ -45,7 +45,6 @@ __all__ = [
     "resolve_result_ref",
 ]
 
-_UNTENANTED_TAG = "_untenanted"
 #: Mirrors OD v1.34 §21.2.1 row 2's `_normalize_tenant_tag` None-passthrough /
 #: empty-string-refused contract by CROSS-REFERENCE (Runtime cannot import
 #: harness_od's private `_normalize_tenant_tag` across the axis boundary —
@@ -70,19 +69,11 @@ def normalize_tenant_scope(tenant_id: str | None) -> str | None:
     """
     if tenant_id is None:
         return None
-    if tenant_id in ("", _RESERVED_SIDECAR_TENANT_TAG, _UNTENANTED_TAG):
-        # codex [P1] round 7 on this arc — a real tenant_id literally equal
-        # to `_UNTENANTED_TAG` encodes to the SAME composite-key prefix as
-        # `tenant_id=None` (both hex-encode the string "_untenanted"),
-        # letting a caller asserting one scope read an entry written under
-        # the other by prefix collision. Reject it here, at the single
-        # normalization boundary every write/read path already funnels
-        # through, closing the collision at its source.
+    if tenant_id in ("", _RESERVED_SIDECAR_TENANT_TAG):
         raise ValueError(
             f"tenant_id must not be empty or the reserved sidecar tag "
-            f"{_RESERVED_SIDECAR_TENANT_TAG!r} or the reserved untenanted tag "
-            f"{_UNTENANTED_TAG!r} — pass None for the untenanted/single-tenant "
-            f"case (got {tenant_id!r})"
+            f"{_RESERVED_SIDECAR_TENANT_TAG!r} — pass None for the "
+            f"untenanted/single-tenant case (got {tenant_id!r})"
         )
     return tenant_id
 
@@ -124,12 +115,30 @@ def _encode_tenant_tag(tag: str) -> str:
     return tag.encode("utf-8").hex()
 
 
+def _encode_scope_prefix(tag: str | None) -> str:
+    """Discriminated composite-key prefix for the untenanted (`None`) vs a
+    real tenant scope — collision-free BY CONSTRUCTION regardless of the
+    tenant's literal string value (codex [P2] round 11 on this arc). The
+    round-7 scheme hex-encoded a reserved sentinel STRING for the `None`
+    case and rejected any real tenant_id equal to that string to avoid a
+    collision — but `RuntimeConfig.tenant_id`'s own validator reserves only
+    `""`/`"_single"`, so a config-valid deployment named `_untenanted`
+    silently lost ALL post-effect recovery (every write degraded to
+    `UnresolvableResultRef`) under that fix. Prefixing with a marker
+    character (`u`/`t`) outside `_encode_tenant_tag`'s hex alphabet
+    (`0-9a-f`) makes the two branches disjoint for EVERY possible tenant
+    string, so no literal needs reserving at all."""
+    if tag is None:
+        return "u"
+    return f"t{_encode_tenant_tag(tag)}"
+
+
 def compose_composite_key(tenant_id: str | None) -> str:
     """Full-strength tenant-composite key — widens the 48-bit
     `uuid4().hex[:12]` carrier default (spec v1.103 §14.8.11) to a full
     uuid4 composed with the normalized tenant scope."""
     tag = normalize_tenant_scope(tenant_id)
-    encoded_tag = _encode_tenant_tag(tag if tag is not None else _UNTENANTED_TAG)
+    encoded_tag = _encode_scope_prefix(tag)
     return f"{encoded_tag}:{uuid.uuid4().hex}"
 
 
@@ -304,11 +313,10 @@ class ProtectedResultStore:
         """
         owning_tag_encoded = composite_key.split(":", 1)[0]
         expected_tag = normalize_tenant_scope(tenant_id)
-        expected_tag_str = expected_tag if expected_tag is not None else _UNTENANTED_TAG
-        if owning_tag_encoded != _encode_tenant_tag(expected_tag_str):
+        if owning_tag_encoded != _encode_scope_prefix(expected_tag):
             raise ProtectedStoreCrossTenantError(
                 f"composite key owned by a different tenant scope than "
-                f"retrieval attempted under {expected_tag_str!r}"
+                f"retrieval attempted under {expected_tag!r}"
             )
         entry_path = self._entry_path(composite_key)
         ciphertext = entry_path.read_bytes()
