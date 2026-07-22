@@ -52,6 +52,7 @@ __all__ = [
     "AUDIT_OFFLOAD_MAX_WORKERS",
     "resolve_result_ref_off_loop",
     "run_audit_off_loop",
+    "run_off_loop_detach_on_cancel",
 ]
 
 #: Small by design: audit jobs are short-lived (one signature + local file
@@ -296,6 +297,39 @@ async def run_audit_off_loop(fn: Callable[..., Any], /, *args: Any, **kwargs: An
         raise
 
 
+async def run_off_loop_detach_on_cancel(
+    fn: Callable[..., Any], /, *args: Any, **kwargs: Any
+) -> Any:
+    """Like `run_audit_off_loop` but does NOT join on cancellation (codex
+    [P2] round 9 on the B-65-A arc).
+
+    `run_audit_off_loop`'s bounded join-then-detach exists so an in-flight
+    AUDIT write's durability is guaranteed before its caller observes
+    cancellation — that grace (`AUDIT_CANCEL_JOIN_GRACE_SECONDS`, a fixed
+    10s) is calibrated for that one caller profile. Reusing it for
+    `shutdown()`'s opportunistic GC sweep (round-8 fix) made
+    `shutdown(timeout=X)` able to overrun its OWN advertised deadline by up
+    to that grace, because `asyncio.wait_for`'s cancellation had to wait
+    for the inner join to finish before propagating. The sweep has no
+    durability requirement of its own — an incomplete sweep just leaves
+    stale entries for the NEXT opportunistic/bootstrap sweep to reap — so
+    this variant cancels the concurrent future if it hasn't started yet,
+    and otherwise returns immediately: the worker keeps running on its
+    daemon thread (harmless — daemon threads die with the process, and the
+    dedicated executor's own `finally` block still reclaims its
+    bookkeeping whenever the worker eventually finishes). The caller's OWN
+    `asyncio.wait_for(..., timeout=...)` is the only bound that matters.
+    """
+    context = contextvars.copy_context()
+    call = functools.partial(context.run, functools.partial(fn, *args, **kwargs))
+    concurrent_future = _AUDIT_OFFLOAD_EXECUTOR.submit(call)
+    try:
+        return await asyncio.wrap_future(concurrent_future)
+    except asyncio.CancelledError:
+        concurrent_future.cancel()  # no-op if already running — best-effort only.
+        raise
+
+
 async def resolve_result_ref_off_loop(
     store: ProtectedResultStore | None, tenant_id: str | None, result: object
 ) -> ResultRefValue:
@@ -307,12 +341,30 @@ async def resolve_result_ref_off_loop(
     the same exhaustion-deadlock hazard `run_audit_off_loop` exists to avoid
     (see module docstring). `resolve_result_ref`/`write_once` never raise
     for any expected failure class (collision / serializer / encryption /
-    durable-publication I/O) — they degrade to `UnresolvableResultRef`. The
-    ONLY way this offload can raise is the executor's own queue-saturation
-    guard (`_DaemonThreadAuditExecutor.submit` at `AUDIT_OFFLOAD_QUEUE_CAP`),
-    which never runs `resolve_result_ref` at all. Caught here and folded
-    into the same discriminated-unresolvable contract so this wrapper keeps
-    the never-raises guarantee end-to-end, exactly like the direct call.
+    durable-publication I/O) — they degrade to `UnresolvableResultRef`.
+    Absent cancellation, the ONLY way this offload can raise is the
+    executor's own queue-saturation guard (`_DaemonThreadAuditExecutor.
+    submit` at `AUDIT_OFFLOAD_QUEUE_CAP`), which never runs
+    `resolve_result_ref` at all — caught here and folded into the same
+    discriminated-unresolvable contract.
+
+    **Documented residual (codex [P1] round 9; advisor-reviewed, NOT
+    fixed).** If the awaiting task is cancelled while the offloaded write
+    is in flight (e.g. `SyncDispatcherFacade`'s `result_timeout_seconds`
+    expiring exactly during post-effect ref-resolution), `run_audit_off_
+    loop`'s `CancelledError` propagates straight through this wrapper — it
+    is deliberately NOT caught here, since suppressing cancellation to
+    force a return value would violate asyncio's cancellation contract
+    (see `test_cancelled_ref_resolution_loses_carrier_but_write_lands_
+    durably`). The raise-site's `PostEffectAuditSigningError` carrier is
+    then never constructed and its `result_ref` is lost to that caller.
+    This is ACCEPTABLE degradation, not data loss: `run_audit_off_loop`'s
+    join-on-cancel still guarantees the write lands durably BEFORE the
+    cancellation is observed, and every envelope carries its own
+    `tenant_id` + `written_at` — the same fields `ProtectedResultStore.
+    gc_sweep()` already decrypts and scans for TTL purposes — so an
+    orphaned entry remains discoverable via a full-store enumerate-and-
+    decrypt scan even without this carrier's pointer.
     """
     try:
         return await run_audit_off_loop(resolve_result_ref, store, tenant_id, result)

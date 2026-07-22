@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import pickle
 import threading
+from pathlib import Path
 
 import pytest
 from harness_runtime.lifecycle.audit_offload import resolve_result_ref_off_loop, run_audit_off_loop
@@ -755,3 +757,71 @@ async def test_resolve_result_ref_off_loop_degrades_on_queue_saturation(
     ref = await resolve_result_ref_off_loop(None, None, {"k": "v"})
     assert isinstance(ref, UnresolvableResultRef)
     assert "saturated" in ref.reason
+
+
+@pytest.mark.asyncio
+async def test_cancelled_ref_resolution_loses_carrier_but_write_lands_durably(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """codex [P1] round 9 — reachability + discoverability witness, not a
+    fix. A cancellation arriving while `resolve_result_ref_off_loop`'s
+    offloaded write is in flight propagates `CancelledError` straight
+    through the wrapper (it only catches `AuditSigningFailedError`), so the
+    raise-site's `PostEffectAuditSigningError` is never constructed and the
+    caller never sees its `result_ref`. This IS reachable in production:
+    `SyncDispatcherFacade.dispatch` cancels its inner task on
+    `result_timeout_seconds` expiry, and that cancellation can be delivered
+    at ANY awaited point, including mid-write here if the paid effect
+    consumed nearly the whole budget before the post-effect signing
+    failure began.
+
+    Per advisor consult (round 9): swallowing `CancelledError` to force the
+    carrier through would violate asyncio's cancellation contract — the
+    right question is whether the data is discoverable WITHOUT the
+    carrier. `run_audit_off_loop`'s join-on-cancel already guarantees the
+    write lands durably BEFORE the cancellation is observed regardless
+    (proven by the sibling `test_cancelled_offload_joins_worker_before_
+    cancellation_completes` above), and every envelope carries its own
+    `tenant_id` — the exact fields `gc_sweep()` already decrypts and scans
+    for TTL purposes. This test proves both halves empirically: the
+    carrier IS lost to THIS caller, but the entry is found by the same
+    enumerate-and-decrypt scan a repair flow would use — documented
+    acceptable degradation, not a bug."""
+    from cryptography.fernet import Fernet
+    from harness_runtime.lifecycle.protected_result_store import ProtectedResultStore
+
+    store = ProtectedResultStore(
+        tmp_path / "protected-results", codec=Fernet(Fernet.generate_key()), ttl_seconds=86400.0
+    )
+    started = threading.Event()
+    release = threading.Event()
+    real_write_once = store.write_once
+
+    def _slow_write_once(tenant_id: str | None, result: object) -> object:
+        started.set()
+        assert release.wait(timeout=10.0)
+        return real_write_once(tenant_id, result)
+
+    monkeypatch.setattr(store, "write_once", _slow_write_once)
+
+    task = asyncio.create_task(resolve_result_ref_off_loop(store, "tenant-a", {"x": 1}))
+    assert await asyncio.to_thread(started.wait, 10.0)
+
+    task.cancel()
+    await asyncio.sleep(0.1)
+    # The join is holding cancellation open while the write is mid-flight.
+    assert not task.done()
+
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    # The carrier's resolved ref is lost to this caller — the finding, confirmed.
+
+    # But the write landed durably (the join waited for it) and the entry is
+    # discoverable via the same enumerate-and-decrypt scan `gc_sweep()` uses.
+    entries = list(store._root.glob("*.entry"))
+    assert len(entries) == 1
+    envelope = pickle.loads(store._codec.decrypt(entries[0].read_bytes()))
+    assert envelope.tenant_id == "tenant-a"
+    assert pickle.loads(envelope.payload) == {"x": 1}

@@ -79,7 +79,7 @@ from weakref import WeakValueDictionary
 
 from pydantic import BaseModel, ConfigDict
 
-from harness_runtime.lifecycle.audit_offload import run_audit_off_loop
+from harness_runtime.lifecycle.audit_offload import run_off_loop_detach_on_cancel
 
 if TYPE_CHECKING:
     from harness_runtime.types import HarnessContext, ServerName
@@ -776,20 +776,29 @@ async def shutdown(
     # the worker thread; the default executor's non-daemon workers are then
     # JOINED at interpreter exit regardless, so a slow sweep can hang
     # process exit long after this function's own bounded timeout already
-    # fired and returned. `run_audit_off_loop` (the same dedicated
-    # daemon-thread executor the raise-site helper `resolve_result_ref_off_
-    # loop` uses, for exactly this reason — see `audit_offload.py`'s module
-    # docstring) fixes this: `wait_for`'s cancellation is honored via its
-    # own bounded join-then-detach, and a detached worker is a daemon
-    # thread, so it can never hold process exit. Best-effort: swept-key
-    # digests discarded, any exception isolated per the same per-resource
-    # pattern as the steps above.
+    # fired and returned. Routing through the dedicated daemon-thread pool
+    # (the same one the raise-site helper `resolve_result_ref_off_loop`
+    # uses) fixes the hang-at-exit hazard — but codex [P2] round 9 found
+    # that `run_audit_off_loop` itself was the WRONG variant: its
+    # join-on-cancel is calibrated for AUDIT-WRITE durability (a fixed 10s
+    # grace), and reusing it here let THIS function's own advertised
+    # `timeout` overrun by up to that grace, since `wait_for`'s cancellation
+    # had to wait for the inner join before propagating. This sweep has no
+    # durability requirement of its own (an incomplete sweep just leaves
+    # stale entries for the next opportunistic/bootstrap sweep) — so
+    # `run_off_loop_detach_on_cancel` is used instead: it never joins, the
+    # worker keeps running harmlessly on its daemon thread if still busy at
+    # this function's own deadline, and `wait_for` bounds the wait exactly
+    # as advertised. Best-effort: swept-key digests discarded, any
+    # exception isolated per the same per-resource pattern as the steps
+    # above.
     _protected_result_store = getattr(ctx, "protected_result_store", None)
     if _protected_result_store is not None:
         remaining = max(0.0, deadline - time.monotonic())
         try:
             await asyncio.wait_for(
-                run_audit_off_loop(_protected_result_store.gc_sweep), timeout=remaining
+                run_off_loop_detach_on_cancel(_protected_result_store.gc_sweep),
+                timeout=remaining,
             )
         except TimeoutError:
             failures.append("protected_result_store")

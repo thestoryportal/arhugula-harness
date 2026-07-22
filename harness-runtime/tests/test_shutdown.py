@@ -735,22 +735,24 @@ async def test_shutdown_step_5b_uses_dedicated_daemon_executor_not_default_pool(
     executor, whose non-daemon workers are JOINED at interpreter exit — a
     slow `gc_sweep` (a real directory enumeration + per-entry decrypt) could
     outlive `shutdown()`'s own bounded timeout and still hang process exit
-    afterward. `run_audit_off_loop` (the same dedicated daemon-thread
-    executor `resolve_result_ref_off_loop` already uses, for this exact
-    reason) fixes it. The interpreter-hang symptom itself isn't observable
-    inside a pytest run, so this test pins the call site directly.
+    afterward. Routing through the dedicated daemon-thread pool (round 8;
+    switched to the no-join variant `run_off_loop_detach_on_cancel` at
+    round 9 — see that function's docstring for why the join-based
+    `run_audit_off_loop` was the wrong variant for THIS caller) fixes it.
+    The interpreter-hang symptom itself isn't observable inside a pytest
+    run, so this test pins the call site directly.
 
     Mutation probe: reverting step 5b to
     `asyncio.to_thread(store.gc_sweep)` makes this spy's call-count
     assertion fail (0 calls instead of 1)."""
     calls: list[object] = []
-    real_run_audit_off_loop = shutdown_mod.run_audit_off_loop
+    real_run_off_loop_detach_on_cancel = shutdown_mod.run_off_loop_detach_on_cancel
 
     async def _spy(fn: Any, *args: Any, **kwargs: Any) -> Any:
         calls.append(fn)
-        return await real_run_audit_off_loop(fn, *args, **kwargs)
+        return await real_run_off_loop_detach_on_cancel(fn, *args, **kwargs)
 
-    monkeypatch.setattr(shutdown_mod, "run_audit_off_loop", _spy)
+    monkeypatch.setattr(shutdown_mod, "run_off_loop_detach_on_cancel", _spy)
     store = _FakeProtectedResultStore()
     ctx = _shutdown_ctx(
         tmp_path, tracer=_FakeTracerWithShutdown(), daemon=_FakeCollectorDaemon(), providers={}
@@ -759,6 +761,47 @@ async def test_shutdown_step_5b_uses_dedicated_daemon_executor_not_default_pool(
     report = await shutdown(ctx, timeout=5.0)
     assert calls == [store.gc_sweep]
     assert report.timed_out is False
+
+
+@pytest.mark.asyncio
+async def test_shutdown_protected_result_store_sweep_does_not_overrun_deadline(
+    tmp_path: Path,
+) -> None:
+    """codex [P2] round 9: the round-8 fix routed step 5b through the
+    join-based `run_audit_off_loop`, whose cancellation join is calibrated
+    for AUDIT-WRITE durability (a fixed 10s grace) — reusing it here let
+    `shutdown(timeout=X)` overrun its OWN advertised deadline by up to that
+    grace, since `wait_for`'s cancellation had to wait for the inner join
+    to finish before propagating. `run_off_loop_detach_on_cancel` (round 9
+    fix) never joins, so `shutdown()` must return promptly even when the
+    sweep is still blocked well past its own bounded timeout.
+
+    Mutation probe: reverting step 5b to `run_audit_off_loop` makes this
+    test's elapsed-time assertion fail (a real multi-second wait for the
+    join grace instead of a near-immediate return)."""
+    import threading
+    import time as time_module
+
+    release = threading.Event()
+
+    class _SlowStore:
+        def gc_sweep(self) -> list[str]:
+            release.wait(timeout=30.0)
+            return []
+
+    ctx = _shutdown_ctx(
+        tmp_path, tracer=_FakeTracerWithShutdown(), daemon=_FakeCollectorDaemon(), providers={}
+    )
+    ctx.protected_result_store = _SlowStore()
+
+    start = time_module.monotonic()
+    report = await shutdown(ctx, timeout=0.1)
+    elapsed = time_module.monotonic() - start
+
+    release.set()
+    assert elapsed < 2.0, f"shutdown() overran its own deadline by {elapsed:.2f}s"
+    assert "protected_result_store" in report.failures
+    assert report.timed_out is True
 
 
 @pytest.mark.asyncio
