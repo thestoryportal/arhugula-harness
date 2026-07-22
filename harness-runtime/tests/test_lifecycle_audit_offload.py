@@ -11,10 +11,17 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import pickle
 import threading
+from pathlib import Path
 
 import pytest
-from harness_runtime.lifecycle.audit_offload import run_audit_off_loop
+from harness_runtime.lifecycle.audit_offload import (
+    resolve_result_ref_off_loop,
+    run_audit_off_loop,
+    run_off_loop_detach_on_cancel,
+)
+from harness_runtime.lifecycle.protected_result_store import UnresolvableResultRef
 
 
 @pytest.mark.asyncio
@@ -708,3 +715,161 @@ async def test_saturation_contained_at_offload_boundaries(
             )
 
     assert sum("offload boundary" in r.message for r in caplog.records) >= 3
+
+
+@pytest.mark.asyncio
+async def test_resolve_result_ref_off_loop_runs_when_default_executor_is_exhausted() -> None:
+    """B-65-A codex round-4 P1 — `resolve_result_ref_off_loop` must resolve
+    the ref via the DEDICATED pool, not the loop's default executor: with
+    every default-executor worker blocked (the same daemon-concurrency
+    picture as `test_offload_runs_when_default_executor_is_exhausted`
+    above), it must still complete. Mutation probe: reverting the call site
+    back to `asyncio.to_thread(resolve_result_ref, ...)` would deadlock this
+    test at the `wait_for` timeout instead of returning."""
+    loop = asyncio.get_running_loop()
+    release = threading.Event()
+    blockers = [loop.run_in_executor(None, release.wait, 10.0) for _ in range(32)]
+    try:
+        ref = await asyncio.wait_for(
+            resolve_result_ref_off_loop(None, None, {"k": "v"}), timeout=5.0
+        )
+        assert isinstance(ref, UnresolvableResultRef)
+        assert ref.reason == "no protected result store configured"
+    finally:
+        release.set()
+        await asyncio.gather(*blockers)
+
+
+@pytest.mark.asyncio
+async def test_resolve_result_ref_off_loop_degrades_on_queue_saturation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """B-65-A codex round-4 P1/advisor tripwire — `resolve_result_ref`
+    itself never raises (it degrades to `UnresolvableResultRef`), but the
+    executor's OWN queue-saturation guard (`submit` at
+    `AUDIT_OFFLOAD_QUEUE_CAP`) raises `AuditSigningFailedError` BEFORE
+    `resolve_result_ref` ever runs. Without the wrapper's own try/except,
+    that typed exception would escape and REPLACE the caller's
+    `PostEffectAuditSigningError` construction with an unrelated error,
+    silently dropping the original carrier. Mutation probe: removing the
+    wrapper's `except AuditSigningFailedError` clause makes this raise
+    instead of returning a discriminated ref."""
+    from harness_runtime.lifecycle import audit_offload as offload_module
+
+    monkeypatch.setattr(offload_module, "AUDIT_OFFLOAD_QUEUE_CAP", 0)
+
+    ref = await resolve_result_ref_off_loop(None, None, {"k": "v"})
+    assert isinstance(ref, UnresolvableResultRef)
+    assert "saturated" in ref.reason
+
+
+@pytest.mark.asyncio
+async def test_cancelled_ref_resolution_loses_carrier_but_write_lands_durably(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """codex [P1] round 9 — reachability + discoverability witness, not a
+    fix. A cancellation arriving while `resolve_result_ref_off_loop`'s
+    offloaded write is in flight propagates `CancelledError` straight
+    through the wrapper (it only catches `AuditSigningFailedError`), so the
+    raise-site's `PostEffectAuditSigningError` is never constructed and the
+    caller never sees its `result_ref`. This IS reachable in production:
+    `SyncDispatcherFacade.dispatch` cancels its inner task on
+    `result_timeout_seconds` expiry, and that cancellation can be delivered
+    at ANY awaited point, including mid-write here if the paid effect
+    consumed nearly the whole budget before the post-effect signing
+    failure began.
+
+    Per advisor consult (round 9): swallowing `CancelledError` to force the
+    carrier through would violate asyncio's cancellation contract — the
+    right question is whether the data is discoverable WITHOUT the
+    carrier. `run_audit_off_loop`'s join-on-cancel already guarantees the
+    write lands durably BEFORE the cancellation is observed regardless
+    (proven by the sibling `test_cancelled_offload_joins_worker_before_
+    cancellation_completes` above), and every envelope carries its own
+    `tenant_id` — the exact fields `gc_sweep()` already decrypts and scans
+    for TTL purposes. This test proves both halves empirically: the
+    carrier IS lost to THIS caller, but the entry is found by the same
+    enumerate-and-decrypt scan a repair flow would use — documented
+    acceptable degradation, not a bug."""
+    from cryptography.fernet import Fernet
+    from harness_runtime.lifecycle.protected_result_store import ProtectedResultStore
+
+    store = ProtectedResultStore(
+        tmp_path / "protected-results", codec=Fernet(Fernet.generate_key()), ttl_seconds=86400.0
+    )
+    started = threading.Event()
+    release = threading.Event()
+    real_write_once = store.write_once
+
+    def _slow_write_once(tenant_id: str | None, result: object) -> object:
+        started.set()
+        assert release.wait(timeout=10.0)
+        return real_write_once(tenant_id, result)
+
+    monkeypatch.setattr(store, "write_once", _slow_write_once)
+
+    task = asyncio.create_task(resolve_result_ref_off_loop(store, "tenant-a", {"x": 1}))
+    assert await asyncio.to_thread(started.wait, 10.0)
+
+    task.cancel()
+    await asyncio.sleep(0.1)
+    # The join is holding cancellation open while the write is mid-flight.
+    assert not task.done()
+
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    # The carrier's resolved ref is lost to this caller — the finding, confirmed.
+
+    # But the write landed durably (the join waited for it) and the entry is
+    # discoverable via the same enumerate-and-decrypt scan `gc_sweep()` uses.
+    entries = list(store._root.glob("*.entry"))
+    assert len(entries) == 1
+    envelope = pickle.loads(store._codec.decrypt(entries[0].read_bytes()))
+    assert envelope.tenant_id == "tenant-a"
+    assert pickle.loads(envelope.payload) == {"x": 1}
+
+
+@pytest.mark.asyncio
+async def test_run_off_loop_detach_on_cancel_releases_slot_for_replacement_capacity() -> None:
+    """codex [P2] round 10 — stalling every worker via `run_off_loop_detach_
+    on_cancel` (the no-join variant introduced at round 9 for the shutdown
+    sweep) must still release each slot on detach, exactly like
+    `run_audit_off_loop`'s own join-based detach does (the sibling
+    `test_capacity_recovers_after_detaching_stalled_workers` above) —
+    otherwise a handful of stalled shutdown sweeps across a long-lived
+    process's lifetime (`shutdown()` runs per `api.run`/`resume`
+    invocation) would permanently exhaust the shared 4-worker pool and
+    starve later audit-signing/ref-resolution jobs entirely.
+
+    Mutation probe: removing the `release_stalled_slot` call in
+    `run_off_loop_detach_on_cancel`'s except-block makes the final
+    `run_audit_off_loop` call below hang past its `wait_for` timeout
+    instead of returning."""
+    from harness_runtime.lifecycle.audit_offload import AUDIT_OFFLOAD_MAX_WORKERS
+
+    started = threading.Barrier(AUDIT_OFFLOAD_MAX_WORKERS + 1, timeout=10.0)
+    release = threading.Event()
+
+    def _stalled() -> None:
+        started.wait()
+        release.wait(timeout=30.0)
+
+    # Stall every worker via the NO-JOIN variant, then detach them all.
+    tasks = [
+        asyncio.create_task(run_off_loop_detach_on_cancel(_stalled))
+        for _ in range(AUDIT_OFFLOAD_MAX_WORKERS)
+    ]
+    await asyncio.to_thread(started.wait)
+    for task in tasks:
+        task.cancel()
+    for task in tasks:
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(asyncio.shield(task), timeout=5.0)
+
+    # A NEW job through the dedicated pool must still run — a replacement
+    # worker serves it, proving the slots were released, not leaked.
+    result = await asyncio.wait_for(run_audit_off_loop(lambda: "recovered"), timeout=5.0)
+    assert result == "recovered"
+    release.set()

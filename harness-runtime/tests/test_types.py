@@ -236,6 +236,13 @@ def test_harness_context_declares_all_c_rt_04_fields() -> None:
         # B-18-KEEPALIVE (runtime spec v1.99 §B-18) — bare dispatcher handle for
         # prewarm() / keep-alive; typed Any to avoid lifecycle→types import cycle.
         "bare_llm_dispatcher",
+        # B-65-A (runtime spec v1.103 §14.8.11; RATIFIED B-65 Class 2 fork
+        # §3b) — the protected post-effect result store, bound at bootstrap
+        # stage 4 OD via materialize_protected_result_store_stage(config);
+        # None at fail-closed=OFF or an absent/malformed signing key. Typed
+        # `ProtectedResultStore | None` (leaf lifecycle module, no import
+        # cycle — same precedent as EngineOutputStore above).
+        "protected_result_store",
     }
     actual = set(HarnessContext.model_fields.keys())
     assert actual == expected, f"missing: {expected - actual}; extra: {actual - expected}"

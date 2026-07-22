@@ -21,6 +21,15 @@ audit-entries.jsonl.lock
 # R-FS-1 E-impl-2 (U-RT-122): durable WAL segment-log engine pause/resume state,
 # written at runtime under repository_root by WALSegmentEnginePauseResumeSubstrate.
 .harness/engine-recovery-segments/
+# B-FANOUT-OUTPUT-REPLAY: per-branch output journals (EngineOutputStore) — a
+# pre-existing gap this arc noticed while adding the sibling entry below (not
+# itself a B-65 artifact; both are harness-internal recovery substrate, never
+# canonical PathClass artifacts).
+.harness/engine-output/
+# B-65 (CP spec v1.103 §25.15 / Runtime spec v1.103 §14.8.11, codex [P1]):
+# encrypted post-effect result-recovery payloads (may carry tenant PII/
+# credentials at rest) — must never be committed.
+.harness/protected-results/
 routing_manifest/
 
 # B-40: cross-process ledger advisory-lock sidecars (harness_is.cross_process_ledger_lock),

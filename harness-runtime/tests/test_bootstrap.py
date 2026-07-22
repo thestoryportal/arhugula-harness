@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from cryptography.fernet import Fernet
 from harness_core.deployment_surface import DeploymentSurface
 from harness_core.persona_tier import PersonaTier
 from harness_core.workload_class import WorkloadClass
@@ -54,6 +55,7 @@ from harness_runtime.lifecycle.prompt_selection import (
     PromptVersionUnapprovedError,
 )
 from harness_runtime.lifecycle.providers import ProviderClientsStage
+from harness_runtime.shutdown import shutdown
 from harness_runtime.types import (
     COST_ACCUM_VAR,
     BootstrapStage,
@@ -1922,4 +1924,171 @@ async def test_u_rt_139_bootstrap_threads_verified_record_into_writer(
     assert ctx.audit_writer.cutover_record == record, (
         "the AUTHENTICATED cutover record did not thread through bootstrap "
         "into the writer — a retagged deployment's restart would brick"
+    )
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_wires_protected_result_store_through_to_shutdown_sweep(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """B-65-A end-to-end witness (advisor-recommended, round-7 gate): a real
+    stage-4-OD-constructed `ProtectedResultStore` must survive `freeze()` on
+    the frozen `HarnessContext` and be swept by `shutdown()`'s step 5b.
+
+    This is the exact seam codex round 4 and round 6 each found broken in a
+    different half: round 4 wired the shutdown sweep but the unit test used
+    a duck-typed `_FakeCtx` that bypassed real `freeze()`; round 6 found
+    `freeze()` itself never forwarded the field, so a real bootstrap's
+    `ctx.protected_result_store` was always `None` even though stage 4 OD
+    had constructed a real store — the round-4 sweep was dead code in
+    production. Neither unit test could catch this because each exercised
+    only one half of the bootstrap→freeze→shutdown chain in isolation. This
+    test runs the real `run_bootstrap` → real `freeze()` → real `shutdown()`
+    chain, so a regression in either half fails here.
+
+    Mutation probe: reverting either the round-6 `freeze()` fix (dropping
+    `protected_result_store=self.protected_result_store,` from the
+    `HarnessContext(...)` call) or the round-4 `shutdown()` fix (dropping
+    step 5b) makes this test fail — the former via the first assertion, the
+    latter via the spy call-count assertion.
+    """
+    monkeypatch.setenv("HARNESS_PROTECTED_RESULT_STORE_KEY", Fernet.generate_key().decode("ascii"))
+    _patch_providers(monkeypatch)
+    _patch_collector(monkeypatch)
+
+    ctx = await run_bootstrap(_config(tmp_path), workload_class=_WORKLOAD)
+
+    assert ctx.protected_result_store is not None, (
+        "stage 4 OD set a real key env var, so the frozen ctx must carry a "
+        "real store — `None` here means freeze() dropped the field again"
+    )
+
+    real_sweep = ctx.protected_result_store.gc_sweep
+    sweep_calls: list[None] = []
+
+    def _spy_sweep() -> None:
+        sweep_calls.append(None)
+        real_sweep()
+
+    monkeypatch.setattr(ctx.protected_result_store, "gc_sweep", _spy_sweep)
+
+    report = await shutdown(ctx)
+
+    assert sweep_calls, (
+        "shutdown() never invoked protected_result_store.gc_sweep() — step 5b regressed"
+    )
+    assert "protected_result_store" not in report.failures
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_survives_protected_result_store_gc_sweep_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """codex [P2] round 8: the bootstrap-half GC sweep (stage 4 OD, reaping a
+    PRIOR process's abandoned entries) is opportunistic housekeeping, not a
+    stage 4 post-condition — an enumeration failure (permission denied, a
+    transient filesystem error) must not abort bootstrap entirely just to
+    reap stale entries. `shutdown()`'s step 5b already isolates its own
+    sweep failure the same way (round 7 fix); this pins the bootstrap-half
+    twin.
+
+    Mutation probe: removing the try/except around
+    `ctx.protected_result_store.gc_sweep()` in `stage_4_od.py` makes
+    `run_bootstrap` raise the fake's `RuntimeError` instead of returning a
+    frozen `ctx`."""
+    _patch_providers(monkeypatch)
+    _patch_collector(monkeypatch)
+
+    from harness_runtime.lifecycle.protected_result_store import ProtectedResultStore
+
+    # A real instance (not a foreign fake) — `HarnessContext`'s frozen field
+    # is Pydantic-typed to `ProtectedResultStore`, so a duck-typed stand-in
+    # would fail validation at a LATER stage for an unrelated reason.
+    real_store = ProtectedResultStore(
+        tmp_path / "protected-results", codec=Fernet(Fernet.generate_key()), ttl_seconds=86400.0
+    )
+
+    def _raising_gc_sweep(*, now: float | None = None) -> list[str]:
+        raise RuntimeError("simulated bootstrap-half GC enumeration failure")
+
+    monkeypatch.setattr(real_store, "gc_sweep", _raising_gc_sweep)
+    monkeypatch.setattr(
+        _stage_4_od_mod, "materialize_protected_result_store_stage", lambda _config: real_store
+    )
+
+    ctx = await run_bootstrap(_config(tmp_path), workload_class=_WORKLOAD)
+
+    assert ctx.protected_result_store is real_store, (
+        "the store must still be wired despite its own GC sweep failing"
+    )
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_protected_result_store_sweep_does_not_block_event_loop(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """codex [P2] round 10: `gc_sweep` enumerates + decrypts every entry and
+    can genuinely run long (many entries, a slow filesystem) — calling it
+    SYNCHRONOUSLY inside this async bootstrap stage would block the event
+    loop for that whole duration. Routing through the same no-join
+    dedicated-pool helper `shutdown()`'s step 5b already uses (round 9)
+    frees the loop regardless of sweep duration. A concurrently-running
+    heartbeat coroutine, timestamped rather than merely counted, proves
+    the loop never stalls for the sweep's fixed sleep duration.
+
+    Mutation probe: reverting stage 4 OD to a synchronous
+    `ctx.protected_result_store.gc_sweep()` call makes the max gap between
+    consecutive heartbeat timestamps jump to roughly the sweep's 0.3s
+    sleep, well past the 0.15s bound, because the sweep then executes
+    directly on the loop's own thread instead of a worker thread."""
+    import asyncio
+    import time as time_module
+
+    from harness_runtime.lifecycle.protected_result_store import ProtectedResultStore
+
+    _patch_providers(monkeypatch)
+    _patch_collector(monkeypatch)
+
+    real_store = ProtectedResultStore(
+        tmp_path / "protected-results", codec=Fernet(Fernet.generate_key()), ttl_seconds=86400.0
+    )
+
+    def _blocking_gc_sweep(*, now: float | None = None) -> list[str]:
+        time_module.sleep(0.3)
+        return []
+
+    monkeypatch.setattr(real_store, "gc_sweep", _blocking_gc_sweep)
+    monkeypatch.setattr(
+        _stage_4_od_mod, "materialize_protected_result_store_stage", lambda _config: real_store
+    )
+
+    heartbeat_timestamps: list[float] = []
+
+    async def _heartbeat() -> None:
+        while True:
+            heartbeat_timestamps.append(time_module.monotonic())
+            await asyncio.sleep(0.02)
+
+    heartbeat_task = asyncio.create_task(_heartbeat())
+    await run_bootstrap(_config(tmp_path), workload_class=_WORKLOAD)
+    heartbeat_task.cancel()
+
+    # A fully-blocked loop gives the heartbeat ZERO chances to run at all
+    # (there is no suspension point anywhere for the scheduler to switch
+    # to it) — so an empty/near-empty timestamp list is ITSELF the
+    # blocked-loop signal, not merely an inconclusive gap computation.
+    assert len(heartbeat_timestamps) >= 5, (
+        f"only {len(heartbeat_timestamps)} heartbeats ran during bootstrap — "
+        f"the loop never got a scheduling opportunity, i.e. it was blocked"
+    )
+    gaps = [
+        heartbeat_timestamps[i + 1] - heartbeat_timestamps[i]
+        for i in range(len(heartbeat_timestamps) - 1)
+    ]
+    max_gap = max(gaps)
+    assert max_gap < 0.15, (
+        f"heartbeat stalled for {max_gap:.3f}s during the sweep — the loop was blocked"
     )

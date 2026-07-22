@@ -41,10 +41,18 @@ from concurrent.futures import Future
 from typing import Any, Final
 
 from harness_runtime.lifecycle.audit_signing_errors import AuditSigningFailedError
+from harness_runtime.lifecycle.protected_result_store import (
+    ProtectedResultStore,
+    ResultRefValue,
+    UnresolvableResultRef,
+    resolve_result_ref,
+)
 
 __all__ = [
     "AUDIT_OFFLOAD_MAX_WORKERS",
+    "resolve_result_ref_off_loop",
     "run_audit_off_loop",
+    "run_off_loop_detach_on_cancel",
 ]
 
 #: Small by design: audit jobs are short-lived (one signature + local file
@@ -287,3 +295,90 @@ async def run_audit_off_loop(fn: Callable[..., Any], /, *args: Any, **kwargs: An
                     AUDIT_CANCEL_JOIN_GRACE_SECONDS,
                 )
         raise
+
+
+async def run_off_loop_detach_on_cancel(
+    fn: Callable[..., Any], /, *args: Any, **kwargs: Any
+) -> Any:
+    """Like `run_audit_off_loop` but does NOT join on cancellation (codex
+    [P2] round 9 on the B-65-A arc).
+
+    `run_audit_off_loop`'s bounded join-then-detach exists so an in-flight
+    AUDIT write's durability is guaranteed before its caller observes
+    cancellation — that grace (`AUDIT_CANCEL_JOIN_GRACE_SECONDS`, a fixed
+    10s) is calibrated for that one caller profile. Reusing it for
+    `shutdown()`'s opportunistic GC sweep (round-8 fix) made
+    `shutdown(timeout=X)` able to overrun its OWN advertised deadline by up
+    to that grace, because `asyncio.wait_for`'s cancellation had to wait
+    for the inner join to finish before propagating. The sweep has no
+    durability requirement of its own — an incomplete sweep just leaves
+    stale entries for the NEXT opportunistic/bootstrap sweep to reap — so
+    this variant cancels the concurrent future if it hasn't started yet,
+    and otherwise detaches immediately: the worker keeps running on its
+    daemon thread (harmless — daemon threads die with the process). The
+    caller's OWN `asyncio.wait_for(..., timeout=...)` is the only bound
+    that matters.
+
+    **Releases the pool slot on detach (codex [P2] round 10).** A detach
+    that never calls `release_stalled_slot` — as an earlier version of
+    this function did not — leaves the stalled worker's slot permanently
+    counted against the shared, only-4-workers-wide `_AUDIT_OFFLOAD_
+    EXECUTOR`: since `shutdown()` runs per `api.run`/`resume` invocation,
+    a handful of stalled sweeps across a long-lived process's lifetime
+    could exhaust every worker and starve subsequent audit-signing/
+    ref-resolution jobs entirely. `release_stalled_slot` is the SAME
+    mechanism `run_audit_off_loop`'s own detach path already uses, and its
+    `_serving`-membership check makes it safe even if the job happened to
+    finish in the race window between this cancellation and the call.
+    """
+    context = contextvars.copy_context()
+    call = functools.partial(context.run, functools.partial(fn, *args, **kwargs))
+    concurrent_future = _AUDIT_OFFLOAD_EXECUTOR.submit(call)
+    try:
+        return await asyncio.wrap_future(concurrent_future)
+    except asyncio.CancelledError:
+        if not concurrent_future.cancel():
+            _AUDIT_OFFLOAD_EXECUTOR.release_stalled_slot(concurrent_future)
+        raise
+
+
+async def resolve_result_ref_off_loop(
+    store: ProtectedResultStore | None, tenant_id: str | None, result: object
+) -> ResultRefValue:
+    """Off-loop `resolve_result_ref` (B-65-A codex round-4 P1).
+
+    `resolve_result_ref` calls into `write_once`, whose I/O (pickle + encrypt
+    + fsync, plus an opportunistic decrypt-sweep) is exactly the class of
+    work `asyncio.to_thread` must not carry — the loop's default executor is
+    the same exhaustion-deadlock hazard `run_audit_off_loop` exists to avoid
+    (see module docstring). `resolve_result_ref`/`write_once` never raise
+    for any expected failure class (collision / serializer / encryption /
+    durable-publication I/O) — they degrade to `UnresolvableResultRef`.
+    Absent cancellation, the ONLY way this offload can raise is the
+    executor's own queue-saturation guard (`_DaemonThreadAuditExecutor.
+    submit` at `AUDIT_OFFLOAD_QUEUE_CAP`), which never runs
+    `resolve_result_ref` at all — caught here and folded into the same
+    discriminated-unresolvable contract.
+
+    **Documented residual (codex [P1] round 9; advisor-reviewed, NOT
+    fixed).** If the awaiting task is cancelled while the offloaded write
+    is in flight (e.g. `SyncDispatcherFacade`'s `result_timeout_seconds`
+    expiring exactly during post-effect ref-resolution), `run_audit_off_
+    loop`'s `CancelledError` propagates straight through this wrapper — it
+    is deliberately NOT caught here, since suppressing cancellation to
+    force a return value would violate asyncio's cancellation contract
+    (see `test_cancelled_ref_resolution_loses_carrier_but_write_lands_
+    durably`). The raise-site's `PostEffectAuditSigningError` carrier is
+    then never constructed and its `result_ref` is lost to that caller.
+    This is ACCEPTABLE degradation, not data loss: `run_audit_off_loop`'s
+    join-on-cancel still guarantees the write lands durably BEFORE the
+    cancellation is observed, and every envelope carries its own
+    `tenant_id` + `written_at` — the same fields `ProtectedResultStore.
+    gc_sweep()` already decrypts and scans for TTL purposes — so an
+    orphaned entry remains discoverable via a full-store enumerate-and-
+    decrypt scan even without this carrier's pointer.
+    """
+    try:
+        return await run_audit_off_loop(resolve_result_ref, store, tenant_id, result)
+    except AuditSigningFailedError as exc:
+        return UnresolvableResultRef(reason=f"result-ref offload saturated: {exc}")

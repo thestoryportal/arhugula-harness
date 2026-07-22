@@ -141,3 +141,52 @@ async def test_frozen_harness_context_accepts_four_new_fields_populated() -> Non
     # construction is exercised by `test_bootstrap.py` post cluster close.
     with pytest.raises(Exception):
         builder.freeze()
+
+
+def test_freeze_forwards_protected_result_store_to_frozen_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """B-65-A codex [P1] round 6: `protected_result_store` is set on the
+    mutable builder at bootstrap stage 4 OD but is an OPTIONAL field
+    (default `None`), so it never showed up in the `IncompleteBootstrapError`
+    surface the other tests in this file exercise. `freeze()` previously
+    omitted it entirely from the `HarnessContext(...)` constructor call —
+    every real bootstrap produced a frozen ctx where `getattr(ctx,
+    "protected_result_store", None)` was `None` even when stage 4 OD had set
+    a real store, making `shutdown()`'s step 5b GC sweep (wired at round 4)
+    unreachable in production. The round-4 shutdown test used a duck-typed
+    `_FakeCtx` that bypassed real `freeze()` entirely and never caught this.
+
+    Monkeypatches `HarnessContext` itself to capture `freeze()`'s
+    constructor kwargs without needing the full required-field set to pass
+    Pydantic validation (the pattern the test above notes is impractical
+    here).
+
+    Mutation probe: removing the `protected_result_store=...` kwarg from
+    `freeze()`'s `HarnessContext(...)` call makes `captured` not contain the
+    key at all instead of holding the sentinel."""
+    from harness_runtime.bootstrap import mutable_context as mutable_context_module
+
+    captured: dict[str, Any] = {}
+
+    class _CapturingHarnessContext:
+        def __init__(self, **kwargs: Any) -> None:
+            captured.update(kwargs)
+            raise RuntimeError("stop before full Pydantic validation")
+
+    monkeypatch.setattr(mutable_context_module, "HarnessContext", _CapturingHarnessContext)
+    from harness_runtime.bootstrap.mutable_context import _REQUIRED_FIELDS
+
+    builder = _MutableHarnessContext()
+    for name in _REQUIRED_FIELDS:
+        if name == "drained_flag":
+            setattr(builder, name, asyncio.Event())
+        else:
+            setattr(builder, name, _sentinel(name))
+    sentinel = _sentinel("protected_result_store")
+    builder.protected_result_store = sentinel
+
+    with pytest.raises(RuntimeError):
+        builder.freeze()
+
+    assert captured.get("protected_result_store") is sentinel

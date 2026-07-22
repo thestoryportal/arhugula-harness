@@ -659,6 +659,151 @@ async def test_shutdown_drains_stage_5_dispatch_executor(tmp_path: Path) -> None
     assert report.timed_out is False
 
 
+class _FakeProtectedResultStore:
+    """Spy for `ProtectedResultStore.gc_sweep` — records calls, optionally raises."""
+
+    def __init__(self, *, raises: Exception | None = None) -> None:
+        self.swept = False
+        self._raises = raises
+
+    def gc_sweep(self, *, now: float | None = None) -> list[str]:
+        self.swept = True
+        if self._raises is not None:
+            raise self._raises
+        return []
+
+
+@pytest.mark.asyncio
+async def test_shutdown_step_5b_sweeps_protected_result_store(tmp_path: Path) -> None:
+    """B-65-A codex round-4 [P2] — this is the SHUTDOWN half of the
+    "GC sweep at bootstrap/shutdown" fallback (spec v1.103 §14.8.11 AC 7);
+    the row this closes previously claimed no graceful-teardown chain
+    existed to hook it into. Mutation probe: removing step 5b from
+    `shutdown()` leaves `store.swept` False — a long-lived daemon that
+    never restarts would then never reap its OWN expired entries at exit,
+    only a NEXT process's bootstrap sweep would (which never arrives if it
+    never restarts).
+    """
+    store = _FakeProtectedResultStore()
+    ctx = _shutdown_ctx(
+        tmp_path, tracer=_FakeTracerWithShutdown(), daemon=_FakeCollectorDaemon(), providers={}
+    )
+    ctx.protected_result_store = store
+    report = await shutdown(ctx, timeout=5.0)
+    assert store.swept is True
+    assert "protected_result_store" not in report.failures
+    assert report.timed_out is False
+
+
+@pytest.mark.asyncio
+async def test_shutdown_isolates_protected_result_store_sweep_failure(tmp_path: Path) -> None:
+    """B-65-A codex round-4 [P2] — per-resource exception isolation must
+    cover the new step 5b like every other step: a raising sweep must not
+    abort the rest of shutdown. Mutation probe: an unguarded call would
+    propagate the exception out of `shutdown()`, failing this test with the
+    stub's `RuntimeError` instead of a clean `ShutdownReport`.
+    """
+    store = _FakeProtectedResultStore(raises=RuntimeError("disk full"))
+    tracer = _FakeTracerWithShutdown(returns=True)
+    ctx = _shutdown_ctx(tmp_path, tracer=tracer, daemon=_FakeCollectorDaemon(), providers={})
+    ctx.protected_result_store = store
+    report = await shutdown(ctx, timeout=5.0)
+    assert store.swept is True
+    assert "protected_result_store" in report.failures
+    assert report.audit_ledger_head_hash == "deadbeef"
+    assert tracer.shutdown_called is True
+
+
+@pytest.mark.asyncio
+async def test_shutdown_skips_protected_result_store_sweep_when_absent(tmp_path: Path) -> None:
+    """`None` store (fail-closed=OFF composition) must not be swept or
+    recorded as a failure — mirrors the bootstrap-stage guard verbatim."""
+    ctx = _shutdown_ctx(
+        tmp_path, tracer=_FakeTracerWithShutdown(), daemon=_FakeCollectorDaemon(), providers={}
+    )
+    ctx.protected_result_store = None
+    report = await shutdown(ctx, timeout=5.0)
+    assert "protected_result_store" not in report.failures
+
+
+@pytest.mark.asyncio
+async def test_shutdown_step_5b_uses_dedicated_daemon_executor_not_default_pool(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """codex [P1] round 8: `asyncio.to_thread` submits to the loop's DEFAULT
+    executor, whose non-daemon workers are JOINED at interpreter exit — a
+    slow `gc_sweep` (a real directory enumeration + per-entry decrypt) could
+    outlive `shutdown()`'s own bounded timeout and still hang process exit
+    afterward. Routing through the dedicated daemon-thread pool (round 8;
+    switched to the no-join variant `run_off_loop_detach_on_cancel` at
+    round 9 — see that function's docstring for why the join-based
+    `run_audit_off_loop` was the wrong variant for THIS caller) fixes it.
+    The interpreter-hang symptom itself isn't observable inside a pytest
+    run, so this test pins the call site directly.
+
+    Mutation probe: reverting step 5b to
+    `asyncio.to_thread(store.gc_sweep)` makes this spy's call-count
+    assertion fail (0 calls instead of 1)."""
+    calls: list[object] = []
+    real_run_off_loop_detach_on_cancel = shutdown_mod.run_off_loop_detach_on_cancel
+
+    async def _spy(fn: Any, *args: Any, **kwargs: Any) -> Any:
+        calls.append(fn)
+        return await real_run_off_loop_detach_on_cancel(fn, *args, **kwargs)
+
+    monkeypatch.setattr(shutdown_mod, "run_off_loop_detach_on_cancel", _spy)
+    store = _FakeProtectedResultStore()
+    ctx = _shutdown_ctx(
+        tmp_path, tracer=_FakeTracerWithShutdown(), daemon=_FakeCollectorDaemon(), providers={}
+    )
+    ctx.protected_result_store = store
+    report = await shutdown(ctx, timeout=5.0)
+    assert calls == [store.gc_sweep]
+    assert report.timed_out is False
+
+
+@pytest.mark.asyncio
+async def test_shutdown_protected_result_store_sweep_does_not_overrun_deadline(
+    tmp_path: Path,
+) -> None:
+    """codex [P2] round 9: the round-8 fix routed step 5b through the
+    join-based `run_audit_off_loop`, whose cancellation join is calibrated
+    for AUDIT-WRITE durability (a fixed 10s grace) — reusing it here let
+    `shutdown(timeout=X)` overrun its OWN advertised deadline by up to that
+    grace, since `wait_for`'s cancellation had to wait for the inner join
+    to finish before propagating. `run_off_loop_detach_on_cancel` (round 9
+    fix) never joins, so `shutdown()` must return promptly even when the
+    sweep is still blocked well past its own bounded timeout.
+
+    Mutation probe: reverting step 5b to `run_audit_off_loop` makes this
+    test's elapsed-time assertion fail (a real multi-second wait for the
+    join grace instead of a near-immediate return)."""
+    import threading
+    import time as time_module
+
+    release = threading.Event()
+
+    class _SlowStore:
+        def gc_sweep(self) -> list[str]:
+            release.wait(timeout=30.0)
+            return []
+
+    ctx = _shutdown_ctx(
+        tmp_path, tracer=_FakeTracerWithShutdown(), daemon=_FakeCollectorDaemon(), providers={}
+    )
+    ctx.protected_result_store = _SlowStore()
+
+    start = time_module.monotonic()
+    report = await shutdown(ctx, timeout=0.1)
+    elapsed = time_module.monotonic() - start
+
+    release.set()
+    assert elapsed < 2.0, f"shutdown() overran its own deadline by {elapsed:.2f}s"
+    assert "protected_result_store" in report.failures
+    assert report.timed_out is True
+
+
 @pytest.mark.asyncio
 async def test_shutdown_flips_draining_even_at_zero_remaining_budget(tmp_path: Path) -> None:
     """Codex round-8 [P2] "enter draining state before scheduling the bounded

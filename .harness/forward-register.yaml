@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 67
+  total: 69
   open: 0
   design_substrate_gated: 2
-  registered_finding: 7
+  registered_finding: 8
   operator_gated: 3
   held: 1
-  closed: 54
-  identity_digest: de7d4c458a636c58
+  closed: 55
+  identity_digest: 1f2dea99fa1fcf15
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -1495,3 +1495,63 @@ items:
   council: no -- documentation-of-accepted-residual row; no design decision pending
   heading: '### B-66 · B-60 fence-consult order at admission discrimination has no single-site
     witness *(registered at the B-60 close, merge-gate test-witness lens, 2026-07-21)*'
+- id: B-67
+  title: Protected result store's TTL GC sweep has no shutdown-time hook — bootstrap half only
+  status: closed
+  pr: pending (impl/b65a-protected-result-store, round-4 fix; flips alongside B-65 at merge)
+  summary: 'CORRECTED at out-of-family Codex round 4: this row''s own premise ("this runtime
+    has no graceful-teardown chain to hook") was FALSE — `shutdown(ctx)` at
+    `harness_runtime/shutdown.py` IS that chain, invoked unconditionally in `run()`''s/
+    `resume()`''s `finally` block regardless of workflow outcome (verified by direct read of
+    `api.py` lines ~671/941). Fixed by wiring a new step 5b in `shutdown()`: a bounded,
+    best-effort `ctx.protected_result_store.gc_sweep()` off the default executor via
+    `asyncio.to_thread` (safe here specifically because shutdown only runs AFTER
+    `execute_workflow` has already returned — no sync driver can be occupying the default pool
+    concurrently, unlike the request-path raise sites this same round also fixed). The
+    `stage_4_od.py` comment carrying the false premise was corrected in the same commit. Both
+    halves (bootstrap reaps a PRIOR process''s abandoned entries; shutdown reaps THIS
+    process''s own before exit) are now wired.'
+  close_out: 'Closed by the fix described above (harness-runtime/src/harness_runtime/shutdown.py
+    step 5b + stage_4_od.py comment correction), landing on impl/b65a-protected-result-store.'
+  council: no -- corrective wiring fix once the false premise was caught by review
+  heading: '### B-67 · Protected result store''s TTL GC sweep has no shutdown-time hook —
+    bootstrap half only *(registered at the B-65-A impl arc, out-of-family Codex round 1 [P1],
+    2026-07-22; CLOSED at round 4 correction, same date)*'
+- id: B-68
+  title: Protected result store's opportunistic GC can race a concurrent in-flight publication under a short TTL
+  status: registered_finding
+  summary: 'Registered at the B-65-A impl arc (out-of-family Codex round 11 [P2]). `write_once()`
+    captures `_StoredEnvelope.written_at` via `time.time()` BEFORE serialization/encryption/
+    `_publish_atomic`''s fsync+`os.link` commit -- a real, non-instantaneous gap. A CONCURRENT
+    sweep (another in-process opportunistic call, or the bootstrap/shutdown-half sweep from a
+    co-resident process sharing the store directory) running during that gap can judge the
+    just-published entry already expired -- IF the deployment-configured `ttl_seconds`
+    (operator-settable, `gt=0.0`, no floor) is shorter than the write''s own encrypt+fsync
+    latency -- and unlink it before `write_once()` returns. The caller then holds a
+    "live-looking" `composite_key` whose first `read()` raises an unhandled `FileNotFoundError`
+    instead of the store''s typed refusals. Advisor-reviewed: the TTL-shorter-than-write-latency
+    precondition is unchanged (needs a TTL roughly seven orders of magnitude below the factory
+    default -- 86400s vs. single-digit-ms write latency -- to matter at all); the complete fix
+    is a genuine concurrency-control redesign (serializing GC against in-flight publications),
+    not a mechanical patch, and a partial mitigation (mtime-authority switch) only narrows
+    rather than closes the window. Merge-gate round-1 concurrency lens (PR #1078) independently
+    confirmed the race AND sharpened the frequency assessment: `shutdown()` step 5b fires
+    `gc_sweep()` UNCONDITIONALLY once per `run()`/`resume()` call, with no interval throttle
+    (unlike the in-write opportunistic trigger''s 300s `_OPPORTUNISTIC_GC_INTERVAL_SECONDS`
+    gate) -- on a daemon serving many concurrent short-lived workflow runs against the SAME
+    shared store instance, concurrent-sweep frequency is materially higher than the
+    opportunistic-trigger-only framing implies, though the TTL precondition above still gates
+    whether any given overlap actually unlinks a live entry. Registered per the terminal
+    register discipline (B-64/B-67 precedents) rather than shipping a round-11 partial fix to
+    a race.'
+  close_out: 'Design a `gc_sweep()`/`write_once()` synchronization primitive (in-flight-write
+    registry the sweep consults before unlinking, or a lock scoped to the publication critical
+    section) over Runtime spec v1.103 §14.8.11; witness with a test pinning a TTL shorter than
+    an injected artificial publication delay, asserting the sweep never removes the in-flight
+    entry. Optional lower-cost interim hardening: degrade `read()`''s raw `FileNotFoundError`
+    to a typed refusal.'
+  council: no -- narrow TTL-dependent race with a documented reachability precondition; the full
+    fix is a concurrency-control design decision, not an immediate judgment call
+  heading: '### B-68 · Protected result store''s opportunistic GC can race a concurrent
+    in-flight publication under a short TTL *(registered at the B-65-A impl arc, out-of-family
+    Codex round 11 [P2], 2026-07-22)*'

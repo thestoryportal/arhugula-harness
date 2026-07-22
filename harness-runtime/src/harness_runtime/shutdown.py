@@ -79,6 +79,8 @@ from weakref import WeakValueDictionary
 
 from pydantic import BaseModel, ConfigDict
 
+from harness_runtime.lifecycle.audit_offload import run_off_loop_detach_on_cancel
+
 if TYPE_CHECKING:
     from harness_runtime.types import HarnessContext, ServerName
 
@@ -757,6 +759,52 @@ async def shutdown(
             except Exception:
                 failures.append("mcp_client_host")
     # Step 5 — ledger/index/cache/worktree: covered by step 2 / no close surface.
+
+    # Step 5b — protected result store GC sweep (B-65-A; spec v1.103
+    # §14.8.11 AC 7, codex round-4 [P2]) — the SHUTDOWN half of the
+    # "GC sweep at bootstrap/shutdown" fallback (the BOOTSTRAP half runs at
+    # `stage_4_od.py` and reaps a PRIOR process's abandoned entries; this
+    # half reaps THIS process's own before exit, so a long-lived daemon that
+    # never restarts still bounds the store between opportunistic in-write
+    # sweeps). The exhaustion-deadlock hazard `asyncio.to_thread`'s DEFAULT
+    # executor poses elsewhere (a sync driver occupying every worker) does
+    # NOT apply here — `shutdown()` only runs AFTER `execute_workflow` has
+    # already returned. But codex [P1] round 8 on this arc: a SEPARATE
+    # hazard from the same default-executor choice DOES apply — `gc_sweep`
+    # enumerates + decrypts every entry, which can genuinely run long, and
+    # `asyncio.wait_for`'s timeout only abandons the AWAITING coroutine, not
+    # the worker thread; the default executor's non-daemon workers are then
+    # JOINED at interpreter exit regardless, so a slow sweep can hang
+    # process exit long after this function's own bounded timeout already
+    # fired and returned. Routing through the dedicated daemon-thread pool
+    # (the same one the raise-site helper `resolve_result_ref_off_loop`
+    # uses) fixes the hang-at-exit hazard — but codex [P2] round 9 found
+    # that `run_audit_off_loop` itself was the WRONG variant: its
+    # join-on-cancel is calibrated for AUDIT-WRITE durability (a fixed 10s
+    # grace), and reusing it here let THIS function's own advertised
+    # `timeout` overrun by up to that grace, since `wait_for`'s cancellation
+    # had to wait for the inner join before propagating. This sweep has no
+    # durability requirement of its own (an incomplete sweep just leaves
+    # stale entries for the next opportunistic/bootstrap sweep) — so
+    # `run_off_loop_detach_on_cancel` is used instead: it never joins, the
+    # worker keeps running harmlessly on its daemon thread if still busy at
+    # this function's own deadline, and `wait_for` bounds the wait exactly
+    # as advertised. Best-effort: swept-key digests discarded, any
+    # exception isolated per the same per-resource pattern as the steps
+    # above.
+    _protected_result_store = getattr(ctx, "protected_result_store", None)
+    if _protected_result_store is not None:
+        remaining = max(0.0, deadline - time.monotonic())
+        try:
+            await asyncio.wait_for(
+                run_off_loop_detach_on_cancel(_protected_result_store.gc_sweep),
+                timeout=remaining,
+            )
+        except TimeoutError:
+            failures.append("protected_result_store")
+            timed_out = True
+        except Exception:
+            failures.append("protected_result_store")
 
     if time.monotonic() > deadline:
         timed_out = True

@@ -26,14 +26,20 @@ U-RT-44/45 shutdown work if a true unregister API is needed.
 
 from __future__ import annotations
 
+import logging
+
 from harness_core import PersonaTier
 from harness_core.workload_class import WorkloadClass
 
+from harness_runtime.bootstrap.factories.protected_result_store_factory import (
+    materialize_protected_result_store_stage,
+)
 from harness_runtime.bootstrap.factories.validator_framework_factory import (
     materialize_validator_framework_stage,
 )
 from harness_runtime.bootstrap.mutable_context import _MutableHarnessContext
 from harness_runtime.config.audit_signing import make_audit_signing_backend
+from harness_runtime.lifecycle.audit_offload import run_off_loop_detach_on_cancel
 from harness_runtime.lifecycle.audit_signing_fail_closed_validation import (
     initialize_mtc_audit_signing_record,
     resolve_audit_signing_fail_closed,
@@ -75,6 +81,51 @@ async def execute(
     # `AuditSigningConfigInvalidError`/`IncompatibleConfigVersion`). This
     # pass touches config only — no backend I/O, no side effects.
     validate_mtc_audit_signing_config(config)
+    # 0a-bis. Protected post-effect result store (B-65-A, Runtime spec v1.103
+    # §14.8.11) — constructed AFTER the fail-loud check above, which already
+    # guarantees a resolved-ON bootstrap has a valid key env var. `None` here
+    # is a normal outcome at fail-closed=OFF (the carrier is never raised on
+    # that path).
+    ctx.protected_result_store = materialize_protected_result_store_stage(config)
+    # B-65-A (Runtime spec v1.103 §14.8.11 AC 7) — the BOOTSTRAP half of the
+    # "GC sweep at bootstrap/shutdown" fallback: reaps entries a PRIOR
+    # crashed/killed process abandoned past their TTL before any of THIS
+    # process's own writes could trigger the opportunistic sweep (a killed
+    # process never reaches its own `shutdown()`, so only the NEXT process's
+    # bootstrap can reap what it left behind). The SHUTDOWN half is wired at
+    # `shutdown.py` step 5b (codex round-4 [P2] correction — this comment
+    # previously claimed no graceful-teardown chain existed; `shutdown(ctx)`
+    # is invoked unconditionally in `run()`'s/`resume()`'s `finally` and is
+    # the correct hook).
+    if ctx.protected_result_store is not None:
+        # codex [P2] round 8 on this arc — this is opportunistic TTL
+        # cleanup, not a stage 4 post-condition (the ctx post-conditions
+        # this stage guarantees are `cost_chain`/`audit_writer` non-None
+        # per the module docstring; the store's OWN presence was already
+        # decided by the factory call above). An enumeration failure here
+        # (permission denied, a transient filesystem error) must not abort
+        # bootstrap entirely just to reap a PRIOR process's abandoned
+        # entries — the shutdown()-step-5b sweep isolates its own failure
+        # the same way; this call should too.
+        #
+        # codex [P2] round 10 on this arc — the sweep enumerates + decrypts
+        # every entry and can genuinely run long on a store with many
+        # entries or a slow filesystem; calling it SYNCHRONOUSLY here
+        # blocks this async bootstrap stage's event loop for however long
+        # that takes. `shutdown()`'s step 5b already offloads the SAME
+        # operation for this exact reason (round 8/9) — the bootstrap half
+        # now does too, via the same no-join dedicated-pool helper (no
+        # `wait_for` bound needed here: bootstrap has no caller-supplied
+        # deadline analogous to `shutdown(timeout=...)`, and offloading to
+        # a worker thread frees the loop regardless of how long the sweep
+        # itself takes).
+        try:
+            await run_off_loop_detach_on_cancel(ctx.protected_result_store.gc_sweep)
+        except Exception:
+            logging.getLogger("harness.runtime.protected_result_store").error(
+                "bootstrap-half GC sweep failed (startup proceeds regardless)",
+                exc_info=True,
+            )
     # 0b. Audit-signing backend (B-47 PR B — OD spec v1.33 §21.2.1 composition
     # root) — constructed AND validated BEFORE the one-shot global tracer
     # registration (out-of-family Codex round-18: OTel registration cannot be

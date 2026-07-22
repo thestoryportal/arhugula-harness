@@ -32,7 +32,10 @@ from harness_cp.hitl_timeout_degradation import (
 )
 from harness_cp.validator_framework_types import HITLEscalationBrief
 
-from harness_runtime.lifecycle.audit_offload import run_audit_off_loop
+from harness_runtime.lifecycle.audit_offload import (
+    resolve_result_ref_off_loop,
+    run_audit_off_loop,
+)
 from harness_runtime.lifecycle.audit_signing_errors import (
     AUDIT_SIGNING_HARD_FAILURES,
     PostEffectAuditSigningError,
@@ -127,6 +130,7 @@ class WebhookDeliveryComposer:
         procedural_tier_snapshot_resolver: Any = None,
         signing_backend: Any = None,
         audit_signing_fail_closed: bool = False,
+        protected_result_store: Any = None,
         workflow_id: str | None = None,
         parent_action_id: str | None = None,
         parent_idempotency_key: str | None = None,
@@ -193,6 +197,12 @@ class WebhookDeliveryComposer:
         # policy (stage-5 factory). ON → both cost-attribution catch sites
         # raise the typed family; OFF (default) byte-preserves log-and-proceed.
         self._audit_signing_fail_closed = audit_signing_fail_closed
+        # B-65-A (Runtime spec v1.103 §14.8.11; RATIFIED B-65 Class 2 fork
+        # §3b) — the protected post-effect result store, threaded from
+        # `ctx.protected_result_store` at bootstrap stage-5. None preserves
+        # unit-test ergonomics (`resolve_result_ref` degrades to an
+        # `UnresolvableResultRef` naming the missing store).
+        self._protected_result_store = protected_result_store
         self._workflow_id = workflow_id
         self._parent_action_id = parent_action_id
         self._parent_idempotency_key = parent_idempotency_key
@@ -209,6 +219,8 @@ class WebhookDeliveryComposer:
         webhook_config: WebhookConfig,
         payload: WebhookPayload,
         idempotency_key: str,
+        *,
+        tenant_id: str | None = None,
     ) -> WebhookDeliveryResult:
         """Deliver `payload` to `webhook_config.endpoint_url` via HTTP POST
         with retry orchestration per spec §14.10.1.
@@ -217,8 +229,23 @@ class WebhookDeliveryComposer:
         within retention window. The idempotency-key header is set on every
         attempt to enable server-side deduplication.
 
+        `tenant_id` (B-65-A, Runtime spec v1.103 §14.8.11): the OWNING
+        tenant scope for the protected-store write on a post-effect signing
+        failure — preferentially the CALLER's `step_context.tenant_id`.
+        When omitted (the legacy 3-arg call shape), falls back to this
+        composer's ctor-bound `self._tenant_id` (codex [P2] round 8 on this
+        arc) rather than defaulting to untenanted: `self._tenant_id` is
+        ALREADY the tenant scope the audit-composition call below uses for
+        this SAME failure, so a caller that constructed
+        `WebhookDeliveryComposer(tenant_id="tenant-a")` and never adopted
+        the newer per-call kwarg would otherwise have its protected-store
+        write land in the untenanted scope while the audit ledger entry for
+        the identical failure is tenant-a-scoped — recovery under the real
+        tenant would then be wrongly refused as cross-tenant.
+
         :raises WebhookDeliveryExhaustedError: when all retry attempts fail.
         """
+        effective_tenant_id = tenant_id if tenant_id is not None else self._tenant_id
         url = webhook_config.endpoint_url
         url_hash = hashlib.sha256(url.encode("utf-8")).hexdigest()
 
@@ -322,14 +349,24 @@ class WebhookDeliveryComposer:
                 url=url,
                 request_body=request_body,
                 idempotency_key=idempotency_key,
+                tenant_id=effective_tenant_id,
             )
         except AUDIT_SIGNING_HARD_FAILURES as sign_exc:
+            # codex [P1] on the B-65-A CP-side arc round 4 — offload via the
+            # dedicated pool, NOT `asyncio.to_thread` (the loop's default
+            # executor is the same exhaustion-deadlock hazard `run_audit_
+            # off_loop` exists to avoid; see `audit_offload.py` module
+            # docstring).
+            _result_ref = await resolve_result_ref_off_loop(
+                self._protected_result_store, effective_tenant_id, result
+            )
             raise PostEffectAuditSigningError(
                 f"audit signing failed after a completed webhook POST "
                 f"(webhook_id={webhook_config.webhook_id!r}, "
                 f"delivered={delivered}): {sign_exc}",
                 effect_class=PostEffectClass.WEBHOOK_RECEIPT,
                 result=result,
+                result_ref=_result_ref,
             ) from sign_exc
 
         if not delivered:
@@ -372,6 +409,7 @@ class WebhookDeliveryComposer:
         url: str,
         request_body: dict[str, Any],
         idempotency_key: str,
+        tenant_id: str | None = None,
     ) -> None:
         """Wrap U-OD-40 cost-attribution invocation in best-effort exception
         swallowing per OD §C-OD-26.2 row "hitl.webhook.deliver" + U-OD-40
@@ -384,6 +422,14 @@ class WebhookDeliveryComposer:
         Skipped when any of (rate_table, cost_chain, audit_writer,
         workflow_id, parent_action_id, parent_idempotency_key) is None
         (operator opt-out / bootstrap not yet wired).
+
+        `tenant_id` (codex [P2] round 10 on this arc): `deliver_webhook`
+        passes its already-resolved `effective_tenant_id` — the SAME
+        tenant scope the protected-store write for this identical delivery
+        uses — so the audit record and the recovery ref never diverge.
+        Defaults to `None` (falling back to `self._tenant_id` below) for
+        callers that invoke this helper directly, bypassing
+        `deliver_webhook`'s own resolution.
         """
         if (
             self._rate_table is None
@@ -411,7 +457,7 @@ class WebhookDeliveryComposer:
                 parent_idempotency_key=self._parent_idempotency_key,
                 workflow_id=self._workflow_id,
                 parent_action_id=self._parent_action_id,
-                tenant_id=self._tenant_id,
+                tenant_id=tenant_id if tenant_id is not None else self._tenant_id,
                 ledger_writer=self._ledger_writer,
                 procedural_tier_snapshot_resolver=self._procedural_tier_snapshot_resolver,
                 signing_backend=self._signing_backend,
@@ -448,6 +494,8 @@ class WebhookDeliveryComposer:
         self,
         brief: HITLEscalationBrief,
         idempotency_key: str,
+        *,
+        tenant_id: str | None = None,
     ) -> WebhookDeliveryResult:
         """Spec-canonical 2-arg brief surface per runtime spec v1.34 §14.10.1
         Reading (H) absorption + §14.8.8.1 step 3 consumer cite.
@@ -501,7 +549,9 @@ class WebhookDeliveryComposer:
         )
 
         payload = project_brief_to_payload(brief, idempotency_key)
-        return await self.deliver_webhook(self._webhook_config, payload, idempotency_key)
+        return await self.deliver_webhook(
+            self._webhook_config, payload, idempotency_key, tenant_id=tenant_id
+        )
 
 
 # --- factory ----------------------------------------------------------------

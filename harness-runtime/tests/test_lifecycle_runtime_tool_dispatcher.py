@@ -1352,3 +1352,160 @@ async def test_effect_fence_suppress_path_emits_sandbox_exit_no_mcp_call(tmp_pat
     assert "sandbox.enter" in names  # emitted pre-fence
     assert "sandbox.exit" in names  # the new suppress-path balance emission
     assert "mcp.tool.call" not in names  # NO effect re-fired
+
+
+# ---------- B-65-A post-effect result-ref wiring (merge-gate test-witness) --
+#
+# Merge-gate round-1 test-witness lens on PR #1078: llm_dispatch's post-
+# effect carrier site got an end-to-end witness (`test_post_effect_failure_
+# carrier_preserves_result` at test_u_rt_136_audit_signing_flag_wiring.py)
+# but this file's TWO carrier sites (schema-violation path line ~1245,
+# success path line ~1294) never constructed a REAL `ProtectedResultStore`
+# and checked the resulting `result_ref` — every existing test here either
+# doesn't reach `audit_signing_fail_closed=True` at all, or (per U-RT-136's
+# own `_site_tool_offload`) drives the cost-attribution helper in isolation
+# without ever inspecting the CARRIER's `result_ref`. A wrong/dropped store
+# reference or wrong `tenant_id` at either raise site would stay green under
+# every pre-existing test — the same "wired-but-unreachable" class this PR's
+# own round-6 fix (freeze() dropping `protected_result_store`) already
+# caught once for the bootstrap chain, not carried over here.
+
+
+def _protected_store(tmp_path):
+    from cryptography.fernet import Fernet
+    from harness_runtime.lifecycle.protected_result_store import ProtectedResultStore
+
+    return ProtectedResultStore(
+        tmp_path / "b65a-store",
+        codec=Fernet(Fernet.generate_key()),
+        ttl_seconds=86400.0,
+    )
+
+
+def _raise_family_cost_attribution(**_kwargs: Any) -> None:
+    from harness_runtime.lifecycle.audit_signing_errors import AuditSigningFailedError
+
+    raise AuditSigningFailedError("kms unavailable (b65a wiring test)")
+
+
+@pytest.mark.asyncio
+async def test_dispatch_schema_violation_threads_result_ref_through_real_store(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The schema-violation carrier site (runtime_tool_dispatcher.py's first
+    `except AUDIT_SIGNING_HARD_FAILURES` block) writes the executed tool's
+    response to `self._protected_result_store` under the step's tenant scope
+    BEFORE constructing the carrier — proven here by reading the ref BACK
+    from a real store, not merely asserting it is a `str`.
+
+    Mutation probe: swapping the raise site's `result_ref=_result_ref` for
+    `result_ref=UnresolvableResultRef(reason="x")`, or threading the WRONG
+    store/tenant_id into `resolve_result_ref_off_loop`, makes `store.read`
+    below raise instead of returning the original response."""
+    from harness_runtime.lifecycle.audit_signing_errors import PostEffectAuditSigningError
+
+    def strict_converter(tool):
+        return ToolContract(
+            name=tool.name,
+            description=tool.description or "",
+            input_schema=tool.inputSchema or {"type": "object"},
+            output_schema={
+                "type": "object",
+                "required": ["must_be_present"],
+                "properties": {"must_be_present": {"type": "string"}},
+            },
+            minimum_tier=SandboxTier.TIER_1_PROCESS,
+            blast_radius_tier=BlastRadiusTier.READ_ONLY,
+        )
+
+    server = _build_fastmcp_server()
+    host = MCPClientHost(
+        transport="stdio",
+        server_name="dispatcher-test-srv",
+        trust_tier=MCPTrustTier.LEVEL_2_SANDBOX_ALL,
+        transport_config={"command": "unused"},
+        tool_contract_converter=strict_converter,
+        session_context_factory=_build_session_factory(server),
+    )
+    await host.start()
+    store = _protected_store(tmp_path)
+    dispatcher = RuntimeToolDispatcher.for_single_host(
+        mcp_client_host=host,
+        per_server_trust_evaluator=PerServerTrustEvaluator(),
+        mcp_namespace_emitter=_make_emitter(),
+        trust_policy=_make_trust_policy(),
+        sandbox_decision_resolver=_good_sandbox_resolver,
+        audit_signing_fail_closed=True,
+        protected_result_store=store,
+    )
+    monkeypatch.setattr(
+        dispatcher, "_attribute_tool_cost_best_effort", _raise_family_cost_attribution
+    )
+    try:
+        with pytest.raises(PostEffectAuditSigningError) as excinfo:
+            await dispatcher.dispatch(
+                _make_binding(),
+                _make_step("echo", {"message": "schema-violation-wiring"}),
+                step_context=_make_step_context(),
+            )
+    finally:
+        await host.shutdown()
+
+    carrier = excinfo.value
+    assert isinstance(carrier.result_ref, str), (
+        f"expected a resolvable store ref, got {carrier.result_ref!r} — the "
+        f"store was not threaded correctly through this raise site"
+    )
+    recovered = store.read(None, carrier.result_ref)
+    assert recovered == carrier.result
+
+
+@pytest.mark.asyncio
+async def test_dispatch_success_path_threads_result_ref_through_real_store(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The success-path carrier site (runtime_tool_dispatcher.py's second
+    `except AUDIT_SIGNING_HARD_FAILURES` block, guarding the post-success
+    cost-attribution call) writes the tool's response to a REAL store and
+    the carrier's `result_ref` resolves it back — the sibling witness to
+    the schema-violation site above (a distinct raise site in the same
+    file; each is independently mutation-probeable).
+
+    Mutation probe: the same class of defect as above, at this file's
+    SECOND raise site specifically — a fix that only threads the store
+    correctly at the schema-violation site (line ~1245) while leaving this
+    success-path site (line ~1294) wired to `None`/the wrong tenant stays
+    green on the test above but fails here."""
+    from harness_runtime.lifecycle.audit_signing_errors import PostEffectAuditSigningError
+
+    host = await _build_started_host()
+    store = _protected_store(tmp_path)
+    dispatcher = RuntimeToolDispatcher.for_single_host(
+        mcp_client_host=host,
+        per_server_trust_evaluator=PerServerTrustEvaluator(),
+        mcp_namespace_emitter=_make_emitter(),
+        trust_policy=_make_trust_policy(),
+        sandbox_decision_resolver=_good_sandbox_resolver,
+        audit_signing_fail_closed=True,
+        protected_result_store=store,
+    )
+    monkeypatch.setattr(
+        dispatcher, "_attribute_tool_cost_best_effort", _raise_family_cost_attribution
+    )
+    try:
+        with pytest.raises(PostEffectAuditSigningError) as excinfo:
+            await dispatcher.dispatch(
+                _make_binding(),
+                _make_step("echo", {"message": "success-path-wiring"}),
+                step_context=_make_step_context(),
+            )
+    finally:
+        await host.shutdown()
+
+    carrier = excinfo.value
+    assert isinstance(carrier.result_ref, str), (
+        f"expected a resolvable store ref, got {carrier.result_ref!r} — the "
+        f"store was not threaded correctly through this raise site"
+    )
+    recovered = store.read(None, carrier.result_ref)
+    assert recovered == carrier.result

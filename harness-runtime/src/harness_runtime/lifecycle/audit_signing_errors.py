@@ -29,7 +29,6 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import uuid
 from enum import StrEnum
 
 from harness_od.audit_signing_errors import (
@@ -37,6 +36,8 @@ from harness_od.audit_signing_errors import (
     AuditSigningBreakerOpenError,
     AuditSigningFailedError,
 )
+
+from harness_runtime.lifecycle.protected_result_store import ResultRefValue
 
 __all__ = [
     "AUDIT_SIGNING_HARD_FAILURES",
@@ -81,6 +82,7 @@ class PostEffectAuditSigningError(AuditSigningFailedError):
         *,
         effect_class: PostEffectClass,
         result: object,
+        result_ref: ResultRefValue,
     ) -> None:
         #: Stable reference joining the caller-visible failure surface to the
         #: audit-failure report: the CP driver stringifies step exceptions
@@ -88,10 +90,21 @@ class PostEffectAuditSigningError(AuditSigningFailedError):
         #: the reference is EMBEDDED in the message — the caller receives the
         #: failure "carrying the result reference" (plan v2.49 §1.3 acc 1b)
         #: and resolves the preserved payload at the report log line.
-        self.result_ref = f"post-effect-{uuid.uuid4().hex[:12]}"
-        super().__init__(
-            f"{message} [effect_class={effect_class.value} result_ref={self.result_ref}]"
+        #:
+        #: Runtime v1.103 §14.8.11 (RATIFIED B-65 fork §3b) — WIDENED from an
+        #: internally-computed `uuid4().hex[:12]` to a caller-supplied
+        #: discriminated value: the RAISE SITE writes `result` to the
+        #: `ProtectedResultStore` under the owning tenant scope BEFORE
+        #: constructing this carrier, and passes the resolved composite key
+        #: (a resolvable `str`) or an `UnresolvableResultRef` (the store
+        #: write, or the versioned serializer, failed) — this carrier never
+        #: computes the ref itself; it only carries whatever the raise site
+        #: resolved.
+        self.result_ref: ResultRefValue = result_ref
+        ref_repr = (
+            result_ref if isinstance(result_ref, str) else f"unresolvable:{result_ref.reason}"
         )
+        super().__init__(f"{message} [effect_class={effect_class.value} result_ref={ref_repr}]")
         self.effect_class = effect_class
         #: The already-obtained effect result (opaque payload) — preserved
         #: for the audit-failure report at the outermost dispatch boundary.
@@ -117,7 +130,9 @@ def report_post_effect_audit_failure(exc: PostEffectAuditSigningError) -> None:
     redacted metadata: the payload's type name and a SHA-256 digest of its
     repr, which lets an operator VERIFY a recovered payload matches the
     report without the log ever holding the content. The object itself
-    stays on the in-memory carrier for richer (protected) consumers.
+    stays on the in-memory carrier; the `result_ref` (Runtime v1.103
+    §14.8.11) resolves the SAME payload durably via `ProtectedResultStore`
+    for richer (protected) consumers, when the store write succeeded.
     """
     result_repr = repr(exc.result)
     logging.getLogger("harness.runtime.audit_signing").error(

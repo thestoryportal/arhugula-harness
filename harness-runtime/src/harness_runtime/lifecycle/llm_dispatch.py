@@ -92,7 +92,10 @@ from harness_cp.validator_fail_transient_staircase import CrossTrustBoundaryStat
 from harness_cp.workflow_driver_types import StepExecutionContext, StepKind, WorkflowStep
 from harness_od.otel_genai_base import HIERARCHY_CORRELATION_KEY, GenAiOperation
 
-from harness_runtime.lifecycle.audit_offload import run_audit_off_loop
+from harness_runtime.lifecycle.audit_offload import (
+    resolve_result_ref_off_loop,
+    run_audit_off_loop,
+)
 from harness_runtime.lifecycle.audit_signing_errors import (
     AUDIT_SIGNING_HARD_FAILURES,
     PostEffectAuditSigningError,
@@ -752,6 +755,13 @@ class RuntimeLLMDispatcher:
     # lower-tier prewarm disposition is held at B-55 (fork gate item 8
     # decided MTC-scoped only; MTC+ON never reaches prewarm per U-RT-135).
     audit_signing_fail_closed: bool = False
+    # B-65-A (Runtime spec v1.103 §14.8.11; RATIFIED B-65 Class 2 fork §3b) —
+    # the protected post-effect result store, threaded from `ctx.
+    # protected_result_store` at stage 5. `None` preserves unit-test
+    # ergonomics (the raise-site helper `resolve_result_ref` degrades to an
+    # `UnresolvableResultRef` naming the missing store, never a second
+    # unrelated error) — production wiring always injects a real instance.
+    protected_result_store: Any = None
 
     async def prewarm(self) -> PrewarmOutcome:
         """Boot-time prompt-cache pre-warm (B-18-KEEPALIVE; ADR-D3 §1.5:189).
@@ -1811,11 +1821,25 @@ class RuntimeLLMDispatcher:
                     tenant_id=step_context.tenant_id,
                 )
             except AUDIT_SIGNING_HARD_FAILURES as exc:
+                # codex [P1] on the B-65-A CP-side arc round 4 — `resolve_
+                # result_ref` is synchronous I/O (pickle+encrypt+fsync, plus
+                # an opportunistic decrypt-sweep of the whole store);
+                # `asyncio.to_thread` would queue it onto the LOOP'S DEFAULT
+                # executor, which `execute_workflow`'s own sync drivers can
+                # exhaust while blocked awaiting a loop coroutine — the same
+                # deadlock class `run_audit_off_loop`'s dedicated pool exists
+                # to avoid (see `audit_offload.py` module docstring).
+                _result_ref = await resolve_result_ref_off_loop(
+                    self.protected_result_store,
+                    step_context.tenant_id,
+                    response,
+                )
                 raise PostEffectAuditSigningError(
                     f"audit signing failed after a completed provider response "
                     f"(provider={provider_name!r}, model={model!r}): {exc}",
                     effect_class=PostEffectClass.PROVIDER_RESPONSE,
                     result=response,
+                    result_ref=_result_ref,
                 ) from exc
 
             # --- Step 5: return step output mapping ---------------------
@@ -3165,6 +3189,7 @@ def materialize_llm_dispatcher_stage(
     prewarm_model: str | None = None,
     prewarm_policy_fail_closed: bool = False,
     audit_signing_fail_closed: bool = False,
+    protected_result_store: Any = None,
 ) -> RuntimeLLMDispatcher:
     """Stage 5 LOOP_INIT composer factory for the LLM dispatcher (U-RT-52).
 
@@ -3259,6 +3284,8 @@ def materialize_llm_dispatcher_stage(
         # U-RT-136 — the resolved OD v1.34 §21.2.3 policy (stage 5 passes
         # `resolve_audit_signing_fail_closed(config)`).
         audit_signing_fail_closed=audit_signing_fail_closed,
+        # B-65-A — `ctx.protected_result_store` (stage 4 OD).
+        protected_result_store=protected_result_store,
     )
 
 

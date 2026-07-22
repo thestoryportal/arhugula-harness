@@ -1991,7 +1991,9 @@ class _MockWebhookComposer:
     def __init__(self) -> None:
         self.delivered: list[tuple[Any, str]] = []
 
-    async def deliver_webhook_for_brief(self, brief: Any, idempotency_key: str) -> Any:
+    async def deliver_webhook_for_brief(
+        self, brief: Any, idempotency_key: str, *, tenant_id: str | None = None
+    ) -> Any:
         from harness_runtime.lifecycle.webhook_delivery_composer import WebhookDeliveryResult
 
         self.delivered.append((brief, idempotency_key))
@@ -3517,7 +3519,9 @@ async def test_hitl_webhook_delivery_counts_as_inflight_effect_at_trip_time(
     token = DispatchCancelToken()
 
     class _TripDuringWebhookDelivery:
-        async def deliver_webhook_for_brief(self, brief: Any, idempotency_key: str) -> Any:
+        async def deliver_webhook_for_brief(
+            self, brief: Any, idempotency_key: str, *, tenant_id: str | None = None
+        ) -> Any:
             token.trip()
             return WebhookDeliveryResult(
                 delivered=True,
@@ -3543,6 +3547,7 @@ async def test_hitl_webhook_delivery_counts_as_inflight_effect_at_trip_time(
                 placement=HITLPlacement(position=HITLPlacementKind.PRE_ACTION),
                 palette=frozenset({HITLResponse.APPROVE}),
                 escalation_reason="test-escalation",
+                tenant_id=None,
             )
     finally:
         DISPATCH_CANCEL_TOKEN_VAR.reset(reset_token)

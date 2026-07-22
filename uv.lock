@@ -988,6 +988,7 @@ version = "0.0.0"
 source = { editable = "harness-runtime" }
 dependencies = [
     { name = "anthropic" },
+    { name = "cryptography" },
     { name = "google-cloud-secret-manager" },
     { name = "harness-as" },
     { name = "harness-core" },
@@ -1019,6 +1020,7 @@ embedding = [
 [package.metadata]
 requires-dist = [
     { name = "anthropic", specifier = ">=0.45" },
+    { name = "cryptography", specifier = ">=44.0" },
     { name = "fastembed", marker = "extra == 'embedding'", specifier = ">=0.4" },
     { name = "google-cloud-secret-manager", specifier = ">=2.0" },
     { name = "harness-as", editable = "harness-as" },

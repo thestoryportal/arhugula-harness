@@ -434,6 +434,9 @@ async def execute(
             # `PostEffectAuditSigningError` carrier instead of proceeding
             # with the signed record omitted (OD v1.34 §21.2.3 rows 1/5/7).
             audit_signing_fail_closed=resolve_audit_signing_fail_closed(config),
+            # B-65-A (Runtime spec v1.103 §14.8.11) — stage-4-constructed
+            # protected result store.
+            protected_result_store=ctx.protected_result_store,
         )
         # B-18-KEEPALIVE — stash the bare dispatcher on ctx so the daemon
         # keep-alive loop (Step 5) can call `bare.prewarm()` directly without
@@ -639,6 +642,9 @@ async def execute(
         audit_signing_fail_closed=resolve_audit_signing_fail_closed(config),
         time_source=lambda: datetime.now(UTC),
         procedural_tier_snapshot_resolver=procedural_tier_snapshot_resolver,
+        # B-65-A (Runtime spec v1.103 §14.8.11) — stage-4-constructed
+        # protected result store.
+        protected_result_store=ctx.protected_result_store,
     )
 
     # U-RT-60 (C-RT-18 §14.8) wrap-asymmetry fork APPLIED — row 2 chain:

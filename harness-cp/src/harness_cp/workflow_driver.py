@@ -1535,6 +1535,38 @@ def _capture_branch_terminal(
         )
 
 
+# B-65 (CP spec v1.103 §25.15 rider; RATIFIED fork
+# `.harness/class_2_fork_b65_post_effect_signing_carrier_cascade_disposition.md` §3/§4
+# option A) — the distinct durable `terminal_status` value for a branch whose dispatch
+# raised the Runtime-owned post-effect audit-signing carrier (`PostEffectAuditSigningError`
+# — the paid effect COMPLETED; only the post-effect audit signing failed). Distinct from
+# `"completed"` (mirroring the v1.74 `"scoped_aborted"` precedent) so every consumer that
+# infers "clean success" / "pause trigger" from `terminal_status == "completed"` does NOT
+# silently misclassify this disposition — it is neither a clean success NOR an ordinary
+# ran-and-errored failure: the branch is TERMINAL (never re-dispatched, under every
+# cascade_policy) AND carries a real, non-None result (`result_ref`), a cell the existing
+# vocabulary (clean-success = non-None output; ran-and-errored/scoped-abort = None output)
+# had no slot for.
+_POST_EFFECT_SIGNING_FAILED_TERMINAL_STATUS = "post_effect_signing_failed"
+
+
+def _post_effect_signing_result_ref_output(exc: BaseException) -> Mapping[str, Any]:
+    """B-65 — JSON-safe, discriminator-preserving encoding of the carrier's
+    `result_ref` (a Runtime `ResultRefValue = str | UnresolvableResultRef` union
+    `harness-cp` cannot import) for BOTH the durable per-branch store (which
+    JSON-serializes `output`, so a raw `UnresolvableResultRef` dataclass would not
+    round-trip) and the in-memory fold. A resolvable ref stays a plain string; an
+    unresolvable declaration becomes a small dict carrying its `reason` — never
+    collapsed into one opaque string (Runtime spec v1.103 §14.8.11: the store's
+    envelope is "never lossy coercion"; CP spec v1.103 §25.15 row 6 requires CP
+    to carry the reference field VERBATIM as an opaque value — the reader, not
+    CP, discriminates the shape)."""
+    result_ref = getattr(exc, "result_ref", None)
+    if isinstance(result_ref, str):
+        return {"result_ref": result_ref}
+    return {"result_ref": {"unresolvable_reason": getattr(result_ref, "reason", "")}}
+
+
 def _mark_branch_dispatched(
     ctx: DriverContext,
     manifest_entry: WorkflowManifestEntry,
@@ -3419,15 +3451,30 @@ def _execute_workflow_body(
                     manifest_entry.persona_tier,
                 ).cascade_policy
                 if _crash_cascade_policy is not CascadePolicy.PROCEED:
-                    _crash_degraded = any(b.output is None for b in _crash_fan_out_resume.branches)
+                    # B-65 — a recovered branch carrying the durable
+                    # `_POST_EFFECT_SIGNING_FAILED_TERMINAL_STATUS` disposition is a genuine
+                    # branch failure (CP spec v1.103 §25.15: terminal-with-result under EVERY
+                    # cascade_policy) even though it carries a non-None `result_ref` output —
+                    # the pre-arc `output is None` predicate alone would miss it (it is neither
+                    # a clean success nor an output-less ran-and-errored/scoped-abort).
+                    _crash_degraded = any(
+                        b.output is None
+                        or b.terminal_status == _POST_EFFECT_SIGNING_FAILED_TERMINAL_STATUS
+                        for b in _crash_fan_out_resume.branches
+                    )
                     # The PAUSE TRIGGER is a genuine branch FAILURE (`terminal_status ==
                     # "completed"` + no output = ran-and-errored), NOT a RECOVER_AS_TERMINAL
                     # `timed_out` branch (a degraded non-contributor — a live timeout is
                     # `deadline_struck`→FAILED, never a pause). Distinct from `_crash_degraded`
                     # (output-None, which a recovered timeout also satisfies) so a timeout-only
                     # degraded recovery is NOT a lost-pause trigger (out-of-family Codex [P2]).
+                    # B-65 — a recovered post-effect-signing-failed branch is ALSO a genuine
+                    # pause trigger (its distinct terminal_status, checked directly — it never
+                    # matches `terminal_status == "completed"` so the base clause alone would
+                    # silently exclude it, mirroring how `timed_out` is deliberately excluded).
                     _crash_pause_trigger = any(
-                        b.terminal_status == "completed" and b.output is None
+                        (b.terminal_status == "completed" and b.output is None)
+                        or b.terminal_status == _POST_EFFECT_SIGNING_FAILED_TERMINAL_STATUS
                         for b in _crash_fan_out_resume.branches
                     )
                     _crash_expected = getattr(_crash_fan_out_resume, "worker_count", None)
@@ -3439,13 +3486,34 @@ def _execute_workflow_body(
                         # obligation 6). Store-only audit (NOT ledger re-materialization — the
                         # deliberate choice): the §25.12 disposition keystone IS the durable
                         # crash-recovery audit substrate, and a FAILED run attests no aggregate.
+                        # B-65 (codex [P1] on this arc) — EXCEPT for a recovered carrier branch:
+                        # the LIVE cascade-cancel path (§25.15 row 6) carries its `result_ref`
+                        # into the FAILED report, so this crash-recovered mirror must too — else
+                        # a crash landing between the durable capture and the live return loses
+                        # the ref the live path would have preserved (an inconsistency, not a
+                        # "FAILED attests no aggregate" case — that precedent is for a PLAIN
+                        # ran-and-errored branch, which still gets `partial_state=None` here).
+                        _crash_post_effect_signing_failures = {
+                            str(b.step_id): b.output
+                            for b in _crash_fan_out_resume.branches
+                            if b.terminal_status == _POST_EFFECT_SIGNING_FAILED_TERMINAL_STATUS
+                            and b.output is not None
+                        }
                         return (
                             RunResult(
                                 workflow_id=manifest_entry.workflow_id,
                                 run_id=run_id,
                                 status=RunStatus.FAILED,
                                 terminal_step_index=None,
-                                partial_state=None,
+                                partial_state=(
+                                    {
+                                        "post_effect_signing_failures": (
+                                            _crash_post_effect_signing_failures
+                                        )
+                                    }
+                                    if _crash_post_effect_signing_failures
+                                    else None
+                                ),
                                 final_state=None,
                                 fail_class=(
                                     "fan-out-crash-resume-cascade-cancel: a branch failed before "
@@ -7609,6 +7677,13 @@ def _execute_parallelization(
     # aggregate source. The cascade-cancel not-yet-dispatched scan reads the writers
     # directly via `_writer_has_branch_disposition`.
     collected: dict[int, tuple[str, Mapping[str, Any]]] = {}
+    # B-65 (CP spec v1.103 §25.15) — branch_index -> the encoded `result_ref` output for
+    # a branch whose dispatch raised the post-effect audit-signing carrier. DISJOINT from
+    # `collected`: this NEVER feeds `_aggregate_parallelization`'s voting fold (a
+    # `result_ref` sentinel would corrupt the vote for genuinely-successful siblings) —
+    # it is merged into the reported aggregate's `partial_state`/`final_state` separately,
+    # by `_finish`, so the ref is still carried into the PARTIAL/FAILED report per spec.
+    post_effect_signing_failures: dict[int, Mapping[str, Any]] = {}
     # B-FANOUT-PAUSE-PARALLELIZATION — branch_index -> terminal disposition
     # ("completed" / "timed_out") for every branch that reached a terminal boundary.
     # Written from the same loop-thread sites as `collected` (single-threaded → safe);
@@ -7648,7 +7723,17 @@ def _execute_parallelization(
     # re-derived from the re-supplied `steps` (it was not carried in the snapshot).
     for _bi, _branch in _recovered_terminal.items():
         terminal_dispositions[_bi] = _branch.terminal_status
-        if _branch.output is not None:
+        # B-65 — a recovered post-effect-signing-failed branch carries a non-None
+        # `output` (its `result_ref`), but it must NEVER enter `collected` — that dict
+        # feeds `_aggregate_parallelization`'s voting fold, and a `result_ref` sentinel
+        # would corrupt the vote tally for the OTHER, genuinely-successful branches
+        # (advisor-caught). Route it to the separate, non-voting
+        # `post_effect_signing_failures` channel instead; every other disposition
+        # (clean success, or `output is None`) is unaffected.
+        if _branch.terminal_status == _POST_EFFECT_SIGNING_FAILED_TERMINAL_STATUS:
+            if _branch.output is not None:
+                post_effect_signing_failures[_bi] = _branch.output
+        elif _branch.output is not None:
             collected[_bi] = (str(steps[_bi].step_id), _branch.output)
         # B-FANOUT-EFFECT-FENCE-SCOPED-ABORT-CRASH-DURABLE (R-FS-1, CP spec v1.74 §1) — a
         # crash-recovered branch the operator scoped-aborted (the durable `scoped_aborted`
@@ -7663,7 +7748,13 @@ def _execute_parallelization(
     # B-FANOUT-OUTPUT-REPLAY — a crash-recovered branch with NO output (ran-and-errored,
     # effect landed) means the ORIGINAL run was DEGRADED; the resumed run must stay PARTIAL
     # rather than upgrade to SUCCESS by omitting the failure (out-of-family Codex [P2]).
-    _recovered_degraded = any(b.output is None for b in _recovered_terminal.values())
+    # B-65 — a recovered post-effect-signing-failed branch is ALSO degraded (its non-None
+    # `result_ref` output does not mean success — the base `output is None` clause alone
+    # would miss it, since this disposition carries a real output by design).
+    _recovered_degraded = any(
+        b.output is None or b.terminal_status == _POST_EFFECT_SIGNING_FAILED_TERMINAL_STATUS
+        for b in _recovered_terminal.values()
+    )
     # B-FANOUT-OUTPUT-REPLAY — record the capture-time fan-out CARDINALITY once on a fresh
     # run (before any branch dispatches), so a changed-cardinality crash-resume (a manifest
     # redefined with fewer branches) fails closed instead of silently dropping the original
@@ -7891,6 +7982,22 @@ def _execute_parallelization(
                 else {"branch_outputs": {}, "aggregate": {}}
             )
         )
+        # B-65 (CP spec v1.103 §25.15 row 6: "the fold carries it unchanged") — merge the
+        # non-voting post-effect-signing-failure refs into the reported aggregate, keyed by
+        # step_id (never merged into `collected` earlier — see that dict's declaration
+        # comment). Absent when empty (the pre-B-65 aggregate shape byte-identical).
+        # `status` can never be SUCCESS here when this is non-empty: a fresh-round failure
+        # always re-raises into `any_failed`/the strict-tier cascade, and a recovered one
+        # forces `_recovered_degraded` above — so this always lands on a PARTIAL/FAILED
+        # report, never silently attached to a SUCCESS.
+        if post_effect_signing_failures:
+            aggregate = {
+                **aggregate,
+                "post_effect_signing_failures": {
+                    str(steps[_bi].step_id): _ref
+                    for _bi, _ref in sorted(post_effect_signing_failures.items())
+                },
+            }
         result = RunResult(
             workflow_id=workflow_id,
             run_id=run_id,
@@ -8029,7 +8136,8 @@ def _execute_parallelization(
     # `branch_metadata=None`). LEDGER-only for a never-dispatched branch — NEVER
     # `_mark_branch_dispatched` / `_capture_branch_terminal`: dispatch-marker ABSENCE is
     # the durable provably-never-ran witness (CP spec v1.90 §25.17 item 4), and a store
-    # terminal outside {completed, timed_out, scoped_aborted} is corrupt to crash-resume.
+    # terminal outside {completed, timed_out, scoped_aborted, post_effect_signing_failed}
+    # is corrupt to crash-resume (`EngineOutputStore._read_last_branch_disposition`).
     # Synthesized entries are PER-ATTEMPT AUDIT records, not resume authority (resume
     # keys on snapshot omission; a stale-snapshot double-resume leaves the first
     # attempt's `cancelled` standing via branch-terminal idempotency — the recorded
@@ -8337,7 +8445,50 @@ def _execute_parallelization(
                 # `cancelled` terminal from the marker-absence, exactly like
                 # the CASCADE_CANCEL/PAUSE tiers' identical rejection path.
                 raise
-            except Exception:
+            except Exception as _branch_exc:
+                # B-65 (CP spec v1.103 §25.15; RATIFIED fork option A) — this branch's
+                # dispatch raised the Runtime-owned post-effect audit-signing carrier
+                # (the paid effect COMPLETED; only the post-effect audit signing
+                # failed). Name-matched (harness-cp cannot import the runtime type,
+                # the established `StepDispatchTimeoutError` precedent). TERMINAL-
+                # with-result under EVERY cascade_policy: record the step entry (obl.
+                # 3) + a distinct durable terminal (NEVER "completed" — that value
+                # reads as clean success on resume) carrying the carrier's
+                # `result_ref`, and route the ref to the non-voting
+                # `post_effect_signing_failures` channel (never `collected` — a
+                # `result_ref` sentinel would corrupt `_aggregate_parallelization`'s
+                # vote for the surviving branches). Re-raise so the gather still
+                # marks this branch failed (→ PARTIAL survivor set), exactly like the
+                # generic ran-and-errored arm below.
+                if type(_branch_exc).__name__ == "PostEffectAuditSigningError":
+                    _ref_output = _post_effect_signing_result_ref_output(_branch_exc)
+                    append_branch_step_ledger_entry(
+                        branch_writer=writer,
+                        branch_context=child,
+                        run_idempotency_key=run_idempotency_key,
+                        local_step_index=0,
+                        timestamp=fanout_timestamp,
+                        procedural_tier_snapshot_ref=snapshot_ref,
+                    )
+                    _capture_branch_terminal(
+                        ctx,
+                        manifest_entry,
+                        run_idempotency_key=run_idempotency_key,
+                        branch_index=branch_index,
+                        step_id=step.step_id,
+                        terminal_status=_POST_EFFECT_SIGNING_FAILED_TERMINAL_STATUS,
+                        output=_ref_output,
+                    )
+                    append_branch_terminal_ledger_entry(
+                        branch_writer=writer,
+                        branch_context=child,
+                        run_idempotency_key=run_idempotency_key,
+                        terminal_status="completed",
+                        timestamp=fanout_timestamp,
+                        procedural_tier_snapshot_ref=snapshot_ref,
+                    )
+                    post_effect_signing_failures[branch_index] = _ref_output
+                    raise
                 # Ran-and-errored → record the step entry (obl. 3) + a `completed`
                 # terminal (dispatch-boundary, not step-outcome; the failure lives
                 # at the step entry). Contributes nothing to the aggregate;
@@ -8773,6 +8924,28 @@ def _execute_parallelization(
                         output=inflight.result(),
                     )
                     collected[branch_index] = (str(step.step_id), inflight.result())
+                elif terminal == "completed" and (
+                    type(inflight.exception()).__name__ == "PostEffectAuditSigningError"
+                ):
+                    # B-65 (CP spec v1.103 §25.15) — this branch's OWN in-flight dispatch (shielded
+                    # to completion while a SIBLING's cascade cancelled it) raised the post-effect
+                    # audit-signing carrier — the same disposition the own-dispatch catch below
+                    # handles, reached via this narrower in-flight-during-cancellation race. Same
+                    # treatment: distinct durable terminal carrying `result_ref`, routed to the
+                    # non-voting channel (never `collected`).
+                    _ref_output = _post_effect_signing_result_ref_output(
+                        cast(BaseException, inflight.exception())
+                    )
+                    _capture_branch_terminal(
+                        ctx,
+                        manifest_entry,
+                        run_idempotency_key=run_idempotency_key,
+                        branch_index=branch_index,
+                        step_id=step.step_id,
+                        terminal_status=_POST_EFFECT_SIGNING_FAILED_TERMINAL_STATUS,
+                        output=_ref_output,
+                    )
+                    post_effect_signing_failures[branch_index] = _ref_output
                 else:
                     # A timed-out (deadline-cut, ambiguous) OR ran-and-errored (effect LANDED, no
                     # output) in-flight sibling — capture the DISPOSITION with no output so
@@ -8831,6 +9004,55 @@ def _execute_parallelization(
                     effect_fence_paused_dispositions[branch_index] = (
                         _fence_key if isinstance(_fence_key, str) else ""
                     )
+                    raise
+                if type(_exc).__name__ == "PostEffectAuditSigningError":
+                    # B-65 (CP spec v1.103 §25.15; RATIFIED fork option A) — this
+                    # branch's dispatch raised the Runtime-owned post-effect
+                    # audit-signing carrier (the paid effect COMPLETED; only the
+                    # post-effect audit signing failed). TERMINAL-with-result under
+                    # EVERY cascade_policy, including `pause`: unlike the
+                    # effect-fence pause dispositions above, this branch MUST NOT
+                    # become resumable — `pause` MUST NOT mint a re-dispatch path
+                    # that re-fires the already-completed effect (the at-most-once
+                    # violation the carrier exists to prevent). So this records a
+                    # step + terminal entry (mirroring the generic own-dispatch-
+                    # errored arm below) and sets `terminal_dispositions[branch_
+                    # index] = "completed"` — the SAME driver-local terminal marker
+                    # scoped_abort uses — so a `pause` snapshot NEVER re-dispatches
+                    # it, while the durable store gets the DISTINCT
+                    # `_POST_EFFECT_SIGNING_FAILED_TERMINAL_STATUS` value (never
+                    # "completed" — that value reads as clean success on resume).
+                    # The carrier's `result_ref` is routed to the non-voting
+                    # `post_effect_signing_failures` channel (never `collected` —
+                    # see the PROCEED-tier twin catch's comment for why).
+                    _ref_output = _post_effect_signing_result_ref_output(_exc)
+                    _capture_branch_terminal(
+                        ctx,
+                        manifest_entry,
+                        run_idempotency_key=run_idempotency_key,
+                        branch_index=branch_index,
+                        step_id=step.step_id,
+                        terminal_status=_POST_EFFECT_SIGNING_FAILED_TERMINAL_STATUS,
+                        output=_ref_output,
+                    )
+                    append_branch_step_ledger_entry(
+                        branch_writer=writer,
+                        branch_context=child,
+                        run_idempotency_key=run_idempotency_key,
+                        local_step_index=0,
+                        timestamp=fanout_timestamp,
+                        procedural_tier_snapshot_ref=snapshot_ref,
+                    )
+                    append_branch_terminal_ledger_entry(
+                        branch_writer=writer,
+                        branch_context=child,
+                        run_idempotency_key=run_idempotency_key,
+                        terminal_status="completed",
+                        timestamp=fanout_timestamp,
+                        procedural_tier_snapshot_ref=snapshot_ref,
+                    )
+                    post_effect_signing_failures[branch_index] = _ref_output
+                    terminal_dispositions[branch_index] = "completed"
                     raise
                 # THIS branch's own dispatch ERRORED — the failure that triggers the
                 # cascade. The effect ran-and-errored → record the step entry (obl. 3)
@@ -9111,10 +9333,16 @@ def _execute_parallelization(
                 salvage=False,
             )
         if branch_failed or deadline_struck:
+            # B-65 (CP spec v1.103 §25.15 row 6) — a plain cascade-cancel FAILED
+            # attests no aggregate (`salvage=False`, the pre-existing precedent),
+            # but the fork's rider explicitly names cascade-cancel among the
+            # policies whose fold carries the carrier's `result_ref` — so salvage
+            # ONLY when a post-effect-signing-failure actually occurred this round
+            # (byte-identical `False` otherwise).
             return _finish(
                 RunStatus.FAILED,
                 fail_class="parallelization-cascade-cancel",
-                salvage=False,
+                salvage=bool(post_effect_signing_failures),
             )
         return _finish(RunStatus.SUCCESS, fail_class=None, salvage=False)
 
@@ -9159,7 +9387,15 @@ def _execute_parallelization(
         and cascade_policy is CascadePolicy.PAUSE
         and not branch_plan
         and any(
-            terminal_dispositions[_bi] == "completed" and _bi not in collected
+            (terminal_dispositions[_bi] == "completed" and _bi not in collected)
+            # B-65 (codex [P2] round 5 on this arc) — a recovered
+            # post_effect_signing_failed branch is ALSO a genuine
+            # re-establish trigger: it carries a non-None result_ref (never
+            # folded into `collected`, per its own dedicated channel), so
+            # the base clause alone would silently exclude it and this
+            # complete-recovery crash-resume would finalize PARTIAL instead
+            # of reconstructing the interrupted PAUSED state.
+            or terminal_dispositions[_bi] == _POST_EFFECT_SIGNING_FAILED_TERMINAL_STATUS
             for _bi in terminal_dispositions
         )
     )
@@ -9189,7 +9425,21 @@ def _execute_parallelization(
         # is captured per branch so resume validates body identity.
         peer_fan_out_resume = PeerFanOutResumeState(
             branches=tuple(
+                # B-65 (codex [P1] on this arc) — a carrier branch's snapshot entry MUST
+                # carry the DISTINCT durable terminal_status + its `result_ref` output
+                # (never the driver-local "completed"/`collected`-sourced None the
+                # generic branch below uses) — else `api.resume`'s seed loop reads it
+                # as an ordinary ran-and-errored branch and DROPS the ref from the
+                # resumed run's report (the live-pause analogue of the P1-3 durable-
+                # store fix; the two must move together).
                 FanOutBranchResumeState(
+                    branch_index=_bi,
+                    step_id=str(steps[_bi].step_id),
+                    terminal_status=_POST_EFFECT_SIGNING_FAILED_TERMINAL_STATUS,
+                    output=post_effect_signing_failures[_bi],
+                )
+                if _bi in post_effect_signing_failures
+                else FanOutBranchResumeState(
                     branch_index=_bi,
                     step_id=str(steps[_bi].step_id),
                     terminal_status=_status,
@@ -9935,6 +10185,40 @@ def _execute_evaluator_optimizer(
         # `cascade-cancel` retain EO's existing terminal-FAILED behavior. In all cases the
         # buffered completed-step entries STILL drain (no silent loss).
         exc = _dispatch_failure.original
+        if type(exc).__name__ == "PostEffectAuditSigningError":
+            # B-65 (CP spec v1.103 §25.15; RATIFIED fork option A) — this generate/
+            # evaluate step's dispatch raised the Runtime-owned post-effect
+            # audit-signing carrier (the paid effect COMPLETED; only the post-effect
+            # audit signing failed). Name-matched (harness-cp cannot import the
+            # runtime type). TERMINAL-with-result under EVERY cascade_policy,
+            # including `pause`: unlike the ordinary dispatch-failure path below,
+            # this NEVER mints a resumable PAUSED (a resume would re-dispatch this
+            # same step, RE-FIRING the already-completed effect — the at-most-once
+            # violation the carrier exists to prevent). Drain the completed-step
+            # prefix (no silent loss) and report FAILED, carrying the carrier's
+            # `result_ref` in `partial_state` (CP spec v1.103 §25.15 row 6: "the
+            # fold carries it unchanged") — unlike EO's ordinary FAILED path, which
+            # attests no aggregate at all.
+            drain_branch_buffers(ctx.ledger_writer, [writer])
+            return RunResult(
+                workflow_id=workflow_id,
+                run_id=run_id,
+                status=RunStatus.FAILED,
+                terminal_step_index=None,
+                partial_state={
+                    "post_effect_signing_failures": {
+                        str(evaluate_step.step_id if entry_index % 2 else generate_step.step_id): (
+                            _post_effect_signing_result_ref_output(exc)
+                        )
+                    }
+                },
+                final_state=None,
+                fail_class=(
+                    "evaluator-optimizer-post-effect-signing-failed: the completed effect's "
+                    "audit signing failed; the effect itself landed and is NOT re-dispatched "
+                    f"— underlying: {type(exc).__name__}: {exc}"
+                ),
+            ), entry_index - _resume_completed_count
         if cascade_policy is CascadePolicy.PAUSE:
             # B-FANOUT-PAUSE-EVALUATOR-OPTIMIZER (R-FS-1) — materialize the §25.15.1
             # `pause → PAUSED` row EXTENDED to the sequential EO loop. The completed-step
@@ -11123,6 +11407,31 @@ def _execute_orchestrator_workers(
     # returns; read on the driver thread AFTER the barrier (single-threaded) for
     # the deterministic fold.
     collected: dict[int, tuple[str, Mapping[str, Any]]] = {}
+    # B-65 (CP spec v1.103 §25.15) — branch_index -> the encoded `result_ref` output for
+    # a worker whose dispatch raised the post-effect audit-signing carrier. DISJOINT from
+    # `collected` (the ORCHESTRATOR_WORKERS analogue of the PARALLELIZATION channel — see
+    # that function's declaration comment for why it never enters the voting fold).
+    post_effect_signing_failures: dict[int, Mapping[str, Any]] = {}
+
+    def _fold_post_effect_signing_failures(aggregate: dict[str, Any]) -> dict[str, Any]:
+        """B-65 (CP spec v1.103 §25.15 row 6) — merge the non-voting post-effect-
+        signing-failure refs into a reported aggregate, keyed by step_id. `_finish`
+        AND every direct (non-`_finish`) `_aggregate_orchestrator_workers(...)`
+        call site in the `not branch_plan` complete-recovery block route through
+        this ONE function (codex [P1] on this arc: the direct sites were missed
+        when `_finish`'s own merge was added — a single call site can't be
+        edited-but-forgotten-elsewhere again). No-op (byte-identical `aggregate`)
+        when empty."""
+        if not post_effect_signing_failures:
+            return aggregate
+        return {
+            **aggregate,
+            "post_effect_signing_failures": {
+                str(worker_steps[_bi].step_id): _ref
+                for _bi, _ref in sorted(post_effect_signing_failures.items())
+            },
+        }
+
     # B-FANOUT-PAUSE — branch_index -> terminal disposition ("completed" / "timed_out")
     # for every branch that reached a terminal boundary. Written from the same
     # post-await loop-thread sites as `collected` (single-threaded → safe). Read
@@ -11161,7 +11470,13 @@ def _execute_orchestrator_workers(
     # snapshot — the workflow object carries the steps).
     for _bi, _branch in _recovered_terminal.items():
         terminal_dispositions[_bi] = _branch.terminal_status
-        if _branch.output is not None:
+        # B-65 — route a recovered post-effect-signing-failed worker's non-None
+        # `result_ref` output to the non-voting channel, never `collected` (mirrors
+        # the PARALLELIZATION seed loop's identical fix — see its comment for why).
+        if _branch.terminal_status == _POST_EFFECT_SIGNING_FAILED_TERMINAL_STATUS:
+            if _branch.output is not None:
+                post_effect_signing_failures[_bi] = _branch.output
+        elif _branch.output is not None:
             collected[_bi] = (str(worker_steps[_bi].step_id), _branch.output)
         # B-FANOUT-EFFECT-FENCE-SCOPED-ABORT-CRASH-DURABLE (R-FS-1, CP spec v1.74 §1) — a
         # crash-recovered worker the operator scoped-aborted (the durable `scoped_aborted`
@@ -11172,7 +11487,12 @@ def _execute_orchestrator_workers(
             _scoped_abort_ordinals.add(_bi)
     # B-FANOUT-OUTPUT-REPLAY — a crash-recovered worker with NO output (ran-and-errored)
     # keeps the run DEGRADED (never SUCCESS while omitting the failure — Codex [P2]).
-    _recovered_degraded = any(b.output is None for b in _recovered_terminal.values())
+    # B-65 — a recovered post-effect-signing-failed worker is ALSO degraded (see the
+    # PARALLELIZATION seed loop's identical fix comment).
+    _recovered_degraded = any(
+        b.output is None or b.terminal_status == _POST_EFFECT_SIGNING_FAILED_TERMINAL_STATUS
+        for b in _recovered_terminal.values()
+    )
     # B-FANOUT-OUTPUT-REPLAY — record the capture-time fan-out CARDINALITY once on a fresh
     # run so a changed-cardinality crash-resume fails closed (Codex [P2]). `steps` here is
     # the [orchestrator, workers] set the resume's `_determine_fanout_resume` also sees.
@@ -11554,7 +11874,13 @@ def _execute_orchestrator_workers(
         # RECOVER_AS_TERMINAL `timed_out` worker (which finalizes PARTIAL via `_degraded` below;
         # out-of-family Codex [P2]).
         _crash_pause_trigger = any(
-            terminal_dispositions[_bi] == "completed" and _bi not in collected
+            (terminal_dispositions[_bi] == "completed" and _bi not in collected)
+            # B-65 (codex [P2] round 5 on this arc) — see the PARALLELIZATION
+            # sibling's identical fix: a recovered post_effect_signing_failed
+            # worker carries a non-None result_ref never folded into
+            # `collected`, so the base clause alone would silently exclude
+            # it here too.
+            or terminal_dispositions[_bi] == _POST_EFFECT_SIGNING_FAILED_TERMINAL_STATUS
             for _bi in terminal_dispositions
         )
         if (
@@ -11586,7 +11912,9 @@ def _execute_orchestrator_workers(
                     run_id=run_id,
                     status=RunStatus.FAILED,
                     terminal_step_index=None,
-                    partial_state=_aggregate_orchestrator_workers(orchestrator_output, collected),
+                    partial_state=_fold_post_effect_signing_failures(
+                        _aggregate_orchestrator_workers(orchestrator_output, collected)
+                    ),
                     final_state=None,
                     fail_class="orchestrator-workers-pause-resume-protocol-not-bound",
                 ), _reestablish_steps
@@ -11594,7 +11922,20 @@ def _execute_orchestrator_workers(
                 orchestrator_output=dict(orchestrator_output),
                 orchestrator_step_id=str(orchestrator_step.step_id),
                 branches=tuple(
+                    # B-65 (codex [P1] on this arc) — see the live-pause snapshot site's
+                    # comment: a carrier worker's RE-ESTABLISHED snapshot entry MUST ALSO
+                    # carry the distinct durable terminal_status + its `result_ref`
+                    # output (a complete-recovery crash-resume can re-establish a PAUSED
+                    # state whose degraded worker is the carrier, not just an ordinary
+                    # ran-and-errored one).
                     FanOutBranchResumeState(
+                        branch_index=_bi,
+                        step_id=str(worker_steps[_bi].step_id),
+                        terminal_status=_POST_EFFECT_SIGNING_FAILED_TERMINAL_STATUS,
+                        output=post_effect_signing_failures[_bi],
+                    )
+                    if _bi in post_effect_signing_failures
+                    else FanOutBranchResumeState(
                         branch_index=_bi,
                         step_id=str(worker_steps[_bi].step_id),
                         terminal_status=_status,
@@ -11630,7 +11971,9 @@ def _execute_orchestrator_workers(
                 run_id=run_id,
                 status=RunStatus.PAUSED,
                 terminal_step_index=None,
-                partial_state=_aggregate_orchestrator_workers(orchestrator_output, collected),
+                partial_state=_fold_post_effect_signing_failures(
+                    _aggregate_orchestrator_workers(orchestrator_output, collected)
+                ),
                 final_state=None,
                 fail_class=None,
                 pause_snapshot=_reestablish_snapshot,
@@ -11649,7 +11992,9 @@ def _execute_orchestrator_workers(
                 run_id=run_id,
                 status=RunStatus.FAILED,
                 terminal_step_index=None,
-                partial_state=_aggregate_orchestrator_workers(orchestrator_output, collected),
+                partial_state=_fold_post_effect_signing_failures(
+                    _aggregate_orchestrator_workers(orchestrator_output, collected)
+                ),
                 final_state=None,
                 fail_class="orchestrator-workers-effect-fence-branch-aborted",
             ), (1 if orchestrator_writer is not None else 0) + _rematerialized_steps
@@ -11678,7 +12023,9 @@ def _execute_orchestrator_workers(
         _aggregate = (
             _synth
             if _synth is not None
-            else _aggregate_orchestrator_workers(orchestrator_output, collected)
+            else _fold_post_effect_signing_failures(
+                _aggregate_orchestrator_workers(orchestrator_output, collected)
+            )
         )
         result = RunResult(
             workflow_id=workflow_id,
@@ -11748,7 +12095,9 @@ def _execute_orchestrator_workers(
         aggregate = (
             _synth
             if _synth is not None
-            else _aggregate_orchestrator_workers(orchestrator_output, collected)
+            else _fold_post_effect_signing_failures(
+                _aggregate_orchestrator_workers(orchestrator_output, collected)
+            )
         )
         result = RunResult(
             workflow_id=workflow_id,
@@ -12029,7 +12378,47 @@ def _execute_orchestrator_workers(
                 # `_proceed_fanout` exit) synthesizes its `cancelled`
                 # terminal from the marker-absence.
                 raise
-            except Exception:
+            except Exception as _branch_exc:
+                # B-65 (CP spec v1.103 §25.15; RATIFIED fork option A) — this worker's
+                # dispatch raised the Runtime-owned post-effect audit-signing carrier
+                # (the paid effect COMPLETED; only the post-effect audit signing
+                # failed). Name-matched (harness-cp cannot import the runtime type).
+                # TERMINAL-with-result under EVERY cascade_policy: record the step
+                # entry (obl. 3) + a distinct durable terminal carrying the carrier's
+                # `result_ref` (never "completed" — that value reads as clean success
+                # on resume), routed to the non-voting `post_effect_signing_failures`
+                # channel (never `collected` — the PARALLELIZATION `_proceed_branch`
+                # twin catch's comment explains why). Re-raise so the gather still
+                # marks this worker failed (→ PARTIAL survivor set).
+                if type(_branch_exc).__name__ == "PostEffectAuditSigningError":
+                    _ref_output = _post_effect_signing_result_ref_output(_branch_exc)
+                    append_branch_step_ledger_entry(
+                        branch_writer=writer,
+                        branch_context=child,
+                        run_idempotency_key=run_idempotency_key,
+                        local_step_index=0,
+                        timestamp=fanout_timestamp,
+                        procedural_tier_snapshot_ref=snapshot_ref,
+                    )
+                    _capture_branch_terminal(
+                        ctx,
+                        manifest_entry,
+                        run_idempotency_key=run_idempotency_key,
+                        branch_index=branch_index,
+                        step_id=step.step_id,
+                        terminal_status=_POST_EFFECT_SIGNING_FAILED_TERMINAL_STATUS,
+                        output=_ref_output,
+                    )
+                    append_branch_terminal_ledger_entry(
+                        branch_writer=writer,
+                        branch_context=child,
+                        run_idempotency_key=run_idempotency_key,
+                        terminal_status="completed",
+                        timestamp=fanout_timestamp,
+                        procedural_tier_snapshot_ref=snapshot_ref,
+                    )
+                    post_effect_signing_failures[branch_index] = _ref_output
+                    raise
                 # Ran-and-errored → record the step entry (obl. 3) + a `completed`
                 # terminal (dispatch-boundary, not step-outcome; the failure lives
                 # at the step entry). Contributes nothing to the aggregate; re-raise
@@ -12424,6 +12813,28 @@ def _execute_orchestrator_workers(
                         output=inflight.result(),
                     )
                     collected[branch_index] = (str(step.step_id), inflight.result())
+                elif terminal == "completed" and (
+                    type(inflight.exception()).__name__ == "PostEffectAuditSigningError"
+                ):
+                    # B-65 (CP spec v1.103 §25.15) — this branch's OWN in-flight dispatch (shielded
+                    # to completion while a SIBLING's cascade cancelled it) raised the post-effect
+                    # audit-signing carrier — the same disposition the own-dispatch catch below
+                    # handles, reached via this narrower in-flight-during-cancellation race. Same
+                    # treatment: distinct durable terminal carrying `result_ref`, routed to the
+                    # non-voting channel (never `collected`).
+                    _ref_output = _post_effect_signing_result_ref_output(
+                        cast(BaseException, inflight.exception())
+                    )
+                    _capture_branch_terminal(
+                        ctx,
+                        manifest_entry,
+                        run_idempotency_key=run_idempotency_key,
+                        branch_index=branch_index,
+                        step_id=step.step_id,
+                        terminal_status=_POST_EFFECT_SIGNING_FAILED_TERMINAL_STATUS,
+                        output=_ref_output,
+                    )
+                    post_effect_signing_failures[branch_index] = _ref_output
                 else:
                     # A timed-out (deadline-cut, ambiguous) OR ran-and-errored (effect LANDED, no
                     # output) in-flight sibling — capture the DISPOSITION with no output so
@@ -12477,6 +12888,49 @@ def _execute_orchestrator_workers(
                     effect_fence_paused_dispositions[branch_index] = (
                         _fence_key if isinstance(_fence_key, str) else ""
                     )
+                    raise
+                if type(_exc).__name__ == "PostEffectAuditSigningError":
+                    # B-65 (CP spec v1.103 §25.15; RATIFIED fork option A) — this
+                    # worker's dispatch raised the Runtime-owned post-effect
+                    # audit-signing carrier (the paid effect COMPLETED; only the
+                    # post-effect audit signing failed). TERMINAL-with-result
+                    # under EVERY cascade_policy, including `pause`: unlike the
+                    # effect-fence pause dispositions above, this worker MUST NOT
+                    # become resumable — see the PARALLELIZATION `_cancel_branch`
+                    # twin catch's comment for the full at-most-once rationale.
+                    # `terminal_dispositions[branch_index] = "completed"` (the
+                    # SAME driver-local terminal marker every other terminal
+                    # disposition here uses) keeps a `pause` snapshot from ever
+                    # re-dispatching it; the durable store gets the DISTINCT
+                    # `_POST_EFFECT_SIGNING_FAILED_TERMINAL_STATUS` value instead.
+                    _ref_output = _post_effect_signing_result_ref_output(_exc)
+                    _capture_branch_terminal(
+                        ctx,
+                        manifest_entry,
+                        run_idempotency_key=run_idempotency_key,
+                        branch_index=branch_index,
+                        step_id=step.step_id,
+                        terminal_status=_POST_EFFECT_SIGNING_FAILED_TERMINAL_STATUS,
+                        output=_ref_output,
+                    )
+                    append_branch_step_ledger_entry(
+                        branch_writer=writer,
+                        branch_context=child,
+                        run_idempotency_key=run_idempotency_key,
+                        local_step_index=0,
+                        timestamp=fanout_timestamp,
+                        procedural_tier_snapshot_ref=snapshot_ref,
+                    )
+                    append_branch_terminal_ledger_entry(
+                        branch_writer=writer,
+                        branch_context=child,
+                        run_idempotency_key=run_idempotency_key,
+                        terminal_status="completed",
+                        timestamp=fanout_timestamp,
+                        procedural_tier_snapshot_ref=snapshot_ref,
+                    )
+                    post_effect_signing_failures[branch_index] = _ref_output
+                    terminal_dispositions[branch_index] = "completed"
                     raise
                 # THIS worker's own dispatch ERRORED — the failure that triggers the
                 # cascade. The effect ran-and-errored → record the step entry (obl. 3 —
@@ -12751,10 +13205,13 @@ def _execute_orchestrator_workers(
                 salvage=False,
             )
         if worker_failed or deadline_struck:
+            # B-65 (CP spec v1.103 §25.15 row 6) — salvage ONLY when a post-effect-
+            # signing-failure actually occurred this round (byte-identical `False`
+            # otherwise) — see the PARALLELIZATION twin site's comment.
             return _finish(
                 RunStatus.FAILED,
                 fail_class="orchestrator-workers-cascade-cancel",
-                salvage=False,
+                salvage=bool(post_effect_signing_failures),
             )
         return _finish(RunStatus.SUCCESS, fail_class=None, salvage=False)
 
@@ -12830,7 +13287,18 @@ def _execute_orchestrator_workers(
             orchestrator_output=dict(orchestrator_output),
             orchestrator_step_id=str(orchestrator_step.step_id),
             branches=tuple(
+                # B-65 (codex [P1] on this arc) — see the PARALLELIZATION twin site's
+                # comment: a carrier worker's snapshot entry MUST carry the distinct
+                # durable terminal_status + its `result_ref` output, never the
+                # driver-local "completed"/`collected`-sourced None.
                 FanOutBranchResumeState(
+                    branch_index=_bi,
+                    step_id=str(worker_steps[_bi].step_id),
+                    terminal_status=_POST_EFFECT_SIGNING_FAILED_TERMINAL_STATUS,
+                    output=post_effect_signing_failures[_bi],
+                )
+                if _bi in post_effect_signing_failures
+                else FanOutBranchResumeState(
                     branch_index=_bi,
                     step_id=str(worker_steps[_bi].step_id),
                     terminal_status=_status,
@@ -13342,6 +13810,12 @@ def _execute_decentralized_handoff(
 
     stage_writers: list[BufferingLedgerWriter] = []
     stage_outputs: dict[str, Mapping[str, Any]] = {}
+    # B-65 (CP spec v1.103 §25.15) — stage step_id -> the encoded `result_ref` output for
+    # a stage whose dispatch raised the post-effect audit-signing carrier. Kept as its
+    # OWN `aggregate` key (never merged into `stage_outputs`, which a genuinely successful
+    # stage's output also populates) so the report reader can discriminate it, mirroring
+    # the fan-out topologies' `post_effect_signing_failures` channel.
+    post_effect_signing_failures: dict[str, Mapping[str, Any]] = {}
     handoffs: list[HandoffContext] = []
     # B-HANDOFF-PAUSE — the completed-stage records (recovered prefix + this-run
     # completions), captured into a `HandoffResumeState` cursor on a `pause` halt. A
@@ -13364,10 +13838,15 @@ def _execute_decentralized_handoff(
         # recovered prefix added NO writers (its ledger entries persisted in the
         # original run), so steps_executed counts only the newly-dispatched stages.
         steps_executed = _drain_and_emit_step_boundaries(ctx, stage_writers)
-        aggregate = {
+        aggregate: dict[str, Any] = {
             "stages": {sid: dict(out) for sid, out in stage_outputs.items()},
             "handoffs": [_handoff_record(h) for h in handoffs],
         }
+        # B-65 (CP spec v1.103 §25.15 row 6: "the fold carries it unchanged") — merge the
+        # discriminated post-effect-signing-failure refs into the reported aggregate.
+        # Absent when empty (the pre-B-65 aggregate shape byte-identical).
+        if post_effect_signing_failures:
+            aggregate["post_effect_signing_failures"] = dict(post_effect_signing_failures)
         return RunResult(
             workflow_id=workflow_id,
             run_id=run_id,
@@ -13548,6 +14027,42 @@ def _execute_decentralized_handoff(
                 salvage=True,
             )
         except Exception as exc:
+            # B-65 (CP spec v1.103 §25.15; RATIFIED fork option A) — this stage's
+            # dispatch raised the Runtime-owned post-effect audit-signing carrier
+            # (the paid effect COMPLETED; only the post-effect audit signing
+            # failed). Name-matched (harness-cp cannot import the runtime type).
+            # TERMINAL-with-result changes RESUMABILITY, not run-level status
+            # (CP spec v1.103 §25.15 row 5: "the run-level status still follows
+            # the policy for the REMAINING branches") — codex [P1] on this arc:
+            # unconditionally returning FAILED here bypassed the PROCEED→PARTIAL
+            # mapping right below, contradicting the fork's own §3 rider
+            # ("proceed ... folds carry the carrier's result_ref into the
+            # PARTIAL/FAILED report" — PROCEED gets PARTIAL, not FAILED). ONLY
+            # `pause` is actually foreclosed here: it must NEVER mint a resumable
+            # PAUSED (a resume would re-dispatch this same stage, RE-FIRING the
+            # already-completed effect) — `cascade-cancel`'s existing FAILED is
+            # unaffected either way (a plain stage failure already means FAILED
+            # there). Both dispositions carry the carrier's `result_ref` in the
+            # salvaged aggregate alongside the completed-stage prefix.
+            if type(exc).__name__ == "PostEffectAuditSigningError":
+                post_effect_signing_failures[str(step.step_id)] = (
+                    _post_effect_signing_result_ref_output(exc)
+                )
+                return _finish(
+                    RunStatus.PARTIAL
+                    if cascade_policy is CascadePolicy.PROCEED
+                    else (RunStatus.FAILED),
+                    fail_class=(
+                        None
+                        if cascade_policy is CascadePolicy.PROCEED
+                        else (
+                            "decentralized-handoff-post-effect-signing-failed: the completed "
+                            "effect's audit signing failed; the effect itself landed and is "
+                            f"NOT re-dispatched — underlying: {type(exc).__name__}: {exc}"
+                        )
+                    ),
+                    salvage=True,
+                )
             # A stage owner failed → the chain stops (single-owner: no in-flight
             # sibling to cancel; the failed stage buffered nothing). cascade_policy
             # governs the disposition over the COMPLETED-stage prefix.

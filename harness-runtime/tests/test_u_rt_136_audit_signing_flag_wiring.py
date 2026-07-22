@@ -53,6 +53,7 @@ from harness_runtime.lifecycle.audit_signing_errors import (
     PostEffectAuditSigningError,
     PostEffectClass,
 )
+from harness_runtime.lifecycle.protected_result_store import UnresolvableResultRef
 from harness_runtime.lifecycle.retry_breaker import BreakerStateMachine
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
@@ -410,7 +411,7 @@ class _AnthropicFakeAdapter:
     client: Any
 
 
-def _llm_dispatcher(*, flag: bool) -> Any:
+def _llm_dispatcher(*, flag: bool, protected_result_store: Any = None) -> Any:
     from harness_runtime.lifecycle.llm_dispatch import RuntimeLLMDispatcher
 
     adapter = _AnthropicFakeAdapter(SimpleNamespace(messages=_AnthropicMessages()))
@@ -418,6 +419,7 @@ def _llm_dispatcher(*, flag: bool) -> Any:
         providers={"anthropic": adapter},
         tracer_provider=_tp(),
         audit_signing_fail_closed=flag,
+        protected_result_store=protected_result_store,
     )
 
 
@@ -446,21 +448,38 @@ def _inference_step() -> WorkflowStep:
 @pytest.mark.asyncio
 async def test_post_effect_failure_carrier_preserves_result(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Any,
 ) -> None:
     """Acc 1b: a signing failure AFTER a fake completed provider response
     raises `PostEffectAuditSigningError`, and the caught carrier yields the
     ORIGINAL result object — the completed PAID effect is not discarded.
 
     Mutation probe: swapping the dispatch-site carrier wrap for a bare
-    re-raise loses the result (`exc.result` gone / wrong type) and FAILS."""
+    re-raise loses the result (`exc.result` gone / wrong type) and FAILS.
+
+    Merge-gate round-1 test-witness lens on PR #1078: also proves
+    llm_dispatch.py's ONE carrier raise site (`_invoke_provider`'s `except
+    AUDIT_SIGNING_HARD_FAILURES`) threads a REAL `ProtectedResultStore`
+    correctly end-to-end (store construction → `resolve_result_ref_off_loop`
+    → carrier). Mutation probe: swapping `result_ref=_result_ref` for a
+    hardcoded `UnresolvableResultRef`/`None` at that site makes the
+    `store.read(...)` below raise instead of returning the original
+    response."""
     import harness_runtime.lifecycle.llm_dispatch as llm_mod
+    from cryptography.fernet import Fernet
+    from harness_runtime.lifecycle.protected_result_store import ProtectedResultStore
 
     async def _signing_fails(**_k: Any) -> None:
         raise _family_exc()
 
     monkeypatch.setattr(llm_mod, "_attribute_cost_off_loop_best_effort", _signing_fails)
 
-    dispatcher = _llm_dispatcher(flag=True)
+    store = ProtectedResultStore(
+        tmp_path / "b65a-store",
+        codec=Fernet(Fernet.generate_key()),
+        ttl_seconds=86400.0,
+    )
+    dispatcher = _llm_dispatcher(flag=True, protected_result_store=store)
     with pytest.raises(PostEffectAuditSigningError) as excinfo:
         await dispatcher.dispatch(
             _inference_binding(), _inference_step(), step_context=_step_context()
@@ -475,6 +494,11 @@ async def test_post_effect_failure_carrier_preserves_result(
     # Family membership — every existing `isinstance(exc, AUDIT_SIGNING_
     # HARD_FAILURES)` discriminator sees the carrier.
     assert isinstance(carrier, AUDIT_SIGNING_HARD_FAILURES)
+    assert isinstance(carrier.result_ref, str), (
+        f"expected a resolvable store ref, got {carrier.result_ref!r} — the "
+        f"store was not threaded correctly through this raise site"
+    )
+    assert store.read(None, carrier.result_ref) == carrier.result
 
 
 # ---------------------------------------------------------------------------
@@ -498,6 +522,7 @@ class _CarrierRaisingInner:
             "audit signing failed after a completed provider response (test)",
             effect_class=PostEffectClass.PROVIDER_RESPONSE,
             result=self.result_payload,
+            result_ref="test-tenant:" + "a" * 32,
         )
 
 
@@ -779,14 +804,35 @@ def test_carrier_message_carries_effect_class_and_result_ref() -> None:
 
     Mutation probe: dropping the message suffix (or the `result_ref`
     attribute) severs the caller→report join and FAILS."""
+    resolved_ref = "test-tenant:" + "b" * 32
     carrier = PostEffectAuditSigningError(
         "audit signing failed after a completed provider response (test)",
         effect_class=PostEffectClass.PROVIDER_RESPONSE,
         result={"id": "msg_ref"},
+        result_ref=resolved_ref,
     )
-    assert carrier.result_ref.startswith("post-effect-")
-    assert f"result_ref={carrier.result_ref}" in str(carrier)
+    assert carrier.result_ref == resolved_ref
+    assert f"result_ref={resolved_ref}" in str(carrier)
     assert "effect_class=provider-response" in str(carrier)
+
+
+def test_carrier_message_carries_unresolvable_declaration_when_store_write_failed() -> None:
+    """Runtime v1.103 §14.8.11 — when the raise site's store write failed,
+    the carrier's `result_ref` is the DISCRIMINATED `UnresolvableResultRef`,
+    never a plain string that reads as live; the message still names it.
+
+    Mutation probe: coercing the declaration to a bare string at the message
+    site (losing the discriminator) fails this witness."""
+    unresolvable = UnresolvableResultRef(reason="store write failed: OSError")
+    carrier = PostEffectAuditSigningError(
+        "audit signing failed after a completed provider response (test)",
+        effect_class=PostEffectClass.PROVIDER_RESPONSE,
+        result={"id": "msg_ref"},
+        result_ref=unresolvable,
+    )
+    assert carrier.result_ref is unresolvable
+    assert isinstance(carrier.result_ref, UnresolvableResultRef)
+    assert "unresolvable:store write failed: OSError" in str(carrier)
 
 
 @pytest.mark.asyncio

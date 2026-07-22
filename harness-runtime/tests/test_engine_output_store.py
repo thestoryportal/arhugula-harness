@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from harness_runtime.lifecycle.engine_output_store import (
     EngineOutputStore,
     engine_output_dir_for,
@@ -193,6 +194,107 @@ def test_scoped_aborted_with_output_is_corrupt_fail_closed(tmp_path: Path) -> No
     readable = set(store.read_branch_records(_RUN_KEY).keys())
     present = store.present_branch_indexes(_RUN_KEY)
     assert readable == {0}  # the malformed scoped_aborted-with-output record is omitted
+    assert present - readable == {1}  # the fail-closed corrupt set
+
+
+def test_post_effect_signing_failed_disposition_round_trip_not_corrupt(tmp_path: Path) -> None:
+    """B-65 (CP spec v1.103 §25.15) — `post_effect_signing_failed` is an ADDITIVE
+    recognized disposition (a branch whose dispatch raised the post-effect audit-
+    signing carrier: output is the carrier's `result_ref`, NEVER None, never
+    re-dispatched). It round-trips AND is NOT treated as corrupt — without the
+    additive accept it would be dropped -> surfaced in the fail-closed corrupt
+    set, so a crash-resume of this disposition would ALWAYS fail closed instead
+    of recovering the ref (codex [P1] on this arc: this exact gap made the CP
+    driver's crash-recovery handling for this status unreachable)."""
+    store = EngineOutputStore(journal_dir=tmp_path / "eo")
+    store.record_branch(_RUN_KEY, 0, "w0", "post_effect_signing_failed", {"result_ref": "ref-abc"})
+    store.record_branch(_RUN_KEY, 1, "w1", "completed", {"out": 1})  # a survivor
+
+    fresh = EngineOutputStore(journal_dir=tmp_path / "eo")  # crash + restart
+    records = fresh.read_branch_records(_RUN_KEY)
+    assert records == {
+        0: ("w0", "post_effect_signing_failed", {"result_ref": "ref-abc"}),
+        1: ("w1", "completed", {"out": 1}),
+    }
+    # NOT corrupt — readable as a terminal, not in the fail-closed set.
+    assert fresh.present_branch_indexes(_RUN_KEY) - set(records.keys()) == set()
+
+
+def test_post_effect_signing_failed_without_output_is_corrupt_fail_closed(
+    tmp_path: Path,
+) -> None:
+    """The SYMMETRIC invariant to `scoped_aborted`'s "output must be None": a
+    `post_effect_signing_failed` record with `output is None` is a MALFORMED /
+    tampered sidecar (this disposition carries the carrier's `result_ref` by
+    construction, never None). Must be treated as corrupt — never readable."""
+    store = EngineOutputStore(journal_dir=tmp_path / "eo")
+    store.record_branch(_RUN_KEY, 0, "w0", "completed", {"o": 0})
+    store._branch_file(_RUN_KEY, 1).write_text(
+        '{"output": null, "step_id": "w1", "terminal_status": "post_effect_signing_failed"}',
+        encoding="utf-8",
+    )
+    readable = set(store.read_branch_records(_RUN_KEY).keys())
+    present = store.present_branch_indexes(_RUN_KEY)
+    assert readable == {0}  # the malformed no-output record is omitted
+    assert present - readable == {1}  # the fail-closed corrupt set
+
+
+def test_post_effect_signing_failed_with_shapeless_output_is_corrupt_fail_closed(
+    tmp_path: Path,
+) -> None:
+    """codex [P2] on the B-65-A CP-side arc: a `post_effect_signing_failed`
+    record whose `output` is a non-None dict MISSING the `"result_ref"` key
+    (e.g. `{}`) is ALSO malformed — the pre-fix check only verified `output
+    is not None`, so an arbitrary non-empty dict slipped through as
+    "readable" with no usable ref. Must be treated as corrupt."""
+    store = EngineOutputStore(journal_dir=tmp_path / "eo")
+    store.record_branch(_RUN_KEY, 0, "w0", "completed", {"o": 0})
+    store._branch_file(_RUN_KEY, 1).write_text(
+        '{"output": {}, "step_id": "w1", "terminal_status": "post_effect_signing_failed"}',
+        encoding="utf-8",
+    )
+    readable = set(store.read_branch_records(_RUN_KEY).keys())
+    present = store.present_branch_indexes(_RUN_KEY)
+    assert readable == {0}  # the shapeless-output record is omitted
+    assert present - readable == {1}  # the fail-closed corrupt set
+
+
+@pytest.mark.parametrize(
+    "malformed_ref_json",
+    [
+        '{"output": {"result_ref": null}, "step_id": "w1", '
+        '"terminal_status": "post_effect_signing_failed"}',
+        '{"output": {"result_ref": 42}, "step_id": "w1", '
+        '"terminal_status": "post_effect_signing_failed"}',
+        '{"output": {"result_ref": {"unresolvable_reason": 42}}, "step_id": "w1", '
+        '"terminal_status": "post_effect_signing_failed"}',
+        '{"output": {"result_ref": {"unresolvable_reason": "x", "extra": "y"}}, '
+        '"step_id": "w1", "terminal_status": "post_effect_signing_failed"}',
+        # codex round-4 [P2]: an EMPTY string is syntactically the right type
+        # but carries no usable ref — must be rejected like the other
+        # malformed shapes, not accepted as "readable" merely because
+        # `isinstance(x, str)` was True.
+        '{"output": {"result_ref": ""}, "step_id": "w1", '
+        '"terminal_status": "post_effect_signing_failed"}',
+        '{"output": {"result_ref": {"unresolvable_reason": ""}}, "step_id": "w1", '
+        '"terminal_status": "post_effect_signing_failed"}',
+    ],
+)
+def test_post_effect_signing_failed_with_malformed_ref_value_is_corrupt_fail_closed(
+    tmp_path: Path, malformed_ref_json: str
+) -> None:
+    """codex [P2] on the B-65-A CP-side arc: the `"result_ref"` key existing is
+    not enough — its VALUE must be either a plain string ref or the EXACT
+    `{"unresolvable_reason": <str>}` shape. A `null`/numeric ref, a non-string
+    `unresolvable_reason`, an unresolvable dict with EXTRA keys, or (round-4)
+    an EMPTY string in either variant previously slipped through as
+    "readable" with no usable ref. Must be treated as corrupt."""
+    store = EngineOutputStore(journal_dir=tmp_path / "eo")
+    store.record_branch(_RUN_KEY, 0, "w0", "completed", {"o": 0})
+    store._branch_file(_RUN_KEY, 1).write_text(malformed_ref_json, encoding="utf-8")
+    readable = set(store.read_branch_records(_RUN_KEY).keys())
+    present = store.present_branch_indexes(_RUN_KEY)
+    assert readable == {0}  # the malformed-ref-value record is omitted
     assert present - readable == {1}  # the fail-closed corrupt set
 
 

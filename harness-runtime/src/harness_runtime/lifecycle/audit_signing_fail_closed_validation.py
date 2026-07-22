@@ -214,6 +214,34 @@ def validate_and_initialize_mtc_audit_signing(
     )
 
 
+def _protected_result_store_key_usable(config: RuntimeConfig) -> bool:
+    """B-65 (codex [P1] on this arc) — True iff the configured protected-result-
+    store key env var is SET AND actually constructs a working Fernet codec.
+
+    The pre-fix check only verified the env var was non-empty — a present but
+    MALFORMED key (or a missing `cryptography` dependency) passed this
+    fail-loud gate while `materialize_protected_result_store_stage()` silently
+    returned `None`, contrary to the fail-closed invariant this validation
+    exists to enforce. Mirrors `protected_result_store_factory._create_fernet_
+    from_key`'s lazy-import idiom directly (not by cross-importing the bootstrap
+    factory — this module is `lifecycle`-owned; `bootstrap.factories` imports
+    FROM `lifecycle`, never the reverse)."""
+    key_material = os.environ.get(config.protected_result_store_key_env_var)
+    if not key_material:
+        return False
+    try:
+        import importlib
+
+        fernet_module = importlib.import_module("cryptography.fernet")
+    except ImportError:
+        return False
+    try:
+        fernet_module.Fernet(key_material.encode("utf-8"))
+    except (ValueError, TypeError):
+        return False
+    return True
+
+
 def validate_mtc_audit_signing_config(config: RuntimeConfig) -> None:
     """Pure config-shape checks — no backend I/O, no side effects.
 
@@ -256,6 +284,28 @@ def validate_mtc_audit_signing_config(config: RuntimeConfig) -> None:
             "audit_signing.backend (audit_signing_fail_closed resolved ON at "
             f"persona_tier={config.persona_tier.value!r} but no SigningBackend "
             "is configured)"
+        )
+    # B-65-A (Runtime spec v1.103 §14.8.11) — verified empirically (this
+    # module's own read of the 4 raise sites): `PostEffectAuditSigningError`
+    # is constructed ONLY when `audit_signing_fail_closed` resolves ON (the
+    # compose/cost-attribution helpers swallow `AUDIT_SIGNING_HARD_FAILURES`
+    # internally under OFF). A store absent at resolved-ON is therefore a
+    # bootstrap MISCONFIGURATION, not a degraded-observability case like
+    # `cost_chain=None` — fail LOUD here rather than let
+    # `ctx.protected_result_store` silently stay `None` and every recovery
+    # entry degrade to an `UnresolvableResultRef` (advisor-caught: that
+    # would be fail-OPEN wearing a fail-closed label, precisely where the
+    # carrier's payload may hold tenant PII/credentials at MTC).
+    if resolved_fail_closed and not _protected_result_store_key_usable(config):
+        missing.append(
+            f"protected result store key (env var "
+            f"{config.protected_result_store_key_env_var!r} named by "
+            f"protected_result_store_key_env_var is unset or not a valid Fernet "
+            f"key, or the `cryptography` package is unavailable, but "
+            f"audit_signing_fail_closed resolved ON at "
+            f"persona_tier={config.persona_tier.value!r} — a post-effect "
+            f"signing failure's completed-effect payload would be "
+            f"unrecoverable)"
         )
     if is_mtc:
         if config.tenant_id is None:
