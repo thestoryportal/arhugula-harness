@@ -61,11 +61,11 @@ snapshot:
   total: 66
   open: 0
   design_substrate_gated: 1
-  registered_finding: 11
+  registered_finding: 10
   operator_gated: 2
   held: 1
-  closed: 51
-  identity_digest: fec157597fca76c7
+  closed: 52
+  identity_digest: 14300b977dd2f559
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -1239,7 +1239,8 @@ items:
     the B-48 apply arc, 2026-07-19)*'
 - id: B-58
   title: Pre-existing harness-cp function-level import of runtime escalation error types
-  status: registered_finding
+  status: closed
+  pr: '#1074'
   summary: 'Registered at the B-48 apply arc (codex round-27): workflow_driver.py:4737 imports three
     ValidatorEscalation* exception classes from harness_runtime.lifecycle.validator_escalation_composer
     at function level -- a pre-existing cross-package import in the OD->CP-canonical-direction
