@@ -1875,6 +1875,21 @@ class BufferingLedgerWriter:
         return list(self._buffer)
 
 
+def _consult_dispatch_fence() -> None:
+    """B-60: cooperative cancel-token consult at a nonlinear-topology
+    boundary (strategy entry / fan-out phase boundary) — no new dispatch
+    scheduling begins after a trip (§14.8.10.3 part 1: the token is checked
+    at every step boundary, and the fence "stops every operation NOT YET
+    STARTED"). Reads the ambient per-job token; `None` (a non-offloaded
+    run) is a no-op — byte-unchanged behavior. A tripped token raises
+    `DispatchFenceTrippedSignal` (a BaseException), which no strategy
+    `except Exception` arm can absorb — it propagates to the job boundary
+    where the runtime discards in-flight results and acks the fence."""
+    token = _DISPATCH_CANCEL_TOKEN_VAR.get()
+    if token is not None:
+        token.check()
+
+
 def drain_branch_buffers(
     real_writer: LedgerWriterLike,
     branch_buffers: Iterable[BufferingLedgerWriter],
@@ -3846,6 +3861,20 @@ def _execute_workflow_body(
     # `_maybe_post_join_synthesis` (the synthesis never ran on a pause, so `synthesis_present`
     # is False → fresh dispatch, effect-free + first-and-only). `_synth_positions` is still
     # consumed by the placement guard below.
+
+    # B-60: cooperative cancel-token consult at the NONLINEAR strategy entry
+    # points — the linear step loop's per-step check (below) is never reached
+    # for these topologies, so without this an offloaded child whose ancestor
+    # tripped the fence between dispatch and strategy entry would begin
+    # scheduling branch/level work past the fence (§14.8.10.3 part 1's
+    # every-step-boundary discipline; "no operation NOT YET STARTED begins").
+    # Covers PARALLELIZATION / EVALUATOR_OPTIMIZER / ORCHESTRATOR_WORKERS /
+    # HIERARCHICAL_DELEGATION (each recursion level re-enters this body) /
+    # DECENTRALIZED_HANDOFF uniformly. The raised signal is a BaseException:
+    # no strategy except-arm can absorb it; it propagates to the job
+    # boundary. Non-offloaded runs (no ambient token) are byte-unchanged.
+    if strategy is not _DriverStrategyStatus.LINEAR_INLINE:
+        _consult_dispatch_fence()
 
     if strategy is _DriverStrategyStatus.PARALLELIZATION:
         # B-POSTJOIN-LLM-SYNTHESIS (CP spec v1.54 §3) — carve an opt-in terminal
@@ -8384,6 +8413,19 @@ def _execute_parallelization(
                         {plan[0]: _branch_admissions[plan[0]] for plan in _warmup_phase2}
                     )
                     raise
+                # B-60: fence consult at the Phase 1 → Phase 2 boundary — a
+                # token tripping mid-Phase-1 must stop Phase 2 from ever
+                # SCHEDULING (the fence stops every operation not yet
+                # started). On the raise, Phase 2's upfront-reserved
+                # admissions are released exactly as the Phase-1-failure arm
+                # above does — nothing else would ever release them.
+                try:
+                    _consult_dispatch_fence()
+                except BaseException:
+                    _release_unconsumed_fanout_admissions(
+                        {plan[0]: _branch_admissions[plan[0]] for plan in _warmup_phase2}
+                    )
+                    raise
                 phase2_results = await asyncio.gather(
                     *(_proceed_branch(*plan) for plan in _warmup_phase2),
                     return_exceptions=True,
@@ -8874,6 +8916,18 @@ def _execute_parallelization(
                     # else ever calls `release_unless_job_bound()` for THOSE
                     # branches; without this they permanently reduce the shared
                     # frame budget.
+                    _release_unconsumed_fanout_admissions(
+                        {plan[0]: _branch_admissions[plan[0]] for plan in _warmup_phase2}
+                    )
+                    raise
+                # B-60: fence consult at the Phase 1 → Phase 2 boundary — a
+                # token tripping mid-Phase-1 must stop Phase 2 from ever
+                # SCHEDULING. Same admission-release-on-raise discipline as
+                # the Phase-1-failure arm above (nothing else releases the
+                # upfront-reserved Phase-2 admissions).
+                try:
+                    _consult_dispatch_fence()
+                except BaseException:
                     _release_unconsumed_fanout_admissions(
                         {plan[0]: _branch_admissions[plan[0]] for plan in _warmup_phase2}
                     )
