@@ -100,6 +100,84 @@ loop_defer R-300 "needs creds"
 SKIP=$(loop_skip_set)
 [ "$SKIP" = "R-300 R-410" ] && ok "'ACTIVATE' in a reason does not drop deferrals ($SKIP)" || bad "kind whole-row match dropped a deferral: [$SKIP]"
 
+# 14b) loop_skip_set accepts B-* item-IDs (forward-register), not just R-* (roadmap
+#      register) — a filter scoped to R- alone silently drops every real-world B-*
+#      deferral (codex [P2] round 2: the live ledger's B-48-EXECUTOR-SELECTION row was
+#      never actually in the skip-set before this fix).
+: > "$(loop_status_path)"; loop_activate "B-prefix test" >/dev/null
+loop_defer B-48-EXECUTOR-SELECTION "operator selection of the B-48 executor design"
+loop_defer R-410 "needs container runtime"
+SKIP=$(loop_skip_set)
+[ "$SKIP" = "B-48-EXECUTOR-SELECTION R-410" ] && ok "skip-set admits B-* alongside R-* ($SKIP)" || bad "B-* item dropped from skip-set: [$SKIP]"
+
+# 15) loop_resolve clears a matching item from BOTH loop_skip_set and
+#     loop_pending_hil_summary — an item whose gate was later answered must not nag
+#     forever just because loop mode never re-ACTIVATEd.
+: > "$(loop_status_path)"; loop_activate "resolve test" >/dev/null
+loop_defer R-410 "needs container runtime"
+loop_defer R-300 "needs OpenAI creds"
+loop_resolve R-410 "ratified via council dyad, PR #1234"
+RC=$?
+[ "$RC" -eq 0 ] && ok "loop_resolve returns 0 on a verified write" || bad "loop_resolve returned $RC on a verified write"
+SKIP=$(loop_skip_set)
+[ "$SKIP" = "R-300" ] && ok "loop_resolve clears item from skip-set ($SKIP)" || bad "resolve did not clear skip-set: [$SKIP]"
+SUM=$(loop_pending_hil_summary)
+printf '%s' "$SUM" | grep -q "R-410" && bad "resolved item still in pending summary: $SUM" \
+  || ok "loop_resolve clears item from pending summary"
+printf '%s' "$SUM" | grep -q "R-300" && ok "unresolved item still in pending summary" || bad "unresolved item dropped: $SUM"
+
+# 15b) loop_resolve returns FAILURE (not false success) when the ledger write doesn't
+#      take effect — codex [P2] round 5: loop_log always exits 0 by design, so a write
+#      failure must be caught by verifying the EFFECT, not the return code, in the
+#      underlying function itself (this defect previously lived only in the now-removed
+#      resolve.sh wrapper's own check — moving loop_resolve's write path here without
+#      also moving that verification was the regression this test pins).
+loop_defer R-888 "needs infra"
+chmod 0444 "$(loop_status_path)"
+loop_resolve R-888 "ratified" 2>/dev/null
+RC=$?
+chmod 0644 "$(loop_status_path)"
+[ "$RC" -ne 0 ] && ok "loop_resolve returns nonzero when the ledger write does not take effect" || bad "loop_resolve returned 0 despite a failed write"
+SKIP=$(loop_skip_set)
+printf '%s' "$SKIP" | grep -q "R-888" && ok "R-888 remains pending after the failed resolve" || bad "R-888 unexpectedly cleared despite failed write: [$SKIP]"
+
+# 15c) A ledger row is monotonic — a LATER write for the same item-id never deletes or
+#      rewrites an earlier row (append-only). Basic sanity check, NOT a concurrency
+#      reproduction: bash test execution is sequential, so a "concurrent" write issued
+#      after loop_resolve already returned never actually races with its internal
+#      write-then-check — the two operations can't interleave without true OS-level
+#      concurrency, which isn't reproducible deterministically in a hermetic
+#      single-process test. See 15d for the actual regression test on this fix.
+: > "$(loop_status_path)"; loop_activate "monotonic-row test" >/dev/null
+loop_defer R-410 "needs container runtime"
+loop_resolve R-410 "ratified via council dyad"
+RC=$?
+loop_defer R-410 "a later re-deferral, e.g. from a sibling process"
+[ "$RC" -eq 0 ] && ok "loop_resolve returns 0 at call-time regardless of what's written afterward" || bad "loop_resolve returned $RC on a call-time-successful write"
+grep -qF '| RESOLVED-HIL | R-410 — ratified via council dyad |' "$(loop_status_path)" && ok "the RESOLVED-HIL row itself is still present (never deleted)" || bad "RESOLVED-HIL row missing after a later DEFERRED-HIL"
+
+# 15d) STRUCTURAL invariant (merge-gate concurrency lens on this arc): loop_resolve's
+#      body must verify its OWN write by grepping for the exact row, NOT by recomputing
+#      loop_skip_set — the latter was this function's first cut and is an unsound
+#      check-then-act race against concurrent writers (a concurrent loop_defer/
+#      loop_resolve for the SAME item-id landing between the write and a loop_skip_set
+#      re-read can flip the derived answer in either direction). Since true concurrent
+#      interleaving can't be reproduced deterministically in this test harness (15c),
+#      this pins the fix at the level that IS deterministically checkable: the
+#      function's source no longer calls loop_skip_set at all.
+BODY=$(declare -f loop_resolve)
+printf '%s' "$BODY" | grep -q 'loop_skip_set' && bad "loop_resolve calls loop_skip_set (reintroduces the check-then-act race)" || ok "loop_resolve does not call loop_skip_set (self-checks its own row instead)"
+printf '%s' "$BODY" | grep -q 'grep -qF' && ok "loop_resolve verifies its own write via a literal grep for the exact row" || bad "loop_resolve's own-write verification mechanism changed unexpectedly"
+
+# 16) Re-deferring an already-resolved item re-flags it (last-write-wins, not sticky-resolved).
+: > "$(loop_status_path)"; loop_activate "re-deferral test" >/dev/null
+loop_defer R-300 "needs OpenAI creds"
+loop_defer R-410 "needs container runtime"
+loop_resolve R-410 "ratified" >/dev/null
+loop_defer R-410 "regressed — needs container runtime again"
+SKIP=$(loop_skip_set)
+[ "$SKIP" = "R-300 R-410" ] && ok "re-deferral after resolve re-flags the item ($SKIP)" || bad "re-deferral not re-flagged: [$SKIP]"
+
 echo "----"
 echo "loop_lib: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

@@ -5,6 +5,11 @@
 # executable path that replaced the denied/malformed raw `source … && loop_defer …`.
 # Asserts they source BOTH libs correctly (functions defined), write the ledger, raise
 # the halt marker, and reject a no-arg defer.
+#
+# Resolution (loop_resolve / RESOLVED-HIL) deliberately has NO wrapper here: it is
+# attended-only by design (permission-guard.sh never auto-allows it — a headless child
+# can't self-assert that a human answered a gate), so it's exercised directly via
+# loop_lib.sh in tools/hooks/test_loop_lib.sh, not through a guard-bypass entry point.
 
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
