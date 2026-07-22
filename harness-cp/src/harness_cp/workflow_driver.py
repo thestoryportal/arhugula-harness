@@ -116,6 +116,9 @@ from harness_cp.sub_agent_dispatch_cancellation import (
 from harness_cp.sub_agent_dispatch_cancellation import (
     DispatchCancelToken as _DispatchCancelToken,
 )
+from harness_cp.sub_agent_dispatch_cancellation import (
+    DispatchFenceTrippedSignal as _DispatchFenceTrippedSignal,
+)
 from harness_cp.sub_agent_dispatch_capacity_authority import (
     BRANCH_CAPACITY_LEASE_VAR as _BRANCH_CAPACITY_LEASE_VAR,
 )
@@ -1873,6 +1876,38 @@ class BufferingLedgerWriter:
     def buffered_entries(self) -> list[tuple[Any, Any]]:
         """The ordered pending-entry list (step order within this branch)."""
         return list(self._buffer)
+
+
+def _reraise_captured_fence_signal(results: Iterable[Any]) -> None:
+    """B-60 (codex round-2 on PR #1075, generalized): a branch gather with
+    ``return_exceptions=True`` captures BaseExceptions — including
+    `DispatchFenceTrippedSignal` — as ordinary results, which downstream
+    folds then convert into branch failures (and, under `cascade_policy=
+    pause`, into a RESUMABLE PAUSED minted from a fence trip). Scan the
+    results IMMEDIATELY after each branch gather and re-raise the first
+    captured signal: completed siblings' admissions were already released
+    by their own dispatch finallys, so a plain re-raise is admission-safe;
+    withheld-phase admissions are handled at the phase-boundary consults."""
+    for result in results:
+        if isinstance(result, _DispatchFenceTrippedSignal):
+            raise result
+
+
+def _reraise_fence_signal_from_group(group: BaseExceptionGroup) -> None:
+    """B-60 (codex round-2 on PR #1075, generalized): a `DispatchFenceTrippedSignal`
+    raised inside a branch TaskGroup arrives wrapped in a `BaseExceptionGroup`.
+    Consuming it as an ordinary branch failure lets the cascade fold convert a
+    fence trip into `branch_failed`/`worker_failed` — and, under
+    `cascade_policy=pause`, mint a RESUMABLE PAUSED from a job-terminal trip.
+    Split the group; if the signal is present, re-raise the LEAF signal (the
+    fence contract: a trip propagates to the job boundary, never folds)."""
+    matches, _rest = group.split(_DispatchFenceTrippedSignal)
+    if matches is None:
+        return
+    leaf: BaseException = matches
+    while isinstance(leaf, BaseExceptionGroup):
+        leaf = leaf.exceptions[0]
+    raise leaf
 
 
 def _consult_dispatch_fence() -> None:
@@ -8343,6 +8378,13 @@ def _execute_parallelization(
                             )
                         except asyncio.CancelledError:
                             raise
+                        except _DispatchFenceTrippedSignal:
+                            # B-60 (codex round-2 on PR #1075, reproduced): the
+                            # fence signal must never be CAPTURED as a branch
+                            # result — re-raised into the outer arm below,
+                            # which releases every still-undispatched
+                            # admission and propagates.
+                            raise
                         except BaseException as _resumed_exc:
                             _resumed_target_results[_target_plan[0]] = _resumed_exc
                 except BaseException:
@@ -8375,6 +8417,7 @@ def _execute_parallelization(
                         *(_proceed_branch(*plan) for plan in _rest_plan),
                         return_exceptions=True,
                     )
+                    _reraise_captured_fence_signal(rest_results)
                     results_by_ordinal: dict[int, Any] = dict(_resumed_target_results)
                     for plan, result in zip(_rest_plan, rest_results, strict=True):
                         results_by_ordinal[plan[0]] = result
@@ -8396,6 +8439,7 @@ def _execute_parallelization(
                         *(_proceed_branch(*plan) for plan in _warmup_phase1),
                         return_exceptions=True,
                     )
+                    _reraise_captured_fence_signal(phase1_results)
                 except BaseException:
                     # codex round-4 [P1] "release admissions withheld by
                     # warm-up timeouts" — PROCEED-tier twin of the strict-tier
@@ -8430,6 +8474,7 @@ def _execute_parallelization(
                     *(_proceed_branch(*plan) for plan in _warmup_phase2),
                     return_exceptions=True,
                 )
+                _reraise_captured_fence_signal(phase2_results)
                 results_by_ordinal = dict(_resumed_target_results)
                 for plan, result in zip(_warmup_phase1, phase1_results, strict=True):
                     results_by_ordinal[plan[0]] = result
@@ -8965,11 +9010,15 @@ def _execute_parallelization(
         # The wall-clock deadline fired with no branch raising (a stuck fan-out) —
         # the §25.11 hard cap. The in-flight branches recorded `timed_out`.
         deadline_struck = True
-    except BaseExceptionGroup:
+    except BaseExceptionGroup as _branch_group:
         # A branch raised → the TaskGroup cancelled not-yet-finished siblings.
         # In-flight siblings ran to completion (shielded) + recorded their terminal;
         # the failing branch's exception group is consumed here (the durable record
         # is the drained ledger). cascade_policy maps the run-level status.
+        # B-60: a fence-trip signal inside the group is JOB-TERMINAL — re-raised,
+        # never folded into a branch failure (a PAUSE-tier fold would mint a
+        # resumable PAUSED from a fence trip).
+        _reraise_fence_signal_from_group(_branch_group)
         branch_failed = True
 
     # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE — an operator ABORT on resume is a TERMINAL decision:
@@ -11968,6 +12017,13 @@ def _execute_orchestrator_workers(
                             )
                         except asyncio.CancelledError:
                             raise
+                        except _DispatchFenceTrippedSignal:
+                            # B-60 (codex round-2 on PR #1075, reproduced): the
+                            # fence signal must never be CAPTURED as a branch
+                            # result — re-raised into the outer arm below,
+                            # which releases every still-undispatched
+                            # admission and propagates.
+                            raise
                         except BaseException as _resumed_exc:
                             _resumed_target_results[_target_plan[0]] = _resumed_exc
                 except BaseException:
@@ -11994,6 +12050,7 @@ def _execute_orchestrator_workers(
                         *(_proceed_worker(*plan) for plan in _rest_plan),
                         return_exceptions=True,
                     )
+                    _reraise_captured_fence_signal(rest_results)
                     results_by_ordinal: dict[int, Any] = dict(_resumed_target_results)
                     for plan, result in zip(_rest_plan, rest_results, strict=True):
                         results_by_ordinal[plan[0]] = result
@@ -12015,6 +12072,7 @@ def _execute_orchestrator_workers(
                         *(_proceed_worker(*plan) for plan in _warmup_phase1),
                         return_exceptions=True,
                     )
+                    _reraise_captured_fence_signal(phase1_results)
                 except BaseException:
                     # codex round-4 [P1] "release admissions withheld by
                     # warm-up timeouts" — ORCHESTRATOR_WORKERS twin of the
@@ -12029,10 +12087,23 @@ def _execute_orchestrator_workers(
                         {plan[0]: _branch_admissions[plan[0]] for plan in _warmup_phase2}
                     )
                     raise
+                # B-60 (codex round-2 on PR #1075, reproduced): fence consult
+                # at the ORCHESTRATOR fan-out's Phase 1 -> Phase 2 boundary —
+                # the parallelization twin's check does not cover this
+                # separate phase pair. Same admission-release-on-raise
+                # discipline as the arm above.
+                try:
+                    _consult_dispatch_fence()
+                except BaseException:
+                    _release_unconsumed_fanout_admissions(
+                        {plan[0]: _branch_admissions[plan[0]] for plan in _warmup_phase2}
+                    )
+                    raise
                 phase2_results = await asyncio.gather(
                     *(_proceed_worker(*plan) for plan in _warmup_phase2),
                     return_exceptions=True,
                 )
+                _reraise_captured_fence_signal(phase2_results)
                 results_by_ordinal = dict(_resumed_target_results)
                 for plan, result in zip(_warmup_phase1, phase1_results, strict=True):
                     results_by_ordinal[plan[0]] = result
@@ -12485,6 +12556,16 @@ def _execute_orchestrator_workers(
                         {plan[0]: _branch_admissions[plan[0]] for plan in _warmup_phase2}
                     )
                     raise
+                # B-60 (codex round-2 on PR #1075, reproduced): fence consult
+                # at the ORCHESTRATOR strict-tier Phase 1 -> Phase 2 boundary.
+                # Same admission-release-on-raise discipline as the arm above.
+                try:
+                    _consult_dispatch_fence()
+                except BaseException:
+                    _release_unconsumed_fanout_admissions(
+                        {plan[0]: _branch_admissions[plan[0]] for plan in _warmup_phase2}
+                    )
+                    raise
                 # Phase 2: the followers under TaskGroup (cache-hits; non-empty by
                 # the gate). A worker failure raises ExceptionGroup (a
                 # BaseExceptionGroup subclass) → propagates unchanged → caller:
@@ -12518,11 +12599,14 @@ def _execute_orchestrator_workers(
         # the §25.11 hard cap. A bare strand is FAILED (parity with PARALLELIZATION);
         # the in-flight workers recorded `timed_out` in their except blocks.
         deadline_struck = True
-    except BaseExceptionGroup:
+    except BaseExceptionGroup as _worker_group:
         # A worker raised → the TaskGroup cancelled not-yet-finished siblings.
         # In-flight siblings ran to completion (shielded) + recorded their terminal;
         # the failing worker's exception group is consumed here (the durable record
         # is the drained ledger). cascade_policy maps the run-level status.
+        # B-60: a fence-trip signal inside the group is JOB-TERMINAL — re-raised,
+        # never folded into a worker failure (see the parallelization twin).
+        _reraise_fence_signal_from_group(_worker_group)
         worker_failed = True
 
     # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE — an operator ABORT on resume is TERMINAL: force FAILED

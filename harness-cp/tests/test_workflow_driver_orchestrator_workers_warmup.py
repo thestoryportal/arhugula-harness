@@ -1433,3 +1433,73 @@ def test_ow_partition_recovered_fence_peer_withheld_as_follower_completed_captur
     # attempt-1 dispatch marker stands un-re-marked.
     assert store.present_branch_indexes(run_key) == {0, 1, 2}
     assert store.present_dispatched_indexes(run_key) == {0, 1, 2, 3}
+
+
+# ---------------------------------------------------------------------------
+# B-60 — fence consult at the ORCHESTRATOR warm-up Phase 1 -> Phase 2 boundary.
+# ---------------------------------------------------------------------------
+
+
+class _B60TrippingCohortWorker:
+    """Cohort-uniform worker dispatcher; the Phase-1 LEADER (lowest ordinal)
+    trips the supplied token at the END of its dispatch (completing cleanly —
+    only the B-60 boundary consult may stop Phase 2)."""
+
+    def __init__(self, token: Any) -> None:
+        self._token = token
+        self.dispatched: list[int] = []
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        idx = int(step.step_payload["index"])
+        self.dispatched.append(idx)
+        if idx == 0:
+            self._token.trip()
+        return {"index": idx}
+
+    def cohort_key(self, binding: StepEffectiveBinding, step: WorkflowStep) -> str | None:
+        return "cohort-b60"
+
+
+def _b60_ow_run(persona_tier: PersonaTier, **run_kwargs: Any) -> tuple[Any, Any]:
+    from harness_cp.sub_agent_dispatch_cancellation import (
+        DISPATCH_CANCEL_TOKEN_VAR,
+        DispatchCancelToken,
+        DispatchFenceTrippedSignal,
+    )
+
+    authority = DefaultCapacityAuthority(frame_budget=4)
+    token = DispatchCancelToken()
+    dispatcher = _B60TrippingCohortWorker(token)
+    reset = DISPATCH_CANCEL_TOKEN_VAR.set(token)
+    try:
+        with pytest.raises(DispatchFenceTrippedSignal):
+            _run(
+                steps=[_orch_step(), _worker(0, "b60"), _worker(1, "b60"), _worker(2, "b60")],
+                registry=_registry(dispatcher),
+                persona_tier=persona_tier,
+                concurrent_cache_warmup=True,
+                capacity_authority=authority,
+                **run_kwargs,
+            )
+    finally:
+        DISPATCH_CANCEL_TOKEN_VAR.reset(reset)
+    return dispatcher, authority
+
+
+def test_b60_ow_phase1_trip_stops_phase2_scheduling_proceed_tier() -> None:
+    """B-60 (codex round-2 on PR #1075, reproduced): the ORCHESTRATOR fan-out
+    has its OWN warm-up phase pair — a token tripping during Phase 1 (the
+    cohort leader) must stop Phase 2 from scheduling, with the withheld
+    Phase-2 admissions released."""
+    dispatcher, authority = _b60_ow_run(PersonaTier.SOLO_DEVELOPER)
+    assert dispatcher.dispatched == [0]
+    assert authority.available == authority.frame_budget
+
+
+def test_b60_ow_phase1_trip_stops_phase2_scheduling_cascade_tier() -> None:
+    """Strict/cascade-tier twin (TaskGroup phase pair)."""
+    dispatcher, authority = _b60_ow_run(PersonaTier.MULTI_TENANT_COMPLIANCE)
+    assert dispatcher.dispatched == [0]
+    assert authority.available == authority.frame_budget

@@ -3196,3 +3196,220 @@ def test_b39_phase0_strike_on_first_of_two_resumed_targets_releases_the_second_u
         f"expected full frame-budget recovery (12); got {authority.available} — "
         f"sub-worker-b's admission leaked under the PROCEED-tier Phase-0 loop"
     )
+
+
+# ---------------------------------------------------------------------------
+# B-60 — Phase-0 resumed-target dispatch must RE-RAISE the fence signal.
+# ---------------------------------------------------------------------------
+
+
+def _b60_linear_child_snapshot() -> PauseSnapshot:
+    """A hash-valid LINEAR child snapshot (the paused-child carrier input)."""
+    return asyncio.run(
+        _protocol().capture_pause_snapshot(
+            workflow_id="wf-child",
+            run_id="child-run",
+            step_index=0,
+            pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
+        )
+    )
+
+
+class _B60PausingThenTrippingSubAgent:
+    """First run: BOTH sub-agent workers' children pause (SubAgentChildPausedError
+    with a hash-valid child snapshot). Resume: the FIRST resumed target's
+    re-dispatch raises `DispatchFenceTrippedSignal` (the real dispatcher's
+    effect-entry refusal after an ancestor trip); the second must never be
+    re-dispatched."""
+
+    def __init__(self) -> None:
+        self.first_run_calls: list[str] = []
+        self.resume_calls: list[str] = []
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        from harness_cp.sub_agent_dispatch_cancellation import DispatchFenceTrippedSignal
+
+        step_id = str(step.step_id)
+        child_resume = getattr(step_context, "child_resume_snapshot", None)
+        if child_resume is None:
+            self.first_run_calls.append(step_id)
+            raise SubAgentChildPausedError(
+                child_workflow_id=f"wf-child-{step_id}",
+                child_snapshot=_b60_linear_child_snapshot(),
+            )
+        self.resume_calls.append(step_id)
+        raise DispatchFenceTrippedSignal
+
+
+class _B60Registry:
+    def __init__(self, *, sub_agent: Any) -> None:
+        self._sub_agent = sub_agent
+        self.echo = _CountingDispatcher()
+
+    def lookup(self, step_kind: StepKind) -> StepDispatcher:
+        if step_kind is StepKind.SUB_AGENT_DISPATCH:
+            return cast(StepDispatcher, self._sub_agent)
+        if step_kind is StepKind.DECLARATIVE_STEP:
+            return cast(StepDispatcher, self.echo)
+        raise StepKindDispatcherNotBoundError(step_kind)
+
+
+def _b60_sub_worker(index: int) -> WorkflowStep:
+    return WorkflowStep(
+        step_id=StepID(f"sub-worker-{index}"),
+        step_kind=StepKind.SUB_AGENT_DISPATCH,
+        step_payload={"child_workflow_id": f"wf-child-sub-worker-{index}"},
+    )
+
+
+def _b60_phase0_run(topology: TopologyPattern) -> None:
+    from harness_cp.sub_agent_dispatch_cancellation import DispatchFenceTrippedSignal
+
+    sub_agent = _B60PausingThenTrippingSubAgent()
+    registry = cast(StepDispatcherRegistry, _B60Registry(sub_agent=sub_agent))
+    steps = (
+        [_b60_sub_worker(1), _b60_sub_worker(2)]
+        if topology is TopologyPattern.PARALLELIZATION
+        else [
+            WorkflowStep(
+                step_id=StepID("parent-orch"),
+                step_kind=StepKind.DECLARATIVE_STEP,
+                step_payload={"role": "parent-orch"},
+            ),
+            _b60_sub_worker(1),
+            _b60_sub_worker(2),
+        ]
+    )
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    paused = execute_workflow(
+        _manifest("wf-b60", topology),
+        steps,
+        run_id="run-b60",
+        ctx=ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=registry,
+    )
+    assert paused.status is RunStatus.PAUSED
+    snap = paused.pause_snapshot
+    assert snap is not None
+    resume_state = snap.fan_out_resume or snap.peer_fan_out_resume
+    assert resume_state is not None
+    assert len(resume_state.paused_child_branches) == 2
+
+    ctx2 = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    with pytest.raises(DispatchFenceTrippedSignal):
+        execute_workflow(
+            _manifest("wf-b60", topology),
+            steps,
+            run_id="run-b60",
+            ctx=ctx2,
+            default_model_binding=_DEFAULT_BINDING,
+            step_dispatchers=registry,
+            pause_snapshot_input=snap,
+        )
+    # THE load-bearing assertion (codex round-2 on PR #1075, reproduced):
+    # the signal was NOT captured as a branch result — the SECOND resumed
+    # target was never re-dispatched.
+    assert len(sub_agent.resume_calls) == 1
+
+
+def test_b60_phase0_resumed_target_fence_signal_reraise_orchestrator() -> None:
+    """Phase-0 (ORCHESTRATOR_WORKERS): a fence signal raised by the first
+    resumed target's re-dispatch propagates — never captured as an ordinary
+    branch result that lets the second target and fresh siblings proceed."""
+    _b60_phase0_run(TopologyPattern.ORCHESTRATOR_WORKERS)
+
+
+def test_b60_phase0_resumed_target_fence_signal_reraise_parallelization() -> None:
+    """Phase-0 (PARALLELIZATION twin): the peer fan-out's own resumed-target
+    loop has the identical capture shape — pinned separately so a
+    single-arm regression cannot slip."""
+    _b60_phase0_run(TopologyPattern.PARALLELIZATION)
+
+
+def test_b60_phase0_resumed_target_fence_signal_reraise_proceed_tier() -> None:
+    """Phase-0 under the PROCEED tier (SOLO): the sequential resumed-target
+    loop's own `except _DispatchFenceTrippedSignal: raise` arm — the capture
+    here is `results[ordinal] = exc`, not a TaskGroup, so this pins the
+    loop-arm fix separately from the group unwrap."""
+    from harness_cp.sub_agent_dispatch_cancellation import DispatchFenceTrippedSignal
+
+    sub_agent = _B60PausingThenTrippingSubAgent()
+    registry = cast(StepDispatcherRegistry, _B60Registry(sub_agent=sub_agent))
+    steps = [_b60_sub_worker(1), _b60_sub_worker(2)]
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    paused = execute_workflow(
+        _manifest("wf-b60-proceed", TopologyPattern.PARALLELIZATION),
+        steps,
+        run_id="run-b60p",
+        ctx=ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=registry,
+    )
+    assert paused.status is RunStatus.PAUSED
+
+    ctx2 = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    with pytest.raises(DispatchFenceTrippedSignal):
+        execute_workflow(
+            _manifest(
+                "wf-b60-proceed", TopologyPattern.PARALLELIZATION, PersonaTier.SOLO_DEVELOPER
+            ),
+            steps,
+            run_id="run-b60p",
+            ctx=ctx2,
+            default_model_binding=_DEFAULT_BINDING,
+            step_dispatchers=registry,
+            pause_snapshot_input=paused.pause_snapshot,
+        )
+    assert len(sub_agent.resume_calls) == 1
+
+
+def test_b60_fresh_branch_fence_signal_not_captured_by_rest_gather() -> None:
+    """The rest-plan gather (`return_exceptions=True`) captures BaseExceptions
+    as results — the post-gather scan must re-raise a captured fence signal
+    instead of letting the fold convert it into a branch failure/PARTIAL.
+    Fresh 2-branch PROCEED fan-out; branch 'b' raises the signal."""
+    from harness_cp.sub_agent_dispatch_cancellation import DispatchFenceTrippedSignal
+
+    class _SignalRaisingDispatcher:
+        def __init__(self) -> None:
+            self.dispatched: list[str] = []
+
+        def dispatch(
+            self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+        ) -> dict[str, Any]:
+            step_id = str(step.step_id)
+            self.dispatched.append(step_id)
+            if step_id == "b":
+                raise DispatchFenceTrippedSignal
+            return {"ok": step_id}
+
+    dispatcher = _SignalRaisingDispatcher()
+
+    class _Reg:
+        def lookup(self, step_kind: StepKind) -> StepDispatcher:
+            return cast(StepDispatcher, dispatcher)
+
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    with pytest.raises(DispatchFenceTrippedSignal):
+        execute_workflow(
+            _manifest("wf-b60-rest", TopologyPattern.PARALLELIZATION, PersonaTier.SOLO_DEVELOPER),
+            [
+                WorkflowStep(
+                    step_id=StepID("a"),
+                    step_kind=StepKind.DECLARATIVE_STEP,
+                    step_payload={},
+                ),
+                WorkflowStep(
+                    step_id=StepID("b"),
+                    step_kind=StepKind.DECLARATIVE_STEP,
+                    step_payload={},
+                ),
+            ],
+            run_id="run-b60r",
+            ctx=ctx,
+            default_model_binding=_DEFAULT_BINDING,
+            step_dispatchers=cast(StepDispatcherRegistry, _Reg()),
+        )
