@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `7a78cb62b330` |
-| `last_refreshed` | 2026-07-21T00:00:00Z |
-| `git_head` | `684f15a4` —  |
+| `workspace_state_hash` | `4a24fad9e9ae` |
+| `last_refreshed` | 2026-07-22T00:00:00Z |
+| `git_head` | `03e06d59` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 96 |
 
@@ -49,11 +49,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| 1077 | 2026-07-22 | B-65-A spec leg merged: CP v1.103 §25.15 terminal-with-result rider + Runtime v1.103 §14.8.11 protected result store + plans v2.40/v2.51 (U-CP-85 amended, U-RT-145 new) + 4 clearance markers; codex 10 rounds terminal. Next: B-65-A impl leg. |
 | 1076 | 2026-07-21 | B-17 hold reaffirmed; next: B-65-A apply arc (then B-59-A, B-33-A) |
 | 1075 | 2026-07-21 | B-60 nonlinear fence consults (closed; B-66 residual registered; register 53 closed / 10 registered_finding) |
 | 1074 | 2026-07-21 | B-58 validator-escalation carriers re-homed to harness-core (closed; register 52 closed / 10 registered_finding) |
 | 1073 | 2026-07-21 | B-63 typed availability for SigningBackend.verify (closed; register 51 closed / 11 registered_finding) |
-| 1072 | 2026-07-21 | B-61/B-62 per-effect fence granularity (closed; register 50 closed / 12 registered_finding) |
 ---
 
 ---
