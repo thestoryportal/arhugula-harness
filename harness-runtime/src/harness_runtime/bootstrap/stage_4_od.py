@@ -29,6 +29,9 @@ from __future__ import annotations
 from harness_core import PersonaTier
 from harness_core.workload_class import WorkloadClass
 
+from harness_runtime.bootstrap.factories.protected_result_store_factory import (
+    materialize_protected_result_store_stage,
+)
 from harness_runtime.bootstrap.factories.validator_framework_factory import (
     materialize_validator_framework_stage,
 )
@@ -75,6 +78,12 @@ async def execute(
     # `AuditSigningConfigInvalidError`/`IncompatibleConfigVersion`). This
     # pass touches config only — no backend I/O, no side effects.
     validate_mtc_audit_signing_config(config)
+    # 0a-bis. Protected post-effect result store (B-65-A, Runtime spec v1.103
+    # §14.8.11) — constructed AFTER the fail-loud check above, which already
+    # guarantees a resolved-ON bootstrap has a valid key env var. `None` here
+    # is a normal outcome at fail-closed=OFF (the carrier is never raised on
+    # that path).
+    ctx.protected_result_store = materialize_protected_result_store_stage(config)
     # 0b. Audit-signing backend (B-47 PR B — OD spec v1.33 §21.2.1 composition
     # root) — constructed AND validated BEFORE the one-shot global tracer
     # registration (out-of-family Codex round-18: OTel registration cannot be

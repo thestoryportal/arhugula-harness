@@ -455,6 +455,9 @@ async def materialize_runtime_tool_dispatcher_stage(
         signing_backend=ctx.audit_signing_backend,
         # U-RT-136 — OD v1.34 §21.2.3 fail-closed policy (rows 1/5/7).
         audit_signing_fail_closed=resolve_audit_signing_fail_closed(config),
+        # B-65-A (Runtime spec v1.103 §14.8.11) — stage-4-constructed
+        # protected result store.
+        protected_result_store=ctx.protected_result_store,
         # R-FS-1 arc CA + B-INTERSTEP-PERRUN-ISOLATION — thread the run-scoped
         # accumulator PROXY (not its `.records` list — that capture defeated per-run
         # isolation) so per-tool-dispatch SpanCostRecords `append` through to the

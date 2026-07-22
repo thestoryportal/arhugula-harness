@@ -48,6 +48,19 @@ _ARN_A = "arn:aws:kms:us-east-1:111122223333:key/row-signing-key"
 _ARN_B = "arn:aws:kms:us-east-1:111122223333:key/cutover-record-key"
 
 
+@pytest.fixture(autouse=True)
+def _protected_result_store_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """B-65-A (Runtime spec v1.103 §14.8.11): this file's fixtures resolve
+    `audit_signing_fail_closed` ON (MTC persona tier / explicit backend), and
+    `validate_mtc_audit_signing_config` now fails loud on that resolution
+    with no protected-store key configured — orthogonal to what these tests
+    exercise (the pre-existing U-RT-134 invariants), so provision a key
+    unconditionally."""
+    from cryptography.fernet import Fernet
+
+    monkeypatch.setenv("HARNESS_PROTECTED_RESULT_STORE_KEY", Fernet.generate_key().decode("ascii"))
+
+
 class _FakeBackend:
     """TEST-ONLY `SigningBackend` double — deterministic HMAC-SHA512 (64
     bytes, matching the ed25519 width), not real asymmetric crypto. No
@@ -180,6 +193,54 @@ def test_fail_closed_on_without_backend_rejected_at_bootstrap_every_tier(
     )
     with pytest.raises(IncompatibleConfigVersion, match="audit_signing.backend"):
         validate_and_initialize_mtc_audit_signing(config, signing_backend=None)
+
+
+@pytest.mark.parametrize(
+    ("persona_tier", "explicit"),
+    [
+        (PersonaTier.SOLO_DEVELOPER, True),
+        (PersonaTier.TEAM_BINDING, True),
+        (PersonaTier.MULTI_TENANT_COMPLIANCE, None),
+    ],
+)
+def test_fail_closed_on_without_store_key_rejected_at_bootstrap_every_tier(
+    tmp_path: Path,
+    persona_tier: PersonaTier,
+    explicit: bool | None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """B-65-A (Runtime spec v1.103 §14.8.11) — advisor-resolved fork: resolved-
+    ON without the protected-store key env var configured is `RT-FAIL-
+    CONFIG-VERSION` at EVERY persona tier, mirroring the sibling backend
+    check above. Mutation probe: silently defaulting to
+    `protected_result_store=None` under fail-closed instead of raising here
+    fails this witness."""
+    monkeypatch.delenv("HARNESS_PROTECTED_RESULT_STORE_KEY", raising=False)
+    tenant_id = "acme" if persona_tier is PersonaTier.MULTI_TENANT_COMPLIANCE else None
+    config = _config(
+        tmp_path,
+        persona_tier=persona_tier,
+        audit_signing_fail_closed=explicit,
+        tenant_id=tenant_id,
+    )
+    with pytest.raises(IncompatibleConfigVersion, match="protected result store key"):
+        validate_and_initialize_mtc_audit_signing(config, signing_backend=_FakeBackend())
+
+
+def test_fail_closed_off_without_store_key_accepted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The store's required-ness is coupled to the RESOLVED policy — OFF at
+    a non-MTC tier means the carrier is never raised, so an unset key is
+    harmless (mirrors `cost_chain=None`'s degraded-but-fine posture)."""
+    monkeypatch.delenv("HARNESS_PROTECTED_RESULT_STORE_KEY", raising=False)
+    config = _config(
+        tmp_path,
+        persona_tier=PersonaTier.SOLO_DEVELOPER,
+        audit_signing_fail_closed=False,
+        backend=AuditSigningBackendKind.NONE,
+    )
+    validate_and_initialize_mtc_audit_signing(config, signing_backend=None)
 
 
 def test_env_only_override_honored_through_both_loaders() -> None:

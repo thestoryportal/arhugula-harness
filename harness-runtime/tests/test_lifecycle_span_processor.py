@@ -679,6 +679,7 @@ def test_aws_kms_config_without_injected_backend_fails_at_bootstrap(tmp_path: Pa
 @pytest.mark.asyncio
 async def test_stage_4_validates_signing_before_one_shot_tracer_registration(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Codex round-18 (B-47 PR B1) — OTel tracer registration is one-shot per
     process; a KMS config failure surfacing AFTER it poisoned same-process
@@ -686,6 +687,14 @@ async def test_stage_4_validates_signing_before_one_shot_tracer_registration(
     BEFORE the tracer registrar is ever invoked."""
     import unittest.mock as mock
     from types import SimpleNamespace
+
+    from cryptography.fernet import Fernet
+
+    # B-65-A (Runtime spec v1.103 §14.8.11) — this config resolves
+    # audit_signing_fail_closed ON (MTC); provision the protected-store key
+    # so the NEW bootstrap invariant doesn't preempt the unrelated
+    # missing-redaction-key gap this test targets.
+    monkeypatch.setenv("HARNESS_PROTECTED_RESULT_STORE_KEY", Fernet.generate_key().decode("ascii"))
 
     from harness_runtime.bootstrap import stage_4_od
     from harness_runtime.bootstrap.mutable_context import _MutableHarnessContext

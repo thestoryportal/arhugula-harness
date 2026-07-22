@@ -198,6 +198,20 @@ class _Deployment:
             handle.write(json.dumps({"legacy_baseline": [[t, h] for t, h in pairs]}) + "\n")
 
 
+@pytest.fixture(autouse=True)
+def _protected_result_store_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """B-65-A (Runtime spec v1.103 §14.8.11): every `_Deployment.config()` in
+    this file resolves `audit_signing_fail_closed` ON (MTC persona tier +
+    a real backend), and `validate_mtc_audit_signing_config` now fails loud
+    when that resolves ON with no protected-store key configured — this
+    file's tests are about record-migration behavior, not that gap, so
+    provision a key unconditionally rather than let every test's config
+    construction hit the new invariant."""
+    from cryptography.fernet import Fernet
+
+    monkeypatch.setenv("HARNESS_PROTECTED_RESULT_STORE_KEY", Fernet.generate_key().decode("ascii"))
+
+
 @pytest.fixture
 def dep(tmp_path: Path) -> _Deployment:
     return _Deployment(tmp_path)

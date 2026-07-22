@@ -1786,6 +1786,37 @@ class RuntimeConfig(BaseModel):
     `harness_runtime.lifecycle.audit_signing_fail_closed_validation`.
     """
 
+    protected_result_store_key_env_var: str = "HARNESS_PROTECTED_RESULT_STORE_KEY"
+    """B-65-A (Runtime spec v1.103 §14.8.11; RATIFIED B-65 Class 2 fork §3b) —
+    names the environment variable holding the protected result store's
+    Fernet DEK (base64-encoded), mirroring the memory-tool's `key_env_var`
+    structure-not-content convention (name a reference, never carry key
+    material on `RuntimeConfig` itself). File/CLI-only (not env-keyed) —
+    an operator overriding WHICH env var to read is a rare indirection, not
+    a correctness-gating flag whose silent drop would matter
+    ([[runtimeconfig-scalar-needs-both-env-loaders]] scopes to flags that
+    gate correctness; this is a reference-name, closer to
+    `audit_cutover_record_key_id`).
+
+    When `audit_signing_fail_closed` resolves ON, the named env var MUST be
+    set to a valid Fernet key at bootstrap — enforced FAIL LOUD at
+    `validate_mtc_audit_signing_config` (never a silent
+    `protected_result_store=None` degrade under fail-closed, where the
+    carrier's payload may hold tenant PII/credentials). When the resolved
+    policy is OFF, the carrier is never raised, so an unset/absent key is
+    harmless — `ctx.protected_result_store` stays `None`.
+    """
+
+    protected_result_store_ttl_seconds: float = 86400.0
+    """B-65-A (Runtime spec v1.103 §14.8.11) — the deployment-configurable
+    TTL (spec AC 7) for unacknowledged protected-store entries; a GC sweep
+    (bootstrap/shutdown + an opportunistic in-write trigger) collects
+    entries past this age. File/CLI-only — a mistuned TTL changes WHEN
+    recovery entries are reclaimed, never a correctness property, so it is
+    not env-keyed per the same rationale as `prompt_cache_prewarm_model`.
+    Default 24h.
+    """
+
     otel: OTelConfig
     """OTLP endpoint, sampler mode, additional resource attrs. Enriched at U-RT-07.
 

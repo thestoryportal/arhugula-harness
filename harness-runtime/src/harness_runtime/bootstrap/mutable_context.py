@@ -185,6 +185,16 @@ class _MutableHarnessContext:
     stage 4 from `config.audit_signing` (`make_audit_signing_backend`);
     threaded into the span-processor redaction-token map (and, at PR B2, the
     remaining audit composer builders). `None` = placeholder signing."""
+    protected_result_store: Any = None
+    """ProtectedResultStore | None — B-65-A (Runtime spec v1.103 §14.8.11;
+    RATIFIED B-65 Class 2 fork §3b) composition root. Constructed at
+    stage 4 from `config.protected_result_store_key_env_var` (`materialize_
+    protected_result_store_stage`); threaded into all 4 `PostEffectClass`
+    raise-site dispatchers/composers at stage 5. `None` when
+    `audit_signing_fail_closed` resolves OFF (the carrier is never raised
+    on that path) — a resolved-ON bootstrap with an unset key env var FAILS
+    LOUD at `validate_mtc_audit_signing_config`, so `None` here never
+    silently masks a fail-closed misconfiguration."""
     requires_inference: bool = True
     """Runtime spec v1.47 §2.1 — bootstrap-time inference-need signal (NOT a
     frozen `HarnessContext` field; not in `_REQUIRED_FIELDS`). Set by

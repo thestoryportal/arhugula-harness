@@ -3176,6 +3176,7 @@ def materialize_llm_dispatcher_stage(
     prewarm_model: str | None = None,
     prewarm_policy_fail_closed: bool = False,
     audit_signing_fail_closed: bool = False,
+    protected_result_store: Any = None,
 ) -> RuntimeLLMDispatcher:
     """Stage 5 LOOP_INIT composer factory for the LLM dispatcher (U-RT-52).
 
@@ -3270,6 +3271,8 @@ def materialize_llm_dispatcher_stage(
         # U-RT-136 — the resolved OD v1.34 §21.2.3 policy (stage 5 passes
         # `resolve_audit_signing_fail_closed(config)`).
         audit_signing_fail_closed=audit_signing_fail_closed,
+        # B-65-A — `ctx.protected_result_store` (stage 4 OD).
+        protected_result_store=protected_result_store,
     )
 
 
