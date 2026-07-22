@@ -1384,3 +1384,66 @@ def test_malformed_baseline_pair_typed_refusal(dep: _Deployment) -> None:
         retag_sidecar(
             dep.config(), sidecar_path=dep.sidecar_path, signing_backend=dep.record_backend
         )
+
+
+def test_b63_record_verify_availability_maps_to_typed_cli_refusal(
+    dep: _Deployment, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """B-63 (codex round-2 P1, PR #1073): a KMS infra failure while
+    AUTHENTICATING the record (backend.verify raises the shared
+    `harness_core.SigningBackendUnavailableError`, translated by
+    `verify_cutover_record_signature` to the OD availability type) exits 1
+    through the REAL CLI with a typed retryable refusal on stderr — never a
+    traceback — and ZERO tags changed."""
+    from harness_core import SigningBackendUnavailableError
+    from harness_runtime.admin.migrate_audit_sidecar import main
+
+    entry = dep.signed_entry("ref-1", placeholder=True)
+    dep.writer().append(None, entry)
+    dep.write_record(_row(entry.entry_hash))
+    before = dep.sidecar_path.read_bytes()
+
+    class _UnavailableVerifyBackend(_FakeBackend):
+        def verify(self, *, message: bytes, signature: bytes, key_id: str, key_period: int) -> bool:
+            raise SigningBackendUnavailableError("kms throttled (test)")
+
+    config_path = dep.root / "harness.toml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "[runtime]",
+                'deployment_surface = "local-development"',
+                f'repository_root = "{dep.root}"',
+                'default_topology = "single-threaded-linear"',
+                'persona_tier = "multi-tenant-compliance"',
+                f'tenant_id = "{_TENANT}"',
+                f'audit_cutover_record_path = "{dep.record_path}"',
+                f'audit_cutover_record_key_id = "{_RECORD_KEY}"',
+                f'audit_ledger_binding_id = "{_BINDING}"',
+                "",
+                "[runtime.audit_signing]",
+                'backend = "aws-kms"',
+                "[runtime.audit_signing.key_arns]",
+                f'"{_ROW_KEY}" = "{_ARN_ROW}"',
+                f'"{_RECORD_KEY}" = "{_ARN_RECORD}"',
+                f'"harness-runtime-redaction-token" = "{_ARN_ROW}-redaction"',
+                f'"harness-runtime-dev" = "{_ARN_ROW}-dev"',
+                f'"harness-cost-attribution-v1" = "{_ARN_ROW}-cost"',
+                "",
+                "[runtime.otel]",
+                'otlp_endpoint = "http://localhost:4318"',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "harness_runtime.config.audit_signing.make_audit_signing_backend",
+        lambda config: _UnavailableVerifyBackend(secret=b"record-secret"),
+    )
+    exit_code = main([str(dep.ledger_path), "--retag", "--runtime-config", str(config_path)])
+    assert exit_code == 1
+    assert dep.sidecar_path.read_bytes() == before
+    captured = capsys.readouterr()
+    assert "record-verification backend unavailable (retryable)" in captured.err
+    assert "Traceback" not in captured.err

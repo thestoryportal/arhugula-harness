@@ -24,15 +24,22 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from harness_core import SigningBackendUnavailableError
+
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
 
-class UnknownSigningKeyIdError(KeyError):
+class UnknownSigningKeyIdError(SigningBackendUnavailableError, KeyError):
     """`key_id` has no entry in this backend's `key_id -> KMS key ARN` mapping.
 
     Fails loud rather than silently signing under a default/wrong key
-    (ADR-D8 §Decision item 2).
+    (ADR-D8 §Decision item 2). Also a `SigningBackendUnavailableError`
+    (B-63): an unmapped `key_id` means the composition root failed to
+    supply the key — availability by OD v1.34 §21.2.2 row 7(b) spec text
+    ("including a `key_id` UNKNOWN to the supplied resolver/mapping"), not
+    a verdict. The `KeyError` base is retained so pre-B-63 callers keyed
+    on it keep working.
     """
 
 
@@ -117,6 +124,25 @@ class AwsKmsSigningBackend:
         # .operation_model("Verify").output_shape.members["SignatureValid"]
         # .documentation` — not merely an empirical single observation) — a
         # successful response's `SignatureValid` is therefore always `True`.
+        # B-63 availability classification (OD v1.34 §21.2.2 row 7(b)): any
+        # boto-raised failure of the Verify call OTHER than the modeled
+        # signature-mismatch exception — credential resolution, network
+        # (EndpointConnectionError), throttling, missing the KMS `Verify`
+        # IAM permission (generic ClientError), service 5xx — means KMS
+        # could not render a verdict: infrastructure, retryable, never a
+        # verdict. Typed as the shared `SigningBackendUnavailableError` so
+        # the OD-axis verifier can translate WITHOUT importing this
+        # backend's module. Non-boto raises (e.g. `TypeError` from a
+        # malformed argument) are programming DEFECTS and propagate
+        # unwrapped, per the same spec row. The catch is scoped to the
+        # network call only; `KMSInvalidSignatureException` (a `ClientError`
+        # subclass) is caught FIRST and keeps meaning mismatch -> `False`.
+        from botocore.exceptions import (  # pyright: ignore[reportMissingTypeStubs]
+            BotoCoreError,
+            ClientError,
+            ParamValidationError,
+        )
+
         try:
             response = self._kms.verify(
                 KeyId=key_arn,
@@ -127,6 +153,19 @@ class AwsKmsSigningBackend:
             )
         except self._kms.exceptions.KMSInvalidSignatureException:
             return False
+        except ParamValidationError:
+            # Codex round-3 P2 (PR #1073): botocore's client-side argument
+            # validation failing is a PROGRAMMING DEFECT (malformed call,
+            # not a service condition) even though it subclasses
+            # BotoCoreError — re-raised unwrapped per the taxonomy, never
+            # masked as retryable availability.
+            raise
+        except (BotoCoreError, ClientError) as exc:
+            raise SigningBackendUnavailableError(
+                f"AWS KMS Verify unavailable for key_id={key_id!r} "
+                f"({type(exc).__name__}: {exc}) — infrastructure failure, "
+                "not a signature verdict (OD v1.34 §21.2.2 row 7(b))"
+            ) from exc
         return response["SignatureValid"]
 
     def _resolve_key_arn(self, key_id: str) -> str:

@@ -708,6 +708,10 @@ def _run_audit_verification_if_engaged(
     the other path-error exits), or `None` when not engaged or when
     hash-only behavior is preserved (the plain summary proceeds verbatim).
     """
+    from harness_od.per_family_audit_verification import (
+        AuditVerificationBackendUnavailableError,
+    )
+
     from harness_runtime.admin.inspect_audit_verification import (
         ForgedCutoverRecordError,
         run_audit_inspection,
@@ -817,6 +821,32 @@ def _run_audit_verification_if_engaged(
             disposition="unverified",
             exit_code=EXIT_AUDIT_UNVERIFIED,
             detail=(f"{AUDIT_UNVERIFIED_FAIL_CLASS}: forged/untrusted cutover record: {exc}"),
+        )
+    except AuditVerificationBackendUnavailableError as exc:
+        # B-63 (codex round-2 P1 on PR #1073): a KMS infra failure during
+        # verification now surfaces as the OD-typed availability error —
+        # availability cannot PROVE trust, so the disposition is the same
+        # fail-closed UNVERIFIED exit (never a traceback), with retryable
+        # wording distinct from the forged-record rejection: the operator
+        # remedy is retry/restore connectivity, not incident response.
+        print(
+            f"harness-inspect: RT-FAIL-AUDIT-UNVERIFIED — verification backend "
+            f"unavailable (retryable): {exc}",
+            file=sys.stderr,
+        )
+        from harness_runtime.admin.inspect_audit_verification import (
+            AUDIT_UNVERIFIED_FAIL_CLASS,
+            EXIT_AUDIT_UNVERIFIED,
+            AuditInspectionOutcome,
+        )
+
+        return AuditInspectionOutcome(
+            disposition="unverified",
+            exit_code=EXIT_AUDIT_UNVERIFIED,
+            detail=(
+                f"{AUDIT_UNVERIFIED_FAIL_CLASS}: verification backend "
+                f"unavailable (retryable): {exc}"
+            ),
         )
 
     if outcome.disposition == "hash-only-preserved":

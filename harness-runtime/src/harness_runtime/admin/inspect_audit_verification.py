@@ -311,7 +311,7 @@ def _load_key_map(path: Path) -> tuple[dict[str, SigningBackend], dict[str, str]
     `key_id` strings; two distinct ids aliasing one ARN share a key.
     """
     from harness_runtime.config.audit_signing import (
-        SigningBackendUnavailableError,
+        SigningBackendSdkUnavailableError,
         make_audit_signing_backend,
     )
 
@@ -368,7 +368,7 @@ def _load_key_map(path: Path) -> tuple[dict[str, SigningBackend], dict[str, str]
             )
         try:
             backend = make_audit_signing_backend(config)
-        except (SigningBackendUnavailableError, *boto_construction_errors) as exc:
+        except (SigningBackendSdkUnavailableError, *boto_construction_errors) as exc:
             # Construction-availability (missing optional SDK, missing AWS
             # region/credentials — botocore's own config errors, codex
             # round-8 P1) is an input/infrastructure failure — surfaces as
