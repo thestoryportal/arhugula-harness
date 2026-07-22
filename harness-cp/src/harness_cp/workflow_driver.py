@@ -8217,22 +8217,24 @@ def _execute_parallelization(
             # cannot actually land there under asyncio's cooperative model.
             _cancel_token: _DispatchCancelToken | None = None
             try:
-                if isinstance(_admission, SubAgentDispatchCapacityError):
-                    # B-48 apply-note 2: admission-rejection composes as a
-                    # BRANCH FAILURE through this SAME exception arm — no new
-                    # control-transfer mode.
-                    raise _admission
-                # B-60 (codex round-3 on PR #1075): INTRA-phase consult — a
-                # trip during an earlier sibling's start stops this branch's
-                # dispatch from beginning. Pre-dispatch raise: release the
-                # admission explicitly (its dispatch-tied releaser is never
-                # scheduled), mirroring the marker-write arm.
+                # B-60 (codex round-3 on PR #1075; round-10 reorder): the
+                # INTRA-phase consult runs BEFORE admission discrimination —
+                # a trip during reserve_fanout() with capacity-rejected
+                # branches must terminate at the fence, never fold the
+                # rejections into a resumable PAUSED. Pre-dispatch raise:
+                # release the admission explicitly (its dispatch-tied
+                # releaser is never scheduled), mirroring the marker arm.
                 try:
                     _consult_dispatch_fence()
                 except BaseException:
                     if isinstance(_admission, CapacityLease):
                         _admission.release_unless_job_bound()
                     raise
+                if isinstance(_admission, SubAgentDispatchCapacityError):
+                    # B-48 apply-note 2: admission-rejection composes as a
+                    # BRANCH FAILURE through this SAME exception arm — no new
+                    # control-transfer mode.
+                    raise _admission
                 _lease_token = _BRANCH_CAPACITY_LEASE_VAR.set(_admission)
                 # PROCEED has no sibling-cancellation mode (a branch failure
                 # never cancels another branch under `return_exceptions=True`),
@@ -11922,22 +11924,24 @@ def _execute_orchestrator_workers(
             # since nothing between here and there awaits).
             _cancel_token: _DispatchCancelToken | None = None
             try:
-                if isinstance(_admission, SubAgentDispatchCapacityError):
-                    # B-48 apply-note 2: admission-rejection composes as a
-                    # BRANCH FAILURE through this SAME exception arm — no new
-                    # control-transfer mode.
-                    raise _admission
-                # B-60 (codex round-3 on PR #1075): INTRA-phase consult — a
-                # trip during an earlier sibling's start stops this branch's
-                # dispatch from beginning. Pre-dispatch raise: release the
-                # admission explicitly (its dispatch-tied releaser is never
-                # scheduled), mirroring the marker-write arm.
+                # B-60 (codex round-3 on PR #1075; round-10 reorder): the
+                # INTRA-phase consult runs BEFORE admission discrimination —
+                # a trip during reserve_fanout() with capacity-rejected
+                # branches must terminate at the fence, never fold the
+                # rejections into a resumable PAUSED. Pre-dispatch raise:
+                # release the admission explicitly (its dispatch-tied
+                # releaser is never scheduled), mirroring the marker arm.
                 try:
                     _consult_dispatch_fence()
                 except BaseException:
                     if isinstance(_admission, CapacityLease):
                         _admission.release_unless_job_bound()
                     raise
+                if isinstance(_admission, SubAgentDispatchCapacityError):
+                    # B-48 apply-note 2: admission-rejection composes as a
+                    # BRANCH FAILURE through this SAME exception arm — no new
+                    # control-transfer mode.
+                    raise _admission
                 _lease_token = _BRANCH_CAPACITY_LEASE_VAR.set(_admission)
                 # codex round-4 [P2] "trip the fence on proceed-barrier
                 # cancellation" — see `_proceed_branch`'s identical rationale:
