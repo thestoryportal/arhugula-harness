@@ -166,16 +166,17 @@ case "$TOOL" in
 esac
 
 # Loop-control wrappers short-circuit to ALLOW *before* the free-text deny scan. defer.sh
-# / halt.sh only append a ledger row / touch the halt marker — they perform no dangerous
-# action regardless of args, and their REASON text naturally names operator actions ("gh
-# secret set …", ".env", "credentials") that the deny-list scans for as substrings. Without
-# this exemption a safe deferral whose reason names the gate would be DENIED, no DEFERRED-HIL
-# row would be written, and the headless loop would retry the same gated item to the cap.
+# / resolve.sh / halt.sh only append a ledger row / touch the halt marker — they perform no
+# dangerous action regardless of args, and their REASON/NOTE text naturally names operator
+# actions ("gh secret set …", ".env", "credentials") that the deny-list scans for as
+# substrings. Without this exemption a safe deferral/resolution whose text names the gate
+# would be DENIED, no DEFERRED-HIL/RESOLVED-HIL row would be written, and the headless loop
+# would retry the same gated item to the cap (or never clear an answered one).
 # Strictly bounded to a SINGLE CLEAN invocation: wrapper prefix + NO control operators (so it
 # can't chain a real dangerous command) + NO $VAR expansion (so it can't expand a secret VALUE
 # into the ledger). $(...) and newlines are control-operator-rejected here too.
 if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ] \
-   && printf '%s' "$CMD" | grep -Eq '^[[:space:]]*(bash[[:space:]]+)?tools/04-loop/(defer|halt)\.sh([[:space:]]|$)' \
+   && printf '%s' "$CMD" | grep -Eq '^[[:space:]]*(bash[[:space:]]+)?tools/04-loop/(defer|resolve|halt)\.sh([[:space:]]|$)' \
    && ! printf '%s' "$CMD" | grep -q '[;&|<>`]' && [ "$CMD" = "${CMD%%\$(*}" ] && [ "$CMD" = "${CMD//$'\n'/}" ] \
    && ! printf '%s' "$CMD" | grep -Eq '\$\{?[A-Za-z_]'; then
   emit_allow
@@ -267,9 +268,9 @@ if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ]; then
     :  # chained / nested / redirected / destructive submode (incl. git commit --amend) → ask
   else
     TRIM=$(printf '%s' "$CMD" | sed 's/^[[:space:]]*//')
-    # (Loop-control wrappers defer.sh/halt.sh are auto-allowed earlier — at the top of the
-    # deny block — so a deferral reason naming an operator action isn't tripped by the
-    # free-text deny scan. See the short-circuit in §2.)
+    # (Loop-control wrappers defer.sh/resolve.sh/halt.sh are auto-allowed earlier — at the
+    # top of the deny block — so a deferral/resolution reason naming an operator action
+    # isn't tripped by the free-text deny scan. See the short-circuit in §2.)
     # Allowlist = commands that are safe REGARDLESS of their arguments (the dev/git arc
     # + pure builtins with no filesystem reach). Deliberately NOT here:
     #  - content readers / programmable filters (cat/head/tail/grep/rg/find/jq/sed/awk/

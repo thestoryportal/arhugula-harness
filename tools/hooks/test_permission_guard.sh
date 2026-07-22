@@ -67,6 +67,10 @@ OUT=$(run_on "$(pl Bash "tools/04-loop/defer.sh R-300 'needs OpenAI credentials 
 [ "$(dec "$OUT")" = "allow" ] && ok "allow defer.sh wrapper (even with 'credentials' in the reason)" || bad "defer.sh not allowed: $OUT"
 OUT=$(run_on "$(pl Bash "bash tools/04-loop/defer.sh R-410 'needs container runtime'" '')")
 [ "$(dec "$OUT")" = "allow" ] && ok "allow 'bash tools/04-loop/defer.sh ...'" || bad "bash defer.sh not allowed: $OUT"
+OUT=$(run_on "$(pl Bash "tools/04-loop/resolve.sh R-410 'ratified via council dyad — see PR #1234'" '')")
+[ "$(dec "$OUT")" = "allow" ] && ok "allow resolve.sh wrapper" || bad "resolve.sh not allowed: $OUT"
+OUT=$(run_on "$(pl Bash "bash tools/04-loop/resolve.sh R-410 'operator ran gh secret set to unblock this'" '')")
+[ "$(dec "$OUT")" = "allow" ] && ok "allow resolve.sh wrapper (even with 'gh secret set' in the note)" || bad "resolve.sh not allowed: $OUT"
 OUT=$(run_on "$(pl Bash "tools/04-loop/halt.sh 'forward menu exhausted — 3 awaiting input'" '')")
 [ "$(dec "$OUT")" = "allow" ] && ok "allow halt.sh wrapper (stand-down)" || bad "halt.sh not allowed: $OUT"
 OUT=$(run_on "$(pl Bash 'source tools/hooks/lib.sh && loop_defer R-1 x' '')")
@@ -75,6 +79,8 @@ OUT=$(run_on "$(pl Bash 'source tools/hooks/lib.sh && loop_defer R-1 x' '')")
 #     secret VALUE into the ledger). Literal "credentials" is fine (4b); `$VAR` is not.
 OUT=$(run_on "$(pl Bash 'tools/04-loop/defer.sh R-300 $OPENAI_API_KEY' '')")
 [ -z "$(dec "$OUT")" ] && ok "defer.sh with \$VAR expansion NOT auto-allowed (no secret leak)" || bad "defer.sh \$VAR auto-allowed (secret-leak vector): $OUT"
+OUT=$(run_on "$(pl Bash 'tools/04-loop/resolve.sh R-300 $OPENAI_API_KEY' '')")
+[ -z "$(dec "$OUT")" ] && ok "resolve.sh with \$VAR expansion NOT auto-allowed (no secret leak)" || bad "resolve.sh \$VAR auto-allowed (secret-leak vector): $OUT"
 # 4d) A deferral REASON that names an operator action (gh secret / .env) must ALLOW — the
 #     wrapper short-circuits BEFORE the free-text deny scan, else the deferral is denied,
 #     no ledger row is written, and the headless loop retries the gated item to the cap.
@@ -87,6 +93,8 @@ OUT=$(run_on "$(pl Bash 'gh secret set FOO' '')")
 [ "$(dec "$OUT")" = "deny" ] && ok "real 'gh secret set' still denied (short-circuit is wrapper-only)" || bad "gh secret leaked through: $OUT"
 OUT=$(run_on "$(pl Bash 'tools/04-loop/defer.sh R-1 x; rm -rf /' '')")
 [ "$(dec "$OUT")" = "deny" ] && ok "wrapper + chained 'rm -rf' still denied (control-op → deny-list)" || bad "chained rm-rf via wrapper not denied: $OUT"
+OUT=$(run_on "$(pl Bash 'tools/04-loop/resolve.sh R-1 x; rm -rf /' '')")
+[ "$(dec "$OUT")" = "deny" ] && ok "resolve.sh + chained 'rm -rf' still denied (control-op → deny-list)" || bad "chained rm-rf via resolve.sh not denied: $OUT"
 OUT=$(run_on "$(pl Bash 'bash tools/hooks/test_loop_lib.sh' '')")
 [ "$(dec "$OUT")" = "allow" ] && ok "allow hermetic test run" || bad "test run not allowed: $OUT"
 OUT=$(run_on "$(pl Bash 'gh pr create --fill' '')")

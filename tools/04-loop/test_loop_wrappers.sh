@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 # Hermetic test for the loop-control wrappers (U-HK-14/15): tools/04-loop/defer.sh +
-# tools/04-loop/halt.sh. These are the allowlisted, single-invocation entry points the
-# autonomous loop uses to record a per-item deferral and to stand the run down — the
-# executable path that replaced the denied/malformed raw `source … && loop_defer …`.
+# tools/04-loop/resolve.sh + tools/04-loop/halt.sh. These are the allowlisted,
+# single-invocation entry points the autonomous loop uses to record a per-item
+# deferral/resolution and to stand the run down — the executable path that replaced the
+# denied/malformed raw `source … && loop_defer …`.
 # Asserts they source BOTH libs correctly (functions defined), write the ledger, raise
-# the halt marker, and reject a no-arg defer.
+# the halt marker, and reject a no-arg defer/resolve.
 
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEFER="$SCRIPT_DIR/defer.sh"
+RESOLVE="$SCRIPT_DIR/resolve.sh"
 HALT="$SCRIPT_DIR/halt.sh"
 
 PASS=0; FAIL=0
@@ -41,7 +43,21 @@ CLAUDE_PROJECT_DIR="$REPO" bash "$DEFER" R-555 >/dev/null 2>&1 && bad "reason-le
 CLAUDE_PROJECT_DIR="$REPO" bash "$DEFER" R-555 "" >/dev/null 2>&1 && bad "empty-reason defer.sh accepted" || ok "empty-reason defer.sh exits nonzero"
 grep -q "R-555" "$LEDGER" && bad "reason-less R-555 row was written" || ok "no reason-less row written"
 
-# 4) halt.sh raises the halt marker + logs a STOP row.
+# 4) resolve.sh writes a RESOLVED-HIL row and clears the item from the skip-set —
+#    matching loop_resolve's last-write-wins semantics, exercised through the actual
+#    guard-allowlisted entry point rather than the sourced function directly.
+CLAUDE_PROJECT_DIR="$REPO" bash "$RESOLVE" R-410 "ratified via council dyad — see PR #1234" >/dev/null 2>&1
+grep -qE '\| RESOLVED-HIL \| R-410 — ratified via council dyad' "$LEDGER" && ok "resolve.sh writes R-410 row" || bad "R-410 resolved row missing"
+SKIP=$(cd "$REPO" && . "$SCRIPT_DIR/../hooks/lib.sh" && . "$SCRIPT_DIR/../hooks/loop_lib.sh" && CLAUDE_PROJECT_DIR="$REPO" loop_skip_set)
+[ "$SKIP" = "R-300" ] && ok "resolve.sh clears R-410 from skip-set ($SKIP)" || bad "skip-set not cleared: [$SKIP]"
+
+# 4b) resolve.sh with no args / no note → usage error (exit 2), no malformed row.
+CLAUDE_PROJECT_DIR="$REPO" bash "$RESOLVE" >/dev/null 2>&1 && bad "no-arg resolve.sh did not error" || ok "no-arg resolve.sh exits nonzero"
+CLAUDE_PROJECT_DIR="$REPO" bash "$RESOLVE" R-999 >/dev/null 2>&1 && bad "note-less resolve.sh accepted" || ok "note-less resolve.sh exits nonzero"
+CLAUDE_PROJECT_DIR="$REPO" bash "$RESOLVE" R-999 "" >/dev/null 2>&1 && bad "empty-note resolve.sh accepted" || ok "empty-note resolve.sh exits nonzero"
+grep -q "R-999" "$LEDGER" && bad "note-less R-999 row was written" || ok "no note-less resolved row written"
+
+# 5) halt.sh raises the halt marker + logs a STOP row.
 CLAUDE_PROJECT_DIR="$REPO" bash "$HALT" "forward menu exhausted — 2 awaiting input" >/dev/null 2>&1
 [ -f "$REPO/.harness/.loop-halt" ] && ok "halt.sh raises .loop-halt" || bad ".loop-halt not raised"
 grep -q '| STOP | forward menu exhausted' "$LEDGER" && ok "halt.sh logs STOP reason" || bad "STOP not logged"
