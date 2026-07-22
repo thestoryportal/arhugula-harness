@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `435f9bf8d50d` |
+| `workspace_state_hash` | `df388ea11898` |
 | `last_refreshed` | 2026-07-22T00:00:00Z |
-| `git_head` | `1267053d` —  |
+| `git_head` | `35a62ad9` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 96 |
 
@@ -49,11 +49,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| 1079 | 2026-07-22 | loop_status.md DEFERRED-HIL rows can be RESOLVED (fix-loop-status-resolved-hil) |
 | PR #1078 | 2026-07-22 | B-65-A protected result store + terminal-with-result cascade disposition — 11 out-of-family codex rounds to terminal; merge-gate 3-lens round-1 BLOCK (missing e2e coverage) fixed + PD-8 probed, round-2 all-APPROVE; B-65 closed, B-68 registered (narrow TTL-dependent GC/publish race). |
 | 1077 | 2026-07-22 | B-65-A spec leg merged: CP v1.103 §25.15 terminal-with-result rider + Runtime v1.103 §14.8.11 protected result store + plans v2.40/v2.51 (U-CP-85 amended, U-RT-145 new) + 4 clearance markers; codex 10 rounds terminal. Next: B-65-A impl leg. |
 | 1076 | 2026-07-21 | B-17 hold reaffirmed; next: B-65-A apply arc (then B-59-A, B-33-A) |
 | 1075 | 2026-07-21 | B-60 nonlinear fence consults (closed; B-66 residual registered; register 53 closed / 10 registered_finding) |
-| 1074 | 2026-07-21 | B-58 validator-escalation carriers re-homed to harness-core (closed; register 52 closed / 10 registered_finding) |
 ---
 
 ---
