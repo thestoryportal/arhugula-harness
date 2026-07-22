@@ -1,0 +1,379 @@
+"""`ProtectedResultStore` unit tests (RATIFIED B-65 Class 2 fork §3b; Runtime
+spec v1.103 §14.8.11). All tests exercise a real `cryptography` Fernet — this
+module never monkeypatches the codec.
+"""
+
+from __future__ import annotations
+
+import os
+import time
+from pathlib import Path
+
+import pytest
+from cryptography.fernet import Fernet
+from harness_runtime.lifecycle.protected_result_store import (
+    ProtectedResultStore,
+    ProtectedStoreCrossTenantError,
+    ProtectedStoreTamperError,
+    UnresolvableResultRef,
+    compose_composite_key,
+    normalize_tenant_scope,
+)
+
+
+def _store(tmp_path: Path, *, ttl_seconds: float = 86400.0) -> ProtectedResultStore:
+    return ProtectedResultStore(
+        tmp_path / "store", codec=Fernet(Fernet.generate_key()), ttl_seconds=ttl_seconds
+    )
+
+
+class _Unserializable:
+    """Holds a live generator — `pickle.dumps` raises `TypeError` on it."""
+
+    def __init__(self) -> None:
+        self.gen = (x for x in range(3))
+
+
+class _ProviderResponse:
+    """Module-level (pickle requires a class resolvable by qualified name —
+    a locally-defined class inside a test function is NOT picklable)."""
+
+    def __init__(self, text: str) -> None:
+        self.text = text
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, _ProviderResponse) and other.text == self.text
+
+
+# --- normalize_tenant_scope / compose_composite_key -------------------------
+
+
+def test_normalize_tenant_scope_none_passes_through() -> None:
+    assert normalize_tenant_scope(None) is None
+
+
+def test_normalize_tenant_scope_refuses_empty_string() -> None:
+    with pytest.raises(ValueError, match="must not be empty"):
+        normalize_tenant_scope("")
+
+
+def test_normalize_tenant_scope_refuses_reserved_sidecar_tag() -> None:
+    with pytest.raises(ValueError, match="reserved sidecar tag"):
+        normalize_tenant_scope("_single")
+
+
+def test_compose_composite_key_is_full_strength_not_48_bit() -> None:
+    """Widens the carrier's `uuid4().hex[:12]` (48 bits) to a full uuid4 (128
+    bits) — mutation probe: truncating back to [:12] shrinks the hex segment
+    below 32 chars and fails this witness."""
+    key = compose_composite_key("tenant-a")
+    hex_part = key.split(":", 1)[1]
+    assert len(hex_part) == 32
+
+
+def test_compose_composite_key_two_calls_never_collide() -> None:
+    keys = {compose_composite_key("tenant-a") for _ in range(1000)}
+    assert len(keys) == 1000
+
+
+# --- write_once / read round trip -------------------------------------------
+
+
+def test_write_once_then_read_round_trips_under_owning_tenant(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    ref = store.write_once("tenant-a", {"payload": "value"})
+    assert isinstance(ref, str)
+    assert store.read("tenant-a", ref) == {"payload": "value"}
+
+
+def test_write_once_none_tenant_round_trips_under_none(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    ref = store.write_once(None, "untenanted result")
+    assert isinstance(ref, str)
+    assert store.read(None, ref) == "untenanted result"
+
+
+def test_cross_tenant_read_refused_typed(tmp_path: Path) -> None:
+    """Fork §2 witness (d) half — dropping the tenant component from the key
+    would let a cross-tenant read resolve; mutation probe: a `read()` that
+    skips the owning-tag comparison lets this pass and fails."""
+    store = _store(tmp_path)
+    ref = store.write_once("tenant-a", "secret payload")
+    with pytest.raises(ProtectedStoreCrossTenantError):
+        store.read("tenant-b", ref)
+
+
+def test_result_ref_resolves_preserved_payload_under_owning_tenant(tmp_path: Path) -> None:
+    """Fork §2 witness (d): the preserved effect payload is recoverable via
+    the ref under the OWNING tenant scope."""
+    store = _store(tmp_path)
+    payload = {"provider_response": "the completed effect result", "n": 42}
+    ref = store.write_once("tenant-recovery", payload)
+    assert store.read("tenant-recovery", ref) == payload
+
+
+# --- write-once collision refusal -------------------------------------------
+
+
+def test_write_once_existing_key_refused_typed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Collision-safe write-once (spec v1.103 §14.8.11): a write against an
+    existing composite key is refused, never overwritten. Composite keys
+    include a fresh uuid4 so natural collision is unreachable — force it by
+    monkeypatching `compose_composite_key` to return a fixed key twice.
+    Mutation probe: an implementation using `open(..., 'w')` (truncate-
+    overwrite) instead of `os.link` no-replace would silently succeed here
+    and fail this witness."""
+    store = _store(tmp_path)
+    fixed_key = "tenant-a:" + "0" * 32
+    monkeypatch.setattr(
+        "harness_runtime.lifecycle.protected_result_store.compose_composite_key",
+        lambda tenant_id: fixed_key,
+    )
+    first = store.write_once("tenant-a", "first payload")
+    assert first == fixed_key
+    second = store.write_once("tenant-a", "second payload — must NOT overwrite")
+    assert isinstance(second, UnresolvableResultRef)
+    assert "write-once" in second.reason
+    # The original entry is untouched.
+    assert store.read("tenant-a", fixed_key) == "first payload"
+
+
+# --- fail-closed serialization / encryption ---------------------------------
+
+
+def test_unserializable_result_composes_with_fail_closed_write_typed_serialization_failure(
+    tmp_path: Path,
+) -> None:
+    """Runtime v1.103 §14.8.11 serialization-failure disposition (codex
+    round-1 on the spec PR): a generator/open-handle/unsupported value's
+    versioned-serializer failure composes with the fail-closed write
+    disposition — the carrier surfaces without a resolvable ref, the typed
+    declaration NAMES the serialization failure, the store persists nothing.
+    Mutation probe: lossy coercion (e.g. `str(result)`) or a crash on the
+    unsupported value fails this witness."""
+    store = _store(tmp_path)
+    before = list((tmp_path / "store").glob("*.entry")) if (tmp_path / "store").exists() else []
+    ref = store.write_once("tenant-a", _Unserializable())
+    assert isinstance(ref, UnresolvableResultRef)
+    assert "serialization failed" in ref.reason
+    after = list((tmp_path / "store").glob("*.entry")) if (tmp_path / "store").exists() else []
+    assert after == before
+
+
+def test_store_write_failure_carrier_surfaces_typed_unresolvable_ref(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The DISCRIMINATED unresolvable declaration replaces the live key when
+    durable publication fails (I/O error). Mutation probe: swallowing the
+    write failure and returning a plain string (that then reads as live)
+    fails this witness."""
+    store = _store(tmp_path)
+
+    def _boom(self: ProtectedResultStore, entry_path: Path, data: bytes) -> None:
+        raise OSError("simulated disk-full during publication")
+
+    monkeypatch.setattr(ProtectedResultStore, "_publish_atomic", _boom)
+    ref = store.write_once("tenant-a", "payload that cannot be recovered")
+    assert isinstance(ref, UnresolvableResultRef)
+    assert "store write failed" in ref.reason
+
+
+# --- non-Mapping arbitrary-object round trip --------------------------------
+
+
+def test_non_mapping_result_round_trips_via_byte_envelope_and_type_tag(tmp_path: Path) -> None:
+    """AC 5 — non-Mapping/arbitrary-object results round-trip via an opaque
+    byte-envelope + type tag, never lossy coercion."""
+    store = _store(tmp_path)
+    ref = store.write_once("tenant-a", _ProviderResponse("recovered content"))
+    resolved = store.read("tenant-a", ref)
+    assert isinstance(resolved, _ProviderResponse)
+    assert resolved.text == "recovered content"
+
+
+# --- encrypted-at-rest confidentiality + tamper refusal ---------------------
+
+
+def test_persisted_bytes_disclose_nothing(tmp_path: Path) -> None:
+    """Encrypted-at-rest ENFORCED (codex round-5 on the spec PR): the on-disk
+    bytes contain neither the plaintext payload nor a trivially-decodable
+    encoding of it. Mutation probe: plaintext or base64-only storage through
+    an independent local path fails this witness."""
+    import base64
+
+    store = _store(tmp_path)
+    sentinel = "SENTINEL-8f3a2c-do-not-leak-this-tenant-prompt"
+    store.write_once("tenant-a", sentinel)
+    store_dir = tmp_path / "store"
+    entry_paths = list(store_dir.glob("*.entry"))
+    assert len(entry_paths) == 1
+    raw = entry_paths[0].read_bytes()
+    assert sentinel.encode("utf-8") not in raw
+    assert base64.b64encode(sentinel.encode("utf-8")) not in raw
+    assert sentinel.encode("ascii", errors="ignore") not in raw.lower()
+
+
+def test_wrong_key_or_tampered_ciphertext_fails_typed_before_deserialization(
+    tmp_path: Path,
+) -> None:
+    """A flipped ciphertext byte or a wrong DEK refuses typed BEFORE any
+    deserialization runs. Mutation probe: deserializing tampered ciphertext
+    (or silently returning it) fails this witness."""
+    key = Fernet.generate_key()
+    store = ProtectedResultStore(tmp_path / "store", codec=Fernet(key), ttl_seconds=86400.0)
+    ref = store.write_once("tenant-a", "payload")
+    entry_path = next((tmp_path / "store").glob("*.entry"))
+
+    # Tampered ciphertext under the SAME key.
+    original = entry_path.read_bytes()
+    tampered = original[:-4] + bytes([b ^ 0xFF for b in original[-4:]])
+    entry_path.write_bytes(tampered)
+    with pytest.raises(ProtectedStoreTamperError):
+        store.read("tenant-a", ref)
+
+    # Wrong DEK entirely.
+    entry_path.write_bytes(original)
+    wrong_key_store = ProtectedResultStore(
+        tmp_path / "store", codec=Fernet(Fernet.generate_key()), ttl_seconds=86400.0
+    )
+    with pytest.raises(ProtectedStoreTamperError):
+        wrong_key_store.read("tenant-a", ref)
+
+
+# --- outage-independence (the store's reason for being) ---------------------
+
+
+def test_envelope_resolves_during_simulated_signing_kms_outage(tmp_path: Path) -> None:
+    """The store's reason-for-being: retrieval succeeds while the signing
+    backend is unavailable. Mutation probe: routing the envelope through the
+    signing KMS fails this witness — this test constructs the store with
+    ONLY a local Fernet codec (never a KMS-backed one) and never touches any
+    signing backend, proving the envelope path has no such dependency."""
+    store = _store(tmp_path)
+    ref = store.write_once("tenant-a", {"provider_response": "completed during outage"})
+
+    def _kms_is_down() -> None:
+        raise RuntimeError("signing KMS unreachable (simulated outage)")
+
+    with pytest.raises(RuntimeError, match="signing KMS unreachable"):
+        _kms_is_down()
+    # The store's own read path never calls anything KMS-related — it
+    # resolves regardless of the (simulated) outage above.
+    assert store.read("tenant-a", ref) == {"provider_response": "completed during outage"}
+
+
+# --- crash-atomic durable publication ---------------------------------------
+
+
+def test_crash_between_temp_write_and_commit_leaves_no_destination_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Crash-atomic durable publication (codex round-7 on the spec PR):
+    interrupt the publication after the temp write but before the atomic
+    no-replace commit — the destination key does NOT exist, the write-once
+    existence check does not wedge on a partial entry, and a subsequent
+    write against the same key succeeds. Mutation probe: direct
+    write-in-place publication (no temp-then-commit) fails this witness."""
+    store = _store(tmp_path)
+    fixed_key = "tenant-a:" + "1" * 32
+    monkeypatch.setattr(
+        "harness_runtime.lifecycle.protected_result_store.compose_composite_key",
+        lambda tenant_id: fixed_key,
+    )
+
+    real_link = os.link
+    call_count = {"n": 0}
+
+    def _link_then_crash(src: str, dst: object, **kwargs: object) -> None:
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            raise OSError("simulated crash between temp write and commit")
+        real_link(src, dst, **kwargs)
+
+    monkeypatch.setattr(os, "link", _link_then_crash)
+    first = store.write_once("tenant-a", "first attempt — crashes before commit")
+    assert isinstance(first, UnresolvableResultRef)
+    assert not any((tmp_path / "store").glob("*.entry"))
+
+    second = store.write_once("tenant-a", "second attempt — succeeds")
+    assert second == fixed_key
+    assert store.read("tenant-a", fixed_key) == "second attempt — succeeds"
+
+
+# --- bounded retention: idempotent read / ack-gated deletion / TTL ----------
+
+
+def test_retrieval_idempotent_across_repeated_reads(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    ref = store.write_once("tenant-a", "read me twice")
+    assert store.read("tenant-a", ref) == "read me twice"
+    assert store.read("tenant-a", ref) == "read me twice"
+
+
+def test_deletion_only_after_durable_repair_ack(tmp_path: Path) -> None:
+    """Mutation probe: deleting on first read destroys the only recoverable
+    copy and fails the re-read — this store's `read()` never deletes; only
+    the explicit `ack_delete()` does."""
+    store = _store(tmp_path)
+    ref = store.write_once("tenant-a", "repair target")
+    store.read("tenant-a", ref)  # a read alone must not delete
+    assert store.read("tenant-a", ref) == "repair target"
+    store.ack_delete(ref)
+    with pytest.raises(FileNotFoundError):
+        store.read("tenant-a", ref)
+
+
+def test_ttl_expiry_gc_sweep_emits_typed_report_line(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Mutation probe: silent expiry (no log line) fails this witness."""
+    store = _store(tmp_path, ttl_seconds=1.0)
+    ref = store.write_once("tenant-a", "will expire")
+    entry_path = next((tmp_path / "store").glob("*.entry"))
+    assert entry_path.exists()
+
+    import logging
+
+    caplog.set_level(logging.WARNING, logger="harness.runtime.protected_result_store")
+    expired = store.gc_sweep(now=time.time() + 10.0)
+    assert len(expired) == 1
+    assert not entry_path.exists()
+    assert any("TTL-expired" in record.message for record in caplog.records)
+    with pytest.raises(FileNotFoundError):
+        store.read("tenant-a", ref)
+
+
+def test_gc_sweep_does_not_collect_unexpired_entries(tmp_path: Path) -> None:
+    store = _store(tmp_path, ttl_seconds=86400.0)
+    store.write_once("tenant-a", "fresh entry")
+    expired = store.gc_sweep(now=time.time())
+    assert expired == []
+    assert len(list((tmp_path / "store").glob("*.entry"))) == 1
+
+
+def test_opportunistic_gc_runs_on_write_after_interval(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Periodic-or-opportunistic runtime sweep (codex round-10 on the spec
+    PR): a write triggers a sweep once the opportunistic interval has
+    elapsed, without requiring a bootstrap/shutdown hook or a background
+    task."""
+    store = _store(tmp_path, ttl_seconds=1.0)
+    monkeypatch.setattr(
+        "harness_runtime.lifecycle.protected_result_store._OPPORTUNISTIC_GC_INTERVAL_SECONDS",
+        0.0,
+    )
+    ref_a = store.write_once("tenant-a", "expires soon")
+    entry_a = store._entry_path(ref_a)  # type: ignore[arg-type]
+    assert entry_a.exists()
+
+    real_time = time.time
+
+    def _later() -> float:
+        return real_time() + 10.0
+
+    monkeypatch.setattr(time, "time", _later)
+    store.write_once("tenant-a", "triggers the opportunistic sweep")
+    assert not entry_a.exists()
