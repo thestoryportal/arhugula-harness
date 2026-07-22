@@ -31,7 +31,7 @@ def test_b58_driver_source_has_no_function_level_exception_import() -> None:
     """B-58 close_out: the CP driver's function-level cross-package import
     of the three exception TYPES is dropped — only the composer FUNCTION
     (the genuine cycle risk) remains lazily imported. Pins the hygiene fix
-    the B-48 package-graph witness had to carve an exclusion for."""
+    the B-48 filing had to note as an explicit prose exclusion."""
     import inspect as inspect_module
 
     import harness_cp.workflow_driver as driver
