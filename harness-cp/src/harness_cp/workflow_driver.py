@@ -58,7 +58,12 @@ if TYPE_CHECKING:
     from harness_cp.validator_framework import SyncValidatorFrameworkFacade
     from harness_cp.validator_framework_types import ValidatorEvaluation
 
-from harness_core import SubAgentDispatchCapacityError
+from harness_core import (
+    SubAgentDispatchCapacityError,
+    ValidatorEscalationGateAuditComposeError,
+    ValidatorEscalationGateRejectedError,
+    ValidatorEscalationGateTimeoutError,
+)
 
 from harness_cp.cp_shared_types import ActorIdentity, AgentRole, ModelBinding
 from harness_cp.engine_class import EngineClass
@@ -4922,11 +4927,13 @@ def _execute_workflow_body(
                         # Lazy import to avoid cycle (runtime → cp → runtime).
                         # GateLevel is module-level imported at line 51;
                         # do NOT lazy-import here (would shadow + break
-                        # line 735's GateLevel.AUTO reference).
+                        # line 735's GateLevel.AUTO reference). B-58: the
+                        # three ValidatorEscalationGate*Error carriers are
+                        # module-level harness_core imports now (re-homed
+                        # per the U-CORE-03 precedent) — only the composer
+                        # FUNCTION still needs the lazy cross-package
+                        # import (it is the genuine cycle risk).
                         from harness_runtime.lifecycle.validator_escalation_composer import (
-                            ValidatorEscalationGateAuditComposeError,
-                            ValidatorEscalationGateRejectedError,
-                            ValidatorEscalationGateTimeoutError,
                             compose_validator_escalation_gate,
                         )
 
