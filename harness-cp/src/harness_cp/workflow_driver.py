@@ -1891,9 +1891,14 @@ def _reraise_captured_fence_signal(results: Iterable[Any]) -> None:
     for result in results:
         if isinstance(result, _DispatchFenceTrippedSignal):
             raise result
+        if isinstance(result, BaseExceptionGroup):
+            # Codex round-5 on PR #1075: a branch that used a TaskGroup
+            # internally delivers its fence signal WRAPPED — unwrap via the
+            # same group-splitting logic (no-op when no signal is present).
+            _reraise_fence_signal_from_group(cast("BaseExceptionGroup[BaseException]", result))
 
 
-def _reraise_fence_signal_from_group(group: BaseExceptionGroup) -> None:
+def _reraise_fence_signal_from_group(group: BaseExceptionGroup[BaseException]) -> None:
     """B-60 (codex round-2 on PR #1075, generalized): a `DispatchFenceTrippedSignal`
     raised inside a branch TaskGroup arrives wrapped in a `BaseExceptionGroup`.
     Consuming it as an ordinary branch failure lets the cascade fold convert a

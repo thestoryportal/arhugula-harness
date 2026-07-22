@@ -3478,3 +3478,40 @@ def test_b60_trip_after_final_drain_stops_post_join_synthesis() -> None:
         getattr(p, "branch_metadata", None) is None and "synthesis" in str(p.action_id)
         for p, _k in ledger.appends
     )
+
+
+def test_b60_group_wrapped_fence_signal_not_captured_by_rest_gather() -> None:
+    """Codex round-5 on PR #1075: a branch whose internal TaskGroup wraps
+    the fence signal delivers a `BaseExceptionGroup` RESULT to the rest
+    gather — the scan must unwrap it, never fold it into PARTIAL."""
+    from harness_cp.sub_agent_dispatch_cancellation import DispatchFenceTrippedSignal
+
+    class _GroupRaisingDispatcher:
+        def dispatch(
+            self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+        ) -> dict[str, Any]:
+            if str(step.step_id) == "b":
+                raise BaseExceptionGroup("inner", [DispatchFenceTrippedSignal()])
+            return {"ok": str(step.step_id)}
+
+    class _Reg:
+        def lookup(self, step_kind: StepKind) -> StepDispatcher:
+            return cast(StepDispatcher, _GroupRaisingDispatcher())
+
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    with pytest.raises(DispatchFenceTrippedSignal):
+        execute_workflow(
+            _manifest("wf-b60-grp", TopologyPattern.PARALLELIZATION, PersonaTier.SOLO_DEVELOPER),
+            [
+                WorkflowStep(
+                    step_id=StepID("a"), step_kind=StepKind.DECLARATIVE_STEP, step_payload={}
+                ),
+                WorkflowStep(
+                    step_id=StepID("b"), step_kind=StepKind.DECLARATIVE_STEP, step_payload={}
+                ),
+            ],
+            run_id="run-b60g",
+            ctx=ctx,
+            default_model_binding=_DEFAULT_BINDING,
+            step_dispatchers=cast(StepDispatcherRegistry, _Reg()),
+        )
