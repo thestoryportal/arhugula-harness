@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `4a24fad9e9ae` |
+| `workspace_state_hash` | `435f9bf8d50d` |
 | `last_refreshed` | 2026-07-22T00:00:00Z |
-| `git_head` | `03e06d59` —  |
+| `git_head` | `1267053d` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 96 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Section 02 names the next Claude/Codex-executable frontier. Completion history lives in `Recently completed`; the full remaining itemization lives in `Remaining forward work` (next section).
 
-**Frontier:** the B-51/B-52/B-54(+B-53) audit-signing amendment arc, leg 9 of 10 — **U-RT-139** (`harness migrate-audit-sidecar` record modes, Runtime plan v2.49 §1.7), then the **U-RT-102 amendment** (B-53 `migrate-audit-sidecar` subcommand promotion, §1.6) closes the arc. Post-#1067 companion also owed: CXA v2.21 §2.3.9 CP→OD verifier seam row `R-planned` → `R-live` flip (design-substrate edit with back-flow companion per CP v1.101 §5).
+**Frontier:** B-65-A CLOSED at PR #1078 (protected result store + terminal-with-result cascade disposition; B-68 registered as its own residual). Next per the pre-existing sequencing: **B-59-A** — capacity authority not preserved across sequential bootstrap invocations (`.harness/class_2_fork_b59_capacity_authority_across_bootstraps.md`; `status: operator_gated` — the fork's own council note names a real C1⊥C9 architectural tension on multi-bootstrap-per-process semantics, not a bounded bug fix; ground the fork doc and drive to that decision point before building). Then **B-33-A** — `verify_rotation_6_steps` cannot prove a rotation boundary occurred (`.harness/class_1_fork_b33_rotation_correlation_carrier.md`; `status: design_substrate_gated` — needs Class 1 fork routing to design-phase spec amendment before impl).
 
 
 ## Remaining forward work
@@ -49,11 +49,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1078 | 2026-07-22 | B-65-A protected result store + terminal-with-result cascade disposition — 11 out-of-family codex rounds to terminal; merge-gate 3-lens round-1 BLOCK (missing e2e coverage) fixed + PD-8 probed, round-2 all-APPROVE; B-65 closed, B-68 registered (narrow TTL-dependent GC/publish race). |
 | 1077 | 2026-07-22 | B-65-A spec leg merged: CP v1.103 §25.15 terminal-with-result rider + Runtime v1.103 §14.8.11 protected result store + plans v2.40/v2.51 (U-CP-85 amended, U-RT-145 new) + 4 clearance markers; codex 10 rounds terminal. Next: B-65-A impl leg. |
 | 1076 | 2026-07-21 | B-17 hold reaffirmed; next: B-65-A apply arc (then B-59-A, B-33-A) |
 | 1075 | 2026-07-21 | B-60 nonlinear fence consults (closed; B-66 residual registered; register 53 closed / 10 registered_finding) |
 | 1074 | 2026-07-21 | B-58 validator-escalation carriers re-homed to harness-core (closed; register 52 closed / 10 registered_finding) |
-| 1073 | 2026-07-21 | B-63 typed availability for SigningBackend.verify (closed; register 51 closed / 11 registered_finding) |
 ---
 
 ---
