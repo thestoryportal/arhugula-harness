@@ -104,19 +104,25 @@ loop_defer() {
 # Usage: loop_resolve <item-id> <how it was resolved + evidence pointer>
 loop_resolve() {
   local item="$1"; shift
-  loop_log RESOLVED-HIL "${item} — $*"
+  local note="$*"
+  loop_log RESOLVED-HIL "${item} — ${note}"
   # loop_log ALWAYS exits 0 by design (a ledger write must never break the calling hook),
   # so an unwritable ledger would otherwise make this report success while the item stays
-  # pending — an attended resolution would appear recorded while SessionStart keeps
-  # reporting the stale gate (codex [P2] round 5 on the resolve.sh arc: this same defect
-  # lived in the now-removed resolve.sh wrapper's own post-write check; moved here so the
-  # underlying function's return code is meaningful regardless of caller). Verify the
-  # EFFECT — the item must have left the skip-set (defined below; called after both are
-  # sourced, so no ordering issue) — rather than trust loop_log's return.
-  case " $(loop_skip_set) " in
-    *" ${item} "*) return 1 ;;
-    *) return 0 ;;
-  esac
+  # pending. Verify the EFFECT rather than trust loop_log's return — but verify OWN write
+  # landed (grep the file for the exact row just appended), NOT recomputed global
+  # skip-set membership. The latter was this function's first cut and is an unsound
+  # check-then-act race against concurrent writers with no locking anywhere in this
+  # library: a concurrent loop_defer/loop_resolve for the SAME item-id landing between
+  # our write and our loop_skip_set read can flip the derived answer in EITHER direction
+  # (merge-gate concurrency lens on this arc: own write succeeds but a concurrent
+  # re-DEFERRED-HIL makes it look still-pending; or own write fails but a concurrent
+  # process's resolve of the same item makes it look cleared). Checking for the specific
+  # row we just wrote is monotonic — nothing in this codebase ever deletes a ledger row —
+  # so it is unaffected by any OTHER process's concurrent activity.
+  local p; p=$(loop_status_path)
+  [ -n "$p" ] || return 1
+  local escaped; escaped=$(printf '%s' "${item} — ${note}" | tr '\n' ' ' | sed 's/|/\\|/g')
+  grep -qF "| RESOLVED-HIL | ${escaped} |" "$p" 2>/dev/null
 }
 
 # The run-scoped SKIP-SET: item-IDs deferred SINCE the last ACTIVATE and not subsequently

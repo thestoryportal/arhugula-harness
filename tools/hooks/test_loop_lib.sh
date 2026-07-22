@@ -141,6 +141,34 @@ chmod 0644 "$(loop_status_path)"
 SKIP=$(loop_skip_set)
 printf '%s' "$SKIP" | grep -q "R-888" && ok "R-888 remains pending after the failed resolve" || bad "R-888 unexpectedly cleared despite failed write: [$SKIP]"
 
+# 15c) A ledger row is monotonic — a LATER write for the same item-id never deletes or
+#      rewrites an earlier row (append-only). Basic sanity check, NOT a concurrency
+#      reproduction: bash test execution is sequential, so a "concurrent" write issued
+#      after loop_resolve already returned never actually races with its internal
+#      write-then-check — the two operations can't interleave without true OS-level
+#      concurrency, which isn't reproducible deterministically in a hermetic
+#      single-process test. See 15d for the actual regression test on this fix.
+: > "$(loop_status_path)"; loop_activate "monotonic-row test" >/dev/null
+loop_defer R-410 "needs container runtime"
+loop_resolve R-410 "ratified via council dyad"
+RC=$?
+loop_defer R-410 "a later re-deferral, e.g. from a sibling process"
+[ "$RC" -eq 0 ] && ok "loop_resolve returns 0 at call-time regardless of what's written afterward" || bad "loop_resolve returned $RC on a call-time-successful write"
+grep -qF '| RESOLVED-HIL | R-410 — ratified via council dyad |' "$(loop_status_path)" && ok "the RESOLVED-HIL row itself is still present (never deleted)" || bad "RESOLVED-HIL row missing after a later DEFERRED-HIL"
+
+# 15d) STRUCTURAL invariant (merge-gate concurrency lens on this arc): loop_resolve's
+#      body must verify its OWN write by grepping for the exact row, NOT by recomputing
+#      loop_skip_set — the latter was this function's first cut and is an unsound
+#      check-then-act race against concurrent writers (a concurrent loop_defer/
+#      loop_resolve for the SAME item-id landing between the write and a loop_skip_set
+#      re-read can flip the derived answer in either direction). Since true concurrent
+#      interleaving can't be reproduced deterministically in this test harness (15c),
+#      this pins the fix at the level that IS deterministically checkable: the
+#      function's source no longer calls loop_skip_set at all.
+BODY=$(declare -f loop_resolve)
+printf '%s' "$BODY" | grep -q 'loop_skip_set' && bad "loop_resolve calls loop_skip_set (reintroduces the check-then-act race)" || ok "loop_resolve does not call loop_skip_set (self-checks its own row instead)"
+printf '%s' "$BODY" | grep -q 'grep -qF' && ok "loop_resolve verifies its own write via a literal grep for the exact row" || bad "loop_resolve's own-write verification mechanism changed unexpectedly"
+
 # 16) Re-deferring an already-resolved item re-flags it (last-write-wins, not sticky-resolved).
 : > "$(loop_status_path)"; loop_activate "re-deferral test" >/dev/null
 loop_defer R-300 "needs OpenAI creds"
