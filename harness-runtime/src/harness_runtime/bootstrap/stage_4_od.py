@@ -26,6 +26,8 @@ U-RT-44/45 shutdown work if a true unregister API is needed.
 
 from __future__ import annotations
 
+import logging
+
 from harness_core import PersonaTier
 from harness_core.workload_class import WorkloadClass
 
@@ -95,7 +97,22 @@ async def execute(
     # is invoked unconditionally in `run()`'s/`resume()`'s `finally` and is
     # the correct hook).
     if ctx.protected_result_store is not None:
-        ctx.protected_result_store.gc_sweep()
+        # codex [P2] round 8 on this arc — this is opportunistic TTL
+        # cleanup, not a stage 4 post-condition (the ctx post-conditions
+        # this stage guarantees are `cost_chain`/`audit_writer` non-None
+        # per the module docstring; the store's OWN presence was already
+        # decided by the factory call above). An enumeration failure here
+        # (permission denied, a transient filesystem error) must not abort
+        # bootstrap entirely just to reap a PRIOR process's abandoned
+        # entries — the shutdown()-step-5b sweep isolates its own failure
+        # the same way; this call should too.
+        try:
+            ctx.protected_result_store.gc_sweep()
+        except Exception:
+            logging.getLogger("harness.runtime.protected_result_store").error(
+                "bootstrap-half GC sweep failed (startup proceeds regardless)",
+                exc_info=True,
+            )
     # 0b. Audit-signing backend (B-47 PR B — OD spec v1.33 §21.2.1 composition
     # root) — constructed AND validated BEFORE the one-shot global tracer
     # registration (out-of-family Codex round-18: OTel registration cannot be

@@ -724,18 +724,27 @@ def test_normalize_tenant_scope_rejects_untenanted_sentinel_literal() -> None:
         normalize_tenant_scope("_untenanted")
 
 
-def test_write_once_refuses_untenanted_sentinel_as_real_tenant_id(tmp_path: Path) -> None:
-    """Companion to the test above at the actual raise-site call — `write_once`
-    must refuse the collision-causing literal before ever composing a
-    composite key or touching disk, not just the standalone normalization
-    function.
+def test_write_once_degrades_untenanted_sentinel_to_unresolvable(tmp_path: Path) -> None:
+    """codex [P1] round 8: `write_once` is reached ONLY via the post-effect
+    raise-site helper `resolve_result_ref`, itself only called while
+    constructing a `PostEffectAuditSigningError` for an ALREADY-completed
+    paid effect — so unlike the standalone `normalize_tenant_scope` (still
+    correctly loud outside this context), `write_once` must NEVER raise the
+    collision-rejection `ValueError` here. A raw `ValueError` escaping this
+    danger window would replace the typed carrier construction entirely;
+    `resolve_result_ref_off_loop`'s narrower catch doesn't fold it, so the
+    caller's own `except AUDIT_SIGNING_HARD_FAILURES` never fires and CP
+    could treat an already-completed effect as an ordinary resumable
+    failure and redispatch it. Degrades to the same `UnresolvableResultRef`
+    disposition as every other expected failure class instead.
 
-    Mutation probe: same as above — a reverted `normalize_tenant_scope`
-    lets this call through, raising nothing and returning a `str` ref
-    instead of raising `ValueError`."""
+    Mutation probe: removing the try/except around the `normalize_tenant_
+    scope`/`compose_composite_key` calls in `write_once` makes this
+    `isinstance` assertion fail with an uncaught `ValueError` instead."""
     store = _store(tmp_path)
-    with pytest.raises(ValueError, match="_untenanted"):
-        store.write_once("_untenanted", {"x": 1})
+    ref = store.write_once("_untenanted", {"x": 1})
+    assert isinstance(ref, UnresolvableResultRef)
+    assert "illegal tenant_id" in ref.reason
 
 
 def test_write_once_survives_opportunistic_gc_sweep_failure(

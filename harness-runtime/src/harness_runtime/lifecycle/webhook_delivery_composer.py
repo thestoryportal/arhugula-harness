@@ -231,13 +231,21 @@ class WebhookDeliveryComposer:
 
         `tenant_id` (B-65-A, Runtime spec v1.103 §14.8.11): the OWNING
         tenant scope for the protected-store write on a post-effect signing
-        failure — the CALLER's `step_context.tenant_id`, not this
-        composer's ctor-bound `self._tenant_id` (which the bootstrap
-        factory never populates). Default `None` preserves the raw 3-arg
-        surface's existing call shape for untenanted/test callers.
+        failure — preferentially the CALLER's `step_context.tenant_id`.
+        When omitted (the legacy 3-arg call shape), falls back to this
+        composer's ctor-bound `self._tenant_id` (codex [P2] round 8 on this
+        arc) rather than defaulting to untenanted: `self._tenant_id` is
+        ALREADY the tenant scope the audit-composition call below uses for
+        this SAME failure, so a caller that constructed
+        `WebhookDeliveryComposer(tenant_id="tenant-a")` and never adopted
+        the newer per-call kwarg would otherwise have its protected-store
+        write land in the untenanted scope while the audit ledger entry for
+        the identical failure is tenant-a-scoped — recovery under the real
+        tenant would then be wrongly refused as cross-tenant.
 
         :raises WebhookDeliveryExhaustedError: when all retry attempts fail.
         """
+        effective_tenant_id = tenant_id if tenant_id is not None else self._tenant_id
         url = webhook_config.endpoint_url
         url_hash = hashlib.sha256(url.encode("utf-8")).hexdigest()
 
@@ -349,7 +357,7 @@ class WebhookDeliveryComposer:
             # off_loop` exists to avoid; see `audit_offload.py` module
             # docstring).
             _result_ref = await resolve_result_ref_off_loop(
-                self._protected_result_store, tenant_id, result
+                self._protected_result_store, effective_tenant_id, result
             )
             raise PostEffectAuditSigningError(
                 f"audit signing failed after a completed webhook POST "

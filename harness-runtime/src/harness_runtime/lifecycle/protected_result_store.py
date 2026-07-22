@@ -196,8 +196,32 @@ class ProtectedResultStore:
         # live-looking ref for. Sweeping first can only ever touch OLDER
         # entries — this one doesn't exist yet.
         self._maybe_opportunistic_gc_sweep()
-        tag = normalize_tenant_scope(tenant_id)
-        composite_key = compose_composite_key(tenant_id)
+        # codex [P1] round 8 on this arc — this helper is reached ONLY via
+        # the post-effect raise-site helper `resolve_result_ref`, itself
+        # only called while constructing a `PostEffectAuditSigningError`
+        # for an ALREADY-completed paid effect. An illegal `tenant_id` (the
+        # `normalize_tenant_scope`-refused sentinel collision) is a real
+        # caller-contract violation, but letting it raise HERE — inside the
+        # danger window this whole store exists to guard — would replace
+        # the typed carrier construction with a raw `ValueError`, which
+        # `resolve_result_ref_off_loop`'s narrower catch doesn't fold, so
+        # the caller's own `except AUDIT_SIGNING_HARD_FAILURES` never fires
+        # and CP could treat an already-completed effect as an ordinary
+        # resumable failure and redispatch it. Degrading to the same
+        # `UnresolvableResultRef` disposition as every other expected
+        # failure class below closes that gap without weakening the
+        # boundary itself — `normalize_tenant_scope` called directly (or via
+        # `read()`) outside this raise-site context still raises loudly.
+        try:
+            tag = normalize_tenant_scope(tenant_id)
+            composite_key = compose_composite_key(tenant_id)
+        except ValueError as exc:
+            logger.error(
+                "protected result store: illegal tenant_id (%r) at write-once raise site: %s",
+                tenant_id,
+                exc,
+            )
+            return UnresolvableResultRef(reason=f"illegal tenant_id: {exc}")
 
         try:
             serialized = pickle.dumps(result, protocol=self._SERIALIZER_VERSION + 4)

@@ -5,6 +5,7 @@ Per `Implementation_Plan_Harness_Runtime_v2_11.md` §1 U-RT-69 (5 ACs).
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, cast
 
 import httpx
@@ -538,3 +539,60 @@ async def test_u_rt_136_post_effect_signing_failure_carries_webhook_receipt(
         _make_webhook_config(), _make_payload(), "idem-136-off"
     )
     assert off_result.delivered is True
+
+
+@pytest.mark.asyncio
+async def test_legacy_ctor_tenant_used_when_per_call_tenant_omitted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """codex [P2] round 8: a caller that constructs `WebhookDeliveryComposer
+    (tenant_id="tenant-a")` and uses the legacy 3-arg `deliver_webhook` call
+    (never adopting the newer per-call `tenant_id` kwarg) must still have
+    its protected-store write land under tenant-a — the SAME tenant scope
+    the audit-composition call for this identical failure already uses via
+    `self._tenant_id`. Landing it under the untenanted scope instead would
+    make a later, correctly-tenant-scoped recovery read wrongly refused as
+    cross-tenant.
+
+    Mutation probe: reverting the raise-site's `effective_tenant_id` back
+    to the raw `tenant_id` parameter makes the `store.read("tenant-a",
+    ref)` call below raise `ProtectedStoreCrossTenantError` instead of
+    returning the receipt."""
+    import harness_runtime.lifecycle.cost_attribution_webhook_dispatch as attr_mod
+    from cryptography.fernet import Fernet
+    from harness_runtime.lifecycle.audit_signing_errors import (
+        AuditSigningFailedError,
+        PostEffectAuditSigningError,
+    )
+    from harness_runtime.lifecycle.protected_result_store import ProtectedResultStore
+
+    def _signing_fails(**_k: Any) -> Any:
+        raise AuditSigningFailedError("kms unavailable (u-rt-136 webhook tenant test)")
+
+    monkeypatch.setattr(attr_mod, "attribute_webhook_dispatch_cost", _signing_fails)
+
+    store = ProtectedResultStore(
+        tmp_path / "protected-results", codec=Fernet(Fernet.generate_key()), ttl_seconds=86400.0
+    )
+    client = _RecordingClient([_MockResponse(200)])
+    composer = WebhookDeliveryComposer(
+        retry_max_attempts=1,
+        http_client_factory=lambda: client,
+        rate_table=cast(Any, object()),
+        cost_chain=cast(Any, object()),
+        audit_writer=cast(Any, object()),
+        workflow_id="wf-136-tenant",
+        parent_action_id="workflow:wf-136-tenant:step:0",
+        parent_idempotency_key="parent-idem-136-tenant",
+        audit_signing_fail_closed=True,
+        protected_result_store=store,
+        tenant_id="tenant-a",
+    )
+    with pytest.raises(PostEffectAuditSigningError) as excinfo:
+        # Legacy 3-positional-arg call — no per-call `tenant_id` kwarg.
+        await composer.deliver_webhook(_make_webhook_config(), _make_payload(), "idem-136-tenant")
+    ref = excinfo.value.result_ref
+    assert isinstance(ref, str), f"expected a resolvable ref, got {ref!r}"
+    receipt = cast(WebhookDeliveryResult, store.read("tenant-a", ref))
+    assert receipt.delivered is True

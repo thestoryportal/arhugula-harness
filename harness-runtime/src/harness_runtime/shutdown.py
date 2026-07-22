@@ -79,6 +79,8 @@ from weakref import WeakValueDictionary
 
 from pydantic import BaseModel, ConfigDict
 
+from harness_runtime.lifecycle.audit_offload import run_audit_off_loop
+
 if TYPE_CHECKING:
     from harness_runtime.types import HarnessContext, ServerName
 
@@ -764,21 +766,30 @@ async def shutdown(
     # `stage_4_od.py` and reaps a PRIOR process's abandoned entries; this
     # half reaps THIS process's own before exit, so a long-lived daemon that
     # never restarts still bounds the store between opportunistic in-write
-    # sweeps). Sync file I/O (unlink of expired entries) is safe on the
-    # loop's default executor HERE — unlike the request-path raise sites in
-    # `llm_dispatch.py`/`runtime_tool_dispatcher.py`/
-    # `webhook_delivery_composer.py`, `shutdown()` only runs AFTER
-    # `execute_workflow` has already returned (it is awaited in `run()`'s/
-    # `resume()`'s `finally`, not concurrently with the driver), so no sync
-    # driver can be occupying the default pool while this runs. Best-effort:
-    # swept-key digests discarded, any exception isolated per the same
-    # per-resource pattern as the steps above.
+    # sweeps). The exhaustion-deadlock hazard `asyncio.to_thread`'s DEFAULT
+    # executor poses elsewhere (a sync driver occupying every worker) does
+    # NOT apply here — `shutdown()` only runs AFTER `execute_workflow` has
+    # already returned. But codex [P1] round 8 on this arc: a SEPARATE
+    # hazard from the same default-executor choice DOES apply — `gc_sweep`
+    # enumerates + decrypts every entry, which can genuinely run long, and
+    # `asyncio.wait_for`'s timeout only abandons the AWAITING coroutine, not
+    # the worker thread; the default executor's non-daemon workers are then
+    # JOINED at interpreter exit regardless, so a slow sweep can hang
+    # process exit long after this function's own bounded timeout already
+    # fired and returned. `run_audit_off_loop` (the same dedicated
+    # daemon-thread executor the raise-site helper `resolve_result_ref_off_
+    # loop` uses, for exactly this reason — see `audit_offload.py`'s module
+    # docstring) fixes this: `wait_for`'s cancellation is honored via its
+    # own bounded join-then-detach, and a detached worker is a daemon
+    # thread, so it can never hold process exit. Best-effort: swept-key
+    # digests discarded, any exception isolated per the same per-resource
+    # pattern as the steps above.
     _protected_result_store = getattr(ctx, "protected_result_store", None)
     if _protected_result_store is not None:
         remaining = max(0.0, deadline - time.monotonic())
         try:
             await asyncio.wait_for(
-                asyncio.to_thread(_protected_result_store.gc_sweep), timeout=remaining
+                run_audit_off_loop(_protected_result_store.gc_sweep), timeout=remaining
             )
         except TimeoutError:
             failures.append("protected_result_store")

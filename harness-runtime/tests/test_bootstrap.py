@@ -1979,3 +1979,47 @@ async def test_bootstrap_wires_protected_result_store_through_to_shutdown_sweep(
         "shutdown() never invoked protected_result_store.gc_sweep() — step 5b regressed"
     )
     assert "protected_result_store" not in report.failures
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_survives_protected_result_store_gc_sweep_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """codex [P2] round 8: the bootstrap-half GC sweep (stage 4 OD, reaping a
+    PRIOR process's abandoned entries) is opportunistic housekeeping, not a
+    stage 4 post-condition — an enumeration failure (permission denied, a
+    transient filesystem error) must not abort bootstrap entirely just to
+    reap stale entries. `shutdown()`'s step 5b already isolates its own
+    sweep failure the same way (round 7 fix); this pins the bootstrap-half
+    twin.
+
+    Mutation probe: removing the try/except around
+    `ctx.protected_result_store.gc_sweep()` in `stage_4_od.py` makes
+    `run_bootstrap` raise the fake's `RuntimeError` instead of returning a
+    frozen `ctx`."""
+    _patch_providers(monkeypatch)
+    _patch_collector(monkeypatch)
+
+    from harness_runtime.lifecycle.protected_result_store import ProtectedResultStore
+
+    # A real instance (not a foreign fake) — `HarnessContext`'s frozen field
+    # is Pydantic-typed to `ProtectedResultStore`, so a duck-typed stand-in
+    # would fail validation at a LATER stage for an unrelated reason.
+    real_store = ProtectedResultStore(
+        tmp_path / "protected-results", codec=Fernet(Fernet.generate_key()), ttl_seconds=86400.0
+    )
+
+    def _raising_gc_sweep(*, now: float | None = None) -> list[str]:
+        raise RuntimeError("simulated bootstrap-half GC enumeration failure")
+
+    monkeypatch.setattr(real_store, "gc_sweep", _raising_gc_sweep)
+    monkeypatch.setattr(
+        _stage_4_od_mod, "materialize_protected_result_store_stage", lambda _config: real_store
+    )
+
+    ctx = await run_bootstrap(_config(tmp_path), workload_class=_WORKLOAD)
+
+    assert ctx.protected_result_store is real_store, (
+        "the store must still be wired despite its own GC sweep failing"
+    )

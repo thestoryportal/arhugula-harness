@@ -727,6 +727,41 @@ async def test_shutdown_skips_protected_result_store_sweep_when_absent(tmp_path:
 
 
 @pytest.mark.asyncio
+async def test_shutdown_step_5b_uses_dedicated_daemon_executor_not_default_pool(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """codex [P1] round 8: `asyncio.to_thread` submits to the loop's DEFAULT
+    executor, whose non-daemon workers are JOINED at interpreter exit — a
+    slow `gc_sweep` (a real directory enumeration + per-entry decrypt) could
+    outlive `shutdown()`'s own bounded timeout and still hang process exit
+    afterward. `run_audit_off_loop` (the same dedicated daemon-thread
+    executor `resolve_result_ref_off_loop` already uses, for this exact
+    reason) fixes it. The interpreter-hang symptom itself isn't observable
+    inside a pytest run, so this test pins the call site directly.
+
+    Mutation probe: reverting step 5b to
+    `asyncio.to_thread(store.gc_sweep)` makes this spy's call-count
+    assertion fail (0 calls instead of 1)."""
+    calls: list[object] = []
+    real_run_audit_off_loop = shutdown_mod.run_audit_off_loop
+
+    async def _spy(fn: Any, *args: Any, **kwargs: Any) -> Any:
+        calls.append(fn)
+        return await real_run_audit_off_loop(fn, *args, **kwargs)
+
+    monkeypatch.setattr(shutdown_mod, "run_audit_off_loop", _spy)
+    store = _FakeProtectedResultStore()
+    ctx = _shutdown_ctx(
+        tmp_path, tracer=_FakeTracerWithShutdown(), daemon=_FakeCollectorDaemon(), providers={}
+    )
+    ctx.protected_result_store = store
+    report = await shutdown(ctx, timeout=5.0)
+    assert calls == [store.gc_sweep]
+    assert report.timed_out is False
+
+
+@pytest.mark.asyncio
 async def test_shutdown_flips_draining_even_at_zero_remaining_budget(tmp_path: Path) -> None:
     """Codex round-8 [P2] "enter draining state before scheduling the bounded
     wait": at `timeout=0.0` the bounded `asyncio.wait_for(...)` around
