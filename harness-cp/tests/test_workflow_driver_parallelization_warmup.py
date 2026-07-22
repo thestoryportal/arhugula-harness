@@ -2992,7 +2992,8 @@ def test_b60_intra_phase_trip_stops_sibling_marker_and_dispatch() -> None:
             )
     finally:
         DISPATCH_CANCEL_TOKEN_VAR.reset(reset)
-    # Branch 0's marker landed (the trip rode it); branch 1's marker AND
-    # dispatch never began.
+    # Branch 0's marker landed (the trip rode it); its OWN dispatch was
+    # refused by the POST-marker consult (codex round-8), and branch 1's
+    # marker AND dispatch never began.
     assert store.present_dispatched_indexes(store.sole_run_key()) == {0}
-    assert 1 not in dispatcher.dispatched
+    assert dispatcher.dispatched == []

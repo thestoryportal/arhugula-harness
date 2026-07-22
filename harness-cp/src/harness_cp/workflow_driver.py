@@ -8638,6 +8638,12 @@ def _execute_parallelization(
                     step_kind=step.step_kind,
                     step=step,
                 )
+                # B-60 (codex round-8 on PR #1075, reproduced): POST-marker
+                # consult — a trip landing while THIS branch's marker wrote
+                # must stop its own dispatch from beginning (the pre-marker
+                # consult already passed). The raise flows into the except
+                # arm below, which releases the admission.
+                _consult_dispatch_fence()
             except BaseException:
                 # codex round-7 [P1] — the marker write is the ONLY statement
                 # before `inflight` exists; `_dispatch_releasing_admission`
@@ -12291,6 +12297,12 @@ def _execute_orchestrator_workers(
                     step_kind=step.step_kind,
                     step=step,
                 )
+                # B-60 (codex round-8 on PR #1075, reproduced): POST-marker
+                # consult — a trip landing while THIS branch's marker wrote
+                # must stop its own dispatch from beginning (the pre-marker
+                # consult already passed). The raise flows into the except
+                # arm below, which releases the admission.
+                _consult_dispatch_fence()
             except BaseException:
                 # codex round-7 [P1] — see `_cancel_branch`'s identical guard
                 # (byte-identical rationale: the marker write is the only
