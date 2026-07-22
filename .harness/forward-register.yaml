@@ -60,12 +60,12 @@
 snapshot:
   total: 67
   open: 0
-  design_substrate_gated: 4
+  design_substrate_gated: 2
   registered_finding: 7
-  operator_gated: 2
+  operator_gated: 4
   held: 1
   closed: 53
-  identity_digest: af49b2f07cade169
+  identity_digest: ba2150a3ceb31dd4
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -1257,7 +1257,7 @@ items:
 - id: B-59
   filing: .harness/class_2_fork_b59_capacity_authority_across_bootstraps.md
   title: Capacity authority not preserved across sequential bootstrap invocations
-  status: design_substrate_gated
+  status: operator_gated
   summary: 'Registered at the B-48 apply arc (codex round-4 [P1] "preserve one capacity authority
     across bootstrap runs"): if `api.run()`''s shutdown times out while a daemon dispatch worker
     is still draining (the documented abandoned-worker-keeps-its-lease-until-fence-ack behavior),
@@ -1435,7 +1435,7 @@ items:
 - id: B-65
   filing: .harness/class_2_fork_b65_post_effect_signing_carrier_cascade_disposition.md
   title: Post-effect signing carrier disposition at CP topology cascade handlers is unspecified
-  status: design_substrate_gated
+  status: operator_gated
   summary: 'Registered at the U-RT-136/U-CP-73 impl arc (out-of-family codex round-2 [P1]).
     Under `audit_signing_fail_closed=ON`, a `PostEffectAuditSigningError` raised at a fan-out
     branch reaches the CP workflow driver''s topology cascade handling as a generic branch
