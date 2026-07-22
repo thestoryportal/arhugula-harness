@@ -2954,3 +2954,45 @@ def test_b60_phase1_trip_stops_phase2_scheduling_cascade_tier() -> None:
         DISPATCH_CANCEL_TOKEN_VAR.reset(reset)
     assert dispatcher.dispatched == [0]
     assert authority.available == authority.frame_budget
+
+
+def test_b60_intra_phase_trip_stops_sibling_marker_and_dispatch() -> None:
+    """B-60 (codex round-3 on PR #1075, reproduced): INTRA-phase — a token
+    tripping while an earlier sibling writes its dispatch marker must stop
+    the LATER sibling's marker + dispatch from beginning (the per-branch
+    consult inside the marker try). Deterministic: the store's marker write
+    for branch 0 trips; branch 1's consult then refuses."""
+    from harness_cp.sub_agent_dispatch_cancellation import (
+        DISPATCH_CANCEL_TOKEN_VAR,
+        DispatchCancelToken,
+        DispatchFenceTrippedSignal,
+    )
+
+    token = DispatchCancelToken()
+
+    class _TrippingMarkerStore(_MiniFanoutStore):
+        def record_branch_dispatched(self, run_key: str, branch_index: int, *a: Any, **k: Any):
+            result = super().record_branch_dispatched(run_key, branch_index, *a, **k)
+            if branch_index == 0:
+                token.trip()
+            return result
+
+    store = _TrippingMarkerStore()
+    dispatcher = _RecordingCohortDispatcher()
+    reset = DISPATCH_CANCEL_TOKEN_VAR.set(token)
+    try:
+        with pytest.raises(DispatchFenceTrippedSignal):
+            _run(
+                steps=[_inference_step(i) for i in range(2)],
+                dispatcher=dispatcher,
+                concurrent_cache_warmup=False,
+                persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+                engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+                store=store,
+            )
+    finally:
+        DISPATCH_CANCEL_TOKEN_VAR.reset(reset)
+    # Branch 0's marker landed (the trip rode it); branch 1's marker AND
+    # dispatch never began.
+    assert store.present_dispatched_indexes(store.sole_run_key()) == {0}
+    assert 1 not in dispatcher.dispatched

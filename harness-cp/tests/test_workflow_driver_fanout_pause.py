@@ -3413,3 +3413,68 @@ def test_b60_fresh_branch_fence_signal_not_captured_by_rest_gather() -> None:
             default_model_binding=_DEFAULT_BINDING,
             step_dispatchers=cast(StepDispatcherRegistry, _Reg()),
         )
+
+
+def test_b60_trip_after_final_drain_stops_post_join_synthesis() -> None:
+    """B-60 (codex round-3 on PR #1075, reproduced): a token tripping as the
+    LAST branch entry drains must stop the terminal POST_JOIN_SYNTHESIS
+    (an LLM dispatch + its disclosing append — both effects) from
+    beginning. Deterministic: the ledger double trips on branch 1's
+    terminal drain append (the final drained entry); the synthesis consult
+    then refuses before the synthesis dispatcher is ever looked up."""
+    from harness_cp.sub_agent_dispatch_cancellation import (
+        DISPATCH_CANCEL_TOKEN_VAR,
+        DispatchCancelToken,
+        DispatchFenceTrippedSignal,
+    )
+
+    token = DispatchCancelToken()
+
+    class _TrippingLedger(_RecordingLedger):
+        def append(self, payload: Any, write_key: Any) -> Any:
+            result = super().append(payload, write_key)
+            bm = getattr(payload, "branch_metadata", None)
+            if bm is not None and bm.branch_index == 1 and bm.terminal_status == "completed":
+                token.trip()
+            return result
+
+    ledger = _TrippingLedger()
+    dispatcher = _CountingDispatcher()
+
+    class _Reg:
+        def lookup(self, step_kind: StepKind) -> StepDispatcher:
+            if step_kind in (StepKind.DECLARATIVE_STEP, StepKind.POST_JOIN_SYNTHESIS):
+                return cast(StepDispatcher, dispatcher)
+            raise StepKindDispatcherNotBoundError(step_kind)
+
+    ctx = cast(DriverContext, _CtxP(ledger=ledger, emitter=_Emitter()))
+    reset = DISPATCH_CANCEL_TOKEN_VAR.set(token)
+    try:
+        with pytest.raises(DispatchFenceTrippedSignal):
+            execute_workflow(
+                _manifest(
+                    "wf-b60-synth", TopologyPattern.PARALLELIZATION, PersonaTier.SOLO_DEVELOPER
+                ),
+                [
+                    WorkflowStep(
+                        step_id=StepID("a"), step_kind=StepKind.DECLARATIVE_STEP, step_payload={}
+                    ),
+                    WorkflowStep(
+                        step_id=StepID("b"), step_kind=StepKind.DECLARATIVE_STEP, step_payload={}
+                    ),
+                    _synthesis_step(),
+                ],
+                run_id="run-b60s",
+                ctx=ctx,
+                default_model_binding=_DEFAULT_BINDING,
+                step_dispatchers=cast(StepDispatcherRegistry, _Reg()),
+            )
+    finally:
+        DISPATCH_CANCEL_TOKEN_VAR.reset(reset)
+    # Both branches ran; the synthesis never began (no synthesis dispatch,
+    # no synthesis ledger entry).
+    assert "synthesis" not in dispatcher.dispatched
+    assert not any(
+        getattr(p, "branch_metadata", None) is None and "synthesis" in str(p.action_id)
+        for p, _k in ledger.appends
+    )

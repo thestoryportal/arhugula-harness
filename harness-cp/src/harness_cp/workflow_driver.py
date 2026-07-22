@@ -5871,6 +5871,14 @@ def _maybe_post_join_synthesis(
                 "no workers). Rejected fail-closed rather than spend an LLM call on no data."
             ),
         )
+    # B-60 (codex round-3 on PR #1075, reproduced): fence consult before the
+    # post-join synthesis — a token tripping during the LAST branch append
+    # must stop the terminal synthesis (a fresh LLM dispatch + its own
+    # disclosing ledger append — both effects) from beginning. Covers the
+    # REPLAY path too (its append is equally a post-trip write). The raised
+    # signal is a BaseException; the caller's `_finish` machinery cannot
+    # absorb it.
+    _consult_dispatch_fence()
     synthesis_idempotency_key = _compute_step_idempotency_key(run_idempotency_key, synthesis_index)
     # B-FANOUT-OUTPUT-REPLAY PR2 — REPLAY a captured synthesis (the W3 crash window). The
     # SHARED `_fanout_replay_store` gate governs BOTH the capture (below) and this consume,
@@ -8203,6 +8211,17 @@ def _execute_parallelization(
                     # BRANCH FAILURE through this SAME exception arm — no new
                     # control-transfer mode.
                     raise _admission
+                # B-60 (codex round-3 on PR #1075): INTRA-phase consult — a
+                # trip during an earlier sibling's start stops this branch's
+                # dispatch from beginning. Pre-dispatch raise: release the
+                # admission explicitly (its dispatch-tied releaser is never
+                # scheduled), mirroring the marker-write arm.
+                try:
+                    _consult_dispatch_fence()
+                except BaseException:
+                    if isinstance(_admission, CapacityLease):
+                        _admission.release_unless_job_bound()
+                    raise
                 _lease_token = _BRANCH_CAPACITY_LEASE_VAR.set(_admission)
                 # PROCEED has no sibling-cancellation mode (a branch failure
                 # never cancels another branch under `return_exceptions=True`),
@@ -8592,6 +8611,12 @@ def _execute_parallelization(
             # strict-tier (PAUSE / CASCADE_CANCEL) path only — PROCEED's
             # `_proceed_branch` writes none.
             try:
+                # B-60 (codex round-3 on PR #1075, reproduced): INTRA-phase
+                # consult — a token tripping while an earlier SIBLING starts
+                # must stop THIS branch's marker write + dispatch from
+                # beginning. A raise flows through this try's existing
+                # admission-releasing arm.
+                _consult_dispatch_fence()
                 _mark_branch_dispatched(
                     ctx,
                     manifest_entry,
@@ -11864,6 +11889,17 @@ def _execute_orchestrator_workers(
                     # BRANCH FAILURE through this SAME exception arm — no new
                     # control-transfer mode.
                     raise _admission
+                # B-60 (codex round-3 on PR #1075): INTRA-phase consult — a
+                # trip during an earlier sibling's start stops this branch's
+                # dispatch from beginning. Pre-dispatch raise: release the
+                # admission explicitly (its dispatch-tied releaser is never
+                # scheduled), mirroring the marker-write arm.
+                try:
+                    _consult_dispatch_fence()
+                except BaseException:
+                    if isinstance(_admission, CapacityLease):
+                        _admission.release_unless_job_bound()
+                    raise
                 _lease_token = _BRANCH_CAPACITY_LEASE_VAR.set(_admission)
                 # codex round-4 [P2] "trip the fence on proceed-barrier
                 # cancellation" — see `_proceed_branch`'s identical rationale:
@@ -12207,6 +12243,12 @@ def _execute_orchestrator_workers(
             # `ensure_future` dispatch — see `_cancel_branch`). `_cancel_worker` is the strict-tier
             # path only — PROCEED's `_proceed_worker` writes no marker.
             try:
+                # B-60 (codex round-3 on PR #1075, reproduced): INTRA-phase
+                # consult — a token tripping while an earlier SIBLING starts
+                # must stop THIS branch's marker write + dispatch from
+                # beginning. A raise flows through this try's existing
+                # admission-releasing arm.
+                _consult_dispatch_fence()
                 _mark_branch_dispatched(
                     ctx,
                     manifest_entry,
