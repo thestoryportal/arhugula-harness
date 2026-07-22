@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `f5d568fca2e6` |
+| `workspace_state_hash` | `7a78cb62b330` |
 | `last_refreshed` | 2026-07-21T00:00:00Z |
-| `git_head` | `e5256a88` —  |
+| `git_head` | `684f15a4` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 96 |
 
@@ -49,7 +49,7 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
-| 1076 | 2026-07-21 | Batched ratifications recorded: B-59-A/B-65-A/B-33-A apply arcs open; B-55 closed as-is (54 closed / 3 operator_gated) |
+| 1076 | 2026-07-21 | B-17 hold reaffirmed; next: B-65-A apply arc (then B-59-A, B-33-A) |
 | 1075 | 2026-07-21 | B-60 nonlinear fence consults (closed; B-66 residual registered; register 53 closed / 10 registered_finding) |
 | 1074 | 2026-07-21 | B-58 validator-escalation carriers re-homed to harness-core (closed; register 52 closed / 10 registered_finding) |
 | 1073 | 2026-07-21 | B-63 typed availability for SigningBackend.verify (closed; register 51 closed / 11 registered_finding) |
