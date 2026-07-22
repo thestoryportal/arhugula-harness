@@ -5985,6 +5985,12 @@ def _maybe_post_join_synthesis(
                         actor=ActorIdentity(ctx.ledger_writer.actor.actor_id),
                     )
                 )
+        # B-60 (codex round-9 on PR #1075, reproduced): consult DIRECTLY at
+        # the synthesis dispatch boundary — the per-step override provenance
+        # write above sits between the function-entry consult and this
+        # dispatch, so a trip landing during that write must be seen HERE
+        # before the LLM dispatch begins.
+        _consult_dispatch_fence()
         synth_output = step_dispatchers.lookup(StepKind.POST_JOIN_SYNTHESIS).dispatch(
             synth_binding, synthesis_step, step_context=synthesis_context
         )
