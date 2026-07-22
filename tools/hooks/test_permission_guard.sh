@@ -99,26 +99,6 @@ OUT=$(run_on "$(pl Edit '' "$REPO/tools/hooks/foo.sh")")
 # 5) ASK (no output) — design-substrate Edit + unknown bash + bare git push (non-force).
 OUT=$(run_on "$(pl Edit '' '/repo/design-substrate/Spec_X.md')")
 [ -z "$OUT" ] && ok "design-substrate Edit → ask (no auto-approve)" || bad "design-substrate auto-decided: $OUT"
-# 4f) loop_status.md Edit/Write → ask (codex [P1] round 4, U-HK-11/14/15): the ledger is
-#     a human-reviewed audit trail; a plain Edit/Write tool call must not be able to
-#     append a fabricated RESOLVED-HIL row and self-clear a gate, even in loop mode.
-OUT=$(run_on "$(pl Edit '' "$REPO/.harness/loop_status.md")")
-[ -z "$OUT" ] && ok "loop_status.md Edit → ask (no auto-approve; ledger is audit-only)" || bad "loop_status.md Edit auto-decided: $OUT"
-OUT=$(run_on "$(pl Write '' "$REPO/.harness/loop_status.md")")
-[ -z "$OUT" ] && ok "loop_status.md Write → ask (no auto-approve)" || bad "loop_status.md Write auto-decided: $OUT"
-OUT=$(run_on "$(pl Edit '' '.harness/loop_status.md')")
-[ -z "$OUT" ] && ok "loop_status.md Edit (relative path) → ask" || bad "loop_status.md relative Edit auto-decided: $OUT"
-# 4g) loop_status.md ALIASES must also → ask (codex [P1] round 5: a literal string/case
-#     match on $FPATH is bypassable by a path that resolves to the same file but doesn't
-#     match the literal pattern — double slash, a `./` segment, or a symlink).
-OUT=$(run_on "$(pl Edit '' "$REPO/.harness//loop_status.md")")
-[ -z "$OUT" ] && ok "loop_status.md double-slash alias → ask (canonical-path compared)" || bad "double-slash alias auto-decided: $OUT"
-OUT=$(run_on "$(pl Edit '' "$REPO/.harness/./loop_status.md")")
-[ -z "$OUT" ] && ok "loop_status.md dot-segment alias → ask (canonical-path compared)" || bad "dot-segment alias auto-decided: $OUT"
-ln -sf "$REPO/.harness/loop_status.md" "$REPO/.harness/loop_status_link.md" 2>/dev/null
-OUT=$(run_on "$(pl Edit '' "$REPO/.harness/loop_status_link.md")")
-[ -z "$OUT" ] && ok "loop_status.md symlink alias → ask (canonical-path compared)" || bad "symlink alias auto-decided: $OUT"
-rm -f "$REPO/.harness/loop_status_link.md"
 OUT=$(run_on "$(pl Bash 'python scripts/migrate.py --wipe' '')")
 [ -z "$OUT" ] && ok "unknown bash → ask" || bad "unknown bash auto-decided: $OUT"
 

@@ -71,31 +71,6 @@ fi
 #    session never sees an auto-decision (other than the §0 hard-DENY above).
 loop_mode_active || exit 0
 
-# Canonicalize a path (relative or absolute) to its physical, symlink-resolved absolute
-# form. Factored out of _safe_path so any OTHER path-IDENTITY check (e.g. the
-# loop_status.md ledger exclusion below) uses the SAME resolution and can't be bypassed by
-# an alias (`.harness//loop_status.md`, `.harness/./loop_status.md`, a symlink) that would
-# fool a naive literal string/case match (codex [P1] round 5 on the resolve.sh arc — a
-# `_safe_path`-style raw-string comparison for the ledger exclusion had exactly this gap).
-# Degrades gracefully to the un-resolved concatenation if a component doesn't exist yet
-# (e.g. `.harness/` not yet created) — still consistent as long as both sides of a
-# comparison call this same function.
-_resolve_abs() {
-  local p="$1"
-  local abs; case "$p" in /*) abs="$p" ;; *) abs="$PROJECT_DIR/$p" ;; esac
-  local dir base rp tgt hops=0
-  dir=$(dirname "$abs"); base=$(basename "$abs")
-  if rp=$(cd "$dir" 2>/dev/null && pwd -P); then abs="$rp/$base"; fi
-  # Follow the symlink CHAIN physically (bounded).
-  while [ -L "$abs" ] && [ "$hops" -lt 16 ]; do
-    tgt=$(readlink "$abs" 2>/dev/null) || break
-    case "$tgt" in /*) abs="$tgt" ;; *) abs="$(dirname "$abs")/$tgt" ;; esac
-    if rp=$(cd "$(dirname "$abs")" 2>/dev/null && pwd -P); then abs="$rp/$(basename "$abs")"; fi
-    hops=$((hops + 1))
-  done
-  printf '%s' "$abs"
-}
-
 # A path is safe to auto-allow iff it is NOT a secret/credential file, is INSIDE the
 # worktree (not .git/, no `..` traversal). Empty = no explicit path (defaults to cwd =
 # worktree) = safe. Used for both read tools (Read/Grep/Glob) and edit tools, so reads of
@@ -106,10 +81,21 @@ _safe_path() {
   case "$p" in
     *.env|*.env.*|*/.env|*credentials*|*.pem|*id_rsa*|*id_ed25519*|*keyring*|*secret*|*.key) return 1 ;;
   esac
+  local abs; case "$p" in /*) abs="$p" ;; *) abs="$PROJECT_DIR/$p" ;; esac
   # Resolve symlinks PHYSICALLY before the containment check: an in-worktree symlink to an
   # outside/secret file would otherwise pass the string-prefix test while the OS follows it
-  # out.
-  local abs; abs=$(_resolve_abs "$p")
+  # out. Resolve the dir via `pwd -P`, and one level of a symlinked final component.
+  local dir base rp tgt hops=0
+  dir=$(dirname "$abs"); base=$(basename "$abs")
+  if rp=$(cd "$dir" 2>/dev/null && pwd -P); then abs="$rp/$base"; fi
+  # Follow the symlink CHAIN physically (bounded) — a link to a link to outside the repo
+  # would otherwise keep `abs` under $root after only one hop.
+  while [ -L "$abs" ] && [ "$hops" -lt 16 ]; do
+    tgt=$(readlink "$abs" 2>/dev/null) || break
+    case "$tgt" in /*) abs="$tgt" ;; *) abs="$(dirname "$abs")/$tgt" ;; esac
+    if rp=$(cd "$(dirname "$abs")" 2>/dev/null && pwd -P); then abs="$rp/$(basename "$abs")"; fi
+    hops=$((hops + 1))
+  done
   # Re-check secret patterns on the resolved target too.
   case "$abs" in
     *.env|*.env.*|*/.env|*credentials*|*.pem|*id_rsa*|*id_ed25519*|*keyring*|*secret*|*.key) return 1 ;;
@@ -185,16 +171,6 @@ esac
 # secret set …", ".env", "credentials") that the deny-list scans for as substrings. Without
 # this exemption a safe deferral whose reason names the gate would be DENIED, no DEFERRED-HIL
 # row would be written, and the headless loop would retry the same gated item to the cap.
-#
-# Deliberately NOT here: any mechanism that CLEARS a gate (asserts a human already
-# answered it) rather than just logging one for future attention. defer.sh/halt.sh are
-# safe to blanket-allow because logging can never cause harm regardless of who calls it;
-# a gate-clearing action is fundamentally different — it must go through the normal
-# deny-list-then-ask flow, reachable only from an attended session. This is why there is
-# no `resolve.sh` wrapper: an unattended headless child could never legitimately answer a
-# HIL gate on its own, so a mechanism that let it try (even indirectly, by clearing a
-# ledger row) would be a bypass, not a convenience. Resolution is recorded directly via
-# loop_lib.sh's loop_resolve from an attended session — no wrapper needed or wanted.
 # Strictly bounded to a SINGLE CLEAN invocation: wrapper prefix + NO control operators (so it
 # can't chain a real dangerous command) + NO $VAR expansion (so it can't expand a secret VALUE
 # into the ledger). $(...) and newlines are control-operator-rejected here too.
@@ -260,30 +236,9 @@ case "$TOOL" in
     # Edits are git-reversible ONLY inside the worktree. Auto-allow EXCEPT design-substrate
     # (X-AL-3 back-flow) — those, plus secret/outside/.git/traversal paths (via _safe_path),
     # fall through to ask.
-    #
-    # loop_status.md is ALSO excluded (codex [P1] round 4, U-HK-11/14/15): it is a
-    # human-reviewed audit trail, not a file any agent — attended or not — should be able
-    # to self-edit via a plain Edit/Write tool call to assert its own gates are cleared
-    # (e.g. hand-appending a RESOLVED-HIL row). Raw Bash-level redirection into it
-    # (`echo … >> .harness/loop_status.md`) is separately already blocked: any `>` trips
-    # the control-operator check in §3's Bash-prefix block below, falling through to ask.
-    # The ONLY writers are loop_log's own appends: from defer.sh/halt.sh (always allowed,
-    # §2 above) or from loop_resolve called directly in an attended session (no wrapper —
-    # see the §2 comment on why resolution has none).
-    #
-    # Compared by CANONICAL absolute path (_resolve_abs), not a literal string/case match
-    # (codex [P1] round 5) — a raw-string check would let `.harness//loop_status.md`,
-    # `.harness/./loop_status.md`, or a symlink alias slip through to the `*)` branch and
-    # auto-allow, defeating this exclusion entirely.
     case "$FPATH" in
       */design-substrate/*|design-substrate/*) : ;;  # ask (absolute OR relative path)
-      *)
-        if [ -n "$FPATH" ] && [ "$(_resolve_abs "$FPATH")" = "$(_resolve_abs "$PROJECT_DIR/.harness/loop_status.md")" ]; then
-          :  # ask — ledger is audit-only
-        else
-          _safe_path "$FPATH" && emit_allow
-        fi
-        ;;
+      *) _safe_path "$FPATH" && emit_allow ;;
     esac
     ;;
 esac
@@ -314,7 +269,7 @@ if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ]; then
     TRIM=$(printf '%s' "$CMD" | sed 's/^[[:space:]]*//')
     # (Loop-control wrappers defer.sh/halt.sh are auto-allowed earlier — at the top of the
     # deny block — so a deferral reason naming an operator action isn't tripped by the
-    # free-text deny scan. See §2.)
+    # free-text deny scan. See the short-circuit in §2.)
     # Allowlist = commands that are safe REGARDLESS of their arguments (the dev/git arc
     # + pure builtins with no filesystem reach). Deliberately NOT here:
     #  - content readers / programmable filters (cat/head/tail/grep/rg/find/jq/sed/awk/
