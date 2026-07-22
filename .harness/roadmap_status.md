@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `df388ea11898` |
+| `workspace_state_hash` | `1feaa2787acc` |
 | `last_refreshed` | 2026-07-22T00:00:00Z |
-| `git_head` | `35a62ad9` —  |
+| `git_head` | `8ba5e6e4` — prose-fix, not a PR |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 96 |
 
@@ -49,11 +49,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| commit 8ba5e6e4 | 2026-07-22 | Direct-commit prose correction: B-59-A/B-33-A frontier text updated from stale operator_gated framing to RATIFIED/build-ready (fork docs' own Status lines + git history commit e5256a88 confirm 2026-07-21 ratification). |
 | 1079 | 2026-07-22 | loop_status.md DEFERRED-HIL rows can be RESOLVED (fix-loop-status-resolved-hil) |
 | PR #1078 | 2026-07-22 | B-65-A protected result store + terminal-with-result cascade disposition — 11 out-of-family codex rounds to terminal; merge-gate 3-lens round-1 BLOCK (missing e2e coverage) fixed + PD-8 probed, round-2 all-APPROVE; B-65 closed, B-68 registered (narrow TTL-dependent GC/publish race). |
 | 1077 | 2026-07-22 | B-65-A spec leg merged: CP v1.103 §25.15 terminal-with-result rider + Runtime v1.103 §14.8.11 protected result store + plans v2.40/v2.51 (U-CP-85 amended, U-RT-145 new) + 4 clearance markers; codex 10 rounds terminal. Next: B-65-A impl leg. |
 | 1076 | 2026-07-21 | B-17 hold reaffirmed; next: B-65-A apply arc (then B-59-A, B-33-A) |
-| 1075 | 2026-07-21 | B-60 nonlinear fence consults (closed; B-66 residual registered; register 53 closed / 10 registered_finding) |
 ---
 
 ---
