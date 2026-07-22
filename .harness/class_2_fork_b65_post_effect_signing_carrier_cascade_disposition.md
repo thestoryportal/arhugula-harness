@@ -59,7 +59,12 @@ rest (the deployment's signing/KMS boundary or an equivalent envelope), tenant-B
 lookup (the same normalized tenant scope the audit path uses — cross-tenant resolution
 refused typed), a defined serialization envelope for non-Mapping results (opaque
 byte-envelope + type tag, never lossy coercion), and write-once at the carrier's raise
-site. The alternative — carrying the payload through the CP/runtime result model — avoids
+site, and **bounded retention (codex round-3 [P2])**: entries are deleted on successful
+recovery (read-once semantics for the repair flow), and unrecovered entries carry a
+deployment-configurable TTL with a GC sweep at bootstrap/shutdown — a signing outage must
+not grow an unbounded store of sensitive payloads (TTL expiry surfaces as a typed
+report-log line, never silent loss of the last reference to a paid effect).
+The alternative — carrying the payload through the CP/runtime result model — avoids
 a new store but widens `RunResult` for a rare failure mode, rides every fold, and leaves
 the SAME plaintext/tenancy questions on the persisted RunResult surfaces; if the operator
 prefers it, the protection contract applies there instead. The §2 witness extends: (d) the
