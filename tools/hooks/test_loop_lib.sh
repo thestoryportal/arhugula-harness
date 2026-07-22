@@ -100,6 +100,16 @@ loop_defer R-300 "needs creds"
 SKIP=$(loop_skip_set)
 [ "$SKIP" = "R-300 R-410" ] && ok "'ACTIVATE' in a reason does not drop deferrals ($SKIP)" || bad "kind whole-row match dropped a deferral: [$SKIP]"
 
+# 14b) loop_skip_set accepts B-* item-IDs (forward-register), not just R-* (roadmap
+#      register) — a filter scoped to R- alone silently drops every real-world B-*
+#      deferral (codex [P2] round 2: the live ledger's B-48-EXECUTOR-SELECTION row was
+#      never actually in the skip-set before this fix).
+: > "$(loop_status_path)"; loop_activate "B-prefix test" >/dev/null
+loop_defer B-48-EXECUTOR-SELECTION "operator selection of the B-48 executor design"
+loop_defer R-410 "needs container runtime"
+SKIP=$(loop_skip_set)
+[ "$SKIP" = "B-48-EXECUTOR-SELECTION R-410" ] && ok "skip-set admits B-* alongside R-* ($SKIP)" || bad "B-* item dropped from skip-set: [$SKIP]"
+
 # 15) loop_resolve clears a matching item from BOTH loop_skip_set and
 #     loop_pending_hil_summary — an item whose gate was later answered must not nag
 #     forever just because loop mode never re-ACTIVATEd.

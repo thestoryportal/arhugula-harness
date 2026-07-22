@@ -120,6 +120,10 @@ loop_skip_set() {
   # (loop_defer/loop_resolve write "<item> — <reason>"). Scanning the whole detail would
   # wrongly match an item merely MENTIONED in a reason, e.g. `loop_defer R-410 "blocked
   # until R-300 decides"` must key on R-410 only, never R-300.
+  # Accept BOTH canonical item-ID families: `R-*` (roadmap register, Project_Roadmap_v1.md)
+  # and `B-*` (forward-register, .harness/forward-register.yaml) — a filter scoped to `R-`
+  # alone silently dropped every real-world B-* deferral (codex [P2] round 2 on this arc;
+  # e.g. the live `B-48-EXECUTOR-SELECTION` row was never actually in the skip-set).
   # Match the KIND COLUMN ($3) exactly — a whole-row regex would let a reason CONTAINING
   # the word "ACTIVATE"/"DEFERRED-HIL" reset the run boundary and drop real deferrals.
   # Per-token LAST-WRITE-WINS since the last ACTIVATE: a later RESOLVED-HIL row clears a
@@ -132,7 +136,7 @@ loop_skip_set() {
       state[tok] = (k == "DEFERRED-HIL") ? "PENDING" : "RESOLVED"
     }
     END { for (t in state) if (state[t] == "PENDING") print t }
-  ' "$p" 2>/dev/null | grep -E '^R-[A-Za-z0-9._-]+$' | sort -u | tr '\n' ' ' | sed 's/ $//'
+  ' "$p" 2>/dev/null | grep -E '^(R|B)-[A-Za-z0-9._-]+$' | sort -u | tr '\n' ' ' | sed 's/ $//'
 }
 
 # Operator-facing summary of the LAST run's still-PENDING deferrals (a RESOLVED-HIL row
