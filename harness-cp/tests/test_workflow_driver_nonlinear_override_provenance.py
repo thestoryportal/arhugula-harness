@@ -621,3 +621,79 @@ def test_decentralized_handoff_override_persists_on_stage_failure(tmp_path: Path
     # before the dispatch that raised); stage-0 ran (no override) → no entry.
     assert len(_override_entries(handle)) == 1
     assert verify_chain(read_ledger(handle)).status is VerificationStatus.VALID
+
+
+def test_b60_trip_during_synthesis_override_provenance_stops_dispatch(tmp_path: Path) -> None:
+    """B-60 (codex round-9 on PR #1075, reproduced): with a per-step override
+    on the POST_JOIN_SYNTHESIS step, the override provenance append sits
+    between the synthesis function-entry consult and the LLM dispatch — a
+    token tripping DURING that provenance write must be seen at the dispatch
+    boundary before the synthesis begins."""
+    import pytest
+    from harness_cp.sub_agent_dispatch_cancellation import (
+        DISPATCH_CANCEL_TOKEN_VAR,
+        DispatchCancelToken,
+        DispatchFenceTrippedSignal,
+    )
+
+    token = DispatchCancelToken()
+    handle = _handle(tmp_path)
+
+    class _TrippingWiring:
+        """cp_is_wiring double whose override-provenance emit TRIPS the token
+        (the trip lands DURING the provenance write — the exact round-9
+        window between the function-entry consult and the dispatch)."""
+
+        def emit_override_state_ledger_entry(self, **_kwargs: Any) -> Any:
+            async def _go() -> None:
+                token.trip()
+
+            return _go()
+
+    class _RecordingDispatcher:
+        def __init__(self) -> None:
+            self.dispatched: list[str] = []
+
+        def dispatch(
+            self, binding: Any, step: WorkflowStep, *, step_context: Any = None
+        ) -> dict[str, Any]:
+            self.dispatched.append(str(step.step_id))
+            return {"ok": str(step.step_id)}
+
+    class _SynthRegistry:
+        def __init__(self, dispatcher: Any) -> None:
+            self._dispatcher = dispatcher
+
+        def lookup(self, step_kind: StepKind) -> StepDispatcher:
+            if step_kind in (StepKind.DECLARATIVE_STEP, StepKind.POST_JOIN_SYNTHESIS):
+                return cast(StepDispatcher, self._dispatcher)
+            raise StepKindDispatcherNotBoundError(step_kind)
+
+    dispatcher = _RecordingDispatcher()
+    ledger = _RealLedger(handle=handle)
+    synthesis = WorkflowStep(
+        step_id=StepID("synthesis"),
+        step_kind=StepKind.POST_JOIN_SYNTHESIS,
+        step_payload={"messages": [], "params": {"max_tokens": 64}},
+    )
+    ctx_obj = _Ctx(ledger=ledger, emitter=_Emitter())
+    ctx_obj.cp_is_wiring = _TrippingWiring()  # type: ignore[attr-defined]
+    ctx = cast(DriverContext, ctx_obj)
+    reset = DISPATCH_CANCEL_TOKEN_VAR.set(token)
+    try:
+        with pytest.raises(DispatchFenceTrippedSignal):
+            execute_workflow(
+                _manifest(
+                    topology_pattern=TopologyPattern.PARALLELIZATION,
+                    overrides={"synthesis": _override("synthesis")},
+                ),
+                [_declarative("branch-0", index=0), _declarative("branch-1", index=1), synthesis],
+                run_id="run-1",
+                ctx=ctx,
+                default_model_binding=_DEFAULT_BINDING,
+                step_dispatchers=cast(StepDispatcherRegistry, _SynthRegistry(dispatcher)),
+            )
+    finally:
+        DISPATCH_CANCEL_TOKEN_VAR.reset(reset)
+    # The branches ran; the synthesis dispatch never began.
+    assert "synthesis" not in dispatcher.dispatched

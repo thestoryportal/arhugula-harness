@@ -568,3 +568,50 @@ def test_decentralized_handoff_opt_out_records_nothing() -> None:
     assert result.status is RunStatus.SUCCESS
     assert disp.seen_upstream == [None, None, None]
     assert channel.records == []  # opt-out: the driver recorded nothing
+
+
+# ---------------------------------------------------------------------------
+# B-60 — per-stage fence consult on the sequential handoff chain.
+# ---------------------------------------------------------------------------
+
+
+def test_b60_mid_chain_trip_stops_next_stage() -> None:
+    """B-60 (codex round-1 on PR #1075): a cancel token tripping during
+    stage 0's dispatch must stop stage 1 from BEGINNING — the per-stage
+    consult is the sequential handoff chain's step-boundary cadence."""
+    import pytest
+    from harness_cp.sub_agent_dispatch_cancellation import (
+        DISPATCH_CANCEL_TOKEN_VAR,
+        DispatchCancelToken,
+        DispatchFenceTrippedSignal,
+    )
+
+    token = DispatchCancelToken()
+
+    class _TrippingHandoffDispatcher(_HandoffDispatcher):
+        def dispatch(
+            self,
+            binding: StepEffectiveBinding,
+            step: WorkflowStep,
+            *,
+            step_context: Any = None,
+        ) -> dict[str, Any]:
+            result = super().dispatch(binding, step, step_context=step_context)
+            if len(self.order) == 1:
+                token.trip()  # trip lands at the end of stage 0
+            return result
+
+    dispatcher = _TrippingHandoffDispatcher()
+    ledger = _RecordingLedger()
+    reset = DISPATCH_CANCEL_TOKEN_VAR.set(token)
+    try:
+        with pytest.raises(DispatchFenceTrippedSignal):
+            _run(
+                steps=[_stage("researcher"), _stage("writer"), _stage("reviewer")],
+                ledger=ledger,
+                dispatcher=dispatcher,
+            )
+    finally:
+        DISPATCH_CANCEL_TOKEN_VAR.reset(reset)
+    # Stage 0 dispatched; stages 1..2 never began.
+    assert dispatcher.order == ["researcher"]

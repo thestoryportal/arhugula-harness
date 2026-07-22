@@ -2830,3 +2830,241 @@ def test_partition_proceed_leaders_run_concurrently_in_phase1() -> None:
     )
     assert result.status is RunStatus.SUCCESS
     assert sorted(witness.dispatched) == [0, 1, 2, 3]
+
+
+# ---------------------------------------------------------------------------
+# B-60 — cancellation fence at nonlinear-topology entry + phase boundaries.
+# ---------------------------------------------------------------------------
+
+
+class _TrippingCohortDispatcher(_RecordingCohortDispatcher):
+    """Records dispatches; TRIPS the supplied token at the END of the given
+    branch's dispatch (the branch itself completes cleanly — the ONLY thing
+    that may stop later phases is the B-60 boundary consult)."""
+
+    def __init__(self, token: Any, *, trip_on: int) -> None:
+        super().__init__()
+        self._token = token
+        self._trip_on = trip_on
+
+    def dispatch(
+        self,
+        binding: StepEffectiveBinding,
+        step: WorkflowStep,
+        *,
+        step_context: Any = None,
+    ) -> dict[str, Any]:
+        result = super().dispatch(binding, step, step_context=step_context)
+        if int(step.step_payload["index"]) == self._trip_on:
+            self._token.trip()
+        return result
+
+
+def test_b60_pre_tripped_fence_refuses_nonlinear_strategy_entry() -> None:
+    """B-60 entry witness (+ the fence-signal TRANSIT witness through the
+    real `execute_workflow` boundary): an ambient token already tripped when
+    a PARALLELIZATION run reaches the strategy dispatch refuses BEFORE any
+    branch is scheduled — zero dispatches, zero ledger appends, and the
+    BaseException signal surfaces at the `execute_workflow` caller (no
+    except-arm or task-group machinery absorbs it)."""
+    from harness_cp.sub_agent_dispatch_cancellation import (
+        DISPATCH_CANCEL_TOKEN_VAR,
+        DispatchCancelToken,
+        DispatchFenceTrippedSignal,
+    )
+
+    ledger = _RecordingLedger()
+    dispatcher = _RecordingCohortDispatcher()
+    token = DispatchCancelToken()
+    token.trip()
+    reset = DISPATCH_CANCEL_TOKEN_VAR.set(token)
+    try:
+        with pytest.raises(DispatchFenceTrippedSignal):
+            _run(
+                steps=[_inference_step(i) for i in range(3)],
+                dispatcher=dispatcher,
+                ledger=ledger,
+                concurrent_cache_warmup=False,
+            )
+    finally:
+        DISPATCH_CANCEL_TOKEN_VAR.reset(reset)
+    assert dispatcher.dispatched == []
+    assert ledger.appends == []
+
+
+def test_b60_phase1_trip_stops_phase2_scheduling_proceed_tier() -> None:
+    """B-60 phase-boundary witness (PROCEED tier): a token tripping DURING
+    Phase 1 (branch[0] completes, tripping at its end) stops Phase 2 from
+    ever SCHEDULING — the siblings are never dispatched, the signal
+    surfaces at the caller, and the withheld Phase-2 admissions are
+    released (no permanent frame-budget reduction)."""
+    from harness_cp.sub_agent_dispatch_cancellation import (
+        DISPATCH_CANCEL_TOKEN_VAR,
+        DispatchCancelToken,
+        DispatchFenceTrippedSignal,
+    )
+
+    authority = DefaultCapacityAuthority(frame_budget=4)
+    token = DispatchCancelToken()
+    dispatcher = _TrippingCohortDispatcher(token, trip_on=0)
+    reset = DISPATCH_CANCEL_TOKEN_VAR.set(token)
+    try:
+        with pytest.raises(DispatchFenceTrippedSignal):
+            _run(
+                steps=[_inference_step(i) for i in range(3)],
+                dispatcher=dispatcher,
+                concurrent_cache_warmup=True,
+                capacity_authority=authority,
+            )
+    finally:
+        DISPATCH_CANCEL_TOKEN_VAR.reset(reset)
+    # Phase 1 dispatched exactly branch[0]; Phase 2 never scheduled.
+    assert dispatcher.dispatched == [0]
+    # The withheld Phase-2 admissions were released on the boundary raise.
+    assert authority.available == authority.frame_budget
+
+
+def test_b60_phase1_trip_stops_phase2_scheduling_cascade_tier() -> None:
+    """B-60 phase-boundary witness (strict/cascade tier — the TaskGroup
+    warm-up path): same interleaving under MULTI_TENANT_COMPLIANCE; the
+    boundary consult between the Phase-1 and Phase-2 TaskGroups refuses
+    Phase 2 and releases its admissions."""
+    from harness_cp.sub_agent_dispatch_cancellation import (
+        DISPATCH_CANCEL_TOKEN_VAR,
+        DispatchCancelToken,
+        DispatchFenceTrippedSignal,
+    )
+
+    authority = DefaultCapacityAuthority(frame_budget=4)
+    token = DispatchCancelToken()
+    dispatcher = _TrippingCohortDispatcher(token, trip_on=0)
+    reset = DISPATCH_CANCEL_TOKEN_VAR.set(token)
+    try:
+        with pytest.raises(DispatchFenceTrippedSignal):
+            _run(
+                steps=[_inference_step(i) for i in range(3)],
+                dispatcher=dispatcher,
+                concurrent_cache_warmup=True,
+                persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+                engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+                store=_MiniFanoutStore(),
+                capacity_authority=authority,
+            )
+    finally:
+        DISPATCH_CANCEL_TOKEN_VAR.reset(reset)
+    assert dispatcher.dispatched == [0]
+    assert authority.available == authority.frame_budget
+
+
+def test_b60_intra_phase_trip_stops_sibling_marker_and_dispatch() -> None:
+    """B-60 (codex round-3 on PR #1075, reproduced): INTRA-phase — a token
+    tripping while an earlier sibling writes its dispatch marker must stop
+    the LATER sibling's marker + dispatch from beginning (the per-branch
+    consult inside the marker try). Deterministic: the store's marker write
+    for branch 0 trips; branch 1's consult then refuses."""
+    from harness_cp.sub_agent_dispatch_cancellation import (
+        DISPATCH_CANCEL_TOKEN_VAR,
+        DispatchCancelToken,
+        DispatchFenceTrippedSignal,
+    )
+
+    token = DispatchCancelToken()
+
+    class _TrippingMarkerStore(_MiniFanoutStore):
+        def record_branch_dispatched(self, run_key: str, branch_index: int, *a: Any, **k: Any):
+            result = super().record_branch_dispatched(run_key, branch_index, *a, **k)
+            if branch_index == 0:
+                token.trip()
+            return result
+
+    store = _TrippingMarkerStore()
+    dispatcher = _RecordingCohortDispatcher()
+    reset = DISPATCH_CANCEL_TOKEN_VAR.set(token)
+    try:
+        with pytest.raises(DispatchFenceTrippedSignal):
+            _run(
+                steps=[_inference_step(i) for i in range(2)],
+                dispatcher=dispatcher,
+                concurrent_cache_warmup=False,
+                persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+                engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+                store=store,
+            )
+    finally:
+        DISPATCH_CANCEL_TOKEN_VAR.reset(reset)
+    # Branch 0's marker landed (the trip rode it); its OWN dispatch was
+    # refused by the POST-marker consult (codex round-8), and branch 1's
+    # marker AND dispatch never began.
+    assert store.present_dispatched_indexes(store.sole_run_key()) == {0}
+    assert dispatcher.dispatched == []
+
+
+def test_b60_all_rejected_with_trip_terminates_at_fence_not_paused() -> None:
+    """B-60 all-rejected+tripped terminal witness: every branch capacity-
+    rejected AND the token tripped during reservation -> the run terminates
+    at the fence with NO branch-failure/cancelled terminals folded. HONESTY
+    NOTE (merge-gate round 1): this pins the OUTCOME jointly with the B-61
+    drain fence, not the round-10 consult ORDER in isolation — empirically
+    no single-site discriminator for the order exists (with a pause
+    protocol bound, admission-rejection pauses PRE-branch for fix and
+    mutation alike; without one, the drain fence backstops). The order is
+    strictly-earlier, comment-documented at both sites, and registered as
+    a forward residual."""
+    from harness_core import SubAgentDispatchCapacityError
+    from harness_cp.sub_agent_dispatch_cancellation import (
+        DISPATCH_CANCEL_TOKEN_VAR,
+        DispatchCancelToken,
+        DispatchFenceTrippedSignal,
+    )
+
+    token = DispatchCancelToken()
+
+    class _AllRejectingTrippingAuthority:
+        """Duck-typed authority (DefaultCapacityAuthority is @final):
+        rejects EVERY branch and trips the token during reservation."""
+
+        frame_budget = 1
+        available = 1
+
+        def reserve_fanout(
+            self,
+            branch_requirements: tuple[int, ...],
+            *,
+            step_ids: tuple[str, ...],
+            descent_chain: tuple[str, ...],
+        ):
+            token.trip()  # the trip lands during reservation
+            return tuple(
+                SubAgentDispatchCapacityError(
+                    requested_frames=req,
+                    available_capacity=0,
+                    step_id=sid,
+                    descent_chain=descent_chain,
+                )
+                for req, sid in zip(branch_requirements, step_ids, strict=True)
+            )
+
+    authority = _AllRejectingTrippingAuthority()
+    dispatcher = _RecordingCohortDispatcher()
+    ledger = _RecordingLedger()
+    reset = DISPATCH_CANCEL_TOKEN_VAR.set(token)
+    try:
+        with pytest.raises(DispatchFenceTrippedSignal):
+            _run(
+                steps=[_inference_step(i) for i in range(2)],
+                dispatcher=dispatcher,
+                ledger=ledger,
+                concurrent_cache_warmup=False,
+                persona_tier=PersonaTier.TEAM_BINDING,  # pause tier
+                capacity_authority=authority,
+            )
+    finally:
+        DISPATCH_CANCEL_TOKEN_VAR.reset(reset)
+    # Fold-side discriminators: nothing dispatched, and NO branch-failure /
+    # cancelled terminal was folded for the rejected branches (the run
+    # terminated at the fence, not at the cascade fold).
+    assert dispatcher.dispatched == []
+    assert not any(
+        p.branch_metadata is not None and p.branch_metadata.terminal_status is not None
+        for p, _k in ledger.appends
+    )

@@ -1105,3 +1105,47 @@ def test_ow_proceed_barrier_deadline_trips_ambient_cancel_token(
     assert dispatcher.captured_token is not None
     assert dispatcher.captured_token != "unset"
     assert dispatcher.captured_token.tripped
+
+
+# ---------------------------------------------------------------------------
+# B-60 — fence consult at the orchestrator -> worker fan-out boundary.
+# ---------------------------------------------------------------------------
+
+
+def test_b60_orchestrator_dispatch_trip_stops_worker_fanout() -> None:
+    """B-60 (codex round-1 on PR #1075, the reproduced interleaving): a
+    cancel token tripping DURING the orchestrator's sequential dispatch
+    passed the strategy-entry consult — without the boundary consult the
+    worker fan-out still began. Now the workers never dispatch; the signal
+    surfaces at the caller."""
+    from harness_cp.sub_agent_dispatch_cancellation import (
+        DISPATCH_CANCEL_TOKEN_VAR,
+        DispatchCancelToken,
+        DispatchFenceTrippedSignal,
+    )
+
+    token = DispatchCancelToken()
+
+    class _TrippingOrchestratorDispatcher(_OWDispatcher):
+        def dispatch(
+            self,
+            binding: StepEffectiveBinding,
+            step: WorkflowStep,
+            *,
+            step_context: Any = None,
+        ) -> dict[str, Any]:
+            result = super().dispatch(binding, step, step_context=step_context)
+            if str(step.step_id) == "orchestrator":
+                token.trip()  # trip lands at the end of the orchestrator dispatch
+            return result
+
+    dispatcher = _TrippingOrchestratorDispatcher()
+    ledger = _RecordingLedger()
+    reset = DISPATCH_CANCEL_TOKEN_VAR.set(token)
+    try:
+        with pytest.raises(DispatchFenceTrippedSignal):
+            _run(steps=_steps(2), dispatcher=dispatcher, ledger=ledger)
+    finally:
+        DISPATCH_CANCEL_TOKEN_VAR.reset(reset)
+    # Only the orchestrator ever dispatched — no worker began.
+    assert set(dispatcher.contexts) == {"orchestrator"}

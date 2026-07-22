@@ -1433,3 +1433,213 @@ def test_ow_partition_recovered_fence_peer_withheld_as_follower_completed_captur
     # attempt-1 dispatch marker stands un-re-marked.
     assert store.present_branch_indexes(run_key) == {0, 1, 2}
     assert store.present_dispatched_indexes(run_key) == {0, 1, 2, 3}
+
+
+# ---------------------------------------------------------------------------
+# B-60 — fence consult at the ORCHESTRATOR warm-up Phase 1 -> Phase 2 boundary.
+# ---------------------------------------------------------------------------
+
+
+class _B60TrippingCohortWorker:
+    """Cohort-uniform worker dispatcher; the Phase-1 LEADER (lowest ordinal)
+    trips the supplied token at the END of its dispatch (completing cleanly —
+    only the B-60 boundary consult may stop Phase 2)."""
+
+    def __init__(self, token: Any) -> None:
+        self._token = token
+        self.dispatched: list[int] = []
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        idx = int(step.step_payload["index"])
+        self.dispatched.append(idx)
+        if idx == 0:
+            self._token.trip()
+        return {"index": idx}
+
+    def cohort_key(self, binding: StepEffectiveBinding, step: WorkflowStep) -> str | None:
+        return "cohort-b60"
+
+
+def _b60_ow_run(persona_tier: PersonaTier, **run_kwargs: Any) -> tuple[Any, Any]:
+    from harness_cp.sub_agent_dispatch_cancellation import (
+        DISPATCH_CANCEL_TOKEN_VAR,
+        DispatchCancelToken,
+        DispatchFenceTrippedSignal,
+    )
+
+    authority = DefaultCapacityAuthority(frame_budget=4)
+    token = DispatchCancelToken()
+    dispatcher = _B60TrippingCohortWorker(token)
+    reset = DISPATCH_CANCEL_TOKEN_VAR.set(token)
+    try:
+        with pytest.raises(DispatchFenceTrippedSignal):
+            _run(
+                steps=[_orch_step(), _worker(0, "b60"), _worker(1, "b60"), _worker(2, "b60")],
+                registry=_registry(dispatcher),
+                persona_tier=persona_tier,
+                concurrent_cache_warmup=True,
+                capacity_authority=authority,
+                **run_kwargs,
+            )
+    finally:
+        DISPATCH_CANCEL_TOKEN_VAR.reset(reset)
+    return dispatcher, authority
+
+
+def test_b60_ow_phase1_trip_stops_phase2_scheduling_proceed_tier() -> None:
+    """B-60 (codex round-2 on PR #1075, reproduced): the ORCHESTRATOR fan-out
+    has its OWN warm-up phase pair — a token tripping during Phase 1 (the
+    cohort leader) must stop Phase 2 from scheduling, with the withheld
+    Phase-2 admissions released."""
+    dispatcher, authority = _b60_ow_run(PersonaTier.SOLO_DEVELOPER)
+    assert dispatcher.dispatched == [0]
+    assert authority.available == authority.frame_budget
+
+
+def test_b60_ow_phase1_trip_stops_phase2_scheduling_cascade_tier() -> None:
+    """Strict/cascade-tier twin (TaskGroup phase pair)."""
+    dispatcher, authority = _b60_ow_run(PersonaTier.MULTI_TENANT_COMPLIANCE)
+    assert dispatcher.dispatched == [0]
+    assert authority.available == authority.frame_budget
+
+
+def test_b60_orchestrator_marker_trip_stops_orchestrator_dispatch() -> None:
+    """B-60 (codex round-7 on PR #1075, reproduced): a token tripping while
+    the orchestrator's reserve marker writes must stop the orchestrator's
+    OWN dispatch from beginning — the marker/dispatch boundary consult."""
+    from harness_cp.sub_agent_dispatch_cancellation import (
+        DISPATCH_CANCEL_TOKEN_VAR,
+        DispatchCancelToken,
+        DispatchFenceTrippedSignal,
+    )
+
+    token = DispatchCancelToken()
+
+    class _TrippingOrchMarkerStore(_MiniOWStore):
+        def record_orchestrator_dispatched(self, *a: Any, **k: Any):
+            result = super().record_orchestrator_dispatched(*a, **k)
+            token.trip()
+            return result
+
+    class _CountingEcho:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def dispatch(
+            self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+        ) -> dict[str, Any]:
+            self.calls.append(str(step.step_id))
+            return {"ok": str(step.step_id)}
+
+    echo = _CountingEcho()
+    store = _TrippingOrchMarkerStore()
+    reset = DISPATCH_CANCEL_TOKEN_VAR.set(token)
+    try:
+        with pytest.raises(DispatchFenceTrippedSignal):
+            _run(
+                steps=[_orch_step(), _worker(0, None)],
+                registry=_KindMap(
+                    {
+                        StepKind.DECLARATIVE_STEP: echo,
+                        StepKind.INFERENCE_STEP: echo,
+                    }
+                ),
+                persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+                engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+                store=store,
+                concurrent_cache_warmup=False,
+            )
+    finally:
+        DISPATCH_CANCEL_TOKEN_VAR.reset(reset)
+    # The marker landed (the trip rode it); the orchestrator dispatch and
+    # every worker never began.
+    assert echo.calls == []
+
+
+def test_b60_ow_intra_phase_worker_marker_trip_stops_sibling() -> None:
+    """Merge-gate test-witness lens closure item 3: the OW WORKER-level
+    intra-phase consults (pre/post marker in `_cancel_worker`) — a token
+    tripping while worker 0's marker writes must stop worker 0's own
+    dispatch AND worker 1's marker+dispatch (the parallelization intra
+    witness's OW twin)."""
+    from harness_cp.sub_agent_dispatch_cancellation import (
+        DISPATCH_CANCEL_TOKEN_VAR,
+        DispatchCancelToken,
+        DispatchFenceTrippedSignal,
+    )
+
+    token = DispatchCancelToken()
+
+    class _TrippingWorkerMarkerStore(_MiniOWStore):
+        def record_branch_dispatched(self, run_key: str, branch_index: int, *a: Any, **k: Any):
+            result = super().record_branch_dispatched(run_key, branch_index, *a, **k)
+            if branch_index == 0:
+                token.trip()
+            return result
+
+    class _CountingWorker:
+        def __init__(self) -> None:
+            self.calls: list[int] = []
+
+        def dispatch(
+            self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+        ) -> dict[str, Any]:
+            self.calls.append(int(step.step_payload["index"]))
+            return {"ok": 1}
+
+    worker = _CountingWorker()
+    store = _TrippingWorkerMarkerStore()
+    reset = DISPATCH_CANCEL_TOKEN_VAR.set(token)
+    try:
+        with pytest.raises(DispatchFenceTrippedSignal):
+            _run(
+                steps=[_orch_step(), _worker(0, None), _worker(1, None)],
+                registry=_KindMap(
+                    {StepKind.DECLARATIVE_STEP: _Echo(), StepKind.INFERENCE_STEP: worker}
+                ),
+                persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+                engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+                store=store,
+                concurrent_cache_warmup=False,
+            )
+    finally:
+        DISPATCH_CANCEL_TOKEN_VAR.reset(reset)
+    # Worker 0's marker landed (the trip rode it); its OWN dispatch was
+    # refused post-marker, and worker 1 never marked nor dispatched.
+    assert worker.calls == []
+
+
+def test_b60_ow_pre_tripped_entry_no_orchestrator_marker() -> None:
+    """Merge-gate test-witness lens closure item 4 (kills the M2
+    strategy-entry-narrowing mutation): a PRE-tripped token on an
+    ORCHESTRATOR_WORKERS run refuses at the strategy entry — before even
+    the orchestrator's durable reserve marker writes."""
+    from harness_cp.sub_agent_dispatch_cancellation import (
+        DISPATCH_CANCEL_TOKEN_VAR,
+        DispatchCancelToken,
+        DispatchFenceTrippedSignal,
+    )
+
+    token = DispatchCancelToken()
+    token.trip()
+    store = _MiniOWStore()
+    echo = _Echo()
+    reset = DISPATCH_CANCEL_TOKEN_VAR.set(token)
+    try:
+        with pytest.raises(DispatchFenceTrippedSignal):
+            _run(
+                steps=[_orch_step(), _worker(0, None)],
+                registry=_KindMap({StepKind.DECLARATIVE_STEP: echo, StepKind.INFERENCE_STEP: echo}),
+                persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+                engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+                store=store,
+                concurrent_cache_warmup=False,
+            )
+    finally:
+        DISPATCH_CANCEL_TOKEN_VAR.reset(reset)
+    # No orchestrator reserve marker was ever written (the strategy-entry
+    # consult refused before the marker; `_orch_marker` is the store state —
+    # `orchestrator_dispatched` is the accessor METHOD).
+    assert not store._orch_marker  # pyright: ignore[reportPrivateUsage]
