@@ -261,16 +261,33 @@ def test_rotation_correlation_id_serializes_and_deserializes_through_jsonl_line(
     assert entries[0].rotation_correlation_id == _CANONICAL_UUID
 
 
-def test_legacy_entry_without_rotation_correlation_id_key_hashes_same_as_v1_12_none() -> None:
-    """ZERO breaking change at hash level: legacy entries (no sidecar key in
-    JSON) round-trip to `rotation_correlation_id=None` and produce the same
-    `response_hash` as v1.12 entries with sidecar `None`."""
-    entry_none = _golden_entry(rotation_correlation_id=None)
-    hash_a = compute_response_hash(entry_none)
-    hash_b = compute_response_hash(entry_none)
-    assert hash_a == hash_b
-    entry_with = entry_none.model_copy(update={"rotation_correlation_id": _CANONICAL_UUID})
-    assert hash_a != compute_response_hash(entry_with)
+def test_legacy_entry_without_rotation_correlation_id_key_hashes_same_as_v1_12_none(
+    tmp_path: Path,
+) -> None:
+    """ZERO breaking change at hash level: a genuinely legacy JSONL line — no
+    `rotation_correlation_id` key at all, mirroring a real pre-v1.12 persisted
+    entry — round-trips through `read_ledger`/`_deserialize_entry` to
+    `rotation_correlation_id=None` and produces the same `response_hash` as the
+    pinned pre-v1.12 golden fixture (mutation probe: changing the deserializer
+    from `raw.get("rotation_correlation_id")` to a required `raw[...]` lookup
+    would raise `KeyError` on this exact legacy line)."""
+    handle = _handle(tmp_path)
+    legacy_line = json.dumps(
+        {
+            "action_id": "act-golden-001",
+            "idempotency_key": "idem-golden-001",
+            "actor": {"actor_class": "agent", "actor_id": "agent-golden"},
+            "response_hash": (b"\xab" * 32).hex(),
+            "timestamp": "2026-05-15T12:00:00+00:00",
+            "prior_event_hash": ALL_ZEROS_SENTINEL.hex(),
+        },
+        separators=(",", ":"),
+    )
+    handle.canonical_path.write_text(legacy_line + "\n")
+    entries = read_ledger(handle)
+    assert len(entries) == 1
+    assert entries[0].rotation_correlation_id is None
+    assert compute_response_hash(entries[0]).hex() == _PRE_V1_12_GOLDEN
 
 
 # ---------------------------------------------------------------------------
