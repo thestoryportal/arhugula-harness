@@ -63,6 +63,8 @@ the round-1 `branch_path` field addition is REMOVED as unnecessary.
 
 **Round-4 correction (same-day, branch-vs-main `just codex-review` against the round-3 fix commit).** Round 3's AC #7 addition (a resolver mechanism: count HITL-paused children, gate the uniform fallback, else force INERT re-pause) was found doubly wrong: strands a transitively-paused container/ancestor branch by forcing INERT re-pause instead of unconditional recursion toward the actually-addressed gate-owning descendant; and assigns the obligation to U-CP-64, which only owns the `ResumeContext` carrier, not the deferred resolver. Fix: CP spec v1.106 §1.2 property 4 CONVERTED from a mechanism to a black-box invariant, MOVED to §5's deferred bucket alongside properties 1-3; a NEW property 5 distinguishes gate-owning from transitively-paused container branches. AC #7 reverts to carrier-level-only tests; the multi-branch mutation-probe test is removed.
 
+**Round-5 note (branch-vs-main `just codex-review` against the round-4 fix commit).** Findings were entirely Runtime-owned (a property-1 restatement drift in the sibling Runtime spec) or documentation hygiene (`harness-cp/CLAUDE.md` round-count staleness, a stale U-RT-95 cross-reference in the Runtime spec's own clearance marker) — see those files' own round-5 corrections. This file required no further content change.
+
 This is the spec leg's plan absorption only — impl (code + tests) is a
 separate follow-on arc per the B-33/B-59 precedent.
 
