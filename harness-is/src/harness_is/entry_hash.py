@@ -73,6 +73,13 @@ def canonicalize(entry: StateLedgerEntry) -> bytes:
     when ``None`` (include-as-null — the record's fields are rendered whenever
     the record is present, mirroring ``actor``). Every pre-v1.8 entry carries
     ``branch_metadata = None`` ⟹ byte-identical canonicalization.
+
+    v1.12 NEW D-derivative sidecar contribution (U-IS-20, C-IS-05 §5.6):
+    ``rotation_correlation_id`` is included in the canonical payload when
+    non-``None``; omitted when ``None`` (the same omit-when-``None``
+    discipline as ``procedural_tier_snapshot_ref``). Every pre-v1.12 entry
+    carries ``rotation_correlation_id = None`` ⟹ byte-identical
+    canonicalization — ZERO breaking change at the hash level.
     """
     payload: dict[str, object] = {
         "action_id": _nfc(entry.action_id),
@@ -97,6 +104,8 @@ def canonicalize(entry: StateLedgerEntry) -> bytes:
                 _nfc(bm.terminal_status) if bm.terminal_status is not None else None
             ),
         }
+    if entry.rotation_correlation_id is not None:
+        payload["rotation_correlation_id"] = _nfc(entry.rotation_correlation_id)
     return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode(
         "utf-8"
     )

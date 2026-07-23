@@ -32,9 +32,11 @@ def test_sibling_ledger_entry_matches_f2_shape() -> None:
 
     Per IS spec v1.3 §5.1 (LANDED PR #89): `StateLedgerEntry` gains the
     `procedural_tier_snapshot_ref` D-derivative sidecar; per IS spec v1.8 §5.4
-    (U-IS-19): it gains the `branch_metadata` D-derivative sidecar — both
-    additive to the F-layer 6-field shape. `SiblingLedgerEntry` inherits the
-    extended field set verbatim per Pydantic v2 subclass semantics.
+    (U-IS-19): it gains the `branch_metadata` D-derivative sidecar; per IS
+    spec v1.12 §5.6 (U-IS-20): it gains the `rotation_correlation_id`
+    D-derivative sidecar — all additive to the F-layer 6-field shape.
+    `SiblingLedgerEntry` inherits the extended field set verbatim per
+    Pydantic v2 subclass semantics.
     """
     assert issubclass(SiblingLedgerEntry, StateLedgerEntry)
     assert set(SiblingLedgerEntry.model_fields) == {
@@ -46,6 +48,7 @@ def test_sibling_ledger_entry_matches_f2_shape() -> None:
         "prior_event_hash",
         "procedural_tier_snapshot_ref",
         "branch_metadata",
+        "rotation_correlation_id",
     }
 
 

@@ -42,8 +42,9 @@ def test_compose_audit_entry_six_field_shape() -> None:
 
     Per IS spec v1.3 §5.1 (LANDED PR #89): `StateLedgerEntry` gains the
     `procedural_tier_snapshot_ref` D-derivative sidecar; per IS spec v1.8 §5.4
-    (U-IS-19): it gains the `branch_metadata` D-derivative sidecar — both
-    additive to the F-layer 6-field shape.
+    (U-IS-19): it gains the `branch_metadata` D-derivative sidecar; per IS
+    spec v1.12 §5.6 (U-IS-20): it gains the `rotation_correlation_id`
+    D-derivative sidecar — all additive to the F-layer 6-field shape.
     """
     entry = compose_secret_fetch_audit_entry(_event(), None)
     assert isinstance(entry, StateLedgerEntry)
@@ -56,6 +57,7 @@ def test_compose_audit_entry_six_field_shape() -> None:
         "prior_event_hash",
         "procedural_tier_snapshot_ref",
         "branch_metadata",
+        "rotation_correlation_id",
     }
 
 
