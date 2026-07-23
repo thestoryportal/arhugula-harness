@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 69
+  total: 71
   open: 1
   design_substrate_gated: 0
-  registered_finding: 8
+  registered_finding: 10
   operator_gated: 1
   held: 1
   closed: 58
-  identity_digest: ce386b4a388a5fec
+  identity_digest: b75a51f9bf4cfbef
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -1583,3 +1583,38 @@ items:
   heading: '### B-68 · Protected result store''s opportunistic GC can race a concurrent
     in-flight publication under a short TTL *(registered at the B-65-A impl arc, out-of-family
     Codex round 11 [P2], 2026-07-22)*'
+- id: B-69
+  title: resume_handle crash-recovery resume path cannot address individual paused children
+    for multi-child HITL delivery
+  status: registered_finding
+  summary: api.resume()'s resume_handle mode gives the caller no prior PauseSnapshot to read
+    a paused child's run_id from before resume_context must be constructed, so B-39's hitl_responses
+    keyed-map addressing is unreachable on that path.
+  close_out: Design a durable-pause-state read accessor (Runtime-owned, reads JournalWorkflowPauseStore)
+    a resume_handle caller can invoke before constructing resume_context, to learn currently-paused
+    children's run_ids for the same workflow_id. A genuine new API surface, not a mechanical
+    patch. See .harness/post-phase-8-forward-register.md B-69 for full detail.
+  council: TBD at build time -- narrow implementation-discretion follow-on in scope shape, but
+    the read-accessor's own API design is a real choice worth a dyadic council pass if non-obvious
+    once scoped.
+  heading: '### B-69 · `resume_handle` crash-recovery resume path cannot address individual
+    paused children for multi-child HITL delivery *(registered at the B-39 spec-leg PR #1092,
+    out-of-family Codex round 3 (branch-vs-main), 2026-07-23)*'
+- id: B-70
+  title: effect_fence_resolution_for's uniform-fallback semantics share B-39's cross-branch-misapplication
+    hazard, unfixed in the already-shipped mechanism
+  status: registered_finding
+  summary: The shipped ResumeContext.effect_fence_resolutions/effect_fence_resolution_for mechanism
+    (B-39's own modeling precedent) has the identical uniform-fallback-to-every-unaddressed-branch
+    gap B-39's CP spec v1.106 section 1.2 property 4 just closed for hitl_responses -- unfixed
+    here, since it predates and is out of this arc's scope.
+  close_out: Extend effect_fence_resolution_for's consumption contract with the same resolver-level
+    multi-child fallback-safety gate (count concurrently-paused children, apply the uniform
+    fallback only when exactly one is paused). Requires a small CP spec section 26.8.1 amendment
+    plus updating its workflow_driver.py callers. See .harness/post-phase-8-forward-register.md
+    B-70 for full detail.
+  council: no -- parity fix mirroring an already-ratified pattern (B-39's own property 4), not
+    a fresh open design question.
+  heading: '### B-70 · `effect_fence_resolution_for`''s uniform-fallback semantics share B-39''s
+    cross-branch-misapplication hazard, unfixed in the already-shipped mechanism *(registered
+    at the B-39 spec-leg PR #1092, out-of-family Codex round 3 (branch-vs-main), 2026-07-23)*'

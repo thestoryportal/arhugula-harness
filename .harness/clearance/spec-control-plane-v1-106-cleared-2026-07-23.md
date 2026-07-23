@@ -16,9 +16,11 @@ reviewer_chain:
   - advisor() (2026-07-23, round 1) — recommended pulling §1 back to CONTRACT altitude rather than a 4th mechanism attempt
   - just codex-review-uncommitted (2026-07-23, round 2) — out-of-family, found the round-1-corrected hitl_responses key shape (branch_path) collides on repeated same-child_workflow_id dispatch
   - advisor() (2026-07-23, round 2) — verified via grep that run_id (not branch_path) is genuinely recursion-stable before endorsing the re-key
+  - just codex-review (2026-07-23, round 3, branch-vs-main against open PR #1092) — out-of-family, found 3 P1s of an addressability/safety class distinct from rounds 1-2's wiring-correctness class
+  - advisor() (2026-07-23, round 3) — diagnosed the 3 findings as one recurring sub-problem (addressability of a specific paused child) plus a sequencing gap; recommended narrow-scope-plus-register over a 4th mechanism-invention attempt
 ---
 
-# Clearance — Spec_Control_Plane_v1_106 (B-39 arc, spec leg; TWO same-day correction passes)
+# Clearance — Spec_Control_Plane_v1_106 (B-39 arc, spec leg; THREE same-day correction passes)
 
 **Round-2 correction (same-day, after round 1's own correction below).** Round
 1's §0 keyed `hitl_responses` by C-CP-25 §25.16 `branch_path`
@@ -124,6 +126,8 @@ scoped identifier with no run-instance component, whereas `run_id`
 genuinely propagates run-instance distinctness through arbitrary recursion
 depth (see the round-2 correction block above). `api.resume()`'s public
 signature is UNCHANGED at this delta.
+
+**Round-3 correction (same-day, branch-vs-main `just codex-review` against open PR #1092 — the correct pre-merge review mode, distinct from rounds 1-2's `-uncommitted` mode which reviews working-tree-relative diffs polluted by untracked clutter).** Three findings, of a NEW class (addressability/safety, not wiring-correctness): (1) `hitl_response_for`'s uniform-fallback ("absent key → uniform `hitl_response`") is safe only when exactly one child is paused this cycle; with 2+, it risks silently misapplying one branch's response — possibly an EDIT payload with audit-attribution stakes — to an unrelated sibling. Fixed: §1.2 gains property 4, a RESOLVER-level obligation (the resolver, not the pure-lookup `hitl_response_for`, must gate the fallback on the concurrent-paused count); §0's docstrings updated to state this; the identical gap in the shipped, cleared `effect_fence_resolution_for` sibling is registered as a separate pre-existing finding, not fixed here. (2) The plan's AC #8 asserted standalone `resume_context_holder` field removal — landing it alone (before its 3 effect-fence-reader consumption sites are re-pointed) breaks the CURRENTLY-WORKING effect-fence resume mechanism. Fixed: AC #8 withdrawn; folded into the SAME deferred delivery-mechanism bucket as §1.2's contract — physical removal + re-pointing now MUST co-land atomically at the impl leg (§1.4 spec text + CP plan v2.42's own correction). (3) `hitl_responses`/`child_run_id` addressing assumes the caller possesses a prior `PauseSnapshot` — true on the `pause_snapshot`-supplied resume path, but NOT on `api.resume()`'s OTHER mode, `resume_handle` (crash-recovery: caller supplies only `workflow_id`; runtime reads the journal itself), where the caller has no snapshot to read a paused child's `run_id` from before `resume_context` must be constructed. Fixed via advisor-recommended narrowing (not solving): §0 states this as an explicit scope limit — `hitl_responses` addressing is `pause_snapshot`-path-only; `resume_handle` callers are limited to the single-child uniform-fallback case; a follow-on durable-pause-state read accessor is registered (`.harness/forward-register.yaml`), not designed here. advisor()'s diagnosis: findings (1) and (3) trace to ONE recurring sub-problem across rounds 1→2→3 — "how does a `resume()` caller name one specific paused child" (R1: not exposed → added a field; R2: exposed field collides → rekeyed; R3: rekeyed field unreachable on one resume mode → narrowed scope) — the convergence-failure signal that justified a round-3 pass rather than declaring round-2's zero-P1 `-uncommitted` result (itself now understood as an artifact of reviewing the wrong diff mode) sufficient.
 
 This is the spec leg only — the impl arc (code + tests) follows as a
 separate PR per the B-33/B-59 precedent, and additionally owes the

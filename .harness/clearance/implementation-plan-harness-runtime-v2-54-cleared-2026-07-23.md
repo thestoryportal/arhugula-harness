@@ -13,9 +13,11 @@ reviewer_chain:
   - Explore grounding pass (2026-07-23, round 1) — confirmed the retry-replay defect against the real `RetryBreakerFallbackDispatcher`/composer wiring
   - advisor() (2026-07-23, round 1) — recommended the CONTRACT-altitude correction
   - just codex-review-uncommitted (2026-07-23, round 2) — out-of-family, found the CP-owned hitl_responses key shape collides on repeated same-child_workflow_id dispatch (CP-owned; this file's own AC #7/#8 unaffected, Depends-on note updated)
+  - just codex-review (2026-07-23, round 3, branch-vs-main against open PR #1092) — out-of-family, found §2's "AC #3 confirmed" claim empirically false against the actual U-RT-95 test file (resume-consume-cycle deferred per FM-2, not exercised)
+  - Direct file read (2026-07-23, round 3) — read test_u_rt_95_hitl_pause_trigger_durable_async_full_execution_path.py lines 1-56 to verify the finding before editing (per subagent-landscape-reports-need-regrounding discipline, applied to a self-authored claim this time)
 ---
 
-# Clearance — Implementation_Plan_Harness_Runtime_v2_54 (B-39 arc, plan leg; TWO same-day correction passes)
+# Clearance — Implementation_Plan_Harness_Runtime_v2_54 (B-39 arc, plan leg; THREE same-day correction passes)
 
 **Round-2 note.** A second out-of-family pass found the CP-owned
 `hitl_responses` key shape (`branch_path`) collides on repeated same-
@@ -51,6 +53,8 @@ reading as reopening Q1=(A)'s full holder retirement. REMOVED from both —
 Q1's retirement of the ctx-level, run-tree-wide-shared BINDING is fixed;
 the impl leg may use any type, new or repurposed, so long as it is never
 bound at that scope again.
+
+**Round-3 correction (same-day, branch-vs-main `just codex-review` against open PR #1092).** §2's prior text claimed AC #3 "is CONFIRMED to still exercise the IDENTICAL operator-facing call shape" through the public `attempt_resume`/`api.resume()` surface, framed as a fixture-only note. Direct read of the ACTUAL U-RT-95 test file found this FALSE: its own doc-comment (lines 29-31) states path (ii) resume-consume-cycle is "deferred to a follow-on arc per FM-2." The materialized path (i) exercises the *engine-layer* WAL_SEGMENT recovery loop (a distinct C-CP-22 surface) — not the workflow-layer HITL composer's public delivery. No test anywhere currently exercises a full public-surface HITL resume-consume cycle. Fix: the "confirmation note" framing is withdrawn; a genuinely NEW AC #9 requires a net-new e2e test (not a fixture edit) materializing the FM-2-deferred path, plus the previously-noted same-cycle-retry e2e scenario.
 
 This is the spec leg's plan absorption only — impl (code + tests) is a
 separate follow-on arc per the B-33/B-59 precedent; the impl leg additionally

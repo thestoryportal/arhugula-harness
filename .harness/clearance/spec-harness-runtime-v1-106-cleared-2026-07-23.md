@@ -14,9 +14,10 @@ reviewer_chain:
   - Explore grounding pass (2026-07-23, round 1) — confirmed the entry-point + nested-child + retry-replay findings against the real call graph
   - advisor() (2026-07-23, round 1) — recommended the CONTRACT-altitude correction
   - just codex-review-uncommitted (2026-07-23, round 2) — out-of-family, found the CP-owned hitl_responses key shape (branch_path) collides on repeated same-child_workflow_id dispatch (this file's own §14.8.8.10 was not itself wrong, but its cross-references needed updating)
+  - just codex-review (2026-07-23, round 3, branch-vs-main against open PR #1092) — out-of-family, found the resume_handle path cannot supply child run_ids for hitl_responses addressing (this file's own §14 resume() invariants needed a scope-limit note); the other 2 round-3 findings are entirely CP-owned
 ---
 
-# Clearance — Spec_Harness_Runtime_v1 (B-39 arc, spec leg; TWO same-day correction passes)
+# Clearance — Spec_Harness_Runtime_v1 (B-39 arc, spec leg; THREE same-day correction passes)
 
 **Round-2 note.** A second out-of-family review round found the CP-owned
 `ResumeContext.hitl_responses` key shape (`branch_path`) collides when two
@@ -69,6 +70,8 @@ how a nested child's re-dispatch (which crosses the EXISTING
 value — is implementation discretion, verified by execution (not by grep)
 at the impl leg, mirroring the ORIGINAL v1.24 §14.8.8.8 framing for this
 identical question.
+
+**Round-3 note (branch-vs-main `just codex-review` against open PR #1092).** Found the `resume_handle` crash-recovery resume mode (§14's `resume()` invariants) cannot supply a paused child's `run_id` before `resume_context` construction, since the caller never possesses the prior `PauseSnapshot` on that path — the CP-owned `hitl_responses`/`child_run_id` addressing scheme (§0 of the sibling CP spec) is therefore unreachable there. Fixed: the `resume()` invariants' "Resume-context one-shot delivery" bullet gains a scope-limit note stating `hitl_responses` addressing works only on the `pause_snapshot`-supplied resume path; `resume_handle` callers are limited to the single-paused-child uniform-fallback case. A follow-on durable-pause-state read accessor is registered, not designed here. The other 2 round-3 findings (multi-child fallback-safety gate; unsafely-sequenced field-removal AC) are entirely CP-owned — see the sibling `Spec_Control_Plane_v1_106.md` clearance marker's own round-3 section; this file required no further change for those two.
 
 This is the spec leg only — the impl arc (composer body amend,
 `HarnessContext` field removal, plus tests, plus a scope-discovery pass to

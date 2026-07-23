@@ -14,9 +14,11 @@ reviewer_chain:
   - advisor() (2026-07-23, round 1) — recommended the CONTRACT-altitude correction (state guarantees, not wiring)
   - just codex-review-uncommitted (2026-07-23, round 2) — out-of-family, found the hitl_responses key shape (branch_path) collides on repeated same-child_workflow_id dispatch
   - advisor() (2026-07-23, round 2) — verified via grep that run_id is genuinely recursion-stable before endorsing the re-key
+  - just codex-review (2026-07-23, round 3, branch-vs-main against open PR #1092) — out-of-family, found AC #8's standalone field-removal breaks 3 currently-working effect-fence readers if landed alone
+  - advisor() (2026-07-23, round 3) — recommended folding field removal into the same deferred bucket as the delivery-mechanism contract, not asserting it as a standalone AC
 ---
 
-# Clearance — Implementation_Plan_Control_Plane_v2_42 (B-39 arc, spec leg; TWO same-day correction passes)
+# Clearance — Implementation_Plan_Control_Plane_v2_42 (B-39 arc, spec leg; THREE same-day correction passes)
 
 v2.41→v2.42: ONE existing unit amended, ZERO new units. U-CP-64 (the
 `ResumeContext` carrier-owning unit) carries the `hitl_responses`/
@@ -54,6 +56,8 @@ propagates run-instance distinctness through arbitrary recursion depth.
 Fix: `hitl_responses` now keys by the paused child's own `run_id`
 (`PausedChildBranchResumeState.child_snapshot.run_id`, an EXISTING field) —
 the round-1 `branch_path` field addition is REMOVED as unnecessary.
+
+**Round-3 correction (same-day, branch-vs-main `just codex-review` against open PR #1092).** Found AC #8 ("`DriverContext.resume_context_holder` field is REMOVED," standalone unit-testable) unsafe: landing field removal alone, before its 3 effect-fence peek-reader consumption sites (`workflow_driver.py`, `getattr(ctx, "resume_context_holder", None)`) are re-pointed, breaks the CURRENTLY-WORKING effect-fence SKIP/RE_FIRE/ABORT resume mechanism (readers silently receive `None`, re-pausing INERT even when the operator supplied a resolution). Fix: AC #8 WITHDRAWN as a standalone AC; folded into §5's deferred delivery-mechanism bucket — physical removal + re-pointing all 3 sites now MUST co-land atomically at the impl leg (never as two separately-sequenced units). AC #7 additionally extended with a NEW mutation-probe test requirement for the CP spec's new §1.2 property 4 (multi-child fallback-safety gate — see the sibling `Spec_Control_Plane_v1_106.md` clearance marker's round-3 section for the underlying finding, which is CP-owned and fixed at the spec level, with this plan's AC #7 carrying the corresponding test obligation). Two follow-ons registered (not solved) at §5: a `resume_handle`-path durable-pause-state read accessor; the pre-existing `effect_fence_resolution_for` uniform-fallback gap.
 
 This is the spec leg's plan absorption only — impl (code + tests) is a
 separate follow-on arc per the B-33/B-59 precedent.
