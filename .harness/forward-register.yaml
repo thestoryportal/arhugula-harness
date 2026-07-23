@@ -59,13 +59,13 @@
 
 snapshot:
   total: 69
-  open: 0
-  design_substrate_gated: 2
+  open: 1
+  design_substrate_gated: 1
   registered_finding: 8
   operator_gated: 2
   held: 1
   closed: 56
-  identity_digest: de28fcc0c03936e5
+  identity_digest: 5dd267a9c7590b73
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -452,17 +452,23 @@ items:
 - id: B-33
   filing: .harness/class_1_fork_b33_rotation_correlation_carrier.md
   title: verify_rotation_6_steps cannot prove a rotation boundary occurred
-  status: design_substrate_gated
-  summary: 'GROUNDED 2026-07-18 (autonomous loop): execute_key_rotation -- the sole
-    verify_rotation_6_steps caller -- still has ONLY test consumers (no production/CLI wiring);
-    the wait-for-real-caller boundary HOLDS, and rotation at MTC is explicitly deferred pending
-    B-33 by both the B-51/B-52/B-54 and B-48 filings. Dormant per its ratified boundary.
-    Original finding: generic hash-chain continuity check passes any intact ledger; cannot
-    confirm a genuine rotation-pair boundary.'
-  close_out: File a Class 1 fork for an IS rotation-correlation carrier (mirrors OD §24.7); extend once
-    B-36's backend lands. B-36 CLOSED 2026-07-16 (ADR-D8, AwsKmsSigningBackend) — this residual now has
-    a real backend to build the rotation-correlation carrier against; still open, unblocked rather than
-    narrowed.
+  status: open
+  summary: 'SPEC LEG LANDED 2026-07-22 (B-33-A) -- IS spec v1.11->v1.12 (NEW §5.6
+    D-derivative sidecar `rotation_correlation_id` on StateLedgerEntry/EntryPayload,
+    C-IS-05; NEW §7.7 presence/uniqueness read-side invariants, C-IS-07) + IS plan
+    v2.7->v2.8 (NEW U-IS-20); no CP unit owed at this leg. The IS-side carrier +
+    invariants are cleared; the CP-owned residual -- verify_rotation_6_steps''s
+    3-step extension (REQUIRE + JOIN the id), the composition-root-injected OD-join
+    evidence DTO, and the boundary attestation against the B-36 AwsKmsSigningBackend
+    key-identity mapping -- remains the open impl leg (mirrors the B-59-A spec-leg
+    -> impl-leg precedent, PRs #1080 -> #1081). execute_key_rotation still has only
+    test consumers; rotation at MTC remains explicitly deferred pending this impl
+    leg per the B-51/B-52/B-54 and B-48 filings.'
+  close_out: 'IS spec leg CLOSED (this arc). Remaining: the CP-axis impl leg --
+    extend verify_rotation_6_steps per fork §2 points 2-4 (REQUIRED correlation
+    argument + 3-step extension + injected OD-join DTO + B-36 key-identity boundary
+    check), wire the carrier''s population at execute_key_rotation''s writes, and
+    author the CP plan delta declaring the cross-axis inbound edge into U-IS-20.'
   council: no for the carrier addition; B-36's own disposition governs the signing-backend half
   heading: '### B-33 · `verify_rotation_6_steps`''s hash-chain check cannot prove a rotation boundary
     occurred *(surfaced at B-26, out-of-family Codex rounds 1 + 5, `advisor()`-confirmed)*'
