@@ -59,13 +59,13 @@
 
 snapshot:
   total: 69
-  open: 1
+  open: 0
   design_substrate_gated: 1
   registered_finding: 8
-  operator_gated: 2
+  operator_gated: 1
   held: 1
-  closed: 56
-  identity_digest: 5dd267a9c7590b73
+  closed: 58
+  identity_digest: d34cc04dc395e0d1
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -452,37 +452,39 @@ items:
 - id: B-33
   filing: .harness/class_1_fork_b33_rotation_correlation_carrier.md
   title: verify_rotation_6_steps cannot prove a rotation boundary occurred
-  status: open
-  summary: 'SPEC LEG LANDED 2026-07-22 (B-33-A) -- IS spec v1.11->v1.12 (NEW §5.6
-    D-derivative sidecar `rotation_correlation_id` on StateLedgerEntry/EntryPayload,
-    C-IS-05; NEW §7.7 join-key read-side invariants -- presence/uniqueness/non-emptiness,
-    NOT a trust anchor -- C-IS-07) + IS plan v2.7->v2.8 (NEW U-IS-20); no CP unit
-    owed at this leg. Forward work is TWO SEPARATE ARCS: (i) the U-IS-20 IS-axis
-    code arc (harness-is only) and (ii) a later CP-axis arc extending
-    verify_rotation_6_steps (REQUIRE + JOIN the id, OD-anchored window-boundary
-    authentication, independent OD-signature coverage for a chain-head rotation
-    entry). Arc (ii)''s former external dependencies are ALL CLOSED: B-22 seam
-    (2026-07-14), B-36 backend selection (ADR-D8 AWS KMS, 2026-07-16), B-47
-    production composition-root wiring (2026-07-17) -- nothing gates arc (ii)
-    except arc (i)''s completion. execute_key_rotation still has only test
-    consumers; rotation at MTC remains explicitly deferred pending arc (ii) per
-    the B-51/B-52/B-54 and B-48 filings, but that does NOT gate the build itself
-    (fork §3 directs the test-consumer apply arc to proceed).'
-  close_out: 'IS spec leg CLOSED (this arc). Remaining, both buildable now with
-    no external blocker: (i) implement U-IS-20 at harness-is/src (carrier +
-    validation + canonicalization + §7.7 helpers). (ii) open a separate CP-axis
-    arc (own CP spec + plan delta) extending verify_rotation_6_steps per fork §2
-    points 2-4 + IS plan v2.8 U-IS-20 Note (d)''s two registered constraints
-    (OD-anchored boundaries; chain-head OD-signature coverage), and wire the
-    carrier''s population at execute_key_rotation''s writes (which does not exist
-    today -- 5 of 6 narrated steps are simulated; arc (ii) must build real
-    ledger-write capability, not extend one).'
+  status: closed
+  pr: '#1082, #1083, #1084, #1087'
+  summary: 'CLOSED 2026-07-23 -- all three ratified-fork (Option A) legs landed:
+    (i) IS carrier -- IS spec v1.11->v1.12 (NEW §5.6 `rotation_correlation_id`
+    sidecar, C-IS-05; NEW §7.7 join-key invariants, C-IS-07) + IS plan v2.8
+    (U-IS-20), code at PR #1083. (ii) CP+OD+Runtime spec+plan rider -- CP spec
+    v1.104->v1.105 (§20.3.1 row 7 + NEW §20.3.2), OD spec v1.34->v1.35 (NEW §24.8),
+    Runtime spec v1.104->v1.105 (NEW §13.6), landed at PR #1084 (4 codex rounds,
+    24 findings fixed). (iii) the real CODE -- OD `find_rotation_pair_evidence`
+    + CP `RotationPairEvidenceProvider`/`KeyIdentityResolver` Protocols +
+    `verify_rotation_6_steps` extension (rotation_window_entries/evidence_provider/
+    key_identity_resolver, subset-membership check, dual pair_present+
+    signatures_verified gate, required physical-key-distinctness attestation) +
+    Runtime composition-root adapter, landed at PR #1087 (2 codex rounds to clean
+    convergence + 3-lens merge-gate all-approve). `verify_rotation_6_steps` now
+    genuinely cannot pass on absent/tampered/structural-only evidence -- the
+    B-26 defect this fork exists to fix is closed.'
+  close_out: 'Two residuals REGISTERED as separate forward dependencies, NOT part
+    of B-33''s own ratified scope (the fork''s own §3 explicitly defers both):
+    (a) `execute_key_rotation`''s real ledger-write path + a real
+    `rotation_window_entries` producer -- `verify_rotation_6_steps` still has
+    ZERO production callers; (b) the OD §21.2.2 rotation-period-aware
+    cryptographic signature verifier -- `find_rotation_pair_evidence` always
+    returns `signatures_verified=False` today, so `PROBE_VERIFY_AT_READ` cannot
+    reach a genuine pass through any real caller until this lands. Neither
+    blocks B-33''s own closure; both are candidate new B-* filings for a future
+    arc when a real rotation-execution production surface is prioritized.'
   council: no -- the carrier shape is settled (re-raised a 2nd time at B-33-A spec-leg
     codex round 4 with no new consequence named; converged, artifact identical
     either way); B-36/B-47 are both closed, so no signing-backend disposition remains
     open
   heading: '### B-33 · `verify_rotation_6_steps`''s hash-chain check cannot prove a rotation boundary
-    occurred *(surfaced at B-26, out-of-family Codex rounds 1 + 5, `advisor()`-confirmed)*'
+    occurred *(surfaced at B-26, out-of-family Codex rounds 1 + 5, `advisor()`-confirmed; CLOSED 2026-07-23)*'
 - id: B-34
   title: Concrete signature-representation gaps in the C-CP-20 §20.2.1 seam
   status: closed
@@ -1275,28 +1277,22 @@ items:
 - id: B-59
   filing: .harness/class_2_fork_b59_capacity_authority_across_bootstraps.md
   title: Capacity authority not preserved across sequential bootstrap invocations
-  status: operator_gated
-  summary: 'Registered at the B-48 apply arc (codex round-4 [P1] "preserve one capacity authority
-    across bootstrap runs"): if `api.run()`''s shutdown times out while a daemon dispatch worker
-    is still draining (the documented abandoned-worker-keeps-its-lease-until-fence-ack behavior),
-    the process releases its lock and permits another `api.run()` invocation -- but the NEXT
-    bootstrap constructs a FRESH `SubAgentDispatchExecutor` with the full configured frame budget.
-    The old, still-draining worker''s occupied frame is invisible to the new executor''s accounting,
-    so the process can transiently exceed the single-shared-cap promise across the boundary. The
-    B-48 fork''s own §4 verification obligations scope entirely to a SINGLE dispatch/workflow-run''s
-    offload mechanics (construction-time mode selection, dispatch-time cancellation, fan-out
-    admission, warm-up partitioning, etc.) -- multiple SEQUENTIAL bootstrap invocations sharing one
-    OS process is a genuinely new, unspecified surface the fork never anticipated.'
-  close_out: 'A real fix needs one of two architectural choices the fork never ratified: (a) a
-    process-scoped capacity-authority singleton that survives across `api.run()` invocations
-    (surviving drain state, not just the frame count), or (b) block a NEW bootstrap from starting
-    until the PRIOR executor has fully drained (a stronger cross-invocation barrier than today''s
-    per-run shutdown timeout). Route through Class 2 fork back-flow before building -- this is an
-    architectural decision on multi-bootstrap-per-process semantics, not a bounded bug fix.'
-  council: 'yes if opened -- C1 orchestration (process lifecycle) vs C9 reliability (capacity
-    invariant integrity) is a nameable tension'
+  status: closed
+  pr: '#1080, #1081'
+  summary: 'CLOSED 2026-07-22 -- ratified option A (process-scoped capacity-authority singleton).
+    Spec leg at PR #1080 (CP v1.103->v1.104 admission-guarantee span clarification + Runtime
+    v1.103->v1.104 NEW §14.8.10.6 cross-bootstrap capacity-authority continuity + RT-FAIL-CAPACITY-
+    AUTHORITY-BUDGET-SHRINK taxonomy row); impl leg at PR #1081 (U-RT-146 -- FrameLedger split out
+    of SubAgentDispatchExecutor, adopted process-lifetime via adopt_or_create_process_capacity_ledger()
+    at stage_5_loop_init.py; typed CapacityAuthorityBudgetShrinkError; 14 PD-8 mutation-probed tests;
+    merge-gate test-witness BLOCK r1 fixed + re-verified APPROVE r2). Originally registered at the
+    B-48 apply arc (codex round-4 [P1] "preserve one capacity authority across bootstrap runs").'
+  close_out: 'DONE -- both architectural choices the fork left open resolved to option A (process-
+    scoped singleton surviving across api.run() invocations, adopt-new-budget-carry-occupied
+    reconciliation). See PR #1080/#1081 for the full mechanism.'
+  council: 'no -- ratified via AskUserQuestion (option A), no cross-domain tension re-opened at apply'
   heading: '### B-59 · Capacity authority not preserved across sequential bootstrap invocations
-    *(registered at the B-48 apply arc, 2026-07-19)*'
+    *(registered at the B-48 apply arc, 2026-07-19; CLOSED 2026-07-22)*'
 
 - id: B-60
   title: Cancellation fence not checked at nonlinear-topology child entry points
