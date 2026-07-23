@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `b08cf58d8478` |
+| `workspace_state_hash` | `703a809f6c69` |
 | `last_refreshed` | 2026-07-22T00:00:00Z |
-| `git_head` | `5146c461` — B-33-A impl leg arc (i) merge — U-IS-20 rotation_correlation_id carrier |
+| `git_head` | `338e54fb` — B-33-A impl leg arc (i) merge — U-IS-20 rotation_correlation_id carrier |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 96 |
 
