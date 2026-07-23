@@ -329,6 +329,7 @@ def test_resume_context_field_shape() -> None:
         "hitl_response",
         "effect_fence_resolution",
         "effect_fence_resolutions",
+        "hitl_responses",
     }
 
 
@@ -403,6 +404,154 @@ def test_resume_context_effect_fence_resolutions_round_trips() -> None:
         effect_fence_resolutions={
             "k0": EffectFenceResolution.SKIP_AS_FIRED,
             "k1": EffectFenceResolution.RE_FIRE,
+        }
+    )
+    restored = ResumeContext.model_validate(rc.model_dump(mode="json"))
+    assert restored == rc
+
+
+# --- B-39 U-CP-64 amendment — `hitl_responses` / `hitl_response_for` -------
+# CP plan v2.42 §1 AC #7 (CP spec v1.106 §0), keyed by the paused child's own
+# `run_id` (round-2-corrected off a colliding `branch_path` key).
+
+
+def test_resume_context_hitl_responses_defaults_none() -> None:
+    """The per-key map defaults to None → `hitl_response_for` falls through to the
+    single uniform `hitl_response` field (byte-identical pre-B-39 behavior)."""
+    from harness_cp.pause_resume_protocol_types import ResumeContext
+
+    hitl = _build_hitl_result()
+    rc = ResumeContext(hitl_response=hitl)
+    assert rc.hitl_responses is None
+    assert rc.hitl_response_for("any-run-id") is hitl
+
+
+def test_hitl_response_for_map_hit_overrides_single() -> None:
+    """A map entry for the child's own `run_id` OVERRIDES the uniform single field;
+    an absent key falls back to it."""
+    from harness_cp.pause_resume_protocol_types import ResumeContext
+
+    uniform = _build_hitl_result()
+    mapped = _build_hitl_result()
+    rc = ResumeContext(
+        hitl_response=uniform,
+        hitl_responses={"run-child-0": mapped},
+    )
+    assert rc.hitl_response_for("run-child-0") is mapped  # map wins
+    assert rc.hitl_response_for("run-child-1") is uniform  # fallback
+
+
+def test_hitl_response_for_both_none_is_none() -> None:
+    """Neither a map entry NOR a single field → None (the branch re-pauses INERT,
+    decline-mirror, never an auto-re-fire)."""
+    from harness_cp.pause_resume_protocol_types import ResumeContext
+
+    mapped = _build_hitl_result()
+    rc = ResumeContext(hitl_responses={"run-child-0": mapped})
+    assert rc.hitl_response_for("run-child-0") is mapped
+    assert rc.hitl_response_for("absent") is None  # no map entry, no single default
+
+
+def test_hitl_response_for_byte_identical_when_never_supplied() -> None:
+    """Pre-B-39 single-branch callers (never supplying `hitl_responses`) are
+    byte-unaffected — `hitl_response_for` degenerates to the uniform field
+    regardless of the key probed."""
+    from harness_cp.pause_resume_protocol_types import ResumeContext
+
+    hitl = _build_hitl_result()
+    rc = ResumeContext(hitl_response=hitl)
+    assert rc.hitl_response_for("child-run-a") is hitl
+    assert rc.hitl_response_for("child-run-b") is hitl
+    assert rc.hitl_response_for("") is hitl
+
+
+def test_hitl_responses_keyed_by_run_id_not_branch_path_mutation_probe() -> None:
+    """Mutation probe (CP plan v2.42 §1 AC #7): TWO PEER branches dispatching the
+    IDENTICAL `child_workflow_id` at the identical internal `step_index` derive
+    byte-IDENTICAL `branch_path` (C-CP-25 §25.16 — a workflow_id-scoped identifier
+    with NO run-instance component; `compose_branch_path` proven below), yet their
+    `child_snapshot.run_id` values are genuinely distinct (folded from each spawning
+    invocation's own `run_id` via `compose_child_run_id_seed` — CP spec v1.106 §0's
+    keying-defect note). `hitl_responses` keyed by `run_id` therefore carries two
+    independently-addressable entries; had it been keyed by `branch_path` instead
+    (the round-1 defect this note records so it is not reinvented), BOTH peers'
+    responses would collide onto the SAME dict key and one would be silently lost
+    — this test fails under that substitution, pinning the keying-defect fix."""
+    from harness_as.sandbox_tier import SandboxTier
+    from harness_cp.cp_shared_types import AgentRole
+    from harness_cp.gate_level_rule import GateLevel
+    from harness_cp.pause_resume_protocol_types import ResumeContext
+    from harness_cp.workflow_driver_types import (
+        StepExecutionContext,
+        compose_branch_child_context,
+        compose_branch_path,
+    )
+    from harness_is.state_ledger_entry_schema import Actor, ActorClass
+
+    # Two SEPARATE spawning invocations (distinct `parent_idempotency_key`, standing
+    # in for two distinct top-level `run_id`s) that happen to dispatch the SAME
+    # `child_workflow_id` at the SAME static workflow_id/step_index/branch_index —
+    # the exact peer-dispatch scenario CP spec v1.106 §0 keys off `run_id` to solve.
+    actor = Actor(actor_class=ActorClass.AGENT, actor_id="test-hitl-mutation-probe")
+    peer_a_root = StepExecutionContext(
+        workflow_id="wf-child",
+        parent_action_id="workflow:wf-child:step:0",
+        parent_gate_level=GateLevel.ASK,
+        parent_sandbox_tier=SandboxTier.TIER_1_PROCESS,
+        parent_actor=actor,
+        parent_entry_hash="",
+        parent_idempotency_key="run-a-idempotency-key",
+        tenant_id=None,
+        step_index=0,
+    )
+    peer_b_root = peer_a_root.model_copy(update={"parent_idempotency_key": "run-b-idempotency-key"})
+
+    peer_a_branch = compose_branch_child_context(
+        peer_a_root, branch_index=0, agent_role=AgentRole("w")
+    )
+    peer_b_branch = compose_branch_child_context(
+        peer_b_root, branch_index=0, agent_role=AgentRole("w")
+    )
+
+    # branch_path collides — byte-identical for both peers (the defect this test pins).
+    assert compose_branch_path(peer_a_branch) == compose_branch_path(peer_b_branch)
+
+    # ...but the two peers' actual child run_ids (sourced off `child_snapshot.run_id`
+    # in production, standing in here as two distinct literal values since the
+    # derivation itself is Runtime-owned) are genuinely distinct.
+    peer_a_run_id = "child-run:run-a-idempotency-key:wf-child-target"
+    peer_b_run_id = "child-run:run-b-idempotency-key:wf-child-target"
+    assert peer_a_run_id != peer_b_run_id
+
+    peer_a_response = _build_hitl_result()
+    peer_b_response = _build_hitl_result()
+    rc = ResumeContext(
+        hitl_responses={
+            peer_a_run_id: peer_a_response,
+            peer_b_run_id: peer_b_response,
+        }
+    )
+
+    # Keyed by run_id: both peers independently addressable.
+    assert rc.hitl_response_for(peer_a_run_id) is peer_a_response
+    assert rc.hitl_response_for(peer_b_run_id) is peer_b_response
+
+    # Mutation probe: had the map been keyed by the (colliding) branch_path instead,
+    # only ONE entry could exist for both peers — the second write clobbers the first.
+    collided_map = {compose_branch_path(peer_a_branch): peer_a_response}
+    collided_map[compose_branch_path(peer_b_branch)] = peer_b_response  # same key — overwrites
+    assert len(collided_map) == 1
+    assert collided_map[compose_branch_path(peer_a_branch)] is peer_b_response  # peer A's lost
+
+
+def test_resume_context_hitl_responses_round_trips() -> None:
+    """The map field survives model_dump/model_validate (operator-supplied at api.resume)."""
+    from harness_cp.pause_resume_protocol_types import ResumeContext
+
+    rc = ResumeContext(
+        hitl_responses={
+            "run-child-0": _build_hitl_result(),
+            "run-child-1": _build_hitl_result(),
         }
     )
     restored = ResumeContext.model_validate(rc.model_dump(mode="json"))
