@@ -93,6 +93,19 @@ cat > "$DASHF" <<'EOF'
 ---
 EOF
 eq "hook_roadmap_next picks U-MEM frontier before recurring R lane" "$(hook_roadmap_next "$DASHF")" "U-MEM-10"
+# 2026-07-23 regression: `## Next action` immediately followed by the NEXT `## `
+# heading (no `---` between them, the real `roadmap_status.md` shape) must not
+# bleed into that next section's own prose — a RESOLVED R-id mentioned there
+# (e.g. a "R-CL-Q1 ... is RESOLVED" narrative aside) must NOT be picked up as
+# the live next-action when the actual Next action prose uses non-R/U tokens.
+cat > "$DASHF" <<'EOF'
+# dash
+## Next action
+**Frontier.** No auto-`ACTIVE` queue item; ground and drive the highest-value `B-*` forward-register row.
+## Remaining forward work
+`R-CL-Q1`, `R-CL-Q2` are RESOLVED. `R-FS-1` has no forward build arcs remaining.
+EOF
+eq "hook_roadmap_next stops at next ## heading, no --- present" "$(hook_roadmap_next "$DASHF")" ""
 # Absent section / file → empty (callers default to '?').
 eq "hook_roadmap_next empty on missing file" "$(hook_roadmap_next "$REPO/nope.md")" ""
 printf '# d\nno next-action heading here\n' > "$DASHF"

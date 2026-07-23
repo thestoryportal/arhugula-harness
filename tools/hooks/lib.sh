@@ -105,18 +105,25 @@ hook_is_roadmap_status_only_set() {
 
 # Extract the CURRENT roadmap next-action R-id from roadmap_status.md. Scopes to
 # the `## Next action` section (from that heading to the next `---` horizontal
-# rule) and returns the FIRST backticked `R-NNN` token there. Scoping is the fix
-# for the old whole-file `head -1` bug: the file carries historical + narrative
-# `R-*` references that precede the live pointer in document order (e.g. an
-# `**`R-010`**` deep in the R-700 banner), so an unscoped match surfaced a stale
-# item. Range tokens such as `R-410..R-440` are menus, not actionable units, so
-# they are ignored. Echoes the R-id, empty if absent (callers default). Usage:
-# NEXT=$(hook_roadmap_next "$ROADMAP_STATUS")
+# rule OR the next `## ` heading, whichever comes first) and returns the FIRST
+# backticked `R-NNN` token there. Scoping is the fix for the old whole-file
+# `head -1` bug: the file carries historical + narrative `R-*` references that
+# precede the live pointer in document order (e.g. an `**`R-010`**` deep in the
+# R-700 banner), so an unscoped match surfaced a stale item. The `## ` exit
+# condition (2026-07-23) is a second-order fix: `## Next action` is not always
+# followed by a `---` before the NEXT `## ` section (e.g. `## Remaining forward
+# work` can immediately follow with no `---` between them) — without it, the
+# scoped section bled into that next section's own prose and could surface an
+# already-RESOLVED R-id mentioned there instead of correctly finding no token
+# in the actual Next action prose (which may use non-`R-`/`U-` tokens like
+# `B-*`). Range tokens such as `R-410..R-440` are menus, not actionable units,
+# so they are ignored. Echoes the R-id, empty if absent (callers default).
+# Usage: NEXT=$(hook_roadmap_next "$ROADMAP_STATUS")
 hook_roadmap_next() {
   local dash="$1"
   [ -f "$dash" ] || return 0
   local section current token
-  section=$(awk '/^## Next action/{f=1; next} f && /^---$/{exit} f' "$dash" 2>/dev/null)
+  section=$(awk '/^## Next action/{f=1; next} f && (/^---$/ || /^## /){exit} f' "$dash" 2>/dev/null)
   current=$(printf '%s\n' "$section" | grep -m1 'Current next action' 2>/dev/null || true)
   token=$(printf '%s\n' "$current" \
     | sed -nE 's/.*next implementable unit is `?((U|R)-[A-Za-z0-9._-]+)`?.*/\1/p' \
