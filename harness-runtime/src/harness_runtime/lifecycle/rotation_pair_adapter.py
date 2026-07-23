@@ -124,8 +124,15 @@ def build_key_identity_resolver_from_mapping(mapping: dict[str, str]) -> KeyIden
     KMS key (a full ARN vs. the bare key ID/UUID) would compare as
     DIFFERENT identities, letting the physical-key-distinctness check
     (CP spec v1.105 §2 row 5) falsely accept a rotation that never
-    actually changed the physical signing key."""
-    return _MappingKeyIdentityResolver(mapping=mapping)
+    actually changed the physical signing key.
+
+    Takes a DEFENSIVE COPY of `mapping` (merge-gate concurrency lens
+    finding) — a resolver built once at composition-root startup and
+    reused across concurrent verification calls must not observe a
+    caller-side in-place mutation mid-lookup; `_MappingKeyIdentityResolver`
+    being `frozen=True` only blocks rebinding its `mapping` attribute, not
+    mutation of the dict's contents, so the copy is taken here instead."""
+    return _MappingKeyIdentityResolver(mapping=dict(mapping))
 
 
 @dataclass(frozen=True, slots=True)

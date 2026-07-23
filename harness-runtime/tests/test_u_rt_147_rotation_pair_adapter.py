@@ -262,3 +262,17 @@ def test_rt147_key_identity_resolver_factory_raises_on_unknown_key() -> None:
     resolver = build_key_identity_resolver_from_mapping({})
     with pytest.raises(KeyError):
         resolver.physical_identity_for("unknown-key")
+
+
+def test_rt147_key_identity_resolver_factory_takes_defensive_copy_of_mapping() -> None:
+    """Merge-gate concurrency lens finding — the factory copies the
+    supplied mapping rather than aliasing it; mutating the caller's dict
+    AFTER construction must not change what an already-built resolver
+    reports (a resolver built once at composition-root startup and reused
+    across concurrent calls must not observe a caller-side in-place
+    mutation). Mutation probe: aliasing the raw dict (dropping the
+    `dict(mapping)` copy) makes this test fail."""
+    live_mapping = {"key-a": "physical-a"}
+    resolver = build_key_identity_resolver_from_mapping(live_mapping)
+    live_mapping["key-a"] = "physical-a-mutated"
+    assert resolver.physical_identity_for("key-a") == "physical-a"
