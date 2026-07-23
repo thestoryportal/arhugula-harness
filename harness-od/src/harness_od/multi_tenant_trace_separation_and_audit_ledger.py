@@ -583,6 +583,36 @@ def sign_rotation_pair(
     return outgoing_entry, incoming_entry
 
 
+def _validate_canonical_rotation_correlation_id(correlation_id: str) -> None:
+    """Reject a non-canonical-form `rotation_correlation_id` (C-OD-24 §24.7).
+
+    `uuid.UUID(value)` alone accepts non-canonical forms `uuid.UUID` can
+    PARSE but does not re-emit byte-identical (uppercase hex, a
+    braces-wrapped form, or a hyphen-free 32-hex-digit string) — out-of-
+    family review round-1 [P2] correction over the pre-existing (already-
+    landed, PR #938) check, which this delta now tightens for BOTH
+    `verify_rotation_pairs` and `find_rotation_pair_evidence` (shared here
+    so the two surfaces cannot drift to different strictness levels).
+    Requires `str(uuid.UUID(value)) == value` — a true round trip.
+    """
+    try:
+        parsed = uuid.UUID(correlation_id)
+    except ValueError as exc:
+        raise RotationPairIntegrityBreach(
+            f"correlation_id={correlation_id!r} is not a canonical UUID "
+            "string (C-OD-24 §24.7 declares this attribute as a UUID "
+            "string or absent)"
+        ) from exc
+    if str(parsed) != correlation_id:
+        raise RotationPairIntegrityBreach(
+            f"correlation_id={correlation_id!r} is not a canonical UUID "
+            "string (C-OD-24 §24.7 declares this attribute as a UUID "
+            "string or absent) — parses but does not round-trip to the "
+            f"canonical form {str(parsed)!r} (out-of-family review round-1 "
+            "[P2] correction)"
+        )
+
+
 def _check_rotation_pair_crypto(
     entry_a: AuditLedgerEntry, entry_b: AuditLedgerEntry, correlation_id: str
 ) -> tuple[AuditLedgerEntry, AuditLedgerEntry]:
@@ -673,14 +703,7 @@ def find_rotation_pair_evidence(ledger: AuditLedger, correlation_id: str) -> Rot
     entries → reuses `_check_rotation_pair_crypto`; any violation raises
     `RotationPairIntegrityBreach`.
     """
-    try:
-        uuid.UUID(correlation_id)
-    except ValueError as exc:
-        raise RotationPairIntegrityBreach(
-            f"correlation_id={correlation_id!r} is not a canonical UUID "
-            "string (C-OD-24 §24.7 declares this attribute as a UUID "
-            "string or absent)"
-        ) from exc
+    _validate_canonical_rotation_correlation_id(correlation_id)
 
     matching = [
         entry
@@ -742,14 +765,7 @@ def verify_rotation_pairs(ledger: AuditLedger) -> None:
         correlation_id = entry.payload.audit_namespace_attrs.get(ROTATION_CORRELATION_ID_ATTR)
         if not correlation_id:
             continue
-        try:
-            uuid.UUID(correlation_id)
-        except ValueError as exc:
-            raise RotationPairIntegrityBreach(
-                f"audit.rotation_correlation_id={correlation_id!r} is not a "
-                "canonical UUID string (C-OD-24 §24.7 declares this attribute "
-                "as a UUID string or absent)"
-            ) from exc
+        _validate_canonical_rotation_correlation_id(correlation_id)
         by_correlation.setdefault(correlation_id, []).append(entry)
 
     for correlation_id, tagged in by_correlation.items():

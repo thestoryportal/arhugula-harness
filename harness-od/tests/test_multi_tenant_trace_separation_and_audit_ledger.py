@@ -496,6 +496,31 @@ def test_verify_rotation_pairs_rejects_malformed_correlation_id() -> None:
         verify_rotation_pairs(ledger)
 
 
+def test_verify_rotation_pairs_rejects_noncanonical_but_parseable_uuid() -> None:
+    """§24.7 — out-of-family review round-1 [P2] correction: a value
+    `uuid.UUID()` can PARSE but does not round-trip byte-identical (here,
+    uppercase hex) is rejected, not silently accepted as canonical.
+    Mutation probe: reverting to a bare `uuid.UUID(value)` parse-only check
+    (dropping the `str(parsed) == value` round-trip comparison) passes this
+    fixture incorrectly."""
+    outgoing, incoming = _rotation_pair()
+    noncanonical_id = outgoing.payload.audit_namespace_attrs[ROTATION_CORRELATION_ID_ATTR].upper()
+    malformed_payload = outgoing.payload.model_copy(
+        update={
+            "audit_namespace_attrs": {
+                **outgoing.payload.audit_namespace_attrs,
+                ROTATION_CORRELATION_ID_ATTR: noncanonical_id,
+            }
+        }
+    )
+    malformed_outgoing = outgoing.model_copy(
+        update={"payload": malformed_payload, "entry_hash": compute_entry_hash(malformed_payload)}
+    )
+    ledger = AuditLedger(entries=(malformed_outgoing, incoming), cell_id=_CELL_7)
+    with pytest.raises(RotationPairIntegrityBreach, match="not a canonical UUID"):
+        verify_rotation_pairs(ledger)
+
+
 # --- OD spec v1.35 C-OD-24 §24.8 — per-correlation-id evidence accessor ----
 
 
@@ -622,6 +647,18 @@ def test_find_rotation_pair_evidence_rejects_malformed_correlation_id() -> None:
     ledger = AuditLedger(entries=(), cell_id=_CELL_7)
     with pytest.raises(RotationPairIntegrityBreach, match="not a canonical UUID"):
         find_rotation_pair_evidence(ledger, "not-a-uuid")
+
+
+def test_find_rotation_pair_evidence_rejects_noncanonical_but_parseable_uuid() -> None:
+    """§24.8 — out-of-family review round-1 [P2] correction: a query id
+    `uuid.UUID()` can PARSE but does not round-trip byte-identical
+    (uppercase hex) is rejected, mirroring `verify_rotation_pairs`'s own
+    strictness (the two surfaces share `_validate_canonical_rotation_
+    correlation_id`, so they cannot drift apart)."""
+    ledger = AuditLedger(entries=(), cell_id=_CELL_7)
+    noncanonical_id = str(uuid.uuid4()).upper()
+    with pytest.raises(RotationPairIntegrityBreach, match="not a canonical UUID"):
+        find_rotation_pair_evidence(ledger, noncanonical_id)
 
 
 def test_find_rotation_pair_evidence_scoped_to_supplied_correlation_id_only() -> None:

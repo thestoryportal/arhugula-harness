@@ -363,8 +363,16 @@ def _write_dual_verify_entry(
     belonging to THIS chain) would otherwise pass presence/uniqueness. Then
     runs `verify_rotation_window`; on `VALID`, extracts the single derived
     correlation id.
+
+    `rotation_window_entries` is snapshotted ONCE into a local list before
+    any check runs (out-of-family review round-1 [P2] correction, mirroring
+    `verify_rotation_6_steps`'s own `audit_ledger_entries` TOCTOU guard) —
+    else a caller-supplied mutable sequence that changes mid-call could
+    authenticate one set of entries while validation/extraction consumes a
+    different, unauthenticated set.
     """
-    if not rotation_window_entries:
+    window = list(rotation_window_entries)
+    if not window:
         return (
             False,
             "no rotation_window_entries supplied — WRITE_DUAL_VERIFY_ENTRY "
@@ -372,7 +380,7 @@ def _write_dual_verify_entry(
             None,
         )
     chain_hashes = {compute_response_hash(entry) for entry in audit_ledger_entries}
-    for window_entry in rotation_window_entries:
+    for window_entry in window:
         if compute_response_hash(window_entry) not in chain_hashes:
             return (
                 False,
@@ -382,7 +390,7 @@ def _write_dual_verify_entry(
                 "round-3 [P1] correction)",
                 None,
             )
-    window_result = verify_rotation_window(rotation_window_entries)
+    window_result = verify_rotation_window(window)
     if window_result.status is not RotationWindowCheckStatus.VALID:
         failure_label = (
             window_result.failure_type.value if window_result.failure_type else "unknown"
@@ -392,7 +400,7 @@ def _write_dual_verify_entry(
             f"rotation window invalid: {failure_label} (IS spec v1.12 §7.7)",
             None,
         )
-    derived_id = rotation_window_entries[0].rotation_correlation_id
+    derived_id = window[0].rotation_correlation_id
     return (
         True,
         f"rotation window valid — derived correlation id {derived_id!r} (IS spec v1.12 §7.7)",

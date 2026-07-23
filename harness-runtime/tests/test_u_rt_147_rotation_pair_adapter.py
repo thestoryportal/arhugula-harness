@@ -11,6 +11,7 @@ behind `verify_rotation_6_steps`.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from unittest.mock import patch
 
 import pytest
 from harness_core import DeploymentSurface, PersonaTier
@@ -29,7 +30,12 @@ from harness_is.state_ledger_entry_schema import (
     StateLedgerEntry,
 )
 from harness_od.audit_ledger_types import AuditLedger, SignatureAlgorithm, StateLedgerEntryRef
-from harness_od.multi_tenant_trace_separation_and_audit_ledger import sign_rotation_pair
+from harness_od.multi_tenant_trace_separation_and_audit_ledger import (
+    RotationPairEvidence as OdRotationPairEvidence,
+)
+from harness_od.multi_tenant_trace_separation_and_audit_ledger import (
+    sign_rotation_pair,
+)
 from harness_od.observability_matrix import CellID
 from harness_runtime.lifecycle.rotation_pair_adapter import (
     OdRotationPairEvidenceAdapter,
@@ -174,16 +180,40 @@ def test_rt147_adapter_real_od_find_rotation_pair_evidence_valid_pair_reports_in
 
 def test_rt147_adapter_maps_signatures_verified_field_verbatim_never_hardcoded() -> None:
     """The adapter maps `signatures_verified` verbatim from OD's evidence —
-    it never hardcodes `True` regardless of what OD returns. Mutation
-    probe: hardcoding `signatures_verified=True` in the adapter's mapping
-    passes every OTHER RT-147 test (since OD always returns `False` in this
-    delta) but fails this dedicated witness, which asserts the adapter's
-    output tracks the real OD accessor's own value directly."""
+    it never hardcodes a constant regardless of what OD returns.
+
+    Out-of-family review round-1 [P2] correction: the real OD accessor
+    always returns `False` in this delta, so a version of this test that
+    only drove the real accessor would still pass even if the adapter
+    hardcoded `signatures_verified=True` — every OTHER RT-147 test would
+    also still pass, since none of them can observe a `True` from OD
+    today. This test therefore monkeypatches OD's own accessor to return
+    `True` for one call and `False` for another, and asserts the adapter's
+    mapped output tracks each value exactly — proving the mapping is
+    genuinely verbatim, not a hardcoded constant of either polarity."""
     ledger, correlation_id = _od_ledger_with_real_pair()
     adapter = OdRotationPairEvidenceAdapter(ledger=ledger)
-    evidence = adapter.evidence_for(correlation_id)
-    assert evidence.signatures_verified is False
-    assert evidence.pair_present is True
+
+    real_evidence = adapter.evidence_for(correlation_id)
+    assert real_evidence.signatures_verified is False
+    assert real_evidence.pair_present is True
+
+    stub_true = OdRotationPairEvidence(
+        correlation_id=correlation_id,
+        pair_present=True,
+        outgoing_key_period=1,
+        incoming_key_period=2,
+        outgoing_key_id="stub-out",
+        incoming_key_id="stub-in",
+        signatures_verified=True,
+    )
+    with patch(
+        "harness_runtime.lifecycle.rotation_pair_adapter.find_rotation_pair_evidence",
+        return_value=stub_true,
+    ):
+        mapped = adapter.evidence_for(correlation_id)
+    assert mapped.signatures_verified is True
+    assert mapped.pair_present is True
 
 
 def test_rt147_and_rt138_factories_independent() -> None:

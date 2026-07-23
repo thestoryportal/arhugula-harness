@@ -57,6 +57,10 @@ from harness_od.multi_tenant_trace_separation_and_audit_ledger import (
     find_rotation_pair_evidence,
 )
 
+from harness_runtime.lifecycle.audit_signing_fail_closed_validation import (
+    canonical_kms_key_identity,
+)
+
 __all__ = ["OdRotationPairEvidenceAdapter", "build_rotation_pair_evidence_provider"]
 
 
@@ -112,15 +116,28 @@ def build_key_identity_resolver_from_mapping(mapping: dict[str, str]) -> KeyIden
     This factory does NOT fabricate a resolver where none exists — the
     composition root must supply a real mapping; an empty mapping
     constructs a resolver that raises `KeyError` for any lookup, which
-    propagates unwrapped (never silently treated as a match)."""
+    propagates unwrapped (never silently treated as a match).
+
+    Mapping VALUES are canonicalized via `canonical_kms_key_identity`
+    (out-of-family review round-1 [P1] correction) — without this, two
+    logical `key_id`s mapped to different SPELLINGS of the same physical
+    KMS key (a full ARN vs. the bare key ID/UUID) would compare as
+    DIFFERENT identities, letting the physical-key-distinctness check
+    (CP spec v1.105 §2 row 5) falsely accept a rotation that never
+    actually changed the physical signing key."""
     return _MappingKeyIdentityResolver(mapping=mapping)
 
 
 @dataclass(frozen=True, slots=True)
 class _MappingKeyIdentityResolver:
-    """`KeyIdentityResolver` Protocol conformer over an explicit mapping."""
+    """`KeyIdentityResolver` Protocol conformer over an explicit mapping.
+
+    `physical_identity_for` returns the CANONICALIZED form (via
+    `canonical_kms_key_identity`), not the raw mapped string, so two
+    entries mapped to different spellings of the same physical key
+    (an ARN vs. its bare key-ID tail) compare equal."""
 
     mapping: dict[str, str]
 
     def physical_identity_for(self, key_id: str) -> str:
-        return self.mapping[key_id]
+        return canonical_kms_key_identity(self.mapping[key_id])
