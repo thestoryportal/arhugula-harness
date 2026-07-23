@@ -65,6 +65,8 @@ the round-1 `branch_path` field addition is REMOVED as unnecessary.
 
 **Round-5 note (branch-vs-main `just codex-review` against the round-4 fix commit).** Findings were entirely Runtime-owned (a property-1 restatement drift in the sibling Runtime spec) or documentation hygiene (`harness-cp/CLAUDE.md` round-count staleness, a stale U-RT-95 cross-reference in the Runtime spec's own clearance marker) — see those files' own round-5 corrections. This file required no further content change.
 
+**Round-6 note.** Findings were entirely Runtime-plan-owned (an atomicity-drift correction) or a genuinely new registration (`B-71`, operator-facing HITL escalation-request correlation gap) landing at the sibling CP spec, not this plan file. This file required no further content change.
+
 This is the spec leg's plan absorption only — impl (code + tests) is a
 separate follow-on arc per the B-33/B-59 precedent.
 

@@ -17,9 +17,10 @@ reviewer_chain:
   - just codex-review (2026-07-23, round 3, branch-vs-main against open PR #1092) — out-of-family, found the resume_handle path cannot supply child run_ids for hitl_responses addressing (this file's own §14 resume() invariants needed a scope-limit note); the other 2 round-3 findings are entirely CP-owned
   - just codex-review (2026-07-23, round 4, branch-vs-main against the round-3 fix commit) — out-of-family, found round 3's CP-owned property 4 defective; this file required no further content change (entirely CP-owned)
   - just codex-review (2026-07-23, round 5, branch-vs-main against the round-4 fix commit) — out-of-family, found THIS file's own property-1 restatement had not carried the round-4 gate-owning correction, plus an overstated PD-8 witness promise and a stale U-RT-95 cross-reference
+  - just codex-review (2026-07-23, round 6, branch-vs-main against the round-5 fix commit) — out-of-family, found a Runtime-plan-side atomicity drift + a genuinely new CP-owned registration (B-71); this file itself required no round-6 change
 ---
 
-# Clearance — Spec_Harness_Runtime_v1 (B-39 arc, spec leg; FIVE same-day correction passes)
+# Clearance — Spec_Harness_Runtime_v1 (B-39 arc, spec leg; SIX same-day correction passes)
 
 **Round-2 note.** A second out-of-family review round found the CP-owned
 `ResumeContext.hitl_responses` key shape (`branch_path`) collides when two
@@ -78,6 +79,8 @@ identical question.
 **Round-4 note (branch-vs-main `just codex-review` against the round-3 fix commit).** Found round 3's CP-owned §1.2 property 4 (this file's own §14.8.8.10 CONTRACT never itself asserted the fallback semantics) prescribed a resolver mechanism that strands transitively-paused container branches and is unassignable to any declared unit — converted to a black-box invariant at the sibling CP spec, entirely CP-owned; see that marker's own round-4 section. **This "no further change" call was ITSELF corrected at round 5 below — this file DID need a change, just not one round 4's own review pass surfaced.**
 
 **Round-5 note (branch-vs-main `just codex-review` against the round-4 fix commit).** Found this file's own §14.8.8.10.1 property 1 restatement had NOT carried the CP spec's round-4 gate-owning-vs-container-branch correction — it still read as requiring EVERY concurrently-paused branch (including a transitively-paused container/ancestor) to receive its own `hitl_response_for` resolution, reintroducing the exact strand-the-container-branch defect round 4 fixed on the CP side. Fixed: property 1 corrected in-place to scope to GATE-OWNING branches only; a NEW property 4 (the multi-branch safety+liveness invariant) added for completeness, mirroring the CP-owned one. Also found this file's own PD-8 witness-obligations paragraph overstated coverage — the repeated-`child_workflow_id` PRODUCTION-shape routing proof (as opposed to the CARRIER-level witness, which IS confirmed at CP plan v2.42 AC #7) is not actually assigned to any unit; corrected to explicitly defer it to the impl-leg resolver bucket (Runtime plan v2.54 §3's new row) rather than implying it was already covered by U-RT-95's AC #9. Also found the stale "U-RT-95 confirmation note" cross-reference below (unchanged since this marker's original filing, predating even round 3's own U-RT-95 fix) — corrected.
+
+**Round-6 note.** Findings landed at the sibling Runtime PLAN's own §1 Files row (an atomicity drift, this SPEC file's own §14.8.8.10.1 property 3/§1.4-mirroring text was not itself wrong) and at the CP spec (`B-71`, a genuinely new registration). This file required no further content change.
 
 This is the spec leg only — the impl arc (composer body amend,
 `HarnessContext` field removal, plus tests, plus a scope-discovery pass to
