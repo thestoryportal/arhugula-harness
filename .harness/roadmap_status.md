@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `703a809f6c69` |
-| `last_refreshed` | 2026-07-22T00:00:00Z |
-| `git_head` | `338e54fb` — B-33-A impl leg arc (i) merge — U-IS-20 rotation_correlation_id carrier |
+| `workspace_state_hash` | `c2910085cc0a` |
+| `last_refreshed` | 2026-07-23T00:00:00Z |
+| `git_head` | `3e8163ad` — B-33-A spec+plan leg (ii) merge — verify_rotation_6_steps CP+OD+Runtime rider |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 96 |
 
@@ -49,11 +49,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1084 | 2026-07-23 | B-33-A spec+plan leg (ii): CP+OD+Runtime rider extending verify_rotation_6_steps with real IS-anchored window presence/uniqueness + OD-anchored evidence checks (4 out-of-family review rounds, 24 findings fixed; leg iii impl remains) |
 | PR #1083 | 2026-07-22 | B-33-A impl leg arc (i) merged: U-IS-20 rotation_correlation_id sidecar carrier (IS spec v1.12 sec5.6/sec7.7) - StateLedgerEntry/EntryPayload field + canonical-round-trip UUID validation + omit-when-None hash coverage + verify_rotation_window composed validator. Also fixed a MemoryOperationEntry codec gap (found by codex round 1) + a tautological legacy-round-trip test (found by merge-gate test-witness lens); operator ratified bundling 2 downstream field-set-assertion fixes into this PR per the U-IS-19 (PR 537) precedent after a merge-gate spec-conformance BLOCK on AC 9 wording. Next: B-33-A impl leg arc (ii) - the separate, not-yet-decomposed CP-axis verify_rotation_6_steps extension arc. |
 | PR #1082 | 2026-07-22 | B-33-A spec leg merged: IS spec v1.11→v1.12 (NEW §5.6 `rotation_correlation_id` sidecar, C-IS-05; NEW §7.7 join-key read-side invariants, C-IS-07) + IS plan v2.7→v2.8 (NEW U-IS-20). 5 codex rounds to convergence — round 4 re-raised the carrier-shape question a 2nd time (labeling non-fork per `advisor()`, not re-litigated); rounds 4-5 found 2 real security-depth gaps (chain-head tamper coverage; OD-anchored window-boundary trust), both correctly registered as impl-leg-(ii)-owned (U-IS-20 Note (d)) rather than spec-scope-creeping. B-33 itself stays open; forward-register row flipped to `open`. Next: B-33-A impl leg arc (i), U-IS-20 code. |
 | PR #1081 | 2026-07-22 | B-59-A impl leg merged: U-RT-146 cross-bootstrap capacity-authority continuity — `FrameLedger` split out of `SubAgentDispatchExecutor`, adopted process-lifetime via `adopt_or_create_process_capacity_ledger()` at `stage_5_loop_init.py`; typed `CapacityAuthorityBudgetShrinkError`; 14 PD-8 mutation-probed tests. Merge-gate round-1 BLOCK (test-witness lens: substring-count lock check + 2 untested ctor guards) fixed + re-verified round-2 all-APPROVE. B-59 CLOSED (spec #1080 + impl #1081). |
 | PR #1080 | 2026-07-22 | B-59-A spec leg merged: CP v1.103→v1.104 (§25.11 admission-guarantee row-2 span clarification) + Runtime v1.103→v1.104 (NEW §14.8.10.6 cross-bootstrap capacity-authority continuity + RT-FAIL-CAPACITY-AUTHORITY-BUDGET-SHRINK taxonomy row) + Runtime plan v2.52 (NEW U-RT-146); no CP plan unit owed; 5 codex rounds to clean convergence (ledger-vs-executor split + lock-identity structural witness). |
-| commit 8ba5e6e4 | 2026-07-22 | Direct-commit prose correction: B-59-A/B-33-A frontier text updated from stale operator_gated framing to RATIFIED/build-ready (fork docs' own Status lines + git history commit e5256a88 confirm 2026-07-21 ratification). |
 ---
 
 ---
