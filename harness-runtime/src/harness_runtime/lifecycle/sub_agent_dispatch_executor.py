@@ -39,6 +39,21 @@ termination or fence-drain acknowledgement — a drained-under-fence or
 abandoned worker keeps its frames until its fence acks; parent return never
 releases. Release is EXACTLY-ONCE across success / failure / pause /
 cancellation / timeout (the `CapacityLease` exactly-once guard).
+
+Cross-bootstrap capacity-authority continuity — U-RT-146 (Runtime spec
+v1.104 §14.8.10.6, RATIFIED B-59 fork option A). `FrameLedger` factors the
+budget/available accounting OUT of `SubAgentDispatchExecutor` so it can
+survive across sequential `api.run()` invocations within one process: stage 5
+(`bootstrap/stage_5_loop_init.py`) adopts the process-lifetime ledger via
+`adopt_or_create_process_capacity_ledger()` instead of always constructing a
+fresh budget, while still constructing a FRESH `SubAgentDispatchExecutor`
+(worker pool + `_draining` flag) every bootstrap bound to that ledger — the
+executor object itself never crosses a bootstrap boundary (its `_draining`
+flag is permanent once flipped; see `drain()`). The executor's admission
+methods (`reserve`/`reserve_fanout`/`submit`/`begin_draining`) all acquire
+`self._admission_lock`, which IS `ledger.lock` (the same object, never a
+second separately-acquired lock) — this keeps the `_draining` check and the
+ledger's capacity decision ONE atomic critical section across the split.
 """
 
 from __future__ import annotations
@@ -58,8 +73,12 @@ from harness_cp.sub_agent_dispatch_capacity_authority import (
 
 __all__ = [
     "DISPATCH_WORKER_THREAD_NAME_PREFIX",
+    "CapacityAuthorityBudgetShrinkError",
+    "FrameLedger",
     "RuntimeCapacityAuthorityAdapter",
     "SubAgentDispatchExecutor",
+    "adopt_or_create_process_capacity_ledger",
+    "reset_capacity_authority_for_tests",
 ]
 
 DISPATCH_WORKER_THREAD_NAME_PREFIX: Final[str] = "harness-subagent-dispatch"
@@ -76,6 +95,117 @@ _DRAIN_POLL_SECONDS: Final[float] = 0.01
 _WorkItem = tuple[Future[Any], Callable[[], Any]] | None
 
 
+class CapacityAuthorityBudgetShrinkError(RuntimeError):
+    """`RT-FAIL-CAPACITY-AUTHORITY-BUDGET-SHRINK` typed carrier (Runtime spec
+    v1.104 §14.8.10.5) — raised at bootstrap adoption when the newly
+    configured `sub_agent_dispatch_max_workers` would shrink the adopted
+    process-lifetime `FrameLedger`'s budget below its CURRENT occupied
+    count. Bootstrap-time-only (the budget is fixed once bootstrap
+    completes); never a silent clamp or a silent over-cap.
+    """
+
+    rt_fail_class = "RT-FAIL-CAPACITY-AUTHORITY-BUDGET-SHRINK"
+
+    __slots__ = ("configured_budget", "occupied_frames")
+
+    def __init__(self, *, configured_budget: int, occupied_frames: int) -> None:
+        self.configured_budget = configured_budget
+        self.occupied_frames = occupied_frames
+        super().__init__(
+            f"RT-FAIL-CAPACITY-AUTHORITY-BUDGET-SHRINK: configured "
+            f"sub_agent_dispatch_max_workers={configured_budget} is below the "
+            f"process-lifetime capacity ledger's current occupied frame count "
+            f"({occupied_frames}); shrink refused at bootstrap."
+        )
+
+
+class FrameLedger:
+    """Process-lifetime frame-budget ledger — U-RT-146 (Runtime spec v1.104
+    §14.8.10.6). Holds ONLY the budget/available accounting that survives
+    across sequential `api.run()` bootstrap invocations within one process;
+    the per-bootstrap `SubAgentDispatchExecutor` (worker pool + `_draining`
+    flag) is rebuilt fresh every bootstrap and DELEGATES its admission
+    decisions here through the SAME `lock` object it exposes — never a
+    second, separately-acquired lock (that would reopen a window where
+    `begin_draining()` flips between an admission's draining-check and its
+    capacity decision).
+
+    `budget`/`available` are RAW fields, not lock-guarded properties —
+    every read/write site (in this module) holds `lock` explicitly around
+    them as part of a larger combined critical section (e.g. the
+    draining-check-plus-capacity-decision in `SubAgentDispatchExecutor.
+    reserve`); a self-locking property would deadlock a caller that already
+    holds this same non-reentrant `Lock`.
+    """
+
+    def __init__(self, *, frame_budget: int) -> None:
+        if frame_budget < 1:
+            msg = f"frame_budget must be >= 1, got {frame_budget}"
+            raise ValueError(msg)
+        self.lock = threading.Lock()
+        self.budget = frame_budget
+        self.available = frame_budget
+
+    def reconcile_budget(self, new_budget: int) -> None:
+        """Adopt-time reconciliation (AC #2) — atomic with any concurrent
+        `reserve`/`release` under the SAME lock those calls use, never an
+        unsynchronized read-then-write a straggler release could race.
+
+        Growing the budget is honored immediately. Shrinking to AT OR ABOVE
+        the current occupied count is honored immediately at the new,
+        smaller budget. Shrinking BELOW the current occupied count is
+        refused typed — bootstrap must not proceed with a negative or
+        silently-clamped `available` count.
+        """
+        if new_budget < 1:
+            msg = f"frame_budget must be >= 1, got {new_budget}"
+            raise ValueError(msg)
+        with self.lock:
+            occupied = self.budget - self.available
+            if new_budget < occupied:
+                raise CapacityAuthorityBudgetShrinkError(
+                    configured_budget=new_budget,
+                    occupied_frames=occupied,
+                )
+            self.budget = new_budget
+            self.available = new_budget - occupied
+
+
+#: Process-lifetime capacity ledger holder (module-global; mirrors
+#: `harness_runtime.drain._process_drained`'s shape — see that module for
+#: the precedent this follows). `None` until the process's first bootstrap
+#: adopts (constructs) it.
+_process_capacity_ledger: FrameLedger | None = None
+
+
+def adopt_or_create_process_capacity_ledger(frame_budget: int) -> FrameLedger:
+    """Bootstrap-time adopt-or-construct (U-RT-146 AC #1/#2).
+
+    On a process's FIRST bootstrap, constructs a fresh `FrameLedger` and
+    adopts it as the process-lifetime authority. On every SUBSEQUENT
+    bootstrap in the same process, ADOPTS the existing ledger instead of
+    constructing a new one, reconciling its budget against the newly
+    configured `frame_budget` (may raise `CapacityAuthorityBudgetShrinkError`
+    per `FrameLedger.reconcile_budget`).
+    """
+    global _process_capacity_ledger
+    if _process_capacity_ledger is None:
+        _process_capacity_ledger = FrameLedger(frame_budget=frame_budget)
+    else:
+        _process_capacity_ledger.reconcile_budget(frame_budget)
+    return _process_capacity_ledger
+
+
+def reset_capacity_authority_for_tests() -> None:
+    """Reset the module-level process-lifetime ledger — test-only escape
+    hatch (see `harness_runtime.drain.reset_process_drained_for_tests` for
+    the precedent this mirrors). Production callers must not invoke this;
+    the function name encodes the contract.
+    """
+    global _process_capacity_ledger
+    _process_capacity_ledger = None
+
+
 class SubAgentDispatchExecutor:
     """Custom grow-on-demand executor over the ONE shared frame budget.
 
@@ -89,13 +219,29 @@ class SubAgentDispatchExecutor:
     job — submission itself never blocks on capacity.
     """
 
-    def __init__(self, *, frame_budget: int) -> None:
-        if frame_budget < 1:
-            msg = f"frame_budget must be >= 1, got {frame_budget}"
+    def __init__(
+        self,
+        *,
+        frame_budget: int | None = None,
+        ledger: FrameLedger | None = None,
+    ) -> None:
+        if ledger is None:
+            if frame_budget is None:
+                msg = "SubAgentDispatchExecutor requires frame_budget or ledger"
+                raise ValueError(msg)
+            ledger = FrameLedger(frame_budget=frame_budget)
+        elif frame_budget is not None:
+            msg = "frame_budget and ledger are mutually exclusive"
             raise ValueError(msg)
-        self._budget = frame_budget
-        self._available = frame_budget
-        self._lock = threading.Lock()
+        self._ledger = ledger
+        # IDENTICAL lock object as the ledger's — never a second,
+        # separately-acquired lock (U-RT-146 AC #1c; the codex round-4
+        # structural witness asserts `executor._admission_lock is
+        # ledger.lock`). Guards BOTH the frame accounting (delegated to
+        # `self._ledger`) and this executor's own per-bootstrap
+        # `_draining`/`_idle_channels`/`_outstanding`/`_completed` state as
+        # ONE combined critical section.
+        self._admission_lock = ledger.lock
         # Per-worker hand-off channels (§14.8.10.1 "idle reuse" — B-48 codex
         # round-4: a SHARED queue lets any looped-back worker race for ANY
         # queued item, so "reuse worker X" was not actually a hand-off to X —
@@ -121,24 +267,25 @@ class SubAgentDispatchExecutor:
 
     @property
     def frame_budget(self) -> int:
-        return self._budget
+        with self._admission_lock:
+            return self._ledger.budget
 
     @property
     def available_frames(self) -> int:
-        with self._lock:
-            return self._available
+        with self._admission_lock:
+            return self._ledger.available
 
     @property
     def occupied_frames(self) -> int:
         """Frames held by admitted jobs — ancestors blocked on descendants AND
         concurrent workflows both count (admission is against AVAILABLE
         capacity, never the local fan-out alone)."""
-        with self._lock:
-            return self._budget - self._available
+        with self._admission_lock:
+            return self._ledger.budget - self._ledger.available
 
     def _release_frames(self, frames: int) -> None:
-        with self._lock:
-            self._available = min(self._budget, self._available + frames)
+        with self._admission_lock:
+            self._ledger.available = min(self._ledger.budget, self._ledger.available + frames)
 
     def reserve(
         self,
@@ -160,15 +307,15 @@ class SubAgentDispatchExecutor:
         atomically with that transition, not just the launch-time `submit()`
         gate below.
         """
-        with self._lock:
-            if self._draining or frames > self._available:
+        with self._admission_lock:
+            if self._draining or frames > self._ledger.available:
                 raise SubAgentDispatchCapacityError(
                     requested_frames=frames,
-                    available_capacity=0 if self._draining else self._available,
+                    available_capacity=0 if self._draining else self._ledger.available,
                     step_id=step_id,
                     descent_chain=descent_chain,
                 )
-            self._available -= frames
+            self._ledger.available -= frames
         return CapacityLease(frames=frames, step_id=step_id, release_fn=self._release_frames)
 
     def reserve_fanout(
@@ -198,8 +345,8 @@ class SubAgentDispatchExecutor:
             )
             raise ValueError(msg)
         results: list[BranchAdmission] = []
-        with self._lock:
-            remaining = self._available
+        with self._admission_lock:
+            remaining = self._ledger.available
             acquired = 0
             admitting = not self._draining
             for frames, step_id in zip(branch_requirements, step_ids, strict=True):
@@ -226,7 +373,7 @@ class SubAgentDispatchExecutor:
                             descent_chain=descent_chain,
                         )
                     )
-            self._available -= acquired
+            self._ledger.available -= acquired
         return tuple(results)
 
     # -- job submission (grow-on-demand workers) ------------------------------
@@ -262,7 +409,7 @@ class SubAgentDispatchExecutor:
         start-failure path below) handles this identically.
         """
         future: Future[Any] = Future()
-        with self._lock:
+        with self._admission_lock:
             if self._draining:
                 raise SubAgentDispatchCapacityError(
                     requested_frames=0,
@@ -295,7 +442,7 @@ class SubAgentDispatchExecutor:
                 # and `_spawned` over-counts a worker that never ran. Re-raise
                 # so the caller's own admission/lease cleanup still fires
                 # (exactly as it would for any other `submit()` exception).
-                with self._lock:
+                with self._admission_lock:
                     self._outstanding.discard(future)
                     self._spawned -= 1
                 raise
@@ -330,7 +477,7 @@ class SubAgentDispatchExecutor:
             # sides strictly ordered — whichever runs first under the lock
             # is the one that's honored, so a late worker self-exits instead
             # of registering into a channel nothing will ever signal.
-            with self._lock:
+            with self._admission_lock:
                 if self._draining:
                     return
                 self._idle_channels.append(my_channel)
@@ -366,7 +513,7 @@ class SubAgentDispatchExecutor:
             self._job_done(future)
 
     def _job_done(self, future: Future[Any]) -> None:
-        with self._lock:
+        with self._admission_lock:
             self._outstanding.discard(future)
             self._completed += 1
 
@@ -394,7 +541,7 @@ class SubAgentDispatchExecutor:
         considers a bounded wait, so the admission surface always closes
         regardless of how much wall-clock budget remains.
         """
-        with self._lock:
+        with self._admission_lock:
             idle_channels = list(self._idle_channels)
             self._idle_channels.clear()
             self._draining = True
@@ -434,15 +581,15 @@ class SubAgentDispatchExecutor:
         """
         self.begin_draining()
         deadline = time.monotonic() + deadline_seconds
-        with self._lock:
+        with self._admission_lock:
             completed_before = self._completed
         while time.monotonic() < deadline:
-            with self._lock:
+            with self._admission_lock:
                 outstanding = len(self._outstanding)
             if outstanding == 0:
                 break
             time.sleep(_DRAIN_POLL_SECONDS)
-        with self._lock:
+        with self._admission_lock:
             still_outstanding = len(self._outstanding)
             completed_during = self._completed - completed_before
         return (completed_during, still_outstanding)
