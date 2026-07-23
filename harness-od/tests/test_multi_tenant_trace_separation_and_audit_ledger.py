@@ -10,6 +10,7 @@ chain over v2.6/v2.5/v2.1 §3.7.4); Spec_Operational_Discipline_v1_2.md §21.
 
 from __future__ import annotations
 
+import uuid
 from typing import Any
 
 import pytest
@@ -33,10 +34,12 @@ from harness_od.multi_tenant_trace_separation_and_audit_ledger import (
     ROTATION_CORRELATION_ID_ATTR,
     HashChainBreach,
     PerTenantSeparation,
+    RotationPairEvidence,
     RotationPairIntegrityBreach,
     TenantIdMissingViolation,
     TenantSeparationStrategy,
     assert_tenant_id_on_every_span_at_multi_tenant_cells,
+    find_rotation_pair_evidence,
     sidecar_tag,
     sign_audit_entry,
     sign_rotation_pair,
@@ -491,6 +494,214 @@ def test_verify_rotation_pairs_rejects_malformed_correlation_id() -> None:
     ledger = AuditLedger(entries=(malformed_outgoing, incoming), cell_id=_CELL_7)
     with pytest.raises(RotationPairIntegrityBreach, match="not a canonical UUID"):
         verify_rotation_pairs(ledger)
+
+
+# --- OD spec v1.35 C-OD-24 §24.8 — per-correlation-id evidence accessor ----
+
+
+def test_find_rotation_pair_evidence_zero_matching_entries_returns_pair_present_false() -> None:
+    """§24.8 acceptance #5 — no matching entries is absence, not a breach."""
+    ledger = AuditLedger(entries=(), cell_id=_CELL_7)
+    evidence = find_rotation_pair_evidence(ledger, str(uuid.uuid4()))
+    assert evidence.pair_present is False
+    assert evidence.outgoing_key_period is None
+    assert evidence.signatures_verified is False
+
+
+def test_find_rotation_pair_evidence_one_matching_entry_raises_integrity_breach() -> None:
+    """§24.8 acceptance #5a — a lone matching entry is a torn write / deleted
+    sibling (structural corruption), NOT absence — mirrors round-2 [P2]
+    correction. Mutation probe: folding this into the zero-entries "absence"
+    bucket would return `pair_present=False` here instead of raising."""
+    outgoing, _incoming = _rotation_pair()
+    ledger = AuditLedger(entries=(outgoing,), cell_id=_CELL_7)
+    correlation_id = outgoing.payload.audit_namespace_attrs[ROTATION_CORRELATION_ID_ATTR]
+    with pytest.raises(RotationPairIntegrityBreach, match="exactly 1 entry"):
+        find_rotation_pair_evidence(ledger, correlation_id)
+
+
+def test_find_rotation_pair_evidence_three_matching_entries_raises_integrity_breach() -> None:
+    """§24.8 acceptance #6 — excess matching entries raise, mirroring §24.7's
+    `!= 2` disposition."""
+    outgoing, incoming = _rotation_pair()
+    correlation_id = outgoing.payload.audit_namespace_attrs[ROTATION_CORRELATION_ID_ATTR]
+    third_payload = AuditPayload(
+        entry_core=StateLedgerEntryRef("rotation-third"),
+        audit_namespace_attrs={ROTATION_CORRELATION_ID_ATTR: correlation_id},
+        prior_entry_hash=incoming.entry_hash,
+    )
+    third_hash = compute_entry_hash(third_payload)
+    third_sig = sign_audit_entry(third_payload, "key-third", SignatureAlgorithm.ED25519).model_copy(
+        update={"audit_signature_key_period": "5"}
+    )
+    third = AuditLedgerEntry(
+        payload=third_payload, signature_attrs=third_sig, entry_hash=third_hash
+    )
+    ledger = AuditLedger(entries=(outgoing, incoming, third), cell_id=_CELL_7)
+    with pytest.raises(RotationPairIntegrityBreach, match="requires exactly 2"):
+        find_rotation_pair_evidence(ledger, correlation_id)
+
+
+def test_find_rotation_pair_evidence_valid_pair_returns_populated_evidence() -> None:
+    """§24.8 acceptance #7 — a valid pair returns populated structural
+    evidence with `signatures_verified=False` (no crypto verifier exists
+    yet — necessary but not sufficient, §24.8 row 8a)."""
+    outgoing, incoming = _rotation_pair(
+        outgoing_key_id="key-out",
+        outgoing_key_period=3,
+        incoming_key_id="key-in",
+        incoming_key_period=4,
+    )
+    ledger = AuditLedger(entries=(outgoing, incoming), cell_id=_CELL_7)
+    correlation_id = outgoing.payload.audit_namespace_attrs[ROTATION_CORRELATION_ID_ATTR]
+    evidence = find_rotation_pair_evidence(ledger, correlation_id)
+    assert evidence == RotationPairEvidence(
+        correlation_id=correlation_id,
+        pair_present=True,
+        outgoing_key_period=3,
+        incoming_key_period=4,
+        outgoing_key_id="key-out",
+        incoming_key_id="key-in",
+        signatures_verified=False,
+    )
+
+
+def test_find_rotation_pair_evidence_tampered_hash_raises_integrity_breach() -> None:
+    """§24.8 acceptance #7 — reuses the shared per-pair helper's hash check."""
+    outgoing, incoming = _rotation_pair()
+    tampered_payload = incoming.payload.model_copy(update={"prior_entry_hash": "WRONG"})
+    tampered_incoming = incoming.model_copy(update={"payload": tampered_payload})
+    ledger = AuditLedger(entries=(outgoing, tampered_incoming), cell_id=_CELL_7)
+    correlation_id = outgoing.payload.audit_namespace_attrs[ROTATION_CORRELATION_ID_ATTR]
+    with pytest.raises(RotationPairIntegrityBreach, match="does not match recomputed"):
+        find_rotation_pair_evidence(ledger, correlation_id)
+
+
+def test_find_rotation_pair_evidence_non_consecutive_periods_raises_integrity_breach() -> None:
+    """§24.8 acceptance #7 — reuses the shared per-pair helper's period check."""
+    outgoing, incoming = _rotation_pair()
+    tampered_sig = incoming.signature_attrs.model_copy(update={"audit_signature_key_period": "9"})
+    tampered_incoming = incoming.model_copy(update={"signature_attrs": tampered_sig})
+    ledger = AuditLedger(entries=(outgoing, tampered_incoming), cell_id=_CELL_7)
+    correlation_id = outgoing.payload.audit_namespace_attrs[ROTATION_CORRELATION_ID_ATTR]
+    with pytest.raises(RotationPairIntegrityBreach, match="not consecutive"):
+        find_rotation_pair_evidence(ledger, correlation_id)
+
+
+def test_find_rotation_pair_evidence_same_key_id_raises_integrity_breach() -> None:
+    """§24.8 acceptance #7 — reuses the shared per-pair helper's key-id check."""
+    outgoing, incoming = _rotation_pair()
+    tampered_outgoing = outgoing.model_copy(
+        update={
+            "signature_attrs": outgoing.signature_attrs.model_copy(
+                update={"audit_signature_key_id": incoming.signature_attrs.audit_signature_key_id}
+            )
+        }
+    )
+    ledger = AuditLedger(entries=(tampered_outgoing, incoming), cell_id=_CELL_7)
+    correlation_id = outgoing.payload.audit_namespace_attrs[ROTATION_CORRELATION_ID_ATTR]
+    with pytest.raises(RotationPairIntegrityBreach, match="key_id must differ"):
+        find_rotation_pair_evidence(ledger, correlation_id)
+
+
+def test_find_rotation_pair_evidence_broken_chain_continuity_raises_integrity_breach() -> None:
+    """§24.8 acceptance #7 — reuses the shared per-pair helper's chain-continuity check."""
+    outgoing, incoming = _rotation_pair()
+    broken_payload = incoming.payload.model_copy(update={"prior_entry_hash": "WRONG"})
+    broken_incoming = incoming.model_copy(
+        update={"payload": broken_payload, "entry_hash": compute_entry_hash(broken_payload)}
+    )
+    ledger = AuditLedger(entries=(outgoing, broken_incoming), cell_id=_CELL_7)
+    correlation_id = outgoing.payload.audit_namespace_attrs[ROTATION_CORRELATION_ID_ATTR]
+    with pytest.raises(RotationPairIntegrityBreach, match="chain-hash"):
+        find_rotation_pair_evidence(ledger, correlation_id)
+
+
+def test_find_rotation_pair_evidence_rejects_malformed_correlation_id() -> None:
+    """§24.8 — a non-canonical-UUID query id is rejected outright."""
+    ledger = AuditLedger(entries=(), cell_id=_CELL_7)
+    with pytest.raises(RotationPairIntegrityBreach, match="not a canonical UUID"):
+        find_rotation_pair_evidence(ledger, "not-a-uuid")
+
+
+def test_find_rotation_pair_evidence_scoped_to_supplied_correlation_id_only() -> None:
+    """§24.8 acceptance #4 — entries under a DIFFERENT correlation id never
+    affect the result (per-id scoping distinct from §24.7's whole-ledger
+    walk). Mutation probe: grouping by ALL correlation ids present (like
+    `verify_rotation_pairs` does) instead of filtering to the ONE supplied
+    id would make an unrelated tampered pair elsewhere in the ledger corrupt
+    this call's result."""
+    valid_outgoing, valid_incoming = _rotation_pair(
+        outgoing_key_id="a-out",
+        outgoing_key_period=1,
+        incoming_key_id="a-in",
+        incoming_key_period=2,
+    )
+    # An UNRELATED, independently-tampered pair under a DIFFERENT correlation id.
+    other_outgoing, other_incoming = _rotation_pair(
+        outgoing_key_id="b-out",
+        outgoing_key_period=1,
+        incoming_key_id="b-in",
+        incoming_key_period=2,
+    )
+    tampered_other = other_incoming.model_copy(
+        update={"payload": other_incoming.payload.model_copy(update={"prior_entry_hash": "WRONG"})}
+    )
+    ledger = AuditLedger(
+        entries=(valid_outgoing, valid_incoming, other_outgoing, tampered_other), cell_id=_CELL_7
+    )
+    correlation_id = valid_outgoing.payload.audit_namespace_attrs[ROTATION_CORRELATION_ID_ATTR]
+    evidence = find_rotation_pair_evidence(ledger, correlation_id)
+    assert evidence.pair_present is True
+    assert evidence.outgoing_key_id == "a-out"
+
+
+def test_verify_rotation_pairs_byte_unchanged_after_shared_helper_extraction() -> None:
+    """§24.7 acceptance #8 — the shared-helper extraction is observably
+    inert: `verify_rotation_pairs`'s own existing test suite (all tests
+    above this section) passes unmodified, and this witness re-confirms
+    the accept + one reject path directly for good measure."""
+    outgoing, incoming = _rotation_pair()
+    ledger = AuditLedger(entries=(outgoing, incoming), cell_id=_CELL_7)
+    assert verify_rotation_pairs(ledger) is None
+    tampered_sig = incoming.signature_attrs.model_copy(update={"audit_signature_key_period": "9"})
+    tampered_incoming = incoming.model_copy(update={"signature_attrs": tampered_sig})
+    tampered_ledger = AuditLedger(entries=(outgoing, tampered_incoming), cell_id=_CELL_7)
+    with pytest.raises(RotationPairIntegrityBreach, match="not consecutive"):
+        verify_rotation_pairs(tampered_ledger)
+
+
+def test_find_rotation_pair_evidence_docstring_and_module_note_disclaim_signature_verification() -> (
+    None
+):
+    """§24.8 acceptance #9 — static disclosure guard: the accessor's own
+    docstring names the structural-only scope, guarding against a future
+    edit silently dropping this disclosure and letting the evidence type
+    overclaim what it certifies."""
+    assert "STRUCTURAL" in (RotationPairEvidence.__doc__ or "")
+    assert "signatures_verified" in (RotationPairEvidence.__doc__ or "")
+
+
+def test_find_rotation_pair_evidence_always_returns_signatures_verified_false_in_this_delta() -> (
+    None
+):
+    """§24.8 acceptance #10 — `signatures_verified` is `False` on EVERY
+    RETURNED evidence object in this delta (zero-match and valid-pair
+    paths only — the tampered/excess/one-entry cases RAISE and never
+    return an evidence object at all, so they are NOT covered here).
+    Mutation probe: hardcoding `signatures_verified=True` on the
+    valid-pair success path passes the dedicated shape-equality witness
+    above but fails this one — the two witnesses are independently
+    load-bearing."""
+    ledger = AuditLedger(entries=(), cell_id=_CELL_7)
+    absent = find_rotation_pair_evidence(ledger, str(uuid.uuid4()))
+    assert absent.signatures_verified is False
+
+    outgoing, incoming = _rotation_pair()
+    valid_ledger = AuditLedger(entries=(outgoing, incoming), cell_id=_CELL_7)
+    correlation_id = outgoing.payload.audit_namespace_attrs[ROTATION_CORRELATION_ID_ATTR]
+    present = find_rotation_pair_evidence(valid_ledger, correlation_id)
+    assert present.signatures_verified is False
 
 
 # --- OD spec v1.33 §21.2.1 — SigningBackend composition-root injection seam --
