@@ -14,7 +14,9 @@ by the split.
 
 from __future__ import annotations
 
+import ast
 import inspect
+import textwrap
 import threading
 import time
 
@@ -301,14 +303,48 @@ def test_reconcile_budget_reads_and_writes_occupied_atomically_under_the_lock() 
     read-modify-write in this method's short body effectively atomic
     against a two-thread race in practice, so a timing-based test alone
     cannot reliably catch this mutation. The deterministic check is
-    structural, exactly as item 1c's own lock-identity witness argues:
-    `reconcile_budget` must acquire `self.lock` EXACTLY ONCE, covering the
-    occupied-read through the final `available` write as one critical
-    section — a two-lock or lock-then-release-then-relock implementation
-    would need a second `self.lock` occurrence to reacquire.
+    structural — but a substring COUNT of `"self.lock"` only proves the
+    lock is acquired once SOMEWHERE in the method; it does not prove
+    `self.budget`/`self.available` are read/written INSIDE that acquisition
+    (merge-gate test-witness lens, round 1: a mutation that narrows the
+    `with self.lock:` block to cover only the shrink-check, moving the
+    `occupied` read before it and the `budget`/`available` writes after it,
+    keeps the count at exactly 1 and would pass a substring check while
+    reopening the exact race this test exists to catch). The AST walk below
+    asserts every `self.budget`/`self.available` reference in the function
+    is a DESCENDANT of the single `with self.lock:` node — nesting, not
+    mere presence.
     """
-    source = inspect.getsource(FrameLedger.reconcile_budget)
-    assert source.count("self.lock") == 1
+    source = textwrap.dedent(inspect.getsource(FrameLedger.reconcile_budget))
+    func = ast.parse(source).body[0]
+    assert isinstance(func, ast.FunctionDef)
+
+    with_nodes = [n for n in ast.walk(func) if isinstance(n, ast.With)]
+    assert len(with_nodes) == 1, "expected exactly one `with` block"
+    (with_node,) = with_nodes
+    assert any(
+        isinstance(item.context_expr, ast.Attribute)
+        and item.context_expr.attr == "lock"
+        and isinstance(item.context_expr.value, ast.Name)
+        and item.context_expr.value.id == "self"
+        for item in with_node.items
+    ), "the `with` block must lock `self.lock`"
+
+    nested_node_ids = {id(n) for n in ast.walk(with_node)}
+    for node in ast.walk(func):
+        if id(node) in nested_node_ids:
+            continue
+        if (
+            isinstance(node, ast.Attribute)
+            and node.attr in ("budget", "available")
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "self"
+        ):
+            pytest.fail(
+                f"self.{node.attr} (line {node.lineno}) is accessed OUTSIDE the "
+                "`with self.lock:` block — read/write is not part of the same "
+                "atomic critical section"
+            )
 
 
 def test_budget_grow_across_bootstraps_honored_immediately() -> None:
@@ -400,3 +436,34 @@ def test_no_new_join_introduced_at_adopt_path() -> None:
     assert elapsed < 0.5
     assert ledger2 is ledger1
     lease.release()
+
+
+def test_executor_requires_frame_budget_or_ledger() -> None:
+    """The `ledger`-adoption constructor path (new to this unit) is
+    mutually exclusive with the pre-existing `frame_budget`-only path —
+    passing NEITHER must fail loud rather than construct with some
+    unspecified default (merge-gate test-witness lens finding: this branch
+    was untested).
+
+    Mutation probe: deleting this guard would let `SubAgentDispatchExecutor()`
+    either raise an unrelated `AttributeError` deep inside `reserve`/etc. the
+    first time `self._ledger` is touched, or (worse) silently construct with
+    a bogus ledger — this test pins the fail-loud-at-construction contract.
+    """
+    with pytest.raises(ValueError, match="requires frame_budget or ledger"):
+        SubAgentDispatchExecutor()
+
+
+def test_executor_rejects_frame_budget_and_ledger_together() -> None:
+    """Passing BOTH `frame_budget` and `ledger` is ambiguous (which wins?)
+    and must fail loud rather than silently favor one (merge-gate
+    test-witness lens finding: this branch was untested).
+
+    Mutation probe: deleting this guard would let a caller that passes both
+    silently get the `ledger`-wins behavior with no signal that the
+    `frame_budget` argument was ignored — this test pins the fail-loud
+    contract instead.
+    """
+    ledger = FrameLedger(frame_budget=4)
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        SubAgentDispatchExecutor(frame_budget=4, ledger=ledger)
