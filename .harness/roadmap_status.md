@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `c4113132a5c8` |
-| `last_refreshed` | 2026-07-22T18:30:00Z |
-| `git_head` | `369780d7` — merge-gate log record for PR #1081 (B-59-A impl leg) |
+| `workspace_state_hash` | `47abe4730628` |
+| `last_refreshed` | 2026-07-22T18:34:00Z |
+| `git_head` | `6a8c25ae` — drift-log cap trim (roadmap refresh follow-on) |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 96 |
 
