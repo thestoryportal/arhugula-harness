@@ -59,13 +59,13 @@
 
 snapshot:
   total: 69
-  open: 0
-  design_substrate_gated: 2
+  open: 1
+  design_substrate_gated: 1
   registered_finding: 8
   operator_gated: 2
   held: 1
   closed: 56
-  identity_digest: de28fcc0c03936e5
+  identity_digest: 5dd267a9c7590b73
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -452,18 +452,35 @@ items:
 - id: B-33
   filing: .harness/class_1_fork_b33_rotation_correlation_carrier.md
   title: verify_rotation_6_steps cannot prove a rotation boundary occurred
-  status: design_substrate_gated
-  summary: 'GROUNDED 2026-07-18 (autonomous loop): execute_key_rotation -- the sole
-    verify_rotation_6_steps caller -- still has ONLY test consumers (no production/CLI wiring);
-    the wait-for-real-caller boundary HOLDS, and rotation at MTC is explicitly deferred pending
-    B-33 by both the B-51/B-52/B-54 and B-48 filings. Dormant per its ratified boundary.
-    Original finding: generic hash-chain continuity check passes any intact ledger; cannot
-    confirm a genuine rotation-pair boundary.'
-  close_out: File a Class 1 fork for an IS rotation-correlation carrier (mirrors OD §24.7); extend once
-    B-36's backend lands. B-36 CLOSED 2026-07-16 (ADR-D8, AwsKmsSigningBackend) — this residual now has
-    a real backend to build the rotation-correlation carrier against; still open, unblocked rather than
-    narrowed.
-  council: no for the carrier addition; B-36's own disposition governs the signing-backend half
+  status: open
+  summary: 'SPEC LEG LANDED 2026-07-22 (B-33-A) -- IS spec v1.11->v1.12 (NEW §5.6
+    D-derivative sidecar `rotation_correlation_id` on StateLedgerEntry/EntryPayload,
+    C-IS-05; NEW §7.7 join-key read-side invariants -- presence/uniqueness/non-emptiness,
+    NOT a trust anchor -- C-IS-07) + IS plan v2.7->v2.8 (NEW U-IS-20); no CP unit
+    owed at this leg. Forward work is TWO SEPARATE ARCS: (i) the U-IS-20 IS-axis
+    code arc (harness-is only) and (ii) a later CP-axis arc extending
+    verify_rotation_6_steps (REQUIRE + JOIN the id, OD-anchored window-boundary
+    authentication, independent OD-signature coverage for a chain-head rotation
+    entry). Arc (ii)''s former external dependencies are ALL CLOSED: B-22 seam
+    (2026-07-14), B-36 backend selection (ADR-D8 AWS KMS, 2026-07-16), B-47
+    production composition-root wiring (2026-07-17) -- nothing gates arc (ii)
+    except arc (i)''s completion. execute_key_rotation still has only test
+    consumers; rotation at MTC remains explicitly deferred pending arc (ii) per
+    the B-51/B-52/B-54 and B-48 filings, but that does NOT gate the build itself
+    (fork §3 directs the test-consumer apply arc to proceed).'
+  close_out: 'IS spec leg CLOSED (this arc). Remaining, both buildable now with
+    no external blocker: (i) implement U-IS-20 at harness-is/src (carrier +
+    validation + canonicalization + §7.7 helpers). (ii) open a separate CP-axis
+    arc (own CP spec + plan delta) extending verify_rotation_6_steps per fork §2
+    points 2-4 + IS plan v2.8 U-IS-20 Note (d)''s two registered constraints
+    (OD-anchored boundaries; chain-head OD-signature coverage), and wire the
+    carrier''s population at execute_key_rotation''s writes (which does not exist
+    today -- 5 of 6 narrated steps are simulated; arc (ii) must build real
+    ledger-write capability, not extend one).'
+  council: no -- the carrier shape is settled (re-raised a 2nd time at B-33-A spec-leg
+    codex round 4 with no new consequence named; converged, artifact identical
+    either way); B-36/B-47 are both closed, so no signing-backend disposition remains
+    open
   heading: '### B-33 · `verify_rotation_6_steps`''s hash-chain check cannot prove a rotation boundary
     occurred *(surfaced at B-26, out-of-family Codex rounds 1 + 5, `advisor()`-confirmed)*'
 - id: B-34
