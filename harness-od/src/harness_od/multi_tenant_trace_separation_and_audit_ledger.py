@@ -90,10 +90,12 @@ __all__ = [
     "ROTATION_CORRELATION_ID_ATTR",
     "HashChainBreach",
     "PerTenantSeparation",
+    "RotationPairEvidence",
     "RotationPairIntegrityBreach",
     "TenantIdMissingViolation",
     "TenantSeparationStrategy",
     "canonical_od_signing_message",
+    "find_rotation_pair_evidence",
     "sidecar_tag",
     "sign_audit_entry",
     "sign_rotation_pair",
@@ -581,6 +583,163 @@ def sign_rotation_pair(
     return outgoing_entry, incoming_entry
 
 
+def _validate_canonical_rotation_correlation_id(correlation_id: str) -> None:
+    """Reject a non-canonical-form `rotation_correlation_id` (C-OD-24 §24.7).
+
+    `uuid.UUID(value)` alone accepts non-canonical forms `uuid.UUID` can
+    PARSE but does not re-emit byte-identical (uppercase hex, a
+    braces-wrapped form, or a hyphen-free 32-hex-digit string) — out-of-
+    family review round-1 [P2] correction over the pre-existing (already-
+    landed, PR #938) check, which this delta now tightens for BOTH
+    `verify_rotation_pairs` and `find_rotation_pair_evidence` (shared here
+    so the two surfaces cannot drift to different strictness levels).
+    Requires `str(uuid.UUID(value)) == value` — a true round trip.
+    """
+    try:
+        parsed = uuid.UUID(correlation_id)
+    except ValueError as exc:
+        raise RotationPairIntegrityBreach(
+            f"correlation_id={correlation_id!r} is not a canonical UUID "
+            "string (C-OD-24 §24.7 declares this attribute as a UUID "
+            "string or absent)"
+        ) from exc
+    if str(parsed) != correlation_id:
+        raise RotationPairIntegrityBreach(
+            f"correlation_id={correlation_id!r} is not a canonical UUID "
+            "string (C-OD-24 §24.7 declares this attribute as a UUID "
+            "string or absent) — parses but does not round-trip to the "
+            f"canonical form {str(parsed)!r} (out-of-family review round-1 "
+            "[P2] correction)"
+        )
+
+
+def _check_rotation_pair_crypto(
+    entry_a: AuditLedgerEntry, entry_b: AuditLedgerEntry, correlation_id: str
+) -> tuple[AuditLedgerEntry, AuditLedgerEntry]:
+    """Shared exactly-2-siblings structural/crypto checks (C-OD-24 §24.7).
+
+    Consumed by both `verify_rotation_pairs` (whole-ledger walk) and
+    `find_rotation_pair_evidence` (§24.8 per-id accessor) — zero duplicated
+    cryptographic logic (U-OD-56 acceptance #7). Raises
+    `RotationPairIntegrityBreach` on the first violation of: per-entry
+    recomputed-hash match; consecutive key periods; differing key ids;
+    chain-hash continuity. Returns the pair ordered `(outgoing, incoming)`
+    by ascending key period on success.
+    """
+    for entry in (entry_a, entry_b):
+        recomputed = compute_entry_hash(entry.payload)
+        if recomputed != entry.entry_hash:
+            raise RotationPairIntegrityBreach(
+                f"audit.rotation_correlation_id={correlation_id!r}: stored "
+                f"entry_hash={entry.entry_hash!r} does not match recomputed "
+                f"hash={recomputed!r} over the entry's payload — payload "
+                "tampered without recomputing entry_hash (C-OD-24 §24.7)"
+            )
+    try:
+        period_a = int(entry_a.signature_attrs.audit_signature_key_period)
+        period_b = int(entry_b.signature_attrs.audit_signature_key_period)
+    except ValueError as exc:
+        raise RotationPairIntegrityBreach(
+            f"audit.rotation_correlation_id={correlation_id!r}: key_period "
+            "must be integer-valued for rotation-tagged entries (C-OD-24 §24.7)"
+        ) from exc
+    sibling_1, sibling_2 = (entry_a, entry_b) if period_a < period_b else (entry_b, entry_a)
+    period_1, period_2 = sorted((period_a, period_b))
+    if period_2 != period_1 + 1:
+        raise RotationPairIntegrityBreach(
+            f"audit.rotation_correlation_id={correlation_id!r}: key periods "
+            f"{period_1} and {period_2} are not consecutive (C-OD-24 §24.7)"
+        )
+    if (
+        sibling_1.signature_attrs.audit_signature_key_id
+        == sibling_2.signature_attrs.audit_signature_key_id
+    ):
+        raise RotationPairIntegrityBreach(
+            f"audit.rotation_correlation_id={correlation_id!r}: outgoing and "
+            "incoming key_id must differ (C-OD-24 §24.7)"
+        )
+    if sibling_2.payload.prior_entry_hash != sibling_1.entry_hash:
+        raise RotationPairIntegrityBreach(
+            f"audit.rotation_correlation_id={correlation_id!r}: chain-hash "
+            "continuity broken across the rotation boundary — "
+            f"sibling_2.payload.prior_entry_hash={sibling_2.payload.prior_entry_hash!r} "
+            f"!= sibling_1.entry_hash={sibling_1.entry_hash!r} (C-OD-24 §24.7)"
+        )
+    return sibling_1, sibling_2
+
+
+class RotationPairEvidence(BaseModel):
+    """Per-correlation-id rotation-pair evidence (C-OD-24 §24.8, NEW at OD v1.35).
+
+    `pair_present=True` certifies STRUCTURAL pair validity (hash/period/
+    key-id/linkage) — it does NOT certify per-entry cryptographic signature
+    verification against either sibling's historical key-period (no
+    rotation-period-aware verifier exists yet; `signatures_verified` is
+    ALWAYS `False` in this delta, necessary-but-not-sufficient for a genuine
+    rotation pass — OD spec v1.35 §24.8 row 8a).
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    correlation_id: str
+    pair_present: bool
+    outgoing_key_period: int | None = None
+    incoming_key_period: int | None = None
+    outgoing_key_id: str | None = None
+    incoming_key_id: str | None = None
+    signatures_verified: bool = False
+
+
+def find_rotation_pair_evidence(ledger: AuditLedger, correlation_id: str) -> RotationPairEvidence:
+    """Per-correlation-id rotation-pair evidence accessor (C-OD-24 §24.8).
+
+    Scopes its check to ONLY entries carrying the supplied `correlation_id`
+    (per-id scoping distinct from `verify_rotation_pairs`'s whole-ledger
+    walk). Exactly 0 matching entries → `pair_present=False` (absence is
+    NOT a breach). Exactly 1 matching entry → `RotationPairIntegrityBreach`
+    (a torn write / deleted sibling is structural corruption, not absence).
+    3+ matching entries → `RotationPairIntegrityBreach` (excess is
+    unambiguous tamper, mirrors §24.7's `!= 2` raise). Exactly 2 matching
+    entries → reuses `_check_rotation_pair_crypto`; any violation raises
+    `RotationPairIntegrityBreach`.
+    """
+    _validate_canonical_rotation_correlation_id(correlation_id)
+
+    matching = [
+        entry
+        for entry in ledger.entries
+        if entry.payload.audit_namespace_attrs.get(ROTATION_CORRELATION_ID_ATTR) == correlation_id
+    ]
+
+    if len(matching) == 0:
+        return RotationPairEvidence(correlation_id=correlation_id, pair_present=False)
+    if len(matching) == 1:
+        raise RotationPairIntegrityBreach(
+            f"audit.rotation_correlation_id={correlation_id!r} tagged "
+            "exactly 1 entry — a lone rotation sibling is a torn write or "
+            "deleted sibling (structural corruption), not absence of "
+            "evidence (C-OD-24 §24.8 row 3a)"
+        )
+    if len(matching) >= 3:
+        raise RotationPairIntegrityBreach(
+            f"audit.rotation_correlation_id={correlation_id!r} tagged "
+            f"{len(matching)} entries; the two-row rotation pattern requires "
+            "exactly 2 (C-OD-24 §24.7)"
+        )
+
+    entry_a, entry_b = matching
+    sibling_1, sibling_2 = _check_rotation_pair_crypto(entry_a, entry_b, correlation_id)
+    return RotationPairEvidence(
+        correlation_id=correlation_id,
+        pair_present=True,
+        outgoing_key_period=int(sibling_1.signature_attrs.audit_signature_key_period),
+        incoming_key_period=int(sibling_2.signature_attrs.audit_signature_key_period),
+        outgoing_key_id=sibling_1.signature_attrs.audit_signature_key_id,
+        incoming_key_id=sibling_2.signature_attrs.audit_signature_key_id,
+        signatures_verified=False,
+    )
+
+
 def verify_rotation_pairs(ledger: AuditLedger) -> None:
     """Verify every `audit.rotation_correlation_id` sibling pair (C-OD-24 §24.7).
 
@@ -606,14 +765,7 @@ def verify_rotation_pairs(ledger: AuditLedger) -> None:
         correlation_id = entry.payload.audit_namespace_attrs.get(ROTATION_CORRELATION_ID_ATTR)
         if not correlation_id:
             continue
-        try:
-            uuid.UUID(correlation_id)
-        except ValueError as exc:
-            raise RotationPairIntegrityBreach(
-                f"audit.rotation_correlation_id={correlation_id!r} is not a "
-                "canonical UUID string (C-OD-24 §24.7 declares this attribute "
-                "as a UUID string or absent)"
-            ) from exc
+        _validate_canonical_rotation_correlation_id(correlation_id)
         by_correlation.setdefault(correlation_id, []).append(entry)
 
     for correlation_id, tagged in by_correlation.items():
@@ -623,46 +775,8 @@ def verify_rotation_pairs(ledger: AuditLedger) -> None:
                 f"{len(tagged)} entries; the two-row rotation pattern requires "
                 "exactly 2 (C-OD-24 §24.7)"
             )
-        for entry in tagged:
-            recomputed = compute_entry_hash(entry.payload)
-            if recomputed != entry.entry_hash:
-                raise RotationPairIntegrityBreach(
-                    f"audit.rotation_correlation_id={correlation_id!r}: stored "
-                    f"entry_hash={entry.entry_hash!r} does not match recomputed "
-                    f"hash={recomputed!r} over the entry's payload — payload "
-                    "tampered without recomputing entry_hash (C-OD-24 §24.7)"
-                )
         entry_a, entry_b = tagged
-        try:
-            period_a = int(entry_a.signature_attrs.audit_signature_key_period)
-            period_b = int(entry_b.signature_attrs.audit_signature_key_period)
-        except ValueError as exc:
-            raise RotationPairIntegrityBreach(
-                f"audit.rotation_correlation_id={correlation_id!r}: key_period "
-                "must be integer-valued for rotation-tagged entries (C-OD-24 §24.7)"
-            ) from exc
-        sibling_1, sibling_2 = (entry_a, entry_b) if period_a < period_b else (entry_b, entry_a)
-        period_1, period_2 = sorted((period_a, period_b))
-        if period_2 != period_1 + 1:
-            raise RotationPairIntegrityBreach(
-                f"audit.rotation_correlation_id={correlation_id!r}: key periods "
-                f"{period_1} and {period_2} are not consecutive (C-OD-24 §24.7)"
-            )
-        if (
-            sibling_1.signature_attrs.audit_signature_key_id
-            == sibling_2.signature_attrs.audit_signature_key_id
-        ):
-            raise RotationPairIntegrityBreach(
-                f"audit.rotation_correlation_id={correlation_id!r}: outgoing and "
-                "incoming key_id must differ (C-OD-24 §24.7)"
-            )
-        if sibling_2.payload.prior_entry_hash != sibling_1.entry_hash:
-            raise RotationPairIntegrityBreach(
-                f"audit.rotation_correlation_id={correlation_id!r}: chain-hash "
-                "continuity broken across the rotation boundary — "
-                f"sibling_2.payload.prior_entry_hash={sibling_2.payload.prior_entry_hash!r} "
-                f"!= sibling_1.entry_hash={sibling_1.entry_hash!r} (C-OD-24 §24.7)"
-            )
+        _check_rotation_pair_crypto(entry_a, entry_b, correlation_id)
     return None
 
 

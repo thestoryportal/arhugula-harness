@@ -328,7 +328,7 @@ def _load_key_map(path: Path) -> tuple[dict[str, SigningBackend], dict[str, str]
     except ImportError:  # boto3 optional — absent SDK surfaces as the typed error below
         boto_construction_errors = ()
     from harness_runtime.lifecycle.audit_signing_fail_closed_validation import (
-        _canonical_kms_key_identity,  # pyright: ignore[reportPrivateUsage]  # single-source normalizer
+        canonical_kms_key_identity,
     )
     from harness_runtime.types import AuditSigningConfig
 
@@ -390,7 +390,7 @@ def _load_key_map(path: Path) -> tuple[dict[str, SigningBackend], dict[str, str]
         # bare UUID and its full ARN spelling are the SAME physical key
         # (codex round-7 P1); raw-string comparison would let an ordinary
         # row key sign the record under an alternate spelling.
-        materials[map_key] = _canonical_kms_key_identity(config.key_arns[key_id])
+        materials[map_key] = canonical_kms_key_identity(config.key_arns[key_id])
     return backends, materials
 
 

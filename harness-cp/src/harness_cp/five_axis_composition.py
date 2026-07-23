@@ -29,6 +29,11 @@ from harness_as import BlastRadiusTier
 from harness_as.sandbox_tier import SandboxTier
 from harness_core import DeploymentSurface, PersonaTier
 from harness_is.chain_verification import verify_chain
+from harness_is.entry_hash import compute_response_hash
+from harness_is.rotation_window_verification import (
+    RotationWindowCheckStatus,
+    verify_rotation_window,
+)
 from harness_is.state_ledger_entry_schema import StateLedgerEntry
 from pydantic import BaseModel, ConfigDict
 
@@ -39,6 +44,12 @@ from harness_cp.f5_signing_key_resolution import (
     SigningKeyScope,
 )
 from harness_cp.gate_level_rule import GateLevel, GateLevelInput, gate_level
+from harness_cp.rotation_pair_verification import (
+    KeyIdentityResolver,
+    RotationBoundaryPhysicalKeyCollisionError,
+    RotationPairEvidenceProvider,
+    RotationPairEvidenceUnavailableError,
+)
 
 # --- §19.3 5-axis composition -----------------------------------------------
 
@@ -301,6 +312,9 @@ def execute_key_rotation(
     scope: SigningKeyScope,
     *,
     audit_ledger_entries: Sequence[StateLedgerEntry] = (),
+    rotation_window_entries: Sequence[StateLedgerEntry] = (),
+    evidence_provider: RotationPairEvidenceProvider | None = None,
+    key_identity_resolver: KeyIdentityResolver | None = None,
 ) -> KeyRotationOutcome:
     """Execute the §20.3 two-row key rotation for a signing-key scope.
 
@@ -310,10 +324,16 @@ def execute_key_rotation(
     (acceptance #7 — F2 immutability invariant): historical entries remain
     verifiable by the (retired) key that signed them.
 
-    `audit_ledger_entries` threads through to `verify_rotation_6_steps` — see
-    its docstring for the real IS hash-chain check this performs.
+    All parameters thread through to `verify_rotation_6_steps` — see its
+    docstring for what each one gates.
     """
-    steps = verify_rotation_6_steps(scope, audit_ledger_entries=audit_ledger_entries)
+    steps = verify_rotation_6_steps(
+        scope,
+        audit_ledger_entries=audit_ledger_entries,
+        rotation_window_entries=rotation_window_entries,
+        evidence_provider=evidence_provider,
+        key_identity_resolver=key_identity_resolver,
+    )
     complete = all(s.succeeded for s in steps)
     return KeyRotationOutcome(
         scope=scope,
@@ -327,64 +347,209 @@ def execute_key_rotation(
     )
 
 
+def _write_dual_verify_entry(
+    audit_ledger_entries: Sequence[StateLedgerEntry],
+    rotation_window_entries: Sequence[StateLedgerEntry],
+) -> tuple[bool, str, str | None]:
+    """`WRITE_DUAL_VERIFY_ENTRY` — IS-anchored presence/uniqueness check over
+    a caller-derived rotation window (CP spec v1.105 §1; IS spec v1.12 §7.7).
+
+    Returns `(succeeded, detail, derived_correlation_id)`. FIRST verifies
+    every `rotation_window_entries` member is also present in
+    `audit_ledger_entries` (matched by `harness_is.entry_hash.
+    compute_response_hash` identity — out-of-family review round-4 [P1]
+    correction over round-3's fix) — this closes the gap where a fabricated
+    window (real, valid entries elsewhere, but never authenticated as
+    belonging to THIS chain) would otherwise pass presence/uniqueness. Then
+    runs `verify_rotation_window`; on `VALID`, extracts the single derived
+    correlation id.
+
+    `rotation_window_entries` is snapshotted ONCE into a local list before
+    any check runs (out-of-family review round-1 [P2] correction, mirroring
+    `verify_rotation_6_steps`'s own `audit_ledger_entries` TOCTOU guard) —
+    else a caller-supplied mutable sequence that changes mid-call could
+    authenticate one set of entries while validation/extraction consumes a
+    different, unauthenticated set.
+    """
+    window = list(rotation_window_entries)
+    if not window:
+        return (
+            False,
+            "no rotation_window_entries supplied — WRITE_DUAL_VERIFY_ENTRY "
+            "requires a caller-derived rotation-event window (IS spec v1.12 §7.7)",
+            None,
+        )
+    chain_hashes = {compute_response_hash(entry) for entry in audit_ledger_entries}
+    for window_entry in window:
+        if compute_response_hash(window_entry) not in chain_hashes:
+            return (
+                False,
+                "rotation_window_entries contains an entry not present in "
+                "audit_ledger_entries — the window must be an authenticated "
+                "subset of the genesis-anchored chain (out-of-family review "
+                "round-3 [P1] correction)",
+                None,
+            )
+    window_result = verify_rotation_window(window)
+    if window_result.status is not RotationWindowCheckStatus.VALID:
+        failure_label = (
+            window_result.failure_type.value if window_result.failure_type else "unknown"
+        )
+        return (
+            False,
+            f"rotation window invalid: {failure_label} (IS spec v1.12 §7.7)",
+            None,
+        )
+    derived_id = window[0].rotation_correlation_id
+    return (
+        True,
+        f"rotation window valid — derived correlation id {derived_id!r} (IS spec v1.12 §7.7)",
+        derived_id,
+    )
+
+
+def _probe_verify_at_read(
+    derived_correlation_id: str | None,
+    evidence_provider: RotationPairEvidenceProvider | None,
+    key_identity_resolver: KeyIdentityResolver | None,
+) -> tuple[bool, str]:
+    """`PROBE_VERIFY_AT_READ` — OD-anchored evidence check + REQUIRED
+    physical-key-distinctness boundary attestation (CP spec v1.105 §1/§2).
+
+    A `RotationPairIntegrityBreach` (OD-detected tamper),
+    `RotationPairEvidenceUnavailableError` (infrastructure unavailable OR a
+    correlation-id mismatch), or `RotationBoundaryPhysicalKeyCollisionError`
+    (same physical key under two labels) from the injected provider/resolver
+    PROPAGATES UNWRAPPED — never caught into a `StepResult` (CP plan v2.41
+    U-CP-45 criterion #4). Otherwise returns `(succeeded, detail)`: an
+    absent pair, `signatures_verified=False` (structural evidence alone is
+    necessary but not sufficient — every provider in this delta), or an
+    absent resolver each yield an EXPLICIT incomplete disposition, never a
+    silent pass.
+    """
+    if derived_correlation_id is None or evidence_provider is None:
+        return (
+            False,
+            "no OD-anchored evidence available — WRITE_DUAL_VERIFY_ENTRY did "
+            "not derive a valid rotation-correlation id, or no evidence_provider "
+            "was injected (CP spec v1.105 §1)",
+        )
+    evidence = evidence_provider.evidence_for(derived_correlation_id)
+    if evidence.correlation_id != derived_correlation_id:
+        raise RotationPairEvidenceUnavailableError(
+            f"evidence correlation-id mismatch: requested "
+            f"{derived_correlation_id!r}, received {evidence.correlation_id!r} "
+            "(out-of-family review round-2 [P2] correction)"
+        )
+    if not evidence.pair_present:
+        return (
+            False,
+            f"no OD-anchored evidence for rotation boundary "
+            f"{derived_correlation_id!r} (OD spec v1.35 §24.8 "
+            "absence-is-not-a-breach disposition)",
+        )
+    if not evidence.signatures_verified:
+        return (
+            False,
+            "structural evidence present, signature verification not "
+            "available (OD spec v1.35 §24.8 row 8a — no rotation-period-aware "
+            "cryptographic verifier exists yet; structural evidence alone is "
+            "necessary but not sufficient)",
+        )
+    if key_identity_resolver is None:
+        return (
+            False,
+            "no key_identity_resolver injected — physical-key-distinctness "
+            "boundary attestation is REQUIRED, not skippable (CP spec v1.105 "
+            "§2 row 5)",
+        )
+    # Guaranteed non-None by RotationPairEvidence's own construction-time
+    # coherence validator (pair_present=True ⟹ all four fields populated).
+    assert evidence.outgoing_key_id is not None
+    assert evidence.incoming_key_id is not None
+    outgoing_identity = key_identity_resolver.physical_identity_for(evidence.outgoing_key_id)
+    incoming_identity = key_identity_resolver.physical_identity_for(evidence.incoming_key_id)
+    if outgoing_identity == incoming_identity:
+        raise RotationBoundaryPhysicalKeyCollisionError(
+            f"rotation pair {derived_correlation_id!r}: outgoing key_id "
+            f"{evidence.outgoing_key_id!r} and incoming key_id "
+            f"{evidence.incoming_key_id!r} resolve to the SAME physical key "
+            f"identity {outgoing_identity!r} — the rotation never actually "
+            "changed the physical signing key (CP spec v1.105 §2 row 5)"
+        )
+    return (
+        True,
+        "OD-anchored structural pair evidence AND per-period signature "
+        f"verification both confirmed for outgoing_key_period="
+        f"{evidence.outgoing_key_period}, incoming_key_period="
+        f"{evidence.incoming_key_period}",
+    )
+
+
 def verify_rotation_6_steps(
     scope: SigningKeyScope,
     *,
     audit_ledger_entries: Sequence[StateLedgerEntry] = (),
+    rotation_window_entries: Sequence[StateLedgerEntry] = (),
+    evidence_provider: RotationPairEvidenceProvider | None = None,
+    key_identity_resolver: KeyIdentityResolver | None = None,
 ) -> tuple[StepResult, ...]:
     """Run the §20.3.1 six-step rotation verification protocol.
 
     Steps in order: stage new key (rotation_state = ROTATING) → write the
     first dual-verify entry → probe-verify both keys at read → verify
     hash-chain link continuity → rotate signing to the new key → retire the
-    old key. Each step yields a `StepResult`; a failed step halts the
-    remaining protocol — every step after the first failure reports
-    `succeeded=False` with a `blocked` detail rather than independently
-    narrating success (§20.3.1's steps are sequential, not independent).
+    old key.
 
     `VERIFY_HASH_CHAIN_LINK` is wired to the real IS chain-linkage check
     (`harness_is.chain_verification.verify_chain`) against
-    `audit_ledger_entries` — the caller-supplied ledger entries relevant to
-    `scope`. This verifies **generic** `prior_event_hash` continuity for
-    whatever entries are supplied; a broken chain fails this step for real.
+    `audit_ledger_entries` — the FULL genesis-anchored chain (position 1's
+    `prior_event_hash` == `ALL_ZEROS_SENTINEL`), NOT the rotation window.
     `audit_ledger_entries` defaulting to empty is itself treated as a
-    failure, not a fabricated pass (Codex out-of-family round 3) — zero
-    entries is an absence of evidence, not proof of chain integrity, and the
-    whole point of this unit is that the step no longer succeeds for free.
-    Even a genuinely intact non-empty chain does NOT confirm that a
-    rotation boundary (a dual-signed sibling pair under two consecutive key
-    periods) is present among the supplied entries — registered as `B-33`
-    (Codex out-of-family rounds 1 + 5), not fixed here. Full §20.3.1
-    pair-boundary verification needs TWO separately-gated things that don't
-    exist yet: (1) a rotation-correlation carrier on `StateLedgerEntry`
-    (mirroring OD spec v1.31 §24.7's `rotation_correlation_id` — a new
-    IS-spec field, Class 1 fork required) and (2) a real signing backend
-    (`B-22`, a separate deployment-surface decision). See `B-33` at
-    `.harness/post-phase-8-forward-register.md` for the full disposition.
+    failure, not a fabricated pass — zero entries is an absence of
+    evidence, not proof of chain integrity.
 
-    Contract on `audit_ledger_entries` (Codex out-of-family round 2): it
-    must be the genesis-anchored chain (position 1's `prior_event_hash` ==
-    `ALL_ZEROS_SENTINEL`, per `verify_chain`'s own contract), not an
-    arbitrary filtered slice — a scope-relevant view carved out of a larger
-    interleaved ledger (e.g. a tenant-scoped read) will fail with
-    `INCEPTION_SENTINEL_MISMATCH` even when the underlying full ledger is
-    intact. No production reader exists yet to violate this (zero callers
-    today); whoever wires a real caller in must supply the true
-    genesis-to-head window, not a reader-filtered subsequence.
+    `WRITE_DUAL_VERIFY_ENTRY` gains a REAL presence/uniqueness check over
+    the SEPARATE `rotation_window_entries` parameter — DISTINCT from
+    `audit_ledger_entries` (out-of-family review round-2 [P1] correction:
+    the two require CONFLICTING input shapes — `verify_chain`'s inception-
+    sentinel contract needs the full chain, `verify_rotation_window` needs a
+    sparse window scoped to just the rotation event). See
+    `_write_dual_verify_entry` for the subset-membership check + window
+    validation.
 
-    The other five steps narrate the signing side of the protocol and stay
+    `PROBE_VERIFY_AT_READ` gains a REAL OD-anchored evidence check via the
+    injected `evidence_provider`, gated on BOTH `pair_present` AND
+    `signatures_verified` (structural evidence alone is necessary but not
+    sufficient — no rotation-period-aware cryptographic verifier exists yet,
+    so no shipped provider in this delta can reach a genuine pass), plus a
+    REQUIRED physical-key-distinctness attestation via `key_identity_resolver`.
+    See `_probe_verify_at_read`.
+
+    `ROTATE_SIGNING_TO_NEW`/`RETIRE_OLD_KEY` are gated on ALL THREE of
+    {`VERIFY_HASH_CHAIN_LINK`, `WRITE_DUAL_VERIFY_ENTRY`, `PROBE_VERIFY_AT_READ`}
+    succeeding. **Ordinal-sequencing scope (out-of-family review round-3
+    [P2] correction):** `VERIFY_HASH_CHAIN_LINK`'s OWN result remains
+    UNCHANGED and independent of the two new steps — a `WRITE_DUAL_VERIFY_
+    ENTRY` failure does NOT retroactively block `VERIFY_HASH_CHAIN_LINK`
+    itself, only the two rotate/retire steps additionally gate on it.
+
+    `STAGE_NEW_KEY` and the two rotate/retire narration strings stay
     simulated: real key staging/signing/verification is not reachable from
     CP today (`f5_signing_key_resolution.sign_audit_entry` /
     `verify_audit_entry_signature` raise `AuditSigningBackendUnavailableError`
-    pending a deployment-bound signing backend — a separate
-    deployment-surface decision, B-22).
+    pending a deployment-bound signing backend, B-22).
+
+    Raises `RotationPairIntegrityBreach`, `RotationPairEvidenceUnavailableError`,
+    or `RotationBoundaryPhysicalKeyCollisionError` — uncaught — when the
+    injected `evidence_provider`/`key_identity_resolver` detects tamper,
+    unavailability, or a physical-key collision (see `_probe_verify_at_read`).
     """
     # One snapshot, reused for both the emptiness check and verification —
     # a caller-supplied mutable sequence must not be re-read after
-    # `verify_chain` runs (Codex out-of-family round 4: a TOCTOU re-read
-    # could see the sequence empty pre-verify but non-empty post-verify, or
-    # vice versa, decoupling the emptiness gate from what was actually
-    # verified).
+    # `verify_chain` runs (a TOCTOU re-read could see the sequence empty
+    # pre-verify but non-empty post-verify, or vice versa, decoupling the
+    # emptiness gate from what was actually verified).
     entries = list(audit_ledger_entries)
     chain_result = verify_chain(entries)
     # `failure_type is None` iff the chain is valid — mirrors
@@ -415,29 +580,38 @@ def verify_rotation_6_steps(
             f"chain-link mismatch at position {chain_result.failure_position} "
             f"({failure_label}) for scope {scope_label}"
         )
+
+    write_dual_succeeded, write_dual_detail, derived_correlation_id = _write_dual_verify_entry(
+        entries, rotation_window_entries
+    )
+    # Any of RotationPairIntegrityBreach / RotationPairEvidenceUnavailableError /
+    # RotationBoundaryPhysicalKeyCollisionError propagates unwrapped here —
+    # deliberately NOT caught (CP plan v2.41 U-CP-45 criterion #4).
+    probe_succeeded, probe_detail = _probe_verify_at_read(
+        derived_correlation_id, evidence_provider, key_identity_resolver
+    )
+
     simulated_suffix = (
         " [simulated narration — no real signing backend wired from CP yet; "
         "see f5_signing_key_resolution.AuditSigningBackendUnavailableError, B-22]"
     )
+    rotate_retire_gate_succeeded = hash_chain_succeeded and write_dual_succeeded and probe_succeeded
     blocked_detail = (
-        "blocked — VERIFY_HASH_CHAIN_LINK failed; §20.3.1 halts the rotation before this step"
+        "blocked — VERIFY_HASH_CHAIN_LINK / WRITE_DUAL_VERIFY_ENTRY / "
+        "PROBE_VERIFY_AT_READ did not all succeed; §20.3.1 halts the rotation "
+        "before this step"
     )
     details: dict[RotationVerificationStep, str] = {
         RotationVerificationStep.STAGE_NEW_KEY: (
             f"new key provisioned via U-CP-44; rotation_state = "
             f"{KeyRotationState.ROTATING.value}{simulated_suffix}"
         ),
-        RotationVerificationStep.WRITE_DUAL_VERIFY_ENTRY: (
-            "first new-key-signed entry written; old key remains in the "
-            f"verification set{simulated_suffix}"
-        ),
-        RotationVerificationStep.PROBE_VERIFY_AT_READ: (
-            f"both keys verify the new entry successfully{simulated_suffix}"
-        ),
+        RotationVerificationStep.WRITE_DUAL_VERIFY_ENTRY: write_dual_detail,
+        RotationVerificationStep.PROBE_VERIFY_AT_READ: probe_detail,
         RotationVerificationStep.VERIFY_HASH_CHAIN_LINK: hash_chain_detail,
         RotationVerificationStep.ROTATE_SIGNING_TO_NEW: (
             blocked_detail
-            if not hash_chain_succeeded
+            if not rotate_retire_gate_succeeded
             else (
                 f"old key rotation_state = {KeyRotationState.RETIRED.value}; new "
                 f"key rotation_state = {KeyRotationState.ACTIVE.value}{simulated_suffix}"
@@ -445,7 +619,7 @@ def verify_rotation_6_steps(
         ),
         RotationVerificationStep.RETIRE_OLD_KEY: (
             blocked_detail
-            if not hash_chain_succeeded
+            if not rotate_retire_gate_succeeded
             else (
                 "old key removed from the verification set after dual-verify "
                 f"quiescence{simulated_suffix}"
@@ -456,11 +630,10 @@ def verify_rotation_6_steps(
         ROTATION_VERIFICATION_STEPS, True
     )
     succeeded[RotationVerificationStep.VERIFY_HASH_CHAIN_LINK] = hash_chain_succeeded
-    if not hash_chain_succeeded:
-        # §20.3.1 is sequential — a failed link check halts the remaining
-        # steps rather than letting them independently claim success.
-        succeeded[RotationVerificationStep.ROTATE_SIGNING_TO_NEW] = False
-        succeeded[RotationVerificationStep.RETIRE_OLD_KEY] = False
+    succeeded[RotationVerificationStep.WRITE_DUAL_VERIFY_ENTRY] = write_dual_succeeded
+    succeeded[RotationVerificationStep.PROBE_VERIFY_AT_READ] = probe_succeeded
+    succeeded[RotationVerificationStep.ROTATE_SIGNING_TO_NEW] = rotate_retire_gate_succeeded
+    succeeded[RotationVerificationStep.RETIRE_OLD_KEY] = rotate_retire_gate_succeeded
     return tuple(
         StepResult(step=step, succeeded=succeeded[step], detail=details[step])
         for step in ROTATION_VERIFICATION_STEPS

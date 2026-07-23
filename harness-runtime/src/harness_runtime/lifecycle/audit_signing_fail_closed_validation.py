@@ -71,6 +71,7 @@ from harness_runtime.types import AuditSigningBackendKind, RuntimeConfig
 __all__ = [
     "AuditSigningConfigInvalidError",
     "IncompatibleConfigVersion",
+    "canonical_kms_key_identity",
     "initialize_mtc_audit_signing_record",
     "mtc_audit_prewarm_disabled",
     "resolve_audit_signing_fail_closed",
@@ -174,7 +175,7 @@ _ROW_SIGNING_CONSUMER_KEY_IDS: frozenset[str] = frozenset(
 )
 
 
-def _canonical_kms_key_identity(arn_or_key_id: str) -> str:
+def canonical_kms_key_identity(arn_or_key_id: str) -> str:
     """Normalize an AWS KMS key ARN or bare key id to a comparable tail.
 
     A full ARN is `arn:aws:kms:<region>:<account>:key/<uuid>`; a bare key
@@ -392,17 +393,17 @@ def validate_mtc_audit_signing_config(config: RuntimeConfig) -> None:
             # identities, not raw ARN strings — AWS KMS accepts both a
             # full ARN and its bare key UUID for the SAME physical key;
             # two differently-spelled logical ids for one key must not
-            # pass distinctness. `_canonical_kms_key_identity` does not
+            # pass distinctness. `canonical_kms_key_identity` does not
             # resolve aliases or cross-account/region equivalence (that
             # needs a live KMS `DescribeKey` call this module does not
             # make, matching `AwsKmsSigningBackend`'s own no-DescribeKey
             # posture) — it closes the common ARN-vs-bare-UUID spelling gap.
-            canonical_resolved = _canonical_kms_key_identity(resolved_arn)
+            canonical_resolved = canonical_kms_key_identity(resolved_arn)
             sharing = [
                 other_id
                 for other_id, other_arn in config.audit_signing.key_arns.items()
                 if other_id != record_key_id
-                and _canonical_kms_key_identity(other_arn) == canonical_resolved
+                and canonical_kms_key_identity(other_arn) == canonical_resolved
             ]
             if sharing:
                 invalid.append(
@@ -707,7 +708,7 @@ def _reject_record_key_used_by_persisted_rows_locked(
     if not sidecar_path.is_file():
         return
     record_arn = _resolve_record_key_arn(config, record_key_id)
-    record_material = _canonical_kms_key_identity(record_arn) if record_arn is not None else None
+    record_material = canonical_kms_key_identity(record_arn) if record_arn is not None else None
     try:
         with sidecar_path.open("r", encoding="utf-8") as handle:
             for line_number, line in enumerate(handle, start=1):
@@ -775,7 +776,7 @@ def _reject_record_key_used_by_persisted_rows_locked(
                     )
                 same_material = (
                     record_material is not None
-                    and _canonical_kms_key_identity(row_arn) == record_material
+                    and canonical_kms_key_identity(row_arn) == record_material
                 )
                 if same_logical or same_material:
                     raise AuditSigningConfigInvalidError(

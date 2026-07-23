@@ -291,6 +291,38 @@ PATTERN_P1_SEAMS: tuple[tuple[str, str, str, str], ...] = (
         "harness_is.chain_verification",
         "verify_chain",
     ),
+    # ---- §2.3.2 CP → IS — 3 NEW B-33 rows (impl leg iii) ------------------
+    # Three NEW genuine typed seams landing the B-33 rotation-correlation
+    # carrier arc's leg (iii) impl (CP spec v1.105 §1, PR #1084's spec+plan
+    # leg (ii)): `verify_rotation_6_steps`'s `WRITE_DUAL_VERIFY_ENTRY` step
+    # consumes IS's `verify_rotation_window` (C-IS-07 §7.7) + its
+    # `RotationWindowCheckStatus` discriminator over the caller-supplied
+    # rotation window, and `harness_is.entry_hash.compute_response_hash` for
+    # the subset-membership check tying `rotation_window_entries` back to
+    # the authenticated `audit_ledger_entries` chain (out-of-family review
+    # round-4 [P1] correction — the CORRECT IS-owned hash primitive for
+    # `StateLedgerEntry`, distinct from OD's `compute_entry_hash`). The
+    # CP→OD evidence lookup (PROBE_VERIFY_AT_READ) does NOT cross this
+    # boundary directly — it is mediated by the Runtime composition-root
+    # adapter (U-RT-147), per the OD→CP canonical direction (CXA §2.3.10).
+    (
+        "U-CP-45→U-IS-20",
+        "harness_cp.five_axis_composition",
+        "harness_is.rotation_window_verification",
+        "verify_rotation_window",
+    ),
+    (
+        "U-CP-45→U-IS-20",
+        "harness_cp.five_axis_composition",
+        "harness_is.rotation_window_verification",
+        "RotationWindowCheckStatus",
+    ),
+    (
+        "U-CP-45→U-IS-08",
+        "harness_cp.five_axis_composition",
+        "harness_is.entry_hash",
+        "compute_response_hash",
+    ),
 )
 
 
@@ -327,8 +359,15 @@ def test_seam_count_is_33() -> None:
     line. Aggregate genuine 31 → 33 (registered code-resident per this
     file's own convention, not a delta-only CXA markdown edit — see the
     module docstring).
+
+    B-33 leg (iii) impl (this arc's PR, following the spec+plan leg (ii) at
+    PR #1084) adds 3 NEW §2.3.2 rows: `verify_rotation_6_steps`'s
+    `WRITE_DUAL_VERIFY_ENTRY` step wires IS's `verify_rotation_window` +
+    `RotationWindowCheckStatus` (C-IS-07 §7.7) and `harness_is.entry_hash.
+    compute_response_hash` (the subset-membership check). Aggregate genuine
+    33 → 36.
     """
-    assert len(PATTERN_P1_SEAMS) == 33
+    assert len(PATTERN_P1_SEAMS) == 36
 
 
 # ---------------------------------------------------------------------------
