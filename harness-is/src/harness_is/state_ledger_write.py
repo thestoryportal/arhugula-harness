@@ -44,7 +44,7 @@ import threading
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 
 from harness_is.chain_link_construction import construct_prior_event_hash
 from harness_is.cross_process_ledger_lock import (
@@ -61,6 +61,7 @@ from harness_is.state_ledger_entry_schema import (
     Identifier,
     StateLedgerEntry,
     Timestamp,
+    reject_noncanonical_rotation_correlation_id,
 )
 
 #: Clock-skew tolerance for the timestamp-monotonicity check (C-IS-05 §5).
@@ -122,6 +123,16 @@ class EntryPayload(BaseModel):
     # by the CP WorkflowDriver. Optional default preserves backward compat;
     # non-None value propagates to StateLedgerEntry + canonicalize + JSONL line.
     branch_metadata: BranchMetadata | None = None
+    # v1.12 NEW D-derivative sidecar (C-IS-05 §5.6; U-IS-20). Producer-supplied
+    # by the CP rotation orchestration. Optional default preserves backward
+    # compat; non-None value propagates to StateLedgerEntry + canonicalize +
+    # JSONL line.
+    rotation_correlation_id: str | None = None
+
+    @field_validator("rotation_correlation_id")
+    @classmethod
+    def _validate_rotation_correlation_id(cls, value: str | None) -> str | None:
+        return reject_noncanonical_rotation_correlation_id(value)
 
 
 class WriteKey(BaseModel):
@@ -160,6 +171,11 @@ def _serialize_entry(entry: StateLedgerEntry) -> str:
     v1.8 sidecar discipline (U-IS-19, C-IS-05 §5.4): when ``branch_metadata``
     is non-``None``, the persisted JSONL line includes it as a nested record
     (mirroring the nested ``actor`` shape); when ``None``, the key is omitted.
+
+    v1.12 sidecar discipline (U-IS-20, C-IS-05 §5.6): when
+    ``rotation_correlation_id`` is non-``None``, the persisted JSONL line
+    includes the field as an additional key; when ``None``, the key is
+    omitted.
     """
     payload: dict[str, object] = {
         "action_id": entry.action_id,
@@ -181,6 +197,8 @@ def _serialize_entry(entry: StateLedgerEntry) -> str:
             "branch_index": bm.branch_index,
             "terminal_status": bm.terminal_status,
         }
+    if entry.rotation_correlation_id is not None:
+        payload["rotation_correlation_id"] = entry.rotation_correlation_id
     return json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
 
 
@@ -194,6 +212,10 @@ def _deserialize_entry(line: str) -> StateLedgerEntry:
     v1.8 sidecar discipline (U-IS-19): ``branch_metadata`` MAY be absent on
     entries written outside a fan-out branch (every pre-v1.8 entry); absent →
     ``None`` reproduces the schema's optional shape.
+
+    v1.12 sidecar discipline (U-IS-20): ``rotation_correlation_id`` MAY be
+    absent on entries written outside a rotation window (every pre-v1.12
+    entry); absent → ``None`` reproduces the schema's optional shape.
     """
     raw = json.loads(line)
     snapshot_ref_raw = raw.get("procedural_tier_snapshot_ref")
@@ -220,6 +242,7 @@ def _deserialize_entry(line: str) -> StateLedgerEntry:
             if branch_metadata_raw is not None
             else None
         ),
+        rotation_correlation_id=raw.get("rotation_correlation_id"),
     )
 
 
@@ -314,6 +337,10 @@ def append_ledger_entry(
             # EntryPayload; canonicalize() includes the nested record in the
             # hash recipe when non-None.
             branch_metadata=entry_payload.branch_metadata,
+            # v1.12 NEW sidecar (U-IS-20, C-IS-05 §5.6). Threaded through from
+            # EntryPayload; canonicalize() includes it in the hash recipe
+            # when non-None.
+            rotation_correlation_id=entry_payload.rotation_correlation_id,
         )
         entry = draft.model_copy(update={"response_hash": compute_response_hash(draft)})
         with ledger_handle.canonical_path.open("a") as fh:

@@ -31,9 +31,12 @@ _F_LAYER_FIELDS = {
 # PRESERVED VERBATIM; the sidecars live at the D-derivative layer.
 #   - `procedural_tier_snapshot_ref` (C-IS-05 §5.1, v1.3)
 #   - `branch_metadata` (C-IS-05 §5.4, v1.8 — U-IS-19 branch-causality carrier)
+#   - `rotation_correlation_id` (C-IS-05 §5.6, v1.12 — U-IS-20 rotation-
+#     correlation carrier)
 _D_DERIVATIVE_FIELDS = {
     "procedural_tier_snapshot_ref",
     "branch_metadata",
+    "rotation_correlation_id",
 }
 _CURRENT_FIELDS = _F_LAYER_FIELDS | _D_DERIVATIVE_FIELDS
 
@@ -52,7 +55,8 @@ def _entry(action_id: str = "00000000-0000-4000-8000-000000000000") -> StateLedg
 def test_state_ledger_entry_schema_completeness() -> None:
     """Acceptance #1 — StateLedgerEntry declares the 6 F-layer fields per §5
     plus the D-derivative sidecar fields (§5.1 `procedural_tier_snapshot_ref`
-    at v1.3; §5.4 `branch_metadata` at v1.8).
+    at v1.3; §5.4 `branch_metadata` at v1.8; §5.6 `rotation_correlation_id`
+    at v1.12).
 
     The F-layer six-field shape is preserved verbatim; the sidecars are
     additive at the extensibility layer authorized by §5.

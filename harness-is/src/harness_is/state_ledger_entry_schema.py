@@ -23,11 +23,12 @@ ADR-F2 v1.2 §Decision (state-ledger entry shape).
 
 from __future__ import annotations
 
+import uuid
 from datetime import datetime
 from enum import StrEnum
 from typing import Annotated, Literal, NewType
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 Identifier = NewType("Identifier", str)
 """Opaque identifier — concrete format (UUID v4 / ULID / …) deferred per §5."""
@@ -40,6 +41,36 @@ Bytes32 = Annotated[bytes, Field(min_length=32, max_length=32)]
 
 ALL_ZEROS_SENTINEL: Bytes32 = b"\x00" * 32
 """Chain-inception `prior_event_hash` sentinel — 32 zero bytes (C-IS-05 §5)."""
+
+
+def reject_noncanonical_rotation_correlation_id(value: str | None) -> str | None:
+    """Canonical-round-trip UUID check for `rotation_correlation_id` (C-IS-05 §5.6).
+
+    `None` passes through unchanged (the default — every entry outside a
+    rotation window). A non-`None` value MUST be the canonical 36-char
+    hyphenated UUID string form: `str(uuid.UUID(value)) == value`. Bare
+    `uuid.UUID`-parseability is INSUFFICIENT — it also accepts 32-char
+    unhyphenated hex, brace-wrapped (`{...}`), and `urn:uuid:`-prefixed forms,
+    none of which is the canonical form the field table requires; each is
+    rejected here even though `uuid.UUID` parses it successfully.
+
+    Shared by `StateLedgerEntry` and `EntryPayload` (state_ledger_write.py) —
+    the same construction-time check applies to both carriers.
+    """
+    if value is None:
+        return None
+    try:
+        parsed = uuid.UUID(value)
+    except ValueError as exc:
+        raise ValueError(
+            f"rotation_correlation_id={value!r} is not a canonical UUID string"
+        ) from exc
+    if str(parsed) != value:
+        raise ValueError(
+            f"rotation_correlation_id={value!r} is not the canonical 36-char "
+            "hyphenated UUID form (parseable but non-canonical spelling rejected)"
+        )
+    return value
 
 
 class ActorClass(StrEnum):
@@ -116,6 +147,16 @@ class StateLedgerEntry(BaseModel):
     `SINGLE_THREADED_LINEAR` path, bootstrap-stage entries, non-branch steps —
     every pre-v1.8 entry). Additive at the same D-derivative extension layer as
     the §5.1 sidecar; the six-field shape stays inviolate.
+
+    v1.12 NEW D-derivative sidecar field — `rotation_correlation_id` per
+    C-IS-05 §5.6 (NEW). Carries the rotation-event correlation identity a
+    CP-side audit-walk verifier requires and joins to prove a genuine
+    key-rotation boundary occurred (C-CP-20). Optional; `None` at every entry
+    outside a rotation window (every pre-v1.12 entry). A non-`None` value MUST
+    be a canonical-form UUID string — rejected at construction otherwise (see
+    `reject_noncanonical_rotation_correlation_id`). Additive at the same
+    D-derivative extension layer as the §5.1/§5.4 sidecars; the six-field
+    shape stays inviolate.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -130,3 +171,10 @@ class StateLedgerEntry(BaseModel):
     procedural_tier_snapshot_ref: Identifier | None = None
     # v1.8 NEW D-derivative sidecar (C-IS-05 §5.4).
     branch_metadata: BranchMetadata | None = None
+    # v1.12 NEW D-derivative sidecar (C-IS-05 §5.6).
+    rotation_correlation_id: str | None = None
+
+    @field_validator("rotation_correlation_id")
+    @classmethod
+    def _validate_rotation_correlation_id(cls, value: str | None) -> str | None:
+        return reject_noncanonical_rotation_correlation_id(value)
