@@ -15,9 +15,10 @@ reviewer_chain:
   - just codex-review-uncommitted (2026-07-23, round 2) — out-of-family, found the CP-owned hitl_responses key shape collides on repeated same-child_workflow_id dispatch (CP-owned; this file's own AC #7/#8 unaffected, Depends-on note updated)
   - just codex-review (2026-07-23, round 3, branch-vs-main against open PR #1092) — out-of-family, found §2's "AC #3 confirmed" claim empirically false against the actual U-RT-95 test file (resume-consume-cycle deferred per FM-2, not exercised)
   - Direct file read (2026-07-23, round 3) — read test_u_rt_95_hitl_pause_trigger_durable_async_full_execution_path.py lines 1-56 to verify the finding before editing (per subagent-landscape-reports-need-regrounding discipline, applied to a self-authored claim this time)
+  - just codex-review (2026-07-23, round 4, branch-vs-main against the round-3 fix commit) — out-of-family, found this file's own filing footer still said "one confirmation note (U-RT-95)" after round 3 made it a genuine amendment; the other 2 round-4 findings are entirely CP-owned
 ---
 
-# Clearance — Implementation_Plan_Harness_Runtime_v2_54 (B-39 arc, plan leg; THREE same-day correction passes)
+# Clearance — Implementation_Plan_Harness_Runtime_v2_54 (B-39 arc, plan leg; FOUR same-day correction passes)
 
 **Round-2 note.** A second out-of-family pass found the CP-owned
 `hitl_responses` key shape (`branch_path`) collides on repeated same-
@@ -34,8 +35,12 @@ delivery, one-shot-per-resume-cycle PRESERVED UNDER RETRY, no new global
 sharing. `HarnessContext.resume_context_holder` field removal is asserted;
 the exact replacement wiring (including `resume_context_holder.py`'s own
 disposition) is impl discretion. U-RT-95's e2e resume-consume-cycle test
-gets a confirmation note (fixture-setup change only; public call shape
-unchanged) plus a NEW owed same-cycle-retry e2e scenario.
+originally got a confirmation note here (fixture-setup change only; public
+call shape unchanged) plus a NEW owed same-cycle-retry e2e scenario —
+**SUPERSEDED at round 3** (see below): direct reading of the actual test
+file found the resume-consume-cycle path is deferred per FM-2, not
+exercised at all; U-RT-95 is a genuine AC #9 amendment, not a fixture-only
+confirmation.
 
 **Round-1 correction pass (same-day).** A first draft's AC #7/#8 asserted the
 composer consumes a bare per-call `resolved_hitl_response` parameter and
@@ -55,6 +60,8 @@ the impl leg may use any type, new or repurposed, so long as it is never
 bound at that scope again.
 
 **Round-3 correction (same-day, branch-vs-main `just codex-review` against open PR #1092).** §2's prior text claimed AC #3 "is CONFIRMED to still exercise the IDENTICAL operator-facing call shape" through the public `attempt_resume`/`api.resume()` surface, framed as a fixture-only note. Direct read of the ACTUAL U-RT-95 test file found this FALSE: its own doc-comment (lines 29-31) states path (ii) resume-consume-cycle is "deferred to a follow-on arc per FM-2." The materialized path (i) exercises the *engine-layer* WAL_SEGMENT recovery loop (a distinct C-CP-22 surface) — not the workflow-layer HITL composer's public delivery. No test anywhere currently exercises a full public-surface HITL resume-consume cycle. Fix: the "confirmation note" framing is withdrawn; a genuinely NEW AC #9 requires a net-new e2e test (not a fixture edit) materializing the FM-2-deferred path, plus the previously-noted same-cycle-retry e2e scenario.
+
+**Second branch-vs-main correction (same-day, against the round-3-above fix commit — distinct from the EARLIER "Round-4 note" above, which predates this session's branch-vs-main review sequence and covers a different topic, candidate-lead removal).** Found this file's own §0.3/filing-footer text still described U-RT-95 as carrying "one confirmation note" after the round-3 fix directly above already made it a genuine AC #9 amendment — fixed (§0.3 + filing footer now say "TWO amended-unit-body amendments"). The round's other 2 findings (a resolver-mechanism defect + a CP-plan unit-assignment defect) are entirely CP-owned — see the sibling `Implementation_Plan_Control_Plane_v2_42.md` clearance marker's own round-4 section; this file required no further content change for those.
 
 This is the spec leg's plan absorption only — impl (code + tests) is a
 separate follow-on arc per the B-33/B-59 precedent; the impl leg additionally

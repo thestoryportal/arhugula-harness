@@ -421,7 +421,22 @@ items:
   status: open
   summary: Two or more concurrently-paused peer/nested children share one run-level ResumeContextHolder;
     delivering each its OWN operator response safely is unresolved.
-  close_out: 'A first attempt (ResumeContext.hitl_responses keyed by workflow_id, consumed via non-destructive
+  close_out: 'FINAL STATE (round 4, 2026-07-23 -- read this line, not the chronological
+    history below, for the CURRENT design): ResumeContext.hitl_responses is keyed by
+    the paused childs own run_id (child_snapshot.run_id), NEVER branch_path or workflow_id
+    -- both were tried and found broken across earlier rounds. PausedChildBranchResumeState
+    carries ZERO new fields (no branch_path field exists). CP plan units U-CP-86/88/89
+    are UNAMENDED. The multi-branch fallback-safety requirement (do not misapply one
+    branch''s response to another) is a black-box safety+liveness invariant deferred
+    to the impl-leg resolver (CP spec v1.106 section 1.2 property 4), distinguishing
+    gate-owning branches from transitively-paused container/ancestor branches (property
+    5) -- NOT a prescribed counting/INERT mechanism (an earlier round tried that, found
+    it strands container branches and is unassignable to any unit). Spec leg LANDED at
+    PR #1092 across 4 same-day correction rounds; impl leg NOT yet opened. Two follow-ons
+    registered separately: B-69 (resume_handle addressability) and B-70 (the identical
+    fallback gap in the shipped effect_fence_resolution_for sibling). --- Chronological
+    history below (superseded intermediate states retained for provenance; the FINAL
+    STATE line above is authoritative) --- A first attempt (ResumeContext.hitl_responses keyed by workflow_id, consumed via non-destructive
     peek()) was built, mutation-probed, and reviewed out-of-family -- Codex found 3 real defects, all
     confirmed correct on inspection: (1) peek-only never one-shot-consumes, so a later HITL-composed step
     sharing the same key would silently reuse a stale response; (2) workflow_id is NOT branch-unique --

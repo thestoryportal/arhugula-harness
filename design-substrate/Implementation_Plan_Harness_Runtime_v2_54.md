@@ -20,7 +20,7 @@ Per `Spec_Harness_Runtime_v1.md` v1.106 §14.8.8.10: the `ResumeContextHolder` s
 
 ### §0.3 Sections revised
 
-§0 (this change note); §1 (the U-RT-94 amendment); §2 (the U-RT-95 confirmation note). All other sections — every other `U-RT-NN` body, all dependency graphs, cross-cutting units, open items — PRESERVED VERBATIM from v2.53.
+§0 (this change note); §1 (the U-RT-94 amendment); §2 (the U-RT-95 amendment — round-3-corrected from a confirmation note to a genuine NEW AC #9, see §2). All other sections — every other `U-RT-NN` body, all dependency graphs, cross-cutting units, open items — PRESERVED VERBATIM from v2.53.
 
 ### §0.4 Scope discipline
 
@@ -77,14 +77,14 @@ DAG topology preserved verbatim from v2.53 — ZERO new edges, ZERO new units.
 |---|---|
 | Artifact | `Implementation_Plan_Harness_Runtime_v2_54.md` |
 | Version | v2.54 |
-| Filing event | B-39 spec leg plan absorption; THREE same-day correction passes — CONTRACT-altitude correction (round 1, falsified the AC #7/#8 mechanism premise); a CP-owned key-shape fix cross-reference update (round 2, `hitl_responses` re-keyed to `child_run_id`, this file's Depends-on note updated to match); and a branch-vs-main review (round 3, against open PR #1092) that found §2's "AC #3 confirmed" claim empirically FALSE — the cited test file's own doc-comment defers the resume-consume-cycle path per FM-2 — replaced with a genuinely NEW required AC #9 (a net-new e2e test, not a fixture update) |
+| Filing event | B-39 spec leg plan absorption; THREE same-day correction passes — CONTRACT-altitude correction (round 1, falsified the AC #7/#8 mechanism premise); a CP-owned key-shape fix cross-reference update (round 2, `hitl_responses` re-keyed to `child_run_id`, this file's Depends-on note updated to match); and a branch-vs-main review (round 3, against open PR #1092) that found §2's "AC #3 confirmed" claim empirically FALSE — the cited test file's own doc-comment defers the resume-consume-cycle path per FM-2 — replaced with a genuinely NEW required AC #9 (a net-new e2e test, not a fixture update). Round 4 (branch-vs-main against the round-3 fix commit) found this file's own §2 relabel was incomplete — the footer below still said "one confirmation note (U-RT-95)" after round 3 already made U-RT-95 a genuine amendment; corrected below. Round 4's other 2 findings (a CP-owned resolver-mechanism defect + a CP-plan unit-assignment defect) are entirely CP-owned — see `Implementation_Plan_Control_Plane_v2_42.md`'s own round-4 note; this file required no further content change for those. |
 | Predecessor | `Implementation_Plan_Harness_Runtime_v2_53.md` |
 | Operator authority | Fork ratification 2026-07-23 (Q1/Q2 original); `AskUserQuestion` 2026-07-23 (Q2 carrier-shape reconcile, CP-side) |
 | Co-published artifacts (this arc) | `Spec_Harness_Runtime_v1.md` v1.106; `Spec_Control_Plane_v1_106.md`; `Implementation_Plan_Control_Plane_v2_42.md`; clearance markers for both specs; workspace `CLAUDE.md` + `harness-cp/CLAUDE.md` pointer bumps |
-| Unit-count change | None — single amended-unit-body amendment (U-RT-94) + one confirmation note (U-RT-95) |
+| Unit-count change | None — TWO amended-unit-body amendments (U-RT-94 + U-RT-95, both genuinely amended as of round 3; round-4-corrected footer, U-RT-95 was previously mislabeled here as a "confirmation note") |
 | Cluster-count change | None |
 | DAG topology change | None |
 | Cross-axis cascade | None asserted by this delta beyond the pre-existing U-RT-94 → U-CP-64 edge (unchanged shape); the propagation-mechanism wiring's eventual cross-axis footprint is impl-leg scope-discovery work (§3 deferred row) |
 | Impl leg | NOT bundled — code + tests land as a separate follow-on arc per the B-33/B-59 precedent; the impl leg additionally owes the scope-discovery pass §3 defers, plus the by-execution call-graph verification the spec's §14.8.8.10.5 deliberately declined to assert |
-| Skill discipline | `implementation-planner` Phase-7 revision-pass absorbing upstream Runtime spec v1.106 into one existing unit body + one confirmation note; fidelity-pure amendment-only pass; NO contract addition beyond the spec; NO unit re-decomposition; NO DAG topology change; NO assertion of unverified wiring (corrected from a first draft that did) |
+| Skill discipline | `implementation-planner` Phase-7 revision-pass absorbing upstream Runtime spec v1.106 into two existing unit body amendments (U-RT-94 + U-RT-95); fidelity-pure amendment-only pass; NO contract addition beyond the spec; NO unit re-decomposition; NO DAG topology change; NO assertion of unverified wiring (corrected from a first draft that did) |
 | Date | 2026-07-23 |
