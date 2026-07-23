@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 69
-  open: 0
-  design_substrate_gated: 1
-  registered_finding: 8
+  total: 72
+  open: 1
+  design_substrate_gated: 0
+  registered_finding: 11
   operator_gated: 1
   held: 1
   closed: 58
-  identity_digest: d34cc04dc395e0d1
+  identity_digest: ea3c3de166547720
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -418,10 +418,30 @@ items:
     Codex round 3; scope narrowed after a same-session Codex review of the first attempt)*'
 - id: B-39
   title: Nested paused-child HITL-response ROUTING (per-child operator response delivery)
-  status: design_substrate_gated
+  status: open
   summary: Two or more concurrently-paused peer/nested children share one run-level ResumeContextHolder;
     delivering each its OWN operator response safely is unresolved.
-  close_out: 'A first attempt (ResumeContext.hitl_responses keyed by workflow_id, consumed via non-destructive
+  close_out: 'FINAL STATE (round 4, 2026-07-23 -- read this line, not the chronological
+    history below, for the CURRENT design): ResumeContext.hitl_responses is keyed by
+    the paused childs own run_id (child_snapshot.run_id), NEVER branch_path or workflow_id
+    -- both were tried and found broken across earlier rounds. PausedChildBranchResumeState
+    carries ZERO new fields (no branch_path field exists). CP plan units U-CP-86/88/89
+    are UNAMENDED. The multi-branch fallback-safety requirement (do not misapply one
+    branch''s response to another) is a black-box safety+liveness invariant deferred
+    to the impl-leg resolver (CP spec v1.106 section 1.2 property 4), distinguishing
+    gate-owning branches from transitively-paused container/ancestor branches (property
+    5), stated as a deterministic outcome rule (round-7-sharpened: uniform fallback
+    resolves a gate-owning branch only when it is the sole unaddressed member of the
+    gate-owning set this cycle) -- NOT a prescribed counting/INERT mechanism (an earlier
+    round tried an unscoped version of that, found it strands container branches and
+    is unassignable to any unit). Spec leg LANDED at PR #1092 across 7 same-day
+    correction rounds; impl leg NOT yet opened. THREE follow-ons registered separately:
+    B-69 (resume_handle addressability), B-70 (the identical fallback gap in the shipped
+    effect_fence_resolution_for sibling), and B-71 (operator-facing HITL escalation
+    requests carry no run_id, so peer branches sharing a child_workflow_id produce
+    indistinguishable requests). --- Chronological
+    history below (superseded intermediate states retained for provenance; the FINAL
+    STATE line above is authoritative) --- A first attempt (ResumeContext.hitl_responses keyed by workflow_id, consumed via non-destructive
     peek()) was built, mutation-probed, and reviewed out-of-family -- Codex found 3 real defects, all
     confirmed correct on inspection: (1) peek-only never one-shot-consumes, so a later HITL-composed step
     sharing the same key would silently reuse a stale response; (2) workflow_id is NOT branch-unique --
@@ -442,7 +462,7 @@ items:
     surface). Spec_Control_Plane_v1_100.md''s own change-note explicitly frames (c) as un-designed, not
     merely unimplemented -- status moved registered_finding -> design_substrate_gated to reflect this
     precisely (a Class 1 fork proposing the threading mechanism is the correct next step, before any code,
-    per X-AL-3). Fork FILED 2026-07-23 at `.harness/class_1_fork_b39_nested_hitl_response_threading.md`: grounds the crux precisely (`ctx.resume_context_holder` is one mutable sidecar threaded by reference to every recursion level; `api.resume()`''s own public signature is singular too) and proposes threading `resume_context` BY VALUE through the existing `pause_snapshot_input` recursive plumbing (mirrors the already-correct per-child mechanism) rather than a shared keyed map -- this closes both prior defects (1)+(2) structurally, not by patching. Two genuine operator-gated decisions remain open at the fork''s Q1/Q2 (retire `ResumeContextHolder` for a single top-to-bottom mechanism vs keep it at depth-0; and how `api.resume()` accepts multiple per-child responses in one call, if at all, this arc). Status stays `design_substrate_gated` pending operator ratification. **RATIFIED 2026-07-23 (operator AskUserQuestion): Q1=(A) retire `ResumeContextHolder`; Q2=(A) batched map at the API boundary — the heavier reading on both, since Q2 is the genuine public-API expansion. Opens a spec leg (CP + Runtime spec deltas, clearance markers, plan units) as its own arc next, per the B-33/B-59 spec-leg/impl-leg precedent; not yet built.**'
+    per X-AL-3). Fork FILED 2026-07-23 at `.harness/class_1_fork_b39_nested_hitl_response_threading.md`: grounds the crux precisely (`ctx.resume_context_holder` is one mutable sidecar threaded by reference to every recursion level; `api.resume()`''s own public signature is singular too) and proposes threading `resume_context` BY VALUE through the existing `pause_snapshot_input` recursive plumbing (mirrors the already-correct per-child mechanism) rather than a shared keyed map -- this closes both prior defects (1)+(2) structurally, not by patching. Two genuine operator-gated decisions remain open at the fork''s Q1/Q2 (retire `ResumeContextHolder` for a single top-to-bottom mechanism vs keep it at depth-0; and how `api.resume()` accepts multiple per-child responses in one call, if at all, this arc). Status stays `design_substrate_gated` pending operator ratification. **RATIFIED 2026-07-23 (operator AskUserQuestion): Q1=(A) retire `ResumeContextHolder`; Q2=(A) batched map at the API boundary — the heavier reading on both, since Q2 is the genuine public-API expansion. Opens a spec leg (CP + Runtime spec deltas, clearance markers, plan units) as its own arc next, per the B-33/B-59 spec-leg/impl-leg precedent; not yet built.** ✅ **SPEC LEG LANDED 2026-07-23** — `Spec_Control_Plane_v1_106.md` + `Spec_Harness_Runtime_v1.md` v1.106 + `Implementation_Plan_Control_Plane_v2_42.md` (U-CP-64/86/88/89 amended) + `Implementation_Plan_Harness_Runtime_v2_54.md` (U-RT-94 amended) + both clearance markers. **Q2 REVISED at spec-grounding time via a second operator AskUserQuestion**: empirical grounding found the shipped `ResumeContext.effect_fence_resolutions: dict[str, EffectFenceResolution]` + `effect_fence_resolution_for(key)` sibling mechanism already solves the identical multi-branch-distinct-resolution problem with NO `api.resume()` signature change; the operator selected the keyed-field-inside-ResumeContext reading (`ResumeContext.hitl_responses: dict[str, HITLResult]` + `hitl_response_for(branch_path)`, a verbatim mirror) over the originally-ratified `Mapping[str, ResumeContext]` API-boundary widening. `api.resume()` stays singular. Status flipped `design_substrate_gated` -> `open` (spec-leg gate cleared; impl leg is the next buildable slice, NOT yet opened). ***CONTRACT-ALTITUDE CORRECTION PASS, same day.*** A first draft of the delivery-mechanism sections prescribed exact wiring (execute_workflow gaining resume_context/resolved_hitl_response parameters; attempt_resume as the depth-0 entry point; direct intra-CP recursion for nested children). just codex-review-uncommitted + an Explore grounding pass found 4 P1 defects: 3 wiring claims empirically false against the real call graph (the real depth-0 path is harness_runtime/api.py''s resume() + lifecycle/mcp_server.py; nested-child re-dispatch crosses into harness-runtime''s RuntimeSubAgentDispatcher/child_workflow_runner.py, not a CP-internal recursive call) plus a retry-replay gap (a bare parameter would replay across RetryBreakerFallbackDispatcher retries within one resume cycle, unlike the retired holder''s consume_and_clear()). advisor() recommended pulling the mechanism sections back to CONTRACT altitude (state required properties -- per-branch-distinct delivery, one-shot preserved under retry, no new global sharing -- leave wiring to the impl leg) rather than a 4th unverified mechanism attempt; all 4 spec/plan artifacts + all 4 clearance markers were revised accordingly. A genuinely new spec-level fix also landed: PausedChildBranchResumeState.branch_path (mirroring EffectFencePausedBranchResumeState.idempotency_key''s working precedent), closing the gap where hitl_responses'' keys were otherwise unaddressable by an external caller. CP plan v2.42''s U-CP-86/88/89 amendments were removed (asserted a false call graph); the propagation-mechanism wiring plus a scope-discovery pass across both axes is owed to the impl leg, which is the next buildable slice, NOT yet opened -- code + tests, per the B-33/B-59 precedent. ***SECOND CONTRACT-ALTITUDE CORRECTION PASS, same day (round 2).*** A second just codex-review-uncommitted pass on the round-1-corrected text found the hitl_responses key shape (branch_path) is ALSO wrong -- it collides when two peer branches dispatch the SAME child_workflow_id, since branch_path derives from a workflow_id-scoped action_id with no run-instance component. Grep-verified via compose_child_run_id_seed''s run_idempotency_key = sha256(run_id, workflow_id, ...) folding: run_id, not branch_path/action_id, genuinely propagates run-instance distinctness through arbitrary recursion depth. Fix: hitl_responses re-keyed to the paused child''s own run_id (PausedChildBranchResumeState.child_snapshot.run_id, an EXISTING PauseSnapshot field -- no new carrier field needed); the round-1-added PausedChildBranchResumeState.branch_path field was REMOVED as unnecessary. All 4 spec/plan artifacts + all 4 clearance markers revised again.'
   council: not yet re-evaluated -- the original C7/C8-vs-C1/C5 framing may no longer be the right lens
     once a concrete delivery mechanism is proposed; ground first per this register's own no-parking discipline
     before deciding
@@ -1583,3 +1603,59 @@ items:
   heading: '### B-68 · Protected result store''s opportunistic GC can race a concurrent
     in-flight publication under a short TTL *(registered at the B-65-A impl arc, out-of-family
     Codex round 11 [P2], 2026-07-22)*'
+- id: B-69
+  title: resume_handle crash-recovery resume path cannot address individual paused children
+    for multi-child HITL delivery
+  status: registered_finding
+  summary: api.resume()'s resume_handle mode gives the caller no prior PauseSnapshot to read
+    a paused child's run_id from before resume_context must be constructed, so B-39's hitl_responses
+    keyed-map addressing is unreachable on that path.
+  close_out: Design a durable-pause-state read accessor (Runtime-owned, reads JournalWorkflowPauseStore)
+    a resume_handle caller can invoke before constructing resume_context, to learn currently-paused
+    children's run_ids for the same workflow_id. A genuine new API surface, not a mechanical
+    patch. See .harness/post-phase-8-forward-register.md B-69 for full detail.
+  council: TBD at build time -- narrow implementation-discretion follow-on in scope shape, but
+    the read-accessor's own API design is a real choice worth a dyadic council pass if non-obvious
+    once scoped.
+  heading: '### B-69 · `resume_handle` crash-recovery resume path cannot address individual
+    paused children for multi-child HITL delivery *(registered at the B-39 spec-leg PR #1092,
+    out-of-family Codex round 3 (branch-vs-main), 2026-07-23)*'
+- id: B-70
+  title: effect_fence_resolution_for's uniform-fallback semantics share B-39's cross-branch-misapplication
+    hazard, unfixed in the already-shipped mechanism
+  status: registered_finding
+  summary: The shipped ResumeContext.effect_fence_resolutions/effect_fence_resolution_for mechanism
+    (B-39's own modeling precedent) has the identical uniform-fallback-to-every-unaddressed-branch
+    gap B-39's CP spec v1.106 section 1.2 property 4 just closed for hitl_responses -- unfixed
+    here, since it predates and is out of this arc's scope.
+  close_out: 'ROUND-7-CORRECTED: do not copy a plain count-based rule verbatim -- B-39
+    itself REJECTED an unscoped count-based fallback rule at its own round 4 (strands
+    transitively-paused container branches). Before implementing, first determine
+    whether effect-fence pauses have an analogous container concept under HIERARCHICAL_DELEGATION
+    recursion (unresolved -- grep EffectFencePausedBranchResumeState/effect_fence_paused_branches
+    in pause_resume_protocol_types.py before assuming either way). If containers exist,
+    mirror B-39''s gate-owning/property-5 split; if not, a plain count-based invariant
+    is safe. See .harness/post-phase-8-forward-register.md B-70 for full detail.'
+  council: no -- parity fix mirroring an already-ratified pattern (B-39's own property 4), not
+    a fresh open design question.
+  heading: '### B-70 · `effect_fence_resolution_for`''s uniform-fallback semantics share B-39''s
+    cross-branch-misapplication hazard, unfixed in the already-shipped mechanism *(registered
+    at the B-39 spec-leg PR #1092, out-of-family Codex round 3 (branch-vs-main), 2026-07-23)*'
+- id: B-71
+  title: Operator-facing HITL escalation requests carry no run-instance-distinct correlation
+    identifier
+  status: registered_finding
+  summary: HITLEscalationBrief and the HITL webhook payload derive their identifiers from a
+    workflow_id-scoped action_id (compose_hitl_action_id), not run_id -- two peer branches sharing
+    a child_workflow_id produce byte-identical escalation requests, making B-39's hitl_responses
+    run_id-keyed addressing impossible to use in that exact scenario.
+  close_out: Amend HITLEscalationBrief (and the webhook payload type) to carry a run-instance-distinct
+    correlation identifier -- most naturally the paused child's own run_id, threaded through
+    at HITL-gate composition time. C-CP-28 contract amendment, additive if optional. See .harness/post-phase-8-forward-register.md
+    B-71 for full detail.
+  council: TBD at build time -- likely narrow (mirrors an established field-add pattern), but
+    the operator-facing/webhook-external surface warrants a quick check before assuming so.
+  heading: '### B-71 · Operator-facing HITL escalation requests carry no run-instance-distinct
+    correlation identifier, making `hitl_responses` addressing impossible for peer branches
+    sharing a `child_workflow_id` *(registered at the B-39 spec-leg PR #1092, out-of-family
+    Codex round 6 (branch-vs-main), 2026-07-23)*'
