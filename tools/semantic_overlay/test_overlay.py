@@ -57,9 +57,11 @@ def test_has_any_cite_ignores_sections() -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_cxa_seams_load_33() -> None:
+def test_cxa_seams_load_36() -> None:
+    # B-33 leg (iii) adds 3 NEW CP->IS seams (verify_rotation_window,
+    # RotationWindowCheckStatus, compute_response_hash) — 33 -> 36.
     seams = overlay.load_cxa_seams()
-    assert len(seams) == 33
+    assert len(seams) == 36
     s0 = seams[0]
     assert set(s0) == {"edge_label", "consumer_module", "producer_module", "symbol"}
     # every module name is dotted harness_*
@@ -71,13 +73,13 @@ def test_cxa_seams_load_33() -> None:
 def test_all_cxa_seams_resolve_to_files(graph: dict) -> None:
     # the HARD-gate invariant: no genuine seam may dangle.
     assert graph["orphans"]["cxa_seam_missing_endpoint"] == []
-    assert graph["stats"]["cxa_seams_wired"] == graph["stats"]["cxa_seams_total"] == 33
+    assert graph["stats"]["cxa_seams_wired"] == graph["stats"]["cxa_seams_total"] == 36
 
 
 def test_seams_are_navigable_endpoint_resolved(graph: dict) -> None:
     # the layer code↔code graphs are blind to (stage-01 finding #3): each resolved seam
     # carries both endpoints as files + axes, not just a label.
-    assert len(graph["seams"]) == 33
+    assert len(graph["seams"]) == 36
     rec = graph["indices"]["seam_by_label"]["U-CP-30→U-IS-12"]
     assert rec["consumer_axis"] == "CP" and rec["producer_axis"] == "IS"
     assert rec["consumer_file"].endswith("handoff_context.py")

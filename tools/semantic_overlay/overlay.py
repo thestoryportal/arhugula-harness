@@ -22,7 +22,7 @@ The four layers:
                           `§N.M` sections, parsed from docstrings/comments, plus the
                           design-substrate `C-*` keyspace for contract-without-code
                           orphan reporting.
-  2. **CXA seams**      — the 33 genuine typed cross-axis seams, read code-resident from
+  2. **CXA seams**      — the 36 genuine typed cross-axis seams, read code-resident from
                           `harness-runtime/tests/integration/test_cxa_pattern_p1.py`
                           (`PATTERN_P1_SEAMS`) — NOT the delta-only CXA markdown (v2.19 holds
                           0 physical rows; the canonical tables live at v2.3 + additive deltas
