@@ -98,6 +98,7 @@ from harness_runtime.lifecycle.sub_agent_dispatch import RuntimeSubAgentDispatch
 from harness_runtime.lifecycle.sub_agent_dispatch_executor import (
     RuntimeCapacityAuthorityAdapter,
     SubAgentDispatchExecutor,
+    adopt_or_create_process_capacity_ledger,
 )
 from harness_runtime.lifecycle.sync_dispatcher_facade import (
     materialize_sync_dispatcher_facade,
@@ -617,7 +618,15 @@ async def execute(
     # composer's OFFLOAD_SYNC construction can reference the executor, and
     # frozen into HarnessContext so the CP fan-out reads the configured cap
     # instead of its default-256 fallback.
-    dispatch_executor = SubAgentDispatchExecutor(frame_budget=config.sub_agent_dispatch_max_workers)
+    # U-RT-146 (Runtime spec v1.104 §14.8.10.6) — the FRAME LEDGER (budget/
+    # available accounting) is adopted across sequential `api.run()`
+    # invocations within this process; only the ledger crosses the
+    # bootstrap boundary. A FRESH `SubAgentDispatchExecutor` (worker pool +
+    # `_draining` flag) is still constructed every bootstrap — reusing the
+    # executor object itself would permanently zero out admission on every
+    # bootstrap after its first `drain()`.
+    dispatch_ledger = adopt_or_create_process_capacity_ledger(config.sub_agent_dispatch_max_workers)
+    dispatch_executor = SubAgentDispatchExecutor(ledger=dispatch_ledger)
     ctx.sub_agent_dispatch_executor = dispatch_executor
     ctx.capacity_authority = RuntimeCapacityAuthorityAdapter(dispatch_executor)
 
