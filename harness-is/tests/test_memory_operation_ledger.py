@@ -476,3 +476,64 @@ def test_projection_rebuild_replaces_stale_projection_files(tmp_path: Path) -> N
             "operation_projection": "retrieval_events",
         }
     ]
+
+
+# ---------------------------------------------------------------------------
+# Out-of-family Codex follow-up on U-IS-20 finding #1 — `rotation_correlation_id`
+# (inherited from `StateLedgerEntry`) must be threaded through
+# `MemoryOperationEntry`'s own specialized codec (hash + JSONL round-trip),
+# exactly as the pre-existing `procedural_tier_snapshot_ref` / `branch_metadata`
+# sidecars already are — otherwise a caller-constructed entry carrying the
+# field would silently lose hash-coverage + persistence for it.
+# ---------------------------------------------------------------------------
+
+_ROTATION_UUID = "12345678-1234-5678-1234-567812345678"
+
+
+def test_memory_operation_entry_hashes_rotation_correlation_id_when_present(
+    tmp_path: Path,
+) -> None:
+    """Mutation probe: two entries differing only in `rotation_correlation_id`
+    must produce different response hashes — the field must not be silently
+    dropped by `MemoryOperationEntry`'s own `_canonical_payload`."""
+    without = _payload(0)
+    with_id = MemoryOperationPayload(
+        **{**without.model_dump(), "rotation_correlation_id": _ROTATION_UUID}
+    )
+    append_memory_operation(_ledger_handle(tmp_path / "a"), without)
+    append_memory_operation(_ledger_handle(tmp_path / "b"), with_id)
+    entry_without = read_memory_operation_ledger(_ledger_handle(tmp_path / "a"))[0]
+    entry_with = read_memory_operation_ledger(_ledger_handle(tmp_path / "b"))[0]
+    assert compute_memory_operation_response_hash(
+        entry_without
+    ) != compute_memory_operation_response_hash(entry_with)
+
+
+def test_memory_operation_entry_omits_rotation_correlation_id_key_when_none(
+    tmp_path: Path,
+) -> None:
+    handle = _ledger_handle(tmp_path)
+    append_memory_operation(handle, _payload(0))
+    raw = _json_lines(handle.canonical_path)[0]
+    assert "rotation_correlation_id" not in raw
+
+
+def test_memory_operation_entry_persists_and_round_trips_rotation_correlation_id(
+    tmp_path: Path,
+) -> None:
+    handle = _ledger_handle(tmp_path)
+    payload = MemoryOperationPayload(
+        **{**_payload(0).model_dump(), "rotation_correlation_id": _ROTATION_UUID}
+    )
+    append_memory_operation(handle, payload)
+    raw = _json_lines(handle.canonical_path)[0]
+    assert raw["rotation_correlation_id"] == _ROTATION_UUID
+    entries = read_memory_operation_ledger(handle)
+    assert entries[0].rotation_correlation_id == _ROTATION_UUID
+
+
+def test_memory_operation_payload_rejects_noncanonical_rotation_correlation_id() -> None:
+    with pytest.raises(ValidationError):
+        MemoryOperationPayload(
+            **{**_payload(0).model_dump(), "rotation_correlation_id": "not-a-uuid"}
+        )

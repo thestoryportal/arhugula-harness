@@ -25,7 +25,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Self
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from harness_is.cross_process_ledger_lock import (
     cross_process_read_lock,
@@ -43,6 +43,7 @@ from harness_is.state_ledger_entry_schema import (
     Identifier,
     StateLedgerEntry,
     Timestamp,
+    reject_noncanonical_rotation_correlation_id,
 )
 
 _WRITE_LOCK = threading.Lock()
@@ -186,6 +187,12 @@ class MemoryOperationPayload(BaseModel):
     redaction_event: MemoryRedactionEvent | None = None
     procedural_tier_snapshot_ref: Identifier | None = None
     branch_metadata: BranchMetadata | None = None
+    rotation_correlation_id: str | None = None
+
+    @field_validator("rotation_correlation_id")
+    @classmethod
+    def _validate_rotation_correlation_id(cls, value: str | None) -> str | None:
+        return reject_noncanonical_rotation_correlation_id(value)
 
     @model_validator(mode="after")
     def _projection_matches_kind(self) -> Self:
@@ -295,6 +302,8 @@ def _canonical_payload(entry: MemoryOperationEntry) -> dict[str, object]:
         payload["procedural_tier_snapshot_ref"] = _nfc(entry.procedural_tier_snapshot_ref)
     if entry.branch_metadata is not None:
         payload["branch_metadata"] = _branch_metadata_payload(entry.branch_metadata)
+    if entry.rotation_correlation_id is not None:
+        payload["rotation_correlation_id"] = _nfc(entry.rotation_correlation_id)
     return payload
 
 
@@ -370,6 +379,7 @@ def _deserialize_entry(line: str) -> MemoryOperationEntry:
             else None
         ),
         branch_metadata=_deserialize_branch_metadata(raw.get("branch_metadata")),
+        rotation_correlation_id=raw.get("rotation_correlation_id"),
         operation_kind=MemoryOperationKind(raw["operation_kind"]),
         operation_projection=MemoryOperationProjection(raw["operation_projection"]),
         run_id=raw.get("run_id"),
@@ -446,6 +456,7 @@ def _entry_from_payload(
         prior_event_hash=_prior_event_hash(prior_entry),
         procedural_tier_snapshot_ref=payload.procedural_tier_snapshot_ref,
         branch_metadata=payload.branch_metadata,
+        rotation_correlation_id=payload.rotation_correlation_id,
         operation_kind=payload.operation_kind,
         operation_projection=payload.operation_projection,
         run_id=payload.run_id,
@@ -469,6 +480,7 @@ def _equivalence_payload_from_entry(entry: MemoryOperationEntry) -> dict[str, ob
         "actor": entry.actor,
         "procedural_tier_snapshot_ref": entry.procedural_tier_snapshot_ref,
         "branch_metadata": entry.branch_metadata,
+        "rotation_correlation_id": entry.rotation_correlation_id,
         "operation_kind": entry.operation_kind,
         "operation_projection": entry.operation_projection,
         "run_id": entry.run_id,
@@ -491,6 +503,7 @@ def _equivalence_payload_from_payload(payload: MemoryOperationPayload) -> dict[s
         "actor": payload.actor,
         "procedural_tier_snapshot_ref": payload.procedural_tier_snapshot_ref,
         "branch_metadata": payload.branch_metadata,
+        "rotation_correlation_id": payload.rotation_correlation_id,
         "operation_kind": payload.operation_kind,
         "operation_projection": payload.operation_projection,
         "run_id": payload.run_id,
