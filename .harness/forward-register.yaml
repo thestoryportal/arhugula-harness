@@ -442,7 +442,7 @@ items:
     surface). Spec_Control_Plane_v1_100.md''s own change-note explicitly frames (c) as un-designed, not
     merely unimplemented -- status moved registered_finding -> design_substrate_gated to reflect this
     precisely (a Class 1 fork proposing the threading mechanism is the correct next step, before any code,
-    per X-AL-3).'
+    per X-AL-3). Fork FILED 2026-07-23 at `.harness/class_1_fork_b39_nested_hitl_response_threading.md`: grounds the crux precisely (`ctx.resume_context_holder` is one mutable sidecar threaded by reference to every recursion level; `api.resume()`''s own public signature is singular too) and proposes threading `resume_context` BY VALUE through the existing `pause_snapshot_input` recursive plumbing (mirrors the already-correct per-child mechanism) rather than a shared keyed map -- this closes both prior defects (1)+(2) structurally, not by patching. Two genuine operator-gated decisions remain open at the fork''s Q1/Q2 (retire `ResumeContextHolder` for a single top-to-bottom mechanism vs keep it at depth-0; and how `api.resume()` accepts multiple per-child responses in one call, if at all, this arc). Status stays `design_substrate_gated` pending operator ratification.'
   council: not yet re-evaluated -- the original C7/C8-vs-C1/C5 framing may no longer be the right lens
     once a concrete delivery mechanism is proposed; ground first per this register's own no-parking discipline
     before deciding
