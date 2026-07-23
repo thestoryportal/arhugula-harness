@@ -9,7 +9,7 @@ merge_commit: pending (pre-merge at filing time; B-33-A spec-leg apply PR)
 reviewer_chain:
   - operator ratification (2026-07-21) — option A as recommended
   - advisor() review of the carrier-shape reconciliation (open-dict framing vs the IS typed-sidecar idiom) prior to authoring
-  - out-of-family codex review owed pre-merge (spec leg)
+  - just codex-review round 1 (2026-07-22, PR #1082) — 2 P1 + 4 P2 findings, all fixed same round: strengthened the Option-A/B hash-coverage reconciliation to directly rebut the fork's "hash-covered by the chain itself" Option-B parenthetical; added §7.7 invariant (c) non-emptiness guard (presence/uniqueness both pass vacuously on an empty window) + matching plan AC + witness; added construction-time canonical-UUID rejection to §5.6 + plan AC + witness; corrected "Closes B-33" → "Closes the IS-side half of B-33" (B-33 itself stays open) at 2 sites; refreshed harness-is/CLAUDE.md + .harness/claude-artifact-pointers.md pointers; refreshed the B-33 prose block at .harness/post-phase-8-forward-register.md to match the YAML transition
 ---
 
 # Clearance — Spec_Information_Substrate_v1 v1.12 (B-33-A spec leg)
