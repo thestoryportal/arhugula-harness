@@ -16,10 +16,14 @@ reviewer_chain:
 v1.104→v1.105: NEW §13.6 — rotation-pair-evidence composition-root inputs,
 mirroring §13.5's shape for a SECOND, independent injected verifier (the
 CP-owned `RotationPairEvidenceProvider`, not `AuditWalkVerifier`). Declares
-the one new operator-facing input (a signing-key identity mapping for the
-CP-owned physical-key-distinctness attestation) and the wiring-site
-declaration (the same composition-root surface §13.5 names, extended to
-construct and inject a second, independently-configured adapter). Plan delta
+the one new REQUIRED operator-facing input (a signing-key identity mapping
+for the CP-owned physical-key-distinctness attestation — required, not
+optional: out-of-family review round-1 [P1]) and the wiring-site declaration.
+**Unlike §13.5's `AuditWalkVerifier`, this leg builds ONLY a factory + adapter
+class — there is NO live production injection site** (out-of-family review
+round-2 [P2] correction: `verify_rotation_6_steps` has zero production
+callers today, so nothing constructs-and-injects this adapter yet; the
+factory is available for a future caller to use). Plan delta
 `Implementation_Plan_Harness_Runtime_v2_53.md` (NEW U-RT-147) carries the
 acceptance criteria.
 

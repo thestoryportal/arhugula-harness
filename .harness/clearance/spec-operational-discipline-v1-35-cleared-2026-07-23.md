@@ -17,12 +17,18 @@ v1.34→v1.35: NEW §24.8 (C-OD-24) — a per-correlation-id rotation-pair evide
 accessor (`find_rotation_pair_evidence`) sitting alongside the existing §24.7
 whole-ledger `verify_rotation_pairs` walk, reusing its crypto/structural checks
 via an extracted shared helper. §24.7 itself is unchanged. Absence of a
-matching pair (0 or 1 entries) is explicitly distinguished from a
-`RotationPairIntegrityBreach` (3+ entries, or 2 entries failing the crypto
-checks) — absence is reported as evidence, not raised as tamper. Plan delta
-`Implementation_Plan_Operational_Discipline_v2_30.md` (NEW U-OD-56) carries the
-acceptance criteria, including a retroactive backfill of §24.7's own coverage
-(previously uncovered by any canonical `U-OD-NN` unit).
+matching pair (EXACTLY 0 entries — out-of-family review round-2 [P2]
+correction: a LONE matching entry is NOT absence, see next) is explicitly
+distinguished from a `RotationPairIntegrityBreach` (3+ entries, 2 entries
+failing the crypto checks, OR exactly 1 matching entry — a torn write/deleted
+sibling, structural corruption rather than benign absence) — absence is
+reported as evidence, not raised as tamper. `RotationPairEvidence` also
+carries a `signatures_verified: bool` field, always `False` in this delta (no
+rotation-period-aware cryptographic verifier exists yet — round-2 [P1]):
+structural evidence is necessary but not sufficient for a genuine rotation
+pass. Plan delta `Implementation_Plan_Operational_Discipline_v2_30.md` (NEW
+U-OD-56) carries the acceptance criteria, including a retroactive backfill of
+§24.7's own coverage (previously uncovered by any canonical `U-OD-NN` unit).
 
 CP-owned and Runtime-owned contract text for this same arc live at the
 sibling `Spec_Control_Plane_v1_105.md` and the Runtime v1.104→v1.105 rider —

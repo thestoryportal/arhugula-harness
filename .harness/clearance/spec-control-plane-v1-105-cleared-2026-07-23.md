@@ -21,11 +21,19 @@ verify_rotation_window`), and `PROBE_VERIFY_AT_READ` gains a real OD-anchored
 evidence check via an injected `RotationPairEvidenceProvider`. NEW §20.3.2
 declares that Protocol + its typed `RotationPairEvidence` DTO + two exception
 types (`RotationPairIntegrityBreach`, `RotationPairEvidenceUnavailableError`)
-+ an optional physical-key-distinctness boundary attestation against a
-signing backend's key-identity mapping. Deliberately NOT byte-compatible for
-absent-parameter callers (justified: zero production callers exist today).
-Plan delta `Implementation_Plan_Control_Plane_v2_41.md` (U-CP-44 + U-CP-45
-amendment) carries the acceptance criteria.
++ a REQUIRED (not optional — out-of-family review round-1 [P1] correction:
+absence is an explicit incomplete disposition, never a silent skip) physical-
+key-distinctness boundary attestation against a signing backend's key-identity
+mapping. `verify_rotation_6_steps` also gains a SEPARATE `rotation_window_
+entries` parameter, distinct from the pre-existing `audit_ledger_entries`
+full-genesis-chain parameter (out-of-family review round-2 [P1] correction),
+and `PROBE_VERIFY_AT_READ` additionally requires OD's `signatures_verified`
+field to be `True` — structural evidence alone is necessary but not
+sufficient (round-2 [P1]) — plus an evidence correlation-id echo check
+(round-2 [P2]). Deliberately NOT byte-compatible for absent-parameter callers
+(justified: zero production callers exist today). Plan delta
+`Implementation_Plan_Control_Plane_v2_41.md` (U-CP-44 + U-CP-45 amendment)
+carries the acceptance criteria.
 
 OD-owned and Runtime-owned contract text for this same arc live at the
 sibling `Spec_Operational_Discipline_v1_35.md` and the Runtime v1.104→v1.105
