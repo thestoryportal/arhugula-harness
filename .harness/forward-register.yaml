@@ -430,11 +430,16 @@ items:
     branch''s response to another) is a black-box safety+liveness invariant deferred
     to the impl-leg resolver (CP spec v1.106 section 1.2 property 4), distinguishing
     gate-owning branches from transitively-paused container/ancestor branches (property
-    5) -- NOT a prescribed counting/INERT mechanism (an earlier round tried that, found
-    it strands container branches and is unassignable to any unit). Spec leg LANDED at
-    PR #1092 across 4 same-day correction rounds; impl leg NOT yet opened. Two follow-ons
-    registered separately: B-69 (resume_handle addressability) and B-70 (the identical
-    fallback gap in the shipped effect_fence_resolution_for sibling). --- Chronological
+    5), stated as a deterministic outcome rule (round-7-sharpened: uniform fallback
+    resolves a gate-owning branch only when it is the sole unaddressed member of the
+    gate-owning set this cycle) -- NOT a prescribed counting/INERT mechanism (an earlier
+    round tried an unscoped version of that, found it strands container branches and
+    is unassignable to any unit). Spec leg LANDED at PR #1092 across 7 same-day
+    correction rounds; impl leg NOT yet opened. THREE follow-ons registered separately:
+    B-69 (resume_handle addressability), B-70 (the identical fallback gap in the shipped
+    effect_fence_resolution_for sibling), and B-71 (operator-facing HITL escalation
+    requests carry no run_id, so peer branches sharing a child_workflow_id produce
+    indistinguishable requests). --- Chronological
     history below (superseded intermediate states retained for provenance; the FINAL
     STATE line above is authoritative) --- A first attempt (ResumeContext.hitl_responses keyed by workflow_id, consumed via non-destructive
     peek()) was built, mutation-probed, and reviewed out-of-family -- Codex found 3 real defects, all
@@ -1623,11 +1628,14 @@ items:
     (B-39's own modeling precedent) has the identical uniform-fallback-to-every-unaddressed-branch
     gap B-39's CP spec v1.106 section 1.2 property 4 just closed for hitl_responses -- unfixed
     here, since it predates and is out of this arc's scope.
-  close_out: Extend effect_fence_resolution_for's consumption contract with the same resolver-level
-    multi-child fallback-safety gate (count concurrently-paused children, apply the uniform
-    fallback only when exactly one is paused). Requires a small CP spec section 26.8.1 amendment
-    plus updating its workflow_driver.py callers. See .harness/post-phase-8-forward-register.md
-    B-70 for full detail.
+  close_out: 'ROUND-7-CORRECTED: do not copy a plain count-based rule verbatim -- B-39
+    itself REJECTED an unscoped count-based fallback rule at its own round 4 (strands
+    transitively-paused container branches). Before implementing, first determine
+    whether effect-fence pauses have an analogous container concept under HIERARCHICAL_DELEGATION
+    recursion (unresolved -- grep EffectFencePausedBranchResumeState/effect_fence_paused_branches
+    in pause_resume_protocol_types.py before assuming either way). If containers exist,
+    mirror B-39''s gate-owning/property-5 split; if not, a plain count-based invariant
+    is safe. See .harness/post-phase-8-forward-register.md B-70 for full detail.'
   council: no -- parity fix mirroring an already-ratified pattern (B-39's own property 4), not
     a fresh open design question.
   heading: '### B-70 · `effect_fence_resolution_for`''s uniform-fallback semantics share B-39''s
