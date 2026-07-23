@@ -1,6 +1,8 @@
 # Class 1 Fork — B-33: `verify_rotation_6_steps` cannot prove a rotation boundary occurred
 
 **Status: RATIFIED 2026-07-21 — the operator selected OPTION A AS RECOMMENDED** (open-dict additive IS carrier + 3-step verifier extension + injected OD-join evidence DTO from the composition root; apply arc per §3).
+
+**Apply-arc progress (updated 2026-07-23).** Leg (i) — the IS carrier — LANDED at IS spec v1.11→v1.12 + IS plan v2.8 (U-IS-20, PR #1083). Leg (ii) — the CP+OD+Runtime SPEC+PLAN surface §2 item 2/4 + §3 sequencing calls for — LANDED at CP spec v1.104→v1.105 (§20.3.1 row 7 amended + NEW §20.3.2), OD spec v1.34→v1.35 (NEW §24.8), Runtime spec v1.104→v1.105 (NEW §13.6), plus the corresponding CP/OD/Runtime plan deltas (v2.41/v2.30/v2.53) and CXA v2.22 (NEW §2.3.10, `R-planned`); clearance markers at `.harness/clearance/*-2026-07-23.md`. Leg (iii) — the remaining impl per §3 bullet 2 (the `verify_rotation_6_steps`/OD-accessor/Runtime-adapter CODE + the rotation-absent/torn-window/genuine-rotation-with-OD-join witnesses, all mutation-probed per PD-8) — NOT YET STARTED; this filing's own §3 wait-for-real-caller boundary still holds (no production caller of `execute_key_rotation` is wired at any leg so far, by design).
 Registered pre-B-36; GROUNDED 2026-07-18 (the wait-for-real-caller boundary held:
 `execute_key_rotation` — the sole `verify_rotation_6_steps` caller — still has only test
 consumers, and rotation at MTC is explicitly deferred pending B-33 by both the B-51/B-52/B-54

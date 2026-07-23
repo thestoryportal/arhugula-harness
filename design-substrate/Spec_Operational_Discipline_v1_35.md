@@ -1,0 +1,57 @@
+# Spec: Operational Discipline — v1.35 (delta over v1.34)
+
+*Delta-only file. The v1.34 body + the entire C-OD-01 … C-OD-30 contract body are PRESERVED VERBATIM (delta-only-spec-file convention). This delta carries exactly ONE section — a NEW subsection under C-OD-24 exposing a per-correlation-id accessor over the existing `verify_rotation_pairs` (§24.7) rotation-pair crypto/structural checks, for the RATIFIED B-33 rotation-correlation carrier arc's CP-side consumption. CP-owned contract text (the `verify_rotation_6_steps` extension + the injected `RotationPairEvidenceProvider` Protocol) lives at the same-arc `Spec_Control_Plane_v1_105.md`; Runtime-owned contract text (the composition-root adapter inputs) lives at the same-arc Runtime v1.104 → v1.105 rider — both cross-referenced here, never restated.*
+
+**Filed:** 2026-07-23
+**Authoring authority:** Class 1 fork `.harness/class_1_fork_b33_rotation_correlation_carrier.md` (**RATIFIED 2026-07-21 — the operator selected OPTION A**: open-dict additive IS carrier + 3-step `verify_rotation_6_steps` extension + injected OD-join evidence DTO from the composition root; fork §2 item 4 + §3 sequencing), applied per workspace `CLAUDE.md` §4.3 back-flow + §4.5 clearance discipline. This is the OD-owned leg of the arc's CP+OD+Runtime spec surface (the fork's §3 sequencing places this AFTER the already-landed IS leg — IS spec v1.11→v1.12 + IS plan v2.8, U-IS-20, PR #1083 — and alongside the CP + Runtime riders of the same arc).
+**Predecessor:** `Spec_Operational_Discipline_v1_34.md` (v1.34 — the B-51/B-52/B-54 OD audit-signing amendment arc; cleared 2026-07-18)
+**Revision shape:** Delta-only spec file per the OD delta-only convention. v1.34 + all earlier file bodies PRESERVED VERBATIM. v1.35 carries this change-note + exactly ONE section: NEW §24.8 (C-OD-24) declaring the per-correlation-id rotation-pair evidence accessor. §24.7's existing whole-ledger `verify_rotation_pairs` contract is PRESERVED VERBATIM — this delta ADDS a sibling query surface over the SAME crypto/structural checks, it does not amend or narrow §24.7.
+
+---
+
+## Change-note (v1.34 → v1.35)
+
+**Grounding (verified at filing time, 2026-07-23).** §24.7's `verify_rotation_pairs(ledger: AuditLedger) -> None` (`Spec_Operational_Discipline_v1_31.md` §24.7; landed at `harness-od/src/harness_od/multi_tenant_trace_separation_and_audit_ledger.py:584-666`, PR #938) is an EXTERNAL-AUDITOR WHOLE-LEDGER walk: it groups every entry in the supplied `ledger` by `audit.rotation_correlation_id`, and raises `RotationPairIntegrityBreach` on the FIRST violation found anywhere across the whole ledger. This shape does not answer the question the B-33 CP-side consumer needs: *"does THIS ONE correlation id, supplied by the IS-side carrier under verification, have a valid OD-side dual-signed pair?"* A whole-ledger walk (a) cannot be scoped to one id without re-deriving the grouping logic at the call site, and (b) would incorrectly FAIL an unrelated, otherwise-valid rotation lookup if ANY other correlation id anywhere in the same ledger happens to be malformed — coupling two independent rotation events' verification outcomes.
+
+**The fix (this delta).** NEW §24.8 declares `find_rotation_pair_evidence(ledger: AuditLedger, correlation_id: str) -> RotationPairEvidence` — a per-id QUERY that REUSES §24.7's exact crypto/structural checks (implementation discretion: extracting the existing per-pair-check loop body into a shared private helper consumed by both `verify_rotation_pairs` and this new function — no duplicated cryptographic logic, per the "grep for a sibling doing the same thing correctly" discipline), scoped to entries carrying the SUPPLIED `correlation_id` only. §24.7 itself is UNCHANGED — both surfaces coexist: §24.7 for whole-ledger external-auditor walks, §24.8 for a single targeted lookup by a caller (the B-33 CP-side `verify_rotation_6_steps` consumer, via the composition-root-injected `RotationPairEvidenceProvider`, Runtime-mediated per the same-arc CP + Runtime riders).
+
+**Downstream absorption owed (same arc; flagged per spec-writer discipline, NOT edited here).** The OD plan delta (`Implementation_Plan_Operational_Discipline_v2_30.md`, NEW U-OD-56 — no existing OD plan unit covers §24.7/§24.8 at all; `sign_rotation_pair`/`verify_rotation_pairs` landed via the standalone Phase-7 `B-AUDIT-KEY-ROTATION-RUNTIME` arc without a canonical `U-OD-NN` unit, a real plan-coverage gap this delta's plan leg backfills alongside the new accessor) + the CP plan delta (`Implementation_Plan_Control_Plane_v2_41.md`, U-CP-44/U-CP-45 amendment) + the Runtime plan delta (`Implementation_Plan_Harness_Runtime_v2_53.md`, NEW U-RT-147) — all enumerated at the same-arc riders' change-notes, not repeated here.
+
+---
+
+## §1 — NEW §24.8 (C-OD-24) — per-correlation-id rotation-pair evidence accessor
+
+*NEW subsection under C-OD-24, sibling to §24.7 (`Spec_Operational_Discipline_v1_31.md`). §24.7's whole-ledger `verify_rotation_pairs` contract is PRESERVED VERBATIM and UNCHANGED — this section adds a second, narrower query surface over the same underlying invariants, it does not amend §24.7's signature, return type, or raise behavior.*
+
+**Accessor signature.**
+
+```
+find_rotation_pair_evidence(
+    ledger         : AuditLedger,
+    correlation_id : str,
+) -> RotationPairEvidence
+```
+
+| # | Property | Contract |
+|---|---|---|
+| 1 | **Scope (per-id, not whole-ledger)** | Filters `ledger.entries` for exactly those whose `audit.rotation_correlation_id` (§24.7's `ROTATION_CORRELATION_ID_ATTR`) equals the SUPPLIED `correlation_id`. Entries carrying a DIFFERENT (or absent) correlation id are never inspected, never raise, and never affect this call's result — the per-id scoping §24.7 itself cannot offer. |
+| 2 | **`RotationPairEvidence` (NEW typed evidence carrier)** | `RotationPairEvidence(BaseModel, frozen, extra="forbid")`: `correlation_id: str`; `pair_present: bool`; `outgoing_key_period: int \| None = None`; `incoming_key_period: int \| None = None`; `outgoing_key_id: str \| None = None`; `incoming_key_id: str \| None = None` — the four `_period`/`_id` fields are populated IFF `pair_present` is `True`. This is the "evidence carrier (correlation id + both key periods + pair presence)" the ratified fork's §2 item 4 names. |
+| 3 | **Absence is NOT a breach (0 or 1 matching entries)** | If FEWER than 2 entries in `ledger` carry the supplied `correlation_id`, returns `RotationPairEvidence(correlation_id=correlation_id, pair_present=False)` (all other fields `None`) — this is an ABSENCE-OF-EVIDENCE result, not a `RotationPairIntegrityBreach` raise. A lone tagged entry, or zero, means this OD ledger holds no dual-signed proof for this rotation event; it is the CALLER's contract (the CP-owned `verify_rotation_6_steps`, per the same-arc CP rider) to decide how absence is treated — this accessor does not itself assert whether absence should fail a rotation check, it only reports the fact. |
+| 4 | **Excess IS a breach (3+ matching entries)** | If 3 or more entries carry the supplied `correlation_id`, raises `RotationPairIntegrityBreach` — unambiguous evidence of ledger manipulation targeting this exact id (mirrors §24.7's `!= 2` raise; excess entries under one correlation id cannot arise from the atomic two-row `sign_rotation_pair` write path). |
+| 5 | **Exactly 2 matching entries — REUSES §24.7's crypto/structural checks verbatim** | Runs the SAME checks §24.7's per-pair loop body already performs (implementation discretion: extract the shared per-pair validation into a private helper consumed by both `verify_rotation_pairs` and this accessor — zero duplicated cryptographic logic): each entry's stored `entry_hash` recomputed from its stored `payload` via `compute_entry_hash` and compared; both entries' `audit_signature_key_period` parsed as integers and confirmed CONSECUTIVE; both entries' `audit_signature_key_id` confirmed to DIFFER; the later-period sibling's `payload.prior_entry_hash` confirmed to extend the earlier-period sibling's `entry_hash` (chain-hash continuity across the rotation boundary). ANY of these checks failing RAISES `RotationPairIntegrityBreach` (tamper detection is ALWAYS fail-loud — never silently encoded as a `RotationPairEvidence` field; this accessor never returns a "present but invalid" evidence object). |
+| 6 | **Malformed correlation-id value** | If an entry's `audit.rotation_correlation_id` VALUE is present but not a canonical UUID string, the malformed-value check (§24.7's existing `uuid.UUID(...)` validation, reused here) still applies during the entry-filtering pass — an entry whose stored value happens to string-match the supplied `correlation_id` but fails canonical-UUID validation is treated per §24.7's existing malformed-value raise (`RotationPairIntegrityBreach`), never silently included or excluded. |
+| 7 | **Return-on-success shape** | On success (exactly 2 matching, all checks pass), returns `RotationPairEvidence(correlation_id=correlation_id, pair_present=True, outgoing_key_period=<the lower period>, incoming_key_period=<the higher period>, outgoing_key_id=<the lower-period sibling's key_id>, incoming_key_id=<the higher-period sibling's key_id>)`. |
+
+**Coexistence with §24.7.** `verify_rotation_pairs` (whole-ledger, `Ok(())`/raise) and `find_rotation_pair_evidence` (per-id, typed evidence/raise) are BOTH first-class public surfaces of `multi_tenant_trace_separation_and_audit_ledger.py` — an external-auditor walk uses the former; a caller with one specific correlation id to check (the B-33 CP consumer) uses the latter. Neither supersedes the other; the shared per-pair-check helper (implementation discretion on exact factoring) is the single source of cryptographic truth both surfaces consume.
+
+---
+
+## §2 — Status
+
+One OD-owned section, ratified 2026-07-21 at the fork gate (the operator decision this arc surfaced is ALREADY TAKEN — no further gate on this delta): NEW §24.8 per-correlation-id rotation-pair evidence accessor, coexisting with §24.7's unchanged whole-ledger walk.
+
+v1.34 + earlier PRESERVED VERBATIM per delta-only-spec-file convention — the entire C-OD-01 … C-OD-30 body except the one new surface above. CP spec AMENDED at the SAME-ARC `Spec_Control_Plane_v1_105.md` (separate file — the definition site for the CP-owned `verify_rotation_6_steps` extension + `RotationPairEvidenceProvider` Protocol + physical-key-distinctness boundary attestation this rider is consumed by). Runtime spec AMENDED at the SAME-ARC Runtime v1.104 → v1.105 rider (separate file — the composition-root adapter inputs + wiring site). IS spec UNCHANGED at this leg (the carrier itself already landed at IS v1.11→v1.12). ADR-F1/F2/F3/F5/D1–D8 UNCHANGED. ADD v1.3 + PRD v1.1/v1.2 UNCHANGED. CXA AMENDED at the same arc: `Cross_Axis_Composition_Document_v2_22.md` NEW §2.3.10 registers the runtime-mediated CP→OD rotation-pair-evidence edge (`R-planned` — the impl arc's landing PR flips it `R-live`), mirroring the §2.3.9 precedent. Plan deltas (OD + CP + Runtime) owed in the same arc per the change-note.
+
+Clearance marker owed at `.harness/clearance/spec-operational-discipline-v1-35-cleared-2026-07-23.md` in the landing PR per workspace `CLAUDE.md` §4.5.
+
+2026-07-23.
