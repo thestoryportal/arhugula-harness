@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `fe49064e0fd3` |
+| `workspace_state_hash` | `4f578830368a` |
 | `last_refreshed` | 2026-07-23T00:00:00Z |
-| `git_head` | `7804a4e1` —  |
+| `git_head` | `df7476b6` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 97 |
 
@@ -49,11 +49,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| direct commit df7476b6 | 2026-07-23 | Recorded B-39 fork ratification (operator AskUserQuestion, Q1=A retire ResumeContextHolder, Q2=A batched map at api.resume()) durably in the fork doc, forward-register.yaml, and this file's next-action, so it survives compaction. Spec leg (CP+Runtime deltas, clearance markers, plan units) opens as the next arc, per B-33/B-59 precedent; not yet authored. |
 | PR #1091 | 2026-07-23 | Fixed hook_roadmap_next section-boundary bug (tools/hooks/lib.sh): stops at the next ## heading, not just ---, so the SessionStart hook no longer surfaces a stale resolved R-id from the following section's prose. Regression test added, 27/27 hook lib tests pass. |
 | PR #1090 | 2026-07-23 | Filed B-39 Class 1 fork doc proposing nested paused-child HITL-response threading design (value-threaded resume_context through existing pause_snapshot_input plumbing, replacing the reverted keyed-map attempt); surfaces 2 operator-gated Q1/Q2 decisions; forward-register.yaml close_out updated, status unchanged (design_substrate_gated). Docs-only, no code. |
 | PR #1088 | 2026-07-23 | Fixed 2 stale forward-register statuses: B-33 marked closed (all 3 ratified-fork legs landed, PRs #1082-1084/#1087; 2 residuals registered as separate forward deps); B-59 marked closed (spec+impl landed PRs #1080/#1081 on 2026-07-22, register never updated off pre-ratification operator_gated status) |
 | PR #1084 | 2026-07-23 | B-33-A spec+plan leg (ii): CP+OD+Runtime rider extending verify_rotation_6_steps with real IS-anchored window presence/uniqueness + OD-anchored evidence checks (4 out-of-family review rounds, 24 findings fixed; leg iii impl remains) |
-| PR #1083 | 2026-07-22 | B-33-A impl leg arc (i) merged: U-IS-20 rotation_correlation_id sidecar carrier (IS spec v1.12 sec5.6/sec7.7) - StateLedgerEntry/EntryPayload field + canonical-round-trip UUID validation + omit-when-None hash coverage + verify_rotation_window composed validator. Also fixed a MemoryOperationEntry codec gap (found by codex round 1) + a tautological legacy-round-trip test (found by merge-gate test-witness lens); operator ratified bundling 2 downstream field-set-assertion fixes into this PR per the U-IS-19 (PR 537) precedent after a merge-gate spec-conformance BLOCK on AC 9 wording. Next: B-33-A impl leg arc (ii) - the separate, not-yet-decomposed CP-axis verify_rotation_6_steps extension arc. |
 ---
 
 ---
