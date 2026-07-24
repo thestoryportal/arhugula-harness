@@ -59,13 +59,13 @@
 
 snapshot:
   total: 73
-  open: 0
-  design_substrate_gated: 1
+  open: 1
+  design_substrate_gated: 0
   registered_finding: 11
   operator_gated: 1
   held: 1
   closed: 59
-  identity_digest: d19e0f130c878f8c
+  identity_digest: 29ab1328db55d99c
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -1614,11 +1614,18 @@ items:
   status: registered_finding
   summary: api.resume()'s resume_handle mode gives the caller no prior PauseSnapshot to read
     a paused child's run_id from before resume_context must be constructed, so B-39's hitl_responses
-    keyed-map addressing is unreachable on that path.
-  close_out: Design a durable-pause-state read accessor (Runtime-owned, reads JournalWorkflowPauseStore)
+    keyed-map addressing is unreachable on that path. GENERALIZED 2026-07-24 at B-70 grounding
+    (out-of-family Codex) -- the identical gap applies to effect-fence idempotency_keys, not just
+    HITL child run_ids -- the accessor must expose BOTH identity kinds.
+  close_out: 'Design a durable-pause-state read accessor (Runtime-owned, reads JournalWorkflowPauseStore)
     a resume_handle caller can invoke before constructing resume_context, to learn currently-paused
-    children's run_ids for the same workflow_id. A genuine new API surface, not a mechanical
-    patch. See .harness/post-phase-8-forward-register.md B-69 for full detail.
+    children''s run_ids AND currently-paused effect-fence idempotency_keys for the same workflow_id
+    -- GENERALIZED 2026-07-24 (out-of-family Codex, B-70 spec-leg round 5): a first draft of CP
+    spec v1.107''s resume_handle scope-limit note (section 1) claimed this row already covers
+    effect-fence identities, but this row as then-written named only HITL child run_ids -- the
+    accessor''s scope is widened here to make that claim true, not merely asserted. A genuine
+    new API surface, not a mechanical patch. See .harness/post-phase-8-forward-register.md B-69
+    for full detail.'
   council: TBD at build time -- narrow implementation-discretion follow-on in scope shape, but
     the read-accessor's own API design is a real choice worth a dyadic council pass if non-obvious
     once scoped.
@@ -1629,12 +1636,12 @@ items:
   filing: .harness/class_2_fork_b70_effect_fence_resolution_uniform_fallback.md
   title: effect_fence_resolution_for's uniform-fallback semantics share B-39's cross-branch-misapplication
     hazard, unfixed in the already-shipped mechanism
-  status: design_substrate_gated
+  status: open
   summary: The shipped ResumeContext.effect_fence_resolutions/effect_fence_resolution_for mechanism
     (B-39's own modeling precedent) has the identical uniform-fallback-to-every-unaddressed-branch
     gap B-39's CP spec v1.106 section 1.2 property 4 just closed for hitl_responses -- unfixed
-    here, since it predates and is out of this arc's scope. GROUNDED 2026-07-24 -- confirmed
-    reachable by direct read of workflow_driver.py; needs its own CP spec property before code.
+    here, since it predates and is out of this arc's scope. GROUNDED 2026-07-24; spec leg LANDED
+    2026-07-24 (CP spec v1.107 + plan v2.43). Impl leg not yet opened -- ready for build.
   close_out: 'GROUNDED 2026-07-24 (fork filed, .harness/class_2_fork_b70_effect_fence_resolution_uniform_fallback.md),
     resolving both open questions the round-7 close_out deferred: (1) NO container/gate-owning
     split is needed (unlike B-39''s HITL fix) -- EffectFencePausedBranchResumeState''s own
@@ -1649,14 +1656,28 @@ items:
     section 1.2 property 4''s safety+liveness shape, simpler -- no property-5 equivalent) before
     code, since restricting the auto-fallback changes observable resume behavior of an
     already-cleared mechanism -- impl-to-cleared-spec does not apply. Status flipped
-    registered_finding -> design_substrate_gated accordingly. Recommended property text at the
-    fork doc section 3. Spec-leg not yet opened -- next step once prioritized.'
+    registered_finding -> design_substrate_gated accordingly. **SPEC LEG LANDED 2026-07-24**
+    (operator ratified "open the spec-leg now" via AskUserQuestion) -- Spec_Control_Plane_v1_107.md
+    NEW section 1 (the safety+liveness invariant, sharpened across 5 out-of-family review rounds
+    from the fork''s section 3 draft -- round 1 added the previously-omitted ORCHESTRATOR carrier;
+    round 2 fixed a gap where the LINEAR consume site never calls effect_fence_resolution_for at
+    all and so was not actually gated by the original wording, but its own fix over-corrected;
+    round 3 found round 2''s fix would permanently livelock any 2+-simultaneous-LINEAR-pause
+    resume, corrected to genuine map-addressability via the LINEAR carrier''s already-existing
+    idempotency_key field; round 4 added a resume_handle scope-limit note mirroring B-69; no
+    property-5 equivalent still holds per the grounding above) + Implementation_Plan_Control_Plane_v2_43.md
+    (ONE deferred coverage-matrix row, zero unit amendment -- mirrors how v2.42 section 5 deferred
+    the parallel hitl_responses property 4/5 invariants) + 2 clearance markers. Status flipped
+    design_substrate_gated -> open (spec-leg gate cleared; impl leg -- the resolver''s tree-walk
+    enumeration of the unaddressed effect-fence-pause set, wired at the LINEAR + ORCHESTRATOR +
+    two fan-out consume sites -- is the next buildable slice, NOT yet opened, per the B-33/B-39/B-59
+    precedent).'
   council: no -- parity fix mirroring an already-ratified pattern (B-39's own property 4), not
     a fresh open design question; grounding confirmed no cross-domain tension.
   heading: '### B-70 · `effect_fence_resolution_for`''s uniform-fallback semantics share B-39''s
     cross-branch-misapplication hazard, unfixed in the already-shipped mechanism *(registered
     at the B-39 spec-leg PR #1092, out-of-family Codex round 3 (branch-vs-main), 2026-07-23;
-    GROUNDED + fork filed 2026-07-24)*'
+    GROUNDED + fork filed 2026-07-24; SPEC LEG LANDED 2026-07-24 — CP spec v1.107 + plan v2.43)*'
 - id: B-71
   title: Operator-facing HITL escalation requests carry no run-instance-distinct correlation
     identifier
