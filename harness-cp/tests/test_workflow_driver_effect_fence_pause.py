@@ -227,6 +227,7 @@ def _run(
     ctx: DriverContext,
     pause_snapshot_input: Any = None,
     resume_context: Any = None,
+    hitl_uniform_fallback_eligible_run_id: str | None = None,
 ) -> Any:
     return execute_workflow(
         _manifest(),
@@ -237,6 +238,7 @@ def _run(
         step_dispatchers=_registry(dispatcher),
         pause_snapshot_input=pause_snapshot_input,
         resume_context=resume_context,
+        hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
     )
 
 
@@ -492,7 +494,17 @@ def test_fresh_non_resuming_dispatch_never_receives_hitl_delivery_cell() -> None
     trivially true at a fresh dispatch's own start (resume_at=0), so the
     uniform fallback would misroute a DIFFERENT child's operator answer onto
     this unrelated step — the multi-child uniform-fallback misapplication risk
-    the CP spec's own round-3 correction history warned about."""
+    the CP spec's own round-3 correction history warned about.
+
+    merge-gate test-witness finding: `hitl_uniform_fallback_eligible_run_id`
+    is set to THIS run's own `run_id` ("run-1", matching `_run`'s fixed
+    `run_id="run-1"`) so the `elif run_id == hitl_uniform_fallback_eligible_
+    run_id` disjunct at the delivery site would ALSO be satisfied — isolating
+    the mutation probe to the `resume_snapshot is not None and pause_reason
+    is HITL_PENDING` gate this test claims to pin. Without that explicit
+    match, `hitl_uniform_fallback_eligible_run_id` defaulted to `None` and
+    the elif was trivially unsatisfied regardless of the gate, so deleting
+    the gate alone would not have flipped this test."""
     from harness_core.identity import EntryID
     from harness_cp.hitl_placement import HITLResult
     from harness_cp.hitl_response_palette import HITLResponse
@@ -512,8 +524,15 @@ def test_fresh_non_resuming_dispatch_never_receives_hitl_delivery_cell() -> None
     # A FRESH dispatch — no pause_snapshot_input at all (resume_at=0 by default,
     # not because s0 is "the resumed step"). resume_context is still forwarded
     # (mirrors a sibling child in a fan-out resume that also received the
-    # parent's threaded resume_context verbatim).
-    result = _run(dispatcher=rec, ctx=ctx, resume_context=resume_ctx)
+    # parent's threaded resume_context verbatim). hitl_uniform_fallback_
+    # eligible_run_id deliberately matches run_id so ONLY the pause-gate
+    # (not the eligibility check) is under test.
+    result = _run(
+        dispatcher=rec,
+        ctx=ctx,
+        resume_context=resume_ctx,
+        hitl_uniform_fallback_eligible_run_id="run-1",
+    )
 
     assert result.status is RunStatus.SUCCESS
     assert len(rec.seen) == 2  # s0, s1 — both dispatched fresh

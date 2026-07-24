@@ -773,21 +773,31 @@ def test_resume_context_forwarded_to_runner_for_downward_threading(tmp_path: Pat
     pass-through operator resume payload) is forwarded to the child runner as
     `resume_context` so the recursive `execute_workflow` call can resolve the
     child's OWN effect-fence + per-branch HITL delivery. `None` on a normal
-    (non-resume) dispatch."""
+    (non-resume) dispatch. Also pins `hitl_uniform_fallback_eligible_run_id`'s
+    identical pass-through forwarding (same mechanism, merge-gate test-witness
+    finding — this field was forwarded but never asserted anywhere)."""
     from harness_cp.pause_resume_protocol_types import ResumeContext
 
     dispatcher, runner, _ = _dispatcher(tmp_path)
 
-    # Normal dispatch → runner receives resume_context=None.
+    # Normal dispatch → runner receives resume_context=None +
+    # hitl_uniform_fallback_eligible_run_id=None.
     dispatcher.dispatch(_binding(), _step(), step_context=_step_context())
     assert runner.calls[-1]["resume_context"] is None
+    assert runner.calls[-1]["hitl_uniform_fallback_eligible_run_id"] is None
 
     # Resume dispatch → the step context carries the operator's resume payload →
     # forwarded verbatim (the SAME object, not a copy — no re-resolution needed).
     resume_ctx = ResumeContext()
-    step_context_with_resume = _step_context().model_copy(update={"resume_context": resume_ctx})
+    step_context_with_resume = _step_context().model_copy(
+        update={
+            "resume_context": resume_ctx,
+            "hitl_uniform_fallback_eligible_run_id": "run-eligible-child",
+        }
+    )
     dispatcher.dispatch(_binding(), _step(), step_context=step_context_with_resume)
     assert runner.calls[-1]["resume_context"] is resume_ctx
+    assert runner.calls[-1]["hitl_uniform_fallback_eligible_run_id"] == "run-eligible-child"
 
 
 def test_child_runner_resume_workflow_id_mismatch_fails_closed() -> None:
