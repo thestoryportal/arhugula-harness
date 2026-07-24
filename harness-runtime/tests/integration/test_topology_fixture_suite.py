@@ -121,6 +121,7 @@ class _MockChildWorkflowRunner:
         pause_snapshot_input: Any = None,
         child_run_id_seed: str | None = None,
         resume_context: Any = None,
+        hitl_uniform_fallback_eligible_run_id: str | None = None,
     ) -> RunResult:
         # B-HIERARCHICAL-PAUSE — accept the additive resume-snapshot kwarg (None on a
         # first dispatch); the widened ChildWorkflowRunner Protocol forwards it.
@@ -128,7 +129,14 @@ class _MockChildWorkflowRunner:
         # child run_id seed (None for a non-recoverable / non-fanout child).
         # B-39 Slice B — accept the additive resume-context payload (None on a
         # non-resume dispatch); forwarded verbatim by the widened Protocol.
-        _ = (pause_snapshot_input, child_run_id_seed, resume_context)
+        # B-39 Slice B, codex round-2 [P1] fix — accept the additive property-4-safe
+        # uniform-fallback eligibility payload.
+        _ = (
+            pause_snapshot_input,
+            child_run_id_seed,
+            resume_context,
+            hitl_uniform_fallback_eligible_run_id,
+        )
         self.calls.append({"workflow_id": workflow_id, "manifest_entry": manifest_entry})
         return RunResult(
             workflow_id=workflow_id,

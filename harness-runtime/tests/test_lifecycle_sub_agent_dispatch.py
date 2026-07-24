@@ -252,6 +252,7 @@ class _MockChildWorkflowRunner:
         pause_snapshot_input: Any = None,
         child_run_id_seed: str | None = None,
         resume_context: Any = None,
+        hitl_uniform_fallback_eligible_run_id: str | None = None,
     ) -> RunResult:
         self.calls.append(
             {
@@ -269,6 +270,9 @@ class _MockChildWorkflowRunner:
                 "child_run_id_seed": child_run_id_seed,
                 # B-39 Slice B — the operator's resume payload, forwarded verbatim.
                 "resume_context": resume_context,
+                # B-39 Slice B, codex round-2 [P1] fix — the property-4-safe uniform-
+                # fallback eligibility, forwarded verbatim.
+                "hitl_uniform_fallback_eligible_run_id": hitl_uniform_fallback_eligible_run_id,
             }
         )
         return self.next_result

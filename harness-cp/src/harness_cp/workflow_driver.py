@@ -76,7 +76,7 @@ from harness_cp.handoff_context import (
     RetryHistory,
     StateSummary,
 )
-from harness_cp.hitl_placement import HITLPlacement
+from harness_cp.hitl_placement import HITLPlacement, HITLResult
 from harness_cp.pause_resume_protocol import (
     CP_FAIL_PAUSE_SNAPSHOT_CORRUPTION,
     CP_FAIL_RESUME_MATERIAL_DIFF_DETECTED,
@@ -2662,6 +2662,63 @@ def _record_reconciler_fanout_resume_finalized(
         record(run_idempotency_key)
 
 
+def _collect_gate_owning_run_ids(snapshot: PauseSnapshot) -> list[str]:
+    """Recursively collect every GATE-OWNING branch's `run_id` under `snapshot`.
+
+    B-39 Slice B (CP spec v1.106 §1.2 properties 4+5) — a node is
+    gate-owning iff its OWN `pause_reason` is `HITL_PENDING` (it dispatched
+    directly into a HITL gate); this is mutually exclusive with carrying a
+    `fan_out_resume`/`peer_fan_out_resume` (a container/ancestor branch,
+    paused only because an unresolved descendant exists below it — property
+    5 — which is never itself gate-owning and is recursed into
+    unconditionally, never added to this set). `HandoffResumeState` /
+    `EvaluatorOptimizerResumeState` carry no `paused_child_branches` (no
+    nested-child-pause mechanism exists for those topologies), so only the
+    two fan-out carriers are walked.
+    """
+    if snapshot.pause_reason is WorkflowPauseReason.HITL_PENDING:
+        return [snapshot.run_id]
+    resume_state = snapshot.fan_out_resume or snapshot.peer_fan_out_resume
+    if resume_state is None:
+        return []
+    run_ids: list[str] = []
+    for paused_child in resume_state.paused_child_branches:
+        run_ids.extend(_collect_gate_owning_run_ids(paused_child.child_snapshot))
+    return run_ids
+
+
+def compute_hitl_uniform_fallback_eligible_run_id(
+    root_snapshot: PauseSnapshot | None,
+    resume_context: ResumeContext | None,
+) -> str | None:
+    """The SOLE gate-owning branch's `run_id` the uniform `hitl_response`
+    fallback may resolve this resume cycle, or `None` when zero or 2+
+    gate-owning branches are unaddressed by `resume_context.hitl_responses`.
+
+    CP spec v1.106 §1.2 property 4 (round-7, deterministic safety rule):
+    "the uniform `hitl_response` fallback MAY resolve a gate-owning branch's
+    `hitl_response_for(child_run_id)` call ONLY when that branch is the SOLE
+    member of the unaddressed gate-owning set this cycle." This MUST be
+    computed ONCE against the TRUE ROOT `PauseSnapshot` (the caller-supplied
+    `pause_snapshot`/`pause_snapshot_input` at the depth-0 `resume()` call,
+    BEFORE any recursion narrows it to a subtree) and threaded down
+    UNCHANGED to every recursion level — a nested child's own
+    `pause_snapshot_input` is only ITS OWN subtree and structurally cannot
+    see sibling branches paused elsewhere in the tree, so recomputing this
+    independently at each recursion level cannot satisfy property 4 (a
+    lone-looking gate-owning branch may have an unaddressed sibling
+    elsewhere in the full tree it has no visibility into).
+    """
+    if root_snapshot is None or resume_context is None:
+        return None
+    gate_owning_run_ids = _collect_gate_owning_run_ids(root_snapshot)
+    hitl_responses = resume_context.hitl_responses or {}
+    unaddressed = [rid for rid in gate_owning_run_ids if rid not in hitl_responses]
+    if len(unaddressed) == 1:
+        return unaddressed[0]
+    return None
+
+
 def execute_workflow(
     manifest_entry: WorkflowManifestEntry,
     steps: Sequence[WorkflowStep],
@@ -2674,6 +2731,7 @@ def execute_workflow(
     reconstruct_final_state: bool = True,
     sub_agent_descent: bool = False,
     resume_context: ResumeContext | None = None,
+    hitl_uniform_fallback_eligible_run_id: str | None = None,
 ) -> RunResult:
     """Execute the workflow per C-CP-25 §25.3 happy-path discipline.
 
@@ -2914,6 +2972,7 @@ def execute_workflow(
             # B-39 Slice B — the operator's resume payload, threaded verbatim (this
             # execute_workflow call's own top-level parameter; unmodified pass-through).
             resume_context=resume_context,
+            hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
         )
 
         # C-OD-25 §25.1 close-time attributes (4 of 12). Outcome enum serializes
@@ -2951,6 +3010,7 @@ def _execute_workflow_body(
     reconstruct_final_state: bool = True,
     sub_agent_descent: bool = False,
     resume_context: ResumeContext | None = None,
+    hitl_uniform_fallback_eligible_run_id: str | None = None,
 ) -> tuple[RunResult, int]:
     """Execute the workflow body within the workflow.envelope OTel span.
 
@@ -3998,6 +4058,7 @@ def _execute_workflow_body(
             synthesis_step=_synthesis_step,
             sub_agent_descent=sub_agent_descent,
             resume_context=resume_context,
+            hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
         )
     if strategy is _DriverStrategyStatus.EVALUATOR_OPTIMIZER:
         return _execute_evaluator_optimizer(
@@ -4014,6 +4075,7 @@ def _execute_workflow_body(
             resume_snapshot=resume_snapshot,
             sub_agent_descent=sub_agent_descent,
             resume_context=resume_context,
+            hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
         )
     if strategy is _DriverStrategyStatus.ORCHESTRATOR_WORKERS:
         # B-POSTJOIN-LLM-SYNTHESIS (CP spec v1.54 §3) — carve an opt-in terminal
@@ -4051,6 +4113,7 @@ def _execute_workflow_body(
             synthesis_step=_synthesis_step,
             sub_agent_descent=sub_agent_descent,
             resume_context=resume_context,
+            hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
         )
     if strategy is _DriverStrategyStatus.HIERARCHICAL_DELEGATION:
         # B-HIERARCHICAL-PAUSE (R-FS-1) — HIERARCHICAL now threads the resume
@@ -4086,6 +4149,7 @@ def _execute_workflow_body(
             synthesis_step=_synthesis_step,
             sub_agent_descent=sub_agent_descent,
             resume_context=resume_context,
+            hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
         )
     if strategy is _DriverStrategyStatus.DECENTRALIZED_HANDOFF:
         return _execute_decentralized_handoff(
@@ -4103,6 +4167,7 @@ def _execute_workflow_body(
             resume_snapshot=resume_snapshot,
             sub_agent_descent=sub_agent_descent,
             resume_context=resume_context,
+            hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
         )
 
     # Selective per-run replay-resumption via N-lookup over the existing
@@ -4517,13 +4582,32 @@ def _execute_workflow_body(
     # default and receive an answer meant for a DIFFERENT paused child —
     # exactly the multi-child uniform-fallback misapplication risk the CP
     # spec's own round-3 correction history warned about.
+    # codex round-2 [P1] (CP spec v1.106 §1.2 property 4, round-7 deterministic
+    # safety rule): a map HIT on `resume_context.hitl_responses` is always safe
+    # (it is addressed to THIS run_id specifically). The UNIFORM `hitl_response`
+    # fallback is safe ONLY when this run_id is the sole member of the
+    # "unaddressed gate-owning set" for the whole resume cycle — computed ONCE
+    # at the true root (see `compute_hitl_uniform_fallback_eligible_run_id`'s
+    # docstring for why this cannot be recomputed locally at this recursion
+    # level) and threaded down as `hitl_uniform_fallback_eligible_run_id`. When
+    # 2+ gate-owning siblings are unaddressed, EVERY one of them must leave
+    # `hitl_delivery_cell` unset here so the dispatcher's existing INERT
+    # re-pause applies — never an auto-re-fire, never a cross-branch
+    # misattribution of a response intended for a different sibling.
     hitl_delivery_cell: HITLDeliveryCell | None = None
     if (
         resume_context is not None
         and resume_snapshot is not None
         and resume_snapshot.pause_reason is WorkflowPauseReason.HITL_PENDING
     ):
-        _resolved_hitl = resume_context.hitl_response_for(run_id)
+        _resolved_hitl: HITLResult | None = None
+        _mapped_hitl = (
+            resume_context.hitl_responses.get(run_id) if resume_context.hitl_responses else None
+        )
+        if _mapped_hitl is not None:
+            _resolved_hitl = _mapped_hitl
+        elif run_id == hitl_uniform_fallback_eligible_run_id:
+            _resolved_hitl = resume_context.hitl_response
         if _resolved_hitl is not None:
             hitl_delivery_cell = HITLDeliveryCell(_resolved_hitl)
     for step_index, step in enumerate(steps[resume_at:], start=resume_at):
@@ -4798,6 +4882,7 @@ def _execute_workflow_body(
             # step (a `RuntimeSubAgentDispatcher` reads it off a SUB_AGENT_DISPATCH
             # step's context to forward into the recursive `execute_workflow` call).
             resume_context=resume_context,
+            hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
             # B-39 Slice B — the per-branch one-shot HITL delivery cell, set ONLY on
             # the RESUMED step (mirrors `effect_fence_resolution` immediately above).
             hitl_delivery_holder=(hitl_delivery_cell if step_index == resume_at else None),
@@ -7163,6 +7248,7 @@ def _execute_parallelization(
     synthesis_step: WorkflowStep | None = None,
     sub_agent_descent: bool = False,
     resume_context: ResumeContext | None = None,
+    hitl_uniform_fallback_eligible_run_id: str | None = None,
 ) -> tuple[RunResult, int]:
     """Execute the `PARALLELIZATION` fan-out-barrier-aggregate strategy (U-CP-86).
 
@@ -7473,6 +7559,7 @@ def _execute_parallelization(
         # B-39 Slice B — plain pass-through; branch children inherit it via
         # compose_branch_child_context's model_copy (deliberately not reset).
         resume_context=resume_context,
+        hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
     )
 
     # R-003 active-workflow-context sidecar (resolved once per fan-out; the same
@@ -9768,6 +9855,7 @@ def _execute_evaluator_optimizer(
     resume_snapshot: PauseSnapshot | None = None,
     sub_agent_descent: bool = False,
     resume_context: ResumeContext | None = None,
+    hitl_uniform_fallback_eligible_run_id: str | None = None,
 ) -> tuple[RunResult, int]:
     """Execute the `EVALUATOR_OPTIMIZER` generate→evaluate→regenerate loop (U-CP-87).
 
@@ -10056,6 +10144,7 @@ def _execute_evaluator_optimizer(
             sub_agent_descent=sub_agent_descent,
             # B-39 Slice B — plain pass-through (no fan-out at this strategy).
             resume_context=resume_context,
+            hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
         )
         # B-NONLINEAR-OVERRIDE-PROVENANCE — buffer the per-step override entry
         # BEFORE dispatch (mirrors the linear path's pre-dispatch emission). A
@@ -10504,6 +10593,7 @@ def _execute_orchestrator_workers(
     synthesis_step: WorkflowStep | None = None,
     sub_agent_descent: bool = False,
     resume_context: ResumeContext | None = None,
+    hitl_uniform_fallback_eligible_run_id: str | None = None,
 ) -> tuple[RunResult, int]:
     """Execute the `ORCHESTRATOR_WORKERS` orchestrator-dispatch-collect strategy (U-CP-88).
 
@@ -11014,6 +11104,7 @@ def _execute_orchestrator_workers(
         # B-39 Slice B — plain pass-through; workers inherit it via
         # compose_branch_child_context's model_copy (deliberately not reset).
         resume_context=resume_context,
+        hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
     )
     if _is_resume:
         # B-FANOUT-PAUSE — the orchestrator already ran in the ORIGINAL envelope
@@ -13466,6 +13557,7 @@ def _execute_hierarchical_delegation(
     synthesis_step: WorkflowStep | None = None,
     sub_agent_descent: bool = False,
     resume_context: ResumeContext | None = None,
+    hitl_uniform_fallback_eligible_run_id: str | None = None,
 ) -> tuple[RunResult, int]:
     """Execute the `HIERARCHICAL_DELEGATION` recursive bounded-fan-out strategy (U-CP-89).
 
@@ -13581,6 +13673,7 @@ def _execute_hierarchical_delegation(
         synthesis_step=synthesis_step,
         sub_agent_descent=sub_agent_descent,
         resume_context=resume_context,
+        hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
     )
 
 
@@ -13660,6 +13753,7 @@ def _execute_decentralized_handoff(
     resume_snapshot: PauseSnapshot | None = None,
     sub_agent_descent: bool = False,
     resume_context: ResumeContext | None = None,
+    hitl_uniform_fallback_eligible_run_id: str | None = None,
 ) -> tuple[RunResult, int]:
     """Execute the `DECENTRALIZED_HANDOFF` single-owner sequential handoff strategy (U-CP-90).
 
@@ -13974,6 +14068,7 @@ def _execute_decentralized_handoff(
             # B-39 Slice B — plain pass-through; stage_ctx inherits it via
             # compose_branch_child_context's model_copy (deliberately not reset).
             resume_context=resume_context,
+            hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
         )
         # Single owner → branch_index 0 (no siblings; causality rides the chained
         # parent_action_id, NOT the fan-out ordinal). step_index = the declared stage

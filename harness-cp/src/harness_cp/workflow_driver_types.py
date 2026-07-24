@@ -481,6 +481,30 @@ class StepExecutionContext(BaseModel):
     pre-arc (a non-resume dispatch, or a resume with no HITL/effect-fence
     ambiguity, sees no behavior change)."""
 
+    hitl_uniform_fallback_eligible_run_id: str | None = None
+    """B-39 impl leg Slice B, codex round-2 [P1] fix (CP spec v1.106 §1.2
+    property 4, round-7 deterministic safety rule) — the SOLE gate-owning
+    branch's `run_id` (if any) the uniform `hitl_response` fallback may
+    resolve THIS resume cycle. Computed ONCE, at the true depth-0 root
+    (`harness_runtime/lifecycle/mcp_server.py`, via
+    `compute_hitl_uniform_fallback_eligible_run_id` against the operator's
+    ORIGINAL, un-narrowed root `PauseSnapshot`), and threaded down
+    UNCHANGED to every recursion level — exactly like `resume_context`
+    above (plain immutable pass-through, safe to share the SAME value
+    across every branch of a fan-out; branch children inherit it verbatim
+    via `compose_branch_child_context`'s `model_copy`, deliberately NOT
+    reset there, unlike the one-shot `hitl_delivery_holder` below). It
+    CANNOT be recomputed locally at a nested recursion level — a child's
+    own `pause_snapshot_input` is only its own subtree and has no
+    visibility into sibling branches paused elsewhere in the full tree.
+
+    `None` means either no gate-owning branch is paused this cycle, or 2+
+    are unaddressed by `resume_context.hitl_responses` (in which case NONE
+    of them may use the uniform fallback — every one re-pauses INERT
+    rather than risk a cross-branch misattribution). Same hash-inert /
+    per-step-transient posture as `resume_context`; `None` default →
+    byte-identical to pre-arc."""
+
     hitl_delivery_holder: HITLDeliveryCell | None = None
     """B-39 impl leg Slice B (CP spec v1.106 §1) — the per-branch ONE-SHOT delivery
     cell for the operator's resolved HITL response, replacing the retired
