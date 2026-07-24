@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `0c56c4777d7b` |
-| `last_refreshed` | 2026-07-24T15:52:08Z |
-| `git_head` | `90668995` —  |
+| `workspace_state_hash` | `302c326fae3d` |
+| `last_refreshed` | 2026-07-24T15:58:04Z |
+| `git_head` | `d7662563` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 98 |
 
@@ -49,11 +49,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| direct commit d7662563 | 2026-07-24 | Pure single-file terminating refresh (fixed point) — the prior commit (d7662563) touched both roadmap_status.md and roadmap_drift_log_archive.md, disqualifying it from the codex-context-guard's exact-file-set refresh-shape check; this commit touches roadmap_status.md ONLY and pins the hash to d7662563. |
 | direct commit 90668995 | 2026-07-24 | Terminating refresh for the B-70 grounding + fork-filing commit (90668995) — corrects the anchor hash to this exact commit and the drift-log cap (11->10 rows, oldest archived) that CI's arc-ledger tally gate flagged. |
 | direct commit (this refresh) | 2026-07-24 | Autonomous-loop grounding pass: B-70 GROUNDED + Class 2 fork filed (`.harness/class_2_fork_b70_effect_fence_resolution_uniform_fallback.md`), status flipped registered_finding -> design_substrate_gated; corrected stale Next-action prose that still pointed at R-600 cadence-9's tripped cadence after PR #1100 had already closed it. |
 | PR #1100 | 2026-07-24 | R-600 cadence-9: PD-9 adversarial-review-loop non-convergence discriminators promoted to Project_Workflow_v1_19.md |
 | PR #1098 | 2026-07-24 | Corrected B-39's stale forward-register row (flipped open -> closed with pr reference now that spec leg + both impl-leg slices are merged) and roadmap_status.md's stale Next-action prose (still described Slice B as unstarted). |
-| PR #1096 | 2026-07-24 | B-39 impl-leg Slice B: per-branch HITL delivery mechanism (HITLDeliveryCell + hitl_responses map + uniform-fallback eligibility per CP spec v1.106 §1.2 properties 4/5), driven through 6 codex-review rounds + 3-lens merge-gate to convergence. Round-4 P1 (ancestor SUB_AGENT_BOUNDARY gate re-fire stranding a deeper-paused child's cursor) grounded as reachable-but-pre-existing/orthogonal, registered as B-72 (advisor-endorsed, merge-gate-endorsed) rather than patched blind. |
 ---
 
 ---
