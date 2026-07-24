@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `ccfe42fe2781` |
-| `last_refreshed` | 2026-07-24T15:41:27Z |
-| `git_head` | `8ceab938` —  |
+| `workspace_state_hash` | `0c56c4777d7b` |
+| `last_refreshed` | 2026-07-24T15:52:08Z |
+| `git_head` | `90668995` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 98 |
 
@@ -49,11 +49,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| direct commit 90668995 | 2026-07-24 | Terminating refresh for the B-70 grounding + fork-filing commit (90668995) — corrects the anchor hash to this exact commit and the drift-log cap (11->10 rows, oldest archived) that CI's arc-ledger tally gate flagged. |
 | direct commit (this refresh) | 2026-07-24 | Autonomous-loop grounding pass: B-70 GROUNDED + Class 2 fork filed (`.harness/class_2_fork_b70_effect_fence_resolution_uniform_fallback.md`), status flipped registered_finding -> design_substrate_gated; corrected stale Next-action prose that still pointed at R-600 cadence-9's tripped cadence after PR #1100 had already closed it. |
 | PR #1100 | 2026-07-24 | R-600 cadence-9: PD-9 adversarial-review-loop non-convergence discriminators promoted to Project_Workflow_v1_19.md |
 | PR #1098 | 2026-07-24 | Corrected B-39's stale forward-register row (flipped open -> closed with pr reference now that spec leg + both impl-leg slices are merged) and roadmap_status.md's stale Next-action prose (still described Slice B as unstarted). |
 | PR #1096 | 2026-07-24 | B-39 impl-leg Slice B: per-branch HITL delivery mechanism (HITLDeliveryCell + hitl_responses map + uniform-fallback eligibility per CP spec v1.106 §1.2 properties 4/5), driven through 6 codex-review rounds + 3-lens merge-gate to convergence. Round-4 P1 (ancestor SUB_AGENT_BOUNDARY gate re-fire stranding a deeper-paused child's cursor) grounded as reachable-but-pre-existing/orthogonal, registered as B-72 (advisor-endorsed, merge-gate-endorsed) rather than patched blind. |
-| PR #1094 | 2026-07-23 | B-39 impl leg slice A: ResumeContext.hitl_responses carrier landed (CP spec v1.106 sec0, CP plan v2.42 U-CP-64), byte-exact, 34 tests, 3 codex rounds, merge-gate 3-lens all-approve (round 2 after test-witness fix) |
 ---
 
 ---
@@ -115,7 +115,6 @@ _Showing the 10 most recent drift/reconciliation events. The full audit history 
 | 2026-07-11 | **Post-#935 terminating refresh — PR #935 B-18-KEEPALIVE merged at `f86ddfa5`; §12.2 owed follow-on.** | Hash `6ae1095b56c9` → `6f4ec726983a` (state at `f86ddfa5`, open PRs empty, fork count 88, batch-57). PR #935 closes B-18-KEEPALIVE (R-FS-2 Wave 1 first arc): boot-time `max_tokens=1` Anthropic prompt-cache prewarm + 240s daemon keep-alive; `PrewarmOutcome(StrEnum)` + `RuntimeLLMDispatcher.prewarm()`; `HarnessContext.bare_llm_dispatcher` stash; stage-5 best-effort prewarm; `_keepalive_loop` (1h-TTL excluded, 3-failure self-disable, cancel+await before `_shutdown`); runtime spec v1.98→v1.99 + clearance marker; 16 hermetic tests; pyright 0/0/0; grok APPROVE; CI 16/16. Arc-ledger 79→80 closed, 15→14 registered. Next-action re-derived to "open B-WAL-F1-01-EXACTLY-ONCE". This terminating refresh updates `.harness/roadmap_status.md` and regenerates `tools/dashboard/roadmap.html` to pin the merge-commit fixed point. |
 | 2026-07-10 | **Post-#925 terminating refresh — PR #925 B-18-3C-PREWARM-COHORTKEY merged at `95e6f27f`; §12.2 owed follow-on.** | Hash `59fa3e76e762` → `39358e3edbb0` (state at `95e6f27f`, open PRs empty, fork count 88, batch-57). PR #925 closes COHORTKEY: `@runtime_checkable CohortKeyCapable(Protocol)` + `cohort_key() -> str | None` dispatcher-oracle replaces the binary predicate; `RuntimeLLMDispatcher` logic-bearing leaf + delegation stubs in 3 wrappers; RK-13 chain witness; CP spec v1.87→v1.88 + clearance; 16 witnesses; 5433 green; Fable-5 NO BLOCKING. arc-ledger standalone 70→71. B-18-3C-PREWARM-DEFAULT-ON prerequisite met. Next-action re-derived to "open B-18-3C-PREWARM-DEFAULT-ON (flip `concurrent_cache_warmup` default True, ADR-D4 §1.8(f))". This terminating refresh updates `.harness/roadmap_status.md` and regenerates `tools/dashboard/roadmap.html` to pin the merge-commit fixed point. |
 | 2026-07-10 | **Post-#924 terminating refresh — PR #924 B-18-3C-PREWARM merged at `0ddf7395`; §12.2 owed follow-on.** | Hash `ae0e7892abea` → `59fa3e76e762` (state at `0ddf7395`, open PRs empty, fork count 87, batch-57). PR #924 closes the B-18 concurrent-prompt-cache warm-up arc: ADR-D4 §1.8 opt-in `concurrent_cache_warmup` D4-tunable + `_same_prefix_cohort()` binary predicate + two-phase `_proceed_fanout()` (serialize branch[0]/gather branches[1..N-1]); CP spec v1.86→v1.87 + clearance; 6 witnesses + 5417 green; CI 16/16. arc-ledger B-18-3C-PREWARM status: `closed · #924`. Next-action re-derived to "open B-18-3C-PREWARM-COHORTKEY (Fork B Class 2 fork doc → implement `cohort_key() -> str | None` Protocol method)". This terminating refresh updates `.harness/roadmap_status.md` and regenerates `tools/dashboard/roadmap.html` to pin the merge-commit fixed point. |
-| 2026-07-10 | **Post-DDR-review terminating refresh — Fable-5 decorrelated review folded into the `B-18-3C-PREWARM` DDR at `31f3f6ff`; §12.2 owed follow-on.** | Hash `80fc94ae439f` → `ae0e7892abea` (state at `31f3f6ff`, open PRs empty, fork count 87, batch-57). With the advisor tool down, **Fable 5 via `Agent(model:"fable")` was adopted as the decorrelated fallback reviewer** (standing operator directive) and ran the pre-commit review of the DDR → SOUND-WITH-AMENDMENTS, catching 3 must-fix hazards (H1 bare-await ledger-loss, H2 predicate misses the memory packet, H3 empty-branch_plan IndexError) now authoritative at DDR §11. Next-action re-derived to "build §5-as-amended-by-§11". This terminating refresh updates `.harness/roadmap_status.md` and regenerates `tools/dashboard/roadmap.html` to pin the review-cleared fixed point. |
 ---
 
 ## Audit checklist (run at session start)
