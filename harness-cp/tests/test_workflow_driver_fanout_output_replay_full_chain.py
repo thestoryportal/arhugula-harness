@@ -547,7 +547,6 @@ class _Ctx:
         ledger: Any,
         store: Any,
         pause_resume_protocol: Any = None,
-        resume_context_holder: Any = None,
         engine_recovery_loop: Any = None,
     ) -> None:
         from opentelemetry.trace import NoOpTracerProvider
@@ -564,10 +563,6 @@ class _Ctx:
         self.engine_output_store = store
         if engine_recovery_loop is not None:
             self.engine_recovery_loop = engine_recovery_loop
-        # B-FANOUT-EFFECT-FENCE-SCOPED-ABORT-CRASH-DURABLE — the operator's per-key
-        # `EffectFenceResolution` map (ABORT_BRANCH etc.), peeked at the fan-out resume sites.
-        if resume_context_holder is not None:
-            self.resume_context_holder = resume_context_holder
 
 
 class _CountingDispatcher:
@@ -2699,7 +2694,7 @@ def _run_persona(
     pause_resume_protocol: Any = None,
     pause_snapshot_input: PauseSnapshot | None = None,
     timeout_disposition: FanoutTimeoutDisposition = FanoutTimeoutDisposition.FAIL_CLOSED,
-    resume_context_holder: Any = None,
+    resume_context: Any = None,
     engine_class: EngineClass = EngineClass.EVENT_SOURCED_REPLAY,
     engine_recovery_loop: Any = None,
     ledger: Any = None,
@@ -2710,7 +2705,6 @@ def _run_persona(
             ledger=ledger if ledger is not None else _RecordingLedger(),
             store=store,
             pause_resume_protocol=pause_resume_protocol,
-            resume_context_holder=resume_context_holder,
             engine_recovery_loop=engine_recovery_loop,
         ),
     )
@@ -2730,6 +2724,7 @@ def _run_persona(
             StepDispatcherRegistry, registry if registry is not None else _Registry(dispatcher)
         ),
         pause_snapshot_input=pause_snapshot_input,
+        resume_context=resume_context,
     )
 
 
@@ -6002,17 +5997,6 @@ class _FenceDispatcher:
         return result
 
 
-class _HolderWithResolutions:
-    """Stand-in `ResumeContextHolder` — `peek()` returns a ResumeContext carrying the operator's
-    per-key `effect_fence_resolutions` map (B-FANOUT-EFFECT-FENCE-PER-BRANCH-RESOLUTION)."""
-
-    def __init__(self, resolutions: dict[str, EffectFenceResolution]) -> None:
-        self._rc = ResumeContext(effect_fence_resolutions=resolutions)
-
-    def peek(self) -> ResumeContext:
-        return self._rc
-
-
 def test_crash_resume_scoped_abort_all_aborted_reproduces_failed() -> None:
     """GENUINE producer→crash→consumer chain (PARALLELIZATION). run1: both peers effect-fence-pause
     → PAUSED. run2: the operator scoped-aborts BOTH (ABORT_BRANCH) → the durable store records each
@@ -6037,8 +6021,8 @@ def test_crash_resume_scoped_abort_all_aborted_reproduces_failed() -> None:
     assert len(efp) == 2
     key_by_index = {b.branch_index: b.idempotency_key for b in efp}
 
-    holder = _HolderWithResolutions(
-        {
+    resume_ctx = ResumeContext(
+        effect_fence_resolutions={
             key_by_index[0]: EffectFenceResolution.ABORT_BRANCH,
             key_by_index[1]: EffectFenceResolution.ABORT_BRANCH,
         }
@@ -6052,7 +6036,7 @@ def test_crash_resume_scoped_abort_all_aborted_reproduces_failed() -> None:
         persona_tier=PersonaTier.TEAM_BINDING,
         pause_resume_protocol=_pause_protocol(),
         pause_snapshot_input=paused.pause_snapshot,
-        resume_context_holder=holder,
+        resume_context=resume_ctx,
     )
     assert resolved.status is RunStatus.FAILED  # in-resume all-abort
     assert "parallelization-effect-fence-branch-aborted" in (resolved.fail_class or "")
@@ -6093,7 +6077,9 @@ def test_crash_resume_scoped_abort_mixed_survivor_is_partial() -> None:
     assert paused.status is RunStatus.PAUSED
     efp = paused.pause_snapshot.peer_fan_out_resume.effect_fence_paused_branches
     assert len(efp) == 1 and efp[0].branch_index == 0
-    holder = _HolderWithResolutions({efp[0].idempotency_key: EffectFenceResolution.ABORT_BRANCH})
+    resume_ctx = ResumeContext(
+        effect_fence_resolutions={efp[0].idempotency_key: EffectFenceResolution.ABORT_BRANCH}
+    )
     resolved = _run_persona(
         workflow_id="wf-sa-mixed",
         steps=steps,
@@ -6102,7 +6088,7 @@ def test_crash_resume_scoped_abort_mixed_survivor_is_partial() -> None:
         persona_tier=PersonaTier.TEAM_BINDING,
         pause_resume_protocol=_pause_protocol(),
         pause_snapshot_input=paused.pause_snapshot,
-        resume_context_holder=holder,
+        resume_context=resume_ctx,
     )
     assert resolved.status is RunStatus.PARTIAL  # survivor folds in-resume
     records = store.read_branch_records(store.sole_run_key())
@@ -6143,8 +6129,10 @@ def test_crash_resume_scoped_abort_orchestrator_all_aborted_reproduces_failed() 
     efp = paused.pause_snapshot.fan_out_resume.effect_fence_paused_branches
     assert len(efp) == 2  # both workers fence-paused (worker branch_index is 0-based)
 
-    holder = _HolderWithResolutions(
-        {b.idempotency_key: EffectFenceResolution.ABORT_BRANCH for b in efp}
+    resume_ctx = ResumeContext(
+        effect_fence_resolutions={
+            b.idempotency_key: EffectFenceResolution.ABORT_BRANCH for b in efp
+        }
     )
     resume_dispatcher = _FenceDispatcher(fence_indices=set(), complete_indices=set())
     resolved = _run_persona(
@@ -6156,7 +6144,7 @@ def test_crash_resume_scoped_abort_orchestrator_all_aborted_reproduces_failed() 
         persona_tier=PersonaTier.TEAM_BINDING,
         pause_resume_protocol=_pause_protocol(),
         pause_snapshot_input=paused.pause_snapshot,
-        resume_context_holder=holder,
+        resume_context=resume_ctx,
     )
     assert resolved.status is RunStatus.FAILED
     assert "orchestrator-workers-effect-fence-branch-aborted" in (resolved.fail_class or "")

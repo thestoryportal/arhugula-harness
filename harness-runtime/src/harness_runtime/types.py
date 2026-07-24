@@ -165,10 +165,6 @@ from harness_runtime.lifecycle.protected_result_store import ProtectedResultStor
 # never carried it onto this frozen model, so `shutdown()`'s step 5b sweep
 # (wired at round 4) was UNREACHABLE in production; every real bootstrap
 # handed `shutdown()` a frozen ctx with no such attribute at all.
-# U-RT-94 — ResumeContextHolder sidecar import (per spec v1.25 §4 C-RT-04
-# NEW field row + §14.8.8.9 carrier definition).
-from harness_runtime.lifecycle.resume_context_holder import ResumeContextHolder
-
 # U-RT-99 — SkillActivationHookConfig + SkillActivationSpanEmitter carriers
 # per runtime spec v1.32 §14.17 (NEW C-RT-27). Operator-opt-in MVP shape per
 # .harness/class_1_fork_as_8d_skill_activation_surface_absence.md Reading B
@@ -2775,19 +2771,6 @@ class HarnessContext(BaseModel):
     `runtime_tool_dispatcher.py` / `webhook_delivery_composer.py`'s post-
     effect fences via `resolve_result_ref_off_loop`, and by `shutdown()`'s
     step 5b GC sweep."""
-
-    # U-RT-94 — Runtime-internal sidecar carrier for one-shot ResumeContext
-    # delivery across the pause-resume cycle. Bound at stage 5 LOOP_INIT to
-    # an empty holder (``ResumeContextHolder()`` with ``_current_context = None``
-    # default). Driver-side resume entry-point per CP spec v1.16 §26.8.5 calls
-    # ``ctx.resume_context_holder.set(resume_context)`` after operator-supplied
-    # ``attempt_resume(..., resume_context=...)`` ingestion. Runtime composer
-    # at §14.8.8.5 resumed-step gate-evaluation consumes via
-    # ``ctx.resume_context_holder.consume_and_clear()`` (atomic one-shot
-    # read-and-clear). NOT operator-supplied at RuntimeConfig — the holder is
-    # a runtime-loop carrier, not deployment-time configuration. Per spec
-    # v1.25 §4 C-RT-04 + §14.8.8.9.
-    resume_context_holder: ResumeContextHolder
 
     # Stage 5 LOOP_INIT.
     override_evaluator: PerStepOverrideEvaluator

@@ -42,7 +42,9 @@ from harness_cp.gate_level_rule import GateLevel
 from harness_cp.hitl_placement import HITLPlacement
 from harness_cp.pause_resume_protocol_types import (
     EffectFenceResolutionDirective,
+    HITLDeliveryCell,
     PauseSnapshot,
+    ResumeContext,
 )
 
 
@@ -455,6 +457,79 @@ class StepExecutionContext(BaseModel):
     fan-out CHILD (`compose_branch_child_context`) — a fan-out worker seeds via its own
     `branch_path` path, never this one."""
 
+    resume_context: ResumeContext | None = None
+    """B-39 impl leg Slice B (CP spec v1.106 §1) — the operator's full resume payload
+    for this resume cycle, threaded through `execute_workflow`'s `resume_context`
+    parameter and onto every `StepExecutionContext` it composes (linear + the 5
+    non-linear strategies; branch children inherit it verbatim via
+    `compose_branch_child_context`'s `model_copy` — deliberately NOT reset there,
+    unlike `hitl_delivery_holder` below).
+
+    Immutable, pure lookup-with-fallback data (`ResumeContext.hitl_response_for` /
+    `effect_fence_resolution_for` are keyed, side-effect-free reads) — safe to share
+    the SAME object reference across every branch of a fan-out, unlike the one-shot
+    `hitl_delivery_holder` cell. Two consumers: (1) the runtime `RuntimeSubAgentDispatcher`
+    reads it off `step_context` to forward into a recursive `execute_workflow
+    (resume_context=...)` call for a dispatched child (replacing the retired
+    ctx-level `resume_context_holder`'s role for the effect-fence PEEK + downward
+    reach); (2) the CP driver's OWN effect-fence resolution sites (linear +
+    fan-out) read it directly in place of the retired `getattr(ctx,
+    "resume_context_holder", None)` + `.peek()`.
+
+    Same hash-inert / per-step-transient posture as `child_resume_snapshot` (NOT
+    persisted, NOT in any §5.2 / outcome-hash); `None` default → byte-identical to
+    pre-arc (a non-resume dispatch, or a resume with no HITL/effect-fence
+    ambiguity, sees no behavior change)."""
+
+    hitl_uniform_fallback_eligible_run_id: str | None = None
+    """B-39 impl leg Slice B, codex round-2 [P1] fix (CP spec v1.106 §1.2
+    property 4, round-7 deterministic safety rule) — the SOLE gate-owning
+    branch's `run_id` (if any) the uniform `hitl_response` fallback may
+    resolve THIS resume cycle. Computed ONCE, at the true depth-0 root
+    (`harness_runtime/lifecycle/mcp_server.py`, via
+    `compute_hitl_uniform_fallback_eligible_run_id` against the operator's
+    ORIGINAL, un-narrowed root `PauseSnapshot`), and threaded down
+    UNCHANGED to every recursion level — exactly like `resume_context`
+    above (plain immutable pass-through, safe to share the SAME value
+    across every branch of a fan-out; branch children inherit it verbatim
+    via `compose_branch_child_context`'s `model_copy`, deliberately NOT
+    reset there, unlike the one-shot `hitl_delivery_holder` below). It
+    CANNOT be recomputed locally at a nested recursion level — a child's
+    own `pause_snapshot_input` is only its own subtree and has no
+    visibility into sibling branches paused elsewhere in the full tree.
+
+    `None` means either no gate-owning branch is paused this cycle, or 2+
+    are unaddressed by `resume_context.hitl_responses` (in which case NONE
+    of them may use the uniform fallback — every one re-pauses INERT
+    rather than risk a cross-branch misattribution). Same hash-inert /
+    per-step-transient posture as `resume_context`; `None` default →
+    byte-identical to pre-arc."""
+
+    hitl_delivery_holder: HITLDeliveryCell | None = None
+    """B-39 impl leg Slice B (CP spec v1.106 §1) — the per-branch ONE-SHOT delivery
+    cell for the operator's resolved HITL response, replacing the retired
+    ctx-level, run-tree-wide-shared `ResumeContextHolder` singleton the runtime
+    HITL gate composer used to `consume_and_clear()` at Step 0.
+
+    Set ONLY at the linear resume_at reconstruction site (`step_index ==
+    resume_at`, mirroring the existing `effect_fence_resolution=(... if
+    step_index == resume_at else None)` pattern), via `resume_context.
+    hitl_response_for(run_id)` — `run_id` being THIS `execute_workflow` call's
+    own run identifier, which for a recursively-dispatched child equals the
+    `child_run_id` it was invoked with (definitionally the same run_id
+    `PausedChildBranchResumeState.child_snapshot.run_id` was keyed by at pause
+    time — no separate lookup/crossing, no keying-mismatch risk). NEVER set at
+    any fan-out/branch-construction site — reset to `None` there defensively
+    (`compose_branch_child_context`), mirroring `is_orchestrator_dispatch` /
+    `is_linear_sequential_dispatch`, so a cell is never accidentally shared
+    across peer branches via `model_copy`. Freshly constructed at this ONE call
+    site (never at ctx/dispatcher/composer-instance scope), so it is reachable
+    from exactly one composer-reaching `StepExecutionContext`.
+
+    Rides `StepExecutionContext` (hash-inert per the new-surface-audit
+    hash-config-not-carrier discipline); `None` default → byte-identical to
+    pre-arc (only the runtime HITL gate composer's Step-0 consume reads it)."""
+
 
 def compose_branch_child_context(
     parent_context: StepExecutionContext,
@@ -530,6 +605,16 @@ def compose_branch_child_context(
             # linear-loop-derived parent does not inherit the flag via `model_copy`
             # (the worker seeds via its own `branch_path` path).
             "is_linear_sequential_dispatch": False,
+            # B-39 Slice B — a fan-out CHILD never inherits a parent step's HITL
+            # delivery cell via `model_copy` (the cell is a per-branch-reachable
+            # one-shot mutable object; sharing it across peer branches would let one
+            # branch's `consume_and_clear()` drain another's — the exact reachability
+            # hazard the ctx-level `ResumeContextHolder` retirement forecloses).
+            # `resume_context` (the plain, immutable pass-through payload) is
+            # deliberately NOT reset — every branch legitimately shares the SAME
+            # operator resume-cycle data, resolved per-branch only at read time via
+            # the keyed `_for(key)` methods.
+            "hitl_delivery_holder": None,
         }
     )
 

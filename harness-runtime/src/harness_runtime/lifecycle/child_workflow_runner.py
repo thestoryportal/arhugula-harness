@@ -44,7 +44,7 @@ from typing import Any, Protocol, cast, runtime_checkable
 
 from harness_cp.cp_shared_types import ModelBinding
 from harness_cp.handoff_context import HandoffContext
-from harness_cp.pause_resume_protocol_types import PauseSnapshot
+from harness_cp.pause_resume_protocol_types import PauseSnapshot, ResumeContext
 from harness_cp.sub_agent_gate_level_descent import SubAgentGateLevelDescent
 from harness_cp.workflow_driver import DriverContext as _CpDriverContext
 from harness_cp.workflow_driver import execute_workflow
@@ -84,6 +84,8 @@ class ChildWorkflowRunner(Protocol):
         default_model_binding: ModelBinding,
         pause_snapshot_input: PauseSnapshot | None = None,
         child_run_id_seed: str | None = None,
+        resume_context: ResumeContext | None = None,
+        hitl_uniform_fallback_eligible_run_id: str | None = None,
     ) -> RunResult:
         """Run the child sub-workflow and return its terminal `RunResult`.
 
@@ -110,6 +112,25 @@ class ChildWorkflowRunner(Protocol):
         non-recoverable child gets `None` → legacy fresh-`uuid` (no auto-resume,
         pre-existing behavior — no suffix-only-reconstruction corruption). Ignored
         on a resume (`pause_snapshot_input` non-None reuses the snapshot's run_id).
+
+        B-39 impl leg Slice B (CP spec v1.106 §1): `resume_context` (additive,
+        default `None`) — the operator's full resume payload, forwarded verbatim
+        into the recursive `execute_workflow(resume_context=...)` call so the
+        child's OWN reconstruction can resolve its own effect-fence directive +
+        per-branch HITL delivery cell (replacing the retired ctx-level, run-tree-
+        wide-shared `ResumeContextHolder` singleton). `None` on a first (non-resume)
+        child dispatch → byte-identical to pre-arc.
+
+        B-39 impl leg Slice B, codex round-2 [P1] fix (CP spec v1.106 §1.2
+        property 4): `hitl_uniform_fallback_eligible_run_id` (additive, default
+        `None`) — the SOLE gate-owning branch's `run_id` (if any) the uniform
+        `hitl_response` fallback may resolve this resume cycle, computed ONCE at
+        the true depth-0 root (`mcp_server.py`, BEFORE any recursion narrows the
+        snapshot to a subtree) and forwarded verbatim, exactly like
+        `resume_context`, NEVER recomputed at this recursion level (a child's own
+        `pause_snapshot_input` cannot see sibling branches paused elsewhere in the
+        tree). `None` on a first (non-resume) child dispatch → byte-identical to
+        pre-arc.
         """
         ...
 
@@ -150,6 +171,8 @@ def compose_child_workflow_runner(ctx: HarnessContext) -> ChildWorkflowRunner:
         default_model_binding: ModelBinding,
         pause_snapshot_input: PauseSnapshot | None = None,
         child_run_id_seed: str | None = None,
+        resume_context: ResumeContext | None = None,
+        hitl_uniform_fallback_eligible_run_id: str | None = None,
     ) -> RunResult:
         # B-HIERARCHICAL-PAUSE — on a RESUME (pause_snapshot_input non-None), FAIL CLOSED
         # if the snapshot's workflow_id does not match the child being invoked (Codex
@@ -220,6 +243,8 @@ def compose_child_workflow_runner(ctx: HarnessContext) -> ChildWorkflowRunner:
             default_model_binding=default_model_binding,
             step_dispatchers=cast(Any, ctx.step_dispatchers),
             pause_snapshot_input=pause_snapshot_input,
+            resume_context=resume_context,
+            hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
             reconstruct_final_state=True,
             # U-1 slice 3a (B-18) — mark the child run as a DESCENDED sub-agent so
             # every child `StepExecutionContext` carries `sub_agent_descent=True`;

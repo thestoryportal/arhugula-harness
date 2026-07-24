@@ -232,6 +232,51 @@ def test_compose_branch_child_inherits_non_branch_fields() -> None:
     assert child.step_index == parent.step_index
 
 
+def test_compose_branch_child_resets_hitl_delivery_holder_never_shares_cell() -> None:
+    """B-39 Slice B mutation probe — the per-branch one-shot `hitl_delivery_holder`
+    cell is NEVER inherited via `model_copy` across fan-out siblings. A parent
+    context that happens to carry a non-None cell (the defensive-reset guard
+    under test) must NOT leak it onto a spawned branch child — else one branch's
+    `consume_and_clear()` would drain a cell reachable from a DIFFERENT branch's
+    context, exactly the ctx-level-holder reachability hazard this mechanism
+    retires. `resume_context` (plain immutable data, safe to share) DOES inherit,
+    by contrast — asserted here too so the two fields' opposite dispositions are
+    both pinned by the same test."""
+    from harness_core.identity import EntryID
+    from harness_cp.hitl_placement import HITLResult
+    from harness_cp.hitl_response_palette import HITLResponse
+    from harness_cp.pause_resume_protocol_types import HITLDeliveryCell, ResumeContext
+
+    hitl = HITLResult(
+        response=HITLResponse.APPROVE,
+        timestamp="2026-07-24T00:00:00Z",
+        audit_ledger_entry_id=EntryID("e-branch-substrate-1"),
+        response_summary_hash="a" * 64,
+    )
+    cell = HITLDeliveryCell(hitl)
+    resume_ctx = ResumeContext()
+    parent = _linear_step_context().model_copy(
+        update={"hitl_delivery_holder": cell, "resume_context": resume_ctx}
+    )
+    assert parent.hitl_delivery_holder is cell  # sanity: the parent really carries it
+
+    child_a = compose_branch_child_context(parent, branch_index=0, agent_role=AgentRole("a"))
+    child_b = compose_branch_child_context(parent, branch_index=1, agent_role=AgentRole("b"))
+
+    assert child_a.hitl_delivery_holder is None
+    assert child_b.hitl_delivery_holder is None
+    # resume_context is the OPPOSITE disposition: shared verbatim (no per-branch
+    # mutable state to leak — pure data, resolved per-branch only at read time).
+    assert child_a.resume_context is resume_ctx
+    assert child_b.resume_context is resume_ctx
+
+    # Reachability, proven not asserted: draining the parent's cell does NOT
+    # affect either child (they never held a reference to it in the first place).
+    assert cell.consume_and_clear() is hitl
+    assert child_a.hitl_delivery_holder is None
+    assert child_b.hitl_delivery_holder is None
+
+
 def test_compose_branch_child_gate_level_descends_monotonically() -> None:
     """The child gate-level descends monotonically (<= parent) per
     C-CP-12 §12.2 — equality is the valid §12.2 default."""

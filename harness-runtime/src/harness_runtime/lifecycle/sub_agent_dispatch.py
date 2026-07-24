@@ -1106,6 +1106,21 @@ class RuntimeSubAgentDispatcher:
                     default_model_binding=binding.model_binding,
                     pause_snapshot_input=step_context.child_resume_snapshot,
                     child_run_id_seed=_child_run_id_seed,
+                    # B-39 Slice B — the operator's resume payload, read off the SAME
+                    # step_context the composer already receives (a CP driver-stamped
+                    # field, pure pass-through — see `StepExecutionContext.
+                    # resume_context`'s docstring) and forwarded into the recursive
+                    # `execute_workflow` call so the child's OWN reconstruction can
+                    # resolve its own effect-fence + HITL delivery.
+                    resume_context=step_context.resume_context,
+                    # B-39 Slice B, codex round-2 [P1] fix — the property-4-safe
+                    # uniform-fallback eligibility, read off the SAME step_context
+                    # (computed ONCE at the true depth-0 root, pure pass-through —
+                    # see `StepExecutionContext.hitl_uniform_fallback_eligible_
+                    # run_id`'s docstring) and forwarded verbatim.
+                    hitl_uniform_fallback_eligible_run_id=(
+                        step_context.hitl_uniform_fallback_eligible_run_id
+                    ),
                 )
             except Exception:
                 # Typed errors from child execution: annotate span +

@@ -87,7 +87,6 @@ from harness_runtime.lifecycle.post_join_synthesis_dispatch import (
 from harness_runtime.lifecycle.procedural_tier_snapshot import (
     make_procedural_tier_snapshot_resolver,
 )
-from harness_runtime.lifecycle.resume_context_holder import ResumeContextHolder
 from harness_runtime.lifecycle.retry_breaker_fallback import (
     materialize_retry_breaker_fallback_dispatcher_stage,
 )
@@ -515,7 +514,6 @@ async def execute(
     # the joint binding at composer dispatch-time.
     ctx.pause_resume_protocol = await materialize_pause_resume_protocol_stage(config, ctx)
     ctx.webhook_delivery_composer = await materialize_webhook_delivery_composer_stage(config, ctx)
-    ctx.resume_context_holder = ResumeContextHolder()
 
     # U-RT-115 (G1-blast): per-step blast-radius resolver closure capturing ctx
     # (the `make_procedural_tier_snapshot_resolver(ctx)` precedent). Shared by
@@ -541,7 +539,6 @@ async def execute(
         pause_resume_protocol=ctx.pause_resume_protocol,
         pause_requested_flag=ctx.pause_requested_flag,
         webhook_delivery_composer=ctx.webhook_delivery_composer,
-        resume_context_holder=ctx.resume_context_holder,
         blast_radius_resolver=blast_radius_resolver,
         hitl_auto_approve_policy=hitl_auto_approve_policy,
     )
@@ -682,7 +679,6 @@ async def execute(
         pause_resume_protocol=ctx.pause_resume_protocol,
         pause_requested_flag=ctx.pause_requested_flag,
         webhook_delivery_composer=ctx.webhook_delivery_composer,
-        resume_context_holder=ctx.resume_context_holder,
         blast_radius_resolver=blast_radius_resolver,
         hitl_auto_approve_policy=hitl_auto_approve_policy,
         # B-48 (U-RT-142; §14.8.10.2 row 2): the sync C-RT-17 inner is
@@ -773,7 +769,6 @@ async def execute(
         pause_resume_protocol=ctx.pause_resume_protocol,
         pause_requested_flag=ctx.pause_requested_flag,
         webhook_delivery_composer=ctx.webhook_delivery_composer,
-        resume_context_holder=ctx.resume_context_holder,
         blast_radius_resolver=blast_radius_resolver,
         hitl_auto_approve_policy=hitl_auto_approve_policy,
         mcp_trust_tier_resolver=mcp_trust_tier_resolver,
@@ -828,11 +823,13 @@ async def execute(
         )
     ctx.step_dispatchers = StepKindDispatcherRegistry(dispatchers=dispatchers)
 
-    # U-RT-88 (C-RT-24 §14.14) + U-RT-97 (C-RT-26 §14.16) + U-RT-94 (v1.25
-    # §14.8.8.9): pause_resume_protocol + webhook_delivery_composer +
-    # resume_context_holder bindings hoisted ABOVE the HITL composer
+    # U-RT-88 (C-RT-24 §14.14) + U-RT-97 (C-RT-26 §14.16): pause_resume_protocol +
+    # webhook_delivery_composer bindings hoisted ABOVE the HITL composer
     # construction sites at v2.25 §7.2 AC #12 absorption — so the
     # RuntimeHITLGateComposer constructor can capture them at construction
     # time per the 4-NEW-fields amendment (lines 211-233 above). Re-binding
     # here would shadow the values the composer captured + introduce a
     # divergence between composer-local refs and ctx-local refs.
+    # B-39 Slice B: the SAME-arc `resume_context_holder` hoist (v1.25 §14.8.8.9)
+    # is RETIRED — HITL delivery is now per-branch via `step_context.
+    # hitl_delivery_holder`, resolved by the CP driver, not a ctx-level binding.

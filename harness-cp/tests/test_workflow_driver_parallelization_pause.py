@@ -305,6 +305,7 @@ def _run(
     pause_snapshot_input: PauseSnapshot | None = None,
     workflow_id: str = "wf-pp",
     persona_tier: PersonaTier = _PAUSE_TIER,
+    resume_context: Any = None,
 ) -> Any:
     return execute_workflow(
         _manifest(workflow_id, persona_tier),
@@ -314,6 +315,7 @@ def _run(
         default_model_binding=_DEFAULT_BINDING,
         step_dispatchers=_registry(dispatcher),
         pause_snapshot_input=pause_snapshot_input,
+        resume_context=resume_context,
     )
 
 
@@ -1273,19 +1275,6 @@ class _FenceAmbiguousBranchDispatcher:
         raise EffectFenceAmbiguousUncommittedError(idempotency_key=self._fence_key)
 
 
-class _HolderWithResolution:
-    """Stand-in `ResumeContextHolder` — `peek()` returns a ResumeContext carrying the
-    operator's effect-fence resolution (NON-consuming, the production peek contract)."""
-
-    def __init__(self, resolution: EffectFenceResolution) -> None:
-        self._rc = ResumeContext(effect_fence_resolution=resolution)
-        self.peeked = 0
-
-    def peek(self) -> ResumeContext:
-        self.peeked += 1
-        return self._rc
-
-
 class _ResumeRecordingDispatcher:
     """Resume-side recording dispatcher: records each dispatched step's threaded
     `step_context.effect_fence_resolution` then SUCCEEDS (no gate, no raise) — to witness
@@ -1357,15 +1346,15 @@ def test_peer_branch_effect_fence_resume_threads_key_bound_resolution() -> None:
     key = efp[0].idempotency_key
 
     # Resume: a holder carrying SKIP_AS_FIRED + a recording dispatcher; branch-1 re-dispatched.
-    holder = _HolderWithResolution(EffectFenceResolution.SKIP_AS_FIRED)
+    resume_ctx = ResumeContext(effect_fence_resolution=EffectFenceResolution.SKIP_AS_FIRED)
     rec = _ResumeRecordingDispatcher()
     ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
-    ctx_obj.resume_context_holder = holder  # type: ignore[attr-defined]
     result = _run(
         steps=_steps(2),
         dispatcher=rec,
         ctx=cast(DriverContext, ctx_obj),
         pause_snapshot_input=snap,
+        resume_context=resume_ctx,
     )
 
     assert result.status is RunStatus.SUCCESS
@@ -1376,7 +1365,8 @@ def test_peer_branch_effect_fence_resume_threads_key_bound_resolution() -> None:
     assert threaded is not None
     assert threaded.resolution is EffectFenceResolution.SKIP_AS_FIRED
     assert threaded.idempotency_key == key
-    assert holder.peeked >= 1  # the holder was PEEKED (non-consuming), not consumed
+    # Non-consuming: re-reading resume_ctx.effect_fence_resolution still returns the value.
+    assert resume_ctx.effect_fence_resolution is EffectFenceResolution.SKIP_AS_FIRED
 
 
 class EffectFenceAbortedError(Exception):
@@ -1415,15 +1405,15 @@ def test_peer_branch_effect_fence_resume_abort_is_terminal_failed_not_repause() 
     snap = paused.pause_snapshot
     assert snap is not None and snap.peer_fan_out_resume is not None
 
-    holder = _HolderWithResolution(EffectFenceResolution.ABORT)
+    resume_ctx = ResumeContext(effect_fence_resolution=EffectFenceResolution.ABORT)
     rec = _AbortOnResolutionDispatcher()
     ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
-    ctx_obj.resume_context_holder = holder  # type: ignore[attr-defined]
     result = _run(
         steps=_steps(2),
         dispatcher=rec,
         ctx=cast(DriverContext, ctx_obj),
         pause_snapshot_input=snap,
+        resume_context=resume_ctx,
     )
 
     assert result.status is RunStatus.FAILED
@@ -1456,14 +1446,14 @@ def test_peer_branch_effect_fence_resume_changed_kind_fails_closed() -> None:
             step_id=StepID("branch-1"), step_kind=StepKind.INFERENCE_STEP, step_payload={"index": 1}
         ),
     ]
-    holder = _HolderWithResolution(EffectFenceResolution.SKIP_AS_FIRED)
+    resume_ctx = ResumeContext(effect_fence_resolution=EffectFenceResolution.SKIP_AS_FIRED)
     ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
-    ctx_obj.resume_context_holder = holder  # type: ignore[attr-defined]
     result = _run(
         steps=changed,
         dispatcher=_ResumeRecordingDispatcher(),
         ctx=cast(DriverContext, ctx_obj),
         pause_snapshot_input=snap,
+        resume_context=resume_ctx,
     )
 
     assert result.status is RunStatus.FAILED
@@ -1484,15 +1474,15 @@ def test_peer_effect_fence_resume_under_proceed_tier_fails_closed() -> None:
     snap = paused.pause_snapshot
     assert snap is not None and snap.peer_fan_out_resume is not None
 
-    holder = _HolderWithResolution(EffectFenceResolution.SKIP_AS_FIRED)
+    resume_ctx = ResumeContext(effect_fence_resolution=EffectFenceResolution.SKIP_AS_FIRED)
     ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
-    ctx_obj.resume_context_holder = holder  # type: ignore[attr-defined]
     result = _run(
         steps=_steps(2),
         dispatcher=_ResumeRecordingDispatcher(),
         ctx=cast(DriverContext, ctx_obj),
         pause_snapshot_input=snap,
-        persona_tier=PersonaTier.SOLO_DEVELOPER,  # → CascadePolicy.PROCEED
+        persona_tier=PersonaTier.SOLO_DEVELOPER,  # → CascadePolicy.PROCEED,
+        resume_context=resume_ctx,
     )
 
     assert result.status is RunStatus.FAILED
@@ -1525,19 +1515,6 @@ class _TwoFenceAmbiguousBranchDispatcher:
         raise EffectFenceAmbiguousUncommittedError(idempotency_key=f"fence-key-{step_id}")
 
 
-class _HolderWithResolutions:
-    """Stand-in holder whose `peek()` returns a ResumeContext carrying a per-key
-    `effect_fence_resolutions` map (B-FANOUT-EFFECT-FENCE-PER-BRANCH-RESOLUTION)."""
-
-    def __init__(self, resolutions: dict[str, EffectFenceResolution]) -> None:
-        self._rc = ResumeContext(effect_fence_resolutions=resolutions)
-        self.peeked = 0
-
-    def peek(self) -> ResumeContext:
-        self.peeked += 1
-        return self._rc
-
-
 def test_peer_per_branch_distinct_resolutions() -> None:
     """REAL-FENCE WITNESS (PARALLELIZATION, per-branch-DISTINCT): two peers fence-pause in one
     barrier; resume resolves branch-0 SKIP_AS_FIRED + branch-1 RE_FIRE via the per-key
@@ -1555,20 +1532,20 @@ def test_peer_per_branch_distinct_resolutions() -> None:
     assert len(efp) == 2
     key_by_index = {b.branch_index: b.idempotency_key for b in efp}
 
-    holder = _HolderWithResolutions(
-        {
+    resume_ctx = ResumeContext(
+        effect_fence_resolutions={
             key_by_index[0]: EffectFenceResolution.SKIP_AS_FIRED,
             key_by_index[1]: EffectFenceResolution.RE_FIRE,
         }
     )
     rec = _ResumeRecordingDispatcher()
     ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
-    ctx_obj.resume_context_holder = holder  # type: ignore[attr-defined]
     result = _run(
         steps=_steps(2),
         dispatcher=rec,
         ctx=cast(DriverContext, ctx_obj),
         pause_snapshot_input=snap,
+        resume_context=resume_ctx,
     )
 
     assert result.status is RunStatus.SUCCESS
@@ -1618,20 +1595,20 @@ def test_peer_mixed_abort_map_suppresses_sibling_refire() -> None:
         b.branch_index: b.idempotency_key
         for b in snap.peer_fan_out_resume.effect_fence_paused_branches
     }
-    holder = _HolderWithResolutions(
-        {
+    resume_ctx = ResumeContext(
+        effect_fence_resolutions={
             key_by_index[0]: EffectFenceResolution.ABORT,
             key_by_index[1]: EffectFenceResolution.RE_FIRE,
         }
     )
     rec = _PeerAbortGuardDispatcher()
     ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
-    ctx_obj.resume_context_holder = holder  # type: ignore[attr-defined]
     result = _run(
         steps=_steps(2),
         dispatcher=rec,
         ctx=cast(DriverContext, ctx_obj),
         pause_snapshot_input=snap,
+        resume_context=resume_ctx,
     )
 
     assert result.status is RunStatus.FAILED
@@ -1663,20 +1640,20 @@ def test_peer_scoped_abort_fires_vouched_sibling() -> None:
         b.branch_index: b.idempotency_key
         for b in snap.peer_fan_out_resume.effect_fence_paused_branches
     }
-    holder = _HolderWithResolutions(
-        {
+    resume_ctx = ResumeContext(
+        effect_fence_resolutions={
             key_by_index[0]: EffectFenceResolution.ABORT_BRANCH,
             key_by_index[1]: EffectFenceResolution.RE_FIRE,
         }
     )
     rec = _PeerAbortGuardDispatcher()
     ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
-    ctx_obj.resume_context_holder = holder  # type: ignore[attr-defined]
     result = _run(
         steps=_steps(2),
         dispatcher=rec,
         ctx=cast(DriverContext, ctx_obj),
         pause_snapshot_input=snap,
+        resume_context=resume_ctx,
     )
 
     assert result.status is RunStatus.PARTIAL  # survivor folded, NOT the run-level-ABORT FAILED
@@ -1702,20 +1679,20 @@ def test_peer_all_scoped_abort_fails_not_vacuous_partial() -> None:
         b.branch_index: b.idempotency_key
         for b in snap.peer_fan_out_resume.effect_fence_paused_branches
     }
-    holder = _HolderWithResolutions(
-        {
+    resume_ctx = ResumeContext(
+        effect_fence_resolutions={
             key_by_index[0]: EffectFenceResolution.ABORT_BRANCH,
             key_by_index[1]: EffectFenceResolution.ABORT_BRANCH,
         }
     )
     rec = _PeerAbortGuardDispatcher()
     ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
-    ctx_obj.resume_context_holder = holder  # type: ignore[attr-defined]
     result = _run(
         steps=_steps(2),
         dispatcher=rec,
         ctx=cast(DriverContext, ctx_obj),
         pause_snapshot_input=snap,
+        resume_context=resume_ctx,
     )
 
     assert result.status is RunStatus.FAILED  # NO survivor → FAILED, not a vacuous PARTIAL
@@ -1739,15 +1716,17 @@ def test_peer_scoped_abort_iterative_repause() -> None:
         b.branch_index: b.idempotency_key
         for b in snap.peer_fan_out_resume.effect_fence_paused_branches
     }
-    holder = _HolderWithResolutions({key_by_index[0]: EffectFenceResolution.ABORT_BRANCH})
+    resume_ctx = ResumeContext(
+        effect_fence_resolutions={key_by_index[0]: EffectFenceResolution.ABORT_BRANCH}
+    )
     rec = _PeerAbortGuardDispatcher()
     ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
-    ctx_obj.resume_context_holder = holder  # type: ignore[attr-defined]
     result = _run(
         steps=_steps(2),
         dispatcher=rec,
         ctx=cast(DriverContext, ctx_obj),
         pause_snapshot_input=snap,
+        resume_context=resume_ctx,
     )
 
     assert result.status is RunStatus.PAUSED
@@ -1777,20 +1756,20 @@ def test_peer_mixed_run_abort_and_scoped_abort_deterministic() -> None:
         b.branch_index: b.idempotency_key
         for b in snap.peer_fan_out_resume.effect_fence_paused_branches
     }
-    holder = _HolderWithResolutions(
-        {
+    resume_ctx = ResumeContext(
+        effect_fence_resolutions={
             key_by_index[0]: EffectFenceResolution.ABORT,
             key_by_index[1]: EffectFenceResolution.ABORT_BRANCH,
         }
     )
     rec = _PeerAbortGuardDispatcher()
     ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
-    ctx_obj.resume_context_holder = holder  # type: ignore[attr-defined]
     result = _run(
         steps=_steps(2),
         dispatcher=rec,
         ctx=cast(DriverContext, ctx_obj),
         pause_snapshot_input=snap,
+        resume_context=resume_ctx,
     )
 
     assert result.status is RunStatus.FAILED  # run-level ABORT dominates
@@ -1815,21 +1794,21 @@ def test_peer_scoped_abort_under_cascade_cancel_fails() -> None:
         b.branch_index: b.idempotency_key
         for b in snap.peer_fan_out_resume.effect_fence_paused_branches
     }
-    holder = _HolderWithResolutions(
-        {
+    resume_ctx = ResumeContext(
+        effect_fence_resolutions={
             key_by_index[0]: EffectFenceResolution.ABORT_BRANCH,
             key_by_index[1]: EffectFenceResolution.RE_FIRE,
         }
     )
     rec = _PeerAbortGuardDispatcher()
     ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
-    ctx_obj.resume_context_holder = holder  # type: ignore[attr-defined]
     result = _run(
         steps=_steps(2),
         dispatcher=rec,
         ctx=cast(DriverContext, ctx_obj),
         pause_snapshot_input=snap,
-        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,  # → CascadePolicy.CASCADE_CANCEL
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,  # → CascadePolicy.CASCADE_CANCEL,
+        resume_context=resume_ctx,
     )
 
     assert result.status is RunStatus.FAILED  # NOT a SUCCESS hiding the scoped-abort
@@ -1852,16 +1831,18 @@ def test_peer_scoped_abort_under_proceed_rejected_requires_strict_tier() -> None
         b.branch_index: b.idempotency_key
         for b in snap.peer_fan_out_resume.effect_fence_paused_branches
     }
-    holder = _HolderWithResolutions({key_by_index[0]: EffectFenceResolution.ABORT_BRANCH})
+    resume_ctx = ResumeContext(
+        effect_fence_resolutions={key_by_index[0]: EffectFenceResolution.ABORT_BRANCH}
+    )
     rec = _PeerAbortGuardDispatcher()
     ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
-    ctx_obj.resume_context_holder = holder  # type: ignore[attr-defined]
     result = _run(
         steps=_steps(2),
         dispatcher=rec,
         ctx=cast(DriverContext, ctx_obj),
         pause_snapshot_input=snap,
-        persona_tier=PersonaTier.SOLO_DEVELOPER,  # → CascadePolicy.PROCEED
+        persona_tier=PersonaTier.SOLO_DEVELOPER,  # → CascadePolicy.PROCEED,
+        resume_context=resume_ctx,
     )
 
     assert result.status is RunStatus.FAILED

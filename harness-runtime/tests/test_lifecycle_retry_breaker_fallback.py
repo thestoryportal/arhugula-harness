@@ -2158,12 +2158,14 @@ async def test_u_rt_114_per_role_models_live_ollama_e2e_through_wrapper() -> Non
 # ---------------------------------------------------------------------------
 
 
-def _real_hitl_composer_with_resume(inner_llm: Any, resume_response: Any) -> Any:
-    """A REAL RuntimeHITLGateComposer with `resume_context_holder` primed so its
-    Step-0 (§14.8.8.5) consume routes the resumed response. The ask/ledger/audit
-    surfaces are never invoked on the resume short-circuit, so they are stubs."""
+def _real_hitl_composer_with_resume(inner_llm: Any, resume_response: Any) -> tuple[Any, Any]:
+    """A REAL RuntimeHITLGateComposer + a `step_context` carrying a pre-loaded
+    one-shot HITL delivery cell (B-39 Slice B — replaces the retired
+    ctx-level `resume_context_holder.set(...)` priming) so Step-0 (§14.8.8.5)
+    consume routes the resumed response. The ask/ledger/audit surfaces are
+    never invoked on the resume short-circuit, so they are stubs."""
     from harness_cp.hitl_placement import HITLPlacementKind
-    from harness_cp.pause_resume_protocol_types import ResumeContext
+    from harness_cp.pause_resume_protocol_types import HITLDeliveryCell
     from harness_od.audit_ledger_types import SignatureAlgorithm
     from harness_runtime.lifecycle.hitl_gate_composer import RuntimeHITLGateComposer
 
@@ -2179,8 +2181,10 @@ def _real_hitl_composer_with_resume(inner_llm: Any, resume_response: Any) -> Any
         audit_signing_algorithm=SignatureAlgorithm.ED25519,
         procedural_tier_snapshot_resolver=lambda: cast(Any, "b" * 64),
     )
-    composer.resume_context_holder.set(ResumeContext(hitl_response=resume_response))
-    return composer
+    step_context = _step_context().model_copy(
+        update={"hitl_delivery_holder": HITLDeliveryCell(resume_response)}
+    )
+    return composer, step_context
 
 
 def _resume_hitl_result(response: Any, *, edited_proposal: Any = None) -> Any:
@@ -2207,7 +2211,9 @@ async def test_retry_wrapper_propagates_resume_reject_terminally_no_retry_no_adv
 
     tp, _ = _tracer_provider_with_exporter()
     inner_llm = _MockInnerDispatcher(outcomes=[{"never": "dispatched"}])
-    composer = _real_hitl_composer_with_resume(inner_llm, _resume_hitl_result(HITLResponse.REJECT))
+    composer, resume_step_context = _real_hitl_composer_with_resume(
+        inner_llm, _resume_hitl_result(HITLResponse.REJECT)
+    )
     # Multi-candidate chain + max_attempts=3 → proves NEITHER retry NOR advance.
     chain = _chain(
         _candidate("anthropic", "claude-test-1"),
@@ -2222,7 +2228,7 @@ async def test_retry_wrapper_propagates_resume_reject_terminally_no_retry_no_adv
     )
 
     with pytest.raises(HITLGateRejectedError):
-        await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
+        await wrapper.dispatch(_binding(), _step(), step_context=resume_step_context)
     assert inner_llm.calls == []  # zero LLM dispatches — no retry, no advance, no re-pause
 
 
@@ -2236,7 +2242,7 @@ async def test_retry_wrapper_propagates_resume_edit_decode_terminally() -> None:
 
     tp, _ = _tracer_provider_with_exporter()
     inner_llm = _MockInnerDispatcher(outcomes=[{"never": "dispatched"}])
-    composer = _real_hitl_composer_with_resume(
+    composer, resume_step_context = _real_hitl_composer_with_resume(
         inner_llm, _resume_hitl_result(HITLResponse.EDIT, edited_proposal=None)
     )
     wrapper = RetryBreakerFallbackDispatcher(
@@ -2248,5 +2254,5 @@ async def test_retry_wrapper_propagates_resume_edit_decode_terminally() -> None:
     )
 
     with pytest.raises(HITLGateEditDecodeError):
-        await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
+        await wrapper.dispatch(_binding(), _step(), step_context=resume_step_context)
     assert inner_llm.calls == []
