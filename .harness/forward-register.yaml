@@ -60,12 +60,12 @@
 snapshot:
   total: 73
   open: 0
-  design_substrate_gated: 0
-  registered_finding: 12
+  design_substrate_gated: 1
+  registered_finding: 11
   operator_gated: 1
   held: 1
   closed: 59
-  identity_digest: a588439ab4fb7da0
+  identity_digest: d19e0f130c878f8c
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -1626,26 +1626,37 @@ items:
     paused children for multi-child HITL delivery *(registered at the B-39 spec-leg PR #1092,
     out-of-family Codex round 3 (branch-vs-main), 2026-07-23)*'
 - id: B-70
+  filing: .harness/class_2_fork_b70_effect_fence_resolution_uniform_fallback.md
   title: effect_fence_resolution_for's uniform-fallback semantics share B-39's cross-branch-misapplication
     hazard, unfixed in the already-shipped mechanism
-  status: registered_finding
+  status: design_substrate_gated
   summary: The shipped ResumeContext.effect_fence_resolutions/effect_fence_resolution_for mechanism
     (B-39's own modeling precedent) has the identical uniform-fallback-to-every-unaddressed-branch
     gap B-39's CP spec v1.106 section 1.2 property 4 just closed for hitl_responses -- unfixed
-    here, since it predates and is out of this arc's scope.
-  close_out: 'ROUND-7-CORRECTED: do not copy a plain count-based rule verbatim -- B-39
-    itself REJECTED an unscoped count-based fallback rule at its own round 4 (strands
-    transitively-paused container branches). Before implementing, first determine
-    whether effect-fence pauses have an analogous container concept under HIERARCHICAL_DELEGATION
-    recursion (unresolved -- grep EffectFencePausedBranchResumeState/effect_fence_paused_branches
-    in pause_resume_protocol_types.py before assuming either way). If containers exist,
-    mirror B-39''s gate-owning/property-5 split; if not, a plain count-based invariant
-    is safe. See .harness/post-phase-8-forward-register.md B-70 for full detail.'
+    here, since it predates and is out of this arc's scope. GROUNDED 2026-07-24 -- confirmed
+    reachable by direct read of workflow_driver.py; needs its own CP spec property before code.
+  close_out: 'GROUNDED 2026-07-24 (fork filed, .harness/class_2_fork_b70_effect_fence_resolution_uniform_fallback.md),
+    resolving both open questions the round-7 close_out deferred: (1) NO container/gate-owning
+    split is needed (unlike B-39''s HITL fix) -- EffectFencePausedBranchResumeState''s own
+    docstring ("always tool-step in production") + Spec_Control_Plane_v1_106.md section 2 (REMOVED,
+    "the effect-fence mechanism does not cross a recursion boundary the way HITL child-pause
+    delivery does") both confirm a nested descendant''s own effect-fence pause propagates via
+    the generic PausedChildBranchResumeState/SubAgentChildPausedError path, never via
+    EffectFencePausedBranchResumeState -- every captured fence-pause entry is inherently
+    gate-owning and already idempotency_key-unique across recursion depth, so the plain
+    count-based-invariant branch of the round-7 conditional applies, not the property-5-mirror
+    branch. (2) The fix DOES need its own CP spec property (a section 26.8.1 companion mirroring
+    section 1.2 property 4''s safety+liveness shape, simpler -- no property-5 equivalent) before
+    code, since restricting the auto-fallback changes observable resume behavior of an
+    already-cleared mechanism -- impl-to-cleared-spec does not apply. Status flipped
+    registered_finding -> design_substrate_gated accordingly. Recommended property text at the
+    fork doc section 3. Spec-leg not yet opened -- next step once prioritized.'
   council: no -- parity fix mirroring an already-ratified pattern (B-39's own property 4), not
-    a fresh open design question.
+    a fresh open design question; grounding confirmed no cross-domain tension.
   heading: '### B-70 · `effect_fence_resolution_for`''s uniform-fallback semantics share B-39''s
     cross-branch-misapplication hazard, unfixed in the already-shipped mechanism *(registered
-    at the B-39 spec-leg PR #1092, out-of-family Codex round 3 (branch-vs-main), 2026-07-23)*'
+    at the B-39 spec-leg PR #1092, out-of-family Codex round 3 (branch-vs-main), 2026-07-23;
+    GROUNDED + fork filed 2026-07-24)*'
 - id: B-71
   title: Operator-facing HITL escalation requests carry no run-instance-distinct correlation
     identifier
