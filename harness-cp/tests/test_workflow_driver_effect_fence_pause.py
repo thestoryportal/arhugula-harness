@@ -463,3 +463,59 @@ def test_resume_threads_key_bound_resolution_to_resumed_step() -> None:
     # Non-consuming: reading resume_ctx.effect_fence_resolution again still returns
     # the same value (a pure field read, no one-shot state to drain).
     assert resume_ctx.effect_fence_resolution is EffectFenceResolution.RE_FIRE
+
+
+class _RecordingHITLHolderDispatcher:
+    """Records the `step_context.hitl_delivery_holder` each dispatch received, then
+    SUCCEEDS — to witness whether the driver mistakenly threads a HITL delivery
+    cell onto a step that is NOT genuinely resuming a HITL_PENDING pause."""
+
+    def __init__(self) -> None:
+        self.seen: list[tuple[str, Any]] = []
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        step_id = str(step.step_id)
+        self.seen.append((step_id, getattr(step_context, "hitl_delivery_holder", None)))
+        return {"tool_id": "do_effect", "response": {"echoed": step_id}}
+
+
+def test_fresh_non_resuming_dispatch_never_receives_hitl_delivery_cell() -> None:
+    """codex round-1 [P1] mutation probe — a FRESH (non-resuming) dispatch that
+    happens to have a non-None `resume_context` (e.g. it is a sibling child
+    dispatched within the same overall resume() cycle as some OTHER paused
+    child) must NEVER receive a HITL delivery cell, even when `resume_context.
+    hitl_response` (the uniform fallback) is populated. Without the
+    `resume_snapshot is not None and resume_snapshot.pause_reason is
+    WorkflowPauseReason.HITL_PENDING` gate, `step_index == resume_at` is
+    trivially true at a fresh dispatch's own start (resume_at=0), so the
+    uniform fallback would misroute a DIFFERENT child's operator answer onto
+    this unrelated step — the multi-child uniform-fallback misapplication risk
+    the CP spec's own round-3 correction history warned about."""
+    from harness_core.identity import EntryID
+    from harness_cp.hitl_placement import HITLResult
+    from harness_cp.hitl_response_palette import HITLResponse
+
+    uniform_fallback = HITLResult(
+        response=HITLResponse.APPROVE,
+        timestamp="2026-07-24T00:00:00Z",
+        audit_ledger_entry_id=EntryID("e-fresh-sibling-probe"),
+        response_summary_hash="f" * 64,
+    )
+    resume_ctx = ResumeContext(hitl_response=uniform_fallback)
+    rec = _RecordingHITLHolderDispatcher()
+    ctx = cast(
+        DriverContext, _Ctx(ledger=_RecordingLedger(), emitter=_Emitter(), with_protocol=True)
+    )
+
+    # A FRESH dispatch — no pause_snapshot_input at all (resume_at=0 by default,
+    # not because s0 is "the resumed step"). resume_context is still forwarded
+    # (mirrors a sibling child in a fan-out resume that also received the
+    # parent's threaded resume_context verbatim).
+    result = _run(dispatcher=rec, ctx=ctx, resume_context=resume_ctx)
+
+    assert result.status is RunStatus.SUCCESS
+    assert len(rec.seen) == 2  # s0, s1 — both dispatched fresh
+    for _step_id, holder in rec.seen:
+        assert holder is None  # NEVER delivered on a fresh, non-resuming dispatch

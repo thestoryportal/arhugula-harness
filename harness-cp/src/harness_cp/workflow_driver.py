@@ -4505,8 +4505,24 @@ def _execute_workflow_body(
     # is constructed HERE, at this single call site, so it is reachable from exactly
     # one composer-reaching `StepExecutionContext` — never shared across branches or
     # recursion depths (see `HITLDeliveryCell`'s docstring).
+    # codex round-1 [P1]: gate delivery on THIS call genuinely resuming a
+    # HITL_PENDING pause (mirrors the effect_fence_directive gate immediately
+    # above, which requires `resume_snapshot.effect_fence_resume is not None`).
+    # `resume_context is not None` alone is NOT sufficient — it is forwarded
+    # verbatim to EVERY child dispatched in the same resume cycle, including a
+    # not-yet-dispatched FRESH sibling (`resume_snapshot is None` for that
+    # child's own recursive `execute_workflow` call). Without this gate, a
+    # fresh sibling's `step_index == resume_at` (trivially true at its own
+    # start, resume_at=0) would fall through to the uniform `hitl_response`
+    # default and receive an answer meant for a DIFFERENT paused child —
+    # exactly the multi-child uniform-fallback misapplication risk the CP
+    # spec's own round-3 correction history warned about.
     hitl_delivery_cell: HITLDeliveryCell | None = None
-    if resume_context is not None:
+    if (
+        resume_context is not None
+        and resume_snapshot is not None
+        and resume_snapshot.pause_reason is WorkflowPauseReason.HITL_PENDING
+    ):
         _resolved_hitl = resume_context.hitl_response_for(run_id)
         if _resolved_hitl is not None:
             hitl_delivery_cell = HITLDeliveryCell(_resolved_hitl)
