@@ -953,6 +953,172 @@ class ResumeContext(BaseModel):
     vouched for (SKIP_AS_FIRED / RE_FIRE) fire and the run folds survivors per
     `cascade_policy`. So all four resolutions compose freely across branches in one map."""
 
+    hitl_responses: dict[str, HITLResult] | None = None
+    """Per-branch-DISTINCT HITL responses, keyed by the paused CHILD's own
+    `PausedChildBranchResumeState.child_snapshot.run_id` — **NOT** `branch_path`
+    (corrected at this pass; see the keying-defect note below). `None` (the
+    default) → every GATE-OWNING branch resolves to the uniform `hitl_response`
+    above (byte-identical to pre-B-39 single-branch behavior in the single-
+    gate-owning-branch case). When supplied, a gate-owning child whose OWN
+    `run_id` appears as a key here is resolved with THIS map's value. This
+    field's CARRIER shape alone does not by itself guarantee an unaddressed
+    gate-owning sibling is never misresolved by the uniform default when 2+
+    gate-owning branches are concurrently paused — that safety guarantee is a
+    RESOLVER-level invariant (§1.2 property 4, round-4-revised from a
+    mechanism to a black-box invariant: safety — no gate-owning branch
+    receives a response addressed to a different one; liveness — resume
+    still reaches every addressed gate-owning branch, traversing any
+    transitively-paused container/ancestor branch en route, property 5),
+    deliberately NOT prescribed here as a specific counting/INERT mechanism
+    (a round-3 draft of this docstring did prescribe one; out-of-family
+    review found it would strand transitively-paused container branches —
+    see §1.2 property 4's own round-4 correction note for the full account).
+    A pure per-key lookup (`hitl_response_for`, below) has no visibility into
+    how many gate-owning siblings are paused this cycle or which branches are
+    merely transitive containers — enforcing the invariant is the deferred
+    resolver's job (CP plan v2.42 §5), not this field's or that method's.
+    This is a `default + per-key override` composition (NOT a replacement of
+    the single field) — the SAME CARRIER shape `effect_fence_resolutions`
+    ships (the effect-fence sibling's identical uniform-fallback safety gap
+    is registered, not fixed, as a pre-existing shipped-and-cleared issue,
+    `B-70`). Read via `hitl_response_for(child_run_id)`.
+
+    **Scope limit (round-3 correction): `pause_snapshot`-return resume path
+    only.** This addressing scheme requires the caller to already possess a
+    `PausedChildBranchResumeState.child_snapshot.run_id` — obtainable only
+    from a `RunResult.pause_snapshot` object the caller directly holds (the
+    resume path where `api.resume(pause_snapshot=...)` is supplied). The
+    OTHER resume mode `api.resume()` supports, `resume_handle` (crash-
+    recovery: the caller supplies only a `workflow_id`; the runtime reads the
+    latest durably-journaled snapshot itself, per §14.14.8), gives the caller
+    NO prior snapshot to read a paused child's `run_id` from BEFORE
+    `resume_context` must be constructed — so multi-child concurrent HITL
+    addressing via `hitl_responses` is NOT YET SUPPORTED on the
+    `resume_handle` path; such a caller is limited to the single-paused-child
+    case (uniform `hitl_response` only) until a follow-on accessor exposing
+    the durably-journaled pause state to `resume_handle` callers before
+    `resume_context` construction is designed. This is a registered scope
+    limitation, not a silently-dropped case — see §3's cross-axis
+    dispositions.
+
+    **Scope limit (round-6 correction, out-of-family review): operator-
+    facing escalation requests do not yet expose the `run_id` a response
+    must be keyed by.** This field lets a CALLER who already knows a paused
+    child's `run_id` construct a correctly-keyed response. It does NOT by
+    itself solve how that caller LEARNS which `run_id` a given HITL
+    escalation request corresponds to. The existing operator-facing request
+    types this arc does NOT touch — `HITLEscalationBrief` (C-CP-28 §25.2,
+    `harness_cp/validator_framework_types.py`) and the webhook delivery
+    payload the HITL gate composer sends — carry `parent_action_id` and the
+    `hitl:`-prefixed `compose_hitl_action_id(parent_action_id,
+    placement_position)` (`harness-runtime/lifecycle/hitl_gate_composer.py`),
+    BOTH of which derive from the SAME workflow_id-scoped, non-run-instance
+    identifier this arc's own keying-defect note (above) already found
+    collides across repeated same-`child_workflow_id` dispatch — NEITHER
+    carries a `run_id`. Concretely: when two peer branches dispatch the
+    SAME `child_workflow_id` and BOTH hit the identical internal HITL gate,
+    their two escalation requests/webhook payloads are byte-identical on
+    every field an operator or webhook consumer can see — there is
+    structurally no way to tell them apart, so a human (or automated
+    consumer) cannot know which `child_run_id` to key a `hitl_responses`
+    entry under for either one. Fixing this requires amending
+    `HITLEscalationBrief`/the webhook payload shape (an EXISTING C-CP-28
+    contract this delta does not touch) to carry a run-instance-distinct
+    correlation identifier — a genuinely separate design surface from this
+    delta's `ResumeContext` carrier fix, NOT solved here. Registered as
+    `B-71` (`.harness/forward-register.yaml`); not this arc's scope.
+
+    **Keying-defect note (why `run_id`, not `branch_path`; recorded so the
+    `branch_path` reading is not reinvented).** A first draft of this field
+    keyed by C-CP-25 §25.16 `branch_path` (`compose_branch_path`), reasoning
+    that it is "globally unique at arbitrary recursion depth." Out-of-family
+    review (`just codex-review-uncommitted`) found this FALSE: `branch_path`
+    derives from `parent_action_id`, which derives from `action_id =
+    f"workflow:{workflow_id}:step:{step_index}"` (`workflow_driver.py`) —
+    scoped by the STATIC workflow/manifest identifier, with NO `run_id`
+    component. When two PEER branches dispatch the SAME `child_workflow_id`
+    (an explicitly supported scenario — see this arc's own register history),
+    their respective children's INTERNAL `action_id`/`branch_path` values are
+    byte-IDENTICAL (same `workflow_id`, same internal `step_index`), so a
+    grandchild paused under child-instance-A and the equivalent grandchild
+    paused under child-instance-B would COLLIDE on the same `branch_path` key
+    — the map could not carry two distinct responses. `run_id`, by contrast,
+    genuinely IS distinct per recursive dispatch instance: `child_run_id` is
+    derived via `compose_child_run_id_seed` (`harness-runtime/lifecycle/
+    sub_agent_dispatch.py`) as `sha256("child-run:" + parent_idempotency_key +
+    ":" + branch_path + ":" + child_workflow_id)`, and `parent_idempotency_key
+    = _compute_step_idempotency_key(run_idempotency_key, step_index, ...)`
+    where `run_idempotency_key = sha256(run_id, workflow_id, ...)` — the
+    SPAWNING invocation's OWN `run_id` is folded in at every level, so two
+    peer branches spawning the same `child_workflow_id` (distinct `run_id`s at
+    the spawning level, since `run_id` is unique per `execute_workflow`
+    invocation) necessarily derive DISTINCT child `run_id`s, and this
+    distinctness propagates to every further-nested grandchild by the same
+    recursive argument. `run_id` is therefore genuinely unique across
+    arbitrary recursion depth AND repeated same-`child_workflow_id` dispatch
+    — the property `branch_path` was wrongly assumed to have. No new carrier
+    field is needed to expose it: `PausedChildBranchResumeState.child_snapshot.
+    run_id` (`PauseSnapshot.run_id: str`, already a REQUIRED existing field)
+    already carries it — an operator reads `paused_child.child_snapshot.
+    run_id` off a prior `RunResult.pause_snapshot` to build a `hitl_responses`
+    key, with NO new public field addition (a prior draft of this spec leg
+    added `PausedChildBranchResumeState.branch_path` for this purpose; REMOVED
+    at this pass — `child_snapshot.run_id` already solves the identical
+    addressability need, more robustly, with a smaller diff).
+
+    HOW the resolved per-branch answer physically reaches the resumed step's
+    gate composer (which parameter, which call site, at which recursion
+    level) is deliberately UNSPECIFIED here — see §1's contract-level
+    statement below; this field only fixes the CARRIER SHAPE an operator
+    constructs, not the delivery mechanism.
+
+    A pause that is NOT branch-scoped (the depth-0 root's own linear/fan-out-
+    barrier gate) has no child `run_id` to key by (it IS the run); its gate
+    always consumes the uniform `hitl_response` field directly, exactly
+    mirroring how a LINEAR effect-fence pause consumes `effect_fence_resolution`
+    directly (§26.8.1 sibling-field precedent, unamended by this delta)."""
+
+    def hitl_response_for(self, child_run_id: str) -> HITLResult | None:
+        """The operator's HITL response for one paused GATE-OWNING child's own `run_id`.
+
+        A PURE per-key lookup-with-fallback: the `hitl_responses` map entry
+        for `child_run_id` if present, else the uniform `hitl_response`
+        default. `None` when neither is supplied → the branch re-pauses
+        INERT (never an auto-re-fire). A `None` map and a map-without-this-
+        key both fall through to the single default, so single-gate-owning-
+        branch callers (the only shape that existed pre-B-39) are byte-
+        unchanged. Keyed by `child_run_id` (`PausedChildBranchResumeState.
+        child_snapshot.run_id`), NOT `branch_path` — see the keying-defect
+        note above; the composition CARRIER shape (default + per-key
+        override) mirrors `effect_fence_resolution_for` (§26.8.1), only the
+        key differs. This method is called ONLY for a branch that is itself
+        gate-owning (property 5) — a transitively-paused container/ancestor
+        branch is never resolved through this method at all; it is simply
+        re-entered/recursed into, unconditionally, by whatever mechanism the
+        impl leg lands (deferred, §1.3).
+
+        **This method alone does NOT enforce the multi-child fallback-safety
+        invariant (§1.2 property 4 — round-4-revised to a black-box
+        invariant; NOT a mechanism this method itself implements).** It has
+        no visibility into how many gate-owning siblings are paused this
+        resume cycle or which OTHER branches in the tree are merely
+        transitive containers, so it cannot by itself refuse an unsafe
+        uniform-fallback call. The RESOLVER invoking this method (impl
+        discretion, §1.3, deferred alongside properties 1-3) MUST itself
+        satisfy property 4's safety + liveness invariants — HOW it does so
+        (counting, addressed-set tracking, some other technique) is
+        deliberately unspecified here; a round-3 draft of this docstring
+        prescribed a specific counting/INERT mechanism, which out-of-family
+        review found would strand a transitively-paused container branch
+        (property 5) — this pure method cannot discharge property 4's
+        invariant on its own, and no longer attempts to describe how the
+        resolver should."""
+        if self.hitl_responses is not None:
+            mapped = self.hitl_responses.get(child_run_id)
+            if mapped is not None:
+                return mapped
+        return self.hitl_response
+
     def effect_fence_resolution_for(self, idempotency_key: str) -> EffectFenceResolution | None:
         """The operator's effect-fence resolution for one held-reserve `idempotency_key`.
 
