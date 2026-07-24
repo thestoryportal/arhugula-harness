@@ -251,6 +251,7 @@ class _MockChildWorkflowRunner:
         default_model_binding: ModelBinding,
         pause_snapshot_input: Any = None,
         child_run_id_seed: str | None = None,
+        resume_context: Any = None,
     ) -> RunResult:
         self.calls.append(
             {
@@ -266,6 +267,8 @@ class _MockChildWorkflowRunner:
                 # B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT — the deterministic child run_id
                 # seed (None when the child is non-recoverable / a non-fanout dispatch).
                 "child_run_id_seed": child_run_id_seed,
+                # B-39 Slice B — the operator's resume payload, forwarded verbatim.
+                "resume_context": resume_context,
             }
         )
         return self.next_result
@@ -759,6 +762,28 @@ def test_child_resume_snapshot_forwarded_to_runner(tmp_path: Path) -> None:
     resume_ctx = _step_context().model_copy(update={"child_resume_snapshot": snap})
     dispatcher.dispatch(_binding(), _step(), step_context=resume_ctx)
     assert runner.calls[-1]["pause_snapshot_input"] is snap
+
+
+def test_resume_context_forwarded_to_runner_for_downward_threading(tmp_path: Path) -> None:
+    """B-39 Slice B — `step_context.resume_context` (the CP driver-stamped, pure
+    pass-through operator resume payload) is forwarded to the child runner as
+    `resume_context` so the recursive `execute_workflow` call can resolve the
+    child's OWN effect-fence + per-branch HITL delivery. `None` on a normal
+    (non-resume) dispatch."""
+    from harness_cp.pause_resume_protocol_types import ResumeContext
+
+    dispatcher, runner, _ = _dispatcher(tmp_path)
+
+    # Normal dispatch → runner receives resume_context=None.
+    dispatcher.dispatch(_binding(), _step(), step_context=_step_context())
+    assert runner.calls[-1]["resume_context"] is None
+
+    # Resume dispatch → the step context carries the operator's resume payload →
+    # forwarded verbatim (the SAME object, not a copy — no re-resolution needed).
+    resume_ctx = ResumeContext()
+    step_context_with_resume = _step_context().model_copy(update={"resume_context": resume_ctx})
+    dispatcher.dispatch(_binding(), _step(), step_context=step_context_with_resume)
+    assert runner.calls[-1]["resume_context"] is resume_ctx
 
 
 def test_child_runner_resume_workflow_id_mismatch_fails_closed() -> None:

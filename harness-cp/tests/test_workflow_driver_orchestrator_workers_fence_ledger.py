@@ -206,7 +206,6 @@ class _Ctx:
         emitter: _Emitter,
         pause_resume_protocol: Any = None,
         engine_output_store: Any = None,
-        resume_context_holder: Any = None,
     ) -> None:
         from opentelemetry.trace import NoOpTracerProvider
 
@@ -220,7 +219,6 @@ class _Ctx:
         self.validator_framework = None
         self.tenant_id = None
         self.engine_output_store = engine_output_store
-        self.resume_context_holder = resume_context_holder
 
 
 def _pause_context_reader() -> tuple[StateSummary, str]:
@@ -403,19 +401,6 @@ class EffectFenceAbortedError(Exception):
     """Test-local stand-in for the runtime fence's operator-ABORT error."""
 
 
-class _HolderWithResolutions:
-    """Stand-in ResumeContextHolder — `peek()` returns a ResumeContext carrying a
-    per-key `effect_fence_resolutions` map (non-consuming peek contract)."""
-
-    def __init__(self, resolutions: dict[str, EffectFenceResolution]) -> None:
-        self._rc = ResumeContext(effect_fence_resolutions=resolutions)
-        self.peeked = 0
-
-    def peek(self) -> ResumeContext:
-        self.peeked += 1
-        return self._rc
-
-
 class _KindMap:
     """Registry mapping step kinds to dispatchers; kinds in `poison` (or unmapped)
     raise `StepKindDispatcherNotBoundError` SYNCHRONOUSLY at lookup — the worker
@@ -579,7 +564,7 @@ def _run(
     store: Any = None,
     with_pause_protocol: bool = False,
     pause_snapshot_input: PauseSnapshot | None = None,
-    resume_context_holder: Any = None,
+    resume_context: Any = None,
     workflow_id: str = "wf-ow-fl",
 ) -> Any:
     if ledger is None:
@@ -593,7 +578,6 @@ def _run(
             emitter=emitter,
             pause_resume_protocol=_protocol() if with_pause_protocol else None,
             engine_output_store=store,
-            resume_context_holder=resume_context_holder,
         ),
     )
     return execute_workflow(
@@ -604,6 +588,7 @@ def _run(
         default_model_binding=_DEFAULT_BINDING,
         step_dispatchers=cast(StepDispatcherRegistry, registry),
         pause_snapshot_input=pause_snapshot_input,
+        resume_context=resume_context,
     )
 
 
@@ -726,7 +711,9 @@ def test_ow_fence_abort_exit_aborted_no_capture_inert_peer_captured() -> None:
     snapshot, key_by_index = _fence_pause_round1(store)
     run_key = store.sole_run_key()
 
-    holder = _HolderWithResolutions({key_by_index[1]: EffectFenceResolution.ABORT})
+    resume_ctx = ResumeContext(
+        effect_fence_resolutions={key_by_index[1]: EffectFenceResolution.ABORT}
+    )
     reactor = _DirectiveReactor(barrier_indexes=frozenset({1, 2}))
     registry = _KindMap({StepKind.DECLARATIVE_STEP: _Echo(), StepKind.INFERENCE_STEP: reactor})
     ledger = _RecordingLedger()
@@ -739,7 +726,7 @@ def test_ow_fence_abort_exit_aborted_no_capture_inert_peer_captured() -> None:
         store=store,
         with_pause_protocol=True,
         pause_snapshot_input=snapshot,
-        resume_context_holder=holder,
+        resume_context=resume_ctx,
         ledger=ledger,
         emitter=emitter,
     )

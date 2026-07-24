@@ -38,7 +38,7 @@ from collections.abc import Mapping
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, PrivateAttr
 
 from harness_cp.handoff_context import StateSummary
 
@@ -1135,6 +1135,54 @@ class ResumeContext(BaseModel):
             if mapped is not None:
                 return mapped
         return self.effect_fence_resolution
+
+
+class HITLDeliveryCell(BaseModel):
+    """Per-branch one-shot mutable cell for resolved HITL-response delivery.
+
+    B-39 impl leg Slice B (CP spec v1.106 §1 / Runtime spec §14.8.8.10) — the
+    replacement for the retired ctx-level, run-tree-wide-shared
+    `ResumeContextHolder` singleton. Reuses the SAME frozen-outer /
+    mutable-internal-`PrivateAttr` shape (Runtime's `ResumeContextHolder`)
+    rather than inventing a new one-shot pattern — the discriminator that
+    separates this from a re-scoped ctx-level holder is REACHABILITY, not
+    intent: exactly one `StepExecutionContext` instance holds a reference to
+    ANY given cell, created fresh at the single point `resume_context.
+    hitl_response_for(run_id)` is resolved (the linear resume_at
+    reconstruction site — the same site that already stamps
+    `effect_fence_resolution`), never at a ctx/dispatcher/composer-instance
+    scope. `harness-cp` cannot import Runtime's `ResumeContextHolder`
+    (`harness-runtime` depends on `harness-cp`, so the reverse import would
+    cycle — the `[[od-cp-canonical-direction-axis-isolation-fix]]` inverse
+    case), so this is a CP-owned sibling type carrying only the narrower
+    `HITLResult` payload the composer's Step-0 read actually consumes (the
+    retired holder's `consume_and_clear()` returned a full `ResumeContext`
+    only to be immediately unwrapped to `.hitl_response` at the one call
+    site that read it).
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    _value: HITLResult | None = PrivateAttr(default=None)
+
+    def __init__(self, resolved: HITLResult | None, **data: Any) -> None:
+        super().__init__(**data)
+        self._value = resolved
+
+    def consume_and_clear(self) -> HITLResult | None:
+        """Atomically return the cell's value AND clear it to `None`.
+
+        Enforces the same one-shot semantic the retired ctx-level holder
+        enforced (CP spec v1.106 §1 CONTRACT property: "one-shot preserved
+        under `RetryBreakerFallbackDispatcher` retry within one resume
+        cycle") — `StepExecutionContext` is frozen and constructed once per
+        step-dispatch attempt, reused unchanged across retries, so the first
+        `dispatch()` call drains this cell and every retry attempt within
+        the same resume cycle sees `None`.
+        """
+        current = self._value
+        self._value = None
+        return current
 
 
 # B-HIERARCHICAL-PAUSE (R-FS-1) — `FanOutResumeState.paused_child_branches` forward-refs

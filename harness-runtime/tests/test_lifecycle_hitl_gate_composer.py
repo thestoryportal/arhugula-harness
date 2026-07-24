@@ -2656,10 +2656,15 @@ def _resume_step_with_payload(payload: Mapping[str, Any]) -> WorkflowStep:
     )
 
 
-def _set_resume_hitl_response(composer: RuntimeHITLGateComposer, hitl: Any) -> None:
-    from harness_cp.pause_resume_protocol_types import ResumeContext
+def _resume_step_context(hitl: Any) -> StepExecutionContext:
+    """B-39 Slice B: a `step_context` carrying a pre-loaded one-shot HITL
+    delivery cell, replacing the retired ctx-level `resume_context_holder.
+    set(...)` priming — the composer now reads `step_context.
+    hitl_delivery_holder.consume_and_clear()` directly (per-branch, not a
+    composer-instance-level sidecar)."""
+    from harness_cp.pause_resume_protocol_types import HITLDeliveryCell
 
-    composer.resume_context_holder.set(ResumeContext(hitl_response=hitl))
+    return _make_step_context().model_copy(update={"hitl_delivery_holder": HITLDeliveryCell(hitl)})
 
 
 def _make_resume_hitl_result(
@@ -2701,12 +2706,12 @@ async def test_resume_edit_applies_structured_payload_replace_not_merge(
         inner=inner, surface=_MockAskUserQuestionSurface([]), tracer_provider=provider
     )
     edited = ProposedAction(action_kind=ActionKind.TOOL_CALL, payload={"edited": 2}, brief=None)
-    _set_resume_hitl_response(
-        composer, _make_resume_hitl_result(HITLResponse.EDIT, edited_proposal=edited)
+    step_context = _resume_step_context(
+        _make_resume_hitl_result(HITLResponse.EDIT, edited_proposal=edited)
     )
 
     step = _resume_step_with_payload({"orig": 1})
-    result = await composer.dispatch(cast(Any, object()), step, step_context=_make_step_context())
+    result = await composer.dispatch(cast(Any, object()), step, step_context=step_context)
 
     assert result == {"inner_dispatched": True}
     assert len(inner.calls) == 1
@@ -2731,13 +2736,13 @@ async def test_resume_edit_with_none_proposal_raises_typed_error_not_attributeer
     composer = _make_composer(
         inner=inner, surface=_MockAskUserQuestionSurface([]), tracer_provider=provider
     )
-    _set_resume_hitl_response(
-        composer, _make_resume_hitl_result(HITLResponse.EDIT, edited_proposal=None)
+    step_context = _resume_step_context(
+        _make_resume_hitl_result(HITLResponse.EDIT, edited_proposal=None)
     )
 
     step = _resume_step_with_payload({"orig": 1})
     with pytest.raises(HITLGateEditDecodeError):
-        await composer.dispatch(cast(Any, object()), step, step_context=_make_step_context())
+        await composer.dispatch(cast(Any, object()), step, step_context=step_context)
     assert inner.calls == []  # step NOT dispatched
 
 
@@ -2755,11 +2760,11 @@ async def test_resume_reject_raises_rejected_error_and_does_not_dispatch(
     composer = _make_composer(
         inner=inner, surface=_MockAskUserQuestionSurface([]), tracer_provider=provider
     )
-    _set_resume_hitl_response(composer, _make_resume_hitl_result(HITLResponse.REJECT))
+    step_context = _resume_step_context(_make_resume_hitl_result(HITLResponse.REJECT))
 
     step = _resume_step_with_payload({"orig": 1})
     with pytest.raises(HITLGateRejectedError):
-        await composer.dispatch(cast(Any, object()), step, step_context=_make_step_context())
+        await composer.dispatch(cast(Any, object()), step, step_context=step_context)
     assert inner.calls == []  # rejected step NOT dispatched (fail-safe restored)
 
 
@@ -2777,15 +2782,14 @@ async def test_resume_approve_and_respond_dispatch_unchanged(
     composer = _make_composer(
         inner=inner, surface=_MockAskUserQuestionSurface([]), tracer_provider=provider
     )
-    _set_resume_hitl_response(
-        composer,
+    step_context = _resume_step_context(
         _make_resume_hitl_result(
             response, response_text="ack" if response == HITLResponse.RESPOND else None
         ),
     )
 
     step = _resume_step_with_payload({"orig": 1})
-    result = await composer.dispatch(cast(Any, object()), step, step_context=_make_step_context())
+    result = await composer.dispatch(cast(Any, object()), step, step_context=step_context)
 
     assert result == {"inner_dispatched": True}
     assert len(inner.calls) == 1
@@ -2834,7 +2838,13 @@ async def test_resume_reject_audits_then_raises(
     composer, audit, ctx = _make_resume_composer_with_audit(
         inner, provider, placements=(HITLPlacement(position=HITLPlacementKind.PRE_ACTION),)
     )
-    _set_resume_hitl_response(composer, _make_resume_hitl_result(HITLResponse.REJECT))
+    from harness_cp.pause_resume_protocol_types import HITLDeliveryCell
+
+    ctx = ctx.model_copy(
+        update={
+            "hitl_delivery_holder": HITLDeliveryCell(_make_resume_hitl_result(HITLResponse.REJECT))
+        }
+    )
 
     with pytest.raises(HITLGateRejectedError):
         await composer.dispatch(
@@ -2866,8 +2876,14 @@ async def test_resume_edit_audits_post_mutation_hash_and_applies(
         inner, provider, placements=(HITLPlacement(position=HITLPlacementKind.PRE_ACTION),)
     )
     edited = ProposedAction(action_kind=ActionKind.TOOL_CALL, payload={"edited": 2}, brief=None)
-    _set_resume_hitl_response(
-        composer, _make_resume_hitl_result(HITLResponse.EDIT, edited_proposal=edited)
+    from harness_cp.pause_resume_protocol_types import HITLDeliveryCell
+
+    ctx = ctx.model_copy(
+        update={
+            "hitl_delivery_holder": HITLDeliveryCell(
+                _make_resume_hitl_result(HITLResponse.EDIT, edited_proposal=edited)
+            )
+        }
     )
 
     result = await composer.dispatch(
@@ -2894,7 +2910,13 @@ async def test_resume_approve_audits_and_dispatches(
     composer, audit, ctx = _make_resume_composer_with_audit(
         inner, provider, placements=(HITLPlacement(position=HITLPlacementKind.PRE_ACTION),)
     )
-    _set_resume_hitl_response(composer, _make_resume_hitl_result(HITLResponse.APPROVE))
+    from harness_cp.pause_resume_protocol_types import HITLDeliveryCell
+
+    ctx = ctx.model_copy(
+        update={
+            "hitl_delivery_holder": HITLDeliveryCell(_make_resume_hitl_result(HITLResponse.APPROVE))
+        }
+    )
 
     result = await composer.dispatch(
         cast(Any, object()), _resume_step_with_payload({"orig": 1}), step_context=ctx
@@ -2919,7 +2941,13 @@ async def test_resume_no_matching_placement_no_audit_but_routes(
     provider, _ = tracer_provider
     inner = _MockInnerDispatcher()
     composer, audit, ctx = _make_resume_composer_with_audit(inner, provider, placements=())
-    _set_resume_hitl_response(composer, _make_resume_hitl_result(HITLResponse.REJECT))
+    from harness_cp.pause_resume_protocol_types import HITLDeliveryCell
+
+    ctx = ctx.model_copy(
+        update={
+            "hitl_delivery_holder": HITLDeliveryCell(_make_resume_hitl_result(HITLResponse.REJECT))
+        }
+    )
 
     with pytest.raises(HITLGateRejectedError):
         await composer.dispatch(

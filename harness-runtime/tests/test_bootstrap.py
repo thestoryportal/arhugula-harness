@@ -1148,14 +1148,15 @@ def test_freeze_raises_incomplete_when_required_field_none() -> None:
     ctx = _MutableHarnessContext()
     with pytest.raises(IncompleteBootstrapError) as excinfo:
         ctx.freeze()
-    # All 41 required fields are missing (U-RT-52 +1 for `llm_dispatcher`;
+    # All 40 required fields are missing (U-RT-52 +1 for `llm_dispatcher`;
     # U-RT-59 +2 for `sub_agent_dispatcher` + `step_dispatchers`;
     # U-RT-60 +1 for `ask_user_question_surface`; U-RT-72 +4 for
     # `mcp_client_hosts` + `tool_dispatcher` + `per_server_trust_evaluator`
     # + `mcp_namespace_emitter` per spec v1.16 §4 C-RT-04 extension
     # (mcp_client_host reshaped singular→dict at U-RT-125 / spec v1.51);
     # U-RT-80 +1 for `memory_tool_registry` per spec v1.17 §4 C-RT-04 +
-    # §14.12 C-RT-22 extension).
+    # §14.12 C-RT-22 extension; B-39 Slice B retires `resume_context_holder`,
+    # -1 from the prior 41 count).
     assert "config" in excinfo.value.missing_fields
     assert "lifecycle_emitter" in excinfo.value.missing_fields
     assert "ledger_reader" in excinfo.value.missing_fields
@@ -1171,8 +1172,10 @@ def test_freeze_raises_incomplete_when_required_field_none() -> None:
     assert "mcp_namespace_emitter" in excinfo.value.missing_fields
     assert "memory_tool_registry" in excinfo.value.missing_fields
     assert "pause_requested_flag" in excinfo.value.missing_fields
-    assert "resume_context_holder" in excinfo.value.missing_fields
-    assert len(excinfo.value.missing_fields) == 41
+    # B-39 Slice B: `resume_context_holder` RETIRED (was required field #41) —
+    # per-branch HITL delivery via `StepExecutionContext.hitl_delivery_holder`
+    # replaces the ctx-level, run-tree-wide-shared singleton.
+    assert len(excinfo.value.missing_fields) == 40
 
 
 def test_bootstrap_stage_complete_event_is_frozen() -> None:

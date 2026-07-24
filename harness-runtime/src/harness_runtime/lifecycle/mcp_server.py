@@ -355,13 +355,12 @@ def materialize_mcp_server_stage(
         # (`workflow_driver.py` C-RT-24 §14.14.3) fires.
         _resume_snapshot = state.get("_resume_pause_snapshot")
         run_id = _resume_snapshot.run_id if _resume_snapshot is not None else uuid.uuid4().hex
-        # One-shot resume-context delivery to the resumed-step HITL gate
-        # (CP spec v1.16 §26.8.5 → runtime ResumeContextHolder sidecar).
+        # B-39 impl leg Slice B (CP spec v1.106 §1) — the operator's resume payload,
+        # threaded as the depth-0 `execute_workflow(resume_context=...)` argument
+        # (below) rather than set into a ctx-level `ResumeContextHolder` singleton
+        # (retired — see `StepExecutionContext.resume_context`'s docstring for the
+        # full per-branch delivery mechanism this replaces).
         _resume_context = state.get("_resume_context")
-        if _resume_context is not None:
-            _holder = getattr(harness_ctx, "resume_context_holder", None)
-            if _holder is not None:
-                _holder.set(_resume_context)
         # B-INTERSTEP-PERRUN-ISOLATION (runtime spec §14.21 C-RT-34 invariant 7;
         # B-INTERSTEP fork §3/§5) — establish THIS run's isolated holders in their
         # ContextVars before dispatch. The set propagates into the
@@ -432,6 +431,7 @@ def materialize_mcp_server_stage(
                     default_model_binding=workflow.default_model_binding,
                     step_dispatchers=cast(Any, effective_step_dispatchers),
                     pause_snapshot_input=_resume_snapshot,
+                    resume_context=_resume_context,
                 ),
                 timeout=drain_timeout_seconds,
             )

@@ -274,6 +274,5 @@ def _fully_populated_builder(
     builder.per_server_trust_evaluator = sentinel
     builder.mcp_namespace_emitter = sentinel
     builder.memory_tool_registry = memory_tool_registry
-    builder.resume_context_holder = sentinel
 
     return builder

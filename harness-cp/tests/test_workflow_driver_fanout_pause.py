@@ -301,6 +301,7 @@ def _run(
     workflow_id: str = "wf-fp",
     topology: TopologyPattern = TopologyPattern.ORCHESTRATOR_WORKERS,
     persona_tier: PersonaTier = _PAUSE_TIER,
+    resume_context: Any = None,
 ) -> Any:
     return execute_workflow(
         _manifest(workflow_id, topology, persona_tier),
@@ -310,6 +311,7 @@ def _run(
         default_model_binding=_DEFAULT_BINDING,
         step_dispatchers=_registry(dispatcher),
         pause_snapshot_input=pause_snapshot_input,
+        resume_context=resume_context,
     )
 
 
@@ -1713,19 +1715,6 @@ class _OrchestratorResumeRecordingDispatcher:
         return {"role": step_id, "echoed": dict(step.step_payload)}
 
 
-class _HolderWithResolution:
-    """Stand-in `ResumeContextHolder` — `peek()` returns a ResumeContext carrying the operator's
-    effect-fence resolution (NON-consuming, the production peek contract)."""
-
-    def __init__(self, resolution: EffectFenceResolution) -> None:
-        self._rc = ResumeContext(effect_fence_resolution=resolution)
-        self.peeked = 0
-
-    def peek(self) -> ResumeContext:
-        self.peeked += 1
-        return self._rc
-
-
 def test_orchestrator_worker_effect_fence_ambiguous_composes_through_barrier_to_pause() -> None:
     """REAL-FENCE WITNESS (PAUSE half, ORCHESTRATOR_WORKERS): a worker whose OWN dispatch raises
     the effect-fence ambiguous error composes through the REAL `_execute_orchestrator_workers`
@@ -1773,15 +1762,15 @@ def test_orchestrator_worker_effect_fence_resume_threads_key_bound_resolution() 
     assert len(efp) == 1
     key = efp[0].idempotency_key
 
-    holder = _HolderWithResolution(EffectFenceResolution.RE_FIRE)
+    resume_ctx = ResumeContext(effect_fence_resolution=EffectFenceResolution.RE_FIRE)
     rec = _OrchestratorResumeRecordingDispatcher()
     ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
-    ctx_obj.resume_context_holder = holder  # type: ignore[attr-defined]
     result = _run(
         steps=_steps(2),
         dispatcher=rec,
         ctx=cast(DriverContext, ctx_obj),
         pause_snapshot_input=snap,
+        resume_context=resume_ctx,
     )
 
     assert result.status is RunStatus.SUCCESS
@@ -1793,7 +1782,8 @@ def test_orchestrator_worker_effect_fence_resume_threads_key_bound_resolution() 
     assert threaded is not None
     assert threaded.resolution is EffectFenceResolution.RE_FIRE
     assert threaded.idempotency_key == key
-    assert holder.peeked >= 1  # PEEKED (non-consuming), not consumed
+    # Non-consuming: re-reading resume_ctx.effect_fence_resolution still returns RE_FIRE.
+    assert resume_ctx.effect_fence_resolution is EffectFenceResolution.RE_FIRE
 
 
 class EffectFenceAbortedError(Exception):
@@ -1832,15 +1822,15 @@ def test_orchestrator_worker_effect_fence_resume_abort_is_terminal_failed() -> N
     snap = paused.pause_snapshot
     assert snap is not None and snap.fan_out_resume is not None
 
-    holder = _HolderWithResolution(EffectFenceResolution.ABORT)
+    resume_ctx = ResumeContext(effect_fence_resolution=EffectFenceResolution.ABORT)
     rec = _OrchestratorAbortOnResolutionDispatcher()
     ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
-    ctx_obj.resume_context_holder = holder  # type: ignore[attr-defined]
     result = _run(
         steps=_steps(2),
         dispatcher=rec,
         ctx=cast(DriverContext, ctx_obj),
         pause_snapshot_input=snap,
+        resume_context=resume_ctx,
     )
 
     assert result.status is RunStatus.FAILED
@@ -1877,14 +1867,14 @@ def test_orchestrator_worker_effect_fence_resume_changed_kind_fails_closed() -> 
             step_id=StepID("worker-1"), step_kind=StepKind.INFERENCE_STEP, step_payload={"index": 1}
         ),
     ]
-    holder = _HolderWithResolution(EffectFenceResolution.SKIP_AS_FIRED)
+    resume_ctx = ResumeContext(effect_fence_resolution=EffectFenceResolution.SKIP_AS_FIRED)
     ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
-    ctx_obj.resume_context_holder = holder  # type: ignore[attr-defined]
     result = _run(
         steps=changed,
         dispatcher=_OrchestratorResumeRecordingDispatcher(),
         ctx=cast(DriverContext, ctx_obj),
         pause_snapshot_input=snap,
+        resume_context=resume_ctx,
     )
 
     assert result.status is RunStatus.FAILED
@@ -1976,12 +1966,15 @@ def test_orchestrator_self_effect_fence_resume_re_fire_recovers() -> None:
     assert snap is not None and snap.orchestrator_effect_fence_resume is not None
     key = snap.orchestrator_effect_fence_resume.idempotency_key
 
-    holder = _HolderWithResolution(EffectFenceResolution.RE_FIRE)
+    resume_ctx = ResumeContext(effect_fence_resolution=EffectFenceResolution.RE_FIRE)
     rec = _OrchestratorSelfFenceAmbiguousDispatcher()
     ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
-    ctx_obj.resume_context_holder = holder  # type: ignore[attr-defined]
     result = _run(
-        steps=_steps(2), dispatcher=rec, ctx=cast(DriverContext, ctx_obj), pause_snapshot_input=snap
+        steps=_steps(2),
+        dispatcher=rec,
+        ctx=cast(DriverContext, ctx_obj),
+        pause_snapshot_input=snap,
+        resume_context=resume_ctx,
     )
 
     assert result.status is RunStatus.SUCCESS
@@ -1991,7 +1984,8 @@ def test_orchestrator_self_effect_fence_resume_re_fire_recovers() -> None:
     assert threaded is not None
     assert threaded.resolution is EffectFenceResolution.RE_FIRE
     assert threaded.idempotency_key == key
-    assert holder.peeked >= 1  # PEEKED (non-consuming)
+    # Non-consuming: re-reading resume_ctx.effect_fence_resolution still returns RE_FIRE.
+    assert resume_ctx.effect_fence_resolution is EffectFenceResolution.RE_FIRE
 
 
 def test_orchestrator_self_effect_fence_resume_abort_is_terminal_failed() -> None:
@@ -2006,12 +2000,15 @@ def test_orchestrator_self_effect_fence_resume_abort_is_terminal_failed() -> Non
     snap = paused.pause_snapshot
     assert snap is not None and snap.orchestrator_effect_fence_resume is not None
 
-    holder = _HolderWithResolution(EffectFenceResolution.ABORT)
+    resume_ctx = ResumeContext(effect_fence_resolution=EffectFenceResolution.ABORT)
     rec = _OrchestratorSelfFenceAmbiguousDispatcher()
     ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
-    ctx_obj.resume_context_holder = holder  # type: ignore[attr-defined]
     result = _run(
-        steps=_steps(2), dispatcher=rec, ctx=cast(DriverContext, ctx_obj), pause_snapshot_input=snap
+        steps=_steps(2),
+        dispatcher=rec,
+        ctx=cast(DriverContext, ctx_obj),
+        pause_snapshot_input=snap,
+        resume_context=resume_ctx,
     )
 
     assert result.status is RunStatus.FAILED
@@ -2031,12 +2028,15 @@ def test_orchestrator_self_effect_fence_resume_skip_as_fired_rejected() -> None:
     snap = paused.pause_snapshot
     assert snap is not None and snap.orchestrator_effect_fence_resume is not None
 
-    holder = _HolderWithResolution(EffectFenceResolution.SKIP_AS_FIRED)
+    resume_ctx = ResumeContext(effect_fence_resolution=EffectFenceResolution.SKIP_AS_FIRED)
     rec = _OrchestratorSelfFenceAmbiguousDispatcher()
     ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
-    ctx_obj.resume_context_holder = holder  # type: ignore[attr-defined]
     result = _run(
-        steps=_steps(2), dispatcher=rec, ctx=cast(DriverContext, ctx_obj), pause_snapshot_input=snap
+        steps=_steps(2),
+        dispatcher=rec,
+        ctx=cast(DriverContext, ctx_obj),
+        pause_snapshot_input=snap,
+        resume_context=resume_ctx,
     )
 
     assert result.status is RunStatus.FAILED
@@ -2074,12 +2074,15 @@ def test_orchestrator_self_effect_fence_resume_changed_orchestrator_fails_closed
             step_payload={"index": 1},
         ),
     ]
-    holder = _HolderWithResolution(EffectFenceResolution.RE_FIRE)
+    resume_ctx = ResumeContext(effect_fence_resolution=EffectFenceResolution.RE_FIRE)
     rec = _OrchestratorSelfFenceAmbiguousDispatcher()
     ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
-    ctx_obj.resume_context_holder = holder  # type: ignore[attr-defined]
     result = _run(
-        steps=changed, dispatcher=rec, ctx=cast(DriverContext, ctx_obj), pause_snapshot_input=snap
+        steps=changed,
+        dispatcher=rec,
+        ctx=cast(DriverContext, ctx_obj),
+        pause_snapshot_input=snap,
+        resume_context=resume_ctx,
     )
 
     assert result.status is RunStatus.FAILED
@@ -2115,14 +2118,14 @@ def test_orchestrator_self_effect_fence_resume_empty_body_fails_closed() -> None
     snap = paused.pause_snapshot
     assert snap is not None and snap.orchestrator_effect_fence_resume is not None
 
-    holder = _HolderWithResolution(EffectFenceResolution.RE_FIRE)
+    resume_ctx = ResumeContext(effect_fence_resolution=EffectFenceResolution.RE_FIRE)
     ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
-    ctx_obj.resume_context_holder = holder  # type: ignore[attr-defined]
     result = _run(
         steps=[],  # body changed to empty between pause and resume
         dispatcher=_OrchestratorSelfFenceAmbiguousDispatcher(),
         ctx=cast(DriverContext, ctx_obj),
         pause_snapshot_input=snap,
+        resume_context=resume_ctx,
     )
     assert result.status is RunStatus.FAILED
     assert "changed-orchestrator" in (result.fail_class or "")
@@ -2174,10 +2177,9 @@ def test_orchestrator_self_effect_fence_resume_synthesis_bearing_recovers() -> N
     snap = paused.pause_snapshot
     assert snap is not None and snap.orchestrator_effect_fence_resume is not None
 
-    holder = _HolderWithResolution(EffectFenceResolution.RE_FIRE)
+    resume_ctx = ResumeContext(effect_fence_resolution=EffectFenceResolution.RE_FIRE)
     rec = _OrchestratorSelfFenceSynthDispatcher()
     ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
-    ctx_obj.resume_context_holder = holder  # type: ignore[attr-defined]
     result = execute_workflow(
         _manifest(),
         [*_steps(2), _synthesis_step()],
@@ -2186,6 +2188,7 @@ def test_orchestrator_self_effect_fence_resume_synthesis_bearing_recovers() -> N
         default_model_binding=_DEFAULT_BINDING,
         step_dispatchers=cast(StepDispatcherRegistry, _SynthRegistry(rec)),
         pause_snapshot_input=snap,
+        resume_context=resume_ctx,
     )
     assert result.status is RunStatus.SUCCESS  # NOT rejected by the synthesis material-diff
     # Everything re-dispatched fresh (orchestrator re-fired + workers + synthesis once).
@@ -2219,28 +2222,6 @@ class _OrchestratorTwoFenceDispatcher:
             return {"role": "orchestrator"}
         self._barrier.wait()
         raise EffectFenceAmbiguousUncommittedError(idempotency_key=f"fence-key-{step_id}")
-
-
-class _HolderWithResolutions:
-    """Stand-in `ResumeContextHolder` — `peek()` returns a ResumeContext carrying a per-key
-    `effect_fence_resolutions` map (B-FANOUT-EFFECT-FENCE-PER-BRANCH-RESOLUTION) + an optional
-    uniform `effect_fence_resolution` default."""
-
-    def __init__(
-        self,
-        resolutions: dict[str, EffectFenceResolution],
-        *,
-        uniform: EffectFenceResolution | None = None,
-    ) -> None:
-        self._rc = ResumeContext(
-            effect_fence_resolution=uniform,
-            effect_fence_resolutions=resolutions,
-        )
-        self.peeked = 0
-
-    def peek(self) -> ResumeContext:
-        self.peeked += 1
-        return self._rc
 
 
 class _OrchestratorPartialResumeDispatcher:
@@ -2291,20 +2272,20 @@ def test_orchestrator_per_branch_distinct_resolutions() -> None:
     key_by_index = {
         b.branch_index: b.idempotency_key for b in snap.fan_out_resume.effect_fence_paused_branches
     }
-    holder = _HolderWithResolutions(
-        {
+    resume_ctx = ResumeContext(
+        effect_fence_resolutions={
             key_by_index[0]: EffectFenceResolution.SKIP_AS_FIRED,
             key_by_index[1]: EffectFenceResolution.RE_FIRE,
         }
     )
     rec = _OrchestratorResumeRecordingDispatcher()
     ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
-    ctx_obj.resume_context_holder = holder  # type: ignore[attr-defined]
     result = _run(
         steps=_steps(2),
         dispatcher=rec,
         ctx=cast(DriverContext, ctx_obj),
         pause_snapshot_input=snap,
+        resume_context=resume_ctx,
     )
 
     assert result.status is RunStatus.SUCCESS
@@ -2324,18 +2305,18 @@ def test_orchestrator_per_branch_map_overrides_uniform_default() -> None:
     key_by_index = {
         b.branch_index: b.idempotency_key for b in snap.fan_out_resume.effect_fence_paused_branches
     }
-    holder = _HolderWithResolutions(
-        {key_by_index[0]: EffectFenceResolution.SKIP_AS_FIRED},
-        uniform=EffectFenceResolution.RE_FIRE,
+    resume_ctx = ResumeContext(
+        effect_fence_resolutions={key_by_index[0]: EffectFenceResolution.SKIP_AS_FIRED},
+        effect_fence_resolution=EffectFenceResolution.RE_FIRE,
     )
     rec = _OrchestratorResumeRecordingDispatcher()
     ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
-    ctx_obj.resume_context_holder = holder  # type: ignore[attr-defined]
     result = _run(
         steps=_steps(2),
         dispatcher=rec,
         ctx=cast(DriverContext, ctx_obj),
         pause_snapshot_input=snap,
+        resume_context=resume_ctx,
     )
 
     assert result.status is RunStatus.SUCCESS
@@ -2352,15 +2333,17 @@ def test_orchestrator_partial_map_unanswered_worker_re_pauses_iteratively() -> N
         b.branch_index: b.idempotency_key for b in snap.fan_out_resume.effect_fence_paused_branches
     }
     # Answer ONLY worker-0; worker-1 left unanswered with NO uniform fallback.
-    holder = _HolderWithResolutions({key_by_index[0]: EffectFenceResolution.SKIP_AS_FIRED})
+    resume_ctx = ResumeContext(
+        effect_fence_resolutions={key_by_index[0]: EffectFenceResolution.SKIP_AS_FIRED}
+    )
     rec = _OrchestratorPartialResumeDispatcher()
     ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
-    ctx_obj.resume_context_holder = holder  # type: ignore[attr-defined]
     result = _run(
         steps=_steps(2),
         dispatcher=rec,
         ctx=cast(DriverContext, ctx_obj),
         pause_snapshot_input=snap,
+        resume_context=resume_ctx,
     )
 
     assert result.status is RunStatus.PAUSED
@@ -2379,15 +2362,17 @@ def test_orchestrator_no_map_uniform_default_applies_to_all() -> None:
     """Backward-compat: with NO map (the v1.65 shape), the single uniform `effect_fence_resolution`
     applies to BOTH fence-paused workers — byte-identical to the pre-arc behavior."""
     snap = _orchestrator_two_fence_pause()
-    holder = _HolderWithResolution(EffectFenceResolution.RE_FIRE)  # single field only, no map
+    resume_ctx = ResumeContext(
+        effect_fence_resolution=EffectFenceResolution.RE_FIRE
+    )  # single field only, no map
     rec = _OrchestratorResumeRecordingDispatcher()
     ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
-    ctx_obj.resume_context_holder = holder  # type: ignore[attr-defined]
     result = _run(
         steps=_steps(2),
         dispatcher=rec,
         ctx=cast(DriverContext, ctx_obj),
         pause_snapshot_input=snap,
+        resume_context=resume_ctx,
     )
 
     assert result.status is RunStatus.SUCCESS
@@ -2430,20 +2415,20 @@ def test_orchestrator_mixed_abort_map_suppresses_sibling_refire() -> None:
     key_by_index = {
         b.branch_index: b.idempotency_key for b in snap.fan_out_resume.effect_fence_paused_branches
     }
-    holder = _HolderWithResolutions(
-        {
+    resume_ctx = ResumeContext(
+        effect_fence_resolutions={
             key_by_index[0]: EffectFenceResolution.ABORT,
             key_by_index[1]: EffectFenceResolution.RE_FIRE,
         }
     )
     rec = _OrchestratorAbortGuardDispatcher()
     ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
-    ctx_obj.resume_context_holder = holder  # type: ignore[attr-defined]
     result = _run(
         steps=_steps(2),
         dispatcher=rec,
         ctx=cast(DriverContext, ctx_obj),
         pause_snapshot_input=snap,
+        resume_context=resume_ctx,
     )
 
     assert result.status is RunStatus.FAILED
@@ -2469,20 +2454,20 @@ def test_orchestrator_scoped_abort_fires_vouched_sibling() -> None:
     key_by_index = {
         b.branch_index: b.idempotency_key for b in snap.fan_out_resume.effect_fence_paused_branches
     }
-    holder = _HolderWithResolutions(
-        {
+    resume_ctx = ResumeContext(
+        effect_fence_resolutions={
             key_by_index[0]: EffectFenceResolution.ABORT_BRANCH,
             key_by_index[1]: EffectFenceResolution.RE_FIRE,
         }
     )
     rec = _OrchestratorAbortGuardDispatcher()
     ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
-    ctx_obj.resume_context_holder = holder  # type: ignore[attr-defined]
     result = _run(
         steps=_steps(2),
         dispatcher=rec,
         ctx=cast(DriverContext, ctx_obj),
         pause_snapshot_input=snap,
+        resume_context=resume_ctx,
     )
 
     assert result.status is RunStatus.PARTIAL  # survivor folded, NOT the run-level-ABORT FAILED
@@ -2501,20 +2486,20 @@ def test_orchestrator_all_scoped_abort_fails_not_vacuous_partial() -> None:
     key_by_index = {
         b.branch_index: b.idempotency_key for b in snap.fan_out_resume.effect_fence_paused_branches
     }
-    holder = _HolderWithResolutions(
-        {
+    resume_ctx = ResumeContext(
+        effect_fence_resolutions={
             key_by_index[0]: EffectFenceResolution.ABORT_BRANCH,
             key_by_index[1]: EffectFenceResolution.ABORT_BRANCH,
         }
     )
     rec = _OrchestratorAbortGuardDispatcher()
     ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
-    ctx_obj.resume_context_holder = holder  # type: ignore[attr-defined]
     result = _run(
         steps=_steps(2),
         dispatcher=rec,
         ctx=cast(DriverContext, ctx_obj),
         pause_snapshot_input=snap,
+        resume_context=resume_ctx,
     )
 
     assert result.status is RunStatus.FAILED  # NO survivor → FAILED, not a vacuous PARTIAL
@@ -2532,15 +2517,17 @@ def test_orchestrator_scoped_abort_iterative_repause() -> None:
     key_by_index = {
         b.branch_index: b.idempotency_key for b in snap.fan_out_resume.effect_fence_paused_branches
     }
-    holder = _HolderWithResolutions({key_by_index[0]: EffectFenceResolution.ABORT_BRANCH})
+    resume_ctx = ResumeContext(
+        effect_fence_resolutions={key_by_index[0]: EffectFenceResolution.ABORT_BRANCH}
+    )
     rec = _OrchestratorAbortGuardDispatcher()
     ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
-    ctx_obj.resume_context_holder = holder  # type: ignore[attr-defined]
     result = _run(
         steps=_steps(2),
         dispatcher=rec,
         ctx=cast(DriverContext, ctx_obj),
         pause_snapshot_input=snap,
+        resume_context=resume_ctx,
     )
 
     assert result.status is RunStatus.PAUSED
@@ -2563,20 +2550,20 @@ def test_orchestrator_mixed_run_abort_and_scoped_abort_deterministic() -> None:
     key_by_index = {
         b.branch_index: b.idempotency_key for b in snap.fan_out_resume.effect_fence_paused_branches
     }
-    holder = _HolderWithResolutions(
-        {
+    resume_ctx = ResumeContext(
+        effect_fence_resolutions={
             key_by_index[0]: EffectFenceResolution.ABORT,
             key_by_index[1]: EffectFenceResolution.ABORT_BRANCH,
         }
     )
     rec = _OrchestratorAbortGuardDispatcher()
     ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
-    ctx_obj.resume_context_holder = holder  # type: ignore[attr-defined]
     result = _run(
         steps=_steps(2),
         dispatcher=rec,
         ctx=cast(DriverContext, ctx_obj),
         pause_snapshot_input=snap,
+        resume_context=resume_ctx,
     )
 
     assert result.status is RunStatus.FAILED  # run-level ABORT dominates
@@ -2594,21 +2581,21 @@ def test_orchestrator_scoped_abort_under_cascade_cancel_fails() -> None:
     key_by_index = {
         b.branch_index: b.idempotency_key for b in snap.fan_out_resume.effect_fence_paused_branches
     }
-    holder = _HolderWithResolutions(
-        {
+    resume_ctx = ResumeContext(
+        effect_fence_resolutions={
             key_by_index[0]: EffectFenceResolution.ABORT_BRANCH,
             key_by_index[1]: EffectFenceResolution.RE_FIRE,
         }
     )
     rec = _OrchestratorAbortGuardDispatcher()
     ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
-    ctx_obj.resume_context_holder = holder  # type: ignore[attr-defined]
     result = _run(
         steps=_steps(2),
         dispatcher=rec,
         ctx=cast(DriverContext, ctx_obj),
         pause_snapshot_input=snap,
         persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,  # → CascadePolicy.CASCADE_CANCEL
+        resume_context=resume_ctx,
     )
 
     assert result.status is RunStatus.FAILED  # NOT a SUCCESS hiding the scoped-abort
@@ -2624,21 +2611,21 @@ def test_orchestrator_scoped_abort_under_proceed_rejected_requires_strict_tier()
     key_by_index = {
         b.branch_index: b.idempotency_key for b in snap.fan_out_resume.effect_fence_paused_branches
     }
-    holder = _HolderWithResolutions(
-        {
+    resume_ctx = ResumeContext(
+        effect_fence_resolutions={
             key_by_index[0]: EffectFenceResolution.ABORT_BRANCH,
             key_by_index[1]: EffectFenceResolution.RE_FIRE,
         }
     )
     rec = _OrchestratorAbortGuardDispatcher()
     ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
-    ctx_obj.resume_context_holder = holder  # type: ignore[attr-defined]
     result = _run(
         steps=_steps(2),
         dispatcher=rec,
         ctx=cast(DriverContext, ctx_obj),
         pause_snapshot_input=snap,
         persona_tier=PersonaTier.SOLO_DEVELOPER,  # → CascadePolicy.PROCEED
+        resume_context=resume_ctx,
     )
 
     assert result.status is RunStatus.FAILED
@@ -2657,21 +2644,21 @@ def test_orchestrator_all_scoped_abort_under_proceed_requires_strict_tier() -> N
     key_by_index = {
         b.branch_index: b.idempotency_key for b in snap.fan_out_resume.effect_fence_paused_branches
     }
-    holder = _HolderWithResolutions(
-        {
+    resume_ctx = ResumeContext(
+        effect_fence_resolutions={
             key_by_index[0]: EffectFenceResolution.ABORT_BRANCH,
             key_by_index[1]: EffectFenceResolution.ABORT_BRANCH,
         }
     )
     rec = _OrchestratorAbortGuardDispatcher()
     ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
-    ctx_obj.resume_context_holder = holder  # type: ignore[attr-defined]
     result = _run(
         steps=_steps(2),
         dispatcher=rec,
         ctx=cast(DriverContext, ctx_obj),
         pause_snapshot_input=snap,
         persona_tier=PersonaTier.SOLO_DEVELOPER,  # → CascadePolicy.PROCEED
+        resume_context=resume_ctx,
     )
 
     assert result.status is RunStatus.FAILED

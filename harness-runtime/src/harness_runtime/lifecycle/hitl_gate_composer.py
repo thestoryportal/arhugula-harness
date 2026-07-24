@@ -182,7 +182,6 @@ from harness_runtime.lifecycle.ask_user_question_surface import (
 from harness_runtime.lifecycle.audit_offload import run_audit_off_loop
 from harness_runtime.lifecycle.audit_signing_errors import AUDIT_SIGNING_HARD_FAILURES
 from harness_runtime.lifecycle.hitl_auto_approve_policy import HITLAutoApprovePolicy
-from harness_runtime.lifecycle.resume_context_holder import ResumeContextHolder
 from harness_runtime.lifecycle.webhook_delivery_composer import (
     WebhookDeliveryComposer,
     WebhookDeliveryResult,
@@ -908,14 +907,6 @@ class RuntimeHITLGateComposer:
     precondition AND-arm at `ctx.webhook_delivery_composer is None` evaluates
     True → fall through to step 4f (sync-blocking). Non-`None` → durable-
     async branch at step 3 invokes `deliver_webhook(brief, idempotency_key)`."""
-
-    resume_context_holder: ResumeContextHolder = field(
-        default_factory=lambda: ResumeContextHolder()
-    )
-    """Runtime-internal sidecar carrier for one-shot ResumeContext delivery
-    per v1.25 §14.8.8.9. Bound at stage-5 LOOP_INIT to an empty holder.
-    Consumed at §14.8.8.5 resume-side gate-evaluation via
-    `consume_and_clear()` atomic one-shot read-and-clear."""
 
     blast_radius_resolver: Callable[[WorkflowStep], BlastRadiusTier] | None = None
     """U-RT-115 (G1-blast) — per-step blast-radius resolver closure.
@@ -1659,12 +1650,16 @@ class RuntimeHITLGateComposer:
             Audit-write substep failed on APPROVE / EDIT / RESPOND path.
         """
         # --- Step 0: Resume-side one-shot consume per §14.8.8.5 -----------
-        # Runtime spec v1.25 §14.8.8.9.3 + v1.24 §14.8.8.5: when the workflow
-        # resumes from a durable-async pause cycle, the driver-side resume
-        # entry-point populated `ctx.resume_context_holder` via
-        # `holder.set(resume_context)`. The composer at the resumed-step
-        # gate-evaluation reads `consume_and_clear()` (atomic one-shot
-        # read-and-clear enforcing §14.8.8.7 invariant 3). The Step-0
+        # B-39 impl leg Slice B (CP spec v1.106 §1 / Runtime spec §14.8.8.10):
+        # the ctx-level, run-tree-wide-shared `ResumeContextHolder` singleton is
+        # RETIRED. The CP driver now stamps a per-branch, freshly-constructed
+        # `HITLDeliveryCell` onto `step_context.hitl_delivery_holder` (ONLY on the
+        # resumed step, `step_index == resume_at`, resolved via
+        # `resume_context.hitl_response_for(run_id)` — see `StepExecutionContext.
+        # hitl_delivery_holder`'s docstring). The composer at the resumed-step
+        # gate-evaluation reads THAT cell's `consume_and_clear()` (atomic one-shot
+        # read-and-clear, same semantic the retired holder enforced — see
+        # `HITLDeliveryCell`'s docstring). The Step-0
         # short-circuit is a ONE-SHOT boundary, NOT an optimization — it MUST
         # skip the §14.8.8.1 gate-FIRE (step 4f) so resume does not re-deliver
         # the webhook + re-raise HITLPauseRequestedSignal (which would re-pause
@@ -1686,9 +1681,12 @@ class RuntimeHITLGateComposer:
         # cell resolution (the `cell` arg is vestigial in `_compose_and_persist_
         # audit`; `gate_level` is the AUTO sentinel) and NOT the gate-FIRE
         # (4-bis/4f), so the one-shot short-circuit + re-pause-avoidance hold.
-        resume_state = self.resume_context_holder.consume_and_clear()
-        if resume_state is not None and resume_state.hitl_response is not None:
-            resumed_response = resume_state.hitl_response
+        resumed_response = (
+            step_context.hitl_delivery_holder.consume_and_clear()
+            if step_context.hitl_delivery_holder is not None
+            else None
+        )
+        if resumed_response is not None:
             resumed_placements = getattr(step_context, "hitl_placements", ()) or getattr(
                 step, "hitl_placements", ()
             )

@@ -259,7 +259,6 @@ class _Ctx:
         emitter: _Emitter,
         pause_resume_protocol: Any = None,
         engine_output_store: Any = None,
-        resume_context_holder: Any = None,
         capacity_authority: Any = None,
     ) -> None:
         from opentelemetry.trace import NoOpTracerProvider
@@ -274,9 +273,6 @@ class _Ctx:
         self.validator_framework = None
         self.tenant_id = None
         self.engine_output_store = engine_output_store
-        # B-18-FENCE-LEDGER-FIDELITY — the driver reads this via
-        # `getattr(ctx, "resume_context_holder", None)`; None ≡ absent.
-        self.resume_context_holder = resume_context_holder
         # B-48/U-CP-101 — injectable so a test can pin an explicit frame
         # budget for precise admission assertions. `None` → the strategy
         # falls back to the module-level default authority.
@@ -320,7 +316,7 @@ def _run(
     with_pause_protocol: bool = False,
     pause_snapshot_input: PauseSnapshot | None = None,
     workflow_id: str = "wf-warmup",
-    resume_context_holder: Any = None,
+    resume_context: Any = None,
     emitter: _Emitter | None = None,
     capacity_authority: Any = None,
 ) -> Any:
@@ -335,7 +331,6 @@ def _run(
             emitter=emitter,
             pause_resume_protocol=_protocol() if with_pause_protocol else None,
             engine_output_store=store,
-            resume_context_holder=resume_context_holder,
             capacity_authority=capacity_authority,
         ),
     )
@@ -352,6 +347,7 @@ def _run(
         default_model_binding=_DEFAULT_BINDING,
         step_dispatchers=_registry(dispatcher, also_declarative=also_declarative),
         pause_snapshot_input=pause_snapshot_input,
+        resume_context=resume_context,
     )
 
 
@@ -1711,20 +1707,6 @@ class EffectFenceAbortedError(Exception):
     when the operator resolved an effect-fence pause with ABORT and the fence applies it."""
 
 
-class _HolderWithResolutions:
-    """Stand-in `ResumeContextHolder` — `peek()` returns a ResumeContext carrying a per-key
-    `effect_fence_resolutions` map (NON-consuming, the production peek contract; the local
-    twin of the pause-file fixture)."""
-
-    def __init__(self, resolutions: dict[str, EffectFenceResolution]) -> None:
-        self._rc = ResumeContext(effect_fence_resolutions=resolutions)
-        self.peeked = 0
-
-    def peek(self) -> ResumeContext:
-        self.peeked += 1
-        return self._rc
-
-
 class _Branch0CleanSiblingsFenceCohortDispatcher:
     """Round-1 hybrid (CohortKeyCapable + fence-raising): branch[0] completes cleanly
     (the warm-up's serialized Phase 1); every sibling synchronizes on a barrier THEN
@@ -1874,7 +1856,9 @@ def test_fence_ledger_abort_exit_aborted_and_recovered_completed_no_capture() ->
     snapshot, key_by_index = _fence_pause_round1(store)
     run_key = store.sole_run_key()
 
-    holder = _HolderWithResolutions({key_by_index[1]: EffectFenceResolution.ABORT})
+    resume_ctx = ResumeContext(
+        effect_fence_resolutions={key_by_index[1]: EffectFenceResolution.ABORT}
+    )
     resume_dispatcher = _FenceDirectiveReactorCohortDispatcher()
     ledger = _RecordingLedger()
     emitter = _Emitter()
@@ -1888,7 +1872,7 @@ def test_fence_ledger_abort_exit_aborted_and_recovered_completed_no_capture() ->
         store=store,
         with_pause_protocol=True,
         pause_snapshot_input=snapshot,
-        resume_context_holder=holder,
+        resume_context=resume_ctx,
         emitter=emitter,
     )
 
@@ -2066,8 +2050,8 @@ def test_fence_ledger_abort_exit_this_round_inert_repause_capture_present() -> N
     snapshot, key_by_index = _fence_pause_round1(store)
     run_key = store.sole_run_key()
 
-    holder = _HolderWithResolutions(
-        {
+    resume_ctx = ResumeContext(
+        effect_fence_resolutions={
             key_by_index[1]: EffectFenceResolution.ABORT,
             key_by_index[2]: EffectFenceResolution.SKIP_AS_FIRED,
         }
@@ -2086,7 +2070,7 @@ def test_fence_ledger_abort_exit_this_round_inert_repause_capture_present() -> N
         store=store,
         with_pause_protocol=True,
         pause_snapshot_input=snapshot,
-        resume_context_holder=holder,
+        resume_context=resume_ctx,
     )
 
     assert result.status is RunStatus.FAILED
@@ -2153,8 +2137,8 @@ def test_fence_ledger_scoped_abort_single_terminal_no_scan_double_record() -> No
     snapshot, key_by_index = _fence_pause_round1(store)
     run_key = store.sole_run_key()
 
-    holder = _HolderWithResolutions(
-        {
+    resume_ctx = ResumeContext(
+        effect_fence_resolutions={
             key_by_index[1]: EffectFenceResolution.ABORT_BRANCH,
             key_by_index[2]: EffectFenceResolution.RE_FIRE,
         }
@@ -2171,7 +2155,7 @@ def test_fence_ledger_scoped_abort_single_terminal_no_scan_double_record() -> No
         store=store,
         with_pause_protocol=True,
         pause_snapshot_input=snapshot,
-        resume_context_holder=holder,
+        resume_context=resume_ctx,
     )
 
     assert result.status is RunStatus.FAILED
