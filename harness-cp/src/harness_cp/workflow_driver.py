@@ -2724,7 +2724,19 @@ def compute_hitl_uniform_fallback_eligible_run_id(
         return None
     gate_owning_run_ids = _collect_gate_owning_run_ids(root_snapshot)
     hitl_responses = resume_context.hitl_responses or {}
-    unaddressed = [rid for rid in gate_owning_run_ids if rid not in hitl_responses]
+    # codex round-5 [P2]: the linear reconstruction site never consults
+    # `hitl_responses` for the depth-0 root itself (gated on `sub_agent_
+    # descent`, per round-4's own fix — a depth-0 pause "has no child run_id
+    # to key by; it IS the run"), so a `hitl_responses` entry that happens to
+    # be keyed by `root_snapshot.run_id` (stale/conflicting caller data) MUST
+    # NOT count as "addressed" here — it can never actually be delivered via
+    # that map. Excluding it from the map-membership test keeps the root
+    # unconditionally eligible when it is the sole gate-owning branch.
+    unaddressed = [
+        rid
+        for rid in gate_owning_run_ids
+        if rid == root_snapshot.run_id or rid not in hitl_responses
+    ]
     if len(unaddressed) == 1:
         return unaddressed[0]
     return None

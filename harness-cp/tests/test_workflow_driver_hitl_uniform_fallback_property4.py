@@ -125,6 +125,38 @@ def test_single_gate_owning_branch_is_eligible_for_uniform_fallback() -> None:
     assert eligible == "run-solo"
 
 
+def test_root_run_id_stale_map_entry_does_not_block_uniform_fallback_eligibility() -> None:
+    """codex round-5 [P2] mutation probe. The linear reconstruction site never
+    consults `hitl_responses` for the depth-0 root itself (gated on
+    `sub_agent_descent`, per round-4's fix — a depth-0 pause "has no child
+    run_id to key by; it IS the run"). A `hitl_responses` entry that happens
+    to be keyed by the root's OWN `run_id` (stale/conflicting caller data)
+    can never actually be delivered via that map, so it MUST NOT count as
+    "addressed" when computing eligibility — else a valid uniform
+    `hitl_response` becomes undeliverable and the workflow re-pauses forever
+    despite the operator having supplied a valid answer."""
+    root = _snapshot(run_id="run-root-solo", pause_reason=WorkflowPauseReason.HITL_PENDING)
+    assert _collect_gate_owning_run_ids(root) == ["run-root-solo"]
+    stale_map_matches_root = ResumeContext(
+        hitl_response=HITLResult(
+            response=HITLResponse.APPROVE,
+            timestamp="2026-07-24T00:00:00Z",
+            audit_ledger_entry_id=EntryID("e-root-uniform"),
+            response_summary_hash="a" * 64,
+        ),
+        hitl_responses={
+            "run-root-solo": HITLResult(
+                response=HITLResponse.REJECT,
+                timestamp="2026-07-24T00:00:00Z",
+                audit_ledger_entry_id=EntryID("e-stale-map"),
+                response_summary_hash="b" * 64,
+            )
+        },
+    )
+    eligible = compute_hitl_uniform_fallback_eligible_run_id(root, stale_map_matches_root)
+    assert eligible == "run-root-solo"
+
+
 def test_b32_relabeled_container_recurses_to_the_real_nested_child() -> None:
     """codex round-3 [P1] mutation probe — the actual defect. B-32's existing
     snapshot builders (workflow_driver.py's PARALLELIZATION/ORCHESTRATOR_
