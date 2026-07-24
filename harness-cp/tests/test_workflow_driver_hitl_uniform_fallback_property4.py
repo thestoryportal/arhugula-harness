@@ -125,6 +125,35 @@ def test_single_gate_owning_branch_is_eligible_for_uniform_fallback() -> None:
     assert eligible == "run-solo"
 
 
+def test_b32_relabeled_container_recurses_to_the_real_nested_child() -> None:
+    """codex round-3 [P1] mutation probe — the actual defect. B-32's existing
+    snapshot builders (workflow_driver.py's PARALLELIZATION/ORCHESTRATOR_
+    WORKERS pause-capture) INFORMATIONALLY relabel a container's OWN
+    `pause_reason` to HITL_PENDING whenever its nested child's `pause_reason`
+    is HITL_PENDING — this is the COMMON single-nested-child case, not an
+    edge case. A tree-walk that treats `pause_reason == HITL_PENDING` alone
+    as gate-owning evidence would incorrectly select the CONTAINER's run_id
+    instead of recursing to the actual gate-owning CHILD, permanently
+    breaking the byte-compat single-paused-child uniform-fallback resume."""
+    child = _snapshot(run_id="run-nested-child", pause_reason=WorkflowPauseReason.HITL_PENDING)
+    # The container's OWN pause_reason is B-32-relabeled HITL_PENDING (NOT
+    # EXPLICIT_OPERATOR) — exactly the shape the real snapshot builders emit.
+    container = _snapshot(
+        run_id="run-container",
+        pause_reason=WorkflowPauseReason.HITL_PENDING,
+        peer_fan_out_resume=PeerFanOutResumeState(
+            branches=(),
+            branch_count=1,
+            paused_child_branches=(_paused_child(branch_index=0, child_snapshot=child),),
+        ),
+    )
+    # The container's own run_id must NEVER appear — only the real child.
+    assert _collect_gate_owning_run_ids(container) == ["run-nested-child"]
+    eligible = compute_hitl_uniform_fallback_eligible_run_id(container, ResumeContext())
+    assert eligible == "run-nested-child"
+    assert eligible != "run-container"
+
+
 def test_two_unaddressed_gate_owning_siblings_yield_no_eligible_run_id() -> None:
     """codex round-2 [P1] core case: 2 concurrently-paused gate-owning peer
     branches, neither addressed by `hitl_responses` — NEITHER may use the

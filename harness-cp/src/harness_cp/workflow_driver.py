@@ -2665,21 +2665,32 @@ def _record_reconciler_fanout_resume_finalized(
 def _collect_gate_owning_run_ids(snapshot: PauseSnapshot) -> list[str]:
     """Recursively collect every GATE-OWNING branch's `run_id` under `snapshot`.
 
-    B-39 Slice B (CP spec v1.106 §1.2 properties 4+5) — a node is
-    gate-owning iff its OWN `pause_reason` is `HITL_PENDING` (it dispatched
-    directly into a HITL gate); this is mutually exclusive with carrying a
-    `fan_out_resume`/`peer_fan_out_resume` (a container/ancestor branch,
-    paused only because an unresolved descendant exists below it — property
-    5 — which is never itself gate-owning and is recursed into
-    unconditionally, never added to this set). `HandoffResumeState` /
+    B-39 Slice B (CP spec v1.106 §1.2 properties 4+5). codex round-3 [P1]
+    fix: a node is a CONTAINER (never itself gate-owning, always recursed
+    into) whenever it carries a `fan_out_resume`/`peer_fan_out_resume` —
+    checked FIRST, regardless of its own `pause_reason`. This is NOT the
+    same as "pause_reason is not HITL_PENDING": B-32's existing snapshot
+    builders (`workflow_driver.py`'s PARALLELIZATION/ORCHESTRATOR_WORKERS
+    pause-capture sites) INFORMATIONALLY relabel a container's OWN
+    `pause_reason` to `HITL_PENDING` whenever its nested child's `pause_
+    reason` is `HITL_PENDING` (so an operator surface keying off the
+    reason knows to supply a `hitl_response`) — this label is explicitly
+    documented there as never consulted by the composer's resume path,
+    but it DOES mean `pause_reason == HITL_PENDING` is NOT sufficient
+    evidence of gate-ownership: a container with exactly this label AND a
+    populated `fan_out_resume`/`peer_fan_out_resume` is the COMMON,
+    byte-compat-critical single-nested-child case, not the exception. Only
+    a node with NEITHER fan-out carrier set, whose own `pause_reason` is
+    genuinely `HITL_PENDING` (a true leaf — it dispatched directly into a
+    HITL gate), is gate-owning (property 5). `HandoffResumeState` /
     `EvaluatorOptimizerResumeState` carry no `paused_child_branches` (no
     nested-child-pause mechanism exists for those topologies), so only the
     two fan-out carriers are walked.
     """
-    if snapshot.pause_reason is WorkflowPauseReason.HITL_PENDING:
-        return [snapshot.run_id]
     resume_state = snapshot.fan_out_resume or snapshot.peer_fan_out_resume
     if resume_state is None:
+        if snapshot.pause_reason is WorkflowPauseReason.HITL_PENDING:
+            return [snapshot.run_id]
         return []
     run_ids: list[str] = []
     for paused_child in resume_state.paused_child_branches:
