@@ -470,17 +470,24 @@ def test_hitl_response_for_byte_identical_when_never_supplied() -> None:
 
 
 def test_hitl_responses_keyed_by_run_id_not_branch_path_mutation_probe() -> None:
-    """Mutation probe (CP plan v2.42 §1 AC #7): TWO PEER branches dispatching the
-    IDENTICAL `child_workflow_id` at the identical internal `step_index` derive
-    byte-IDENTICAL `branch_path` (C-CP-25 §25.16 — a workflow_id-scoped identifier
-    with NO run-instance component; `compose_branch_path` proven below), yet their
-    `child_snapshot.run_id` values are genuinely distinct (folded from each spawning
-    invocation's own `run_id` via `compose_child_run_id_seed` — CP spec v1.106 §0's
-    keying-defect note). `hitl_responses` keyed by `run_id` therefore carries two
-    independently-addressable entries; had it been keyed by `branch_path` instead
-    (the round-1 defect this note records so it is not reinvented), BOTH peers'
-    responses would collide onto the SAME dict key and one would be silently lost
-    — this test fails under that substitution, pinning the keying-defect fix."""
+    """Mutation probe (CP plan v2.42 §1 AC #7), through the REAL `hitl_response_for` on
+    BOTH sides of the probe (not a disconnected dict — a prior draft of this test built
+    its "collision" demonstration entirely outside `ResumeContext`, so it would stay
+    green under the exact regression it claimed to pin; caught by merge-gate's
+    test-witness lens, fixed here). TWO PEER branches dispatching the IDENTICAL
+    `child_workflow_id` at the identical internal `step_index` derive byte-IDENTICAL
+    `branch_path` (C-CP-25 §25.16 — a workflow_id-scoped identifier with NO
+    run-instance component; `compose_branch_path` proven below via the real production
+    function). A `ResumeContext` whose `hitl_responses` is (incorrectly) keyed by that
+    colliding `branch_path` can hold only ONE peer's entry (the second construction
+    write clobbers the first) — and calling the REAL `hitl_response_for` with EITHER
+    peer's own `run_id` (the `child_snapshot.run_id`-style key production code actually
+    uses) finds nothing in a `branch_path`-keyed map, silently falling through to the
+    uniform default for BOTH peers. Keyed by `run_id` instead (the round-2-corrected
+    scheme; genuinely distinct per spawning invocation per `compose_child_run_id_seed`
+    — Runtime-owned, not re-derived here to keep this test within CP-axis isolation,
+    since CI's `axis-isolation` matrix installs ONLY harness-cp's declared deps), the
+    SAME real method resolves both peers to their own distinct response."""
     from harness_as.sandbox_tier import SandboxTier
     from harness_cp.cp_shared_types import AgentRole
     from harness_cp.gate_level_rule import GateLevel
@@ -518,35 +525,42 @@ def test_hitl_responses_keyed_by_run_id_not_branch_path_mutation_probe() -> None
         peer_b_root, branch_index=0, agent_role=AgentRole("w")
     )
 
-    # branch_path collides — byte-identical for both peers (the defect this test pins).
-    assert compose_branch_path(peer_a_branch) == compose_branch_path(peer_b_branch)
+    # branch_path collides — byte-identical for both peers (real production function).
+    branch_path_a = compose_branch_path(peer_a_branch)
+    branch_path_b = compose_branch_path(peer_b_branch)
+    assert branch_path_a == branch_path_b
 
-    # ...but the two peers' actual child run_ids (sourced off `child_snapshot.run_id`
-    # in production, standing in here as two distinct literal values since the
-    # derivation itself is Runtime-owned) are genuinely distinct.
-    peer_a_run_id = "child-run:run-a-idempotency-key:wf-child-target"
-    peer_b_run_id = "child-run:run-b-idempotency-key:wf-child-target"
-    assert peer_a_run_id != peer_b_run_id
+    # The two peers' actual child run_ids (standing in for `child_snapshot.run_id`;
+    # the Runtime-owned derivation is out of CP-axis isolation scope — see docstring)
+    # are genuinely distinct.
+    peer_a_run_id = "run-a-child-run-id"
+    peer_b_run_id = "run-b-child-run-id"
 
+    uniform_fallback = _build_hitl_result()
     peer_a_response = _build_hitl_result()
     peer_b_response = _build_hitl_result()
-    rc = ResumeContext(
-        hitl_responses={
-            peer_a_run_id: peer_a_response,
-            peer_b_run_id: peer_b_response,
-        }
+
+    # INCORRECT construction: keyed by the (colliding) branch_path. Only ONE entry can
+    # even exist — the second dict-literal write clobbers the first.
+    rc_wrong = ResumeContext(
+        hitl_response=uniform_fallback,
+        hitl_responses={branch_path_a: peer_a_response, branch_path_b: peer_b_response},
     )
+    assert len(rc_wrong.hitl_responses) == 1  # collided at construction time
 
-    # Keyed by run_id: both peers independently addressable.
-    assert rc.hitl_response_for(peer_a_run_id) is peer_a_response
-    assert rc.hitl_response_for(peer_b_run_id) is peer_b_response
+    # Neither peer's OWN run_id retrieves ANYTHING from a branch_path-keyed map — both
+    # silently fall through to the uniform default via the REAL `hitl_response_for` call.
+    assert rc_wrong.hitl_response_for(peer_a_run_id) is uniform_fallback
+    assert rc_wrong.hitl_response_for(peer_b_run_id) is uniform_fallback
 
-    # Mutation probe: had the map been keyed by the (colliding) branch_path instead,
-    # only ONE entry could exist for both peers — the second write clobbers the first.
-    collided_map = {compose_branch_path(peer_a_branch): peer_a_response}
-    collided_map[compose_branch_path(peer_b_branch)] = peer_b_response  # same key — overwrites
-    assert len(collided_map) == 1
-    assert collided_map[compose_branch_path(peer_a_branch)] is peer_b_response  # peer A's lost
+    # CORRECT construction: keyed by run_id — both peers independently addressable
+    # through the SAME real method.
+    rc_right = ResumeContext(
+        hitl_response=uniform_fallback,
+        hitl_responses={peer_a_run_id: peer_a_response, peer_b_run_id: peer_b_response},
+    )
+    assert rc_right.hitl_response_for(peer_a_run_id) is peer_a_response
+    assert rc_right.hitl_response_for(peer_b_run_id) is peer_b_response
 
 
 def test_resume_context_hitl_responses_round_trips() -> None:
