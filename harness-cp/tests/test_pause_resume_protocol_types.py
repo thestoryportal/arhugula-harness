@@ -418,10 +418,11 @@ def test_resume_context_effect_fence_resolutions_round_trips() -> None:
 def test_resume_context_hitl_responses_defaults_none() -> None:
     """The per-key map defaults to None → `hitl_response_for` falls through to the
     single uniform `hitl_response` field (byte-identical pre-B-39 behavior)."""
-    from harness_cp.pause_resume_protocol_types import ResumeContext
+    from harness_cp.pause_resume_protocol import ResumeContext  # noqa: F401
+    from harness_cp.pause_resume_protocol_types import ResumeContext as _RC
 
     hitl = _build_hitl_result()
-    rc = ResumeContext(hitl_response=hitl)
+    rc = _RC(hitl_response=hitl)
     assert rc.hitl_responses is None
     assert rc.hitl_response_for("any-run-id") is hitl
 
@@ -429,11 +430,12 @@ def test_resume_context_hitl_responses_defaults_none() -> None:
 def test_hitl_response_for_map_hit_overrides_single() -> None:
     """A map entry for the child's own `run_id` OVERRIDES the uniform single field;
     an absent key falls back to it."""
-    from harness_cp.pause_resume_protocol_types import ResumeContext
+    from harness_cp.pause_resume_protocol import ResumeContext  # noqa: F401
+    from harness_cp.pause_resume_protocol_types import ResumeContext as _RC
 
     uniform = _build_hitl_result()
     mapped = _build_hitl_result()
-    rc = ResumeContext(
+    rc = _RC(
         hitl_response=uniform,
         hitl_responses={"run-child-0": mapped},
     )
@@ -444,10 +446,11 @@ def test_hitl_response_for_map_hit_overrides_single() -> None:
 def test_hitl_response_for_both_none_is_none() -> None:
     """Neither a map entry NOR a single field → None (the branch re-pauses INERT,
     decline-mirror, never an auto-re-fire)."""
-    from harness_cp.pause_resume_protocol_types import ResumeContext
+    from harness_cp.pause_resume_protocol import ResumeContext  # noqa: F401
+    from harness_cp.pause_resume_protocol_types import ResumeContext as _RC
 
     mapped = _build_hitl_result()
-    rc = ResumeContext(hitl_responses={"run-child-0": mapped})
+    rc = _RC(hitl_responses={"run-child-0": mapped})
     assert rc.hitl_response_for("run-child-0") is mapped
     assert rc.hitl_response_for("absent") is None  # no map entry, no single default
 
@@ -456,10 +459,11 @@ def test_hitl_response_for_byte_identical_when_never_supplied() -> None:
     """Pre-B-39 single-branch callers (never supplying `hitl_responses`) are
     byte-unaffected — `hitl_response_for` degenerates to the uniform field
     regardless of the key probed."""
-    from harness_cp.pause_resume_protocol_types import ResumeContext
+    from harness_cp.pause_resume_protocol import ResumeContext  # noqa: F401
+    from harness_cp.pause_resume_protocol_types import ResumeContext as _RC
 
     hitl = _build_hitl_result()
-    rc = ResumeContext(hitl_response=hitl)
+    rc = _RC(hitl_response=hitl)
     assert rc.hitl_response_for("child-run-a") is hitl
     assert rc.hitl_response_for("child-run-b") is hitl
     assert rc.hitl_response_for("") is hitl
@@ -480,6 +484,7 @@ def test_hitl_responses_keyed_by_run_id_not_branch_path_mutation_probe() -> None
     from harness_as.sandbox_tier import SandboxTier
     from harness_cp.cp_shared_types import AgentRole
     from harness_cp.gate_level_rule import GateLevel
+    from harness_cp.pause_resume_protocol import ResumeContext as _  # noqa: F401
     from harness_cp.pause_resume_protocol_types import ResumeContext
     from harness_cp.workflow_driver_types import (
         StepExecutionContext,
@@ -546,13 +551,14 @@ def test_hitl_responses_keyed_by_run_id_not_branch_path_mutation_probe() -> None
 
 def test_resume_context_hitl_responses_round_trips() -> None:
     """The map field survives model_dump/model_validate (operator-supplied at api.resume)."""
-    from harness_cp.pause_resume_protocol_types import ResumeContext
+    from harness_cp.pause_resume_protocol import ResumeContext  # noqa: F401
+    from harness_cp.pause_resume_protocol_types import ResumeContext as _RC
 
-    rc = ResumeContext(
+    rc = _RC(
         hitl_responses={
             "run-child-0": _build_hitl_result(),
             "run-child-1": _build_hitl_result(),
         }
     )
-    restored = ResumeContext.model_validate(rc.model_dump(mode="json"))
+    restored = _RC.model_validate(rc.model_dump(mode="json"))
     assert restored == rc
