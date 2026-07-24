@@ -4611,9 +4611,23 @@ def _execute_workflow_body(
         and resume_snapshot is not None
         and resume_snapshot.pause_reason is WorkflowPauseReason.HITL_PENDING
     ):
+        # codex round-4 [P2] (CP spec v1.106 §0's own text): "A pause that is NOT
+        # branch-scoped (the depth-0 root's own linear/fan-out-barrier gate) has
+        # no child run_id to key by (it IS the run); its gate always consumes the
+        # uniform hitl_response field directly." `hitl_responses` is keyed by a
+        # recursively-dispatched CHILD's own run_id (§0's keying-defect note) —
+        # never the depth-0 root's. `sub_agent_descent` (already threaded, set
+        # True by `child_workflow_runner.py` for every recursive child dispatch,
+        # monotonic-sticky through further descent) is the existing "am I the
+        # depth-0 root" discriminator — consult the map only when it is True, so
+        # a `hitl_responses` entry that happens to be keyed by the root's OWN
+        # run_id (stale/conflicting caller data) can never override the root
+        # gate's uniform `hitl_response`.
         _resolved_hitl: HITLResult | None = None
         _mapped_hitl = (
-            resume_context.hitl_responses.get(run_id) if resume_context.hitl_responses else None
+            resume_context.hitl_responses.get(run_id)
+            if sub_agent_descent and resume_context.hitl_responses
+            else None
         )
         if _mapped_hitl is not None:
             _resolved_hitl = _mapped_hitl

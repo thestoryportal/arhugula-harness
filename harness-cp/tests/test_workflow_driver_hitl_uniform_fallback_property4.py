@@ -413,8 +413,17 @@ def _resume(
     pause_snapshot_input: PauseSnapshot,
     resume_context: ResumeContext,
     hitl_uniform_fallback_eligible_run_id: str | None,
+    sub_agent_descent: bool = False,
 ) -> _HITLPauseDispatcher:
-    """Resume the captured pause; return the recording dispatcher for assertion."""
+    """Resume the captured pause; return the recording dispatcher for assertion.
+
+    `sub_agent_descent=False` (the default) simulates the depth-0 root — this
+    helper calls `execute_workflow` directly, exactly the shape a real
+    depth-0 `mcp_server.py` call has. `sub_agent_descent=True` simulates a
+    recursively-dispatched child (set by `child_workflow_runner.py` for every
+    real recursive dispatch) — pass it explicitly for tests targeting
+    child-only behavior (e.g. `hitl_responses` map consultation, codex round-4
+    [P2])."""
     ctx = _Ctx()
     dispatcher = _HITLPauseDispatcher(
         pause_requested_flag=ctx.pause_requested_flag, raise_on="__never__"
@@ -429,6 +438,7 @@ def _resume(
         pause_snapshot_input=pause_snapshot_input,
         resume_context=resume_context,
         hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
+        sub_agent_descent=sub_agent_descent,
     )
     assert result.status is RunStatus.SUCCESS
     return dispatcher
@@ -505,7 +515,9 @@ def test_map_hit_is_always_safe_regardless_of_uniform_fallback_eligibility() -> 
     always safe, independent of `hitl_uniform_fallback_eligible_run_id` (which
     only gates the UNIFORM fallback path). Even with eligibility explicitly
     `None` (as it correctly would be with an unaddressed sibling elsewhere),
-    a map-addressed child still receives its OWN keyed response."""
+    a map-addressed CHILD (`sub_agent_descent=True` — codex round-4 [P2]:
+    `hitl_responses` addressing applies only to recursively-dispatched
+    children, never the depth-0 root) still receives its OWN keyed response."""
     snap_a = _capture_hitl_pause(run_id="child-run-mapped")
     keyed_response = HITLResult(
         response=HITLResponse.EDIT,
@@ -528,7 +540,52 @@ def test_map_hit_is_always_safe_regardless_of_uniform_fallback_eligibility() -> 
         pause_snapshot_input=snap_a,
         resume_context=resume_ctx,
         hitl_uniform_fallback_eligible_run_id=None,
+        sub_agent_descent=True,
     )
     holder = dict(dispatcher.seen_holders)["s0"]
     assert holder is not None
     assert holder.consume_and_clear() == keyed_response
+
+
+def test_depth_0_root_never_consults_map_even_on_matching_run_id() -> None:
+    """codex round-4 [P2] mutation probe — the actual defect. CP spec v1.106
+    §0's own text: a pause that is NOT branch-scoped (the depth-0 root's own
+    gate) "has no child run_id to key by (it IS the run); its gate always
+    consumes the uniform hitl_response field directly." At the depth-0 root
+    (`sub_agent_descent=False`, the default — no `child_workflow_runner.py`
+    recursion involved), a `hitl_responses` entry that happens to be keyed by
+    the ROOT's OWN run_id (stale/conflicting caller data — e.g. an operator
+    UI that mistakenly threads the pause result's run_id into the child-keyed
+    map) MUST NOT override the uniform `hitl_response` — the map is
+    child-only addressing and must never apply at the root."""
+    snap_root = _capture_hitl_pause(run_id="root-run-conflicting-key")
+    uniform_approve = HITLResult(
+        response=HITLResponse.APPROVE,
+        timestamp="2026-07-24T00:00:00Z",
+        audit_ledger_entry_id=EntryID("e-root-uniform"),
+        response_summary_hash="1" * 64,
+    )
+    conflicting_map_reject = HITLResult(
+        response=HITLResponse.REJECT,
+        timestamp="2026-07-24T00:00:00Z",
+        audit_ledger_entry_id=EntryID("e-root-conflicting-map"),
+        response_summary_hash="2" * 64,
+    )
+    # The map is keyed by the ROOT's OWN run_id — exactly the stale/conflicting
+    # shape codex's finding describes.
+    resume_ctx = ResumeContext(
+        hitl_response=uniform_approve,
+        hitl_responses={snap_root.run_id: conflicting_map_reject},
+    )
+
+    dispatcher = _resume(
+        pause_snapshot_input=snap_root,
+        resume_context=resume_ctx,
+        hitl_uniform_fallback_eligible_run_id=snap_root.run_id,
+        sub_agent_descent=False,
+    )
+    holder = dict(dispatcher.seen_holders)["s0"]
+    assert holder is not None
+    # Must be the UNIFORM value, NEVER the map entry — even though the map key
+    # byte-matches this run's own run_id.
+    assert holder.consume_and_clear() == uniform_approve

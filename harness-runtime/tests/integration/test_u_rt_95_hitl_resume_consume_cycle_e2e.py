@@ -64,8 +64,12 @@ plumbing (`HITLDeliveryCell` / `ResumeContext.hitl_responses` /
 
 1. `test_hitl_resume_consume_cycle_reaches_composer_and_continues_past_gate` —
    pause on the DURABLE_ASYNC gate, resume via `api.resume(..., resume_context=
-   ResumeContext(hitl_responses={run_id: HITLResult(response=APPROVE, ...)}))`,
-   assert the run reaches SUCCESS (continues past the gate), the fake Anthropic
+   ResumeContext(hitl_response=HITLResult(response=APPROVE, ...)))` — the
+   UNIFORM field, since this is a depth-0 (not branch-scoped) pause and CP
+   spec v1.106 §0's own text requires the root gate to consume `hitl_response`
+   directly (`hitl_responses` addresses only recursively-dispatched children —
+   codex round-4 [P2]) — assert the run reaches SUCCESS (continues past the
+   gate), the fake Anthropic
    adapter's `create()` was invoked exactly once (proving `_dispatch_inner` —
    i.e. the REAL post-gate dispatch — fired, not a silent auto-approve), and
    exactly one webhook POST was captured across the whole run (the initial
@@ -547,12 +551,14 @@ async def test_hitl_resume_consume_cycle_reaches_composer_and_continues_past_gat
         f"got {len(_captured_webhook_requests)}"
     )
 
-    # ---- "Resume" — the PUBLIC api.resume() surface, carrying the resolved
-    # operator response keyed by the paused run's own run_id.
-    run_id = paused.pause_snapshot.run_id
-    resume_context = ResumeContext(
-        hitl_responses={run_id: _resolved_hitl_result(entry_suffix="approve")}
-    )
+    # ---- "Resume" — the PUBLIC api.resume() surface. This is a depth-0 (NOT
+    # branch-scoped) pause, so per CP spec v1.106 §0's own text the gate
+    # always consumes the uniform `hitl_response` field directly (`hitl_
+    # responses` addresses only recursively-dispatched children — codex
+    # round-4 [P2]; see `test_workflow_driver_hitl_uniform_fallback_
+    # property4.py::test_depth_0_root_never_consults_map_even_on_matching_
+    # run_id` for the carrier-level witness of this same distinction).
+    resume_context = ResumeContext(hitl_response=_resolved_hitl_result(entry_suffix="approve"))
     resumed = await resume(
         workflow,
         pause_snapshot=paused.pause_snapshot,
@@ -603,9 +609,10 @@ async def test_hitl_resume_consume_cycle_dispatches_inner_exactly_once(
         "LLM dispatcher on the initial (pausing) run"
     )
 
-    run_id = paused.pause_snapshot.run_id
+    # Depth-0 pause — the uniform `hitl_response` field, not `hitl_responses`
+    # (codex round-4 [P2]; see the core-scenario test above for the full note).
     resume_context = ResumeContext(
-        hitl_responses={run_id: _resolved_hitl_result(entry_suffix="dispatch-count")}
+        hitl_response=_resolved_hitl_result(entry_suffix="dispatch-count")
     )
     resumed = await resume(
         workflow,
@@ -730,10 +737,9 @@ async def test_hitl_resume_same_cycle_retry_does_not_resupply_resolved_value(
     assert len(_captured_webhook_requests) == 1
     assert anthropic_client.messages.call_count == 0
 
-    run_id = paused.pause_snapshot.run_id
-    resume_context = ResumeContext(
-        hitl_responses={run_id: _resolved_hitl_result(entry_suffix="retry-replay")}
-    )
+    # Depth-0 pause — the uniform `hitl_response` field, not `hitl_responses`
+    # (codex round-4 [P2]; see the core-scenario test above for the full note).
+    resume_context = ResumeContext(hitl_response=_resolved_hitl_result(entry_suffix="retry-replay"))
     resumed = await resume(
         workflow,
         pause_snapshot=paused.pause_snapshot,
