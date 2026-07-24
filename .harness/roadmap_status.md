@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `d435d990af1f` |
-| `last_refreshed` | 2026-07-24T07:26:34Z |
-| `git_head` | `e3afbcab` —  |
+| `workspace_state_hash` | `0518d8a0fb50` |
+| `last_refreshed` | 2026-07-24T11:19:13Z |
+| `git_head` | `7d6b3638` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 97 |
 
@@ -49,11 +49,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1098 | 2026-07-24 | Corrected B-39's stale forward-register row (flipped open -> closed with pr reference now that spec leg + both impl-leg slices are merged) and roadmap_status.md's stale Next-action prose (still described Slice B as unstarted). Flagged R-600-pattern-bake-in-sweep's tripped ~10-PR cadence (64 commits since dfe82ab6) as the highest-priority next action per the derivation rule's mode-agnostic-infra-first ordering. |
 | PR #1096 | 2026-07-24 | B-39 impl-leg Slice B: per-branch HITL delivery mechanism (HITLDeliveryCell + hitl_responses map + uniform-fallback eligibility per CP spec v1.106 §1.2 properties 4/5), driven through 6 codex-review rounds + 3-lens merge-gate to convergence. Round-4 P1 (ancestor SUB_AGENT_BOUNDARY gate re-fire stranding a deeper-paused child's cursor) grounded as reachable-but-pre-existing/orthogonal, registered as B-72 (advisor-endorsed, merge-gate-endorsed) rather than patched blind. |
 | PR #1094 | 2026-07-23 | B-39 impl leg slice A: ResumeContext.hitl_responses carrier landed (CP spec v1.106 sec0, CP plan v2.42 U-CP-64), byte-exact, 34 tests, 3 codex rounds, merge-gate 3-lens all-approve (round 2 after test-witness fix) |
 | PR #1092 | 2026-07-23 | B-39 spec leg (nested paused-child HITL-response routing): CP+Runtime spec deltas (v1.106) + plan deltas (CP v2.42, Runtime v2.54) + 4 clearance markers, landed after 7 rounds of out-of-family review (2 -uncommitted + 5 branch-vs-main). Registered 3 follow-ons (B-69/70/71). Spec-leg only per B-33/B-59 precedent; impl leg not yet opened. |
 | direct commit df7476b6 | 2026-07-23 | Recorded B-39 fork ratification (operator AskUserQuestion, Q1=A retire ResumeContextHolder, Q2=A batched map at api.resume()) durably in the fork doc, forward-register.yaml, and this file's next-action, so it survives compaction. Spec leg (CP+Runtime deltas, clearance markers, plan units) opens as the next arc, per B-33/B-59 precedent; not yet authored. |
-| PR #1091 | 2026-07-23 | Fixed hook_roadmap_next section-boundary bug (tools/hooks/lib.sh): stops at the next ## heading, not just ---, so the SessionStart hook no longer surfaces a stale resolved R-id from the following section's prose. Regression test added, 27/27 hook lib tests pass. |
 ---
 
 ---
