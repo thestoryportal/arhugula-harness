@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 72
+  total: 73
   open: 1
   design_substrate_gated: 0
-  registered_finding: 11
+  registered_finding: 12
   operator_gated: 1
   held: 1
   closed: 58
-  identity_digest: ea3c3de166547720
+  identity_digest: 26369fad0e1275d3
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -1659,3 +1659,27 @@ items:
     correlation identifier, making `hitl_responses` addressing impossible for peer branches
     sharing a `child_workflow_id` *(registered at the B-39 spec-leg PR #1092, out-of-family
     Codex round 6 (branch-vs-main), 2026-07-23)*'
+- id: B-72
+  title: SUB_AGENT_DISPATCH step's own SUB_AGENT_BOUNDARY HITL gate can re-fire on resume-forward,
+    discarding an already-paused descendant's cursor
+  status: registered_finding
+  summary: hitl_delivery_holder is never threaded to fan-out branches, so a SUB_AGENT_DISPATCH
+    branch with its own SUB_AGENT_BOUNDARY placement re-evaluates its gate on every resume-forward;
+    a fresh DURABLE_ASYNC re-pause has no evident mechanism to preserve the branch's prior-round
+    child_resume_snapshot cursor. Pre-existing/orthogonal to B-39 (the old global ResumeContextHolder
+    masked it via accidental cross-branch misapplication); B-39 makes it newly visible, not new.
+  close_out: Add a re-entry/forwarding marker (candidate signal -- child_resume_snapshot is not
+    None) the composer's Step 0 can check to bypass the branch's own gate re-evaluation when
+    forwarding an already-paused descendant, distinct from consuming a delivery cell. Do NOT
+    implement blind -- build a real reproduction (SUB_AGENT_DISPATCH step with its own DURABLE_ASYNC
+    SUB_AGENT_BOUNDARY placement wrapping a nested-HITL child) before designing the fix, mirroring
+    test_u_rt_95_hitl_resume_consume_cycle_e2e.py's real-stack pattern. See
+    .harness/post-phase-8-forward-register.md B-72 for full detail.
+  council: TBD at build time -- real correctness/safety tradeoff (skip a gate vs. strand a
+    descendant), worth a dyadic council pass (C10 blast-radius/gate-integrity vs. C-CP-21
+    liveness) once the reproduction confirms the failure mode's actual shape.
+  heading: '### B-72 · A `SUB_AGENT_DISPATCH` step''s own `SUB_AGENT_BOUNDARY` HITL gate can
+    re-fire on every resume-forward of an already-dispatched, deeper-paused child, discarding
+    the child''s `paused_child_branches` cursor *(registered at the B-39 impl-leg Slice B
+    branch `b39-impl-leg-slice-b-hitl-delivery-mechanism`, out-of-family Codex round 4
+    (branch-vs-main), 2026-07-24)*'
