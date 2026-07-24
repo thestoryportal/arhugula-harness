@@ -43,11 +43,11 @@ All canonical design artifacts live in `design-substrate/`; root `CLAUDE.md` is 
 
 Citation discipline remains unchanged: when this file cites a canonical artifact, consult the design-phase substrate copy and preserve byte-exact citation discipline per `Project_Workflow_v1_8.md` §7.4.2.
 
-**Delta-baseline §-cite convention.** `Project_Workflow` is a delta chain — `Project_Workflow_v1_8.md` is the full baseline; v1.9–v1.18 are deltas that preserve prior bodies verbatim (current head v1.18, recorded at this file's §2.1). A `§`-cite therefore names the version of **last substantive definition** of that section, which is often older than the head: §7.4.2 byte-exact-citation discipline + §2.7.6 back-flow routing live at v1.8; §7.4.7.3 stale-carry audit at v1.13; §7.5.2 PD-5 lives at v1.15, PD-6 lives at v1.16, PD-7 lives at v1.17, and PD-8 lives at v1.18. These older-version §-cites are **intentional and resolve byte-exact — not stale** (a cite to `v1.18 §7.4.2` would in fact *fail* byte-exact, since §7.4.2 is not re-tabled in the v1.18 delta).
+**Delta-baseline §-cite convention.** `Project_Workflow` is a delta chain — `Project_Workflow_v1_8.md` is the full baseline; v1.9–v1.19 are deltas that preserve prior bodies verbatim (current head v1.19, recorded at this file's §2.1). A `§`-cite therefore names the version of **last substantive definition** of that section, which is often older than the head: §7.4.2 byte-exact-citation discipline + §2.7.6 back-flow routing live at v1.8; §7.4.7.3 stale-carry audit at v1.13; §7.5.2 PD-5 lives at v1.15, PD-6 lives at v1.16, PD-7 lives at v1.17, PD-8 lives at v1.18, and PD-9 lives at v1.19. These older-version §-cites are **intentional and resolve byte-exact — not stale** (a cite to `v1.19 §7.4.2` would in fact *fail* byte-exact, since §7.4.2 is not re-tabled in the v1.19 delta).
 
 ### 2.1 Governance + Execution Discipline
 
-Current governance anchors: `Project_Workflow_v1_18.md`, `Phase_7_Meta_Architecture_v1.md`, `Phase_7_Kickoff_Prompt.md`, `Target_Stack_Commitment_v1.md`, `Plan_Executability_Audit_v1.md`, and `Canonical_Substrate_Inventory.md`. Full roles and lineage are indexed at `claude-artifact-pointers.md` §2.1 in `.harness`.
+Current governance anchors: `Project_Workflow_v1_19.md`, `Phase_7_Meta_Architecture_v1.md`, `Phase_7_Kickoff_Prompt.md`, `Target_Stack_Commitment_v1.md`, `Plan_Executability_Audit_v1.md`, and `Canonical_Substrate_Inventory.md`. Full roles and lineage are indexed at `claude-artifact-pointers.md` §2.1 in `.harness`.
 
 ### 2.2 ADR + ADD + PRD
 
@@ -318,7 +318,7 @@ The X-AL-3 silent-absorption rule (§4.4) is the hard boundary: Phase 7 sessions
 | PRD | v1.1 | §2.2 |
 | Per-axis specs | All P5-CK cleared at v1+ | §2.3 |
 | Per-axis plans | All P6-CK cleared at v2+ | §2.4 |
-| Workflow doc | v1.18 (active discipline including §7.4 fidelity-grammar + §7.5 process-discipline catalogue; PD-8 mutation-probe-as-load-bearing-witness — pointer was stale at v1.16/PD-6 through the v1.17/PD-7 cadence-5 clearance; corrected in the same PR that lands v1.18) | §2.1 |
+| Workflow doc | v1.19 (active discipline including §7.4 fidelity-grammar + §7.5 process-discipline catalogue; PD-9 adversarial-review-loop non-convergence discriminators — pointer verified current at v1.18 before this bump, no staleness this cadence) | §2.1 |
 | Six topology patterns | 6-class enum locked at ADR-D4 v1.1 | §1.1 row CP |
 | Permanent tensions | T-perm-1 (C4↔C10), T-perm-2 (C2↔C3), T-perm-3 (C1↔C9) resolved at canonical artifacts | §10.7 council voice-roster |
 
