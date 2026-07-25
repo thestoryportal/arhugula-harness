@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `241beeb6111c` |
-| `last_refreshed` | 2026-07-25T01:20:47Z |
-| `git_head` | `8bf93e55` —  |
+| `workspace_state_hash` | `6c59c22a2f5b` |
+| `last_refreshed` | 2026-07-25T01:26:11Z |
+| `git_head` | `43955579` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 98 |
 
@@ -49,11 +49,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
-| PR #1101 | 2026-07-25 | B-70 impl leg landed — resolver's tree-walk enumeration of the unaddressed effect-fence-pause set wired at LINEAR + ORCHESTRATOR + both fan-out consume sites (CP spec v1.107 §1.1), plus the LINEAR site's round-3 map-addressability amendment. 2 merge-gate rounds (round 1 BLOCK on spec-conformance + test-witness — both fixed; round 2 all-approve). forward-register B-70 row remains open (impl-only leg, register close is a separate follow-on). |
+| direct commit 43955579 | 2026-07-25 | Terminating refresh pinning the anchor to the B-70 close-out bundle commit (forward-register B-70 row open->closed, .harness/post-phase-8-forward-register.md + harness-cp/CLAUDE.md pointer refresh, post-#1101). |
+| PR #1101 | 2026-07-25 | B-70 impl leg landed — resolver's tree-walk enumeration of the unaddressed effect-fence-pause set wired at LINEAR + ORCHESTRATOR + both fan-out consume sites (CP spec v1.107 §1.1), plus the LINEAR site's round-3 map-addressability amendment. 2 merge-gate rounds (round 1 BLOCK on spec-conformance + test-witness — both fixed; round 2 all-approve). forward-register B-70 row closed in the same-day follow-on ops commit (43955579). |
 | direct commit fdf9aa87 | 2026-07-24 | Terminating refresh for the B-70 spec-leg commit (fdf9aa87, CP spec v1.107 + plan v2.43) -- pins the anchor hash to this exact commit. |
 | direct commit d7662563 | 2026-07-24 | Pure single-file terminating refresh (fixed point) — the prior commit (d7662563) touched both roadmap_status.md and roadmap_drift_log_archive.md, disqualifying it from the codex-context-guard's exact-file-set refresh-shape check; this commit touches roadmap_status.md ONLY and pins the hash to d7662563. |
 | direct commit 90668995 | 2026-07-24 | Terminating refresh for the B-70 grounding + fork-filing commit (90668995) — corrects the anchor hash to this exact commit and the drift-log cap (11->10 rows, oldest archived) that CI's arc-ledger tally gate flagged. |
-| direct commit (this refresh) | 2026-07-24 | Autonomous-loop grounding pass: B-70 GROUNDED + Class 2 fork filed (`.harness/class_2_fork_b70_effect_fence_resolution_uniform_fallback.md`), status flipped registered_finding -> design_substrate_gated; corrected stale Next-action prose that still pointed at R-600 cadence-9's tripped cadence after PR #1100 had already closed it. |
 ---
 
 ---
