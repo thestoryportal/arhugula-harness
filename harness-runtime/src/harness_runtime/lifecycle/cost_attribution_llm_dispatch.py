@@ -60,7 +60,8 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from typing import Any, cast
 
-from harness_cp.engine_namespace import ReplayDisposition
+from harness_cp.engine_class import EngineClass
+from harness_cp.engine_namespace import REPLAY_DISPOSITION_MAPPING, ReplayDisposition
 from harness_cp.f5_signing_key_resolution import SigningBackend
 from harness_cxa.cp_audit_conversion import cp_audit_to_od_audit
 from harness_is.state_ledger_entry_schema import Identifier
@@ -83,10 +84,25 @@ from harness_runtime.types import AuditLedgerWriter, CostAttributionChain
 #: dispatch audit-write path at `sub_agent_dispatch.py`.
 _DEFAULT_SIGNING_KEY_ID = "harness-cost-attribution-v1"
 
-#: Default ReplayDisposition for live LLM dispatches outside a replay
-#: context. Per ADR-D1 v1.2 §1.1.1, NO_REPLAY is the PURE_PATTERN_NO_ENGINE
-#: disposition — the dominant case for at-the-edge LLM calls.
+#: Default ReplayDisposition when the caller has no `run_engine_class` in
+#: scope (e.g. unit tests constructing this helper directly). Per ADR-D1
+#: v1.2 §1.1.1, NO_REPLAY is the PURE_PATTERN_NO_ENGINE disposition — the
+#: dominant case for at-the-edge LLM calls.
 _DEFAULT_REPLAY_DISPOSITION = ReplayDisposition.NO_REPLAY
+
+
+def _resolve_replay_disposition(run_engine_class: EngineClass | None) -> ReplayDisposition:
+    """Map the workflow's declared engine class to its replay disposition.
+
+    Per ADR-D1 v1.2 §1.1.1 `REPLAY_DISPOSITION_MAPPING` (closed, total over
+    `EngineClass`). `None` (engine class not surfaced to this caller) falls
+    back to `_DEFAULT_REPLAY_DISPOSITION` rather than raising — callers that
+    don't thread `step_context.run_engine_class` (e.g. direct unit-test
+    construction) keep the pre-existing NO_REPLAY behavior."""
+    if run_engine_class is None:
+        return _DEFAULT_REPLAY_DISPOSITION
+    return REPLAY_DISPOSITION_MAPPING[run_engine_class]
+
 
 #: Dispatch kind for LLM-dispatch cost records (C-OD-15 §15.1.1) — the typed
 #: key for `RollupAxis.PER_DISPATCH_KIND`. The cross-family `provider_discriminator`
@@ -117,6 +133,7 @@ def attribute_llm_dispatch_cost(
     ledger_writer: Any = None,
     procedural_tier_snapshot_resolver: Callable[[], Identifier] | None = None,
     signing_backend: SigningBackend | None = None,
+    run_engine_class: EngineClass | None = None,
 ) -> SpanCostRecord:
     """Run the §C-OD-26.1 v1.10 canonical cost-attribution chain for one LLM dispatch.
 
@@ -187,6 +204,15 @@ def attribute_llm_dispatch_cost(
         R-003 resolver for the F2 entry's `procedural_tier_snapshot_ref`
         sidecar (IS spec §C-IS-05 §5.1). Consulted only when `ledger_writer`
         is bound.
+    run_engine_class
+        The workflow's declared engine class, sourced from
+        `step_context.run_engine_class`. Resolves the record's
+        `engine_replay_disposition` via the ADR-D1 v1.2 §1.1.1
+        `REPLAY_DISPOSITION_MAPPING` (e.g. `SAVE_POINT_CHECKPOINT` →
+        `CHECKPOINT_RESUME`). `None` (caller has no engine class in scope)
+        falls back to `NO_REPLAY`, preserving pre-existing behavior
+        (B-30 close-out step 4 — the field was previously hard-coded to
+        `NO_REPLAY` regardless of engine class).
 
     Returns
     -------
@@ -238,7 +264,7 @@ def attribute_llm_dispatch_cost(
         total_cost=float(span_cost),
         total_latency_ms=0,  # latency observability deferred to follow-on arc
         derived_keys=(),
-        engine_replay_disposition=_DEFAULT_REPLAY_DISPOSITION,
+        engine_replay_disposition=_resolve_replay_disposition(run_engine_class),
         retry_attempt_number=None,
         retry_cause_attribution=None,
         is_replay_derived=False,

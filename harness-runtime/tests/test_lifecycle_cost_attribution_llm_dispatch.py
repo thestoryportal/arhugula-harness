@@ -23,6 +23,7 @@ from harness_as.sandbox_tier import SandboxTier
 from harness_core import PersonaTier, StepID
 from harness_cp.cp_shared_types import ModelBinding
 from harness_cp.engine_class import EngineClass
+from harness_cp.engine_namespace import REPLAY_DISPOSITION_MAPPING, ReplayDisposition
 from harness_cp.gate_level_rule import GateLevel
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
 from harness_cp.workflow_driver_types import (
@@ -106,6 +107,59 @@ def test_attribute_llm_dispatch_cost_returns_attached_record_for_anthropic(
     # AC #2 — cost uses usage attrs; per claude-haiku-4-5 override $1/MTok in + $5/MTok out:
     # cost = 1000 * (1.00 / 1e6) + 500 * (5.00 / 1e6) = 0.001 + 0.0025 = 0.0035
     assert attached.total_cost == pytest.approx(0.0035, rel=1e-6)
+
+
+@pytest.mark.parametrize(
+    "engine_class",
+    list(EngineClass),
+)
+def test_attribute_llm_dispatch_cost_threads_real_engine_replay_disposition(
+    engine_class: EngineClass,
+    cost_chain: RuntimeCostAttributionChain,
+    audit_writer: _RecordingAuditWriter,
+) -> None:
+    """B-30 close-out step 4 — `engine_replay_disposition` is no longer
+    hard-coded to `NO_REPLAY`; it resolves the workflow's real declared
+    `run_engine_class` via the ADR-D1 v1.2 §1.1.1 `REPLAY_DISPOSITION_MAPPING`
+    (total over `EngineClass` — every member round-trips to its mapped
+    disposition, not just the PURE_PATTERN_NO_ENGINE default case)."""
+    attached = attribute_llm_dispatch_cost(
+        rate_table=RATE_TABLE_V1,
+        cost_chain=cost_chain,
+        audit_writer=audit_writer,
+        provider_name="anthropic",
+        model="claude-haiku-4-5",
+        span_id="0123456789abcdef",
+        parent_idempotency_key="parent-idem-1",
+        workflow_id="test-wf",
+        parent_action_id="workflow:test-wf:step:0",
+        input_tokens=1000,
+        output_tokens=500,
+        run_engine_class=engine_class,
+    )
+    assert attached.engine_replay_disposition == REPLAY_DISPOSITION_MAPPING[engine_class]
+
+
+def test_attribute_llm_dispatch_cost_defaults_to_no_replay_when_engine_class_unset(
+    cost_chain: RuntimeCostAttributionChain,
+    audit_writer: _RecordingAuditWriter,
+) -> None:
+    """`run_engine_class` omitted (e.g. a direct unit-test call) preserves the
+    pre-existing NO_REPLAY default rather than raising."""
+    attached = attribute_llm_dispatch_cost(
+        rate_table=RATE_TABLE_V1,
+        cost_chain=cost_chain,
+        audit_writer=audit_writer,
+        provider_name="anthropic",
+        model="claude-haiku-4-5",
+        span_id="0123456789abcdef",
+        parent_idempotency_key="parent-idem-1",
+        workflow_id="test-wf",
+        parent_action_id="workflow:test-wf:step:0",
+        input_tokens=1000,
+        output_tokens=500,
+    )
+    assert attached.engine_replay_disposition == ReplayDisposition.NO_REPLAY
 
 
 def test_attribute_llm_dispatch_cost_writes_audit_entry(

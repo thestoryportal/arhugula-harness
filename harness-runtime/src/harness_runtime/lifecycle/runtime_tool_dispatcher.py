@@ -673,6 +673,7 @@ class RuntimeToolDispatcher:
                 ledger_writer=self._ledger_writer,
                 procedural_tier_snapshot_resolver=self._procedural_tier_snapshot_resolver,
                 signing_backend=self._signing_backend,
+                run_engine_class=step_context.run_engine_class,
             )
         except AUDIT_SIGNING_HARD_FAILURES:
             # Codex round-4 P1 (PR B2a): signing failures are compliance

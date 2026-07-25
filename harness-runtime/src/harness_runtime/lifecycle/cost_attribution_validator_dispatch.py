@@ -57,7 +57,8 @@ from collections.abc import Callable
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, cast
 
-from harness_cp.engine_namespace import ReplayDisposition
+from harness_cp.engine_class import EngineClass
+from harness_cp.engine_namespace import REPLAY_DISPOSITION_MAPPING, ReplayDisposition
 from harness_cp.f5_signing_key_resolution import SigningBackend
 from harness_cxa.cp_audit_conversion import cp_audit_to_od_audit
 from harness_is.state_ledger_entry_schema import Identifier
@@ -85,9 +86,22 @@ if TYPE_CHECKING:
 #: entries. Same convention as the LLM-dispatch + tool-dispatch precedents.
 _DEFAULT_SIGNING_KEY_ID = "harness-cost-attribution-v1"
 
-#: Default ReplayDisposition for live validator dispatches outside a replay
-#: context (PURE_PATTERN_NO_ENGINE engine class default per ADR-D1 v1.2 §1.1.1).
+#: Default ReplayDisposition when the caller has no `run_engine_class` in
+#: scope (PURE_PATTERN_NO_ENGINE engine class default per ADR-D1 v1.2 §1.1.1).
 _DEFAULT_REPLAY_DISPOSITION = ReplayDisposition.NO_REPLAY
+
+
+def _resolve_replay_disposition(run_engine_class: EngineClass | None) -> ReplayDisposition:
+    """Map the workflow's declared engine class to its replay disposition.
+
+    Per ADR-D1 v1.2 §1.1.1 `REPLAY_DISPOSITION_MAPPING` (closed, total over
+    `EngineClass`). `None` falls back to `_DEFAULT_REPLAY_DISPOSITION`,
+    mirroring the LLM-dispatch precedent at
+    `cost_attribution_llm_dispatch.py`."""
+    if run_engine_class is None:
+        return _DEFAULT_REPLAY_DISPOSITION
+    return REPLAY_DISPOSITION_MAPPING[run_engine_class]
+
 
 #: Dispatch kind for validator-dispatch cost records (C-OD-15 §15.1.1) — the
 #: typed key for `RollupAxis.PER_DISPATCH_KIND`. The cross-family
@@ -132,6 +146,7 @@ def attribute_validator_dispatch_cost(
     ledger_writer: Any = None,
     procedural_tier_snapshot_resolver: Callable[[], Identifier] | None = None,
     signing_backend: SigningBackend | None = None,
+    run_engine_class: EngineClass | None = None,
 ) -> SpanCostRecord:
     """Run the §C-OD-26.1 canonical cost-attribution chain for one validator dispatch.
 
@@ -245,7 +260,7 @@ def attribute_validator_dispatch_cost(
         # observability — non-canonical at the cost record. Coerced to int
         # per SpanCostRecord schema (latency in whole ms is the carrier shape).
         derived_keys=(),
-        engine_replay_disposition=_DEFAULT_REPLAY_DISPOSITION,
+        engine_replay_disposition=_resolve_replay_disposition(run_engine_class),
         retry_attempt_number=None,
         retry_cause_attribution=None,
         is_replay_derived=False,
@@ -420,6 +435,7 @@ class CostAttributingValidatorHook:
                 ledger_writer=self._ledger_writer,
                 procedural_tier_snapshot_resolver=self._procedural_tier_snapshot_resolver,
                 signing_backend=self._signing_backend,
+                run_engine_class=step_context.run_engine_class,
             )
         except AUDIT_SIGNING_HARD_FAILURES:
             # Codex round-4 P1 (PR B2a): signing failures are compliance
