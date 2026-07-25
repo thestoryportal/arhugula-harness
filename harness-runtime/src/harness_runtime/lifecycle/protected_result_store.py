@@ -27,6 +27,7 @@ import logging
 import os
 import pickle
 import tempfile
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -38,6 +39,7 @@ if TYPE_CHECKING:
 __all__ = [
     "ProtectedResultStore",
     "ProtectedStoreCrossTenantError",
+    "ProtectedStoreEntryNotFoundError",
     "ProtectedStoreTamperError",
     "ResultRefValue",
     "UnresolvableResultRef",
@@ -57,6 +59,62 @@ logger = logging.getLogger("harness.runtime.protected_result_store")
 #: or-opportunistic per spec v1.103 §14.8.11, codex round-10 on the spec PR —
 #: a long-lived daemon that never restarts must still bound the store).
 _OPPORTUNISTIC_GC_INTERVAL_SECONDS = 300.0
+
+#: B-68 codex round 2 [P1] x2: publication and `gc_sweep()` must mutually
+#: exclude even across multiple `ProtectedResultStore` INSTANCES sharing one
+#: on-disk directory — the daemon composition root constructs a FRESH
+#: instance per `run()`/`resume()` bootstrap (`stage_4_od.py`), so an
+#: instance-scoped `threading.Lock` attribute would not exclude a
+#: concurrent BOOTSTRAP's sweep. Keyed by the resolved root path (module-
+#: wide, not per-instance); `threading.Lock` (not `asyncio.Lock`) because
+#: `gc_sweep` is invoked off-loop via `run_off_loop_detach_on_cancel` — a
+#: real OS-thread boundary an asyncio-only lock would not cross.
+_root_locks: dict[str, threading.Lock] = {}
+_root_locks_guard = threading.Lock()
+
+
+def _lock_for_root(root: Path) -> threading.Lock:
+    # codex round 3 [P2]: keyed by RESOLVED path, not the raw `str(root)` —
+    # two filesystem-equivalent spellings of the same directory (e.g. a
+    # `..`-containing alias) would otherwise key different lock objects,
+    # reopening the exact GC/publication race this lock exists to close.
+    # `resolve()` is a read-only stat, not a mutating effect — it doesn't
+    # create the directory or touch the codec, so it doesn't violate this
+    # class's "constructor performs no I/O" discipline (module docstring);
+    # `strict=False` (the default) never raises for a not-yet-existing path.
+    #
+    # codex round 6 [P2]: `resolve()` alone still under-normalizes on a
+    # case-INSENSITIVE filesystem (macOS APFS default volumes) — two
+    # differently-cased spellings of the same directory (e.g. `/Users/...`
+    # vs `/users/...`) resolve to two DISTINCT strings even though they
+    # name the identical inode, reopening the same aliasing race. Key on
+    # true filesystem identity instead (`st_dev`, `st_ino` — the same pair
+    # `os.path.samefile` compares).
+    #
+    # `_publish_lock` is now a PROPERTY (see `ProtectedResultStore`) rather
+    # than a construction-time-cached attribute, specifically so this
+    # function is never called before the directory is guaranteed to
+    # exist — an earlier draft fell back to the resolved-path STRING when
+    # `stat()` raised on a not-yet-created directory, but that reopened a
+    # NEW race: a caller that accessed the lock before creation (the
+    # string-keyed fallback) and one that accessed it after (the
+    # inode-keyed identity) would get two DIFFERENT lock objects for the
+    # SAME logical root. `mkdir` here — unconditional, before the stat —
+    # closes that window by guaranteeing every access keys on identity;
+    # `exist_ok=True` tolerates concurrent create-create races safely.
+    resolved = root.resolve()
+    resolved.mkdir(parents=True, exist_ok=True)
+    try:
+        st = resolved.stat()
+        key = f"{st.st_dev}:{st.st_ino}"
+    except OSError:
+        key = str(resolved)
+    with _root_locks_guard:
+        lock = _root_locks.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _root_locks[key] = lock
+        return lock
 
 
 def normalize_tenant_scope(tenant_id: str | None) -> str | None:
@@ -103,6 +161,14 @@ class ProtectedStoreCrossTenantError(RuntimeError):
 class ProtectedStoreTamperError(RuntimeError):
     """Ciphertext failed authentication (wrong key or tampered bytes) —
     refused typed BEFORE any deserialization runs (spec v1.103 §14.8.11)."""
+
+
+class ProtectedStoreEntryNotFoundError(FileNotFoundError):
+    """`read()` found no entry at the requested composite key — refused
+    TYPED (B-68 optional interim hardening) rather than a raw
+    `FileNotFoundError` leaking `Path.read_bytes()`'s implementation detail.
+    Subclasses `FileNotFoundError` so existing `except FileNotFoundError` /
+    `pytest.raises(FileNotFoundError)` callers keep working unchanged."""
 
 
 def _encode_tenant_tag(tag: str) -> str:
@@ -160,6 +226,10 @@ class _StoredEnvelope:
     tenant_id: str | None
     type_tag: str
     serializer_version: int
+    #: Forensic/debugging record of when this write STARTED — NOT the TTL
+    #: age authority (B-68: it's stamped before the encrypt+publish latency
+    #: that can itself exceed a short TTL). `gc_sweep` ages entries off the
+    #: entry file's own filesystem mtime instead; see `gc_sweep`'s docstring.
     written_at: float
     payload: bytes
     composite_key: str
@@ -179,10 +249,29 @@ class ProtectedResultStore:
     _SERIALIZER_VERSION = 1
 
     def __init__(self, root: Path, *, codec: FernetLike, ttl_seconds: float) -> None:
-        self._root = root
+        # codex round 4 [P2]: resolve ONCE here and use the SAME resolved
+        # path for both all on-disk I/O (`self._root`) and the lock key —
+        # otherwise a symlink retargeted between two constructions could
+        # let two instances do I/O in the SAME new directory under
+        # DIFFERENT locks, reopening the race this lock exists to close.
+        self._root = root.resolve()
         self._codec = codec
         self._ttl_seconds = ttl_seconds
         self._last_gc_at = 0.0
+
+    @property
+    def _publish_lock(self) -> threading.Lock:
+        # B-68 codex round 2 — module-wide, keyed by the root's filesystem
+        # identity (not a fresh per-instance lock); see `_lock_for_root`'s
+        # docstring. codex round 6 [P2]: recomputed on EVERY access rather
+        # than cached once at construction, deliberately NOT because the
+        # constructor avoids I/O (that's `_lock_for_root`'s own `mkdir`'s
+        # job — see its docstring for why a cached, possibly-pre-creation
+        # key would reopen a race) but because `_lock_for_root` is a
+        # cheap, idempotent registry lookup, not a fresh allocation — a
+        # property is the correct shape for a value that's always
+        # re-derivable and never needs its own state.
+        return _lock_for_root(self._root)
 
     def _entry_path(self, composite_key: str) -> Path:
         digest = hashlib.sha256(composite_key.encode("utf-8")).hexdigest()
@@ -292,18 +381,50 @@ class ProtectedResultStore:
         TOCTOU-racy pre-check) -> DESTINATION-directory fsync AFTER the
         commit, before returning. A crash before the commit leaves NO
         destination entry; a crash after leaves a complete, retrievable one.
+
+        B-68 codex round 2 [P1] x2 + round 4 [P1]: the WHOLE temp-file
+        lifetime — creation, write+fsync, the commit, the mtime refresh
+        (`gc_sweep`'s age authority), and that refresh's OWN durability —
+        runs under `self._publish_lock`, the SAME lock `gc_sweep` holds for
+        its whole sweep (including its `.tmp-*` crash-orphan reclaim loop).
+        Round 2/3's fix locked only from `os.link` onward: a concurrent
+        sweep could still classify this method's OWN in-flight `.tmp-*`
+        file as a crash orphan (stale mtime under a short TTL + slow
+        fsync) and unlink it before `os.link` ever ran, losing recovery
+        for an already-completed paid effect when the subsequent `os.link`
+        then raised `FileNotFoundError`. Holding the lock for the entire
+        method closes that: `gc_sweep`'s tmp-cleanup loop can never run
+        while a temp file is still in active use.
         """
         self._root.mkdir(parents=True, exist_ok=True)
-        fd, tmp_name = tempfile.mkstemp(dir=self._root, prefix=".tmp-")
-        try:
-            with os.fdopen(fd, "wb") as handle:
-                handle.write(data)
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.link(tmp_name, entry_path)
-        finally:
-            os.unlink(tmp_name)
-        self._fsync_dir(self._root)
+        with self._publish_lock:
+            fd, tmp_name = tempfile.mkstemp(dir=self._root, prefix=".tmp-")
+            try:
+                with os.fdopen(fd, "wb") as handle:
+                    handle.write(data)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.link(tmp_name, entry_path)
+                self._fsync_dir(self._root)
+                # Refresh mtime to "now" — the temp file's mtime (set at
+                # `handle.write()` above) predates this commit by however
+                # long the fsync+link just took; `gc_sweep`'s age
+                # authority must not under-report the true publish moment
+                # (B-68 [P1] round 1).
+                os.utime(entry_path, None)
+                # Durably persist that refresh BEFORE releasing the lock —
+                # a crash between `os.utime` and an fsync of its own could
+                # lose the update on some filesystems (round 2 [P1]),
+                # reintroducing the exact race on the NEXT process's
+                # bootstrap sweep. `fsync` on an O_RDONLY fd is valid and
+                # flushes the inode's metadata (including mtime).
+                entry_fd = os.open(entry_path, os.O_RDONLY)
+                try:
+                    os.fsync(entry_fd)
+                finally:
+                    os.close(entry_fd)
+            finally:
+                os.unlink(tmp_name)
 
     def read(self, tenant_id: str | None, composite_key: str) -> object:
         """Idempotent, tenant-bound retrieval (spec v1.103 §14.8.11).
@@ -319,7 +440,16 @@ class ProtectedResultStore:
                 f"retrieval attempted under {expected_tag!r}"
             )
         entry_path = self._entry_path(composite_key)
-        ciphertext = entry_path.read_bytes()
+        try:
+            ciphertext = entry_path.read_bytes()
+        except FileNotFoundError as exc:
+            # B-68 optional interim hardening — refuse TYPED rather than
+            # leak `Path.read_bytes()`'s raw `FileNotFoundError` (reached
+            # e.g. after `ack_delete()`, TTL GC, or a caller-supplied
+            # composite_key that was never written).
+            raise ProtectedStoreEntryNotFoundError(
+                f"no entry at composite key {composite_key!r}"
+            ) from exc
         try:
             plaintext = self._codec.decrypt(ciphertext)
         except Exception as exc:
@@ -360,91 +490,153 @@ class ProtectedResultStore:
         Expiry is a TYPED report-log line, never silent loss — the caller
         (bootstrap/shutdown hook, or the opportunistic in-write trigger)
         gets the expired composite-key digests back for its own reporting.
+
+        Age is measured from the entry FILE's own filesystem mtime, never
+        the encrypted envelope's embedded `written_at` (B-68 registered
+        finding: `written_at` is stamped BEFORE serialization/encryption/
+        `_publish_atomic`'s fsync+commit — a real, non-instantaneous gap
+        under load or a large payload. A short deployment-configured TTL
+        could then see a just-published, still-live entry as already
+        expired the instant it becomes visible on disk, regardless of any
+        concurrent sweep. `_publish_atomic` refreshes the entry's mtime to
+        "now" AFTER its durable commit — the same trusted, always-available
+        age signal already used below for undecryptable entries, now
+        applied unconditionally rather than only as a decrypt-failure
+        fallback. This sweep and that refresh mutually exclude via
+        `self._publish_lock` (codex round 2 [P1] x2 — round 1's plain
+        `os.utime` refresh still left a window between `os.link` (visible)
+        and the refresh itself for a genuinely CONCURRENT sweep to observe
+        the stale pre-fsync mtime, and didn't fsync the refresh, so a crash
+        right after could lose it): closed for concurrent callers WITHIN
+        this process (the lock is keyed by resolved root path, shared
+        across every `ProtectedResultStore` instance the daemon constructs
+        for the same on-disk directory — this daemon builds a FRESH
+        instance per `run()`/`resume()` bootstrap, not one shared object).
+        A separate OS PROCESS sharing this same directory is NOT covered by
+        an in-process lock; that residual is registered, not silently
+        assumed closed.
         """
         current_time = now if now is not None else time.time()
         expired: list[str] = []
         if not self._root.exists():
             return expired
-        for entry_path in self._root.glob("*.entry"):
+        # B-68 codex round 2 [P1]: candidate SELECTION runs under the SAME
+        # lock `_publish_atomic` holds around its commit + mtime refresh —
+        # a sweep in progress can never observe an entry mid-publish (stale
+        # pre-fsync mtime), and a publish in progress can never race a
+        # sweep's read of its own just-refreshed mtime.
+        #
+        # codex round 7 [P1]: this lock scope used to wrap decrypt +
+        # unlink too — the FULL sweep body. `gc_sweep` is invoked via
+        # `run_off_loop_detach_on_cancel` (`audit_offload.py`), whose
+        # entire design intent is that a slow/hung worker gets DETACHED
+        # (the caller's own timeout is the only bound that matters; the
+        # worker keeps running harmlessly on a daemon thread) rather than
+        # blocking anything else. Holding the lock across a decrypt-heavy
+        # scan of a large backlog defeated that: a detached, still-running
+        # sweep would keep the NEXT `write_once()`/`gc_sweep()` call on the
+        # same root — on a long-lived daemon, this is every subsequent
+        # `run()`/`resume()`, not just process exit — blocked indefinitely
+        # on the abandoned worker's lock. Narrowed to a two-phase design:
+        # phase 1 (below, under the lock) only `stat()`s candidates — no
+        # decrypt, no unlink — bounding lock-hold time to enumeration cost
+        # regardless of backlog size or a stalled decrypt. Phase 2 (after
+        # the lock releases) does the slow work. This is SAFE because:
+        # expiry is monotonic (a `stat()`-confirmed-expired entry's mtime
+        # never gets younger — nothing ever re-touches an already-committed
+        # entry after `_publish_atomic`'s own refresh) and every write uses
+        # a FRESH `uuid4()`-derived composite key (`write_once`), so no
+        # concurrent publish can "resurrect" a candidate already selected
+        # here. A second sweep concurrently selecting + unlinking the SAME
+        # candidate is harmless — `unlink(missing_ok=True)` absorbs the
+        # race; the only cost is a duplicate log line.
+        entry_candidates: list[tuple[Path, float]] = []
+        tmp_candidates: list[tuple[Path, float]] = []
+        with self._publish_lock:
+            for entry_path in self._root.glob("*.entry"):
+                try:
+                    written_at = entry_path.stat().st_mtime
+                except OSError:
+                    continue
+                if current_time - written_at > self._ttl_seconds:
+                    entry_candidates.append((entry_path, written_at))
+            # codex [P2] round 5 on this arc — a process KILLED between
+            # `_publish_atomic`'s temp-write and its `finally: os.unlink(tmp_name)`
+            # leaves a `.tmp-*` file behind indefinitely: this loop (and every
+            # bootstrap/shutdown/opportunistic sweep, which all funnel through
+            # this method) previously enumerated only `*.entry`, so repeated
+            # crashes could accumulate stale ciphertext or exhaust disk with no
+            # bound. `.tmp-*` files carry no envelope to decrypt (a crash mid-
+            # write may leave them incomplete) — mtime is the only available age
+            # signal, same fallback already used for undecryptable `.entry`
+            # files above. Reuses the store's own TTL rather than a new config
+            # surface (temp files never survive a normal write for more than
+            # milliseconds, so any bound this generous only ever catches
+            # genuine crash orphans).
+            for tmp_entry_path in self._root.glob(".tmp-*"):
+                try:
+                    tmp_mtime = tmp_entry_path.stat().st_mtime
+                except OSError:
+                    continue
+                if current_time - tmp_mtime > self._ttl_seconds:
+                    tmp_candidates.append((tmp_entry_path, tmp_mtime))
+        # Phase 2 — outside the lock: decrypt (best-effort, logging only)
+        # and the actual unlinks. See the round-7 comment above for why
+        # this is safe unlocked.
+        for entry_path, written_at in entry_candidates:
+            tenant_tag: str | None = None
             try:
                 plaintext = self._codec.decrypt(entry_path.read_bytes())
                 envelope: _StoredEnvelope = pickle.loads(plaintext)
-                written_at = envelope.written_at
-                tenant_tag: str | None = envelope.tenant_id
+                tenant_tag = envelope.tenant_id
             except Exception:
                 # codex [P2] on this arc — an undecryptable entry (a DEK
                 # rotation invalidating the key, or genuine corruption) must
                 # NOT be skipped forever: without a fallback age signal it
                 # would never expire, defeating the bounded-retention
-                # guarantee. Fall back to the filesystem's own mtime (a
-                # trusted, always-available age signal) rather than treating
-                # "unreadable" as "immortal".
-                try:
-                    written_at = entry_path.stat().st_mtime
-                except OSError:
-                    continue
-                tenant_tag = None
-            if current_time - written_at > self._ttl_seconds:
-                digest = entry_path.stem
-                try:
-                    entry_path.unlink(missing_ok=True)
-                except OSError as exc:
-                    # codex [P1] on this arc — a sweep-time unlink failure (e.g.
-                    # permission denied) must NEVER propagate: `write_once()` calls
-                    # this opportunistically, and an uncaught OSError here would
-                    # replace the caller's typed `PostEffectAuditSigningError` with
-                    # an unrelated GC error, defeating the at-most-once carrier
-                    # entirely. Log + skip this entry; the sweep continues.
-                    logger.error(
-                        "protected result store: TTL-expired entry GC unlink failed "
-                        "(digest=%s, tenant=%s): %s",
-                        digest,
-                        tenant_tag,
-                        exc,
-                    )
-                    continue
-                expired.append(digest)
-                logger.warning(
-                    "protected result store: TTL-expired entry GC'd "
-                    "(digest=%s, tenant=%s, age_s=%.1f)",
+                # guarantee. `tenant_tag` stays `None` (unreadable) — the
+                # log line below still reports it, just without identity.
+                pass
+            digest = entry_path.stem
+            try:
+                entry_path.unlink(missing_ok=True)
+            except OSError as exc:
+                # codex [P1] on this arc — a sweep-time unlink failure (e.g.
+                # permission denied) must NEVER propagate: `write_once()` calls
+                # this opportunistically, and an uncaught OSError here would
+                # replace the caller's typed `PostEffectAuditSigningError` with
+                # an unrelated GC error, defeating the at-most-once carrier
+                # entirely. Log + skip this entry; the sweep continues.
+                logger.error(
+                    "protected result store: TTL-expired entry GC unlink failed "
+                    "(digest=%s, tenant=%s): %s",
                     digest,
                     tenant_tag,
-                    current_time - written_at,
+                    exc,
                 )
-        # codex [P2] round 5 on this arc — a process KILLED between
-        # `_publish_atomic`'s temp-write and its `finally: os.unlink(tmp_name)`
-        # leaves a `.tmp-*` file behind indefinitely: this loop (and every
-        # bootstrap/shutdown/opportunistic sweep, which all funnel through
-        # this method) previously enumerated only `*.entry`, so repeated
-        # crashes could accumulate stale ciphertext or exhaust disk with no
-        # bound. `.tmp-*` files carry no envelope to decrypt (a crash mid-
-        # write may leave them incomplete) — mtime is the only available age
-        # signal, same fallback already used for undecryptable `.entry`
-        # files above. Reuses the store's own TTL rather than a new config
-        # surface (temp files never survive a normal write for more than
-        # milliseconds, so any bound this generous only ever catches
-        # genuine crash orphans).
-        for tmp_entry_path in self._root.glob(".tmp-*"):
-            try:
-                tmp_mtime = tmp_entry_path.stat().st_mtime
-            except OSError:
                 continue
-            if current_time - tmp_mtime > self._ttl_seconds:
-                try:
-                    tmp_entry_path.unlink(missing_ok=True)
-                except OSError as exc:
-                    logger.error(
-                        "protected result store: crash-orphaned temp-file GC "
-                        "unlink failed (%s): %s",
-                        tmp_entry_path.name,
-                        exc,
-                    )
-                    continue
-                logger.warning(
-                    "protected result store: crash-orphaned temp-file GC'd (%s, age_s=%.1f)",
+            expired.append(digest)
+            logger.warning(
+                "protected result store: TTL-expired entry GC'd (digest=%s, tenant=%s, age_s=%.1f)",
+                digest,
+                tenant_tag,
+                current_time - written_at,
+            )
+        for tmp_entry_path, tmp_mtime in tmp_candidates:
+            try:
+                tmp_entry_path.unlink(missing_ok=True)
+            except OSError as exc:
+                logger.error(
+                    "protected result store: crash-orphaned temp-file GC unlink failed (%s): %s",
                     tmp_entry_path.name,
-                    current_time - tmp_mtime,
+                    exc,
                 )
+                continue
+            logger.warning(
+                "protected result store: crash-orphaned temp-file GC'd (%s, age_s=%.1f)",
+                tmp_entry_path.name,
+                current_time - tmp_mtime,
+            )
         self._last_gc_at = current_time
         return expired
 

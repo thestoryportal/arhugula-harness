@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import errno
 import os
+import threading
 import time
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from cryptography.fernet import Fernet
 from harness_runtime.lifecycle.protected_result_store import (
     ProtectedResultStore,
     ProtectedStoreCrossTenantError,
+    ProtectedStoreEntryNotFoundError,
     ProtectedStoreTamperError,
     UnresolvableResultRef,
     _encode_scope_prefix,
@@ -400,6 +402,22 @@ def test_deletion_only_after_durable_repair_ack(tmp_path: Path) -> None:
         store.read("tenant-a", ref)
 
 
+def test_read_missing_entry_raises_typed_not_found(tmp_path: Path) -> None:
+    """B-68 optional interim hardening: a missing entry (never written, or
+    already GC'd/ack-deleted) refuses via the discoverable typed subclass,
+    not a bare `Path.read_bytes()` `FileNotFoundError`.
+
+    Mutation probe: reverting `read()` to call `entry_path.read_bytes()`
+    unguarded still satisfies `pytest.raises(FileNotFoundError)` (the typed
+    class subclasses it) but fails the `isinstance` check below, since the
+    raised instance would be the plain builtin, not the typed subclass."""
+    store = _store(tmp_path)
+    fake_ref = compose_composite_key("tenant-a")
+    with pytest.raises(ProtectedStoreEntryNotFoundError) as exc_info:
+        store.read("tenant-a", fake_ref)
+    assert isinstance(exc_info.value, FileNotFoundError)
+
+
 def test_ttl_expiry_gc_sweep_emits_typed_report_line(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -442,6 +460,428 @@ def test_gc_sweep_expires_undecryptable_entry_via_mtime_fallback(tmp_path: Path)
     expired = store.gc_sweep(now=time.time())
     assert len(expired) == 1
     assert not entry_path.exists()
+
+
+def test_gc_sweep_ages_off_filesystem_mtime_not_embedded_written_at(tmp_path: Path) -> None:
+    """B-68 registered finding: `write_once()` stamps `_StoredEnvelope.
+    written_at` via `time.time()` BEFORE serialization/encryption/
+    `_publish_atomic`'s fsync+commit — a real, non-instantaneous gap. Under
+    a deployment TTL shorter than that latency, a naive `written_at`-
+    authority sweep would GC a just-published, still-live entry the instant
+    it becomes visible on disk. `gc_sweep()` now ages every entry off the
+    entry file's own filesystem mtime (set at durable-write time), not the
+    embedded, pre-latency `written_at` — this constructs a decryptable
+    entry whose embedded `written_at` is already far outside the TTL while
+    its real file mtime is fresh, and asserts the sweep does NOT collect it.
+
+    Mutation probe: reverting `gc_sweep` to read `envelope.written_at` as
+    the age authority (the pre-fix behavior) makes this entry expire."""
+    import pickle
+
+    from harness_runtime.lifecycle.protected_result_store import _StoredEnvelope
+
+    store = _store(tmp_path, ttl_seconds=1.0)
+    composite_key = compose_composite_key("tenant-a")
+    envelope = _StoredEnvelope(
+        tenant_id="tenant-a",
+        type_tag="str",
+        serializer_version=store._SERIALIZER_VERSION,  # type: ignore[attr-defined]
+        written_at=time.time() - 10.0,  # far outside the 1s TTL
+        payload=pickle.dumps("still live"),
+        composite_key=composite_key,
+    )
+    ciphertext = store._codec.encrypt(pickle.dumps(envelope))  # type: ignore[attr-defined]
+    entry_path = store._entry_path(composite_key)  # type: ignore[arg-type]
+    store._publish_atomic(entry_path, ciphertext)  # type: ignore[arg-type]
+    # The file's real mtime is "now" (just written) — fresh, well inside the TTL.
+
+    expired = store.gc_sweep(now=time.time())
+    assert expired == []
+    assert entry_path.exists()
+    assert store.read("tenant-a", composite_key) == "still live"
+
+
+def test_write_once_survives_immediate_sweep_under_slow_fsync_and_short_ttl(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """B-68 out-of-family Codex round 1 [P1], empirically reproduced by the
+    reviewer: mtime-from-write-time (the fix above) still under-reports the
+    true publish moment by however long `_publish_atomic`'s own fsync+link
+    commit takes — the temp file's mtime is set at `handle.write()`,
+    BEFORE that commit. A 20ms TTL with a 100ms-slowed fsync let `gc_sweep`
+    collect a just-published, still-live entry immediately after
+    `write_once()` returned. `_publish_atomic` now refreshes the entry's
+    mtime to "now" AFTER the durable commit, closing that remaining gap.
+
+    Mutation probe: removing the post-commit `os.utime` refresh reproduces
+    the exact codex-verified failure — `gc_sweep` collects the entry."""
+    store = _store(tmp_path, ttl_seconds=0.02)
+    real_fsync = os.fsync
+    seen = {"slowed": False}
+
+    def _slow_first_fsync(fd: int) -> None:
+        if not seen["slowed"]:
+            seen["slowed"] = True
+            time.sleep(0.10)
+        real_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", _slow_first_fsync)
+    ref = store.write_once("tenant-a", "just published")
+    assert isinstance(ref, str)
+
+    expired = store.gc_sweep(now=time.time())
+    assert expired == []
+    assert store.read("tenant-a", ref) == "just published"
+
+
+def test_publish_lock_shared_across_instances_of_same_root(tmp_path: Path) -> None:
+    """B-68 codex round 2 [P1] x2 precondition: `_publish_atomic` and
+    `gc_sweep` must mutually exclude even across multiple
+    `ProtectedResultStore` INSTANCES pointed at the same on-disk
+    directory — this daemon constructs a FRESH instance per
+    `run()`/`resume()` bootstrap (`stage_4_od.py`), not one shared object.
+    `_lock_for_root` is keyed by root path specifically so this holds.
+
+    Mutation probe: keying the lock registry by `id(self)`/a fresh
+    per-instance `threading.Lock()` instead of the resolved root path
+    makes this identity check fail."""
+    store_a = _store(tmp_path)
+    store_b = ProtectedResultStore(
+        tmp_path / "store",
+        codec=store_a._codec,
+        ttl_seconds=1.0,  # type: ignore[attr-defined]
+    )
+    assert store_a._publish_lock is store_b._publish_lock  # type: ignore[attr-defined]
+
+
+def test_publish_lock_shared_across_filesystem_equivalent_path_aliases(
+    tmp_path: Path,
+) -> None:
+    """codex round 3 [P2]: two filesystem-equivalent spellings of the SAME
+    directory (a `..`-containing alias vs. the direct path) must key the
+    SAME lock — `RuntimeConfig` doesn't guarantee a single canonical
+    spelling across bootstraps, and keying by raw `str(root)` alone would
+    let such an alias silently reopen the GC/publication race this lock
+    exists to close.
+
+    Mutation probe: keying `_lock_for_root` by the raw, un-resolved
+    `str(root)` makes this identity check fail (the alias below is
+    textually different from the direct path)."""
+    store_direct = _store(tmp_path)
+    aliased_root = tmp_path / "unrelated" / ".." / "store"
+    assert aliased_root != tmp_path / "store"  # textually distinct...
+    store_aliased = ProtectedResultStore(
+        aliased_root,
+        codec=store_direct._codec,  # type: ignore[attr-defined]
+        ttl_seconds=1.0,
+    )
+    # ...but filesystem-equivalent, so the lock must still be shared.
+    assert store_direct._publish_lock is store_aliased._publish_lock  # type: ignore[attr-defined]
+
+
+def test_publish_lock_shared_across_case_insensitive_path_spellings(
+    tmp_path: Path,
+) -> None:
+    """merge-gate round-6 out-of-family Codex review (PR #1103): on a
+    case-INSENSITIVE filesystem (macOS APFS default volumes), two
+    differently-cased spellings of the SAME directory name the identical
+    inode but `Path.resolve()` alone preserves the caller's casing —
+    keying the lock registry by the resolved-path STRING (round-3's fix)
+    would still let this alias reopen the GC/publication race. Skipped
+    on a case-SENSITIVE filesystem (most CI runners), where the two
+    spellings genuinely name different, unrelated paths.
+
+    Mutation probe: keying `_lock_for_root` by the resolved-path string
+    instead of filesystem identity (`st_dev`/`st_ino`) makes this
+    identity check fail on a case-insensitive volume."""
+    store_direct = _store(tmp_path)
+    direct_root = tmp_path / "store"
+    direct_root.mkdir(parents=True, exist_ok=True)
+    cased_root = Path(str(direct_root).swapcase())
+    if not (cased_root.exists() and os.path.samefile(direct_root, cased_root)):
+        pytest.skip("filesystem under tmp_path is not case-insensitive")
+    store_cased = ProtectedResultStore(
+        cased_root,
+        codec=store_direct._codec,  # type: ignore[attr-defined]
+        ttl_seconds=1.0,
+    )
+    assert store_direct._publish_lock is store_cased._publish_lock  # type: ignore[attr-defined]
+
+
+def test_gc_sweep_blocks_while_publish_lock_held(tmp_path: Path) -> None:
+    """B-68 codex round 2 [P1]: round 1's plain post-commit `os.utime`
+    refresh still left a window between `os.link` (the entry becomes
+    visible) and the refresh where a genuinely CONCURRENT `gc_sweep()` —
+    from a SEPARATE instance sharing this directory — could observe the
+    stale pre-fsync mtime. `gc_sweep` now acquires `self._publish_lock`
+    (the SAME lock `_publish_atomic` holds across its commit + refresh)
+    for its whole sweep. Verifies the mechanism directly: while the lock
+    is held (simulating a publish mid-flight), a concurrent `gc_sweep()`
+    call on a SEPARATE instance pointed at the same directory must block
+    until the lock releases, not run past the held section.
+
+    Mutation probe: removing `with self._publish_lock:` from `gc_sweep`
+    lets the sweep complete immediately instead of blocking."""
+    store_a = _store(tmp_path, ttl_seconds=86400.0)
+    store_b = ProtectedResultStore(
+        tmp_path / "store",
+        codec=store_a._codec,
+        ttl_seconds=86400.0,  # type: ignore[attr-defined]
+    )
+    # `gc_sweep` short-circuits (never touching the lock) if the store
+    # directory doesn't exist yet — the constructor performs NO I/O, so it
+    # must be created first (mirroring what a real `write_once()` would
+    # have already done in production).
+    (tmp_path / "store").mkdir(parents=True)
+    sweep_started = threading.Event()
+    sweep_done = threading.Event()
+
+    def _run_sweep() -> None:
+        sweep_started.set()
+        store_b.gc_sweep(now=time.time())
+        sweep_done.set()
+
+    with store_a._publish_lock:  # type: ignore[attr-defined]
+        sweeper = threading.Thread(target=_run_sweep)
+        sweeper.start()
+        assert sweep_started.wait(timeout=5.0)
+        # Bounded wait for a chance to run past the held lock — it must
+        # still be blocked, not merely "hasn't gotten there yet".
+        assert not sweep_done.wait(timeout=0.3)
+
+    sweeper.join(timeout=5.0)
+    assert sweep_done.is_set()
+
+
+def test_write_once_blocks_while_publish_lock_held(tmp_path: Path) -> None:
+    """Companion to the test above: `_publish_atomic`'s commit + mtime-
+    refresh critical section acquires the SAME `self._publish_lock`, so a
+    concurrent publish is blocked out exactly as a concurrent sweep is —
+    closing codex round 2 [P1]'s window from the writer's side.
+
+    Mutation probe: removing `with self._publish_lock:` from
+    `_publish_atomic` lets `write_once()` complete immediately instead of
+    blocking."""
+    store = _store(tmp_path)
+    write_started = threading.Event()
+    write_results: list[object] = []
+
+    def _run_write() -> None:
+        write_started.set()
+        write_results.append(store.write_once("tenant-a", "payload"))
+
+    with store._publish_lock:  # type: ignore[attr-defined]
+        writer = threading.Thread(target=_run_write)
+        writer.start()
+        assert write_started.wait(timeout=5.0)
+        writer.join(timeout=0.3)
+        assert write_results == []
+        assert writer.is_alive()
+
+    writer.join(timeout=5.0)
+    assert len(write_results) == 1
+    assert isinstance(write_results[0], str)
+    assert store.read("tenant-a", write_results[0]) == "payload"
+
+
+def test_write_once_does_not_block_on_a_sweep_stalled_in_its_decrypt_phase(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """merge-gate round-2 out-of-family Codex review (PR #1103, round 7
+    [P1]): `gc_sweep()` is invoked via `run_off_loop_detach_on_cancel`
+    (`audit_offload.py`), whose entire design intent is that a slow/hung
+    worker gets DETACHED rather than blocking anything else — "the
+    caller's own `asyncio.wait_for(..., timeout=...)` is the only bound
+    that matters" (that function's own docstring). An earlier version of
+    this fix held `self._publish_lock` across the WHOLE sweep body,
+    including the per-entry decrypt+`pickle.loads` pass — so a detached,
+    still-running sweep (stalled decrypting a large backlog, or a genuine
+    hang) would keep the NEXT `write_once()`/`gc_sweep()` call on the SAME
+    root blocked indefinitely, defeating the detach design on a long-lived
+    daemon (`shutdown()` runs every `run()`/`resume()`, not just process
+    exit). `gc_sweep()` now only holds the lock for the fast `stat()`-only
+    candidate-selection phase; decrypt + unlink happen after it releases.
+
+    This test pins that: it stalls a sweep INSIDE its (unlocked) decrypt
+    phase (`pickle.loads`, not the codec — this module never monkeypatches
+    the codec, see the module docstring) and asserts a concurrent
+    `write_once()` on a second instance completes promptly rather than
+    blocking on the stalled sweep.
+
+    Mutation probe: re-wrapping the whole sweep body (decrypt phase
+    included) back under `self._publish_lock` makes the write block for
+    the full stall duration instead of completing promptly."""
+    import pickle
+
+    store_a = _store(tmp_path, ttl_seconds=0.01)
+    store_b = ProtectedResultStore(
+        tmp_path / "store",
+        codec=store_a._codec,  # type: ignore[attr-defined]
+        ttl_seconds=0.01,
+    )
+    # Suppress store_b's OWN opportunistic sweep (a fresh instance's
+    # `_last_gc_at` starts at 0.0, so its first `write_once()` would
+    # otherwise ALSO trigger a nested `gc_sweep()` that hits the same
+    # stalled mock below — a confound this test doesn't intend to exercise;
+    # the property under test is a WRITE not blocking on ANOTHER thread's
+    # stalled sweep, not on its own.
+    store_b._last_gc_at = time.time()  # type: ignore[attr-defined]
+    ref = store_a.write_once("tenant-a", "will be swept")
+    assert isinstance(ref, str)
+    time.sleep(0.05)  # comfortably past the 0.01s TTL
+
+    decrypt_phase_entered = threading.Event()
+    decrypt_may_proceed = threading.Event()
+    real_pickle_loads = pickle.loads
+
+    def _stalled_pickle_loads(data: bytes) -> object:
+        decrypt_phase_entered.set()
+        decrypt_may_proceed.wait(timeout=5.0)
+        return real_pickle_loads(data)
+
+    monkeypatch.setattr(pickle, "loads", _stalled_pickle_loads)
+
+    sweep_results: list[list[str]] = []
+
+    def _run_sweep() -> None:
+        sweep_results.append(store_a.gc_sweep())
+
+    sweeper = threading.Thread(target=_run_sweep)
+    sweeper.start()
+    assert decrypt_phase_entered.wait(timeout=5.0), "sweep never reached its decrypt phase"
+
+    # Run the write on its OWN thread and check with a SHORT bounded join —
+    # calling `write_once()` directly and merely timing how long it takes
+    # would not discriminate: under the pre-fix whole-body lock it still
+    # eventually completes (once the mock's own 5s wait times out), just
+    # slower, so a synchronous call passes either way. A short join window
+    # well under the mock's 5s stall is what actually distinguishes
+    # "blocked on the stalled sweep" from "completed promptly".
+    write_results: list[object] = []
+
+    def _run_write() -> None:
+        write_results.append(store_b.write_once("tenant-b", "must not block on the stalled sweep"))
+
+    writer = threading.Thread(target=_run_write)
+    writer.start()
+    writer.join(timeout=0.3)
+    assert not writer.is_alive(), (
+        "write_once() was still blocked 0.3s after starting — it waited on "
+        "the stalled sweep's lock instead of completing promptly"
+    )
+    assert len(write_results) == 1
+
+    decrypt_may_proceed.set()
+    sweeper.join(timeout=5.0)
+    assert not sweeper.is_alive()
+
+    write_result = write_results[0]
+    assert isinstance(write_result, str)
+    assert store_b.read("tenant-b", write_result) == "must not block on the stalled sweep"
+    assert len(sweep_results) == 1
+    assert sweep_results[0] != []
+
+
+def test_write_once_temp_file_protected_from_concurrent_sweep_before_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """B-68 out-of-family Codex round 4 [P1]: round 2/3's lock covered only
+    `os.link` onward — a concurrent `gc_sweep()` (from a SEPARATE instance
+    sharing this directory) could still classify THIS method's own
+    in-flight `.tmp-*` file as a crash orphan (stale mtime under a short
+    TTL + a slow fsync) and unlink it before `os.link` ever ran, losing
+    recovery for an already-completed paid effect once the subsequent
+    `os.link` raised `FileNotFoundError` (surfaced as
+    `UnresolvableResultRef`, not the intended live ref). `_publish_atomic`
+    now holds `self._publish_lock` for its ENTIRE body — starting before
+    `tempfile.mkstemp`, not just from the commit onward — so a concurrent
+    sweep can never run at all while a temp file is still in active use.
+
+    Mutation probe: narrowing `_publish_atomic`'s `with self._publish_lock:`
+    back to start at `os.link` (the round 2/3 shape) reproduces the exact
+    codex-verified failure — a concurrent sweep unlinks the still-in-flight
+    temp file and `write_once()` returns `UnresolvableResultRef`.
+
+    merge-gate round-1 test-witness lens (PR #1103): an earlier version of
+    this test signaled the sweeper via a sleep-then-set inside the mocked
+    `os.fsync`, relying on the writer thread losing the GIL during the
+    REAL `fsync()` syscall for the sweeper to actually run before the
+    writer reached `os.link` — empirically only ~80% reliable (confirmed
+    by repeated runs against a shadow copy with the round-2/3 regression
+    reinstated: 2/11 runs passed despite the bug). Rewritten so the WRITER
+    thread deterministically PARKS (via a second `Event`, not a sleep)
+    inside the paused `fsync` call — i.e. still holding `self._publish_lock`
+    under the fix — so which thread runs when no longer depends on
+    scheduler timing. The `time.sleep` below is a one-directional wait
+    (make the temp file look stale before the sweeper scans it), not a
+    race for CPU time, so it does not reintroduce nondeterminism."""
+    store_a = _store(tmp_path, ttl_seconds=0.02)
+    store_b = ProtectedResultStore(
+        tmp_path / "store",
+        codec=store_a._codec,  # type: ignore[attr-defined]
+        ttl_seconds=0.02,
+    )
+
+    real_fsync = os.fsync
+    fsync_seen = {"n": 0}
+    temp_file_created = threading.Event()
+    writer_may_continue = threading.Event()
+
+    def _paused_first_fsync(fd: int) -> None:
+        fsync_seen["n"] += 1
+        if fsync_seen["n"] == 1:
+            # Deterministically park the writer INSIDE the publish critical
+            # section, right after the temp file is created but before
+            # `os.link` — rather than relying on the writer losing the GIL
+            # during a real fsync syscall for a concurrent sweeper to run.
+            temp_file_created.set()
+            writer_may_continue.wait(timeout=5.0)
+        real_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", _paused_first_fsync)
+
+    write_result: list[object] = []
+
+    def _run_write() -> None:
+        write_result.append(store_a.write_once("tenant-a", "must survive a concurrent sweep"))
+
+    writer = threading.Thread(target=_run_write)
+    writer.start()
+
+    assert temp_file_created.wait(timeout=5.0), "writer never reached the paused fsync point"
+    # One-directional: make the temp file's mtime genuinely stale relative
+    # to the TTL before the sweeper scans it. Not a race — the writer is
+    # already parked and cannot advance until `writer_may_continue` fires.
+    time.sleep(0.05)
+
+    sweep_results: list[list[str]] = []
+    sweep_done = threading.Event()
+
+    def _concurrent_sweep() -> None:
+        sweep_results.append(store_b.gc_sweep(now=time.time()))
+        sweep_done.set()
+
+    sweeper = threading.Thread(target=_concurrent_sweep)
+    sweeper.start()
+
+    # Under the fix, `gc_sweep()` blocks trying to acquire the SAME
+    # publish lock the parked writer still holds — it must NOT complete
+    # while the writer's temp file is still in flight. Under the round-2/3
+    # regression, the sweeper acquires the lock immediately (the writer
+    # hasn't reached it yet) and returns well within this window.
+    assert not sweep_done.wait(timeout=0.3), (
+        "gc_sweep() completed while the writer's temp file was still "
+        "in-flight — the publish lock did not protect the pre-os.link window"
+    )
+
+    writer_may_continue.set()
+    writer.join(timeout=5.0)
+    sweeper.join(timeout=5.0)
+
+    assert write_result and isinstance(write_result[0], str)
+    ref = write_result[0]
+    assert sweep_results == [[]]
+    assert store_a.read("tenant-a", ref) == "must survive a concurrent sweep"
 
 
 def test_gc_sweep_does_not_collect_unexpired_entries(tmp_path: Path) -> None:
@@ -673,10 +1113,13 @@ def test_directory_open_durability_failure_degrades_to_unresolvable(
     real_open = os.open
 
     def _flaky_open(path: object, flags: int, *args: object, **kwargs: object) -> int:
-        # `_fsync_dir` opens with exactly `os.O_RDONLY`; `tempfile.mkstemp`
-        # (the SAME write's temp-file creation, earlier in the call chain)
-        # uses different flags — discriminate on that, not call order.
-        if flags == os.O_RDONLY:
+        # `_fsync_dir` opens `store._root` with exactly `os.O_RDONLY`; B-68
+        # round 2 [P1] added a SECOND `os.O_RDONLY` open (the entry's own
+        # post-refresh fsync) — flags alone no longer discriminate the two,
+        # so key on the PATH (the directory vs. the entry file) instead.
+        # `tempfile.mkstemp` (the SAME write's temp-file creation, earlier
+        # in the call chain) uses neither this path nor these flags.
+        if flags == os.O_RDONLY and Path(path) == store._root:  # type: ignore[arg-type]
             raise OSError(errno.EIO, "simulated disk failure opening directory")
         return real_open(path, flags, *args, **kwargs)  # type: ignore[arg-type]
 
@@ -698,7 +1141,10 @@ def test_directory_open_unsupported_errno_still_degrades_gracefully(
     real_open = os.open
 
     def _unsupported_open(path: object, flags: int, *args: object, **kwargs: object) -> int:
-        if flags == os.O_RDONLY:
+        # See the discrimination note in the test above — key on the
+        # directory PATH, not flags alone (B-68 round 2 [P1] added a second
+        # `os.O_RDONLY` open for the entry's own post-refresh fsync).
+        if flags == os.O_RDONLY and Path(path) == store._root:  # type: ignore[arg-type]
             raise OSError(errno.ENOTSUP, "directory open not supported (simulated)")
         return real_open(path, flags, *args, **kwargs)  # type: ignore[arg-type]
 
