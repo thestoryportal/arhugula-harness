@@ -205,6 +205,31 @@ class FanOutBranchResumeState(BaseModel):
     obligation 7 does not re-dispatch its possibly-landed effect)."""
 
 
+class PreDispatchGateOwningBranchResumeState(BaseModel):
+    """A branch whose OWN HITL gate fired before any child run was dispatched.
+
+    B-72 impl leg (CP spec v1.108 §1) — carries the CAPTURED `step_id` (out-of-
+    family Codex [P1]: an ordinal-only carrier gives the resume-side material-diff
+    guard, `_resume_body_mismatch`, no step identity to validate — unlike every
+    other persisted branch disposition (`FanOutBranchResumeState`,
+    `PausedChildBranchResumeState`, `EffectFencePausedBranchResumeState`), which
+    would let a same-count body edit that REPLACES the paused step attach the
+    operator's stored response to a DIFFERENT, unrelated step). Resume validates
+    the re-supplied branch step's `step_id` against this — a same-count rename/
+    reorder/replace fails closed rather than silently deliver a resolved answer
+    to the wrong step's dispatch."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    branch_index: int
+    """The fan-out branch ordinal (0-based), same convention as
+    `FanOutBranchResumeState.branch_index`."""
+
+    step_id: str
+    """The branch's `WorkflowStep.step_id` AT CAPTURE TIME (the material-diff
+    identity guard — see class docstring)."""
+
+
 class FanOutResumeState(BaseModel):
     """Fan-out resume reconstruction state carried by a paused-fan-out PauseSnapshot.
 
@@ -300,8 +325,8 @@ class FanOutResumeState(BaseModel):
     from the canonical serialization when empty, so every pre-existing snapshot hashes
     byte-identically (the `paused_child_branches` drop-when-empty discipline)."""
 
-    pre_dispatch_gate_owning_branches: tuple[int, ...] = ()
-    """B-72 impl leg (CP spec v1.108 §1.1/§1.3a) — worker branch ordinals whose OWN
+    pre_dispatch_gate_owning_branches: tuple[PreDispatchGateOwningBranchResumeState, ...] = ()
+    """B-72 impl leg (CP spec v1.108 §1.1/§1.3a) — worker branches whose OWN
     `SUB_AGENT_BOUNDARY` (or equivalent) HITL gate fired BEFORE any child run was
     dispatched (the runtime's `HITLPauseRequestedSignal`, raised ahead of
     `RuntimeSubAgentDispatcher.dispatch`). DISTINCT from `branches` (terminal — MUST
@@ -312,12 +337,16 @@ class FanOutResumeState(BaseModel):
     FRESH on resume like an absent ordinal — this field exists ONLY so the resolver
     can COUNT it into property 4's unaddressed gate-owning set (§1.1(a)) and, when it
     is the cycle's sole unaddressed member, DELIVER it the uniform `hitl_response` via
-    a delivery-cell construction at the branch's own re-dispatch site (§1.1(b)). The
-    internal identity `_collect_gate_owning_run_ids` derives for each ordinal here
-    composes THIS `PauseSnapshot`'s own tree-wide-unique `run_id` with the ordinal
-    (§1.1(d)'s tree-wide-uniqueness requirement) — never placed in, or compatible
-    with, `hitl_responses`. Additive, default-empty: `_compute_snapshot_hash` DROPS
-    this field from the canonical serialization when empty, so every pre-existing
+    a delivery-cell construction at the branch's own re-dispatch site (§1.1(b)). Each
+    row carries its captured `step_id` (out-of-family Codex [P1]: the resume-side
+    material-diff guard needs a step identity to validate, mirroring every other
+    persisted branch disposition — see `PreDispatchGateOwningBranchResumeState`'s
+    own docstring). The internal identity `_collect_gate_owning_run_ids` derives for
+    each ordinal here composes THIS `PauseSnapshot`'s own tree-wide-unique `run_id`
+    with the ordinal (§1.1(d)'s tree-wide-uniqueness requirement) — never placed in,
+    or compatible with, `hitl_responses`. Additive, default-empty:
+    `_compute_snapshot_hash` DROPS this field from the canonical serialization when
+    empty, so every pre-existing
     snapshot hashes byte-identically (the `effect_fence_paused_branches` drop-when-
     empty discipline)."""
 
@@ -393,9 +422,9 @@ class PeerFanOutResumeState(BaseModel):
     resume via the fence-keyed `EffectFenceResolution`, NOT a fresh dispatch. Additive,
     default-empty, dropped-from-hash-when-empty (same discipline as `synthesis_step_id`)."""
 
-    pre_dispatch_gate_owning_branches: tuple[int, ...] = ()
+    pre_dispatch_gate_owning_branches: tuple[PreDispatchGateOwningBranchResumeState, ...] = ()
     """B-72 impl leg (CP spec v1.108 §1.1/§1.3a) — the PARALLELIZATION analogue of
-    `FanOutResumeState.pre_dispatch_gate_owning_branches`: peer branch ordinals whose OWN
+    `FanOutResumeState.pre_dispatch_gate_owning_branches`: peer branches whose OWN
     `SUB_AGENT_BOUNDARY` HITL gate fired BEFORE any child run was dispatched (the
     runtime's `HITLPauseRequestedSignal`, raised ahead of
     `RuntimeSubAgentDispatcher.dispatch`). See that field's docstring for the full
