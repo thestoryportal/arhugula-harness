@@ -1596,7 +1596,7 @@ items:
     reverting the fix makes the corresponding test fail; restoring it passes -- including a
     round-2 self-correction (merge-gate round-1 test-witness lens, PR #1103) where an
     earlier timing-based witness was found empirically ~80% reliable, not deterministic, and
-    was rewritten to a purely Event-driven handshake. 9 new tests added; full
+    was rewritten to a purely Event-driven handshake. 10 new tests added; full
     `harness-runtime` + `harness-cp` suites green. Advisor-reviewed before close: round 5''s
     finding restates an ALREADY-DISCLOSED cross-PROCESS residual (see B-73) rather than a
     defect introduced by this fix, so this row closes on the in-process synchronization
