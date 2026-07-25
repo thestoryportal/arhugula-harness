@@ -24,6 +24,7 @@ from harness_as.tool_contract import ToolContract
 from harness_core import PersonaTier
 from harness_cp.cp_shared_types import MCPTrustTier, ModelBinding
 from harness_cp.engine_class import EngineClass
+from harness_cp.engine_namespace import ReplayDisposition
 from harness_cp.gate_level_rule import GateLevel
 from harness_cp.mcp_client_namespace_emitter import (
     MCPClientNamespaceEmitter,
@@ -112,7 +113,7 @@ async def _build_started_host(output_schema: dict | None = None) -> MCPClientHos
     return host
 
 
-def _make_step_context() -> StepExecutionContext:
+def _make_step_context(run_engine_class: EngineClass | None = None) -> StepExecutionContext:
     return StepExecutionContext(
         workflow_id="wf-cost-1",
         parent_action_id="workflow:wf-cost-1:step:0",
@@ -123,6 +124,7 @@ def _make_step_context() -> StepExecutionContext:
         parent_idempotency_key="run-idem-cost-abc",
         tenant_id=None,
         step_index=0,
+        run_engine_class=run_engine_class,
     )
 
 
@@ -267,6 +269,55 @@ async def test_dispatch_happy_path_invokes_cost_attribution(tracer_setup) -> Non
         # flat_per_invocation rate=0.01 → cost = 0.01
         cost_attr = outer.attributes[COST_ATTRIBUTED_DECIMAL_ATTR]
         assert cost_attr == "0.01"
+    finally:
+        await host.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# B-30 — real run_engine_class reaches the composed SpanCostRecord
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_dispatch_threads_real_run_engine_class_into_disposition(tracer_setup) -> None:
+    """B-30 close-out step 4 witness (merge-gate test-witness lens finding) —
+    proves the PRODUCTION call site (`RuntimeToolDispatcher.dispatch` →
+    `_attribute_tool_cost_best_effort`) actually threads
+    `step_context.run_engine_class` through to the composed `SpanCostRecord`,
+    not just that `attribute_tool_dispatch_cost` resolves the mapping
+    correctly when called directly with a manual kwarg. A revert of the
+    `run_engine_class=step_context.run_engine_class` threading at
+    `runtime_tool_dispatcher.py`'s cost-wrapper call site would leave
+    `engine_replay_disposition` at the pre-fix `NO_REPLAY` default here and
+    fail this assertion."""
+    tracer_provider, _exporter = tracer_setup
+    host = await _build_started_host()
+    rate_table = _make_rate_table(
+        {"echo": ToolRate(cost_kind="flat_per_invocation", rate=Decimal("0.01"))}
+    )
+    cost_chain = RuntimeCostAttributionChain()
+    audit_writer = _RecordingAuditWriter()
+    cost_record_sink: list[SpanCostRecord] = []
+    dispatcher = RuntimeToolDispatcher.for_single_host(
+        mcp_client_host=host,
+        per_server_trust_evaluator=PerServerTrustEvaluator(),
+        mcp_namespace_emitter=_make_emitter(),
+        trust_policy=_make_trust_policy(),
+        sandbox_decision_resolver=_good_sandbox_resolver,
+        tracer_provider=tracer_provider,
+        cost_chain=cost_chain,
+        audit_writer=audit_writer,
+        rate_table=rate_table,
+        cost_record_sink=cost_record_sink,
+    )
+    try:
+        await dispatcher.dispatch(
+            _make_binding(),
+            _make_step("echo", {"message": "hello"}),
+            step_context=_make_step_context(run_engine_class=EngineClass.SAVE_POINT_CHECKPOINT),
+        )
+        assert len(cost_record_sink) == 1
+        assert cost_record_sink[0].engine_replay_disposition == ReplayDisposition.CHECKPOINT_RESUME
     finally:
         await host.shutdown()
 

@@ -372,6 +372,67 @@ def test_end_to_end_dispatch_emits_cost_attribution_audit_entry(
     assert recovered == pytest.approx(Decimal("0.0035"), rel=Decimal("1e-6"))
 
 
+def test_end_to_end_dispatch_threads_real_run_engine_class_into_disposition(
+    cost_chain: RuntimeCostAttributionChain,
+    audit_writer: _RecordingAuditWriter,
+) -> None:
+    """B-30 close-out step 4 witness (merge-gate test-witness lens finding) —
+    proves the PRODUCTION call site (`RuntimeLLMDispatcher.dispatch`) actually
+    threads `step_context.run_engine_class` through to the composed
+    `SpanCostRecord`, not just that `attribute_llm_dispatch_cost` resolves the
+    mapping correctly when called directly with a manual kwarg. A revert of
+    the `run_engine_class=step_context.run_engine_class` threading at
+    `llm_dispatch.py`'s dispatch-site call into `_attribute_cost_off_loop_best_effort`
+    would leave `engine_replay_disposition` at the pre-fix `NO_REPLAY` default
+    here and fail this assertion."""
+    import asyncio
+
+    tp = TracerProvider()
+    tp.add_span_processor(SimpleSpanProcessor(InMemorySpanExporter()))
+    cost_records: list[object] = []
+
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": _FakeAnthropicAdapter()},
+        tracer_provider=tp,
+        cost_chain=cost_chain,
+        audit_writer=audit_writer,
+        rate_table=RATE_TABLE_V1,
+        cost_record_sink=cost_records,
+    )
+    binding = StepEffectiveBinding(
+        step_id="step-0",
+        model_binding=_DEFAULT_BINDING,
+        engine_class=EngineClass.SAVE_POINT_CHECKPOINT,
+        override_applied=False,
+        persona_tier=PersonaTier.SOLO_DEVELOPER,
+    )
+    step = WorkflowStep(
+        step_id=StepID("step-0"),
+        step_kind=StepKind.INFERENCE_STEP,
+        step_payload={
+            "messages": [{"role": "user", "content": "hi"}],
+            "tools": None,
+            "params": {"max_tokens": 1},
+        },
+    )
+    step_context = StepExecutionContext(
+        workflow_id="wf",
+        parent_action_id="workflow:wf:step:0",
+        parent_gate_level=GateLevel.AUTO,
+        parent_sandbox_tier=SandboxTier.TIER_1_PROCESS,
+        parent_actor=_ACTOR,
+        parent_entry_hash="",
+        parent_idempotency_key="parent-e2e-key",
+        tenant_id=None,
+        step_index=0,
+        run_engine_class=EngineClass.SAVE_POINT_CHECKPOINT,
+    )
+    asyncio.run(dispatcher.dispatch(binding, step, step_context=step_context))
+
+    assert len(cost_records) == 1
+    assert cost_records[0].engine_replay_disposition == ReplayDisposition.CHECKPOINT_RESUME
+
+
 def test_dispatcher_without_cost_substrate_silently_skips_cost_attribution() -> None:
     """Backward-compat: dispatcher constructed without cost_chain/audit_writer/
     rate_table proceeds without cost-attribution (unit-test ergonomics).
