@@ -673,7 +673,21 @@ def test_write_once_temp_file_protected_from_concurrent_sweep_before_commit(
     Mutation probe: narrowing `_publish_atomic`'s `with self._publish_lock:`
     back to start at `os.link` (the round 2/3 shape) reproduces the exact
     codex-verified failure — a concurrent sweep unlinks the still-in-flight
-    temp file and `write_once()` returns `UnresolvableResultRef`."""
+    temp file and `write_once()` returns `UnresolvableResultRef`.
+
+    merge-gate round-1 test-witness lens (PR #1103): an earlier version of
+    this test signaled the sweeper via a sleep-then-set inside the mocked
+    `os.fsync`, relying on the writer thread losing the GIL during the
+    REAL `fsync()` syscall for the sweeper to actually run before the
+    writer reached `os.link` — empirically only ~80% reliable (confirmed
+    by repeated runs against a shadow copy with the round-2/3 regression
+    reinstated: 2/11 runs passed despite the bug). Rewritten so the WRITER
+    thread deterministically PARKS (via a second `Event`, not a sleep)
+    inside the paused `fsync` call — i.e. still holding `self._publish_lock`
+    under the fix — so which thread runs when no longer depends on
+    scheduler timing. The `time.sleep` below is a one-directional wait
+    (make the temp file look stale before the sweeper scans it), not a
+    race for CPU time, so it does not reintroduce nondeterminism."""
     store_a = _store(tmp_path, ttl_seconds=0.02)
     store_b = ProtectedResultStore(
         tmp_path / "store",
@@ -683,34 +697,62 @@ def test_write_once_temp_file_protected_from_concurrent_sweep_before_commit(
 
     real_fsync = os.fsync
     fsync_seen = {"n": 0}
-    temp_file_stale = threading.Event()
+    temp_file_created = threading.Event()
+    writer_may_continue = threading.Event()
 
-    def _slow_first_fsync(fd: int) -> None:
+    def _paused_first_fsync(fd: int) -> None:
         fsync_seen["n"] += 1
         if fsync_seen["n"] == 1:
-            # Sleep FIRST, signal AFTER — the concurrent sweeper must only
-            # run once the temp file's write-time mtime is genuinely stale
-            # in real wall-clock terms (exceeding the short TTL below), not
-            # the instant it's created. Matches codex's own repro shape.
-            time.sleep(0.10)
-            temp_file_stale.set()
+            # Deterministically park the writer INSIDE the publish critical
+            # section, right after the temp file is created but before
+            # `os.link` — rather than relying on the writer losing the GIL
+            # during a real fsync syscall for a concurrent sweeper to run.
+            temp_file_created.set()
+            writer_may_continue.wait(timeout=5.0)
         real_fsync(fd)
 
-    monkeypatch.setattr(os, "fsync", _slow_first_fsync)
+    monkeypatch.setattr(os, "fsync", _paused_first_fsync)
+
+    write_result: list[object] = []
+
+    def _run_write() -> None:
+        write_result.append(store_a.write_once("tenant-a", "must survive a concurrent sweep"))
+
+    writer = threading.Thread(target=_run_write)
+    writer.start()
+
+    assert temp_file_created.wait(timeout=5.0), "writer never reached the paused fsync point"
+    # One-directional: make the temp file's mtime genuinely stale relative
+    # to the TTL before the sweeper scans it. Not a race — the writer is
+    # already parked and cannot advance until `writer_may_continue` fires.
+    time.sleep(0.05)
 
     sweep_results: list[list[str]] = []
+    sweep_done = threading.Event()
 
     def _concurrent_sweep() -> None:
-        temp_file_stale.wait(timeout=5.0)
         sweep_results.append(store_b.gc_sweep(now=time.time()))
+        sweep_done.set()
 
     sweeper = threading.Thread(target=_concurrent_sweep)
     sweeper.start()
 
-    ref = store_a.write_once("tenant-a", "must survive a concurrent sweep")
+    # Under the fix, `gc_sweep()` blocks trying to acquire the SAME
+    # publish lock the parked writer still holds — it must NOT complete
+    # while the writer's temp file is still in flight. Under the round-2/3
+    # regression, the sweeper acquires the lock immediately (the writer
+    # hasn't reached it yet) and returns well within this window.
+    assert not sweep_done.wait(timeout=0.3), (
+        "gc_sweep() completed while the writer's temp file was still "
+        "in-flight — the publish lock did not protect the pre-os.link window"
+    )
+
+    writer_may_continue.set()
+    writer.join(timeout=5.0)
     sweeper.join(timeout=5.0)
 
-    assert isinstance(ref, str)
+    assert write_result and isinstance(write_result[0], str)
+    ref = write_result[0]
     assert sweep_results == [[]]
     assert store_a.read("tenant-a", ref) == "must survive a concurrent sweep"
 
