@@ -2820,28 +2820,28 @@ def _resolve_effect_fence_gated(
 ) -> EffectFenceResolution | None:
     """Per-key effect-fence resolution, gated by CP spec v1.107 §1.1(a)'s multi-location
     safety rule. A map HIT on `resume_context.effect_fence_resolutions` is always safe
-    (it is addressed to THIS `idempotency_key` specifically) — mirrors `effect_fence_
-    resolution_for`'s map-hit behavior. The UNIFORM `effect_fence_resolution` fallback
-    is safe ONLY when `idempotency_key` is the sole member of the resume-cycle-wide
-    unaddressed effect-fence-pause set (`eligible_key`, computed ONCE at the root by
-    `compute_effect_fence_uniform_fallback_eligible_key` and threaded down unchanged —
-    see that function's docstring). When 2+ locations are unaddressed, every one of
-    them must receive `None` here so the caller's existing INERT re-pause applies —
-    never an auto-re-fire, never a cross-location misattribution of a judgment
-    intended for a different location. `resume_context.effect_fence_resolution_for`
-    is deliberately NOT called here: that method's uniform-fallback branch applies
-    unconditionally, which is exactly the unsafe shape this gate exists to replace."""
+    (it is addressed to THIS `idempotency_key` specifically). The UNIFORM `effect_fence_
+    resolution` fallback is safe ONLY when `idempotency_key` is the sole member of the
+    resume-cycle-wide unaddressed effect-fence-pause set (`eligible_key`, computed ONCE
+    at the root by `compute_effect_fence_uniform_fallback_eligible_key` and threaded
+    down unchanged — see that function's docstring). When 2+ locations are unaddressed,
+    every one of them must receive `None` here so the caller's existing INERT re-pause
+    applies — never an auto-re-fire, never a cross-location misattribution of a judgment
+    intended for a different location.
+
+    Per CP spec v1.107 §1.1/§3, this site remains a caller of the EXISTING
+    `effect_fence_resolution_for` method (a new call site, not a new or changed
+    method) — `is_mapped` is checked FIRST, separately, only to decide whether the
+    gate applies; `effect_fence_resolution_for`'s own return value (map hit or
+    uniform default) is what is actually returned in both safe branches."""
     if resume_context is None:
         return None
-    mapped = (
-        resume_context.effect_fence_resolutions.get(idempotency_key)
-        if resume_context.effect_fence_resolutions
-        else None
+    is_mapped = bool(
+        resume_context.effect_fence_resolutions
+        and idempotency_key in resume_context.effect_fence_resolutions
     )
-    if mapped is not None:
-        return mapped
-    if idempotency_key == eligible_key:
-        return resume_context.effect_fence_resolution
+    if is_mapped or idempotency_key == eligible_key:
+        return resume_context.effect_fence_resolution_for(idempotency_key)
     return None
 
 
