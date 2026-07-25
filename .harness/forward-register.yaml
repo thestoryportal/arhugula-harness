@@ -1956,8 +1956,17 @@ items:
     the operator-facing HITL escalation payload exposes NO run-instance-distinct identifier at all
     (keyed off compose_hitl_action_id, workflow_id-scoped), needing its own C-CP-28 carrier amendment
     -- so even an internally-mintable-early run_id does not clear this to pure impl discretion until
-    B-71 lands or is co-designed with it. Full detail + all 3 codex-caught corrections at
-    .harness/post-phase-8-forward-register.md B-72 round-5 update.
+    B-71 lands or is co-designed with it. CLOSE-OUT CAVEAT (codex, not independently verified this
+    pass) -- _collect_gate_owning_run_ids (workflow_driver.py:2665-2698) treats any node carrying a
+    fan-out resume carrier as an unconditional container regardless of its own pause_reason, and that
+    carrier is built whenever ANY branch fails/pauses in a PARALLELIZATION run -- so a branch paused at
+    its own gate with zero dispatched children may compute to an EMPTY gate-owning set, meaning
+    delivery-cell construction alone may not suffice. Verify before building. NET POSITION -- round-3
+    repro is gate-owning, needs delivery-cell construction (not necessarily a key), modulo the
+    unverified caveat just above; keyed multi-peer addressing stays fully open and is B-71-gated;
+    B-72's own original hybrid scenario stays open and untested; council covers all of the above, none
+    retired. Full detail + all corrections at .harness/post-phase-8-forward-register.md B-72 round-5
+    update.
   council: RETIRED "skip-a-gate vs strand-a-descendant" framing (2026-07-25 round 2) -- the spec's
     mechanism ROUTES a resolved answer via hitl_response_for(child_run_id), it does not skip gate
     evaluation. Design-risk flag RELOCATES, not deleted -- the deferred resolver must independently
