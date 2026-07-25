@@ -82,7 +82,33 @@ def _lock_for_root(root: Path) -> threading.Lock:
     # create the directory or touch the codec, so it doesn't violate this
     # class's "constructor performs no I/O" discipline (module docstring);
     # `strict=False` (the default) never raises for a not-yet-existing path.
-    key = str(root.resolve())
+    #
+    # codex round 6 [P2]: `resolve()` alone still under-normalizes on a
+    # case-INSENSITIVE filesystem (macOS APFS default volumes) — two
+    # differently-cased spellings of the same directory (e.g. `/Users/...`
+    # vs `/users/...`) resolve to two DISTINCT strings even though they
+    # name the identical inode, reopening the same aliasing race. Key on
+    # true filesystem identity instead (`st_dev`, `st_ino` — the same pair
+    # `os.path.samefile` compares).
+    #
+    # `_publish_lock` is now a PROPERTY (see `ProtectedResultStore`) rather
+    # than a construction-time-cached attribute, specifically so this
+    # function is never called before the directory is guaranteed to
+    # exist — an earlier draft fell back to the resolved-path STRING when
+    # `stat()` raised on a not-yet-created directory, but that reopened a
+    # NEW race: a caller that accessed the lock before creation (the
+    # string-keyed fallback) and one that accessed it after (the
+    # inode-keyed identity) would get two DIFFERENT lock objects for the
+    # SAME logical root. `mkdir` here — unconditional, before the stat —
+    # closes that window by guaranteeing every access keys on identity;
+    # `exist_ok=True` tolerates concurrent create-create races safely.
+    resolved = root.resolve()
+    resolved.mkdir(parents=True, exist_ok=True)
+    try:
+        st = resolved.stat()
+        key = f"{st.st_dev}:{st.st_ino}"
+    except OSError:
+        key = str(resolved)
     with _root_locks_guard:
         lock = _root_locks.get(key)
         if lock is None:
@@ -232,9 +258,20 @@ class ProtectedResultStore:
         self._codec = codec
         self._ttl_seconds = ttl_seconds
         self._last_gc_at = 0.0
-        # B-68 codex round 2 — module-wide, keyed by resolved root path (not
-        # a fresh per-instance lock); see `_lock_for_root`'s docstring.
-        self._publish_lock = _lock_for_root(self._root)
+
+    @property
+    def _publish_lock(self) -> threading.Lock:
+        # B-68 codex round 2 — module-wide, keyed by the root's filesystem
+        # identity (not a fresh per-instance lock); see `_lock_for_root`'s
+        # docstring. codex round 6 [P2]: recomputed on EVERY access rather
+        # than cached once at construction, deliberately NOT because the
+        # constructor avoids I/O (that's `_lock_for_root`'s own `mkdir`'s
+        # job — see its docstring for why a cached, possibly-pre-creation
+        # key would reopen a race) but because `_lock_for_root` is a
+        # cheap, idempotent registry lookup, not a fresh allocation — a
+        # property is the correct shape for a value that's always
+        # re-derivable and never needs its own state.
+        return _lock_for_root(self._root)
 
     def _entry_path(self, composite_key: str) -> Path:
         digest = hashlib.sha256(composite_key.encode("utf-8")).hexdigest()

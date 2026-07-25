@@ -579,6 +579,35 @@ def test_publish_lock_shared_across_filesystem_equivalent_path_aliases(
     assert store_direct._publish_lock is store_aliased._publish_lock  # type: ignore[attr-defined]
 
 
+def test_publish_lock_shared_across_case_insensitive_path_spellings(
+    tmp_path: Path,
+) -> None:
+    """merge-gate round-6 out-of-family Codex review (PR #1103): on a
+    case-INSENSITIVE filesystem (macOS APFS default volumes), two
+    differently-cased spellings of the SAME directory name the identical
+    inode but `Path.resolve()` alone preserves the caller's casing —
+    keying the lock registry by the resolved-path STRING (round-3's fix)
+    would still let this alias reopen the GC/publication race. Skipped
+    on a case-SENSITIVE filesystem (most CI runners), where the two
+    spellings genuinely name different, unrelated paths.
+
+    Mutation probe: keying `_lock_for_root` by the resolved-path string
+    instead of filesystem identity (`st_dev`/`st_ino`) makes this
+    identity check fail on a case-insensitive volume."""
+    store_direct = _store(tmp_path)
+    direct_root = tmp_path / "store"
+    direct_root.mkdir(parents=True, exist_ok=True)
+    cased_root = Path(str(direct_root).swapcase())
+    if not (cased_root.exists() and os.path.samefile(direct_root, cased_root)):
+        pytest.skip("filesystem under tmp_path is not case-insensitive")
+    store_cased = ProtectedResultStore(
+        cased_root,
+        codec=store_direct._codec,  # type: ignore[attr-defined]
+        ttl_seconds=1.0,
+    )
+    assert store_direct._publish_lock is store_cased._publish_lock  # type: ignore[attr-defined]
+
+
 def test_gc_sweep_blocks_while_publish_lock_held(tmp_path: Path) -> None:
     """B-68 codex round 2 [P1]: round 1's plain post-commit `os.utime`
     refresh still left a window between `os.link` (the entry becomes
