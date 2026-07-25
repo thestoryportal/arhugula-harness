@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 73
+  total: 78
   open: 0
   design_substrate_gated: 0
-  registered_finding: 11
+  registered_finding: 15
   operator_gated: 1
   held: 1
-  closed: 60
-  identity_digest: 8b455a1e80dba45b
+  closed: 61
+  identity_digest: 2b9de97440883449
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -1572,42 +1572,221 @@ items:
     2026-07-22; CLOSED at round 4 correction, same date)*'
 - id: B-68
   title: Protected result store's opportunistic GC can race a concurrent in-flight publication under a short TTL
-  status: registered_finding
-  summary: 'Registered at the B-65-A impl arc (out-of-family Codex round 11 [P2]). `write_once()`
-    captures `_StoredEnvelope.written_at` via `time.time()` BEFORE serialization/encryption/
-    `_publish_atomic`''s fsync+`os.link` commit -- a real, non-instantaneous gap. A CONCURRENT
-    sweep (another in-process opportunistic call, or the bootstrap/shutdown-half sweep from a
-    co-resident process sharing the store directory) running during that gap can judge the
-    just-published entry already expired -- IF the deployment-configured `ttl_seconds`
-    (operator-settable, `gt=0.0`, no floor) is shorter than the write''s own encrypt+fsync
-    latency -- and unlink it before `write_once()` returns. The caller then holds a
-    "live-looking" `composite_key` whose first `read()` raises an unhandled `FileNotFoundError`
-    instead of the store''s typed refusals. Advisor-reviewed: the TTL-shorter-than-write-latency
-    precondition is unchanged (needs a TTL roughly seven orders of magnitude below the factory
-    default -- 86400s vs. single-digit-ms write latency -- to matter at all); the complete fix
-    is a genuine concurrency-control redesign (serializing GC against in-flight publications),
-    not a mechanical patch, and a partial mitigation (mtime-authority switch) only narrows
-    rather than closes the window. Merge-gate round-1 concurrency lens (PR #1078) independently
-    confirmed the race AND sharpened the frequency assessment: `shutdown()` step 5b fires
-    `gc_sweep()` UNCONDITIONALLY once per `run()`/`resume()` call, with no interval throttle
-    (unlike the in-write opportunistic trigger''s 300s `_OPPORTUNISTIC_GC_INTERVAL_SECONDS`
-    gate) -- on a daemon serving many concurrent short-lived workflow runs against the SAME
-    shared store instance, concurrent-sweep frequency is materially higher than the
-    opportunistic-trigger-only framing implies, though the TTL precondition above still gates
-    whether any given overlap actually unlinks a live entry. Registered per the terminal
-    register discipline (B-64/B-67 precedents) rather than shipping a round-11 partial fix to
-    a race.'
-  close_out: 'Design a `gc_sweep()`/`write_once()` synchronization primitive (in-flight-write
-    registry the sweep consults before unlinking, or a lock scoped to the publication critical
-    section) over Runtime spec v1.103 §14.8.11; witness with a test pinning a TTL shorter than
-    an injected artificial publication delay, asserting the sweep never removes the in-flight
-    entry. Optional lower-cost interim hardening: degrade `read()`''s raw `FileNotFoundError`
-    to a typed refusal.'
+  status: closed
+  pr: "#1103"
+  summary: 'Registered at the B-65-A impl arc (out-of-family Codex round 11 [P2]). Fixed across
+    6 rounds of out-of-family Codex review on the B-68 impl branch
+    (b68-protected-result-store-gc-race-mtime-authority): (1) `gc_sweep()`''s age authority
+    switched from the pre-publish `_StoredEnvelope.written_at` field (captured before
+    serialization/encryption/fsync -- the original gap) to the committed entry file''s own
+    filesystem mtime, explicitly refreshed via `os.utime` + its own fsync AFTER the durable
+    `os.link` commit -- closing the timing window the original finding described; (2) a
+    process-wide `threading.Lock` registry keyed by the store root''s filesystem identity
+    (`_root_locks`, module-level, not per-instance; keyed by `(st_dev, st_ino)` when the
+    root exists, falling back to the resolved path string when it does not yet) now
+    serializes `_publish_atomic`''s ENTIRE publish critical section (temp-file creation
+    through the post-commit mtime-refresh fsync) against `gc_sweep`''s ENTIRE scan, closing
+    same-process/same-root races including a co-resident concurrent-instance race the
+    register''s original close_out did not anticipate, path-aliasing (`..`-relative spellings),
+    and case-insensitive-filesystem aliasing (round 6, e.g. macOS APFS default volumes -- two
+    differently-cased spellings of the same directory now share one lock); (3) `read()`
+    degrades a missing entry to a typed `ProtectedStoreEntryNotFoundError(FileNotFoundError)`
+    (the optional interim hardening the close_out named) instead of a raw `FileNotFoundError`.
+    Each round''s fix is witnessed by a deterministic (non-flaky) mutation-probed test:
+    reverting the fix makes the corresponding test fail; restoring it passes -- including a
+    round-2 self-correction (merge-gate round-1 test-witness lens, PR #1103) where an
+    earlier timing-based witness was found empirically ~80% reliable, not deterministic, and
+    was rewritten to a purely Event-driven handshake. 10 new tests added; full
+    `harness-runtime` + `harness-cp` suites green. Advisor-reviewed before close: round 5''s
+    finding restates an ALREADY-DISCLOSED cross-PROCESS residual (see B-73) rather than a
+    defect introduced by this fix, so this row closes on the in-process synchronization
+    scope the original close_out described.'
+  close_out: 'Closed by the fix described above
+    (harness-runtime/src/harness_runtime/lifecycle/protected_result_store.py +
+    harness-runtime/tests/test_lifecycle_protected_result_store.py). The cross-PROCESS case
+    -- two separate OS processes sharing one store root, each with its own in-memory
+    `_root_locks` registry -- is NOT closed by an in-process `threading.Lock` and is split
+    out to B-73 rather than silently folded into this closure; council: no.'
   council: no -- narrow TTL-dependent race with a documented reachability precondition; the full
     fix is a concurrency-control design decision, not an immediate judgment call
   heading: '### B-68 · Protected result store''s opportunistic GC can race a concurrent
     in-flight publication under a short TTL *(registered at the B-65-A impl arc, out-of-family
-    Codex round 11 [P2], 2026-07-22)*'
+    Codex round 11 [P2], 2026-07-22; CLOSED 2026-07-25 -- in-process synchronization scope;
+    cross-process residual split to B-73)*'
+- id: B-73
+  title: Protected result store's GC/publish synchronization is in-process only -- two co-resident
+    OS processes sharing one store root are not mutually excluded
+  status: registered_finding
+  summary: 'Split out of B-68 at its close (2026-07-25). B-68''s fix serializes `gc_sweep()`
+    against `_publish_atomic()` via a `threading.Lock` keyed by the store root''s filesystem
+    identity, held in a module-level `_root_locks` registry -- this closes every same-process
+    race, including multiple `ProtectedResultStore` instances constructed against the same
+    root within one process (e.g. across bootstrap/resume cycles) and both `..`-relative and
+    case-folded path aliases. Out-of-family Codex round 5 (post-fix convergence check)
+    confirmed the registry does NOT extend across a process boundary: two separate daemon
+    PROCESSES sharing one store directory each hold their own independent `_root_locks` dict,
+    so one process''s bootstrap/shutdown sweep can still unlink another process''s
+    just-published entry between its `os.link()` commit and mtime refresh, if the
+    deployment-configured TTL is shorter than that window. This is the SAME reachability
+    precondition B-68''s original registration already named (TTL shorter than single-digit-ms
+    publish latency -- roughly seven orders of magnitude below the factory default) and the
+    same residual B-68''s own code comments and commit history disclosed throughout ("a
+    genuinely separate OS process sharing the store directory remains an open residual,
+    registered, not silently assumed closed"). Not council-eligible: closing it requires an
+    OS-level cross-process lock (e.g. `fcntl.flock` on a dedicated lockfile under the store
+    root) -- a materially different mechanism than the in-process fix, matching the original
+    B-68 registration''s own assessment that a complete fix is a genuine concurrency-control
+    redesign, not a mechanical patch.'
+  close_out: 'Add an OS-level advisory lock (`fcntl.flock` on a dedicated lockfile under the
+    store root, or equivalent) wrapping the same `_publish_atomic`/`gc_sweep` critical
+    sections the in-process `threading.Lock` already wraps, acquired/released around the
+    existing lock so both layers compose without a nested-lock ordering hazard. Witness with
+    a genuine multi-PROCESS test (e.g. `multiprocessing` workers, not threads) pinning a TTL
+    shorter than an injected publication delay in one process while a second process sweeps
+    concurrently, asserting the entry survives.'
+  council: no -- narrow TTL-dependent cross-process race with a documented, unchanged
+    reachability precondition; the fix is a known primitive (fcntl.flock), not a judgment call
+  heading: '### B-73 · Protected result store''s GC/publish synchronization is in-process only
+    -- two co-resident OS processes sharing one store root are not mutually excluded *(split
+    from B-68 at its close, out-of-family Codex round 5, 2026-07-25)*'
+- id: B-74
+  title: Protected result store's mtime-based GC age authority can under-report publish time
+    below a filesystem's timestamp granularity
+  status: registered_finding
+  summary: 'Surfaced at the B-68 impl arc, out-of-family Codex round 7 [P2]. `_publish_atomic`''s
+    `os.utime(entry_path, None)` refresh sets the entry''s mtime to the CURRENT system time, but
+    the underlying filesystem is what actually STORES that value, at whatever timestamp
+    resolution it supports -- on a coarse-granularity filesystem (e.g. legacy FAT32, or certain
+    network filesystem configurations; NOT the modern POSIX filesystems -- ext4/APFS/NTFS --
+    this workspace''s committed local-development/self-hosted-server/managed-cloud deployment
+    surfaces default to, which offer sub-millisecond resolution), the stored mtime can round
+    DOWN by up to the filesystem''s own granularity (e.g. up to ~1 second on a 1-second-resolution
+    filesystem). If the deployment-configured `ttl_seconds` is SHORTER than that rounding error,
+    `gc_sweep()` can classify a just-published, genuinely-live entry as already expired and
+    reclaim it -- even though the B-68 mtime-authority fix (round 1) is working exactly as
+    designed; the filesystem itself cannot represent the precision the fix relies on. This is
+    the SAME "operator configures a near-zero TTL" reachability floor B-68''s own original
+    registration already named (roughly seven orders of magnitude below the factory 86400s
+    default), now sharpened with a SECOND, filesystem-dependent dimension of that floor. Not
+    council-eligible as a mechanical patch: codex''s own framing states the fix is either
+    "reject TTLs below a guaranteed timestamp resolution" or "use an age authority that cannot
+    predate publication by more than the TTL" -- both require picking a concrete resolution
+    floor, which is FILESYSTEM-dependent and not knowable a priori without probing the actual
+    deployment volume, making this a genuine design decision (what floor? how is it probed or
+    configured? what''s the failure mode when unknown?) rather than a mechanical patch a fix
+    round can safely author.'
+  close_out: 'Design a TTL-floor validation or a probe-based age-authority selection that
+    accounts for the deployment filesystem''s actual timestamp resolution -- e.g. probe the
+    store root''s filesystem granularity at construction/first-write time (write a marker file,
+    read back its mtime precision) and either refuse a TTL below that floor with a typed error,
+    or fall back to a higher-resolution age signal (e.g. a companion sidecar file recording a
+    monotonic sequence number or a separate high-resolution timestamp store) when the TTL is
+    below the floor. Witness with a test that simulates a coarse-mtime filesystem (e.g. via a
+    monkeypatched `os.stat`/`os.utime` rounding to whole seconds) and a TTL below that
+    resolution, asserting the store either refuses the TTL or does not lose the live entry.'
+  council: no -- narrow, filesystem-dependent TTL-precondition gap; the fix requires picking a
+    concrete resolution floor which is a design decision, not an immediate judgment call
+  heading: '### B-74 · Protected result store''s mtime-based GC age authority can under-report
+    publish time below a filesystem''s timestamp granularity *(surfaced at the B-68 impl arc,
+    out-of-family Codex round 7 [P2], 2026-07-25)*'
+- id: B-75
+  title: Protected result store's gc_sweep candidate-selection scan can itself stall inside the
+    publish lock under a pathological backlog or a hanging filesystem
+  status: registered_finding
+  summary: 'Surfaced at the B-68 impl arc, out-of-family Codex round 8 [P1] -- a round-8 finding
+    directly about round 7''s OWN fix, the third consecutive round to surface an issue in the
+    immediately-prior round''s change (round 6->7->8). Round 7 narrowed `gc_sweep`''s lock to a
+    fast, `stat()`-only candidate-selection phase specifically to bound lock-hold time against a
+    slow DECRYPT phase (see B-68''s closed row). Codex round 8 observes that even this narrowed
+    phase -- `glob()` + `stat()` over every `*.entry`/`.tmp-*` file, still inside the lock -- is
+    itself unbounded in a MORE EXTREME scenario: a pathologically large backlog (far larger than
+    what makes decrypt slow, since `stat()` is orders of magnitude cheaper per file), or a
+    filesystem mount that hangs/stalls on `stat()` itself (e.g. a dead network mount). Under
+    `run_off_loop_detach_on_cancel`''s detach semantics, a shutdown sweep stuck in THIS phase
+    would ALSO get detached while still holding the lock, reopening the same
+    class of liveness hazard round 7 closed for the decrypt phase specifically. Registered
+    rather than fixed inline per advisor()''s explicit round-8 guidance: three consecutive
+    rounds each surfacing a defect the PRIOR round''s own fix introduced is the
+    non-convergent-adversarial-hardening-arms-race signature (this workspace''s own standing
+    discipline) -- stop patching, register, and ship rather than open a round 9. Reachability is
+    genuinely narrower than round 7''s finding (needs either an extreme file count or a
+    hanging/failing filesystem mount, not merely a large-but-normal backlog), and a failing
+    filesystem mount would likely be causing failures well beyond this store already.'
+  close_out: 'Bound the candidate-selection phase itself -- e.g. batch the `glob()`/`stat()` scan
+    with a periodic lock release/re-acquire (yielding between batches so a stalled scan cannot
+    monopolize the lock indefinitely), or move the scan itself off-lock using a snapshot-then-
+    verify pattern (enumerate + stat unlocked, then re-verify each candidate''s mtime under a
+    BRIEF lock hold immediately before acting on it -- mirroring how phase 2''s unlink already
+    trusts a monotonic once-confirmed-expired fact, but applied one level earlier). Witness with
+    a test that stalls `glob()`/`stat()` itself (not decrypt) and asserts a concurrent write
+    still completes within a short bounded window.'
+  council: no -- narrow liveness-hardening follow-on to an already-shipped fix; the fix shape
+    (batch/yield or snapshot-then-verify) is a known pattern, not an open design question
+  heading: '### B-75 · Protected result store''s gc_sweep candidate-selection scan can itself
+    stall inside the publish lock under a pathological backlog or a hanging filesystem *(surfaced
+    at the B-68 impl arc, out-of-family Codex round 8 [P1], 2026-07-25)*'
+- id: B-76
+  title: Protected result store's lock-key registry can fail open on a transient stat() failure
+    during root-identity resolution
+  status: registered_finding
+  summary: 'Surfaced at the B-68 impl arc, out-of-family Codex round 8 [P2]. `_lock_for_root`
+    keys the process-wide lock registry on `(st_dev, st_ino)` when `resolved.stat()` succeeds,
+    falling back to the resolved-path STRING when it raises `OSError` (a defensive branch added
+    at round 6 for the not-yet-created-directory case, now effectively unreachable in normal
+    operation since round 6''s own fix made `_lock_for_root` unconditionally `mkdir` the
+    directory before stat''ing). Codex observes the fallback is still live for a TRANSIENT
+    `stat()` failure (not "doesn''t exist yet", but a genuine intermittent I/O error) -- if one
+    concurrent caller''s `stat()` transiently fails while another''s (near-simultaneous) call
+    succeeds, the two callers key DIFFERENT locks for the SAME logical root (one string-keyed,
+    one inode-keyed), silently reopening the exact aliasing race the identity-based key exists to
+    close. Narrow: requires a genuinely intermittent filesystem error at the precise moment of a
+    concurrent lock-key computation, not a sustained failure (a sustained failure would surface
+    elsewhere -- e.g. the `mkdir` immediately preceding this stat would itself already be
+    failing loudly).'
+  close_out: 'Do not silently fall back to a different key namespace on a `stat()` failure after
+    a successful `mkdir` -- propagate the `OSError` (or retry with a bounded backoff before
+    propagating) so a transient failure surfaces as a typed refusal rather than a silent
+    identity-namespace split. Witness with a test that monkeypatches `Path.stat` to fail once
+    then succeed, asserting the lock registry does not admit two distinct lock objects for the
+    same resolved root across that transient failure.'
+  council: no -- narrow transient-I/O-error handling gap; propagate-vs-fallback is a
+    correctness fix, not an open design question
+  heading: '### B-76 · Protected result store''s lock-key registry can fail open on a transient
+    stat() failure during root-identity resolution *(surfaced at the B-68 impl arc, out-of-family
+    Codex round 8 [P2], 2026-07-25)*'
+- id: B-77
+  title: Protected result store's mtime refresh is not durable atomically with the publish
+    commit, leaving a crash window where a recovered entry looks pre-aged
+  status: registered_finding
+  summary: 'Surfaced at the B-68 impl arc, out-of-family Codex round 8 [P2]. `_publish_atomic`
+    makes the entry durable in two separate steps: the `os.link` commit + its directory fsync
+    (durability step 1), THEN a separate `os.utime` mtime refresh + its own fsync (durability
+    step 2). If the process crashes BETWEEN these two steps (after the entry is durably linked
+    and visible, but before its mtime is refreshed), the entry that survives the crash retains
+    the TEMP FILE''s original, pre-fsync-latency mtime -- the exact stale timestamp the B-68
+    round-1 fix exists to move away from. The NEXT process''s bootstrap sweep, reading this
+    crash-recovered entry, would then see the OLD (potentially already-TTL-exceeded) mtime and
+    could immediately reclaim an entry that in fact just barely finished publishing before the
+    crash. This is a variant of round 1''s original bug, but scoped to the crash-recovery path
+    specifically (not the live-concurrent-thread path round 2-7 closed) -- a narrower
+    reachability precondition (needs a crash at a specific ~2-syscall-wide instant, not just
+    concurrent access) with the same root cause (mtime refresh is not atomic with the commit
+    that makes the entry durable and visible).'
+  close_out: 'Make the age-authority timestamp durable ATOMICALLY with the commit rather than as
+    a separate later step -- e.g. write the intended-mtime as part of the temp file''s own
+    content/xattr before `os.link`, so the linked dirent already carries the correct age
+    signal the instant it becomes durable, with no intervening crash window. Alternatively,
+    treat any post-crash entry with a mtime predating the entry''s OWN prior directory-fsync-only
+    durability marker as needing a decrypt-based fallback age check (mirroring the existing
+    undecryptable-entry fallback) rather than trusting a possibly-pre-refresh mtime unconditionally.
+    Witness with a test that simulates a crash between the `os.link` commit and the `os.utime`
+    refresh (e.g. via a monkeypatched `os.utime` that raises once) and asserts a subsequent
+    bootstrap-style sweep does not reclaim the crash-recovered entry immediately.'
+  council: no -- narrow crash-window durability-ordering gap; the fix (atomic age-stamp-with-
+    commit, or a fallback age check) is a known pattern, not an open design question
+  heading: '### B-77 · Protected result store''s mtime refresh is not durable atomically with
+    the publish commit, leaving a crash window where a recovered entry looks pre-aged *(surfaced
+    at the B-68 impl arc, out-of-family Codex round 8 [P2], 2026-07-25)*'
 - id: B-69
   title: resume_handle crash-recovery resume path cannot address individual paused children
     for multi-child HITL delivery
