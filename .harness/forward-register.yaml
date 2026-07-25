@@ -1894,11 +1894,29 @@ items:
     a fresh DURABLE_ASYNC re-pause has no evident mechanism to preserve the branch's prior-round
     child_resume_snapshot cursor. Pre-existing/orthogonal to B-39 (the old global ResumeContextHolder
     masked it via accidental cross-branch misapplication); B-39 makes it newly visible, not new.
-  close_out: Build the deferred fan-out HITL delivery-mechanism wiring -- call resume_context.
+  close_out: SUPERSEDED 2026-07-25 (spec leg landed, CP spec v1.108 property 6) -- the ORIGINAL
+    recipe below (call hitl_response_for(child_run_id) at the fan-out branch dispatch site) is WRONG for
+    a pre-dispatch gate-owning branch and MUST NOT be followed literally -- property 6 explicitly
+    FORBIDS ever resolving a pre-dispatch gate-owning branch via the child_run_id-keyed hitl_responses
+    map (out-of-family codex [P1] caught this contradiction between the original recipe and the newly
+    landed contract, 2026-07-25). CORRECTED RECIPE for item (1), the round-3 repro own SOLE-branch case --
+    (a) add a carrier (amendment to PeerFanOutResumeState/FanOutResumeState or equivalent) recording a
+    pre-dispatch gate-owning branch presence, keyed by a tree-wide-unique internal identity per CP spec
+    v1.108 (ancestry-qualified, NOT merely locally-unique among sibling branches -- ship a
+    collision-witness test); (b) amend _collect_gate_owning_run_ids to walk this new carrier alongside its
+    existing paused_child_branches walk; (c) construct a HITLDeliveryCell-equivalent on that branch own
+    StepExecutionContext at the fan-out dispatch sites (_execute_parallelization ~7851-7866,
+    _execute_orchestrator_workers ~11696-11710 -- mirroring workflow_driver.py:4766-4777 LINEAR-only
+    construction) ONLY when this internal identity is the sole unaddressed member per property 4/6 own
+    SOLE-membership rule -- NEVER via hitl_response_for(child_run_id), which this branch has none of.
+    Items (2)/(3)/(4) below remain B-71-gated/open, unchanged by the spec leg. Full detail at CP spec
+    v1.108 + .harness/class_1_tension_b72_pre_dispatch_gate_owning_branch_identity.md.
+    --- Original (now-superseded) recipe + append-only correction history, preserved for provenance ---
+    Build the deferred fan-out HITL delivery-mechanism wiring -- call resume_context.
     hitl_response_for(child_run_id) at the fan-out branch dispatch site and construct a
-    HITLDeliveryCell-equivalent on that branch's StepExecutionContext (mirroring workflow_driver.py:4777's
-    LINEAR-only construction), while independently satisfying property 4's multi-child fallback-safety
-    invariant (a prior draft's counting approach already failed review here). UPDATE 2026-07-25 round 3 --
+    HITLDeliveryCell-equivalent on that branch own StepExecutionContext (mirroring workflow_driver.py:4777
+    LINEAR-only construction), while independently satisfying property 4 multi-child fallback-safety
+    invariant (a prior draft counting approach already failed review here). UPDATE 2026-07-25 round 3 --
     EMPIRICALLY CONFIRMED via a built reproduction, harness-runtime/tests/integration/
     test_b72_fanout_sub_agent_dispatch_hitl_gate_resume.py (2 tests, both PASS -- pin the confirmed broken
     state directly, not via xfail). Precondition test confirms a PARALLELIZATION branch's own
