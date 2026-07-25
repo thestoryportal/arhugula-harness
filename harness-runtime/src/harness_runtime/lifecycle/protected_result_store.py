@@ -520,57 +520,46 @@ class ProtectedResultStore:
         expired: list[str] = []
         if not self._root.exists():
             return expired
-        # B-68 codex round 2 [P1]: the whole sweep runs under the SAME lock
-        # `_publish_atomic` holds around its commit + mtime refresh — a
-        # sweep in progress can never observe an entry mid-publish (stale
+        # B-68 codex round 2 [P1]: candidate SELECTION runs under the SAME
+        # lock `_publish_atomic` holds around its commit + mtime refresh —
+        # a sweep in progress can never observe an entry mid-publish (stale
         # pre-fsync mtime), and a publish in progress can never race a
         # sweep's read of its own just-refreshed mtime.
+        #
+        # codex round 7 [P1]: this lock scope used to wrap decrypt +
+        # unlink too — the FULL sweep body. `gc_sweep` is invoked via
+        # `run_off_loop_detach_on_cancel` (`audit_offload.py`), whose
+        # entire design intent is that a slow/hung worker gets DETACHED
+        # (the caller's own timeout is the only bound that matters; the
+        # worker keeps running harmlessly on a daemon thread) rather than
+        # blocking anything else. Holding the lock across a decrypt-heavy
+        # scan of a large backlog defeated that: a detached, still-running
+        # sweep would keep the NEXT `write_once()`/`gc_sweep()` call on the
+        # same root — on a long-lived daemon, this is every subsequent
+        # `run()`/`resume()`, not just process exit — blocked indefinitely
+        # on the abandoned worker's lock. Narrowed to a two-phase design:
+        # phase 1 (below, under the lock) only `stat()`s candidates — no
+        # decrypt, no unlink — bounding lock-hold time to enumeration cost
+        # regardless of backlog size or a stalled decrypt. Phase 2 (after
+        # the lock releases) does the slow work. This is SAFE because:
+        # expiry is monotonic (a `stat()`-confirmed-expired entry's mtime
+        # never gets younger — nothing ever re-touches an already-committed
+        # entry after `_publish_atomic`'s own refresh) and every write uses
+        # a FRESH `uuid4()`-derived composite key (`write_once`), so no
+        # concurrent publish can "resurrect" a candidate already selected
+        # here. A second sweep concurrently selecting + unlinking the SAME
+        # candidate is harmless — `unlink(missing_ok=True)` absorbs the
+        # race; the only cost is a duplicate log line.
+        entry_candidates: list[tuple[Path, float]] = []
+        tmp_candidates: list[tuple[Path, float]] = []
         with self._publish_lock:
             for entry_path in self._root.glob("*.entry"):
                 try:
                     written_at = entry_path.stat().st_mtime
                 except OSError:
                     continue
-                tenant_tag: str | None = None
-                try:
-                    plaintext = self._codec.decrypt(entry_path.read_bytes())
-                    envelope: _StoredEnvelope = pickle.loads(plaintext)
-                    tenant_tag = envelope.tenant_id
-                except Exception:
-                    # codex [P2] on this arc — an undecryptable entry (a DEK
-                    # rotation invalidating the key, or genuine corruption) must
-                    # NOT be skipped forever: without a fallback age signal it
-                    # would never expire, defeating the bounded-retention
-                    # guarantee. `tenant_tag` stays `None` (unreadable) — the
-                    # log line below still reports it, just without identity.
-                    pass
                 if current_time - written_at > self._ttl_seconds:
-                    digest = entry_path.stem
-                    try:
-                        entry_path.unlink(missing_ok=True)
-                    except OSError as exc:
-                        # codex [P1] on this arc — a sweep-time unlink failure (e.g.
-                        # permission denied) must NEVER propagate: `write_once()` calls
-                        # this opportunistically, and an uncaught OSError here would
-                        # replace the caller's typed `PostEffectAuditSigningError` with
-                        # an unrelated GC error, defeating the at-most-once carrier
-                        # entirely. Log + skip this entry; the sweep continues.
-                        logger.error(
-                            "protected result store: TTL-expired entry GC unlink failed "
-                            "(digest=%s, tenant=%s): %s",
-                            digest,
-                            tenant_tag,
-                            exc,
-                        )
-                        continue
-                    expired.append(digest)
-                    logger.warning(
-                        "protected result store: TTL-expired entry GC'd "
-                        "(digest=%s, tenant=%s, age_s=%.1f)",
-                        digest,
-                        tenant_tag,
-                        current_time - written_at,
-                    )
+                    entry_candidates.append((entry_path, written_at))
             # codex [P2] round 5 on this arc — a process KILLED between
             # `_publish_atomic`'s temp-write and its `finally: os.unlink(tmp_name)`
             # leaves a `.tmp-*` file behind indefinitely: this loop (and every
@@ -590,21 +579,64 @@ class ProtectedResultStore:
                 except OSError:
                     continue
                 if current_time - tmp_mtime > self._ttl_seconds:
-                    try:
-                        tmp_entry_path.unlink(missing_ok=True)
-                    except OSError as exc:
-                        logger.error(
-                            "protected result store: crash-orphaned temp-file GC "
-                            "unlink failed (%s): %s",
-                            tmp_entry_path.name,
-                            exc,
-                        )
-                        continue
-                    logger.warning(
-                        "protected result store: crash-orphaned temp-file GC'd (%s, age_s=%.1f)",
-                        tmp_entry_path.name,
-                        current_time - tmp_mtime,
-                    )
+                    tmp_candidates.append((tmp_entry_path, tmp_mtime))
+        # Phase 2 — outside the lock: decrypt (best-effort, logging only)
+        # and the actual unlinks. See the round-7 comment above for why
+        # this is safe unlocked.
+        for entry_path, written_at in entry_candidates:
+            tenant_tag: str | None = None
+            try:
+                plaintext = self._codec.decrypt(entry_path.read_bytes())
+                envelope: _StoredEnvelope = pickle.loads(plaintext)
+                tenant_tag = envelope.tenant_id
+            except Exception:
+                # codex [P2] on this arc — an undecryptable entry (a DEK
+                # rotation invalidating the key, or genuine corruption) must
+                # NOT be skipped forever: without a fallback age signal it
+                # would never expire, defeating the bounded-retention
+                # guarantee. `tenant_tag` stays `None` (unreadable) — the
+                # log line below still reports it, just without identity.
+                pass
+            digest = entry_path.stem
+            try:
+                entry_path.unlink(missing_ok=True)
+            except OSError as exc:
+                # codex [P1] on this arc — a sweep-time unlink failure (e.g.
+                # permission denied) must NEVER propagate: `write_once()` calls
+                # this opportunistically, and an uncaught OSError here would
+                # replace the caller's typed `PostEffectAuditSigningError` with
+                # an unrelated GC error, defeating the at-most-once carrier
+                # entirely. Log + skip this entry; the sweep continues.
+                logger.error(
+                    "protected result store: TTL-expired entry GC unlink failed "
+                    "(digest=%s, tenant=%s): %s",
+                    digest,
+                    tenant_tag,
+                    exc,
+                )
+                continue
+            expired.append(digest)
+            logger.warning(
+                "protected result store: TTL-expired entry GC'd (digest=%s, tenant=%s, age_s=%.1f)",
+                digest,
+                tenant_tag,
+                current_time - written_at,
+            )
+        for tmp_entry_path, tmp_mtime in tmp_candidates:
+            try:
+                tmp_entry_path.unlink(missing_ok=True)
+            except OSError as exc:
+                logger.error(
+                    "protected result store: crash-orphaned temp-file GC unlink failed (%s): %s",
+                    tmp_entry_path.name,
+                    exc,
+                )
+                continue
+            logger.warning(
+                "protected result store: crash-orphaned temp-file GC'd (%s, age_s=%.1f)",
+                tmp_entry_path.name,
+                current_time - tmp_mtime,
+            )
         self._last_gc_at = current_time
         return expired
 

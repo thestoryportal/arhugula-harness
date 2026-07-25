@@ -684,6 +684,104 @@ def test_write_once_blocks_while_publish_lock_held(tmp_path: Path) -> None:
     assert store.read("tenant-a", write_results[0]) == "payload"
 
 
+def test_write_once_does_not_block_on_a_sweep_stalled_in_its_decrypt_phase(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """merge-gate round-2 out-of-family Codex review (PR #1103, round 7
+    [P1]): `gc_sweep()` is invoked via `run_off_loop_detach_on_cancel`
+    (`audit_offload.py`), whose entire design intent is that a slow/hung
+    worker gets DETACHED rather than blocking anything else — "the
+    caller's own `asyncio.wait_for(..., timeout=...)` is the only bound
+    that matters" (that function's own docstring). An earlier version of
+    this fix held `self._publish_lock` across the WHOLE sweep body,
+    including the per-entry decrypt+`pickle.loads` pass — so a detached,
+    still-running sweep (stalled decrypting a large backlog, or a genuine
+    hang) would keep the NEXT `write_once()`/`gc_sweep()` call on the SAME
+    root blocked indefinitely, defeating the detach design on a long-lived
+    daemon (`shutdown()` runs every `run()`/`resume()`, not just process
+    exit). `gc_sweep()` now only holds the lock for the fast `stat()`-only
+    candidate-selection phase; decrypt + unlink happen after it releases.
+
+    This test pins that: it stalls a sweep INSIDE its (unlocked) decrypt
+    phase (`pickle.loads`, not the codec — this module never monkeypatches
+    the codec, see the module docstring) and asserts a concurrent
+    `write_once()` on a second instance completes promptly rather than
+    blocking on the stalled sweep.
+
+    Mutation probe: re-wrapping the whole sweep body (decrypt phase
+    included) back under `self._publish_lock` makes the write block for
+    the full stall duration instead of completing promptly."""
+    import pickle
+
+    store_a = _store(tmp_path, ttl_seconds=0.01)
+    store_b = ProtectedResultStore(
+        tmp_path / "store",
+        codec=store_a._codec,  # type: ignore[attr-defined]
+        ttl_seconds=0.01,
+    )
+    # Suppress store_b's OWN opportunistic sweep (a fresh instance's
+    # `_last_gc_at` starts at 0.0, so its first `write_once()` would
+    # otherwise ALSO trigger a nested `gc_sweep()` that hits the same
+    # stalled mock below — a confound this test doesn't intend to exercise;
+    # the property under test is a WRITE not blocking on ANOTHER thread's
+    # stalled sweep, not on its own.
+    store_b._last_gc_at = time.time()  # type: ignore[attr-defined]
+    ref = store_a.write_once("tenant-a", "will be swept")
+    assert isinstance(ref, str)
+    time.sleep(0.05)  # comfortably past the 0.01s TTL
+
+    decrypt_phase_entered = threading.Event()
+    decrypt_may_proceed = threading.Event()
+    real_pickle_loads = pickle.loads
+
+    def _stalled_pickle_loads(data: bytes) -> object:
+        decrypt_phase_entered.set()
+        decrypt_may_proceed.wait(timeout=5.0)
+        return real_pickle_loads(data)
+
+    monkeypatch.setattr(pickle, "loads", _stalled_pickle_loads)
+
+    sweep_results: list[list[str]] = []
+
+    def _run_sweep() -> None:
+        sweep_results.append(store_a.gc_sweep())
+
+    sweeper = threading.Thread(target=_run_sweep)
+    sweeper.start()
+    assert decrypt_phase_entered.wait(timeout=5.0), "sweep never reached its decrypt phase"
+
+    # Run the write on its OWN thread and check with a SHORT bounded join —
+    # calling `write_once()` directly and merely timing how long it takes
+    # would not discriminate: under the pre-fix whole-body lock it still
+    # eventually completes (once the mock's own 5s wait times out), just
+    # slower, so a synchronous call passes either way. A short join window
+    # well under the mock's 5s stall is what actually distinguishes
+    # "blocked on the stalled sweep" from "completed promptly".
+    write_results: list[object] = []
+
+    def _run_write() -> None:
+        write_results.append(store_b.write_once("tenant-b", "must not block on the stalled sweep"))
+
+    writer = threading.Thread(target=_run_write)
+    writer.start()
+    writer.join(timeout=0.3)
+    assert not writer.is_alive(), (
+        "write_once() was still blocked 0.3s after starting — it waited on "
+        "the stalled sweep's lock instead of completing promptly"
+    )
+    assert len(write_results) == 1
+
+    decrypt_may_proceed.set()
+    sweeper.join(timeout=5.0)
+    assert not sweeper.is_alive()
+
+    write_result = write_results[0]
+    assert isinstance(write_result, str)
+    assert store_b.read("tenant-b", write_result) == "must not block on the stalled sweep"
+    assert len(sweep_results) == 1
+    assert sweep_results[0] != []
+
+
 def test_write_once_temp_file_protected_from_concurrent_sweep_before_commit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

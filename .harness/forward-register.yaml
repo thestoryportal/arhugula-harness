@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 74
+  total: 75
   open: 0
   design_substrate_gated: 0
-  registered_finding: 11
+  registered_finding: 12
   operator_gated: 1
   held: 1
   closed: 61
-  identity_digest: 17e286298ae0df08
+  identity_digest: 5916e0966ea0f495
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -1649,6 +1649,46 @@ items:
   heading: '### B-73 · Protected result store''s GC/publish synchronization is in-process only
     -- two co-resident OS processes sharing one store root are not mutually excluded *(split
     from B-68 at its close, out-of-family Codex round 5, 2026-07-25)*'
+- id: B-74
+  title: Protected result store's mtime-based GC age authority can under-report publish time
+    below a filesystem's timestamp granularity
+  status: registered_finding
+  summary: 'Surfaced at the B-68 impl arc, out-of-family Codex round 7 [P2]. `_publish_atomic`''s
+    `os.utime(entry_path, None)` refresh sets the entry''s mtime to the CURRENT system time, but
+    the underlying filesystem is what actually STORES that value, at whatever timestamp
+    resolution it supports -- on a coarse-granularity filesystem (e.g. legacy FAT32, or certain
+    network filesystem configurations; NOT the modern POSIX filesystems -- ext4/APFS/NTFS --
+    this workspace''s committed local-development/self-hosted-server/managed-cloud deployment
+    surfaces default to, which offer sub-millisecond resolution), the stored mtime can round
+    DOWN by up to the filesystem''s own granularity (e.g. up to ~1 second on a 1-second-resolution
+    filesystem). If the deployment-configured `ttl_seconds` is SHORTER than that rounding error,
+    `gc_sweep()` can classify a just-published, genuinely-live entry as already expired and
+    reclaim it -- even though the B-68 mtime-authority fix (round 1) is working exactly as
+    designed; the filesystem itself cannot represent the precision the fix relies on. This is
+    the SAME "operator configures a near-zero TTL" reachability floor B-68''s own original
+    registration already named (roughly seven orders of magnitude below the factory 86400s
+    default), now sharpened with a SECOND, filesystem-dependent dimension of that floor. Not
+    council-eligible as a mechanical patch: codex''s own framing states the fix is either
+    "reject TTLs below a guaranteed timestamp resolution" or "use an age authority that cannot
+    predate publication by more than the TTL" -- both require picking a concrete resolution
+    floor, which is FILESYSTEM-dependent and not knowable a priori without probing the actual
+    deployment volume, making this a genuine design decision (what floor? how is it probed or
+    configured? what''s the failure mode when unknown?) rather than a mechanical patch a fix
+    round can safely author.'
+  close_out: 'Design a TTL-floor validation or a probe-based age-authority selection that
+    accounts for the deployment filesystem''s actual timestamp resolution -- e.g. probe the
+    store root''s filesystem granularity at construction/first-write time (write a marker file,
+    read back its mtime precision) and either refuse a TTL below that floor with a typed error,
+    or fall back to a higher-resolution age signal (e.g. a companion sidecar file recording a
+    monotonic sequence number or a separate high-resolution timestamp store) when the TTL is
+    below the floor. Witness with a test that simulates a coarse-mtime filesystem (e.g. via a
+    monkeypatched `os.stat`/`os.utime` rounding to whole seconds) and a TTL below that
+    resolution, asserting the store either refuses the TTL or does not lose the live entry.'
+  council: no -- narrow, filesystem-dependent TTL-precondition gap; the fix requires picking a
+    concrete resolution floor which is a design decision, not an immediate judgment call
+  heading: '### B-74 · Protected result store''s mtime-based GC age authority can under-report
+    publish time below a filesystem''s timestamp granularity *(surfaced at the B-68 impl arc,
+    out-of-family Codex round 7 [P2], 2026-07-25)*'
 - id: B-69
   title: resume_handle crash-recovery resume path cannot address individual paused children
     for multi-child HITL delivery
