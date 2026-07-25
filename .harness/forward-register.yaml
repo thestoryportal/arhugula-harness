@@ -1936,20 +1936,27 @@ items:
     keying-defect note warns against reinventing. Explicitly NOT a finding of this pass. First question
     owed before design or code -- dispatch-idempotency (b) or addressing/delivery (a); see
     .harness/post-phase-8-forward-register.md B-72 round-4 update for full detail.
-    UPDATE 2026-07-25 round 5 (systems-architect tension-resolution mode, 2 out-of-family Codex
+    UPDATE 2026-07-25 round 5 (systems-architect tension-resolution mode, 3 out-of-family Codex
     corrections) -- the (a)-vs-(b) framing was the wrong axis for the round-3 REPRODUCTION's narrower
     scenario specifically -- CP spec v1.106 section 1.2 properties 4-5 distinguish gate-owning branches
-    (need an addressed answer, category a) from transitively-paused container/ancestor branches
-    (re-entered unconditionally, no key, category b) as two DIFFERENT branch roles, not competing
-    theories -- and the round-3 repro (single PARALLELIZATION branch, own SUB_AGENT_BOUNDARY placement,
-    no nested child) is confirmed gate-owning, so that narrower scenario is category (a). B-72's OWN
-    original registered scenario above (a branch that already dispatched into its own gate, got
-    approved, and is now resume-forwarded toward its self-dispatched deeper-paused descendant) is a
-    THIRD, hybrid case property 5 does not cover (it requires "never itself dispatched into a HITL
-    gate") -- this hybrid case is NOT resolved by round 5 and stays open. The addressing key itself for
-    the gate-owning case also stays open -- CP spec property 1 normatively fixes the hitl_responses key
-    shape to run_id, not impl discretion, so any fix needs a run_id-compatible pre-dispatch carrier,
-    not merely any existing branch identity. Full detail + both codex-caught corrections at
+    from transitively-paused container/ancestor branches as two DIFFERENT branch roles, not competing
+    theories, and the round-3 repro (single PARALLELIZATION branch, own SUB_AGENT_BOUNDARY placement,
+    no nested child) is confirmed gate-owning. CORRECTION -- "category (a)" here is DELIVERY-cell
+    construction, not necessarily keyed addressing; the round-3 test itself resumes via the UNIFORM
+    ResumeContext.hitl_response field (test line 573), not a keyed map, and property 4 permits the
+    uniform fallback for a SOLE unaddressed gate-owning branch -- exactly this repro's shape. So
+    wiring a delivery-cell construction alone (no keying) already fixes the round-3 repro; KEYED
+    multi-peer addressing (2+ concurrent gate-owning branches) is a separate, still fully open
+    question untested by any evidence gathered so far. B-72's OWN original registered scenario above
+    (a branch that already dispatched into its own gate, got approved, and is now resume-forwarded
+    toward its self-dispatched deeper-paused descendant) is a THIRD, hybrid case property 5 does not
+    cover (it requires "never itself dispatched into a HITL gate") -- stays OPEN, unresolved. SECOND
+    CORRECTION -- the keyed-addressing tiebreaker (does a run_id-compatible pre-dispatch carrier
+    exist) is gated on B-71 regardless of its answer -- B-71 (already registered, separate) is that
+    the operator-facing HITL escalation payload exposes NO run-instance-distinct identifier at all
+    (keyed off compose_hitl_action_id, workflow_id-scoped), needing its own C-CP-28 carrier amendment
+    -- so even an internally-mintable-early run_id does not clear this to pure impl discretion until
+    B-71 lands or is co-designed with it. Full detail + all 3 codex-caught corrections at
     .harness/post-phase-8-forward-register.md B-72 round-5 update.
   council: RETIRED "skip-a-gate vs strand-a-descendant" framing (2026-07-25 round 2) -- the spec's
     mechanism ROUTES a resolved answer via hitl_response_for(child_run_id), it does not skip gate
@@ -1958,10 +1965,12 @@ items:
     was already found by out-of-family review to strand a container branch -- worth a dyadic council
     pass on the property-4-safe resolver design once the reproduction pins the observable shape.
     UPDATE 2026-07-25 round 5 -- council scope is NOT narrowed by round 5's category resolution; it now
-    covers (1) the run_id-compatible pre-dispatch addressing-key design for the round-3-confirmed
-    gate-owning case, (2) property 4's resolver set-membership mechanism, and (3) B-72's own original
-    hybrid scenario (previously-gate-owning, now forwarding past its own already-satisfied gate) that
-    round 5 re-opened -- property 5 does not settle it, so it is not safely retirable from council scope.
+    covers (1) the delivery-cell-construction fix for the round-3-confirmed single-branch gate-owning
+    case (no keying needed), (2) the keyed multi-peer addressing design, gated on B-71 landing or
+    being co-designed with it, (3) property 4's resolver set-membership mechanism, and (4) B-72's own
+    original hybrid scenario (previously-gate-owning, now forwarding past its own already-satisfied
+    gate) that round 5 re-opened -- property 5 does not settle it, so it is not safely retirable from
+    council scope.
   heading: '### B-72 · A `SUB_AGENT_DISPATCH` step''s own `SUB_AGENT_BOUNDARY` HITL gate can
     re-fire on every resume-forward of an already-dispatched, deeper-paused child, discarding
     the child''s `paused_child_branches` cursor *(registered at the B-39 impl-leg Slice B
