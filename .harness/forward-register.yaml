@@ -60,12 +60,12 @@
 snapshot:
   total: 78
   open: 0
-  design_substrate_gated: 0
-  registered_finding: 15
+  design_substrate_gated: 1
+  registered_finding: 14
   operator_gated: 1
   held: 1
   closed: 61
-  identity_digest: 2b9de97440883449
+  identity_digest: 551a8a27b88a7688
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -1888,7 +1888,7 @@ items:
 - id: B-72
   title: SUB_AGENT_DISPATCH step's own SUB_AGENT_BOUNDARY HITL gate can re-fire on resume-forward,
     discarding an already-paused descendant's cursor
-  status: registered_finding
+  status: design_substrate_gated
   summary: hitl_delivery_holder is never threaded to fan-out branches, so a SUB_AGENT_DISPATCH
     branch with its own SUB_AGENT_BOUNDARY placement re-evaluates its gate on every resume-forward;
     a fresh DURABLE_ASYNC re-pause has no evident mechanism to preserve the branch's prior-round
@@ -1967,6 +1967,34 @@ items:
     B-72's own original hybrid scenario stays open and untested; council covers all of the above, none
     retired. Full detail + all corrections at .harness/post-phase-8-forward-register.md B-72 round-5
     update.
+    UPDATE 2026-07-25 round 6 (roadmap-continue, advisor()-directed empirical check BEFORE any code) --
+    round 5's own close-out caveat (whether _collect_gate_owning_run_ids returns an empty gate-owning
+    set for a branch paused at its own gate with zero dispatched children) is CONFIRMED TRUE by direct
+    instrumentation of the real round-3 repro object -- compute_hitl_uniform_fallback_eligible_run_id
+    returns None (not the branch's own run_id); PeerFanOutResumeState captures branch_count=1 but BOTH
+    branches=() and paused_child_branches=() are empty -- no carrier anywhere records this branch's own
+    gate-pause identity. NET POSITION ITEM (1) IS FALSIFIED -- delivery-cell construction alone cannot
+    fix the round-3 repro; the fix needs a NEW per-branch carrier on PeerFanOutResumeState/
+    FanOutResumeState, which is a CP-spec-owned additive schema change (Class 1, not impl discretion).
+    Filed as .harness/class_1_fork_b72_gate_ownership_missing_carrier.md. Status flips
+    registered_finding -> design_substrate_gated (mirrors the B-70 discriminator). No design-substrate
+    edit, no code edit (debug instrumentation added and reverted; git diff confirmed clean). Recommends
+    co-designing the new carrier's identity shape with B-71's already-registered keyed-addressing
+    question, since both need the same answer to "what identifies a not-yet-dispatched gate-owning
+    branch, compatible with property 1's fixed run_id-shaped key".
+    UPDATE 2026-07-25 round 6 continued -- a second instrumentation pass (terminal_dispositions dump
+    at workflow_driver.py:9698) confirms the mechanism directly (not just the outcome) --
+    terminal_dispositions={} branch_failed=True for this branch's ordinal; branch_failed derives from
+    the gather() BaseException scan, independent of terminal_dispositions, which is why no
+    FanOutBranchResumeState/branches entry is ever produced. Also flags an unexplained datum for the
+    spec-leg -- root pause_reason is EXPLICIT_OPERATOR, not HITL_PENDING, possibly related to round 3's
+    own noted "separate, not-yet-understood quirk"; the new carrier's reason-labeling convention needs
+    its own design decision against _collect_gate_owning_run_ids' existing HITL_PENDING leaf test, not
+    an assumed compatibility. Section 4 now states the carrier as a REQUIREMENT (identity +
+    B-71-compatible key shape + reason-labeling decision), not a prescribed field name/type -- round 5's
+    own lesson about premature carrier-shape prescription. Operator decision owed -- open the CP spec-leg now, co-designed with B-71 (recommended; note this is
+    now a two-row co-design, wider than the single-delta B-70/B-33/B-39 precedent it otherwise mirrors)
+    or hold both B-72 and B-71. Full detail at the fork doc above.
   council: RETIRED "skip-a-gate vs strand-a-descendant" framing (2026-07-25 round 2) -- the spec's
     mechanism ROUTES a resolved answer via hitl_response_for(child_run_id), it does not skip gate
     evaluation. Design-risk flag RELOCATES, not deleted -- the deferred resolver must independently
