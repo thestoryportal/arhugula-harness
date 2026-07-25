@@ -633,6 +633,12 @@ def _strip_default_fanout_resume_fields(
     # same drop-when-default discipline as `synthesis_step_id`/`paused_child_branches`).
     if not carrier.get("effect_fence_paused_branches"):
         carrier.pop("effect_fence_paused_branches", None)
+    # B-72 impl leg (CP spec v1.108 §1.3a): `pre_dispatch_gate_owning_branches` is a NEW
+    # default-empty field on both fan-out carriers; `model_dump` always emits it (as `[]`),
+    # which would change the hash of every pre-existing snapshot — drop it when empty (the
+    # same drop-when-default discipline as `effect_fence_paused_branches`).
+    if not carrier.get("pre_dispatch_gate_owning_branches"):
+        carrier.pop("pre_dispatch_gate_owning_branches", None)
     paused_children = carrier.get("paused_child_branches")
     if isinstance(paused_children, list):
         for pcb in cast("list[Any]", paused_children):

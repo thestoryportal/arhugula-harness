@@ -66,7 +66,7 @@ from harness_cp.engine_class import EngineClass
 from harness_cp.hitl_placement import HITLPlacement, HITLPlacementKind, HITLResult
 from harness_cp.hitl_response_palette import HITLResponse
 from harness_cp.hitl_timeout_degradation import WebhookConfig
-from harness_cp.pause_resume_protocol_types import ResumeContext
+from harness_cp.pause_resume_protocol_types import ResumeContext, WorkflowPauseReason
 from harness_cp.routing_manifest_residence import RoutingManifest
 from harness_cp.sub_agent_brief import (
     ClearTaskBoundaries,
@@ -470,78 +470,72 @@ async def test_fanout_branch_own_gate_pauses_on_first_dispatch(
 
 
 @pytest.mark.asyncio
-async def test_fanout_branch_gate_resume_with_resolved_answer_re_fires(
+async def test_fanout_branch_gate_resume_with_resolved_answer_is_consumed(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     _captured_webhook_requests: list[httpx.Request],
 ) -> None:
-    """THE B-72 CORE ASSERTION, PINNED AS A CONFIRMED GAP.
+    """THE B-72 CORE ASSERTION — CONFIRMS THE FIX (CP spec v1.108 §1 property 6 impl leg).
 
-    Deliberately asserts the CURRENTLY-OBSERVED (broken) behavior directly,
-    rather than wrapping a "correct" assertion in a blanket
-    `@pytest.mark.xfail` — per out-of-family review (codex round 1 on this
-    PR): a blanket `xfail` swallows ANY failure (an unrelated `resume()`
-    regression would still report `xfailed`, hiding it), and asserting only
-    `resumed.status` is too weak an oracle (an implementation that marked the
-    branch "completed" WITHOUT actually reaching `_dispatch_inner` would
-    satisfy it). Pins the confirmed shape with independent oracles, so any of
-    them drifting is a real, visible failure:
+    Originally pinned the CONFIRMED-BROKEN behavior directly (a delivered
+    answer was silently dropped, the gate re-fired forever) rather than a
+    blanket `@pytest.mark.xfail` — per out-of-family review (codex round 1 on
+    the original PR): a blanket `xfail` swallows ANY failure (an unrelated
+    `resume()` regression would still report `xfailed`, hiding it), and
+    asserting only `resumed.status` is too weak an oracle (an implementation
+    that marked the branch "completed" WITHOUT actually reaching
+    `_dispatch_inner` would satisfy it). Now pins the CONFIRMED-FIXED shape
+    with the SAME independent oracles, so any of them drifting is a real,
+    visible failure:
 
-    1. `resumed.status == "paused"` (re-paused, not completed, not corrupted)
-    2. `resumed.failure_cause is None` (a clean re-pause, not an error)
-    3. `resumed.pause_snapshot is not None` (codex round 4 on this PR: without
-       this, a re-fire that silently drops the snapshot — status='paused'
-       with no way to resume again — would slip through every other
-       assertion above unnoticed, contradicting the documented "clean
-       infinite re-pause" claim)
-    4. `resumed.workflow_id == paused.workflow_id` (run identity preserved
-       across the resume cycle)
-    5. `len(_captured_webhook_requests) == 2` (re-escalated — the gate fired
-       a SECOND time; 1 would mean it correctly consumed the resolved answer)
-    6. `sub_agent_dispatcher_calls == []` — a DIRECT spy on
+    1. `len(_captured_webhook_requests) == 1` (NOT re-escalated — the branch's
+       own gate consumed the delivered answer on resume instead of re-firing
+       a second webhook POST).
+    2. `sub_agent_dispatcher_calls` has exactly 1 entry — a DIRECT spy on
        `RuntimeSubAgentDispatcher.dispatch` (not a proxy via the Anthropic
-       client — see codex round 2 below for why the proxy was insufficient).
-       Proves the real dispatcher was NEVER reached, i.e. the branch's own
-       gate re-fired BEFORE ever attempting to dispatch the child at all.
+       client). Proves the real dispatcher WAS reached this time, i.e. the
+       delivered `hitl_response` unblocked the gate rather than re-pausing it.
+    3. `resumed.pause_snapshot is not None` (a caller-facing dead-end — status
+       'paused' with no way to resume again — would slip through the other
+       assertions unnoticed).
+    4. `resumed.workflow_id == paused.workflow_id` (run identity preserved
+       across the resume cycle).
+    5. `resumed.pause_snapshot.pause_reason == EXPLICIT_OPERATOR`, NOT
+       `HITL_PENDING` — see the SEPARATE-ISSUE note below for why the run
+       re-pauses a SECOND time despite the HITL gate itself being genuinely
+       consumed.
 
     Per `ResumeContext.hitl_responses`'s own docstring, `None` (the default)
     means every gate-owning branch resolves to the uniform `hitl_response`, so
-    a single-gate-owning-branch case like this one should work via the
-    uniform field alone if the delivery mechanism existed.
+    this single-gate-owning-branch case resolves via the uniform field alone
+    — CP spec v1.108 §1.1(b)'s delivery-cell construction at the fan-out
+    dispatch site, threaded onto the branch's `hitl_delivery_holder` exactly
+    like the LINEAR path's resume_at reconstruction.
 
-    THE FIX TARGET (what this test's assertions should become once the
-    deferred wiring lands — see `.harness/post-phase-8-forward-register.md`
-    B-72) is DELIBERATELY NOT stated as a specific terminal `RunStatus` here.
-    Codex round 2 on this PR empirically bypassed
-    `RuntimeHITLGateComposer.dispatch` entirely (monkeypatched straight to
-    `_dispatch_inner`) and found the run STILL ends `status='paused'`
-    (`pause_reason='explicit_operator'`), with ZERO Anthropic calls, even
-    though `RuntimeSubAgentDispatcher.dispatch` WAS reached and the branch's
-    own `FanOutBranchResumeState.terminal_status` came back `'completed'`
-    with `output=None`. This is a SEPARATE, not-yet-understood behavior of
-    this test's specific child shape (`EngineClass.PURE_PATTERN_NO_ENGINE`,
-    zero-content child step) — unrelated to B-72's HITL delivery-mechanism
-    gap, and out of scope to chase down here. The load-bearing, CONFIRMED-safe
-    oracle is therefore assertion 4 above (was the dispatcher reached at
-    all), not the run's eventual terminal status. When the deferred wiring
-    lands, assertion 4 should flip to a NON-empty `sub_agent_dispatcher_calls`
-    list and assertion 3 should drop to 1 webhook POST — update THOSE two
-    assertions; do not assume `status == "completed"` without first
-    empirically re-checking what a genuinely-consumed gate produces for this
-    child shape.
+    SEPARATE ISSUE (pre-existing, confirmed via direct empirical
+    re-verification per this module's own prior guidance — "do not assume
+    `status == 'completed'` without first empirically re-checking"): the
+    dispatcher spy confirms `RuntimeSubAgentDispatcher.dispatch` IS reached
+    (assertion 2), but the run still ends `status='paused'` a SECOND time
+    (`pause_reason='explicit_operator'`, `FanOutBranchResumeState.
+    terminal_status='completed'` with `output=None` — an ordinary
+    ran-and-errored branch, folded through the SAME `pause` cascade-policy
+    path as any other branch failure). This is a DIFFERENT, unrelated
+    behavior of this test's specific child shape
+    (`EngineClass.PURE_PATTERN_NO_ENGINE`, zero-content child step) —
+    orthogonal to B-72's HITL delivery-mechanism gap this test targets, and
+    out of scope to chase down here (exactly as this module's docstring
+    anticipated before the fix landed). Assertion 5 pins that the SECOND
+    pause is a genuine, ordinary branch failure (EXPLICIT_OPERATOR) and NOT
+    a re-fired HITL gate (HITL_PENDING) — the discriminator that proves this
+    is the separate issue, not a recurrence of the fixed one.
 
-    NOTE (codex round 1 on this PR): this single-branch, single-gate-owning
-    reproduction confirms the LIVENESS symptom (the gate never consumes a
-    delivered answer) but does NOT by itself fully scope the eventual fix's
-    branch-addressing mechanism. Here the gate fires BEFORE `_dispatch_inner`
-    ever creates a child run, so the resulting `PauseSnapshot` carries no
-    child run ID or branch-specific identity — `hitl_response_for(child_run_id)`
-    cannot distinguish two PEER gate-owning branches in this exact shape,
-    since neither would have a child run yet either. The register's
-    `hitl_response_for(child_run_id)`-based close-out steps additionally need
-    either a multi-peer-branch reproduction, or grounding on how a branch's
-    OWN (pre-dispatch) identity would be exposed for addressing, before the
-    fix is genuinely scoped for the 2+-gate-owning-branches case.
+    NOTE (codex round 1 on the original PR, still accurate): this
+    single-branch, single-gate-owning reproduction confirms + fixes the
+    LIVENESS symptom (the gate now consumes a delivered answer) but does NOT
+    by itself close the multi-peer keyed-addressing case (`B-72` net-position
+    items (2)/(3)/(4), `B-71`-gated) — see CP spec v1.108 §1.2's own scope
+    note.
     """
     anthropic_client = _SucceedingAnthropicClient()
     _install_fake_providers(monkeypatch, anthropic_client)
@@ -579,37 +573,31 @@ async def test_fanout_branch_gate_resume_with_resolved_answer_re_fires(
     )
 
     assert isinstance(resumed, RunResult)
-    assert resumed.status == "paused", (
-        f"B-72 gap shape changed: expected the branch's own gate to re-fire "
-        f"and re-pause (status='paused'); got status={resumed.status!r} "
-        f"failure_cause={resumed.failure_cause!r}. See the docstring's FIX "
-        f"TARGET note before assuming this means the deferred wiring landed "
-        f"— re-verify what a genuinely-consumed gate produces for this "
-        f"child shape before updating this assertion."
+    assert len(_captured_webhook_requests) == 1, (
+        f"expected the branch's own gate to consume the delivered answer "
+        f"(NO re-escalation, still 1 webhook POST total); got "
+        f"{len(_captured_webhook_requests)} POST(s) — a 2nd POST would mean "
+        f"the delivery-cell wiring regressed and the gate re-fired instead "
+        f"of consuming the resolved response"
     )
-    assert resumed.failure_cause is None, (
-        f"expected a clean re-pause (no error), got failure_cause={resumed.failure_cause!r}"
+    assert len(sub_agent_dispatcher_calls) == 1, (
+        f"expected the real RuntimeSubAgentDispatcher to be reached exactly "
+        f"once — the branch's own gate consumed the delivered answer and let "
+        f"the dispatch through; got {len(sub_agent_dispatcher_calls)} "
+        f"dispatcher call(s)"
     )
     assert resumed.pause_snapshot is not None, (
         "expected the re-pause to carry a fresh, resumable pause_snapshot — "
-        "status='paused' with pause_snapshot=None would mean the gate "
-        "re-fired AND the run silently became unresumable, contradicting "
-        "the documented 'infinite re-pause, no state corruption' shape "
-        "(codex round 4 on this PR: without this assertion, a caller-facing "
-        "dead-end would slip through all other assertions unnoticed)"
+        "status='paused' with pause_snapshot=None would mean the run "
+        "silently became unresumable"
     )
     assert resumed.workflow_id == paused.workflow_id, (
         "expected the re-paused run to preserve its workflow identity across the resume cycle"
     )
-    assert len(_captured_webhook_requests) == 2, (
-        f"expected the branch's own gate to re-escalate (2nd webhook POST) "
-        f"since it never consumed the delivered answer; got "
-        f"{len(_captured_webhook_requests)} POST(s)"
-    )
-    assert sub_agent_dispatcher_calls == [], (
-        f"expected the real RuntimeSubAgentDispatcher to NEVER be reached — "
-        f"the branch's own gate re-fired before ever attempting to dispatch "
-        f"the child; got {len(sub_agent_dispatcher_calls)} dispatcher "
-        f"call(s), meaning the child dispatch WAS attempted despite the gate "
-        f"re-firing (a different, not-yet-understood failure shape)"
+    assert resumed.pause_snapshot.pause_reason is WorkflowPauseReason.EXPLICIT_OPERATOR, (
+        f"expected the SECOND pause to be an ORDINARY branch failure "
+        f"(EXPLICIT_OPERATOR) — the separate, pre-existing child-dispatch-shape "
+        f"issue this module's docstring documents — NOT a re-fired HITL gate "
+        f"(HITL_PENDING), which would mean the B-72 fix regressed; got "
+        f"pause_reason={resumed.pause_snapshot.pause_reason!r}"
     )
