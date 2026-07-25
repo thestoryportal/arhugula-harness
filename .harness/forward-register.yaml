@@ -2068,6 +2068,17 @@ items:
     EvaluatorOptimizerResumeState/HandoffResumeState carriers as a distinct, ungrounded, out-of-
     scope gap for a future arc's own reproduction-first grounding pass, not silently folded into
     this delta's build scope. 5 rounds total to convergence.
+    ROUND 6 CODEX FIX (2026-07-25, same branch, pre-merge). Codex caught that round 5's own fix
+    under-scoped -- HIERARCHICAL_DELEGATION was omitted despite recursively reusing
+    _execute_orchestrator_workers per U-CP-88/89 (confirmed by direct code read of
+    workflow_driver.py:13745-13849 -- _execute_hierarchical_delegation takes the identical
+    crash_fan_out_resume FanOutResumeState/PeerFanOutResumeState parameter and threads it through
+    the same helper, not a separate implementation) and sharing the identical carrier being amended
+    -- leaving the contract inconsistent with the runtime call graph it constrains. Fixed -- section
+    1.1 and section 1.2b now include HIERARCHICAL_DELEGATION on carrier-identity grounds, not
+    reproduction grounds; the plan's coverage row already amends _execute_orchestrator_workers
+    directly, which covers every HIERARCHICAL_DELEGATION recursion level automatically, no separate
+    call site owed. 6 rounds total to convergence.
   council: RETIRED "skip-a-gate vs strand-a-descendant" framing (2026-07-25 round 2) -- the spec's
     mechanism ROUTES a resolved answer via hitl_response_for(child_run_id), it does not skip gate
     evaluation. Design-risk flag RELOCATES, not deleted -- the deferred resolver must independently
