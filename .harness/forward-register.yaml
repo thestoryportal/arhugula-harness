@@ -1909,8 +1909,13 @@ items:
     _execute_orchestrator_workers ~11696-11710 -- mirroring workflow_driver.py:4766-4777 LINEAR-only
     construction) ONLY when this internal identity is the sole unaddressed member per property 4/6 own
     SOLE-membership rule -- NEVER via hitl_response_for(child_run_id), which this branch has none of.
-    Items (2)/(3)/(4) below remain B-71-gated/open, unchanged by the spec leg. Full detail at CP spec
-    v1.108 + .harness/class_1_tension_b72_pre_dispatch_gate_owning_branch_identity.md.
+    Items (2)/(3)/(4) below remain open, unchanged by the spec leg -- only item (2) (keyed multi-peer
+    addressing) is B-71-gated per CP spec v1.108 SS1.2's own scope note; item (3) (property 4's general
+    resolver set-membership mechanism) is independently deferred to the impl leg, not B-71-related; item
+    (4) (B-72 own round-1 hybrid case) needs its own reproduction before any design, also not B-71-related
+    (codex out-of-family review caught this register row overbroadly labeling all three B-71-gated,
+    2026-07-25). Full detail at CP spec v1.108 +
+    .harness/class_1_tension_b72_pre_dispatch_gate_owning_branch_identity.md.
     --- Original (now-superseded) recipe + append-only correction history, preserved for provenance ---
     Build the deferred fan-out HITL delivery-mechanism wiring -- call resume_context.
     hitl_response_for(child_run_id) at the fan-out branch dispatch site and construct a
