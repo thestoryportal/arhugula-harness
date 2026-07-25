@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `3f4ee0ff9f29` |
+| `workspace_state_hash` | `c3fe4823745c` |
 | `last_refreshed` | 2026-07-25T00:00:00Z |
-| `git_head` | `0e7e60a6` —  |
+| `git_head` | `f0374658` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 98 |
 
@@ -51,11 +51,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1108 | 2026-07-25 | docs(B-72): named the dispatch-idempotency-vs-addressing category ambiguity in the existing register text; retracted an unverified branch_path addressing-key hypothesis (advisor()-caught before write-up); corrected a stale flaky-test note. Doc-only. |
 | PR #1107 | 2026-07-25 | B-72 reproduction shipped: real-stack test confirms the fan-out HITL delivery-mechanism gap empirically (dispatcher-spy oracle, mutation-probed). 5 codex rounds to convergence; merge-gate 3-lens all-approve at round 1. Also landed the merge-gate log entry as a small follow-up commit. |
 | PR #1103 | 2026-07-25 | B-68 closed: protected result store GC/publish race fixed (mtime-authority age signal, filesystem-identity-keyed lock, bounded lock-hold across the fast candidate-selection phase only). 5 narrower residuals registered (B-73-B-77) per the non-convergent-adversarial-hardening-arms-race discriminator after 8 out-of-family Codex rounds. Merge-gate 2 rounds (round 1 fixed a flaky test-witness; round 2 all-approve). |
 | PR #1105 | 2026-07-25 | B-72 round-2 reframe: verified HITLDeliveryCell is constructed exactly once codebase-wide (LINEAR-only), and CP spec's own hitl_response_for docstring confirms the fan-out delivery mechanism is deliberately deferred (section 1.3) -- not a surprising bug, the CP spec's own acknowledged gap. Retired skip-gate-vs-strand-descendant council framing; relocated the design-risk flag to property-4 multi-child fallback-safety (a prior draft already failed review there). Reproduction remains the unskippable first step of the next build session. |
 | PR #1104 | 2026-07-25 | B-72 doc-only grounding: confirmed via direct trace that a re-fired ancestor SUB_AGENT_BOUNDARY HITL gate's signal (BaseException) is uncaught in the fan-out branch-dispatch chain, captured inertly by gather(return_exceptions=True), not re-raised by _reraise_captured_fence_signal (B-60's DispatchFenceTrippedSignal-only scope), correctly flagged any_failed but with no paused_child_dispositions entry -- run finishes PARTIAL with the cursor lost. Reproduction (~700-line real-stack scaffold mirroring test_u_rt_95) deliberately deferred to next session. |
-| PR #1102 | 2026-07-25 | B-30 close-out step 4 built -- real engine_replay_disposition threaded into the 3 live cost-attribution composers (LLM/tool/validator dispatch) via the existing REPLAY_DISPOSITION_MAPPING[EngineClass] table; webhook deferred to FM-2 (dormant singleton); steps (1) ingest_span-consumer-absent and (2) double-billing-not-live re-grounded and recorded. merge-gate caught + fixed 2 real findings (stale forward-register.yaml row, missing call-site-level test witnesses). |
 ---
 
 ---
