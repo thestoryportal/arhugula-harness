@@ -1924,7 +1924,18 @@ items:
     cannot by itself distinguish two PEER gate-owning branches in this shape. This reproduction scopes the
     single-branch LIVENESS gap; the multi-branch addressing mechanism needs either a multi-peer-branch
     repro or grounding on branch-own pre-dispatch identity before the fix is genuinely scoped.
-    See .harness/post-phase-8-forward-register.md B-72 for full detail.
+    UPDATE 2026-07-25 round 4 -- re-confirmed by direct read that hitl_delivery_holder/hitl_delivery_cell
+    stay confined to _execute_workflow_body; _execute_parallelization and _execute_orchestrator_workers
+    reference neither (matches round 2, not a new finding). The genuinely new observation -- round 1's
+    own text frames this as a dispatch-idempotency defect (no addressing key needed, just a
+    first-dispatch-vs-resume-forward check), while round 2's reframe frames it as an addressing/delivery
+    defect (needs a per-branch key) -- these do not reconcile and nobody had named the ambiguity. A
+    mid-pass hypothesis floating branch_path as that key was advisor()-rejected before write-up -- the
+    single-branch repro tests zero multi-branch addressing, so the "collision only hits nested
+    grandchildren, not peers" claim is unverified, and it is exactly the reading the code's own
+    keying-defect note warns against reinventing. Explicitly NOT a finding of this pass. First question
+    owed before design or code -- dispatch-idempotency (b) or addressing/delivery (a); see
+    .harness/post-phase-8-forward-register.md B-72 round-4 update for full detail.
   council: RETIRED "skip-a-gate vs strand-a-descendant" framing (2026-07-25 round 2) -- the spec's
     mechanism ROUTES a resolved answer via hitl_response_for(child_run_id), it does not skip gate
     evaluation. Design-risk flag RELOCATES, not deleted -- the deferred resolver must independently
