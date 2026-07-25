@@ -1936,12 +1936,32 @@ items:
     keying-defect note warns against reinventing. Explicitly NOT a finding of this pass. First question
     owed before design or code -- dispatch-idempotency (b) or addressing/delivery (a); see
     .harness/post-phase-8-forward-register.md B-72 round-4 update for full detail.
+    UPDATE 2026-07-25 round 5 (systems-architect tension-resolution mode, 2 out-of-family Codex
+    corrections) -- the (a)-vs-(b) framing was the wrong axis for the round-3 REPRODUCTION's narrower
+    scenario specifically -- CP spec v1.106 section 1.2 properties 4-5 distinguish gate-owning branches
+    (need an addressed answer, category a) from transitively-paused container/ancestor branches
+    (re-entered unconditionally, no key, category b) as two DIFFERENT branch roles, not competing
+    theories -- and the round-3 repro (single PARALLELIZATION branch, own SUB_AGENT_BOUNDARY placement,
+    no nested child) is confirmed gate-owning, so that narrower scenario is category (a). B-72's OWN
+    original registered scenario above (a branch that already dispatched into its own gate, got
+    approved, and is now resume-forwarded toward its self-dispatched deeper-paused descendant) is a
+    THIRD, hybrid case property 5 does not cover (it requires "never itself dispatched into a HITL
+    gate") -- this hybrid case is NOT resolved by round 5 and stays open. The addressing key itself for
+    the gate-owning case also stays open -- CP spec property 1 normatively fixes the hitl_responses key
+    shape to run_id, not impl discretion, so any fix needs a run_id-compatible pre-dispatch carrier,
+    not merely any existing branch identity. Full detail + both codex-caught corrections at
+    .harness/post-phase-8-forward-register.md B-72 round-5 update.
   council: RETIRED "skip-a-gate vs strand-a-descendant" framing (2026-07-25 round 2) -- the spec's
     mechanism ROUTES a resolved answer via hitl_response_for(child_run_id), it does not skip gate
     evaluation. Design-risk flag RELOCATES, not deleted -- the deferred resolver must independently
     satisfy property 4's multi-child fallback-safety invariant, and a prior draft's counting mechanism
     was already found by out-of-family review to strand a container branch -- worth a dyadic council
     pass on the property-4-safe resolver design once the reproduction pins the observable shape.
+    UPDATE 2026-07-25 round 5 -- council scope is NOT narrowed by round 5's category resolution; it now
+    covers (1) the run_id-compatible pre-dispatch addressing-key design for the round-3-confirmed
+    gate-owning case, (2) property 4's resolver set-membership mechanism, and (3) B-72's own original
+    hybrid scenario (previously-gate-owning, now forwarding past its own already-satisfied gate) that
+    round 5 re-opened -- property 5 does not settle it, so it is not safely retirable from council scope.
   heading: '### B-72 · A `SUB_AGENT_DISPATCH` step''s own `SUB_AGENT_BOUNDARY` HITL gate can
     re-fire on every resume-forward of an already-dispatched, deeper-paused child, discarding
     the child''s `paused_child_branches` cursor *(registered at the B-39 impl-leg Slice B
