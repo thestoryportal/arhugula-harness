@@ -59,13 +59,13 @@
 
 snapshot:
   total: 78
-  open: 0
-  design_substrate_gated: 1
+  open: 1
+  design_substrate_gated: 0
   registered_finding: 14
   operator_gated: 1
   held: 1
   closed: 61
-  identity_digest: 551a8a27b88a7688
+  identity_digest: 1986bbaa8f042274
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -1888,7 +1888,7 @@ items:
 - id: B-72
   title: SUB_AGENT_DISPATCH step's own SUB_AGENT_BOUNDARY HITL gate can re-fire on resume-forward,
     discarding an already-paused descendant's cursor
-  status: design_substrate_gated
+  status: open
   summary: hitl_delivery_holder is never threaded to fan-out branches, so a SUB_AGENT_DISPATCH
     branch with its own SUB_AGENT_BOUNDARY placement re-evaluates its gate on every resume-forward;
     a fresh DURABLE_ASYNC re-pause has no evident mechanism to preserve the branch's prior-round
@@ -2004,7 +2004,24 @@ items:
     only at actual dispatch time. Deterministic-minting alone does not cover the repro's own shape.
     Full detail (incl. an unresolved observation about whether the round-3 repro's SOLE-branch case can
     be fixed via the uniform fallback without a property-1-compliant external identity at all) at the
-    fork doc's new section 7. Spec-leg authoring is the next action, not yet started.
+    fork doc's new section 7.
+    SPEC LEG LANDED 2026-07-25 -- CP spec v1.107 -> v1.108 (NEW additive SS1.2 property 6, systems-architect
+    tension-resolution mode, advisor() unavailable at authoring time, grounded directly against verbatim
+    property 1/4/5 text + verbatim sub_agent_dispatch.py code) + CP plan v2.43 -> v2.44 (deferred coverage-
+    matrix row) + 2 clearance markers. Resolves the (a)/(b)/(c) framing -- neither widening property 1's key
+    nor a separate delivery path is needed; a pre-dispatch gate-owning branch is counted in property 4's
+    unaddressed-set test via an internal-only identity, never hitl_responses-keyed. B-71 confirmed NOT a
+    co-requisite for this specific fix. Out-of-family just codex-review (round 1, base=main) caught 2 real
+    [P1]s before merge -- (1) the plan delta's first-draft coverage row named only the counting/carrier side,
+    omitting the delivery-cell construction at the fan-out dispatch sites required to actually consume the
+    resolved response -- fixed, the row now explicitly names both; (2) the canonicalization bundle (clearance
+    markers, CLAUDE.md pointer bumps, this register update) was incomplete when the spec/plan text alone was
+    reviewed -- fixed by this update + the co-landing PR. Full detail at the tension record,
+    .harness/class_1_tension_b72_pre_dispatch_gate_owning_branch_identity.md. Status flips
+    design_substrate_gated -> open (spec-leg gate cleared; the impl leg -- code + tests wiring the new carrier
+    + the delivery-cell construction per CP plan v2.44 SS5's now-corrected row -- is the next buildable slice,
+    NOT yet opened, per the B-33/B-39/B-59/B-70 spec-leg/impl-leg precedent). Closes ONLY net-position item
+    (1); items (2)/(3)/(4) remain open exactly as rounds 5-7 scoped them.
   council: RETIRED "skip-a-gate vs strand-a-descendant" framing (2026-07-25 round 2) -- the spec's
     mechanism ROUTES a resolved answer via hitl_response_for(child_run_id), it does not skip gate
     evaluation. Design-risk flag RELOCATES, not deleted -- the deferred resolver must independently
