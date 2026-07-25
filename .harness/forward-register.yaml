@@ -1992,9 +1992,19 @@ items:
     its own design decision against _collect_gate_owning_run_ids' existing HITL_PENDING leaf test, not
     an assumed compatibility. Section 4 now states the carrier as a REQUIREMENT (identity +
     B-71-compatible key shape + reason-labeling decision), not a prescribed field name/type -- round 5's
-    own lesson about premature carrier-shape prescription. Operator decision owed -- open the CP spec-leg now, co-designed with B-71 (recommended; note this is
-    now a two-row co-design, wider than the single-delta B-70/B-33/B-39 precedent it otherwise mirrors)
-    or hold both B-72 and B-71. Full detail at the fork doc above.
+    own lesson about premature carrier-shape prescription.
+    OPERATOR RATIFIED 2026-07-25 (AskUserQuestion) -- open the CP spec-leg now, co-designed with B-71.
+    UPDATE round 7 (pre-authoring grounding) -- B-71's own close_out only exposes an ALREADY-DISPATCHED
+    child's run_id (an identifier that already exists), so the co-design is SEQUENTIAL not simultaneous --
+    this carrier's identity gets designed first, B-71 can echo it after. A second empirical check of
+    compose_child_run_id_seed (sub_agent_dispatch.py:363-395,1078-1098) found the deterministic
+    pre-dispatch minting path (round 5's own tiebreaker option) is GATED on subagent_child_recoverable
+    (engine in ESR/WAL/SAVE_POINT/RECONCILER_LOOP) -- for PURE_PATTERN_NO_ENGINE, the EXACT engine class
+    the round-3 repro uses, the seed falls through to None and a fresh non-deterministic uuid is minted
+    only at actual dispatch time. Deterministic-minting alone does not cover the repro's own shape.
+    Full detail (incl. an unresolved observation about whether the round-3 repro's SOLE-branch case can
+    be fixed via the uniform fallback without a property-1-compliant external identity at all) at the
+    fork doc's new section 7. Spec-leg authoring is the next action, not yet started.
   council: RETIRED "skip-a-gate vs strand-a-descendant" framing (2026-07-25 round 2) -- the spec's
     mechanism ROUTES a resolved answer via hitl_response_for(child_run_id), it does not skip gate
     evaluation. Design-risk flag RELOCATES, not deleted -- the deferred resolver must independently

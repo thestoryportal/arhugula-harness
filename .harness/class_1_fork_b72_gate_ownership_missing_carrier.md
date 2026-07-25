@@ -147,3 +147,53 @@ and `B-71` at `design_substrate_gated` pending a future session. A council pass 
 recommendation, likely C10 blast-radius + whichever voice owns liveness/fallback-safety composition) was
 already recommended for the property-4-safe resolver design broadly — this carrier gap is naturally in the
 same scope, not a separate council question.
+
+**OPERATOR RATIFIED 2026-07-25 (AskUserQuestion): open now, co-designed with `B-71`.**
+
+## §7 Round 7 (2026-07-25, pre-authoring grounding — narrows §4's requirement (2))
+
+Before writing any spec text, `advisor()` posed the discriminating question: does `B-71`'s own scope
+actually share ONE identity with this carrier gap, or does `B-71` reduce to echoing back whatever this
+carrier mints? Direct read of `B-71`'s full `close_out` (not the round-5 paraphrase): `B-71`'s registered
+scope is narrower than assumed — amend `HITLEscalationBrief` + the webhook payload to carry the ALREADY-
+DISPATCHED paused child's own `run_id` (an identifier that already exists once a child run is created).
+`B-71` does NOT mint an identity for a not-yet-dispatched branch; it only proposes exposing one that
+already exists. **This confirms the co-design is sequential, not simultaneous:** whatever this carrier
+gap needs is designed first; `B-71` can subsequently reuse or echo it, not the reverse.
+
+**A second, load-bearing empirical check — does the CP spec's own existing precedent for pre-dispatch
+identity minting (`compose_child_run_id_seed`, `sub_agent_dispatch.py:363-395`) generalize to this case?**
+Direct read of the composer's actual call site (`sub_agent_dispatch.py:1078-1098`): `_child_run_id_seed`
+is computed via `compose_child_run_id_seed` — a PURE, deterministic function of `parent_idempotency_key` +
+`branch_path` + `child_workflow_id`, all known before dispatch — but **only when the child is
+`subagent_child_recoverable`** (engine ∈ `{ESR, WAL, SAVE_POINT, RECONCILER_LOOP}`, per that predicate's
+own 3-conjunct docstring). For every OTHER engine class, including **`PURE_PATTERN_NO_ENGINE` — the exact
+engine class the round-3 repro's child uses** — all three `if`/`elif` branches at the call site fall
+through to `_child_run_id_seed = None`, and `child_workflow_runner` mints a **fresh, non-deterministic
+`uuid`** only at the moment dispatch actually happens.
+
+**This means round 5's own tiebreaker option — "mint the child's `run_id` earlier, property 1's key shape
+untouched" — is only PARTIALLY viable.** It works for the recoverable-engine subset (where a deterministic
+seed already exists and could plausibly be exposed earlier). It does **not** work for the non-recoverable
+subset, which is not a corner case — it is the exact shape the workspace's own reproduction test uses. For
+that subset, no stable identifier exists before the dispatch decision is made, and by construction none
+can be minted early (the fresh-uuid path exists specifically because these children have no durable store
+to key a deterministic seed against — minting one anyway would imply a durable identity for a child with
+no durable state, which is a different and larger change than "expose an existing value earlier").
+
+**Narrows the requirement stated at §4:** "compatible with whatever key shape `B-71` settles on" is not a
+free deferral — the CP spec text this leg produces must explicitly decide, for the non-recoverable-engine
+case specifically, between (b) widening property 1's fixed `run_id`-shaped key to a union that admits a
+branch-own identity, or (c) a separate, non-`hitl_responses` delivery path for this case, with property 4's
+safety invariant explicitly extended to cover it. **Observation, not yet a resolved finding:** the round-3
+repro's own shape (a SOLE gate-owning branch, no peers) is eligible for property 4's UNIFORM fallback
+(`resume_context.hitl_response`, no keyed map, no `hitl_responses` lookup at all) — the uniform-fallback
+arm's `run_id == hitl_uniform_fallback_eligible_run_id` comparison does not itself require an externally
+addressable, property-1-compliant identity; it only requires SOME per-branch-per-cycle-stable value the
+internal eligibility computation can count and compare against. Whether this observation narrows the FIX
+needed for the round-3 repro specifically (independent of the harder 2+-concurrent-non-recoverable-
+gate-owning-branches case, which genuinely has no addressable identity and stays open) is exactly the kind
+of subtle reasoning that has already been gotten wrong multiple times this arc (round 4's `branch_path`
+rejection, round 5's premature Class-3 framing) — **flagged for the spec-leg to verify carefully against
+the actual property 1/4 text and the `_collect_gate_owning_run_ids` call sites, not asserted as settled
+here.**
