@@ -65,7 +65,8 @@ from collections.abc import Callable
 from decimal import Decimal
 from typing import Any, cast
 
-from harness_cp.engine_namespace import ReplayDisposition
+from harness_cp.engine_class import EngineClass
+from harness_cp.engine_namespace import REPLAY_DISPOSITION_MAPPING, ReplayDisposition
 from harness_cp.f5_signing_key_resolution import SigningBackend
 from harness_cxa.cp_audit_conversion import cp_audit_to_od_audit
 from harness_is.state_ledger_entry_schema import Identifier
@@ -85,10 +86,23 @@ from harness_runtime.types import AuditLedgerWriter, CostAttributionChain
 #: overrides via bootstrap config per ADR-D5 v1.4 §1.4.1 + C-OD-21 §21.2.
 _DEFAULT_SIGNING_KEY_ID = "harness-cost-attribution-v1"
 
-#: Default ReplayDisposition for live tool dispatches outside a replay
-#: context. Per ADR-D1 v1.2 §1.1.1, NO_REPLAY is the PURE_PATTERN_NO_ENGINE
+#: Default ReplayDisposition when the caller has no `run_engine_class` in
+#: scope. Per ADR-D1 v1.2 §1.1.1, NO_REPLAY is the PURE_PATTERN_NO_ENGINE
 #: disposition — the dominant case for at-the-edge tool invocations.
 _DEFAULT_REPLAY_DISPOSITION = ReplayDisposition.NO_REPLAY
+
+
+def _resolve_replay_disposition(run_engine_class: EngineClass | None) -> ReplayDisposition:
+    """Map the workflow's declared engine class to its replay disposition.
+
+    Per ADR-D1 v1.2 §1.1.1 `REPLAY_DISPOSITION_MAPPING` (closed, total over
+    `EngineClass`). `None` falls back to `_DEFAULT_REPLAY_DISPOSITION`,
+    mirroring the LLM-dispatch precedent at
+    `cost_attribution_llm_dispatch.py`."""
+    if run_engine_class is None:
+        return _DEFAULT_REPLAY_DISPOSITION
+    return REPLAY_DISPOSITION_MAPPING[run_engine_class]
+
 
 #: Dispatch kind for tool-dispatch cost records (C-OD-15 §15.1.1) — the typed
 #: key for `RollupAxis.PER_DISPATCH_KIND`. The cross-family `provider_discriminator`
@@ -181,8 +195,14 @@ def attribute_tool_dispatch_cost(
     ledger_writer: Any = None,
     procedural_tier_snapshot_resolver: Callable[[], Identifier] | None = None,
     signing_backend: SigningBackend | None = None,
+    run_engine_class: EngineClass | None = None,
 ) -> SpanCostRecord:
     """Run the §C-OD-26.1 canonical cost-attribution chain for one tool dispatch.
+
+    `run_engine_class` (sourced from `step_context.run_engine_class`)
+    resolves the record's `engine_replay_disposition` via the ADR-D1 v1.2
+    §1.1.1 `REPLAY_DISPOSITION_MAPPING`; `None` falls back to `NO_REPLAY`
+    (B-30 close-out step 4 — mirrors the LLM-dispatch fix).
 
     Resolves tool-rate → computes cost per `cost_kind` formula → attaches
     idempotency-key → projects to CostRecordAuditPayload → converts via
@@ -294,7 +314,7 @@ def attribute_tool_dispatch_cost(
         total_cost=float(cost_decimal),
         total_latency_ms=0,  # latency observability deferred to follow-on arc
         derived_keys=(),
-        engine_replay_disposition=_DEFAULT_REPLAY_DISPOSITION,
+        engine_replay_disposition=_resolve_replay_disposition(run_engine_class),
         retry_attempt_number=None,
         retry_cause_attribution=None,
         is_replay_derived=False,

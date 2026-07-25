@@ -21,11 +21,23 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
+from harness_as.sandbox_tier import SandboxTier
+from harness_cp.engine_class import EngineClass
+from harness_cp.engine_namespace import REPLAY_DISPOSITION_MAPPING, ReplayDisposition
+from harness_cp.gate_level_rule import GateLevel
+from harness_cp.validator_framework_types import (
+    ValidatorEvaluation,
+    ValidatorNextAction,
+    ValidatorOutcome,
+    ValidatorResult,
+)
+from harness_cp.workflow_driver_types import StepExecutionContext, StepKind, WorkflowStep
 from harness_is.state_ledger_entry_schema import Actor, ActorClass
 from harness_is.state_ledger_write import read_ledger
 from harness_od.rate_table_types import RateTable, WebhookRate
 from harness_runtime.lifecycle.cost_attribution import RuntimeCostAttributionChain
 from harness_runtime.lifecycle.cost_attribution_validator_dispatch import (
+    CostAttributingValidatorHook,
     _compute_validator_cost,
     attribute_validator_dispatch_cost,
 )
@@ -142,8 +154,99 @@ def test_attribute_validator_dispatch_cost_returns_attached_record(
     assert attached.dispatch_kind == "validator"  # v1.30 — the PER_DISPATCH_KIND key
     assert attached.gen_ai_provider_name == "validator:schema-validator"
     assert attached.gen_ai_request_model == ""
+    assert attached.engine_replay_disposition == ReplayDisposition.NO_REPLAY  # default
+
+
+@pytest.mark.parametrize("engine_class", list(EngineClass))
+def test_attribute_validator_dispatch_cost_threads_real_engine_replay_disposition(
+    engine_class: EngineClass,
+    cost_chain: RuntimeCostAttributionChain,
+    audit_writer: _RecordingAuditWriter,
+) -> None:
+    """B-30 close-out step 4 — `engine_replay_disposition` resolves the
+    workflow's real declared `run_engine_class` via the ADR-D1 v1.2 §1.1.1
+    `REPLAY_DISPOSITION_MAPPING` instead of the pre-fix hard-coded
+    `NO_REPLAY`."""
+    rate_table = _make_rate_table(cpu_rate_per_ms=Decimal("0.01"))
+    attached = attribute_validator_dispatch_cost(
+        rate_table=rate_table,
+        cost_chain=cost_chain,
+        audit_writer=audit_writer,
+        validator_id="schema-validator",
+        execution_time_ms=10.0,
+        span_id="abcdef0123456789",
+        idempotency_key="validator-idem-1",
+        parent_idempotency_key="parent-idem-1",
+        workflow_id="test-wf",
+        parent_action_id="workflow:test-wf:step:0",
+        run_engine_class=engine_class,
+    )
+    assert attached.engine_replay_disposition == REPLAY_DISPOSITION_MAPPING[engine_class]
     assert attached.total_cost == pytest.approx(0.1, rel=1e-9)  # 10 ms × 0.01
     assert attached.total_latency_ms == 10
+
+
+@pytest.mark.asyncio
+async def test_on_post_evaluate_threads_real_run_engine_class_into_disposition(
+    cost_chain: RuntimeCostAttributionChain,
+    audit_writer: _RecordingAuditWriter,
+) -> None:
+    """B-30 close-out step 4 witness (merge-gate test-witness lens finding) —
+    proves the PRODUCTION entry point (`CostAttributingValidatorHook.
+    on_post_evaluate`, the real `ValidatorPostEvaluateHook` firing site per CP
+    spec v1.24 §28.10.1) actually threads `step_context.run_engine_class`
+    through to the composed `SpanCostRecord`, not just that
+    `attribute_validator_dispatch_cost` resolves the mapping correctly when
+    called directly with a manual kwarg. A revert of the
+    `run_engine_class=step_context.run_engine_class` threading at this hook's
+    call into `attribute_validator_dispatch_cost` would leave
+    `engine_replay_disposition` at the pre-fix `NO_REPLAY` default here and
+    fail this assertion."""
+    rate_table = _make_rate_table(cpu_rate_per_ms=Decimal("0.01"))
+    cost_record_sink: list = []
+    hook = CostAttributingValidatorHook(
+        rate_table=rate_table,
+        cost_chain=cost_chain,
+        audit_writer=audit_writer,
+        cost_record_sink=cost_record_sink,
+    )
+    step = WorkflowStep(
+        step_id="step-0",
+        step_kind=StepKind.INFERENCE_STEP,
+        step_payload={},
+    )
+    step_context = StepExecutionContext(
+        workflow_id="test-wf",
+        parent_action_id="workflow:test-wf:step:0",
+        parent_gate_level=GateLevel.AUTO,
+        parent_sandbox_tier=SandboxTier.TIER_1_PROCESS,
+        parent_actor=Actor(actor_class=ActorClass.OPERATOR, actor_id="harness-runtime"),
+        parent_entry_hash="",
+        parent_idempotency_key="parent-idem-1",
+        tenant_id=None,
+        step_index=0,
+        run_engine_class=EngineClass.SAVE_POINT_CHECKPOINT,
+    )
+    evaluation = ValidatorEvaluation(
+        result=ValidatorResult(
+            outcome=ValidatorOutcome.PASS,
+            fail_class=None,
+            fail_detail_hash=None,
+        ),
+        span_attributes={"step.id": "step-0"},
+        next_action=ValidatorNextAction.PROCEED,
+        burden_count=0,
+    )
+
+    await hook.on_post_evaluate(
+        step=step,
+        step_context=step_context,
+        evaluation=evaluation,
+        execution_time_ms=10.0,
+    )
+
+    assert len(cost_record_sink) == 1
+    assert cost_record_sink[0].engine_replay_disposition == ReplayDisposition.CHECKPOINT_RESUME
 
 
 def test_attribute_validator_dispatch_cost_writes_audit_entry(

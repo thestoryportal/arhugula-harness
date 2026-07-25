@@ -25,6 +25,8 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
+from harness_cp.engine_class import EngineClass
+from harness_cp.engine_namespace import REPLAY_DISPOSITION_MAPPING, ReplayDisposition
 from harness_is.state_ledger_entry_schema import Actor, ActorClass, Identifier
 from harness_is.state_ledger_write import read_ledger
 from harness_od.audit_signing_errors import AuditSigningFailedError
@@ -163,6 +165,40 @@ def test_canonical_json_byte_length_unicode_uses_utf8() -> None:
 
 
 # ---------------------------------------------------------------------------
+# B-30 close-out step 4 — real engine_replay_disposition threading
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("engine_class", list(EngineClass))
+def test_attribute_tool_dispatch_cost_threads_real_engine_replay_disposition(
+    engine_class: EngineClass,
+    cost_chain: RuntimeCostAttributionChain,
+    audit_writer: _RecordingAuditWriter,
+) -> None:
+    """`engine_replay_disposition` resolves the workflow's real declared
+    `run_engine_class` via the ADR-D1 v1.2 §1.1.1 `REPLAY_DISPOSITION_MAPPING`
+    instead of the pre-fix hard-coded `NO_REPLAY`."""
+    rate_table = _make_rate_table(
+        {"echo": ToolRate(cost_kind="flat_per_invocation", rate=Decimal("0.005"))}
+    )
+    attached = attribute_tool_dispatch_cost(
+        rate_table=rate_table,
+        cost_chain=cost_chain,
+        audit_writer=audit_writer,
+        tool_id="echo",
+        tool_args={"input": "hi"},
+        response={"output": "hi"},
+        span_id="abcdef0123456789",
+        idempotency_key="tool-idem-1",
+        parent_idempotency_key="parent-idem-1",
+        workflow_id="test-wf",
+        parent_action_id="workflow:test-wf:step:0",
+        run_engine_class=engine_class,
+    )
+    assert attached.engine_replay_disposition == REPLAY_DISPOSITION_MAPPING[engine_class]
+
+
+# ---------------------------------------------------------------------------
 # AC #1 (helper-layer) + AC #5 — full chain returns attached record + 1 audit write
 # ---------------------------------------------------------------------------
 
@@ -192,6 +228,7 @@ def test_attribute_tool_dispatch_cost_returns_attached_record(
     assert attached.span_id == "abcdef0123456789"
     assert attached.idempotency_key == "parent-idem-1"  # joins to parent
     assert attached.provider_discriminator is None  # v1.30 — no chain-level family tag
+    assert attached.engine_replay_disposition == ReplayDisposition.NO_REPLAY  # default
     assert attached.dispatch_kind == "tool"  # v1.30 — the PER_DISPATCH_KIND key
     assert attached.gen_ai_provider_name == "tool:echo"
     assert attached.gen_ai_request_model == ""

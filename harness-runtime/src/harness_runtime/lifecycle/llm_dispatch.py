@@ -74,6 +74,7 @@ from harness_cp.cp_shared_types import (
     RoutingDecisionTrace,
     TraceContext,
 )
+from harness_cp.engine_class import EngineClass
 from harness_cp.layer_budget import DEFAULT_LAYER_BUDGETS, LayerBudget
 from harness_cp.layered_routing_strategy import LayerDecisionFn
 from harness_cp.memory_access_mode import MemoryAccessMode
@@ -1819,6 +1820,7 @@ class RuntimeLLMDispatcher:
                         cache_attrs.cache_read_input_tokens if cache_attrs is not None else None
                     ),
                     tenant_id=step_context.tenant_id,
+                    run_engine_class=step_context.run_engine_class,
                 )
             except AUDIT_SIGNING_HARD_FAILURES as exc:
                 # codex [P1] on the B-65-A CP-side arc round 4 — `resolve_
@@ -3055,6 +3057,7 @@ def _attribute_cost_best_effort(
     cache_creation: int | None,
     cache_read: int | None,
     tenant_id: str | None,
+    run_engine_class: EngineClass | None = None,
 ) -> None:
     """Best-effort cost-attribution invocation per §C-OD-26.1 (U-OD-38).
 
@@ -3119,6 +3122,7 @@ def _attribute_cost_best_effort(
             # PER_PROVIDER_DISCRIMINATOR rollup is non-vacuous in production.
             # An LLM dispatch always has a provider ⟹ always a family tag.
             provider_discriminator=cross_family_tag_for_provider(provider_name),
+            run_engine_class=run_engine_class,
         )
     except AUDIT_SIGNING_HARD_FAILURES:
         # Codex round-4 P1 (PR B2a): a CONFIGURED signing backend's failure
