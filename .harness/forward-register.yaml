@@ -1720,7 +1720,12 @@ items:
     forwarding an already-paused descendant, distinct from consuming a delivery cell. Do NOT
     implement blind -- build a real reproduction (SUB_AGENT_DISPATCH step with its own DURABLE_ASYNC
     SUB_AGENT_BOUNDARY placement wrapping a nested-HITL child) before designing the fix, mirroring
-    test_u_rt_95_hitl_resume_consume_cycle_e2e.py's real-stack pattern. See
+    test_u_rt_95_hitl_resume_consume_cycle_e2e.py's real-stack pattern. UPDATE 2026-07-25 -- the
+    drop mechanism is now confirmed via direct trace (BaseException signal uncaught by the fan-out
+    branch try/except chain, captured inertly by gather(return_exceptions=True), not re-raised by
+    _reraise_captured_fence_signal which only recognizes _DispatchFenceTrippedSignal, correctly
+    flagged any_failed but with no paused_child_dispositions entry -- run finishes PARTIAL with the
+    cursor lost). Reproduction still not built; ready for a reproduction-first build next session. See
     .harness/post-phase-8-forward-register.md B-72 for full detail.
   council: TBD at build time -- real correctness/safety tradeoff (skip a gate vs. strand a
     descendant), worth a dyadic council pass (C10 blast-radius/gate-integrity vs. C-CP-21
