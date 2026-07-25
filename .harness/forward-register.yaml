@@ -59,13 +59,13 @@
 
 snapshot:
   total: 73
-  open: 1
+  open: 0
   design_substrate_gated: 0
   registered_finding: 11
   operator_gated: 1
   held: 1
-  closed: 59
-  identity_digest: 29ab1328db55d99c
+  closed: 60
+  identity_digest: 8b455a1e80dba45b
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -1636,12 +1636,14 @@ items:
   filing: .harness/class_2_fork_b70_effect_fence_resolution_uniform_fallback.md
   title: effect_fence_resolution_for's uniform-fallback semantics share B-39's cross-branch-misapplication
     hazard, unfixed in the already-shipped mechanism
-  status: open
+  status: closed
   summary: The shipped ResumeContext.effect_fence_resolutions/effect_fence_resolution_for mechanism
     (B-39's own modeling precedent) has the identical uniform-fallback-to-every-unaddressed-branch
     gap B-39's CP spec v1.106 section 1.2 property 4 just closed for hitl_responses -- unfixed
     here, since it predates and is out of this arc's scope. GROUNDED 2026-07-24; spec leg LANDED
-    2026-07-24 (CP spec v1.107 + plan v2.43). Impl leg not yet opened -- ready for build.
+    2026-07-24 (CP spec v1.107 + plan v2.43). IMPL LEG LANDED 2026-07-25 (PR 1101) -- the
+    resolver's tree-walk enumeration wired at LINEAR + ORCHESTRATOR + both fan-out consume
+    sites, plus the LINEAR site's round-3 map-addressability amendment. CLOSED.
   close_out: 'GROUNDED 2026-07-24 (fork filed, .harness/class_2_fork_b70_effect_fence_resolution_uniform_fallback.md),
     resolving both open questions the round-7 close_out deferred: (1) NO container/gate-owning
     split is needed (unlike B-39''s HITL fix) -- EffectFencePausedBranchResumeState''s own
@@ -1671,13 +1673,21 @@ items:
     design_substrate_gated -> open (spec-leg gate cleared; impl leg -- the resolver''s tree-walk
     enumeration of the unaddressed effect-fence-pause set, wired at the LINEAR + ORCHESTRATOR +
     two fan-out consume sites -- is the next buildable slice, NOT yet opened, per the B-33/B-39/B-59
-    precedent).'
+    precedent). **IMPL LEG LANDED 2026-07-25** (PR #1101, merged after 2 merge-gate rounds --
+    round 1 BLOCK on spec-conformance [_resolve_effect_fence_gated reimplemented
+    effect_fence_resolution_for inline instead of calling it, fixed to genuinely call the
+    existing method] + test-witness [sub_agent_dispatch.py''s forwarding of the new field had
+    no assertion, fixed; PARALLELIZATION peer 2-unaddressed-locations safety witness added
+    for symmetry with the ORCHESTRATOR_WORKERS one]; round 2 all-approve). 1767 harness-cp +
+    3046 harness-runtime tests green. B-70 CLOSED.'
+  pr: '#1101'
   council: no -- parity fix mirroring an already-ratified pattern (B-39's own property 4), not
     a fresh open design question; grounding confirmed no cross-domain tension.
   heading: '### B-70 · `effect_fence_resolution_for`''s uniform-fallback semantics share B-39''s
     cross-branch-misapplication hazard, unfixed in the already-shipped mechanism *(registered
     at the B-39 spec-leg PR #1092, out-of-family Codex round 3 (branch-vs-main), 2026-07-23;
-    GROUNDED + fork filed 2026-07-24; SPEC LEG LANDED 2026-07-24 — CP spec v1.107 + plan v2.43)*'
+    GROUNDED + fork filed 2026-07-24; SPEC LEG LANDED 2026-07-24 — CP spec v1.107 + plan v2.43;
+    IMPL LEG LANDED 2026-07-25 — PR #1101, CLOSED)*'
 - id: B-71
   title: Operator-facing HITL escalation requests carry no run-instance-distinct correlation
     identifier
