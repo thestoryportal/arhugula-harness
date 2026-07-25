@@ -2742,6 +2742,109 @@ def compute_hitl_uniform_fallback_eligible_run_id(
     return None
 
 
+def _collect_effect_fence_idempotency_keys(snapshot: PauseSnapshot) -> list[str]:
+    """Recursively collect every effect-fence-pause `idempotency_key` under `snapshot`,
+    across all THREE carriers (CP spec v1.107 §1.1): (a) the LINEAR path's own
+    `effect_fence_resume`; (b) the ORCHESTRATOR's own `orchestrator_effect_fence_resume`
+    (the FIRST-step analogue, populated by ORCHESTRATOR_WORKERS/HIERARCHICAL_DELEGATION
+    when the orchestrator's OWN dispatch, not a worker's, fence-pauses); and (c) every
+    fan-out `effect_fence_paused_branches` entry (PARALLELIZATION peers or
+    ORCHESTRATOR_WORKERS/HIERARCHICAL_DELEGATION workers), at any recursion depth.
+
+    B-70 impl leg (CP spec v1.107 §1.1) — the effect-fence analogue of
+    `_collect_gate_owning_run_ids`. Every captured entry is inherently gate-owning by
+    construction (§2's grounding — no property-5 container/gate-owning split is
+    needed here, unlike the HITL resolver), so this simply enumerates every candidate
+    key without a container/leaf classification. Recurses through BOTH
+    `fan_out_resume.paused_child_branches` and `peer_fan_out_resume.paused_child_
+    branches` (a transitively-paused SUB_AGENT_DISPATCH branch's nested child may
+    itself carry any of the three carriers at its own recursion depth). `handoff_
+    resume` / `evaluator_optimizer_resume` carry no effect-fence carrier (single-owner
+    sequential topologies with no fan-out barrier to pause at) and are not walked."""
+    keys: list[str] = []
+    if snapshot.effect_fence_resume is not None:
+        keys.append(snapshot.effect_fence_resume.idempotency_key)
+    if snapshot.orchestrator_effect_fence_resume is not None:
+        keys.append(snapshot.orchestrator_effect_fence_resume.idempotency_key)
+    resume_state = snapshot.fan_out_resume or snapshot.peer_fan_out_resume
+    if resume_state is not None:
+        for ef in resume_state.effect_fence_paused_branches:
+            keys.append(ef.idempotency_key)
+        for paused_child in resume_state.paused_child_branches:
+            keys.extend(_collect_effect_fence_idempotency_keys(paused_child.child_snapshot))
+    return keys
+
+
+def compute_effect_fence_uniform_fallback_eligible_key(
+    root_snapshot: PauseSnapshot | None,
+    resume_context: ResumeContext | None,
+) -> str | None:
+    """The SOLE unaddressed effect-fence-pause location's `idempotency_key` the
+    uniform `effect_fence_resolution` fallback may resolve this resume cycle, or
+    `None` when zero or 2+ locations are unaddressed by `resume_context.
+    effect_fence_resolutions`.
+
+    CP spec v1.107 §1.1(a) (safety rule): "The uniform `effect_fence_resolution`
+    value MAY be applied at a location ... ONLY when that location is the SOLE
+    member of the unaddressed effect-fence-pause set this cycle. When the
+    unaddressed set has 2+ members, EVERY member MUST re-pause INERT." Mirrors
+    `compute_hitl_uniform_fallback_eligible_run_id`'s discipline: this MUST be
+    computed ONCE against the TRUE ROOT `PauseSnapshot` (the caller-supplied
+    `pause_snapshot`/`pause_snapshot_input` at the depth-0 `resume()` call, BEFORE
+    any recursion narrows it to a subtree) and threaded down UNCHANGED to every
+    recursion level — a nested child's own `pause_snapshot_input` is only ITS OWN
+    subtree and structurally cannot see sibling locations paused elsewhere in the
+    full tree, so recomputing this independently at each recursion level cannot
+    satisfy the safety rule (a lone-looking pause may have an unaddressed sibling
+    elsewhere in the full tree it has no visibility into).
+
+    Unlike `compute_hitl_uniform_fallback_eligible_run_id`, no root-identity special
+    case is needed: an `idempotency_key` is always a genuine per-held-reserve key
+    (never a run_id standing in for "the run itself"), so `resume_context.
+    effect_fence_resolutions` membership is tested directly against every collected
+    key with no exclusion."""
+    if root_snapshot is None or resume_context is None:
+        return None
+    candidate_keys = _collect_effect_fence_idempotency_keys(root_snapshot)
+    resolutions = resume_context.effect_fence_resolutions or {}
+    unaddressed = [k for k in candidate_keys if k not in resolutions]
+    if len(unaddressed) == 1:
+        return unaddressed[0]
+    return None
+
+
+def _resolve_effect_fence_gated(
+    resume_context: ResumeContext | None,
+    idempotency_key: str,
+    eligible_key: str | None,
+) -> EffectFenceResolution | None:
+    """Per-key effect-fence resolution, gated by CP spec v1.107 §1.1(a)'s multi-location
+    safety rule. A map HIT on `resume_context.effect_fence_resolutions` is always safe
+    (it is addressed to THIS `idempotency_key` specifically) — mirrors `effect_fence_
+    resolution_for`'s map-hit behavior. The UNIFORM `effect_fence_resolution` fallback
+    is safe ONLY when `idempotency_key` is the sole member of the resume-cycle-wide
+    unaddressed effect-fence-pause set (`eligible_key`, computed ONCE at the root by
+    `compute_effect_fence_uniform_fallback_eligible_key` and threaded down unchanged —
+    see that function's docstring). When 2+ locations are unaddressed, every one of
+    them must receive `None` here so the caller's existing INERT re-pause applies —
+    never an auto-re-fire, never a cross-location misattribution of a judgment
+    intended for a different location. `resume_context.effect_fence_resolution_for`
+    is deliberately NOT called here: that method's uniform-fallback branch applies
+    unconditionally, which is exactly the unsafe shape this gate exists to replace."""
+    if resume_context is None:
+        return None
+    mapped = (
+        resume_context.effect_fence_resolutions.get(idempotency_key)
+        if resume_context.effect_fence_resolutions
+        else None
+    )
+    if mapped is not None:
+        return mapped
+    if idempotency_key == eligible_key:
+        return resume_context.effect_fence_resolution
+    return None
+
+
 def execute_workflow(
     manifest_entry: WorkflowManifestEntry,
     steps: Sequence[WorkflowStep],
@@ -2755,6 +2858,7 @@ def execute_workflow(
     sub_agent_descent: bool = False,
     resume_context: ResumeContext | None = None,
     hitl_uniform_fallback_eligible_run_id: str | None = None,
+    effect_fence_uniform_fallback_eligible_key: str | None = None,
 ) -> RunResult:
     """Execute the workflow per C-CP-25 §25.3 happy-path discipline.
 
@@ -2996,6 +3100,7 @@ def execute_workflow(
             # execute_workflow call's own top-level parameter; unmodified pass-through).
             resume_context=resume_context,
             hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
+            effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
         )
 
         # C-OD-25 §25.1 close-time attributes (4 of 12). Outcome enum serializes
@@ -3034,6 +3139,7 @@ def _execute_workflow_body(
     sub_agent_descent: bool = False,
     resume_context: ResumeContext | None = None,
     hitl_uniform_fallback_eligible_run_id: str | None = None,
+    effect_fence_uniform_fallback_eligible_key: str | None = None,
 ) -> tuple[RunResult, int]:
     """Execute the workflow body within the workflow.envelope OTel span.
 
@@ -4082,6 +4188,7 @@ def _execute_workflow_body(
             sub_agent_descent=sub_agent_descent,
             resume_context=resume_context,
             hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
+            effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
         )
     if strategy is _DriverStrategyStatus.EVALUATOR_OPTIMIZER:
         return _execute_evaluator_optimizer(
@@ -4099,6 +4206,7 @@ def _execute_workflow_body(
             sub_agent_descent=sub_agent_descent,
             resume_context=resume_context,
             hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
+            effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
         )
     if strategy is _DriverStrategyStatus.ORCHESTRATOR_WORKERS:
         # B-POSTJOIN-LLM-SYNTHESIS (CP spec v1.54 §3) — carve an opt-in terminal
@@ -4137,6 +4245,7 @@ def _execute_workflow_body(
             sub_agent_descent=sub_agent_descent,
             resume_context=resume_context,
             hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
+            effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
         )
     if strategy is _DriverStrategyStatus.HIERARCHICAL_DELEGATION:
         # B-HIERARCHICAL-PAUSE (R-FS-1) — HIERARCHICAL now threads the resume
@@ -4173,6 +4282,7 @@ def _execute_workflow_body(
             sub_agent_descent=sub_agent_descent,
             resume_context=resume_context,
             hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
+            effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
         )
     if strategy is _DriverStrategyStatus.DECENTRALIZED_HANDOFF:
         return _execute_decentralized_handoff(
@@ -4191,6 +4301,7 @@ def _execute_workflow_body(
             sub_agent_descent=sub_agent_descent,
             resume_context=resume_context,
             hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
+            effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
         )
 
     # Selective per-run replay-resumption via N-lookup over the existing
@@ -4577,11 +4688,28 @@ def _execute_workflow_body(
     # B-39 Slice B: `resume_context` replaces the retired ctx-level `resume_context_
     # holder` PEEK (byte-identical resulting values — same `ResumeContext` object, same
     # `.effect_fence_resolution` field read).
+    #
+    # B-70 impl leg, round-3 correction (CP spec v1.107 §1.1) — this site is now
+    # MAP-ADDRESSABLE: it consults `_resolve_effect_fence_gated` (reusing this
+    # carrier's OWN pre-existing `idempotency_key`) instead of reading `resume_
+    # context.effect_fence_resolution` directly. A prior draft phrased the safety
+    # rule around `effect_fence_resolution_for` calls only, which was a no-op here
+    # (this site never called that method) — out-of-family review found that let a
+    # co-existing fan-out/orchestrator pause correctly re-pause INERT under the rule
+    # while THIS site kept consuming the uniform value unconditionally, reproducing
+    # the exact cross-location misapplication the property exists to close. The gate
+    # (`_hitl_uniform_fallback... ` sibling `effect_fence_uniform_fallback_eligible_
+    # key`) is threaded exactly like the HITL fallback eligibility above.
     effect_fence_directive: EffectFenceResolutionDirective | None = None
     if resume_snapshot is not None and resume_snapshot.effect_fence_resume is not None:
-        if resume_context is not None and resume_context.effect_fence_resolution is not None:
+        _linear_fence_resolution = _resolve_effect_fence_gated(
+            resume_context,
+            resume_snapshot.effect_fence_resume.idempotency_key,
+            effect_fence_uniform_fallback_eligible_key,
+        )
+        if _linear_fence_resolution is not None:
             effect_fence_directive = EffectFenceResolutionDirective(
-                resolution=resume_context.effect_fence_resolution,
+                resolution=_linear_fence_resolution,
                 idempotency_key=resume_snapshot.effect_fence_resume.idempotency_key,
             )
     # B-39 Slice B (CP spec v1.106 §1) — resolve THIS execute_workflow call's own
@@ -4920,6 +5048,7 @@ def _execute_workflow_body(
             # step's context to forward into the recursive `execute_workflow` call).
             resume_context=resume_context,
             hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
+            effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
             # B-39 Slice B — the per-branch one-shot HITL delivery cell, set ONLY on
             # the RESUMED step (mirrors `effect_fence_resolution` immediately above).
             hitl_delivery_holder=(hitl_delivery_cell if step_index == resume_at else None),
@@ -7286,6 +7415,7 @@ def _execute_parallelization(
     sub_agent_descent: bool = False,
     resume_context: ResumeContext | None = None,
     hitl_uniform_fallback_eligible_run_id: str | None = None,
+    effect_fence_uniform_fallback_eligible_key: str | None = None,
 ) -> tuple[RunResult, int]:
     """Execute the `PARALLELIZATION` fan-out-barrier-aggregate strategy (U-CP-86).
 
@@ -7365,11 +7495,14 @@ def _execute_parallelization(
     )
     # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE / B-FANOUT-EFFECT-FENCE-PER-BRANCH-RESOLUTION — PEEK
     # (NOT consume — the HITL composer one-shot intact) the operator's resume context off the
-    # holder. Per paused peer below, `effect_fence_resolution_for(branch_key)` returns that
-    # branch's `effect_fence_resolutions` map entry if supplied, else the uniform
-    # `effect_fence_resolution` default — so two paused peers can resolve DIFFERENTLY in one
-    # resume (SKIP_AS_FIRED vs RE_FIRE; ABORT keeps its run-level-terminal semantic). None holder /
-    # no resolution for a branch's key → that paused peer re-pauses INERT (the #701 decline-mirror).
+    # holder. Per paused peer below, `_resolve_effect_fence_gated(branch_key, eligible_key)`
+    # (B-70 impl leg, CP spec v1.107 §1.1) returns that branch's `effect_fence_resolutions`
+    # map entry if supplied, else the uniform `effect_fence_resolution` default ONLY when
+    # `branch_key` is the resume-cycle-wide SOLE unaddressed location — so two paused peers can
+    # resolve DIFFERENTLY in one resume (SKIP_AS_FIRED vs RE_FIRE; ABORT keeps its
+    # run-level-terminal semantic), but the uniform fallback never cross-misattributes a
+    # judgment intended for a different, unaddressed location. None holder / no resolution for a
+    # branch's key → that paused peer re-pauses INERT (the #701 decline-mirror).
     #
     # B-39 Slice B: `resume_context` replaces the retired ctx-level `resume_context_
     # holder` PEEK (byte-identical resulting values — same `ResumeContext` object, same
@@ -7387,8 +7520,13 @@ def _execute_parallelization(
     # the ABORT branch keeps its directive → re-dispatch → EffectFenceAbortedError → terminal
     # FAILED. Per-branch-SCOPED abort (fire survivors anyway) is the registered follow-on
     # B-FANOUT-EFFECT-FENCE-PER-BRANCH-SCOPED-ABORT.
+    # B-70 impl leg (CP spec v1.107 §1.1) — gated via `_resolve_effect_fence_gated`
+    # instead of the unconditional `effect_fence_resolution_for` (the uniform-fallback
+    # branch is unsafe when 2+ locations are unaddressed this cycle; a map HIT is
+    # always safe and passes through unchanged).
     _any_fence_abort = _ef_resume_ctx is not None and any(
-        _ef_resume_ctx.effect_fence_resolution_for(_k) is EffectFenceResolution.ABORT
+        _resolve_effect_fence_gated(_ef_resume_ctx, _k, effect_fence_uniform_fallback_eligible_key)
+        is EffectFenceResolution.ABORT
         for _k in _recovered_effect_fence_paused.values()
     )
 
@@ -7597,6 +7735,7 @@ def _execute_parallelization(
         # compose_branch_child_context's model_copy (deliberately not reset).
         resume_context=resume_context,
         hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
+        effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
     )
 
     # R-003 active-workflow-context sidecar (resolved once per fan-out; the same
@@ -7663,8 +7802,12 @@ def _execute_parallelization(
         # paused peer resolves to ABORT, suppress this NON-ABORT peer's continue-resolution so it
         # re-pauses INERT (never fires) before the ABORT fails the run (Codex [P1]).
         _branch_fence_key = _recovered_effect_fence_paused.get(branch_index)
+        # B-70 impl leg (CP spec v1.107 §1.1) — gated via `_resolve_effect_fence_gated`
+        # (the uniform-fallback branch is unsafe when 2+ locations are unaddressed).
         _branch_resolution = (
-            _ef_resume_ctx.effect_fence_resolution_for(_branch_fence_key)
+            _resolve_effect_fence_gated(
+                _ef_resume_ctx, _branch_fence_key, effect_fence_uniform_fallback_eligible_key
+            )
             if (_branch_fence_key and _ef_resume_ctx is not None)
             else None
         )
@@ -9893,6 +10036,7 @@ def _execute_evaluator_optimizer(
     sub_agent_descent: bool = False,
     resume_context: ResumeContext | None = None,
     hitl_uniform_fallback_eligible_run_id: str | None = None,
+    effect_fence_uniform_fallback_eligible_key: str | None = None,
 ) -> tuple[RunResult, int]:
     """Execute the `EVALUATOR_OPTIMIZER` generate→evaluate→regenerate loop (U-CP-87).
 
@@ -10182,6 +10326,7 @@ def _execute_evaluator_optimizer(
             # B-39 Slice B — plain pass-through (no fan-out at this strategy).
             resume_context=resume_context,
             hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
+            effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
         )
         # B-NONLINEAR-OVERRIDE-PROVENANCE — buffer the per-step override entry
         # BEFORE dispatch (mirrors the linear path's pre-dispatch emission). A
@@ -10631,6 +10776,7 @@ def _execute_orchestrator_workers(
     sub_agent_descent: bool = False,
     resume_context: ResumeContext | None = None,
     hitl_uniform_fallback_eligible_run_id: str | None = None,
+    effect_fence_uniform_fallback_eligible_key: str | None = None,
 ) -> tuple[RunResult, int]:
     """Execute the `ORCHESTRATOR_WORKERS` orchestrator-dispatch-collect strategy (U-CP-88).
 
@@ -10723,11 +10869,14 @@ def _execute_orchestrator_workers(
     # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE / B-FANOUT-EFFECT-FENCE-PER-BRANCH-RESOLUTION — PEEK
     # (NOT consume — the HITL composer's one-shot consume stays intact, mirroring the linear path)
     # the operator's resume context off the holder. Per paused worker below,
-    # `effect_fence_resolution_for(branch_key)` returns that branch's `effect_fence_resolutions`
-    # map entry if supplied, else the uniform `effect_fence_resolution` default — so two paused
-    # workers can resolve DIFFERENTLY in one resume (SKIP_AS_FIRED vs RE_FIRE; ABORT keeps its
-    # run-level-terminal semantic). None when no holder / no resolution for a branch's key → that
-    # paused worker re-pauses INERT (never an auto-re-fire — the #701 decline-mirror).
+    # `_resolve_effect_fence_gated(branch_key, eligible_key)` (B-70 impl leg, CP spec v1.107
+    # §1.1) returns that branch's `effect_fence_resolutions` map entry if supplied, else the
+    # uniform `effect_fence_resolution` default ONLY when `branch_key` is the resume-cycle-wide
+    # SOLE unaddressed location — so two paused workers can resolve DIFFERENTLY in one resume
+    # (SKIP_AS_FIRED vs RE_FIRE; ABORT keeps its run-level-terminal semantic), but the uniform
+    # fallback never cross-misattributes a judgment intended for a different, unaddressed
+    # location. None when no holder / no resolution for a branch's key → that paused worker
+    # re-pauses INERT (never an auto-re-fire — the #701 decline-mirror).
     #
     # B-39 Slice B: `resume_context` replaces the retired ctx-level `resume_context_
     # holder` PEEK (byte-identical resulting values — same `ResumeContext` object, same
@@ -10749,8 +10898,13 @@ def _execute_orchestrator_workers(
     # clear+re-fire concurrently before the ABORT branch fails the run). Suppress the non-ABORT
     # siblings' directives below; the ABORT worker keeps its directive → EffectFenceAbortedError
     # → terminal FAILED. The PARALLELIZATION analogue.
+    # B-70 impl leg (CP spec v1.107 §1.1) — gated via `_resolve_effect_fence_gated`
+    # instead of the unconditional `effect_fence_resolution_for` (the uniform-fallback
+    # branch is unsafe when 2+ locations are unaddressed this cycle; a map HIT is
+    # always safe and passes through unchanged).
     _any_fence_abort = _ef_resume_ctx is not None and any(
-        _ef_resume_ctx.effect_fence_resolution_for(_k) is EffectFenceResolution.ABORT
+        _resolve_effect_fence_gated(_ef_resume_ctx, _k, effect_fence_uniform_fallback_eligible_key)
+        is EffectFenceResolution.ABORT
         for _k in _recovered_effect_fence_paused.values()
     )
 
@@ -11064,8 +11218,14 @@ def _execute_orchestrator_workers(
                 final_state=None,
                 fail_class="fan-out-orchestrator-effect-fence-resume-changed-orchestrator",
             ), 0
+        # B-70 impl leg (CP spec v1.107 §1.1) — gated via `_resolve_effect_fence_gated`
+        # (the uniform-fallback branch is unsafe when 2+ locations are unaddressed).
         _orch_resolution = (
-            _ef_resume_ctx.effect_fence_resolution_for(_orch_fence_resume.idempotency_key)
+            _resolve_effect_fence_gated(
+                _ef_resume_ctx,
+                _orch_fence_resume.idempotency_key,
+                effect_fence_uniform_fallback_eligible_key,
+            )
             if (_orch_fence_resume.idempotency_key and _ef_resume_ctx is not None)
             else None
         )
@@ -11142,6 +11302,7 @@ def _execute_orchestrator_workers(
         # compose_branch_child_context's model_copy (deliberately not reset).
         resume_context=resume_context,
         hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
+        effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
     )
     if _is_resume:
         # B-FANOUT-PAUSE — the orchestrator already ran in the ORIGINAL envelope
@@ -11484,16 +11645,22 @@ def _execute_orchestrator_workers(
         # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE / B-FANOUT-EFFECT-FENCE-PER-BRANCH-RESOLUTION — on
         # resume, a worker whose OWN dispatch raised the effect fence is re-dispatched WITH the
         # operator's resolution key-bound to THIS branch's reserve, threaded on the (hash-inert)
-        # `effect_fence_resolution`. The resolution is `effect_fence_resolution_for(branch_key)` —
-        # this worker's per-key `effect_fence_resolutions` entry if supplied, else the uniform
-        # default — so two paused workers can resolve DIFFERENTLY in one resume (the worker analogue
-        # of the linear B-EFFECT-FENCE-PAUSE-RESOLUTION threading). Built ONLY when this ordinal was
+        # `effect_fence_resolution`. The resolution is `_resolve_effect_fence_gated(branch_key,
+        # eligible_key)` (B-70 impl leg, CP spec v1.107 §1.1) — this worker's per-key
+        # `effect_fence_resolutions` entry if supplied, else the uniform default ONLY when
+        # `branch_key` is the resume-cycle-wide SOLE unaddressed location — so two paused workers
+        # can resolve DIFFERENTLY in one resume (the worker analogue of the linear
+        # B-EFFECT-FENCE-PAUSE-RESOLUTION threading). Built ONLY when this ordinal was
         # fence-paused AND the captured key is non-empty AND a resolution exists for it; else None →
         # the fence re-pauses INERT (never an auto-re-fire). None for every non-fence worker →
         # byte-identical to the pre-arc context.
         _branch_fence_key = _recovered_effect_fence_paused.get(branch_index)
+        # B-70 impl leg (CP spec v1.107 §1.1) — gated via `_resolve_effect_fence_gated`
+        # (the uniform-fallback branch is unsafe when 2+ locations are unaddressed).
         _branch_resolution = (
-            _ef_resume_ctx.effect_fence_resolution_for(_branch_fence_key)
+            _resolve_effect_fence_gated(
+                _ef_resume_ctx, _branch_fence_key, effect_fence_uniform_fallback_eligible_key
+            )
             if (_branch_fence_key and _ef_resume_ctx is not None)
             else None
         )
@@ -13595,6 +13762,7 @@ def _execute_hierarchical_delegation(
     sub_agent_descent: bool = False,
     resume_context: ResumeContext | None = None,
     hitl_uniform_fallback_eligible_run_id: str | None = None,
+    effect_fence_uniform_fallback_eligible_key: str | None = None,
 ) -> tuple[RunResult, int]:
     """Execute the `HIERARCHICAL_DELEGATION` recursive bounded-fan-out strategy (U-CP-89).
 
@@ -13711,6 +13879,7 @@ def _execute_hierarchical_delegation(
         sub_agent_descent=sub_agent_descent,
         resume_context=resume_context,
         hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
+        effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
     )
 
 
@@ -13791,6 +13960,7 @@ def _execute_decentralized_handoff(
     sub_agent_descent: bool = False,
     resume_context: ResumeContext | None = None,
     hitl_uniform_fallback_eligible_run_id: str | None = None,
+    effect_fence_uniform_fallback_eligible_key: str | None = None,
 ) -> tuple[RunResult, int]:
     """Execute the `DECENTRALIZED_HANDOFF` single-owner sequential handoff strategy (U-CP-90).
 
@@ -14106,6 +14276,7 @@ def _execute_decentralized_handoff(
             # compose_branch_child_context's model_copy (deliberately not reset).
             resume_context=resume_context,
             hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
+            effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
         )
         # Single owner → branch_index 0 (no siblings; causality rides the chained
         # parent_action_id, NOT the fan-out ordinal). step_index = the declared stage

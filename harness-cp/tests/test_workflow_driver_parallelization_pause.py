@@ -306,6 +306,7 @@ def _run(
     workflow_id: str = "wf-pp",
     persona_tier: PersonaTier = _PAUSE_TIER,
     resume_context: Any = None,
+    effect_fence_uniform_fallback_eligible_key: str | None = None,
 ) -> Any:
     return execute_workflow(
         _manifest(workflow_id, persona_tier),
@@ -316,6 +317,7 @@ def _run(
         step_dispatchers=_registry(dispatcher),
         pause_snapshot_input=pause_snapshot_input,
         resume_context=resume_context,
+        effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
     )
 
 
@@ -1349,12 +1351,16 @@ def test_peer_branch_effect_fence_resume_threads_key_bound_resolution() -> None:
     resume_ctx = ResumeContext(effect_fence_resolution=EffectFenceResolution.SKIP_AS_FIRED)
     rec = _ResumeRecordingDispatcher()
     ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    # B-70 impl leg (CP spec v1.107 §1.1) — the uniform fallback now applies only
+    # when this location is the SOLE unaddressed member; this snapshot has exactly
+    # one fence-paused location, so its own key is trivially eligible.
     result = _run(
         steps=_steps(2),
         dispatcher=rec,
         ctx=cast(DriverContext, ctx_obj),
         pause_snapshot_input=snap,
         resume_context=resume_ctx,
+        effect_fence_uniform_fallback_eligible_key=key,
     )
 
     assert result.status is RunStatus.SUCCESS
@@ -1404,16 +1410,21 @@ def test_peer_branch_effect_fence_resume_abort_is_terminal_failed_not_repause() 
     )
     snap = paused.pause_snapshot
     assert snap is not None and snap.peer_fan_out_resume is not None
+    key = snap.peer_fan_out_resume.effect_fence_paused_branches[0].idempotency_key
 
     resume_ctx = ResumeContext(effect_fence_resolution=EffectFenceResolution.ABORT)
     rec = _AbortOnResolutionDispatcher()
     ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    # B-70 impl leg (CP spec v1.107 §1.1) — the uniform fallback now applies only
+    # when this location is the SOLE unaddressed member; this snapshot has exactly
+    # one fence-paused location, so its own key is trivially eligible.
     result = _run(
         steps=_steps(2),
         dispatcher=rec,
         ctx=cast(DriverContext, ctx_obj),
         pause_snapshot_input=snap,
         resume_context=resume_ctx,
+        effect_fence_uniform_fallback_eligible_key=key,
     )
 
     assert result.status is RunStatus.FAILED

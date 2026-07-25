@@ -505,6 +505,32 @@ class StepExecutionContext(BaseModel):
     per-step-transient posture as `resume_context`; `None` default →
     byte-identical to pre-arc."""
 
+    effect_fence_uniform_fallback_eligible_key: str | None = None
+    """B-70 impl leg (CP spec v1.107 §1.1) — the effect-fence analogue of
+    `hitl_uniform_fallback_eligible_run_id` immediately above: the SOLE
+    unaddressed effect-fence-pause location's `idempotency_key` (if any) the
+    uniform `effect_fence_resolution` fallback may resolve THIS resume cycle.
+    Computed ONCE, at the true depth-0 root (`harness_runtime/lifecycle/
+    mcp_server.py`, via `compute_effect_fence_uniform_fallback_eligible_key`
+    against the operator's ORIGINAL, un-narrowed root `PauseSnapshot`), and
+    threaded down UNCHANGED to every recursion level — exactly like
+    `hitl_uniform_fallback_eligible_run_id` (plain immutable pass-through,
+    safe to share the SAME value across every branch of a fan-out; branch
+    children inherit it verbatim via `compose_branch_child_context`'s
+    `model_copy`). It CANNOT be recomputed locally at a nested recursion
+    level — a child's own `pause_snapshot_input` is only its own subtree and
+    has no visibility into sibling locations paused elsewhere in the full
+    tree.
+
+    `None` means either no effect-fence-pause location is unaddressed this
+    cycle, or 2+ are unaddressed by `resume_context.effect_fence_resolutions`
+    (in which case NONE of them may use the uniform fallback — every one
+    re-pauses INERT rather than risk a cross-location misattribution of a
+    SKIP_AS_FIRED/RE_FIRE/ABORT/ABORT_BRANCH judgment intended for a
+    different location). Same hash-inert / per-step-transient posture as
+    `hitl_uniform_fallback_eligible_run_id`; `None` default → byte-identical
+    to pre-arc."""
+
     hitl_delivery_holder: HITLDeliveryCell | None = None
     """B-39 impl leg Slice B (CP spec v1.106 §1) — the per-branch ONE-SHOT delivery
     cell for the operator's resolved HITL response, replacing the retired

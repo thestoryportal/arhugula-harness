@@ -1121,6 +1121,13 @@ class RuntimeSubAgentDispatcher:
                     hitl_uniform_fallback_eligible_run_id=(
                         step_context.hitl_uniform_fallback_eligible_run_id
                     ),
+                    # B-70 impl leg (CP spec v1.107 §1.1) — the effect-fence analogue of
+                    # `hitl_uniform_fallback_eligible_run_id` immediately above, read off
+                    # the SAME step_context (computed ONCE at the true depth-0 root, pure
+                    # pass-through) and forwarded verbatim.
+                    effect_fence_uniform_fallback_eligible_key=(
+                        step_context.effect_fence_uniform_fallback_eligible_key
+                    ),
                 )
             except Exception:
                 # Typed errors from child execution: annotate span +

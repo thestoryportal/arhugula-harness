@@ -122,6 +122,7 @@ class _MockChildWorkflowRunner:
         child_run_id_seed: str | None = None,
         resume_context: Any = None,
         hitl_uniform_fallback_eligible_run_id: str | None = None,
+        effect_fence_uniform_fallback_eligible_key: str | None = None,
     ) -> RunResult:
         # B-HIERARCHICAL-PAUSE — accept the additive resume-snapshot kwarg (None on a
         # first dispatch); the widened ChildWorkflowRunner Protocol forwards it.

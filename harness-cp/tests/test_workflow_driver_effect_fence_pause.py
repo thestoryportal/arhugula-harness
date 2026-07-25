@@ -228,6 +228,7 @@ def _run(
     pause_snapshot_input: Any = None,
     resume_context: Any = None,
     hitl_uniform_fallback_eligible_run_id: str | None = None,
+    effect_fence_uniform_fallback_eligible_key: str | None = None,
 ) -> Any:
     return execute_workflow(
         _manifest(),
@@ -239,6 +240,7 @@ def _run(
         pause_snapshot_input=pause_snapshot_input,
         resume_context=resume_context,
         hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
+        effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
     )
 
 
@@ -447,11 +449,15 @@ def test_resume_threads_key_bound_resolution_to_resumed_step() -> None:
     resume_ctx = ResumeContext(effect_fence_resolution=EffectFenceResolution.RE_FIRE)
     rec = _RecordingResolutionDispatcher()
     ctx_obj = _Ctx(ledger=_RecordingLedger(), emitter=_Emitter(), with_protocol=True)
+    # B-70 impl leg (CP spec v1.107 §1.1) — the uniform fallback now applies only
+    # when this location is the SOLE unaddressed member; this snapshot has exactly
+    # one fence-paused location, so its own key is trivially eligible.
     result = _run(
         dispatcher=rec,
         ctx=cast(DriverContext, ctx_obj),
         pause_snapshot_input=snap,
         resume_context=resume_ctx,
+        effect_fence_uniform_fallback_eligible_key=key,
     )
 
     assert result.status is RunStatus.SUCCESS
