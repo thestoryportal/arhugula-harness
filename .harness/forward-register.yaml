@@ -2045,6 +2045,29 @@ items:
     + the delivery-cell construction per CP plan v2.44 SS5's now-corrected row -- is the next buildable slice,
     NOT yet opened, per the B-33/B-39/B-59/B-70 spec-leg/impl-leg precedent). Closes ONLY net-position item
     (1); items (2)/(3)/(4) remain open exactly as rounds 5-7 scoped them.
+    ROUND 2-5 CODEX FIXES (2026-07-25, same branch, pre-merge, out-of-family just codex-review
+    base=main). Round 2 caught property 6's internal identity permitting only local uniqueness,
+    colliding under nested fan-out and violating property 4's SOLE-member safety guarantee -- fixed,
+    now requires resume-tree-wide uniqueness plus a collision-witness test, and this register's own
+    stale close-out recipe plus stale claude-artifact-pointers.md rows were fixed too. Round 3
+    caught property 6 permitting counted-but-never-keyed without requiring actual delivery to the
+    sole branch, leaving the round-3 repro's livelock unclosed -- fixed, section 1.1(b) now requires
+    delivery as an explicit contract outcome, plus this tension record's stale Status field and an
+    overbroad B-71 dependency label on items (3)/(4) here were fixed. Round 4 caught the new
+    carrier's existence and byte-compat treatment being left to unauthorized impl discretion despite
+    PeerFanOutResumeState/FanOutResumeState participating in the persisted snapshot_hash -- fixed,
+    NEW section 1.3a pre-authorizes ONE additive drop-when-empty/None hash-strip-scoped field
+    mirroring the v1.97/v1.99 precedent, plus stale harness-cp/CLAUDE.md and clearance-marker
+    summaries were fixed. Round 5 caught two real findings. (a) this session's own roadmap_status.md
+    dashboard still said the spec leg was not yet started despite the completed delta -- fixed at
+    the dashboard's round-8 update. (b) property 6's contract text read as topology-agnostic while
+    only PARALLELIZATION/ORCHESTRATOR_WORKERS are grounded by the round-3 reproduction (confirmed
+    via direct grep -- the repro test uses TopologyPattern.PARALLELIZATION exclusively) -- fixed,
+    NEW section 1.2b explicitly scopes property 6 to the two fan-out topologies and names
+    EVALUATOR_OPTIMIZER/DECENTRALIZED_HANDOFF's sequential
+    EvaluatorOptimizerResumeState/HandoffResumeState carriers as a distinct, ungrounded, out-of-
+    scope gap for a future arc's own reproduction-first grounding pass, not silently folded into
+    this delta's build scope. 5 rounds total to convergence.
   council: RETIRED "skip-a-gate vs strand-a-descendant" framing (2026-07-25 round 2) -- the spec's
     mechanism ROUTES a resolved answer via hitl_response_for(child_run_id), it does not skip gate
     evaluation. Design-risk flag RELOCATES, not deleted -- the deferred resolver must independently
