@@ -2506,10 +2506,12 @@ def test_ac6_daemon_concurrent_two_clients_complete_independently(
         pause_snapshot_input: Any = None,
         resume_context: Any = None,
         hitl_uniform_fallback_eligible_run_id: Any = None,
+        effect_fence_uniform_fallback_eligible_key: Any = None,
     ) -> _CpRunResult:
         _ = pause_snapshot_input  # C-RT-35 resume threading — None on the run path.
         _ = resume_context  # B-39 Slice B — None on the (non-resume) run path.
         _ = hitl_uniform_fallback_eligible_run_id  # B-39 Slice B, codex round-2 [P1] fix.
+        _ = effect_fence_uniform_fallback_eligible_key  # B-70 impl leg.
         wf_id = manifest_entry.workflow_id
         # The worker thread inherits the tool handler task's contextvars
         # context via `asyncio.to_thread`'s `copy_context().run`. Reading via

@@ -266,6 +266,11 @@ def materialize_mcp_server_stage(
     _compute_hitl_fallback_eligible_run_id = (
         _workflow_driver.compute_hitl_uniform_fallback_eligible_run_id
     )
+    # B-70 impl leg (CP spec v1.107 §1.1) — the effect-fence analogue of
+    # `_compute_hitl_fallback_eligible_run_id` immediately above.
+    _compute_effect_fence_fallback_eligible_key = (
+        _workflow_driver.compute_effect_fence_uniform_fallback_eligible_key
+    )
 
     fastmcp = FastMCP(
         name="harness-runtime",
@@ -375,6 +380,14 @@ def materialize_mcp_server_stage(
         _hitl_uniform_fallback_eligible_run_id = _compute_hitl_fallback_eligible_run_id(
             _resume_snapshot, _resume_context
         )
+        # B-70 impl leg (CP spec v1.107 §1.1) — the effect-fence analogue, computed ONCE
+        # HERE against the SAME un-narrowed root `_resume_snapshot` (mirrors the HITL
+        # computation immediately above; see `compute_effect_fence_uniform_fallback_
+        # eligible_key`'s docstring for why this cannot be recomputed at a nested
+        # recursion level).
+        _effect_fence_uniform_fallback_eligible_key = _compute_effect_fence_fallback_eligible_key(
+            _resume_snapshot, _resume_context
+        )
         # B-INTERSTEP-PERRUN-ISOLATION (runtime spec §14.21 C-RT-34 invariant 7;
         # B-INTERSTEP fork §3/§5) — establish THIS run's isolated holders in their
         # ContextVars before dispatch. The set propagates into the
@@ -447,6 +460,9 @@ def materialize_mcp_server_stage(
                     pause_snapshot_input=_resume_snapshot,
                     resume_context=_resume_context,
                     hitl_uniform_fallback_eligible_run_id=(_hitl_uniform_fallback_eligible_run_id),
+                    effect_fence_uniform_fallback_eligible_key=(
+                        _effect_fence_uniform_fallback_eligible_key
+                    ),
                 ),
                 timeout=drain_timeout_seconds,
             )

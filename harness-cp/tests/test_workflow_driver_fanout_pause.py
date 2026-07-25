@@ -60,6 +60,7 @@ from harness_cp.workflow_driver import (
     StepDispatcher,
     StepDispatcherRegistry,
     StepKindDispatcherNotBoundError,
+    compute_effect_fence_uniform_fallback_eligible_key,
     execute_workflow,
 )
 from harness_cp.workflow_driver_types import (
@@ -302,6 +303,7 @@ def _run(
     topology: TopologyPattern = TopologyPattern.ORCHESTRATOR_WORKERS,
     persona_tier: PersonaTier = _PAUSE_TIER,
     resume_context: Any = None,
+    effect_fence_uniform_fallback_eligible_key: str | None = None,
 ) -> Any:
     return execute_workflow(
         _manifest(workflow_id, topology, persona_tier),
@@ -312,6 +314,7 @@ def _run(
         step_dispatchers=_registry(dispatcher),
         pause_snapshot_input=pause_snapshot_input,
         resume_context=resume_context,
+        effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
     )
 
 
@@ -1765,12 +1768,16 @@ def test_orchestrator_worker_effect_fence_resume_threads_key_bound_resolution() 
     resume_ctx = ResumeContext(effect_fence_resolution=EffectFenceResolution.RE_FIRE)
     rec = _OrchestratorResumeRecordingDispatcher()
     ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    # B-70 impl leg (CP spec v1.107 §1.1) — the uniform fallback now applies only
+    # when this location is the SOLE unaddressed member; this snapshot has exactly
+    # one fence-paused location, so its own key is trivially eligible.
     result = _run(
         steps=_steps(2),
         dispatcher=rec,
         ctx=cast(DriverContext, ctx_obj),
         pause_snapshot_input=snap,
         resume_context=resume_ctx,
+        effect_fence_uniform_fallback_eligible_key=key,
     )
 
     assert result.status is RunStatus.SUCCESS
@@ -1821,16 +1828,21 @@ def test_orchestrator_worker_effect_fence_resume_abort_is_terminal_failed() -> N
     )
     snap = paused.pause_snapshot
     assert snap is not None and snap.fan_out_resume is not None
+    key = snap.fan_out_resume.effect_fence_paused_branches[0].idempotency_key
 
     resume_ctx = ResumeContext(effect_fence_resolution=EffectFenceResolution.ABORT)
     rec = _OrchestratorAbortOnResolutionDispatcher()
     ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    # B-70 impl leg (CP spec v1.107 §1.1) — the uniform fallback now applies only
+    # when this location is the SOLE unaddressed member; this snapshot has exactly
+    # one fence-paused location, so its own key is trivially eligible.
     result = _run(
         steps=_steps(2),
         dispatcher=rec,
         ctx=cast(DriverContext, ctx_obj),
         pause_snapshot_input=snap,
         resume_context=resume_ctx,
+        effect_fence_uniform_fallback_eligible_key=key,
     )
 
     assert result.status is RunStatus.FAILED
@@ -1969,12 +1981,16 @@ def test_orchestrator_self_effect_fence_resume_re_fire_recovers() -> None:
     resume_ctx = ResumeContext(effect_fence_resolution=EffectFenceResolution.RE_FIRE)
     rec = _OrchestratorSelfFenceAmbiguousDispatcher()
     ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    # B-70 impl leg (CP spec v1.107 §1.1) — the uniform fallback now applies only
+    # when this location is the SOLE unaddressed member; this snapshot has exactly
+    # one fence-paused location, so its own key is trivially eligible.
     result = _run(
         steps=_steps(2),
         dispatcher=rec,
         ctx=cast(DriverContext, ctx_obj),
         pause_snapshot_input=snap,
         resume_context=resume_ctx,
+        effect_fence_uniform_fallback_eligible_key=key,
     )
 
     assert result.status is RunStatus.SUCCESS
@@ -1999,16 +2015,21 @@ def test_orchestrator_self_effect_fence_resume_abort_is_terminal_failed() -> Non
     )
     snap = paused.pause_snapshot
     assert snap is not None and snap.orchestrator_effect_fence_resume is not None
+    key = snap.orchestrator_effect_fence_resume.idempotency_key
 
     resume_ctx = ResumeContext(effect_fence_resolution=EffectFenceResolution.ABORT)
     rec = _OrchestratorSelfFenceAmbiguousDispatcher()
     ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    # B-70 impl leg (CP spec v1.107 §1.1) — the uniform fallback now applies only
+    # when this location is the SOLE unaddressed member; this snapshot has exactly
+    # one fence-paused location, so its own key is trivially eligible.
     result = _run(
         steps=_steps(2),
         dispatcher=rec,
         ctx=cast(DriverContext, ctx_obj),
         pause_snapshot_input=snap,
         resume_context=resume_ctx,
+        effect_fence_uniform_fallback_eligible_key=key,
     )
 
     assert result.status is RunStatus.FAILED
@@ -2027,16 +2048,21 @@ def test_orchestrator_self_effect_fence_resume_skip_as_fired_rejected() -> None:
     )
     snap = paused.pause_snapshot
     assert snap is not None and snap.orchestrator_effect_fence_resume is not None
+    key = snap.orchestrator_effect_fence_resume.idempotency_key
 
     resume_ctx = ResumeContext(effect_fence_resolution=EffectFenceResolution.SKIP_AS_FIRED)
     rec = _OrchestratorSelfFenceAmbiguousDispatcher()
     ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    # B-70 impl leg (CP spec v1.107 §1.1) — the uniform fallback now applies only
+    # when this location is the SOLE unaddressed member; this snapshot has exactly
+    # one fence-paused location, so its own key is trivially eligible.
     result = _run(
         steps=_steps(2),
         dispatcher=rec,
         ctx=cast(DriverContext, ctx_obj),
         pause_snapshot_input=snap,
         resume_context=resume_ctx,
+        effect_fence_uniform_fallback_eligible_key=key,
     )
 
     assert result.status is RunStatus.FAILED
@@ -2176,10 +2202,14 @@ def test_orchestrator_self_effect_fence_resume_synthesis_bearing_recovers() -> N
     assert paused.status is RunStatus.PAUSED
     snap = paused.pause_snapshot
     assert snap is not None and snap.orchestrator_effect_fence_resume is not None
+    key = snap.orchestrator_effect_fence_resume.idempotency_key
 
     resume_ctx = ResumeContext(effect_fence_resolution=EffectFenceResolution.RE_FIRE)
     rec = _OrchestratorSelfFenceSynthDispatcher()
     ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    # B-70 impl leg (CP spec v1.107 §1.1) — the uniform fallback now applies only
+    # when this location is the SOLE unaddressed member; this snapshot has exactly
+    # one fence-paused location, so its own key is trivially eligible.
     result = execute_workflow(
         _manifest(),
         [*_steps(2), _synthesis_step()],
@@ -2189,6 +2219,7 @@ def test_orchestrator_self_effect_fence_resume_synthesis_bearing_recovers() -> N
         step_dispatchers=cast(StepDispatcherRegistry, _SynthRegistry(rec)),
         pause_snapshot_input=snap,
         resume_context=resume_ctx,
+        effect_fence_uniform_fallback_eligible_key=key,
     )
     assert result.status is RunStatus.SUCCESS  # NOT rejected by the synthesis material-diff
     # Everything re-dispatched fresh (orchestrator re-fired + workers + synthesis once).
@@ -2311,12 +2342,18 @@ def test_orchestrator_per_branch_map_overrides_uniform_default() -> None:
     )
     rec = _OrchestratorResumeRecordingDispatcher()
     ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    # B-70 impl leg (CP spec v1.107 §1.1) — worker-0 is map-addressed (always safe);
+    # worker-1 is the SOLE remaining unaddressed location this cycle, so the uniform
+    # fallback is safe for it too. Computed via the real resolver, not hand-derived.
     result = _run(
         steps=_steps(2),
         dispatcher=rec,
         ctx=cast(DriverContext, ctx_obj),
         pause_snapshot_input=snap,
         resume_context=resume_ctx,
+        effect_fence_uniform_fallback_eligible_key=(
+            compute_effect_fence_uniform_fallback_eligible_key(snap, resume_ctx)
+        ),
     )
 
     assert result.status is RunStatus.SUCCESS
@@ -2358,14 +2395,22 @@ def test_orchestrator_partial_map_unanswered_worker_re_pauses_iteratively() -> N
     assert rec.seen_resolution["worker-1"] is None
 
 
-def test_orchestrator_no_map_uniform_default_applies_to_all() -> None:
-    """Backward-compat: with NO map (the v1.65 shape), the single uniform `effect_fence_resolution`
-    applies to BOTH fence-paused workers — byte-identical to the pre-arc behavior."""
+def test_orchestrator_no_map_two_unaddressed_workers_both_repause_inert() -> None:
+    """B-70 impl leg (CP spec v1.107 §1.1) SUPERSEDES the pre-arc behavior this test
+    used to pin: with NO map and BOTH workers fence-paused, the uniform `effect_fence_
+    resolution` no longer applies unconditionally to every unaddressed location — that
+    was exactly the cross-location misapplication risk the spec's safety rule exists to
+    close (a single operator judgment silently applied to 2+ distinct held reserves).
+    With 2 unaddressed locations this cycle, `effect_fence_uniform_fallback_eligible_key`
+    is `None` (per the pure tests), so NEITHER worker receives a directive — both
+    re-pause INERT, and the run stays PAUSED with both branches still unresolved."""
     snap = _orchestrator_two_fence_pause()
     resume_ctx = ResumeContext(
         effect_fence_resolution=EffectFenceResolution.RE_FIRE
     )  # single field only, no map
-    rec = _OrchestratorResumeRecordingDispatcher()
+    eligible_key = compute_effect_fence_uniform_fallback_eligible_key(snap, resume_ctx)
+    assert eligible_key is None  # 2 unaddressed locations -> no sole eligible member
+    rec = _OrchestratorPartialResumeDispatcher()
     ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
     result = _run(
         steps=_steps(2),
@@ -2373,11 +2418,82 @@ def test_orchestrator_no_map_uniform_default_applies_to_all() -> None:
         ctx=cast(DriverContext, ctx_obj),
         pause_snapshot_input=snap,
         resume_context=resume_ctx,
+        effect_fence_uniform_fallback_eligible_key=eligible_key,
     )
 
-    assert result.status is RunStatus.SUCCESS
-    assert rec.seen_resolution["worker-0"].resolution is EffectFenceResolution.RE_FIRE
-    assert rec.seen_resolution["worker-1"].resolution is EffectFenceResolution.RE_FIRE
+    assert result.status is RunStatus.PAUSED
+    assert rec.seen_resolution["worker-0"] is None
+    assert rec.seen_resolution["worker-1"] is None
+    snap2 = result.pause_snapshot
+    assert snap2 is not None and snap2.fan_out_resume is not None
+    # Both locations re-pause carrying their same original keys — neither was
+    # misattributed the uniform RE_FIRE judgment intended for at most one of them.
+    assert {b.idempotency_key for b in snap2.fan_out_resume.effect_fence_paused_branches} == {
+        b.idempotency_key for b in snap.fan_out_resume.effect_fence_paused_branches
+    }
+
+
+class _OrchestratorAmbiguousUnlessAbortLeakedDispatcher:
+    """Resume-side witness for the no-map-two-unaddressed-ABORT case: RAISES
+    `EffectFenceAbortedError` if a directive somehow reached this worker (proving
+    the safety gate leaked — the failure mode this witness exists to catch), else
+    RAISES the ambiguous fence error (proving NO directive reached it — the
+    expected safe outcome, re-pause INERT, never a terminal FAILED)."""
+
+    def __init__(self) -> None:
+        self.dispatched: list[str] = []
+        self.seen_resolution: dict[str, Any] = {}
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        step_id = str(step.step_id)
+        self.dispatched.append(step_id)
+        directive = getattr(step_context, "effect_fence_resolution", None)
+        self.seen_resolution[step_id] = directive
+        if step_id == "orchestrator":
+            return {"role": "orchestrator"}
+        if directive is not None:
+            raise EffectFenceAbortedError(f"leaked directive at {step_id}: {directive}")
+        raise EffectFenceAmbiguousUncommittedError(idempotency_key=f"fence-key-{step_id}")
+
+
+def test_orchestrator_no_map_two_unaddressed_workers_abort_default_both_repause_inert() -> None:
+    """advisor()-flagged gap: the uniform-ABORT + 2-unaddressed-locations path is a
+    DISTINCT code path from the RE_FIRE case above — it exercises the interaction
+    between the B-70 safety gate and the pre-existing run-level ABORT guard
+    (`_any_fence_abort`). Pre-B-70, both workers would have resolved ABORT
+    unconditionally -> `_any_fence_abort=True` -> terminal FAILED. Post-B-70, with 2
+    unaddressed locations and no map, `effect_fence_uniform_fallback_eligible_key`
+    is `None`, so NEITHER worker's gated resolution is ABORT (both are `None`) ->
+    `_any_fence_abort=False` -> the run stays PAUSED, re-entering both locations
+    INERT rather than misattributing a single ABORT judgment to both distinct held
+    reserves and failing the whole run on an ambiguous operator input."""
+    snap = _orchestrator_two_fence_pause()
+    resume_ctx = ResumeContext(
+        effect_fence_resolution=EffectFenceResolution.ABORT
+    )  # single field only, no map
+    eligible_key = compute_effect_fence_uniform_fallback_eligible_key(snap, resume_ctx)
+    assert eligible_key is None  # 2 unaddressed locations -> no sole eligible member
+    rec = _OrchestratorAmbiguousUnlessAbortLeakedDispatcher()
+    ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    result = _run(
+        steps=_steps(2),
+        dispatcher=rec,
+        ctx=cast(DriverContext, ctx_obj),
+        pause_snapshot_input=snap,
+        resume_context=resume_ctx,
+        effect_fence_uniform_fallback_eligible_key=eligible_key,
+    )
+
+    assert result.status is RunStatus.PAUSED  # NOT FAILED — the pre-B-70 outcome
+    assert rec.seen_resolution["worker-0"] is None
+    assert rec.seen_resolution["worker-1"] is None
+    snap2 = result.pause_snapshot
+    assert snap2 is not None and snap2.fan_out_resume is not None
+    assert {b.idempotency_key for b in snap2.fan_out_resume.effect_fence_paused_branches} == {
+        b.idempotency_key for b in snap.fan_out_resume.effect_fence_paused_branches
+    }
 
 
 class _OrchestratorAbortGuardDispatcher:

@@ -86,6 +86,7 @@ class ChildWorkflowRunner(Protocol):
         child_run_id_seed: str | None = None,
         resume_context: ResumeContext | None = None,
         hitl_uniform_fallback_eligible_run_id: str | None = None,
+        effect_fence_uniform_fallback_eligible_key: str | None = None,
     ) -> RunResult:
         """Run the child sub-workflow and return its terminal `RunResult`.
 
@@ -131,6 +132,15 @@ class ChildWorkflowRunner(Protocol):
         `pause_snapshot_input` cannot see sibling branches paused elsewhere in the
         tree). `None` on a first (non-resume) child dispatch → byte-identical to
         pre-arc.
+
+        B-70 impl leg (CP spec v1.107 §1.1): `effect_fence_uniform_fallback_
+        eligible_key` (additive, default `None`) — the effect-fence analogue of
+        `hitl_uniform_fallback_eligible_run_id` immediately above: the SOLE
+        unaddressed effect-fence-pause location's `idempotency_key` (if any) the
+        uniform `effect_fence_resolution` fallback may resolve this resume cycle,
+        computed ONCE at the true depth-0 root and forwarded verbatim, NEVER
+        recomputed at this recursion level. `None` on a first (non-resume) child
+        dispatch → byte-identical to pre-arc.
         """
         ...
 
@@ -173,6 +183,7 @@ def compose_child_workflow_runner(ctx: HarnessContext) -> ChildWorkflowRunner:
         child_run_id_seed: str | None = None,
         resume_context: ResumeContext | None = None,
         hitl_uniform_fallback_eligible_run_id: str | None = None,
+        effect_fence_uniform_fallback_eligible_key: str | None = None,
     ) -> RunResult:
         # B-HIERARCHICAL-PAUSE — on a RESUME (pause_snapshot_input non-None), FAIL CLOSED
         # if the snapshot's workflow_id does not match the child being invoked (Codex
@@ -245,6 +256,7 @@ def compose_child_workflow_runner(ctx: HarnessContext) -> ChildWorkflowRunner:
             pause_snapshot_input=pause_snapshot_input,
             resume_context=resume_context,
             hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
+            effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
             reconstruct_final_state=True,
             # U-1 slice 3a (B-18) — mark the child run as a DESCENDED sub-agent so
             # every child `StepExecutionContext` carries `sub_agent_descent=True`;

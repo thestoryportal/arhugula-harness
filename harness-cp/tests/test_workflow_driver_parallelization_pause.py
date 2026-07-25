@@ -70,6 +70,7 @@ from harness_cp.workflow_driver import (
     _DriverStrategyStatus,
     _resume_carrier_topology_mismatch,
     _synthesis_resume_material_diff,
+    compute_effect_fence_uniform_fallback_eligible_key,
     execute_workflow,
 )
 from harness_cp.workflow_driver_types import (
@@ -306,6 +307,7 @@ def _run(
     workflow_id: str = "wf-pp",
     persona_tier: PersonaTier = _PAUSE_TIER,
     resume_context: Any = None,
+    effect_fence_uniform_fallback_eligible_key: str | None = None,
 ) -> Any:
     return execute_workflow(
         _manifest(workflow_id, persona_tier),
@@ -316,6 +318,7 @@ def _run(
         step_dispatchers=_registry(dispatcher),
         pause_snapshot_input=pause_snapshot_input,
         resume_context=resume_context,
+        effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
     )
 
 
@@ -1349,12 +1352,16 @@ def test_peer_branch_effect_fence_resume_threads_key_bound_resolution() -> None:
     resume_ctx = ResumeContext(effect_fence_resolution=EffectFenceResolution.SKIP_AS_FIRED)
     rec = _ResumeRecordingDispatcher()
     ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    # B-70 impl leg (CP spec v1.107 §1.1) — the uniform fallback now applies only
+    # when this location is the SOLE unaddressed member; this snapshot has exactly
+    # one fence-paused location, so its own key is trivially eligible.
     result = _run(
         steps=_steps(2),
         dispatcher=rec,
         ctx=cast(DriverContext, ctx_obj),
         pause_snapshot_input=snap,
         resume_context=resume_ctx,
+        effect_fence_uniform_fallback_eligible_key=key,
     )
 
     assert result.status is RunStatus.SUCCESS
@@ -1404,9 +1411,100 @@ def test_peer_branch_effect_fence_resume_abort_is_terminal_failed_not_repause() 
     )
     snap = paused.pause_snapshot
     assert snap is not None and snap.peer_fan_out_resume is not None
+    key = snap.peer_fan_out_resume.effect_fence_paused_branches[0].idempotency_key
 
     resume_ctx = ResumeContext(effect_fence_resolution=EffectFenceResolution.ABORT)
     rec = _AbortOnResolutionDispatcher()
+    ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    # B-70 impl leg (CP spec v1.107 §1.1) — the uniform fallback now applies only
+    # when this location is the SOLE unaddressed member; this snapshot has exactly
+    # one fence-paused location, so its own key is trivially eligible.
+    result = _run(
+        steps=_steps(2),
+        dispatcher=rec,
+        ctx=cast(DriverContext, ctx_obj),
+        pause_snapshot_input=snap,
+        resume_context=resume_ctx,
+        effect_fence_uniform_fallback_eligible_key=key,
+    )
+
+    assert result.status is RunStatus.FAILED
+    assert "parallelization-effect-fence-aborted" in (result.fail_class or "")
+    assert result.pause_snapshot is None  # terminal — NOT a re-pause
+    assert "branch-1" in rec.dispatched  # the aborted branch DID re-dispatch
+
+
+class _TwoFenceBranchDispatcher:
+    """Both peer branches raise the effect-fence ambiguous error with DISTINCT keys,
+    synchronized on a barrier so both are in-flight BEFORE either raises — the
+    PARALLELIZATION analogue of `_OrchestratorTwoFenceDispatcher` (fanout_pause.py),
+    producing TWO `effect_fence_paused_branches` in one pause (the multi-location
+    safety-invariant precondition)."""
+
+    def __init__(self) -> None:
+        self._barrier = threading.Barrier(2, timeout=10.0)
+        self.dispatched: list[str] = []
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        step_id = str(step.step_id)
+        self.dispatched.append(step_id)
+        self._barrier.wait()
+        raise EffectFenceAmbiguousUncommittedError(idempotency_key=f"fence-key-{step_id}")
+
+
+def _peer_two_fence_pause() -> PauseSnapshot:
+    """Drive a real PARALLELIZATION pause with BOTH peer branches effect-fence-paused;
+    return the snapshot (the per-branch-distinct precondition)."""
+    paused = _run(
+        steps=_steps(2),
+        dispatcher=_TwoFenceBranchDispatcher(),
+        ctx=cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())),
+    )
+    assert paused.status is RunStatus.PAUSED
+    snap = paused.pause_snapshot
+    assert snap is not None and snap.peer_fan_out_resume is not None
+    assert len(snap.peer_fan_out_resume.effect_fence_paused_branches) == 2
+    return snap
+
+
+class _AmbiguousUnlessDirectiveLeakedDispatcher:
+    """Resume-side witness for the no-map-two-unaddressed case: RAISES the ambiguous
+    fence error again if NO directive reached this branch (the expected safe outcome —
+    re-pause INERT, proving neither branch was misattributed a judgment)."""
+
+    def __init__(self) -> None:
+        self.dispatched: list[str] = []
+        self.seen_resolution: dict[str, Any] = {}
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        step_id = str(step.step_id)
+        self.dispatched.append(step_id)
+        directive = getattr(step_context, "effect_fence_resolution", None)
+        self.seen_resolution[step_id] = directive
+        if directive is None:
+            raise EffectFenceAmbiguousUncommittedError(idempotency_key=f"fence-key-{step_id}")
+        return {"role": step_id, "echoed": dict(step.step_payload)}
+
+
+def test_peer_no_map_two_unaddressed_branches_both_repause_inert() -> None:
+    """merge-gate test-witness finding: the ORCHESTRATOR_WORKERS + fan-out multi-location
+    safety witness (test_workflow_driver_fanout_pause.py) had no PARALLELIZATION peer
+    sibling, even though both strategies share the exact same `_resolve_effect_fence_gated`
+    helper. With NO map and BOTH peers fence-paused, `effect_fence_uniform_fallback_
+    eligible_key` is `None` (2 unaddressed locations) — NEITHER peer receives a directive;
+    both re-pause INERT rather than one being misattributed the uniform judgment intended
+    for at most one of them."""
+    snap = _peer_two_fence_pause()
+    resume_ctx = ResumeContext(
+        effect_fence_resolution=EffectFenceResolution.RE_FIRE
+    )  # single field only, no map
+    eligible_key = compute_effect_fence_uniform_fallback_eligible_key(snap, resume_ctx)
+    assert eligible_key is None  # 2 unaddressed locations -> no sole eligible member
+    rec = _AmbiguousUnlessDirectiveLeakedDispatcher()
     ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
     result = _run(
         steps=_steps(2),
@@ -1414,12 +1512,17 @@ def test_peer_branch_effect_fence_resume_abort_is_terminal_failed_not_repause() 
         ctx=cast(DriverContext, ctx_obj),
         pause_snapshot_input=snap,
         resume_context=resume_ctx,
+        effect_fence_uniform_fallback_eligible_key=eligible_key,
     )
 
-    assert result.status is RunStatus.FAILED
-    assert "parallelization-effect-fence-aborted" in (result.fail_class or "")
-    assert result.pause_snapshot is None  # terminal — NOT a re-pause
-    assert "branch-1" in rec.dispatched  # the aborted branch DID re-dispatch
+    assert result.status is RunStatus.PAUSED  # NOT SUCCESS — neither peer fired
+    assert rec.seen_resolution["branch-0"] is None
+    assert rec.seen_resolution["branch-1"] is None
+    snap2 = result.pause_snapshot
+    assert snap2 is not None and snap2.peer_fan_out_resume is not None
+    assert {b.idempotency_key for b in snap2.peer_fan_out_resume.effect_fence_paused_branches} == {
+        b.idempotency_key for b in snap.peer_fan_out_resume.effect_fence_paused_branches
+    }
 
 
 def test_peer_branch_effect_fence_resume_changed_kind_fails_closed() -> None:
