@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 78
+  total: 79
   open: 1
   design_substrate_gated: 0
-  registered_finding: 14
+  registered_finding: 15
   operator_gated: 1
   held: 1
   closed: 61
-  identity_digest: 1986bbaa8f042274
+  identity_digest: eb0dd8ac4308028e
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -1787,6 +1787,37 @@ items:
   heading: '### B-77 · Protected result store''s mtime refresh is not durable atomically with
     the publish commit, leaving a crash window where a recovered entry looks pre-aged *(surfaced
     at the B-68 impl arc, out-of-family Codex round 8 [P2], 2026-07-25)*'
+- id: B-78
+  title: A SUB_AGENT_DISPATCH step's own SUB_AGENT_BOUNDARY gate under EVALUATOR_OPTIMIZER or
+    DECENTRALIZED_HANDOFF can exhibit the same pre-dispatch re-fire livelock B-72 property 6
+    closes for the fan-out topologies, ungrounded by any reproduction
+  status: registered_finding
+  summary: 'Split out of B-72''s spec leg at CP spec v1.108 SS1.2b (out-of-family Codex round 5,
+    2026-07-25; round 7 [P2] flagged this exclusion as needing its own durable tracking, not
+    just correction-history prose). Property 6 (v1.108 SS1) closes B-72 net-position item (1)
+    ONLY for the PARALLELIZATION/ORCHESTRATOR_WORKERS/HIERARCHICAL_DELEGATION topologies -- the
+    ones whose gate-owning-branch pause state is captured via the PeerFanOutResumeState/
+    FanOutResumeState carrier family (HIERARCHICAL_DELEGATION included on carrier-identity
+    grounds per round 6, since it recursively reuses _execute_orchestrator_workers per
+    U-CP-88/89, not a separate implementation). A SUB_AGENT_DISPATCH step carrying its own
+    SUB_AGENT_BOUNDARY placement under EVALUATOR_OPTIMIZER or DECENTRALIZED_HANDOFF is captured
+    into a DIFFERENT carrier family instead (EvaluatorOptimizerResumeState/HandoffResumeState)
+    and can plausibly exhibit the SAME re-fire-on-resume symptom B-72''s round-3 reproduction
+    pins for the fan-out case -- but this has NEVER been reproduced or even directly grounded
+    against those carriers'' own code paths. Registered rather than assumed, per this arc''s own
+    round-3/4/5/6/7 discipline of verifying before claiming closure or scope.'
+  close_out: 'A future arc''s own reproduction-first grounding pass (mirroring how B-72''s round-3
+    repro preceded its own spec leg): construct a real EVALUATOR_OPTIMIZER or
+    DECENTRALIZED_HANDOFF workflow whose SUB_AGENT_DISPATCH step carries SUB_AGENT_BOUNDARY,
+    confirm (or falsify) that its own pre-dispatch gate re-fires identically on resume, and only
+    then determine whether a property-6-shaped fix (or a materially different one, given the
+    different carrier shape) is warranted -- not yet designed, not yet specified.'
+  council: 'no -- narrow topology-specific livelock candidate with a clear grounding-first next
+    step (reproduce before designing), mirroring B-72''s own precedent; not a judgment call yet'
+  heading: '### B-78 · A `SUB_AGENT_DISPATCH` step''s own `SUB_AGENT_BOUNDARY` gate under
+    `EVALUATOR_OPTIMIZER`/`DECENTRALIZED_HANDOFF` can exhibit the same pre-dispatch re-fire
+    livelock `B-72` property 6 closes for the fan-out topologies, ungrounded by any
+    reproduction *(split from B-72''s spec leg, out-of-family Codex round 5+7, 2026-07-25)*'
 - id: B-69
   title: resume_handle crash-recovery resume path cannot address individual paused children
     for multi-child HITL delivery
@@ -2079,6 +2110,16 @@ items:
     reproduction grounds; the plan's coverage row already amends _execute_orchestrator_workers
     directly, which covers every HIERARCHICAL_DELEGATION recursion level automatically, no separate
     call site owed. 6 rounds total to convergence.
+    ROUND 7 CODEX FIXES (2026-07-25, same branch, pre-merge, 2 real P2s). (a) The delta's own
+    header/revision-shape text asserted NO new field and NO carrier-shape change while section 1.3a
+    explicitly authorizes one additive default-empty field on
+    PeerFanOutResumeState/FanOutResumeState -- fixed, reworded to acknowledge the field, exact
+    name/type still deferred to the impl leg. (b) The EVALUATOR_OPTIMIZER/DECENTRALIZED_HANDOFF
+    topology exclusion (named in section 1.2b) was tracked only in this correction-history prose
+    with no durable register row of its own -- fixed, split out as new B-78 (registered_finding),
+    with its own close-out recipe -- a future arc's reproduction-first grounding pass against those
+    carriers, mirroring how this B-72 round-3 repro preceded its own spec leg. 7 rounds total to
+    convergence.
   council: RETIRED "skip-a-gate vs strand-a-descendant" framing (2026-07-25 round 2) -- the spec's
     mechanism ROUTES a resolved answer via hitl_response_for(child_run_id), it does not skip gate
     evaluation. Design-risk flag RELOCATES, not deleted -- the deferred resolver must independently
