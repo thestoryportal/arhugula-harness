@@ -3195,6 +3195,254 @@ def test_peer_resume_excludes_pre_dispatch_gate_owner_resolved_this_round() -> N
     )
 
 
+class _RoundTwoResolveOnePausedChildFireOtherDispatcher:
+    """B-81 close-out (2) — the paused-child-resolves-this-round exclusion arm: branch-0-sub
+    consumes its delivered `HITLDeliveryCell` and, on ITS OWN dispatch (not a sibling in-flight
+    race), acts as a faithful `RuntimeSubAgentDispatcher` double — dispatching a REAL nested
+    child `execute_workflow` that itself PAUSES (the same `_PeerGrandchildDispatcher` shape
+    `_PeerFaithfulSubAgentDispatcher` uses above) and re-raising `SubAgentChildPausedError`.
+    branch-1-sub, dispatched for the first time, raises the pause signal unconditionally — a
+    fresh gate owner. The resumed snapshot must show branch-0 landing in `paused_child_branches`
+    (NOT re-counted as a carried-forward pre-dispatch gate owner) and branch-1 as the sole
+    pre-dispatch gate owner."""
+
+    def __init__(self, *, child_dispatcher: _PeerGrandchildDispatcher) -> None:
+        self._child_dispatcher = child_dispatcher
+        self.dispatched: list[str] = []
+
+    def lookup(self, step_kind: StepKind) -> StepDispatcher:
+        return cast(StepDispatcher, self)
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        step_id = str(step.step_id)
+        self.dispatched.append(step_id)
+        if step_id == "branch-0-sub":
+            holder = getattr(step_context, "hitl_delivery_holder", None)
+            resolved = holder.consume_and_clear() if holder is not None else None
+            assert resolved is not None, "branch-0-sub must receive its delivery cell this round"
+            child_resume = getattr(step_context, "child_resume_snapshot", None)
+            child_ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+            child_result = execute_workflow(
+                _peer_child_manifest("wf-child-0"),
+                _peer_child_steps(),
+                run_id="child-run-0",
+                ctx=child_ctx,
+                default_model_binding=_DEFAULT_BINDING,
+                step_dispatchers=_registry(self._child_dispatcher),
+                pause_snapshot_input=child_resume,
+            )
+            assert child_result.status is RunStatus.PAUSED, (
+                "the nested child must itself pause (grandchild-1 fails under "
+                f"cascade_policy=pause); got status={child_result.status!r}"
+            )
+            assert child_result.pause_snapshot is not None
+            raise SubAgentChildPausedError(
+                child_workflow_id="wf-child-0", child_snapshot=child_result.pause_snapshot
+            )
+        raise HITLPauseRequestedSignal()
+
+
+def test_peer_resume_excludes_pre_dispatch_gate_owner_paused_child_this_round() -> None:
+    """B-81 close-out (2) — the round-6 carry-forward fix's `paused_child_dispositions`
+    exclusion conjunct must actually discriminate: a recovered pre-dispatch gate-owning
+    branch whose delivered cell leads to a REAL nested child pause (not a clean complete)
+    must be excluded from `pre_dispatch_gate_owning_branches` and land in
+    `paused_child_branches` instead — the sibling arm to
+    `test_peer_resume_excludes_pre_dispatch_gate_owner_resolved_this_round`'s
+    `terminal_dispositions` exclusion.
+
+    Mutation-probe note: deleting the `and _bi not in paused_child_dispositions` conjunct
+    from `_pre_dispatch_gate_owning_carried_forward` should make branch-0 wrongly reappear
+    in `pre_dispatch_gate_owning_branches` alongside branch-1."""
+    _peer_grandchild0_dispatches[0] = 0
+    steps = [
+        WorkflowStep(
+            step_id=StepID("branch-0-sub"),
+            step_kind=StepKind.SUB_AGENT_DISPATCH,
+            step_payload={"child_workflow_id": "wf-child-0"},
+        ),
+        WorkflowStep(
+            step_id=StepID("branch-1-sub"),
+            step_kind=StepKind.SUB_AGENT_DISPATCH,
+            step_payload={"child_workflow_id": "wf-child-1"},
+        ),
+    ]
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    round1_dispatcher = _RoundOneCohortLeaderOnlyGateDispatcher()
+    paused = execute_workflow(
+        _manifest("wf-pp"),
+        steps,
+        run_id="run-1",
+        ctx=ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=cast(StepDispatcherRegistry, round1_dispatcher),
+    )
+    assert paused.status is RunStatus.PAUSED
+    snap = paused.pause_snapshot
+    assert snap is not None
+    assert snap.peer_fan_out_resume is not None
+    assert [b.branch_index for b in snap.peer_fan_out_resume.pre_dispatch_gate_owning_branches] == [
+        0
+    ]
+
+    resume_dispatcher = _RoundTwoResolveOnePausedChildFireOtherDispatcher(
+        child_dispatcher=_PeerGrandchildDispatcher()
+    )
+    resume_ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    resume_context = ResumeContext(
+        hitl_response=HITLResult(
+            response=HITLResponse.APPROVE,
+            timestamp="2026-07-26T00:00:00Z",
+            audit_ledger_entry_id=EntryID("e-b81-paused-child"),
+            response_summary_hash="d" * 64,
+        )
+    )
+    eligible_run_id = compute_hitl_uniform_fallback_eligible_run_id(snap, resume_context)
+    assert eligible_run_id is not None
+    resumed = execute_workflow(
+        _manifest("wf-pp"),
+        steps,
+        run_id="run-1",
+        ctx=resume_ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=cast(StepDispatcherRegistry, resume_dispatcher),
+        pause_snapshot_input=snap,
+        resume_context=resume_context,
+        hitl_uniform_fallback_eligible_run_id=eligible_run_id,
+    )
+    assert sorted(resume_dispatcher.dispatched) == ["branch-0-sub", "branch-1-sub"]
+    assert resumed.status is RunStatus.PAUSED, (
+        f"expected the run to re-pause (branch-1's fresh gate + branch-0's paused child); "
+        f"got status={resumed.status!r} fail_class={resumed.fail_class!r}"
+    )
+    resumed_snap = resumed.pause_snapshot
+    assert resumed_snap is not None
+    resumed_pfr = resumed_snap.peer_fan_out_resume
+    assert resumed_pfr is not None
+    assert [b.branch_index for b in resumed_pfr.pre_dispatch_gate_owning_branches] == [1], (
+        "branch-0 PAUSED as a nested child this round and must be EXCLUDED from the "
+        "carried-forward pre-dispatch gate-owning set — only branch-1 (the fresh "
+        f"this-round pause) should remain; got "
+        f"{[b.branch_index for b in resumed_pfr.pre_dispatch_gate_owning_branches]!r}"
+    )
+    assert [b.branch_index for b in resumed_pfr.paused_child_branches] == [0], (
+        "branch-0 must land in paused_child_branches instead of being silently dropped"
+    )
+    assert resumed_pfr.paused_child_branches[0].child_workflow_id == "wf-child-0"
+
+
+class _RoundTwoResolveOneFenceAmbiguousFireOtherDispatcher:
+    """B-81 close-out (2) — the effect-fence-resolves-this-round exclusion arm: branch-0-sub
+    consumes its delivered `HITLDeliveryCell` and its OWN dispatch raises the runtime effect
+    fence's ambiguous-uncommitted error (name-matched; `EffectFenceAmbiguousUncommittedError`
+    test-local stand-in defined above). branch-1-sub, dispatched for the first time, raises
+    the pause signal unconditionally — a fresh gate owner."""
+
+    def __init__(self) -> None:
+        self.dispatched: list[str] = []
+
+    def lookup(self, step_kind: StepKind) -> StepDispatcher:
+        return cast(StepDispatcher, self)
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        step_id = str(step.step_id)
+        self.dispatched.append(step_id)
+        if step_id == "branch-0-sub":
+            holder = getattr(step_context, "hitl_delivery_holder", None)
+            resolved = holder.consume_and_clear() if holder is not None else None
+            assert resolved is not None, "branch-0-sub must receive its delivery cell this round"
+            raise EffectFenceAmbiguousUncommittedError(idempotency_key="fence-key-b81")
+        raise HITLPauseRequestedSignal()
+
+
+def test_peer_resume_excludes_pre_dispatch_gate_owner_effect_fence_paused_this_round() -> None:
+    """B-81 close-out (2) — the round-6 carry-forward fix's `effect_fence_paused_dispositions`
+    exclusion conjunct must actually discriminate: a recovered pre-dispatch gate-owning branch
+    whose delivered cell leads to an effect-fence-ambiguous dispatch (not a clean complete)
+    must be excluded from `pre_dispatch_gate_owning_branches` and land in
+    `effect_fence_paused_branches` instead.
+
+    Mutation-probe note: deleting the `and _bi not in effect_fence_paused_dispositions`
+    conjunct should make branch-0 wrongly reappear in `pre_dispatch_gate_owning_branches`
+    alongside branch-1."""
+    steps = [
+        WorkflowStep(
+            step_id=StepID("branch-0-sub"),
+            step_kind=StepKind.SUB_AGENT_DISPATCH,
+            step_payload={"child_workflow_id": "wf-child-0"},
+        ),
+        WorkflowStep(
+            step_id=StepID("branch-1-sub"),
+            step_kind=StepKind.SUB_AGENT_DISPATCH,
+            step_payload={"child_workflow_id": "wf-child-1"},
+        ),
+    ]
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    round1_dispatcher = _RoundOneCohortLeaderOnlyGateDispatcher()
+    paused = execute_workflow(
+        _manifest("wf-pp"),
+        steps,
+        run_id="run-1",
+        ctx=ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=cast(StepDispatcherRegistry, round1_dispatcher),
+    )
+    assert paused.status is RunStatus.PAUSED
+    snap = paused.pause_snapshot
+    assert snap is not None
+    assert snap.peer_fan_out_resume is not None
+    assert [b.branch_index for b in snap.peer_fan_out_resume.pre_dispatch_gate_owning_branches] == [
+        0
+    ]
+
+    resume_dispatcher = _RoundTwoResolveOneFenceAmbiguousFireOtherDispatcher()
+    resume_ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    resume_context = ResumeContext(
+        hitl_response=HITLResult(
+            response=HITLResponse.APPROVE,
+            timestamp="2026-07-26T00:00:00Z",
+            audit_ledger_entry_id=EntryID("e-b81-fence-ambiguous"),
+            response_summary_hash="e" * 64,
+        )
+    )
+    eligible_run_id = compute_hitl_uniform_fallback_eligible_run_id(snap, resume_context)
+    assert eligible_run_id is not None
+    resumed = execute_workflow(
+        _manifest("wf-pp"),
+        steps,
+        run_id="run-1",
+        ctx=resume_ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=cast(StepDispatcherRegistry, resume_dispatcher),
+        pause_snapshot_input=snap,
+        resume_context=resume_context,
+        hitl_uniform_fallback_eligible_run_id=eligible_run_id,
+    )
+    assert sorted(resume_dispatcher.dispatched) == ["branch-0-sub", "branch-1-sub"]
+    assert resumed.status is RunStatus.PAUSED, (
+        f"expected the run to re-pause (branch-1's fresh gate + branch-0's fence-ambiguous "
+        f"pause); got status={resumed.status!r} fail_class={resumed.fail_class!r}"
+    )
+    resumed_snap = resumed.pause_snapshot
+    assert resumed_snap is not None
+    resumed_pfr = resumed_snap.peer_fan_out_resume
+    assert resumed_pfr is not None
+    assert [b.branch_index for b in resumed_pfr.pre_dispatch_gate_owning_branches] == [1], (
+        "branch-0 fence-ambiguous-paused this round and must be EXCLUDED from the "
+        "carried-forward pre-dispatch gate-owning set — only branch-1 (the fresh "
+        f"this-round pause) should remain; got "
+        f"{[b.branch_index for b in resumed_pfr.pre_dispatch_gate_owning_branches]!r}"
+    )
+    assert [b.branch_index for b in resumed_pfr.effect_fence_paused_branches] == [0], (
+        "branch-0 must land in effect_fence_paused_branches instead of being silently dropped"
+    )
+    assert resumed_pfr.effect_fence_paused_branches[0].idempotency_key == "fence-key-b81"
+
+
 # ---------------------------------------------------------------------------
 # B-39/B-48 Phase-0 lease-leak fix — PARALLELIZATION twins (round-6
 # concurrency-lens BLOCK named 4 symmetric sites; the ORCHESTRATOR_WORKERS
