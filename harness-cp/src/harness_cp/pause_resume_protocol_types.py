@@ -205,6 +205,64 @@ class FanOutBranchResumeState(BaseModel):
     obligation 7 does not re-dispatch its possibly-landed effect)."""
 
 
+class PreDispatchGateOwningBranchResumeState(BaseModel):
+    """A branch whose OWN HITL gate fired before any child run was dispatched.
+
+    B-72 impl leg (CP spec v1.108 §1) — carries the CAPTURED `step_id` (out-of-
+    family Codex [P1]: an ordinal-only carrier gives the resume-side material-diff
+    guard, `_resume_body_mismatch`, no step identity to validate — unlike every
+    other persisted branch disposition (`FanOutBranchResumeState`,
+    `PausedChildBranchResumeState`, `EffectFencePausedBranchResumeState`), which
+    would let a same-count body edit that REPLACES the paused step attach the
+    operator's stored response to a DIFFERENT, unrelated step). Resume validates
+    the re-supplied branch step's `step_id` against this — a same-count rename/
+    reorder/replace fails closed rather than silently deliver a resolved answer
+    to the wrong step's dispatch. `step_kind` + `child_workflow_id` (out-of-family
+    Codex [P1], round 4; `step_kind` corrected at round 5) close NARROWER gaps
+    the `step_id`-only guard left open. `step_kind` is a CAPTURED field, NOT a
+    constant check against `StepKind.SUB_AGENT_DISPATCH` — round 5 caught round
+    4's own false assumption that a pre-dispatch gate-owning branch is always
+    that kind: `HITLPlacementKind.PRE_ACTION` can ALSO gate `INFERENCE_STEP`/
+    `TOOL_STEP` steps and raises the SAME name-matched
+    `HITLPauseRequestedSignal`, so an unchanged `PRE_ACTION`-gated branch would
+    otherwise be rejected as a false material diff on resume — the
+    `PausedChildBranchResumeState` (B-31) precedent this class originally
+    mirrored does NOT apply here (that carrier IS uniquely `SUB_AGENT_DISPATCH`
+    by construction — only that kind can raise `SubAgentChildPausedError` —
+    whereas this one is genuinely multi-kind). `child_workflow_id` closes a
+    separate gap: a same-`step_id` edit that swaps the target `child_workflow_id`
+    previously passed undetected — the same identity dimension
+    `PausedChildBranchResumeState` already validates, but here only meaningful
+    (and only populated) when the captured `step_kind` is `SUB_AGENT_DISPATCH`."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    branch_index: int
+    """The fan-out branch ordinal (0-based), same convention as
+    `FanOutBranchResumeState.branch_index`."""
+
+    step_id: str
+    """The branch's `WorkflowStep.step_id` AT CAPTURE TIME (the material-diff
+    identity guard — see class docstring)."""
+
+    step_kind: str
+    """The branch's `WorkflowStep.step_kind.value` AT CAPTURE TIME (out-of-family
+    Codex [P2], round 5). A pre-dispatch gate-owning branch can be
+    `SUB_AGENT_DISPATCH` (`SUB_AGENT_BOUNDARY` placement) OR `INFERENCE_STEP`/
+    `TOOL_STEP` (`PRE_ACTION` placement) — both raise the same signal, so this
+    MUST be a captured value compared for equality, never a hardcoded constant
+    (see class docstring for the round-4-then-corrected-at-round-5 history)."""
+
+    child_workflow_id: str | None = None
+    """The target child workflow's identifier AT CAPTURE TIME, read from
+    `step.step_payload["child_workflow_id"]` via the same `_opaque_field`
+    convention `PausedChildBranchResumeState.child_workflow_id` (B-31) already
+    uses. Resume validates it against the re-supplied step's payload ONLY when
+    present — default-`None` for byte-compat (`_strip_default_fanout_resume_fields`
+    does not need to special-case it since the field lives inside a
+    non-empty-tuple-gated carrier row, not a bare top-level field)."""
+
+
 class FanOutResumeState(BaseModel):
     """Fan-out resume reconstruction state carried by a paused-fan-out PauseSnapshot.
 
@@ -300,6 +358,31 @@ class FanOutResumeState(BaseModel):
     from the canonical serialization when empty, so every pre-existing snapshot hashes
     byte-identically (the `paused_child_branches` drop-when-empty discipline)."""
 
+    pre_dispatch_gate_owning_branches: tuple[PreDispatchGateOwningBranchResumeState, ...] = ()
+    """B-72 impl leg (CP spec v1.108 §1.1/§1.3a) — worker branches whose OWN
+    `SUB_AGENT_BOUNDARY` (or equivalent) HITL gate fired BEFORE any child run was
+    dispatched (the runtime's `HITLPauseRequestedSignal`, raised ahead of
+    `RuntimeSubAgentDispatcher.dispatch`). DISTINCT from `branches` (terminal — MUST
+    NOT re-dispatch), from `paused_child_branches` (a child run WAS dispatched and
+    itself paused), and from `effect_fence_paused_branches` (a different signal):
+    a pre-dispatch gate-owning branch has no child `run_id` to key `hitl_responses`
+    by (property 6 §1.1(b) forbids ever keying it there), so it is re-dispatched
+    FRESH on resume like an absent ordinal — this field exists ONLY so the resolver
+    can COUNT it into property 4's unaddressed gate-owning set (§1.1(a)) and, when it
+    is the cycle's sole unaddressed member, DELIVER it the uniform `hitl_response` via
+    a delivery-cell construction at the branch's own re-dispatch site (§1.1(b)). Each
+    row carries its captured `step_id` (out-of-family Codex [P1]: the resume-side
+    material-diff guard needs a step identity to validate, mirroring every other
+    persisted branch disposition — see `PreDispatchGateOwningBranchResumeState`'s
+    own docstring). The internal identity `_collect_gate_owning_run_ids` derives for
+    each ordinal here composes THIS `PauseSnapshot`'s own tree-wide-unique `run_id`
+    with the ordinal (§1.1(d)'s tree-wide-uniqueness requirement) — never placed in,
+    or compatible with, `hitl_responses`. Additive, default-empty:
+    `_compute_snapshot_hash` DROPS this field from the canonical serialization when
+    empty, so every pre-existing
+    snapshot hashes byte-identically (the `effect_fence_paused_branches` drop-when-
+    empty discipline)."""
+
 
 class PeerFanOutResumeState(BaseModel):
     """Peer fan-out (PARALLELIZATION) resume reconstruction state.
@@ -371,6 +454,16 @@ class PeerFanOutResumeState(BaseModel):
     runtime effect fence's `EffectFenceAmbiguousUncommittedError` (C-RT-31 §14.22). Re-entered on
     resume via the fence-keyed `EffectFenceResolution`, NOT a fresh dispatch. Additive,
     default-empty, dropped-from-hash-when-empty (same discipline as `synthesis_step_id`)."""
+
+    pre_dispatch_gate_owning_branches: tuple[PreDispatchGateOwningBranchResumeState, ...] = ()
+    """B-72 impl leg (CP spec v1.108 §1.1/§1.3a) — the PARALLELIZATION analogue of
+    `FanOutResumeState.pre_dispatch_gate_owning_branches`: peer branches whose OWN
+    `SUB_AGENT_BOUNDARY` HITL gate fired BEFORE any child run was dispatched (the
+    runtime's `HITLPauseRequestedSignal`, raised ahead of
+    `RuntimeSubAgentDispatcher.dispatch`). See that field's docstring for the full
+    disposition-class + identity discipline (property 6, CP spec v1.108 §1). Additive,
+    default-empty, dropped-from-hash-when-empty (same discipline as
+    `effect_fence_paused_branches`)."""
 
 
 class HandoffStageResumeState(BaseModel):

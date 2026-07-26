@@ -102,6 +102,7 @@ from harness_cp.pause_resume_protocol_types import (
     PausedChildBranchResumeState,
     PauseSnapshot,
     PeerFanOutResumeState,
+    PreDispatchGateOwningBranchResumeState,
     ResumeContext,
     WorkflowPauseReason,
 )
@@ -2662,6 +2663,42 @@ def _record_reconciler_fanout_resume_finalized(
         record(run_idempotency_key)
 
 
+def _pre_dispatch_gate_owning_branch_identity(snapshot_run_id: str, branch_index: int) -> str:
+    """Tree-wide-unique internal identity for a pre-dispatch gate-owning branch.
+
+    B-72 impl leg (CP spec v1.108 §1.1(d)) — a pre-dispatch gate-owning branch has
+    no child `run_id` to identify it (property 6 §1.1(b) forbids ever keying it into
+    `hitl_responses`), so the resolver needs an impl-discretion internal identity for
+    property 4's counting + SOLE-member comparison. Composing the CONTAINING
+    `PauseSnapshot`'s own `run_id` (already tree-wide-unique by construction — every
+    recursion level's snapshot carries the run_id of the distinct sub-workflow run
+    that captured it) with the local branch ordinal is sufficient: two pre-dispatch
+    gate-owning branches at different tree positions are, by definition, captured
+    under snapshots with distinct `run_id`s, so their composed identities can never
+    collide even when the LOCAL ordinal happens to match (the nested-fan-out
+    collision codex's [P1] review named). Never placed in, or compatible with,
+    `hitl_responses` (which stays exclusively `child_run_id`-keyed per property 1)."""
+    return f"{snapshot_run_id}:pre-dispatch-gate:{branch_index}"
+
+
+def _pre_dispatch_gate_owning_captured_child_workflow_id(step: WorkflowStep) -> str | None:
+    """The pre-dispatch gate-owning branch's STATICALLY declared target child
+    workflow, read from `step.step_payload["child_workflow_id"]` AT PAUSE-CAPTURE
+    TIME (out-of-family Codex [P1], round 4).
+
+    Unlike `PausedChildBranchResumeState.child_workflow_id` (B-31), which sources
+    the value from a `SubAgentChildPausedError` raised by an ALREADY-DISPATCHED
+    child, a pre-dispatch gate-owning branch has no dispatched child to source it
+    from — the step's own payload is the only place this identity can be read
+    from before dispatch. Returns `None` (never raises) when the payload does not
+    declare one, mirroring B-31's own "skip the check when absent" byte-compat
+    convention at the resume-side comparison."""
+    try:
+        return str(_opaque_field(step.step_payload, "child_workflow_id"))
+    except (TypeError, KeyError, AttributeError):
+        return None
+
+
 def _collect_gate_owning_run_ids(snapshot: PauseSnapshot) -> list[str]:
     """Recursively collect every GATE-OWNING branch's `run_id` under `snapshot`.
 
@@ -2686,16 +2723,55 @@ def _collect_gate_owning_run_ids(snapshot: PauseSnapshot) -> list[str]:
     `EvaluatorOptimizerResumeState` carry no `paused_child_branches` (no
     nested-child-pause mechanism exists for those topologies), so only the
     two fan-out carriers are walked.
+
+    B-72 impl leg (CP spec v1.108 §1) — a resume_state-bearing (container)
+    node ALSO directly owns any of ITS OWN `pre_dispatch_gate_owning_branches`
+    (a peer/worker branch whose own gate fired before it ever produced a child
+    run — no nested `PauseSnapshot` exists for it, so it cannot be reached via
+    the `paused_child_branches` recursion below). Each such ordinal contributes
+    its own tree-wide-unique internal identity (never a `run_id`) to the
+    returned set, alongside the recursively-collected genuine child run_ids.
     """
     resume_state = snapshot.fan_out_resume or snapshot.peer_fan_out_resume
     if resume_state is None:
         if snapshot.pause_reason is WorkflowPauseReason.HITL_PENDING:
             return [snapshot.run_id]
         return []
-    run_ids: list[str] = []
+    run_ids: list[str] = [
+        _pre_dispatch_gate_owning_branch_identity(snapshot.run_id, _row.branch_index)
+        for _row in resume_state.pre_dispatch_gate_owning_branches
+    ]
     for paused_child in resume_state.paused_child_branches:
         run_ids.extend(_collect_gate_owning_run_ids(paused_child.child_snapshot))
     return run_ids
+
+
+def _collect_pre_dispatch_gate_owning_identities(snapshot: PauseSnapshot) -> frozenset[str]:
+    """The subset of `_collect_gate_owning_run_ids`'s output that are pre-dispatch
+    gate-owning INTERNAL identities (CP spec v1.108 §1.1(b)) — NEVER a genuine
+    `child_run_id`, and so NEVER addressable via `resume_context.hitl_responses`.
+
+    Out-of-family Codex review [P1]: `compute_hitl_uniform_fallback_eligible_run_id`'s
+    generic `rid not in hitl_responses` membership test would otherwise treat an
+    operator-supplied map key that happens to COLLIDE with a composed internal
+    identity (accidentally or maliciously) as "addressed" — removing it from the
+    unaddressed set could make an ACTUALLY-unaddressed sibling ELSEWHERE in the tree
+    wrongly appear to be the SOLE unaddressed member, letting the uniform fallback
+    misattribute a response across two DISTINCT pre-dispatch branches (exactly the
+    cross-branch misattribution property 4 exists to prevent). This set lets the
+    caller force every pre-dispatch identity to count as unconditionally unaddressed,
+    mirroring how the root `run_id` already gets an identical exclusion. Mirrors
+    `_collect_gate_owning_run_ids`'s own recursion shape."""
+    resume_state = snapshot.fan_out_resume or snapshot.peer_fan_out_resume
+    if resume_state is None:
+        return frozenset()
+    identities: set[str] = {
+        _pre_dispatch_gate_owning_branch_identity(snapshot.run_id, _row.branch_index)
+        for _row in resume_state.pre_dispatch_gate_owning_branches
+    }
+    for paused_child in resume_state.paused_child_branches:
+        identities |= _collect_pre_dispatch_gate_owning_identities(paused_child.child_snapshot)
+    return frozenset(identities)
 
 
 def compute_hitl_uniform_fallback_eligible_run_id(
@@ -2732,10 +2808,16 @@ def compute_hitl_uniform_fallback_eligible_run_id(
     # NOT count as "addressed" here — it can never actually be delivered via
     # that map. Excluding it from the map-membership test keeps the root
     # unconditionally eligible when it is the sole gate-owning branch.
+    # B-72 impl leg, out-of-family Codex [P1]: a pre-dispatch gate-owning
+    # branch's composed internal identity gets the SAME exclusion, for the
+    # same reason — it has no child run_id, can never actually be addressed
+    # via `hitl_responses`, and property 6 §1.1(b) forbids ever keying it
+    # there (see `_collect_pre_dispatch_gate_owning_identities`'s docstring).
+    never_keyable = _collect_pre_dispatch_gate_owning_identities(root_snapshot)
     unaddressed = [
         rid
         for rid in gate_owning_run_ids
-        if rid == root_snapshot.run_id or rid not in hitl_responses
+        if rid == root_snapshot.run_id or rid in never_keyable or rid not in hitl_responses
     ]
     if len(unaddressed) == 1:
         return unaddressed[0]
@@ -7493,6 +7575,17 @@ def _execute_parallelization(
         if _peer_resume is not None
         else {}
     )
+    # B-72 impl leg (CP spec v1.108 §1) — peer ordinals recorded, on a PRIOR round, as
+    # pre-dispatch gate-owning (their own gate fired before any child run existed). NOT
+    # skipped on resume — re-dispatched FRESH exactly like an absent ordinal (no child
+    # snapshot to thread; property 6 §1.1(b) forbids ever keying `hitl_responses` by
+    # them) — this set exists ONLY to let the branch-construction loop recognize which
+    # ordinals are eligible for the uniform-fallback delivery-cell construction below.
+    _recovered_pre_dispatch_gate_owning: frozenset[int] = (
+        frozenset(row.branch_index for row in _peer_resume.pre_dispatch_gate_owning_branches)
+        if _peer_resume is not None
+        else frozenset()
+    )
     # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE / B-FANOUT-EFFECT-FENCE-PER-BRANCH-RESOLUTION — PEEK
     # (NOT consume — the HITL composer one-shot intact) the operator's resume context off the
     # holder. Per paused peer below, `_resolve_effect_fence_gated(branch_key, eligible_key)`
@@ -7676,6 +7769,66 @@ def _execute_parallelization(
                         f"{str(steps[ef.branch_index].step_kind.value)!r} — the resolution would "
                         "not reach the fence (only the captured-kind dispatch does)"
                     )
+            # B-72 impl leg (CP spec v1.108 §1, out-of-family Codex [P1]) — pre-dispatch
+            # gate-owning peers: same BOUNDS + IDENTITY guard, PLUS no-overlap with the
+            # terminal/paused-child/effect-fence-paused sets (`seen` accumulates all three)
+            # — a pre-dispatch-gate-owning ordinal is a disjoint FIFTH disposition. The
+            # identity guard is load-bearing here specifically: without it, a same-count
+            # body edit REPLACING the paused step at this ordinal would silently attach the
+            # operator's stored `hitl_response` to a DIFFERENT, unrelated step's dispatch.
+            for pg in _peer_resume.pre_dispatch_gate_owning_branches:
+                if not (0 <= pg.branch_index < len(steps)):
+                    return (
+                        f"pre-dispatch-gate-owning-index-out-of-range: {pg.branch_index} "
+                        f"∉ [0, {len(steps)})"
+                    )
+                if pg.branch_index in seen:
+                    return (
+                        f"pre-dispatch-gate-owning-overlaps-terminal-or-duplicate: "
+                        f"{pg.branch_index}"
+                    )
+                seen.add(pg.branch_index)
+                if str(steps[pg.branch_index].step_id) != pg.step_id:
+                    return (
+                        f"pre-dispatch-gate-owning-identity-mismatch at {pg.branch_index}: "
+                        f"snapshot step_id={pg.step_id!r}, resume step_id="
+                        f"{str(steps[pg.branch_index].step_id)!r}"
+                    )
+                # out-of-family Codex [P1], round 4: `step_id` alone does not stop a
+                # same-step_id edit that swaps `step_kind` or the target
+                # `child_workflow_id` — mirrors `PausedChildBranchResumeState` (B-31)'s
+                # identical kind-changed + workflow-id-changed guards. Round 5 correction
+                # (out-of-family Codex [P2]): round 4 wrongly checked this against the
+                # CONSTANT `StepKind.SUB_AGENT_DISPATCH` — a pre-dispatch gate-owning branch
+                # can ALSO be `INFERENCE_STEP`/`TOOL_STEP` under `HITLPlacementKind.PRE_ACTION`
+                # (both placements raise the same name-matched `HITLPauseRequestedSignal`), so
+                # the constant check falsely rejected an UNCHANGED `PRE_ACTION`-gated resume.
+                # This now compares against the CAPTURED value, exactly like every other
+                # material-diff identity check in this function.
+                if steps[pg.branch_index].step_kind.value != pg.step_kind:
+                    return (
+                        f"pre-dispatch-gate-owning-kind-changed at {pg.branch_index}: "
+                        f"snapshot step_kind={pg.step_kind!r}, resume step_kind="
+                        f"{steps[pg.branch_index].step_kind.value!r}"
+                    )
+                if pg.child_workflow_id is not None:
+                    try:
+                        _resumed_pg_cwid = str(
+                            _opaque_field(steps[pg.branch_index].step_payload, "child_workflow_id")
+                        )
+                    except (TypeError, KeyError, AttributeError):
+                        return (
+                            f"pre-dispatch-gate-owning-workflow-id-unreadable at "
+                            f"{pg.branch_index}: snapshot child_workflow_id="
+                            f"{pg.child_workflow_id!r} but the resumed step_payload has no "
+                            "readable child_workflow_id key"
+                        )
+                    if _resumed_pg_cwid != pg.child_workflow_id:
+                        return (
+                            f"pre-dispatch-gate-owning-workflow-id-changed at "
+                            f"{pg.branch_index}: snapshot child_workflow_id="
+                            f"{pg.child_workflow_id!r}, resume targets {_resumed_pg_cwid!r}"
+                        )
             return None
 
         _mismatch = _resume_body_mismatch()
@@ -7848,6 +8001,35 @@ def _execute_parallelization(
         # ORCHESTRATOR_WORKERS `child_resume_snapshot` threading applied peer-shaped.
         # `None` for every non-paused-child branch → byte-identical to the pre-arc context.
         _child_resume = _recovered_paused_child.get(branch_index)
+        # B-72 impl leg (CP spec v1.108 §1.1(b)) — on resume, a peer branch recorded as
+        # pre-dispatch gate-owning on a PRIOR round is re-dispatched WITH a fresh
+        # `HITLDeliveryCell` threaded onto its `hitl_delivery_holder`, mirroring the
+        # LINEAR resume_at reconstruction site's construction (`workflow_driver.py`'s
+        # `hitl_delivery_cell = HITLDeliveryCell(_resolved_hitl)`), ONLY when this
+        # branch's internal identity is the resume-cycle-wide SOLE unaddressed
+        # gate-owning member (`hitl_uniform_fallback_eligible_run_id`, computed ONCE at
+        # the true root and threaded down unchanged). Property 6 §1.1(b) forbids EVER
+        # keying this branch via `resume_context.hitl_responses` (no `child_run_id`
+        # exists) — the uniform `hitl_response` field is the ONLY valid source. `None`
+        # for every branch not recorded pre-dispatch-gate-owning, or not the cycle's
+        # sole eligible member → byte-identical to the pre-arc context (re-pauses INERT,
+        # never an auto-re-fire, never a cross-branch misattribution). Run-level ABORT
+        # guard (out-of-family Codex [P1], round 4): mirrors the effect-fence
+        # suppression above — if ANY paused peer resolved this resume to ABORT, this
+        # branch must NOT dispatch ahead of the run failing, so no delivery cell is
+        # constructed at all (it re-pauses INERT, exactly like a non-ABORT
+        # effect-fence peer under the same guard).
+        _branch_hitl_delivery_cell: HITLDeliveryCell | None = None
+        if (
+            not _any_fence_abort
+            and branch_index in _recovered_pre_dispatch_gate_owning
+            and resume_context is not None
+        ):
+            _branch_pre_dispatch_identity = _pre_dispatch_gate_owning_branch_identity(
+                run_id, branch_index
+            )
+            if _branch_pre_dispatch_identity == hitl_uniform_fallback_eligible_run_id:
+                _branch_hitl_delivery_cell = HITLDeliveryCell(resume_context.hitl_response)
         child = compose_branch_child_context(
             fanout_parent,
             branch_index=branch_index,
@@ -7860,6 +8042,7 @@ def _execute_parallelization(
             update={
                 "child_resume_snapshot": _child_resume,
                 "effect_fence_resolution": _branch_effect_fence_directive,
+                "hitl_delivery_holder": _branch_hitl_delivery_cell,
                 "hitl_placements": fold_step_hitl_placements(
                     manifest_entry.hitl_placements, binding.hitl_placement
                 ),
@@ -8011,6 +8194,13 @@ def _execute_parallelization(
     # LINEAR effect-fence ABORT does (out-of-family Codex [P1]: without this an ABORT re-supplied
     # under CascadePolicy.PAUSE fell through the generic branch-failure path → re-pause).
     effect_fence_aborted_dispositions: set[int] = set()
+    # B-72 impl leg (CP spec v1.108 §1) — peer ordinals whose OWN dispatch raised the runtime's
+    # `HITLPauseRequestedSignal` THIS round (its own `SUB_AGENT_BOUNDARY` gate fired before any
+    # child run was dispatched). DISJOINT from `terminal_dispositions` (caught at a dedicated
+    # except site, never falls through to the generic ran-and-errored arm) and from
+    # `paused_child_dispositions` (no child run — and so no child `PauseSnapshot` — ever existed).
+    # Read AFTER the barrier to build `PeerFanOutResumeState.pre_dispatch_gate_owning_branches`.
+    pre_dispatch_gate_owning_dispositions: set[int] = set()
 
     # B-FANOUT-PAUSE-PARALLELIZATION — seed the recovered terminal branches (from the
     # resume snapshot) into `collected` + `terminal_dispositions` so (a) their outputs
@@ -9161,6 +9351,16 @@ def _execute_parallelization(
                         _inflight_exc.child_snapshot,
                     )
                     raise
+                if type(_inflight_exc).__name__ == "HITLPauseRequestedSignal":
+                    # B-72 impl leg (CP spec v1.108 §1) — this branch was cancelled because a
+                    # SIBLING raised first, but its OWN in-flight dispatch's `SUB_AGENT_BOUNDARY`
+                    # gate fired before any child run was dispatched (the same race the
+                    # `SubAgentChildPausedError` in-flight catch above handles for a genuine
+                    # nested-child pause). Capture as pre-dispatch gate-owning (NOT a terminal
+                    # `completed` branch — else the snapshot would drop it from the re-dispatchable
+                    # set): stash + re-raise, no step/terminal entry recorded.
+                    pre_dispatch_gate_owning_dispositions.add(branch_index)
+                    raise
                 if type(_inflight_exc).__name__ == "EffectFenceAbortedError":
                     # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE — an in-flight
                     # branch whose re-dispatch raised the operator's ABORT
@@ -9387,6 +9587,25 @@ def _execute_parallelization(
                 # snapshot records it + obligation 7 does NOT re-dispatch its landed
                 # effect on resume.
                 terminal_dispositions[branch_index] = "completed"
+                raise
+            except BaseException as _pause_signal:
+                # B-72 impl leg (CP spec v1.108 §1) — this branch's OWN `SUB_AGENT_DISPATCH`
+                # dispatch is a `SUB_AGENT_BOUNDARY` HITL gate that fired BEFORE any child run
+                # was ever dispatched — the runtime's `HITLPauseRequestedSignal` (a BaseException
+                # subclass per Runtime spec §14.8.8.2; only an explicit catch consumes it, so the
+                # `except Exception` clause above never sees it — placed AFTER it so `Exception`
+                # subtypes keep matching their own typed handlers first). Name-matched (harness-cp
+                # cannot import harness-runtime). NOT a terminal branch (re-dispatched FRESH on
+                # resume, exactly like an absent ordinal) and NOT a failure in itself: stash the
+                # ordinal, record NO step/terminal entry (a `completed` terminal would make resume
+                # SKIP it), then re-raise so the TaskGroup halts the fan-out at the pause boundary —
+                # mirroring the `SubAgentChildPausedError` disposition shape above. Any OTHER
+                # BaseException (e.g. a genuine `asyncio.CancelledError` reaching this frame by some
+                # path other than the dedicated handler above) is NOT ours to interpret — re-raise
+                # unclassified so it propagates exactly as it did before this clause existed.
+                if type(_pause_signal).__name__ != "HITLPauseRequestedSignal":
+                    raise
+                pre_dispatch_gate_owning_dispositions.add(branch_index)
                 raise
             _record_clean(branch_index, step, child, writer, output)
         finally:
@@ -9719,6 +9938,31 @@ def _execute_parallelization(
         # prior + this-round terminal sets. Absent branch ordinals (the cancelled
         # not-yet-dispatched ones) are left re-dispatchable by omission. `step_id`
         # is captured per branch so resume validates body identity.
+        # B-72 impl leg (out-of-family Codex [P1], round 6) — a recovered
+        # pre-dispatch gate-owning ordinal is normally "rebuilt fresh" every round
+        # (re-dispatch IS the carry, per `_recovered_pre_dispatch_gate_owning`'s own
+        # docstring) because every recovered ordinal is unconditionally re-attempted
+        # this round. But under §25.19 warm-up cohort scheduling a phase-2 follower
+        # can be WITHHELD from this round's dispatch entirely (e.g. a phase-1 leader
+        # re-pauses before the follower is ever attempted) — that ordinal then
+        # appears in neither `pre_dispatch_gate_owning_dispositions` (never
+        # re-raised — never dispatched) NOR any terminal/paused-child/fence
+        # disposition (never resolved either), so a bare rebuild-from-live-only
+        # silently drops it from the new snapshot. Property 4's SOLE-unaddressed-
+        # member safety test walks exactly this tuple — an undercounted tuple lets
+        # a later resume wrongly treat a remaining branch as sole and deliver the
+        # uniform response to it. Carry forward any recovered ordinal that neither
+        # re-fired this round (already in the live set) nor resolved via a
+        # different disposition this round (completed / recursive-child-paused /
+        # fence-paused) — i.e. one that was genuinely skipped, not addressed.
+        _pre_dispatch_gate_owning_carried_forward = frozenset(
+            _bi
+            for _bi in _recovered_pre_dispatch_gate_owning
+            if _bi not in pre_dispatch_gate_owning_dispositions
+            and _bi not in terminal_dispositions
+            and _bi not in paused_child_dispositions
+            and _bi not in effect_fence_paused_dispositions
+        )
         peer_fan_out_resume = PeerFanOutResumeState(
             branches=tuple(
                 # B-65 (codex [P1] on this arc) — a carrier branch's snapshot entry MUST
@@ -9787,6 +10031,41 @@ def _execute_parallelization(
             # before fresh-dispatching. None when no synthesis was opted in
             # (drop-from-hash-when-None keeps those snapshots byte-identical).
             synthesis_step_id=(str(synthesis_step.step_id) if synthesis_step is not None else None),
+            # B-72 impl leg (CP spec v1.108 §1) — peers whose OWN gate fired THIS round
+            # before any child run was dispatched. DISJOINT from `branches` (never entered
+            # `terminal_dispositions`) and from `paused_child_branches` (no child snapshot
+            # exists). COVERED by the snapshot hash (dropped-when-empty → a round with no
+            # pre-dispatch gate-owning branch hashes byte-identically to pre-B-72). Each row
+            # carries the captured `step_id` (out-of-family Codex [P1]) so the material-diff
+            # guard below can validate identity, exactly like every other disposition class.
+            # `step_kind` (out-of-family Codex [P2], round 5) IS captured — a pre-dispatch
+            # gate-owning branch can be SUB_AGENT_DISPATCH (SUB_AGENT_BOUNDARY) OR
+            # INFERENCE_STEP/TOOL_STEP (PRE_ACTION); both raise the same name-matched
+            # signal, so this must be a captured-and-compared value, never a hardcoded
+            # constant (round 4's own first attempt wrongly assumed SUB_AGENT_DISPATCH-only
+            # and would have rejected an unchanged PRE_ACTION-gated resume — see the carrier's
+            # class docstring for the full correction). `child_workflow_id` (out-of-family
+            # Codex [P1], round 4) closes the narrower same-step_id-different-target gap
+            # `PausedChildBranchResumeState` (B-31) already closes for the sibling
+            # recursive-child-pause disposition; it reads the STATIC declared target from the
+            # step's own payload (no dispatched child exists yet to source it from an
+            # exception) and defaults to `None` — byte-compat with the same "skip the check
+            # when absent" convention B-31 established — for any step whose payload does not
+            # declare one (i.e. every non-SUB_AGENT_DISPATCH pre-dispatch gate-owning branch).
+            pre_dispatch_gate_owning_branches=tuple(
+                PreDispatchGateOwningBranchResumeState(
+                    branch_index=_bi,
+                    step_id=str(steps[_bi].step_id),
+                    step_kind=str(steps[_bi].step_kind.value),
+                    child_workflow_id=_pre_dispatch_gate_owning_captured_child_workflow_id(
+                        steps[_bi]
+                    ),
+                )
+                for _bi in sorted(
+                    pre_dispatch_gate_owning_dispositions
+                    | _pre_dispatch_gate_owning_carried_forward
+                )
+            ),
         )
         # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE — label the pause EFFECT_FENCE_AMBIGUOUS whenever a
         # branch fence-paused this round, so an operator surface keying off the reason knows to
@@ -9808,6 +10087,10 @@ def _execute_parallelization(
         # Per-child response ROUTING when >1 nested child pauses HITL_PENDING in the same round is
         # a SEPARATE, unresolved gap (out-of-family Codex [P1], round 2) tracked at B-39 — an
         # operator surface must still inspect `paused_child_branches` before supplying a response.
+        # B-72 impl leg — a peer that IS itself pre-dispatch gate-owning this round ALSO labels
+        # the pause HITL_PENDING (it dispatched directly into its own gate — property 5's own
+        # gate-owning test — so an operator surface keying off the reason knows to supply a
+        # `hitl_response` exactly as it would for a nested HITL-paused child).
         _any_nested_hitl_pending = any(
             _child_snap.pause_reason is WorkflowPauseReason.HITL_PENDING
             for _, _child_snap in paused_child_dispositions.values()
@@ -9816,7 +10099,11 @@ def _execute_parallelization(
             WorkflowPauseReason.EFFECT_FENCE_AMBIGUOUS
             if effect_fence_paused_dispositions
             else WorkflowPauseReason.HITL_PENDING
-            if _any_nested_hitl_pending
+            if (
+                _any_nested_hitl_pending
+                or pre_dispatch_gate_owning_dispositions
+                or _pre_dispatch_gate_owning_carried_forward
+            )
             else WorkflowPauseReason.EXPLICIT_OPERATOR
         )
         snapshot = _run_protocol_method_sync(
@@ -10866,6 +11153,17 @@ def _execute_orchestrator_workers(
         if _fan_out_resume is not None
         else {}
     )
+    # B-72 impl leg (CP spec v1.108 §1) — worker ordinals recorded, on a PRIOR round, as
+    # pre-dispatch gate-owning (their own gate fired before any child run existed). NOT
+    # skipped on resume — re-dispatched FRESH exactly like an absent ordinal (no child
+    # snapshot to thread; property 6 §1.1(b) forbids ever keying `hitl_responses` by
+    # them) — this set exists ONLY to let the branch-construction loop recognize which
+    # ordinals are eligible for the uniform-fallback delivery-cell construction below.
+    _recovered_pre_dispatch_gate_owning: frozenset[int] = (
+        frozenset(row.branch_index for row in _fan_out_resume.pre_dispatch_gate_owning_branches)
+        if _fan_out_resume is not None
+        else frozenset()
+    )
     # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE / B-FANOUT-EFFECT-FENCE-PER-BRANCH-RESOLUTION — PEEK
     # (NOT consume — the HITL composer's one-shot consume stays intact, mirroring the linear path)
     # the operator's resume context off the holder. Per paused worker below,
@@ -11083,6 +11381,66 @@ def _execute_orchestrator_workers(
                         f"{str(worker_steps[ef.branch_index].step_kind.value)!r} — the resolution "
                         "would not reach the fence (only the captured-kind dispatch does)"
                     )
+            # B-72 impl leg (CP spec v1.108 §1, out-of-family Codex [P1]) — pre-dispatch
+            # gate-owning workers: same BOUNDS + IDENTITY guard, PLUS no-overlap with the
+            # terminal/paused-child/effect-fence-paused sets (`seen` accumulates all three)
+            # — a pre-dispatch-gate-owning ordinal is a disjoint FIFTH disposition. The
+            # identity guard is load-bearing here specifically: without it, a same-count
+            # body edit REPLACING the paused step at this ordinal would silently attach the
+            # operator's stored `hitl_response` to a DIFFERENT, unrelated step's dispatch
+            # (the PARALLELIZATION `_resume_body_mismatch` twin guard).
+            for pg in _fan_out_resume.pre_dispatch_gate_owning_branches:
+                if not (0 <= pg.branch_index < len(worker_steps)):
+                    return (
+                        f"pre-dispatch-gate-owning-index-out-of-range: {pg.branch_index} "
+                        f"∉ [0, {len(worker_steps)})"
+                    )
+                if pg.branch_index in seen:
+                    return (
+                        f"pre-dispatch-gate-owning-overlaps-other-disposition-or-duplicate: "
+                        f"{pg.branch_index}"
+                    )
+                seen.add(pg.branch_index)
+                if str(worker_steps[pg.branch_index].step_id) != pg.step_id:
+                    return (
+                        f"pre-dispatch-gate-owning-identity-mismatch at {pg.branch_index}: "
+                        f"snapshot step_id={pg.step_id!r}, resume step_id="
+                        f"{str(worker_steps[pg.branch_index].step_id)!r}"
+                    )
+                # out-of-family Codex [P1], round 4 (corrected round 5, [P2]): `step_id`
+                # alone does not stop a same-step_id edit that swaps `step_kind` or the
+                # target `child_workflow_id` — mirrors `PausedChildBranchResumeState`
+                # (B-31)'s identical guards. This compares against the CAPTURED value, not
+                # a hardcoded constant (a pre-dispatch gate-owning worker can be
+                # SUB_AGENT_DISPATCH OR INFERENCE_STEP/TOOL_STEP under PRE_ACTION — see
+                # `_execute_parallelization`'s own twin guard for the full rationale).
+                if worker_steps[pg.branch_index].step_kind.value != pg.step_kind:
+                    return (
+                        f"pre-dispatch-gate-owning-kind-changed at {pg.branch_index}: "
+                        f"snapshot step_kind={pg.step_kind!r}, resume step_kind="
+                        f"{worker_steps[pg.branch_index].step_kind.value!r}"
+                    )
+                if pg.child_workflow_id is not None:
+                    try:
+                        _resumed_pg_cwid = str(
+                            _opaque_field(
+                                worker_steps[pg.branch_index].step_payload,
+                                "child_workflow_id",
+                            )
+                        )
+                    except (TypeError, KeyError, AttributeError):
+                        return (
+                            f"pre-dispatch-gate-owning-workflow-id-unreadable at "
+                            f"{pg.branch_index}: snapshot child_workflow_id="
+                            f"{pg.child_workflow_id!r} but the resumed step_payload has no "
+                            "readable child_workflow_id key"
+                        )
+                    if _resumed_pg_cwid != pg.child_workflow_id:
+                        return (
+                            f"pre-dispatch-gate-owning-workflow-id-changed at "
+                            f"{pg.branch_index}: snapshot child_workflow_id="
+                            f"{pg.child_workflow_id!r}, resume targets {_resumed_pg_cwid!r}"
+                        )
             return None
 
         _mismatch = _resume_body_mismatch()
@@ -11693,6 +12051,29 @@ def _execute_orchestrator_workers(
             if (_branch_fence_key and _branch_resolution is not None)
             else None
         )
+        # B-72 impl leg (CP spec v1.108 §1.1(b)) — the ORCHESTRATOR_WORKERS analogue of the
+        # PARALLELIZATION delivery-cell construction: on resume, a worker recorded as
+        # pre-dispatch gate-owning on a PRIOR round is re-dispatched WITH a fresh
+        # `HITLDeliveryCell` threaded onto its `hitl_delivery_holder`, ONLY when this worker's
+        # internal identity is the resume-cycle-wide SOLE unaddressed gate-owning member. `None`
+        # for every worker not recorded pre-dispatch-gate-owning, or not the cycle's sole
+        # eligible member → byte-identical to the pre-arc context (re-pauses INERT).
+        # Run-level ABORT guard (out-of-family Codex [P1], round 4): mirrors the
+        # effect-fence suppression above — if ANY paused peer resolved this resume to
+        # ABORT, this worker must NOT dispatch ahead of the run failing, so no delivery
+        # cell is constructed at all (it re-pauses INERT, exactly like a non-ABORT
+        # effect-fence peer under the same guard).
+        _branch_hitl_delivery_cell: HITLDeliveryCell | None = None
+        if (
+            not _any_fence_abort
+            and branch_index in _recovered_pre_dispatch_gate_owning
+            and resume_context is not None
+        ):
+            _branch_pre_dispatch_identity = _pre_dispatch_gate_owning_branch_identity(
+                run_id, branch_index
+            )
+            if _branch_pre_dispatch_identity == hitl_uniform_fallback_eligible_run_id:
+                _branch_hitl_delivery_cell = HITLDeliveryCell(resume_context.hitl_response)
         child = compose_branch_child_context(
             fanout_parent, branch_index=branch_index, agent_role=role
         ).model_copy(
@@ -11704,6 +12085,7 @@ def _execute_orchestrator_workers(
                 "step_index": branch_index + 1,
                 "child_resume_snapshot": _child_resume,
                 "effect_fence_resolution": _branch_effect_fence_directive,
+                "hitl_delivery_holder": _branch_hitl_delivery_cell,
                 "hitl_placements": fold_step_hitl_placements(
                     manifest_entry.hitl_placements, binding.hitl_placement
                 ),
@@ -11792,6 +12174,13 @@ def _execute_orchestrator_workers(
     # post-barrier forces RunStatus.FAILED tier-agnostic, BEFORE the pause path (the LINEAR ABORT
     # → FAILED analogue; Codex [P1]).
     effect_fence_aborted_dispositions: set[int] = set()
+    # B-72 impl leg (CP spec v1.108 §1) — worker ordinals whose OWN dispatch raised the runtime's
+    # `HITLPauseRequestedSignal` THIS round (its own `SUB_AGENT_BOUNDARY` gate fired before any
+    # child run was dispatched — the ORCHESTRATOR_WORKERS analogue of the PARALLELIZATION set).
+    # DISJOINT from `terminal_dispositions` and from `paused_child_dispositions` (no child run —
+    # and so no child `PauseSnapshot` — ever existed). Read AFTER the barrier to build
+    # `FanOutResumeState.pre_dispatch_gate_owning_branches`.
+    pre_dispatch_gate_owning_dispositions: set[int] = set()
 
     # B-FANOUT-PAUSE — seed the recovered terminal branches (from the resume
     # snapshot) into `collected` + `terminal_dispositions` so (a) their outputs
@@ -13076,6 +13465,15 @@ def _execute_orchestrator_workers(
                         _inflight_exc.child_snapshot,
                     )
                     raise
+                if type(_inflight_exc).__name__ == "HITLPauseRequestedSignal":
+                    # B-72 impl leg (CP spec v1.108 §1) — this worker was cancelled because a
+                    # SIBLING raised first, but its OWN in-flight dispatch's `SUB_AGENT_BOUNDARY`
+                    # gate fired before any child run was dispatched (the same race the
+                    # `SubAgentChildPausedError` in-flight catch above handles for a genuine
+                    # nested-child pause). Capture as pre-dispatch gate-owning (NOT a terminal
+                    # `completed` branch): stash + re-raise, no step/terminal entry recorded.
+                    pre_dispatch_gate_owning_dispositions.add(branch_index)
+                    raise
                 # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE (R-FS-1) — this branch was cancelled because
                 # a SIBLING raised first, but its OWN in-flight dispatch raised the runtime effect
                 # fence (the shield suppresses the in-flight exception + re-raises CancelledError,
@@ -13298,6 +13696,23 @@ def _execute_orchestrator_workers(
                     procedural_tier_snapshot_ref=snapshot_ref,
                 )
                 terminal_dispositions[branch_index] = "completed"  # B-FANOUT-PAUSE
+                raise
+            except BaseException as _pause_signal:
+                # B-72 impl leg (CP spec v1.108 §1) — this worker's OWN `SUB_AGENT_DISPATCH`
+                # dispatch is a `SUB_AGENT_BOUNDARY` HITL gate that fired BEFORE any child run
+                # was ever dispatched — the runtime's `HITLPauseRequestedSignal` (a BaseException
+                # subclass per Runtime spec §14.8.8.2; only an explicit catch consumes it, so the
+                # `except Exception` clause above never sees it — placed AFTER it so `Exception`
+                # subtypes keep matching their own typed handlers first). Name-matched (harness-cp
+                # cannot import harness-runtime). NOT a terminal branch (re-dispatched FRESH on
+                # resume, exactly like an absent ordinal) and NOT a failure in itself: stash the
+                # ordinal, record NO step/terminal entry, then re-raise so the TaskGroup halts the
+                # fan-out at the pause boundary — mirroring the `SubAgentChildPausedError`
+                # disposition shape above (the PARALLELIZATION `_cancel_branch` twin catch). Any
+                # OTHER BaseException is not ours to interpret — re-raise unclassified.
+                if type(_pause_signal).__name__ != "HITLPauseRequestedSignal":
+                    raise
+                pre_dispatch_gate_owning_dispositions.add(branch_index)
                 raise
             _record_clean(branch_index, step, child, writer, output)
         finally:
@@ -13614,6 +14029,18 @@ def _execute_orchestrator_workers(
         # prior + this-round terminal sets. Absent worker ordinals (the cancelled
         # not-yet-dispatched ones) are left re-dispatchable by omission. `step_id`
         # is captured per branch so resume validates body identity (Codex [P1]).
+        # B-72 impl leg (out-of-family Codex [P1], round 6) — carry forward a
+        # recovered pre-dispatch gate-owning worker that was withheld this round
+        # (neither re-fired nor resolved via another disposition); see
+        # `_execute_parallelization`'s own construction site for the full rationale.
+        _pre_dispatch_gate_owning_carried_forward = frozenset(
+            _bi
+            for _bi in _recovered_pre_dispatch_gate_owning
+            if _bi not in pre_dispatch_gate_owning_dispositions
+            and _bi not in terminal_dispositions
+            and _bi not in paused_child_dispositions
+            and _bi not in effect_fence_paused_dispositions
+        )
         fan_out_resume = FanOutResumeState(
             orchestrator_output=dict(orchestrator_output),
             orchestrator_step_id=str(orchestrator_step.step_id),
@@ -13686,6 +14113,32 @@ def _execute_orchestrator_workers(
             # level, so a child level's synthesis is captured into the child's own
             # snapshot here too.
             synthesis_step_id=(str(synthesis_step.step_id) if synthesis_step is not None else None),
+            # B-72 impl leg (CP spec v1.108 §1) — workers whose OWN gate fired THIS round
+            # before any child run was dispatched (the PARALLELIZATION analogue). DISJOINT
+            # from `branches` and from `paused_child_branches`. COVERED by the snapshot hash
+            # (dropped-when-empty → a round with no pre-dispatch gate-owning worker hashes
+            # byte-identically to pre-B-72). HIERARCHICAL_DELEGATION reuses this function per
+            # level, so a child level's own pre-dispatch gate-owning workers are captured here.
+            # Each row carries the captured `step_id` (out-of-family Codex [P1]) so the
+            # material-diff guard below can validate identity, plus the captured `step_kind`
+            # (out-of-family Codex [P2], round 5 — NOT a constant check; a pre-dispatch
+            # gate-owning worker can be SUB_AGENT_DISPATCH OR INFERENCE_STEP/TOOL_STEP) and
+            # `child_workflow_id` (out-of-family Codex [P1], round 4) — see
+            # `_execute_parallelization`'s own construction site for the full rationale.
+            pre_dispatch_gate_owning_branches=tuple(
+                PreDispatchGateOwningBranchResumeState(
+                    branch_index=_bi,
+                    step_id=str(worker_steps[_bi].step_id),
+                    step_kind=str(worker_steps[_bi].step_kind.value),
+                    child_workflow_id=_pre_dispatch_gate_owning_captured_child_workflow_id(
+                        worker_steps[_bi]
+                    ),
+                )
+                for _bi in sorted(
+                    pre_dispatch_gate_owning_dispositions
+                    | _pre_dispatch_gate_owning_carried_forward
+                )
+            ),
         )
         # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE — label EFFECT_FENCE_AMBIGUOUS when a worker
         # fence-paused this round so the operator surface knows to supply an EffectFenceResolution
@@ -13697,6 +14150,8 @@ def _execute_orchestrator_workers(
         # is PURELY INFORMATIONAL (the composer's `consume_and_clear` never branches on
         # pause_reason); per-child response ROUTING when >1 nested child pauses HITL_PENDING is a
         # SEPARATE unresolved gap tracked at B-39 (see the PARALLELIZATION analogue comment above).
+        # B-72 impl leg — a worker that IS itself pre-dispatch gate-owning this round ALSO labels
+        # the pause HITL_PENDING (the PARALLELIZATION analogue).
         _any_nested_hitl_pending = any(
             _child_snap.pause_reason is WorkflowPauseReason.HITL_PENDING
             for _, _child_snap in paused_child_dispositions.values()
@@ -13705,7 +14160,11 @@ def _execute_orchestrator_workers(
             WorkflowPauseReason.EFFECT_FENCE_AMBIGUOUS
             if effect_fence_paused_dispositions
             else WorkflowPauseReason.HITL_PENDING
-            if _any_nested_hitl_pending
+            if (
+                _any_nested_hitl_pending
+                or pre_dispatch_gate_owning_dispositions
+                or _pre_dispatch_gate_owning_carried_forward
+            )
             else WorkflowPauseReason.EXPLICIT_OPERATOR
         )
         snapshot = _run_protocol_method_sync(

@@ -37,6 +37,7 @@ from harness_cp.pause_resume_protocol_types import (
     PausedChildBranchResumeState,
     PauseSnapshot,
     PeerFanOutResumeState,
+    PreDispatchGateOwningBranchResumeState,
     ResumeContext,
     WorkflowPauseReason,
 )
@@ -48,6 +49,7 @@ from harness_cp.workflow_driver import (
     StepDispatcherRegistry,
     StepKindDispatcherNotBoundError,
     _collect_gate_owning_run_ids,
+    _pre_dispatch_gate_owning_branch_identity,
     compute_hitl_uniform_fallback_eligible_run_id,
     execute_workflow,
 )
@@ -288,6 +290,139 @@ def test_container_branch_never_counted_as_gate_owning() -> None:
     # 2 unaddressed gate-owning leaves → property 4 safety → no eligible run_id,
     # even though the container branch sits between them structurally.
     assert compute_hitl_uniform_fallback_eligible_run_id(root, ResumeContext()) is None
+
+
+def test_pre_dispatch_gate_owning_branch_is_collected_and_eligible() -> None:
+    """B-72 impl leg (CP spec v1.108 §1) — a peer branch recorded in the NEW
+    `PeerFanOutResumeState.pre_dispatch_gate_owning_branches` field (its own
+    gate fired before any child run existed — no nested `PausedChildBranch
+    ResumeState` to recurse into) is collected into the gate-owning set via
+    its composed internal identity, and is trivially the sole unaddressed
+    member when it is the only one."""
+    root = _snapshot(
+        run_id="run-root-pre-dispatch",
+        pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
+        peer_fan_out_resume=PeerFanOutResumeState(
+            branches=(),
+            branch_count=1,
+            pre_dispatch_gate_owning_branches=(
+                PreDispatchGateOwningBranchResumeState(
+                    branch_index=0, step_id="branch-0", step_kind="sub-agent-dispatch"
+                ),
+            ),
+        ),
+    )
+    expected_identity = _pre_dispatch_gate_owning_branch_identity("run-root-pre-dispatch", 0)
+    assert _collect_gate_owning_run_ids(root) == [expected_identity]
+    # Never conflated with a bare run_id — the internal identity is a distinct
+    # composed string, never `hitl_responses`-keyable (property 6 §1.1(b)).
+    assert expected_identity != root.run_id
+    eligible = compute_hitl_uniform_fallback_eligible_run_id(root, ResumeContext())
+    assert eligible == expected_identity
+
+
+def test_pre_dispatch_gate_owning_branches_at_different_tree_positions_never_collide() -> None:
+    """CP spec v1.108 §1.1(d) collision-witness test (codex out-of-family
+    review [P1], required before property 6 can be considered satisfied): two
+    pre-dispatch gate-owning branches at DIFFERENT tree positions — here, a
+    root-level peer branch (ordinal 0) and a NESTED child's own peer branch
+    (ALSO local ordinal 0, under a different `PeerFanOutResumeState` reached
+    via `paused_child_branches`) — must produce DISTINCT internal identities
+    even though their LOCAL ordinals are identical. An implementation keying
+    solely on the local branch ordinal (the exact defect codex's review
+    named) would collapse these two genuinely distinct branches into one,
+    letting property 4's SOLE-member rule misattribute a response meant for
+    one to the other."""
+    nested_child_with_own_pre_dispatch_branch = _snapshot(
+        run_id="run-nested-child",
+        pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
+        peer_fan_out_resume=PeerFanOutResumeState(
+            branches=(),
+            branch_count=1,
+            # SAME local ordinal as the root's own.
+            pre_dispatch_gate_owning_branches=(
+                PreDispatchGateOwningBranchResumeState(
+                    branch_index=0, step_id="nested-branch-0", step_kind="sub-agent-dispatch"
+                ),
+            ),
+        ),
+    )
+    root = _snapshot(
+        run_id="run-root",
+        pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
+        peer_fan_out_resume=PeerFanOutResumeState(
+            branches=(),
+            branch_count=2,
+            # the root's OWN branch 0.
+            pre_dispatch_gate_owning_branches=(
+                PreDispatchGateOwningBranchResumeState(
+                    branch_index=0, step_id="root-branch-0", step_kind="sub-agent-dispatch"
+                ),
+            ),
+            paused_child_branches=(
+                _paused_child(
+                    branch_index=1, child_snapshot=nested_child_with_own_pre_dispatch_branch
+                ),
+            ),
+        ),
+    )
+    collected = _collect_gate_owning_run_ids(root)
+    assert len(collected) == 2
+    assert len(set(collected)) == 2, (
+        f"two pre-dispatch gate-owning branches at different tree positions "
+        f"collapsed to the same internal identity despite sharing the same "
+        f"local ordinal (0): {collected!r}"
+    )
+    # 2 unaddressed gate-owning members → property 4 safety → neither is
+    # eligible for the uniform fallback (never a cross-branch misattribution).
+    assert compute_hitl_uniform_fallback_eligible_run_id(root, ResumeContext()) is None
+
+
+def test_pre_dispatch_gate_owning_identity_colliding_with_hitl_responses_key_stays_unaddressed() -> (
+    None
+):
+    """CP spec v1.108 §1.1(b) mutation probe (codex out-of-family review [P1]):
+    property 6 explicitly FORBIDS a pre-dispatch gate-owning branch from EVER
+    being resolvable via `hitl_responses` — no `child_run_id` exists to key it
+    by. If an operator-supplied `hitl_responses` map happens to carry a key
+    that collides with the composed internal identity (accidentally, or a
+    caller mistakenly threading the identity string through), the generic
+    membership test must NOT treat that as "addressed" — else it could make a
+    genuinely-unaddressed SIBLING elsewhere in the tree wrongly appear to be
+    the sole unaddressed member, misattributing the uniform fallback across
+    two DISTINCT pre-dispatch branches (the exact cross-branch misattribution
+    property 4 exists to prevent)."""
+    sibling = _snapshot(run_id="run-sibling", pause_reason=WorkflowPauseReason.HITL_PENDING)
+    root = _snapshot(
+        run_id="run-root-collision",
+        pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
+        peer_fan_out_resume=PeerFanOutResumeState(
+            branches=(),
+            branch_count=2,
+            pre_dispatch_gate_owning_branches=(
+                PreDispatchGateOwningBranchResumeState(
+                    branch_index=0, step_id="branch-0", step_kind="sub-agent-dispatch"
+                ),
+            ),
+            paused_child_branches=(_paused_child(branch_index=1, child_snapshot=sibling),),
+        ),
+    )
+    colliding_identity = _pre_dispatch_gate_owning_branch_identity("run-root-collision", 0)
+    # A `hitl_responses` map that happens to carry a key colliding with the
+    # composed internal identity — this must be IGNORED for the pre-dispatch
+    # branch, leaving it (correctly) counted as unaddressed alongside its
+    # genuinely-unaddressed sibling, so 2 unaddressed members → no eligible id.
+    colliding_map = ResumeContext(
+        hitl_responses={
+            colliding_identity: HITLResult(
+                response=HITLResponse.APPROVE,
+                timestamp="2026-07-25T00:00:00Z",
+                audit_ledger_entry_id=EntryID("e-collision"),
+                response_summary_hash="a" * 64,
+            )
+        }
+    )
+    assert compute_hitl_uniform_fallback_eligible_run_id(root, colliding_map) is None
 
 
 def test_none_root_or_none_resume_context_yields_no_eligible_run_id() -> None:
