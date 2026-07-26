@@ -1831,6 +1831,7 @@ items:
     is the SAME root-cause gap B-79 already registers (missing HITL placement/material-diff
     validation before resume dispatch) -- folded into B-79''s scope rather than fixed here or
     registered as a duplicate row; see B-79''s amended summary.'
+  pr: '#1117'
   close_out: 'CLOSED. Reproduction confirmed and exceeded the registered hypothesis (uncaught
     crash, not just livelock); fix landed mirroring the cleared LINEAR mechanism; the one residual
     finding (round 4) is B-79''s pre-existing gap reached via a new path, not a new defect --
