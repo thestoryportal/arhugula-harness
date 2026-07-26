@@ -3973,3 +3973,229 @@ def test_ow_worker_resume_delivers_and_excludes_resolved_pre_dispatch_gate_owner
         f"this-round pause) should remain; got "
         f"{sorted(b.branch_index for b in resumed_fr.pre_dispatch_gate_owning_branches)!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# B-81 close-out (1) — the OW mirror of PARALLELIZATION's own pre-dispatch
+# gate-owning material-diff witnesses (test_workflow_driver_parallelization_
+# pause.py's test_peer_resume_rejects_pre_dispatch_gate_owning_kind_changed /
+# _workflow_id_swap / test_peer_resume_accepts_unchanged_pre_action_gated_
+# inference_step), ported against _execute_orchestrator_workers's OWN
+# `_resume_body_mismatch` closure (workflow_driver.py ~11605-11653) — this
+# code path was symmetric with PARALLELIZATION's but had ZERO direct test
+# coverage of its own before this arc (merge-gate test-witness lens round 2).
+# ---------------------------------------------------------------------------
+
+
+def test_ow_worker_resume_rejects_pre_dispatch_gate_owning_kind_changed() -> None:
+    """B-81 (1) — a same-`step_id` edit that swaps a pre-dispatch gate-owning OW
+    branch's `step_kind` must fail closed, mirroring PARALLELIZATION's own guard
+    at its structurally-identical `_resume_body_mismatch` closure.
+
+    Mutation-probe note: disabling the kind-changed guard does NOT flip
+    `status` (a downstream workflow-id-unreadable guard still catches the
+    malformed resume and returns FAILED) — this test's actual discriminating
+    power is the `fail_class` substring assertion below, not the status
+    assertion. Verified via mutation probe 2026-07-26."""
+    steps = [
+        WorkflowStep(
+            step_id=StepID("orchestrator"),
+            step_kind=StepKind.DECLARATIVE_STEP,
+            step_payload={"role": "orchestrator"},
+        ),
+        WorkflowStep(
+            step_id=StepID("worker-0-sub"),
+            step_kind=StepKind.SUB_AGENT_DISPATCH,
+            step_payload={"child_workflow_id": "wf-child-ow-kind"},
+        ),
+    ]
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    paused = execute_workflow(
+        _manifest("wf-ow-kind"),
+        steps,
+        run_id="run-1",
+        ctx=ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=cast(StepDispatcherRegistry, _PreDispatchGateDispatcherOW()),
+    )
+    assert paused.status is RunStatus.PAUSED
+    snap = paused.pause_snapshot
+    assert snap is not None
+    assert snap.fan_out_resume is not None
+    assert len(snap.fan_out_resume.pre_dispatch_gate_owning_branches) == 1
+    assert snap.fan_out_resume.pre_dispatch_gate_owning_branches[0].branch_index == 0
+
+    # Resume with worker-0-sub's step_kind CHANGED to DECLARATIVE_STEP (same step_id).
+    changed_steps = [
+        steps[0],
+        WorkflowStep(
+            step_id=StepID("worker-0-sub"),
+            step_kind=StepKind.DECLARATIVE_STEP,
+            step_payload={"index": 0},
+        ),
+    ]
+    resume_ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    resumed = execute_workflow(
+        _manifest("wf-ow-kind"),
+        changed_steps,
+        run_id="run-1",
+        ctx=resume_ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(_CountingDispatcher()),
+        pause_snapshot_input=snap,
+    )
+    assert resumed.status is RunStatus.FAILED
+    assert "pre-dispatch-gate-owning-kind-changed" in (resumed.fail_class or "")
+
+
+def test_ow_worker_resume_rejects_pre_dispatch_gate_owning_workflow_id_swap() -> None:
+    """B-81 (1) — a same-`step_id`, same-`step_kind` edit that swaps a pre-dispatch
+    gate-owning OW `SUB_AGENT_DISPATCH` branch's target `child_workflow_id` must
+    fail closed, mirroring PARALLELIZATION's own guard.
+
+    Mutation-probe note: unlike the sibling kind-changed test above, disabling
+    THIS guard flips `status` PAUSED -> FAILED directly (no downstream guard
+    catches it) — `status` itself is load-bearing here, not just `fail_class`.
+    Verified via mutation probe 2026-07-26."""
+    steps = [
+        WorkflowStep(
+            step_id=StepID("orchestrator"),
+            step_kind=StepKind.DECLARATIVE_STEP,
+            step_payload={"role": "orchestrator"},
+        ),
+        WorkflowStep(
+            step_id=StepID("worker-0-sub"),
+            step_kind=StepKind.SUB_AGENT_DISPATCH,
+            step_payload={"child_workflow_id": "wf-child-ow-swap"},
+        ),
+    ]
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    paused = execute_workflow(
+        _manifest("wf-ow-swap"),
+        steps,
+        run_id="run-1",
+        ctx=ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=cast(StepDispatcherRegistry, _PreDispatchGateDispatcherOW()),
+    )
+    assert paused.status is RunStatus.PAUSED
+    snap = paused.pause_snapshot
+    assert snap is not None
+    assert snap.fan_out_resume is not None
+    assert (
+        snap.fan_out_resume.pre_dispatch_gate_owning_branches[0].child_workflow_id
+        == "wf-child-ow-swap"
+    )
+
+    # Resume with worker-0-sub's step_payload edited to target a DIFFERENT child
+    # workflow — same step_id, same step_kind (so the identity/kind guards pass).
+    changed_steps = [
+        steps[0],
+        WorkflowStep(
+            step_id=StepID("worker-0-sub"),
+            step_kind=StepKind.SUB_AGENT_DISPATCH,
+            step_payload={"child_workflow_id": "wf-child-ow-SWAPPED"},
+        ),
+    ]
+    resume_ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    resumed = execute_workflow(
+        _manifest("wf-ow-swap"),
+        changed_steps,
+        run_id="run-1",
+        ctx=resume_ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(_CountingDispatcher()),
+        pause_snapshot_input=snap,
+    )
+    assert resumed.status is RunStatus.FAILED
+    assert "pre-dispatch-gate-owning-workflow-id-changed" in (resumed.fail_class or "")
+
+
+class _PreDispatchGateOnInferenceStepDispatcherOW:
+    """OW mirror of `test_workflow_driver_parallelization_pause.py`'s
+    `_PreDispatchGateOnInferenceStepDispatcher` — a `PRE_ACTION`-gated
+    `INFERENCE_STEP` worker ALSO raises `HITLPauseRequestedSignal` pre-dispatch
+    (not only `SUB_AGENT_DISPATCH`); an UNCHANGED resume of this exact shape
+    must succeed, not be falsely rejected as a kind-changed material diff."""
+
+    def __init__(self) -> None:
+        self._raised = False
+        self.dispatched: list[str] = []
+
+    def lookup(self, step_kind: StepKind) -> StepDispatcher:
+        return cast(StepDispatcher, self)
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        step_id = str(step.step_id)
+        self.dispatched.append(step_id)
+        if step_id == "worker-0-inf" and not self._raised:
+            self._raised = True
+            raise HITLPauseRequestedSignal()
+        return {"role": step_id, "echoed": dict(step.step_payload)}
+
+
+def test_ow_worker_resume_accepts_unchanged_pre_action_gated_inference_step() -> None:
+    """B-81 (1) — the OW mirror of PARALLELIZATION's own round-5 regression:
+    `PRE_ACTION` can gate an `INFERENCE_STEP`/`TOOL_STEP` OW worker too, raising
+    the SAME name-matched signal; an UNCHANGED resume of that worker must
+    succeed, not be rejected as a false `pre-dispatch-gate-owning-kind-changed`.
+
+    Mutation-probe note: hardcoding the kind comparison's RHS to the
+    `SUB_AGENT_DISPATCH` literal (the exact round-5 regression shape, in place
+    of comparing against the captured `pg.step_kind`) flips this test's
+    outcome SUCCESS -> FAILED with `fail_class` reporting a spurious
+    kind-changed diff for an actually-unchanged INFERENCE_STEP resume —
+    confirming this test would catch the regression it was ported to guard
+    against. Verified via mutation probe 2026-07-26."""
+    steps = [
+        WorkflowStep(
+            step_id=StepID("orchestrator"),
+            step_kind=StepKind.DECLARATIVE_STEP,
+            step_payload={"role": "orchestrator"},
+        ),
+        WorkflowStep(
+            step_id=StepID("worker-0-inf"),
+            step_kind=StepKind.INFERENCE_STEP,
+            step_payload={"prompt": "hi"},
+        ),
+    ]
+    dispatcher = _PreDispatchGateOnInferenceStepDispatcherOW()
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    paused = execute_workflow(
+        _manifest("wf-ow-inf"),
+        steps,
+        run_id="run-1",
+        ctx=ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=cast(StepDispatcherRegistry, dispatcher),
+    )
+    assert paused.status is RunStatus.PAUSED
+    snap = paused.pause_snapshot
+    assert snap is not None
+    assert snap.fan_out_resume is not None
+    pre_dispatch = snap.fan_out_resume.pre_dispatch_gate_owning_branches
+    assert len(pre_dispatch) == 1
+    assert pre_dispatch[0].branch_index == 0
+    assert pre_dispatch[0].step_kind == StepKind.INFERENCE_STEP.value
+    assert pre_dispatch[0].child_workflow_id is None, (
+        "an INFERENCE_STEP branch has no child_workflow_id to capture — must "
+        "stay None, not spuriously read a payload key that doesn't exist"
+    )
+
+    resume_ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    resumed = execute_workflow(
+        _manifest("wf-ow-inf"),
+        steps,
+        run_id="run-1",
+        ctx=resume_ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=cast(StepDispatcherRegistry, dispatcher),
+        pause_snapshot_input=snap,
+    )
+    assert resumed.status is RunStatus.SUCCESS, (
+        f"expected an UNCHANGED PRE_ACTION-gated INFERENCE_STEP resume to succeed "
+        f"(no material diff at all); got status={resumed.status!r} "
+        f"fail_class={resumed.fail_class!r}"
+    )
