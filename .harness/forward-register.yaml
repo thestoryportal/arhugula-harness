@@ -61,11 +61,11 @@ snapshot:
   total: 82
   open: 0
   design_substrate_gated: 0
-  registered_finding: 18
+  registered_finding: 17
   operator_gated: 1
   held: 1
-  closed: 62
-  identity_digest: acf2f0f2f2668743
+  closed: 63
+  identity_digest: 9b4c32f19d8a19c4
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -1791,27 +1791,50 @@ items:
   title: A SUB_AGENT_DISPATCH step's own SUB_AGENT_BOUNDARY gate under EVALUATOR_OPTIMIZER or
     DECENTRALIZED_HANDOFF can exhibit the same pre-dispatch re-fire livelock B-72 property 6
     closes for the fan-out topologies, ungrounded by any reproduction
-  status: registered_finding
+  status: closed
   summary: 'Split out of B-72''s spec leg at CP spec v1.108 SS1.2b (out-of-family Codex round 5,
     2026-07-25; round 7 [P2] flagged this exclusion as needing its own durable tracking, not
     just correction-history prose). Property 6 (v1.108 SS1) closes B-72 net-position item (1)
     ONLY for the PARALLELIZATION/ORCHESTRATOR_WORKERS/HIERARCHICAL_DELEGATION topologies -- the
     ones whose gate-owning-branch pause state is captured via the PeerFanOutResumeState/
-    FanOutResumeState carrier family (HIERARCHICAL_DELEGATION included on carrier-identity
-    grounds per round 6, since it recursively reuses _execute_orchestrator_workers per
-    U-CP-88/89, not a separate implementation). A SUB_AGENT_DISPATCH step carrying its own
+    FanOutResumeState carrier family. A SUB_AGENT_DISPATCH step carrying its own
     SUB_AGENT_BOUNDARY placement under EVALUATOR_OPTIMIZER or DECENTRALIZED_HANDOFF is captured
-    into a DIFFERENT carrier family instead (EvaluatorOptimizerResumeState/HandoffResumeState)
-    and can plausibly exhibit the SAME re-fire-on-resume symptom B-72''s round-3 reproduction
-    pins for the fan-out case -- but this has NEVER been reproduced or even directly grounded
-    against those carriers'' own code paths. Registered rather than assumed, per this arc''s own
-    round-3/4/5/6/7 discipline of verifying before claiming closure or scope.'
-  close_out: 'A future arc''s own reproduction-first grounding pass (mirroring how B-72''s round-3
-    repro preceded its own spec leg): construct a real EVALUATOR_OPTIMIZER or
-    DECENTRALIZED_HANDOFF workflow whose SUB_AGENT_DISPATCH step carries SUB_AGENT_BOUNDARY,
-    confirm (or falsify) that its own pre-dispatch gate re-fires identically on resume, and only
-    then determine whether a property-6-shaped fix (or a materially different one, given the
-    different carrier shape) is warranted -- not yet designed, not yet specified.'
+    into a DIFFERENT carrier family instead (EvaluatorOptimizerResumeState/HandoffResumeState).
+    GROUNDED 2026-07-26 (reproduction-first pass, real-stack integration tests against
+    harness-runtime): the actual defect was WORSE than the registered livelock hypothesis -- a
+    genuine `HITLPauseRequestedSignal` (a deliberate `BaseException`, not `Exception`) raised
+    from `_dispatch_and_buffer`/the stage dispatcher inside `_execute_evaluator_optimizer` and
+    `_execute_decentralized_handoff` was UNCAUGHT (no handler matched a bare `BaseException`
+    subclass), crashing the run outright rather than pausing it; and separately, neither
+    topology constructed a `HITLDeliveryCell` at its own resumed-step dispatch site at all, so
+    even a caught pause could never deliver a resolved operator response on resume. CLOSED --
+    IMPL LEG LANDED 2026-07-26 (PR #1117, branch b78-eo-dh-hitl-delivery-cell-impl-leg): mirrors
+    the already-cleared LINEAR delivery-cell mechanism (CP spec v1.108 SS1 line 37) at both EO''s
+    and DH''s own resumed-step dispatch sites -- a name-matched `except BaseException` catch
+    (EO wraps it as `_EvaluatorOptimizerHITLPauseError`; DH catches inline) plus
+    `HITLDeliveryCell` construction keyed on `resume_context.hitl_responses`/uniform-fallback
+    eligibility, identical resolution shape to LINEAR/fan-out. No new CP-spec carrier field
+    needed (EO/DH have no branch-ordinal ambiguity, unlike the fan-out topologies property 6 was
+    built for) -- plain Phase-7 impl work, not Class 1. 5 rounds of out-of-family
+    `just codex-review main` to convergence: round 1 (REJECT responses on resume must be
+    terminal, not folded into a resumable pause) and round 2 (the round-1 terminal-carve-out was
+    too broad, misclassifying a genuine non-HITL `rt_fail_class` as gate-terminal) and round 3
+    (round 2''s narrowed carve-out was checked ahead of the `cascade_policy` branches in DH,
+    wrongly forcing terminal FAILED even under `cascade_policy=PROCEED`''s documented
+    PARTIAL-salvage disposition) were genuine regressions this arc''s own fixes introduced, each
+    fixed and mutation-probe-verified. Round 4''s finding (an unanswered `HITL_PENDING` resume
+    with no resolved response proceeds to dispatch rather than staying inert) is NOT an EO/DH-
+    specific defect -- direct grep confirmed the identical unconditional-dispatch-after-
+    delivery-cell-construction shape already exists at the already-shipped LINEAR resume_at site
+    (`workflow_driver.py` ~4900-4990), relying on `RuntimeHITLGateComposer`''s own Step-0
+    consume-or-fresh-fire logic (`hitl_gate_composer.py:1684-1688`) to re-escalate safely. This
+    is the SAME root-cause gap B-79 already registers (missing HITL placement/material-diff
+    validation before resume dispatch) -- folded into B-79''s scope rather than fixed here or
+    registered as a duplicate row; see B-79''s amended summary.'
+  close_out: 'CLOSED. Reproduction confirmed and exceeded the registered hypothesis (uncaught
+    crash, not just livelock); fix landed mirroring the cleared LINEAR mechanism; the one residual
+    finding (round 4) is B-79''s pre-existing gap reached via a new path, not a new defect --
+    tracked there.'
   council: 'no -- narrow topology-specific livelock candidate with a clear grounding-first next
     step (reproduce before designing), mirroring B-72''s own precedent; not a judgment call yet'
   heading: '### B-78 · A `SUB_AGENT_DISPATCH` step''s own `SUB_AGENT_BOUNDARY` gate under
@@ -2265,7 +2288,26 @@ items:
     into, that logic being Runtime-owned -- needs a new cross-axis seam to expose it) not a
     mechanical patch. Witness with a test that edits a paused step''s HITL placement (or
     step_kind) between pause and resume while preserving step_id, and asserts the resume is
-    rejected as a material diff rather than silently delivering the stale response.'
+    rejected as a material diff rather than silently delivering the stale response.
+
+    SCOPE BROADENED 2026-07-26 (B-78 impl leg, out-of-family Codex round 4, branch-vs-main PR
+    #1117): the gap also manifests via a SECOND path this row did not originally name -- when NO
+    HITLDeliveryCell is constructed at all (no addressed or uniform HITLResult resolves this
+    resume cycle), execution still proceeds to dispatch rather than staying inert, relying
+    entirely on RuntimeHITLGateComposer''s Step-0 consume-or-fresh-fire logic
+    (hitl_gate_composer.py:1684-1688) to treat the dispatch as a brand-new gate evaluation. This
+    is SAFE-BUT-WASTEFUL (a second webhook fire) when the step''s HITL placement is unchanged,
+    but degrades to the SAME unauthorized-dispatch risk this row already describes if the
+    placement was ALSO removed/altered between pause and resume, since the fresh-fire path''s
+    "does this step still need a gate" check is exactly the material-diff validation this row
+    calls for and that does not yet exist anywhere. Confirmed via direct grep that this is the
+    identical pre-existing shape at the already-shipped LINEAR resume_at site AND now also
+    reachable at the newly-landed EVALUATOR_OPTIMIZER/DECENTRALIZED_HANDOFF delivery-cell sites
+    (B-78 impl leg, PR #1117) -- one shared root cause, four call sites (LINEAR, both fan-out
+    closures, EO, DH). The close_out design task above (a persisted HITL-placement/
+    gate-configuration identity, checked before ANY resume dispatch regardless of whether a
+    delivery cell resolves) already covers this path; no separate fix is owed, this note only
+    widens the reachability set the eventual fix must cover.'
   council: 'Likely worth a dyadic pass (a design task touching a Runtime-owned cross-axis seam,
     not mechanical) -- C10 (blast-radius/gate-integrity, mirroring the B-72 spec-leg''s own
     prior falsified-draft caution) paired with whichever voice owns the CP<->Runtime
