@@ -22,11 +22,11 @@ from __future__ import annotations
 
 import dataclasses
 import errno
-import fcntl
 import hashlib
 import logging
 import os
 import pickle
+import sys
 import tempfile
 import threading
 import time
@@ -38,6 +38,14 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from harness_runtime.lifecycle.memory_tool_encrypted import FernetLike
+
+#: C-STK-10 commits to macOS / Linux / Windows without per-OS port forking;
+#: the stdlib has no `fcntl` on Windows. `harness_runtime.types` imports
+#: `ProtectedResultStore` unconditionally, so an unguarded top-level
+#: `import fcntl` would make `import harness_runtime` itself fail on
+#: Windows (codex [P1] on the B-73 arc) — mirrors the same guard already
+#: shipped at `harness_is.cross_process_ledger_lock`.
+_IS_WINDOWS = sys.platform == "win32"
 
 __all__ = [
     "ProtectedResultStore",
@@ -306,7 +314,17 @@ class ProtectedResultStore:
         already holds it via another fd — so this is safe (and always
         uncontended) even nested under the in-process lock that already
         serializes same-process callers before any `flock` call is reached.
+
+        No-op on Windows (`_IS_WINDOWS`) — same posture as pre-B-73 (the
+        in-process `self._publish_lock` still applies; only the additional
+        cross-process exclusion is unavailable there), matching
+        `harness_is.cross_process_ledger_lock`'s own Windows carve-out.
         """
+        if _IS_WINDOWS:
+            yield
+            return
+        import fcntl  # POSIX-only; never reached on Windows.
+
         lock_path = self._root / _CROSS_PROCESS_LOCK_FILENAME
         fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
         try:

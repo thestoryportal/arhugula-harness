@@ -55,6 +55,7 @@ class _Unserializable:
 #: boundary.
 _B73_CHILD_WRITE_SCRIPT = """
 import sys
+import time
 from pathlib import Path
 from cryptography.fernet import Fernet
 from harness_runtime.lifecycle.protected_result_store import ProtectedResultStore
@@ -62,6 +63,12 @@ from harness_runtime.lifecycle.protected_result_store import ProtectedResultStor
 store_dir, key, done_marker, ready_marker = sys.argv[1:5]
 Path(ready_marker).write_text("ready")
 store = ProtectedResultStore(Path(store_dir), codec=Fernet(key.encode()), ttl_seconds=86400.0)
+# codex [P2] on the B-73 arc: a fresh store's _last_gc_at is 0.0, so this
+# write_once() would otherwise ALSO trigger _maybe_opportunistic_gc_sweep()
+# first -- which acquires the SAME cross-process lock via gc_sweep(),
+# making this test pass even if _publish_atomic's OWN lock use were
+# removed. Suppressing it isolates the assertion to _publish_atomic.
+store._last_gc_at = time.time()
 store.write_once("tenant-a", "written by a separate OS process")
 Path(done_marker).write_text("done")
 """
@@ -960,7 +967,16 @@ def test_write_once_blocks_across_separate_processes_via_cross_process_lock(
     `cryptography` + `harness_runtime` in this environment) masking the
     missing lock; the `ready_marker` handshake below closes that gap by
     timing the "still blocked" check from the moment the child is
-    actually about to contend on the lock, not from process spawn."""
+    actually about to contend on the lock, not from process spawn.
+
+    out-of-family Codex [P2]: a fresh child store's `_last_gc_at` is `0.0`,
+    so `write_once()` would otherwise ALSO trigger
+    `_maybe_opportunistic_gc_sweep()` first — which acquires the SAME
+    cross-process lock via `gc_sweep()`, so this test would still pass
+    even with `_cross_process_lock()` removed from `_publish_atomic`
+    ALONE (the opportunistic sweep's own lock use would still block it).
+    `_B73_CHILD_WRITE_SCRIPT` suppresses that sweep so this test isolates
+    `_publish_atomic`'s own critical section specifically."""
     key = Fernet.generate_key()
     store_dir = tmp_path / "store"
     store_dir.mkdir(parents=True)
