@@ -2197,7 +2197,23 @@ items:
     suppressed peer is still re-dispatched (re-pausing INERT) rather than silently skipped. Full
     harness-cp targeted suite re-run clean (156 passed, +3 from this round); ruff + pyright
     strict clean on all touched files. 4 rounds of out-of-family just codex-review total to
-    convergence for the impl leg.'
+    convergence for the impl leg. ROUND 5 CODEX FIX (2026-07-25, same PR #1116, pre-merge,
+    base=main, out-of-family just codex-review) -- round 4''s OWN kind-changed guard was itself
+    broken: it hardcoded a constant check against StepKind.SUB_AGENT_DISPATCH, wrongly assuming
+    a pre-dispatch gate-owning branch can only ever be that kind. HITLPlacementKind.PRE_ACTION
+    can ALSO gate INFERENCE_STEP/TOOL_STEP steps and raises the SAME name-matched
+    HITLPauseRequestedSignal -- an unchanged PRE_ACTION-gated resume would have been rejected as
+    a false material diff, a genuine regression round 4 introduced. Fixed by restoring step_kind
+    as a CAPTURED field (compared for equality on resume), not a constant check -- the
+    PausedChildBranchResumeState (B-31) precedent round 4 mirrored does not apply here, since
+    that carrier IS uniquely SUB_AGENT_DISPATCH by construction while this one is genuinely
+    multi-kind. child_workflow_id is unaffected (already defaulted to None via a try/except for
+    non-SUB_AGENT_DISPATCH payloads). NEW regression test reproduces the exact scenario codex
+    flagged: a PRE_ACTION-gated INFERENCE_STEP branch pre-dispatch-pauses, and resuming with the
+    UNCHANGED workflow now succeeds instead of failing closed on a bogus kind-changed material
+    diff. Full harness-cp + harness-runtime targeted suites re-run clean (157 + 2 passed, +1
+    from this round); ruff + pyright strict clean on all touched files. 5 rounds of
+    out-of-family just codex-review total to convergence for the impl leg.'
   pr: '#1116'
   council: RETIRED "skip-a-gate vs strand-a-descendant" framing (2026-07-25 round 2) -- the spec's
     mechanism ROUTES a resolved answer via hitl_response_for(child_run_id), it does not skip gate
