@@ -10310,6 +10310,24 @@ class _EvaluatorOptimizerStepDispatchError(Exception):
         self.original = original
 
 
+class _EvaluatorOptimizerHITLPauseError(Exception):
+    """Marks that an EO generate/evaluate step's DISPATCH raised the runtime's
+    `HITLPauseRequestedSignal` (B-78) — a `SUB_AGENT_DISPATCH` declared step whose
+    own `SUB_AGENT_BOUNDARY` gate fired BEFORE any child run was dispatched.
+
+    Distinguished from `_EvaluatorOptimizerStepDispatchError` (an ordinary dispatch
+    FAILURE governed by `cascade_policy`) so the outer handler can materialize a
+    genuine `WorkflowPauseReason.HITL_PENDING` pause UNCONDITIONALLY (mirroring the
+    `SINGLE_THREADED_LINEAR` path's own HITL branch, `workflow_driver.py:5175`,
+    which pauses whenever a `pause_resume_protocol` is bound, independent of
+    `cascade_policy` — the tunable governs the reaction to a step FAILURE, not an
+    explicit HITL gate request)."""
+
+    def __init__(self, original: BaseException) -> None:
+        super().__init__(str(original))
+        self.original = original
+
+
 def _execute_evaluator_optimizer(
     *,
     manifest_entry: WorkflowManifestEntry,
@@ -10614,6 +10632,17 @@ def _execute_evaluator_optimizer(
             resume_context=resume_context,
             hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
             effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
+            # B-78 impl leg — the one-shot HITL delivery cell (constructed below,
+            # near the resume-recovery block), threaded ONLY onto the FIRST
+            # `_dispatch_and_buffer` call made this resume cycle (`entry_index ==
+            # _resume_completed_count` — the step being re-dispatched immediately
+            # after resume; mirrors the LINEAR path's `step_index == resume_at`
+            # gate). Every later call in the same loop invocation (a later
+            # iteration's generate/evaluate) gets `None`, exactly like every
+            # non-resumed LINEAR step.
+            hitl_delivery_holder=(
+                hitl_delivery_cell if entry_index == _resume_completed_count else None
+            ),
         )
         # B-NONLINEAR-OVERRIDE-PROVENANCE — buffer the per-step override entry
         # BEFORE dispatch (mirrors the linear path's pre-dispatch emission). A
@@ -10654,6 +10683,25 @@ def _execute_evaluator_optimizer(
             raise
         except Exception as dispatch_exc:
             raise _EvaluatorOptimizerStepDispatchError(dispatch_exc) from dispatch_exc
+        except BaseException as _pause_signal:
+            # B-78 impl leg — this step's own `SUB_AGENT_BOUNDARY` HITL gate fired
+            # BEFORE any child run was ever dispatched. The runtime's
+            # `HITLPauseRequestedSignal` (a `BaseException` subclass per Runtime
+            # spec §14.8.8.2; only an explicit catch consumes it, so the
+            # `except Exception` clause above never sees it — placed AFTER it so
+            # `Exception` subtypes keep matching their own typed handlers first).
+            # Name-matched (harness-cp cannot import harness-runtime), mirroring
+            # `_execute_parallelization`'s own per-branch catch
+            # (`workflow_driver.py:9591`). EO is strictly sequential/single-owner
+            # (no fan-out, no branch-ordinal ambiguity per CP spec v1.108 §1's
+            # property-6 framing — that carrier exists only for peer-branch
+            # topologies), so wrap TYPED and let the outer handler apply the
+            # LINEAR path's simpler unconditional-pause mechanism. Any OTHER
+            # BaseException is NOT ours to interpret — re-raise unclassified,
+            # exactly as it would have propagated before this clause existed.
+            if type(_pause_signal).__name__ != "HITLPauseRequestedSignal":
+                raise
+            raise _EvaluatorOptimizerHITLPauseError(_pause_signal) from _pause_signal
         # B-INTERSTEP (runtime spec §14.21 C-RT-34) — record this step's output to
         # the run-scoped inter-step channel BEFORE the next dispatch so the EO data
         # flow is real: the evaluate dispatch reads the generate draft, and the
@@ -10715,6 +10763,35 @@ def _execute_evaluator_optimizer(
     # partial iteration); its iteration is ALREADY counted via the replayed generate.
     resume_pending_evaluate = entry_index % 2 == 1
 
+    # B-78 impl leg (CP spec-precedent §1, mirrors `workflow_driver.py:4830-4859`
+    # EXACTLY — the LINEAR `resume_at` delivery-cell construction site) — resolve
+    # THIS resume cycle's one-shot HITL delivery cell. EO is sequential/single-owner
+    # (no fan-out, no branch-ordinal ambiguity), so the LINEAR mechanism applies
+    # unmodified: gated on genuinely resuming a HITL_PENDING pause; a map HIT on
+    # `resume_context.hitl_responses` (keyed by THIS run_id, only consulted when
+    # `sub_agent_descent` — the "am I the depth-0 root" discriminator) is always
+    # safe; the UNIFORM `hitl_response` fallback applies only when this run_id is
+    # the resume cycle's sole unaddressed gate-owning member
+    # (`hitl_uniform_fallback_eligible_run_id`, computed once at the true root).
+    hitl_delivery_cell: HITLDeliveryCell | None = None
+    if (
+        resume_context is not None
+        and resume_snapshot is not None
+        and resume_snapshot.pause_reason is WorkflowPauseReason.HITL_PENDING
+    ):
+        _eo_resolved_hitl: HITLResult | None = None
+        _eo_mapped_hitl = (
+            resume_context.hitl_responses.get(run_id)
+            if sub_agent_descent and resume_context.hitl_responses
+            else None
+        )
+        if _eo_mapped_hitl is not None:
+            _eo_resolved_hitl = _eo_mapped_hitl
+        elif run_id == hitl_uniform_fallback_eligible_run_id:
+            _eo_resolved_hitl = resume_context.hitl_response
+        if _eo_resolved_hitl is not None:
+            hitl_delivery_cell = HITLDeliveryCell(_eo_resolved_hitl)
+
     try:
         if resume_pending_evaluate:
             last_evaluation = _dispatch_and_buffer(
@@ -10766,6 +10843,75 @@ def _execute_evaluator_optimizer(
                 f"PAUSED ({child_paused}); the cross-recursion child-pause disposition is "
                 "not materialized for EVALUATOR_OPTIMIZER"
             ),
+        ), entry_index - _resume_completed_count
+    except _EvaluatorOptimizerHITLPauseError as _hitl_pause:
+        # B-78 impl leg — the failed step's own `SUB_AGENT_BOUNDARY` HITL gate fired
+        # (a genuine operator-pause REQUEST, not a dispatch FAILURE). Mirrors the
+        # LINEAR path's own HITL branch (`workflow_driver.py:5175-5213`): pause
+        # UNCONDITIONALLY whenever a `pause_resume_protocol` is bound — NOT gated
+        # on `cascade_policy` (that tunable governs the reaction to a step
+        # FAILURE, the sibling `_EvaluatorOptimizerStepDispatchError` handler
+        # below; a HITL gate request is not a failure at all). `pause_reason`
+        # MUST be `HITL_PENDING` (not the dispatch-failure handler's hardcoded
+        # `EXPLICIT_OPERATOR`) — the LINEAR resume_at delivery-cell gate
+        # (`workflow_driver.py:4834`) requires exactly this label before it will
+        # ever construct a delivery cell; EO's own mirrored gate above shares the
+        # same requirement.
+        protocol = getattr(ctx, "pause_resume_protocol", None)
+        if protocol is None:
+            # Defensive — per the runtime composer's own §14.8.8.1 step 0 OR-form
+            # precondition this is unreachable (the signal only fires when a
+            # protocol IS bound); surfaced as FAILED for visibility, mirroring
+            # the LINEAR path's own defensive fallthrough comment. The
+            # completed-step buffer still drains (no silent loss).
+            drain_branch_buffers(ctx.ledger_writer, [writer])
+            return RunResult(
+                workflow_id=workflow_id,
+                run_id=run_id,
+                status=RunStatus.FAILED,
+                terminal_step_index=None,
+                partial_state=None,
+                final_state=None,
+                fail_class=(
+                    "evaluator-optimizer-hitl-pause-resume-protocol-not-bound: a step's "
+                    "own SUB_AGENT_BOUNDARY HITL gate fired but no pause_resume_protocol "
+                    "is bound (cannot capture a resumable snapshot) — underlying: "
+                    f"{type(_hitl_pause.original).__name__}: {_hitl_pause.original}"
+                ),
+            ), entry_index - _resume_completed_count
+        # Drain the completed-step buffer BEFORE returning PAUSED so this-run
+        # completions persist; the cursor captures their outputs for resume recovery.
+        drain_branch_buffers(ctx.ledger_writer, [writer])
+        eo_resume = EvaluatorOptimizerResumeState(
+            completed_steps=tuple(completed_step_records),
+        )
+        snapshot = _run_protocol_method_sync(
+            cast(PauseResumeProtocol, protocol).capture_pause_snapshot(
+                workflow_id=workflow_id,
+                run_id=run_id,
+                # The failed step's DECLARED ordinal, exactly like the sibling
+                # dispatch-failure handler below (`entry_index` is still the
+                # failed step's own entry_index — it is only incremented AFTER a
+                # successful `_dispatch_and_buffer` return).
+                step_index=entry_index % 2,
+                pause_reason=WorkflowPauseReason.HITL_PENDING,
+                evaluator_optimizer_resume=eo_resume,
+            )
+        )
+        return RunResult(
+            workflow_id=workflow_id,
+            run_id=run_id,
+            status=RunStatus.PAUSED,
+            terminal_step_index=None,
+            partial_state={
+                "accepted": False,
+                "iterations": iterations,
+                "output": dict(last_generate_output),
+                "evaluation": dict(last_evaluation),
+            },
+            final_state=None,
+            fail_class=None,
+            pause_snapshot=snapshot,
         ), entry_index - _resume_completed_count
     except _EvaluatorOptimizerStepDispatchError as _dispatch_failure:
         # A generate/evaluate DISPATCH raised (the ONLY pause-eligible failure — setup +
@@ -14578,6 +14724,34 @@ def _execute_decentralized_handoff(
         len(_handoff_resume.completed_stages) if _handoff_resume is not None else 0
     )
 
+    # B-78 impl leg (mirrors `workflow_driver.py:4830-4859` EXACTLY — the LINEAR
+    # `resume_at` delivery-cell construction site, and the sibling EVALUATOR_OPTIMIZER
+    # construction above). DECENTRALIZED_HANDOFF is single-owner sequential (no
+    # fan-out, no branch-ordinal ambiguity), so the LINEAR mechanism applies
+    # unmodified: gated on genuinely resuming a HITL_PENDING pause; a map HIT on
+    # `resume_context.hitl_responses` (keyed by THIS run_id, only consulted when
+    # `sub_agent_descent`) is always safe; the UNIFORM `hitl_response` fallback
+    # applies only when this run_id is the resume cycle's sole unaddressed
+    # gate-owning member.
+    hitl_delivery_cell: HITLDeliveryCell | None = None
+    if (
+        resume_context is not None
+        and resume_snapshot is not None
+        and resume_snapshot.pause_reason is WorkflowPauseReason.HITL_PENDING
+    ):
+        _handoff_resolved_hitl: HITLResult | None = None
+        _handoff_mapped_hitl = (
+            resume_context.hitl_responses.get(run_id)
+            if sub_agent_descent and resume_context.hitl_responses
+            else None
+        )
+        if _handoff_mapped_hitl is not None:
+            _handoff_resolved_hitl = _handoff_mapped_hitl
+        elif run_id == hitl_uniform_fallback_eligible_run_id:
+            _handoff_resolved_hitl = resume_context.hitl_response
+        if _handoff_resolved_hitl is not None:
+            hitl_delivery_cell = HITLDeliveryCell(_handoff_resolved_hitl)
+
     # The on-stage-failure cascade reaction (§25.15.1) — resolved from the manifest's
     # (workload_class, engine_class, persona_tier) via the §11.4 D4 tunable, the same
     # source ORCHESTRATOR_WORKERS reads (SOLO→proceed / TEAM→pause / MTC→cascade-cancel;
@@ -14740,9 +14914,28 @@ def _execute_decentralized_handoff(
         # Single owner → branch_index 0 (no siblings; causality rides the chained
         # parent_action_id, NOT the fan-out ordinal). step_index = the declared stage
         # ordinal (the dispatcher reads it for per-step policy / audit / skill hook).
+        # B-78 impl leg: `compose_branch_child_context` UNCONDITIONALLY resets
+        # `hitl_delivery_holder` to `None` (workflow_driver_types.py — every fan-out
+        # CHILD must not inherit a parent's one-shot cell), so setting it on
+        # `spawning` above would be silently wiped; it must be re-applied HERE, in
+        # this SAME trailing `model_copy`, gated on this being the FIRST stage
+        # dispatched this resume cycle (mirrors the LINEAR `step_index == resume_at`
+        # gate / the EVALUATOR_OPTIMIZER `entry_index == _resume_completed_count`
+        # gate — DH's single-owner-per-call shape makes `stage_index ==
+        # _resume_completed_count` the exact analogue: it is true for exactly the
+        # one stage resumed immediately after a pause, and DH's resume-recovery
+        # `continue` branch above means only ONE stage_index value ever reaches
+        # this line without having already been recovered).
         stage_ctx = compose_branch_child_context(
             spawning, branch_index=0, agent_role=role
-        ).model_copy(update={"step_index": stage_index})
+        ).model_copy(
+            update={
+                "step_index": stage_index,
+                "hitl_delivery_holder": (
+                    hitl_delivery_cell if stage_index == _resume_completed_count else None
+                ),
+            }
+        )
         this_action_id = compose_branch_step_action_id(stage_ctx, 0)
         # B-HANDOFF-PAUSE (R-FS-1) — RESUME recovery of the completed prefix. On resume,
         # stages 0..k-1 already dispatched + persisted their ledger entries in the
@@ -14924,6 +15117,62 @@ def _execute_decentralized_handoff(
                 fail_class=_step_fail_class("decentralized-handoff-stage-failure", exc),
                 salvage=False,
             )
+        except BaseException as _pause_signal:
+            # B-78 impl leg — this stage's own `SUB_AGENT_BOUNDARY` HITL gate fired
+            # BEFORE any child run was ever dispatched (a stage declared
+            # `SUB_AGENT_DISPATCH` — contrary to this function's own docstring
+            # design-intent note that stages are "NEVER SUB_AGENT_DISPATCH", which is
+            # NOT code-enforced: `step_dispatchers.lookup(step.step_kind)` dispatches
+            # whatever kind the manifest declares). The runtime's
+            # `HITLPauseRequestedSignal` (a `BaseException` subclass per Runtime spec
+            # §14.8.8.2) bypasses `except Exception` above; name-matched (harness-cp
+            # cannot import harness-runtime), mirroring `_execute_parallelization`'s
+            # own per-branch catch (`workflow_driver.py:9591`) and the sibling
+            # EVALUATOR_OPTIMIZER catch above. DH is single-owner sequential (no
+            # fan-out, no branch-ordinal ambiguity), so — like EO — the LINEAR path's
+            # simpler unconditional-pause mechanism applies directly, inline (DH's
+            # dispatch try/except is not wrapped in a nested closure the way EO's is,
+            # so no separate typed wrapper exception is needed here). Pauses
+            # UNCONDITIONALLY whenever a `pause_resume_protocol` is bound — NOT
+            # gated on `cascade_policy` (that tunable governs the reaction to a
+            # stage FAILURE, the `except Exception` branch above; a HITL gate
+            # request is not a failure). Any OTHER BaseException re-raises
+            # unclassified, exactly as it would have propagated before this clause
+            # existed.
+            if type(_pause_signal).__name__ != "HITLPauseRequestedSignal":
+                raise
+            protocol = getattr(ctx, "pause_resume_protocol", None)
+            if protocol is None:
+                # Defensive — per the runtime composer's own §14.8.8.1 step 0
+                # OR-form precondition this is unreachable (the signal only fires
+                # when a protocol IS bound); surfaced as FAILED for visibility,
+                # mirroring the LINEAR path's own defensive fallthrough comment.
+                # The completed-stage prefix still salvages.
+                return _finish(
+                    RunStatus.FAILED,
+                    fail_class=(
+                        "decentralized-handoff-hitl-pause-resume-protocol-not-bound: "
+                        f"stage {stage_index}'s own SUB_AGENT_BOUNDARY HITL gate fired "
+                        "but no pause_resume_protocol is bound (cannot capture a "
+                        f"resumable snapshot) — underlying: "
+                        f"{type(_pause_signal).__name__}: {_pause_signal}"
+                    ),
+                    salvage=True,
+                )
+            handoff_resume = HandoffResumeState(
+                completed_stages=tuple(completed_stage_records),
+                stage_count=len(steps),
+            )
+            snapshot = _run_protocol_method_sync(
+                cast(PauseResumeProtocol, protocol).capture_pause_snapshot(
+                    workflow_id=workflow_id,
+                    run_id=run_id,
+                    step_index=stage_index,
+                    pause_reason=WorkflowPauseReason.HITL_PENDING,
+                    handoff_resume=handoff_resume,
+                )
+            )
+            return _finish(RunStatus.PAUSED, fail_class=None, salvage=True, pause_snapshot=snapshot)
         # Persist the stage as a per-role branch entry whose branch_metadata chains
         # off the prior stage (causality) + a fresh `completed` terminal entry (U-CP-84).
         append_branch_step_ledger_entry(
