@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 80
+  total: 81
   open: 0
   design_substrate_gated: 0
-  registered_finding: 16
+  registered_finding: 17
   operator_gated: 1
   held: 1
   closed: 62
-  identity_digest: 261f9be91a8e851a
+  identity_digest: d0d8288000a989d5
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -2213,7 +2213,7 @@ items:
     UNCHANGED workflow now succeeds instead of failing closed on a bogus kind-changed material
     diff. Full harness-cp + harness-runtime targeted suites re-run clean (157 + 2 passed, +1
     from this round); ruff + pyright strict clean on all touched files. 5 rounds of
-    out-of-family just codex-review total to convergence for the impl leg.'
+    out-of-family just codex-review total to convergence for the impl leg. UPDATE 2026-07-25 round 6 (branch-vs-main, same PR #1116, out-of-family just codex-review) -- 2 NEW findings: (1) _any_fence_abort is scoped to the CURRENT fan-out level only, so a nested/deeper subtree effect-fence ABORT does not suppress a shallower level''s pre-dispatch HITL delivery -- confirmed PRE-EXISTING (inherited from the B-70 impl leg''s own fan-out-local _any_fence_abort computation, which the pre-existing effect-fence-directive suppression already consumes the same way) and NOT introduced by this diff -- registered separately as B-80 rather than fixed here; (2) a repeated resume starting with multiple recovered pre-dispatch gate-owning peers silently dropped one that Sec25.19 warm-up cohort scheduling withholds this round (a leader re-pausing before its cohort follower is ever dispatched) -- genuinely FIXED, since this IS the new carrier''s own property-4 sole-membership safety guarantee: carry forward any recovered ordinal that neither re-fired this round nor resolved via a different disposition (completed / recursive-child-paused / fence-paused), at both the PeerFanOutResumeState and FanOutResumeState construction sites. NEW regression test constructs the exact scenario via a real Sec25.19 cohort-key warm-up split and verifies the withheld branch is carried forward with its identity intact; mutation-probe confirmed the test fails without the fix. Full harness-cp + harness-runtime targeted suites re-run clean (158 + 2 passed, +1 from this round); ruff + pyright strict clean on all touched files. 6 rounds of out-of-family just codex-review total to convergence for the impl leg.'
   pr: '#1116'
   council: RETIRED "skip-a-gate vs strand-a-descendant" framing (2026-07-25 round 2) -- the spec's
     mechanism ROUTES a resolved answer via hitl_response_for(child_run_id), it does not skip gate
@@ -2277,3 +2277,10 @@ items:
     identity alone, so a HITL placement/gate-configuration change between pause and resume is
     not detected as a material diff *(surfaced at the B-72 impl leg, out-of-family Codex round 3
     (branch-vs-main), 2026-07-25)*'
+- id: B-80
+  title: 'The _any_fence_abort HITL-delivery suppression guard is scoped to the current fan-out level, not the true root of a nested resume tree'
+  status: registered_finding
+  summary: 'Out-of-family Codex round 6 (branch-vs-main, B-72 impl leg PR #1116, 2026-07-25). The round-4 fix suppresses a pre-dispatch gate-owning peer''s HITLDeliveryCell construction when _any_fence_abort is true, but that value is computed from _recovered_effect_fence_paused, which is scoped to the CURRENT fan-out level''s own recovered branches only. When an effect-fence ABORT targets a DIFFERENT, nested pause subtree (e.g. a deeper HIERARCHICAL_DELEGATION level, or a sibling peer''s recursively paused child), a shallower level''s own _any_fence_abort stays false and its pre-dispatch gate-owning peer can still receive a delivery cell and dispatch before the run-level abort is honored -- resumed branches are processed sequentially, so an earlier pre-dispatch branch can consume its HITL response and execute ahead of a later subtree processing the abort. Confirmed PRE-EXISTING and NOT introduced by the B-72 impl leg -- _any_fence_abort itself was computed fan-out-locally by the B-70 impl leg (CP spec v1.107), and the pre-existing effect-fence-directive peer suppression already consumes that same narrow value; B-72''s round-4 guard mirrors the established pattern verbatim. Affects BOTH the pre-existing effect-fence directive suppression and the new B-72 HITL delivery gate, at all four fan-out dispatch sites (_execute_parallelization and _execute_orchestrator_workers, including HIERARCHICAL_DELEGATION''s recursive reuse).'
+  close_out: 'Compute the abort guard from the true root of the resume tree (or thread a run-level abort signal down through the recursive _execute_orchestrator_workers/HIERARCHICAL_DELEGATION calls) rather than from the current level''s own _recovered_effect_fence_paused, and consume it uniformly at both the pre-existing effect-fence-directive suppression site and the B-72 pre-dispatch HITL delivery-cell gate. This is a genuine design task (what ''true root'' means for a peer fan-out vs. a recursively nested HIERARCHICAL_DELEGATION tree, and how to thread it without a new cross-axis seam) not a mechanical patch. Witness with a test where a nested/deeper subtree''s effect-fence ABORT races a shallower sibling subtree''s pre-dispatch HITL delivery in the same resume round, and assert the shallower delivery is suppressed.'
+  council: 'Likely worth a dyadic pass (a design task touching cross-recursion-boundary abort propagation, not mechanical) -- C1 (orchestration/topology, owns HIERARCHICAL_DELEGATION''s recursive reuse) paired with C10 (blast-radius/gate-integrity, mirroring B-79''s own reasoning). Not urgent -- the reachability precondition (a nested subtree ABORT racing a shallower pre-dispatch HITL delivery in the SAME resume round) is narrow, and the suppression gap is symmetric with an already-shipped effect-fence-directive mechanism that has not surfaced in production.'
+  heading: '### B-80 · The `_any_fence_abort` HITL-delivery suppression guard is scoped to the current fan-out level, not the true root of a nested resume tree *(surfaced at the B-72 impl leg, out-of-family Codex round 6 (branch-vs-main), 2026-07-25)*'
