@@ -10955,6 +10955,31 @@ def _execute_evaluator_optimizer(
                     f"— underlying: {type(exc).__name__}: {exc}"
                 ),
             ), entry_index - _resume_completed_count
+        _hitl_terminal_fail_class = getattr(exc, "rt_fail_class", None)
+        if _hitl_terminal_fail_class is not None:
+            # B-78 [P1] (out-of-family Codex round 1) — a HITL gate's own TERMINAL
+            # routing outcome (REJECT / EDIT-decode failure / audit-compose failure /
+            # timeout — every `RuntimeHITLGateComposer` exception that carries an
+            # `rt_fail_class` marker, see `_step_fail_class`'s own docstring) is NOT
+            # an ordinary dispatch failure subject to cascade_policy's pause/proceed/
+            # cascade-cancel reaction — it is ALWAYS terminal, exactly like the
+            # `PostEffectAuditSigningError` carve-out immediately above (checked
+            # BEFORE any cascade_policy branch). Without this, resuming with
+            # `HITLResponse.REJECT` under TEAM's cascade_policy=pause (now reachable
+            # via this arc's own delivery-cell wiring) would be misclassified as an
+            # ordinary retryable dispatch failure and produce ANOTHER resumable
+            # EXPLICIT_OPERATOR pause instead of the canonical terminal FAILED the
+            # exception's own docstring + §14.8 already promise.
+            drain_branch_buffers(ctx.ledger_writer, [writer])
+            return RunResult(
+                workflow_id=workflow_id,
+                run_id=run_id,
+                status=RunStatus.FAILED,
+                terminal_step_index=None,
+                partial_state=None,
+                final_state=None,
+                fail_class=_step_fail_class("evaluator-optimizer-hitl-gate-terminal", exc),
+            ), entry_index - _resume_completed_count
         if cascade_policy is CascadePolicy.PAUSE:
             # B-FANOUT-PAUSE-EVALUATOR-OPTIMIZER (R-FS-1) — materialize the §25.15.1
             # `pause → PAUSED` row EXTENDED to the sequential EO loop. The completed-step
@@ -15058,6 +15083,27 @@ def _execute_decentralized_handoff(
                             f"NOT re-dispatched — underlying: {type(exc).__name__}: {exc}"
                         )
                     ),
+                    salvage=True,
+                )
+            _hitl_terminal_fail_class = getattr(exc, "rt_fail_class", None)
+            if _hitl_terminal_fail_class is not None:
+                # B-78 [P1] (out-of-family Codex round 1, mirrors the EVALUATOR_
+                # OPTIMIZER carve-out immediately above's sibling) — a HITL gate's
+                # own TERMINAL routing outcome (REJECT / EDIT-decode failure /
+                # audit-compose failure / timeout — any `RuntimeHITLGateComposer`
+                # exception carrying an `rt_fail_class` marker) is NOT an ordinary
+                # stage failure subject to cascade_policy's proceed/pause/
+                # cascade-cancel reaction — it is ALWAYS terminal, checked BEFORE
+                # any cascade_policy branch. Without this, resuming with
+                # `HITLResponse.REJECT` under TEAM's cascade_policy=pause (now
+                # reachable via this arc's own delivery-cell wiring) would be
+                # misclassified as an ordinary retryable stage failure and produce
+                # ANOTHER resumable EXPLICIT_OPERATOR pause instead of the
+                # canonical terminal FAILED the exception's own docstring + §14.8
+                # already promise.
+                return _finish(
+                    RunStatus.FAILED,
+                    fail_class=_step_fail_class("decentralized-handoff-hitl-gate-terminal", exc),
                     salvage=True,
                 )
             # A stage owner failed → the chain stops (single-owner: no in-flight

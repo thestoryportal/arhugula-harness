@@ -600,6 +600,15 @@ def _resolved_hitl_result(*, entry_suffix: str) -> HITLResult:
     )
 
 
+def _rejected_hitl_result(*, entry_suffix: str) -> HITLResult:
+    return HITLResult(
+        response=HITLResponse.REJECT,
+        timestamp="2026-07-26T00:00:00Z",
+        audit_ledger_entry_id=EntryID(f"e-b78-{entry_suffix}-reject"),
+        response_summary_hash="b" * 64,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Test 1 — the generate step's own gate pauses cleanly on first dispatch
 # (gap 1, FIXED).
@@ -767,6 +776,73 @@ async def test_eo_generate_step_gate_resume_with_resolved_answer_is_consumed(
 
 
 # ---------------------------------------------------------------------------
+# Test 2b — a REJECTed resume is TERMINAL, not folded into a resumable pause
+# (out-of-family Codex round 1 [P1] on this arc).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_eo_generate_step_gate_resume_with_reject_is_terminal_not_paused(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    _captured_webhook_requests: list[httpx.Request],
+) -> None:
+    """Out-of-family Codex [P1]: resuming with `HITLResponse.REJECT` must
+    produce a terminal `RunStatus.FAILED` carrying the canonical
+    `RT-FAIL-HITL-GATE-REJECTED` fail_class — NOT another resumable
+    `EXPLICIT_OPERATOR` pause. Before the fix, `HITLGateRejectedError` (an
+    ordinary `Exception` carrying `rt_fail_class`) was indistinguishable from
+    any other dispatch failure and got folded into the same
+    `cascade_policy=pause` materialization as a retryable failure — silently
+    discarding the operator's explicit rejection and re-pausing instead."""
+    anthropic_client = _SucceedingAnthropicClient()
+    _install_fake_providers(monkeypatch, anthropic_client)
+    _install_fake_od_stage4(monkeypatch)
+    _install_fake_webhook_composer_factory(monkeypatch, _captured_webhook_requests)
+
+    sub_agent_dispatcher_calls: list[Any] = []
+    _original_dispatch = sub_agent_dispatch.RuntimeSubAgentDispatcher.dispatch
+
+    def _spying_dispatch(self: Any, *args: Any, **kwargs: Any) -> Any:
+        sub_agent_dispatcher_calls.append((args, kwargs))
+        return _original_dispatch(self, *args, **kwargs)
+
+    monkeypatch.setattr(sub_agent_dispatch.RuntimeSubAgentDispatcher, "dispatch", _spying_dispatch)
+
+    config = _config(tmp_path)
+    workflow = _EvaluatorOptimizerSubAgentDispatchWorkflow()
+
+    paused = await api_run(workflow, config=config)
+    assert paused.status == "paused"
+    assert paused.pause_snapshot is not None
+
+    resume_context = ResumeContext(hitl_response=_rejected_hitl_result(entry_suffix="eo-reject"))
+    resumed = await resume(
+        workflow,
+        pause_snapshot=paused.pause_snapshot,
+        resume_context=resume_context,
+        config=config,
+    )
+
+    assert isinstance(resumed, RunResult)
+    assert resumed.status == "failed", (
+        f"expected a REJECTed resume to be a TERMINAL failure, not a resumable "
+        f"pause; got status={resumed.status!r} "
+        f"pause_reason={(resumed.pause_snapshot.pause_reason if resumed.pause_snapshot else None)!r}"
+    )
+    assert (
+        resumed.failure_cause is not None
+        and "RT-FAIL-HITL-GATE-REJECTED" in resumed.failure_cause.detail
+    ), (
+        f"expected the canonical RT-FAIL-HITL-GATE-REJECTED fail_class; got {resumed.failure_cause!r}"
+    )
+    assert sub_agent_dispatcher_calls == [], (
+        "a REJECTed gate must never reach the real RuntimeSubAgentDispatcher — "
+        f"got {len(sub_agent_dispatcher_calls)} dispatcher call(s)"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Test 3 — DECENTRALIZED_HANDOFF reachability: the identical fix, applied to
 # a stage-based topology instead of a generate/evaluate loop.
 # ---------------------------------------------------------------------------
@@ -843,3 +919,64 @@ async def test_dh_stage_own_gate_pauses_and_resumes(
         f"once; got {len(sub_agent_dispatcher_calls)} dispatcher call(s)"
     )
     assert resumed.workflow_id == paused.workflow_id
+
+
+# ---------------------------------------------------------------------------
+# Test 3b — DH's own REJECT-is-terminal mirror of Test 2b.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_dh_stage_gate_resume_with_reject_is_terminal_not_paused(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    _captured_webhook_requests: list[httpx.Request],
+) -> None:
+    """DH mirror of `test_eo_generate_step_gate_resume_with_reject_is_terminal_
+    not_paused` — the same out-of-family Codex [P1] fix applied to DH's own
+    inline `except Exception as exc:` stage-failure handler."""
+    anthropic_client = _SucceedingAnthropicClient()
+    _install_fake_providers(monkeypatch, anthropic_client)
+    _install_fake_od_stage4(monkeypatch)
+    _install_fake_webhook_composer_factory(monkeypatch, _captured_webhook_requests)
+
+    sub_agent_dispatcher_calls: list[Any] = []
+    _original_dispatch = sub_agent_dispatch.RuntimeSubAgentDispatcher.dispatch
+
+    def _spying_dispatch(self: Any, *args: Any, **kwargs: Any) -> Any:
+        sub_agent_dispatcher_calls.append((args, kwargs))
+        return _original_dispatch(self, *args, **kwargs)
+
+    monkeypatch.setattr(sub_agent_dispatch.RuntimeSubAgentDispatcher, "dispatch", _spying_dispatch)
+
+    config = _config(tmp_path)
+    workflow = _DecentralizedHandoffSubAgentDispatchWorkflow()
+
+    paused = await api_run(workflow, config=config)
+    assert paused.status == "paused"
+    assert paused.pause_snapshot is not None
+
+    resume_context = ResumeContext(hitl_response=_rejected_hitl_result(entry_suffix="dh-reject"))
+    resumed = await resume(
+        workflow,
+        pause_snapshot=paused.pause_snapshot,
+        resume_context=resume_context,
+        config=config,
+    )
+
+    assert isinstance(resumed, RunResult)
+    assert resumed.status == "failed", (
+        f"expected a REJECTed resume to be a TERMINAL failure, not a resumable "
+        f"pause; got status={resumed.status!r} "
+        f"pause_reason={(resumed.pause_snapshot.pause_reason if resumed.pause_snapshot else None)!r}"
+    )
+    assert (
+        resumed.failure_cause is not None
+        and "RT-FAIL-HITL-GATE-REJECTED" in resumed.failure_cause.detail
+    ), (
+        f"expected the canonical RT-FAIL-HITL-GATE-REJECTED fail_class; got {resumed.failure_cause!r}"
+    )
+    assert sub_agent_dispatcher_calls == [], (
+        "a REJECTed gate must never reach the real RuntimeSubAgentDispatcher — "
+        f"got {len(sub_agent_dispatcher_calls)} dispatcher call(s)"
+    )
