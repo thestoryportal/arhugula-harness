@@ -61,11 +61,11 @@ snapshot:
   total: 82
   open: 0
   design_substrate_gated: 0
-  registered_finding: 16
+  registered_finding: 15
   operator_gated: 1
   held: 1
-  closed: 64
-  identity_digest: 4ec87795cdc271d8
+  closed: 65
+  identity_digest: 9cbed903e91a5e31
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -1616,39 +1616,50 @@ items:
 - id: B-73
   title: Protected result store's GC/publish synchronization is in-process only -- two co-resident
     OS processes sharing one store root are not mutually excluded
-  status: registered_finding
-  summary: 'Split out of B-68 at its close (2026-07-25). B-68''s fix serializes `gc_sweep()`
-    against `_publish_atomic()` via a `threading.Lock` keyed by the store root''s filesystem
-    identity, held in a module-level `_root_locks` registry -- this closes every same-process
-    race, including multiple `ProtectedResultStore` instances constructed against the same
-    root within one process (e.g. across bootstrap/resume cycles) and both `..`-relative and
-    case-folded path aliases. Out-of-family Codex round 5 (post-fix convergence check)
-    confirmed the registry does NOT extend across a process boundary: two separate daemon
-    PROCESSES sharing one store directory each hold their own independent `_root_locks` dict,
-    so one process''s bootstrap/shutdown sweep can still unlink another process''s
-    just-published entry between its `os.link()` commit and mtime refresh, if the
-    deployment-configured TTL is shorter than that window. This is the SAME reachability
-    precondition B-68''s original registration already named (TTL shorter than single-digit-ms
-    publish latency -- roughly seven orders of magnitude below the factory default) and the
-    same residual B-68''s own code comments and commit history disclosed throughout ("a
-    genuinely separate OS process sharing the store directory remains an open residual,
-    registered, not silently assumed closed"). Not council-eligible: closing it requires an
-    OS-level cross-process lock (e.g. `fcntl.flock` on a dedicated lockfile under the store
-    root) -- a materially different mechanism than the in-process fix, matching the original
-    B-68 registration''s own assessment that a complete fix is a genuine concurrency-control
-    redesign, not a mechanical patch.'
-  close_out: 'Add an OS-level advisory lock (`fcntl.flock` on a dedicated lockfile under the
-    store root, or equivalent) wrapping the same `_publish_atomic`/`gc_sweep` critical
-    sections the in-process `threading.Lock` already wraps, acquired/released around the
-    existing lock so both layers compose without a nested-lock ordering hazard. Witness with
-    a genuine multi-PROCESS test (e.g. `multiprocessing` workers, not threads) pinning a TTL
-    shorter than an injected publication delay in one process while a second process sweeps
-    concurrently, asserting the entry survives.'
+  status: closed
+  pr: "#1120"
+  summary: 'Split out of B-68 at its close (2026-07-25). CLOSED 2026-07-26 at PR #1120:
+    `_cross_process_lock()` (an `fcntl.flock` on a dedicated `.cross_process.lock` file,
+    disjoint from both `gc_sweep` glob patterns) is now composed INSIDE the existing
+    in-process `self._publish_lock` at both `_publish_atomic` and `gc_sweep`''s
+    candidate-selection phase -- a single, fixed nesting order everywhere, no lock-ordering
+    hazard. Guarded on Windows (`_IS_WINDOWS = sys.platform == "win32"`) per C-STK-10,
+    mirroring the same carve-out already shipped at `harness_is.cross_process_ledger_lock`;
+    `fcntl` is imported lazily inside the lock method, never at module scope (an unguarded
+    top-level import would have broken `import harness_runtime` entirely on Windows, since
+    `harness_runtime.types` imports `ProtectedResultStore` unconditionally -- caught at
+    out-of-family Codex round 1). 4 rounds of `just codex-review main` to clean convergence:
+    round 1 (the Windows-import [P1] above, plus a [P2] where the write-once regression test
+    did not isolate `_publish_atomic`''s own lock use -- a fresh child store''s opportunistic
+    pre-write GC sweep already acquires the same lock, so the test passed even with
+    `_publish_atomic`''s lock removed alone); round 2 (the new tests would spuriously fail on
+    Windows, where the lock intentionally no-ops -- added `skipif`; the readiness marker was
+    written before `flock` was ever attempted, leaving a scheduling window); round 3 (the same
+    underlying concern persisted -- writing the marker "right before" the contending call
+    still is not proof of being AT the `flock` attempt, since real serialization + Fernet
+    encryption happen first -- fixed by wrapping `fcntl.flock` itself in each child script so
+    the marker fires at the actual syscall attempt); round 4 clean. Each fix was
+    mutation-probe-verified (revert the fix, confirm the corresponding regression test fails;
+    restore, confirm green) before landing. `merge-gate` 3-lens review: concurrency + test-
+    witness APPROVE at round 1; spec-conformance BLOCKED once (this ledger row was not
+    updated in the same PR, diverging from the B-68 precedent) -- fixed by this same update.'
+  close_out: 'Closed by the fix described above
+    (harness-runtime/src/harness_runtime/lifecycle/protected_result_store.py +
+    harness-runtime/tests/test_lifecycle_protected_result_store.py). Witnessed with two
+    genuine-subprocess regression tests (`subprocess`, not `multiprocessing` -- avoids both
+    the fork-after-lock-held deadlock hazard and spawn''s pickle-by-module-name ambiguity in
+    this monorepo''s several same-named `tests` packages) asserting cross-process blocking via
+    `store._cross_process_lock()` held directly in the parent, rather than the originally-
+    envisioned TTL-race-survival scenario -- a deliberate, reasoned deviation from the literal
+    recipe above (lock-identity blocking is the more deterministic, non-flaky witness shape
+    for this claim; matches this workspace''s own "races are non-deterministic -- assert
+    lock-identity" discipline) rather than a silent gap.'
   council: no -- narrow TTL-dependent cross-process race with a documented, unchanged
     reachability precondition; the fix is a known primitive (fcntl.flock), not a judgment call
   heading: '### B-73 · Protected result store''s GC/publish synchronization is in-process only
     -- two co-resident OS processes sharing one store root are not mutually excluded *(split
-    from B-68 at its close, out-of-family Codex round 5, 2026-07-25)*'
+    from B-68 at its close, out-of-family Codex round 5, 2026-07-25; CLOSED 2026-07-26 -- PR
+    #1120)*'
 - id: B-74
   title: Protected result store's mtime-based GC age authority can under-report publish time
     below a filesystem's timestamp granularity
