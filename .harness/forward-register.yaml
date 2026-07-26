@@ -1841,7 +1841,8 @@ items:
   heading: '### B-78 · A `SUB_AGENT_DISPATCH` step''s own `SUB_AGENT_BOUNDARY` gate under
     `EVALUATOR_OPTIMIZER`/`DECENTRALIZED_HANDOFF` can exhibit the same pre-dispatch re-fire
     livelock `B-72` property 6 closes for the fan-out topologies, ungrounded by any
-    reproduction *(split from B-72''s spec leg, out-of-family Codex round 5+7, 2026-07-25)*'
+    reproduction *(split from B-72''s spec leg, out-of-family Codex round 5+7, 2026-07-25;
+    GROUNDED + IMPL LEG LANDED 2026-07-26 — PR #1117, CLOSED)*'
 - id: B-69
   title: resume_handle crash-recovery resume path cannot address individual paused children
     for multi-child HITL delivery
