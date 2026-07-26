@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 79
-  open: 1
+  total: 80
+  open: 0
   design_substrate_gated: 0
-  registered_finding: 15
+  registered_finding: 16
   operator_gated: 1
   held: 1
-  closed: 61
-  identity_digest: eb0dd8ac4308028e
+  closed: 62
+  identity_digest: 261f9be91a8e851a
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -1919,207 +1919,265 @@ items:
 - id: B-72
   title: SUB_AGENT_DISPATCH step's own SUB_AGENT_BOUNDARY HITL gate can re-fire on resume-forward,
     discarding an already-paused descendant's cursor
-  status: open
+  status: closed
   summary: hitl_delivery_holder is never threaded to fan-out branches, so a SUB_AGENT_DISPATCH
     branch with its own SUB_AGENT_BOUNDARY placement re-evaluates its gate on every resume-forward;
     a fresh DURABLE_ASYNC re-pause has no evident mechanism to preserve the branch's prior-round
     child_resume_snapshot cursor. Pre-existing/orthogonal to B-39 (the old global ResumeContextHolder
     masked it via accidental cross-branch misapplication); B-39 makes it newly visible, not new.
-  close_out: SUPERSEDED 2026-07-25 (spec leg landed, CP spec v1.108 property 6) -- the ORIGINAL
-    recipe below (call hitl_response_for(child_run_id) at the fan-out branch dispatch site) is WRONG for
-    a pre-dispatch gate-owning branch and MUST NOT be followed literally -- property 6 explicitly
-    FORBIDS ever resolving a pre-dispatch gate-owning branch via the child_run_id-keyed hitl_responses
-    map (out-of-family codex [P1] caught this contradiction between the original recipe and the newly
-    landed contract, 2026-07-25). CORRECTED RECIPE for item (1), the round-3 repro own SOLE-branch case --
-    (a) add a carrier (amendment to PeerFanOutResumeState/FanOutResumeState or equivalent) recording a
-    pre-dispatch gate-owning branch presence, keyed by a tree-wide-unique internal identity per CP spec
-    v1.108 (ancestry-qualified, NOT merely locally-unique among sibling branches -- ship a
-    collision-witness test); (b) amend _collect_gate_owning_run_ids to walk this new carrier alongside its
-    existing paused_child_branches walk; (c) construct a HITLDeliveryCell-equivalent on that branch own
-    StepExecutionContext at the fan-out dispatch sites (_execute_parallelization ~7851-7866,
-    _execute_orchestrator_workers ~11696-11710 -- mirroring workflow_driver.py:4766-4777 LINEAR-only
-    construction) ONLY when this internal identity is the sole unaddressed member per property 4/6 own
-    SOLE-membership rule -- NEVER via hitl_response_for(child_run_id), which this branch has none of.
-    Items (2)/(3)/(4) below remain open, unchanged by the spec leg -- only item (2) (keyed multi-peer
-    addressing) is B-71-gated per CP spec v1.108 SS1.2's own scope note; item (3) (property 4's general
-    resolver set-membership mechanism) is independently deferred to the impl leg, not B-71-related; item
-    (4) (B-72 own round-1 hybrid case) needs its own reproduction before any design, also not B-71-related
-    (codex out-of-family review caught this register row overbroadly labeling all three B-71-gated,
-    2026-07-25). Full detail at CP spec v1.108 +
-    .harness/class_1_tension_b72_pre_dispatch_gate_owning_branch_identity.md.
-    --- Original (now-superseded) recipe + append-only correction history, preserved for provenance ---
-    Build the deferred fan-out HITL delivery-mechanism wiring -- call resume_context.
+  close_out: 'SUPERSEDED 2026-07-25 (spec leg landed, CP spec v1.108 property 6) -- the ORIGINAL
+    recipe below (call hitl_response_for(child_run_id) at the fan-out branch dispatch site) is
+    WRONG for a pre-dispatch gate-owning branch and MUST NOT be followed literally -- property 6
+    explicitly FORBIDS ever resolving a pre-dispatch gate-owning branch via the
+    child_run_id-keyed hitl_responses map (out-of-family codex [P1] caught this contradiction
+    between the original recipe and the newly landed contract, 2026-07-25). CORRECTED RECIPE for
+    item (1), the round-3 repro own SOLE-branch case -- (a) add a carrier (amendment to
+    PeerFanOutResumeState/FanOutResumeState or equivalent) recording a pre-dispatch gate-owning
+    branch presence, keyed by a tree-wide-unique internal identity per CP spec v1.108
+    (ancestry-qualified, NOT merely locally-unique among sibling branches -- ship a
+    collision-witness test); (b) amend _collect_gate_owning_run_ids to walk this new carrier
+    alongside its existing paused_child_branches walk; (c) construct a
+    HITLDeliveryCell-equivalent on that branch own StepExecutionContext at the fan-out dispatch
+    sites (_execute_parallelization ~7851-7866, _execute_orchestrator_workers ~11696-11710 --
+    mirroring workflow_driver.py:4766-4777 LINEAR-only construction) ONLY when this internal
+    identity is the sole unaddressed member per property 4/6 own SOLE-membership rule -- NEVER
+    via hitl_response_for(child_run_id), which this branch has none of. Items (2)/(3)/(4) below
+    remain open, unchanged by the spec leg -- only item (2) (keyed multi-peer addressing) is
+    B-71-gated per CP spec v1.108 SS1.2''s own scope note; item (3) (property 4''s general
+    resolver set-membership mechanism) is independently deferred to the impl leg, not
+    B-71-related; item (4) (B-72 own round-1 hybrid case) needs its own reproduction before any
+    design, also not B-71-related (codex out-of-family review caught this register row
+    overbroadly labeling all three B-71-gated, 2026-07-25). Full detail at CP spec v1.108 +
+    .harness/class_1_tension_b72_pre_dispatch_gate_owning_branch_identity.md. --- Original
+    (now-superseded) recipe + append-only correction history, preserved for provenance --- Build
+    the deferred fan-out HITL delivery-mechanism wiring -- call resume_context.
     hitl_response_for(child_run_id) at the fan-out branch dispatch site and construct a
-    HITLDeliveryCell-equivalent on that branch own StepExecutionContext (mirroring workflow_driver.py:4777
-    LINEAR-only construction), while independently satisfying property 4 multi-child fallback-safety
-    invariant (a prior draft counting approach already failed review here). UPDATE 2026-07-25 round 3 --
-    EMPIRICALLY CONFIRMED via a built reproduction, harness-runtime/tests/integration/
-    test_b72_fanout_sub_agent_dispatch_hitl_gate_resume.py (2 tests, both PASS -- pin the confirmed broken
-    state directly, not via xfail). Precondition test confirms a PARALLELIZATION branch's own
-    SUB_AGENT_BOUNDARY gate correctly pauses on first dispatch through the REAL RuntimeHITLGateComposer.
-    Core test pins the gap with 4 oracles -- api.resume with a resolved answer does NOT reach completed;
-    status stays paused, failure_cause is None, 2 webhook POSTs (re-escalated), and a DIRECT spy on
-    RuntimeSubAgentDispatcher.dispatch stays empty (proves the real dispatcher was never reached --
-    NOT an Anthropic-client-call-count proxy, which codex round 2 showed does not discriminate for this
-    child's PURE_PATTERN_NO_ENGINE engine class). Refines round 1's PARTIAL/cursor-lost prediction --
-    this used TEAM_BINDING/pause cascade policy, and the observed shape is an infinite re-pause (no state
-    corruption, just never converges), not a lost cursor. The exact post-fix terminal status is
-    deliberately NOT documented as completed -- codex round 2 empirically bypassed the gate entirely and
-    the run STILL ended paused for this child shape (separate, unrelated quirk, independently reproduced).
-    Full harness-runtime suite re-run -- 3069 passed, 40 skipped, 0 xfailed, 0 regressions (just check
-    full monorepo -- 6682 passed). 4 rounds of codex review, all real, all fixed -- (1) a blanket xfail
-    would have masked an unrelated resume() regression, replaced with direct oracles; (2) status-only +
-    an Anthropic-client-proxy oracle were both too weak, replaced with a mutation-probed direct spy on
-    RuntimeSubAgentDispatcher.dispatch; (3) this register text itself went stale describing the retired
-    proxy oracle, corrected; (4) never asserted pause_snapshot is not None -- a re-fire that silently
-    dropped the resumable snapshot would have passed every other assertion, added that check plus a
-    workflow-identity check. Final oracle count -- 6. A SEPARATE finding still OPEN -- the gate fires before
-    any child run exists, so the resulting snapshot carries no child run ID; hitl_response_for(child_run_id)
-    cannot by itself distinguish two PEER gate-owning branches in this shape. This reproduction scopes the
-    single-branch LIVENESS gap; the multi-branch addressing mechanism needs either a multi-peer-branch
-    repro or grounding on branch-own pre-dispatch identity before the fix is genuinely scoped.
-    UPDATE 2026-07-25 round 4 -- re-confirmed by direct read that hitl_delivery_holder/hitl_delivery_cell
-    stay confined to _execute_workflow_body; _execute_parallelization and _execute_orchestrator_workers
-    reference neither (matches round 2, not a new finding). The genuinely new observation -- round 1's
-    own text frames this as a dispatch-idempotency defect (no addressing key needed, just a
-    first-dispatch-vs-resume-forward check), while round 2's reframe frames it as an addressing/delivery
-    defect (needs a per-branch key) -- these do not reconcile and nobody had named the ambiguity. A
-    mid-pass hypothesis floating branch_path as that key was advisor()-rejected before write-up -- the
-    single-branch repro tests zero multi-branch addressing, so the "collision only hits nested
-    grandchildren, not peers" claim is unverified, and it is exactly the reading the code's own
-    keying-defect note warns against reinventing. Explicitly NOT a finding of this pass. First question
-    owed before design or code -- dispatch-idempotency (b) or addressing/delivery (a); see
-    .harness/post-phase-8-forward-register.md B-72 round-4 update for full detail.
-    UPDATE 2026-07-25 round 5 (systems-architect tension-resolution mode, 3 out-of-family Codex
-    corrections) -- the (a)-vs-(b) framing was the wrong axis for the round-3 REPRODUCTION's narrower
-    scenario specifically -- CP spec v1.106 section 1.2 properties 4-5 distinguish gate-owning branches
-    from transitively-paused container/ancestor branches as two DIFFERENT branch roles, not competing
-    theories, and the round-3 repro (single PARALLELIZATION branch, own SUB_AGENT_BOUNDARY placement,
-    no nested child) is confirmed gate-owning. CORRECTION -- "category (a)" here is DELIVERY-cell
-    construction, not necessarily keyed addressing; the round-3 test itself resumes via the UNIFORM
-    ResumeContext.hitl_response field (test line 573), not a keyed map, and property 4 permits the
-    uniform fallback for a SOLE unaddressed gate-owning branch -- exactly this repro's shape. So
-    wiring a delivery-cell construction alone (no keying) already fixes the round-3 repro; KEYED
-    multi-peer addressing (2+ concurrent gate-owning branches) is a separate, still fully open
-    question untested by any evidence gathered so far. B-72's OWN original registered scenario above
-    (a branch that already dispatched into its own gate, got approved, and is now resume-forwarded
-    toward its self-dispatched deeper-paused descendant) is a THIRD, hybrid case property 5 does not
-    cover (it requires "never itself dispatched into a HITL gate") -- stays OPEN, unresolved. SECOND
+    HITLDeliveryCell-equivalent on that branch own StepExecutionContext (mirroring
+    workflow_driver.py:4777 LINEAR-only construction), while independently satisfying property 4
+    multi-child fallback-safety invariant (a prior draft counting approach already failed review
+    here). UPDATE 2026-07-25 round 3 -- EMPIRICALLY CONFIRMED via a built reproduction,
+    harness-runtime/tests/integration/ test_b72_fanout_sub_agent_dispatch_hitl_gate_resume.py (2
+    tests, both PASS -- pin the confirmed broken state directly, not via xfail). Precondition
+    test confirms a PARALLELIZATION branch''s own SUB_AGENT_BOUNDARY gate correctly pauses on
+    first dispatch through the REAL RuntimeHITLGateComposer. Core test pins the gap with 4
+    oracles -- api.resume with a resolved answer does NOT reach completed; status stays paused,
+    failure_cause is None, 2 webhook POSTs (re-escalated), and a DIRECT spy on
+    RuntimeSubAgentDispatcher.dispatch stays empty (proves the real dispatcher was never reached
+    -- NOT an Anthropic-client-call-count proxy, which codex round 2 showed does not
+    discriminate for this child''s PURE_PATTERN_NO_ENGINE engine class). Refines round 1''s
+    PARTIAL/cursor-lost prediction -- this used TEAM_BINDING/pause cascade policy, and the
+    observed shape is an infinite re-pause (no state corruption, just never converges), not a
+    lost cursor. The exact post-fix terminal status is deliberately NOT documented as completed
+    -- codex round 2 empirically bypassed the gate entirely and the run STILL ended paused for
+    this child shape (separate, unrelated quirk, independently reproduced). Full harness-runtime
+    suite re-run -- 3069 passed, 40 skipped, 0 xfailed, 0 regressions (just check full monorepo
+    -- 6682 passed). 4 rounds of codex review, all real, all fixed -- (1) a blanket xfail would
+    have masked an unrelated resume() regression, replaced with direct oracles; (2) status-only
+    + an Anthropic-client-proxy oracle were both too weak, replaced with a mutation-probed
+    direct spy on RuntimeSubAgentDispatcher.dispatch; (3) this register text itself went stale
+    describing the retired proxy oracle, corrected; (4) never asserted pause_snapshot is not
+    None -- a re-fire that silently dropped the resumable snapshot would have passed every other
+    assertion, added that check plus a workflow-identity check. Final oracle count -- 6. A
+    SEPARATE finding still OPEN -- the gate fires before any child run exists, so the resulting
+    snapshot carries no child run ID; hitl_response_for(child_run_id) cannot by itself
+    distinguish two PEER gate-owning branches in this shape. This reproduction scopes the
+    single-branch LIVENESS gap; the multi-branch addressing mechanism needs either a
+    multi-peer-branch repro or grounding on branch-own pre-dispatch identity before the fix is
+    genuinely scoped. UPDATE 2026-07-25 round 4 -- re-confirmed by direct read that
+    hitl_delivery_holder/hitl_delivery_cell stay confined to _execute_workflow_body;
+    _execute_parallelization and _execute_orchestrator_workers reference neither (matches round
+    2, not a new finding). The genuinely new observation -- round 1''s own text frames this as a
+    dispatch-idempotency defect (no addressing key needed, just a
+    first-dispatch-vs-resume-forward check), while round 2''s reframe frames it as an
+    addressing/delivery defect (needs a per-branch key) -- these do not reconcile and nobody had
+    named the ambiguity. A mid-pass hypothesis floating branch_path as that key was
+    advisor()-rejected before write-up -- the single-branch repro tests zero multi-branch
+    addressing, so the "collision only hits nested grandchildren, not peers" claim is
+    unverified, and it is exactly the reading the code''s own keying-defect note warns against
+    reinventing. Explicitly NOT a finding of this pass. First question owed before design or
+    code -- dispatch-idempotency (b) or addressing/delivery (a); see
+    .harness/post-phase-8-forward-register.md B-72 round-4 update for full detail. UPDATE
+    2026-07-25 round 5 (systems-architect tension-resolution mode, 3 out-of-family Codex
+    corrections) -- the (a)-vs-(b) framing was the wrong axis for the round-3 REPRODUCTION''s
+    narrower scenario specifically -- CP spec v1.106 section 1.2 properties 4-5 distinguish
+    gate-owning branches from transitively-paused container/ancestor branches as two DIFFERENT
+    branch roles, not competing theories, and the round-3 repro (single PARALLELIZATION branch,
+    own SUB_AGENT_BOUNDARY placement, no nested child) is confirmed gate-owning. CORRECTION --
+    "category (a)" here is DELIVERY-cell construction, not necessarily keyed addressing; the
+    round-3 test itself resumes via the UNIFORM ResumeContext.hitl_response field (test line
+    573), not a keyed map, and property 4 permits the uniform fallback for a SOLE unaddressed
+    gate-owning branch -- exactly this repro''s shape. So wiring a delivery-cell construction
+    alone (no keying) already fixes the round-3 repro; KEYED multi-peer addressing (2+
+    concurrent gate-owning branches) is a separate, still fully open question untested by any
+    evidence gathered so far. B-72''s OWN original registered scenario above (a branch that
+    already dispatched into its own gate, got approved, and is now resume-forwarded toward its
+    self-dispatched deeper-paused descendant) is a THIRD, hybrid case property 5 does not cover
+    (it requires "never itself dispatched into a HITL gate") -- stays OPEN, unresolved. SECOND
     CORRECTION -- the keyed-addressing tiebreaker (does a run_id-compatible pre-dispatch carrier
-    exist) is gated on B-71 regardless of its answer -- B-71 (already registered, separate) is that
-    the operator-facing HITL escalation payload exposes NO run-instance-distinct identifier at all
-    (keyed off compose_hitl_action_id, workflow_id-scoped), needing its own C-CP-28 carrier amendment
-    -- so even an internally-mintable-early run_id does not clear this to pure impl discretion until
-    B-71 lands or is co-designed with it. CLOSE-OUT CAVEAT (codex, not independently verified this
-    pass) -- _collect_gate_owning_run_ids (workflow_driver.py:2665-2698) treats any node carrying a
-    fan-out resume carrier as an unconditional container regardless of its own pause_reason, and that
-    carrier is built whenever ANY branch fails/pauses in a PARALLELIZATION run -- so a branch paused at
-    its own gate with zero dispatched children may compute to an EMPTY gate-owning set, meaning
-    delivery-cell construction alone may not suffice. Verify before building. NET POSITION -- round-3
-    repro is gate-owning, needs delivery-cell construction (not necessarily a key), modulo the
-    unverified caveat just above; keyed multi-peer addressing stays fully open and is B-71-gated;
-    B-72's own original hybrid scenario stays open and untested; council covers all of the above, none
-    retired. Full detail + all corrections at .harness/post-phase-8-forward-register.md B-72 round-5
-    update.
-    UPDATE 2026-07-25 round 6 (roadmap-continue, advisor()-directed empirical check BEFORE any code) --
-    round 5's own close-out caveat (whether _collect_gate_owning_run_ids returns an empty gate-owning
-    set for a branch paused at its own gate with zero dispatched children) is CONFIRMED TRUE by direct
-    instrumentation of the real round-3 repro object -- compute_hitl_uniform_fallback_eligible_run_id
-    returns None (not the branch's own run_id); PeerFanOutResumeState captures branch_count=1 but BOTH
-    branches=() and paused_child_branches=() are empty -- no carrier anywhere records this branch's own
-    gate-pause identity. NET POSITION ITEM (1) IS FALSIFIED -- delivery-cell construction alone cannot
-    fix the round-3 repro; the fix needs a NEW per-branch carrier on PeerFanOutResumeState/
-    FanOutResumeState, which is a CP-spec-owned additive schema change (Class 1, not impl discretion).
-    Filed as .harness/class_1_fork_b72_gate_ownership_missing_carrier.md. Status flips
-    registered_finding -> design_substrate_gated (mirrors the B-70 discriminator). No design-substrate
-    edit, no code edit (debug instrumentation added and reverted; git diff confirmed clean). Recommends
-    co-designing the new carrier's identity shape with B-71's already-registered keyed-addressing
-    question, since both need the same answer to "what identifies a not-yet-dispatched gate-owning
-    branch, compatible with property 1's fixed run_id-shaped key".
-    UPDATE 2026-07-25 round 6 continued -- a second instrumentation pass (terminal_dispositions dump
-    at workflow_driver.py:9698) confirms the mechanism directly (not just the outcome) --
-    terminal_dispositions={} branch_failed=True for this branch's ordinal; branch_failed derives from
-    the gather() BaseException scan, independent of terminal_dispositions, which is why no
-    FanOutBranchResumeState/branches entry is ever produced. Also flags an unexplained datum for the
-    spec-leg -- root pause_reason is EXPLICIT_OPERATOR, not HITL_PENDING, possibly related to round 3's
-    own noted "separate, not-yet-understood quirk"; the new carrier's reason-labeling convention needs
-    its own design decision against _collect_gate_owning_run_ids' existing HITL_PENDING leaf test, not
+    exist) is gated on B-71 regardless of its answer -- B-71 (already registered, separate) is
+    that the operator-facing HITL escalation payload exposes NO run-instance-distinct identifier
+    at all (keyed off compose_hitl_action_id, workflow_id-scoped), needing its own C-CP-28
+    carrier amendment -- so even an internally-mintable-early run_id does not clear this to pure
+    impl discretion until B-71 lands or is co-designed with it. CLOSE-OUT CAVEAT (codex, not
+    independently verified this pass) -- _collect_gate_owning_run_ids
+    (workflow_driver.py:2665-2698) treats any node carrying a fan-out resume carrier as an
+    unconditional container regardless of its own pause_reason, and that carrier is built
+    whenever ANY branch fails/pauses in a PARALLELIZATION run -- so a branch paused at its own
+    gate with zero dispatched children may compute to an EMPTY gate-owning set, meaning
+    delivery-cell construction alone may not suffice. Verify before building. NET POSITION --
+    round-3 repro is gate-owning, needs delivery-cell construction (not necessarily a key),
+    modulo the unverified caveat just above; keyed multi-peer addressing stays fully open and is
+    B-71-gated; B-72''s own original hybrid scenario stays open and untested; council covers all
+    of the above, none retired. Full detail + all corrections at
+    .harness/post-phase-8-forward-register.md B-72 round-5 update. UPDATE 2026-07-25 round 6
+    (roadmap-continue, advisor()-directed empirical check BEFORE any code) -- round 5''s own
+    close-out caveat (whether _collect_gate_owning_run_ids returns an empty gate-owning set for
+    a branch paused at its own gate with zero dispatched children) is CONFIRMED TRUE by direct
+    instrumentation of the real round-3 repro object --
+    compute_hitl_uniform_fallback_eligible_run_id returns None (not the branch''s own run_id);
+    PeerFanOutResumeState captures branch_count=1 but BOTH branches=() and
+    paused_child_branches=() are empty -- no carrier anywhere records this branch''s own
+    gate-pause identity. NET POSITION ITEM (1) IS FALSIFIED -- delivery-cell construction alone
+    cannot fix the round-3 repro; the fix needs a NEW per-branch carrier on
+    PeerFanOutResumeState/ FanOutResumeState, which is a CP-spec-owned additive schema change
+    (Class 1, not impl discretion). Filed as
+    .harness/class_1_fork_b72_gate_ownership_missing_carrier.md. Status flips registered_finding
+    -> design_substrate_gated (mirrors the B-70 discriminator). No design-substrate edit, no
+    code edit (debug instrumentation added and reverted; git diff confirmed clean). Recommends
+    co-designing the new carrier''s identity shape with B-71''s already-registered
+    keyed-addressing question, since both need the same answer to "what identifies a
+    not-yet-dispatched gate-owning branch, compatible with property 1''s fixed run_id-shaped
+    key". UPDATE 2026-07-25 round 6 continued -- a second instrumentation pass
+    (terminal_dispositions dump at workflow_driver.py:9698) confirms the mechanism directly (not
+    just the outcome) -- terminal_dispositions={} branch_failed=True for this branch''s ordinal;
+    branch_failed derives from the gather() BaseException scan, independent of
+    terminal_dispositions, which is why no FanOutBranchResumeState/branches entry is ever
+    produced. Also flags an unexplained datum for the spec-leg -- root pause_reason is
+    EXPLICIT_OPERATOR, not HITL_PENDING, possibly related to round 3''s own noted "separate,
+    not-yet-understood quirk"; the new carrier''s reason-labeling convention needs its own
+    design decision against _collect_gate_owning_run_ids'' existing HITL_PENDING leaf test, not
     an assumed compatibility. Section 4 now states the carrier as a REQUIREMENT (identity +
-    B-71-compatible key shape + reason-labeling decision), not a prescribed field name/type -- round 5's
-    own lesson about premature carrier-shape prescription.
-    OPERATOR RATIFIED 2026-07-25 (AskUserQuestion) -- open the CP spec-leg now, co-designed with B-71.
-    UPDATE round 7 (pre-authoring grounding) -- B-71's own close_out only exposes an ALREADY-DISPATCHED
-    child's run_id (an identifier that already exists), so the co-design is SEQUENTIAL not simultaneous --
-    this carrier's identity gets designed first, B-71 can echo it after. A second empirical check of
-    compose_child_run_id_seed (sub_agent_dispatch.py:363-395,1078-1098) found the deterministic
-    pre-dispatch minting path (round 5's own tiebreaker option) is GATED on subagent_child_recoverable
-    (engine in ESR/WAL/SAVE_POINT/RECONCILER_LOOP) -- for PURE_PATTERN_NO_ENGINE, the EXACT engine class
-    the round-3 repro uses, the seed falls through to None and a fresh non-deterministic uuid is minted
-    only at actual dispatch time. Deterministic-minting alone does not cover the repro's own shape.
-    Full detail (incl. an unresolved observation about whether the round-3 repro's SOLE-branch case can
-    be fixed via the uniform fallback without a property-1-compliant external identity at all) at the
-    fork doc's new section 7.
-    SPEC LEG LANDED 2026-07-25 -- CP spec v1.107 -> v1.108 (NEW additive SS1.2 property 6, systems-architect
-    tension-resolution mode, advisor() unavailable at authoring time, grounded directly against verbatim
-    property 1/4/5 text + verbatim sub_agent_dispatch.py code) + CP plan v2.43 -> v2.44 (deferred coverage-
-    matrix row) + 2 clearance markers. Resolves the (a)/(b)/(c) framing -- neither widening property 1's key
-    nor a separate delivery path is needed; a pre-dispatch gate-owning branch is counted in property 4's
-    unaddressed-set test via an internal-only identity, never hitl_responses-keyed. B-71 confirmed NOT a
-    co-requisite for this specific fix. Out-of-family just codex-review (round 1, base=main) caught 2 real
-    [P1]s before merge -- (1) the plan delta's first-draft coverage row named only the counting/carrier side,
-    omitting the delivery-cell construction at the fan-out dispatch sites required to actually consume the
-    resolved response -- fixed, the row now explicitly names both; (2) the canonicalization bundle (clearance
-    markers, CLAUDE.md pointer bumps, this register update) was incomplete when the spec/plan text alone was
-    reviewed -- fixed by this update + the co-landing PR. Full detail at the tension record,
+    B-71-compatible key shape + reason-labeling decision), not a prescribed field name/type --
+    round 5''s own lesson about premature carrier-shape prescription. OPERATOR RATIFIED
+    2026-07-25 (AskUserQuestion) -- open the CP spec-leg now, co-designed with B-71. UPDATE
+    round 7 (pre-authoring grounding) -- B-71''s own close_out only exposes an
+    ALREADY-DISPATCHED child''s run_id (an identifier that already exists), so the co-design is
+    SEQUENTIAL not simultaneous -- this carrier''s identity gets designed first, B-71 can echo
+    it after. A second empirical check of compose_child_run_id_seed
+    (sub_agent_dispatch.py:363-395,1078-1098) found the deterministic pre-dispatch minting path
+    (round 5''s own tiebreaker option) is GATED on subagent_child_recoverable (engine in
+    ESR/WAL/SAVE_POINT/RECONCILER_LOOP) -- for PURE_PATTERN_NO_ENGINE, the EXACT engine class
+    the round-3 repro uses, the seed falls through to None and a fresh non-deterministic uuid is
+    minted only at actual dispatch time. Deterministic-minting alone does not cover the repro''s
+    own shape. Full detail (incl. an unresolved observation about whether the round-3 repro''s
+    SOLE-branch case can be fixed via the uniform fallback without a property-1-compliant
+    external identity at all) at the fork doc''s new section 7. SPEC LEG LANDED 2026-07-25 -- CP
+    spec v1.107 -> v1.108 (NEW additive SS1.2 property 6, systems-architect tension-resolution
+    mode, advisor() unavailable at authoring time, grounded directly against verbatim property
+    1/4/5 text + verbatim sub_agent_dispatch.py code) + CP plan v2.43 -> v2.44 (deferred
+    coverage- matrix row) + 2 clearance markers. Resolves the (a)/(b)/(c) framing -- neither
+    widening property 1''s key nor a separate delivery path is needed; a pre-dispatch
+    gate-owning branch is counted in property 4''s unaddressed-set test via an internal-only
+    identity, never hitl_responses-keyed. B-71 confirmed NOT a co-requisite for this specific
+    fix. Out-of-family just codex-review (round 1, base=main) caught 2 real [P1]s before merge
+    -- (1) the plan delta''s first-draft coverage row named only the counting/carrier side,
+    omitting the delivery-cell construction at the fan-out dispatch sites required to actually
+    consume the resolved response -- fixed, the row now explicitly names both; (2) the
+    canonicalization bundle (clearance markers, CLAUDE.md pointer bumps, this register update)
+    was incomplete when the spec/plan text alone was reviewed -- fixed by this update + the
+    co-landing PR. Full detail at the tension record,
     .harness/class_1_tension_b72_pre_dispatch_gate_owning_branch_identity.md. Status flips
-    design_substrate_gated -> open (spec-leg gate cleared; the impl leg -- code + tests wiring the new carrier
-    + the delivery-cell construction per CP plan v2.44 SS5's now-corrected row -- is the next buildable slice,
-    NOT yet opened, per the B-33/B-39/B-59/B-70 spec-leg/impl-leg precedent). Closes ONLY net-position item
-    (1); items (2)/(3)/(4) remain open exactly as rounds 5-7 scoped them.
-    ROUND 2-5 CODEX FIXES (2026-07-25, same branch, pre-merge, out-of-family just codex-review
-    base=main). Round 2 caught property 6's internal identity permitting only local uniqueness,
-    colliding under nested fan-out and violating property 4's SOLE-member safety guarantee -- fixed,
-    now requires resume-tree-wide uniqueness plus a collision-witness test, and this register's own
-    stale close-out recipe plus stale claude-artifact-pointers.md rows were fixed too. Round 3
-    caught property 6 permitting counted-but-never-keyed without requiring actual delivery to the
-    sole branch, leaving the round-3 repro's livelock unclosed -- fixed, section 1.1(b) now requires
-    delivery as an explicit contract outcome, plus this tension record's stale Status field and an
-    overbroad B-71 dependency label on items (3)/(4) here were fixed. Round 4 caught the new
-    carrier's existence and byte-compat treatment being left to unauthorized impl discretion despite
-    PeerFanOutResumeState/FanOutResumeState participating in the persisted snapshot_hash -- fixed,
-    NEW section 1.3a pre-authorizes ONE additive drop-when-empty/None hash-strip-scoped field
-    mirroring the v1.97/v1.99 precedent, plus stale harness-cp/CLAUDE.md and clearance-marker
-    summaries were fixed. Round 5 caught two real findings. (a) this session's own roadmap_status.md
-    dashboard still said the spec leg was not yet started despite the completed delta -- fixed at
-    the dashboard's round-8 update. (b) property 6's contract text read as topology-agnostic while
-    only PARALLELIZATION/ORCHESTRATOR_WORKERS are grounded by the round-3 reproduction (confirmed
-    via direct grep -- the repro test uses TopologyPattern.PARALLELIZATION exclusively) -- fixed,
-    NEW section 1.2b explicitly scopes property 6 to the two fan-out topologies and names
-    EVALUATOR_OPTIMIZER/DECENTRALIZED_HANDOFF's sequential
+    design_substrate_gated -> open (spec-leg gate cleared; the impl leg -- code + tests wiring
+    the new carrier + the delivery-cell construction per CP plan v2.44 SS5''s now-corrected row
+    -- is the next buildable slice, NOT yet opened, per the B-33/B-39/B-59/B-70
+    spec-leg/impl-leg precedent). Closes ONLY net-position item (1); items (2)/(3)/(4) remain
+    open exactly as rounds 5-7 scoped them. ROUND 2-5 CODEX FIXES (2026-07-25, same branch,
+    pre-merge, out-of-family just codex-review base=main). Round 2 caught property 6''s internal
+    identity permitting only local uniqueness, colliding under nested fan-out and violating
+    property 4''s SOLE-member safety guarantee -- fixed, now requires resume-tree-wide
+    uniqueness plus a collision-witness test, and this register''s own stale close-out recipe
+    plus stale claude-artifact-pointers.md rows were fixed too. Round 3 caught property 6
+    permitting counted-but-never-keyed without requiring actual delivery to the sole branch,
+    leaving the round-3 repro''s livelock unclosed -- fixed, section 1.1(b) now requires
+    delivery as an explicit contract outcome, plus this tension record''s stale Status field and
+    an overbroad B-71 dependency label on items (3)/(4) here were fixed. Round 4 caught the new
+    carrier''s existence and byte-compat treatment being left to unauthorized impl discretion
+    despite PeerFanOutResumeState/FanOutResumeState participating in the persisted snapshot_hash
+    -- fixed, NEW section 1.3a pre-authorizes ONE additive drop-when-empty/None
+    hash-strip-scoped field mirroring the v1.97/v1.99 precedent, plus stale harness-cp/CLAUDE.md
+    and clearance-marker summaries were fixed. Round 5 caught two real findings. (a) this
+    session''s own roadmap_status.md dashboard still said the spec leg was not yet started
+    despite the completed delta -- fixed at the dashboard''s round-8 update. (b) property 6''s
+    contract text read as topology-agnostic while only PARALLELIZATION/ORCHESTRATOR_WORKERS are
+    grounded by the round-3 reproduction (confirmed via direct grep -- the repro test uses
+    TopologyPattern.PARALLELIZATION exclusively) -- fixed, NEW section 1.2b explicitly scopes
+    property 6 to the two fan-out topologies and names
+    EVALUATOR_OPTIMIZER/DECENTRALIZED_HANDOFF''s sequential
     EvaluatorOptimizerResumeState/HandoffResumeState carriers as a distinct, ungrounded, out-of-
-    scope gap for a future arc's own reproduction-first grounding pass, not silently folded into
-    this delta's build scope. 5 rounds total to convergence.
-    ROUND 6 CODEX FIX (2026-07-25, same branch, pre-merge). Codex caught that round 5's own fix
-    under-scoped -- HIERARCHICAL_DELEGATION was omitted despite recursively reusing
+    scope gap for a future arc''s own reproduction-first grounding pass, not silently folded
+    into this delta''s build scope. 5 rounds total to convergence. ROUND 6 CODEX FIX
+    (2026-07-25, same branch, pre-merge). Codex caught that round 5''s own fix under-scoped --
+    HIERARCHICAL_DELEGATION was omitted despite recursively reusing
     _execute_orchestrator_workers per U-CP-88/89 (confirmed by direct code read of
     workflow_driver.py:13745-13849 -- _execute_hierarchical_delegation takes the identical
-    crash_fan_out_resume FanOutResumeState/PeerFanOutResumeState parameter and threads it through
-    the same helper, not a separate implementation) and sharing the identical carrier being amended
-    -- leaving the contract inconsistent with the runtime call graph it constrains. Fixed -- section
-    1.1 and section 1.2b now include HIERARCHICAL_DELEGATION on carrier-identity grounds, not
-    reproduction grounds; the plan's coverage row already amends _execute_orchestrator_workers
-    directly, which covers every HIERARCHICAL_DELEGATION recursion level automatically, no separate
-    call site owed. 6 rounds total to convergence.
-    ROUND 7 CODEX FIXES (2026-07-25, same branch, pre-merge, 2 real P2s). (a) The delta's own
-    header/revision-shape text asserted NO new field and NO carrier-shape change while section 1.3a
-    explicitly authorizes one additive default-empty field on
+    crash_fan_out_resume FanOutResumeState/PeerFanOutResumeState parameter and threads it
+    through the same helper, not a separate implementation) and sharing the identical carrier
+    being amended -- leaving the contract inconsistent with the runtime call graph it
+    constrains. Fixed -- section 1.1 and section 1.2b now include HIERARCHICAL_DELEGATION on
+    carrier-identity grounds, not reproduction grounds; the plan''s coverage row already amends
+    _execute_orchestrator_workers directly, which covers every HIERARCHICAL_DELEGATION recursion
+    level automatically, no separate call site owed. 6 rounds total to convergence. ROUND 7
+    CODEX FIXES (2026-07-25, same branch, pre-merge, 2 real P2s). (a) The delta''s own
+    header/revision-shape text asserted NO new field and NO carrier-shape change while section
+    1.3a explicitly authorizes one additive default-empty field on
     PeerFanOutResumeState/FanOutResumeState -- fixed, reworded to acknowledge the field, exact
     name/type still deferred to the impl leg. (b) The EVALUATOR_OPTIMIZER/DECENTRALIZED_HANDOFF
     topology exclusion (named in section 1.2b) was tracked only in this correction-history prose
-    with no durable register row of its own -- fixed, split out as new B-78 (registered_finding),
-    with its own close-out recipe -- a future arc's reproduction-first grounding pass against those
-    carriers, mirroring how this B-72 round-3 repro preceded its own spec leg. 7 rounds total to
-    convergence.
+    with no durable register row of its own -- fixed, split out as new B-78
+    (registered_finding), with its own close-out recipe -- a future arc''s reproduction-first
+    grounding pass against those carriers, mirroring how this B-72 round-3 repro preceded its
+    own spec leg. 7 rounds total to convergence. IMPL LEG LANDED 2026-07-25 (PR #1116) -- closes
+    net-position item (1) end-to-end. NEW additive
+    PreDispatchGateOwningBranchResumeState(branch_index, step_id) carrier on
+    PeerFanOutResumeState/FanOutResumeState per SS1.3a''s pre-authorization (drop-when-empty
+    hash-strip scoped -- pre-B-72 snapshots re-hash byte-identically).
+    _collect_gate_owning_run_ids amended to walk it via a tree-wide-unique internal identity
+    (f''{snapshot_run_id}:pre-dispatch-gate:{branch_index}''). NEW
+    _collect_pre_dispatch_gate_owning_identities excludes these identities from the
+    hitl_responses-keyed addressability check per SS1.1(b)''s never-keyable requirement.
+    HITLDeliveryCell construction wired at both _execute_parallelization and
+    _execute_orchestrator_workers (the latter covers HIERARCHICAL_DELEGATION via its existing
+    recursive reuse), gated on this branch''s identity being the SOLE unaddressed member per
+    property 4/6. The round-3 repro''s own test renamed/re-asserted to confirm FIXED behavior
+    (webhook count stays 1, RuntimeSubAgentDispatcher reached exactly once, second pause is the
+    separate pre-existing EngineClass.PURE_PATTERN_NO_ENGINE child-shape quirk the original test
+    already flagged out of scope) plus a NEW assertion that the first pause is labeled
+    HITL_PENDING (the operator-facing signal the carrier is active). No _resumed_target_plan
+    extension needed for concurrency -- property 6(c) means when 2+ branches are unaddressed no
+    delivery cell is built for ANY of them, so at most one branch ever holds a HITLDeliveryCell
+    in a single resume cycle; the B-39 interim-sequencing hazard the existing plan extension
+    guards against is structurally unreachable here. Also confirmed -- the PROCEED
+    cascade-policy path needs no equivalent wiring -- _proceed_branch/_proceed_worker have no
+    except BaseException handler, so a HITLPauseRequestedSignal propagates through
+    asyncio.gather(..., return_exceptions=True) unchanged and is already caught by the existing
+    generic any_failed BaseException scan, matching the established
+    proceed-degrades-never-resumes precedent for every other unhandled pause/failure class on
+    that path. 3 rounds of out-of-family just codex-review (base=main) to convergence -- round 1
+    caught 2 real [P1]s -- (a) the carrier was ordinal-only, giving _resume_body_mismatch
+    nothing to validate identity against -- fixed by adding step_id to the carrier plus
+    bounds/no-overlap/step_id-identity validation in both fan-out _resume_body_mismatch
+    closures, empirically verified by editing a paused step''s step_id between pause and resume
+    and confirming the resume now fails closed; (b)
+    compute_hitl_uniform_fallback_eligible_run_id''s generic ''rid not in hitl_responses''
+    filter would treat a COLLIDING map key as addressed for a pre-dispatch identity, violating
+    SS1.1(b) -- fixed via the never-keyable exclusion above, regression-tested. Round 2
+    confirmed both fixes clean. Round 3 found a THIRD, genuinely distinct gap this diff does NOT
+    introduce -- confirmed pre-existing at the already-shipped LINEAR resume_at delivery-cell
+    construction site (workflow_driver.py ~4748-4777), which this diff''s fan-out wiring mirrors
+    verbatim and therefore inherits, not causes -- registered separately as B-79 (see its own
+    row) rather than fixed here. Full harness-cp + harness-runtime targeted suites re-run clean
+    (153 + 2 passed, 0 regressions); ruff + pyright strict clean on all touched files.'
+  pr: '#1116'
   council: RETIRED "skip-a-gate vs strand-a-descendant" framing (2026-07-25 round 2) -- the spec's
     mechanism ROUTES a resolved answer via hitl_response_for(child_run_id), it does not skip gate
     evaluation. Design-risk flag RELOCATES, not deleted -- the deferred resolver must independently
@@ -2138,3 +2196,47 @@ items:
     the child''s `paused_child_branches` cursor *(registered at the B-39 impl-leg Slice B
     branch `b39-impl-leg-slice-b-hitl-delivery-mechanism`, out-of-family Codex round 4
     (branch-vs-main), 2026-07-24)*'
+- id: B-79
+  title: 'A resumed branch''s HITLDeliveryCell is constructed from step_id identity alone, so a
+    HITL placement/gate-configuration change between pause and resume is not detected as a
+    material diff'
+  status: registered_finding
+  summary: 'Out-of-family Codex round 3 (branch-vs-main, B-72 impl leg PR #1116, 2026-07-25).
+    The B-72 impl leg''s _resume_body_mismatch guard (mirroring the pre-existing
+    effect_fence_paused_branches/paused_child_branches precedent) validates a pre-dispatch
+    gate-owning branch''s step_id identity before delivering the operator''s resolved response,
+    but does not validate whether the branch''s HITL placement (e.g. SUB_AGENT_BOUNDARY) or
+    step_kind still applies to the resumed step. If a workflow is edited between pause and
+    resume while preserving the branch''s step_id -- removing its SUB_AGENT_BOUNDARY placement,
+    for instance -- the guard still accepts the resume and RuntimeHITLGateComposer''s Step 0
+    unconditionally consumes and applies the stored HITLDeliveryCell (e.g. a REJECT) to the
+    now-ungated branch, before any current-placement evaluation runs. Confirmed PRE-EXISTING and
+    NOT introduced by the B-72 impl leg -- the identical unconditional construction (no
+    placement-identity check at all) already exists at the already-shipped LINEAR resume_at
+    delivery-cell site (workflow_driver.py ~4748-4777, landed at the B-39 impl leg), which
+    B-72''s fan-out wiring mirrors verbatim -- confirmed by direct grep/read of that site before
+    registering this row, per this workspace''s own codex-finding-scope-verify-sibling-pattern
+    discipline.'
+  close_out: 'Design a HITL placement/gate-configuration identity check (e.g. persisting the
+    resolved set of applicable HITL placements, or a content hash of the step''s HITL-relevant
+    fields, alongside step_id at pause-capture time) and validate it at BOTH the LINEAR
+    resume_at site and the fan-out _resume_body_mismatch closures (_execute_parallelization /
+    _execute_orchestrator_workers) before a HITLDeliveryCell is constructed -- reject the resume
+    as a material diff if the check fails, mirroring the existing step_id/step_kind precedent.
+    This is a genuine design task (what identity to persist, and whether the composer''s own
+    persona/engine-class placement-resolution logic -- which harness-cp does not have visibility
+    into, that logic being Runtime-owned -- needs a new cross-axis seam to expose it) not a
+    mechanical patch. Witness with a test that edits a paused step''s HITL placement (or
+    step_kind) between pause and resume while preserving step_id, and asserts the resume is
+    rejected as a material diff rather than silently delivering the stale response.'
+  council: 'Likely worth a dyadic pass (a design task touching a Runtime-owned cross-axis seam,
+    not mechanical) -- C10 (blast-radius/gate-integrity, mirroring the B-72 spec-leg''s own
+    prior falsified-draft caution) paired with whichever voice owns the CP<->Runtime
+    HITL-placement-resolution boundary. Not urgent -- the reachability precondition (an operator
+    edits a workflow''s HITL placements between an in-flight pause and its resume) is narrow,
+    and this gap is symmetric with an already-shipped LINEAR mechanism that has not surfaced in
+    production.'
+  heading: '### B-79 · A resumed branch''s `HITLDeliveryCell` is constructed from `step_id`
+    identity alone, so a HITL placement/gate-configuration change between pause and resume is
+    not detected as a material diff *(surfaced at the B-72 impl leg, out-of-family Codex round 3
+    (branch-vs-main), 2026-07-25)*'
