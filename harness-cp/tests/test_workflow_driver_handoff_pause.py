@@ -290,6 +290,49 @@ class _HandoffNonHitlRtFailClassDispatcher(_HandoffDispatcher):
         return super().dispatch(binding, step, step_context=step_context)
 
 
+class _NonHitlRtFailClassErrorForReject(Exception):
+    rt_fail_class = "RT-FAIL-HITL-GATE-REJECTED"
+
+
+class _HandoffHitlRejectDispatcher(_HandoffDispatcher):
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        step_id = str(step.step_id)
+        if step_id in self._fail:
+            self.dispatched.append(step_id)
+            if step_context is not None:
+                self.parent_action_ids[step_id] = step_context.parent_action_id
+            raise _NonHitlRtFailClassErrorForReject(f"operator rejected at {step_id}")
+        return super().dispatch(binding, step, step_context=step_context)
+
+
+def test_handoff_hitl_gate_reject_under_proceed_still_partial_not_failed() -> None:
+    """Out-of-family Codex round 3 [P1]: round 2's carve-out placement (checked
+    BEFORE the PROCEED branch) wrongly forced terminal FAILED even under
+    `cascade_policy=proceed`, overriding DH's documented PROCEED→PARTIAL
+    disposition. Scoping the carve-out to the PAUSE branch only (round 3's
+    fix) must leave PROCEED's existing salvage-to-PARTIAL behavior unchanged
+    for a genuine `RT-FAIL-HITL-GATE-REJECTED` exception too. Mutation-probed:
+    reverting the carve-out to its round-2 placement (before the PROCEED
+    check) flips this test's `RunStatus.PARTIAL` assertion to `FAILED`."""
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    result = _run(
+        steps=[_stage("s0"), _stage("s1"), _stage("s2")],
+        dispatcher=_HandoffHitlRejectDispatcher(fail_step_ids={"s2"}),
+        ctx=ctx,
+        persona_tier=_PROCEED_TIER,
+    )
+    assert result.status is RunStatus.PARTIAL, (
+        f"expected a REJECTed HITL gate under cascade_policy=proceed to retain "
+        f"the ordinary PROCEED→PARTIAL salvage disposition; got "
+        f"status={result.status!r} fail_class={result.fail_class!r}"
+    )
+    assert result.fail_class is not None and "RT-FAIL-HITL-GATE-REJECTED" in result.fail_class
+    assert result.partial_state is not None
+    assert set(result.partial_state["stages"]) == {"s0", "s1"}
+
+
 def test_handoff_pause_with_non_hitl_rt_fail_class_still_resumable_not_terminal() -> None:
     """B-78 [P1] round 2 regression: an `rt_fail_class`-carrying exception that
     is NOT one of the 4 `RT-FAIL-HITL-GATE-*` HITL routing outcomes must fall

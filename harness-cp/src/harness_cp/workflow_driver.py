@@ -10968,45 +10968,48 @@ def _execute_evaluator_optimizer(
                     f"— underlying: {type(exc).__name__}: {exc}"
                 ),
             ), entry_index - _resume_completed_count
-        _hitl_terminal_fail_class = getattr(exc, "rt_fail_class", None)
-        if _hitl_terminal_fail_class is not None and _hitl_terminal_fail_class.startswith(
-            _HITL_GATE_TERMINAL_FAIL_CLASS_PREFIX
-        ):
-            # B-78 [P1] (out-of-family Codex round 1, narrowed at round 2) — a
-            # HITL gate's own TERMINAL routing outcome (REJECT / EDIT-decode
-            # failure / audit-compose failure / timeout — the 4 `hitl_gate_
-            # composer.py` exceptions sharing the `RT-FAIL-HITL-GATE-` prefix,
-            # see `_HITL_GATE_TERMINAL_FAIL_CLASS_PREFIX`'s own docstring) is NOT
-            # an ordinary dispatch failure subject to cascade_policy's pause/proceed/
-            # cascade-cancel reaction — it is ALWAYS terminal, exactly like the
-            # `PostEffectAuditSigningError` carve-out immediately above (checked
-            # BEFORE any cascade_policy branch). Round 1's first draft matched ANY
-            # `rt_fail_class`-carrying exception, which wrongly swept up
-            # `SubAgentDispatchCapacityError` (`RT-FAIL-SUB-AGENT-DISPATCH-CAPACITY`)
-            # too — round 2 narrowed to the exact prefix so that exception keeps
-            # its existing cascade_policy-gated disposition unchanged. Without this
-            # carve-out, resuming with `HITLResponse.REJECT` under TEAM's
-            # cascade_policy=pause (now reachable via this arc's own delivery-cell
-            # wiring) would be misclassified as an ordinary retryable dispatch
-            # failure and produce ANOTHER resumable EXPLICIT_OPERATOR pause instead
-            # of the canonical terminal FAILED the exception's own docstring +
-            # §14.8 already promise.
-            drain_branch_buffers(ctx.ledger_writer, [writer])
-            return RunResult(
-                workflow_id=workflow_id,
-                run_id=run_id,
-                status=RunStatus.FAILED,
-                terminal_step_index=None,
-                partial_state=None,
-                final_state=None,
-                fail_class=_step_fail_class("evaluator-optimizer-hitl-gate-terminal", exc),
-            ), entry_index - _resume_completed_count
         if cascade_policy is CascadePolicy.PAUSE:
             # B-FANOUT-PAUSE-EVALUATOR-OPTIMIZER (R-FS-1) — materialize the §25.15.1
             # `pause → PAUSED` row EXTENDED to the sequential EO loop. The completed-step
             # prefix is captured into a hash-integrity-checked iteration cursor;
             # `api.resume` re-enters here, recovers the prefix (NOT re-dispatched), and
             # re-dispatches from the failed step. The failed step buffered nothing.
+            _hitl_terminal_fail_class = getattr(exc, "rt_fail_class", None)
+            if _hitl_terminal_fail_class is not None and _hitl_terminal_fail_class.startswith(
+                _HITL_GATE_TERMINAL_FAIL_CLASS_PREFIX
+            ):
+                # B-78 [P1] (out-of-family Codex round 1, narrowed at round 2,
+                # scoped to PAUSE-only at round 3 mirroring DH's own sibling
+                # fix) — a HITL gate's own TERMINAL routing outcome (REJECT /
+                # EDIT-decode failure / audit-compose failure / timeout — the 4
+                # `hitl_gate_composer.py` exceptions sharing the
+                # `RT-FAIL-HITL-GATE-` prefix, see
+                # `_HITL_GATE_TERMINAL_FAIL_CLASS_PREFIX`'s own docstring) must
+                # NEVER mint a resumable PAUSED — re-dispatching would re-fire
+                # the SAME terminal HITL routing failure, exactly like the
+                # `PostEffectAuditSigningError` carve-out immediately above's
+                # own "ONLY pause is foreclosed" reasoning. Scoped to the PAUSE
+                # branch specifically (not checked before it, unlike round 2's
+                # placement) because EO's PROCEED/cascade-cancel policies
+                # already fall through to terminal FAILED unconditionally for
+                # ANY exception (EO has no separate PROCEED→PARTIAL branch,
+                # unlike DH) — this scoping is symmetry with DH's own
+                # PAUSE-only fix, not a behavior change for EO's PROCEED case.
+                # Round 1's first draft matched ANY `rt_fail_class`-carrying
+                # exception, which wrongly swept up
+                # `SubAgentDispatchCapacityError`
+                # (`RT-FAIL-SUB-AGENT-DISPATCH-CAPACITY`) too — round 2 narrowed
+                # to the exact prefix.
+                drain_branch_buffers(ctx.ledger_writer, [writer])
+                return RunResult(
+                    workflow_id=workflow_id,
+                    run_id=run_id,
+                    status=RunStatus.FAILED,
+                    terminal_step_index=None,
+                    partial_state=None,
+                    final_state=None,
+                    fail_class=_step_fail_class("evaluator-optimizer-hitl-gate-terminal", exc),
+                ), entry_index - _resume_completed_count
             protocol = getattr(ctx, "pause_resume_protocol", None)
             if protocol is None:
                 # No pause/resume opt-in bound → the snapshot cannot be captured, so a
@@ -15106,36 +15109,6 @@ def _execute_decentralized_handoff(
                     ),
                     salvage=True,
                 )
-            _hitl_terminal_fail_class = getattr(exc, "rt_fail_class", None)
-            if _hitl_terminal_fail_class is not None and _hitl_terminal_fail_class.startswith(
-                _HITL_GATE_TERMINAL_FAIL_CLASS_PREFIX
-            ):
-                # B-78 [P1] (out-of-family Codex round 1, narrowed at round 2 —
-                # mirrors the EVALUATOR_OPTIMIZER carve-out immediately above's
-                # sibling) — a HITL gate's own TERMINAL routing outcome (REJECT /
-                # EDIT-decode failure / audit-compose failure / timeout — the 4
-                # `hitl_gate_composer.py` exceptions sharing the
-                # `RT-FAIL-HITL-GATE-` prefix, see
-                # `_HITL_GATE_TERMINAL_FAIL_CLASS_PREFIX`'s own docstring) is NOT
-                # an ordinary stage failure subject to cascade_policy's proceed/
-                # pause/cascade-cancel reaction — it is ALWAYS terminal, checked
-                # BEFORE any cascade_policy branch. Round 1's first draft matched
-                # ANY `rt_fail_class`-carrying exception, which wrongly swept up
-                # `SubAgentDispatchCapacityError`
-                # (`RT-FAIL-SUB-AGENT-DISPATCH-CAPACITY`) too — round 2 narrowed to
-                # the exact prefix so that exception keeps its existing
-                # cascade_policy-gated disposition unchanged. Without this
-                # carve-out, resuming with `HITLResponse.REJECT` under TEAM's
-                # cascade_policy=pause (now reachable via this arc's own
-                # delivery-cell wiring) would be misclassified as an ordinary
-                # retryable stage failure and produce ANOTHER resumable
-                # EXPLICIT_OPERATOR pause instead of the canonical terminal FAILED
-                # the exception's own docstring + §14.8 already promise.
-                return _finish(
-                    RunStatus.FAILED,
-                    fail_class=_step_fail_class("decentralized-handoff-hitl-gate-terminal", exc),
-                    salvage=True,
-                )
             # A stage owner failed → the chain stops (single-owner: no in-flight
             # sibling to cancel; the failed stage buffered nothing). cascade_policy
             # governs the disposition over the COMPLETED-stage prefix.
@@ -15153,6 +15126,35 @@ def _execute_decentralized_handoff(
                 # stage cursor; `api.resume` re-enters here, recovers the prefix (NOT
                 # re-dispatched), and re-dispatches from stage k. The failed stage k
                 # buffered nothing (single-owner: no in-flight sibling to cancel).
+                _hitl_terminal_fail_class = getattr(exc, "rt_fail_class", None)
+                if _hitl_terminal_fail_class is not None and _hitl_terminal_fail_class.startswith(
+                    _HITL_GATE_TERMINAL_FAIL_CLASS_PREFIX
+                ):
+                    # B-78 [P1] (out-of-family Codex round 1, narrowed at round 2,
+                    # scoped to PAUSE-only at round 3 — mirrors the EVALUATOR_
+                    # OPTIMIZER carve-out's own sibling fix) — a HITL gate's own
+                    # TERMINAL routing outcome (REJECT / EDIT-decode failure /
+                    # audit-compose failure / timeout — the 4
+                    # `hitl_gate_composer.py` exceptions sharing the
+                    # `RT-FAIL-HITL-GATE-` prefix, see
+                    # `_HITL_GATE_TERMINAL_FAIL_CLASS_PREFIX`'s own docstring) must
+                    # NEVER mint a resumable PAUSED — re-dispatching would re-fire
+                    # the SAME terminal HITL routing failure. Round 2's placement
+                    # (checked BEFORE the PROCEED branch above) wrongly overrode
+                    # PROCEED's own PARTIAL disposition too (out-of-family Codex
+                    # round 3 [P1]) — scoped here, inside PAUSE only, so PROCEED's
+                    # existing branch above (which already surfaces the correct
+                    # `RT-FAIL-HITL-GATE-*` fail_class via `_step_fail_class`)
+                    # keeps its established PARTIAL/salvage disposition unchanged,
+                    # mirroring the `PostEffectAuditSigningError` carve-out's own
+                    # "ONLY pause is foreclosed" precedent immediately above.
+                    return _finish(
+                        RunStatus.FAILED,
+                        fail_class=_step_fail_class(
+                            "decentralized-handoff-hitl-gate-terminal", exc
+                        ),
+                        salvage=True,
+                    )
                 protocol = getattr(ctx, "pause_resume_protocol", None)
                 if protocol is None:
                     # No pause/resume opt-in bound → the snapshot cannot be captured, so
