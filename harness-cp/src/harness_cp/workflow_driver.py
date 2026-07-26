@@ -9938,6 +9938,31 @@ def _execute_parallelization(
         # prior + this-round terminal sets. Absent branch ordinals (the cancelled
         # not-yet-dispatched ones) are left re-dispatchable by omission. `step_id`
         # is captured per branch so resume validates body identity.
+        # B-72 impl leg (out-of-family Codex [P1], round 6) — a recovered
+        # pre-dispatch gate-owning ordinal is normally "rebuilt fresh" every round
+        # (re-dispatch IS the carry, per `_recovered_pre_dispatch_gate_owning`'s own
+        # docstring) because every recovered ordinal is unconditionally re-attempted
+        # this round. But under §25.19 warm-up cohort scheduling a phase-2 follower
+        # can be WITHHELD from this round's dispatch entirely (e.g. a phase-1 leader
+        # re-pauses before the follower is ever attempted) — that ordinal then
+        # appears in neither `pre_dispatch_gate_owning_dispositions` (never
+        # re-raised — never dispatched) NOR any terminal/paused-child/fence
+        # disposition (never resolved either), so a bare rebuild-from-live-only
+        # silently drops it from the new snapshot. Property 4's SOLE-unaddressed-
+        # member safety test walks exactly this tuple — an undercounted tuple lets
+        # a later resume wrongly treat a remaining branch as sole and deliver the
+        # uniform response to it. Carry forward any recovered ordinal that neither
+        # re-fired this round (already in the live set) nor resolved via a
+        # different disposition this round (completed / recursive-child-paused /
+        # fence-paused) — i.e. one that was genuinely skipped, not addressed.
+        _pre_dispatch_gate_owning_carried_forward = frozenset(
+            _bi
+            for _bi in _recovered_pre_dispatch_gate_owning
+            if _bi not in pre_dispatch_gate_owning_dispositions
+            and _bi not in terminal_dispositions
+            and _bi not in paused_child_dispositions
+            and _bi not in effect_fence_paused_dispositions
+        )
         peer_fan_out_resume = PeerFanOutResumeState(
             branches=tuple(
                 # B-65 (codex [P1] on this arc) — a carrier branch's snapshot entry MUST
@@ -10036,7 +10061,10 @@ def _execute_parallelization(
                         steps[_bi]
                     ),
                 )
-                for _bi in sorted(pre_dispatch_gate_owning_dispositions)
+                for _bi in sorted(
+                    pre_dispatch_gate_owning_dispositions
+                    | _pre_dispatch_gate_owning_carried_forward
+                )
             ),
         )
         # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE — label the pause EFFECT_FENCE_AMBIGUOUS whenever a
@@ -10071,7 +10099,11 @@ def _execute_parallelization(
             WorkflowPauseReason.EFFECT_FENCE_AMBIGUOUS
             if effect_fence_paused_dispositions
             else WorkflowPauseReason.HITL_PENDING
-            if (_any_nested_hitl_pending or pre_dispatch_gate_owning_dispositions)
+            if (
+                _any_nested_hitl_pending
+                or pre_dispatch_gate_owning_dispositions
+                or _pre_dispatch_gate_owning_carried_forward
+            )
             else WorkflowPauseReason.EXPLICIT_OPERATOR
         )
         snapshot = _run_protocol_method_sync(
@@ -13997,6 +14029,18 @@ def _execute_orchestrator_workers(
         # prior + this-round terminal sets. Absent worker ordinals (the cancelled
         # not-yet-dispatched ones) are left re-dispatchable by omission. `step_id`
         # is captured per branch so resume validates body identity (Codex [P1]).
+        # B-72 impl leg (out-of-family Codex [P1], round 6) — carry forward a
+        # recovered pre-dispatch gate-owning worker that was withheld this round
+        # (neither re-fired nor resolved via another disposition); see
+        # `_execute_parallelization`'s own construction site for the full rationale.
+        _pre_dispatch_gate_owning_carried_forward = frozenset(
+            _bi
+            for _bi in _recovered_pre_dispatch_gate_owning
+            if _bi not in pre_dispatch_gate_owning_dispositions
+            and _bi not in terminal_dispositions
+            and _bi not in paused_child_dispositions
+            and _bi not in effect_fence_paused_dispositions
+        )
         fan_out_resume = FanOutResumeState(
             orchestrator_output=dict(orchestrator_output),
             orchestrator_step_id=str(orchestrator_step.step_id),
@@ -14090,7 +14134,10 @@ def _execute_orchestrator_workers(
                         worker_steps[_bi]
                     ),
                 )
-                for _bi in sorted(pre_dispatch_gate_owning_dispositions)
+                for _bi in sorted(
+                    pre_dispatch_gate_owning_dispositions
+                    | _pre_dispatch_gate_owning_carried_forward
+                )
             ),
         )
         # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE — label EFFECT_FENCE_AMBIGUOUS when a worker
@@ -14113,7 +14160,11 @@ def _execute_orchestrator_workers(
             WorkflowPauseReason.EFFECT_FENCE_AMBIGUOUS
             if effect_fence_paused_dispositions
             else WorkflowPauseReason.HITL_PENDING
-            if (_any_nested_hitl_pending or pre_dispatch_gate_owning_dispositions)
+            if (
+                _any_nested_hitl_pending
+                or pre_dispatch_gate_owning_dispositions
+                or _pre_dispatch_gate_owning_carried_forward
+            )
             else WorkflowPauseReason.EXPLICIT_OPERATOR
         )
         snapshot = _run_protocol_method_sync(

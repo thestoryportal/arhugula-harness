@@ -2932,6 +2932,110 @@ def test_peer_resume_suppresses_pre_dispatch_hitl_delivery_during_fence_abort() 
     ] == [1]
 
 
+class _WarmupCohortLeaderGateDispatcher:
+    """out-of-family Codex [P1], round 6 — round-2 resume dispatcher: branch-1-sub
+    and branch-2-sub form a size-2 SUB_AGENT_DISPATCH `cohort_key` cohort, so
+    branch-1-sub (the lower ordinal) is the §25.19 warm-up Phase-1 leader and
+    branch-2-sub is deferred to Phase 2. The leader re-raises the pre-dispatch
+    HITL signal (still unresolved) on every call, which fails Phase 1 — and per
+    the driver's own documented contract ("a Phase-1 failure WITHHOLDS the
+    followers ... entirely") Phase 2 (the follower) is never even attempted this
+    round. `dispatched` records every call that actually reached `dispatch()`,
+    so the test can assert branch-2-sub was genuinely never touched, not merely
+    absent from the snapshot by coincidence."""
+
+    def __init__(self) -> None:
+        self.dispatched: list[str] = []
+
+    def lookup(self, step_kind: StepKind) -> StepDispatcher:
+        return cast(StepDispatcher, self)
+
+    def cohort_key(self, binding: StepEffectiveBinding, step: WorkflowStep) -> str | None:
+        return "warmup-cohort-k" if step.step_kind is StepKind.SUB_AGENT_DISPATCH else None
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        self.dispatched.append(str(step.step_id))
+        raise HITLPauseRequestedSignal()
+
+
+def test_peer_resume_carries_forward_pre_dispatch_gate_owner_withheld_by_warmup() -> None:
+    """out-of-family Codex [P1], round 6 — a repeated resume starting with TWO
+    recovered pre-dispatch gate-owning peers must not silently drop the one that
+    §25.19 warm-up scheduling withholds this round (the leader re-pauses before
+    the follower is ever dispatched). Property 4's SOLE-unaddressed-member
+    safety test walks `pre_dispatch_gate_owning_branches` — an undercounted
+    tuple would let a LATER resume wrongly treat the remaining branch as sole
+    and deliver the operator's uniform response to it."""
+    steps = [
+        WorkflowStep(
+            step_id=StepID("branch-0"),
+            step_kind=StepKind.DECLARATIVE_STEP,
+            step_payload={"index": 0},
+        ),
+        WorkflowStep(
+            step_id=StepID("branch-1-sub"),
+            step_kind=StepKind.SUB_AGENT_DISPATCH,
+            step_payload={"child_workflow_id": "wf-child-1"},
+        ),
+        WorkflowStep(
+            step_id=StepID("branch-2-sub"),
+            step_kind=StepKind.SUB_AGENT_DISPATCH,
+            step_payload={"child_workflow_id": "wf-child-2"},
+        ),
+    ]
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    paused = execute_workflow(
+        _manifest("wf-pp"),
+        steps,
+        run_id="run-1",
+        ctx=ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=cast(StepDispatcherRegistry, _PreDispatchGateDispatcher()),
+    )
+    assert paused.status is RunStatus.PAUSED
+    snap = paused.pause_snapshot
+    assert snap is not None
+    assert snap.peer_fan_out_resume is not None
+    assert [b.branch_index for b in snap.peer_fan_out_resume.pre_dispatch_gate_owning_branches] == [
+        1,
+        2,
+    ], "round 1 (no warm-up cohort) must record BOTH SUB_AGENT_DISPATCH peers"
+
+    resume_dispatcher = _WarmupCohortLeaderGateDispatcher()
+    resume_ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    resumed = execute_workflow(
+        _manifest("wf-pp"),
+        steps,
+        run_id="run-1",
+        ctx=resume_ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=cast(StepDispatcherRegistry, resume_dispatcher),
+        pause_snapshot_input=snap,
+    )
+    assert resume_dispatcher.dispatched == ["branch-1-sub"], (
+        "branch-2-sub must be genuinely WITHHELD by the warm-up split this round "
+        f"(never reach dispatch()) — got {resume_dispatcher.dispatched!r}"
+    )
+    assert resumed.status is RunStatus.PAUSED
+    resumed_snap = resumed.pause_snapshot
+    assert resumed_snap is not None
+    resumed_pfr = resumed_snap.peer_fan_out_resume
+    assert resumed_pfr is not None
+    assert sorted(b.branch_index for b in resumed_pfr.pre_dispatch_gate_owning_branches) == [
+        1,
+        2,
+    ], (
+        "branch-2-sub (withheld, neither re-fired nor resolved this round) must be "
+        "CARRIED FORWARD from the recovered set, not silently dropped"
+    )
+    _carried = next(b for b in resumed_pfr.pre_dispatch_gate_owning_branches if b.branch_index == 2)
+    assert _carried.step_id == "branch-2-sub"
+    assert _carried.step_kind == StepKind.SUB_AGENT_DISPATCH.value
+    assert _carried.child_workflow_id == "wf-child-2"
+
+
 # ---------------------------------------------------------------------------
 # B-39/B-48 Phase-0 lease-leak fix — PARALLELIZATION twins (round-6
 # concurrency-lens BLOCK named 4 symmetric sites; the ORCHESTRATOR_WORKERS
