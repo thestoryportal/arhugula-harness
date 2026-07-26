@@ -4204,10 +4204,14 @@ def test_ow_worker_resume_accepts_unchanged_pre_action_gated_inference_step() ->
 class _RoundTwoResolveOnePausedChildFireOtherDispatcherOW:
     """B-81 close-out (2) — the OW mirror of `test_workflow_driver_parallelization_
     pause.py`'s `_RoundTwoResolveOnePausedChildFireOtherDispatcher`: worker-0-sub
-    consumes its delivered `HITLDeliveryCell` and, on ITS OWN dispatch, acts as a
-    faithful `RuntimeSubAgentDispatcher` double — dispatching a REAL nested child
-    `execute_workflow` that itself PAUSES (the same `_GrandchildDispatcher` shape
-    `_FaithfulSubAgentDispatcher` uses above) and re-raising `SubAgentChildPausedError`.
+    consumes its delivered `HITLDeliveryCell` and acts as a faithful `RuntimeSubAgentDispatcher`
+    double — dispatching a REAL nested child `execute_workflow` that itself PAUSES (the same
+    `_GrandchildDispatcher` shape `_FaithfulSubAgentDispatcher` uses above) and re-raising
+    `SubAgentChildPausedError`. worker-1-sub raises the pause signal synchronously and
+    typically completes first, so this exercise most often lands in the in-flight-cancellation-
+    race catch rather than the direct own-dispatch catch — both write
+    `paused_child_dispositions[branch_index]` identically (merge-gate test-witness lens,
+    PR #1119), so either path equally exercises the exclusion conjunct this test targets.
     worker-1-sub, dispatched for the first time (withheld by round 1's warm-up
     cohort), raises the pause signal unconditionally — a fresh gate owner."""
 

@@ -3197,10 +3197,15 @@ def test_peer_resume_excludes_pre_dispatch_gate_owner_resolved_this_round() -> N
 
 class _RoundTwoResolveOnePausedChildFireOtherDispatcher:
     """B-81 close-out (2) — the paused-child-resolves-this-round exclusion arm: branch-0-sub
-    consumes its delivered `HITLDeliveryCell` and, on ITS OWN dispatch (not a sibling in-flight
-    race), acts as a faithful `RuntimeSubAgentDispatcher` double — dispatching a REAL nested
-    child `execute_workflow` that itself PAUSES (the same `_PeerGrandchildDispatcher` shape
-    `_PeerFaithfulSubAgentDispatcher` uses above) and re-raising `SubAgentChildPausedError`.
+    consumes its delivered `HITLDeliveryCell` and acts as a faithful `RuntimeSubAgentDispatcher`
+    double — dispatching a REAL nested child `execute_workflow` that itself PAUSES (the same
+    `_PeerGrandchildDispatcher` shape `_PeerFaithfulSubAgentDispatcher` uses above) and
+    re-raising `SubAgentChildPausedError`. branch-1-sub raises the pause signal synchronously
+    and typically completes first, so this exercise most often lands in the in-flight-
+    cancellation-race catch (the `isinstance(_inflight_exc, SubAgentChildPausedError)` branch)
+    rather than the direct `except SubAgentChildPausedError` catch at branch-0's own dispatch —
+    both write `paused_child_dispositions[branch_index]` identically (merge-gate test-witness
+    lens, PR #1119), so either path equally exercises the exclusion conjunct this test targets.
     branch-1-sub, dispatched for the first time, raises the pause signal unconditionally — a
     fresh gate owner. The resumed snapshot must show branch-0 landing in `paused_child_branches`
     (NOT re-counted as a carried-forward pre-dispatch gate owner) and branch-1 as the sole
