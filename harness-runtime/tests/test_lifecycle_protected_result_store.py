@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import errno
 import os
+import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -36,6 +38,75 @@ class _Unserializable:
 
     def __init__(self) -> None:
         self.gen = (x for x in range(3))
+
+
+#: B-73 cross-process regression tests: standalone scripts run via
+#: `subprocess` (a genuine separate OS process, its own fresh interpreter —
+#: avoids both `multiprocessing`'s `fork`-after-lock-held deadlock hazard
+#: and `spawn`'s pickle-by-module-name resolution, which this monorepo's
+#: several same-named `tests` packages make ambiguous). A cold child
+#: interpreter's own import of `cryptography` + `harness_runtime` alone
+#: takes ~5s in this environment. Each script wraps `fcntl.flock` itself
+#: (a codex [P2]-driven fix on the B-73 arc, round 3 — writing the
+#: `ready_marker` any earlier, even "right before the call that contends
+#: on the lock," only proves the child reached that call, not that it's
+#: AT the `flock` attempt: `write_once()` still does real serialization +
+#: Fernet encryption first, a genuine scheduling window a descheduled
+#: child could stall in past the parent's bounded wait, letting a broken
+#: fix's absence go undetected) — the wrapper writes `ready_marker` the
+#: instant `fcntl.flock` is actually called, before delegating to the
+#: real syscall, closing that window entirely. A `done_marker` written
+#: after the call returns lets the parent observe completion, all
+#: without any IPC primitive shared across the process boundary.
+_B73_FLOCK_SIGNAL_WRAPPER = """
+import fcntl as _fcntl
+_real_flock = _fcntl.flock
+def _signaling_flock(fd, op):
+    Path(ready_marker).write_text("ready")
+    return _real_flock(fd, op)
+_fcntl.flock = _signaling_flock
+"""
+
+_B73_CHILD_WRITE_SCRIPT = (
+    """
+import sys
+import time
+from pathlib import Path
+from cryptography.fernet import Fernet
+from harness_runtime.lifecycle.protected_result_store import ProtectedResultStore
+
+store_dir, key, done_marker, ready_marker = sys.argv[1:5]
+"""
+    + _B73_FLOCK_SIGNAL_WRAPPER
+    + """
+store = ProtectedResultStore(Path(store_dir), codec=Fernet(key.encode()), ttl_seconds=86400.0)
+# codex [P2] on the B-73 arc: a fresh store's _last_gc_at is 0.0, so this
+# write_once() would otherwise ALSO trigger _maybe_opportunistic_gc_sweep()
+# first -- which acquires the SAME cross-process lock via gc_sweep(),
+# making this test pass even if _publish_atomic's OWN lock use were
+# removed. Suppressing it isolates the assertion to _publish_atomic.
+store._last_gc_at = time.time()
+store.write_once("tenant-a", "written by a separate OS process")
+Path(done_marker).write_text("done")
+"""
+)
+
+_B73_CHILD_SWEEP_SCRIPT = (
+    """
+import sys
+from pathlib import Path
+from cryptography.fernet import Fernet
+from harness_runtime.lifecycle.protected_result_store import ProtectedResultStore
+
+store_dir, key, done_marker, ready_marker = sys.argv[1:5]
+"""
+    + _B73_FLOCK_SIGNAL_WRAPPER
+    + """
+store = ProtectedResultStore(Path(store_dir), codec=Fernet(key.encode()), ttl_seconds=86400.0)
+store.gc_sweep()
+Path(done_marker).write_text("done")
+"""
+)
 
 
 class _ProviderResponse:
@@ -882,6 +953,154 @@ def test_write_once_temp_file_protected_from_concurrent_sweep_before_commit(
     ref = write_result[0]
     assert sweep_results == [[]]
     assert store_a.read("tenant-a", ref) == "must survive a concurrent sweep"
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="_cross_process_lock() deliberately no-ops on Windows (C-STK-10; no fcntl); "
+    "the blocking assertion below does not hold there.",
+)
+def test_write_once_blocks_across_separate_processes_via_cross_process_lock(
+    tmp_path: Path,
+) -> None:
+    """B-73 (split from B-68 at its close, out-of-family Codex round 5):
+    `_root_locks`' `threading.Lock` only serializes callers WITHIN one
+    process — the daemon composition root constructs a FRESH
+    `ProtectedResultStore` per bootstrap, so two separate OS PROCESSES
+    sharing this same directory each hold their own independent
+    `_root_locks` dict and are not mutually excluded by it at all.
+    `_cross_process_lock` (`fcntl.flock` on a dedicated lockfile, acquired
+    INSIDE `self._publish_lock`) closes that gap.
+
+    Direct analog of `test_write_once_blocks_while_publish_lock_held`
+    (which holds `store._publish_lock` directly to simulate an in-process
+    concurrent publisher): here the lock is held directly via
+    `store._cross_process_lock()`, standing in for a genuinely separate
+    process's in-flight publish, and the blocked caller is a GENUINE
+    separate OS process (`subprocess` running `_B73_CHILD_WRITE_SCRIPT` —
+    a fresh interpreter, no shared Python state, so it cannot be serialized
+    by the in-process `_root_locks` dict at all). No TTL/staleness timing
+    is exercised here — that race is already covered in-process by
+    `test_write_once_temp_file_protected_from_concurrent_sweep_before_
+    commit`; this test isolates the cross-process mutual-exclusion
+    mechanism itself.
+
+    Mutation probe: removing `self._cross_process_lock()` from
+    `_publish_atomic`'s `with` statement lets the child process's
+    `write_once()` complete immediately instead of blocking on the
+    parent-held flock — a manual mutation-probe run against a reverted
+    copy of the fix (before this handshake was added) reproduced a false
+    pass caused by the child's own cold-start import cost (~5s for
+    `cryptography` + `harness_runtime` in this environment) masking the
+    missing lock; the `ready_marker` handshake below closes that gap by
+    timing the "still blocked" check from the moment the child is
+    actually about to contend on the lock, not from process spawn.
+
+    out-of-family Codex [P2]: a fresh child store's `_last_gc_at` is `0.0`,
+    so `write_once()` would otherwise ALSO trigger
+    `_maybe_opportunistic_gc_sweep()` first — which acquires the SAME
+    cross-process lock via `gc_sweep()`, so this test would still pass
+    even with `_cross_process_lock()` removed from `_publish_atomic`
+    ALONE (the opportunistic sweep's own lock use would still block it).
+    `_B73_CHILD_WRITE_SCRIPT` suppresses that sweep so this test isolates
+    `_publish_atomic`'s own critical section specifically."""
+    key = Fernet.generate_key()
+    store_dir = tmp_path / "store"
+    store_dir.mkdir(parents=True)
+    store = ProtectedResultStore(store_dir, codec=Fernet(key), ttl_seconds=86400.0)
+    done_marker = tmp_path / "child_done_marker"
+    ready_marker = tmp_path / "child_ready_marker"
+
+    with store._cross_process_lock():  # type: ignore[attr-defined]
+        child = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                _B73_CHILD_WRITE_SCRIPT,
+                str(store_dir),
+                key.decode("ascii"),
+                str(done_marker),
+                str(ready_marker),
+            ]
+        )
+        try:
+            deadline = time.monotonic() + 10.0
+            while not ready_marker.exists():
+                assert time.monotonic() < deadline, "child never signaled readiness"
+                time.sleep(0.02)
+            # Bounded wait for a chance to run past the held lock, timed
+            # from the moment the child is actually about to contend on
+            # it — the marker file must still be absent, not merely
+            # "hasn't gotten there yet".
+            time.sleep(0.5)
+            assert not done_marker.exists(), (
+                "a separate OS process's write_once() completed while the "
+                "parent held the cross-process lock"
+            )
+        except BaseException:
+            child.kill()
+            child.wait(timeout=5.0)
+            raise
+
+    assert child.wait(timeout=30.0) == 0
+    assert done_marker.exists()
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="_cross_process_lock() deliberately no-ops on Windows (C-STK-10; no fcntl); "
+    "the blocking assertion below does not hold there.",
+)
+def test_gc_sweep_blocks_across_separate_processes_via_cross_process_lock(
+    tmp_path: Path,
+) -> None:
+    """Companion to the test above: `gc_sweep`'s candidate-selection phase
+    acquires the SAME `_cross_process_lock`, so a concurrent sweep from a
+    genuinely separate OS process is blocked out exactly as a concurrent
+    publish is.
+
+    Mutation probe: removing `self._cross_process_lock()` from `gc_sweep`'s
+    `with` statement lets the child process's `gc_sweep()` complete
+    immediately instead of blocking on the parent-held flock — see the
+    companion write-side test's docstring for why the `ready_marker`
+    handshake below is load-bearing (a cold child interpreter's own import
+    cost can otherwise mask a missing lock)."""
+    key = Fernet.generate_key()
+    store_dir = tmp_path / "store"
+    store_dir.mkdir(parents=True)
+    store = ProtectedResultStore(store_dir, codec=Fernet(key), ttl_seconds=86400.0)
+    done_marker = tmp_path / "child_done_marker"
+    ready_marker = tmp_path / "child_ready_marker"
+
+    with store._cross_process_lock():  # type: ignore[attr-defined]
+        child = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                _B73_CHILD_SWEEP_SCRIPT,
+                str(store_dir),
+                key.decode("ascii"),
+                str(done_marker),
+                str(ready_marker),
+            ]
+        )
+        try:
+            deadline = time.monotonic() + 10.0
+            while not ready_marker.exists():
+                assert time.monotonic() < deadline, "child never signaled readiness"
+                time.sleep(0.02)
+            time.sleep(0.5)
+            assert not done_marker.exists(), (
+                "a separate OS process's gc_sweep() completed while the "
+                "parent held the cross-process lock"
+            )
+        except BaseException:
+            child.kill()
+            child.wait(timeout=5.0)
+            raise
+
+    assert child.wait(timeout=30.0) == 0
+    assert done_marker.exists()
 
 
 def test_gc_sweep_does_not_collect_unexpired_entries(tmp_path: Path) -> None:

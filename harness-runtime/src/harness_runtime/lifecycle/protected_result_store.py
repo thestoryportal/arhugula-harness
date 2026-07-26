@@ -26,15 +26,26 @@ import hashlib
 import logging
 import os
 import pickle
+import sys
 import tempfile
 import threading
 import time
 import uuid
+from collections.abc import Generator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from harness_runtime.lifecycle.memory_tool_encrypted import FernetLike
+
+#: C-STK-10 commits to macOS / Linux / Windows without per-OS port forking;
+#: the stdlib has no `fcntl` on Windows. `harness_runtime.types` imports
+#: `ProtectedResultStore` unconditionally, so an unguarded top-level
+#: `import fcntl` would make `import harness_runtime` itself fail on
+#: Windows (codex [P1] on the B-73 arc) — mirrors the same guard already
+#: shipped at `harness_is.cross_process_ledger_lock`.
+_IS_WINDOWS = sys.platform == "win32"
 
 __all__ = [
     "ProtectedResultStore",
@@ -71,6 +82,18 @@ _OPPORTUNISTIC_GC_INTERVAL_SECONDS = 300.0
 #: real OS-thread boundary an asyncio-only lock would not cross.
 _root_locks: dict[str, threading.Lock] = {}
 _root_locks_guard = threading.Lock()
+
+#: B-73: the in-process `threading.Lock` above excludes concurrent same-
+#: process callers only — the daemon composition root constructs a FRESH
+#: `ProtectedResultStore` per bootstrap, but two separate OS PROCESSES
+#: sharing one store root (e.g. two co-resident daemon instances) each hold
+#: their own independent `_root_locks` dict and are not mutually excluded by
+#: it at all. This dedicated lockfile name is disjoint from both `gc_sweep`
+#: glob patterns (`*.entry` — Python's dotfile-hiding glob semantics never
+#: match a leading-dot name against a non-dot-leading pattern; `.tmp-*` —
+#: this name doesn't share that prefix), so it is never enumerated as a GC
+#: candidate.
+_CROSS_PROCESS_LOCK_FILENAME = ".cross_process.lock"
 
 
 def _lock_for_root(root: Path) -> threading.Lock:
@@ -273,6 +296,46 @@ class ProtectedResultStore:
         # re-derivable and never needs its own state.
         return _lock_for_root(self._root)
 
+    @contextmanager
+    def _cross_process_lock(self) -> Generator[None, None, None]:
+        """B-73: an OS-level advisory lock (`fcntl.flock`) serializing
+        `_publish_atomic` and `gc_sweep`'s candidate-selection phase across
+        separate PROCESSES sharing this store root — mirrors the proven
+        same-host `flock` pattern already shipped at
+        `reconciler_pause_resume_substrate.py`'s `_workflow_lock`.
+
+        Always acquired INSIDE `self._publish_lock` (a single, fixed nesting
+        order everywhere this is used — never the reverse), so the two
+        layers compose without a lock-ordering hazard. A fresh fd is opened
+        and closed on every call (no process-wide registry needed, unlike
+        `_root_locks`): `flock` coordinates through the kernel via the actual
+        on-disk file, and POSIX `flock` semantics deny a second `flock()` on
+        an independently-opened fd for the SAME file while this process
+        already holds it via another fd — so this is safe (and always
+        uncontended) even nested under the in-process lock that already
+        serializes same-process callers before any `flock` call is reached.
+
+        No-op on Windows (`_IS_WINDOWS`) — same posture as pre-B-73 (the
+        in-process `self._publish_lock` still applies; only the additional
+        cross-process exclusion is unavailable there), matching
+        `harness_is.cross_process_ledger_lock`'s own Windows carve-out.
+        """
+        if _IS_WINDOWS:
+            yield
+            return
+        import fcntl  # POSIX-only; never reached on Windows.
+
+        lock_path = self._root / _CROSS_PROCESS_LOCK_FILENAME
+        fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+
     def _entry_path(self, composite_key: str) -> Path:
         digest = hashlib.sha256(composite_key.encode("utf-8")).hexdigest()
         return self._root / f"{digest}.entry"
@@ -397,7 +460,7 @@ class ProtectedResultStore:
         while a temp file is still in active use.
         """
         self._root.mkdir(parents=True, exist_ok=True)
-        with self._publish_lock:
+        with self._publish_lock, self._cross_process_lock():
             fd, tmp_name = tempfile.mkstemp(dir=self._root, prefix=".tmp-")
             try:
                 with os.fdopen(fd, "wb") as handle:
@@ -512,9 +575,9 @@ class ProtectedResultStore:
         across every `ProtectedResultStore` instance the daemon constructs
         for the same on-disk directory — this daemon builds a FRESH
         instance per `run()`/`resume()` bootstrap, not one shared object).
-        A separate OS PROCESS sharing this same directory is NOT covered by
-        an in-process lock; that residual is registered, not silently
-        assumed closed.
+        A separate OS PROCESS sharing this same directory is additionally
+        excluded by `_cross_process_lock` (B-73), composed inside
+        `self._publish_lock` below.
         """
         current_time = now if now is not None else time.time()
         expired: list[str] = []
@@ -552,7 +615,7 @@ class ProtectedResultStore:
         # race; the only cost is a duplicate log line.
         entry_candidates: list[tuple[Path, float]] = []
         tmp_candidates: list[tuple[Path, float]] = []
-        with self._publish_lock:
+        with self._publish_lock, self._cross_process_lock():
             for entry_path in self._root.glob("*.entry"):
                 try:
                     written_at = entry_path.stat().st_mtime
