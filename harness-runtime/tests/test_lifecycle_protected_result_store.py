@@ -46,18 +46,29 @@ class _Unserializable:
 #: and `spawn`'s pickle-by-module-name resolution, which this monorepo's
 #: several same-named `tests` packages make ambiguous). A cold child
 #: interpreter's own import of `cryptography` + `harness_runtime` alone
-#: takes ~5s in this environment — each script writes a `ready_marker`
-#: immediately before the call that actually contends on the lock (codex
-#: [P2] on the B-73 arc: writing it any earlier — e.g. right after
-#: imports — only proves the child STARTED, not that it's imminently
-#: about to attempt the flock; a descheduled/stalled child in that gap
-#: could let a broken fix's absence go undetected), so the parent can wait
-#: out the (unrelated) import/construction startup cost and time the
-#: "still blocked" check from the moment the child is genuinely about to
-#: contend on it, not from process spawn. A `done_marker` written after
-#: the call returns lets the parent observe completion, all without any
-#: IPC primitive shared across the process boundary.
-_B73_CHILD_WRITE_SCRIPT = """
+#: takes ~5s in this environment. Each script wraps `fcntl.flock` itself
+#: (a codex [P2]-driven fix on the B-73 arc, round 3 — writing the
+#: `ready_marker` any earlier, even "right before the call that contends
+#: on the lock," only proves the child reached that call, not that it's
+#: AT the `flock` attempt: `write_once()` still does real serialization +
+#: Fernet encryption first, a genuine scheduling window a descheduled
+#: child could stall in past the parent's bounded wait, letting a broken
+#: fix's absence go undetected) — the wrapper writes `ready_marker` the
+#: instant `fcntl.flock` is actually called, before delegating to the
+#: real syscall, closing that window entirely. A `done_marker` written
+#: after the call returns lets the parent observe completion, all
+#: without any IPC primitive shared across the process boundary.
+_B73_FLOCK_SIGNAL_WRAPPER = """
+import fcntl as _fcntl
+_real_flock = _fcntl.flock
+def _signaling_flock(fd, op):
+    Path(ready_marker).write_text("ready")
+    return _real_flock(fd, op)
+_fcntl.flock = _signaling_flock
+"""
+
+_B73_CHILD_WRITE_SCRIPT = (
+    """
 import sys
 import time
 from pathlib import Path
@@ -65,6 +76,9 @@ from cryptography.fernet import Fernet
 from harness_runtime.lifecycle.protected_result_store import ProtectedResultStore
 
 store_dir, key, done_marker, ready_marker = sys.argv[1:5]
+"""
+    + _B73_FLOCK_SIGNAL_WRAPPER
+    + """
 store = ProtectedResultStore(Path(store_dir), codec=Fernet(key.encode()), ttl_seconds=86400.0)
 # codex [P2] on the B-73 arc: a fresh store's _last_gc_at is 0.0, so this
 # write_once() would otherwise ALSO trigger _maybe_opportunistic_gc_sweep()
@@ -72,23 +86,27 @@ store = ProtectedResultStore(Path(store_dir), codec=Fernet(key.encode()), ttl_se
 # making this test pass even if _publish_atomic's OWN lock use were
 # removed. Suppressing it isolates the assertion to _publish_atomic.
 store._last_gc_at = time.time()
-Path(ready_marker).write_text("ready")
 store.write_once("tenant-a", "written by a separate OS process")
 Path(done_marker).write_text("done")
 """
+)
 
-_B73_CHILD_SWEEP_SCRIPT = """
+_B73_CHILD_SWEEP_SCRIPT = (
+    """
 import sys
 from pathlib import Path
 from cryptography.fernet import Fernet
 from harness_runtime.lifecycle.protected_result_store import ProtectedResultStore
 
 store_dir, key, done_marker, ready_marker = sys.argv[1:5]
+"""
+    + _B73_FLOCK_SIGNAL_WRAPPER
+    + """
 store = ProtectedResultStore(Path(store_dir), codec=Fernet(key.encode()), ttl_seconds=86400.0)
-Path(ready_marker).write_text("ready")
 store.gc_sweep()
 Path(done_marker).write_text("done")
 """
+)
 
 
 class _ProviderResponse:
@@ -1006,7 +1024,7 @@ def test_write_once_blocks_across_separate_processes_via_cross_process_lock(
             ]
         )
         try:
-            deadline = time.monotonic() + 30.0
+            deadline = time.monotonic() + 10.0
             while not ready_marker.exists():
                 assert time.monotonic() < deadline, "child never signaled readiness"
                 time.sleep(0.02)
@@ -1067,7 +1085,7 @@ def test_gc_sweep_blocks_across_separate_processes_via_cross_process_lock(
             ]
         )
         try:
-            deadline = time.monotonic() + 30.0
+            deadline = time.monotonic() + 10.0
             while not ready_marker.exists():
                 assert time.monotonic() < deadline, "child never signaled readiness"
                 time.sleep(0.02)
