@@ -31,6 +31,7 @@ from typing import Any, cast
 
 import pytest
 from harness_core import PersonaTier, StepID, WorkloadClass
+from harness_core.identity import EntryID
 from harness_core.workflow_event_class import WorkflowEventClass
 from harness_cp.cp_shared_types import ModelBinding
 from harness_cp.cross_family_fallback_chain import (
@@ -40,6 +41,8 @@ from harness_cp.cross_family_fallback_chain import (
 )
 from harness_cp.engine_class import EngineClass
 from harness_cp.handoff_context import StateSummary
+from harness_cp.hitl_placement import HITLResult
+from harness_cp.hitl_response_palette import HITLResponse
 from harness_cp.pause_resume_protocol import PauseResumeProtocol, _compute_snapshot_hash
 from harness_cp.pause_resume_protocol_types import (
     EffectFencePausedBranchResumeState,
@@ -61,6 +64,7 @@ from harness_cp.workflow_driver import (
     StepDispatcherRegistry,
     StepKindDispatcherNotBoundError,
     compute_effect_fence_uniform_fallback_eligible_key,
+    compute_hitl_uniform_fallback_eligible_run_id,
     execute_workflow,
 )
 from harness_cp.workflow_driver_types import (
@@ -3837,3 +3841,135 @@ class _PreDispatchGateDispatcherOW:
         if step_id == "orchestrator":
             return {"role": "orchestrator"}
         raise HITLPauseRequestedSignal()
+
+
+class _RoundTwoResolveOneFireOtherDispatcherOW:
+    """merge-gate test-witness lens round 2 [BLOCK] — the ORCHESTRATOR_WORKERS
+    mirror of `_execute_parallelization`'s `HITLDeliveryCell` CONSTRUCTION site
+    (workflow_driver.py ~12066-12076, the actual delivery/liveness half of the
+    B-72 fix, not merely the carry-forward counting half) had zero test
+    coverage anywhere in the repo — round 1's withheld-branch test only proved
+    the COUNTING side survives a repeated resume, never that a delivered cell
+    is actually consumed at this site. worker-0-sub consumes its delivered
+    cell and completes; worker-1-sub — dispatched for the first time ever,
+    since round 1's warm-up split withheld it — raises the pause signal
+    unconditionally (a fresh, not-yet-recovered gate owner)."""
+
+    def __init__(self) -> None:
+        self.dispatched: list[str] = []
+
+    def lookup(self, step_kind: StepKind) -> StepDispatcher:
+        return cast(StepDispatcher, self)
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        step_id = str(step.step_id)
+        self.dispatched.append(step_id)
+        if step_id == "worker-0-sub":
+            holder = getattr(step_context, "hitl_delivery_holder", None)
+            resolved = holder.consume_and_clear() if holder is not None else None
+            if resolved is not None:
+                return {"role": "worker-0-sub", "resolved": True}
+            raise HITLPauseRequestedSignal()
+        raise HITLPauseRequestedSignal()
+
+
+def test_ow_worker_resume_delivers_and_excludes_resolved_pre_dispatch_gate_owner() -> None:
+    """merge-gate test-witness lens round 2 [BLOCK] — the ORCHESTRATOR_WORKERS
+    analogue of `test_workflow_driver_parallelization_pause.py`'s
+    `test_peer_resume_excludes_pre_dispatch_gate_owner_resolved_this_round`.
+    Exercises the `HITLDeliveryCell` CONSTRUCTION site at `_execute_orchestrator_
+    workers` (workflow_driver.py ~12066-12076) — the required-OUTCOME delivery
+    half of CP spec v1.108 §1.1(c), not just the carry-forward counting half —
+    AND proves the carry-forward union's exclusion conjuncts hold at the
+    `FanOutResumeState` construction site too: worker-0 resolves this round
+    (consumes its delivered cell, completes) and must be EXCLUDED from the new
+    snapshot; worker-1 (fresh this round) must be present.
+
+    Uses the SAME real §25.19 warm-up cohort split as the withheld-branch test
+    (deterministic — no thread races) to get worker-1 genuinely untouched in
+    round 1, so worker-0 is the resume-cycle-wide SOLE unaddressed member and
+    actually receives a delivery cell in round 2."""
+    steps = [
+        WorkflowStep(
+            step_id=StepID("orchestrator"),
+            step_kind=StepKind.DECLARATIVE_STEP,
+            step_payload={"role": "orchestrator"},
+        ),
+        WorkflowStep(
+            step_id=StepID("worker-0-sub"),
+            step_kind=StepKind.SUB_AGENT_DISPATCH,
+            step_payload={"child_workflow_id": "wf-child-0"},
+        ),
+        WorkflowStep(
+            step_id=StepID("worker-1-sub"),
+            step_kind=StepKind.SUB_AGENT_DISPATCH,
+            step_payload={"child_workflow_id": "wf-child-1"},
+        ),
+    ]
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    round1_dispatcher = _WarmupCohortLeaderGateDispatcherOW()
+    paused = execute_workflow(
+        _manifest("wf-ow-excl"),
+        steps,
+        run_id="run-1",
+        ctx=ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=cast(StepDispatcherRegistry, round1_dispatcher),
+    )
+    assert round1_dispatcher.dispatched == ["worker-0-sub"], (
+        "worker-1-sub must be genuinely WITHHELD by the warm-up split in round 1 "
+        f"(never reach dispatch()) — got {round1_dispatcher.dispatched!r}"
+    )
+    assert paused.status is RunStatus.PAUSED
+    snap = paused.pause_snapshot
+    assert snap is not None
+    assert snap.fan_out_resume is not None
+    assert [b.branch_index for b in snap.fan_out_resume.pre_dispatch_gate_owning_branches] == [0], (
+        "round 1: worker-0-sub (the leader) is the SOLE recorded pre-dispatch gate owner"
+    )
+
+    resume_dispatcher = _RoundTwoResolveOneFireOtherDispatcherOW()
+    resume_ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    resume_context = ResumeContext(
+        hitl_response=HITLResult(
+            response=HITLResponse.APPROVE,
+            timestamp="2026-07-25T00:00:00Z",
+            audit_ledger_entry_id=EntryID("e-b72-ow-exclusion"),
+            response_summary_hash="d" * 64,
+        )
+    )
+    eligible_run_id = compute_hitl_uniform_fallback_eligible_run_id(snap, resume_context)
+    assert eligible_run_id is not None, (
+        "worker-0-sub must be the resume-cycle-wide SOLE unaddressed gate-owning "
+        "member so it actually receives a delivery cell this round"
+    )
+    resumed = execute_workflow(
+        _manifest("wf-ow-excl"),
+        steps,
+        run_id="run-1",
+        ctx=resume_ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=cast(StepDispatcherRegistry, resume_dispatcher),
+        pause_snapshot_input=snap,
+        resume_context=resume_context,
+        hitl_uniform_fallback_eligible_run_id=eligible_run_id,
+    )
+    assert sorted(resume_dispatcher.dispatched) == ["worker-0-sub", "worker-1-sub"], (
+        f"both workers must be re-dispatched this round — got {resume_dispatcher.dispatched!r}"
+    )
+    assert resumed.status is RunStatus.PAUSED, (
+        f"expected worker-1-sub's fresh pre-dispatch pause to re-pause the run; "
+        f"got status={resumed.status!r} fail_class={resumed.fail_class!r}"
+    )
+    resumed_snap = resumed.pause_snapshot
+    assert resumed_snap is not None
+    resumed_fr = resumed_snap.fan_out_resume
+    assert resumed_fr is not None
+    assert sorted(b.branch_index for b in resumed_fr.pre_dispatch_gate_owning_branches) == [1], (
+        "worker-0 RESOLVED this round (consumed its DELIVERED cell, completed) and "
+        "must be EXCLUDED from the carried-forward set — only worker-1 (the fresh "
+        f"this-round pause) should remain; got "
+        f"{sorted(b.branch_index for b in resumed_fr.pre_dispatch_gate_owning_branches)!r}"
+    )
