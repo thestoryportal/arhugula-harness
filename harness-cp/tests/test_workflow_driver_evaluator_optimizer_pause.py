@@ -37,7 +37,11 @@ from harness_cp.cross_family_fallback_chain import (
 )
 from harness_cp.engine_class import EngineClass
 from harness_cp.handoff_context import StateSummary
-from harness_cp.pause_resume_protocol import PauseResumeProtocol, _compute_snapshot_hash
+from harness_cp.pause_resume_protocol import (
+    PauseResumeProtocol,
+    PauseResumeProtocolEventKind,
+    _compute_snapshot_hash,
+)
 from harness_cp.pause_resume_protocol_types import (
     EvaluatorOptimizerResumeState,
     EvaluatorOptimizerStepResumeState,
@@ -302,6 +306,61 @@ def test_eo_pause_with_protocol_returns_paused_with_eo_snapshot() -> None:
     # The completed loop state salvages as partial_state (no silent loss).
     assert result.partial_state is not None
     assert result.partial_state["output"] == {"draft": 2}
+
+
+class _NonHitlRtFailClassError(Exception):
+    """B-78 [P1] round 2 regression fixture — a non-HITL exception that
+    happens to carry an `rt_fail_class` marker (mirroring
+    `SubAgentDispatchCapacityError`'s `RT-FAIL-SUB-AGENT-DISPATCH-CAPACITY`,
+    the exact class out-of-family Codex round 1's first draft wrongly swept
+    into the always-terminal HITL carve-out). This class must NOT be treated
+    as HITL-gate-terminal — it must retain the ordinary cascade_policy-gated
+    disposition (a resumable PAUSED under TEAM here)."""
+
+    rt_fail_class = "RT-FAIL-SUB-AGENT-DISPATCH-CAPACITY"
+
+
+class _EoNonHitlRtFailClassDispatcher(_EoDispatcher):
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        # Peek at the upcoming call ordinal WITHOUT incrementing `self.calls` —
+        # `super().dispatch()` does its own `self.calls += 1` on the delegated
+        # path, so incrementing here too would double-count and let the
+        # parent's OWN `fail_on_call` check (raising a plain `RuntimeError`)
+        # fire on a different call than intended, masking this fixture's
+        # exception entirely (caught empirically via a debug print during
+        # this fix's own mutation probe — the double-increment bug, not a
+        # source defect, produced a false-negative on the first draft).
+        if self._fail_on is not None and self.calls + 1 == self._fail_on:
+            self.calls += 1
+            raise _NonHitlRtFailClassError("simulated capacity exhaustion")
+        return super().dispatch(binding, step, step_context=step_context)
+
+
+def test_eo_pause_with_non_hitl_rt_fail_class_still_resumable_not_terminal() -> None:
+    """B-78 [P1] round 2 regression: an `rt_fail_class`-carrying exception that
+    is NOT one of the 4 `RT-FAIL-HITL-GATE-*` HITL routing outcomes must fall
+    through to the ordinary cascade_policy=pause materialization — a
+    resumable PAUSED, not a terminal FAILED. Mutation-probed: widening the
+    carve-out's `startswith` check back to a bare `is not None` (round 1's
+    original defect) flips this test's `RunStatus.PAUSED` assertion to
+    `RunStatus.FAILED`."""
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    result = _run(
+        steps=_loop_steps(),
+        dispatcher=_EoNonHitlRtFailClassDispatcher(accept_on_evaluate=None, fail_on_call=4),
+        ctx=ctx,
+    )
+    assert result.status is RunStatus.PAUSED, (
+        f"a non-HITL rt_fail_class-carrying exception must retain the ordinary "
+        f"cascade_policy=pause disposition; got status={result.status!r} "
+        f"fail_class={result.fail_class!r}"
+    )
+    assert result.fail_class is None
+    snap = result.pause_snapshot
+    assert snap is not None
+    assert snap.evaluator_optimizer_resume is not None
 
 
 def test_eo_pause_emits_resumption_not_workflow_start_on_resume() -> None:
@@ -898,3 +957,73 @@ def test_eo_existing_snapshot_without_eo_resume_still_validates() -> None:
         evaluator_optimizer_resume=None,
     )
     assert hash_without == hash_with_none
+
+
+class HITLPauseRequestedSignal(BaseException):
+    """Test-local stand-in for the runtime `hitl_gate_composer.HITLPauseRequestedSignal`
+    — a `BaseException`, name-matched by the driver (harness-cp cannot import
+    harness-runtime). Mirrors `test_workflow_driver_parallelization_pause.py`'s
+    identically-named test-local class."""
+
+
+class _EoGenuineHitlGateDispatcher(_EoDispatcher):
+    """Raises the genuine HITL-gate-pause signal (not an ordinary dispatch failure)
+    on the `fail_on`-th call — exercises `_EvaluatorOptimizerHITLPauseError`'s own
+    outer handler, distinct from `_EvaluatorOptimizerStepDispatchError`'s
+    cascade_policy-gated failure path every other test in this file exercises."""
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        if self._fail_on is not None and self.calls + 1 == self._fail_on:
+            self.calls += 1
+            raise HITLPauseRequestedSignal()
+        return super().dispatch(binding, step, step_context=step_context)
+
+
+class _RecordingCpIsWiring:
+    """Records the PAUSE_CAPTURED CP→IS emission the driver fires alongside a genuine
+    HITL-gate pause (production binds this via the U-RT-111 wiring; the default `_CtxP`
+    leaves it absent so the emission is opt-in, mirroring
+    `test_workflow_driver_effect_fence_pause.py`'s identically-named fixture)."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[Any, int]] = []
+
+    async def emit_pause_resume_state_ledger_entry(
+        self,
+        *,
+        workflow_id: str,
+        step_id: str,
+        protocol_event_kind: Any,
+        event_sequence_id: int,
+        protocol_state_snapshot: Any,
+        actor: Any,
+    ) -> None:
+        self.calls.append((protocol_event_kind, event_sequence_id))
+
+
+def test_eo_genuine_hitl_gate_pause_emits_cp_is_pause_captured() -> None:
+    """codex out-of-family review [P2] (2026-07-26): the new genuine-HITL-gate-pause
+    handler (`_EvaluatorOptimizerHITLPauseError`'s own outer handler) must emit a
+    `PAUSE_CAPTURED` CP→IS audit entry when `cp_is_wiring` is bound, mirroring LINEAR's
+    own HITL branch (`workflow_driver.py:5199-5215`) — a gap the ordinary
+    dispatch-failure pause path's existing emission coverage (see
+    `test_eo_two_same_parity_re_pauses_emit_distinct_resume_audit_sequences` above) did
+    NOT exercise, since it goes through a different exception/handler entirely.
+    Mutation-probed: deleting the new `_eo_hitl_cp_is_wiring is not None` emission block
+    in `_execute_evaluator_optimizer` leaves `wiring.calls` empty against this test."""
+    wiring = _RecordingCpIsWiring()
+    ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    ctx_obj.cp_is_wiring = wiring  # type: ignore[attr-defined]
+    result = _run(
+        steps=_loop_steps(),
+        dispatcher=_EoGenuineHitlGateDispatcher(fail_on_call=1),
+        ctx=cast(DriverContext, ctx_obj),
+    )
+    assert result.status is RunStatus.PAUSED
+    snap = result.pause_snapshot
+    assert snap is not None
+    assert wiring.calls == [
+        (PauseResumeProtocolEventKind.PAUSE_CAPTURED, (snap.step_index << 2) | 2)
+    ]
