@@ -3703,3 +3703,137 @@ def test_b60_depth2_nested_group_fence_signal_unwrapped() -> None:
             default_model_binding=_DEFAULT_BINDING,
             step_dispatchers=cast(StepDispatcherRegistry, _Reg()),
         )
+
+
+class HITLPauseRequestedSignal(BaseException):
+    """Test-local stand-in for the runtime `hitl_gate_composer.HITLPauseRequestedSignal`
+    — a `BaseException`, name-matched by the driver (harness-cp cannot import
+    harness-runtime). Mirrors `test_workflow_driver_parallelization_pause.py`'s
+    identically-named test-local class."""
+
+
+class _WarmupCohortLeaderGateDispatcherOW:
+    """merge-gate test-witness lens round 1 [BLOCK] — the ORCHESTRATOR_WORKERS
+    mirror of `_execute_parallelization`'s round-6 `_pre_dispatch_gate_owning_
+    carried_forward` fix (`workflow_driver.py`'s `FanOutResumeState` construction
+    site) had zero test coverage. worker-0-sub and worker-1-sub form a size-2
+    SUB_AGENT_DISPATCH `cohort_key` cohort, so worker-0-sub (the lower ordinal)
+    is the §25.19 warm-up Phase-1 leader and worker-1-sub is deferred to Phase 2.
+    The leader re-raises the pre-dispatch HITL signal (still unresolved) on
+    every call, which fails Phase 1 — Phase 2 (the follower) is never even
+    attempted this round."""
+
+    def __init__(self) -> None:
+        self.dispatched: list[str] = []
+
+    def lookup(self, step_kind: StepKind) -> StepDispatcher:
+        return cast(StepDispatcher, self)
+
+    def cohort_key(self, binding: StepEffectiveBinding, step: WorkflowStep) -> str | None:
+        return "ow-warmup-cohort-k" if step.step_kind is StepKind.SUB_AGENT_DISPATCH else None
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        step_id = str(step.step_id)
+        if step_id == "orchestrator":
+            return {"role": "orchestrator"}
+        self.dispatched.append(step_id)
+        raise HITLPauseRequestedSignal()
+
+
+def test_ow_worker_resume_carries_forward_pre_dispatch_gate_owner_withheld_by_warmup() -> None:
+    """merge-gate test-witness lens round 1 [BLOCK] — the ORCHESTRATOR_WORKERS
+    analogue of `test_workflow_driver_parallelization_pause.py`'s
+    `test_peer_resume_carries_forward_pre_dispatch_gate_owner_withheld_by_warmup`.
+    A repeated resume starting with a recovered pre-dispatch gate-owning worker
+    must not silently drop it when §25.19 warm-up scheduling withholds it this
+    round (the leader re-pauses before its cohort follower is ever dispatched).
+    Exercises `_execute_orchestrator_workers`'s own `FanOutResumeState`
+    construction site (workflow_driver.py's `_pre_dispatch_gate_owning_carried_
+    forward` union), which the PARALLELIZATION regression test does not reach —
+    `HIERARCHICAL_DELEGATION` reuses this same function recursively."""
+    steps = [
+        WorkflowStep(
+            step_id=StepID("orchestrator"),
+            step_kind=StepKind.DECLARATIVE_STEP,
+            step_payload={"role": "orchestrator"},
+        ),
+        WorkflowStep(
+            step_id=StepID("worker-0-sub"),
+            step_kind=StepKind.SUB_AGENT_DISPATCH,
+            step_payload={"child_workflow_id": "wf-child-0"},
+        ),
+        WorkflowStep(
+            step_id=StepID("worker-1-sub"),
+            step_kind=StepKind.SUB_AGENT_DISPATCH,
+            step_payload={"child_workflow_id": "wf-child-1"},
+        ),
+    ]
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    paused = execute_workflow(
+        _manifest("wf-ow-pp"),
+        steps,
+        run_id="run-1",
+        ctx=ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=cast(StepDispatcherRegistry, _PreDispatchGateDispatcherOW()),
+    )
+    assert paused.status is RunStatus.PAUSED
+    snap = paused.pause_snapshot
+    assert snap is not None
+    assert snap.fan_out_resume is not None
+    assert [b.branch_index for b in snap.fan_out_resume.pre_dispatch_gate_owning_branches] == [
+        0,
+        1,
+    ], "round 1 (no warm-up cohort) must record BOTH SUB_AGENT_DISPATCH workers"
+
+    resume_dispatcher = _WarmupCohortLeaderGateDispatcherOW()
+    resume_ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    resumed = execute_workflow(
+        _manifest("wf-ow-pp"),
+        steps,
+        run_id="run-1",
+        ctx=resume_ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=cast(StepDispatcherRegistry, resume_dispatcher),
+        pause_snapshot_input=snap,
+    )
+    assert resume_dispatcher.dispatched == ["worker-0-sub"], (
+        "worker-1-sub must be genuinely WITHHELD by the warm-up split this round "
+        f"(never reach dispatch()) — got {resume_dispatcher.dispatched!r}"
+    )
+    assert resumed.status is RunStatus.PAUSED
+    resumed_snap = resumed.pause_snapshot
+    assert resumed_snap is not None
+    resumed_fr = resumed_snap.fan_out_resume
+    assert resumed_fr is not None
+    assert sorted(b.branch_index for b in resumed_fr.pre_dispatch_gate_owning_branches) == [
+        0,
+        1,
+    ], (
+        "worker-1-sub (withheld, neither re-fired nor resolved this round) must be "
+        "CARRIED FORWARD from the recovered set, not silently dropped"
+    )
+    _carried = next(b for b in resumed_fr.pre_dispatch_gate_owning_branches if b.branch_index == 1)
+    assert _carried.step_id == "worker-1-sub"
+    assert _carried.step_kind == StepKind.SUB_AGENT_DISPATCH.value
+    assert _carried.child_workflow_id == "wf-child-1"
+
+
+class _PreDispatchGateDispatcherOW:
+    """Round-1 dispatcher: orchestrator completes; both workers unconditionally
+    raise the pre-dispatch HITL signal (no cohort key — no warm-up split, so
+    BOTH get a live attempt this round, mirroring
+    `test_workflow_driver_parallelization_pause.py`'s `_PreDispatchGateDispatcher`)."""
+
+    def lookup(self, step_kind: StepKind) -> StepDispatcher:
+        return cast(StepDispatcher, self)
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        step_id = str(step.step_id)
+        if step_id == "orchestrator":
+            return {"role": "orchestrator"}
+        raise HITLPauseRequestedSignal()
