@@ -217,7 +217,17 @@ class PreDispatchGateOwningBranchResumeState(BaseModel):
     operator's stored response to a DIFFERENT, unrelated step). Resume validates
     the re-supplied branch step's `step_id` against this — a same-count rename/
     reorder/replace fails closed rather than silently deliver a resolved answer
-    to the wrong step's dispatch."""
+    to the wrong step's dispatch. `child_workflow_id` (out-of-family Codex [P1],
+    round 4) closes a NARROWER gap the `step_id`-only guard left open: a
+    same-`step_id` edit that swaps the target `child_workflow_id` previously
+    passed undetected — the same identity dimension `PausedChildBranchResumeState`
+    (B-31) already validates for the sibling recursive-child-pause disposition.
+    A resumed branch's `step_kind` is validated too, but against the CONSTANT
+    `StepKind.SUB_AGENT_DISPATCH` rather than a captured value — a pre-dispatch
+    gate-owning branch is ALWAYS that kind by construction (the composer's
+    `SUB_AGENT_BOUNDARY` placement applies only to `SUB_AGENT_DISPATCH` steps),
+    exactly mirroring `PausedChildBranchResumeState`'s own kind-changed guard
+    (which likewise checks against the constant, not a stored field)."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -228,6 +238,15 @@ class PreDispatchGateOwningBranchResumeState(BaseModel):
     step_id: str
     """The branch's `WorkflowStep.step_id` AT CAPTURE TIME (the material-diff
     identity guard — see class docstring)."""
+
+    child_workflow_id: str | None = None
+    """The target child workflow's identifier AT CAPTURE TIME, read from
+    `step.step_payload["child_workflow_id"]` via the same `_opaque_field`
+    convention `PausedChildBranchResumeState.child_workflow_id` (B-31) already
+    uses. Resume validates it against the re-supplied step's payload ONLY when
+    present — default-`None` for byte-compat (`_strip_default_fanout_resume_fields`
+    does not need to special-case it since the field lives inside a
+    non-empty-tuple-gated carrier row, not a bare top-level field)."""
 
 
 class FanOutResumeState(BaseModel):

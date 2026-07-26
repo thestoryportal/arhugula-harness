@@ -31,6 +31,7 @@ from typing import Any, cast
 
 import pytest
 from harness_core import PersonaTier, StepID, WorkloadClass
+from harness_core.identity import EntryID
 from harness_core.workflow_event_class import WorkflowEventClass
 from harness_cp.cp_shared_types import ModelBinding
 from harness_cp.cross_family_fallback_chain import (
@@ -40,6 +41,8 @@ from harness_cp.cross_family_fallback_chain import (
 )
 from harness_cp.engine_class import EngineClass
 from harness_cp.handoff_context import StateSummary
+from harness_cp.hitl_placement import HITLResult
+from harness_cp.hitl_response_palette import HITLResponse
 from harness_cp.pause_resume_protocol import (
     PauseResumeProtocol,
     _compute_snapshot_hash,
@@ -2571,6 +2574,276 @@ def test_peer_resume_rejects_paused_child_workflow_id_swap() -> None:
     )
     assert resumed.status is RunStatus.FAILED
     assert "paused-child-workflow-id-changed" in (resumed.fail_class or "")
+
+
+# ---------------------------------------------------------------------------
+# B-72 impl leg (CP spec v1.108 §1) — pre-dispatch gate-owning material-diff +
+# fence-abort suppression (out-of-family Codex [P1], round 4).
+# ---------------------------------------------------------------------------
+
+
+class HITLPauseRequestedSignal(BaseException):
+    """Test-local stand-in for the runtime `hitl_gate_composer.HITLPauseRequestedSignal`
+    — a `BaseException`, name-matched by the driver (harness-cp cannot import
+    harness-runtime), exactly like `EffectFenceAmbiguousUncommittedError` above."""
+
+
+class _PreDispatchGateDispatcher:
+    """A SUB_AGENT_DISPATCH dispatcher that raises the HITL pause signal on every
+    call BEFORE any child run is ever created — the pre-dispatch gate-owning shape.
+    branch-0 (DECLARATIVE_STEP) completes normally via the shared `_CountingDispatcher`."""
+
+    def lookup(self, step_kind: StepKind) -> StepDispatcher:
+        if step_kind is StepKind.SUB_AGENT_DISPATCH:
+            return cast(StepDispatcher, self)
+        return cast(StepDispatcher, _CountingDispatcher())
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        raise HITLPauseRequestedSignal()
+
+
+def test_peer_resume_rejects_pre_dispatch_gate_owning_kind_changed() -> None:
+    """out-of-family Codex [P1], round 4 — a same-`step_id` edit that swaps a
+    pre-dispatch gate-owning branch's `step_kind` must fail closed (mirrors the
+    B-21 paused-child-kind-changed guard the sibling disposition already has)."""
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    paused = execute_workflow(
+        _manifest("wf-pp"),
+        _peer_parent_steps(),
+        run_id="run-1",
+        ctx=ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=cast(StepDispatcherRegistry, _PreDispatchGateDispatcher()),
+    )
+    assert paused.status is RunStatus.PAUSED
+    snap = paused.pause_snapshot
+    assert snap is not None
+    assert snap.peer_fan_out_resume is not None
+    assert len(snap.peer_fan_out_resume.pre_dispatch_gate_owning_branches) == 1
+    assert snap.peer_fan_out_resume.pre_dispatch_gate_owning_branches[0].branch_index == 1
+
+    # Resume with branch-1-sub's step_kind CHANGED to DECLARATIVE_STEP (same step_id).
+    changed_steps = [
+        _peer_parent_steps()[0],
+        WorkflowStep(
+            step_id=StepID("branch-1-sub"),
+            step_kind=StepKind.DECLARATIVE_STEP,
+            step_payload={"index": 1},
+        ),
+    ]
+    resume_ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    resumed = execute_workflow(
+        _manifest("wf-pp"),
+        changed_steps,
+        run_id="run-1",
+        ctx=resume_ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(_CountingDispatcher()),
+        pause_snapshot_input=snap,
+    )
+    assert resumed.status is RunStatus.FAILED
+    assert "pre-dispatch-gate-owning-kind-changed" in (resumed.fail_class or "")
+
+
+def test_peer_resume_rejects_pre_dispatch_gate_owning_workflow_id_swap() -> None:
+    """out-of-family Codex [P1], round 4 — a same-`step_id`, same-`step_kind` edit
+    that swaps a pre-dispatch gate-owning SUB_AGENT_DISPATCH branch's target
+    `child_workflow_id` must fail closed, not silently deliver the operator's
+    stored `hitl_response` to a dispatch now targeting a DIFFERENT child workflow
+    (mirrors the B-31 paused-child-workflow-id-changed guard)."""
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    paused = execute_workflow(
+        _manifest("wf-pp"),
+        _peer_parent_steps(),
+        run_id="run-1",
+        ctx=ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=cast(StepDispatcherRegistry, _PreDispatchGateDispatcher()),
+    )
+    assert paused.status is RunStatus.PAUSED
+    snap = paused.pause_snapshot
+    assert snap is not None
+    assert snap.peer_fan_out_resume is not None
+    assert (
+        snap.peer_fan_out_resume.pre_dispatch_gate_owning_branches[0].child_workflow_id
+        == "wf-child-peer"
+    )
+
+    # Resume with branch-1-sub's step_payload edited to target a DIFFERENT child
+    # workflow — same step_id, same step_kind (so the identity/kind guards pass).
+    changed_steps = [
+        _peer_parent_steps()[0],
+        WorkflowStep(
+            step_id=StepID("branch-1-sub"),
+            step_kind=StepKind.SUB_AGENT_DISPATCH,
+            step_payload={"child_workflow_id": "wf-child-SWAPPED"},
+        ),
+    ]
+    resume_ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    resumed = execute_workflow(
+        _manifest("wf-pp"),
+        changed_steps,
+        run_id="run-1",
+        ctx=resume_ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(_CountingDispatcher()),
+        pause_snapshot_input=snap,
+    )
+    assert resumed.status is RunStatus.FAILED
+    assert "pre-dispatch-gate-owning-workflow-id-changed" in (resumed.fail_class or "")
+
+
+def _pre_dispatch_and_fence_peer_steps() -> list[WorkflowStep]:
+    return [
+        WorkflowStep(
+            step_id=StepID("branch-0"),
+            step_kind=StepKind.DECLARATIVE_STEP,
+            step_payload={"index": 0},
+        ),
+        WorkflowStep(
+            step_id=StepID("branch-1-sub"),
+            step_kind=StepKind.SUB_AGENT_DISPATCH,
+            step_payload={"child_workflow_id": "wf-child-peer"},
+        ),
+        WorkflowStep(
+            step_id=StepID("branch-2"),
+            step_kind=StepKind.DECLARATIVE_STEP,
+            step_payload={"index": 2},
+        ),
+    ]
+
+
+class _PreDispatchAndFenceCaptureDispatcher:
+    """branch-0 completes and sets a gate; branch-1-sub (SUB_AGENT_DISPATCH) waits
+    on it then raises the HITL pause signal (pre-dispatch gate-owning); branch-2
+    waits on it then raises the effect-fence-ambiguous error — so BOTH non-branch-0
+    dispositions land in the SAME pause snapshot (no not-yet-dispatched race)."""
+
+    def __init__(self) -> None:
+        self._gate = threading.Event()
+
+    def lookup(self, step_kind: StepKind) -> StepDispatcher:
+        return cast(StepDispatcher, self)
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        step_id = str(step.step_id)
+        if step_id == "branch-0":
+            self._gate.set()
+            return {"role": "branch-0", "echoed": dict(step.step_payload)}
+        assert self._gate.wait(timeout=10.0), f"{step_id} timed out waiting for branch-0"
+        if step_id == "branch-1-sub":
+            raise HITLPauseRequestedSignal()
+        raise EffectFenceAmbiguousUncommittedError(idempotency_key="fence-key-branch-2")
+
+
+class _ResumeAwareGateDispatcher:
+    """Mimics the REAL HITL gate composer's Step-0 short-circuit: consumes
+    `step_context.hitl_delivery_holder` if present and non-`None` (bypasses the
+    gate, dispatches as if approved); otherwise re-raises the pause signal
+    (the unconsumed-resume-forward shape)."""
+
+    def __init__(self) -> None:
+        self.dispatched_without_cell: list[str] = []
+        self.dispatched_with_cell: list[str] = []
+
+    def lookup(self, step_kind: StepKind) -> StepDispatcher:
+        if step_kind is StepKind.SUB_AGENT_DISPATCH:
+            return cast(StepDispatcher, self)
+        return cast(StepDispatcher, _AbortOnEffectFenceDispatcher())
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        holder = getattr(step_context, "hitl_delivery_holder", None)
+        resolved = holder.consume_and_clear() if holder is not None else None
+        if resolved is not None:
+            self.dispatched_with_cell.append(str(step.step_id))
+            return {"role": "resumed-gate", "echoed": dict(step.step_payload)}
+        self.dispatched_without_cell.append(str(step.step_id))
+        raise HITLPauseRequestedSignal()
+
+
+class _AbortOnEffectFenceDispatcher:
+    """The resume-side branch-0 (terminal-skipped, never actually called) and
+    branch-2 (effect-fence-paused, re-dispatched with the operator's ABORT
+    resolution threaded) dispatcher — raises unconditionally on ANY call, which
+    is exactly the ABORT-tier behavior (the branch fails, the run fails)."""
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        raise RuntimeError("effect-fence ABORT — branch fails per operator resolution")
+
+
+def test_peer_resume_suppresses_pre_dispatch_hitl_delivery_during_fence_abort() -> None:
+    """out-of-family Codex [P1], round 4 — when one recovered peer is pre-dispatch
+    HITL-paused and ANOTHER is effect-fence-paused, a `ResumeContext` carrying
+    both a `hitl_response` AND a run-level effect-fence `ABORT` must NOT construct
+    a `HITLDeliveryCell` for the HITL-approved peer — it must re-pause INERT
+    (never dispatch with an approved cell) so it cannot fire ahead of the ABORT
+    failing the run, mirroring the existing effect-fence-peer ABORT suppression."""
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    paused = execute_workflow(
+        _manifest("wf-pp"),
+        _pre_dispatch_and_fence_peer_steps(),
+        run_id="run-1",
+        ctx=ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=cast(StepDispatcherRegistry, _PreDispatchAndFenceCaptureDispatcher()),
+    )
+    assert paused.status is RunStatus.PAUSED
+    snap = paused.pause_snapshot
+    assert snap is not None
+    pfr = snap.peer_fan_out_resume
+    assert pfr is not None
+    assert [b.branch_index for b in pfr.pre_dispatch_gate_owning_branches] == [1]
+    assert [b.branch_index for b in pfr.effect_fence_paused_branches] == [2]
+
+    resume_dispatcher = _ResumeAwareGateDispatcher()
+    resume_ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    resumed = execute_workflow(
+        _manifest("wf-pp"),
+        _pre_dispatch_and_fence_peer_steps(),
+        run_id="run-1",
+        ctx=resume_ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=cast(StepDispatcherRegistry, resume_dispatcher),
+        pause_snapshot_input=snap,
+        resume_context=ResumeContext(
+            hitl_response=HITLResult(
+                response=HITLResponse.APPROVE,
+                timestamp="2026-07-25T00:00:00Z",
+                audit_ledger_entry_id=EntryID("e-b72-round4"),
+                response_summary_hash="b" * 64,
+            ),
+            effect_fence_resolution=EffectFenceResolution.ABORT,
+        ),
+    )
+    assert resume_dispatcher.dispatched_with_cell == [], (
+        "the HITL-approved pre-dispatch gate-owning peer must NEVER receive a "
+        "delivery cell while a run-level effect-fence ABORT is in play — it fired "
+        f"anyway: {resume_dispatcher.dispatched_with_cell!r}"
+    )
+    assert resume_dispatcher.dispatched_without_cell == ["branch-1-sub"], (
+        "the peer must still be RE-DISPATCHED (re-pausing INERT with no cell), not "
+        "silently skipped — a vacuous pass would look identical to a real suppression"
+    )
+    # branch-1-sub re-pauses (no cell consumed → raises the signal again) and
+    # branch-2's ABORT-triggered failure folds into a fresh resumable snapshot
+    # (a bound `pause_resume_protocol` is still present) — the run PAUSES again
+    # rather than corrupting or silently succeeding; the load-bearing assertions
+    # are the two above (no delivery cell fired, the peer WAS re-dispatched).
+    assert resumed.status is RunStatus.PAUSED
+    resumed_snap = resumed.pause_snapshot
+    assert resumed_snap is not None
+    assert resumed_snap.peer_fan_out_resume is not None
+    assert [
+        b.branch_index for b in resumed_snap.peer_fan_out_resume.pre_dispatch_gate_owning_branches
+    ] == [1]
 
 
 # ---------------------------------------------------------------------------
