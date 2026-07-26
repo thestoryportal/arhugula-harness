@@ -47,12 +47,16 @@ class _Unserializable:
 #: several same-named `tests` packages make ambiguous). A cold child
 #: interpreter's own import of `cryptography` + `harness_runtime` alone
 #: takes ~5s in this environment — each script writes a `ready_marker`
-#: BEFORE touching the store, so the parent can wait out that (unrelated)
-#: startup cost and time the "still blocked" check from the moment the
-#: child is actually about to contend on the lock, not from process spawn.
-#: A `done_marker` written after the call returns lets the parent observe
-#: completion, all without any IPC primitive shared across the process
-#: boundary.
+#: immediately before the call that actually contends on the lock (codex
+#: [P2] on the B-73 arc: writing it any earlier — e.g. right after
+#: imports — only proves the child STARTED, not that it's imminently
+#: about to attempt the flock; a descheduled/stalled child in that gap
+#: could let a broken fix's absence go undetected), so the parent can wait
+#: out the (unrelated) import/construction startup cost and time the
+#: "still blocked" check from the moment the child is genuinely about to
+#: contend on it, not from process spawn. A `done_marker` written after
+#: the call returns lets the parent observe completion, all without any
+#: IPC primitive shared across the process boundary.
 _B73_CHILD_WRITE_SCRIPT = """
 import sys
 import time
@@ -61,7 +65,6 @@ from cryptography.fernet import Fernet
 from harness_runtime.lifecycle.protected_result_store import ProtectedResultStore
 
 store_dir, key, done_marker, ready_marker = sys.argv[1:5]
-Path(ready_marker).write_text("ready")
 store = ProtectedResultStore(Path(store_dir), codec=Fernet(key.encode()), ttl_seconds=86400.0)
 # codex [P2] on the B-73 arc: a fresh store's _last_gc_at is 0.0, so this
 # write_once() would otherwise ALSO trigger _maybe_opportunistic_gc_sweep()
@@ -69,6 +72,7 @@ store = ProtectedResultStore(Path(store_dir), codec=Fernet(key.encode()), ttl_se
 # making this test pass even if _publish_atomic's OWN lock use were
 # removed. Suppressing it isolates the assertion to _publish_atomic.
 store._last_gc_at = time.time()
+Path(ready_marker).write_text("ready")
 store.write_once("tenant-a", "written by a separate OS process")
 Path(done_marker).write_text("done")
 """
@@ -80,8 +84,8 @@ from cryptography.fernet import Fernet
 from harness_runtime.lifecycle.protected_result_store import ProtectedResultStore
 
 store_dir, key, done_marker, ready_marker = sys.argv[1:5]
-Path(ready_marker).write_text("ready")
 store = ProtectedResultStore(Path(store_dir), codec=Fernet(key.encode()), ttl_seconds=86400.0)
+Path(ready_marker).write_text("ready")
 store.gc_sweep()
 Path(done_marker).write_text("done")
 """
@@ -933,6 +937,11 @@ def test_write_once_temp_file_protected_from_concurrent_sweep_before_commit(
     assert store_a.read("tenant-a", ref) == "must survive a concurrent sweep"
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="_cross_process_lock() deliberately no-ops on Windows (C-STK-10; no fcntl); "
+    "the blocking assertion below does not hold there.",
+)
 def test_write_once_blocks_across_separate_processes_via_cross_process_lock(
     tmp_path: Path,
 ) -> None:
@@ -1019,6 +1028,11 @@ def test_write_once_blocks_across_separate_processes_via_cross_process_lock(
     assert done_marker.exists()
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="_cross_process_lock() deliberately no-ops on Windows (C-STK-10; no fcntl); "
+    "the blocking assertion below does not hold there.",
+)
 def test_gc_sweep_blocks_across_separate_processes_via_cross_process_lock(
     tmp_path: Path,
 ) -> None:
