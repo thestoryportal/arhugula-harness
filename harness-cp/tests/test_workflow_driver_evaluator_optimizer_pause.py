@@ -304,6 +304,61 @@ def test_eo_pause_with_protocol_returns_paused_with_eo_snapshot() -> None:
     assert result.partial_state["output"] == {"draft": 2}
 
 
+class _NonHitlRtFailClassError(Exception):
+    """B-78 [P1] round 2 regression fixture — a non-HITL exception that
+    happens to carry an `rt_fail_class` marker (mirroring
+    `SubAgentDispatchCapacityError`'s `RT-FAIL-SUB-AGENT-DISPATCH-CAPACITY`,
+    the exact class out-of-family Codex round 1's first draft wrongly swept
+    into the always-terminal HITL carve-out). This class must NOT be treated
+    as HITL-gate-terminal — it must retain the ordinary cascade_policy-gated
+    disposition (a resumable PAUSED under TEAM here)."""
+
+    rt_fail_class = "RT-FAIL-SUB-AGENT-DISPATCH-CAPACITY"
+
+
+class _EoNonHitlRtFailClassDispatcher(_EoDispatcher):
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        # Peek at the upcoming call ordinal WITHOUT incrementing `self.calls` —
+        # `super().dispatch()` does its own `self.calls += 1` on the delegated
+        # path, so incrementing here too would double-count and let the
+        # parent's OWN `fail_on_call` check (raising a plain `RuntimeError`)
+        # fire on a different call than intended, masking this fixture's
+        # exception entirely (caught empirically via a debug print during
+        # this fix's own mutation probe — the double-increment bug, not a
+        # source defect, produced a false-negative on the first draft).
+        if self._fail_on is not None and self.calls + 1 == self._fail_on:
+            self.calls += 1
+            raise _NonHitlRtFailClassError("simulated capacity exhaustion")
+        return super().dispatch(binding, step, step_context=step_context)
+
+
+def test_eo_pause_with_non_hitl_rt_fail_class_still_resumable_not_terminal() -> None:
+    """B-78 [P1] round 2 regression: an `rt_fail_class`-carrying exception that
+    is NOT one of the 4 `RT-FAIL-HITL-GATE-*` HITL routing outcomes must fall
+    through to the ordinary cascade_policy=pause materialization — a
+    resumable PAUSED, not a terminal FAILED. Mutation-probed: widening the
+    carve-out's `startswith` check back to a bare `is not None` (round 1's
+    original defect) flips this test's `RunStatus.PAUSED` assertion to
+    `RunStatus.FAILED`."""
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    result = _run(
+        steps=_loop_steps(),
+        dispatcher=_EoNonHitlRtFailClassDispatcher(accept_on_evaluate=None, fail_on_call=4),
+        ctx=ctx,
+    )
+    assert result.status is RunStatus.PAUSED, (
+        f"a non-HITL rt_fail_class-carrying exception must retain the ordinary "
+        f"cascade_policy=pause disposition; got status={result.status!r} "
+        f"fail_class={result.fail_class!r}"
+    )
+    assert result.fail_class is None
+    snap = result.pause_snapshot
+    assert snap is not None
+    assert snap.evaluator_optimizer_resume is not None
+
+
 def test_eo_pause_emits_resumption_not_workflow_start_on_resume() -> None:
     """The resume envelope emits RESUMPTION (the completed prefix already ran in the
     original envelope), not a second WORKFLOW_START."""

@@ -267,6 +267,51 @@ def test_handoff_pause_with_protocol_returns_paused_with_handoff_snapshot() -> N
     assert set(result.partial_state["stages"]) == {"s0", "s1"}
 
 
+class _NonHitlRtFailClassError(Exception):
+    """B-78 [P1] round 2 regression fixture — mirrors the EVALUATOR_OPTIMIZER
+    sibling in `test_workflow_driver_evaluator_optimizer_pause.py`. A non-HITL
+    exception carrying an `rt_fail_class` marker (e.g.
+    `SubAgentDispatchCapacityError`'s `RT-FAIL-SUB-AGENT-DISPATCH-CAPACITY`)
+    must NOT be treated as HITL-gate-terminal by DH's own carve-out."""
+
+    rt_fail_class = "RT-FAIL-SUB-AGENT-DISPATCH-CAPACITY"
+
+
+class _HandoffNonHitlRtFailClassDispatcher(_HandoffDispatcher):
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        step_id = str(step.step_id)
+        if step_id in self._fail:
+            self.dispatched.append(step_id)
+            if step_context is not None:
+                self.parent_action_ids[step_id] = step_context.parent_action_id
+            raise _NonHitlRtFailClassError(f"simulated capacity exhaustion at {step_id}")
+        return super().dispatch(binding, step, step_context=step_context)
+
+
+def test_handoff_pause_with_non_hitl_rt_fail_class_still_resumable_not_terminal() -> None:
+    """B-78 [P1] round 2 regression: an `rt_fail_class`-carrying exception that
+    is NOT one of the 4 `RT-FAIL-HITL-GATE-*` HITL routing outcomes must fall
+    through to the ordinary cascade_policy=pause materialization — a
+    resumable PAUSED, not a terminal FAILED."""
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    result = _run(
+        steps=[_stage("s0"), _stage("s1"), _stage("s2")],
+        dispatcher=_HandoffNonHitlRtFailClassDispatcher(fail_step_ids={"s2"}),
+        ctx=ctx,
+    )
+    assert result.status is RunStatus.PAUSED, (
+        f"a non-HITL rt_fail_class-carrying exception must retain the ordinary "
+        f"cascade_policy=pause disposition; got status={result.status!r} "
+        f"fail_class={result.fail_class!r}"
+    )
+    assert result.fail_class is None
+    snap = result.pause_snapshot
+    assert snap is not None
+    assert snap.handoff_resume is not None
+
+
 def test_handoff_pause_emits_resumption_not_workflow_start_on_resume() -> None:
     """The resume envelope emits RESUMPTION (the completed prefix already ran in the
     original envelope), not a second WORKFLOW_START."""

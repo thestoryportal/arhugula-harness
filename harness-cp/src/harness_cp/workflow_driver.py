@@ -1682,6 +1682,19 @@ def _step_fail_class(prefix: str, exc: BaseException) -> str:
     return f"{prefix}: {code}: {exc}"
 
 
+_HITL_GATE_TERMINAL_FAIL_CLASS_PREFIX = "RT-FAIL-HITL-GATE-"
+"""B-78 [P1] (out-of-family Codex round 2) — the exact, narrow discriminator for
+"is this exception a HITL gate's own terminal routing outcome" (REJECT /
+EDIT-decode / audit-compose / timeout — `hitl_gate_composer.py`'s 4
+`rt_fail_class` values, all sharing this prefix), as opposed to any OTHER
+exception that happens to carry an unrelated `rt_fail_class` marker (e.g.
+`SubAgentDispatchCapacityError`'s `RT-FAIL-SUB-AGENT-DISPATCH-CAPACITY`,
+which round 1's first draft of this check wrongly swept up — that exception
+must retain its EXISTING cascade_policy-gated disposition: a resumable pause
+under TEAM, PARTIAL under DH's PROCEED, unaffected by this HITL-specific
+carve-out)."""
+
+
 def _read_durable_replay_prefix(
     ctx: DriverContext,
     *,
@@ -10956,20 +10969,28 @@ def _execute_evaluator_optimizer(
                 ),
             ), entry_index - _resume_completed_count
         _hitl_terminal_fail_class = getattr(exc, "rt_fail_class", None)
-        if _hitl_terminal_fail_class is not None:
-            # B-78 [P1] (out-of-family Codex round 1) — a HITL gate's own TERMINAL
-            # routing outcome (REJECT / EDIT-decode failure / audit-compose failure /
-            # timeout — every `RuntimeHITLGateComposer` exception that carries an
-            # `rt_fail_class` marker, see `_step_fail_class`'s own docstring) is NOT
+        if _hitl_terminal_fail_class is not None and _hitl_terminal_fail_class.startswith(
+            _HITL_GATE_TERMINAL_FAIL_CLASS_PREFIX
+        ):
+            # B-78 [P1] (out-of-family Codex round 1, narrowed at round 2) — a
+            # HITL gate's own TERMINAL routing outcome (REJECT / EDIT-decode
+            # failure / audit-compose failure / timeout — the 4 `hitl_gate_
+            # composer.py` exceptions sharing the `RT-FAIL-HITL-GATE-` prefix,
+            # see `_HITL_GATE_TERMINAL_FAIL_CLASS_PREFIX`'s own docstring) is NOT
             # an ordinary dispatch failure subject to cascade_policy's pause/proceed/
             # cascade-cancel reaction — it is ALWAYS terminal, exactly like the
             # `PostEffectAuditSigningError` carve-out immediately above (checked
-            # BEFORE any cascade_policy branch). Without this, resuming with
-            # `HITLResponse.REJECT` under TEAM's cascade_policy=pause (now reachable
-            # via this arc's own delivery-cell wiring) would be misclassified as an
-            # ordinary retryable dispatch failure and produce ANOTHER resumable
-            # EXPLICIT_OPERATOR pause instead of the canonical terminal FAILED the
-            # exception's own docstring + §14.8 already promise.
+            # BEFORE any cascade_policy branch). Round 1's first draft matched ANY
+            # `rt_fail_class`-carrying exception, which wrongly swept up
+            # `SubAgentDispatchCapacityError` (`RT-FAIL-SUB-AGENT-DISPATCH-CAPACITY`)
+            # too — round 2 narrowed to the exact prefix so that exception keeps
+            # its existing cascade_policy-gated disposition unchanged. Without this
+            # carve-out, resuming with `HITLResponse.REJECT` under TEAM's
+            # cascade_policy=pause (now reachable via this arc's own delivery-cell
+            # wiring) would be misclassified as an ordinary retryable dispatch
+            # failure and produce ANOTHER resumable EXPLICIT_OPERATOR pause instead
+            # of the canonical terminal FAILED the exception's own docstring +
+            # §14.8 already promise.
             drain_branch_buffers(ctx.ledger_writer, [writer])
             return RunResult(
                 workflow_id=workflow_id,
@@ -15086,21 +15107,30 @@ def _execute_decentralized_handoff(
                     salvage=True,
                 )
             _hitl_terminal_fail_class = getattr(exc, "rt_fail_class", None)
-            if _hitl_terminal_fail_class is not None:
-                # B-78 [P1] (out-of-family Codex round 1, mirrors the EVALUATOR_
-                # OPTIMIZER carve-out immediately above's sibling) — a HITL gate's
-                # own TERMINAL routing outcome (REJECT / EDIT-decode failure /
-                # audit-compose failure / timeout — any `RuntimeHITLGateComposer`
-                # exception carrying an `rt_fail_class` marker) is NOT an ordinary
-                # stage failure subject to cascade_policy's proceed/pause/
-                # cascade-cancel reaction — it is ALWAYS terminal, checked BEFORE
-                # any cascade_policy branch. Without this, resuming with
-                # `HITLResponse.REJECT` under TEAM's cascade_policy=pause (now
-                # reachable via this arc's own delivery-cell wiring) would be
-                # misclassified as an ordinary retryable stage failure and produce
-                # ANOTHER resumable EXPLICIT_OPERATOR pause instead of the
-                # canonical terminal FAILED the exception's own docstring + §14.8
-                # already promise.
+            if _hitl_terminal_fail_class is not None and _hitl_terminal_fail_class.startswith(
+                _HITL_GATE_TERMINAL_FAIL_CLASS_PREFIX
+            ):
+                # B-78 [P1] (out-of-family Codex round 1, narrowed at round 2 —
+                # mirrors the EVALUATOR_OPTIMIZER carve-out immediately above's
+                # sibling) — a HITL gate's own TERMINAL routing outcome (REJECT /
+                # EDIT-decode failure / audit-compose failure / timeout — the 4
+                # `hitl_gate_composer.py` exceptions sharing the
+                # `RT-FAIL-HITL-GATE-` prefix, see
+                # `_HITL_GATE_TERMINAL_FAIL_CLASS_PREFIX`'s own docstring) is NOT
+                # an ordinary stage failure subject to cascade_policy's proceed/
+                # pause/cascade-cancel reaction — it is ALWAYS terminal, checked
+                # BEFORE any cascade_policy branch. Round 1's first draft matched
+                # ANY `rt_fail_class`-carrying exception, which wrongly swept up
+                # `SubAgentDispatchCapacityError`
+                # (`RT-FAIL-SUB-AGENT-DISPATCH-CAPACITY`) too — round 2 narrowed to
+                # the exact prefix so that exception keeps its existing
+                # cascade_policy-gated disposition unchanged. Without this
+                # carve-out, resuming with `HITLResponse.REJECT` under TEAM's
+                # cascade_policy=pause (now reachable via this arc's own
+                # delivery-cell wiring) would be misclassified as an ordinary
+                # retryable stage failure and produce ANOTHER resumable
+                # EXPLICIT_OPERATOR pause instead of the canonical terminal FAILED
+                # the exception's own docstring + §14.8 already promise.
                 return _finish(
                     RunStatus.FAILED,
                     fail_class=_step_fail_class("decentralized-handoff-hitl-gate-terminal", exc),
