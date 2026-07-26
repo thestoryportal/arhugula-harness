@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `27b754523c1f` |
+| `workspace_state_hash` | `55a04ea34d4c` |
 | `last_refreshed` | 2026-07-26T00:00:00Z |
-| `git_head` | `fc8054b9` —  |
+| `git_head` | `661cf163` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 99 |
 
@@ -61,11 +61,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1119 | 2026-07-26 | B-81 CLOSED (step 2/2): 4 exclusion-conjunct tests (paused_child + effect_fence arms) at both PeerFanOutResumeState and FanOutResumeState construction sites, mutation-probe-verified; merge-gate test-witness lens caught a docstring accuracy nit (fixed inline, no behavior change) |
 | PR #1118 | 2026-07-26 | B-81 close-out step 1/2: ported 3 PARALLELIZATION pre-dispatch gate-owning material-diff tests to OW mirror in test_workflow_driver_fanout_pause.py, mutation-probe-verified; step 2 (4 exclusion-conjunct tests) remains open |
 | PR #1117 | 2026-07-26 | B-78 CLOSED: EO/DH HITL pause handlers were uncaught-crashing + missing delivery cells; fixed mirroring LINEAR's mechanism, no new CP-spec carrier field. 6 codex rounds to convergence (rounds 1-3 fixed self-introduced regressions in the terminal-REJECT carve-out; round 4's finding folded into B-79's broadened scope; round 6 fixed a stale-carry-text defect + a PAUSE_CAPTURED audit-emission gap). merge-gate all-approve after 2 fix rounds. |
 | PR #1116 | 2026-07-25 | B-72 impl leg closed: pre-dispatch gate-owning branch carrier + delivery-cell wiring for CP spec v1.108 property 6; 9 out-of-family codex rounds + 3-round merge-gate to convergence; B-79/B-80/B-81 registered as follow-on findings |
 | PR #1115 | 2026-07-25 | B-72 CP spec v1.108 -- property 6 pre-dispatch gate-owning branch counting, closes net-position item (1); 8 codex rounds to convergence; new B-78 registered for the excluded EVALUATOR_OPTIMIZER/DECENTRALIZED_HANDOFF topology gap |
-| PR #1113 | 2026-07-25 | B-72 round-7 pre-authoring grounding: B-71 co-design is sequential (B-71 only exposes an already-dispatched child's run_id, doesn't mint a pre-dispatch identity); compose_child_run_id_seed's deterministic minting is gated on subagent_child_recoverable, doesn't cover PURE_PATTERN_NO_ENGINE (the repro's own engine class). Spec-leg authoring is the next action, not yet started. Doc-only. |
 ---
 
 ---
