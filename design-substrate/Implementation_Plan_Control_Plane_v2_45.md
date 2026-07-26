@@ -46,16 +46,16 @@ DAG topology preserved verbatim from v2.43 — ZERO new edges, ZERO new units, Z
 
 | Field | Value |
 |---|---|
-| Artifact | `Implementation_Plan_Control_Plane_v2_44.md` |
-| Version | v2.44 |
-| Filing event | `B-72` (item 1) spec leg plan absorption (Class 1 tension, operator-ratified "open the CP spec-leg now, co-designed with `B-71`" via `AskUserQuestion` 2026-07-25) — one coverage-matrix row, no unit amendment |
-| Predecessor | `Implementation_Plan_Control_Plane_v2_43.md` |
-| Operator authority | `AskUserQuestion` 2026-07-25 |
-| Co-published artifacts (this arc) | `Spec_Control_Plane_v1_108.md`; clearance marker; workspace `CLAUDE.md` §2.3/§2.4 pointer bump; `.harness/forward-register.yaml` + `.harness/post-phase-8-forward-register.md` `B-72` row |
-| Unit-count change | None (102 → 102 — coverage-row-only delta) |
+| Artifact | `Implementation_Plan_Control_Plane_v2_45.md` |
+| Version | v2.45 |
+| Filing event | PROSE-ONLY stale-carry-text correction to v2.44 §5's coverage-matrix row, caught by the `merge-gate` skill's spec-conformance lens reviewing PR #1117 (the `B-78` impl leg) — sibling to `Spec_Control_Plane_v1_109.md`'s correction, same trigger |
+| Predecessor | `Implementation_Plan_Control_Plane_v2_44.md` |
+| Operator authority | N/A — Class 3 informational correction, no operator gate; out-of-family `just codex-review`-caught stale-carry-text fix |
+| Co-published artifacts (this arc) | `Spec_Control_Plane_v1_109.md`; 2 clearance markers; workspace `harness-cp/CLAUDE.md` §1.2 pointer bump; `.harness/forward-register.yaml` `B-78`/`B-79` rows |
+| Unit-count change | None (102 → 102 — prose-only delta) |
 | Cluster-count change | None |
 | DAG topology change | None |
 | Cross-axis cascade | None asserted by this delta |
-| Impl leg | NOT bundled — code + tests land as a separate follow-on arc per the `B-33`/`B-39`/`B-59`/`B-70` precedent |
-| Skill discipline | `implementation-planner` Phase-7 revision-pass absorbing upstream CP spec v1.108 into the coverage matrix only; fidelity-pure; NO contract addition beyond the spec; NO unit re-decomposition; NO DAG topology change |
-| Date | 2026-07-25 |
+| Impl leg | Already landed — PR #1117 (the `B-78` impl leg this correction documents) |
+| Skill discipline | Prose-only correction; NO contract addition; NO unit re-decomposition; NO DAG topology change |
+| Date | 2026-07-26 |

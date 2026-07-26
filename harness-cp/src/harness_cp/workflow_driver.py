@@ -10898,6 +10898,7 @@ def _execute_evaluator_optimizer(
         eo_resume = EvaluatorOptimizerResumeState(
             completed_steps=tuple(completed_step_records),
         )
+        _eo_hitl_step_index = entry_index % 2
         snapshot = _run_protocol_method_sync(
             cast(PauseResumeProtocol, protocol).capture_pause_snapshot(
                 workflow_id=workflow_id,
@@ -10906,11 +10907,28 @@ def _execute_evaluator_optimizer(
                 # dispatch-failure handler below (`entry_index` is still the
                 # failed step's own entry_index — it is only incremented AFTER a
                 # successful `_dispatch_and_buffer` return).
-                step_index=entry_index % 2,
+                step_index=_eo_hitl_step_index,
                 pause_reason=WorkflowPauseReason.HITL_PENDING,
                 evaluator_optimizer_resume=eo_resume,
             )
         )
+        # codex out-of-family review [P2] (2026-07-26): mirror the LINEAR HITL
+        # branch's own PAUSE_CAPTURED CP->IS emission (`workflow_driver.py:5199-
+        # 5215`) so this pause path's protocol audit history is not silently
+        # incomplete relative to LINEAR's. event_kind_index=2 matches LINEAR's
+        # own HITL-signal-path disambiguator.
+        _eo_hitl_cp_is_wiring = getattr(ctx, "cp_is_wiring", None)
+        if _eo_hitl_cp_is_wiring is not None:
+            _run_protocol_method_sync(
+                _eo_hitl_cp_is_wiring.emit_pause_resume_state_ledger_entry(
+                    workflow_id=workflow_id,
+                    step_id=str(_eo_hitl_step_index),
+                    protocol_event_kind=PauseResumeProtocolEventKind.PAUSE_CAPTURED,
+                    event_sequence_id=(_eo_hitl_step_index << 2) | 2,
+                    protocol_state_snapshot=snapshot.model_dump(mode="json"),
+                    actor=ActorIdentity(ctx.ledger_writer.actor.actor_id),
+                )
+            )
         return RunResult(
             workflow_id=workflow_id,
             run_id=run_id,
@@ -15250,6 +15268,23 @@ def _execute_decentralized_handoff(
                     handoff_resume=handoff_resume,
                 )
             )
+            # codex out-of-family review [P2] (2026-07-26): mirror the LINEAR HITL
+            # branch's own PAUSE_CAPTURED CP->IS emission (`workflow_driver.py:5199-
+            # 5215`) so this pause path's protocol audit history is not silently
+            # incomplete relative to LINEAR's. event_kind_index=2 matches LINEAR's
+            # own HITL-signal-path disambiguator.
+            _dh_hitl_cp_is_wiring = getattr(ctx, "cp_is_wiring", None)
+            if _dh_hitl_cp_is_wiring is not None:
+                _run_protocol_method_sync(
+                    _dh_hitl_cp_is_wiring.emit_pause_resume_state_ledger_entry(
+                        workflow_id=workflow_id,
+                        step_id=str(stage_index),
+                        protocol_event_kind=PauseResumeProtocolEventKind.PAUSE_CAPTURED,
+                        event_sequence_id=(stage_index << 2) | 2,
+                        protocol_state_snapshot=snapshot.model_dump(mode="json"),
+                        actor=ActorIdentity(ctx.ledger_writer.actor.actor_id),
+                    )
+                )
             return _finish(RunStatus.PAUSED, fail_class=None, salvage=True, pause_snapshot=snapshot)
         # Persist the stage as a per-role branch entry whose branch_metadata chains
         # off the prior stage (causality) + a fresh `completed` terminal entry (U-CP-84).
