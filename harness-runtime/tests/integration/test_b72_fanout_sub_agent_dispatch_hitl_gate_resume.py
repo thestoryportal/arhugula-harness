@@ -463,6 +463,15 @@ async def test_fanout_branch_own_gate_pauses_on_first_dispatch(
         f"failure_cause={paused.failure_cause!r}"
     )
     assert paused.pause_snapshot is not None
+    assert paused.pause_snapshot.pause_reason is WorkflowPauseReason.HITL_PENDING, (
+        # B-72 impl leg — a pre-dispatch gate-owning branch is the operator-facing
+        # signal that property 6's carrier is active; this must NOT read as the
+        # generic EXPLICIT_OPERATOR branch-failure pause (`workflow_driver.py`'s
+        # `_pause_reason` computation was amended alongside the carrier itself).
+        f"expected the first pause to be labeled HITL_PENDING (a pre-dispatch "
+        f"gate-owning branch is present); got "
+        f"pause_reason={paused.pause_snapshot.pause_reason!r}"
+    )
     assert len(_captured_webhook_requests) == 1, (
         f"expected exactly 1 webhook POST from the branch's own gate firing; "
         f"got {len(_captured_webhook_requests)}"
