@@ -7797,16 +7797,19 @@ def _execute_parallelization(
                 # out-of-family Codex [P1], round 4: `step_id` alone does not stop a
                 # same-step_id edit that swaps `step_kind` or the target
                 # `child_workflow_id` — mirrors `PausedChildBranchResumeState` (B-31)'s
-                # identical kind-changed + workflow-id-changed guards. A pre-dispatch
-                # gate-owning branch is ALWAYS `SUB_AGENT_DISPATCH` by construction (the
-                # composer's `SUB_AGENT_BOUNDARY` placement applies only to that kind), so
-                # this checks the CONSTANT, not a captured value — exactly like
-                # `PausedChildBranchResumeState`'s own kind-changed guard above.
-                if steps[pg.branch_index].step_kind is not StepKind.SUB_AGENT_DISPATCH:
+                # identical kind-changed + workflow-id-changed guards. Round 5 correction
+                # (out-of-family Codex [P2]): round 4 wrongly checked this against the
+                # CONSTANT `StepKind.SUB_AGENT_DISPATCH` — a pre-dispatch gate-owning branch
+                # can ALSO be `INFERENCE_STEP`/`TOOL_STEP` under `HITLPlacementKind.PRE_ACTION`
+                # (both placements raise the same name-matched `HITLPauseRequestedSignal`), so
+                # the constant check falsely rejected an UNCHANGED `PRE_ACTION`-gated resume.
+                # This now compares against the CAPTURED value, exactly like every other
+                # material-diff identity check in this function.
+                if steps[pg.branch_index].step_kind.value != pg.step_kind:
                     return (
                         f"pre-dispatch-gate-owning-kind-changed at {pg.branch_index}: "
-                        f"resume step_kind={steps[pg.branch_index].step_kind.value!r} — a "
-                        "pre-dispatch gate-owning branch must stay SUB_AGENT_DISPATCH"
+                        f"snapshot step_kind={pg.step_kind!r}, resume step_kind="
+                        f"{steps[pg.branch_index].step_kind.value!r}"
                     )
                 if pg.child_workflow_id is not None:
                     try:
@@ -10010,20 +10013,25 @@ def _execute_parallelization(
             # pre-dispatch gate-owning branch hashes byte-identically to pre-B-72). Each row
             # carries the captured `step_id` (out-of-family Codex [P1]) so the material-diff
             # guard below can validate identity, exactly like every other disposition class.
-            # `child_workflow_id` (out-of-family Codex [P1], round 4) closes the narrower
-            # same-step_id-different-target gap `PausedChildBranchResumeState` (B-31) already
-            # closes for the sibling recursive-child-pause disposition; it reads the STATIC
-            # declared target from the step's own payload (no dispatched child exists yet to
-            # source it from an exception) and defaults to `None` — byte-compat with the same
-            # "skip the check when absent" convention B-31 established — when the step's
-            # payload does not declare one. `step_kind` is NOT captured here (unlike
-            # `EffectFencePausedBranchResumeState` above): the resume-side guard validates it
-            # against the CONSTANT `StepKind.SUB_AGENT_DISPATCH`, mirroring
-            # `PausedChildBranchResumeState`'s identical constant-comparison kind-changed guard.
+            # `step_kind` (out-of-family Codex [P2], round 5) IS captured — a pre-dispatch
+            # gate-owning branch can be SUB_AGENT_DISPATCH (SUB_AGENT_BOUNDARY) OR
+            # INFERENCE_STEP/TOOL_STEP (PRE_ACTION); both raise the same name-matched
+            # signal, so this must be a captured-and-compared value, never a hardcoded
+            # constant (round 4's own first attempt wrongly assumed SUB_AGENT_DISPATCH-only
+            # and would have rejected an unchanged PRE_ACTION-gated resume — see the carrier's
+            # class docstring for the full correction). `child_workflow_id` (out-of-family
+            # Codex [P1], round 4) closes the narrower same-step_id-different-target gap
+            # `PausedChildBranchResumeState` (B-31) already closes for the sibling
+            # recursive-child-pause disposition; it reads the STATIC declared target from the
+            # step's own payload (no dispatched child exists yet to source it from an
+            # exception) and defaults to `None` — byte-compat with the same "skip the check
+            # when absent" convention B-31 established — for any step whose payload does not
+            # declare one (i.e. every non-SUB_AGENT_DISPATCH pre-dispatch gate-owning branch).
             pre_dispatch_gate_owning_branches=tuple(
                 PreDispatchGateOwningBranchResumeState(
                     branch_index=_bi,
                     step_id=str(steps[_bi].step_id),
+                    step_kind=str(steps[_bi].step_kind.value),
                     child_workflow_id=_pre_dispatch_gate_owning_captured_child_workflow_id(
                         steps[_bi]
                     ),
@@ -11367,19 +11375,18 @@ def _execute_orchestrator_workers(
                         f"snapshot step_id={pg.step_id!r}, resume step_id="
                         f"{str(worker_steps[pg.branch_index].step_id)!r}"
                     )
-                # out-of-family Codex [P1], round 4: `step_id` alone does not stop a
-                # same-step_id edit that swaps `step_kind` or the target
-                # `child_workflow_id` — mirrors `PausedChildBranchResumeState` (B-31)'s
-                # identical kind-changed + workflow-id-changed guards. A pre-dispatch
-                # gate-owning branch is ALWAYS `SUB_AGENT_DISPATCH` by construction, so
-                # this checks the CONSTANT, not a captured value (see
+                # out-of-family Codex [P1], round 4 (corrected round 5, [P2]): `step_id`
+                # alone does not stop a same-step_id edit that swaps `step_kind` or the
+                # target `child_workflow_id` — mirrors `PausedChildBranchResumeState`
+                # (B-31)'s identical guards. This compares against the CAPTURED value, not
+                # a hardcoded constant (a pre-dispatch gate-owning worker can be
+                # SUB_AGENT_DISPATCH OR INFERENCE_STEP/TOOL_STEP under PRE_ACTION — see
                 # `_execute_parallelization`'s own twin guard for the full rationale).
-                if worker_steps[pg.branch_index].step_kind is not StepKind.SUB_AGENT_DISPATCH:
+                if worker_steps[pg.branch_index].step_kind.value != pg.step_kind:
                     return (
                         f"pre-dispatch-gate-owning-kind-changed at {pg.branch_index}: "
-                        "resume step_kind="
-                        f"{worker_steps[pg.branch_index].step_kind.value!r} — a pre-dispatch "
-                        "gate-owning branch must stay SUB_AGENT_DISPATCH"
+                        f"snapshot step_kind={pg.step_kind!r}, resume step_kind="
+                        f"{worker_steps[pg.branch_index].step_kind.value!r}"
                     )
                 if pg.child_workflow_id is not None:
                     try:
@@ -14069,15 +14076,16 @@ def _execute_orchestrator_workers(
             # byte-identically to pre-B-72). HIERARCHICAL_DELEGATION reuses this function per
             # level, so a child level's own pre-dispatch gate-owning workers are captured here.
             # Each row carries the captured `step_id` (out-of-family Codex [P1]) so the
-            # material-diff guard below can validate identity, plus `child_workflow_id`
-            # (out-of-family Codex [P1], round 4) mirroring `PausedChildBranchResumeState`
-            # (B-31)'s identical identity dimension — see `_execute_parallelization`'s own
-            # construction site for the full rationale (including why `step_kind` is a
-            # resume-side constant check, not a captured field, here).
+            # material-diff guard below can validate identity, plus the captured `step_kind`
+            # (out-of-family Codex [P2], round 5 — NOT a constant check; a pre-dispatch
+            # gate-owning worker can be SUB_AGENT_DISPATCH OR INFERENCE_STEP/TOOL_STEP) and
+            # `child_workflow_id` (out-of-family Codex [P1], round 4) — see
+            # `_execute_parallelization`'s own construction site for the full rationale.
             pre_dispatch_gate_owning_branches=tuple(
                 PreDispatchGateOwningBranchResumeState(
                     branch_index=_bi,
                     step_id=str(worker_steps[_bi].step_id),
+                    step_kind=str(worker_steps[_bi].step_kind.value),
                     child_workflow_id=_pre_dispatch_gate_owning_captured_child_workflow_id(
                         worker_steps[_bi]
                     ),

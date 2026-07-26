@@ -2647,6 +2647,92 @@ def test_peer_resume_rejects_pre_dispatch_gate_owning_kind_changed() -> None:
     assert "pre-dispatch-gate-owning-kind-changed" in (resumed.fail_class or "")
 
 
+class _PreDispatchGateOnInferenceStepDispatcher:
+    """Regression witness for out-of-family Codex [P2], round 5: a `PRE_ACTION`-
+    gated `INFERENCE_STEP` branch ALSO raises `HITLPauseRequestedSignal`
+    pre-dispatch (not only `SUB_AGENT_DISPATCH`/`SUB_AGENT_BOUNDARY`) — round 4's
+    own first fix wrongly hardcoded `SUB_AGENT_DISPATCH` as a resume-side
+    constant, which would reject an UNCHANGED resume of this exact shape. The
+    first dispatch of `branch-1-inf` raises the pause signal; every subsequent
+    dispatch (the resume) succeeds — mirroring a real HITL gate that was
+    approved out-of-band between pause and resume."""
+
+    def __init__(self) -> None:
+        self._raised = False
+        self.dispatched: list[str] = []
+
+    def lookup(self, step_kind: StepKind) -> StepDispatcher:
+        return cast(StepDispatcher, self)
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        step_id = str(step.step_id)
+        self.dispatched.append(step_id)
+        if step_id == "branch-1-inf" and not self._raised:
+            self._raised = True
+            raise HITLPauseRequestedSignal()
+        return {"role": step_id, "echoed": dict(step.step_payload)}
+
+
+def test_peer_resume_accepts_unchanged_pre_action_gated_inference_step() -> None:
+    """out-of-family Codex [P2], round 5 — round 4's own fix wrongly assumed a
+    pre-dispatch gate-owning branch is ALWAYS `SUB_AGENT_DISPATCH`. `PRE_ACTION`
+    can ALSO gate an `INFERENCE_STEP`/`TOOL_STEP` branch, raising the SAME
+    name-matched signal; an UNCHANGED resume of that branch must succeed, not be
+    rejected as a false `pre-dispatch-gate-owning-kind-changed` material diff."""
+    steps = [
+        WorkflowStep(
+            step_id=StepID("branch-0"),
+            step_kind=StepKind.DECLARATIVE_STEP,
+            step_payload={"index": 0},
+        ),
+        WorkflowStep(
+            step_id=StepID("branch-1-inf"),
+            step_kind=StepKind.INFERENCE_STEP,
+            step_payload={"prompt": "hi"},
+        ),
+    ]
+    dispatcher = _PreDispatchGateOnInferenceStepDispatcher()
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    paused = execute_workflow(
+        _manifest("wf-pp"),
+        steps,
+        run_id="run-1",
+        ctx=ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=cast(StepDispatcherRegistry, dispatcher),
+    )
+    assert paused.status is RunStatus.PAUSED
+    snap = paused.pause_snapshot
+    assert snap is not None
+    assert snap.peer_fan_out_resume is not None
+    pre_dispatch = snap.peer_fan_out_resume.pre_dispatch_gate_owning_branches
+    assert len(pre_dispatch) == 1
+    assert pre_dispatch[0].branch_index == 1
+    assert pre_dispatch[0].step_kind == StepKind.INFERENCE_STEP.value
+    assert pre_dispatch[0].child_workflow_id is None, (
+        "an INFERENCE_STEP branch has no child_workflow_id to capture — must "
+        "stay None, not spuriously read a payload key that doesn't exist"
+    )
+
+    resume_ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    resumed = execute_workflow(
+        _manifest("wf-pp"),
+        steps,
+        run_id="run-1",
+        ctx=resume_ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=cast(StepDispatcherRegistry, dispatcher),
+        pause_snapshot_input=snap,
+    )
+    assert resumed.status is RunStatus.SUCCESS, (
+        f"expected an UNCHANGED PRE_ACTION-gated INFERENCE_STEP resume to succeed "
+        f"(no material diff at all); got status={resumed.status!r} "
+        f"fail_class={resumed.fail_class!r}"
+    )
+
+
 def test_peer_resume_rejects_pre_dispatch_gate_owning_workflow_id_swap() -> None:
     """out-of-family Codex [P1], round 4 — a same-`step_id`, same-`step_kind` edit
     that swaps a pre-dispatch gate-owning SUB_AGENT_DISPATCH branch's target

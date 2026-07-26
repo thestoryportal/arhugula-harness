@@ -217,17 +217,23 @@ class PreDispatchGateOwningBranchResumeState(BaseModel):
     operator's stored response to a DIFFERENT, unrelated step). Resume validates
     the re-supplied branch step's `step_id` against this — a same-count rename/
     reorder/replace fails closed rather than silently deliver a resolved answer
-    to the wrong step's dispatch. `child_workflow_id` (out-of-family Codex [P1],
-    round 4) closes a NARROWER gap the `step_id`-only guard left open: a
-    same-`step_id` edit that swaps the target `child_workflow_id` previously
-    passed undetected — the same identity dimension `PausedChildBranchResumeState`
-    (B-31) already validates for the sibling recursive-child-pause disposition.
-    A resumed branch's `step_kind` is validated too, but against the CONSTANT
-    `StepKind.SUB_AGENT_DISPATCH` rather than a captured value — a pre-dispatch
-    gate-owning branch is ALWAYS that kind by construction (the composer's
-    `SUB_AGENT_BOUNDARY` placement applies only to `SUB_AGENT_DISPATCH` steps),
-    exactly mirroring `PausedChildBranchResumeState`'s own kind-changed guard
-    (which likewise checks against the constant, not a stored field)."""
+    to the wrong step's dispatch. `step_kind` + `child_workflow_id` (out-of-family
+    Codex [P1], round 4; `step_kind` corrected at round 5) close NARROWER gaps
+    the `step_id`-only guard left open. `step_kind` is a CAPTURED field, NOT a
+    constant check against `StepKind.SUB_AGENT_DISPATCH` — round 5 caught round
+    4's own false assumption that a pre-dispatch gate-owning branch is always
+    that kind: `HITLPlacementKind.PRE_ACTION` can ALSO gate `INFERENCE_STEP`/
+    `TOOL_STEP` steps and raises the SAME name-matched
+    `HITLPauseRequestedSignal`, so an unchanged `PRE_ACTION`-gated branch would
+    otherwise be rejected as a false material diff on resume — the
+    `PausedChildBranchResumeState` (B-31) precedent this class originally
+    mirrored does NOT apply here (that carrier IS uniquely `SUB_AGENT_DISPATCH`
+    by construction — only that kind can raise `SubAgentChildPausedError` —
+    whereas this one is genuinely multi-kind). `child_workflow_id` closes a
+    separate gap: a same-`step_id` edit that swaps the target `child_workflow_id`
+    previously passed undetected — the same identity dimension
+    `PausedChildBranchResumeState` already validates, but here only meaningful
+    (and only populated) when the captured `step_kind` is `SUB_AGENT_DISPATCH`."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -238,6 +244,14 @@ class PreDispatchGateOwningBranchResumeState(BaseModel):
     step_id: str
     """The branch's `WorkflowStep.step_id` AT CAPTURE TIME (the material-diff
     identity guard — see class docstring)."""
+
+    step_kind: str
+    """The branch's `WorkflowStep.step_kind.value` AT CAPTURE TIME (out-of-family
+    Codex [P2], round 5). A pre-dispatch gate-owning branch can be
+    `SUB_AGENT_DISPATCH` (`SUB_AGENT_BOUNDARY` placement) OR `INFERENCE_STEP`/
+    `TOOL_STEP` (`PRE_ACTION` placement) — both raise the same signal, so this
+    MUST be a captured value compared for equality, never a hardcoded constant
+    (see class docstring for the round-4-then-corrected-at-round-5 history)."""
 
     child_workflow_id: str | None = None
     """The target child workflow's identifier AT CAPTURE TIME, read from

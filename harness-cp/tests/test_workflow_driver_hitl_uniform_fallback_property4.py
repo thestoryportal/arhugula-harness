@@ -306,7 +306,9 @@ def test_pre_dispatch_gate_owning_branch_is_collected_and_eligible() -> None:
             branches=(),
             branch_count=1,
             pre_dispatch_gate_owning_branches=(
-                PreDispatchGateOwningBranchResumeState(branch_index=0, step_id="branch-0"),
+                PreDispatchGateOwningBranchResumeState(
+                    branch_index=0, step_id="branch-0", step_kind="sub-agent-dispatch"
+                ),
             ),
         ),
     )
@@ -339,7 +341,9 @@ def test_pre_dispatch_gate_owning_branches_at_different_tree_positions_never_col
             branch_count=1,
             # SAME local ordinal as the root's own.
             pre_dispatch_gate_owning_branches=(
-                PreDispatchGateOwningBranchResumeState(branch_index=0, step_id="nested-branch-0"),
+                PreDispatchGateOwningBranchResumeState(
+                    branch_index=0, step_id="nested-branch-0", step_kind="sub-agent-dispatch"
+                ),
             ),
         ),
     )
@@ -351,7 +355,9 @@ def test_pre_dispatch_gate_owning_branches_at_different_tree_positions_never_col
             branch_count=2,
             # the root's OWN branch 0.
             pre_dispatch_gate_owning_branches=(
-                PreDispatchGateOwningBranchResumeState(branch_index=0, step_id="root-branch-0"),
+                PreDispatchGateOwningBranchResumeState(
+                    branch_index=0, step_id="root-branch-0", step_kind="sub-agent-dispatch"
+                ),
             ),
             paused_child_branches=(
                 _paused_child(
@@ -394,7 +400,9 @@ def test_pre_dispatch_gate_owning_identity_colliding_with_hitl_responses_key_sta
             branches=(),
             branch_count=2,
             pre_dispatch_gate_owning_branches=(
-                PreDispatchGateOwningBranchResumeState(branch_index=0, step_id="branch-0"),
+                PreDispatchGateOwningBranchResumeState(
+                    branch_index=0, step_id="branch-0", step_kind="sub-agent-dispatch"
+                ),
             ),
             paused_child_branches=(_paused_child(branch_index=1, child_snapshot=sibling),),
         ),
