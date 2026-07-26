@@ -2176,7 +2176,28 @@ items:
     construction site (workflow_driver.py ~4748-4777), which this diff''s fan-out wiring mirrors
     verbatim and therefore inherits, not causes -- registered separately as B-79 (see its own
     row) rather than fixed here. Full harness-cp + harness-runtime targeted suites re-run clean
-    (153 + 2 passed, 0 regressions); ruff + pyright strict clean on all touched files.'
+    (153 + 2 passed, 0 regressions); ruff + pyright strict clean on all touched files. ROUND 4
+    CODEX FIX (2026-07-25, same PR #1116, pre-merge, base=main, out-of-family just codex-review)
+    -- 2 real [P1]s in the impl leg''s OWN new code (not the round-3 pre-existing gap registered
+    as B-79): (a) the carrier validated step_id identity but not step_kind or (for
+    SUB_AGENT_DISPATCH) the target child_workflow_id -- a same-step_id edit swapping either
+    previously passed the resume guard undetected -- fixed by mirroring
+    PausedChildBranchResumeState (B-31)''s identical guards exactly: step_kind is checked
+    against the CONSTANT StepKind.SUB_AGENT_DISPATCH (a pre-dispatch gate-owning branch is
+    always that kind by construction, so no field is captured for it), child_workflow_id is a
+    NEW optional captured field read from the step''s own payload at pause time (no dispatched
+    child exists yet to source it from an exception, unlike B-31''s carrier). (b) a
+    HITLDeliveryCell could still be constructed for the sole unaddressed pre-dispatch
+    gate-owning peer even when a SIBLING effect-fence-paused peer resolved this resume to a
+    run-level ABORT -- letting the HITL-approved peer dispatch concurrently before the ABORT
+    fails the run -- fixed by gating both fan-out delivery-cell construction sites on `not
+    _any_fence_abort`, mirroring the existing effect-fence-directive suppression at the same two
+    sites. 3 new regression tests witness both fixes in
+    test_workflow_driver_parallelization_pause.py, including a non-vacuous check that the
+    suppressed peer is still re-dispatched (re-pausing INERT) rather than silently skipped. Full
+    harness-cp targeted suite re-run clean (156 passed, +3 from this round); ruff + pyright
+    strict clean on all touched files. 4 rounds of out-of-family just codex-review total to
+    convergence for the impl leg.'
   pr: '#1116'
   council: RETIRED "skip-a-gate vs strand-a-descendant" framing (2026-07-25 round 2) -- the spec's
     mechanism ROUTES a resolved answer via hitl_response_for(child_run_id), it does not skip gate
