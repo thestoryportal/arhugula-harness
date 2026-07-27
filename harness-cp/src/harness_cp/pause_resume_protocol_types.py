@@ -783,6 +783,36 @@ class PauseSnapshot(BaseModel):
     """C-IS-05 §5 `entry_hash` at pause point. Material-diff detection at
     U-CP-64 checks reachability from current entry chain."""
 
+    hitl_gate_config_hash: str | None = None
+    """B-79 impl leg slice 2 (CP spec v1.111 §1.2 property 7, §1.3a) — the
+    sha256 hex digest (via `_hash_hitl_gate_config`, the SAME pure function
+    slice 1 built for the fan-out closure) of the applicable HITL gate
+    configuration of the step this pause will resume INTO, at capture time.
+    Present ONLY for a `pause_reason=HITL_PENDING` capture at one of the three
+    single-owner sequential sites (LINEAR `resume_at`, `EVALUATOR_OPTIMIZER`,
+    `DECENTRALIZED_HANDOFF`) — the fan-out closure's own material-diff identity
+    lives on `PreDispatchGateOwningBranchResumeState.hitl_gate_config_hash`
+    (slice 1), not here. A single top-level field serves all three sequential
+    sites (unlike the fan-out branches, a sequential resume has at most ONE
+    currently-relevant step, so no per-branch carrier is needed) — the LINEAR
+    site has no existing per-step resume-identity carrier of any kind to
+    extend (§1.3a), so this is a net-new top-level field rather than a field
+    added to `EvaluatorOptimizerResumeState`/`HandoffResumeState` (which would
+    additionally require new None-strip machinery in `_compute_snapshot_hash`
+    for byte-compat, mirroring `_strip_default_fanout_resume_fields` — a
+    top-level field needs no such machinery since it is a bare scalar, not a
+    nested carrier dump).
+
+    default-`None` for byte-compat: a snapshot captured before this delta
+    deserializes with this field absent → `None`. `_compute_snapshot_hash`
+    (mirroring `effect_fence_resume`'s own pattern) adds this to the canonical
+    dict ONLY when not `None`, so a pre-existing snapshot's recomputed
+    `snapshot_hash` is byte-unchanged. Resume SKIPS the material-diff
+    comparison when the CAPTURED (snapshot) value is `None` — mirrors
+    `PreDispatchGateOwningBranchResumeState.hitl_gate_config_hash`'s own
+    "validate ONLY when present" convention — rather than treating an
+    unrecoverable legacy absence as a rejection."""
+
     fan_out_resume: FanOutResumeState | None = None
     """B-FANOUT-PAUSE (R-FS-1) — fan-out resume reconstruction state, present
     ONLY when this snapshot captures a `cascade_policy=pause` fan-out halt

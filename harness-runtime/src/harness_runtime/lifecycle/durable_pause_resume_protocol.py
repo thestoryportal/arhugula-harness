@@ -88,6 +88,7 @@ class DurablePauseResumeProtocol(PauseResumeProtocol):
         evaluator_optimizer_resume: EvaluatorOptimizerResumeState | None = None,
         effect_fence_resume: EffectFenceResumeState | None = None,
         orchestrator_effect_fence_resume: OrchestratorEffectFencePausedResumeState | None = None,
+        hitl_gate_config_hash: str | None = None,
     ) -> PauseSnapshot:
         """Compose the snapshot via the parent, then durably persist it.
 
@@ -97,11 +98,14 @@ class DurablePauseResumeProtocol(PauseResumeProtocol):
 
         ``fan_out_resume`` (B-FANOUT-PAUSE, ORCHESTRATOR_WORKERS),
         ``peer_fan_out_resume`` (B-FANOUT-PAUSE-PARALLELIZATION), ``handoff_resume``
-        (B-HANDOFF-PAUSE, DECENTRALIZED_HANDOFF), and ``evaluator_optimizer_resume``
-        (B-FANOUT-PAUSE-EVALUATOR-OPTIMIZER, EVALUATOR_OPTIMIZER) are forwarded to the
-        parent so a durable `cascade_policy=pause` snapshot carries (and journals) its
-        resume state — without forwarding, the durable resume path would silently drop it
-        (and the new kwarg would raise `TypeError` at the driver's capture call under
+        (B-HANDOFF-PAUSE, DECENTRALIZED_HANDOFF), ``evaluator_optimizer_resume``
+        (B-FANOUT-PAUSE-EVALUATOR-OPTIMIZER, EVALUATOR_OPTIMIZER), and
+        ``hitl_gate_config_hash`` (B-79 impl leg slice 2, CP spec v1.111 §1.2
+        property 7 — the LINEAR/EVALUATOR_OPTIMIZER/DECENTRALIZED_HANDOFF
+        material-diff identity) are forwarded to the parent so a durable
+        `cascade_policy=pause` snapshot carries (and journals) its resume state —
+        without forwarding, the durable resume path would silently drop it (and
+        the new kwarg would raise `TypeError` at the driver's capture call under
         durable config).
         """
         snapshot = await super().capture_pause_snapshot(
@@ -115,6 +119,7 @@ class DurablePauseResumeProtocol(PauseResumeProtocol):
             evaluator_optimizer_resume=evaluator_optimizer_resume,
             effect_fence_resume=effect_fence_resume,
             orchestrator_effect_fence_resume=orchestrator_effect_fence_resume,
+            hitl_gate_config_hash=hitl_gate_config_hash,
         )
         self._store.capture(snapshot)
         return snapshot
