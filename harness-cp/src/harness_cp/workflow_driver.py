@@ -2738,19 +2738,27 @@ def _hash_hitl_gate_config(
     return hashlib.sha256(payload).hexdigest()
 
 
-def _pre_dispatch_gate_owning_captured_hitl_gate_config_hash(
+def _captured_hitl_gate_config_hash(
     step: WorkflowStep,
     manifest_entry: WorkflowManifestEntry,
     *,
     default_model_binding: ModelBinding,
 ) -> str:
-    """The pre-dispatch gate-owning branch's applicable HITL gate configuration,
-    captured AT PAUSE-CAPTURE TIME as a content hash (B-79 impl leg slice 1, CP
-    spec v1.110 §1.2 property 7).
+    """A step's applicable HITL gate configuration, captured AT PAUSE-CAPTURE (or
+    resume-recompute) TIME as a content hash (CP spec v1.111 §1.2 property 7).
+
+    Originally built at B-79 slice 1 for the fan-out closure's pre-dispatch
+    gate-owning branch identity (`PreDispatchGateOwningBranchResumeState.
+    hitl_gate_config_hash`); generalized (renamed from
+    `_pre_dispatch_gate_owning_captured_hitl_gate_config_hash`) at slice 2 to
+    also serve the three single-owner sequential sites (LINEAR `resume_at`,
+    `EVALUATOR_OPTIMIZER`, `DECENTRALIZED_HANDOFF`, `PauseSnapshot.
+    hitl_gate_config_hash`) — the function body was ALWAYS topology-agnostic
+    (no fan-out-specific logic), only its name and call sites were narrow.
 
     Mirrors `_pre_dispatch_gate_owning_captured_child_workflow_id`'s standalone-
     recompute pattern: `resolve_step_binding` is the same pure/deterministic
-    function the enclosing dispatch loop already calls per-branch, so
+    function the enclosing dispatch loop already calls per-step, so
     recomputing it here (outside that loop, for exactly this step) is safe and
     consistent with existing call sites elsewhere in this module. The
     applicable placement set folds the per-step ADD-only override
@@ -4991,6 +4999,42 @@ def _execute_workflow_body(
         elif run_id == hitl_uniform_fallback_eligible_run_id:
             _resolved_hitl = resume_context.hitl_response
         if _resolved_hitl is not None:
+            # B-79 impl leg slice 2 (CP spec v1.111 §1.2 property 7, §1.1(d)) — the
+            # LINEAR site's FIRST-EVER per-step material-diff guard: this site
+            # previously carried NO identity check of any kind (not even step_id).
+            # A resumed branch's applicable HITL gate configuration MUST be
+            # unchanged from capture time — reject before constructing the
+            # delivery cell, mirroring the fan-out closure's `_resume_body_
+            # mismatch`-style fail-closed discipline (§1.1(b)/(c)). SKIP (byte-
+            # compat) when the snapshot's captured value is `None` — an already-
+            # durable snapshot from the PRECEDING deployment cannot be validated
+            # and must not be rejected on that basis alone, mirroring
+            # `PreDispatchGateOwningBranchResumeState.hitl_gate_config_hash`'s own
+            # "validate ONLY when present" convention.
+            if resume_snapshot.hitl_gate_config_hash is not None:
+                _resumed_linear_gate_config_hash = _captured_hitl_gate_config_hash(
+                    steps[resume_at],
+                    manifest_entry,
+                    default_model_binding=default_model_binding,
+                )
+                if _resumed_linear_gate_config_hash != resume_snapshot.hitl_gate_config_hash:
+                    return (
+                        RunResult(
+                            workflow_id=manifest_entry.workflow_id,
+                            run_id=run_id,
+                            status=RunStatus.FAILED,
+                            terminal_step_index=None,
+                            partial_state=None,
+                            final_state=None,
+                            fail_class=(
+                                "linear-resume-hitl-gate-config-changed at "
+                                f"{resume_at}: snapshot hitl_gate_config_hash="
+                                f"{resume_snapshot.hitl_gate_config_hash!r}, resume "
+                                f"recomputes {_resumed_linear_gate_config_hash!r}"
+                            ),
+                        ),
+                        0,
+                    )
             hitl_delivery_cell = HITLDeliveryCell(_resolved_hitl)
     for step_index, step in enumerate(steps[resume_at:], start=resume_at):
         # B-48 (U-RT-143; Runtime spec v1.102 §14.8.10.3 part 1): cooperative
@@ -5317,6 +5361,15 @@ def _execute_workflow_body(
                             run_id=run_id,
                             step_index=step_index,
                             pause_reason=WorkflowPauseReason.HITL_PENDING,
+                            # B-79 impl leg slice 2 (CP spec v1.111 §1.2 property 7,
+                            # §1.1(d)) — capture the pausing step's applicable HITL
+                            # gate configuration so a resumed delivery can be
+                            # rejected as a material diff if it changed.
+                            hitl_gate_config_hash=_captured_hitl_gate_config_hash(
+                                step,
+                                manifest_entry,
+                                default_model_binding=default_model_binding,
+                            ),
                         )
                     )
                     # U-RT-111 v2.38 AC #3 — PAUSE_CAPTURED HITL-signal CP→IS
@@ -7987,12 +8040,10 @@ def _execute_parallelization(
                 # validated and must not be rejected on that basis alone, mirroring
                 # `child_workflow_id`'s own "validate ONLY when present" convention above.
                 if pg.hitl_gate_config_hash is not None:
-                    _resumed_pg_gate_config_hash = (
-                        _pre_dispatch_gate_owning_captured_hitl_gate_config_hash(
-                            steps[pg.branch_index],
-                            manifest_entry,
-                            default_model_binding=default_model_binding,
-                        )
+                    _resumed_pg_gate_config_hash = _captured_hitl_gate_config_hash(
+                        steps[pg.branch_index],
+                        manifest_entry,
+                        default_model_binding=default_model_binding,
                     )
                     if _resumed_pg_gate_config_hash != pg.hitl_gate_config_hash:
                         return (
@@ -10234,7 +10285,7 @@ def _execute_parallelization(
                         steps[_bi]
                     ),
                     hitl_gate_config_hash=(
-                        _pre_dispatch_gate_owning_captured_hitl_gate_config_hash(
+                        _captured_hitl_gate_config_hash(
                             steps[_bi],
                             manifest_entry,
                             default_model_binding=default_model_binding,
@@ -10972,6 +11023,39 @@ def _execute_evaluator_optimizer(
         elif run_id == hitl_uniform_fallback_eligible_run_id:
             _eo_resolved_hitl = resume_context.hitl_response
         if _eo_resolved_hitl is not None:
+            # B-79 impl leg slice 2 (CP spec v1.111 §1.2 property 7, §1.1(d)) — mirrors
+            # the LINEAR site's own material-diff guard, placed at the SAME point
+            # (immediately before constructing the delivery cell), NOT inside
+            # `_resume_body_mismatch` above (which runs unconditionally for ANY
+            # `_eo_resume`-bearing resume, including a nested child under a fan-out
+            # with 2+ unaddressed gate-owning siblings that legitimately reaches this
+            # function with no delivery pending this cycle — `_resume_body_mismatch`
+            # returning a FAILED there would be a wrongly-terminal outcome for what
+            # should be a recoverable INERT re-pause). The staleness risk this guards
+            # against exists ONLY when a delivery is about to happen. SKIP (byte-
+            # compat) when the captured value is `None` — mirrors the LINEAR site's
+            # own "validate ONLY when present" convention.
+            if resume_snapshot.hitl_gate_config_hash is not None:
+                _resumed_eo_gate_config_hash = _captured_hitl_gate_config_hash(
+                    steps[resume_snapshot.step_index],
+                    manifest_entry,
+                    default_model_binding=default_model_binding,
+                )
+                if _resumed_eo_gate_config_hash != resume_snapshot.hitl_gate_config_hash:
+                    return RunResult(
+                        workflow_id=workflow_id,
+                        run_id=run_id,
+                        status=RunStatus.FAILED,
+                        terminal_step_index=None,
+                        partial_state=None,
+                        final_state=None,
+                        fail_class=(
+                            "evaluator-optimizer-resume-hitl-gate-config-changed at "
+                            f"{resume_snapshot.step_index}: snapshot hitl_gate_config_hash="
+                            f"{resume_snapshot.hitl_gate_config_hash!r}, resume recomputes "
+                            f"{_resumed_eo_gate_config_hash!r}"
+                        ),
+                    ), 0
             hitl_delivery_cell = HITLDeliveryCell(_eo_resolved_hitl)
 
     try:
@@ -11079,6 +11163,15 @@ def _execute_evaluator_optimizer(
                 step_index=_eo_hitl_step_index,
                 pause_reason=WorkflowPauseReason.HITL_PENDING,
                 evaluator_optimizer_resume=eo_resume,
+                # B-79 impl leg slice 2 (CP spec v1.111 §1.2 property 7, §1.1(d)) —
+                # capture the pausing step's applicable HITL gate configuration.
+                # `_eo_hitl_step_index` is 0=generate / 1=evaluate, matching
+                # `steps[0]`/`steps[1]` (`generate_step`/`evaluate_step`).
+                hitl_gate_config_hash=_captured_hitl_gate_config_hash(
+                    steps[_eo_hitl_step_index],
+                    manifest_entry,
+                    default_model_binding=default_model_binding,
+                ),
             )
         )
         # codex out-of-family review [P2] (2026-07-26): mirror the LINEAR HITL
@@ -11839,12 +11932,10 @@ def _execute_orchestrator_workers(
                 # SKIP (byte-compat) when the snapshot's captured value is `None` — see
                 # `_execute_parallelization`'s own twin guard for the full rationale.
                 if pg.hitl_gate_config_hash is not None:
-                    _resumed_pg_gate_config_hash = (
-                        _pre_dispatch_gate_owning_captured_hitl_gate_config_hash(
-                            worker_steps[pg.branch_index],
-                            manifest_entry,
-                            default_model_binding=default_model_binding,
-                        )
+                    _resumed_pg_gate_config_hash = _captured_hitl_gate_config_hash(
+                        worker_steps[pg.branch_index],
+                        manifest_entry,
+                        default_model_binding=default_model_binding,
                     )
                     if _resumed_pg_gate_config_hash != pg.hitl_gate_config_hash:
                         return (
@@ -14547,7 +14638,7 @@ def _execute_orchestrator_workers(
                         worker_steps[_bi]
                     ),
                     hitl_gate_config_hash=(
-                        _pre_dispatch_gate_owning_captured_hitl_gate_config_hash(
+                        _captured_hitl_gate_config_hash(
                             worker_steps[_bi],
                             manifest_entry,
                             default_model_binding=default_model_binding,
@@ -15027,6 +15118,37 @@ def _execute_decentralized_handoff(
         elif run_id == hitl_uniform_fallback_eligible_run_id:
             _handoff_resolved_hitl = resume_context.hitl_response
         if _handoff_resolved_hitl is not None:
+            # B-79 impl leg slice 2 (CP spec v1.111 §1.2 property 7, §1.1(d)) — mirrors
+            # the LINEAR/EO sites' own material-diff guard, placed at the SAME point
+            # (immediately before constructing the delivery cell), NOT inside
+            # `_resume_body_mismatch` above (which runs unconditionally for ANY
+            # `_handoff_resume`-bearing resume, including a nested child under a
+            # fan-out with 2+ unaddressed gate-owning siblings that legitimately
+            # reaches this function with no delivery pending this cycle — a FAILED
+            # there would be a wrongly-terminal outcome for what should be a
+            # recoverable INERT re-pause). SKIP (byte-compat) when the captured value
+            # is `None`.
+            if resume_snapshot.hitl_gate_config_hash is not None:
+                _resumed_handoff_gate_config_hash = _captured_hitl_gate_config_hash(
+                    steps[resume_snapshot.step_index],
+                    manifest_entry,
+                    default_model_binding=default_model_binding,
+                )
+                if _resumed_handoff_gate_config_hash != resume_snapshot.hitl_gate_config_hash:
+                    return RunResult(
+                        workflow_id=workflow_id,
+                        run_id=run_id,
+                        status=RunStatus.FAILED,
+                        terminal_step_index=None,
+                        partial_state=None,
+                        final_state=None,
+                        fail_class=(
+                            "decentralized-handoff-resume-hitl-gate-config-changed at "
+                            f"{resume_snapshot.step_index}: snapshot hitl_gate_config_hash="
+                            f"{resume_snapshot.hitl_gate_config_hash!r}, resume recomputes "
+                            f"{_resumed_handoff_gate_config_hash!r}"
+                        ),
+                    ), 0
             hitl_delivery_cell = HITLDeliveryCell(_handoff_resolved_hitl)
 
     # The on-stage-failure cascade reaction (§25.15.1) — resolved from the manifest's
@@ -15477,6 +15599,13 @@ def _execute_decentralized_handoff(
                     step_index=stage_index,
                     pause_reason=WorkflowPauseReason.HITL_PENDING,
                     handoff_resume=handoff_resume,
+                    # B-79 impl leg slice 2 (CP spec v1.111 §1.2 property 7, §1.1(d)) —
+                    # capture the pausing stage's applicable HITL gate configuration.
+                    hitl_gate_config_hash=_captured_hitl_gate_config_hash(
+                        step,
+                        manifest_entry,
+                        default_model_binding=default_model_binding,
+                    ),
                 )
             )
             # codex out-of-family review [P2] (2026-07-26): mirror the LINEAR HITL

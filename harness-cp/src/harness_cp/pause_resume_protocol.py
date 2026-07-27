@@ -421,6 +421,7 @@ class PauseResumeProtocol:
         evaluator_optimizer_resume: EvaluatorOptimizerResumeState | None = None,
         effect_fence_resume: EffectFenceResumeState | None = None,
         orchestrator_effect_fence_resume: OrchestratorEffectFencePausedResumeState | None = None,
+        hitl_gate_config_hash: str | None = None,
     ) -> PauseSnapshot:
         """Capture a workflow-layer pause snapshot per CP spec v1.11 §26.1.
 
@@ -442,6 +443,14 @@ class PauseResumeProtocol:
         which). All are COVERED by `snapshot_hash` so a tampered recovered-output fails
         the resume-time recompute. Linear / single-step callers pass none → the snapshot +
         its hash are byte-identical to the pre-B-FANOUT-PAUSE baseline.
+
+        ``hitl_gate_config_hash`` (B-79 impl leg slice 2, CP spec v1.111 §1.2 property 7;
+        default None) carries the applicable HITL gate configuration's content hash for a
+        `pause_reason=HITL_PENDING` capture at one of the three single-owner sequential
+        sites — orthogonal to the topology carriers above (it may coexist with
+        `evaluator_optimizer_resume`/`handoff_resume`, or with neither at the LINEAR site,
+        which has no topology carrier of its own). COVERED by `snapshot_hash` when
+        present, mirroring `effect_fence_resume`'s own pattern.
         """
         state_summary, state_ledger_anchor = self._pause_context_reader()
         snapshot_hash = _compute_snapshot_hash(
@@ -455,6 +464,7 @@ class PauseResumeProtocol:
             evaluator_optimizer_resume=evaluator_optimizer_resume,
             effect_fence_resume=effect_fence_resume,
             orchestrator_effect_fence_resume=orchestrator_effect_fence_resume,
+            hitl_gate_config_hash=hitl_gate_config_hash,
         )
         return PauseSnapshot(
             workflow_id=workflow_id,
@@ -471,6 +481,7 @@ class PauseResumeProtocol:
             evaluator_optimizer_resume=evaluator_optimizer_resume,
             effect_fence_resume=effect_fence_resume,
             orchestrator_effect_fence_resume=orchestrator_effect_fence_resume,
+            hitl_gate_config_hash=hitl_gate_config_hash,
         )
 
     async def attempt_resume(
@@ -529,6 +540,7 @@ class PauseResumeProtocol:
             evaluator_optimizer_resume=snapshot.evaluator_optimizer_resume,
             effect_fence_resume=snapshot.effect_fence_resume,
             orchestrator_effect_fence_resume=snapshot.orchestrator_effect_fence_resume,
+            hitl_gate_config_hash=snapshot.hitl_gate_config_hash,
         )
         if expected_hash != snapshot.snapshot_hash:
             return ResumeResult(
@@ -694,6 +706,14 @@ def _strip_default_fanout_resume_fields(
             # include in `_compute_snapshot_hash` (it is passed as a param, not model-dumped).
             if child.get("orchestrator_effect_fence_resume") is None:
                 child.pop("orchestrator_effect_fence_resume", None)
+            # B-79 impl leg slice 2 — same nested-byte-compat obligation as
+            # `orchestrator_effect_fence_resume` immediately above: `hitl_gate_config_hash`
+            # is a brand-new default-None `PauseSnapshot` field, so a pre-arc nested child
+            # snapshot's `model_dump` would otherwise gain a `null` key it never hashed
+            # with. Stripping when None can only RESTORE byte-compat; a real nested
+            # sequential-site HITL_PENDING child capture keeps its non-null hash covered.
+            if child.get("hitl_gate_config_hash") is None:
+                child.pop("hitl_gate_config_hash", None)
             for nested_key in ("fan_out_resume", "peer_fan_out_resume"):
                 _strip_default_fanout_resume_fields(
                     child.get(nested_key),
@@ -715,6 +735,7 @@ def _compute_snapshot_hash(
     evaluator_optimizer_resume: EvaluatorOptimizerResumeState | None = None,
     effect_fence_resume: EffectFenceResumeState | None = None,
     orchestrator_effect_fence_resume: OrchestratorEffectFencePausedResumeState | None = None,
+    hitl_gate_config_hash: str | None = None,
 ) -> str:
     """sha256 hex over canonical JSON of (workflow_id, run_id, step_index, state_summary).
 
@@ -811,6 +832,11 @@ def _compute_snapshot_hash(
         canonical["orchestrator_effect_fence_resume"] = orchestrator_effect_fence_resume.model_dump(
             mode="json"
         )
+    if hitl_gate_config_hash is not None:
+        # B-79 impl leg slice 2: a bare scalar, not a nested carrier — added ONLY when
+        # present so every pre-existing (pre-delta) snapshot hashes byte-identically to
+        # before, mirroring every carrier's own drop-when-None/empty discipline above.
+        canonical["hitl_gate_config_hash"] = hitl_gate_config_hash
     payload = json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(payload).hexdigest()
 

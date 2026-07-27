@@ -1432,9 +1432,12 @@ def test_paused_child_absent_workflow_id_byte_compat_hash() -> None:
     # The nested child_snapshot dict also has its (pre-existing, unrelated to B-31)
     # default-None `orchestrator_effect_fence_resume` key dropped by the SAME strip
     # function — mirror that here too, else this test's own hand-built "canonical" dict
-    # would disagree with the real stripped shape for an unrelated reason.
+    # would disagree with the real stripped shape for an unrelated reason. B-79 impl leg
+    # slice 2 adds a second such default-None top-level `PauseSnapshot` field,
+    # `hitl_gate_config_hash` — dropped from the nested dump the same way.
     child_snap_dump = child_snap.model_dump(mode="json")
     child_snap_dump.pop("orchestrator_effect_fence_resume", None)
+    child_snap_dump.pop("hitl_gate_config_hash", None)
     canonical = {
         "workflow_id": "wf-fp",
         "run_id": "run-1",
