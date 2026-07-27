@@ -222,13 +222,30 @@ Live smoke commands, each requiring explicit approval:
 
 ```bash
 just r421-e2b-live-probe
-just r421-managed-cloud-live-e2e harness.managed-cloud.e2b.toml
+just r421-managed-cloud-live-e2e harness.managed-cloud.e2b.toml \
+  --cloud-run-auth-audience https://arhugula-r421-otel-collector-qsqt4j4y3a-uc.a.run.app \
+  --cloud-run-auth-impersonate-service-account gcp-secret-manager-accessor@project-ba535aa4-f08d-46b2-ba6.iam.gserviceaccount.com
 just r412-e2b-full-vm-live-e2e
-just r810-files-live-e2e harness.managed-cloud.e2b.toml
-just r820-managed-agents-live-e2e harness.managed-cloud.e2b.toml
+just r810-files-live-e2e harness.managed-cloud.e2b.toml \
+  --cloud-run-auth-audience https://arhugula-r421-otel-collector-qsqt4j4y3a-uc.a.run.app \
+  --cloud-run-auth-impersonate-service-account gcp-secret-manager-accessor@project-ba535aa4-f08d-46b2-ba6.iam.gserviceaccount.com
+just r820-managed-agents-live-e2e harness.managed-cloud.e2b.toml \
+  --cloud-run-auth-audience https://arhugula-r421-otel-collector-qsqt4j4y3a-uc.a.run.app \
+  --cloud-run-auth-impersonate-service-account gcp-secret-manager-accessor@project-ba535aa4-f08d-46b2-ba6.iam.gserviceaccount.com
 just r830-s3-live-e2e
 just r830-managed-db-live-e2e
 ```
+
+The two `--cloud-run-auth-*` flags on the three OTLP e2es are **not optional** for this
+workspace's collector: `arhugula-r421-otel-collector` is a private Cloud Run service, so the
+export needs an ID token minted for its URL audience by an SA that holds `roles/run.invoker`
+(the active gcloud account is a user account, which `gcloud auth print-identity-token
+--audiences=` rejects — hence the impersonation flag). Omit them and the run emits
+unauthenticated telemetry, then fails at Cloud Trace polling *after* the paid provider and
+sandbox work has already been spent. Values above are the literal ones the 2026-06-10 GO run
+used (`.harness/release-candidate-deployment-readiness-report-2026-06-10.md` risk #1); they
+depend on the `serviceAccountTokenCreator` re-grant flagged above. The readiness, probe, and
+`r830` commands do not accept these flags and do not need them.
 
 Provider routing smoke is optional in the RC batch unless the operator asks for it:
 
