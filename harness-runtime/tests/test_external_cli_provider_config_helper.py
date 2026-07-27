@@ -140,7 +140,52 @@ def test_cli_prints_materialized_provider_config_path(
     assert capsys.readouterr().out.strip() == out_path.as_posix()
     runtime = tomllib.loads(out_path.read_text(encoding="utf-8"))["runtime"]
     assert runtime["enabled_provider_names"] == ["gemini"]
-    assert runtime["external_cli_providers"][0]["kind"] == "gemini"
+    provider = runtime["external_cli_providers"][0]
+    assert provider["kind"] == "gemini"
+    # The legacy Gemini preset declares its auth probe, so the materialized
+    # entry carries it even though no ``--auth-arg`` was passed. ``auth_check``
+    # stays false: firing the probe is an outward model call, operator opt-in.
+    assert provider["auth_args"] == ["--skip-trust", "-p", "Reply with the single word OK."]
+    assert provider["auth_check"] is False
+
+
+def test_explicit_auth_args_override_the_gemini_preset_declaration(tmp_path: Path) -> None:
+    helper = _load_helper()
+    repo_root = tmp_path / "checkout"
+    repo_root.mkdir()
+    base_path = tmp_path / "harness.toml"
+    base_path.write_text(_base_config(repo_root), encoding="utf-8")
+    out_path = tmp_path / "gemini-override.toml"
+
+    helper.materialize_external_cli_config(
+        provider="gemini",
+        auth_args=("--version",),
+        base_config=base_path,
+        repo_root=repo_root,
+        output=out_path,
+    )
+
+    runtime = tomllib.loads(out_path.read_text(encoding="utf-8"))["runtime"]
+    assert runtime["external_cli_providers"][0]["auth_args"] == ["--version"]
+
+
+def test_presets_without_declared_auth_args_emit_no_auth_args(tmp_path: Path) -> None:
+    helper = _load_helper()
+    repo_root = tmp_path / "checkout"
+    repo_root.mkdir()
+    base_path = tmp_path / "harness.toml"
+    base_path.write_text(_base_config(repo_root), encoding="utf-8")
+
+    for name in ("claude_code", "codex", "antigravity"):
+        out_path = tmp_path / f"{name}.toml"
+        helper.materialize_external_cli_config(
+            provider=name,
+            base_config=base_path,
+            repo_root=repo_root,
+            output=out_path,
+        )
+        runtime = tomllib.loads(out_path.read_text(encoding="utf-8"))["runtime"]
+        assert "auth_args" not in runtime["external_cli_providers"][0]
 
 
 def test_cli_materializes_antigravity_print_mode_config(
