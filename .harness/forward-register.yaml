@@ -61,11 +61,11 @@ snapshot:
   total: 82
   open: 0
   design_substrate_gated: 0
-  registered_finding: 14
+  registered_finding: 13
   operator_gated: 1
   held: 1
-  closed: 66
-  identity_digest: 9e3858cfbb40980e
+  closed: 67
+  identity_digest: cad3320e84b9e6be
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -1706,42 +1706,20 @@ items:
 - id: B-75
   title: Protected result store's gc_sweep candidate-selection scan can itself stall inside the
     publish lock under a pathological backlog or a hanging filesystem
-  status: registered_finding
-  summary: 'Surfaced at the B-68 impl arc, out-of-family Codex round 8 [P1] -- a round-8 finding
-    directly about round 7''s OWN fix, the third consecutive round to surface an issue in the
-    immediately-prior round''s change (round 6->7->8). Round 7 narrowed `gc_sweep`''s lock to a
-    fast, `stat()`-only candidate-selection phase specifically to bound lock-hold time against a
-    slow DECRYPT phase (see B-68''s closed row). Codex round 8 observes that even this narrowed
-    phase -- `glob()` + `stat()` over every `*.entry`/`.tmp-*` file, still inside the lock -- is
-    itself unbounded in a MORE EXTREME scenario: a pathologically large backlog (far larger than
-    what makes decrypt slow, since `stat()` is orders of magnitude cheaper per file), or a
-    filesystem mount that hangs/stalls on `stat()` itself (e.g. a dead network mount). Under
-    `run_off_loop_detach_on_cancel`''s detach semantics, a shutdown sweep stuck in THIS phase
-    would ALSO get detached while still holding the lock, reopening the same
-    class of liveness hazard round 7 closed for the decrypt phase specifically. Registered
-    rather than fixed inline per advisor()''s explicit round-8 guidance: three consecutive
-    rounds each surfacing a defect the PRIOR round''s own fix introduced is the
-    non-convergent-adversarial-hardening-arms-race signature (this workspace''s own standing
-    discipline) -- stop patching, register, and ship rather than open a round 9. Reachability is
-    genuinely narrower than round 7''s finding (needs either an extreme file count or a
-    hanging/failing filesystem mount, not merely a large-but-normal backlog), and a failing
-    filesystem mount would likely be causing failures well beyond this store already. ESCALATION
-    (advisor(), B-76 arc, 2026-07-26): B-73''s cross-process flock is now ALSO held across this
-    candidate-selection phase, so a stalled scan blocks other OS PROCESSES sharing the store
-    root, not just other threads in this process -- worse than this row''s original P1 framing.'
-  close_out: 'Bound the candidate-selection phase itself -- e.g. batch the `glob()`/`stat()` scan
-    with a periodic lock release/re-acquire (yielding between batches so a stalled scan cannot
-    monopolize the lock indefinitely), or move the scan itself off-lock using a snapshot-then-
-    verify pattern (enumerate + stat unlocked, then re-verify each candidate''s mtime under a
-    BRIEF lock hold immediately before acting on it -- mirroring how phase 2''s unlink already
-    trusts a monotonic once-confirmed-expired fact, but applied one level earlier). Witness with
-    a test that stalls `glob()`/`stat()` itself (not decrypt) and asserts a concurrent write
-    still completes within a short bounded window.'
-  council: no -- narrow liveness-hardening follow-on to an already-shipped fix; the fix shape
-    (batch/yield or snapshot-then-verify) is a known pattern, not an open design question
+  status: closed
+  pr: '#1122'
+  summary: 'CLOSED -- candidate ENUMERATION (`glob()`/`stat()` over `*.entry`/`.tmp-*`) now runs
+    fully unlocked, producing PROVISIONAL candidates re-verified in a single brief combined lock
+    acquisition before being trusted (safe because a `.tmp-*` filename is permanently bound to
+    one creator whose `mkstemp` call itself runs inside the lock, so a candidate surviving to be
+    re-observed under the sweep''s own lock hold is provably a genuine orphan, not an in-flight
+    write -- closing the asymmetry advisor() flagged rather than scoping to `*.entry` only).
+    Mutation-probe-verified regression tests added (a structural lock-held witness, plus a
+    stalled-enumeration concurrent-write test).'
   heading: '### B-75 · Protected result store''s gc_sweep candidate-selection scan can itself
     stall inside the publish lock under a pathological backlog or a hanging filesystem *(surfaced
-    at the B-68 impl arc, out-of-family Codex round 8 [P1], 2026-07-25)*'
+    at the B-68 impl arc, out-of-family Codex round 8 [P1], 2026-07-25; FIXED 2026-07-26 -- PR
+    #1122, CLOSED)*'
 - id: B-76
   title: Protected result store's lock-key registry can fail open on a transient stat() failure
     during root-identity resolution
