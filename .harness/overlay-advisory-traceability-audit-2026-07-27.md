@@ -11,10 +11,15 @@
 - `just overlay-check` + `just overlay` + `just overlay-query --orphans` (semantic overlay
   R-IF-112), re-run at branch `rc-rebaseline-phase-d-reaudit`, merge-base `1abfaae3`
   (`ops: roadmap status refresh post-#1134`).
-- Hard gate (`just overlay-check`): **clean — `semantic overlay OK — 389 nodes, 36/36 seams wired`.**
-- Overlay summary at this run: 389 source files · 387 carrying a cite (99.5 %) · 147 distinct
-  contracts cited of 155 scanned · 376 distinct units cited · 13 ADRs · 36/36 CXA seams wired
-  · 15/55 substitutions with a direct `H_T-*` carrier file.
+- Hard gate (`just overlay-check`): **clean — `semantic overlay OK — 389 nodes, 36/36 seams wired`**
+  (identical pre-fix and post-fix — this audit's two fixes are comment-only, so no node was added).
+- Overlay summary (`just overlay`), **pre-fix → post-fix**, matching the bucket table's columns
+  below; the two `code_without_cite` fixes are the only delta: 389 source files · **387 → 389**
+  carrying a cite (**99.5 % → 100.0 %**) · 147 distinct contracts cited of 155 scanned ·
+  **376 → 377** distinct units cited · 13 ADRs · 36/36 CXA seams wired · 15/55 substitutions with
+  a direct `H_T-*` carrier file. The post-fix column is the measured `just overlay` output at this
+  branch's HEAD; the +1 distinct unit is `U-RT-145`, whose only `<pkg>/src/**` carriers are the two
+  files fixed here (`U-RT-141`, the second token added, was already cited by 9 other source files).
 
 The 2026-06-10 audit was run at HEAD `788e69f4`. That commit is **not an ancestor of current
 `main`** — repository history was re-created 2026-07-25 (`main`'s root commit is `d45ce125`,
