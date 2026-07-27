@@ -767,17 +767,27 @@ items:
     vestigial (required ctor kwarg at sub_agent_dispatch.py:607, never called -- the 8b F2 entry stamps
     WRITER_OWNED_TIMESTAMP at :801), and a third construction site (migrate_audit_sidecar.py:139-152) also
     takes the default clock.
-  close_out: PRIMARY instruction (guidance rewritten 2026-07-27 grounding pass) -- if a real deterministic-clock
-    consumer ever surfaces (e.g. a multi-writer clock-skew test), adopt the WRITER_OWNED_TIMESTAMP sentinel
-    at the composer F2 write, the pattern sub_agent_dispatch.py:801 and workflow_driver.py:2028-2030 already
-    migrated to per IS spec C-IS-07 §7.6, letting the IS writer sample the clock inside its own lock.
-    SUPERSEDED alternative, do NOT follow -- the originally-registered fix of threading an optional time_source
-    parameter through the 4 attribute_*_dispatch_cost composer signatures (tool/llm/webhook/validator, which
-    currently have none) down to the already-time_source-accepting compose_cost_f2_entry_core helper plus
-    the bootstrap sites. It is named here only so no future implementer re-derives it -- it would re-introduce
-    the caller-side timestamp capture the B-48 arc deliberately moved away from. Committed posture unchanged
-    -- detect-then-refuse, register-don't-build, per the workspace's established B-19/B-42 discipline against
-    building speculative infrastructure ahead of a real consumer.
+  close_out: OPERATIVE close-out (the originally-registered plan, RESTORED at out-of-family Codex round 3,
+    2026-07-27) -- if a real deterministic-clock consumer ever surfaces (e.g. a multi-writer clock-skew
+    test), thread an optional time_source parameter through the 4 attribute_*_dispatch_cost composer
+    signatures (tool/llm/webhook/validator, which currently have none) down to the already-time_source-accepting
+    compose_cost_f2_entry_core helper, plus the bootstrap sites. This is the only mechanism that satisfies
+    the deterministic/injectable-clock use case, and it stays within IS spec C-IS-07 §7.6's preserved
+    caller-supplied timestamp semantics for DIRECT surfaces -- no spec change needed. CONSIDERED AND
+    REJECTED -- WRITER_OWNED_TIMESTAMP sentinel adoption at the composer F2 write was briefly recorded
+    by the 2026-07-27 grounding pass as the likely fix, and corrected the same day at Codex round 3, on
+    two spec-verified grounds. (a) IS spec C-IS-07 §7.6's "Surfaces that do NOT change" paragraph classifies
+    runtime cost writes as DIRECT appends keeping caller-supplied timestamp semantics verbatim, and its
+    "Registered residual" paragraph requires a separate spec back-flow before writer-owned authority may
+    extend to any direct surface -- an extension explicitly assigned to B-57 (covers the remaining direct
+    writers), NOT to B-44; adopting the sentinel here at impl time would be a silent spec violation.
+    (b) The sentinel cannot serve B-44's own stated trigger at all -- state_ledger_write.py lines 316-320
+    resolve WRITER_OWNED_TIMESTAMP through a hardcoded datetime.now(UTC) inside the write lock, so a
+    deterministic/injectable-clock consumer gets no determinism from it; only an injectable time_source
+    can. The sub_agent_dispatch.py:801 and workflow_driver.py:2028-2030 cites describe only what B-48
+    did on the DRAIN/offloaded surfaces -- they are not a precedent for the DIRECT composer F2 write.
+    Committed posture unchanged -- detect-then-refuse, register-don't-build, per the workspace's established
+    B-19/B-42 discipline against building speculative infrastructure ahead of a real consumer.
   council: no — mechanical once a consumer exists; not urgent, genuinely dormant today
   heading: '### B-44 · No production bootstrap site injects a non-default `time_source` clock *(split
     from B-29, 2026-07-15)*'
