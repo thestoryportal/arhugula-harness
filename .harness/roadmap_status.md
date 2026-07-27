@@ -74,7 +74,6 @@
 | PR #1120 | 2026-07-26 | B-73 closed: cross-process fcntl.flock advisory lock for the protected result store, composed inside the existing in-process threading.Lock at both _publish_atomic and gc_sweep's candidate-selection phase; guarded on Windows per C-STK-10; 4 rounds of just codex-review main to clean convergence; witnessed with two genuine-subprocess mutation-probed regression tests. |
 | PR #1119 | 2026-07-26 | B-81 CLOSED in full at forward-register.yaml (both PR #1118 and PR #1119 landed); closing lag-eliminating refresh |
 | PR #1118 | 2026-07-26 | B-81 close-out step 1/2: ported 3 PARALLELIZATION pre-dispatch gate-owning material-diff tests to OW mirror in test_workflow_driver_fanout_pause.py, mutation-probe-verified; step 2 (4 exclusion-conjunct tests) remains open |
-| PR #1117 | 2026-07-26 | B-78 CLOSED: EO/DH HITL pause handlers were uncaught-crashing + missing delivery cells; fixed mirroring LINEAR's mechanism, no new CP-spec carrier field. 6 codex rounds to convergence (rounds 1-3 fixed self-introduced regressions in the terminal-REJECT carve-out; round 4's finding folded into B-79's broadened scope; round 6 fixed a stale-carry-text defect + a PAUSE_CAPTURED audit-emission gap). merge-gate all-approve after 2 fix rounds. |
 ---
 
 ---
