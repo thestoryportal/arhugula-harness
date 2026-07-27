@@ -162,10 +162,10 @@ shell r411-gvisor sudo docker"`) and left it Running. A re-validation pass must 
 volume (or re-provision the VM) first; gVisor is Linux-only and never available on the macOS host.
 
 Setup the R-420 live e2e needs before it will run: see
-`deploy/self-hosted-local/README.md` step 4 (empty `prompts/` + `routing_manifest/` directories
-and a throwaway `STATE_LEDGER` scratch **directory** — that path class resolves to a directory
-containing `state.jsonl`, and the template's default file binding aborts stage 1 with
-`FileExistsError`).
+`deploy/self-hosted-local/README.md` step 4 (empty `prompts/` + `routing_manifest/` directories;
+the template already binds `STATE_LEDGER` to a throwaway scratch **directory** — that path class
+resolves to a directory containing `state.jsonl`, and binding it to a file path such as the
+repo's real `.harness/state.jsonl` aborts stage 1 with `FileExistsError`).
 
 Acceptance criteria:
 

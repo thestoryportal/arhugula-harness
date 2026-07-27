@@ -28,9 +28,8 @@ non-secret sentinel keyring entry, so it makes no hosted-provider call.
 3. Replace every `/absolute/path/to/arhugula-v2` placeholder with this
    workspace root.
 4. Prepare the path-class bindings the live e2e resolves. The template binds
-   four `PathClass` members per workflow class; two of them point at
-   directories this repo does not ship, and one points at the repo's real
-   state ledger:
+   four `PathClass` members per workflow class; three of them point at
+   directories this repo does not ship:
 
    ```sh
    mkdir -p prompts routing_manifest
@@ -43,8 +42,8 @@ non-secret sentinel keyring entry, so it makes no hosted-provider call.
      untracked directories at the workspace root. Routing data itself is read
      from the `[runtime.routing_manifest]` table in the config, not from files
      in that directory.
-   - `STATE_LEDGER` → repoint it at a **throwaway scratch directory** before
-     running:
+   - `STATE_LEDGER` → the template already binds a **throwaway scratch
+     directory**:
 
      ```toml
      path = "/absolute/path/to/arhugula-v2/.harness/r420-scratch"
@@ -55,14 +54,14 @@ non-secret sentinel keyring entry, so it makes no hosted-provider call.
      opens the ledger at `<dir>/state.jsonl`, so a binding that itself ends in
      `state.jsonl` produces `r420-scratch/state.jsonl/state.jsonl`.
 
-     The template ships `<root>/.harness/state.jsonl`, which is this repo's real
-     hash-chained ledger **file**. That default does not merely pollute the live
+     Do **not** repoint this at `<root>/.harness/state.jsonl`, this repo's real
+     hash-chained ledger **file**. That binding does not merely pollute the live
      ledger — it aborts the run before it starts: bootstrap stage 1
      `materialize_path_registry` calls `Path.mkdir(parents=True, exist_ok=True)`
      on every resolved path, and `mkdir` raises `FileExistsError` on an existing
-     non-directory, ahead of any chain verification. Binding a fresh scratch
-     directory instead gives the smoke run an empty ledger and a clean genesis
-     chain. Delete the scratch directory when the run is done.
+     non-directory, ahead of any chain verification. The shipped scratch
+     directory gives the smoke run an empty ledger and a clean genesis chain.
+     Delete it when the run is done.
 
 5. Put the R-420 sentinel value in the OS keyring under service `harness`.
    The included no-paid template expects keyring item name `r420_probe_key`:

@@ -50,11 +50,17 @@ workflow_class = "pipeline-automation"
 deployment_surface = "self-hosted-server"
 path = "/absolute/path/to/arhugula-v2/routing_manifest"
 
+# STATE_LEDGER resolves to a DIRECTORY, not a file: bootstrap stage 1
+# `materialize_path_registry` runs `Path.mkdir(parents=True, exist_ok=True)` on
+# the resolved path, and the ledger itself lands at `<dir>/state.jsonl`. Binding
+# a file path (for example the repo's real `.harness/state.jsonl`) aborts the
+# run with `FileExistsError` before any ledger logic. This throwaway scratch
+# directory gives the smoke run a clean genesis chain; delete it when done.
 [[runtime.path_bindings.raw_entries]]
 path_class = "STATE_LEDGER"
 workflow_class = "pipeline-automation"
 deployment_surface = "self-hosted-server"
-path = "/absolute/path/to/arhugula-v2/.harness/state.jsonl"
+path = "/absolute/path/to/arhugula-v2/.harness/r420-scratch"
 
 [[runtime.path_bindings.raw_entries]]
 path_class = "SKILLS"
@@ -74,11 +80,13 @@ workflow_class = "software-engineering"
 deployment_surface = "self-hosted-server"
 path = "/absolute/path/to/arhugula-v2/routing_manifest"
 
+# STATE_LEDGER is a DIRECTORY (see the pipeline-automation row above); the
+# ledger lands at `<dir>/state.jsonl`.
 [[runtime.path_bindings.raw_entries]]
 path_class = "STATE_LEDGER"
 workflow_class = "software-engineering"
 deployment_surface = "self-hosted-server"
-path = "/absolute/path/to/arhugula-v2/.harness/state.jsonl"
+path = "/absolute/path/to/arhugula-v2/.harness/r420-scratch"
 
 [[runtime.mcp_clients]]
 client_name = "r420-echo"
