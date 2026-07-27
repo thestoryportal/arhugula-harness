@@ -1163,6 +1163,125 @@ def test_gc_sweep_blocks_across_separate_processes_via_cross_process_lock(
     assert done_marker.exists()
 
 
+def test_gc_sweep_candidate_enumeration_runs_without_holding_publish_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """B-75 (codex round 8 on the B-68 arc, closed via advisor()-directed
+    snapshot-then-verify at the B-76 arc): candidate ENUMERATION (`glob()`
+    over `*.entry`/`.tmp-*`) must run WITHOUT holding `self._publish_lock`.
+    Round 7's fix already moved decrypt+unlink off-lock; round 8 found the
+    `glob()`/`stat()` SCAN itself was still unbounded while held — a
+    pathologically large backlog, or a hanging filesystem mount, could
+    stall the scan and block every concurrent write/sweep on this root
+    (worse after B-73: across OS PROCESSES too, since the scan also held
+    `_cross_process_lock`).
+
+    Structural witness (not wall-clock, per
+    `[[verification-shape-sharpened-grep-vs-e2e]]`): records whether
+    `store._publish_lock` is held at the moment each `Path.glob()` call is
+    made on the store's own directory, and asserts every enumeration call
+    observes it UNHELD.
+
+    Mutation probe: wrapping the enumeration loops back inside the
+    `with self._publish_lock, self._cross_process_lock():` block (the
+    pre-fix shape) makes every recorded `glob()` call see the lock HELD."""
+    store = _store(tmp_path, ttl_seconds=0.01)
+    ref = store.write_once("tenant-a", "will be swept")
+    assert isinstance(ref, str)
+    time.sleep(0.05)  # comfortably past the 0.01s TTL
+
+    lock_held_at_glob: list[bool] = []
+    real_glob = Path.glob
+
+    def _recording_glob(self: Path, pattern: str) -> object:
+        if self == store._root:  # type: ignore[attr-defined]
+            lock_held_at_glob.append(store._publish_lock.locked())  # type: ignore[attr-defined]
+        return real_glob(self, pattern)
+
+    monkeypatch.setattr(Path, "glob", _recording_glob)
+
+    expired = store.gc_sweep(now=time.time())
+
+    assert lock_held_at_glob, "no glob() call was observed on the store root"
+    assert not any(lock_held_at_glob), (
+        f"candidate enumeration ran with `_publish_lock` HELD at least once: {lock_held_at_glob}"
+    )
+    assert expired == [store._entry_path(ref).stem]  # type: ignore[attr-defined,arg-type]
+
+
+def test_write_once_does_not_block_on_a_stalled_gc_sweep_enumeration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """B-75 companion: with candidate enumeration off-lock, a `write_once()`
+    on a SEPARATE instance must not block on a concurrent `gc_sweep()`
+    stalled inside its (now unlocked) `glob()` scan — mirrors
+    `test_write_once_does_not_block_on_a_sweep_stalled_in_its_decrypt_phase`'s
+    structure for the newly-unlocked enumeration phase instead of decrypt.
+
+    Mutation probe: re-wrapping the enumeration loops back under
+    `self._publish_lock` makes the write block for the stall duration
+    instead of completing promptly."""
+    store_a = _store(tmp_path, ttl_seconds=86400.0)
+    store_b = ProtectedResultStore(
+        tmp_path / "store",
+        codec=store_a._codec,  # type: ignore[attr-defined]
+        ttl_seconds=86400.0,
+    )
+    (tmp_path / "store").mkdir(parents=True, exist_ok=True)
+    # A fresh instance's `_last_gc_at` starts at 0.0 — suppress store_b's
+    # OWN opportunistic sweep so the property under test (a write not
+    # blocking on ANOTHER thread's stalled sweep) isn't confounded by its
+    # own nested `gc_sweep()` call hitting the same stalled mock.
+    store_b._last_gc_at = time.time()  # type: ignore[attr-defined]
+
+    enumeration_entered = threading.Event()
+    enumeration_may_proceed = threading.Event()
+    real_glob = Path.glob
+    calls = {"n": 0}
+
+    def _stalled_glob(self: Path, pattern: str) -> object:
+        if self == store_a._root:  # type: ignore[attr-defined]
+            calls["n"] += 1
+            if calls["n"] == 1:
+                enumeration_entered.set()
+                enumeration_may_proceed.wait(timeout=5.0)
+        return real_glob(self, pattern)
+
+    monkeypatch.setattr(Path, "glob", _stalled_glob)
+
+    sweep_results: list[list[str]] = []
+
+    def _run_sweep() -> None:
+        sweep_results.append(store_a.gc_sweep(now=time.time()))
+
+    sweeper = threading.Thread(target=_run_sweep)
+    sweeper.start()
+    assert enumeration_entered.wait(timeout=5.0), "sweep never reached its enumeration phase"
+
+    write_results: list[object] = []
+
+    def _run_write() -> None:
+        write_results.append(store_b.write_once("tenant-b", "must not block on the stalled scan"))
+
+    writer = threading.Thread(target=_run_write)
+    writer.start()
+    writer.join(timeout=0.3)
+    assert not writer.is_alive(), (
+        "write_once() was still blocked 0.3s after starting — it waited on "
+        "the stalled enumeration's lock instead of completing promptly"
+    )
+    assert len(write_results) == 1
+
+    enumeration_may_proceed.set()
+    sweeper.join(timeout=5.0)
+    assert not sweeper.is_alive()
+
+    write_result = write_results[0]
+    assert isinstance(write_result, str)
+    assert store_b.read("tenant-b", write_result) == "must not block on the stalled scan"
+    assert sweep_results == [[]]
+
+
 def test_gc_sweep_does_not_collect_unexpired_entries(tmp_path: Path) -> None:
     store = _store(tmp_path, ttl_seconds=86400.0)
     store.write_once("tenant-a", "fresh entry")

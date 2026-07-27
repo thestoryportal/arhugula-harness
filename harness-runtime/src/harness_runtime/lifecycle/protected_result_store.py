@@ -599,60 +599,78 @@ class ProtectedResultStore:
         expired: list[str] = []
         if not self._root.exists():
             return expired
-        # B-68 codex round 2 [P1]: candidate SELECTION runs under the SAME
-        # lock `_publish_atomic` holds around its commit + mtime refresh —
-        # a sweep in progress can never observe an entry mid-publish (stale
-        # pre-fsync mtime), and a publish in progress can never race a
-        # sweep's read of its own just-refreshed mtime.
-        #
-        # codex round 7 [P1]: this lock scope used to wrap decrypt +
-        # unlink too — the FULL sweep body. `gc_sweep` is invoked via
-        # `run_off_loop_detach_on_cancel` (`audit_offload.py`), whose
-        # entire design intent is that a slow/hung worker gets DETACHED
-        # (the caller's own timeout is the only bound that matters; the
-        # worker keeps running harmlessly on a daemon thread) rather than
-        # blocking anything else. Holding the lock across a decrypt-heavy
-        # scan of a large backlog defeated that: a detached, still-running
-        # sweep would keep the NEXT `write_once()`/`gc_sweep()` call on the
-        # same root — on a long-lived daemon, this is every subsequent
-        # `run()`/`resume()`, not just process exit — blocked indefinitely
-        # on the abandoned worker's lock. Narrowed to a two-phase design:
-        # phase 1 (below, under the lock) only `stat()`s candidates — no
-        # decrypt, no unlink — bounding lock-hold time to enumeration cost
-        # regardless of backlog size or a stalled decrypt. Phase 2 (after
-        # the lock releases) does the slow work. This is SAFE because:
-        # expiry is monotonic (a `stat()`-confirmed-expired entry's mtime
-        # never gets younger — nothing ever re-touches an already-committed
-        # entry after `_publish_atomic`'s own refresh) and every write uses
-        # a FRESH `uuid4()`-derived composite key (`write_once`), so no
-        # concurrent publish can "resurrect" a candidate already selected
-        # here. A second sweep concurrently selecting + unlinking the SAME
-        # candidate is harmless — `unlink(missing_ok=True)` absorbs the
-        # race; the only cost is a duplicate log line.
+        # B-75 (codex round 8 on the B-68 arc; closed via advisor()-directed
+        # snapshot-then-verify at the B-76 arc): candidate ENUMERATION
+        # (`glob()` + a first `stat()` pass, for both `*.entry` and
+        # `.tmp-*`) now runs FULLY UNLOCKED — the part whose cost scales
+        # with total store size (or, on a hanging filesystem mount, has no
+        # bound at all), and the actual pathological-backlog/stalled-scan
+        # hazard this row registers (round 7's fix already moved decrypt +
+        # unlink off-lock; round 8 found the `glob()`/`stat()` phase itself
+        # was still unbounded). It is NOT safe to simply leave selection
+        # unlocked and trust the result outright, unlike phase 2 below — an
+        # unlocked stat can observe an entry or temp file MID-PUBLISH (the
+        # narrow window `_publish_atomic` holds this lock across
+        # specifically to prevent, per codex round 2 [P1] x2: a stale
+        # pre-`os.utime`-refresh mtime for `*.entry`, or a not-yet-durable
+        # in-flight write for `.tmp-*`). So this unlocked pass only
+        # produces PROVISIONAL candidates; each is RE-VERIFIED in a single,
+        # brief, combined lock acquisition below before being trusted.
+        # While that re-verify lock is held, `_publish_atomic` cannot be
+        # mid-flight on ANY entry (same lock, whole-lifetime hold — see its
+        # own docstring) — so a provisional candidate that is STILL there
+        # and STILL past TTL when re-stat'd under the lock is genuinely
+        # expired (`*.entry`) or a genuine crash orphan (`.tmp-*`: its
+        # filename is permanently bound to one creator, and
+        # `tempfile.mkstemp` is itself called inside the lock, so if it
+        # survives to be re-observed under a freshly-acquired lock its
+        # creator can no longer be active — it either already finished and
+        # unlinked it, or crashed and released the lock without doing so).
+        # One combined acquisition covering the whole re-verify pass (not
+        # one per candidate) — a batched release/reacquire loop would
+        # instead turn `_cross_process_lock`'s per-call `fcntl.flock`
+        # (B-73) into N kernel round-trips and give a competing process a
+        # window to interleave between batches.
+        provisional_entries: list[Path] = []
+        for entry_path in self._root.glob("*.entry"):
+            try:
+                written_at = entry_path.stat().st_mtime
+            except OSError:
+                continue
+            if current_time - written_at > self._ttl_seconds:
+                provisional_entries.append(entry_path)
+        # codex [P2] round 5 on this arc — a process KILLED between
+        # `_publish_atomic`'s temp-write and its `finally: os.unlink(tmp_name)`
+        # leaves a `.tmp-*` file behind indefinitely: this loop (and every
+        # bootstrap/shutdown/opportunistic sweep, which all funnel through
+        # this method) previously enumerated only `*.entry`, so repeated
+        # crashes could accumulate stale ciphertext or exhaust disk with no
+        # bound. `.tmp-*` files carry no envelope to decrypt (a crash mid-
+        # write may leave them incomplete) — mtime is the only available age
+        # signal, same fallback already used for undecryptable `.entry`
+        # files above. Reuses the store's own TTL rather than a new config
+        # surface (temp files never survive a normal write for more than
+        # milliseconds, so any bound this generous only ever catches
+        # genuine crash orphans).
+        provisional_tmp: list[Path] = []
+        for tmp_entry_path in self._root.glob(".tmp-*"):
+            try:
+                tmp_mtime = tmp_entry_path.stat().st_mtime
+            except OSError:
+                continue
+            if current_time - tmp_mtime > self._ttl_seconds:
+                provisional_tmp.append(tmp_entry_path)
         entry_candidates: list[tuple[Path, float]] = []
         tmp_candidates: list[tuple[Path, float]] = []
         with self._publish_lock, self._cross_process_lock():
-            for entry_path in self._root.glob("*.entry"):
+            for entry_path in provisional_entries:
                 try:
                     written_at = entry_path.stat().st_mtime
                 except OSError:
                     continue
                 if current_time - written_at > self._ttl_seconds:
                     entry_candidates.append((entry_path, written_at))
-            # codex [P2] round 5 on this arc — a process KILLED between
-            # `_publish_atomic`'s temp-write and its `finally: os.unlink(tmp_name)`
-            # leaves a `.tmp-*` file behind indefinitely: this loop (and every
-            # bootstrap/shutdown/opportunistic sweep, which all funnel through
-            # this method) previously enumerated only `*.entry`, so repeated
-            # crashes could accumulate stale ciphertext or exhaust disk with no
-            # bound. `.tmp-*` files carry no envelope to decrypt (a crash mid-
-            # write may leave them incomplete) — mtime is the only available age
-            # signal, same fallback already used for undecryptable `.entry`
-            # files above. Reuses the store's own TTL rather than a new config
-            # surface (temp files never survive a normal write for more than
-            # milliseconds, so any bound this generous only ever catches
-            # genuine crash orphans).
-            for tmp_entry_path in self._root.glob(".tmp-*"):
+            for tmp_entry_path in provisional_tmp:
                 try:
                     tmp_mtime = tmp_entry_path.stat().st_mtime
                 except OSError:
