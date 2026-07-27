@@ -31,6 +31,7 @@ from harness_runtime.lifecycle.external_cli_provider import (
     ExternalCLINotAuthenticatedError,
     construct_antigravity_cli_adapter,
     construct_gemini_cli_adapter,
+    construct_generic_command_cli_adapter,
 )
 from harness_runtime.types import ExternalCLIProviderConfig, ExternalCLIProviderKind
 
@@ -235,7 +236,7 @@ async def test_gemini_legacy_cli_auth_confirms_gemini_legacy_route() -> None:
     assert route.route_ref == "gemini:gemini"
 
 
-def test_generic_command_cli_auth_confirms_operator_declared_route() -> None:
+async def test_generic_command_cli_auth_confirms_operator_declared_route() -> None:
     command = os.getenv("U_MEM_24_GENERIC_COMMAND_AUTH_PROBE", "").strip()
     if not command:
         pytest.skip("U_MEM_24_GENERIC_COMMAND_AUTH_PROBE is not set")
@@ -243,9 +244,24 @@ def test_generic_command_cli_auth_confirms_operator_declared_route() -> None:
     executable = argv[0]
     if shutil.which(executable) is None:
         pytest.skip(f"generic auth probe executable {executable!r} is not installed on PATH")
-    result = _run_status(argv)
-    if result.returncode != 0:
-        pytest.fail("generic command auth probe failed")
+
+    # Drive the operator-declared probe through the shipped constructor rather
+    # than a bare subprocess, so the live gate binds the production auth path.
+    # Unlike the absent-CLI skips above, a declared probe that fails to confirm
+    # a session is a failure, not a skip.
+    config = ExternalCLIProviderConfig(
+        provider="generic-command",
+        kind=ExternalCLIProviderKind.GENERIC_COMMAND,
+        command=executable,
+        auth_args=tuple(argv[1:]),
+        auth_check=True,
+        timeout_seconds=20.0,
+    )
+    try:
+        adapter = await construct_generic_command_cli_adapter(config)
+    except ExternalCLINotAuthenticatedError as exc:
+        pytest.fail(f"generic command auth probe failed: {exc}")
+    await adapter.aclose()
 
     route = _resolve_authenticated_route(
         kind=CliProfileKind.CUSTOM,
