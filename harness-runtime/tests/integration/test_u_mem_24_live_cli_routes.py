@@ -224,10 +224,23 @@ async def test_gemini_legacy_cli_auth_confirms_gemini_legacy_route() -> None:
     )
     try:
         adapter = await construct_gemini_cli_adapter(config)
-    except ExternalCLINotAuthenticatedError:
-        # The exception text embeds the probe's stdout/stderr; keep it out of
-        # test logs per the module's no-secret-output guarantee. Re-run the
-        # declared probe manually to inspect the refusal.
+    except ExternalCLINotAuthenticatedError as exc:
+        # The exception text embeds the probe's stdout/stderr; inspect it only
+        # internally and keep it out of test logs per the module's
+        # no-secret-output guarantee. Argv rot (the CLI rejecting the declared
+        # flags themselves) is a probe regression and must FAIL; any other
+        # refusal is an environment condition (unauthenticated session, tier
+        # refusal, upstream auth drift) and keeps the sibling gates'
+        # skip-when-not-authenticated semantic. Exit codes cannot distinguish
+        # the two (both exit 1), so this marker check is the bounded
+        # classification available at this boundary.
+        detail = str(exc).lower()
+        argv_rot_markers = ("unknown option", "unknown flag", "unrecognized", "usage:")
+        if any(marker in detail for marker in argv_rot_markers):
+            pytest.fail(
+                "legacy Gemini CLI rejected the declared probe argv itself "
+                "(probe output redacted; run the declared probe manually to inspect)"
+            )
         pytest.skip(
             "legacy Gemini CLI declared auth probe did not confirm a session "
             "(probe output redacted; run the declared probe manually to inspect)"
