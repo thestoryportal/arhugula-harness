@@ -635,6 +635,40 @@ def test_ow_resume_rejects_hitl_gate_config_changed() -> None:
     assert "pre-dispatch-gate-owning-hitl-gate-config-changed" in (resumed.fail_class or "")
 
 
+def test_ow_resume_rejects_hitl_gate_config_placement_removed() -> None:
+    """out-of-family Codex [P2] (round 4) — the OW site's own coverage only
+    exercised an ALTERED attribute (timeout); the REMOVED-placement direction
+    (§1.1(b) symmetry) needs its own end-to-end witness at this site too,
+    mirroring `test_peer_resume_rejects_hitl_gate_config_placement_removed`."""
+    manifest = _ow_manifest(hitl_placements=(_BASE_PLACEMENT,))
+    paused = execute_workflow(
+        manifest,
+        _ow_steps(),
+        run_id="run-ow-4",
+        ctx=_ctx(),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=cast(StepDispatcherRegistry, _PreDispatchGateAlwaysDispatcher()),
+    )
+    assert paused.status is RunStatus.PAUSED
+    snap = paused.pause_snapshot
+    assert snap is not None
+    assert snap.fan_out_resume is not None
+    assert len(snap.fan_out_resume.pre_dispatch_gate_owning_branches) == 1
+
+    altered_manifest = _ow_manifest(hitl_placements=())
+    resumed = execute_workflow(
+        altered_manifest,
+        _ow_steps(),
+        run_id="run-ow-4",
+        ctx=_ctx(),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=cast(StepDispatcherRegistry, _PreDispatchGateOnceDispatcher()),
+        pause_snapshot_input=snap,
+    )
+    assert resumed.status is RunStatus.FAILED
+    assert "pre-dispatch-gate-owning-hitl-gate-config-changed" in (resumed.fail_class or "")
+
+
 def test_ow_resume_accepts_unchanged_hitl_gate_config() -> None:
     """Mirrors `test_peer_resume_accepts_unchanged_hitl_gate_config`'s shared-
     dispatcher-instance shape."""
