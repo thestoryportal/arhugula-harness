@@ -607,11 +607,14 @@ class ProtectedResultStore:
         under load or a large payload. A short deployment-configured TTL
         could then see a just-published, still-live entry as already
         expired the instant it becomes visible on disk, regardless of any
-        concurrent sweep. `_publish_atomic` refreshes the entry's mtime to
-        "now" AFTER its durable commit — the same trusted, always-available
-        age signal already used below for undecryptable entries, now
-        applied unconditionally rather than only as a decrypt-failure
-        fallback. This sweep and that refresh mutually exclude via
+        concurrent sweep. `_publish_atomic` refreshes the temp file's mtime
+        to "now" BEFORE its durable commit (B-77 — moved pre-commit so the
+        dominant, payload-scaling data write+fsync duration is excluded
+        from the window; a narrower residual remains, see that method's
+        own docstring) — the same trusted, always-available age signal
+        already used below for undecryptable entries, now applied
+        unconditionally rather than only as a decrypt-failure fallback.
+        This sweep and that refresh mutually exclude via
         `self._publish_lock` (codex round 2 [P1] x2 — round 1's plain
         `os.utime` refresh still left a window between `os.link` (visible)
         and the refresh itself for a genuinely CONCURRENT sweep to observe
