@@ -63,11 +63,11 @@ is preserved above rather than rewritten. T-2's status is **false at HEAD** and 
 
 - **Per-agent-role runtime model dispatch is BUILT**, not "gated to `R-300-second-provider`", and
   the gating arc itself (`R-300-multi-llm-second-provider`) **RESOLVED 2026-06-03** (PR #281 + #283).
-- **Routing half:** `llm_dispatch.py:1015` resolves `_role = step_context.agent_role or
-  _MVP_DEFAULT_AGENT_ROLE`; `:1040` indexes `manifest.per_role_bindings`. The authority site is
+- **Routing half:** `llm_dispatch.py:1022` resolves `_role = step_context.agent_role or
+  _MVP_DEFAULT_AGENT_ROLE`; `:1047` indexes `manifest.per_role_bindings`. The authority site is
   `retry_breaker_fallback.py:743-749`, whose `_effective_chain` per-role branch promotes
   `role_binding.preferred_model_binding` through the U-RT-114 §14.5.3 chain-augmentation.
-- **Prompt half:** `prompt_selection.py:245` `resolve_per_role_system_prompts` (docstring:
+- **Prompt half:** `prompt_selection.py:256` `resolve_per_role_system_prompts` (docstring:
   "R-FS-1 arc B4 — per-role prompt threading, runtime spec §14.5.3") is bound at
   `stage_0_preamble.py:97` onto `ctx.per_role_system_prompts` and indexed at dispatch on
   `step_context.agent_role`.
@@ -93,7 +93,7 @@ Under FULL-SPEC, the 12 acknowledged deferrals are all build targets. The action
 - **U-1 (cache_control breakpoint emission)** — the cleanest net-new build arc: a committed ADR-D3 §1.5 contract, unregistered, real cost lever. Register + build.
 - **U-2 (breaker.cause/cooldown_ms)** — net-new but *operator-discretionary* per the design record (a conscious event-vs-ambient schema choice). Surface for the build/skip call.
 - **R-1 (managed-cloud dispatch)** — was operator-ratified DEFER-INDEFINITELY; the new directive overrides — confirm.
-- **T-1..T-9** — already tracked. Several are **built but gated on a 2nd provider** (Arc R, per-role B4) — an *infra* gate, not a build gap: the code exists; a second provider activates it. The rest (B-TAIL, B3 smart-HITL, F-B3-2, FM-2 EDIT, per-persona crypto) are registered forward arcs to drive under FULL-SPEC.
+- **T-1..T-9** — already tracked. Several are **built but gated on a 2nd provider** (Arc R, per-role B4) — an *infra* gate, not a build gap: the code exists; a second provider activates it. **[superseded for per-role B4 — see the §3b "Correction note — 2026-07-27 (row T-2)" above: per-role B4 is BUILT (routing + prompt halves both runtime-indexed) and `R-300-multi-llm-second-provider` itself RESOLVED 2026-06-03. Arc R (L2 EMBEDDING / L3 LLM_AS_ROUTER) IS still production-inert by default, but the live gate is the `routing_activation` opt-in flag (`llm_dispatch.py:1020`), not a second provider.]** The rest (B-TAIL, B3 smart-HITL, F-B3-2, FM-2 EDIT, per-persona crypto) are registered forward arcs to drive under FULL-SPEC.
 
 **Scope honesty:** this is a *semantic* audit — its verdicts are council-voice judgments, adversarially checked for silent-narrowing and hand-re-grounded for the 2 net-new unregistered findings. The 9 tracked items were confirmed present in the ledgers by acknowledgment-grep but not each independently re-built-verified (they carry their own arc records). "Zero silent gaps" is the load-bearing claim and it is strongly supported.
 

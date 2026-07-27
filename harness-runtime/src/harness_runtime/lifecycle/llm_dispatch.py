@@ -417,14 +417,21 @@ def _extract_anthropic_cache_request_attrs(
     return (None, None)
 
 
-# R-300 MVP routing-envelope placeholders. The DECLARATIVE-echo layer decision
-# (see `RuntimeLLMDispatcher.dispatch`) echoes the resolved `binding.model_binding`
-# and ignores the InferenceRequest discriminators, so these are carried-but-not-
-# selection-driving at MVP. `AgentRole` is an open-string newtype and no per-step
-# role is threaded through the execution path at v1.6 (WorkflowStep carries only
-# step_id/step_kind/step_payload) and no conventional default-role key exists in
-# `RoutingManifest.per_role_bindings`; they become load-bearing at
-# R-300-second-provider when `route()` performs real per-discriminator selection.
+# Routing-envelope defaults. The DECLARATIVE-echo layer decision (see
+# `RuntimeLLMDispatcher.dispatch`) echoes the resolved `binding.model_binding` and
+# ignores the InferenceRequest discriminators, so those envelope fields are
+# carried-but-not-selection-driving on the echo path.
+#
+# CORRECTED 2026-07-27 — this comment previously added "no per-step role is
+# threaded through the execution path at v1.6 (WorkflowStep carries only
+# step_id/step_kind/step_payload) ... they become load-bearing at
+# R-300-second-provider". FALSE at HEAD, and that arc itself RESOLVED 2026-06-03.
+# A per-step role IS threaded (`StepExecutionContext.agent_role`) and IS indexed:
+# per-role MODEL at `retry_breaker_fallback._effective_chain`'s per-role branch
+# (unconditional) and per-role PROMPT at `dispatch`'s `per_role_system_prompts`
+# lookup (R-FS-1 arc B4 / U-RT-114, runtime spec §14.5.3). This constant is the
+# DEFAULT-role fall-through key, which both indexers deliberately exclude to keep
+# the unbound/linear path byte-identical — not a stand-in for a missing dimension.
 _MVP_DEFAULT_AGENT_ROLE = AgentRole("default")
 _MVP_DEFAULT_WORKLOAD_CLASS = WorkloadClass.SOFTWARE_ENGINEERING
 _MVP_PLACEHOLDER_TRACE_CONTEXT = TraceContext(
@@ -1342,7 +1349,18 @@ class RuntimeLLMDispatcher:
         # this boundary: the live routing decision is surfaced as `routing.*`
         # span attrs inside `_invoke_provider`, and the step output is the raw
         # provider Mapping returned below — NOT the InferenceResponse (which is
-        # likewise discarded). They become load-bearing at R-300-second-provider.
+        # likewise discarded).
+        #
+        # CORRECTED 2026-07-27 — this previously closed "They become load-bearing
+        # at R-300-second-provider"; that arc RESOLVED 2026-06-03 and per-role
+        # selection did NOT land here. It landed on the two paths that bypass this
+        # envelope entirely: per-role MODEL at
+        # `retry_breaker_fallback._effective_chain`'s per-role branch and per-role
+        # PROMPT at the `per_role_system_prompts` lookup above (both keying on
+        # `step_context.agent_role`; R-FS-1 arc B4 / U-RT-114). The envelope's own
+        # discriminators stay carried-but-discarded on the echo path — the live
+        # per-discriminator `route()` selection is the `routing_activation`
+        # opt-in path (`resolve_routed_binding`), not this construction.
         envelope = InferenceRequest(
             agent_role=_role,
             workload_class=self.workload_class or _MVP_DEFAULT_WORKLOAD_CLASS,

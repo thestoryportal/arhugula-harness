@@ -92,11 +92,20 @@ class PromptSelectionManifest(BaseModel):
     )
     """Per-role prompt-version selection. Empty (default) → no per-role binding.
 
-    NOTE: the runtime has no per-step agent-role dimension at MVP (dispatch keys
-    on ``_MVP_DEFAULT_AGENT_ROLE``; routing's own ``per_role_bindings`` is
-    likewise role-keyed only at R-300-second-provider), so per-role selection is
+    CORRECTED 2026-07-27 — this docstring previously read "the runtime has no
+    per-step agent-role dimension at MVP ... routing's own ``per_role_bindings``
+    is likewise role-keyed only at R-300-second-provider, so per-role selection is
     carried faithfully but resolved against the default role until real per-role
-    dispatch lands. ``per_workload_overrides`` keys on the REAL run workload."""
+    dispatch lands." That is FALSE at HEAD, and `R-300-multi-llm-second-provider`
+    itself RESOLVED 2026-06-03. Per-role dispatch LANDED at R-FS-1 arc B4 /
+    U-RT-114 (runtime spec §14.5.3): ``StepExecutionContext.agent_role`` is a real
+    threaded dimension, the runtime consumer
+    ``prompt_selection.resolve_per_role_system_prompts`` builds the per-role
+    injection map the dispatcher indexes on the branch role, and routing's own
+    ``per_role_bindings`` is indexed at the same arc. The DEFAULT role alone still
+    falls through to the stage-0 ``active_prompt_version`` — by design (the
+    linear-path-untouched invariant), not as a deferral.
+    ``per_workload_overrides`` keys on the REAL run workload."""
 
     per_workload_overrides: Mapping[WorkloadClass, PromptBinding] = Field(
         default_factory=lambda: dict[WorkloadClass, PromptBinding]()
