@@ -37,7 +37,7 @@ State pinned at **2026-07-27**, `main` HEAD `1abfaae3` (`ops: roadmap status ref
 *Historical note (superseded).* The original authoring pinned `main` at `897a585`
 (`ops: roadmap status refresh post-overlay-fix`) with 304 nodes / 31 seams. **`897a585` is no
 longer an ancestor of `main`** — repository history was re-created 2026-07-25 (`main`'s root
-commit is `ebab176d`). Do not attempt `git` range queries against it.
+commit is `d45ce125`). Do not attempt `git` range queries against it.
 
 ## 1. Claude Code Startup
 

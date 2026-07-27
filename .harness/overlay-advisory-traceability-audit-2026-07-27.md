@@ -17,7 +17,7 @@
   · 15/55 substitutions with a direct `H_T-*` carrier file.
 
 The 2026-06-10 audit was run at HEAD `788e69f4`. That commit is **not an ancestor of current
-`main`** — repository history was re-created 2026-07-25 (`main`'s root commit is `ebab176d`,
+`main`** — repository history was re-created 2026-07-25 (`main`'s root commit is `d45ce125`,
 2026-07-25), so the two runs are compared by content, not by git range.
 
 ## Bucket counts (this run vs 2026-06-10)
