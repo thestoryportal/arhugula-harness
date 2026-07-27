@@ -10,15 +10,22 @@ store member (IS) → effective active prompt. It is where the PR #2 store gains
 its consumer (the CP→IS store consultation is the CXA seam registered at
 cascade PR #5; runtime is the consumer endpoint).
 
-**Dimension honesty.** Reconciliation reads the run's REAL ``workload_class``
-(threaded into ``run_bootstrap``) and the MVP-default agent role
-(``_MVP_DEFAULT_AGENT_ROLE`` — the runtime has no per-step role at MVP; routing's
-own ``per_role_bindings`` is likewise role-keyed only at R-300-second-provider).
-So per-workload selection (``per_workload_overrides``) is behavior-driving
-end-to-end, while per-role bindings are carried faithfully but resolved against
-the default role until real per-role dispatch lands. This mirrors the routing
-precedent exactly (`[[r-cxa-seam-wiring-is-producer-discovery]]` — don't build
-the hollow per-role runtime indexer).
+**Dimension honesty (CORRECTED 2026-07-27).** Reconciliation reads the run's REAL
+``workload_class`` (threaded into ``run_bootstrap``) and, for the default-role
+path, ``_MVP_DEFAULT_AGENT_ROLE``. This paragraph previously read "the runtime has
+no per-step role at MVP; routing's own ``per_role_bindings`` is likewise
+role-keyed only at R-300-second-provider ... per-role bindings are carried
+faithfully but resolved against the default role until real per-role dispatch
+lands ... don't build the hollow per-role runtime indexer." That is FALSE at HEAD,
+and `R-300-multi-llm-second-provider` itself RESOLVED 2026-06-03. Per-role
+dispatch LANDED at R-FS-1 arc B4 / U-RT-114 (runtime spec §14.5.3): this module's
+own :func:`resolve_per_role_system_prompts` builds the per-role injection map the
+dispatcher indexes on ``step_context.agent_role``, and routing's
+``per_role_bindings`` is indexed at the same arc (the per-role MODEL authority is
+``retry_breaker_fallback._effective_chain``'s per-role branch). Per-workload
+selection (``per_workload_overrides``) remains behavior-driving end-to-end; the
+DEFAULT role alone still falls through to the stage-0 ``active_prompt_version``,
+by design (the linear-path-untouched invariant), not as a deferral.
 
 **Hash/injection coherence (the load-bearing correctness property).** The
 selected version is reconciled ONTO ``active_prompt_version`` (a ``model_copy``
@@ -65,9 +72,13 @@ __all__ = [
     "resolve_per_role_system_prompts",
 ]
 
-# Mirrors ``llm_dispatch._MVP_DEFAULT_AGENT_ROLE`` — the runtime has no per-step
-# agent role at MVP, so per-role prompt selection resolves against this default
-# until real per-role dispatch (R-300-second-provider). Per-workload selection
+# Mirrors ``llm_dispatch._MVP_DEFAULT_AGENT_ROLE`` — the DEFAULT-role key. Real
+# per-role dispatch LANDED (R-FS-1 arc B4 / U-RT-114); this constant is now the
+# fall-through key that `resolve_per_role_system_prompts` EXCLUDES so the
+# unbound/linear path stays byte-identical, NOT a stand-in for a missing role
+# dimension. (Corrected 2026-07-27; previously read "the runtime has no per-step
+# agent role at MVP ... until real per-role dispatch (R-300-second-provider)" —
+# false at HEAD, and that arc itself RESOLVED 2026-06-03.) Per-workload selection
 # keys on the genuine run workload and is behavior-driving today.
 _MVP_DEFAULT_AGENT_ROLE = AgentRole("default")
 

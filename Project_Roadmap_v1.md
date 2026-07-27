@@ -2338,7 +2338,7 @@ R-CXA-1-as-is-seam:
 R-CXA-2-cp-is-seam:
   title: CXA-2 (CP->IS) seam completion — runtime caller-site invocations + remaining §12.3 edges
   surface: I
-  status: RESOLVED   # batch-55: CP->IS producer surface closed as counted bounded residual
+  status: RESOLVED   # batch-57: CP->IS producer surface closed; batch-55 bounded residual DISCHARGED (WAL + reconciler recovery loops live)
   depends_on: []
   blocks: [R-700-phase-8-substitution-accounting]
   posture: phase-7
@@ -2347,7 +2347,7 @@ R-CXA-2-cp-is-seam:
   advisor_required: yes
   council_required: no
   verification: { shape: e2e, must_pass: ["6 §16.5 composer methods (U-CP-74..79) invoked at their firing sites + e2e", "remaining ~16 of 17 §12.3 edges materialized"] }
-  close_shape: { type: retirement-event, artifact: ".harness/phase-7d-retirement-events-batch-55.md", cascade: [dashboard; register §B-14] }
+  close_shape: { type: retirement-event, artifact: ".harness/phase-7d-retirement-events-batch-57.md", cascade: [dashboard; register §B-14] }
   next_pointer: null
   notes: >
     STILL-BOUNDED per R-700 — cp_is_wiring PARTIAL-LAND; U-RT-35 unit landed (batch-46) but full contract
@@ -2397,10 +2397,21 @@ R-CXA-2-cp-is-seam:
     primitives onto `HarnessContext` and focused tests prove direct CP→IS producer emissions through the bound
     runtime context (`cp.hitl-tool-call-rewriting`, `cp.pause-captured`, `cp.resume-attempted`). **2026-06-09
     PR #454 closed the provider-turn HITL producer:** Anthropic non-memory `tool_use` continuation now runs through
-    `ctx.hitl_tool_loop` and returns `tool_result` continuation messages. **2026-06-09 batch-55 closes the live-ledger
-    residual as bounded residual:** R-CXA-2 is RESOLVED-AS-BOUNDED-RESIDUAL. The durable/journaled recovery loop is
-    still not claimed as substantive production evidence; it remains an explicit re-open trigger for a future
-    event-sourced replay, reconciler-loop, WAL-segment, or engine-native-pause recovery implementation.
+    `ctx.hitl_tool_loop` and returns `tool_result` continuation messages. **2026-06-09 batch-55 closed the live-ledger
+    residual as a COUNTED bounded residual:** every CP->IS producer fired in production EXCEPT the engine-layer
+    recovery-loop primitive, dormant until a real durable/journaled recovery engine existed, with an explicit
+    re-open trigger for a future event-sourced replay, reconciler-loop, WAL-segment, or engine-native-pause
+    recovery implementation.
+    **The re-open trigger FIRED and is SATISFIED; batch-57 DISCHARGES the residual.** R-FS-1 E-impl-2 landed the
+    hand-rolled WAL segment-log substrate (U-RT-121) + WAL_SEGMENT engine materialization (U-CP-94) + the
+    engine-layer recovery-loop firing branch (U-CP-95) + durable factory bind and by-execution go-live e2e
+    (U-RT-122), so `RuntimeEngineRecoveryLoop` fires `cp.pause-captured` / `cp.resume-attempted` against a
+    crash-survivable store from a real WAL_SEGMENT driver. R-FS-1 E-impl-3c extends the SAME primitive to the
+    RECONCILER_LOOP driver (U-CP-97 firing branch + U-RT-123 CAS-lease reconciler substrate + U-RT-124
+    engine-class-aware factory bind), so the primitive now fires from BOTH durable engine classes named in the
+    trigger. `H_T-CXA-2` moved BOUNDED_RESIDUAL -> SUBSTANTIVE_RETIRED (count-neutral) at
+    `.harness/substitutions.yaml`; evidence at `.harness/phase-7d-retirement-events-batch-57.md` §1.1. The
+    residual is built, not bounded.
 
 R-CXA-3-cp-as-seam:
   title: CXA-3 (CP->AS) seam — runtime composer

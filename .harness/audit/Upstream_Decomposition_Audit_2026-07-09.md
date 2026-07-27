@@ -47,7 +47,7 @@ Every narrowing that exists is acknowledged. Under the FULL-SPEC directive each 
 | # | Voice | Capability (committed → narrowed) | Tracking anchor | Status |
 |---|---|---|---|---|
 | T-1 | C6 | Layered routing **L2 EMBEDDING + L3 LLM_AS_ROUTER** (ADR-F1 three-tier strategy) | Arc R (`r-fs-1-r-routing-intelligence-design-v1.md`; arc-ledger; PR #602/#606) | **BUILT, production-inert until a 2nd provider + routing-activation gate** |
-| T-2 | C6 | **Per-agent-role** runtime model dispatch (ADR-F1 §Consequences a) | beyond-mvp ledger row **B4**; frozen order …R→B4→CA… | Carried structurally; **runtime-indexing gated to R-300-second-provider** |
+| T-2 | C6 | **Per-agent-role** runtime model dispatch (ADR-F1 §Consequences a) | beyond-mvp ledger row **B4**; frozen order …R→B4→CA… | *(as audited 2026-07-09)* Carried structurally; **runtime-indexing gated to R-300-second-provider** — **superseded, see the 2026-07-27 correction note below** |
 | T-3 | C7 | **Production tail-based sampling ENFORCEMENT** (ADR-D6 §1.3 two-posture) | beyond-mvp ledger **B-TAIL-CONDITIONAL-SAMPLING** | Registered forward arc |
 | T-4 | C7 | **Cross-family fallback `provider_discriminator` production population** (ADR-D6 §1.2 + ADR-F1) | beyond-mvp ledger **B-FALLBACK-CHAIN-FAMILY-COST-COMPOSITION** | **BUILT 2026-06-18** |
 | T-5 | C10 | **Per-MCP-server-trust-tier GATE axis** into the HITL `gate_level()` max() (ADR-D2 §1.5.1 + ADR-D5) | Acknowledged in-spec at AS spec C-AS-10 §10.3 | Spec-acknowledged deferral |
@@ -55,6 +55,27 @@ Every narrowing that exists is acknowledged. Under the FULL-SPEC directive each 
 | T-7 | C11 | **HITL timeout-degradation dispatch-on-mode per persona tier** (ADR-D5 §1.6) | fork **F-B3-2**; runtime spec v1.50 change-note | Registered ("fail-open → no tier") |
 | T-8 | C11 | **Durable-async EDIT/REJECT resume-response integration** (ADR-D5 §1.1 palette at durable-async cells) | **FM-2 / B-EDIT-CARRIER-DURABLE-ASYNC-RESUME** (runtime spec v1.62) | Registered forward arc |
 | T-9 | C11 | **Per-persona-tier audit-ledger cryptographic shape** (append-only→hash-chained→signed; Ed25519 + rotation + F5 secrets; per-persona redaction toggle) | ADR-D5 / Persona tiers; runtime spec | Registered / persona-tier gated |
+
+#### Correction note — 2026-07-27 (row T-2)
+
+This audit is a **frozen point-in-time record dated 2026-07-09**; the original T-2 status text
+is preserved above rather than rewritten. T-2's status is **false at HEAD** and is corrected here:
+
+- **Per-agent-role runtime model dispatch is BUILT**, not "gated to `R-300-second-provider`", and
+  the gating arc itself (`R-300-multi-llm-second-provider`) **RESOLVED 2026-06-03** (PR #281 + #283).
+- **Routing half:** `llm_dispatch.py:1022` resolves `_role = step_context.agent_role or
+  _MVP_DEFAULT_AGENT_ROLE`; `:1047` indexes `manifest.per_role_bindings`. The authority site is
+  `retry_breaker_fallback.py:743-749`, whose `_effective_chain` per-role branch promotes
+  `role_binding.preferred_model_binding` through the U-RT-114 §14.5.3 chain-augmentation.
+- **Prompt half:** `prompt_selection.py:256` `resolve_per_role_system_prompts` (docstring:
+  "R-FS-1 arc B4 — per-role prompt threading, runtime spec §14.5.3") is bound at
+  `stage_0_preamble.py:97` onto `ctx.per_role_system_prompts` and indexed at dispatch on
+  `step_context.agent_role`.
+- The tracking anchor (beyond-mvp ledger row **B4**) was corrected in the same pass.
+
+The stale claim originated as a carry-text from the PR #509 record and survived into this audit;
+it is the `[[stale-carry-text-disposition]]` defect class, not an error in the audit's method.
+
 
 ### 3c. Operator-ratified DEFER — the new directive overrides a prior hold (surface, don't silently reverse)
 
@@ -72,7 +93,7 @@ Under FULL-SPEC, the 12 acknowledged deferrals are all build targets. The action
 - **U-1 (cache_control breakpoint emission)** — the cleanest net-new build arc: a committed ADR-D3 §1.5 contract, unregistered, real cost lever. Register + build.
 - **U-2 (breaker.cause/cooldown_ms)** — net-new but *operator-discretionary* per the design record (a conscious event-vs-ambient schema choice). Surface for the build/skip call.
 - **R-1 (managed-cloud dispatch)** — was operator-ratified DEFER-INDEFINITELY; the new directive overrides — confirm.
-- **T-1..T-9** — already tracked. Several are **built but gated on a 2nd provider** (Arc R, per-role B4) — an *infra* gate, not a build gap: the code exists; a second provider activates it. The rest (B-TAIL, B3 smart-HITL, F-B3-2, FM-2 EDIT, per-persona crypto) are registered forward arcs to drive under FULL-SPEC.
+- **T-1..T-9** — already tracked. Several are **built but gated on a 2nd provider** (Arc R, per-role B4) — an *infra* gate, not a build gap: the code exists; a second provider activates it. **[superseded for per-role B4 — see the §3b "Correction note — 2026-07-27 (row T-2)" above: per-role B4 is BUILT (routing + prompt halves both runtime-indexed) and `R-300-multi-llm-second-provider` itself RESOLVED 2026-06-03. Arc R (L2 EMBEDDING / L3 LLM_AS_ROUTER) IS still production-inert by default, but the live gate is the `routing_activation` opt-in flag (`llm_dispatch.py:1020`), not a second provider.]** The rest (B-TAIL, B3 smart-HITL, F-B3-2, FM-2 EDIT, per-persona crypto) are registered forward arcs to drive under FULL-SPEC.
 
 **Scope honesty:** this is a *semantic* audit — its verdicts are council-voice judgments, adversarially checked for silent-narrowing and hand-re-grounded for the 2 net-new unregistered findings. The 9 tracked items were confirmed present in the ledgers by acknowledgment-grep but not each independently re-built-verified (they carry their own arc records). "Zero silent gaps" is the load-bearing claim and it is strongly supported.
 

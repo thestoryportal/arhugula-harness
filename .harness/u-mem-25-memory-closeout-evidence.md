@@ -92,18 +92,21 @@ Pass/skip semantics are explicit. Anthropic skips only when `ANTHROPIC_API_KEY`
 is absent from the live execution environment. Claude Code and Codex pass only
 when the local CLI is installed and reports authenticated status; the Codex
 probe strips `OPENAI_API_KEY` and requires ChatGPT subscription auth. Antigravity
-and legacy Gemini skip when their local CLIs are absent, and otherwise remain
-skipped until a non-secret auth-status probe is declared. The generic-command
-gate skips until `U_MEM_24_GENERIC_COMMAND_AUTH_PROBE` names an operator-owned
-zero-secret status command.
+passes when its CLI binary `agy` is installed and the declared `agy models` auth
+probe exits 0 with non-empty stdout, and skips when either condition fails.
+Legacy Gemini skips when its CLI is absent, and otherwise remains skipped until a
+non-secret auth-status probe is declared. The generic-command gate skips until
+`U_MEM_24_GENERIC_COMMAND_AUTH_PROBE` names an operator-owned zero-secret status
+command.
 
-Observed local live-confirmation status on 2026-07-03:
+Observed local live-confirmation status on 2026-07-03; the three
+previously NOT CONFIRMED rows were re-grounded on 2026-07-27:
 
 | Gate | Local status | Evidence |
 | --- | --- | --- |
 | `live-anthropic-native-memory` | PASS | `test_u_mem_24_live_memory.py -m e2e -k anthropic_native_memory` passed against the hosted provider and asserted canonical native-adapter ledger rows. |
 | `live-claude-code-cli-auth` | PASS | `test_u_mem_24_live_cli_routes.py -m e2e -k claude_code` passed in the broader local Claude Code auth boundary. |
 | `live-codex-cli-auth` | PASS | `test_u_mem_24_live_cli_routes.py -m e2e -k codex` passed with `OPENAI_API_KEY` stripped and ChatGPT subscription auth required. |
-| `live-antigravity-cli-auth` | NOT CONFIRMED | Skipped because `antigravity` is not installed on PATH. |
-| `live-gemini-legacy-cli-auth` | NOT CONFIRMED | Skipped because `gemini` is not installed on PATH. |
-| `live-generic-command-cli-auth` | NOT CONFIRMED | Skipped because `U_MEM_24_GENERIC_COMMAND_AUTH_PROBE` is not set. |
+| `live-antigravity-cli-auth` | PASS (2026-07-27) | `test_u_mem_24_live_cli_routes.py -m e2e -k antigravity` passed. The 2026-07-03 NOT CONFIRMED was a wrong-binary-name probe: the Antigravity CLI binary is `agy` per the repo's own `PROVIDER_PRESETS["antigravity"]` preset (`tools/external_cli_provider_config.py`), not `antigravity`. Live evidence: `agy` v1.1.7 at `/Users/robertrhu/.local/bin/agy`; the production `construct_antigravity_cli_adapter` auth probe (`_antigravity_auth_argv` -> `agy models`) exits 0 with a non-empty model list. Negative control: the same constructor against command `antigravity` fails ENOENT/127, reproducing the original false reading. The test now sources the executable name from the preset so the defect cannot recur. |
+| `live-gemini-legacy-cli-auth` | NOT CONFIRMED - gate open by upstream absence (2026-07-27) | The 2026-07-03 "not installed" reason is false at HEAD: `gemini` v0.49.0 is installed at `~/.local/share/mise/installs/node/24/bin/gemini`, with a logged-in OAuth session at `~/.gemini/oauth_creds.json` (refresh token on file; the cached access token is past its recorded `expiry_date`, so it refreshes on next use). The gate stays open for a different and genuine reason: v0.49.0 ships no auth/status subcommand - verified against `gemini --help`, whose only commands are `mcp`, `extensions`, `skills`, `hooks`, `gemma`, and the default query - so no zero-cost CLI-native status probe exists. The preset accordingly ships `auth_check=False` and the declared `auth_args` remains unset. The one operator-ratifiable path is authorizing a single free-tier `gemini -p` probe, an outward model call, which was NOT fired. |
+| `live-generic-command-cli-auth` | NOT CONFIRMED - mechanism VERIFIED (2026-07-27) | Mechanism demonstrated end to end with candidate command `ollama list`: `U_MEM_24_GENERIC_COMMAND_AUTH_PROBE="ollama list" pytest test_u_mem_24_live_cli_routes.py -m e2e -k generic_command` passed and bound `generic-command:custom`. The local ollama server was started only for the demonstration and stopped afterwards, restoring its prior down state. The gate itself remains NOT CONFIRMED because the standing declaration is deliberately operator-owned: no default is baked into `U_MEM_24_GENERIC_COMMAND_AUTH_PROBE`, so a standing value requires operator ratification. |
