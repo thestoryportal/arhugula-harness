@@ -204,6 +204,11 @@ async def test_gemini_legacy_cli_auth_confirms_gemini_legacy_route() -> None:
     preset = _load_provider_preset_helper().PROVIDER_PRESETS["gemini"]
     command: str = preset.command
     auth_args: tuple[str, ...] = preset.auth_args
+    if not auth_args:
+        # A missing declaration is a regression of the standing probe, not an
+        # authentication outcome — fail rather than skip so the gate cannot go
+        # silently green on a gutted preset.
+        pytest.fail("PROVIDER_PRESETS['gemini'] no longer declares auth_args")
     if shutil.which(command) is None:
         pytest.skip(f"legacy Gemini CLI executable {command!r} is not installed on PATH")
 
