@@ -458,12 +458,14 @@ class ProtectedResultStore:
         refresh to "now" + its OWN fsync (B-77, see below) -> atomic
         no-replace commit (`os.link` — raises `FileExistsError` if the
         destination already exists, the write-once guard itself, no
-        TOCTOU-racy pre-check) -> DESTINATION-directory fsync AFTER the
-        commit, before returning. A crash before the commit leaves NO
-        destination entry; a crash after leaves a complete, retrievable one.
+        TOCTOU-racy pre-check) -> DESTINATION-directory fsync -> a SECOND
+        mtime refresh + its OWN fsync (B-77), before returning. A crash
+        before the commit leaves NO destination entry; a crash after
+        leaves a complete, retrievable one whose mtime is no staler than
+        the first (pre-commit) stamp.
 
         B-68 codex round 2 [P1] x2 + round 4 [P1]: the WHOLE temp-file
-        lifetime — creation, write+fsync, the mtime refresh + its own
+        lifetime — creation, write+fsync, both mtime refreshes + their own
         durability, and the commit — runs under `self._publish_lock`, the
         SAME lock `gc_sweep` holds for its whole sweep (including its
         `.tmp-*` crash-orphan reclaim loop). Round 2/3's fix locked only
@@ -476,29 +478,40 @@ class ProtectedResultStore:
         loop can never run while a temp file is still in active use.
 
         B-77 (forward-register, out-of-family Codex round 8 on the B-68
-        arc; NARROWED, not closed, 2026-07-26 — see the row for the
-        residual): the mtime refresh used to run AFTER `os.link` + its
-        directory fsync, as a separate step with its own separate fsync. A
-        crash between the commit becoming durable and that refresh (or its
-        fsync) left a recovered entry with the TEMP FILE's original,
-        pre-write-fsync-latency mtime — stale by however long the DATA
-        write+fsync above took (unbounded under I/O pressure, a large
-        payload, or a slow/network-backed filesystem). Refreshing +
-        fsyncing the mtime on the TEMP file BEFORE `os.link` removes the
-        DATA write+fsync duration from that window — the dominant,
-        payload-scaling term. It does NOT remove the window entirely: the
-        metadata fsync immediately below, plus `os.link`, plus the
-        directory fsync, all still run AFTER the timestamp is stamped, so
-        an unbounded delay in THAT tail can still make `gc_sweep` observe
-        an already-stale mtime the instant the entry becomes visible
-        (out-of-family Codex round 9, reproduced with a slowed metadata
-        fsync + a 20ms TTL). No ordering of a single fsync-then-commit
-        pipeline can fully close this — the stamp is always followed by at
-        least one more durability step. See B-77's forward-register row
-        for why the actual fix (an age authority that cannot predate
-        publication, e.g. a grace period gating a NEWLY-observed entry
-        from reclaim until a subsequent sweep) is deferred rather than
-        built into this reorder.
+        arc; NARROWED TWICE, not closed, 2026-07-26 — see the row for the
+        residual): the mtime refresh originally ran ONLY after `os.link` +
+        its directory fsync. A crash between the commit becoming durable
+        and that refresh (or its fsync) left a recovered entry with the
+        TEMP FILE's original, pre-write-fsync-latency mtime — stale by
+        however long the DATA write+fsync above took (unbounded under I/O
+        pressure, a large payload, or a slow/network-backed filesystem).
+        Round 1 of this fix moved the refresh to run ONLY before `os.link`
+        instead — this removed the DATA write+fsync duration from the
+        crash window (the dominant, payload-scaling term), but Codex round
+        9 reproduced a DIFFERENT regression against `main`: a successful,
+        uninterrupted `write_once()` could now return a reference whose
+        entry an IMMEDIATE `gc_sweep()` reclaims, if the metadata
+        fsync/`os.link`/directory-fsync tail below the pre-commit stamp
+        took longer than a short deployment TTL (on `main`, that tail runs
+        BEFORE the (only) stamp, so this never happened there). This
+        method now does BOTH: the pre-commit stamp (kept, for crash
+        recovery) AND the post-commit stamp (restored, matching `main`'s
+        original normal-path behavior exactly). The residual crash window
+        is now `os.link` -> the post-commit refresh completing — the SAME
+        shape B-77 originally named, but starting from the pre-commit
+        stamp's fresher baseline (excluding the data write+fsync term)
+        rather than the temp file's raw write-time mtime. See B-77's
+        forward-register row for why closing that residual (an age
+        authority that cannot predate publication by construction, e.g. a
+        grace period gating a NEWLY-observed entry from reclaim until a
+        subsequent sweep) is deferred rather than built into this method.
+        Restoring the post-commit block also reintroduces a pre-existing,
+        out-of-scope inconsistency the reorder had incidentally fixed: if
+        this SECOND refresh's own fsync fails, `write_once` reports
+        `UnresolvableResultRef` even though `entry_path` is already
+        durably linked and readable. Not fixed here — matches `main`'s
+        original semantics; B-77's row notes this so it isn't
+        rediscovered as novel.
         """
         self._root.mkdir(parents=True, exist_ok=True)
         with self._publish_lock, self._cross_process_lock():
@@ -512,11 +525,10 @@ class ProtectedResultStore:
                 # `handle.write()` above) predates this point by however
                 # long the fsync just took; `gc_sweep`'s age authority must
                 # not under-report the true publish moment (B-68 [P1]
-                # round 1). Done on the TEMP file, BEFORE `os.link`, so the
-                # (dominant, payload-scaling) data write+fsync duration is
-                # excluded from the crash-staleness window — a REMAINING,
-                # narrower window is documented on the method docstring
-                # (B-77, not fully closed by this reorder).
+                # round 1). Done on the TEMP file, BEFORE `os.link`, so a
+                # crash before the SECOND refresh below still recovers a
+                # reasonably fresh mtime (B-77) — this does not by itself
+                # close B-77 (see the method docstring).
                 os.utime(tmp_name, None)
                 # Durably persist that refresh BEFORE the commit — a crash
                 # between `os.utime` and an fsync of its own could lose the
@@ -532,6 +544,23 @@ class ProtectedResultStore:
                     os.close(tmp_fd)
                 os.link(tmp_name, entry_path)
                 self._fsync_dir(self._root)
+                # Refresh mtime to "now" AGAIN, on the now-committed entry
+                # — the pre-commit stamp above predates THIS point by
+                # however long the metadata fsync + `os.link` + directory
+                # fsync just took; on the uninterrupted (no-crash) path,
+                # this keeps `gc_sweep`'s age authority from under-
+                # reporting the true publish moment by that tail (Codex
+                # round 9 [P1] — restores `main`'s original post-commit
+                # refresh, kept alongside the pre-commit one rather than
+                # instead of it).
+                os.utime(entry_path, None)
+                # Durably persist this refresh too, for the same reason as
+                # the pre-commit one above.
+                entry_fd = os.open(entry_path, os.O_RDONLY)
+                try:
+                    os.fsync(entry_fd)
+                finally:
+                    os.close(entry_fd)
             finally:
                 os.unlink(tmp_name)
 
@@ -607,14 +636,15 @@ class ProtectedResultStore:
         under load or a large payload. A short deployment-configured TTL
         could then see a just-published, still-live entry as already
         expired the instant it becomes visible on disk, regardless of any
-        concurrent sweep. `_publish_atomic` refreshes the temp file's mtime
-        to "now" BEFORE its durable commit (B-77 — moved pre-commit so the
-        dominant, payload-scaling data write+fsync duration is excluded
-        from the window; a narrower residual remains, see that method's
-        own docstring) — the same trusted, always-available age signal
-        already used below for undecryptable entries, now applied
-        unconditionally rather than only as a decrypt-failure fallback.
-        This sweep and that refresh mutually exclude via
+        concurrent sweep. `_publish_atomic` refreshes the mtime to "now"
+        TWICE — once on the temp file BEFORE its durable commit (for crash
+        recovery) and once more on the entry AFTER (matching `main`'s
+        original normal-path behavior; B-77, see that method's own
+        docstring for the residual crash window this does not close) —
+        the same trusted, always-available age signal already used below
+        for undecryptable entries, now applied unconditionally rather than
+        only as a decrypt-failure fallback. This sweep and those refreshes
+        mutually exclude via
         `self._publish_lock` (codex round 2 [P1] x2 — round 1's plain
         `os.utime` refresh still left a window between `os.link` (visible)
         and the refresh itself for a genuinely CONCURRENT sweep to observe

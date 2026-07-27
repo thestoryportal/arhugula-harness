@@ -1755,33 +1755,46 @@ items:
   title: Protected result store's mtime refresh is not durable atomically with the publish
     commit, leaving a crash window where a recovered entry looks pre-aged
   status: registered_finding
-  summary: 'NARROWED, not closed, 2026-07-26 (PR #1123). `_publish_atomic` now refreshes +
-    fsyncs the temp file''s mtime BEFORE `os.link`, not after -- removing the DATA write+fsync
-    duration (the dominant, payload-scaling term) from the crash-staleness window. This PR went
-    through two wrong claims before landing here, both caught by out-of-family Codex: round 1
-    first tried to classify B-77 as dormant via a "sub-millisecond os.link-to-os.utime window"
-    argument (wrong -- the real pre-fix window was the FULL pre-link write+fsync duration,
-    unbounded, not a fast gap); round 2 then claimed the reorder "closes the window
-    structurally, not narrowing it" (also wrong -- Codex round 9 reproduced an immediate
-    false-expiry by slowing the metadata fsync that now runs AFTER the stamp but BEFORE
-    `os.link`+the directory fsync, with `ttl_seconds=0.02`). No ordering of a single
-    fsync-then-commit pipeline can fully close this: the stamp is always followed by at least
-    one more durability step (the metadata fsync itself, `os.link`, the directory fsync), and an
-    unbounded delay in that tail reproduces the same class of bug in a narrower window.
-    Mutation-probe-verified regression test added for the closed (data-fsync) portion of the
-    window; the residual (metadata-fsync+link+dirfsync tail) portion is registered, not tested,
-    since no fix for it has landed.'
+  summary: 'NARROWED TWICE, not closed, 2026-07-26 (PR #1123). This PR went through THREE wrong
+    claims before landing here, all caught by out-of-family Codex: round 1 tried to classify
+    B-77 as dormant via a "sub-millisecond os.link-to-os.utime window" argument (wrong -- the
+    real pre-fix window was the FULL pre-link write+fsync duration, unbounded). Round 2 moved
+    the SOLE mtime refresh from post-commit to pre-commit and claimed this "closes the window
+    structurally" (wrong -- Codex round 9 [P1] reproduced a DIFFERENT, normal-path regression
+    against `main`: with the stamp now BEFORE the metadata-fsync+`os.link`+directory-fsync tail
+    instead of after, a successful uninterrupted write could return a reference an IMMEDIATE
+    sweep reclaims, `ttl_seconds=0.02` + a 100ms-delayed directory fsync -- something that could
+    never happen on `main`, where the stamp already ran after that tail). Round 3 (current):
+    `_publish_atomic` now stamps TWICE -- once pre-commit (on the temp file, for crash recovery)
+    AND once post-commit (on the entry, restoring `main`''s exact original normal-path
+    behavior) -- rather than moving the single stamp. This is a strict improvement over `main`
+    on both axes (normal path unchanged from `main`; crash-after-link path now recovers the
+    pre-commit stamp instead of `main`''s raw write-time value) with no reopened ground. The
+    residual crash window is now `os.link` -> the post-commit refresh completing -- the SAME
+    shape B-77 originally named, starting from the fresher pre-commit baseline rather than
+    write-time. Restoring the post-commit block also reintroduces a pre-existing, OUT-OF-SCOPE
+    inconsistency the round-2 reorder had incidentally fixed: if the post-commit refresh''s own
+    fsync fails, `write_once` reports `UnresolvableResultRef` even though `entry_path` is
+    already durably linked and readable -- this matches `main`''s original semantics and is
+    intentionally NOT fixed here (recording it so it is not later rediscovered as novel).
+    Mutation-probe-verified regression tests added for BOTH the crash-recovery path (pre-commit
+    stamp) and the normal-path regression Codex round 9 found (post-commit stamp); the residual
+    (post-link-to-post-commit-refresh tail) is registered, not tested, since no fix for it has
+    landed. merge-gate 3-lens review approved the round-2 diff; only the concurrency lens was
+    re-run for round 3 (the durability-step change is inside the same lock its reasoning already
+    covered) per advisor()-directed scope.'
   close_out: 'advisor()-directed: do NOT add a TTL floor -- that is B-74''s own already-declined
     close_out option ("reject TTLs below a guaranteed timestamp resolution... a genuine design
     decision"), and the field is a spec''d deployment-configurable surface (Runtime v1.103
     SS14.8.11 AC 7) Phase-7 impl discretion should not narrow. The actual fix is an age
-    authority that cannot predate publication by construction, not a reordering of a
-    single-stamp pipeline: `gc_sweep` should not reclaim an entry it has not observed in a PRIOR
+    authority that cannot predate publication by construction, not a further reordering of a
+    two-stamp pipeline: `gc_sweep` should not reclaim an entry it has not observed in a PRIOR
     sweep (a grace period) -- bounded to one sweep interval, immune to arbitrary I/O latency in
     the publish path, implementable entirely inside `gc_sweep`/`_publish_atomic` without
-    touching the config contract. Witness with a test mirroring B-77''s existing regression test
-    but slowing the METADATA fsync (not the data fsync) under a short TTL, asserting the sweep
-    still does not reclaim a just-published entry.'
+    touching the config contract. Witness with a test that simulates a crash strictly BETWEEN
+    `os.link` and the post-commit refresh completing (e.g. a monkeypatched post-commit
+    `os.utime` that raises once) and asserts a subsequent bootstrap-style sweep does not reclaim
+    the crash-recovered entry immediately.'
   council: no -- the grace-period fix shape is a known pattern (first-observation gating), not
     an open design question; narrow implementation-discretion follow-on once picked up
   heading: '### B-77 · Protected result store''s mtime refresh is not durable atomically with
