@@ -534,6 +534,41 @@ def test_peer_resume_rejects_hitl_gate_config_removed_placements_added() -> None
     assert "pre-dispatch-gate-owning-hitl-gate-config-changed" in (resumed.fail_class or "")
 
 
+def test_peer_resume_rejects_hitl_gate_config_per_step_add_fold_removed() -> None:
+    """out-of-family Codex [P1] (merge-gate test-witness lens) — the per-step
+    `StepOverride.hitl_placement` ADD-fold contribution
+    (`fold_step_hitl_placements`) must itself be exercised end-to-end, not just
+    proven at the `_hash_hitl_gate_config` pure-function level. The
+    workflow-level `hitl_placements` tuple is EMPTY here; the ONLY source of
+    the applicable placement is the per-step ADD-fold override — a mutation
+    that dropped `binding.hitl_placement` from the fold (using
+    `manifest_entry.hitl_placements` alone) would compute an empty applicable
+    tuple at BOTH pause and resume time here and go undetected."""
+    manifest = _manifest(
+        hitl_placements=(),
+        per_step_overrides={
+            StepID("branch-1-inf"): StepOverride(
+                step_id=StepID("branch-1-inf"),
+                hitl_placement=_BASE_PLACEMENT,
+            )
+        },
+    )
+    snap = _pause(manifest)
+
+    altered_manifest = _manifest(hitl_placements=(), per_step_overrides={})
+    resumed = execute_workflow(
+        altered_manifest,
+        _peer_steps(),
+        run_id="run-1",
+        ctx=_ctx(),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=cast(StepDispatcherRegistry, _PreDispatchGateOnceDispatcher()),
+        pause_snapshot_input=snap,
+    )
+    assert resumed.status is RunStatus.FAILED
+    assert "pre-dispatch-gate-owning-hitl-gate-config-changed" in (resumed.fail_class or "")
+
+
 # --- 3. `_execute_orchestrator_workers` twin-guard witness --------------------------
 
 
@@ -629,4 +664,67 @@ def test_ow_resume_accepts_unchanged_hitl_gate_config() -> None:
     assert resumed.status is RunStatus.SUCCESS, (
         f"expected an UNCHANGED gate-config resume to succeed; got "
         f"status={resumed.status!r} fail_class={resumed.fail_class!r}"
+    )
+
+
+def test_ow_resume_skips_check_for_legacy_row_with_absent_hash() -> None:
+    """out-of-family Codex [P1] (merge-gate test-witness lens) — the
+    `_execute_orchestrator_workers` legacy-skip guard
+    (`workflow_driver.py`'s OW twin of `_execute_parallelization`'s own guard)
+    is a SEPARATE, duplicated `if pg.hitl_gate_config_hash is not None:` check
+    at a different call site — it has no dedicated witness anywhere else in
+    this file. Mirrors `test_peer_resume_skips_check_for_legacy_row_with_absent_
+    hash`'s shape exactly, but against `fan_out_resume` (the OW/HIERARCHICAL_
+    DELEGATION carrier), not `peer_fan_out_resume`."""
+    manifest = _ow_manifest(hitl_placements=(_BASE_PLACEMENT,))
+    dispatcher = _PreDispatchGateOnceDispatcher()
+    paused = execute_workflow(
+        manifest,
+        _ow_steps(),
+        run_id="run-ow-3",
+        ctx=_ctx(),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=cast(StepDispatcherRegistry, dispatcher),
+    )
+    assert paused.status is RunStatus.PAUSED
+    snap = paused.pause_snapshot
+    assert snap is not None
+    assert snap.fan_out_resume is not None
+    assert len(snap.fan_out_resume.pre_dispatch_gate_owning_branches) == 1
+
+    legacy_row = snap.fan_out_resume.pre_dispatch_gate_owning_branches[0]
+    assert legacy_row.hitl_gate_config_hash is not None
+    legacy_fan_out_resume = snap.fan_out_resume.model_copy(
+        update={
+            "pre_dispatch_gate_owning_branches": (
+                legacy_row.model_copy(update={"hitl_gate_config_hash": None}),
+            )
+        }
+    )
+    legacy_snapshot_hash = _compute_snapshot_hash(
+        workflow_id=snap.workflow_id,
+        run_id=snap.run_id,
+        step_index=snap.step_index,
+        state_summary=snap.state_summary,
+        fan_out_resume=legacy_fan_out_resume,
+    )
+    legacy_snap = snap.model_copy(
+        update={
+            "fan_out_resume": legacy_fan_out_resume,
+            "snapshot_hash": legacy_snapshot_hash,
+        }
+    )
+
+    resumed = execute_workflow(
+        manifest,
+        _ow_steps(),
+        run_id="run-ow-3",
+        ctx=_ctx(),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=cast(StepDispatcherRegistry, dispatcher),
+        pause_snapshot_input=legacy_snap,
+    )
+    assert resumed.status is RunStatus.SUCCESS, (
+        f"a legacy (field-absent) OW row must not be rejected on the gate-config "
+        f"check alone; got status={resumed.status!r} fail_class={resumed.fail_class!r}"
     )
