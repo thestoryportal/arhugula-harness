@@ -125,13 +125,29 @@ def _lock_for_root(root: Path) -> threading.Lock:
     # SAME logical root. `mkdir` here — unconditional, before the stat —
     # closes that window by guaranteeing every access keys on identity;
     # `exist_ok=True` tolerates concurrent create-create races safely.
+    #
+    # B-76 (codex round 8 on the B-68 arc): `stat()` is no longer wrapped
+    # in a fallback. An earlier draft caught `OSError` here and fell back
+    # to the resolved-path STRING for the not-yet-created-directory case
+    # -- but the unconditional `mkdir` immediately above already makes
+    # that case unreachable, so the only failure still reaching this catch
+    # was a genuinely TRANSIENT stat() error (e.g. an intermittent I/O
+    # fault). If one concurrent caller's `stat()` transiently failed while
+    # another's near-simultaneous call succeeded, the two would key
+    # DIFFERENT locks (one string-keyed, one inode-keyed) for the SAME
+    # logical root -- silently reopening the exact aliasing race this
+    # identity-based key exists to close. A sustained failure already
+    # surfaces loudly one line up at `mkdir`, so a transient one deserves
+    # the same treatment: propagate, don't silently switch key
+    # namespaces. Every caller of `_publish_lock`/`_lock_for_root`
+    # already tolerates a raised `OSError` here -- `write_once` folds it
+    # to `UnresolvableResultRef`, the bootstrap and shutdown-step-5b
+    # `gc_sweep()` callers each wrap it in `except Exception`, and
+    # `_maybe_opportunistic_gc_sweep` does too.
     resolved = root.resolve()
     resolved.mkdir(parents=True, exist_ok=True)
-    try:
-        st = resolved.stat()
-        key = f"{st.st_dev}:{st.st_ino}"
-    except OSError:
-        key = str(resolved)
+    st = resolved.stat()
+    key = f"{st.st_dev}:{st.st_ino}"
     with _root_locks_guard:
         lock = _root_locks.get(key)
         if lock is None:

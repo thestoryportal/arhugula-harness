@@ -6,6 +6,7 @@ module never monkeypatches the codec.
 from __future__ import annotations
 
 import errno
+import inspect
 import os
 import subprocess
 import sys
@@ -677,6 +678,65 @@ def test_publish_lock_shared_across_case_insensitive_path_spellings(
         ttl_seconds=1.0,
     )
     assert store_direct._publish_lock is store_cased._publish_lock  # type: ignore[attr-defined]
+
+
+def test_transient_stat_failure_at_lock_key_resolution_propagates_not_falls_back(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """B-76 (codex round 8 on the B-68 arc): `_lock_for_root` no longer
+    catches `OSError` from `resolved.stat()` and silently falls back to a
+    resolved-path-STRING key. The unconditional `mkdir` immediately above
+    that call already makes the not-yet-created-directory case
+    unreachable, so the only failure the old fallback still caught was a
+    genuinely TRANSIENT I/O error — and silently switching key namespaces
+    there would let two near-simultaneous callers key DIFFERENT locks
+    (one string-keyed, one inode-keyed) for the SAME logical root,
+    reopening the exact aliasing race this identity-based key exists to
+    close.
+
+    Mutation probe: restoring the `except OSError: key = str(resolved)`
+    fallback makes the first access below return a (wrongly divergent)
+    lock instead of raising, and this test's `pytest.raises` fails."""
+    store_a = _store(tmp_path)
+    lock_a = store_a._publish_lock  # type: ignore[attr-defined]  # establishes the real, inode-keyed lock
+
+    store_b = ProtectedResultStore(
+        tmp_path / "store",
+        codec=store_a._codec,  # type: ignore[attr-defined]
+        ttl_seconds=1.0,
+    )
+    real_stat = Path.stat
+    resolved_root = (tmp_path / "store").resolve()
+    calls = {"n": 0}
+
+    def _flaky_stat(self: Path, *args: object, **kwargs: object) -> os.stat_result:
+        # Only intercepts `_lock_for_root`'s OWN direct `resolved.stat()`
+        # call (checked by immediate-caller frame) — `Path.resolve()` and
+        # `Path.mkdir()`'s `exist_ok` branch both call `.stat()`
+        # internally too (pathlib-version-dependent, and each already
+        # swallows its own `OSError`), so a blind global intercept would
+        # get absorbed there instead of ever reaching the line under test.
+        frame = inspect.currentframe()
+        caller = frame.f_back if frame is not None else None
+        if (
+            self == resolved_root
+            and caller is not None
+            and caller.f_code.co_name == "_lock_for_root"
+        ):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise OSError(errno.EIO, "simulated transient I/O failure")
+        return real_stat(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", _flaky_stat)
+
+    with pytest.raises(OSError):
+        _ = store_b._publish_lock  # type: ignore[attr-defined]  # transient failure propagates, no fallback lock
+
+    # Retry after the transient failure clears: must resolve to the SAME
+    # lock object already registered for this root's true identity —
+    # never a second, divergently-keyed one.
+    assert store_b._publish_lock is lock_a  # type: ignore[attr-defined]
 
 
 def test_gc_sweep_blocks_while_publish_lock_held(tmp_path: Path) -> None:
