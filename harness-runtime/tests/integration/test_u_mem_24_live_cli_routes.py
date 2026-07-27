@@ -222,21 +222,27 @@ async def test_gemini_legacy_cli_auth_confirms_gemini_legacy_route() -> None:
         auth_check=True,
         timeout_seconds=60.0,
     )
+    # The exception text embeds the probe's stdout/stderr; inspect it only
+    # internally and keep it out of test logs per the module's
+    # no-secret-output guarantee. Argv rot (the CLI rejecting the declared
+    # flags themselves) is a probe regression and must FAIL; any other
+    # refusal is an environment condition (unauthenticated session, tier
+    # refusal, upstream auth drift) and keeps the sibling gates'
+    # skip-when-not-authenticated semantic. Exit codes cannot distinguish
+    # the two (both exit 1), so this marker check is the bounded
+    # classification available at this boundary. The fail/skip is raised
+    # OUTSIDE the except block so the chained original exception (and the
+    # probe output it embeds) never reaches the test log.
+    probe_argv_rot = False
+    adapter = None
     try:
         adapter = await construct_gemini_cli_adapter(config)
     except ExternalCLINotAuthenticatedError as exc:
-        # The exception text embeds the probe's stdout/stderr; inspect it only
-        # internally and keep it out of test logs per the module's
-        # no-secret-output guarantee. Argv rot (the CLI rejecting the declared
-        # flags themselves) is a probe regression and must FAIL; any other
-        # refusal is an environment condition (unauthenticated session, tier
-        # refusal, upstream auth drift) and keeps the sibling gates'
-        # skip-when-not-authenticated semantic. Exit codes cannot distinguish
-        # the two (both exit 1), so this marker check is the bounded
-        # classification available at this boundary.
         detail = str(exc).lower()
         argv_rot_markers = ("unknown option", "unknown flag", "unrecognized", "usage:")
-        if any(marker in detail for marker in argv_rot_markers):
+        probe_argv_rot = any(marker in detail for marker in argv_rot_markers)
+    if adapter is None:
+        if probe_argv_rot:
             pytest.fail(
                 "legacy Gemini CLI rejected the declared probe argv itself "
                 "(probe output redacted; run the declared probe manually to inspect)"
@@ -281,12 +287,17 @@ async def test_generic_command_cli_auth_confirms_operator_declared_route() -> No
         auth_check=True,
         timeout_seconds=20.0,
     )
+    # The exception text embeds the probe's stdout/stderr; keep it out of
+    # test logs per the module's no-secret-output guarantee. The fail is
+    # raised OUTSIDE the except block so the chained original exception (and
+    # the probe output it embeds) never reaches the test log; re-run the
+    # declared probe manually to inspect the failure.
+    adapter = None
     try:
         adapter = await construct_generic_command_cli_adapter(config)
     except ExternalCLINotAuthenticatedError:
-        # The exception text embeds the probe's stdout/stderr; keep it out of
-        # test logs per the module's no-secret-output guarantee. Re-run the
-        # declared probe manually to inspect the failure.
+        pass
+    if adapter is None:
         pytest.fail(
             "generic command auth probe failed "
             "(probe output redacted; run the declared probe manually to inspect)"
