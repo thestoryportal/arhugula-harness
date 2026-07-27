@@ -1263,8 +1263,8 @@ class RuntimeLLMDispatcher:
         # mechanism + all 3 invariants preserved; indexing the per-role model at
         # the inner too would create TWO authorities (wrapper candidate vs inner
         # override) and silently defeat fallback for role-routed branches (the
-        # C-RT-16 composition gap). MODEL BINDING ONLY — the per-role PROMPT is
-        # resolved once at stage 0 with the default role (deferred to B4, §14.5.3).
+        # C-RT-16 composition gap). MODEL BINDING ONLY — the per-role PROMPT is a
+        # separate surface, resolved by the B4 dispatch-read immediately below.
         _role = step_context.agent_role or _MVP_DEFAULT_AGENT_ROLE
         _effective_model_binding = binding.model_binding
 

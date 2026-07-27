@@ -197,8 +197,9 @@ async def test_antigravity_cli_auth_confirms_antigravity_route() -> None:
 @pytest.mark.skip(
     reason=(
         "No non-secret legacy Gemini auth-status probe is declared for this "
-        "host yet (B-28 finding #14, test-quality preflight 2026-07-12 — same "
-        "dead-code shape as the Antigravity test above)"
+        "host yet (B-28 finding #14, test-quality preflight 2026-07-12). The "
+        "Antigravity test above no longer shares this shape — it was converted "
+        "into a real live gate once its auth probe was declared."
     )
 )
 def test_gemini_legacy_cli_auth_confirms_gemini_legacy_route() -> None:
