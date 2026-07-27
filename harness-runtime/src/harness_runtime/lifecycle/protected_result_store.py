@@ -460,8 +460,7 @@ class ProtectedResultStore:
         destination already exists, the write-once guard itself, no
         TOCTOU-racy pre-check) -> DESTINATION-directory fsync AFTER the
         commit, before returning. A crash before the commit leaves NO
-        destination entry; a crash after leaves a complete, retrievable one
-        whose age-authority mtime is ALREADY correct and ALREADY durable.
+        destination entry; a crash after leaves a complete, retrievable one.
 
         B-68 codex round 2 [P1] x2 + round 4 [P1]: the WHOLE temp-file
         lifetime — creation, write+fsync, the mtime refresh + its own
@@ -477,21 +476,29 @@ class ProtectedResultStore:
         loop can never run while a temp file is still in active use.
 
         B-77 (forward-register, out-of-family Codex round 8 on the B-68
-        arc; closed 2026-07-26): the mtime refresh used to run AFTER
-        `os.link` + its directory fsync, as a separate step with its own
-        separate fsync. A crash between the commit becoming durable and
-        that refresh (or its fsync) left a recovered entry with the TEMP
-        FILE's original, pre-write-fsync-latency mtime — stale by however
-        long the DATA fsync above took (unbounded under I/O pressure, a
-        large payload, or a slow/network-backed filesystem — not a fixed
-        small window). The NEXT process's bootstrap sweep, reading that
-        entry, could then wrongly reclaim it as already-expired. Refreshing
-        + fsyncing the mtime on the TEMP file BEFORE `os.link` removes the
-        window structurally rather than narrowing it: after a crash, the
-        recovered state is either "no entry" (crash before the commit) or
-        "an entry whose mtime was already correct and already durable the
-        instant it became visible" (crash after) — there is no third,
-        stale-but-live state.
+        arc; NARROWED, not closed, 2026-07-26 — see the row for the
+        residual): the mtime refresh used to run AFTER `os.link` + its
+        directory fsync, as a separate step with its own separate fsync. A
+        crash between the commit becoming durable and that refresh (or its
+        fsync) left a recovered entry with the TEMP FILE's original,
+        pre-write-fsync-latency mtime — stale by however long the DATA
+        write+fsync above took (unbounded under I/O pressure, a large
+        payload, or a slow/network-backed filesystem). Refreshing +
+        fsyncing the mtime on the TEMP file BEFORE `os.link` removes the
+        DATA write+fsync duration from that window — the dominant,
+        payload-scaling term. It does NOT remove the window entirely: the
+        metadata fsync immediately below, plus `os.link`, plus the
+        directory fsync, all still run AFTER the timestamp is stamped, so
+        an unbounded delay in THAT tail can still make `gc_sweep` observe
+        an already-stale mtime the instant the entry becomes visible
+        (out-of-family Codex round 9, reproduced with a slowed metadata
+        fsync + a 20ms TTL). No ordering of a single fsync-then-commit
+        pipeline can fully close this — the stamp is always followed by at
+        least one more durability step. See B-77's forward-register row
+        for why the actual fix (an age authority that cannot predate
+        publication, e.g. a grace period gating a NEWLY-observed entry
+        from reclaim until a subsequent sweep) is deferred rather than
+        built into this reorder.
         """
         self._root.mkdir(parents=True, exist_ok=True)
         with self._publish_lock, self._cross_process_lock():
@@ -506,8 +513,10 @@ class ProtectedResultStore:
                 # long the fsync just took; `gc_sweep`'s age authority must
                 # not under-report the true publish moment (B-68 [P1]
                 # round 1). Done on the TEMP file, BEFORE `os.link`, so the
-                # commit below can never make a stale-mtime entry visible
-                # (B-77).
+                # (dominant, payload-scaling) data write+fsync duration is
+                # excluded from the crash-staleness window — a REMAINING,
+                # narrower window is documented on the method docstring
+                # (B-77, not fully closed by this reorder).
                 os.utime(tmp_name, None)
                 # Durably persist that refresh BEFORE the commit — a crash
                 # between `os.utime` and an fsync of its own could lose the

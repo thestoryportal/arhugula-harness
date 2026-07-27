@@ -61,11 +61,11 @@ snapshot:
   total: 82
   open: 0
   design_substrate_gated: 0
-  registered_finding: 12
+  registered_finding: 13
   operator_gated: 1
   held: 1
-  closed: 68
-  identity_digest: 73964cc9ceb704e8
+  closed: 67
+  identity_digest: cad3320e84b9e6be
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -1689,20 +1689,23 @@ items:
     finding with B-77 -- both concern raw mtime as an untrustworthy age authority (this row:
     filesystem timestamp-granularity rounding; B-77: crash-window non-atomicity); ground as a
     single does-the-age-authority-stay-mtime question before building either in isolation.
-    SCOPE REDUCED 2026-07-26 (PR #1123, B-77''s close): the "likely ONE finding" framing above
-    was directionally right but not literally -- B-77''s independent crash-window-non-atomicity
-    dimension is now closed by construction (the mtime refresh runs before the commit, not
-    after), which removes ONE of this row''s two named dimensions. The residual is now PURE
-    filesystem storage-resolution rounding only: even with a perfectly-ordered, atomically-
-    committed mtime, a coarse-granularity filesystem can still round the STORED value down by
-    up to its own granularity. An earlier same-arc attempt (PR #1123 round 1) tried to classify
-    this residual as dormant via a "no realistic operator would configure a below-floor TTL"
-    argument -- out-of-family Codex [P2] correctly rejected this: `protected_result_store_
-    ttl_seconds` (types.py) enforces only `gt=0.0`, no floor, and the env loader + factory pass
-    an override through unchanged, so a below-floor TTL is a SUPPORTED configuration the system
-    does not guard against, not an unreachable one -- "operators probably wouldn''t" is not the
-    same claim as B-44/B-45''s "no live code path reaches this," and does not establish
-    dormancy. Remains open, not dormant, not built this arc.'
+    NARROWED (not closed) 2026-07-26 (PR #1123): the "likely ONE finding" framing above was
+    directionally right but not literal -- B-77 and B-74 share raw mtime as an untrustworthy age
+    authority, but B-77''s reorder fix only removes the DATA write+fsync duration from its own
+    crash window, not the whole window (see B-77''s row -- a residual metadata-fsync+commit
+    tail remains, reproduced by out-of-family Codex round 9). This row''s own concern (filesystem
+    storage-resolution rounding) is UNTOUCHED by that reorder either way -- it was never about
+    ordering, only about what a coarse filesystem stores once a value is fsync''d, so it stays
+    fully in scope, not reduced. Two same-arc attempts to dispose of this row were both wrong
+    and reverted: PR #1123 round 1 tried "no realistic operator would configure a below-floor
+    TTL" (rejected by Codex -- `protected_result_store_ttl_seconds` enforces only `gt=0.0`, no
+    floor, and the env loader + factory pass an override through unchanged, so this is a
+    SUPPORTED configuration, not an unreachable one); a later round considered adding that same
+    TTL floor as a mechanical fix and advisor() rejected it too -- it is this row''s own
+    close_out option ("reject TTLs below a guaranteed timestamp resolution"), already flagged as
+    a genuine design decision, and the field is a spec''d deployment-configurable surface
+    (Runtime v1.103 SS14.8.11 AC 7) Phase-7 impl discretion should not narrow unilaterally.
+    Remains open, not dormant, not built this arc.'
   close_out: 'Design a TTL-floor validation or a probe-based age-authority selection that
     accounts for the deployment filesystem''s actual timestamp resolution -- e.g. probe the
     store root''s filesystem granularity at construction/first-write time (write a marker file,
@@ -1751,27 +1754,39 @@ items:
 - id: B-77
   title: Protected result store's mtime refresh is not durable atomically with the publish
     commit, leaving a crash window where a recovered entry looks pre-aged
-  status: closed
-  pr: '#1123'
-  summary: 'CLOSED -- `_publish_atomic` now refreshes + fsyncs the temp file''s mtime BEFORE
-    `os.link`, not after, eliminating the crash window structurally rather than narrowing it (a
-    crash before the commit leaves no entry; a crash after leaves one whose mtime was already
-    correct and already durable the instant it became visible). Round 1 of this same arc (PR
-    #1123) first tried to classify B-77 as dormant via a "sub-millisecond os.link-to-os.utime
-    window" argument -- out-of-family Codex [P2] correctly caught this as wrong: the real
-    staleness window is the FULL pre-link write+fsync duration (unbounded under I/O
-    pressure/a large payload/a slow filesystem), not the fast link-to-utime gap, so a
-    near-default TTL could plausibly reach it. advisor()-directed correction: the reorder fix
-    closes the window by construction rather than needing a reachability argument at all.
-    Mutation-probe-verified regression test added (simulates a slowed initial data fsync plus a
-    "crash" immediately after the commit; the crash-recovered entry must already carry a fresh
-    mtime). Existing fsync-ordinal-counting tests updated for the inserted pre-commit metadata
-    fsync.'
-  council: n/a -- closed via a mechanical reordering fix, no design decision needed
+  status: registered_finding
+  summary: 'NARROWED, not closed, 2026-07-26 (PR #1123). `_publish_atomic` now refreshes +
+    fsyncs the temp file''s mtime BEFORE `os.link`, not after -- removing the DATA write+fsync
+    duration (the dominant, payload-scaling term) from the crash-staleness window. This PR went
+    through two wrong claims before landing here, both caught by out-of-family Codex: round 1
+    first tried to classify B-77 as dormant via a "sub-millisecond os.link-to-os.utime window"
+    argument (wrong -- the real pre-fix window was the FULL pre-link write+fsync duration,
+    unbounded, not a fast gap); round 2 then claimed the reorder "closes the window
+    structurally, not narrowing it" (also wrong -- Codex round 9 reproduced an immediate
+    false-expiry by slowing the metadata fsync that now runs AFTER the stamp but BEFORE
+    `os.link`+the directory fsync, with `ttl_seconds=0.02`). No ordering of a single
+    fsync-then-commit pipeline can fully close this: the stamp is always followed by at least
+    one more durability step (the metadata fsync itself, `os.link`, the directory fsync), and an
+    unbounded delay in that tail reproduces the same class of bug in a narrower window.
+    Mutation-probe-verified regression test added for the closed (data-fsync) portion of the
+    window; the residual (metadata-fsync+link+dirfsync tail) portion is registered, not tested,
+    since no fix for it has landed.'
+  close_out: 'advisor()-directed: do NOT add a TTL floor -- that is B-74''s own already-declined
+    close_out option ("reject TTLs below a guaranteed timestamp resolution... a genuine design
+    decision"), and the field is a spec''d deployment-configurable surface (Runtime v1.103
+    SS14.8.11 AC 7) Phase-7 impl discretion should not narrow. The actual fix is an age
+    authority that cannot predate publication by construction, not a reordering of a
+    single-stamp pipeline: `gc_sweep` should not reclaim an entry it has not observed in a PRIOR
+    sweep (a grace period) -- bounded to one sweep interval, immune to arbitrary I/O latency in
+    the publish path, implementable entirely inside `gc_sweep`/`_publish_atomic` without
+    touching the config contract. Witness with a test mirroring B-77''s existing regression test
+    but slowing the METADATA fsync (not the data fsync) under a short TTL, asserting the sweep
+    still does not reclaim a just-published entry.'
+  council: no -- the grace-period fix shape is a known pattern (first-observation gating), not
+    an open design question; narrow implementation-discretion follow-on once picked up
   heading: '### B-77 · Protected result store''s mtime refresh is not durable atomically with
     the publish commit, leaving a crash window where a recovered entry looks pre-aged *(surfaced
-    at the B-68 impl arc, out-of-family Codex round 8 [P2], 2026-07-25; FIXED 2026-07-26 -- PR
-    #1123, CLOSED)*'
+    at the B-68 impl arc, out-of-family Codex round 8 [P2], 2026-07-25)*'
 - id: B-78
   title: A SUB_AGENT_DISPATCH step's own SUB_AGENT_BOUNDARY gate under EVALUATOR_OPTIMIZER or
     DECENTRALIZED_HANDOFF can exhibit the same pre-dispatch re-fire livelock B-72 property 6

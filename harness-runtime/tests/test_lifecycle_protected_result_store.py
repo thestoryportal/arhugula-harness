@@ -611,15 +611,19 @@ def test_crash_immediately_after_commit_leaves_an_already_correct_durable_mtime(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """B-77 (forward-register, out-of-family Codex round 8 on the B-68 arc;
-    closed 2026-07-26). Codex caught a wrong dormancy conclusion first
-    (PR #1123): the crash window this finding concerns isn't a fast
-    `os.link`-to-`os.utime` gap, it's the WHOLE write+fsync duration —
-    unbounded under I/O pressure/a large payload/a slow filesystem, not a
-    fixed small window. `_publish_atomic` now refreshes + fsyncs the
-    temp file's mtime BEFORE `os.link`, so the crash window is eliminated
-    structurally, not narrowed: simulate a slowed initial data fsync (so
-    the temp file's write-time mtime would badly under-report "now" if it
-    were ever used) PLUS a "crash" immediately after the commit (the
+    NARROWED not closed, 2026-07-26 — see the row for the residual).
+    Codex caught a wrong dormancy conclusion first (PR #1123 round 1): the
+    crash window this finding concerns isn't a fast `os.link`-to-`os.utime`
+    gap, it's the WHOLE write+fsync duration — unbounded under I/O
+    pressure/a large payload/a slow filesystem, not a fixed small window.
+    `_publish_atomic` now refreshes + fsyncs the temp file's mtime BEFORE
+    `os.link`, removing THAT (dominant, payload-scaling) duration from the
+    window — it does NOT eliminate the window entirely (a narrower residual
+    remains; Codex round 9 reproduced it with a slowed metadata fsync + a
+    20ms TTL — not covered by this test, which targets the DATA-fsync term
+    this fix does close). This test: simulate a slowed initial data fsync
+    (so the temp file's write-time mtime would badly under-report "now" if
+    it were ever used) PLUS a "crash" immediately after the commit (the
     directory fsync — the very next step — raises), and confirm the
     surviving entry already carries a fresh, correct mtime a fresh
     process's immediate bootstrap sweep must not reclaim.
