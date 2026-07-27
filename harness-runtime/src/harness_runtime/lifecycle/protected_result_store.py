@@ -454,26 +454,44 @@ class ProtectedResultStore:
 
     def _publish_atomic(self, entry_path: Path, data: bytes) -> None:
         """Crash-atomic durable publication (spec v1.103 §14.8.11, codex
-        round-7 + round-10 on the spec PR): temp-bytes fsync -> atomic
+        round-7 + round-10 on the spec PR): temp-bytes fsync -> mtime
+        refresh to "now" + its OWN fsync (B-77, see below) -> atomic
         no-replace commit (`os.link` — raises `FileExistsError` if the
         destination already exists, the write-once guard itself, no
         TOCTOU-racy pre-check) -> DESTINATION-directory fsync AFTER the
         commit, before returning. A crash before the commit leaves NO
-        destination entry; a crash after leaves a complete, retrievable one.
+        destination entry; a crash after leaves a complete, retrievable one
+        whose age-authority mtime is ALREADY correct and ALREADY durable.
 
         B-68 codex round 2 [P1] x2 + round 4 [P1]: the WHOLE temp-file
-        lifetime — creation, write+fsync, the commit, the mtime refresh
-        (`gc_sweep`'s age authority), and that refresh's OWN durability —
-        runs under `self._publish_lock`, the SAME lock `gc_sweep` holds for
-        its whole sweep (including its `.tmp-*` crash-orphan reclaim loop).
-        Round 2/3's fix locked only from `os.link` onward: a concurrent
-        sweep could still classify this method's OWN in-flight `.tmp-*`
-        file as a crash orphan (stale mtime under a short TTL + slow
-        fsync) and unlink it before `os.link` ever ran, losing recovery
-        for an already-completed paid effect when the subsequent `os.link`
-        then raised `FileNotFoundError`. Holding the lock for the entire
-        method closes that: `gc_sweep`'s tmp-cleanup loop can never run
-        while a temp file is still in active use.
+        lifetime — creation, write+fsync, the mtime refresh + its own
+        durability, and the commit — runs under `self._publish_lock`, the
+        SAME lock `gc_sweep` holds for its whole sweep (including its
+        `.tmp-*` crash-orphan reclaim loop). Round 2/3's fix locked only
+        from `os.link` onward: a concurrent sweep could still classify this
+        method's OWN in-flight `.tmp-*` file as a crash orphan (stale mtime
+        under a short TTL + slow fsync) and unlink it before `os.link` ever
+        ran, losing recovery for an already-completed paid effect when the
+        subsequent `os.link` then raised `FileNotFoundError`. Holding the
+        lock for the entire method closes that: `gc_sweep`'s tmp-cleanup
+        loop can never run while a temp file is still in active use.
+
+        B-77 (forward-register, out-of-family Codex round 8 on the B-68
+        arc; closed 2026-07-26): the mtime refresh used to run AFTER
+        `os.link` + its directory fsync, as a separate step with its own
+        separate fsync. A crash between the commit becoming durable and
+        that refresh (or its fsync) left a recovered entry with the TEMP
+        FILE's original, pre-write-fsync-latency mtime — stale by however
+        long the DATA fsync above took (unbounded under I/O pressure, a
+        large payload, or a slow/network-backed filesystem — not a fixed
+        small window). The NEXT process's bootstrap sweep, reading that
+        entry, could then wrongly reclaim it as already-expired. Refreshing
+        + fsyncing the mtime on the TEMP file BEFORE `os.link` removes the
+        window structurally rather than narrowing it: after a crash, the
+        recovered state is either "no entry" (crash before the commit) or
+        "an entry whose mtime was already correct and already durable the
+        instant it became visible" (crash after) — there is no third,
+        stale-but-live state.
         """
         self._root.mkdir(parents=True, exist_ok=True)
         with self._publish_lock, self._cross_process_lock():
@@ -483,25 +501,28 @@ class ProtectedResultStore:
                     handle.write(data)
                     handle.flush()
                     os.fsync(handle.fileno())
+                # Refresh mtime to "now" — the temp file's mtime (set at
+                # `handle.write()` above) predates this point by however
+                # long the fsync just took; `gc_sweep`'s age authority must
+                # not under-report the true publish moment (B-68 [P1]
+                # round 1). Done on the TEMP file, BEFORE `os.link`, so the
+                # commit below can never make a stale-mtime entry visible
+                # (B-77).
+                os.utime(tmp_name, None)
+                # Durably persist that refresh BEFORE the commit — a crash
+                # between `os.utime` and an fsync of its own could lose the
+                # update on some filesystems (round 2 [P1]), reintroducing
+                # a stale-mtime window (now pre-commit rather than
+                # post-commit, but the same hazard). `fsync` on an
+                # O_RDONLY fd is valid and flushes the inode's metadata
+                # (including mtime).
+                tmp_fd = os.open(tmp_name, os.O_RDONLY)
+                try:
+                    os.fsync(tmp_fd)
+                finally:
+                    os.close(tmp_fd)
                 os.link(tmp_name, entry_path)
                 self._fsync_dir(self._root)
-                # Refresh mtime to "now" — the temp file's mtime (set at
-                # `handle.write()` above) predates this commit by however
-                # long the fsync+link just took; `gc_sweep`'s age
-                # authority must not under-report the true publish moment
-                # (B-68 [P1] round 1).
-                os.utime(entry_path, None)
-                # Durably persist that refresh BEFORE releasing the lock —
-                # a crash between `os.utime` and an fsync of its own could
-                # lose the update on some filesystems (round 2 [P1]),
-                # reintroducing the exact race on the NEXT process's
-                # bootstrap sweep. `fsync` on an O_RDONLY fd is valid and
-                # flushes the inode's metadata (including mtime).
-                entry_fd = os.open(entry_path, os.O_RDONLY)
-                try:
-                    os.fsync(entry_fd)
-                finally:
-                    os.close(entry_fd)
             finally:
                 os.unlink(tmp_name)
 

@@ -61,11 +61,11 @@ snapshot:
   total: 82
   open: 0
   design_substrate_gated: 0
-  registered_finding: 13
+  registered_finding: 12
   operator_gated: 1
   held: 1
-  closed: 67
-  identity_digest: cad3320e84b9e6be
+  closed: 68
+  identity_digest: 73964cc9ceb704e8
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -1688,7 +1688,21 @@ items:
     round can safely author. CROSS-REFERENCE (advisor(), B-76 arc, 2026-07-26): likely ONE
     finding with B-77 -- both concern raw mtime as an untrustworthy age authority (this row:
     filesystem timestamp-granularity rounding; B-77: crash-window non-atomicity); ground as a
-    single does-the-age-authority-stay-mtime question before building either in isolation.'
+    single does-the-age-authority-stay-mtime question before building either in isolation.
+    SCOPE REDUCED 2026-07-26 (PR #1123, B-77''s close): the "likely ONE finding" framing above
+    was directionally right but not literally -- B-77''s independent crash-window-non-atomicity
+    dimension is now closed by construction (the mtime refresh runs before the commit, not
+    after), which removes ONE of this row''s two named dimensions. The residual is now PURE
+    filesystem storage-resolution rounding only: even with a perfectly-ordered, atomically-
+    committed mtime, a coarse-granularity filesystem can still round the STORED value down by
+    up to its own granularity. An earlier same-arc attempt (PR #1123 round 1) tried to classify
+    this residual as dormant via a "no realistic operator would configure a below-floor TTL"
+    argument -- out-of-family Codex [P2] correctly rejected this: `protected_result_store_
+    ttl_seconds` (types.py) enforces only `gt=0.0`, no floor, and the env loader + factory pass
+    an override through unchanged, so a below-floor TTL is a SUPPORTED configuration the system
+    does not guard against, not an unreachable one -- "operators probably wouldn''t" is not the
+    same claim as B-44/B-45''s "no live code path reaches this," and does not establish
+    dormancy. Remains open, not dormant, not built this arc.'
   close_out: 'Design a TTL-floor validation or a probe-based age-authority selection that
     accounts for the deployment filesystem''s actual timestamp resolution -- e.g. probe the
     store root''s filesystem granularity at construction/first-write time (write a marker file,
@@ -1737,37 +1751,27 @@ items:
 - id: B-77
   title: Protected result store's mtime refresh is not durable atomically with the publish
     commit, leaving a crash window where a recovered entry looks pre-aged
-  status: registered_finding
-  summary: 'Surfaced at the B-68 impl arc, out-of-family Codex round 8 [P2]. `_publish_atomic`
-    makes the entry durable in two separate steps: the `os.link` commit + its directory fsync
-    (durability step 1), THEN a separate `os.utime` mtime refresh + its own fsync (durability
-    step 2). If the process crashes BETWEEN these two steps (after the entry is durably linked
-    and visible, but before its mtime is refreshed), the entry that survives the crash retains
-    the TEMP FILE''s original, pre-fsync-latency mtime -- the exact stale timestamp the B-68
-    round-1 fix exists to move away from. The NEXT process''s bootstrap sweep, reading this
-    crash-recovered entry, would then see the OLD (potentially already-TTL-exceeded) mtime and
-    could immediately reclaim an entry that in fact just barely finished publishing before the
-    crash. This is a variant of round 1''s original bug, but scoped to the crash-recovery path
-    specifically (not the live-concurrent-thread path round 2-7 closed) -- a narrower
-    reachability precondition (needs a crash at a specific ~2-syscall-wide instant, not just
-    concurrent access) with the same root cause (mtime refresh is not atomic with the commit
-    that makes the entry durable and visible). CROSS-REFERENCE (advisor(), B-76 arc, 2026-07-26):
-    likely ONE finding with B-74 -- see B-74''s row for the shared-root-cause framing.'
-  close_out: 'Make the age-authority timestamp durable ATOMICALLY with the commit rather than as
-    a separate later step -- e.g. write the intended-mtime as part of the temp file''s own
-    content/xattr before `os.link`, so the linked dirent already carries the correct age
-    signal the instant it becomes durable, with no intervening crash window. Alternatively,
-    treat any post-crash entry with a mtime predating the entry''s OWN prior directory-fsync-only
-    durability marker as needing a decrypt-based fallback age check (mirroring the existing
-    undecryptable-entry fallback) rather than trusting a possibly-pre-refresh mtime unconditionally.
-    Witness with a test that simulates a crash between the `os.link` commit and the `os.utime`
-    refresh (e.g. via a monkeypatched `os.utime` that raises once) and asserts a subsequent
-    bootstrap-style sweep does not reclaim the crash-recovered entry immediately.'
-  council: no -- narrow crash-window durability-ordering gap; the fix (atomic age-stamp-with-
-    commit, or a fallback age check) is a known pattern, not an open design question
+  status: closed
+  pr: '#1123'
+  summary: 'CLOSED -- `_publish_atomic` now refreshes + fsyncs the temp file''s mtime BEFORE
+    `os.link`, not after, eliminating the crash window structurally rather than narrowing it (a
+    crash before the commit leaves no entry; a crash after leaves one whose mtime was already
+    correct and already durable the instant it became visible). Round 1 of this same arc (PR
+    #1123) first tried to classify B-77 as dormant via a "sub-millisecond os.link-to-os.utime
+    window" argument -- out-of-family Codex [P2] correctly caught this as wrong: the real
+    staleness window is the FULL pre-link write+fsync duration (unbounded under I/O
+    pressure/a large payload/a slow filesystem), not the fast link-to-utime gap, so a
+    near-default TTL could plausibly reach it. advisor()-directed correction: the reorder fix
+    closes the window by construction rather than needing a reachability argument at all.
+    Mutation-probe-verified regression test added (simulates a slowed initial data fsync plus a
+    "crash" immediately after the commit; the crash-recovered entry must already carry a fresh
+    mtime). Existing fsync-ordinal-counting tests updated for the inserted pre-commit metadata
+    fsync.'
+  council: n/a -- closed via a mechanical reordering fix, no design decision needed
   heading: '### B-77 · Protected result store''s mtime refresh is not durable atomically with
     the publish commit, leaving a crash window where a recovered entry looks pre-aged *(surfaced
-    at the B-68 impl arc, out-of-family Codex round 8 [P2], 2026-07-25)*'
+    at the B-68 impl arc, out-of-family Codex round 8 [P2], 2026-07-25; FIXED 2026-07-26 -- PR
+    #1123, CLOSED)*'
 - id: B-78
   title: A SUB_AGENT_DISPATCH step's own SUB_AGENT_BOUNDARY gate under EVALUATOR_OPTIMIZER or
     DECENTRALIZED_HANDOFF can exhibit the same pre-dispatch re-fire livelock B-72 property 6
