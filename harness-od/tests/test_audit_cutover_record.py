@@ -319,6 +319,49 @@ def test_record_source_scoped_uniqueness() -> None:
     assert len(quarantine_exempted.rows) == 2
 
 
+def test_record_rejects_cross_tenant_relabel_of_already_tagged_row() -> None:
+    """An ALREADY-TAGGED row (`source_tag` neither `"_single"` nor equal to
+    its own `tenant_scope`) is a cross-tenant relabel this arc does not
+    authorize, and must be REJECTED at construction — the `B-56` posture:
+    the mismatch is surfaced typed for operator investigation, never
+    silently repaired and never silently exempted.
+
+    Direct negative-path witness for the guard that names `B-56` verbatim
+    (`audit_cutover_record._validate_rows`). Every OTHER row-level test in
+    this file constructs `source_tag == tenant_scope` (or the `"_single"`
+    migration default), so this branch had no direct witness — its
+    runtime-layer siblings in `record_migration` are witnessed via
+    `match="relabeled wrapper"`, but this record-layer raise was not.
+
+    Surfaces as Pydantic's `ValidationError`, not the underlying
+    `CutoverRecordValidationError`: the raise happens inside a
+    `@model_validator`, which wraps it — the same wrapping every other
+    construction-rejection test in this file relies on (see
+    `test_validator_bypassing_construction_rejected_at_sign_and_verify`).
+
+    Mutation probe: deleting the `source_tag != tenant_scope` guard lets
+    the relabel construct cleanly and this test fails.
+    """
+    with pytest.raises(ValidationError, match="cross-tenant relabel"):
+        AuditCutoverRecord(
+            schema_version=1,
+            authored_at=datetime(2026, 7, 19, tzinfo=UTC),
+            algorithm=SignatureAlgorithm.ED25519,
+            key_id="k",
+            ledger_binding_id="sidecar-1",
+            rows=(
+                AuditCutoverRecordRow(
+                    # already-tagged (not the "_single" migration default)
+                    # AND claiming a DIFFERENT destination tenant.
+                    source_tag="tenant-a",
+                    tenant_scope="tenant-b",
+                    entry_hash=_HASH_A,
+                    verification_disposition=VerificationDisposition.FOUR_TUPLE_REAL,
+                ),
+            ),
+        )
+
+
 def test_sign_cutover_record_rejects_algorithm_disagreement() -> None:
     class _WrongAlgoBackend:
         algorithm = "ecdsa-p256"

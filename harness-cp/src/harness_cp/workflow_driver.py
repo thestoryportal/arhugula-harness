@@ -6762,23 +6762,27 @@ def _maybe_post_join_synthesis(
 # reach. This is NOT a spec contradiction (§25.12 constrains append *order*, not
 # timestamp *values*; the canonical reading — consistent with the linear path —
 # is that the timestamp records the ledger-*append* event, and a fan-out is one
-# barrier-drain persist event). The realization: `drain_branch_buffers` re-stamps
-# every entry to a single drain-moment timestamp at its actual append point, so
-# physical-append-order == timestamp-order for **causally-ordered** drains —
-# every level reached through the single-threaded recursion seam, plus the
-# interleaved DIRECT linear-inline writer, are serialized in causal order and stay
-# non-decreasing. This is NOT "by construction" for **concurrent** appends the
-# drain cannot order: `drain_timestamp` is captured OUTSIDE the IS writer's
-# `_WRITE_LOCK`, so two sibling `SUB_AGENT_DISPATCH` children draining on separate
-# fan-out threads (or a runtime audit / cost write interleaving the lock between
-# this capture and its appends) can still invert → `NonMonotonicTimestampError`.
-# That is a known gap — unreachable today behind the runtime sync/async-bridge
-# deadlock, and equally broken under the prior fan-out-start-timestamp policy (NOT
-# a regression); the clean fix is timestamp-authority INSIDE `_WRITE_LOCK` (an IS
-# write-path change, contract-touching) belonging to the same arc as the deadlock.
+# barrier-drain persist event). The realization (B-48 apply arc; IS spec C-IS-07
+# §7.6, v1.11): `drain_branch_buffers` re-stamps every entry to the
+# `WRITER_OWNED_TIMESTAMP` sentinel rather than any locally-captured `now()`, and
+# `append_ledger_entry` recognizes the sentinel and samples the persisted
+# timestamp ITSELF, inside its `_WRITE_LOCK`, at each entry's actual
+# physical-append moment. Sampling order therefore EQUALS physical-append order by
+# construction — for **causally-ordered** drains (every level reached through the
+# single-threaded recursion seam, plus the interleaved DIRECT linear-inline
+# writer) AND for **concurrent** appends the drain cannot itself order: two
+# sibling `SUB_AGENT_DISPATCH` children draining on separate fan-out threads (or a
+# runtime audit / cost write interleaving the lock) can no longer invert, because
+# capture order is no longer what the monotonicity check compares. This supersedes
+# the prior one-drain-one-timestamp policy — entries of ONE drain MAY now carry
+# distinct, non-decreasing instants, each sampled at its own append. The
+# zero-tolerance writer remains the live safety net for the DIRECT (linear /
+# runtime) append paths, whose caller-supplied semantics are unchanged (the
+# sentinel is opt-in per entry on the drain surface only, never a default); the
+# residual direct-writer capture-order inversion is the `B-57` register row.
 # See `.harness/runtime_defect_sub_agent_inference_child_loop_bridge_deadlock.md`
 # §8 + `drain_branch_buffers` + `test_concurrent_sibling_drains_invert_timestamp`
-# (xfail, strict). The `timestamp=` these helpers
+# (a passing witness; previously strict-xfail). The `timestamp=` these helpers
 # carry is a buffer-time placeholder the drain overrides (it never reaches the
 # ledger; see `drain_branch_buffers`). The R-003
 # active-workflow-context invariant (IS §5.1
