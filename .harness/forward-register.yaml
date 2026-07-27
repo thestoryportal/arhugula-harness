@@ -59,13 +59,13 @@
 
 snapshot:
   total: 82
-  open: 1
+  open: 0
   design_substrate_gated: 0
   registered_finding: 11
   operator_gated: 1
   held: 1
-  closed: 68
-  identity_digest: 2cdccf09a92c424b
+  closed: 69
+  identity_digest: 8a3b00d4b3cd39ac
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -2296,7 +2296,7 @@ items:
   title: 'A resumed branch''s HITLDeliveryCell is constructed from step_id identity alone, so a
     HITL placement/gate-configuration change between pause and resume is not detected as a
     material diff'
-  status: open
+  status: closed
   summary: 'Out-of-family Codex round 3 (branch-vs-main, B-72 impl leg PR #1116, 2026-07-25).
     The B-72 impl leg''s _resume_body_mismatch guard (mirroring the pre-existing
     effect_fence_paused_branches/paused_child_branches precedent) validates a pre-dispatch
@@ -2370,9 +2370,49 @@ items:
     SS1.1(b) ADD/REMOVE symmetry, the byte-compat strip + legacy-snapshot-resume
     witnesses, plus 6 full pause-to-resume integration witnesses across both wiring
     sites), mutation-probe-verified (all 6 rejection/byte-compat witnesses genuinely
-    fail when the corresponding guard is disabled). SLICE 2 (the LINEAR resume_at +
-    EVALUATOR_OPTIMIZER + DECENTRALIZED_HANDOFF net-new carrier, per SS1.1(d))
-    remains open, not yet built -- this row stays open.'
+    fail when the corresponding guard is disabled).
+
+    IMPL LEG SLICE 2 LANDED 2026-07-27 at PR #1133 (branch
+    b79-slice2-sequential-material-diff) -- the three single-owner sequential sites
+    (LINEAR resume_at, EVALUATOR_OPTIMIZER, DECENTRALIZED_HANDOFF), closing property
+    7 end-to-end. Chose the spec''s own "reused verbatim" impl-discretion branch
+    (SS1.3a): ONE new top-level PauseSnapshot.hitl_gate_config_hash field (str | None,
+    default None) shared across all three sequential sites, rather than three
+    distinct carriers or fields added to EvaluatorOptimizerResumeState/
+    HandoffResumeState -- a sequential resume has at most one currently-relevant
+    step, unlike the fan-out branches, so no per-branch carrier is needed. Reused
+    slice 1''s _hash_hitl_gate_config pure function verbatim; renamed the
+    topology-specific recompute helper (_pre_dispatch_gate_owning_captured_hitl_gate_config_hash
+    -> _captured_hitl_gate_config_hash) since its body was always generic. Each
+    site''s guard is placed immediately before its hitl_delivery_cell construction,
+    deliberately NOT inside the unconditional _resume_body_mismatch closure slice 1
+    used for the fan-out case -- a first draft mirrored that placement uncritically
+    and advisor() caught the over-rejection risk before merge: an EO/DH resume with
+    no delivery pending this cycle (e.g. a nested child under a fan-out with 2+
+    unaddressed gate-owning siblings) legitimately reaches _resume_body_mismatch, and
+    a FAILED there would wrongly turn a recoverable INERT re-pause into a terminal
+    outcome. 3 rounds of out-of-family just codex-review to convergence: round 1
+    [P2] the reject-tests only exercised an altered attribute (timeout), not the
+    SS1.1(b) removal-symmetry direction -- added a placement-removed test per site;
+    round 2 [P2] api.resume''s outer bounds check does not cover the internal
+    ChildWorkflowRunner recursive-dispatch path -- a workflow body shortened between
+    pause and resume raised an uncaught IndexError at the LINEAR site instead of a
+    fail-closed RunResult (EO/DH were already protected by their own pre-existing
+    _resume_body_mismatch bounds checks, confirmed empirically via the same
+    shortened-body repro against both sites at the merge-gate pass); fixed +
+    regression test added, mutation-probe-verified; round 3 converged clean ("No
+    actionable defects were found"). DurablePauseResumeProtocol (harness-runtime)
+    forwards the new kwarg to its parent -- pyright''s reportIncompatibleMethodOverride
+    caught the omission before it could silently drop the field under durable config.
+    17 new/updated tests (accept-unchanged / reject-changed / reject-removed /
+    skip-legacy-None / no-delivery-pending-does-not-fail per site, plus the
+    shortened-body bounds-check regression + a _compute_snapshot_hash byte-compat
+    check), mutation-probe-verified. merge-gate 3-lens review: concurrency APPROVE;
+    spec-conformance BLOCKED once (this row not updated in the same PR, unlike
+    slice 1''s own precedent -- fixed, re-verified). Full harness-cp suite: 1837
+    passed; monorepo-wide just check: 6775 passed, 0 failed. B-79 CLOSED
+    end-to-end -- both slices land.'
+  pr: '#1132, #1133'
   council: 'CONVENED 2026-07-27 (roadmap-continue, dyadic council-orchestrator pass, C10 + C1
     co-primary). Probe-first discipline run BEFORE deliberation falsified this row''s own
     premise: Runtime-owned persona/engine-class placement-resolution logic is NOT opaque to
@@ -2438,7 +2478,8 @@ items:
   heading: '### B-79 · A resumed branch''s `HITLDeliveryCell` is constructed from `step_id`
     identity alone, so a HITL placement/gate-configuration change between pause and resume is
     not detected as a material diff *(surfaced at the B-72 impl leg, out-of-family Codex round 3
-    (branch-vs-main), 2026-07-25)*'
+    (branch-vs-main), 2026-07-25; SPEC LEG + IMPL LEG SLICE 1 LANDED 2026-07-27 — PR #1132; IMPL
+    LEG SLICE 2 LANDED 2026-07-27 — PR #1133, CLOSED)*'
 - id: B-80
   title: 'The _any_fence_abort HITL-delivery suppression guard is scoped to the current fan-out level, not the true root of a nested resume tree'
   status: closed

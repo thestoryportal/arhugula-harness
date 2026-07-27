@@ -14,11 +14,16 @@ actually occur — not inside the unconditional `_resume_body_mismatch` closure.
 A `_eo_resume`/`_handoff_resume`-bearing resume with NO delivery pending this
 cycle (e.g. a nested child under a fan-out with 2+ unaddressed gate-owning
 siblings) legitimately reaches those closures; rejecting it there would turn a
-recoverable INERT re-pause into a terminal FAILED. `test_*_no_delivery_pending_*`
-below is the witness for this — a design correction caught before merge (an
-initial draft placed the EO/DH checks inside `_resume_body_mismatch`, mirroring
-slice 1's placement uncritically; `advisor()` confirmed the divergence + the
-over-rejection risk before this landed).
+recoverable INERT re-pause into a terminal FAILED. `test_eo_*_no_delivery_pending_*`
+/ `test_dh_*_no_delivery_pending_*` below are the witness for this — a design
+correction caught before merge (an initial draft placed the EO/DH checks
+inside `_resume_body_mismatch`, mirroring slice 1's placement uncritically;
+`advisor()` confirmed the divergence + the over-rejection risk before this
+landed). LINEAR has no such closure to begin with (it never had ANY material-
+diff guard before this delta), so `test_linear_*_no_delivery_pending_*` proves
+a narrower, less load-bearing property — only that the guard stays scoped
+inside the `resume_context is not None` gate, not hoisted unconditionally
+(merge-gate test-witness lens, PR #1133).
 
 This module tests, per site (LINEAR / EVALUATOR_OPTIMIZER / DECENTRALIZED_HANDOFF):
   1. resume accepts an unchanged HITL gate configuration (real pause → resume
