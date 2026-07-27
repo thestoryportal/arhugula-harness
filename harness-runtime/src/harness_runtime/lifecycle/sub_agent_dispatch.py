@@ -1128,6 +1128,13 @@ class RuntimeSubAgentDispatcher:
                     effect_fence_uniform_fallback_eligible_key=(
                         step_context.effect_fence_uniform_fallback_eligible_key
                     ),
+                    # B-80 impl leg (CP spec v1.111 §2 property 8) — the THIRD
+                    # sibling of the two immediately above, read off the SAME
+                    # step_context (computed ONCE at the true depth-0 root, pure
+                    # pass-through) and forwarded verbatim.
+                    effect_fence_tree_wide_abort_present=(
+                        step_context.effect_fence_tree_wide_abort_present
+                    ),
                 )
             except Exception:
                 # Typed errors from child execution: annotate span +

@@ -254,6 +254,7 @@ class _MockChildWorkflowRunner:
         resume_context: Any = None,
         hitl_uniform_fallback_eligible_run_id: str | None = None,
         effect_fence_uniform_fallback_eligible_key: str | None = None,
+        effect_fence_tree_wide_abort_present: bool = False,
     ) -> RunResult:
         self.calls.append(
             {
@@ -278,6 +279,8 @@ class _MockChildWorkflowRunner:
                 "effect_fence_uniform_fallback_eligible_key": (
                     effect_fence_uniform_fallback_eligible_key
                 ),
+                # B-80 impl leg — the THIRD sibling, forwarded verbatim.
+                "effect_fence_tree_wide_abort_present": effect_fence_tree_wide_abort_present,
             }
         )
         return self.next_result
@@ -783,18 +786,23 @@ def test_resume_context_forwarded_to_runner_for_downward_threading(tmp_path: Pat
     finding — this field was forwarded but never asserted anywhere) and its B-70
     effect-fence sibling `effect_fence_uniform_fallback_eligible_key` (merge-gate
     test-witness finding on the B-70 PR itself — the same class of gap, caught
-    before merge this time)."""
+    before merge this time), plus its B-80 THIRD sibling `effect_fence_tree_wide_
+    abort_present` (out-of-family Codex [P2] on the B-80 PR itself — the runtime
+    mock recorded this kwarg without asserting it, so removing the production
+    forwarder at `sub_agent_dispatch.py` would have stayed green)."""
     from harness_cp.pause_resume_protocol_types import ResumeContext
 
     dispatcher, runner, _ = _dispatcher(tmp_path)
 
     # Normal dispatch → runner receives resume_context=None +
     # hitl_uniform_fallback_eligible_run_id=None +
-    # effect_fence_uniform_fallback_eligible_key=None.
+    # effect_fence_uniform_fallback_eligible_key=None +
+    # effect_fence_tree_wide_abort_present=False.
     dispatcher.dispatch(_binding(), _step(), step_context=_step_context())
     assert runner.calls[-1]["resume_context"] is None
     assert runner.calls[-1]["hitl_uniform_fallback_eligible_run_id"] is None
     assert runner.calls[-1]["effect_fence_uniform_fallback_eligible_key"] is None
+    assert runner.calls[-1]["effect_fence_tree_wide_abort_present"] is False
 
     # Resume dispatch → the step context carries the operator's resume payload →
     # forwarded verbatim (the SAME object, not a copy — no re-resolution needed).
@@ -804,6 +812,7 @@ def test_resume_context_forwarded_to_runner_for_downward_threading(tmp_path: Pat
             "resume_context": resume_ctx,
             "hitl_uniform_fallback_eligible_run_id": "run-eligible-child",
             "effect_fence_uniform_fallback_eligible_key": "fence-key-eligible-child",
+            "effect_fence_tree_wide_abort_present": True,
         }
     )
     dispatcher.dispatch(_binding(), _step(), step_context=step_context_with_resume)
@@ -812,6 +821,7 @@ def test_resume_context_forwarded_to_runner_for_downward_threading(tmp_path: Pat
     assert (
         runner.calls[-1]["effect_fence_uniform_fallback_eligible_key"] == "fence-key-eligible-child"
     )
+    assert runner.calls[-1]["effect_fence_tree_wide_abort_present"] is True
 
 
 def test_child_runner_resume_workflow_id_mismatch_fails_closed() -> None:
