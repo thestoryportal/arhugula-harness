@@ -25,9 +25,13 @@ State pinned at **2026-07-27**, `main` HEAD `1abfaae3` (`ops: roadmap status ref
 - Semantic overlay hard gate is clean: **389 nodes, 36/36 CXA seams wired, 0 missing CXA endpoints**.
 - Phase 8 substitution accounting is closed. Live ledger is 54/54 `RETIRED` and 54/54 pipeline-advanced.
 - Latest retirement batch record: `.harness/phase-7d-retirement-events-batch-57.md`.
-- Advisory overlay buckets at this pin: `code_without_cite` 0 · `contract_without_code` 0 ·
-  `unit_without_code` 2 · `substitution_without_carrier` 40 · `cxa_seam_missing_endpoint` 0.
-  Full classification: `.harness/overlay-advisory-traceability-audit-2026-07-27.md` (the §6 deliverable).
+- Advisory overlay buckets **measured at this pin** (`1abfaae3`, pre-fix): `code_without_cite` 2 ·
+  `contract_without_code` 0 · `unit_without_code` 2 · `substitution_without_carrier` 40 ·
+  `cxa_seam_missing_endpoint` 0. The two `code_without_cite` rows are comment-only cite
+  formalizations landed in **this re-baseline PR**, taking that bucket to **0** — so the
+  post-merge baseline is `code_without_cite` 0 with the other four buckets unchanged.
+  Full classification, including the pre-fix/post-fix bucket table and the per-file evidence
+  for both cites: `.harness/overlay-advisory-traceability-audit-2026-07-27.md` (the §6 deliverable).
 - No canonical R-411/R-412/R-420/R-421/R-430/R-500/R-810/R-820/R-830/R-008/R-CXA-* item should be reopened as implementation work unless a new concrete deployment failure proves a regression.
 
 *Historical note (superseded).* The original authoring pinned `main` at `897a585`

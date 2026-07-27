@@ -61,7 +61,8 @@ non-secret sentinel keyring entry, so it makes no hosted-provider call.
      on every resolved path, and `mkdir` raises `FileExistsError` on an existing
      non-directory, ahead of any chain verification. The shipped scratch
      directory gives the smoke run an empty ledger and a clean genesis chain.
-     Delete it when the run is done.
+     The directory is gitignored (`.harness/r420-scratch/`), so a stray `git add`
+     cannot commit the run's state; delete it when the run is done.
 
 5. Put the R-420 sentinel value in the OS keyring under service `harness`.
    The included no-paid template expects keyring item name `r420_probe_key`:
