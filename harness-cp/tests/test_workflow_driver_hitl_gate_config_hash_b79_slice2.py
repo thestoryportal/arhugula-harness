@@ -322,6 +322,17 @@ def test_linear_resume_rejects_hitl_gate_config_changed() -> None:
     assert "linear-resume-hitl-gate-config-changed" in resumed.fail_class
 
 
+def test_linear_resume_rejects_hitl_gate_config_placement_removed() -> None:
+    """codex out-of-family review [P2]: an altered-attribute test alone (timeout)
+    does not prove the §1.1(b) REMOVAL-symmetry direction — a placement present
+    at capture but ABSENT at resume must also reject."""
+    snap = _linear_capture(hitl_placements=(_PLACEMENT_A,))
+    resumed = _linear_resume(snap=snap, hitl_placements=(), with_delivery=True)
+    assert resumed.status is RunStatus.FAILED
+    assert resumed.fail_class is not None
+    assert "linear-resume-hitl-gate-config-changed" in resumed.fail_class
+
+
 def test_linear_resume_skips_check_for_legacy_snapshot_with_absent_hash() -> None:
     """Mutation probe: treating `None` as a mismatch (rather than skipping) at
     the LINEAR site's guard flips this test's SUCCESS to FAILED."""
@@ -450,6 +461,16 @@ def test_eo_resume_rejects_hitl_gate_config_changed() -> None:
     assert "evaluator-optimizer-resume-hitl-gate-config-changed" in resumed.fail_class
 
 
+def test_eo_resume_rejects_hitl_gate_config_placement_removed() -> None:
+    """codex out-of-family review [P2]: an altered-attribute test alone (timeout)
+    does not prove the §1.1(b) REMOVAL-symmetry direction."""
+    snap = _eo_capture(hitl_placements=(_PLACEMENT_A,))
+    resumed = _eo_resume(snap=snap, hitl_placements=(), with_delivery=True)
+    assert resumed.status is RunStatus.FAILED
+    assert resumed.fail_class is not None
+    assert "evaluator-optimizer-resume-hitl-gate-config-changed" in resumed.fail_class
+
+
 def test_eo_resume_skips_check_for_legacy_snapshot_with_absent_hash() -> None:
     snap = _legacy_snapshot(_eo_capture(hitl_placements=(_PLACEMENT_A,)))
     resumed = _eo_resume(snap=snap, hitl_placements=(_PLACEMENT_B,), with_delivery=True)
@@ -568,6 +589,16 @@ def test_dh_resume_accepts_unchanged_hitl_gate_config() -> None:
 def test_dh_resume_rejects_hitl_gate_config_changed() -> None:
     snap = _dh_capture(hitl_placements=(_PLACEMENT_A,))
     resumed = _dh_resume(snap=snap, hitl_placements=(_PLACEMENT_B,), with_delivery=True)
+    assert resumed.status is RunStatus.FAILED
+    assert resumed.fail_class is not None
+    assert "decentralized-handoff-resume-hitl-gate-config-changed" in resumed.fail_class
+
+
+def test_dh_resume_rejects_hitl_gate_config_placement_removed() -> None:
+    """codex out-of-family review [P2]: an altered-attribute test alone (timeout)
+    does not prove the §1.1(b) REMOVAL-symmetry direction."""
+    snap = _dh_capture(hitl_placements=(_PLACEMENT_A,))
+    resumed = _dh_resume(snap=snap, hitl_placements=(), with_delivery=True)
     assert resumed.status is RunStatus.FAILED
     assert resumed.fail_class is not None
     assert "decentralized-handoff-resume-hitl-gate-config-changed" in resumed.fail_class
