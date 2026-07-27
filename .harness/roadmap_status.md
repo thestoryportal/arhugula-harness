@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `bafc0b4b8448` |
-| `last_refreshed` | 2026-07-27T10:04:46Z |
-| `git_head` | `fef8dd93` —  |
+| `workspace_state_hash` | `40d63822872b` |
+| `last_refreshed` | 2026-07-27T00:00:00Z |
+| `git_head` | `61746360` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 99 |
 
@@ -83,7 +83,7 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
-| PR #1130 | 2026-07-27T10:04:46Z | Prose-only miscount correction to CP spec v1.110 §1.1(d) (ALL FOUR -> ALL THREE of LINEAR/EO/DH), self-caught via advisor()-directed fresh full re-read before opening the B-79/B-80 impl leg. No contract/carrier/scope change. |
+| PR #1130 | 2026-07-27 | Hash-recompute fix: the prior commit (61746360) touched roadmap_status.md's last_refreshed field without recomputing workspace_state_hash for its own resulting HEAD, creating 2-commit accumulated drift that CI's Codex context guard correctly hard-failed on (per CLAUDE.md §12.2.1, accumulated drift beyond a single-commit lag is never tolerated). This commit recomputes the hash to match its own HEAD. |
 | PR #1129 | 2026-07-27 | Co-designed B-79/B-80 CP spec leg landed -- CP spec v1.110 (properties 7+8) + plan v2.46. Every load-bearing call-graph claim independently re-verified against current HEAD before drafting, per the earlier B-71 lesson. 6 rounds of out-of-family codex-review-uncommitted caught 6 real defects: a mis-scoped carrier, a false audit-ledger claim, a false zero-cross-axis-cascade claim, an entirely-omitted EO/DH scope gap, and 2 rounds of consistency drift across mirrors of the same fixes. Both rows flip registered_finding -> open; impl leg is a separate follow-on arc. |
 | PR #1128 | 2026-07-27 | B-80 council convening (C1 + C10): probe found HIERARCHICAL_DELEGATION's recursion crosses CP->Runtime->CP per fresh execute_workflow() call, and two existing sibling values already thread a root-computed signal through that exact channel (B-39/B-70 precedent). Recommends a third sibling value ORed into the level-local _any_fence_abort, no new seam or carrier field. Classified Class 1 -- surfaces an undocumented interaction between two existing CP-spec invariants, spec-leg owed, co-designable with B-79. |
 | PR #1127 | 2026-07-27 | B-79 council convening (C10 + C1): probe-first check falsified the row's own premise -- Runtime placement-resolution logic is NOT opaque to harness-cp; placement existence + removed_placements are CP-native. Recommends a content hash over HITLPlacement + removed_placements on existing pause-capture carriers, no new cross-axis seam. Classified Class 1 -- spec-leg owed before impl, not yet opened. |
