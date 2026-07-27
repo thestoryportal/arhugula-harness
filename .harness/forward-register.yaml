@@ -2344,13 +2344,36 @@ items:
     gate-configuration identity, checked before ANY resume dispatch regardless of whether a
     delivery cell resolves) already covers this path; no separate fix is owed, this note only
     widens the reachability set the eventual fix must cover.'
-  council: 'Likely worth a dyadic pass (a design task touching a Runtime-owned cross-axis seam,
-    not mechanical) -- C10 (blast-radius/gate-integrity, mirroring the B-72 spec-leg''s own
-    prior falsified-draft caution) paired with whichever voice owns the CP<->Runtime
-    HITL-placement-resolution boundary. Not urgent -- the reachability precondition (an operator
-    edits a workflow''s HITL placements between an in-flight pause and its resume) is narrow,
-    and this gap is symmetric with an already-shipped LINEAR mechanism that has not surfaced in
-    production.'
+  council: 'CONVENED 2026-07-27 (roadmap-continue, dyadic council-orchestrator pass, C10 + C1
+    co-primary). Probe-first discipline run BEFORE deliberation falsified this row''s own
+    premise: Runtime-owned persona/engine-class placement-resolution logic is NOT opaque to
+    harness-cp for the scenario in scope -- step_context.hitl_placements (via
+    fold_step_hitl_placements) and StepEffectiveBinding.removed_placements are BOTH CP-native,
+    deterministic folds already computed at every dispatch/resume call; the composer
+    (hitl_gate_composer.py) only CONSUMES the CP-folded value. Only the gate-LEVEL computation
+    (persona_tier x blast_radius x mcp_trust_tier) is genuinely Runtime-resolved, and that is a
+    function of deployment config, not the workflow-body edit this row''s reachability
+    precondition describes -- so NO new cross-axis seam is needed. TENSION (narrow
+    placement.position-only hash vs. broader full-HITLPlacement-tuple hash) probe-resolved:
+    HITLPlacement is itself a frozen 4-field Pydantic model already inside the same tuple, so
+    hashing all 4 fields (position/tool_filter/cascade_policy/timeout) + removed_placements
+    costs nothing extra over the narrow framing -- both voices converged on the broader hash.
+    RECOMMENDATION: persist a SHA-256 content hash over (ordered HITLPlacement tuple +
+    sorted removed_placements) on the existing pause-capture carriers
+    (PausedChildBranchResumeState / PreDispatchGateOwningBranchResumeState, drop-when-None
+    byte-compat, mirroring the B-31 child_workflow_id / B-72 step_kind precedent exactly) +
+    a new analogous carrier for the LINEAR resume_at site (which the probe found has NO
+    per-step identity check at all today, not even step_id -- a slightly larger gap than the
+    fan-out sites); companion fix owed at hitl_gate_composer.py''s Step 0 short-circuit
+    (~1684-1750), which never gates delivery on placement drift today. FIX SIZE:
+    mechanical-with-a-thin-design-decision, not a genuine architectural task. CLASSIFICATION:
+    Class 1 -- every prior material-diff identity addition to these same carriers (step_kind;
+    child_workflow_id at B-31/v1.99; the B-72 pre-dispatch-gate-owning identity itself at
+    v1.107->v1.108) went through a CP spec-leg amendment before impl per C-CP-26 PauseResume
+    Protocol authority; this is architecturally identical in kind, not bug-fix-shaped impl
+    discretion. NEXT ACTION: open a CP spec-leg (fork doc or B-72-lineage follow-on) proposing
+    the additive field(s) + a new §1.x invariant mirroring property 6''s shape, before any
+    impl. Not yet opened this pass.'
   heading: '### B-79 · A resumed branch''s `HITLDeliveryCell` is constructed from `step_id`
     identity alone, so a HITL placement/gate-configuration change between pause and resume is
     not detected as a material diff *(surfaced at the B-72 impl leg, out-of-family Codex round 3
