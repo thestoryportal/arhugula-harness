@@ -59,13 +59,13 @@
 
 snapshot:
   total: 82
-  open: 2
+  open: 1
   design_substrate_gated: 0
   registered_finding: 11
   operator_gated: 1
   held: 1
-  closed: 67
-  identity_digest: 10819dd40760af49
+  closed: 68
+  identity_digest: 2cdccf09a92c424b
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -2412,7 +2412,8 @@ items:
     (branch-vs-main), 2026-07-25)*'
 - id: B-80
   title: 'The _any_fence_abort HITL-delivery suppression guard is scoped to the current fan-out level, not the true root of a nested resume tree'
-  status: open
+  status: closed
+  pr: '#1131'
   summary: 'Out-of-family Codex round 6 (branch-vs-main, B-72 impl leg PR #1116, 2026-07-25). The round-4 fix suppresses a pre-dispatch gate-owning peer''s HITLDeliveryCell construction when _any_fence_abort is true, but that value is computed from _recovered_effect_fence_paused, which is scoped to the CURRENT fan-out level''s own recovered branches only. When an effect-fence ABORT targets a DIFFERENT, nested pause subtree (e.g. a deeper HIERARCHICAL_DELEGATION level, or a sibling peer''s recursively paused child), a shallower level''s own _any_fence_abort stays false and its pre-dispatch gate-owning peer can still receive a delivery cell and dispatch before the run-level abort is honored -- resumed branches are processed sequentially, so an earlier pre-dispatch branch can consume its HITL response and execute ahead of a later subtree processing the abort. Confirmed PRE-EXISTING and NOT introduced by the B-72 impl leg -- _any_fence_abort itself was computed fan-out-locally by the B-70 impl leg (CP spec v1.107), and the pre-existing effect-fence-directive peer suppression already consumes that same narrow value; B-72''s round-4 guard mirrors the established pattern verbatim. Affects BOTH the pre-existing effect-fence directive suppression and the new B-72 HITL delivery gate, at all four fan-out dispatch sites (_execute_parallelization and _execute_orchestrator_workers, including HIERARCHICAL_DELEGATION''s recursive reuse).'
   close_out: 'SPEC LEG LANDED 2026-07-27 -- CP spec v1.110 §2 property 8 + CP plan v2.46
     (co-designed with B-79). Every load-bearing call-graph claim from the council convening
@@ -2442,7 +2443,31 @@ items:
     boundary the two siblings already use), but the touch is real, not absent. Impl leg (the new
     function, the parameter thread, the two OR-sites, the §1.1(b) precedence wiring, the witness
     test) is a separate follow-on arc, not yet built. Clearance at .harness/clearance/spec-control-plane-
-    v1-110-cleared-2026-07-27.md + implementation-plan-control-plane-v2-46-cleared-2026-07-27.md.'
+    v1-110-cleared-2026-07-27.md + implementation-plan-control-plane-v2-46-cleared-2026-07-27.md.
+    IMPL LEG LANDED 2026-07-27 at PR #1131 -- CLOSED end-to-end. Added compute_effect_fence_
+    tree_wide_abort_present(root_snapshot, resume_context) -> bool (reuses the existing
+    _collect_effect_fence_idempotency_keys tree walk + _resolve_effect_fence_gated resolver,
+    filtering empty-string idempotency_key candidates before the ABORT scan -- out-of-family
+    Codex [P2] round 1 -- since a "" key is never key-bound-resolvable at the real per-branch
+    consult sites, which guard on `if (_branch_fence_key and ...)`). Threaded as a NEW additive
+    parameter through execute_workflow -> _execute_workflow_body -> the 5 topology strategy
+    functions -> StepExecutionContext (harness_cp.workflow_driver_types) -> harness-runtime''s
+    sub_agent_dispatch.py -> child_workflow_runner.py''s ChildWorkflowRunner Protocol + composer
+    -> the recursive execute_workflow call for a dispatched child -- the IDENTICAL channel its
+    two siblings already use, confirmed no NEW cross-axis seam. ORed (never replacing) into the
+    level-local _any_fence_abort at both _execute_parallelization and _execute_orchestrator_
+    workers (the latter covers HIERARCHICAL_DELEGATION via its recursive reuse). 2 out-of-family
+    Codex [P2] findings across 2 rounds, both fixed: (1) the empty-key filter above; (2) the
+    runtime mock recorded the new kwarg without any test asserting it -- extended the
+    established test_resume_context_forwarded_to_runner_for_downward_threading precedent test
+    to assert it, mutation-probe-verified. 17 new/extended tests total (12 pure unit tests for
+    the compute function incl. tree-wide-reach into a nested paused_child_branches subtree +
+    empty-key filtering; 2 integration suppression witnesses, one per fan-out site, each with a
+    negative control, direct-kwarg-injection pattern mirroring the B-70 sibling test file''s own
+    established precedent for this exact parameter class; the extended forwarding-assertion
+    test), all mutation-probe-verified. Full harness-cp (1804 passed) + harness-runtime (3089
+    passed, 10 skipped) suites green; ruff + pyright strict clean. No design-substrate/** edit
+    (spec leg already landed at PR #1129/#1130); no clearance marker owed.'
   council: 'CONVENED 2026-07-27 (roadmap-continue, dyadic council-orchestrator pass, C1 + C10
     co-primary). Probe-first discipline confirmed HIERARCHICAL_DELEGATION''s "recursion" is
     NOT same-stack-frame Python recursion -- each nesting level re-enters via a fresh
