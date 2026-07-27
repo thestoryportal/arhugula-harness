@@ -43,18 +43,26 @@ non-secret sentinel keyring entry, so it makes no hosted-provider call.
      untracked directories at the workspace root. Routing data itself is read
      from the `[runtime.routing_manifest]` table in the config, not from files
      in that directory.
-   - `STATE_LEDGER` → repoint it to a **throwaway path** before running:
+   - `STATE_LEDGER` → repoint it at a **throwaway scratch directory** before
+     running:
 
      ```toml
-     path = "/absolute/path/to/arhugula-v2/.harness/r420-scratch/state.jsonl"
+     path = "/absolute/path/to/arhugula-v2/.harness/r420-scratch"
      ```
 
-     The template ships `<root>/.harness/state.jsonl`, which is this repo's
-     real hash-chained ledger. `materialize_state_ledger` reattaches to an
-     existing file and appends to it (and raises `TamperedChainError` if
-     `verify_chain` reports `INVALID`), so leaving the default binding in place
-     writes e2e entries into the live ledger. Delete the scratch directory when
-     the run is done.
+     `STATE_LEDGER` resolves to a **directory**, not a file (IS spec v1.3 §1
+     amendment). `initialize_jsonl_event_ledger` creates that directory and
+     opens the ledger at `<dir>/state.jsonl`, so a binding that itself ends in
+     `state.jsonl` produces `r420-scratch/state.jsonl/state.jsonl`.
+
+     The template ships `<root>/.harness/state.jsonl`, which is this repo's real
+     hash-chained ledger **file**. That default does not merely pollute the live
+     ledger — it aborts the run before it starts: bootstrap stage 1
+     `materialize_path_registry` calls `Path.mkdir(parents=True, exist_ok=True)`
+     on every resolved path, and `mkdir` raises `FileExistsError` on an existing
+     non-directory, ahead of any chain verification. Binding a fresh scratch
+     directory instead gives the smoke run an empty ledger and a clean genesis
+     chain. Delete the scratch directory when the run is done.
 
 5. Put the R-420 sentinel value in the OS keyring under service `harness`.
    The included no-paid template expects keyring item name `r420_probe_key`:

@@ -80,13 +80,20 @@ Run:
 ```bash
 just check
 just overlay-check
-python3 tools/substitution_ledger.py --check
-python3 tools/forward_register.py --check
+uv run python tools/substitution_ledger.py --check
+uv run python tools/forward_register.py --check
 
-# The tools tests run from the `tools/` working directory, exactly as CI invokes them
-# (.github/workflows/ci.yml) — `test_substitution_ledger.py` imports its module as a
-# top-level name and fails collection from the repo root.
-cd tools && uv run python -m pytest test_substitution_ledger.py semantic_overlay/test_overlay.py -q
+# Both ledger checks run under `uv run`, exactly as CI invokes them
+# (.github/workflows/ci.yml). Each loads its YAML source through PyYAML —
+# `substitution_ledger.py` imports it at module top, `forward_register.py` lazily
+# inside `load()` — so the bare `python3` form fails on a clean machine whose
+# system interpreter has no PyYAML.
+#
+# The tools tests run from the `tools/` working directory, also as CI invokes them:
+# `test_substitution_ledger.py` imports its module as a top-level name and fails
+# collection from the repo root. Keep the parentheses — an unwrapped `cd tools`
+# leaves the shell in `tools/` and the next pasted command resolves under it.
+(cd tools && uv run python -m pytest test_substitution_ledger.py semantic_overlay/test_overlay.py -q)
 ```
 
 *(Removed 2026-07-27: the HTML dashboard was eliminated 2026-07-14 per root `CLAUDE.md` §12 —
@@ -156,7 +163,9 @@ volume (or re-provision the VM) first; gVisor is Linux-only and never available 
 
 Setup the R-420 live e2e needs before it will run: see
 `deploy/self-hosted-local/README.md` step 4 (empty `prompts/` + `routing_manifest/` directories
-and a throwaway `STATE_LEDGER` path).
+and a throwaway `STATE_LEDGER` scratch **directory** — that path class resolves to a directory
+containing `state.jsonl`, and the template's default file binding aborts stage 1 with
+`FileExistsError`).
 
 Acceptance criteria:
 
