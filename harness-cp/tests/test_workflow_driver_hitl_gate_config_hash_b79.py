@@ -323,7 +323,18 @@ def test_hash_placement_removed_discriminates() -> None:
 
 def test_hash_removed_placements_set_order_independent() -> None:
     """`removed_placements` is a `frozenset` — construction order must not affect
-    the hash (the sorted-by-`.value` canonicalization)."""
+    the hash (the sorted-by-`.value` canonicalization).
+
+    Merge-gate test-witness lens, round 2 (drive-by, non-blocking): `Loosenable
+    PlacementKind` is a CLOSED enum with EXACTLY ONE member (`SUB_AGENT_BOUNDARY`
+    — see its own class docstring; extension is a Workflow §4.1.2 Class-2 D5
+    revision), so a genuinely multi-element `removed_placements` set cannot be
+    constructed against today's domain — a single-element set trivially satisfies
+    order-independence regardless of the `sorted(...)` canonicalization in
+    `_hash_hitl_gate_config`. This test documents the invariant defensively
+    (the hash function's own sorting IS still correct for a hypothetical future
+    2+-member enum); it is NOT a live discrimination witness against the
+    current single-member domain."""
     s1 = frozenset({LoosenablePlacementKind.SUB_AGENT_BOUNDARY})
     s2 = frozenset(list({LoosenablePlacementKind.SUB_AGENT_BOUNDARY}))
     assert _hash_hitl_gate_config((_BASE_PLACEMENT,), s1) == _hash_hitl_gate_config(
