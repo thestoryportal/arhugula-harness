@@ -761,13 +761,33 @@ items:
     shared compose_cost_f2_entry_core helper accepts one too, but none of the 4 attribute_*_dispatch_cost
     composer functions (tool/llm/webhook/validator) expose a time_source parameter of their own -- they
     call the helper without one, so it always defaults to datetime.now(UTC). No production bootstrap site
-    (stage_4_od.py:62, stage_5_loop_init.py:596) injects a non-default clock either -- the flagged NonMonotonicTimestampError
-    failure mode has no live trigger today.
-  close_out: Thread an optional time_source parameter through each of the 4 attribute_*_dispatch_cost
-    composer signatures (currently they don't have one at all) down to the already-time_source-accepting
-    compose_cost_f2_entry_core helper, plus the bootstrap sites, once a real deterministic-clock consumer
-    surfaces (e.g. a multi-writer clock-skew test). Mirrors the workspace's established B-19/B-42 discipline
-    against building speculative infrastructure ahead of a real consumer.
+    (stage_4_od.py:185, stage_5_loop_init.py:649, migrate_audit_sidecar.py:151) injects a non-default clock
+    either -- the flagged NonMonotonicTimestampError failure mode has no live trigger today. Re-verified
+    2026-07-27 at HEAD 25b44127, MORE dormant than registered -- RuntimeSubAgentDispatcher.time_source is now
+    vestigial (required ctor kwarg at sub_agent_dispatch.py:607, never called -- the 8b F2 entry stamps
+    WRITER_OWNED_TIMESTAMP at :801), and a third construction site (migrate_audit_sidecar.py:139-152) also
+    takes the default clock.
+  close_out: OPERATIVE close-out (the originally-registered plan, RESTORED at out-of-family Codex round 3,
+    2026-07-27) -- if a real deterministic-clock consumer ever surfaces (e.g. a multi-writer clock-skew
+    test), thread an optional time_source parameter through the 4 attribute_*_dispatch_cost composer
+    signatures (tool/llm/webhook/validator, which currently have none) down to the already-time_source-accepting
+    compose_cost_f2_entry_core helper, plus the bootstrap sites. This is the only mechanism that satisfies
+    the deterministic/injectable-clock use case, and it stays within IS spec C-IS-07 §7.6's preserved
+    caller-supplied timestamp semantics for DIRECT surfaces -- no spec change needed. CONSIDERED AND
+    REJECTED -- WRITER_OWNED_TIMESTAMP sentinel adoption at the composer F2 write was briefly recorded
+    by the 2026-07-27 grounding pass as the likely fix, and corrected the same day at Codex round 3, on
+    two spec-verified grounds. (a) IS spec C-IS-07 §7.6's "Surfaces that do NOT change" paragraph classifies
+    runtime cost writes as DIRECT appends keeping caller-supplied timestamp semantics verbatim, and its
+    "Registered residual" paragraph requires a separate spec back-flow before writer-owned authority may
+    extend to any direct surface -- an extension explicitly assigned to B-57 (covers the remaining direct
+    writers), NOT to B-44; adopting the sentinel here at impl time would be a silent spec violation.
+    (b) The sentinel cannot serve B-44's own stated trigger at all -- state_ledger_write.py lines 316-320
+    resolve WRITER_OWNED_TIMESTAMP through a hardcoded datetime.now(UTC) inside the write lock, so a
+    deterministic/injectable-clock consumer gets no determinism from it; only an injectable time_source
+    can. The sub_agent_dispatch.py:801 and workflow_driver.py:2028-2030 cites describe only what B-48
+    did on the DRAIN/offloaded surfaces -- they are not a precedent for the DIRECT composer F2 write.
+    Committed posture unchanged -- detect-then-refuse, register-don't-build, per the workspace's established
+    B-19/B-42 discipline against building speculative infrastructure ahead of a real consumer.
   council: no — mechanical once a consumer exists; not urgent, genuinely dormant today
   heading: '### B-44 · No production bootstrap site injects a non-default `time_source` clock *(split
     from B-29, 2026-07-15)*'
@@ -792,8 +812,10 @@ items:
     no-op branches of the canonical-file/directory lock context managers and `_DirLock` (the
     pre-B-46 `_flock` symbol was deleted at PR 1052), also covering the transitional
     legacy-sidecar protocol retirement once no pre-B-46 writers remain; (3) apply the same fix to `reconciler_pause_resume_substrate`'s
-    `_workflow_lock` so both same-host lock primitives in this codebase reach genuine Windows parity together,
-    not one at a time. No Windows CI exists today, so this is currently untested-by-CI on that platform
+    `_workflow_lock` AND -- widened 2026-07-27 -- `protected_result_store._cross_process_lock` (added by B-73,
+    PR 1120) so all THREE same-host lock primitives in this codebase reach genuine Windows parity together,
+    not one at a time. The third is exclusive-only (LOCK_EX), so it maps cleanly onto msvcrt.locking and does
+    NOT add to the LOCK_SH/LOCK_EX hard part. No Windows CI exists today, so this is currently untested-by-CI on that platform
     regardless — low urgency until Windows becomes an active target, not blocking.
   council: no for now — narrow implementation-discretion follow-on per C-IS-09 §9.4's own deferred-mechanism
     framing; council-eligible AT BUILD TIME only if the msvcrt-exclusive-only-lock tradeoff (weaker-than-POSIX
@@ -1535,7 +1557,8 @@ items:
     JOINTLY with the B-61 drain fence (the lens verified non-vacuity: reverting the order AND
     disabling the drain fence together fails the witness; either alone preserves the outcome);
     a protocol-bound all-rejected variant pauses PRE-branch for fix and mutation alike. (2) The
-    _cancel_worker PRE-marker consult is individually shadowed by its own post-marker sibling
+    _cancel_worker PRE-marker consult (and _cancel_branch:9532, its structurally-identical
+    sibling -- row imprecision corrected 2026-07-27) is individually shadowed by its own post-marker sibling
     (disable-pre-alone leaves the b60 set green; the residual marker-present/effect-never-fired
     state equals the handled crash-between-marker-and-dispatch window). Both orders are
     strictly-earlier semantics, comment-documented at their sites.'
