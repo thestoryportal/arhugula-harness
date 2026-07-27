@@ -61,11 +61,11 @@ snapshot:
   total: 82
   open: 0
   design_substrate_gated: 0
-  registered_finding: 15
+  registered_finding: 14
   operator_gated: 1
   held: 1
-  closed: 65
-  identity_digest: 9cbed903e91a5e31
+  closed: 66
+  identity_digest: 9e3858cfbb40980e
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -1685,7 +1685,10 @@ items:
     floor, which is FILESYSTEM-dependent and not knowable a priori without probing the actual
     deployment volume, making this a genuine design decision (what floor? how is it probed or
     configured? what''s the failure mode when unknown?) rather than a mechanical patch a fix
-    round can safely author.'
+    round can safely author. CROSS-REFERENCE (advisor(), B-76 arc, 2026-07-26): likely ONE
+    finding with B-77 -- both concern raw mtime as an untrustworthy age authority (this row:
+    filesystem timestamp-granularity rounding; B-77: crash-window non-atomicity); ground as a
+    single does-the-age-authority-stay-mtime question before building either in isolation.'
   close_out: 'Design a TTL-floor validation or a probe-based age-authority selection that
     accounts for the deployment filesystem''s actual timestamp resolution -- e.g. probe the
     store root''s filesystem granularity at construction/first-write time (write a marker file,
@@ -1722,7 +1725,10 @@ items:
     discipline) -- stop patching, register, and ship rather than open a round 9. Reachability is
     genuinely narrower than round 7''s finding (needs either an extreme file count or a
     hanging/failing filesystem mount, not merely a large-but-normal backlog), and a failing
-    filesystem mount would likely be causing failures well beyond this store already.'
+    filesystem mount would likely be causing failures well beyond this store already. ESCALATION
+    (advisor(), B-76 arc, 2026-07-26): B-73''s cross-process flock is now ALSO held across this
+    candidate-selection phase, so a stalled scan blocks other OS PROCESSES sharing the store
+    root, not just other threads in this process -- worse than this row''s original P1 framing.'
   close_out: 'Bound the candidate-selection phase itself -- e.g. batch the `glob()`/`stat()` scan
     with a periodic lock release/re-acquire (yielding between batches so a stalled scan cannot
     monopolize the lock indefinitely), or move the scan itself off-lock using a snapshot-then-
@@ -1739,32 +1745,17 @@ items:
 - id: B-76
   title: Protected result store's lock-key registry can fail open on a transient stat() failure
     during root-identity resolution
-  status: registered_finding
-  summary: 'Surfaced at the B-68 impl arc, out-of-family Codex round 8 [P2]. `_lock_for_root`
-    keys the process-wide lock registry on `(st_dev, st_ino)` when `resolved.stat()` succeeds,
-    falling back to the resolved-path STRING when it raises `OSError` (a defensive branch added
-    at round 6 for the not-yet-created-directory case, now effectively unreachable in normal
-    operation since round 6''s own fix made `_lock_for_root` unconditionally `mkdir` the
-    directory before stat''ing). Codex observes the fallback is still live for a TRANSIENT
-    `stat()` failure (not "doesn''t exist yet", but a genuine intermittent I/O error) -- if one
-    concurrent caller''s `stat()` transiently fails while another''s (near-simultaneous) call
-    succeeds, the two callers key DIFFERENT locks for the SAME logical root (one string-keyed,
-    one inode-keyed), silently reopening the exact aliasing race the identity-based key exists to
-    close. Narrow: requires a genuinely intermittent filesystem error at the precise moment of a
-    concurrent lock-key computation, not a sustained failure (a sustained failure would surface
-    elsewhere -- e.g. the `mkdir` immediately preceding this stat would itself already be
-    failing loudly).'
-  close_out: 'Do not silently fall back to a different key namespace on a `stat()` failure after
-    a successful `mkdir` -- propagate the `OSError` (or retry with a bounded backoff before
-    propagating) so a transient failure surfaces as a typed refusal rather than a silent
-    identity-namespace split. Witness with a test that monkeypatches `Path.stat` to fail once
-    then succeed, asserting the lock registry does not admit two distinct lock objects for the
-    same resolved root across that transient failure.'
-  council: no -- narrow transient-I/O-error handling gap; propagate-vs-fallback is a
-    correctness fix, not an open design question
+  status: closed
+  pr: '#1121'
+  summary: 'CLOSED -- `_lock_for_root` no longer catches `OSError` from `resolved.stat()` and
+    falls back to a resolved-path-STRING key; propagates instead, closing the transient-failure
+    aliasing race. Mutation-probe-verified regression test added. Selected via advisor() as the
+    cleanest of the 4 findings surfaced at the same B-68 arc round 8 (B-74/B-75/B-76/B-77, all in
+    this file) -- a genuinely mechanical propagate-vs-fallback fix, no interaction with B-73''s
+    cross-process flock, no reopening of the phase-1/phase-2 GC-sweep safety argument.'
   heading: '### B-76 · Protected result store''s lock-key registry can fail open on a transient
     stat() failure during root-identity resolution *(surfaced at the B-68 impl arc, out-of-family
-    Codex round 8 [P2], 2026-07-25)*'
+    Codex round 8 [P2], 2026-07-25; FIXED 2026-07-26 -- PR #1121, CLOSED)*'
 - id: B-77
   title: Protected result store's mtime refresh is not durable atomically with the publish
     commit, leaving a crash window where a recovered entry looks pre-aged
@@ -1782,7 +1773,8 @@ items:
     specifically (not the live-concurrent-thread path round 2-7 closed) -- a narrower
     reachability precondition (needs a crash at a specific ~2-syscall-wide instant, not just
     concurrent access) with the same root cause (mtime refresh is not atomic with the commit
-    that makes the entry durable and visible).'
+    that makes the entry durable and visible). CROSS-REFERENCE (advisor(), B-76 arc, 2026-07-26):
+    likely ONE finding with B-74 -- see B-74''s row for the shared-root-cause framing.'
   close_out: 'Make the age-authority timestamp durable ATOMICALLY with the commit rather than as
     a separate later step -- e.g. write the intended-mtime as part of the temp file''s own
     content/xattr before `os.link`, so the linked dirent already carries the correct age
