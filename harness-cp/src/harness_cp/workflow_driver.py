@@ -5012,6 +5012,30 @@ def _execute_workflow_body(
             # `PreDispatchGateOwningBranchResumeState.hitl_gate_config_hash`'s own
             # "validate ONLY when present" convention.
             if resume_snapshot.hitl_gate_config_hash is not None:
+                # out-of-family Codex [P2]: `api.resume`'s outer bounds check does
+                # NOT cover this internal path — a recursively-dispatched child
+                # reached via `ChildWorkflowRunner` bypasses it, so a workflow body
+                # SHORTENED between pause and resume (`resume_at >= len(steps)`)
+                # would otherwise IndexError here uncaught, aborting the parent
+                # resume instead of a fail-closed `RunResult`. Bounds-check first,
+                # mirroring the DECENTRALIZED_HANDOFF site's own
+                # `stage-index-out-of-range` guard.
+                if not (0 <= resume_at < len(steps)):
+                    return (
+                        RunResult(
+                            workflow_id=manifest_entry.workflow_id,
+                            run_id=run_id,
+                            status=RunStatus.FAILED,
+                            terminal_step_index=None,
+                            partial_state=None,
+                            final_state=None,
+                            fail_class=(
+                                f"linear-resume-step-index-out-of-range: {resume_at} "
+                                f"∉ [0, {len(steps)})"
+                            ),
+                        ),
+                        0,
+                    )
                 _resumed_linear_gate_config_hash = _captured_hitl_gate_config_hash(
                     steps[resume_at],
                     manifest_entry,

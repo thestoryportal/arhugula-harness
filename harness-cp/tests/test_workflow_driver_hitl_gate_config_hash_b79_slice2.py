@@ -357,6 +357,40 @@ def test_linear_resume_changed_config_with_no_delivery_pending_does_not_fail() -
     )
 
 
+def test_linear_resume_shortened_body_fails_closed_not_indexerror() -> None:
+    """out-of-family Codex [P2]: `api.resume`'s outer bounds check does not cover
+    the internal `ChildWorkflowRunner` recursive-dispatch path — a workflow body
+    SHORTENED between pause and resume (`resume_at >= len(steps)`) reached that
+    way must return a fail-closed `RunResult`, not raise an uncaught
+    `IndexError` from `steps[resume_at]` and abort the parent resume.
+    Mutation probe: deleting the bounds-check block reproduces the IndexError
+    (confirmed empirically against the pre-fix code — `execute_workflow` itself
+    raises, so this test would ERROR rather than FAIL)."""
+    snap = _linear_capture(hitl_placements=(_PLACEMENT_A,))
+    manifest = _manifest(
+        topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+        hitl_placements=(_PLACEMENT_A,),
+        workflow_id=_LINEAR_WF,
+    )
+    ctx = _Ctx()
+    resumed = execute_workflow(
+        manifest,
+        [],  # SHORTENED body: resume_at (0) is now out of range for zero steps
+        run_id=snap.run_id,
+        ctx=cast(DriverContext, ctx),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(
+            _LinearDispatcher(raise_on="__never__", pause_requested_flag=ctx.pause_requested_flag)
+        ),
+        pause_snapshot_input=snap,
+        resume_context=ResumeContext(hitl_response=_hitl_result()),
+        hitl_uniform_fallback_eligible_run_id=snap.run_id,
+    )
+    assert resumed.status is RunStatus.FAILED
+    assert resumed.fail_class is not None
+    assert "linear-resume-step-index-out-of-range" in resumed.fail_class
+
+
 # =============================================================================
 # EVALUATOR_OPTIMIZER
 # =============================================================================
