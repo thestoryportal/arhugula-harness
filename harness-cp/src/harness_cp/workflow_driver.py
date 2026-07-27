@@ -2973,10 +2973,22 @@ def compute_effect_fence_tree_wide_abort_present(
     `False` when `root_snapshot`/`resume_context` is `None` (the crash-resume
     path, where the level-local `_any_fence_abort` term already evaluates
     `False` too — CP spec v1.111 §2.1(b) byte-compat requirement) or when no
-    collected location resolves to `ABORT`."""
+    collected location resolves to `ABORT`.
+
+    out-of-family Codex [P2]: candidate keys are filtered to non-empty ONLY —
+    a "" `idempotency_key` (the defensive placeholder a captured error with no
+    key carries, per `effect_fence_paused_dispositions`'s own docstring) is
+    NEVER actually key-bound-resolvable at the real per-branch consult sites
+    (`if (_branch_fence_key and _ef_resume_ctx is not None)` at both fan-out
+    dispatch sites) — they treat it as unresolvable and re-pause INERT rather
+    than ever consulting the uniform fallback for it. Passing "" through here
+    unfiltered could let a uniform ABORT default falsely activate the
+    tree-wide signal from an entry no real consumer would ever resolve to
+    ABORT, spuriously suppressing unrelated valid HITL delivery elsewhere in
+    the tree."""
     if root_snapshot is None or resume_context is None:
         return False
-    candidate_keys = _collect_effect_fence_idempotency_keys(root_snapshot)
+    candidate_keys = [k for k in _collect_effect_fence_idempotency_keys(root_snapshot) if k]
     eligible_key = compute_effect_fence_uniform_fallback_eligible_key(root_snapshot, resume_context)
     return any(
         _resolve_effect_fence_gated(resume_context, _k, eligible_key) is EffectFenceResolution.ABORT
