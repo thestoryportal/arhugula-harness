@@ -30,6 +30,11 @@ audit-entries.jsonl.lock
 # encrypted post-effect result-recovery payloads (may carry tenant PII/
 # credentials at rest) — must never be committed.
 .harness/protected-results/
+# R-420 live-e2e scratch STATE_LEDGER directory. The self-hosted-local template
+# (deploy/self-hosted-local/harness.selfhosted.local.example.toml) binds STATE_LEDGER
+# here, so a smoke run fills it with state.jsonl + runtime sidecars — throwaway state,
+# never committed (codex round-2 [P2]).
+.harness/r420-scratch/
 routing_manifest/
 
 # B-40: cross-process ledger advisory-lock sidecars (harness_is.cross_process_ledger_lock),
