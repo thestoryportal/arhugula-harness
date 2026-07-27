@@ -582,10 +582,11 @@ def test_write_once_survives_immediate_sweep_under_slow_fsync_and_short_ttl(
     commit takes — the temp file's mtime is set at `handle.write()`,
     BEFORE that commit. A 20ms TTL with a 100ms-slowed fsync let `gc_sweep`
     collect a just-published, still-live entry immediately after
-    `write_once()` returned. `_publish_atomic` now refreshes the entry's
-    mtime to "now" AFTER the durable commit, closing that remaining gap.
+    `write_once()` returned. `_publish_atomic` now refreshes the temp
+    file's mtime to "now" (B-77: BEFORE the commit, not after) closing
+    that remaining gap.
 
-    Mutation probe: removing the post-commit `os.utime` refresh reproduces
+    Mutation probe: removing the pre-commit `os.utime` refresh reproduces
     the exact codex-verified failure — `gc_sweep` collects the entry."""
     store = _store(tmp_path, ttl_seconds=0.02)
     real_fsync = os.fsync
@@ -604,6 +605,118 @@ def test_write_once_survives_immediate_sweep_under_slow_fsync_and_short_ttl(
     expired = store.gc_sweep(now=time.time())
     assert expired == []
     assert store.read("tenant-a", ref) == "just published"
+
+
+def test_crash_immediately_after_commit_leaves_an_already_correct_durable_mtime(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """B-77 (forward-register, out-of-family Codex round 8 on the B-68 arc;
+    NARROWED not closed, 2026-07-26 — see the row for the residual).
+    Codex caught a wrong dormancy conclusion first (PR #1123 round 1): the
+    crash window this finding concerns isn't a fast `os.link`-to-`os.utime`
+    gap, it's the WHOLE write+fsync duration — unbounded under I/O
+    pressure/a large payload/a slow filesystem, not a fixed small window.
+    `_publish_atomic` now refreshes + fsyncs the temp file's mtime BEFORE
+    `os.link`, removing THAT (dominant, payload-scaling) duration from the
+    window — it does NOT eliminate the window entirely (a narrower residual
+    remains; see
+    `test_slow_post_commit_tail_does_not_falsely_expire_a_successful_write`
+    for Codex round 9's separate, normal-path regression this test does
+    NOT cover — this one targets only the DATA-fsync term the fix does
+    close). This test: simulate a slowed initial data fsync
+    (so the temp file's write-time mtime would badly under-report "now" if
+    it were ever used) PLUS a "crash" immediately after the commit (the
+    directory fsync — the very next step — raises), and confirm the
+    surviving entry already carries a fresh, correct mtime a fresh
+    process's immediate bootstrap sweep must not reclaim.
+
+    Mutation probe: reverting to the pre-fix post-commit `os.utime`
+    ordering makes the crash-recovered entry inherit the temp file's
+    stale, pre-slow-fsync mtime, and the sweep below reclaims it."""
+    store = _store(tmp_path, ttl_seconds=0.05)
+    real_fsync = os.fsync
+    seen = {"slowed": False}
+
+    def _slow_first_fsync(fd: int) -> None:
+        if not seen["slowed"]:
+            seen["slowed"] = True
+            time.sleep(0.10)
+        real_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", _slow_first_fsync)
+
+    def _crash_after_commit(root: Path) -> None:
+        raise OSError("simulated crash immediately after the commit")
+
+    monkeypatch.setattr(store, "_fsync_dir", _crash_after_commit)
+
+    ref = store.write_once("tenant-a", "crashes right after commit")
+    assert isinstance(ref, UnresolvableResultRef)
+
+    entry_path = next((tmp_path / "store").glob("*.entry"))
+    assert entry_path.exists()  # the commit itself survived the "crash"
+
+    # A separate, fresh instance sharing the same root stands in for the
+    # NEXT process's bootstrap sweep — unaffected by the patches above
+    # (both are set on `store`/the global `os.fsync`, and `seen["slowed"]`
+    # is already consumed by the time this runs).
+    store2 = ProtectedResultStore(
+        tmp_path / "store",
+        codec=store._codec,  # type: ignore[attr-defined]
+        ttl_seconds=0.05,
+    )
+    expired = store2.gc_sweep(now=time.time())
+    assert expired == []
+    assert entry_path.exists()
+
+
+def test_slow_post_commit_tail_does_not_falsely_expire_a_successful_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """B-77 (forward-register, out-of-family Codex round 9 [P1] on the
+    B-68 arc). The round-1 reorder fix (mtime stamped on the temp file
+    BEFORE `os.link`) closed the crash-recovery gap but opened a
+    DIFFERENT, normal-path regression against `main`: on `main`, the
+    (single) mtime stamp runs AFTER the full commit tail (metadata fsync
+    + `os.link` + directory fsync), so a successful `write_once()` always
+    returns a genuinely-fresh entry. With the stamp moved to run BEFORE
+    that tail instead, a slow tail (a large payload, I/O pressure, or —
+    as here — an injected delay) could make an IMMEDIATE `gc_sweep()`
+    right after a successful, uninterrupted `write_once()` reclaim the
+    entry it just returned a reference for — no crash involved. Codex
+    reproduced this with a 20ms TTL and a 100ms-delayed directory fsync.
+    `_publish_atomic` now refreshes the mtime a SECOND time, on the
+    entry, AFTER the full commit tail — restoring `main`'s original
+    normal-path guarantee — in ADDITION to (not instead of) the
+    pre-commit stamp `test_crash_immediately_after_commit_leaves_an_
+    already_correct_durable_mtime` covers.
+
+    Mutation probe: removing the post-commit `os.utime`+fsync block
+    (reverting to the round-1-only, pre-commit-stamp-alone shape) makes
+    this test fail — the immediate sweep below reclaims the entry."""
+    store = _store(tmp_path, ttl_seconds=0.02)
+    real_fsync = os.fsync
+    calls = {"n": 0}
+
+    def _slow_third_fsync(fd: int) -> None:
+        calls["n"] += 1
+        # Third fsync call is the DESTINATION-directory fsync
+        # (`_fsync_dir`, inside `_publish_atomic`, after `os.link`) — see
+        # the discrimination note on `test_directory_fsync_durability_
+        # failure_degrades_to_unresolvable` above for the full call
+        # ordering.
+        if calls["n"] == 3:
+            time.sleep(0.10)
+        real_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", _slow_third_fsync)
+
+    ref = store.write_once("tenant-a", "slow tail, no crash")
+    assert isinstance(ref, str)
+
+    expired = store.gc_sweep(now=time.time())
+    assert expired == []
+    assert store.read("tenant-a", ref) == "slow tail, no crash"
 
 
 def test_publish_lock_shared_across_instances_of_same_root(tmp_path: Path) -> None:
@@ -1418,10 +1531,13 @@ def test_directory_fsync_durability_failure_degrades_to_unresolvable(
 
     def _flaky_fsync(fd: int) -> None:
         calls["n"] += 1
-        # First call is the temp-file's own fsync (inside `_publish_atomic`,
-        # before the `os.link` commit); second is the DESTINATION-directory
-        # fsync (`_fsync_dir`, after the commit) — the one this fix targets.
-        if calls["n"] == 2:
+        # First call is the temp-file's own DATA fsync; second is the
+        # temp-file's own pre-commit METADATA (mtime) fsync (B-77); third
+        # is the DESTINATION-directory fsync (`_fsync_dir`, after the
+        # commit) — the one this fix targets. A fourth call (the entry's
+        # own post-commit metadata fsync, B-77) follows but is unreached
+        # once this one raises.
+        if calls["n"] == 3:
             raise OSError(errno.EIO, "simulated disk failure")
         real_fsync(fd)
 
@@ -1447,7 +1563,11 @@ def test_directory_fsync_unsupported_errno_still_degrades_gracefully(
 
     def _unsupported_fsync(fd: int) -> None:
         calls["n"] += 1
-        if calls["n"] == 2:
+        # See the discrimination note in the test above — the directory
+        # fsync is the THIRD call (B-77 inserted a temp-file metadata
+        # fsync as the second, pre-commit, and an entry metadata fsync as
+        # a fourth, post-commit).
+        if calls["n"] == 3:
             raise OSError(errno.ENOTSUP, "directory fsync not supported (simulated)")
         real_fsync(fd)
 
@@ -1511,12 +1631,14 @@ def test_directory_open_durability_failure_degrades_to_unresolvable(
     real_open = os.open
 
     def _flaky_open(path: object, flags: int, *args: object, **kwargs: object) -> int:
-        # `_fsync_dir` opens `store._root` with exactly `os.O_RDONLY`; B-68
-        # round 2 [P1] added a SECOND `os.O_RDONLY` open (the entry's own
-        # post-refresh fsync) — flags alone no longer discriminate the two,
-        # so key on the PATH (the directory vs. the entry file) instead.
-        # `tempfile.mkstemp` (the SAME write's temp-file creation, earlier
-        # in the call chain) uses neither this path nor these flags.
+        # `_fsync_dir` opens `store._root` with exactly `os.O_RDONLY`; the
+        # temp file's own pre-commit metadata fsync AND the entry's own
+        # post-commit metadata fsync (both B-77) ALSO do a bare
+        # `os.O_RDONLY` open — flags alone no longer discriminate any of
+        # these, so key on the PATH (the directory vs. the temp/entry
+        # file) instead. `tempfile.mkstemp` (the SAME write's temp-file
+        # creation, earlier in the call chain) uses neither this path nor
+        # these flags.
         if flags == os.O_RDONLY and Path(path) == store._root:  # type: ignore[arg-type]
             raise OSError(errno.EIO, "simulated disk failure opening directory")
         return real_open(path, flags, *args, **kwargs)  # type: ignore[arg-type]
@@ -1540,8 +1662,9 @@ def test_directory_open_unsupported_errno_still_degrades_gracefully(
 
     def _unsupported_open(path: object, flags: int, *args: object, **kwargs: object) -> int:
         # See the discrimination note in the test above — key on the
-        # directory PATH, not flags alone (B-68 round 2 [P1] added a second
-        # `os.O_RDONLY` open for the entry's own post-refresh fsync).
+        # directory PATH, not flags alone (the temp/entry files' own
+        # pre-/post-commit metadata fsyncs, both B-77, ALSO do a bare
+        # `os.O_RDONLY` open).
         if flags == os.O_RDONLY and Path(path) == store._root:  # type: ignore[arg-type]
             raise OSError(errno.ENOTSUP, "directory open not supported (simulated)")
         return real_open(path, flags, *args, **kwargs)  # type: ignore[arg-type]
