@@ -30,6 +30,7 @@ from harness_runtime.cli_profile_loading import CliProfileResolutionRequest, res
 from harness_runtime.lifecycle.external_cli_provider import (
     ExternalCLINotAuthenticatedError,
     construct_antigravity_cli_adapter,
+    construct_gemini_cli_adapter,
 )
 from harness_runtime.types import ExternalCLIProviderConfig, ExternalCLIProviderKind
 
@@ -194,16 +195,44 @@ async def test_antigravity_cli_auth_confirms_antigravity_route() -> None:
     assert route.route_ref == "antigravity:antigravity"
 
 
-@pytest.mark.skip(
-    reason=(
-        "No non-secret legacy Gemini auth-status probe is declared for this "
-        "host yet (B-28 finding #14, test-quality preflight 2026-07-12). The "
-        "Antigravity test above no longer shares this shape — it was converted "
-        "into a real live gate once its auth probe was declared."
+async def test_gemini_legacy_cli_auth_confirms_gemini_legacy_route() -> None:
+    # The legacy Gemini CLI ships no status subcommand, so its declared auth
+    # probe is a minimal free-tier prompt. Both the executable name and the
+    # probe argv come from the single preset authority, so a wrong-binary or
+    # wrong-probe defect cannot recur here either.
+    preset = _load_provider_preset_helper().PROVIDER_PRESETS["gemini"]
+    command: str = preset.command
+    auth_args: tuple[str, ...] = preset.auth_args
+    if shutil.which(command) is None:
+        pytest.skip(f"legacy Gemini CLI executable {command!r} is not installed on PATH")
+
+    # Drive the declared probe through the shipped constructor rather than a
+    # bare subprocess, so the live gate binds the production code path.
+    config = ExternalCLIProviderConfig(
+        provider="gemini",
+        kind=ExternalCLIProviderKind.GEMINI,
+        command=command,
+        auth_args=auth_args,
+        auth_check=True,
+        timeout_seconds=60.0,
     )
-)
-def test_gemini_legacy_cli_auth_confirms_gemini_legacy_route() -> None:
-    pass
+    try:
+        adapter = await construct_gemini_cli_adapter(config)
+    except ExternalCLINotAuthenticatedError as exc:
+        pytest.skip(f"legacy Gemini CLI declared auth probe did not confirm a session: {exc}")
+    await adapter.aclose()
+
+    # ``provider_name`` on the route is the CLI-profile provenance identity
+    # from BUILT_IN_CLI_PROVIDER_BINDINGS ("gemini_legacy"), a separate surface
+    # from the external CLI kind ("gemini") that composes route_ref.
+    route = _resolve_authenticated_route(
+        kind=CliProfileKind.GEMINI_LEGACY,
+        provider="gemini_legacy",
+        external_cli_kind="gemini",
+        command_name="gemini",
+        family=ProviderFamily.GOOGLE,
+    )
+    assert route.route_ref == "gemini:gemini"
 
 
 def test_generic_command_cli_auth_confirms_operator_declared_route() -> None:

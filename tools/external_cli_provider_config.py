@@ -23,6 +23,7 @@ class ProviderPreset(NamedTuple):
     model: str
     family: str
     auth_check: bool
+    auth_args: tuple[str, ...] = ()
 
 
 PROVIDER_PRESETS: dict[str, ProviderPreset] = {
@@ -64,7 +65,12 @@ PROVIDER_PRESETS: dict[str, ProviderPreset] = {
         command="gemini",
         model="gemini-2.5-flash",
         family="google",
+        # ``auth_check`` stays false: the legacy Gemini CLI ships no
+        # status subcommand, so its only probe IS an outward model call.
+        # Declaring the probe here keeps the single-authority shape while
+        # leaving the outward call an explicit operator opt-in.
         auth_check=False,
+        auth_args=("--skip-trust", "-p", "Reply with the single word OK."),
     ),
 }
 
@@ -168,6 +174,10 @@ def _build_provider_entry(
         raise ValueError("generic-command requires --command")
 
     kind = preset.kind if preset is not None else "generic-command"
+    # Explicit ``--auth-arg`` values override the preset declaration.
+    resolved_auth_args: tuple[str, ...] = (
+        tuple(auth_args) if auth_args else (preset.auth_args if preset is not None else ())
+    )
     resolved_auth_check = (
         auth_check
         if auth_check is not None
@@ -184,8 +194,8 @@ def _build_provider_entry(
     }
     if args:
         entry["args"] = list(args)
-    if auth_args:
-        entry["auth_args"] = list(auth_args)
+    if resolved_auth_args:
+        entry["auth_args"] = list(resolved_auth_args)
     if response_format != "text":
         entry["response_format"] = response_format
     if prompt_transport != "stdin":

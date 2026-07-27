@@ -216,7 +216,8 @@ LIVE_CREDENTIAL_GATES: tuple[LiveCredentialGate, ...] = (
         required_operator_surface="codex-credential-gate:U-MEM-24:generic-command-cli-auth",
         deterministic_absence_probe="subprocess-fake route resolves generic-command:custom",
         resume_command=(
-            "rtk env UV_CACHE_DIR=/tmp/arhugula-uv-cache uv run pytest "
+            "rtk env UV_CACHE_DIR=/tmp/arhugula-uv-cache "
+            'U_MEM_24_GENERIC_COMMAND_AUTH_PROBE="ollama list" uv run pytest '
             "harness-runtime/tests/integration/test_u_mem_24_live_cli_routes.py "
             "-m e2e -k generic_command"
         ),
