@@ -6770,16 +6770,20 @@ def _maybe_post_join_synthesis(
 # physical-append moment. Sampling order therefore EQUALS physical-append order by
 # construction — for **causally-ordered** drains (every level reached through the
 # single-threaded recursion seam, plus the interleaved DIRECT linear-inline
-# writer) AND for **concurrent** appends the drain cannot itself order: two
-# sibling `SUB_AGENT_DISPATCH` children draining on separate fan-out threads (or a
-# runtime audit / cost write interleaving the lock) can no longer invert, because
-# capture order is no longer what the monotonicity check compares. This supersedes
-# the prior one-drain-one-timestamp policy — entries of ONE drain MAY now carry
-# distinct, non-decreasing instants, each sampled at its own append. The
-# zero-tolerance writer remains the live safety net for the DIRECT (linear /
-# runtime) append paths, whose caller-supplied semantics are unchanged (the
-# sentinel is opt-in per entry on the drain surface only, never a default); the
-# residual direct-writer capture-order inversion is the `B-57` register row.
+# writer) AND for the **concurrent** appends the drain cannot itself order: two
+# sibling `SUB_AGENT_DISPATCH` children draining on separate fan-out threads can
+# no longer invert, because capture order is no longer what the monotonicity check
+# compares. This supersedes the prior one-drain-one-timestamp policy — entries of
+# ONE drain MAY now carry distinct, non-decreasing instants, each sampled at its
+# own append. The zero-tolerance writer remains the live safety net for the DIRECT
+# (linear / runtime) append paths, whose caller-supplied semantics are unchanged
+# (the sentinel is opt-in per entry on the drain surface only, never a default).
+# B-48 closed the drain-vs-drain half ONLY: a DIRECT runtime audit / cost write
+# interleaving the lock CAN still invert against a drain append — its timestamp is
+# still captured caller-side, OUTSIDE `_WRITE_LOCK` — which is why
+# `audit_writer.py` carries a bounded 5-attempt resample-retry and
+# `cost_attribution_f2_write.py` (which carries none) stays exposed. That residual
+# is the `B-57` register row (IS spec C-IS-07 §7.6 "Registered residual").
 # See `.harness/runtime_defect_sub_agent_inference_child_loop_bridge_deadlock.md`
 # §8 + `drain_branch_buffers` + `test_concurrent_sibling_drains_invert_timestamp`
 # (a passing witness; previously strict-xfail). The `timestamp=` these helpers
