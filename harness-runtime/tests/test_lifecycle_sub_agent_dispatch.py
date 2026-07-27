@@ -254,6 +254,7 @@ class _MockChildWorkflowRunner:
         resume_context: Any = None,
         hitl_uniform_fallback_eligible_run_id: str | None = None,
         effect_fence_uniform_fallback_eligible_key: str | None = None,
+        effect_fence_tree_wide_abort_present: bool = False,
     ) -> RunResult:
         self.calls.append(
             {
@@ -278,6 +279,8 @@ class _MockChildWorkflowRunner:
                 "effect_fence_uniform_fallback_eligible_key": (
                     effect_fence_uniform_fallback_eligible_key
                 ),
+                # B-80 impl leg — the THIRD sibling, forwarded verbatim.
+                "effect_fence_tree_wide_abort_present": effect_fence_tree_wide_abort_present,
             }
         )
         return self.next_result

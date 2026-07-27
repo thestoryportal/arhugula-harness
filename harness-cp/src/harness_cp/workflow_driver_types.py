@@ -531,6 +531,32 @@ class StepExecutionContext(BaseModel):
     `hitl_uniform_fallback_eligible_run_id`; `None` default → byte-identical
     to pre-arc."""
 
+    effect_fence_tree_wide_abort_present: bool = False
+    """B-80 impl leg (CP spec v1.111 §2 property 8) — the THIRD sibling of
+    `hitl_uniform_fallback_eligible_run_id` / `effect_fence_uniform_fallback_
+    eligible_key` immediately above: whether ANY location in the FULL resume
+    tree resolves to an `EffectFenceResolution.ABORT` this resume cycle.
+    Computed ONCE, at the true depth-0 root (`harness_runtime/lifecycle/
+    mcp_server.py`, via `compute_effect_fence_tree_wide_abort_present` against
+    the operator's ORIGINAL, un-narrowed root `PauseSnapshot`), and threaded
+    down UNCHANGED to every recursion level via the SAME channel as its two
+    siblings — plain immutable pass-through, safe to share the SAME value
+    across every branch of a fan-out; branch children inherit it verbatim via
+    `compose_branch_child_context`'s `model_copy`. It CANNOT be recomputed
+    locally at a nested recursion level — a child's own `pause_snapshot_input`
+    is only its own subtree and has no visibility into an ABORT resolving
+    elsewhere in the full tree.
+
+    Consumed ONLY at the two fan-out dispatch sites (`_execute_parallelization`
+    / `_execute_orchestrator_workers`, including `HIERARCHICAL_DELEGATION`'s
+    recursive reuse) — ORed (never replacing) into the level-local
+    `_any_fence_abort` HITL-delivery-suppression guard, widening its scope from
+    "this level's own recovered branches" to "anywhere in the tree." `False`
+    default → byte-identical to pre-arc (a non-resume dispatch, a resume with
+    no effect-fence pause anywhere in the tree, or a resume where no location
+    resolves to ABORT, sees no behavior change). Same hash-inert /
+    per-step-transient posture as its two siblings."""
+
     hitl_delivery_holder: HITLDeliveryCell | None = None
     """B-39 impl leg Slice B (CP spec v1.106 §1) — the per-branch ONE-SHOT delivery
     cell for the operator's resolved HITL response, replacing the retired

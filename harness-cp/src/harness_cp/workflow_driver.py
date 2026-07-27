@@ -2940,6 +2940,50 @@ def _resolve_effect_fence_gated(
     return None
 
 
+def compute_effect_fence_tree_wide_abort_present(
+    root_snapshot: PauseSnapshot | None,
+    resume_context: ResumeContext | None,
+) -> bool:
+    """Whether ANY location in the FULL resume tree resolves to an
+    `EffectFenceResolution.ABORT` this resume cycle — the THIRD sibling of
+    `compute_hitl_uniform_fallback_eligible_run_id` /
+    `compute_effect_fence_uniform_fallback_eligible_key`.
+
+    CP spec v1.111 §2 property 8 (closes `B-80`): the pre-existing
+    `_any_fence_abort` HITL-delivery-suppression guard at the fan-out dispatch
+    sites is computed from `_recovered_effect_fence_paused`, scoped to the
+    CURRENT fan-out level's own recovered branches only — so an ABORT
+    targeting a DIFFERENT, nested pause subtree (a deeper
+    `HIERARCHICAL_DELEGATION` level, or a sibling peer's recursively paused
+    child) is invisible to a shallower level's own guard. This MUST be
+    computed ONCE against the TRUE ROOT `PauseSnapshot` (the caller-supplied
+    `pause_snapshot`/`pause_snapshot_input` at the depth-0 `resume()` call,
+    BEFORE any recursion narrows it to a subtree) and threaded down UNCHANGED
+    to every recursion level — mirrors
+    `compute_effect_fence_uniform_fallback_eligible_key`'s own discipline
+    exactly, reusing the SAME tree-wide enumeration
+    (`_collect_effect_fence_idempotency_keys`) and the SAME per-key resolver
+    (`_resolve_effect_fence_gated`, gated by the SAME sole-unaddressed-location
+    safety rule that resolver already enforces for the uniform-fallback case).
+
+    Deliberately blanket scope, not `cascade_policy`-precise (CP spec v1.111
+    §2.1(c)) — `PauseSnapshot` carries no `cascade_policy` field at any level,
+    so a precise version is out of scope of this property.
+
+    `False` when `root_snapshot`/`resume_context` is `None` (the crash-resume
+    path, where the level-local `_any_fence_abort` term already evaluates
+    `False` too — CP spec v1.111 §2.1(b) byte-compat requirement) or when no
+    collected location resolves to `ABORT`."""
+    if root_snapshot is None or resume_context is None:
+        return False
+    candidate_keys = _collect_effect_fence_idempotency_keys(root_snapshot)
+    eligible_key = compute_effect_fence_uniform_fallback_eligible_key(root_snapshot, resume_context)
+    return any(
+        _resolve_effect_fence_gated(resume_context, _k, eligible_key) is EffectFenceResolution.ABORT
+        for _k in candidate_keys
+    )
+
+
 def execute_workflow(
     manifest_entry: WorkflowManifestEntry,
     steps: Sequence[WorkflowStep],
@@ -2954,6 +2998,7 @@ def execute_workflow(
     resume_context: ResumeContext | None = None,
     hitl_uniform_fallback_eligible_run_id: str | None = None,
     effect_fence_uniform_fallback_eligible_key: str | None = None,
+    effect_fence_tree_wide_abort_present: bool = False,
 ) -> RunResult:
     """Execute the workflow per C-CP-25 §25.3 happy-path discipline.
 
@@ -3196,6 +3241,7 @@ def execute_workflow(
             resume_context=resume_context,
             hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
             effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
+            effect_fence_tree_wide_abort_present=effect_fence_tree_wide_abort_present,
         )
 
         # C-OD-25 §25.1 close-time attributes (4 of 12). Outcome enum serializes
@@ -3235,6 +3281,7 @@ def _execute_workflow_body(
     resume_context: ResumeContext | None = None,
     hitl_uniform_fallback_eligible_run_id: str | None = None,
     effect_fence_uniform_fallback_eligible_key: str | None = None,
+    effect_fence_tree_wide_abort_present: bool = False,
 ) -> tuple[RunResult, int]:
     """Execute the workflow body within the workflow.envelope OTel span.
 
@@ -4284,6 +4331,7 @@ def _execute_workflow_body(
             resume_context=resume_context,
             hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
             effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
+            effect_fence_tree_wide_abort_present=effect_fence_tree_wide_abort_present,
         )
     if strategy is _DriverStrategyStatus.EVALUATOR_OPTIMIZER:
         return _execute_evaluator_optimizer(
@@ -4302,6 +4350,7 @@ def _execute_workflow_body(
             resume_context=resume_context,
             hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
             effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
+            effect_fence_tree_wide_abort_present=effect_fence_tree_wide_abort_present,
         )
     if strategy is _DriverStrategyStatus.ORCHESTRATOR_WORKERS:
         # B-POSTJOIN-LLM-SYNTHESIS (CP spec v1.54 §3) — carve an opt-in terminal
@@ -4341,6 +4390,7 @@ def _execute_workflow_body(
             resume_context=resume_context,
             hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
             effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
+            effect_fence_tree_wide_abort_present=effect_fence_tree_wide_abort_present,
         )
     if strategy is _DriverStrategyStatus.HIERARCHICAL_DELEGATION:
         # B-HIERARCHICAL-PAUSE (R-FS-1) — HIERARCHICAL now threads the resume
@@ -4378,6 +4428,7 @@ def _execute_workflow_body(
             resume_context=resume_context,
             hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
             effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
+            effect_fence_tree_wide_abort_present=effect_fence_tree_wide_abort_present,
         )
     if strategy is _DriverStrategyStatus.DECENTRALIZED_HANDOFF:
         return _execute_decentralized_handoff(
@@ -4397,6 +4448,7 @@ def _execute_workflow_body(
             resume_context=resume_context,
             hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
             effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
+            effect_fence_tree_wide_abort_present=effect_fence_tree_wide_abort_present,
         )
 
     # Selective per-run replay-resumption via N-lookup over the existing
@@ -5144,6 +5196,7 @@ def _execute_workflow_body(
             resume_context=resume_context,
             hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
             effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
+            effect_fence_tree_wide_abort_present=effect_fence_tree_wide_abort_present,
             # B-39 Slice B — the per-branch one-shot HITL delivery cell, set ONLY on
             # the RESUMED step (mirrors `effect_fence_resolution` immediately above).
             hitl_delivery_holder=(hitl_delivery_cell if step_index == resume_at else None),
@@ -7511,6 +7564,7 @@ def _execute_parallelization(
     resume_context: ResumeContext | None = None,
     hitl_uniform_fallback_eligible_run_id: str | None = None,
     effect_fence_uniform_fallback_eligible_key: str | None = None,
+    effect_fence_tree_wide_abort_present: bool = False,
 ) -> tuple[RunResult, int]:
     """Execute the `PARALLELIZATION` fan-out-barrier-aggregate strategy (U-CP-86).
 
@@ -7635,6 +7689,14 @@ def _execute_parallelization(
         is EffectFenceResolution.ABORT
         for _k in _recovered_effect_fence_paused.values()
     )
+    # B-80 impl leg (CP spec v1.111 §2 property 8) — widen (never replace) the
+    # level-local guard immediately above with the tree-wide signal computed
+    # ONCE at the true depth-0 root and threaded down unchanged (see
+    # `compute_effect_fence_tree_wide_abort_present`'s docstring). A shallower
+    # level's own recovered branches may show no ABORT while a deeper/sibling
+    # subtree elsewhere in the full resume tree does — this OR closes that
+    # blind spot without narrowing the pre-existing level-local rule.
+    _any_fence_abort = _any_fence_abort or effect_fence_tree_wide_abort_present
 
     # Empty step sequence → trivially SUCCESS with an empty aggregate (no
     # fan-out; mirrors the linear path's empty-loop SUCCESS).
@@ -7902,6 +7964,7 @@ def _execute_parallelization(
         resume_context=resume_context,
         hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
         effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
+        effect_fence_tree_wide_abort_present=effect_fence_tree_wide_abort_present,
     )
 
     # R-003 active-workflow-context sidecar (resolved once per fan-out; the same
@@ -10355,6 +10418,7 @@ def _execute_evaluator_optimizer(
     resume_context: ResumeContext | None = None,
     hitl_uniform_fallback_eligible_run_id: str | None = None,
     effect_fence_uniform_fallback_eligible_key: str | None = None,
+    effect_fence_tree_wide_abort_present: bool = False,
 ) -> tuple[RunResult, int]:
     """Execute the `EVALUATOR_OPTIMIZER` generate→evaluate→regenerate loop (U-CP-87).
 
@@ -10645,6 +10709,7 @@ def _execute_evaluator_optimizer(
             resume_context=resume_context,
             hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
             effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
+            effect_fence_tree_wide_abort_present=effect_fence_tree_wide_abort_present,
             # B-78 impl leg — the one-shot HITL delivery cell (constructed below,
             # near the resume-recovery block), threaded ONLY onto the FIRST
             # `_dispatch_and_buffer` call made this resume cycle (`entry_index ==
@@ -11277,6 +11342,7 @@ def _execute_orchestrator_workers(
     resume_context: ResumeContext | None = None,
     hitl_uniform_fallback_eligible_run_id: str | None = None,
     effect_fence_uniform_fallback_eligible_key: str | None = None,
+    effect_fence_tree_wide_abort_present: bool = False,
 ) -> tuple[RunResult, int]:
     """Execute the `ORCHESTRATOR_WORKERS` orchestrator-dispatch-collect strategy (U-CP-88).
 
@@ -11418,6 +11484,14 @@ def _execute_orchestrator_workers(
         is EffectFenceResolution.ABORT
         for _k in _recovered_effect_fence_paused.values()
     )
+    # B-80 impl leg (CP spec v1.111 §2 property 8) — widen (never replace) the
+    # level-local guard immediately above with the tree-wide signal computed
+    # ONCE at the true depth-0 root and threaded down unchanged (see
+    # `compute_effect_fence_tree_wide_abort_present`'s docstring). A shallower
+    # level's own recovered branches may show no ABORT while a deeper/sibling
+    # subtree elsewhere in the full resume tree does — this OR closes that
+    # blind spot without narrowing the pre-existing level-local rule.
+    _any_fence_abort = _any_fence_abort or effect_fence_tree_wide_abort_present
 
     # B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-EFFECT-BEARING (out-of-family Codex [P2]) — an
     # orchestrator effect-fence resume whose body was CHANGED to empty (`steps == []`) must FAIL
@@ -11874,6 +11948,7 @@ def _execute_orchestrator_workers(
         resume_context=resume_context,
         hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
         effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
+        effect_fence_tree_wide_abort_present=effect_fence_tree_wide_abort_present,
     )
     if _is_resume:
         # B-FANOUT-PAUSE — the orchestrator already ran in the ORIGINAL envelope
@@ -14435,6 +14510,7 @@ def _execute_hierarchical_delegation(
     resume_context: ResumeContext | None = None,
     hitl_uniform_fallback_eligible_run_id: str | None = None,
     effect_fence_uniform_fallback_eligible_key: str | None = None,
+    effect_fence_tree_wide_abort_present: bool = False,
 ) -> tuple[RunResult, int]:
     """Execute the `HIERARCHICAL_DELEGATION` recursive bounded-fan-out strategy (U-CP-89).
 
@@ -14552,6 +14628,7 @@ def _execute_hierarchical_delegation(
         resume_context=resume_context,
         hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
         effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
+        effect_fence_tree_wide_abort_present=effect_fence_tree_wide_abort_present,
     )
 
 
@@ -14633,6 +14710,7 @@ def _execute_decentralized_handoff(
     resume_context: ResumeContext | None = None,
     hitl_uniform_fallback_eligible_run_id: str | None = None,
     effect_fence_uniform_fallback_eligible_key: str | None = None,
+    effect_fence_tree_wide_abort_present: bool = False,
 ) -> tuple[RunResult, int]:
     """Execute the `DECENTRALIZED_HANDOFF` single-owner sequential handoff strategy (U-CP-90).
 
@@ -14977,6 +15055,7 @@ def _execute_decentralized_handoff(
             resume_context=resume_context,
             hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
             effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
+            effect_fence_tree_wide_abort_present=effect_fence_tree_wide_abort_present,
         )
         # Single owner → branch_index 0 (no siblings; causality rides the chained
         # parent_action_id, NOT the fan-out ordinal). step_index = the declared stage
