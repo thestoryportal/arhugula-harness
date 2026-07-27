@@ -2343,7 +2343,36 @@ items:
     closures, EO, DH). The close_out design task above (a persisted HITL-placement/
     gate-configuration identity, checked before ANY resume dispatch regardless of whether a
     delivery cell resolves) already covers this path; no separate fix is owed, this note only
-    widens the reachability set the eventual fix must cover.'
+    widens the reachability set the eventual fix must cover.
+
+    IMPL LEG SLICE 1 LANDED 2026-07-27 at PR #1132 -- the fan-out closure''s
+    pre-dispatch-gate-owning delivery site only (_execute_parallelization +
+    _execute_orchestrator_workers, the latter covering HIERARCHICAL_DELEGATION via
+    its recursive reuse per the B-72 precedent). Per advisor()''s split
+    recommendation (mirroring the B-80 8-before-7 split), slice 1 extends
+    PreDispatchGateOwningBranchResumeState with ONE new field, hitl_gate_config_hash
+    (str | None, default None) -- a sha256 hex digest over the ADD-only-folded
+    applicable HITLPlacement tuple (fold_step_hitl_placements(manifest_entry.
+    hitl_placements, binding.hitl_placement)) plus the per-step removed_placements
+    directive (binding.removed_placements), mirroring step_id/step_kind/
+    child_workflow_id''s own material-diff identity guard shape at the SAME
+    resume-side _resume_body_mismatch closures. out-of-family codex round 2 [P1]:
+    an initial draft made the field REQUIRED (no default) -- breaking
+    JournalWorkflowPauseStore._parse_snapshot deserialization of a real durable
+    journal snapshot captured by the PRECEDING (B-72-only) deployment, which would
+    have stranded in-flight HITL-paused workflows after an upgrade; fixed --
+    default-None byte-compat, _strip_default_fanout_resume_fields drops a None value
+    from the hash-covered dump so a legacy row re-hashes byte-identically, and resume
+    SKIPS the material-diff comparison when the snapshot''s captured value is None
+    (mirrors child_workflow_id''s own "validate ONLY when present" convention).
+    Round 3 converged clean ("No actionable correctness defects were found").
+    17 new tests (pure discrimination witnesses for all 5 SS1.1(a) fields plus
+    SS1.1(b) ADD/REMOVE symmetry, the byte-compat strip + legacy-snapshot-resume
+    witnesses, plus 6 full pause-to-resume integration witnesses across both wiring
+    sites), mutation-probe-verified (all 6 rejection/byte-compat witnesses genuinely
+    fail when the corresponding guard is disabled). SLICE 2 (the LINEAR resume_at +
+    EVALUATOR_OPTIMIZER + DECENTRALIZED_HANDOFF net-new carrier, per SS1.1(d))
+    remains open, not yet built -- this row stays open.'
   council: 'CONVENED 2026-07-27 (roadmap-continue, dyadic council-orchestrator pass, C10 + C1
     co-primary). Probe-first discipline run BEFORE deliberation falsified this row''s own
     premise: Runtime-owned persona/engine-class placement-resolution logic is NOT opaque to

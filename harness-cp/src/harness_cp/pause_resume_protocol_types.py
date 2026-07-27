@@ -262,6 +262,35 @@ class PreDispatchGateOwningBranchResumeState(BaseModel):
     does not need to special-case it since the field lives inside a
     non-empty-tuple-gated carrier row, not a bare top-level field)."""
 
+    hitl_gate_config_hash: str | None = None
+    """B-79 impl leg slice 1 (CP spec v1.110 §1.2 property 7) — a sha256 hex
+    digest over this branch's APPLICABLE HITL gate configuration AT CAPTURE
+    TIME: the ADD-only-folded placement tuple (`fold_step_hitl_placements(
+    manifest_entry.hitl_placements, binding.hitl_placement)`) plus the per-step
+    `removed_placements` directive (`binding.removed_placements`) — see
+    `_hash_hitl_gate_config`. Resume recomputes the same hash against the
+    re-supplied step and rejects a mismatch as a material diff, exactly like
+    `step_id`/`step_kind`/`child_workflow_id` above: a same-step_id edit that
+    ADDS/REMOVES/ALTERS a placement (position, tool_filter, cascade_policy,
+    timeout) or the removed-placements set would otherwise silently deliver
+    the operator's stored `hitl_response` under a gate configuration different
+    from the one that actually paused.
+
+    default-`None` for byte-compat (out-of-family Codex [P1] — corrected from an
+    initial `str`-required draft that broke `JournalWorkflowPauseStore._parse_
+    snapshot`'s deserialization of an already-durable journal record captured by
+    the PRECEDING `B-72` deployment: unlike `child_workflow_id` above, this field
+    is being added to an ALREADY-SHIPPED carrier row type, not introduced
+    alongside a brand-new one, so a real pre-existing durable snapshot with this
+    field absent from its JSON MUST still deserialize + hash + resume
+    successfully). Resume SKIPS the gate-config comparison when the CAPTURED
+    (snapshot) value is `None` — mirrors `child_workflow_id`'s own "validate
+    ONLY when present" convention — rather than treating an unrecoverable legacy
+    absence as a rejection. `_strip_default_fanout_resume_fields` DOES
+    special-case this one (unlike `child_workflow_id`): a legacy row's `None`
+    must drop from the hash-covered dump so its recomputed `snapshot_hash`
+    stays byte-identical to how it hashed under the preceding deployment."""
+
 
 class FanOutResumeState(BaseModel):
     """Fan-out resume reconstruction state carried by a paused-fan-out PauseSnapshot.
