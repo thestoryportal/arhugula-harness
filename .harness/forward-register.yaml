@@ -1688,7 +1688,26 @@ items:
     round can safely author. CROSS-REFERENCE (advisor(), B-76 arc, 2026-07-26): likely ONE
     finding with B-77 -- both concern raw mtime as an untrustworthy age authority (this row:
     filesystem timestamp-granularity rounding; B-77: crash-window non-atomicity); ground as a
-    single does-the-age-authority-stay-mtime question before building either in isolation.'
+    single does-the-age-authority-stay-mtime question before building either in isolation.
+    GROUNDED 2026-07-26 (advisor()-directed re-application of the workspace''s own
+    B-44/B-45 dormancy test): B-74 and B-77 are DISTINCT root causes sharing only a symptom
+    (raw mtime as an untrustworthy age authority) -- B-74 fires with no crash at all, B-77
+    requires one; a fix for one does not close the other, so the "likely ONE finding" framing
+    above does not hold and each is dispositioned independently below. B-74 itself is DORMANT
+    by the SAME test already applied to B-44 ("no live trigger today") and B-45 ("no realistic
+    config reaches this"): `protected_result_store_ttl_seconds` (types.py, `gt=0.0,
+    allow_inf_nan=False`, factory default 86400.0) has no floor beyond nonzero, so a coarse
+    filesystem''s rounding error (up to ~1s on a 1-second-resolution filesystem; this
+    workspace''s committed deployment surfaces default to sub-millisecond-resolution ext4/APFS/
+    NTFS) only matters if `ttl_seconds` is configured below that rounding error -- but the
+    store''s entire purpose (holding `PostEffectAuditSigningError.result` for HUMAN-timescale
+    operator recovery, per the spec''s own 86400s default) makes a sub-second-to-low-single-
+    digit-second TTL a degenerate configuration no realistic deployment would set, not a
+    reachable one. Registered, not built -- same disposition as B-44/B-45; would become
+    council-eligible (the "design a resolution floor" question) only if a real consumer ever
+    wants a sub-second TTL, mirroring B-44''s own "once a real consumer surfaces" framing (the
+    prior `council: no` framing already correctly anticipated this; it was not self-
+    contradictory, just not yet spelled out against the dormancy test).'
   close_out: 'Design a TTL-floor validation or a probe-based age-authority selection that
     accounts for the deployment filesystem''s actual timestamp resolution -- e.g. probe the
     store root''s filesystem granularity at construction/first-write time (write a marker file,
@@ -1752,7 +1771,24 @@ items:
     reachability precondition (needs a crash at a specific ~2-syscall-wide instant, not just
     concurrent access) with the same root cause (mtime refresh is not atomic with the commit
     that makes the entry durable and visible). CROSS-REFERENCE (advisor(), B-76 arc, 2026-07-26):
-    likely ONE finding with B-74 -- see B-74''s row for the shared-root-cause framing.'
+    likely ONE finding with B-74 -- see B-74''s row for the shared-root-cause framing.
+    GROUNDED 2026-07-26 (advisor()-directed re-application of the B-44/B-45 dormancy test,
+    against `_publish_atomic`''s actual code, `protected_result_store.py:478-506`): the
+    "CROSS-REFERENCE... likely ONE finding" framing above does not hold -- see B-74''s row for
+    why they''re distinct. B-77''s own reachability is INDEPENDENTLY dormant, by a STRICTER
+    margin than B-74''s: the crash window this row concerns is bounded by `os.link` (line 486,
+    entry becomes durably visible; the recovered entry inherits the temp file''s mtime, set at
+    `handle.write()`+`fsync()` just before) through `os.utime`''s refresh (line 493) -- i.e. one
+    `os.link` call plus one directory fsync, both already running inside `self._publish_lock`
+    with no cross-process lock re-acquisition mid-method. That is a sub-millisecond-to-low-
+    single-digit-millisecond window on any of this workspace''s committed deployment surfaces
+    even under a large-payload/slow-disk worst case -- narrower than B-74''s already-degenerate
+    sub-second-TTL floor, not wider. Reaching it needs BOTH a near-zero `ttl_seconds`
+    (B-74''s already-established degenerate-configuration floor) AND a crash landing inside
+    that sub-millisecond window specifically -- a doubly-degenerate combination. Registered,
+    not built -- same disposition as B-44/B-45/B-74; the close_out''s fix pattern is real and
+    known (a genuine future candidate if a sub-second-TTL consumer ever surfaces), just not
+    reachable under any deployment this workspace has committed to today.'
   close_out: 'Make the age-authority timestamp durable ATOMICALLY with the commit rather than as
     a separate later step -- e.g. write the intended-mtime as part of the temp file''s own
     content/xattr before `os.link`, so the linked dirent already carries the correct age
