@@ -1,18 +1,39 @@
 # Release-Candidate Deployment Readiness Runbook
 
-> Status: Claude Code handoff for the next phase after full harness implementation closure. This is process-substrate, not design-substrate. Do not create a second roadmap or dashboard for this phase unless the release-candidate effort grows into multiple durable parallel tracks. Use `.harness/roadmap_status.md` and `tools/dashboard/roadmap.html` as the canonical status surfaces.
+> ## ⚠️ ARC CLOSED — this is a RE-VALIDATION recipe, not a live handoff
+>
+> **This arc ran to completion on 2026-06-10 with verdict `GO for release candidate`.**
+> Closure report: [`.harness/release-candidate-deployment-readiness-report-2026-06-10.md`](./release-candidate-deployment-readiness-report-2026-06-10.md).
+> Every RC surface across all three tiers — provider-free, self-hosted (daemon + telemetry +
+> multitenant + gVisor sandbox), and managed-cloud (E2B, GCP Secret Manager, Neon, Files API,
+> Managed Agents, OTLP→Cloud Trace, S3) — was exercised and passing with zero harness code changes.
+>
+> The runbook is **retained as the re-validation recipe**: run it when a new deployment failure,
+> a stack/credential change, or an operator request calls for another RC pass. §10's "first Claude
+> prompt" applies **only to such a re-validation pass** — it is no longer a standing session opener.
+> **Forward work derives from the roadmap per root `CLAUDE.md` §12, not from this file.**
+>
+> Status: process-substrate, not design-substrate. Do not create a second roadmap for this phase
+> unless the release-candidate effort grows into multiple durable parallel tracks.
+> `.harness/roadmap_status.md` is the canonical status surface (the HTML dashboard this runbook
+> originally also named was eliminated 2026-07-14 per root `CLAUDE.md` §12).
 
 ## 0. Starting State
 
-Current handoff state at authoring:
+State pinned at **2026-07-27**, `main` HEAD `1abfaae3` (`ops: roadmap status refresh post-#1134`):
 
-- `main` is pushed to `origin/main` at `897a585` (`ops: roadmap status refresh post-overlay-fix`).
-- The prior commit `d4b6b4e` merged the overlay-check fix: stale gitignored `tools/semantic_overlay/overlay.json` artifacts no longer fail `overlay-check`; stale tracked snapshots still fail.
-- Root checkout was clean and aligned with `origin/main` at Codex handoff.
-- `.harness/roadmap_status.md` intentionally records the expected status-refresh fixed-point lag: dashboard head/hash pin `d4b6b4e`, while repository HEAD is the refresh commit `897a585`.
+- Semantic overlay hard gate is clean: **389 nodes, 36/36 CXA seams wired, 0 missing CXA endpoints**.
 - Phase 8 substitution accounting is closed. Live ledger is 54/54 `RETIRED` and 54/54 pipeline-advanced.
-- Semantic overlay hard gate is clean: 304 nodes, 31/31 CXA seams wired, 0 missing CXA endpoints.
+- Latest retirement batch record: `.harness/phase-7d-retirement-events-batch-57.md`.
+- Advisory overlay buckets at this pin: `code_without_cite` 0 · `contract_without_code` 0 ·
+  `unit_without_code` 2 · `substitution_without_carrier` 40 · `cxa_seam_missing_endpoint` 0.
+  Full classification: `.harness/overlay-advisory-traceability-audit-2026-07-27.md` (the §6 deliverable).
 - No canonical R-411/R-412/R-420/R-421/R-430/R-500/R-810/R-820/R-830/R-008/R-CXA-* item should be reopened as implementation work unless a new concrete deployment failure proves a regression.
+
+*Historical note (superseded).* The original authoring pinned `main` at `897a585`
+(`ops: roadmap status refresh post-overlay-fix`) with 304 nodes / 31 seams. **`897a585` is no
+longer an ancestor of `main`** — repository history was re-created 2026-07-25 (`main`'s root
+commit is `ebab176d`). Do not attempt `git` range queries against it.
 
 ## 1. Claude Code Startup
 
@@ -28,7 +49,7 @@ git fetch origin
 git merge --ff-only origin/main
 ```
 
-4. If dashboard drift is only the expected terminating-refresh fixed point, treat it as non-blocking. If drift is substantive, stop and reconcile before any RC work.
+4. If `.harness/roadmap_status.md` drift is only the expected terminating-refresh fixed point, treat it as non-blocking. If drift is substantive, stop and reconcile before any RC work.
 5. Do not ask whether to reopen closed harness implementation rows. The next phase is release-candidate readiness, live acceptance smoke, traceability cleanup, then optional polish.
 
 ## 2. HIL Scope Gate
@@ -59,10 +80,18 @@ Run:
 ```bash
 just check
 just overlay-check
-python tools/substitution_ledger.py --check
-python3 tools/dashboard/generate.py --root .
-uv run pytest tools/semantic_overlay/test_overlay.py tools/test_dashboard_generate.py tools/test_substitution_ledger.py
+python3 tools/substitution_ledger.py --check
+python3 tools/forward_register.py --check
+
+# The tools tests run from the `tools/` working directory, exactly as CI invokes them
+# (.github/workflows/ci.yml) — `test_substitution_ledger.py` imports its module as a
+# top-level name and fails collection from the repo root.
+cd tools && uv run python -m pytest test_substitution_ledger.py semantic_overlay/test_overlay.py -q
 ```
+
+*(Removed 2026-07-27: the HTML dashboard was eliminated 2026-07-14 per root `CLAUDE.md` §12 —
+`python3 tools/dashboard/generate.py --root .` and `tools/test_dashboard_generate.py` no longer
+exist and are no longer gates.)*
 
 Also audit:
 
@@ -78,8 +107,8 @@ Provider-free acceptance criteria:
 
 - Full local gate is green, or every failure is classified with file/test evidence.
 - `overlay-check` has 0 hard findings.
-- Substitution ledger validates.
-- Dashboard regenerates from source, not hand edits.
+- Substitution ledger validates; forward-register tally validates.
+- `.harness/roadmap_status.md` is at the expected fixed point (or a terminating refresh is owed and noted).
 - A release operator can identify required environment variables, cloud resources, local daemons, and cleanup steps from repo docs.
 
 If docs are insufficient, fix the runbook/docs in a focused docs PR before live smoke.
@@ -91,6 +120,8 @@ Goal: prove the local/self-hosted deployment path still works from documented se
 Preconditions:
 
 - Docker Desktop or equivalent Docker daemon is running.
+  **Current state (2026-07-27): the Docker daemon is NOT running** — `docker info` fails. Start
+  Docker Desktop before any Phase-B command; this is an operator-machine gate, not a harness gap.
 - The operator has copied or prepared the self-hosted config, normally:
 
 ```bash
@@ -117,6 +148,16 @@ just r411-gvisor-live-e2e
 
 Use `R411_GVISOR_DOCKER_COMMAND` if targeting the Lima Linux VM rather than the default Docker socket.
 
+**Current state (2026-07-27): the R-411 Lima VM volume `/Volumes/Development/arhugula-r411/` is
+ABSENT** (external volume not mounted). The 2026-06-10 pass ran R-411 against that VM
+(`R411_GVISOR_DOCKER_COMMAND="env LIMA_HOME=/Volumes/Development/arhugula-r411/lima-home limactl
+shell r411-gvisor sudo docker"`) and left it Running. A re-validation pass must re-mount the
+volume (or re-provision the VM) first; gVisor is Linux-only and never available on the macOS host.
+
+Setup the R-420 live e2e needs before it will run: see
+`deploy/self-hosted-local/README.md` step 4 (empty `prompts/` + `routing_manifest/` directories
+and a throwaway `STATE_LEDGER` path).
+
 Acceptance criteria:
 
 - Self-hosted readiness passes before stack mutation.
@@ -138,6 +179,19 @@ Preconditions:
 - AWS profile/S3 env for R-830 is available if running S3 smoke.
 - Neon/PostgreSQL connection string is available if running managed-DB smoke.
 - Anthropic/OpenAI/Ollama credentials are available only for the specific approved provider smoke.
+
+**Current state (2026-07-27) — two live gates carried over from the 2026-06-10 close:**
+
+- **GCP IAM re-grant needed for the three OTLP e2es.** `roles/iam.serviceAccountTokenCreator`
+  (`user:storyportalrobert@gmail.com` on SA `gcp-secret-manager-accessor@project-ba535aa4-…`) was
+  deliberately **REVOKED** at the 2026-06-10 close per operator decision. `roles/run.invoker`
+  (SA → Cloud Run collector `arhugula-r421-otel-collector`, `us-central1`) was **RETAINED**. A
+  re-validation of `r421-managed-cloud-live-e2e` / `r810-files-live-e2e` /
+  `r820-managed-agents-live-e2e` therefore needs only the token-creator grant re-applied
+  (operator-gated privileged IAM mutation — never apply unilaterally), then revoked again at close.
+- **AWS SSO session for `r830` expires.** `just r830-s3-live-e2e` fails on an expired session;
+  the operator re-runs `aws sso login --profile r830` first (this is exactly how the 2026-06-10
+  pass closed remaining risk #2).
 
 Prepare or verify managed config, normally from:
 
@@ -187,12 +241,20 @@ just overlay
 just overlay-query --orphans
 ```
 
-Current known advisory classes at handoff:
+Current advisory classes, re-measured **2026-07-27** at `main` `1abfaae3` (full classification:
+`.harness/overlay-advisory-traceability-audit-2026-07-27.md`):
 
-- `code_without_cite`: 14 files.
-- `contract_without_code`: 8 contracts: `C-CP-30`, `C-CP-37`, `C-CP-43`, `C-CP-49`, `C-CP-50`, `C-IS-11`, `C-OD-3`, `C-RT-28`.
-- `substitution_without_carrier`: 47 rows.
-- `cxa_seam_missing_endpoint`: 0 hard findings.
+- `code_without_cite`: **0** files (was 14 at the 2026-06-10 handoff; the last 2 were closed by
+  comment-only cite formalization at the re-baseline PR).
+- `contract_without_code`: **0** contracts — **bucket closed** (was 8: `C-CP-30`, `C-CP-37`,
+  `C-CP-43`, `C-CP-49`, `C-CP-50`, `C-IS-11`, `C-OD-3`, `C-RT-28`).
+- `unit_without_code`: **2** — `U-MEM-17` (implemented at
+  `lifecycle/native_memory_adapter.py`; the unit token is cited only from the tests file, and the
+  overlay scans `<pkg>/src/**` only) and `U-RT-00` (the Runtime spec's own authoring unit — no
+  code carrier by construction). Both ACCEPTED. This bucket was not enumerated at 2026-06-10.
+- `substitution_without_carrier`: **40** rows (was 47) = 31 `SUBSTANTIVE_RETIRED` + 9
+  `AUTHORING_ONLY`; both `BOUNDED_RESIDUAL` rows now have direct carriers.
+- `cxa_seam_missing_endpoint`: **0** hard findings (over 36 wired seams, up from 31).
 
 Cleanup rules:
 
@@ -203,7 +265,7 @@ Cleanup rules:
 
 Recommended deliverable:
 
-- A short `.harness/overlay-advisory-traceability-audit-YYYY-MM-DD.md` classifying each advisory bucket as fixed, accepted, or escalated.
+- A short `.harness/overlay-advisory-traceability-audit-YYYY-MM-DD.md` classifying each advisory bucket as fixed, accepted, or escalated. Prior deliverables: `2026-06-10` (arc close), `2026-07-27` (re-baseline; current baseline).
 - Focused source/docstring edits only when evidence is direct.
 - `just overlay-check` and targeted tests after any source edit.
 
@@ -231,7 +293,9 @@ The report must include:
 
 After the RC report is accepted, present this menu and stop for operator selection:
 
-- Dashboard iteration-2: dependency graph, sparklines, live update mode.
+- ~~Dashboard iteration-2: dependency graph, sparklines, live update mode.~~ **RETIRED /
+  SUPERSEDED 2026-07-27** — the HTML dashboard was eliminated 2026-07-14 per root `CLAUDE.md` §12;
+  `.harness/roadmap_status.md` is the sole surviving status surface. Not selectable.
 - ICM governance methodology adoption/reconciliation.
 - CXA-2 durable recovery hardening if a real event-sourced, WAL, reconciler, or engine-native recovery loop is introduced.
 - Additional provider or deployment feature development.
@@ -239,17 +303,19 @@ After the RC report is accepted, present this menu and stop for operator selecti
 
 ## 9. Conflict and Tension Notes
 
-- No new roadmap/dashboard is needed now. The existing roadmap and dashboard are canonical.
+- No new roadmap is needed. `Project_Roadmap_v1.md` + `.harness/roadmap_status.md` are canonical (the HTML dashboard was eliminated 2026-07-14).
 - The RC runbook is an execution checklist and handoff, not a competing status system.
 - Closed R-items remain closed unless live RC evidence proves regression.
 - Advisory overlay findings are traceability work, not proof of missing implementation.
 - `overlay.json` is gitignored and generated on demand. Do not force-add it.
 - Do not mix design-substrate amendments with runtime implementation unless a specific back-flow arc is opened.
 
-## 10. Suggested First Claude Prompt
+## 10. Suggested First Claude Prompt — RE-VALIDATION PASSES ONLY
 
-Use this prompt when starting Claude Code:
+**Not a standing session opener.** The arc closed GO on 2026-06-10 (see the banner at the top of
+this file); a normal session derives its next action from the roadmap per root `CLAUDE.md` §12.
+Use the prompt below only when the operator has explicitly asked for another RC pass:
 
 ```text
-Run the SessionStart audit, trust .harness/roadmap_status.md, then read .harness/release-candidate-deployment-readiness-runbook.md. Do not reopen closed R-items. Start the release-candidate deployment-readiness arc at the HIL scope gate, then proceed through provider-free readiness before requesting approval for any live deployment smoke.
+Run the SessionStart audit, trust .harness/roadmap_status.md, then read .harness/release-candidate-deployment-readiness-runbook.md. This is a RE-VALIDATION pass of an already-GO-closed arc. Do not reopen closed R-items. Start at the HIL scope gate, then proceed through provider-free readiness before requesting approval for any live deployment smoke.
 ```

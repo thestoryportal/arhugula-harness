@@ -65,9 +65,13 @@ Canonical plan heads are core `Implementation_Plan_Harness_Core_v1_3.md`, IS `Im
 
 For axis-specific work, read the relevant scoped guidance after this root file: `harness-is/CLAUDE.md`, `harness-as/CLAUDE.md`, `harness-cp/CLAUDE.md`, or `harness-od/CLAUDE.md`. `harness-core/` hosts shared types and `harness-cxa/` hosts CXA seam instantiation. Full prior pointer text is indexed at `claude-artifact-pointers.md` §2.5 in `.harness`.
 
-### 2.6 Current Release-Candidate Handoff
+### 2.6 Release-Candidate Arc — CLOSED (GO, 2026-06-10)
 
-After batch-56 and the overlay-check ignored-artifact fix, the next forward phase is release-candidate deployment readiness. Before opening new implementation, read `.harness/release-candidate-deployment-readiness-runbook.md` after the mandatory §12 session-start audit. That runbook is the active Claude handoff for provider-free readiness, live deployment acceptance smoke, overlay advisory traceability cleanup, closure reporting, and the optional-polish gate. It is process-substrate and does not create a second roadmap or dashboard.
+The release-candidate deployment-readiness arc **ran to completion with verdict `GO for release candidate`**; closure report at `.harness/release-candidate-deployment-readiness-report-2026-06-10.md`. **No standing RC handoff remains — forward work derives from the roadmap per §12.**
+
+`.harness/release-candidate-deployment-readiness-runbook.md` is retained as the **re-validation recipe** (run it only when a deployment failure, a stack/credential change, or an operator request calls for another RC pass). Its live gates are operator-gated: Docker daemon up (Phase B); the R-411 Lima VM volume `/Volumes/Development/arhugula-r411/` mounted; paid Phase-C approval; the GCP `roles/iam.serviceAccountTokenCreator` re-grant (deliberately revoked at the 2026-06-10 close) plus `aws sso login --profile r830`.
+
+Current Phase-D advisory-traceability baseline: `.harness/overlay-advisory-traceability-audit-2026-07-27.md` (supersedes the 2026-06-10 audit).
 
 ---
 

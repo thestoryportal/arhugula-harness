@@ -1,7 +1,12 @@
-"""B-65-A protected result store — stage-4 OD composition-root factory.
+"""B-65-A protected result store — stage-4 OD composition-root factory (U-RT-145).
 
 Implements `Spec_Harness_Runtime_v1.md` v1.103 §14.8.11 construction (RATIFIED
-B-65 Class 2 fork §3b). Mirrors `memory_tool_registry_factory.
+B-65 Class 2 fork §3b). Plan home is `Implementation_Plan_Harness_Runtime_v2_51.
+md` §1.1 U-RT-145, whose coverage row maps "§14.8.11 protected post-effect result
+store (surface A)" to U-RT-145 and whose files-affected list names "the
+composition-root factories that build those dispatchers (the store dependency +
+owning tenant scope are INJECTED there)" — this module is that injection site.
+Mirrors `memory_tool_registry_factory.
 _create_fernet_from_key`'s lazy-`cryptography`-import idiom rather than
 introducing a second Fernet-construction pattern — `cryptography` stays an
 optional dependency behind an RT-FAIL, never imported eagerly.

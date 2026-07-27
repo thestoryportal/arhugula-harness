@@ -1,5 +1,13 @@
 """Dedicated off-loop executor for audit composition — B-47 PR B2a.
 
+**Cite anchors.** The executor itself is the pool `Spec_Harness_Runtime_v1.md`
+v1.102 §14.8.10.1 names verbatim as "the 4-worker audit-offload executor" when
+ruling it INELIGIBLE for B-48's sub-agent offload (the sibling grow-on-demand
+executor at `lifecycle/sub_agent_dispatch_executor.py`, U-RT-141). Beyond the
+B-47 audit-write venue, this module hosts `resolve_result_ref_off_loop` — the
+off-loop half of **U-RT-145**'s §14.8.11 protected-result-store resolution
+(B-65-A); see that function's own docstring for the codex round-4 P1 grounding.
+
 Out-of-family Codex round-2 findings on the PR B2a landing:
 
 **Why not `asyncio.to_thread` (P1 — executor exhaustion deadlock).** The CP

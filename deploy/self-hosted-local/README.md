@@ -27,37 +27,66 @@ non-secret sentinel keyring entry, so it makes no hosted-provider call.
 
 3. Replace every `/absolute/path/to/arhugula-v2` placeholder with this
    workspace root.
-4. Put the R-420 sentinel value in the OS keyring under service `harness`.
+4. Prepare the path-class bindings the live e2e resolves. The template binds
+   four `PathClass` members per workflow class; two of them point at
+   directories this repo does not ship, and one points at the repo's real
+   state ledger:
+
+   ```sh
+   mkdir -p prompts routing_manifest
+   ```
+
+   - `PROMPTS` → `<root>/prompts` and `ROUTING_MANIFEST` → `<root>/routing_manifest`
+     may be **empty**. Bootstrap stage 1 (`materialize_path_registry`) creates
+     every resolved path with `Path.mkdir(parents=True, exist_ok=True)`, so
+     pre-creating them is optional — but if you skip it, the run leaves two new
+     untracked directories at the workspace root. Routing data itself is read
+     from the `[runtime.routing_manifest]` table in the config, not from files
+     in that directory.
+   - `STATE_LEDGER` → repoint it to a **throwaway path** before running:
+
+     ```toml
+     path = "/absolute/path/to/arhugula-v2/.harness/r420-scratch/state.jsonl"
+     ```
+
+     The template ships `<root>/.harness/state.jsonl`, which is this repo's
+     real hash-chained ledger. `materialize_state_ledger` reattaches to an
+     existing file and appends to it (and raises `TamperedChainError` if
+     `verify_chain` reports `INVALID`), so leaving the default binding in place
+     writes e2e entries into the live ledger. Delete the scratch directory when
+     the run is done.
+
+5. Put the R-420 sentinel value in the OS keyring under service `harness`.
    The included no-paid template expects keyring item name `r420_probe_key`:
 
    ```sh
    uv run python -c 'import keyring; keyring.set_password("harness", "r420_probe_key", "r420-local-sentinel")'
    ```
-5. Start the local backend:
+6. Start the local backend:
 
    ```sh
    just r420-self-hosted-stack-up
    ```
 
-6. Run the non-mutating static gate:
+7. Run the non-mutating static gate:
 
    ```sh
    just r420-self-hosted-readiness harness.selfhosted.local.toml
    ```
 
-7. Start the harness daemon against the self-hosted config:
+8. Start the harness daemon against the self-hosted config:
 
    ```sh
    uv run harness daemon --config harness.selfhosted.local.toml
    ```
 
-8. Or run the full local live e2e in one command:
+9. Or run the full local live e2e in one command:
 
    ```sh
    just r420-self-hosted-live-e2e harness.selfhosted.local.toml
    ```
 
-9. Run the R-430 tail-keep collector proof against the same local stack:
+10. Run the R-430 tail-keep collector proof against the same local stack:
 
    ```sh
    just r430-tail-keep-live-e2e harness.selfhosted.local.toml
@@ -67,7 +96,7 @@ non-secret sentinel keyring entry, so it makes no hosted-provider call.
    trace through the real OTLP collector. Passing output ends with
    `trigger-trace-preserved=true` and `non-trigger-trace-exported=false`.
 
-10. Run the R-500 multi-tenant self-hosted proof against the same local stack:
+11. Run the R-500 multi-tenant self-hosted proof against the same local stack:
 
    ```sh
    just r500-multitenant-live-e2e harness.selfhosted.local.toml
@@ -79,7 +108,7 @@ non-secret sentinel keyring entry, so it makes no hosted-provider call.
    ledger. Passing output ends with `tenant-resource-separated=true`,
    `content-redacted=true`, and `audit-ledger-separated=true`.
 
-11. Open Grafana at `http://127.0.0.1:3000`.
+12. Open Grafana at `http://127.0.0.1:3000`.
 
 Stop the backend with:
 
