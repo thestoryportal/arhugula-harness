@@ -19,7 +19,7 @@
   **376 → 377** distinct units cited · 13 ADRs · 36/36 CXA seams wired · 15/55 substitutions with
   a direct `H_T-*` carrier file. The post-fix column is the measured `just overlay` output at this
   branch's HEAD; the +1 distinct unit is `U-RT-145`, whose only `<pkg>/src/**` carriers are the two
-  files fixed here (`U-RT-141`, the second token added, was already cited by 9 other source files).
+  files fixed here (`U-RT-141`, the second token added, was already cited by 8 other source files).
 
 The 2026-06-10 audit was run at HEAD `788e69f4`. That commit is **not an ancestor of current
 `main`** — repository history was re-created 2026-07-25 (`main`'s root commit is `d45ce125`,
@@ -102,7 +102,7 @@ Disposition breakdown of the 40 rows (derived by joining the orphan list to
 
 By axis: IS 8 · AS 8 · CP 17 · OD 4 · CXA 3.
 
-The substitution ledger gate remains authoritative and passes: `python3 tools/substitution_ledger.py
+The substitution ledger gate remains authoritative and passes: `uv run python tools/substitution_ledger.py
 --check` → `ledger OK — 54/54 RETIRED, 54/54 pipeline-advanced`. The overlay carrier-join is a
 *secondary* traceability lens whose thinness on retired rows is expected and does not contradict
 the ledger. **Accepted; not escalated.**

@@ -38,8 +38,9 @@ non-secret sentinel keyring entry, so it makes no hosted-provider call.
    - `PROMPTS` → `<root>/prompts` and `ROUTING_MANIFEST` → `<root>/routing_manifest`
      may be **empty**. Bootstrap stage 1 (`materialize_path_registry`) creates
      every resolved path with `Path.mkdir(parents=True, exist_ok=True)`, so
-     pre-creating them is optional — but if you skip it, the run leaves two new
-     untracked directories at the workspace root. Routing data itself is read
+     pre-creating them is optional — but if you skip it, the run leaves
+     `prompts/` untracked at the workspace root (`routing_manifest/` is already
+     gitignored). Routing data itself is read
      from the `[runtime.routing_manifest]` table in the config, not from files
      in that directory.
    - `STATE_LEDGER` → the template already binds a **throwaway scratch
