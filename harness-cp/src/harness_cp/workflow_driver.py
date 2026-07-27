@@ -76,7 +76,7 @@ from harness_cp.handoff_context import (
     RetryHistory,
     StateSummary,
 )
-from harness_cp.hitl_placement import HITLPlacement, HITLResult
+from harness_cp.hitl_placement import HITLPlacement, HITLResult, LoosenablePlacementKind
 from harness_cp.pause_resume_protocol import (
     CP_FAIL_PAUSE_SNAPSHOT_CORRUPTION,
     CP_FAIL_RESUME_MATERIAL_DIFF_DETECTED,
@@ -2710,6 +2710,64 @@ def _pre_dispatch_gate_owning_captured_child_workflow_id(step: WorkflowStep) -> 
         return str(_opaque_field(step.step_payload, "child_workflow_id"))
     except (TypeError, KeyError, AttributeError):
         return None
+
+
+def _hash_hitl_gate_config(
+    applicable_placements: tuple[HITLPlacement, ...],
+    removed_placements: frozenset[LoosenablePlacementKind],
+) -> str:
+    """sha256 hex over canonical JSON of an applicable HITL gate configuration.
+
+    B-79 impl leg slice 1 (CP spec v1.110 §1.2 property 7) — mirrors the
+    `canonicalize_brief`/`compute_brief_summary_hash` sorted-key-JSON pattern at
+    `harness_cp.sub_agent_brief`. `applicable_placements` is the caller's
+    ADD-only-folded tuple (`fold_step_hitl_placements(manifest_entry.
+    hitl_placements, binding.hitl_placement)`) — its ORDER is already
+    deterministic (manifest declaration order + fold-time append order) and is
+    deliberately NOT re-sorted here: sorting could falsely equate two
+    `tool_filter`/`cascade_policy` orderings that are semantically distinct.
+    `removed_placements` is a `frozenset` (no stable iteration order under hash
+    randomization across process restarts) — sorted by `.value` for
+    cross-process determinism, since this hash is compared across a
+    pause/resume cycle that may span a process restart."""
+    canonical: dict[str, object] = {
+        "placements": [p.model_dump(mode="json") for p in applicable_placements],
+        "removed_placements": sorted(rp.value for rp in removed_placements),
+    }
+    payload = json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _pre_dispatch_gate_owning_captured_hitl_gate_config_hash(
+    step: WorkflowStep,
+    manifest_entry: WorkflowManifestEntry,
+    *,
+    default_model_binding: ModelBinding,
+) -> str:
+    """The pre-dispatch gate-owning branch's applicable HITL gate configuration,
+    captured AT PAUSE-CAPTURE TIME as a content hash (B-79 impl leg slice 1, CP
+    spec v1.110 §1.2 property 7).
+
+    Mirrors `_pre_dispatch_gate_owning_captured_child_workflow_id`'s standalone-
+    recompute pattern: `resolve_step_binding` is the same pure/deterministic
+    function the enclosing dispatch loop already calls per-branch, so
+    recomputing it here (outside that loop, for exactly this step) is safe and
+    consistent with existing call sites elsewhere in this module. The
+    applicable placement set folds the per-step ADD-only override
+    (`binding.hitl_placement`) onto the workflow-declared tuple, exactly as the
+    runtime HITL gate composer resolves it at dispatch time — NOT the bare
+    `manifest_entry.hitl_placements` alone, which would miss a per-step-added
+    gate position."""
+    binding = resolve_step_binding(
+        manifest_entry,
+        str(step.step_id),
+        default_model_binding=default_model_binding,
+        persona_tier=manifest_entry.persona_tier,
+    )
+    applicable_placements = fold_step_hitl_placements(
+        manifest_entry.hitl_placements, binding.hitl_placement
+    )
+    return _hash_hitl_gate_config(applicable_placements, binding.removed_placements)
 
 
 def _collect_gate_owning_run_ids(snapshot: PauseSnapshot) -> list[str]:
@@ -7916,6 +7974,28 @@ def _execute_parallelization(
                             f"{pg.branch_index}: snapshot child_workflow_id="
                             f"{pg.child_workflow_id!r}, resume targets {_resumed_pg_cwid!r}"
                         )
+                # B-79 impl leg slice 1 (CP spec v1.110 §1.2 property 7) — a resumed
+                # branch's applicable HITL gate configuration MUST be unchanged from
+                # capture time. Recompute the same content hash against the re-supplied
+                # step and reject a mismatch as a material diff — an ADD/REMOVE/ALTER of a
+                # placement (position, tool_filter, cascade_policy, timeout) or the
+                # removed-placements set would otherwise silently deliver the operator's
+                # stored `hitl_response` under a gate configuration different from the one
+                # that actually paused.
+                _resumed_pg_gate_config_hash = (
+                    _pre_dispatch_gate_owning_captured_hitl_gate_config_hash(
+                        steps[pg.branch_index],
+                        manifest_entry,
+                        default_model_binding=default_model_binding,
+                    )
+                )
+                if _resumed_pg_gate_config_hash != pg.hitl_gate_config_hash:
+                    return (
+                        f"pre-dispatch-gate-owning-hitl-gate-config-changed at "
+                        f"{pg.branch_index}: snapshot hitl_gate_config_hash="
+                        f"{pg.hitl_gate_config_hash!r}, resume recomputes "
+                        f"{_resumed_pg_gate_config_hash!r}"
+                    )
             return None
 
         _mismatch = _resume_body_mismatch()
@@ -10148,6 +10228,13 @@ def _execute_parallelization(
                     child_workflow_id=_pre_dispatch_gate_owning_captured_child_workflow_id(
                         steps[_bi]
                     ),
+                    hitl_gate_config_hash=(
+                        _pre_dispatch_gate_owning_captured_hitl_gate_config_hash(
+                            steps[_bi],
+                            manifest_entry,
+                            default_model_binding=default_model_binding,
+                        )
+                    ),
                 )
                 for _bi in sorted(
                     pre_dispatch_gate_owning_dispositions
@@ -11740,6 +11827,24 @@ def _execute_orchestrator_workers(
                             f"{pg.branch_index}: snapshot child_workflow_id="
                             f"{pg.child_workflow_id!r}, resume targets {_resumed_pg_cwid!r}"
                         )
+                # B-79 impl leg slice 1 (CP spec v1.110 §1.2 property 7) — the
+                # ORCHESTRATOR_WORKERS analogue of `_execute_parallelization`'s own twin
+                # guard (HIERARCHICAL_DELEGATION reuses this function per level, so a
+                # child level's own pre-dispatch gate-owning workers are covered too).
+                _resumed_pg_gate_config_hash = (
+                    _pre_dispatch_gate_owning_captured_hitl_gate_config_hash(
+                        worker_steps[pg.branch_index],
+                        manifest_entry,
+                        default_model_binding=default_model_binding,
+                    )
+                )
+                if _resumed_pg_gate_config_hash != pg.hitl_gate_config_hash:
+                    return (
+                        f"pre-dispatch-gate-owning-hitl-gate-config-changed at "
+                        f"{pg.branch_index}: snapshot hitl_gate_config_hash="
+                        f"{pg.hitl_gate_config_hash!r}, resume recomputes "
+                        f"{_resumed_pg_gate_config_hash!r}"
+                    )
             return None
 
         _mismatch = _resume_body_mismatch()
@@ -14432,6 +14537,13 @@ def _execute_orchestrator_workers(
                     step_kind=str(worker_steps[_bi].step_kind.value),
                     child_workflow_id=_pre_dispatch_gate_owning_captured_child_workflow_id(
                         worker_steps[_bi]
+                    ),
+                    hitl_gate_config_hash=(
+                        _pre_dispatch_gate_owning_captured_hitl_gate_config_hash(
+                            worker_steps[_bi],
+                            manifest_entry,
+                            default_model_binding=default_model_binding,
+                        )
                     ),
                 )
                 for _bi in sorted(

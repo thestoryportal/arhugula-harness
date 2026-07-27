@@ -262,6 +262,26 @@ class PreDispatchGateOwningBranchResumeState(BaseModel):
     does not need to special-case it since the field lives inside a
     non-empty-tuple-gated carrier row, not a bare top-level field)."""
 
+    hitl_gate_config_hash: str
+    """B-79 impl leg slice 1 (CP spec v1.110 §1.2 property 7) — a sha256 hex
+    digest over this branch's APPLICABLE HITL gate configuration AT CAPTURE
+    TIME: the ADD-only-folded placement tuple (`fold_step_hitl_placements(
+    manifest_entry.hitl_placements, binding.hitl_placement)`) plus the per-step
+    `removed_placements` directive (`binding.removed_placements`) — see
+    `_hash_hitl_gate_config`. Resume recomputes the same hash against the
+    re-supplied step and rejects a mismatch as a material diff, exactly like
+    `step_id`/`step_kind`/`child_workflow_id` above: a same-step_id edit that
+    ADDS/REMOVES/ALTERS a placement (position, tool_filter, cascade_policy,
+    timeout) or the removed-placements set would otherwise silently deliver
+    the operator's stored `hitl_response` under a gate configuration different
+    from the one that actually paused. REQUIRED (no default) — unlike
+    `child_workflow_id` (which only applies to `SUB_AGENT_DISPATCH` steps),
+    every pre-dispatch gate-owning branch by construction has a non-empty
+    applicable placement set (that is what fired the gate), so this hash is
+    always computable and always populated; no drop-when-default scoping is
+    needed (mirrors `step_id`/`step_kind`'s own required-field treatment, not
+    `child_workflow_id`'s optional one)."""
+
 
 class FanOutResumeState(BaseModel):
     """Fan-out resume reconstruction state carried by a paused-fan-out PauseSnapshot.
