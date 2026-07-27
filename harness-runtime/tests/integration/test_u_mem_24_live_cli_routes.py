@@ -7,11 +7,14 @@ without printing secrets or moving credential material.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import shlex
 import shutil
 import subprocess
+from pathlib import Path
+from types import ModuleType
 
 import pytest
 from harness_cp.cp_shared_types import ModelBinding
@@ -24,6 +27,11 @@ from harness_is.cli_profile import (
     CliProfileKind,
 )
 from harness_runtime.cli_profile_loading import CliProfileResolutionRequest, resolve_cli_profile
+from harness_runtime.lifecycle.external_cli_provider import (
+    ExternalCLINotAuthenticatedError,
+    construct_antigravity_cli_adapter,
+)
+from harness_runtime.types import ExternalCLIProviderConfig, ExternalCLIProviderKind
 
 pytestmark = pytest.mark.e2e
 
@@ -139,17 +147,51 @@ def test_codex_cli_auth_confirms_codex_route() -> None:
     assert route.route_ref == "codex:codex"
 
 
-@pytest.mark.skip(
-    reason=(
-        "No non-secret Antigravity auth-status probe is declared for this host "
-        "yet (B-28 finding #14, test-quality preflight 2026-07-12 — the prior "
-        "body's PATH-presence check before an unconditional pytest.skip() was "
-        "unreachable dead code; there is no live gate here until a probe "
-        "recipe exists, see CLAUDE.md §2.2)"
+def _load_provider_preset_helper() -> ModuleType:
+    helper_path = Path(__file__).resolve().parents[3] / "tools" / "external_cli_provider_config.py"
+    spec = importlib.util.spec_from_file_location("external_cli_provider_config", helper_path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+async def test_antigravity_cli_auth_confirms_antigravity_route() -> None:
+    # The Antigravity executable is ``agy``; sourcing it from the single
+    # declared preset authority keeps this gate from re-acquiring the
+    # wrong-binary-name defect that previously reported it as uninstalled.
+    command: str = _load_provider_preset_helper().PROVIDER_PRESETS["antigravity"].command
+    if shutil.which(command) is None:
+        pytest.skip(f"Antigravity CLI executable {command!r} is not installed on PATH")
+
+    # Drive the real production auth probe (``agy models``, asserted as exit-0
+    # with non-empty stdout) through the adapter constructor rather than a bare
+    # subprocess, so the live gate binds the shipped code path.
+    config = ExternalCLIProviderConfig(
+        provider="antigravity",
+        kind=ExternalCLIProviderKind.ANTIGRAVITY,
+        command=command,
+        auth_check=True,
+        timeout_seconds=20.0,
     )
-)
-def test_antigravity_cli_auth_confirms_antigravity_route() -> None:
-    pass
+    try:
+        adapter = await construct_antigravity_cli_adapter(config)
+    except ExternalCLINotAuthenticatedError as exc:
+        pytest.skip(f"Antigravity CLI session auth is not available: {exc}")
+    await adapter.aclose()
+
+    # ``command_name`` on the route is the CLI-profile provenance identity from
+    # BUILT_IN_CLI_PROVIDER_BINDINGS ("antigravity"), a separate surface from the
+    # executable name above ("agy"); route_ref is derived from that identity.
+    route = _resolve_authenticated_route(
+        kind=CliProfileKind.ANTIGRAVITY,
+        provider="antigravity",
+        external_cli_kind="antigravity",
+        command_name="antigravity",
+        family=ProviderFamily.GOOGLE,
+    )
+    assert route.route_ref == "antigravity:antigravity"
 
 
 @pytest.mark.skip(

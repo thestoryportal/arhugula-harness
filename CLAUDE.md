@@ -589,7 +589,7 @@ When drift is detected at session-start audit OR when an R-NNN entry's `depends_
 
 A session must **NOT** conclude `NO_ACTIVE_CANDIDATES → idle/done` and stop while the forward register is non-empty. When the §4 auto-`ACTIVE` queue is empty:
 
-1. **Pick** the highest-value forward item per the §4 priority order (`R-700` close, `R-410..R-440`, `R-300-second-provider`, `R-CXA-2/3`, `R-810/820`, …).
+1. **Pick** the highest-value forward item per the §4 priority order (`R-700` close, `R-410..R-440`, `R-810/820`, …).
 2. **Ground it first** (`[[r-cxa-seam-wiring-is-producer-discovery]]`, `[[grounding-reveals-claude-closeable-slice-close-honestly]]`) — a nominally "operator-gated" item usually has a real Claude-closeable slice grounding reveals.
 3. **Build its Claude-executable slice** — stdlib/mockable slices, scaffolding, the recipe the operator runs, the whole non-live substance — driving up to the genuine gate.
 4. **Surface only the genuine gate, batched + minimal:** (a) a real architectural/scoping decision, (b) a credential/secret, (c) paid-call authorization, (d) an irreversible/outward-facing action. One `AskUserQuestion`, not drip-fed; never ask for what has a sensible default or what you can decide and note.
