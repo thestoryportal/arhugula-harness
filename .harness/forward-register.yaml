@@ -2383,7 +2383,48 @@ items:
   status: registered_finding
   summary: 'Out-of-family Codex round 6 (branch-vs-main, B-72 impl leg PR #1116, 2026-07-25). The round-4 fix suppresses a pre-dispatch gate-owning peer''s HITLDeliveryCell construction when _any_fence_abort is true, but that value is computed from _recovered_effect_fence_paused, which is scoped to the CURRENT fan-out level''s own recovered branches only. When an effect-fence ABORT targets a DIFFERENT, nested pause subtree (e.g. a deeper HIERARCHICAL_DELEGATION level, or a sibling peer''s recursively paused child), a shallower level''s own _any_fence_abort stays false and its pre-dispatch gate-owning peer can still receive a delivery cell and dispatch before the run-level abort is honored -- resumed branches are processed sequentially, so an earlier pre-dispatch branch can consume its HITL response and execute ahead of a later subtree processing the abort. Confirmed PRE-EXISTING and NOT introduced by the B-72 impl leg -- _any_fence_abort itself was computed fan-out-locally by the B-70 impl leg (CP spec v1.107), and the pre-existing effect-fence-directive peer suppression already consumes that same narrow value; B-72''s round-4 guard mirrors the established pattern verbatim. Affects BOTH the pre-existing effect-fence directive suppression and the new B-72 HITL delivery gate, at all four fan-out dispatch sites (_execute_parallelization and _execute_orchestrator_workers, including HIERARCHICAL_DELEGATION''s recursive reuse).'
   close_out: 'Compute the abort guard from the true root of the resume tree (or thread a run-level abort signal down through the recursive _execute_orchestrator_workers/HIERARCHICAL_DELEGATION calls) rather than from the current level''s own _recovered_effect_fence_paused, and consume it uniformly at both the pre-existing effect-fence-directive suppression site and the B-72 pre-dispatch HITL delivery-cell gate. This is a genuine design task (what ''true root'' means for a peer fan-out vs. a recursively nested HIERARCHICAL_DELEGATION tree, and how to thread it without a new cross-axis seam) not a mechanical patch. Witness with a test where a nested/deeper subtree''s effect-fence ABORT races a shallower sibling subtree''s pre-dispatch HITL delivery in the same resume round, and assert the shallower delivery is suppressed.'
-  council: 'Likely worth a dyadic pass (a design task touching cross-recursion-boundary abort propagation, not mechanical) -- C1 (orchestration/topology, owns HIERARCHICAL_DELEGATION''s recursive reuse) paired with C10 (blast-radius/gate-integrity, mirroring B-79''s own reasoning). Not urgent -- the reachability precondition (a nested subtree ABORT racing a shallower pre-dispatch HITL delivery in the SAME resume round) is narrow, and the suppression gap is symmetric with an already-shipped effect-fence-directive mechanism that has not surfaced in production.'
+  council: 'CONVENED 2026-07-27 (roadmap-continue, dyadic council-orchestrator pass, C1 + C10
+    co-primary). Probe-first discipline confirmed HIERARCHICAL_DELEGATION''s "recursion" is
+    NOT same-stack-frame Python recursion -- each nesting level re-enters via a fresh
+    execute_workflow() call across the CP->Runtime->CP boundary (RuntimeSubAgentDispatcher ->
+    ChildWorkflowRunner -> execute_workflow), and TWO existing sibling values
+    (hitl_uniform_fallback_eligible_run_id, effect_fence_uniform_fallback_eligible_key) are
+    ALREADY computed once at the true depth-0 root and threaded verbatim through this exact
+    crossing -- the identical problem shape B-70 already solved. RECOMMENDATION: a THIRD
+    sibling value (effect_fence_tree_wide_abort_present: bool), computed once at depth-0 via a
+    ~5-line helper reusing the EXISTING _collect_effect_fence_idempotency_keys tree walk +
+    _resolve_effect_fence_gated resolver, threaded through the IDENTICAL channel as the two
+    siblings, ORed (not replacing) into the level-local _any_fence_abort at both consume sites
+    -- NO new cross-axis seam, NO new carrier field, satisfies this row''s own registered
+    constraint exactly. TENSION (blanket tree-wide boolean vs. precise cascade_policy-chain
+    walk) probe-resolved in favor of the blanket reading: (a) the already-shipped local-level
+    rule this arc extends is itself cascade_policy-BLIND ("tier-agnostic FAILED" per CP spec
+    v1.107 SS1.1) -- a cascade_policy-aware tree-wide extension would be MORE discriminating
+    than the shipped convention it extends, out of family; (b) PauseSnapshot carries ZERO
+    cascade_policy field anywhere in its schema (verified directly) -- the precise reading
+    would need a NEW durable carrier field, a strictly bigger, separately-scoped task beyond
+    this row''s own close-out text. C1''s precision concern is registered as a named,
+    deliberately-declined refinement, not silently dropped -- revisit only if a real
+    production case demonstrates non-negligible over-suppression cost under
+    cascade_policy=proceed nesting. GENUINE NEW FINDING (not resolvable as pure impl
+    discretion): the fix surfaces an undocumented interaction between TWO existing CP-spec
+    invariants -- SS1.1''s abort-suppression rule and SS1.2 property 6''s MANDATORY delivery for
+    the sole-unaddressed pre-dispatch gate-owning branch (v1.108) -- since widening
+    _any_fence_abort tree-wide widens the circumstances under which that mandatory delivery is
+    skipped. Traced empirically: this does NOT reintroduce a livelock (suppression only
+    delays a peer by one resume round; the run either terminates FAILED via the abort''s own
+    path regardless, or a later round recovers the peer if the run turns out not doomed) --
+    but the spec text as written does not currently reconcile SS1.1 against SS1.2 property 6 for
+    the tree-wide case. FIX SIZE: mechanical (one new pure function reusing two existing
+    utilities + a parameter threaded through an existing channel + a 2-line OR at each of 2
+    consume sites + the already-specified witness test). CLASSIFICATION: Class 1, not Class 3
+    -- mirrors the B-70/B-72 precedent (both routed through a CP spec delta + clearance marker
+    + plan coverage-row before impl) exactly, and additionally owes the SS1.1/SS1.2-property-6
+    reconciliation as new spec prose (likely a new SS1.1(c) or similar, noting the tree-wide
+    suppression rule takes precedence over property 6''s mandatory-delivery obligation, with
+    the delayed-not-lost liveness rationale this convening worked out). NEXT ACTION: route to
+    a CP spec leg before any impl, co-designable with B-79 (both touch the same
+    _resume_body_mismatch/pre-dispatch-carrier family). Not yet opened this pass.'
   heading: '### B-80 · The `_any_fence_abort` HITL-delivery suppression guard is scoped to the current fan-out level, not the true root of a nested resume tree *(surfaced at the B-72 impl leg, out-of-family Codex round 6 (branch-vs-main), 2026-07-25)*'
 - id: B-81
   title: 'OW/HIERARCHICAL_DELEGATION test parity gaps remain for the B-72 pre-dispatch gate-owning carrier''s exclusion conjuncts and resume-side material-diff validation'
