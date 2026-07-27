@@ -7981,21 +7981,26 @@ def _execute_parallelization(
                 # placement (position, tool_filter, cascade_policy, timeout) or the
                 # removed-placements set would otherwise silently deliver the operator's
                 # stored `hitl_response` under a gate configuration different from the one
-                # that actually paused.
-                _resumed_pg_gate_config_hash = (
-                    _pre_dispatch_gate_owning_captured_hitl_gate_config_hash(
-                        steps[pg.branch_index],
-                        manifest_entry,
-                        default_model_binding=default_model_binding,
+                # that actually paused. SKIP (byte-compat, out-of-family Codex [P1]) when
+                # the snapshot's captured value is `None` — an already-durable snapshot
+                # from the PRECEDING deployment (before this field existed) cannot be
+                # validated and must not be rejected on that basis alone, mirroring
+                # `child_workflow_id`'s own "validate ONLY when present" convention above.
+                if pg.hitl_gate_config_hash is not None:
+                    _resumed_pg_gate_config_hash = (
+                        _pre_dispatch_gate_owning_captured_hitl_gate_config_hash(
+                            steps[pg.branch_index],
+                            manifest_entry,
+                            default_model_binding=default_model_binding,
+                        )
                     )
-                )
-                if _resumed_pg_gate_config_hash != pg.hitl_gate_config_hash:
-                    return (
-                        f"pre-dispatch-gate-owning-hitl-gate-config-changed at "
-                        f"{pg.branch_index}: snapshot hitl_gate_config_hash="
-                        f"{pg.hitl_gate_config_hash!r}, resume recomputes "
-                        f"{_resumed_pg_gate_config_hash!r}"
-                    )
+                    if _resumed_pg_gate_config_hash != pg.hitl_gate_config_hash:
+                        return (
+                            f"pre-dispatch-gate-owning-hitl-gate-config-changed at "
+                            f"{pg.branch_index}: snapshot hitl_gate_config_hash="
+                            f"{pg.hitl_gate_config_hash!r}, resume recomputes "
+                            f"{_resumed_pg_gate_config_hash!r}"
+                        )
             return None
 
         _mismatch = _resume_body_mismatch()
@@ -11831,20 +11836,23 @@ def _execute_orchestrator_workers(
                 # ORCHESTRATOR_WORKERS analogue of `_execute_parallelization`'s own twin
                 # guard (HIERARCHICAL_DELEGATION reuses this function per level, so a
                 # child level's own pre-dispatch gate-owning workers are covered too).
-                _resumed_pg_gate_config_hash = (
-                    _pre_dispatch_gate_owning_captured_hitl_gate_config_hash(
-                        worker_steps[pg.branch_index],
-                        manifest_entry,
-                        default_model_binding=default_model_binding,
+                # SKIP (byte-compat) when the snapshot's captured value is `None` — see
+                # `_execute_parallelization`'s own twin guard for the full rationale.
+                if pg.hitl_gate_config_hash is not None:
+                    _resumed_pg_gate_config_hash = (
+                        _pre_dispatch_gate_owning_captured_hitl_gate_config_hash(
+                            worker_steps[pg.branch_index],
+                            manifest_entry,
+                            default_model_binding=default_model_binding,
+                        )
                     )
-                )
-                if _resumed_pg_gate_config_hash != pg.hitl_gate_config_hash:
-                    return (
-                        f"pre-dispatch-gate-owning-hitl-gate-config-changed at "
-                        f"{pg.branch_index}: snapshot hitl_gate_config_hash="
-                        f"{pg.hitl_gate_config_hash!r}, resume recomputes "
-                        f"{_resumed_pg_gate_config_hash!r}"
-                    )
+                    if _resumed_pg_gate_config_hash != pg.hitl_gate_config_hash:
+                        return (
+                            f"pre-dispatch-gate-owning-hitl-gate-config-changed at "
+                            f"{pg.branch_index}: snapshot hitl_gate_config_hash="
+                            f"{pg.hitl_gate_config_hash!r}, resume recomputes "
+                            f"{_resumed_pg_gate_config_hash!r}"
+                        )
             return None
 
         _mismatch = _resume_body_mismatch()

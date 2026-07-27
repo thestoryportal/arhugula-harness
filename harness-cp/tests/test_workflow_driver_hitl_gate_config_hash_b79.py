@@ -4,9 +4,10 @@ between pause and resume at the fan-out closure's pre-dispatch-gate-owning deliv
 site (`_execute_parallelization` + `_execute_orchestrator_workers`, the latter
 covering `HIERARCHICAL_DELEGATION` via its recursive reuse per the B-72 precedent).
 
-`PreDispatchGateOwningBranchResumeState` gains ONE new REQUIRED field,
-`hitl_gate_config_hash` — a sha256 hex digest over the ADD-only-folded applicable
-`HITLPlacement` tuple (`fold_step_hitl_placements(manifest_entry.hitl_placements,
+`PreDispatchGateOwningBranchResumeState` gains ONE new field, `hitl_gate_config_hash`
+(default-`None`, byte-compat scoped — see the strip test below) — a sha256 hex
+digest over the ADD-only-folded applicable `HITLPlacement` tuple
+(`fold_step_hitl_placements(manifest_entry.hitl_placements,
 binding.hitl_placement)`) plus the per-step `removed_placements` directive
 (`binding.removed_placements`) — mirroring `step_id`/`step_kind`/`child_workflow_id`'s
 own material-diff identity guard shape. Slice 2 (the LINEAR/EVALUATOR_OPTIMIZER/
@@ -19,7 +20,9 @@ This module tests:
      cascade_policy, timeout, removed_placements each changed ALONE must
      discriminate), plus §1.1(b) symmetry (an ADDED placement rejects; a REMOVED
      placement rejects), plus determinism (identical inputs → identical hash;
-     `removed_placements` frozenset-order-independence).
+     `removed_placements` frozenset-order-independence); plus the
+     `_strip_default_fanout_resume_fields` byte-compat drop for a legacy
+     (field-absent) row.
   2. `_execute_parallelization`'s actual resume-side rejection/acceptance, via
      `execute_workflow`'s real pause → resume round trip — mirroring
      `test_workflow_driver_parallelization_pause.py`'s own
@@ -44,7 +47,11 @@ from harness_cp.cross_family_fallback_chain import (
 from harness_cp.engine_class import EngineClass
 from harness_cp.handoff_context import StateSummary
 from harness_cp.hitl_placement import HITLPlacement, HITLPlacementKind, LoosenablePlacementKind
-from harness_cp.pause_resume_protocol import PauseResumeProtocol
+from harness_cp.pause_resume_protocol import (
+    PauseResumeProtocol,
+    _compute_snapshot_hash,
+    _strip_default_fanout_resume_fields,
+)
 from harness_cp.pause_resume_protocol_types import PauseSnapshot
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
 from harness_cp.topology_pattern import CascadePolicy, TopologyPattern
@@ -324,6 +331,31 @@ def test_hash_removed_placements_set_order_independent() -> None:
     )
 
 
+def test_strip_drops_none_hitl_gate_config_hash_from_legacy_row() -> None:
+    """out-of-family Codex [P1] — a legacy row (captured by the PRECEDING
+    deployment, before this field existed) must strip `hitl_gate_config_hash:
+    null` from the hash-covered dump so its recomputed `snapshot_hash` stays
+    byte-identical to how it hashed before this delta."""
+    carrier_dump: dict[str, Any] = {
+        "branches": (),
+        "branch_count": 2,
+        "pre_dispatch_gate_owning_branches": [
+            {
+                "branch_index": 1,
+                "step_id": "branch-1-inf",
+                "step_kind": "inference-step",
+                "child_workflow_id": None,
+                "hitl_gate_config_hash": None,
+            }
+        ],
+    }
+    _strip_default_fanout_resume_fields(carrier_dump)
+    row = carrier_dump["pre_dispatch_gate_owning_branches"][0]
+    assert "hitl_gate_config_hash" not in row, (
+        f"legacy row's None hitl_gate_config_hash must be stripped; got {row!r}"
+    )
+
+
 # --- 2. `_execute_parallelization` resume-side witnesses ---------------------------
 
 
@@ -364,6 +396,72 @@ def test_peer_resume_accepts_unchanged_hitl_gate_config() -> None:
     assert resumed.status is RunStatus.SUCCESS, (
         f"expected an UNCHANGED gate-config resume to succeed; got "
         f"status={resumed.status!r} fail_class={resumed.fail_class!r}"
+    )
+
+
+def test_peer_resume_skips_check_for_legacy_row_with_absent_hash() -> None:
+    """out-of-family Codex [P1] — a durable snapshot captured by the PRECEDING
+    deployment (before this field existed) has `hitl_gate_config_hash=None` on
+    its pre-dispatch gate-owning row. Resume must NOT reject it as a
+    gate-config material diff on that basis alone — the check is skipped, not
+    treated as an unconditional mismatch."""
+    manifest = _manifest(hitl_placements=(_BASE_PLACEMENT,))
+    dispatcher = _PreDispatchGateOnceDispatcher()
+    paused = execute_workflow(
+        manifest,
+        _peer_steps(),
+        run_id="run-1",
+        ctx=_ctx(),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=cast(StepDispatcherRegistry, dispatcher),
+    )
+    assert paused.status is RunStatus.PAUSED
+    snap = paused.pause_snapshot
+    assert snap is not None
+    assert snap.peer_fan_out_resume is not None
+
+    legacy_row = snap.peer_fan_out_resume.pre_dispatch_gate_owning_branches[0]
+    assert legacy_row.hitl_gate_config_hash is not None
+    legacy_peer_fan_out_resume = snap.peer_fan_out_resume.model_copy(
+        update={
+            "pre_dispatch_gate_owning_branches": (
+                legacy_row.model_copy(update={"hitl_gate_config_hash": None}),
+            )
+        }
+    )
+    # The top-level `snapshot_hash` integrity check (§26.6 invariant 2) runs BEFORE
+    # this property's own check — it must be recomputed against the TAMPERED
+    # (legacy-shaped) content, mirroring how `_hash_hitl_gate_config` computed it
+    # here at the real B-79 change:  by construction, `_strip_default_fanout_resume_
+    # fields` drops a `None` `hitl_gate_config_hash` from the hashed dump, so this
+    # recompute yields the SAME hash a real legacy (field-absent) durable snapshot
+    # would already carry — a genuine legacy-shape witness, not a corruption probe.
+    legacy_snapshot_hash = _compute_snapshot_hash(
+        workflow_id=snap.workflow_id,
+        run_id=snap.run_id,
+        step_index=snap.step_index,
+        state_summary=snap.state_summary,
+        peer_fan_out_resume=legacy_peer_fan_out_resume,
+    )
+    legacy_snap = snap.model_copy(
+        update={
+            "peer_fan_out_resume": legacy_peer_fan_out_resume,
+            "snapshot_hash": legacy_snapshot_hash,
+        }
+    )
+
+    resumed = execute_workflow(
+        manifest,
+        _peer_steps(),
+        run_id="run-1",
+        ctx=_ctx(),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=cast(StepDispatcherRegistry, dispatcher),
+        pause_snapshot_input=legacy_snap,
+    )
+    assert resumed.status is RunStatus.SUCCESS, (
+        f"a legacy (field-absent) row must not be rejected on the gate-config check "
+        f"alone; got status={resumed.status!r} fail_class={resumed.fail_class!r}"
     )
 
 
