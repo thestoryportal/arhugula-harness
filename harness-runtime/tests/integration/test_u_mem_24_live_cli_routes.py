@@ -219,8 +219,14 @@ async def test_gemini_legacy_cli_auth_confirms_gemini_legacy_route() -> None:
     )
     try:
         adapter = await construct_gemini_cli_adapter(config)
-    except ExternalCLINotAuthenticatedError as exc:
-        pytest.skip(f"legacy Gemini CLI declared auth probe did not confirm a session: {exc}")
+    except ExternalCLINotAuthenticatedError:
+        # The exception text embeds the probe's stdout/stderr; keep it out of
+        # test logs per the module's no-secret-output guarantee. Re-run the
+        # declared probe manually to inspect the refusal.
+        pytest.skip(
+            "legacy Gemini CLI declared auth probe did not confirm a session "
+            "(probe output redacted; run the declared probe manually to inspect)"
+        )
     await adapter.aclose()
 
     # ``provider_name`` on the route is the CLI-profile provenance identity
@@ -259,8 +265,14 @@ async def test_generic_command_cli_auth_confirms_operator_declared_route() -> No
     )
     try:
         adapter = await construct_generic_command_cli_adapter(config)
-    except ExternalCLINotAuthenticatedError as exc:
-        pytest.fail(f"generic command auth probe failed: {exc}")
+    except ExternalCLINotAuthenticatedError:
+        # The exception text embeds the probe's stdout/stderr; keep it out of
+        # test logs per the module's no-secret-output guarantee. Re-run the
+        # declared probe manually to inspect the failure.
+        pytest.fail(
+            "generic command auth probe failed "
+            "(probe output redacted; run the declared probe manually to inspect)"
+        )
     await adapter.aclose()
 
     route = _resolve_authenticated_route(
