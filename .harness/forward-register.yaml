@@ -767,15 +767,17 @@ items:
     vestigial (required ctor kwarg at sub_agent_dispatch.py:607, never called -- the 8b F2 entry stamps
     WRITER_OWNED_TIMESTAMP at :801), and a third construction site (migrate_audit_sidecar.py:139-152) also
     takes the default clock.
-  close_out: Thread an optional time_source parameter through each of the 4 attribute_*_dispatch_cost
-    composer signatures (currently they don't have one at all) down to the already-time_source-accepting
-    compose_cost_f2_entry_core helper, plus the bootstrap sites, once a real deterministic-clock consumer
-    surfaces (e.g. a multi-writer clock-skew test). Mirrors the workspace's established B-19/B-42 discipline
-    against building speculative infrastructure ahead of a real consumer. Guidance refreshed 2026-07-27 -- the
-    architecturally-consistent fix is now more likely WRITER_OWNED_TIMESTAMP sentinel adoption at the composer
-    F2 write (the pattern sub_agent_dispatch.py:801 and workflow_driver.py:2028-2030 migrated to) than
-    threading a clock through 4 composer signatures, which would re-introduce the caller-side capture the
-    B-48 arc moved away from. Committed posture unchanged -- detect-then-refuse, register-don't-build.
+  close_out: PRIMARY instruction (guidance rewritten 2026-07-27 grounding pass) -- if a real deterministic-clock
+    consumer ever surfaces (e.g. a multi-writer clock-skew test), adopt the WRITER_OWNED_TIMESTAMP sentinel
+    at the composer F2 write, the pattern sub_agent_dispatch.py:801 and workflow_driver.py:2028-2030 already
+    migrated to per IS spec C-IS-07 §7.6, letting the IS writer sample the clock inside its own lock.
+    SUPERSEDED alternative, do NOT follow -- the originally-registered fix of threading an optional time_source
+    parameter through the 4 attribute_*_dispatch_cost composer signatures (tool/llm/webhook/validator, which
+    currently have none) down to the already-time_source-accepting compose_cost_f2_entry_core helper plus
+    the bootstrap sites. It is named here only so no future implementer re-derives it -- it would re-introduce
+    the caller-side timestamp capture the B-48 arc deliberately moved away from. Committed posture unchanged
+    -- detect-then-refuse, register-don't-build, per the workspace's established B-19/B-42 discipline against
+    building speculative infrastructure ahead of a real consumer.
   council: no — mechanical once a consumer exists; not urgent, genuinely dormant today
   heading: '### B-44 · No production bootstrap site injects a non-default `time_source` clock *(split
     from B-29, 2026-07-15)*'
