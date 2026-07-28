@@ -87,6 +87,10 @@ from harness_runtime.lifecycle.retry_breaker_fallback import (
     _required_capabilities,
     materialize_retry_breaker_fallback_dispatcher_stage,
 )
+from harness_runtime.memory_tool_executor import (
+    MemoryToolExecutionDeniedError,
+    MemoryToolExecutionInputError,
+)
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -996,6 +1000,121 @@ async def test_classify_provider_exception_still_retries_transient_status_codes(
     assert result == {"result": "retried-then-ok"}
     # 3 dispatch calls on the SAME (only) candidate — proves the staircase
     # actually retried rather than fail-fasting after the first 429.
+    assert len(inner.calls) == 3
+
+
+@pytest.mark.asyncio
+async def test_memory_tool_input_error_fails_fast_no_retry() -> None:
+    """B-84: an executor-level memory tool argument failure must NOT run the
+    retry staircase. The memory tool loops execute a prepared batch in order,
+    so a `MemoryToolExecutionInputError` on a LATER call can follow an EARLIER
+    call that already committed a durable write — and a `TRANSIENT_RETRY`
+    classification re-ran the WHOLE dispatch, committing that write again once
+    per retry.
+
+    Mirrors `test_classify_provider_exception_fails_fast_on_auth_error`'s
+    discriminating shape: `max_attempts=3` with 2 outcomes is not by itself a
+    witness (a retry-then-success on candidate 0 also totals 2 calls) — the
+    load-bearing assertion is WHICH candidate the 2nd call dispatched to."""
+    primary = _candidate("anthropic", "claude-test-1")
+    same_family = (_candidate("anthropic", "claude-test-2"),)
+    chain = _chain(primary, same_family=same_family)
+    breaker = _retry_breaker_with_llm_policy(max_attempts=3)
+    inner = _MockInnerDispatcher(
+        outcomes=[
+            MemoryToolExecutionInputError("memory tool argument 'memory_ref' must be a string"),
+            {"result": "candidate-1-ok"},
+        ]
+    )
+    tp, exporter = _tracer_provider_with_exporter()
+    wrapper = RetryBreakerFallbackDispatcher(
+        inner=inner,
+        retry_breaker=breaker,
+        fallback_chain=chain,
+        tracer_provider=tp,
+        sleep_fn=_noop_sleep,
+    )
+
+    result = await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
+    assert result == {"result": "candidate-1-ok"}
+    assert len(inner.calls) == 2
+    assert inner.calls[0][0].model_binding.model == "claude-test-1"
+    assert inner.calls[1][0].model_binding.model == "claude-test-2"
+
+    # The fail-fast exit class, per CP §3.5: `permanent-fail-exit` (NOT
+    # `transient-retry`), with the exception class name as the open-set
+    # cause attribution.
+    attempts = [
+        s for s in exporter.get_finished_spans() if s.name == "harness.runtime.retry_attempt"
+    ]
+    first = attempts[0].attributes
+    assert first is not None
+    assert first["retry.fail_class"] == "permanent-fail-exit"
+    assert first["retry.cause_attribution"] == "MemoryToolExecutionInputError"
+    assert first["retry.delay_ms"] == 0
+
+
+@pytest.mark.asyncio
+async def test_memory_tool_input_error_single_candidate_dispatches_exactly_once() -> None:
+    """B-84, the duplication-closing half stated directly: on the DEFAULT
+    single-candidate chain a memory tool input error consumes exactly ONE
+    dispatch — no retry, and no candidate to advance to — so a write committed
+    earlier in the batch cannot be re-committed by this wrapper. Under the
+    pre-B-84 `TRANSIENT_RETRY` classification this consumed `max_attempts`
+    dispatches (3 here), i.e. up to 3 copies of that write."""
+    chain = _chain(_candidate("anthropic", "claude-test-1"))
+    breaker = _retry_breaker_with_llm_policy(max_attempts=3)
+    inner = _MockInnerDispatcher(
+        outcomes=[
+            MemoryToolExecutionInputError("memory tool argument 'memory_ref' must be a string"),
+        ]
+    )
+    tp, _ = _tracer_provider_with_exporter()
+    wrapper = RetryBreakerFallbackDispatcher(
+        inner=inner,
+        retry_breaker=breaker,
+        fallback_chain=chain,
+        tracer_provider=tp,
+        sleep_fn=_noop_sleep,
+    )
+
+    with pytest.raises(RetryBreakerFallbackExhaustedError):
+        await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
+    # Exactly one attempt. The mock raises IndexError when over-called, so a
+    # regression to TRANSIENT_RETRY surfaces as a wrong exception type too.
+    assert len(inner.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_memory_tool_denied_error_still_retries() -> None:
+    """B-84 scope guard: the reclassification covers `MemoryToolExecutionInputError`
+    ONLY, not its `MemoryToolExecutionError` base. `MemoryToolExecutionDeniedError`
+    stays transient deliberately — `StandardMemoryToolExecutor._read_record_by_ref`
+    (`memory_tool_executor.py:446-449`) wraps ANY store exception, including
+    genuinely transient I/O, into the denied class, and `_allowed_index_entry`
+    (`:424-435`) raises it off mutable index state. Fail-fasting the whole base
+    class would therefore kill retries for real flakes. This test fails if the
+    isinstance check is widened to the base."""
+    chain = _chain(_candidate("anthropic", "claude-test-1"))
+    breaker = _retry_breaker_with_llm_policy(max_attempts=3)
+    inner = _MockInnerDispatcher(
+        outcomes=[
+            MemoryToolExecutionDeniedError("memory ref mem:x is unavailable"),
+            MemoryToolExecutionDeniedError("memory ref mem:x is unavailable"),
+            {"result": "retried-then-ok"},
+        ]
+    )
+    tp, _ = _tracer_provider_with_exporter()
+    wrapper = RetryBreakerFallbackDispatcher(
+        inner=inner,
+        retry_breaker=breaker,
+        fallback_chain=chain,
+        tracer_provider=tp,
+        sleep_fn=_noop_sleep,
+    )
+
+    result = await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
+    assert result == {"result": "retried-then-ok"}
     assert len(inner.calls) == 3
 
 

@@ -3269,10 +3269,11 @@ class _PreparedMemoryToolCall:
     partially-committed batch: every call in a response is resolved and
     validated BEFORE any of them runs, so a malformed *later* call cannot abort
     the dispatch after an *earlier* (possibly write-like) call already committed
-    durable memory state. That matters because the abort is retryable —
+    durable memory state. That matters because the abort can be retryable —
     ``_classify_provider_exception`` (`retry_breaker_fallback.py`) maps every
     exception other than ``LLMDispatchProviderUnreachableError`` /
-    ``LLMDispatchPayloadShapeError`` / 401-403 to ``TRANSIENT_RETRY``, so
+    ``LLMDispatchPayloadShapeError`` / ``MemoryToolExecutionInputError``
+    (fail-fast since B-84) / 401-403 to ``TRANSIENT_RETRY``, so
     ``RetryBreakerFallbackDispatcher`` re-runs the whole dispatch from the top
     and the already-committed call executes a second time.
 

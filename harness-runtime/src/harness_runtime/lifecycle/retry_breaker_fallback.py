@@ -26,7 +26,8 @@ Per-step invocation discipline (the body of
      C-CP-03 §3.5 ``retry.*`` 6-attribute namespace; dispatch via
      ``self.inner.dispatch(rebound_binding, step)``. On success the breaker
      records success and the result returns; on fail-fast (provider-
-     unreachable / payload-shape / auth, B-41) the breaker records failure
+     unreachable / payload-shape / auth, B-41 / memory-tool input, B-84)
+     the breaker records failure
      and the candidate is abandoned; on transient SDK failure the staircase
      advances and either retries (sleeps full-jitter backoff) or escalates.
   5. On ``FallbackChainExhaustedError`` emit ``fallback.exhausted`` on the
@@ -98,6 +99,7 @@ from harness_runtime.lifecycle.llm_dispatch import (
     RoutedPrimaryResolution,
 )
 from harness_runtime.lifecycle.retry_breaker import BreakerStateMachine
+from harness_runtime.memory_tool_executor import MemoryToolExecutionInputError
 from harness_runtime.types import LLMDispatcher, RetryBreakerRegistry
 
 __all__ = [
@@ -288,6 +290,30 @@ def _classify_provider_exception(exc: BaseException) -> ValidatorRetryExitClass 
       ``_classify_breaker_cause`` below, deliberately NOT reusing that
       function so this classifier's control-flow contract stays independent
       of the telemetry classifier's).
+    - ``MemoryToolExecutionInputError`` → ``None`` (fail-fast, B-84). A
+      contract-invalid C-MEM-14 memory tool call is a PERMANENT malformed-input
+      failure, not a provider transient: spec §14.6 D2 makes an exception
+      retry-eligible *iff* it "matches CP §21.2 transient staircase … fail-fast
+      otherwise", and this class matches nothing in §21.2 (network / rate-limit
+      / 5xx). It is the same class as ``LLMDispatchPayloadShapeError``
+      (§14.5 ``RT-FAIL-PAYLOAD-SHAPE``, "permanent") raised one layer deeper —
+      at the memory tool executor's argument validation
+      (`memory_tool_executor.py:549-553`) or at the dispatch-side memory
+      context/schema invariants (`llm_dispatch.py:3626-3641`) — so it takes the
+      same fail-fast branch. The harm this closes (B-84): the memory tool loops
+      execute a prepared batch in order, so an executor-level argument failure
+      on a LATER call can follow an EARLIER call that already committed a
+      durable write; a ``TRANSIENT_RETRY`` classification re-ran the whole
+      dispatch and committed that write again, once per retry. Fail-fast does
+      NOT close the partial-commit itself (that half stays registered at B-84),
+      and it still permits the outer candidate advance — it removes the
+      same-candidate retry staircase, which for the default single-candidate
+      chain removes the duplication entirely.
+      ``MemoryToolExecutionDeniedError`` is deliberately NOT included: its
+      raise sites read mutable index/store state (`memory_tool_executor.py:424-435`)
+      and it also WRAPS arbitrary store exceptions, including genuinely
+      transient I/O (`:446-449`), so fail-fasting the denied class would kill
+      retries for real flakes.
     - ``asyncio.CancelledError`` → re-raise (shutdown / cancellation must
       propagate; this is handled by the caller, not classified here).
     - All other ``Exception`` subclasses → ``TRANSIENT_RETRY`` (treat as
@@ -296,7 +322,14 @@ def _classify_provider_exception(exc: BaseException) -> ValidatorRetryExitClass 
       ``status_code is not None`` guard would wrongly kill retries for
       genuinely transient provider failures.
     """
-    if isinstance(exc, (LLMDispatchProviderUnreachableError, LLMDispatchPayloadShapeError)):
+    if isinstance(
+        exc,
+        (
+            LLMDispatchProviderUnreachableError,
+            LLMDispatchPayloadShapeError,
+            MemoryToolExecutionInputError,
+        ),
+    ):
         return None
     status_code = getattr(exc, "status_code", None)
     if isinstance(status_code, int) and status_code in (401, 403):
@@ -947,7 +980,8 @@ class RetryBreakerFallbackDispatcher:
                         raise
                     cause = _classify_provider_exception(exc)
                     if cause is None:
-                        # Fail-fast: AUTH / payload-shape. Per CP §3.5 canonical
+                        # Fail-fast: AUTH / payload-shape / memory-tool input
+                        # (B-84). Per CP §3.5 canonical
                         # 5-class taxonomy, fail-fast maps to PERMANENT_FAIL_EXIT.
                         # `retry.cause_attribution` carries the broader
                         # open-set string (Python exception class name MVP).
