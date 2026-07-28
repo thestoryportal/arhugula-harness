@@ -2802,8 +2802,7 @@ async def test_ollama_mixed_memory_and_caller_tool_batch_returns_to_caller() -> 
 
     [span] = _unserved_tool_call_spans(exporter)
     _assert_unserved_span_shape(dict(span.attributes or {}), provider="ollama", count=1)
-    attrs = dict(span.attributes or {})
-    assert "memory.degraded_serve.reason" not in attrs, (
+    assert _degraded_serve_spans(exporter) == [], (
         "the R5 fallback did not run — its sink must be untouched"
     )
 
@@ -2826,9 +2825,10 @@ async def test_ollama_caller_only_tool_batch_matches_bare_path_semantics() -> No
         )
     ]
     executor = _FakeStandardMemoryToolExecutor()
+    tracer_provider, exporter = _tracer_provider_with_exporter()
     dispatcher = RuntimeLLMDispatcher(
         providers={"ollama": _OllamaFakeAdapter(client)},
-        tracer_provider=_tracer_provider_with_exporter()[0],
+        tracer_provider=tracer_provider,
         memory_context=_ollama_memory_context(),
         standard_memory_tool_executor=executor,
     )
@@ -2837,6 +2837,9 @@ async def test_ollama_caller_only_tool_batch_matches_bare_path_semantics() -> No
 
     assert executor.requests == []
     assert result["message"]["tool_calls"] == [hallucinated]
+    assert _unserved_tool_call_spans(exporter) == [], (
+        "zero memory-named calls in the batch — nothing went unserved, no span may claim otherwise"
+    )
 
 
 @pytest.mark.asyncio

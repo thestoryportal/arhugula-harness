@@ -2586,9 +2586,11 @@ def _emit_unserved_memory_tool_calls_span(
     it lands on the memory tracer's own span, never on the `gen_ai` span
     (C-OD-04 §4.3 namespace discipline).
 
-    Emitted from the same `finally` as the B-83 span, so the report survives a
-    provider call that raises AFTER the batch was returned; `dispatch_outcome`
-    says which happened. Because model-emitted batches are nondeterministic the
+    Emitted from the same `finally` as the B-83 span. Both record sites are
+    immediately followed by the arm's `return`, so on this path the outcome is
+    structurally `completed` — the `outcome`/`error_type` parameters exist only
+    for parity with the B-83 emitter's signature, not because a raise-after-mixed-
+    exit path is reachable. Because model-emitted batches are nondeterministic the
     span may fire 0..N times across retry attempts of one logical call — the
     same property the B-83 span has, and deliberately not deduped.
     """
