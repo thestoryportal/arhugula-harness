@@ -3164,6 +3164,164 @@ async def test_b83_cross_family_recomposed_context_is_reported_but_never_rendere
     assert "memory.packet_hash" not in attrs
 
 
+class _RaisingOllamaClient(_OllamaClient):
+    """Raises on EVERY chat call, including the tools-unsupported retry."""
+
+    def __init__(self, first: BaseException, rest: BaseException) -> None:
+        super().__init__()
+        self._first = first
+        self._rest = rest
+
+    async def chat(self, **kwargs: Any) -> _OllamaResponse:
+        self.calls.append({**kwargs, "messages": list(kwargs.get("messages", []))})
+        raise self._first if len(self.calls) == 1 else self._rest
+
+
+@pytest.mark.asyncio
+async def test_b83_degraded_span_survives_a_failing_provider_call() -> None:
+    """P2-d — a repair that was SENT and then failed still disclosed.
+
+    Emitting after the dispatch lost the only B-83-specific signal whenever the
+    provider call raised, even though the packet had already gone to the
+    provider. The span must still be emitted, marked `provider_error`.
+    """
+    adapter = _AnthropicFakeAdapter(_AnthropicClient())
+
+    async def _boom(**_kwargs: Any) -> Any:
+        raise TimeoutError("provider timed out after the request was sent")
+
+    adapter.client.messages.create = _boom  # type: ignore[method-assign]
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": adapter},
+        tracer_provider=tp,
+        memory_context=_b83_memory_context(provider="anthropic"),
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+    )
+
+    with pytest.raises(TimeoutError):
+        await dispatcher.dispatch(_binding("anthropic"), _step(), step_context=_step_context())
+
+    spans = _degraded_serve_spans(exporter)
+    assert len(spans) == 1, "the degradation must be reported even though the call failed"
+    attrs = dict(spans[0].attributes or {})
+    assert attrs["memory.degraded_serve.dispatch_outcome"] == "provider_error"
+    assert attrs["memory.degraded_serve.provider_error_type"] == "TimeoutError"
+    assert attrs["memory.degraded_serve.reason"] == "arm_unservable"
+    assert attrs["memory.operation.name"] == "injection", "the packet WAS sent before the failure"
+
+
+@pytest.mark.asyncio
+async def test_b83_report_only_span_survives_a_failing_provider_call() -> None:
+    """P2-d — a report-only WITHHOLDING is equally real when the call fails."""
+    client = _OpenAIClient()
+
+    async def _boom(**_kwargs: Any) -> Any:
+        raise RuntimeError("adapter exploded")
+
+    client.chat.completions.create = _boom  # type: ignore[method-assign]
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"openai": _OpenAIFakeAdapter(client)},
+        tracer_provider=tp,
+        # Composed for anthropic → report-only on the openai arm.
+        memory_context=_b83_memory_context(provider="anthropic"),
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+    )
+
+    with pytest.raises(RuntimeError):
+        await dispatcher.dispatch(_binding("openai"), _step(), step_context=_step_context())
+
+    attrs = dict(_degraded_serve_spans(exporter)[0].attributes or {})
+    assert attrs["memory.degraded_serve.dispatch_outcome"] == "provider_error"
+    assert attrs["memory.degraded_serve.reason"] == "provider_scope_mismatch"
+    assert attrs["memory.operation.name"] == "denial"
+
+
+@pytest.mark.asyncio
+async def test_b83_r5_retry_failure_still_reports_the_degradation() -> None:
+    """P2-d — the sink, not a return tuple, is what makes this reachable.
+
+    The ollama fallback decides its degradation INSIDE the arm call and its
+    retry can itself fail. A return-tuple element travels only on success, so
+    the decision (and the packet already sent on the retry) would vanish.
+    """
+    client = _RaisingOllamaClient(
+        OllamaResponseError("llava-llama3:latest does not support tools", 400),
+        OllamaResponseError("daemon died mid-retry", 500),
+    )
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"ollama": _OllamaFakeAdapter(client)},
+        tracer_provider=tp,
+        memory_context=_b83_memory_context(provider="ollama", model="llava-llama3:latest"),
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+    )
+
+    with pytest.raises(OllamaResponseError):
+        await dispatcher.dispatch(
+            _binding("ollama", model="llava-llama3:latest"),
+            _step(),
+            step_context=_step_context(),
+        )
+
+    assert len(client.calls) == 2, "the tools-unsupported retry did fire, and then failed"
+    assert _B83_SECTION_TEXT in json.dumps(client.calls[1]["messages"]), (
+        "the packet reached the provider on the retry — the disclosure really happened"
+    )
+    spans = _degraded_serve_spans(exporter)
+    assert len(spans) == 1, "a return-tuple report would have been lost here"
+    attrs = dict(spans[0].attributes or {})
+    assert attrs["memory.degraded_serve.dispatch_outcome"] == "provider_error"
+    assert attrs["memory.degraded_serve.reason"] == "arm_unservable"
+
+
+@pytest.mark.asyncio
+async def test_b83_degraded_span_survives_cancellation() -> None:
+    """P2-d residual — `CancelledError` passes through `finally`, so the span
+    is still emitted, labelled `cancelled` rather than blamed on the provider."""
+    adapter = _AnthropicFakeAdapter(_AnthropicClient())
+
+    async def _cancel(**_kwargs: Any) -> Any:
+        raise asyncio.CancelledError
+
+    adapter.client.messages.create = _cancel  # type: ignore[method-assign]
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": adapter},
+        tracer_provider=tp,
+        memory_context=_b83_memory_context(provider="anthropic"),
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await dispatcher.dispatch(_binding("anthropic"), _step(), step_context=_step_context())
+
+    attrs = dict(_degraded_serve_spans(exporter)[0].attributes or {})
+    assert attrs["memory.degraded_serve.dispatch_outcome"] == "cancelled"
+    assert "memory.degraded_serve.provider_error_type" not in attrs
+
+
+@pytest.mark.asyncio
+async def test_b83_successful_dispatch_marks_the_outcome_completed() -> None:
+    """The success path carries the same attribute, so `completed` vs
+    `provider_error` is a real discriminator rather than presence-vs-absence."""
+    client = _AnthropicClient()
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": _AnthropicFakeAdapter(client)},
+        tracer_provider=tp,
+        memory_context=_b83_memory_context(provider="anthropic"),
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+    )
+
+    await dispatcher.dispatch(_binding("anthropic"), _step(), step_context=_step_context())
+
+    attrs = dict(_degraded_serve_spans(exporter)[0].attributes or {})
+    assert attrs["memory.degraded_serve.dispatch_outcome"] == "completed"
+    assert "memory.degraded_serve.provider_error_type" not in attrs
+
+
 @pytest.mark.asyncio
 async def test_b83_packet_policy_denied_context_is_reported_but_never_rendered() -> None:
     """P1-e — scope is fine, but the prompt-packet MODE is not authorized.
