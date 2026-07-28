@@ -69,7 +69,7 @@ For axis-specific work, read the relevant scoped guidance after this root file: 
 
 The release-candidate deployment-readiness arc **ran to completion with verdict `GO for release candidate`**; closure report at `.harness/release-candidate-deployment-readiness-report-2026-06-10.md`. **No standing RC handoff remains — forward work derives from the roadmap per §12.**
 
-`.harness/release-candidate-deployment-readiness-runbook.md` is retained as the **re-validation recipe** (run it only when a deployment failure, a stack/credential change, or an operator request calls for another RC pass). Its live gates are operator-gated: Docker daemon up (Phase B); the R-411 Lima VM volume `/Volumes/Development/arhugula-r411/` mounted; paid Phase-C approval; the GCP `roles/iam.serviceAccountTokenCreator` re-grant (deliberately revoked at the 2026-06-10 close) plus `aws sso login --profile r830`.
+`.harness/release-candidate-deployment-readiness-runbook.md` is retained as the **re-validation recipe** (run it only when a deployment failure, a stack/credential change, or an operator request calls for another RC pass). Its live gates are operator-gated: Docker daemon up (Phase B); the R-411 Lima VM volume `/Volumes/Development/arhugula-r411/` mounted; paid Phase-C approval; the GCP `roles/iam.serviceAccountTokenCreator` re-grant (deliberately revoked at the 2026-06-10 close) plus `aws login --profile r830`.
 
 Current Phase-D advisory-traceability baseline: `.harness/overlay-advisory-traceability-audit-2026-07-27.md` (supersedes the 2026-06-10 audit).
 

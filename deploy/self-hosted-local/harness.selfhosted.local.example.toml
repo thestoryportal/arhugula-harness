@@ -97,8 +97,75 @@ connection_url = "stdio://uv run python /absolute/path/to/arhugula-v2/deploy/sel
 default_minimum_tier = "tier-1-process"
 default_blast_radius = "READ_ONLY"
 default_sandbox_tier = "tier-1-process"
-default_sandbox_tech = "host-process"
-default_sandbox_provider = "host"
+# `default_sandbox_tech` / `default_sandbox_provider` are DELIBERATELY UNSET.
+#
+# They are the `sandbox.enter` span labels, and an EXPLICIT operator value
+# always wins over derivation — including when a floor RAISES the tier
+# (`resolve_per_tool_sandbox_defaults` re-derives them from the raised tier only
+# when they are `None`; `harness-runtime/src/harness_runtime/config/
+# sandbox_defaults.py`). Because row 3 floors this stdio server to tier-3 (see
+# below), pinning them to `"host-process"` / `"host"` would make every span
+# report host execution while the tool actually runs under gVisor `runsc` —
+# a telemetry lie, not a cosmetic one.
+#
+# Left unset, they derive from the tier actually delivered: `("gvisor",
+# "runsc")` for TIER_3_MICROVM. Prefer unset over hardcoding those strings —
+# the per-tier label table is explicitly a placeholder pending the ADR-D2 §1.7
+# canonical `sandbox.*` namespace reconciliation, so derivation tracks the
+# rename and a hardcoded copy would not.
+
+# --- Tier-3 execution driver (REQUIRED for the stdio echo server above) -------
+#
+# The `default_*` tier keys above are a FLOOR REQUEST, not the resolved tier.
+# C-AS-02 §2.3 row 3 floors ANY stdio MCP transport at TIER_3_MICROVM
+# (`harness-as/src/harness_as/sandbox_tier_floor.py`: `if mcp_transport is
+# MCPTransport.STDIO: return _resolved(_tier_max(SandboxTier.TIER_3_MICROVM,
+# floor))`), regardless of the per-client `tier-1-process` declared above. So
+# `r420-echo` resolves to tier-3 and needs a tier-3 execution driver; without
+# one, `just r420-self-hosted-live-e2e` aborts at dispatch with
+# `SandboxDriverUnavailableError: resolved tier 'tier-3-microvm'`.
+#
+# Uncomment and adapt the block below. gVisor (`runsc`) is Linux-only and is
+# never available on a macOS host directly, so the driver must reach a Linux
+# daemon with `runsc` registered. Lima is one provisioning option — the same VM
+# the R-411 gVisor smoke uses (see
+# `.harness/release-candidate-deployment-readiness-runbook.md` §4 and the
+# `R411_GVISOR_DOCKER_COMMAND` recipe). The daemon's runtime MUST be
+# registered under the exact name `runsc`: the tier-3 factory constructs
+# `GVisorRunscToolRunnerExecutionDriver`, which always passes
+# `--runtime runsc` — another tier-3 runtime name fails at container start.
+#
+# `docker_binary` is exec'd as argv[0] with NO shell, so a multi-word remote
+# invocation must be wrapped in a single executable script, e.g.
+#
+#   #!/bin/sh
+#   exec env LIMA_HOME=/path/to/lima-home limactl shell <vm> sudo docker "$@"
+#
+# `command` receives the MCP request JSON on stdin and must write MCP-shaped
+# JSON to stdout. Echo back the real argument (as below) rather than a
+# constant — a constant makes the e2e pass without proving transit.
+#
+# Keep `default_sandbox_tech` / `default_sandbox_provider` UNSET (see the note
+# on the client entry above). If you do set them, set them to the tier you
+# actually deliver — `"gvisor"` / `"runsc"` for tier-3 — never leave the
+# tier-1 `"host-process"` / `"host"` pair in place, or the `sandbox.enter`
+# span will report host execution for a container that ran under runsc.
+#
+# NOTE: the sed-based runner below is a DEMO echo scoped to the r420 e2e's
+# fixed ASCII value — it does not handle escaped quotes (a value like
+# `say \"hi\"` yields malformed JSON and the driver raises
+# ToolInvocationProtocolError). For real workloads substitute an image with a
+# JSON-capable runner (e.g. python) instead of extending the sed pattern.
+#
+# [runtime.mcp_clients.sandbox_driver]
+# image = "alpine:3.20"                                    # must be pre-pulled inside the VM
+# command = [
+#   "sh",
+#   "-c",
+#   'v=$(sed -n "s/.*\"value\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" | head -n 1); printf "{\"content\":[{\"type\":\"text\",\"text\":\"%s\"}],\"isError\":false}" "$v"',
+# ]
+# docker_binary = "/absolute/path/to/gvisor-docker.sh"     # the wrapper script above
+# network = "none"
 
 [runtime.routing_manifest]
 manifest_version = 1
