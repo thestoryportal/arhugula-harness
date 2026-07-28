@@ -147,12 +147,19 @@ SandboxDriverUnavailableError: resolved tier 'tier-3-microvm'
 This is the enforced contract behaving correctly, not a config bug. Close it with
 config only — no harness code change:
 
-1. Provision a Linux daemon with a tier-3 runtime registered. gVisor (`runsc`) is
-   Linux-only and never runs on the macOS host directly, so macOS operators need
-   a VM. Lima is one option — the same `r411-gvisor` VM the R-411 gVisor smoke
-   uses (`.harness/release-candidate-deployment-readiness-runbook.md` §4 and its
-   `R411_GVISOR_DOCKER_COMMAND` recipe). Any Docker-compatible daemon with a
-   tier-3 runtime works.
+1. Provision a Linux daemon with the gVisor runtime registered **under the exact
+   name `runsc`**. This is not generic tier-3 compatibility: the tier-3 branch of
+   `runtime_tool_dispatcher_factory.py` always constructs
+   `GVisorRunscToolRunnerExecutionDriver`, whose `runtime` field defaults to
+   `"runsc"` and is emitted verbatim as `--runtime runsc` in the `docker run`
+   argv (`harness-runtime/src/harness_runtime/lifecycle/
+   docker_tool_execution_driver.py`). A daemon offering some other tier-3 runtime
+   — or gVisor registered under a different name — fails at container start.
+   gVisor is Linux-only and never runs on the macOS host directly, so macOS
+   operators need a VM. Lima is one option — the same `r411-gvisor` VM the R-411
+   gVisor smoke uses (`.harness/release-candidate-deployment-readiness-runbook.md`
+   §4 and its `R411_GVISOR_DOCKER_COMMAND` recipe). Verify with
+   `docker info` on the daemon: `runsc` must appear under `Runtimes`.
 2. Write a one-line wrapper script. `SandboxDriverConfig.docker_binary` is
    exec'd as `argv[0]` with **no shell**, so a multi-word remote invocation must
    live in a single executable file:
@@ -170,6 +177,15 @@ config only — no harness code change:
    inside the VM. Keep `network = "none"`. The `command` reads the MCP request
    JSON on stdin and must echo the real `tool_args.value` back — a constant
    response makes the e2e pass without proving transit.
+4. **Leave `default_sandbox_tech` and `default_sandbox_provider` unset** (the
+   template ships them commented out). They are the `sandbox.enter` span labels,
+   and an explicit operator value **survives the row-3 raise** — the resolver
+   re-derives them from the raised tier only when they are `None`
+   (`harness-runtime/src/harness_runtime/config/sandbox_defaults.py`). Pinning
+   them to the tier-1 pair `"host-process"` / `"host"` therefore makes every span
+   claim host execution for a tool that actually ran under gVisor `runsc`:
+   security telemetry that lies about the isolation applied. Unset, they derive
+   to `gvisor` / `runsc` alongside the delivered tier.
 
 ## Boundaries
 

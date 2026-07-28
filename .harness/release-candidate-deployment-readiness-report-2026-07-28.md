@@ -36,7 +36,7 @@ Deploy-doc audit (runbook §3 list) performed; two doc gaps found and fixed in t
 
 **Provider-free acceptance: met.**
 
-## Phase B — Local/self-hosted deployment smoke: **3/3 GREEN**, two genuine re-validation findings
+## Phase B — Local/self-hosted deployment smoke: **3/3 GREEN**, three findings
 
 This is where the pass earned its keep. Both R-500 and R-420 **failed on first run** against
 current `main` — neither was an environment flake; each was real drift between a live-e2e /
@@ -46,7 +46,7 @@ deploy-template surface and a harness invariant that was tightened after the 202
 |---|---|
 | `just r430-tail-keep-live-e2e harness.selfhosted.local.toml` | ✅ **PASS, unchanged.** Trigger trace preserved (including the `sandbox.violation` span); non-triggering trace dropped. `cost=0`, hosted-provider-calls=0. No drift. |
 | `just r500-multitenant-live-e2e` | ❌ **FAILED first** → **FIXED + STRENGTHENED** → ✅ **PASS.** See finding #1. Post-fix: `tenant-resource-separated=true content-redacted=true audit-ledger-separated=true cost=0 hosted-provider-calls=0`, `tenant_a_audit_entries=2 tenant_b_audit_entries=1`; the IS wrapper chain **and** (newly) each tenant's OD audit chain verified. |
-| `just r420-self-hosted-live-e2e harness.selfhosted.local.toml` | ❌ **FAILED first** → **UNBLOCKED (config-only)** → ✅ **PASS.** See finding #2. Post-unblock: `workflow=r420-self-hosted-tool-echo status=success cost=0`. |
+| `just r420-self-hosted-live-e2e harness.selfhosted.local.toml` | ❌ **FAILED first** → **UNBLOCKED (config-only)** → ✅ **PASS**, then **re-run after a span-honesty correction** → ✅ **PASS**. See finding #2 + finding #3. Final: `workflow=r420-self-hosted-tool-echo status=success cost=0 hosted-provider-calls=0`. |
 | `just r411-gvisor-live-e2e` (with `R411_GVISOR_DOCKER_COMMAND`) | ✅ **PASS — 1 passed in 7.87s.** See R-411 note. |
 
 Phase B made **0 hosted-provider calls, $0**.
@@ -164,6 +164,45 @@ landed in this PR (below).
 **Classification: deploy-template drift, fixed in docs/template. Not a harness defect** — the floor
 is the enforced cleared contract behaving correctly; the shipped example config had not caught up.
 
+### Finding #3 — the tier-3 unblock made the `sandbox.enter` span lie about isolation (found by out-of-family review; FIXED + honest re-run)
+
+Finding #2's unblock was **incomplete, and the incompleteness was a telemetry-honesty defect** — surfaced by codex round 2 against the round-1 template, not by any test.
+
+**Root cause.** The template kept the client entry's `default_sandbox_tech = "host-process"` and `default_sandbox_provider = "host"` alongside the new tier-3 driver. Those two fields are the `sandbox.enter` span labels, and **an explicit operator value survives the floor raise**: `resolve_per_tool_sandbox_defaults` re-derives them from the raised tier *only when they are `None`* (`harness-runtime/src/harness_runtime/config/sandbox_defaults.py:275-282`; the per-tier table is `_TIER_TECH_PROVIDER` at `:61-66`, where `TIER_3_MICROVM → ("gvisor", "runsc")`). The resolved decision flows straight into `SandboxDispatchDecision(tier=…, tech=eff.sandbox_tech, provider=eff.sandbox_provider, …)` in `runtime_tool_dispatcher_factory.py`.
+
+So the tool executed under gVisor `runsc` while its span reported **host-process execution**. Tier was honest; the isolation *labels* were not. For a security-telemetry surface whose stated purpose is recording why isolation was applied, that is the wrong direction to be wrong in.
+
+**Counterfactual witness (the pre-fix config, resolved through the real resolver):**
+
+```
+PRE-FIX (what the first r420 run emitted):
+  tier= tier-3-microvm | tech= host-process / provider= host
+```
+
+**This is recorded, not hidden: the first two passing r420 runs in this arc emitted spans carrying those false `host-process` / `host` labels.** No conclusion in this report rested on them (the pass criterion is workflow status, not span labels), and no telemetry left the machine — the local collector stack was torn down — but the runs are named here so the record is accurate.
+
+**Fix.** Both label keys are now **unset** in the shipped template and in the local config, with the reasoning inline. Unsetting is preferred over hardcoding `"gvisor"` / `"runsc"`: `_TIER_TECH_PROVIDER`'s own comment (`sandbox_defaults.py:53-60`) marks these as **placeholder** labels pending the ADR-D2 §1.7 canonical `sandbox.*` namespace reconciliation, so derivation tracks that future rename while a hardcoded copy in a shipped template would silently drift.
+
+**Post-fix witness, same resolver, same config:**
+
+```
+RESOLVED (what the sandbox.enter span carries):
+  tier     = tier-3-microvm
+  tech     = gvisor
+  provider = runsc
+  reason   = per-tool-sandbox-floor: echo → tier-3-microvm (C-AS-02 §2.3)
+```
+
+**Honest re-run (2026-07-28, stack up, free, `cost=0`):**
+
+```
+[r420-live] completed: workflow=r420-self-hosted-tool-echo status=success cost=0 hosted-provider-calls=0
+```
+
+Stack torn down after; all three containers and the network confirmed `Removed`.
+
+**Classification: deploy-template defect in this pass's own unblock, fixed before merge.** Not a harness defect — the resolver's explicit-value-wins precedence is correct and deliberate (an operator must be able to override labels); the template was supplying an override it had no business supplying.
+
 ### Additional Phase-B environment note — placeholder substitution
 
 **Both** scratch configs (`harness.selfhosted.local.toml`, `harness.managed-cloud.e2b.toml`) as
@@ -246,15 +285,19 @@ remains the current baseline.
 
 ## Doc/template fixes landed at this pass
 
-Both findings above were *documentation/template* drift, so both are closed in-repo rather than
+All three findings above were *tooling / documentation / template* drift, so all are closed in-repo rather than
 merely narrated:
 
 - `deploy/self-hosted-local/harness.selfhosted.local.example.toml` — a **commented**
   `[runtime.mcp_clients.sandbox_driver]` example block immediately after the `r420-echo` entry,
   explaining the C-AS-02 §2.3 row 3 stdio floor and showing the `image` / `command` /
-  `docker_binary` / `network` keys with the generic wrapper-script pattern.
-- `deploy/self-hosted-local/README.md` — a new step documenting the floor and the wrapper-script
-  provisioning step (Lima/gVisor named as one option, with the R-411 runbook precedent).
+  `docker_binary` / `network` keys with the generic wrapper-script pattern; plus
+  `default_sandbox_tech` / `default_sandbox_provider` commented **out** with the finding-#3
+  rationale (they were the false-label carriers).
+- `deploy/self-hosted-local/README.md` — a new "Tier-3 sandbox driver" section: the floor, the
+  wrapper-script step, the **`runsc`-specifically** daemon requirement (the tier-3 branch always
+  builds `GVisorRunscToolRunnerExecutionDriver`, which emits a literal `--runtime runsc` — generic
+  tier-3 compatibility is not enough), and the finding-#3 span-label rule.
 - `.harness/release-candidate-deployment-readiness-runbook.md` — five targeted de-stales:
   AWS `aws login`, the R-411 volume current-state note, the Phase-B stdio-floor requirement,
   the placeholder-substitution warning at the copy steps, and a note that the R-500 script now
@@ -286,9 +329,9 @@ stack (grafana / otel-collector / tempo); local Ollama daemon.
 
 ## Cleanup performed
 
-- **Docker self-hosted stack**: brought up and taken **DOWN cleanly, three times** (twice during
-  the Phase-B runs, once more for the finding-#1 re-validation + mutation probe). Final teardown
-  confirmed all three containers and the network `Removed`.
+- **Docker self-hosted stack**: brought up and taken **DOWN cleanly, four times** (twice during
+  the Phase-B runs, once for the finding-#1 re-validation + mutation probe, once for the finding-#3
+  honest r420 re-run). Every teardown confirmed all three containers and the network `Removed`.
 - **E2B sandboxes**: context-manager teardown + server-side auto-expiry — none persist.
 - **Neon/PG**: r830 deleted its unique path.
 - **S3**: r830 deleted its unique object key.
@@ -353,12 +396,19 @@ self-hosted **daemon e2e (R-420)** + telemetry (R-430) + multitenant (R-500) + *
 (R-411)**; managed-cloud **E2B** (probe + full VM), **Neon managed-DB**, and **S3**; and Phase-D
 traceability at zero drift.
 
-**Two live-surface defects were found and closed at this pass, both outside harness production
-code** — a stale live-e2e script fabricating placeholder audit hashes (harness caught it loudly, as
-designed) and a deploy template that predates the enforced stdio tier-3 floor. That is precisely
-the value a re-validation pass exists to deliver: seven weeks of harness tightening had drifted
-past two auxiliary surfaces, and neither drift was visible to CI. **Zero harness production code
-was changed.**
+**Three live-surface defects were found and closed at this pass, all outside harness production
+code** — a stale live-e2e script fabricating placeholder audit hashes (the harness caught it
+loudly, as designed), a deploy template that predates the enforced stdio tier-3 floor, and — in
+this pass's own unblock for that second one — a template override that made the `sandbox.enter`
+span report host execution for a tool running under gVisor. That is precisely the value a
+re-validation pass exists to deliver: seven weeks of harness tightening had drifted past two
+auxiliary surfaces, neither drift was visible to CI, and the third defect was caught only because
+the pass's own output was put through out-of-family review. **Zero harness production code was
+changed.**
+
+Two of the three were caught by review rather than by a failing command — worth noting for
+calibration: a green live-e2e is a weaker witness than it looks, since both the r500 chain
+overclaim and the r420 span-label lie produced perfectly passing runs.
 
 The single residual is the three GCP OTLP e2es, blocked on an operator-owned IAM re-grant. They
 passed at the 2026-06-10 GO close, the `run.invoker` half of their auth is still in place, and
