@@ -342,3 +342,89 @@ async def test_generic_command_adapter_uses_configured_templates_and_stdin() -> 
         (("my-llm", "auth", "status"), "", 42.0),
         (("my-llm", "--model", "demo-model", "--json"), "Reply OK", 42.0),
     ]
+
+
+@pytest.mark.asyncio
+async def test_gemini_auth_probe_nonzero_exit_rejects_construction() -> None:
+    """G4 (PR #1137 follow-up) — the configured-auth-command probe's
+    nonzero-exit branch had no CI witness, so both live auth gates were
+    falsely-green-capable."""
+    runner = _FakeRunner(
+        results=[CLIProcessResult(exit_code=1, stdout="", stderr="gemini probe refused: no creds")],
+        calls=[],
+    )
+
+    with pytest.raises(ExternalCLINotAuthenticatedError, match="gemini probe refused: no creds"):
+        await construct_gemini_cli_adapter(
+            _provider_config(
+                "gemini",
+                "gemini",
+                "gemini",
+                auth_check=True,
+                auth_args=("--skip-trust", "-p", "Reply with the single word OK."),
+            ),
+            runner=runner,
+        )
+
+    assert runner.calls == [
+        (("gemini", "--skip-trust", "-p", "Reply with the single word OK."), "", 42.0),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_gemini_auth_check_without_auth_args_raises_before_any_spawn() -> None:
+    """G4 — ``auth_check=true`` with no declared ``auth_args`` must raise
+    before the probe is ever spawned."""
+    runner = _FakeRunner(results=[], calls=[])
+
+    with pytest.raises(
+        ExternalCLINotAuthenticatedError,
+        match="Gemini CLI auth_check=true requires auth_args",
+    ):
+        await construct_gemini_cli_adapter(
+            _provider_config("gemini", "gemini", "gemini", auth_check=True),
+            runner=runner,
+        )
+
+    assert runner.calls == []
+
+
+@pytest.mark.asyncio
+async def test_generic_command_auth_probe_nonzero_exit_rejects_construction() -> None:
+    """G4 — the generic-command standing probe's nonzero-exit branch; only the
+    exit-0 happy path was covered."""
+    runner = _FakeRunner(
+        results=[CLIProcessResult(exit_code=3, stdout="", stderr="local llm login required")],
+        calls=[],
+    )
+
+    with pytest.raises(ExternalCLINotAuthenticatedError, match="local llm login required"):
+        await construct_generic_command_cli_adapter(
+            _provider_config(
+                "local_llm",
+                "generic-command",
+                "my-llm",
+                auth_args=("auth", "status"),
+            ),
+            runner=runner,
+        )
+
+    assert runner.calls == [(("my-llm", "auth", "status"), "", 42.0)]
+
+
+@pytest.mark.asyncio
+async def test_generic_command_auth_check_without_auth_args_raises_before_any_spawn() -> None:
+    """G4 — the generic-command half of the ``requires auth_args`` branch,
+    carrying its own provider label."""
+    runner = _FakeRunner(results=[], calls=[])
+
+    with pytest.raises(
+        ExternalCLINotAuthenticatedError,
+        match="generic external CLI auth_check=true requires auth_args",
+    ):
+        await construct_generic_command_cli_adapter(
+            _provider_config("local_llm", "generic-command", "my-llm"),
+            runner=runner,
+        )
+
+    assert runner.calls == []
