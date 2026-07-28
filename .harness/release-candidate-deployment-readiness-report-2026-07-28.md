@@ -307,8 +307,9 @@ merely narrated:
 
 ## Live calls made + cost class
 
-- **E2B**: 3 hosted sandbox lifecycles (`r421-e2b-live-probe` × 1, `r412-e2b-full-vm-live-e2e`,
-  and the probe's own provision/teardown) — seconds each, all self-cleaned. Usage-billed, **cents**.
+- **E2B**: 2 hosted sandbox lifecycles (one `Sandbox.create()` provision/teardown each for
+  `r421-e2b-live-probe` and `r412-e2b-full-vm-live-e2e`) — seconds each, all self-cleaned.
+  Usage-billed, **cents**.
 - **Neon/PG**: 1 connection + CRUD on a unique path, cleaned up. Negligible.
 - **AWS S3**: 1 create/view/update/delete cycle on a unique object key + cleanup. Negligible.
 - **Anthropic**: no Files API / Managed Agents calls this pass (those e2es are the operator-gated
