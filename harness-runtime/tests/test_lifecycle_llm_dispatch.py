@@ -1817,6 +1817,68 @@ async def test_openai_malformed_terminal_batch_raises_shape_error_not_exhaustion
 
 
 @pytest.mark.asyncio
+async def test_openai_multi_call_batch_executes_in_order_and_correlates_per_call() -> None:
+    """TWO memory calls in ONE response — order and per-call correlation.
+
+    Every single-call test passes under a loop that truncates, reverses, or
+    mispairs the batch, because with N==1 those are all no-ops. This is the
+    witness that N>1 is handled correctly.
+    """
+    search_call = _openai_tool_call(
+        "call_search",
+        "memory_search",
+        query="first",
+        scope_ref="scope:u-mem-16",
+        policy_ref="policy:u-mem-16",
+    )
+    write_call = _openai_tool_call(
+        "call_write",
+        "memory_write_note",
+        note="second",
+        scope_ref="scope:u-mem-16",
+        policy_ref="policy:u-mem-16",
+    )
+    client = _OpenAIClient()
+    client.chat.completions.responses = [
+        _ProviderResponse(
+            id="cmpl_batch2",
+            usage=_Usage(prompt_tokens=10, completion_tokens=4),
+            _dump=_openai_tool_call_dump("cmpl_batch2", search_call, write_call),
+        ),
+        _ProviderResponse(
+            id="cmpl_done",
+            usage=_Usage(prompt_tokens=12, completion_tokens=5),
+            _dump={"id": "cmpl_done", "choices": [{"message": {"role": "assistant"}}]},
+        ),
+    ]
+    executor = _FakeStandardMemoryToolExecutor()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"openai": _OpenAIFakeAdapter(client)},
+        tracer_provider=_tracer_provider_with_exporter()[0],
+        memory_context=_standard_tools_memory_context(),
+        standard_memory_tool_executor=executor,
+    )
+
+    await dispatcher.dispatch(_binding("openai"), _step(), step_context=_step_context())
+
+    # (i) both executed, (ii) in the order the provider asked for.
+    assert [r.tool_name for r in executor.requests] == [
+        MemoryToolName.SEARCH,
+        MemoryToolName.WRITE_NOTE,
+    ]
+    assert executor.requests[0].arguments["query"] == "first"
+    assert executor.requests[1].arguments["note"] == "second"
+
+    # (iv) BOTH result turns reached the continuation, after the assistant turn.
+    continuation = client.chat.completions.calls[1]["messages"]
+    tool_turns = [m for m in continuation if m.get("role") == "tool"]
+    assert len(tool_turns) == 2
+    # (iii) each result turn correlates to ITS OWN call, not to prepared[0].
+    assert [t["tool_call_id"] for t in tool_turns] == ["call_search", "call_write"]
+    assert [t["name"] for t in tool_turns] == ["memory_search", "memory_write_note"]
+
+
+@pytest.mark.asyncio
 async def test_openai_memory_read_executes_without_a_scope_ref_argument() -> None:
     """`memory.read` declares NO `scope_ref` — requiring one made it unreachable.
 
@@ -2362,6 +2424,73 @@ async def test_ollama_memory_tool_loop_raises_exhaustion_before_executing_final_
         "the final iteration's batch must not execute — nothing can carry its "
         f"results back; got {len(executor.requests)} executions"
     )
+
+
+@pytest.mark.asyncio
+async def test_ollama_multi_call_batch_executes_in_order_and_correlates_per_call() -> None:
+    """Ollama mirror — TWO memory calls in ONE response.
+
+    Correlation here is by `tool_name` rather than a tool-call id (ollama's
+    client exposes none), so mispairing shows up as two turns naming the same
+    tool instead of one each.
+    """
+    search_call = {
+        "function": {
+            "name": "memory.search",
+            "arguments": {
+                "query": "first",
+                "scope_ref": "scope:u-mem-16",
+                "policy_ref": "policy:u-mem-16",
+            },
+        }
+    }
+    write_call = {
+        "function": {
+            "name": "memory.write_note",
+            "arguments": {
+                "note": "second",
+                "scope_ref": "scope:u-mem-16",
+                "policy_ref": "policy:u-mem-16",
+            },
+        }
+    }
+    client = _OllamaClient()
+    client.responses = [
+        _OllamaResponse(
+            prompt_eval_count=20,
+            eval_count=8,
+            _dump=_ollama_dump(
+                {"role": "assistant", "content": "", "tool_calls": [search_call, write_call]}
+            ),
+        ),
+        _OllamaResponse(
+            prompt_eval_count=31,
+            eval_count=9,
+            _dump=_ollama_dump({"role": "assistant", "content": "done"}),
+        ),
+    ]
+    executor = _FakeStandardMemoryToolExecutor()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"ollama": _OllamaFakeAdapter(client)},
+        tracer_provider=_tracer_provider_with_exporter()[0],
+        memory_context=_ollama_memory_context(),
+        standard_memory_tool_executor=executor,
+    )
+
+    result = await dispatcher.dispatch(_binding("ollama"), _step(), step_context=_step_context())
+
+    assert [r.tool_name for r in executor.requests] == [
+        MemoryToolName.SEARCH,
+        MemoryToolName.WRITE_NOTE,
+    ]
+    assert executor.requests[0].arguments["query"] == "first"
+    assert executor.requests[1].arguments["note"] == "second"
+
+    continuation = client.calls[1]["messages"]
+    tool_turns = [m for m in continuation if m.get("role") == "tool"]
+    assert len(tool_turns) == 2
+    assert [t["tool_name"] for t in tool_turns] == ["memory.search", "memory.write_note"]
+    assert result["message"]["content"] == "done"
 
 
 @pytest.mark.asyncio
