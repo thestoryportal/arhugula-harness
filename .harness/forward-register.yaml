@@ -59,13 +59,13 @@
 
 snapshot:
   total: 91
-  open: 2
+  open: 3
   design_substrate_gated: 0
-  registered_finding: 15
+  registered_finding: 14
   operator_gated: 1
   held: 1
   closed: 72
-  identity_digest: f525a73fb92f1d67
+  identity_digest: bb0ab2bfe5d23f22
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -2673,8 +2673,8 @@ items:
   heading: '### B-89 · Memory-scope producer asymmetry: capture stamps raw provider KEYS while retrieval requests carry family VALUES *(surfaced by the B-86 grounding pass, 2026-07-28)*'
 - id: B-90
   title: 'Capture-path MemoryScope omits tenant and workload_class -- tool-captured records are tenant-unpartitioned'
-  status: registered_finding
+  status: open
   summary: 'Surfaced at the B-86 council convening (2026-07-28), as the adjacent half of Probe C. MECHANISM: `harness-runtime/src/harness_runtime/memory_capture.py:585-591` constructs its `MemoryScope` with only `project` / `workflow` / `provider_family` / `cli_profile` / `visibility` -- `tenant` and `workload_class` are omitted ENTIRELY -- while the composed REQUEST scope populates them (`harness-runtime/src/harness_runtime/automatic_memory.py:194-199`). Under the enforcement predicates'' wildcard-on-`None` semantics a `None` RECORD value passes all three sites: `MemoryRetriever._scope_mismatch` skips a `None` on either side (`harness-is/src/harness_is/memory_retrieval.py:377-383`); the index `_scope_matches` carries the same field list (`memory_retrieval_index.py:379-396`); and `memory_policy._scope_not_broader` guards only NON-`None` record values (`if record_value is not None and requested_value != record_value`, `memory_policy.py:336-359`), so a `None` record tenant passes. NET: every tool-captured / episodic record is tenant-UNPARTITIONED and reachable by ANY tenant''s family-matching request -- against the cleared threat-model mandate at `design-substrate/Spec_Memory_Substrate_v1.md:481` (''Retrieval and injection enforce project, workflow, tenant, provider-family, CLI-profile, and visibility scope before ranking''). HONEST CAVEATS: single-tenant local deployment is the current default posture, so live exposure is bounded today; and the wildcard-on-`None` semantics are themselves load-bearing and currently UNDOCUMENTED -- the B-86 spec-leg''s C-MEM-03 null-semantics sentence is what documents them.'
-  close_out: '(1) PREFERRED -- fold into the B-89 writer-side repair: consuming the run''s composed `record_scope` brings `tenant` + `workload_class` along, so the B-89 fix incidentally closes this row. (2) An INDEPENDENT narrow fix (stamp the two fields into the constructed scope at `memory_capture.py:585-591`) is landable WITHOUT the spec-leg, since it needs no contract decision, but it would be superseded by (1) -- prefer (1) unless a multi-tenant deployment lands first, in which case take (2) immediately and let B-89 subsume it. (3) Witness either shape by asserting a tenant-A request does NOT retrieve a tenant-B tool-captured record at ALL THREE enforcement sites (retrieval, index, policy); a single-site witness passes over the other two, which is how this survived.'
+  close_out: '(1) PREFERRED -- fold into the B-89 writer-side repair: consuming the run''s composed `record_scope` brings `tenant` + `workload_class` along, so the B-89 fix incidentally closes this row. (2) An INDEPENDENT narrow fix (stamp the two fields into the constructed scope at `memory_capture.py:585-591`) is landable WITHOUT the spec-leg, since it needs no contract decision, but it would be superseded by (1) -- prefer (1) unless a multi-tenant deployment lands first, in which case take (2) immediately and let B-89 subsume it. (3) Witness either shape by asserting a tenant-A request does NOT retrieve a tenant-B tool-captured record at ALL THREE enforcement sites (retrieval, index, policy); a single-site witness passes over the other two, which is how this survived. STATUS registered_finding -> open: the B-86 spec leg (this PR) makes route (1) actionable now -- U-MEM-26 explicitly incorporates this repair, so the row is buildable at U-MEM-26''s writer-repair half.'
   council: 'No -- conformance repair to a cleared threat-model invariant (:481); no cross-domain tension. Fold into the B-89 writer repair at the B-86 spec-leg''s impl leg.'
   heading: '### B-90 · Capture-path `MemoryScope` omits `tenant` and `workload_class` — tool-captured records are tenant-unpartitioned *(surfaced at the B-86 council convening, 2026-07-28)*'
