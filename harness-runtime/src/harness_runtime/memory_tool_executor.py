@@ -581,7 +581,20 @@ def _allowed_kinds(args: Mapping[str, object]) -> tuple[MemoryRecordKind, ...]:
     for item in cast(Sequence[object], raw):
         if not isinstance(item, str):
             raise MemoryToolExecutionInputError("allowed_kinds entries must be strings")
-        kinds.append(MemoryRecordKind(item))
+        # B-84: the enum conversion must raise the TYPED input error, not the
+        # bare `ValueError` `MemoryRecordKind(...)` raises. A bare `ValueError`
+        # is NOT caught by the fail-fast branch of `_classify_provider_exception`
+        # (`retry_breaker_fallback.py:326-334`) — `MemoryToolExecutionInputError`
+        # subclasses `ValueError`, not the reverse — so an unknown kind on a
+        # `memory.search` following a committed `memory.write_note` in the same
+        # batch still replayed the whole dispatch and duplicated the write.
+        try:
+            kinds.append(MemoryRecordKind(item))
+        except ValueError as exc:
+            accepted = ", ".join(kind.value for kind in MemoryRecordKind)
+            raise MemoryToolExecutionInputError(
+                f"unsupported allowed_kinds entry {item!r}; accepted kinds: {accepted}"
+            ) from exc
     return tuple(kinds)
 
 

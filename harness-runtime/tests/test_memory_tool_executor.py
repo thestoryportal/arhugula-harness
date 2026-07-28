@@ -37,9 +37,11 @@ from harness_is.memory_retrieval import MemoryRetriever
 from harness_is.memory_retrieval_index import DerivedRetrievalIndexStore
 from harness_is.memory_store import CanonicalMemoryStore, MemoryStoreRecord
 from harness_is.state_ledger_entry_schema import Actor, ActorClass
+from harness_runtime.lifecycle.retry_breaker_fallback import _classify_provider_exception
 from harness_runtime.memory_tool_executor import (
     MemoryToolExecutionContext,
     MemoryToolExecutionDeniedError,
+    MemoryToolExecutionInputError,
     MemoryToolExecutionRequest,
     StandardMemoryToolExecutor,
 )
@@ -196,6 +198,46 @@ def _request(
         arguments=arguments,
         context=_context(),
     )
+
+
+def test_search_unknown_allowed_kind_raises_typed_input_error_and_fails_fast(
+    tmp_path: Path,
+) -> None:
+    """B-84 round 1: an unknown `allowed_kinds` entry must raise the TYPED
+    `MemoryToolExecutionInputError`, not the bare `ValueError` that
+    `MemoryRecordKind(...)` raises.
+
+    The distinction is load-bearing rather than cosmetic: `_classify_provider_exception`
+    fail-fasts on `MemoryToolExecutionInputError`, and because that class
+    SUBCLASSES `ValueError` (not the reverse) a bare `ValueError` misses the
+    isinstance check entirely and classifies `TRANSIENT_RETRY`. A batch of
+    [memory.write_note (valid), memory.search (unknown allowed_kind)] would then
+    commit the write, raise, and replay the whole dispatch — the exact
+    duplication class this arc closes, reached through the one raise site the
+    first pass missed. The second assertion is the cross-layer half: the REAL
+    exception instance the executor raises is what the classifier must
+    fail-fast, so it is fed to the real classifier rather than a hand-built
+    stand-in."""
+    _store_unused, executor = _executor(tmp_path)
+
+    with pytest.raises(MemoryToolExecutionInputError) as excinfo:
+        executor.execute(
+            _request(
+                MemoryToolName.SEARCH,
+                {
+                    "query": "codex memory tools workflow preferences",
+                    "scope_ref": _SCOPE_REF,
+                    "policy_ref": _POLICY_REF,
+                    "allowed_kinds": ["preference", "not_a_real_kind"],
+                },
+            )
+        )
+    message = str(excinfo.value)
+    assert "not_a_real_kind" in message  # names the offending value
+    assert MemoryRecordKind.PREFERENCE.value in message  # names the accepted kinds
+
+    # Cross-layer: the real exception instance fail-fasts (None = no staircase).
+    assert _classify_provider_exception(excinfo.value) is None
 
 
 def test_search_and_read_return_only_policy_allowed_refs(tmp_path: Path) -> None:
