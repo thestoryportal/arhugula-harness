@@ -926,5 +926,6 @@ __all__ = [
     "MemoryToolExecutionError",
     "MemoryToolExecutionInputError",
     "MemoryToolExecutionRequest",
+    "MemoryToolExecutionStoreError",
     "StandardMemoryToolExecutor",
 ]
