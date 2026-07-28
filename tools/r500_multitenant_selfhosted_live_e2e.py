@@ -433,10 +433,13 @@ def _prove_audit_ledger_separation() -> tuple[int, int]:
 
         # Build the entries BEFORE appending so tenant A's second entry can
         # chain onto the first. Both A-entries previously took the default
-        # genesis `prior_hash`, so tenant A's audit chain was genesis→genesis:
-        # a real broken link was indistinguishable from the intended shape, and
-        # the verification below would have accepted either. `compute_entry_hash`
-        # is pure, so entry 1's hash is available before entry 2 is built.
+        # genesis `prior_hash`, leaving tenant A's audit chain genuinely
+        # BROKEN (entry 2's prior_entry_hash pointed at genesis, not at entry
+        # 1's hash) — harmless only because nothing verified it. The chain
+        # verification added below rejects that shape outright, so the fixture
+        # has to be honestly chained for this proof to mean anything.
+        # `compute_entry_hash` is pure, so entry 1's hash is available before
+        # entry 2 is built.
         entry_a1 = _make_audit_entry("1" * 64)
         entry_a2 = _make_audit_entry("2" * 64, prior_hash=entry_a1.entry_hash)
         entry_b1 = _make_audit_entry("3" * 64)
@@ -478,12 +481,18 @@ def _prove_audit_ledger_separation() -> tuple[int, int]:
             persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
             deployment_surface=DeploymentSurface.SELF_HOSTED_SERVER,
         )
-        for tenant_id, expected_len in ((TENANT_A, 2), (TENANT_B, 1)):
+        expected_hashes = {
+            TENANT_A: (entry_a1.entry_hash, entry_a2.entry_hash),
+            TENANT_B: (entry_b1.entry_hash,),
+        }
+        for tenant_id, expected in expected_hashes.items():
             rehydrated = writer.read_full_entries_for_tenant(tenant_id)
-            if len(rehydrated) != expected_len:
+            # Identity, not just cardinality: an equal-length cross-tenant swap
+            # keeps both counts right and both chains internally valid.
+            if tuple(e.entry_hash for e in rehydrated) != expected:
                 raise R500LiveE2EError(
-                    f"tenant {tenant_id} rehydrated {len(rehydrated)} full audit "
-                    f"entries, expected {expected_len}"
+                    f"tenant {tenant_id} rehydrated the wrong audit entries: got "
+                    f"{[e.entry_hash for e in rehydrated]}, expected {list(expected)}"
                 )
             try:
                 verify_hash_chain_integrity(AuditLedger(entries=tuple(rehydrated), cell_id=cell))

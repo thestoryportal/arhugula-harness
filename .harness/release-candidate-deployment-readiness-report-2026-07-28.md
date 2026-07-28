@@ -13,7 +13,7 @@
 - `main` HEAD at the pass: `ed3a770c` (`ops: roadmap status refresh post-#1140`), which refreshes
   over `c78e9a46` (`feat(runtime): … B-82`, PR #1140 merged during the arc).
 - Working tree carries exactly one code change, shipped in this PR: the R-500 script fix
-  (`tools/r500_multitenant_selfhosted_live_e2e.py`, see Phase B finding #2). `design-substrate/**`
+  (`tools/r500_multitenant_selfhosted_live_e2e.py`, see Phase B finding #1). `design-substrate/**`
   untouched; `.harness/roadmap_status.md` untouched (the §12.2 refresh is owed as the follow-on
   terminating-refresh commit, not bundled here).
 - Runbook §0 pinned starting state at `1abfaae3`; this pass ran against the later `ed3a770c`.
@@ -36,7 +36,7 @@ Deploy-doc audit (runbook §3 list) performed; two doc gaps found and fixed in t
 
 **Provider-free acceptance: met.**
 
-## Phase B — Local/self-hosted deployment smoke: **3/3 GREEN**, three findings
+## Phase B — Local/self-hosted deployment smoke: **3/3 GREEN** (+ R-411 sandbox-local smoke, scoped separately by the runbook), three findings
 
 This is where the pass earned its keep. Both R-500 and R-420 **failed on first run** against
 current `main` — neither was an environment flake; each was real drift between a live-e2e /

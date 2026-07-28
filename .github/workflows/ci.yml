@@ -361,7 +361,7 @@ jobs:
         run: uv run python tools/q1_review_gate.py --schema | uv run python -m json.tool >/dev/null
 
   q3-evidence-and-closure-gate:
-    # B-35 (.harness/forward-register.yaml) — these two tools/*.py test modules
+    # B-35 (.harness/forward-register.yaml) — these tools/*.py test modules
     # lived outside pytest's 7 package testpaths with no CI job of their own,
     # so a real, currently-red qa_evidence_matrix.py --check gap (12 contracts
     # with no test-file citation) sat undetected. This job is their home.
@@ -381,9 +381,9 @@ jobs:
       - name: Sync workspace (all members; provides pyyaml via harness-runtime)
         run: uv sync --all-packages
 
-      - name: Q3 evidence-matrix + closure-gate tests
+      - name: Q3 evidence-matrix + closure-gate + r500-proof tests
         working-directory: tools
-        run: uv run python -m pytest test_qa_evidence_matrix.py test_closure_gate.py -q
+        run: uv run python -m pytest test_qa_evidence_matrix.py test_closure_gate.py test_r500_multitenant_selfhosted.py -q
 
       - name: Validate the Q3 evidence matrix (missing test-citation = CI failure)
         run: uv run python tools/qa_evidence_matrix.py --check

@@ -1,13 +1,19 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
+import pytest
+
+from tools import r500_multitenant_selfhosted_live_e2e as r500
 from tools.r500_multitenant_selfhosted_live_e2e import (
     CHILD_SPAN,
     ROOT_SPAN,
     STRUCTURE_SENTINEL,
     TENANT_A,
+    R500LiveE2EError,
     _assert_tenant_trace_records,
+    _prove_audit_ledger_separation,
     _tempo_span_records,
     _trace_id_hex,
 )
@@ -121,6 +127,43 @@ def test_tenant_trace_assertion_accepts_redacted_structure_only_records() -> Non
     ]
 
     _assert_tenant_trace_records(records, tenant_id=TENANT_A)
+
+
+def test_prove_audit_ledger_separation_returns_expected_counts() -> None:
+    """The audit-ledger separation proof is fully offline — a temp directory
+    JSONL ledger, no Tempo, no Docker, no collector — so the live e2e's
+    load-bearing leg is exercisable in CI. Tenant A gets 2 chained entries,
+    tenant B gets 1; the assertion is the same (2, 1) the live run reports as
+    `tenant_a_audit_entries` / `tenant_b_audit_entries`."""
+    assert _prove_audit_ledger_separation() == (2, 1)
+
+
+def test_prove_audit_ledger_separation_rejects_an_unchained_tenant_chain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression freeze for the 2026-07-28 RC re-validation finding.
+
+    Before the fix both tenant-A entries took `_make_audit_entry`'s default
+    genesis `prior_hash`, so tenant A's audit chain was broken while the proof
+    still reported `audit-ledger-separated=true` — nothing verified the OD
+    chain. This reproduces exactly that shape by dropping the caller's
+    `prior_hash`, and asserts the per-tenant `verify_hash_chain_integrity` walk
+    now catches it. A green run here without the raise means the chain
+    verification has been lost again.
+    """
+    real = r500._make_audit_entry
+
+    def _unchained(seed: str, prior_hash: str = "0" * 64) -> Any:
+        return real(seed)  # drop the caller's prior_hash — the pre-fix behavior
+
+    monkeypatch.setattr(r500, "_make_audit_entry", _unchained)
+
+    with pytest.raises(R500LiveE2EError) as excinfo:
+        _prove_audit_ledger_separation()
+
+    message = str(excinfo.value)
+    assert "OD audit chain failed verification" in message
+    assert "hash chain broken at entry 1" in message
 
 
 def test_justfile_exposes_r500_live_e2e_recipe() -> None:
