@@ -1605,12 +1605,17 @@ class RuntimeLLMDispatcher:
             # `dispatch()` and returned the prompt UNCHANGED (its gate is
             # `PROMPT_EXTENSION_PACKET`), so this adds the packet text that
             # earlier call declined to add.
+            #
+            # A provider-MISMATCHED context is the one case that is NOT
+            # repaired — its packet was scoped to another provider family, so
+            # it is reported and withheld (`rendered is None`). See
+            # `_degraded_serve_for_unservable_arm`.
             degraded_memory_serve = _degraded_serve_for_unservable_arm(
                 provider_name,
                 memory_context=memory_context,
                 standard_memory_tool_executor=standard_memory_tool_executor,
             )
-            if degraded_memory_serve is not None:
+            if degraded_memory_serve is not None and degraded_memory_serve.rendered is not None:
                 effective_system_prompt = append_rendered_memory_packet(
                     effective_system_prompt,
                     degraded_memory_serve.rendered,
@@ -2068,20 +2073,42 @@ class _ExternalCLIAttrs:
     kind: str
 
 
+#: B-83 degraded-serve reasons. Span-attribute VALUES, deliberately not enum
+#: members — `MemoryTelemetryOperationName` / `MemoryTelemetryFailureClass` /
+#: `MemoryOperationKind` are CLOSED per C-MEM-19, and extending one would be an
+#: X-AL-3 design extension.
+#:
+#: `arm_unservable` — the arm reached will not inject the C-MEM-14 tools, but
+#: the context was composed FOR THIS provider, so its packet is
+#: provider-matched by construction and can be served as prompt text
+#: (C-MEM-13, `Spec_Memory_Substrate_v1.md:460`). REPAIRED.
+_DEGRADED_REASON_ARM_UNSERVABLE: Final[str] = "arm_unservable"
+#: `provider_scope_mismatch` — the context was composed for a DIFFERENT
+#: provider than the one being dispatched. REPORT-ONLY: see
+#: `_degraded_serve_for_unservable_arm` for why the packet must NOT be served.
+_DEGRADED_REASON_PROVIDER_SCOPE_MISMATCH: Final[str] = "provider_scope_mismatch"
+
+
 @dataclass(frozen=True, slots=True)
 class _DegradedMemoryServe:
     """B-83 — a dispatch that could NOT serve its selected access mode.
 
-    Carries the mode that was SELECTED plus the packet actually served in its
-    place, so the one telemetry emitter (`_emit_degraded_memory_serve_span`)
-    reports the same shape for every reachability. Constructed at exactly two
-    sites: the arm-selection serve-check (an arm that will not inject the
-    tools) and the ollama tools-unsupported fallback (an arm that tried and
-    was refused by the daemon).
+    Carries the mode that was SELECTED, WHY the dispatch could not serve it,
+    and the packet served in its place — or `None` when the degradation is
+    REPORT-ONLY and nothing was served. One carrier for both dispositions, so
+    the single telemetry emitter (`_emit_degraded_memory_serve_span`) reports
+    the same attribute shape for every reachability.
+
+    Constructed at exactly two sites: the arm-selection serve-check (an arm
+    that will not inject the tools, or a provider-mismatched context) and the
+    ollama tools-unsupported fallback (an arm that tried and was refused by
+    the daemon).
     """
 
     selected_access_mode: MemoryAccessMode
-    rendered: RenderedMemoryPromptPacket
+    reason: str
+    #: None ⇒ report-only: nothing was served to the model.
+    rendered: RenderedMemoryPromptPacket | None
 
 
 #: The provider arms that own a standard-memory-tools sibling dispatch fn.
@@ -2145,6 +2172,28 @@ def _degraded_serve_for_unservable_arm(
     the prompt-extension packet for providers without usable tool support — so
     the repair is to serve the packet as read-only prompt text.
 
+    TWO DISPOSITIONS, and the discriminator is provider identity:
+
+    * `arm_unservable` → REPAIR. The context was composed for THIS provider,
+      so the packet already cleared retrieval + policy for exactly this
+      provider and provider-family scope. Serving it as prompt text discloses
+      nothing the selection did not already clear.
+
+    * `provider_scope_mismatch` → REPORT-ONLY, no packet, no memory. A
+      statically injected context composed for provider X, dispatched against
+      provider Y after a fallback rebinding. Retrieval and injection enforce
+      PROVIDER-FAMILY scope before ranking (memory threat model,
+      `Spec_Memory_Substrate_v1.md:481`), and the packet was assembled under
+      X's `MemoryScope.provider_family`. Forwarding its TEXT to a Y-family
+      provider would bypass that scope boundary — a DISCLOSURE leak, which no
+      amount of read-only framing fixes. Recomposition is impossible here by
+      construction (this path is definitionally the `memory_runtime`-UNBOUND
+      one — the bound path recomposes per attempt and never reaches this
+      branch), and fail-closed would convert a silent degradation into a run
+      failure. So the honest and only safe action is to REPORT it: the
+      degradation becomes visible in telemetry instead of silent, and no
+      cross-family record is disclosed.
+
     Returns None (zero behavior change) on every servable dispatch and on every
     non-`STANDARD_MEMORY_TOOLS` context.
     """
@@ -2162,8 +2211,18 @@ def _degraded_serve_for_unservable_arm(
         is not None
     ):
         return None
+    # Checked FIRST: the scope boundary binds regardless of which arm was
+    # reached, so a mismatched context is never repaired even on an arm that
+    # would otherwise have taken the packet.
+    if memory_context.selection.selected_provider != provider_name:
+        return _DegradedMemoryServe(
+            selected_access_mode=memory_context.access_mode,
+            reason=_DEGRADED_REASON_PROVIDER_SCOPE_MISMATCH,
+            rendered=None,
+        )
     return _DegradedMemoryServe(
         selected_access_mode=memory_context.access_mode,
+        reason=_DEGRADED_REASON_ARM_UNSERVABLE,
         rendered=render_packet_for_degraded_dispatch(memory_context),
     )
 
@@ -2175,35 +2234,57 @@ def _emit_degraded_memory_serve_span(
     provider: str,
     model: str,
 ) -> None:
-    """Emit the ONE `memory.operation` span for a B-83 degraded-serve repair.
+    """Emit the ONE `memory.operation` span for a B-83 degraded serve.
 
-    A successful INJECTION of the packet — not a failure — so no
-    `failure_class` is set: the packet really did reach the model, just through
-    the prompt seam instead of the selected tool surface. `access_mode` reports
-    what was SERVED; the two `memory.degraded_serve*` attributes report that a
-    repair happened and which mode was displaced. Attributes land on the memory
-    tracer's own span, never on the `gen_ai` span (C-OD-04 §4.3 namespace
-    discipline).
+    Every attribute reports what ACTUALLY happened, so the two dispositions are
+    distinguishable without reading the reason string:
+
+    * REPAIRED (`degraded.rendered` present) — `INJECTION` /
+      `access_mode=prompt_extension_packet` / the served packet's hash and
+      record count. A successful injection through a different seam, not a
+      failure, so no `failure_class` is set.
+    * REPORT-ONLY (`degraded.rendered is None`) — `DENIAL` /
+      `access_mode=no_memory_access` / `record_count=0` / NO `packet_hash`
+      (nothing was served, so claiming a served packet hash would be a lie).
+      Mirrors `RuntimeMemoryContextComposer.compose_run_start`'s own
+      DENIAL+INJECT shape for the no-memory outcome. `failure_class` is
+      deliberately UNSET: no member of the closed `MemoryTelemetryFailureClass`
+      describes a provider-scope mismatch, and reusing `POLICY_DENIAL` would
+      assert a policy decision no resolver made.
+
+    `memory.degraded_serve` + `.reason` + `.selected_access_mode` carry the
+    B-83-specific detail. All of it lands on the memory tracer's own span,
+    never on the `gen_ai` span (C-OD-04 §4.3 namespace discipline).
 
     Uses only existing closed-enum members (`MemoryTelemetryOperationName.
-    INJECTION`, `MemoryOperationKind.INJECT`) — adding a member to either would
-    be an X-AL-3 design extension.
+    INJECTION` / `.DENIAL`, `MemoryOperationKind.INJECT`) — adding a member to
+    any of the three closed memory enums would be an X-AL-3 design extension,
+    which is why the reason is a span-attribute VALUE.
     """
 
+    served = degraded.rendered
     with memory_telemetry_span(
         tracer_provider,
         tracer_name="harness.runtime.llm_dispatch",
-        operation_name=MemoryTelemetryOperationName.INJECTION,
+        operation_name=(
+            MemoryTelemetryOperationName.INJECTION
+            if served is not None
+            else MemoryTelemetryOperationName.DENIAL
+        ),
         operation_kind=MemoryOperationKind.INJECT.value,
-        access_mode=MemoryAccessMode.PROMPT_EXTENSION_PACKET.value,
+        access_mode=(
+            MemoryAccessMode.PROMPT_EXTENSION_PACKET.value
+            if served is not None
+            else MemoryAccessMode.NO_MEMORY_ACCESS.value
+        ),
         provider=provider,
         model=model,
-        policy_decision="allowed",
-        packet_hash=degraded.rendered.packet_hash,
-        record_count=len(degraded.rendered.selected_refs),
+        packet_hash=served.packet_hash if served is not None else None,
+        record_count=len(served.selected_refs) if served is not None else 0,
     ) as span:
         if span is not None:
             span.set_attribute("memory.degraded_serve", True)
+            span.set_attribute("memory.degraded_serve.reason", degraded.reason)
             span.set_attribute(
                 "memory.degraded_serve.selected_access_mode",
                 degraded.selected_access_mode.value,
@@ -3438,6 +3519,45 @@ def _function_tool_name(tool: Mapping[str, Any]) -> str | None:
     return name if isinstance(name, str) else None
 
 
+def _fold_memory_packet_into_system(
+    kwargs: dict[str, Any],
+    rendered: RenderedMemoryPromptPacket,
+) -> None:
+    """Merge a packet into the ONE effective system source, post-params-merge.
+
+    B-83 [P1-b]. The naive repair — handing the packet to
+    `_payload_to_ollama_kwargs` as its ``system`` argument — creates a SECOND
+    system source whenever the payload already leads with a
+    ``{"role":"system"}`` message, and `_inject_leading_system_message` then
+    raises `PromptInjectionConflictError` by design. That would break a
+    previously-working tool-free dispatch for every step that supplies its own
+    system prompt (the idiomatic OpenAI/Ollama shape).
+
+    So the packet is folded into whatever system text the dispatch ALREADY
+    resolved — appended through `append_rendered_memory_packet`, the same seam
+    the selected-mode path uses, so separator and ordering semantics cannot
+    drift. Exactly one leading system message either way.
+
+    Operates on the FINISHED kwargs (post-`params` merge) for the same reason
+    `_inject_leading_system_message` does: a ``params["messages"]`` override can
+    replace the message list wholesale, so a payload-level merge could miss the
+    real leading system message and reintroduce the two-source collision.
+    """
+
+    messages: list[Mapping[str, Any]] = list(kwargs.get("messages", ()))
+    if messages and messages[0].get("role") == "system":
+        head = messages[0]
+        kwargs["messages"] = [
+            {
+                **head,
+                "content": append_rendered_memory_packet(str(head.get("content") or ""), rendered),
+            },
+            *messages[1:],
+        ]
+        return
+    kwargs["messages"] = [{"role": "system", "content": rendered.content}, *messages]
+
+
 async def _dispatch_ollama(
     adapter: Any,
     model: str,
@@ -3445,13 +3565,21 @@ async def _dispatch_ollama(
     *,
     system: str | None = None,
     upstream: Mapping[str, Any] | None = None,
+    memory_packet: RenderedMemoryPromptPacket | None = None,
 ) -> tuple[Mapping[str, Any], _UsageAttrs]:
     """Ollama provider branch — ``client.chat(...)``.
 
     Ollama's ``ChatResponse`` exposes ``prompt_eval_count`` / ``eval_count``
     instead of a nested ``usage`` object; no ``response_id``.
+
+    ``memory_packet`` (B-83) folds a rendered C-MEM-12 packet into the single
+    effective system source AFTER the normal translate, so it can never collide
+    with a payload-carried system message. `None` — every caller but the
+    tools-unsupported fallback — is byte-identical to pre-B-83.
     """
     kwargs = _payload_to_ollama_kwargs(payload, system, upstream)
+    if memory_packet is not None:
+        _fold_memory_packet_into_system(kwargs, memory_packet)
     response = await adapter.client.chat(model=model, **kwargs)
     return _ollama_response_bundle(response)
 
@@ -3513,16 +3641,26 @@ async def _dispatch_ollama_with_standard_memory_tools(
             # FIRST call only: a mid-loop rejection would mean the model changed
             # identity between continuation turns, which is not a case to paper
             # over, so it stays fail-loud.
+            # Always `arm_unservable`, never `provider_scope_mismatch`: this
+            # function is only reached through `_standard_memory_tools_context`,
+            # which already required `selection.selected_provider ==
+            # provider_name`, so the packet is provider-matched by construction.
             degraded = _DegradedMemoryServe(
                 selected_access_mode=memory_context.access_mode,
+                reason=_DEGRADED_REASON_ARM_UNSERVABLE,
                 rendered=render_packet_for_degraded_dispatch(memory_context),
             )
+            # `system=system` reproduces the pre-B-83 retry EXACTLY (including
+            # its pre-existing conflict semantics); the packet is then folded
+            # into whichever single system source that produced, so the retry
+            # can never carry two.
             bare_response, bare_usage = await _dispatch_ollama(
                 adapter,
                 model,
                 payload,
-                system=append_rendered_memory_packet(system, degraded.rendered),
+                system=system,
                 upstream=upstream,
+                memory_packet=degraded.rendered,
             )
             return (bare_response, bare_usage, degraded)
         # See the OpenAI arm — every turn's usage is folded in before exit.

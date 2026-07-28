@@ -3003,6 +3003,7 @@ async def test_b83_anthropic_arm_repairs_unservable_standard_tools_to_packet() -
     assert attrs["memory.operation.name"] == "injection"
     assert attrs["memory.operation.kind"] == "inject"
     assert attrs["memory.access_mode"] == "prompt_extension_packet"
+    assert attrs["memory.degraded_serve.reason"] == "arm_unservable"
     assert attrs["memory.degraded_serve.selected_access_mode"] == "standard_memory_tools"
     assert attrs["memory.provider"] == "anthropic"
     assert attrs["memory.packet_hash"] == "c" * 64
@@ -3033,18 +3034,20 @@ async def test_b83_external_cli_arm_repairs_unservable_standard_tools_to_packet(
 
 
 @pytest.mark.asyncio
-async def test_b83_provider_rebound_context_repairs_even_on_a_tool_capable_arm() -> None:
+async def test_b83_provider_rebound_context_is_reported_but_never_served() -> None:
     """(b) — a STATICALLY injected context composed for provider X, dispatched
-    against provider Y after a fallback rebinding.
+    against provider Y after a fallback rebinding. REPORT-ONLY.
 
-    The openai arm COULD serve tools, and this asserts it deliberately does
-    NOT: the selection's retrieval + policy checks were made against
-    provider X (`MemoryRetrievalRequest.provider`, `MemoryScope.provider_family`
-    and the ledgered injection decision all carry X), so advertising X's
-    `scope_ref`/`policy_ref` as a live tool surface to Y would attribute Y's
-    writes to a scope Y was never policy-checked for. Serving the
-    already-retrieved packet as read-only text is the conservative repair — it
-    adds no new authority, only the records the policy already cleared.
+    Neither the tools NOR the packet may reach Y. The tools are withheld
+    because X's `scope_ref`/`policy_ref` would attribute Y's writes to a scope
+    Y was never policy-checked for; the PACKET is withheld because retrieval
+    and injection enforce provider-family scope before ranking
+    (`Spec_Memory_Substrate_v1.md:481`) and the packet was assembled under X's
+    `MemoryScope.provider_family` — forwarding its text to a Y-family provider
+    is a disclosure leak that read-only framing does not fix. Recomposition is
+    impossible on this path (it is definitionally the `memory_runtime`-unbound
+    configuration) and fail-closed would turn a silent degradation into a run
+    failure, so the degradation is made VISIBLE instead of silent.
     """
     client = _OpenAIClient()
     tp, exporter = _tracer_provider_with_exporter()
@@ -3060,8 +3063,76 @@ async def test_b83_provider_rebound_context_repairs_even_on_a_tool_capable_arm()
 
     call = client.chat.completions.calls[0]
     assert "tools" not in call, "a context composed for another provider must not arm the tools"
-    assert call["messages"][0]["role"] == "system"
-    assert _B83_SECTION_TEXT in call["messages"][0]["content"]
+    assert all(message["role"] != "system" for message in call["messages"]), (
+        "no system message at all — the cross-provider packet must not be composed"
+    )
+    serialized = json.dumps(call["messages"])
+    assert _B83_SECTION_TEXT not in serialized, "cross-family packet text must never reach the wire"
+    assert "read-only memory packet" not in serialized
+
+    spans = _degraded_serve_spans(exporter)
+    assert len(spans) == 1, "the degradation must still be reported, just not repaired"
+    attrs = dict(spans[0].attributes or {})
+    assert attrs["memory.degraded_serve.reason"] == "provider_scope_mismatch"
+    assert attrs["memory.operation.name"] == "denial"
+    assert attrs["memory.access_mode"] == "no_memory_access"
+    assert attrs["memory.record_count"] == 0
+    assert "memory.packet_hash" not in attrs, "nothing was served — claiming a hash would lie"
+    assert attrs["memory.degraded_serve.selected_access_mode"] == "standard_memory_tools"
+
+
+@pytest.mark.asyncio
+async def test_b83_r5_retry_merges_the_packet_into_a_payload_carried_system_message() -> None:
+    """P1-b — the R5 retry must never create a SECOND system source.
+
+    A step that supplies its own leading `{"role":"system"}` message is the
+    idiomatic Ollama shape. Handing the packet to the translate seam as its
+    `system` argument would collide with it and raise
+    `PromptInjectionConflictError`, breaking a tool-free dispatch that worked
+    before B-83. The packet is folded into the existing system message instead:
+    one system source, original text first, packet appended.
+    """
+    client = _OllamaClient()
+    client.errors = [
+        OllamaResponseError("llava-llama3:latest does not support tools", 400),
+    ]
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"ollama": _OllamaFakeAdapter(client)},
+        tracer_provider=tp,
+        memory_context=_b83_memory_context(
+            provider="ollama",
+            model="llava-llama3:latest",
+            family=ProviderFamily.LOCAL_OPEN_WEIGHT,
+        ),
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+    )
+
+    result = await dispatcher.dispatch(
+        _binding("ollama", model="llava-llama3:latest"),
+        _step(
+            {
+                "messages": [
+                    {"role": "system", "content": "STEP-OWNED SYSTEM"},
+                    {"role": "user", "content": "hi"},
+                ],
+                "tools": None,
+                "params": {},
+            }
+        ),
+        step_context=_step_context(),
+    )
+
+    assert result["message"]["content"] == "ok", "the tool-free dispatch must still succeed"
+    retry_messages = client.calls[1]["messages"]
+    system_messages = [m for m in retry_messages if m["role"] == "system"]
+    assert len(system_messages) == 1, "exactly one system source on the retry"
+    assert retry_messages[0] is system_messages[0], "and it stays leading"
+    content = system_messages[0]["content"]
+    assert content.startswith("STEP-OWNED SYSTEM\n\nread-only memory packet"), (
+        "the step's own system text is preserved and the packet is appended after it"
+    )
+    assert _B83_SECTION_TEXT in content
     assert len(_degraded_serve_spans(exporter)) == 1
 
 
