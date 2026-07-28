@@ -3172,6 +3172,83 @@ async def test_b83_cross_family_recomposed_context_is_reported_but_never_rendere
     assert "memory.packet_hash" not in attrs
 
 
+@pytest.mark.asyncio
+async def test_b83_arm_site_family_mismatch_is_reported_but_never_served() -> None:
+    """Merge-gate Gap A — the FAMILY conjunct must bind at the ARM-SELECTION
+    site, not only the R5 ollama path.
+
+    Identity matches (context composed for anthropic, dispatched to
+    anthropic) but the scope carries the chain-primary's OpenAI family —
+    the shape a `memory_runtime` cross-family fallback produces when the
+    rebound candidate is an unservable NON-ollama arm. A mutation scoping
+    the family check to the R5 path would repair here; this witness kills it.
+    """
+    client = _AnthropicClient()
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": _AnthropicFakeAdapter(client)},
+        tracer_provider=tp,
+        memory_context=_b83_memory_context(
+            provider="anthropic",
+            family=ProviderFamily.OPENAI,
+        ),
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+    )
+
+    await dispatcher.dispatch(_binding("anthropic"), _step(), step_context=_step_context())
+
+    assert client.messages.last_kwargs is not None
+    assert "system" not in client.messages.last_kwargs, (
+        "an OpenAI-family-scoped packet must never be composed for an anthropic dispatch"
+    )
+
+    spans = _degraded_serve_spans(exporter)
+    assert len(spans) == 1, "still reported, just not served"
+    attrs = dict(spans[0].attributes or {})
+    assert attrs["memory.degraded_serve.reason"] == "provider_family_scope_mismatch"
+    assert attrs["memory.operation.name"] == "denial"
+    assert attrs["memory.access_mode"] == "no_memory_access"
+    assert "memory.packet_hash" not in attrs
+
+
+@pytest.mark.asyncio
+async def test_b83_absent_record_scope_fails_closed_to_report_only() -> None:
+    """Merge-gate Gap B — an UNVERIFIABLE scope must read as not-matching.
+
+    A hand-built statically-injected context with `record_scope=None`
+    (reachability (b)'s own configuration — `RuntimeMemoryContext.record_scope`
+    defaults to None) cannot prove which family its packet was assembled
+    under. `_packet_scope_matches_dispatch_family` deliberately returns False
+    there ("unverifiable is not the same as safe"); a mutation returning True
+    would render the packet across an unverifiable family boundary and every
+    other witness would stay green — this one kills it.
+    """
+    client = _AnthropicClient()
+    tp, exporter = _tracer_provider_with_exporter()
+    context = _b83_memory_context(provider="anthropic").model_copy(update={"record_scope": None})
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": _AnthropicFakeAdapter(client)},
+        tracer_provider=tp,
+        memory_context=context,
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+    )
+
+    await dispatcher.dispatch(_binding("anthropic"), _step(), step_context=_step_context())
+
+    assert client.messages.last_kwargs is not None
+    assert "system" not in client.messages.last_kwargs, (
+        "a packet with no provable scope must never be composed"
+    )
+
+    spans = _degraded_serve_spans(exporter)
+    assert len(spans) == 1, "the fail-closed withholding must still be reported"
+    attrs = dict(spans[0].attributes or {})
+    assert attrs["memory.degraded_serve.reason"] == "provider_family_scope_mismatch"
+    assert attrs["memory.operation.name"] == "denial"
+    assert attrs["memory.access_mode"] == "no_memory_access"
+    assert "memory.packet_hash" not in attrs
+
+
 class _RaisingOllamaClient(_OllamaClient):
     """Raises on EVERY chat call, including the tools-unsupported retry."""
 
