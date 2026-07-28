@@ -1,0 +1,340 @@
+# Release-Candidate Deployment-Readiness Report — 2026-07-28 (re-validation pass)
+
+> Closure report for a **re-validation pass** of the already-GO-closed release-candidate arc
+> (runbook §7). The arc itself closed `GO for release candidate` on 2026-06-10
+> (`.harness/release-candidate-deployment-readiness-report-2026-06-10.md`); this pass re-ran the
+> runbook recipe against current `main` after ~7 weeks of harness evolution.
+> Process-substrate, mode-agnostic. Operator standing approval covered the free gates, the
+> Phase-B live batch, the non-GCP Phase-C paid batch (cents), and branch prune.
+
+## Git head and branch
+
+- Branch: `rc-revalidation-close-2026-07-28` (cut from `main`).
+- `main` HEAD at the pass: `ed3a770c` (`ops: roadmap status refresh post-#1140`), which refreshes
+  over `c78e9a46` (`feat(runtime): … B-82`, PR #1140 merged during the arc).
+- Working tree carries exactly one code change, shipped in this PR: the R-500 script fix
+  (`tools/r500_multitenant_selfhosted_live_e2e.py`, see Phase B finding #2). `design-substrate/**`
+  untouched; `.harness/roadmap_status.md` untouched (the §12.2 refresh is owed as the follow-on
+  terminating-refresh commit, not bundled here).
+- Runbook §0 pinned starting state at `1abfaae3`; this pass ran against the later `ed3a770c`.
+  Every §0 invariant re-verified below (389 nodes / 36 seams / 54-54 ledger) still holds.
+
+## Phase A — Provider-free RC readiness gate: **GREEN**
+
+| Command | Outcome |
+|---|---|
+| `just check` | ✅ green. **6782 tests at arc start → 6814 at arc close** (the arc absorbed PR #1140's landings); both runs green. |
+| `just overlay-check` | ✅ clean — **389 nodes, 36/36 CXA seams, 0 missing CXA endpoints** (matches the §0 pin exactly). |
+| `uv run python tools/substitution_ledger.py --check` | ✅ **54/54 RETIRED, 54/54 pipeline-advanced**. |
+| `uv run python tools/forward_register.py --check` | ✅ clean. Register **grew 82 → 85 items** across the session (three new forward registrations from other in-flight work, all schema-valid). |
+| `(cd tools && uv run python -m pytest test_substitution_ledger.py semantic_overlay/test_overlay.py -q)` | ✅ **34 passed**. |
+| `just r420-self-hosted-readiness harness.selfhosted.local.toml` | ✅ **all static checks PASS**. |
+| `just r421-managed-cloud-readiness harness.managed-cloud.e2b.toml --hosted-sandbox-provider e2b` | ✅ **all static checks PASS**. |
+
+Deploy-doc audit (runbook §3 list) performed; two doc gaps found and fixed in this PR — see
+"Doc/template fixes landed at this pass".
+
+**Provider-free acceptance: met.**
+
+## Phase B — Local/self-hosted deployment smoke: **3/3 GREEN**, two genuine re-validation findings
+
+This is where the pass earned its keep. Both R-500 and R-420 **failed on first run** against
+current `main` — neither was an environment flake; each was real drift between a live-e2e /
+deploy-template surface and a harness invariant that was tightened after the 2026-06-10 GO pass.
+
+| Command | Outcome |
+|---|---|
+| `just r430-tail-keep-live-e2e harness.selfhosted.local.toml` | ✅ **PASS, unchanged.** Trigger trace preserved (including the `sandbox.violation` span); non-triggering trace dropped. `cost=0`, hosted-provider-calls=0. No drift. |
+| `just r500-multitenant-live-e2e` | ❌ **FAILED first** → **FIXED** → ✅ **PASS.** See finding #1. Post-fix: tenant-resource-separated, content-redacted, audit-ledger-separated, hash chain **VALID**, `cost=0`. |
+| `just r420-self-hosted-live-e2e harness.selfhosted.local.toml` | ❌ **FAILED first** → **UNBLOCKED (config-only)** → ✅ **PASS.** See finding #2. Post-unblock: `workflow=r420-self-hosted-tool-echo status=success cost=0`. |
+| `just r411-gvisor-live-e2e` (with `R411_GVISOR_DOCKER_COMMAND`) | ✅ **PASS — 1 passed in 7.87s.** See R-411 note. |
+
+Phase B made **0 hosted-provider calls, $0**.
+
+### Finding #1 — R-500 script fabricated audit entries with placeholder hashes (harness-side script defect; FIXED)
+
+First run failed at the audit-ledger leg:
+
+```
+audit_entry fails content-integrity before write: stored entry_hash='1111…'
+```
+
+**Root cause.** `tools/r500_multitenant_selfhosted_live_e2e.py::_make_audit_entry` fabricated its
+proof entries with a caller-supplied placeholder `entry_hash` string. That predates the write-side
+content-integrity check now enforced at
+`harness-runtime/src/harness_runtime/lifecycle/audit_writer.py:679-691` — a write-side mirror of
+the sidecar fold's check, which recomputes `compute_entry_hash(payload)` and refuses to persist an
+entry whose stored hash does not match its payload (because such an entry would wedge every
+post-restart append when the fold rescans it). **The harness is correct; the live-e2e script was
+stale.**
+
+**Fix (the uncommitted change shipping in this PR).** `_make_audit_entry` now takes a `seed`
+(used only for the entry ref + signature label, preserving per-entry distinctness) and computes
+`entry_hash=compute_entry_hash(payload)` from
+`harness_od.audit_ledger_types` (`audit_ledger_types.py:139`). Re-run **PASSED** end to end with a
+`VALID` chain.
+
+**Classification: harness-adjacent tooling defect, fixed. Not a harness regression** — the
+production write path was already correct and in fact caught the bad entry loudly, exactly as
+designed.
+
+### Finding #2 — the self-hosted deploy template's stdio MCP echo server is foreclosed at its declared tier-1 (template drift; UNBLOCKED config-only)
+
+First run failed at dispatch:
+
+```
+SandboxDriverUnavailableError: resolved tier 'tier-3-microvm'
+```
+
+**Root cause.** `deploy/self-hosted-local/harness.selfhosted.local.example.toml` declares the
+`r420-echo` MCP client with `transport = "stdio"` and `default_minimum_tier = "tier-1-process"` /
+`default_sandbox_tech = "host-process"`. The **enforced C-AS-02 §2.3 row 3 floor** —
+`harness-as/src/harness_as/sandbox_tier_floor.py:143-145`, `if mcp_transport is
+MCPTransport.STDIO: return _resolved(_tier_max(SandboxTier.TIER_3_MICROVM, floor))` — floors *any*
+stdio MCP transport at `TIER_3_MICROVM` regardless of the declared per-client tier. The template
+therefore resolves to tier-3 and then has no tier-3 execution driver configured. **The 2026-06-10
+GO pass ran before that floor was enforced at this dispatch path**, which is why R-420 passed then
+with the same template.
+
+**Unblock — config-only, zero harness code change.** Two operator-local artifacts:
+
+1. A wrapper script at `.harness/r420-scratch/gvisor-docker.sh` (gitignored):
+   `exec env LIMA_HOME=/Volumes/Development/arhugula-r411/lima-home limactl shell r411-gvisor sudo
+   docker "$@"`. `SandboxDriverConfig.docker_binary` is exec'd as `argv[0]` with no shell, so the
+   multi-word Lima invocation needs a single-file wrapper. Smoke-tested standalone (Lima docker
+   server 29.5.3 responding).
+2. A `[runtime.mcp_clients.sandbox_driver]` table in the gitignored `harness.selfhosted.local.toml`:
+   `image = "alpine:3.20"` (already pulled inside the VM; `runsc` registered there),
+   `docker_binary` = the wrapper's absolute path, `network = "none"`, and a `command` that is an
+   **honest** stdin-reading `sh` runner — it extracts `tool_args.value` from the request JSON and
+   echoes it back in MCP-shaped output, rather than returning a constant. The shell escaping was
+   empirically tested on the host `sh` before wiring it in.
+
+Re-run **PASSED**: `workflow=r420-self-hosted-tool-echo status=success cost=0`.
+
+**Evidence line, stated honestly:** R-420 self-hosted live e2e passes at **tier-3 via the Lima
+`r411-gvisor` VM + `runsc`, driven by an operator-local wrapper script** — **not** "tier-3 out of
+the box". A fresh operator following `deploy/self-hosted-local/README.md` as it stood would have
+hit the same `SandboxDriverUnavailableError`. That gap is closed by the template + README changes
+landed in this PR (below).
+
+**Classification: deploy-template drift, fixed in docs/template. Not a harness defect** — the floor
+is the enforced cleared contract behaving correctly; the shipped example config had not caught up.
+
+### Additional Phase-B environment note — placeholder substitution
+
+**Both** scratch configs (`harness.selfhosted.local.toml`, `harness.managed-cloud.e2b.toml`) as
+copied from their examples carry `/absolute/path/to/arhugula-v2` placeholders (11 and 2 occurrences
+respectively). These were substituted locally for every run. Unsubstituted, the R-420 live e2e
+fails at bootstrap stage 1. The runbook now flags this at the copy step (below).
+
+### R-411 gVisor sandbox smoke
+
+```
+R411_GVISOR_DOCKER_COMMAND="env LIMA_HOME=/Volumes/Development/arhugula-r411/lima-home limactl shell r411-gvisor sudo docker" just r411-gvisor-live-e2e
+```
+
+✅ **PASS — 1 passed in 7.87s.** TOOL_STEP executed under `runsc`.
+
+**The runbook's §4 "volume ABSENT" current-state note was STALE.** Grounding found
+`/Volumes/Development/arhugula-r411/` **mounted**, with the VM merely in state `Stopped` (not
+absent, not Broken). A plain `limactl start` sufficed — no re-mount and no re-provision were
+needed. The runbook §4 note is corrected and re-dated in this PR.
+
+## Phase C — Managed-cloud deployment smoke: **4/4 GREEN non-GCP; 3 GCP-OTLP e2es NOT RUN (operator-gated)**
+
+| Command | Outcome |
+|---|---|
+| `just r421-e2b-live-probe` | ✅ **PASS** — `stdout=r421-e2b-ok`; **1 hosted E2B call** (auth → provision → run → teardown). |
+| `just r412-e2b-full-vm-live-e2e` | ✅ **PASS** — 1 passed; full-VM sandbox provisioned and torn down. |
+| `just r830-managed-db-live-e2e` | ✅ **PASS** — 1 passed; real Neon/PG CRUD on a unique path + cleanup. |
+| `just r830-s3-live-e2e` | ✅ **PASS** — via the test's own documented **static-key fallback** (`R830_S3_PROFILE` overridden empty + AWS keys sourced from the MAIN `.env`). See the AWS-auth note. |
+| `just r421-managed-cloud-live-e2e …` | ⛔ **NOT RUN** — operator-gated (GCP IAM re-grant). |
+| `just r810-files-live-e2e …` | ⛔ **NOT RUN** — operator-gated (GCP IAM re-grant). |
+| `just r820-managed-agents-live-e2e …` | ⛔ **NOT RUN** — operator-gated (GCP IAM re-grant). |
+
+### AWS auth — the runbook's `aws sso login` instruction is stale on this host
+
+The `r830` profile's SSO session was expired. `aws sso login --profile r830` is **not** the right
+command on this machine: the profile carries only `login_session` (no `sso_*` keys), and this host
+runs **AWS CLI v2.34**, whose own error text says *"reauthenticate using `aws login`"* — the newer
+`aws login` flow, which the `r830` test's own docstring already documents. Rather than fire an
+interactive browser re-auth unilaterally, the pass used the test's documented static-key fallback
+(profile forced empty, static keys from `.env`) and **PASSED**. The runbook §5 line is corrected in
+this PR.
+
+### The three OTLP e2es — operator-gated, **not attempted**
+
+`r421-managed-cloud-live-e2e`, `r810-files-live-e2e`, and `r820-managed-agents-live-e2e` all
+require the `roles/iam.serviceAccountTokenCreator` binding (`user:storyportalrobert@gmail.com` on
+SA `gcp-secret-manager-accessor@project-ba535aa4-…`) that was **deliberately REVOKED at the
+2026-06-10 close** per operator decision. `roles/run.invoker` (SA → Cloud Run collector
+`arhugula-r421-otel-collector`, `us-central1`) is still **RETAINED**, so the re-grant is the only
+missing piece.
+
+Applying it is a **privileged IAM mutation**. The agent is **hard-blocked** from it by the
+auto-mode permission classifier — this block fires regardless of the recorded standing approval,
+which is the correct posture for a credential-scope mutation. The exact re-grant command was
+surfaced to the operator (roadmap Round 30) and left for the operator to run.
+
+**Consequence for runbook §5's re-grant/revoke cycle: N/A this pass.** The grant was never applied,
+so there is nothing to revoke at this close. Net standing IAM state is **unchanged** from the
+2026-06-10 close (only the `run.invoker` binding persists, exactly as that report recorded).
+
+## Phase D — Advisory overlay traceability: **GREEN, zero drift vs the 2026-07-27 baseline**
+
+```
+just overlay
+just overlay-query --orphans
+```
+
+Every bucket matches `.harness/overlay-advisory-traceability-audit-2026-07-27.md` **exactly**:
+
+| Bucket | Count | Disposition |
+|---|---|---|
+| `code_without_cite` | **0** | closed, holds |
+| `contract_without_code` | **0** | bucket closed, holds |
+| `unit_without_code` | **2** | ACCEPTED (`U-MEM-17` test-only cite; `U-RT-00` authoring unit) |
+| `substitution_without_carrier` | **40** | advisory (31 `SUBSTANTIVE_RETIRED` + 9 `AUTHORING_ONLY`) |
+| `cxa_seam_missing_endpoint` | **0** | hard gate clean |
+
+No source edited, nothing escalated. **No new Phase-D deliverable is owed** — the 2026-07-27 audit
+remains the current baseline.
+
+## Doc/template fixes landed at this pass
+
+Both findings above were *documentation/template* drift, so both are closed in-repo rather than
+merely narrated:
+
+- `deploy/self-hosted-local/harness.selfhosted.local.example.toml` — a **commented**
+  `[runtime.mcp_clients.sandbox_driver]` example block immediately after the `r420-echo` entry,
+  explaining the C-AS-02 §2.3 row 3 stdio floor and showing the `image` / `command` /
+  `docker_binary` / `network` keys with the generic wrapper-script pattern.
+- `deploy/self-hosted-local/README.md` — a new step documenting the floor and the wrapper-script
+  provisioning step (Lima/gVisor named as one option, with the R-411 runbook precedent).
+- `.harness/release-candidate-deployment-readiness-runbook.md` — five targeted de-stales:
+  AWS `aws login`, the R-411 volume current-state note, the Phase-B stdio-floor requirement,
+  the placeholder-substitution warning at the copy steps, and a note that the R-500 script now
+  computes real entry hashes. The GO-closed banner is preserved byte-exact.
+- `tools/r500_multitenant_selfhosted_live_e2e.py` — the finding-#1 fix.
+
+## Live calls made + cost class
+
+- **E2B**: 3 hosted sandbox lifecycles (`r421-e2b-live-probe` × 1, `r412-e2b-full-vm-live-e2e`,
+  and the probe's own provision/teardown) — seconds each, all self-cleaned. Usage-billed, **cents**.
+- **Neon/PG**: 1 connection + CRUD on a unique path, cleaned up. Negligible.
+- **AWS S3**: 1 create/view/update/delete cycle on a unique object key + cleanup. Negligible.
+- **Anthropic**: no Files API / Managed Agents calls this pass (those e2es are the operator-gated
+  OTLP legs). Incidental free model-list GETs only, via `just check`.
+- **GCP**: none (the OTLP legs did not run).
+- **Local (Ollama, Docker stack, Lima VM, gVisor)**: $0.
+
+**Total cost class: well under a few US cents.** No sustained or leaked billable resources.
+
+## Credentials / resources touched (names only)
+
+`E2B_API_KEY`, `R830_MANAGED_DB_CONNECTION_STRING`, `R830_S3_BUCKET` / `R830_S3_REGION` /
+`R830_S3_PROFILE` (overridden empty) plus the static `AWS_*` keys, all from the MAIN `.env` and
+consumed only through `just` recipes; OS keyring item `harness`/`r420_probe_key`; the Lima VM
+`r411-gvisor` under `LIMA_HOME=/Volumes/Development/arhugula-r411/lima-home`; local Docker Compose
+stack (grafana / otel-collector / tempo); local Ollama daemon.
+**No secret values were printed, written, or relocated. No IAM mutation was applied.**
+
+## Cleanup performed
+
+- **Docker self-hosted stack**: brought up and taken **DOWN cleanly, twice** (guaranteed EXIT
+  trap; all containers + network removed each time).
+- **E2B sandboxes**: context-manager teardown + server-side auto-expiry — none persist.
+- **Neon/PG**: r830 deleted its unique path.
+- **S3**: r830 deleted its unique object key.
+- **IAM**: nothing applied, therefore nothing to revoke. Standing IAM unchanged.
+- **Scratch config files** — see the deviation note below.
+- **Services deliberately left running at close** (operator convenience, no cost): the Ollama.app
+  daemon, the Lima `r411-gvisor` VM, and Docker Desktop. Stop the VM with
+  `LIMA_HOME=/Volumes/Development/arhugula-r411/lima-home limactl stop r411-gvisor` if not needed.
+
+### Scratch-file disposition — **deliberate deviation from the Leg-8 remove-at-close convention**
+
+The 2026-06-10 close removed both scratch configs to restore a clean tree. This pass **splits** that:
+
+- ❌ **`harness.managed-cloud.e2b.toml` — DELETED.** It is **not** gitignored, so leaving it risks a
+  stray `git add` committing machine-specific paths. Convention applied as written.
+- ✅ **`harness.selfhosted.local.toml` + `.harness/r420-scratch/gvisor-docker.sh` — RETAINED.**
+  Both are gitignored, so neither can pollute the tree.
+
+**Rationale for the deviation:** the three OTLP e2es remain an **open operator-gated residual**.
+When the operator applies the IAM re-grant and runs them, they will want the *working* Phase-B
+self-hosted config — including the hard-won `[runtime.mcp_clients.sandbox_driver]` block and its
+wrapper script — already in place rather than reconstructed from scratch. Deleting a gitignored
+artifact that a pending follow-up run needs would be cleanup theatre. The clean-tree property the
+convention protects is fully preserved by the two files' gitignore status. Delete them once the
+OTLP legs close.
+
+*(The runbook does not itself mandate deletion — Leg-8/§7 speak to cleanup reporting; the 2026-06-10
+report's Cleanup line established the remove-both practice. No runbook text was overridden.)*
+
+## Remaining risks / unblock-asks
+
+1. **The three GCP OTLP e2es are unexercised at this pass (operator-gated).** `r421-managed-cloud`,
+   `r810-files`, `r820-managed-agents` all need `roles/iam.serviceAccountTokenCreator` re-granted
+   to `user:storyportalrobert@gmail.com` on SA `gcp-secret-manager-accessor@project-ba535aa4-…`.
+   The agent is hard-blocked from applying it (auto-mode classifier, correctly). The exact command
+   was surfaced to the operator. **These three surfaces PASSED at 2026-06-10** and nothing in this
+   pass suggests regression — but they are unproven *at this HEAD*. This is the sole residual.
+2. **Deploy-template tier-3 requirement is operator-machine-specific.** The template's new
+   commented block shows the pattern, but a tier-3 driver still requires an operator-provisioned
+   Linux/gVisor substrate (gVisor is Linux-only; never available on the macOS host directly). The
+   README now says so; there is no out-of-the-box tier-3 on a bare macOS checkout.
+3. **Branch hygiene — permission-guard inconsistency (reported, not resolved).** Gate (e) pruned
+   **3 of 9** stale merged branches via the lease-guarded recipe (`rc-rebaseline-phase-d-reaudit`
+   #1135, `b81-ow-material-diff-test-parity-step1` #1118, `grounding-pass-b44-b45-b56-b57-b66`
+   #1134 — each verified MERGED then 404-confirmed). The permission guard then **HARD-STOPped the
+   identical operation** for the remaining 6 (`b39…`/#1092, `b72…`/#1116, `b78…`/#1117,
+   `b81-exclusion…`/#1119, `roadmap-status-refresh-post-1092`/#1093,
+   `u-mem-live-gates-and-grounding-drift`/#1136). Inconsistent permit/deny across structurally
+   identical shapes — a guard-behavior finding, not a harness finding. Reported for operator
+   attention; the 6 branches are merged and harmless if left.
+4. **Docker Desktop startup fragility (operator-machine).** Docker Desktop initially failed with a
+   `vmnetd`/privileged-port AppleScript repair error; the sudo repair command was surfaced to the
+   operator and the daemon came up subsequently. Environment, not harness.
+5. **`.harness/roadmap_status.md` refresh is owed** as the follow-on terminating-refresh commit
+   after this PR merges (§12.2 / §12.2.1). Not bundled here.
+
+## Recommendation: **deploy** — RC re-validation: **PASS with one operator-gated residual (3 OTLP e2es)**
+
+Every RC surface exercisable without a privileged IAM mutation was exercised and passes at
+`ed3a770c`: the provider-free gate (`just check` 6814, overlay 389/36, ledgers 54/54, tools 34);
+self-hosted **daemon e2e (R-420)** + telemetry (R-430) + multitenant (R-500) + **gVisor sandbox
+(R-411)**; managed-cloud **E2B** (probe + full VM), **Neon managed-DB**, and **S3**; and Phase-D
+traceability at zero drift.
+
+**Two live-surface defects were found and closed at this pass, both outside harness production
+code** — a stale live-e2e script fabricating placeholder audit hashes (harness caught it loudly, as
+designed) and a deploy template that predates the enforced stdio tier-3 floor. That is precisely
+the value a re-validation pass exists to deliver: seven weeks of harness tightening had drifted
+past two auxiliary surfaces, and neither drift was visible to CI. **Zero harness production code
+was changed.**
+
+The single residual is the three GCP OTLP e2es, blocked on an operator-owned IAM re-grant. They
+passed at the 2026-06-10 GO close, the `run.invoker` half of their auth is still in place, and
+nothing in this pass indicates regression — but they are **unproven at this HEAD** and the verdict
+says so rather than claiming coverage it does not have. Re-run them after the re-grant using the
+retained `harness.selfhosted.local.toml`-adjacent managed config and the runbook §5 command block
+(both `--cloud-run-auth-*` flags are required), then revoke the grant again per the 2026-06-10
+disposition.
+
+**Verdict: deploy-ready, with the 3 OTLP e2es carried as a named operator-gated residual.**
+
+## Optional-polish menu (runbook §8)
+
+- ~~Dashboard iteration-2.~~ **RETIRED / not selectable** (HTML dashboard eliminated 2026-07-14).
+- Close the OTLP residual: operator applies the IAM re-grant, agent runs the 3 e2es, agent revokes.
+- Investigate the branch-prune permission-guard inconsistency (risk #3) — 3/9 permitted, 6/9
+  hard-stopped on structurally identical operations.
+- Ship a first-class tier-3 driver provisioning path for `deploy/self-hosted-local/` (beyond the
+  commented example + wrapper-script recipe landed here).
+- ICM governance methodology adoption/reconciliation.
+- CXA-2 durable recovery hardening if a real event-sourced / WAL / reconciler / engine-native
+  recovery loop is introduced.
+- Additional provider or deployment feature development.
+- Documentation packaging for external users.

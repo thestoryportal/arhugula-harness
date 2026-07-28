@@ -100,6 +100,45 @@ default_sandbox_tier = "tier-1-process"
 default_sandbox_tech = "host-process"
 default_sandbox_provider = "host"
 
+# --- Tier-3 execution driver (REQUIRED for the stdio echo server above) -------
+#
+# The `default_*` tier keys above are a FLOOR REQUEST, not the resolved tier.
+# C-AS-02 §2.3 row 3 floors ANY stdio MCP transport at TIER_3_MICROVM
+# (`harness-as/src/harness_as/sandbox_tier_floor.py`: `if mcp_transport is
+# MCPTransport.STDIO: return _resolved(_tier_max(SandboxTier.TIER_3_MICROVM,
+# floor))`), regardless of the per-client `tier-1-process` declared above. So
+# `r420-echo` resolves to tier-3 and needs a tier-3 execution driver; without
+# one, `just r420-self-hosted-live-e2e` aborts at dispatch with
+# `SandboxDriverUnavailableError: resolved tier 'tier-3-microvm'`.
+#
+# Uncomment and adapt the block below. gVisor (`runsc`) is Linux-only and is
+# never available on a macOS host directly, so the driver must reach a Linux
+# daemon with `runsc` registered. Lima is one provisioning option — the same VM
+# the R-411 gVisor smoke uses (see
+# `.harness/release-candidate-deployment-readiness-runbook.md` §4 and the
+# `R411_GVISOR_DOCKER_COMMAND` recipe); any Docker-compatible daemon with a
+# tier-3 runtime works.
+#
+# `docker_binary` is exec'd as argv[0] with NO shell, so a multi-word remote
+# invocation must be wrapped in a single executable script, e.g.
+#
+#   #!/bin/sh
+#   exec env LIMA_HOME=/path/to/lima-home limactl shell <vm> sudo docker "$@"
+#
+# `command` receives the MCP request JSON on stdin and must write MCP-shaped
+# JSON to stdout. Echo back the real argument (as below) rather than a
+# constant — a constant makes the e2e pass without proving transit.
+#
+# [runtime.mcp_clients.sandbox_driver]
+# image = "alpine:3.20"                                    # must be pre-pulled inside the VM
+# command = [
+#   "sh",
+#   "-c",
+#   'v=$(sed -n "s/.*\"value\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" | head -n 1); printf "{\"content\":[{\"type\":\"text\",\"text\":\"%s\"}],\"isError\":false}" "$v"',
+# ]
+# docker_binary = "/absolute/path/to/gvisor-docker.sh"     # the wrapper script above
+# network = "none"
+
 [runtime.routing_manifest]
 manifest_version = 1
 per_role_bindings = {}

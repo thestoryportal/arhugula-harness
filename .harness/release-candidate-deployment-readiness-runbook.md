@@ -139,6 +139,12 @@ Preconditions:
 cp deploy/self-hosted-local/harness.selfhosted.local.example.toml harness.selfhosted.local.toml
 ```
 
+  **Substitute the placeholders.** Both example TOMLs ship
+  `/absolute/path/to/arhugula-v2` placeholders (11 occurrences in the self-hosted example, 2 in
+  `deploy/managed-cloud/harness.managed-cloud.e2b.example.toml`). Replace every one with the real
+  workspace root after copying — `just r420-self-hosted-live-e2e` fails at bootstrap stage 1
+  otherwise. (Confirmed 2026-07-28.)
+
 Recommended commands:
 
 ```bash
@@ -159,11 +165,25 @@ just r411-gvisor-live-e2e
 
 Use `R411_GVISOR_DOCKER_COMMAND` if targeting the Lima Linux VM rather than the default Docker socket.
 
-**Current state (2026-07-27): the R-411 Lima VM volume `/Volumes/Development/arhugula-r411/` is
-ABSENT** (external volume not mounted). The 2026-06-10 pass ran R-411 against that VM
+**Current state (2026-07-28, re-grounded — supersedes the 2026-07-27 "volume ABSENT" note, which
+was STALE): the volume `/Volumes/Development/arhugula-r411/` is MOUNTED**; the VM `r411-gvisor` was
+merely in state `Stopped`. A plain `limactl start` sufficed — **no re-mount and no re-provision
+were needed**. The 2026-06-10 pass ran R-411 against that VM
 (`R411_GVISOR_DOCKER_COMMAND="env LIMA_HOME=/Volumes/Development/arhugula-r411/lima-home limactl
-shell r411-gvisor sudo docker"`) and left it Running. A re-validation pass must re-mount the
-volume (or re-provision the VM) first; gVisor is Linux-only and never available on the macOS host.
+shell r411-gvisor sudo docker"`); the 2026-07-28 re-validation re-ran it the same way and it
+PASSED (1 passed, 7.87s). Check the VM's actual state before concluding the substrate is absent —
+gVisor is Linux-only and never available on the macOS host, but "not running" ≠ "not provisioned".
+
+**Tier-3 driver requirement (found 2026-07-28).** Phase B's `r420-self-hosted-live-e2e` now needs a
+tier-3 execution driver: **C-AS-02 §2.3 row 3 floors any stdio MCP transport at `TIER_3_MICROVM`**
+(`harness-as/src/harness_as/sandbox_tier_floor.py`), so the template's `r420-echo` stdio echo
+server resolves to tier-3 despite its declared `tier-1-process` and aborts with
+`SandboxDriverUnavailableError: resolved tier 'tier-3-microvm'` when no driver is configured. The
+2026-06-10 GO pass predates that floor's enforcement at this dispatch path. Close it **config-only**
+via the commented `[runtime.mcp_clients.sandbox_driver]` block now shipped in
+`deploy/self-hosted-local/harness.selfhosted.local.example.toml` plus the wrapper-script step in
+`deploy/self-hosted-local/README.md` § "Tier-3 sandbox driver" (the Lima `r411-gvisor` VM above is
+one provisioning option). No harness code change is involved.
 
 Setup the R-420 live e2e needs before it will run: see
 `deploy/self-hosted-local/README.md` step 4 (empty `prompts/` + `routing_manifest/` directories;
@@ -177,6 +197,11 @@ Acceptance criteria:
 - Stack starts, shows healthy container status, and is torn down or intentionally left running with operator approval.
 - R-420, R-430, and R-500 live e2e commands pass or produce classified environment failures.
 - R-411 gVisor smoke passes when the Linux VM/runtime is available; otherwise classify as host unavailable, not harness regression.
+
+*(2026-07-28) `tools/r500_multitenant_selfhosted_live_e2e.py` now computes real
+`compute_entry_hash(payload)` values for its fabricated audit entries — its former placeholder
+hashes are refused by the write-side content-integrity check at
+`harness-runtime/src/harness_runtime/lifecycle/audit_writer.py`.*
 
 ## 5. Phase C: Managed-Cloud Deployment Smoke
 
@@ -202,9 +227,14 @@ Preconditions:
   re-validation of `r421-managed-cloud-live-e2e` / `r810-files-live-e2e` /
   `r820-managed-agents-live-e2e` therefore needs only the token-creator grant re-applied
   (operator-gated privileged IAM mutation — never apply unilaterally), then revoked again at close.
-- **AWS SSO session for `r830` expires.** `just r830-s3-live-e2e` fails on an expired session;
-  the operator re-runs `aws sso login --profile r830` first (this is exactly how the 2026-06-10
-  pass closed remaining risk #2).
+- **AWS session for `r830` expires.** `just r830-s3-live-e2e` fails on an expired session; the
+  operator re-runs **`aws login`** first. *(Corrected 2026-07-28 — `aws sso login --profile r830`,
+  as the 2026-06-10 pass used, is stale on this host: the `r830` profile carries only
+  `login_session` and no `sso_*` keys, and AWS CLI v2.34's own error text says "reauthenticate
+  using `aws login`"; the r830 test docstring already documents `aws login`.)* **Fallback that
+  needs no interactive re-auth:** the test supports static keys — override `R830_S3_PROFILE` to
+  empty and supply the `AWS_*` keys from the MAIN `.env`. The 2026-07-28 re-validation PASSED this
+  way.
 
 Prepare or verify managed config, normally from:
 

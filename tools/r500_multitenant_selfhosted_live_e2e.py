@@ -333,28 +333,34 @@ def _assert_tenant_trace_records(records: Sequence[TempoSpanRecord], *, tenant_i
             raise R500LiveE2EError(f"structure attribute missing from {record.name}")
 
 
-def _make_audit_entry(entry_hash: str, prior_hash: str = "0" * 64) -> Any:
+def _make_audit_entry(seed: str, prior_hash: str = "0" * 64) -> Any:
+    # ``seed`` distinguishes the fabricated entries (it seeds the entry ref +
+    # signature label); the entry_hash itself MUST be the real content hash —
+    # the audit writer's write-side content-integrity check (audit_writer.py,
+    # mirror of the sidecar fold's check) recomputes and refuses placeholders.
     from harness_od.audit_ledger_types import (
         AuditLedgerEntry,
         AuditPayload,
         AuditSignatureAttributes,
         SignatureAlgorithm,
         StateLedgerEntryRef,
+        compute_entry_hash,
     )
 
+    payload = AuditPayload(
+        entry_core=StateLedgerEntryRef(f"r500-entry-ref-{seed[:8]}"),
+        audit_namespace_attrs={"audit.actor": "r500-live-proof"},
+        prior_entry_hash=prior_hash,
+    )
     return AuditLedgerEntry(
-        payload=AuditPayload(
-            entry_core=StateLedgerEntryRef(f"r500-entry-ref-{entry_hash[:8]}"),
-            audit_namespace_attrs={"audit.actor": "r500-live-proof"},
-            prior_entry_hash=prior_hash,
-        ),
+        payload=payload,
         signature_attrs=AuditSignatureAttributes(
-            audit_signature_value=f"sig:{entry_hash[:8]}",
+            audit_signature_value=f"sig:{seed[:8]}",
             audit_signature_algorithm=SignatureAlgorithm.ED25519,
             audit_signature_key_id="r500-live-test-key",
             audit_signature_key_period="2026-Q2",
         ),
-        entry_hash=entry_hash,
+        entry_hash=compute_entry_hash(payload),
     )
 
 

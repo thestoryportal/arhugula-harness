@@ -95,6 +95,11 @@ non-secret sentinel keyring entry, so it makes no hosted-provider call.
    just r420-self-hosted-live-e2e harness.selfhosted.local.toml
    ```
 
+   This step needs a tier-3 execution driver — see
+   [Tier-3 sandbox driver](#tier-3-sandbox-driver-required-for-the-r-420-live-e2e)
+   below. Without one it aborts at dispatch with
+   `SandboxDriverUnavailableError: resolved tier 'tier-3-microvm'`.
+
 10. Run the R-430 tail-keep collector proof against the same local stack:
 
    ```sh
@@ -124,6 +129,47 @@ Stop the backend with:
 ```sh
 just r420-self-hosted-stack-down
 ```
+
+## Tier-3 sandbox driver (required for the R-420 live e2e)
+
+The `r420-echo` MCP client in the template declares
+`default_minimum_tier = "tier-1-process"`, but that is a floor *request*, not the
+resolved tier. **C-AS-02 §2.3 row 3 floors any stdio MCP transport at
+`TIER_3_MICROVM`** (`harness-as/src/harness_as/sandbox_tier_floor.py` — the
+`MCPTransport.STDIO` branch returns `_tier_max(SandboxTier.TIER_3_MICROVM,
+floor)`), so `r420-echo` always resolves to tier-3 and the live e2e needs a
+tier-3 execution driver. Without one, step 9 aborts at dispatch:
+
+```text
+SandboxDriverUnavailableError: resolved tier 'tier-3-microvm'
+```
+
+This is the enforced contract behaving correctly, not a config bug. Close it with
+config only — no harness code change:
+
+1. Provision a Linux daemon with a tier-3 runtime registered. gVisor (`runsc`) is
+   Linux-only and never runs on the macOS host directly, so macOS operators need
+   a VM. Lima is one option — the same `r411-gvisor` VM the R-411 gVisor smoke
+   uses (`.harness/release-candidate-deployment-readiness-runbook.md` §4 and its
+   `R411_GVISOR_DOCKER_COMMAND` recipe). Any Docker-compatible daemon with a
+   tier-3 runtime works.
+2. Write a one-line wrapper script. `SandboxDriverConfig.docker_binary` is
+   exec'd as `argv[0]` with **no shell**, so a multi-word remote invocation must
+   live in a single executable file:
+
+   ```sh
+   #!/bin/sh
+   exec env LIMA_HOME=/path/to/lima-home limactl shell <vm> sudo docker "$@"
+   ```
+
+   Keep it outside version control (for example under the gitignored
+   `.harness/r420-scratch/`) and `chmod +x` it.
+3. Uncomment the `[runtime.mcp_clients.sandbox_driver]` block in
+   `harness.selfhosted.local.example.toml` (copied into your local config) and
+   point `docker_binary` at that script's absolute path. Pre-pull the `image`
+   inside the VM. Keep `network = "none"`. The `command` reads the MCP request
+   JSON on stdin and must echo the real `tool_args.value` back — a constant
+   response makes the e2e pass without proving transit.
 
 ## Boundaries
 
