@@ -33,7 +33,7 @@ provider calls.
 | --- | --- | --- |
 | C-MEM-01 - Memory plane boundary | Memory store, access-mode, policy, retrieval, and runtime projection boundaries stay separated. | Matrix rows for schema validation, cross-scope denial, prompt fallback, standard tools, and native adapter. |
 | C-MEM-02 - Canonical path registry | Path registry rejects traversal and scopes memory paths. | `path_traversal_rejection` selectors. |
-| C-MEM-03 - Common record identity | Record envelopes carry stable identity, scope, provenance, timestamps, and hashes. | `schema_validation` selectors. |
+| C-MEM-03 - Common record identity | Record envelopes carry stable identity, scope, provenance, timestamps, and hashes. **Evidences the v1 obligations only.** v1.1 obligations (value domain + asymmetric null semantics): **PENDING — U-MEM-26**. | `schema_validation` selectors. |
 | C-MEM-04 - Episodic records | Episodic capture records preserve source and scope before promotion. | Record-envelope and operation-ledger selectors. |
 | C-MEM-05 - Semantic records | Semantic records are promotion-gated and retrieval-ranked. | Promotion policy, memory-poisoning, retrieval, and retrieval-index selectors. |
 | C-MEM-06 - Preference records | Preference promotion is explicit and policy-reviewed. | Promotion policy selectors. |
@@ -43,8 +43,8 @@ provider calls.
 | C-MEM-10 - Promotion pipeline | Candidate extraction and review bind promotion before injection. | `promotion_policy` and `memory_poisoning` selectors. |
 | C-MEM-11 - Retrieval and ranking | Retrieval output is deterministic under fixed inputs and excludes disallowed records. | `retrieval_determinism` and `cross_scope_cross_tenant_denial` selectors. |
 | C-MEM-12 - Memory packet assembly | Prompt packets are assembled from filtered records and provider-neutral context carriers. | `prompt_packet_fallback`, `memory_poisoning`, and redaction selectors. |
-| C-MEM-13 - Provider memory access modes | Native memory, standard tools, prompt packet, and no-access mode are typed scenarios. | `ACCESS_MODE_VERIFICATION_SCENARIOS`. |
-| C-MEM-14 - Provider-neutral memory tools | Standard memory tools expose controlled read/list/write behavior on tool-capable paths. | `standard_memory_tools` selectors. |
+| C-MEM-13 - Provider memory access modes | Native memory, standard tools, prompt packet, and no-access mode are typed scenarios. **Evidences the v1 obligations only.** v1.1 obligations (cross-family withholding + recording surface): **PENDING — U-MEM-26**. | `ACCESS_MODE_VERIFICATION_SCENARIOS`. |
+| C-MEM-14 - Provider-neutral memory tools | Standard memory tools expose controlled read/list/write behavior on tool-capable paths. **Evidences the v1 obligations only.** v1.1 obligations (qualified exposure obligation): **PENDING — U-MEM-26**. | `standard_memory_tools` selectors. |
 | C-MEM-15 - Native provider memory adapters | Native provider adapters are separated from prompt fallback and standard tools. | `native_anthropic_adapter` selectors plus live Anthropic gate. |
 | C-MEM-16 - CLI profiles | CLI profile resolution supports generic and vendor-specific routes without hard-coded auth assumptions. | `cli_profile_resolution` selectors and external CLI route scenarios. |
 | C-MEM-17 - Engine-class durability | Durable engine classes preserve memory operation evidence across restart/resume boundaries. | `engine_class_durability` selectors. |
@@ -63,6 +63,15 @@ provider calls.
 
 No provider-free U-MEM-25 blocker remains once `just memory-closeout-check`,
 docs link checks, overlay checks, `just codex-check`, review, and closeout pass.
+
+**Version scoping (added 2026-07-28, `B-86` spec leg).** This packet certifies the
+`C-MEM-*` family at spec **v1**. `Spec_Memory_Substrate_v1.md` v1.1 grew the
+obligations of C-MEM-03, C-MEM-13, and C-MEM-14; those three rows are annotated
+`PENDING — U-MEM-26` above. The binary checker cannot see this: it derives the
+contract-id set from the spec's `## C-MEM-NN` headings, and v1.1 adds no new id,
+so the gate correctly still reports `ready: yes` for the coverage property it
+actually tests. U-MEM-26's acceptance criteria require these three rows to be
+re-opened and extended and the check re-run green before that unit can close.
 
 Live checks are explicitly gated, not silently skipped:
 

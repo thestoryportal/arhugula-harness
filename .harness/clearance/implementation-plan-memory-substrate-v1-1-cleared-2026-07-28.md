@@ -13,6 +13,7 @@ reviewer_chain:
   - genuinely-convened council (2026-07-28) — C10 + C3 co-primary, C6 consultant; Q1 tension probe-resolved, Q2 carried C3's tools/capture cut as a condition of concurrence
   - spec-writer apply pass (2026-07-28) — plan delta authored alongside the spec delta in the same PR
   - just codex-review round 1 (2026-07-28) — [P2-c] closeout staleness absorbed here: U-MEM-26 gains an acceptance criterion re-opening the U-MEM-25 closeout evidence rows for C-MEM-03 / C-MEM-13 / C-MEM-14 and a verification line re-running the closeout check; [P1-b] recording-surface precision propagated into the unit's Implement + Acceptance wording (no C-MEM-08 operation kind introduced); [P1-a] asymmetric-null witness pair added to Verification
+  - just codex-review round 2 (2026-07-28) — [P1] interim-window false certification: honest-annotation half applied (U-MEM-25 evidence rows scoped to v1 with `PENDING — U-MEM-26` markers), red-gate alternative DECLINED and the decline recorded with its CI-discipline rationale in this plan's change-note
 ---
 
 # Clearance — Implementation_Plan_Memory_Substrate_v1 v1.1 (B-86 spec leg, plan delta)
