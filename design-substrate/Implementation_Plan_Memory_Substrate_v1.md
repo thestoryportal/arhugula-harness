@@ -16,7 +16,9 @@ Revision date: 2026-07-28
 
 **Trigger and back-flow authority.** RATIFIED Class 1 fork `.harness/class_1_fork_b86_memory_scope_provider_family_keying.md` (filed 2026-07-28; register row `B-86`), applied at the spec leg as `Spec_Memory_Substrate_v1.md` v1.1 in this same PR. v1.1 of that spec adds the C-MEM-03 `provider_family` value domain, `null` semantics, and run-level derivation rule with its paired writer-side obligation; the C-MEM-13 cross-family withholding invariant; and the C-MEM-14 exposure qualification. This plan delta decomposes the resulting impl leg.
 
-**Revision scope.** ONE new atomic unit, **U-MEM-26**, carrying the C-MEM-13 cross-family withholding guard at the standard-memory-tools context resolution, the `B-89` writer-side repair (the capture path consumes the run's composed record scope instead of constructing its own, which incidentally closes `B-90`'s `tenant` / `workload_class` omission), and their witnesses. U-MEM-26 is a **conformance-repair unit against the already-cleared threat-model invariant** "Retrieval and injection enforce project, workflow, tenant, provider-family, CLI-profile, and visibility scope before ranking." - not new capability.
+**Revision scope.** ONE new atomic unit, **U-MEM-26**, carrying the C-MEM-13 cross-family withholding guard at the standard-memory-tools context resolution, the `B-89` writer-side repair (the capture path consumes the run's composed record scope instead of constructing its own, which incidentally closes `B-90`'s `tenant` / `workload_class` omission), and their witnesses. U-MEM-26 is a **conformance-repair unit against the already-cleared threat-model invariant** "Retrieval and injection enforce project, workflow, tenant, provider-family, CLI-profile, and visibility scope before ranking." - not new capability. Per the spec v1.1 recording-surface paragraph, the withholding is **recorded** on the C-MEM-19 telemetry surface with a named denial reason; a durable ledger row is owed only where the withholding is realized as a `no_memory_access` transition, and is then dischargeable through the existing `inject` operation kind. U-MEM-26 introduces no C-MEM-08 operation kind.
+
+**Closeout staleness, disclosed (Codex round 1 [P2-c]).** U-MEM-24 verification and U-MEM-25 closeout evidence were certified against the pre-v1.1 contracts, and the closeout checker keys on the spec's `## C-MEM-NN` headings — v1.1 adds no new contract id, so the check still reports ready while covering obligations that have since grown. The fix is taken in the **minimal form**: no dependency-edge or ordering change (the checker is id-coverage-based, not ordering-sensitive, and U-MEM-25's evidence remains valid for U-MEM-01..25). Instead, U-MEM-26 carries an acceptance criterion requiring the U-MEM-25 closeout evidence rows for C-MEM-03, C-MEM-13, and C-MEM-14 to be re-opened and extended for the v1.1 obligations, plus a verification line requiring the closeout check to be re-run green with those refreshed rows. U-MEM-26 therefore cannot land while the closeout evidence still describes only pre-v1.1 obligations.
 
 **Back-reference reconciliation inside this file.** §3 axis placement gains U-MEM-26 under control plane and runtime; §4 gains three dependency edges (`U-MEM-07`, `U-MEM-14`, `U-MEM-16` -> `U-MEM-26`); §4.1 coverage map extends the R-MEM-01 range and adds U-MEM-26 to R-MEM-09 and R-MEM-12; §7 gains a G6 review-boundary row; §9 extends the completion range to U-MEM-26. No other row is touched.
 
@@ -848,26 +850,30 @@ Back-flow authority: `.harness/class_1_fork_b86_memory_scope_provider_family_key
 Implement:
 
 - The C-MEM-13 cross-family withholding guard at the standard-memory-tools context resolution: when `standard_memory_tools` has been selected and the dispatched candidate's provider family differs from `MemoryScope.provider_family`, neither the memory tool schemas nor the scope reference are exposed for that dispatch, and the dispatch proceeds without model-facing memory access.
-- A named denial reason recorded for the withheld dispatch, following the disposition shape already used for the withheld read-only rendered packet.
+- A named denial reason recorded for the withheld dispatch on the C-MEM-19 memory telemetry surface, following the span-shaped disposition already used for the withheld read-only rendered packet. No new C-MEM-08 operation kind is introduced; the denial reason rides an attribute value.
 - The `B-89` writer-side repair: the capture path consumes the run's composed record scope instead of constructing an independent `MemoryScope`, so written records carry the run's `ProviderFamily` value rather than a raw per-dispatch provider key.
 - Forward-only normalization posture for records already written with a non-value identifier: no rewrite, no migration.
 
 Acceptance:
 
-- A cross-family servable dispatch lands with the memory tools and scope reference withheld and the withholding reported with a named denial reason; the dispatch itself still completes.
+- A cross-family servable dispatch lands with the memory tools and scope reference withheld and the withholding reported on the C-MEM-19 memory telemetry surface with a named denial reason; the dispatch itself still completes.
+- Where the withholding is realized as a transition of that dispatch to `no_memory_access`, C-MEM-13's pre-existing must-ledger invariant is satisfied through the existing `inject` memory operation entry and its injection-decision projection; where it is not such a transition, the recording is span-only and no durable row is claimed. Neither branch introduces a C-MEM-08 operation kind.
 - Harness-authored automatic capture is unaffected by the withholding guard and continues on the same dispatch.
 - A same-family servable dispatch is unchanged: schemas and scope reference are exposed exactly as before.
 - Records written by the capture path carry the run's composed record scope, including `provider_family` as a `ProviderFamily` value and the `tenant` and `workload_class` fields the independently-constructed scope omitted, closing `B-90`.
 - A record written under the run's composed scope is retrievable by a family-scoped request of that same family, which the pre-repair raw-key write was not.
 - The forward-only migration residual is stated: pre-repair records written with a non-value identifier remain unretrievable under family-scoped requests and are not rewritten.
+- The U-MEM-25 closeout evidence rows for C-MEM-03, C-MEM-13, and C-MEM-14 are re-opened and extended to cover the v1.1 obligations (value domain and asymmetric `null` semantics; cross-family withholding and its recording surface; the qualified exposure obligation), and the closeout check is re-run green with those rows in place.
 
 Verification:
 
-- Cross-family servable dispatch test asserting withheld schemas, withheld scope reference, the named denial reason, and continued dispatch.
+- Cross-family servable dispatch test asserting withheld schemas, withheld scope reference, the named denial reason on the telemetry surface, and continued dispatch.
 - Same-family control test asserting exposure is unchanged.
 - Capture-unaffected test asserting harness-authored capture still writes on the withheld dispatch.
 - Capture-scope test asserting written records carry the composed scope's `provider_family`, `tenant`, and `workload_class`.
 - Round-trip retrieval test proving a newly captured record is visible to a family-scoped request of its own family.
+- Asymmetric `null` test pair: a `null`-family record is reachable by a family-scoped request, and a family-scoped record is NOT reachable by a `null`-family request.
+- Re-run of the memory closeout check with the refreshed C-MEM-03 / C-MEM-13 / C-MEM-14 evidence rows.
 
 Out of scope for this unit:
 
