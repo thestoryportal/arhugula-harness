@@ -1,6 +1,6 @@
 # U-MEM-25 Memory Closeout Evidence
 
-Status: provider-free memory substrate closeout evidence ready for review.
+Status: provider-free memory substrate closeout evidence ready for review, **scoped to `Spec_Memory_Substrate_v1.md` v1 and `Implementation_Plan_Memory_Substrate_v1.md` v1 (U-MEM-01..25)**. The v1.1 obligations added at the `B-86` spec leg are **not** certified here; the affected R-MEM and C-MEM rows carry an explicit `PENDING — U-MEM-26` marker. See "Version scoping" under Remaining Gates And Blockers.
 
 This packet is the human-facing closeout checklist for U-MEM-25. It maps every
 R-MEM and C-MEM item to implementation and verification evidence, records the
@@ -11,7 +11,7 @@ provider calls.
 
 | Requirement | Closeout evidence | Verification evidence |
 | --- | --- | --- |
-| R-MEM-01 - Full memory layer, no limited MVP | Canonical store, policy, retrieval, access modes, native adapter, standard tools, migration, redaction, observability, and verification matrix are all implemented across `harness-is`, `harness-cp`, `harness-as`, and `harness-runtime`. | U-MEM-24 matrix plus `just memory-closeout-check`. |
+| R-MEM-01 - Full memory layer, no limited MVP | Canonical store, policy, retrieval, access modes, native adapter, standard tools, migration, redaction, observability, and verification matrix are all implemented across `harness-is`, `harness-cp`, `harness-as`, and `harness-runtime`. **Evidences the v1 obligations only.** v1.1 obligations (the U-MEM-26 unit added to this requirement's unit range): **PENDING — U-MEM-26**. | U-MEM-24 matrix plus `just memory-closeout-check`. |
 | R-MEM-02 - Canonical filesystem/git store | Memory path registry, filesystem-backed operations, operation ledger, and derived retrieval indexes preserve canonical store ownership. | Path registry, operation ledger, retrieval-index, and durability selectors in `harness-runtime/src/harness_runtime/memory_verification_suite.py`. |
 | R-MEM-03 - Typed memory records | Typed record envelopes cover episodic, semantic, preference, procedural, compaction, migration, and redaction records. | Schema validation selectors in the C-MEM-20 matrix. |
 | R-MEM-04 - Automatic episodic and durable capture | Runtime capture paths create scoped records and durable operation-ledger rows. | Operation ledger and durability selectors in the matrix. |
@@ -19,10 +19,10 @@ provider calls.
 | R-MEM-06 - Compaction safety | Compaction requires one durable disposition per candidate and records discard, keep, promote, or queue decisions. | Compaction safety selectors in the matrix. |
 | R-MEM-07 - Retrieval and ranking | Retrieval is deterministic for fixed store, policy, request, and index inputs. | Retrieval and retrieval-index selectors in the matrix. |
 | R-MEM-08 - Memory packet assembly and injection | Runtime context assembly builds prompt packets only from policy-filtered records and redaction-safe content. | Prompt fallback, retrieval denial, and redaction selectors in the matrix. |
-| R-MEM-09 - Multi-provider memory routing | Access-mode scenarios cover native provider memory, standard memory tools, prompt fallback, and no-access denial. | Access-mode scenarios in `ACCESS_MODE_VERIFICATION_SCENARIOS`. |
+| R-MEM-09 - Multi-provider memory routing | Access-mode scenarios cover native provider memory, standard memory tools, prompt fallback, and no-access denial. **Evidences the v1 obligations only.** v1.1 obligations (cross-family withholding on a servable dispatch + its recording surface): **PENDING — U-MEM-26**. | Access-mode scenarios in `ACCESS_MODE_VERIFICATION_SCENARIOS`. |
 | R-MEM-10 - CLI-neutral and CLI-specific profiles | CLI profiles cover generic, Claude Code, Codex, Antigravity, legacy Gemini, and custom routes. | CLI profile scenarios and fake-subprocess external route selectors in `CLI_PROFILE_VERIFICATION_SCENARIOS` and `EXTERNAL_CLI_ROUTING_SCENARIOS`. |
 | R-MEM-11 - Engine-class durability | Durable engine classes are covered by operation-ledger and runtime durability selectors. | Engine-class durability row in the C-MEM-20 matrix. |
-| R-MEM-12 - Redaction, privacy, and scope controls | Redaction, tombstone, retention, and cross-scope denial exclude unavailable records from packets and tools while keeping audit sidecars. | Redaction, retrieval, memory tool, policy, and access-mode denial selectors. |
+| R-MEM-12 - Redaction, privacy, and scope controls | Redaction, tombstone, retention, and cross-scope denial exclude unavailable records from packets and tools while keeping audit sidecars. **Evidences the v1 obligations only.** v1.1 obligations (run-level `provider_family` keying, asymmetric null semantics, and the writer-side composed-scope obligation): **PENDING — U-MEM-26**. | Redaction, retrieval, memory tool, policy, and access-mode denial selectors. |
 | R-MEM-13 - Observability | Memory telemetry spans and operation/failure classifications are wired across capture, retrieval, tools, native adapter, migration, redaction, and lifecycle paths. | Observability implementation is covered by the U-MEM-22 selectors and the full provider-free local gate. |
 | R-MEM-14 - Review and administration | Promotion review, administrative evidence packets, live-gate records, and this U-MEM-25 closeout packet make memory state reviewable. | `tools/memory_closeout_check.py`, `just memory-closeout-check`, and closeout review evidence below. |
 | R-MEM-15 - Migration and compatibility | Callback-backed migration supports dry-run reports and explicit `migrate` events without silent canonical writes. | Migration compatibility tests from U-MEM-23 and provider-free local gate evidence. |
@@ -65,13 +65,23 @@ No provider-free U-MEM-25 blocker remains once `just memory-closeout-check`,
 docs link checks, overlay checks, `just codex-check`, review, and closeout pass.
 
 **Version scoping (added 2026-07-28, `B-86` spec leg).** This packet certifies the
-`C-MEM-*` family at spec **v1**. `Spec_Memory_Substrate_v1.md` v1.1 grew the
-obligations of C-MEM-03, C-MEM-13, and C-MEM-14; those three rows are annotated
-`PENDING — U-MEM-26` above. The binary checker cannot see this: it derives the
-contract-id set from the spec's `## C-MEM-NN` headings, and v1.1 adds no new id,
-so the gate correctly still reports `ready: yes` for the coverage property it
-actually tests. U-MEM-26's acceptance criteria require these three rows to be
-re-opened and extended and the check re-run green before that unit can close.
+memory substrate at spec **v1** and plan **v1** (U-MEM-01..25). Two matrices are
+affected by the v1.1 delta and both are annotated above:
+
+- **C-MEM matrix** — `Spec_Memory_Substrate_v1.md` v1.1 grew the obligations of
+  C-MEM-03, C-MEM-13, and C-MEM-14.
+- **R-MEM matrix** — `Implementation_Plan_Memory_Substrate_v1.md` v1.1 maps the
+  new U-MEM-26 unit into R-MEM-01, R-MEM-09, and R-MEM-12, so those three
+  requirement rows are likewise certified only to their v1 obligations.
+
+The binary checker cannot see either scoping: it derives both id sets from
+headings (`### R-MEM-NN` in the PRD, `## C-MEM-NN` in the spec) and tests only
+that every derived id has an evidence row. Neither id set changes at v1.1, so
+the gate correctly still reports `ready: yes` for the property it actually
+tests. Making it red for the interim window was considered and declined on
+main-always-green CI grounds; the rationale is recorded at the plan v1.1
+change-note. U-MEM-26's acceptance criteria require these rows to be re-opened
+and extended, and the check re-run green, before that unit can close.
 
 Live checks are explicitly gated, not silently skipped:
 
