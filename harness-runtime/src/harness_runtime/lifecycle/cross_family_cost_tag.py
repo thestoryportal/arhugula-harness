@@ -49,6 +49,7 @@ from harness_od.cross_family_rollup import CrossFamilyTag
 __all__ = [
     "cross_family_tag_for_provider",
     "provider_family_for_provider",
+    "provider_family_for_scope_check",
 ]
 
 
@@ -95,6 +96,39 @@ def provider_family_for_provider(provider: str) -> ProviderFamily:
         return ProviderFamily(provider)
     except ValueError:
         return ProviderFamily.LOCAL_OPEN_WEIGHT
+
+
+def provider_family_for_scope_check(provider: str) -> ProviderFamily | None:
+    """Map a provider key to its `ProviderFamily`, or `None` when UNREGISTERED.
+
+    The fail-closed sibling of `provider_family_for_provider`, for callers that
+    use the family as a SCOPE BOUNDARY rather than a cost label. The two differ
+    ONLY in the terminal case: this one returns `None` where the other falls
+    back to `LOCAL_OPEN_WEIGHT`.
+
+    `None` ⇒ "this key is not registered, so its family is UNKNOWN". A
+    scope-boundary caller MUST fail closed on it — under the cost-attribution
+    fallback an unregistered key compares EQUAL to a `local_open_weight`-scoped
+    packet and would authorize serving records retrieved under a scope this
+    dispatch was never proven to belong to (`B-86`). A mis-attributed cost row
+    is recoverable; a cross-scope disclosure is not.
+
+    The `ProviderFamily(provider)` parse path is PRESERVED: a provider key that
+    is value-equal to a family member (`"anthropic"` / `"openai"` / `"google"` /
+    `"local_open_weight"`) resolves even when absent from the explicit map, so
+    the sentinel means "unregistered", never "spelled differently".
+
+    Cost-attribution callers keep using `provider_family_for_provider`
+    unchanged — its conservative fallback is correct for attribution, where a
+    total function over every provider key is the requirement.
+    """
+    family = _PROVIDER_FAMILY_BY_PROVIDER.get(provider)
+    if family is not None:
+        return family
+    try:
+        return ProviderFamily(provider)
+    except ValueError:
+        return None
 
 
 def cross_family_tag_for_provider(provider: str) -> str:
