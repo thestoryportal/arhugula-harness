@@ -2105,6 +2105,12 @@ _DEGRADED_REASON_PROVIDER_SCOPE_MISMATCH: Final[str] = "provider_scope_mismatch"
 #: was RETRIEVED under a different provider-FAMILY scope than the family this
 #: dispatch belongs to. REPORT-ONLY. See `_packet_scope_matches_dispatch_family`.
 _DEGRADED_REASON_PROVIDER_FAMILY_SCOPE_MISMATCH: Final[str] = "provider_family_scope_mismatch"
+#: `packet_policy_denied` — scope is fine, but C-MEM-13 would NOT have selected
+#: `PROMPT_EXTENSION_PACKET` for this request: policy `injection_access` denies
+#: prompt packets, or the token budget is empty, or the provider does not
+#: support the mode. REPORT-ONLY — see
+#: `RuntimeMemoryContext.prompt_packet_fallback_eligible`.
+_DEGRADED_REASON_PACKET_POLICY_DENIED: Final[str] = "packet_policy_denied"
 
 
 @dataclass(frozen=True, slots=True)
@@ -2222,10 +2228,26 @@ def _degraded_serve_disposition(
     serve-check and the ollama tools-unsupported fallback, so the two sites can
     never disagree about whether a packet is safe to render.
 
-    Repair only when BOTH scope conjuncts hold — provider identity AND the
-    packet's retrieval family. Either one failing is report-only: the
-    degradation becomes visible in telemetry and no cross-scope record is
-    disclosed.
+    Repair requires THREE conjuncts, covering the two questions a degraded
+    serve raises — *may these records go to this destination* (scope) and *is
+    this delivery mode authorized at all* (policy):
+
+    1. provider IDENTITY — the context was composed for this provider;
+    2. provider FAMILY — the packet was RETRIEVED under this dispatch's family
+       scope (`_packet_scope_matches_dispatch_family`);
+    3. prompt-packet AUTHORIZATION — C-MEM-13 would itself have selected
+       `PROMPT_EXTENSION_PACKET` for the same request
+       (`prompt_packet_fallback_eligible`, settled at composition where the
+       policy + budget inputs are in scope). Rendering the packet IS the
+       prompt-packet mode, so the standard-tools selection that actually won
+       does not authorize it; a policy allowing `standard_tool_access` while
+       `injection_access` denies prompt packets is a legal, expressible
+       configuration, and the packet mode additionally requires a non-empty
+       token budget that the tools mode does not.
+
+    Any conjunct failing is report-only: the degradation becomes visible in
+    telemetry, and nothing is disclosed out of scope or through a mode the
+    operator disabled.
     """
 
     if memory_context.selection.selected_provider != provider_name:
@@ -2238,6 +2260,12 @@ def _degraded_serve_disposition(
         return _DegradedMemoryServe(
             selected_access_mode=memory_context.access_mode,
             reason=_DEGRADED_REASON_PROVIDER_FAMILY_SCOPE_MISMATCH,
+            rendered=None,
+        )
+    if not memory_context.prompt_packet_fallback_eligible:
+        return _DegradedMemoryServe(
+            selected_access_mode=memory_context.access_mode,
+            reason=_DEGRADED_REASON_PACKET_POLICY_DENIED,
             rendered=None,
         )
     return _DegradedMemoryServe(

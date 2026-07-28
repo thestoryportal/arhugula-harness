@@ -944,6 +944,7 @@ def _standard_tools_memory_context(
     model: str = "test-model-1",
     family: ProviderFamily = ProviderFamily.OPENAI,
     packet_sections: tuple[MemoryPacketSection, ...] = (),
+    prompt_packet_fallback_eligible: bool = True,
 ) -> RuntimeMemoryContext:
     """A STANDARD_MEMORY_TOOLS context.
 
@@ -951,6 +952,14 @@ def _standard_tools_memory_context(
     so every pre-B-83 caller keeps the empty packet it always had. The B-83
     degraded-serve repair DOES render it, so those witnesses pass real sections
     and assert their text on the wire.
+
+    `prompt_packet_fallback_eligible` models the C-MEM-13 answer the composer
+    settles (B-83 [P1-e]): would `PROMPT_EXTENSION_PACKET` have been selected
+    for this same request? It defaults True here, i.e. these fixtures model a
+    policy with `injection_access=PROMPT_PACKET` AND a non-empty token budget —
+    made EXPLICIT because the earlier fixtures were silently relying on the
+    repair not checking. Pass False to model the equally legal
+    tools-allowed / packets-denied policy.
     """
     packet = MemoryPacket(
         packet_id="memory-packet:" + ("c" * 32),
@@ -997,6 +1006,7 @@ def _standard_tools_memory_context(
         ledgerable_denial=False,
         injection_action_id=Identifier("memory-injection:cccccccccccccccccccccccccccccccc"),
         injection_operation_result=MemoryOperationWriteResult.APPENDED,
+        prompt_packet_fallback_eligible=prompt_packet_fallback_eligible,
     )
 
 
@@ -2955,6 +2965,7 @@ def _b83_memory_context(
     provider: str,
     model: str = "test-model-1",
     family: ProviderFamily | None = None,
+    prompt_packet_fallback_eligible: bool = True,
 ) -> RuntimeMemoryContext:
     """A STANDARD_MEMORY_TOOLS context whose packet carries assertable text.
 
@@ -2967,6 +2978,7 @@ def _b83_memory_context(
         provider=provider,
         model=model,
         family=family if family is not None else provider_family_for_provider(provider),
+        prompt_packet_fallback_eligible=prompt_packet_fallback_eligible,
         packet_sections=(
             MemoryPacketSection(
                 section_id="active_operator_project_preferences",
@@ -3150,6 +3162,81 @@ async def test_b83_cross_family_recomposed_context_is_reported_but_never_rendere
     assert attrs["memory.operation.name"] == "denial"
     assert attrs["memory.access_mode"] == "no_memory_access"
     assert "memory.packet_hash" not in attrs
+
+
+@pytest.mark.asyncio
+async def test_b83_packet_policy_denied_context_is_reported_but_never_rendered() -> None:
+    """P1-e — scope is fine, but the prompt-packet MODE is not authorized.
+
+    `select_memory_access_mode` returns at the first mode whose gates pass, so a
+    `STANDARD_MEMORY_TOOLS` selection says nothing about the packet mode — its
+    branch was never evaluated. A policy allowing `standard_tool_access` while
+    `injection_access` denies prompt packets is legal and expressible (DENY is
+    the default), and rendering the packet IS the prompt-packet mode. Without
+    this conjunct the degradation discloses memory through a mode the operator
+    switched off.
+    """
+    client = _AnthropicClient()
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": _AnthropicFakeAdapter(client)},
+        tracer_provider=tp,
+        memory_context=_b83_memory_context(
+            provider="anthropic",
+            prompt_packet_fallback_eligible=False,
+        ),
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+    )
+
+    await dispatcher.dispatch(_binding("anthropic"), _step(), step_context=_step_context())
+
+    assert "system" not in client.messages.calls[0], (
+        "a packet the packet-policy denies must never reach the wire"
+    )
+    spans = _degraded_serve_spans(exporter)
+    assert len(spans) == 1, "still reported, just not rendered"
+    attrs = dict(spans[0].attributes or {})
+    assert attrs["memory.degraded_serve.reason"] == "packet_policy_denied"
+    assert attrs["memory.operation.name"] == "denial"
+    assert attrs["memory.access_mode"] == "no_memory_access"
+    assert attrs["memory.record_count"] == 0
+    assert "memory.packet_hash" not in attrs
+
+
+@pytest.mark.asyncio
+async def test_b83_packet_policy_denied_also_withholds_on_the_r5_path() -> None:
+    """P1-e reaches the ollama tools-unsupported fallback too.
+
+    The R5 site shares `_degraded_serve_disposition`, so the authorization
+    conjunct binds there as well — the retry drops the tools and carries NO
+    packet.
+    """
+    client = _OllamaClient()
+    client.errors = [
+        OllamaResponseError("llava-llama3:latest does not support tools", 400),
+    ]
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"ollama": _OllamaFakeAdapter(client)},
+        tracer_provider=tp,
+        memory_context=_b83_memory_context(
+            provider="ollama",
+            model="llava-llama3:latest",
+            prompt_packet_fallback_eligible=False,
+        ),
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+    )
+
+    result = await dispatcher.dispatch(
+        _binding("ollama", model="llava-llama3:latest"),
+        _step(),
+        step_context=_step_context(),
+    )
+
+    assert result["message"]["content"] == "ok", "the tool-free retry must still succeed"
+    assert _B83_SECTION_TEXT not in json.dumps(client.calls[1]["messages"])
+    attrs = dict(_degraded_serve_spans(exporter)[0].attributes or {})
+    assert attrs["memory.degraded_serve.reason"] == "packet_policy_denied"
 
 
 @pytest.mark.asyncio

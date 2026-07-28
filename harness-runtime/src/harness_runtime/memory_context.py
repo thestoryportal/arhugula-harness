@@ -17,6 +17,7 @@ from harness_cp.memory_access_mode import (
     MemoryAccessModeRequest,
     MemoryAccessModeSelection,
     MemoryProviderCapabilities,
+    reflect_memory_provider_capabilities,
     select_memory_access_mode,
 )
 from harness_is.cli_profile import CliProfile
@@ -106,6 +107,19 @@ class RuntimeMemoryContext(BaseModel):
     ledgerable_denial: bool
     injection_action_id: Identifier
     injection_operation_result: MemoryOperationWriteResult
+    #: B-83 [P1-e] — would C-MEM-13 have selected `PROMPT_EXTENSION_PACKET` for
+    #: the SAME request, had the higher-precedence modes been unavailable? The
+    #: dispatch-side degraded-serve repair renders this packet as prompt text,
+    #: which is the prompt-packet mode's own surface, so it must be authorized
+    #: by the prompt-packet mode's own gates — policy `injection_access` plus a
+    #: non-empty token budget — not merely by the standard-tools selection that
+    #: actually won. Those inputs (`workflow_policy` / `step_policy` /
+    #: `token_budget` / `provider_capabilities`) live on the COMPOSITION request
+    #: and are absent from both this context and `MemoryAccessModeSelection`, so
+    #: the answer is settled HERE, where they are in scope, and carried forward.
+    #: Defaults FALSE: a context assembled anywhere but `compose_run_start` has
+    #: not proven eligibility, and unproven must read as ineligible.
+    prompt_packet_fallback_eligible: bool = False
 
     @model_validator(mode="after")
     def _packet_matches_mode(self) -> Self:
@@ -245,6 +259,9 @@ class RuntimeMemoryContextComposer:
             packet_hash=retrieval_result.packet_hash,
             record_count=len(retrieval_result.packet.sections),
         )
+        # B-83 [P1-e] — settled here, where the policy + budget inputs are in
+        # scope, and carried on the context for the dispatch-side repair.
+        prompt_packet_eligible = _prompt_packet_fallback_eligible(request)
         with memory_telemetry_span(
             self._tracer_provider,
             tracer_name="harness.runtime.memory_context",
@@ -280,6 +297,7 @@ class RuntimeMemoryContextComposer:
             ledgerable_denial=False,
             injection_action_id=action_id,
             injection_operation_result=operation_result,
+            prompt_packet_fallback_eligible=prompt_packet_eligible,
         )
 
     def _write_injection_decision(
@@ -453,6 +471,49 @@ def _access_mode_request(
         provider_capabilities=request.provider_capabilities,
         external_cli_route=request.external_cli_route,
     )
+
+
+def _prompt_packet_fallback_eligible(request: MemoryContextCompositionRequest) -> bool:
+    """Would C-MEM-13 select `PROMPT_EXTENSION_PACKET` for this same request?
+
+    B-83 [P1-e]. `select_memory_access_mode` returns at the FIRST mode whose
+    gates pass, so a `STANDARD_MEMORY_TOOLS` selection proves nothing about the
+    prompt-packet mode: its branch was never evaluated. A policy may perfectly
+    well allow `standard_tool_access` while `injection_access` denies prompt
+    packets (the default is DENY), and the packet branch additionally requires a
+    non-empty `token_budget`, which the tools branch does not. The dispatch-side
+    degraded-serve repair renders the packet as prompt text — the prompt-packet
+    mode's own surface — so it needs the prompt-packet mode's own authorization.
+
+    Answered by RE-RUNNING the real selector with only the higher-precedence
+    capabilities masked off, never by re-implementing its policy predicates.
+    `select_memory_access_mode` is pure ("without touching credentials"), so the
+    probe is side-effect-free, and it composes the WHOLE decision tree in
+    canonical order — external-CLI route denial, `_policy_denies`,
+    `supports_prompt_extension_packet`, `_policy_allows_prompt_packet`, and the
+    `token_budget <= 0` gate — with zero duplicated logic to drift.
+
+    Masking native + standard-tools is exactly the counterfactual the repair
+    faces: the arm reached cannot serve those modes, so the question is what
+    C-MEM-13 would have chosen without them.
+    """
+
+    base = _access_mode_request(request)
+    capabilities = base.provider_capabilities or reflect_memory_provider_capabilities(
+        request.model_binding,
+        is_external_cli=request.external_cli_route is not None,
+    )
+    probe = base.model_copy(
+        update={
+            "provider_capabilities": capabilities.model_copy(
+                update={
+                    "supports_native_memory": False,
+                    "supports_standard_memory_tools": False,
+                }
+            )
+        }
+    )
+    return select_memory_access_mode(probe).access_mode is MemoryAccessMode.PROMPT_EXTENSION_PACKET
 
 
 def _retrieval_request(
