@@ -1708,13 +1708,30 @@ class RuntimeLLMDispatcher:
                 cache_attrs = None
                 request_attrs = None
             elif provider_name == "ollama":
-                response, usage_attrs = await _dispatch_ollama(
-                    adapter,
-                    model,
-                    payload,
-                    system=effective_system_prompt,
-                    upstream=upstream_output,
-                )
+                if (
+                    standard_memory_tool_executor is not None
+                    and memory_context is not None
+                    and memory_context.access_mode is MemoryAccessMode.STANDARD_MEMORY_TOOLS
+                ):
+                    response, usage_attrs = await _dispatch_ollama_with_standard_memory_tools(
+                        adapter,
+                        model,
+                        payload,
+                        memory_context=memory_context,
+                        standard_memory_tool_executor=standard_memory_tool_executor,
+                        step_context=step_context,
+                        step_id=step_id,
+                        system=effective_system_prompt,
+                        upstream=upstream_output,
+                    )
+                else:
+                    response, usage_attrs = await _dispatch_ollama(
+                        adapter,
+                        model,
+                        payload,
+                        system=effective_system_prompt,
+                        upstream=upstream_output,
+                    )
                 cache_attrs = None
                 request_attrs = None
             elif isinstance(adapter, _ExternalCLIProviderLike):
@@ -2697,6 +2714,102 @@ async def _dispatch_openai(
     return _openai_response_bundle(response)
 
 
+@dataclass(frozen=True, slots=True)
+class _PreparedMemoryToolCall:
+    """One memory tool call fully resolved + validated, NOT yet executed.
+
+    Batch preparation is what makes the memory tool loops safe against a
+    partially-committed batch: every call in a response is resolved and
+    validated BEFORE any of them runs, so a malformed *later* call cannot abort
+    the dispatch after an *earlier* (possibly write-like) call already committed
+    durable memory state. That matters because the abort is retryable —
+    ``_classify_provider_exception`` (`retry_breaker_fallback.py`) maps every
+    exception other than ``LLMDispatchProviderUnreachableError`` /
+    ``LLMDispatchPayloadShapeError`` / 401-403 to ``TRANSIENT_RETRY``, so
+    ``RetryBreakerFallbackDispatcher`` re-runs the whole dispatch from the top
+    and the already-committed call executes a second time.
+
+    ``tool_call_id`` is OpenAI-only: ollama's typed client exposes no tool-call
+    id at all (`ollama/_types.py:304-355`), so its result turn correlates by
+    name instead.
+    """
+
+    tool_name: MemoryToolName
+    request: MemoryToolExecutionRequest
+    tool_call_id: str | None = None
+
+
+#: The dotted C-MEM-14 provider-neutral identities, as a membership set.
+_MEMORY_TOOL_NAMES: Final[frozenset[str]] = frozenset(tool.value for tool in MemoryToolName)
+
+
+def _all_calls_are_memory_tools(
+    names: Sequence[str | None],
+    memory_names: frozenset[str],
+) -> bool:
+    """True only when EVERY call in the batch names a memory tool we advertised.
+
+    A batch containing any other call — a legitimate caller-advertised tool that
+    survived the dedup filter, a malformed tool_call shape, or a hallucinated
+    name — belongs to the CALLER. The bare dispatch paths (`_dispatch_openai` /
+    `_dispatch_ollama`) return every tool_call to the caller untouched, whatever
+    it names; auto-injecting memory tools must not turn that into a raise, or
+    enabling automatic memory would break ordinary tool workflows.
+    """
+    return all(name is not None and name in memory_names for name in names)
+
+
+def _add_optional_tokens(running: int | None, turn: int | None) -> int | None:
+    """Sum two optional token counts, treating ``None`` as ABSENT — not zero.
+
+    A turn the provider reported nothing for must neither invent a ``0`` total
+    nor erase counts already accumulated.
+    """
+    if running is None:
+        return turn
+    if turn is None:
+        return running
+    return running + turn
+
+
+def _accumulated_usage(running: _UsageAttrs, turn: _UsageAttrs) -> _UsageAttrs:
+    """Fold one continuation turn's usage into a memory tool loop's totals.
+
+    Every provider call in the loop consumes tokens, so bundling only the FINAL
+    response's usage silently dropped every continuation turn from turn capture,
+    ``gen_ai.usage.*`` and cost attribution. ``response_id`` is NOT accumulated —
+    it identifies ONE provider response, so the bundle keeps the final turn's
+    (unchanged semantics; ollama has none either way).
+    """
+    return _UsageAttrs(
+        input_tokens=_add_optional_tokens(running.input_tokens, turn.input_tokens),
+        output_tokens=_add_optional_tokens(running.output_tokens, turn.output_tokens),
+        response_id=turn.response_id,
+    )
+
+
+#: A loop's usage accumulator before any provider call — all-absent, not zero.
+_NO_USAGE: Final[_UsageAttrs] = _UsageAttrs(
+    input_tokens=None,
+    output_tokens=None,
+    response_id=None,
+)
+
+
+def _memory_tool_loop_exhausted(provider_label: str, max_iterations: int) -> RuntimeError:
+    """The C-MEM-14 continuation-loop bound error, shared by both provider loops.
+
+    Deliberately the SAME generic ``RuntimeError`` both loops have always
+    raised — introducing a distinct type here would change how
+    ``_classify_provider_exception`` routes loop exhaustion (today:
+    ``TRANSIENT_RETRY``), which is a separate decision from the
+    execute-before-raise defect this shape exists to close.
+    """
+    return RuntimeError(
+        f"{provider_label} standard memory tool loop exceeded {max_iterations} continuation turns"
+    )
+
+
 async def _dispatch_openai_with_standard_memory_tools(
     adapter: Any,
     model: str,
@@ -2716,41 +2829,66 @@ async def _dispatch_openai_with_standard_memory_tools(
     messages = list(kwargs["messages"])
     kwargs["messages"] = messages
 
-    for _ in range(max_iterations):
+    usage = _NO_USAGE
+    for iteration in range(max_iterations):
         response = await adapter.client.chat.completions.create(model=model, **kwargs)
+        # Every call in the loop consumes tokens — fold each turn in before
+        # any exit, so a continuation turn is never dropped from usage.
+        usage = _accumulated_usage(usage, _openai_usage_attrs(response))
         response_mapping = _response_to_mapping(response)
         tool_calls = _openai_tool_calls(response_mapping)
         if not tool_calls:
-            return _openai_response_bundle(response)
+            return (response_mapping, usage)
+        if not _all_calls_are_memory_tools(
+            [_function_tool_name(call) for call in tool_calls],
+            _OPENAI_MEMORY_TOOL_CALL_NAMES,
+        ):
+            # The batch is the CALLER's — hand the whole response back
+            # unprocessed (bare-path parity) and execute NOTHING from it, so a
+            # mixed batch cannot half-commit memory before control returns.
+            return (response_mapping, usage)
+        # Validate the batch BEFORE the bound check: a malformed memory call is
+        # a fail-fast payload-shape error, and letting the generic (retryable)
+        # exhaustion error mask it on the terminal turn would replay up to
+        # `max_iterations` provider calls for a request that can never succeed.
+        prepared = _openai_prepared_memory_tool_calls(
+            tool_calls,
+            memory_context=memory_context,
+            step_context=step_context,
+            step_id=step_id,
+            model=model,
+        )
+        if iteration + 1 >= max_iterations:
+            # The batch is valid but no iteration budget remains to send its
+            # results back, so the dispatch fails whatever it returns. Raise
+            # BEFORE executing — otherwise a terminal `memory.write_note` /
+            # `memory.propose_promotion` / `memory.request_redaction` commits
+            # for a dispatch that reports failure, and the failure is retryable
+            # (see `_PreparedMemoryToolCall`), so the sequence can repeat.
+            raise _memory_tool_loop_exhausted("OpenAI", max_iterations)
 
-        assistant_message = _openai_assistant_message(response_mapping)
-        messages.append(assistant_message)
+        messages.append(_openai_assistant_message(response_mapping))
         messages.extend(
-            _openai_memory_tool_result_message(
-                call,
+            _openai_memory_tool_result_messages(
+                prepared,
                 standard_memory_tool_executor=standard_memory_tool_executor,
-                memory_context=memory_context,
-                step_context=step_context,
-                step_id=step_id,
-                provider="openai",
-                model=model,
             )
-            for call in tool_calls
         )
 
-    raise RuntimeError(
-        f"OpenAI standard memory tool loop exceeded {max_iterations} continuation turns"
-    )
+    raise _memory_tool_loop_exhausted("OpenAI", max_iterations)
 
 
-def _openai_response_bundle(response: Any) -> tuple[Mapping[str, Any], _UsageAttrs]:
+def _openai_usage_attrs(response: Any) -> _UsageAttrs:
     usage = getattr(response, "usage", None)
-    usage_attrs = _UsageAttrs(
+    return _UsageAttrs(
         input_tokens=getattr(usage, "prompt_tokens", None),
         output_tokens=getattr(usage, "completion_tokens", None),
         response_id=getattr(response, "id", None),
     )
-    return (_response_to_mapping(response), usage_attrs)
+
+
+def _openai_response_bundle(response: Any) -> tuple[Mapping[str, Any], _UsageAttrs]:
+    return (_response_to_mapping(response), _openai_usage_attrs(response))
 
 
 def _openai_assistant_message(response: Mapping[str, Any]) -> dict[str, Any]:
@@ -2787,41 +2925,69 @@ def _openai_first_message(response: Mapping[str, Any]) -> Mapping[str, Any]:
     return cast(Mapping[str, Any], message)
 
 
-def _openai_memory_tool_result_message(
-    call: Mapping[str, Any],
+def _openai_prepared_memory_tool_calls(
+    calls: Sequence[Mapping[str, Any]],
     *,
-    standard_memory_tool_executor: Any,
     memory_context: RuntimeMemoryContext,
     step_context: StepExecutionContext,
     step_id: str,
-    provider: str,
     model: str,
-) -> dict[str, Any]:
-    tool_call_id = call.get("id")
-    if not isinstance(tool_call_id, str) or not tool_call_id:
-        raise LLMDispatchPayloadShapeError("OpenAI memory tool_call missing string id")
-    tool_name, arguments = _openai_memory_tool_name_and_arguments(call)
-    request = MemoryToolExecutionRequest(
-        tool_name=tool_name,
-        arguments=arguments,
-        context=_standard_memory_tool_context(
-            arguments,
-            memory_context=memory_context,
-            step_context=step_context,
-            step_id=step_id,
-            provider=provider,
-            model=model,
-        ),
-    )
-    result = standard_memory_tool_executor.execute(request)
-    return {
-        "role": "tool",
-        "tool_call_id": tool_call_id,
-        # Same wire boundary as the tools[] array — the tool-result turn echoes
-        # the function name the provider called, so it carries the wire name.
-        "name": _OPENAI_MEMORY_TOOL_WIRE_NAMES[tool_name],
-        "content": json.dumps(result, sort_keys=True, separators=(",", ":"), default=str),
-    }
+) -> tuple[_PreparedMemoryToolCall, ...]:
+    """Resolve + validate the COMPLETE batch before any of it executes.
+
+    Every failure mode of a single call — missing id, unknown tool name,
+    malformed arguments, a `scope_ref` that does not match the context — is
+    raised here, where nothing has run yet. See `_PreparedMemoryToolCall`.
+    """
+    prepared: list[_PreparedMemoryToolCall] = []
+    for call in calls:
+        tool_call_id = call.get("id")
+        if not isinstance(tool_call_id, str) or not tool_call_id:
+            raise LLMDispatchPayloadShapeError("OpenAI memory tool_call missing string id")
+        tool_name, arguments = _openai_memory_tool_name_and_arguments(call)
+        prepared.append(
+            _PreparedMemoryToolCall(
+                tool_name=tool_name,
+                request=MemoryToolExecutionRequest(
+                    tool_name=tool_name,
+                    arguments=arguments,
+                    context=_standard_memory_tool_context(
+                        arguments,
+                        tool_name=tool_name,
+                        memory_context=memory_context,
+                        step_context=step_context,
+                        step_id=step_id,
+                        provider="openai",
+                        model=model,
+                    ),
+                ),
+                tool_call_id=tool_call_id,
+            )
+        )
+    return tuple(prepared)
+
+
+def _openai_memory_tool_result_messages(
+    prepared: Sequence[_PreparedMemoryToolCall],
+    *,
+    standard_memory_tool_executor: Any,
+) -> list[dict[str, Any]]:
+    """Execute an ALREADY-VALIDATED batch in order and build its result turns."""
+    messages: list[dict[str, Any]] = []
+    for call in prepared:
+        result = standard_memory_tool_executor.execute(call.request)
+        messages.append(
+            {
+                "role": "tool",
+                "tool_call_id": call.tool_call_id,
+                # Same wire boundary as the tools[] array — the tool-result turn
+                # echoes the function name the provider called, so it carries the
+                # wire name.
+                "name": _OPENAI_MEMORY_TOOL_WIRE_NAMES[call.tool_name],
+                "content": json.dumps(result, sort_keys=True, separators=(",", ":"), default=str),
+            }
+        )
+    return messages
 
 
 def _openai_memory_tool_name_and_arguments(
@@ -2863,9 +3029,42 @@ def _openai_memory_tool_name_and_arguments(
     raise LLMDispatchPayloadShapeError(f"OpenAI memory tool {name!r} arguments missing")
 
 
+def _memory_tools_declaring(field: str) -> frozenset[MemoryToolName]:
+    """Which C-MEM-14 tools declare ``field`` in their own input schema.
+
+    Same authority ``_bind_schema_fixed_value`` uses when it binds a fixed enum
+    value (presence in the contract's ``properties``), and the same partition
+    the executor itself enforces: ``StandardMemoryToolExecutor._require_scope_ref``
+    is reached ONLY from ``_search`` and ``_write_note``
+    (`memory_tool_executor.py:195` / `:262`) — exactly the two contracts that
+    declare ``scope_ref``.
+    """
+    return frozenset(
+        entry.tool
+        for entry in MEMORY_TOOL_CONTRACTS
+        if isinstance(properties := entry.contract.input_schema.get("properties"), Mapping)
+        and field in properties
+    )
+
+
+#: `memory.read` / `memory.propose_promotion` / `memory.request_redaction` declare
+#: NO `scope_ref` and set `additionalProperties: false`
+#: (`harness-as/src/harness_as/memory_tool_contracts.py`), so a schema-conformant
+#: model CANNOT send one. Requiring it in the arguments for every tool — as this
+#: dispatch-side check originally did — made three of the five ADVERTISED tools
+#: permanently unreachable: they failed here before ever reaching the executor.
+#: The authoritative `scope_ref` was never the argument anyway; it is
+#: `RuntimeMemoryContext.scope_ref`, and the argument is only a cross-check,
+#: which is exactly why it can be scoped to the tools that carry one.
+_MEMORY_TOOLS_DECLARING_SCOPE_REF: Final[frozenset[MemoryToolName]] = _memory_tools_declaring(
+    "scope_ref"
+)
+
+
 def _standard_memory_tool_context(
     arguments: Mapping[str, object],
     *,
+    tool_name: MemoryToolName,
     memory_context: RuntimeMemoryContext,
     step_context: StepExecutionContext,
     step_id: str,
@@ -2880,11 +3079,14 @@ def _standard_memory_tool_context(
         raise MemoryToolExecutionInputError(
             "standard memory tool dispatch requires RuntimeMemoryContext.scope_ref"
         )
-    scope_ref = arguments.get("scope_ref")
-    if not isinstance(scope_ref, str) or not scope_ref:
-        raise MemoryToolExecutionInputError("standard memory tool call requires scope_ref")
-    if scope_ref != memory_context.scope_ref:
-        raise MemoryToolExecutionInputError("standard memory tool scope_ref does not match context")
+    if tool_name in _MEMORY_TOOLS_DECLARING_SCOPE_REF:
+        scope_ref = arguments.get("scope_ref")
+        if not isinstance(scope_ref, str) or not scope_ref:
+            raise MemoryToolExecutionInputError("standard memory tool call requires scope_ref")
+        if scope_ref != memory_context.scope_ref:
+            raise MemoryToolExecutionInputError(
+                "standard memory tool scope_ref does not match context"
+            )
     token_budget = memory_context.packet.token_budget if memory_context.packet is not None else 0
     return MemoryToolExecutionContext(
         run_id=memory_context.run_id,
@@ -2952,6 +3154,13 @@ _OPENAI_MEMORY_TOOL_FROM_WIRE: Final[dict[str, MemoryToolName]] = (
     _invert_openai_memory_tool_wire_names()
 )
 
+#: Every spelling an OpenAI tool_call can carry and still be OURS — the wire
+#: names we actually advertise, plus the dotted identities the inbound resolver
+#: tolerates for byte-compat. Anything outside this set is the caller's.
+_OPENAI_MEMORY_TOOL_CALL_NAMES: Final[frozenset[str]] = _MEMORY_TOOL_NAMES | frozenset(
+    _OPENAI_MEMORY_TOOL_FROM_WIRE
+)
+
 
 def _openai_tools_with_standard_memory(
     existing_tools: object,
@@ -2971,7 +3180,7 @@ def _openai_tools_with_standard_memory(
             if not isinstance(tool, Mapping):
                 continue
             tool_mapping = dict(cast(Mapping[str, Any], tool))
-            if _openai_function_tool_name(tool_mapping) in memory_tool_names:
+            if _function_tool_name(tool_mapping) in memory_tool_names:
                 continue
             preserved.append(tool_mapping)
     return [*preserved, *_openai_standard_memory_tools(memory_context)]
@@ -3009,7 +3218,13 @@ def _bind_schema_fixed_value(properties: dict[str, object], name: str, value: st
         properties[name] = {"type": "string", "enum": [value]}
 
 
-def _openai_function_tool_name(tool: Mapping[str, Any]) -> str | None:
+def _function_tool_name(tool: Mapping[str, Any]) -> str | None:
+    """Read ``function.name`` off the shared ``{"type":"function",...}`` shape.
+
+    OpenAI and Ollama advertise function tools — and echo function CALLS back —
+    under the identical envelope, so this reader is provider-neutral and serves
+    both the outbound ``tools[]`` array and the inbound ``tool_calls[]`` list.
+    """
     function = tool.get("function")
     if not isinstance(function, Mapping):
         return None
@@ -3033,13 +3248,320 @@ async def _dispatch_ollama(
     """
     kwargs = _payload_to_ollama_kwargs(payload, system, upstream)
     response = await adapter.client.chat(model=model, **kwargs)
+    return _ollama_response_bundle(response)
 
-    usage_attrs = _UsageAttrs(
+
+async def _dispatch_ollama_with_standard_memory_tools(
+    adapter: Any,
+    model: str,
+    payload: ProviderAgnosticPayload,
+    *,
+    memory_context: RuntimeMemoryContext,
+    standard_memory_tool_executor: Any,
+    step_context: StepExecutionContext,
+    step_id: str,
+    system: str | None = None,
+    upstream: Mapping[str, Any] | None = None,
+    max_iterations: int = 16,
+) -> tuple[Mapping[str, Any], _UsageAttrs]:
+    """Ollama provider branch with C-MEM-14 standard memory tool continuation.
+
+    B-82 — `select_memory_access_mode` selects `STANDARD_MEMORY_TOOLS` for
+    ollama, so the bare branch silently degraded the selected mode to zero
+    memory access. Unlike the OpenAI arm there is NO wire-name encoding here:
+    ollama's ``/api/chat`` accepts the dotted C-MEM-14 provider-neutral
+    identities (``memory.search`` ...) verbatim and echoes them back in
+    ``message.tool_calls[].function.name``.
+    """
+    kwargs = _payload_to_ollama_kwargs(payload, system, upstream)
+    kwargs["tools"] = _ollama_tools_with_standard_memory(kwargs.get("tools"), memory_context)
+    messages = list(kwargs["messages"])
+    kwargs["messages"] = messages
+
+    usage = _NO_USAGE
+    for iteration in range(max_iterations):
+        try:
+            response = await adapter.client.chat(model=model, **kwargs)
+        except Exception as exc:
+            if iteration != 0 or not _is_ollama_tools_unsupported_error(exc):
+                raise
+            # This model carries no tool template, so the memory tools we
+            # auto-injected turned a previously-working TEXT dispatch into a
+            # 400. Byte-restore the pre-B-82 behavior for exactly these models
+            # by re-dispatching bare — the daemon, not a capability table, is
+            # the authority on which models take tools.
+            #
+            # FIRST call only: a mid-loop rejection would mean the model changed
+            # identity between continuation turns, which is not a case to paper
+            # over, so it stays fail-loud.
+            return await _dispatch_ollama(
+                adapter,
+                model,
+                payload,
+                system=system,
+                upstream=upstream,
+            )
+        # See the OpenAI arm — every turn's usage is folded in before exit.
+        usage = _accumulated_usage(usage, _ollama_usage_attrs(response))
+        response_mapping = _response_to_mapping(response)
+        tool_calls = _ollama_tool_calls(response_mapping)
+        if not tool_calls:
+            return (response_mapping, usage)
+        if not _all_calls_are_memory_tools(
+            [_function_tool_name(call) for call in tool_calls],
+            _MEMORY_TOOL_NAMES,
+        ):
+            # Caller-owned batch — see the OpenAI arm's matching comment.
+            return (response_mapping, usage)
+        # Validate first, then check the bound, then execute — see the OpenAI
+        # arm's matching comments; the ordering rationale is identical.
+        prepared = _ollama_prepared_memory_tool_calls(
+            tool_calls,
+            memory_context=memory_context,
+            step_context=step_context,
+            step_id=step_id,
+            model=model,
+        )
+        if iteration + 1 >= max_iterations:
+            raise _memory_tool_loop_exhausted("Ollama", max_iterations)
+
+        messages.append(dict(_ollama_message(response_mapping)))
+        messages.extend(
+            _ollama_memory_tool_result_messages(
+                prepared,
+                standard_memory_tool_executor=standard_memory_tool_executor,
+            )
+        )
+
+    raise _memory_tool_loop_exhausted("Ollama", max_iterations)
+
+
+#: Substring of the ollama daemon's rejection when a model has no tool template.
+_OLLAMA_TOOLS_UNSUPPORTED_MARKER: Final[str] = "does not support tools"
+
+
+def _is_ollama_tools_unsupported_error(exc: BaseException) -> bool:
+    """True for the daemon's ``<model> does not support tools`` rejection.
+
+    **Brittleness tradeoff, deliberate.** This matches a SUBSTRING of an upstream
+    error string because the daemon offers no machine-readable discriminator:
+    ``ollama.ResponseError`` carries only ``.error`` (str) and ``.status_code``
+    (`ollama/_types.py:632-651`), and the same type is raised for unrelated
+    failures. Probed live against ollama 0.6.2 + a local daemon:
+
+    - tools unsupported -> ``.error = 'registry.ollama.ai/library/llava-llama3:
+      latest does not support tools'``, ``.status_code = 400``
+    - model not found   -> ``.error = "model 'x' not found"``, ``.status_code = 404``
+
+    If upstream rewords the message this predicate simply stops matching and the
+    error propagates — it fails CLOSED (a loud dispatch failure), never silently
+    swallowing a different fault. The robust alternative, a per-model capability
+    table, is a design question this arc deliberately does not open:
+    `reflect_provider_capabilities` reports ``supports_tools=True`` for every
+    ollama model string (`harness-cp/src/harness_cp/provider_capabilities.py:127`),
+    which is the pre-existing gap this narrow fallback works around.
+
+    Duck-typed on the class NAME rather than importing `ollama`, so this module
+    stays free of provider-SDK imports like every other dispatch branch. Paired
+    with the ``.error`` substring, a false positive is not reachable in practice.
+    """
+    if type(exc).__name__ != "ResponseError":
+        return False
+    error = getattr(exc, "error", None)
+    return isinstance(error, str) and _OLLAMA_TOOLS_UNSUPPORTED_MARKER in error
+
+
+def _ollama_usage_attrs(response: Any) -> _UsageAttrs:
+    return _UsageAttrs(
         input_tokens=getattr(response, "prompt_eval_count", None),
         output_tokens=getattr(response, "eval_count", None),
         response_id=None,
     )
-    return (_response_to_mapping(response), usage_attrs)
+
+
+def _ollama_response_bundle(response: Any) -> tuple[Mapping[str, Any], _UsageAttrs]:
+    return (_response_to_mapping(response), _ollama_usage_attrs(response))
+
+
+def _ollama_message(response: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Read the assistant turn off an ollama ``ChatResponse`` dump.
+
+    Ollama has NO ``choices[]`` envelope — ``ChatResponse.message`` is
+    top-level (`ollama/_types.py:418`).
+    """
+    message = response.get("message")
+    if not isinstance(message, Mapping):
+        raise LLMDispatchPayloadShapeError("Ollama response message missing")
+    return cast(Mapping[str, Any], message)
+
+
+def _ollama_tool_calls(response: Mapping[str, Any]) -> tuple[Mapping[str, Any], ...]:
+    message = _ollama_message(response)
+    tool_calls = message.get("tool_calls")
+    if tool_calls is None:
+        return ()
+    if isinstance(tool_calls, str | bytes) or not isinstance(tool_calls, Sequence):
+        raise LLMDispatchPayloadShapeError("Ollama tool_calls must be a sequence")
+    calls: list[Mapping[str, Any]] = []
+    for item in cast(Sequence[object], tool_calls):
+        if not isinstance(item, Mapping):
+            raise LLMDispatchPayloadShapeError("Ollama tool_call entries must be mappings")
+        calls.append(cast(Mapping[str, Any], item))
+    return tuple(calls)
+
+
+def _ollama_prepared_memory_tool_calls(
+    calls: Sequence[Mapping[str, Any]],
+    *,
+    memory_context: RuntimeMemoryContext,
+    step_context: StepExecutionContext,
+    step_id: str,
+    model: str,
+) -> tuple[_PreparedMemoryToolCall, ...]:
+    """Resolve + validate the COMPLETE batch before any of it executes.
+
+    Mirrors `_openai_prepared_memory_tool_calls` exactly, minus the tool-call-id
+    check ollama has no field for. See `_PreparedMemoryToolCall`.
+    """
+    prepared: list[_PreparedMemoryToolCall] = []
+    for call in calls:
+        tool_name, arguments = _ollama_memory_tool_name_and_arguments(call)
+        prepared.append(
+            _PreparedMemoryToolCall(
+                tool_name=tool_name,
+                request=MemoryToolExecutionRequest(
+                    tool_name=tool_name,
+                    arguments=arguments,
+                    context=_standard_memory_tool_context(
+                        arguments,
+                        tool_name=tool_name,
+                        memory_context=memory_context,
+                        step_context=step_context,
+                        step_id=step_id,
+                        provider="ollama",
+                        model=model,
+                    ),
+                ),
+            )
+        )
+    return tuple(prepared)
+
+
+def _ollama_memory_tool_result_messages(
+    prepared: Sequence[_PreparedMemoryToolCall],
+    *,
+    standard_memory_tool_executor: Any,
+) -> list[dict[str, Any]]:
+    """Execute an ALREADY-VALIDATED batch in order and build its result turns.
+
+    Ollama's `Message` carries NO `tool_call_id` — the typed client drops the
+    daemon's tool-call id entirely, so no correlation id is reachable. The
+    tool-result turn correlates by NAME via `Message.tool_name`
+    (`ollama/_types.py:330`); an extra `tool_call_id` key would be silently
+    dropped by the pydantic model, so it is deliberately not emitted.
+    """
+    messages: list[dict[str, Any]] = []
+    for call in prepared:
+        result = standard_memory_tool_executor.execute(call.request)
+        messages.append(
+            {
+                "role": "tool",
+                "tool_name": call.tool_name.value,
+                "content": json.dumps(result, sort_keys=True, separators=(",", ":"), default=str),
+            }
+        )
+    return messages
+
+
+def _ollama_memory_tool_name_and_arguments(
+    call: Mapping[str, Any],
+) -> tuple[MemoryToolName, dict[str, object]]:
+    function = call.get("function")
+    if not isinstance(function, Mapping):
+        raise LLMDispatchPayloadShapeError("Ollama memory tool_call.function missing")
+    function_mapping = cast(Mapping[str, object], function)
+    name = function_mapping.get("name")
+    if not isinstance(name, str) or not name:
+        raise LLMDispatchPayloadShapeError("Ollama memory tool_call.function.name missing")
+    try:
+        tool_name = MemoryToolName(name)
+    except ValueError as exc:
+        raise LLMDispatchPayloadShapeError(
+            f"Ollama standard memory loop received non-memory tool {name!r}"
+        ) from exc
+    raw_arguments = function_mapping.get("arguments")
+    # `Message.ToolCall.Function.arguments` is typed `Mapping[str, Any]`
+    # (`ollama/_types.py:346`) — already decoded, so the happy path does NOT
+    # json.loads. A JSON string is still accepted defensively for client
+    # versions / hand-rolled stubs that hand back the OpenAI-shaped encoding.
+    if isinstance(raw_arguments, Mapping):
+        return (tool_name, dict(cast(Mapping[str, object], raw_arguments)))
+    if isinstance(raw_arguments, str):
+        try:
+            parsed = json.loads(raw_arguments)
+        except json.JSONDecodeError as exc:
+            raise LLMDispatchPayloadShapeError(
+                f"Ollama memory tool {name!r} arguments are not valid JSON"
+            ) from exc
+        if not isinstance(parsed, Mapping):
+            raise LLMDispatchPayloadShapeError(
+                f"Ollama memory tool {name!r} arguments must decode to an object"
+            )
+        return (tool_name, dict(cast(Mapping[str, object], parsed)))
+    raise LLMDispatchPayloadShapeError(f"Ollama memory tool {name!r} arguments missing")
+
+
+def _ollama_tools_with_standard_memory(
+    existing_tools: object,
+    memory_context: RuntimeMemoryContext,
+) -> list[dict[str, Any]]:
+    # Drop a caller-supplied tool that names one of the injected memory tools.
+    # The collision set is the DOTTED provider-neutral identities only — unlike
+    # OpenAI, ollama needs no second wire spelling, so there is no second name
+    # to collide on.
+    memory_tool_names = {entry.tool.value for entry in MEMORY_TOOL_CONTRACTS}
+    preserved: list[dict[str, Any]] = []
+    if isinstance(existing_tools, Sequence) and not isinstance(existing_tools, str | bytes):
+        for tool in cast(Sequence[object], existing_tools):
+            if not isinstance(tool, Mapping):
+                continue
+            tool_mapping = dict(cast(Mapping[str, Any], tool))
+            if _function_tool_name(tool_mapping) in memory_tool_names:
+                continue
+            preserved.append(tool_mapping)
+    return [*preserved, *_ollama_standard_memory_tools(memory_context)]
+
+
+def _ollama_standard_memory_tools(memory_context: RuntimeMemoryContext) -> list[dict[str, Any]]:
+    if memory_context.scope_ref is None:
+        raise MemoryToolExecutionInputError(
+            "standard memory tool schema injection requires RuntimeMemoryContext.scope_ref"
+        )
+    tools: list[dict[str, Any]] = []
+    for entry in MEMORY_TOOL_CONTRACTS:
+        # deepcopy BEFORE mutating — `entry.contract.input_schema` is the shared
+        # module-level contract object; binding the fixed values in place would
+        # leak this dispatch's scope_ref/policy_ref into every concurrent one.
+        parameters: dict[str, object] = deepcopy(entry.contract.input_schema)
+        properties = parameters.get("properties")
+        if not isinstance(properties, dict):
+            raise MemoryToolExecutionInputError("memory tool input schema properties missing")
+        schema_properties = cast("dict[str, object]", properties)
+        _bind_schema_fixed_value(schema_properties, "scope_ref", memory_context.scope_ref)
+        _bind_schema_fixed_value(schema_properties, "policy_ref", memory_context.policy_ref)
+        tools.append(
+            {
+                "type": "function",
+                "function": {
+                    # DOTTED provider-neutral identity — no wire-name map on this
+                    # path (see `_dispatch_ollama_with_standard_memory_tools`).
+                    "name": entry.tool.value,
+                    "description": entry.contract.description,
+                    "parameters": parameters,
+                },
+            }
+        )
+    return tools
 
 
 async def _dispatch_external_cli(

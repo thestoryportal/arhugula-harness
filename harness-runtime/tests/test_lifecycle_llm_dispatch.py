@@ -26,15 +26,20 @@ import json
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
 from typing import Any, cast
 
 import pytest
-from harness_as.memory_tool_contracts import MemoryToolName
+from harness_as.memory_tool_contracts import (
+    MEMORY_TOOL_CONTRACTS,
+    MemoryToolName,
+    memory_tool_contract,
+)
 from harness_as.sandbox_tier import BlastRadiusTier, SandboxTier
 from harness_as.tool_contract import ToolContract
-from harness_core import PersonaTier
+from harness_core import DeploymentSurface, PersonaTier
 from harness_core.identity import StepID
 from harness_core.workload_class import WorkloadClass
 from harness_cp.cp_shared_types import AgentRole, ModelBinding, RouterResolution
@@ -79,6 +84,15 @@ from harness_cp.workflow_driver_types import (
 )
 from harness_cp.workflow_manifest_entry import StepOverride, WorkflowManifestEntry
 from harness_is.memory_operation_ledger import MemoryOperationWriteResult
+from harness_is.memory_path_registry import MemoryRootBinding
+from harness_is.memory_policy import (
+    AccessDecision,
+    CaptureDecision,
+    MemoryPolicyDocument,
+    MemoryPolicyResolver,
+    PromotionDecision,
+    ReviewMode,
+)
 from harness_is.memory_record_envelope import (
     MemoryID,
     MemoryRecordKind,
@@ -89,7 +103,10 @@ from harness_is.memory_retrieval import (
     MemoryPacket,
     MemoryPacketAccessMode,
     MemoryPacketSection,
+    MemoryRetriever,
 )
+from harness_is.memory_retrieval_index import DerivedRetrievalIndexStore
+from harness_is.memory_store import CanonicalMemoryStore
 from harness_is.state_ledger_entry_schema import Actor, ActorClass, Identifier
 from harness_od.audit_ledger_types import SignatureAlgorithm
 from harness_runtime.lifecycle import llm_dispatch as llm_dispatch_module
@@ -128,6 +145,11 @@ from harness_runtime.lifecycle.retry_breaker_fallback import (
 )
 from harness_runtime.lifecycle.sync_dispatcher_facade import SyncDispatcherFacade
 from harness_runtime.memory_context import RuntimeMemoryContext
+from harness_runtime.memory_tool_executor import (
+    MemoryToolExecutionInputError,
+    StandardMemoryToolExecutor,
+)
+from ollama import ResponseError as OllamaResponseError
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -288,6 +310,10 @@ class _OpenAIFakeAdapter:
 class _OllamaClient:
     def __init__(self) -> None:
         self.last_kwargs: dict[str, Any] | None = None
+        self.calls: list[dict[str, Any]] = []
+        self.responses: list[_OllamaResponse] = []
+        #: Positional per-call side effects; `None` means "no error this call".
+        self.errors: list[BaseException | None] = []
         self.canned_response = _OllamaResponse(
             prompt_eval_count=20,
             eval_count=8,
@@ -296,6 +322,16 @@ class _OllamaClient:
 
     async def chat(self, **kwargs: Any) -> _OllamaResponse:
         self.last_kwargs = kwargs
+        # Snapshot the mutable continuation-turn `messages` list — the memory
+        # tool loop appends to it in place across turns, so a shared reference
+        # would make every recorded call show only the FINAL message state.
+        self.calls.append({**kwargs, "messages": list(kwargs.get("messages", []))})
+        if self.errors:
+            error = self.errors.pop(0)
+            if error is not None:
+                raise error
+        if self.responses:
+            return self.responses.pop(0)
         return self.canned_response
 
 
@@ -1438,7 +1474,7 @@ async def test_openai_standard_memory_tool_loop_executes_provider_neutral_tool()
     ]
     executor = _FakeStandardMemoryToolExecutor()
     adapter = _OpenAIFakeAdapter(client)
-    tp, _ = _tracer_provider_with_exporter()
+    tp, exporter = _tracer_provider_with_exporter()
     dispatcher = RuntimeLLMDispatcher(
         providers={"openai": adapter},
         tracer_provider=tp,
@@ -1498,6 +1534,15 @@ async def test_openai_standard_memory_tool_loop_executes_provider_neutral_tool()
     assert continuation[-1]["tool_call_id"] == "call_memory_search"
     assert continuation[-1]["name"] == "memory_search"
     assert json.loads(continuation[-1]["content"])["results"][0]["record_kind"] == "preference"
+
+    # Usage is ACCUMULATED across every provider call in the loop. The two calls
+    # carry distinct counts (10/4 then 12/5), so the sums 22/9 are discriminating:
+    # a final-turn-only bundle reads 12/5, a first-turn-only bundle reads 10/4.
+    attrs = exporter.get_finished_spans()[0].attributes or {}
+    assert attrs["gen_ai.usage.input_tokens"] == 10 + 12
+    assert attrs["gen_ai.usage.output_tokens"] == 4 + 5
+    # `response_id` is NOT accumulated — it identifies ONE response, the final one.
+    assert attrs["gen_ai.response.id"] == "cmpl_final_001"
 
 
 @pytest.mark.asyncio
@@ -1595,6 +1640,1276 @@ def test_openai_memory_tool_wire_name_resolves_back_to_provider_neutral_identity
             }
         )
     assert "non-memory tool" in str(excinfo.value)
+
+
+# ---------------------------------------------------------------------------
+# B-82 round 1 (out-of-family Codex) — durable-double-write hardening.
+#
+# Both memory tool loops previously (a) executed earlier calls in a batch before
+# validating later ones, and (b) executed the final iteration's batch before
+# raising loop-exhausted. Both aborts classify TRANSIENT_RETRY
+# (`retry_breaker_fallback.py:299-304` — only ProviderUnreachable / PayloadShape
+# / 401-403 are fail-fast), so `RetryBreakerFallbackDispatcher` re-runs the whole
+# dispatch and an already-committed `memory.write_note` runs twice.
+# ---------------------------------------------------------------------------
+
+
+def _openai_tool_call(call_id: str, name: str, **arguments: Any) -> dict[str, Any]:
+    return {
+        "id": call_id,
+        "type": "function",
+        "function": {"name": name, "arguments": json.dumps(arguments, sort_keys=True)},
+    }
+
+
+def _openai_tool_call_dump(response_id: str, *calls: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": response_id,
+        "choices": [{"message": {"role": "assistant", "content": None, "tool_calls": list(calls)}}],
+    }
+
+
+@pytest.mark.asyncio
+async def test_openai_memory_tool_batch_is_validated_before_any_call_executes() -> None:
+    """An invalid LATER call must abort BEFORE the earlier one commits.
+
+    The earlier call here is a WRITE (`memory.write_note`). Executing it and
+    then raising on call 2 leaves durable memory state changed for a dispatch
+    that reports a retryable failure — the double-write class.
+    """
+    client = _OpenAIClient()
+    client.chat.completions.responses = [
+        _ProviderResponse(
+            id="cmpl_batch",
+            usage=_Usage(prompt_tokens=10, completion_tokens=4),
+            _dump=_openai_tool_call_dump(
+                "cmpl_batch",
+                _openai_tool_call(
+                    "call_write",
+                    "memory_write_note",
+                    note="durable",
+                    scope_ref="scope:u-mem-16",
+                    policy_ref="policy:u-mem-16",
+                ),
+                # A MEMORY-named call with a malformed payload — the case that
+                # still fails loud. (A non-memory name is the caller's and is
+                # handed back instead; witnessed separately below.)
+                {
+                    "id": "call_bad_args",
+                    "type": "function",
+                    "function": {"name": "memory_search", "arguments": "not json at all"},
+                },
+            ),
+        )
+    ]
+    executor = _FakeStandardMemoryToolExecutor()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"openai": _OpenAIFakeAdapter(client)},
+        tracer_provider=_tracer_provider_with_exporter()[0],
+        memory_context=_standard_tools_memory_context(),
+        standard_memory_tool_executor=executor,
+    )
+
+    with pytest.raises(LLMDispatchPayloadShapeError):
+        await dispatcher.dispatch(_binding("openai"), _step(), step_context=_step_context())
+
+    assert executor.requests == [], (
+        "the whole batch must be validated before ANY call executes; the "
+        f"write-like call 1 ran anyway ({len(executor.requests)} execution(s))"
+    )
+
+
+@pytest.mark.asyncio
+async def test_openai_memory_tool_loop_raises_exhaustion_before_executing_final_batch() -> None:
+    """At the iteration bound, the final batch must NOT execute.
+
+    Its results can never be sent back, so the dispatch fails regardless —
+    executing it commits a write for a failed, retryable dispatch.
+    """
+    client = _OpenAIClient()
+    # Every turn asks for a tool call, so the loop runs to its bound.
+    client.chat.completions.canned_response = _ProviderResponse(
+        id="cmpl_forever",
+        usage=_Usage(prompt_tokens=10, completion_tokens=4),
+        _dump=_openai_tool_call_dump(
+            "cmpl_forever",
+            _openai_tool_call(
+                "call_write",
+                "memory_write_note",
+                note="durable",
+                scope_ref="scope:u-mem-16",
+                policy_ref="policy:u-mem-16",
+            ),
+        ),
+    )
+    executor = _FakeStandardMemoryToolExecutor()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"openai": _OpenAIFakeAdapter(client)},
+        tracer_provider=_tracer_provider_with_exporter()[0],
+        memory_context=_standard_tools_memory_context(),
+        standard_memory_tool_executor=executor,
+    )
+
+    with pytest.raises(RuntimeError) as excinfo:
+        await dispatcher.dispatch(_binding("openai"), _step(), step_context=_step_context())
+
+    assert "exceeded 16 continuation turns" in str(excinfo.value)
+    assert len(client.chat.completions.calls) == 16
+    # 16 turns requested tools; only the first 15 could have their results sent
+    # back, so exactly 15 executed. Pre-fix this was 16.
+    assert len(executor.requests) == 15, (
+        "the final iteration's batch must not execute — nothing can carry its "
+        f"results back; got {len(executor.requests)} executions"
+    )
+
+
+@pytest.mark.asyncio
+async def test_openai_malformed_terminal_batch_raises_shape_error_not_exhaustion() -> None:
+    """OpenAI mirror — validation precedes the bound check, so a malformed
+    memory call fails fast instead of being masked by retryable exhaustion."""
+    client = _OpenAIClient()
+    good = _ProviderResponse(
+        id="cmpl_ok",
+        usage=_Usage(prompt_tokens=10, completion_tokens=4),
+        _dump=_openai_tool_call_dump(
+            "cmpl_ok",
+            _openai_tool_call(
+                "call_search",
+                "memory_search",
+                query="x",
+                scope_ref="scope:u-mem-16",
+                policy_ref="policy:u-mem-16",
+            ),
+        ),
+    )
+    # 15 well-formed turns, then a MALFORMED one exactly at the bound.
+    client.chat.completions.responses = [good] * 15 + [
+        _ProviderResponse(
+            id="cmpl_bad",
+            usage=_Usage(prompt_tokens=10, completion_tokens=4),
+            _dump=_openai_tool_call_dump(
+                "cmpl_bad",
+                {
+                    "id": "call_bad_args",
+                    "type": "function",
+                    "function": {"name": "memory_search", "arguments": "not json at all"},
+                },
+            ),
+        )
+    ]
+    executor = _FakeStandardMemoryToolExecutor()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"openai": _OpenAIFakeAdapter(client)},
+        tracer_provider=_tracer_provider_with_exporter()[0],
+        memory_context=_standard_tools_memory_context(),
+        standard_memory_tool_executor=executor,
+    )
+
+    with pytest.raises(LLMDispatchPayloadShapeError) as excinfo:
+        await dispatcher.dispatch(_binding("openai"), _step(), step_context=_step_context())
+
+    assert "continuation turns" not in str(excinfo.value), (
+        "the malformed terminal batch must surface as a fail-fast payload-shape "
+        "error, not be masked by the retryable exhaustion RuntimeError"
+    )
+    assert len(client.chat.completions.calls) == 16
+    assert len(executor.requests) == 15
+
+
+@pytest.mark.asyncio
+async def test_openai_multi_call_batch_executes_in_order_and_correlates_per_call() -> None:
+    """TWO memory calls in ONE response — order and per-call correlation.
+
+    Every single-call test passes under a loop that truncates, reverses, or
+    mispairs the batch, because with N==1 those are all no-ops. This is the
+    witness that N>1 is handled correctly.
+    """
+    search_call = _openai_tool_call(
+        "call_search",
+        "memory_search",
+        query="first",
+        scope_ref="scope:u-mem-16",
+        policy_ref="policy:u-mem-16",
+    )
+    write_call = _openai_tool_call(
+        "call_write",
+        "memory_write_note",
+        note="second",
+        scope_ref="scope:u-mem-16",
+        policy_ref="policy:u-mem-16",
+    )
+    client = _OpenAIClient()
+    client.chat.completions.responses = [
+        _ProviderResponse(
+            id="cmpl_batch2",
+            usage=_Usage(prompt_tokens=10, completion_tokens=4),
+            _dump=_openai_tool_call_dump("cmpl_batch2", search_call, write_call),
+        ),
+        _ProviderResponse(
+            id="cmpl_done",
+            usage=_Usage(prompt_tokens=12, completion_tokens=5),
+            _dump={"id": "cmpl_done", "choices": [{"message": {"role": "assistant"}}]},
+        ),
+    ]
+    executor = _FakeStandardMemoryToolExecutor()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"openai": _OpenAIFakeAdapter(client)},
+        tracer_provider=_tracer_provider_with_exporter()[0],
+        memory_context=_standard_tools_memory_context(),
+        standard_memory_tool_executor=executor,
+    )
+
+    await dispatcher.dispatch(_binding("openai"), _step(), step_context=_step_context())
+
+    # (i) both executed, (ii) in the order the provider asked for.
+    assert [r.tool_name for r in executor.requests] == [
+        MemoryToolName.SEARCH,
+        MemoryToolName.WRITE_NOTE,
+    ]
+    assert executor.requests[0].arguments["query"] == "first"
+    assert executor.requests[1].arguments["note"] == "second"
+
+    # (iv) BOTH result turns reached the continuation, after the assistant turn.
+    continuation = client.chat.completions.calls[1]["messages"]
+    tool_turns = [m for m in continuation if m.get("role") == "tool"]
+    assert len(tool_turns) == 2
+    # (iii) each result turn correlates to ITS OWN call, not to prepared[0].
+    assert [t["tool_call_id"] for t in tool_turns] == ["call_search", "call_write"]
+    assert [t["name"] for t in tool_turns] == ["memory_search", "memory_write_note"]
+
+
+@pytest.mark.asyncio
+async def test_openai_memory_read_executes_without_a_scope_ref_argument() -> None:
+    """`memory.read` declares NO `scope_ref` — requiring one made it unreachable.
+
+    `memory.read` / `memory.propose_promotion` / `memory.request_redaction`
+    declare no `scope_ref` AND set `additionalProperties: false`
+    (`harness-as/src/harness_as/memory_tool_contracts.py`), so a schema-conformant
+    model cannot send one. The executor draws the same line — `_require_scope_ref`
+    is reached only from `_search` / `_write_note`
+    (`memory_tool_executor.py:195` / `:262`).
+    """
+    client = _OpenAIClient()
+    client.chat.completions.responses = [
+        _ProviderResponse(
+            id="cmpl_read",
+            usage=_Usage(prompt_tokens=10, completion_tokens=4),
+            _dump=_openai_tool_call_dump(
+                "cmpl_read",
+                _openai_tool_call(
+                    "call_read",
+                    "memory_read",
+                    memory_ref="mem:semantic:preference:" + ("a" * 64),
+                    policy_ref="policy:u-mem-16",
+                ),
+            ),
+        ),
+        _ProviderResponse(
+            id="cmpl_done",
+            usage=_Usage(prompt_tokens=12, completion_tokens=5),
+            _dump={"id": "cmpl_done", "choices": [{"message": {"role": "assistant"}}]},
+        ),
+    ]
+    executor = _FakeStandardMemoryToolExecutor()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"openai": _OpenAIFakeAdapter(client)},
+        tracer_provider=_tracer_provider_with_exporter()[0],
+        memory_context=_standard_tools_memory_context(),
+        standard_memory_tool_executor=executor,
+    )
+
+    await dispatcher.dispatch(_binding("openai"), _step(), step_context=_step_context())
+
+    assert [r.tool_name for r in executor.requests] == [MemoryToolName.READ]
+    # The authoritative scope_ref is the CONTEXT's, never the argument's.
+    assert executor.requests[0].context.scope_ref == "scope:u-mem-16"
+    assert "scope_ref" not in executor.requests[0].arguments
+
+
+@pytest.mark.asyncio
+async def test_openai_mixed_memory_and_caller_tool_batch_returns_to_caller() -> None:
+    """A batch containing a caller-advertised tool goes back to the caller whole.
+
+    Auto-injected memory tools must not break ordinary tool workflows, and no
+    memory call from a mixed batch may execute before control returns.
+    """
+    memory_call = _openai_tool_call(
+        "call_search",
+        "memory_search",
+        query="x",
+        scope_ref="scope:u-mem-16",
+        policy_ref="policy:u-mem-16",
+    )
+    caller_call = _openai_tool_call("call_weather", "weather_lookup", city="lisbon")
+    client = _OpenAIClient()
+    client.chat.completions.responses = [
+        _ProviderResponse(
+            id="cmpl_mixed",
+            usage=_Usage(prompt_tokens=10, completion_tokens=4),
+            _dump=_openai_tool_call_dump("cmpl_mixed", memory_call, caller_call),
+        )
+    ]
+    executor = _FakeStandardMemoryToolExecutor()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"openai": _OpenAIFakeAdapter(client)},
+        tracer_provider=_tracer_provider_with_exporter()[0],
+        memory_context=_standard_tools_memory_context(),
+        standard_memory_tool_executor=executor,
+    )
+
+    result = await dispatcher.dispatch(
+        _binding("openai"),
+        _step(
+            {
+                "messages": [{"role": "user", "content": "hi"}],
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {"name": "weather_lookup", "parameters": {"type": "object"}},
+                    }
+                ],
+                "params": {"max_tokens": 100},
+            }
+        ),
+        step_context=_step_context(),
+    )
+
+    assert executor.requests == [], "no memory call may execute from a caller-owned batch"
+    assert len(client.chat.completions.calls) == 1, "the loop must not continue"
+    assert result["choices"][0]["message"]["tool_calls"] == [memory_call, caller_call]
+
+
+@pytest.mark.asyncio
+async def test_openai_caller_only_tool_batch_matches_bare_path_semantics() -> None:
+    """Bare-path parity: a non-memory tool_call is returned, never raised on.
+
+    `_dispatch_openai` returns every tool_call to the caller untouched whatever
+    it names, so a hallucinated name is handed back too rather than becoming a
+    new failure mode that only appears once automatic memory is enabled.
+    """
+    hallucinated = _openai_tool_call("call_ghost", "not_a_tool_anyone_advertised")
+    client = _OpenAIClient()
+    client.chat.completions.responses = [
+        _ProviderResponse(
+            id="cmpl_ghost",
+            usage=_Usage(prompt_tokens=10, completion_tokens=4),
+            _dump=_openai_tool_call_dump("cmpl_ghost", hallucinated),
+        )
+    ]
+    executor = _FakeStandardMemoryToolExecutor()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"openai": _OpenAIFakeAdapter(client)},
+        tracer_provider=_tracer_provider_with_exporter()[0],
+        memory_context=_standard_tools_memory_context(),
+        standard_memory_tool_executor=executor,
+    )
+
+    result = await dispatcher.dispatch(_binding("openai"), _step(), step_context=_step_context())
+
+    assert executor.requests == []
+    assert result["choices"][0]["message"]["tool_calls"] == [hallucinated]
+
+
+# ---------------------------------------------------------------------------
+# B-82 — Ollama standard memory tools (C-MEM-14).
+#
+# `select_memory_access_mode` selects STANDARD_MEMORY_TOOLS for ollama, so the
+# bare ollama branch silently degraded the selected mode to ZERO memory access.
+# Unlike the OpenAI arm there is no wire-name encoding: ollama's `/api/chat`
+# accepts the DOTTED provider-neutral identities verbatim.
+# ---------------------------------------------------------------------------
+
+
+class _FakeStandardMemoryToolExecutor:
+    def __init__(self) -> None:
+        self.requests: list[Any] = []
+
+    def execute(self, request: Any) -> dict[str, object]:
+        self.requests.append(request)
+        return {
+            "results": [
+                {
+                    "memory_ref": "mem:semantic:preference:" + ("a" * 64),
+                    "record_kind": "preference",
+                    "packet_section_ref": "active_operator_project_preferences",
+                    "packet_hash": "b" * 64,
+                    "score": 100,
+                }
+            ],
+            "policy_ref": "policy:u-mem-16",
+        }
+
+
+def _ollama_memory_context() -> RuntimeMemoryContext:
+    return _standard_tools_memory_context(
+        provider="ollama",
+        model="llama3.2:3b",
+        family=ProviderFamily.LOCAL_OPEN_WEIGHT,
+    )
+
+
+def _real_memory_tool_executor(tmp_path: Path) -> StandardMemoryToolExecutor:
+    """A REAL `StandardMemoryToolExecutor` over a filesystem store under tmp_path.
+
+    Built exactly the way `tests/test_memory_tool_executor.py::_executor` builds
+    it, and pinned to the same `policy:u-mem-16` / `scope:u-mem-16` refs the
+    dispatch fixtures use, so a dispatch-composed context is accepted verbatim.
+    Needed because the `_FakeStandardMemoryToolExecutor` validates NOTHING —
+    required-argument-key enforcement lives in the executor
+    (`memory_tool_executor.py:266` -> `_string_arg` at `:549-553`), not at the
+    dispatch layer, so only a real executor can witness it.
+    """
+    binding = MemoryRootBinding(default_root=tmp_path / "memory")
+    surface = DeploymentSurface.LOCAL_DEVELOPMENT
+    store = CanonicalMemoryStore(root_binding=binding, deployment_surface=surface)
+    index_store = DerivedRetrievalIndexStore(root_binding=binding, deployment_surface=surface)
+    index_store.rebuild(indexed_at=datetime(2026, 7, 2, 18, 0, 0, tzinfo=UTC))
+    resolver = MemoryPolicyResolver(
+        MemoryPolicyDocument(
+            policy_id="policy:u-mem-16",
+            enabled=True,
+            capture_decision=CaptureDecision.CAPTURE_FULL,
+            promotion_decision=PromotionDecision.PROPOSE_SEMANTIC,
+            retrieval_access=AccessDecision.RETRIEVAL_ONLY,
+            standard_tool_access=AccessDecision.STANDARD_TOOLS,
+            review_mode=ReviewMode.OPERATOR_REQUIRED,
+        )
+    )
+    return StandardMemoryToolExecutor(
+        store=store,
+        index_store=index_store,
+        retriever=MemoryRetriever(
+            store=store,
+            index_store=index_store,
+            policy_resolver=resolver,
+            policy_ref="policy:u-mem-16",
+        ),
+        policy_resolver=resolver,
+    )
+
+
+def _ollama_write_note_dump(**arguments: Any) -> dict[str, Any]:
+    return _ollama_dump(
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{"function": {"name": "memory.write_note", "arguments": arguments}}],
+        }
+    )
+
+
+def _ollama_dump(message: dict[str, Any]) -> dict[str, Any]:
+    """An ollama `ChatResponse.model_dump()` — NO `choices[]`, message top-level."""
+    return {"model": "llama3.2:3b", "done": True, "message": message}
+
+
+@pytest.mark.asyncio
+async def test_ollama_standard_memory_tools_serialize_dotted_provider_neutral_names() -> None:
+    """The injected ollama tools carry the DOTTED C-MEM-14 identities.
+
+    Ollama imposes no `^[a-zA-Z0-9_-]{1,64}$` name grammar (the constraint that
+    forced the OpenAI wire-name map), so introducing one here would encode a
+    false capability claim. This asserts the serialized array directly.
+    """
+    client = _OllamaClient()
+    adapter = _OllamaFakeAdapter(client)
+    tp, _ = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"ollama": adapter},
+        tracer_provider=tp,
+        memory_context=_ollama_memory_context(),
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+    )
+
+    await dispatcher.dispatch(
+        _binding("ollama"),
+        _step(
+            {
+                "messages": [{"role": "user", "content": "search memory"}],
+                # A caller-supplied duplicate under the SAME dotted spelling —
+                # the only collision shape that exists on this path.
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {"name": "memory.search", "parameters": {"type": "object"}},
+                    },
+                    {
+                        "type": "function",
+                        "function": {"name": "weather.lookup", "parameters": {"type": "object"}},
+                    },
+                ],
+                "params": {"max_tokens": 100},
+            }
+        ),
+        step_context=_step_context(),
+    )
+
+    emitted = client.calls[0]["tools"]
+    names = [tool["function"]["name"] for tool in emitted]
+    # The length check matters: a set comparison alone cannot see a surviving
+    # caller duplicate of an injected name.
+    assert len(names) == len(MEMORY_TOOL_CONTRACTS) + 1, f"expected dedup; got {names!r}"
+    assert set(names) == {
+        "weather.lookup",
+        "memory.search",
+        "memory.read",
+        "memory.write_note",
+        "memory.propose_promotion",
+        "memory.request_redaction",
+    }, f"unexpected serialized memory tool names: {sorted(names)!r}"
+    # The scope_ref / policy_ref properties are bound to the dispatch's context,
+    # and the shared module-level contract schema is NOT mutated by the binding.
+    search = next(tool for tool in emitted if tool["function"]["name"] == "memory.search")
+    properties = search["function"]["parameters"]["properties"]
+    assert properties["scope_ref"] == {"type": "string", "enum": ["scope:u-mem-16"]}
+    assert properties["policy_ref"] == {"type": "string", "enum": ["policy:u-mem-16"]}
+    contract = memory_tool_contract(MemoryToolName.SEARCH).contract
+    assert contract.input_schema["properties"]["scope_ref"] != properties["scope_ref"]  # type: ignore[index]
+
+
+@pytest.mark.asyncio
+async def test_ollama_standard_memory_tool_loop_executes_provider_neutral_tool() -> None:
+    """A scripted ollama tool call round-trips through the executor.
+
+    Ollama hands back `arguments` ALREADY DECODED as a mapping
+    (`ollama/_types.py:346`), and its `Message` carries no `tool_call_id`
+    (`_types.py:304-355`) — the tool-result turn correlates by `tool_name`.
+    """
+    client = _OllamaClient()
+    tool_call = {
+        "function": {
+            # Ollama echoes back the dotted identity we advertised.
+            "name": "memory.search",
+            "arguments": {
+                "query": "codex memory",
+                "scope_ref": "scope:u-mem-16",
+                "policy_ref": "policy:u-mem-16",
+            },
+        }
+    }
+    client.responses = [
+        _OllamaResponse(
+            prompt_eval_count=20,
+            eval_count=8,
+            _dump=_ollama_dump(
+                {"role": "assistant", "content": "", "tool_calls": [tool_call]},
+            ),
+        ),
+        _OllamaResponse(
+            prompt_eval_count=31,
+            eval_count=9,
+            _dump=_ollama_dump({"role": "assistant", "content": "done"}),
+        ),
+    ]
+    executor = _FakeStandardMemoryToolExecutor()
+    adapter = _OllamaFakeAdapter(client)
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"ollama": adapter},
+        tracer_provider=tp,
+        memory_context=_ollama_memory_context(),
+        standard_memory_tool_executor=executor,
+    )
+
+    result = await dispatcher.dispatch(
+        _binding("ollama", model="llama3.2:3b"),
+        _step(),
+        step_context=_step_context(),
+    )
+
+    assert len(executor.requests) == 1
+    # The executor receives the provider-neutral `MemoryToolName`, and the
+    # arguments mapping passes through undecoded-by-us.
+    assert executor.requests[0].tool_name is MemoryToolName.SEARCH
+    assert executor.requests[0].arguments["query"] == "codex memory"
+    assert executor.requests[0].context.provider == "ollama"
+    assert executor.requests[0].context.policy_ref == "policy:u-mem-16"
+
+    assert len(client.calls) == 2
+    continuation = client.calls[1]["messages"]
+    assert continuation[-2] == {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [tool_call],
+    }
+    # The ollama tool-result turn shape — `tool_name`, NOT `tool_call_id`/`name`.
+    assert continuation[-1]["role"] == "tool"
+    assert continuation[-1]["tool_name"] == "memory.search"
+    assert "tool_call_id" not in continuation[-1]
+    assert json.loads(continuation[-1]["content"])["results"][0]["record_kind"] == "preference"
+
+    # The final bundle is the bare path's shape — top-level `message`, and usage
+    # ACCUMULATED across every provider call in the loop (no `response_id`).
+    # Both calls carry distinct counts (20/8 then 31/9), so the sums 51/17 are
+    # discriminating: a final-turn-only bundle reads 31/9, a first-turn-only
+    # bundle reads 20/8.
+    assert result["message"]["content"] == "done"
+    attrs = exporter.get_finished_spans()[0].attributes or {}
+    assert attrs["gen_ai.usage.input_tokens"] == 20 + 31
+    assert attrs["gen_ai.usage.output_tokens"] == 8 + 9
+    assert "gen_ai.response.id" not in attrs
+
+
+def test_ollama_memory_tool_call_resolution_fails_loud_on_unknown_name() -> None:
+    """A non-memory tool name in the memory loop raises the typed shape error."""
+    resolve = llm_dispatch_module._ollama_memory_tool_name_and_arguments
+
+    tool_name, arguments = resolve(
+        {"function": {"name": "memory.write_note", "arguments": {"scope_ref": "scope:x"}}}
+    )
+    assert tool_name is MemoryToolName.WRITE_NOTE
+    assert arguments == {"scope_ref": "scope:x"}
+
+    with pytest.raises(LLMDispatchPayloadShapeError) as excinfo:
+        resolve({"function": {"name": "memory_search", "arguments": {}}})
+    # `memory_search` is the OPENAI wire spelling — it is not a name this path
+    # ever advertises, so it fails loud rather than being silently tolerated.
+    assert "non-memory tool" in str(excinfo.value)
+
+
+def test_ollama_memory_tool_arguments_fail_loud_when_malformed() -> None:
+    """A JSON string is tolerated; junk and non-object arguments fail loud."""
+    resolve = llm_dispatch_module._ollama_memory_tool_name_and_arguments
+
+    _, arguments = resolve(
+        {"function": {"name": "memory.read", "arguments": '{"scope_ref": "scope:x"}'}}
+    )
+    assert arguments == {"scope_ref": "scope:x"}
+
+    with pytest.raises(LLMDispatchPayloadShapeError) as excinfo:
+        resolve({"function": {"name": "memory.read", "arguments": "not json at all"}})
+    assert "not valid JSON" in str(excinfo.value)
+
+    with pytest.raises(LLMDispatchPayloadShapeError) as excinfo:
+        resolve({"function": {"name": "memory.read", "arguments": "[1, 2]"}})
+    assert "must decode to an object" in str(excinfo.value)
+
+    with pytest.raises(LLMDispatchPayloadShapeError) as excinfo:
+        resolve({"function": {"name": "memory.read", "arguments": 17}})
+    assert "arguments missing" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_ollama_scope_ref_mismatch_fails_loud_mirroring_openai() -> None:
+    """A tool call whose `scope_ref` does not match the context fails loud.
+
+    Deliberately mirrors the OpenAI semantic (`_standard_memory_tool_context`
+    raises) — a feed-the-error-back-as-a-tool-turn recovery mechanism here
+    would be a per-provider divergence, i.e. a design extension.
+    """
+    client = _OllamaClient()
+    client.responses = [
+        _OllamaResponse(
+            prompt_eval_count=20,
+            eval_count=8,
+            _dump=_ollama_dump(
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "function": {
+                                "name": "memory.search",
+                                "arguments": {"query": "x", "scope_ref": "scope:someone-else"},
+                            }
+                        }
+                    ],
+                }
+            ),
+        )
+    ]
+    adapter = _OllamaFakeAdapter(client)
+    tp, _ = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"ollama": adapter},
+        tracer_provider=tp,
+        memory_context=_ollama_memory_context(),
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+    )
+
+    with pytest.raises(MemoryToolExecutionInputError):
+        await dispatcher.dispatch(_binding("ollama"), _step(), step_context=_step_context())
+
+
+@pytest.mark.asyncio
+async def test_ollama_memory_tool_batch_is_validated_before_any_call_executes() -> None:
+    """Ollama mirror of the OpenAI batch pre-validation witness.
+
+    Call 1 is a WRITE, call 2 is malformed (`arguments` is a non-JSON string).
+    Nothing may execute.
+    """
+    client = _OllamaClient()
+    client.responses = [
+        _OllamaResponse(
+            prompt_eval_count=20,
+            eval_count=8,
+            _dump=_ollama_dump(
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "function": {
+                                "name": "memory.write_note",
+                                "arguments": {
+                                    "note": "durable",
+                                    "scope_ref": "scope:u-mem-16",
+                                    "policy_ref": "policy:u-mem-16",
+                                },
+                            }
+                        },
+                        {"function": {"name": "memory.read", "arguments": "not json at all"}},
+                    ],
+                }
+            ),
+        )
+    ]
+    executor = _FakeStandardMemoryToolExecutor()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"ollama": _OllamaFakeAdapter(client)},
+        tracer_provider=_tracer_provider_with_exporter()[0],
+        memory_context=_ollama_memory_context(),
+        standard_memory_tool_executor=executor,
+    )
+
+    with pytest.raises(LLMDispatchPayloadShapeError):
+        await dispatcher.dispatch(_binding("ollama"), _step(), step_context=_step_context())
+
+    assert executor.requests == [], (
+        "the whole batch must be validated before ANY call executes; the "
+        f"write-like call 1 ran anyway ({len(executor.requests)} execution(s))"
+    )
+
+
+@pytest.mark.asyncio
+async def test_ollama_memory_tool_loop_raises_exhaustion_before_executing_final_batch() -> None:
+    """Ollama mirror of the OpenAI iteration-bound witness."""
+    client = _OllamaClient()
+    client.canned_response = _OllamaResponse(
+        prompt_eval_count=20,
+        eval_count=8,
+        _dump=_ollama_dump(
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "function": {
+                            "name": "memory.write_note",
+                            "arguments": {
+                                "note": "durable",
+                                "scope_ref": "scope:u-mem-16",
+                                "policy_ref": "policy:u-mem-16",
+                            },
+                        }
+                    }
+                ],
+            }
+        ),
+    )
+    executor = _FakeStandardMemoryToolExecutor()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"ollama": _OllamaFakeAdapter(client)},
+        tracer_provider=_tracer_provider_with_exporter()[0],
+        memory_context=_ollama_memory_context(),
+        standard_memory_tool_executor=executor,
+    )
+
+    with pytest.raises(RuntimeError) as excinfo:
+        await dispatcher.dispatch(_binding("ollama"), _step(), step_context=_step_context())
+
+    assert "exceeded 16 continuation turns" in str(excinfo.value)
+    assert len(client.calls) == 16
+    assert len(executor.requests) == 15, (
+        "the final iteration's batch must not execute — nothing can carry its "
+        f"results back; got {len(executor.requests)} executions"
+    )
+
+
+@pytest.mark.asyncio
+async def test_ollama_multi_call_batch_executes_in_order_and_correlates_per_call() -> None:
+    """Ollama mirror — TWO memory calls in ONE response.
+
+    Correlation here is by `tool_name` rather than a tool-call id (ollama's
+    client exposes none), so mispairing shows up as two turns naming the same
+    tool instead of one each.
+    """
+    search_call = {
+        "function": {
+            "name": "memory.search",
+            "arguments": {
+                "query": "first",
+                "scope_ref": "scope:u-mem-16",
+                "policy_ref": "policy:u-mem-16",
+            },
+        }
+    }
+    write_call = {
+        "function": {
+            "name": "memory.write_note",
+            "arguments": {
+                "note": "second",
+                "scope_ref": "scope:u-mem-16",
+                "policy_ref": "policy:u-mem-16",
+            },
+        }
+    }
+    client = _OllamaClient()
+    client.responses = [
+        _OllamaResponse(
+            prompt_eval_count=20,
+            eval_count=8,
+            _dump=_ollama_dump(
+                {"role": "assistant", "content": "", "tool_calls": [search_call, write_call]}
+            ),
+        ),
+        _OllamaResponse(
+            prompt_eval_count=31,
+            eval_count=9,
+            _dump=_ollama_dump({"role": "assistant", "content": "done"}),
+        ),
+    ]
+    executor = _FakeStandardMemoryToolExecutor()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"ollama": _OllamaFakeAdapter(client)},
+        tracer_provider=_tracer_provider_with_exporter()[0],
+        memory_context=_ollama_memory_context(),
+        standard_memory_tool_executor=executor,
+    )
+
+    result = await dispatcher.dispatch(_binding("ollama"), _step(), step_context=_step_context())
+
+    assert [r.tool_name for r in executor.requests] == [
+        MemoryToolName.SEARCH,
+        MemoryToolName.WRITE_NOTE,
+    ]
+    assert executor.requests[0].arguments["query"] == "first"
+    assert executor.requests[1].arguments["note"] == "second"
+
+    continuation = client.calls[1]["messages"]
+    tool_turns = [m for m in continuation if m.get("role") == "tool"]
+    assert len(tool_turns) == 2
+    assert [t["tool_name"] for t in tool_turns] == ["memory.search", "memory.write_note"]
+    assert result["message"]["content"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_ollama_memory_read_executes_without_a_scope_ref_argument() -> None:
+    """Ollama mirror — `memory.read` is reachable without a `scope_ref` argument."""
+    client = _OllamaClient()
+    client.responses = [
+        _OllamaResponse(
+            prompt_eval_count=20,
+            eval_count=8,
+            _dump=_ollama_dump(
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "function": {
+                                "name": "memory.read",
+                                "arguments": {
+                                    "memory_ref": "mem:semantic:preference:" + ("a" * 64),
+                                    "policy_ref": "policy:u-mem-16",
+                                },
+                            }
+                        }
+                    ],
+                }
+            ),
+        ),
+        _OllamaResponse(
+            prompt_eval_count=31,
+            eval_count=9,
+            _dump=_ollama_dump({"role": "assistant", "content": "done"}),
+        ),
+    ]
+    executor = _FakeStandardMemoryToolExecutor()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"ollama": _OllamaFakeAdapter(client)},
+        tracer_provider=_tracer_provider_with_exporter()[0],
+        memory_context=_ollama_memory_context(),
+        standard_memory_tool_executor=executor,
+    )
+
+    result = await dispatcher.dispatch(_binding("ollama"), _step(), step_context=_step_context())
+
+    assert [r.tool_name for r in executor.requests] == [MemoryToolName.READ]
+    assert executor.requests[0].context.scope_ref == "scope:u-mem-16"
+    assert "scope_ref" not in executor.requests[0].arguments
+    assert result["message"]["content"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_ollama_mixed_memory_and_caller_tool_batch_returns_to_caller() -> None:
+    """Ollama mirror — a mixed batch goes back to the caller, executing nothing."""
+    memory_call = {
+        "function": {
+            "name": "memory.search",
+            "arguments": {
+                "query": "x",
+                "scope_ref": "scope:u-mem-16",
+                "policy_ref": "policy:u-mem-16",
+            },
+        }
+    }
+    caller_call = {"function": {"name": "weather.lookup", "arguments": {"city": "lisbon"}}}
+    client = _OllamaClient()
+    client.responses = [
+        _OllamaResponse(
+            prompt_eval_count=20,
+            eval_count=8,
+            _dump=_ollama_dump(
+                {"role": "assistant", "content": "", "tool_calls": [memory_call, caller_call]}
+            ),
+        )
+    ]
+    executor = _FakeStandardMemoryToolExecutor()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"ollama": _OllamaFakeAdapter(client)},
+        tracer_provider=_tracer_provider_with_exporter()[0],
+        memory_context=_ollama_memory_context(),
+        standard_memory_tool_executor=executor,
+    )
+
+    result = await dispatcher.dispatch(
+        _binding("ollama"),
+        _step(
+            {
+                "messages": [{"role": "user", "content": "hi"}],
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {"name": "weather.lookup", "parameters": {"type": "object"}},
+                    }
+                ],
+                "params": {"max_tokens": 100},
+            }
+        ),
+        step_context=_step_context(),
+    )
+
+    assert executor.requests == [], "no memory call may execute from a caller-owned batch"
+    assert len(client.calls) == 1, "the loop must not continue"
+    assert result["message"]["tool_calls"] == [memory_call, caller_call]
+
+
+@pytest.mark.asyncio
+async def test_ollama_caller_only_tool_batch_matches_bare_path_semantics() -> None:
+    """Ollama mirror of the bare-path parity witness.
+
+    Note `memory_search` — the OPENAI wire spelling — is a caller-owned name on
+    this path: ollama advertises only the dotted identities, so the underscore
+    form names nothing we injected.
+    """
+    hallucinated = {"function": {"name": "memory_search", "arguments": {}}}
+    client = _OllamaClient()
+    client.responses = [
+        _OllamaResponse(
+            prompt_eval_count=20,
+            eval_count=8,
+            _dump=_ollama_dump({"role": "assistant", "content": "", "tool_calls": [hallucinated]}),
+        )
+    ]
+    executor = _FakeStandardMemoryToolExecutor()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"ollama": _OllamaFakeAdapter(client)},
+        tracer_provider=_tracer_provider_with_exporter()[0],
+        memory_context=_ollama_memory_context(),
+        standard_memory_tool_executor=executor,
+    )
+
+    result = await dispatcher.dispatch(_binding("ollama"), _step(), step_context=_step_context())
+
+    assert executor.requests == []
+    assert result["message"]["tool_calls"] == [hallucinated]
+
+
+@pytest.mark.asyncio
+async def test_ollama_write_note_round_trips_through_the_real_executor(tmp_path: Path) -> None:
+    """One witness through the REAL contract-validation boundary.
+
+    `_FakeStandardMemoryToolExecutor` accepts any arguments, so it cannot catch
+    a wrong required key. The real executor's `_write_note` reads the contract's
+    `note` via `_string_arg` (`memory_tool_executor.py:266` -> `:549-553`) —
+    that is where required-key enforcement actually lives (NOT at the dispatch
+    layer, which validates only `scope_ref`/`policy_ref`).
+    """
+    client = _OllamaClient()
+    client.responses = [
+        _OllamaResponse(
+            prompt_eval_count=20,
+            eval_count=8,
+            _dump=_ollama_write_note_dump(
+                note="durable",
+                scope_ref="scope:u-mem-16",
+                policy_ref="policy:u-mem-16",
+            ),
+        ),
+        _OllamaResponse(
+            prompt_eval_count=31,
+            eval_count=9,
+            _dump=_ollama_dump({"role": "assistant", "content": "noted"}),
+        ),
+    ]
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"ollama": _OllamaFakeAdapter(client)},
+        tracer_provider=_tracer_provider_with_exporter()[0],
+        memory_context=_ollama_memory_context(),
+        standard_memory_tool_executor=_real_memory_tool_executor(tmp_path),
+    )
+
+    result = await dispatcher.dispatch(_binding("ollama"), _step(), step_context=_step_context())
+
+    tool_turn = client.calls[1]["messages"][-1]
+    assert tool_turn["tool_name"] == "memory.write_note"
+    # The real executor's contract output — proof the write actually committed.
+    written = json.loads(tool_turn["content"])
+    assert written["memory_ref"]
+    assert written["operation_ref"]
+    assert written["policy_ref"] == "policy:u-mem-16"
+    assert result["message"]["content"] == "noted"
+
+
+@pytest.mark.asyncio
+async def test_ollama_write_note_with_the_wrong_required_key_fails_at_the_real_executor(
+    tmp_path: Path,
+) -> None:
+    """`text` is NOT the contract's key — `memory.write_note` requires `note`.
+
+    Guards the fixture bug the fake was hiding: with `_FakeStandardMemoryToolExecutor`
+    this call "succeeds"; against the real executor it fails loud.
+    """
+    client = _OllamaClient()
+    client.responses = [
+        _OllamaResponse(
+            prompt_eval_count=20,
+            eval_count=8,
+            _dump=_ollama_write_note_dump(
+                text="durable",
+                scope_ref="scope:u-mem-16",
+                policy_ref="policy:u-mem-16",
+            ),
+        )
+    ]
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"ollama": _OllamaFakeAdapter(client)},
+        tracer_provider=_tracer_provider_with_exporter()[0],
+        memory_context=_ollama_memory_context(),
+        standard_memory_tool_executor=_real_memory_tool_executor(tmp_path),
+    )
+
+    with pytest.raises(MemoryToolExecutionInputError) as excinfo:
+        await dispatcher.dispatch(_binding("ollama"), _step(), step_context=_step_context())
+
+    assert "'note'" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_ollama_malformed_terminal_batch_raises_shape_error_not_exhaustion() -> None:
+    """At the bound, a MALFORMED memory call must still fail fast.
+
+    Exhaustion is a bare `RuntimeError` → `TRANSIENT_RETRY`
+    (`retry_breaker_fallback.py:299-304`), so letting it mask a payload-shape
+    error would replay up to 16 provider calls for a request that can never
+    succeed. Validation therefore runs before the bound check.
+    """
+    client = _OllamaClient()
+    good = _OllamaResponse(
+        prompt_eval_count=20,
+        eval_count=8,
+        _dump=_ollama_dump(
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "function": {
+                            "name": "memory.search",
+                            "arguments": {
+                                "query": "x",
+                                "scope_ref": "scope:u-mem-16",
+                                "policy_ref": "policy:u-mem-16",
+                            },
+                        }
+                    }
+                ],
+            }
+        ),
+    )
+    # 15 well-formed turns, then a MALFORMED one exactly at the bound.
+    client.responses = [good] * 15 + [
+        _OllamaResponse(
+            prompt_eval_count=20,
+            eval_count=8,
+            _dump=_ollama_dump(
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {"function": {"name": "memory.read", "arguments": "not json at all"}}
+                    ],
+                }
+            ),
+        )
+    ]
+    executor = _FakeStandardMemoryToolExecutor()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"ollama": _OllamaFakeAdapter(client)},
+        tracer_provider=_tracer_provider_with_exporter()[0],
+        memory_context=_ollama_memory_context(),
+        standard_memory_tool_executor=executor,
+    )
+
+    with pytest.raises(LLMDispatchPayloadShapeError) as excinfo:
+        await dispatcher.dispatch(_binding("ollama"), _step(), step_context=_step_context())
+
+    assert "continuation turns" not in str(excinfo.value), (
+        "the malformed terminal batch must surface as a fail-fast payload-shape "
+        "error, not be masked by the retryable exhaustion RuntimeError"
+    )
+    assert len(client.calls) == 16
+    assert len(executor.requests) == 15
+
+
+@pytest.mark.asyncio
+async def test_ollama_tool_unsupported_model_falls_back_to_the_bare_text_path() -> None:
+    """A model with no tool template must keep working, exactly as pre-B-82.
+
+    `reflect_provider_capabilities` reports `supports_tools=True` for EVERY
+    ollama model string (`harness-cp/src/harness_cp/provider_capabilities.py:127`),
+    so the memory tools get injected even for e.g. `llava-llama3`, and the daemon
+    400s what used to be a working TEXT dispatch. The daemon — not a capability
+    table — is the authority, so the first call's rejection re-dispatches bare.
+
+    The error shape is the REAL `ollama.ResponseError`, probed live against
+    ollama 0.6.2: `.error` is the daemon's message, `.status_code` is 400.
+    """
+    client = _OllamaClient()
+    client.errors = [
+        OllamaResponseError(
+            "registry.ollama.ai/library/llava-llama3:latest does not support tools",
+            400,
+        )
+    ]
+    executor = _FakeStandardMemoryToolExecutor()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"ollama": _OllamaFakeAdapter(client)},
+        tracer_provider=_tracer_provider_with_exporter()[0],
+        memory_context=_ollama_memory_context(),
+        standard_memory_tool_executor=executor,
+    )
+
+    result = await dispatcher.dispatch(
+        _binding("ollama", model="llava-llama3:latest"),
+        _step(),
+        step_context=_step_context(),
+    )
+
+    assert result["message"]["content"] == "ok"
+    assert executor.requests == []
+    assert len(client.calls) == 2
+    # Call 1 carried the injected memory tools; the bare retry carries none.
+    assert len(client.calls[0]["tools"]) == len(MEMORY_TOOL_CONTRACTS)
+    assert "tools" not in client.calls[1], (
+        "the fallback must byte-restore the pre-B-82 bare dispatch — no tools at all"
+    )
+
+
+@pytest.mark.asyncio
+async def test_ollama_non_tool_response_errors_still_propagate() -> None:
+    """Only the tool-unsupported rejection is absorbed; everything else raises.
+
+    Same exception TYPE and a 4xx status, so the discriminator really is the
+    message — a blanket `except ResponseError` would swallow this one too.
+    """
+    client = _OllamaClient()
+    client.errors = [OllamaResponseError("model 'no-such-model:latest' not found", 404)]
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"ollama": _OllamaFakeAdapter(client)},
+        tracer_provider=_tracer_provider_with_exporter()[0],
+        memory_context=_ollama_memory_context(),
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+    )
+
+    with pytest.raises(OllamaResponseError) as excinfo:
+        await dispatcher.dispatch(_binding("ollama"), _step(), step_context=_step_context())
+
+    assert "not found" in str(excinfo.value)
+    assert len(client.calls) == 1, "a non-tool error must not trigger a bare retry"
+
+
+@pytest.mark.asyncio
+async def test_ollama_mid_loop_tool_unsupported_error_stays_fail_loud() -> None:
+    """The fallback is FIRST-call only.
+
+    A tool-unsupported rejection arriving mid-loop would mean the model changed
+    identity between continuation turns — not a case to paper over.
+    """
+    client = _OllamaClient()
+    client.errors = [
+        None,
+        OllamaResponseError("some-model does not support tools", 400),
+    ]
+    client.responses = [
+        _OllamaResponse(
+            prompt_eval_count=20,
+            eval_count=8,
+            _dump=_ollama_dump(
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "function": {
+                                "name": "memory.search",
+                                "arguments": {
+                                    "query": "x",
+                                    "scope_ref": "scope:u-mem-16",
+                                    "policy_ref": "policy:u-mem-16",
+                                },
+                            }
+                        }
+                    ],
+                }
+            ),
+        )
+    ]
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"ollama": _OllamaFakeAdapter(client)},
+        tracer_provider=_tracer_provider_with_exporter()[0],
+        memory_context=_ollama_memory_context(),
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+    )
+
+    with pytest.raises(OllamaResponseError):
+        await dispatcher.dispatch(_binding("ollama"), _step(), step_context=_step_context())
+
+    assert len(client.calls) == 2, "no bare retry — the mid-loop rejection propagates"
+
+
+@pytest.mark.asyncio
+async def test_ollama_without_standard_memory_tools_stays_on_the_bare_path() -> None:
+    """No standard-tools memory context bound → the bare branch, tools untouched.
+
+    Guards the B-82 branch guard against over-firing: a PROMPT_EXTENSION_PACKET
+    context (or no memory context at all) must NOT inject memory tools.
+    """
+    client = _OllamaClient()
+    adapter = _OllamaFakeAdapter(client)
+    tp, _ = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"ollama": adapter},
+        tracer_provider=tp,
+        memory_context=_prompt_extension_memory_context(provider="ollama"),
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+    )
+
+    await dispatcher.dispatch(_binding("ollama"), _step(), step_context=_step_context())
+
+    assert len(client.calls) == 1
+    assert "tools" not in client.calls[0]
 
 
 @pytest.mark.asyncio
