@@ -114,6 +114,7 @@ from harness_runtime.lifecycle.ask_user_question_surface import (
     AskUserQuestionResult,
     AskUserQuestionSurface,
 )
+from harness_runtime.lifecycle.cross_family_cost_tag import provider_family_for_provider
 from harness_runtime.lifecycle.engine_output_store import EngineOutputStore
 from harness_runtime.lifecycle.hitl_gate_composer import RuntimeHITLGateComposer
 from harness_runtime.lifecycle.hitl_tool_loop import HITLToolLoopContext, ModelToolCall
@@ -981,7 +982,12 @@ def _standard_tools_memory_context(
             project="arhugula-v2",
             workflow="memory-substrate",
             workload_class="coding-arc",
-            provider_family=ProviderFamily.OPENAI.value,
+            # B-83 [P1-c] — tracks `family` rather than being hardcoded OPENAI.
+            # `compose_for_dispatch` derives this from the fallback chain, and
+            # the dispatch-side serve-check compares it against the dispatched
+            # provider's family, so a fixture that claims OPENAI scope for an
+            # anthropic/ollama context is a lie the serve-check now catches.
+            provider_family=family.value,
             cli_profile="codex",
             visibility=MemoryVisibility.WORKFLOW,
         ),
@@ -2948,13 +2954,19 @@ def _b83_memory_context(
     *,
     provider: str,
     model: str = "test-model-1",
-    family: ProviderFamily = ProviderFamily.OPENAI,
+    family: ProviderFamily | None = None,
 ) -> RuntimeMemoryContext:
-    """A STANDARD_MEMORY_TOOLS context whose packet carries assertable text."""
+    """A STANDARD_MEMORY_TOOLS context whose packet carries assertable text.
+
+    `family` defaults to the provider's OWN family via the same authority the
+    dispatch-side serve-check uses, so a witness cannot accidentally assert a
+    scope its provider does not have. Pass it explicitly only to build the
+    deliberately-mismatched cross-family case (B-83 [P1-c]).
+    """
     return _standard_tools_memory_context(
         provider=provider,
         model=model,
-        family=family,
+        family=family if family is not None else provider_family_for_provider(provider),
         packet_sections=(
             MemoryPacketSection(
                 section_id="active_operator_project_preferences",
@@ -3082,6 +3094,174 @@ async def test_b83_provider_rebound_context_is_reported_but_never_served() -> No
 
 
 @pytest.mark.asyncio
+async def test_b83_cross_family_recomposed_context_is_reported_but_never_rendered() -> None:
+    """P1-c — provider IDENTITY matches, provider FAMILY does not.
+
+    The `memory_runtime` path recomposes per attempt, so on a cross-family
+    fallback `selection.selected_provider` becomes the CURRENT candidate and
+    the identity conjunct passes. But `compose_for_dispatch` derives
+    `record_scope.provider_family` from the fallback chain's PRIMARY
+    (`automatic_memory.py:191-199`) and `MemoryRetriever` filters records on
+    exactly that field (`memory_retrieval.py:371-384`), so the packet holds
+    OpenAI-family records while the dispatch is ollama. Rendering it is the
+    same disclosure leak one layer down, so this must be report-only — proven
+    through the R5 path, where the packet would otherwise be rendered.
+    """
+    client = _OllamaClient()
+    client.errors = [
+        OllamaResponseError("llava-llama3:latest does not support tools", 400),
+    ]
+    executor = _FakeStandardMemoryToolExecutor()
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"ollama": _OllamaFakeAdapter(client)},
+        tracer_provider=tp,
+        # Recomposed FOR ollama (identity matches) but scoped to the chain
+        # primary's OpenAI family — exactly what compose_for_dispatch produces
+        # on a cross-family fallback.
+        memory_context=_b83_memory_context(
+            provider="ollama",
+            model="llava-llama3:latest",
+            family=ProviderFamily.OPENAI,
+        ),
+        standard_memory_tool_executor=executor,
+    )
+
+    result = await dispatcher.dispatch(
+        _binding("ollama", model="llava-llama3:latest"),
+        _step(),
+        step_context=_step_context(),
+    )
+
+    assert result["message"]["content"] == "ok", "the tool-free retry must still succeed"
+    assert len(client.calls) == 2
+    retry = client.calls[1]
+    assert "tools" not in retry
+    serialized = json.dumps(retry["messages"])
+    assert _B83_SECTION_TEXT not in serialized, (
+        "an OpenAI-family-scoped packet must never be rendered for an ollama dispatch"
+    )
+    assert "read-only memory packet" not in serialized
+
+    spans = _degraded_serve_spans(exporter)
+    assert len(spans) == 1, "still reported, just not rendered"
+    attrs = dict(spans[0].attributes or {})
+    assert attrs["memory.degraded_serve.reason"] == "provider_family_scope_mismatch"
+    assert attrs["memory.operation.name"] == "denial"
+    assert attrs["memory.access_mode"] == "no_memory_access"
+    assert "memory.packet_hash" not in attrs
+
+
+@pytest.mark.asyncio
+async def test_b83_arm_repair_merges_into_a_payload_carried_system_message() -> None:
+    """P1-d — the ARM-SELECTION repair must not become a second system source.
+
+    Sibling of the R5 fix: an unservable-arm repair on a payload that already
+    leads with `{"role":"system"}` used to raise `PromptInjectionConflictError`
+    across the openai/ollama/external-CLI translators, breaking a dispatch that
+    worked before B-83. Exercised on the openai bare arm (no executor bound →
+    unservable) since it is the shortest path to the leading-system-message
+    translator.
+    """
+    client = _OpenAIClient()
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"openai": _OpenAIFakeAdapter(client)},
+        tracer_provider=tp,
+        memory_context=_b83_memory_context(provider="openai"),
+        # No executor → the openai arm cannot serve the selected mode.
+        standard_memory_tool_executor=None,
+    )
+
+    await dispatcher.dispatch(
+        _binding("openai"),
+        _step(
+            {
+                "messages": [
+                    {"role": "system", "content": "STEP-OWNED SYSTEM"},
+                    {"role": "user", "content": "hi"},
+                ],
+                "tools": None,
+                "params": {},
+            }
+        ),
+        step_context=_step_context(),
+    )
+
+    messages = client.chat.completions.calls[0]["messages"]
+    system_messages = [m for m in messages if m["role"] == "system"]
+    assert len(system_messages) == 1, "exactly one system source"
+    assert messages[0] is system_messages[0], "and it stays leading"
+    assert system_messages[0]["content"].startswith("STEP-OWNED SYSTEM\n\nread-only memory packet")
+    assert _B83_SECTION_TEXT in system_messages[0]["content"]
+    assert len(_degraded_serve_spans(exporter)) == 1
+
+
+@pytest.mark.asyncio
+async def test_b83_arm_repair_merges_into_anthropic_params_system() -> None:
+    """P1-d, anthropic arm — its single source is `params["system"]` when present.
+
+    Folding must happen at THAT source, not as the competing `system=` kwarg,
+    which would raise the pre-existing `params["system"]` conflict.
+    """
+    client = _AnthropicClient()
+    tp, _ = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": _AnthropicFakeAdapter(client)},
+        tracer_provider=tp,
+        memory_context=_b83_memory_context(provider="anthropic"),
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+    )
+
+    await dispatcher.dispatch(
+        _binding("anthropic"),
+        _step(
+            {
+                "messages": [{"role": "user", "content": "hi"}],
+                "tools": None,
+                "params": {"max_tokens": 100, "system": "PAYLOAD-OWNED SYSTEM"},
+            }
+        ),
+        step_context=_step_context(),
+    )
+
+    assert client.messages.last_kwargs is not None
+    system = client.messages.last_kwargs["system"]
+    assert system.startswith("PAYLOAD-OWNED SYSTEM\n\nread-only memory packet")
+    assert _B83_SECTION_TEXT in system
+
+
+@pytest.mark.asyncio
+async def test_b83_two_base_system_sources_still_fail_loud_through_the_repair() -> None:
+    """The repair folds; it never MASKS a genuine two-BASE-prompt collision.
+
+    An active prompt AND a payload-carried system source remain the
+    detect-then-refuse case (R-PM-1), packet or no packet.
+    """
+    tp, _ = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": _AnthropicFakeAdapter(_AnthropicClient())},
+        tracer_provider=tp,
+        memory_context=_b83_memory_context(provider="anthropic"),
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+        active_system_prompt="ACTIVE PROMPT",
+    )
+
+    with pytest.raises(PromptInjectionConflictError):
+        await dispatcher.dispatch(
+            _binding("anthropic"),
+            _step(
+                {
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "tools": None,
+                    "params": {"max_tokens": 100, "system": "PAYLOAD-OWNED SYSTEM"},
+                }
+            ),
+            step_context=_step_context(),
+        )
+
+
+@pytest.mark.asyncio
 async def test_b83_r5_retry_merges_the_packet_into_a_payload_carried_system_message() -> None:
     """P1-b — the R5 retry must never create a SECOND system source.
 
@@ -3100,11 +3280,7 @@ async def test_b83_r5_retry_merges_the_packet_into_a_payload_carried_system_mess
     dispatcher = RuntimeLLMDispatcher(
         providers={"ollama": _OllamaFakeAdapter(client)},
         tracer_provider=tp,
-        memory_context=_b83_memory_context(
-            provider="ollama",
-            model="llava-llama3:latest",
-            family=ProviderFamily.LOCAL_OPEN_WEIGHT,
-        ),
+        memory_context=_b83_memory_context(provider="ollama", model="llava-llama3:latest"),
         standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
     )
 
@@ -3156,11 +3332,7 @@ async def test_b83_ollama_tools_unsupported_retry_carries_the_packet() -> None:
     dispatcher = RuntimeLLMDispatcher(
         providers={"ollama": _OllamaFakeAdapter(client)},
         tracer_provider=tp,
-        memory_context=_b83_memory_context(
-            provider="ollama",
-            model="llava-llama3:latest",
-            family=ProviderFamily.LOCAL_OPEN_WEIGHT,
-        ),
+        memory_context=_b83_memory_context(provider="ollama", model="llava-llama3:latest"),
         standard_memory_tool_executor=executor,
     )
 
@@ -3192,10 +3364,7 @@ async def test_b83_servable_ollama_arm_emits_no_degraded_span_and_no_packet() ->
     dispatcher = RuntimeLLMDispatcher(
         providers={"ollama": _OllamaFakeAdapter(client)},
         tracer_provider=tp,
-        memory_context=_b83_memory_context(
-            provider="ollama",
-            family=ProviderFamily.LOCAL_OPEN_WEIGHT,
-        ),
+        memory_context=_b83_memory_context(provider="ollama"),
         standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
     )
 
