@@ -91,6 +91,19 @@ def test_declared_failure_class_is_the_authority(
     assert classify_memory_failure(exc) is expected
 
 
+def test_instance_level_assignment_cannot_shadow_the_type_declaration() -> None:
+    """codex R1 — only the exception HIERARCHY is the declaration authority.
+
+    The attribute is read from ``type(exc)``: an instance-level assignment
+    (or a raising instance property) must not override the class declaration,
+    or classification would depend on per-object mutation rather than the
+    type contract.
+    """
+    exc = _DeclaredDenialError("is superseded")
+    exc.memory_failure_class = MemoryTelemetryFailureClass.IO_FAILURE  # type: ignore[misc]
+    assert classify_memory_failure(exc) is MemoryTelemetryFailureClass.POLICY_DENIAL
+
+
 @pytest.mark.parametrize(
     ("exc", "expected"),
     [

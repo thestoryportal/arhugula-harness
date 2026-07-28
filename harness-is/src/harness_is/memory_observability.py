@@ -203,13 +203,18 @@ def classify_memory_failure(exc: BaseException) -> MemoryTelemetryFailureClass:
 def _declared_failure_class(exc: BaseException) -> MemoryTelemetryFailureClass | None:
     """Return the failure class the exception's type declares, if any.
 
-    `getattr` walks the MRO, so a subclass inherits its base's declaration for
-    free. Only a real `MemoryTelemetryFailureClass` member is honoured - a
-    string or a misspelled attribute is ignored rather than silently becoming
-    an invented class outside the closed C-MEM-19 vocabulary.
+    The attribute is read from ``type(exc)``, NOT the instance: only the
+    exception HIERARCHY is the declaration authority — an instance-level
+    assignment cannot shadow the type's declaration, and a raising instance
+    property cannot mask the original failure (codex R1). Class-level
+    ``getattr`` still walks the MRO, so a subclass inherits its base's
+    declaration for free. Only a real `MemoryTelemetryFailureClass` member is
+    honoured - a string or a misspelled attribute is ignored rather than
+    silently becoming an invented class outside the closed C-MEM-19
+    vocabulary.
     """
 
-    declared = getattr(exc, MEMORY_FAILURE_CLASS_ATTRIBUTE, None)
+    declared = getattr(type(exc), MEMORY_FAILURE_CLASS_ATTRIBUTE, None)
     if isinstance(declared, MemoryTelemetryFailureClass):
         return declared
     return None
