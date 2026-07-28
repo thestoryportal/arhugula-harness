@@ -38,6 +38,7 @@ Two tests:
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -62,6 +63,41 @@ from opentelemetry.trace import StatusCode
 # test fakes the leaf client and ignores the model string.
 _INVALID_ANTHROPIC_MODEL = "claude-nonexistent-model-r300-fallback-probe"
 _OPENAI_FALLBACK_MODEL = "gpt-4o-mini"
+
+# OpenAI's Chat Completions API rejects any `tools[].function.name` outside this
+# grammar with an HTTP 400 before the model is reached.
+_OPENAI_FUNCTION_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
+
+# The wire encoding of the five C-MEM-14 provider-neutral memory tool identities
+# (`memory.search` ... ) at the OpenAI adapter boundary.
+_EXPECTED_MEMORY_TOOL_WIRE_NAMES = frozenset(
+    {
+        "memory_search",
+        "memory_read",
+        "memory_write_note",
+        "memory_propose_promotion",
+        "memory_request_redaction",
+    }
+)
+
+
+def _openai_tool_function_names(calls: Sequence[dict[str, Any]]) -> list[str]:
+    """Every ``tools[].function.name`` handed to the OpenAI leaf across calls."""
+    names: list[str] = []
+    for call in calls:
+        tools = call.get("tools")
+        if not isinstance(tools, list):
+            continue
+        for tool in tools:
+            if not isinstance(tool, dict):
+                continue
+            function = tool.get("function")
+            if not isinstance(function, dict):
+                continue
+            name = function.get("name")
+            if isinstance(name, str):
+                names.append(name)
+    return names
 
 
 # ---------------------------------------------------------------------------
@@ -334,7 +370,19 @@ class _FakeOpenAIResponse:
 
 
 class _SucceedingOpenAICompletions:
-    async def create(self, *, model: str, **_kwargs: Any) -> _FakeOpenAIResponse:
+    """Canned-success OpenAI leaf that RECORDS the kwargs it was handed.
+
+    Recording is load-bearing, not incidental: a fake that swallowed ``**kwargs``
+    is precisely why the ``tools[].function.name`` regression (dotted C-MEM-14
+    identities rejected by OpenAI's ``^[a-zA-Z0-9_-]{1,64}$`` name grammar with
+    an HTTP 400) shipped invisible through a green deterministic suite.
+    """
+
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    async def create(self, *, model: str, **kwargs: Any) -> _FakeOpenAIResponse:
+        self.calls.append({"model": model, **kwargs})
         return _FakeOpenAIResponse(model)
 
 
@@ -443,6 +491,32 @@ async def test_r300_deterministic_cross_family_fallback_through_production_path(
     assert any(
         int((s.attributes or {}).get("fallback.chain_length", 0)) >= 2 for s in fallback_spans
     ), "expected the outer fallback span to carry fallback.chain_length ≥ 2"
+
+    # --- OpenAI wire-name witness -------------------------------------------
+    # The automatic memory substrate (default-on) injects the five C-MEM-14
+    # standard memory tools into every OpenAI dispatch. Their provider-neutral
+    # identities are dotted (`memory.search` ...) and OpenAI rejects a dotted
+    # `tools[].function.name` with an HTTP 400 — so EVERY emitted function name
+    # must be the adapter-owned wire encoding. Asserting on the recorded kwargs
+    # is what makes this deterministic test able to catch the 400 class at all.
+    openai_client = providers["openai"].client
+    assert isinstance(openai_client, _SucceedingOpenAIClient)
+    calls = openai_client.chat.completions.calls
+    assert calls, "expected ≥1 recorded openai chat.completions.create call"
+    function_names = _openai_tool_function_names(calls)
+    assert function_names, (
+        "expected the openai dispatch to carry tools[] (the default-on standard "
+        f"memory tools); recorded call keys: {[sorted(c) for c in calls]!r}"
+    )
+    offenders = [n for n in function_names if _OPENAI_FUNCTION_NAME_PATTERN.match(n) is None]
+    assert not offenders, (
+        "every tools[].function.name must match ^[a-zA-Z0-9_-]{1,64}$ or OpenAI "
+        f"rejects the request with HTTP 400; offenders: {offenders!r}"
+    )
+    assert _EXPECTED_MEMORY_TOOL_WIRE_NAMES <= set(function_names), (
+        "expected the five C-MEM-14 memory tools serialized under their OpenAI "
+        f"wire names; observed function names: {sorted(set(function_names))!r}"
+    )
 
 
 # ---------------------------------------------------------------------------
